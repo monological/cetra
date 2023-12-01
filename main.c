@@ -16,7 +16,6 @@
 #include "util.h"
 #include "import.h"
 
-
 #define NK_INCLUDE_FIXED_TYPES
 #define NK_INCLUDE_STANDARD_IO
 #define NK_INCLUDE_STANDARD_VARARGS
@@ -25,10 +24,10 @@
 #define NK_INCLUDE_FONT_BAKING
 #define NK_INCLUDE_DEFAULT_FONT
 #define NK_IMPLEMENTATION
-#define NK_GLFW_GL4_IMPLEMENTATION
+#define NK_GLFW_GL3_IMPLEMENTATION
 #define NK_KEYSTATE_BASED_INPUT
 #include "nuklear.h"
-#include "nuklear_glfw_gl4.h"
+#include "nuklear_glfw_gl3.h"
 
 #define MAX_VERTEX_BUFFER 512 * 1024
 #define MAX_ELEMENT_BUFFER 128 * 1024
@@ -38,20 +37,24 @@
 #define AXES_VERT_SHADER_PATH "/Users/neo/Desktop/graphics/engine/src/axes_vert.glsl"
 #define AXES_FRAG_SHADER_PATH "/Users/neo/Desktop/graphics/engine/src/axes_frag.glsl"
 
-const unsigned int WIDTH = 800;
-const unsigned int HEIGHT = 600;
+const unsigned int WIDTH = 1920;
+const unsigned int HEIGHT = 1080;
 const float ROTATE_SPEED = 0.4f; // Speed of rotation
 const float RADIUS = 2.0f;
 const unsigned int RINGS = 20;
 const unsigned int SECTORS = 20;
 const float rotationSensitivity = 0.005f;
 
+float minDistance = 2000.0f;
+float maxDistance = 3000.0f;
+float oscillationSpeed = 0.5f; // Adjust this value as needed
+
 float cameraDistance = 2000.0f;
 float cameraHeightBase = 0.0f; // Base height of the camera
-float cameraAngle = 0.0f;
+float cameraTheta = 0.3f;
+float cameraPhi = 0.0f;
 float zoomSpeed = 0.005f;
-float orbitSpeed = 0.01f;
-float verticalMovementAmplitude = 5.0f; // Amplitude of vertical movement
+double orbitSpeed = 0.001f;
 
 
 void generateSphere(Mesh* mesh, float radius, unsigned int rings, unsigned int sectors) {
@@ -156,6 +159,7 @@ int main() {
 #ifdef __APPLE__
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
 #endif
+    glfwWindowHint(GLFW_DOUBLEBUFFER, GLFW_TRUE);
 
     GLFWwindow* window = glfwCreateWindow(WIDTH, HEIGHT, "Wireframe Sphere", NULL, NULL);
     if (window == NULL) {
@@ -168,6 +172,7 @@ int main() {
     glfwSetCursorPosCallback(window, cursor_position_callback);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glfwSwapInterval(1);
 
     if (glewInit() != GLEW_OK) {
         fprintf(stderr, "Failed to initialize GLEW\n");
@@ -175,34 +180,20 @@ int main() {
     }
 
 
+    /*
+    struct nk_glfw glfw = {0};
     struct nk_context *ctx;
     struct nk_colorf bg;
     struct nk_image img;
 
-    ctx = nk_glfw3_init(window, NK_GLFW3_INSTALL_CALLBACKS, MAX_VERTEX_BUFFER, MAX_ELEMENT_BUFFER);
-    /* Load Fonts: if none of these are loaded a default font will be used  */
-    /* Load Cursor: if you uncomment cursor loading please hide the cursor */
-    {struct nk_font_atlas *atlas;
-    nk_glfw3_font_stash_begin(&atlas);
-    /*struct nk_font *droid = nk_font_atlas_add_from_file(atlas, "../../../extra_font/DroidSans.ttf", 14, 0);*/
-    /*struct nk_font *roboto = nk_font_atlas_add_from_file(atlas, "../../../extra_font/Roboto-Regular.ttf", 14, 0);*/
-    /*struct nk_font *future = nk_font_atlas_add_from_file(atlas, "../../../extra_font/kenvector_future_thin.ttf", 13, 0);*/
-    /*struct nk_font *clean = nk_font_atlas_add_from_file(atlas, "../../../extra_font/ProggyClean.ttf", 12, 0);*/
-    /*struct nk_font *tiny = nk_font_atlas_add_from_file(atlas, "../../../extra_font/ProggyTiny.ttf", 10, 0);*/
-    /*struct nk_font *cousine = nk_font_atlas_add_from_file(atlas, "../../../extra_font/Cousine-Regular.ttf", 13, 0);*/
-    nk_glfw3_font_stash_end();
-    /*nk_style_load_all_cursors(ctx, atlas->cursors);*/
-    /*nk_style_set_font(ctx, &droid->handle);*/}
-
-    /* Create bindless texture.
-     * The index returned is not the opengl resource id.
-     * IF you need the GL resource id use: nk_glfw3_get_tex_ogl_id() */
-    {int tex_index = 0;
-    enum {tex_width = 256, tex_height = 256};
-    char pixels[tex_width * tex_height * 4];
-    memset(pixels, 128, sizeof(pixels));
-    tex_index = nk_glfw3_create_texture(pixels, tex_width, tex_height);
-    img = nk_image_id(tex_index);}
+    ctx = nk_glfw3_init(&glfw, window, NK_GLFW3_INSTALL_CALLBACKS);
+    {
+        struct nk_font_atlas *atlas;
+        nk_glfw3_font_stash_begin(&glfw, &atlas);
+        nk_glfw3_font_stash_end(&glfw);
+        nk_style_load_all_cursors(ctx, atlas->cursors);
+        //nk_style_set_font(ctx, &droid->handle);
+    }*/
 
     int framebufferWidth, framebufferHeight;
     glfwGetFramebufferSize(window, &framebufferWidth, &framebufferHeight);
@@ -292,13 +283,16 @@ int main() {
     float fovRadians = glm_rad(35.0f);
     float aspectRatio = (float)framebufferWidth / (float)framebufferHeight;
     float nearClip = 0.1f;
-    float farClip = 4000.0f;
+    float farClip = 10000.0f;
+
+    float cameraAmplitude = (maxDistance - minDistance) / 2.0f; // Half the range of motion
+    float midPoint = minDistance + cameraAmplitude; // Middle point of the motion
 
     glm_perspective(fovRadians, aspectRatio, nearClip, farClip, projection);
 
     //generateSphere(mesh, RADIUS, RINGS, SECTORS);
-    Scene *scene = import_fbx("/Users/neo/Desktop/graphics/engine/src/pilot.fbx", \
-            "/Users/neo/Desktop/graphics/engine/src");
+    Scene *scene = import_fbx("/Users/neo/Desktop/graphics/engine/src/room.fbx", \
+            "/Users/neo/Desktop/graphics/engine/src/room.fbm");
     print_scene(scene);
 
     // Create scene node for the sphere
@@ -323,56 +317,10 @@ int main() {
 
     while (!glfwWindowShouldClose(window)) {
 
-        nk_glfw3_new_frame();
-
-        /* GUI */
-        if (nk_begin(ctx, "Demo", nk_rect(50, 50, 230, 250),
-            NK_WINDOW_BORDER|NK_WINDOW_MOVABLE|NK_WINDOW_SCALABLE|
-            NK_WINDOW_MINIMIZABLE|NK_WINDOW_TITLE))
-        {
-            enum {EASY, HARD};
-            static int op = EASY;
-            static int property = 20;
-            nk_layout_row_static(ctx, 30, 80, 1);
-            if (nk_button_label(ctx, "button"))
-                fprintf(stdout, "button pressed\n");
-
-            nk_layout_row_dynamic(ctx, 30, 2);
-            if (nk_option_label(ctx, "easy", op == EASY)) op = EASY;
-            if (nk_option_label(ctx, "hard", op == HARD)) op = HARD;
-
-            nk_layout_row_dynamic(ctx, 25, 1);
-            nk_property_int(ctx, "Compression:", 0, &property, 100, 10, 1);
-
-            nk_layout_row_dynamic(ctx, 20, 1);
-            nk_label(ctx, "background:", NK_TEXT_LEFT);
-            nk_layout_row_dynamic(ctx, 25, 1);
-            if (nk_combo_begin_color(ctx, nk_rgb_cf(bg), nk_vec2(nk_widget_width(ctx),400))) {
-                nk_layout_row_dynamic(ctx, 120, 1);
-                bg = nk_color_picker(ctx, bg, NK_RGBA);
-                nk_layout_row_dynamic(ctx, 25, 1);
-                bg.r = nk_propertyf(ctx, "#R:", 0, bg.r, 1.0f, 0.01f,0.005f);
-                bg.g = nk_propertyf(ctx, "#G:", 0, bg.g, 1.0f, 0.01f,0.005f);
-                bg.b = nk_propertyf(ctx, "#B:", 0, bg.b, 1.0f, 0.01f,0.005f);
-                bg.a = nk_propertyf(ctx, "#A:", 0, bg.a, 1.0f, 0.01f,0.005f);
-                nk_combo_end(ctx);
-            }
-        }
-        nk_end(ctx);
-
-        /* Bindless Texture */
-        if (nk_begin(ctx, "Texture", nk_rect(250, 150, 230, 250),
-            NK_WINDOW_BORDER|NK_WINDOW_MOVABLE|NK_WINDOW_SCALABLE|
-            NK_WINDOW_MINIMIZABLE|NK_WINDOW_TITLE))
-        {
-            struct nk_command_buffer *canvas = nk_window_get_canvas(ctx);
-            struct nk_rect total_space = nk_window_get_content_region(ctx);
-            nk_draw_image(canvas, total_space, &img, nk_white);
-        }
-        nk_end(ctx);
-
+        
         glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
 
         float timeValue = glfwGetTime();
         float angle = timeValue * ROTATE_SPEED;
@@ -386,23 +334,22 @@ int main() {
         };
 
         if (!dragging) {
-
-            // Update camera position for zoom and orbit
-            cameraDistance += sin(timeValue * zoomSpeed) * 2.0f; // Reduced zoom amplitude
-            cameraAngle += orbitSpeed; // Rotate around the center
+            cameraDistance = midPoint + cameraAmplitude * sin(timeValue * oscillationSpeed);
+            cameraPhi += orbitSpeed; // Rotate around the center
 
             // Calculate vertical movement
-            float cameraHeight = cameraHeightBase + cos(timeValue * zoomSpeed) * verticalMovementAmplitude;
+            float cameraHeight = cameraHeightBase + sin(cameraTheta) * cameraDistance;
 
             // Calculate the new camera position
             vec3 newCameraPosition = {
-                cos(cameraAngle) * cameraDistance,
+                cos(cameraPhi) * cameraDistance * cos(cameraTheta),
                 cameraHeight,
-                sin(cameraAngle) * cameraDistance
+                sin(cameraPhi) * cameraDistance * cos(cameraTheta)
             };
 
             // Update camera view matrix
             glm_lookat(newCameraPosition, lookAtPoint, upVector, view);
+            glm_perspective(fovRadians, aspectRatio, nearClip, farClip, projection);
             glUniform3fv(camPosLoc, 1, (const GLfloat*)&newCameraPosition);
 
 
@@ -427,7 +374,77 @@ int main() {
 
         render_node(root_node, root_node->local_transform, view, projection);
 
-        nk_glfw3_render(NK_ANTI_ALIASING_ON);
+        /*
+        GLint previousViewport[4];
+        glGetIntegerv(GL_VIEWPORT, previousViewport);
+        GLboolean depthTest = glIsEnabled(GL_DEPTH_TEST);
+        GLboolean blend = glIsEnabled(GL_BLEND);
+
+        nk_glfw3_new_frame(&glfw);
+
+        if (nk_begin(ctx, "Camera", nk_rect(15, 15, 230, 500),
+            NK_WINDOW_BORDER|NK_WINDOW_MOVABLE|NK_WINDOW_SCALABLE|
+            NK_WINDOW_MINIMIZABLE|NK_WINDOW_TITLE))
+        {
+
+            nk_layout_row_dynamic(ctx, 25, 1);
+            nk_property_float(ctx, "Theta:", 0.0f, &cameraTheta, M_PI_2, 0.1f, 1);
+
+            nk_layout_row_dynamic(ctx, 25, 1);
+            nk_property_float(ctx, "Phi:", 0.0f, &cameraPhi, M_PI_2, 0.1f, 1);
+
+            nk_layout_row_dynamic(ctx, 25, 1);
+            nk_property_float(ctx, "Distance:", 0.0f, &cameraDistance, 3000.0f, 100.0f, 1);
+
+            nk_layout_row_dynamic(ctx, 25, 1);
+            nk_property_float(ctx, "Height:", -50.0f, &cameraHeightBase, 50.0f, 10.0f, 1);
+
+            nk_layout_row_dynamic(ctx, 25, 1);
+            nk_property_float(ctx, "LookAt X:", -25.0f, &lookAtPoint[0], 25.0f, 1.0f, 1);
+
+            nk_layout_row_dynamic(ctx, 25, 1);
+            nk_property_float(ctx, "LookAt Y:", -25.0f, &lookAtPoint[1], 25.0f, 1.0f, 1);
+
+            nk_layout_row_dynamic(ctx, 25, 1);
+            nk_property_float(ctx, "LookAt Z:", -25.0f, &lookAtPoint[2], 25.0f, 1.0f, 1);
+
+            nk_layout_row_dynamic(ctx, 25, 1);
+            nk_property_float(ctx, "Up X:", -25.0f, &upVector[0], 25.0f, 1.0f, 1);
+
+            nk_layout_row_dynamic(ctx, 25, 1);
+            nk_property_float(ctx, "Up Y:", -25.0f, &upVector[1], 25.0f, 1.0f, 1);
+
+            nk_layout_row_dynamic(ctx, 25, 1);
+            nk_property_float(ctx, "Up Z:", -25.0f, &upVector[2], 25.0f, 1.0f, 1);
+
+            nk_layout_row_dynamic(ctx, 25, 1);
+            nk_property_float(ctx, "Zoom:", 0.0f, &zoomSpeed, 2.0f, 0.01f, 1);
+
+            nk_layout_row_dynamic(ctx, 25, 1);
+            nk_property_double(ctx, "Orbit:", 0.0f, &orbitSpeed, 0.1f, 0.001f, 1);
+
+            nk_layout_row_dynamic(ctx, 25, 1);
+            nk_property_float(ctx, "Amplitude:", 0.0f, &cameraAmplitude, 50.0f, 1.0f, 1);
+
+            nk_layout_row_dynamic(ctx, 25, 1);
+            nk_property_float(ctx, "Fov:", 0.0f, &fovRadians, M_PI_2, 0.1f, 1);
+
+            nk_layout_row_dynamic(ctx, 25, 1);
+            nk_property_float(ctx, "Near Clip:", 0.0f, &nearClip, 5.0f, 0.1f, 1);
+
+            nk_layout_row_dynamic(ctx, 25, 1);
+            nk_property_float(ctx, "Far Clip:", 0.0f, &farClip, 10000.0f, 500.0f, 1);
+        }
+        nk_end(ctx);
+
+        nk_glfw3_render(&glfw, NK_ANTI_ALIASING_ON, MAX_VERTEX_BUFFER, MAX_ELEMENT_BUFFER);
+        */
+
+        // Restore OpenGL state
+        //glViewport(previousViewport[0], previousViewport[1], previousViewport[2], previousViewport[3]);
+        //if (depthTest) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
+        //if (blend) glEnable(GL_BLEND); else glDisable(GL_BLEND);
+
         glfwSwapBuffers(window);
         glfwPollEvents();
     }
@@ -442,7 +459,7 @@ int main() {
     free_shader(axes_vertex_shader);
     free_shader(axes_fragment_shader);
 
-    nk_glfw3_shutdown();
+    //nk_glfw3_shutdown(&glfw);
     glfwTerminate();
 
     return 0;
