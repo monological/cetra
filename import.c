@@ -15,88 +15,7 @@
 #include "light.h"
 #include "camera.h"
 #include "util.h"
-
-GLuint load_texture(const char* path, const char* directory) {
-    char filename[1000];
-    GLuint textureID = 0;
-    GLenum format;
-
-    // Normalize and work on a copy of the path
-    char* normalized_path = convert_and_normalize_path(path);
-    if (!normalized_path) {
-        fprintf(stderr, "Failed to normalize path: %s\n", path);
-        return 0;
-    }
-
-    char* subpath = strdup(normalized_path);
-    if (!subpath) {
-        fprintf(stderr, "Memory allocation failed for subpath.\n");
-        free(normalized_path);
-        return 0;
-    }
-
-    bool loaded = false;
-    do {
-        snprintf(filename, sizeof(filename), "%s/%s", directory, subpath);
-        printf("trying texture path %s\n", filename);
-
-        // Load the image using stb_image.h
-        int width, height, nrChannels;
-        unsigned char* data = stbi_load(filename, &width, &height, &nrChannels, 0);
-        if (data) {
-            // Generate the OpenGL texture
-            glGenTextures(1, &textureID);
-            glBindTexture(GL_TEXTURE_2D, textureID);
-
-            // Set the texture wrapping and filtering options
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-
-            // Determine the image format
-            if (nrChannels == 1)
-                format = GL_RED;
-            else if (nrChannels == 3)
-                format = GL_RGB;
-            else if (nrChannels == 4)
-                format = GL_RGBA;
-
-            // Upload the image data to the texture
-            glTexImage2D(GL_TEXTURE_2D, 0, format, width, height, 0, format, GL_UNSIGNED_BYTE, data);
-            glGenerateMipmap(GL_TEXTURE_2D);
-
-            // Free the image memory and unbind the texture
-            stbi_image_free(data);
-            loaded = true;
-            break;
-        }
-
-        // Try removing the leftmost sub-path
-        char* slash_pos = strchr(subpath, '/');
-        if (slash_pos != NULL) {
-            memmove(subpath, slash_pos + 1, strlen(slash_pos));
-        } else {
-            break; // No more sub-paths to remove
-        }
-    } while (!loaded);
-
-    if (!loaded) {
-        fprintf(stderr, "Failed to load texture after trying all sub-paths.\n");
-        glBindTexture(GL_TEXTURE_2D, 0);
-        return 0;
-    }else{
-        printf("Texture loaded at path: %s\n", filename);
-    }
-
-    free(normalized_path);
-    free(subpath);
-
-    // Unbind the texture
-    glBindTexture(GL_TEXTURE_2D, 0);
-
-    return textureID;
-}
+#include "texture.h"
 
 
 Material* process_ai_material(struct aiMaterial* ai_mat, const char* directory) {
@@ -117,7 +36,6 @@ Material* process_ai_material(struct aiMaterial* ai_mat, const char* directory) 
         material->albedo[2] = 0.2;
     }
 
-
     /*
     if (AI_SUCCESS == aiGetMaterialFloat(ai_mat, AI_MATKEY_METALLIC_FACTOR, &floatVal)) {
         material->metallic = floatVal;
@@ -129,41 +47,67 @@ Material* process_ai_material(struct aiMaterial* ai_mat, const char* directory) 
     }else{
         material->roughness = 0.5;
     }*/
-        material->metallic = 1.0;
-        material->roughness = 1.0;
+        material->metallic = 0.5;
+        material->roughness = 0.5;
 
-    // Load textures
+         // Load Albedo/Base Color Texture
     if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_DIFFUSE, 0, &str, NULL, NULL, NULL, NULL, NULL, NULL)) {
-        material->albedoTexID = load_texture(str.data, directory);
-    }
-    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_NORMALS, 0, &str, NULL, NULL, NULL, NULL, NULL, NULL)) {
-        material->normalTexID = load_texture(str.data, directory);
-    }
-    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_METALNESS, 0, &str, NULL, NULL, NULL, NULL, NULL, NULL)) {
-        material->metalnessTexID = load_texture(str.data, directory);
-    }
-    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_DIFFUSE_ROUGHNESS, 0, &str, NULL, NULL, NULL, NULL, NULL, NULL)) {
-        material->roughnessTexID = load_texture(str.data, directory);
-    }
-    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_AMBIENT_OCCLUSION, 0, &str, NULL, NULL, NULL, NULL, NULL, NULL)) {
-        material->ambientOcclusionTexID = load_texture(str.data, directory);
-    }
-    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_EMISSIVE, 0, &str, NULL, NULL, NULL, NULL, NULL, NULL)) {
-        material->emissiveTexID = load_texture(str.data, directory);
-    }
-    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_HEIGHT, 0, &str, NULL, NULL, NULL, NULL, NULL, NULL)) {
-        material->heightTexID = load_texture(str.data, directory);
+        material->albedoTex = load_texture(str.data, directory);
+        printf("Diffuse texture loaded: %s\n", str.data);
     }
 
-    // Load additional advanced PBR textures
+    // Load Normal Texture
+    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_NORMALS, 0, &str, NULL, NULL, NULL, NULL, NULL, NULL)) {
+        material->normalTex = load_texture(str.data, directory);
+        printf("Normals texture loaded: %s\n", str.data);
+    }
+
+    // Load Metalness Texture
+    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_METALNESS, 0, &str, NULL, NULL, NULL, NULL, NULL, NULL)) {
+        material->metalnessTex = load_texture(str.data, directory);
+        printf("Metalness texture loaded: %s\n", str.data);
+    }
+
+    // Load Diffuse Roughness Texture
+    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_DIFFUSE_ROUGHNESS, 0, &str, NULL, NULL, NULL, NULL, NULL, NULL)) {
+        material->roughnessTex = load_texture(str.data, directory);
+        printf("Diffuse Roughness texture loaded: %s\n", str.data);
+    }
+
+    // Load Ambient Occlusion Texture
+    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_AMBIENT_OCCLUSION, 0, &str, NULL, NULL, NULL, NULL, NULL, NULL)) {
+        material->ambientOcclusionTex = load_texture(str.data, directory);
+        printf("Ambient Occlusion texture loaded: %s\n", str.data);
+    }
+
+    // Load Emissive Texture
+    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_EMISSIVE, 0, &str, NULL, NULL, NULL, NULL, NULL, NULL)) {
+        material->emissiveTex = load_texture(str.data, directory);
+        printf("Emissive texture loaded: %s\n", str.data);
+    }
+
+    // Load Height Texture
+    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_HEIGHT, 0, &str, NULL, NULL, NULL, NULL, NULL, NULL)) {
+        material->heightTex = load_texture(str.data, directory);
+        printf("Height texture loaded: %s\n", str.data);
+    }
+
+    // Load Opacity Texture
     if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_OPACITY, 0, &str, NULL, NULL, NULL, NULL, NULL, NULL)) {
-        material->opacityTexID = load_texture(str.data, directory);
+        material->opacityTex = load_texture(str.data, directory);
+        printf("Opacity texture loaded: %s\n", str.data);
     }
+
+    // Load Sheen Texture
     if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_SHEEN, 0, &str, NULL, NULL, NULL, NULL, NULL, NULL)) {
-        material->sheenTexID = load_texture(str.data, directory);
+        material->sheenTex = load_texture(str.data, directory);
+        printf("Sheen texture loaded: %s\n", str.data);
     }
+
+    // Load Reflectance Texture
     if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_REFLECTION, 0, &str, NULL, NULL, NULL, NULL, NULL, NULL)) {
-        material->reflectanceTexID = load_texture(str.data, directory);
+        material->reflectanceTex = load_texture(str.data, directory);
+        printf("Reflectance texture loaded: %s\n", str.data);
     }
 
     return material;

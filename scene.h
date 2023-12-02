@@ -61,6 +61,7 @@ void set_program_for_node(SceneNode* node, Program* program);
 void set_shaders_for_node(SceneNode* node, Shader* vertex, Shader* geometry, Shader* fragment);
 void set_axes_program_for_node(SceneNode* node, Program* program);
 void set_axes_shaders_for_node(SceneNode* node, Shader* vertex, Shader* fragment);
+void set_should_draw_axes(SceneNode* node, bool should_draw_axes);
 
 void setup_node_axes_buffers(SceneNode* node);
 void draw_node_axes(SceneNode* node, const mat4 model, const mat4 view, const mat4 projection);

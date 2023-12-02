@@ -1,5 +1,7 @@
 
 #include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
 #include <cglm/cglm.h>
 
 #include "light.h"
@@ -23,6 +25,30 @@ Light* create_light() {
     return light;
 }
 
+void set_light_name(Light* light, const char* name) {
+    if (light) {
+        free(light->name); // Free the existing name
+        light->name = strdup(name); // Duplicate and store the new name
+    }
+}
+
+void set_light_type(Light* light, LightType type) {
+    if (light) {
+        light->type = type;
+    }
+}
+
+void set_light_specular(Light* light, vec3 specular) {
+    if (light) {
+        glm_vec3_copy(specular, light->specular);
+    }
+}
+
+void set_light_ambient(Light* light, vec3 ambient) {
+    if (light) {
+        glm_vec3_copy(ambient, light->ambient);
+    }
+}
 
 void set_light_position(Light* light, vec3 position) {
     if (light) {

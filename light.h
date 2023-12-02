@@ -32,6 +32,10 @@ typedef struct Light {
 } Light;
 
 Light* create_light();
+void set_light_name(Light* light, const char* name);
+void set_light_type(Light* light, LightType type);
+void set_light_specular(Light* light, vec3 specular);
+void set_light_ambient(Light* light, vec3 ambient);
 void set_light_position(Light* light, vec3 position);
 void set_light_direction(Light* light, vec3 direction);
 void set_light_color(Light* light, vec3 color);

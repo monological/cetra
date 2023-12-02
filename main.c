@@ -37,8 +37,8 @@
 #define AXES_VERT_SHADER_PATH "/Users/neo/Desktop/graphics/engine/src/axes_vert.glsl"
 #define AXES_FRAG_SHADER_PATH "/Users/neo/Desktop/graphics/engine/src/axes_frag.glsl"
 
-const unsigned int WIDTH = 1920;
-const unsigned int HEIGHT = 1080;
+const unsigned int WIDTH = 800;
+const unsigned int HEIGHT = 600;
 const float ROTATE_SPEED = 0.4f; // Speed of rotation
 const float RADIUS = 2.0f;
 const unsigned int RINGS = 20;
@@ -50,7 +50,7 @@ float maxDistance = 3000.0f;
 float oscillationSpeed = 0.5f; // Adjust this value as needed
 
 float cameraDistance = 2000.0f;
-float cameraHeightBase = 0.0f; // Base height of the camera
+float cameraHeight = 0.0f; // Base height of the camera
 float cameraTheta = 0.3f;
 float cameraPhi = 0.0f;
 float zoomSpeed = 0.005f;
@@ -160,6 +160,8 @@ int main() {
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
 #endif
     glfwWindowHint(GLFW_DOUBLEBUFFER, GLFW_TRUE);
+    glfwWindowHint(GLFW_SAMPLES, 4); // Enable 4x MSAA
+
 
     GLFWwindow* window = glfwCreateWindow(WIDTH, HEIGHT, "Wireframe Sphere", NULL, NULL);
     if (window == NULL) {
@@ -179,8 +181,6 @@ int main() {
         return -1;
     }
 
-
-    /*
     struct nk_glfw glfw = {0};
     struct nk_context *ctx;
     struct nk_colorf bg;
@@ -192,14 +192,50 @@ int main() {
         nk_glfw3_font_stash_begin(&glfw, &atlas);
         nk_glfw3_font_stash_end(&glfw);
         nk_style_load_all_cursors(ctx, atlas->cursors);
-        //nk_style_set_font(ctx, &droid->handle);
-    }*/
+    }
 
     int framebufferWidth, framebufferHeight;
     glfwGetFramebufferSize(window, &framebufferWidth, &framebufferHeight);
     glViewport(0, 0, framebufferWidth, framebufferHeight);
     CheckOpenGLError("view port");
 
+    /*
+     * MSAA anti-aliasing
+     *
+     */
+    glfwGetFramebufferSize(window, &framebufferWidth, &framebufferHeight);
+    glViewport(0, 0, framebufferWidth, framebufferHeight);
+    CheckOpenGLError("view port");
+
+    // Set up MSAA anti-aliasing
+    GLuint framebuffer, multisampleTexture, depthRbo;
+    int samples = 4; // Number of samples for MSAA, adjust as needed
+
+    // Create and set up the multisample framebuffer
+    glGenFramebuffers(1, &framebuffer);
+    glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+
+    glGenTextures(1, &multisampleTexture);
+    glBindTexture(GL_TEXTURE_2D_MULTISAMPLE, multisampleTexture);
+    glTexImage2DMultisample(GL_TEXTURE_2D_MULTISAMPLE, samples, GL_RGB, framebufferWidth, framebufferHeight, GL_TRUE);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D_MULTISAMPLE, multisampleTexture, 0);
+
+    glGenRenderbuffers(1, &depthRbo);
+    glBindRenderbuffer(GL_RENDERBUFFER, depthRbo);
+    glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples, GL_DEPTH24_STENCIL8, framebufferWidth, framebufferHeight);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, depthRbo);
+
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        fprintf(stderr, "Error: MSAA Framebuffer is not complete!\n");
+        return -1;
+    }
+
+    glBindFramebuffer(GL_FRAMEBUFFER, 0); // Bind back to the default framebuffer
+
+    /*
+     * Set up shaders.
+     *
+     */
     Program* pbr_shader_program = create_program();
 
     Shader* pbr_vertex_shader = create_shader_from_path(VERTEX, PBR_VERT_SHADER_PATH);
@@ -290,14 +326,23 @@ int main() {
 
     glm_perspective(fovRadians, aspectRatio, nearClip, farClip, projection);
 
-    //generateSphere(mesh, RADIUS, RINGS, SECTORS);
     Scene *scene = import_fbx("/Users/neo/Desktop/graphics/engine/src/room.fbx", \
             "/Users/neo/Desktop/graphics/engine/src/room.fbm");
-    print_scene(scene);
 
     // Create scene node for the sphere
     SceneNode* root_node = scene->root_node;
     assert(root_node != NULL);
+
+    vec3 lightPosition = {0.0, 0.0, 2000.00};
+    if(!root_node->light){
+        Light *light = create_light();
+        set_light_name(light, "root");
+        set_light_type(light, LIGHT_POINT);
+        set_light_position(light, lightPosition);
+        set_light_intensity(light, 200.0f);
+        set_light_color(light, (vec3){1.0f, 0.0f, 0.0f});
+        set_node_light(root_node, light);
+    }
 
     setup_node_meshes(root_node);
     set_shaders_for_node(root_node, pbr_vertex_shader, pbr_geometry_shader, pbr_fragment_shader);
@@ -307,6 +352,8 @@ int main() {
     set_axes_program_for_node(root_node, axes_shader_program);
     set_axes_shaders_for_node(root_node, axes_vertex_shader, axes_fragment_shader);
 
+    print_scene(scene);
+
     //glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
     glEnable(GL_DEPTH_TEST);
 
@@ -315,8 +362,10 @@ int main() {
 
     GLint timeUniformLocation = glGetUniformLocation(pbr_shader_program->programID, "time");
 
-    while (!glfwWindowShouldClose(window)) {
+    static bool should_draw_axes = true;
 
+    while (!glfwWindowShouldClose(window)) {
+        glBindFramebuffer(GL_FRAMEBUFFER, framebuffer); // Bind multisample framebuffer
         
         glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -328,7 +377,7 @@ int main() {
         glUniform1f(timeUniformLocation, timeValue);
 
         Transform transform = {
-            .position = {0.0f, 0.0f, 0.0f},
+            .position = {0.0f, -200.0f, 0.0f},
             .rotation = {0.0f, 0.0f, 0.0f},
             .scale = {1.0f, 1.0f, 1.0f}
         };
@@ -338,7 +387,7 @@ int main() {
             cameraPhi += orbitSpeed; // Rotate around the center
 
             // Calculate vertical movement
-            float cameraHeight = cameraHeightBase + sin(cameraTheta) * cameraDistance;
+            //float cameraHeight = cameraHeightBase + sin(cameraTheta) * cameraDistance;
 
             // Calculate the new camera position
             vec3 newCameraPosition = {
@@ -374,7 +423,6 @@ int main() {
 
         render_node(root_node, root_node->local_transform, view, projection);
 
-        /*
         GLint previousViewport[4];
         glGetIntegerv(GL_VIEWPORT, previousViewport);
         GLboolean depthTest = glIsEnabled(GL_DEPTH_TEST);
@@ -387,6 +435,16 @@ int main() {
             NK_WINDOW_MINIMIZABLE|NK_WINDOW_TITLE))
         {
 
+            nk_layout_row_static(ctx, 30, 80, 1);
+            if (nk_button_label(ctx, "Show Axes")){
+                if(should_draw_axes){
+                    should_draw_axes = false;
+                }else{
+                    should_draw_axes = true;
+                }
+                set_should_draw_axes(root_node, should_draw_axes);
+            }
+
             nk_layout_row_dynamic(ctx, 25, 1);
             nk_property_float(ctx, "Theta:", 0.0f, &cameraTheta, M_PI_2, 0.1f, 1);
 
@@ -397,7 +455,7 @@ int main() {
             nk_property_float(ctx, "Distance:", 0.0f, &cameraDistance, 3000.0f, 100.0f, 1);
 
             nk_layout_row_dynamic(ctx, 25, 1);
-            nk_property_float(ctx, "Height:", -50.0f, &cameraHeightBase, 50.0f, 10.0f, 1);
+            nk_property_float(ctx, "Height:", -2000.0f, &cameraHeight, 2000.0f, 100.0f, 1);
 
             nk_layout_row_dynamic(ctx, 25, 1);
             nk_property_float(ctx, "LookAt X:", -25.0f, &lookAtPoint[0], 25.0f, 1.0f, 1);
@@ -438,12 +496,15 @@ int main() {
         nk_end(ctx);
 
         nk_glfw3_render(&glfw, NK_ANTI_ALIASING_ON, MAX_VERTEX_BUFFER, MAX_ELEMENT_BUFFER);
-        */
 
         // Restore OpenGL state
-        //glViewport(previousViewport[0], previousViewport[1], previousViewport[2], previousViewport[3]);
-        //if (depthTest) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
-        //if (blend) glEnable(GL_BLEND); else glDisable(GL_BLEND);
+        glViewport(previousViewport[0], previousViewport[1], previousViewport[2], previousViewport[3]);
+        if (depthTest) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
+        if (blend) glEnable(GL_BLEND); else glDisable(GL_BLEND);
+
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0); // Default framebuffer
+        glBlitFramebuffer(0, 0, framebufferWidth, framebufferHeight, 0, 0, framebufferWidth, framebufferHeight, GL_COLOR_BUFFER_BIT, GL_NEAREST);
 
         glfwSwapBuffers(window);
         glfwPollEvents();
@@ -459,7 +520,12 @@ int main() {
     free_shader(axes_vertex_shader);
     free_shader(axes_fragment_shader);
 
-    //nk_glfw3_shutdown(&glfw);
+    // Cleanup MSAA resources
+    glDeleteFramebuffers(1, &framebuffer);
+    glDeleteTextures(1, &multisampleTexture);
+    glDeleteRenderbuffers(1, &depthRbo);
+
+    nk_glfw3_shutdown(&glfw);
     glfwTerminate();
 
     return 0;

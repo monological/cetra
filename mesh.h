@@ -7,6 +7,8 @@
 #include <assimp/scene.h>
 #include <assimp/postprocess.h>
 
+#include "texture.h"
+
 
 typedef struct Material {
     vec3 albedo;
@@ -14,22 +16,23 @@ typedef struct Material {
     float roughness;
     float ao;
 
-    // Core PBR Texture IDs
-    GLuint albedoTexID;           // Albedo (Diffuse) Map
-    GLuint normalTexID;           // Normal Map
-    GLuint roughnessTexID;        // Roughness Map
-    GLuint metalnessTexID;        // Metalness Map
-    GLuint ambientOcclusionTexID; // Ambient Occlusion Map
-    GLuint emissiveTexID;         // Emissive Map
-    GLuint heightTexID;           // Height Map (Displacement Map)
+    // Core PBR Textures
+    Texture* albedoTex;           // Albedo (Diffuse) Map
+    Texture* normalTex;           // Normal Map
+    Texture* roughnessTex;        // Roughness Map
+    Texture* metalnessTex;        // Metalness Map
+    Texture* ambientOcclusionTex; // Ambient Occlusion Map
+    Texture* emissiveTex;         // Emissive Map
+    Texture* heightTex;           // Height Map (Displacement Map)
 
     // Additional Advanced PBR Textures
-    GLuint opacityTexID;             // Opacity Map
-    GLuint microsurfaceTexID;        // Microsurface (Detail) Map
-    GLuint anisotropyTexID;          // Anisotropy Map
-    GLuint subsurfaceScatteringTexID;// Subsurface Scattering Map
-    GLuint sheenTexID;               // Sheen Map (for fabrics)
-    GLuint reflectanceTexID;         // Reflectance Map
+    Texture* opacityTex;             // Opacity Map
+    Texture* microsurfaceTex;        // Microsurface (Detail) Map
+    Texture* anisotropyTex;          // Anisotropy Map
+    Texture* subsurfaceScatteringTex;// Subsurface Scattering Map
+    Texture* sheenTex;               // Sheen Map (for fabrics)
+    Texture* reflectanceTex;         // Reflectance Map
+
 } Material;
 
 Material* create_material();

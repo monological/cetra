@@ -99,11 +99,12 @@ void free_mesh(Mesh* mesh) {
     if (mesh->texCoords) free(mesh->texCoords);
     if (mesh->indices) free(mesh->indices);
 
-    free_material(mesh->material);
+    if (mesh->material) {
+        free_material(mesh->material);
+    }
 
     free(mesh);
 }
-
 
 Material* create_material() {
     Material* material = (Material*)malloc(sizeof(Material));
@@ -118,29 +119,44 @@ Material* create_material() {
     material->roughness = 1.0f;
     material->ao = 1.0f;
 
-    // Initialize texture IDs to 0 (no texture)
-    material->albedoTexID = 0;
-    material->normalTexID = 0;
-    material->roughnessTexID = 0;
-    material->metalnessTexID = 0;
-    material->ambientOcclusionTexID = 0;
-    material->emissiveTexID = 0;
-    material->heightTexID = 0;
+    // In create_material function
+    material->albedoTex = NULL;
+    material->normalTex = NULL;
+    material->roughnessTex = NULL;
+    material->metalnessTex = NULL;
+    material->ambientOcclusionTex = NULL;
+    material->emissiveTex = NULL;
+    material->heightTex = NULL;
 
     // Additional Advanced PBR Textures
-    material->opacityTexID = 0;
-    material->microsurfaceTexID = 0;
-    material->anisotropyTexID = 0;
-    material->subsurfaceScatteringTexID = 0;
-    material->sheenTexID = 0;
-    material->reflectanceTexID = 0;
+    material->opacityTex = NULL;
+    material->microsurfaceTex = NULL;
+    material->anisotropyTex = NULL;
+    material->subsurfaceScatteringTex = NULL;
+    material->sheenTex = NULL;
+    material->reflectanceTex = NULL;
 
     return material;
 }
 
 void free_material(Material* material) {
     if (material) {
-        // Free the material structure itself
+        // Free each Texture struct
+        free_texture(material->albedoTex);
+        free_texture(material->normalTex);
+        free_texture(material->roughnessTex);
+        free_texture(material->metalnessTex);
+        free_texture(material->ambientOcclusionTex);
+        free_texture(material->emissiveTex);
+        free_texture(material->heightTex);
+        free_texture(material->opacityTex);
+        free_texture(material->microsurfaceTex);
+        free_texture(material->anisotropyTex);
+        free_texture(material->subsurfaceScatteringTex);
+        free_texture(material->sheenTex);
+        free_texture(material->reflectanceTex);
+
+        // Finally, free the material structure itself
         free(material);
     }
 }

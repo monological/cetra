@@ -283,6 +283,17 @@ void setup_node_axes_buffers(SceneNode* node) {
     }
 }
 
+void set_should_draw_axes(SceneNode* node, bool should_draw_axes){
+    if (!node) return;
+    
+    node->should_draw_axes = should_draw_axes;
+
+    for (size_t i = 0; i < node->children_count; ++i) {
+        set_should_draw_axes(node->children[i], should_draw_axes);
+    }
+
+}
+
 void draw_node_axes(SceneNode* node, const mat4 model, const mat4 view, const mat4 projection) {
     if (!node || !node->should_draw_axes || !node->axes_shader_program) return;
 
@@ -344,84 +355,80 @@ void render_node(SceneNode* self, mat4 model, mat4 view, mat4 projection) {
                     glUniform1f(aoLoc, mat->ao);
 
                     // Set textures (if they exist)
-                    if (mat->albedoTexID) {
+                    if (mat->albedoTex) {
                         glActiveTexture(GL_TEXTURE0);
-                        glBindTexture(GL_TEXTURE_2D, mat->albedoTexID);
+                        glBindTexture(GL_TEXTURE_2D, mat->albedoTex->id);
                         glUniform1i(glGetUniformLocation(self->shader_program->programID, "albedoTex"), 0);
                     }
 
-                    if (mat->normalTexID) {
+                    if (mat->normalTex) {
                         glActiveTexture(GL_TEXTURE1);
-                        glBindTexture(GL_TEXTURE_2D, mat->normalTexID);
+                        glBindTexture(GL_TEXTURE_2D, mat->normalTex->id);
                         glUniform1i(glGetUniformLocation(self->shader_program->programID, "normalTex"), 1);
                     }
 
-                    if (mat->roughnessTexID) {
+                    if (mat->roughnessTex) {
                         glActiveTexture(GL_TEXTURE2);
-                        glBindTexture(GL_TEXTURE_2D, mat->roughnessTexID);
+                        glBindTexture(GL_TEXTURE_2D, mat->roughnessTex->id);
                         glUniform1i(glGetUniformLocation(self->shader_program->programID, "roughnessTex"), 2);
                     }
 
-                    if (mat->metalnessTexID) {
+                    if (mat->metalnessTex) {
                         glActiveTexture(GL_TEXTURE3);
-                        glBindTexture(GL_TEXTURE_2D, mat->metalnessTexID);
+                        glBindTexture(GL_TEXTURE_2D, mat->metalnessTex->id);
                         glUniform1i(glGetUniformLocation(self->shader_program->programID, "metalnessTex"), 3);
                     }
 
-                    if (mat->ambientOcclusionTexID) {
+                    if (mat->ambientOcclusionTex) {
                         glActiveTexture(GL_TEXTURE4);
-                        glBindTexture(GL_TEXTURE_2D, mat->ambientOcclusionTexID);
+                        glBindTexture(GL_TEXTURE_2D, mat->ambientOcclusionTex->id);
                         glUniform1i(glGetUniformLocation(self->shader_program->programID, "aoTex"), 4);
                     }
 
-                    if (mat->emissiveTexID) {
+                    if (mat->emissiveTex) {
                         glActiveTexture(GL_TEXTURE5);
-                        glBindTexture(GL_TEXTURE_2D, mat->emissiveTexID);
+                        glBindTexture(GL_TEXTURE_2D, mat->emissiveTex->id);
                         glUniform1i(glGetUniformLocation(self->shader_program->programID, "emissiveTex"), 5);
                     }
 
-                    if (mat->heightTexID) {
+                    if (mat->heightTex) {
                         glActiveTexture(GL_TEXTURE6);
-                        glBindTexture(GL_TEXTURE_2D, mat->heightTexID);
+                        glBindTexture(GL_TEXTURE_2D, mat->heightTex->id);
                         glUniform1i(glGetUniformLocation(self->shader_program->programID, "heightTex"), 6);
                     }
 
                     // Additional Advanced PBR Textures
-                    if (mat->opacityTexID) {
+                    if (mat->opacityTex) {
                         glActiveTexture(GL_TEXTURE7);
-                        glBindTexture(GL_TEXTURE_2D, mat->opacityTexID);
+                        glBindTexture(GL_TEXTURE_2D, mat->opacityTex->id);
                         glUniform1i(glGetUniformLocation(self->shader_program->programID, "opacityTex"), 7);
                     }
 
-                    if (mat->sheenTexID) {
+                    if (mat->sheenTex) {
                         glActiveTexture(GL_TEXTURE8);
-                        glBindTexture(GL_TEXTURE_2D, mat->sheenTexID);
+                        glBindTexture(GL_TEXTURE_2D, mat->sheenTex->id);
                         glUniform1i(glGetUniformLocation(self->shader_program->programID, "sheenTex"), 8);
                     }
 
-                    if (mat->reflectanceTexID) {
+                    if (mat->reflectanceTex) {
                         glActiveTexture(GL_TEXTURE9);
-                        glBindTexture(GL_TEXTURE_2D, mat->reflectanceTexID);
+                        glBindTexture(GL_TEXTURE_2D, mat->reflectanceTex->id);
                         glUniform1i(glGetUniformLocation(self->shader_program->programID, "reflectanceTex"), 9);
                     }
 
                     // Set uniform values for each texture type
-                    glUniform1i(glGetUniformLocation(self->shader_program->programID, "albedoTexExists"), mat->albedoTexID != 0 ? 1 : 0);
-                    glUniform1i(glGetUniformLocation(self->shader_program->programID, "normalTexExists"), mat->normalTexID != 0 ? 1 : 0);
-                    glUniform1i(glGetUniformLocation(self->shader_program->programID, "roughnessTexExists"), mat->roughnessTexID != 0 ? 1 : 0);
-                    glUniform1i(glGetUniformLocation(self->shader_program->programID, "metalnessTexExists"), mat->metalnessTexID != 0 ? 1 : 0);
-                    glUniform1i(glGetUniformLocation(self->shader_program->programID, "aoTexExists"), mat->ambientOcclusionTexID != 0 ? 1 : 0);
-                    glUniform1i(glGetUniformLocation(self->shader_program->programID, "emissiveTexExists"), mat->emissiveTexID != 0 ? 1 : 0);
-                    glUniform1i(glGetUniformLocation(self->shader_program->programID, "heightTexExists"), mat->heightTexID != 0 ? 1 : 0);
+                    glUniform1i(glGetUniformLocation(self->shader_program->programID, "albedoTexExists"), mat->albedoTex ? 1 : 0);
+                    glUniform1i(glGetUniformLocation(self->shader_program->programID, "normalTexExists"), mat->normalTex ? 1 : 0);
+                    glUniform1i(glGetUniformLocation(self->shader_program->programID, "roughnessTexExists"), mat->roughnessTex ? 1 : 0);
+                    glUniform1i(glGetUniformLocation(self->shader_program->programID, "metalnessTexExists"), mat->metalnessTex ? 1 : 0);
+                    glUniform1i(glGetUniformLocation(self->shader_program->programID, "aoTexExists"), mat->ambientOcclusionTex ? 1 : 0);
+                    glUniform1i(glGetUniformLocation(self->shader_program->programID, "emissiveTexExists"), mat->emissiveTex ? 1 : 0);
+                    glUniform1i(glGetUniformLocation(self->shader_program->programID, "heightTexExists"), mat->heightTex ? 1 : 0);
 
                     // Set uniform values for additional advanced PBR textures
-                    glUniform1i(glGetUniformLocation(self->shader_program->programID, "opacityTexExists"), mat->opacityTexID != 0 ? 1 : 0);
-                    glUniform1i(glGetUniformLocation(self->shader_program->programID, "microsurfaceTexExists"), mat->microsurfaceTexID != 0 ? 1 : 0);
-                    glUniform1i(glGetUniformLocation(self->shader_program->programID, "anisotropyTexExists"), mat->anisotropyTexID != 0 ? 1 : 0);
-                    glUniform1i(glGetUniformLocation(self->shader_program->programID, "subsurfaceScatteringTexExists"), mat->subsurfaceScatteringTexID != 0 ? 1 : 0);
-                    glUniform1i(glGetUniformLocation(self->shader_program->programID, "sheenTexExists"), mat->sheenTexID != 0 ? 1 : 0);
-                    glUniform1i(glGetUniformLocation(self->shader_program->programID, "reflectanceTexExists"), mat->reflectanceTexID != 0 ? 1 : 0);
-
+                    glUniform1i(glGetUniformLocation(self->shader_program->programID, "opacityTexExists"), mat->opacityTex ? 1 : 0);
+                    glUniform1i(glGetUniformLocation(self->shader_program->programID, "sheenTexExists"), mat->sheenTex ? 1 : 0);
+                    glUniform1i(glGetUniformLocation(self->shader_program->programID, "reflectanceTexExists"), mat->reflectanceTex ? 1 : 0);
 
                 }
                 // Bind VAO and draw the mesh
@@ -546,33 +553,22 @@ void free_node(SceneNode* node) {
     free(node);
 }
 
+void print_indentation(int depth) {
+    for (int i = 0; i < depth; i++) {
+        printf("    ");
+    }
+}
 
 void print_scene_node(const SceneNode* node, int depth) {
     if (!node) return;
 
-    // Create indentation based on the depth of the node in the scene graph
-    for (int i = 0; i < depth; i++) {
-        printf("    ");
-    }
-
-    // Print node properties
-    printf("Node: %s\n", node->name ? node->name : "Unnamed");
-    for (int i = 0; i < depth; i++) {
-        printf("    ");
-    }
-    printf("Children Count: %zu\n", node->children_count);
-    for (int i = 0; i < depth; i++) {
-        printf("    ");
-    }
-    printf("Mesh Count: %zu\n", node->mesh_count);
-    for (int i = 0; i < depth; i++) {
-        printf("    ");
-    }
-    printf("Light: %s\n", node->light_name ? node->light_name : "None");
-    for (int i = 0; i < depth; i++) {
-        printf("    ");
-    }
-    printf("Camera: %s\n", node->camera_name ? node->camera_name : "None");
+    print_indentation(depth);
+    printf("Node: %s | Children: %zu | Meshes: %zu | Light: %s | Camera: %s\n",
+           node->name ? node->name : "Unnamed",
+           node->children_count,
+           node->mesh_count,
+           node->light_name ? node->light_name : "None",
+           node->camera_name ? node->camera_name : "None");
 
     // Recursively print children nodes
     for (size_t i = 0; i < node->children_count; i++) {
@@ -584,10 +580,13 @@ void print_scene(const Scene* scene) {
     if (!scene) return;
 
     printf("Scene:\n");
-    printf("Light Count: %zu\n", scene->light_count);
-    printf("Camera Count: %zu\n", scene->camera_count);
-    printf("Texture Directory: %s\n", scene->textureDirectory ? scene->textureDirectory : "None");
+    printf("Lights: %zu | Cameras: %zu | Texture Directory: %s\n",
+           scene->light_count,
+           scene->camera_count,
+           scene->textureDirectory ? scene->textureDirectory : "None");
 
     // Start recursion with the root node
     print_scene_node(scene->root_node, 0);
 }
+
+
