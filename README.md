@@ -1,8 +1,10 @@
 <div align="center">
 
+<pre>
 ┏┓┏┓┏┳┓┳┓┏┓
 ┃ ┣  ┃ ┣┫┣┫
 ┗┛┗┛ ┻ ┛┗┛┗
+</pre>
 
 <h3>
     Cetra Graphics Engine
