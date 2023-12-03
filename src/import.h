@@ -28,7 +28,7 @@ void process_ai_lights(const struct aiScene* scene, Light ***lights, uint32_t *n
 void process_ai_cameras(const struct aiScene* scene, Camera ***cameras, uint32_t *num_cameras);
 
 // Main function to import an FBX file and create a Scene structure
-Scene* import_fbx(const char* path, const char* textureDirectory);
+Scene* import_fbx(const char* path, const char* texture_directory);
 
 #endif // IMPORT_H
 

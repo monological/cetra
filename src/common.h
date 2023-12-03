@@ -5,5 +5,8 @@
 #define GL_ATTR_NORMAL   1
 #define GL_ATTR_TEXCOORD 2
 
+#define MAX_VERTEX_BUFFER 512 * 1024
+#define MAX_ELEMENT_BUFFER 128 * 1024
+
 #endif // COMMON_H
 

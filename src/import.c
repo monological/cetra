@@ -220,10 +220,10 @@ void process_ai_cameras(const struct aiScene* scene, Camera ***cameras, size_t *
         }
 
         glm_vec3_copy((vec3){ai_camera->mPosition.x, ai_camera->mPosition.y, ai_camera->mPosition.z}, camera->position);
-        glm_vec3_copy((vec3){ai_camera->mUp.x, ai_camera->mUp.y, ai_camera->mUp.z}, camera->up);
+        glm_vec3_copy((vec3){ai_camera->mUp.x, ai_camera->mUp.y, ai_camera->mUp.z}, camera->up_vector);
         glm_vec3_copy((vec3){ai_camera->mLookAt.x, ai_camera->mLookAt.y, ai_camera->mLookAt.z}, camera->look_at);
 
-        camera->fov = ai_camera->mHorizontalFOV;
+        camera->fov_radians = ai_camera->mHorizontalFOV;
         camera->aspect_ratio = ai_camera->mAspect; // You might need to calculate this differently
         camera->near_clip = ai_camera->mClipPlaneNear;
         camera->far_clip = ai_camera->mClipPlaneFar;
@@ -250,10 +250,10 @@ void copy_aiMatrix_to_mat4(const struct aiMatrix4x4 *from, mat4 to) {
     to[0][3] = from->d1; to[1][3] = from->d2; to[2][3] = from->d3; to[3][3] = from->d4;
 }
 
-SceneNode* process_ai_node(struct aiNode* ai_node, const struct aiScene* ai_scene, const char *textureDirectory) {
+SceneNode* process_ai_node(struct aiNode* ai_node, const struct aiScene* ai_scene, const char *texture_directory) {
     assert(ai_node != NULL);
     assert(ai_scene != NULL);
-    assert(textureDirectory != NULL);
+    assert(texture_directory != NULL);
 
     SceneNode* node = create_node();
     if (!node) {
@@ -270,7 +270,7 @@ SceneNode* process_ai_node(struct aiNode* ai_node, const struct aiScene* ai_scen
         process_ai_mesh(mesh, ai_scene->mMeshes[meshIndex]);
         if (ai_scene->mMeshes[meshIndex]->mMaterialIndex >= 0) {
             unsigned int matIndex = ai_scene->mMeshes[meshIndex]->mMaterialIndex;
-            mesh->material = process_ai_material(ai_scene->mMaterials[matIndex], textureDirectory);
+            mesh->material = process_ai_material(ai_scene->mMaterials[matIndex], texture_directory);
         }
         node->meshes[i] = mesh;
     }
@@ -279,7 +279,7 @@ SceneNode* process_ai_node(struct aiNode* ai_node, const struct aiScene* ai_scen
     node->children_count = ai_node->mNumChildren;
     node->children = malloc(sizeof(SceneNode*) * node->children_count);
     for (unsigned int i = 0; i < node->children_count; i++) {
-        node->children[i] = process_ai_node(ai_node->mChildren[i], ai_scene, textureDirectory);
+        node->children[i] = process_ai_node(ai_node->mChildren[i], ai_scene, texture_directory);
         node->children[i]->parent = node; // Set parent
     }
 
@@ -291,7 +291,7 @@ SceneNode* process_ai_node(struct aiNode* ai_node, const struct aiScene* ai_scen
     return node;
 }
 
-Scene* import_fbx(const char* path, const char* textureDirectory) {
+Scene* import_fbx(const char* path, const char* texture_directory) {
     const struct aiScene* ai_scene = aiImportFile(path, aiProcess_Triangulate | aiProcess_FlipUVs | aiProcess_CalcTangentSpace);
     if (!ai_scene || ai_scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !ai_scene->mRootNode) {
         fprintf(stderr, "Error importing FBX file: %s\n", path);
@@ -304,14 +304,14 @@ Scene* import_fbx(const char* path, const char* textureDirectory) {
         return NULL;
     }
 
-    set_scene_texture_directory(scene, textureDirectory);
+    set_scene_texture_directory(scene, texture_directory);
 
     // Process lights and cameras
     process_ai_lights(ai_scene, &scene->lights, &scene->light_count);
     process_ai_cameras(ai_scene, &scene->cameras, &scene->camera_count);
 
     // Process the root node
-    scene->root_node = process_ai_node(ai_scene->mRootNode, ai_scene, scene->textureDirectory);
+    scene->root_node = process_ai_node(ai_scene->mRootNode, ai_scene, scene->texture_directory);
 
     associate_cameras_and_lights_with_nodes(scene->root_node, scene);
 

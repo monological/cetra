@@ -82,8 +82,10 @@ message(STATUS "ASSIMP Library found at: ${ASSIMP_LIBRARY}")
 # Include the directories for header files
 include_directories(${EXTERNAL_INSTALL_LOCATION}/include)
 
+
 # Add the target for the engine library
 add_library(engine SHARED 
+    src/engine.c
     src/util.c
     src/scene.c
     src/shader.c

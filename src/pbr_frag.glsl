@@ -6,6 +6,7 @@ in vec2 TexCoords;
 out vec4 FragColor;
 
 struct Light {
+    int type;
     vec3 position;
     vec3 direction;
     vec3 color;
@@ -17,15 +18,21 @@ struct Light {
     float quadratic;
     float cutOff;
     float outerCutOff;
-    int type; // LightType: 0 - Directional, 1 - Point, 2 - Spot, 3 - Unknown
 };
 
 uniform Light light;
+
+uniform vec3 view;
+uniform vec3 model;
+uniform vec3 projection;
+
 uniform vec3 albedo;
 uniform float metallic;
 uniform float roughness;
 uniform float ao;
 uniform vec3 camPos;
+uniform float time;
+
 uniform sampler2D albedoTex;
 uniform sampler2D normalTex;
 uniform sampler2D roughnessTex;
@@ -33,6 +40,9 @@ uniform sampler2D metalnessTex;
 uniform sampler2D aoTex;
 uniform sampler2D emissiveTex;
 uniform sampler2D heightTex;
+uniform sampler2D opacityTex;
+uniform sampler2D sheenTex;
+uniform sampler2D reflectanceTex;
 
 uniform int albedoTexExists;
 uniform int normalTexExists;
@@ -41,6 +51,9 @@ uniform int metalnessTexExists;
 uniform int aoTexExists;
 uniform int emissiveTexExists;
 uniform int heightTexExists;
+uniform int opacityTexExists;
+uniform int sheenTexExists;
+uniform int reflectanceTexExists;
 
 const float PI = 3.14159265359;
 
@@ -161,6 +174,21 @@ void main() {
         emissiveMap = texture(emissiveTex, TexCoords).rgb;
     }
 
+    float opacity = 1.0;
+    if (opacityTexExists > 0) {
+        opacity = texture(opacityTex, TexCoords).r;
+    }
+
+    vec3 sheenColor = vec3(0.0);
+    if (sheenTexExists > 0) {
+        sheenColor = texture(sheenTex, TexCoords).rgb;
+    }
+
+    vec3 reflectance = vec3(0.04); // Default reflectance value
+    if (reflectanceTexExists > 0) {
+        reflectance = texture(reflectanceTex, TexCoords).rgb;
+    }
+
     // Use declared variables for final values
     vec3 finalAlbedo = albedoMap;
     float finalMetallic = metallicMap;
@@ -170,15 +198,27 @@ void main() {
     // Calculate PBR Lighting
     vec3 N = normalize(normalMap);
     vec3 V = normalize(camPos - FragPos);
+    vec3 F0 = mix(vec3(0.04), albedoMap, metallicMap);
 
-    vec3 F0 = vec3(0.04);
     F0 = mix(F0, finalAlbedo, finalMetallic);
 
     vec3 Lo = vec3(0.0);
-    // Light calculations (unchanged)
+    if (light.type == 0) { // Directional light
+        Lo += calculateDirectionalLight(N, V, light);
+    } else if (light.type == 1) { // Point light
+        Lo += calculatePointLight(N, V, light, FragPos);
+    } else if (light.type == 2) { // Spot light
+        Lo += calculateSpotLight(N, V, light, FragPos);
+    }
 
     vec3 ambient = finalAlbedo * finalAO;
-    vec3 color = ambient + Lo + emissiveMap;
+    vec3 color = ambient + Lo + emissiveMap + sheenColor;
+
+    // Apply reflectance
+    color = mix(color, vec3(1.0), reflectance);
+
+    // Apply opacity to the final color
+    color = mix(vec3(0.0), color, opacity);
 
     // Tone Mapping
     color = color / (color + vec3(1.0)); // Reinhard tone mapping

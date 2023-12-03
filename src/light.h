@@ -12,8 +12,10 @@ typedef enum {
 } LightType;
 
 typedef struct Light {
-    char* name; // Name of the light
+    char* name;
+
     LightType type;
+
     vec3 position;
     vec3 direction;
     vec3 color;

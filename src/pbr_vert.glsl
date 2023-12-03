@@ -10,6 +10,8 @@ out vec2 TexCoords;
 uniform mat4 model;
 uniform mat4 view;
 uniform mat4 projection;
+uniform vec3 camPos;
+uniform float time;
 
 void main() {
     FragPos = vec3(model * vec4(aPos, 1.0));

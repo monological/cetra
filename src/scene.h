@@ -37,17 +37,12 @@ typedef struct SceneNode {
     Camera* camera;
     char* camera_name;
 
-    Program* shader_program;
-    Shader* vertex_shader;
-    Shader* geometry_shader;
-    Shader* fragment_shader;
+    ShaderProgram* shader_program;
 
-    bool should_draw_axes;
+    bool show_axes;
     GLuint axesVAO;
     GLuint axesVBO;
-    Program* axes_shader_program;
-    Shader* axes_vertex_shader;
-    Shader* axes_fragment_shader;
+    ShaderProgram* axes_shader_program;
 } SceneNode;
 
 SceneNode* create_node();
@@ -57,16 +52,17 @@ void set_node_light_name(SceneNode* node, const char* name);
 void set_node_camera(SceneNode* node, Camera* camera);
 void set_node_camera_name(SceneNode* node, const char* name);
 
-void set_program_for_node(SceneNode* node, Program* program);
+void set_program_for_node(SceneNode* node, ShaderProgram* program);
 void set_shaders_for_node(SceneNode* node, Shader* vertex, Shader* geometry, Shader* fragment);
-void set_axes_program_for_node(SceneNode* node, Program* program);
+void set_axes_program_for_node(SceneNode* node, ShaderProgram* program);
 void set_axes_shaders_for_node(SceneNode* node, Shader* vertex, Shader* fragment);
-void set_should_draw_axes(SceneNode* node, bool should_draw_axes);
+void set_node_show_axes(SceneNode* node, bool show_axes);
 
 void setup_node_axes_buffers(SceneNode* node);
 void draw_node_axes(SceneNode* node, const mat4 model, const mat4 view, const mat4 projection);
 void add_child_node(SceneNode* self, SceneNode* child);
-void render_node(SceneNode* self, mat4 model, mat4 view, mat4 projection);
+void render_node(SceneNode* self, mat4 model, mat4 view, mat4 projection,
+    float time_value, vec3 cam_pos);
 void transform_node(SceneNode* node, Transform* transform);
 void update_child_nodes(SceneNode* node, mat4 parentTransform);
 void setup_node_meshes(SceneNode* node);
@@ -81,7 +77,7 @@ typedef struct Scene {
     Camera** cameras;
     size_t camera_count;
 
-    char* textureDirectory;
+    char* texture_directory;
 } Scene;
 
 Scene* create_scene();

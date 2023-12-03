@@ -3,8 +3,6 @@
 
 #include "camera.h"
 
-#include "camera.h"
-
 // Function to create and initialize a Camera object
 Camera* create_camera() {
     Camera* camera = (Camera*)malloc(sizeof(Camera));
@@ -14,13 +12,22 @@ Camera* create_camera() {
 
     camera->name = NULL;
 
-    glm_vec3_copy((vec3){0.0f, 0.0f, 0.0f}, camera->position);
-    glm_vec3_copy((vec3){0.0f, 0.0f, -1.0f}, camera->look_at);
-    glm_vec3_copy((vec3){0.0f, 1.0f, 0.0f}, camera->up);
-    camera->fov = 45.0f;
+    glm_vec3_copy((vec3){0.0f, 2.0f, 5.0f}, camera->position); // Default position
+    glm_vec3_copy((vec3){0.0f, 0.0f, 0.0f}, camera->look_at);   // Looking towards the origin
+    glm_vec3_copy((vec3){0.0f, 1.0f, 0.0f}, camera->up_vector);       // 'Up' is in the Y direction
     camera->aspect_ratio = 16.0f / 9.0f;
-    camera->near_clip = 0.1f;           
-    camera->far_clip = 100.0f;          
+    camera->fov_radians = glm_rad(60.0f);  // A typical field of view
+    camera->near_clip = 0.1f;              // Typical near clip plane
+    camera->far_clip = 1000.0f;            // Typical far clip plane
+
+    // animation variables
+    camera->theta = 0.0f;
+    camera->phi = 0.0f;
+    camera->distance = 2000.0f;
+    camera->height = 0.0f;
+    camera->zoom_speed = 0.005f;
+    camera->orbit_speed = 0.001f;
+    camera->amplitude = 0.001f;
 
     return camera;
 }
@@ -48,29 +55,17 @@ void set_camera_look_at(Camera* camera, vec3 look_at) {
     }
 }
 
-void set_camera_up(Camera* camera, vec3 up) {
+void set_camera_up_vector(Camera* camera, vec3 up_vector) {
     if (camera) {
-        glm_vec3_copy(up, camera->up);
+        glm_vec3_copy(up_vector, camera->up_vector);
     }
 }
 
-void set_camera_fov(Camera* camera, float fov) {
-    if (camera) {
-        camera->fov = fov;
-    }
-}
-
-void set_camera_aspect_ratio(Camera* camera, float aspect_ratio) {
-    if (camera) {
-        camera->aspect_ratio = aspect_ratio;
-    }
-}
-
-void set_camera_clip_planes(Camera* camera, float near_clip, float far_clip) {
-    if (camera) {
-        camera->near_clip = near_clip;
-        camera->far_clip = far_clip;
-    }
+void set_camera_perspective(Camera* camera, float fov_degrees, float near_clip, float far_clip){
+    if (!camera) return;
+    camera->fov_radians = glm_rad(fov_degrees);
+    camera->near_clip = near_clip;
+    camera->far_clip = far_clip;
 }
 
 

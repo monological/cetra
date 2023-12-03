@@ -12,7 +12,7 @@ typedef enum {
 typedef struct {
     GLuint shaderID;
     ShaderType type;
-    char* source; // Store the source code
+    char* source;
 } Shader;
 
 Shader* create_shader_from_path(ShaderType type, const char* file_path);
