@@ -41,10 +41,12 @@ Texture* load_texture(const char* path, const char* directory) {
 
     do {
         snprintf(filename, sizeof(filename), "%s/%s", directory, subpath);
-        printf("trying texture path %s\n", filename);
+        //printf("trying texture path %s\n", filename);
 
         unsigned char* data = stbi_load(filename, &width, &height, &nrChannels, 0);
         if (data) {
+            printf("loading texture path %s\n", filename);
+
             // Create new texture object
             Texture* newTexture = create_texture();
             if (!newTexture) {
@@ -85,6 +87,8 @@ Texture* load_texture(const char* path, const char* directory) {
             glBindTexture(GL_TEXTURE_2D, 0);
             free(normalized_path);
             free(subpath);
+
+
             return newTexture;
         }
 

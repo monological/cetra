@@ -127,4 +127,8 @@ elseif(WIN32)
     target_link_libraries(network OpenGL::GL)
 endif()
 
+# Copy models directory and glsl files to the build directory
+file(COPY models DESTINATION ${CMAKE_BINARY_DIR})
+file(COPY textures DESTINATION ${CMAKE_BINARY_DIR})
+file(COPY shaders DESTINATION ${CMAKE_BINARY_DIR})
 

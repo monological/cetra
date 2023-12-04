@@ -33,7 +33,7 @@ void set_camera_position(Camera* camera, vec3 position);
 void set_camera_look_at(Camera* camera, vec3 look_at);
 void set_camera_direction(Camera* camera, vec3 direction);
 void set_camera_up_vector(Camera* camera, vec3 up_vector);
-void set_camera_perspective(Camera* camera, float fov_degrees, float near_clip, float far_clip);
+void set_camera_perspective(Camera* camera, float fov_radians, float near_clip, float far_clip);
 
 #endif // _CAMERA_H_
 

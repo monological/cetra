@@ -419,8 +419,8 @@ void render_node(SceneNode* self, mat4 model, mat4 view, mat4 projection,
         }
 
         // Optional cleanup
-        glUseProgram(0);
         glBindVertexArray(0);
+        glUseProgram(0);
 
     }
 

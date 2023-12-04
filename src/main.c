@@ -17,13 +17,13 @@
 #include "engine.h"
 #include "import.h"
 
-#define PBR_VERT_SHADER_PATH "/Users/neo/Desktop/graphics/engine/src/pbr_vert.glsl"
-#define PBR_FRAG_SHADER_PATH "/Users/neo/Desktop/graphics/engine/src/pbr_frag.glsl"
-#define AXES_VERT_SHADER_PATH "/Users/neo/Desktop/graphics/engine/src/axes_vert.glsl"
-#define AXES_FRAG_SHADER_PATH "/Users/neo/Desktop/graphics/engine/src/axes_frag.glsl"
+#define PBR_VERT_SHADER_PATH "./shaders/pbr_vert.glsl"
+#define PBR_FRAG_SHADER_PATH "./shaders/pbr_frag.glsl"
+#define AXES_VERT_SHADER_PATH "./shaders/axes_vert.glsl"
+#define AXES_FRAG_SHADER_PATH "./shaders/axes_frag.glsl"
 
-#define FBX_MODEL_PATH "/Users/neo/Desktop/graphics/engine/models/pilot.fbx"
-#define FBX_TEXTURE_DIR "/Users/neo/Desktop/graphics/engine/models/pilot.fbm"
+#define FBX_MODEL_PATH "./models/room.fbx"
+#define FBX_TEXTURE_DIR "./textures/room.fbm"
 
 const unsigned int WIDTH = 800;
 const unsigned int HEIGHT = 600;
@@ -179,6 +179,12 @@ void render_scene(Engine* engine, Scene* current_scene){
 
 int main() {
     
+    printf("┏┓┏┓┏┳┓┳┓┏┓\n");
+    printf("┃ ┣  ┃ ┣┫┣┫\n");
+    printf("┗┛┗┛ ┻ ┛┗┛┗\n");
+
+    printf("\nInitializing Cetra Graphics Engine...\n");
+    
     Engine *engine = create_engine("Cetra Engine", WIDTH, HEIGHT);
 
     set_engine_error_callback(engine, error_callback);
@@ -214,7 +220,7 @@ int main() {
     vec3 camera_position = {0.0f, 2.0f, 300.0f};
     vec3 look_at_point = {0.0f, 0.0f, 0.0f};
     vec3 up_vector = {0.0f, 1.0f, 0.0f};
-    float fov_degrees = 35.0f;
+    float fov_radians = 0.37;
     float near_clip = 0.1f;
     float far_clip = 10000.0f;
 
@@ -223,10 +229,13 @@ int main() {
     set_camera_position(camera, camera_position);
     set_camera_look_at(camera, look_at_point);
     set_camera_up_vector(camera, up_vector);
-    set_camera_perspective(camera, fov_degrees, near_clip, far_clip);
+    set_camera_perspective(camera, fov_radians, near_clip, far_clip);
 
     update_engine_camera_lookat(engine);
     update_engine_camera_perspective(engine);
+
+    camera->theta = 0.60f;
+    camera->height = 1000.0f;
 
     set_engine_camera(engine, camera);
     
@@ -252,8 +261,8 @@ int main() {
         set_light_name(light, "root");
         set_light_type(light, LIGHT_POINT);
         set_light_position(light, lightPosition);
-        set_light_intensity(light, 0.1f);
-        set_light_color(light, (vec3){0.7f, 0.7f, 0.7f});
+        set_light_intensity(light, 10.0f);
+        set_light_color(light, (vec3){1.0f, 0.7f, 0.7f});
         set_node_light(root_node, light);
     }
 
@@ -270,7 +279,10 @@ int main() {
 
     run_engine_render_loop(engine, render_scene);
 
+    printf("cleaning up...\n");
     free_engine(engine);
+
+    printf("goodbye friend...\n");
 
     return 0;
 }

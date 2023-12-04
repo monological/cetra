@@ -67,8 +67,6 @@ Engine* create_engine(const char* window_title, int width, int height) {
     glm_mat4_identity(engine->view_matrix);
     glm_mat4_identity(engine->projection_matrix);
 
-    
-
     engine->show_wireframe = false;
     engine->show_axes = false;
 
@@ -412,7 +410,7 @@ void render_nuklear_gui(Engine* engine) {
         // Button for toggling axes
         nk_layout_row_static(engine->nk_ctx, 30, 80, 1);
         if (nk_button_label(engine->nk_ctx, "Show Axes")) {
-            engine->show_axes = !engine->show_axes;
+            set_engine_show_axes(engine, !engine->show_axes);
         }
 
         // Camera properties
@@ -421,6 +419,7 @@ void render_nuklear_gui(Engine* engine) {
         nk_property_float(engine->nk_ctx, "Phi:", 0.0f, &camera->phi, M_PI_2, 0.1f, 1);
         nk_property_float(engine->nk_ctx, "Distance:", 0.0f, &camera->distance, 3000.0f, 100.0f, 1);
         nk_property_float(engine->nk_ctx, "Height:", -2000.0f, &camera->height, 2000.0f, 100.0f, 1);
+        nk_property_float(engine->nk_ctx, "Fov:", 0.0f, &camera->fov_radians, M_PI, 0.01f, 0.01f);
 
         // LookAt Point properties
         nk_layout_row_dynamic(engine->nk_ctx, 25, 1);
@@ -439,7 +438,6 @@ void render_nuklear_gui(Engine* engine) {
         nk_property_float(engine->nk_ctx, "Zoom:", 0.0f, &camera->zoom_speed, 2.0f, 0.01f, 1);
         nk_property_float(engine->nk_ctx, "Orbit:", 0.0f, &camera->orbit_speed, 0.1f, 0.001f, 1);
         nk_property_float(engine->nk_ctx, "Amplitude:", 0.0f, &camera->amplitude, 50.0f, 1.0f, 1);
-        nk_property_float(engine->nk_ctx, "Fov:", 0.0f, &camera->fov_radians, M_PI, 0.01f, 0.01f);
         nk_property_float(engine->nk_ctx, "Near Clip:", 0.1f, &camera->near_clip, 100.0f, 1.0f, 0.1f);
         nk_property_float(engine->nk_ctx, "Far Clip:", 0.1f, &camera->far_clip, 10000.0f, 100.0f, 10.0f);
     }

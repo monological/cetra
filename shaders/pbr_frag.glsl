@@ -57,19 +57,19 @@ uniform int reflectanceTexExists;
 
 const float PI = 3.14159265359;
 
-
-float distributionGGX(vec3 N, vec3 H, float roughness) {
-    float a = roughness*roughness;
-    float a2 = a*a;
+float distributionGGX(vec3 N, vec3 H, float roughness, float gamma) {
+    float a = pow(roughness, gamma); // Non-linear mapping of roughness
+    float a2 = a * a;
     float NdotH = max(dot(N, H), 0.0);
-    float NdotH2 = NdotH*NdotH;
+    float NdotH2 = NdotH * NdotH;
 
-    float nom   = a2;
+    float nom = a2;
     float denom = (NdotH2 * (a2 - 1.0) + 1.0);
     denom = PI * denom * denom;
 
     return nom / denom;
 }
+
 
 float geometrySchlickGGX(float NdotV, float roughness) {
     float r = (roughness + 1.0);
@@ -90,18 +90,22 @@ float geometrySmith(vec3 N, vec3 V, vec3 L, float roughness) {
     return ggx1 * ggx2;
 }
 
-vec3 fresnelSchlick(float cosTheta, vec3 F0) {
+vec3 fresnelSchlick(float cosTheta, vec3 F0, float metallic) {
+    vec3 F0_non_metal = vec3(0.04); // Base reflectivity for non-metals
+    F0 = mix(F0_non_metal, F0, metallic); // Interpolate based on metallic value
     return F0 + (1.0 - F0) * pow(1.0 - cosTheta, 5.0);
 }
 
 
-vec3 calculateLightContribution(vec3 N, vec3 V, vec3 L, float NdotL) {
+vec3 calculateLightContribution(vec3 N, vec3 V, vec3 L, float NdotL, float metallic, vec3 albedo) {
     vec3 H = normalize(V + L);
-    vec3 F0 = vec3(0.04);
-    F0 = mix(F0, albedo, metallic);
+    vec3 F0 = albedo; // Reflectivity at normal incidence for metals
 
-    vec3 F = fresnelSchlick(max(dot(H, V), 0.0), F0);
-    float D = distributionGGX(N, H, roughness);
+    // Calculate Fresnel term using updated function
+    vec3 F = fresnelSchlick(max(dot(H, V), 0.0), F0, metallic);
+
+    float gamma = 2.0;
+    float D = distributionGGX(N, H, roughness, gamma);
     float G = geometrySmith(N, V, L, roughness);
 
     vec3 nominator = NdotL * F * D * G;
@@ -111,23 +115,23 @@ vec3 calculateLightContribution(vec3 N, vec3 V, vec3 L, float NdotL) {
     return specular;
 }
 
-vec3 calculatePointLight(vec3 N, vec3 V, Light light, vec3 fragPos) {
+vec3 calculatePointLight(vec3 N, vec3 V, Light light, vec3 fragPos, float metallic, vec3 albedo) {
     vec3 L = normalize(light.position - fragPos);
     float distance = length(light.position - fragPos);
     float attenuation = 1.0 / (light.constant + light.linear * distance + light.quadratic * (distance * distance));
     float NdotL = max(dot(N, L), 0.0);
-    vec3 lightContribution = calculateLightContribution(N, V, L, NdotL);
+    vec3 lightContribution = calculateLightContribution(N, V, L, NdotL, metallic, albedo);
     return lightContribution * light.color * light.intensity * attenuation;
 }
 
-vec3 calculateDirectionalLight(vec3 N, vec3 V, Light light) {
+vec3 calculateDirectionalLight(vec3 N, vec3 V, Light light, float metallic, vec3 albedo) {
     vec3 L = normalize(-light.direction);
     float NdotL = max(dot(N, L), 0.0);
-    vec3 lightContribution = calculateLightContribution(N, V, L, NdotL);
+    vec3 lightContribution = calculateLightContribution(N, V, L, NdotL, metallic, albedo);
     return lightContribution * light.color * light.intensity;
 }
 
-vec3 calculateSpotLight(vec3 N, vec3 V, Light light, vec3 fragPos) {
+vec3 calculateSpotLight(vec3 N, vec3 V, Light light, vec3 fragPos, float metallic, vec3 albedo) {
     vec3 L = normalize(light.position - fragPos);
     float distance = length(light.position - fragPos);
     float attenuation = 1.0 / (light.constant + light.linear * distance + light.quadratic * (distance * distance));
@@ -135,7 +139,7 @@ vec3 calculateSpotLight(vec3 N, vec3 V, Light light, vec3 fragPos) {
     float epsilon = light.cutOff - light.outerCutOff;
     float intensity = clamp((theta - light.outerCutOff) / epsilon, 0.0, 1.0);
     float NdotL = max(dot(N, L), 0.0);
-    vec3 lightContribution = calculateLightContribution(N, V, L, NdotL);
+    vec3 lightContribution = calculateLightContribution(N, V, L, NdotL, metallic, albedo);
     return lightContribution * light.color * light.intensity * attenuation * intensity;
 }
 
@@ -202,17 +206,22 @@ void main() {
 
     F0 = mix(F0, finalAlbedo, finalMetallic);
 
-    vec3 Lo = vec3(0.0);
+
+    vec3 Lo = vec3(0.0); // Accumulate specular component
     if (light.type == 0) { // Directional light
-        Lo += calculateDirectionalLight(N, V, light);
+        Lo += calculateDirectionalLight(N, V, light, finalMetallic, finalAlbedo);
     } else if (light.type == 1) { // Point light
-        Lo += calculatePointLight(N, V, light, FragPos);
+        Lo += calculatePointLight(N, V, light, FragPos, finalMetallic, finalAlbedo);
     } else if (light.type == 2) { // Spot light
-        Lo += calculateSpotLight(N, V, light, FragPos);
+        Lo += calculateSpotLight(N, V, light, FragPos, finalMetallic, finalAlbedo);
     }
 
+    // Ambient and diffuse calculation
     vec3 ambient = finalAlbedo * finalAO;
-    vec3 color = ambient + Lo + emissiveMap + sheenColor;
+    vec3 diffuse = (1.0 - finalMetallic) * finalAlbedo / PI;
+
+    // Combine lighting components
+    vec3 color = ambient + Lo + diffuse + emissiveMap + sheenColor;
 
     // Apply reflectance
     color = mix(color, vec3(1.0), reflectance);
@@ -224,8 +233,8 @@ void main() {
     color = color / (color + vec3(1.0)); // Reinhard tone mapping
     color = pow(color, vec3(1.0/2.2)); // Gamma Correction
 
-    // Tone mapping and gamma correction (unchanged)
     FragColor = vec4(color, 1.0);
+
 }
 
 

@@ -110,94 +110,96 @@ void setup_program_uniforms(ShaderProgram* program) {
 
     // Existing uniforms setup
     program->model_loc = glGetUniformLocation(program->id, "model");
-    if (program->model_loc == -1) fprintf(stderr, "Uniform 'model' not found.\n");
+    //if (program->model_loc == -1) fprintf(stderr, "Uniform 'model' not found.\n");
 
     program->view_loc = glGetUniformLocation(program->id, "view");
-    if (program->view_loc == -1) fprintf(stderr, "Uniform 'view' not found.\n");
+    //if (program->view_loc == -1) fprintf(stderr, "Uniform 'view' not found.\n");
 
     program->proj_loc = glGetUniformLocation(program->id, "projection");
-    if (program->proj_loc == -1) fprintf(stderr, "Uniform 'projection' not found.\n");
+    //if (program->proj_loc == -1) fprintf(stderr, "Uniform 'projection' not found.\n");
 
     program->cam_pos_loc = glGetUniformLocation(program->id, "camPos");
-    if (program->cam_pos_loc == -1) fprintf(stderr, "Uniform 'camPos' not found.\n");
+    //if (program->cam_pos_loc == -1) fprintf(stderr, "Uniform 'camPos' not found.\n");
 
     program->time_loc = glGetUniformLocation(program->id, "time");
-    if (program->time_loc == -1) fprintf(stderr, "Uniform 'time' not found.\n");
+    //if (program->time_loc == -1) fprintf(stderr, "Uniform 'time' not found.\n");
 
     // New uniforms setup
     program->albedo_loc = glGetUniformLocation(program->id, "albedo");
-    if (program->albedo_loc == -1) fprintf(stderr, "Uniform 'albedo' not found.\n");
+    //if (program->albedo_loc == -1) fprintf(stderr, "Uniform 'albedo' not found.\n");
 
     program->metallic_loc = glGetUniformLocation(program->id, "metallic");
-    if (program->metallic_loc == -1) fprintf(stderr, "Uniform 'metallic' not found.\n");
+    //if (program->metallic_loc == -1) fprintf(stderr, "Uniform 'metallic' not found.\n");
 
     program->roughness_loc = glGetUniformLocation(program->id, "roughness");
-    if (program->roughness_loc == -1) fprintf(stderr, "Uniform 'roughness' not found.\n");
+    //if (program->roughness_loc == -1) fprintf(stderr, "Uniform 'roughness' not found.\n");
 
     program->ao_loc = glGetUniformLocation(program->id, "ao");
-    if (program->ao_loc == -1) fprintf(stderr, "Uniform 'ao' not found.\n");
+    //if (program->ao_loc == -1) fprintf(stderr, "Uniform 'ao' not found.\n");
 
     // Texture uniforms setup
     program->albedo_tex_loc = glGetUniformLocation(program->id, "albedoTex");
-    if (program->albedo_tex_loc == -1) fprintf(stderr, "Uniform 'albedoTex' not found.\n");
+    //if (program->albedo_tex_loc == -1) fprintf(stderr, "Uniform 'albedoTex' not found.\n");
 
     program->normal_tex_loc = glGetUniformLocation(program->id, "normalTex");
-    if (program->normal_tex_loc == -1) fprintf(stderr, "Uniform 'normalTex' not found.\n");
+    //if (program->normal_tex_loc == -1) fprintf(stderr, "Uniform 'normalTex' not found.\n");
 
     program->roughness_tex_loc = glGetUniformLocation(program->id, "roughnessTex");
-    if (program->roughness_tex_loc == -1) fprintf(stderr, "Uniform 'roughnessTex' not found.\n");
+    //if (program->roughness_tex_loc == -1) fprintf(stderr, "Uniform 'roughnessTex' not found.\n");
 
     program->metalness_tex_loc = glGetUniformLocation(program->id, "metalnessTex");
-    if (program->metalness_tex_loc == -1) fprintf(stderr, "Uniform 'metalnessTex' not found.\n");
+    //if (program->metalness_tex_loc == -1) fprintf(stderr, "Uniform 'metalnessTex' not found.\n");
 
     program->ao_tex_loc = glGetUniformLocation(program->id, "aoTex");
-    if (program->ao_tex_loc == -1) fprintf(stderr, "Uniform 'aoTex' not found.\n");
+    //if (program->ao_tex_loc == -1) fprintf(stderr, "Uniform 'aoTex' not found.\n");
 
     program->emissive_tex_loc = glGetUniformLocation(program->id, "emissiveTex");
-    if (program->emissive_tex_loc == -1) fprintf(stderr, "Uniform 'emissiveTex' not found.\n");
+    //if (program->emissive_tex_loc == -1) fprintf(stderr, "Uniform 'emissiveTex' not found.\n");
 
     program->height_tex_loc = glGetUniformLocation(program->id, "heightTex");
-    if (program->height_tex_loc == -1) fprintf(stderr, "Uniform 'heightTex' not found.\n");
+    //if (program->height_tex_loc == -1) fprintf(stderr, "Uniform 'heightTex' not found.\n");
 
     program->opacity_tex_loc = glGetUniformLocation(program->id, "opacityTex");
-    if (program->opacity_tex_loc == -1) fprintf(stderr, "Uniform 'opacityTex' not found.\n");
+    //if (program->opacity_tex_loc == -1) fprintf(stderr, "Uniform 'opacityTex' not found.\n");
 
     program->sheen_tex_loc = glGetUniformLocation(program->id, "sheenTex");
-    if (program->sheen_tex_loc == -1) fprintf(stderr, "Uniform 'sheenTex' not found.\n");
+    //if (program->sheen_tex_loc == -1) fprintf(stderr, "Uniform 'sheenTex' not found.\n");
 
     program->reflectance_tex_loc = glGetUniformLocation(program->id, "reflectanceTex");
-    if (program->reflectance_tex_loc == -1) fprintf(stderr, "Uniform 'reflectanceTex' not found.\n");
+    //if (program->reflectance_tex_loc == -1) fprintf(stderr, "Uniform 'reflectanceTex' not found.\n");
 
     // Texture exists uniform setup
     program->albedo_tex_exists_loc = glGetUniformLocation(program->id, "albedoTexExists");
-    if (program->albedo_tex_exists_loc == -1) fprintf(stderr, "Uniform 'albedoTexExists' not found.\n");
+    //if (program->albedo_tex_exists_loc == -1) fprintf(stderr, "Uniform 'albedoTexExists' not found.\n");
 
     program->normal_tex_exists_loc = glGetUniformLocation(program->id, "normalTexExists");
-    if (program->normal_tex_exists_loc == -1) fprintf(stderr, "Uniform 'normalTexExists' not found.\n");
+    //if (program->normal_tex_exists_loc == -1) fprintf(stderr, "Uniform 'normalTexExists' not found.\n");
 
     program->roughness_tex_exists_loc = glGetUniformLocation(program->id, "roughnessTexExists");
-    if (program->roughness_tex_exists_loc == -1) fprintf(stderr, "Uniform 'roughnessTexExists' not found.\n");
+    //if (program->roughness_tex_exists_loc == -1) fprintf(stderr, "Uniform 'roughnessTexExists' not found.\n");
 
     program->metalness_tex_exists_loc = glGetUniformLocation(program->id, "metalnessTexExists");
-    if (program->metalness_tex_exists_loc == -1) fprintf(stderr, "Uniform 'metalnessTexExists' not found.\n");
+    //if (program->metalness_tex_exists_loc == -1) fprintf(stderr, "Uniform 'metalnessTexExists' not found.\n");
 
     program->ao_tex_exists_loc = glGetUniformLocation(program->id, "aoTexExists");
-    if (program->ao_tex_exists_loc == -1) fprintf(stderr, "Uniform 'aoTexExists' not found.\n");
+    //if (program->ao_tex_exists_loc == -1) fprintf(stderr, "Uniform 'aoTexExists' not found.\n");
 
     program->emissive_tex_exists_loc = glGetUniformLocation(program->id, "emissiveTexExists");
-    if (program->emissive_tex_exists_loc == -1) fprintf(stderr, "Uniform 'emissiveTexExists' not found.\n");
+    //if (program->emissive_tex_exists_loc == -1) fprintf(stderr, "Uniform 'emissiveTexExists' not found.\n");
 
     program->height_tex_exists_loc = glGetUniformLocation(program->id, "heightTexExists");
-    if (program->height_tex_exists_loc == -1) fprintf(stderr, "Uniform 'heightTexExists' not found.\n");
+    //if (program->height_tex_exists_loc == -1) fprintf(stderr, "Uniform 'heightTexExists' not found.\n");
 
     program->opacity_tex_exists_loc = glGetUniformLocation(program->id, "opacityTexExists");
-    if (program->opacity_tex_exists_loc == -1) fprintf(stderr, "Uniform 'opacityTexExists' not found.\n");
+    //if (program->opacity_tex_exists_loc == -1) fprintf(stderr, "Uniform 'opacityTexExists' not found.\n");
 
     program->sheen_tex_exists_loc = glGetUniformLocation(program->id, "sheenTexExists");
-    if (program->sheen_tex_exists_loc == -1) fprintf(stderr, "Uniform 'sheenTexExists' not found.\n");
+    //if (program->sheen_tex_exists_loc == -1) fprintf(stderr, "Uniform 'sheenTexExists' not found.\n");
 
     program->reflectance_tex_exists_loc = glGetUniformLocation(program->id, "reflectanceTexExists");
-    if (program->reflectance_tex_exists_loc == -1) fprintf(stderr, "Uniform 'reflectanceTexExists' not found.\n");
+    //if (program->reflectance_tex_exists_loc == -1) fprintf(stderr, "Uniform 'reflectanceTexExists' not found.\n");
+
+    return;
 }
 
 
@@ -253,14 +255,40 @@ GLboolean init_shader_program(ShaderProgram* program, const char* vert_path,
         success = GL_FALSE;
     }
 
-    glValidateProgram(program->id);
-    CheckOpenGLError("validate program");
-
     setup_program_uniforms(program);
 
     return success;
 }
 
+GLboolean validate_program(ShaderProgram* program){
+    // Validate the shader program
+    //
+    GLboolean success = GL_TRUE;
+
+    glValidateProgram(program->id);
+    CheckOpenGLError("validate program");
+
+    GLint validationStatus;
+    glGetProgramiv(program->id, GL_VALIDATE_STATUS, &validationStatus);
+    if (validationStatus == GL_FALSE) {
+        fprintf(stderr, "Shader program validation failed\n");
+
+        // Get and print the validation log
+        GLint logLength;
+        glGetProgramiv(program->id, GL_INFO_LOG_LENGTH, &logLength);
+        char* logMessage = malloc(sizeof(char) * logLength);
+        if (logMessage) {
+            glGetProgramInfoLog(program->id, logLength, NULL, logMessage);
+            fprintf(stderr, "Validation log: %s\n", logMessage);
+            free(logMessage);
+        } else {
+            fprintf(stderr, "Failed to allocate memory for validation log\n");
+        }
+
+        success = GL_FALSE;
+    }
+    return success;
+}
 void free_program(ShaderProgram* program) {
     if (program != NULL) {
         if (program->id != 0) {

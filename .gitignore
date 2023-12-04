@@ -2,5 +2,5 @@
 *.fbx 
 *.fbm
 build
-models
+my_models
 *.swp
