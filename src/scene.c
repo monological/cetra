@@ -104,6 +104,8 @@ void free_scene(Scene* scene) {
 
     // Finally, free the scene itself
     free(scene);
+
+    return;
 }
 
 Camera* find_camera_by_name(Scene* scene, const char* name) {
