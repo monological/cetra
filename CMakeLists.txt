@@ -22,6 +22,10 @@ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-strict-prototypes")
 # Define the external install location
 set(EXTERNAL_INSTALL_LOCATION ${CMAKE_BINARY_DIR}/external)
 
+set(CMAKE_INSTALL_RPATH "${EXTERNAL_INSTALL_LOCATION}/lib;@loader_path")
+set(CMAKE_BUILD_WITH_INSTALL_RPATH TRUE)
+set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
+
 # Add cglm as an external project
 ExternalProject_Add(
     cglm
@@ -33,6 +37,7 @@ ExternalProject_Add(
     EXCLUDE_FROM_ALL TRUE
     UPDATE_DISCONNECTED TRUE
     PATCH_COMMAND find <SOURCE_DIR> -type f -exec dos2unix {} +
+    BUILD_ALWAYS 1
 )
 
 # Add GLFW as an external project
@@ -46,6 +51,7 @@ ExternalProject_Add(
     EXCLUDE_FROM_ALL TRUE
     UPDATE_DISCONNECTED TRUE
     PATCH_COMMAND find <SOURCE_DIR> -type f -exec dos2unix {} +
+    BUILD_ALWAYS 1
 )
 
 ExternalProject_Add(
@@ -58,6 +64,7 @@ ExternalProject_Add(
     EXCLUDE_FROM_ALL TRUE
     UPDATE_DISCONNECTED TRUE
     PATCH_COMMAND find <SOURCE_DIR> -type f -exec dos2unix {} +
+    BUILD_ALWAYS 1
 )
 
 
@@ -69,22 +76,20 @@ execute_process(
 # Add GLEW-cmake directory
 add_subdirectory(${GLEW_DIR})
 
-# Find the required libraries
-find_library(GLFW_LIBRARY NAMES glfw3 PATHS "${EXTERNAL_INSTALL_LOCATION}/lib" NO_DEFAULT_PATH)
-message(STATUS "GLFW Library found at: ${GLFW_LIBRARY}")
 
-find_library(CGLM_LIBRARY NAMES cglm libcglm PATHS ${EXTERNAL_INSTALL_LOCATION}/lib NO_DEFAULT_PATH)
-message(STATUS "CGLM Library found at: ${CGLM_LIBRARY}")
 
-find_library(ASSIMP_LIBRARY NAMES assimp PATHS "${EXTERNAL_INSTALL_LOCATION}/lib" NO_DEFAULT_PATH)
-message(STATUS "ASSIMP Library found at: ${ASSIMP_LIBRARY}")
+add_custom_target(FindLibraries ALL
+    COMMAND ${CMAKE_COMMAND} -E echo "Finding external libraries..."
+    COMMAND ${CMAKE_COMMAND} -D CMAKE_PREFIX_PATH=${EXTERNAL_INSTALL_LOCATION} -P ${CMAKE_CURRENT_LIST_DIR}/FindLibraries.cmake
+    DEPENDS assimp
+)
 
 # Include the directories for header files
 include_directories(${EXTERNAL_INSTALL_LOCATION}/include)
 
 
 # Add the target for the engine library
-add_library(engine SHARED 
+add_library(cetra SHARED 
     src/engine.c
     src/util.c
     src/scene.c
@@ -100,13 +105,13 @@ add_library(engine SHARED
 )
 
 # Ensure GLEW and external libraries are built before the engine target
-add_dependencies(engine glfw cglm libglew_static assimp)
+add_dependencies(cetra glfw cglm libglew_static assimp FindLibraries)
 
 # Link the engine with external libraries
-target_link_libraries(engine "${EXTERNAL_INSTALL_LOCATION}/lib/libglfw3.a" ${CGLM_LIBRARY} libglew_static ${ASSIMP_LIBRARY})
+target_link_libraries(cetra "${EXTERNAL_INSTALL_LOCATION}/lib/libglfw3.a" ${CGLM_LIBRARY} libglew_static "${EXTERNAL_INSTALL_LOCATION}/lib/libassimp.dylib")
 
-add_executable(cetra src/main.c)
-target_link_libraries(cetra engine "${EXTERNAL_INSTALL_LOCATION}/lib/libglfw3.a" ${CGLM_LIBRARY} libglew_static ${ASSIMP_LIBRARY})
+add_executable(render src/main.c)
+target_link_libraries(render cetra "${EXTERNAL_INSTALL_LOCATION}/lib/libglfw3.a" ${CGLM_LIBRARY} libglew_static "${EXTERNAL_INSTALL_LOCATION}/lib/libassimp.dylib")
 
 # Platform-specific configurations for linking
 if(APPLE)
@@ -114,17 +119,17 @@ if(APPLE)
     find_library(IOKIT_LIBRARY IOKit)
     find_library(COREVIDEO_LIBRARY CoreVideo)
     find_library(OPENGL_LIBRARY OpenGL)
-    target_link_libraries(engine ${COCOA_LIBRARY} ${IOKIT_LIBRARY} ${COREVIDEO_LIBRARY} ${OPENGL_LIBRARY})
     target_link_libraries(cetra ${COCOA_LIBRARY} ${IOKIT_LIBRARY} ${COREVIDEO_LIBRARY} ${OPENGL_LIBRARY})
+    target_link_libraries(render ${COCOA_LIBRARY} ${IOKIT_LIBRARY} ${COREVIDEO_LIBRARY} ${OPENGL_LIBRARY})
 elseif(UNIX)
     find_package(X11 REQUIRED)
     find_package(OpenGL REQUIRED)
-    target_link_libraries(engine ${X11_LIBRARIES} ${OPENGL_LIBRARIES} dl m pthread)
     target_link_libraries(cetra ${X11_LIBRARIES} ${OPENGL_LIBRARIES} dl m pthread)
+    target_link_libraries(render ${X11_LIBRARIES} ${OPENGL_LIBRARIES} dl m pthread)
 elseif(WIN32)
     find_package(OpenGL REQUIRED)
-    target_link_libraries(engine OpenGL::GL)
     target_link_libraries(cetra OpenGL::GL)
+    target_link_libraries(render OpenGL::GL)
 endif()
 
 # Copy models directory and glsl files to the build directory
