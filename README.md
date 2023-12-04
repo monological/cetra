@@ -19,18 +19,17 @@
 
 ---
 
-## Build
+## Build & Run
 
 ```
 mkdir build
 cd build
 cmake ..
 make
-```
-
-## Run
 
 ./cetra
+```
 
+~~ GLHF ~~
 
 
