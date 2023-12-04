@@ -15,6 +15,22 @@
 
 - Written in C. 
 - Minimal dependencies (cglm, glfw, glew, assimp). 
-- PBR shader 
+- PBR shader.
+
+---
+
+## Build
+
+```
+mkdir build
+cd build
+cmake ..
+make
+```
+
+## Run
+
+./cetra
+
 
 

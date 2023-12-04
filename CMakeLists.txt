@@ -105,8 +105,8 @@ add_dependencies(engine glfw cglm libglew_static assimp)
 # Link the engine with external libraries
 target_link_libraries(engine "${EXTERNAL_INSTALL_LOCATION}/lib/libglfw3.a" ${CGLM_LIBRARY} libglew_static ${ASSIMP_LIBRARY})
 
-add_executable(network src/main.c)
-target_link_libraries(network engine "${EXTERNAL_INSTALL_LOCATION}/lib/libglfw3.a" ${CGLM_LIBRARY} libglew_static ${ASSIMP_LIBRARY})
+add_executable(cetra src/main.c)
+target_link_libraries(cetra engine "${EXTERNAL_INSTALL_LOCATION}/lib/libglfw3.a" ${CGLM_LIBRARY} libglew_static ${ASSIMP_LIBRARY})
 
 # Platform-specific configurations for linking
 if(APPLE)
@@ -115,16 +115,16 @@ if(APPLE)
     find_library(COREVIDEO_LIBRARY CoreVideo)
     find_library(OPENGL_LIBRARY OpenGL)
     target_link_libraries(engine ${COCOA_LIBRARY} ${IOKIT_LIBRARY} ${COREVIDEO_LIBRARY} ${OPENGL_LIBRARY})
-    target_link_libraries(network ${COCOA_LIBRARY} ${IOKIT_LIBRARY} ${COREVIDEO_LIBRARY} ${OPENGL_LIBRARY})
+    target_link_libraries(cetra ${COCOA_LIBRARY} ${IOKIT_LIBRARY} ${COREVIDEO_LIBRARY} ${OPENGL_LIBRARY})
 elseif(UNIX)
     find_package(X11 REQUIRED)
     find_package(OpenGL REQUIRED)
     target_link_libraries(engine ${X11_LIBRARIES} ${OPENGL_LIBRARIES} dl m pthread)
-    target_link_libraries(network ${X11_LIBRARIES} ${OPENGL_LIBRARIES} dl m pthread)
+    target_link_libraries(cetra ${X11_LIBRARIES} ${OPENGL_LIBRARIES} dl m pthread)
 elseif(WIN32)
     find_package(OpenGL REQUIRED)
     target_link_libraries(engine OpenGL::GL)
-    target_link_libraries(network OpenGL::GL)
+    target_link_libraries(cetra OpenGL::GL)
 endif()
 
 # Copy models directory and glsl files to the build directory
