@@ -1,6 +1,4 @@
 .DS_Store
-*.fbx 
-*.fbm
 build
 my_models
 *.swp
