@@ -221,7 +221,7 @@ int main() {
     vec3 look_at_point = {0.0f, 0.0f, 0.0f};
     vec3 up_vector = {0.0f, 1.0f, 0.0f};
     float fov_radians = 0.37;
-    float near_clip = 0.1f;
+    float near_clip = 7.0f;
     float far_clip = 10000.0f;
 
     Camera *camera = create_camera();

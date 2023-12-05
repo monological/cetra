@@ -129,6 +129,9 @@ int setup_engine_glfw(Engine* engine) {
 
     glfwMakeContextCurrent(engine->window);
 
+    // Enable V-Sync
+    glfwSwapInterval(1);
+
     if (engine->mouse_button_callback) {
         glfwSetMouseButtonCallback(engine->window, engine->mouse_button_callback);
     }
@@ -439,7 +442,7 @@ void render_nuklear_gui(Engine* engine) {
         nk_property_float(engine->nk_ctx, "Zoom:", 0.0f, &camera->zoom_speed, 2.0f, 0.01f, 1);
         nk_property_float(engine->nk_ctx, "Orbit:", 0.0f, &camera->orbit_speed, 0.1f, 0.001f, 1);
         nk_property_float(engine->nk_ctx, "Amplitude:", 0.0f, &camera->amplitude, 50.0f, 1.0f, 1);
-        nk_property_float(engine->nk_ctx, "Near Clip:", 0.1f, &camera->near_clip, 100.0f, 1.0f, 0.1f);
+        nk_property_float(engine->nk_ctx, "Near Clip:", 5.0f, &camera->near_clip, 100.0f, 1.0f, 1.0f);
         nk_property_float(engine->nk_ctx, "Far Clip:", 0.1f, &camera->far_clip, 10000.0f, 100.0f, 10.0f);
     }
     nk_end(engine->nk_ctx);
@@ -494,7 +497,7 @@ void run_engine_render_loop(Engine* engine, RenderSceneFunc render_func) {
 
         glBindFramebuffer(GL_FRAMEBUFFER, engine->framebuffer);
         glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
 
         Scene* current_scene = get_current_scene(engine);
 
