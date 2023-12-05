@@ -26,6 +26,11 @@ set(CMAKE_INSTALL_RPATH "${EXTERNAL_INSTALL_LOCATION}/lib;@loader_path")
 set(CMAKE_BUILD_WITH_INSTALL_RPATH TRUE)
 set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
 
+# needed by progress bar
+set(CURSES_NEED_NCURSES TRUE)
+find_package(Curses)
+include_directories(${CURSES_INCLUDE_DIRS})
+
 # Add cglm as an external project
 ExternalProject_Add(
     cglm
@@ -102,6 +107,8 @@ add_library(cetra SHARED
     src/import.c
     src/cwalk.c
     src/str.c
+    src/progressbar.c
+    src/statusbar.c
 )
 
 # Ensure GLEW and external libraries are built before the engine target
@@ -119,21 +126,23 @@ if(APPLE)
     find_library(IOKIT_LIBRARY IOKit)
     find_library(COREVIDEO_LIBRARY CoreVideo)
     find_library(OPENGL_LIBRARY OpenGL)
-    target_link_libraries(cetra ${COCOA_LIBRARY} ${IOKIT_LIBRARY} ${COREVIDEO_LIBRARY} ${OPENGL_LIBRARY})
-    target_link_libraries(render ${COCOA_LIBRARY} ${IOKIT_LIBRARY} ${COREVIDEO_LIBRARY} ${OPENGL_LIBRARY})
+    target_link_libraries(cetra ${COCOA_LIBRARY} ${IOKIT_LIBRARY} ${COREVIDEO_LIBRARY} ${OPENGL_LIBRARY} ${CURSES_LIBRARIES})
+    target_link_libraries(render ${COCOA_LIBRARY} ${IOKIT_LIBRARY} ${COREVIDEO_LIBRARY} ${OPENGL_LIBRARY} ${CURSES_LIBRARIES})
 elseif(UNIX)
     find_package(X11 REQUIRED)
     find_package(OpenGL REQUIRED)
-    target_link_libraries(cetra ${X11_LIBRARIES} ${OPENGL_LIBRARIES} dl m pthread)
-    target_link_libraries(render ${X11_LIBRARIES} ${OPENGL_LIBRARIES} dl m pthread)
+    target_link_libraries(cetra ${X11_LIBRARIES} ${OPENGL_LIBRARIES} dl m pthread ${CURSES_LIBRARIES})
+    target_link_libraries(render ${X11_LIBRARIES} ${OPENGL_LIBRARIES} dl m pthread ${CURSES_LIBRARIES})
 elseif(WIN32)
     find_package(OpenGL REQUIRED)
     target_link_libraries(cetra OpenGL::GL)
     target_link_libraries(render OpenGL::GL)
 endif()
 
-# Copy models directory and glsl files to the build directory
-file(COPY models DESTINATION ${CMAKE_BINARY_DIR})
-file(COPY textures DESTINATION ${CMAKE_BINARY_DIR})
-file(COPY shaders DESTINATION ${CMAKE_BINARY_DIR})
-
+add_custom_command(
+    TARGET render POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/models ${CMAKE_BINARY_DIR}/models
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/textures ${CMAKE_BINARY_DIR}/textures
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/shaders ${CMAKE_BINARY_DIR}/shaders
+    COMMENT "Copying models, textures, and shaders to build directory"
+)

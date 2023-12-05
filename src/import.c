@@ -122,6 +122,14 @@ void process_ai_mesh(Mesh* mesh, struct aiMesh* ai_mesh) {
     mesh->vertices = malloc(mesh->vertexCount * 3 * sizeof(float));
     mesh->normals = malloc(mesh->vertexCount * 3 * sizeof(float));
 
+    if (ai_mesh->mTangents && ai_mesh->mBitangents) {
+        mesh->tangents = malloc(mesh->vertexCount * 3 * sizeof(float));
+        mesh->bitangents = malloc(mesh->vertexCount * 3 * sizeof(float));
+    } else {
+        mesh->tangents = NULL;
+        mesh->bitangents = NULL;
+    }
+
     // Check for texture coordinates
     if (ai_mesh->mTextureCoords[0]) {
         mesh->texCoords = malloc(mesh->vertexCount * 2 * sizeof(float));
@@ -141,6 +149,20 @@ void process_ai_mesh(Mesh* mesh, struct aiMesh* ai_mesh) {
         mesh->normals[i * 3] = ai_mesh->mNormals[i].x;
         mesh->normals[i * 3 + 1] = ai_mesh->mNormals[i].y;
         mesh->normals[i * 3 + 2] = ai_mesh->mNormals[i].z;
+
+        if(mesh->tangents){
+            // Tangents
+            mesh->tangents[i * 3] = ai_mesh->mTangents[i].x;
+            mesh->tangents[i * 3 + 1] = ai_mesh->mTangents[i].y;
+            mesh->tangents[i * 3 + 2] = ai_mesh->mTangents[i].z;
+        }
+
+        if(mesh->bitangents){
+            // Bitangents
+            mesh->bitangents[i * 3] = ai_mesh->mBitangents[i].x;
+            mesh->bitangents[i * 3 + 1] = ai_mesh->mBitangents[i].y;
+            mesh->bitangents[i * 3 + 2] = ai_mesh->mBitangents[i].z;
+        }
 
         if (mesh->texCoords) {
             mesh->texCoords[i * 2] = ai_mesh->mTextureCoords[0][i].x;

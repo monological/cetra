@@ -2,6 +2,7 @@
 in vec3 Normal;
 in vec3 FragPos;
 in vec2 TexCoords;
+in mat3 TBN;
 
 out vec4 FragColor;
 
@@ -153,9 +154,15 @@ void main() {
         albedoMap = texture(albedoTex, TexCoords).rgb;
     }
 
-    vec3 normalMap = normalize(Normal);
+    // Sample and transform the normal using the TBN matrix
+    vec3 normalMap;
     if (normalTexExists > 0) {
-        normalMap = normalize(texture(normalTex, TexCoords).rgb * 2.0 - 1.0);
+        normalMap = texture(normalTex, TexCoords).rgb;
+        // Transform normal from [0,1] range to [-1,1] range and apply TBN matrix
+        normalMap = normalMap * 2.0 - 1.0;
+        normalMap = normalize(TBN * normalMap);
+    } else {
+        normalMap = normalize(Normal); // Use vertex normal if no normal map
     }
 
     float roughnessMap = roughness;

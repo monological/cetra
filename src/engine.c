@@ -118,6 +118,7 @@ int setup_engine_glfw(Engine* engine) {
 #endif
     glfwWindowHint(GLFW_DOUBLEBUFFER, GLFW_TRUE);
     glfwWindowHint(GLFW_SAMPLES, 4); // Enable 4x MSAA
+    glfwWindowHint(GLFW_DEPTH_BITS, 32);
 
     engine->window = glfwCreateWindow(engine->window_width, engine->window_height, engine->window_title, NULL, NULL);
     if (engine->window == NULL) {
@@ -484,6 +485,10 @@ void run_engine_render_loop(Engine* engine, RenderSceneFunc render_func) {
         glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
     }
     glEnable(GL_DEPTH_TEST);
+    //glEnable(GL_CULL_FACE);
+    //glCullFace(GL_BACK); // Cull back faces
+    //glFrontFace(GL_CCW); // Front faces are defined in counter-clockwise order
+
 
     while (!glfwWindowShouldClose(engine->window)) {
 

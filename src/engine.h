@@ -55,13 +55,10 @@ typedef struct Engine {
     mat4 view_matrix;
     mat4 projection_matrix;
 
-    GLint cam_pos_loc;            // Uniform location for camera position
-    GLint time_uniform_location;  // Uniform location for time
-
     // nuklear gui
     struct nk_context *nk_ctx;
     struct nk_glfw nk_glfw;
-    struct nk_color bg; // Background color
+    struct nk_color bg;
 
     bool show_wireframe;
     bool show_axes;

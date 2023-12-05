@@ -15,12 +15,6 @@ Texture* load_texture(const char* path, const char* directory) {
     char filename[1000];
     GLenum format;
 
-    // Check cache first
-    Texture* cachedTexture = find_texture_in_cache(path);
-    if (cachedTexture) {
-        return cachedTexture;
-    }
-
     // Normalize and work on a copy of the path
     char* normalized_path = convert_and_normalize_path(path);
     if (!normalized_path) {
@@ -43,9 +37,16 @@ Texture* load_texture(const char* path, const char* directory) {
         snprintf(filename, sizeof(filename), "%s/%s", directory, subpath);
         //printf("trying texture path %s\n", filename);
 
+        Texture* cachedTexture = find_texture_in_cache(filename);
+        if (cachedTexture) {
+            printf("Using cached texture path %s\n", filename);
+            return cachedTexture;
+        }
+
         unsigned char* data = stbi_load(filename, &width, &height, &nrChannels, 0);
         if (data) {
-            printf("loading texture path %s\n", filename);
+
+            printf("Loading texture path %s\n", filename);
 
             // Create new texture object
             Texture* newTexture = create_texture();

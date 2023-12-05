@@ -30,7 +30,7 @@ make -j 8
 
 ## Install
 
-The cmake build script does not currently install all the libraries system wide.
+The cmake build script does not currently install the libraries system wide.
 
 - The external libraries are installed locally in the ./build/external/lib directory.
 - The header files are in the ./build/external/include directory.

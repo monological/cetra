@@ -41,6 +41,8 @@ void free_material(Material* material);
 typedef struct Mesh {
     float* vertices;       // Array of vertex positions
     float* normals;        // Array of normals
+    float* tangents;   // Array of tangents
+    float* bitangents; // Array of bitangents
     float* texCoords;      // Array of texture coordinates
     unsigned int* indices; // Array of indices
 
@@ -55,6 +57,9 @@ typedef struct Mesh {
     GLuint EBO; // Element Buffer Object (for indices)
     GLuint NBO; // Normal Buffer Object
     GLuint TBO; // Texture Buffer Object (for UVs)
+    GLuint TangentVBO;     // Tangent Buffer Object
+    GLuint BitangentVBO;   // Bitangent Buffer Object
+
 } Mesh;
 
 Mesh* create_mesh();

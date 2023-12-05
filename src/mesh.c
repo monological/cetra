@@ -39,6 +39,9 @@ Mesh* create_mesh() {
     // Generate Element Buffer Object (EBO)
     glGenBuffers(1, &mesh->EBO);
 
+    glGenBuffers(1, &mesh->TangentVBO);
+    glGenBuffers(1, &mesh->BitangentVBO);
+
     // Unbind the VAO
     glBindVertexArray(0);
 
@@ -64,6 +67,25 @@ void setup_mesh_buffers(Mesh* mesh) {
         glVertexAttribPointer(GL_ATTR_NORMAL, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
         glEnableVertexAttribArray(GL_ATTR_NORMAL);
     }
+
+    // Tangents
+    if (mesh->tangents) {
+        glGenBuffers(1, &(mesh->TangentVBO));
+        glBindBuffer(GL_ARRAY_BUFFER, mesh->TangentVBO);
+        glBufferData(GL_ARRAY_BUFFER, mesh->vertexCount * 3 * sizeof(float), mesh->tangents, GL_STATIC_DRAW);
+        glVertexAttribPointer(GL_ATTR_TANGENT, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+        glEnableVertexAttribArray(GL_ATTR_TANGENT);
+    }
+
+    // Bitangents
+    if (mesh->bitangents) {
+        glGenBuffers(1, &(mesh->BitangentVBO));
+        glBindBuffer(GL_ARRAY_BUFFER, mesh->BitangentVBO);
+        glBufferData(GL_ARRAY_BUFFER, mesh->vertexCount * 3 * sizeof(float), mesh->bitangents, GL_STATIC_DRAW);
+        glVertexAttribPointer(GL_ATTR_BITANGENT, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+        glEnableVertexAttribArray(GL_ATTR_BITANGENT);
+    }
+    
 
     // Texture coordinates
     if (mesh->texCoords) {
@@ -92,10 +114,14 @@ void free_mesh(Mesh* mesh) {
     glDeleteBuffers(1, &mesh->TBO);
     glDeleteBuffers(1, &mesh->EBO);
     glDeleteVertexArrays(1, &mesh->VAO);
+    glDeleteBuffers(1, &mesh->TangentVBO);
+    glDeleteBuffers(1, &mesh->BitangentVBO);
 
     // Free the allocated memory
     if (mesh->vertices) free(mesh->vertices);
     if (mesh->normals) free(mesh->normals);
+    if (mesh->tangents) free(mesh->tangents);
+    if (mesh->bitangents) free(mesh->bitangents);
     if (mesh->texCoords) free(mesh->texCoords);
     if (mesh->indices) free(mesh->indices);
 
