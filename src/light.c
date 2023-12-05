@@ -26,46 +26,41 @@ Light* create_light() {
 }
 
 void set_light_name(Light* light, const char* name) {
-    if (light) {
-        free(light->name); // Free the existing name
-        light->name = strdup(name); // Duplicate and store the new name
+    if(!light) return;
+    if(light->name){
+        free(light->name);
     }
+    light->name = strdup(name);
 }
 
 void set_light_type(Light* light, LightType type) {
-    if (light) {
-        light->type = type;
-    }
+    if(!light) return;
+    light->type = type;
 }
 
 void set_light_specular(Light* light, vec3 specular) {
-    if (light) {
-        glm_vec3_copy(specular, light->specular);
-    }
+    if(!light) return;
+    glm_vec3_copy(specular, light->specular);
 }
 
 void set_light_ambient(Light* light, vec3 ambient) {
-    if (light) {
-        glm_vec3_copy(ambient, light->ambient);
-    }
+    if(!light) return;
+    glm_vec3_copy(ambient, light->ambient);
 }
 
 void set_light_position(Light* light, vec3 position) {
-    if (light) {
-        glm_vec3_copy(position, light->position);
-    }
+    if(!light) return;
+    glm_vec3_copy(position, light->position);
 }
 
 void set_light_direction(Light* light, vec3 direction) {
-    if (light) {
-        glm_vec3_copy(direction, light->direction);
-    }
+    if(!light) return;
+    glm_vec3_copy(direction, light->direction);
 }
 
 void set_light_color(Light* light, vec3 color) {
-    if (light) {
-        glm_vec3_copy(color, light->color);
-    }
+    if(!light) return;
+    glm_vec3_copy(color, light->color);
 }
 
 
@@ -79,9 +74,8 @@ void set_light_color(Light* light, vec3 color) {
  *                  1 represents the light's natural intensity.
  */
 void set_light_intensity(Light* light, float intensity) {
-    if (light) {
-        light->intensity = intensity;
-    }
+    if(!light) return;
+    light->intensity = intensity;
 }
 
 /**
@@ -97,11 +91,10 @@ void set_light_intensity(Light* light, float intensity) {
  *                  effect at longer distances.
  */
 void set_light_attenuation(Light* light, float constant, float linear, float quadratic) {
-    if (light) {
-        light->constant = constant;
-        light->linear = linear;
-        light->quadratic = quadratic;
-    }
+    if(!light) return;
+    light->constant = constant;
+    light->linear = linear;
+    light->quadratic = quadratic;
 }
 
 /**
@@ -115,14 +108,18 @@ void set_light_attenuation(Light* light, float constant, float linear, float qua
  *                    falls off to zero. Also typically in radians or as a cosine.
  */
 void set_light_cutoff(Light* light, float cutOff, float outerCutOff) {
-    if (light) {
-        light->cutOff = cutOff;
-        light->outerCutOff = outerCutOff;
-    }
+    if(!light) return;
+    light->cutOff = cutOff;
+    light->outerCutOff = outerCutOff;
 }
 
 
 void free_light(Light* light) {
+    if(!light) return;
+
+    if(light->name){
+        free(light->name);
+    }
     free(light);
 }
 

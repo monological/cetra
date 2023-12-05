@@ -127,8 +127,6 @@ Light* find_light_by_name(Scene* scene, const char* name) {
     return NULL;
 }
 
-
-
 SceneNode* create_node() {
     SceneNode* node = malloc(sizeof(SceneNode));
     if (!node) {
@@ -151,7 +149,6 @@ SceneNode* create_node() {
     node->light = NULL;
 
     node->camera = NULL;
-    node->camera_name = NULL;
 
     node->shader_program = NULL;
 
@@ -178,12 +175,6 @@ void set_node_camera(SceneNode* node, Camera* camera) {
     node->camera = camera;
 }
 
-void set_node_camera_name(SceneNode* node, const char* name) {
-    if (!node || !name) return;
-    node->camera_name = strdup(name);
-}
-
-
 void set_program_for_node(SceneNode* node, ShaderProgram* program) {
     if (!node) {
         return; // If the node is NULL, exit the function
@@ -192,7 +183,6 @@ void set_program_for_node(SceneNode* node, ShaderProgram* program) {
     // Set the shader program for the current node
     node->shader_program = program;
 
-    // Recursively set the shader program for each child node
     for (size_t i = 0; i < node->children_count; ++i) {
         set_program_for_node(node->children[i], program);
     }
@@ -491,7 +481,6 @@ void setup_node_meshes(SceneNode* node) {
 }
 
 
-
 void free_node(SceneNode* node) {
     if (!node) return;
 
@@ -516,10 +505,6 @@ void free_node(SceneNode* node) {
         free(node->name);
     }
 
-    if (node->camera_name) {
-        free(node->camera_name);
-    }
-
     // Note: Do not free camera and light, as they are managed by the Scene.
     // Similarly, shaders and programs are usually shared and should be managed separately.
 
@@ -541,14 +526,12 @@ void print_scene_node(const SceneNode* node, int depth) {
            node->children_count,
            node->mesh_count,
            node->light ? (node->light->name ? node->light->name : "Unnamed Light") : "None",
-           node->camera_name ? node->camera_name : "None");
+           node->camera ? (node->camera->name ? node->camera->name : "Unnamed Camera") : "None");
 
-    // Recursively print children nodes
     for (size_t i = 0; i < node->children_count; i++) {
         print_scene_node(node->children[i], depth + 1);
     }
 }
-
 
 void print_scene(const Scene* scene) {
     if (!scene) return;

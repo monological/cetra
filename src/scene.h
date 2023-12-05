@@ -33,7 +33,6 @@ typedef struct SceneNode {
     size_t mesh_count;
 
     Light* light;
-    char* light_name;
 
     Camera* camera;
     char* camera_name;
@@ -49,7 +48,6 @@ typedef struct SceneNode {
 SceneNode* create_node();
 void set_node_name(SceneNode* node, const char* name);
 void set_node_light(SceneNode* node, Light* light);
-void set_node_light_name(SceneNode* node, const char* name);
 void set_node_camera(SceneNode* node, Camera* camera);
 void set_node_camera_name(SceneNode* node, const char* name);
 
