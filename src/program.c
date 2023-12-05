@@ -21,6 +21,10 @@ ShaderProgram* create_program() {
     program->shaders = NULL;
     program->shader_count = 0;
 
+    program->render_mode_loc = -1;
+    program->near_clip_loc = -1;
+    program->far_clip_loc = -1;
+
     program->model_loc = -1;
     program->view_loc = -1;
     program->proj_loc = -1;
@@ -107,6 +111,10 @@ void setup_program_uniforms(ShaderProgram* program) {
         fprintf(stderr, "Invalid shader program.\n");
         return;
     }
+
+    program->render_mode_loc = glGetUniformLocation(program->id, "renderMode");
+    program->near_clip_loc = glGetUniformLocation(program->id, "nearClip");
+    program->far_clip_loc = glGetUniformLocation(program->id, "farClip");
 
     // Existing uniforms setup
     program->model_loc = glGetUniformLocation(program->id, "model");

@@ -11,6 +11,7 @@
 #include "mesh.h"
 #include "light.h"
 #include "camera.h"
+#include "common.h"
 
 // Axis vertices: 6 vertices, 2 for each line (origin and end)
 float axesVertices[] = {
@@ -277,8 +278,9 @@ void draw_node_axes(SceneNode* node, const mat4 model, const mat4 view, const ma
 }
 
 
-void render_node(SceneNode* self, mat4 model, mat4 view, mat4 projection, 
-        float time_value, vec3 cam_pos) {
+void render_node(SceneNode* self, Camera *camera, 
+        mat4 model, mat4 view, mat4 projection, 
+        float time_value, RenderMode render_mode) {
     if (!self) {
         printf("error: render_node called with NULL node\n");
         return;
@@ -288,13 +290,19 @@ void render_node(SceneNode* self, mat4 model, mat4 view, mat4 projection,
         // Use the shader program
         glUseProgram(self->shader_program->id);
 
+        // PBR, NORMALS, etc...
+        glUniform1i(self->shader_program->render_mode_loc, render_mode);
+        glUniform1f(self->shader_program->near_clip_loc, camera->near_clip);
+        glUniform1f(self->shader_program->far_clip_loc, camera->far_clip);
+
+
         // Set shader uniforms for model, view, and projection matrices
         glUniformMatrix4fv(self->shader_program->model_loc, 1, GL_FALSE, (const GLfloat*)self->global_transform);
         glUniformMatrix4fv(self->shader_program->view_loc, 1, GL_FALSE, (const GLfloat*)view);
         glUniformMatrix4fv(self->shader_program->proj_loc, 1, GL_FALSE, (const GLfloat*)projection);
 
         // cam position and time
-        glUniform3fv(self->shader_program->cam_pos_loc, 1, (const GLfloat*)&cam_pos);
+        glUniform3fv(self->shader_program->cam_pos_loc, 1, (const GLfloat*)&camera->position);
         glUniform1f(self->shader_program->time_loc, time_value);
 
         // Set material properties if available
@@ -432,7 +440,9 @@ void render_node(SceneNode* self, mat4 model, mat4 view, mat4 projection,
 
     // Render children
     for (size_t i = 0; i < self->children_count; i++) {
-        render_node(self->children[i], self->global_transform, view, projection, time_value, cam_pos);
+        render_node(self->children[i], camera, 
+            self->global_transform, view, 
+            projection, time_value, render_mode);
     }
 }
 

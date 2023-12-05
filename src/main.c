@@ -172,8 +172,12 @@ void render_scene(Engine* engine, Scene* current_scene){
 
     update_child_nodes(root_node, engine->model_matrix);
 
-    render_node(root_node, root_node->local_transform, 
-        engine->view_matrix, engine->projection_matrix, time_value, camera->position);
+    render_node(root_node, camera, 
+        root_node->local_transform, 
+        engine->view_matrix, engine->projection_matrix, 
+        time_value, 
+        engine->current_render_mode
+    );
 
 }
 
@@ -279,10 +283,10 @@ int main() {
 
     run_engine_render_loop(engine, render_scene);
 
-    printf("cleaning up...\n");
+    printf("Cleaning up...\n");
     free_engine(engine);
 
-    printf("goodbye friend...\n");
+    printf("Goodbye Friend...\n");
 
     return 0;
 }

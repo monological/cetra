@@ -10,6 +10,7 @@
 #include "shader.h"
 #include "light.h"
 #include "camera.h"
+#include "common.h"
 
 typedef struct {
     vec3 position;
@@ -61,8 +62,9 @@ void set_node_show_axes(SceneNode* node, bool show_axes);
 void setup_node_axes_buffers(SceneNode* node);
 void draw_node_axes(SceneNode* node, const mat4 model, const mat4 view, const mat4 projection);
 void add_child_node(SceneNode* self, SceneNode* child);
-void render_node(SceneNode* self, mat4 model, mat4 view, mat4 projection,
-    float time_value, vec3 cam_pos);
+void render_node(SceneNode* self, Camera *camera, 
+        mat4 model, mat4 view, mat4 projection, 
+        float time_value, RenderMode render_mode);
 void transform_node(SceneNode* node, Transform* transform);
 void update_child_nodes(SceneNode* node, mat4 parentTransform);
 void setup_node_meshes(SceneNode* node);

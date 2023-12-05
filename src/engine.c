@@ -63,6 +63,8 @@ Engine* create_engine(const char* window_title, int width, int height) {
     engine->mouse_button_callback = NULL;
     engine->cursor_position_callback = NULL;
 
+    engine->current_render_mode = RENDER_MODE_PBR;
+
     glm_mat4_identity(engine->model_matrix);
     glm_mat4_identity(engine->view_matrix);
     glm_mat4_identity(engine->projection_matrix);
@@ -416,6 +418,35 @@ void render_nuklear_gui(Engine* engine) {
         if (nk_button_label(engine->nk_ctx, "Show Axes")) {
             set_engine_show_axes(engine, !engine->show_axes);
         }
+
+        // top margin
+        nk_layout_row_dynamic(engine->nk_ctx, 10, 1); // 10 pixels of vertical space
+        nk_spacing(engine->nk_ctx, 1); // Creates a dummy widget for spacing
+
+        nk_layout_row_dynamic(engine->nk_ctx, 30, 1);
+        const char *render_modes[] = {
+            "PBR",
+            "Normals",
+            "World Pos",
+            "Tex Coords",
+            "Tangent Space",
+            "Flat Color",
+        };
+        int selected_render_mode = engine->current_render_mode;
+        if (nk_combo_begin_label(engine->nk_ctx, render_modes[selected_render_mode], nk_vec2(nk_widget_width(engine->nk_ctx), 200))) {
+            nk_layout_row_dynamic(engine->nk_ctx, 25, 1);
+            for (int i = 0; i < sizeof(render_modes) / sizeof(render_modes[0]); i++) {
+                if (nk_combo_item_label(engine->nk_ctx, render_modes[i], NK_TEXT_ALIGN_LEFT)) {
+                    selected_render_mode = i;
+                }
+            }
+            nk_combo_end(engine->nk_ctx);
+        }
+        engine->current_render_mode = selected_render_mode;
+
+        // bot margin
+        nk_layout_row_dynamic(engine->nk_ctx, 10, 1); // 10 pixels of vertical space
+        nk_spacing(engine->nk_ctx, 1); // Creates a dummy widget for spacing
 
         // Camera properties
         nk_layout_row_dynamic(engine->nk_ctx, 25, 1);

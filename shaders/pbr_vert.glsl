@@ -6,7 +6,11 @@ layout(location = 3) in vec3 aTangent;
 layout(location = 4) in vec3 aBitangent;
 
 out vec3 Normal;
-out vec3 FragPos;
+out vec3 WorldPos;     // World position
+out vec3 ViewPos;      // View position
+out vec3 FragPos;      // Fragment position in clip space
+out float ClipDepth;   // Depth in clip space
+out float FragDepth;
 out vec2 TexCoords;
 out mat3 TBN;
 
@@ -17,8 +21,19 @@ uniform vec3 camPos;
 uniform float time;
 
 void main() {
-    FragPos = vec3(model * vec4(aPos, 1.0));
-    Normal = mat3(transpose(inverse(model))) * aNormal;
+    vec4 worldPos = model * vec4(aPos, 1.0);
+    WorldPos = worldPos.xyz;
+    
+    vec4 viewPos = view * worldPos;
+    ViewPos = viewPos.xyz;
+
+    vec4 clipPos = projection * viewPos;
+    FragPos = clipPos.xyz;
+    ClipDepth = clipPos.z; // Depth in clip space
+
+    FragDepth = gl_Position.z / gl_Position.w; // Perspective divide to get normalized device coordinates
+
+    Normal = normalize(mat3(transpose(inverse(model))) * aNormal);
     TexCoords = aTexCoords;
 
     // Calculate the TBN matrix
@@ -27,5 +42,7 @@ void main() {
     vec3 N = normalize(mat3(model) * aNormal);
     TBN = mat3(T, B, N);
 
-    gl_Position = projection * view * vec4(FragPos, 1.0);
+    gl_Position = clipPos;
 }
+
+

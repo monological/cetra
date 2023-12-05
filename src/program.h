@@ -9,6 +9,10 @@ typedef struct {
     Shader** shaders;
     size_t shader_count;
 
+    GLint render_mode_loc;
+    GLint near_clip_loc;
+    GLint far_clip_loc;
+
     GLint model_loc;
     GLint view_loc;
     GLint proj_loc; 

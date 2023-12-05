@@ -24,6 +24,7 @@
 #include "nuklear.h"
 #include "nuklear_glfw_gl3.h"
 
+
 typedef struct Engine {
     GLFWwindow* window;
     char* window_title;      // Title of the GLFW window
@@ -51,6 +52,8 @@ typedef struct Engine {
     ShaderProgram** programs; // Global shader programs used across scenes
     size_t program_count;      // Count of global programs
     
+    RenderMode current_render_mode; // default is PBR
+
     mat4 model_matrix;
     mat4 view_matrix;
     mat4 projection_matrix;
