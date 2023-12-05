@@ -36,6 +36,8 @@ The cmake build script does not currently install the libraries system wide.
 - The header files are in the ./build/external/include directory.
 - The libcetra library is installed in ./build.
 
+The cmake build script also copies over the models, shaders and textures to the build directory. The render executable expects these to be there.
+
 The `render` exe is built to look for the libraries locally. 
 
 ## Run
