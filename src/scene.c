@@ -191,18 +191,6 @@ void setup_scene_axes(Scene* scene){
         success = GL_FALSE;
     }
 
-    /*
-    // Bind the VAO for validation
-    glBindVertexArray(scene->root_node->axesVAO);
-
-    if(!validate_program(axes_shader_program)){
-        fprintf(stderr, "Axes shader program validation failed\n");
-        success = GL_FALSE;
-    }
-
-    // Unbind the VAO after validation
-    glBindVertexArray(0);*/
-
 
     if(success){
         scene->axes_shader_program = axes_shader_program;
@@ -357,6 +345,11 @@ void upload_buffers_to_gpu_for_nodes(SceneNode* node) {
     // Color attribute
     glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
     glEnableVertexAttribArray(1);
+
+    // only validate if VAO is bound
+    if(node->axes_shader_program && !validate_program(node->axes_shader_program)){
+        fprintf(stderr, "Axes shader program validation failed\n");
+    }
 
     // Unbind VAO
     glBindVertexArray(0);
@@ -558,7 +551,7 @@ void render_nodes(SceneNode* node, Camera *camera,
         GLint viewLoc = glGetUniformLocation(node->axes_shader_program->id, "view");
         GLint projLoc = glGetUniformLocation(node->axes_shader_program->id, "projection");
 
-        glUniformMatrix4fv(modelLoc, 1, GL_FALSE, (const GLfloat*)model);
+        glUniformMatrix4fv(modelLoc, 1, GL_FALSE, (const GLfloat*)node->global_transform);
         glUniformMatrix4fv(viewLoc, 1, GL_FALSE, (const GLfloat*)view);
         glUniformMatrix4fv(projLoc, 1, GL_FALSE, (const GLfloat*)projection);
 

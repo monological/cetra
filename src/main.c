@@ -251,6 +251,7 @@ int main() {
         return -1;
     }
 
+    setup_scene_axes(scene);
 
     SceneNode* root_node = scene->root_node;
     assert(root_node != NULL);
@@ -268,7 +269,6 @@ int main() {
     }
 
     upload_buffers_to_gpu_for_nodes(root_node);
-    setup_scene_axes(scene);
 
     set_program_for_nodes(root_node, pbr_shader_program);
 
