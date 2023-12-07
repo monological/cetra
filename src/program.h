@@ -50,13 +50,16 @@ typedef struct {
 
 } ShaderProgram;
 
+// malloc
 ShaderProgram* create_program();
-void attach_shader(ShaderProgram* program, Shader* shader);
+void free_program(ShaderProgram* program);
+
+void attach_program_shader(ShaderProgram* program, Shader* shader);
 GLboolean link_program(ShaderProgram* program);
 void setup_program_uniforms(ShaderProgram* program);
-GLboolean init_shader_program(ShaderProgram* program, const char* vert_path, const char* frag_path, const char* geom_path);
+GLboolean init_program_shader(ShaderProgram* program, 
+    const char* vert_path, const char* frag_path, const char* geom_path);
 GLboolean validate_program(ShaderProgram* program);
-void free_program(ShaderProgram* program);
 
 
 #endif // _PROGRAM_H_

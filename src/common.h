@@ -19,6 +19,11 @@ typedef enum {
     RENDER_MODE_FLAT_COLOR        // Flat Color Visualization
 } RenderMode;
 
+typedef struct {
+    vec3 position;
+    vec3 rotation;
+    vec3 scale;
+} Transform;
 
 #endif // COMMON_H
 

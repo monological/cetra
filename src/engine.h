@@ -27,30 +27,28 @@
 
 typedef struct Engine {
     GLFWwindow* window;
-    char* window_title;      // Title of the GLFW window
-    int window_width;        // Width of the window
-    int window_height;       // Height of the window
+    char* window_title;             // Title of the GLFW window
+    int window_width;               // Width of the window
+    int window_height;              // Height of the window
 
-    GLuint framebuffer;           // Framebuffer object
-    int framebuffer_width;   // Width of the framebuffer
-    int framebuffer_height;  // Height of the framebuffer
-
-    GLuint multisample_texture;   // Multisample texture for MSAA
-    GLuint depth_renderbuffer;    // Depth renderbuffer
-                                  //
     GLFWerrorfun error_callback;
     GLFWmousebuttonfun mouse_button_callback;
     GLFWcursorposfun cursor_position_callback;
 
-    Camera *camera; // main camera
+    GLuint framebuffer;             // Framebuffer object
+    int framebuffer_width;          // Width of the framebuffer
+    int framebuffer_height;         // Height of the framebuffer
+    GLuint multisample_texture;     // Multisample texture for MSAA
+    GLuint depth_renderbuffer;      // Depth renderbuffer
 
-    Scene** scenes;            // Array of scenes managed by the engine
-    size_t scene_count;        // Number of scenes
-    size_t current_scene_index;// Index of the currently active scene
-    Camera* main_camera;       // Primary camera for rendering
+    Camera *camera;                 // main camera
 
-    ShaderProgram** programs; // Global shader programs used across scenes
-    size_t program_count;      // Count of global programs
+    Scene** scenes;                 // Array of scenes managed by the engine
+    size_t scene_count;             // Number of scenes
+    size_t current_scene_index;     // Index of the currently active scene
+
+    ShaderProgram** programs;       // Global shader programs used across scenes
+    size_t program_count;           // Count of global programs
     
     RenderMode current_render_mode; // default is PBR
 
@@ -72,12 +70,12 @@ typedef void (*RenderSceneFunc)(Engine*, Scene*);
 Engine* create_engine(const char* window_title, int width, int height);
 void free_engine(Engine* engine);
 
-// glfw callbacks
+// GLFW callbacks
 void set_engine_error_callback(Engine* engine, GLFWerrorfun error_callback);
 void set_engine_mouse_button_callback(Engine* engine, GLFWmousebuttonfun mouse_button_callback);
 void set_engine_cursor_position_callback(Engine* engine, GLFWcursorposfun cursor_position_callback);
 
-// setup glfw env
+// Setup glfw env
 int setup_engine_glfw(Engine* engine);
 void setup_engine_msaa(Engine *engine);
 
@@ -99,7 +97,7 @@ void add_program_to_engine(Engine* engine, ShaderProgram* program);
 int setup_engine_gui(Engine* engine);
 void render_nuklear_gui(Engine* engine);
 
-// main render
+// Render
 void set_engine_show_wireframe(Engine* engine, bool show_wireframe);
 void set_engine_show_axes(Engine* engine, bool show_axes);
 void run_engine_render_loop(Engine* engine, RenderSceneFunc render_func);

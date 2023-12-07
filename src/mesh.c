@@ -48,7 +48,7 @@ Mesh* create_mesh() {
     return mesh;
 }
 
-void setup_mesh_buffers(Mesh* mesh) {
+void upload_mesh_buffers_to_gpu(Mesh* mesh) {
     if (!mesh) return;
 
     // Bind the Vertex Array Object (VAO)

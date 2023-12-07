@@ -122,7 +122,7 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
     }
 }
 
-void render_scene(Engine* engine, Scene* current_scene){
+void render_scene_callback(Engine* engine, Scene* current_scene){
     SceneNode *root_node = current_scene->root_node;
 
     if(!engine || !root_node) return;
@@ -170,9 +170,9 @@ void render_scene(Engine* engine, Scene* current_scene){
 
     transform_node(root_node, &transform);
 
-    update_child_nodes(root_node, engine->model_matrix);
+    apply_transform_to_nodes(root_node, engine->model_matrix);
 
-    render_node(root_node, camera, 
+    render_nodes(root_node, camera, 
         root_node->local_transform, 
         engine->view_matrix, engine->projection_matrix, 
         time_value, 
@@ -205,21 +205,15 @@ int main() {
      *
      */
     ShaderProgram* pbr_shader_program = create_program();
-    if (!init_shader_program(pbr_shader_program, PBR_VERT_SHADER_PATH, PBR_FRAG_SHADER_PATH, NULL)) {
+    if (!init_program_shader(pbr_shader_program, 
+                PBR_VERT_SHADER_PATH, PBR_FRAG_SHADER_PATH, NULL)) {
         fprintf(stderr, "Failed to initialize PBR shader program\n");
         return -1;
     }
     add_program_to_engine(engine, pbr_shader_program);
 
-    ShaderProgram* axes_shader_program = create_program();
-    if (!init_shader_program(axes_shader_program, AXES_VERT_SHADER_PATH, AXES_FRAG_SHADER_PATH, NULL)) {
-        fprintf(stderr, "Failed to initialize Axes shader program\n");
-        return -1;
-    }
-    add_program_to_engine(engine, axes_shader_program);
-
     /*
-     * Set up camera
+     * Set up camera.
      */
     vec3 camera_position = {0.0f, 2.0f, 300.0f};
     vec3 look_at_point = {0.0f, 0.0f, 0.0f};
@@ -243,6 +237,9 @@ int main() {
 
     set_engine_camera(engine, camera);
     
+    /*
+     * Import fbx model.
+     */
     Scene *scene = add_scene_from_fbx(
         engine, 
         FBX_MODEL_PATH,
@@ -254,13 +251,13 @@ int main() {
         return -1;
     }
 
-    // Create scene node for the sphere
+
     SceneNode* root_node = scene->root_node;
     assert(root_node != NULL);
 
     vec3 lightPosition = {0.0, 0.0, 2000.00};
     if(root_node->light == NULL){
-        printf("no root light found so adding one...\n");
+        printf("No root light found so adding one...\n");
         Light *light = create_light();
         set_light_name(light, "root");
         set_light_type(light, LIGHT_POINT);
@@ -270,18 +267,17 @@ int main() {
         set_node_light(root_node, light);
     }
 
-    setup_node_meshes(root_node);
-    set_program_for_node(root_node, pbr_shader_program);
+    upload_buffers_to_gpu_for_nodes(root_node);
+    setup_scene_axes(scene);
 
-    setup_node_axes_buffers(root_node);
-    set_axes_program_for_node(root_node, axes_shader_program);
+    set_program_for_nodes(root_node, pbr_shader_program);
 
     print_scene(scene);
 
     set_engine_show_wireframe(engine, false);
     set_engine_show_axes(engine, true);
 
-    run_engine_render_loop(engine, render_scene);
+    run_engine_render_loop(engine, render_scene_callback);
 
     printf("Cleaning up...\n");
     free_engine(engine);

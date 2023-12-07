@@ -7,7 +7,7 @@
 #include "util.h"
 #include "cwalk.h"
 
-void CheckOpenGLError(const char* where) {
+void check_gl_error(const char* where) {
     GLenum err;
     while ((err = glGetError()) != GL_NO_ERROR) {
         fprintf(stderr, "OpenGL error: %u - where: %s\n", err, where);

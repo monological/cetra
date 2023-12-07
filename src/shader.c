@@ -60,21 +60,26 @@ Shader* create_shader(ShaderType type, const char* source) {
         return NULL;
     }
 
+    if(!source){
+        fprintf(stderr, "Shader source is NULL\n");
+        return NULL;
+    }
+
     shader->type = type;
-    shader->source = strdup(source); // Duplicate the source string
+    shader->source = strdup(source);
 
     GLenum glType;
     switch (shader->type) {
-        case VERTEX:   glType = GL_VERTEX_SHADER; break;
-        case GEOMETRY: glType = GL_GEOMETRY_SHADER; break;
-        case FRAGMENT: glType = GL_FRAGMENT_SHADER; break;
+        case VERTEX_SHADER:   glType = GL_VERTEX_SHADER; break;
+        case GEOMETRY_SHADER: glType = GL_GEOMETRY_SHADER; break;
+        case FRAGMENT_SHADER: glType = GL_FRAGMENT_SHADER; break;
         default:
             fprintf(stderr, "Unknown shader type\n");
             return GL_FALSE;
     }
 
     shader->shaderID = glCreateShader(glType);
-    CheckOpenGLError("create shader");
+    check_gl_error("create shader");
 
     if (shader->shaderID == 0) {
         fprintf(stderr, "Failed to create shader object.\n");
@@ -85,7 +90,6 @@ Shader* create_shader(ShaderType type, const char* source) {
 }
 
 GLboolean compile_shader(Shader* shader) {
-    // Check if the shader and its source are valid
     if (!shader || !shader->source) {
         fprintf(stderr, "Invalid shader or shader source.\n");
         return GL_FALSE;
@@ -94,25 +98,26 @@ GLboolean compile_shader(Shader* shader) {
     // Set shader source and compile
     const GLchar* source = shader->source;
     glShaderSource(shader->shaderID, 1, &source, NULL);
-    CheckOpenGLError("glShaderSource");
+    check_gl_error("glShaderSource");
+
     glCompileShader(shader->shaderID);
-    CheckOpenGLError("glCompileShader");
+    check_gl_error("glCompileShader");
 
     // Check compilation status
     int success;
     glGetShaderiv(shader->shaderID, GL_COMPILE_STATUS, &success);
-    CheckOpenGLError("glGetShaderiv");
+    check_gl_error("glGetShaderiv");
 
     if (!success) {
         GLint logLength = 0;
         glGetShaderiv(shader->shaderID, GL_INFO_LOG_LENGTH, &logLength);
-        CheckOpenGLError("glGetShaderiv log length");
+        check_gl_error("glGetShaderiv log length");
 
         if (logLength > 0) {
             char* log = (char*)malloc(logLength);
             if (log) {
                 glGetShaderInfoLog(shader->shaderID, logLength, &logLength, log);
-                CheckOpenGLError("glGetShaderInfoLog");
+                check_gl_error("glGetShaderInfoLog");
                 fprintf(stderr, "Shader compilation failed: %s\n", log);
                 free(log);
             } else {
@@ -128,14 +133,14 @@ GLboolean compile_shader(Shader* shader) {
     return GL_TRUE;
 }
 
-
-
 void free_shader(Shader* shader) {
     if (shader) {
         if (shader->shaderID != 0) {
             glDeleteShader(shader->shaderID);
         }
-        free(shader->source);
+        if(shader->source){
+            free(shader->source);
+        }
         free(shader);
     }
 }

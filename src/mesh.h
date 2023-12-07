@@ -63,7 +63,7 @@ typedef struct Mesh {
 } Mesh;
 
 Mesh* create_mesh();
-void setup_mesh_buffers(Mesh* mesh);
+void upload_mesh_buffers_to_gpu(Mesh* mesh);
 void free_mesh(Mesh* mesh);
 
 #endif // _MESH_H_

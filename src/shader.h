@@ -4,9 +4,9 @@
 #include <GL/glew.h>
 
 typedef enum {
-    VERTEX,
-    GEOMETRY,
-    FRAGMENT
+    VERTEX_SHADER,
+    GEOMETRY_SHADER,
+    FRAGMENT_SHADER
 } ShaderType;
 
 typedef struct {

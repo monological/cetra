@@ -2,7 +2,7 @@
 #define _UTIL_H_
 
 
-void CheckOpenGLError(const char* where);
+void check_gl_error(const char* where);
 char* convert_windows_path_to_unix(const char* windows_path);
 char* convert_and_normalize_path(const char *input_path);
 

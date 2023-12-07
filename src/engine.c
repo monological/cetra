@@ -44,24 +44,24 @@ Engine* create_engine(const char* window_title, int width, int height) {
     engine->window_width = width;
     engine->window_height = height;
 
+    engine->error_callback = NULL;
+    engine->mouse_button_callback = NULL;
+    engine->cursor_position_callback = NULL;
+
     engine->framebuffer = 0;
     engine->framebuffer_width = 0;
     engine->framebuffer_height = 0;
     engine->multisample_texture = 0;
     engine->depth_renderbuffer = 0;
 
+    engine->camera = NULL;
+
     engine->scenes = NULL;
     engine->scene_count = 0;
     engine->current_scene_index = 0;
-    engine->main_camera = NULL;
     
     engine->programs = NULL;
     engine->program_count = 0;
-
-    // Set callbacks to NULL initially
-    engine->error_callback = NULL;
-    engine->mouse_button_callback = NULL;
-    engine->cursor_position_callback = NULL;
 
     engine->current_render_mode = RENDER_MODE_PBR;
 
@@ -74,6 +74,49 @@ Engine* create_engine(const char* window_title, int width, int height) {
 
     return engine;
 }
+
+void free_engine(Engine* engine) {
+    if (!engine) return;
+
+    if (engine->scenes) {
+        for (size_t i = 0; i < engine->scene_count; ++i) {
+            if (engine->scenes[i]) {
+                free_scene(engine->scenes[i]);
+            }
+        }
+        free(engine->scenes);
+    }
+
+    if (engine->programs) {
+        for (size_t i = 0; i < engine->program_count; ++i) {
+            if (engine->programs[i]) {
+                free_program(engine->programs[i]);
+            }
+        }
+        free(engine->programs);
+    }
+
+    if (engine->camera) {
+        free_camera(engine->camera);
+    }
+
+    // Destroy GLFW window
+    if (engine->window) {
+        glfwDestroyWindow(engine->window);
+    }
+
+    glDeleteFramebuffers(1, &engine->framebuffer);
+    glDeleteTextures(1, &engine->multisample_texture);
+    glDeleteRenderbuffers(1, &engine->depth_renderbuffer);
+
+    nk_glfw3_shutdown(&engine->nk_glfw);
+
+    // Terminate GLFW
+    glfwTerminate();
+
+    free(engine);
+}
+
 
 void set_engine_error_callback(Engine* engine, GLFWerrorfun error_callback) {
     if (!engine) return;
@@ -153,7 +196,7 @@ int setup_engine_glfw(Engine* engine) {
 
     glfwGetFramebufferSize(engine->window, &(engine->framebuffer_width), &(engine->framebuffer_height));
     glViewport(0, 0, engine->framebuffer_width, engine->framebuffer_height);
-    CheckOpenGLError("view port");
+    check_gl_error("view port");
 
     return 0; // Success
 }
@@ -228,52 +271,6 @@ void update_engine_camera_perspective(Engine* engine){
 }
 
 
-void free_engine(Engine* engine) {
-    if (!engine) return;
-
-    // Free scenes
-    if (engine->scenes) {
-        for (size_t i = 0; i < engine->scene_count; ++i) {
-            if (engine->scenes[i]) {
-                free_scene(engine->scenes[i]);
-            }
-        }
-        free(engine->scenes);
-    }
-
-    if (engine->programs) {
-        for (size_t i = 0; i < engine->program_count; ++i) {
-            if (engine->programs[i]) {
-                free_program(engine->programs[i]);
-            }
-        }
-        free(engine->programs);
-    }
-
-    // Free the main camera if it's dynamically allocated
-    if (engine->main_camera) {
-        // Assuming there is a function to free a camera
-        free_camera(engine->main_camera);
-    }
-
-    // Destroy GLFW window
-    if (engine->window) {
-        glfwDestroyWindow(engine->window);
-    }
-
-
-    glDeleteFramebuffers(1, &engine->framebuffer);
-    glDeleteTextures(1, &engine->multisample_texture);
-    glDeleteRenderbuffers(1, &engine->depth_renderbuffer);
-
-    nk_glfw3_shutdown(&engine->nk_glfw);
-
-    // Terminate GLFW
-    glfwTerminate();
-
-    // Finally, free the engine struct itself
-    free(engine);
-}
 
 /*
  * Scene
@@ -507,7 +504,7 @@ void set_engine_show_axes(Engine* engine, bool show_axes){
             if(!scene) continue;
             SceneNode* root_node = scene->root_node;
             if(!root_node) continue;
-            set_node_show_axes(root_node, show_axes);
+            set_show_axes_for_nodes(root_node, show_axes);
         }
     }
 }

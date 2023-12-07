@@ -4,7 +4,6 @@
 
 #include "camera.h"
 
-// Function to create and initialize a Camera object
 Camera* create_camera() {
     Camera* camera = (Camera*)malloc(sizeof(Camera));
     if (!camera) {
@@ -50,7 +49,6 @@ void free_camera(Camera* camera) {
     free(camera);
 }
 
-// Setters for Camera properties
 void set_camera_position(Camera* camera, vec3 position) {
     if (!camera) return;
     glm_vec3_copy(position, camera->position);
