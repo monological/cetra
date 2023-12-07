@@ -115,6 +115,10 @@ void free_scene(Scene* scene) {
         free_node(scene->root_node);
     }
 
+    if(scene->axes_shader_program){
+        free_program(scene->axes_shader_program);
+    }
+
     // Finally, free the scene itnode
     free(scene);
 
@@ -195,7 +199,10 @@ void setup_scene_axes(Scene* scene){
     if(success){
         scene->axes_shader_program = axes_shader_program;
         set_axes_program_for_nodes(scene->root_node, axes_shader_program);
+
+        setup_program_uniforms(scene->axes_shader_program);
     }
+
 
 }
 
@@ -547,13 +554,9 @@ void render_nodes(SceneNode* node, Camera *camera,
         glUseProgram(node->axes_shader_program->id);
 
         // Pass the model, view, and projection matrices to the shader
-        GLint modelLoc = glGetUniformLocation(node->axes_shader_program->id, "model");
-        GLint viewLoc = glGetUniformLocation(node->axes_shader_program->id, "view");
-        GLint projLoc = glGetUniformLocation(node->axes_shader_program->id, "projection");
-
-        glUniformMatrix4fv(modelLoc, 1, GL_FALSE, (const GLfloat*)node->global_transform);
-        glUniformMatrix4fv(viewLoc, 1, GL_FALSE, (const GLfloat*)view);
-        glUniformMatrix4fv(projLoc, 1, GL_FALSE, (const GLfloat*)projection);
+        glUniformMatrix4fv(node->axes_shader_program->model_loc, 1, GL_FALSE, (const GLfloat*)node->global_transform);
+        glUniformMatrix4fv(node->axes_shader_program->view_loc, 1, GL_FALSE, (const GLfloat*)view);
+        glUniformMatrix4fv(node->axes_shader_program->proj_loc, 1, GL_FALSE, (const GLfloat*)projection);
 
         glBindVertexArray(node->axesVAO);
         glDrawArrays(GL_LINES, 0,  sizeof(axesVertices) / (6 * sizeof(float)));
