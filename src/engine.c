@@ -413,14 +413,19 @@ void render_nuklear_gui(Engine* engine) {
     nk_glfw3_new_frame(&engine->nk_glfw);
 
     // Begin Nuklear GUI window
-    if (nk_begin(engine->nk_ctx, "Camera", nk_rect(15, 15, 230, 500),
+    if (nk_begin(engine->nk_ctx, "Camera", nk_rect(15, 15, 250, 500),
         NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_SCALABLE |
         NK_WINDOW_MINIMIZABLE | NK_WINDOW_TITLE)) {
 
         // Button for toggling axes
-        nk_layout_row_static(engine->nk_ctx, 30, 80, 1);
+        nk_layout_row_dynamic(engine->nk_ctx, 30, 2);
         if (nk_button_label(engine->nk_ctx, "Show Axes")) {
             set_engine_show_axes(engine, !engine->show_axes);
+        }
+
+        // Button for toggling wireframe
+        if (nk_button_label(engine->nk_ctx, "Show Wireframe")) {
+            set_engine_show_wireframe(engine, !engine->show_wireframe);
         }
 
         // top margin
@@ -498,6 +503,12 @@ void set_engine_show_wireframe(Engine* engine, bool show_wireframe){
     if (!engine) return;
 
     engine->show_wireframe = show_wireframe;
+
+    if(show_wireframe){
+        glDisable(GL_CULL_FACE);
+    }else{
+        glEnable(GL_CULL_FACE);
+    }
 }
 
 void set_engine_show_axes(Engine* engine, bool show_axes){
@@ -519,16 +530,17 @@ void set_engine_show_axes(Engine* engine, bool show_axes){
 void run_engine_render_loop(Engine* engine, RenderSceneFunc render_func) {
     if (!engine) return;
 
-    if(engine->show_wireframe){
-        glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
-    }
     glEnable(GL_DEPTH_TEST);
-    //glEnable(GL_CULL_FACE);
-    //glCullFace(GL_BACK); // Cull back faces
-    //glFrontFace(GL_CCW); // Front faces are defined in counter-clockwise order
 
+    glCullFace(GL_BACK); // Cull back faces
+    glFrontFace(GL_CCW); // Front faces are defined in counter-clockwise order
 
     while (!glfwWindowShouldClose(engine->window)) {
+        if(engine->show_wireframe){
+            glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+        }else{
+            glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+        }
 
         glBindFramebuffer(GL_FRAMEBUFFER, engine->framebuffer);
         glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
@@ -539,6 +551,8 @@ void run_engine_render_loop(Engine* engine, RenderSceneFunc render_func) {
         if(render_func != NULL && current_scene != NULL) {
             render_func(engine, current_scene);
         }
+
+        glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
 
         render_nuklear_gui(engine);
 

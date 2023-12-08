@@ -36,8 +36,9 @@
 #define FBX_MODEL_PATH "./models/room.fbx"
 #define FBX_TEXTURE_DIR "./textures/room.fbm"
 
-const unsigned int WIDTH = 800;
-const unsigned int HEIGHT = 600;
+const unsigned int HEIGHT = 1080;
+const unsigned int WIDTH = 1920;
+
 const float ROTATE_SPEED = 0.4f; // Speed of rotation
 const float RADIUS = 2.0f;
 const unsigned int RINGS = 20;
