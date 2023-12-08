@@ -2,6 +2,7 @@
 #ifndef _SCENE_H_
 #define _SCENE_H_
 
+#include <GLFW/glfw3.h>
 #include <cglm/cglm.h>
 #include <GL/glew.h>
 
@@ -105,7 +106,7 @@ Camera* find_camera_by_name(Scene* scene, const char* name);
 Light* find_light_by_name(Scene* scene, const char* name);
 
 // axes
-void setup_scene_axes(Scene* scene);
+GLboolean setup_scene_axes(Scene* scene);
 
 // print
 void print_scene_node(const SceneNode* node, int depth);
