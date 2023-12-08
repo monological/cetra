@@ -25,6 +25,12 @@
 #include "ext/nuklear_glfw_gl3.h"
 
 
+typedef enum CameraMode {
+    CAMERA_MODE_FREE,    // Free movement mode
+    CAMERA_MODE_ORBIT,   // Orbit around a point
+} CameraMode;
+
+
 typedef struct Engine {
     GLFWwindow* window;
     char* window_title;             // Title of the GLFW window
@@ -34,6 +40,7 @@ typedef struct Engine {
     GLFWerrorfun error_callback;
     GLFWmousebuttonfun mouse_button_callback;
     GLFWcursorposfun cursor_position_callback;
+    GLFWkeyfun key_callback;
 
     GLuint framebuffer;             // Framebuffer object
     int framebuffer_width;          // Width of the framebuffer
@@ -42,6 +49,7 @@ typedef struct Engine {
     GLuint depth_renderbuffer;      // Depth renderbuffer
 
     Camera *camera;                 // main camera
+    CameraMode camera_mode;         // Current camera mode
 
     Scene** scenes;                 // Array of scenes managed by the engine
     size_t scene_count;             // Number of scenes
@@ -74,6 +82,7 @@ void free_engine(Engine* engine);
 void set_engine_error_callback(Engine* engine, GLFWerrorfun error_callback);
 void set_engine_mouse_button_callback(Engine* engine, GLFWmousebuttonfun mouse_button_callback);
 void set_engine_cursor_position_callback(Engine* engine, GLFWcursorposfun cursor_position_callback);
+void set_engine_key_callback(Engine* engine, GLFWkeyfun key_callback);
 
 // Setup glfw env
 int setup_engine_glfw(Engine* engine);
@@ -81,6 +90,7 @@ void setup_engine_msaa(Engine *engine);
 
 // Camera
 void set_engine_camera(Engine* engine, Camera* camera);
+void set_engine_camera_mode(Engine* engine, CameraMode mode);
 void update_engine_camera_lookat(Engine* engine);
 void update_engine_camera_perspective(Engine* engine);
 

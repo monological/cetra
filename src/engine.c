@@ -1,5 +1,7 @@
 #include <stdio.h>
 #include <stdint.h>
+#include <string.h>
+#include <math.h>
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
 #include <cglm/cglm.h>
@@ -34,7 +36,12 @@ Engine* create_engine(const char* window_title, int width, int height) {
 
     engine->window = NULL;
 
-    engine->window_title = window_title ? strdup(window_title) : NULL;
+    if(window_title != NULL){
+        engine->window_title = strdup(window_title);
+    }else{
+        engine->window_title = NULL;
+    }
+
     if (window_title && !engine->window_title) {
         fprintf(stderr, "Failed to allocate memory for window title\n");
         free(engine);
@@ -55,6 +62,7 @@ Engine* create_engine(const char* window_title, int width, int height) {
     engine->depth_renderbuffer = 0;
 
     engine->camera = NULL;
+    engine->camera_mode = CAMERA_MODE_ORBIT;
 
     engine->scenes = NULL;
     engine->scene_count = 0;
@@ -117,7 +125,6 @@ void free_engine(Engine* engine) {
     free(engine);
 }
 
-
 void set_engine_error_callback(Engine* engine, GLFWerrorfun error_callback) {
     if (!engine) return;
     engine->error_callback = error_callback;
@@ -135,9 +142,18 @@ void set_engine_mouse_button_callback(Engine* engine, GLFWmousebuttonfun mouse_b
 }
 
 void set_engine_cursor_position_callback(Engine* engine, GLFWcursorposfun cursor_position_callback) {
+    if (!engine) return;
     engine->cursor_position_callback = cursor_position_callback;
     if (engine->window) {
         glfwSetCursorPosCallback(engine->window, cursor_position_callback);
+    }
+}
+
+void set_engine_key_callback(Engine* engine, GLFWkeyfun key_callback) {
+    if (!engine) return;
+    engine->key_callback = key_callback;
+    if (engine->window) {
+        glfwSetKeyCallback(engine->window, key_callback);
     }
 }
 
@@ -250,6 +266,12 @@ void set_engine_camera(Engine* engine, Camera* camera){
     if (!engine || !camera) return;
 
     engine->camera = camera;
+}
+
+void set_engine_camera_mode(Engine* engine, CameraMode mode) {
+    if (engine) {
+        engine->camera_mode = mode;
+    }
 }
 
 void update_engine_camera_lookat(Engine* engine){
@@ -420,6 +442,23 @@ void render_nuklear_gui(Engine* engine) {
         if (nk_button_label(engine->nk_ctx, "Show Wireframe")) {
             set_engine_show_wireframe(engine, !engine->show_wireframe);
         }
+
+        // cam modes
+        nk_layout_row_dynamic(engine->nk_ctx, 30, 2);
+
+        int cam_mode = engine->camera_mode;
+
+        // Radio button for CAMERA_MODE_FREE
+        if (nk_option_label(engine->nk_ctx, "Free Mode", cam_mode  == CAMERA_MODE_FREE)) {
+            cam_mode = CAMERA_MODE_FREE;
+        }
+
+        // Radio button for CAMERA_MODE_ORBIT
+        if (nk_option_label(engine->nk_ctx, "Orbit Mode", cam_mode == CAMERA_MODE_ORBIT)) {
+            cam_mode = CAMERA_MODE_ORBIT;
+        }
+
+        engine->camera_mode = cam_mode;
 
         // top margin
         nk_layout_row_dynamic(engine->nk_ctx, 10, 1); // 10 pixels of vertical space

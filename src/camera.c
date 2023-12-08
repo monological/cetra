@@ -21,7 +21,7 @@ Camera* create_camera() {
     camera->near_clip = 0.1f;              // Typical near clip plane
     camera->far_clip = 1000.0f;            // Typical far clip plane
 
-    // animation variables
+    // orbit animation variables
     camera->theta = 0.0f;
     camera->phi = 0.0f;
     camera->distance = 2000.0f;

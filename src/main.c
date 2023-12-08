@@ -139,6 +139,79 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
     }
 }
 
+void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods) {
+
+    if(!window) return;
+
+    Engine *engine = glfwGetWindowUserPointer(window);
+    if (!engine) {
+        printf("Engine pointer is NULL\n");
+        return;
+    }
+
+    if(!engine->camera){
+        printf("No camera defined.\n");
+        return;
+    }
+
+    Camera *camera = engine->camera;
+
+    float cameraSpeed = 300.0f;
+    vec3 move_direction = {0.0f, 0.0f, 0.0f};
+    vec3 new_position = {0.0f, 0.0f, 0.0f};
+
+    if (action == GLFW_PRESS || action == GLFW_REPEAT) {
+        vec3 forward, right;
+        switch (key) {
+            case GLFW_KEY_W:
+            case GLFW_KEY_UP:
+                printf("up key triggered\n");
+                // Move camera forward
+                glm_vec3_sub(camera->look_at, camera->position, forward);
+                glm_vec3_normalize(forward);
+                glm_vec3_scale(forward, cameraSpeed, forward);
+                glm_vec3_add(camera->position, forward, new_position);
+                break;
+
+            case GLFW_KEY_S:
+            case GLFW_KEY_DOWN:
+                printf("down key triggered\n");
+                // Move camera backward
+                glm_vec3_sub(camera->look_at, camera->position, forward);
+                glm_vec3_normalize(forward);
+                glm_vec3_scale(forward, cameraSpeed, forward);
+                glm_vec3_sub(camera->position, forward, new_position);
+                break;
+
+            case GLFW_KEY_A:
+            case GLFW_KEY_LEFT:
+                printf("left key triggered\n");
+                // Move camera left
+                glm_vec3_sub(camera->look_at, camera->position, forward);
+                glm_vec3_crossn(camera->up_vector, forward, right);
+                glm_vec3_normalize(right);
+                glm_vec3_scale(right, cameraSpeed, right);
+                glm_vec3_sub(camera->position, right, new_position);
+                break;
+
+            case GLFW_KEY_D:
+            case GLFW_KEY_RIGHT:
+                printf("right key triggered\n");
+                // Move camera right
+                glm_vec3_sub(camera->look_at, camera->position, forward);
+                glm_vec3_crossn(camera->up_vector, forward, right);
+                glm_vec3_normalize(right);
+                glm_vec3_scale(right, cameraSpeed, right);
+                glm_vec3_add(camera->position, right, new_position);
+                break;
+        }
+
+        set_camera_position(camera, new_position);
+    }
+
+}
+
+
 void render_scene_callback(Engine* engine, Scene* current_scene){
     SceneNode *root_node = current_scene->root_node;
 
@@ -149,40 +222,45 @@ void render_scene_callback(Engine* engine, Scene* current_scene){
     if(!camera) return;
 
     float time_value = glfwGetTime();
-    float angle = time_value * ROTATE_SPEED;
-    camera->amplitude = (MAX_DIST - MIN_DIST) / 2.0f; // Half the range of motion
-    float midPoint = MIN_DIST + camera->amplitude; // Middle point of the motion
-
+    
     Transform transform = {
         .position = {0.0f, -200.0f, 0.0f},
         .rotation = {0.0f, 0.0f, 0.0f},
         .scale = {1.0f, 1.0f, 1.0f}
     };
 
-    if (!dragging) {
-        camera->distance = midPoint + camera->amplitude * sin(time_value * CAM_ANGULAR_SPEED);
-        camera->phi += camera->orbit_speed; // Rotate around the center
+    if(engine->camera_mode == CAMERA_MODE_ORBIT){
+        if (!dragging) {
+            camera->amplitude = (MAX_DIST - MIN_DIST) / 2.0f; // Half the range of motion
+            float midPoint = MIN_DIST + camera->amplitude; // Middle point of the motion
+            camera->distance = midPoint + camera->amplitude * sin(time_value * CAM_ANGULAR_SPEED);
+            camera->phi += camera->orbit_speed; // Rotate around the center
 
-        vec3 new_camera_position = {
-            cos(camera->phi) * camera->distance * cos(camera->theta),
-            camera->height,
-            sin(camera->phi) * camera->distance * cos(camera->theta)
-        };
+            vec3 new_camera_position = {
+                cos(camera->phi) * camera->distance * cos(camera->theta),
+                camera->height,
+                sin(camera->phi) * camera->distance * cos(camera->theta)
+            };
 
-        set_camera_position(camera, new_camera_position);
+            set_camera_position(camera, new_camera_position);
+            update_engine_camera_lookat(engine);
+            update_engine_camera_perspective(engine);
+
+        } else {
+            float angle = time_value * ROTATE_SPEED;
+            float zpos = cosf(angle);
+            float ypos = sinf(angle);
+
+            transform.position[0] = 0.0f;
+            transform.position[1] = -200.0f;
+            transform.position[2] = 0.0f;
+            transform.rotation[0] = dy * ROTATION_SENSITIVITY;
+            transform.rotation[1] = dx * ROTATION_SENSITIVITY;
+            transform.rotation[2] = 0.0f;
+        }
+    }else if(engine->camera_mode == CAMERA_MODE_FREE){
         update_engine_camera_lookat(engine);
         update_engine_camera_perspective(engine);
-
-    } else {
-        float zpos = cosf(angle);
-        float ypos = sinf(angle);
-
-        transform.position[0] = 0.0f;
-        transform.position[1] = -25.0f;
-        transform.position[2] = 0.0f;
-        transform.rotation[0] = dy * ROTATION_SENSITIVITY;
-        transform.rotation[1] = dx * ROTATION_SENSITIVITY;
-        transform.rotation[2] = 0.0f;
     }
 
     transform_node(root_node, &transform);
@@ -219,6 +297,7 @@ int main() {
     set_engine_error_callback(engine, error_callback);
     set_engine_mouse_button_callback(engine, mouse_button_callback);
     set_engine_cursor_position_callback(engine, cursor_position_callback);
+    set_engine_key_callback(engine, key_callback);
 
     /*
      * Set up shaders.
