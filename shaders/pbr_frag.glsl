@@ -27,9 +27,9 @@ struct Light {
 
 uniform Light light;
 
-uniform vec3 view;
-uniform vec3 model;
-uniform vec3 projection;
+uniform mat4 view;
+uniform mat4 model;
+uniform mat4 projection;
 
 uniform int renderMode;
 uniform float nearClip;

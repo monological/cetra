@@ -30,9 +30,6 @@
 
 #define PBR_VERT_SHADER_PATH "./shaders/pbr_vert.glsl"
 #define PBR_FRAG_SHADER_PATH "./shaders/pbr_frag.glsl"
-#define AXES_VERT_SHADER_PATH "./shaders/axes_vert.glsl"
-#define AXES_FRAG_SHADER_PATH "./shaders/axes_frag.glsl"
-
 #define FBX_MODEL_PATH "./models/room.fbx"
 #define FBX_TEXTURE_DIR "./textures/room.fbm"
 
