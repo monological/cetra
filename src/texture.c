@@ -3,9 +3,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "ext/stb_image.h"
+#include "ext/uthash.h"
+
 #include "texture.h"
-#include "stb_image.h"
-#include "uthash.h"
 #include "util.h"
 
 Texture* create_texture() {

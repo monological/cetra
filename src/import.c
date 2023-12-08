@@ -9,7 +9,8 @@
 #include <GL/glew.h>
 
 #define STB_IMAGE_IMPLEMENTATION
-#include "stb_image.h"
+#include "ext/stb_image.h"
+
 #include "scene.h"
 #include "mesh.h"
 #include "light.h"

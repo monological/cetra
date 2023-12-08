@@ -21,8 +21,8 @@
 #define NK_KEYSTATE_BASED_INPUT
 #define NK_IMPLEMENTATION
 #define NK_GLFW_GL3_IMPLEMENTATION
-#include "nuklear.h"
-#include "nuklear_glfw_gl3.h"
+#include "ext/nuklear.h"
+#include "ext/nuklear_glfw_gl3.h"
 
 // Function to create and initialize the engine
 Engine* create_engine(const char* window_title, int width, int height) {
@@ -197,6 +197,8 @@ int setup_engine_glfw(Engine* engine) {
     glfwGetFramebufferSize(engine->window, &(engine->framebuffer_width), &(engine->framebuffer_height));
     glViewport(0, 0, engine->framebuffer_width, engine->framebuffer_height);
     check_gl_error("view port");
+
+    
 
     return 0; // Success
 }
@@ -374,6 +376,11 @@ int setup_engine_gui(Engine* engine) {
 
     engine->nk_ctx = nk_glfw3_init(&engine->nk_glfw, engine->window, NK_GLFW3_INSTALL_CALLBACKS);
 
+    if (!engine->nk_ctx) {
+        printf("Failed to initialize Nuklear context\n");
+        return -1; // or handle the error appropriately
+    }
+
     struct nk_font_atlas *atlas;
     nk_glfw3_font_stash_begin(&engine->nk_glfw, &atlas);
     nk_glfw3_font_stash_end(&engine->nk_glfw);
@@ -383,6 +390,8 @@ int setup_engine_gui(Engine* engine) {
     // Initialize default background color
     engine->bg = nk_rgb(28, 48, 62);
 
+    // save engine to window so we can use it in callbacks
+    glfwSetWindowUserPointer(engine->window, engine);
 
     return 0; // Success
 }

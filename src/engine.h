@@ -21,8 +21,8 @@
 #define NK_INCLUDE_FONT_BAKING
 #define NK_INCLUDE_DEFAULT_FONT
 #define NK_KEYSTATE_BASED_INPUT
-#include "nuklear.h"
-#include "nuklear_glfw_gl3.h"
+#include "ext/nuklear.h"
+#include "ext/nuklear_glfw_gl3.h"
 
 
 typedef struct Engine {

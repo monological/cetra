@@ -105,8 +105,8 @@ add_library(cetra SHARED
     src/camera.c
     src/light.c
     src/import.c
-    src/cwalk.c
-    src/progressbar.c
+    src/ext/cwalk.c
+    src/ext/progressbar.c
 )
 
 # Ensure GLEW and external libraries are built before the engine target

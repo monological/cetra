@@ -4,7 +4,8 @@
 
 #include <GL/glew.h>
 #include <stdbool.h>
-#include "uthash.h"
+
+#include "ext/uthash.h"
 
 /*
  * Texture

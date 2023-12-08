@@ -7,7 +7,7 @@
 #include <GLFW/glfw3.h>
 
 #include "util.h"
-#include "cwalk.h"
+#include "ext/cwalk.h"
 
 void print_indentation(int depth) {
     for (int i = 0; i < depth; i++) {

@@ -1,10 +1,10 @@
 #ifndef IMPORT_H
 #define IMPORT_H
+#include <string.h>
+#include <stdio.h>
 
 #include <GL/glew.h>
 #include <assimp/scene.h>
-#include <string.h>
-#include <stdio.h>
 
 #include "mesh.h"
 #include "light.h"

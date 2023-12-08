@@ -17,6 +17,17 @@
 #include "engine.h"
 #include "import.h"
 
+#define NK_INCLUDE_FIXED_TYPES
+#define NK_INCLUDE_STANDARD_IO
+#define NK_INCLUDE_STANDARD_VARARGS
+#define NK_INCLUDE_DEFAULT_ALLOCATOR
+#define NK_INCLUDE_VERTEX_BUFFER_OUTPUT
+#define NK_INCLUDE_FONT_BAKING
+#define NK_INCLUDE_DEFAULT_FONT
+#define NK_KEYSTATE_BASED_INPUT
+#include "ext/nuklear.h"
+#include "ext/nuklear_glfw_gl3.h"
+
 #define PBR_VERT_SHADER_PATH "./shaders/pbr_vert.glsl"
 #define PBR_FRAG_SHADER_PATH "./shaders/pbr_frag.glsl"
 #define AXES_VERT_SHADER_PATH "./shaders/axes_vert.glsl"
@@ -85,6 +96,24 @@ float dx, dy;
 void cursor_position_callback(GLFWwindow* window, double xpos, double ypos) {
     int windowWidth, windowHeight, framebufferWidth, framebufferHeight;
 
+    if(!window) return;
+
+    Engine *engine = glfwGetWindowUserPointer(window);
+    if (!engine) {
+        printf("Engine pointer is NULL\n");
+        return;
+    }
+
+    if (!engine->nk_ctx) {
+        printf("Nuklear context is NULL\n");
+        return;
+    }
+
+    // Check if mouse is over any Nuklear window
+    if (nk_window_is_any_hovered(engine->nk_ctx)) {
+        return;
+    }
+
     glfwGetWindowSize(window, &windowWidth, &windowHeight);
     glfwGetFramebufferSize(window, &framebufferWidth, &framebufferHeight);
 
@@ -100,6 +129,24 @@ void cursor_position_callback(GLFWwindow* window, double xpos, double ypos) {
 
 void mouse_button_callback(GLFWwindow* window, int button, int action, int mods) {
     int windowWidth, windowHeight, framebufferWidth, framebufferHeight;
+
+    if(!window) return;
+
+    Engine *engine = glfwGetWindowUserPointer(window);
+    if (!engine) {
+        printf("Engine pointer is NULL\n");
+        return;
+    }
+
+    if (!engine->nk_ctx) {
+        printf("Nuklear context is NULL\n");
+        return;
+    }
+
+    // Check if mouse is over any Nuklear window
+    if (nk_window_is_any_hovered(engine->nk_ctx)) {
+        return;
+    }
 
     glfwGetWindowSize(window, &windowWidth, &windowHeight);
     glfwGetFramebufferSize(window, &framebufferWidth, &framebufferHeight);
@@ -191,14 +238,14 @@ int main() {
     
     Engine *engine = create_engine("Cetra Engine", WIDTH, HEIGHT);
 
-    set_engine_error_callback(engine, error_callback);
-    set_engine_mouse_button_callback(engine, mouse_button_callback);
-    set_engine_cursor_position_callback(engine, cursor_position_callback);
-
     setup_engine_glfw(engine);
     setup_engine_msaa(engine);
 
     setup_engine_gui(engine);
+
+    set_engine_error_callback(engine, error_callback);
+    set_engine_mouse_button_callback(engine, mouse_button_callback);
+    set_engine_cursor_position_callback(engine, cursor_position_callback);
 
     /*
      * Set up shaders.
