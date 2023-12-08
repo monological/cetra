@@ -10,6 +10,7 @@
 Light* create_light() {
     Light* light = malloc(sizeof(Light));
     if (light) {
+        light->name = NULL;
         light->type = LIGHT_UNKNOWN;
         glm_vec3_copy((vec3){0.0f, 0.0f, 0.0f}, light->position);
         glm_vec3_copy((vec3){0.0f, -1.0f, 0.0f}, light->direction);
