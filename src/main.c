@@ -350,7 +350,10 @@ int main() {
         return -1;
     }
 
-    setup_scene_axes(scene);
+    if(!setup_scene_axes(scene)){
+        fprintf(stderr, "Failed to scene axes shaders\n");
+        return -1;
+    }
 
     SceneNode* root_node = scene->root_node;
     assert(root_node != NULL);

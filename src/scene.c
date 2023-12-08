@@ -160,7 +160,7 @@ Light* find_light_by_name(Scene* scene, const char* name) {
     return NULL;
 }
 
-void setup_scene_axes(Scene* scene){
+GLboolean setup_scene_axes(Scene* scene){
     GLboolean success = GL_TRUE;
 
     ShaderProgram* axes_shader_program = create_program();
@@ -198,7 +198,7 @@ void setup_scene_axes(Scene* scene){
         setup_program_uniforms(scene->axes_shader_program);
     }
 
-
+    return success;
 }
 
 SceneNode* create_node() {
