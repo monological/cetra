@@ -166,7 +166,7 @@ GLboolean setup_scene_axes(Scene* scene){
     ShaderProgram* axes_shader_program = create_program();
     if(!axes_shader_program){
         fprintf(stderr, "Failed to create axes shader program\n");
-        return;
+        return GL_FALSE;
     }
 
     Shader* axes_vert_shader = create_shader(VERTEX_SHADER, axes_vert_src);
