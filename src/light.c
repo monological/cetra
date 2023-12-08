@@ -9,27 +9,34 @@
 
 Light* create_light() {
     Light* light = malloc(sizeof(Light));
-    if (light) {
-        light->name = NULL;
-        light->type = LIGHT_UNKNOWN;
-        glm_vec3_copy((vec3){0.0f, 0.0f, 0.0f}, light->position);
-        glm_vec3_copy((vec3){0.0f, -1.0f, 0.0f}, light->direction);
-        glm_vec3_copy((vec3){1.0f, 1.0f, 1.0f}, light->color);
-        glm_vec3_copy((vec3){1.0f, 1.0f, 1.0f}, light->specular);
-        glm_vec3_copy((vec3){1.0f, 1.0f, 1.0f}, light->ambient);
-        light->intensity = 1.0f;
-        light->constant = 1.0f;
-        light->linear = 0.09f;
-        light->quadratic = 0.032f;
-        light->cutOff = cosf(glm_rad(12.5f));
-        light->outerCutOff = cosf(glm_rad(15.0f));
+
+    if (!light) {
+        fprintf(stderr, "Failed to allocate memory for light\n");
+        return NULL;
     }
+    memset(light, 0, sizeof(Light)); 
+
+    light->name = NULL;
+    light->type = LIGHT_UNKNOWN;
+
+    glm_vec3_copy((vec3){0.0f, 0.0f, 0.0f}, light->position);
+    glm_vec3_copy((vec3){0.0f, -1.0f, 0.0f}, light->direction);
+    glm_vec3_copy((vec3){1.0f, 1.0f, 1.0f}, light->color);
+    glm_vec3_copy((vec3){1.0f, 1.0f, 1.0f}, light->specular);
+    glm_vec3_copy((vec3){1.0f, 1.0f, 1.0f}, light->ambient);
+    light->intensity = 1.0f;
+    light->constant = 1.0f;
+    light->linear = 0.09f;
+    light->quadratic = 0.032f;
+    light->cutOff = cosf(glm_rad(12.5f));
+    light->outerCutOff = cosf(glm_rad(15.0f));
+
     return light;
 }
 
 void set_light_name(Light* light, const char* name) {
-    if(!light) return;
-    if(light->name){
+    if(!light || !name) return;
+    if(light->name != NULL){
         free(light->name);
     }
     light->name = safe_strdup(name);
