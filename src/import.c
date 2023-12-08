@@ -209,9 +209,9 @@ void process_ai_lights(const struct aiScene* scene, Light ***lights, size_t *num
     for (unsigned int i = 0; i < scene->mNumLights; i++) {
         const struct aiLight* ai_light = scene->mLights[i];
         Light *light = create_light();
-        light->name = strdup(ai_light->mName.data);
+        light->name = safe_strdup(ai_light->mName.data);
 
-        light->name = strdup(ai_light->mName.data);
+        light->name = safe_strdup(ai_light->mName.data);
         glm_vec3_copy((vec3){ai_light->mPosition.x, ai_light->mPosition.y, ai_light->mPosition.z}, light->position);
         glm_vec3_copy((vec3){ai_light->mDirection.x, ai_light->mDirection.y, ai_light->mDirection.z}, light->direction);
         glm_vec3_copy((vec3){ai_light->mColorDiffuse.r, ai_light->mColorDiffuse.g, ai_light->mColorDiffuse.b}, light->color);
@@ -257,7 +257,7 @@ void process_ai_cameras(const struct aiScene* scene, Camera ***cameras, size_t *
     for (unsigned int i = 0; i < *num_cameras; i++) {
         const struct aiCamera* ai_camera = scene->mCameras[i];
         Camera *camera = malloc(sizeof(Camera));
-        camera->name = strdup(ai_camera->mName.data);
+        camera->name = safe_strdup(ai_camera->mName.data);
 
         if (!camera) {
             fprintf(stderr, "Failed to allocate memory for camera\n");
@@ -328,7 +328,7 @@ SceneNode* process_ai_node(struct aiNode* ai_node, const struct aiScene* ai_scen
         node->children[i]->parent = node; // Set parent
     }
 
-    node->name = strdup(ai_node->mName.data);
+    node->name = safe_strdup(ai_node->mName.data);
 
     struct aiMatrix4x4 ai_mat = ai_node->mTransformation;
     copy_aiMatrix_to_mat4(&ai_mat, node->original_transform);

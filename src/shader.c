@@ -66,7 +66,7 @@ Shader* create_shader(ShaderType type, const char* source) {
     }
 
     shader->type = type;
-    shader->source = strdup(source);
+    shader->source = safe_strdup(source);
 
     GLenum glType;
     switch (shader->type) {

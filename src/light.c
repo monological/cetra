@@ -4,6 +4,7 @@
 #include <string.h>
 #include <cglm/cglm.h>
 
+#include "util.h"
 #include "light.h"
 
 Light* create_light() {
@@ -30,7 +31,7 @@ void set_light_name(Light* light, const char* name) {
     if(light->name){
         free(light->name);
     }
-    light->name = strdup(name);
+    light->name = safe_strdup(name);
 }
 
 void set_light_type(Light* light, LightType type) {

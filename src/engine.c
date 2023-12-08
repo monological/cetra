@@ -37,7 +37,7 @@ Engine* create_engine(const char* window_title, int width, int height) {
     engine->window = NULL;
 
     if(window_title != NULL){
-        engine->window_title = strdup(window_title);
+        engine->window_title = safe_strdup(window_title);
     }else{
         engine->window_title = NULL;
     }
@@ -491,11 +491,11 @@ void render_nuklear_gui(Engine* engine) {
 
         // Camera properties
         nk_layout_row_dynamic(engine->nk_ctx, 25, 1);
-        nk_property_float(engine->nk_ctx, "Theta:", 0.0f, &camera->theta, M_PI_2, 0.1f, 1);
-        nk_property_float(engine->nk_ctx, "Phi:", 0.0f, &camera->phi, M_PI_2, 0.1f, 1);
+        nk_property_float(engine->nk_ctx, "Theta:", 0.0f, &camera->theta, GLM_PI_2, 0.1f, 1);
+        nk_property_float(engine->nk_ctx, "Phi:", 0.0f, &camera->phi, GLM_PI_2, 0.1f, 1);
         nk_property_float(engine->nk_ctx, "Distance:", 0.0f, &camera->distance, 3000.0f, 100.0f, 1);
         nk_property_float(engine->nk_ctx, "Height:", -2000.0f, &camera->height, 2000.0f, 100.0f, 1);
-        nk_property_float(engine->nk_ctx, "Fov:", 0.0f, &camera->fov_radians, M_PI, 0.01f, 0.01f);
+        nk_property_float(engine->nk_ctx, "Fov:", 0.0f, &camera->fov_radians, GLM_PI, 0.01f, 0.01f);
 
         // LookAt Point properties
         nk_layout_row_dynamic(engine->nk_ctx, 25, 1);

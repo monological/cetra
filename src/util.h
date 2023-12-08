@@ -12,6 +12,7 @@ void check_gl_error(const char* where);
  * String
  */
 void print_indentation(int depth);
+char *safe_strdup(const char *s);
 
 /*
  * Path

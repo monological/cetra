@@ -9,17 +9,36 @@
 #include "util.h"
 #include "ext/cwalk.h"
 
-void print_indentation(int depth) {
-    for (int i = 0; i < depth; i++) {
-        printf("    ");
-    }
-}
 
 void check_gl_error(const char* where) {
     GLenum err;
     while ((err = glGetError()) != GL_NO_ERROR) {
         fprintf(stderr, "OpenGL error: %u - where: %s\n", err, where);
     }
+}
+
+void print_indentation(int depth) {
+    for (int i = 0; i < depth; i++) {
+        printf("    ");
+    }
+}
+
+char *safe_strdup(const char *s) {
+    if (s == NULL) {
+        return NULL;  // Return NULL if the input string is NULL
+    }
+
+    size_t len = strlen(s);
+    char *d = (char *)malloc(len + 1);  // Allocate memory for the string and null terminator
+
+    if (d == NULL) {
+        // Handle memory allocation failure
+        return NULL;
+    }
+
+    memcpy(d, s, len + 1);  // Use memcpy instead of strcpy to avoid potential issues
+                             // and copy exactly len + 1 bytes (including null terminator)
+    return d;
 }
 
 bool path_exists(const char* path) {
@@ -78,7 +97,7 @@ bool find_existing_subpath(const char* base_dir, char** subpath_ptr) {
     while (*subpath != '\0') {
         snprintf(fullpath, fullpath_size, "%s/%s", base_dir, subpath);
         if (path_exists(fullpath)) {
-            char* new_subpath = strdup(fullpath);
+            char* new_subpath = safe_strdup(fullpath);
             if (new_subpath) {
                 free(*subpath_ptr);  // Free the original subpath
                 *subpath_ptr = new_subpath;  // Update the pointer to the new subpath
@@ -143,7 +162,7 @@ char* convert_and_normalize_path(const char *input_path) {
     if (style == CWK_STYLE_WINDOWS) {
         unix_path = convert_windows_path_to_unix(input_path);
     } else {
-        unix_path = strdup(input_path);
+        unix_path = safe_strdup(input_path);
     }
 
     if (unix_path == NULL) {

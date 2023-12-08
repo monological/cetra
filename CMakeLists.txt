@@ -113,10 +113,22 @@ add_library(cetra SHARED
 add_dependencies(cetra glfw cglm libglew_static assimp FindLibraries)
 
 # Link the engine with external libraries
-target_link_libraries(cetra "${EXTERNAL_INSTALL_LOCATION}/lib/libglfw3.a" ${CGLM_LIBRARY} libglew_static "${EXTERNAL_INSTALL_LOCATION}/lib/libassimp.dylib")
+if(APPLE)
+    target_link_libraries(cetra "${EXTERNAL_INSTALL_LOCATION}/lib/libglfw3.a" ${CGLM_LIBRARY} libglew_static "${EXTERNAL_INSTALL_LOCATION}/lib/libassimp.dylib")
 
-add_executable(render src/main.c)
-target_link_libraries(render cetra "${EXTERNAL_INSTALL_LOCATION}/lib/libglfw3.a" ${CGLM_LIBRARY} libglew_static "${EXTERNAL_INSTALL_LOCATION}/lib/libassimp.dylib")
+    add_executable(render src/main.c)
+    target_link_libraries(render cetra "${EXTERNAL_INSTALL_LOCATION}/lib/libglfw3.a" ${CGLM_LIBRARY} libglew_static "${EXTERNAL_INSTALL_LOCATION}/lib/libassimp.dylib")
+elseif(UNIX)
+    target_link_libraries(cetra "${EXTERNAL_INSTALL_LOCATION}/lib/libglfw3.a" ${CGLM_LIBRARY} libglew_static "${EXTERNAL_INSTALL_LOCATION}/lib/libassimp.so")
+
+    add_executable(render src/main.c)
+    target_link_libraries(render cetra "${EXTERNAL_INSTALL_LOCATION}/lib/libglfw3.a" ${CGLM_LIBRARY} libglew_static "${EXTERNAL_INSTALL_LOCATION}/lib/libassimp.so")
+elseif(WIN32)
+    target_link_libraries(cetra "${EXTERNAL_INSTALL_LOCATION}/lib/libglfw3.a" ${CGLM_LIBRARY} libglew_static "${EXTERNAL_INSTALL_LOCATION}/lib/libassimp.dll")
+
+    add_executable(render src/main.c)
+    target_link_libraries(render cetra "${EXTERNAL_INSTALL_LOCATION}/lib/libglfw3.a" ${CGLM_LIBRARY} libglew_static "${EXTERNAL_INSTALL_LOCATION}/lib/libassimp.dll")
+endif()
 
 # Platform-specific configurations for linking
 if(APPLE)

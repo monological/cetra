@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "util.h"
 #include "camera.h"
 
 Camera* create_camera() {
@@ -38,7 +39,7 @@ void set_camera_name(Camera* camera, const char* name) {
     if(camera->name){
         free(camera->name);
     }
-    camera->name = strdup(name);
+    camera->name = safe_strdup(name);
 }
 
 void free_camera(Camera* camera) {

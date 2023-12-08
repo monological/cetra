@@ -1,5 +1,6 @@
 
 #include <stdlib.h>
+#include <string.h>
 
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
@@ -268,7 +269,7 @@ void add_child_node(SceneNode* node, SceneNode* child) {
 
 void set_node_name(SceneNode* node, const char* name) {
     if (!node || !name) return;
-    node->name = strdup(name);
+    node->name = safe_strdup(name);
 }
 
 void set_node_light(SceneNode* node, Light* light) {

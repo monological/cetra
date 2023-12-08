@@ -98,7 +98,7 @@ void set_texture_pool_directory(TexturePool* pool, const char* directory){
             free(pool->directory);
         }
 
-        pool->directory = strdup(directory);
+        pool->directory = safe_strdup(directory);
 
         if (!pool->directory) {
             fprintf(stderr, "Failed to allocate memory for directory string\n");
@@ -151,7 +151,7 @@ Texture* load_texture_path_into_pool(TexturePool* pool, const char* filepath) {
         return NULL;
     }
 
-    char* subpath = strdup(normalized_path);
+    char* subpath = safe_strdup(normalized_path);
     if (!subpath) {
         fprintf(stderr, "Memory allocation failed for subpath.\n");
         free(normalized_path);
@@ -217,7 +217,7 @@ Texture* load_texture_path_into_pool(TexturePool* pool, const char* filepath) {
 
         // Update texture properties
         newTexture->id = textureID;
-        newTexture->filepath = strdup(subpath);
+        newTexture->filepath = safe_strdup(subpath);
         newTexture->width = width;
         newTexture->height = height;
         newTexture->format = format;
