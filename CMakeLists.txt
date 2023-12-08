@@ -72,6 +72,7 @@ ExternalProject_Add(
     BUILD_ALWAYS 1
 )
 
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 # Clone GLEW-cmake from GitHub
 execute_process(
