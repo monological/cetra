@@ -270,8 +270,6 @@ void update_engine_camera_perspective(Engine* engine){
             camera->far_clip, engine->projection_matrix);
 }
 
-
-
 /*
  * Scene
  *

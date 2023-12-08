@@ -167,20 +167,7 @@ Material* create_material() {
 
 void free_material(Material* material) {
     if (material) {
-        // Free each Texture struct
-        free_texture(material->albedoTex);
-        free_texture(material->normalTex);
-        free_texture(material->roughnessTex);
-        free_texture(material->metalnessTex);
-        free_texture(material->ambientOcclusionTex);
-        free_texture(material->emissiveTex);
-        free_texture(material->heightTex);
-        free_texture(material->opacityTex);
-        free_texture(material->microsurfaceTex);
-        free_texture(material->anisotropyTex);
-        free_texture(material->subsurfaceScatteringTex);
-        free_texture(material->sheenTex);
-        free_texture(material->reflectanceTex);
+        // Texures are managed by pool. Do not free them here.
 
         // Finally, free the material structure itself
         free(material);

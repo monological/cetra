@@ -86,7 +86,7 @@ typedef struct Scene {
     Camera** cameras;
     size_t camera_count;
 
-    char* texture_directory;
+    TexturePool *tex_pool;
 
     // used by all nodes
     ShaderProgram* axes_shader_program;
@@ -97,7 +97,6 @@ Scene* create_scene();
 void free_scene(Scene* scene);
 
 // set
-void set_scene_texture_directory(Scene* scene, const char* directory);
 void set_scene_lights(Scene* scene, Light** lights, size_t light_count);
 void set_scene_cameras(Scene* scene, Camera** cameras, size_t camera_count);
 

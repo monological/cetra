@@ -72,7 +72,9 @@ Scene* create_scene() {
     scene->light_count = 0;
     scene->cameras = NULL;
     scene->camera_count = 0;
-    scene->texture_directory = NULL;
+
+    scene->tex_pool = create_texture_pool();
+
     scene->axes_shader_program = NULL;
     return scene;
 }
@@ -82,10 +84,10 @@ void free_scene(Scene* scene) {
         return; // Nothing to free
     }
 
-    // Free texture directory string
-    if (scene->texture_directory) {
-        free(scene->texture_directory);
-        scene->texture_directory = NULL;
+    // Free texture pool
+    if (scene->tex_pool) {
+        free_texture_pool(scene->tex_pool);
+        scene->tex_pool = NULL;
     }
 
     // Free all lights
@@ -125,15 +127,6 @@ void free_scene(Scene* scene) {
     return;
 }
 
-
-void set_scene_texture_directory(Scene* scene, const char* directory) {
-    if (scene) {
-        if (scene->texture_directory) {
-            free(scene->texture_directory);
-        }
-        scene->texture_directory = strdup(directory);
-    }
-}
 
 void set_scene_lights(Scene* scene, Light** lights, size_t light_count) {
     if (!scene) return;
@@ -573,14 +566,6 @@ void render_nodes(SceneNode* node, Camera *camera,
     }
 }
 
-
-
-void print_indentation(int depth) {
-    for (int i = 0; i < depth; i++) {
-        printf("    ");
-    }
-}
-
 void print_scene_node(const SceneNode* node, int depth) {
     if (!node) return;
 
@@ -603,7 +588,7 @@ void print_scene(const Scene* scene) {
     printf("Scene | Lights: %zu | Cameras: %zu | Texture Directory: %s\n",
            scene->light_count,
            scene->camera_count,
-           scene->texture_directory ? scene->texture_directory : "None");
+           scene->tex_pool ? (scene->tex_pool->directory ? scene->tex_pool->directory : "None") : "None");
 
     print_scene_node(scene->root_node, 0);
 }

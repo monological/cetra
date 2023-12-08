@@ -8,110 +8,6 @@
 #include "uthash.h"
 #include "util.h"
 
-
-static TextureCache *cache = NULL;
-
-Texture* load_texture(const char* path, const char* directory) {
-    char filename[1000];
-    GLenum format;
-
-    // Normalize and work on a copy of the path
-    char* normalized_path = convert_and_normalize_path(path);
-    if (!normalized_path) {
-        fprintf(stderr, "Failed to normalize path: %s\n", path);
-        return 0;
-    }
-
-    char* subpath = strdup(normalized_path);
-    if (!subpath) {
-        fprintf(stderr, "Memory allocation failed for subpath.\n");
-        free(normalized_path);
-        return 0;
-    }
-
-    bool loaded = false;
-    GLuint textureID = 0;
-    int width, height, nrChannels;
-
-    do {
-        snprintf(filename, sizeof(filename), "%s/%s", directory, subpath);
-        //printf("trying texture path %s\n", filename);
-
-        Texture* cachedTexture = find_texture_in_cache(filename);
-        if (cachedTexture) {
-            printf("Using cached texture path %s\n", filename);
-            return cachedTexture;
-        }
-
-        unsigned char* data = stbi_load(filename, &width, &height, &nrChannels, 0);
-        if (data) {
-
-            printf("Loading texture path %s\n", filename);
-
-            // Create new texture object
-            Texture* newTexture = create_texture();
-            if (!newTexture) {
-                stbi_image_free(data);
-                free(normalized_path);
-                free(subpath);
-                return NULL;
-            }
-
-            glGenTextures(1, &textureID);
-            glBindTexture(GL_TEXTURE_2D, textureID);
-
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-
-            if (nrChannels == 1)
-                format = GL_RED;
-            else if (nrChannels == 3)
-                format = GL_RGB;
-            else if (nrChannels == 4)
-                format = GL_RGBA;
-
-            glTexImage2D(GL_TEXTURE_2D, 0, format, width, height, 0, format, GL_UNSIGNED_BYTE, data);
-            glGenerateMipmap(GL_TEXTURE_2D);
-
-            stbi_image_free(data);
-            loaded = true;
-
-            newTexture->id = textureID; // Correctly assign the texture ID
-            newTexture->filepath = strdup(filename);
-            newTexture->width = width;
-            newTexture->height = height;
-            newTexture->format = format;
-
-            add_texture_to_cache(newTexture);
-            glBindTexture(GL_TEXTURE_2D, 0);
-            free(normalized_path);
-            free(subpath);
-
-
-            return newTexture;
-        }
-
-        char* slash_pos = strchr(subpath, '/');
-        if (slash_pos != NULL) {
-            memmove(subpath, slash_pos + 1, strlen(slash_pos));
-        } else {
-            break;
-        }
-    } while (!loaded);
-
-    free(normalized_path);
-    free(subpath);
-
-    if (!loaded) {
-        fprintf(stderr, "Failed to load texture after trying all sub-paths.\n");
-        glBindTexture(GL_TEXTURE_2D, 0);
-        return NULL;
-    }
-}
-
-
 Texture* create_texture() {
     Texture* texture = (Texture*)malloc(sizeof(Texture));
     if (!texture) {
@@ -119,12 +15,11 @@ Texture* create_texture() {
         return NULL;
     }
 
-    // Initialize texture properties with default values
-    texture->id = 0;        // 0 indicates that the texture is not yet loaded into OpenGL
+    texture->id = 0;           // OpenGL texture id
     texture->filepath = NULL;  // No file path initially
-    texture->width = 0;     // Default width
-    texture->height = 0;    // Default height
-    texture->format = 0;    // Default format (you can choose a specific default if applicable)
+    texture->width = 0;        // Default width
+    texture->height = 0;       // Default height
+    texture->format = 0;       // Default format (you can choose a specific default if applicable)
 
     return texture;
 }
@@ -132,7 +27,10 @@ Texture* create_texture() {
 void free_texture(Texture* texture) {
     if (texture) {
         glDeleteTextures(1, &(texture->id));
-        free(texture->filepath);
+        if(texture->filepath){
+            free(texture->filepath);
+            texture->filepath = NULL;
+        }
         free(texture);
     }
 }
@@ -156,89 +54,222 @@ void set_texture_format(Texture* texture, GLenum format) {
 }
 
 /* 
- * Texture Cache
+ * Texture Pool
  *
  */
 
-TextureCache* create_texture_cache(const char* filepath, Texture* texture) {
-    TextureCache *cache = malloc(sizeof(TextureCache));
-    if (!cache) {
-        fprintf(stderr, "Failed to allocate memory for TextureCache\n");
+
+TexturePool* create_texture_pool() {
+    TexturePool* pool = (TexturePool*)malloc(sizeof(TexturePool));
+    if (!pool) {
+        fprintf(stderr, "Failed to allocate memory for TexturePool\n");
         return NULL;
     }
 
-    if (filepath) {
-        strncpy(cache->filepath, filepath, sizeof(cache->filepath));
-        cache->filepath[sizeof(cache->filepath) - 1] = '\0'; // Ensure null-termination
+    pool->directory = NULL;
+    pool->textures = NULL;
+    pool->texture_count = 0;
+    pool->texture_cache = NULL;
+    return pool;
+}
+
+void free_texture_pool(TexturePool* pool) {
+    if (pool) {
+        if (pool->directory) {
+            free(pool->directory);
+        }
+
+        // Only free the array of pointers, not the textures themselves
+        free(pool->textures);
+
+        // This will handle freeing of all Texture objects
+        clear_texture_pool(pool);
+
+        free(pool);
+    }
+}
+
+void set_texture_pool_directory(TexturePool* pool, const char* directory){
+    if(!pool) return;
+
+    if (directory) {
+        if(pool->directory != NULL){
+            free(pool->directory);
+        }
+
+        pool->directory = strdup(directory);
+
+        if (!pool->directory) {
+            fprintf(stderr, "Failed to allocate memory for directory string\n");
+        }
     } else {
-        cache->filepath[0] = '\0'; // Empty string for no filepath
-    }
-
-    cache->texture = texture; // Can be NULL if just reserving the cache
-    return cache;
-}
-
-void free_texture_cache(TextureCache* cache) {
-    if (cache) {
-        // Note: This does NOT free the associated texture, only the cache
-        free(cache);
+        pool->directory = NULL;
     }
 }
 
-void set_texture_cache_filepath(TextureCache* cache, const char* filepath) {
-    if (cache && filepath) {
-        strncpy(cache->filepath, filepath, sizeof(cache->filepath));
-        cache->filepath[sizeof(cache->filepath) - 1] = '\0'; // Ensure null-termination
+Texture* get_texture_from_pool(TexturePool* pool, const char* filepath) {
+    if (pool && filepath) {
+        Texture* found;
+        HASH_FIND_STR(pool->texture_cache, filepath, found);
+        return found;
+    }
+    return NULL;
+}
+
+void add_texture_to_pool(TexturePool* pool, Texture* texture) {
+    if (pool && texture && texture->filepath) {
+        // Add to dynamic array
+        pool->textures = realloc(pool->textures, (pool->texture_count + 1) * sizeof(Texture*));
+        if (!pool->textures) {
+            fprintf(stderr, "Failed to reallocate memory for textures array\n");
+            return;
+        }
+        pool->textures[pool->texture_count++] = texture;
+
+        // Add to cache
+        Texture* existing;
+        HASH_FIND_STR(pool->texture_cache, texture->filepath, existing);
+        if (!existing) {
+            HASH_ADD_KEYPTR(hh, pool->texture_cache, texture->filepath, strlen(texture->filepath), texture);
+        }
     }
 }
 
-void set_texture_cache_texture(TextureCache* cache, Texture* texture) {
-    if (cache) {
-        cache->texture = texture;
+Texture* load_texture_path_into_pool(TexturePool* pool, const char* filepath) {
+    if (!pool || !filepath) {
+        fprintf(stderr, "Invalid pool or filepath\n");
+        return NULL;
+    }
+
+    GLenum format;
+
+    // Normalize and work on a copy of the filepath
+    char* normalized_path = convert_and_normalize_path(filepath);
+    if (!normalized_path) {
+        fprintf(stderr, "Failed to normalize path: %s\n", filepath);
+        return NULL;
+    }
+
+    char* subpath = strdup(normalized_path);
+    if (!subpath) {
+        fprintf(stderr, "Memory allocation failed for subpath.\n");
+        free(normalized_path);
+        return NULL;
+    }
+
+    // Use find_existing_subpath to find a valid subpath
+    if (!find_existing_subpath(pool->directory, &subpath)) {
+        fprintf(stderr, "No valid subpath found for texture: %s\n", subpath);
+        free(normalized_path);
+        free(subpath);
+        return NULL;
+    }
+
+    GLuint textureID = 0;
+    int width, height, nrChannels;
+
+    Texture* cachedTexture = get_texture_from_pool(pool, subpath);
+    if (cachedTexture) {
+        printf("Using cached texture path %s\n", subpath);
+        free(normalized_path);
+        free(subpath);
+        return cachedTexture;
+    }
+
+    //printf("Loading texture path %s\n", subpath);
+
+    unsigned char* data = stbi_load(subpath, &width, &height, &nrChannels, 0);
+    if (data) {
+
+        // Create new texture object
+        Texture* newTexture = create_texture();
+        if (!newTexture) {
+            stbi_image_free(data);
+            free(normalized_path);
+            free(subpath);
+            return NULL;
+        }
+
+        glGenTextures(1, &textureID);
+        glBindTexture(GL_TEXTURE_2D, textureID);
+
+        // Set texture parameters
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+        // Determine format
+        if (nrChannels == 1)
+            format = GL_RED;
+        else if (nrChannels == 3)
+            format = GL_RGB;
+        else if (nrChannels == 4)
+            format = GL_RGBA;
+
+        // Upload texture data
+        glTexImage2D(GL_TEXTURE_2D, 0, format, width, height, 0, format, GL_UNSIGNED_BYTE, data);
+        glGenerateMipmap(GL_TEXTURE_2D);
+
+        // Clean up
+        stbi_image_free(data);
+
+        // Update texture properties
+        newTexture->id = textureID;
+        newTexture->filepath = strdup(subpath);
+        newTexture->width = width;
+        newTexture->height = height;
+        newTexture->format = format;
+
+        // Add texture to the pool
+        add_texture_to_pool(pool, newTexture);
+        glBindTexture(GL_TEXTURE_2D, 0);
+
+        free(normalized_path);
+        free(subpath);
+
+        return newTexture;
+    }
+
+    fprintf(stderr, "Failed to load texture: %s\n", subpath);
+    free(normalized_path);
+    free(subpath);
+    return NULL;
+
+}
+
+
+void remove_texture_from_pool(TexturePool* pool, const char* filepath) {
+    if (pool && filepath) {
+        // Remove from cache
+        Texture* to_remove;
+        HASH_FIND_STR(pool->texture_cache, filepath, to_remove);
+        if (to_remove) {
+            HASH_DEL(pool->texture_cache, to_remove);
+            free_texture(to_remove);
+        }
+
+        // Remove from dynamic array
+        for (size_t i = 0; i < pool->texture_count; i++) {
+            if (strcmp(pool->textures[i]->filepath, filepath) == 0) {
+                free_texture(pool->textures[i]);
+                pool->textures[i] = pool->textures[pool->texture_count - 1];
+                pool->texture_count--;
+                break;
+            }
+        }
     }
 }
 
-Texture* find_texture_in_cache(const char* path) {
-    TextureCache *cache;
-    HASH_FIND_STR(cache, path, cache);
-    return (cache) ? cache->texture : NULL;
-}
-
-void add_texture_to_cache(Texture* texture) {
-    if (!texture || !texture->filepath) {
-        fprintf(stderr, "Invalid texture or filepath for caching\n");
-        return;
-    }
-
-    TextureCache *new_cache_entry = create_texture_cache(texture->filepath, texture);
-    if (!new_cache_entry) {
-        fprintf(stderr, "Failed to create TextureCache for: %s\n", texture->filepath);
-        return;
-    }
-
-    if (strlen(texture->filepath) >= sizeof(new_cache_entry->filepath)) {
-        fprintf(stderr, "Filepath too long for cache: %s\n", texture->filepath);
-        return;
-    }
-
-    HASH_ADD_STR(cache, filepath, new_cache_entry);
-}
-
-void remove_texture_from_cache(const char* path) {
-    TextureCache *cache;
-    HASH_FIND_STR(cache, path, cache);
-    if (cache) {
-        HASH_DEL(cache, cache);
-        free_texture_cache(cache);
+void clear_texture_pool(TexturePool* pool) {
+    if (pool && pool->texture_cache) {
+        Texture* current, *tmp;
+        HASH_ITER(hh, pool->texture_cache, current, tmp) {
+            if (current) {
+                HASH_DEL(pool->texture_cache, current);
+                free_texture(current);
+            }
+        }
     }
 }
-
-void clear_texture_cache(void) {
-    TextureCache *current, *tmp;
-    HASH_ITER(hh, cache, current, tmp) {
-        HASH_DEL(cache, current);
-        free_texture_cache(current);
-    }
-}
-
 
