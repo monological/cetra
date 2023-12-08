@@ -36,63 +36,32 @@
 #define FBX_MODEL_PATH "./models/room.fbx"
 #define FBX_TEXTURE_DIR "./textures/room.fbm"
 
+/*
+ * Constants
+ */
 const unsigned int HEIGHT = 1080;
 const unsigned int WIDTH = 1920;
-
 const float ROTATE_SPEED = 0.4f; // Speed of rotation
-const float RADIUS = 2.0f;
-const unsigned int RINGS = 20;
-const unsigned int SECTORS = 20;
-const float rotationSensitivity = 0.005f;
-
-float minDistance = 2000.0f;
-float maxDistance = 3000.0f;
-float oscillationSpeed = 0.5f; // Adjust this value as needed
-
-void generateSphere(Mesh* mesh, float radius, unsigned int rings, unsigned int sectors) {
-    float const R = 1.0f / (float)(rings - 1);
-    float const S = 1.0f / (float)(sectors - 1);
-
-    mesh->vertexCount = rings * sectors * 3;
-    mesh->indexCount = (rings - 1) * (sectors - 1) * 6;
-
-    mesh->vertices = malloc(mesh->vertexCount * sizeof(float));
-    mesh->indices = malloc(mesh->indexCount * sizeof(unsigned int));
-
-    unsigned int v = 0, i = 0;
-    for (unsigned int r = 0; r < rings; ++r) {
-        for (unsigned int s = 0; s < sectors; ++s) {
-            float const y = sinf(-M_PI_2 + M_PI * r * R);
-            float const x = cosf(2 * M_PI * s * S) * sinf(M_PI * r * R);
-            float const z = sinf(2 * M_PI * s * S) * sinf(M_PI * r * R);
-
-            mesh->vertices[v++] = x * radius;
-            mesh->vertices[v++] = y * radius;
-            mesh->vertices[v++] = z * radius;
-        }
-    }
-
-    for (unsigned int r = 0; r < rings - 1; ++r) {
-        for (unsigned int s = 0; s < sectors - 1; ++s) {
-            mesh->indices[i++] = r * sectors + s;
-            mesh->indices[i++] = r * sectors + (s + 1);
-            mesh->indices[i++] = (r + 1) * sectors + (s + 1);
-
-            mesh->indices[i++] = (r + 1) * sectors + (s + 1);
-            mesh->indices[i++] = (r + 1) * sectors + s;
-            mesh->indices[i++] = r * sectors + s;
-        }
-    }
-}
+const float ROTATION_SENSITIVITY = 0.005f;
+const float MIN_DIST = 2000.0f;
+const float MAX_DIST = 3000.0f;
+const float CAM_ANGULAR_SPEED = 0.5f; // Adjust this value as needed
 
 
+/*
+ * Mouse
+ */
+bool dragging = false;
+float centerX;
+float centerY;
+float dx, dy;
+
+/*
+ * Callbacks
+ */
 void error_callback(int error, const char* description) {
     fprintf(stderr, "Error: %s\n", description);
 }
-
-bool dragging = false;
-float centerX, centerY;
-float dx, dy;
 
 void cursor_position_callback(GLFWwindow* window, double xpos, double ypos) {
     int windowWidth, windowHeight, framebufferWidth, framebufferHeight;
@@ -181,8 +150,8 @@ void render_scene_callback(Engine* engine, Scene* current_scene){
 
     float time_value = glfwGetTime();
     float angle = time_value * ROTATE_SPEED;
-    camera->amplitude = (maxDistance - minDistance) / 2.0f; // Half the range of motion
-    float midPoint = minDistance + camera->amplitude; // Middle point of the motion
+    camera->amplitude = (MAX_DIST - MIN_DIST) / 2.0f; // Half the range of motion
+    float midPoint = MIN_DIST + camera->amplitude; // Middle point of the motion
 
     Transform transform = {
         .position = {0.0f, -200.0f, 0.0f},
@@ -191,7 +160,7 @@ void render_scene_callback(Engine* engine, Scene* current_scene){
     };
 
     if (!dragging) {
-        camera->distance = midPoint + camera->amplitude * sin(time_value * oscillationSpeed);
+        camera->distance = midPoint + camera->amplitude * sin(time_value * CAM_ANGULAR_SPEED);
         camera->phi += camera->orbit_speed; // Rotate around the center
 
         vec3 new_camera_position = {
@@ -211,8 +180,8 @@ void render_scene_callback(Engine* engine, Scene* current_scene){
         transform.position[0] = 0.0f;
         transform.position[1] = -25.0f;
         transform.position[2] = 0.0f;
-        transform.rotation[0] = dy * rotationSensitivity;
-        transform.rotation[1] = dx * rotationSensitivity;
+        transform.rotation[0] = dy * ROTATION_SENSITIVITY;
+        transform.rotation[1] = dx * ROTATION_SENSITIVITY;
         transform.rotation[2] = 0.0f;
     }
 
@@ -229,6 +198,9 @@ void render_scene_callback(Engine* engine, Scene* current_scene){
 
 }
 
+/*
+ * CETRA MAIN
+ */
 int main() {
     
     printf("┏┓┏┓┏┳┓┳┓┏┓\n");
@@ -288,11 +260,14 @@ int main() {
     /*
      * Import fbx model.
      */
-    Scene *scene = add_scene_from_fbx(
-        engine, 
-        FBX_MODEL_PATH,
-        FBX_TEXTURE_DIR
-    );
+
+    Scene* scene = create_scene_from_fbx_path(FBX_MODEL_PATH, FBX_TEXTURE_DIR);
+    if (!scene) {
+        fprintf(stderr, "Failed to import FBX model: %s\n", FBX_MODEL_PATH);
+        return -1;
+    }
+
+    add_scene_to_engine(engine, scene);
 
     if(!scene || !scene->root_node){
         fprintf(stderr, "Failed to import scene\n");

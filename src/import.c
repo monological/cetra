@@ -336,7 +336,7 @@ SceneNode* process_ai_node(struct aiNode* ai_node, const struct aiScene* ai_scen
     return node;
 }
 
-Scene* import_fbx(const char* path, const char* texture_directory) {
+Scene* create_scene_from_fbx_path(const char* path, const char* texture_directory) {
     const struct aiScene* ai_scene = aiImportFile(path, aiProcess_Triangulate | aiProcess_FlipUVs | aiProcess_CalcTangentSpace);
     if (!ai_scene || ai_scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !ai_scene->mRootNode) {
         fprintf(stderr, "Error importing FBX file: %s\n", path);
@@ -370,4 +370,5 @@ Scene* import_fbx(const char* path, const char* texture_directory) {
     aiReleaseImport(ai_scene);
     return scene;
 }
+
 

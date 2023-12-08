@@ -22,7 +22,7 @@ void process_ai_lights(const struct aiScene* scene, Light ***lights,
 
 void process_ai_cameras(const struct aiScene* scene, Camera ***cameras, uint32_t *num_cameras);
 
-Scene* import_fbx(const char* path, const char* texture_directory);
+Scene* create_scene_from_fbx_path(const char* path, const char* texture_directory);
 
 #endif // IMPORT_H
 

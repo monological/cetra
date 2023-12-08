@@ -85,7 +85,7 @@ void update_engine_camera_lookat(Engine* engine);
 void update_engine_camera_perspective(Engine* engine);
 
 // Scene
-Scene* add_scene_from_fbx(Engine* engine, const char* fbx_file_path, const char* texture_directory);
+void add_scene_to_engine(Engine* engine, Scene* scene);
 void set_active_scene_by_index(Engine* engine, size_t scene_index);
 void set_active_scene_by_name(Engine* engine, const char* scene_name);
 Scene* get_current_scene(const Engine* engine);

@@ -58,6 +58,7 @@ const char* axes_frag_src =
     "    FragColor = vec4(vertexColor, 1.0);\n"
     "}";
 
+
 Scene* create_scene() {
     Scene* scene = malloc(sizeof(Scene));
     if (!scene) {

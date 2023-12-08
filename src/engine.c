@@ -277,31 +277,24 @@ void update_engine_camera_perspective(Engine* engine){
  *
  */
 
-Scene* add_scene_from_fbx(Engine* engine, const char* fbx_file_path, const char* texture_directory) {
-    if (!engine || !fbx_file_path || !texture_directory) return NULL;
-
-    // Import the scene from the FBX file with the texture directory
-    Scene* new_scene = import_fbx(fbx_file_path, texture_directory);
-    if (!new_scene) {
-        fprintf(stderr, "Failed to import FBX file: %s\n", fbx_file_path);
-        return NULL;
-    }
+void add_scene_to_engine(Engine* engine, Scene* scene) {
+    if (!engine || !scene) return;
 
     // Reallocate the scenes array to accommodate the new scene
     size_t new_count = engine->scene_count + 1;
     Scene** new_scenes = realloc(engine->scenes, new_count * sizeof(Scene*));
     if (!new_scenes) {
         fprintf(stderr, "Failed to reallocate memory for new scene\n");
-        free_scene(new_scene); // Assuming there's a function to free a Scene
-        return NULL;
+        free_scene(scene); // Assuming there's a function to free a Scene
+        return;
     }
 
     // Add the new scene to the array and update the scene count
     engine->scenes = new_scenes;
-    engine->scenes[engine->scene_count] = new_scene;
+    engine->scenes[engine->scene_count] = scene;
     engine->scene_count = new_count;
 
-    return new_scene;
+    return;
 }
 
 
