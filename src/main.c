@@ -359,6 +359,10 @@ int main() {
     if(root_node->light == NULL){
         printf("No root light found so adding one...\n");
         Light *light = create_light();
+        if(!light){
+            fprintf(stderr, "Failed to create root light.\n");
+            return -1;
+        }
         set_light_name(light, "root");
         set_light_type(light, LIGHT_POINT);
         set_light_position(light, lightPosition);
