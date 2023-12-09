@@ -18,8 +18,8 @@
 /*
  * prototypes
  */
-static void set_axes_program_for_nodes(SceneNode* node, ShaderProgram* program);
-static void _upload_buffers_to_gpu_for_nodes(SceneNode* node);
+static void _set_axes_program_for_nodes(SceneNode* node, ShaderProgram* program);
+static void _set_light_outlines_program_for_nodes(SceneNode* node, ShaderProgram* program);
 
 // Axis vertices: 6 vertices, 2 for each line (origin and end)
 float axesVertices[] = {
@@ -79,14 +79,8 @@ Scene* create_scene() {
     scene->tex_pool = create_texture_pool();
 
     scene->axes_shader_program = NULL;
-
-    // light outlines
-    scene->show_light_outlines = true;
-    glGenVertexArrays(1, &scene->light_outlines_vao);
-    check_gl_error("create scene gen vertex failed");
-    glGenBuffers(1, &scene->light_outlines_vbo);
-    check_gl_error("create scene gen buffers failed");
     scene->light_outlines_shader_program = NULL;
+
     return scene;
 }
 
@@ -155,11 +149,6 @@ void set_scene_cameras(Scene* scene, Camera** cameras, size_t camera_count) {
     scene->camera_count = camera_count;
 }
 
-void set_scene_show_light_outlines(Scene* scene, bool show_light_outlines){
-    if (!scene) return;
-    scene->show_light_outlines = show_light_outlines;
-}
-
 /*
  * find
  */
@@ -196,9 +185,9 @@ static void _collect_scene_lights(Scene* scene, LightDistancePair* pairs, size_t
 
     for (size_t i = 0; i < scene->light_count; ++i) {
         vec3 light_pos = {
-            scene->lights[i]->position[0],
-            scene->lights[i]->position[1],
-            scene->lights[i]->position[2]
+            scene->lights[i]->global_position[0],
+            scene->lights[i]->global_position[1],
+            scene->lights[i]->global_position[2]
         };
         float distance = sqrt(pow(light_pos[0] - target_pos[0], 2) 
             + pow(light_pos[1] - target_pos[1], 2) 
@@ -244,51 +233,21 @@ Light** get_closest_lights(Scene* scene, SceneNode* target_node,
 GLboolean setup_scene_axes(Scene* scene) {
     if (!setup_program_shader_from_source(&scene->axes_shader_program, 
             axes_vert_src, axes_frag_src, NULL)) {
+        fprintf(stderr, "Failed to set up scene axes program");
         return GL_FALSE;
     }
-    set_axes_program_for_nodes(scene->root_node, scene->axes_shader_program);
-    setup_program_uniforms(scene->axes_shader_program);
+    _set_axes_program_for_nodes(scene->root_node, scene->axes_shader_program);
     return GL_TRUE;
 }
 
 GLboolean setup_scene_light_outlines(Scene* scene) {
     if (!setup_program_shader_from_paths(&scene->light_outlines_shader_program,
             OUTLINES_VERT_SHADER_PATH, OUTLINES_FRAG_SHADER_PATH, OUTLINES_GEO_SHADER_PATH)) {
+        fprintf(stderr, "Failed to set up scene light program");
         return GL_FALSE;
     }
-    setup_program_uniforms(scene->light_outlines_shader_program);
+    _set_light_outlines_program_for_nodes(scene->root_node, scene->light_outlines_shader_program);
     return GL_TRUE;
-}
-
-void upload_buffers_to_gpu_for_scene(Scene* scene) {
-    if (!scene || !scene->root_node) return;
-
-    size_t buffer_size = scene->light_count * sizeof(vec3) * 2; // 2 vec3 per light (position, color)
-    vec3* buffer_data = (vec3*)malloc(buffer_size);
-    if (!buffer_data) {
-        return;
-    }
-
-    for (size_t i = 0; i < scene->light_count; ++i) {
-        Light* light = scene->lights[i];
-        glm_vec3_copy(light->position, buffer_data[i * 2]);
-        glm_vec3_copy((vec3){1.0f, 0.0f, 0.0f}, buffer_data[i * 2 + 1]);
-    }
-
-    glBindVertexArray(scene->light_outlines_vao);
-    glBindBuffer(GL_ARRAY_BUFFER, scene->light_outlines_vbo);
-    glBufferData(GL_ARRAY_BUFFER, buffer_size, buffer_data, GL_STATIC_DRAW);
-
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
-    glEnableVertexAttribArray(1);
-
-    glBindVertexArray(0);
-
-    free(buffer_data);
-
-    _upload_buffers_to_gpu_for_nodes(scene->root_node);
 }
 
 /*
@@ -320,10 +279,18 @@ SceneNode* create_node() {
     // axes
     node->show_axes = true;
     glGenVertexArrays(1, &node->axes_vao);
-    check_gl_error("create node gen vertex failed");
+    check_gl_error("create node axes gen vertex failed");
     glGenBuffers(1, &node->axes_vbo);
-    check_gl_error("create node gen buffers failed");
+    check_gl_error("create node axes gen buffers failed");
     node->axes_shader_program = NULL;
+
+    // light outlines
+    node->show_light_outlines = true;
+    glGenVertexArrays(1, &node->light_outlines_vao);
+    check_gl_error("create node outlines gen vertex failed");
+    glGenBuffers(1, &node->light_outlines_vbo);
+    check_gl_error("create node outlines gen buffers failed");
+    node->light_outlines_shader_program = NULL;
 
     return node;
 }
@@ -388,7 +355,7 @@ void set_program_for_nodes(SceneNode* node, ShaderProgram* program) {
     }
 }
 
-static void set_axes_program_for_nodes(SceneNode* node, ShaderProgram* program) {
+static void _set_axes_program_for_nodes(SceneNode* node, ShaderProgram* program) {
     if (!node) {
         return;
     }
@@ -396,7 +363,7 @@ static void set_axes_program_for_nodes(SceneNode* node, ShaderProgram* program) 
     node->axes_shader_program = program;
 
     for (size_t i = 0; i < node->children_count; ++i) {
-        set_axes_program_for_nodes(node->children[i], program);
+        _set_axes_program_for_nodes(node->children[i], program);
     }
 }
 
@@ -408,25 +375,31 @@ void set_show_axes_for_nodes(SceneNode* node, bool show_axes){
     for (size_t i = 0; i < node->children_count; ++i) {
         set_show_axes_for_nodes(node->children[i], show_axes);
     }
-
 }
 
-static void _upload_buffers_to_gpu_for_nodes(SceneNode* node) {
-    if (!node) return;
-
-    /*
-     * Setup and upload mesh buffers.
-     */
-    for (size_t i = 0; i < node->mesh_count; i++) {
-        if (node->meshes[i]) {
-            upload_mesh_buffers_to_gpu(node->meshes[i]);
-        }
+static void _set_light_outlines_program_for_nodes(SceneNode* node, ShaderProgram* program) {
+    if (!node) {
+        return;
     }
-    
-    /*
-     * Setup and upload axes buffers.
-     */
 
+    node->light_outlines_shader_program = program;
+
+    for (size_t i = 0; i < node->children_count; ++i) {
+        _set_light_outlines_program_for_nodes(node->children[i], program);
+    }
+}
+
+void set_show_light_outlines_for_nodes(SceneNode* node, bool show_light_outlines){
+    if (!node) return;
+    
+    node->show_light_outlines = show_light_outlines;
+
+    for (size_t i = 0; i < node->children_count; ++i) {
+        set_show_light_outlines_for_nodes(node->children[i], show_light_outlines);
+    }
+}
+
+static void _upload_axes_buffers_to_gpu_for_node(SceneNode* node){
     // Bind the Vertex Array Object (VAO)
     glBindVertexArray(node->axes_vao);
 
@@ -447,42 +420,121 @@ static void _upload_buffers_to_gpu_for_nodes(SceneNode* node) {
         fprintf(stderr, "Axes shader program validation failed\n");
     }
 
-    // Unbind VAO
+    glBindVertexArray(0);
+}
+
+static void _upload_light_outline_buffers_to_gpu_for_node(SceneNode* node, bool val_prog){
+    if(!node || !node->light) return;
+
+    size_t buffer_size = sizeof(vec3) * 2;
+    vec3* buffer_data = (vec3*)malloc(buffer_size);
+    if (!buffer_data) {
+        return;
+    }
+
+    glm_vec3_copy(node->light->global_position, buffer_data[0]);
+    glm_vec3_copy(node->light->color, buffer_data[1]);
+
+
+    // Print the position and color
+    //printf("Light Position: (%f, %f, %f)\n", buffer_data[0][0], buffer_data[0][1], buffer_data[0][2]);
+    //printf("Light Color: (%f, %f, %f)\n\n\n", buffer_data[1][0], buffer_data[1][1], buffer_data[1][2]);
+
+
+    /*for (size_t i = 0; i < 2; i++) {
+        for (size_t j = 0; j < 3; j++) {
+           printf("%f\n", buffer_data[i][j]);
+        }
+    }*/
+
+    glBindVertexArray(node->light_outlines_vao);
+    glBindBuffer(GL_ARRAY_BUFFER, node->light_outlines_vbo);
+
+
+    glBufferData(GL_ARRAY_BUFFER, buffer_size, buffer_data, GL_STATIC_DRAW);
+
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
+    glEnableVertexAttribArray(1);
+
+    // only validate if VAO is bound
+    if(val_prog && node->light_outlines_shader_program && !validate_program(node->light_outlines_shader_program)){
+        fprintf(stderr, "Light outline shader program validation failed\n");
+    }
+
     glBindVertexArray(0);
 
+    free(buffer_data);
+}
+
+void upload_buffers_to_gpu_for_nodes(SceneNode* node) {
+    if (!node) return;
+
+    /*
+     * Setup and upload mesh buffers.
+     */
+    for (size_t i = 0; i < node->mesh_count; i++) {
+        if (node->meshes[i]) {
+            upload_mesh_buffers_to_gpu(node->meshes[i]);
+        }
+    }
+    
+    _upload_axes_buffers_to_gpu_for_node(node);
+
+    if(node->light){
+        _upload_light_outline_buffers_to_gpu_for_node(node, true);
+    }
+
     for (size_t i = 0; i < node->children_count; i++) {
-        _upload_buffers_to_gpu_for_nodes(node->children[i]);
+        upload_buffers_to_gpu_for_nodes(node->children[i]);
     }
 }
 
-void transform_scene(Scene* scene, Transform *transform) {
-    if (!scene || !transform) return;
+void transform_scene(Scene* scene, Transform* transform, mat4* result_matrix) {
+    if (!scene || !transform || !result_matrix) {
+        glm_mat4_identity(*result_matrix); // Reset to identity if inputs are invalid
+        return;
+    }
 
-    if(!scene->root_node){
+    if (!scene->root_node) {
         fprintf(stderr, "Failed to transform scene. No root node found.\n");
+        glm_mat4_identity(*result_matrix);
         return;
     }
 
     SceneNode* node = scene->root_node;
 
-    mat4 localTransform;
-    glm_mat4_identity(localTransform);
-    glm_translate(localTransform, transform->position);
-    glm_rotate(localTransform, transform->rotation[0], (vec3){1.0f, 0.0f, 0.0f});
-    glm_rotate(localTransform, transform->rotation[1], (vec3){0.0f, 1.0f, 0.0f});
-    glm_rotate(localTransform, transform->rotation[2], (vec3){0.0f, 0.0f, 1.0f});
-    glm_scale(localTransform, transform->scale);
+    glm_mat4_identity(*result_matrix);
+    glm_translate(*result_matrix, transform->position);
+    glm_rotate(*result_matrix, transform->rotation[0], (vec3){1.0f, 0.0f, 0.0f});
+    glm_rotate(*result_matrix, transform->rotation[1], (vec3){0.0f, 1.0f, 0.0f});
+    glm_rotate(*result_matrix, transform->rotation[2], (vec3){0.0f, 0.0f, 1.0f});
+    glm_scale(*result_matrix, transform->scale);
 
-    glm_mat4_mul(node->original_transform, localTransform, node->local_transform);
-    
+    glm_mat4_mul(node->original_transform, *result_matrix, node->local_transform);
 }
+
 
 void apply_transform_to_nodes(SceneNode* node, mat4 transform) {
     if (!node) return;
 
     mat4 localTransform;
+    glm_mat4_identity(localTransform);
+
     glm_mat4_mul(node->original_transform, node->local_transform, localTransform);
     glm_mat4_mul(transform, localTransform, node->global_transform);
+
+    if (node->light) {
+        vec3 light_position;
+        glm_mat4_mulv3(node->global_transform, node->light->original_position, 1.0f, light_position);
+        glm_vec3_copy(light_position, node->light->global_position);
+
+        //print_light(node->light);
+        _upload_light_outline_buffers_to_gpu_for_node(node, false);
+        
+    }
 
     for (size_t i = 0; i < node->children_count; i++) {
         if (node->children[i]) {
@@ -498,7 +550,6 @@ void render_nodes(Scene* scene, SceneNode* node, Camera *camera,
         printf("error: render_node called with NULL node\n");
         return;
     }
-    ShaderProgram* program = NULL;
 
     size_t returned_light_count;
     size_t max_lights = calculate_max_lights();
@@ -508,7 +559,7 @@ void render_nodes(Scene* scene, SceneNode* node, Camera *camera,
 
     if (node->shader_program) {
 
-        program = node->shader_program;
+        ShaderProgram* program = node->shader_program;
 
         // Use the shader program
         glUseProgram(program->id);
@@ -522,7 +573,7 @@ void render_nodes(Scene* scene, SceneNode* node, Camera *camera,
             }
 
             if (program->light_position_loc[i] != -1) {
-                glUniform3fv(program->light_position_loc[i], 1, (const GLfloat*)&closest_light->position);
+                glUniform3fv(program->light_position_loc[i], 1, (const GLfloat*)&closest_light->global_position);
             }
             if (program->light_direction_loc[i] != -1) {
                 glUniform3fv(program->light_direction_loc[i], 1, (const GLfloat*)&closest_light->direction);
@@ -680,7 +731,7 @@ void render_nodes(Scene* scene, SceneNode* node, Camera *camera,
     }
 
     if (node->show_axes && node->axes_shader_program) {
-        program = node->axes_shader_program;
+        ShaderProgram* program = node->axes_shader_program;
 
         glUseProgram(program->id);
 
@@ -691,13 +742,13 @@ void render_nodes(Scene* scene, SceneNode* node, Camera *camera,
 
         glBindVertexArray(node->axes_vao);
         glDrawArrays(GL_LINES, 0,  sizeof(axesVertices) / (6 * sizeof(float)));
-        glBindVertexArray(0);
 
+        glBindVertexArray(0);
         glUseProgram(0);
     }
 
-    if (scene->show_light_outlines && scene->light_outlines_shader_program) {
-        program = scene->light_outlines_shader_program;
+    if (node->show_light_outlines && node->light_outlines_shader_program) {
+        ShaderProgram* program = node->light_outlines_shader_program;
 
         glUseProgram(program->id);
 
@@ -710,7 +761,7 @@ void render_nodes(Scene* scene, SceneNode* node, Camera *camera,
             }
 
             if (program->light_position_loc[i] != -1) {
-                glUniform3fv(program->light_position_loc[i], 1, (const GLfloat*)&closest_light->position);
+                glUniform3fv(program->light_position_loc[i], 1, (const GLfloat*)&closest_light->global_position);
             }
             if (program->light_direction_loc[i] != -1) {
                 glUniform3fv(program->light_direction_loc[i], 1, (const GLfloat*)&closest_light->direction);
@@ -757,10 +808,10 @@ void render_nodes(Scene* scene, SceneNode* node, Camera *camera,
         glUniformMatrix4fv(program->view_loc, 1, GL_FALSE, (const GLfloat*)view);
         glUniformMatrix4fv(program->proj_loc, 1, GL_FALSE, (const GLfloat*)projection);
 
-        glBindVertexArray(scene->light_outlines_vao);
-        glDrawArrays(GL_LINES, 0, scene->light_count * 2);
-        glBindVertexArray(0);
+        glBindVertexArray(node->light_outlines_vao);
+        glDrawArrays(GL_POINTS, 0, 2);
 
+        glBindVertexArray(0);
         glUseProgram(0);
     }
 

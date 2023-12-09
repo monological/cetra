@@ -219,7 +219,8 @@ void process_ai_lights(const struct aiScene* scene, Light ***lights, size_t *num
         Light *light = create_light();
         light->name = safe_strdup(ai_light->mName.data);
 
-        glm_vec3_copy((vec3){ai_light->mPosition.x, ai_light->mPosition.y, ai_light->mPosition.z}, light->position);
+        glm_vec3_copy((vec3){ai_light->mPosition.x, ai_light->mPosition.y, ai_light->mPosition.z}, light->original_position);
+        glm_vec3_copy((vec3){ai_light->mPosition.x, ai_light->mPosition.y, ai_light->mPosition.z}, light->global_position);
         glm_vec3_copy((vec3){ai_light->mDirection.x, ai_light->mDirection.y, ai_light->mDirection.z}, light->direction);
         glm_vec3_copy((vec3){ai_light->mColorAmbient.r, ai_light->mColorAmbient.g, ai_light->mColorAmbient.b}, light->ambient);
         glm_vec3_copy((vec3){ai_light->mColorDiffuse.r, ai_light->mColorDiffuse.g, ai_light->mColorDiffuse.b}, light->color);

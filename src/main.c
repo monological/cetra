@@ -28,8 +28,8 @@
 #include "ext/nuklear.h"
 #include "ext/nuklear_glfw_gl3.h"
 
-#define FBX_MODEL_PATH "./models/room2.fbx"
-#define FBX_TEXTURE_DIR "./textures/room.fbm"
+#define FBX_MODEL_PATH "./models/pilot.fbx"
+#define FBX_TEXTURE_DIR "./textures/pilot.fbm"
 
 /*
  * Constants
@@ -258,7 +258,7 @@ void render_scene_callback(Engine* engine, Scene* current_scene){
         update_engine_camera_perspective(engine);
     }
 
-    transform_scene(current_scene, &transform);
+    transform_scene(current_scene, &transform, &(engine->model_matrix));
 
     apply_transform_to_nodes(root_node, engine->model_matrix);
 
@@ -298,7 +298,8 @@ int main() {
      * Set up shaders.
      *
      */
-    ShaderProgram* pbr_shader_program = create_program();
+    ShaderProgram* pbr_shader_program = NULL;
+
     if (!setup_program_shader_from_paths(&pbr_shader_program, 
                 PBR_VERT_SHADER_PATH, PBR_FRAG_SHADER_PATH, PBR_GEO_SHADER_PATH)) {
         fprintf(stderr, "Failed to initialize PBR shader program\n");
@@ -361,7 +362,6 @@ int main() {
     SceneNode* root_node = scene->root_node;
     assert(root_node != NULL);
 
-    /*
     vec3 lightPosition = {0.0, 0.0, 2000.00};
     if(root_node->light == NULL){
         printf("No root light found so adding one...\n");
@@ -376,9 +376,9 @@ int main() {
         set_light_intensity(light, 10.0f);
         set_light_color(light, (vec3){1.0f, 0.7f, 0.7f});
         set_node_light(root_node, light);
-    }*/
+    }
 
-    upload_buffers_to_gpu_for_scene(scene);
+    upload_buffers_to_gpu_for_nodes(root_node);
 
     set_program_for_nodes(root_node, pbr_shader_program);
 

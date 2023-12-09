@@ -263,6 +263,11 @@ GLboolean setup_program_shader_from_paths(ShaderProgram** program, const char* v
         const char* frag_path, const char* geo_path) {
     GLboolean success = GL_TRUE;
 
+    if(*program != NULL){
+        fprintf(stderr, "Failed to setup shader program. Program already created.\n");
+        return GL_FALSE;
+    }
+
     // Create and initialize the ShaderProgram
     *program = create_program();
     if (!(*program)) {
@@ -327,6 +332,11 @@ GLboolean setup_program_shader_from_source(ShaderProgram** program, const char* 
         const char* frag_source, const char* geo_source) {
     GLboolean success = GL_TRUE;
 
+    if(*program != NULL){
+        fprintf(stderr, "Failed to setup shader program. Program already created.\n");
+        return GL_FALSE;
+    }
+
     // Create and initialize the ShaderProgram
     *program = create_program();
     if (!(*program)) {
@@ -386,8 +396,6 @@ GLboolean setup_program_shader_from_source(ShaderProgram** program, const char* 
 
     return success;
 }
-
-
 
 
 GLboolean validate_program(ShaderProgram* program){

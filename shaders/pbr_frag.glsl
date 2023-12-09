@@ -69,7 +69,7 @@ uniform int reflectanceTexExists;
 
 const float PI = 3.14159265359;
 
-const float defaultEfficacy = 12.0; // 80 lumens per watt for LEDs
+const float defaultEfficacy = 80.0; // 80 lumens per watt for LEDs
 
 float distributionGGX(vec3 N, vec3 H, float roughness, float gamma) {
     float a = pow(roughness, gamma); // Non-linear mapping of roughness

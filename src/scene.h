@@ -41,6 +41,11 @@ typedef struct SceneNode {
     GLuint axes_vao;
     GLuint axes_vbo;
     ShaderProgram* axes_shader_program;
+
+    bool show_light_outlines;
+    GLuint light_outlines_vao;
+    GLuint light_outlines_vbo;
+    ShaderProgram* light_outlines_shader_program;
 } SceneNode;
 
 // malloc
@@ -57,6 +62,9 @@ void set_node_camera(SceneNode* node, Camera* camera);
 
 // axes
 void set_show_axes_for_nodes(SceneNode* node, bool show_axes);
+
+// outlines
+void set_show_light_outlines_for_nodes(SceneNode* node, bool show_light_outlines);
 
 // shaders
 void set_program_for_nodes(SceneNode* node, ShaderProgram* program);
@@ -87,10 +95,6 @@ typedef struct Scene {
 
     // used by all nodes
     ShaderProgram* axes_shader_program;
-
-    bool show_light_outlines;
-    GLuint light_outlines_vao;
-    GLuint light_outlines_vbo;
     ShaderProgram* light_outlines_shader_program;
 } Scene;
 
@@ -101,7 +105,6 @@ void free_scene(Scene* scene);
 // set
 void set_scene_lights(Scene* scene, Light** lights, size_t light_count);
 void set_scene_cameras(Scene* scene, Camera** cameras, size_t camera_count);
-void set_scene_show_light_outlines(Scene* scene, bool show_light_outlines);
 
 // find
 Camera* find_camera_by_name(Scene* scene, const char* name);
@@ -119,8 +122,8 @@ void print_scene(const Scene* scene);
 
 // render
 
-void upload_buffers_to_gpu_for_scene(Scene* scene);
-void transform_scene(Scene* scene, Transform* transform);
+void upload_buffers_to_gpu_for_nodes(SceneNode* node);
+void transform_scene(Scene* scene, Transform* transform, mat4* result_matrix);
 void render_nodes(Scene *scene, SceneNode* node, Camera *camera, 
         mat4 model, mat4 view, mat4 projection, 
         float time_value, RenderMode render_mode);

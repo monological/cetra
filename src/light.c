@@ -19,7 +19,9 @@ Light* create_light() {
     light->name = NULL;
     light->type = LIGHT_UNKNOWN;
 
-    glm_vec3_copy((vec3){0.0f, 0.0f, 0.0f}, light->position);
+    glm_vec3_copy((vec3){0.0f, 0.0f, 0.0f}, light->original_position);
+    glm_vec3_copy((vec3){0.0f, 0.0f, 0.0f}, light->global_position);
+
     glm_vec3_copy((vec3){0.0f, -1.0f, 0.0f}, light->direction);
     glm_vec3_copy((vec3){1.0f, 1.0f, 1.0f}, light->color);
     glm_vec3_copy((vec3){1.0f, 1.0f, 1.0f}, light->specular);
@@ -59,9 +61,14 @@ void set_light_ambient(Light* light, vec3 ambient) {
     glm_vec3_copy(ambient, light->ambient);
 }
 
-void set_light_position(Light* light, vec3 position) {
+void set_light_original_position(Light* light, vec3 original_position) {
     if(!light) return;
-    glm_vec3_copy(position, light->position);
+    glm_vec3_copy(original_position, light->original_position);
+}
+
+void set_light_global_position(Light* light, vec3 global_position) {
+    if(!light) return;
+    glm_vec3_copy(global_position, light->global_position);
 }
 
 void set_light_direction(Light* light, vec3 direction) {
@@ -149,11 +156,12 @@ void print_light(const Light* light) {
         default:                typeString = "Unknown"; break;
     }
 
-    printf("<Light name='%s', type='%s', position=(%f, %f, %f), direction=(%f, %f, %f), "
+    printf("<Light name='%s', type='%s', original_position=(%f, %f, %f) global_position=(%f, %f, %f), direction=(%f, %f, %f), "
            "color=(%f, %f, %f), specular=(%f, %f, %f), ambient=(%f, %f, %f), "
            "intensity=%f, constant=%f, linear=%f, quadratic=%f, cutOff=%f, outerCutOff=%f>\n",
            light->name, typeString,
-           light->position[0], light->position[1], light->position[2],
+           light->original_position[0], light->original_position[1], light->original_position[2],
+           light->global_position[0], light->global_position[1], light->global_position[2],
            light->direction[0], light->direction[1], light->direction[2],
            light->color[0], light->color[1], light->color[2],
            light->specular[0], light->specular[1], light->specular[2],

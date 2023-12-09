@@ -570,7 +570,13 @@ void set_engine_show_light_outlines(Engine* engine, bool show_light_outlines){
     engine->show_light_outlines = show_light_outlines;
 
     for (size_t i = 0; i < engine->scene_count; ++i) {
-        set_scene_show_light_outlines(engine->scenes[i], show_light_outlines);
+        if (engine->scenes[i]) {
+            Scene* scene = engine->scenes[i];
+            if(!scene) continue;
+            SceneNode* root_node = scene->root_node;
+            if(!root_node) continue;
+            set_show_light_outlines_for_nodes(root_node, show_light_outlines);
+        }
     }
 
 }

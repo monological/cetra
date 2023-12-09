@@ -14,6 +14,27 @@ out float FragDepth;
 out vec2 TexCoords;
 out mat3 TBN;
 
+#define MAX_LIGHTS 75
+
+struct Light {
+    int type;
+    vec3 position;
+    vec3 direction;
+    vec3 color;
+    vec3 specular;
+    vec3 ambient;
+    float intensity;
+    float constant;
+    float linear;
+    float quadratic;
+    float cutOff;
+    float outerCutOff;
+    vec2 size;
+};
+
+uniform Light lights[MAX_LIGHTS];
+uniform int numLights;
+
 uniform mat4 model;
 uniform mat4 view;
 uniform mat4 projection;
