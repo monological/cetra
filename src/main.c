@@ -160,7 +160,6 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
         switch (key) {
             case GLFW_KEY_W:
             case GLFW_KEY_UP:
-                printf("up key triggered\n");
                 // Move camera forward
                 glm_vec3_sub(camera->look_at, camera->position, forward);
                 glm_vec3_normalize(forward);
@@ -170,7 +169,6 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
 
             case GLFW_KEY_S:
             case GLFW_KEY_DOWN:
-                printf("down key triggered\n");
                 // Move camera backward
                 glm_vec3_sub(camera->look_at, camera->position, forward);
                 glm_vec3_normalize(forward);
@@ -180,7 +178,6 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
 
             case GLFW_KEY_A:
             case GLFW_KEY_LEFT:
-                printf("left key triggered\n");
                 // Move camera left
                 glm_vec3_sub(camera->look_at, camera->position, forward);
                 glm_vec3_crossn(camera->up_vector, forward, right);
@@ -191,7 +188,6 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
 
             case GLFW_KEY_D:
             case GLFW_KEY_RIGHT:
-                printf("right key triggered\n");
                 // Move camera right
                 glm_vec3_sub(camera->look_at, camera->position, forward);
                 glm_vec3_crossn(camera->up_vector, forward, right);
@@ -258,7 +254,7 @@ void render_scene_callback(Engine* engine, Scene* current_scene){
         update_engine_camera_perspective(engine);
     }
 
-    transform_scene(current_scene, &transform, &(engine->model_matrix));
+    transform_node(root_node, &transform, &(engine->model_matrix));
 
     apply_transform_to_nodes(root_node, engine->model_matrix);
 
@@ -362,7 +358,6 @@ int main() {
     SceneNode* root_node = scene->root_node;
     assert(root_node != NULL);
 
-    vec3 lightPosition = {0.0, 0.0, 2000.00};
     if(root_node->light == NULL){
         printf("No root light found so adding one...\n");
         Light *light = create_light();
@@ -370,13 +365,32 @@ int main() {
             fprintf(stderr, "Failed to create root light.\n");
             return -1;
         }
-        set_light_name(light, "root");
+        set_light_name(light, "root_light");
         set_light_type(light, LIGHT_POINT);
+        vec3 lightPosition = {0.0f, 0.0f, 0.0f};
         set_light_original_position(light, lightPosition);
         set_light_global_position(light, lightPosition);
-        set_light_intensity(light, 10.0f);
-        set_light_color(light, (vec3){1.0f, 0.7f, 0.7f});
-        set_node_light(root_node, light);
+        set_light_intensity(light, 500.0f);
+        set_light_color(light, (vec3){1.0f, 0.0f, 0.0f});
+        add_light_to_scene(scene, light);
+
+        Transform light_transform = {
+            .position = {300.0f, 300.0f, -200.00f},
+            .rotation = {0.0f, 0.0f, 0.0f},
+            .scale = {1.0f, 1.0f, 1.0f}
+        };
+
+        SceneNode *light_node = create_node();
+        set_node_light(light_node, light);
+        set_node_name(light_node, "root_light_node");
+        set_show_axes_for_nodes(light_node, true);
+        set_show_light_outlines_for_nodes(light_node, true);
+
+        mat4 light_matrix; 
+        glm_mat4_identity(light_matrix);
+        transform_node(light_node, &light_transform, &light_matrix);
+
+        add_child_node(root_node, light_node);
     }
 
     upload_buffers_to_gpu_for_nodes(root_node);

@@ -102,12 +102,13 @@ typedef struct Scene {
 Scene* create_scene();
 void free_scene(Scene* scene);
 
-// set
-void set_scene_lights(Scene* scene, Light** lights, size_t light_count);
+// camera
 void set_scene_cameras(Scene* scene, Camera** cameras, size_t camera_count);
-
-// find
 Camera* find_camera_by_name(Scene* scene, const char* name);
+
+// light
+void set_scene_lights(Scene* scene, Light** lights, size_t light_count);
+void add_light_to_scene(Scene* scene, Light* light);
 Light* find_light_by_name(Scene* scene, const char* name);
 Light** get_closest_lights(Scene* scene, SceneNode* target_node, 
         size_t max_lights, size_t* returned_light_count);
@@ -123,7 +124,7 @@ void print_scene(const Scene* scene);
 // render
 
 void upload_buffers_to_gpu_for_nodes(SceneNode* node);
-void transform_scene(Scene* scene, Transform* transform, mat4* result_matrix);
+void transform_node(SceneNode* node, Transform* transform, mat4* result_matrix);
 void render_nodes(Scene *scene, SceneNode* node, Camera *camera, 
         mat4 model, mat4 view, mat4 projection, 
         float time_value, RenderMode render_mode);

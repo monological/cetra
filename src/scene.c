@@ -136,12 +136,9 @@ void free_scene(Scene* scene) {
     return;
 }
 
-
-void set_scene_lights(Scene* scene, Light** lights, size_t light_count) {
-    if (!scene) return;
-    scene->lights = lights;
-    scene->light_count = light_count;
-}
+/*
+ * Cameras
+ */
 
 void set_scene_cameras(Scene* scene, Camera** cameras, size_t camera_count) {
     if (!scene) return;
@@ -149,9 +146,12 @@ void set_scene_cameras(Scene* scene, Camera** cameras, size_t camera_count) {
     scene->camera_count = camera_count;
 }
 
-/*
- * find
- */
+void set_scene_lights(Scene* scene, Light** lights, size_t light_count) {
+    if (!scene) return;
+    scene->lights = lights;
+    scene->light_count = light_count;
+}
+
 Camera* find_camera_by_name(Scene* scene, const char* name) {
     for (size_t i = 0; i < scene->camera_count; ++i) {
         if (strcmp(scene->cameras[i]->name, name) == 0) {
@@ -159,6 +159,29 @@ Camera* find_camera_by_name(Scene* scene, const char* name) {
         }
     }
     return NULL;
+}
+
+/*
+ * Lights
+ */
+void add_light_to_scene(Scene* scene, Light* light) {
+    if (!scene || ! light) return;
+
+    // Reallocate the lights array to accommodate the new light
+    size_t new_count = scene->light_count + 1;
+    Light** new_lights = realloc(scene->lights, new_count * sizeof(Light*));
+    if (!new_lights) {
+        fprintf(stderr, "Failed to reallocate memory for new light\n");
+        free_light(light); // Assuming there's a function to free a Light
+        return;
+    }
+
+    // Add the new light to the array and update the light count
+    scene->lights = new_lights;
+    scene->lights[scene->light_count] = light;
+    scene->light_count = new_count;
+
+    return;
 }
 
 Light* find_light_by_name(Scene* scene, const char* name) {
@@ -322,6 +345,7 @@ void free_node(SceneNode* node) {
 }
 
 void add_child_node(SceneNode* node, SceneNode* child) {
+    if (!node || !child) return;
     node->children = realloc(node->children, (node->children_count + 1) * sizeof(SceneNode*));
     node->children[node->children_count] = child;
     child->parent = node;
@@ -492,19 +516,11 @@ void upload_buffers_to_gpu_for_nodes(SceneNode* node) {
     }
 }
 
-void transform_scene(Scene* scene, Transform* transform, mat4* result_matrix) {
-    if (!scene || !transform || !result_matrix) {
+void transform_node(SceneNode* node, Transform* transform, mat4* result_matrix) {
+    if (!node || !transform || !result_matrix) {
         glm_mat4_identity(*result_matrix); // Reset to identity if inputs are invalid
         return;
     }
-
-    if (!scene->root_node) {
-        fprintf(stderr, "Failed to transform scene. No root node found.\n");
-        glm_mat4_identity(*result_matrix);
-        return;
-    }
-
-    SceneNode* node = scene->root_node;
 
     glm_mat4_identity(*result_matrix);
     glm_translate(*result_matrix, transform->position);
