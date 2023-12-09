@@ -7,8 +7,9 @@ in float ClipDepth;
 in float FragDepth;
 in vec2 TexCoords;
 in mat3 TBN;
-
 out vec4 FragColor;
+
+#define MAX_LIGHTS 75
 
 struct Light {
     int type;
@@ -23,9 +24,11 @@ struct Light {
     float quadratic;
     float cutOff;
     float outerCutOff;
+    vec2 size;
 };
 
-uniform Light light;
+uniform Light lights[MAX_LIGHTS];
+uniform int numLights;
 
 uniform mat4 view;
 uniform mat4 model;
@@ -66,6 +69,8 @@ uniform int reflectanceTexExists;
 
 const float PI = 3.14159265359;
 
+const float defaultEfficacy = 12.0; // 80 lumens per watt for LEDs
+
 float distributionGGX(vec3 N, vec3 H, float roughness, float gamma) {
     float a = pow(roughness, gamma); // Non-linear mapping of roughness
     float a2 = a * a;
@@ -105,6 +110,15 @@ vec3 fresnelSchlick(float cosTheta, vec3 F0, float metallic) {
     return F0 + (1.0 - F0) * pow(1.0 - cosTheta, 5.0);
 }
 
+vec3 convertWattsToRadiance(vec3 power, float efficacy) {
+    float lumensPerWatt = efficacy;
+    vec3 lumens = power * lumensPerWatt;
+    // Assuming a standard area and solid angle, or adjust as needed
+    float area = 100.0; // in square meters
+    vec3 radiance = lumens / area;
+    return radiance;
+}
+
 
 vec3 calculateLightContribution(vec3 N, vec3 V, vec3 L, float NdotL, float metallic, vec3 albedo) {
     vec3 H = normalize(V + L);
@@ -124,23 +138,23 @@ vec3 calculateLightContribution(vec3 N, vec3 V, vec3 L, float NdotL, float metal
     return specular;
 }
 
-vec3 calculatePointLight(vec3 N, vec3 V, Light light, vec3 fragPos, float metallic, vec3 albedo) {
+vec3 calculatePointLight(vec3 N, vec3 V, Light light, vec3 fragPos, float metallic, vec3 albedo, vec3 radiance) {
     vec3 L = normalize(light.position - fragPos);
     float distance = length(light.position - fragPos);
     float attenuation = 1.0 / (light.constant + light.linear * distance + light.quadratic * (distance * distance));
     float NdotL = max(dot(N, L), 0.0);
     vec3 lightContribution = calculateLightContribution(N, V, L, NdotL, metallic, albedo);
-    return lightContribution * light.color * light.intensity * attenuation;
+    return lightContribution * radiance * light.intensity * attenuation;
 }
 
-vec3 calculateDirectionalLight(vec3 N, vec3 V, Light light, float metallic, vec3 albedo) {
+vec3 calculateDirectionalLight(vec3 N, vec3 V, Light light, float metallic, vec3 albedo, vec3 radiance) {
     vec3 L = normalize(-light.direction);
     float NdotL = max(dot(N, L), 0.0);
     vec3 lightContribution = calculateLightContribution(N, V, L, NdotL, metallic, albedo);
-    return lightContribution * light.color * light.intensity;
+    return lightContribution * radiance * light.intensity;
 }
 
-vec3 calculateSpotLight(vec3 N, vec3 V, Light light, vec3 fragPos, float metallic, vec3 albedo) {
+vec3 calculateSpotLight(vec3 N, vec3 V, Light light, vec3 fragPos, float metallic, vec3 albedo, vec3 radiance) {
     vec3 L = normalize(light.position - fragPos);
     float distance = length(light.position - fragPos);
     float attenuation = 1.0 / (light.constant + light.linear * distance + light.quadratic * (distance * distance));
@@ -149,8 +163,42 @@ vec3 calculateSpotLight(vec3 N, vec3 V, Light light, vec3 fragPos, float metalli
     float intensity = clamp((theta - light.outerCutOff) / epsilon, 0.0, 1.0);
     float NdotL = max(dot(N, L), 0.0);
     vec3 lightContribution = calculateLightContribution(N, V, L, NdotL, metallic, albedo);
-    return lightContribution * light.color * light.intensity * attenuation * intensity;
+    return lightContribution * radiance * light.intensity * attenuation * intensity;
 }
+
+// GLSL
+
+vec3 calculateAreaLight(vec3 N, vec3 V, Light light, vec3 fragPos, float metallic, vec3 albedo, vec3 radiance) {
+    // Basic properties
+    vec3 L = normalize(light.position - fragPos); // Direction from fragment to light
+    float distance = length(light.position - fragPos);
+    float NdotL = max(dot(N, L), 0.0);
+
+    // Area light specific calculations
+    // Assuming 'size' is a vec2 representing the width and height of the light
+    vec2 size = light.size;
+    vec3 lightRight = normalize(cross(light.direction, vec3(0.0, 1.0, 0.0))); // Adjust as needed
+    vec3 lightUp = cross(light.direction, lightRight);
+
+    // Simple form factor calculation for rectangular area light
+    float formFactor = 0.0;
+    for (int i = -1; i <= 1; i += 2) {
+        for (int j = -1; j <= 1; j += 2) {
+            vec3 cornerDir = normalize(light.position + (lightRight * size.x * i + lightUp * size.y * j) - fragPos);
+            formFactor += max(dot(N, cornerDir), 0.0);
+        }
+    }
+    formFactor *= 0.25;
+
+    // Light attenuation (modify as per your attenuation model)
+    float attenuation = 1.0 / (light.constant + light.linear * distance + light.quadratic * (distance * distance));
+
+    // Calculate light contribution using the PBR model
+    vec3 lightContribution = calculateLightContribution(N, V, L, NdotL, metallic, albedo);
+
+    return lightContribution * radiance * light.intensity * attenuation * formFactor;
+}
+
 
 float textureExists(int texExists) {
     return float(texExists);
@@ -231,14 +279,22 @@ void main() {
 
         F0 = mix(F0, finalAlbedo, finalMetallic);
 
-
         vec3 Lo = vec3(0.0); // Accumulate specular component
-        if (light.type == 0) { // Directional light
-            Lo += calculateDirectionalLight(N, V, light, finalMetallic, finalAlbedo);
-        } else if (light.type == 1) { // Point light
-            Lo += calculatePointLight(N, V, light, FragPos, finalMetallic, finalAlbedo);
-        } else if (light.type == 2) { // Spot light
-            Lo += calculateSpotLight(N, V, light, FragPos, finalMetallic, finalAlbedo);
+
+        for (int i = 0; i < numLights; i++) {
+            Light light = lights[i];
+
+            vec3 radiance = convertWattsToRadiance(light.color, defaultEfficacy);
+
+            if (light.type == 0) { // Directional light
+                Lo += calculateDirectionalLight(N, V, light, finalMetallic, finalAlbedo, radiance);
+            } else if (light.type == 1) { // Point light
+                Lo += calculatePointLight(N, V, light, FragPos, finalMetallic, finalAlbedo, radiance);
+            } else if (light.type == 2) { // Spot light
+                Lo += calculateSpotLight(N, V, light, FragPos, finalMetallic, finalAlbedo, radiance);
+            }else if (light.type == 3) { // Area light
+                Lo += calculateAreaLight(N, V, light, FragPos, finalMetallic, finalAlbedo, radiance);
+            }
         }
 
         // Ambient and diffuse calculation

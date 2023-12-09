@@ -31,6 +31,8 @@ Light* create_light() {
     light->cutOff = cosf(glm_rad(12.5f));
     light->outerCutOff = cosf(glm_rad(15.0f));
 
+    glm_vec2_copy((vec2){50.0f, 50.0f}, light->size);
+
     return light;
 }
 
@@ -132,4 +134,31 @@ void free_light(Light* light) {
     free(light);
 }
 
+void print_light(const Light* light) {
+    if (!light) {
+        printf("<Invalid light pointer>\n");
+        return;
+    }
+
+    const char* typeString;
+    switch (light->type) {
+        case LIGHT_DIRECTIONAL: typeString = "Directional"; break;
+        case LIGHT_POINT:       typeString = "Point"; break;
+        case LIGHT_SPOT:        typeString = "Spot"; break;
+        case LIGHT_AREA:        typeString = "AREA"; break;
+        default:                typeString = "Unknown"; break;
+    }
+
+    printf("<Light name='%s', type='%s', position=(%f, %f, %f), direction=(%f, %f, %f), "
+           "color=(%f, %f, %f), specular=(%f, %f, %f), ambient=(%f, %f, %f), "
+           "intensity=%f, constant=%f, linear=%f, quadratic=%f, cutOff=%f, outerCutOff=%f>\n",
+           light->name, typeString,
+           light->position[0], light->position[1], light->position[2],
+           light->direction[0], light->direction[1], light->direction[2],
+           light->color[0], light->color[1], light->color[2],
+           light->specular[0], light->specular[1], light->specular[2],
+           light->ambient[0], light->ambient[1], light->ambient[2],
+           light->intensity, light->constant, light->linear, light->quadratic,
+           light->cutOff, light->outerCutOff);
+}
 

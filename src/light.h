@@ -8,6 +8,7 @@ typedef enum {
     LIGHT_DIRECTIONAL,
     LIGHT_POINT,
     LIGHT_SPOT,
+    LIGHT_AREA,
     LIGHT_UNKNOWN
 } LightType;
 
@@ -31,6 +32,9 @@ typedef struct Light {
     // Spot light specific properties
     float cutOff;      // Cut-off angle
     float outerCutOff; // Outer cut-off angle
+
+    // Area
+    vec2 size;
 } Light;
 
 Light* create_light();
@@ -45,6 +49,7 @@ void set_light_intensity(Light* light, float intensity);
 void set_light_attenuation(Light* light, float constant, float linear, float quadratic);
 void set_light_cutoff(Light* light, float cutOff, float outerCutOff);
 void free_light(Light* light);
+void print_light(const Light* light);
 
 #endif // _LIGHT_H_
 

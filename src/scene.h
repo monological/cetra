@@ -38,8 +38,8 @@ typedef struct SceneNode {
     ShaderProgram* shader_program;
 
     bool show_axes;
-    GLuint axesVAO;
-    GLuint axesVBO;
+    GLuint axes_vao;
+    GLuint axes_vbo;
     ShaderProgram* axes_shader_program;
 } SceneNode;
 
@@ -61,22 +61,18 @@ void set_show_axes_for_nodes(SceneNode* node, bool show_axes);
 // shaders
 void set_program_for_nodes(SceneNode* node, ShaderProgram* program);
 
-
-// buffers
-void upload_buffers_to_gpu_for_nodes(SceneNode* node);
-
 // move
-void transform_node(SceneNode* node, Transform* transform);
 void apply_transform_to_nodes(SceneNode* node, mat4 parentTransform);
 
-// render
-void render_nodes(SceneNode* node, Camera *camera, 
-        mat4 model, mat4 view, mat4 projection, 
-        float time_value, RenderMode render_mode);
 
 /*
  * Scene
  */
+
+typedef struct {
+    Light* light;
+    float distance;
+} LightDistancePair;
 
 typedef struct Scene {
     SceneNode* root_node;
@@ -91,6 +87,11 @@ typedef struct Scene {
 
     // used by all nodes
     ShaderProgram* axes_shader_program;
+
+    bool show_light_outlines;
+    GLuint light_outlines_vao;
+    GLuint light_outlines_vbo;
+    ShaderProgram* light_outlines_shader_program;
 } Scene;
 
 // malloc
@@ -100,18 +101,29 @@ void free_scene(Scene* scene);
 // set
 void set_scene_lights(Scene* scene, Light** lights, size_t light_count);
 void set_scene_cameras(Scene* scene, Camera** cameras, size_t camera_count);
+void set_scene_show_light_outlines(Scene* scene, bool show_light_outlines);
 
 // find
 Camera* find_camera_by_name(Scene* scene, const char* name);
 Light* find_light_by_name(Scene* scene, const char* name);
+Light** get_closest_lights(Scene* scene, SceneNode* target_node, 
+        size_t max_lights, size_t* returned_light_count);
 
-// axes
+// viz
 GLboolean setup_scene_axes(Scene* scene);
+GLboolean setup_scene_light_outlines(Scene* scene);
 
 // print
 void print_scene_node(const SceneNode* node, int depth);
 void print_scene(const Scene* scene);
 
+// render
+
+void upload_buffers_to_gpu_for_scene(Scene* scene);
+void transform_scene(Scene* scene, Transform* transform);
+void render_nodes(Scene *scene, SceneNode* node, Camera *camera, 
+        mat4 model, mat4 view, mat4 projection, 
+        float time_value, RenderMode render_mode);
 
 #endif // _SCENE_H_
 

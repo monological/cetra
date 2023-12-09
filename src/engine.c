@@ -79,6 +79,7 @@ Engine* create_engine(const char* window_title, int width, int height) {
 
     engine->show_wireframe = false;
     engine->show_axes = false;
+    engine->show_light_outlines = false;
 
     return engine;
 }
@@ -443,6 +444,10 @@ void render_nuklear_gui(Engine* engine) {
             set_engine_show_wireframe(engine, !engine->show_wireframe);
         }
 
+        if (nk_button_label(engine->nk_ctx, "Show Lights")) {
+            set_engine_show_light_outlines(engine, !engine->show_light_outlines);
+        }
+
         // cam modes
         nk_layout_row_dynamic(engine->nk_ctx, 30, 2);
 
@@ -557,6 +562,17 @@ void set_engine_show_axes(Engine* engine, bool show_axes){
             set_show_axes_for_nodes(root_node, show_axes);
         }
     }
+}
+
+void set_engine_show_light_outlines(Engine* engine, bool show_light_outlines){
+    if (!engine) return;
+    
+    engine->show_light_outlines = show_light_outlines;
+
+    for (size_t i = 0; i < engine->scene_count; ++i) {
+        set_scene_show_light_outlines(engine->scenes[i], show_light_outlines);
+    }
+
 }
 
 void run_engine_render_loop(Engine* engine, RenderSceneFunc render_func) {

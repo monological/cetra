@@ -118,6 +118,30 @@ GLboolean link_program(ShaderProgram* program) {
     return GL_TRUE;
 }
 
+#define USED_UNIFORM_COMPONENTS 77  // Number of components used by non-light uniforms
+#define COMPONENTS_PER_LIGHT 21      // Number of components per light
+
+/**
+ * Calculates and returns the maximum number of lights supported by the shader program.
+ * 
+ * @return The maximum number of lights that can be handled by the shader program.
+ */
+size_t calculate_max_lights() {
+    GLint max_uniform_components;
+    glGetIntegerv(GL_MAX_FRAGMENT_UNIFORM_COMPONENTS, &max_uniform_components);
+
+    if (max_uniform_components < USED_UNIFORM_COMPONENTS) {
+        fprintf(stderr, "Insufficient uniform components available.\n");
+        return 0;
+    }
+
+    size_t max_light_uniforms = max_uniform_components - USED_UNIFORM_COMPONENTS;
+    size_t max_lights = max_light_uniforms / COMPONENTS_PER_LIGHT;
+
+    return max_lights;
+}
+
+
 /*
  * Sets up the uniforms. Only call after compiling and linking.
  *
@@ -170,18 +194,87 @@ void setup_program_uniforms(ShaderProgram* program) {
     program->sheen_tex_exists_loc = glGetUniformLocation(program->id, "sheenTexExists");
     program->reflectance_tex_exists_loc = glGetUniformLocation(program->id, "reflectanceTexExists");
 
+    program->max_lights = calculate_max_lights(); 
+
+    program->light_position_loc = malloc(program->max_lights * sizeof(GLint));
+    program->light_direction_loc = malloc(program->max_lights * sizeof(GLint));
+    program->light_color_loc = malloc(program->max_lights * sizeof(GLint));
+    program->light_specular_loc = malloc(program->max_lights * sizeof(GLint));
+    program->light_ambient_loc = malloc(program->max_lights * sizeof(GLint));
+    program->light_intensity_loc = malloc(program->max_lights * sizeof(GLint));
+    program->light_constant_loc = malloc(program->max_lights * sizeof(GLint));
+    program->light_linear_loc = malloc(program->max_lights * sizeof(GLint));
+    program->light_quadratic_loc = malloc(program->max_lights * sizeof(GLint));
+    program->light_cutOff_loc = malloc(program->max_lights * sizeof(GLint));
+    program->light_outerCutOff_loc = malloc(program->max_lights * sizeof(GLint));
+    program->light_type_loc = malloc(program->max_lights * sizeof(GLint));
+    program->light_size_loc = malloc(program->max_lights * sizeof(GLint));
+
+    // Retrieve uniform locations for light properties
+    char uniformName[64];
+    for (size_t i = 0; i < program->max_lights; ++i) {
+        sprintf(uniformName, "lights[%zu].position", i);
+        program->light_position_loc[i] = glGetUniformLocation(program->id, uniformName);
+
+        sprintf(uniformName, "lights[%zu].direction", i);
+        program->light_direction_loc[i] = glGetUniformLocation(program->id, uniformName);
+
+        sprintf(uniformName, "lights[%zu].color", i);
+        program->light_color_loc[i] = glGetUniformLocation(program->id, uniformName);
+
+        sprintf(uniformName, "lights[%zu].specular", i);
+        program->light_specular_loc[i] = glGetUniformLocation(program->id, uniformName);
+
+        sprintf(uniformName, "lights[%zu].ambient", i);
+        program->light_ambient_loc[i] = glGetUniformLocation(program->id, uniformName);
+
+        sprintf(uniformName, "lights[%zu].intensity", i);
+        program->light_intensity_loc[i] = glGetUniformLocation(program->id, uniformName);
+
+        sprintf(uniformName, "lights[%zu].constant", i);
+        program->light_constant_loc[i] = glGetUniformLocation(program->id, uniformName);
+
+        sprintf(uniformName, "lights[%zu].linear", i);
+        program->light_linear_loc[i] = glGetUniformLocation(program->id, uniformName);
+
+        sprintf(uniformName, "lights[%zu].quadratic", i);
+        program->light_quadratic_loc[i] = glGetUniformLocation(program->id, uniformName);
+
+        sprintf(uniformName, "lights[%zu].cutOff", i);
+        program->light_cutOff_loc[i] = glGetUniformLocation(program->id, uniformName);
+
+        sprintf(uniformName, "lights[%zu].outerCutOff", i);
+        program->light_outerCutOff_loc[i] = glGetUniformLocation(program->id, uniformName);
+
+        sprintf(uniformName, "lights[%zu].type", i);
+        program->light_type_loc[i] = glGetUniformLocation(program->id, uniformName);
+
+        sprintf(uniformName, "lights[%zu].size", i);
+        program->light_size_loc[i] = glGetUniformLocation(program->id, uniformName);
+    }
+
+    // Retrieve the location for the number of lights uniform
+    program->num_lights_loc = glGetUniformLocation(program->id, "numLights");
+
     return;
 }
 
-GLboolean init_program_shader(ShaderProgram* program, const char* vert_path,
-        const char* frag_path, const char* geom_path) {
+GLboolean setup_program_shader_from_paths(ShaderProgram** program, const char* vert_path,
+        const char* frag_path, const char* geo_path) {
     GLboolean success = GL_TRUE;
+
+    // Create and initialize the ShaderProgram
+    *program = create_program();
+    if (!(*program)) {
+        fprintf(stderr, "Failed to create shader program\n");
+        return GL_FALSE;
+    }
 
     // Load and compile the vertex shader
     if (vert_path != NULL) {
         Shader* vertex_shader = create_shader_from_path(VERTEX_SHADER, vert_path);
         if (vertex_shader && compile_shader(vertex_shader)) {
-            attach_program_shader(program, vertex_shader);
+            attach_program_shader(*program, vertex_shader);
         } else {
             fprintf(stderr, "Vertex shader compilation failed\n");
             success = GL_FALSE;
@@ -195,7 +288,7 @@ GLboolean init_program_shader(ShaderProgram* program, const char* vert_path,
     if (frag_path != NULL) {
         Shader* fragment_shader = create_shader_from_path(FRAGMENT_SHADER, frag_path);
         if (fragment_shader && compile_shader(fragment_shader)) {
-            attach_program_shader(program, fragment_shader);
+            attach_program_shader(*program, fragment_shader);
         } else {
             fprintf(stderr, "Fragment shader compilation failed\n");
             success = GL_FALSE;
@@ -206,10 +299,10 @@ GLboolean init_program_shader(ShaderProgram* program, const char* vert_path,
     }
 
     // Load and compile the geometry shader, if path is provided
-    if (geom_path != NULL) {
-        Shader* geometry_shader = create_shader_from_path(GEOMETRY_SHADER, geom_path);
+    if (geo_path != NULL) {
+        Shader* geometry_shader = create_shader_from_path(GEOMETRY_SHADER, geo_path);
         if (geometry_shader && compile_shader(geometry_shader)) {
-            attach_program_shader(program, geometry_shader);
+            attach_program_shader(*program, geometry_shader);
         } else {
             fprintf(stderr, "Geometry shader compilation failed\n");
             success = GL_FALSE;
@@ -217,15 +310,85 @@ GLboolean init_program_shader(ShaderProgram* program, const char* vert_path,
     }
 
     // Link the shader program
-    if (success && !link_program(program)) {
+    if (success && !link_program(*program)) {
         fprintf(stderr, "Shader program linking failed\n");
         success = GL_FALSE;
     }
 
-    setup_program_uniforms(program);
+    // Setup uniforms and other initializations as needed
+    if (success) {
+        setup_program_uniforms(*program);
+    }
 
     return success;
 }
+
+GLboolean setup_program_shader_from_source(ShaderProgram** program, const char* vert_source,
+        const char* frag_source, const char* geo_source) {
+    GLboolean success = GL_TRUE;
+
+    // Create and initialize the ShaderProgram
+    *program = create_program();
+    if (!(*program)) {
+        fprintf(stderr, "Failed to create shader program\n");
+        return GL_FALSE;
+    }
+
+    // Create and compile the vertex shader
+    if (vert_source != NULL) {
+        Shader* vertex_shader = create_shader(VERTEX_SHADER, vert_source);
+        if (vertex_shader && compile_shader(vertex_shader)) {
+            attach_program_shader(*program, vertex_shader);
+        } else {
+            fprintf(stderr, "Vertex shader compilation failed\n");
+            success = GL_FALSE;
+        }
+    } else {
+        fprintf(stderr, "Vertex shader source is NULL\n");
+        success = GL_FALSE;
+    }
+
+    // Create and compile the fragment shader
+    if (frag_source != NULL) {
+        Shader* fragment_shader = create_shader(FRAGMENT_SHADER, frag_source);
+        if (fragment_shader && compile_shader(fragment_shader)) {
+            attach_program_shader(*program, fragment_shader);
+        } else {
+            fprintf(stderr, "Fragment shader compilation failed\n");
+            success = GL_FALSE;
+        }
+    } else {
+        fprintf(stderr, "Fragment shader source is NULL\n");
+        success = GL_FALSE;
+    }
+
+    // Create and compile the geometry shader, if source is provided
+    if (geo_source != NULL) {
+        Shader* geometry_shader = create_shader(GEOMETRY_SHADER, geo_source);
+        if (geometry_shader && compile_shader(geometry_shader)) {
+            attach_program_shader(*program, geometry_shader);
+        } else {
+            fprintf(stderr, "Geometry shader compilation failed\n");
+            success = GL_FALSE;
+        }
+    }
+
+    // Link the shader program
+    if (success && !link_program(*program)) {
+        fprintf(stderr, "Shader program linking failed\n");
+        success = GL_FALSE;
+    }
+
+    // Setup uniforms and other initializations as needed
+    if (success) {
+        setup_program_uniforms(*program);
+    }
+
+    return success;
+}
+
+
+
 
 GLboolean validate_program(ShaderProgram* program){
     GLboolean success = GL_TRUE;
@@ -264,10 +427,47 @@ void free_program(ShaderProgram* program) {
         if (program->shaders) {
             for (size_t i = 0; i < program->shader_count; ++i) {
                 if (program->shaders[i]) {
-                    free_shader(program->shaders[i]);
+                    free_shader(program->shaders[i]); 
                 }
             }
             free(program->shaders);
+        }
+
+        if (program->light_position_loc) {
+            free(program->light_position_loc);
+        }
+        if (program->light_direction_loc) {
+            free(program->light_direction_loc);
+        }
+        if (program->light_color_loc) {
+            free(program->light_color_loc);
+        }
+        if (program->light_specular_loc) {
+            free(program->light_specular_loc);
+        }
+        if (program->light_ambient_loc) {
+            free(program->light_ambient_loc);
+        }
+        if (program->light_intensity_loc) {
+            free(program->light_intensity_loc);
+        }
+        if (program->light_constant_loc) {
+            free(program->light_constant_loc);
+        }
+        if (program->light_linear_loc) {
+            free(program->light_linear_loc);
+        }
+        if (program->light_quadratic_loc) {
+            free(program->light_quadratic_loc);
+        }
+        if (program->light_cutOff_loc) {
+            free(program->light_cutOff_loc);
+        }
+        if (program->light_outerCutOff_loc) {
+            free(program->light_outerCutOff_loc);
+        }
+        if (program->light_type_loc) {
+            free(program->light_type_loc);
         }
 
         free(program);

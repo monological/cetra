@@ -19,6 +19,7 @@
  * prototypes
  */
 static void set_axes_program_for_nodes(SceneNode* node, ShaderProgram* program);
+static void _upload_buffers_to_gpu_for_nodes(SceneNode* node);
 
 // Axis vertices: 6 vertices, 2 for each line (origin and end)
 float axesVertices[] = {
@@ -78,6 +79,14 @@ Scene* create_scene() {
     scene->tex_pool = create_texture_pool();
 
     scene->axes_shader_program = NULL;
+
+    // light outlines
+    scene->show_light_outlines = true;
+    glGenVertexArrays(1, &scene->light_outlines_vao);
+    check_gl_error("create scene gen vertex failed");
+    glGenBuffers(1, &scene->light_outlines_vbo);
+    check_gl_error("create scene gen buffers failed");
+    scene->light_outlines_shader_program = NULL;
     return scene;
 }
 
@@ -123,6 +132,10 @@ void free_scene(Scene* scene) {
         free_program(scene->axes_shader_program);
     }
 
+    if(scene->light_outlines_shader_program){
+        free_program(scene->light_outlines_shader_program);
+    }
+
     // Finally, free the scene itnode
     free(scene);
 
@@ -142,6 +155,14 @@ void set_scene_cameras(Scene* scene, Camera** cameras, size_t camera_count) {
     scene->camera_count = camera_count;
 }
 
+void set_scene_show_light_outlines(Scene* scene, bool show_light_outlines){
+    if (!scene) return;
+    scene->show_light_outlines = show_light_outlines;
+}
+
+/*
+ * find
+ */
 Camera* find_camera_by_name(Scene* scene, const char* name) {
     for (size_t i = 0; i < scene->camera_count; ++i) {
         if (strcmp(scene->cameras[i]->name, name) == 0) {
@@ -160,46 +181,120 @@ Light* find_light_by_name(Scene* scene, const char* name) {
     return NULL;
 }
 
-GLboolean setup_scene_axes(Scene* scene){
-    GLboolean success = GL_TRUE;
+static int _compare_light_distance(const void* a, const void* b) {
+    LightDistancePair* pair_a = (LightDistancePair*)a;
+    LightDistancePair* pair_b = (LightDistancePair*)b;
+    return (pair_a->distance > pair_b->distance) - (pair_a->distance < pair_b->distance);
+}
 
-    ShaderProgram* axes_shader_program = create_program();
-    if(!axes_shader_program){
-        fprintf(stderr, "Failed to create axes shader program\n");
+static void _collect_scene_lights(Scene* scene, LightDistancePair* pairs, size_t* count, SceneNode* target_node) {
+    vec3 target_pos = {
+        target_node->global_transform[3][0],
+        target_node->global_transform[3][1],
+        target_node->global_transform[3][2]
+    };
+
+    for (size_t i = 0; i < scene->light_count; ++i) {
+        vec3 light_pos = {
+            scene->lights[i]->position[0],
+            scene->lights[i]->position[1],
+            scene->lights[i]->position[2]
+        };
+        float distance = sqrt(pow(light_pos[0] - target_pos[0], 2) 
+            + pow(light_pos[1] - target_pos[1], 2) 
+            + pow(light_pos[2] - target_pos[2], 2));
+
+        pairs[*count].light = scene->lights[i];
+        pairs[*count].distance = distance;
+        (*count)++;
+    }
+}
+
+Light** get_closest_lights(Scene* scene, SceneNode* target_node, 
+        size_t max_lights, size_t* returned_light_count) {
+
+    LightDistancePair* pairs = malloc(scene->light_count * sizeof(LightDistancePair));
+    if (!pairs) {
+        // Handle memory allocation failure
+        *returned_light_count = 0;
+        return NULL;
+    }
+
+    size_t count = 0;
+    _collect_scene_lights(scene, pairs, &count, target_node);
+    qsort(pairs, count, sizeof(LightDistancePair), _compare_light_distance);
+
+    size_t result_count = (count < max_lights) ? count : max_lights;
+    Light** closest_lights = malloc(result_count * sizeof(Light*));
+    if (!closest_lights) {
+        free(pairs);
+        *returned_light_count = 0;
+        return NULL;
+    }
+
+    for (size_t i = 0; i < result_count; i++) {
+        closest_lights[i] = pairs[i].light;
+    }
+
+    free(pairs);
+    *returned_light_count = result_count;
+    return closest_lights;
+}
+
+GLboolean setup_scene_axes(Scene* scene) {
+    if (!setup_program_shader_from_source(&scene->axes_shader_program, 
+            axes_vert_src, axes_frag_src, NULL)) {
         return GL_FALSE;
     }
-
-    Shader* axes_vert_shader = create_shader(VERTEX_SHADER, axes_vert_src);
-    if(axes_vert_shader && compile_shader(axes_vert_shader)){
-        attach_program_shader(axes_shader_program, axes_vert_shader);
-    }else {
-        fprintf(stderr, "Axes vertex shader compilation failed\n");
-        success = GL_FALSE;
-    }
-
-    Shader* axes_frag_shader = create_shader(FRAGMENT_SHADER, axes_frag_src);
-    if(axes_frag_shader && compile_shader(axes_frag_shader)){
-        attach_program_shader(axes_shader_program, axes_frag_shader);
-    } else {
-        fprintf(stderr, "Axes fragment shader compilation failed\n");
-        success = GL_FALSE;
-    }
-
-    if (success && !link_program(axes_shader_program)) {
-        fprintf(stderr, "Axes shader program linking failed\n");
-        success = GL_FALSE;
-    }
-
-
-    if(success){
-        scene->axes_shader_program = axes_shader_program;
-        set_axes_program_for_nodes(scene->root_node, axes_shader_program);
-
-        setup_program_uniforms(scene->axes_shader_program);
-    }
-
-    return success;
+    set_axes_program_for_nodes(scene->root_node, scene->axes_shader_program);
+    setup_program_uniforms(scene->axes_shader_program);
+    return GL_TRUE;
 }
+
+GLboolean setup_scene_light_outlines(Scene* scene) {
+    if (!setup_program_shader_from_paths(&scene->light_outlines_shader_program,
+            OUTLINES_VERT_SHADER_PATH, OUTLINES_FRAG_SHADER_PATH, OUTLINES_GEO_SHADER_PATH)) {
+        return GL_FALSE;
+    }
+    setup_program_uniforms(scene->light_outlines_shader_program);
+    return GL_TRUE;
+}
+
+void upload_buffers_to_gpu_for_scene(Scene* scene) {
+    if (!scene || !scene->root_node) return;
+
+    size_t buffer_size = scene->light_count * sizeof(vec3) * 2; // 2 vec3 per light (position, color)
+    vec3* buffer_data = (vec3*)malloc(buffer_size);
+    if (!buffer_data) {
+        return;
+    }
+
+    for (size_t i = 0; i < scene->light_count; ++i) {
+        Light* light = scene->lights[i];
+        glm_vec3_copy(light->position, buffer_data[i * 2]);
+        glm_vec3_copy((vec3){1.0f, 0.0f, 0.0f}, buffer_data[i * 2 + 1]);
+    }
+
+    glBindVertexArray(scene->light_outlines_vao);
+    glBindBuffer(GL_ARRAY_BUFFER, scene->light_outlines_vbo);
+    glBufferData(GL_ARRAY_BUFFER, buffer_size, buffer_data, GL_STATIC_DRAW);
+
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
+    glEnableVertexAttribArray(1);
+
+    glBindVertexArray(0);
+
+    free(buffer_data);
+
+    _upload_buffers_to_gpu_for_nodes(scene->root_node);
+}
+
+/*
+ * Scene Node
+ *
+ */
 
 SceneNode* create_node() {
     SceneNode* node = malloc(sizeof(SceneNode));
@@ -221,14 +316,13 @@ SceneNode* create_node() {
     node->light = NULL;
     node->camera = NULL;
     node->shader_program = NULL;
+
+    // axes
     node->show_axes = true;
-
-    glGenVertexArrays(1, &node->axesVAO);
+    glGenVertexArrays(1, &node->axes_vao);
     check_gl_error("create node gen vertex failed");
-
-    glGenBuffers(1, &node->axesVBO);
+    glGenBuffers(1, &node->axes_vbo);
     check_gl_error("create node gen buffers failed");
-
     node->axes_shader_program = NULL;
 
     return node;
@@ -317,7 +411,7 @@ void set_show_axes_for_nodes(SceneNode* node, bool show_axes){
 
 }
 
-void upload_buffers_to_gpu_for_nodes(SceneNode* node) {
+static void _upload_buffers_to_gpu_for_nodes(SceneNode* node) {
     if (!node) return;
 
     /*
@@ -334,10 +428,10 @@ void upload_buffers_to_gpu_for_nodes(SceneNode* node) {
      */
 
     // Bind the Vertex Array Object (VAO)
-    glBindVertexArray(node->axesVAO);
+    glBindVertexArray(node->axes_vao);
 
     // Bind and set up the Vertex Buffer Object (VBO)
-    glBindBuffer(GL_ARRAY_BUFFER, node->axesVBO);
+    glBindBuffer(GL_ARRAY_BUFFER, node->axes_vbo);
     glBufferData(GL_ARRAY_BUFFER, sizeof(axesVertices), axesVertices, GL_STATIC_DRAW);
 
     // Position attribute
@@ -357,12 +451,19 @@ void upload_buffers_to_gpu_for_nodes(SceneNode* node) {
     glBindVertexArray(0);
 
     for (size_t i = 0; i < node->children_count; i++) {
-        upload_buffers_to_gpu_for_nodes(node->children[i]);
+        _upload_buffers_to_gpu_for_nodes(node->children[i]);
     }
 }
 
-void transform_node(SceneNode* node, Transform* transform) {
-    if (!node || !transform) return;
+void transform_scene(Scene* scene, Transform *transform) {
+    if (!scene || !transform) return;
+
+    if(!scene->root_node){
+        fprintf(stderr, "Failed to transform scene. No root node found.\n");
+        return;
+    }
+
+    SceneNode* node = scene->root_node;
 
     mat4 localTransform;
     glm_mat4_identity(localTransform);
@@ -373,14 +474,15 @@ void transform_node(SceneNode* node, Transform* transform) {
     glm_scale(localTransform, transform->scale);
 
     glm_mat4_mul(node->original_transform, localTransform, node->local_transform);
+    
 }
 
-void apply_transform_to_nodes(SceneNode* node, mat4 parentTransform) {
+void apply_transform_to_nodes(SceneNode* node, mat4 transform) {
     if (!node) return;
 
     mat4 localTransform;
     glm_mat4_mul(node->original_transform, node->local_transform, localTransform);
-    glm_mat4_mul(parentTransform, localTransform, node->global_transform);
+    glm_mat4_mul(transform, localTransform, node->global_transform);
 
     for (size_t i = 0; i < node->children_count; i++) {
         if (node->children[i]) {
@@ -389,32 +491,95 @@ void apply_transform_to_nodes(SceneNode* node, mat4 parentTransform) {
     }
 }
 
-void render_nodes(SceneNode* node, Camera *camera, 
+void render_nodes(Scene* scene, SceneNode* node, Camera *camera, 
         mat4 model, mat4 view, mat4 projection, 
         float time_value, RenderMode render_mode) {
     if (!node) {
         printf("error: render_node called with NULL node\n");
         return;
     }
+    ShaderProgram* program = NULL;
+
+    size_t returned_light_count;
+    size_t max_lights = calculate_max_lights();
+    Light** closest_lights = get_closest_lights(scene, node, max_lights, 
+            &returned_light_count);
+
 
     if (node->shader_program) {
+
+        program = node->shader_program;
+
         // Use the shader program
-        glUseProgram(node->shader_program->id);
+        glUseProgram(program->id);
+
+        for (size_t i = 0; i < returned_light_count; ++i) {
+
+            Light* closest_light = closest_lights[i];
+
+            if(!closest_light){
+                continue;
+            }
+
+            if (program->light_position_loc[i] != -1) {
+                glUniform3fv(program->light_position_loc[i], 1, (const GLfloat*)&closest_light->position);
+            }
+            if (program->light_direction_loc[i] != -1) {
+                glUniform3fv(program->light_direction_loc[i], 1, (const GLfloat*)&closest_light->direction);
+            }
+            if (program->light_color_loc[i] != -1) {
+                glUniform3fv(program->light_color_loc[i], 1, (const GLfloat*)&closest_light->color);
+            }
+            if (program->light_specular_loc[i] != -1) {
+                glUniform3fv(program->light_specular_loc[i], 1, (const GLfloat*)&closest_light->specular);
+            }
+            if (program->light_ambient_loc[i] != -1) {
+                glUniform3fv(program->light_ambient_loc[i], 1, (const GLfloat*)&closest_light->ambient);
+            }
+            if (program->light_intensity_loc[i] != -1) {
+                glUniform1f(program->light_intensity_loc[i], closest_light->intensity);
+            }
+            if (program->light_constant_loc[i] != -1) {
+                glUniform1f(program->light_constant_loc[i], closest_light->constant);
+            }
+            if (program->light_linear_loc[i] != -1) {
+                glUniform1f(program->light_linear_loc[i], closest_light->linear);
+            }
+            if (program->light_quadratic_loc[i] != -1) {
+                glUniform1f(program->light_quadratic_loc[i], closest_light->quadratic);
+            }
+            if (program->light_cutOff_loc[i] != -1) {
+                glUniform1f(program->light_cutOff_loc[i], closest_light->cutOff);
+            }
+            if (program->light_outerCutOff_loc[i] != -1) {
+                glUniform1f(program->light_outerCutOff_loc[i], closest_light->outerCutOff);
+            }
+            if (program->light_type_loc[i] != -1) {
+                glUniform1f(program->light_type_loc[i], closest_light->type);
+            }
+
+            if (program->light_size_loc[i] != -1) {
+                glUniform2f(program->light_size_loc[i], closest_light->size[0], closest_light->size[1]);
+            }
+
+            glUniform1i(program->num_lights_loc, (GLint)returned_light_count);
+        }
+
 
         // PBR, NORMALS, etc...
-        glUniform1i(node->shader_program->render_mode_loc, render_mode);
-        glUniform1f(node->shader_program->near_clip_loc, camera->near_clip);
-        glUniform1f(node->shader_program->far_clip_loc, camera->far_clip);
+        glUniform1i(program->render_mode_loc, render_mode);
+        glUniform1f(program->near_clip_loc, camera->near_clip);
+        glUniform1f(program->far_clip_loc, camera->far_clip);
 
 
         // Set shader uniforms for model, view, and projection matrices
-        glUniformMatrix4fv(node->shader_program->model_loc, 1, GL_FALSE, (const GLfloat*)node->global_transform);
-        glUniformMatrix4fv(node->shader_program->view_loc, 1, GL_FALSE, (const GLfloat*)view);
-        glUniformMatrix4fv(node->shader_program->proj_loc, 1, GL_FALSE, (const GLfloat*)projection);
+        glUniformMatrix4fv(program->model_loc, 1, GL_FALSE, (const GLfloat*)node->global_transform);
+        glUniformMatrix4fv(program->view_loc, 1, GL_FALSE, (const GLfloat*)view);
+        glUniformMatrix4fv(program->proj_loc, 1, GL_FALSE, (const GLfloat*)projection);
 
         // cam position and time
-        glUniform3fv(node->shader_program->cam_pos_loc, 1, (const GLfloat*)&camera->position);
-        glUniform1f(node->shader_program->time_loc, time_value);
+        glUniform3fv(program->cam_pos_loc, 1, (const GLfloat*)&camera->position);
+        glUniform1f(program->time_loc, time_value);
 
         // Set material properties if available
         if (node->meshes && node->mesh_count > 0) {
@@ -424,119 +589,88 @@ void render_nodes(SceneNode* node, Camera *camera,
                     Material* mat = mesh->material;
                     
                     // Set albedo, metallic, roughness, and ambient occlusion
-                    glUniform3fv(node->shader_program->albedo_loc, 1, (const GLfloat*)&mat->albedo);
-                    glUniform1f(node->shader_program->metallic_loc, mat->metallic);
-                    glUniform1f(node->shader_program->roughness_loc, mat->roughness);
-                    glUniform1f(node->shader_program->ao_loc, mat->ao);
+                    glUniform3fv(program->albedo_loc, 1, (const GLfloat*)&mat->albedo);
+                    glUniform1f(program->metallic_loc, mat->metallic);
+                    glUniform1f(program->roughness_loc, mat->roughness);
+                    glUniform1f(program->ao_loc, mat->ao);
 
                     if (mat->albedoTex) {
                         glActiveTexture(GL_TEXTURE0);
                         glBindTexture(GL_TEXTURE_2D, mat->albedoTex->id);
-                        glUniform1i(node->shader_program->albedo_tex_loc, 0);
+                        glUniform1i(program->albedo_tex_loc, 0);
                     }
 
                     if (mat->normalTex) {
                         glActiveTexture(GL_TEXTURE1);
                         glBindTexture(GL_TEXTURE_2D, mat->normalTex->id);
-                        glUniform1i(node->shader_program->normal_tex_loc, 1);
+                        glUniform1i(program->normal_tex_loc, 1);
                     }
 
                     if (mat->roughnessTex) {
                         glActiveTexture(GL_TEXTURE2);
                         glBindTexture(GL_TEXTURE_2D, mat->roughnessTex->id);
-                        glUniform1i(node->shader_program->roughness_tex_loc, 2);
+                        glUniform1i(program->roughness_tex_loc, 2);
                     }
 
                     if (mat->metalnessTex) {
                         glActiveTexture(GL_TEXTURE3);
                         glBindTexture(GL_TEXTURE_2D, mat->metalnessTex->id);
-                        glUniform1i(node->shader_program->metalness_tex_loc, 3);
+                        glUniform1i(program->metalness_tex_loc, 3);
                     }
 
                     if (mat->ambientOcclusionTex) {
                         glActiveTexture(GL_TEXTURE4);
                         glBindTexture(GL_TEXTURE_2D, mat->ambientOcclusionTex->id);
-                        glUniform1i(node->shader_program->ao_tex_loc, 4);
+                        glUniform1i(program->ao_tex_loc, 4);
                     }
 
                     if (mat->emissiveTex) {
                         glActiveTexture(GL_TEXTURE5);
                         glBindTexture(GL_TEXTURE_2D, mat->emissiveTex->id);
-                        glUniform1i(node->shader_program->emissive_tex_loc, 5);
+                        glUniform1i(program->emissive_tex_loc, 5);
                     }
 
                     if (mat->heightTex) {
                         glActiveTexture(GL_TEXTURE6);
                         glBindTexture(GL_TEXTURE_2D, mat->heightTex->id);
-                        glUniform1i(node->shader_program->height_tex_loc, 6);
+                        glUniform1i(program->height_tex_loc, 6);
                     }
 
                     if (mat->opacityTex) {
                         glActiveTexture(GL_TEXTURE7);
                         glBindTexture(GL_TEXTURE_2D, mat->opacityTex->id);
-                        glUniform1i(node->shader_program->opacity_tex_loc, 7);
+                        glUniform1i(program->opacity_tex_loc, 7);
                     }
 
                     if (mat->sheenTex) {
                         glActiveTexture(GL_TEXTURE8);
                         glBindTexture(GL_TEXTURE_2D, mat->sheenTex->id);
-                        glUniform1i(node->shader_program->sheen_tex_loc, 8);
+                        glUniform1i(program->sheen_tex_loc, 8);
                     }
 
                     if (mat->reflectanceTex) {
                         glActiveTexture(GL_TEXTURE9);
                         glBindTexture(GL_TEXTURE_2D, mat->reflectanceTex->id);
-                        glUniform1i(node->shader_program->reflectance_tex_loc, 9);
+                        glUniform1i(program->reflectance_tex_loc, 9);
                     }
 
                     // Set uniform values for each texture type
-                    glUniform1i(node->shader_program->albedo_tex_exists_loc, mat->albedoTex ? 1 : 0);
-                    glUniform1i(node->shader_program->normal_tex_exists_loc, mat->normalTex ? 1 : 0);
-                    glUniform1i(node->shader_program->roughness_tex_exists_loc, mat->roughnessTex ? 1 : 0);
-                    glUniform1i(node->shader_program->metalness_tex_exists_loc, mat->metalnessTex ? 1 : 0);
-                    glUniform1i(node->shader_program->ao_tex_exists_loc, mat->ambientOcclusionTex ? 1 : 0);
-                    glUniform1i(node->shader_program->emissive_tex_exists_loc, mat->emissiveTex ? 1 : 0);
-                    glUniform1i(node->shader_program->height_tex_exists_loc, mat->heightTex ? 1 : 0);
-                    glUniform1i(node->shader_program->opacity_tex_exists_loc, mat->opacityTex ? 1 : 0);
-                    glUniform1i(node->shader_program->sheen_tex_exists_loc, mat->sheenTex ? 1 : 0);
-                    glUniform1i(node->shader_program->reflectance_tex_exists_loc, mat->reflectanceTex ? 1 : 0);
+                    glUniform1i(program->albedo_tex_exists_loc, mat->albedoTex ? 1 : 0);
+                    glUniform1i(program->normal_tex_exists_loc, mat->normalTex ? 1 : 0);
+                    glUniform1i(program->roughness_tex_exists_loc, mat->roughnessTex ? 1 : 0);
+                    glUniform1i(program->metalness_tex_exists_loc, mat->metalnessTex ? 1 : 0);
+                    glUniform1i(program->ao_tex_exists_loc, mat->ambientOcclusionTex ? 1 : 0);
+                    glUniform1i(program->emissive_tex_exists_loc, mat->emissiveTex ? 1 : 0);
+                    glUniform1i(program->height_tex_exists_loc, mat->heightTex ? 1 : 0);
+                    glUniform1i(program->opacity_tex_exists_loc, mat->opacityTex ? 1 : 0);
+                    glUniform1i(program->sheen_tex_exists_loc, mat->sheenTex ? 1 : 0);
+                    glUniform1i(program->reflectance_tex_exists_loc, mat->reflectanceTex ? 1 : 0);
 
                 }
                 // Bind VAO and draw the mesh
                 glBindVertexArray(mesh->VAO);
                 glDrawElements(GL_TRIANGLES, mesh->indexCount, GL_UNSIGNED_INT, 0);
             }
-        }
-
-        // Check and pass light data to shader
-        if (node->light) {
-            GLint lightPosLoc = glGetUniformLocation(node->shader_program->id, "light.position");
-            GLint lightDirLoc = glGetUniformLocation(node->shader_program->id, "light.direction");
-            GLint lightColorLoc = glGetUniformLocation(node->shader_program->id, "light.color");
-            GLint lightColorSpecular = glGetUniformLocation(node->shader_program->id, "light.specular");
-            GLint lightColorAmbient = glGetUniformLocation(node->shader_program->id, "light.ambient");
-            GLint lightIntensityLoc = glGetUniformLocation(node->shader_program->id, "light.intensity");
-            GLint lightConstantLoc = glGetUniformLocation(node->shader_program->id, "light.constant");
-            GLint lightLinearLoc = glGetUniformLocation(node->shader_program->id, "light.linear");
-            GLint lightQuadraticLoc = glGetUniformLocation(node->shader_program->id, "light.quadratic");
-            GLint lightCutOffLoc = glGetUniformLocation(node->shader_program->id, "light.cutOff");
-            GLint lightOuterCutOffLoc = glGetUniformLocation(node->shader_program->id, "light.outerCutOff");
-            GLint lightTypeLoc = glGetUniformLocation(node->shader_program->id, "light.type");
-            
-
-            glUniform3fv(lightPosLoc, 1, (const GLfloat*)&node->light->position);
-            glUniform3fv(lightDirLoc, 1, (const GLfloat*)&node->light->direction);
-            glUniform3fv(lightColorLoc, 1, (const GLfloat*)&node->light->color);
-            glUniform3fv(lightColorSpecular, 1, (const GLfloat*)&node->light->specular);
-            glUniform3fv(lightColorAmbient, 1, (const GLfloat*)&node->light->ambient);
-            glUniform1f(lightIntensityLoc, node->light->intensity);
-            glUniform1f(lightConstantLoc, node->light->constant);
-            glUniform1f(lightLinearLoc, node->light->linear);
-            glUniform1f(lightQuadraticLoc, node->light->quadratic);
-            glUniform1f(lightCutOffLoc, node->light->cutOff);
-            glUniform1f(lightOuterCutOffLoc, node->light->outerCutOff);
-            glUniform1f(lightTypeLoc, node->light->type);
-
         }
 
         // Optional cleanup
@@ -546,23 +680,95 @@ void render_nodes(SceneNode* node, Camera *camera,
     }
 
     if (node->show_axes && node->axes_shader_program) {
-        glUseProgram(node->axes_shader_program->id);
+        program = node->axes_shader_program;
+
+        glUseProgram(program->id);
 
         // Pass the model, view, and projection matrices to the shader
-        glUniformMatrix4fv(node->axes_shader_program->model_loc, 1, GL_FALSE, (const GLfloat*)node->global_transform);
-        glUniformMatrix4fv(node->axes_shader_program->view_loc, 1, GL_FALSE, (const GLfloat*)view);
-        glUniformMatrix4fv(node->axes_shader_program->proj_loc, 1, GL_FALSE, (const GLfloat*)projection);
+        glUniformMatrix4fv(program->model_loc, 1, GL_FALSE, (const GLfloat*)node->global_transform);
+        glUniformMatrix4fv(program->view_loc, 1, GL_FALSE, (const GLfloat*)view);
+        glUniformMatrix4fv(program->proj_loc, 1, GL_FALSE, (const GLfloat*)projection);
 
-        glBindVertexArray(node->axesVAO);
+        glBindVertexArray(node->axes_vao);
         glDrawArrays(GL_LINES, 0,  sizeof(axesVertices) / (6 * sizeof(float)));
         glBindVertexArray(0);
 
         glUseProgram(0);
     }
 
+    if (scene->show_light_outlines && scene->light_outlines_shader_program) {
+        program = scene->light_outlines_shader_program;
+
+        glUseProgram(program->id);
+
+        for (size_t i = 0; i < returned_light_count; ++i) {
+
+            Light* closest_light = closest_lights[i];
+
+            if(!closest_light){
+                continue;
+            }
+
+            if (program->light_position_loc[i] != -1) {
+                glUniform3fv(program->light_position_loc[i], 1, (const GLfloat*)&closest_light->position);
+            }
+            if (program->light_direction_loc[i] != -1) {
+                glUniform3fv(program->light_direction_loc[i], 1, (const GLfloat*)&closest_light->direction);
+            }
+            if (program->light_color_loc[i] != -1) {
+                glUniform3fv(program->light_color_loc[i], 1, (const GLfloat*)&closest_light->color);
+            }
+            if (program->light_specular_loc[i] != -1) {
+                glUniform3fv(program->light_specular_loc[i], 1, (const GLfloat*)&closest_light->specular);
+            }
+            if (program->light_ambient_loc[i] != -1) {
+                glUniform3fv(program->light_ambient_loc[i], 1, (const GLfloat*)&closest_light->ambient);
+            }
+            if (program->light_intensity_loc[i] != -1) {
+                glUniform1f(program->light_intensity_loc[i], closest_light->intensity);
+            }
+            if (program->light_constant_loc[i] != -1) {
+                glUniform1f(program->light_constant_loc[i], closest_light->constant);
+            }
+            if (program->light_linear_loc[i] != -1) {
+                glUniform1f(program->light_linear_loc[i], closest_light->linear);
+            }
+            if (program->light_quadratic_loc[i] != -1) {
+                glUniform1f(program->light_quadratic_loc[i], closest_light->quadratic);
+            }
+            if (program->light_cutOff_loc[i] != -1) {
+                glUniform1f(program->light_cutOff_loc[i], closest_light->cutOff);
+            }
+            if (program->light_outerCutOff_loc[i] != -1) {
+                glUniform1f(program->light_outerCutOff_loc[i], closest_light->outerCutOff);
+            }
+            if (program->light_type_loc[i] != -1) {
+                glUniform1f(program->light_type_loc[i], closest_light->type);
+            }
+
+            if (program->light_size_loc[i] != -1) {
+                glUniform2f(program->light_size_loc[i], closest_light->size[0], closest_light->size[1]);
+            }
+
+            glUniform1i(program->num_lights_loc, (GLint)returned_light_count);
+        }
+
+        glUniformMatrix4fv(program->model_loc, 1, GL_FALSE, (const GLfloat*)node->global_transform);
+        glUniformMatrix4fv(program->view_loc, 1, GL_FALSE, (const GLfloat*)view);
+        glUniformMatrix4fv(program->proj_loc, 1, GL_FALSE, (const GLfloat*)projection);
+
+        glBindVertexArray(scene->light_outlines_vao);
+        glDrawArrays(GL_LINES, 0, scene->light_count * 2);
+        glBindVertexArray(0);
+
+        glUseProgram(0);
+    }
+
+    free(closest_lights);
+
     // Render children
     for (size_t i = 0; i < node->children_count; i++) {
-        render_nodes(node->children[i], camera, 
+        render_nodes(scene, node->children[i], camera, 
             node->global_transform, view, 
             projection, time_value, render_mode);
     }
@@ -584,6 +790,13 @@ void print_scene_node(const SceneNode* node, int depth) {
     }
 }
 
+void print_scene_lights(const Scene* scene) {
+    if (!scene) return;
+    for (size_t i = 0; i < scene->light_count; i++) {
+        print_light(scene->lights[i]);
+    }
+}
+
 void print_scene(const Scene* scene) {
     if (!scene) return;
 
@@ -592,7 +805,10 @@ void print_scene(const Scene* scene) {
            scene->camera_count,
            scene->tex_pool ? (scene->tex_pool->directory ? scene->tex_pool->directory : "None") : "None");
 
+    print_scene_lights(scene);
     print_scene_node(scene->root_node, 0);
 }
+
+
 
 

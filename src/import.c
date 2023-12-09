@@ -34,24 +34,32 @@ Material* process_ai_material(struct aiMaterial* ai_mat, TexturePool* tex_pool) 
         material->albedo[1] = color.g;
         material->albedo[2] = color.b;
     }else{
-        material->albedo[0] = 1.0;
-        material->albedo[1] = 0.2;
-        material->albedo[2] = 0.2;
+        printf("Failed to load color diffuse\n");
+        material->albedo[0] = 0.1;
+        material->albedo[1] = 0.1;
+        material->albedo[2] = 0.1;
     }
 
-    /*
-       if (AI_SUCCESS == aiGetMaterialFloat(ai_mat, AI_MATKEY_METALLIC_FACTOR, &floatVal)) {
-       material->metallic = floatVal;
-       }else{
-       material->metallic = 0.5;
-       }
-       if (AI_SUCCESS == aiGetMaterialFloat(ai_mat, AI_MATKEY_ROUGHNESS_FACTOR, &floatVal)) {
-       material->roughness = floatVal;
-       }else{
-       material->roughness = 0.5;
-       }*/
-    material->metallic = 0.5;
-    material->roughness = 0.5;
+    
+    ai_real metallic, roughness;
+    aiReturn result;
+
+    /*result = aiGetMaterialFloat(ai_mat, AI_MATKEY_METALLIC_FACTOR, &metallic);
+    if (result == AI_SUCCESS) {
+        material->metallic = metallic;
+    } else {
+        material->metallic = 0.5;
+    }
+
+    result = aiGetMaterialFloat(ai_mat, AI_MATKEY_ROUGHNESS_FACTOR, &roughness);
+    if (result == AI_SUCCESS) {
+        material->roughness = roughness;
+    } else {
+        material->roughness = 0.5;
+    }*/
+   
+    material->metallic = 0.1;
+    material->roughness = 0.1;
 
     // Load Diffuse Texture
     if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_DIFFUSE, 0, &str, NULL, NULL, NULL, NULL, NULL, NULL)) {
@@ -211,19 +219,17 @@ void process_ai_lights(const struct aiScene* scene, Light ***lights, size_t *num
         Light *light = create_light();
         light->name = safe_strdup(ai_light->mName.data);
 
-        light->name = safe_strdup(ai_light->mName.data);
         glm_vec3_copy((vec3){ai_light->mPosition.x, ai_light->mPosition.y, ai_light->mPosition.z}, light->position);
         glm_vec3_copy((vec3){ai_light->mDirection.x, ai_light->mDirection.y, ai_light->mDirection.z}, light->direction);
+        glm_vec3_copy((vec3){ai_light->mColorAmbient.r, ai_light->mColorAmbient.g, ai_light->mColorAmbient.b}, light->ambient);
         glm_vec3_copy((vec3){ai_light->mColorDiffuse.r, ai_light->mColorDiffuse.g, ai_light->mColorDiffuse.b}, light->color);
         glm_vec3_copy((vec3){ai_light->mColorSpecular.r, ai_light->mColorSpecular.g, ai_light->mColorSpecular.b}, light->specular);
-        glm_vec3_copy((vec3){ai_light->mColorAmbient.r, ai_light->mColorAmbient.g, ai_light->mColorAmbient.b}, light->ambient);
 
         // Set intensity, attenuation, and cutoff based on light type
         switch (ai_light->mType) {
-            default:
             case aiLightSource_DIRECTIONAL:
                 light->type = LIGHT_DIRECTIONAL;
-                light->intensity = 1.0f; // Default intensity for directional light
+                light->intensity = 1.0f;
                 break;
             case aiLightSource_POINT:
                 light->type = LIGHT_POINT;
@@ -233,6 +239,14 @@ void process_ai_lights(const struct aiScene* scene, Light ***lights, size_t *num
                 break;
             case aiLightSource_SPOT:
                 light->type = LIGHT_SPOT;
+                light->constant = ai_light->mAttenuationConstant;
+                light->linear = ai_light->mAttenuationLinear;
+                light->quadratic = ai_light->mAttenuationQuadratic;
+                light->cutOff = ai_light->mAngleInnerCone;
+                light->outerCutOff = ai_light->mAngleOuterCone;
+                break;
+            default:
+                light->type = LIGHT_AREA;
                 light->constant = ai_light->mAttenuationConstant;
                 light->linear = ai_light->mAttenuationLinear;
                 light->quadratic = ai_light->mAttenuationQuadratic;

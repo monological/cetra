@@ -28,9 +28,7 @@
 #include "ext/nuklear.h"
 #include "ext/nuklear_glfw_gl3.h"
 
-#define PBR_VERT_SHADER_PATH "./shaders/pbr_vert.glsl"
-#define PBR_FRAG_SHADER_PATH "./shaders/pbr_frag.glsl"
-#define FBX_MODEL_PATH "./models/room.fbx"
+#define FBX_MODEL_PATH "./models/room2.fbx"
 #define FBX_TEXTURE_DIR "./textures/room.fbm"
 
 /*
@@ -260,11 +258,11 @@ void render_scene_callback(Engine* engine, Scene* current_scene){
         update_engine_camera_perspective(engine);
     }
 
-    transform_node(root_node, &transform);
+    transform_scene(current_scene, &transform);
 
     apply_transform_to_nodes(root_node, engine->model_matrix);
 
-    render_nodes(root_node, camera, 
+    render_nodes(current_scene, root_node, camera, 
         root_node->local_transform, 
         engine->view_matrix, engine->projection_matrix, 
         time_value, 
@@ -301,8 +299,8 @@ int main() {
      *
      */
     ShaderProgram* pbr_shader_program = create_program();
-    if (!init_program_shader(pbr_shader_program, 
-                PBR_VERT_SHADER_PATH, PBR_FRAG_SHADER_PATH, NULL)) {
+    if (!setup_program_shader_from_paths(&pbr_shader_program, 
+                PBR_VERT_SHADER_PATH, PBR_FRAG_SHADER_PATH, PBR_GEO_SHADER_PATH)) {
         fprintf(stderr, "Failed to initialize PBR shader program\n");
         return -1;
     }
@@ -355,9 +353,15 @@ int main() {
         return -1;
     }
 
+    if(!setup_scene_light_outlines(scene)){
+        fprintf(stderr, "Failed to scene light outlines shaders\n");
+        return -1;
+    }
+
     SceneNode* root_node = scene->root_node;
     assert(root_node != NULL);
 
+    /*
     vec3 lightPosition = {0.0, 0.0, 2000.00};
     if(root_node->light == NULL){
         printf("No root light found so adding one...\n");
@@ -372,9 +376,9 @@ int main() {
         set_light_intensity(light, 10.0f);
         set_light_color(light, (vec3){1.0f, 0.7f, 0.7f});
         set_node_light(root_node, light);
-    }
+    }*/
 
-    upload_buffers_to_gpu_for_nodes(root_node);
+    upload_buffers_to_gpu_for_scene(scene);
 
     set_program_for_nodes(root_node, pbr_shader_program);
 
@@ -382,6 +386,7 @@ int main() {
 
     set_engine_show_wireframe(engine, false);
     set_engine_show_axes(engine, true);
+    set_engine_show_light_outlines(engine, true);
 
     run_engine_render_loop(engine, render_scene_callback);
 
