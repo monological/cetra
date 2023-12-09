@@ -372,7 +372,8 @@ int main() {
         }
         set_light_name(light, "root");
         set_light_type(light, LIGHT_POINT);
-        set_light_position(light, lightPosition);
+        set_light_original_position(light, lightPosition);
+        set_light_global_position(light, lightPosition);
         set_light_intensity(light, 10.0f);
         set_light_color(light, (vec3){1.0f, 0.7f, 0.7f});
         set_node_light(root_node, light);
