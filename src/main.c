@@ -371,7 +371,7 @@ int main() {
         set_light_original_position(light, lightPosition);
         set_light_global_position(light, lightPosition);
         set_light_intensity(light, 500.0f);
-        set_light_color(light, (vec3){1.0f, 0.0f, 0.0f});
+        set_light_color(light, (vec3){0.0f, 0.0f, 100.0f});
         add_light_to_scene(scene, light);
 
         Transform light_transform = {
