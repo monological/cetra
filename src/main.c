@@ -28,8 +28,8 @@
 #include "ext/nuklear.h"
 #include "ext/nuklear_glfw_gl3.h"
 
-#define FBX_MODEL_PATH "./models/pilot.fbx"
-#define FBX_TEXTURE_DIR "./textures/pilot.fbm"
+#define FBX_MODEL_PATH "./models/room.fbx"
+#define FBX_TEXTURE_DIR "./textures/room.fbm"
 
 /*
  * Constants
