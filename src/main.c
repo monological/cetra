@@ -358,7 +358,7 @@ int main() {
     SceneNode* root_node = scene->root_node;
     assert(root_node != NULL);
 
-    if(root_node->light == NULL){
+    if(scene->light_count == 0){
         printf("No root light found so adding one...\n");
         Light *light = create_light();
         if(!light){
@@ -374,17 +374,17 @@ int main() {
         set_light_color(light, (vec3){0.0f, 0.0f, 100.0f});
         add_light_to_scene(scene, light);
 
-        Transform light_transform = {
-            .position = {300.0f, 300.0f, -200.00f},
-            .rotation = {0.0f, 0.0f, 0.0f},
-            .scale = {1.0f, 1.0f, 1.0f}
-        };
-
         SceneNode *light_node = create_node();
         set_node_light(light_node, light);
         set_node_name(light_node, "root_light_node");
         set_show_axes_for_nodes(light_node, true);
         set_show_light_outlines_for_nodes(light_node, true);
+
+        Transform light_transform = {
+            .position = {300.0f, 300.0f, -200.00f},
+            .rotation = {0.0f, 0.0f, 0.0f},
+            .scale = {1.0f, 1.0f, 1.0f}
+        };
 
         mat4 light_matrix; 
         glm_mat4_identity(light_matrix);
