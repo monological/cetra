@@ -95,7 +95,7 @@ include_directories(${EXTERNAL_INSTALL_LOCATION}/include)
 
 
 # Add the target for the engine library
-add_library(cetra SHARED 
+add_library(cetra STATIC 
     src/engine.c
     src/util.c
     src/scene.c
@@ -117,17 +117,17 @@ add_dependencies(cetra glfw cglm libglew_static assimp FindLibraries)
 if(APPLE)
     target_link_libraries(cetra "${EXTERNAL_INSTALL_LOCATION}/lib/libglfw3.a" ${CGLM_LIBRARY} libglew_static "${EXTERNAL_INSTALL_LOCATION}/lib/libassimp.dylib")
 
-    add_executable(render src/main.c)
+    add_executable(render src/apps/render.c)
     target_link_libraries(render cetra "${EXTERNAL_INSTALL_LOCATION}/lib/libglfw3.a" ${CGLM_LIBRARY} libglew_static "${EXTERNAL_INSTALL_LOCATION}/lib/libassimp.dylib")
 elseif(UNIX)
     target_link_libraries(cetra "${EXTERNAL_INSTALL_LOCATION}/lib/libglfw3.a" ${CGLM_LIBRARY} libglew_static "${EXTERNAL_INSTALL_LOCATION}/lib/libassimp.so")
 
-    add_executable(render src/main.c)
+    add_executable(render src/apps/render.c)
     target_link_libraries(render cetra "${EXTERNAL_INSTALL_LOCATION}/lib/libglfw3.a" ${CGLM_LIBRARY} libglew_static "${EXTERNAL_INSTALL_LOCATION}/lib/libassimp.so")
 elseif(WIN32)
     target_link_libraries(cetra "${EXTERNAL_INSTALL_LOCATION}/lib/libglfw3.a" ${CGLM_LIBRARY} libglew_static "${EXTERNAL_INSTALL_LOCATION}/lib/libassimp.dll")
 
-    add_executable(render src/main.c)
+    add_executable(render src/apps/render.c)
     target_link_libraries(render cetra "${EXTERNAL_INSTALL_LOCATION}/lib/libglfw3.a" ${CGLM_LIBRARY} libglew_static "${EXTERNAL_INSTALL_LOCATION}/lib/libassimp.dll")
 endif()
 
@@ -154,6 +154,6 @@ add_custom_command(
     TARGET render POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/models ${CMAKE_BINARY_DIR}/models
     COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/textures ${CMAKE_BINARY_DIR}/textures
-    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/shaders ${CMAKE_BINARY_DIR}/shaders
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/src/shaders ${CMAKE_BINARY_DIR}/shaders
     COMMENT "Copying models, textures, and shaders to build directory"
 )

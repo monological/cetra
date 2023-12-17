@@ -43,6 +43,7 @@ uniform vec3 camPos;
 uniform float time;
 
 void main() {
+
     vec4 worldPos = model * vec4(aPos, 1.0);
     WorldPos = worldPos.xyz;
     
@@ -63,6 +64,10 @@ void main() {
     vec3 B = normalize(mat3(model) * aBitangent);
     vec3 N = normalize(mat3(model) * aNormal);
     TBN = mat3(T, B, N);
+
+
+    
+
 
     gl_Position = clipPos;
 }
