@@ -6,6 +6,9 @@
 #include <assimp/scene.h>
 #include <assimp/light.h>
 #include <assimp/material.h>
+#include <assimp/cimport.h>
+#include <assimp/scene.h>
+#include <assimp/postprocess.h>
 #include <GL/glew.h>
 
 #define STB_IMAGE_IMPLEMENTATION
@@ -17,6 +20,7 @@
 #include "camera.h"
 #include "util.h"
 #include "texture.h"
+#include "material.h"
 
 
 Material* process_ai_material(struct aiMaterial* ai_mat, TexturePool* tex_pool) {

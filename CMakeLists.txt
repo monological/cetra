@@ -102,6 +102,7 @@ add_library(cetra STATIC
     src/shader.c
     src/program.c
     src/mesh.c
+    src/material.c
     src/texture.c
     src/camera.c
     src/light.c
