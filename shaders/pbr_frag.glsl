@@ -312,7 +312,7 @@ void main() {
 
         // Tone Mapping
         color = color / (color + vec3(1.0)); // Reinhard tone mapping
-        color = pow(color, vec3(1.0/2.2)); // Gamma Correction
+        color = pow(color, vec3(1.0/1.5)); // Gamma Correction
 
         FragColor = vec4(color, 1.0);
     }else if (renderMode == 1) { // Normals Visualization

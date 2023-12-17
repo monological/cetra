@@ -290,6 +290,10 @@ int main() {
     set_engine_cursor_position_callback(engine, cursor_position_callback);
     set_engine_key_callback(engine, key_callback);
 
+    GLint maxGeometryOutputVertices;
+    glGetIntegerv(GL_MAX_GEOMETRY_OUTPUT_VERTICES, &maxGeometryOutputVertices);
+    printf("Max geometry output vertices: %i\n", maxGeometryOutputVertices);
+
     /*
      * Set up shaders.
      *

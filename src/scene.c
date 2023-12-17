@@ -622,7 +622,7 @@ void render_nodes(Scene* scene, SceneNode* node, Camera *camera,
                 glUniform1f(program->light_outerCutOff_loc[i], closest_light->outerCutOff);
             }
             if (program->light_type_loc[i] != -1) {
-                glUniform1f(program->light_type_loc[i], closest_light->type);
+                glUniform1i(program->light_type_loc[i], closest_light->type);
             }
 
             if (program->light_size_loc[i] != -1) {
@@ -810,7 +810,7 @@ void render_nodes(Scene* scene, SceneNode* node, Camera *camera,
                 glUniform1f(program->light_outerCutOff_loc[i], closest_light->outerCutOff);
             }
             if (program->light_type_loc[i] != -1) {
-                glUniform1f(program->light_type_loc[i], closest_light->type);
+                glUniform1i(program->light_type_loc[i], closest_light->type);
             }
 
             if (program->light_size_loc[i] != -1) {
