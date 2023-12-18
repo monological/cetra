@@ -125,9 +125,7 @@ void print_scene(const Scene* scene);
 
 void upload_buffers_to_gpu_for_nodes(SceneNode* node);
 void transform_node(SceneNode* node, Transform* transform, mat4* result_matrix);
-void render_nodes(Scene *scene, SceneNode* node, Camera *camera, 
-        mat4 model, mat4 view, mat4 projection, 
-        float time_value, RenderMode render_mode);
+
 
 #endif // _SCENE_H_
 

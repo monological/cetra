@@ -16,6 +16,7 @@
 #include "../util.h"
 #include "../engine.h"
 #include "../import.h"
+#include "../render.h"
 
 #define NK_INCLUDE_FIXED_TYPES
 #define NK_INCLUDE_STANDARD_IO
@@ -258,9 +259,13 @@ void render_scene_callback(Engine* engine, Scene* current_scene){
 
     apply_transform_to_nodes(root_node, engine->model_matrix);
 
-    render_nodes(current_scene, root_node, camera, 
+    render_scene(
+        current_scene, 
+        current_scene->root_node,
+        camera, 
         root_node->local_transform, 
-        engine->view_matrix, engine->projection_matrix, 
+        engine->view_matrix, 
+        engine->projection_matrix, 
         time_value, 
         engine->current_render_mode
     );

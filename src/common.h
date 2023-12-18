@@ -1,6 +1,8 @@
 #ifndef COMMON_H
 #define COMMON_H
 
+#include <cglm/cglm.h>
+
 #define GL_ATTR_POSITION 0
 #define GL_ATTR_NORMAL   1
 #define GL_ATTR_TEXCOORD 2
@@ -32,6 +34,10 @@ typedef struct {
     vec3 rotation;
     vec3 scale;
 } Transform;
+
+// Axis vertices: 6 vertices, 2 for each line (origin and end)
+extern float axes_vertices[];
+extern const size_t axes_vertices_size;
 
 #endif // COMMON_H
 

@@ -96,11 +96,13 @@ include_directories(${EXTERNAL_INSTALL_LOCATION}/include)
 
 # Add the target for the engine library
 add_library(cetra STATIC 
+    src/common.c
     src/engine.c
     src/util.c
     src/scene.c
     src/shader.c
     src/program.c
+    src/render.c
     src/mesh.c
     src/material.c
     src/texture.c
