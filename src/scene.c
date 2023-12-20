@@ -126,6 +126,11 @@ void free_scene(Scene* scene) {
     return;
 }
 
+void set_scene_root_node(Scene* scene, SceneNode* root_node) {
+    if (!scene) return;
+    scene->root_node = root_node;
+}
+
 /*
  * Cameras
  */
@@ -340,6 +345,25 @@ void add_child_node(SceneNode* node, SceneNode* child) {
     node->children[node->children_count] = child;
     child->parent = node;
     node->children_count++;
+}
+
+
+void add_mesh_to_node(SceneNode* node, Mesh* mesh) {
+    if (!node || !mesh) return;
+
+    // Reallocate the meshes array to accommodate the new mesh
+    size_t new_count = node->mesh_count + 1;
+    Mesh** new_meshes = realloc(node->meshes, new_count * sizeof(Mesh*));
+    if (!new_meshes) {
+        fprintf(stderr, "Failed to reallocate memory for new mesh\n");
+        // Handle error, such as freeing the mesh if it's dynamically allocated
+        return;
+    }
+
+    // Add the new mesh to the array and update the mesh count
+    node->meshes = new_meshes;
+    node->meshes[node->mesh_count] = mesh;
+    node->mesh_count = new_count;
 }
 
 void set_node_name(SceneNode* node, const char* name) {

@@ -2,6 +2,7 @@
 #define _UTIL_H_
 
 #include <stdbool.h>
+#include <cglm/cglm.h>
 
 /*
  * OpenGL

@@ -69,6 +69,7 @@ typedef struct Engine {
     struct nk_glfw nk_glfw;
     struct nk_color bg;
 
+    bool show_gui;
     bool show_wireframe;
     bool show_axes;
     bool show_light_outlines;
@@ -105,6 +106,7 @@ Scene* get_current_scene(const Engine* engine);
 void add_program_to_engine(Engine* engine, ShaderProgram* program);
 
 // GUI
+void set_engine_show_gui(Engine* engine, bool show_gui);
 int setup_engine_gui(Engine* engine);
 void render_nuklear_gui(Engine* engine);
 

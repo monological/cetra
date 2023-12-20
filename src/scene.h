@@ -55,6 +55,9 @@ void free_node(SceneNode* node);
 // build graph
 void add_child_node(SceneNode* node, SceneNode* child);
 
+// meshes
+void add_mesh_to_node(SceneNode* node, Mesh* mesh);
+
 // setters
 void set_node_name(SceneNode* node, const char* name);
 void set_node_light(SceneNode* node, Light* light);
@@ -101,6 +104,9 @@ typedef struct Scene {
 // malloc
 Scene* create_scene();
 void free_scene(Scene* scene);
+
+// root
+void set_scene_root_node(Scene* scene, SceneNode* root_node);
 
 // camera
 void set_scene_cameras(Scene* scene, Camera** cameras, size_t camera_count);

@@ -77,6 +77,7 @@ Engine* create_engine(const char* window_title, int width, int height) {
     glm_mat4_identity(engine->view_matrix);
     glm_mat4_identity(engine->projection_matrix);
 
+    engine->show_gui = false;
     engine->show_wireframe = false;
     engine->show_axes = false;
     engine->show_light_outlines = false;
@@ -387,6 +388,12 @@ void add_program_to_engine(Engine* engine, ShaderProgram* program) {
  * GUI
  *
  */
+
+void set_engine_show_gui(Engine* engine, bool show_gui){
+    if (!engine) return;
+    engine->show_gui = show_gui;
+}
+
 int setup_engine_gui(Engine* engine) {
     if (!engine || !engine->window) return -1;
 
@@ -414,6 +421,8 @@ int setup_engine_gui(Engine* engine) {
 
 void render_nuklear_gui(Engine* engine) {
     if (!engine || !engine->nk_ctx) return;
+
+    if(engine->show_gui == false) return;
 
     Camera *camera = engine->camera;
 

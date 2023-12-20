@@ -20,6 +20,8 @@ Mesh* create_mesh() {
         return NULL;
     }
 
+    mesh->draw_mode = GL_TRIANGLES;
+
     mesh->vertices = NULL;
     mesh->normals = NULL;
     mesh->texCoords = NULL;
@@ -47,6 +49,39 @@ Mesh* create_mesh() {
     glBindVertexArray(0);
 
     return mesh;
+}
+
+void free_mesh(Mesh* mesh) {
+    if (!mesh) return;
+
+    // Free OpenGL buffers
+    glDeleteBuffers(1, &mesh->VBO);
+    glDeleteBuffers(1, &mesh->NBO);
+    glDeleteBuffers(1, &mesh->TBO);
+    glDeleteBuffers(1, &mesh->EBO);
+    glDeleteVertexArrays(1, &mesh->VAO);
+    glDeleteBuffers(1, &mesh->TangentVBO);
+    glDeleteBuffers(1, &mesh->BitangentVBO);
+
+    // Free the allocated memory
+    if (mesh->vertices) free(mesh->vertices);
+    if (mesh->normals) free(mesh->normals);
+    if (mesh->tangents) free(mesh->tangents);
+    if (mesh->bitangents) free(mesh->bitangents);
+    if (mesh->texCoords) free(mesh->texCoords);
+    if (mesh->indices) free(mesh->indices);
+
+    // same material can be shared by multiple meshes
+    //if (mesh->material) {
+    //    free_material(mesh->material);
+    //}
+
+    free(mesh);
+}
+
+void set_mesh_draw_mode(Mesh* mesh, MeshDrawMode draw_mode) {
+    if (!mesh) return;
+    mesh->draw_mode = draw_mode;
 }
 
 void upload_mesh_buffers_to_gpu(Mesh* mesh) {
@@ -104,33 +139,6 @@ void upload_mesh_buffers_to_gpu(Mesh* mesh) {
 
     // Unbind VAO
     glBindVertexArray(0);
-}
-
-void free_mesh(Mesh* mesh) {
-    if (!mesh) return;
-
-    // Free OpenGL buffers
-    glDeleteBuffers(1, &mesh->VBO);
-    glDeleteBuffers(1, &mesh->NBO);
-    glDeleteBuffers(1, &mesh->TBO);
-    glDeleteBuffers(1, &mesh->EBO);
-    glDeleteVertexArrays(1, &mesh->VAO);
-    glDeleteBuffers(1, &mesh->TangentVBO);
-    glDeleteBuffers(1, &mesh->BitangentVBO);
-
-    // Free the allocated memory
-    if (mesh->vertices) free(mesh->vertices);
-    if (mesh->normals) free(mesh->normals);
-    if (mesh->tangents) free(mesh->tangents);
-    if (mesh->bitangents) free(mesh->bitangents);
-    if (mesh->texCoords) free(mesh->texCoords);
-    if (mesh->indices) free(mesh->indices);
-
-    if (mesh->material) {
-        free_material(mesh->material);
-    }
-
-    free(mesh);
 }
 
 

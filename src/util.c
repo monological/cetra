@@ -4,8 +4,10 @@
 #include <sys/stat.h>
 #include <stdbool.h>
 #include <unistd.h>
+#include <math.h>
 
 #include <GLFW/glfw3.h>
+#include <cglm/cglm.h>
 
 #include "util.h"
 #include "ext/cwalk.h"
