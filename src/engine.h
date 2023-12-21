@@ -80,15 +80,13 @@ typedef void (*RenderSceneFunc)(Engine*, Scene*);
 Engine* create_engine(const char* window_title, int width, int height);
 void free_engine(Engine* engine);
 
+int init_engine(Engine* engine);
+
 // GLFW callbacks
 void set_engine_error_callback(Engine* engine, GLFWerrorfun error_callback);
 void set_engine_mouse_button_callback(Engine* engine, GLFWmousebuttonfun mouse_button_callback);
 void set_engine_cursor_position_callback(Engine* engine, GLFWcursorposfun cursor_position_callback);
 void set_engine_key_callback(Engine* engine, GLFWkeyfun key_callback);
-
-// Setup glfw env
-int setup_engine_glfw(Engine* engine);
-void setup_engine_msaa(Engine *engine);
 
 // Camera
 void set_engine_camera(Engine* engine, Camera* camera);
@@ -107,7 +105,6 @@ void add_program_to_engine(Engine* engine, ShaderProgram* program);
 
 // GUI
 void set_engine_show_gui(Engine* engine, bool show_gui);
-int setup_engine_gui(Engine* engine);
 void render_nuklear_gui(Engine* engine);
 
 // Render

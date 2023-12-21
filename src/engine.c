@@ -26,7 +26,18 @@
 #include "ext/nuklear.h"
 #include "ext/nuklear_glfw_gl3.h"
 
-// Function to create and initialize the engine
+
+/*
+ * Private functions
+ */
+static int _setup_engine_glfw(Engine* engine);
+static int _setup_engine_msaa(Engine *engine);
+static int _setup_engine_gui(Engine* engine);
+
+
+/*
+ * Engine
+ */
 Engine* create_engine(const char* window_title, int width, int height) {
     Engine* engine = malloc(sizeof(Engine));
     if (!engine) {
@@ -127,39 +138,10 @@ void free_engine(Engine* engine) {
     free(engine);
 }
 
-void set_engine_error_callback(Engine* engine, GLFWerrorfun error_callback) {
-    if (!engine) return;
-    engine->error_callback = error_callback;
-    if (engine->window) {
-        glfwSetErrorCallback(error_callback);
-    }
-}
-
-void set_engine_mouse_button_callback(Engine* engine, GLFWmousebuttonfun mouse_button_callback) {
-    if (!engine) return;
-    engine->mouse_button_callback = mouse_button_callback;
-    if (engine->window) {
-        glfwSetMouseButtonCallback(engine->window, mouse_button_callback);
-    }
-}
-
-void set_engine_cursor_position_callback(Engine* engine, GLFWcursorposfun cursor_position_callback) {
-    if (!engine) return;
-    engine->cursor_position_callback = cursor_position_callback;
-    if (engine->window) {
-        glfwSetCursorPosCallback(engine->window, cursor_position_callback);
-    }
-}
-
-void set_engine_key_callback(Engine* engine, GLFWkeyfun key_callback) {
-    if (!engine) return;
-    engine->key_callback = key_callback;
-    if (engine->window) {
-        glfwSetKeyCallback(engine->window, key_callback);
-    }
-}
-
-int setup_engine_glfw(Engine* engine) {
+/*
+ * Setup GLFW
+ */
+static int _setup_engine_glfw(Engine* engine) {
     if(!engine){
         return -1;
     }
@@ -216,17 +198,15 @@ int setup_engine_glfw(Engine* engine) {
     glViewport(0, 0, engine->framebuffer_width, engine->framebuffer_height);
     check_gl_error("view port");
 
-    
-
-    return 0; // Success
+    return 0;
 }
 
 /*
  * MSAA anti-aliasing
  *
  */
-void setup_engine_msaa(Engine *engine) {
-    if (!engine || !engine->window) return;
+static int _setup_engine_msaa(Engine *engine) {
+    if (!engine || !engine->window) return -1;
     
     // Set up MSAA anti-aliasing
     int samples = 4; // Number of samples for MSAA, adjust as needed
@@ -254,16 +234,108 @@ void setup_engine_msaa(Engine *engine) {
         engine->framebuffer = 0;
         engine->multisample_texture = 0;
         engine->depth_renderbuffer = 0;
-        return;
+        return -1;
     }
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0); // Bind back to the default framebuffer
+
+    return 0;
+}
+
+/*
+ * Nuklear GUI
+ *
+ */
+static int _setup_engine_gui(Engine* engine) {
+    if (!engine || !engine->window) return -1;
+
+    engine->nk_ctx = nk_glfw3_init(&engine->nk_glfw, engine->window, NK_GLFW3_INSTALL_CALLBACKS);
+
+    if (!engine->nk_ctx) {
+        printf("Failed to initialize Nuklear context\n");
+        return -1; // or handle the error appropriately
+    }
+
+    struct nk_font_atlas *atlas;
+    nk_glfw3_font_stash_begin(&engine->nk_glfw, &atlas);
+    nk_glfw3_font_stash_end(&engine->nk_glfw);
+
+    nk_style_load_all_cursors(engine->nk_ctx, atlas->cursors);
+
+    // Initialize default background color
+    engine->bg = nk_rgb(28, 48, 62);
+
+    // save engine to window so we can use it in callbacks
+    glfwSetWindowUserPointer(engine->window, engine);
+
+    return 0;
+}
+
+/*
+ * Initialize the Engine
+ *
+ */
+int init_engine(Engine* engine){
+    printf("┏┓┏┓┏┳┓┳┓┏┓\n");
+    printf("┃ ┣  ┃ ┣┫┣┫\n");
+    printf("┗┛┗┛ ┻ ┛┗┛┗\n");
+
+    printf("\nInitializing Cetra Graphics Engine...\n");
+
+    if(_setup_engine_glfw(engine) != 0){
+        fprintf(stderr, "Failed to initialize engine GLFW\n");
+        return -1;
+    }
+    if(_setup_engine_msaa(engine) != 0){
+        fprintf(stderr, "Failed to initialize engine MSAA\n");
+        return -1;
+    }
+    if(_setup_engine_gui(engine) != 0){
+        fprintf(stderr, "Failed to initialize engine GUI\n");
+        return -1;
+    }
+
+    return 0;
+}
+
+/*
+ * Callbacks
+ */
+void set_engine_error_callback(Engine* engine, GLFWerrorfun error_callback) {
+    if (!engine) return;
+    engine->error_callback = error_callback;
+    if (engine->window) {
+        glfwSetErrorCallback(error_callback);
+    }
+}
+
+void set_engine_mouse_button_callback(Engine* engine, GLFWmousebuttonfun mouse_button_callback) {
+    if (!engine) return;
+    engine->mouse_button_callback = mouse_button_callback;
+    if (engine->window) {
+        glfwSetMouseButtonCallback(engine->window, mouse_button_callback);
+    }
+}
+
+void set_engine_cursor_position_callback(Engine* engine, GLFWcursorposfun cursor_position_callback) {
+    if (!engine) return;
+    engine->cursor_position_callback = cursor_position_callback;
+    if (engine->window) {
+        glfwSetCursorPosCallback(engine->window, cursor_position_callback);
+    }
+}
+
+void set_engine_key_callback(Engine* engine, GLFWkeyfun key_callback) {
+    if (!engine) return;
+    engine->key_callback = key_callback;
+    if (engine->window) {
+        glfwSetKeyCallback(engine->window, key_callback);
+    }
 }
 
 /*
  * Camera
  */
-
 void set_engine_camera(Engine* engine, Camera* camera){
     if (!engine || !camera) return;
 
@@ -300,7 +372,6 @@ void update_engine_camera_perspective(Engine* engine){
  * Scene
  *
  */
-
 void add_scene_to_engine(Engine* engine, Scene* scene) {
     if (!engine || !scene) return;
 
@@ -320,7 +391,6 @@ void add_scene_to_engine(Engine* engine, Scene* scene) {
 
     return;
 }
-
 
 void set_active_scene_by_index(Engine* engine, size_t scene_index) {
     if (!engine) return;
@@ -383,40 +453,13 @@ void add_program_to_engine(Engine* engine, ShaderProgram* program) {
     engine->program_count = new_count;
 }
 
-
 /*
  * GUI
  *
  */
-
 void set_engine_show_gui(Engine* engine, bool show_gui){
     if (!engine) return;
     engine->show_gui = show_gui;
-}
-
-int setup_engine_gui(Engine* engine) {
-    if (!engine || !engine->window) return -1;
-
-    engine->nk_ctx = nk_glfw3_init(&engine->nk_glfw, engine->window, NK_GLFW3_INSTALL_CALLBACKS);
-
-    if (!engine->nk_ctx) {
-        printf("Failed to initialize Nuklear context\n");
-        return -1; // or handle the error appropriately
-    }
-
-    struct nk_font_atlas *atlas;
-    nk_glfw3_font_stash_begin(&engine->nk_glfw, &atlas);
-    nk_glfw3_font_stash_end(&engine->nk_glfw);
-
-    nk_style_load_all_cursors(engine->nk_ctx, atlas->cursors);
-
-    // Initialize default background color
-    engine->bg = nk_rgb(28, 48, 62);
-
-    // save engine to window so we can use it in callbacks
-    glfwSetWindowUserPointer(engine->window, engine);
-
-    return 0; // Success
 }
 
 void render_nuklear_gui(Engine* engine) {

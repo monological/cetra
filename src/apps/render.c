@@ -166,6 +166,7 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
                 glm_vec3_normalize(forward);
                 glm_vec3_scale(forward, cameraSpeed, forward);
                 glm_vec3_add(camera->position, forward, new_position);
+                set_camera_position(camera, new_position);
                 break;
 
             case GLFW_KEY_S:
@@ -175,6 +176,7 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
                 glm_vec3_normalize(forward);
                 glm_vec3_scale(forward, cameraSpeed, forward);
                 glm_vec3_sub(camera->position, forward, new_position);
+                set_camera_position(camera, new_position);
                 break;
 
             case GLFW_KEY_A:
@@ -184,7 +186,8 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
                 glm_vec3_crossn(camera->up_vector, forward, right);
                 glm_vec3_normalize(right);
                 glm_vec3_scale(right, cameraSpeed, right);
-                glm_vec3_sub(camera->position, right, new_position);
+                glm_vec3_add(camera->position, right, new_position);
+                set_camera_position(camera, new_position);
                 break;
 
             case GLFW_KEY_D:
@@ -194,11 +197,11 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
                 glm_vec3_crossn(camera->up_vector, forward, right);
                 glm_vec3_normalize(right);
                 glm_vec3_scale(right, cameraSpeed, right);
-                glm_vec3_add(camera->position, right, new_position);
+                glm_vec3_sub(camera->position, right, new_position);
+                set_camera_position(camera, new_position);
                 break;
         }
 
-        set_camera_position(camera, new_position);
     }
 
 }
@@ -277,27 +280,17 @@ void render_scene_callback(Engine* engine, Scene* current_scene){
  */
 int main() {
     
-    printf("┏┓┏┓┏┳┓┳┓┏┓\n");
-    printf("┃ ┣  ┃ ┣┫┣┫\n");
-    printf("┗┛┗┛ ┻ ┛┗┛┗\n");
-
-    printf("\nInitializing Cetra Graphics Engine...\n");
-    
     Engine *engine = create_engine("Cetra Engine", WIDTH, HEIGHT);
 
-    setup_engine_glfw(engine);
-    setup_engine_msaa(engine);
-
-    setup_engine_gui(engine);
+    if(init_engine(engine) != 0){
+        fprintf(stderr, "Failed to initialize engine\n");
+        return -1;
+    }
 
     set_engine_error_callback(engine, error_callback);
     set_engine_mouse_button_callback(engine, mouse_button_callback);
     set_engine_cursor_position_callback(engine, cursor_position_callback);
     set_engine_key_callback(engine, key_callback);
-
-    GLint maxGeometryOutputVertices;
-    glGetIntegerv(GL_MAX_GEOMETRY_OUTPUT_VERTICES, &maxGeometryOutputVertices);
-    printf("Max geometry output vertices: %i\n", maxGeometryOutputVertices);
 
     /*
      * Set up shaders.
@@ -408,6 +401,7 @@ int main() {
 
     print_scene(scene);
 
+    set_engine_show_gui(engine, true);
     set_engine_show_wireframe(engine, false);
     set_engine_show_axes(engine, true);
     set_engine_show_outlines(engine, true);

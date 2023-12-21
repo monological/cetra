@@ -250,27 +250,17 @@ void render_scene_callback(Engine* engine, Scene* current_scene){
  */
 int main() {
     
-    printf("┏┓┏┓┏┳┓┳┓┏┓\n");
-    printf("┃ ┣  ┃ ┣┫┣┫\n");
-    printf("┗┛┗┛ ┻ ┛┗┛┗\n");
-
-    printf("\nInitializing Cetra Graphics Engine...\n");
-    
     Engine *engine = create_engine("Cetra Engine", WIDTH, HEIGHT);
 
-    setup_engine_glfw(engine);
-    setup_engine_msaa(engine);
-
-    setup_engine_gui(engine);
+    if(init_engine(engine) != 0){
+        fprintf(stderr, "Failed to initialize engine\n");
+        return -1;
+    }
 
     set_engine_error_callback(engine, error_callback);
     set_engine_mouse_button_callback(engine, mouse_button_callback);
     set_engine_cursor_position_callback(engine, cursor_position_callback);
     set_engine_key_callback(engine, key_callback);
-
-    GLint maxGeometryOutputVertices;
-    glGetIntegerv(GL_MAX_GEOMETRY_OUTPUT_VERTICES, &maxGeometryOutputVertices);
-    printf("Max geometry output vertices: %i\n", maxGeometryOutputVertices);
 
     /*
      * Set up shaders.
