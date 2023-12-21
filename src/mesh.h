@@ -46,11 +46,20 @@ typedef struct Mesh {
 
 } Mesh;
 
+/*
+ * Mesh
+ */
 Mesh* create_mesh();
 void free_mesh(Mesh* mesh);
 
+/*
+ * Mesh setters
+ */
 void set_mesh_draw_mode(Mesh* mesh, MeshDrawMode draw_mode);
 
+/*
+ * Mesh buffers
+ */
 void upload_mesh_buffers_to_gpu(Mesh* mesh);
 
 #endif // _MESH_H_

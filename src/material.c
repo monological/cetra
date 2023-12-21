@@ -7,6 +7,7 @@
 
 #include "common.h"
 #include "material.h"
+#include "program.h"
 
 Material* create_material() {
     Material* material = (Material*)malloc(sizeof(Material));
@@ -38,6 +39,8 @@ Material* create_material() {
     material->sheenTex = NULL;
     material->reflectanceTex = NULL;
 
+    material->shader_program = NULL;
+
     return material;
 }
 
@@ -45,7 +48,22 @@ void free_material(Material* material) {
     if (material) {
         // Texures are managed by pool. Do not free them here.
 
+        // shader program managed by engine. Do not free here.
+
         // Finally, free the material structure itself
         free(material);
     }
+}
+
+void set_material_shader_program(Material* material, ShaderProgram* shader_program) {
+    if (!material) {
+        fprintf(stderr, "Cannot set shader program for NULL material\n");
+        return;
+    }
+
+    if (!shader_program) {
+        fprintf(stderr, "Cannot set NULL shader program for material\n");
+        return;
+    }
+    material->shader_program = shader_program;
 }

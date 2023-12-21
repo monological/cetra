@@ -33,9 +33,7 @@ typedef struct SceneNode {
     Light* light;
 
     Camera* camera;
-    char* camera_name;
 
-    ShaderProgram* shader_program;
 
     bool show_axes;
     GLuint axes_vao;

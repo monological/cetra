@@ -329,7 +329,6 @@ SceneNode* create_node() {
     node->mesh_count = 0;
     node->light = NULL;
     node->camera = NULL;
-    node->shader_program = NULL;
 
     // axes
     node->show_axes = true;
@@ -422,7 +421,13 @@ void set_program_for_nodes(SceneNode* node, ShaderProgram* program) {
         return;
     }
 
-    node->shader_program = program;
+    for(size_t i = 0; i < node->mesh_count; ++i){
+        Mesh* mesh = node->meshes[i];
+
+        if(mesh && mesh->material){
+            mesh->material->shader_program = program;
+        }
+    }
 
     for (size_t i = 0; i < node->children_count; ++i) {
         set_program_for_nodes(node->children[i], program);
