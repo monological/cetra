@@ -178,8 +178,8 @@ void _render_node(SceneNode* node, Camera *camera,
 
             }
             // Bind VAO and draw the mesh
-            glBindVertexArray(mesh->VAO);
-            glDrawElements(mesh->draw_mode, mesh->indexCount, GL_UNSIGNED_INT, 0);
+            glBindVertexArray(mesh->vao);
+            glDrawElements(mesh->draw_mode, mesh->index_count, GL_UNSIGNED_INT, 0);
         }
     }
 

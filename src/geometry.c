@@ -87,7 +87,7 @@ void free_cubic_bezier_curve(CubicBezierCurve* curve) {
 }
 
 void rasterize_point_to_mesh(Mesh* mesh, const Point* point) {
-    mesh->vertexCount = 1;
+    mesh->vertex_count = 1;
     mesh->vertices = (float*)realloc(mesh->vertices, 3 * sizeof(float)); // 3 for x, y, z
 
     if (!mesh->vertices) {
@@ -100,7 +100,7 @@ void rasterize_point_to_mesh(Mesh* mesh, const Point* point) {
     mesh->vertices[2] = point->position[2];
 
     // Points don't use indices
-    mesh->indexCount = 0;
+    mesh->index_count = 0;
     free(mesh->indices);
     mesh->indices = NULL;
 }
@@ -111,11 +111,11 @@ void rasterize_circle_to_mesh(Mesh* mesh, const Circle* circle, bool filled) {
     MeshDrawMode render_mode = filled ? TRIANGLES : LINE_STRIP;
     if (render_mode == TRIANGLES) {
         // Set up for filled circle
-        mesh->vertexCount = segments + 1; // One vertex per segment plus the center
-        mesh->indexCount = segments * 3; // Three indices per triangle
+        mesh->vertex_count = segments + 1; // One vertex per segment plus the center
+        mesh->index_count = segments * 3; // Three indices per triangle
 
-        mesh->vertices = (float*)realloc(mesh->vertices, mesh->vertexCount * 3 * sizeof(float));
-        mesh->indices = (unsigned int*)realloc(mesh->indices, mesh->indexCount * sizeof(unsigned int));
+        mesh->vertices = (float*)realloc(mesh->vertices, mesh->vertex_count * 3 * sizeof(float));
+        mesh->indices = (unsigned int*)realloc(mesh->indices, mesh->index_count * sizeof(unsigned int));
 
         if (!mesh->vertices || !mesh->indices) {
             fprintf(stderr, "Failed to allocate memory for filled circle mesh\n");
@@ -143,11 +143,11 @@ void rasterize_circle_to_mesh(Mesh* mesh, const Circle* circle, bool filled) {
         }
     } else if (render_mode == LINE_STRIP) {
         // Set up for circle outline
-        mesh->vertexCount = segments + 1; // One vertex per segment plus one to close the loop
-        mesh->indexCount = segments + 1;  // One index per vertex
+        mesh->vertex_count = segments + 1; // One vertex per segment plus one to close the loop
+        mesh->index_count = segments + 1;  // One index per vertex
 
-        mesh->vertices = (float*)realloc(mesh->vertices, mesh->vertexCount * 3 * sizeof(float));
-        mesh->indices = (unsigned int*)realloc(mesh->indices, mesh->indexCount * sizeof(unsigned int));
+        mesh->vertices = (float*)realloc(mesh->vertices, mesh->vertex_count * 3 * sizeof(float));
+        mesh->indices = (unsigned int*)realloc(mesh->indices, mesh->index_count * sizeof(unsigned int));
 
         if (!mesh->vertices || !mesh->indices) {
             fprintf(stderr, "Failed to allocate memory for circle outline mesh\n");
@@ -185,9 +185,9 @@ void rasterize_rectangle_to_mesh(Mesh* mesh, const Rectangle* rectangle, bool fi
         const int resolution = RECTANGLE_RESOLUTION; // Resolution of the curves
         const float theta_step = (float)M_PI / 2 / (resolution - 1); // Quarter-circle for the corner
         const int total_vertices = filled ? (resolution * 4 + 1) : (resolution * 4); // +1 for center vertex if filled
-        mesh->vertexCount = total_vertices;
+        mesh->vertex_count = total_vertices;
 
-        mesh->vertices = (float*)realloc(mesh->vertices, mesh->vertexCount * 3 * sizeof(float));
+        mesh->vertices = (float*)realloc(mesh->vertices, mesh->vertex_count * 3 * sizeof(float));
 
         if (!mesh->vertices) {
             fprintf(stderr, "Failed to allocate memory for rounded rectangle mesh\n");
@@ -234,8 +234,8 @@ void rasterize_rectangle_to_mesh(Mesh* mesh, const Rectangle* rectangle, bool fi
             vertex_index++;
 
             // Set indices for filled rectangle (triangles)
-            mesh->indexCount = resolution * 4 * 3; // 3 indices per triangle
-            mesh->indices = (unsigned int*)realloc(mesh->indices, mesh->indexCount * sizeof(unsigned int));
+            mesh->index_count = resolution * 4 * 3; // 3 indices per triangle
+            mesh->indices = (unsigned int*)realloc(mesh->indices, mesh->index_count * sizeof(unsigned int));
 
             if (!mesh->indices) {
                 fprintf(stderr, "Failed to allocate memory for indices\n");
@@ -253,15 +253,15 @@ void rasterize_rectangle_to_mesh(Mesh* mesh, const Rectangle* rectangle, bool fi
             mesh->draw_mode = TRIANGLES;
         } else {
             // Set indices for non-filled rectangle (line strip)
-            mesh->indexCount = resolution * 4 + 1; // +1 to close the loop
-            mesh->indices = (unsigned int*)realloc(mesh->indices, mesh->indexCount * sizeof(unsigned int));
+            mesh->index_count = resolution * 4 + 1; // +1 to close the loop
+            mesh->indices = (unsigned int*)realloc(mesh->indices, mesh->index_count * sizeof(unsigned int));
 
             if (!mesh->indices) {
                 fprintf(stderr, "Failed to allocate memory for indices\n");
                 return;
             }
 
-            for (size_t i = 0; i < mesh->indexCount; ++i) {
+            for (size_t i = 0; i < mesh->index_count; ++i) {
                 mesh->indices[i] = i % (resolution * 4);
             }
 
@@ -290,11 +290,11 @@ void rasterize_rectangle_to_mesh(Mesh* mesh, const Rectangle* rectangle, bool fi
 
         if (filled) {
             // Handling filled rectangle with sharp corners
-            mesh->vertexCount = 4;
-            mesh->indexCount = 6; // Two triangles to form a rectangle
+            mesh->vertex_count = 4;
+            mesh->index_count = 6; // Two triangles to form a rectangle
 
-            mesh->vertices = (float*)realloc(mesh->vertices, mesh->vertexCount * 3 * sizeof(float));
-            mesh->indices = (unsigned int*)realloc(mesh->indices, mesh->indexCount * sizeof(unsigned int));
+            mesh->vertices = (float*)realloc(mesh->vertices, mesh->vertex_count * 3 * sizeof(float));
+            mesh->indices = (unsigned int*)realloc(mesh->indices, mesh->index_count * sizeof(unsigned int));
 
             if (!mesh->vertices || !mesh->indices) {
                 fprintf(stderr, "Failed to allocate memory for filled rectangle mesh\n");
@@ -312,11 +312,11 @@ void rasterize_rectangle_to_mesh(Mesh* mesh, const Rectangle* rectangle, bool fi
 
             mesh->draw_mode = TRIANGLES;
         } else {
-            mesh->vertexCount = 4;
-            mesh->indexCount = 5; // Line loop (4 corners + close loop)
+            mesh->vertex_count = 4;
+            mesh->index_count = 5; // Line loop (4 corners + close loop)
 
-            mesh->vertices = (float*)realloc(mesh->vertices, mesh->vertexCount * 3 * sizeof(float));
-            mesh->indices = (unsigned int*)realloc(mesh->indices, mesh->indexCount * sizeof(unsigned int));
+            mesh->vertices = (float*)realloc(mesh->vertices, mesh->vertex_count * 3 * sizeof(float));
+            mesh->indices = (unsigned int*)realloc(mesh->indices, mesh->index_count * sizeof(unsigned int));
 
             if (!mesh->vertices || !mesh->indices) {
                 fprintf(stderr, "Failed to allocate memory for rectangle outline mesh\n");
@@ -345,11 +345,11 @@ void rasterize_bezier_curves_to_mesh(Mesh* mesh, CubicBezierCurve* curves, size_
     }
 
     const int resolution = 20; // Number of segments per curve
-    mesh->vertexCount = resolution * num_curves;
-    mesh->indexCount = (resolution - 1) * 2 * num_curves;
+    mesh->vertex_count = resolution * num_curves;
+    mesh->index_count = (resolution - 1) * 2 * num_curves;
 
-    mesh->vertices = (float*)realloc(mesh->vertices, mesh->vertexCount * 3 * sizeof(float));
-    mesh->indices = (unsigned int*)realloc(mesh->indices, mesh->indexCount * sizeof(unsigned int));
+    mesh->vertices = (float*)realloc(mesh->vertices, mesh->vertex_count * 3 * sizeof(float));
+    mesh->indices = (unsigned int*)realloc(mesh->indices, mesh->index_count * sizeof(unsigned int));
 
     if (!mesh->vertices || !mesh->indices) {
         fprintf(stderr, "Failed to allocate memory for mesh\n");

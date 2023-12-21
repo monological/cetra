@@ -107,6 +107,15 @@ void free_scene(Scene* scene) {
         scene->cameras = NULL;
     }
 
+    if(scene->materials){
+        for (size_t i = 0; i < scene->material_count; ++i) {
+            if (scene->materials[i]) {
+                free_material(scene->materials[i]);
+            }
+        }
+        free(scene->materials);
+    }
+
     // Free the root node and its subtree
     if (scene->root_node) {
         free_node(scene->root_node);
@@ -248,6 +257,34 @@ Light** get_closest_lights(Scene* scene, SceneNode* target_node,
     return closest_lights;
 }
 
+void add_material_to_scene(Scene* scene, Material* material) {
+    if (!scene || !material) {
+        fprintf(stderr, "Invalid input to add_material_to_scene\n");
+        return;
+    }
+
+    // check if material already added to scene and return if so
+    for(size_t i = 0; i < scene->material_count; ++i){
+        if(scene->materials[i] == material){
+            return;
+        }
+    }
+
+    // Resize the materials array to accommodate the new material
+    size_t new_count = scene->material_count + 1;
+    Material** new_materials = realloc(scene->materials, new_count * sizeof(Material*));
+
+    if (!new_materials) {
+        fprintf(stderr, "Failed to allocate memory for new material\n");
+        return;
+    }
+
+    // Add the new material to the array and update the material count
+    scene->materials = new_materials;
+    scene->materials[scene->material_count] = material;
+    scene->material_count = new_count;
+}
+
 GLboolean setup_scene_axes(Scene* scene) {
     if (!setup_program_shader_from_source(&scene->axes_shader_program, 
             axes_vert_src, axes_frag_src, NULL)) {
@@ -346,7 +383,6 @@ void add_child_node(SceneNode* node, SceneNode* child) {
     child->parent = node;
     node->children_count++;
 }
-
 
 void add_mesh_to_node(SceneNode* node, Mesh* mesh) {
     if (!node || !mesh) return;

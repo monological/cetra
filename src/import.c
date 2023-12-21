@@ -150,16 +150,16 @@ Material* process_ai_material(struct aiMaterial* ai_mat, TexturePool* tex_pool) 
 
 
 void process_ai_mesh(Mesh* mesh, struct aiMesh* ai_mesh) {
-    mesh->vertexCount = ai_mesh->mNumVertices;
-    mesh->indexCount = ai_mesh->mNumFaces * 3; // Assuming the mesh is triangulated
+    mesh->vertex_count = ai_mesh->mNumVertices;
+    mesh->index_count = ai_mesh->mNumFaces * 3; // Assuming the mesh is triangulated
 
     // Allocate memory for vertices and normals
-    mesh->vertices = malloc(mesh->vertexCount * 3 * sizeof(float));
-    mesh->normals = malloc(mesh->vertexCount * 3 * sizeof(float));
+    mesh->vertices = malloc(mesh->vertex_count * 3 * sizeof(float));
+    mesh->normals = malloc(mesh->vertex_count * 3 * sizeof(float));
 
     if (ai_mesh->mTangents && ai_mesh->mBitangents) {
-        mesh->tangents = malloc(mesh->vertexCount * 3 * sizeof(float));
-        mesh->bitangents = malloc(mesh->vertexCount * 3 * sizeof(float));
+        mesh->tangents = malloc(mesh->vertex_count * 3 * sizeof(float));
+        mesh->bitangents = malloc(mesh->vertex_count * 3 * sizeof(float));
     } else {
         mesh->tangents = NULL;
         mesh->bitangents = NULL;
@@ -167,16 +167,16 @@ void process_ai_mesh(Mesh* mesh, struct aiMesh* ai_mesh) {
 
     // Check for texture coordinates
     if (ai_mesh->mTextureCoords[0]) {
-        mesh->texCoords = malloc(mesh->vertexCount * 2 * sizeof(float));
+        mesh->tex_coords = malloc(mesh->vertex_count * 2 * sizeof(float));
     } else {
-        mesh->texCoords = NULL;
+        mesh->tex_coords = NULL;
     }
 
     // Allocate memory for indices
-    mesh->indices = malloc(mesh->indexCount * sizeof(unsigned int));
+    mesh->indices = malloc(mesh->index_count * sizeof(unsigned int));
 
     // Process vertices and normals
-    for (unsigned int i = 0; i < mesh->vertexCount; i++) {
+    for (unsigned int i = 0; i < mesh->vertex_count; i++) {
         mesh->vertices[i * 3] = ai_mesh->mVertices[i].x;
         mesh->vertices[i * 3 + 1] = ai_mesh->mVertices[i].y;
         mesh->vertices[i * 3 + 2] = ai_mesh->mVertices[i].z;
@@ -199,9 +199,9 @@ void process_ai_mesh(Mesh* mesh, struct aiMesh* ai_mesh) {
             mesh->bitangents[i * 3 + 2] = ai_mesh->mBitangents[i].z;
         }
 
-        if (mesh->texCoords) {
-            mesh->texCoords[i * 2] = ai_mesh->mTextureCoords[0][i].x;
-            mesh->texCoords[i * 2 + 1] = ai_mesh->mTextureCoords[0][i].y;
+        if (mesh->tex_coords) {
+            mesh->tex_coords[i * 2] = ai_mesh->mTextureCoords[0][i].x;
+            mesh->tex_coords[i * 2 + 1] = ai_mesh->mTextureCoords[0][i].y;
         }
     }
 
@@ -314,10 +314,8 @@ void copy_aiMatrix_to_mat4(const struct aiMatrix4x4 *from, mat4 to) {
     to[0][3] = from->d1; to[1][3] = from->d2; to[2][3] = from->d3; to[3][3] = from->d4;
 }
 
-SceneNode* process_ai_node(struct aiNode* ai_node, const struct aiScene* ai_scene, TexturePool* tex_pool) {
-    assert(ai_node != NULL);
-    assert(ai_scene != NULL);
-    assert(tex_pool != NULL);
+SceneNode* process_ai_node(Scene* scene, struct aiNode* ai_node, const struct aiScene* ai_scene, TexturePool* tex_pool) {
+    if(!scene || !ai_node || !ai_scene || !tex_pool) return NULL;
 
     SceneNode* node = create_node();
     if (!node) {
@@ -335,6 +333,9 @@ SceneNode* process_ai_node(struct aiNode* ai_node, const struct aiScene* ai_scen
         if (ai_scene->mMeshes[meshIndex]->mMaterialIndex >= 0) {
             unsigned int matIndex = ai_scene->mMeshes[meshIndex]->mMaterialIndex;
             mesh->material = process_ai_material(ai_scene->mMaterials[matIndex], tex_pool);
+
+            // scene will manage the material
+            add_material_to_scene(scene, mesh->material);
         }
         node->meshes[i] = mesh;
     }
@@ -343,7 +344,7 @@ SceneNode* process_ai_node(struct aiNode* ai_node, const struct aiScene* ai_scen
     node->children_count = ai_node->mNumChildren;
     node->children = malloc(sizeof(SceneNode*) * node->children_count);
     for (unsigned int i = 0; i < node->children_count; i++) {
-        node->children[i] = process_ai_node(ai_node->mChildren[i], ai_scene, tex_pool);
+        node->children[i] = process_ai_node(scene, ai_node->mChildren[i], ai_scene, tex_pool);
         node->children[i]->parent = node; // Set parent
     }
 
@@ -382,7 +383,7 @@ Scene* create_scene_from_fbx_path(const char* path, const char* texture_director
     process_ai_cameras(ai_scene, &scene->cameras, &scene->camera_count);
 
     // Process the root node
-    scene->root_node = process_ai_node(ai_scene->mRootNode, ai_scene, tex_pool);
+    scene->root_node = process_ai_node(scene, ai_scene->mRootNode, ai_scene, tex_pool);
 
     associate_cameras_and_lights_with_nodes(scene->root_node, scene);
 

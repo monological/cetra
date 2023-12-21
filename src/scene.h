@@ -75,7 +75,6 @@ void set_program_for_nodes(SceneNode* node, ShaderProgram* program);
 // move
 void apply_transform_to_nodes(SceneNode* node, mat4 parentTransform);
 
-
 /*
  * Scene
  */
@@ -93,6 +92,9 @@ typedef struct Scene {
 
     Camera** cameras;
     size_t camera_count;
+
+    Material** materials;
+    size_t material_count;
 
     TexturePool *tex_pool;
 
@@ -119,6 +121,9 @@ Light* find_light_by_name(Scene* scene, const char* name);
 Light** get_closest_lights(Scene* scene, SceneNode* target_node, 
         size_t max_lights, size_t* returned_light_count);
 
+// material
+void add_material_to_scene(Scene* scene, Material* material);
+
 // viz
 GLboolean setup_scene_axes(Scene* scene);
 GLboolean setup_scene_outlines(Scene* scene);
@@ -128,7 +133,6 @@ void print_scene_node(const SceneNode* node, int depth);
 void print_scene(const Scene* scene);
 
 // render
-
 void upload_buffers_to_gpu_for_nodes(SceneNode* node);
 void transform_node(SceneNode* node, Transform* transform, mat4* result_matrix);
 

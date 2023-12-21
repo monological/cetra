@@ -57,6 +57,9 @@ typedef struct Engine {
 
     ShaderProgram** programs;       // Global shader programs used across scenes
     size_t program_count;           // Count of global programs
+
+    Material** materials;           // Global materials used across meshes
+    size_t material_count;          // Count of global materials
     
     RenderMode current_render_mode; // default is PBR
 

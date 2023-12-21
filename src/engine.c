@@ -375,6 +375,13 @@ void update_engine_camera_perspective(Engine* engine){
 void add_scene_to_engine(Engine* engine, Scene* scene) {
     if (!engine || !scene) return;
 
+    // check if scene already added to engine and return if so
+    for(size_t i = 0; i < engine->scene_count; ++i){
+        if(engine->scenes[i] == scene){
+            return;
+        }
+    }
+
     // Reallocate the scenes array to accommodate the new scene
     size_t new_count = engine->scene_count + 1;
     Scene** new_scenes = realloc(engine->scenes, new_count * sizeof(Scene*));
@@ -436,6 +443,13 @@ void add_program_to_engine(Engine* engine, ShaderProgram* program) {
     if (!engine || !program) {
         fprintf(stderr, "Invalid input to add_program_to_engine\n");
         return;
+    }
+
+    // check if program already added to engine and return if so
+    for(size_t i = 0; i < engine->program_count; ++i){
+        if(engine->programs[i] == program){
+            return;
+        }
     }
 
     // Resize the programs array to accommodate the new program
@@ -630,7 +644,6 @@ void set_engine_show_outlines(Engine* engine, bool show_outlines){
             set_show_outlines_for_nodes(root_node, show_outlines);
         }
     }
-
 }
 
 void run_engine_render_loop(Engine* engine, RenderSceneFunc render_func) {
