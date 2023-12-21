@@ -118,24 +118,24 @@ add_library(cetra STATIC
 add_dependencies(cetra glfw cglm libglew_static assimp FindLibraries)
 
 add_executable(render src/apps/render.c)
-add_executable(mindbeam src/apps/mindbeam.c)
+add_executable(shapes src/apps/shapes.c)
 
 # Link the engine with external libraries
 if(APPLE)
     target_link_libraries(cetra "${EXTERNAL_INSTALL_LOCATION}/lib/libglfw3.a" ${CGLM_LIBRARY} libglew_static "${EXTERNAL_INSTALL_LOCATION}/lib/libassimp.dylib")
 
     target_link_libraries(render cetra "${EXTERNAL_INSTALL_LOCATION}/lib/libglfw3.a" ${CGLM_LIBRARY} libglew_static "${EXTERNAL_INSTALL_LOCATION}/lib/libassimp.dylib")
-    target_link_libraries(mindbeam cetra "${EXTERNAL_INSTALL_LOCATION}/lib/libglfw3.a" ${CGLM_LIBRARY} libglew_static "${EXTERNAL_INSTALL_LOCATION}/lib/libassimp.dylib")
+    target_link_libraries(shapes cetra "${EXTERNAL_INSTALL_LOCATION}/lib/libglfw3.a" ${CGLM_LIBRARY} libglew_static "${EXTERNAL_INSTALL_LOCATION}/lib/libassimp.dylib")
 elseif(UNIX)
     target_link_libraries(cetra "${EXTERNAL_INSTALL_LOCATION}/lib/libglfw3.a" ${CGLM_LIBRARY} libglew_static "${EXTERNAL_INSTALL_LOCATION}/lib/libassimp.so")
 
     target_link_libraries(render cetra "${EXTERNAL_INSTALL_LOCATION}/lib/libglfw3.a" ${CGLM_LIBRARY} libglew_static "${EXTERNAL_INSTALL_LOCATION}/lib/libassimp.so")
-    target_link_libraries(mindbeam cetra "${EXTERNAL_INSTALL_LOCATION}/lib/libglfw3.a" ${CGLM_LIBRARY} libglew_static "${EXTERNAL_INSTALL_LOCATION}/lib/libassimp.so")
+    target_link_libraries(shapes cetra "${EXTERNAL_INSTALL_LOCATION}/lib/libglfw3.a" ${CGLM_LIBRARY} libglew_static "${EXTERNAL_INSTALL_LOCATION}/lib/libassimp.so")
 elseif(WIN32)
     target_link_libraries(cetra "${EXTERNAL_INSTALL_LOCATION}/lib/libglfw3.a" ${CGLM_LIBRARY} libglew_static "${EXTERNAL_INSTALL_LOCATION}/lib/libassimp.dll")
 
     target_link_libraries(render cetra "${EXTERNAL_INSTALL_LOCATION}/lib/libglfw3.a" ${CGLM_LIBRARY} libglew_static "${EXTERNAL_INSTALL_LOCATION}/lib/libassimp.dll")
-    target_link_libraries(mindbeam cetra "${EXTERNAL_INSTALL_LOCATION}/lib/libglfw3.a" ${CGLM_LIBRARY} libglew_static "${EXTERNAL_INSTALL_LOCATION}/lib/libassimp.dll")
+    target_link_libraries(shapes cetra "${EXTERNAL_INSTALL_LOCATION}/lib/libglfw3.a" ${CGLM_LIBRARY} libglew_static "${EXTERNAL_INSTALL_LOCATION}/lib/libassimp.dll")
 endif()
 
 # Platform-specific configurations for linking
@@ -146,18 +146,18 @@ if(APPLE)
     find_library(OPENGL_LIBRARY OpenGL)
     target_link_libraries(cetra ${COCOA_LIBRARY} ${IOKIT_LIBRARY} ${COREVIDEO_LIBRARY} ${OPENGL_LIBRARY} ${CURSES_LIBRARIES})
     target_link_libraries(render ${COCOA_LIBRARY} ${IOKIT_LIBRARY} ${COREVIDEO_LIBRARY} ${OPENGL_LIBRARY} ${CURSES_LIBRARIES})
-    target_link_libraries(mindbeam ${COCOA_LIBRARY} ${IOKIT_LIBRARY} ${COREVIDEO_LIBRARY} ${OPENGL_LIBRARY} ${CURSES_LIBRARIES})
+    target_link_libraries(shapes ${COCOA_LIBRARY} ${IOKIT_LIBRARY} ${COREVIDEO_LIBRARY} ${OPENGL_LIBRARY} ${CURSES_LIBRARIES})
 elseif(UNIX)
     find_package(X11 REQUIRED)
     find_package(OpenGL REQUIRED)
     target_link_libraries(cetra ${X11_LIBRARIES} ${OPENGL_LIBRARIES} dl m pthread ${CURSES_LIBRARIES})
     target_link_libraries(render ${X11_LIBRARIES} ${OPENGL_LIBRARIES} dl m pthread ${CURSES_LIBRARIES})
-    target_link_libraries(mindbeam ${X11_LIBRARIES} ${OPENGL_LIBRARIES} dl m pthread ${CURSES_LIBRARIES})
+    target_link_libraries(shapes ${X11_LIBRARIES} ${OPENGL_LIBRARIES} dl m pthread ${CURSES_LIBRARIES})
 elseif(WIN32)
     find_package(OpenGL REQUIRED)
     target_link_libraries(cetra OpenGL::GL)
     target_link_libraries(render OpenGL::GL)
-    target_link_libraries(mindbeam OpenGL::GL)
+    target_link_libraries(shapes OpenGL::GL)
 endif()
 
 add_custom_command(
