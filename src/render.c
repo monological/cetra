@@ -208,13 +208,13 @@ void _render_axes(SceneNode* node, mat4 view, mat4 projection){
     glUseProgram(0);
 }
 
-void _render_light_outlines(SceneNode* node, Camera *camera, 
+void _render_outlines(SceneNode* node, Camera *camera, 
         mat4 model, mat4 view, mat4 projection, 
         float time_value, RenderMode render_mode, Light** closest_lights, size_t returned_light_count){
-    if(!node || !node->light_outlines_shader_program){
+    if(!node || !node->outlines_shader_program){
         return;
     }
-    ShaderProgram* program = node->light_outlines_shader_program;
+    ShaderProgram* program = node->outlines_shader_program;
 
     glUseProgram(program->id);
 
@@ -274,7 +274,7 @@ void _render_light_outlines(SceneNode* node, Camera *camera,
     glUniformMatrix4fv(program->view_loc, 1, GL_FALSE, (const GLfloat*)view);
     glUniformMatrix4fv(program->proj_loc, 1, GL_FALSE, (const GLfloat*)projection);
 
-    glBindVertexArray(node->light_outlines_vao);
+    glBindVertexArray(node->outlines_vao);
     glDrawArrays(GL_POINTS, 0, 2);
 
     glBindVertexArray(0);
@@ -309,8 +309,8 @@ void render_scene(Scene* scene, SceneNode *node, Camera *camera,
         _render_axes(node, view, projection);
     }
 
-    if (node->show_light_outlines && node->light_outlines_shader_program) {
-        _render_light_outlines(node, camera, model, view, projection, 
+    if (node->show_outlines && node->outlines_shader_program) {
+        _render_outlines(node, camera, model, view, projection, 
                 time_value, render_mode, closest_lights, returned_light_count);
     }
 

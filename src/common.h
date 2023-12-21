@@ -16,9 +16,9 @@
 #define PBR_FRAG_SHADER_PATH "./shaders/pbr_frag.glsl"
 #define PBR_GEO_SHADER_PATH NULL
 
-#define OUTLINES_VERT_SHADER_PATH "./shaders/light_outlines_vert.glsl"
-#define OUTLINES_FRAG_SHADER_PATH "./shaders/light_outlines_frag.glsl"
-#define OUTLINES_GEO_SHADER_PATH "./shaders/light_outlines_geo.glsl"
+#define OUTLINES_VERT_SHADER_PATH "./shaders/outlines_vert.glsl"
+#define OUTLINES_FRAG_SHADER_PATH "./shaders/outlines_frag.glsl"
+#define OUTLINES_GEO_SHADER_PATH "./shaders/outlines_geo.glsl"
 
 typedef enum {
     RENDER_MODE_PBR,              // Regular PBR Rendering

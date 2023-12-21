@@ -80,7 +80,7 @@ Engine* create_engine(const char* window_title, int width, int height) {
     engine->show_gui = false;
     engine->show_wireframe = false;
     engine->show_axes = false;
-    engine->show_light_outlines = false;
+    engine->show_outlines = false;
 
     return engine;
 }
@@ -453,8 +453,8 @@ void render_nuklear_gui(Engine* engine) {
             set_engine_show_wireframe(engine, !engine->show_wireframe);
         }
 
-        if (nk_button_label(engine->nk_ctx, "Show Lights")) {
-            set_engine_show_light_outlines(engine, !engine->show_light_outlines);
+        if (nk_button_label(engine->nk_ctx, "Show Outlines")) {
+            set_engine_show_outlines(engine, !engine->show_outlines);
         }
 
         // cam modes
@@ -573,10 +573,10 @@ void set_engine_show_axes(Engine* engine, bool show_axes){
     }
 }
 
-void set_engine_show_light_outlines(Engine* engine, bool show_light_outlines){
+void set_engine_show_outlines(Engine* engine, bool show_outlines){
     if (!engine) return;
     
-    engine->show_light_outlines = show_light_outlines;
+    engine->show_outlines = show_outlines;
 
     for (size_t i = 0; i < engine->scene_count; ++i) {
         if (engine->scenes[i]) {
@@ -584,7 +584,7 @@ void set_engine_show_light_outlines(Engine* engine, bool show_light_outlines){
             if(!scene) continue;
             SceneNode* root_node = scene->root_node;
             if(!root_node) continue;
-            set_show_light_outlines_for_nodes(root_node, show_light_outlines);
+            set_show_outlines_for_nodes(root_node, show_outlines);
         }
     }
 

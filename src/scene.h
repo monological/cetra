@@ -42,10 +42,10 @@ typedef struct SceneNode {
     GLuint axes_vbo;
     ShaderProgram* axes_shader_program;
 
-    bool show_light_outlines;
-    GLuint light_outlines_vao;
-    GLuint light_outlines_vbo;
-    ShaderProgram* light_outlines_shader_program;
+    bool show_outlines;
+    GLuint outlines_vao;
+    GLuint outlines_vbo;
+    ShaderProgram* outlines_shader_program;
 } SceneNode;
 
 // malloc
@@ -67,7 +67,7 @@ void set_node_camera(SceneNode* node, Camera* camera);
 void set_show_axes_for_nodes(SceneNode* node, bool show_axes);
 
 // outlines
-void set_show_light_outlines_for_nodes(SceneNode* node, bool show_light_outlines);
+void set_show_outlines_for_nodes(SceneNode* node, bool show_outlines);
 
 // shaders
 void set_program_for_nodes(SceneNode* node, ShaderProgram* program);
@@ -98,7 +98,7 @@ typedef struct Scene {
 
     // used by all nodes
     ShaderProgram* axes_shader_program;
-    ShaderProgram* light_outlines_shader_program;
+    ShaderProgram* outlines_shader_program;
 } Scene;
 
 // malloc
@@ -121,7 +121,7 @@ Light** get_closest_lights(Scene* scene, SceneNode* target_node,
 
 // viz
 GLboolean setup_scene_axes(Scene* scene);
-GLboolean setup_scene_light_outlines(Scene* scene);
+GLboolean setup_scene_outlines(Scene* scene);
 
 // print
 void print_scene_node(const SceneNode* node, int depth);
