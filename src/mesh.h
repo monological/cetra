@@ -23,6 +23,9 @@ typedef enum {
 typedef struct Mesh {
     MeshDrawMode draw_mode;
 
+    // if we are drawing lines
+    float line_width;
+
     float* vertices;       // Array of vertex positions
     float* normals;        // Array of normals
     float* tangents;       // Array of tangents

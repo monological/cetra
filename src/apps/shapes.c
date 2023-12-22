@@ -268,12 +268,39 @@ int main() {
      */
     ShaderProgram* pbr_shader_program = NULL;
 
-    if (!setup_program_shader_from_paths(&pbr_shader_program, 
-                PBR_VERT_SHADER_PATH, PBR_FRAG_SHADER_PATH, PBR_GEO_SHADER_PATH)) {
-        fprintf(stderr, "Failed to initialize PBR shader program\n");
+    if(!create_pbr_program(&pbr_shader_program)){
+        fprintf(stderr, "Failed to create PBR shader program\n");
         return -1;
     }
+    
     add_program_to_engine(engine, pbr_shader_program);
+
+    ShaderProgram* line_shader_program = NULL;
+
+    if(!create_line_program(&line_shader_program)){
+        fprintf(stderr, "Failed to create line shader program\n");
+        return -1;
+    }
+
+    add_program_to_engine(engine, line_shader_program);
+
+    /*
+     * Set up materials.
+     */
+    Material* pbr_material = create_material();
+    set_material_shader_program(pbr_material, pbr_shader_program);
+
+    pbr_material->albedo[0] = 1.0f; // Red
+    pbr_material->albedo[1] = 0.0f; // Green
+    pbr_material->albedo[2] = 0.0f; // Blue
+
+    Material* line_material = create_material();
+    set_material_shader_program(line_material, line_shader_program);
+
+    line_material->albedo[0] = 0.0f; // Red
+    line_material->albedo[1] = 1.0f; // Green
+    line_material->albedo[2] = 0.0f; // Blue
+
 
     /*
      * Set up camera.
@@ -320,84 +347,89 @@ int main() {
 
     set_scene_root_node(scene, root_node);
 
-    Material* material = create_material();
-
-    material->albedo[0] = 1.0f; // Red
-    material->albedo[1] = 0.0f; // Green
-    material->albedo[2] = 0.0f; // Blue
-
     Mesh* mesh1 = create_mesh();
-    mesh1->material = material;
+    mesh1->material = line_material;
 
     Rectangle rectangle1 = {
         .position = {-20.0f, -20.0f, 0.0f},
         .size = {20.0f, 20.0f, 0.0f},
-        .corner_radius = 0.0f
+        .corner_radius = 0.0f,
+        .line_width = 0.2f,
+        .filled = false
     };
-    rasterize_rectangle_to_mesh(mesh1, &rectangle1, false);
+    rasterize_rectangle_to_mesh(mesh1, &rectangle1);
 
     add_mesh_to_node(root_node, mesh1);
 
     Mesh* mesh2 = create_mesh();
-    mesh2->material = material;
+    mesh2->material = pbr_material;
 
     Rectangle rectangle2 = {
         .position = {20.0f, -20.0f, 0.0f},
         .size = {20.0f, 20.0f, 0.0f},
-        .corner_radius = 0.0f
+        .corner_radius = 0.0f,
+        .line_width = 2.0f,
+        .filled = true
     };
-    rasterize_rectangle_to_mesh(mesh2, &rectangle2, true);
+    rasterize_rectangle_to_mesh(mesh2, &rectangle2);
 
     add_mesh_to_node(root_node, mesh2);
 
     Mesh* mesh3 = create_mesh();
-    mesh3->material = material;
+    mesh3->material = line_material;
 
     Rectangle rectangle3 = {
         .position = {-20.0f, 20.0f, 0.0f},
         .size = {20.0f, 20.0f, 0.0f},
-        .corner_radius = 2.0f
+        .corner_radius = 2.0f,
+        .line_width = 2.0f,
+        .filled = false
     };
-    rasterize_rectangle_to_mesh(mesh3, &rectangle3, false);
+    rasterize_rectangle_to_mesh(mesh3, &rectangle3);
 
     add_mesh_to_node(root_node, mesh3);
 
     Mesh* mesh4 = create_mesh();
-    mesh4->material = material;
+    mesh4->material = pbr_material;
 
     Rectangle rectangle4 = {
         .position = {20.0f, 20.0f, 0.0f},
         .size = {20.0f, 20.0f, 0.0f},
-        .corner_radius = 2.0f
+        .corner_radius = 2.0f,
+        .line_width = 2.0f,
+        .filled = true
     };
-    rasterize_rectangle_to_mesh(mesh4, &rectangle4, true);
+    rasterize_rectangle_to_mesh(mesh4, &rectangle4);
 
     add_mesh_to_node(root_node, mesh4);
 
     Mesh* mesh5 = create_mesh();
-    mesh5->material = material;
+    mesh5->material = line_material;
 
     Circle circle1 = {
         .position = {-20.0f, -60.0f, 0.0f},
         .radius = 10.0f,
+        .line_width = 10.0f,
+        .filled = false
     };
     
-    rasterize_circle_to_mesh(mesh5, &circle1, false);
+    rasterize_circle_to_mesh(mesh5, &circle1);
 
     add_mesh_to_node(root_node, mesh5);
 
     Mesh* mesh6 = create_mesh();
-    mesh6->material = material;
+    mesh6->material = pbr_material;
 
     Circle circle2 = {
         .position = {20.0f, -60.0f, 0.0f},
         .radius = 10.0f,
+        .line_width = 2.0f,
+        .filled = true
     };
     
-    rasterize_circle_to_mesh(mesh6, &circle2, true);
+    rasterize_circle_to_mesh(mesh6, &circle2);
 
     add_mesh_to_node(root_node, mesh6);
-    
 
     // Top-Left Quadrant (Start on left, End on right, Y-Start < Y-End)
     vec3 start7 = {-35.0f, 75.0f, 0.0f}; // Starting from left, higher up
@@ -416,34 +448,34 @@ int main() {
     vec3 end10 = {25.0f, 55.0f, 0.0f};   // Ending towards left, slightly higher
 
     Mesh* mesh7 = create_mesh();
-    mesh7->material = material; // Assuming 'material' is defined elsewhere
+    mesh7->material = line_material;
 
-    CubicBezierCurve *bez7 = generate_s_shaped_bezier_curve(start7, end7, 5.0);
-    rasterize_bezier_curves_to_mesh(mesh7, bez7, 1);
+    CubicBezierCurve *bez7 = generate_s_shaped_bezier_curve(start7, end7, 5.0f, 2.0f);
+    rasterize_bezier_curve_to_mesh(mesh7, bez7);
     add_mesh_to_node(root_node, mesh7);
     free(bez7);
 
     Mesh* mesh8 = create_mesh();
-    mesh8->material = material;
+    mesh8->material = line_material;
 
-    CubicBezierCurve *bez8 = generate_s_shaped_bezier_curve(start8, end8, 5.0);
-    rasterize_bezier_curves_to_mesh(mesh8, bez8, 1);
+    CubicBezierCurve *bez8 = generate_s_shaped_bezier_curve(start8, end8, 5.0f, 2.0f);
+    rasterize_bezier_curve_to_mesh(mesh8, bez8);
     add_mesh_to_node(root_node, mesh8);
     free(bez8);
 
     Mesh* mesh9 = create_mesh();
-    mesh9->material = material;
+    mesh9->material = line_material;
 
-    CubicBezierCurve *bez9 = generate_s_shaped_bezier_curve(start9, end9, 5.0);
-    rasterize_bezier_curves_to_mesh(mesh9, bez9, 1);
+    CubicBezierCurve *bez9 = generate_s_shaped_bezier_curve(start9, end9, 5.0f, 2.0f);
+    rasterize_bezier_curve_to_mesh(mesh9, bez9);
     add_mesh_to_node(root_node, mesh9);
     free(bez9);
 
     Mesh* mesh10 = create_mesh();
-    mesh10->material = material;
+    mesh10->material = line_material;
 
-    CubicBezierCurve *bez10 = generate_s_shaped_bezier_curve(start10, end10, 5.0);
-    rasterize_bezier_curves_to_mesh(mesh10, bez10, 1);
+    CubicBezierCurve *bez10 = generate_s_shaped_bezier_curve(start10, end10, 5.0f, 2.0f);
+    rasterize_bezier_curve_to_mesh(mesh10, bez10);
     add_mesh_to_node(root_node, mesh10);
     free(bez10);
 
@@ -501,8 +533,6 @@ int main() {
     }
 
     upload_buffers_to_gpu_for_nodes(root_node);
-
-    set_program_for_nodes(root_node, pbr_shader_program);
 
     print_scene(scene);
 

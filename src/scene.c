@@ -24,33 +24,6 @@ static void _set_outlines_program_for_nodes(SceneNode* node, ShaderProgram* prog
 
 
 
-const char* axes_vert_src =
-    "#version 330 core\n"
-    "layout (location = 0) in vec3 aPos;\n"
-    "layout (location = 1) in vec3 aColor;\n"
-    "out vec3 vertexColor;\n"
-    "uniform mat4 model;\n"
-    "uniform mat4 view;\n"
-    "uniform mat4 projection;\n"
-    "void main()\n"
-    "{\n"
-    "    gl_Position = projection * view * model * vec4(aPos, 1.0);\n"
-    "    vertexColor = aColor;\n"
-    "}";
-
-const char* axes_frag_src =
-    "#version 330 core\n"
-    "in vec3 vertexColor;\n"
-    "out vec4 FragColor;\n"
-    "uniform mat4 view;\n"
-    "uniform mat4 model;\n"
-    "uniform mat4 projection;\n"
-    "void main()\n"
-    "{\n"
-    "    FragColor = vec4(vertexColor, 1.0);\n"
-    "}";
-
-
 Scene* create_scene() {
     Scene* scene = malloc(sizeof(Scene));
     if (!scene) {
@@ -286,9 +259,7 @@ void add_material_to_scene(Scene* scene, Material* material) {
 }
 
 GLboolean setup_scene_axes(Scene* scene) {
-    if (!setup_program_shader_from_source(&scene->axes_shader_program, 
-            axes_vert_src, axes_frag_src, NULL)) {
-        fprintf(stderr, "Failed to set up scene axes program");
+    if(create_axes_program(&scene->axes_shader_program) != GL_TRUE){
         return GL_FALSE;
     }
     _set_axes_program_for_nodes(scene->root_node, scene->axes_shader_program);
@@ -296,9 +267,7 @@ GLboolean setup_scene_axes(Scene* scene) {
 }
 
 GLboolean setup_scene_outlines(Scene* scene) {
-    if (!setup_program_shader_from_paths(&scene->outlines_shader_program,
-            OUTLINES_VERT_SHADER_PATH, OUTLINES_FRAG_SHADER_PATH, OUTLINES_GEO_SHADER_PATH)) {
-        fprintf(stderr, "Failed to set up scene light program");
+    if(create_outlines_program(&scene->outlines_shader_program) != GL_TRUE){
         return GL_FALSE;
     }
     _set_outlines_program_for_nodes(scene->root_node, scene->outlines_shader_program);

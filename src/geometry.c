@@ -41,8 +41,8 @@ void cubic_bezier_curve_point(const CubicBezierCurve* curve, float t, vec3 resul
     }
 }
 
-
-CubicBezierCurve* generate_s_shaped_bezier_curve(vec3 start, vec3 end, float s_intensity) {
+CubicBezierCurve* generate_s_shaped_bezier_curve(vec3 start, vec3 end, float intensity, 
+        float line_width) {
     CubicBezierCurve* curve = malloc(sizeof(CubicBezierCurve));
     if (!curve) {
         fprintf(stderr, "Failed to allocate memory for CubicBezierCurve\n");
@@ -52,8 +52,8 @@ CubicBezierCurve* generate_s_shaped_bezier_curve(vec3 start, vec3 end, float s_i
     float direction_x = (end[0] - start[0] >= 0) ? 1.0f : -1.0f; // 1 if end is to the right of start, -1 otherwise
     float direction_y = (end[1] - start[1] >= 0) ? 1.0f : -1.0f; // 1 if end is above start, -1 otherwise
 
-    float horizontal_offset = fabs(end[0] - start[0]) / 3.0f * s_intensity;
-    float vertical_offset = fabs(end[1] - start[1]) / 3.0f * s_intensity;
+    float horizontal_offset = fabs(end[0] - start[0]) / 3.0f * intensity;
+    float vertical_offset = fabs(end[1] - start[1]) / 3.0f * intensity;
 
 
     glm_vec3_copy(start, curve->control_points[0]);
@@ -76,6 +76,8 @@ CubicBezierCurve* generate_s_shaped_bezier_curve(vec3 start, vec3 end, float s_i
         curve->control_points[1][1] += vertical_offset;
         curve->control_points[2][1] -= vertical_offset;
     }
+
+    curve->line_width = line_width;
 
     return curve;
 }
@@ -105,11 +107,11 @@ void rasterize_point_to_mesh(Mesh* mesh, const Point* point) {
     mesh->indices = NULL;
 }
 
-void rasterize_circle_to_mesh(Mesh* mesh, const Circle* circle, bool filled) {
+void rasterize_circle_to_mesh(Mesh* mesh, const Circle* circle) {
     const int segments = NUM_CIRCLE_SEGMENTS; // Number of segments for approximation
 
-    MeshDrawMode render_mode = filled ? TRIANGLES : LINE_STRIP;
-    if (render_mode == TRIANGLES) {
+    MeshDrawMode draw_mode = circle->filled ? TRIANGLES : LINE_STRIP;
+    if (draw_mode == TRIANGLES) {
         // Set up for filled circle
         mesh->vertex_count = segments + 1; // One vertex per segment plus the center
         mesh->index_count = segments * 3; // Three indices per triangle
@@ -141,7 +143,7 @@ void rasterize_circle_to_mesh(Mesh* mesh, const Circle* circle, bool filled) {
             mesh->indices[i * 3 + 1] = i + 1;
             mesh->indices[i * 3 + 2] = (i + 1) % segments + 1;
         }
-    } else if (render_mode == LINE_STRIP) {
+    } else if (draw_mode == LINE_STRIP) {
         // Set up for circle outline
         mesh->vertex_count = segments + 1; // One vertex per segment plus one to close the loop
         mesh->index_count = segments + 1;  // One index per vertex
@@ -166,11 +168,14 @@ void rasterize_circle_to_mesh(Mesh* mesh, const Circle* circle, bool filled) {
         mesh->indices[segments] = 0; // Close the loop
     }
 
-    mesh->draw_mode = render_mode; // Set the mesh draw mode
+    if(draw_mode == LINE_STRIP) {
+        mesh->line_width = circle->line_width;
+    }
+    mesh->draw_mode = draw_mode;
 }
 
 
-void rasterize_rectangle_to_mesh(Mesh* mesh, const Rectangle* rectangle, bool filled) {
+void rasterize_rectangle_to_mesh(Mesh* mesh, const Rectangle* rectangle) {
     if (!mesh || !rectangle) {
         return;
     }
@@ -184,7 +189,7 @@ void rasterize_rectangle_to_mesh(Mesh* mesh, const Rectangle* rectangle, bool fi
 
         const int resolution = RECTANGLE_RESOLUTION; // Resolution of the curves
         const float theta_step = (float)M_PI / 2 / (resolution - 1); // Quarter-circle for the corner
-        const int total_vertices = filled ? (resolution * 4 + 1) : (resolution * 4); // +1 for center vertex if filled
+        const int total_vertices = rectangle->filled ? (resolution * 4 + 1) : (resolution * 4); // +1 for center vertex if filled
         mesh->vertex_count = total_vertices;
 
         mesh->vertices = (float*)realloc(mesh->vertices, mesh->vertex_count * 3 * sizeof(float));
@@ -222,7 +227,7 @@ void rasterize_rectangle_to_mesh(Mesh* mesh, const Rectangle* rectangle, bool fi
             }
         }
 
-        if (filled) {
+        if (rectangle->filled) {
             // Add the center point for filled rectangle at the actual center, not the corner
             vec3 rectangle_center = {
                 rectangle->position[0],
@@ -265,6 +270,7 @@ void rasterize_rectangle_to_mesh(Mesh* mesh, const Rectangle* rectangle, bool fi
                 mesh->indices[i] = i % (resolution * 4);
             }
 
+            mesh->line_width = rectangle->line_width;
             mesh->draw_mode = LINE_STRIP;
         }
     } else {
@@ -288,7 +294,7 @@ void rasterize_rectangle_to_mesh(Mesh* mesh, const Rectangle* rectangle, bool fi
         bottom_right[1] = rectangle->position[1] - half_height;
         bottom_right[2] = rectangle->position[2];
 
-        if (filled) {
+        if (rectangle->filled) {
             // Handling filled rectangle with sharp corners
             mesh->vertex_count = 4;
             mesh->index_count = 6; // Two triangles to form a rectangle
@@ -333,20 +339,21 @@ void rasterize_rectangle_to_mesh(Mesh* mesh, const Rectangle* rectangle, bool fi
             memcpy(mesh->indices, outline_indices, sizeof(outline_indices));
 
             mesh->draw_mode = LINE_LOOP;
+            mesh->line_width = rectangle->line_width;
         }
 
 
     }
 }
 
-void rasterize_bezier_curves_to_mesh(Mesh* mesh, CubicBezierCurve* curves, size_t num_curves) {
-    if (!mesh || !curves) {
+void rasterize_bezier_curve_to_mesh(Mesh* mesh, CubicBezierCurve* curve) {
+    if (!mesh || !curve) {
         return;
     }
 
     const int resolution = 20; // Number of segments per curve
-    mesh->vertex_count = resolution * num_curves;
-    mesh->index_count = (resolution - 1) * 2 * num_curves;
+    mesh->vertex_count = resolution;
+    mesh->index_count = (resolution - 1) * 2;
 
     mesh->vertices = (float*)realloc(mesh->vertices, mesh->vertex_count * 3 * sizeof(float));
     mesh->indices = (unsigned int*)realloc(mesh->indices, mesh->index_count * sizeof(unsigned int));
@@ -357,26 +364,24 @@ void rasterize_bezier_curves_to_mesh(Mesh* mesh, CubicBezierCurve* curves, size_
     }
 
     size_t vertex_index = 0, index_index = 0;
-    for (size_t curve_index = 0; curve_index < num_curves; ++curve_index) {
-        CubicBezierCurve *curve = &curves[curve_index];
-        for (int j = 0; j < resolution; ++j) {
-            float t = (float)j / (float)(resolution - 1);
-            vec3 point;
-            cubic_bezier_curve_point(curve, t, point);
+    for (int j = 0; j < resolution; ++j) {
+        float t = (float)j / (float)(resolution - 1);
+        vec3 point;
+        cubic_bezier_curve_point(curve, t, point);
 
-            mesh->vertices[vertex_index * 3] = point[0];
-            mesh->vertices[vertex_index * 3 + 1] = point[1];
-            mesh->vertices[vertex_index * 3 + 2] = point[2];
+        mesh->vertices[vertex_index * 3] = point[0];
+        mesh->vertices[vertex_index * 3 + 1] = point[1];
+        mesh->vertices[vertex_index * 3 + 2] = point[2];
 
-            if (j < resolution - 1) {
-                mesh->indices[index_index++] = vertex_index;
-                mesh->indices[index_index++] = vertex_index + 1;
-            }
-
-            vertex_index++;
+        if (j < resolution - 1) {
+            mesh->indices[index_index++] = vertex_index;
+            mesh->indices[index_index++] = vertex_index + 1;
         }
+
+        vertex_index++;
     }
 
+    mesh->line_width = curve->line_width;
     mesh->draw_mode = LINE_STRIP;
 }
 

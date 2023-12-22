@@ -67,21 +67,48 @@ typedef struct {
 
     size_t max_lights; // Maximum number of lights the shader program can handle
 
+    // only if drawing LINES, LINE_LOOP, LINE_STRIP
+    GLint line_width_loc;
 
 } ShaderProgram;
 
-// malloc
+/*
+ * Shader Program Functions
+ */
 ShaderProgram* create_program();
 void free_program(ShaderProgram* program);
 
+/*
+ * Shader Program Setup
+ */ 
 void attach_program_shader(ShaderProgram* program, Shader* shader);
 GLboolean link_program(ShaderProgram* program);
+
+/*
+ * Shader Program Uniforms
+ */
 void setup_program_uniforms(ShaderProgram* program);
+
+/*
+ * Setup Program Shaders
+ */
 GLboolean setup_program_shader_from_paths(ShaderProgram** program, const char* vert_path,
         const char* frag_path, const char* geo_path);
 GLboolean setup_program_shader_from_source(ShaderProgram** program, const char* vert_source,
         const char* frag_source, const char* geo_source);
+/*
+ * Preset Programs
+ */
+GLboolean create_pbr_program(ShaderProgram** program);
+GLboolean create_line_program(ShaderProgram** program);
+GLboolean create_outlines_program(ShaderProgram** program);
+GLboolean create_axes_program(ShaderProgram** program);
+
+/*
+ * Program Validation
+ */
 GLboolean validate_program(ShaderProgram* program);
+
 size_t calculate_max_lights();
 
 

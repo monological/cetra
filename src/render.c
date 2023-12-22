@@ -160,7 +160,6 @@ void _update_camera_uniforms(ShaderProgram * program, Camera *camera){
     glUniform1f(program->far_clip_loc, camera->far_clip);
 
 }
-    
 
 void _render_node(SceneNode* node, Camera *camera,
         mat4 model, mat4 view, mat4 projection,
@@ -191,7 +190,7 @@ void _render_node(SceneNode* node, Camera *camera,
 
                 glUniform1f(program->time_loc, time_value);
                 glUniform1i(program->render_mode_loc, render_mode);
-                
+                glUniform1f(program->line_width_loc, mesh->line_width);
 
                 _update_camera_uniforms(program, camera);
                 _update_program_material_uniforms(program, mat);

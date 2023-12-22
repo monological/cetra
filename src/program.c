@@ -3,6 +3,33 @@
 
 #include "program.h"
 #include "util.h"
+#include "common.h"
+
+const char* axes_vert_src =
+    "#version 330 core\n"
+    "layout (location = 0) in vec3 aPos;\n"
+    "layout (location = 1) in vec3 aColor;\n"
+    "out vec3 vertexColor;\n"
+    "uniform mat4 model;\n"
+    "uniform mat4 view;\n"
+    "uniform mat4 projection;\n"
+    "void main()\n"
+    "{\n"
+    "    gl_Position = projection * view * model * vec4(aPos, 1.0);\n"
+    "    vertexColor = aColor;\n"
+    "}";
+
+const char* axes_frag_src =
+    "#version 330 core\n"
+    "in vec3 vertexColor;\n"
+    "out vec4 FragColor;\n"
+    "uniform mat4 view;\n"
+    "uniform mat4 model;\n"
+    "uniform mat4 projection;\n"
+    "void main()\n"
+    "{\n"
+    "    FragColor = vec4(vertexColor, 1.0);\n"
+    "}";
 
 ShaderProgram* create_program() {
     ShaderProgram* program = malloc(sizeof(ShaderProgram));
@@ -57,6 +84,8 @@ ShaderProgram* create_program() {
     program->opacity_tex_exists_loc = -1;
     program->sheen_tex_exists_loc = -1;
     program->reflectance_tex_exists_loc = -1;
+
+    program->line_width_loc = -1;
 
     return program;
 }
@@ -117,9 +146,6 @@ GLboolean link_program(ShaderProgram* program) {
 
     return GL_TRUE;
 }
-
-#define USED_UNIFORM_COMPONENTS 77  // Number of components used by non-light uniforms
-#define COMPONENTS_PER_LIGHT 21      // Number of components per light
 
 /**
  * Calculates and returns the maximum number of lights supported by the shader program.
@@ -255,6 +281,8 @@ void setup_program_uniforms(ShaderProgram* program) {
 
     // Retrieve the location for the number of lights uniform
     program->num_lights_loc = glGetUniformLocation(program->id, "numLights");
+
+    program->line_width_loc = glGetUniformLocation(program->id, "lineWidth");
 
     return;
 }
@@ -397,6 +425,58 @@ GLboolean setup_program_shader_from_source(ShaderProgram** program, const char* 
     return success;
 }
 
+GLboolean create_pbr_program(ShaderProgram** program){
+    if(*program != NULL){
+        fprintf(stderr, "Failed to setup shader program. Program already created.\n");
+        return GL_FALSE;
+    }
+    if (!setup_program_shader_from_paths(program, 
+                PBR_VERT_SHADER_PATH, PBR_FRAG_SHADER_PATH, PBR_GEO_SHADER_PATH)) {
+        fprintf(stderr, "Failed to initialize PBR shader program\n");
+        return GL_FALSE;
+    }
+
+    return GL_TRUE;
+}
+
+GLboolean create_line_program(ShaderProgram** program){
+    if(*program != NULL){
+        fprintf(stderr, "Failed to setup shader program. Program already created.\n");
+        return GL_FALSE;
+    }
+    if (!setup_program_shader_from_paths(program, 
+                LINES_VERT_SHADER_PATH, LINES_FRAG_SHADER_PATH, LINES_GEO_SHADER_PATH)) {
+        fprintf(stderr, "Failed to initialize LINES shader program\n");
+        return GL_FALSE;
+    }
+
+    return GL_TRUE;
+}
+
+GLboolean create_outlines_program(ShaderProgram** program){
+    if(*program != NULL){
+        fprintf(stderr, "Failed to setup shader program. Program already created.\n");
+        return GL_FALSE;
+    }
+    if (!setup_program_shader_from_paths(program,
+            OUTLINES_VERT_SHADER_PATH, OUTLINES_FRAG_SHADER_PATH, OUTLINES_GEO_SHADER_PATH)) {
+        fprintf(stderr, "Failed to set up scene light program");
+        return GL_FALSE;
+    }
+    return GL_TRUE;
+}
+
+GLboolean create_axes_program(ShaderProgram** program){
+    if(*program != NULL){
+        fprintf(stderr, "Failed to setup shader program. Program already created.\n");
+        return GL_FALSE;
+    }
+    if (!setup_program_shader_from_source(program, axes_vert_src, axes_frag_src, NULL)) {
+        fprintf(stderr, "Failed to set up axes program");
+        return GL_FALSE;
+    }
+    return GL_TRUE;
+}
 
 GLboolean validate_program(ShaderProgram* program){
     GLboolean success = GL_TRUE;

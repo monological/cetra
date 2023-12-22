@@ -22,6 +22,8 @@ Mesh* create_mesh() {
 
     mesh->draw_mode = GL_TRIANGLES;
 
+    mesh->line_width = 1.0f;
+
     mesh->vertices = NULL;
     mesh->normals = NULL;
     mesh->tex_coords = NULL;
