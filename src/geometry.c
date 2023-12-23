@@ -11,7 +11,7 @@
 /*
  * Bezier curve functions
  */
-void cubic_bezier_curve_point(const CubicBezierCurve* curve, float t, vec3 result) {
+void cubic_bezier_curve_point(const Curve* curve, float t, vec3 result) {
     // t is the parameter of the curve, ranging from 0 to 1.
     // one_minus_t is the complementary parameter to t.
     float one_minus_t = 1.0f - t;
@@ -41,11 +41,11 @@ void cubic_bezier_curve_point(const CubicBezierCurve* curve, float t, vec3 resul
     }
 }
 
-CubicBezierCurve* generate_s_shaped_bezier_curve(vec3 start, vec3 end, float intensity, 
+Curve* generate_s_shaped_bezier_curve(vec3 start, vec3 end, float intensity, 
         float line_width) {
-    CubicBezierCurve* curve = malloc(sizeof(CubicBezierCurve));
+    Curve* curve = malloc(sizeof(Curve));
     if (!curve) {
-        fprintf(stderr, "Failed to allocate memory for CubicBezierCurve\n");
+        fprintf(stderr, "Failed to allocate memory for Curve\n");
         return NULL;
     }
 
@@ -82,13 +82,13 @@ CubicBezierCurve* generate_s_shaped_bezier_curve(vec3 start, vec3 end, float int
     return curve;
 }
 
-void free_cubic_bezier_curve(CubicBezierCurve* curve) {
+void free_curve(Curve* curve) {
     if (curve) {
         free(curve);
     }
 }
 
-void rasterize_point_to_mesh(Mesh* mesh, const Point* point) {
+void generate_point_to_mesh(Mesh* mesh, const Point* point) {
     mesh->vertex_count = 1;
     mesh->vertices = (float*)realloc(mesh->vertices, 3 * sizeof(float)); // 3 for x, y, z
 
@@ -107,7 +107,7 @@ void rasterize_point_to_mesh(Mesh* mesh, const Point* point) {
     mesh->indices = NULL;
 }
 
-void rasterize_circle_to_mesh(Mesh* mesh, const Circle* circle) {
+void generate_circle_to_mesh(Mesh* mesh, const Circle* circle) {
     const int segments = NUM_CIRCLE_SEGMENTS; // Number of segments for approximation
 
     MeshDrawMode draw_mode = circle->filled ? TRIANGLES : LINE_STRIP;
@@ -175,7 +175,7 @@ void rasterize_circle_to_mesh(Mesh* mesh, const Circle* circle) {
 }
 
 
-void rasterize_rectangle_to_mesh(Mesh* mesh, const Rectangle* rectangle) {
+void generate_rect_to_mesh(Mesh* mesh, const Rect* rectangle) {
     if (!mesh || !rectangle) {
         return;
     }
@@ -307,10 +307,10 @@ void rasterize_rectangle_to_mesh(Mesh* mesh, const Rectangle* rectangle) {
                 return;
             }
 
-            glm_vec3_copy(top_left, &mesh->vertices[0]); // Top left
-            glm_vec3_copy(top_right, &mesh->vertices[3]); // Top right
-            glm_vec3_copy(bottom_left, &mesh->vertices[6]); // Bottom left
-            glm_vec3_copy(bottom_right, &mesh->vertices[9]); // Bottom right
+            glm_vec3_copy(top_left, &mesh->vertices[0]);
+            glm_vec3_copy(top_right, &mesh->vertices[3]);
+            glm_vec3_copy(bottom_left, &mesh->vertices[6]);
+            glm_vec3_copy(bottom_right, &mesh->vertices[9]);
 
             // Indices - two triangles forming the rectangle
             unsigned int rect_indices[6] = {0, 2, 1, 1, 2, 3};
@@ -329,10 +329,10 @@ void rasterize_rectangle_to_mesh(Mesh* mesh, const Rectangle* rectangle) {
                 return;
             }
 
-            glm_vec3_copy(top_left, &mesh->vertices[0]); // Top left
-            glm_vec3_copy(top_right, &mesh->vertices[3]); // Top right
-            glm_vec3_copy(bottom_right, &mesh->vertices[6]); // Bottom right
-            glm_vec3_copy(bottom_left, &mesh->vertices[9]); // Bottom left
+            glm_vec3_copy(top_left, &mesh->vertices[0]);
+            glm_vec3_copy(top_right, &mesh->vertices[3]);
+            glm_vec3_copy(bottom_right, &mesh->vertices[6]);
+            glm_vec3_copy(bottom_left, &mesh->vertices[9]);
 
             // Indices for line loop
             unsigned int outline_indices[5] = {0, 1, 2, 3, 0};
@@ -342,11 +342,10 @@ void rasterize_rectangle_to_mesh(Mesh* mesh, const Rectangle* rectangle) {
             mesh->line_width = rectangle->line_width;
         }
 
-
     }
 }
 
-void rasterize_bezier_curve_to_mesh(Mesh* mesh, CubicBezierCurve* curve) {
+void generate_curve_to_mesh(Mesh* mesh, Curve* curve) {
     if (!mesh || !curve) {
         return;
     }
@@ -385,92 +384,4 @@ void rasterize_bezier_curve_to_mesh(Mesh* mesh, CubicBezierCurve* curve) {
     mesh->draw_mode = LINE_STRIP;
 }
 
-
-float noise(float x, float y) {
-    return sinf(x * 12.9898f) * cosf(y * 78.233f);
-}
-
-// Linear interpolation
-float lerp(float a, float b, float t) {
-    return a + t * (b - a);
-}
-
-
-float fbm_2d(float x, float y, void* params) {
-
-    fbmParams* fbm_params = (fbmParams*)params;
-
-    float total = 0.0f;
-    float frequency = 1.0f;
-    float amplitude = 1.0f;
-    float max_value = 0.0f;  // Used for normalizing result
-
-    for(int i = 0; i < fbm_params->octaves; i++) {
-        total += noise(x * frequency, y * frequency) * amplitude;
-
-        max_value += amplitude;
-        amplitude *= fbm_params->persistence;
-        frequency *= 2.0f;
-    }
-
-    return total / max_value;
-}
-
-void rasterize_contours_to_mesh(Mesh* mesh, SurfaceFunction surface, void* params, 
-        const Rect* bounds, int resolution,
-        int levels) {
-    if (!mesh || !surface || !bounds) {
-        fprintf(stderr, "Invalid parameters for rasterizing contours to mesh.\n");
-        return;
-    }
-
-    // Allocate vertices and indices
-    mesh->vertex_count = resolution * resolution;
-    mesh->index_count = (resolution - 1) * (resolution - 1) * 6; // 6 indices per quad (2 triangles)
-
-    mesh->vertices = (float*)realloc(mesh->vertices, mesh->vertex_count * 3 * sizeof(float));
-    mesh->indices = (unsigned int*)realloc(mesh->indices, mesh->index_count * sizeof(unsigned int));
-
-    if (!mesh->vertices || !mesh->indices) {
-        fprintf(stderr, "Failed to allocate memory for contour mesh\n");
-        return;
-    }
-
-    // Generate vertices
-    float x_step = (bounds->width) / (resolution - 1);
-    float y_step = (bounds->height) / (resolution - 1);
-
-    for (int y = 0; y < resolution; ++y) {
-        for (int x = 0; x < resolution; ++x) {
-            float surface_x = bounds->x + x * x_step;
-            float surface_y = bounds->y + y * y_step;
-            float height = surface(surface_x, surface_y, params);
-
-            int vertex_index = (y * resolution + x) * 3;
-            mesh->vertices[vertex_index] = surface_x;
-            mesh->vertices[vertex_index + 1] = surface_y;
-            mesh->vertices[vertex_index + 2] = height;
-        }
-    }
-
-    // Generate indices
-    size_t index = 0;
-    for (int y = 0; y < resolution - 1; ++y) {
-        for (int x = 0; x < resolution - 1; ++x) {
-            int base = y * resolution + x;
-            // First triangle
-            mesh->indices[index++] = base;
-            mesh->indices[index++] = base + 1;
-            mesh->indices[index++] = base + resolution + 1;
-
-            // Second triangle
-            mesh->indices[index++] = base;
-            mesh->indices[index++] = base + resolution + 1;
-            mesh->indices[index++] = base + resolution;
-        }
-    }
-
-    mesh->line_width = 0.3f;
-    mesh->draw_mode = LINES;
-}
 

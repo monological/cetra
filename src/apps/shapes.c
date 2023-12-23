@@ -350,56 +350,56 @@ int main() {
     Mesh* mesh1 = create_mesh();
     mesh1->material = line_material;
 
-    Rectangle rectangle1 = {
+    Rect rectangle1 = {
         .position = {-20.0f, -20.0f, 0.0f},
         .size = {20.0f, 20.0f, 0.0f},
         .corner_radius = 0.0f,
         .line_width = 0.2f,
         .filled = false
     };
-    rasterize_rectangle_to_mesh(mesh1, &rectangle1);
+    generate_rect_to_mesh(mesh1, &rectangle1);
 
     add_mesh_to_node(root_node, mesh1);
 
     Mesh* mesh2 = create_mesh();
     mesh2->material = pbr_material;
 
-    Rectangle rectangle2 = {
+    Rect rectangle2 = {
         .position = {20.0f, -20.0f, 0.0f},
         .size = {20.0f, 20.0f, 0.0f},
         .corner_radius = 0.0f,
         .line_width = 2.0f,
         .filled = true
     };
-    rasterize_rectangle_to_mesh(mesh2, &rectangle2);
+    generate_rect_to_mesh(mesh2, &rectangle2);
 
     add_mesh_to_node(root_node, mesh2);
 
     Mesh* mesh3 = create_mesh();
     mesh3->material = line_material;
 
-    Rectangle rectangle3 = {
+    Rect rectangle3 = {
         .position = {-20.0f, 20.0f, 0.0f},
         .size = {20.0f, 20.0f, 0.0f},
         .corner_radius = 2.0f,
         .line_width = 2.0f,
         .filled = false
     };
-    rasterize_rectangle_to_mesh(mesh3, &rectangle3);
+    generate_rect_to_mesh(mesh3, &rectangle3);
 
     add_mesh_to_node(root_node, mesh3);
 
     Mesh* mesh4 = create_mesh();
     mesh4->material = pbr_material;
 
-    Rectangle rectangle4 = {
+    Rect rectangle4 = {
         .position = {20.0f, 20.0f, 0.0f},
         .size = {20.0f, 20.0f, 0.0f},
         .corner_radius = 2.0f,
         .line_width = 2.0f,
         .filled = true
     };
-    rasterize_rectangle_to_mesh(mesh4, &rectangle4);
+    generate_rect_to_mesh(mesh4, &rectangle4);
 
     add_mesh_to_node(root_node, mesh4);
 
@@ -413,7 +413,7 @@ int main() {
         .filled = false
     };
     
-    rasterize_circle_to_mesh(mesh5, &circle1);
+    generate_circle_to_mesh(mesh5, &circle1);
 
     add_mesh_to_node(root_node, mesh5);
 
@@ -427,7 +427,7 @@ int main() {
         .filled = true
     };
     
-    rasterize_circle_to_mesh(mesh6, &circle2);
+    generate_circle_to_mesh(mesh6, &circle2);
 
     add_mesh_to_node(root_node, mesh6);
 
@@ -450,57 +450,34 @@ int main() {
     Mesh* mesh7 = create_mesh();
     mesh7->material = line_material;
 
-    CubicBezierCurve *bez7 = generate_s_shaped_bezier_curve(start7, end7, 5.0f, 2.0f);
-    rasterize_bezier_curve_to_mesh(mesh7, bez7);
+    Curve *bez7 = generate_s_shaped_bezier_curve(start7, end7, 5.0f, 2.0f);
+    generate_curve_to_mesh(mesh7, bez7);
     add_mesh_to_node(root_node, mesh7);
     free(bez7);
 
     Mesh* mesh8 = create_mesh();
     mesh8->material = line_material;
 
-    CubicBezierCurve *bez8 = generate_s_shaped_bezier_curve(start8, end8, 5.0f, 2.0f);
-    rasterize_bezier_curve_to_mesh(mesh8, bez8);
+    Curve *bez8 = generate_s_shaped_bezier_curve(start8, end8, 5.0f, 2.0f);
+    generate_curve_to_mesh(mesh8, bez8);
     add_mesh_to_node(root_node, mesh8);
     free(bez8);
 
     Mesh* mesh9 = create_mesh();
     mesh9->material = line_material;
 
-    CubicBezierCurve *bez9 = generate_s_shaped_bezier_curve(start9, end9, 5.0f, 2.0f);
-    rasterize_bezier_curve_to_mesh(mesh9, bez9);
+    Curve *bez9 = generate_s_shaped_bezier_curve(start9, end9, 5.0f, 2.0f);
+    generate_curve_to_mesh(mesh9, bez9);
     add_mesh_to_node(root_node, mesh9);
     free(bez9);
 
     Mesh* mesh10 = create_mesh();
     mesh10->material = line_material;
 
-    CubicBezierCurve *bez10 = generate_s_shaped_bezier_curve(start10, end10, 5.0f, 2.0f);
-    rasterize_bezier_curve_to_mesh(mesh10, bez10);
+    Curve *bez10 = generate_s_shaped_bezier_curve(start10, end10, 5.0f, 2.0f);
+    generate_curve_to_mesh(mesh10, bez10);
     add_mesh_to_node(root_node, mesh10);
     free(bez10);
-
-    // Assume create_mesh, add_mesh_to_node, and other necessary functions are defined
-    Mesh* mesh = create_mesh();
-    mesh->material = line_material; // Replace with your material for lines
-
-    fbmParams fbm_params;
-    fbm_params.octaves = 12;
-    fbm_params.persistence = 0.5f;
-
-    Rect bounds = {
-        .x = -25.0f,
-        .y = -25.0f,
-        .width = 50.0f,
-        .height = 50.0f
-    };
-
-    int resolution = 5; // Resolution of the grid for contour lines
-    int levels = 10; // Number of contour levels (not used in current implementation, but could be used for future modifications)
-
-    rasterize_contours_to_mesh(mesh, fbm_2d, &fbm_params, &bounds, resolution, levels);
-
-    add_mesh_to_node(root_node, mesh);
-
 
     if(!scene || !scene->root_node){
         fprintf(stderr, "Failed to import scene\n");
