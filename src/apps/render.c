@@ -29,7 +29,7 @@
 #include "../ext/nuklear.h"
 #include "../ext/nuklear_glfw_gl3.h"
 
-#define FBX_MODEL_PATH "./models/room.fbx"
+#define FBX_MODEL_PATH "./models/n64.fbx"
 #define FBX_TEXTURE_DIR "./textures/room.fbm"
 
 /*

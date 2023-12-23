@@ -386,4 +386,91 @@ void rasterize_bezier_curve_to_mesh(Mesh* mesh, CubicBezierCurve* curve) {
 }
 
 
+float noise(float x, float y) {
+    return sinf(x * 12.9898f) * cosf(y * 78.233f);
+}
+
+// Linear interpolation
+float lerp(float a, float b, float t) {
+    return a + t * (b - a);
+}
+
+
+float fbm_2d(float x, float y, void* params) {
+
+    fbmParams* fbm_params = (fbmParams*)params;
+
+    float total = 0.0f;
+    float frequency = 1.0f;
+    float amplitude = 1.0f;
+    float max_value = 0.0f;  // Used for normalizing result
+
+    for(int i = 0; i < fbm_params->octaves; i++) {
+        total += noise(x * frequency, y * frequency) * amplitude;
+
+        max_value += amplitude;
+        amplitude *= fbm_params->persistence;
+        frequency *= 2.0f;
+    }
+
+    return total / max_value;
+}
+
+void rasterize_contours_to_mesh(Mesh* mesh, SurfaceFunction surface, void* params, 
+        const Rect* bounds, int resolution,
+        int levels) {
+    if (!mesh || !surface || !bounds) {
+        fprintf(stderr, "Invalid parameters for rasterizing contours to mesh.\n");
+        return;
+    }
+
+    // Allocate vertices and indices
+    mesh->vertex_count = resolution * resolution;
+    mesh->index_count = (resolution - 1) * (resolution - 1) * 6; // 6 indices per quad (2 triangles)
+
+    mesh->vertices = (float*)realloc(mesh->vertices, mesh->vertex_count * 3 * sizeof(float));
+    mesh->indices = (unsigned int*)realloc(mesh->indices, mesh->index_count * sizeof(unsigned int));
+
+    if (!mesh->vertices || !mesh->indices) {
+        fprintf(stderr, "Failed to allocate memory for contour mesh\n");
+        return;
+    }
+
+    // Generate vertices
+    float x_step = (bounds->width) / (resolution - 1);
+    float y_step = (bounds->height) / (resolution - 1);
+
+    for (int y = 0; y < resolution; ++y) {
+        for (int x = 0; x < resolution; ++x) {
+            float surface_x = bounds->x + x * x_step;
+            float surface_y = bounds->y + y * y_step;
+            float height = surface(surface_x, surface_y, params);
+
+            int vertex_index = (y * resolution + x) * 3;
+            mesh->vertices[vertex_index] = surface_x;
+            mesh->vertices[vertex_index + 1] = surface_y;
+            mesh->vertices[vertex_index + 2] = height;
+        }
+    }
+
+    // Generate indices
+    size_t index = 0;
+    for (int y = 0; y < resolution - 1; ++y) {
+        for (int x = 0; x < resolution - 1; ++x) {
+            int base = y * resolution + x;
+            // First triangle
+            mesh->indices[index++] = base;
+            mesh->indices[index++] = base + 1;
+            mesh->indices[index++] = base + resolution + 1;
+
+            // Second triangle
+            mesh->indices[index++] = base;
+            mesh->indices[index++] = base + resolution + 1;
+            mesh->indices[index++] = base + resolution;
+        }
+    }
+
+    mesh->line_width = 0.3f;
+    mesh->draw_mode = LINES;
+}
 

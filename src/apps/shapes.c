@@ -479,6 +479,28 @@ int main() {
     add_mesh_to_node(root_node, mesh10);
     free(bez10);
 
+    // Assume create_mesh, add_mesh_to_node, and other necessary functions are defined
+    Mesh* mesh = create_mesh();
+    mesh->material = line_material; // Replace with your material for lines
+
+    fbmParams fbm_params;
+    fbm_params.octaves = 12;
+    fbm_params.persistence = 0.5f;
+
+    Rect bounds = {
+        .x = -25.0f,
+        .y = -25.0f,
+        .width = 50.0f,
+        .height = 50.0f
+    };
+
+    int resolution = 5; // Resolution of the grid for contour lines
+    int levels = 10; // Number of contour levels (not used in current implementation, but could be used for future modifications)
+
+    rasterize_contours_to_mesh(mesh, fbm_2d, &fbm_params, &bounds, resolution, levels);
+
+    add_mesh_to_node(root_node, mesh);
+
 
     if(!scene || !scene->root_node){
         fprintf(stderr, "Failed to import scene\n");
