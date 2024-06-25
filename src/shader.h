@@ -15,10 +15,11 @@ typedef struct {
     char* source;
 } Shader;
 
-Shader* create_shader_from_path(ShaderType type, const char* file_path);
 Shader* create_shader(ShaderType type, const char* source);
-GLboolean compile_shader(Shader* shader);
+Shader* create_shader_from_path(ShaderType type, const char* file_path);
 void free_shader(Shader* shader);
+
+GLboolean compile_shader(Shader* shader);
 
 #endif // _SHADER_H_
 

@@ -54,7 +54,8 @@ void main() {
     FragPos_vs = clipPos.xyz;
     ClipDepth_vs = clipPos.z; // Depth in clip space
 
-    FragDepth_vs = gl_Position.z / gl_Position.w; // Perspective divide to get normalized device coordinates
+    // Perspective divide to get normalized device coordinates
+    FragDepth_vs = gl_Position.z / gl_Position.w;
 
     Normal_vs = normalize(mat3(transpose(inverse(model))) * aNormal);
     TexCoords_vs = aTexCoords;

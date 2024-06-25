@@ -44,7 +44,7 @@ void free_curve(Curve* curve);
 /* Generate to mesh */
 void generate_point_to_mesh(Mesh* mesh, const Point* point);
 void generate_circle_to_mesh(Mesh* mesh, const Circle* circle);
-void generate_rect_to_mesh(Mesh* mesh, const Rect* rectangle);
+void generate_rect_to_mesh(Mesh* mesh, const Rect* rect);
 void generate_curve_to_mesh(Mesh* mesh, Curve* curve);
 
 #endif // GEOMETRY_H

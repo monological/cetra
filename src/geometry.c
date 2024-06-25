@@ -175,27 +175,27 @@ void generate_circle_to_mesh(Mesh* mesh, const Circle* circle) {
 }
 
 
-void generate_rect_to_mesh(Mesh* mesh, const Rect* rectangle) {
-    if (!mesh || !rectangle) {
+void generate_rect_to_mesh(Mesh* mesh, const Rect* rect) {
+    if (!mesh || !rect) {
         return;
     }
 
     // Calculate half dimensions
-    float half_width = rectangle->size[0] / 2.0f;
-    float half_height = rectangle->size[1] / 2.0f;
+    float half_width = rect->size[0] / 2.0f;
+    float half_height = rect->size[1] / 2.0f;
 
-    const float corner_radius = rectangle->corner_radius;
+    const float corner_radius = rect->corner_radius;
     if (corner_radius > 0.0f) {
 
-        const int resolution = RECTANGLE_RESOLUTION; // Resolution of the curves
+        const int resolution = rect_RESOLUTION; // Resolution of the curves
         const float theta_step = (float)M_PI / 2 / (resolution - 1); // Quarter-circle for the corner
-        const int total_vertices = rectangle->filled ? (resolution * 4 + 1) : (resolution * 4); // +1 for center vertex if filled
+        const int total_vertices = rect->filled ? (resolution * 4 + 1) : (resolution * 4); // +1 for center vertex if filled
         mesh->vertex_count = total_vertices;
 
         mesh->vertices = (float*)realloc(mesh->vertices, mesh->vertex_count * 3 * sizeof(float));
 
         if (!mesh->vertices) {
-            fprintf(stderr, "Failed to allocate memory for rounded rectangle mesh\n");
+            fprintf(stderr, "Failed to allocate memory for rounded rect mesh\n");
             return;
         }
 
@@ -203,10 +203,10 @@ void generate_rect_to_mesh(Mesh* mesh, const Rect* rectangle) {
 
         // Define the centered points of the arcs for the four corners
         vec3 arc_centers[4] = {
-            {(rectangle->position[0] + rectangle->size[0] - corner_radius)-half_width, (rectangle->position[1] + rectangle->size[1] - corner_radius)-half_height, 0.0f}, // Top right
-            {(rectangle->position[0] + rectangle->size[0] - corner_radius)-half_width, (rectangle->position[1] + corner_radius)-half_height, 0.0f}, // Bottom right
-            {(rectangle->position[0] + corner_radius)-half_width, (rectangle->position[1] + corner_radius)-half_height, 0.0f}, // Bottom left
-            {(rectangle->position[0] + corner_radius)-half_width, (rectangle->position[1] + rectangle->size[1] - corner_radius)-half_height, 0.0f} // Top left
+            {(rect->position[0] + rect->size[0] - corner_radius)-half_width, (rect->position[1] + rect->size[1] - corner_radius)-half_height, 0.0f}, // Top right
+            {(rect->position[0] + rect->size[0] - corner_radius)-half_width, (rect->position[1] + corner_radius)-half_height, 0.0f}, // Bottom right
+            {(rect->position[0] + corner_radius)-half_width, (rect->position[1] + corner_radius)-half_height, 0.0f}, // Bottom left
+            {(rect->position[0] + corner_radius)-half_width, (rect->position[1] + rect->size[1] - corner_radius)-half_height, 0.0f} // Top left
         };
 
         float angles[4] = {
@@ -227,18 +227,18 @@ void generate_rect_to_mesh(Mesh* mesh, const Rect* rectangle) {
             }
         }
 
-        if (rectangle->filled) {
-            // Add the center point for filled rectangle at the actual center, not the corner
-            vec3 rectangle_center = {
-                rectangle->position[0],
-                rectangle->position[1],
+        if (rect->filled) {
+            // Add the center point for filled rect at the actual center, not the corner
+            vec3 rect_center = {
+                rect->position[0],
+                rect->position[1],
                 0.0f
             };
-            glm_vec3_copy(rectangle_center, &mesh->vertices[vertex_index * 3]);
+            glm_vec3_copy(rect_center, &mesh->vertices[vertex_index * 3]);
             size_t center_vertex_index = vertex_index;
             vertex_index++;
 
-            // Set indices for filled rectangle (triangles)
+            // Set indices for filled rect (triangles)
             mesh->index_count = resolution * 4 * 3; // 3 indices per triangle
             mesh->indices = (unsigned int*)realloc(mesh->indices, mesh->index_count * sizeof(unsigned int));
 
@@ -257,7 +257,7 @@ void generate_rect_to_mesh(Mesh* mesh, const Rect* rectangle) {
 
             mesh->draw_mode = TRIANGLES;
         } else {
-            // Set indices for non-filled rectangle (line strip)
+            // Set indices for non-filled rect (line strip)
             mesh->index_count = resolution * 4 + 1; // +1 to close the loop
             mesh->indices = (unsigned int*)realloc(mesh->indices, mesh->index_count * sizeof(unsigned int));
 
@@ -270,40 +270,40 @@ void generate_rect_to_mesh(Mesh* mesh, const Rect* rectangle) {
                 mesh->indices[i] = i % (resolution * 4);
             }
 
-            mesh->line_width = rectangle->line_width;
+            mesh->line_width = rect->line_width;
             mesh->draw_mode = LINE_STRIP;
         }
     } else {
-        // Assuming rectangle->position is the center of the rectangle
+        // Assuming rect->position is the center of the rect
         vec3 top_left, top_right, bottom_left, bottom_right;
 
         // Calculate corner positions
-        top_left[0] = rectangle->position[0] - half_width;
-        top_left[1] = rectangle->position[1] + half_height;
-        top_left[2] = rectangle->position[2];
+        top_left[0] = rect->position[0] - half_width;
+        top_left[1] = rect->position[1] + half_height;
+        top_left[2] = rect->position[2];
 
-        top_right[0] = rectangle->position[0] + half_width;
-        top_right[1] = rectangle->position[1] + half_height;
-        top_right[2] = rectangle->position[2];
+        top_right[0] = rect->position[0] + half_width;
+        top_right[1] = rect->position[1] + half_height;
+        top_right[2] = rect->position[2];
 
-        bottom_left[0] = rectangle->position[0] - half_width;
-        bottom_left[1] = rectangle->position[1] - half_height;
-        bottom_left[2] = rectangle->position[2];
+        bottom_left[0] = rect->position[0] - half_width;
+        bottom_left[1] = rect->position[1] - half_height;
+        bottom_left[2] = rect->position[2];
 
-        bottom_right[0] = rectangle->position[0] + half_width;
-        bottom_right[1] = rectangle->position[1] - half_height;
-        bottom_right[2] = rectangle->position[2];
+        bottom_right[0] = rect->position[0] + half_width;
+        bottom_right[1] = rect->position[1] - half_height;
+        bottom_right[2] = rect->position[2];
 
-        if (rectangle->filled) {
-            // Handling filled rectangle with sharp corners
+        if (rect->filled) {
+            // Handling filled rect with sharp corners
             mesh->vertex_count = 4;
-            mesh->index_count = 6; // Two triangles to form a rectangle
+            mesh->index_count = 6; // Two triangles to form a rect
 
             mesh->vertices = (float*)realloc(mesh->vertices, mesh->vertex_count * 3 * sizeof(float));
             mesh->indices = (unsigned int*)realloc(mesh->indices, mesh->index_count * sizeof(unsigned int));
 
             if (!mesh->vertices || !mesh->indices) {
-                fprintf(stderr, "Failed to allocate memory for filled rectangle mesh\n");
+                fprintf(stderr, "Failed to allocate memory for filled rect mesh\n");
                 return;
             }
 
@@ -312,7 +312,7 @@ void generate_rect_to_mesh(Mesh* mesh, const Rect* rectangle) {
             glm_vec3_copy(bottom_left, &mesh->vertices[6]);
             glm_vec3_copy(bottom_right, &mesh->vertices[9]);
 
-            // Indices - two triangles forming the rectangle
+            // Indices - two triangles forming the rect
             unsigned int rect_indices[6] = {0, 2, 1, 1, 2, 3};
             memcpy(mesh->indices, rect_indices, sizeof(rect_indices));
 
@@ -325,7 +325,7 @@ void generate_rect_to_mesh(Mesh* mesh, const Rect* rectangle) {
             mesh->indices = (unsigned int*)realloc(mesh->indices, mesh->index_count * sizeof(unsigned int));
 
             if (!mesh->vertices || !mesh->indices) {
-                fprintf(stderr, "Failed to allocate memory for rectangle outline mesh\n");
+                fprintf(stderr, "Failed to allocate memory for rect outline mesh\n");
                 return;
             }
 
@@ -339,7 +339,7 @@ void generate_rect_to_mesh(Mesh* mesh, const Rect* rectangle) {
             memcpy(mesh->indices, outline_indices, sizeof(outline_indices));
 
             mesh->draw_mode = LINE_LOOP;
-            mesh->line_width = rectangle->line_width;
+            mesh->line_width = rect->line_width;
         }
 
     }

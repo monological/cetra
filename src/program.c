@@ -90,6 +90,63 @@ ShaderProgram* create_program() {
     return program;
 }
 
+void free_program(ShaderProgram* program) {
+    if (program != NULL) {
+        if (program->id != 0) {
+            glDeleteProgram(program->id);
+        }
+
+        if (program->shaders) {
+            for (size_t i = 0; i < program->shader_count; ++i) {
+                if (program->shaders[i]) {
+                    free_shader(program->shaders[i]); 
+                }
+            }
+            free(program->shaders);
+        }
+
+        if (program->light_position_loc) {
+            free(program->light_position_loc);
+        }
+        if (program->light_direction_loc) {
+            free(program->light_direction_loc);
+        }
+        if (program->light_color_loc) {
+            free(program->light_color_loc);
+        }
+        if (program->light_specular_loc) {
+            free(program->light_specular_loc);
+        }
+        if (program->light_ambient_loc) {
+            free(program->light_ambient_loc);
+        }
+        if (program->light_intensity_loc) {
+            free(program->light_intensity_loc);
+        }
+        if (program->light_constant_loc) {
+            free(program->light_constant_loc);
+        }
+        if (program->light_linear_loc) {
+            free(program->light_linear_loc);
+        }
+        if (program->light_quadratic_loc) {
+            free(program->light_quadratic_loc);
+        }
+        if (program->light_cutOff_loc) {
+            free(program->light_cutOff_loc);
+        }
+        if (program->light_outerCutOff_loc) {
+            free(program->light_outerCutOff_loc);
+        }
+        if (program->light_type_loc) {
+            free(program->light_type_loc);
+        }
+
+        free(program);
+    }
+}
+
+
 /*
  * GL attach and add shader to program.
  */
@@ -317,6 +374,17 @@ GLboolean setup_program_shader_from_paths(ShaderProgram** program, const char* v
         success = GL_FALSE;
     }
 
+    // Load and compile the geometry shader, if path is provided
+    if (geo_path != NULL) {
+        Shader* geometry_shader = create_shader_from_path(GEOMETRY_SHADER, geo_path);
+        if (geometry_shader && compile_shader(geometry_shader)) {
+            attach_program_shader(*program, geometry_shader);
+        } else {
+            fprintf(stderr, "Geometry shader compilation failed\n");
+            success = GL_FALSE;
+        }
+    }
+
     // Load and compile the fragment shader
     if (frag_path != NULL) {
         Shader* fragment_shader = create_shader_from_path(FRAGMENT_SHADER, frag_path);
@@ -329,17 +397,6 @@ GLboolean setup_program_shader_from_paths(ShaderProgram** program, const char* v
     } else {
         fprintf(stderr, "Fragment shader path is NULL\n");
         success = GL_FALSE;
-    }
-
-    // Load and compile the geometry shader, if path is provided
-    if (geo_path != NULL) {
-        Shader* geometry_shader = create_shader_from_path(GEOMETRY_SHADER, geo_path);
-        if (geometry_shader && compile_shader(geometry_shader)) {
-            attach_program_shader(*program, geometry_shader);
-        } else {
-            fprintf(stderr, "Geometry shader compilation failed\n");
-            success = GL_FALSE;
-        }
     }
 
     // Link the shader program
@@ -439,7 +496,7 @@ GLboolean create_pbr_program(ShaderProgram** program){
     return GL_TRUE;
 }
 
-GLboolean create_line_program(ShaderProgram** program){
+GLboolean create_shape_program(ShaderProgram** program){
     if(*program != NULL){
         fprintf(stderr, "Failed to setup shader program. Program already created.\n");
         return GL_FALSE;
@@ -506,59 +563,4 @@ GLboolean validate_program(ShaderProgram* program){
     return success;
 }
 
-void free_program(ShaderProgram* program) {
-    if (program != NULL) {
-        if (program->id != 0) {
-            glDeleteProgram(program->id);
-        }
-
-        if (program->shaders) {
-            for (size_t i = 0; i < program->shader_count; ++i) {
-                if (program->shaders[i]) {
-                    free_shader(program->shaders[i]); 
-                }
-            }
-            free(program->shaders);
-        }
-
-        if (program->light_position_loc) {
-            free(program->light_position_loc);
-        }
-        if (program->light_direction_loc) {
-            free(program->light_direction_loc);
-        }
-        if (program->light_color_loc) {
-            free(program->light_color_loc);
-        }
-        if (program->light_specular_loc) {
-            free(program->light_specular_loc);
-        }
-        if (program->light_ambient_loc) {
-            free(program->light_ambient_loc);
-        }
-        if (program->light_intensity_loc) {
-            free(program->light_intensity_loc);
-        }
-        if (program->light_constant_loc) {
-            free(program->light_constant_loc);
-        }
-        if (program->light_linear_loc) {
-            free(program->light_linear_loc);
-        }
-        if (program->light_quadratic_loc) {
-            free(program->light_quadratic_loc);
-        }
-        if (program->light_cutOff_loc) {
-            free(program->light_cutOff_loc);
-        }
-        if (program->light_outerCutOff_loc) {
-            free(program->light_outerCutOff_loc);
-        }
-        if (program->light_type_loc) {
-            free(program->light_type_loc);
-        }
-
-        free(program);
-    }
-}
 

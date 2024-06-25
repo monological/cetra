@@ -275,14 +275,14 @@ int main() {
     
     add_program_to_engine(engine, pbr_shader_program);
 
-    ShaderProgram* line_shader_program = NULL;
+    ShaderProgram* shape_shader_program = NULL;
 
-    if(!create_line_program(&line_shader_program)){
-        fprintf(stderr, "Failed to create line shader program\n");
+    if(!create_shape_program(&shape_shader_program)){
+        fprintf(stderr, "Failed to create shape shader program\n");
         return -1;
     }
 
-    add_program_to_engine(engine, line_shader_program);
+    add_program_to_engine(engine, shape_shader_program);
 
     /*
      * Set up materials.
@@ -294,12 +294,12 @@ int main() {
     pbr_material->albedo[1] = 0.0f; // Green
     pbr_material->albedo[2] = 0.0f; // Blue
 
-    Material* line_material = create_material();
-    set_material_shader_program(line_material, line_shader_program);
+    Material* shape_material = create_material();
+    set_material_shader_program(shape_material, shape_shader_program);
 
-    line_material->albedo[0] = 0.0f; // Red
-    line_material->albedo[1] = 1.0f; // Green
-    line_material->albedo[2] = 0.0f; // Blue
+    shape_material->albedo[0] = 0.0f; // Red
+    shape_material->albedo[1] = 1.0f; // Green
+    shape_material->albedo[2] = 0.0f; // Blue
 
 
     /*
@@ -348,7 +348,7 @@ int main() {
     set_scene_root_node(scene, root_node);
 
     Mesh* mesh1 = create_mesh();
-    mesh1->material = line_material;
+    mesh1->material = shape_material;
 
     Rect rectangle1 = {
         .position = {-20.0f, -20.0f, 0.0f},
@@ -376,7 +376,7 @@ int main() {
     add_mesh_to_node(root_node, mesh2);
 
     Mesh* mesh3 = create_mesh();
-    mesh3->material = line_material;
+    mesh3->material = shape_material;
 
     Rect rectangle3 = {
         .position = {-20.0f, 20.0f, 0.0f},
@@ -404,7 +404,7 @@ int main() {
     add_mesh_to_node(root_node, mesh4);
 
     Mesh* mesh5 = create_mesh();
-    mesh5->material = line_material;
+    mesh5->material = shape_material;
 
     Circle circle1 = {
         .position = {-20.0f, -60.0f, 0.0f},
@@ -448,7 +448,7 @@ int main() {
     vec3 end10 = {25.0f, 55.0f, 0.0f};   // Ending towards left, slightly higher
 
     Mesh* mesh7 = create_mesh();
-    mesh7->material = line_material;
+    mesh7->material = shape_material;
 
     Curve *bez7 = generate_s_shaped_bezier_curve(start7, end7, 5.0f, 2.0f);
     generate_curve_to_mesh(mesh7, bez7);
@@ -456,7 +456,7 @@ int main() {
     free(bez7);
 
     Mesh* mesh8 = create_mesh();
-    mesh8->material = line_material;
+    mesh8->material = shape_material;
 
     Curve *bez8 = generate_s_shaped_bezier_curve(start8, end8, 5.0f, 2.0f);
     generate_curve_to_mesh(mesh8, bez8);
@@ -464,7 +464,7 @@ int main() {
     free(bez8);
 
     Mesh* mesh9 = create_mesh();
-    mesh9->material = line_material;
+    mesh9->material = shape_material;
 
     Curve *bez9 = generate_s_shaped_bezier_curve(start9, end9, 5.0f, 2.0f);
     generate_curve_to_mesh(mesh9, bez9);
@@ -472,7 +472,7 @@ int main() {
     free(bez9);
 
     Mesh* mesh10 = create_mesh();
-    mesh10->material = line_material;
+    mesh10->material = shape_material;
 
     Curve *bez10 = generate_s_shaped_bezier_curve(start10, end10, 5.0f, 2.0f);
     generate_curve_to_mesh(mesh10, bez10);

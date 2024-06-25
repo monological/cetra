@@ -100,7 +100,7 @@ GLboolean setup_program_shader_from_source(ShaderProgram** program, const char* 
  * Preset Programs
  */
 GLboolean create_pbr_program(ShaderProgram** program);
-GLboolean create_line_program(ShaderProgram** program);
+GLboolean create_shape_program(ShaderProgram** program);
 GLboolean create_outlines_program(ShaderProgram** program);
 GLboolean create_axes_program(ShaderProgram** program);
 

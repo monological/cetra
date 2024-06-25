@@ -177,8 +177,6 @@ Texture* load_texture_path_into_pool(TexturePool* pool, const char* filepath) {
         return cachedTexture;
     }
 
-    //printf("Loading texture path %s\n", subpath);
-
     unsigned char* data = stbi_load(subpath, &width, &height, &nrChannels, 0);
     if (data) {
 

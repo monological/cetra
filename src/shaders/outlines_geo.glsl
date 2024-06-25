@@ -1,6 +1,6 @@
 #version 330 core
 layout (points) in;
-layout (triangle_strip, max_vertices = 320) out;
+layout (triangle_strip, max_vertices = 128) out;
 
 in vec3 vertexColor[];
 in vec3 WorldPos[];
