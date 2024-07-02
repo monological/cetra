@@ -2,3 +2,6 @@
 build
 my_models
 *.swp
+*.o
+src/shader_strings.h
+*.a

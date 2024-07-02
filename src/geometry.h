@@ -6,7 +6,7 @@
 #include "mesh.h"
 
 #define NUM_CIRCLE_SEGMENTS 64
-#define RECTANGLE_RESOLUTION 32
+#define RECT_RESOLUTION 32
 
 /*
  * Primitives

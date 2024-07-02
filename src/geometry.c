@@ -187,7 +187,7 @@ void generate_rect_to_mesh(Mesh* mesh, const Rect* rect) {
     const float corner_radius = rect->corner_radius;
     if (corner_radius > 0.0f) {
 
-        const int resolution = rect_RESOLUTION; // Resolution of the curves
+        const int resolution = RECT_RESOLUTION; // Resolution of the curves
         const float theta_step = (float)M_PI / 2 / (resolution - 1); // Quarter-circle for the corner
         const int total_vertices = rect->filled ? (resolution * 4 + 1) : (resolution * 4); // +1 for center vertex if filled
         mesh->vertex_count = total_vertices;

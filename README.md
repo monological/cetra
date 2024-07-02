@@ -21,10 +21,7 @@
 
 ## Build
 
-```
-mkdir build
-cd build
-cmake ..
+brew install glfw cglm glew assimp --build-from-source```
 make -j 8
 ```
 

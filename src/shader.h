@@ -3,6 +3,8 @@
 
 #include <GL/glew.h>
 
+#include "shader_strings.h"
+
 typedef enum {
     VERTEX_SHADER,
     GEOMETRY_SHADER,

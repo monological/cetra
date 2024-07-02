@@ -487,8 +487,8 @@ GLboolean create_pbr_program(ShaderProgram** program){
         fprintf(stderr, "Failed to setup shader program. Program already created.\n");
         return GL_FALSE;
     }
-    if (!setup_program_shader_from_paths(program, 
-                PBR_VERT_SHADER_PATH, PBR_FRAG_SHADER_PATH, PBR_GEO_SHADER_PATH)) {
+    if (!setup_program_shader_from_source(program, 
+                pbr_vert_shader_str, pbr_frag_shader_str, NULL)) {
         fprintf(stderr, "Failed to initialize PBR shader program\n");
         return GL_FALSE;
     }
@@ -501,8 +501,8 @@ GLboolean create_shape_program(ShaderProgram** program){
         fprintf(stderr, "Failed to setup shader program. Program already created.\n");
         return GL_FALSE;
     }
-    if (!setup_program_shader_from_paths(program, 
-                LINES_VERT_SHADER_PATH, LINES_FRAG_SHADER_PATH, LINES_GEO_SHADER_PATH)) {
+    if (!setup_program_shader_from_source(program, 
+                lines_vert_shader_str, lines_frag_shader_str, lines_geo_shader_str)) {
         fprintf(stderr, "Failed to initialize LINES shader program\n");
         return GL_FALSE;
     }
@@ -515,8 +515,8 @@ GLboolean create_outlines_program(ShaderProgram** program){
         fprintf(stderr, "Failed to setup shader program. Program already created.\n");
         return GL_FALSE;
     }
-    if (!setup_program_shader_from_paths(program,
-            OUTLINES_VERT_SHADER_PATH, OUTLINES_FRAG_SHADER_PATH, OUTLINES_GEO_SHADER_PATH)) {
+    if (!setup_program_shader_from_source(program,
+            outlines_vert_shader_str, outlines_frag_shader_str, outlines_geo_shader_str)) {
         fprintf(stderr, "Failed to set up scene light program");
         return GL_FALSE;
     }
