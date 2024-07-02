@@ -8,16 +8,16 @@
 #include <GLFW/glfw3.h>
 #include <cglm/cglm.h>
 
-#include "../../common.h"
-#include "../../mesh.h"
-#include "../../shader.h"
-#include "../../program.h"
-#include "../../scene.h"
-#include "../../util.h"
-#include "../../engine.h"
-#include "../../import.h"
-#include "../../render.h"
-#include "../../geometry.h"
+#include "cetra/common.h"
+#include "cetra/mesh.h"
+#include "cetra/shader.h"
+#include "cetra/program.h"
+#include "cetra/scene.h"
+#include "cetra/util.h"
+#include "cetra/engine.h"
+#include "cetra/import.h"
+#include "cetra/render.h"
+#include "cetra/geometry.h"
 
 #define NK_INCLUDE_FIXED_TYPES
 #define NK_INCLUDE_STANDARD_IO
@@ -27,8 +27,8 @@
 #define NK_INCLUDE_FONT_BAKING
 #define NK_INCLUDE_DEFAULT_FONT
 #define NK_KEYSTATE_BASED_INPUT
-#include "../../ext/nuklear.h"
-#include "../../ext/nuklear_glfw_gl3.h"
+#include "cetra/ext/nuklear.h"
+#include "cetra/ext/nuklear_glfw_gl3.h"
 
 #define FBX_MODEL_PATH "./models/room.fbx"
 #define FBX_TEXTURE_DIR "./textures/room.fbm"

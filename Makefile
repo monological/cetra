@@ -1,75 +1,47 @@
-# Compiler and linker configurations
-CC = gcc
-CFLAGS = -Wall -g -std=c11
-LDFLAGS =
-LIBS = -lm -lpthread
+# Root Makefile
 
-# Define executable extension based on the OS
-UNAME_S := $(shell uname -s)
-ifeq ($(UNAME_S), Darwin) # macOS specifics
-    HOMEBREW_PREFIX := /opt/homebrew
-    CFLAGS += -I$(HOMEBREW_PREFIX)/include
-    LDFLAGS += -L$(HOMEBREW_PREFIX)/lib
-    LIBS += -lglfw -lcglm -lglew -lassimp
-    LIBS += -framework Cocoa -framework OpenGL -framework IOKit -framework CoreVideo
-    EXE =
-endif
-ifeq ($(UNAME_S), Linux) # Linux specifics
-    EXE =
-    LIBS += -lglfw -lcglm -lglew -lassimp
-    LIBS += -lX11 -lGL -lncurses
-endif
-ifneq (, $(findstring CYGWIN, $(UNAME_S))$(findstring MINGW, $(UNAME_S))$(findstring MSYS, $(UNAME_S)))
-    # Windows specifics
-    EXE = .exe
-    LIBS += -lglfw -lcglm -lglew -lassimp
-    LIBS += -lglu32 -lgdi32 -lopengl32 -lkernel32
-    CFLAGS += -I/mingw/include
-    LDFLAGS += -L/mingw/lib
-endif
+.PHONY: all cetra apps clean copy_lib copy_headers
 
-# Source files and object files
-SRC = $(wildcard src/*.c src/apps/*.c src/ext/*.c)
-OBJ = $(SRC:.c=.o)
+# Define the build directory relative to the root
+BUILD_DIR := ./build
 
-SHADER_DIR = ./src/shaders
-SHADER_HEADER = ./src/shader_strings.h
-SHADER_FILES = $(wildcard $(SHADER_DIR)/*.glsl)
+export BUILD_DIR  # Exporting BUILD_DIR to be globally available
 
-# Define targets
-all: shaders render$(EXE) shapes$(EXE) pcb$(EXE)
+all: cetra apps
 
-# Shader header generation depends on all shader files
-shaders: $(SHADER_HEADER)
+cetra:
+	@echo "Building the cetra..."
+	$(MAKE) -C cetra
+	@echo "Copying cetra outputs..."
+	$(MAKE) copy_lib
+	$(MAKE) copy_headers
 
-$(SHADER_HEADER): $(SHADER_FILES)
-	python3 gen_shader_header.py $(SHADER_DIR) $(SHADER_HEADER)
+# Build applications, passing BUILD_DIR explicitly
+apps:
+	@echo "Building applications..."
+	@for dir in apps/*; do \
+		if [ -f $$dir/Makefile ]; then \
+			echo "Building in $$dir..."; \
+			$(MAKE) -C $$dir BUILD_DIR=$(CURDIR)/build; \
+		fi \
+	done
 
-# Build the applications
-render$(EXE): src/apps/render.o libengine.a
-	$(CC) $(LDFLAGS) -o $@ $^ $(LIBS)
+# Copy the static library and headers to the central build directory
+copy_lib:
+	mkdir -p $(BUILD_DIR)/lib
+	cp cetra/libcetra.a $(BUILD_DIR)/lib/
 
-shapes$(EXE): src/apps/shapes.o libengine.a
-	$(CC) $(LDFLAGS) -o $@ $^ $(LIBS)
+copy_headers:
+	mkdir -p $(BUILD_DIR)/include/cetra
+	rsync -av --include='*/' --include='*.h' --exclude='*' --prune-empty-dirs cetra/src/ $(BUILD_DIR)/include/cetra/
 
-pcb$(EXE): src/apps/pcb/pcb.o libengine.a
-	$(CC) $(LDFLAGS) -o $@ $^ $(LIBS)
-
-# Build the engine library
-libengine.a: $(filter-out src/apps/%.o, $(OBJ))
-	ar rcs $@ $^
-
-# Generic rule for building objects
-%.o: %.c $(SHADER_HEADER)
-	$(CC) $(CFLAGS) -c -o $@ $<
-
-# Clean the build
+# Clean up the build
 clean:
-	rm -f $(OBJ) render$(EXE) shapes$(EXE) pcb$(EXE) libengine.a
-	rm -f $(SHADER_HEADER)
-
-# Additional commands for copying resources
-resources:
-	cp -r models textures src/shaders $(BUILD_DIR)
-
-.PHONY: all clean resources shaders
+	@echo "Cleaning up..."
+	$(MAKE) -C cetra clean
+	@for dir in apps/*; do \
+		if [ -f $$dir/Makefile ]; then \
+			$(MAKE) -C $$dir clean; \
+		fi \
+	done
+	rm -rf $(BUILD_DIR)  # Clean up the central build directory

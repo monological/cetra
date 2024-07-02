@@ -8,17 +8,16 @@
 #include <GLFW/glfw3.h>
 #include <cglm/cglm.h>
 
-#include "../common.h"
-#include "../mesh.h"
-#include "../shader.h"
-#include "../program.h"
-#include "../scene.h"
-#include "../util.h"
-#include "../engine.h"
-#include "../import.h"
-#include "../render.h"
-
-#include "../shader_strings.h"
+#include "cetra/common.h"
+#include "cetra/mesh.h"
+#include "cetra/shader.h"
+#include "cetra/program.h"
+#include "cetra/scene.h"
+#include "cetra/util.h"
+#include "cetra/engine.h"
+#include "cetra/import.h"
+#include "cetra/render.h"
+#include "cetra/geometry.h"
 
 #define NK_INCLUDE_FIXED_TYPES
 #define NK_INCLUDE_STANDARD_IO
@@ -28,8 +27,8 @@
 #define NK_INCLUDE_FONT_BAKING
 #define NK_INCLUDE_DEFAULT_FONT
 #define NK_KEYSTATE_BASED_INPUT
-#include "../ext/nuklear.h"
-#include "../ext/nuklear_glfw_gl3.h"
+#include "cetra/ext/nuklear.h"
+#include "cetra/ext/nuklear_glfw_gl3.h"
 
 #define FBX_MODEL_PATH "./models/room.fbx"
 #define FBX_TEXTURE_DIR "./textures/room.fbm"
@@ -37,8 +36,8 @@
 /*
  * Constants
  */
-const unsigned int HEIGHT = 1080;
-const unsigned int WIDTH = 1920;
+const unsigned int HEIGHT = 812;
+const unsigned int WIDTH = 375;
 const float ROTATE_SPEED = 0.4f; // Speed of rotation
 const float ROTATION_SENSITIVITY = 0.005f;
 const float MIN_DIST = 2000.0f;
@@ -221,44 +220,13 @@ void render_scene_callback(Engine* engine, Scene* current_scene){
     float time_value = glfwGetTime();
     
     Transform transform = {
-        .position = {0.0f, -200.0f, 0.0f},
+        .position = {0.0f, 0.0f, -100.0f},
         .rotation = {0.0f, 0.0f, 0.0f},
         .scale = {1.0f, 1.0f, 1.0f}
     };
 
-    if(engine->camera_mode == CAMERA_MODE_ORBIT){
-        if (!dragging) {
-            camera->amplitude = (MAX_DIST - MIN_DIST) / 2.0f; // Half the range of motion
-            float midPoint = MIN_DIST + camera->amplitude; // Middle point of the motion
-            camera->distance = midPoint + camera->amplitude * sin(time_value * CAM_ANGULAR_SPEED);
-            camera->phi += camera->orbit_speed; // Rotate around the center
-
-            vec3 new_camera_position = {
-                cos(camera->phi) * camera->distance * cos(camera->theta),
-                camera->height,
-                sin(camera->phi) * camera->distance * cos(camera->theta)
-            };
-
-            set_camera_position(camera, new_camera_position);
-            update_engine_camera_lookat(engine);
-            update_engine_camera_perspective(engine);
-
-        } else {
-            float angle = time_value * ROTATE_SPEED;
-            float zpos = cosf(angle);
-            float ypos = sinf(angle);
-
-            transform.position[0] = 0.0f;
-            transform.position[1] = -200.0f;
-            transform.position[2] = 0.0f;
-            transform.rotation[0] = dy * ROTATION_SENSITIVITY;
-            transform.rotation[1] = dx * ROTATION_SENSITIVITY;
-            transform.rotation[2] = 0.0f;
-        }
-    }else if(engine->camera_mode == CAMERA_MODE_FREE){
-        update_engine_camera_lookat(engine);
-        update_engine_camera_perspective(engine);
-    }
+    update_engine_camera_lookat(engine);
+    update_engine_camera_perspective(engine);
 
     transform_node(root_node, &transform, &(engine->model_matrix));
 
@@ -300,12 +268,39 @@ int main() {
      */
     ShaderProgram* pbr_shader_program = NULL;
 
-    if (!setup_program_shader_from_source(&pbr_shader_program, 
-                pbr_vert_shader_str, pbr_frag_shader_str, NULL)) {
-        fprintf(stderr, "Failed to initialize PBR shader program\n");
+    if(!create_pbr_program(&pbr_shader_program)){
+        fprintf(stderr, "Failed to create PBR shader program\n");
         return -1;
     }
+    
     add_program_to_engine(engine, pbr_shader_program);
+
+    ShaderProgram* shape_shader_program = NULL;
+
+    if(!create_shape_program(&shape_shader_program)){
+        fprintf(stderr, "Failed to create shape shader program\n");
+        return -1;
+    }
+
+    add_program_to_engine(engine, shape_shader_program);
+
+    /*
+     * Set up materials.
+     */
+    Material* pbr_material = create_material();
+    set_material_shader_program(pbr_material, pbr_shader_program);
+
+    pbr_material->albedo[0] = 1.0f; // Red
+    pbr_material->albedo[1] = 0.0f; // Green
+    pbr_material->albedo[2] = 0.0f; // Blue
+
+    Material* shape_material = create_material();
+    set_material_shader_program(shape_material, shape_shader_program);
+
+    shape_material->albedo[0] = 0.0f; // Red
+    shape_material->albedo[1] = 1.0f; // Green
+    shape_material->albedo[2] = 0.0f; // Blue
+
 
     /*
      * Set up camera.
@@ -331,18 +326,158 @@ int main() {
     camera->height = 1000.0f;
 
     set_engine_camera(engine, camera);
+    set_engine_camera_mode(engine, CAMERA_MODE_FREE);
     
     /*
      * Import fbx model.
      */
 
-    Scene* scene = create_scene_from_fbx_path(FBX_MODEL_PATH, FBX_TEXTURE_DIR);
+    Scene* scene = create_scene();
     if (!scene) {
-        fprintf(stderr, "Failed to import FBX model: %s\n", FBX_MODEL_PATH);
+        fprintf(stderr, "Failed to create scene\n");
+        return -1;
+    }
+    add_scene_to_engine(engine, scene);
+
+    SceneNode* root_node = create_node();
+    if (!root_node) {
+        fprintf(stderr, "Failed to create root node\n");
         return -1;
     }
 
-    add_scene_to_engine(engine, scene);
+    set_scene_root_node(scene, root_node);
+
+    Mesh* mesh1 = create_mesh();
+    mesh1->material = shape_material;
+
+    Rect rectangle1 = {
+        .position = {-20.0f, -20.0f, 0.0f},
+        .size = {20.0f, 20.0f, 0.0f},
+        .corner_radius = 0.0f,
+        .line_width = 0.2f,
+        .filled = false
+    };
+    generate_rect_to_mesh(mesh1, &rectangle1);
+
+    add_mesh_to_node(root_node, mesh1);
+
+    Mesh* mesh2 = create_mesh();
+    mesh2->material = pbr_material;
+
+    Rect rectangle2 = {
+        .position = {20.0f, -20.0f, 0.0f},
+        .size = {20.0f, 20.0f, 0.0f},
+        .corner_radius = 0.0f,
+        .line_width = 2.0f,
+        .filled = true
+    };
+    generate_rect_to_mesh(mesh2, &rectangle2);
+
+    add_mesh_to_node(root_node, mesh2);
+
+    Mesh* mesh3 = create_mesh();
+    mesh3->material = shape_material;
+
+    Rect rectangle3 = {
+        .position = {-20.0f, 20.0f, 0.0f},
+        .size = {20.0f, 20.0f, 0.0f},
+        .corner_radius = 2.0f,
+        .line_width = 2.0f,
+        .filled = false
+    };
+    generate_rect_to_mesh(mesh3, &rectangle3);
+
+    add_mesh_to_node(root_node, mesh3);
+
+    Mesh* mesh4 = create_mesh();
+    mesh4->material = pbr_material;
+
+    Rect rectangle4 = {
+        .position = {20.0f, 20.0f, 0.0f},
+        .size = {20.0f, 20.0f, 0.0f},
+        .corner_radius = 2.0f,
+        .line_width = 2.0f,
+        .filled = true
+    };
+    generate_rect_to_mesh(mesh4, &rectangle4);
+
+    add_mesh_to_node(root_node, mesh4);
+
+    Mesh* mesh5 = create_mesh();
+    mesh5->material = shape_material;
+
+    Circle circle1 = {
+        .position = {-20.0f, -60.0f, 0.0f},
+        .radius = 10.0f,
+        .line_width = 10.0f,
+        .filled = false
+    };
+    
+    generate_circle_to_mesh(mesh5, &circle1);
+
+    add_mesh_to_node(root_node, mesh5);
+
+    Mesh* mesh6 = create_mesh();
+    mesh6->material = pbr_material;
+
+    Circle circle2 = {
+        .position = {20.0f, -60.0f, 0.0f},
+        .radius = 10.0f,
+        .line_width = 2.0f,
+        .filled = true
+    };
+    
+    generate_circle_to_mesh(mesh6, &circle2);
+
+    add_mesh_to_node(root_node, mesh6);
+
+    // Top-Left Quadrant (Start on left, End on right, Y-Start < Y-End)
+    vec3 start7 = {-35.0f, 75.0f, 0.0f}; // Starting from left, higher up
+    vec3 end7 = {-25.0f, 65.0f, 0.0f};   // Ending towards right, slightly lower
+
+    // Top-Right Quadrant (Start on right, End on left, Y-Start < Y-End)
+    vec3 start8 = {35.0f, 75.0f, 0.0f};  // Starting from right, higher up
+    vec3 end8 = {25.0f, 65.0f, 0.0f};    // Ending towards left, slightly lower
+
+    // Bottom-Left Quadrant (Start on left, End on right, Y-Start > Y-End)
+    vec3 start9 = {-35.0f, 45.0f, 0.0f}; // Starting from left, lower down
+    vec3 end9 = {-25.0f, 55.0f, 0.0f};   // Ending towards right, slightly higher
+
+    // Bottom-Right Quadrant (Start on right, End on left, Y-Start > Y-End)
+    vec3 start10 = {35.0f, 45.0f, 0.0f}; // Starting from right, lower down
+    vec3 end10 = {25.0f, 55.0f, 0.0f};   // Ending towards left, slightly higher
+
+    Mesh* mesh7 = create_mesh();
+    mesh7->material = shape_material;
+
+    Curve *bez7 = generate_s_shaped_bezier_curve(start7, end7, 5.0f, 2.0f);
+    generate_curve_to_mesh(mesh7, bez7);
+    add_mesh_to_node(root_node, mesh7);
+    free(bez7);
+
+    Mesh* mesh8 = create_mesh();
+    mesh8->material = shape_material;
+
+    Curve *bez8 = generate_s_shaped_bezier_curve(start8, end8, 5.0f, 2.0f);
+    generate_curve_to_mesh(mesh8, bez8);
+    add_mesh_to_node(root_node, mesh8);
+    free(bez8);
+
+    Mesh* mesh9 = create_mesh();
+    mesh9->material = shape_material;
+
+    Curve *bez9 = generate_s_shaped_bezier_curve(start9, end9, 5.0f, 2.0f);
+    generate_curve_to_mesh(mesh9, bez9);
+    add_mesh_to_node(root_node, mesh9);
+    free(bez9);
+
+    Mesh* mesh10 = create_mesh();
+    mesh10->material = shape_material;
+
+    Curve *bez10 = generate_s_shaped_bezier_curve(start10, end10, 5.0f, 2.0f);
+    generate_curve_to_mesh(mesh10, bez10);
+    add_mesh_to_node(root_node, mesh10);
+    free(bez10);
 
     if(!scene || !scene->root_node){
         fprintf(stderr, "Failed to import scene\n");
@@ -359,7 +494,6 @@ int main() {
         return -1;
     }
 
-    SceneNode* root_node = scene->root_node;
     assert(root_node != NULL);
 
     if(scene->light_count == 0){
@@ -385,7 +519,7 @@ int main() {
         set_show_outlines_for_nodes(light_node, true);
 
         Transform light_transform = {
-            .position = {300.0f, 300.0f, -200.00f},
+            .position = {0.0f, 0.0f, -200.00f},
             .rotation = {0.0f, 0.0f, 0.0f},
             .scale = {1.0f, 1.0f, 1.0f}
         };
@@ -399,14 +533,12 @@ int main() {
 
     upload_buffers_to_gpu_for_nodes(root_node);
 
-    set_program_for_nodes(root_node, pbr_shader_program);
-
     print_scene(scene);
 
-    set_engine_show_gui(engine, true);
+    set_engine_show_gui(engine, false);
     set_engine_show_wireframe(engine, false);
-    set_engine_show_axes(engine, true);
-    set_engine_show_outlines(engine, true);
+    set_engine_show_axes(engine, false);
+    set_engine_show_outlines(engine, false);
 
     run_engine_render_loop(engine, render_scene_callback);
 
