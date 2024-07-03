@@ -31,9 +31,6 @@
 #include "cetra/ext/nuklear.h"
 #include "cetra/ext/nuklear_glfw_gl3.h"
 
-#define FBX_MODEL_PATH "./models/room.fbx"
-#define FBX_TEXTURE_DIR "./textures/room.fbm"
-
 /*
  * Constants
  */
@@ -280,7 +277,15 @@ void render_scene_callback(Engine* engine, Scene* current_scene){
 /*
  * CETRA MAIN
  */
-int main() {
+int main(int argc, char **argv) {
+
+    if (argc < 3) {
+        fprintf(stderr, "Usage: %s <FBX_MODEL_PATH> <FBX_TEXTURE_DIR>\n", argv[0]);
+        return -1;
+    }
+
+    const char *fbx_model_path = argv[1];
+    const char *fbx_texture_dir = argv[2];
     
     Engine *engine = create_engine("Cetra Engine", WIDTH, HEIGHT);
 
@@ -336,9 +341,9 @@ int main() {
      * Import fbx model.
      */
 
-    Scene* scene = create_scene_from_fbx_path(FBX_MODEL_PATH, FBX_TEXTURE_DIR);
+    Scene* scene = create_scene_from_fbx_path(fbx_model_path, fbx_texture_dir);
     if (!scene) {
-        fprintf(stderr, "Failed to import FBX model: %s\n", FBX_MODEL_PATH);
+        fprintf(stderr, "Failed to import FBX model: %s\n", fbx_model_path);
         return -1;
     }
 
