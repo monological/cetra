@@ -26,24 +26,23 @@ typedef struct Mesh {
     // if we are drawing lines
     float line_width;
 
-    float* vertices;       // Array of vertex positions
-    float* normals;        // Array of normals
-    float* tangents;       // Array of tangents
-    float* bitangents;     // Array of bitangents
+    float* vertices;        // Array of vertex positions
+    float* normals;         // Array of normals
+    float* tangents;        // Array of tangents
+    float* bitangents;      // Array of bitangents
     float* tex_coords;      // Array of texture coordinates
-    unsigned int* indices; // Array of indices
+    unsigned int* indices;  // Array of indices
 
     size_t vertex_count;    // Number of vertices
     size_t index_count;     // Number of indices
 
     Material* material;
 
-    // OpenGL buffer objects
-    GLuint vao;            // Vertex Array Object
-    GLuint vbo;            // Vertex Buffer Object
-    GLuint ebo;            // Element Buffer Object (for indices)
-    GLuint nbo;            // Normal Buffer Object
-    GLuint tbo;            // Texture Buffer Object (for UVs)
+    GLuint vao;             // Vertex Array Object
+    GLuint vbo;             // Vertex Buffer Object
+    GLuint ebo;             // Element Buffer Object (for indices)
+    GLuint nbo;             // Normal Buffer Object
+    GLuint tbo;             // Texture Buffer Object (for UVs)
     GLuint tangent_vbo;     // Tangent Buffer Object
     GLuint bitangent_vbo;   // Bitangent Buffer Object
 

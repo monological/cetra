@@ -57,6 +57,7 @@ typedef struct Engine {
 
     ShaderProgram** programs;       // Global shader programs used across scenes
     size_t program_count;           // Count of global programs
+    ShaderProgram* program_map;   // name to program cache
 
     Material** materials;           // Global materials used across meshes
     size_t material_count;          // Count of global materials
@@ -104,7 +105,8 @@ void set_active_scene_by_name(Engine* engine, const char* scene_name);
 Scene* get_current_scene(const Engine* engine);
 
 // Shader Programs
-void add_program_to_engine(Engine* engine, ShaderProgram* program);
+void add_shader_program_to_engine(Engine* engine, ShaderProgram* program);
+ShaderProgram* get_engine_shader_program_by_name(Engine* engine, const char* program_name);
 
 // GUI
 void set_engine_show_gui(Engine* engine, bool show_gui);

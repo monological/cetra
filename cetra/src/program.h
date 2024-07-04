@@ -3,8 +3,12 @@
 
 #include "shader.h"
 
+#include "ext/uthash.h"
+
 typedef struct {
     GLuint id;
+
+    char* name;
 
     Shader** shaders;
     size_t shader_count;
@@ -70,12 +74,13 @@ typedef struct {
     // only if drawing LINES, LINE_LOOP, LINE_STRIP
     GLint line_width_loc;
 
+    UT_hash_handle hh;   // Makes this structure hashable
 } ShaderProgram;
 
 /*
  * Shader Program Functions
  */
-ShaderProgram* create_program();
+ShaderProgram* create_program(const char* name);
 void free_program(ShaderProgram* program);
 
 /*
@@ -92,17 +97,17 @@ void setup_program_uniforms(ShaderProgram* program);
 /*
  * Setup Program Shaders
  */
-GLboolean setup_program_shader_from_paths(ShaderProgram** program, const char* vert_path,
+ShaderProgram* setup_program_shader_from_paths(const char* name, const char* vert_path,
         const char* frag_path, const char* geo_path);
-GLboolean setup_program_shader_from_source(ShaderProgram** program, const char* vert_source,
+ShaderProgram* setup_program_shader_from_source(const char* name, const char* vert_source,
         const char* frag_source, const char* geo_source);
 /*
  * Preset Programs
  */
-GLboolean create_pbr_program(ShaderProgram** program);
-GLboolean create_shape_program(ShaderProgram** program);
-GLboolean create_outlines_program(ShaderProgram** program);
-GLboolean create_axes_program(ShaderProgram** program);
+ShaderProgram* create_pbr_program();
+ShaderProgram* create_shape_program();
+ShaderProgram* create_outline_program();
+ShaderProgram* create_axes_program();
 
 /*
  * Program Validation

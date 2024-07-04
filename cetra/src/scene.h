@@ -123,8 +123,8 @@ Light** get_closest_lights(Scene* scene, SceneNode* target_node,
 void add_material_to_scene(Scene* scene, Material* material);
 
 // viz
-GLboolean setup_scene_axes(Scene* scene);
-GLboolean setup_scene_outlines(Scene* scene);
+GLboolean set_scene_axes_shader_program(Scene* scene, ShaderProgram* axes_shader_program);
+GLboolean set_scene_outlines_shader_program(Scene* scene, ShaderProgram* outlines_shader_program);
 
 // print
 void print_scene_node(const SceneNode* node, int depth);

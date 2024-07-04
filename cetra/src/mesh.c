@@ -96,6 +96,12 @@ void upload_mesh_buffers_to_gpu(Mesh* mesh) {
     glVertexAttribPointer(GL_ATTR_POSITION, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
     glEnableVertexAttribArray(GL_ATTR_POSITION);
 
+    // Indices
+    if (mesh->indices) {
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, mesh->ebo);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, mesh->index_count * sizeof(unsigned int), mesh->indices, GL_STATIC_DRAW);
+    }
+
     // Normals
     if (mesh->normals) {
         glBindBuffer(GL_ARRAY_BUFFER, mesh->nbo);
@@ -129,12 +135,6 @@ void upload_mesh_buffers_to_gpu(Mesh* mesh) {
         glBufferData(GL_ARRAY_BUFFER, mesh->vertex_count * 2 * sizeof(float), mesh->tex_coords, GL_STATIC_DRAW);
         glVertexAttribPointer(GL_ATTR_TEXCOORD, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), (void*)0);
         glEnableVertexAttribArray(GL_ATTR_TEXCOORD);
-    }
-
-    // Indices
-    if (mesh->indices) {
-        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, mesh->ebo);
-        glBufferData(GL_ELEMENT_ARRAY_BUFFER, mesh->index_count * sizeof(unsigned int), mesh->indices, GL_STATIC_DRAW);
     }
 
     // Unbind vao

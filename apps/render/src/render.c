@@ -303,14 +303,23 @@ int main(int argc, char **argv) {
      * Set up shaders.
      *
      */
-    ShaderProgram* pbr_shader_program = NULL;
-
-    if (!setup_program_shader_from_source(&pbr_shader_program, 
-                pbr_vert_shader_str, pbr_frag_shader_str, NULL)) {
-        fprintf(stderr, "Failed to initialize PBR shader program\n");
+    ShaderProgram* pbr_shader_program = get_engine_shader_program_by_name(engine, "pbr");
+    if (!pbr_shader_program) {
+        fprintf(stderr, "Failed to get PBR shader program\n");
         return -1;
     }
-    add_program_to_engine(engine, pbr_shader_program);
+
+    ShaderProgram* axes_shader_program = get_engine_shader_program_by_name(engine, "axes");
+    if (!axes_shader_program) {
+        fprintf(stderr, "Failed to get axes shader program\n");
+        return -1;
+    }
+
+    ShaderProgram* outlines_shader_program = get_engine_shader_program_by_name(engine, "outline");
+    if (!outlines_shader_program) {
+        fprintf(stderr, "Failed to get outlines shader program\n");
+        return -1;
+    }
 
     /*
      * Set up camera.
@@ -354,13 +363,13 @@ int main(int argc, char **argv) {
         return -1;
     }
 
-    if(!setup_scene_axes(scene)){
-        fprintf(stderr, "Failed to scene axes shaders\n");
+    if(set_scene_axes_shader_program(scene, axes_shader_program) != 0){
+        fprintf(stderr, "Failed to set scene axes shader program\n");
         return -1;
     }
 
-    if(!setup_scene_outlines(scene)){
-        fprintf(stderr, "Failed to scene light outlines shaders\n");
+    if(set_scene_outlines_shader_program(scene, outlines_shader_program) != 0){
+        fprintf(stderr, "Failed to set scene outlines shader program\n");
         return -1;
     }
 

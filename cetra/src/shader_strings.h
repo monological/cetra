@@ -1,6 +1,43 @@
 #ifndef SHADER_STRINGS_H
 #define SHADER_STRINGS_H
 
+static const char* shape_geo_shader_str = 
+    "#version 400 core\n"
+    "layout(lines) in;\n"
+    "layout(triangle_strip, max_vertices = 6) out;\n"
+    ""
+    "in vec3 WorldPos_vs[2]; // World position from vertex shader\n"
+    ""
+    "uniform mat4 projection;\n"
+    "uniform mat4 view;\n"
+    "uniform float lineWidth;\n"
+    "uniform float time;\n"
+    ""
+    "void main() {\n"
+    "    vec3 startPosition = WorldPos_vs[0];\n"
+    "    vec3 endPosition = WorldPos_vs[1];\n"
+    ""
+    "    // Direction and perpendicular vector\n"
+    "    vec3 lineDir = normalize(endPosition - startPosition);\n"
+    "    vec3 perpVec = normalize(vec3(-lineDir.y, lineDir.x, 0.0)) * lineWidth * 0.5;\n"
+    ""
+    "    // Offset vector: a small fraction of the line direction\n"
+    "    vec3 offsetVec = lineDir * 0.12 * lineWidth; // Adjust this value as needed\n"
+    ""
+    "    gl_Position = projection * view * vec4(startPosition + perpVec - offsetVec, 1.0);\n"
+    "    EmitVertex();\n"
+    "    gl_Position = projection * view * vec4(startPosition - perpVec - offsetVec, 1.0);\n"
+    "    EmitVertex();\n"
+    "    gl_Position = projection * view * vec4(endPosition + perpVec + offsetVec, 1.0);\n"
+    "    EmitVertex();\n"
+    "    gl_Position = projection * view * vec4(endPosition - perpVec + offsetVec, 1.0);\n"
+    "    EmitVertex();\n"
+    ""
+    "    EndPrimitive();\n"
+    "}\n"
+    ""
+    "";
+
 static const char* pbr_vert_shader_str = 
     "#version 330 core\n"
     "layout(location = 0) in vec3 aPos;\n"
@@ -78,19 +115,6 @@ static const char* pbr_vert_shader_str =
     ""
     "";
 
-static const char* lines_frag_shader_str = 
-    "#version 410 core\n"
-    ""
-    "out vec4 FragColor;\n"
-    ""
-    "uniform vec3 albedo;\n"
-    ""
-    "void main()\n"
-    "{\n"
-    "    FragColor = vec4(albedo, 1.0);\n"
-    "}\n"
-    "";
-
 static const char* outlines_frag_shader_str = 
     "#version 410 core\n"
     "in vec3 geomColor; // The color passed from the geometry shader\n"
@@ -102,41 +126,17 @@ static const char* outlines_frag_shader_str =
     "}\n"
     "";
 
-static const char* lines_geo_shader_str = 
-    "#version 400 core\n"
-    "layout(lines) in;\n"
-    "layout(triangle_strip, max_vertices = 6) out;\n"
+static const char* shape_frag_shader_str = 
+    "#version 410 core\n"
     ""
-    "in vec3 WorldPos_vs[2]; // World position from vertex shader\n"
+    "out vec4 FragColor;\n"
     ""
-    "uniform mat4 projection;\n"
-    "uniform mat4 view;\n"
-    "uniform float lineWidth;\n"
-    "uniform float time;\n"
+    "uniform vec3 albedo;\n"
     ""
-    "void main() {\n"
-    "    vec3 startPosition = WorldPos_vs[0];\n"
-    "    vec3 endPosition = WorldPos_vs[1];\n"
-    ""
-    "    // Direction and perpendicular vector\n"
-    "    vec3 lineDir = normalize(endPosition - startPosition);\n"
-    "    vec3 perpVec = normalize(vec3(-lineDir.y, lineDir.x, 0.0)) * lineWidth * 0.5;\n"
-    ""
-    "    // Offset vector: a small fraction of the line direction\n"
-    "    vec3 offsetVec = lineDir * 0.12 * lineWidth; // Adjust this value as needed\n"
-    ""
-    "    gl_Position = projection * view * vec4(startPosition + perpVec - offsetVec, 1.0);\n"
-    "    EmitVertex();\n"
-    "    gl_Position = projection * view * vec4(startPosition - perpVec - offsetVec, 1.0);\n"
-    "    EmitVertex();\n"
-    "    gl_Position = projection * view * vec4(endPosition + perpVec + offsetVec, 1.0);\n"
-    "    EmitVertex();\n"
-    "    gl_Position = projection * view * vec4(endPosition - perpVec + offsetVec, 1.0);\n"
-    "    EmitVertex();\n"
-    ""
-    "    EndPrimitive();\n"
+    "void main()\n"
+    "{\n"
+    "    FragColor = vec4(albedo, 1.0);\n"
     "}\n"
-    ""
     "";
 
 static const char* pbr_frag_shader_str = 
@@ -483,7 +483,35 @@ static const char* pbr_frag_shader_str =
     ""
     "";
 
-static const char* lines_vert_shader_str = 
+static const char* outlines_vert_shader_str = 
+    "#version 410 core\n"
+    "layout(location = 0) in vec3 aPos;   // Position of the vertex\n"
+    "layout(location = 1) in vec3 aColor; // Color of the vertex\n"
+    ""
+    "out vec3 vertexColor; // Variable to transfer color to geometry shader\n"
+    "out vec3 WorldPos;     // World position\n"
+    ""
+    "uniform mat4 model;\n"
+    "uniform mat4 view;\n"
+    "uniform mat4 projection;\n"
+    ""
+    "uniform vec3 camPos;\n"
+    "uniform float time;\n"
+    ""
+    "void main()\n"
+    "{\n"
+    "    vertexColor = aColor;          // Pass the color to the next shader stage\n"
+    ""
+    "    vec4 worldPos = model * vec4(aPos, 1.0);\n"
+    "    WorldPos = worldPos.xyz;\n"
+    ""
+    "    vec4 viewPos = view * worldPos;\n"
+    "    vec4 clipPos = projection * viewPos;\n"
+    "    gl_Position = clipPos;\n"
+    "}\n"
+    "";
+
+static const char* shape_vert_shader_str = 
     "#version 330 core\n"
     "layout(location = 0) in vec3 aPos;\n"
     "layout(location = 1) in vec3 aNormal;\n"
@@ -555,34 +583,6 @@ static const char* lines_vert_shader_str =
     "    gl_Position = clipPos;\n"
     "}\n"
     ""
-    "";
-
-static const char* outlines_vert_shader_str = 
-    "#version 410 core\n"
-    "layout(location = 0) in vec3 aPos;   // Position of the vertex\n"
-    "layout(location = 1) in vec3 aColor; // Color of the vertex\n"
-    ""
-    "out vec3 vertexColor; // Variable to transfer color to geometry shader\n"
-    "out vec3 WorldPos;     // World position\n"
-    ""
-    "uniform mat4 model;\n"
-    "uniform mat4 view;\n"
-    "uniform mat4 projection;\n"
-    ""
-    "uniform vec3 camPos;\n"
-    "uniform float time;\n"
-    ""
-    "void main()\n"
-    "{\n"
-    "    vertexColor = aColor;          // Pass the color to the next shader stage\n"
-    ""
-    "    vec4 worldPos = model * vec4(aPos, 1.0);\n"
-    "    WorldPos = worldPos.xyz;\n"
-    ""
-    "    vec4 viewPos = view * worldPos;\n"
-    "    vec4 clipPos = projection * viewPos;\n"
-    "    gl_Position = clipPos;\n"
-    "}\n"
     "";
 
 static const char* outlines_geo_shader_str = 

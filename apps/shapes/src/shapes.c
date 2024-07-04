@@ -266,23 +266,29 @@ int main() {
      * Set up shaders.
      *
      */
-    ShaderProgram* pbr_shader_program = NULL;
-
-    if(!create_pbr_program(&pbr_shader_program)){
-        fprintf(stderr, "Failed to create PBR shader program\n");
-        return -1;
-    }
-    
-    add_program_to_engine(engine, pbr_shader_program);
-
-    ShaderProgram* shape_shader_program = NULL;
-
-    if(!create_shape_program(&shape_shader_program)){
-        fprintf(stderr, "Failed to create shape shader program\n");
+    ShaderProgram* pbr_shader_program = get_engine_shader_program_by_name(engine, "pbr");
+    if (!pbr_shader_program) {
+        fprintf(stderr, "Failed to get PBR shader program\n");
         return -1;
     }
 
-    add_program_to_engine(engine, shape_shader_program);
+    ShaderProgram* shape_shader_program = get_engine_shader_program_by_name(engine, "shape");
+    if (!shape_shader_program) {
+        fprintf(stderr, "Failed to get shape shader program\n");
+        return -1;
+    }
+
+    ShaderProgram* axes_shader_program = get_engine_shader_program_by_name(engine, "axes");
+    if (!axes_shader_program) {
+        fprintf(stderr, "Failed to get axes shader program\n");
+        return -1;
+    }
+
+    ShaderProgram* outlines_shader_program = get_engine_shader_program_by_name(engine, "outline");
+    if (!outlines_shader_program) {
+        fprintf(stderr, "Failed to get outline shader program\n");
+        return -1;
+    }
 
     /*
      * Set up materials.
@@ -347,6 +353,19 @@ int main() {
 
     set_scene_root_node(scene, root_node);
 
+    if(set_scene_axes_shader_program(scene, axes_shader_program) == GL_FALSE){
+        fprintf(stderr, "Failed to set scene axes shader program\n");
+        return -1;
+    }
+
+    if(set_scene_outlines_shader_program(scene, outlines_shader_program) == GL_FALSE){
+        fprintf(stderr, "Failed to set scene outlines shader program\n");
+        return -1;
+    }
+
+    /*
+     * mesh1: Rectangle with no corner radius and no fill
+     */
     Mesh* mesh1 = create_mesh();
     mesh1->material = shape_material;
 
@@ -361,6 +380,9 @@ int main() {
 
     add_mesh_to_node(root_node, mesh1);
 
+    /*
+     * mesh2: Rectangle with no corner radius and fill
+     */
     Mesh* mesh2 = create_mesh();
     mesh2->material = pbr_material;
 
@@ -375,6 +397,9 @@ int main() {
 
     add_mesh_to_node(root_node, mesh2);
 
+    /*
+     * mesh3: Rectangle with corner radius and no fill
+     */
     Mesh* mesh3 = create_mesh();
     mesh3->material = shape_material;
 
@@ -389,6 +414,9 @@ int main() {
 
     add_mesh_to_node(root_node, mesh3);
 
+    /*
+     * mesh4: Rectangle with corner radius and fill
+     */
     Mesh* mesh4 = create_mesh();
     mesh4->material = pbr_material;
 
@@ -403,6 +431,9 @@ int main() {
 
     add_mesh_to_node(root_node, mesh4);
 
+    /*
+     * mesh5: Circle with no fill
+     */
     Mesh* mesh5 = create_mesh();
     mesh5->material = shape_material;
 
@@ -417,6 +448,9 @@ int main() {
 
     add_mesh_to_node(root_node, mesh5);
 
+    /*
+     * mesh6: Circle with fill
+     */
     Mesh* mesh6 = create_mesh();
     mesh6->material = pbr_material;
 
@@ -447,6 +481,9 @@ int main() {
     vec3 start10 = {35.0f, 45.0f, 0.0f}; // Starting from right, lower down
     vec3 end10 = {25.0f, 55.0f, 0.0f};   // Ending towards left, slightly higher
 
+    /*
+     * mesh7: S-Shaped Bezier Curve
+     */
     Mesh* mesh7 = create_mesh();
     mesh7->material = shape_material;
 
@@ -478,21 +515,6 @@ int main() {
     generate_curve_to_mesh(mesh10, bez10);
     add_mesh_to_node(root_node, mesh10);
     free(bez10);
-
-    if(!scene || !scene->root_node){
-        fprintf(stderr, "Failed to import scene\n");
-        return -1;
-    }
-
-    if(!setup_scene_axes(scene)){
-        fprintf(stderr, "Failed to scene axes shaders\n");
-        return -1;
-    }
-
-    if(!setup_scene_outlines(scene)){
-        fprintf(stderr, "Failed to scene light outlines shaders\n");
-        return -1;
-    }
 
     assert(root_node != NULL);
 

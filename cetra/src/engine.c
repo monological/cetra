@@ -30,6 +30,7 @@
 /*
  * Private functions
  */
+static int _create_default_shaders_for_engine(Engine* engine);
 static int _setup_engine_glfw(Engine* engine);
 static int _setup_engine_msaa(Engine *engine);
 static int _setup_engine_gui(Engine* engine);
@@ -81,6 +82,7 @@ Engine* create_engine(const char* window_title, int width, int height) {
     
     engine->programs = NULL;
     engine->program_count = 0;
+    engine->program_map = NULL;
 
     engine->current_render_mode = RENDER_MODE_PBR;
 
@@ -295,6 +297,11 @@ int init_engine(Engine* engine){
         return -1;
     }
 
+    if(_create_default_shaders_for_engine(engine) != 0){
+        fprintf(stderr, "Failed to create default shaders for engine\n");
+        return -1;
+    }
+
     return 0;
 }
 
@@ -439,7 +446,54 @@ Scene* get_current_scene(const Engine* engine) {
     return engine->scenes[engine->current_scene_index];
 }
 
-void add_program_to_engine(Engine* engine, ShaderProgram* program) {
+/*
+ * Shaders
+ *
+ */
+
+static int _create_default_shaders_for_engine(Engine* engine) {
+    if (!engine) return -1;
+
+    ShaderProgram* pbr_shader_program = NULL;
+
+    if((pbr_shader_program = create_pbr_program()) == NULL){
+        fprintf(stderr, "Failed to create PBR shader program\n");
+        return -1;
+    }
+    
+    add_shader_program_to_engine(engine, pbr_shader_program);
+
+    ShaderProgram* shape_shader_program = NULL;
+
+    if((shape_shader_program = create_shape_program()) == NULL){
+        fprintf(stderr, "Failed to create shape shader program\n");
+        return -1;
+    }
+
+    add_shader_program_to_engine(engine, shape_shader_program);
+
+    ShaderProgram* axes_shader_program = NULL;
+
+    if((axes_shader_program = create_axes_program()) == NULL){
+        fprintf(stderr, "Failed to create axes shader program\n");
+        return -1;
+    }
+
+    add_shader_program_to_engine(engine, axes_shader_program);
+
+    ShaderProgram* outline_shader_program = NULL;
+
+    if((outline_shader_program = create_outline_program()) == NULL){
+        fprintf(stderr, "Failed to create outline shader program\n");
+        return -1;
+    }
+
+    add_shader_program_to_engine(engine, outline_shader_program);
+
+    return 0;
+}
+
+void add_shader_program_to_engine(Engine* engine, ShaderProgram* program) {
     if (!engine || !program) {
         fprintf(stderr, "Invalid input to add_program_to_engine\n");
         return;
@@ -465,6 +519,23 @@ void add_program_to_engine(Engine* engine, ShaderProgram* program) {
     engine->programs = new_programs;
     engine->programs[engine->program_count] = program;
     engine->program_count = new_count;
+
+    ShaderProgram* existing;
+    HASH_FIND_STR(engine->program_map, program->name, existing);
+    if (!existing) {
+        HASH_ADD_KEYPTR(hh, engine->program_map, program->name, strlen(program->name), program);
+    }
+}
+
+ShaderProgram* get_engine_shader_program_by_name(Engine* engine, const char* program_name) {
+    if (!engine || !program_name) {
+        fprintf(stderr, "Invalid input to get_program_from_engine\n");
+        return NULL;
+    }
+
+    ShaderProgram* existing;
+    HASH_FIND_STR(engine->program_map, program_name, existing);
+    return existing;
 }
 
 /*

@@ -258,16 +258,16 @@ void add_material_to_scene(Scene* scene, Material* material) {
     scene->material_count = new_count;
 }
 
-GLboolean setup_scene_axes(Scene* scene) {
-    if(create_axes_program(&scene->axes_shader_program) != GL_TRUE){
+GLboolean set_scene_axes_shader_program(Scene* scene, ShaderProgram* axes_shader_program) {
+    if((scene->axes_shader_program = axes_shader_program) == NULL){
         return GL_FALSE;
     }
     _set_axes_program_for_nodes(scene->root_node, scene->axes_shader_program);
     return GL_TRUE;
 }
 
-GLboolean setup_scene_outlines(Scene* scene) {
-    if(create_outlines_program(&scene->outlines_shader_program) != GL_TRUE){
+GLboolean set_scene_outlines_shader_program(Scene* scene, ShaderProgram* outlines_shader_program) {
+    if((scene->outlines_shader_program = outlines_shader_program) == NULL){
         return GL_FALSE;
     }
     _set_outlines_program_for_nodes(scene->root_node, scene->outlines_shader_program);

@@ -31,7 +31,7 @@ const char* axes_frag_src =
     "    FragColor = vec4(vertexColor, 1.0);\n"
     "}";
 
-ShaderProgram* create_program() {
+ShaderProgram* create_program(const char* name){
     ShaderProgram* program = malloc(sizeof(ShaderProgram));
     if (!program) {
         fprintf(stderr, "Failed to allocate memory for shader program\n");
@@ -44,6 +44,13 @@ ShaderProgram* create_program() {
         fprintf(stderr, "Failed to create program object.\n");
         return NULL;
     }
+
+    if(!name){
+        fprintf(stderr, "Shader program name is NULL\n");
+        return NULL;
+    }
+
+    program->name = safe_strdup(name);
 
     program->shaders = NULL;
     program->shader_count = 0;
@@ -96,6 +103,10 @@ void free_program(ShaderProgram* program) {
             glDeleteProgram(program->id);
         }
 
+        if(program->name != NULL){
+            free(program->name);
+        }
+
         if (program->shaders) {
             for (size_t i = 0; i < program->shader_count; ++i) {
                 if (program->shaders[i]) {
@@ -146,7 +157,6 @@ void free_program(ShaderProgram* program) {
     }
 }
 
-
 /*
  * GL attach and add shader to program.
  */
@@ -190,7 +200,7 @@ GLboolean link_program(ShaderProgram* program) {
             if (log) {
                 glGetProgramInfoLog(program->id, logLength, &logLength, log);
                 check_gl_error("glGetProgramInfoLog");
-                fprintf(stderr, "Program compilation failed: %s\n", log);
+                fprintf(stderr, "Program %s compilation failed: %s\n", program->name, log);
                 free(log);
             } else {
                 fprintf(stderr, "Failed to allocate memory for program log.\n");
@@ -344,30 +354,29 @@ void setup_program_uniforms(ShaderProgram* program) {
     return;
 }
 
-GLboolean setup_program_shader_from_paths(ShaderProgram** program, const char* vert_path,
+ShaderProgram* setup_program_shader_from_paths(const char* name, const char* vert_path,
         const char* frag_path, const char* geo_path) {
-    GLboolean success = GL_TRUE;
 
-    if(*program != NULL){
-        fprintf(stderr, "Failed to setup shader program. Program already created.\n");
-        return GL_FALSE;
+    if(!name){
+        fprintf(stderr, "Shader program name is NULL\n");
+        return NULL;
     }
 
-    // Create and initialize the ShaderProgram
-    *program = create_program();
-    if (!(*program)) {
-        fprintf(stderr, "Failed to create shader program\n");
-        return GL_FALSE;
+    GLboolean success = GL_TRUE;
+
+    ShaderProgram* program = create_program(name);
+    if(program == NULL){
+        fprintf(stderr, "Failed to create program by name %s\n", name);
+        return NULL;
     }
 
     // Load and compile the vertex shader
     if (vert_path != NULL) {
         Shader* vertex_shader = create_shader_from_path(VERTEX_SHADER, vert_path);
         if (vertex_shader && compile_shader(vertex_shader)) {
-            attach_program_shader(*program, vertex_shader);
+            attach_program_shader(program, vertex_shader);
         } else {
             fprintf(stderr, "Vertex shader compilation failed\n");
-            success = GL_FALSE;
         }
     } else {
         fprintf(stderr, "Vertex shader path is NULL\n");
@@ -378,7 +387,7 @@ GLboolean setup_program_shader_from_paths(ShaderProgram** program, const char* v
     if (geo_path != NULL) {
         Shader* geometry_shader = create_shader_from_path(GEOMETRY_SHADER, geo_path);
         if (geometry_shader && compile_shader(geometry_shader)) {
-            attach_program_shader(*program, geometry_shader);
+            attach_program_shader(program, geometry_shader);
         } else {
             fprintf(stderr, "Geometry shader compilation failed\n");
             success = GL_FALSE;
@@ -389,7 +398,7 @@ GLboolean setup_program_shader_from_paths(ShaderProgram** program, const char* v
     if (frag_path != NULL) {
         Shader* fragment_shader = create_shader_from_path(FRAGMENT_SHADER, frag_path);
         if (fragment_shader && compile_shader(fragment_shader)) {
-            attach_program_shader(*program, fragment_shader);
+            attach_program_shader(program, fragment_shader);
         } else {
             fprintf(stderr, "Fragment shader compilation failed\n");
             success = GL_FALSE;
@@ -400,40 +409,43 @@ GLboolean setup_program_shader_from_paths(ShaderProgram** program, const char* v
     }
 
     // Link the shader program
-    if (success && !link_program(*program)) {
+    if (success && !link_program(program)) {
         fprintf(stderr, "Shader program linking failed\n");
         success = GL_FALSE;
     }
 
     // Setup uniforms and other initializations as needed
     if (success) {
-        setup_program_uniforms(*program);
+        setup_program_uniforms(program);
+    }else{
+        free_program(program);
+        program = NULL;
     }
 
-    return success;
+    return program;
 }
 
-GLboolean setup_program_shader_from_source(ShaderProgram** program, const char* vert_source,
+ShaderProgram* setup_program_shader_from_source(const char* name, const char* vert_source,
         const char* frag_source, const char* geo_source) {
-    GLboolean success = GL_TRUE;
 
-    if(*program != NULL){
-        fprintf(stderr, "Failed to setup shader program. Program already created.\n");
-        return GL_FALSE;
+    if(!name){
+        fprintf(stderr, "Shader program name is NULL\n");
+        return NULL;
     }
 
-    // Create and initialize the ShaderProgram
-    *program = create_program();
-    if (!(*program)) {
-        fprintf(stderr, "Failed to create shader program\n");
-        return GL_FALSE;
+    GLboolean success = GL_TRUE;
+
+    ShaderProgram* program = create_program(name);
+    if(program == NULL){
+        fprintf(stderr, "Failed to create program by name %s\n", name);
+        return NULL;
     }
 
     // Create and compile the vertex shader
     if (vert_source != NULL) {
         Shader* vertex_shader = create_shader(VERTEX_SHADER, vert_source);
         if (vertex_shader && compile_shader(vertex_shader)) {
-            attach_program_shader(*program, vertex_shader);
+            attach_program_shader(program, vertex_shader);
         } else {
             fprintf(stderr, "Vertex shader compilation failed\n");
             success = GL_FALSE;
@@ -447,7 +459,7 @@ GLboolean setup_program_shader_from_source(ShaderProgram** program, const char* 
     if (frag_source != NULL) {
         Shader* fragment_shader = create_shader(FRAGMENT_SHADER, frag_source);
         if (fragment_shader && compile_shader(fragment_shader)) {
-            attach_program_shader(*program, fragment_shader);
+            attach_program_shader(program, fragment_shader);
         } else {
             fprintf(stderr, "Fragment shader compilation failed\n");
             success = GL_FALSE;
@@ -461,7 +473,7 @@ GLboolean setup_program_shader_from_source(ShaderProgram** program, const char* 
     if (geo_source != NULL) {
         Shader* geometry_shader = create_shader(GEOMETRY_SHADER, geo_source);
         if (geometry_shader && compile_shader(geometry_shader)) {
-            attach_program_shader(*program, geometry_shader);
+            attach_program_shader(program, geometry_shader);
         } else {
             fprintf(stderr, "Geometry shader compilation failed\n");
             success = GL_FALSE;
@@ -469,70 +481,68 @@ GLboolean setup_program_shader_from_source(ShaderProgram** program, const char* 
     }
 
     // Link the shader program
-    if (success && !link_program(*program)) {
+    if (success && !link_program(program)) {
         fprintf(stderr, "Shader program linking failed\n");
         success = GL_FALSE;
     }
 
     // Setup uniforms and other initializations as needed
     if (success) {
-        setup_program_uniforms(*program);
+        setup_program_uniforms(program);
+    }else{
+        free_program(program);
+        program = NULL;
     }
 
-    return success;
+    return program;
 }
 
-GLboolean create_pbr_program(ShaderProgram** program){
-    if(*program != NULL){
-        fprintf(stderr, "Failed to setup shader program. Program already created.\n");
-        return GL_FALSE;
-    }
-    if (!setup_program_shader_from_source(program, 
-                pbr_vert_shader_str, pbr_frag_shader_str, NULL)) {
+ShaderProgram* create_pbr_program(){
+    ShaderProgram* program = NULL;
+
+    if((program = setup_program_shader_from_source("pbr", 
+            pbr_vert_shader_str, pbr_frag_shader_str, NULL)) == NULL) {
         fprintf(stderr, "Failed to initialize PBR shader program\n");
-        return GL_FALSE;
+        return NULL;
     }
 
-    return GL_TRUE;
+    return program;
 }
 
-GLboolean create_shape_program(ShaderProgram** program){
-    if(*program != NULL){
-        fprintf(stderr, "Failed to setup shader program. Program already created.\n");
-        return GL_FALSE;
-    }
-    if (!setup_program_shader_from_source(program, 
-                lines_vert_shader_str, lines_frag_shader_str, lines_geo_shader_str)) {
-        fprintf(stderr, "Failed to initialize LINES shader program\n");
-        return GL_FALSE;
+ShaderProgram* create_shape_program(){
+    ShaderProgram* program = NULL;
+
+    if((program = setup_program_shader_from_source("shape", 
+            shape_vert_shader_str, shape_frag_shader_str, shape_geo_shader_str)) == NULL) {
+        fprintf(stderr, "Failed to initialize shape shader program\n");
+        return NULL;
     }
 
-    return GL_TRUE;
+    return program;
 }
 
-GLboolean create_outlines_program(ShaderProgram** program){
-    if(*program != NULL){
-        fprintf(stderr, "Failed to setup shader program. Program already created.\n");
-        return GL_FALSE;
+ShaderProgram* create_outline_program(){
+    ShaderProgram* program = NULL;
+
+    if((program = setup_program_shader_from_source("outline", 
+            outlines_vert_shader_str, outlines_frag_shader_str, outlines_geo_shader_str)) == NULL) {
+        fprintf(stderr, "Failed to initialize outlines shader program\n");
+        return NULL;
     }
-    if (!setup_program_shader_from_source(program,
-            outlines_vert_shader_str, outlines_frag_shader_str, outlines_geo_shader_str)) {
-        fprintf(stderr, "Failed to set up scene light program");
-        return GL_FALSE;
-    }
-    return GL_TRUE;
+
+    return program;
 }
 
-GLboolean create_axes_program(ShaderProgram** program){
-    if(*program != NULL){
-        fprintf(stderr, "Failed to setup shader program. Program already created.\n");
-        return GL_FALSE;
+ShaderProgram* create_axes_program(){
+    ShaderProgram* program = NULL;
+
+    if((program = setup_program_shader_from_source("axes", 
+            axes_vert_src, axes_frag_src, NULL)) == NULL) {
+        fprintf(stderr, "Failed to initialize axes shader program\n");
+        return NULL;
     }
-    if (!setup_program_shader_from_source(program, axes_vert_src, axes_frag_src, NULL)) {
-        fprintf(stderr, "Failed to set up axes program");
-        return GL_FALSE;
-    }
-    return GL_TRUE;
+
+    return program;
 }
 
 GLboolean validate_program(ShaderProgram* program){
