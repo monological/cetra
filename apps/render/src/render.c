@@ -363,12 +363,12 @@ int main(int argc, char **argv) {
         return -1;
     }
 
-    if(set_scene_xyz_shader_program(scene, xyz_shader_program) != 0){
+    if(set_scene_xyz_shader_program(scene, xyz_shader_program) == GL_FALSE){
         fprintf(stderr, "Failed to set scene xyz shader program\n");
         return -1;
     }
 
-    if(set_scene_outlines_shader_program(scene, outlines_shader_program) != 0){
+    if(set_scene_outlines_shader_program(scene, outlines_shader_program) == GL_FALSE){
         fprintf(stderr, "Failed to set scene outlines shader program\n");
         return -1;
     }
