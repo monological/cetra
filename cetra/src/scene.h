@@ -59,7 +59,7 @@ void set_node_camera(SceneNode* node, Camera* camera);
 void set_show_xyz_for_nodes(SceneNode* node, bool show_xyz);
 
 // shaders
-void set_program_for_nodes(SceneNode* node, ShaderProgram* program);
+void set_shader_program_for_nodes(SceneNode* node, ShaderProgram* program);
 
 // move
 void apply_transform_to_nodes(SceneNode* node, mat4 parentTransform);

@@ -357,46 +357,9 @@ int main(int argc, char **argv) {
         return -1;
     }
 
-    SceneNode* root_node = scene->root_node;
-    assert(root_node != NULL);
+    upload_buffers_to_gpu_for_nodes(scene->root_node);
 
-    if(scene->light_count == 0){
-        printf("No root light found so adding one...\n");
-        Light *light = create_light();
-        if(!light){
-            fprintf(stderr, "Failed to create root light.\n");
-            return -1;
-        }
-        set_light_name(light, "root_light");
-        set_light_type(light, LIGHT_POINT);
-        vec3 lightPosition = {0.0f, 0.0f, 0.0f};
-        set_light_original_position(light, lightPosition);
-        set_light_global_position(light, lightPosition);
-        set_light_intensity(light, 500.0f);
-        set_light_color(light, (vec3){0.0f, 0.0f, 100.0f});
-        add_light_to_scene(scene, light);
-
-        SceneNode *light_node = create_node();
-        set_node_light(light_node, light);
-        set_node_name(light_node, "root_light_node");
-        set_show_xyz_for_nodes(light_node, true);
-
-        Transform light_transform = {
-            .position = {0.0f, 0.0f, 0.00f},
-            .rotation = {0.0f, 0.0f, 0.0f},
-            .scale = {200.0f, 200.0f, 200.0f}
-        };
-
-        mat4 light_matrix; 
-        glm_mat4_identity(light_matrix);
-        transform_node(light_node, &light_transform, &light_matrix);
-
-        add_child_node(root_node, light_node);
-    }
-
-    upload_buffers_to_gpu_for_nodes(root_node);
-
-    set_program_for_nodes(root_node, pbr_shader_program);
+    set_shader_program_for_nodes(scene->root_node, pbr_shader_program);
 
     print_scene(scene);
 

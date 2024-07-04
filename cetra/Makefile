@@ -1,9 +1,19 @@
+#
+# ┏┓┏┓┏┳┓┳┓┏┓
+# ┃ ┣  ┃ ┣┫┣┫
+# ┗┛┗┛ ┻ ┛┗┛┗
+#
+# Cetra Graphics Engine
+#
+
 # Color codes
 RED = \033[0;31m
 GREEN = \033[0;32m
 YELLOW = \033[0;33m
 BLUE = \033[0;34m
 NC = \033[0m # No Color
+
+.PHONY: all clean shaders
 
 # Compiler and linker configurations
 CC = gcc
@@ -65,5 +75,4 @@ clean:
 	rm -f $(OBJ) libcetra.a
 	rm -f $(SHADER_HEADER)
 
-.PHONY: all clean shaders
 

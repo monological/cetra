@@ -3,7 +3,7 @@
 # ┃ ┣  ┃ ┣┫┣┫
 # ┗┛┗┛ ┻ ┛┗┛┗
 #
-# Build system for the Cetra Engine
+# Cetra Graphics Engine
 #
 
 # Color codes

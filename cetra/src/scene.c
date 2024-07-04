@@ -357,7 +357,7 @@ void set_node_camera(SceneNode* node, Camera* camera) {
     node->camera = camera;
 }
 
-void set_program_for_nodes(SceneNode* node, ShaderProgram* program) {
+void set_shader_program_for_nodes(SceneNode* node, ShaderProgram* program) {
     if (!node) {
         return;
     }
@@ -371,7 +371,7 @@ void set_program_for_nodes(SceneNode* node, ShaderProgram* program) {
     }
 
     for (size_t i = 0; i < node->children_count; ++i) {
-        set_program_for_nodes(node->children[i], program);
+        set_shader_program_for_nodes(node->children[i], program);
     }
 }
 
