@@ -5,7 +5,7 @@
 #include "util.h"
 #include "common.h"
 
-const char* axes_vert_src =
+const char* xyz_vert_src =
     "#version 330 core\n"
     "layout (location = 0) in vec3 aPos;\n"
     "layout (location = 1) in vec3 aColor;\n"
@@ -19,7 +19,7 @@ const char* axes_vert_src =
     "    vertexColor = aColor;\n"
     "}";
 
-const char* axes_frag_src =
+const char* xyz_frag_src =
     "#version 330 core\n"
     "in vec3 vertexColor;\n"
     "out vec4 FragColor;\n"
@@ -533,12 +533,12 @@ ShaderProgram* create_outline_program(){
     return program;
 }
 
-ShaderProgram* create_axes_program(){
+ShaderProgram* create_xyz_program(){
     ShaderProgram* program = NULL;
 
-    if((program = setup_program_shader_from_source("axes", 
-            axes_vert_src, axes_frag_src, NULL)) == NULL) {
-        fprintf(stderr, "Failed to initialize axes shader program\n");
+    if((program = setup_program_shader_from_source("xyz", 
+            xyz_vert_src, xyz_frag_src, NULL)) == NULL) {
+        fprintf(stderr, "Failed to initialize xyz shader program\n");
         return NULL;
     }
 

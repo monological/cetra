@@ -3,7 +3,7 @@
 #include "common.h"
 
 // Axis vertices: 6 vertices, 2 for each line (origin and end)
-float axes_vertices[] = {
+float xyz_vertices[] = {
     // X-axis (Red)
     0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, // Origin to Red
     1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, // Red end
@@ -15,5 +15,5 @@ float axes_vertices[] = {
     0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f  // Blue end
 };
 
-const size_t axes_vertices_size = sizeof(axes_vertices);
+const size_t xyz_vertices_size = sizeof(xyz_vertices);
 

@@ -309,9 +309,9 @@ int main(int argc, char **argv) {
         return -1;
     }
 
-    ShaderProgram* axes_shader_program = get_engine_shader_program_by_name(engine, "axes");
-    if (!axes_shader_program) {
-        fprintf(stderr, "Failed to get axes shader program\n");
+    ShaderProgram* xyz_shader_program = get_engine_shader_program_by_name(engine, "xyz");
+    if (!xyz_shader_program) {
+        fprintf(stderr, "Failed to get xyz shader program\n");
         return -1;
     }
 
@@ -363,8 +363,8 @@ int main(int argc, char **argv) {
         return -1;
     }
 
-    if(set_scene_axes_shader_program(scene, axes_shader_program) != 0){
-        fprintf(stderr, "Failed to set scene axes shader program\n");
+    if(set_scene_xyz_shader_program(scene, xyz_shader_program) != 0){
+        fprintf(stderr, "Failed to set scene xyz shader program\n");
         return -1;
     }
 
@@ -395,7 +395,7 @@ int main(int argc, char **argv) {
         SceneNode *light_node = create_node();
         set_node_light(light_node, light);
         set_node_name(light_node, "root_light_node");
-        set_show_axes_for_nodes(light_node, true);
+        set_show_xyz_for_nodes(light_node, true);
         set_show_outlines_for_nodes(light_node, true);
 
         Transform light_transform = {
@@ -419,7 +419,7 @@ int main(int argc, char **argv) {
 
     set_engine_show_gui(engine, true);
     set_engine_show_wireframe(engine, false);
-    set_engine_show_axes(engine, true);
+    set_engine_show_xyz(engine, true);
     set_engine_show_outlines(engine, true);
 
     run_engine_render_loop(engine, render_scene_callback);

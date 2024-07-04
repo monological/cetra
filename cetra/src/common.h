@@ -43,8 +43,8 @@ typedef struct {
 } Transform;
 
 // Axis vertices: 6 vertices, 2 for each line (origin and end)
-extern float axes_vertices[];
-extern const size_t axes_vertices_size;
+extern float xyz_vertices[];
+extern const size_t xyz_vertices_size;
 
 #endif // COMMON_H
 

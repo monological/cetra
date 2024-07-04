@@ -107,7 +107,7 @@ ShaderProgram* setup_program_shader_from_source(const char* name, const char* ve
 ShaderProgram* create_pbr_program();
 ShaderProgram* create_shape_program();
 ShaderProgram* create_outline_program();
-ShaderProgram* create_axes_program();
+ShaderProgram* create_xyz_program();
 
 /*
  * Program Validation

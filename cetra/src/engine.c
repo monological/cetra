@@ -92,7 +92,7 @@ Engine* create_engine(const char* window_title, int width, int height) {
 
     engine->show_gui = false;
     engine->show_wireframe = false;
-    engine->show_axes = false;
+    engine->show_xyz = false;
     engine->show_outlines = false;
 
     return engine;
@@ -472,14 +472,14 @@ static int _create_default_shaders_for_engine(Engine* engine) {
 
     add_shader_program_to_engine(engine, shape_shader_program);
 
-    ShaderProgram* axes_shader_program = NULL;
+    ShaderProgram* xyz_shader_program = NULL;
 
-    if((axes_shader_program = create_axes_program()) == NULL){
-        fprintf(stderr, "Failed to create axes shader program\n");
+    if((xyz_shader_program = create_xyz_program()) == NULL){
+        fprintf(stderr, "Failed to create xyz shader program\n");
         return -1;
     }
 
-    add_shader_program_to_engine(engine, axes_shader_program);
+    add_shader_program_to_engine(engine, xyz_shader_program);
 
     ShaderProgram* outline_shader_program = NULL;
 
@@ -570,10 +570,10 @@ void render_nuklear_gui(Engine* engine) {
         NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_SCALABLE |
         NK_WINDOW_MINIMIZABLE | NK_WINDOW_TITLE)) {
 
-        // Button for toggling axes
+        // Button for toggling xyz
         nk_layout_row_dynamic(engine->nk_ctx, 30, 2);
-        if (nk_button_label(engine->nk_ctx, "Show Axes")) {
-            set_engine_show_axes(engine, !engine->show_axes);
+        if (nk_button_label(engine->nk_ctx, "Show xyz")) {
+            set_engine_show_xyz(engine, !engine->show_xyz);
         }
 
         // Button for toggling wireframe
@@ -685,10 +685,10 @@ void set_engine_show_wireframe(Engine* engine, bool show_wireframe){
     }
 }
 
-void set_engine_show_axes(Engine* engine, bool show_axes){
+void set_engine_show_xyz(Engine* engine, bool show_xyz){
     if (!engine) return;
 
-    engine->show_axes = show_axes;
+    engine->show_xyz = show_xyz;
 
     for (size_t i = 0; i < engine->scene_count; ++i) {
         if (engine->scenes[i]) {
@@ -696,7 +696,7 @@ void set_engine_show_axes(Engine* engine, bool show_axes){
             if(!scene) continue;
             SceneNode* root_node = scene->root_node;
             if(!root_node) continue;
-            set_show_axes_for_nodes(root_node, show_axes);
+            set_show_xyz_for_nodes(root_node, show_xyz);
         }
     }
 }

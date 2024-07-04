@@ -19,7 +19,7 @@
 /*
  * prototypes
  */
-static void _set_axes_program_for_nodes(SceneNode* node, ShaderProgram* program);
+static void _set_xyz_program_for_nodes(SceneNode* node, ShaderProgram* program);
 static void _set_outlines_program_for_nodes(SceneNode* node, ShaderProgram* program);
 
 
@@ -41,7 +41,7 @@ Scene* create_scene() {
 
     scene->tex_pool = create_texture_pool();
 
-    scene->axes_shader_program = NULL;
+    scene->xyz_shader_program = NULL;
     scene->outlines_shader_program = NULL;
 
     return scene;
@@ -92,14 +92,6 @@ void free_scene(Scene* scene) {
     // Free the root node and its subtree
     if (scene->root_node) {
         free_node(scene->root_node);
-    }
-
-    if(scene->axes_shader_program){
-        free_program(scene->axes_shader_program);
-    }
-
-    if(scene->outlines_shader_program){
-        free_program(scene->outlines_shader_program);
     }
 
     // Finally, free the scene itnode
@@ -258,11 +250,11 @@ void add_material_to_scene(Scene* scene, Material* material) {
     scene->material_count = new_count;
 }
 
-GLboolean set_scene_axes_shader_program(Scene* scene, ShaderProgram* axes_shader_program) {
-    if((scene->axes_shader_program = axes_shader_program) == NULL){
+GLboolean set_scene_xyz_shader_program(Scene* scene, ShaderProgram* xyz_shader_program) {
+    if((scene->xyz_shader_program = xyz_shader_program) == NULL){
         return GL_FALSE;
     }
-    _set_axes_program_for_nodes(scene->root_node, scene->axes_shader_program);
+    _set_xyz_program_for_nodes(scene->root_node, scene->xyz_shader_program);
     return GL_TRUE;
 }
 
@@ -299,13 +291,13 @@ SceneNode* create_node() {
     node->light = NULL;
     node->camera = NULL;
 
-    // axes
-    node->show_axes = true;
-    glGenVertexArrays(1, &node->axes_vao);
-    check_gl_error("create node axes gen vertex failed");
-    glGenBuffers(1, &node->axes_vbo);
-    check_gl_error("create node axes gen buffers failed");
-    node->axes_shader_program = NULL;
+    // xyz
+    node->show_xyz = true;
+    glGenVertexArrays(1, &node->xyz_vao);
+    check_gl_error("create node xyz gen vertex failed");
+    glGenBuffers(1, &node->xyz_vbo);
+    check_gl_error("create node xyz gen buffers failed");
+    node->xyz_shader_program = NULL;
 
     // light outlines
     node->show_outlines = true;
@@ -403,25 +395,25 @@ void set_program_for_nodes(SceneNode* node, ShaderProgram* program) {
     }
 }
 
-static void _set_axes_program_for_nodes(SceneNode* node, ShaderProgram* program) {
+static void _set_xyz_program_for_nodes(SceneNode* node, ShaderProgram* program) {
     if (!node) {
         return;
     }
 
-    node->axes_shader_program = program;
+    node->xyz_shader_program = program;
 
     for (size_t i = 0; i < node->children_count; ++i) {
-        _set_axes_program_for_nodes(node->children[i], program);
+        _set_xyz_program_for_nodes(node->children[i], program);
     }
 }
 
-void set_show_axes_for_nodes(SceneNode* node, bool show_axes){
+void set_show_xyz_for_nodes(SceneNode* node, bool show_xyz){
     if (!node) return;
     
-    node->show_axes = show_axes;
+    node->show_xyz = show_xyz;
 
     for (size_t i = 0; i < node->children_count; ++i) {
-        set_show_axes_for_nodes(node->children[i], show_axes);
+        set_show_xyz_for_nodes(node->children[i], show_xyz);
     }
 }
 
@@ -447,13 +439,13 @@ void set_show_outlines_for_nodes(SceneNode* node, bool show_outlines){
     }
 }
 
-static void _upload_axes_buffers_to_gpu_for_node(SceneNode* node){
+static void _upload_xyz_buffers_to_gpu_for_node(SceneNode* node){
     // Bind the Vertex Array Object (VAO)
-    glBindVertexArray(node->axes_vao);
+    glBindVertexArray(node->xyz_vao);
 
     // Bind and set up the Vertex Buffer Object (VBO)
-    glBindBuffer(GL_ARRAY_BUFFER, node->axes_vbo);
-    glBufferData(GL_ARRAY_BUFFER, axes_vertices_size, axes_vertices, GL_STATIC_DRAW);
+    glBindBuffer(GL_ARRAY_BUFFER, node->xyz_vbo);
+    glBufferData(GL_ARRAY_BUFFER, xyz_vertices_size, xyz_vertices, GL_STATIC_DRAW);
 
     // Position attribute
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
@@ -464,8 +456,8 @@ static void _upload_axes_buffers_to_gpu_for_node(SceneNode* node){
     glEnableVertexAttribArray(1);
 
     // only validate if VAO is bound
-    if(node->axes_shader_program && !validate_program(node->axes_shader_program)){
-        fprintf(stderr, "Axes shader program validation failed\n");
+    if(node->xyz_shader_program && !validate_program(node->xyz_shader_program)){
+        fprintf(stderr, "xyz shader program validation failed\n");
     }
 
     glBindVertexArray(0);
@@ -518,7 +510,7 @@ void upload_buffers_to_gpu_for_nodes(SceneNode* node) {
         }
     }
     
-    _upload_axes_buffers_to_gpu_for_node(node);
+    _upload_xyz_buffers_to_gpu_for_node(node);
 
     if(node->light){
         _upload_outline_buffers_to_gpu_for_node(node, true);

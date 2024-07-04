@@ -207,11 +207,11 @@ void _render_node(SceneNode* node, Camera *camera,
     }
 }
 
-void _render_axes(SceneNode* node, mat4 view, mat4 projection){
-    if(!node || !node->axes_shader_program){
+void _render_xyz(SceneNode* node, mat4 view, mat4 projection){
+    if(!node || !node->xyz_shader_program){
         return;
     }
-    ShaderProgram* program = node->axes_shader_program;
+    ShaderProgram* program = node->xyz_shader_program;
 
     glUseProgram(program->id);
 
@@ -220,8 +220,8 @@ void _render_axes(SceneNode* node, mat4 view, mat4 projection){
     glUniformMatrix4fv(program->view_loc, 1, GL_FALSE, (const GLfloat*)view);
     glUniformMatrix4fv(program->proj_loc, 1, GL_FALSE, (const GLfloat*)projection);
 
-    glBindVertexArray(node->axes_vao);
-    glDrawArrays(GL_LINES, 0,  axes_vertices_size / (6 * sizeof(float)));
+    glBindVertexArray(node->xyz_vao);
+    glDrawArrays(GL_LINES, 0,  xyz_vertices_size / (6 * sizeof(float)));
 
     glBindVertexArray(0);
     glUseProgram(0);
@@ -281,8 +281,8 @@ void render_scene(Scene* scene, SceneNode *node, Camera *camera,
     _render_node(node, camera, model, view, projection, 
             time_value, render_mode, closest_lights, returned_light_count);
 
-    if (node->show_axes && node->axes_shader_program) {
-        _render_axes(node, view, projection);
+    if (node->show_xyz && node->xyz_shader_program) {
+        _render_xyz(node, view, projection);
     }
 
     if (node->show_outlines && node->outlines_shader_program) {

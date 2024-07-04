@@ -35,10 +35,10 @@ typedef struct SceneNode {
     Camera* camera;
 
 
-    bool show_axes;
-    GLuint axes_vao;
-    GLuint axes_vbo;
-    ShaderProgram* axes_shader_program;
+    bool show_xyz;
+    GLuint xyz_vao;
+    GLuint xyz_vbo;
+    ShaderProgram* xyz_shader_program;
 
     bool show_outlines;
     GLuint outlines_vao;
@@ -61,8 +61,8 @@ void set_node_name(SceneNode* node, const char* name);
 void set_node_light(SceneNode* node, Light* light);
 void set_node_camera(SceneNode* node, Camera* camera);
 
-// axes
-void set_show_axes_for_nodes(SceneNode* node, bool show_axes);
+// xyz
+void set_show_xyz_for_nodes(SceneNode* node, bool show_xyz);
 
 // outlines
 void set_show_outlines_for_nodes(SceneNode* node, bool show_outlines);
@@ -97,7 +97,7 @@ typedef struct Scene {
     TexturePool *tex_pool;
 
     // used by all nodes
-    ShaderProgram* axes_shader_program;
+    ShaderProgram* xyz_shader_program;
     ShaderProgram* outlines_shader_program;
 } Scene;
 
@@ -123,7 +123,7 @@ Light** get_closest_lights(Scene* scene, SceneNode* target_node,
 void add_material_to_scene(Scene* scene, Material* material);
 
 // viz
-GLboolean set_scene_axes_shader_program(Scene* scene, ShaderProgram* axes_shader_program);
+GLboolean set_scene_xyz_shader_program(Scene* scene, ShaderProgram* xyz_shader_program);
 GLboolean set_scene_outlines_shader_program(Scene* scene, ShaderProgram* outlines_shader_program);
 
 // print
