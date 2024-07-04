@@ -23,21 +23,21 @@ Material* create_material() {
     material->ao = 1.0f;
 
     // In create_material function
-    material->albedoTex = NULL;
-    material->normalTex = NULL;
-    material->roughnessTex = NULL;
-    material->metalnessTex = NULL;
-    material->ambientOcclusionTex = NULL;
-    material->emissiveTex = NULL;
-    material->heightTex = NULL;
+    material->albedo_tex = NULL;
+    material->normal_tex = NULL;
+    material->roughness_tex = NULL;
+    material->metalness_tex = NULL;
+    material->ambient_occlusion_tex = NULL;
+    material->emissive_tex = NULL;
+    material->height_tex = NULL;
 
     // Additional Advanced PBR Textures
-    material->opacityTex = NULL;
-    material->microsurfaceTex = NULL;
-    material->anisotropyTex = NULL;
-    material->subsurfaceScatteringTex = NULL;
-    material->sheenTex = NULL;
-    material->reflectanceTex = NULL;
+    material->opacity_tex = NULL;
+    material->microsurface_tex = NULL;
+    material->anisotropy_tex = NULL;
+    material->subsurface_scattering_tex = NULL;
+    material->sheen_tex = NULL;
+    material->reflectance_tex = NULL;
 
     material->shader_program = NULL;
 

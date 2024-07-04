@@ -144,7 +144,6 @@ void generate_circle_to_mesh(Mesh* mesh, const Circle* circle) {
             mesh->indices[i * 3 + 2] = (i + 1) % segments + 1;
         }
     } else if (draw_mode == LINE_STRIP) {
-        // Set up for circle outline
         mesh->vertex_count = segments + 1; // One vertex per segment plus one to close the loop
         mesh->index_count = segments + 1;  // One index per vertex
 
@@ -152,7 +151,7 @@ void generate_circle_to_mesh(Mesh* mesh, const Circle* circle) {
         mesh->indices = (unsigned int*)realloc(mesh->indices, mesh->index_count * sizeof(unsigned int));
 
         if (!mesh->vertices || !mesh->indices) {
-            fprintf(stderr, "Failed to allocate memory for circle outline mesh\n");
+            fprintf(stderr, "Failed to allocate memory for circle mesh\n");
             return;
         }
 
@@ -325,7 +324,7 @@ void generate_rect_to_mesh(Mesh* mesh, const Rect* rect) {
             mesh->indices = (unsigned int*)realloc(mesh->indices, mesh->index_count * sizeof(unsigned int));
 
             if (!mesh->vertices || !mesh->indices) {
-                fprintf(stderr, "Failed to allocate memory for rect outline mesh\n");
+                fprintf(stderr, "Failed to allocate memory for rect mesh\n");
                 return;
             }
 
@@ -335,8 +334,8 @@ void generate_rect_to_mesh(Mesh* mesh, const Rect* rect) {
             glm_vec3_copy(bottom_left, &mesh->vertices[9]);
 
             // Indices for line loop
-            unsigned int outline_indices[5] = {0, 1, 2, 3, 0};
-            memcpy(mesh->indices, outline_indices, sizeof(outline_indices));
+            unsigned int rect_indices[5] = {0, 1, 2, 3, 0};
+            memcpy(mesh->indices, rect_indices, sizeof(rect_indices));
 
             mesh->draw_mode = LINE_LOOP;
             mesh->line_width = rect->line_width;

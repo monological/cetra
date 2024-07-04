@@ -29,7 +29,6 @@ Material* process_ai_material(struct aiMaterial* ai_mat, TexturePool* tex_pool) 
     Material* material = create_material();
 
     struct aiColor4D color;
-    float floatVal;
     struct aiString str;
 
       // Load Albedo/Base Color
@@ -44,11 +43,11 @@ Material* process_ai_material(struct aiMaterial* ai_mat, TexturePool* tex_pool) 
         material->albedo[2] = 0.1;
     }
 
-    
+    /*
     ai_real metallic, roughness;
     aiReturn result;
 
-    /*result = aiGetMaterialFloat(ai_mat, AI_MATKEY_METALLIC_FACTOR, &metallic);
+    result = aiGetMaterialFloat(ai_mat, AI_MATKEY_METALLIC_FACTOR, &metallic);
     if (result == AI_SUCCESS) {
         material->metallic = metallic;
     } else {
@@ -67,81 +66,81 @@ Material* process_ai_material(struct aiMaterial* ai_mat, TexturePool* tex_pool) 
 
     // Load Diffuse Texture
     if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_DIFFUSE, 0, &str, NULL, NULL, NULL, NULL, NULL, NULL)) {
-        material->albedoTex = load_texture_path_into_pool(tex_pool, str.data);
-        if (material->albedoTex != NULL) {
-            printf("Diffuse texture loaded: %s\n", material->albedoTex->filepath);
+        material->albedo_tex = load_texture_path_into_pool(tex_pool, str.data);
+        if (material->albedo_tex != NULL) {
+            printf("Diffuse texture loaded: %s\n", material->albedo_tex->filepath);
         }
     }
 
     // Load Normal Texture
     if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_NORMALS, 0, &str, NULL, NULL, NULL, NULL, NULL, NULL)) {
-        material->normalTex = load_texture_path_into_pool(tex_pool, str.data);
-        if (material->normalTex != NULL) {
-            printf("Normals texture loaded: %s\n", material->normalTex->filepath);
+        material->normal_tex = load_texture_path_into_pool(tex_pool, str.data);
+        if (material->normal_tex != NULL) {
+            printf("Normals texture loaded: %s\n", material->normal_tex->filepath);
         }
     }
 
     // Load Metalness Texture
     if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_METALNESS, 0, &str, NULL, NULL, NULL, NULL, NULL, NULL)) {
-        material->metalnessTex = load_texture_path_into_pool(tex_pool, str.data);
-        if (material->metalnessTex != NULL) {
-            printf("Metalness texture loaded: %s\n", material->metalnessTex->filepath);
+        material->metalness_tex = load_texture_path_into_pool(tex_pool, str.data);
+        if (material->metalness_tex != NULL) {
+            printf("Metalness texture loaded: %s\n", material->metalness_tex->filepath);
         }
     }
 
     // Load Diffuse Roughness Texture
     if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_DIFFUSE_ROUGHNESS, 0, &str, NULL, NULL, NULL, NULL, NULL, NULL)) {
-        material->roughnessTex = load_texture_path_into_pool(tex_pool, str.data);
-        if (material->roughnessTex != NULL) {
-            printf("Diffuse Roughness texture loaded: %s\n", material->roughnessTex->filepath);
+        material->roughness_tex = load_texture_path_into_pool(tex_pool, str.data);
+        if (material->roughness_tex != NULL) {
+            printf("Diffuse Roughness texture loaded: %s\n", material->roughness_tex->filepath);
         }
     }
 
     // Load Ambient Occlusion Texture
     if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_AMBIENT_OCCLUSION, 0, &str, NULL, NULL, NULL, NULL, NULL, NULL)) {
-        material->ambientOcclusionTex = load_texture_path_into_pool(tex_pool, str.data);
-        if (material->ambientOcclusionTex != NULL) {
-            printf("Ambient Occlusion texture loaded: %s\n", material->ambientOcclusionTex->filepath);
+        material->ambient_occlusion_tex = load_texture_path_into_pool(tex_pool, str.data);
+        if (material->ambient_occlusion_tex != NULL) {
+            printf("Ambient Occlusion texture loaded: %s\n", material->ambient_occlusion_tex->filepath);
         }
     }
 
     // Load Emissive Texture
     if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_EMISSIVE, 0, &str, NULL, NULL, NULL, NULL, NULL, NULL)) {
-        material->emissiveTex = load_texture_path_into_pool(tex_pool, str.data);
-        if (material->emissiveTex != NULL) {
-            printf("Emissive texture loaded: %s\n", material->emissiveTex->filepath);
+        material->emissive_tex = load_texture_path_into_pool(tex_pool, str.data);
+        if (material->emissive_tex != NULL) {
+            printf("Emissive texture loaded: %s\n", material->emissive_tex->filepath);
         }
     }
 
     // Load Height Texture
     if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_HEIGHT, 0, &str, NULL, NULL, NULL, NULL, NULL, NULL)) {
-        material->heightTex = load_texture_path_into_pool(tex_pool, str.data);
-        if (material->heightTex != NULL) {
-            printf("Height texture loaded: %s\n", material->heightTex->filepath);
+        material->height_tex = load_texture_path_into_pool(tex_pool, str.data);
+        if (material->height_tex != NULL) {
+            printf("Height texture loaded: %s\n", material->height_tex->filepath);
         }
     }
 
     // Load Opacity Texture
     if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_OPACITY, 0, &str, NULL, NULL, NULL, NULL, NULL, NULL)) {
-        material->opacityTex = load_texture_path_into_pool(tex_pool, str.data);
-        if (material->opacityTex != NULL) {
-            printf("Opacity texture loaded: %s\n", material->opacityTex->filepath);
+        material->opacity_tex = load_texture_path_into_pool(tex_pool, str.data);
+        if (material->opacity_tex != NULL) {
+            printf("Opacity texture loaded: %s\n", material->opacity_tex->filepath);
         }
     }
 
     // Load Sheen Texture
     if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_SHEEN, 0, &str, NULL, NULL, NULL, NULL, NULL, NULL)) {
-        material->sheenTex = load_texture_path_into_pool(tex_pool, str.data);
-        if (material->sheenTex != NULL) {
-            printf("Sheen texture loaded: %s\n", material->sheenTex->filepath);
+        material->sheen_tex = load_texture_path_into_pool(tex_pool, str.data);
+        if (material->sheen_tex != NULL) {
+            printf("Sheen texture loaded: %s\n", material->sheen_tex->filepath);
         }
     }
 
     // Load Reflectance Texture
     if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_REFLECTION, 0, &str, NULL, NULL, NULL, NULL, NULL, NULL)) {
-        material->reflectanceTex = load_texture_path_into_pool(tex_pool, str.data);
-        if (material->reflectanceTex != NULL) {
-            printf("Reflectance texture loaded: %s\n", material->reflectanceTex->filepath);
+        material->reflectance_tex = load_texture_path_into_pool(tex_pool, str.data);
+        if (material->reflectance_tex != NULL) {
+            printf("Reflectance texture loaded: %s\n", material->reflectance_tex->filepath);
         }
     }
 

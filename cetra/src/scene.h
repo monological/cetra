@@ -34,16 +34,10 @@ typedef struct SceneNode {
 
     Camera* camera;
 
-
     bool show_xyz;
     GLuint xyz_vao;
     GLuint xyz_vbo;
     ShaderProgram* xyz_shader_program;
-
-    bool show_outlines;
-    GLuint outlines_vao;
-    GLuint outlines_vbo;
-    ShaderProgram* outlines_shader_program;
 } SceneNode;
 
 // malloc
@@ -63,9 +57,6 @@ void set_node_camera(SceneNode* node, Camera* camera);
 
 // xyz
 void set_show_xyz_for_nodes(SceneNode* node, bool show_xyz);
-
-// outlines
-void set_show_outlines_for_nodes(SceneNode* node, bool show_outlines);
 
 // shaders
 void set_program_for_nodes(SceneNode* node, ShaderProgram* program);

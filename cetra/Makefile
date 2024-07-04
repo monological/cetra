@@ -1,6 +1,13 @@
+# Color codes
+RED = \033[0;31m
+GREEN = \033[0;32m
+YELLOW = \033[0;33m
+BLUE = \033[0;34m
+NC = \033[0m # No Color
+
 # Compiler and linker configurations
 CC = gcc
-CFLAGS = -Wall -g -std=c11
+CFLAGS = -Wall -g -std=c11 -DGL_SILENCE_DEPRECATION 
 LDFLAGS =
 LIBS = -lm -lpthread
 
@@ -40,10 +47,12 @@ all: libcetra.a shaders
 shaders: $(SHADER_HEADER)
 
 $(SHADER_HEADER): $(SHADER_FILES)
+	@echo "$(BLUE)Updating shader header file...$(NC)"
 	python3 gen_shader_header.py $(SHADER_DIR) $(SHADER_HEADER)
 
 # Build the cetra library
 libcetra.a: $(OBJ)
+	@echo "$(YELLOW)Generating Cetra static library...$(NC)"
 	ar rcs $@ $^
 
 # Generic rule for building objects
@@ -52,7 +61,9 @@ libcetra.a: $(OBJ)
 
 # Clean the build
 clean:
+	@echo "$(RED)Cleaning up Cetra...$(NC)"
 	rm -f $(OBJ) libcetra.a
 	rm -f $(SHADER_HEADER)
 
 .PHONY: all clean shaders
+

@@ -154,7 +154,6 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
     Camera *camera = engine->camera;
 
     float cameraSpeed = 300.0f;
-    vec3 move_direction = {0.0f, 0.0f, 0.0f};
     vec3 new_position = {0.0f, 0.0f, 0.0f};
 
     if (action == GLFW_PRESS || action == GLFW_REPEAT) {
@@ -284,12 +283,6 @@ int main() {
         return -1;
     }
 
-    ShaderProgram* outlines_shader_program = get_engine_shader_program_by_name(engine, "outline");
-    if (!outlines_shader_program) {
-        fprintf(stderr, "Failed to get outline shader program\n");
-        return -1;
-    }
-
     /*
      * Set up materials.
      */
@@ -355,11 +348,6 @@ int main() {
 
     if(set_scene_xyz_shader_program(scene, xyz_shader_program) == GL_FALSE){
         fprintf(stderr, "Failed to set scene xyz shader program\n");
-        return -1;
-    }
-
-    if(set_scene_outlines_shader_program(scene, outlines_shader_program) == GL_FALSE){
-        fprintf(stderr, "Failed to set scene outlines shader program\n");
         return -1;
     }
 
@@ -538,7 +526,6 @@ int main() {
         set_node_light(light_node, light);
         set_node_name(light_node, "root_light_node");
         set_show_xyz_for_nodes(light_node, true);
-        set_show_outlines_for_nodes(light_node, true);
 
         Transform light_transform = {
             .position = {0.0f, 0.0f, -200.00f},
@@ -560,7 +547,6 @@ int main() {
     set_engine_show_gui(engine, false);
     set_engine_show_wireframe(engine, false);
     set_engine_show_xyz(engine, false);
-    set_engine_show_outlines(engine, false);
 
     run_engine_render_loop(engine, render_scene_callback);
 

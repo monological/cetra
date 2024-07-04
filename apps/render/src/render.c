@@ -152,7 +152,6 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
     Camera *camera = engine->camera;
 
     float cameraSpeed = 300.0f;
-    vec3 move_direction = {0.0f, 0.0f, 0.0f};
     vec3 new_position = {0.0f, 0.0f, 0.0f};
 
     if (action == GLFW_PRESS || action == GLFW_REPEAT) {
@@ -241,10 +240,6 @@ void render_scene_callback(Engine* engine, Scene* current_scene){
             update_engine_camera_perspective(engine);
 
         } else {
-            float angle = time_value * ROTATE_SPEED;
-            float zpos = cosf(angle);
-            float ypos = sinf(angle);
-
             transform.position[0] = 0.0f;
             transform.position[1] = -200.0f;
             transform.position[2] = 0.0f;
@@ -279,13 +274,13 @@ void render_scene_callback(Engine* engine, Scene* current_scene){
  */
 int main(int argc, char **argv) {
 
-    if (argc < 3) {
-        fprintf(stderr, "Usage: %s <FBX_MODEL_PATH> <FBX_TEXTURE_DIR>\n", argv[0]);
+    if (argc < 2) {
+        fprintf(stderr, "Usage: %s <FBX_MODEL_PATH> [FBX_TEXTURE_DIR]\n", argv[0]);
         return -1;
     }
 
     const char *fbx_model_path = argv[1];
-    const char *fbx_texture_dir = argv[2];
+    const char *fbx_texture_dir = argc > 2 ? argv[2] : NULL;
     
     Engine *engine = create_engine("Cetra Engine", WIDTH, HEIGHT);
 
@@ -312,12 +307,6 @@ int main(int argc, char **argv) {
     ShaderProgram* xyz_shader_program = get_engine_shader_program_by_name(engine, "xyz");
     if (!xyz_shader_program) {
         fprintf(stderr, "Failed to get xyz shader program\n");
-        return -1;
-    }
-
-    ShaderProgram* outlines_shader_program = get_engine_shader_program_by_name(engine, "outline");
-    if (!outlines_shader_program) {
-        fprintf(stderr, "Failed to get outlines shader program\n");
         return -1;
     }
 
@@ -368,11 +357,6 @@ int main(int argc, char **argv) {
         return -1;
     }
 
-    if(set_scene_outlines_shader_program(scene, outlines_shader_program) == GL_FALSE){
-        fprintf(stderr, "Failed to set scene outlines shader program\n");
-        return -1;
-    }
-
     SceneNode* root_node = scene->root_node;
     assert(root_node != NULL);
 
@@ -396,12 +380,11 @@ int main(int argc, char **argv) {
         set_node_light(light_node, light);
         set_node_name(light_node, "root_light_node");
         set_show_xyz_for_nodes(light_node, true);
-        set_show_outlines_for_nodes(light_node, true);
 
         Transform light_transform = {
-            .position = {300.0f, 300.0f, -200.00f},
+            .position = {0.0f, 0.0f, 0.00f},
             .rotation = {0.0f, 0.0f, 0.0f},
-            .scale = {1.0f, 1.0f, 1.0f}
+            .scale = {200.0f, 200.0f, 200.0f}
         };
 
         mat4 light_matrix; 
@@ -420,7 +403,6 @@ int main(int argc, char **argv) {
     set_engine_show_gui(engine, true);
     set_engine_show_wireframe(engine, false);
     set_engine_show_xyz(engine, true);
-    set_engine_show_outlines(engine, true);
 
     run_engine_render_loop(engine, render_scene_callback);
 

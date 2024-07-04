@@ -142,6 +142,11 @@ Texture* load_texture_path_into_pool(TexturePool* pool, const char* filepath) {
         return NULL;
     }
 
+    if(pool->directory == NULL){
+        fprintf(stderr, "Texture pool directory not set\n");
+        return NULL;
+    }
+
     GLenum format;
 
     // Normalize and work on a copy of the filepath
@@ -199,12 +204,13 @@ Texture* load_texture_path_into_pool(TexturePool* pool, const char* filepath) {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
         // Determine format
-        if (nrChannels == 1)
+        if (nrChannels == 1){
             format = GL_RED;
-        else if (nrChannels == 3)
+        }else if (nrChannels == 3){
             format = GL_RGB;
-        else if (nrChannels == 4)
+        }else{
             format = GL_RGBA;
+        }
 
         // Upload texture data
         glTexImage2D(GL_TEXTURE_2D, 0, format, width, height, 0, format, GL_UNSIGNED_BYTE, data);

@@ -14,21 +14,21 @@ typedef struct Material {
     float ao;
 
     // Core PBR Textures
-    Texture* albedoTex;           // Albedo (Diffuse) Map
-    Texture* normalTex;           // Normal Map
-    Texture* roughnessTex;        // Roughness Map
-    Texture* metalnessTex;        // Metalness Map
-    Texture* ambientOcclusionTex; // Ambient Occlusion Map
-    Texture* emissiveTex;         // Emissive Map
-    Texture* heightTex;           // Height Map (Displacement Map)
+    Texture* albedo_tex;           // Albedo (Diffuse) Map
+    Texture* normal_tex;           // Normal Map
+    Texture* roughness_tex;        // Roughness Map
+    Texture* metalness_tex;        // Metalness Map
+    Texture* ambient_occlusion_tex; // Ambient Occlusion Map
+    Texture* emissive_tex;         // Emissive Map
+    Texture* height_tex;           // Height Map (Displacement Map)
 
     // Additional Advanced PBR Textures
-    Texture* opacityTex;             // Opacity Map
-    Texture* microsurfaceTex;        // Microsurface (Detail) Map
-    Texture* anisotropyTex;          // Anisotropy Map
-    Texture* subsurfaceScatteringTex;// Subsurface Scattering Map
-    Texture* sheenTex;               // Sheen Map (for fabrics)
-    Texture* reflectanceTex;         // Reflectance Map
+    Texture* opacity_tex;             // Opacity Map
+    Texture* microsurface_tex;        // Microsurface (Detail) Map
+    Texture* anisotropy_tex;          // Anisotropy Map
+    Texture* subsurface_scattering_tex;// Subsurface Scattering Map
+    Texture* sheen_tex;               // Sheen Map (for fabrics)
+    Texture* reflectance_tex;         // Reflectance Map
 
     ShaderProgram* shader_program;
 } Material;

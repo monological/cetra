@@ -93,7 +93,6 @@ Engine* create_engine(const char* window_title, int width, int height) {
     engine->show_gui = false;
     engine->show_wireframe = false;
     engine->show_xyz = false;
-    engine->show_outlines = false;
 
     return engine;
 }
@@ -481,15 +480,6 @@ static int _create_default_shaders_for_engine(Engine* engine) {
 
     add_shader_program_to_engine(engine, xyz_shader_program);
 
-    ShaderProgram* outline_shader_program = NULL;
-
-    if((outline_shader_program = create_outline_program()) == NULL){
-        fprintf(stderr, "Failed to create outline shader program\n");
-        return -1;
-    }
-
-    add_shader_program_to_engine(engine, outline_shader_program);
-
     return 0;
 }
 
@@ -572,17 +562,13 @@ void render_nuklear_gui(Engine* engine) {
 
         // Button for toggling xyz
         nk_layout_row_dynamic(engine->nk_ctx, 30, 2);
-        if (nk_button_label(engine->nk_ctx, "Show xyz")) {
+        if (nk_button_label(engine->nk_ctx, "Show XYZ")) {
             set_engine_show_xyz(engine, !engine->show_xyz);
         }
 
         // Button for toggling wireframe
         if (nk_button_label(engine->nk_ctx, "Show Wireframe")) {
             set_engine_show_wireframe(engine, !engine->show_wireframe);
-        }
-
-        if (nk_button_label(engine->nk_ctx, "Show Outlines")) {
-            set_engine_show_outlines(engine, !engine->show_outlines);
         }
 
         // cam modes
@@ -697,22 +683,6 @@ void set_engine_show_xyz(Engine* engine, bool show_xyz){
             SceneNode* root_node = scene->root_node;
             if(!root_node) continue;
             set_show_xyz_for_nodes(root_node, show_xyz);
-        }
-    }
-}
-
-void set_engine_show_outlines(Engine* engine, bool show_outlines){
-    if (!engine) return;
-    
-    engine->show_outlines = show_outlines;
-
-    for (size_t i = 0; i < engine->scene_count; ++i) {
-        if (engine->scenes[i]) {
-            Scene* scene = engine->scenes[i];
-            if(!scene) continue;
-            SceneNode* root_node = scene->root_node;
-            if(!root_node) continue;
-            set_show_outlines_for_nodes(root_node, show_outlines);
         }
     }
 }

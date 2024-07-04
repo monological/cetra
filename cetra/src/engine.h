@@ -76,7 +76,6 @@ typedef struct Engine {
     bool show_gui;
     bool show_wireframe;
     bool show_xyz;
-    bool show_outlines;
 } Engine;
 
 typedef void (*RenderSceneFunc)(Engine*, Scene*);
@@ -115,7 +114,6 @@ void render_nuklear_gui(Engine* engine);
 // Render
 void set_engine_show_wireframe(Engine* engine, bool show_wireframe);
 void set_engine_show_xyz(Engine* engine, bool show_xyz);
-void set_engine_show_outlines(Engine* engine, bool show_outlines);
 void run_engine_render_loop(Engine* engine, RenderSceneFunc render_func);
 
 

@@ -521,18 +521,6 @@ ShaderProgram* create_shape_program(){
     return program;
 }
 
-ShaderProgram* create_outline_program(){
-    ShaderProgram* program = NULL;
-
-    if((program = setup_program_shader_from_source("outline", 
-            outlines_vert_shader_str, outlines_frag_shader_str, outlines_geo_shader_str)) == NULL) {
-        fprintf(stderr, "Failed to initialize outlines shader program\n");
-        return NULL;
-    }
-
-    return program;
-}
-
 ShaderProgram* create_xyz_program(){
     ShaderProgram* program = NULL;
 

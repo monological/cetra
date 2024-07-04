@@ -20,9 +20,6 @@
  * prototypes
  */
 static void _set_xyz_program_for_nodes(SceneNode* node, ShaderProgram* program);
-static void _set_outlines_program_for_nodes(SceneNode* node, ShaderProgram* program);
-
-
 
 Scene* create_scene() {
     Scene* scene = malloc(sizeof(Scene));
@@ -42,7 +39,6 @@ Scene* create_scene() {
     scene->tex_pool = create_texture_pool();
 
     scene->xyz_shader_program = NULL;
-    scene->outlines_shader_program = NULL;
 
     return scene;
 }
@@ -258,14 +254,6 @@ GLboolean set_scene_xyz_shader_program(Scene* scene, ShaderProgram* xyz_shader_p
     return GL_TRUE;
 }
 
-GLboolean set_scene_outlines_shader_program(Scene* scene, ShaderProgram* outlines_shader_program) {
-    if((scene->outlines_shader_program = outlines_shader_program) == NULL){
-        return GL_FALSE;
-    }
-    _set_outlines_program_for_nodes(scene->root_node, scene->outlines_shader_program);
-    return GL_TRUE;
-}
-
 /*
  * Scene Node
  *
@@ -298,14 +286,6 @@ SceneNode* create_node() {
     glGenBuffers(1, &node->xyz_vbo);
     check_gl_error("create node xyz gen buffers failed");
     node->xyz_shader_program = NULL;
-
-    // light outlines
-    node->show_outlines = true;
-    glGenVertexArrays(1, &node->outlines_vao);
-    check_gl_error("create node outlines gen vertex failed");
-    glGenBuffers(1, &node->outlines_vbo);
-    check_gl_error("create node outlines gen buffers failed");
-    node->outlines_shader_program = NULL;
 
     return node;
 }
@@ -417,28 +397,6 @@ void set_show_xyz_for_nodes(SceneNode* node, bool show_xyz){
     }
 }
 
-static void _set_outlines_program_for_nodes(SceneNode* node, ShaderProgram* program) {
-    if (!node) {
-        return;
-    }
-
-    node->outlines_shader_program = program;
-
-    for (size_t i = 0; i < node->children_count; ++i) {
-        _set_outlines_program_for_nodes(node->children[i], program);
-    }
-}
-
-void set_show_outlines_for_nodes(SceneNode* node, bool show_outlines){
-    if (!node) return;
-    
-    node->show_outlines = show_outlines;
-
-    for (size_t i = 0; i < node->children_count; ++i) {
-        set_show_outlines_for_nodes(node->children[i], show_outlines);
-    }
-}
-
 static void _upload_xyz_buffers_to_gpu_for_node(SceneNode* node){
     // Bind the Vertex Array Object (VAO)
     glBindVertexArray(node->xyz_vao);
@@ -463,41 +421,6 @@ static void _upload_xyz_buffers_to_gpu_for_node(SceneNode* node){
     glBindVertexArray(0);
 }
 
-static void _upload_outline_buffers_to_gpu_for_node(SceneNode* node, bool val_prog){
-    if(!node || !node->light) return;
-
-    size_t buffer_size = sizeof(vec3) * 2;
-    vec3* buffer_data = (vec3*)malloc(buffer_size);
-    if (!buffer_data) {
-        return;
-    }
-
-    glm_vec3_copy(node->light->global_position, buffer_data[0]);
-    glm_vec3_copy(node->light->color, buffer_data[1]);
-
-
-    glBindVertexArray(node->outlines_vao);
-    glBindBuffer(GL_ARRAY_BUFFER, node->outlines_vbo);
-
-
-    glBufferData(GL_ARRAY_BUFFER, buffer_size, buffer_data, GL_STATIC_DRAW);
-
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
-    glEnableVertexAttribArray(0);
-
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
-    glEnableVertexAttribArray(1);
-
-    // only validate if VAO is bound
-    if(val_prog && node->outlines_shader_program && !validate_program(node->outlines_shader_program)){
-        fprintf(stderr, "Light outline shader program validation failed\n");
-    }
-
-    glBindVertexArray(0);
-
-    free(buffer_data);
-}
-
 void upload_buffers_to_gpu_for_nodes(SceneNode* node) {
     if (!node) return;
 
@@ -511,10 +434,6 @@ void upload_buffers_to_gpu_for_nodes(SceneNode* node) {
     }
     
     _upload_xyz_buffers_to_gpu_for_node(node);
-
-    if(node->light){
-        _upload_outline_buffers_to_gpu_for_node(node, true);
-    }
 
     for (size_t i = 0; i < node->children_count; i++) {
         upload_buffers_to_gpu_for_nodes(node->children[i]);
@@ -551,8 +470,6 @@ void apply_transform_to_nodes(SceneNode* node, mat4 transform) {
         vec3 light_position;
         glm_mat4_mulv3(node->global_transform, node->light->original_position, 1.0f, light_position);
         glm_vec3_copy(light_position, node->light->global_position);
-
-        _upload_outline_buffers_to_gpu_for_node(node, false);
     }
 
     for (size_t i = 0; i < node->children_count; i++) {

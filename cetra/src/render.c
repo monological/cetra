@@ -76,77 +76,77 @@ void _update_program_material_uniforms(ShaderProgram * program, Material* materi
     glUniform1f(program->roughness_loc, material->roughness);
     glUniform1f(program->ao_loc, material->ao);
 
-    if (material->albedoTex) {
+    if (material->albedo_tex) {
         glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, material->albedoTex->id);
+        glBindTexture(GL_TEXTURE_2D, material->albedo_tex->id);
         glUniform1i(program->albedo_tex_loc, 0);
     }
 
-    if (material->normalTex) {
+    if (material->normal_tex) {
         glActiveTexture(GL_TEXTURE1);
-        glBindTexture(GL_TEXTURE_2D, material->normalTex->id);
+        glBindTexture(GL_TEXTURE_2D, material->normal_tex->id);
         glUniform1i(program->normal_tex_loc, 1);
     }
 
-    if (material->roughnessTex) {
+    if (material->roughness_tex) {
         glActiveTexture(GL_TEXTURE2);
-        glBindTexture(GL_TEXTURE_2D, material->roughnessTex->id);
+        glBindTexture(GL_TEXTURE_2D, material->roughness_tex->id);
         glUniform1i(program->roughness_tex_loc, 2);
     }
 
-    if (material->metalnessTex) {
+    if (material->metalness_tex) {
         glActiveTexture(GL_TEXTURE3);
-        glBindTexture(GL_TEXTURE_2D, material->metalnessTex->id);
+        glBindTexture(GL_TEXTURE_2D, material->metalness_tex->id);
         glUniform1i(program->metalness_tex_loc, 3);
     }
 
-    if (material->ambientOcclusionTex) {
+    if (material->ambient_occlusion_tex) {
         glActiveTexture(GL_TEXTURE4);
-        glBindTexture(GL_TEXTURE_2D, material->ambientOcclusionTex->id);
+        glBindTexture(GL_TEXTURE_2D, material->ambient_occlusion_tex->id);
         glUniform1i(program->ao_tex_loc, 4);
     }
 
-    if (material->emissiveTex) {
+    if (material->emissive_tex) {
         glActiveTexture(GL_TEXTURE5);
-        glBindTexture(GL_TEXTURE_2D, material->emissiveTex->id);
+        glBindTexture(GL_TEXTURE_2D, material->emissive_tex->id);
         glUniform1i(program->emissive_tex_loc, 5);
     }
 
-    if (material->heightTex) {
+    if (material->height_tex) {
         glActiveTexture(GL_TEXTURE6);
-        glBindTexture(GL_TEXTURE_2D, material->heightTex->id);
+        glBindTexture(GL_TEXTURE_2D, material->height_tex->id);
         glUniform1i(program->height_tex_loc, 6);
     }
 
-    if (material->opacityTex) {
+    if (material->opacity_tex) {
         glActiveTexture(GL_TEXTURE7);
-        glBindTexture(GL_TEXTURE_2D, material->opacityTex->id);
+        glBindTexture(GL_TEXTURE_2D, material->opacity_tex->id);
         glUniform1i(program->opacity_tex_loc, 7);
     }
 
-    if (material->sheenTex) {
+    if (material->sheen_tex) {
         glActiveTexture(GL_TEXTURE8);
-        glBindTexture(GL_TEXTURE_2D, material->sheenTex->id);
+        glBindTexture(GL_TEXTURE_2D, material->sheen_tex->id);
         glUniform1i(program->sheen_tex_loc, 8);
     }
 
-    if (material->reflectanceTex) {
+    if (material->reflectance_tex) {
         glActiveTexture(GL_TEXTURE9);
-        glBindTexture(GL_TEXTURE_2D, material->reflectanceTex->id);
+        glBindTexture(GL_TEXTURE_2D, material->reflectance_tex->id);
         glUniform1i(program->reflectance_tex_loc, 9);
     }
 
     // Set uniform values for each texture type
-    glUniform1i(program->albedo_tex_exists_loc, material->albedoTex ? 1 : 0);
-    glUniform1i(program->normal_tex_exists_loc, material->normalTex ? 1 : 0);
-    glUniform1i(program->roughness_tex_exists_loc, material->roughnessTex ? 1 : 0);
-    glUniform1i(program->metalness_tex_exists_loc, material->metalnessTex ? 1 : 0);
-    glUniform1i(program->ao_tex_exists_loc, material->ambientOcclusionTex ? 1 : 0);
-    glUniform1i(program->emissive_tex_exists_loc, material->emissiveTex ? 1 : 0);
-    glUniform1i(program->height_tex_exists_loc, material->heightTex ? 1 : 0);
-    glUniform1i(program->opacity_tex_exists_loc, material->opacityTex ? 1 : 0);
-    glUniform1i(program->sheen_tex_exists_loc, material->sheenTex ? 1 : 0);
-    glUniform1i(program->reflectance_tex_exists_loc, material->reflectanceTex ? 1 : 0);
+    glUniform1i(program->albedo_tex_exists_loc, material->albedo_tex ? 1 : 0);
+    glUniform1i(program->normal_tex_exists_loc, material->normal_tex ? 1 : 0);
+    glUniform1i(program->roughness_tex_exists_loc, material->roughness_tex ? 1 : 0);
+    glUniform1i(program->metalness_tex_exists_loc, material->metalness_tex ? 1 : 0);
+    glUniform1i(program->ao_tex_exists_loc, material->ambient_occlusion_tex ? 1 : 0);
+    glUniform1i(program->emissive_tex_exists_loc, material->emissive_tex ? 1 : 0);
+    glUniform1i(program->height_tex_exists_loc, material->height_tex ? 1 : 0);
+    glUniform1i(program->opacity_tex_exists_loc, material->opacity_tex ? 1 : 0);
+    glUniform1i(program->sheen_tex_exists_loc, material->sheen_tex ? 1 : 0);
+    glUniform1i(program->reflectance_tex_exists_loc, material->reflectance_tex ? 1 : 0);
 
 }
 
@@ -227,38 +227,6 @@ void _render_xyz(SceneNode* node, mat4 view, mat4 projection){
     glUseProgram(0);
 }
 
-void _render_outlines(SceneNode* node, Camera *camera, 
-        mat4 model, mat4 view, mat4 projection, 
-        float time_value, RenderMode render_mode, Light** closest_lights, size_t returned_light_count){
-    if(!node || !node->outlines_shader_program){
-        return;
-    }
-    ShaderProgram* program = node->outlines_shader_program;
-
-    glUseProgram(program->id);
-
-    for (size_t i = 0; i < returned_light_count; ++i) {
-
-        Light* closest_light = closest_lights[i];
-
-        if(!closest_light){
-            continue;
-        }
-
-        _update_program_light_uniforms(program, closest_light, returned_light_count, i);
-    }
-
-    glUniformMatrix4fv(program->model_loc, 1, GL_FALSE, (const GLfloat*)node->global_transform);
-    glUniformMatrix4fv(program->view_loc, 1, GL_FALSE, (const GLfloat*)view);
-    glUniformMatrix4fv(program->proj_loc, 1, GL_FALSE, (const GLfloat*)projection);
-
-    glBindVertexArray(node->outlines_vao);
-    glDrawArrays(GL_POINTS, 0, 2);
-
-    glBindVertexArray(0);
-    glUseProgram(0);
-}
-
 void render_scene(Scene* scene, SceneNode *node, Camera *camera, 
         mat4 model, mat4 view, mat4 projection, 
         float time_value, RenderMode render_mode) {
@@ -283,11 +251,6 @@ void render_scene(Scene* scene, SceneNode *node, Camera *camera,
 
     if (node->show_xyz && node->xyz_shader_program) {
         _render_xyz(node, view, projection);
-    }
-
-    if (node->show_outlines && node->outlines_shader_program) {
-        _render_outlines(node, camera, model, view, projection, 
-                time_value, render_mode, closest_lights, returned_light_count);
     }
 
     free(closest_lights);
