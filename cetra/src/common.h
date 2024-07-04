@@ -15,18 +15,6 @@
 #define USED_UNIFORM_COMPONENTS 77  // Number of components used by non-light uniforms
 #define COMPONENTS_PER_LIGHT 21      // Number of components per light
 
-#define PBR_VERT_SHADER_PATH "./shaders/pbr_vert.glsl"
-#define PBR_FRAG_SHADER_PATH "./shaders/pbr_frag.glsl"
-#define PBR_GEO_SHADER_PATH NULL
-
-#define LINES_VERT_SHADER_PATH "./shaders/lines_vert.glsl"
-#define LINES_FRAG_SHADER_PATH "./shaders/lines_frag.glsl"
-#define LINES_GEO_SHADER_PATH "./shaders/lines_geo.glsl"
-
-#define OUTLINES_VERT_SHADER_PATH "./shaders/outlines_vert.glsl"
-#define OUTLINES_FRAG_SHADER_PATH "./shaders/outlines_frag.glsl"
-#define OUTLINES_GEO_SHADER_PATH "./shaders/outlines_geo.glsl"
-
 typedef enum {
     RENDER_MODE_PBR,              // Regular PBR Rendering
     RENDER_MODE_NORMALS,          // Normals Visualization
