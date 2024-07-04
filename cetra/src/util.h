@@ -4,10 +4,13 @@
 #include <stdbool.h>
 #include <cglm/cglm.h>
 
+#include "common.h"
+
 /*
  * OpenGL
  */ 
 void check_gl_error(const char* where);
+size_t get_gl_max_lights();
 
 /*
  * String

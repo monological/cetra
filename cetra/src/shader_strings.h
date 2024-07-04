@@ -38,6 +38,20 @@ static const char* shape_geo_shader_str =
     ""
     "";
 
+static const char* xyz_vert_shader_str = 
+    "#version 330 core\n"
+    "layout (location = 0) in vec3 aPos;\n"
+    "layout (location = 1) in vec3 aColor;\n"
+    "out vec3 vertexColor;\n"
+    "uniform mat4 model;\n"
+    "uniform mat4 view;\n"
+    "uniform mat4 projection;\n"
+    "void main()\n"
+    "{\n"
+    "    gl_Position = projection * view * model * vec4(aPos, 1.0);\n"
+    "    vertexColor = aColor;\n"
+    "}\n";
+
 static const char* pbr_vert_shader_str = 
     "#version 330 core\n"
     "layout(location = 0) in vec3 aPos;\n"
@@ -545,5 +559,17 @@ static const char* shape_vert_shader_str =
     "}\n"
     ""
     "";
+
+static const char* xyz_frag_shader_str = 
+    "#version 330 core\n"
+    "in vec3 vertexColor;\n"
+    "out vec4 FragColor;\n"
+    "uniform mat4 view;\n"
+    "uniform mat4 model;\n"
+    "uniform mat4 projection;\n"
+    "void main()\n"
+    "{\n"
+    "    FragColor = vec4(vertexColor, 1.0);\n"
+    "}\n";
 
 #endif // SHADER_STRINGS_H

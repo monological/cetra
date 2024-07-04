@@ -80,7 +80,6 @@ Shader* create_shader(ShaderType type, const char* source) {
     }
 
     shader->shaderID = glCreateShader(glType);
-    check_gl_error("create shader");
 
     if (shader->shaderID == 0) {
         fprintf(stderr, "Failed to create shader object.\n");

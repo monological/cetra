@@ -81,26 +81,20 @@ typedef struct {
  * Shader Program Functions
  */
 ShaderProgram* create_program(const char* name);
+ShaderProgram* create_program_from_paths(const char* name, const char* vert_path,
+        const char* frag_path, const char* geo_path);
+ShaderProgram* create_program_from_source(const char* name, const char* vert_source,
+        const char* frag_source, const char* geo_source);
 void free_program(ShaderProgram* program);
 
 /*
- * Shader Program Setup
+ * Shader Program Setup Functions
  */ 
-void attach_program_shader(ShaderProgram* program, Shader* shader);
+void attach_shader_to_program(ShaderProgram* program, Shader* shader);
 GLboolean link_program(ShaderProgram* program);
-
-/*
- * Shader Program Uniforms
- */
+GLboolean validate_program(ShaderProgram* program);
 void setup_program_uniforms(ShaderProgram* program);
 
-/*
- * Setup Program Shaders
- */
-ShaderProgram* setup_program_shader_from_paths(const char* name, const char* vert_path,
-        const char* frag_path, const char* geo_path);
-ShaderProgram* setup_program_shader_from_source(const char* name, const char* vert_source,
-        const char* frag_source, const char* geo_source);
 /*
  * Preset Programs
  */
@@ -108,10 +102,6 @@ ShaderProgram* create_pbr_program();
 ShaderProgram* create_shape_program();
 ShaderProgram* create_xyz_program();
 
-/*
- * Program Validation
- */
-GLboolean validate_program(ShaderProgram* program);
 
 size_t calculate_max_lights();
 

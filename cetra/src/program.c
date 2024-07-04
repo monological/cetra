@@ -5,32 +5,6 @@
 #include "util.h"
 #include "common.h"
 
-const char* xyz_vert_src =
-    "#version 330 core\n"
-    "layout (location = 0) in vec3 aPos;\n"
-    "layout (location = 1) in vec3 aColor;\n"
-    "out vec3 vertexColor;\n"
-    "uniform mat4 model;\n"
-    "uniform mat4 view;\n"
-    "uniform mat4 projection;\n"
-    "void main()\n"
-    "{\n"
-    "    gl_Position = projection * view * model * vec4(aPos, 1.0);\n"
-    "    vertexColor = aColor;\n"
-    "}";
-
-const char* xyz_frag_src =
-    "#version 330 core\n"
-    "in vec3 vertexColor;\n"
-    "out vec4 FragColor;\n"
-    "uniform mat4 view;\n"
-    "uniform mat4 model;\n"
-    "uniform mat4 projection;\n"
-    "void main()\n"
-    "{\n"
-    "    FragColor = vec4(vertexColor, 1.0);\n"
-    "}";
-
 ShaderProgram* create_program(const char* name){
     ShaderProgram* program = malloc(sizeof(ShaderProgram));
     if (!program) {
@@ -38,7 +12,6 @@ ShaderProgram* create_program(const char* name){
         return NULL;
     }
     program->id = glCreateProgram();
-    check_gl_error("create program");
 
     if (program->id == 0) {
         fprintf(stderr, "Failed to create program object.\n");
@@ -93,6 +66,149 @@ ShaderProgram* create_program(const char* name){
     program->reflectance_tex_exists_loc = -1;
 
     program->line_width_loc = -1;
+
+    return program;
+}
+
+ShaderProgram* create_program_from_paths(const char* name, const char* vert_path,
+        const char* frag_path, const char* geo_path) {
+
+    if(!name){
+        fprintf(stderr, "Shader program name is NULL\n");
+        return NULL;
+    }
+
+    GLboolean success = GL_TRUE;
+
+    ShaderProgram* program = create_program(name);
+    if(program == NULL){
+        fprintf(stderr, "Failed to create program by name %s\n", name);
+        return NULL;
+    }
+
+    // Load and compile the vertex shader
+    if (vert_path != NULL) {
+        Shader* vertex_shader = create_shader_from_path(VERTEX_SHADER, vert_path);
+        if (vertex_shader && compile_shader(vertex_shader)) {
+            attach_shader_to_program(program, vertex_shader);
+        } else {
+            fprintf(stderr, "Vertex shader compilation failed\n");
+        }
+    } else {
+        fprintf(stderr, "Vertex shader path is NULL\n");
+        success = GL_FALSE;
+    }
+
+    // Load and compile the geometry shader, if path is provided
+    if (geo_path != NULL) {
+        Shader* geometry_shader = create_shader_from_path(GEOMETRY_SHADER, geo_path);
+        if (geometry_shader && compile_shader(geometry_shader)) {
+            attach_shader_to_program(program, geometry_shader);
+        } else {
+            fprintf(stderr, "Geometry shader compilation failed\n");
+            success = GL_FALSE;
+        }
+    }
+
+    // Load and compile the fragment shader
+    if (frag_path != NULL) {
+        Shader* fragment_shader = create_shader_from_path(FRAGMENT_SHADER, frag_path);
+        if (fragment_shader && compile_shader(fragment_shader)) {
+            attach_shader_to_program(program, fragment_shader);
+        } else {
+            fprintf(stderr, "Fragment shader compilation failed\n");
+            success = GL_FALSE;
+        }
+    } else {
+        fprintf(stderr, "Fragment shader path is NULL\n");
+        success = GL_FALSE;
+    }
+
+    // Link the shader program
+    if (success && !link_program(program)) {
+        fprintf(stderr, "Shader program linking failed\n");
+        success = GL_FALSE;
+    }
+
+    // Setup uniforms and other initializations as needed
+    if (success) {
+        setup_program_uniforms(program);
+    }else{
+        free_program(program);
+        program = NULL;
+    }
+
+    return program;
+}
+
+ShaderProgram* create_program_from_source(const char* name, const char* vert_source,
+        const char* frag_source, const char* geo_source) {
+
+    if(!name){
+        fprintf(stderr, "Shader program name is NULL\n");
+        return NULL;
+    }
+
+    GLboolean success = GL_TRUE;
+
+    ShaderProgram* program = create_program(name);
+    if(program == NULL){
+        fprintf(stderr, "Failed to create program by name %s\n", name);
+        return NULL;
+    }
+
+    // Create and compile the vertex shader
+    if (vert_source != NULL) {
+        Shader* vertex_shader = create_shader(VERTEX_SHADER, vert_source);
+        if (vertex_shader && compile_shader(vertex_shader)) {
+            attach_shader_to_program(program, vertex_shader);
+        } else {
+            fprintf(stderr, "Vertex shader compilation failed\n");
+            success = GL_FALSE;
+        }
+    } else {
+        fprintf(stderr, "Vertex shader source is NULL\n");
+        success = GL_FALSE;
+    }
+
+    // Create and compile the fragment shader
+    if (frag_source != NULL) {
+        Shader* fragment_shader = create_shader(FRAGMENT_SHADER, frag_source);
+        if (fragment_shader && compile_shader(fragment_shader)) {
+            attach_shader_to_program(program, fragment_shader);
+        } else {
+            fprintf(stderr, "Fragment shader compilation failed\n");
+            success = GL_FALSE;
+        }
+    } else {
+        fprintf(stderr, "Fragment shader source is NULL\n");
+        success = GL_FALSE;
+    }
+
+    // Create and compile the geometry shader, if source is provided
+    if (geo_source != NULL) {
+        Shader* geometry_shader = create_shader(GEOMETRY_SHADER, geo_source);
+        if (geometry_shader && compile_shader(geometry_shader)) {
+            attach_shader_to_program(program, geometry_shader);
+        } else {
+            fprintf(stderr, "Geometry shader compilation failed\n");
+            success = GL_FALSE;
+        }
+    }
+
+    // Link the shader program
+    if (success && !link_program(program)) {
+        fprintf(stderr, "Shader program linking failed\n");
+        success = GL_FALSE;
+    }
+
+    // Setup uniforms and other initializations as needed
+    if (success) {
+        setup_program_uniforms(program);
+    }else{
+        free_program(program);
+        program = NULL;
+    }
 
     return program;
 }
@@ -157,10 +273,7 @@ void free_program(ShaderProgram* program) {
     }
 }
 
-/*
- * GL attach and add shader to program.
- */
-void attach_program_shader(ShaderProgram* program, Shader* shader) {
+void attach_shader_to_program(ShaderProgram* program, Shader* shader) {
     if (program && shader && shader->shaderID) {
         // Attach the shader to the program
         glAttachShader(program->id, shader->shaderID);
@@ -187,9 +300,11 @@ GLboolean link_program(ShaderProgram* program) {
     int success;
 
     glLinkProgram(program->id);
-        check_gl_error("link program");
+    check_gl_error("link program");
+
     glGetProgramiv(program->id, GL_LINK_STATUS, &success);
-        check_gl_error("get program iv");
+    check_gl_error("get program iv");
+
     if (!success) {
         GLint logLength = 0;
         glGetProgramiv(program->id, GL_INFO_LOG_LENGTH, &logLength);
@@ -200,6 +315,7 @@ GLboolean link_program(ShaderProgram* program) {
             if (log) {
                 glGetProgramInfoLog(program->id, logLength, &logLength, log);
                 check_gl_error("glGetProgramInfoLog");
+
                 fprintf(stderr, "Program %s compilation failed: %s\n", program->name, log);
                 free(log);
             } else {
@@ -214,24 +330,32 @@ GLboolean link_program(ShaderProgram* program) {
     return GL_TRUE;
 }
 
-/**
- * Calculates and returns the maximum number of lights supported by the shader program.
- * 
- * @return The maximum number of lights that can be handled by the shader program.
- */
-size_t calculate_max_lights() {
-    GLint max_uniform_components;
-    glGetIntegerv(GL_MAX_FRAGMENT_UNIFORM_COMPONENTS, &max_uniform_components);
+GLboolean validate_program(ShaderProgram* program){
+    GLboolean success = GL_TRUE;
 
-    if (max_uniform_components < USED_UNIFORM_COMPONENTS) {
-        fprintf(stderr, "Insufficient uniform components available.\n");
-        return 0;
+    glValidateProgram(program->id);
+    check_gl_error("validate program");
+
+    GLint validationStatus;
+    glGetProgramiv(program->id, GL_VALIDATE_STATUS, &validationStatus);
+    if (validationStatus == GL_FALSE) {
+        fprintf(stderr, "Shader program validation failed\n");
+
+        // Get and print the validation log
+        GLint logLength;
+        glGetProgramiv(program->id, GL_INFO_LOG_LENGTH, &logLength);
+        char* logMessage = malloc(sizeof(char) * logLength);
+        if (logMessage) {
+            glGetProgramInfoLog(program->id, logLength, NULL, logMessage);
+            fprintf(stderr, "Validation log: %s\n", logMessage);
+            free(logMessage);
+        } else {
+            fprintf(stderr, "Failed to allocate memory for validation log\n");
+        }
+
+        success = GL_FALSE;
     }
-
-    size_t max_light_uniforms = max_uniform_components - USED_UNIFORM_COMPONENTS;
-    size_t max_lights = max_light_uniforms / COMPONENTS_PER_LIGHT;
-
-    return max_lights;
+    return success;
 }
 
 
@@ -287,7 +411,7 @@ void setup_program_uniforms(ShaderProgram* program) {
     program->sheen_tex_exists_loc = glGetUniformLocation(program->id, "sheenTexExists");
     program->reflectance_tex_exists_loc = glGetUniformLocation(program->id, "reflectanceTexExists");
 
-    program->max_lights = calculate_max_lights(); 
+    program->max_lights = get_gl_max_lights(); 
 
     program->light_position_loc = malloc(program->max_lights * sizeof(GLint));
     program->light_direction_loc = malloc(program->max_lights * sizeof(GLint));
@@ -354,153 +478,10 @@ void setup_program_uniforms(ShaderProgram* program) {
     return;
 }
 
-ShaderProgram* setup_program_shader_from_paths(const char* name, const char* vert_path,
-        const char* frag_path, const char* geo_path) {
-
-    if(!name){
-        fprintf(stderr, "Shader program name is NULL\n");
-        return NULL;
-    }
-
-    GLboolean success = GL_TRUE;
-
-    ShaderProgram* program = create_program(name);
-    if(program == NULL){
-        fprintf(stderr, "Failed to create program by name %s\n", name);
-        return NULL;
-    }
-
-    // Load and compile the vertex shader
-    if (vert_path != NULL) {
-        Shader* vertex_shader = create_shader_from_path(VERTEX_SHADER, vert_path);
-        if (vertex_shader && compile_shader(vertex_shader)) {
-            attach_program_shader(program, vertex_shader);
-        } else {
-            fprintf(stderr, "Vertex shader compilation failed\n");
-        }
-    } else {
-        fprintf(stderr, "Vertex shader path is NULL\n");
-        success = GL_FALSE;
-    }
-
-    // Load and compile the geometry shader, if path is provided
-    if (geo_path != NULL) {
-        Shader* geometry_shader = create_shader_from_path(GEOMETRY_SHADER, geo_path);
-        if (geometry_shader && compile_shader(geometry_shader)) {
-            attach_program_shader(program, geometry_shader);
-        } else {
-            fprintf(stderr, "Geometry shader compilation failed\n");
-            success = GL_FALSE;
-        }
-    }
-
-    // Load and compile the fragment shader
-    if (frag_path != NULL) {
-        Shader* fragment_shader = create_shader_from_path(FRAGMENT_SHADER, frag_path);
-        if (fragment_shader && compile_shader(fragment_shader)) {
-            attach_program_shader(program, fragment_shader);
-        } else {
-            fprintf(stderr, "Fragment shader compilation failed\n");
-            success = GL_FALSE;
-        }
-    } else {
-        fprintf(stderr, "Fragment shader path is NULL\n");
-        success = GL_FALSE;
-    }
-
-    // Link the shader program
-    if (success && !link_program(program)) {
-        fprintf(stderr, "Shader program linking failed\n");
-        success = GL_FALSE;
-    }
-
-    // Setup uniforms and other initializations as needed
-    if (success) {
-        setup_program_uniforms(program);
-    }else{
-        free_program(program);
-        program = NULL;
-    }
-
-    return program;
-}
-
-ShaderProgram* setup_program_shader_from_source(const char* name, const char* vert_source,
-        const char* frag_source, const char* geo_source) {
-
-    if(!name){
-        fprintf(stderr, "Shader program name is NULL\n");
-        return NULL;
-    }
-
-    GLboolean success = GL_TRUE;
-
-    ShaderProgram* program = create_program(name);
-    if(program == NULL){
-        fprintf(stderr, "Failed to create program by name %s\n", name);
-        return NULL;
-    }
-
-    // Create and compile the vertex shader
-    if (vert_source != NULL) {
-        Shader* vertex_shader = create_shader(VERTEX_SHADER, vert_source);
-        if (vertex_shader && compile_shader(vertex_shader)) {
-            attach_program_shader(program, vertex_shader);
-        } else {
-            fprintf(stderr, "Vertex shader compilation failed\n");
-            success = GL_FALSE;
-        }
-    } else {
-        fprintf(stderr, "Vertex shader source is NULL\n");
-        success = GL_FALSE;
-    }
-
-    // Create and compile the fragment shader
-    if (frag_source != NULL) {
-        Shader* fragment_shader = create_shader(FRAGMENT_SHADER, frag_source);
-        if (fragment_shader && compile_shader(fragment_shader)) {
-            attach_program_shader(program, fragment_shader);
-        } else {
-            fprintf(stderr, "Fragment shader compilation failed\n");
-            success = GL_FALSE;
-        }
-    } else {
-        fprintf(stderr, "Fragment shader source is NULL\n");
-        success = GL_FALSE;
-    }
-
-    // Create and compile the geometry shader, if source is provided
-    if (geo_source != NULL) {
-        Shader* geometry_shader = create_shader(GEOMETRY_SHADER, geo_source);
-        if (geometry_shader && compile_shader(geometry_shader)) {
-            attach_program_shader(program, geometry_shader);
-        } else {
-            fprintf(stderr, "Geometry shader compilation failed\n");
-            success = GL_FALSE;
-        }
-    }
-
-    // Link the shader program
-    if (success && !link_program(program)) {
-        fprintf(stderr, "Shader program linking failed\n");
-        success = GL_FALSE;
-    }
-
-    // Setup uniforms and other initializations as needed
-    if (success) {
-        setup_program_uniforms(program);
-    }else{
-        free_program(program);
-        program = NULL;
-    }
-
-    return program;
-}
-
 ShaderProgram* create_pbr_program(){
     ShaderProgram* program = NULL;
 
-    if((program = setup_program_shader_from_source("pbr", 
+    if((program = create_program_from_source("pbr", 
             pbr_vert_shader_str, pbr_frag_shader_str, NULL)) == NULL) {
         fprintf(stderr, "Failed to initialize PBR shader program\n");
         return NULL;
@@ -512,7 +493,7 @@ ShaderProgram* create_pbr_program(){
 ShaderProgram* create_shape_program(){
     ShaderProgram* program = NULL;
 
-    if((program = setup_program_shader_from_source("shape", 
+    if((program = create_program_from_source("shape", 
             shape_vert_shader_str, shape_frag_shader_str, shape_geo_shader_str)) == NULL) {
         fprintf(stderr, "Failed to initialize shape shader program\n");
         return NULL;
@@ -524,41 +505,12 @@ ShaderProgram* create_shape_program(){
 ShaderProgram* create_xyz_program(){
     ShaderProgram* program = NULL;
 
-    if((program = setup_program_shader_from_source("xyz", 
-            xyz_vert_src, xyz_frag_src, NULL)) == NULL) {
+    if((program = create_program_from_source("xyz", 
+            xyz_vert_shader_str, xyz_frag_shader_str, NULL)) == NULL) {
         fprintf(stderr, "Failed to initialize xyz shader program\n");
         return NULL;
     }
 
     return program;
 }
-
-GLboolean validate_program(ShaderProgram* program){
-    GLboolean success = GL_TRUE;
-
-    glValidateProgram(program->id);
-    check_gl_error("validate program");
-
-    GLint validationStatus;
-    glGetProgramiv(program->id, GL_VALIDATE_STATUS, &validationStatus);
-    if (validationStatus == GL_FALSE) {
-        fprintf(stderr, "Shader program validation failed\n");
-
-        // Get and print the validation log
-        GLint logLength;
-        glGetProgramiv(program->id, GL_INFO_LOG_LENGTH, &logLength);
-        char* logMessage = malloc(sizeof(char) * logLength);
-        if (logMessage) {
-            glGetProgramInfoLog(program->id, logLength, NULL, logMessage);
-            fprintf(stderr, "Validation log: %s\n", logMessage);
-            free(logMessage);
-        } else {
-            fprintf(stderr, "Failed to allocate memory for validation log\n");
-        }
-
-        success = GL_FALSE;
-    }
-    return success;
-}
-
 

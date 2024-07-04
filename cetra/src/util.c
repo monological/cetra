@@ -20,6 +20,21 @@ void check_gl_error(const char* where) {
     }
 }
 
+size_t get_gl_max_lights() {
+    GLint max_uniform_components;
+    glGetIntegerv(GL_MAX_FRAGMENT_UNIFORM_COMPONENTS, &max_uniform_components);
+
+    if (max_uniform_components < USED_UNIFORM_COMPONENTS) {
+        fprintf(stderr, "Insufficient uniform components available.\n");
+        return 0;
+    }
+
+    size_t max_light_uniforms = max_uniform_components - USED_UNIFORM_COMPONENTS;
+    size_t max_lights = max_light_uniforms / COMPONENTS_PER_LIGHT;
+
+    return max_lights;
+}
+
 void print_indentation(int depth) {
     for (int i = 0; i < depth; i++) {
         printf("    ");

@@ -197,7 +197,6 @@ static int _setup_engine_glfw(Engine* engine) {
 
     glfwGetFramebufferSize(engine->window, &(engine->framebuffer_width), &(engine->framebuffer_height));
     glViewport(0, 0, engine->framebuffer_width, engine->framebuffer_height);
-    check_gl_error("view port");
 
     return 0;
 }

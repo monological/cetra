@@ -14,6 +14,7 @@
 #include "light.h"
 #include "camera.h"
 #include "common.h"
+#include "util.h"
 
 void _update_program_light_uniforms(ShaderProgram * program, Light* light, 
         size_t light_count, size_t index){
@@ -242,7 +243,7 @@ void render_scene(Scene* scene, SceneNode *node, Camera *camera,
     }
 
     size_t returned_light_count;
-    size_t max_lights = calculate_max_lights();
+    size_t max_lights = get_gl_max_lights();
     Light** closest_lights = get_closest_lights(scene, node, max_lights, 
             &returned_light_count);
 

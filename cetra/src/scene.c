@@ -282,9 +282,7 @@ SceneNode* create_node() {
     // xyz
     node->show_xyz = true;
     glGenVertexArrays(1, &node->xyz_vao);
-    check_gl_error("create node xyz gen vertex failed");
     glGenBuffers(1, &node->xyz_vbo);
-    check_gl_error("create node xyz gen buffers failed");
     node->xyz_shader_program = NULL;
 
     return node;
@@ -311,7 +309,8 @@ void free_node(SceneNode* node) {
     }
 
     // Note: Do not free camera and light, as they are managed by the Scene.
-    // Similarly, shaders and programs are usually shared and should be managed separately.
+    // Similarly, shaders and programs are usually shared and should be managed
+    // separately.
 
     free(node);
 }
@@ -460,11 +459,10 @@ void transform_node(SceneNode* node, Transform* transform, mat4* result_matrix) 
 void apply_transform_to_nodes(SceneNode* node, mat4 transform) {
     if (!node) return;
 
-    mat4 localTransform;
-    glm_mat4_identity(localTransform);
-
-    glm_mat4_mul(node->original_transform, node->local_transform, localTransform);
-    glm_mat4_mul(transform, localTransform, node->global_transform);
+    mat4 local_transform;
+    glm_mat4_identity(local_transform);
+    glm_mat4_mul(node->original_transform, node->local_transform, local_transform);
+    glm_mat4_mul(transform, local_transform, node->global_transform);
 
     if (node->light) {
         vec3 light_position;

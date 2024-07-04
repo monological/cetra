@@ -62,7 +62,7 @@ void set_show_xyz_for_nodes(SceneNode* node, bool show_xyz);
 void set_shader_program_for_nodes(SceneNode* node, ShaderProgram* program);
 
 // move
-void apply_transform_to_nodes(SceneNode* node, mat4 parentTransform);
+void apply_transform_to_nodes(SceneNode* node, mat4 transform);
 
 /*
  * Scene
