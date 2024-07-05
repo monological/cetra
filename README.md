@@ -19,28 +19,46 @@
 
 ---
 
-## Build
 
-brew install glfw cglm glew assimp --build-from-source```
-make -j 8
+## Setup
+
+### On MacOS:
+
+```
+brew install glfw cglm glew assimp
 ```
 
-## Install
+### On Ubuntu:
 
-The cmake build script does not currently install the libraries system wide.
+```
+sudo apt-get install libglfw3-dev libglm-dev libglew-dev libassimp-dev
+```
 
-- The external libraries are installed locally in the ./build/external/lib directory.
-- The header files are in the ./build/external/include directory.
-- The libcetra library is installed in ./build.
+### On Arch:
 
-The cmake build script also copies over the models, shaders and textures to the build directory.
+```
+sudo pacman -S glfw cglm glew assimp
+```
 
-The `render` exe is built to look for the models, shaders textures and libraries locally. 
+### On Fedora:
+
+```
+sudo dnf install glfw cglm glew assimp
+```
+
+## Build
+
+```
+make
+```
 
 ## Run
 
-Simply execute `./render`
+Example apps are built in the `build/bin` directory.
 
-~ GLHF
+```
+./build/bin/render ./assets/room.fbx ./assets/room.fbm 
+```
+
 
 
