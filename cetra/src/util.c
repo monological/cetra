@@ -5,18 +5,19 @@
 #include <stdbool.h>
 #include <unistd.h>
 #include <math.h>
-
 #include <GLFW/glfw3.h>
 #include <cglm/cglm.h>
 
 #include "util.h"
+
 #include "ext/cwalk.h"
+#include "ext/log.h"
 
 
 void check_gl_error(const char* where) {
     GLenum err;
     while ((err = glGetError()) != GL_NO_ERROR) {
-        fprintf(stderr, "OpenGL error: %u - where: %s\n", err, where);
+        log_error("OpenGL error: %u - where: %s\n", err, where);
     }
 }
 
@@ -25,7 +26,7 @@ size_t get_gl_max_lights() {
     glGetIntegerv(GL_MAX_FRAGMENT_UNIFORM_COMPONENTS, &max_uniform_components);
 
     if (max_uniform_components < USED_UNIFORM_COMPONENTS) {
-        fprintf(stderr, "Insufficient uniform components available.\n");
+        log_error("Insufficient uniform components available.\n");
         return 0;
     }
 
@@ -96,7 +97,7 @@ bool path_exists(const char* path) {
  */
 bool find_existing_subpath(const char* base_dir, char** subpath_ptr) {
     if (!base_dir || !subpath_ptr || !*subpath_ptr) {
-        fprintf(stderr, "Invalid input\n");
+        log_error("Invalid input\n");
         return false;
     }
 
@@ -107,7 +108,7 @@ bool find_existing_subpath(const char* base_dir, char** subpath_ptr) {
     char* fullpath = malloc(fullpath_size);
 
     if (!fullpath) {
-        fprintf(stderr, "Failed to allocate memory for fullpath.\n");
+        log_error("Failed to allocate memory for fullpath.\n");
         return false;
     }
 
@@ -122,7 +123,7 @@ bool find_existing_subpath(const char* base_dir, char** subpath_ptr) {
                 path_found = true;
                 break;
             } else {
-                fprintf(stderr, "Failed to allocate memory for new subpath.\n");
+                log_error("Failed to allocate memory for new subpath.\n");
                 break;
             }
         }
@@ -140,14 +141,14 @@ bool find_existing_subpath(const char* base_dir, char** subpath_ptr) {
 
 char* convert_windows_path_to_unix(const char* windows_path) {
     if (windows_path == NULL) {
-        fprintf(stderr, "Error: Input path is NULL\n");
+        log_error("Error: Input path is NULL\n");
         return NULL;
     }
 
     int len = strlen(windows_path);
     char* unix_path = malloc(len + 1); // +1 for null terminator
     if (unix_path == NULL) {
-        fprintf(stderr, "Error: Memory allocation failed\n");
+        log_error("Error: Memory allocation failed\n");
         return NULL;
     }
 
@@ -168,7 +169,7 @@ char* convert_windows_path_to_unix(const char* windows_path) {
 
 char* convert_and_normalize_path(const char *input_path) {
     if (input_path == NULL) {
-        fprintf(stderr, "Error: Input path is NULL\n");
+        log_error("Error: Input path is NULL\n");
         return NULL;
     }
 
@@ -184,7 +185,7 @@ char* convert_and_normalize_path(const char *input_path) {
     }
 
     if (unix_path == NULL) {
-        fprintf(stderr, "Error allocating memory for path conversion.\n");
+        log_error("Error allocating memory for path conversion.\n");
         return NULL;
     }
 
@@ -192,7 +193,7 @@ char* convert_and_normalize_path(const char *input_path) {
     estimated_size = cwk_path_normalize(unix_path, NULL, 0);
     char* normalized_path = malloc(estimated_size + 1); // +1 for null terminator
     if (normalized_path == NULL) {
-        fprintf(stderr, "Error allocating memory for normalized path.\n");
+        log_error("Error allocating memory for normalized path.\n");
         free(unix_path);
         return NULL;
     }

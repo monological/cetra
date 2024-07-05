@@ -10,13 +10,14 @@
 #include <assimp/postprocess.h>
 
 #include "common.h"
+#include "ext/log.h"
 #include "material.h"
 #include "mesh.h"
 
 Mesh* create_mesh() {
     Mesh* mesh = malloc(sizeof(Mesh));
     if (!mesh) {
-        fprintf(stderr, "Failed to allocate memory for Mesh\n");
+        log_error("Failed to allocate memory for Mesh\n");
         return NULL;
     }
 

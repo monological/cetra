@@ -13,6 +13,7 @@
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "ext/stb_image.h"
+#include "ext/log.h"
 
 #include "scene.h"
 #include "mesh.h"
@@ -268,7 +269,7 @@ void process_ai_cameras(const struct aiScene* scene, Camera ***cameras, size_t *
     *cameras = malloc(sizeof(Camera*) * (*num_cameras));
 
     if (!(*cameras)) {
-        fprintf(stderr, "Failed to allocate memory for cameras\n");
+        log_error("Failed to allocate memory for cameras\n");
         return;
     }
 
@@ -278,7 +279,7 @@ void process_ai_cameras(const struct aiScene* scene, Camera ***cameras, size_t *
         camera->name = safe_strdup(ai_camera->mName.data);
 
         if (!camera) {
-            fprintf(stderr, "Failed to allocate memory for camera\n");
+            log_error("Failed to allocate memory for camera\n");
             continue;
         }
 
@@ -358,7 +359,7 @@ SceneNode* process_ai_node(Scene* scene, struct aiNode* ai_node, const struct ai
 Scene* create_scene_from_fbx_path(const char* path, const char* texture_directory) {
     const struct aiScene* ai_scene = aiImportFile(path, aiProcess_Triangulate | aiProcess_FlipUVs | aiProcess_CalcTangentSpace);
     if (!ai_scene || ai_scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !ai_scene->mRootNode) {
-        fprintf(stderr, "Error importing FBX file: %s\n", path);
+        log_error("Error importing FBX file: %s\n", path);
         return NULL;
     }
 
@@ -370,7 +371,7 @@ Scene* create_scene_from_fbx_path(const char* path, const char* texture_director
 
     TexturePool* tex_pool = scene->tex_pool;
     if (!tex_pool) {
-        fprintf(stderr, "Failed to create texture pool\n");
+        log_error("Failed to create texture pool\n");
         aiReleaseImport(ai_scene);
         return NULL;
     }

@@ -6,6 +6,7 @@
 #include <GLFW/glfw3.h>
 #include <cglm/cglm.h>
 
+#include "ext/log.h"
 #include "scene.h"
 #include "program.h"
 #include "shader.h"
@@ -233,12 +234,12 @@ void render_scene(Scene* scene, SceneNode *node, Camera *camera,
         float time_value, RenderMode render_mode) {
 
     if (!scene) {
-        printf("error: render called with NULL scene\n");
+        log_error("error: render called with NULL scene\n");
         return;
     }
 
     if (!node) {
-        printf("error: render called with NULL root node\n");
+        log_error("error: render called with NULL root node\n");
         return;
     }
 

@@ -6,12 +6,13 @@
 
 #include "util.h"
 #include "light.h"
+#include "ext/log.h"
 
 Light* create_light() {
     Light* light = malloc(sizeof(Light));
 
     if (!light) {
-        fprintf(stderr, "Failed to allocate memory for light\n");
+        log_error("Failed to allocate memory for light\n");
         return NULL;
     }
     memset(light, 0, sizeof(Light)); 

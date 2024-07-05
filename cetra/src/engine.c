@@ -25,6 +25,7 @@
 #define NK_GLFW_GL3_IMPLEMENTATION
 #include "ext/nuklear.h"
 #include "ext/nuklear_glfw_gl3.h"
+#include "ext/log.h"
 
 
 /*
@@ -42,7 +43,7 @@ static int _setup_engine_gui(Engine* engine);
 Engine* create_engine(const char* window_title, int width, int height) {
     Engine* engine = malloc(sizeof(Engine));
     if (!engine) {
-        fprintf(stderr, "Failed to allocate memory for engine\n");
+        log_error("Failed to allocate memory for engine\n");
         return NULL;
     }
 
@@ -55,7 +56,7 @@ Engine* create_engine(const char* window_title, int width, int height) {
     }
 
     if (window_title && !engine->window_title) {
-        fprintf(stderr, "Failed to allocate memory for window title\n");
+        log_error("Failed to allocate memory for window title\n");
         free(engine);
         return NULL;
     }
@@ -152,7 +153,7 @@ static int _setup_engine_glfw(Engine* engine) {
     }
 
     if (!glfwInit()) {
-        fprintf(stderr, "Failed to initialize GLFW\n");
+        log_error("Failed to initialize GLFW\n");
         return -1;
     }
 
@@ -168,7 +169,7 @@ static int _setup_engine_glfw(Engine* engine) {
 
     engine->window = glfwCreateWindow(engine->window_width, engine->window_height, engine->window_title, NULL, NULL);
     if (engine->window == NULL) {
-        fprintf(stderr, "Failed to create GLFW window\n");
+        log_error("Failed to create GLFW window\n");
         glfwTerminate();
         return -1;
     }
@@ -190,7 +191,7 @@ static int _setup_engine_glfw(Engine* engine) {
     glfwSwapInterval(1);
 
     if (glewInit() != GLEW_OK) {
-        fprintf(stderr, "Failed to initialize GLEW\n");
+        log_error("Failed to initialize GLEW\n");
         glfwTerminate();
         return -1;
     }
@@ -226,7 +227,7 @@ static int _setup_engine_msaa(Engine *engine) {
     glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, engine->depth_renderbuffer);
 
     if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-        fprintf(stderr, "Error: MSAA Framebuffer is not complete!\n");
+        log_error("Error: MSAA Framebuffer is not complete!\n");
         // Cleanup in case of framebuffer setup failure
         glDeleteFramebuffers(1, &engine->framebuffer);
         glDeleteTextures(1, &engine->multisample_texture);
@@ -252,7 +253,7 @@ static int _setup_engine_gui(Engine* engine) {
     engine->nk_ctx = nk_glfw3_init(&engine->nk_glfw, engine->window, NK_GLFW3_INSTALL_CALLBACKS);
 
     if (!engine->nk_ctx) {
-        printf("Failed to initialize Nuklear context\n");
+        log_error("Failed to initialize Nuklear context\n");
         return -1; // or handle the error appropriately
     }
 
@@ -283,20 +284,20 @@ int init_engine(Engine* engine){
     printf("\nInitializing Cetra Graphics Engine...\n");
 
     if(_setup_engine_glfw(engine) != 0){
-        fprintf(stderr, "Failed to initialize engine GLFW\n");
+        log_error("Failed to initialize engine GLFW\n");
         return -1;
     }
     if(_setup_engine_msaa(engine) != 0){
-        fprintf(stderr, "Failed to initialize engine MSAA\n");
+        log_error("Failed to initialize engine MSAA\n");
         return -1;
     }
     if(_setup_engine_gui(engine) != 0){
-        fprintf(stderr, "Failed to initialize engine GUI\n");
+        log_error("Failed to initialize engine GUI\n");
         return -1;
     }
 
     if(_create_default_shaders_for_engine(engine) != 0){
-        fprintf(stderr, "Failed to create default shaders for engine\n");
+        log_error("Failed to create default shaders for engine\n");
         return -1;
     }
 
@@ -391,7 +392,7 @@ void add_scene_to_engine(Engine* engine, Scene* scene) {
     size_t new_count = engine->scene_count + 1;
     Scene** new_scenes = realloc(engine->scenes, new_count * sizeof(Scene*));
     if (!new_scenes) {
-        fprintf(stderr, "Failed to reallocate memory for new scene\n");
+        log_error("Failed to reallocate memory for new scene\n");
         free_scene(scene); // Assuming there's a function to free a Scene
         return;
     }
@@ -410,7 +411,7 @@ void set_active_scene_by_index(Engine* engine, size_t scene_index) {
     if (scene_index < engine->scene_count) {
         engine->current_scene_index = scene_index;
     } else {
-        fprintf(stderr, "Scene index %zu is out of bounds. The engine has %zu scenes.\n", scene_index, engine->scene_count);
+        log_error("Scene index %zu is out of bounds. The engine has %zu scenes.\n", scene_index, engine->scene_count);
     }
 }
 
@@ -424,19 +425,19 @@ void set_active_scene_by_name(Engine* engine, const char* scene_name) {
         }
     }
 
-    fprintf(stderr, "Scene named '%s' not found.\n", scene_name);
+    log_error("Scene named '%s' not found.\n", scene_name);
 }
 
 Scene* get_current_scene(const Engine* engine) {
     // Validate the engine pointer and scenes array
     if (!engine || !engine->scenes) {
-        fprintf(stderr, "Engine or scenes array is NULL.\n");
+        log_error("Engine or scenes array is NULL.\n");
         return NULL;
     }
 
     // Validate the current scene index
     if (engine->current_scene_index >= engine->scene_count) {
-        fprintf(stderr, "Current scene index (%zu) is out of bounds. Total scenes: %zu.\n", engine->current_scene_index, engine->scene_count);
+        log_error("Current scene index (%zu) is out of bounds. Total scenes: %zu.\n", engine->current_scene_index, engine->scene_count);
         return NULL;
     }
 
@@ -455,7 +456,7 @@ static int _create_default_shaders_for_engine(Engine* engine) {
     ShaderProgram* pbr_shader_program = NULL;
 
     if((pbr_shader_program = create_pbr_program()) == NULL){
-        fprintf(stderr, "Failed to create PBR shader program\n");
+        log_error("Failed to create PBR shader program\n");
         return -1;
     }
     
@@ -464,7 +465,7 @@ static int _create_default_shaders_for_engine(Engine* engine) {
     ShaderProgram* shape_shader_program = NULL;
 
     if((shape_shader_program = create_shape_program()) == NULL){
-        fprintf(stderr, "Failed to create shape shader program\n");
+        log_error("Failed to create shape shader program\n");
         return -1;
     }
 
@@ -473,7 +474,7 @@ static int _create_default_shaders_for_engine(Engine* engine) {
     ShaderProgram* xyz_shader_program = NULL;
 
     if((xyz_shader_program = create_xyz_program()) == NULL){
-        fprintf(stderr, "Failed to create xyz shader program\n");
+        log_error("Failed to create xyz shader program\n");
         return -1;
     }
 
@@ -484,7 +485,7 @@ static int _create_default_shaders_for_engine(Engine* engine) {
 
 void add_shader_program_to_engine(Engine* engine, ShaderProgram* program) {
     if (!engine || !program) {
-        fprintf(stderr, "Invalid input to add_program_to_engine\n");
+        log_error("Invalid input to add_program_to_engine\n");
         return;
     }
 
@@ -500,7 +501,7 @@ void add_shader_program_to_engine(Engine* engine, ShaderProgram* program) {
     ShaderProgram** new_programs = realloc(engine->programs, new_count * sizeof(ShaderProgram*));
 
     if (!new_programs) {
-        fprintf(stderr, "Failed to allocate memory for new program\n");
+        log_error("Failed to allocate memory for new program\n");
         return;
     }
 
@@ -518,7 +519,7 @@ void add_shader_program_to_engine(Engine* engine, ShaderProgram* program) {
 
 ShaderProgram* get_engine_shader_program_by_name(Engine* engine, const char* program_name) {
     if (!engine || !program_name) {
-        fprintf(stderr, "Invalid input to get_program_from_engine\n");
+        log_error("Invalid input to get_program_from_engine\n");
         return NULL;
     }
 

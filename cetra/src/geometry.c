@@ -2,9 +2,10 @@
 #include <math.h>
 #include <cglm/cglm.h>
 
+#include "common.h"
+#include "ext/log.h"
 #include "geometry.h"
 #include "mesh.h"
-#include "common.h"
 #include "util.h"
 
 
@@ -45,7 +46,7 @@ Curve* generate_s_shaped_bezier_curve(vec3 start, vec3 end, float intensity,
         float line_width) {
     Curve* curve = malloc(sizeof(Curve));
     if (!curve) {
-        fprintf(stderr, "Failed to allocate memory for Curve\n");
+        log_error("Failed to allocate memory for Curve\n");
         return NULL;
     }
 
@@ -93,7 +94,7 @@ void generate_point_to_mesh(Mesh* mesh, const Point* point) {
     mesh->vertices = (float*)realloc(mesh->vertices, 3 * sizeof(float)); // 3 for x, y, z
 
     if (!mesh->vertices) {
-        fprintf(stderr, "Failed to allocate memory for vertices\n");
+        log_error("Failed to allocate memory for vertices\n");
         return;
     }
 
@@ -120,7 +121,7 @@ void generate_circle_to_mesh(Mesh* mesh, const Circle* circle) {
         mesh->indices = (unsigned int*)realloc(mesh->indices, mesh->index_count * sizeof(unsigned int));
 
         if (!mesh->vertices || !mesh->indices) {
-            fprintf(stderr, "Failed to allocate memory for filled circle mesh\n");
+            log_error("Failed to allocate memory for filled circle mesh\n");
             return;
         }
 
@@ -151,7 +152,7 @@ void generate_circle_to_mesh(Mesh* mesh, const Circle* circle) {
         mesh->indices = (unsigned int*)realloc(mesh->indices, mesh->index_count * sizeof(unsigned int));
 
         if (!mesh->vertices || !mesh->indices) {
-            fprintf(stderr, "Failed to allocate memory for circle mesh\n");
+            log_error("Failed to allocate memory for circle mesh\n");
             return;
         }
 
@@ -194,7 +195,7 @@ void generate_rect_to_mesh(Mesh* mesh, const Rect* rect) {
         mesh->vertices = (float*)realloc(mesh->vertices, mesh->vertex_count * 3 * sizeof(float));
 
         if (!mesh->vertices) {
-            fprintf(stderr, "Failed to allocate memory for rounded rect mesh\n");
+            log_error("Failed to allocate memory for rounded rect mesh\n");
             return;
         }
 
@@ -242,7 +243,7 @@ void generate_rect_to_mesh(Mesh* mesh, const Rect* rect) {
             mesh->indices = (unsigned int*)realloc(mesh->indices, mesh->index_count * sizeof(unsigned int));
 
             if (!mesh->indices) {
-                fprintf(stderr, "Failed to allocate memory for indices\n");
+                log_error("Failed to allocate memory for indices\n");
                 return;
             }
 
@@ -261,7 +262,7 @@ void generate_rect_to_mesh(Mesh* mesh, const Rect* rect) {
             mesh->indices = (unsigned int*)realloc(mesh->indices, mesh->index_count * sizeof(unsigned int));
 
             if (!mesh->indices) {
-                fprintf(stderr, "Failed to allocate memory for indices\n");
+                log_error("Failed to allocate memory for indices\n");
                 return;
             }
 
@@ -302,7 +303,7 @@ void generate_rect_to_mesh(Mesh* mesh, const Rect* rect) {
             mesh->indices = (unsigned int*)realloc(mesh->indices, mesh->index_count * sizeof(unsigned int));
 
             if (!mesh->vertices || !mesh->indices) {
-                fprintf(stderr, "Failed to allocate memory for filled rect mesh\n");
+                log_error("Failed to allocate memory for filled rect mesh\n");
                 return;
             }
 
@@ -324,7 +325,7 @@ void generate_rect_to_mesh(Mesh* mesh, const Rect* rect) {
             mesh->indices = (unsigned int*)realloc(mesh->indices, mesh->index_count * sizeof(unsigned int));
 
             if (!mesh->vertices || !mesh->indices) {
-                fprintf(stderr, "Failed to allocate memory for rect mesh\n");
+                log_error("Failed to allocate memory for rect mesh\n");
                 return;
             }
 
@@ -357,7 +358,7 @@ void generate_curve_to_mesh(Mesh* mesh, Curve* curve) {
     mesh->indices = (unsigned int*)realloc(mesh->indices, mesh->index_count * sizeof(unsigned int));
 
     if (!mesh->vertices || !mesh->indices) {
-        fprintf(stderr, "Failed to allocate memory for mesh\n");
+        log_error("Failed to allocate memory for mesh\n");
         return;
     }
 

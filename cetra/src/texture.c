@@ -5,6 +5,7 @@
 
 #include "ext/stb_image.h"
 #include "ext/uthash.h"
+#include "ext/log.h"
 
 #include "texture.h"
 #include "util.h"
@@ -12,7 +13,7 @@
 Texture* create_texture() {
     Texture* texture = (Texture*)malloc(sizeof(Texture));
     if (!texture) {
-        fprintf(stderr, "Failed to allocate memory for texture\n");
+        log_error("Failed to allocate memory for texture\n");
         return NULL;
     }
 
@@ -63,7 +64,7 @@ void set_texture_format(Texture* texture, GLenum format) {
 TexturePool* create_texture_pool() {
     TexturePool* pool = (TexturePool*)malloc(sizeof(TexturePool));
     if (!pool) {
-        fprintf(stderr, "Failed to allocate memory for TexturePool\n");
+        log_error("Failed to allocate memory for TexturePool\n");
         return NULL;
     }
 
@@ -101,7 +102,7 @@ void set_texture_pool_directory(TexturePool* pool, const char* directory){
         pool->directory = safe_strdup(directory);
 
         if (!pool->directory) {
-            fprintf(stderr, "Failed to allocate memory for directory string\n");
+            log_error("Failed to allocate memory for directory string\n");
         }
     } else {
         pool->directory = NULL;
@@ -122,7 +123,7 @@ void add_texture_to_pool(TexturePool* pool, Texture* texture) {
         // Add to dynamic array
         pool->textures = realloc(pool->textures, (pool->texture_count + 1) * sizeof(Texture*));
         if (!pool->textures) {
-            fprintf(stderr, "Failed to reallocate memory for textures array\n");
+            log_error("Failed to reallocate memory for textures array\n");
             return;
         }
         pool->textures[pool->texture_count++] = texture;
@@ -138,12 +139,12 @@ void add_texture_to_pool(TexturePool* pool, Texture* texture) {
 
 Texture* load_texture_path_into_pool(TexturePool* pool, const char* filepath) {
     if (!pool || !filepath) {
-        fprintf(stderr, "Invalid pool or filepath\n");
+        log_error("Invalid pool or filepath\n");
         return NULL;
     }
 
     if(pool->directory == NULL){
-        fprintf(stderr, "Texture pool directory not set\n");
+        log_error("Texture pool directory not set\n");
         return NULL;
     }
 
@@ -152,20 +153,20 @@ Texture* load_texture_path_into_pool(TexturePool* pool, const char* filepath) {
     // Normalize and work on a copy of the filepath
     char* normalized_path = convert_and_normalize_path(filepath);
     if (!normalized_path) {
-        fprintf(stderr, "Failed to normalize path: %s\n", filepath);
+        log_error("Failed to normalize path: %s\n", filepath);
         return NULL;
     }
 
     char* subpath = safe_strdup(normalized_path);
     if (!subpath) {
-        fprintf(stderr, "Memory allocation failed for subpath.\n");
+        log_error("Memory allocation failed for subpath.\n");
         free(normalized_path);
         return NULL;
     }
 
     // Use find_existing_subpath to find a valid subpath
     if (!find_existing_subpath(pool->directory, &subpath)) {
-        fprintf(stderr, "No valid subpath found for texture: %s\n", subpath);
+        log_error("No valid subpath found for texture: %s\n", subpath);
         free(normalized_path);
         free(subpath);
         return NULL;
@@ -236,7 +237,7 @@ Texture* load_texture_path_into_pool(TexturePool* pool, const char* filepath) {
         return newTexture;
     }
 
-    fprintf(stderr, "Failed to load texture: %s\n", subpath);
+    log_error("Failed to load texture: %s\n", subpath);
     free(normalized_path);
     free(subpath);
     return NULL;

@@ -1,25 +1,26 @@
 #include <stdlib.h>
 #include <stdio.h>
 
+#include "common.h"
+#include "ext/log.h"
 #include "program.h"
 #include "util.h"
-#include "common.h"
 
 ShaderProgram* create_program(const char* name){
     ShaderProgram* program = malloc(sizeof(ShaderProgram));
     if (!program) {
-        fprintf(stderr, "Failed to allocate memory for shader program\n");
+        log_error("Failed to allocate memory for shader program\n");
         return NULL;
     }
     program->id = glCreateProgram();
 
     if (program->id == 0) {
-        fprintf(stderr, "Failed to create program object.\n");
+        log_error("Failed to create program object.\n");
         return NULL;
     }
 
     if(!name){
-        fprintf(stderr, "Shader program name is NULL\n");
+        log_error("Shader program name is NULL\n");
         return NULL;
     }
 
@@ -74,7 +75,7 @@ ShaderProgram* create_program_from_paths(const char* name, const char* vert_path
         const char* frag_path, const char* geo_path) {
 
     if(!name){
-        fprintf(stderr, "Shader program name is NULL\n");
+        log_error("Shader program name is NULL\n");
         return NULL;
     }
 
@@ -82,7 +83,7 @@ ShaderProgram* create_program_from_paths(const char* name, const char* vert_path
 
     ShaderProgram* program = create_program(name);
     if(program == NULL){
-        fprintf(stderr, "Failed to create program by name %s\n", name);
+        log_error("Failed to create program by name %s\n", name);
         return NULL;
     }
 
@@ -92,10 +93,10 @@ ShaderProgram* create_program_from_paths(const char* name, const char* vert_path
         if (vertex_shader && compile_shader(vertex_shader)) {
             attach_shader_to_program(program, vertex_shader);
         } else {
-            fprintf(stderr, "Vertex shader compilation failed\n");
+            log_error("Vertex shader compilation failed\n");
         }
     } else {
-        fprintf(stderr, "Vertex shader path is NULL\n");
+        log_error("Vertex shader path is NULL\n");
         success = GL_FALSE;
     }
 
@@ -105,7 +106,7 @@ ShaderProgram* create_program_from_paths(const char* name, const char* vert_path
         if (geometry_shader && compile_shader(geometry_shader)) {
             attach_shader_to_program(program, geometry_shader);
         } else {
-            fprintf(stderr, "Geometry shader compilation failed\n");
+            log_error("Geometry shader compilation failed\n");
             success = GL_FALSE;
         }
     }
@@ -116,17 +117,17 @@ ShaderProgram* create_program_from_paths(const char* name, const char* vert_path
         if (fragment_shader && compile_shader(fragment_shader)) {
             attach_shader_to_program(program, fragment_shader);
         } else {
-            fprintf(stderr, "Fragment shader compilation failed\n");
+            log_error("Fragment shader compilation failed\n");
             success = GL_FALSE;
         }
     } else {
-        fprintf(stderr, "Fragment shader path is NULL\n");
+        log_error("Fragment shader path is NULL\n");
         success = GL_FALSE;
     }
 
     // Link the shader program
     if (success && !link_program(program)) {
-        fprintf(stderr, "Shader program linking failed\n");
+        log_error("Shader program linking failed\n");
         success = GL_FALSE;
     }
 
@@ -145,7 +146,7 @@ ShaderProgram* create_program_from_source(const char* name, const char* vert_sou
         const char* frag_source, const char* geo_source) {
 
     if(!name){
-        fprintf(stderr, "Shader program name is NULL\n");
+        log_error("Shader program name is NULL\n");
         return NULL;
     }
 
@@ -153,7 +154,7 @@ ShaderProgram* create_program_from_source(const char* name, const char* vert_sou
 
     ShaderProgram* program = create_program(name);
     if(program == NULL){
-        fprintf(stderr, "Failed to create program by name %s\n", name);
+        log_error("Failed to create program by name %s\n", name);
         return NULL;
     }
 
@@ -163,11 +164,11 @@ ShaderProgram* create_program_from_source(const char* name, const char* vert_sou
         if (vertex_shader && compile_shader(vertex_shader)) {
             attach_shader_to_program(program, vertex_shader);
         } else {
-            fprintf(stderr, "Vertex shader compilation failed\n");
+            log_error("Vertex shader compilation failed\n");
             success = GL_FALSE;
         }
     } else {
-        fprintf(stderr, "Vertex shader source is NULL\n");
+        log_error("Vertex shader source is NULL\n");
         success = GL_FALSE;
     }
 
@@ -177,11 +178,11 @@ ShaderProgram* create_program_from_source(const char* name, const char* vert_sou
         if (fragment_shader && compile_shader(fragment_shader)) {
             attach_shader_to_program(program, fragment_shader);
         } else {
-            fprintf(stderr, "Fragment shader compilation failed\n");
+            log_error("Fragment shader compilation failed\n");
             success = GL_FALSE;
         }
     } else {
-        fprintf(stderr, "Fragment shader source is NULL\n");
+        log_error("Fragment shader source is NULL\n");
         success = GL_FALSE;
     }
 
@@ -191,14 +192,14 @@ ShaderProgram* create_program_from_source(const char* name, const char* vert_sou
         if (geometry_shader && compile_shader(geometry_shader)) {
             attach_shader_to_program(program, geometry_shader);
         } else {
-            fprintf(stderr, "Geometry shader compilation failed\n");
+            log_error("Geometry shader compilation failed\n");
             success = GL_FALSE;
         }
     }
 
     // Link the shader program
     if (success && !link_program(program)) {
-        fprintf(stderr, "Shader program linking failed\n");
+        log_error("Shader program linking failed\n");
         success = GL_FALSE;
     }
 
@@ -283,7 +284,7 @@ void attach_shader_to_program(ShaderProgram* program, Shader* shader) {
         size_t new_count = program->shader_count + 1;
         Shader** new_shaders = realloc(program->shaders, new_count * sizeof(Shader*));
         if (new_shaders == NULL) {
-            fprintf(stderr, "Failed to allocate memory for shaders\n");
+            log_error("Failed to allocate memory for shaders\n");
             return;
         }
 
@@ -292,7 +293,7 @@ void attach_shader_to_program(ShaderProgram* program, Shader* shader) {
         program->shaders = new_shaders;
         program->shader_count = new_count;
     } else {
-        fprintf(stderr, "Failed to attach shader %i", shader ? shader->shaderID : 0);
+        log_error("Failed to attach shader %i", shader ? shader->shaderID : 0);
     }
 }
 
@@ -316,13 +317,13 @@ GLboolean link_program(ShaderProgram* program) {
                 glGetProgramInfoLog(program->id, logLength, &logLength, log);
                 check_gl_error("glGetProgramInfoLog");
 
-                fprintf(stderr, "Program %s compilation failed: %s\n", program->name, log);
+                log_error("Program %s compilation failed: %s\n", program->name, log);
                 free(log);
             } else {
-                fprintf(stderr, "Failed to allocate memory for program log.\n");
+                log_error("Failed to allocate memory for program log.\n");
             }
         } else {
-            fprintf(stderr, "Program compilation failed with no additional information.\n");
+            log_error("Program compilation failed with no additional information.\n");
         }
         return GL_FALSE;
     }
@@ -339,7 +340,7 @@ GLboolean validate_program(ShaderProgram* program){
     GLint validationStatus;
     glGetProgramiv(program->id, GL_VALIDATE_STATUS, &validationStatus);
     if (validationStatus == GL_FALSE) {
-        fprintf(stderr, "Shader program validation failed\n");
+        log_error("Shader program validation failed\n");
 
         // Get and print the validation log
         GLint logLength;
@@ -347,10 +348,10 @@ GLboolean validate_program(ShaderProgram* program){
         char* logMessage = malloc(sizeof(char) * logLength);
         if (logMessage) {
             glGetProgramInfoLog(program->id, logLength, NULL, logMessage);
-            fprintf(stderr, "Validation log: %s\n", logMessage);
+            log_error("Validation log: %s\n", logMessage);
             free(logMessage);
         } else {
-            fprintf(stderr, "Failed to allocate memory for validation log\n");
+            log_error("Failed to allocate memory for validation log\n");
         }
 
         success = GL_FALSE;
@@ -366,7 +367,7 @@ GLboolean validate_program(ShaderProgram* program){
 
 void setup_program_uniforms(ShaderProgram* program) {
     if (program == NULL || program->id == 0) {
-        fprintf(stderr, "Invalid shader program.\n");
+        log_error("Invalid shader program.\n");
         return;
     }
 
@@ -483,7 +484,7 @@ ShaderProgram* create_pbr_program(){
 
     if((program = create_program_from_source("pbr", 
             pbr_vert_shader_str, pbr_frag_shader_str, NULL)) == NULL) {
-        fprintf(stderr, "Failed to initialize PBR shader program\n");
+        log_error("Failed to initialize PBR shader program\n");
         return NULL;
     }
 
@@ -495,7 +496,7 @@ ShaderProgram* create_shape_program(){
 
     if((program = create_program_from_source("shape", 
             shape_vert_shader_str, shape_frag_shader_str, shape_geo_shader_str)) == NULL) {
-        fprintf(stderr, "Failed to initialize shape shader program\n");
+        log_error("Failed to initialize shape shader program\n");
         return NULL;
     }
 
@@ -507,7 +508,7 @@ ShaderProgram* create_xyz_program(){
 
     if((program = create_program_from_source("xyz", 
             xyz_vert_shader_str, xyz_frag_shader_str, NULL)) == NULL) {
-        fprintf(stderr, "Failed to initialize xyz shader program\n");
+        log_error("Failed to initialize xyz shader program\n");
         return NULL;
     }
 

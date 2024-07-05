@@ -6,6 +6,7 @@
 #include <GLFW/glfw3.h>
 #include <cglm/cglm.h>
 
+#include "ext/log.h"
 #include "scene.h"
 #include "program.h"
 #include "shader.h"
@@ -24,7 +25,7 @@ static void _set_xyz_program_for_nodes(SceneNode* node, ShaderProgram* program);
 Scene* create_scene() {
     Scene* scene = malloc(sizeof(Scene));
     if (!scene) {
-        fprintf(stderr, "Failed to allocate memory for Scene\n");
+        log_error("Failed to allocate memory for Scene\n");
         return NULL;
     }
     memset(scene, 0, sizeof(Scene)); 
@@ -136,7 +137,7 @@ void add_light_to_scene(Scene* scene, Light* light) {
     size_t new_count = scene->light_count + 1;
     Light** new_lights = realloc(scene->lights, new_count * sizeof(Light*));
     if (!new_lights) {
-        fprintf(stderr, "Failed to reallocate memory for new light\n");
+        log_error("Failed to reallocate memory for new light\n");
         free_light(light); // Assuming there's a function to free a Light
         return;
     }
@@ -220,7 +221,7 @@ Light** get_closest_lights(Scene* scene, SceneNode* target_node,
 
 void add_material_to_scene(Scene* scene, Material* material) {
     if (!scene || !material) {
-        fprintf(stderr, "Invalid input to add_material_to_scene\n");
+        log_error("Invalid input to add_material_to_scene\n");
         return;
     }
 
@@ -236,7 +237,7 @@ void add_material_to_scene(Scene* scene, Material* material) {
     Material** new_materials = realloc(scene->materials, new_count * sizeof(Material*));
 
     if (!new_materials) {
-        fprintf(stderr, "Failed to allocate memory for new material\n");
+        log_error("Failed to allocate memory for new material\n");
         return;
     }
 
@@ -262,7 +263,7 @@ GLboolean set_scene_xyz_shader_program(Scene* scene, ShaderProgram* xyz_shader_p
 SceneNode* create_node() {
     SceneNode* node = malloc(sizeof(SceneNode));
     if (!node) {
-        fprintf(stderr, "Failed to allocate memory for scene node\n");
+        log_error("Failed to allocate memory for scene node\n");
         return NULL;
     }
     
@@ -330,7 +331,7 @@ void add_mesh_to_node(SceneNode* node, Mesh* mesh) {
     size_t new_count = node->mesh_count + 1;
     Mesh** new_meshes = realloc(node->meshes, new_count * sizeof(Mesh*));
     if (!new_meshes) {
-        fprintf(stderr, "Failed to reallocate memory for new mesh\n");
+        log_error("Failed to reallocate memory for new mesh\n");
         // Handle error, such as freeing the mesh if it's dynamically allocated
         return;
     }
@@ -414,7 +415,7 @@ static void _upload_xyz_buffers_to_gpu_for_node(SceneNode* node){
 
     // only validate if VAO is bound
     if(node->xyz_shader_program && !validate_program(node->xyz_shader_program)){
-        fprintf(stderr, "xyz shader program validation failed\n");
+        log_error("xyz shader program validation failed\n");
     }
 
     glBindVertexArray(0);
