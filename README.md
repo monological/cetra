@@ -57,7 +57,7 @@ make
 Example apps are built in the `build/bin` directory.
 
 ```
-./build/bin/render ./assets/room.fbx ./assets/room.fbm 
+./build/bin/render ./assets/c64.fbx ./assets/c64.fbm 
 ```
 
 
