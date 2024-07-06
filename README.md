@@ -19,11 +19,7 @@
 
 ---
 
-<p align="center">
-  <video width="1080" height="720" controls autoplay loop muted playsinline>
-    <source src="https://cetra.gg/static/c64.mp4" type="video/mp4">
-  </video>
-</p>
+[![Demo](https://cetra.gg/static/c64.gif)](https://cetra.gg/static/c64.gif)
 
 ---
 
