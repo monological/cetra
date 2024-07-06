@@ -19,7 +19,9 @@
 
 ---
 
-[![Demo](https://cetra.gg/static/c64.mov)](https://cetra.gg/static/c64.mov)
+<p align="center">
+  <video src="https://cetra.gg/static/c64.mov" width="800px" autoplay></video>
+</p>
 
 ---
 
