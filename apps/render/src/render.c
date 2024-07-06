@@ -269,6 +269,39 @@ void render_scene_callback(Engine* engine, Scene* current_scene){
 
 }
 
+void create_root_light(Scene *scene){
+    Light *light = create_light();
+    if(!light){
+        fprintf(stderr, "Failed to create root light.\n");
+        return -1;
+    }
+    set_light_name(light, "root_light");
+    set_light_type(light, LIGHT_POINT);
+    vec3 lightPosition = {0.0f, 0.0f, 10.0f};
+    set_light_original_position(light, lightPosition);
+    set_light_global_position(light, lightPosition);
+    set_light_intensity(light, 1500.0f);
+    set_light_color(light, (vec3){100.0f, 100.0f, 100.0f});
+    add_light_to_scene(scene, light);
+
+    SceneNode *light_node = create_node();
+    set_node_light(light_node, light);
+    set_node_name(light_node, "root_light_node");
+    set_show_xyz_for_nodes(light_node, false);
+
+    Transform light_transform = {
+        .position = {300.0f, 300.0f, -300.00f},
+        .rotation = {0.0f, 0.0f, 0.0f},
+        .scale = {1.0f, 1.0f, 1.0f}
+    };
+
+    mat4 light_matrix; 
+    glm_mat4_identity(light_matrix);
+    transform_node(light_node, &light_transform, &light_matrix);
+
+    add_child_node(scene->root_node, light_node);
+}
+
 /*
  * CETRA MAIN
  */
@@ -357,39 +390,7 @@ int main(int argc, char **argv) {
         return -1;
     }
 
-    if(1){
-        printf("No root light found so adding one...\n");
-        Light *light = create_light();
-        if(!light){
-            fprintf(stderr, "Failed to create root light.\n");
-            return -1;
-        }
-        set_light_name(light, "root_light");
-        set_light_type(light, LIGHT_POINT);
-        vec3 lightPosition = {0.0f, 0.0f, 10.0f};
-        set_light_original_position(light, lightPosition);
-        set_light_global_position(light, lightPosition);
-        set_light_intensity(light, 1500.0f);
-        set_light_color(light, (vec3){100.0f, 100.0f, 100.0f});
-        add_light_to_scene(scene, light);
-
-        SceneNode *light_node = create_node();
-        set_node_light(light_node, light);
-        set_node_name(light_node, "root_light_node");
-        set_show_xyz_for_nodes(light_node, false);
-
-        Transform light_transform = {
-            .position = {300.0f, 300.0f, -300.00f},
-            .rotation = {0.0f, 0.0f, 0.0f},
-            .scale = {1.0f, 1.0f, 1.0f}
-        };
-
-        mat4 light_matrix; 
-        glm_mat4_identity(light_matrix);
-        transform_node(light_node, &light_transform, &light_matrix);
-
-        add_child_node(scene->root_node, light_node);
-    }
+    create_root_light(scene);
 
     upload_buffers_to_gpu_for_nodes(scene->root_node);
 

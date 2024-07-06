@@ -161,7 +161,7 @@ void main() {
     vec3 lightColor = lights[0].color * lights[0].intensity;
 
     // Adjust ambient light intensity
-    vec3 ambient = finalAlbedo * 0.07;
+    vec3 ambient = finalAlbedo * 0.09;
 										   
 	// Apply albedo to diffuse
     vec3 diffuse = calculateDiffuse(N, L, lightColor, distance, constant, linear, quadratic) * finalAlbedo;
