@@ -20,7 +20,9 @@
 ---
 
 <p align="center">
-  <video src="https://cetra.gg/static/c64.mov" width="800px" autoplay></video>
+  <video width="1080" height="720" controls autoplay>
+    <source src="https://cetra.gg/static/c64.mov" type="video/mp4">
+  </video>
 </p>
 
 ---
