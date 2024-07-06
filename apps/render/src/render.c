@@ -273,7 +273,7 @@ void create_root_light(Scene *scene){
     Light *light = create_light();
     if(!light){
         fprintf(stderr, "Failed to create root light.\n");
-        return -1;
+        return;
     }
     set_light_name(light, "root_light");
     set_light_type(light, LIGHT_POINT);

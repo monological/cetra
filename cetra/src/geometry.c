@@ -132,7 +132,7 @@ void generate_circle_to_mesh(Mesh* mesh, const Circle* circle) {
 
         // Circle vertices
         for (int i = 0; i < segments; ++i) {
-            float theta = 2.0f * M_PI * i / segments;
+            float theta = 2.0f * GLM_PI * i / segments;
             mesh->vertices[(i + 1) * 3] = circle->position[0] + circle->radius * cosf(theta);
             mesh->vertices[(i + 1) * 3 + 1] = circle->position[1] + circle->radius * sinf(theta);
             mesh->vertices[(i + 1) * 3 + 2] = circle->position[2];
@@ -158,7 +158,7 @@ void generate_circle_to_mesh(Mesh* mesh, const Circle* circle) {
 
         // Circle vertices
         for (int i = 0; i < segments; ++i) {
-            float theta = 2.0f * M_PI * i / segments;
+            float theta = 2.0f * GLM_PI * i / segments;
             mesh->vertices[i * 3] = circle->position[0] + circle->radius * cosf(theta);
             mesh->vertices[i * 3 + 1] = circle->position[1] + circle->radius * sinf(theta);
             mesh->vertices[i * 3 + 2] = circle->position[2];
@@ -188,7 +188,7 @@ void generate_rect_to_mesh(Mesh* mesh, const Rect* rect) {
     if (corner_radius > 0.0f) {
 
         const int resolution = RECT_RESOLUTION; // Resolution of the curves
-        const float theta_step = (float)M_PI / 2 / (resolution - 1); // Quarter-circle for the corner
+        const float theta_step = (float)GLM_PI / 2 / (resolution - 1); // Quarter-circle for the corner
         const int total_vertices = rect->filled ? (resolution * 4 + 1) : (resolution * 4); // +1 for center vertex if filled
         mesh->vertex_count = total_vertices;
 
@@ -210,10 +210,10 @@ void generate_rect_to_mesh(Mesh* mesh, const Rect* rect) {
         };
 
         float angles[4] = {
-            -M_PI_2,      // Top right starts at -π/2 radians
+            -GLM_PI_2,      // Top right starts at -π/2 radians
             0,            // Bottom right starts at 0 radians
-            M_PI_2,       // Bottom left starts at π/2 radians
-            M_PI          // Top left starts at π radians
+            GLM_PI_2,       // Bottom left starts at π/2 radians
+            GLM_PI          // Top left starts at π radians
         };
 
         for (int c = 0; c < 4; c++) {
