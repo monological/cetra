@@ -11,11 +11,12 @@
  * Texture
  */
 typedef struct Texture {
-    GLuint id;           // OpenGL texture ID
-    char* filepath;      // File path of the texture
-    int width;           // Width of the texture
-    int height;          // Height of the texture
-    GLenum format;       // Format of the texture (e.g., GL_RGB, GL_RGBA)
+    GLuint id;              // OpenGL texture ID
+    char* filepath;         // File path of the texture
+    int width;              // Width of the texture
+    int height;             // Height of the texture
+    GLenum internal_format; // This is the format of the texture object in OpenGL (e.g., GL_RGB, GL_RGBA)
+    GLenum data_format;     // This is the format of the texture data (e.g., GL_RGB, GL_RGBA)
 
     UT_hash_handle hh;   // Makes this structure hashable
 } Texture;
@@ -26,7 +27,8 @@ void free_texture(Texture* texture);
 
 void set_texture_width(Texture* texture, int width);
 void set_texture_height(Texture* texture, int height);
-void set_texture_format(Texture* texture, GLenum format);
+void set_texture_internal_format(Texture* texture, GLenum internal_format);
+void set_texture_data_format(Texture* texture, GLenum data_format);
 
 /*
  * Texture Pool

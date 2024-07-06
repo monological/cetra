@@ -9,7 +9,7 @@
 char* _read_shader_source(const char* filePath) {
     FILE* file = fopen(filePath, "r");
     if (!file) {
-        log_error("Failed to open shader file: %s\n", filePath);
+        log_error("Failed to open shader file: %s", filePath);
         return NULL;
     }
 
@@ -24,14 +24,14 @@ char* _read_shader_source(const char* filePath) {
 
     char* buffer = malloc(length + 1);
     if (!buffer) {
-        log_error("Failed to allocate memory for shader source\n");
+        log_error("Failed to allocate memory for shader source");
         fclose(file);
         return NULL;
     }
 
     size_t readSize = fread(buffer, 1, length, file);
     if (readSize != length) {
-        log_error("Error reading shader file: %s\n", filePath);
+        log_error("Error reading shader file: %s", filePath);
         free(buffer);
         fclose(file);
         return NULL;
@@ -56,12 +56,12 @@ Shader* create_shader_from_path(ShaderType type, const char* file_path) {
 Shader* create_shader(ShaderType type, const char* source) {
     Shader* shader = malloc(sizeof(Shader));
     if (!shader) {
-        log_error("Failed to allocate memory for shader\n");
+        log_error("Failed to allocate memory for shader");
         return NULL;
     }
 
     if(!source){
-        log_error("Shader source is NULL\n");
+        log_error("Shader source is NULL");
         return NULL;
     }
 
@@ -74,14 +74,14 @@ Shader* create_shader(ShaderType type, const char* source) {
         case GEOMETRY_SHADER: glType = GL_GEOMETRY_SHADER; break;
         case FRAGMENT_SHADER: glType = GL_FRAGMENT_SHADER; break;
         default:
-            log_error("Unknown shader type\n");
+            log_error("Unknown shader type");
             return GL_FALSE;
     }
 
     shader->shaderID = glCreateShader(glType);
 
     if (shader->shaderID == 0) {
-        log_error("Failed to create shader object.\n");
+        log_error("Failed to create shader object.");
         return NULL;
     }
 
@@ -90,7 +90,7 @@ Shader* create_shader(ShaderType type, const char* source) {
 
 GLboolean compile_shader(Shader* shader) {
     if (!shader || !shader->source) {
-        log_error("Invalid shader or shader source.\n");
+        log_error("Invalid shader or shader source.");
         return GL_FALSE;
     }
 
@@ -117,13 +117,13 @@ GLboolean compile_shader(Shader* shader) {
             if (log) {
                 glGetShaderInfoLog(shader->shaderID, logLength, &logLength, log);
                 check_gl_error("glGetShaderInfoLog");
-                log_error("Shader compilation failed: %s\n", log);
+                log_error("Shader compilation failed: %s", log);
                 free(log);
             } else {
-                log_error("Failed to allocate memory for shader log.\n");
+                log_error("Failed to allocate memory for shader log.");
             }
         } else {
-            log_error("Shader compilation failed with no additional information.\n");
+            log_error("Shader compilation failed with no additional information.");
         }
 
         return GL_FALSE;

@@ -9,18 +9,18 @@
 ShaderProgram* create_program(const char* name){
     ShaderProgram* program = malloc(sizeof(ShaderProgram));
     if (!program) {
-        log_error("Failed to allocate memory for shader program\n");
+        log_error("Failed to allocate memory for shader program");
         return NULL;
     }
     program->id = glCreateProgram();
 
     if (program->id == 0) {
-        log_error("Failed to create program object.\n");
+        log_error("Failed to create program object.");
         return NULL;
     }
 
     if(!name){
-        log_error("Shader program name is NULL\n");
+        log_error("Shader program name is NULL");
         return NULL;
     }
 
@@ -75,7 +75,7 @@ ShaderProgram* create_program_from_paths(const char* name, const char* vert_path
         const char* frag_path, const char* geo_path) {
 
     if(!name){
-        log_error("Shader program name is NULL\n");
+        log_error("Shader program name is NULL");
         return NULL;
     }
 
@@ -83,7 +83,7 @@ ShaderProgram* create_program_from_paths(const char* name, const char* vert_path
 
     ShaderProgram* program = create_program(name);
     if(program == NULL){
-        log_error("Failed to create program by name %s\n", name);
+        log_error("Failed to create program by name %s", name);
         return NULL;
     }
 
@@ -93,10 +93,10 @@ ShaderProgram* create_program_from_paths(const char* name, const char* vert_path
         if (vertex_shader && compile_shader(vertex_shader)) {
             attach_shader_to_program(program, vertex_shader);
         } else {
-            log_error("Vertex shader compilation failed\n");
+            log_error("Vertex shader compilation failed");
         }
     } else {
-        log_error("Vertex shader path is NULL\n");
+        log_error("Vertex shader path is NULL");
         success = GL_FALSE;
     }
 
@@ -106,7 +106,7 @@ ShaderProgram* create_program_from_paths(const char* name, const char* vert_path
         if (geometry_shader && compile_shader(geometry_shader)) {
             attach_shader_to_program(program, geometry_shader);
         } else {
-            log_error("Geometry shader compilation failed\n");
+            log_error("Geometry shader compilation failed");
             success = GL_FALSE;
         }
     }
@@ -117,17 +117,17 @@ ShaderProgram* create_program_from_paths(const char* name, const char* vert_path
         if (fragment_shader && compile_shader(fragment_shader)) {
             attach_shader_to_program(program, fragment_shader);
         } else {
-            log_error("Fragment shader compilation failed\n");
+            log_error("Fragment shader compilation failed");
             success = GL_FALSE;
         }
     } else {
-        log_error("Fragment shader path is NULL\n");
+        log_error("Fragment shader path is NULL");
         success = GL_FALSE;
     }
 
     // Link the shader program
     if (success && !link_program(program)) {
-        log_error("Shader program linking failed\n");
+        log_error("Shader program linking failed");
         success = GL_FALSE;
     }
 
@@ -146,7 +146,7 @@ ShaderProgram* create_program_from_source(const char* name, const char* vert_sou
         const char* frag_source, const char* geo_source) {
 
     if(!name){
-        log_error("Shader program name is NULL\n");
+        log_error("Shader program name is NULL");
         return NULL;
     }
 
@@ -154,7 +154,7 @@ ShaderProgram* create_program_from_source(const char* name, const char* vert_sou
 
     ShaderProgram* program = create_program(name);
     if(program == NULL){
-        log_error("Failed to create program by name %s\n", name);
+        log_error("Failed to create program by name %s", name);
         return NULL;
     }
 
@@ -164,11 +164,11 @@ ShaderProgram* create_program_from_source(const char* name, const char* vert_sou
         if (vertex_shader && compile_shader(vertex_shader)) {
             attach_shader_to_program(program, vertex_shader);
         } else {
-            log_error("Vertex shader compilation failed\n");
+            log_error("Vertex shader compilation failed");
             success = GL_FALSE;
         }
     } else {
-        log_error("Vertex shader source is NULL\n");
+        log_error("Vertex shader source is NULL");
         success = GL_FALSE;
     }
 
@@ -178,11 +178,11 @@ ShaderProgram* create_program_from_source(const char* name, const char* vert_sou
         if (fragment_shader && compile_shader(fragment_shader)) {
             attach_shader_to_program(program, fragment_shader);
         } else {
-            log_error("Fragment shader compilation failed\n");
+            log_error("Fragment shader compilation failed");
             success = GL_FALSE;
         }
     } else {
-        log_error("Fragment shader source is NULL\n");
+        log_error("Fragment shader source is NULL");
         success = GL_FALSE;
     }
 
@@ -192,14 +192,14 @@ ShaderProgram* create_program_from_source(const char* name, const char* vert_sou
         if (geometry_shader && compile_shader(geometry_shader)) {
             attach_shader_to_program(program, geometry_shader);
         } else {
-            log_error("Geometry shader compilation failed\n");
+            log_error("Geometry shader compilation failed");
             success = GL_FALSE;
         }
     }
 
     // Link the shader program
     if (success && !link_program(program)) {
-        log_error("Shader program linking failed\n");
+        log_error("Shader program linking failed");
         success = GL_FALSE;
     }
 
@@ -284,7 +284,7 @@ void attach_shader_to_program(ShaderProgram* program, Shader* shader) {
         size_t new_count = program->shader_count + 1;
         Shader** new_shaders = realloc(program->shaders, new_count * sizeof(Shader*));
         if (new_shaders == NULL) {
-            log_error("Failed to allocate memory for shaders\n");
+            log_error("Failed to allocate memory for shaders");
             return;
         }
 
@@ -317,13 +317,13 @@ GLboolean link_program(ShaderProgram* program) {
                 glGetProgramInfoLog(program->id, logLength, &logLength, log);
                 check_gl_error("glGetProgramInfoLog");
 
-                log_error("Program %s compilation failed: %s\n", program->name, log);
+                log_error("Program %s compilation failed: %s", program->name, log);
                 free(log);
             } else {
-                log_error("Failed to allocate memory for program log.\n");
+                log_error("Failed to allocate memory for program log.");
             }
         } else {
-            log_error("Program compilation failed with no additional information.\n");
+            log_error("Program compilation failed with no additional information.");
         }
         return GL_FALSE;
     }
@@ -340,7 +340,7 @@ GLboolean validate_program(ShaderProgram* program){
     GLint validationStatus;
     glGetProgramiv(program->id, GL_VALIDATE_STATUS, &validationStatus);
     if (validationStatus == GL_FALSE) {
-        log_error("Shader program validation failed\n");
+        log_error("Shader program validation failed");
 
         // Get and print the validation log
         GLint logLength;
@@ -348,10 +348,10 @@ GLboolean validate_program(ShaderProgram* program){
         char* logMessage = malloc(sizeof(char) * logLength);
         if (logMessage) {
             glGetProgramInfoLog(program->id, logLength, NULL, logMessage);
-            log_error("Validation log: %s\n", logMessage);
+            log_error("Validation log: %s", logMessage);
             free(logMessage);
         } else {
-            log_error("Failed to allocate memory for validation log\n");
+            log_error("Failed to allocate memory for validation log");
         }
 
         success = GL_FALSE;
@@ -367,7 +367,7 @@ GLboolean validate_program(ShaderProgram* program){
 
 void setup_program_uniforms(ShaderProgram* program) {
     if (program == NULL || program->id == 0) {
-        log_error("Invalid shader program.\n");
+        log_error("Invalid shader program.");
         return;
     }
 
@@ -484,7 +484,7 @@ ShaderProgram* create_pbr_program(){
 
     if((program = create_program_from_source("pbr", 
             pbr_vert_shader_str, pbr_frag_shader_str, NULL)) == NULL) {
-        log_error("Failed to initialize PBR shader program\n");
+        log_error("Failed to initialize PBR shader program");
         return NULL;
     }
 
@@ -496,7 +496,7 @@ ShaderProgram* create_shape_program(){
 
     if((program = create_program_from_source("shape", 
             shape_vert_shader_str, shape_frag_shader_str, shape_geo_shader_str)) == NULL) {
-        log_error("Failed to initialize shape shader program\n");
+        log_error("Failed to initialize shape shader program");
         return NULL;
     }
 
@@ -508,7 +508,7 @@ ShaderProgram* create_xyz_program(){
 
     if((program = create_program_from_source("xyz", 
             xyz_vert_shader_str, xyz_frag_shader_str, NULL)) == NULL) {
-        log_error("Failed to initialize xyz shader program\n");
+        log_error("Failed to initialize xyz shader program");
         return NULL;
     }
 

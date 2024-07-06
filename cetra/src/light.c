@@ -12,7 +12,7 @@ Light* create_light() {
     Light* light = malloc(sizeof(Light));
 
     if (!light) {
-        log_error("Failed to allocate memory for light\n");
+        log_error("Failed to allocate memory for light");
         return NULL;
     }
     memset(light, 0, sizeof(Light)); 

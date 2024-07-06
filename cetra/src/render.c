@@ -234,12 +234,12 @@ void render_scene(Scene* scene, SceneNode *node, Camera *camera,
         float time_value, RenderMode render_mode) {
 
     if (!scene) {
-        log_error("error: render called with NULL scene\n");
+        log_error("error: render called with NULL scene");
         return;
     }
 
     if (!node) {
-        log_error("error: render called with NULL root node\n");
+        log_error("error: render called with NULL root node");
         return;
     }
 

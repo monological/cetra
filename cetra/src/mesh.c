@@ -17,7 +17,7 @@
 Mesh* create_mesh() {
     Mesh* mesh = malloc(sizeof(Mesh));
     if (!mesh) {
-        log_error("Failed to allocate memory for Mesh\n");
+        log_error("Failed to allocate memory for Mesh");
         return NULL;
     }
 

@@ -13,7 +13,7 @@
 Material* create_material() {
     Material* material = (Material*)malloc(sizeof(Material));
     if (!material) {
-        log_error("Failed to allocate memory for material\n");
+        log_error("Failed to allocate memory for material");
         return NULL;
     }
 
@@ -54,12 +54,12 @@ void free_material(Material* material) {
 
 void set_material_shader_program(Material* material, ShaderProgram* shader_program) {
     if (!material) {
-        log_error("Cannot set shader program for NULL material\n");
+        log_error("Cannot set shader program for NULL material");
         return;
     }
 
     if (!shader_program) {
-        log_error("Cannot set NULL shader program for material\n");
+        log_error("Cannot set NULL shader program for material");
         return;
     }
     material->shader_program = shader_program;

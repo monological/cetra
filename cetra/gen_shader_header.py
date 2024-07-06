@@ -3,15 +3,17 @@ import argparse
 
 def shader_to_string(file_path):
     try:
-        with open(file_path, 'r') as file:
+        with open(file_path, 'r', encoding='utf-8', errors='ignore') as file:
             content = file.readlines()
             processed_lines = []
             for line in content:
+                # Remove null bytes before processing the line
+                clean_line = line.replace('\x00', '')
                 # Strip the line to check if it's empty
-                stripped_line = line.strip()
+                stripped_line = clean_line.strip()
                 if stripped_line:
                     # If the line is not empty, process and add the escaped version with newline
-                    processed_lines.append('    "' + line.replace('"', '\\"').rstrip() + '\\n"')
+                    processed_lines.append('    "' + clean_line.replace('"', '\\"').rstrip() + '\\n"')
                 else:
                     # For empty lines, add an empty string literal that doesn't close
                     processed_lines.append('    ""')
@@ -21,7 +23,7 @@ def shader_to_string(file_path):
         return None
 
 def main(input_dir, output_file):
-    shaders = os.listdir(input_dir)
+    shaders = [f for f in os.listdir(input_dir) if f.endswith('.glsl')]
 
     with open(output_file, 'w') as header_file:
         header_file.write("#ifndef SHADER_STRINGS_H\n")

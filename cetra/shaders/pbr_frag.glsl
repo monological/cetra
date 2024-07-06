@@ -71,272 +71,106 @@ const float PI = 3.14159265359;
 
 const float defaultEfficacy = 80.0; // 80 lumens per watt for LEDs
 
-float distributionGGX(vec3 N, vec3 H, float roughness, float gamma) {
-    float a = pow(roughness, gamma); // Non-linear mapping of roughness
-    float a2 = a * a;
-    float NdotH = max(dot(N, H), 0.0);
-    float NdotH2 = NdotH * NdotH;
 
-    float nom = a2;
-    float denom = (NdotH2 * (a2 - 1.0) + 1.0);
-    denom = PI * denom * denom;
-
-    return nom / denom;
+vec3 sRGBToLinear(vec3 srgb) {
+    return pow(srgb, vec3(2.2));
 }
 
-
-float geometrySchlickGGX(float NdotV, float roughness) {
-    float r = (roughness + 1.0);
-    float k = (r*r) / 8.0;
-
-    float nom   = NdotV;
-    float denom = NdotV * (1.0 - k) + k;
-
-    return nom / denom;
+vec3 applyGammaCorrection(vec3 color, float gamma) {
+    return pow(color, vec3(1.0 / gamma));
 }
 
-float geometrySmith(vec3 N, vec3 V, vec3 L, float roughness) {
-    float NdotV = max(dot(N, V), 0.0);
-    float NdotL = max(dot(N, L), 0.0);
-    float ggx2  = geometrySchlickGGX(NdotV, roughness);
-    float ggx1  = geometrySchlickGGX(NdotL, roughness);
-
-    return ggx1 * ggx2;
+float calculateAttenuation(float distance, float constant, float linear, float quadratic) {
+    return 1.0 / (constant + linear * distance + quadratic * (distance * distance));
 }
 
-vec3 fresnelSchlick(float cosTheta, vec3 F0, float metallic) {
-    vec3 F0_non_metal = vec3(0.04); // Base reflectivity for non-metals
-    F0 = mix(F0_non_metal, F0, metallic); // Interpolate based on metallic value
-    return F0 + (1.0 - F0) * pow(1.0 - cosTheta, 5.0);
+vec3 calculateDiffuse(vec3 N, vec3 L, vec3 lightColor, float distance, float constant, float linear, float quadratic) {
+    float diff = max(dot(N, L), 0.0);
+    float attenuation = calculateAttenuation(distance, constant, linear, quadratic);
+    return diff * lightColor * attenuation;
 }
-
-vec3 convertWattsToRadiance(vec3 power, float efficacy) {
-    float lumensPerWatt = efficacy;
-    vec3 lumens = power * lumensPerWatt;
-    // Assuming a standard area and solid angle, or adjust as needed
-    float area = 100.0; // in square meters
-    vec3 radiance = lumens / area;
-    return radiance;
-}
-
-
-vec3 calculateLightContribution(vec3 N, vec3 V, vec3 L, float NdotL, float metallic, vec3 albedo) {
-    vec3 H = normalize(V + L);
-    vec3 F0 = albedo; // Reflectivity at normal incidence for metals
-
-    // Calculate Fresnel term using updated function
-    vec3 F = fresnelSchlick(max(dot(H, V), 0.0), F0, metallic);
-
-    float gamma = 2.0;
-    float D = distributionGGX(N, H, roughness, gamma);
-    float G = geometrySmith(N, V, L, roughness);
-
-    vec3 nominator = NdotL * F * D * G;
-    float denominator = 4.0 * max(dot(N, V), 0.0) * max(dot(N, L), 0.0);
-    vec3 specular = nominator / max(denominator, 0.01);
-
-    return specular;
-}
-
-vec3 calculatePointLight(vec3 N, vec3 V, Light light, vec3 fragPos, float metallic, vec3 albedo, vec3 radiance) {
-    vec3 L = normalize(light.position - fragPos);
-    float distance = length(light.position - fragPos);
-    float attenuation = 1.0 / (light.constant + light.linear * distance + light.quadratic * (distance * distance));
-    float NdotL = max(dot(N, L), 0.0);
-    vec3 lightContribution = calculateLightContribution(N, V, L, NdotL, metallic, albedo);
-    return lightContribution * radiance * light.intensity * attenuation;
-}
-
-vec3 calculateDirectionalLight(vec3 N, vec3 V, Light light, float metallic, vec3 albedo, vec3 radiance) {
-    vec3 L = normalize(-light.direction);
-    float NdotL = max(dot(N, L), 0.0);
-    vec3 lightContribution = calculateLightContribution(N, V, L, NdotL, metallic, albedo);
-    return lightContribution * radiance * light.intensity;
-}
-
-vec3 calculateSpotLight(vec3 N, vec3 V, Light light, vec3 fragPos, float metallic, vec3 albedo, vec3 radiance) {
-    vec3 L = normalize(light.position - fragPos);
-    float distance = length(light.position - fragPos);
-    float attenuation = 1.0 / (light.constant + light.linear * distance + light.quadratic * (distance * distance));
-    float theta = dot(L, normalize(-light.direction));
-    float epsilon = light.cutOff - light.outerCutOff;
-    float intensity = clamp((theta - light.outerCutOff) / epsilon, 0.0, 1.0);
-    float NdotL = max(dot(N, L), 0.0);
-    vec3 lightContribution = calculateLightContribution(N, V, L, NdotL, metallic, albedo);
-    return lightContribution * radiance * light.intensity * attenuation * intensity;
-}
-
-// GLSL
-
-vec3 calculateAreaLight(vec3 N, vec3 V, Light light, vec3 fragPos, float metallic, vec3 albedo, vec3 radiance) {
-    // Basic properties
-    vec3 L = normalize(light.position - fragPos); // Direction from fragment to light
-    float distance = length(light.position - fragPos);
-    float NdotL = max(dot(N, L), 0.0);
-
-    // Area light specific calculations
-    // Assuming 'size' is a vec2 representing the width and height of the light
-    vec2 size = light.size;
-    vec3 lightRight = normalize(cross(light.direction, vec3(0.0, 1.0, 0.0))); // Adjust as needed
-    vec3 lightUp = cross(light.direction, lightRight);
-
-    // Simple form factor calculation for rectangular area light
-    float formFactor = 0.0;
-    for (int i = -1; i <= 1; i += 2) {
-        for (int j = -1; j <= 1; j += 2) {
-            vec3 cornerDir = normalize(light.position + (lightRight * size.x * i + lightUp * size.y * j) - fragPos);
-            formFactor += max(dot(N, cornerDir), 0.0);
-        }
-    }
-    formFactor *= 0.25;
-
-    // Light attenuation (modify as per your attenuation model)
-    float attenuation = 1.0 / (light.constant + light.linear * distance + light.quadratic * (distance * distance));
-
-    // Calculate light contribution using the PBR model
-    vec3 lightContribution = calculateLightContribution(N, V, L, NdotL, metallic, albedo);
-
-    return lightContribution * radiance * light.intensity * attenuation * formFactor;
-}
-
-
-float textureExists(int texExists) {
-    return float(texExists);
-}
-
-
-float linearizeDepth(float depth) {
-    float z = depth * 2.0 - 1.0; // Back to NDC
-    return (2.0 * nearClip * farClip) / (farClip + nearClip - z * (farClip - nearClip));
-}
-
 
 void main() {
-
-    if(renderMode == 0){ // PBR
-
-        vec3 albedoMap = albedo;
-        if (albedoTexExists > 0) {
-            albedoMap = texture(albedoTex, TexCoords).rgb;
-        }
-
-        // Sample and transform the normal using the TBN matrix
-        vec3 normalMap;
-        if (normalTexExists > 0) {
-            normalMap = texture(normalTex, TexCoords).rgb;
-            // Transform normal from [0,1] range to [-1,1] range and apply TBN matrix
-            normalMap = normalMap * 2.0 - 1.0;
-            normalMap = normalize(TBN * normalMap);
-        } else {
-            normalMap = normalize(Normal); // Use vertex normal if no normal map
-        }
-
-        float roughnessMap = roughness;
-        if (roughnessTexExists > 0) {
-            roughnessMap = texture(roughnessTex, TexCoords).r;
-        }
-
-        float metallicMap = metallic;
-        if (metalnessTexExists > 0) {
-            metallicMap = texture(metalnessTex, TexCoords).r;
-        }
-
-        float aoMap = ao;
-        if (aoTexExists > 0) {
-            aoMap = texture(aoTex, TexCoords).r;
-        }
-
-        vec3 emissiveMap = vec3(0.0);
-        if (emissiveTexExists > 0) {
-            emissiveMap = texture(emissiveTex, TexCoords).rgb;
-        }
-
-        float opacity = 1.0;
-        if (opacityTexExists > 0) {
-            opacity = texture(opacityTex, TexCoords).r;
-        }
-
-        vec3 sheenColor = vec3(0.0);
-        if (sheenTexExists > 0) {
-            sheenColor = texture(sheenTex, TexCoords).rgb;
-        }
-
-        vec3 reflectance = vec3(0.04); // Default reflectance value
-        if (reflectanceTexExists > 0) {
-            reflectance = texture(reflectanceTex, TexCoords).rgb;
-        }
-
-        // Use declared variables for final values
-        vec3 finalAlbedo = albedoMap;
-        float finalMetallic = metallicMap;
-        float finalRoughness = roughnessMap;
-        float finalAO = aoMap;
-
-        // Calculate PBR Lighting
-        vec3 N = normalize(normalMap);
-        vec3 V = normalize(camPos - FragPos);
-        vec3 F0 = mix(vec3(0.04), albedoMap, metallicMap);
-
-        F0 = mix(F0, finalAlbedo, finalMetallic);
-
-        vec3 Lo = vec3(0.0); // Accumulate specular component
-
-        for (int i = 0; i < numLights; i++) {
-            Light light = lights[i];
-
-            vec3 radiance = convertWattsToRadiance(light.color, defaultEfficacy);
-
-            if (light.type == 0) { // Directional light
-                Lo += calculateDirectionalLight(N, V, light, finalMetallic, finalAlbedo, radiance);
-            } else if (light.type == 1) { // Point light
-                Lo += calculatePointLight(N, V, light, FragPos, finalMetallic, finalAlbedo, radiance);
-            } else if (light.type == 2) { // Spot light
-                Lo += calculateSpotLight(N, V, light, FragPos, finalMetallic, finalAlbedo, radiance);
-            }else if (light.type == 3) { // Area light
-                Lo += calculateAreaLight(N, V, light, FragPos, finalMetallic, finalAlbedo, radiance);
-            }
-        }
-
-        // Ambient and diffuse calculation
-        vec3 ambient = finalAlbedo * finalAO;
-        vec3 diffuse = (1.0 - finalMetallic) * finalAlbedo / PI;
-
-        // Combine lighting components
-        vec3 color = ambient + Lo + diffuse + emissiveMap + sheenColor;
-
-        // Apply reflectance
-        color = mix(color, vec3(1.0), reflectance);
-
-        // Apply opacity to the final color
-        color = mix(vec3(0.0), color, opacity);
-
-        // Tone Mapping
-        color = color / (color + vec3(1.0)); // Reinhard tone mapping
-        color = pow(color, vec3(1.0/1.5)); // Gamma Correction
-
-        FragColor = vec4(color, 1.0);
-    }else if (renderMode == 1) { // Normals Visualization
-        vec3 color = normalize(Normal) * 0.5 + 0.5;
-        FragColor = vec4(color, 1.0);
-    }
-    else if (renderMode == 2) { // World Position Visualization
-        vec3 color = 0.5 * WorldPos + 0.5;
-        FragColor = vec4(color, 1.0);
-    }
-    else if (renderMode == 3) { // Texture Coordinates Visualization
-        FragColor = vec4(TexCoords, 0.0, 1.0);
-    }
-    else if (renderMode == 4) { // Tangent Space Visualization
-        vec3 tangent = normalize(TBN[0]);
-        vec3 bitangent = normalize(TBN[1]);
-        vec3 normal = normalize(TBN[2]);
-        FragColor = vec4(tangent * 0.5 + 0.5, 1.0);
-    } else if (renderMode == 5) { // Flat color
-        FragColor = vec4(1.0f, 0.0f, 0.0f, 1.0);
+    vec3 albedoMap = vec3(1.0);  // Default white color
+    if (albedoTexExists > 0) {
+        albedoMap = texture(albedoTex, TexCoords).rgb;
+        albedoMap = sRGBToLinear(albedoMap);  // Convert from sRGB to Linear RGB
     }
 
-    
+	vec3 normalMap;
+	if (normalTexExists > 0 && false) {
+		normalMap = texture(normalTex, TexCoords).rgb;
+		// Transform normal from [0,1] range to [-1,1] range and apply TBN matrix
+		normalMap = normalMap * 2.0 - 1.0;
+		normalMap = normalize(TBN * normalMap);
+	} else {
+		normalMap = normalize(Normal); // Use vertex normal if no normal map
+	}
 
+	float roughnessMap = roughness;
+	if (roughnessTexExists > 0) {
+		roughnessMap = texture(roughnessTex, TexCoords).r;
+	}
+
+	float metallicMap = metallic;
+	if (metalnessTexExists > 0) {
+		metallicMap = texture(metalnessTex, TexCoords).r;
+	}
+
+	float aoMap = ao;
+	if (aoTexExists > 0) {
+		aoMap = texture(aoTex, TexCoords).r;
+	}
+
+	vec3 emissiveMap = vec3(0.0);
+	if (emissiveTexExists > 0) {
+		emissiveMap = texture(emissiveTex, TexCoords).rgb;
+	}
+
+	float opacity = 1.0;
+	if (opacityTexExists > 0) {
+		opacity = texture(opacityTex, TexCoords).r;
+	}
+
+	vec3 sheenColor = vec3(0.0);
+	if (sheenTexExists > 0) {
+		sheenColor = texture(sheenTex, TexCoords).rgb;
+	}
+
+	vec3 reflectance = vec3(0.04); // Default reflectance value
+	if (reflectanceTexExists > 0) {
+		reflectance = texture(reflectanceTex, TexCoords).rgb;
+	}
+
+	// Use declared variables for final values
+	vec3 finalAlbedo = albedoMap;
+	float finalMetallic = metallicMap;
+	float finalRoughness = roughnessMap;
+	float finalAO = aoMap;
+
+    // Normalize the normal vectors
+    vec3 N = normalize(normalMap);
+    vec3 V = normalize(camPos - FragPos);
+    vec3 L = normalize(lights[0].position - FragPos);
+    float distance = length(lights[0].position - FragPos);
+
+    // Light parameters
+    float constant = lights[0].constant;
+    float linear = lights[0].linear;
+    float quadratic = lights[0].quadratic;
+    vec3 lightColor = lights[0].color * lights[0].intensity;
+
+    // Adjust ambient light intensity
+    vec3 ambient = finalAlbedo * 0.07;
+										   
+	// Apply albedo to diffuse
+    vec3 diffuse = calculateDiffuse(N, L, lightColor, distance, constant, linear, quadratic) * finalAlbedo;
+
+    vec3 color = ambient + diffuse;
+    color = clamp(color, 0.0, 1.0);
+
+    color = applyGammaCorrection(color, 2.2);  // Apply gamma correction
+
+    FragColor = vec4(color, 1.0);
 }
-
 
