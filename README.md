@@ -20,8 +20,8 @@
 ---
 
 <p align="center">
-  <video width="1080" height="720" controls autoplay>
-    <source src="https://cetra.gg/static/c64.mov" type="video/mp4">
+  <video width="1080" height="720" controls autoplay loop muted playsinline>
+    <source src="https://cetra.gg/static/c64.mp4" type="video/mp4">
   </video>
 </p>
 
