@@ -2,7 +2,7 @@
 
 CC = gcc
 CFLAGS = -Wall -g -std=c11 -I$(BUILD_DIR)/include
-LDFLAGS = 
+LDFLAGS = -L/lib -L/usr/lib -L/usr/local/lib
 LIBS = -lm -lpthread -lcetra 
 
 # Check if BUILD_DIR is set

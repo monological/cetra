@@ -27,8 +27,11 @@ Mesh* create_mesh() {
 
     mesh->vertices = NULL;
     mesh->normals = NULL;
+    mesh->tangents = NULL;
+    mesh->bitangents = NULL;
     mesh->tex_coords = NULL;
     mesh->indices = NULL;
+
     mesh->vertex_count = 0;
     mesh->index_count = 0;
 

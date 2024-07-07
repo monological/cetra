@@ -18,7 +18,7 @@ NC = \033[0m # No Color
 # Compiler and linker configurations
 CC = gcc
 CFLAGS = -Wall -g -std=c11 -DGL_SILENCE_DEPRECATION -D_POSIX_C_SOURCE=200809L 
-LDFLAGS =
+LDFLAGS = -L/lib -L/usr/lib -L/usr/local/lib
 LIBS = -lm -lpthread
 
 # Define executable extension based on the OS
@@ -27,16 +27,16 @@ ifeq ($(UNAME_S), Darwin) # macOS specifics
     HOMEBREW_PREFIX := /opt/homebrew
     CFLAGS += -I$(HOMEBREW_PREFIX)/include
     LDFLAGS += -L$(HOMEBREW_PREFIX)/lib
-    LIBS += -lglfw -lcglm -lglew -lassimp
+    LIBS += -lglfw -lcglm -lGLEW -lassimp
     LIBS += -framework Cocoa -framework OpenGL -framework IOKit -framework CoreVideo
 endif
 ifeq ($(UNAME_S), Linux) # Linux specifics
-    LIBS += -lglfw -lcglm -lglew -lassimp
+    LIBS += -lglfw -lcglm -lGLEW -lassimp
     LIBS += -lX11 -lGL -lncurses
 endif
 ifneq (, $(findstring CYGWIN, $(UNAME_S))$(findstring MINGW, $(UNAME_S))$(findstring MSYS, $(UNAME_S)))
     # Windows specifics
-    LIBS += -lglfw -lcglm -lglew -lassimp
+    LIBS += -lglfw -lcglm -lGLEW -lassimp
     LIBS += -lglu32 -lgdi32 -lopengl32 -lkernel32
     CFLAGS += -I/mingw/include
     LDFLAGS += -L/mingw/lib
