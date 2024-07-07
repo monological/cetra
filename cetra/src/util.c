@@ -64,15 +64,14 @@ char *safe_strdup(const char *s) {
 
 bool path_exists(const char* path) {
     struct stat statbuf;
-    struct stat lstatbuf;
 
     // Use lstat to get info about the link itself
-    if (lstat(path, &lstatbuf) != 0) {
+    if (lstat(path, &statbuf) != 0) {
         return false; // Path doesn't exist or error in lstat
     }
 
     // If it's not a symlink, just return true, the path exists
-    if (!S_ISLNK(lstatbuf.st_mode)) {
+    if (!S_ISLNK(statbuf.st_mode)) {
         return true;
     }
 
@@ -83,6 +82,7 @@ bool path_exists(const char* path) {
 
     return true;
 }
+
 
 /**
  * Attempts to find an existing file or directory by modifying and checking subpaths of a given path.
