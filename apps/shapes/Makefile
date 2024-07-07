@@ -20,17 +20,17 @@ ifeq ($(UNAME_S), Darwin)
     EXE = shapes
     CFLAGS += -I$(HOMEBREW_PREFIX)/include
     LDFLAGS += -L$(HOMEBREW_PREFIX)/lib
-    LIBS += -lglfw -lcglm -lglew -lassimp
+    LIBS += -lglfw -lcglm -lGLEW -lassimp
     LIBS += -framework Cocoa -framework OpenGL -framework IOKit -framework CoreVideo
 endif
 ifeq ($(UNAME_S), Linux)
 	EXE = shapes
-    LIBS += -lglfw -lcglm -lglew -lassimp
+    LIBS += -lglfw -lcglm -lGLEW -lassimp
     LIBS += -lX11 -lGL -lncurses
 endif
 ifneq (, $(findstring CYGWIN, $(UNAME_S))$(findstring MINGW, $(UNAME_S))$(findstring MSYS, $(UNAME_S)))
 	EXE = shapes.exe
-    LIBS += -lglfw -lcglm -lglew -lassimp
+    LIBS += -lglfw -lcglm -lGLEW -lassimp
     LIBS += -lglu32 -lgdi32 -lopengl32 -lkernel32
 	CFLAGS += -I/mingw/include
     LDFLAGS += -L/mingw/lib
