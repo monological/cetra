@@ -58,12 +58,12 @@ all: libcetra.a shaders
 shaders: $(SHADER_HEADER)
 
 $(SHADER_HEADER): $(SHADER_FILES)
-	@echo "$(BLUE)Updating shader header file...$(NC)"
+	@echo -e "$(BLUE)Updating shader header file...$(NC)"
 	python3 gen_shader_header.py $(SHADER_DIR) $(SHADER_HEADER)
 
 # Build the cetra library
 libcetra.a: $(OBJ)
-	@echo "$(YELLOW)Generating Cetra static library...$(NC)"
+	@echo -e "$(YELLOW)Generating Cetra static library...$(NC)"
 	ar rcs $@ $^
 
 # Generic rule for building objects
@@ -72,7 +72,7 @@ libcetra.a: $(OBJ)
 
 # Clean the build
 clean:
-	@echo "$(RED)Cleaning up Cetra...$(NC)"
+	@echo -e "$(RED)Cleaning up Cetra...$(NC)"
 	rm -f $(OBJ) libcetra.a
 	rm -f $(SHADER_HEADER)
 

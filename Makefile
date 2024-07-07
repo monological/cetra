@@ -22,14 +22,14 @@ export BUILD_DIR
 all: cetra apps
 
 cetra:
-	@echo "$(GREEN)Building Cetra Engine...$(NC)"
+	@echo -e "$(GREEN)Building Cetra Engine...$(NC)"
 	$(MAKE) -C cetra
-	@echo "$(BLUE)Copying Cetra outputs...$(NC)"
+	@echo -e "$(BLUE)Copying Cetra outputs...$(NC)"
 	$(MAKE) lib
 	$(MAKE) headers
 
 apps:
-	@echo "$(YELLOW)Building apps...$(NC)"
+	@echo -e "$(YELLOW)Building apps...$(NC)"
 	@for dir in apps/*; do \
 		if [ -f $$dir/Makefile ]; then \
 			echo "$(BLUE)Building in $$dir...$(NC)"; \
@@ -46,7 +46,7 @@ headers:
 	rsync -q -av --include='*/' --include='*.h' --exclude='*' --prune-empty-dirs cetra/src/ $(BUILD_DIR)/include/cetra/
 
 clean:
-	@echo "$(RED)Cleaning up...$(NC)"
+	@echo -e "$(RED)Cleaning up...$(NC)"
 	$(MAKE) -C cetra clean
 	@for dir in apps/*; do \
 		if [ -f $$dir/Makefile ]; then \
