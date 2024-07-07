@@ -32,7 +32,7 @@ apps:
 	@echo -e "$(YELLOW)Building apps...$(NC)"
 	@for dir in apps/*; do \
 		if [ -f $$dir/Makefile ]; then \
-			echo "$(BLUE)Building in $$dir...$(NC)"; \
+			@echo -e "$(BLUE)Building in $$dir...$(NC)"; \
 			$(MAKE) -C $$dir BUILD_DIR=$(CURDIR)/build; \
 		fi \
 	done
