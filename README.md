@@ -19,7 +19,7 @@
 
 ---
 
-[![Demo](https://cetra.gg/static/c64.gif)](https://cetra.gg/static/c64.gif)
+![](https://cetra.gg/static/c64.gif)
 
 ---
 
