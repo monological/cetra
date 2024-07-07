@@ -19,9 +19,7 @@
 
 ---
 
-<div align="center">
-    <img src="https://cetra.gg/static/c64.mp4" alt="c64" width="1000"/>
-</div>
+[c64.webm](https://github.com/monological/cetra/assets/162402/a6381cd9-275c-45d9-9c9f-7ae54639398e)
 
 ---
 
