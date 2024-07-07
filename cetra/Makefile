@@ -17,7 +17,7 @@ NC = \033[0m # No Color
 
 # Compiler and linker configurations
 CC = gcc
-CFLAGS = -Wall -g -std=c11 -DGL_SILENCE_DEPRECATION 
+CFLAGS = -Wall -g -std=c11 -DGL_SILENCE_DEPRECATION -D_POSIX_C_SOURCE=200809L 
 LDFLAGS =
 LIBS = -lm -lpthread
 
