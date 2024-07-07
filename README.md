@@ -20,7 +20,7 @@
 ---
 
 <div align="center">
-    <img src="https://cetra.gg/static/c64.webm" alt="c64" width="1000"/>
+    <img src="https://cetra.gg/static/c64.mp4" alt="c64" width="1000"/>
 </div>
 
 ---
