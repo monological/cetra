@@ -19,7 +19,9 @@
 
 ---
 
-![](https://cetra.gg/static/c64.gif)
+<div align="center">
+    <img src="https://cetra.gg/static/c64.gif" alt="c64" width="1000"/>
+</div>
 
 ---
 
