@@ -2,7 +2,7 @@
 
 CC = gcc
 CFLAGS = -Wall -g -std=c11 -I$(BUILD_DIR)/include
-LDFLAGS = -L/lib -L/usr/lib -L/usr/local/lib
+LDFLAGS =
 LIBS = -lm -lpthread -lcetra 
 
 # Check if BUILD_DIR is set
@@ -25,12 +25,13 @@ ifeq ($(UNAME_S), Darwin)
 endif
 ifeq ($(UNAME_S), Linux)
 	EXE = render
-    LIBS += -lglfw -lcglm -lglew -lassimp
+    LIBS += -lglfw -lcglm -lGLEW -lassimp
     LIBS += -lX11 -lGL -lncurses
+	LDFLAGS += -L/lib -L/usr/lib -L/usr/local/lib
 endif
 ifneq (, $(findstring CYGWIN, $(UNAME_S))$(findstring MINGW, $(UNAME_S))$(findstring MSYS, $(UNAME_S)))
 	EXE = render.exe
-    LIBS += -lglfw -lcglm -lglew -lassimp
+    LIBS += -lglfw -lcglm -lGLEW -lassimp
     LIBS += -lglu32 -lgdi32 -lopengl32 -lkernel32
 	CFLAGS += -I/mingw/include
     LDFLAGS += -L/mingw/lib

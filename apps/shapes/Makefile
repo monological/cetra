@@ -2,7 +2,7 @@
 
 CC = gcc
 CFLAGS = -Wall -g -std=c11 -I$(BUILD_DIR)/include
-LDFLAGS = -L/lib -L/usr/lib -L/usr/local/lib
+LDFLAGS =
 LIBS = -lm -lpthread -lcetra
 
 # Check if BUILD_DIR is set
@@ -20,13 +20,14 @@ ifeq ($(UNAME_S), Darwin)
     EXE = shapes
     CFLAGS += -I$(HOMEBREW_PREFIX)/include
     LDFLAGS += -L$(HOMEBREW_PREFIX)/lib
-    LIBS += -lglfw -lcglm -lGLEW -lassimp
+    LIBS += -lglfw -lcglm -lglew -lassimp
     LIBS += -framework Cocoa -framework OpenGL -framework IOKit -framework CoreVideo
 endif
 ifeq ($(UNAME_S), Linux)
 	EXE = shapes
     LIBS += -lglfw -lcglm -lGLEW -lassimp
     LIBS += -lX11 -lGL -lncurses
+	LDFLAGS += -L/lib -L/usr/lib -L/usr/local/lib
 endif
 ifneq (, $(findstring CYGWIN, $(UNAME_S))$(findstring MINGW, $(UNAME_S))$(findstring MSYS, $(UNAME_S)))
 	EXE = shapes.exe

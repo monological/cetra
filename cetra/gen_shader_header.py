@@ -29,12 +29,33 @@ def main(input_dir, output_file):
         header_file.write("#ifndef SHADER_STRINGS_H\n")
         header_file.write("#define SHADER_STRINGS_H\n\n")
 
+        # Disable the unused variable warning
+        header_file.write("#if defined(__GNUC__)\n")
+        header_file.write("#pragma GCC diagnostic push\n")
+        header_file.write("#pragma GCC diagnostic ignored \"-Wunused-variable\"\n")
+        header_file.write("#elif defined(__clang__)\n")
+        header_file.write("#pragma clang diagnostic push\n")
+        header_file.write("#pragma clang diagnostic ignored \"-Wunused-variable\"\n")
+        header_file.write("#elif defined(_MSC_VER)\n")
+        header_file.write("#pragma warning(push)\n")
+        header_file.write("#pragma warning(disable: 4101)\n")
+        header_file.write("#endif\n\n")
+
         for shader in shaders:
             shader_path = os.path.join(input_dir, shader)
             shader_var_name = os.path.splitext(shader)[0].replace('.', '_') + "_shader"
             shader_string = shader_to_string(shader_path)
             if shader_string:
                 header_file.write(f"static const char* {shader_var_name}_str = \n{shader_string};\n\n")
+
+        # Re-enable the unused variable warning
+        header_file.write("#if defined(__GNUC__)\n")
+        header_file.write("#pragma GCC diagnostic pop\n")
+        header_file.write("#elif defined(__clang__)\n")
+        header_file.write("#pragma clang diagnostic pop\n")
+        header_file.write("#elif defined(_MSC_VER)\n")
+        header_file.write("#pragma warning(pop)\n")
+        header_file.write("#endif\n\n")
 
         header_file.write("#endif // SHADER_STRINGS_H\n")
 
@@ -44,3 +65,4 @@ if __name__ == "__main__":
     parser.add_argument('output_file', type=str, help='Output header file path')
     args = parser.parse_args()
     main(args.input_dir, args.output_file)
+

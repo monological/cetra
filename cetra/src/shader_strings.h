@@ -1,6 +1,17 @@
 #ifndef SHADER_STRINGS_H
 #define SHADER_STRINGS_H
 
+#if defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-variable"
+#elif defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunused-variable"
+#elif defined(_MSC_VER)
+#pragma warning(push)
+#pragma warning(disable: 4101)
+#endif
+
 static const char* shape_geo_shader_str = 
     "#version 400 core\n"
     "layout(lines) in;\n"
@@ -405,5 +416,13 @@ static const char* xyz_frag_shader_str =
     "{\n"
     "    FragColor = vec4(vertexColor, 1.0);\n"
     "}\n";
+
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#elif defined(__clang__)
+#pragma clang diagnostic pop
+#elif defined(_MSC_VER)
+#pragma warning(pop)
+#endif
 
 #endif // SHADER_STRINGS_H
