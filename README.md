@@ -16,7 +16,7 @@
 
 
 - Written in C. 
-- Minimal dependencies (cglm, glfw, glew, assimp). 
+- Just a few dependencies (cglm, glfw, glew, assimp). 
 - PBR shader.
 
 ---
@@ -43,7 +43,8 @@ sudo apt-get install libglfw3-dev libglm-dev libglew-dev libassimp-dev
 ### On Arch:
 
 ```
-sudo pacman -S glfw cglm glew assimp
+sudo pacman -S glfw glew assimp
+yay -S cglm
 ```
 
 ### On Fedora:
