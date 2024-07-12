@@ -44,163 +44,27 @@ const float CAM_ANGULAR_SPEED = 0.5f; // Adjust this value as needed
 
 
 /*
- * Mouse
- */
-bool dragging = false;
-float centerX;
-float centerY;
-float dx, dy;
-
-/*
  * Callbacks
  */
 void error_callback(int error, const char* description) {
     fprintf(stderr, "Error: %s\n", description);
 }
 
-void cursor_position_callback(GLFWwindow* window, double xpos, double ypos) {
-    int windowWidth, windowHeight, framebufferWidth, framebufferHeight;
+void cursor_position_callback(Engine *engine, double xpos, double ypos) {
 
-    if(!window) return;
-
-    Engine *engine = glfwGetWindowUserPointer(window);
-    if (!engine) {
-        printf("Engine pointer is NULL\n");
-        return;
-    }
-
-    if (!engine->nk_ctx) {
-        printf("Nuklear context is NULL\n");
-        return;
-    }
-
-    // Check if mouse is over any Nuklear window
-    if (nk_window_is_any_hovered(engine->nk_ctx)) {
-        return;
-    }
-
-    glfwGetWindowSize(window, &windowWidth, &windowHeight);
-    glfwGetFramebufferSize(window, &framebufferWidth, &framebufferHeight);
-
-    xpos = ((xpos / windowWidth) * framebufferWidth);
-    ypos = ((1 - ypos / windowHeight) * framebufferHeight);
-
-
-    if (dragging) {
-        dx = xpos - centerX;
-        dy = ypos - centerY;
-    }
 }
 
-void mouse_button_callback(GLFWwindow* window, int button, int action, int mods) {
-    int windowWidth, windowHeight, framebufferWidth, framebufferHeight;
+void mouse_button_callback(Engine *engine, int button, int action, int mods) {
 
-    if(!window) return;
-
-    Engine *engine = glfwGetWindowUserPointer(window);
-    if (!engine) {
-        printf("Engine pointer is NULL\n");
-        return;
+    if(engine->mouse_is_dragging){
+        printf("dragging start %i %f %f\n", engine->mouse_is_dragging, engine->mouse_drag_x, engine->mouse_drag_y);
+    }else{
+        printf("dragging stop  %i %f %f\n", engine->mouse_is_dragging, engine->mouse_drag_x, engine->mouse_drag_y);
     }
 
-    if (!engine->nk_ctx) {
-        printf("Nuklear context is NULL\n");
-        return;
-    }
-
-    // Check if mouse is over any Nuklear window
-    if (nk_window_is_any_hovered(engine->nk_ctx)) {
-        return;
-    }
-
-    glfwGetWindowSize(window, &windowWidth, &windowHeight);
-    glfwGetFramebufferSize(window, &framebufferWidth, &framebufferHeight);
-
-    double xpos, ypos;
-    glfwGetCursorPos(window, &xpos, &ypos);
-
-    xpos = ((xpos / windowWidth) * framebufferWidth);
-    ypos = ((1 - ypos / windowHeight) * framebufferHeight);
-
-
-    if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
-        dragging = true;
-        centerX = xpos;
-        centerY = ypos;
-        printf("dragging %i %f %f\n", dragging, xpos, ypos);
-    } else if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_RELEASE) {
-        dragging = false;
-        printf("dragging %i %f %f\n", dragging, xpos, ypos);
-    }
 }
 
-void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods) {
-
-    if(!window) return;
-
-    Engine *engine = glfwGetWindowUserPointer(window);
-    if (!engine) {
-        printf("Engine pointer is NULL\n");
-        return;
-    }
-
-    if(!engine->camera){
-        printf("No camera defined.\n");
-        return;
-    }
-
-    Camera *camera = engine->camera;
-
-    float cameraSpeed = 300.0f;
-    vec3 new_position = {0.0f, 0.0f, 0.0f};
-
-    if (action == GLFW_PRESS || action == GLFW_REPEAT) {
-        vec3 forward, right;
-        switch (key) {
-            case GLFW_KEY_W:
-            case GLFW_KEY_UP:
-                // Move camera forward
-                glm_vec3_sub(camera->look_at, camera->position, forward);
-                glm_vec3_normalize(forward);
-                glm_vec3_scale(forward, cameraSpeed, forward);
-                glm_vec3_add(camera->position, forward, new_position);
-                set_camera_position(camera, new_position);
-                break;
-
-            case GLFW_KEY_S:
-            case GLFW_KEY_DOWN:
-                // Move camera backward
-                glm_vec3_sub(camera->look_at, camera->position, forward);
-                glm_vec3_normalize(forward);
-                glm_vec3_scale(forward, cameraSpeed, forward);
-                glm_vec3_sub(camera->position, forward, new_position);
-                set_camera_position(camera, new_position);
-                break;
-
-            case GLFW_KEY_A:
-            case GLFW_KEY_LEFT:
-                // Move camera left
-                glm_vec3_sub(camera->look_at, camera->position, forward);
-                glm_vec3_crossn(camera->up_vector, forward, right);
-                glm_vec3_normalize(right);
-                glm_vec3_scale(right, cameraSpeed, right);
-                glm_vec3_add(camera->position, right, new_position);
-                set_camera_position(camera, new_position);
-                break;
-
-            case GLFW_KEY_D:
-            case GLFW_KEY_RIGHT:
-                // Move camera right
-                glm_vec3_sub(camera->look_at, camera->position, forward);
-                glm_vec3_crossn(camera->up_vector, forward, right);
-                glm_vec3_normalize(right);
-                glm_vec3_scale(right, cameraSpeed, right);
-                glm_vec3_sub(camera->position, right, new_position);
-                set_camera_position(camera, new_position);
-                break;
-        }
-
-    }
+void key_callback(Engine *engine, int key, int scancode, int action, int mods) {
 
 }
 
@@ -223,7 +87,7 @@ void render_scene_callback(Engine* engine, Scene* current_scene){
     };
 
     if(engine->camera_mode == CAMERA_MODE_ORBIT){
-        if (!dragging) {
+        if (!engine->mouse_is_dragging) {
             camera->amplitude = (MAX_DIST - MIN_DIST) / 2.0f; // Half the range of motion
             float midPoint = MIN_DIST + camera->amplitude; // Middle point of the motion
             camera->distance = midPoint + camera->amplitude * sin(time_value * CAM_ANGULAR_SPEED);
@@ -243,8 +107,8 @@ void render_scene_callback(Engine* engine, Scene* current_scene){
             transform.position[0] = 0.0f;
             transform.position[1] = -200.0f;
             transform.position[2] = 0.0f;
-            transform.rotation[0] = dy * ROTATION_SENSITIVITY;
-            transform.rotation[1] = dx * ROTATION_SENSITIVITY;
+            transform.rotation[0] = engine->mouse_drag_y * ROTATION_SENSITIVITY;
+            transform.rotation[1] = engine->mouse_drag_x * ROTATION_SENSITIVITY;
             transform.rotation[2] = 0.0f;
         }
     }else if(engine->camera_mode == CAMERA_MODE_FREE){

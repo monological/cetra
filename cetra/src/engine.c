@@ -35,6 +35,9 @@ static int _create_default_shaders_for_engine(Engine* engine);
 static int _setup_engine_glfw(Engine* engine);
 static int _setup_engine_msaa(Engine *engine);
 static int _setup_engine_gui(Engine* engine);
+static void _engine_cursor_position_callback(GLFWwindow* window, double xpos, double ypos);
+static void _engine_mouse_button_callback(GLFWwindow* window, int button, int action, int mods);
+static void _engine_key_callback(GLFWwindow* window, int key, int scancode, int action, int mods);
 
 
 /*
@@ -94,6 +97,12 @@ Engine* create_engine(const char* window_title, int width, int height) {
     engine->show_gui = false;
     engine->show_wireframe = false;
     engine->show_xyz = false;
+
+    engine->mouse_is_dragging = false;
+    engine->mouse_center_x = 0.0f;
+    engine->mouse_center_y = 0.0f;
+    engine->mouse_drag_x = 0.0f;
+    engine->mouse_drag_y = 0.0f;
 
     return engine;
 }
@@ -179,13 +188,6 @@ static int _setup_engine_glfw(Engine* engine) {
     // Enable V-Sync
     glfwSwapInterval(1);
 
-    if (engine->mouse_button_callback) {
-        glfwSetMouseButtonCallback(engine->window, engine->mouse_button_callback);
-    }
-    if (engine->cursor_position_callback) {
-        glfwSetCursorPosCallback(engine->window, engine->cursor_position_callback);
-    }
-
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glfwSwapInterval(1);
@@ -198,6 +200,7 @@ static int _setup_engine_glfw(Engine* engine) {
 
     glfwGetFramebufferSize(engine->window, &(engine->framebuffer_width), &(engine->framebuffer_height));
     glViewport(0, 0, engine->framebuffer_width, engine->framebuffer_height);
+
 
     return 0;
 }
@@ -269,6 +272,10 @@ static int _setup_engine_gui(Engine* engine) {
     // save engine to window so we can use it in callbacks
     glfwSetWindowUserPointer(engine->window, engine);
 
+    glfwSetMouseButtonCallback(engine->window, _engine_mouse_button_callback);
+    glfwSetCursorPosCallback(engine->window, _engine_cursor_position_callback);
+    glfwSetKeyCallback(engine->window, _engine_key_callback);
+
     return 0;
 }
 
@@ -315,27 +322,177 @@ void set_engine_error_callback(Engine* engine, GLFWerrorfun error_callback) {
     }
 }
 
-void set_engine_mouse_button_callback(Engine* engine, GLFWmousebuttonfun mouse_button_callback) {
-    if (!engine) return;
-    engine->mouse_button_callback = mouse_button_callback;
-    if (engine->window) {
-        glfwSetMouseButtonCallback(engine->window, mouse_button_callback);
-    }
-}
-
-void set_engine_cursor_position_callback(Engine* engine, GLFWcursorposfun cursor_position_callback) {
+void set_engine_cursor_position_callback(Engine* engine, CursorPositionCallback cursor_position_callback) {
     if (!engine) return;
     engine->cursor_position_callback = cursor_position_callback;
-    if (engine->window) {
-        glfwSetCursorPosCallback(engine->window, cursor_position_callback);
+}
+
+void set_engine_mouse_button_callback(Engine* engine, MouseButtonCallback mouse_button_callback) {
+    if (!engine) return;
+    engine->mouse_button_callback = mouse_button_callback;
+}
+
+void set_engine_key_callback(Engine* engine, KeyCallback key_callback) {
+    if (!engine) return;
+    engine->key_callback = key_callback;
+}
+
+/*
+ * Mouse and Keyboard Callbacks
+ */
+
+static void _engine_cursor_position_callback(GLFWwindow* window, double xpos, double ypos) {
+    int window_width, window_height, fb_width, fb_height;
+
+    if(!window) return;
+
+    Engine *engine = glfwGetWindowUserPointer(window);
+    if (!engine) {
+        printf("Engine pointer is NULL\n");
+        return;
+    }
+
+    if (!engine->nk_ctx) {
+        printf("Nuklear context is NULL\n");
+        return;
+    }
+
+    // Check if mouse is over any Nuklear window
+    if (nk_window_is_any_hovered(engine->nk_ctx)) {
+        return;
+    }
+
+    glfwGetWindowSize(window, &window_width, &window_height);
+    glfwGetFramebufferSize(window, &fb_width, &fb_height);
+
+    xpos = ((xpos / window_width) * fb_width);
+    ypos = ((1 - ypos / window_height) * fb_height);
+
+
+    if (engine->mouse_is_dragging) {
+        engine->mouse_drag_x = xpos - engine->mouse_center_x;
+        engine->mouse_drag_y = ypos - engine->mouse_center_y;
+    }
+
+    if(engine->cursor_position_callback){
+        engine->cursor_position_callback(engine, xpos, ypos);
     }
 }
 
-void set_engine_key_callback(Engine* engine, GLFWkeyfun key_callback) {
-    if (!engine) return;
-    engine->key_callback = key_callback;
-    if (engine->window) {
-        glfwSetKeyCallback(engine->window, key_callback);
+static void _engine_mouse_button_callback(GLFWwindow* window, int button, int action, int mods) {
+    int window_width, window_height, fb_width, fb_height;
+
+    if(!window) return;
+
+    Engine *engine = glfwGetWindowUserPointer(window);
+    if (!engine) {
+        printf("Engine pointer is NULL\n");
+        return;
+    }
+
+    if (!engine->nk_ctx) {
+        printf("Nuklear context is NULL\n");
+        return;
+    }
+
+    // Check if mouse is over any Nuklear window
+    if (nk_window_is_any_hovered(engine->nk_ctx)) {
+        return;
+    }
+
+    glfwGetWindowSize(window, &window_width, &window_height);
+    glfwGetFramebufferSize(window, &fb_width, &fb_height);
+
+    double xpos, ypos;
+    glfwGetCursorPos(window, &xpos, &ypos);
+
+    xpos = ((xpos / window_width) * fb_width);
+    ypos = ((1 - ypos / window_height) * fb_height);
+
+    if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
+        engine->mouse_is_dragging = true;
+        engine->mouse_center_x = xpos;
+        engine->mouse_center_y = ypos;
+    } else if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_RELEASE) {
+        engine->mouse_is_dragging = false;
+        engine->mouse_center_x = xpos;
+        engine->mouse_center_y = ypos;
+    }
+
+    if(engine->mouse_button_callback){
+        engine->mouse_button_callback(engine, button, action, mods);
+    }
+}
+
+
+static void _engine_key_callback(GLFWwindow* window, int key, int scancode, int action, int mods) {
+    if(!window) return;
+
+    Engine *engine = glfwGetWindowUserPointer(window);
+    if (!engine) {
+        printf("Engine pointer is NULL\n");
+        return;
+    }
+
+    if(!engine->camera){
+        printf("No camera defined.\n");
+        return;
+    }
+
+    Camera *camera = engine->camera;
+
+    float cameraSpeed = 300.0f;
+    vec3 new_position = {0.0f, 0.0f, 0.0f};
+
+    if (action == GLFW_PRESS || action == GLFW_REPEAT) {
+        vec3 forward, right;
+        switch (key) {
+            case GLFW_KEY_W:
+            case GLFW_KEY_UP:
+                // Move camera forward
+                glm_vec3_sub(camera->look_at, camera->position, forward);
+                glm_vec3_normalize(forward);
+                glm_vec3_scale(forward, cameraSpeed, forward);
+                glm_vec3_add(camera->position, forward, new_position);
+                set_camera_position(camera, new_position);
+                break;
+
+            case GLFW_KEY_S:
+            case GLFW_KEY_DOWN:
+                // Move camera backward
+                glm_vec3_sub(camera->look_at, camera->position, forward);
+                glm_vec3_normalize(forward);
+                glm_vec3_scale(forward, cameraSpeed, forward);
+                glm_vec3_sub(camera->position, forward, new_position);
+                set_camera_position(camera, new_position);
+                break;
+
+            case GLFW_KEY_A:
+            case GLFW_KEY_LEFT:
+                // Move camera left
+                glm_vec3_sub(camera->look_at, camera->position, forward);
+                glm_vec3_crossn(camera->up_vector, forward, right);
+                glm_vec3_normalize(right);
+                glm_vec3_scale(right, cameraSpeed, right);
+                glm_vec3_add(camera->position, right, new_position);
+                set_camera_position(camera, new_position);
+                break;
+
+            case GLFW_KEY_D:
+            case GLFW_KEY_RIGHT:
+                // Move camera right
+                glm_vec3_sub(camera->look_at, camera->position, forward);
+                glm_vec3_crossn(camera->up_vector, forward, right);
+                glm_vec3_normalize(right);
+                glm_vec3_scale(right, cameraSpeed, right);
+                glm_vec3_sub(camera->position, right, new_position);
+                set_camera_position(camera, new_position);
+                break;
+        }
+    }
+
+    if(engine->key_callback){
+        engine->key_callback(engine, key, scancode, action, mods);
     }
 }
 

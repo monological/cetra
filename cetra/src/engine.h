@@ -30,6 +30,12 @@ typedef enum CameraMode {
     CAMERA_MODE_ORBIT,   // Orbit around a point
 } CameraMode;
 
+struct Engine;
+
+typedef void (*CursorPositionCallback)(struct Engine* engine, double xpos, double ypos);
+typedef void (*MouseButtonCallback)(struct Engine* engine, int button, int action, int mods);
+typedef void (*KeyCallback)(struct Engine* engine, int key, int scancode, int action, int mods);
+
 
 typedef struct Engine {
     GLFWwindow* window;
@@ -38,9 +44,10 @@ typedef struct Engine {
     int window_height;              // Height of the window
 
     GLFWerrorfun error_callback;
-    GLFWmousebuttonfun mouse_button_callback;
-    GLFWcursorposfun cursor_position_callback;
-    GLFWkeyfun key_callback;
+    
+    CursorPositionCallback cursor_position_callback;
+    MouseButtonCallback mouse_button_callback;
+    KeyCallback key_callback;
 
     GLuint framebuffer;             // Framebuffer object
     int framebuffer_width;          // Width of the framebuffer
@@ -76,6 +83,12 @@ typedef struct Engine {
     bool show_gui;
     bool show_wireframe;
     bool show_xyz;
+
+    bool mouse_is_dragging;
+    float mouse_center_x;
+    float mouse_center_y;
+    float mouse_drag_x;
+    float mouse_drag_y;
 } Engine;
 
 typedef void (*RenderSceneFunc)(Engine*, Scene*);
@@ -87,9 +100,9 @@ int init_engine(Engine* engine);
 
 // GLFW callbacks
 void set_engine_error_callback(Engine* engine, GLFWerrorfun error_callback);
-void set_engine_mouse_button_callback(Engine* engine, GLFWmousebuttonfun mouse_button_callback);
-void set_engine_cursor_position_callback(Engine* engine, GLFWcursorposfun cursor_position_callback);
-void set_engine_key_callback(Engine* engine, GLFWkeyfun key_callback);
+void set_engine_mouse_button_callback(Engine* engine, MouseButtonCallback mouse_button_callback);
+void set_engine_cursor_position_callback(Engine* engine, CursorPositionCallback cursor_position_callback);
+void set_engine_key_callback(Engine* engine, KeyCallback key_callback);
 
 // Camera
 void set_engine_camera(Engine* engine, Camera* camera);
