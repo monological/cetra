@@ -19,12 +19,18 @@ typedef struct Texture {
                             // GL_RGBA)
     GLenum data_format;     // This is the format of the texture data (e.g., GL_RGB, GL_RGBA)
 
+    size_t ref_count; // Reference count for shared ownership
+
     UT_hash_handle hh; // Makes this structure hashable
 } Texture;
 
 // malloc
 Texture* create_texture();
 void free_texture(Texture* texture);
+
+// reference counting
+Texture* texture_retain(Texture* texture);
+void texture_release(Texture* texture);
 
 void set_texture_width(Texture* texture, int width);
 void set_texture_height(Texture* texture, int height);

@@ -68,9 +68,10 @@ Material* process_ai_material(struct aiMaterial* ai_mat, TexturePool* tex_pool) 
     // Load Diffuse Texture
     if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_DIFFUSE, 0, &str, NULL, NULL, NULL,
                                            NULL, NULL, NULL)) {
-        material->albedo_tex = load_texture_path_into_pool(tex_pool, str.data);
-        if (material->albedo_tex != NULL) {
-            log_info("Diffuse texture loaded: %s", material->albedo_tex->filepath);
+        Texture* tex = load_texture_path_into_pool(tex_pool, str.data);
+        if (tex) {
+            set_material_albedo_tex(material, tex);
+            log_info("Diffuse texture loaded: %s", tex->filepath);
         } else {
             log_warn("Failed to load diffuse texture '%s'", str.data);
         }
@@ -79,9 +80,10 @@ Material* process_ai_material(struct aiMaterial* ai_mat, TexturePool* tex_pool) 
     // Load Normal Texture
     if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_NORMALS, 0, &str, NULL, NULL, NULL,
                                            NULL, NULL, NULL)) {
-        material->normal_tex = load_texture_path_into_pool(tex_pool, str.data);
-        if (material->normal_tex != NULL) {
-            log_info("Normals texture loaded: %s", material->normal_tex->filepath);
+        Texture* tex = load_texture_path_into_pool(tex_pool, str.data);
+        if (tex) {
+            set_material_normal_tex(material, tex);
+            log_info("Normals texture loaded: %s", tex->filepath);
         } else {
             log_warn("Failed to load normal texture '%s'", str.data);
         }
@@ -90,9 +92,10 @@ Material* process_ai_material(struct aiMaterial* ai_mat, TexturePool* tex_pool) 
     // Load Metalness Texture
     if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_METALNESS, 0, &str, NULL, NULL,
                                            NULL, NULL, NULL, NULL)) {
-        material->metalness_tex = load_texture_path_into_pool(tex_pool, str.data);
-        if (material->metalness_tex != NULL) {
-            log_info("Metalness texture loaded: %s", material->metalness_tex->filepath);
+        Texture* tex = load_texture_path_into_pool(tex_pool, str.data);
+        if (tex) {
+            set_material_metalness_tex(material, tex);
+            log_info("Metalness texture loaded: %s", tex->filepath);
         } else {
             log_warn("Failed to load metalness texture '%s'", str.data);
         }
@@ -101,9 +104,10 @@ Material* process_ai_material(struct aiMaterial* ai_mat, TexturePool* tex_pool) 
     // Load Diffuse Roughness Texture
     if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_DIFFUSE_ROUGHNESS, 0, &str, NULL,
                                            NULL, NULL, NULL, NULL, NULL)) {
-        material->roughness_tex = load_texture_path_into_pool(tex_pool, str.data);
-        if (material->roughness_tex != NULL) {
-            log_info("Diffuse Roughness texture loaded: %s", material->roughness_tex->filepath);
+        Texture* tex = load_texture_path_into_pool(tex_pool, str.data);
+        if (tex) {
+            set_material_roughness_tex(material, tex);
+            log_info("Diffuse Roughness texture loaded: %s", tex->filepath);
         } else {
             log_warn("Failed to load roughness texture '%s'", str.data);
         }
@@ -112,10 +116,10 @@ Material* process_ai_material(struct aiMaterial* ai_mat, TexturePool* tex_pool) 
     // Load Ambient Occlusion Texture
     if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_AMBIENT_OCCLUSION, 0, &str, NULL,
                                            NULL, NULL, NULL, NULL, NULL)) {
-        material->ambient_occlusion_tex = load_texture_path_into_pool(tex_pool, str.data);
-        if (material->ambient_occlusion_tex != NULL) {
-            log_info("Ambient Occlusion texture loaded: %s",
-                     material->ambient_occlusion_tex->filepath);
+        Texture* tex = load_texture_path_into_pool(tex_pool, str.data);
+        if (tex) {
+            set_material_ambient_occlusion_tex(material, tex);
+            log_info("Ambient Occlusion texture loaded: %s", tex->filepath);
         } else {
             log_warn("Failed to load ambient occlusion texture '%s'", str.data);
         }
@@ -124,9 +128,10 @@ Material* process_ai_material(struct aiMaterial* ai_mat, TexturePool* tex_pool) 
     // Load Emissive Texture
     if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_EMISSIVE, 0, &str, NULL, NULL,
                                            NULL, NULL, NULL, NULL)) {
-        material->emissive_tex = load_texture_path_into_pool(tex_pool, str.data);
-        if (material->emissive_tex != NULL) {
-            log_info("Emissive texture loaded: %s", material->emissive_tex->filepath);
+        Texture* tex = load_texture_path_into_pool(tex_pool, str.data);
+        if (tex) {
+            set_material_emissive_tex(material, tex);
+            log_info("Emissive texture loaded: %s", tex->filepath);
         } else {
             log_warn("Failed to load emissive texture '%s'", str.data);
         }
@@ -135,9 +140,10 @@ Material* process_ai_material(struct aiMaterial* ai_mat, TexturePool* tex_pool) 
     // Load Height Texture
     if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_HEIGHT, 0, &str, NULL, NULL, NULL,
                                            NULL, NULL, NULL)) {
-        material->height_tex = load_texture_path_into_pool(tex_pool, str.data);
-        if (material->height_tex != NULL) {
-            log_info("Height texture loaded: %s", material->height_tex->filepath);
+        Texture* tex = load_texture_path_into_pool(tex_pool, str.data);
+        if (tex) {
+            set_material_height_tex(material, tex);
+            log_info("Height texture loaded: %s", tex->filepath);
         } else {
             log_warn("Failed to load height texture '%s'", str.data);
         }
@@ -146,9 +152,10 @@ Material* process_ai_material(struct aiMaterial* ai_mat, TexturePool* tex_pool) 
     // Load Opacity Texture
     if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_OPACITY, 0, &str, NULL, NULL, NULL,
                                            NULL, NULL, NULL)) {
-        material->opacity_tex = load_texture_path_into_pool(tex_pool, str.data);
-        if (material->opacity_tex != NULL) {
-            log_info("Opacity texture loaded: %s", material->opacity_tex->filepath);
+        Texture* tex = load_texture_path_into_pool(tex_pool, str.data);
+        if (tex) {
+            set_material_opacity_tex(material, tex);
+            log_info("Opacity texture loaded: %s", tex->filepath);
         } else {
             log_warn("Failed to load opacity texture '%s'", str.data);
         }
@@ -157,18 +164,20 @@ Material* process_ai_material(struct aiMaterial* ai_mat, TexturePool* tex_pool) 
     // Load Sheen Texture
     if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_SHEEN, 0, &str, NULL, NULL, NULL,
                                            NULL, NULL, NULL)) {
-        material->sheen_tex = load_texture_path_into_pool(tex_pool, str.data);
-        if (material->sheen_tex != NULL) {
-            log_info("Sheen texture loaded: %s", material->sheen_tex->filepath);
+        Texture* tex = load_texture_path_into_pool(tex_pool, str.data);
+        if (tex) {
+            set_material_sheen_tex(material, tex);
+            log_info("Sheen texture loaded: %s", tex->filepath);
         }
     }
 
     // Load Reflectance Texture
     if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_REFLECTION, 0, &str, NULL, NULL,
                                            NULL, NULL, NULL, NULL)) {
-        material->reflectance_tex = load_texture_path_into_pool(tex_pool, str.data);
-        if (material->reflectance_tex != NULL) {
-            log_info("Reflectance texture loaded: %s", material->reflectance_tex->filepath);
+        Texture* tex = load_texture_path_into_pool(tex_pool, str.data);
+        if (tex) {
+            set_material_reflectance_tex(material, tex);
+            log_info("Reflectance texture loaded: %s", tex->filepath);
         } else {
             log_warn("Failed to load reflectance texture '%s'", str.data);
         }

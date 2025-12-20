@@ -23,6 +23,7 @@ Texture* create_texture() {
     texture->height = 0;
     texture->internal_format = 0;
     texture->data_format = 0;
+    texture->ref_count = 1;
 
     return texture;
 }
@@ -35,6 +36,24 @@ void free_texture(Texture* texture) {
             texture->filepath = NULL;
         }
         free(texture);
+    }
+}
+
+Texture* texture_retain(Texture* texture) {
+    if (texture) {
+        texture->ref_count++;
+    }
+    return texture;
+}
+
+void texture_release(Texture* texture) {
+    if (texture) {
+        if (texture->ref_count > 0) {
+            texture->ref_count--;
+        }
+        if (texture->ref_count == 0) {
+            free_texture(texture);
+        }
     }
 }
 
@@ -277,9 +296,9 @@ void remove_texture_from_pool(TexturePool* pool, const char* filepath) {
             }
         }
 
-        // Free once after removal from both data structures
+        // Release the pool's reference (frees if ref_count reaches 0)
         if (to_remove) {
-            free_texture(to_remove);
+            texture_release(to_remove);
         }
     }
 }
@@ -288,11 +307,11 @@ void clear_texture_pool(TexturePool* pool) {
     if (pool && pool->texture_cache) {
         Texture *current, *tmp;
         HASH_ITER(hh, pool->texture_cache, current, tmp) {
-            Texture* to_free = current;
+            Texture* to_release = current;
             // NOLINTNEXTLINE(clang-analyzer-unix.Malloc) - uthash pattern, tmp holds next before
             // delete
             HASH_DEL(pool->texture_cache, current);
-            free_texture(to_free);
+            texture_release(to_release);
         }
         pool->texture_cache = NULL;
     }

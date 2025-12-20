@@ -44,10 +44,35 @@ Material* create_material() {
 
 void free_material(Material* material) {
     if (material) {
-        /* Texures are managed by pool. Do not free them here.
-         *
-         * Shader program managed by engine. Do not free here.
-         */
+        // Release all texture references
+        if (material->albedo_tex)
+            texture_release(material->albedo_tex);
+        if (material->normal_tex)
+            texture_release(material->normal_tex);
+        if (material->roughness_tex)
+            texture_release(material->roughness_tex);
+        if (material->metalness_tex)
+            texture_release(material->metalness_tex);
+        if (material->ambient_occlusion_tex)
+            texture_release(material->ambient_occlusion_tex);
+        if (material->emissive_tex)
+            texture_release(material->emissive_tex);
+        if (material->height_tex)
+            texture_release(material->height_tex);
+        if (material->opacity_tex)
+            texture_release(material->opacity_tex);
+        if (material->microsurface_tex)
+            texture_release(material->microsurface_tex);
+        if (material->anisotropy_tex)
+            texture_release(material->anisotropy_tex);
+        if (material->subsurface_scattering_tex)
+            texture_release(material->subsurface_scattering_tex);
+        if (material->sheen_tex)
+            texture_release(material->sheen_tex);
+        if (material->reflectance_tex)
+            texture_release(material->reflectance_tex);
+
+        // Shader program managed by engine. Do not free here.
         free(material);
     }
 }
@@ -63,4 +88,84 @@ void set_material_shader_program(Material* material, ShaderProgram* shader_progr
         return;
     }
     material->shader_program = shader_program;
+}
+
+void set_material_albedo_tex(Material* material, Texture* texture) {
+    if (!material)
+        return;
+    if (material->albedo_tex)
+        texture_release(material->albedo_tex);
+    material->albedo_tex = texture_retain(texture);
+}
+
+void set_material_normal_tex(Material* material, Texture* texture) {
+    if (!material)
+        return;
+    if (material->normal_tex)
+        texture_release(material->normal_tex);
+    material->normal_tex = texture_retain(texture);
+}
+
+void set_material_roughness_tex(Material* material, Texture* texture) {
+    if (!material)
+        return;
+    if (material->roughness_tex)
+        texture_release(material->roughness_tex);
+    material->roughness_tex = texture_retain(texture);
+}
+
+void set_material_metalness_tex(Material* material, Texture* texture) {
+    if (!material)
+        return;
+    if (material->metalness_tex)
+        texture_release(material->metalness_tex);
+    material->metalness_tex = texture_retain(texture);
+}
+
+void set_material_ambient_occlusion_tex(Material* material, Texture* texture) {
+    if (!material)
+        return;
+    if (material->ambient_occlusion_tex)
+        texture_release(material->ambient_occlusion_tex);
+    material->ambient_occlusion_tex = texture_retain(texture);
+}
+
+void set_material_emissive_tex(Material* material, Texture* texture) {
+    if (!material)
+        return;
+    if (material->emissive_tex)
+        texture_release(material->emissive_tex);
+    material->emissive_tex = texture_retain(texture);
+}
+
+void set_material_height_tex(Material* material, Texture* texture) {
+    if (!material)
+        return;
+    if (material->height_tex)
+        texture_release(material->height_tex);
+    material->height_tex = texture_retain(texture);
+}
+
+void set_material_opacity_tex(Material* material, Texture* texture) {
+    if (!material)
+        return;
+    if (material->opacity_tex)
+        texture_release(material->opacity_tex);
+    material->opacity_tex = texture_retain(texture);
+}
+
+void set_material_sheen_tex(Material* material, Texture* texture) {
+    if (!material)
+        return;
+    if (material->sheen_tex)
+        texture_release(material->sheen_tex);
+    material->sheen_tex = texture_retain(texture);
+}
+
+void set_material_reflectance_tex(Material* material, Texture* texture) {
+    if (!material)
+        return;
+    if (material->reflectance_tex)
+        texture_release(material->reflectance_tex);
+    material->reflectance_tex = texture_retain(texture);
 }

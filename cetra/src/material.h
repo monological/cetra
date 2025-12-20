@@ -37,4 +37,15 @@ void free_material(Material* material);
 
 void set_material_shader_program(Material* material, ShaderProgram* shader_program);
 
+void set_material_albedo_tex(Material* material, Texture* texture);
+void set_material_normal_tex(Material* material, Texture* texture);
+void set_material_roughness_tex(Material* material, Texture* texture);
+void set_material_metalness_tex(Material* material, Texture* texture);
+void set_material_ambient_occlusion_tex(Material* material, Texture* texture);
+void set_material_emissive_tex(Material* material, Texture* texture);
+void set_material_height_tex(Material* material, Texture* texture);
+void set_material_opacity_tex(Material* material, Texture* texture);
+void set_material_sheen_tex(Material* material, Texture* texture);
+void set_material_reflectance_tex(Material* material, Texture* texture);
+
 #endif // _MATERIAL_H_
