@@ -8,7 +8,10 @@
 #include "transform.h"
 
 void reset_and_apply_transform(mat4* matrix, Transform* transform) {
-    if (!transform || !matrix) {
+    if (!matrix) {
+        return;
+    }
+    if (!transform) {
         glm_mat4_identity(*matrix);
         return;
     }
