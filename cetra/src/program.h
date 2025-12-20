@@ -25,6 +25,10 @@ ShaderProgram* create_program_from_source(const char* name, const char* vert_sou
                                           const char* frag_source, const char* geo_source);
 void free_program(ShaderProgram* program);
 
+// Hot-reload: recompile shaders from paths and relink program
+GLboolean reload_program_from_paths(ShaderProgram* program, const char* vert_path,
+                                    const char* frag_path, const char* geo_path);
+
 /*
  * Shader Program Setup Functions
  */

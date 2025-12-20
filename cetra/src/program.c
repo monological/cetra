@@ -205,6 +205,103 @@ void free_program(ShaderProgram* program) {
     }
 }
 
+GLboolean reload_program_from_paths(ShaderProgram* program, const char* vert_path,
+                                    const char* frag_path, const char* geo_path) {
+    if (!program || !vert_path || !frag_path) {
+        log_error("Invalid arguments to reload_program_from_paths");
+        return GL_FALSE;
+    }
+
+    // Compile new shaders first (don't modify program until all succeed)
+    Shader* new_vert = create_shader_from_path(VERTEX_SHADER, vert_path);
+    if (!new_vert || !compile_shader(new_vert)) {
+        log_error("Failed to compile vertex shader: %s", vert_path);
+        if (new_vert)
+            free_shader(new_vert);
+        return GL_FALSE;
+    }
+
+    Shader* new_frag = create_shader_from_path(FRAGMENT_SHADER, frag_path);
+    if (!new_frag || !compile_shader(new_frag)) {
+        log_error("Failed to compile fragment shader: %s", frag_path);
+        free_shader(new_vert);
+        if (new_frag)
+            free_shader(new_frag);
+        return GL_FALSE;
+    }
+
+    Shader* new_geo = NULL;
+    if (geo_path) {
+        new_geo = create_shader_from_path(GEOMETRY_SHADER, geo_path);
+        if (!new_geo || !compile_shader(new_geo)) {
+            log_error("Failed to compile geometry shader: %s", geo_path);
+            free_shader(new_vert);
+            free_shader(new_frag);
+            if (new_geo)
+                free_shader(new_geo);
+            return GL_FALSE;
+        }
+    }
+
+    // All shaders compiled successfully - now modify the program
+    // Detach and free old shaders
+    for (size_t i = 0; i < program->shader_count; ++i) {
+        if (program->shaders[i]) {
+            glDetachShader(program->id, program->shaders[i]->shaderID);
+            free_shader(program->shaders[i]);
+        }
+    }
+    free(program->shaders);
+    program->shaders = NULL;
+    program->shader_count = 0;
+
+    // Attach new shaders
+    glAttachShader(program->id, new_vert->shaderID);
+    glAttachShader(program->id, new_frag->shaderID);
+    if (new_geo)
+        glAttachShader(program->id, new_geo->shaderID);
+
+    // Relink
+    if (!link_program(program)) {
+        log_error("Failed to relink program after shader reload");
+        free_shader(new_vert);
+        free_shader(new_frag);
+        if (new_geo)
+            free_shader(new_geo);
+        return GL_FALSE;
+    }
+
+    // Store new shaders
+    size_t new_count = new_geo ? 3 : 2;
+    program->shaders = malloc(new_count * sizeof(Shader*));
+    if (!program->shaders) {
+        log_error("Failed to allocate shader array");
+        free_shader(new_vert);
+        free_shader(new_frag);
+        if (new_geo)
+            free_shader(new_geo);
+        return GL_FALSE;
+    }
+    program->shaders[0] = new_vert;
+    program->shaders[1] = new_frag;
+    if (new_geo)
+        program->shaders[2] = new_geo;
+    program->shader_count = new_count;
+
+    // Re-cache uniforms
+    if (program->uniforms) {
+        free_uniform_manager(program->uniforms);
+    }
+    program->uniforms = create_uniform_manager(program->id);
+    if (program->uniforms) {
+        uniform_cache_standard(program->uniforms);
+        uniform_cache_lights(program->uniforms, get_gl_max_lights());
+    }
+
+    log_info("Reloaded shader program: %s", program->name);
+    return GL_TRUE;
+}
+
 void attach_shader_to_program(ShaderProgram* program, Shader* shader) {
     if (program && shader && shader->shaderID) {
         // Attach the shader to the program
