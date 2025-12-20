@@ -178,7 +178,7 @@ static void _update_camera_uniforms(ShaderProgram* program, Camera* camera) {
 
 static void _render_node(SceneNode* node, Camera* camera, mat4 model, mat4 view, mat4 projection,
                          float time_value, RenderMode render_mode, Light** closest_lights,
-                         size_t returned_light_count) {
+                         size_t returned_light_count, GLuint* current_program) {
 
     if (!node->meshes || node->mesh_count == 0)
         return;
@@ -193,7 +193,11 @@ static void _render_node(SceneNode* node, Camera* camera, mat4 model, mat4 view,
         if (!program || !program->uniforms)
             continue;
 
-        glUseProgram(program->id);
+        // Only switch program if different from current
+        if (*current_program != program->id) {
+            glUseProgram(program->id);
+            *current_program = program->id;
+        }
 
         UniformManager* u = program->uniforms;
 
@@ -214,20 +218,21 @@ static void _render_node(SceneNode* node, Camera* camera, mat4 model, mat4 view,
 
         glBindVertexArray(mesh->vao);
         glDrawElements(mesh->draw_mode, mesh->index_count, GL_UNSIGNED_INT, 0);
-
         glBindVertexArray(0);
-        glUseProgram(0);
     }
 }
 
-static void _render_xyz(SceneNode* node, mat4 view, mat4 projection) {
+static void _render_xyz(SceneNode* node, mat4 view, mat4 projection, GLuint* current_program) {
     if (!node || !node->xyz_shader_program || !node->xyz_shader_program->uniforms)
         return;
 
     ShaderProgram* program = node->xyz_shader_program;
     UniformManager* u = program->uniforms;
 
-    glUseProgram(program->id);
+    if (*current_program != program->id) {
+        glUseProgram(program->id);
+        *current_program = program->id;
+    }
 
     uniform_set_mat4(u, "model", (const float*)node->global_transform);
     uniform_set_mat4(u, "view", (const float*)view);
@@ -235,13 +240,12 @@ static void _render_xyz(SceneNode* node, mat4 view, mat4 projection) {
 
     glBindVertexArray(node->xyz_vao);
     glDrawArrays(GL_LINES, 0, xyz_vertices_size / (6 * sizeof(float)));
-
     glBindVertexArray(0);
-    glUseProgram(0);
 }
 
 static void _render_scene(Scene* scene, SceneNode* node, Camera* camera, mat4 model, mat4 view,
-                          mat4 projection, float time_value, RenderMode render_mode) {
+                          mat4 projection, float time_value, RenderMode render_mode,
+                          GLuint* current_program) {
 
     if (!scene) {
         log_error("error: render called with NULL scene");
@@ -258,10 +262,10 @@ static void _render_scene(Scene* scene, SceneNode* node, Camera* camera, mat4 mo
     Light** closest_lights = get_closest_lights(scene, node, max_lights, &returned_light_count);
 
     _render_node(node, camera, model, view, projection, time_value, render_mode, closest_lights,
-                 returned_light_count);
+                 returned_light_count, current_program);
 
     if (node->show_xyz && node->xyz_shader_program) {
-        _render_xyz(node, view, projection);
+        _render_xyz(node, view, projection, current_program);
     }
 
     // Note: closest_lights points to scene's cached array, do not free
@@ -269,7 +273,7 @@ static void _render_scene(Scene* scene, SceneNode* node, Camera* camera, mat4 mo
     // Render children
     for (size_t i = 0; i < node->children_count; i++) {
         _render_scene(scene, node->children[i], camera, node->global_transform, view, projection,
-                      time_value, render_mode);
+                      time_value, render_mode, current_program);
     }
 }
 
@@ -303,5 +307,12 @@ void render_current_scene(Engine* engine, float time_value) {
 
     RenderMode render_mode = engine->current_render_mode;
 
-    _render_scene(scene, root_node, camera, *model, *view, *projection, time_value, render_mode);
+    // Track current program to avoid redundant glUseProgram calls
+    GLuint current_program = 0;
+
+    _render_scene(scene, root_node, camera, *model, *view, *projection, time_value, render_mode,
+                  &current_program);
+
+    // Reset program state at end of frame
+    glUseProgram(0);
 }
