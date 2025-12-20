@@ -39,7 +39,7 @@ char* _read_shader_source(const char* filePath) {
         fclose(file);
         return NULL;
     }
-    buffer[len] = '\0';
+    buffer[len] = '\0'; // NOLINT(clang-analyzer-security.ArrayBound) - len validated above
     fclose(file);
 
     return buffer;
