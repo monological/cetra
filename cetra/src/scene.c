@@ -41,6 +41,11 @@ Scene* create_scene() {
 
     scene->xyz_shader_program = NULL;
 
+    // Initialize light cache (will be allocated on first use)
+    scene->light_cache_pairs = NULL;
+    scene->light_cache_result = NULL;
+    scene->light_cache_capacity = 0;
+
     return scene;
 }
 
@@ -91,7 +96,15 @@ void free_scene(Scene* scene) {
         free_node(scene->root_node);
     }
 
-    // Finally, free the scene itnode
+    // Free light cache
+    if (scene->light_cache_pairs) {
+        free(scene->light_cache_pairs);
+    }
+    if (scene->light_cache_result) {
+        free(scene->light_cache_result);
+    }
+
+    // Finally, free the scene itself
     free(scene);
 
     return;
@@ -190,33 +203,43 @@ static void _collect_scene_lights(Scene* scene, LightDistancePair* pairs, size_t
 
 Light** get_closest_lights(Scene* scene, SceneNode* target_node, size_t max_lights,
                            size_t* returned_light_count) {
-
-    LightDistancePair* pairs = malloc(scene->light_count * sizeof(LightDistancePair));
-    if (!pairs) {
-        // Handle memory allocation failure
+    if (!scene || scene->light_count == 0) {
         *returned_light_count = 0;
         return NULL;
     }
 
+    // Grow cache if needed (only reallocates when light count increases)
+    if (scene->light_count > scene->light_cache_capacity) {
+        free(scene->light_cache_pairs);
+        free(scene->light_cache_result);
+
+        scene->light_cache_pairs = malloc(scene->light_count * sizeof(LightDistancePair));
+        scene->light_cache_result = malloc(scene->light_count * sizeof(Light*));
+        scene->light_cache_capacity = scene->light_count;
+
+        if (!scene->light_cache_pairs || !scene->light_cache_result) {
+            free(scene->light_cache_pairs);
+            free(scene->light_cache_result);
+            scene->light_cache_pairs = NULL;
+            scene->light_cache_result = NULL;
+            scene->light_cache_capacity = 0;
+            *returned_light_count = 0;
+            return NULL;
+        }
+    }
+
+    // Collect and sort lights using cached arrays
     size_t count = 0;
-    _collect_scene_lights(scene, pairs, &count, target_node);
-    qsort(pairs, count, sizeof(LightDistancePair), _compare_light_distance);
+    _collect_scene_lights(scene, scene->light_cache_pairs, &count, target_node);
+    qsort(scene->light_cache_pairs, count, sizeof(LightDistancePair), _compare_light_distance);
 
     size_t result_count = (count < max_lights) ? count : max_lights;
-    Light** closest_lights = malloc(result_count * sizeof(Light*));
-    if (!closest_lights) {
-        free(pairs);
-        *returned_light_count = 0;
-        return NULL;
-    }
-
     for (size_t i = 0; i < result_count; i++) {
-        closest_lights[i] = pairs[i].light;
+        scene->light_cache_result[i] = scene->light_cache_pairs[i].light;
     }
 
-    free(pairs);
     *returned_light_count = result_count;
-    return closest_lights;
+    return scene->light_cache_result;
 }
 
 void add_material_to_scene(Scene* scene, Material* material) {

@@ -253,7 +253,7 @@ static void _render_scene(Scene* scene, SceneNode* node, Camera* camera, mat4 mo
         _render_xyz(node, view, projection);
     }
 
-    free(closest_lights);
+    // Note: closest_lights points to scene's cached array, do not free
 
     // Render children
     for (size_t i = 0; i < node->children_count; i++) {

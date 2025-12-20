@@ -89,6 +89,11 @@ typedef struct Scene {
     // used by all nodes
     ShaderProgram* xyz_shader_program;
     ShaderProgram* outlines_shader_program;
+
+    // Pre-allocated cache for light selection (avoids per-frame malloc)
+    LightDistancePair* light_cache_pairs;
+    Light** light_cache_result;
+    size_t light_cache_capacity;
 } Scene;
 
 // malloc
