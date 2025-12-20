@@ -484,24 +484,71 @@ void upload_buffers_to_gpu_for_nodes(SceneNode* node) {
     }
 }
 
-void apply_transform_to_nodes(SceneNode* node, mat4 transform) {
-    if (!node)
+typedef struct {
+    SceneNode* node;
+    mat4 parent_transform;
+} TransformStackEntry;
+
+void apply_transform_to_nodes(SceneNode* root, mat4 transform) {
+    if (!root)
         return;
 
-    glm_mat4_mul(transform, node->original_transform, node->global_transform);
-
-    if (node->light) {
-        vec3 light_position;
-        glm_mat4_mulv3(node->global_transform, node->light->original_position, 1.0f,
-                       light_position);
-        glm_vec3_copy(light_position, node->light->global_position);
+    // Iterative traversal using explicit stack
+    size_t stack_capacity = 64;
+    size_t stack_size = 0;
+    TransformStackEntry* stack = malloc(stack_capacity * sizeof(TransformStackEntry));
+    if (!stack) {
+        log_error("Failed to allocate transform stack");
+        return;
     }
 
-    for (size_t i = 0; i < node->children_count; i++) {
-        if (node->children[i]) {
-            apply_transform_to_nodes(node->children[i], node->global_transform);
+    // Push root node
+    stack[stack_size].node = root;
+    glm_mat4_copy(transform, stack[stack_size].parent_transform);
+    stack_size++;
+
+    while (stack_size > 0) {
+        // Pop from stack
+        stack_size--;
+        SceneNode* node = stack[stack_size].node;
+        mat4 parent_transform;
+        glm_mat4_copy(stack[stack_size].parent_transform, parent_transform);
+
+        // Apply transform
+        glm_mat4_mul(parent_transform, node->original_transform, node->global_transform);
+
+        // Update light position if present
+        if (node->light) {
+            vec3 light_position;
+            glm_mat4_mulv3(node->global_transform, node->light->original_position, 1.0f,
+                           light_position);
+            glm_vec3_copy(light_position, node->light->global_position);
+        }
+
+        // Push children (in reverse order to maintain left-to-right traversal)
+        for (size_t i = node->children_count; i > 0; i--) {
+            if (node->children[i - 1]) {
+                // Grow stack if needed
+                if (stack_size >= stack_capacity) {
+                    stack_capacity *= 2;
+                    TransformStackEntry* new_stack =
+                        realloc(stack, stack_capacity * sizeof(TransformStackEntry));
+                    if (!new_stack) {
+                        log_error("Failed to grow transform stack");
+                        free(stack);
+                        return;
+                    }
+                    stack = new_stack;
+                }
+
+                stack[stack_size].node = node->children[i - 1];
+                glm_mat4_copy(node->global_transform, stack[stack_size].parent_transform);
+                stack_size++;
+            }
         }
     }
+
+    free(stack);
 }
 
 void print_scene_node(const SceneNode* node, int depth) {
