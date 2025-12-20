@@ -16,11 +16,14 @@ ShaderProgram* create_program(const char* name) {
 
     if (program->id == 0) {
         log_error("Failed to create program object.");
+        free(program);
         return NULL;
     }
 
     if (!name) {
         log_error("Shader program name is NULL");
+        glDeleteProgram(program->id);
+        free(program);
         return NULL;
     }
 
@@ -67,6 +70,21 @@ ShaderProgram* create_program(const char* name) {
     program->reflectance_tex_exists_loc = -1;
 
     program->line_width_loc = -1;
+
+    // Initialize light uniform location arrays to NULL
+    program->max_lights = 0;
+    program->light_position_loc = NULL;
+    program->light_direction_loc = NULL;
+    program->light_color_loc = NULL;
+    program->light_specular_loc = NULL;
+    program->light_ambient_loc = NULL;
+    program->light_intensity_loc = NULL;
+    program->light_constant_loc = NULL;
+    program->light_linear_loc = NULL;
+    program->light_quadratic_loc = NULL;
+    program->light_cutOff_loc = NULL;
+    program->light_outerCutOff_loc = NULL;
+    program->light_type_loc = NULL;
 
     return program;
 }

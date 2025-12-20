@@ -284,10 +284,10 @@ void clear_texture_pool(TexturePool* pool) {
     if (pool && pool->texture_cache) {
         Texture *current, *tmp;
         HASH_ITER(hh, pool->texture_cache, current, tmp) {
-            if (current) {
-                HASH_DEL(pool->texture_cache, current);
-                free_texture(current);
-            }
+            Texture* to_free = current;
+            HASH_DEL(pool->texture_cache, current);
+            free_texture(to_free);
         }
+        pool->texture_cache = NULL;
     }
 }

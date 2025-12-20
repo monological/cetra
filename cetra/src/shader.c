@@ -15,14 +15,16 @@ char* _read_shader_source(const char* filePath) {
 
     fseek(file, 0, SEEK_END);
     long length = ftell(file);
-    if (length == -1) {
-        perror("Error occurred in ftell");
+    if (length <= 0) {
+        if (length == -1) {
+            perror("Error occurred in ftell");
+        }
         fclose(file);
         return NULL;
     }
     fseek(file, 0, SEEK_SET);
 
-    char* buffer = malloc(length + 1);
+    char* buffer = malloc((size_t)length + 1);
     if (!buffer) {
         log_error("Failed to allocate memory for shader source");
         fclose(file);
@@ -54,14 +56,14 @@ Shader* create_shader_from_path(ShaderType type, const char* file_path) {
 }
 
 Shader* create_shader(ShaderType type, const char* source) {
-    Shader* shader = malloc(sizeof(Shader));
-    if (!shader) {
-        log_error("Failed to allocate memory for shader");
+    if (!source) {
+        log_error("Shader source is NULL");
         return NULL;
     }
 
-    if (!source) {
-        log_error("Shader source is NULL");
+    Shader* shader = malloc(sizeof(Shader));
+    if (!shader) {
+        log_error("Failed to allocate memory for shader");
         return NULL;
     }
 

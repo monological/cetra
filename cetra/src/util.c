@@ -211,11 +211,13 @@ void convert_rgb_to_float(vec3* albedo, int r, int g, int b) {
 }
 
 void hex_to_rgb_float(vec3* albedo, const char* hex) {
+    if (!hex || !albedo) {
+        return;
+    }
     if (hex[0] == '#')
         hex++; // Skip the hash if present
 
-    unsigned int rgb;
-    sscanf(hex, "%x", &rgb); // Parse the hex value
+    unsigned long rgb = strtoul(hex, NULL, 16); // Parse the hex value
 
     (*albedo)[0] = ((rgb >> 16) & 0xFF) / 255.0f; // Red component
     (*albedo)[1] = ((rgb >> 8) & 0xFF) / 255.0f;  // Green component
