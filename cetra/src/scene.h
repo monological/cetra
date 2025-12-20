@@ -44,10 +44,10 @@ SceneNode* create_node();
 void free_node(SceneNode* node);
 
 // build graph
-void add_child_node(SceneNode* node, SceneNode* child);
+int add_child_node(SceneNode* node, SceneNode* child);
 
 // meshes
-void add_mesh_to_node(SceneNode* node, Mesh* mesh);
+int add_mesh_to_node(SceneNode* node, Mesh* mesh);
 
 // setters
 void set_node_name(SceneNode* node, const char* name);
@@ -109,13 +109,13 @@ Camera* find_camera_by_name(Scene* scene, const char* name);
 
 // light
 void set_scene_lights(Scene* scene, Light** lights, size_t light_count);
-void add_light_to_scene(Scene* scene, Light* light);
+int add_light_to_scene(Scene* scene, Light* light);
 Light* find_light_by_name(Scene* scene, const char* name);
 Light** get_closest_lights(Scene* scene, SceneNode* target_node, size_t max_lights,
                            size_t* returned_light_count);
 
 // material
-void add_material_to_scene(Scene* scene, Material* material);
+int add_material_to_scene(Scene* scene, Material* material);
 
 // viz
 GLboolean set_scene_xyz_shader_program(Scene* scene, ShaderProgram* xyz_shader_program);

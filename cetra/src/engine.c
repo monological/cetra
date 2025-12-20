@@ -550,14 +550,14 @@ void update_engine_camera_perspective(Engine* engine) {
  * Scene
  *
  */
-void add_scene_to_engine(Engine* engine, Scene* scene) {
+int add_scene_to_engine(Engine* engine, Scene* scene) {
     if (!engine || !scene)
-        return;
+        return -1;
 
     // check if scene already added to engine and return if so
     for (size_t i = 0; i < engine->scene_count; ++i) {
         if (engine->scenes[i] == scene) {
-            return;
+            return 0; // already added, success
         }
     }
 
@@ -566,8 +566,7 @@ void add_scene_to_engine(Engine* engine, Scene* scene) {
     Scene** new_scenes = realloc(engine->scenes, new_count * sizeof(Scene*));
     if (!new_scenes) {
         log_error("Failed to reallocate memory for new scene");
-        free_scene(scene); // Assuming there's a function to free a Scene
-        return;
+        return -1;
     }
 
     // Add the new scene to the array and update the scene count
@@ -575,7 +574,7 @@ void add_scene_to_engine(Engine* engine, Scene* scene) {
     engine->scenes[engine->scene_count] = scene;
     engine->scene_count = new_count;
 
-    return;
+    return 0;
 }
 
 void set_active_scene_by_index(Engine* engine, size_t scene_index) {
@@ -661,16 +660,16 @@ static int _create_default_shaders_for_engine(Engine* engine) {
     return 0;
 }
 
-void add_shader_program_to_engine(Engine* engine, ShaderProgram* program) {
+int add_shader_program_to_engine(Engine* engine, ShaderProgram* program) {
     if (!engine || !program) {
-        log_error("Invalid input to add_program_to_engine");
-        return;
+        log_error("Invalid input to add_shader_program_to_engine");
+        return -1;
     }
 
     // check if program already added to engine and return if so
     for (size_t i = 0; i < engine->program_count; ++i) {
         if (engine->programs[i] == program) {
-            return;
+            return 0; // already added, success
         }
     }
 
@@ -680,7 +679,7 @@ void add_shader_program_to_engine(Engine* engine, ShaderProgram* program) {
 
     if (!new_programs) {
         log_error("Failed to allocate memory for new program");
-        return;
+        return -1;
     }
 
     // Add the new program to the array and update the program count
@@ -693,6 +692,8 @@ void add_shader_program_to_engine(Engine* engine, ShaderProgram* program) {
     if (!existing) {
         HASH_ADD_KEYPTR(hh, engine->program_map, program->name, strlen(program->name), program);
     }
+
+    return 0;
 }
 
 ShaderProgram* get_engine_shader_program_by_name(Engine* engine, const char* program_name) {

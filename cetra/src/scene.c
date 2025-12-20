@@ -146,25 +146,21 @@ Camera* find_camera_by_name(Scene* scene, const char* name) {
 /*
  * Lights
  */
-void add_light_to_scene(Scene* scene, Light* light) {
+int add_light_to_scene(Scene* scene, Light* light) {
     if (!scene || !light)
-        return;
+        return -1;
 
-    // Reallocate the lights array to accommodate the new light
     size_t new_count = scene->light_count + 1;
     Light** new_lights = realloc(scene->lights, new_count * sizeof(Light*));
     if (!new_lights) {
         log_error("Failed to reallocate memory for new light");
-        free_light(light); // Assuming there's a function to free a Light
-        return;
+        return -1;
     }
 
-    // Add the new light to the array and update the light count
     scene->lights = new_lights;
     scene->lights[scene->light_count] = light;
     scene->light_count = new_count;
-
-    return;
+    return 0;
 }
 
 Light* find_light_by_name(Scene* scene, const char* name) {
@@ -242,32 +238,26 @@ Light** get_closest_lights(Scene* scene, SceneNode* target_node, size_t max_ligh
     return scene->light_cache_result;
 }
 
-void add_material_to_scene(Scene* scene, Material* material) {
-    if (!scene || !material) {
-        log_error("Invalid input to add_material_to_scene");
-        return;
-    }
+int add_material_to_scene(Scene* scene, Material* material) {
+    if (!scene || !material)
+        return -1;
 
-    // check if material already added to scene and return if so
     for (size_t i = 0; i < scene->material_count; ++i) {
-        if (scene->materials[i] == material) {
-            return;
-        }
+        if (scene->materials[i] == material)
+            return 0;
     }
 
-    // Resize the materials array to accommodate the new material
     size_t new_count = scene->material_count + 1;
     Material** new_materials = realloc(scene->materials, new_count * sizeof(Material*));
-
     if (!new_materials) {
         log_error("Failed to allocate memory for new material");
-        return;
+        return -1;
     }
 
-    // Add the new material to the array and update the material count
     scene->materials = new_materials;
     scene->materials[scene->material_count] = material;
     scene->material_count = new_count;
+    return 0;
 }
 
 GLboolean set_scene_xyz_shader_program(Scene* scene, ShaderProgram* xyz_shader_program) {
@@ -339,32 +329,39 @@ void free_node(SceneNode* node) {
     free(node);
 }
 
-void add_child_node(SceneNode* node, SceneNode* child) {
+int add_child_node(SceneNode* node, SceneNode* child) {
     if (!node || !child)
-        return;
-    node->children = realloc(node->children, (node->children_count + 1) * sizeof(SceneNode*));
+        return -1;
+
+    SceneNode** new_children =
+        realloc(node->children, (node->children_count + 1) * sizeof(SceneNode*));
+    if (!new_children) {
+        log_error("Failed to reallocate memory for child node");
+        return -1;
+    }
+
+    node->children = new_children;
     node->children[node->children_count] = child;
     child->parent = node;
     node->children_count++;
+    return 0;
 }
 
-void add_mesh_to_node(SceneNode* node, Mesh* mesh) {
+int add_mesh_to_node(SceneNode* node, Mesh* mesh) {
     if (!node || !mesh)
-        return;
+        return -1;
 
-    // Reallocate the meshes array to accommodate the new mesh
     size_t new_count = node->mesh_count + 1;
     Mesh** new_meshes = realloc(node->meshes, new_count * sizeof(Mesh*));
     if (!new_meshes) {
         log_error("Failed to reallocate memory for new mesh");
-        // Handle error, such as freeing the mesh if it's dynamically allocated
-        return;
+        return -1;
     }
 
-    // Add the new mesh to the array and update the mesh count
     node->meshes = new_meshes;
     node->meshes[node->mesh_count] = mesh;
     node->mesh_count = new_count;
+    return 0;
 }
 
 void set_node_name(SceneNode* node, const char* name) {
