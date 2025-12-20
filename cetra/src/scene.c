@@ -134,6 +134,23 @@ void set_scene_lights(Scene* scene, Light** lights, size_t light_count) {
     scene->light_count = light_count;
 }
 
+int add_camera_to_scene(Scene* scene, Camera* camera) {
+    if (!scene || !camera)
+        return -1;
+
+    size_t new_count = scene->camera_count + 1;
+    Camera** new_cameras = realloc(scene->cameras, new_count * sizeof(Camera*));
+    if (!new_cameras) {
+        log_error("Failed to reallocate memory for new camera");
+        return -1;
+    }
+
+    scene->cameras = new_cameras;
+    scene->cameras[scene->camera_count] = camera;
+    scene->camera_count = new_count;
+    return 0;
+}
+
 Camera* find_camera_by_name(Scene* scene, const char* name) {
     for (size_t i = 0; i < scene->camera_count; ++i) {
         if (strcmp(scene->cameras[i]->name, name) == 0) {

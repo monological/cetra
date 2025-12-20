@@ -105,6 +105,7 @@ void set_scene_root_node(Scene* scene, SceneNode* root_node);
 
 // camera
 void set_scene_cameras(Scene* scene, Camera** cameras, size_t camera_count);
+int add_camera_to_scene(Scene* scene, Camera* camera);
 Camera* find_camera_by_name(Scene* scene, const char* name);
 
 // light
