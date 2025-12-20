@@ -15,6 +15,7 @@
 #include "util.h"
 #include "engine.h"
 #include "transform.h"
+#include "intersect.h"
 
 #define NK_INCLUDE_FIXED_TYPES
 #define NK_INCLUDE_STANDARD_IO
@@ -40,8 +41,6 @@ static int _setup_engine_gui(Engine* engine);
 static void _engine_cursor_position_callback(GLFWwindow* window, double xpos, double ypos);
 static void _engine_mouse_button_callback(GLFWwindow* window, int button, int action, int mods);
 static void _engine_key_callback(GLFWwindow* window, int key, int scancode, int action, int mods);
-static void _traverse_and_check_intersections(SceneNode* node, vec3 ray_origin, vec3 ray_dir,
-                                              float* min_distance, SceneNode** picked_node);
 static SceneNode* _perform_engine_ray_picking(Engine* engine, double mouse_fb_x, double mouse_fb_y);
 
 /*
@@ -781,8 +780,7 @@ void render_nuklear_gui(Engine* engine) {
         nk_layout_row_dynamic(engine->nk_ctx, 30, 2);
 
         // Radio button for CAMERA_MODE_FREE
-        if (nk_option_label(engine->nk_ctx, "Free Mode",
-                            engine->camera_mode == CAMERA_MODE_FREE)) {
+        if (nk_option_label(engine->nk_ctx, "Free Mode", engine->camera_mode == CAMERA_MODE_FREE)) {
             engine->camera_mode = CAMERA_MODE_FREE;
         }
 
@@ -946,195 +944,54 @@ void get_mouse_world_position_on_drag_plane(Engine* engine, double mouse_fb_x, d
     if (!engine || !engine->camera)
         return;
 
-    // Convert to NDC
-    double x_ndc = (2.0 * mouse_fb_x) / engine->fb_width - 1.0;
-    double y_ndc = (2.0 * mouse_fb_y) / engine->fb_height - 1.0;
-
-    // Create projection and view matrices
+    // Build projection and view matrices
     mat4 projection, view;
     glm_perspective(engine->camera->fov_radians, engine->camera->aspect_ratio,
                     engine->camera->near_clip, engine->camera->far_clip, projection);
     glm_lookat(engine->camera->position, engine->camera->look_at, engine->camera->up_vector, view);
 
-    // Convert from NDC to eye space ray
-    vec4 ray_clip = {x_ndc, y_ndc, -1.0, 1.0};
-    vec4 ray_eye;
-    mat4 inv_projection;
-    glm_mat4_inv(projection, inv_projection);
-    glm_mat4_mulv(inv_projection, ray_clip, ray_eye);
-
-    // Transform ray to world space
+    // Compute ray from screen coordinates
     vec3 ray_dir;
-    mat4 inv_view;
-    glm_mat4_inv(view, inv_view);
-    glm_mat4_mulv3(inv_view, ray_eye, 0.0, ray_dir);
-    glm_vec3_normalize(ray_dir);
+    compute_ray_from_screen((float)mouse_fb_x, (float)mouse_fb_y, engine->fb_width,
+                            engine->fb_height, projection, view, engine->camera->position, ray_dir);
 
-    // Project ray to the drag plane distance
-    vec3 ray_origin;
-    glm_vec3_copy(engine->camera->position, ray_origin);
-
-    // Calculate point on ray at the stored drag distance
-    vec3 point_on_plane;
-    glm_vec3_scale(ray_dir, engine->drag_plane_distance, point_on_plane);
-    glm_vec3_add(ray_origin, point_on_plane, out_world_pos);
+    // Project ray to the stored drag plane distance
+    ray_point_at_distance(engine->camera->position, ray_dir, engine->drag_plane_distance,
+                          out_world_pos);
 }
 
 static SceneNode* _perform_engine_ray_picking(Engine* engine, double mouse_fb_x,
                                               double mouse_fb_y) {
-    printf("Mouse FB X: %f, Mouse FB Y: %f\n", mouse_fb_x, mouse_fb_y);
-
-    // Convert to NDC (framebuffer Y is already 0 at bottom, so no inversion needed)
-    double x_ndc = (2.0 * mouse_fb_x) / engine->fb_width - 1.0;
-    double y_ndc = (2.0 * mouse_fb_y) / engine->fb_height - 1.0;
-    printf("NDC Coordinates: (%f, %f)\n", x_ndc, y_ndc);
-
-    // Create projection matrix
-    mat4 projection;
+    // Build projection and view matrices
+    mat4 projection, view;
     glm_perspective(engine->camera->fov_radians, engine->camera->aspect_ratio,
                     engine->camera->near_clip, engine->camera->far_clip, projection);
-
-    // Create view matrix
-    mat4 view;
     glm_lookat(engine->camera->position, engine->camera->look_at, engine->camera->up_vector, view);
 
-    // Convert from NDC to camera/view space ray
-    vec4 ray_clip = {x_ndc, y_ndc, -1.0, 1.0};
-    vec4 ray_eye;
-    mat4 inv_projection;
-    glm_mat4_inv(projection, inv_projection);
-    glm_mat4_mulv(inv_projection, ray_clip, ray_eye);
-    printf("Ray in Eye Space: (%f, %f, %f, %f)\n", ray_eye[0], ray_eye[1], ray_eye[2], ray_eye[3]);
-
-    // Transform ray to world space
-    vec3 ray_world;
-    mat4 inv_view;
-    glm_mat4_inv(view, inv_view);
-    glm_mat4_mulv3(inv_view, ray_eye, 0.0, ray_world);
-    glm_vec3_normalize(ray_world);
-    printf("Ray in World Space: (%f, %f, %f)\n", ray_world[0], ray_world[1], ray_world[2]);
-
-    // Ray origin and direction
-    vec3 ray_origin;
+    // Compute ray from screen coordinates
+    vec3 ray_origin, ray_dir;
     glm_vec3_copy(engine->camera->position, ray_origin);
-    vec3 ray_dir;
-    glm_vec3_copy(ray_world, ray_dir);
+    compute_ray_from_screen((float)mouse_fb_x, (float)mouse_fb_y, engine->fb_width,
+                            engine->fb_height, projection, view, ray_origin, ray_dir);
 
-    printf("Ray Origin: (%f, %f, %f), Direction: (%f, %f, %f)\n", ray_origin[0], ray_origin[1],
-           ray_origin[2], ray_dir[0], ray_dir[1], ray_dir[2]);
-
-    float min_distance = FLT_MAX;
-    SceneNode* picked_node = NULL;
-
-    // Recursive intersection check
+    // Perform scene graph picking
     Scene* current_scene = get_current_scene(engine);
-    SceneNode* node = current_scene->root_node;
-    if (node) {
-        _traverse_and_check_intersections(node, ray_origin, ray_dir, &min_distance, &picked_node);
-    }
+    if (!current_scene || !current_scene->root_node)
+        return NULL;
 
-    if (picked_node) {
-        printf("Picked Node: %s\n", picked_node->name);
+    RayPickResult result = pick_scene_node(current_scene->root_node, ray_origin, ray_dir);
 
-        // Calculate and store the world-space hit point
-        vec3 hit_point;
-        glm_vec3_scale(ray_dir, min_distance, hit_point);
-        glm_vec3_add(ray_origin, hit_point, hit_point);
-        glm_vec3_copy(hit_point, engine->drag_start_world_pos);
-
-        // Store distance from camera to drag plane
-        engine->drag_plane_distance = min_distance;
+    if (result.hit) {
+        // Store hit information for drag operations
+        glm_vec3_copy(result.hit_point, engine->drag_start_world_pos);
+        engine->drag_plane_distance = result.distance;
 
         // Store object's current position (extract from transform)
-        glm_vec3_copy((vec3){picked_node->global_transform[3][0],
-                             picked_node->global_transform[3][1],
-                             picked_node->global_transform[3][2]},
+        glm_vec3_copy((vec3){result.node->global_transform[3][0],
+                             result.node->global_transform[3][1],
+                             result.node->global_transform[3][2]},
                       engine->drag_object_start_pos);
-    } else {
-        printf("No node picked.\n");
     }
 
-    return picked_node;
-}
-
-static bool _ray_aabb_intersection(vec3 ray_origin, vec3 ray_dir, vec3 bbox_min, vec3 bbox_max,
-                                   float* t_near, float* t_far) {
-    printf("Checking AABB - Min: (%f, %f, %f), Max: (%f, %f, %f)\n", bbox_min[0], bbox_min[1],
-           bbox_min[2], bbox_max[0], bbox_max[1], bbox_max[2]);
-
-    vec3 inv_dir = {1.0f / ray_dir[0], 1.0f / ray_dir[1], 1.0f / ray_dir[2]};
-    vec3 t0s = {(bbox_min[0] - ray_origin[0]) * inv_dir[0],
-                (bbox_min[1] - ray_origin[1]) * inv_dir[1],
-                (bbox_min[2] - ray_origin[2]) * inv_dir[2]};
-    vec3 t1s = {(bbox_max[0] - ray_origin[0]) * inv_dir[0],
-                (bbox_max[1] - ray_origin[1]) * inv_dir[1],
-                (bbox_max[2] - ray_origin[2]) * inv_dir[2]};
-
-    vec3 tmin = {fmin(t0s[0], t1s[0]), fmin(t0s[1], t1s[1]), fmin(t0s[2], t1s[2])};
-    vec3 tmax = {fmax(t0s[0], t1s[0]), fmax(t0s[1], t1s[1]), fmax(t0s[2], t1s[2])};
-
-    *t_near = fmax(fmax(tmin[0], tmin[1]), tmin[2]);
-    *t_far = fmin(fmin(tmax[0], tmax[1]), tmax[2]);
-
-    return (*t_near <= *t_far) && (*t_far >= 0.0f);
-}
-
-static void _traverse_and_check_intersections(SceneNode* node, vec3 ray_origin, vec3 ray_dir,
-                                              float* min_distance, SceneNode** picked_node) {
-    if (!node)
-        return;
-
-    printf("Traversing Node: %s\n", node->name);
-
-    mat4 invGlobalTransform;
-    glm_mat4_inv(node->global_transform, invGlobalTransform);
-
-    vec3 local_ray_origin, local_ray_dir;
-    glm_mat4_mulv3(invGlobalTransform, ray_origin, 1.0f, local_ray_origin);
-    glm_mat4_mulv3(invGlobalTransform, ray_dir, 0.0f, local_ray_dir);
-    glm_vec3_normalize(local_ray_dir);
-
-    printf("Local Ray Origin: (%f, %f, %f), Local Ray Dir: (%f, %f, %f)\n", local_ray_origin[0],
-           local_ray_origin[1], local_ray_origin[2], local_ray_dir[0], local_ray_dir[1],
-           local_ray_dir[2]);
-
-    for (size_t i = 0; i < node->mesh_count; i++) {
-        Mesh* mesh = node->meshes[i];
-        float t_near, t_far;
-        printf("Node: %s, AABB Min: (%f, %f, %f), Max: (%f, %f, %f)\n", node->name,
-               mesh->aabb.min[0], mesh->aabb.min[1], mesh->aabb.min[2], mesh->aabb.max[0],
-               mesh->aabb.max[1], mesh->aabb.max[2]);
-        if (_ray_aabb_intersection(local_ray_origin, local_ray_dir, mesh->aabb.min, mesh->aabb.max,
-                                   &t_near, &t_far)) {
-            printf("AABB Intersection at Node: %s, Mesh: %zu, t_near: %f, t_far: %f\n", node->name,
-                   i, t_near, t_far);
-            if (t_near < *min_distance && t_near > 0) {
-                printf("Valid Intersection - Closer than previous\n");
-                for (size_t j = 0; j < mesh->index_count; j += 3) {
-                    vec3 v0, v1, v2;
-                    glm_vec3_copy(mesh->vertices + mesh->indices[j] * 3, v0);
-                    glm_vec3_copy(mesh->vertices + mesh->indices[j + 1] * 3, v1);
-                    glm_vec3_copy(mesh->vertices + mesh->indices[j + 2] * 3, v2);
-
-                    float t;
-                    if (glm_ray_triangle(local_ray_origin, local_ray_dir, v0, v1, v2, &t) &&
-                        t < *min_distance && t > 0) {
-                        *min_distance = t;
-                        *picked_node = node;
-                        printf("Triangle Intersection at Node: %s, Mesh: %zu, Triangle Index: %zu, "
-                               "Distance: %f\n",
-                               node->name, i, j, t);
-                    }
-                }
-            }
-        } else {
-            printf("No AABB Intersection at Node: %s, Mesh: %zu\n", node->name, i);
-        }
-    }
-    printf("--------------------\n");
-
-    for (size_t i = 0; i < node->children_count; i++) {
-        _traverse_and_check_intersections(node->children[i], ray_origin, ray_dir, min_distance,
-                                          picked_node);
-    }
+    return result.node;
 }
