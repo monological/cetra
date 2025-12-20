@@ -17,7 +17,8 @@ NC = \033[0m # No Color
 
 # Compiler and linker configurations
 CC = gcc
-CFLAGS = -Wall -g -std=c11 -DGL_SILENCE_DEPRECATION -D_POSIX_C_SOURCE=200809L 
+AR = ar
+CFLAGS = -Wall -g -std=c11 -DGL_SILENCE_DEPRECATION -D_POSIX_C_SOURCE=200809L
 LDFLAGS =
 LIBS = -lm -lpthread
 
@@ -25,6 +26,7 @@ LIBS = -lm -lpthread
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S), Darwin) # macOS specifics
     HOMEBREW_PREFIX := /opt/homebrew
+    AR = /usr/bin/ar
     CFLAGS += -I$(HOMEBREW_PREFIX)/include
     LDFLAGS += -L$(HOMEBREW_PREFIX)/lib
     LIBS += -lglfw -lcglm -lglew -lassimp
@@ -64,7 +66,7 @@ $(SHADER_HEADER): $(SHADER_FILES)
 # Build the cetra library
 libcetra.a: $(OBJ)
 	@echo -e "$(YELLOW)Generating Cetra static library...$(NC)"
-	ar rcs $@ $^
+	$(AR) rcs $@ $^
 
 # Generic rule for building objects
 %.o: %.c $(SHADER_HEADER)

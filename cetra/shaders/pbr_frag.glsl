@@ -91,7 +91,7 @@ vec3 calculateDiffuse(vec3 N, vec3 L, vec3 lightColor, float distance, float con
 }
 
 void main() {
-    vec3 albedoMap = vec3(1.0);  // Default white color
+    vec3 albedoMap = albedo;  // Use material albedo color
     if (albedoTexExists > 0) {
         albedoMap = texture(albedoTex, TexCoords).rgb;
         albedoMap = sRGBToLinear(albedoMap);  // Convert from sRGB to Linear RGB
