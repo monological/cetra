@@ -15,7 +15,7 @@ char* _read_shader_source(const char* filePath) {
 
     fseek(file, 0, SEEK_END);
     long length = ftell(file);
-    if (length <= 0) {
+    if (length <= 0 || length > 10 * 1024 * 1024) { // Max 10MB
         if (length == -1) {
             perror("Error occurred in ftell");
         }
@@ -24,21 +24,22 @@ char* _read_shader_source(const char* filePath) {
     }
     fseek(file, 0, SEEK_SET);
 
-    char* buffer = malloc((size_t)length + 1);
+    size_t len = (size_t)length;
+    char* buffer = malloc(len + 1);
     if (!buffer) {
         log_error("Failed to allocate memory for shader source");
         fclose(file);
         return NULL;
     }
 
-    size_t readSize = fread(buffer, 1, length, file);
-    if (readSize != length) {
+    size_t readSize = fread(buffer, 1, len, file);
+    if (readSize != len) {
         log_error("Error reading shader file: %s", filePath);
         free(buffer);
         fclose(file);
         return NULL;
     }
-    buffer[length] = '\0';
+    buffer[len] = '\0';
     fclose(file);
 
     return buffer;

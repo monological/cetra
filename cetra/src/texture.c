@@ -283,6 +283,7 @@ void remove_texture_from_pool(TexturePool* pool, const char* filepath) {
 void clear_texture_pool(TexturePool* pool) {
     if (pool && pool->texture_cache) {
         Texture *current, *tmp;
+        // NOLINTNEXTLINE(clang-analyzer-unix.Malloc) - uthash HASH_ITER pattern is safe
         HASH_ITER(hh, pool->texture_cache, current, tmp) {
             Texture* to_free = current;
             HASH_DEL(pool->texture_cache, current);

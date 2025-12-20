@@ -780,19 +780,17 @@ void render_nuklear_gui(Engine* engine) {
         // cam modes
         nk_layout_row_dynamic(engine->nk_ctx, 30, 2);
 
-        int cam_mode = engine->camera_mode;
-
         // Radio button for CAMERA_MODE_FREE
-        if (nk_option_label(engine->nk_ctx, "Free Mode", cam_mode == CAMERA_MODE_FREE)) {
-            cam_mode = CAMERA_MODE_FREE;
+        if (nk_option_label(engine->nk_ctx, "Free Mode",
+                            engine->camera_mode == CAMERA_MODE_FREE)) {
+            engine->camera_mode = CAMERA_MODE_FREE;
         }
 
         // Radio button for CAMERA_MODE_ORBIT
-        if (nk_option_label(engine->nk_ctx, "Orbit Mode", cam_mode == CAMERA_MODE_ORBIT)) {
-            cam_mode = CAMERA_MODE_ORBIT;
+        if (nk_option_label(engine->nk_ctx, "Orbit Mode",
+                            engine->camera_mode == CAMERA_MODE_ORBIT)) {
+            engine->camera_mode = CAMERA_MODE_ORBIT;
         }
-
-        engine->camera_mode = (CameraMode)cam_mode;
 
         // top margin
         nk_layout_row_dynamic(engine->nk_ctx, 10, 1); // 10 pixels of vertical space
