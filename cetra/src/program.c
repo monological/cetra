@@ -28,63 +28,9 @@ ShaderProgram* create_program(const char* name) {
     }
 
     program->name = safe_strdup(name);
-
     program->shaders = NULL;
     program->shader_count = 0;
-
-    program->render_mode_loc = -1;
-    program->near_clip_loc = -1;
-    program->far_clip_loc = -1;
-
-    program->model_loc = -1;
-    program->view_loc = -1;
-    program->proj_loc = -1;
-    program->cam_pos_loc = -1;
-    program->time_loc = -1;
-
-    program->albedo_loc = -1;
-    program->metallic_loc = -1;
-    program->roughness_loc = -1;
-    program->ao_loc = -1;
-
-    program->albedo_tex_loc = -1;
-    program->normal_tex_loc = -1;
-    program->roughness_tex_loc = -1;
-    program->metalness_tex_loc = -1;
-    program->ao_tex_loc = -1;
-    program->emissive_tex_loc = -1;
-    program->height_tex_loc = -1;
-    program->opacity_tex_loc = -1;
-    program->sheen_tex_loc = -1;
-    program->reflectance_tex_loc = -1;
-
-    program->albedo_tex_exists_loc = -1;
-    program->normal_tex_exists_loc = -1;
-    program->roughness_tex_exists_loc = -1;
-    program->metalness_tex_exists_loc = -1;
-    program->ao_tex_exists_loc = -1;
-    program->emissive_tex_exists_loc = -1;
-    program->height_tex_exists_loc = -1;
-    program->opacity_tex_exists_loc = -1;
-    program->sheen_tex_exists_loc = -1;
-    program->reflectance_tex_exists_loc = -1;
-
-    program->line_width_loc = -1;
-
-    // Initialize light uniform location arrays to NULL
-    program->max_lights = 0;
-    program->light_position_loc = NULL;
-    program->light_direction_loc = NULL;
-    program->light_color_loc = NULL;
-    program->light_specular_loc = NULL;
-    program->light_ambient_loc = NULL;
-    program->light_intensity_loc = NULL;
-    program->light_constant_loc = NULL;
-    program->light_linear_loc = NULL;
-    program->light_quadratic_loc = NULL;
-    program->light_cutOff_loc = NULL;
-    program->light_outerCutOff_loc = NULL;
-    program->light_type_loc = NULL;
+    program->uniforms = NULL;
 
     return program;
 }
@@ -251,41 +197,8 @@ void free_program(ShaderProgram* program) {
             free(program->shaders);
         }
 
-        if (program->light_position_loc) {
-            free(program->light_position_loc);
-        }
-        if (program->light_direction_loc) {
-            free(program->light_direction_loc);
-        }
-        if (program->light_color_loc) {
-            free(program->light_color_loc);
-        }
-        if (program->light_specular_loc) {
-            free(program->light_specular_loc);
-        }
-        if (program->light_ambient_loc) {
-            free(program->light_ambient_loc);
-        }
-        if (program->light_intensity_loc) {
-            free(program->light_intensity_loc);
-        }
-        if (program->light_constant_loc) {
-            free(program->light_constant_loc);
-        }
-        if (program->light_linear_loc) {
-            free(program->light_linear_loc);
-        }
-        if (program->light_quadratic_loc) {
-            free(program->light_quadratic_loc);
-        }
-        if (program->light_cutOff_loc) {
-            free(program->light_cutOff_loc);
-        }
-        if (program->light_outerCutOff_loc) {
-            free(program->light_outerCutOff_loc);
-        }
-        if (program->light_type_loc) {
-            free(program->light_type_loc);
+        if (program->uniforms) {
+            free_uniform_manager(program->uniforms);
         }
 
         free(program);
@@ -377,123 +290,20 @@ GLboolean validate_program(ShaderProgram* program) {
     return success;
 }
 
-/*
- * Sets up the uniforms. Only call after compiling and linking.
- *
- */
-
 void setup_program_uniforms(ShaderProgram* program) {
     if (program == NULL || program->id == 0) {
         log_error("Invalid shader program.");
         return;
     }
 
-    program->render_mode_loc = glGetUniformLocation(program->id, "renderMode");
-    program->near_clip_loc = glGetUniformLocation(program->id, "nearClip");
-    program->far_clip_loc = glGetUniformLocation(program->id, "farClip");
-
-    // Existing uniforms setup
-    program->model_loc = glGetUniformLocation(program->id, "model");
-    program->view_loc = glGetUniformLocation(program->id, "view");
-    program->proj_loc = glGetUniformLocation(program->id, "projection");
-    program->cam_pos_loc = glGetUniformLocation(program->id, "camPos");
-    program->time_loc = glGetUniformLocation(program->id, "time");
-
-    // New uniforms setup
-    program->albedo_loc = glGetUniformLocation(program->id, "albedo");
-    program->metallic_loc = glGetUniformLocation(program->id, "metallic");
-    program->roughness_loc = glGetUniformLocation(program->id, "roughness");
-    program->ao_loc = glGetUniformLocation(program->id, "ao");
-
-    // Texture uniforms setup
-    program->albedo_tex_loc = glGetUniformLocation(program->id, "albedoTex");
-    program->normal_tex_loc = glGetUniformLocation(program->id, "normalTex");
-    program->roughness_tex_loc = glGetUniformLocation(program->id, "roughnessTex");
-    program->metalness_tex_loc = glGetUniformLocation(program->id, "metalnessTex");
-    program->ao_tex_loc = glGetUniformLocation(program->id, "aoTex");
-    program->emissive_tex_loc = glGetUniformLocation(program->id, "emissiveTex");
-    program->height_tex_loc = glGetUniformLocation(program->id, "heightTex");
-    program->opacity_tex_loc = glGetUniformLocation(program->id, "opacityTex");
-    program->sheen_tex_loc = glGetUniformLocation(program->id, "sheenTex");
-    program->reflectance_tex_loc = glGetUniformLocation(program->id, "reflectanceTex");
-
-    // Texture exists uniform setup
-    program->albedo_tex_exists_loc = glGetUniformLocation(program->id, "albedoTexExists");
-    program->normal_tex_exists_loc = glGetUniformLocation(program->id, "normalTexExists");
-    program->roughness_tex_exists_loc = glGetUniformLocation(program->id, "roughnessTexExists");
-    program->metalness_tex_exists_loc = glGetUniformLocation(program->id, "metalnessTexExists");
-    program->ao_tex_exists_loc = glGetUniformLocation(program->id, "aoTexExists");
-    program->emissive_tex_exists_loc = glGetUniformLocation(program->id, "emissiveTexExists");
-    program->height_tex_exists_loc = glGetUniformLocation(program->id, "heightTexExists");
-    program->opacity_tex_exists_loc = glGetUniformLocation(program->id, "opacityTexExists");
-    program->sheen_tex_exists_loc = glGetUniformLocation(program->id, "sheenTexExists");
-    program->reflectance_tex_exists_loc = glGetUniformLocation(program->id, "reflectanceTexExists");
-
-    program->max_lights = get_gl_max_lights();
-
-    program->light_position_loc = malloc(program->max_lights * sizeof(GLint));
-    program->light_direction_loc = malloc(program->max_lights * sizeof(GLint));
-    program->light_color_loc = malloc(program->max_lights * sizeof(GLint));
-    program->light_specular_loc = malloc(program->max_lights * sizeof(GLint));
-    program->light_ambient_loc = malloc(program->max_lights * sizeof(GLint));
-    program->light_intensity_loc = malloc(program->max_lights * sizeof(GLint));
-    program->light_constant_loc = malloc(program->max_lights * sizeof(GLint));
-    program->light_linear_loc = malloc(program->max_lights * sizeof(GLint));
-    program->light_quadratic_loc = malloc(program->max_lights * sizeof(GLint));
-    program->light_cutOff_loc = malloc(program->max_lights * sizeof(GLint));
-    program->light_outerCutOff_loc = malloc(program->max_lights * sizeof(GLint));
-    program->light_type_loc = malloc(program->max_lights * sizeof(GLint));
-    program->light_size_loc = malloc(program->max_lights * sizeof(GLint));
-
-    // Retrieve uniform locations for light properties
-    char uniformName[64];
-    for (size_t i = 0; i < program->max_lights; ++i) {
-        sprintf(uniformName, "lights[%zu].position", i);
-        program->light_position_loc[i] = glGetUniformLocation(program->id, uniformName);
-
-        sprintf(uniformName, "lights[%zu].direction", i);
-        program->light_direction_loc[i] = glGetUniformLocation(program->id, uniformName);
-
-        sprintf(uniformName, "lights[%zu].color", i);
-        program->light_color_loc[i] = glGetUniformLocation(program->id, uniformName);
-
-        sprintf(uniformName, "lights[%zu].specular", i);
-        program->light_specular_loc[i] = glGetUniformLocation(program->id, uniformName);
-
-        sprintf(uniformName, "lights[%zu].ambient", i);
-        program->light_ambient_loc[i] = glGetUniformLocation(program->id, uniformName);
-
-        sprintf(uniformName, "lights[%zu].intensity", i);
-        program->light_intensity_loc[i] = glGetUniformLocation(program->id, uniformName);
-
-        sprintf(uniformName, "lights[%zu].constant", i);
-        program->light_constant_loc[i] = glGetUniformLocation(program->id, uniformName);
-
-        sprintf(uniformName, "lights[%zu].linear", i);
-        program->light_linear_loc[i] = glGetUniformLocation(program->id, uniformName);
-
-        sprintf(uniformName, "lights[%zu].quadratic", i);
-        program->light_quadratic_loc[i] = glGetUniformLocation(program->id, uniformName);
-
-        sprintf(uniformName, "lights[%zu].cutOff", i);
-        program->light_cutOff_loc[i] = glGetUniformLocation(program->id, uniformName);
-
-        sprintf(uniformName, "lights[%zu].outerCutOff", i);
-        program->light_outerCutOff_loc[i] = glGetUniformLocation(program->id, uniformName);
-
-        sprintf(uniformName, "lights[%zu].type", i);
-        program->light_type_loc[i] = glGetUniformLocation(program->id, uniformName);
-
-        sprintf(uniformName, "lights[%zu].size", i);
-        program->light_size_loc[i] = glGetUniformLocation(program->id, uniformName);
+    program->uniforms = create_uniform_manager(program->id);
+    if (!program->uniforms) {
+        log_error("Failed to create uniform manager");
+        return;
     }
 
-    // Retrieve the location for the number of lights uniform
-    program->num_lights_loc = glGetUniformLocation(program->id, "numLights");
-
-    program->line_width_loc = glGetUniformLocation(program->id, "lineWidth");
-
-    return;
+    uniform_cache_standard(program->uniforms);
+    uniform_cache_lights(program->uniforms, get_gl_max_lights());
 }
 
 ShaderProgram* create_pbr_program() {
