@@ -12,6 +12,7 @@
 #include "program.h"
 #include "import.h"
 #include "common.h"
+#include "input.h"
 
 #define NK_INCLUDE_FIXED_TYPES
 #define NK_INCLUDE_STANDARD_IO
@@ -83,18 +84,7 @@ typedef struct Engine {
     bool show_wireframe;
     bool show_xyz;
 
-    bool mouse_is_dragging;
-    float mouse_center_fb_x;
-    float mouse_center_fb_y;
-    float mouse_prev_fb_x;
-    float mouse_prev_fb_y;
-    float mouse_drag_fb_x;
-    float mouse_drag_fb_y;
-
-    SceneNode* selected_node;
-    vec3 drag_start_world_pos;  // World position where drag started
-    vec3 drag_object_start_pos; // Object's world position at drag start
-    float drag_plane_distance;  // Distance from camera to drag plane
+    InputState input;
 } Engine;
 
 typedef void (*RenderSceneFunc)(Engine*, Scene*);

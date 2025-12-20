@@ -101,18 +101,7 @@ Engine* create_engine(const char* window_title, int width, int height) {
     engine->show_wireframe = false;
     engine->show_xyz = false;
 
-    engine->mouse_is_dragging = false;
-    engine->mouse_center_fb_x = 0.0f;
-    engine->mouse_center_fb_y = 0.0f;
-    engine->mouse_prev_fb_x = 0.0f;
-    engine->mouse_prev_fb_y = 0.0f;
-    engine->mouse_drag_fb_x = 0.0f;
-    engine->mouse_drag_fb_y = 0.0f;
-
-    engine->selected_node = NULL;
-    glm_vec3_zero(engine->drag_start_world_pos);
-    glm_vec3_zero(engine->drag_object_start_pos);
-    engine->drag_plane_distance = 0.0f;
+    init_input_state(&engine->input);
 
     return engine;
 }
@@ -382,14 +371,14 @@ static void _engine_cursor_position_callback(GLFWwindow* window, double xpos, do
     xpos = ((xpos / engine->win_width) * engine->fb_width);
     ypos = (1.0 - (ypos / engine->win_height)) * engine->fb_height;
 
-    if (engine->mouse_is_dragging) {
+    if (engine->input.is_dragging) {
         // Calculate per-frame delta (not accumulated)
-        engine->mouse_drag_fb_x = xpos - engine->mouse_prev_fb_x;
-        engine->mouse_drag_fb_y = ypos - engine->mouse_prev_fb_y;
+        engine->input.drag_fb_x = xpos - engine->input.prev_fb_x;
+        engine->input.drag_fb_y = ypos - engine->input.prev_fb_y;
 
         // Update previous position for next frame
-        engine->mouse_prev_fb_x = xpos;
-        engine->mouse_prev_fb_y = ypos;
+        engine->input.prev_fb_x = xpos;
+        engine->input.prev_fb_y = ypos;
     }
 
     if (engine->cursor_position_callback) {
@@ -420,20 +409,18 @@ static void _engine_mouse_button_callback(GLFWwindow* window, int button, int ac
     mouse_fb_y = ((1.0 - (mouse_fb_y / engine->win_height)) * engine->fb_height);
 
     if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
-        engine->mouse_is_dragging = true;
-        engine->mouse_center_fb_x = mouse_fb_x;
-        engine->mouse_center_fb_y = mouse_fb_y;
-        engine->mouse_prev_fb_x = mouse_fb_x;
-        engine->mouse_prev_fb_y = mouse_fb_y;
+        engine->input.is_dragging = true;
+        engine->input.center_fb_x = mouse_fb_x;
+        engine->input.center_fb_y = mouse_fb_y;
+        engine->input.prev_fb_x = mouse_fb_x;
+        engine->input.prev_fb_y = mouse_fb_y;
 
-        engine->selected_node = _perform_engine_ray_picking(engine, mouse_fb_x, mouse_fb_y);
+        engine->input.selected_node = _perform_engine_ray_picking(engine, mouse_fb_x, mouse_fb_y);
 
     } else if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_RELEASE) {
-        engine->mouse_is_dragging = false;
-        engine->mouse_center_fb_x = mouse_fb_x;
-        engine->mouse_center_fb_y = mouse_fb_y;
-
-        // engine->selected_node = NULL;
+        engine->input.is_dragging = false;
+        engine->input.center_fb_x = mouse_fb_x;
+        engine->input.center_fb_y = mouse_fb_y;
     }
 
     if (engine->mouse_button_callback) {
@@ -934,7 +921,7 @@ void get_mouse_world_position_on_drag_plane(Engine* engine, double mouse_fb_x, d
                             engine->fb_height, projection, view, engine->camera->position, ray_dir);
 
     // Project ray to the stored drag plane distance
-    ray_point_at_distance(engine->camera->position, ray_dir, engine->drag_plane_distance,
+    ray_point_at_distance(engine->camera->position, ray_dir, engine->input.drag_plane_distance,
                           out_world_pos);
 }
 
@@ -961,14 +948,14 @@ static SceneNode* _perform_engine_ray_picking(Engine* engine, double mouse_fb_x,
 
     if (result.hit) {
         // Store hit information for drag operations
-        glm_vec3_copy(result.hit_point, engine->drag_start_world_pos);
-        engine->drag_plane_distance = result.distance;
+        glm_vec3_copy(result.hit_point, engine->input.drag_start_world_pos);
+        engine->input.drag_plane_distance = result.distance;
 
         // Store object's current position (extract from transform)
         glm_vec3_copy((vec3){result.node->global_transform[3][0],
                              result.node->global_transform[3][1],
                              result.node->global_transform[3][2]},
-                      engine->drag_object_start_pos);
+                      engine->input.drag_object_start_pos);
     }
 
     return result.node;

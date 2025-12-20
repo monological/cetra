@@ -56,13 +56,11 @@ void cursor_position_callback(Engine *engine, double xpos, double ypos) {
 }
 
 void mouse_button_callback(Engine *engine, int button, int action, int mods) {
-
-    if(engine->mouse_is_dragging){
-        printf("dragging start %i %f %f\n", engine->mouse_is_dragging, engine->mouse_drag_fb_x, engine->mouse_drag_fb_y);
+    if(engine->input.is_dragging){
+        printf("dragging start %i %f %f\n", engine->input.is_dragging, engine->input.drag_fb_x, engine->input.drag_fb_y);
     }else{
-        printf("dragging stop  %i %f %f\n", engine->mouse_is_dragging, engine->mouse_drag_fb_x, engine->mouse_drag_fb_y);
+        printf("dragging stop  %i %f %f\n", engine->input.is_dragging, engine->input.drag_fb_x, engine->input.drag_fb_y);
     }
-
 }
 
 void key_callback(Engine *engine, int key, int scancode, int action, int mods) {
@@ -88,7 +86,7 @@ void render_scene_callback(Engine* engine, Scene* current_scene){
     };
 
     if(engine->camera_mode == CAMERA_MODE_ORBIT){
-        if (!engine->mouse_is_dragging) {
+        if (!engine->input.is_dragging) {
             camera->amplitude = (MAX_DIST - MIN_DIST) / 2.0f; // Half the range of motion
             float midPoint = MIN_DIST + camera->amplitude; // Middle point of the motion
             camera->distance = midPoint + camera->amplitude * sin(time_value * CAM_ANGULAR_SPEED);
@@ -108,8 +106,8 @@ void render_scene_callback(Engine* engine, Scene* current_scene){
             transform.position[0] = 0.0f;
             transform.position[1] = -200.0f;
             transform.position[2] = 0.0f;
-            transform.rotation[0] = engine->mouse_drag_fb_y * ROTATION_SENSITIVITY;
-            transform.rotation[1] = engine->mouse_drag_fb_x * ROTATION_SENSITIVITY;
+            transform.rotation[0] = engine->input.drag_fb_y * ROTATION_SENSITIVITY;
+            transform.rotation[1] = engine->input.drag_fb_x * ROTATION_SENSITIVITY;
             transform.rotation[2] = 0.0f;
         }
     }else if(engine->camera_mode == CAMERA_MODE_FREE){

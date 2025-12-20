@@ -55,21 +55,21 @@ void error_callback(int error, const char* description) {
 }
 
 void cursor_position_callback(Engine *engine, double xpos, double ypos) {
-    if(engine->mouse_is_dragging && engine->selected_node){
+    if(engine->input.is_dragging && engine->input.selected_node){
         // Get current mouse position in world space on the drag plane
         vec3 current_world_pos;
         get_mouse_world_position_on_drag_plane(engine, xpos, ypos, current_world_pos);
 
         // Calculate world-space delta from drag start
         vec3 world_delta;
-        glm_vec3_sub(current_world_pos, engine->drag_start_world_pos, world_delta);
+        glm_vec3_sub(current_world_pos, engine->input.drag_start_world_pos, world_delta);
 
         // Calculate new object position: start position + delta
         vec3 new_pos;
-        glm_vec3_add(engine->drag_object_start_pos, world_delta, new_pos);
+        glm_vec3_add(engine->input.drag_object_start_pos, world_delta, new_pos);
 
         // Set the translation directly in the transform matrix
-        SceneNode *node = engine->selected_node;
+        SceneNode *node = engine->input.selected_node;
         node->original_transform[3][0] = new_pos[0];
         node->original_transform[3][1] = new_pos[1];
         // Keep Z unchanged: node->original_transform[3][2] = new_pos[2];
@@ -77,12 +77,11 @@ void cursor_position_callback(Engine *engine, double xpos, double ypos) {
 }
 
 void mouse_button_callback(Engine *engine, int button, int action, int mods) {
-    if(engine->mouse_is_dragging){
-        printf("dragging start %i %f %f\n", engine->mouse_is_dragging, engine->mouse_drag_fb_x, engine->mouse_drag_fb_y);
+    if(engine->input.is_dragging){
+        printf("dragging start %i %f %f\n", engine->input.is_dragging, engine->input.drag_fb_x, engine->input.drag_fb_y);
     }else{
-        printf("dragging stop  %i %f %f\n", engine->mouse_is_dragging, engine->mouse_drag_fb_x, engine->mouse_drag_fb_y);
+        printf("dragging stop  %i %f %f\n", engine->input.is_dragging, engine->input.drag_fb_x, engine->input.drag_fb_y);
     }
-    
 }
 
 void key_callback(Engine *engine, int key, int scancode, int action, int mods) {
