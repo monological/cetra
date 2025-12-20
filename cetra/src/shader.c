@@ -83,13 +83,17 @@ Shader* create_shader(ShaderType type, const char* source) {
             break;
         default:
             log_error("Unknown shader type");
-            return GL_FALSE;
+            free(shader->source);
+            free(shader);
+            return NULL;
     }
 
     shader->shaderID = glCreateShader(glType);
 
     if (shader->shaderID == 0) {
         log_error("Failed to create shader object.");
+        free(shader->source);
+        free(shader);
         return NULL;
     }
 
