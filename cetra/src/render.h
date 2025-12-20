@@ -11,10 +11,8 @@
 #include "shader.h"
 #include "light.h"
 #include "camera.h"
+#include "engine.h"
 
-void render_scene(Scene *scene, SceneNode* node,
-        Camera *camera, 
-        mat4 model, mat4 view, mat4 projection, 
-        float time_value, RenderMode render_mode);
+void render_current_scene(Engine* engine, float time_value);
 
 #endif // _RENDER_H_

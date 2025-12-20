@@ -42,10 +42,10 @@ char* _read_shader_source(const char* filePath) {
     return buffer;
 }
 
-
 Shader* create_shader_from_path(ShaderType type, const char* file_path) {
     char* source = _read_shader_source(file_path);
-    if (!source) return NULL;
+    if (!source)
+        return NULL;
 
     Shader* shader = create_shader(type, source);
     free(source);
@@ -60,7 +60,7 @@ Shader* create_shader(ShaderType type, const char* source) {
         return NULL;
     }
 
-    if(!source){
+    if (!source) {
         log_error("Shader source is NULL");
         return NULL;
     }
@@ -70,9 +70,15 @@ Shader* create_shader(ShaderType type, const char* source) {
 
     GLenum glType;
     switch (shader->type) {
-        case VERTEX_SHADER:   glType = GL_VERTEX_SHADER; break;
-        case GEOMETRY_SHADER: glType = GL_GEOMETRY_SHADER; break;
-        case FRAGMENT_SHADER: glType = GL_FRAGMENT_SHADER; break;
+        case VERTEX_SHADER:
+            glType = GL_VERTEX_SHADER;
+            break;
+        case GEOMETRY_SHADER:
+            glType = GL_GEOMETRY_SHADER;
+            break;
+        case FRAGMENT_SHADER:
+            glType = GL_FRAGMENT_SHADER;
+            break;
         default:
             log_error("Unknown shader type");
             return GL_FALSE;
@@ -137,11 +143,9 @@ void free_shader(Shader* shader) {
         if (shader->shaderID != 0) {
             glDeleteShader(shader->shaderID);
         }
-        if(shader->source){
+        if (shader->source) {
             free(shader->source);
         }
         free(shader);
     }
 }
-
-

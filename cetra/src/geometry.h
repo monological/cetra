@@ -6,7 +6,7 @@
 #include "mesh.h"
 
 #define NUM_CIRCLE_SEGMENTS 64
-#define RECT_RESOLUTION 32
+#define RECT_RESOLUTION     32
 
 /*
  * Primitives
@@ -35,7 +35,6 @@ typedef struct {
     float line_width;
 } Curve;
 
-
 /* Bezier functions */
 void cubic_bezier_curve_point(const Curve* curve, float t, vec3 result);
 Curve* generate_s_shaped_bezier_curve(vec3 start, vec3 end, float intensity, float line_width);
@@ -48,4 +47,3 @@ void generate_rect_to_mesh(Mesh* mesh, const Rect* rect);
 void generate_curve_to_mesh(Mesh* mesh, Curve* curve);
 
 #endif // GEOMETRY_H
-

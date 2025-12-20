@@ -6,7 +6,7 @@
 #include "program.h"
 #include "util.h"
 
-ShaderProgram* create_program(const char* name){
+ShaderProgram* create_program(const char* name) {
     ShaderProgram* program = malloc(sizeof(ShaderProgram));
     if (!program) {
         log_error("Failed to allocate memory for shader program");
@@ -19,7 +19,7 @@ ShaderProgram* create_program(const char* name){
         return NULL;
     }
 
-    if(!name){
+    if (!name) {
         log_error("Shader program name is NULL");
         return NULL;
     }
@@ -72,9 +72,9 @@ ShaderProgram* create_program(const char* name){
 }
 
 ShaderProgram* create_program_from_paths(const char* name, const char* vert_path,
-        const char* frag_path, const char* geo_path) {
+                                         const char* frag_path, const char* geo_path) {
 
-    if(!name){
+    if (!name) {
         log_error("Shader program name is NULL");
         return NULL;
     }
@@ -82,7 +82,7 @@ ShaderProgram* create_program_from_paths(const char* name, const char* vert_path
     GLboolean success = GL_TRUE;
 
     ShaderProgram* program = create_program(name);
-    if(program == NULL){
+    if (program == NULL) {
         log_error("Failed to create program by name %s", name);
         return NULL;
     }
@@ -134,7 +134,7 @@ ShaderProgram* create_program_from_paths(const char* name, const char* vert_path
     // Setup uniforms and other initializations as needed
     if (success) {
         setup_program_uniforms(program);
-    }else{
+    } else {
         free_program(program);
         program = NULL;
     }
@@ -143,9 +143,9 @@ ShaderProgram* create_program_from_paths(const char* name, const char* vert_path
 }
 
 ShaderProgram* create_program_from_source(const char* name, const char* vert_source,
-        const char* frag_source, const char* geo_source) {
+                                          const char* frag_source, const char* geo_source) {
 
-    if(!name){
+    if (!name) {
         log_error("Shader program name is NULL");
         return NULL;
     }
@@ -153,7 +153,7 @@ ShaderProgram* create_program_from_source(const char* name, const char* vert_sou
     GLboolean success = GL_TRUE;
 
     ShaderProgram* program = create_program(name);
-    if(program == NULL){
+    if (program == NULL) {
         log_error("Failed to create program by name %s", name);
         return NULL;
     }
@@ -206,7 +206,7 @@ ShaderProgram* create_program_from_source(const char* name, const char* vert_sou
     // Setup uniforms and other initializations as needed
     if (success) {
         setup_program_uniforms(program);
-    }else{
+    } else {
         free_program(program);
         program = NULL;
     }
@@ -220,14 +220,14 @@ void free_program(ShaderProgram* program) {
             glDeleteProgram(program->id);
         }
 
-        if(program->name != NULL){
+        if (program->name != NULL) {
             free(program->name);
         }
 
         if (program->shaders) {
             for (size_t i = 0; i < program->shader_count; ++i) {
                 if (program->shaders[i]) {
-                    free_shader(program->shaders[i]); 
+                    free_shader(program->shaders[i]);
                 }
             }
             free(program->shaders);
@@ -331,7 +331,7 @@ GLboolean link_program(ShaderProgram* program) {
     return GL_TRUE;
 }
 
-GLboolean validate_program(ShaderProgram* program){
+GLboolean validate_program(ShaderProgram* program) {
     GLboolean success = GL_TRUE;
 
     glValidateProgram(program->id);
@@ -358,7 +358,6 @@ GLboolean validate_program(ShaderProgram* program){
     }
     return success;
 }
-
 
 /*
  * Sets up the uniforms. Only call after compiling and linking.
@@ -412,7 +411,7 @@ void setup_program_uniforms(ShaderProgram* program) {
     program->sheen_tex_exists_loc = glGetUniformLocation(program->id, "sheenTexExists");
     program->reflectance_tex_exists_loc = glGetUniformLocation(program->id, "reflectanceTexExists");
 
-    program->max_lights = get_gl_max_lights(); 
+    program->max_lights = get_gl_max_lights();
 
     program->light_position_loc = malloc(program->max_lights * sizeof(GLint));
     program->light_direction_loc = malloc(program->max_lights * sizeof(GLint));
@@ -479,11 +478,11 @@ void setup_program_uniforms(ShaderProgram* program) {
     return;
 }
 
-ShaderProgram* create_pbr_program(){
+ShaderProgram* create_pbr_program() {
     ShaderProgram* program = NULL;
 
-    if((program = create_program_from_source("pbr", 
-            pbr_vert_shader_str, pbr_frag_shader_str, NULL)) == NULL) {
+    if ((program = create_program_from_source("pbr", pbr_vert_shader_str, pbr_frag_shader_str,
+                                              NULL)) == NULL) {
         log_error("Failed to initialize PBR shader program");
         return NULL;
     }
@@ -491,11 +490,11 @@ ShaderProgram* create_pbr_program(){
     return program;
 }
 
-ShaderProgram* create_shape_program(){
+ShaderProgram* create_shape_program() {
     ShaderProgram* program = NULL;
 
-    if((program = create_program_from_source("shape", 
-            shape_vert_shader_str, shape_frag_shader_str, shape_geo_shader_str)) == NULL) {
+    if ((program = create_program_from_source("shape", shape_vert_shader_str, shape_frag_shader_str,
+                                              shape_geo_shader_str)) == NULL) {
         log_error("Failed to initialize shape shader program");
         return NULL;
     }
@@ -503,15 +502,14 @@ ShaderProgram* create_shape_program(){
     return program;
 }
 
-ShaderProgram* create_xyz_program(){
+ShaderProgram* create_xyz_program() {
     ShaderProgram* program = NULL;
 
-    if((program = create_program_from_source("xyz", 
-            xyz_vert_shader_str, xyz_frag_shader_str, NULL)) == NULL) {
+    if ((program = create_program_from_source("xyz", xyz_vert_shader_str, xyz_frag_shader_str,
+                                              NULL)) == NULL) {
         log_error("Failed to initialize xyz shader program");
         return NULL;
     }
 
     return program;
 }
-

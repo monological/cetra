@@ -15,16 +15,18 @@
 #include "light.h"
 #include "camera.h"
 #include "common.h"
+#include "engine.h"
 #include "util.h"
 
-void _update_program_light_uniforms(ShaderProgram * program, Light* light, 
-        size_t light_count, size_t index){
-    if(!program || !light){
+static void _update_program_light_uniforms(ShaderProgram* program, Light* light, size_t light_count,
+                                           size_t index) {
+    if (!program || !light) {
         return;
     }
 
     if (program->light_position_loc[index] != -1) {
-        glUniform3fv(program->light_position_loc[index], 1, (const GLfloat*)&light->global_position);
+        glUniform3fv(program->light_position_loc[index], 1,
+                     (const GLfloat*)&light->global_position);
     }
     if (program->light_direction_loc[index] != -1) {
         glUniform3fv(program->light_direction_loc[index], 1, (const GLfloat*)&light->direction);
@@ -67,8 +69,8 @@ void _update_program_light_uniforms(ShaderProgram * program, Light* light,
     glUniform1i(program->num_lights_loc, (GLint)light_count);
 }
 
-void _update_program_material_uniforms(ShaderProgram * program, Material* material){
-    if(!program || !material){
+void _update_program_material_uniforms(ShaderProgram* program, Material* material) {
+    if (!program || !material) {
         return;
     }
 
@@ -149,24 +151,21 @@ void _update_program_material_uniforms(ShaderProgram * program, Material* materi
     glUniform1i(program->opacity_tex_exists_loc, material->opacity_tex ? 1 : 0);
     glUniform1i(program->sheen_tex_exists_loc, material->sheen_tex ? 1 : 0);
     glUniform1i(program->reflectance_tex_exists_loc, material->reflectance_tex ? 1 : 0);
-
 }
 
-void _update_camera_uniforms(ShaderProgram * program, Camera *camera){
-    if(!program || !camera){
+static void _update_camera_uniforms(ShaderProgram* program, Camera* camera) {
+    if (!program || !camera) {
         return;
     }
 
     glUniform3fv(program->cam_pos_loc, 1, (const GLfloat*)&camera->position);
     glUniform1f(program->near_clip_loc, camera->near_clip);
     glUniform1f(program->far_clip_loc, camera->far_clip);
-
 }
 
-void _render_node(SceneNode* node, Camera *camera,
-        mat4 model, mat4 view, mat4 projection,
-        float time_value, RenderMode render_mode, Light** closest_lights, 
-        size_t returned_light_count){
+static void _render_node(SceneNode* node, Camera* camera, mat4 model, mat4 view, mat4 projection,
+                         float time_value, RenderMode render_mode, Light** closest_lights,
+                         size_t returned_light_count) {
 
     // Process each mesh and its material
     if (node->meshes && node->mesh_count > 0) {
@@ -186,9 +185,10 @@ void _render_node(SceneNode* node, Camera *camera,
                 }
 
                 // Set shader uniforms for model, view, projection matrices, and other properties
+                glUniformMatrix4fv(program->model_loc, 1, GL_FALSE,
+                                   (const GLfloat*)node->global_transform);
                 glUniformMatrix4fv(program->view_loc, 1, GL_FALSE, (const GLfloat*)view);
                 glUniformMatrix4fv(program->proj_loc, 1, GL_FALSE, (const GLfloat*)projection);
-                glUniformMatrix4fv(program->model_loc, 1, GL_FALSE, (const GLfloat*)node->global_transform);
 
                 glUniform1f(program->time_loc, time_value);
                 glUniform1i(program->render_mode_loc, render_mode);
@@ -209,8 +209,8 @@ void _render_node(SceneNode* node, Camera *camera,
     }
 }
 
-void _render_xyz(SceneNode* node, mat4 view, mat4 projection){
-    if(!node || !node->xyz_shader_program){
+static void _render_xyz(SceneNode* node, mat4 view, mat4 projection) {
+    if (!node || !node->xyz_shader_program) {
         return;
     }
     ShaderProgram* program = node->xyz_shader_program;
@@ -223,15 +223,14 @@ void _render_xyz(SceneNode* node, mat4 view, mat4 projection){
     glUniformMatrix4fv(program->proj_loc, 1, GL_FALSE, (const GLfloat*)projection);
 
     glBindVertexArray(node->xyz_vao);
-    glDrawArrays(GL_LINES, 0,  xyz_vertices_size / (6 * sizeof(float)));
+    glDrawArrays(GL_LINES, 0, xyz_vertices_size / (6 * sizeof(float)));
 
     glBindVertexArray(0);
     glUseProgram(0);
 }
 
-void render_scene(Scene* scene, SceneNode *node, Camera *camera, 
-        mat4 model, mat4 view, mat4 projection, 
-        float time_value, RenderMode render_mode) {
+static void _render_scene(Scene* scene, SceneNode* node, Camera* camera, mat4 model, mat4 view,
+                          mat4 projection, float time_value, RenderMode render_mode) {
 
     if (!scene) {
         log_error("error: render called with NULL scene");
@@ -245,11 +244,10 @@ void render_scene(Scene* scene, SceneNode *node, Camera *camera,
 
     size_t returned_light_count;
     size_t max_lights = get_gl_max_lights();
-    Light** closest_lights = get_closest_lights(scene, node, max_lights, 
-            &returned_light_count);
+    Light** closest_lights = get_closest_lights(scene, node, max_lights, &returned_light_count);
 
-    _render_node(node, camera, model, view, projection, 
-            time_value, render_mode, closest_lights, returned_light_count);
+    _render_node(node, camera, model, view, projection, time_value, render_mode, closest_lights,
+                 returned_light_count);
 
     if (node->show_xyz && node->xyz_shader_program) {
         _render_xyz(node, view, projection);
@@ -259,9 +257,40 @@ void render_scene(Scene* scene, SceneNode *node, Camera *camera,
 
     // Render children
     for (size_t i = 0; i < node->children_count; i++) {
-        render_scene(scene, node->children[i], camera, 
-            node->global_transform, view, 
-            projection, time_value, render_mode);
+        _render_scene(scene, node->children[i], camera, node->global_transform, view, projection,
+                      time_value, render_mode);
     }
 }
 
+void render_current_scene(Engine* engine, float time_value) {
+    if (!engine) {
+        log_error("error: render called with NULL engine");
+        return;
+    }
+
+    Scene* scene = get_current_scene(engine);
+    if (!scene) {
+        log_error("error: render called with NULL scene");
+        return;
+    }
+
+    SceneNode* root_node = scene->root_node;
+    if (!root_node) {
+        log_error("error: render called with NULL root node");
+        return;
+    }
+
+    Camera* camera = engine->camera;
+    if (!camera) {
+        log_error("error: render called with NULL camera");
+        return;
+    }
+
+    mat4* model = &engine->model_matrix;
+    mat4* view = &engine->view_matrix;
+    mat4* projection = &engine->projection_matrix;
+
+    RenderMode render_mode = engine->current_render_mode;
+
+    _render_scene(scene, root_node, camera, *model, *view, *projection, time_value, render_mode);
+}

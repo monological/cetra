@@ -5,11 +5,7 @@
 
 #include "shader_strings.h"
 
-typedef enum {
-    VERTEX_SHADER,
-    GEOMETRY_SHADER,
-    FRAGMENT_SHADER
-} ShaderType;
+typedef enum { VERTEX_SHADER, GEOMETRY_SHADER, FRAGMENT_SHADER } ShaderType;
 
 typedef struct {
     GLuint shaderID;
@@ -24,4 +20,3 @@ void free_shader(Shader* shader);
 GLboolean compile_shader(Shader* shader);
 
 #endif // _SHADER_H_
-

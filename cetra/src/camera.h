@@ -8,9 +8,9 @@
 typedef struct Camera {
     char* name;
 
-    vec3 position;        // Camera position
-    vec3 up_vector;       // up_vector vector
-    vec3 look_at;         // Look-at point
+    vec3 position;  // Camera position
+    vec3 up_vector; // up_vector vector
+    vec3 look_at;   // Look-at point
 
     float fov_radians;    // Field of view (in radians)
     float aspect_ratio;   // Aspect ratio
@@ -28,7 +28,6 @@ typedef struct Camera {
     float amplitude;
 } Camera;
 
-
 Camera* create_camera();
 void free_camera(Camera* camera);
 
@@ -40,4 +39,3 @@ void set_camera_up_vector(Camera* camera, vec3 up_vector);
 void set_camera_perspective(Camera* camera, float fov_radians, float near_clip, float far_clip);
 
 #endif // _CAMERA_H_
-

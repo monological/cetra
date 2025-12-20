@@ -15,7 +15,6 @@
 #include "ext/cwalk.h"
 #include "ext/log.h"
 
-
 void check_gl_error(const char* where) {
     GLenum err;
     while ((err = glGetError()) != GL_NO_ERROR) {
@@ -44,21 +43,21 @@ void print_indentation(int depth) {
     }
 }
 
-char *safe_strdup(const char *s) {
+char* safe_strdup(const char* s) {
     if (s == NULL) {
-        return NULL;  // Return NULL if the input string is NULL
+        return NULL; // Return NULL if the input string is NULL
     }
 
     size_t len = strlen(s);
-    char *d = (char *)malloc(len + 1);  // Allocate memory for the string and null terminator
+    char* d = (char*)malloc(len + 1); // Allocate memory for the string and null terminator
 
     if (d == NULL) {
         // Handle memory allocation failure
         return NULL;
     }
 
-    memcpy(d, s, len + 1);  // Use memcpy instead of strcpy to avoid potential issues
-                             // and copy exactly len + 1 bytes (including null terminator)
+    memcpy(d, s, len + 1); // Use memcpy instead of strcpy to avoid potential issues
+                           // and copy exactly len + 1 bytes (including null terminator)
     return d;
 }
 
@@ -83,9 +82,9 @@ bool path_exists(const char* path) {
     return true;
 }
 
-
 /**
- * Attempts to find an existing file or directory by modifying and checking subpaths of a given path.
+ * Attempts to find an existing file or directory by modifying and checking subpaths of a given
+ * path.
  *
  * Parameters:
  *   base_dir - The base directory path.
@@ -120,8 +119,8 @@ bool find_existing_subpath(const char* base_dir, char** subpath_ptr) {
         if (path_exists(fullpath)) {
             char* new_subpath = safe_strdup(fullpath);
             if (new_subpath) {
-                free(*subpath_ptr);  // Free the original subpath
-                *subpath_ptr = new_subpath;  // Update the pointer to the new subpath
+                free(*subpath_ptr);         // Free the original subpath
+                *subpath_ptr = new_subpath; // Update the pointer to the new subpath
                 path_found = true;
                 break;
             } else {
@@ -169,7 +168,7 @@ char* convert_windows_path_to_unix(const char* windows_path) {
     return unix_path;
 }
 
-char* convert_and_normalize_path(const char *input_path) {
+char* convert_and_normalize_path(const char* input_path) {
     if (input_path == NULL) {
         log_error("Error: Input path is NULL");
         return NULL;
@@ -205,7 +204,20 @@ char* convert_and_normalize_path(const char *input_path) {
     return normalized_path;
 }
 
+void convert_rgb_to_float(vec3* albedo, int r, int g, int b) {
+    (*albedo)[0] = r / 255.0f;
+    (*albedo)[1] = g / 255.0f;
+    (*albedo)[2] = b / 255.0f;
+}
 
+void hex_to_rgb_float(vec3* albedo, const char* hex) {
+    if (hex[0] == '#')
+        hex++; // Skip the hash if present
 
+    unsigned int rgb;
+    sscanf(hex, "%x", &rgb); // Parse the hex value
 
-
+    (*albedo)[0] = ((rgb >> 16) & 0xFF) / 255.0f; // Red component
+    (*albedo)[1] = ((rgb >> 8) & 0xFF) / 255.0f;  // Green component
+    (*albedo)[2] = (rgb & 0xFF) / 255.0f;         // Blue component
+}

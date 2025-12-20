@@ -19,9 +19,9 @@ typedef struct {
 
     GLint model_loc;
     GLint view_loc;
-    GLint proj_loc; 
-    GLint cam_pos_loc;  
-    GLint time_loc;     
+    GLint proj_loc;
+    GLint cam_pos_loc;
+    GLint time_loc;
 
     GLint albedo_loc;
     GLint metallic_loc;
@@ -74,7 +74,7 @@ typedef struct {
     // only if drawing LINES, LINE_LOOP, LINE_STRIP
     GLint line_width_loc;
 
-    UT_hash_handle hh;   // Makes this structure hashable
+    UT_hash_handle hh; // Makes this structure hashable
 } ShaderProgram;
 
 /*
@@ -82,14 +82,14 @@ typedef struct {
  */
 ShaderProgram* create_program(const char* name);
 ShaderProgram* create_program_from_paths(const char* name, const char* vert_path,
-        const char* frag_path, const char* geo_path);
+                                         const char* frag_path, const char* geo_path);
 ShaderProgram* create_program_from_source(const char* name, const char* vert_source,
-        const char* frag_source, const char* geo_source);
+                                          const char* frag_source, const char* geo_source);
 void free_program(ShaderProgram* program);
 
 /*
  * Shader Program Setup Functions
- */ 
+ */
 void attach_shader_to_program(ShaderProgram* program, Shader* shader);
 GLboolean link_program(ShaderProgram* program);
 GLboolean validate_program(ShaderProgram* program);
@@ -102,10 +102,6 @@ ShaderProgram* create_pbr_program();
 ShaderProgram* create_shape_program();
 ShaderProgram* create_xyz_program();
 
-
 size_t calculate_max_lights();
 
-
 #endif // _PROGRAM_H_
-
-

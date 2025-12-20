@@ -13,11 +13,14 @@ YELLOW = \033[0;33m
 BLUE = \033[0;34m
 NC = \033[0m # No Color
 
-.PHONY: all clean shaders
+.PHONY: all clean shaders format lint deeplint
 
 # Compiler and linker configurations
 CC = gcc
 AR = ar
+CLANG_FORMAT = clang-format
+CPPCHECK = cppcheck
+CLANG_TIDY = /opt/homebrew/opt/llvm/bin/clang-tidy
 CFLAGS = -Wall -g -std=c11 -DGL_SILENCE_DEPRECATION -D_POSIX_C_SOURCE=200809L
 LDFLAGS =
 LIBS = -lm -lpthread
@@ -78,4 +81,21 @@ clean:
 	rm -f $(OBJ) libcetra.a
 	rm -f $(SHADER_HEADER)
 
+# Format source files
+format:
+	@echo -e "$(BLUE)Formatting source files...$(NC)"
+	$(CLANG_FORMAT) -i src/*.c src/*.h src/ext/*.c src/ext/*.h 2>/dev/null || true
+
+# Quick lint with cppcheck
+lint:
+	@echo -e "$(YELLOW)Running cppcheck...$(NC)"
+	$(CPPCHECK) --enable=warning,style,performance --std=c11 \
+		--suppress=missingIncludeSystem \
+		-I$(HOMEBREW_PREFIX)/include \
+		src/*.c src/*.h
+
+# Deep lint with clang-tidy (slow but thorough)
+deeplint:
+	@echo -e "$(YELLOW)Running clang-tidy (deep analysis)...$(NC)"
+	$(CLANG_TIDY) src/*.c -- $(CFLAGS)
 

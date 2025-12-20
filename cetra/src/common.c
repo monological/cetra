@@ -16,4 +16,3 @@ float xyz_vertices[] = {
 };
 
 const size_t xyz_vertices_size = sizeof(xyz_vertices);
-

@@ -30,7 +30,7 @@ Texture* create_texture() {
 void free_texture(Texture* texture) {
     if (texture) {
         glDeleteTextures(1, &(texture->id));
-        if(texture->filepath){
+        if (texture->filepath) {
             free(texture->filepath);
             texture->filepath = NULL;
         }
@@ -62,11 +62,10 @@ void set_texture_data_format(Texture* texture, GLenum data_format) {
     }
 }
 
-/* 
+/*
  * Texture Pool
  *
  */
-
 
 TexturePool* create_texture_pool() {
     TexturePool* pool = (TexturePool*)malloc(sizeof(TexturePool));
@@ -98,13 +97,14 @@ void free_texture_pool(TexturePool* pool) {
     }
 }
 
-void set_texture_pool_directory(TexturePool* pool, const char* directory){
-    if(!pool) return;
+void set_texture_pool_directory(TexturePool* pool, const char* directory) {
+    if (!pool)
+        return;
 
     if (directory) {
         log_info("Setting texture directory to: '%s'", directory);
 
-        if(pool->directory != NULL){
+        if (pool->directory != NULL) {
             free(pool->directory);
         }
 
@@ -141,7 +141,8 @@ void add_texture_to_pool(TexturePool* pool, Texture* texture) {
         Texture* existing;
         HASH_FIND_STR(pool->texture_cache, texture->filepath, existing);
         if (!existing) {
-            HASH_ADD_KEYPTR(hh, pool->texture_cache, texture->filepath, strlen(texture->filepath), texture);
+            HASH_ADD_KEYPTR(hh, pool->texture_cache, texture->filepath, strlen(texture->filepath),
+                            texture);
         }
     }
 }
@@ -152,11 +153,10 @@ Texture* load_texture_path_into_pool(TexturePool* pool, const char* filepath) {
         return NULL;
     }
 
-    if(pool->directory == NULL){
+    if (pool->directory == NULL) {
         log_error("Texture pool directory not set");
         return NULL;
     }
-
 
     // Normalize and work on a copy of the filepath
     char* normalized_path = convert_and_normalize_path(filepath);
@@ -191,7 +191,7 @@ Texture* load_texture_path_into_pool(TexturePool* pool, const char* filepath) {
     }
 
     unsigned char* data = stbi_load(subpath, &width, &height, &nrChannels, 0);
-    if(!data) {
+    if (!data) {
         log_error("Failed to load texture: %s", subpath);
         free(normalized_path);
         free(subpath);
@@ -221,20 +221,20 @@ Texture* load_texture_path_into_pool(TexturePool* pool, const char* filepath) {
     GLenum internal_format;
     GLenum data_format;
 
-    if (nrChannels == 1){
+    if (nrChannels == 1) {
         internal_format = GL_RED;
         data_format = GL_RED;
-    }else if (nrChannels == 3){
+    } else if (nrChannels == 3) {
         internal_format = GL_SRGB;
         data_format = GL_RGB;
-    }else{
+    } else {
         internal_format = GL_SRGB_ALPHA;
         data_format = GL_RGBA;
     }
 
     // Upload texture data
-    glTexImage2D(GL_TEXTURE_2D, 0, internal_format, width, height, 
-        0, data_format, GL_UNSIGNED_BYTE, data);
+    glTexImage2D(GL_TEXTURE_2D, 0, internal_format, width, height, 0, data_format, GL_UNSIGNED_BYTE,
+                 data);
     glGenerateMipmap(GL_TEXTURE_2D);
 
     // Clean up
@@ -257,7 +257,6 @@ Texture* load_texture_path_into_pool(TexturePool* pool, const char* filepath) {
 
     return new_texture;
 }
-
 
 void remove_texture_from_pool(TexturePool* pool, const char* filepath) {
     if (pool && filepath) {
@@ -283,7 +282,7 @@ void remove_texture_from_pool(TexturePool* pool, const char* filepath) {
 
 void clear_texture_pool(TexturePool* pool) {
     if (pool && pool->texture_cache) {
-        Texture* current, *tmp;
+        Texture *current, *tmp;
         HASH_ITER(hh, pool->texture_cache, current, tmp) {
             if (current) {
                 HASH_DEL(pool->texture_cache, current);
@@ -292,4 +291,3 @@ void clear_texture_pool(TexturePool* pool) {
         }
     }
 }
-

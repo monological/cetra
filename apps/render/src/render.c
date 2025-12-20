@@ -17,6 +17,7 @@
 #include "cetra/engine.h"
 #include "cetra/import.h"
 #include "cetra/render.h"
+#include "cetra/transform.h"
 
 #include "cetra/shader_strings.h"
 
@@ -57,9 +58,9 @@ void cursor_position_callback(Engine *engine, double xpos, double ypos) {
 void mouse_button_callback(Engine *engine, int button, int action, int mods) {
 
     if(engine->mouse_is_dragging){
-        printf("dragging start %i %f %f\n", engine->mouse_is_dragging, engine->mouse_drag_x, engine->mouse_drag_y);
+        printf("dragging start %i %f %f\n", engine->mouse_is_dragging, engine->mouse_drag_fb_x, engine->mouse_drag_fb_y);
     }else{
-        printf("dragging stop  %i %f %f\n", engine->mouse_is_dragging, engine->mouse_drag_x, engine->mouse_drag_y);
+        printf("dragging stop  %i %f %f\n", engine->mouse_is_dragging, engine->mouse_drag_fb_x, engine->mouse_drag_fb_y);
     }
 
 }
@@ -107,8 +108,8 @@ void render_scene_callback(Engine* engine, Scene* current_scene){
             transform.position[0] = 0.0f;
             transform.position[1] = -200.0f;
             transform.position[2] = 0.0f;
-            transform.rotation[0] = engine->mouse_drag_y * ROTATION_SENSITIVITY;
-            transform.rotation[1] = engine->mouse_drag_x * ROTATION_SENSITIVITY;
+            transform.rotation[0] = engine->mouse_drag_fb_y * ROTATION_SENSITIVITY;
+            transform.rotation[1] = engine->mouse_drag_fb_x * ROTATION_SENSITIVITY;
             transform.rotation[2] = 0.0f;
         }
     }else if(engine->camera_mode == CAMERA_MODE_FREE){
@@ -116,20 +117,11 @@ void render_scene_callback(Engine* engine, Scene* current_scene){
         update_engine_camera_perspective(engine);
     }
 
-    transform_node(root_node, &transform, &(engine->model_matrix));
+    reset_and_apply_transform(&engine->model_matrix, &transform);
 
     apply_transform_to_nodes(root_node, engine->model_matrix);
 
-    render_scene(
-        current_scene, 
-        current_scene->root_node,
-        camera, 
-        root_node->local_transform, 
-        engine->view_matrix, 
-        engine->projection_matrix, 
-        time_value, 
-        engine->current_render_mode
-    );
+    render_current_scene(engine, time_value);
 
 }
 
@@ -158,10 +150,6 @@ void create_root_light(Scene *scene){
         .rotation = {0.0f, 0.0f, 0.0f},
         .scale = {1.0f, 1.0f, 1.0f}
     };
-
-    mat4 light_matrix; 
-    glm_mat4_identity(light_matrix);
-    transform_node(light_node, &light_transform, &light_matrix);
 
     add_child_node(scene->root_node, light_node);
 }

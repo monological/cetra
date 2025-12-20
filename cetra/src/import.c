@@ -23,21 +23,21 @@
 #include "texture.h"
 #include "material.h"
 
-
 Material* process_ai_material(struct aiMaterial* ai_mat, TexturePool* tex_pool) {
-    if(!ai_mat || !tex_pool) return NULL;
+    if (!ai_mat || !tex_pool)
+        return NULL;
 
     Material* material = create_material();
 
     struct aiColor4D color;
     struct aiString str;
 
-      // Load Albedo/Base Color
+    // Load Albedo/Base Color
     if (AI_SUCCESS == aiGetMaterialColor(ai_mat, AI_MATKEY_COLOR_DIFFUSE, &color)) {
         material->albedo[0] = color.r;
         material->albedo[1] = color.g;
         material->albedo[2] = color.b;
-    }else{
+    } else {
         log_warn("Failed to load color diffuse.");
         material->albedo[0] = 0.1;
         material->albedo[1] = 0.1;
@@ -61,92 +61,102 @@ Material* process_ai_material(struct aiMaterial* ai_mat, TexturePool* tex_pool) 
     } else {
         material->roughness = 0.5;
     }*/
-   
+
     material->metallic = 0.1;
     material->roughness = 0.1;
 
     // Load Diffuse Texture
-    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_DIFFUSE, 0, &str, NULL, NULL, NULL, NULL, NULL, NULL)) {
+    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_DIFFUSE, 0, &str, NULL, NULL, NULL,
+                                           NULL, NULL, NULL)) {
         material->albedo_tex = load_texture_path_into_pool(tex_pool, str.data);
         if (material->albedo_tex != NULL) {
             log_info("Diffuse texture loaded: %s", material->albedo_tex->filepath);
-        }else{
+        } else {
             log_warn("Failed to load diffuse texture '%s'", str.data);
         }
     }
 
     // Load Normal Texture
-    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_NORMALS, 0, &str, NULL, NULL, NULL, NULL, NULL, NULL)) {
+    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_NORMALS, 0, &str, NULL, NULL, NULL,
+                                           NULL, NULL, NULL)) {
         material->normal_tex = load_texture_path_into_pool(tex_pool, str.data);
         if (material->normal_tex != NULL) {
             log_info("Normals texture loaded: %s", material->normal_tex->filepath);
-        }else{
+        } else {
             log_warn("Failed to load normal texture '%s'", str.data);
         }
     }
 
     // Load Metalness Texture
-    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_METALNESS, 0, &str, NULL, NULL, NULL, NULL, NULL, NULL)) {
+    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_METALNESS, 0, &str, NULL, NULL,
+                                           NULL, NULL, NULL, NULL)) {
         material->metalness_tex = load_texture_path_into_pool(tex_pool, str.data);
         if (material->metalness_tex != NULL) {
             log_info("Metalness texture loaded: %s", material->metalness_tex->filepath);
-        }else{
+        } else {
             log_warn("Failed to load metalness texture '%s'", str.data);
         }
     }
 
     // Load Diffuse Roughness Texture
-    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_DIFFUSE_ROUGHNESS, 0, &str, NULL, NULL, NULL, NULL, NULL, NULL)) {
+    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_DIFFUSE_ROUGHNESS, 0, &str, NULL,
+                                           NULL, NULL, NULL, NULL, NULL)) {
         material->roughness_tex = load_texture_path_into_pool(tex_pool, str.data);
         if (material->roughness_tex != NULL) {
             log_info("Diffuse Roughness texture loaded: %s", material->roughness_tex->filepath);
-        }else{
+        } else {
             log_warn("Failed to load roughness texture '%s'", str.data);
         }
     }
 
     // Load Ambient Occlusion Texture
-    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_AMBIENT_OCCLUSION, 0, &str, NULL, NULL, NULL, NULL, NULL, NULL)) {
+    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_AMBIENT_OCCLUSION, 0, &str, NULL,
+                                           NULL, NULL, NULL, NULL, NULL)) {
         material->ambient_occlusion_tex = load_texture_path_into_pool(tex_pool, str.data);
         if (material->ambient_occlusion_tex != NULL) {
-            log_info("Ambient Occlusion texture loaded: %s", material->ambient_occlusion_tex->filepath);
-        }else{
+            log_info("Ambient Occlusion texture loaded: %s",
+                     material->ambient_occlusion_tex->filepath);
+        } else {
             log_warn("Failed to load ambient occlusion texture '%s'", str.data);
         }
     }
 
     // Load Emissive Texture
-    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_EMISSIVE, 0, &str, NULL, NULL, NULL, NULL, NULL, NULL)) {
+    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_EMISSIVE, 0, &str, NULL, NULL,
+                                           NULL, NULL, NULL, NULL)) {
         material->emissive_tex = load_texture_path_into_pool(tex_pool, str.data);
         if (material->emissive_tex != NULL) {
             log_info("Emissive texture loaded: %s", material->emissive_tex->filepath);
-        }else{
+        } else {
             log_warn("Failed to load emissive texture '%s'", str.data);
         }
     }
 
     // Load Height Texture
-    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_HEIGHT, 0, &str, NULL, NULL, NULL, NULL, NULL, NULL)) {
+    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_HEIGHT, 0, &str, NULL, NULL, NULL,
+                                           NULL, NULL, NULL)) {
         material->height_tex = load_texture_path_into_pool(tex_pool, str.data);
         if (material->height_tex != NULL) {
             log_info("Height texture loaded: %s", material->height_tex->filepath);
-        }else{
+        } else {
             log_warn("Failed to load height texture '%s'", str.data);
         }
     }
 
     // Load Opacity Texture
-    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_OPACITY, 0, &str, NULL, NULL, NULL, NULL, NULL, NULL)) {
+    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_OPACITY, 0, &str, NULL, NULL, NULL,
+                                           NULL, NULL, NULL)) {
         material->opacity_tex = load_texture_path_into_pool(tex_pool, str.data);
         if (material->opacity_tex != NULL) {
             log_info("Opacity texture loaded: %s", material->opacity_tex->filepath);
-        }else{
+        } else {
             log_warn("Failed to load opacity texture '%s'", str.data);
         }
     }
 
     // Load Sheen Texture
-    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_SHEEN, 0, &str, NULL, NULL, NULL, NULL, NULL, NULL)) {
+    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_SHEEN, 0, &str, NULL, NULL, NULL,
+                                           NULL, NULL, NULL)) {
         material->sheen_tex = load_texture_path_into_pool(tex_pool, str.data);
         if (material->sheen_tex != NULL) {
             log_info("Sheen texture loaded: %s", material->sheen_tex->filepath);
@@ -154,18 +164,18 @@ Material* process_ai_material(struct aiMaterial* ai_mat, TexturePool* tex_pool) 
     }
 
     // Load Reflectance Texture
-    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_REFLECTION, 0, &str, NULL, NULL, NULL, NULL, NULL, NULL)) {
+    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_REFLECTION, 0, &str, NULL, NULL,
+                                           NULL, NULL, NULL, NULL)) {
         material->reflectance_tex = load_texture_path_into_pool(tex_pool, str.data);
         if (material->reflectance_tex != NULL) {
             log_info("Reflectance texture loaded: %s", material->reflectance_tex->filepath);
-        }else{
+        } else {
             log_warn("Failed to load reflectance texture '%s'", str.data);
         }
     }
 
     return material;
 }
-
 
 void process_ai_mesh(Mesh* mesh, struct aiMesh* ai_mesh) {
     mesh->vertex_count = ai_mesh->mNumVertices;
@@ -203,14 +213,14 @@ void process_ai_mesh(Mesh* mesh, struct aiMesh* ai_mesh) {
         mesh->normals[i * 3 + 1] = ai_mesh->mNormals[i].y;
         mesh->normals[i * 3 + 2] = ai_mesh->mNormals[i].z;
 
-        if(mesh->tangents){
+        if (mesh->tangents) {
             // Tangents
             mesh->tangents[i * 3] = ai_mesh->mTangents[i].x;
             mesh->tangents[i * 3 + 1] = ai_mesh->mTangents[i].y;
             mesh->tangents[i * 3 + 2] = ai_mesh->mTangents[i].z;
         }
 
-        if(mesh->bitangents){
+        if (mesh->bitangents) {
             // Bitangents
             mesh->bitangents[i * 3] = ai_mesh->mBitangents[i].x;
             mesh->bitangents[i * 3 + 1] = ai_mesh->mBitangents[i].y;
@@ -232,21 +242,31 @@ void process_ai_mesh(Mesh* mesh, struct aiMesh* ai_mesh) {
     }
 }
 
-void process_ai_lights(const struct aiScene* scene, Light ***lights, size_t *num_lights) {
+void process_ai_lights(const struct aiScene* scene, Light*** lights, size_t* num_lights) {
     *num_lights = scene->mNumLights;
     *lights = malloc(sizeof(Light*) * (*num_lights));
 
     for (unsigned int i = 0; i < scene->mNumLights; i++) {
         const struct aiLight* ai_light = scene->mLights[i];
-        Light *light = create_light();
+        Light* light = create_light();
         light->name = safe_strdup(ai_light->mName.data);
 
-        glm_vec3_copy((vec3){ai_light->mPosition.x, ai_light->mPosition.y, ai_light->mPosition.z}, light->original_position);
-        glm_vec3_copy((vec3){ai_light->mPosition.x, ai_light->mPosition.y, ai_light->mPosition.z}, light->global_position);
-        glm_vec3_copy((vec3){ai_light->mDirection.x, ai_light->mDirection.y, ai_light->mDirection.z}, light->direction);
-        glm_vec3_copy((vec3){ai_light->mColorAmbient.r, ai_light->mColorAmbient.g, ai_light->mColorAmbient.b}, light->ambient);
-        glm_vec3_copy((vec3){ai_light->mColorDiffuse.r, ai_light->mColorDiffuse.g, ai_light->mColorDiffuse.b}, light->color);
-        glm_vec3_copy((vec3){ai_light->mColorSpecular.r, ai_light->mColorSpecular.g, ai_light->mColorSpecular.b}, light->specular);
+        glm_vec3_copy((vec3){ai_light->mPosition.x, ai_light->mPosition.y, ai_light->mPosition.z},
+                      light->original_position);
+        glm_vec3_copy((vec3){ai_light->mPosition.x, ai_light->mPosition.y, ai_light->mPosition.z},
+                      light->global_position);
+        glm_vec3_copy(
+            (vec3){ai_light->mDirection.x, ai_light->mDirection.y, ai_light->mDirection.z},
+            light->direction);
+        glm_vec3_copy(
+            (vec3){ai_light->mColorAmbient.r, ai_light->mColorAmbient.g, ai_light->mColorAmbient.b},
+            light->ambient);
+        glm_vec3_copy(
+            (vec3){ai_light->mColorDiffuse.r, ai_light->mColorDiffuse.g, ai_light->mColorDiffuse.b},
+            light->color);
+        glm_vec3_copy((vec3){ai_light->mColorSpecular.r, ai_light->mColorSpecular.g,
+                             ai_light->mColorSpecular.b},
+                      light->specular);
 
         // Set intensity, attenuation, and cutoff based on light type
         switch (ai_light->mType) {
@@ -282,7 +302,7 @@ void process_ai_lights(const struct aiScene* scene, Light ***lights, size_t *num
     }
 }
 
-void process_ai_cameras(const struct aiScene* scene, Camera ***cameras, size_t *num_cameras) {
+void process_ai_cameras(const struct aiScene* scene, Camera*** cameras, size_t* num_cameras) {
     *num_cameras = scene->mNumCameras;
     *cameras = malloc(sizeof(Camera*) * (*num_cameras));
 
@@ -293,7 +313,7 @@ void process_ai_cameras(const struct aiScene* scene, Camera ***cameras, size_t *
 
     for (unsigned int i = 0; i < *num_cameras; i++) {
         const struct aiCamera* ai_camera = scene->mCameras[i];
-        Camera *camera = malloc(sizeof(Camera));
+        Camera* camera = malloc(sizeof(Camera));
         camera->name = safe_strdup(ai_camera->mName.data);
 
         if (!camera) {
@@ -301,9 +321,13 @@ void process_ai_cameras(const struct aiScene* scene, Camera ***cameras, size_t *
             continue;
         }
 
-        glm_vec3_copy((vec3){ai_camera->mPosition.x, ai_camera->mPosition.y, ai_camera->mPosition.z}, camera->position);
-        glm_vec3_copy((vec3){ai_camera->mUp.x, ai_camera->mUp.y, ai_camera->mUp.z}, camera->up_vector);
-        glm_vec3_copy((vec3){ai_camera->mLookAt.x, ai_camera->mLookAt.y, ai_camera->mLookAt.z}, camera->look_at);
+        glm_vec3_copy(
+            (vec3){ai_camera->mPosition.x, ai_camera->mPosition.y, ai_camera->mPosition.z},
+            camera->position);
+        glm_vec3_copy((vec3){ai_camera->mUp.x, ai_camera->mUp.y, ai_camera->mUp.z},
+                      camera->up_vector);
+        glm_vec3_copy((vec3){ai_camera->mLookAt.x, ai_camera->mLookAt.y, ai_camera->mLookAt.z},
+                      camera->look_at);
 
         camera->fov_radians = ai_camera->mHorizontalFOV;
         camera->aspect_ratio = ai_camera->mAspect; // You might need to calculate this differently
@@ -325,15 +349,29 @@ void associate_cameras_and_lights_with_nodes(SceneNode* node, Scene* scene) {
     }
 }
 
-void copy_aiMatrix_to_mat4(const struct aiMatrix4x4 *from, mat4 to) {
-    to[0][0] = from->a1; to[1][0] = from->a2; to[2][0] = from->a3; to[3][0] = from->a4;
-    to[0][1] = from->b1; to[1][1] = from->b2; to[2][1] = from->b3; to[3][1] = from->b4;
-    to[0][2] = from->c1; to[1][2] = from->c2; to[2][2] = from->c3; to[3][2] = from->c4;
-    to[0][3] = from->d1; to[1][3] = from->d2; to[2][3] = from->d3; to[3][3] = from->d4;
+void copy_aiMatrix_to_mat4(const struct aiMatrix4x4* from, mat4 to) {
+    to[0][0] = from->a1;
+    to[1][0] = from->a2;
+    to[2][0] = from->a3;
+    to[3][0] = from->a4;
+    to[0][1] = from->b1;
+    to[1][1] = from->b2;
+    to[2][1] = from->b3;
+    to[3][1] = from->b4;
+    to[0][2] = from->c1;
+    to[1][2] = from->c2;
+    to[2][2] = from->c3;
+    to[3][2] = from->c4;
+    to[0][3] = from->d1;
+    to[1][3] = from->d2;
+    to[2][3] = from->d3;
+    to[3][3] = from->d4;
 }
 
-SceneNode* process_ai_node(Scene* scene, struct aiNode* ai_node, const struct aiScene* ai_scene, TexturePool* tex_pool) {
-    if(!scene || !ai_node || !ai_scene || !tex_pool) return NULL;
+SceneNode* process_ai_node(Scene* scene, struct aiNode* ai_node, const struct aiScene* ai_scene,
+                           TexturePool* tex_pool) {
+    if (!scene || !ai_node || !ai_scene || !tex_pool)
+        return NULL;
 
     SceneNode* node = create_node();
     if (!node) {
@@ -346,7 +384,7 @@ SceneNode* process_ai_node(Scene* scene, struct aiNode* ai_node, const struct ai
 
     for (unsigned int i = 0; i < node->mesh_count; i++) {
         unsigned int meshIndex = ai_node->mMeshes[i];
-        Mesh *mesh = create_mesh();
+        Mesh* mesh = create_mesh();
         process_ai_mesh(mesh, ai_scene->mMeshes[meshIndex]);
         if (ai_scene->mMeshes[meshIndex]->mMaterialIndex >= 0) {
             unsigned int matIndex = ai_scene->mMeshes[meshIndex]->mMaterialIndex;
@@ -355,6 +393,9 @@ SceneNode* process_ai_node(Scene* scene, struct aiNode* ai_node, const struct ai
             // scene will manage the material
             add_material_to_scene(scene, mesh->material);
         }
+
+        calculate_aabb(mesh);
+
         node->meshes[i] = mesh;
     }
 
@@ -375,7 +416,8 @@ SceneNode* process_ai_node(Scene* scene, struct aiNode* ai_node, const struct ai
 }
 
 Scene* create_scene_from_fbx_path(const char* path, const char* texture_directory) {
-    const struct aiScene* ai_scene = aiImportFile(path, aiProcess_Triangulate | aiProcess_FlipUVs | aiProcess_CalcTangentSpace);
+    const struct aiScene* ai_scene =
+        aiImportFile(path, aiProcess_Triangulate | aiProcess_FlipUVs | aiProcess_CalcTangentSpace);
     if (!ai_scene || ai_scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !ai_scene->mRootNode) {
         log_error("Error importing FBX file: %s\n", path);
         return NULL;
@@ -408,5 +450,3 @@ Scene* create_scene_from_fbx_path(const char* path, const char* texture_director
     aiReleaseImport(ai_scene);
     return scene;
 }
-
-

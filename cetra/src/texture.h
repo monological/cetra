@@ -15,10 +15,11 @@ typedef struct Texture {
     char* filepath;         // File path of the texture
     int width;              // Width of the texture
     int height;             // Height of the texture
-    GLenum internal_format; // This is the format of the texture object in OpenGL (e.g., GL_RGB, GL_RGBA)
+    GLenum internal_format; // This is the format of the texture object in OpenGL (e.g., GL_RGB,
+                            // GL_RGBA)
     GLenum data_format;     // This is the format of the texture data (e.g., GL_RGB, GL_RGBA)
 
-    UT_hash_handle hh;   // Makes this structure hashable
+    UT_hash_handle hh; // Makes this structure hashable
 } Texture;
 
 // malloc
@@ -34,12 +35,12 @@ void set_texture_data_format(Texture* texture, GLenum data_format);
  * Texture Pool
  */
 typedef struct TexturePool {
-    char* directory;           // Directory where texture images are stored
+    char* directory; // Directory where texture images are stored
 
-    Texture** textures;        // Dynamic array of Texture pointers
-    size_t texture_count;      // Number of textures in the pool
+    Texture** textures;   // Dynamic array of Texture pointers
+    size_t texture_count; // Number of textures in the pool
 
-    Texture* texture_cache;    // Hash table for cached textures
+    Texture* texture_cache; // Hash table for cached textures
 } TexturePool;
 
 TexturePool* create_texture_pool();
@@ -53,7 +54,4 @@ Texture* load_texture_path_into_pool(TexturePool* pool, const char* filepath);
 void remove_texture_from_pool(TexturePool* pool, const char* filepath);
 void clear_texture_pool(TexturePool* pool);
 
-
 #endif // TEXTURE_H
-
-

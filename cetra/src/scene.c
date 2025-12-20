@@ -28,7 +28,7 @@ Scene* create_scene() {
         log_error("Failed to allocate memory for Scene");
         return NULL;
     }
-    memset(scene, 0, sizeof(Scene)); 
+    memset(scene, 0, sizeof(Scene));
 
     // Initialize the Scene structure
     scene->root_node = NULL;
@@ -77,7 +77,7 @@ void free_scene(Scene* scene) {
         scene->cameras = NULL;
     }
 
-    if(scene->materials){
+    if (scene->materials) {
         for (size_t i = 0; i < scene->material_count; ++i) {
             if (scene->materials[i]) {
                 free_material(scene->materials[i]);
@@ -98,7 +98,8 @@ void free_scene(Scene* scene) {
 }
 
 void set_scene_root_node(Scene* scene, SceneNode* root_node) {
-    if (!scene) return;
+    if (!scene)
+        return;
     scene->root_node = root_node;
 }
 
@@ -107,13 +108,15 @@ void set_scene_root_node(Scene* scene, SceneNode* root_node) {
  */
 
 void set_scene_cameras(Scene* scene, Camera** cameras, size_t camera_count) {
-    if (!scene) return;
+    if (!scene)
+        return;
     scene->cameras = cameras;
     scene->camera_count = camera_count;
 }
 
 void set_scene_lights(Scene* scene, Light** lights, size_t light_count) {
-    if (!scene) return;
+    if (!scene)
+        return;
     scene->lights = lights;
     scene->light_count = light_count;
 }
@@ -131,7 +134,8 @@ Camera* find_camera_by_name(Scene* scene, const char* name) {
  * Lights
  */
 void add_light_to_scene(Scene* scene, Light* light) {
-    if (!scene || ! light) return;
+    if (!scene || !light)
+        return;
 
     // Reallocate the lights array to accommodate the new light
     size_t new_count = scene->light_count + 1;
@@ -165,22 +169,18 @@ static int _compare_light_distance(const void* a, const void* b) {
     return (pair_a->distance > pair_b->distance) - (pair_a->distance < pair_b->distance);
 }
 
-static void _collect_scene_lights(Scene* scene, LightDistancePair* pairs, size_t* count, SceneNode* target_node) {
-    vec3 target_pos = {
-        target_node->global_transform[3][0],
-        target_node->global_transform[3][1],
-        target_node->global_transform[3][2]
-    };
+static void _collect_scene_lights(Scene* scene, LightDistancePair* pairs, size_t* count,
+                                  SceneNode* target_node) {
+    vec3 target_pos = {target_node->global_transform[3][0], target_node->global_transform[3][1],
+                       target_node->global_transform[3][2]};
 
     for (size_t i = 0; i < scene->light_count; ++i) {
-        vec3 light_pos = {
-            scene->lights[i]->global_position[0],
-            scene->lights[i]->global_position[1],
-            scene->lights[i]->global_position[2]
-        };
-        float distance = sqrt(pow(light_pos[0] - target_pos[0], 2) 
-            + pow(light_pos[1] - target_pos[1], 2) 
-            + pow(light_pos[2] - target_pos[2], 2));
+        vec3 light_pos = {scene->lights[i]->global_position[0],
+                          scene->lights[i]->global_position[1],
+                          scene->lights[i]->global_position[2]};
+        float distance =
+            sqrt(pow(light_pos[0] - target_pos[0], 2) + pow(light_pos[1] - target_pos[1], 2) +
+                 pow(light_pos[2] - target_pos[2], 2));
 
         pairs[*count].light = scene->lights[i];
         pairs[*count].distance = distance;
@@ -188,8 +188,8 @@ static void _collect_scene_lights(Scene* scene, LightDistancePair* pairs, size_t
     }
 }
 
-Light** get_closest_lights(Scene* scene, SceneNode* target_node, 
-        size_t max_lights, size_t* returned_light_count) {
+Light** get_closest_lights(Scene* scene, SceneNode* target_node, size_t max_lights,
+                           size_t* returned_light_count) {
 
     LightDistancePair* pairs = malloc(scene->light_count * sizeof(LightDistancePair));
     if (!pairs) {
@@ -226,8 +226,8 @@ void add_material_to_scene(Scene* scene, Material* material) {
     }
 
     // check if material already added to scene and return if so
-    for(size_t i = 0; i < scene->material_count; ++i){
-        if(scene->materials[i] == material){
+    for (size_t i = 0; i < scene->material_count; ++i) {
+        if (scene->materials[i] == material) {
             return;
         }
     }
@@ -248,7 +248,7 @@ void add_material_to_scene(Scene* scene, Material* material) {
 }
 
 GLboolean set_scene_xyz_shader_program(Scene* scene, ShaderProgram* xyz_shader_program) {
-    if((scene->xyz_shader_program = xyz_shader_program) == NULL){
+    if ((scene->xyz_shader_program = xyz_shader_program) == NULL) {
         return GL_FALSE;
     }
     _set_xyz_program_for_nodes(scene->root_node, scene->xyz_shader_program);
@@ -266,14 +266,13 @@ SceneNode* create_node() {
         log_error("Failed to allocate memory for scene node");
         return NULL;
     }
-    
+
     node->name = NULL;
     node->parent = NULL;
     node->children = NULL;
     node->children_count = 0;
-    glm_mat4_identity(node->original_transform); 
-    glm_mat4_identity(node->local_transform); 
-    glm_mat4_identity(node->global_transform); 
+    glm_mat4_identity(node->original_transform);
+    glm_mat4_identity(node->global_transform);
 
     node->meshes = NULL;
     node->mesh_count = 0;
@@ -290,7 +289,8 @@ SceneNode* create_node() {
 }
 
 void free_node(SceneNode* node) {
-    if (!node) return;
+    if (!node)
+        return;
 
     for (size_t i = 0; i < node->children_count; i++) {
         free_node(node->children[i]);
@@ -317,7 +317,8 @@ void free_node(SceneNode* node) {
 }
 
 void add_child_node(SceneNode* node, SceneNode* child) {
-    if (!node || !child) return;
+    if (!node || !child)
+        return;
     node->children = realloc(node->children, (node->children_count + 1) * sizeof(SceneNode*));
     node->children[node->children_count] = child;
     child->parent = node;
@@ -325,7 +326,8 @@ void add_child_node(SceneNode* node, SceneNode* child) {
 }
 
 void add_mesh_to_node(SceneNode* node, Mesh* mesh) {
-    if (!node || !mesh) return;
+    if (!node || !mesh)
+        return;
 
     // Reallocate the meshes array to accommodate the new mesh
     size_t new_count = node->mesh_count + 1;
@@ -343,17 +345,20 @@ void add_mesh_to_node(SceneNode* node, Mesh* mesh) {
 }
 
 void set_node_name(SceneNode* node, const char* name) {
-    if (!node || !name) return;
+    if (!node || !name)
+        return;
     node->name = safe_strdup(name);
 }
 
 void set_node_light(SceneNode* node, Light* light) {
-    if (!node) return;
+    if (!node)
+        return;
     node->light = light;
 }
 
 void set_node_camera(SceneNode* node, Camera* camera) {
-    if (!node) return;
+    if (!node)
+        return;
     node->camera = camera;
 }
 
@@ -362,10 +367,10 @@ void set_shader_program_for_nodes(SceneNode* node, ShaderProgram* program) {
         return;
     }
 
-    for(size_t i = 0; i < node->mesh_count; ++i){
+    for (size_t i = 0; i < node->mesh_count; ++i) {
         Mesh* mesh = node->meshes[i];
 
-        if(mesh && mesh->material){
+        if (mesh && mesh->material) {
             mesh->material->shader_program = program;
         }
     }
@@ -387,9 +392,10 @@ static void _set_xyz_program_for_nodes(SceneNode* node, ShaderProgram* program) 
     }
 }
 
-void set_show_xyz_for_nodes(SceneNode* node, bool show_xyz){
-    if (!node) return;
-    
+void set_show_xyz_for_nodes(SceneNode* node, bool show_xyz) {
+    if (!node)
+        return;
+
     node->show_xyz = show_xyz;
 
     for (size_t i = 0; i < node->children_count; ++i) {
@@ -397,7 +403,7 @@ void set_show_xyz_for_nodes(SceneNode* node, bool show_xyz){
     }
 }
 
-static void _upload_xyz_buffers_to_gpu_for_node(SceneNode* node){
+static void _upload_xyz_buffers_to_gpu_for_node(SceneNode* node) {
     // Bind the Vertex Array Object (VAO)
     glBindVertexArray(node->xyz_vao);
 
@@ -414,7 +420,7 @@ static void _upload_xyz_buffers_to_gpu_for_node(SceneNode* node){
     glEnableVertexAttribArray(1);
 
     // only validate if VAO is bound
-    if(node->xyz_shader_program && !validate_program(node->xyz_shader_program)){
+    if (node->xyz_shader_program && !validate_program(node->xyz_shader_program)) {
         log_error("xyz shader program validation failed");
     }
 
@@ -422,7 +428,8 @@ static void _upload_xyz_buffers_to_gpu_for_node(SceneNode* node){
 }
 
 void upload_buffers_to_gpu_for_nodes(SceneNode* node) {
-    if (!node) return;
+    if (!node)
+        return;
 
     /*
      * Setup and upload mesh buffers.
@@ -432,7 +439,7 @@ void upload_buffers_to_gpu_for_nodes(SceneNode* node) {
             upload_mesh_buffers_to_gpu(node->meshes[i]);
         }
     }
-    
+
     _upload_xyz_buffers_to_gpu_for_node(node);
 
     for (size_t i = 0; i < node->children_count; i++) {
@@ -440,34 +447,16 @@ void upload_buffers_to_gpu_for_nodes(SceneNode* node) {
     }
 }
 
-void transform_node(SceneNode* node, Transform* transform, mat4* result_matrix) {
-    if (!node || !transform || !result_matrix) {
-        glm_mat4_identity(*result_matrix);
-        return;
-    }
-
-    glm_mat4_identity(*result_matrix);
-    glm_translate(*result_matrix, transform->position);
-    glm_rotate(*result_matrix, transform->rotation[0], (vec3){1.0f, 0.0f, 0.0f});
-    glm_rotate(*result_matrix, transform->rotation[1], (vec3){0.0f, 1.0f, 0.0f});
-    glm_rotate(*result_matrix, transform->rotation[2], (vec3){0.0f, 0.0f, 1.0f});
-    glm_scale(*result_matrix, transform->scale);
-
-    glm_mat4_mul(node->original_transform, *result_matrix, node->local_transform);
-}
-
-
 void apply_transform_to_nodes(SceneNode* node, mat4 transform) {
-    if (!node) return;
+    if (!node)
+        return;
 
-    mat4 local_transform;
-    glm_mat4_identity(local_transform);
-    glm_mat4_mul(node->original_transform, node->local_transform, local_transform);
-    glm_mat4_mul(transform, local_transform, node->global_transform);
+    glm_mat4_mul(transform, node->original_transform, node->global_transform);
 
     if (node->light) {
         vec3 light_position;
-        glm_mat4_mulv3(node->global_transform, node->light->original_position, 1.0f, light_position);
+        glm_mat4_mulv3(node->global_transform, node->light->original_position, 1.0f,
+                       light_position);
         glm_vec3_copy(light_position, node->light->global_position);
     }
 
@@ -478,15 +467,13 @@ void apply_transform_to_nodes(SceneNode* node, mat4 transform) {
     }
 }
 
-
 void print_scene_node(const SceneNode* node, int depth) {
-    if (!node) return;
+    if (!node)
+        return;
 
     print_indentation(depth);
     printf("Node: %s | Children: %zu | Meshes: %zu | Light: %s | Camera: %s\n",
-           node->name ? node->name : "Unnamed",
-           node->children_count,
-           node->mesh_count,
+           node->name ? node->name : "Unnamed", node->children_count, node->mesh_count,
            node->light ? (node->light->name ? node->light->name : "Unnamed Light") : "None",
            node->camera ? (node->camera->name ? node->camera->name : "Unnamed Camera") : "None");
 
@@ -496,24 +483,22 @@ void print_scene_node(const SceneNode* node, int depth) {
 }
 
 void print_scene_lights(const Scene* scene) {
-    if (!scene) return;
+    if (!scene)
+        return;
     for (size_t i = 0; i < scene->light_count; i++) {
         print_light(scene->lights[i]);
     }
 }
 
 void print_scene(const Scene* scene) {
-    if (!scene) return;
+    if (!scene)
+        return;
 
-    printf("Scene | Lights: %zu | Cameras: %zu | Textures: '%s'\n",
-           scene->light_count,
+    printf("Scene | Lights: %zu | Cameras: %zu | Textures: '%s'\n", scene->light_count,
            scene->camera_count,
-           scene->tex_pool ? (scene->tex_pool->directory ? scene->tex_pool->directory : "None") : "None");
+           scene->tex_pool ? (scene->tex_pool->directory ? scene->tex_pool->directory : "None")
+                           : "None");
 
     print_scene_lights(scene);
     print_scene_node(scene->root_node, 0);
 }
-
-
-
-

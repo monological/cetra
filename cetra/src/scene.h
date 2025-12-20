@@ -23,8 +23,7 @@ typedef struct SceneNode {
     struct SceneNode** children;
 
     size_t children_count;
-    mat4 original_transform; 
-    mat4 local_transform; 
+    mat4 original_transform;
     mat4 global_transform;
 
     Mesh** meshes;
@@ -85,7 +84,7 @@ typedef struct Scene {
     Material** materials;
     size_t material_count;
 
-    TexturePool *tex_pool;
+    TexturePool* tex_pool;
 
     // used by all nodes
     ShaderProgram* xyz_shader_program;
@@ -107,8 +106,8 @@ Camera* find_camera_by_name(Scene* scene, const char* name);
 void set_scene_lights(Scene* scene, Light** lights, size_t light_count);
 void add_light_to_scene(Scene* scene, Light* light);
 Light* find_light_by_name(Scene* scene, const char* name);
-Light** get_closest_lights(Scene* scene, SceneNode* target_node, 
-        size_t max_lights, size_t* returned_light_count);
+Light** get_closest_lights(Scene* scene, SceneNode* target_node, size_t max_lights,
+                           size_t* returned_light_count);
 
 // material
 void add_material_to_scene(Scene* scene, Material* material);
@@ -123,9 +122,5 @@ void print_scene(const Scene* scene);
 
 // render
 void upload_buffers_to_gpu_for_nodes(SceneNode* node);
-void transform_node(SceneNode* node, Transform* transform, mat4* result_matrix);
-
 
 #endif // _SCENE_H_
-
-

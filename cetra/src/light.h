@@ -4,13 +4,7 @@
 
 #include <cglm/cglm.h>
 
-typedef enum {
-    LIGHT_DIRECTIONAL,
-    LIGHT_POINT,
-    LIGHT_SPOT,
-    LIGHT_AREA,
-    LIGHT_UNKNOWN
-} LightType;
+typedef enum { LIGHT_DIRECTIONAL, LIGHT_POINT, LIGHT_SPOT, LIGHT_AREA, LIGHT_UNKNOWN } LightType;
 
 typedef struct Light {
     char* name;
@@ -55,6 +49,3 @@ void free_light(Light* light);
 void print_light(const Light* light);
 
 #endif // _LIGHT_H_
-
-
-
