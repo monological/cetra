@@ -368,15 +368,8 @@ static void _engine_cursor_position_callback(GLFWwindow* window, double xpos, do
         return;
 
     Engine* engine = glfwGetWindowUserPointer(window);
-    if (!engine) {
-        printf("Engine pointer is NULL\n");
+    if (!engine || !engine->nk_ctx)
         return;
-    }
-
-    if (!engine->nk_ctx) {
-        printf("Nuklear context is NULL\n");
-        return;
-    }
 
     // Check if mouse is over any Nuklear window
     if (nk_window_is_any_hovered(engine->nk_ctx)) {
@@ -409,15 +402,8 @@ static void _engine_mouse_button_callback(GLFWwindow* window, int button, int ac
         return;
 
     Engine* engine = glfwGetWindowUserPointer(window);
-    if (!engine) {
-        printf("Engine pointer is NULL\n");
+    if (!engine || !engine->nk_ctx)
         return;
-    }
-
-    if (!engine->nk_ctx) {
-        printf("Nuklear context is NULL\n");
-        return;
-    }
 
     // Check if mouse is over any Nuklear window
     if (nk_window_is_any_hovered(engine->nk_ctx)) {
@@ -432,8 +418,6 @@ static void _engine_mouse_button_callback(GLFWwindow* window, int button, int ac
 
     mouse_fb_x = ((mouse_fb_x / engine->win_width) * engine->fb_width);
     mouse_fb_y = ((1.0 - (mouse_fb_y / engine->win_height)) * engine->fb_height);
-
-    printf("Framebuffer Mouse Coordinates: (%f, %f)\n", mouse_fb_x, mouse_fb_y);
 
     if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
         engine->mouse_is_dragging = true;
@@ -462,15 +446,8 @@ static void _engine_key_callback(GLFWwindow* window, int key, int scancode, int 
         return;
 
     Engine* engine = glfwGetWindowUserPointer(window);
-    if (!engine) {
-        printf("Engine pointer is NULL\n");
+    if (!engine || !engine->camera)
         return;
-    }
-
-    if (!engine->camera) {
-        printf("No camera defined.\n");
-        return;
-    }
 
     Camera* camera = engine->camera;
 

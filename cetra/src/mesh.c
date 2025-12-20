@@ -104,15 +104,11 @@ void set_mesh_draw_mode(Mesh* mesh, MeshDrawMode draw_mode) {
 }
 
 void calculate_aabb(Mesh* mesh) {
-    AABB* aabb = &mesh->aabb; // Direct reference to the mesh's AABB
-
-    printf("Starting AABB calculation for Mesh with %zu vertices.\n", mesh->vertex_count);
+    AABB* aabb = &mesh->aabb;
 
     if (mesh->vertex_count == 0) {
-        glm_vec3_zero(aabb->min); // Set to zero if no vertices
+        glm_vec3_zero(aabb->min);
         glm_vec3_zero(aabb->max);
-        printf("No vertices present. AABB set to zero.\n");
-
         return;
     }
 
@@ -120,21 +116,14 @@ void calculate_aabb(Mesh* mesh) {
     glm_vec3_copy((vec3){mesh->vertices[0], mesh->vertices[1], mesh->vertices[2]}, aabb->min);
     glm_vec3_copy((vec3){mesh->vertices[0], mesh->vertices[1], mesh->vertices[2]}, aabb->max);
 
-    printf("Initial AABB set to first vertex: Min (%f, %f, %f), Max (%f, %f, %f)\n", aabb->min[0],
-           aabb->min[1], aabb->min[2], aabb->max[0], aabb->max[1], aabb->max[2]);
-
     // Iterate over each vertex to update the min and max vectors
     for (size_t i = 1; i < mesh->vertex_count; ++i) {
         vec3 vertex = {mesh->vertices[i * 3 + 0], mesh->vertices[i * 3 + 1],
                        mesh->vertices[i * 3 + 2]};
 
-        // Update min and max based on the current vertex
         glm_vec3_minv(aabb->min, vertex, aabb->min);
         glm_vec3_maxv(aabb->max, vertex, aabb->max);
     }
-
-    printf("Final AABB after iterating vertices: Min (%f, %f, %f), Max (%f, %f, %f)\n",
-           aabb->min[0], aabb->min[1], aabb->min[2], aabb->max[0], aabb->max[1], aabb->max[2]);
 }
 
 void upload_mesh_buffers_to_gpu(Mesh* mesh) {

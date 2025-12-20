@@ -69,108 +69,159 @@ uniform int reflectanceTexExists;
 
 const float PI = 3.14159265359;
 
-const float defaultEfficacy = 80.0; // 80 lumens per watt for LEDs
-
-
+// Color space conversions
 vec3 sRGBToLinear(vec3 srgb) {
     return pow(srgb, vec3(2.2));
 }
 
-vec3 applyGammaCorrection(vec3 color, float gamma) {
-    return pow(color, vec3(1.0 / gamma));
+vec3 linearToSRGB(vec3 linear) {
+    return pow(linear, vec3(1.0 / 2.2));
 }
 
+// Fresnel-Schlick approximation
+vec3 fresnelSchlick(float cosTheta, vec3 F0) {
+    return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
+
+// GGX/Trowbridge-Reitz Normal Distribution Function
+float distributionGGX(vec3 N, vec3 H, float roughness) {
+    float a = roughness * roughness;
+    float a2 = a * a;
+    float NdotH = max(dot(N, H), 0.0);
+    float NdotH2 = NdotH * NdotH;
+
+    float num = a2;
+    float denom = (NdotH2 * (a2 - 1.0) + 1.0);
+    denom = PI * denom * denom;
+
+    return num / denom;
+}
+
+// Smith's Schlick-GGX geometry function for a single direction
+float geometrySchlickGGX(float NdotV, float roughness) {
+    float r = (roughness + 1.0);
+    float k = (r * r) / 8.0;
+
+    float num = NdotV;
+    float denom = NdotV * (1.0 - k) + k;
+
+    return num / denom;
+}
+
+// Smith's geometry function combining view and light directions
+float geometrySmith(vec3 N, vec3 V, vec3 L, float roughness) {
+    float NdotV = max(dot(N, V), 0.0);
+    float NdotL = max(dot(N, L), 0.0);
+    float ggx2 = geometrySchlickGGX(NdotV, roughness);
+    float ggx1 = geometrySchlickGGX(NdotL, roughness);
+
+    return ggx1 * ggx2;
+}
+
+// Attenuation for point/spot lights
 float calculateAttenuation(float distance, float constant, float linear, float quadratic) {
     return 1.0 / (constant + linear * distance + quadratic * (distance * distance));
 }
 
-vec3 calculateDiffuse(vec3 N, vec3 L, vec3 lightColor, float distance, float constant, float linear, float quadratic) {
-    float diff = max(dot(N, L), 0.0);
-    float attenuation = calculateAttenuation(distance, constant, linear, quadratic);
-    return diff * lightColor * attenuation;
-}
-
 void main() {
-    vec3 albedoMap = albedo;  // Use material albedo color
+    // Sample material properties from textures or use uniforms
+    vec3 albedoMap = albedo;
     if (albedoTexExists > 0) {
         albedoMap = texture(albedoTex, TexCoords).rgb;
-        albedoMap = sRGBToLinear(albedoMap);  // Convert from sRGB to Linear RGB
+        albedoMap = sRGBToLinear(albedoMap);
     }
 
-	vec3 normalMap;
-	if (normalTexExists > 0) {
-		normalMap = texture(normalTex, TexCoords).rgb;
-		// Transform normal from [0,1] range to [-1,1] range and apply TBN matrix
-		normalMap = normalMap * 2.0 - 1.0;
-		normalMap = normalize(TBN * normalMap);
-	} else {
-		normalMap = normalize(Normal); // Use vertex normal if no normal map
-	}
+    vec3 N;
+    if (normalTexExists > 0) {
+        N = texture(normalTex, TexCoords).rgb;
+        N = N * 2.0 - 1.0;
+        N = normalize(TBN * N);
+    } else {
+        N = normalize(Normal);
+    }
 
-	float roughnessMap = roughness;
-	if (roughnessTexExists > 0) {
-		roughnessMap = texture(roughnessTex, TexCoords).r;
-	}
+    float roughnessMap = roughness;
+    if (roughnessTexExists > 0) {
+        roughnessMap = texture(roughnessTex, TexCoords).r;
+    }
+    // Clamp roughness to avoid division issues
+    roughnessMap = clamp(roughnessMap, 0.04, 1.0);
 
-	float metallicMap = metallic;
-	if (metalnessTexExists > 0) {
-		metallicMap = texture(metalnessTex, TexCoords).r;
-	}
+    float metallicMap = metallic;
+    if (metalnessTexExists > 0) {
+        metallicMap = texture(metalnessTex, TexCoords).r;
+    }
 
-	float aoMap = ao;
-	if (aoTexExists > 0) {
-		aoMap = texture(aoTex, TexCoords).r;
-	}
+    float aoMap = ao;
+    if (aoTexExists > 0) {
+        aoMap = texture(aoTex, TexCoords).r;
+    }
 
-	vec3 emissiveMap = vec3(0.0);
-	if (emissiveTexExists > 0) {
-		emissiveMap = texture(emissiveTex, TexCoords).rgb;
-	}
+    vec3 emissiveMap = vec3(0.0);
+    if (emissiveTexExists > 0) {
+        emissiveMap = sRGBToLinear(texture(emissiveTex, TexCoords).rgb);
+    }
 
-	float opacity = 1.0;
-	if (opacityTexExists > 0) {
-		opacity = texture(opacityTex, TexCoords).r;
-	}
+    float opacity = 1.0;
+    if (opacityTexExists > 0) {
+        opacity = texture(opacityTex, TexCoords).r;
+    }
 
-	vec3 sheenColor = vec3(0.0);
-	if (sheenTexExists > 0) {
-		sheenColor = texture(sheenTex, TexCoords).rgb;
-	}
-
-	vec3 reflectance = vec3(0.04); // Default reflectance value
-	if (reflectanceTexExists > 0) {
-		reflectance = texture(reflectanceTex, TexCoords).rgb;
-	}
-
-	// Use declared variables for final values
-	vec3 finalAlbedo = albedoMap;
-	float finalMetallic = metallicMap;
-	float finalRoughness = roughnessMap;
-	float finalAO = aoMap;
-
-    // Normalize the normal vectors
-    vec3 N = normalize(normalMap);
+    // Calculate view direction
     vec3 V = normalize(camPos - FragPos);
-    vec3 L = normalize(lights[0].position - FragPos);
-    float distance = length(lights[0].position - FragPos);
 
-    // Light parameters
-    float constant = lights[0].constant;
-    float linear = lights[0].linear;
-    float quadratic = lights[0].quadratic;
-    vec3 lightColor = lights[0].color * lights[0].intensity;
+    // Calculate F0 (surface reflection at zero incidence)
+    // Dielectrics use 0.04, metals use albedo color
+    vec3 F0 = vec3(0.04);
+    F0 = mix(F0, albedoMap, metallicMap);
 
-    // Adjust ambient light intensity
-    vec3 ambient = finalAlbedo * 0.09;
-										   
-	// Apply albedo to diffuse
-    vec3 diffuse = calculateDiffuse(N, L, lightColor, distance, constant, linear, quadratic) * finalAlbedo;
+    // Accumulate lighting from all lights
+    vec3 Lo = vec3(0.0);
 
-    vec3 color = ambient + diffuse;
-    color = clamp(color, 0.0, 1.0);
+    for (int i = 0; i < numLights; i++) {
+        // Calculate per-light radiance
+        vec3 L = normalize(lights[i].position - FragPos);
+        vec3 H = normalize(V + L);
+        float distance = length(lights[i].position - FragPos);
 
-    color = applyGammaCorrection(color, 2.2);  // Apply gamma correction
+        float attenuation = calculateAttenuation(distance, lights[i].constant,
+                                                  lights[i].linear, lights[i].quadratic);
+        vec3 radiance = lights[i].color * lights[i].intensity * attenuation;
 
-    FragColor = vec4(color, 1.0);
+        // Cook-Torrance BRDF
+        float NDF = distributionGGX(N, H, roughnessMap);
+        float G = geometrySmith(N, V, L, roughnessMap);
+        vec3 F = fresnelSchlick(max(dot(H, V), 0.0), F0);
+
+        // Specular contribution
+        vec3 numerator = NDF * G * F;
+        float denominator = 4.0 * max(dot(N, V), 0.0) * max(dot(N, L), 0.0) + 0.0001;
+        vec3 specular = numerator / denominator;
+
+        // Energy conservation: diffuse and specular must not exceed 1.0
+        vec3 kS = F;
+        vec3 kD = vec3(1.0) - kS;
+        // Metals have no diffuse reflection
+        kD *= 1.0 - metallicMap;
+
+        // Lambertian diffuse
+        float NdotL = max(dot(N, L), 0.0);
+
+        // Add this light's contribution
+        Lo += (kD * albedoMap / PI + specular) * radiance * NdotL;
+    }
+
+    // Ambient lighting (simplified IBL approximation)
+    vec3 ambient = vec3(0.03) * albedoMap * aoMap;
+
+    // Final color
+    vec3 color = ambient + Lo + emissiveMap;
+
+    // HDR tonemapping (Reinhard)
+    color = color / (color + vec3(1.0));
+
+    // Gamma correction
+    color = linearToSRGB(color);
+
+    FragColor = vec4(color, opacity);
 }
-
