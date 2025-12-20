@@ -42,8 +42,6 @@ static void _engine_mouse_button_callback(GLFWwindow* window, int button, int ac
 static void _engine_key_callback(GLFWwindow* window, int key, int scancode, int action, int mods);
 static void _traverse_and_check_intersections(SceneNode* node, vec3 ray_origin, vec3 ray_dir,
                                               float* min_distance, SceneNode** picked_node);
-static bool _intersect_ray_triangle(vec3 ray_origin, vec3 ray_dir, vec3 v0, vec3 v1, vec3 v2,
-                                    float* t);
 static SceneNode* _perform_engine_ray_picking(Engine* engine, double mouse_fb_x, double mouse_fb_y);
 
 /*
@@ -388,10 +386,6 @@ static void _engine_cursor_position_callback(GLFWwindow* window, double xpos, do
 
     glfwGetWindowSize(window, &engine->win_width, &engine->win_height);
     glfwGetFramebufferSize(window, &engine->fb_width, &engine->fb_height);
-
-    // Original window coordinates before transformation
-    double original_xpos = xpos;
-    double original_ypos = ypos;
 
     xpos = ((xpos / engine->win_width) * engine->fb_width);
     ypos = (1.0 - (ypos / engine->win_height)) * engine->fb_height;
@@ -798,7 +792,7 @@ void render_nuklear_gui(Engine* engine) {
             cam_mode = CAMERA_MODE_ORBIT;
         }
 
-        engine->camera_mode = cam_mode;
+        engine->camera_mode = (CameraMode)cam_mode;
 
         // top margin
         nk_layout_row_dynamic(engine->nk_ctx, 10, 1); // 10 pixels of vertical space
