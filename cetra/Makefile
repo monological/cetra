@@ -99,5 +99,5 @@ lint:
 # Deep lint with clang-tidy (slow but thorough)
 deeplint:
 	@echo -e "$(YELLOW)Running clang-tidy (deep analysis)...$(NC)"
-	$(CLANG_TIDY) src/*.c -- $(CFLAGS)
+	$(CLANG_TIDY) --header-filter='src/[^e].*' src/*.c -- $(CFLAGS)
 
