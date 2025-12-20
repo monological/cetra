@@ -92,6 +92,7 @@ lint:
 	$(CPPCHECK) --enable=warning,style,performance --std=c11 \
 		--suppress=missingIncludeSystem \
 		--suppress=unusedStructMember \
+		--suppress=*:$(HOMEBREW_PREFIX)/include/* \
 		-I$(HOMEBREW_PREFIX)/include \
 		src/*.c src/*.h
 
