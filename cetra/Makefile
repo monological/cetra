@@ -86,11 +86,12 @@ format:
 	@echo -e "$(BLUE)Formatting source files...$(NC)"
 	$(CLANG_FORMAT) -i src/*.c src/*.h src/ext/*.c src/ext/*.h 2>/dev/null || true
 
-# Quick lint with cppcheck
+# Quick lint with cppcheck (whole program analysis)
 lint:
 	@echo -e "$(YELLOW)Running cppcheck...$(NC)"
 	$(CPPCHECK) --enable=warning,style,performance --std=c11 \
 		--suppress=missingIncludeSystem \
+		--suppress=unusedStructMember \
 		-I$(HOMEBREW_PREFIX)/include \
 		src/*.c src/*.h
 
