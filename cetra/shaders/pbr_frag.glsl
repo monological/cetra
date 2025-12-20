@@ -98,7 +98,7 @@ void main() {
     }
 
 	vec3 normalMap;
-	if (normalTexExists > 0 && false) {
+	if (normalTexExists > 0) {
 		normalMap = texture(normalTex, TexCoords).rgb;
 		// Transform normal from [0,1] range to [-1,1] range and apply TBN matrix
 		normalMap = normalMap * 2.0 - 1.0;

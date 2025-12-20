@@ -260,22 +260,26 @@ Texture* load_texture_path_into_pool(TexturePool* pool, const char* filepath) {
 
 void remove_texture_from_pool(TexturePool* pool, const char* filepath) {
     if (pool && filepath) {
-        // Remove from cache
-        Texture* to_remove;
+        Texture* to_remove = NULL;
+
+        // Find and remove from cache (don't free yet)
         HASH_FIND_STR(pool->texture_cache, filepath, to_remove);
         if (to_remove) {
             HASH_DEL(pool->texture_cache, to_remove);
-            free_texture(to_remove);
         }
 
-        // Remove from dynamic array
+        // Remove from dynamic array (swap with last, don't free yet)
         for (size_t i = 0; i < pool->texture_count; i++) {
             if (strcmp(pool->textures[i]->filepath, filepath) == 0) {
-                free_texture(pool->textures[i]);
                 pool->textures[i] = pool->textures[pool->texture_count - 1];
                 pool->texture_count--;
                 break;
             }
+        }
+
+        // Free once after removal from both data structures
+        if (to_remove) {
+            free_texture(to_remove);
         }
     }
 }
@@ -285,7 +289,8 @@ void clear_texture_pool(TexturePool* pool) {
         Texture *current, *tmp;
         HASH_ITER(hh, pool->texture_cache, current, tmp) {
             Texture* to_free = current;
-            // NOLINTNEXTLINE(clang-analyzer-unix.Malloc) - uthash pattern, tmp holds next before delete
+            // NOLINTNEXTLINE(clang-analyzer-unix.Malloc) - uthash pattern, tmp holds next before
+            // delete
             HASH_DEL(pool->texture_cache, current);
             free_texture(to_free);
         }

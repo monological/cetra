@@ -169,7 +169,6 @@ void upload_mesh_buffers_to_gpu(Mesh* mesh) {
 
     // Tangents
     if (mesh->tangents) {
-        glGenBuffers(1, &(mesh->tangent_vbo));
         glBindBuffer(GL_ARRAY_BUFFER, mesh->tangent_vbo);
         glBufferData(GL_ARRAY_BUFFER, mesh->vertex_count * 3 * sizeof(float), mesh->tangents,
                      GL_STATIC_DRAW);
@@ -179,7 +178,6 @@ void upload_mesh_buffers_to_gpu(Mesh* mesh) {
 
     // Bitangents
     if (mesh->bitangents) {
-        glGenBuffers(1, &(mesh->bitangent_vbo));
         glBindBuffer(GL_ARRAY_BUFFER, mesh->bitangent_vbo);
         glBufferData(GL_ARRAY_BUFFER, mesh->vertex_count * 3 * sizeof(float), mesh->bitangents,
                      GL_STATIC_DRAW);
