@@ -78,6 +78,10 @@ void mouse_button_callback(Engine* engine, int button, int action, int mods) {
                 orbit_start_phi = atan2f(dir[2], dir[0]);
                 camera->distance = dist;
             }
+            // Save starting positions for Shift+drag pan
+            glm_vec3_copy(camera->look_at, free_start_look_at);
+            glm_vec3_copy(camera->position, free_start_cam_pos);
+            free_look_distance = dist;
         } else if (engine->camera_mode == CAMERA_MODE_FREE) {
             // Calculate current phi/theta from camera position relative to look_at
             vec3 dir;
@@ -138,29 +142,53 @@ void render_scene_callback(Engine* engine, Scene* current_scene) {
             update_engine_camera_perspective(engine);
 
         } else {
-            // Manual orbit - spherical coordinates around look_at point
-            // Horizontal drag rotates around Y axis (phi)
-            // Vertical drag tilts up/down (theta)
-            camera->phi = orbit_start_phi - engine->input.drag_fb_x * ORBIT_SENSITIVITY;
-            camera->theta = orbit_start_theta + engine->input.drag_fb_y * ORBIT_SENSITIVITY;
+            if (engine->input.shift_held) {
+                // Shift+drag: Pan camera (move both camera and look_at)
+                vec3 forward, right_vec, up_vec;
+                glm_vec3_sub(free_start_look_at, free_start_cam_pos, forward);
+                glm_vec3_crossn(camera->up_vector, forward, right_vec);
+                glm_vec3_normalize(right_vec);
+                glm_vec3_cross(forward, right_vec, up_vec);
+                glm_vec3_normalize(up_vec);
 
-            // Clamp theta to avoid gimbal lock (stay within ~85 degrees of horizon)
-            float max_theta = (float)M_PI_2 - 0.1f;
-            if (camera->theta > max_theta)
-                camera->theta = max_theta;
-            if (camera->theta < -max_theta)
-                camera->theta = -max_theta;
+                float pan_speed = free_look_distance * 0.0005f;
+                vec3 pan_offset;
+                glm_vec3_scale(right_vec, -engine->input.drag_fb_x * pan_speed, pan_offset);
+                vec3 up_offset;
+                glm_vec3_scale(up_vec, -engine->input.drag_fb_y * pan_speed, up_offset);
+                glm_vec3_add(pan_offset, up_offset, pan_offset);
 
-            // Calculate camera position on sphere around look_at point
-            float cos_theta = cosf(camera->theta);
-            vec3 offset = {camera->distance * cos_theta * cosf(camera->phi),
-                           camera->distance * sinf(camera->theta),
-                           camera->distance * cos_theta * sinf(camera->phi)};
+                // Move both camera and look_at from starting positions
+                vec3 new_pos, new_look;
+                glm_vec3_add(free_start_cam_pos, pan_offset, new_pos);
+                glm_vec3_add(free_start_look_at, pan_offset, new_look);
+                set_camera_position(camera, new_pos);
+                set_camera_look_at(camera, new_look);
+            } else {
+                // Manual orbit - spherical coordinates around look_at point
+                // Horizontal drag rotates around Y axis (phi)
+                // Vertical drag tilts up/down (theta)
+                camera->phi = orbit_start_phi - engine->input.drag_fb_x * ORBIT_SENSITIVITY;
+                camera->theta = orbit_start_theta + engine->input.drag_fb_y * ORBIT_SENSITIVITY;
 
-            vec3 new_camera_position;
-            glm_vec3_add(camera->look_at, offset, new_camera_position);
+                // Clamp theta to avoid gimbal lock (stay within ~85 degrees of horizon)
+                float max_theta = (float)M_PI_2 - 0.1f;
+                if (camera->theta > max_theta)
+                    camera->theta = max_theta;
+                if (camera->theta < -max_theta)
+                    camera->theta = -max_theta;
 
-            set_camera_position(camera, new_camera_position);
+                // Calculate camera position on sphere around look_at point
+                float cos_theta = cosf(camera->theta);
+                vec3 offset = {camera->distance * cos_theta * cosf(camera->phi),
+                               camera->distance * sinf(camera->theta),
+                               camera->distance * cos_theta * sinf(camera->phi)};
+
+                vec3 new_camera_position;
+                glm_vec3_add(camera->look_at, offset, new_camera_position);
+
+                set_camera_position(camera, new_camera_position);
+            }
             update_engine_camera_lookat(engine);
             update_engine_camera_perspective(engine);
         }
@@ -354,8 +382,8 @@ int main(int argc, char** argv) {
      * Import fbx model with async texture loading.
      */
 
-    Scene* scene = create_scene_from_fbx_path_async(fbx_model_path, fbx_texture_dir,
-                                                    engine->async_loader);
+    Scene* scene =
+        create_scene_from_fbx_path_async(fbx_model_path, fbx_texture_dir, engine->async_loader);
     if (!scene) {
         fprintf(stderr, "Failed to import FBX model: %s\n", fbx_model_path);
         return -1;
