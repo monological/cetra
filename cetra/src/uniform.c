@@ -148,6 +148,24 @@ void uniform_cache_lights(UniformManager* mgr, size_t max_lights) {
     }
 }
 
+void uniform_cache_shadows(UniformManager* mgr, size_t max_shadow_lights) {
+    if (!mgr)
+        return;
+
+    uniform_location(mgr, "shadowMaps");
+    uniform_location(mgr, "numShadowLights");
+    uniform_location(mgr, "shadowBias");
+    uniform_location(mgr, "shadowTexelSize");
+
+    for (size_t i = 0; i < max_shadow_lights; i++) {
+        char name[64];
+        snprintf(name, sizeof(name), "lightSpaceMatrix[%zu]", i);
+        uniform_location(mgr, name);
+        snprintf(name, sizeof(name), "shadowLightIndex[%zu]", i);
+        uniform_location(mgr, name);
+    }
+}
+
 void uniform_set_int(UniformManager* mgr, const char* name, int value) {
     GLint loc = uniform_location(mgr, name);
     if (loc >= 0)

@@ -43,6 +43,7 @@ void setup_program_uniforms(ShaderProgram* program);
 ShaderProgram* create_pbr_program();
 ShaderProgram* create_shape_program();
 ShaderProgram* create_xyz_program();
+ShaderProgram* create_shadow_depth_program();
 
 size_t calculate_max_lights();
 

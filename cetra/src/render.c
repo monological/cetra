@@ -18,6 +18,7 @@
 #include "common.h"
 #include "engine.h"
 #include "util.h"
+#include "shadow.h"
 
 static void _update_program_light_uniforms(ShaderProgram* program, Light* light, size_t light_count,
                                            size_t index) {
@@ -197,10 +198,10 @@ static void _update_camera_uniforms(ShaderProgram* program, Camera* camera) {
     uniform_set_float(u, "farClip", camera->far_clip);
 }
 
-static void _render_node(SceneNode* node, Camera* camera, mat4 model, mat4 view, mat4 projection,
-                         float time_value, RenderMode render_mode, Light** closest_lights,
-                         size_t returned_light_count, GLuint* current_program,
-                         Material** current_material) {
+static void _render_node(Scene* scene, SceneNode* node, Camera* camera, mat4 model, mat4 view,
+                         mat4 projection, float time_value, RenderMode render_mode,
+                         Light** closest_lights, size_t returned_light_count,
+                         GLuint* current_program, Material** current_material) {
 
     if (!node->meshes || node->mesh_count == 0)
         return;
@@ -234,6 +235,15 @@ static void _render_node(SceneNode* node, Camera* camera, mat4 model, mat4 view,
             // Update lights once per program switch for this node
             for (size_t j = 0; j < returned_light_count; ++j) {
                 _update_program_light_uniforms(program, closest_lights[j], returned_light_count, j);
+            }
+
+            // Bind shadow maps
+            if (scene && scene->shadow_system && scene->shadow_system->active_count > 0) {
+                int shadow_indices[MAX_SHADOW_LIGHTS] = {-1, -1, -1};
+                for (size_t k = 0; k < returned_light_count && k < MAX_SHADOW_LIGHTS; ++k) {
+                    shadow_indices[k] = closest_lights[k]->shadow_map_index;
+                }
+                bind_shadow_maps_to_program(scene->shadow_system, program, shadow_indices);
             }
         }
 
@@ -292,8 +302,8 @@ static void _render_scene(Scene* scene, SceneNode* node, Camera* camera, mat4 mo
     size_t max_lights = get_gl_max_lights();
     Light** closest_lights = get_closest_lights(scene, node, max_lights, &returned_light_count);
 
-    _render_node(node, camera, model, view, projection, time_value, render_mode, closest_lights,
-                 returned_light_count, current_program, current_material);
+    _render_node(scene, node, camera, model, view, projection, time_value, render_mode,
+                 closest_lights, returned_light_count, current_program, current_material);
 
     if (node->show_xyz && node->xyz_shader_program) {
         _render_xyz(node, view, projection, current_program);

@@ -16,6 +16,7 @@
 #include "engine.h"
 #include "transform.h"
 #include "intersect.h"
+#include "shadow.h"
 
 #define NK_INCLUDE_FIXED_TYPES
 #define NK_INCLUDE_STANDARD_IO
@@ -805,6 +806,15 @@ static int _create_default_shaders_for_engine(Engine* engine) {
 
     add_shader_program_to_engine(engine, xyz_shader_program);
 
+    ShaderProgram* shadow_depth_program = NULL;
+
+    if ((shadow_depth_program = create_shadow_depth_program()) == NULL) {
+        log_error("Failed to create shadow depth shader program");
+        return -1;
+    }
+
+    add_shader_program_to_engine(engine, shadow_depth_program);
+
     return 0;
 }
 
@@ -1057,10 +1067,8 @@ void set_engine_show_xyz(Engine* engine, bool show_xyz) {
     engine->show_xyz = show_xyz;
 
     for (size_t i = 0; i < engine->scene_count; ++i) {
-        if (engine->scenes[i]) {
-            Scene* scene = engine->scenes[i];
-            if (!scene)
-                continue;
+        Scene* scene = engine->scenes[i];
+        if (scene) {
             SceneNode* root_node = scene->root_node;
             if (!root_node)
                 continue;
@@ -1099,6 +1107,12 @@ void run_engine_render_loop(Engine* engine, RenderSceneFunc render_func) {
             glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
         } else {
             glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+        }
+
+        // Shadow depth pass (before main render)
+        Scene* shadow_scene = get_current_scene(engine);
+        if (shadow_scene && shadow_scene->shadow_system) {
+            render_shadow_depth_pass(engine, shadow_scene);
         }
 
         glBindFramebuffer(GL_FRAMEBUFFER, engine->framebuffer);
@@ -1142,7 +1156,7 @@ void get_mouse_world_position_on_drag_plane(Engine* engine, double mouse_fb_x, d
     glm_lookat(engine->camera->position, engine->camera->look_at, engine->camera->up_vector, view);
 
     // Compute ray from screen coordinates
-    vec3 ray_dir;
+    vec3 ray_dir = {0};
     compute_ray_from_screen((float)mouse_fb_x, (float)mouse_fb_y, engine->fb_width,
                             engine->fb_height, projection, view, engine->camera->position, ray_dir);
 
@@ -1160,7 +1174,7 @@ static SceneNode* _perform_engine_ray_picking(Engine* engine, double mouse_fb_x,
     glm_lookat(engine->camera->position, engine->camera->look_at, engine->camera->up_vector, view);
 
     // Compute ray from screen coordinates
-    vec3 ray_origin, ray_dir;
+    vec3 ray_origin, ray_dir = {0};
     glm_vec3_copy(engine->camera->position, ray_origin);
     compute_ray_from_screen((float)mouse_fb_x, (float)mouse_fb_y, engine->fb_width,
                             engine->fb_height, projection, view, ray_origin, ray_dir);

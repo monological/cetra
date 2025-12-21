@@ -3,6 +3,7 @@
 #define _LIGHT_H_
 
 #include <cglm/cglm.h>
+#include <stdbool.h>
 
 typedef enum { LIGHT_DIRECTIONAL, LIGHT_POINT, LIGHT_SPOT, LIGHT_AREA, LIGHT_UNKNOWN } LightType;
 
@@ -31,6 +32,10 @@ typedef struct Light {
 
     // Area
     vec2 size;
+
+    // Shadow mapping
+    bool cast_shadows;
+    int shadow_map_index;
 } Light;
 
 Light* create_light();
@@ -45,6 +50,7 @@ void set_light_color(Light* light, vec3 color);
 void set_light_intensity(Light* light, float intensity);
 void set_light_attenuation(Light* light, float constant, float linear, float quadratic);
 void set_light_cutoff(Light* light, float cutOff, float outerCutOff);
+void set_light_cast_shadows(Light* light, bool cast_shadows);
 void free_light(Light* light);
 void print_light(const Light* light);
 

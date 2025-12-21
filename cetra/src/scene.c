@@ -46,6 +46,9 @@ Scene* create_scene() {
     scene->light_cache_result = NULL;
     scene->light_cache_capacity = 0;
 
+    // Initialize shadow system
+    scene->shadow_system = create_shadow_system(DEFAULT_SHADOW_MAP_SIZE);
+
     return scene;
 }
 
@@ -102,6 +105,12 @@ void free_scene(Scene* scene) {
     }
     if (scene->light_cache_result) {
         free(scene->light_cache_result);
+    }
+
+    // Free shadow system
+    if (scene->shadow_system) {
+        free_shadow_system(scene->shadow_system);
+        scene->shadow_system = NULL;
     }
 
     // Finally, free the scene itself

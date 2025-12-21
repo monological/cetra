@@ -36,6 +36,9 @@ Light* create_light() {
 
     glm_vec2_copy((vec2){50.0f, 50.0f}, light->size);
 
+    light->cast_shadows = false;
+    light->shadow_map_index = -1;
+
     return light;
 }
 
@@ -140,6 +143,12 @@ void set_light_cutoff(Light* light, float cutOff, float outerCutOff) {
         return;
     light->cutOff = cutOff;
     light->outerCutOff = outerCutOff;
+}
+
+void set_light_cast_shadows(Light* light, bool cast_shadows) {
+    if (!light)
+        return;
+    light->cast_shadows = cast_shadows;
 }
 
 void free_light(Light* light) {

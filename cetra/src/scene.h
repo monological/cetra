@@ -12,6 +12,7 @@
 #include "shader.h"
 #include "light.h"
 #include "camera.h"
+#include "shadow.h"
 
 /*
  * SceneNode
@@ -94,6 +95,9 @@ typedef struct Scene {
     LightDistancePair* light_cache_pairs;
     Light** light_cache_result;
     size_t light_cache_capacity;
+
+    // Shadow mapping
+    ShadowSystem* shadow_system;
 } Scene;
 
 // malloc

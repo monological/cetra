@@ -1,0 +1,10 @@
+repos:
+  - repo: https://github.com/pocc/pre-commit-hooks
+    rev: v1.3.5
+    hooks:
+      - id: clang-format
+        args: [-i]
+        exclude: '^cetra/src/ext/'
+      - id: cppcheck
+        args: [--std=c11, --suppress=missingIncludeSystem, --suppress=unusedFunction, --suppress=unmatchedSuppression, --suppress=staticFunction, --suppress=unusedStructMember, --suppress=toomanyconfigs, --suppress=normalCheckLevelMaxBranches, --suppress=checkersReport, --suppress=unreachableCode, --suppress=variableScope, --suppress=knownConditionTrueFalse, "--suppress=*:*ext/*"]
+        exclude: '^cetra/src/ext/'

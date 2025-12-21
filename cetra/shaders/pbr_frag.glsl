@@ -73,6 +73,15 @@ uniform int microsurfaceTexExists;
 uniform int anisotropyTexExists;
 uniform int subsurfaceTexExists;
 
+// Shadow mapping uniforms
+#define MAX_SHADOW_LIGHTS 3
+uniform sampler2DArray shadowMaps;
+uniform mat4 lightSpaceMatrix[MAX_SHADOW_LIGHTS];
+uniform int shadowLightIndex[MAX_SHADOW_LIGHTS];
+uniform int numShadowLights;
+uniform float shadowBias;
+uniform vec2 shadowTexelSize;
+
 const float PI = 3.14159265359;
 
 // Color space conversions
@@ -158,6 +167,42 @@ float geometrySmith(vec3 N, vec3 V, vec3 L, float roughness) {
 // Attenuation for point/spot lights
 float calculateAttenuation(float distance, float constant, float linear, float quadratic) {
     return 1.0 / (constant + linear * distance + quadratic * (distance * distance));
+}
+
+// PCF soft shadow calculation
+float calculateShadow(int shadowIndex, vec3 worldPos, float NdotL) {
+    vec4 fragPosLightSpace = lightSpaceMatrix[shadowIndex] * vec4(worldPos, 1.0);
+    vec3 projCoords = fragPosLightSpace.xyz / fragPosLightSpace.w;
+    projCoords = projCoords * 0.5 + 0.5;
+
+    if (projCoords.z > 1.0 || projCoords.x < 0.0 || projCoords.x > 1.0 ||
+        projCoords.y < 0.0 || projCoords.y > 1.0) {
+        return 1.0;
+    }
+
+    float bias = max(shadowBias * (1.0 - NdotL), shadowBias * 0.1);
+    float currentDepth = projCoords.z;
+
+    // PCF 3x3 kernel
+    float shadow = 0.0;
+    for (int x = -1; x <= 1; ++x) {
+        for (int y = -1; y <= 1; ++y) {
+            vec2 offset = vec2(float(x), float(y)) * shadowTexelSize;
+            float pcfDepth = texture(shadowMaps, vec3(projCoords.xy + offset, float(shadowIndex))).r;
+            shadow += currentDepth - bias > pcfDepth ? 1.0 : 0.0;
+        }
+    }
+    return 1.0 - (shadow / 9.0);
+}
+
+// Find shadow slot for a given light index (-1 if not shadow-casting)
+int getShadowSlot(int lightIndex) {
+    for (int i = 0; i < numShadowLights && i < MAX_SHADOW_LIGHTS; i++) {
+        if (shadowLightIndex[i] == lightIndex) {
+            return i;
+        }
+    }
+    return -1;
 }
 
 void main() {
@@ -324,8 +369,17 @@ void main() {
         // Lambertian diffuse
         float NdotL = max(dot(N, L), 0.0);
 
-        // Add this light's contribution
-        Lo += (kD * albedoMap / PI + specular) * radiance * NdotL;
+        // Shadow calculation for directional lights
+        float shadow = 1.0;
+        if (lights[i].type == 0) {  // LIGHT_DIRECTIONAL = 0
+            int shadowSlot = getShadowSlot(i);
+            if (shadowSlot >= 0) {
+                shadow = calculateShadow(shadowSlot, WorldPos, NdotL);
+            }
+        }
+
+        // Add this light's contribution with shadow
+        Lo += (kD * albedoMap / PI + specular) * radiance * NdotL * shadow;
 
         // Add subsurface scattering contribution
         if (subsurfaceTexExists > 0 && sssThickness < 0.99) {

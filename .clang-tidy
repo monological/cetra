@@ -1,0 +1,1 @@
+HeaderFilterRegex: '.*/cetra/src/(?!ext/).*\.h$'

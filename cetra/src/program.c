@@ -401,6 +401,7 @@ void setup_program_uniforms(ShaderProgram* program) {
 
     uniform_cache_standard(program->uniforms);
     uniform_cache_lights(program->uniforms, get_gl_max_lights());
+    uniform_cache_shadows(program->uniforms, 3);
 }
 
 ShaderProgram* create_pbr_program() {
@@ -433,6 +434,18 @@ ShaderProgram* create_xyz_program() {
     if ((program = create_program_from_source("xyz", xyz_vert_shader_str, xyz_frag_shader_str,
                                               NULL)) == NULL) {
         log_error("Failed to initialize xyz shader program");
+        return NULL;
+    }
+
+    return program;
+}
+
+ShaderProgram* create_shadow_depth_program() {
+    ShaderProgram* program = NULL;
+
+    if ((program = create_program_from_source("shadow_depth", shadow_depth_vert_shader_str,
+                                              shadow_depth_frag_shader_str, NULL)) == NULL) {
+        log_error("Failed to initialize shadow depth shader program");
         return NULL;
     }
 
