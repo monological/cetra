@@ -45,6 +45,6 @@ void zoom_camera(Camera* camera, float delta);
 
 // Matrix computation
 void compute_view_matrix(Camera* camera, mat4 view);
-void compute_projection_matrix(Camera* camera, mat4 projection);
+void compute_projection_matrix(const Camera* camera, mat4 projection);
 
 #endif // _CAMERA_H_

@@ -152,7 +152,7 @@ void compute_view_matrix(Camera* camera, mat4 view) {
     glm_lookat(camera->position, camera->look_at, camera->up_vector, view);
 }
 
-void compute_projection_matrix(Camera* camera, mat4 projection) {
+void compute_projection_matrix(const Camera* camera, mat4 projection) {
     if (!camera)
         return;
     glm_perspective(camera->fov_radians, camera->aspect_ratio, camera->near_clip, camera->far_clip,

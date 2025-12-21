@@ -90,9 +90,8 @@ Material* process_ai_material(struct aiMaterial* ai_mat, TexturePool* tex_pool) 
 
     for (size_t i = 0; i < texture_mapping_count; i++) {
         const TextureMapping* mapping = &texture_mappings[i];
-        if (AI_SUCCESS ==
-            aiGetMaterialTexture(ai_mat, mapping->ai_type, 0, &str, NULL, NULL, NULL, NULL, NULL,
-                                 NULL)) {
+        if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, mapping->ai_type, 0, &str, NULL, NULL, NULL,
+                                               NULL, NULL, NULL)) {
             Texture* tex = load_texture_path_into_pool(tex_pool, str.data);
             if (tex) {
                 mapping->setter(material, tex);
@@ -151,9 +150,8 @@ Material* process_ai_material_async(struct aiMaterial* ai_mat, TexturePool* tex_
 
     for (size_t i = 0; i < texture_mapping_count; i++) {
         const TextureMapping* mapping = &texture_mappings[i];
-        if (AI_SUCCESS ==
-            aiGetMaterialTexture(ai_mat, mapping->ai_type, 0, &str, NULL, NULL, NULL, NULL, NULL,
-                                 NULL)) {
+        if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, mapping->ai_type, 0, &str, NULL, NULL, NULL,
+                                               NULL, NULL, NULL)) {
             load_material_texture_async(loader, tex_pool, material, str.data, mapping->setter,
                                         mapping->name);
         }
