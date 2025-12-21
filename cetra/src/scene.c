@@ -197,12 +197,6 @@ Light* find_light_by_name(Scene* scene, const char* name) {
     return NULL;
 }
 
-static int _compare_light_distance(const void* a, const void* b) {
-    LightDistancePair* pair_a = (LightDistancePair*)a;
-    LightDistancePair* pair_b = (LightDistancePair*)b;
-    return (pair_a->distance > pair_b->distance) - (pair_a->distance < pair_b->distance);
-}
-
 static void _collect_scene_lights(Scene* scene, LightDistancePair* pairs, size_t* count,
                                   SceneNode* target_node) {
     vec3 target_pos;
@@ -246,14 +240,36 @@ Light** get_closest_lights(Scene* scene, SceneNode* target_node, size_t max_ligh
         }
     }
 
-    // Collect and sort lights using cached arrays
+    // Collect lights and compute distances
     size_t count = 0;
     _collect_scene_lights(scene, scene->light_cache_pairs, &count, target_node);
-    qsort(scene->light_cache_pairs, count, sizeof(LightDistancePair), _compare_light_distance);
 
-    size_t result_count = (count < max_lights) ? count : max_lights;
-    for (size_t i = 0; i < result_count; i++) {
-        scene->light_cache_result[i] = scene->light_cache_pairs[i].light;
+    size_t result_count;
+    if (count <= max_lights) {
+        // No sorting needed - all lights fit
+        result_count = count;
+        for (size_t i = 0; i < result_count; i++) {
+            scene->light_cache_result[i] = scene->light_cache_pairs[i].light;
+        }
+    } else {
+        // Use partial selection: find k smallest via partial qsort
+        // For each position 0..max_lights-1, find the minimum in remaining elements
+        result_count = max_lights;
+        for (size_t i = 0; i < max_lights; i++) {
+            size_t min_idx = i;
+            for (size_t j = i + 1; j < count; j++) {
+                if (scene->light_cache_pairs[j].distance <
+                    scene->light_cache_pairs[min_idx].distance) {
+                    min_idx = j;
+                }
+            }
+            if (min_idx != i) {
+                LightDistancePair tmp = scene->light_cache_pairs[i];
+                scene->light_cache_pairs[i] = scene->light_cache_pairs[min_idx];
+                scene->light_cache_pairs[min_idx] = tmp;
+            }
+            scene->light_cache_result[i] = scene->light_cache_pairs[i].light;
+        }
     }
 
     *returned_light_count = result_count;
