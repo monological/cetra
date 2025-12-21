@@ -216,7 +216,7 @@ static int _setup_engine_glfw(Engine* engine) {
     }
 
     glfwGetFramebufferSize(engine->window, &(engine->fb_width), &(engine->fb_height));
-    glViewport(1, 0, engine->fb_width, engine->fb_height);
+    glViewport(0, 0, engine->fb_width, engine->fb_height);
 
     return 0;
 }
