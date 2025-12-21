@@ -95,6 +95,12 @@ ShaderProgram* create_program_from_paths(const char* name, const char* vert_path
         success = GL_FALSE;
     }
 
+    // Validate the program
+    if (success && !validate_program(program)) {
+        log_error("Shader program validation failed");
+        success = GL_FALSE;
+    }
+
     // Setup uniforms and other initializations as needed
     if (success) {
         setup_program_uniforms(program);
@@ -164,6 +170,12 @@ ShaderProgram* create_program_from_source(const char* name, const char* vert_sou
     // Link the shader program
     if (success && !link_program(program)) {
         log_error("Shader program linking failed");
+        success = GL_FALSE;
+    }
+
+    // Validate the program
+    if (success && !validate_program(program)) {
+        log_error("Shader program validation failed");
         success = GL_FALSE;
     }
 
@@ -264,6 +276,16 @@ GLboolean reload_program_from_paths(ShaderProgram* program, const char* vert_pat
     // Relink
     if (!link_program(program)) {
         log_error("Failed to relink program after shader reload");
+        free_shader(new_vert);
+        free_shader(new_frag);
+        if (new_geo)
+            free_shader(new_geo);
+        return GL_FALSE;
+    }
+
+    // Validate the program
+    if (!validate_program(program)) {
+        log_error("Shader program validation failed after reload");
         free_shader(new_vert);
         free_shader(new_frag);
         if (new_geo)
