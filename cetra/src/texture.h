@@ -67,5 +67,6 @@ void clear_texture_pool(TexturePool* pool);
 // Thread-safe variants for async loading
 Texture* get_texture_from_pool_threadsafe(TexturePool* pool, const char* filepath);
 void add_texture_to_pool_threadsafe(TexturePool* pool, Texture* texture);
+void remove_texture_from_pool_threadsafe(TexturePool* pool, const char* filepath);
 
 #endif // TEXTURE_H

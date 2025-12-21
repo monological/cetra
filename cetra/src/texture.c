@@ -369,3 +369,35 @@ void add_texture_to_pool_threadsafe(TexturePool* pool, Texture* texture) {
 
     pthread_mutex_unlock(&pool->cache_mutex);
 }
+
+void remove_texture_from_pool_threadsafe(TexturePool* pool, const char* filepath) {
+    if (!pool || !filepath) {
+        return;
+    }
+
+    pthread_mutex_lock(&pool->cache_mutex);
+
+    Texture* to_remove = NULL;
+
+    // Find and remove from cache
+    HASH_FIND_STR(pool->texture_cache, filepath, to_remove);
+    if (to_remove) {
+        HASH_DEL(pool->texture_cache, to_remove);
+    }
+
+    // Remove from dynamic array (swap with last)
+    for (size_t i = 0; i < pool->texture_count; i++) {
+        if (strcmp(pool->textures[i]->filepath, filepath) == 0) {
+            pool->textures[i] = pool->textures[pool->texture_count - 1];
+            pool->texture_count--;
+            break;
+        }
+    }
+
+    pthread_mutex_unlock(&pool->cache_mutex);
+
+    // Release reference outside the lock to avoid potential deadlock
+    if (to_remove) {
+        texture_release(to_remove);
+    }
+}
