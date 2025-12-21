@@ -351,10 +351,11 @@ int main(int argc, char** argv) {
     set_engine_camera(engine, camera);
 
     /*
-     * Import fbx model.
+     * Import fbx model with async texture loading.
      */
 
-    Scene* scene = create_scene_from_fbx_path(fbx_model_path, fbx_texture_dir);
+    Scene* scene = create_scene_from_fbx_path_async(fbx_model_path, fbx_texture_dir,
+                                                    engine->async_loader);
     if (!scene) {
         fprintf(stderr, "Failed to import FBX model: %s\n", fbx_model_path);
         return -1;
