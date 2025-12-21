@@ -193,27 +193,29 @@ static void _render_node(SceneNode* node, Camera* camera, mat4 model, mat4 view,
         if (!program || !program->uniforms)
             continue;
 
+        UniformManager* u = program->uniforms;
+
         // Only switch program if different from current
         if (*current_program != program->id) {
             glUseProgram(program->id);
             *current_program = program->id;
+
+            // Set view/projection/camera uniforms once per program switch
+            uniform_set_mat4(u, "view", (const float*)view);
+            uniform_set_mat4(u, "projection", (const float*)projection);
+            uniform_set_float(u, "time", time_value);
+            uniform_set_int(u, "renderMode", render_mode);
+            _update_camera_uniforms(program, camera);
+
+            // Update lights once per program switch for this node
+            for (size_t j = 0; j < returned_light_count; ++j) {
+                _update_program_light_uniforms(program, closest_lights[j], returned_light_count, j);
+            }
         }
 
-        UniformManager* u = program->uniforms;
-
-        for (size_t j = 0; j < returned_light_count; ++j) {
-            _update_program_light_uniforms(program, closest_lights[j], returned_light_count, j);
-        }
-
+        // Per-mesh uniforms
         uniform_set_mat4(u, "model", (const float*)node->global_transform);
-        uniform_set_mat4(u, "view", (const float*)view);
-        uniform_set_mat4(u, "projection", (const float*)projection);
-
-        uniform_set_float(u, "time", time_value);
-        uniform_set_int(u, "renderMode", render_mode);
         uniform_set_float(u, "lineWidth", mesh->line_width);
-
-        _update_camera_uniforms(program, camera);
         _update_program_material_uniforms(program, mat);
 
         glBindVertexArray(mesh->vao);

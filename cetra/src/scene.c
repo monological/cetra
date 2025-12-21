@@ -205,16 +205,13 @@ static int _compare_light_distance(const void* a, const void* b) {
 
 static void _collect_scene_lights(Scene* scene, LightDistancePair* pairs, size_t* count,
                                   SceneNode* target_node) {
-    vec3 target_pos = {target_node->global_transform[3][0], target_node->global_transform[3][1],
-                       target_node->global_transform[3][2]};
+    vec3 target_pos;
+    glm_vec3_copy((vec3){target_node->global_transform[3][0], target_node->global_transform[3][1],
+                         target_node->global_transform[3][2]},
+                  target_pos);
 
     for (size_t i = 0; i < scene->light_count; ++i) {
-        vec3 light_pos = {scene->lights[i]->global_position[0],
-                          scene->lights[i]->global_position[1],
-                          scene->lights[i]->global_position[2]};
-        float distance =
-            sqrt(pow(light_pos[0] - target_pos[0], 2) + pow(light_pos[1] - target_pos[1], 2) +
-                 pow(light_pos[2] - target_pos[2], 2));
+        float distance = glm_vec3_distance(scene->lights[i]->global_position, target_pos);
 
         pairs[*count].light = scene->lights[i];
         pairs[*count].distance = distance;
