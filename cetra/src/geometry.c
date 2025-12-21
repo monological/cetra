@@ -90,12 +90,11 @@ void free_curve(Curve* curve) {
 
 void generate_point_to_mesh(Mesh* mesh, const Point* point) {
     mesh->vertex_count = 1;
-    mesh->vertices = (float*)realloc(mesh->vertices, 3 * sizeof(float)); // 3 for x, y, z
-
-    if (!mesh->vertices) {
-        log_error("Failed to allocate memory for vertices");
+    float* new_vertices = (float*)safe_realloc(mesh->vertices, 3 * sizeof(float));
+    if (!new_vertices) {
         return;
     }
+    mesh->vertices = new_vertices;
 
     mesh->vertices[0] = point->position[0];
     mesh->vertices[1] = point->position[1];
@@ -116,14 +115,20 @@ void generate_circle_to_mesh(Mesh* mesh, const Circle* circle) {
         mesh->vertex_count = segments + 1; // One vertex per segment plus the center
         mesh->index_count = segments * 3;  // Three indices per triangle
 
-        mesh->vertices = (float*)realloc(mesh->vertices, mesh->vertex_count * 3 * sizeof(float));
-        mesh->indices =
-            (unsigned int*)realloc(mesh->indices, mesh->index_count * sizeof(unsigned int));
+        float* new_vertices =
+            (float*)safe_realloc(mesh->vertices, mesh->vertex_count * 3 * sizeof(float));
+        unsigned int* new_indices =
+            (unsigned int*)safe_realloc(mesh->indices, mesh->index_count * sizeof(unsigned int));
 
-        if (!mesh->vertices || !mesh->indices) {
-            log_error("Failed to allocate memory for filled circle mesh");
+        if (!new_vertices || !new_indices) {
+            if (new_vertices)
+                mesh->vertices = new_vertices;
+            if (new_indices)
+                mesh->indices = new_indices;
             return;
         }
+        mesh->vertices = new_vertices;
+        mesh->indices = new_indices;
 
         // Center vertex
         mesh->vertices[0] = circle->position[0];
@@ -148,14 +153,20 @@ void generate_circle_to_mesh(Mesh* mesh, const Circle* circle) {
         mesh->vertex_count = segments + 1; // One vertex per segment plus one to close the loop
         mesh->index_count = segments + 1;  // One index per vertex
 
-        mesh->vertices = (float*)realloc(mesh->vertices, mesh->vertex_count * 3 * sizeof(float));
-        mesh->indices =
-            (unsigned int*)realloc(mesh->indices, mesh->index_count * sizeof(unsigned int));
+        float* new_vertices =
+            (float*)safe_realloc(mesh->vertices, mesh->vertex_count * 3 * sizeof(float));
+        unsigned int* new_indices =
+            (unsigned int*)safe_realloc(mesh->indices, mesh->index_count * sizeof(unsigned int));
 
-        if (!mesh->vertices || !mesh->indices) {
-            log_error("Failed to allocate memory for circle mesh");
+        if (!new_vertices || !new_indices) {
+            if (new_vertices)
+                mesh->vertices = new_vertices;
+            if (new_indices)
+                mesh->indices = new_indices;
             return;
         }
+        mesh->vertices = new_vertices;
+        mesh->indices = new_indices;
 
         // Circle vertices
         for (int i = 0; i < segments; ++i) {
@@ -195,12 +206,12 @@ void generate_rect_to_mesh(Mesh* mesh, const Rect* rect) {
                                        : (resolution * 4); // +1 for center vertex if filled
         mesh->vertex_count = total_vertices;
 
-        mesh->vertices = (float*)realloc(mesh->vertices, mesh->vertex_count * 3 * sizeof(float));
-
-        if (!mesh->vertices) {
-            log_error("Failed to allocate memory for rounded rect mesh");
+        float* new_vertices =
+            (float*)safe_realloc(mesh->vertices, mesh->vertex_count * 3 * sizeof(float));
+        if (!new_vertices) {
             return;
         }
+        mesh->vertices = new_vertices;
 
         size_t vertex_index = 0;
 
@@ -246,13 +257,12 @@ void generate_rect_to_mesh(Mesh* mesh, const Rect* rect) {
 
             // Set indices for filled rect (triangles)
             mesh->index_count = resolution * 4 * 3; // 3 indices per triangle
-            mesh->indices =
-                (unsigned int*)realloc(mesh->indices, mesh->index_count * sizeof(unsigned int));
-
-            if (!mesh->indices) {
-                log_error("Failed to allocate memory for indices");
+            unsigned int* new_indices = (unsigned int*)safe_realloc(
+                mesh->indices, mesh->index_count * sizeof(unsigned int));
+            if (!new_indices) {
                 return;
             }
+            mesh->indices = new_indices;
 
             size_t index_index = 0;
             for (int i = 0; i < resolution * 4; i++) {
@@ -265,13 +275,12 @@ void generate_rect_to_mesh(Mesh* mesh, const Rect* rect) {
         } else {
             // Set indices for non-filled rect (line strip)
             mesh->index_count = resolution * 4 + 1; // +1 to close the loop
-            mesh->indices =
-                (unsigned int*)realloc(mesh->indices, mesh->index_count * sizeof(unsigned int));
-
-            if (!mesh->indices) {
-                log_error("Failed to allocate memory for indices");
+            unsigned int* new_indices = (unsigned int*)safe_realloc(
+                mesh->indices, mesh->index_count * sizeof(unsigned int));
+            if (!new_indices) {
                 return;
             }
+            mesh->indices = new_indices;
 
             for (size_t i = 0; i < mesh->index_count; ++i) {
                 mesh->indices[i] = i % (resolution * 4);
@@ -306,15 +315,20 @@ void generate_rect_to_mesh(Mesh* mesh, const Rect* rect) {
             mesh->vertex_count = 4;
             mesh->index_count = 6; // Two triangles to form a rect
 
-            mesh->vertices =
-                (float*)realloc(mesh->vertices, mesh->vertex_count * 3 * sizeof(float));
-            mesh->indices =
-                (unsigned int*)realloc(mesh->indices, mesh->index_count * sizeof(unsigned int));
+            float* new_vertices =
+                (float*)safe_realloc(mesh->vertices, mesh->vertex_count * 3 * sizeof(float));
+            unsigned int* new_indices = (unsigned int*)safe_realloc(
+                mesh->indices, mesh->index_count * sizeof(unsigned int));
 
-            if (!mesh->vertices || !mesh->indices) {
-                log_error("Failed to allocate memory for filled rect mesh");
+            if (!new_vertices || !new_indices) {
+                if (new_vertices)
+                    mesh->vertices = new_vertices;
+                if (new_indices)
+                    mesh->indices = new_indices;
                 return;
             }
+            mesh->vertices = new_vertices;
+            mesh->indices = new_indices;
 
             glm_vec3_copy(top_left, &mesh->vertices[0]);
             glm_vec3_copy(top_right, &mesh->vertices[3]);
@@ -330,15 +344,20 @@ void generate_rect_to_mesh(Mesh* mesh, const Rect* rect) {
             mesh->vertex_count = 4;
             mesh->index_count = 5; // Line loop (4 corners + close loop)
 
-            mesh->vertices =
-                (float*)realloc(mesh->vertices, mesh->vertex_count * 3 * sizeof(float));
-            mesh->indices =
-                (unsigned int*)realloc(mesh->indices, mesh->index_count * sizeof(unsigned int));
+            float* new_vertices =
+                (float*)safe_realloc(mesh->vertices, mesh->vertex_count * 3 * sizeof(float));
+            unsigned int* new_indices = (unsigned int*)safe_realloc(
+                mesh->indices, mesh->index_count * sizeof(unsigned int));
 
-            if (!mesh->vertices || !mesh->indices) {
-                log_error("Failed to allocate memory for rect mesh");
+            if (!new_vertices || !new_indices) {
+                if (new_vertices)
+                    mesh->vertices = new_vertices;
+                if (new_indices)
+                    mesh->indices = new_indices;
                 return;
             }
+            mesh->vertices = new_vertices;
+            mesh->indices = new_indices;
 
             glm_vec3_copy(top_left, &mesh->vertices[0]);
             glm_vec3_copy(top_right, &mesh->vertices[3]);
@@ -364,13 +383,20 @@ void generate_curve_to_mesh(Mesh* mesh, Curve* curve) {
     mesh->vertex_count = resolution;
     mesh->index_count = (resolution - 1) * 2;
 
-    mesh->vertices = (float*)realloc(mesh->vertices, mesh->vertex_count * 3 * sizeof(float));
-    mesh->indices = (unsigned int*)realloc(mesh->indices, mesh->index_count * sizeof(unsigned int));
+    float* new_vertices =
+        (float*)safe_realloc(mesh->vertices, mesh->vertex_count * 3 * sizeof(float));
+    unsigned int* new_indices =
+        (unsigned int*)safe_realloc(mesh->indices, mesh->index_count * sizeof(unsigned int));
 
-    if (!mesh->vertices || !mesh->indices) {
-        log_error("Failed to allocate memory for mesh");
+    if (!new_vertices || !new_indices) {
+        if (new_vertices)
+            mesh->vertices = new_vertices;
+        if (new_indices)
+            mesh->indices = new_indices;
         return;
     }
+    mesh->vertices = new_vertices;
+    mesh->indices = new_indices;
 
     size_t vertex_index = 0, index_index = 0;
     for (int j = 0; j < resolution; ++j) {

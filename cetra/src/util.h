@@ -19,6 +19,11 @@ void print_indentation(int depth);
 char* safe_strdup(const char* s);
 
 /*
+ * Memory
+ */
+void* safe_realloc(void* ptr, size_t size);
+
+/*
  * Path
  */
 bool path_exists(const char* path);

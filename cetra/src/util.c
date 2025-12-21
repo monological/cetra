@@ -61,6 +61,21 @@ char* safe_strdup(const char* s) {
     return d;
 }
 
+void* safe_realloc(void* ptr, size_t size) {
+    if (size == 0) {
+        free(ptr);
+        return NULL;
+    }
+
+    void* new_ptr = realloc(ptr, size);
+    if (!new_ptr) {
+        log_error("Failed to reallocate %zu bytes", size);
+        // Original ptr is still valid, caller must handle
+        return NULL;
+    }
+    return new_ptr;
+}
+
 bool path_exists(const char* path) {
     struct stat statbuf;
 
