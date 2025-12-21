@@ -283,9 +283,10 @@ int add_material_to_scene(Scene* scene, Material* material) {
 }
 
 GLboolean set_scene_xyz_shader_program(Scene* scene, ShaderProgram* xyz_shader_program) {
-    if ((scene->xyz_shader_program = xyz_shader_program) == NULL) {
+    if (!scene || !xyz_shader_program) {
         return GL_FALSE;
     }
+    scene->xyz_shader_program = xyz_shader_program;
     _set_xyz_program_for_nodes(scene->root_node, scene->xyz_shader_program);
     return GL_TRUE;
 }
