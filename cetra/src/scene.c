@@ -152,9 +152,13 @@ int add_camera_to_scene(Scene* scene, Camera* camera) {
 }
 
 Camera* find_camera_by_name(Scene* scene, const char* name) {
+    if (!scene || !name)
+        return NULL;
+
     for (size_t i = 0; i < scene->camera_count; ++i) {
-        if (strcmp(scene->cameras[i]->name, name) == 0) {
-            return scene->cameras[i];
+        Camera* cam = scene->cameras[i];
+        if (cam && cam->name && strcmp(cam->name, name) == 0) {
+            return cam;
         }
     }
     return NULL;
@@ -181,9 +185,13 @@ int add_light_to_scene(Scene* scene, Light* light) {
 }
 
 Light* find_light_by_name(Scene* scene, const char* name) {
+    if (!scene || !name)
+        return NULL;
+
     for (size_t i = 0; i < scene->light_count; ++i) {
-        if (strcmp(scene->lights[i]->name, name) == 0) {
-            return scene->lights[i];
+        Light* light = scene->lights[i];
+        if (light && light->name && strcmp(light->name, name) == 0) {
+            return light;
         }
     }
     return NULL;
