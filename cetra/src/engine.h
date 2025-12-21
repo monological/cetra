@@ -83,8 +83,16 @@ typedef struct Engine {
     bool show_gui;
     bool show_wireframe;
     bool show_xyz;
+    bool show_fps;
 
     InputState input;
+
+    // FPS tracking
+    double last_frame_time;
+    double delta_time;
+    float fps;
+    float fps_update_timer;
+    int frame_count;
 } Engine;
 
 typedef void (*RenderSceneFunc)(Engine*, Scene*);
@@ -119,6 +127,7 @@ ShaderProgram* get_engine_shader_program_by_name(Engine* engine, const char* pro
 
 // GUI
 void set_engine_show_gui(Engine* engine, bool show_gui);
+void set_engine_show_fps(Engine* engine, bool show_fps);
 void render_nuklear_gui(Engine* engine);
 
 // Render

@@ -320,6 +320,7 @@ int main(int argc, char **argv) {
     print_scene(scene);
 
     set_engine_show_gui(engine, true);
+    set_engine_show_fps(engine, true);
     set_engine_show_wireframe(engine, false);
     set_engine_show_xyz(engine, false);
 

@@ -100,8 +100,16 @@ Engine* create_engine(const char* window_title, int width, int height) {
     engine->show_gui = false;
     engine->show_wireframe = false;
     engine->show_xyz = false;
+    engine->show_fps = false;
 
     init_input_state(&engine->input);
+
+    // FPS tracking initialization
+    engine->last_frame_time = 0.0;
+    engine->delta_time = 0.0;
+    engine->fps = 0.0f;
+    engine->fps_update_timer = 0.0f;
+    engine->frame_count = 0;
 
     return engine;
 }
@@ -704,16 +712,18 @@ void set_engine_show_gui(Engine* engine, bool show_gui) {
     engine->show_gui = show_gui;
 }
 
+void set_engine_show_fps(Engine* engine, bool show_fps) {
+    if (!engine)
+        return;
+    engine->show_fps = show_fps;
+}
+
 void render_nuklear_gui(Engine* engine) {
     if (!engine || !engine->nk_ctx)
         return;
 
-    if (engine->show_gui == false)
-        return;
-
-    Camera* camera = engine->camera;
-
-    if (!camera)
+    // Skip if nothing to show
+    if (!engine->show_gui && !engine->show_fps)
         return;
 
     // Save OpenGL state
@@ -725,10 +735,13 @@ void render_nuklear_gui(Engine* engine) {
     // Start Nuklear frame
     nk_glfw3_new_frame(&engine->nk_glfw);
 
-    // Begin Nuklear GUI window
-    if (nk_begin(engine->nk_ctx, "Camera", nk_rect(15, 15, 250, 500),
-                 NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_SCALABLE | NK_WINDOW_MINIMIZABLE |
-                     NK_WINDOW_TITLE)) {
+    Camera* camera = engine->camera;
+
+    // Camera controls window (only if show_gui and camera exists)
+    if (engine->show_gui && camera) {
+        if (nk_begin(engine->nk_ctx, "Camera", nk_rect(15, 15, 250, 500),
+                     NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_SCALABLE | NK_WINDOW_MINIMIZABLE |
+                         NK_WINDOW_TITLE)) {
 
         // Button for toggling xyz
         nk_layout_row_dynamic(engine->nk_ctx, 30, 2);
@@ -811,8 +824,35 @@ void render_nuklear_gui(Engine* engine) {
                           1.0f);
         nk_property_float(engine->nk_ctx, "Far Clip:", 0.1f, &camera->far_clip, 10000.0f, 100.0f,
                           10.0f);
+        }
+        nk_end(engine->nk_ctx);
     }
-    nk_end(engine->nk_ctx);
+
+    // FPS display - raw text overlay, no window chrome
+    if (engine->show_fps) {
+        // Make window completely transparent
+        struct nk_color transparent = nk_rgba(0, 0, 0, 0);
+        nk_style_push_color(engine->nk_ctx, &engine->nk_ctx->style.window.background, transparent);
+        nk_style_push_style_item(engine->nk_ctx, &engine->nk_ctx->style.window.fixed_background,
+                                  nk_style_item_color(transparent));
+
+        // Position in top-right, using window coords
+        struct nk_rect fps_rect = nk_rect(engine->win_width - 100, 10, 90, 25);
+
+        if (nk_begin(engine->nk_ctx, "##fps", fps_rect,
+                     NK_WINDOW_NO_SCROLLBAR | NK_WINDOW_NO_INPUT)) {
+            char fps_text[16];
+            snprintf(fps_text, sizeof(fps_text), "%.1f FPS", engine->fps);
+            nk_layout_row_dynamic(engine->nk_ctx, 20, 1);
+            nk_text_colored(engine->nk_ctx, fps_text, strlen(fps_text),
+                           NK_TEXT_RIGHT, nk_rgb(255, 255, 255));
+        }
+        nk_end(engine->nk_ctx);
+
+        // Restore styles
+        nk_style_pop_style_item(engine->nk_ctx);
+        nk_style_pop_color(engine->nk_ctx);
+    }
 
     // Render Nuklear GUI
     nk_glfw3_render(&engine->nk_glfw, NK_ANTI_ALIASING_ON, MAX_VERTEX_BUFFER, MAX_ELEMENT_BUFFER);
@@ -873,7 +913,23 @@ void run_engine_render_loop(Engine* engine, RenderSceneFunc render_func) {
     glCullFace(GL_BACK); // Cull back faces
     glFrontFace(GL_CCW); // Front faces are defined in counter-clockwise order
 
+    engine->last_frame_time = glfwGetTime();
+
     while (!glfwWindowShouldClose(engine->window)) {
+        // Calculate delta time and FPS
+        double current_time = glfwGetTime();
+        engine->delta_time = current_time - engine->last_frame_time;
+        engine->last_frame_time = current_time;
+
+        engine->frame_count++;
+        engine->fps_update_timer += (float)engine->delta_time;
+
+        if (engine->fps_update_timer >= 0.5f) {
+            engine->fps = (float)engine->frame_count / engine->fps_update_timer;
+            engine->frame_count = 0;
+            engine->fps_update_timer = 0.0f;
+        }
+
         if (engine->show_wireframe) {
             glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
         } else {
