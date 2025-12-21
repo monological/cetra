@@ -123,33 +123,66 @@ void render_scene_callback(Engine* engine, Scene* current_scene){
 
 }
 
-void create_root_light(Scene *scene){
-    Light *light = create_light();
-    if(!light){
-        fprintf(stderr, "Failed to create root light.\n");
+void create_scene_lights(Scene *scene){
+    // Key light - main light, front-right, above
+    Light *key = create_light();
+    if(!key){
+        fprintf(stderr, "Failed to create key light.\n");
         return;
     }
-    set_light_name(light, "root_light");
-    set_light_type(light, LIGHT_POINT);
-    vec3 lightPosition = {0.0f, 0.0f, 10.0f};
-    set_light_original_position(light, lightPosition);
-    set_light_global_position(light, lightPosition);
-    set_light_intensity(light, 1500.0f);
-    set_light_color(light, (vec3){100.0f, 100.0f, 100.0f});
-    add_light_to_scene(scene, light);
+    set_light_name(key, "key_light");
+    set_light_type(key, LIGHT_POINT);
+    vec3 key_pos = {300.0f, 400.0f, 500.0f};
+    set_light_original_position(key, key_pos);
+    set_light_global_position(key, key_pos);
+    set_light_intensity(key, 80000.0f);
+    set_light_color(key, (vec3){1.0f, 0.95f, 0.9f});
+    add_light_to_scene(scene, key);
 
-    SceneNode *light_node = create_node();
-    set_node_light(light_node, light);
-    set_node_name(light_node, "root_light_node");
-    set_show_xyz_for_nodes(light_node, false);
+    SceneNode *key_node = create_node();
+    set_node_light(key_node, key);
+    set_node_name(key_node, "key_light_node");
+    add_child_node(scene->root_node, key_node);
 
-    Transform light_transform = {
-        .position = {300.0f, 300.0f, -300.00f},
-        .rotation = {0.0f, 0.0f, 0.0f},
-        .scale = {1.0f, 1.0f, 1.0f}
-    };
+    // Fill light - softer, front-left
+    Light *fill = create_light();
+    if(!fill){
+        fprintf(stderr, "Failed to create fill light.\n");
+        return;
+    }
+    set_light_name(fill, "fill_light");
+    set_light_type(fill, LIGHT_POINT);
+    vec3 fill_pos = {-400.0f, 200.0f, 400.0f};
+    set_light_original_position(fill, fill_pos);
+    set_light_global_position(fill, fill_pos);
+    set_light_intensity(fill, 40000.0f);
+    set_light_color(fill, (vec3){0.8f, 0.85f, 1.0f});
+    add_light_to_scene(scene, fill);
 
-    add_child_node(scene->root_node, light_node);
+    SceneNode *fill_node = create_node();
+    set_node_light(fill_node, fill);
+    set_node_name(fill_node, "fill_light_node");
+    add_child_node(scene->root_node, fill_node);
+
+    // Rim light - behind and above for edge definition
+    Light *rim = create_light();
+    if(!rim){
+        fprintf(stderr, "Failed to create rim light.\n");
+        return;
+    }
+    set_light_name(rim, "rim_light");
+    set_light_type(rim, LIGHT_POINT);
+    vec3 rim_pos = {0.0f, 500.0f, -400.0f};
+    set_light_original_position(rim, rim_pos);
+    set_light_global_position(rim, rim_pos);
+    set_light_intensity(rim, 60000.0f);
+    set_light_color(rim, (vec3){1.0f, 1.0f, 1.0f});
+    add_light_to_scene(scene, rim);
+
+    SceneNode *rim_node = create_node();
+    set_node_light(rim_node, rim);
+    set_node_name(rim_node, "rim_light_node");
+    add_child_node(scene->root_node, rim_node);
 }
 
 /*
@@ -240,7 +273,7 @@ int main(int argc, char **argv) {
         return -1;
     }
 
-    create_root_light(scene);
+    create_scene_lights(scene);
 
     upload_buffers_to_gpu_for_nodes(scene->root_node);
 
