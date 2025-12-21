@@ -178,7 +178,8 @@ static void _update_camera_uniforms(ShaderProgram* program, Camera* camera) {
 
 static void _render_node(SceneNode* node, Camera* camera, mat4 model, mat4 view, mat4 projection,
                          float time_value, RenderMode render_mode, Light** closest_lights,
-                         size_t returned_light_count, GLuint* current_program) {
+                         size_t returned_light_count, GLuint* current_program,
+                         Material** current_material) {
 
     if (!node->meshes || node->mesh_count == 0)
         return;
@@ -199,6 +200,8 @@ static void _render_node(SceneNode* node, Camera* camera, mat4 model, mat4 view,
         if (*current_program != program->id) {
             glUseProgram(program->id);
             *current_program = program->id;
+            // Force material update when program changes
+            *current_material = NULL;
 
             // Set view/projection/camera uniforms once per program switch
             uniform_set_mat4(u, "view", (const float*)view);
@@ -213,10 +216,15 @@ static void _render_node(SceneNode* node, Camera* camera, mat4 model, mat4 view,
             }
         }
 
-        // Per-mesh uniforms
+        // Per-mesh uniforms (model matrix is always per-mesh)
         uniform_set_mat4(u, "model", (const float*)node->global_transform);
         uniform_set_float(u, "lineWidth", mesh->line_width);
-        _update_program_material_uniforms(program, mat);
+
+        // Only update material uniforms if material changed
+        if (*current_material != mat) {
+            _update_program_material_uniforms(program, mat);
+            *current_material = mat;
+        }
 
         glBindVertexArray(mesh->vao);
         glDrawElements(mesh->draw_mode, mesh->index_count, GL_UNSIGNED_INT, 0);
@@ -247,7 +255,7 @@ static void _render_xyz(SceneNode* node, mat4 view, mat4 projection, GLuint* cur
 
 static void _render_scene(Scene* scene, SceneNode* node, Camera* camera, mat4 model, mat4 view,
                           mat4 projection, float time_value, RenderMode render_mode,
-                          GLuint* current_program) {
+                          GLuint* current_program, Material** current_material) {
 
     if (!scene) {
         log_error("error: render called with NULL scene");
@@ -264,7 +272,7 @@ static void _render_scene(Scene* scene, SceneNode* node, Camera* camera, mat4 mo
     Light** closest_lights = get_closest_lights(scene, node, max_lights, &returned_light_count);
 
     _render_node(node, camera, model, view, projection, time_value, render_mode, closest_lights,
-                 returned_light_count, current_program);
+                 returned_light_count, current_program, current_material);
 
     if (node->show_xyz && node->xyz_shader_program) {
         _render_xyz(node, view, projection, current_program);
@@ -275,7 +283,7 @@ static void _render_scene(Scene* scene, SceneNode* node, Camera* camera, mat4 mo
     // Render children
     for (size_t i = 0; i < node->children_count; i++) {
         _render_scene(scene, node->children[i], camera, node->global_transform, view, projection,
-                      time_value, render_mode, current_program);
+                      time_value, render_mode, current_program, current_material);
     }
 }
 
@@ -309,11 +317,12 @@ void render_current_scene(Engine* engine, float time_value) {
 
     RenderMode render_mode = engine->current_render_mode;
 
-    // Track current program to avoid redundant glUseProgram calls
+    // Track current program and material to avoid redundant state changes
     GLuint current_program = 0;
+    Material* current_material = NULL;
 
     _render_scene(scene, root_node, camera, *model, *view, *projection, time_value, render_mode,
-                  &current_program);
+                  &current_program, &current_material);
 
     // Reset program state at end of frame
     glUseProgram(0);
