@@ -24,159 +24,82 @@
 #include "material.h"
 #include "async_loader.h"
 
-Material* process_ai_material(struct aiMaterial* ai_mat, TexturePool* tex_pool) {
-    if (!ai_mat || !tex_pool)
-        return NULL;
+/*
+ * Texture mapping table for material loading
+ */
+typedef struct TextureMapping {
+    enum aiTextureType ai_type;
+    void (*setter)(Material*, Texture*);
+    const char* name;
+} TextureMapping;
 
-    Material* material = create_material();
+static const TextureMapping texture_mappings[] = {
+    {aiTextureType_DIFFUSE, set_material_albedo_tex, "Diffuse"},
+    {aiTextureType_NORMALS, set_material_normal_tex, "Normal"},
+    {aiTextureType_METALNESS, set_material_metalness_tex, "Metalness"},
+    {aiTextureType_DIFFUSE_ROUGHNESS, set_material_roughness_tex, "Roughness"},
+    {aiTextureType_AMBIENT_OCCLUSION, set_material_ambient_occlusion_tex, "AO"},
+    {aiTextureType_EMISSIVE, set_material_emissive_tex, "Emissive"},
+    {aiTextureType_HEIGHT, set_material_height_tex, "Height"},
+    {aiTextureType_OPACITY, set_material_opacity_tex, "Opacity"},
+    {aiTextureType_SHEEN, set_material_sheen_tex, "Sheen"},
+    {aiTextureType_REFLECTION, set_material_reflectance_tex, "Reflectance"},
+};
 
+static const size_t texture_mapping_count = sizeof(texture_mappings) / sizeof(texture_mappings[0]);
+
+/*
+ * Extract material properties (color, metallic, roughness) from assimp material
+ */
+static void extract_material_properties(struct aiMaterial* ai_mat, Material* material) {
     struct aiColor4D color;
-    struct aiString str;
 
-    // Load Albedo/Base Color
     if (AI_SUCCESS == aiGetMaterialColor(ai_mat, AI_MATKEY_COLOR_DIFFUSE, &color)) {
         material->albedo[0] = color.r;
         material->albedo[1] = color.g;
         material->albedo[2] = color.b;
     } else {
-        log_warn("Failed to load color diffuse.");
         material->albedo[0] = 0.1;
         material->albedo[1] = 0.1;
         material->albedo[2] = 0.1;
     }
 
     ai_real metallic, roughness;
-    aiReturn result;
 
-    result = aiGetMaterialFloat(ai_mat, AI_MATKEY_METALLIC_FACTOR, &metallic);
-    if (result == AI_SUCCESS) {
+    if (AI_SUCCESS == aiGetMaterialFloat(ai_mat, AI_MATKEY_METALLIC_FACTOR, &metallic)) {
         material->metallic = metallic;
     } else {
         material->metallic = 0.5;
     }
 
-    result = aiGetMaterialFloat(ai_mat, AI_MATKEY_ROUGHNESS_FACTOR, &roughness);
-    if (result == AI_SUCCESS) {
+    if (AI_SUCCESS == aiGetMaterialFloat(ai_mat, AI_MATKEY_ROUGHNESS_FACTOR, &roughness)) {
         material->roughness = roughness;
     } else {
         material->roughness = 0.5;
     }
+}
 
-    // Load Diffuse Texture
-    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_DIFFUSE, 0, &str, NULL, NULL, NULL,
-                                           NULL, NULL, NULL)) {
-        Texture* tex = load_texture_path_into_pool(tex_pool, str.data);
-        if (tex) {
-            set_material_albedo_tex(material, tex);
-            log_info("Diffuse texture loaded: %s", tex->filepath);
-        } else {
-            log_warn("Failed to load diffuse texture '%s'", str.data);
-        }
-    }
+Material* process_ai_material(struct aiMaterial* ai_mat, TexturePool* tex_pool) {
+    if (!ai_mat || !tex_pool)
+        return NULL;
 
-    // Load Normal Texture
-    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_NORMALS, 0, &str, NULL, NULL, NULL,
-                                           NULL, NULL, NULL)) {
-        Texture* tex = load_texture_path_into_pool(tex_pool, str.data);
-        if (tex) {
-            set_material_normal_tex(material, tex);
-            log_info("Normals texture loaded: %s", tex->filepath);
-        } else {
-            log_warn("Failed to load normal texture '%s'", str.data);
-        }
-    }
+    Material* material = create_material();
+    extract_material_properties(ai_mat, material);
 
-    // Load Metalness Texture
-    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_METALNESS, 0, &str, NULL, NULL,
-                                           NULL, NULL, NULL, NULL)) {
-        Texture* tex = load_texture_path_into_pool(tex_pool, str.data);
-        if (tex) {
-            set_material_metalness_tex(material, tex);
-            log_info("Metalness texture loaded: %s", tex->filepath);
-        } else {
-            log_warn("Failed to load metalness texture '%s'", str.data);
-        }
-    }
+    struct aiString str;
 
-    // Load Diffuse Roughness Texture
-    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_DIFFUSE_ROUGHNESS, 0, &str, NULL,
-                                           NULL, NULL, NULL, NULL, NULL)) {
-        Texture* tex = load_texture_path_into_pool(tex_pool, str.data);
-        if (tex) {
-            set_material_roughness_tex(material, tex);
-            log_info("Diffuse Roughness texture loaded: %s", tex->filepath);
-        } else {
-            log_warn("Failed to load roughness texture '%s'", str.data);
-        }
-    }
-
-    // Load Ambient Occlusion Texture
-    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_AMBIENT_OCCLUSION, 0, &str, NULL,
-                                           NULL, NULL, NULL, NULL, NULL)) {
-        Texture* tex = load_texture_path_into_pool(tex_pool, str.data);
-        if (tex) {
-            set_material_ambient_occlusion_tex(material, tex);
-            log_info("Ambient Occlusion texture loaded: %s", tex->filepath);
-        } else {
-            log_warn("Failed to load ambient occlusion texture '%s'", str.data);
-        }
-    }
-
-    // Load Emissive Texture
-    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_EMISSIVE, 0, &str, NULL, NULL,
-                                           NULL, NULL, NULL, NULL)) {
-        Texture* tex = load_texture_path_into_pool(tex_pool, str.data);
-        if (tex) {
-            set_material_emissive_tex(material, tex);
-            log_info("Emissive texture loaded: %s", tex->filepath);
-        } else {
-            log_warn("Failed to load emissive texture '%s'", str.data);
-        }
-    }
-
-    // Load Height Texture
-    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_HEIGHT, 0, &str, NULL, NULL, NULL,
-                                           NULL, NULL, NULL)) {
-        Texture* tex = load_texture_path_into_pool(tex_pool, str.data);
-        if (tex) {
-            set_material_height_tex(material, tex);
-            log_info("Height texture loaded: %s", tex->filepath);
-        } else {
-            log_warn("Failed to load height texture '%s'", str.data);
-        }
-    }
-
-    // Load Opacity Texture
-    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_OPACITY, 0, &str, NULL, NULL, NULL,
-                                           NULL, NULL, NULL)) {
-        Texture* tex = load_texture_path_into_pool(tex_pool, str.data);
-        if (tex) {
-            set_material_opacity_tex(material, tex);
-            log_info("Opacity texture loaded: %s", tex->filepath);
-        } else {
-            log_warn("Failed to load opacity texture '%s'", str.data);
-        }
-    }
-
-    // Load Sheen Texture
-    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_SHEEN, 0, &str, NULL, NULL, NULL,
-                                           NULL, NULL, NULL)) {
-        Texture* tex = load_texture_path_into_pool(tex_pool, str.data);
-        if (tex) {
-            set_material_sheen_tex(material, tex);
-            log_info("Sheen texture loaded: %s", tex->filepath);
-        }
-    }
-
-    // Load Reflectance Texture
-    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_REFLECTION, 0, &str, NULL, NULL,
-                                           NULL, NULL, NULL, NULL)) {
-        Texture* tex = load_texture_path_into_pool(tex_pool, str.data);
-        if (tex) {
-            set_material_reflectance_tex(material, tex);
-            log_info("Reflectance texture loaded: %s", tex->filepath);
-        } else {
-            log_warn("Failed to load reflectance texture '%s'", str.data);
+    for (size_t i = 0; i < texture_mapping_count; i++) {
+        const TextureMapping* mapping = &texture_mappings[i];
+        if (AI_SUCCESS ==
+            aiGetMaterialTexture(ai_mat, mapping->ai_type, 0, &str, NULL, NULL, NULL, NULL, NULL,
+                                 NULL)) {
+            Texture* tex = load_texture_path_into_pool(tex_pool, str.data);
+            if (tex) {
+                mapping->setter(material, tex);
+                log_info("%s texture loaded: %s", mapping->name, tex->filepath);
+            } else {
+                log_warn("Failed to load %s texture '%s'", mapping->name, str.data);
+            }
         }
     }
 
@@ -222,97 +145,18 @@ Material* process_ai_material_async(struct aiMaterial* ai_mat, TexturePool* tex_
     }
 
     Material* material = create_material();
+    extract_material_properties(ai_mat, material);
 
-    struct aiColor4D color;
     struct aiString str;
 
-    // Load Albedo/Base Color
-    if (AI_SUCCESS == aiGetMaterialColor(ai_mat, AI_MATKEY_COLOR_DIFFUSE, &color)) {
-        material->albedo[0] = color.r;
-        material->albedo[1] = color.g;
-        material->albedo[2] = color.b;
-    } else {
-        material->albedo[0] = 0.1;
-        material->albedo[1] = 0.1;
-        material->albedo[2] = 0.1;
-    }
-
-    ai_real metallic, roughness;
-    aiReturn result;
-
-    result = aiGetMaterialFloat(ai_mat, AI_MATKEY_METALLIC_FACTOR, &metallic);
-    if (result == AI_SUCCESS) {
-        material->metallic = metallic;
-    } else {
-        material->metallic = 0.5;
-    }
-
-    result = aiGetMaterialFloat(ai_mat, AI_MATKEY_ROUGHNESS_FACTOR, &roughness);
-    if (result == AI_SUCCESS) {
-        material->roughness = roughness;
-    } else {
-        material->roughness = 0.5;
-    }
-
-    // Load textures asynchronously
-    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_DIFFUSE, 0, &str, NULL, NULL, NULL,
-                                           NULL, NULL, NULL)) {
-        load_material_texture_async(loader, tex_pool, material, str.data, set_material_albedo_tex,
-                                    "Diffuse");
-    }
-
-    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_NORMALS, 0, &str, NULL, NULL, NULL,
-                                           NULL, NULL, NULL)) {
-        load_material_texture_async(loader, tex_pool, material, str.data, set_material_normal_tex,
-                                    "Normal");
-    }
-
-    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_METALNESS, 0, &str, NULL, NULL,
-                                           NULL, NULL, NULL, NULL)) {
-        load_material_texture_async(loader, tex_pool, material, str.data,
-                                    set_material_metalness_tex, "Metalness");
-    }
-
-    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_DIFFUSE_ROUGHNESS, 0, &str, NULL,
-                                           NULL, NULL, NULL, NULL, NULL)) {
-        load_material_texture_async(loader, tex_pool, material, str.data,
-                                    set_material_roughness_tex, "Roughness");
-    }
-
-    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_AMBIENT_OCCLUSION, 0, &str, NULL,
-                                           NULL, NULL, NULL, NULL, NULL)) {
-        load_material_texture_async(loader, tex_pool, material, str.data,
-                                    set_material_ambient_occlusion_tex, "AO");
-    }
-
-    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_EMISSIVE, 0, &str, NULL, NULL,
-                                           NULL, NULL, NULL, NULL)) {
-        load_material_texture_async(loader, tex_pool, material, str.data, set_material_emissive_tex,
-                                    "Emissive");
-    }
-
-    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_HEIGHT, 0, &str, NULL, NULL, NULL,
-                                           NULL, NULL, NULL)) {
-        load_material_texture_async(loader, tex_pool, material, str.data, set_material_height_tex,
-                                    "Height");
-    }
-
-    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_OPACITY, 0, &str, NULL, NULL, NULL,
-                                           NULL, NULL, NULL)) {
-        load_material_texture_async(loader, tex_pool, material, str.data, set_material_opacity_tex,
-                                    "Opacity");
-    }
-
-    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_SHEEN, 0, &str, NULL, NULL, NULL,
-                                           NULL, NULL, NULL)) {
-        load_material_texture_async(loader, tex_pool, material, str.data, set_material_sheen_tex,
-                                    "Sheen");
-    }
-
-    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_REFLECTION, 0, &str, NULL, NULL,
-                                           NULL, NULL, NULL, NULL)) {
-        load_material_texture_async(loader, tex_pool, material, str.data,
-                                    set_material_reflectance_tex, "Reflectance");
+    for (size_t i = 0; i < texture_mapping_count; i++) {
+        const TextureMapping* mapping = &texture_mappings[i];
+        if (AI_SUCCESS ==
+            aiGetMaterialTexture(ai_mat, mapping->ai_type, 0, &str, NULL, NULL, NULL, NULL, NULL,
+                                 NULL)) {
+            load_material_texture_async(loader, tex_pool, material, str.data, mapping->setter,
+                                        mapping->name);
+        }
     }
 
     return material;
