@@ -83,3 +83,78 @@ void set_camera_perspective(Camera* camera, float fov_radians, float near_clip, 
     camera->near_clip = near_clip;
     camera->far_clip = far_clip;
 }
+
+void orbit_camera(Camera* camera, float delta_theta, float delta_phi) {
+    if (!camera)
+        return;
+
+    camera->theta += delta_theta;
+    camera->phi += delta_phi;
+
+    // Clamp phi to avoid flipping at poles
+    float limit = GLM_PI_2f - 0.01f;
+    if (camera->phi > limit)
+        camera->phi = limit;
+    if (camera->phi < -limit)
+        camera->phi = -limit;
+
+    // Update position from spherical coordinates
+    float cos_phi = cosf(camera->phi);
+    camera->position[0] = camera->look_at[0] + camera->distance * cos_phi * sinf(camera->theta);
+    camera->position[1] = camera->look_at[1] + camera->distance * sinf(camera->phi);
+    camera->position[2] = camera->look_at[2] + camera->distance * cos_phi * cosf(camera->theta);
+}
+
+void pan_camera(Camera* camera, float delta_x, float delta_y) {
+    if (!camera)
+        return;
+
+    // Compute forward direction (look_at - position)
+    vec3 forward;
+    glm_vec3_sub(camera->look_at, camera->position, forward);
+    glm_vec3_normalize(forward);
+
+    // Compute right vector (forward x up)
+    vec3 right;
+    glm_vec3_cross(forward, camera->up_vector, right);
+    glm_vec3_normalize(right);
+
+    // Compute actual up vector (right x forward)
+    vec3 up;
+    glm_vec3_cross(right, forward, up);
+
+    // Move camera and target together
+    vec3 offset;
+    glm_vec3_scale(right, delta_x, offset);
+    glm_vec3_add(camera->position, offset, camera->position);
+    glm_vec3_add(camera->look_at, offset, camera->look_at);
+
+    glm_vec3_scale(up, delta_y, offset);
+    glm_vec3_add(camera->position, offset, camera->position);
+    glm_vec3_add(camera->look_at, offset, camera->look_at);
+}
+
+void zoom_camera(Camera* camera, float delta) {
+    if (!camera)
+        return;
+
+    camera->distance += delta * camera->zoom_speed;
+    if (camera->distance < 0.1f)
+        camera->distance = 0.1f;
+
+    // Recompute position from orbit parameters
+    orbit_camera(camera, 0.0f, 0.0f);
+}
+
+void compute_view_matrix(Camera* camera, mat4 view) {
+    if (!camera)
+        return;
+    glm_lookat(camera->position, camera->look_at, camera->up_vector, view);
+}
+
+void compute_projection_matrix(Camera* camera, mat4 projection) {
+    if (!camera)
+        return;
+    glm_perspective(camera->fov_radians, camera->aspect_ratio, camera->near_clip, camera->far_clip,
+                    projection);
+}

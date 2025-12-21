@@ -38,4 +38,13 @@ void set_camera_direction(Camera* camera, vec3 direction);
 void set_camera_up_vector(Camera* camera, vec3 up_vector);
 void set_camera_perspective(Camera* camera, float fov_radians, float near_clip, float far_clip);
 
+// Camera movement helpers
+void orbit_camera(Camera* camera, float delta_theta, float delta_phi);
+void pan_camera(Camera* camera, float delta_x, float delta_y);
+void zoom_camera(Camera* camera, float delta);
+
+// Matrix computation
+void compute_view_matrix(Camera* camera, mat4 view);
+void compute_projection_matrix(Camera* camera, mat4 projection);
+
 #endif // _CAMERA_H_
