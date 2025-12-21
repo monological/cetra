@@ -447,51 +447,132 @@ static void _engine_key_callback(GLFWwindow* window, int key, int scancode, int 
     Camera* camera = engine->camera;
 
     float cameraSpeed = 300.0f;
+    float orbit_step = 0.1f;
+    float max_theta = (float)M_PI_2 - 0.1f;
     vec3 new_position = {0.0f, 0.0f, 0.0f};
+    vec3 movement = {0.0f, 0.0f, 0.0f};
 
     if (action == GLFW_PRESS || action == GLFW_REPEAT) {
         vec3 forward, right;
         switch (key) {
             case GLFW_KEY_W:
-            case GLFW_KEY_UP:
-                // Move camera forward
                 glm_vec3_sub(camera->look_at, camera->position, forward);
                 glm_vec3_normalize(forward);
-                glm_vec3_scale(forward, cameraSpeed, forward);
-                glm_vec3_add(camera->position, forward, new_position);
+                glm_vec3_scale(forward, cameraSpeed, movement);
+                glm_vec3_add(camera->position, movement, new_position);
                 set_camera_position(camera, new_position);
+                glm_vec3_add(camera->look_at, movement, camera->look_at);
                 break;
 
             case GLFW_KEY_S:
-            case GLFW_KEY_DOWN:
-                // Move camera backward
                 glm_vec3_sub(camera->look_at, camera->position, forward);
                 glm_vec3_normalize(forward);
-                glm_vec3_scale(forward, cameraSpeed, forward);
-                glm_vec3_sub(camera->position, forward, new_position);
+                glm_vec3_scale(forward, cameraSpeed, movement);
+                glm_vec3_sub(camera->position, movement, new_position);
                 set_camera_position(camera, new_position);
+                glm_vec3_sub(camera->look_at, movement, camera->look_at);
                 break;
 
             case GLFW_KEY_A:
-            case GLFW_KEY_LEFT:
-                // Move camera left
                 glm_vec3_sub(camera->look_at, camera->position, forward);
                 glm_vec3_crossn(camera->up_vector, forward, right);
                 glm_vec3_normalize(right);
-                glm_vec3_scale(right, cameraSpeed, right);
-                glm_vec3_add(camera->position, right, new_position);
+                glm_vec3_scale(right, cameraSpeed, movement);
+                glm_vec3_add(camera->position, movement, new_position);
                 set_camera_position(camera, new_position);
+                glm_vec3_add(camera->look_at, movement, camera->look_at);
                 break;
 
             case GLFW_KEY_D:
-            case GLFW_KEY_RIGHT:
-                // Move camera right
                 glm_vec3_sub(camera->look_at, camera->position, forward);
                 glm_vec3_crossn(camera->up_vector, forward, right);
                 glm_vec3_normalize(right);
-                glm_vec3_scale(right, cameraSpeed, right);
-                glm_vec3_sub(camera->position, right, new_position);
+                glm_vec3_scale(right, cameraSpeed, movement);
+                glm_vec3_sub(camera->position, movement, new_position);
                 set_camera_position(camera, new_position);
+                glm_vec3_sub(camera->look_at, movement, camera->look_at);
+                break;
+
+            case GLFW_KEY_UP:
+                if (engine->camera_mode == CAMERA_MODE_ORBIT) {
+                    camera->theta += orbit_step;
+                    if (camera->theta > max_theta)
+                        camera->theta = max_theta;
+                    float cos_theta = cosf(camera->theta);
+                    vec3 offset = {camera->distance * cos_theta * cosf(camera->phi),
+                                   camera->distance * sinf(camera->theta),
+                                   camera->distance * cos_theta * sinf(camera->phi)};
+                    glm_vec3_add(camera->look_at, offset, new_position);
+                    set_camera_position(camera, new_position);
+                } else {
+                    glm_vec3_sub(camera->look_at, camera->position, forward);
+                    glm_vec3_normalize(forward);
+                    glm_vec3_scale(forward, cameraSpeed, movement);
+                    glm_vec3_add(camera->position, movement, new_position);
+                    set_camera_position(camera, new_position);
+                    glm_vec3_add(camera->look_at, movement, camera->look_at);
+                }
+                break;
+
+            case GLFW_KEY_DOWN:
+                if (engine->camera_mode == CAMERA_MODE_ORBIT) {
+                    camera->theta -= orbit_step;
+                    if (camera->theta < -max_theta)
+                        camera->theta = -max_theta;
+                    float cos_theta = cosf(camera->theta);
+                    vec3 offset = {camera->distance * cos_theta * cosf(camera->phi),
+                                   camera->distance * sinf(camera->theta),
+                                   camera->distance * cos_theta * sinf(camera->phi)};
+                    glm_vec3_add(camera->look_at, offset, new_position);
+                    set_camera_position(camera, new_position);
+                } else {
+                    glm_vec3_sub(camera->look_at, camera->position, forward);
+                    glm_vec3_normalize(forward);
+                    glm_vec3_scale(forward, cameraSpeed, movement);
+                    glm_vec3_sub(camera->position, movement, new_position);
+                    set_camera_position(camera, new_position);
+                    glm_vec3_sub(camera->look_at, movement, camera->look_at);
+                }
+                break;
+
+            case GLFW_KEY_LEFT:
+                if (engine->camera_mode == CAMERA_MODE_ORBIT) {
+                    camera->phi += orbit_step;
+                    float cos_theta = cosf(camera->theta);
+                    vec3 offset = {camera->distance * cos_theta * cosf(camera->phi),
+                                   camera->distance * sinf(camera->theta),
+                                   camera->distance * cos_theta * sinf(camera->phi)};
+                    glm_vec3_add(camera->look_at, offset, new_position);
+                    set_camera_position(camera, new_position);
+                } else {
+                    glm_vec3_sub(camera->look_at, camera->position, forward);
+                    glm_vec3_crossn(camera->up_vector, forward, right);
+                    glm_vec3_normalize(right);
+                    glm_vec3_scale(right, cameraSpeed, movement);
+                    glm_vec3_add(camera->position, movement, new_position);
+                    set_camera_position(camera, new_position);
+                    glm_vec3_add(camera->look_at, movement, camera->look_at);
+                }
+                break;
+
+            case GLFW_KEY_RIGHT:
+                if (engine->camera_mode == CAMERA_MODE_ORBIT) {
+                    camera->phi -= orbit_step;
+                    float cos_theta = cosf(camera->theta);
+                    vec3 offset = {camera->distance * cos_theta * cosf(camera->phi),
+                                   camera->distance * sinf(camera->theta),
+                                   camera->distance * cos_theta * sinf(camera->phi)};
+                    glm_vec3_add(camera->look_at, offset, new_position);
+                    set_camera_position(camera, new_position);
+                } else {
+                    glm_vec3_sub(camera->look_at, camera->position, forward);
+                    glm_vec3_crossn(camera->up_vector, forward, right);
+                    glm_vec3_normalize(right);
+                    glm_vec3_scale(right, cameraSpeed, movement);
+                    glm_vec3_sub(camera->position, movement, new_position);
+                    set_camera_position(camera, new_position);
+                    glm_vec3_sub(camera->look_at, movement, camera->look_at);
+                }
                 break;
         }
     }
@@ -740,90 +821,102 @@ void render_nuklear_gui(Engine* engine) {
     // Camera controls window (only if show_gui and camera exists)
     if (engine->show_gui && camera) {
         if (nk_begin(engine->nk_ctx, "Camera", nk_rect(15, 15, 250, 500),
-                     NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_SCALABLE | NK_WINDOW_MINIMIZABLE |
-                         NK_WINDOW_TITLE)) {
+                     NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_SCALABLE |
+                         NK_WINDOW_MINIMIZABLE | NK_WINDOW_TITLE)) {
 
-        // Button for toggling xyz
-        nk_layout_row_dynamic(engine->nk_ctx, 30, 2);
-        if (nk_button_label(engine->nk_ctx, "Show XYZ")) {
-            set_engine_show_xyz(engine, !engine->show_xyz);
-        }
-
-        // Button for toggling wireframe
-        if (nk_button_label(engine->nk_ctx, "Show Wireframe")) {
-            set_engine_show_wireframe(engine, !engine->show_wireframe);
-        }
-
-        // cam modes
-        nk_layout_row_dynamic(engine->nk_ctx, 30, 2);
-
-        // Radio button for CAMERA_MODE_FREE
-        if (nk_option_label(engine->nk_ctx, "Free Mode", engine->camera_mode == CAMERA_MODE_FREE)) {
-            engine->camera_mode = CAMERA_MODE_FREE;
-        }
-
-        // Radio button for CAMERA_MODE_ORBIT
-        if (nk_option_label(engine->nk_ctx, "Orbit Mode",
-                            engine->camera_mode == CAMERA_MODE_ORBIT)) {
-            engine->camera_mode = CAMERA_MODE_ORBIT;
-        }
-
-        // top margin
-        nk_layout_row_dynamic(engine->nk_ctx, 10, 1); // 10 pixels of vertical space
-        nk_spacing(engine->nk_ctx, 1);                // Creates a dummy widget for spacing
-
-        nk_layout_row_dynamic(engine->nk_ctx, 30, 1);
-        const char* render_modes[] = {
-            "PBR",        "Normals",         "World Pos",
-            "Tex Coords", "Tangent Space",   "Flat Color",
-            "Albedo",     "Simple Lighting", "Metallic and Roughness",
-        };
-        int selected_render_mode = engine->current_render_mode;
-        if (nk_combo_begin_label(engine->nk_ctx, render_modes[selected_render_mode],
-                                 nk_vec2(nk_widget_width(engine->nk_ctx), 200))) {
-            nk_layout_row_dynamic(engine->nk_ctx, 25, 1);
-            for (int i = 0; i < sizeof(render_modes) / sizeof(render_modes[0]); i++) {
-                if (nk_combo_item_label(engine->nk_ctx, render_modes[i], NK_TEXT_ALIGN_LEFT)) {
-                    selected_render_mode = i;
-                }
+            // Button for toggling xyz
+            nk_layout_row_dynamic(engine->nk_ctx, 30, 2);
+            if (nk_button_label(engine->nk_ctx, "Show XYZ")) {
+                set_engine_show_xyz(engine, !engine->show_xyz);
             }
-            nk_combo_end(engine->nk_ctx);
-        }
-        engine->current_render_mode = selected_render_mode;
 
-        // bot margin
-        nk_layout_row_dynamic(engine->nk_ctx, 10, 1); // 10 pixels of vertical space
-        nk_spacing(engine->nk_ctx, 1);                // Creates a dummy widget for spacing
+            // Button for toggling wireframe
+            if (nk_button_label(engine->nk_ctx, "Show Wireframe")) {
+                set_engine_show_wireframe(engine, !engine->show_wireframe);
+            }
 
-        // Camera properties
-        nk_layout_row_dynamic(engine->nk_ctx, 25, 1);
-        nk_property_float(engine->nk_ctx, "Theta:", 0.0f, &camera->theta, GLM_PI_2, 0.1f, 1);
-        nk_property_float(engine->nk_ctx, "Phi:", 0.0f, &camera->phi, GLM_PI_2, 0.1f, 1);
-        nk_property_float(engine->nk_ctx, "Distance:", 0.0f, &camera->distance, 3000.0f, 100.0f, 1);
-        nk_property_float(engine->nk_ctx, "Height:", -2000.0f, &camera->height, 2000.0f, 100.0f, 1);
-        nk_property_float(engine->nk_ctx, "Fov:", 0.0f, &camera->fov_radians, GLM_PI, 0.01f, 0.01f);
+            // cam modes
+            nk_layout_row_dynamic(engine->nk_ctx, 30, 2);
 
-        // LookAt Point properties
-        nk_layout_row_dynamic(engine->nk_ctx, 25, 1);
-        nk_property_float(engine->nk_ctx, "LookAt X:", -25.0f, &camera->look_at[0], 25.0f, 1.0f, 1);
-        nk_property_float(engine->nk_ctx, "LookAt Y:", -25.0f, &camera->look_at[1], 25.0f, 1.0f, 1);
-        nk_property_float(engine->nk_ctx, "LookAt Z:", -25.0f, &camera->look_at[2], 25.0f, 1.0f, 1);
+            // Radio button for CAMERA_MODE_FREE
+            if (nk_option_label(engine->nk_ctx, "Free Mode",
+                                engine->camera_mode == CAMERA_MODE_FREE)) {
+                engine->camera_mode = CAMERA_MODE_FREE;
+            }
 
-        // Up Vector properties
-        nk_layout_row_dynamic(engine->nk_ctx, 25, 1);
-        nk_property_float(engine->nk_ctx, "up X:", -25.0f, &camera->up_vector[0], 25.0f, 1.0f, 1);
-        nk_property_float(engine->nk_ctx, "up Y:", -25.0f, &camera->up_vector[1], 25.0f, 1.0f, 1);
-        nk_property_float(engine->nk_ctx, "up Z:", -25.0f, &camera->up_vector[2], 25.0f, 1.0f, 1);
+            // Radio button for CAMERA_MODE_ORBIT
+            if (nk_option_label(engine->nk_ctx, "Orbit Mode",
+                                engine->camera_mode == CAMERA_MODE_ORBIT)) {
+                engine->camera_mode = CAMERA_MODE_ORBIT;
+            }
 
-        // Additional camera control properties
-        nk_layout_row_dynamic(engine->nk_ctx, 25, 1);
-        nk_property_float(engine->nk_ctx, "Zoom:", 0.0f, &camera->zoom_speed, 2.0f, 0.01f, 1);
-        nk_property_float(engine->nk_ctx, "Orbit:", 0.0f, &camera->orbit_speed, 0.1f, 0.001f, 1);
-        nk_property_float(engine->nk_ctx, "Amplitude:", 0.0f, &camera->amplitude, 50.0f, 1.0f, 1);
-        nk_property_float(engine->nk_ctx, "Near Clip:", 5.0f, &camera->near_clip, 100.0f, 1.0f,
-                          1.0f);
-        nk_property_float(engine->nk_ctx, "Far Clip:", 0.1f, &camera->far_clip, 10000.0f, 100.0f,
-                          10.0f);
+            // top margin
+            nk_layout_row_dynamic(engine->nk_ctx, 10, 1); // 10 pixels of vertical space
+            nk_spacing(engine->nk_ctx, 1);                // Creates a dummy widget for spacing
+
+            nk_layout_row_dynamic(engine->nk_ctx, 30, 1);
+            const char* render_modes[] = {
+                "PBR",        "Normals",         "World Pos",
+                "Tex Coords", "Tangent Space",   "Flat Color",
+                "Albedo",     "Simple Lighting", "Metallic and Roughness",
+            };
+            int selected_render_mode = engine->current_render_mode;
+            if (nk_combo_begin_label(engine->nk_ctx, render_modes[selected_render_mode],
+                                     nk_vec2(nk_widget_width(engine->nk_ctx), 200))) {
+                nk_layout_row_dynamic(engine->nk_ctx, 25, 1);
+                for (int i = 0; i < sizeof(render_modes) / sizeof(render_modes[0]); i++) {
+                    if (nk_combo_item_label(engine->nk_ctx, render_modes[i], NK_TEXT_ALIGN_LEFT)) {
+                        selected_render_mode = i;
+                    }
+                }
+                nk_combo_end(engine->nk_ctx);
+            }
+            engine->current_render_mode = selected_render_mode;
+
+            // bot margin
+            nk_layout_row_dynamic(engine->nk_ctx, 10, 1); // 10 pixels of vertical space
+            nk_spacing(engine->nk_ctx, 1);                // Creates a dummy widget for spacing
+
+            // Camera properties
+            nk_layout_row_dynamic(engine->nk_ctx, 25, 1);
+            nk_property_float(engine->nk_ctx, "Theta:", 0.0f, &camera->theta, GLM_PI_2, 0.1f, 1);
+            nk_property_float(engine->nk_ctx, "Phi:", 0.0f, &camera->phi, GLM_PI_2, 0.1f, 1);
+            nk_property_float(engine->nk_ctx, "Distance:", 0.0f, &camera->distance, 3000.0f, 100.0f,
+                              1);
+            nk_property_float(engine->nk_ctx, "Height:", -2000.0f, &camera->height, 2000.0f, 100.0f,
+                              1);
+            nk_property_float(engine->nk_ctx, "Fov:", 0.0f, &camera->fov_radians, GLM_PI, 0.01f,
+                              0.01f);
+
+            // LookAt Point properties
+            nk_layout_row_dynamic(engine->nk_ctx, 25, 1);
+            nk_property_float(engine->nk_ctx, "LookAt X:", -25.0f, &camera->look_at[0], 25.0f, 1.0f,
+                              1);
+            nk_property_float(engine->nk_ctx, "LookAt Y:", -25.0f, &camera->look_at[1], 25.0f, 1.0f,
+                              1);
+            nk_property_float(engine->nk_ctx, "LookAt Z:", -25.0f, &camera->look_at[2], 25.0f, 1.0f,
+                              1);
+
+            // Up Vector properties
+            nk_layout_row_dynamic(engine->nk_ctx, 25, 1);
+            nk_property_float(engine->nk_ctx, "up X:", -25.0f, &camera->up_vector[0], 25.0f, 1.0f,
+                              1);
+            nk_property_float(engine->nk_ctx, "up Y:", -25.0f, &camera->up_vector[1], 25.0f, 1.0f,
+                              1);
+            nk_property_float(engine->nk_ctx, "up Z:", -25.0f, &camera->up_vector[2], 25.0f, 1.0f,
+                              1);
+
+            // Additional camera control properties
+            nk_layout_row_dynamic(engine->nk_ctx, 25, 1);
+            nk_property_float(engine->nk_ctx, "Zoom:", 0.0f, &camera->zoom_speed, 2.0f, 0.01f, 1);
+            nk_property_float(engine->nk_ctx, "Orbit:", 0.0f, &camera->orbit_speed, 0.1f, 0.001f,
+                              1);
+            nk_property_float(engine->nk_ctx, "Amplitude:", 0.0f, &camera->amplitude, 50.0f, 1.0f,
+                              1);
+            nk_property_float(engine->nk_ctx, "Near Clip:", 5.0f, &camera->near_clip, 100.0f, 1.0f,
+                              1.0f);
+            nk_property_float(engine->nk_ctx, "Far Clip:", 0.1f, &camera->far_clip, 10000.0f,
+                              100.0f, 10.0f);
         }
         nk_end(engine->nk_ctx);
     }
@@ -834,7 +927,7 @@ void render_nuklear_gui(Engine* engine) {
         struct nk_color transparent = nk_rgba(0, 0, 0, 0);
         nk_style_push_color(engine->nk_ctx, &engine->nk_ctx->style.window.background, transparent);
         nk_style_push_style_item(engine->nk_ctx, &engine->nk_ctx->style.window.fixed_background,
-                                  nk_style_item_color(transparent));
+                                 nk_style_item_color(transparent));
 
         // Position in top-right, using window coords
         struct nk_rect fps_rect = nk_rect(engine->win_width - 100, 10, 90, 25);
@@ -844,8 +937,8 @@ void render_nuklear_gui(Engine* engine) {
             char fps_text[16];
             snprintf(fps_text, sizeof(fps_text), "%.1f FPS", engine->fps);
             nk_layout_row_dynamic(engine->nk_ctx, 20, 1);
-            nk_text_colored(engine->nk_ctx, fps_text, strlen(fps_text),
-                           NK_TEXT_RIGHT, nk_rgb(255, 255, 255));
+            nk_text_colored(engine->nk_ctx, fps_text, strlen(fps_text), NK_TEXT_RIGHT,
+                            nk_rgb(255, 255, 255));
         }
         nk_end(engine->nk_ctx);
 
