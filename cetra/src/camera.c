@@ -64,6 +64,12 @@ void set_camera_look_at(Camera* camera, vec3 look_at) {
     glm_vec3_copy(look_at, camera->look_at);
 }
 
+void set_camera_direction(Camera* camera, vec3 direction) {
+    if (!camera)
+        return;
+    glm_vec3_add(camera->position, direction, camera->look_at);
+}
+
 void set_camera_up_vector(Camera* camera, vec3 up_vector) {
     if (!camera)
         return;
