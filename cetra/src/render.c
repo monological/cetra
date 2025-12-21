@@ -154,6 +154,24 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
         uniform_set_int(u, "reflectanceTex", 9);
     }
 
+    if (material->microsurface_tex) {
+        glActiveTexture(GL_TEXTURE10);
+        glBindTexture(GL_TEXTURE_2D, material->microsurface_tex->id);
+        uniform_set_int(u, "microsurfaceTex", 10);
+    }
+
+    if (material->anisotropy_tex) {
+        glActiveTexture(GL_TEXTURE11);
+        glBindTexture(GL_TEXTURE_2D, material->anisotropy_tex->id);
+        uniform_set_int(u, "anisotropyTex", 11);
+    }
+
+    if (material->subsurface_scattering_tex) {
+        glActiveTexture(GL_TEXTURE12);
+        glBindTexture(GL_TEXTURE_2D, material->subsurface_scattering_tex->id);
+        uniform_set_int(u, "subsurfaceTex", 12);
+    }
+
     uniform_set_int(u, "albedoTexExists", material->albedo_tex ? 1 : 0);
     uniform_set_int(u, "normalTexExists", material->normal_tex ? 1 : 0);
     uniform_set_int(u, "roughnessTexExists", material->roughness_tex ? 1 : 0);
@@ -164,6 +182,9 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
     uniform_set_int(u, "opacityTexExists", material->opacity_tex ? 1 : 0);
     uniform_set_int(u, "sheenTexExists", material->sheen_tex ? 1 : 0);
     uniform_set_int(u, "reflectanceTexExists", material->reflectance_tex ? 1 : 0);
+    uniform_set_int(u, "microsurfaceTexExists", material->microsurface_tex ? 1 : 0);
+    uniform_set_int(u, "anisotropyTexExists", material->anisotropy_tex ? 1 : 0);
+    uniform_set_int(u, "subsurfaceTexExists", material->subsurface_scattering_tex ? 1 : 0);
 }
 
 static void _update_camera_uniforms(ShaderProgram* program, Camera* camera) {

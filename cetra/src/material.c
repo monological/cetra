@@ -169,3 +169,27 @@ void set_material_reflectance_tex(Material* material, Texture* texture) {
         texture_release(material->reflectance_tex);
     material->reflectance_tex = texture_retain(texture);
 }
+
+void set_material_microsurface_tex(Material* material, Texture* texture) {
+    if (!material)
+        return;
+    if (material->microsurface_tex)
+        texture_release(material->microsurface_tex);
+    material->microsurface_tex = texture_retain(texture);
+}
+
+void set_material_anisotropy_tex(Material* material, Texture* texture) {
+    if (!material)
+        return;
+    if (material->anisotropy_tex)
+        texture_release(material->anisotropy_tex);
+    material->anisotropy_tex = texture_retain(texture);
+}
+
+void set_material_subsurface_scattering_tex(Material* material, Texture* texture) {
+    if (!material)
+        return;
+    if (material->subsurface_scattering_tex)
+        texture_release(material->subsurface_scattering_tex);
+    material->subsurface_scattering_tex = texture_retain(texture);
+}

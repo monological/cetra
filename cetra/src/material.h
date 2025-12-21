@@ -47,5 +47,8 @@ void set_material_height_tex(Material* material, Texture* texture);
 void set_material_opacity_tex(Material* material, Texture* texture);
 void set_material_sheen_tex(Material* material, Texture* texture);
 void set_material_reflectance_tex(Material* material, Texture* texture);
+void set_material_microsurface_tex(Material* material, Texture* texture);
+void set_material_anisotropy_tex(Material* material, Texture* texture);
+void set_material_subsurface_scattering_tex(Material* material, Texture* texture);
 
 #endif // _MATERIAL_H_

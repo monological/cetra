@@ -55,6 +55,9 @@ uniform sampler2D heightTex;
 uniform sampler2D opacityTex;
 uniform sampler2D sheenTex;
 uniform sampler2D reflectanceTex;
+uniform sampler2D microsurfaceTex;
+uniform sampler2D anisotropyTex;
+uniform sampler2D subsurfaceTex;
 
 uniform int albedoTexExists;
 uniform int normalTexExists;
@@ -66,6 +69,9 @@ uniform int heightTexExists;
 uniform int opacityTexExists;
 uniform int sheenTexExists;
 uniform int reflectanceTexExists;
+uniform int microsurfaceTexExists;
+uniform int anisotropyTexExists;
+uniform int subsurfaceTexExists;
 
 const float PI = 3.14159265359;
 
@@ -95,6 +101,37 @@ float distributionGGX(vec3 N, vec3 H, float roughness) {
     denom = PI * denom * denom;
 
     return num / denom;
+}
+
+// Anisotropic GGX distribution (for brushed metal, hair, etc.)
+float distributionGGXAnisotropic(vec3 N, vec3 H, vec3 T, vec3 B, float roughness, float anisotropy) {
+    float at = max(roughness * (1.0 + anisotropy), 0.001);
+    float ab = max(roughness * (1.0 - anisotropy), 0.001);
+
+    float ToH = dot(T, H);
+    float BoH = dot(B, H);
+    float NoH = max(dot(N, H), 0.0);
+
+    float a2 = at * ab;
+    vec3 v = vec3(ab * ToH, at * BoH, a2 * NoH);
+    float v2 = dot(v, v);
+    float w2 = a2 / v2;
+
+    return a2 * w2 * w2 / PI;
+}
+
+// Subsurface scattering approximation using wrap lighting
+vec3 subsurfaceScattering(vec3 N, vec3 L, vec3 V, vec3 albedo, float thickness, vec3 lightColor) {
+    // Wrap lighting for diffuse transmission
+    float wrap = 0.5;
+    float NdotL = dot(N, L);
+    float wrapDiffuse = max(0.0, (NdotL + wrap) / (1.0 + wrap));
+
+    // Back-lighting transmission
+    float transmittance = exp(-thickness * 2.0);
+    vec3 backLight = albedo * lightColor * transmittance * max(0.0, -NdotL);
+
+    return backLight * 0.5;
 }
 
 // Smith's Schlick-GGX geometry function for a single direction
@@ -167,6 +204,24 @@ void main() {
         opacity = texture(opacityTex, TexCoords).r;
     }
 
+    // Microsurface detail - modulates roughness for fine surface detail
+    if (microsurfaceTexExists > 0) {
+        float detail = texture(microsurfaceTex, TexCoords).r;
+        roughnessMap = clamp(roughnessMap * (0.5 + detail), 0.04, 1.0);
+    }
+
+    // Anisotropy - for brushed metal, hair effects
+    float anisotropyMap = 0.0;
+    if (anisotropyTexExists > 0) {
+        anisotropyMap = texture(anisotropyTex, TexCoords).r;
+    }
+
+    // Subsurface scattering thickness map
+    float sssThickness = 1.0;
+    if (subsurfaceTexExists > 0) {
+        sssThickness = texture(subsurfaceTex, TexCoords).r;
+    }
+
     // Calculate view direction
     vec3 V = normalize(camPos - FragPos);
 
@@ -231,6 +286,10 @@ void main() {
     // Accumulate lighting from all lights
     vec3 Lo = vec3(0.0);
 
+    // Get tangent and bitangent for anisotropy
+    vec3 T = normalize(TBN[0]);
+    vec3 B = normalize(TBN[1]);
+
     for (int i = 0; i < numLights; i++) {
         // Calculate per-light radiance
         vec3 L = normalize(lights[i].position - FragPos);
@@ -241,8 +300,13 @@ void main() {
                                                   lights[i].linear, lights[i].quadratic);
         vec3 radiance = lights[i].color * lights[i].intensity * attenuation;
 
-        // Cook-Torrance BRDF
-        float NDF = distributionGGX(N, H, roughnessMap);
+        // Cook-Torrance BRDF with optional anisotropy
+        float NDF;
+        if (anisotropyTexExists > 0 && anisotropyMap > 0.01) {
+            NDF = distributionGGXAnisotropic(N, H, T, B, roughnessMap, anisotropyMap);
+        } else {
+            NDF = distributionGGX(N, H, roughnessMap);
+        }
         float G = geometrySmith(N, V, L, roughnessMap);
         vec3 F = fresnelSchlick(max(dot(H, V), 0.0), F0);
 
@@ -262,6 +326,11 @@ void main() {
 
         // Add this light's contribution
         Lo += (kD * albedoMap / PI + specular) * radiance * NdotL;
+
+        // Add subsurface scattering contribution
+        if (subsurfaceTexExists > 0 && sssThickness < 0.99) {
+            Lo += subsurfaceScattering(N, L, V, albedoMap, sssThickness, lights[i].color * lights[i].intensity * attenuation);
+        }
     }
 
     // Ambient lighting (simplified IBL approximation)
