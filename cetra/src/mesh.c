@@ -13,6 +13,7 @@
 #include "ext/log.h"
 #include "material.h"
 #include "mesh.h"
+#include "util.h"
 
 Mesh* create_mesh() {
     Mesh* mesh = malloc(sizeof(Mesh));
@@ -183,6 +184,8 @@ void upload_mesh_buffers_to_gpu(Mesh* mesh) {
         glVertexAttribPointer(GL_ATTR_TEXCOORD, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), (void*)0);
         glEnableVertexAttribArray(GL_ATTR_TEXCOORD);
     }
+
+    check_gl_error("mesh buffer upload");
 
     // Unbind vao
     glBindVertexArray(0);

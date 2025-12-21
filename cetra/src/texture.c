@@ -263,7 +263,9 @@ Texture* load_texture_path_into_pool(TexturePool* pool, const char* filepath) {
     // Upload texture data
     glTexImage2D(GL_TEXTURE_2D, 0, internal_format, width, height, 0, data_format, GL_UNSIGNED_BYTE,
                  data);
+    check_gl_error("texture upload");
     glGenerateMipmap(GL_TEXTURE_2D);
+    check_gl_error("mipmap generation");
 
     // Clean up
     stbi_image_free(data);
