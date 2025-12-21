@@ -252,6 +252,9 @@ Texture* load_texture_path_into_pool(TexturePool* pool, const char* filepath) {
     if (nrChannels == 1) {
         internal_format = GL_RED;
         data_format = GL_RED;
+    } else if (nrChannels == 2) {
+        internal_format = GL_RG;
+        data_format = GL_RG;
     } else if (nrChannels == 3) {
         internal_format = GL_SRGB;
         data_format = GL_RGB;
