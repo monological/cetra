@@ -532,17 +532,15 @@ static void _engine_key_callback(GLFWwindow* window, int key, int scancode, int 
                         glm_vec3_add(camera->look_at, to_camera, new_position);
                         set_camera_position(camera, new_position);
                     }
-                } else {
+                } else if (engine->camera_mode == CAMERA_MODE_ORBIT) {
                     // Orbit - tilt up
-                    camera->distance = dist;
-                    camera->theta = asinf(to_camera[1] / dist);
-                    camera->phi = atan2f(to_camera[2], to_camera[0]);
                     camera->theta += orbit_step;
                     if (camera->theta > max_theta)
                         camera->theta = max_theta;
                     float cos_theta = cosf(camera->theta);
-                    vec3 offset = {dist * cos_theta * cosf(camera->phi), dist * sinf(camera->theta),
-                                   dist * cos_theta * sinf(camera->phi)};
+                    vec3 offset = {camera->distance * cos_theta * cosf(camera->phi),
+                                   camera->distance * sinf(camera->theta),
+                                   camera->distance * cos_theta * sinf(camera->phi)};
                     glm_vec3_add(camera->look_at, offset, new_position);
                     set_camera_position(camera, new_position);
                 }
@@ -570,17 +568,15 @@ static void _engine_key_callback(GLFWwindow* window, int key, int scancode, int 
                     glm_vec3_scale(to_camera, dist + zoom_amount, to_camera);
                     glm_vec3_add(camera->look_at, to_camera, new_position);
                     set_camera_position(camera, new_position);
-                } else {
+                } else if (engine->camera_mode == CAMERA_MODE_ORBIT) {
                     // Orbit - tilt down
-                    camera->distance = dist;
-                    camera->theta = asinf(to_camera[1] / dist);
-                    camera->phi = atan2f(to_camera[2], to_camera[0]);
                     camera->theta -= orbit_step;
                     if (camera->theta < -max_theta)
                         camera->theta = -max_theta;
                     float cos_theta = cosf(camera->theta);
-                    vec3 offset = {dist * cos_theta * cosf(camera->phi), dist * sinf(camera->theta),
-                                   dist * cos_theta * sinf(camera->phi)};
+                    vec3 offset = {camera->distance * cos_theta * cosf(camera->phi),
+                                   camera->distance * sinf(camera->theta),
+                                   camera->distance * cos_theta * sinf(camera->phi)};
                     glm_vec3_add(camera->look_at, offset, new_position);
                     set_camera_position(camera, new_position);
                 }
