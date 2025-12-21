@@ -37,12 +37,16 @@
  */
 const unsigned int HEIGHT = 1080;
 const unsigned int WIDTH = 1920;
-const float ROTATE_SPEED = 0.4f; // Speed of rotation
-const float ROTATION_SENSITIVITY = 0.005f;
 const float MIN_DIST = 2000.0f;
 const float MAX_DIST = 3000.0f;
-const float CAM_ANGULAR_SPEED = 0.5f; // Adjust this value as needed
+const float CAM_ANGULAR_SPEED = 0.5f;
+const float ORBIT_SENSITIVITY = 0.002f;
 
+/*
+ * Orbit state - stored at drag start
+ */
+static float orbit_start_phi = 0.0f;
+static float orbit_start_theta = 0.0f;
 
 /*
  * Callbacks
@@ -56,10 +60,19 @@ void cursor_position_callback(Engine *engine, double xpos, double ypos) {
 }
 
 void mouse_button_callback(Engine *engine, int button, int action, int mods) {
-    if(engine->input.is_dragging){
-        printf("dragging start %i %f %f\n", engine->input.is_dragging, engine->input.drag_fb_x, engine->input.drag_fb_y);
-    }else{
-        printf("dragging stop  %i %f %f\n", engine->input.is_dragging, engine->input.drag_fb_x, engine->input.drag_fb_y);
+    if(engine->input.is_dragging && engine->camera){
+        Camera *camera = engine->camera;
+
+        // Calculate current phi/theta from camera's actual position
+        vec3 dir;
+        glm_vec3_sub(camera->position, camera->look_at, dir);
+        float dist = glm_vec3_norm(dir);
+
+        if (dist > 0.001f) {
+            orbit_start_theta = asinf(dir[1] / dist);
+            orbit_start_phi = atan2f(dir[2], dir[0]);
+            camera->distance = dist;
+        }
     }
 }
 
@@ -78,7 +91,7 @@ void render_scene_callback(Engine* engine, Scene* current_scene){
     if(!camera) return;
 
     float time_value = glfwGetTime();
-    
+
     Transform transform = {
         .position = {0.0f, -80.0f, 0.0f},
         .rotation = {0.0f, 0.0f, 0.0f},
@@ -87,30 +100,55 @@ void render_scene_callback(Engine* engine, Scene* current_scene){
 
     if(engine->camera_mode == CAMERA_MODE_ORBIT){
         if (!engine->input.is_dragging) {
-            camera->amplitude = (MAX_DIST - MIN_DIST) / 2.0f; // Half the range of motion
-            float midPoint = MIN_DIST + camera->amplitude; // Middle point of the motion
-            camera->distance = midPoint + camera->amplitude * sin(time_value * CAM_ANGULAR_SPEED);
-            camera->phi += camera->orbit_speed; // Rotate around the center
+            // Auto-orbit animation
+            camera->amplitude = (MAX_DIST - MIN_DIST) / 2.0f;
+            float midPoint = MIN_DIST + camera->amplitude;
+            camera->distance = midPoint + camera->amplitude * sinf(time_value * CAM_ANGULAR_SPEED);
+            camera->phi += camera->orbit_speed;
 
-            vec3 new_camera_position = {
-                cos(camera->phi) * camera->distance * cos(camera->theta),
-                camera->height,
-                sin(camera->phi) * camera->distance * cos(camera->theta)
+            // Use spherical coordinates for consistency
+            float cos_theta = cosf(camera->theta);
+            vec3 offset = {
+                camera->distance * cos_theta * cosf(camera->phi),
+                camera->distance * sinf(camera->theta),
+                camera->distance * cos_theta * sinf(camera->phi)
             };
+
+            vec3 new_camera_position;
+            glm_vec3_add(camera->look_at, offset, new_camera_position);
 
             set_camera_position(camera, new_camera_position);
             update_engine_camera_lookat(engine);
             update_engine_camera_perspective(engine);
 
         } else {
-            transform.position[0] = 0.0f;
-            transform.position[1] = -200.0f;
-            transform.position[2] = 0.0f;
-            transform.rotation[0] = engine->input.drag_fb_y * ROTATION_SENSITIVITY;
-            transform.rotation[1] = engine->input.drag_fb_x * ROTATION_SENSITIVITY;
-            transform.rotation[2] = 0.0f;
+            // Manual orbit - spherical coordinates around look_at point
+            // Horizontal drag rotates around Y axis (phi)
+            // Vertical drag tilts up/down (theta)
+            camera->phi = orbit_start_phi - engine->input.drag_fb_x * ORBIT_SENSITIVITY;
+            camera->theta = orbit_start_theta + engine->input.drag_fb_y * ORBIT_SENSITIVITY;
+
+            // Clamp theta to avoid gimbal lock (stay within ~85 degrees of horizon)
+            float max_theta = (float)M_PI_2 - 0.1f;
+            if (camera->theta > max_theta) camera->theta = max_theta;
+            if (camera->theta < -max_theta) camera->theta = -max_theta;
+
+            // Calculate camera position on sphere around look_at point
+            float cos_theta = cosf(camera->theta);
+            vec3 offset = {
+                camera->distance * cos_theta * cosf(camera->phi),
+                camera->distance * sinf(camera->theta),
+                camera->distance * cos_theta * sinf(camera->phi)
+            };
+
+            vec3 new_camera_position;
+            glm_vec3_add(camera->look_at, offset, new_camera_position);
+
+            set_camera_position(camera, new_camera_position);
+            update_engine_camera_lookat(engine);
+            update_engine_camera_perspective(engine);
         }
-    }else if(engine->camera_mode == CAMERA_MODE_FREE){
+    } else if(engine->camera_mode == CAMERA_MODE_FREE){
         update_engine_camera_lookat(engine);
         update_engine_camera_perspective(engine);
     }

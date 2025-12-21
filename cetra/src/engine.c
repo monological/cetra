@@ -372,11 +372,11 @@ static void _engine_cursor_position_callback(GLFWwindow* window, double xpos, do
     ypos = (1.0 - (ypos / engine->win_height)) * engine->fb_height;
 
     if (engine->input.is_dragging) {
-        // Calculate per-frame delta (not accumulated)
-        engine->input.drag_fb_x = xpos - engine->input.prev_fb_x;
-        engine->input.drag_fb_y = ypos - engine->input.prev_fb_y;
+        // Calculate total offset from drag start position
+        engine->input.drag_fb_x = xpos - engine->input.center_fb_x;
+        engine->input.drag_fb_y = ypos - engine->input.center_fb_y;
 
-        // Update previous position for next frame
+        // Update previous position for next frame (for per-frame delta if needed)
         engine->input.prev_fb_x = xpos;
         engine->input.prev_fb_y = ypos;
     }
