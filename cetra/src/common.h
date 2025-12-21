@@ -25,12 +25,15 @@
 #define CETRA_BLACK_COLOR   ((vec3){0.0f, 0.0f, 0.0f})
 
 typedef enum {
-    RENDER_MODE_PBR,           // Regular PBR Rendering
-    RENDER_MODE_NORMALS,       // Normals Visualization
-    RENDER_MODE_WORLD_POS,     // World Position Visualization
-    RENDER_MODE_TEX_COORDS,    // Texture Coordinates Visualization
-    RENDER_MODE_TANGENT_SPACE, // Tangent Space Visualization
-    RENDER_MODE_FLAT_COLOR     // Flat Color Visualization
+    RENDER_MODE_PBR,              // Regular PBR Rendering
+    RENDER_MODE_NORMALS,          // Normals Visualization
+    RENDER_MODE_WORLD_POS,        // World Position Visualization
+    RENDER_MODE_TEX_COORDS,       // Texture Coordinates Visualization
+    RENDER_MODE_TANGENT_SPACE,    // Tangent Space Visualization
+    RENDER_MODE_FLAT_COLOR,       // Flat Color Visualization
+    RENDER_MODE_ALBEDO,           // Albedo Only
+    RENDER_MODE_SIMPLE_LIGHTING,  // Simple Diffuse Lighting
+    RENDER_MODE_METALLIC_ROUGH    // Metallic and Roughness Visualization
 } RenderMode;
 
 // Axis vertices: 6 vertices, 2 for each line (origin and end)

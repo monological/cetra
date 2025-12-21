@@ -170,6 +170,59 @@ void main() {
     // Calculate view direction
     vec3 V = normalize(camPos - FragPos);
 
+    // Render mode handling
+    if (renderMode == 1) {
+        // Normals Visualization
+        vec3 color = normalize(Normal) * 0.5 + 0.5;
+        FragColor = vec4(color, 1.0);
+        return;
+    } else if (renderMode == 2) {
+        // World Position Visualization
+        vec3 color = fract(WorldPos * 0.01);
+        FragColor = vec4(color, 1.0);
+        return;
+    } else if (renderMode == 3) {
+        // Texture Coordinates Visualization
+        FragColor = vec4(TexCoords, 0.0, 1.0);
+        return;
+    } else if (renderMode == 4) {
+        // Tangent Space Visualization
+        vec3 tangent = normalize(TBN[0]) * 0.5 + 0.5;
+        FragColor = vec4(tangent, 1.0);
+        return;
+    } else if (renderMode == 5) {
+        // Flat Color
+        FragColor = vec4(1.0, 0.5, 0.2, 1.0);
+        return;
+    } else if (renderMode == 6) {
+        // Albedo Only
+        vec3 color = linearToSRGB(albedoMap);
+        FragColor = vec4(color, opacity);
+        return;
+    } else if (renderMode == 7) {
+        // Simple Diffuse Lighting
+        vec3 Lo = vec3(0.0);
+        for (int i = 0; i < numLights; i++) {
+            vec3 L = normalize(lights[i].position - FragPos);
+            float distance = length(lights[i].position - FragPos);
+            float attenuation = calculateAttenuation(distance, lights[i].constant,
+                                                      lights[i].linear, lights[i].quadratic);
+            float NdotL = max(dot(N, L), 0.0);
+            Lo += albedoMap * lights[i].color * lights[i].intensity * attenuation * NdotL;
+        }
+        vec3 color = Lo + vec3(0.03) * albedoMap;
+        color = color / (color + vec3(1.0));
+        color = linearToSRGB(color);
+        FragColor = vec4(color, opacity);
+        return;
+    } else if (renderMode == 8) {
+        // Metallic and Roughness Visualization
+        FragColor = vec4(metallicMap, roughnessMap, 0.0, 1.0);
+        return;
+    }
+
+    // renderMode == 0: Full PBR
+
     // Calculate F0 (surface reflection at zero incidence)
     // Dielectrics use 0.04, metals use albedo color
     vec3 F0 = vec3(0.04);
