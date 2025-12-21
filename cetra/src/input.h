@@ -9,6 +9,7 @@ struct SceneNode;
 
 typedef struct InputState {
     bool is_dragging;
+    bool shift_held;
     float center_fb_x;
     float center_fb_y;
     float prev_fb_x;

@@ -7,6 +7,7 @@ void init_input_state(InputState* state) {
         return;
 
     state->is_dragging = false;
+    state->shift_held = false;
     state->center_fb_x = 0.0f;
     state->center_fb_y = 0.0f;
     state->prev_fb_x = 0.0f;
