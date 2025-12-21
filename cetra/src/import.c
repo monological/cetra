@@ -45,7 +45,6 @@ Material* process_ai_material(struct aiMaterial* ai_mat, TexturePool* tex_pool) 
         material->albedo[2] = 0.1;
     }
 
-    /*
     ai_real metallic, roughness;
     aiReturn result;
 
@@ -61,10 +60,7 @@ Material* process_ai_material(struct aiMaterial* ai_mat, TexturePool* tex_pool) 
         material->roughness = roughness;
     } else {
         material->roughness = 0.5;
-    }*/
-
-    material->metallic = 0.1;
-    material->roughness = 0.1;
+    }
 
     // Load Diffuse Texture
     if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_DIFFUSE, 0, &str, NULL, NULL, NULL,
@@ -241,8 +237,22 @@ Material* process_ai_material_async(struct aiMaterial* ai_mat, TexturePool* tex_
         material->albedo[2] = 0.1;
     }
 
-    material->metallic = 0.1;
-    material->roughness = 0.1;
+    ai_real metallic, roughness;
+    aiReturn result;
+
+    result = aiGetMaterialFloat(ai_mat, AI_MATKEY_METALLIC_FACTOR, &metallic);
+    if (result == AI_SUCCESS) {
+        material->metallic = metallic;
+    } else {
+        material->metallic = 0.5;
+    }
+
+    result = aiGetMaterialFloat(ai_mat, AI_MATKEY_ROUGHNESS_FACTOR, &roughness);
+    if (result == AI_SUCCESS) {
+        material->roughness = roughness;
+    } else {
+        material->roughness = 0.5;
+    }
 
     // Load textures asynchronously
     if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_DIFFUSE, 0, &str, NULL, NULL, NULL,
