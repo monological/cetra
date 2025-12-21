@@ -22,6 +22,7 @@
 #include "util.h"
 #include "texture.h"
 #include "material.h"
+#include "async_loader.h"
 
 Material* process_ai_material(struct aiMaterial* ai_mat, TexturePool* tex_pool) {
     if (!ai_mat || !tex_pool)
@@ -181,6 +182,127 @@ Material* process_ai_material(struct aiMaterial* ai_mat, TexturePool* tex_pool) 
         } else {
             log_warn("Failed to load reflectance texture '%s'", str.data);
         }
+    }
+
+    return material;
+}
+
+/*
+ * Async texture load callback context
+ */
+typedef struct AsyncTexCallback {
+    Material* material;
+    void (*setter)(Material*, Texture*);
+    const char* tex_type;
+} AsyncTexCallback;
+
+static void async_tex_callback(Texture* tex, void* user_data) {
+    AsyncTexCallback* ctx = (AsyncTexCallback*)user_data;
+    if (tex && ctx->material && ctx->setter) {
+        ctx->setter(ctx->material, tex);
+        log_info("%s texture loaded async: %s", ctx->tex_type, tex->filepath);
+    }
+    free(ctx);
+}
+
+static void load_material_texture_async(AsyncLoader* loader, TexturePool* tex_pool, Material* mat,
+                                        const char* filepath, void (*setter)(Material*, Texture*),
+                                        const char* tex_type) {
+    AsyncTexCallback* ctx = malloc(sizeof(AsyncTexCallback));
+    if (!ctx) {
+        log_error("Failed to allocate AsyncTexCallback");
+        return;
+    }
+    ctx->material = mat;
+    ctx->setter = setter;
+    ctx->tex_type = tex_type;
+    load_texture_async(loader, tex_pool, filepath, async_tex_callback, ctx);
+}
+
+Material* process_ai_material_async(struct aiMaterial* ai_mat, TexturePool* tex_pool,
+                                    AsyncLoader* loader) {
+    if (!ai_mat || !tex_pool || !loader) {
+        return NULL;
+    }
+
+    Material* material = create_material();
+
+    struct aiColor4D color;
+    struct aiString str;
+
+    // Load Albedo/Base Color
+    if (AI_SUCCESS == aiGetMaterialColor(ai_mat, AI_MATKEY_COLOR_DIFFUSE, &color)) {
+        material->albedo[0] = color.r;
+        material->albedo[1] = color.g;
+        material->albedo[2] = color.b;
+    } else {
+        material->albedo[0] = 0.1;
+        material->albedo[1] = 0.1;
+        material->albedo[2] = 0.1;
+    }
+
+    material->metallic = 0.1;
+    material->roughness = 0.1;
+
+    // Load textures asynchronously
+    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_DIFFUSE, 0, &str, NULL, NULL, NULL,
+                                           NULL, NULL, NULL)) {
+        load_material_texture_async(loader, tex_pool, material, str.data, set_material_albedo_tex,
+                                    "Diffuse");
+    }
+
+    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_NORMALS, 0, &str, NULL, NULL, NULL,
+                                           NULL, NULL, NULL)) {
+        load_material_texture_async(loader, tex_pool, material, str.data, set_material_normal_tex,
+                                    "Normal");
+    }
+
+    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_METALNESS, 0, &str, NULL, NULL,
+                                           NULL, NULL, NULL, NULL)) {
+        load_material_texture_async(loader, tex_pool, material, str.data,
+                                    set_material_metalness_tex, "Metalness");
+    }
+
+    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_DIFFUSE_ROUGHNESS, 0, &str, NULL,
+                                           NULL, NULL, NULL, NULL, NULL)) {
+        load_material_texture_async(loader, tex_pool, material, str.data,
+                                    set_material_roughness_tex, "Roughness");
+    }
+
+    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_AMBIENT_OCCLUSION, 0, &str, NULL,
+                                           NULL, NULL, NULL, NULL, NULL)) {
+        load_material_texture_async(loader, tex_pool, material, str.data,
+                                    set_material_ambient_occlusion_tex, "AO");
+    }
+
+    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_EMISSIVE, 0, &str, NULL, NULL,
+                                           NULL, NULL, NULL, NULL)) {
+        load_material_texture_async(loader, tex_pool, material, str.data, set_material_emissive_tex,
+                                    "Emissive");
+    }
+
+    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_HEIGHT, 0, &str, NULL, NULL, NULL,
+                                           NULL, NULL, NULL)) {
+        load_material_texture_async(loader, tex_pool, material, str.data, set_material_height_tex,
+                                    "Height");
+    }
+
+    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_OPACITY, 0, &str, NULL, NULL, NULL,
+                                           NULL, NULL, NULL)) {
+        load_material_texture_async(loader, tex_pool, material, str.data, set_material_opacity_tex,
+                                    "Opacity");
+    }
+
+    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_SHEEN, 0, &str, NULL, NULL, NULL,
+                                           NULL, NULL, NULL)) {
+        load_material_texture_async(loader, tex_pool, material, str.data, set_material_sheen_tex,
+                                    "Sheen");
+    }
+
+    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_REFLECTION, 0, &str, NULL, NULL,
+                                           NULL, NULL, NULL, NULL)) {
+        load_material_texture_async(loader, tex_pool, material, str.data,
+                                    set_material_reflectance_tex, "Reflectance");
     }
 
     return material;
@@ -453,6 +575,101 @@ Scene* create_scene_from_fbx_path(const char* path, const char* texture_director
 
     // Process the root node
     scene->root_node = process_ai_node(scene, ai_scene->mRootNode, ai_scene, tex_pool);
+
+    associate_cameras_and_lights_with_nodes(scene->root_node, scene);
+
+    aiReleaseImport(ai_scene);
+    return scene;
+}
+
+/*
+ * Async variant of process_ai_node - uses async texture loading
+ */
+static SceneNode* process_ai_node_async(Scene* scene, struct aiNode* ai_node,
+                                        const struct aiScene* ai_scene, TexturePool* tex_pool,
+                                        AsyncLoader* loader) {
+    if (!scene || !ai_node || !ai_scene || !tex_pool || !loader) {
+        return NULL;
+    }
+
+    SceneNode* node = create_node();
+    if (!node) {
+        return NULL;
+    }
+
+    // Process meshes for this node
+    node->mesh_count = ai_node->mNumMeshes;
+    node->meshes = malloc(sizeof(Mesh*) * node->mesh_count);
+
+    for (unsigned int i = 0; i < node->mesh_count; i++) {
+        unsigned int meshIndex = ai_node->mMeshes[i];
+        Mesh* mesh = create_mesh();
+        process_ai_mesh(mesh, ai_scene->mMeshes[meshIndex]);
+        if (ai_scene->mMeshes[meshIndex]->mMaterialIndex >= 0) {
+            unsigned int matIndex = ai_scene->mMeshes[meshIndex]->mMaterialIndex;
+            // Use async material processing
+            mesh->material =
+                process_ai_material_async(ai_scene->mMaterials[matIndex], tex_pool, loader);
+            add_material_to_scene(scene, mesh->material);
+        }
+
+        calculate_aabb(mesh);
+        node->meshes[i] = mesh;
+    }
+
+    // Recursively process children nodes
+    node->children_count = ai_node->mNumChildren;
+    node->children = malloc(sizeof(SceneNode*) * node->children_count);
+    for (unsigned int i = 0; i < node->children_count; i++) {
+        node->children[i] =
+            process_ai_node_async(scene, ai_node->mChildren[i], ai_scene, tex_pool, loader);
+        node->children[i]->parent = node;
+    }
+
+    node->name = safe_strdup(ai_node->mName.data);
+
+    struct aiMatrix4x4 ai_mat = ai_node->mTransformation;
+    copy_aiMatrix_to_mat4(&ai_mat, node->original_transform);
+
+    return node;
+}
+
+Scene* create_scene_from_fbx_path_async(const char* path, const char* texture_directory,
+                                        AsyncLoader* loader) {
+    if (!loader) {
+        log_error("AsyncLoader is NULL, falling back to sync loading");
+        return create_scene_from_fbx_path(path, texture_directory);
+    }
+
+    const struct aiScene* ai_scene =
+        aiImportFile(path, aiProcess_Triangulate | aiProcess_FlipUVs | aiProcess_CalcTangentSpace);
+    if (!ai_scene || ai_scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !ai_scene->mRootNode) {
+        log_error("Error importing FBX file: %s\n", path);
+        return NULL;
+    }
+
+    Scene* scene = create_scene();
+    if (!scene) {
+        aiReleaseImport(ai_scene);
+        return NULL;
+    }
+
+    TexturePool* tex_pool = scene->tex_pool;
+    if (!tex_pool) {
+        log_error("Failed to create texture pool\n");
+        aiReleaseImport(ai_scene);
+        return NULL;
+    }
+
+    set_texture_pool_directory(tex_pool, texture_directory);
+
+    // Process lights and cameras
+    process_ai_lights(ai_scene, &scene->lights, &scene->light_count);
+    process_ai_cameras(ai_scene, &scene->cameras, &scene->camera_count);
+
+    // Process the root node with async texture loading
+    scene->root_node =
+        process_ai_node_async(scene, ai_scene->mRootNode, ai_scene, tex_pool, loader);
 
     associate_cameras_and_lights_with_nodes(scene->root_node, scene);
 

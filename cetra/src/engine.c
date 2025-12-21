@@ -111,12 +111,20 @@ Engine* create_engine(const char* window_title, int width, int height) {
     engine->fps_update_timer = 0.0f;
     engine->frame_count = 0;
 
+    engine->async_loader = NULL;
+
     return engine;
 }
 
 void free_engine(Engine* engine) {
     if (!engine)
         return;
+
+    // Free async loader before scenes (may have pending work)
+    if (engine->async_loader) {
+        free_async_loader(engine->async_loader);
+        engine->async_loader = NULL;
+    }
 
     if (engine->scenes) {
         for (size_t i = 0; i < engine->scene_count; ++i) {
@@ -319,6 +327,12 @@ int init_engine(Engine* engine) {
 
     if (_create_default_shaders_for_engine(engine) != 0) {
         log_error("Failed to create default shaders for engine");
+        return -1;
+    }
+
+    engine->async_loader = create_async_loader();
+    if (!engine->async_loader) {
+        log_error("Failed to create async loader");
         return -1;
     }
 
@@ -1096,6 +1110,11 @@ void run_engine_render_loop(Engine* engine, RenderSceneFunc render_func) {
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
 
         Scene* current_scene = get_current_scene(engine);
+
+        // Process pending async texture uploads (max 5 per frame to avoid stutter)
+        if (current_scene && current_scene->tex_pool && engine->async_loader) {
+            async_loader_process_pending(engine->async_loader, current_scene->tex_pool, 5);
+        }
 
         if (render_func != NULL && current_scene != NULL) {
             render_func(engine, current_scene);

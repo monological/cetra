@@ -97,6 +97,13 @@ TexturePool* create_texture_pool() {
     pool->textures = NULL;
     pool->texture_count = 0;
     pool->texture_cache = NULL;
+
+    if (pthread_mutex_init(&pool->cache_mutex, NULL) != 0) {
+        log_error("Failed to init cache_mutex");
+        free(pool);
+        return NULL;
+    }
+
     return pool;
 }
 
@@ -111,6 +118,8 @@ void free_texture_pool(TexturePool* pool) {
 
         // This will handle freeing of all Texture objects
         clear_texture_pool(pool);
+
+        pthread_mutex_destroy(&pool->cache_mutex);
 
         free(pool);
     }
@@ -315,4 +324,48 @@ void clear_texture_pool(TexturePool* pool) {
         }
         pool->texture_cache = NULL;
     }
+}
+
+/*
+ * Thread-safe variants for async loading
+ */
+
+Texture* get_texture_from_pool_threadsafe(TexturePool* pool, const char* filepath) {
+    if (!pool || !filepath) {
+        return NULL;
+    }
+
+    pthread_mutex_lock(&pool->cache_mutex);
+    Texture* found;
+    HASH_FIND_STR(pool->texture_cache, filepath, found);
+    pthread_mutex_unlock(&pool->cache_mutex);
+
+    return found;
+}
+
+void add_texture_to_pool_threadsafe(TexturePool* pool, Texture* texture) {
+    if (!pool || !texture || !texture->filepath) {
+        return;
+    }
+
+    pthread_mutex_lock(&pool->cache_mutex);
+
+    // Check if already exists
+    Texture* existing;
+    HASH_FIND_STR(pool->texture_cache, texture->filepath, existing);
+    if (!existing) {
+        // Add to dynamic array
+        pool->textures = realloc(pool->textures, (pool->texture_count + 1) * sizeof(Texture*));
+        if (pool->textures) {
+            pool->textures[pool->texture_count++] = texture;
+
+            // Add to cache
+            HASH_ADD_KEYPTR(hh, pool->texture_cache, texture->filepath, strlen(texture->filepath),
+                            texture);
+        } else {
+            log_error("Failed to reallocate memory for textures array");
+        }
+    }
+
+    pthread_mutex_unlock(&pool->cache_mutex);
 }

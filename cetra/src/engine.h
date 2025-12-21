@@ -13,6 +13,7 @@
 #include "import.h"
 #include "common.h"
 #include "input.h"
+#include "async_loader.h"
 
 #define NK_INCLUDE_FIXED_TYPES
 #define NK_INCLUDE_STANDARD_IO
@@ -93,6 +94,9 @@ typedef struct Engine {
     float fps;
     float fps_update_timer;
     int frame_count;
+
+    // Async loading
+    AsyncLoader* async_loader;
 } Engine;
 
 typedef void (*RenderSceneFunc)(Engine*, Scene*);

@@ -2,6 +2,8 @@
 #ifndef TEXTURE_H
 #define TEXTURE_H
 
+#include <pthread.h>
+
 #include <GL/glew.h>
 #include <stdbool.h>
 
@@ -47,6 +49,8 @@ typedef struct TexturePool {
     size_t texture_count; // Number of textures in the pool
 
     Texture* texture_cache; // Hash table for cached textures
+
+    pthread_mutex_t cache_mutex; // Protects texture_cache and textures array
 } TexturePool;
 
 TexturePool* create_texture_pool();
@@ -59,5 +63,9 @@ void add_texture_to_pool(TexturePool* pool, Texture* texture);
 Texture* load_texture_path_into_pool(TexturePool* pool, const char* filepath);
 void remove_texture_from_pool(TexturePool* pool, const char* filepath);
 void clear_texture_pool(TexturePool* pool);
+
+// Thread-safe variants for async loading
+Texture* get_texture_from_pool_threadsafe(TexturePool* pool, const char* filepath);
+void add_texture_to_pool_threadsafe(TexturePool* pool, Texture* texture);
 
 #endif // TEXTURE_H
