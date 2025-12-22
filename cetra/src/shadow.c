@@ -133,8 +133,13 @@ int init_shadow_map_array(ShadowSystem* system) {
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
     float border_color[] = {1.0f, 1.0f, 1.0f, 1.0f};
     glTexParameterfv(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_BORDER_COLOR, border_color);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
 
     glGenFramebuffers(1, &system->casters[0].fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, system->casters[0].fbo);
+    glDrawBuffer(GL_NONE);
+    glReadBuffer(GL_NONE);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
     system->initialized = true;
     return 0;
@@ -171,6 +176,13 @@ void begin_shadow_pass(ShadowSystem* system, size_t caster_index) {
     glBindFramebuffer(GL_FRAMEBUFFER, system->casters[0].fbo);
     glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, system->shadow_map_array, 0,
                               (GLint)caster_index);
+
+    GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    if (status != GL_FRAMEBUFFER_COMPLETE) {
+        log_error("Shadow framebuffer incomplete: 0x%x", status);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        return;
+    }
 
     glViewport(0, 0, size, size);
     glClear(GL_DEPTH_BUFFER_BIT);
@@ -276,18 +288,7 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
 
     ShadowSystem* ss = scene->shadow_system;
 
-    if (!ss->depth_program) {
-        ss->depth_program = get_engine_shader_program_by_name(engine, "shadow_depth");
-        if (!ss->depth_program) {
-            return;
-        }
-    }
-
-    if (!ss->initialized) {
-        if (init_shadow_map_array(ss) != 0)
-            return;
-    }
-
+    // First count shadow-casting lights before doing any GL operations
     ss->active_count = 0;
     vec3 scene_center = {0.0f, 0.0f, 0.0f};
 
@@ -297,21 +298,46 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
             continue;
 
         if (light->type == LIGHT_DIRECTIONAL && light->cast_shadows) {
-            size_t slot = ss->active_count;
-
-            compute_directional_light_space_matrix(light->direction, scene_center, ss->ortho_size,
-                                                   ss->near_plane, ss->far_plane,
-                                                   ss->casters[slot].light_space_matrix);
-
-            light->shadow_map_index = (int)slot;
             ss->active_count++;
         } else {
             light->shadow_map_index = -1;
         }
     }
 
+    // Always initialize the shadow map array texture (needed for sampler2DArray in shader)
+    if (!ss->initialized) {
+        if (init_shadow_map_array(ss) != 0)
+            return;
+    }
+
+    // Early exit if no shadow-casting lights - but texture is already initialized
     if (ss->active_count == 0)
         return;
+
+    // Now get the depth program for shadow rendering
+    if (!ss->depth_program) {
+        ss->depth_program = get_engine_shader_program_by_name(engine, "shadow_depth");
+        if (!ss->depth_program) {
+            return;
+        }
+    }
+
+    // Compute light space matrices for shadow-casting lights
+    size_t slot = 0;
+    for (size_t i = 0; i < scene->light_count && slot < MAX_SHADOW_LIGHTS; ++i) {
+        Light* light = scene->lights[i];
+        if (!light)
+            continue;
+
+        if (light->type == LIGHT_DIRECTIONAL && light->cast_shadows) {
+            compute_directional_light_space_matrix(light->direction, scene_center, ss->ortho_size,
+                                                   ss->near_plane, ss->far_plane,
+                                                   ss->casters[slot].light_space_matrix);
+
+            light->shadow_map_index = (int)slot;
+            slot++;
+        }
+    }
 
     GLint prev_viewport[4];
     glGetIntegerv(GL_VIEWPORT, prev_viewport);
@@ -334,6 +360,7 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     }
 
     glCullFace(GL_BACK);
+    glUseProgram(0);
 
     glViewport(prev_viewport[0], prev_viewport[1], prev_viewport[2], prev_viewport[3]);
 }

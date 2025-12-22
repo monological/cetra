@@ -237,13 +237,23 @@ static void _render_node(Scene* scene, SceneNode* node, Camera* camera, mat4 mod
                 _update_program_light_uniforms(program, closest_lights[j], returned_light_count, j);
             }
 
-            // Bind shadow maps
-            if (scene && scene->shadow_system && scene->shadow_system->active_count > 0) {
-                int shadow_indices[MAX_SHADOW_LIGHTS] = {-1, -1, -1};
-                for (size_t k = 0; k < returned_light_count && k < MAX_SHADOW_LIGHTS; ++k) {
-                    shadow_indices[k] = closest_lights[k]->shadow_map_index;
+            // Bind shadow maps (always bind texture to satisfy sampler2DArray)
+            if (scene && scene->shadow_system) {
+                if (scene->shadow_system->active_count > 0) {
+                    int shadow_indices[MAX_SHADOW_LIGHTS] = {-1, -1, -1};
+                    for (size_t k = 0; k < returned_light_count && k < MAX_SHADOW_LIGHTS; ++k) {
+                        shadow_indices[k] = closest_lights[k]->shadow_map_index;
+                    }
+                    bind_shadow_maps_to_program(scene->shadow_system, program, shadow_indices);
+                } else {
+                    // No active shadows, but still bind texture for sampler2DArray
+                    glActiveTexture(GL_TEXTURE0 + SHADOW_MAP_TEXTURE_UNIT);
+                    glBindTexture(GL_TEXTURE_2D_ARRAY, scene->shadow_system->shadow_map_array);
+                    uniform_set_int(u, "shadowMaps", SHADOW_MAP_TEXTURE_UNIT);
+                    uniform_set_int(u, "numShadowLights", 0);
                 }
-                bind_shadow_maps_to_program(scene->shadow_system, program, shadow_indices);
+            } else {
+                uniform_set_int(u, "numShadowLights", 0);
             }
         }
 
