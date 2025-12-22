@@ -96,6 +96,11 @@ typedef struct Scene {
     Light** light_cache_result;
     size_t light_cache_capacity;
 
+    // Pre-allocated traversal stack (avoids per-frame malloc)
+    SceneNode** traversal_stack;
+    mat4* traversal_transforms; // Used by apply_transform_to_nodes
+    size_t traversal_stack_capacity;
+
     // Shadow mapping
     ShadowSystem* shadow_system;
 } Scene;

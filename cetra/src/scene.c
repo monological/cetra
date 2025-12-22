@@ -46,6 +46,19 @@ Scene* create_scene() {
     scene->light_cache_result = NULL;
     scene->light_cache_capacity = 0;
 
+    // Pre-allocate traversal stack (avoids per-frame malloc)
+    scene->traversal_stack_capacity = 64;
+    scene->traversal_stack = malloc(scene->traversal_stack_capacity * sizeof(SceneNode*));
+    scene->traversal_transforms = malloc(scene->traversal_stack_capacity * sizeof(mat4));
+    if (!scene->traversal_stack || !scene->traversal_transforms) {
+        log_error("Failed to allocate traversal stack");
+        free(scene->traversal_stack);
+        free(scene->traversal_transforms);
+        scene->traversal_stack = NULL;
+        scene->traversal_transforms = NULL;
+        scene->traversal_stack_capacity = 0;
+    }
+
     // Initialize shadow system
     scene->shadow_system = create_shadow_system(DEFAULT_SHADOW_MAP_SIZE);
 
@@ -105,6 +118,14 @@ void free_scene(Scene* scene) {
     }
     if (scene->light_cache_result) {
         free(scene->light_cache_result);
+    }
+
+    // Free traversal stack
+    if (scene->traversal_stack) {
+        free(scene->traversal_stack);
+    }
+    if (scene->traversal_transforms) {
+        free(scene->traversal_transforms);
     }
 
     // Free shadow system

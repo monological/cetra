@@ -294,9 +294,33 @@ static void _render_xyz(SceneNode* node, mat4 view, mat4 projection, GLuint* cur
     glBindVertexArray(0);
 }
 
-typedef struct {
-    SceneNode* node;
-} RenderStackEntry;
+// Helper to ensure scene's traversal stack has enough capacity
+static int _ensure_traversal_stack_capacity(Scene* scene, size_t required) {
+    if (scene->traversal_stack_capacity >= required)
+        return 0;
+
+    size_t new_capacity = scene->traversal_stack_capacity;
+    while (new_capacity < required)
+        new_capacity *= 2;
+
+    // Realloc each array separately to avoid dangling pointers on partial failure
+    SceneNode** new_stack = realloc(scene->traversal_stack, new_capacity * sizeof(SceneNode*));
+    if (!new_stack) {
+        log_error("Failed to grow traversal stack");
+        return -1;
+    }
+    scene->traversal_stack = new_stack;
+
+    mat4* new_transforms = realloc(scene->traversal_transforms, new_capacity * sizeof(mat4));
+    if (!new_transforms) {
+        log_error("Failed to grow traversal transforms");
+        return -1;
+    }
+    scene->traversal_transforms = new_transforms;
+
+    scene->traversal_stack_capacity = new_capacity;
+    return 0;
+}
 
 static void _render_scene_iterative(Scene* scene, SceneNode* root, Camera* camera, mat4 view,
                                     mat4 projection, float time_value, RenderMode render_mode,
@@ -311,23 +335,21 @@ static void _render_scene_iterative(Scene* scene, SceneNode* root, Camera* camer
         return;
     }
 
-    // Iterative traversal using explicit stack
-    size_t stack_capacity = 64;
-    size_t stack_size = 0;
-    RenderStackEntry* stack = malloc(stack_capacity * sizeof(RenderStackEntry));
-    if (!stack) {
-        log_error("Failed to allocate render stack");
+    // Use scene's pre-allocated traversal stack
+    if (!scene->traversal_stack) {
+        log_error("Scene traversal stack not initialized");
         return;
     }
 
+    size_t stack_size = 0;
     size_t max_lights = get_gl_max_lights();
 
     // Push root node
-    stack[stack_size++].node = root;
+    scene->traversal_stack[stack_size++] = root;
 
     while (stack_size > 0) {
         // Pop from stack
-        SceneNode* node = stack[--stack_size].node;
+        SceneNode* node = scene->traversal_stack[--stack_size];
 
         // Get closest lights for this node
         size_t returned_light_count;
@@ -350,23 +372,15 @@ static void _render_scene_iterative(Scene* scene, SceneNode* root, Camera* camer
                 continue;
 
             // Grow stack if needed
-            if (stack_size >= stack_capacity) {
-                stack_capacity *= 2;
-                RenderStackEntry* new_stack =
-                    realloc(stack, stack_capacity * sizeof(RenderStackEntry));
-                if (!new_stack) {
-                    log_error("Failed to grow render stack");
-                    free(stack);
+            if (stack_size >= scene->traversal_stack_capacity) {
+                if (_ensure_traversal_stack_capacity(scene, stack_size + 1) != 0) {
                     return;
                 }
-                stack = new_stack;
             }
 
-            stack[stack_size++].node = child;
+            scene->traversal_stack[stack_size++] = child;
         }
     }
-
-    free(stack);
 }
 
 void render_current_scene(Engine* engine, float time_value) {
