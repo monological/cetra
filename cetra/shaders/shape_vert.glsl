@@ -14,7 +14,7 @@ out float FragDepth_vs;
 out vec2 TexCoords_vs;
 out mat3 TBN_vs;
 
-#define MAX_LIGHTS 75
+#define MAX_LIGHTS 70
 
 struct Light {
     int type;

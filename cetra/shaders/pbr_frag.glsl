@@ -9,7 +9,7 @@ in vec2 TexCoords;
 in mat3 TBN;
 out vec4 FragColor;
 
-#define MAX_LIGHTS 75
+#define MAX_LIGHTS 70
 
 struct Light {
     int type;
