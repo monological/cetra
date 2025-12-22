@@ -402,8 +402,8 @@ void main() {
             attenuation = 1.0;
         } else {
             // Point/Spot lights: use position-based calculation
-            L = normalize(lights[i].position - FragPos);
-            float distance = length(lights[i].position - FragPos);
+            L = normalize(lights[i].position - WorldPos);
+            float distance = length(lights[i].position - WorldPos);
             attenuation = calculateAttenuation(distance, lights[i].constant,
                                                lights[i].linear, lights[i].quadratic);
         }
