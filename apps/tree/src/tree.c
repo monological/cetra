@@ -20,6 +20,7 @@
 #include "cetra/transform.h"
 #include "cetra/light.h"
 #include "cetra/texture.h"
+#include "cetra/app.h"
 
 #define NK_INCLUDE_FIXED_TYPES
 #define NK_INCLUDE_STANDARD_IO
@@ -661,7 +662,6 @@ static void generate_procedural_textures(void) {
  */
 const unsigned int HEIGHT = 900;
 const unsigned int WIDTH = 1400;
-const float ORBIT_SENSITIVITY = 0.003f;
 
 /*
  * Tree Parameters
@@ -694,15 +694,9 @@ static SceneNode* island_node = NULL;
 static Material* island_material = NULL;
 
 /*
- * Drag state - stored at drag start
+ * Mouse drag controller
  */
-static float orbit_start_phi = 0.0f;
-static float orbit_start_theta = 0.0f;
-static float free_start_yaw = 0.0f;
-static float free_start_pitch = 0.0f;
-static float free_look_distance = 500.0f;
-static vec3 free_start_look_at = {0.0f, 0.0f, 0.0f};
-static vec3 free_start_cam_pos = {0.0f, 0.0f, 0.0f};
+static MouseDragController* drag_controller = NULL;
 
 /*
  * Random float in range
@@ -1182,35 +1176,15 @@ static void render_tree_gui(const Engine* engine, Scene* scene) {
  * Callbacks
  */
 void mouse_button_callback(Engine* engine, int button, int action, int mods) {
-    if (engine->input.is_dragging && engine->camera) {
-        Camera* camera = engine->camera;
-
-        // Calculate current angles from camera's actual position
-        vec3 dir;
-        glm_vec3_sub(camera->position, camera->look_at, dir);
-        float dist = glm_vec3_norm(dir);
-
-        if (dist > 0.001f) {
-            orbit_start_theta = asinf(dir[1] / dist);
-            orbit_start_phi = atan2f(dir[2], dir[0]);
-            camera->distance = dist;
-            free_look_distance = dist;
-            free_start_pitch = orbit_start_theta;
-            free_start_yaw = orbit_start_phi;
-        }
-        // Save starting positions for Shift+drag pan
-        glm_vec3_copy(camera->look_at, free_start_look_at);
-        glm_vec3_copy(camera->position, free_start_cam_pos);
+    if (drag_controller) {
+        double x, y;
+        glfwGetCursorPos(engine->window, &x, &y);
+        mouse_drag_on_button(drag_controller, button, action, mods, x, y);
     }
 }
 
 void render_scene_callback(Engine* engine, Scene* scene) {
     if (!engine || !scene || !scene->root_node) {
-        return;
-    }
-
-    Camera* camera = engine->camera;
-    if (!camera) {
         return;
     }
 
@@ -1223,56 +1197,10 @@ void render_scene_callback(Engine* engine, Scene* scene) {
         memcpy(&prev_params, &params, sizeof(TreeParams));
     }
 
-    // Handle camera - check if not hovering over GUI
-    if (engine->input.is_dragging && !nk_window_is_any_hovered(engine->nk_ctx)) {
-        if (engine->input.shift_held) {
-            // Shift+drag: Pan camera (move both camera and look_at)
-            vec3 forward, right_vec, up_vec;
-            glm_vec3_sub(free_start_look_at, free_start_cam_pos, forward);
-            glm_vec3_crossn(camera->up_vector, forward, right_vec);
-            glm_vec3_normalize(right_vec);
-            glm_vec3_cross(forward, right_vec, up_vec);
-            glm_vec3_normalize(up_vec);
-
-            float pan_speed = free_look_distance * 0.0005f;
-            vec3 pan_offset;
-            glm_vec3_scale(right_vec, -engine->input.drag_fb_x * pan_speed, pan_offset);
-            vec3 up_offset;
-            glm_vec3_scale(up_vec, -engine->input.drag_fb_y * pan_speed, up_offset);
-            glm_vec3_add(pan_offset, up_offset, pan_offset);
-
-            // Move both camera and look_at from starting positions
-            vec3 new_pos, new_look;
-            glm_vec3_add(free_start_cam_pos, pan_offset, new_pos);
-            glm_vec3_add(free_start_look_at, pan_offset, new_look);
-            set_camera_position(camera, new_pos);
-            set_camera_look_at(camera, new_look);
-        } else {
-            // Regular drag: Orbit around look_at point
-            float yaw = free_start_yaw - engine->input.drag_fb_x * ORBIT_SENSITIVITY;
-            float pitch = free_start_pitch + engine->input.drag_fb_y * ORBIT_SENSITIVITY;
-
-            // Clamp pitch to avoid gimbal lock
-            float max_pitch = (float)M_PI_2 - 0.1f;
-            if (pitch > max_pitch)
-                pitch = max_pitch;
-            if (pitch < -max_pitch)
-                pitch = -max_pitch;
-
-            // Calculate camera position on sphere around look_at point
-            float cos_pitch = cosf(pitch);
-            vec3 offset = {free_look_distance * cos_pitch * cosf(yaw),
-                           free_look_distance * sinf(pitch),
-                           free_look_distance * cos_pitch * sinf(yaw)};
-
-            vec3 new_camera_position;
-            glm_vec3_add(camera->look_at, offset, new_camera_position);
-            set_camera_position(camera, new_camera_position);
-        }
+    // Update camera - only if not hovering over GUI
+    if (drag_controller && app_can_process_3d_input(engine)) {
+        mouse_drag_update(drag_controller, glfwGetTime());
     }
-
-    update_engine_camera_lookat(engine);
-    update_engine_camera_perspective(engine);
 
     // Apply transforms
     Transform t = {.position = {0, 0, 0}, .rotation = {0, 0, 0}, .scale = {1, 1, 1}};
@@ -1280,66 +1208,6 @@ void render_scene_callback(Engine* engine, Scene* scene) {
     apply_transform_to_nodes(scene->root_node, engine->model_matrix);
 
     render_current_scene(engine, glfwGetTime());
-}
-
-/*
- * Create scene lights
- */
-void create_scene_lights(Scene* scene) {
-    // Key light - main directional-style light with shadows
-    Light* key = create_light();
-    set_light_name(key, "key_light");
-    set_light_type(key, LIGHT_DIRECTIONAL);
-    vec3 key_dir = {-0.5f, -0.8f, -0.3f};
-    set_light_direction(key, key_dir);
-    vec3 key_pos = {200.0f, 400.0f, 300.0f};
-    set_light_original_position(key, key_pos);
-    set_light_global_position(key, key_pos);
-    set_light_intensity(key, 3.0f);
-    set_light_color(key, (vec3){1.0f, 0.95f, 0.9f});
-    set_light_cast_shadows(key, true);
-    add_light_to_scene(scene, key);
-
-    SceneNode* key_node = create_node();
-    set_node_light(key_node, key);
-    set_node_name(key_node, "key_light_node");
-    add_child_node(scene->root_node, key_node);
-
-    // Fill light - softer, opposite side
-    Light* fill = create_light();
-    set_light_name(fill, "fill_light");
-    set_light_type(fill, LIGHT_DIRECTIONAL);
-    vec3 fill_dir = {0.6f, -0.4f, 0.3f};
-    set_light_direction(fill, fill_dir);
-    vec3 fill_pos = {-250.0f, 200.0f, 200.0f};
-    set_light_original_position(fill, fill_pos);
-    set_light_global_position(fill, fill_pos);
-    set_light_intensity(fill, 1.2f);
-    set_light_color(fill, (vec3){0.7f, 0.85f, 1.0f});
-    add_light_to_scene(scene, fill);
-
-    SceneNode* fill_node = create_node();
-    set_node_light(fill_node, fill);
-    set_node_name(fill_node, "fill_light_node");
-    add_child_node(scene->root_node, fill_node);
-
-    // Rim light - back light for edge definition
-    Light* rim = create_light();
-    set_light_name(rim, "rim_light");
-    set_light_type(rim, LIGHT_DIRECTIONAL);
-    vec3 rim_dir = {0.0f, -0.3f, 0.9f};
-    set_light_direction(rim, rim_dir);
-    vec3 rim_pos = {0.0f, 300.0f, -300.0f};
-    set_light_original_position(rim, rim_pos);
-    set_light_global_position(rim, rim_pos);
-    set_light_intensity(rim, 1.5f);
-    set_light_color(rim, (vec3){1.0f, 0.98f, 0.95f});
-    add_light_to_scene(scene, rim);
-
-    SceneNode* rim_node = create_node();
-    set_node_light(rim_node, rim);
-    set_node_name(rim_node, "rim_light_node");
-    add_child_node(scene->root_node, rim_node);
 }
 
 /*
@@ -1437,6 +1305,9 @@ int main(void) {
     set_engine_camera(engine, camera);
     camera->distance = 550.0f;
 
+    // Create drag controller (no auto-orbit for tree app)
+    drag_controller = create_mouse_drag_controller(engine);
+
     // Create scene
     Scene* scene = create_scene();
     SceneNode* root = create_node();
@@ -1448,7 +1319,7 @@ int main(void) {
         set_scene_xyz_shader_program(scene, xyz_program);
     }
 
-    create_scene_lights(scene);
+    create_three_point_lights(scene, 1.0f);
 
     // Create island
     create_island(root);
@@ -1479,6 +1350,7 @@ int main(void) {
     run_engine_render_loop(engine, render_scene_callback);
 
     printf("Cleaning up...\n");
+    free_mouse_drag_controller(drag_controller);
     free_engine(engine);
 
     printf("Goodbye!\n");
