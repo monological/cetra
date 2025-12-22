@@ -91,18 +91,20 @@ void orbit_camera(Camera* camera, float delta_theta, float delta_phi) {
     camera->theta += delta_theta;
     camera->phi += delta_phi;
 
-    // Clamp phi to avoid flipping at poles
-    float limit = GLM_PI_2f - 0.01f;
-    if (camera->phi > limit)
-        camera->phi = limit;
-    if (camera->phi < -limit)
-        camera->phi = -limit;
+    // Clamp theta (vertical/elevation) to avoid flipping at poles
+    // theta: -pi/2 (looking down) to +pi/2 (looking up)
+    float limit = GLM_PI_2f - 0.1f;
+    if (camera->theta > limit)
+        camera->theta = limit;
+    if (camera->theta < -limit)
+        camera->theta = -limit;
 
     // Update position from spherical coordinates
-    float cos_phi = cosf(camera->phi);
-    camera->position[0] = camera->look_at[0] + camera->distance * cos_phi * sinf(camera->theta);
-    camera->position[1] = camera->look_at[1] + camera->distance * sinf(camera->phi);
-    camera->position[2] = camera->look_at[2] + camera->distance * cos_phi * cosf(camera->theta);
+    // theta = elevation angle (vertical), phi = azimuth angle (horizontal)
+    float cos_theta = cosf(camera->theta);
+    camera->position[0] = camera->look_at[0] + camera->distance * cos_theta * cosf(camera->phi);
+    camera->position[1] = camera->look_at[1] + camera->distance * sinf(camera->theta);
+    camera->position[2] = camera->look_at[2] + camera->distance * cos_theta * sinf(camera->phi);
 }
 
 void pan_camera(Camera* camera, float delta_x, float delta_y) {
@@ -114,22 +116,19 @@ void pan_camera(Camera* camera, float delta_x, float delta_y) {
     glm_vec3_sub(camera->look_at, camera->position, forward);
     glm_vec3_normalize(forward);
 
-    // Compute right vector (forward x up)
+    // Compute right vector (up x forward) - matches original engine.c convention
     vec3 right;
-    glm_vec3_cross(forward, camera->up_vector, right);
+    glm_vec3_cross(camera->up_vector, forward, right);
     glm_vec3_normalize(right);
 
-    // Compute actual up vector (right x forward)
-    vec3 up;
-    glm_vec3_cross(right, forward, up);
-
-    // Move camera and target together
+    // Move camera and target together along right axis
     vec3 offset;
     glm_vec3_scale(right, delta_x, offset);
     glm_vec3_add(camera->position, offset, camera->position);
     glm_vec3_add(camera->look_at, offset, camera->look_at);
 
-    glm_vec3_scale(up, delta_y, offset);
+    // Move camera and target together along world up axis (matches original)
+    glm_vec3_scale(camera->up_vector, delta_y, offset);
     glm_vec3_add(camera->position, offset, camera->position);
     glm_vec3_add(camera->look_at, offset, camera->look_at);
 }
@@ -144,6 +143,77 @@ void zoom_camera(Camera* camera, float delta) {
 
     // Recompute position from orbit parameters
     orbit_camera(camera, 0.0f, 0.0f);
+}
+
+void camera_move_forward(Camera* camera, float distance) {
+    if (!camera)
+        return;
+
+    vec3 forward;
+    glm_vec3_sub(camera->look_at, camera->position, forward);
+    glm_vec3_normalize(forward);
+
+    vec3 movement;
+    glm_vec3_scale(forward, distance, movement);
+
+    glm_vec3_add(camera->position, movement, camera->position);
+    glm_vec3_add(camera->look_at, movement, camera->look_at);
+}
+
+void camera_strafe(Camera* camera, float distance) {
+    if (!camera)
+        return;
+
+    vec3 forward;
+    glm_vec3_sub(camera->look_at, camera->position, forward);
+
+    vec3 right;
+    glm_vec3_crossn(camera->up_vector, forward, right);
+    glm_vec3_normalize(right);
+
+    vec3 movement;
+    glm_vec3_scale(right, distance, movement);
+
+    glm_vec3_add(camera->position, movement, camera->position);
+    glm_vec3_add(camera->look_at, movement, camera->look_at);
+}
+
+void camera_zoom_toward_target(Camera* camera, float factor, float min_distance) {
+    if (!camera)
+        return;
+
+    vec3 to_camera;
+    glm_vec3_sub(camera->position, camera->look_at, to_camera);
+    float dist = glm_vec3_norm(to_camera);
+
+    if (dist < 0.001f)
+        dist = 1000.0f;
+
+    float new_dist = dist * factor;
+    if (new_dist < min_distance)
+        new_dist = min_distance;
+
+    glm_vec3_normalize(to_camera);
+    glm_vec3_scale(to_camera, new_dist, to_camera);
+    glm_vec3_add(camera->look_at, to_camera, camera->position);
+
+    camera->distance = new_dist;
+}
+
+void camera_sync_spherical_from_position(Camera* camera) {
+    if (!camera)
+        return;
+
+    vec3 to_camera;
+    glm_vec3_sub(camera->position, camera->look_at, to_camera);
+    float dist = glm_vec3_norm(to_camera);
+
+    if (dist < 0.001f)
+        dist = 1000.0f;
+
+    camera->distance = dist;
+    camera->theta = asinf(to_camera[1] / dist);
+    camera->phi = atan2f(to_camera[2], to_camera[0]);
 }
 
 void compute_view_matrix(Camera* camera, mat4 view) {

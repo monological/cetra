@@ -42,6 +42,12 @@ void set_camera_perspective(Camera* camera, float fov_radians, float near_clip, 
 void orbit_camera(Camera* camera, float delta_theta, float delta_phi);
 void pan_camera(Camera* camera, float delta_x, float delta_y);
 void zoom_camera(Camera* camera, float delta);
+void camera_move_forward(Camera* camera, float distance);
+void camera_strafe(Camera* camera, float distance);
+void camera_zoom_toward_target(Camera* camera, float factor, float min_distance);
+
+// Sync spherical coordinates from current position
+void camera_sync_spherical_from_position(Camera* camera);
 
 // Matrix computation
 void compute_view_matrix(Camera* camera, mat4 view);

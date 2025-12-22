@@ -463,190 +463,71 @@ static void _engine_key_callback(GLFWwindow* window, int key, int scancode, int 
 
     Camera* camera = engine->camera;
 
-    float cameraSpeed = 300.0f;
-    float orbit_step = 0.1f;
-    float max_theta = (float)M_PI_2 - 0.1f;
-    vec3 new_position = {0.0f, 0.0f, 0.0f};
-    vec3 movement = {0.0f, 0.0f, 0.0f};
+    static const float MOVE_SPEED = 300.0f;
+    static const float ORBIT_STEP = 0.1f;
+    static const float PAN_SPEED = 15.0f;
+    static const float ZOOM_FACTOR = 0.9f;
+    static const float MIN_ZOOM_DISTANCE = 10.0f;
 
     if (action == GLFW_PRESS || action == GLFW_REPEAT) {
-        vec3 forward, right;
         switch (key) {
             case GLFW_KEY_W:
-                glm_vec3_sub(camera->look_at, camera->position, forward);
-                glm_vec3_normalize(forward);
-                glm_vec3_scale(forward, cameraSpeed, movement);
-                glm_vec3_add(camera->position, movement, new_position);
-                set_camera_position(camera, new_position);
-                glm_vec3_add(camera->look_at, movement, camera->look_at);
+                camera_move_forward(camera, MOVE_SPEED);
                 break;
 
             case GLFW_KEY_S:
-                glm_vec3_sub(camera->look_at, camera->position, forward);
-                glm_vec3_normalize(forward);
-                glm_vec3_scale(forward, cameraSpeed, movement);
-                glm_vec3_sub(camera->position, movement, new_position);
-                set_camera_position(camera, new_position);
-                glm_vec3_sub(camera->look_at, movement, camera->look_at);
+                camera_move_forward(camera, -MOVE_SPEED);
                 break;
 
             case GLFW_KEY_A:
-                glm_vec3_sub(camera->look_at, camera->position, forward);
-                glm_vec3_crossn(camera->up_vector, forward, right);
-                glm_vec3_normalize(right);
-                glm_vec3_scale(right, cameraSpeed, movement);
-                glm_vec3_add(camera->position, movement, new_position);
-                set_camera_position(camera, new_position);
-                glm_vec3_add(camera->look_at, movement, camera->look_at);
+                camera_strafe(camera, MOVE_SPEED);
                 break;
 
             case GLFW_KEY_D:
-                glm_vec3_sub(camera->look_at, camera->position, forward);
-                glm_vec3_crossn(camera->up_vector, forward, right);
-                glm_vec3_normalize(right);
-                glm_vec3_scale(right, cameraSpeed, movement);
-                glm_vec3_sub(camera->position, movement, new_position);
-                set_camera_position(camera, new_position);
-                glm_vec3_sub(camera->look_at, movement, camera->look_at);
+                camera_strafe(camera, -MOVE_SPEED);
                 break;
 
-            case GLFW_KEY_UP: {
-                vec3 to_camera;
-                glm_vec3_sub(camera->position, camera->look_at, to_camera);
-                float dist = glm_vec3_norm(to_camera);
-                if (dist < 0.001f)
-                    dist = 1000.0f;
-
+            case GLFW_KEY_UP:
                 if (mods & GLFW_MOD_SHIFT) {
-                    // Shift+UP: Pan camera up
-                    float panSpeed = 15.0f;
-                    glm_vec3_scale(camera->up_vector, panSpeed, movement);
-                    glm_vec3_add(camera->position, movement, new_position);
-                    set_camera_position(camera, new_position);
-                    glm_vec3_add(camera->look_at, movement, camera->look_at);
+                    pan_camera(camera, 0.0f, PAN_SPEED);
                 } else if (engine->camera_mode == CAMERA_MODE_FREE) {
-                    // Zoom in - move closer to look_at
-                    float zoom_amount = dist * 0.1f;
-                    if (dist - zoom_amount > 10.0f) {
-                        glm_vec3_normalize(to_camera);
-                        glm_vec3_scale(to_camera, dist - zoom_amount, to_camera);
-                        glm_vec3_add(camera->look_at, to_camera, new_position);
-                        set_camera_position(camera, new_position);
-                    }
+                    camera_zoom_toward_target(camera, ZOOM_FACTOR, MIN_ZOOM_DISTANCE);
                 } else if (engine->camera_mode == CAMERA_MODE_ORBIT) {
-                    // Orbit - tilt up
-                    camera->theta += orbit_step;
-                    if (camera->theta > max_theta)
-                        camera->theta = max_theta;
-                    float cos_theta = cosf(camera->theta);
-                    vec3 offset = {camera->distance * cos_theta * cosf(camera->phi),
-                                   camera->distance * sinf(camera->theta),
-                                   camera->distance * cos_theta * sinf(camera->phi)};
-                    glm_vec3_add(camera->look_at, offset, new_position);
-                    set_camera_position(camera, new_position);
+                    // Tilt up: increase theta (vertical/elevation)
+                    orbit_camera(camera, ORBIT_STEP, 0.0f);
                 }
                 break;
-            }
 
-            case GLFW_KEY_DOWN: {
-                vec3 to_camera;
-                glm_vec3_sub(camera->position, camera->look_at, to_camera);
-                float dist = glm_vec3_norm(to_camera);
-                if (dist < 0.001f)
-                    dist = 1000.0f;
-
+            case GLFW_KEY_DOWN:
                 if (mods & GLFW_MOD_SHIFT) {
-                    // Shift+DOWN: Pan camera down
-                    float panSpeed = 15.0f;
-                    glm_vec3_scale(camera->up_vector, panSpeed, movement);
-                    glm_vec3_sub(camera->position, movement, new_position);
-                    set_camera_position(camera, new_position);
-                    glm_vec3_sub(camera->look_at, movement, camera->look_at);
+                    pan_camera(camera, 0.0f, -PAN_SPEED);
                 } else if (engine->camera_mode == CAMERA_MODE_FREE) {
-                    // Zoom out - move further from look_at
-                    float zoom_amount = dist * 0.1f;
-                    glm_vec3_normalize(to_camera);
-                    glm_vec3_scale(to_camera, dist + zoom_amount, to_camera);
-                    glm_vec3_add(camera->look_at, to_camera, new_position);
-                    set_camera_position(camera, new_position);
+                    camera_zoom_toward_target(camera, 1.0f / ZOOM_FACTOR, MIN_ZOOM_DISTANCE);
                 } else if (engine->camera_mode == CAMERA_MODE_ORBIT) {
-                    // Orbit - tilt down
-                    camera->theta -= orbit_step;
-                    if (camera->theta < -max_theta)
-                        camera->theta = -max_theta;
-                    float cos_theta = cosf(camera->theta);
-                    vec3 offset = {camera->distance * cos_theta * cosf(camera->phi),
-                                   camera->distance * sinf(camera->theta),
-                                   camera->distance * cos_theta * sinf(camera->phi)};
-                    glm_vec3_add(camera->look_at, offset, new_position);
-                    set_camera_position(camera, new_position);
+                    // Tilt down: decrease theta (vertical/elevation)
+                    orbit_camera(camera, -ORBIT_STEP, 0.0f);
                 }
                 break;
-            }
 
-            case GLFW_KEY_LEFT: {
-                vec3 to_camera;
-                glm_vec3_sub(camera->position, camera->look_at, to_camera);
-                float dist = glm_vec3_norm(to_camera);
-                if (dist < 0.001f)
-                    dist = 1000.0f;
-
+            case GLFW_KEY_LEFT:
                 if (mods & GLFW_MOD_SHIFT) {
-                    // Shift+LEFT: Pan camera left
-                    float panSpeed = 15.0f;
-                    glm_vec3_sub(camera->look_at, camera->position, forward);
-                    glm_vec3_crossn(camera->up_vector, forward, right);
-                    glm_vec3_normalize(right);
-                    glm_vec3_scale(right, panSpeed, movement);
-                    glm_vec3_sub(camera->position, movement, new_position);
-                    set_camera_position(camera, new_position);
-                    glm_vec3_sub(camera->look_at, movement, camera->look_at);
+                    pan_camera(camera, -PAN_SPEED, 0.0f);
                 } else {
-                    // Orbit left (both modes)
-                    camera->distance = dist;
-                    camera->theta = asinf(to_camera[1] / dist);
-                    camera->phi = atan2f(to_camera[2], to_camera[0]);
-                    camera->phi += orbit_step;
-                    float cos_theta = cosf(camera->theta);
-                    vec3 offset = {dist * cos_theta * cosf(camera->phi), dist * sinf(camera->theta),
-                                   dist * cos_theta * sinf(camera->phi)};
-                    glm_vec3_add(camera->look_at, offset, new_position);
-                    set_camera_position(camera, new_position);
+                    // Orbit left: increase phi (horizontal/azimuth)
+                    camera_sync_spherical_from_position(camera);
+                    orbit_camera(camera, 0.0f, ORBIT_STEP);
                 }
                 break;
-            }
 
-            case GLFW_KEY_RIGHT: {
-                vec3 to_camera;
-                glm_vec3_sub(camera->position, camera->look_at, to_camera);
-                float dist = glm_vec3_norm(to_camera);
-                if (dist < 0.001f)
-                    dist = 1000.0f;
-
+            case GLFW_KEY_RIGHT:
                 if (mods & GLFW_MOD_SHIFT) {
-                    // Shift+RIGHT: Pan camera right
-                    float panSpeed = 15.0f;
-                    glm_vec3_sub(camera->look_at, camera->position, forward);
-                    glm_vec3_crossn(camera->up_vector, forward, right);
-                    glm_vec3_normalize(right);
-                    glm_vec3_scale(right, panSpeed, movement);
-                    glm_vec3_add(camera->position, movement, new_position);
-                    set_camera_position(camera, new_position);
-                    glm_vec3_add(camera->look_at, movement, camera->look_at);
+                    pan_camera(camera, PAN_SPEED, 0.0f);
                 } else {
-                    // Orbit right (both modes)
-                    camera->distance = dist;
-                    camera->theta = asinf(to_camera[1] / dist);
-                    camera->phi = atan2f(to_camera[2], to_camera[0]);
-                    camera->phi -= orbit_step;
-                    float cos_theta = cosf(camera->theta);
-                    vec3 offset = {dist * cos_theta * cosf(camera->phi), dist * sinf(camera->theta),
-                                   dist * cos_theta * sinf(camera->phi)};
-                    glm_vec3_add(camera->look_at, offset, new_position);
-                    set_camera_position(camera, new_position);
+                    // Orbit right: decrease phi (horizontal/azimuth)
+                    camera_sync_spherical_from_position(camera);
+                    orbit_camera(camera, 0.0f, -ORBIT_STEP);
                 }
                 break;
-            }
         }
     }
 
