@@ -1037,13 +1037,6 @@ void run_engine_render_loop(Engine* engine, RenderSceneFunc render_func) {
             async_loader_process_pending(engine->async_loader, current_scene->tex_pool, 5);
         }
 
-        // Render skybox (before main scene, with depth write disabled)
-        if (current_scene && current_scene->render_skybox && current_scene->ibl &&
-            current_scene->ibl->precomputed) {
-            render_skybox(current_scene->ibl, engine->view_matrix, engine->projection_matrix,
-                          current_scene->skybox_exposure);
-        }
-
         if (render_func != NULL && current_scene != NULL) {
             render_func(engine, current_scene);
         }

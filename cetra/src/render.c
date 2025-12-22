@@ -444,6 +444,11 @@ void render_current_scene(Engine* engine, float time_value) {
     _render_scene_iterative(scene, root_node, camera, *view, *projection, time_value, render_mode,
                             &current_program, &current_material, &frustum);
 
+    // Render skybox last (if enabled)
+    if (scene->render_skybox && scene->ibl && scene->ibl->precomputed) {
+        render_skybox(scene->ibl, *view, *projection, scene->skybox_exposure);
+    }
+
     // Reset program state at end of frame
     glUseProgram(0);
 }
