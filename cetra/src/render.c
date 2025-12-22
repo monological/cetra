@@ -99,82 +99,84 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
     uniform_set_float(u, "ior", material->ior);
     uniform_set_float(u, "filmThickness", material->filmThickness);
 
+    // Always set sampler uniforms to correct texture units (prevents stale values)
+    uniform_set_int(u, "albedoTex", 0);
+    uniform_set_int(u, "normalTex", 1);
+    uniform_set_int(u, "roughnessTex", 2);
+    uniform_set_int(u, "metalnessTex", 3);
+    uniform_set_int(u, "aoTex", 4);
+    uniform_set_int(u, "emissiveTex", 5);
+    uniform_set_int(u, "heightTex", 6);
+    uniform_set_int(u, "opacityTex", 7);
+    uniform_set_int(u, "sheenTex", 8);
+    uniform_set_int(u, "reflectanceTex", 9);
+    uniform_set_int(u, "microsurfaceTex", 10);
+    uniform_set_int(u, "anisotropyTex", 11);
+    uniform_set_int(u, "subsurfaceTex", 12);
+
     if (material->albedo_tex) {
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, material->albedo_tex->id);
-        uniform_set_int(u, "albedoTex", 0);
     }
 
     if (material->normal_tex) {
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_2D, material->normal_tex->id);
-        uniform_set_int(u, "normalTex", 1);
     }
 
     if (material->roughness_tex) {
         glActiveTexture(GL_TEXTURE2);
         glBindTexture(GL_TEXTURE_2D, material->roughness_tex->id);
-        uniform_set_int(u, "roughnessTex", 2);
     }
 
     if (material->metalness_tex) {
         glActiveTexture(GL_TEXTURE3);
         glBindTexture(GL_TEXTURE_2D, material->metalness_tex->id);
-        uniform_set_int(u, "metalnessTex", 3);
     }
 
     if (material->ambient_occlusion_tex) {
         glActiveTexture(GL_TEXTURE4);
         glBindTexture(GL_TEXTURE_2D, material->ambient_occlusion_tex->id);
-        uniform_set_int(u, "aoTex", 4);
     }
 
     if (material->emissive_tex) {
         glActiveTexture(GL_TEXTURE5);
         glBindTexture(GL_TEXTURE_2D, material->emissive_tex->id);
-        uniform_set_int(u, "emissiveTex", 5);
     }
 
     if (material->height_tex) {
         glActiveTexture(GL_TEXTURE6);
         glBindTexture(GL_TEXTURE_2D, material->height_tex->id);
-        uniform_set_int(u, "heightTex", 6);
     }
 
     if (material->opacity_tex) {
         glActiveTexture(GL_TEXTURE7);
         glBindTexture(GL_TEXTURE_2D, material->opacity_tex->id);
-        uniform_set_int(u, "opacityTex", 7);
     }
 
     if (material->sheen_tex) {
         glActiveTexture(GL_TEXTURE8);
         glBindTexture(GL_TEXTURE_2D, material->sheen_tex->id);
-        uniform_set_int(u, "sheenTex", 8);
     }
 
     if (material->reflectance_tex) {
         glActiveTexture(GL_TEXTURE9);
         glBindTexture(GL_TEXTURE_2D, material->reflectance_tex->id);
-        uniform_set_int(u, "reflectanceTex", 9);
     }
 
     if (material->microsurface_tex) {
         glActiveTexture(GL_TEXTURE10);
         glBindTexture(GL_TEXTURE_2D, material->microsurface_tex->id);
-        uniform_set_int(u, "microsurfaceTex", 10);
     }
 
     if (material->anisotropy_tex) {
         glActiveTexture(GL_TEXTURE11);
         glBindTexture(GL_TEXTURE_2D, material->anisotropy_tex->id);
-        uniform_set_int(u, "anisotropyTex", 11);
     }
 
     if (material->subsurface_scattering_tex) {
         glActiveTexture(GL_TEXTURE12);
         glBindTexture(GL_TEXTURE_2D, material->subsurface_scattering_tex->id);
-        uniform_set_int(u, "subsurfaceTex", 12);
     }
 
     uniform_set_int(u, "albedoTexExists", material->albedo_tex ? 1 : 0);
@@ -190,6 +192,9 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
     uniform_set_int(u, "microsurfaceTexExists", material->microsurface_tex ? 1 : 0);
     uniform_set_int(u, "anisotropyTexExists", material->anisotropy_tex ? 1 : 0);
     uniform_set_int(u, "subsurfaceTexExists", material->subsurface_scattering_tex ? 1 : 0);
+
+    // Reset active texture unit
+    glActiveTexture(GL_TEXTURE0);
 }
 
 static void _update_camera_uniforms(ShaderProgram* program, Camera* camera) {

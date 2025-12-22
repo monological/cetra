@@ -519,4 +519,7 @@ void bind_ibl_textures(IBLResources* ibl, ShaderProgram* program) {
     uniform_set_int(u, "iblEnabled", 1);
     uniform_set_float(u, "iblIntensity", ibl->intensity);
     uniform_set_float(u, "maxReflectionLOD", ibl->max_reflection_lod);
+
+    // Reset active texture unit
+    glActiveTexture(GL_TEXTURE0);
 }
