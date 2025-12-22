@@ -318,6 +318,48 @@ void create_scene_lights(Scene* scene) {
 }
 
 /*
+ * Configure iridescent visor material (pilot helmet style).
+ * filmThickness: coating thickness in nanometers (300-500nm for gold/rainbow effect)
+ */
+void set_node_iridescent_visor(SceneNode* node, float opacity, float roughness,
+                               float filmThickness) {
+    if (!node)
+        return;
+
+    for (size_t i = 0; i < node->mesh_count; i++) {
+        Mesh* mesh = node->meshes[i];
+        if (mesh && mesh->material) {
+            mesh->material->opacity = opacity;
+            mesh->material->roughness = roughness;
+            mesh->material->metallic = 0.0f;
+            mesh->material->ior = 1.5f;
+            mesh->material->filmThickness = filmThickness;
+        }
+    }
+}
+
+/*
+ * Configure visor materials for helmet models.
+ */
+void configure_visor_materials(Scene* scene) {
+    if (!scene || !scene->root_node)
+        return;
+
+    // Common visor node names
+    const char* visor_names[] = {"VISIERE_A", "VISIERE_B", "GLASSE", "visor", "Visor", NULL};
+
+    for (int i = 0; visor_names[i] != NULL; i++) {
+        SceneNode* node = find_node_by_name(scene->root_node, visor_names[i]);
+        if (node) {
+            printf("Configuring iridescent visor for: %s\n", visor_names[i]);
+            // Mirror-like visor: low opacity (reflective), very glossy, 520nm (green center, purple
+            // edges)
+            set_node_iridescent_visor(node, 0.15f, 0.005f, 520.0f);
+        }
+    }
+}
+
+/*
  * CETRA MAIN
  */
 int main(int argc, char** argv) {
@@ -407,6 +449,7 @@ int main(int argc, char** argv) {
     }
 
     create_scene_lights(scene);
+    configure_visor_materials(scene);
 
     upload_buffers_to_gpu_for_nodes(scene->root_node);
 
