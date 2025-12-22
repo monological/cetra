@@ -294,38 +294,79 @@ static void _render_xyz(SceneNode* node, mat4 view, mat4 projection, GLuint* cur
     glBindVertexArray(0);
 }
 
-static void _render_scene(Scene* scene, SceneNode* node, Camera* camera, mat4 model, mat4 view,
-                          mat4 projection, float time_value, RenderMode render_mode,
-                          GLuint* current_program, Material** current_material) {
+typedef struct {
+    SceneNode* node;
+} RenderStackEntry;
 
+static void _render_scene_iterative(Scene* scene, SceneNode* root, Camera* camera, mat4 view,
+                                    mat4 projection, float time_value, RenderMode render_mode,
+                                    GLuint* current_program, Material** current_material) {
     if (!scene) {
         log_error("error: render called with NULL scene");
         return;
     }
 
-    if (!node) {
+    if (!root) {
         log_error("error: render called with NULL root node");
         return;
     }
 
-    size_t returned_light_count;
+    // Iterative traversal using explicit stack
+    size_t stack_capacity = 64;
+    size_t stack_size = 0;
+    RenderStackEntry* stack = malloc(stack_capacity * sizeof(RenderStackEntry));
+    if (!stack) {
+        log_error("Failed to allocate render stack");
+        return;
+    }
+
     size_t max_lights = get_gl_max_lights();
-    Light** closest_lights = get_closest_lights(scene, node, max_lights, &returned_light_count);
 
-    _render_node(scene, node, camera, model, view, projection, time_value, render_mode,
-                 closest_lights, returned_light_count, current_program, current_material);
+    // Push root node
+    stack[stack_size++].node = root;
 
-    if (node->show_xyz && node->xyz_shader_program) {
-        _render_xyz(node, view, projection, current_program);
+    while (stack_size > 0) {
+        // Pop from stack
+        SceneNode* node = stack[--stack_size].node;
+
+        // Get closest lights for this node
+        size_t returned_light_count;
+        Light** closest_lights = get_closest_lights(scene, node, max_lights, &returned_light_count);
+
+        // Render this node's meshes
+        _render_node(scene, node, camera, node->global_transform, view, projection, time_value,
+                     render_mode, closest_lights, returned_light_count, current_program,
+                     current_material);
+
+        // Render xyz axes if enabled
+        if (node->show_xyz && node->xyz_shader_program) {
+            _render_xyz(node, view, projection, current_program);
+        }
+
+        // Push children in reverse order to maintain left-to-right traversal
+        for (size_t i = node->children_count; i > 0; i--) {
+            SceneNode* child = node->children[i - 1];
+            if (!child)
+                continue;
+
+            // Grow stack if needed
+            if (stack_size >= stack_capacity) {
+                stack_capacity *= 2;
+                RenderStackEntry* new_stack =
+                    realloc(stack, stack_capacity * sizeof(RenderStackEntry));
+                if (!new_stack) {
+                    log_error("Failed to grow render stack");
+                    free(stack);
+                    return;
+                }
+                stack = new_stack;
+            }
+
+            stack[stack_size++].node = child;
+        }
     }
 
-    // Note: closest_lights points to scene's cached array, do not free
-
-    // Render children
-    for (size_t i = 0; i < node->children_count; i++) {
-        _render_scene(scene, node->children[i], camera, node->global_transform, view, projection,
-                      time_value, render_mode, current_program, current_material);
-    }
+    free(stack);
 }
 
 void render_current_scene(Engine* engine, float time_value) {
@@ -352,7 +393,6 @@ void render_current_scene(Engine* engine, float time_value) {
         return;
     }
 
-    mat4* model = &engine->model_matrix;
     mat4* view = &engine->view_matrix;
     mat4* projection = &engine->projection_matrix;
 
@@ -362,8 +402,8 @@ void render_current_scene(Engine* engine, float time_value) {
     GLuint current_program = 0;
     Material* current_material = NULL;
 
-    _render_scene(scene, root_node, camera, *model, *view, *projection, time_value, render_mode,
-                  &current_program, &current_material);
+    _render_scene_iterative(scene, root_node, camera, *view, *projection, time_value, render_mode,
+                            &current_program, &current_material);
 
     // Reset program state at end of frame
     glUseProgram(0);
