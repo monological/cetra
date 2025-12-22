@@ -18,6 +18,7 @@
 #include "cetra/import.h"
 #include "cetra/render.h"
 #include "cetra/transform.h"
+#include "cetra/ibl.h"
 
 #include "cetra/shader_strings.h"
 
@@ -365,12 +366,13 @@ void configure_visor_materials(Scene* scene) {
 int main(int argc, char** argv) {
 
     if (argc < 2) {
-        fprintf(stderr, "Usage: %s <FBX_MODEL_PATH> [FBX_TEXTURE_DIR]\n", argv[0]);
+        fprintf(stderr, "Usage: %s <FBX_MODEL_PATH> [FBX_TEXTURE_DIR] [HDR_PATH]\n", argv[0]);
         return -1;
     }
 
     const char* fbx_model_path = argv[1];
     const char* fbx_texture_dir = argc > 2 ? argv[2] : NULL;
+    const char* hdr_path = argc > 3 ? argv[3] : NULL;
 
     Engine* engine = create_engine("Cetra Engine", WIDTH, HEIGHT);
 
@@ -450,6 +452,25 @@ int main(int argc, char** argv) {
 
     create_scene_lights(scene);
     configure_visor_materials(scene);
+
+    if (hdr_path) {
+        IBLResources* ibl = create_ibl_resources();
+        if (ibl && load_hdr_environment(ibl, hdr_path) == 0) {
+            if (precompute_ibl(ibl, engine) == 0) {
+                scene->ibl = ibl;
+                scene->render_skybox = true;
+                scene->skybox_exposure = 1.0f;
+                printf("IBL loaded from: %s\n", hdr_path);
+            } else {
+                fprintf(stderr, "Failed to precompute IBL\n");
+                free_ibl_resources(ibl);
+            }
+        } else {
+            fprintf(stderr, "Failed to load HDR: %s\n", hdr_path);
+            if (ibl)
+                free_ibl_resources(ibl);
+        }
+    }
 
     upload_buffers_to_gpu_for_nodes(scene->root_node);
 
