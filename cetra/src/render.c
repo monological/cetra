@@ -271,6 +271,12 @@ static void _render_node(Scene* scene, SceneNode* node, Camera* camera, mat4 mod
             if (scene && scene->ibl && scene->ibl->precomputed) {
                 bind_ibl_textures(scene->ibl, program);
             } else {
+                // Set IBL sampler uniforms to their designated texture units even when disabled
+                // This prevents type mismatch when samplerCube defaults to unit 0 (which has 2D
+                // textures)
+                uniform_set_int(u, "irradianceMap", 14);
+                uniform_set_int(u, "prefilteredMap", 15);
+                uniform_set_int(u, "brdfLUT", 16);
                 uniform_set_int(u, "iblEnabled", 0);
             }
         }
