@@ -216,7 +216,7 @@ void generate_rect_to_mesh(Mesh* mesh, const Rect* rect) {
         size_t vertex_index = 0;
 
         // Define the centered points of the arcs for the four corners
-        vec3 arc_centers[4] = {
+        const vec3 arc_centers[4] = {
             {(rect->position[0] + rect->size[0] - corner_radius) - half_width,
              (rect->position[1] + rect->size[1] - corner_radius) - half_height, 0.0f}, // Top right
             {(rect->position[0] + rect->size[0] - corner_radius) - half_width,
@@ -227,7 +227,7 @@ void generate_rect_to_mesh(Mesh* mesh, const Rect* rect) {
              (rect->position[1] + rect->size[1] - corner_radius) - half_height, 0.0f} // Top left
         };
 
-        float angles[4] = {
+        const float angles[4] = {
             -GLM_PI_2, // Top right starts at -π/2 radians
             0,         // Bottom right starts at 0 radians
             GLM_PI_2,  // Bottom left starts at π/2 radians
@@ -253,7 +253,6 @@ void generate_rect_to_mesh(Mesh* mesh, const Rect* rect) {
             vec3 rect_center = {rect->position[0], rect->position[1], 0.0f};
             glm_vec3_copy(rect_center, &mesh->vertices[vertex_index * 3]);
             size_t center_vertex_index = vertex_index;
-            vertex_index++;
 
             // Set indices for filled rect (triangles)
             mesh->index_count = resolution * 4 * 3; // 3 indices per triangle
@@ -374,7 +373,7 @@ void generate_rect_to_mesh(Mesh* mesh, const Rect* rect) {
     }
 }
 
-void generate_curve_to_mesh(Mesh* mesh, Curve* curve) {
+void generate_curve_to_mesh(Mesh* mesh, const Curve* curve) {
     if (!mesh || !curve) {
         return;
     }
@@ -401,7 +400,7 @@ void generate_curve_to_mesh(Mesh* mesh, Curve* curve) {
     size_t vertex_index = 0, index_index = 0;
     for (int j = 0; j < resolution; ++j) {
         float t = (float)j / (float)(resolution - 1);
-        vec3 point;
+        vec3 point = {0};
         cubic_bezier_curve_point(curve, t, point);
 
         mesh->vertices[vertex_index * 3] = point[0];
@@ -418,4 +417,111 @@ void generate_curve_to_mesh(Mesh* mesh, Curve* curve) {
 
     mesh->line_width = curve->line_width;
     mesh->draw_mode = LINE_STRIP;
+}
+
+void generate_cylinder_to_mesh(Mesh* mesh, const Cylinder* cylinder) {
+    if (!mesh || !cylinder || cylinder->segments < 3) {
+        return;
+    }
+
+    int segments = cylinder->segments;
+    float base_r = cylinder->base_radius;
+    float top_r = cylinder->top_radius;
+    float h = cylinder->height;
+
+    // Vertices: 2 rings (bottom + top)
+    mesh->vertex_count = segments * 2;
+    mesh->index_count = segments * 6; // 2 triangles per quad, 3 indices each
+
+    float* new_vertices =
+        (float*)safe_realloc(mesh->vertices, mesh->vertex_count * 3 * sizeof(float));
+    float* new_normals =
+        (float*)safe_realloc(mesh->normals, mesh->vertex_count * 3 * sizeof(float));
+    float* new_tex_coords =
+        (float*)safe_realloc(mesh->tex_coords, mesh->vertex_count * 2 * sizeof(float));
+    unsigned int* new_indices =
+        (unsigned int*)safe_realloc(mesh->indices, mesh->index_count * sizeof(unsigned int));
+
+    if (!new_vertices || !new_normals || !new_tex_coords || !new_indices) {
+        if (new_vertices)
+            mesh->vertices = new_vertices;
+        if (new_normals)
+            mesh->normals = new_normals;
+        if (new_tex_coords)
+            mesh->tex_coords = new_tex_coords;
+        if (new_indices)
+            mesh->indices = new_indices;
+        return;
+    }
+    mesh->vertices = new_vertices;
+    mesh->normals = new_normals;
+    mesh->tex_coords = new_tex_coords;
+    mesh->indices = new_indices;
+
+    // Generate vertices for bottom and top rings
+    for (int i = 0; i < segments; i++) {
+        float theta = 2.0f * GLM_PI * i / segments;
+        float cos_t = cosf(theta);
+        float sin_t = sinf(theta);
+        float u = (float)i / segments;
+
+        // Bottom ring vertex (index i)
+        mesh->vertices[i * 3 + 0] = cylinder->position[0] + base_r * cos_t;
+        mesh->vertices[i * 3 + 1] = cylinder->position[1];
+        mesh->vertices[i * 3 + 2] = cylinder->position[2] + base_r * sin_t;
+
+        // Top ring vertex (index segments + i)
+        int top_idx = segments + i;
+        mesh->vertices[top_idx * 3 + 0] = cylinder->position[0] + top_r * cos_t;
+        mesh->vertices[top_idx * 3 + 1] = cylinder->position[1] + h;
+        mesh->vertices[top_idx * 3 + 2] = cylinder->position[2] + top_r * sin_t;
+
+        // Calculate normal (pointing outward radially)
+        // For a tapered cylinder, the normal tilts based on the slope
+        float slope = (base_r - top_r) / h;
+        float nx = cos_t;
+        float ny = slope;
+        float nz = sin_t;
+        float len = sqrtf(nx * nx + ny * ny + nz * nz);
+        if (len > 0.0001f) {
+            nx /= len;
+            ny /= len;
+            nz /= len;
+        }
+
+        // Bottom normal
+        mesh->normals[i * 3 + 0] = nx;
+        mesh->normals[i * 3 + 1] = ny;
+        mesh->normals[i * 3 + 2] = nz;
+
+        // Top normal (same direction)
+        mesh->normals[top_idx * 3 + 0] = nx;
+        mesh->normals[top_idx * 3 + 1] = ny;
+        mesh->normals[top_idx * 3 + 2] = nz;
+
+        // UV coordinates: U wraps around, V goes 0 at bottom to 1 at top
+        mesh->tex_coords[i * 2 + 0] = u;
+        mesh->tex_coords[i * 2 + 1] = 0.0f;
+
+        mesh->tex_coords[top_idx * 2 + 0] = u;
+        mesh->tex_coords[top_idx * 2 + 1] = 1.0f;
+    }
+
+    // Generate indices for triangles
+    size_t idx = 0;
+    for (int i = 0; i < segments; i++) {
+        int next = (i + 1) % segments;
+
+        // Bottom-left, bottom-right, top-left triangle
+        mesh->indices[idx++] = i;
+        mesh->indices[idx++] = next;
+        mesh->indices[idx++] = segments + i;
+
+        // Top-left, bottom-right, top-right triangle
+        mesh->indices[idx++] = segments + i;
+        mesh->indices[idx++] = next;
+        mesh->indices[idx++] = segments + next;
+    }
+
+    mesh->draw_mode = TRIANGLES;
 }

@@ -35,6 +35,14 @@ typedef struct {
     float line_width;
 } Curve;
 
+typedef struct {
+    vec3 position;
+    float base_radius;
+    float top_radius;
+    float height;
+    int segments;
+} Cylinder;
+
 /* Bezier functions */
 void cubic_bezier_curve_point(const Curve* curve, float t, vec3 result);
 Curve* generate_s_shaped_bezier_curve(vec3 start, vec3 end, float intensity, float line_width);
@@ -44,6 +52,7 @@ void free_curve(Curve* curve);
 void generate_point_to_mesh(Mesh* mesh, const Point* point);
 void generate_circle_to_mesh(Mesh* mesh, const Circle* circle);
 void generate_rect_to_mesh(Mesh* mesh, const Rect* rect);
-void generate_curve_to_mesh(Mesh* mesh, Curve* curve);
+void generate_curve_to_mesh(Mesh* mesh, const Curve* curve);
+void generate_cylinder_to_mesh(Mesh* mesh, const Cylinder* cylinder);
 
 #endif // GEOMETRY_H
