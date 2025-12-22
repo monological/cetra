@@ -314,8 +314,8 @@ void main() {
         sssThickness = texture(subsurfaceTex, TexCoords).r;
     }
 
-    // Calculate view direction
-    vec3 V = normalize(camPos - FragPos);
+    // Calculate view direction (must use WorldPos, not FragPos which is clip space)
+    vec3 V = normalize(camPos - WorldPos);
 
     // Render mode handling
     if (renderMode == 1) {
@@ -356,8 +356,8 @@ void main() {
                 L = normalize(-lights[i].direction);
                 attenuation = 1.0;
             } else {
-                L = normalize(lights[i].position - FragPos);
-                float distance = length(lights[i].position - FragPos);
+                L = normalize(lights[i].position - WorldPos);
+                float distance = length(lights[i].position - WorldPos);
                 attenuation = calculateAttenuation(distance, lights[i].constant,
                                                    lights[i].linear, lights[i].quadratic);
             }
