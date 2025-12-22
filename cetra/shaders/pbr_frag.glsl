@@ -303,10 +303,17 @@ void main() {
         // Simple Diffuse Lighting
         vec3 Lo = vec3(0.0);
         for (int i = 0; i < numLights; i++) {
-            vec3 L = normalize(lights[i].position - FragPos);
-            float distance = length(lights[i].position - FragPos);
-            float attenuation = calculateAttenuation(distance, lights[i].constant,
-                                                      lights[i].linear, lights[i].quadratic);
+            vec3 L;
+            float attenuation;
+            if (lights[i].type == 0) {
+                L = normalize(-lights[i].direction);
+                attenuation = 1.0;
+            } else {
+                L = normalize(lights[i].position - FragPos);
+                float distance = length(lights[i].position - FragPos);
+                attenuation = calculateAttenuation(distance, lights[i].constant,
+                                                   lights[i].linear, lights[i].quadratic);
+            }
             float NdotL = max(dot(N, L), 0.0);
             Lo += albedoMap * lights[i].color * lights[i].intensity * attenuation * NdotL;
         }
@@ -337,12 +344,22 @@ void main() {
 
     for (int i = 0; i < numLights; i++) {
         // Calculate per-light radiance
-        vec3 L = normalize(lights[i].position - FragPos);
-        vec3 H = normalize(V + L);
-        float distance = length(lights[i].position - FragPos);
+        vec3 L;
+        float attenuation;
 
-        float attenuation = calculateAttenuation(distance, lights[i].constant,
-                                                  lights[i].linear, lights[i].quadratic);
+        if (lights[i].type == 0) {
+            // LIGHT_DIRECTIONAL: use direction, no attenuation
+            L = normalize(-lights[i].direction);
+            attenuation = 1.0;
+        } else {
+            // Point/Spot lights: use position-based calculation
+            L = normalize(lights[i].position - FragPos);
+            float distance = length(lights[i].position - FragPos);
+            attenuation = calculateAttenuation(distance, lights[i].constant,
+                                               lights[i].linear, lights[i].quadratic);
+        }
+
+        vec3 H = normalize(V + L);
         vec3 radiance = lights[i].color * lights[i].intensity * attenuation;
 
         // Cook-Torrance BRDF with optional anisotropy
