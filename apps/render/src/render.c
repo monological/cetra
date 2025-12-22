@@ -61,6 +61,9 @@ void error_callback(int error, const char* description) {
 }
 
 void cursor_position_callback(Engine* engine, double xpos, double ypos) {
+    (void)engine;
+    (void)xpos;
+    (void)ypos;
 }
 
 void mouse_button_callback(Engine* engine, int button, int action, int mods) {
@@ -101,6 +104,11 @@ void mouse_button_callback(Engine* engine, int button, int action, int mods) {
 }
 
 void key_callback(Engine* engine, int key, int scancode, int action, int mods) {
+    (void)engine;
+    (void)key;
+    (void)scancode;
+    (void)action;
+    (void)mods;
 }
 
 void render_scene_callback(Engine* engine, Scene* current_scene) {
@@ -258,12 +266,11 @@ void create_scene_lights(Scene* scene) {
         return;
     }
     set_light_name(key, "key_light");
-    set_light_type(key, LIGHT_POINT);
-    vec3 key_pos = {300.0f, 400.0f, 500.0f};
-    set_light_original_position(key, key_pos);
-    set_light_global_position(key, key_pos);
-    set_light_intensity(key, 80000.0f);
-    set_light_color(key, (vec3){1.0f, 0.95f, 0.9f});
+    set_light_type(key, LIGHT_DIRECTIONAL);
+    vec3 key_dir = {-0.4f, -0.7f, -0.6f}; // pointing into scene from front-right-above
+    set_light_direction(key, key_dir);
+    set_light_intensity(key, 3.0f);
+    set_light_color(key, (vec3){1.0f, 0.95f, 0.9f}); // warm white
     add_light_to_scene(scene, key);
 
     SceneNode* key_node = create_node();
@@ -278,12 +285,11 @@ void create_scene_lights(Scene* scene) {
         return;
     }
     set_light_name(fill, "fill_light");
-    set_light_type(fill, LIGHT_POINT);
-    vec3 fill_pos = {-400.0f, 200.0f, 400.0f};
-    set_light_original_position(fill, fill_pos);
-    set_light_global_position(fill, fill_pos);
-    set_light_intensity(fill, 40000.0f);
-    set_light_color(fill, (vec3){0.8f, 0.85f, 1.0f});
+    set_light_type(fill, LIGHT_DIRECTIONAL);
+    vec3 fill_dir = {0.5f, -0.4f, -0.5f}; // pointing into scene from front-left
+    set_light_direction(fill, fill_dir);
+    set_light_intensity(fill, 1.5f);
+    set_light_color(fill, (vec3){0.8f, 0.85f, 1.0f}); // cool white
     add_light_to_scene(scene, fill);
 
     SceneNode* fill_node = create_node();
@@ -298,12 +304,11 @@ void create_scene_lights(Scene* scene) {
         return;
     }
     set_light_name(rim, "rim_light");
-    set_light_type(rim, LIGHT_POINT);
-    vec3 rim_pos = {0.0f, 500.0f, -400.0f};
-    set_light_original_position(rim, rim_pos);
-    set_light_global_position(rim, rim_pos);
-    set_light_intensity(rim, 60000.0f);
-    set_light_color(rim, (vec3){1.0f, 1.0f, 1.0f});
+    set_light_type(rim, LIGHT_DIRECTIONAL);
+    vec3 rim_dir = {0.0f, -0.6f, 0.8f}; // pointing from behind
+    set_light_direction(rim, rim_dir);
+    set_light_intensity(rim, 2.0f);
+    set_light_color(rim, (vec3){1.0f, 1.0f, 1.0f}); // pure white
     add_light_to_scene(scene, rim);
 
     SceneNode* rim_node = create_node();

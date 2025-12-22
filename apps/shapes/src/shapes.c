@@ -32,7 +32,7 @@
 #include "cetra/ext/nuklear.h"
 #include "cetra/ext/nuklear_glfw_gl3.h"
 
-#define FBX_MODEL_PATH "./models/room.fbx"
+#define FBX_MODEL_PATH  "./models/room.fbx"
 #define FBX_TEXTURE_DIR "./textures/room.fbm"
 
 /*
@@ -46,7 +46,6 @@ const float MIN_DIST = 2000.0f;
 const float MAX_DIST = 3000.0f;
 const float CAM_ANGULAR_SPEED = 0.5f; // Adjust this value as needed
 
-
 /*
  * Callbacks
  */
@@ -54,8 +53,8 @@ void error_callback(int error, const char* description) {
     fprintf(stderr, "Error: %s\n", description);
 }
 
-void cursor_position_callback(Engine *engine, double xpos, double ypos) {
-    if(engine->input.is_dragging && engine->input.selected_node){
+void cursor_position_callback(Engine* engine, double xpos, double ypos) {
+    if (engine->input.is_dragging && engine->input.selected_node) {
         // Get current mouse position in world space on the drag plane
         vec3 current_world_pos;
         get_mouse_world_position_on_drag_plane(engine, xpos, ypos, current_world_pos);
@@ -69,28 +68,28 @@ void cursor_position_callback(Engine *engine, double xpos, double ypos) {
         glm_vec3_add(engine->input.drag_object_start_pos, world_delta, new_pos);
 
         // Set the translation directly in the transform matrix
-        SceneNode *node = engine->input.selected_node;
+        SceneNode* node = engine->input.selected_node;
         node->original_transform[3][0] = new_pos[0];
         node->original_transform[3][1] = new_pos[1];
         // Keep Z unchanged: node->original_transform[3][2] = new_pos[2];
     }
 }
 
-void mouse_button_callback(Engine *engine, int button, int action, int mods) {
-    if(engine->input.is_dragging){
-        printf("dragging start %i %f %f\n", engine->input.is_dragging, engine->input.drag_fb_x, engine->input.drag_fb_y);
-    }else{
-        printf("dragging stop  %i %f %f\n", engine->input.is_dragging, engine->input.drag_fb_x, engine->input.drag_fb_y);
+void mouse_button_callback(Engine* engine, int button, int action, int mods) {
+    if (engine->input.is_dragging) {
+        printf("dragging start %i %f %f\n", engine->input.is_dragging, engine->input.drag_fb_x,
+               engine->input.drag_fb_y);
+    } else {
+        printf("dragging stop  %i %f %f\n", engine->input.is_dragging, engine->input.drag_fb_x,
+               engine->input.drag_fb_y);
     }
 }
 
-void key_callback(Engine *engine, int key, int scancode, int action, int mods) {
-
+void key_callback(Engine* engine, int key, int scancode, int action, int mods) {
 }
 
-
-void create_scene_light(Scene *scene) {
-    Light *light = create_light();
+void create_scene_light(Scene* scene) {
+    Light* light = create_light();
     if (!light) {
         fprintf(stderr, "Failed to create light.\n");
         return;
@@ -104,28 +103,28 @@ void create_scene_light(Scene *scene) {
     set_light_color(light, (vec3){100.0f, 100.0f, 100.0f});
     add_light_to_scene(scene, light);
 
-    SceneNode *light_node = create_node();
+    SceneNode* light_node = create_node();
     set_node_light(light_node, light);
     set_node_name(light_node, "light_node");
     add_child_node(scene->root_node, light_node);
 }
 
-void render_scene_callback(Engine* engine, Scene* current_scene){
-    SceneNode *root_node = current_scene->root_node;
+void render_scene_callback(Engine* engine, Scene* current_scene) {
+    SceneNode* root_node = current_scene->root_node;
 
-    if(!engine || !root_node) return;
+    if (!engine || !root_node)
+        return;
 
-    Camera *camera = engine->camera;
+    const Camera* camera = engine->camera;
 
-    if(!camera) return;
+    if (!camera)
+        return;
 
     float time_value = glfwGetTime();
-    
-    Transform transform = {
-        .position = {0.0f, 0.0f, 0.0f},
-        .rotation = {0.0f, 0.0f, 0.0f},
-        .scale = {1.0f, 1.0f, 1.0f}
-    };
+
+    Transform transform = {.position = {0.0f, 0.0f, 0.0f},
+                           .rotation = {0.0f, 0.0f, 0.0f},
+                           .scale = {1.0f, 1.0f, 1.0f}};
 
     update_engine_camera_lookat(engine);
     update_engine_camera_perspective(engine);
@@ -135,17 +134,16 @@ void render_scene_callback(Engine* engine, Scene* current_scene){
     apply_transform_to_nodes(root_node, engine->model_matrix);
 
     render_current_scene(engine, time_value);
-
 }
 
 /*
  * CETRA MAIN
  */
 int main() {
-    
-    Engine *engine = create_engine("Cetra Engine", WIDTH, HEIGHT);
 
-    if(init_engine(engine) != 0){
+    Engine* engine = create_engine("Cetra Engine", WIDTH, HEIGHT);
+
+    if (init_engine(engine) != 0) {
         fprintf(stderr, "Failed to initialize engine\n");
         return -1;
     }
@@ -194,7 +192,6 @@ int main() {
     shape_material->albedo[1] = 1.0f; // Green
     shape_material->albedo[2] = 0.0f; // Blue
 
-
     /*
      * Set up camera.
      */
@@ -205,7 +202,7 @@ int main() {
     float near_clip = 7.0f;
     float far_clip = 10000.0f;
 
-    Camera *camera = create_camera();
+    Camera* camera = create_camera();
 
     set_camera_position(camera, camera_position);
     set_camera_look_at(camera, look_at_point);
@@ -220,7 +217,7 @@ int main() {
 
     set_engine_camera(engine, camera);
     set_engine_camera_mode(engine, CAMERA_MODE_FREE);
-    
+
     /*
      * Import fbx model.
      */
@@ -242,7 +239,7 @@ int main() {
 
     create_scene_light(scene);
 
-    if(set_scene_xyz_shader_program(scene, xyz_shader_program) == GL_FALSE){
+    if (set_scene_xyz_shader_program(scene, xyz_shader_program) == GL_FALSE) {
         fprintf(stderr, "Failed to set scene xyz shader program\n");
         return -1;
     }
@@ -268,20 +265,17 @@ int main() {
 
     add_mesh_to_node(node1, mesh1);*/
 
-
     /*
      * mesh2: Rectangle with no corner radius and fill
      */
     Mesh* mesh2 = create_mesh();
     mesh2->material = pbr_material;
 
-    Rect rectangle2 = {
-        .position = {0.0f, -20.0f, 0.0f},
-        .size = {20.0f, 20.0f, 0.0f},
-        .corner_radius = 0.0f,
-        .line_width = 2.0f,
-        .filled = true
-    };
+    Rect rectangle2 = {.position = {0.0f, -20.0f, 0.0f},
+                       .size = {20.0f, 20.0f, 0.0f},
+                       .corner_radius = 0.0f,
+                       .line_width = 2.0f,
+                       .filled = true};
     generate_rect_to_mesh(mesh2, &rectangle2);
     calculate_aabb(mesh2);
 
@@ -315,13 +309,11 @@ int main() {
     Mesh* mesh4 = create_mesh();
     mesh4->material = pbr_material;
 
-    Rect rectangle4 = {
-        .position = {0.0f, 20.0f, 0.0f},
-        .size = {20.0f, 20.0f, 0.0f},
-        .corner_radius = 2.0f,
-        .line_width = 2.0f,
-        .filled = true
-    };
+    Rect rectangle4 = {.position = {0.0f, 20.0f, 0.0f},
+                       .size = {20.0f, 20.0f, 0.0f},
+                       .corner_radius = 2.0f,
+                       .line_width = 2.0f,
+                       .filled = true};
     generate_rect_to_mesh(mesh4, &rectangle4);
     calculate_aabb(mesh4);
 
@@ -341,7 +333,7 @@ int main() {
         .line_width = 10.0f,
         .filled = false
     };
-    
+
     generate_circle_to_mesh(mesh5, &circle1);
     calculate_aabb(mesh5);
 
@@ -362,7 +354,7 @@ int main() {
         .line_width = 2.0f,
         .filled = true
     };
-    
+
     generate_circle_to_mesh(mesh6, &circle2);
     calculate_aabb(mesh6);
 
@@ -434,9 +426,9 @@ int main() {
     add_mesh_to_node(node10, mesh10);
     free(bez10);*/
 
-    //add_child_node(root_node, node1);
+    // add_child_node(root_node, node1);
     add_child_node(root_node, node2);
-    //add_child_node(root_node, node3);
+    // add_child_node(root_node, node3);
     add_child_node(root_node, node4);
     /*add_child_node(root_node, node5);
     add_child_node(root_node, node6);
@@ -464,6 +456,3 @@ int main() {
 
     return 0;
 }
-
-
-
