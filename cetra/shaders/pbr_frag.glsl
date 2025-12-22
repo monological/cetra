@@ -253,6 +253,47 @@ int getShadowSlot(int lightIndex) {
 }
 
 void main() {
+    // Early-out for simple render modes that don't need texture sampling
+    if (renderMode == 5) {
+        // Flat Color - no textures needed
+        FragColor = vec4(1.0, 0.5, 0.2, 1.0);
+        return;
+    }
+    if (renderMode == 1) {
+        // Normals Visualization - no textures needed
+        vec3 color = normalize(Normal) * 0.5 + 0.5;
+        FragColor = vec4(color, 1.0);
+        return;
+    }
+    if (renderMode == 2) {
+        // World Position Visualization - no textures needed
+        vec3 color = fract(WorldPos * 0.01);
+        FragColor = vec4(color, 1.0);
+        return;
+    }
+    if (renderMode == 3) {
+        // Texture Coordinates Visualization - no textures needed
+        FragColor = vec4(TexCoords, 0.0, 1.0);
+        return;
+    }
+    if (renderMode == 4) {
+        // Tangent Space Visualization - no textures needed
+        vec3 tangent = normalize(TBN[0]) * 0.5 + 0.5;
+        FragColor = vec4(tangent, 1.0);
+        return;
+    }
+    if (renderMode == 6) {
+        // Albedo Only - only sample albedo texture
+        vec3 albedoMap = albedo;
+        if (albedoTexExists > 0) {
+            albedoMap = texture(albedoTex, TexCoords).rgb;
+            albedoMap = sRGBToLinear(albedoMap);
+        }
+        vec3 color = linearToSRGB(albedoMap);
+        FragColor = vec4(color, materialOpacity);
+        return;
+    }
+
     // Sample material properties from textures or use uniforms
     vec3 albedoMap = albedo;
     if (albedoTexExists > 0) {
@@ -317,36 +358,8 @@ void main() {
     // Calculate view direction (must use WorldPos, not FragPos which is clip space)
     vec3 V = normalize(camPos - WorldPos);
 
-    // Render mode handling
-    if (renderMode == 1) {
-        // Normals Visualization
-        vec3 color = normalize(Normal) * 0.5 + 0.5;
-        FragColor = vec4(color, 1.0);
-        return;
-    } else if (renderMode == 2) {
-        // World Position Visualization
-        vec3 color = fract(WorldPos * 0.01);
-        FragColor = vec4(color, 1.0);
-        return;
-    } else if (renderMode == 3) {
-        // Texture Coordinates Visualization
-        FragColor = vec4(TexCoords, 0.0, 1.0);
-        return;
-    } else if (renderMode == 4) {
-        // Tangent Space Visualization
-        vec3 tangent = normalize(TBN[0]) * 0.5 + 0.5;
-        FragColor = vec4(tangent, 1.0);
-        return;
-    } else if (renderMode == 5) {
-        // Flat Color
-        FragColor = vec4(1.0, 0.5, 0.2, 1.0);
-        return;
-    } else if (renderMode == 6) {
-        // Albedo Only
-        vec3 color = linearToSRGB(albedoMap);
-        FragColor = vec4(color, opacity);
-        return;
-    } else if (renderMode == 7) {
+    // Render modes that need texture data
+    if (renderMode == 7) {
         // Simple Diffuse Lighting
         vec3 Lo = vec3(0.0);
         for (int i = 0; i < numLights; i++) {
@@ -369,7 +382,8 @@ void main() {
         color = linearToSRGB(color);
         FragColor = vec4(color, opacity);
         return;
-    } else if (renderMode == 8) {
+    }
+    if (renderMode == 8) {
         // Metallic and Roughness Visualization
         FragColor = vec4(metallicMap, roughnessMap, 0.0, 1.0);
         return;

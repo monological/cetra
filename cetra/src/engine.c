@@ -1014,8 +1014,11 @@ void run_engine_render_loop(Engine* engine, RenderSceneFunc render_func) {
             engine->fps_update_timer = 0.0f;
         }
 
+        // Wireframe mode: use albedo-only rendering for performance
+        RenderMode saved_render_mode = engine->current_render_mode;
         if (engine->show_wireframe) {
             glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+            engine->current_render_mode = RENDER_MODE_ALBEDO;
         } else {
             glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
         }
@@ -1042,6 +1045,7 @@ void run_engine_render_loop(Engine* engine, RenderSceneFunc render_func) {
         }
 
         glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+        engine->current_render_mode = saved_render_mode;
 
         render_nuklear_gui(engine);
 
