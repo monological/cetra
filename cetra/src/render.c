@@ -19,6 +19,7 @@
 #include "engine.h"
 #include "util.h"
 #include "shadow.h"
+#include "intersect.h"
 
 static void _update_program_light_uniforms(ShaderProgram* program, Light* light, size_t light_count,
                                            size_t index) {
@@ -201,7 +202,8 @@ static void _update_camera_uniforms(ShaderProgram* program, Camera* camera) {
 static void _render_node(Scene* scene, SceneNode* node, Camera* camera, mat4 model, mat4 view,
                          mat4 projection, float time_value, RenderMode render_mode,
                          Light** closest_lights, size_t returned_light_count,
-                         GLuint* current_program, Material** current_material) {
+                         GLuint* current_program, Material** current_material,
+                         const Frustum* frustum) {
 
     if (!node->meshes || node->mesh_count == 0)
         return;
@@ -210,6 +212,12 @@ static void _render_node(Scene* scene, SceneNode* node, Camera* camera, mat4 mod
         Mesh* mesh = node->meshes[i];
         if (!mesh || !mesh->material)
             continue;
+
+        // Frustum culling: skip mesh if its AABB is completely outside the view frustum
+        if (frustum && !frustum_test_aabb_transformed(frustum, mesh->aabb.min, mesh->aabb.max,
+                                                      node->global_transform)) {
+            continue;
+        }
 
         Material* mat = mesh->material;
         ShaderProgram* program = mat->shader_program;
@@ -324,7 +332,8 @@ static int _ensure_traversal_stack_capacity(Scene* scene, size_t required) {
 
 static void _render_scene_iterative(Scene* scene, SceneNode* root, Camera* camera, mat4 view,
                                     mat4 projection, float time_value, RenderMode render_mode,
-                                    GLuint* current_program, Material** current_material) {
+                                    GLuint* current_program, Material** current_material,
+                                    const Frustum* frustum) {
     if (!scene) {
         log_error("error: render called with NULL scene");
         return;
@@ -358,7 +367,7 @@ static void _render_scene_iterative(Scene* scene, SceneNode* root, Camera* camer
         // Render this node's meshes
         _render_node(scene, node, camera, node->global_transform, view, projection, time_value,
                      render_mode, closest_lights, returned_light_count, current_program,
-                     current_material);
+                     current_material, frustum);
 
         // Render xyz axes if enabled
         if (node->show_xyz && node->xyz_shader_program) {
@@ -412,12 +421,18 @@ void render_current_scene(Engine* engine, float time_value) {
 
     RenderMode render_mode = engine->current_render_mode;
 
+    // Extract frustum from view-projection matrix for culling
+    mat4 vp;
+    glm_mat4_mul(*projection, *view, vp);
+    Frustum frustum;
+    frustum_extract_from_vp(vp, &frustum);
+
     // Track current program and material to avoid redundant state changes
     GLuint current_program = 0;
     Material* current_material = NULL;
 
     _render_scene_iterative(scene, root_node, camera, *view, *projection, time_value, render_mode,
-                            &current_program, &current_material);
+                            &current_program, &current_material, &frustum);
 
     // Reset program state at end of frame
     glUseProgram(0);
