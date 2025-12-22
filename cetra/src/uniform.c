@@ -95,6 +95,9 @@ void uniform_cache_standard(UniformManager* mgr) {
     uniform_location(mgr, "metallic");
     uniform_location(mgr, "roughness");
     uniform_location(mgr, "ao");
+    uniform_location(mgr, "materialOpacity");
+    uniform_location(mgr, "ior");
+    uniform_location(mgr, "filmThickness");
 
     // Texture samplers
     uniform_location(mgr, "albedoTex");

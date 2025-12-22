@@ -42,6 +42,9 @@ uniform vec3 albedo;
 uniform float metallic;
 uniform float roughness;
 uniform float ao;
+uniform float materialOpacity;
+uniform float ior;
+uniform float filmThickness;
 uniform vec3 camPos;
 uniform float time;
 
@@ -96,6 +99,37 @@ vec3 linearToSRGB(vec3 linear) {
 // Fresnel-Schlick approximation
 vec3 fresnelSchlick(float cosTheta, vec3 F0) {
     return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
+
+// Thin-film interference for iridescent coatings (pilot visor effect)
+// thickness: film thickness in nanometers (200-600nm typical)
+// cosTheta: dot(N, V) - viewing angle
+// filmIOR: refractive index of the thin film coating (~1.5 for most coatings)
+vec3 thinFilmInterference(float thickness, float cosTheta, float filmIOR) {
+    // Wavelengths in nanometers for RGB
+    const vec3 wavelengths = vec3(650.0, 550.0, 450.0); // R, G, B
+
+    // Refracted angle in the film (Snell's law, assuming air n=1.0)
+    float sinTheta = sqrt(1.0 - cosTheta * cosTheta);
+    float sinThetaFilm = sinTheta / filmIOR;
+    float cosThetaFilm = sqrt(1.0 - sinThetaFilm * sinThetaFilm);
+
+    // Optical path difference (2 * n * d * cos(theta_film))
+    float opd = 2.0 * filmIOR * thickness * cosThetaFilm;
+
+    // Phase shift for each wavelength
+    vec3 phase = 2.0 * PI * opd / wavelengths;
+
+    // Interference: (1 + cos(phase)) / 2 gives 0-1 range
+    // Add phase shift of PI for reflection from denser medium
+    vec3 interference = 0.5 + 0.5 * cos(phase + PI);
+
+    // Boost saturation for more vivid colors
+    vec3 color = interference;
+    float avg = (color.r + color.g + color.b) / 3.0;
+    color = mix(vec3(avg), color, 1.5); // Increase saturation
+
+    return clamp(color, 0.0, 1.0);
 }
 
 // GGX/Trowbridge-Reitz Normal Distribution Function
@@ -244,9 +278,9 @@ void main() {
         emissiveMap = sRGBToLinear(texture(emissiveTex, TexCoords).rgb);
     }
 
-    float opacity = 1.0;
+    float opacity = materialOpacity;
     if (opacityTexExists > 0) {
-        opacity = texture(opacityTex, TexCoords).r;
+        opacity = texture(opacityTex, TexCoords).r * materialOpacity;
     }
 
     // Microsurface detail - modulates roughness for fine surface detail
@@ -330,9 +364,11 @@ void main() {
 
     // renderMode == 0: Full PBR
 
-    // Calculate F0 (surface reflection at zero incidence)
-    // Dielectrics use 0.04, metals use albedo color
-    vec3 F0 = vec3(0.04);
+    // Calculate F0 (surface reflection at zero incidence) from IOR
+    // F0 = ((ior - 1) / (ior + 1))^2
+    // For plastic/glass (ior=1.5): F0 = 0.04
+    float iorF0 = pow((ior - 1.0) / (ior + 1.0), 2.0);
+    vec3 F0 = vec3(iorF0);
     F0 = mix(F0, albedoMap, metallicMap);
 
     // Accumulate lighting from all lights
@@ -371,6 +407,16 @@ void main() {
         }
         float G = geometrySmith(N, V, L, roughnessMap);
         vec3 F = fresnelSchlick(max(dot(H, V), 0.0), F0);
+
+        // Apply thin-film interference for iridescent coatings (pilot visor style)
+        if (filmThickness > 0.0) {
+            float NdotV = max(dot(N, V), 0.0);
+            vec3 iridescence = thinFilmInterference(filmThickness, NdotV, 1.5);
+            // Strong iridescent mirror effect
+            float fresnel = pow(1.0 - NdotV, 2.0);  // Broader fresnel for more color spread
+            // Replace F entirely with strong iridescent reflection
+            F = iridescence * (0.6 + fresnel * 0.4);
+        }
 
         // Specular contribution
         vec3 numerator = NDF * G * F;
@@ -416,5 +462,15 @@ void main() {
     // Gamma correction
     color = linearToSRGB(color);
 
-    FragColor = vec4(color, opacity);
+    // For translucent materials, apply Fresnel-based alpha
+    // Edges become more reflective (less transparent) at glancing angles
+    float finalOpacity = opacity;
+    if (opacity < 1.0) {
+        float NdotV = max(dot(N, V), 0.0);
+        float fresnelOpacity = iorF0 + (1.0 - iorF0) * pow(1.0 - NdotV, 5.0);
+        // Blend between base opacity and full opacity based on Fresnel
+        finalOpacity = mix(opacity, 1.0, fresnelOpacity);
+    }
+
+    FragColor = vec4(color, finalOpacity);
 }

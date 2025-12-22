@@ -476,6 +476,22 @@ void set_node_camera(SceneNode* node, Camera* camera) {
     node->camera = camera;
 }
 
+SceneNode* find_node_by_name(SceneNode* root, const char* name) {
+    if (!root || !name)
+        return NULL;
+
+    if (root->name && strcmp(root->name, name) == 0)
+        return root;
+
+    for (size_t i = 0; i < root->children_count; i++) {
+        SceneNode* found = find_node_by_name(root->children[i], name);
+        if (found)
+            return found;
+    }
+
+    return NULL;
+}
+
 void set_shader_program_for_nodes(SceneNode* node, ShaderProgram* program) {
     if (!node) {
         return;

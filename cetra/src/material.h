@@ -11,6 +11,9 @@ typedef struct Material {
     float metallic;
     float roughness;
     float ao;
+    float opacity;
+    float ior;           // Index of refraction (1.5 for plastic/glass, 1.33 for water)
+    float filmThickness; // Thin-film thickness in nanometers (0 = disabled, 200-600nm typical)
 
     // Core PBR Textures
     Texture* albedo_tex;            // Albedo (Diffuse) Map

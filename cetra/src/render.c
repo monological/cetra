@@ -95,6 +95,9 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
     uniform_set_float(u, "metallic", material->metallic);
     uniform_set_float(u, "roughness", material->roughness);
     uniform_set_float(u, "ao", material->ao);
+    uniform_set_float(u, "materialOpacity", material->opacity);
+    uniform_set_float(u, "ior", material->ior);
+    uniform_set_float(u, "filmThickness", material->filmThickness);
 
     if (material->albedo_tex) {
         glActiveTexture(GL_TEXTURE0);

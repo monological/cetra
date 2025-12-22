@@ -55,6 +55,9 @@ void set_node_name(SceneNode* node, const char* name);
 void set_node_light(SceneNode* node, Light* light);
 void set_node_camera(SceneNode* node, Camera* camera);
 
+// find
+SceneNode* find_node_by_name(SceneNode* root, const char* name);
+
 // xyz
 void set_show_xyz_for_nodes(SceneNode* node, bool show_xyz);
 
