@@ -975,6 +975,10 @@ void run_engine_render_loop(Engine* engine, RenderSceneFunc render_func) {
         engine->delta_time = current_time - engine->last_frame_time;
         engine->last_frame_time = current_time;
 
+        // Clamp delta time to prevent physics explosions on frame drops
+        if (engine->delta_time > 0.1)
+            engine->delta_time = 0.1;
+
         engine->frame_count++;
         engine->fps_update_timer += (float)engine->delta_time;
 
