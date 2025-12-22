@@ -62,6 +62,11 @@ Scene* create_scene() {
     // Initialize shadow system
     scene->shadow_system = create_shadow_system(DEFAULT_SHADOW_MAP_SIZE);
 
+    // Initialize IBL (NULL by default, user must load HDR)
+    scene->ibl = NULL;
+    scene->render_skybox = false;
+    scene->skybox_exposure = 1.0f;
+
     return scene;
 }
 
@@ -132,6 +137,12 @@ void free_scene(Scene* scene) {
     if (scene->shadow_system) {
         free_shadow_system(scene->shadow_system);
         scene->shadow_system = NULL;
+    }
+
+    // Free IBL resources
+    if (scene->ibl) {
+        free_ibl_resources(scene->ibl);
+        scene->ibl = NULL;
     }
 
     // Finally, free the scene itself

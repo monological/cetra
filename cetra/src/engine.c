@@ -696,6 +696,32 @@ static int _create_default_shaders_for_engine(Engine* engine) {
 
     add_shader_program_to_engine(engine, shadow_depth_program);
 
+    // IBL Programs
+    ShaderProgram* skybox_program = create_skybox_program();
+    if (skybox_program) {
+        add_shader_program_to_engine(engine, skybox_program);
+    }
+
+    ShaderProgram* ibl_equirect_program = create_ibl_equirect_to_cube_program();
+    if (ibl_equirect_program) {
+        add_shader_program_to_engine(engine, ibl_equirect_program);
+    }
+
+    ShaderProgram* ibl_irradiance_program = create_ibl_irradiance_program();
+    if (ibl_irradiance_program) {
+        add_shader_program_to_engine(engine, ibl_irradiance_program);
+    }
+
+    ShaderProgram* ibl_prefilter_program = create_ibl_prefilter_program();
+    if (ibl_prefilter_program) {
+        add_shader_program_to_engine(engine, ibl_prefilter_program);
+    }
+
+    ShaderProgram* ibl_brdf_program = create_ibl_brdf_program();
+    if (ibl_brdf_program) {
+        add_shader_program_to_engine(engine, ibl_brdf_program);
+    }
+
     return 0;
 }
 
@@ -1009,6 +1035,13 @@ void run_engine_render_loop(Engine* engine, RenderSceneFunc render_func) {
         // Process pending async texture uploads (max 5 per frame to avoid stutter)
         if (current_scene && current_scene->tex_pool && engine->async_loader) {
             async_loader_process_pending(engine->async_loader, current_scene->tex_pool, 5);
+        }
+
+        // Render skybox (before main scene, with depth write disabled)
+        if (current_scene && current_scene->render_skybox && current_scene->ibl &&
+            current_scene->ibl->precomputed) {
+            render_skybox(current_scene->ibl, engine->view_matrix, engine->projection_matrix,
+                          current_scene->skybox_exposure);
         }
 
         if (render_func != NULL && current_scene != NULL) {

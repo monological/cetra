@@ -266,6 +266,13 @@ static void _render_node(Scene* scene, SceneNode* node, Camera* camera, mat4 mod
             } else {
                 uniform_set_int(u, "numShadowLights", 0);
             }
+
+            // Bind IBL textures if available
+            if (scene && scene->ibl && scene->ibl->precomputed) {
+                bind_ibl_textures(scene->ibl, program);
+            } else {
+                uniform_set_int(u, "iblEnabled", 0);
+            }
         }
 
         // Per-mesh uniforms (model matrix is always per-mesh)

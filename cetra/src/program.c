@@ -454,3 +454,63 @@ ShaderProgram* create_shadow_depth_program() {
 
     return program;
 }
+
+ShaderProgram* create_skybox_program() {
+    ShaderProgram* program = NULL;
+
+    if ((program = create_program_from_source("skybox", skybox_vert_shader_str,
+                                              skybox_frag_shader_str, NULL)) == NULL) {
+        log_error("Failed to initialize skybox shader program");
+        return NULL;
+    }
+
+    return program;
+}
+
+ShaderProgram* create_ibl_equirect_to_cube_program() {
+    ShaderProgram* program = NULL;
+
+    if ((program = create_program_from_source("ibl_equirect_to_cube", ibl_cubemap_vert_shader_str,
+                                              ibl_equirect_frag_shader_str, NULL)) == NULL) {
+        log_error("Failed to initialize IBL equirect-to-cube shader program");
+        return NULL;
+    }
+
+    return program;
+}
+
+ShaderProgram* create_ibl_irradiance_program() {
+    ShaderProgram* program = NULL;
+
+    if ((program = create_program_from_source("ibl_irradiance", ibl_cubemap_vert_shader_str,
+                                              ibl_irradiance_frag_shader_str, NULL)) == NULL) {
+        log_error("Failed to initialize IBL irradiance shader program");
+        return NULL;
+    }
+
+    return program;
+}
+
+ShaderProgram* create_ibl_prefilter_program() {
+    ShaderProgram* program = NULL;
+
+    if ((program = create_program_from_source("ibl_prefilter", ibl_cubemap_vert_shader_str,
+                                              ibl_prefilter_frag_shader_str, NULL)) == NULL) {
+        log_error("Failed to initialize IBL prefilter shader program");
+        return NULL;
+    }
+
+    return program;
+}
+
+ShaderProgram* create_ibl_brdf_program() {
+    ShaderProgram* program = NULL;
+
+    if ((program = create_program_from_source("ibl_brdf", ibl_brdf_vert_shader_str,
+                                              ibl_brdf_frag_shader_str, NULL)) == NULL) {
+        log_error("Failed to initialize IBL BRDF shader program");
+        return NULL;
+    }
+
+    return program;
+}

@@ -45,6 +45,13 @@ ShaderProgram* create_shape_program();
 ShaderProgram* create_xyz_program();
 ShaderProgram* create_shadow_depth_program();
 
+// IBL Programs
+ShaderProgram* create_skybox_program();
+ShaderProgram* create_ibl_equirect_to_cube_program();
+ShaderProgram* create_ibl_irradiance_program();
+ShaderProgram* create_ibl_prefilter_program();
+ShaderProgram* create_ibl_brdf_program();
+
 size_t calculate_max_lights();
 
 #endif // _PROGRAM_H_

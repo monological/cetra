@@ -85,6 +85,14 @@ uniform int numShadowLights;
 uniform float shadowBias;
 uniform vec2 shadowTexelSize;
 
+// IBL (Image-Based Lighting) uniforms
+uniform samplerCube irradianceMap;
+uniform samplerCube prefilteredMap;
+uniform sampler2D brdfLUT;
+uniform int iblEnabled;
+uniform float iblIntensity;
+uniform float maxReflectionLOD;
+
 const float PI = 3.14159265359;
 
 // Color space conversions
@@ -99,6 +107,11 @@ vec3 linearToSRGB(vec3 linear) {
 // Fresnel-Schlick approximation
 vec3 fresnelSchlick(float cosTheta, vec3 F0) {
     return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
+
+// Fresnel-Schlick with roughness for IBL
+vec3 fresnelSchlickRoughness(float cosTheta, vec3 F0, float roughness) {
+    return F0 + (max(vec3(1.0 - roughness), F0) - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
 }
 
 // Thin-film interference for iridescent coatings (pilot visor effect)
@@ -450,8 +463,31 @@ void main() {
         }
     }
 
-    // Ambient lighting (simplified IBL approximation)
-    vec3 ambient = vec3(0.03) * albedoMap * aoMap;
+    // Ambient lighting with IBL
+    vec3 ambient;
+    if (iblEnabled > 0) {
+        float NdotV = max(dot(N, V), 0.0);
+        vec3 F = fresnelSchlickRoughness(NdotV, F0, roughnessMap);
+
+        vec3 kS = F;
+        vec3 kD = vec3(1.0) - kS;
+        kD *= 1.0 - metallicMap;
+
+        // Diffuse IBL: sample irradiance map with surface normal
+        vec3 irradiance = texture(irradianceMap, N).rgb;
+        vec3 diffuse = irradiance * albedoMap;
+
+        // Specular IBL: sample prefiltered env map with reflection vector
+        vec3 R = reflect(-V, N);
+        vec3 prefilteredColor = textureLod(prefilteredMap, R, roughnessMap * maxReflectionLOD).rgb;
+        vec2 brdf = texture(brdfLUT, vec2(NdotV, roughnessMap)).rg;
+        vec3 specular = prefilteredColor * (F * brdf.x + brdf.y);
+
+        ambient = (kD * diffuse + specular) * aoMap * iblIntensity;
+    } else {
+        // Fallback to simple ambient when IBL is disabled
+        ambient = vec3(0.03) * albedoMap * aoMap;
+    }
 
     // Final color
     vec3 color = ambient + Lo + emissiveMap;

@@ -13,6 +13,7 @@
 #include "light.h"
 #include "camera.h"
 #include "shadow.h"
+#include "ibl.h"
 
 /*
  * SceneNode
@@ -106,6 +107,11 @@ typedef struct Scene {
 
     // Shadow mapping
     ShadowSystem* shadow_system;
+
+    // Image-Based Lighting
+    IBLResources* ibl;
+    bool render_skybox;
+    float skybox_exposure;
 } Scene;
 
 // malloc
