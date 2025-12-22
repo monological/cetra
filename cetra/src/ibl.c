@@ -230,10 +230,31 @@ static void create_cubemap_texture(GLuint* texture, int size, bool mipmap) {
 
     if (mipmap) {
         glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-        glGenerateMipmap(GL_TEXTURE_CUBE_MAP);
+        // Don't call glGenerateMipmap here - we'll render to each mip level manually
     } else {
         glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     }
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+}
+
+// Create prefilter cubemap with manually allocated mip levels
+static void create_prefilter_cubemap(GLuint* texture, int size, int num_mip_levels) {
+    glGenTextures(1, texture);
+    glBindTexture(GL_TEXTURE_CUBE_MAP, *texture);
+
+    // Allocate storage for each mip level and face
+    for (int mip = 0; mip < num_mip_levels; ++mip) {
+        int mip_size = size >> mip;
+        for (int face = 0; face < 6; ++face) {
+            glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, mip, GL_RGB16F, mip_size, mip_size,
+                         0, GL_RGB, GL_FLOAT, NULL);
+        }
+    }
+
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
     glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 }
 
@@ -412,7 +433,7 @@ int precompute_ibl(IBLResources* ibl, Engine* engine) {
 
     // Step 3: Generate prefiltered map with mipmaps
     log_info("  Generating prefiltered environment map...");
-    create_cubemap_texture(&ibl->prefilter_map, IBL_PREFILTER_SIZE, true);
+    create_prefilter_cubemap(&ibl->prefilter_map, IBL_PREFILTER_SIZE, IBL_PREFILTER_MIP_LEVELS);
     render_prefilter_convolution(ibl, capture_projection, capture_views);
 
     // Step 4: Generate BRDF LUT
