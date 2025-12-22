@@ -361,8 +361,8 @@ int main(int argc, char** argv) {
     /*
      * Set up camera.
      */
-    vec3 camera_position = {0.0f, 2.0f, 300.0f};
-    vec3 look_at_point = {0.0f, 0.0f, 0.0f};
+    vec3 camera_position = {0.0f, 150.0f, 100.0f};
+    vec3 look_at_point = {0.0f, 150.0f, 0.0f};
     vec3 up_vector = {0.0f, 1.0f, 0.0f};
     float fov_radians = 0.37;
     float near_clip = 7.0f;
