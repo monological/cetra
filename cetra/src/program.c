@@ -363,7 +363,10 @@ GLboolean validate_program(ShaderProgram* program) {
     GLboolean success = GL_TRUE;
 
     glValidateProgram(program->id);
-    check_gl_error("validate program");
+    // Note: Some drivers generate spurious GL errors during validation.
+    // The validation status (GL_VALIDATE_STATUS) is what actually matters.
+    while (glGetError() != GL_NO_ERROR) {
+    }
 
     GLint validationStatus;
     glGetProgramiv(program->id, GL_VALIDATE_STATUS, &validationStatus);

@@ -439,16 +439,25 @@ void generate_cylinder_to_mesh(Mesh* mesh, const Cylinder* cylinder) {
         (float*)safe_realloc(mesh->normals, mesh->vertex_count * 3 * sizeof(float));
     float* new_tex_coords =
         (float*)safe_realloc(mesh->tex_coords, mesh->vertex_count * 2 * sizeof(float));
+    float* new_tangents =
+        (float*)safe_realloc(mesh->tangents, mesh->vertex_count * 3 * sizeof(float));
+    float* new_bitangents =
+        (float*)safe_realloc(mesh->bitangents, mesh->vertex_count * 3 * sizeof(float));
     unsigned int* new_indices =
         (unsigned int*)safe_realloc(mesh->indices, mesh->index_count * sizeof(unsigned int));
 
-    if (!new_vertices || !new_normals || !new_tex_coords || !new_indices) {
+    if (!new_vertices || !new_normals || !new_tex_coords || !new_tangents || !new_bitangents ||
+        !new_indices) {
         if (new_vertices)
             mesh->vertices = new_vertices;
         if (new_normals)
             mesh->normals = new_normals;
         if (new_tex_coords)
             mesh->tex_coords = new_tex_coords;
+        if (new_tangents)
+            mesh->tangents = new_tangents;
+        if (new_bitangents)
+            mesh->bitangents = new_bitangents;
         if (new_indices)
             mesh->indices = new_indices;
         return;
@@ -456,6 +465,8 @@ void generate_cylinder_to_mesh(Mesh* mesh, const Cylinder* cylinder) {
     mesh->vertices = new_vertices;
     mesh->normals = new_normals;
     mesh->tex_coords = new_tex_coords;
+    mesh->tangents = new_tangents;
+    mesh->bitangents = new_bitangents;
     mesh->indices = new_indices;
 
     // Generate vertices for bottom and top rings
@@ -498,6 +509,38 @@ void generate_cylinder_to_mesh(Mesh* mesh, const Cylinder* cylinder) {
         mesh->normals[top_idx * 3 + 0] = nx;
         mesh->normals[top_idx * 3 + 1] = ny;
         mesh->normals[top_idx * 3 + 2] = nz;
+
+        // Tangent: along the circumference (perpendicular to radial direction)
+        float tx = -sin_t;
+        float ty = 0.0f;
+        float tz = cos_t;
+
+        mesh->tangents[i * 3 + 0] = tx;
+        mesh->tangents[i * 3 + 1] = ty;
+        mesh->tangents[i * 3 + 2] = tz;
+
+        mesh->tangents[top_idx * 3 + 0] = tx;
+        mesh->tangents[top_idx * 3 + 1] = ty;
+        mesh->tangents[top_idx * 3 + 2] = tz;
+
+        // Bitangent: cross(normal, tangent) for proper TBN
+        float bx = ny * tz - nz * ty;
+        float by = nz * tx - nx * tz;
+        float bz = nx * ty - ny * tx;
+        float blen = sqrtf(bx * bx + by * by + bz * bz);
+        if (blen > 0.0001f) {
+            bx /= blen;
+            by /= blen;
+            bz /= blen;
+        }
+
+        mesh->bitangents[i * 3 + 0] = bx;
+        mesh->bitangents[i * 3 + 1] = by;
+        mesh->bitangents[i * 3 + 2] = bz;
+
+        mesh->bitangents[top_idx * 3 + 0] = bx;
+        mesh->bitangents[top_idx * 3 + 1] = by;
+        mesh->bitangents[top_idx * 3 + 2] = bz;
 
         // UV coordinates: U wraps around, V goes 0 at bottom to 1 at top
         mesh->tex_coords[i * 2 + 0] = u;

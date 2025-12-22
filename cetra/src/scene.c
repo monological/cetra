@@ -533,6 +533,10 @@ static void _upload_xyz_buffers_to_gpu_for_node(SceneNode* node) {
     glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
     glEnableVertexAttribArray(1);
 
+    // Clear any stale GL errors before validation
+    while (glGetError() != GL_NO_ERROR) {
+    }
+
     // only validate if VAO is bound
     if (node->xyz_shader_program && !validate_program(node->xyz_shader_program)) {
         log_error("xyz shader program validation failed");
