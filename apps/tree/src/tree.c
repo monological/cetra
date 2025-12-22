@@ -446,8 +446,6 @@ static Texture* create_texture_from_data(unsigned char* data, int width, int hei
 
     tex->width = width;
     tex->height = height;
-    tex->internal_format = format;
-    tex->data_format = format;
     tex->filepath = strdup(name);
 
     glGenTextures(1, &tex->id);
@@ -458,11 +456,37 @@ static Texture* create_texture_from_data(unsigned char* data, int width, int hei
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
-    GLenum internal = (format == GL_RGBA) ? GL_RGBA8 : (format == GL_RED ? GL_R8 : GL_RGB8);
-    glTexImage2D(GL_TEXTURE_2D, 0, internal, width, height, 0, format, GL_UNSIGNED_BYTE, data);
+    // Use sized internal formats
+    GLenum internal_format;
+    if (format == GL_RGBA) {
+        internal_format = GL_RGBA8;
+    } else if (format == GL_RED) {
+        internal_format = GL_R8;
+    } else {
+        internal_format = GL_RGB8;
+    }
+
+    tex->internal_format = internal_format;
+    tex->data_format = format;
+
+    glTexImage2D(GL_TEXTURE_2D, 0, internal_format, width, height, 0, format, GL_UNSIGNED_BYTE,
+                 data);
+
+    GLenum err = glGetError();
+    if (err != GL_NO_ERROR) {
+        printf("OpenGL error after glTexImage2D for %s: %d\n", name, err);
+    }
+
     glGenerateMipmap(GL_TEXTURE_2D);
 
+    err = glGetError();
+    if (err != GL_NO_ERROR) {
+        printf("OpenGL error after glGenerateMipmap for %s: %d\n", name, err);
+    }
+
     glBindTexture(GL_TEXTURE_2D, 0);
+
+    printf("Created texture %s: id=%u, %dx%d\n", name, tex->id, width, height);
 
     return tex;
 }
@@ -475,6 +499,94 @@ static Texture* bark_normal_tex = NULL;
 static Texture* bark_roughness_tex = NULL;
 static Texture* leaf_albedo_tex = NULL;
 static Texture* leaf_normal_tex = NULL;
+static Texture* island_albedo_tex = NULL;
+static Texture* island_normal_tex = NULL;
+
+/*
+ * Generate island/ground normal texture (mostly flat with some variation)
+ */
+static unsigned char* generate_island_normal(int width, int height) {
+    unsigned char* data = malloc(width * height * 3);
+    if (!data)
+        return NULL;
+
+    init_perlin(1000);
+
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            int idx = (y * width + x) * 3;
+
+            float nx = (float)x / width * 16.0f;
+            float ny = (float)y / height * 16.0f;
+
+            // Subtle height variation for normal calculation
+            float h = fbm_noise(nx, ny, 3, 0.5f) * 0.1f;
+            float hx = fbm_noise(nx + 0.1f, ny, 3, 0.5f) * 0.1f;
+            float hy = fbm_noise(nx, ny + 0.1f, 3, 0.5f) * 0.1f;
+
+            // Derive normal from height differences
+            float dx = (hx - h) * 2.0f;
+            float dy = (hy - h) * 2.0f;
+
+            vec3 normal = {-dx, 1.0f, -dy};
+            glm_vec3_normalize(normal);
+
+            // Convert to 0-255 range
+            data[idx] = (unsigned char)((normal[0] * 0.5f + 0.5f) * 255);
+            data[idx + 1] = (unsigned char)((normal[1] * 0.5f + 0.5f) * 255);
+            data[idx + 2] = (unsigned char)((normal[2] * 0.5f + 0.5f) * 255);
+        }
+    }
+
+    return data;
+}
+
+/*
+ * Generate island/ground albedo texture
+ */
+static unsigned char* generate_island_albedo(int width, int height) {
+    unsigned char* data = malloc(width * height * 3);
+    if (!data)
+        return NULL;
+
+    init_perlin(999);
+
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            int idx = (y * width + x) * 3;
+
+            // Base noise for variation
+            float nx = (float)x / width * 8.0f;
+            float ny = (float)y / height * 8.0f;
+
+            float noise = fbm_noise(nx, ny, 4, 0.5f);
+            float detail = fbm_noise(nx * 4.0f, ny * 4.0f, 2, 0.5f) * 0.3f;
+
+            float combined = noise + detail;
+
+            // Earth/dirt brown base
+            float r = 0.35f + combined * 0.15f;
+            float g = 0.25f + combined * 0.12f;
+            float b = 0.15f + combined * 0.08f;
+
+            // Add some green patches (grass)
+            float grass = fbm_noise(nx * 2.0f + 100.0f, ny * 2.0f, 3, 0.6f);
+            if (grass > 0.3f) {
+                float grass_blend = (grass - 0.3f) * 1.5f;
+                grass_blend = fminf(grass_blend, 0.6f);
+                r = r * (1.0f - grass_blend) + 0.2f * grass_blend;
+                g = g * (1.0f - grass_blend) + 0.4f * grass_blend;
+                b = b * (1.0f - grass_blend) + 0.15f * grass_blend;
+            }
+
+            data[idx] = (unsigned char)(fminf(fmaxf(r, 0.0f), 1.0f) * 255);
+            data[idx + 1] = (unsigned char)(fminf(fmaxf(g, 0.0f), 1.0f) * 255);
+            data[idx + 2] = (unsigned char)(fminf(fmaxf(b, 0.0f), 1.0f) * 255);
+        }
+    }
+
+    return data;
+}
 
 static void generate_procedural_textures(void) {
     printf("Generating procedural bark textures...\n");
@@ -516,7 +628,32 @@ static void generate_procedural_textures(void) {
         free(leaf_normal_data);
     }
 
+    printf("Generating procedural island textures...\n");
+
+    unsigned char* island_albedo_data = generate_island_albedo(TEXTURE_SIZE, TEXTURE_SIZE);
+    if (island_albedo_data) {
+        island_albedo_tex = create_texture_from_data(island_albedo_data, TEXTURE_SIZE, TEXTURE_SIZE,
+                                                     GL_RGB, "proc_island_albedo");
+        free(island_albedo_data);
+    }
+
+    unsigned char* island_normal_data = generate_island_normal(TEXTURE_SIZE, TEXTURE_SIZE);
+    if (island_normal_data) {
+        island_normal_tex = create_texture_from_data(island_normal_data, TEXTURE_SIZE, TEXTURE_SIZE,
+                                                     GL_RGB, "proc_island_normal");
+        free(island_normal_data);
+    }
+
     printf("Procedural textures generated.\n");
+
+    // Clear any pending GL errors and reset state to avoid affecting subsequent operations
+    while (glGetError() != GL_NO_ERROR) {
+    }
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+    glBindVertexArray(0);
 }
 
 /*
@@ -553,6 +690,8 @@ static TreeParams prev_params;
 static Material* bark_material = NULL;
 static Material* leaf_material = NULL;
 static SceneNode* tree_root = NULL;
+static SceneNode* island_node = NULL;
+static Material* island_material = NULL;
 
 /*
  * Drag state - stored at drag start
@@ -570,6 +709,133 @@ static vec3 free_start_cam_pos = {0.0f, 0.0f, 0.0f};
  */
 static float rand_range(float min_val, float max_val) {
     return min_val + (float)rand() / RAND_MAX * (max_val - min_val);
+}
+
+/*
+ * Generate island mesh - a domed disc
+ */
+static void generate_island_mesh(Mesh* mesh, float radius, float height, int rings, int segments) {
+    // Create a domed disc with rings from center to edge
+    int num_vertices = 1 + rings * segments; // center + rings
+    int num_triangles = segments + (rings - 1) * segments * 2;
+
+    mesh->vertex_count = num_vertices;
+    mesh->vertices = malloc(num_vertices * 3 * sizeof(float));
+    mesh->normals = malloc(num_vertices * 3 * sizeof(float));
+    mesh->tex_coords = malloc(num_vertices * 2 * sizeof(float));
+    mesh->tangents = malloc(num_vertices * 3 * sizeof(float));
+    mesh->bitangents = malloc(num_vertices * 3 * sizeof(float));
+    mesh->index_count = num_triangles * 3;
+    mesh->indices = malloc(mesh->index_count * sizeof(unsigned int));
+
+    // Center vertex (top of dome)
+    mesh->vertices[0] = 0.0f;
+    mesh->vertices[1] = height;
+    mesh->vertices[2] = 0.0f;
+    mesh->normals[0] = 0.0f;
+    mesh->normals[1] = 1.0f;
+    mesh->normals[2] = 0.0f;
+    mesh->tangents[0] = 1.0f;
+    mesh->tangents[1] = 0.0f;
+    mesh->tangents[2] = 0.0f;
+    mesh->bitangents[0] = 0.0f;
+    mesh->bitangents[1] = 0.0f;
+    mesh->bitangents[2] = 1.0f;
+    mesh->tex_coords[0] = 0.5f;
+    mesh->tex_coords[1] = 0.5f;
+
+    // Generate ring vertices
+    int vi = 1;
+    for (int r = 1; r <= rings; r++) {
+        float ring_radius = radius * (float)r / rings;
+        float ring_height = height * (1.0f - ((float)r / rings) * ((float)r / rings));
+
+        for (int s = 0; s < segments; s++) {
+            float angle = 2.0f * (float)M_PI * s / segments;
+            float x = ring_radius * cosf(angle);
+            float z = ring_radius * sinf(angle);
+
+            mesh->vertices[vi * 3] = x;
+            mesh->vertices[vi * 3 + 1] = ring_height;
+            mesh->vertices[vi * 3 + 2] = z;
+
+            // Normal pointing up and slightly outward
+            vec3 normal = {x, ring_radius * 0.5f, z};
+            glm_vec3_normalize(normal);
+            mesh->normals[vi * 3] = normal[0];
+            mesh->normals[vi * 3 + 1] = normal[1];
+            mesh->normals[vi * 3 + 2] = normal[2];
+
+            // Tangent along the circle (perpendicular to radial)
+            mesh->tangents[vi * 3] = -sinf(angle);
+            mesh->tangents[vi * 3 + 1] = 0.0f;
+            mesh->tangents[vi * 3 + 2] = cosf(angle);
+
+            // Bitangent (cross of normal and tangent)
+            mesh->bitangents[vi * 3] = cosf(angle);
+            mesh->bitangents[vi * 3 + 1] = 0.0f;
+            mesh->bitangents[vi * 3 + 2] = sinf(angle);
+
+            // UV coordinates
+            mesh->tex_coords[vi * 2] = 0.5f + 0.5f * x / radius;
+            mesh->tex_coords[vi * 2 + 1] = 0.5f + 0.5f * z / radius;
+
+            vi++;
+        }
+    }
+
+    // Generate indices
+    int ii = 0;
+
+    // Center fan (first ring)
+    for (int s = 0; s < segments; s++) {
+        mesh->indices[ii++] = 0;
+        mesh->indices[ii++] = 1 + s;
+        mesh->indices[ii++] = 1 + (s + 1) % segments;
+    }
+
+    // Remaining rings
+    for (int r = 1; r < rings; r++) {
+        int ring_start = 1 + (r - 1) * segments;
+        int next_ring_start = 1 + r * segments;
+
+        for (int s = 0; s < segments; s++) {
+            int curr = ring_start + s;
+            int next = ring_start + (s + 1) % segments;
+            int curr_outer = next_ring_start + s;
+            int next_outer = next_ring_start + (s + 1) % segments;
+
+            // Two triangles per quad
+            mesh->indices[ii++] = curr;
+            mesh->indices[ii++] = curr_outer;
+            mesh->indices[ii++] = next_outer;
+
+            mesh->indices[ii++] = curr;
+            mesh->indices[ii++] = next_outer;
+            mesh->indices[ii++] = next;
+        }
+    }
+
+    mesh->draw_mode = TRIANGLES;
+}
+
+/*
+ * Create island node with mesh
+ */
+static void create_island(SceneNode* parent) {
+    island_node = create_node();
+    set_node_name(island_node, "island");
+
+    Mesh* mesh = create_mesh();
+    generate_island_mesh(mesh, 120.0f, 15.0f, 8, 32);
+    mesh->material = island_material;
+
+    // Position slightly below ground level
+    glm_mat4_identity(island_node->original_transform);
+    glm_translate(island_node->original_transform, (vec3){0.0f, -5.0f, 0.0f});
+
+    add_mesh_to_node(island_node, mesh);
+    add_child_node(parent, island_node);
 }
 
 /*
@@ -597,9 +863,12 @@ static void generate_leaf_cluster(SceneNode* parent, vec3 tip_pos, vec3 directio
     mesh->vertices = malloc(mesh->vertex_count * 3 * sizeof(float));
     mesh->normals = malloc(mesh->vertex_count * 3 * sizeof(float));
     mesh->tex_coords = malloc(mesh->vertex_count * 2 * sizeof(float));
+    mesh->tangents = malloc(mesh->vertex_count * 3 * sizeof(float));
+    mesh->bitangents = malloc(mesh->vertex_count * 3 * sizeof(float));
     mesh->indices = malloc(mesh->index_count * sizeof(unsigned int));
 
-    if (!mesh->vertices || !mesh->normals || !mesh->tex_coords || !mesh->indices) {
+    if (!mesh->vertices || !mesh->normals || !mesh->tex_coords || !mesh->indices ||
+        !mesh->tangents || !mesh->bitangents) {
         free_mesh(mesh);
         free_node(leaf_node);
         return;
@@ -641,6 +910,16 @@ static void generate_leaf_cluster(SceneNode* parent, vec3 tip_pos, vec3 directio
         glm_mat4_mulv3(rot, normal, 0.0f, normal);
         glm_vec3_normalize(normal);
 
+        // Tangent (X-axis of quad, along U direction)
+        vec3 tangent = {1, 0, 0};
+        glm_mat4_mulv3(rot, tangent, 0.0f, tangent);
+        glm_vec3_normalize(tangent);
+
+        // Bitangent (Z-axis of quad, along V direction)
+        vec3 bitangent = {0, 0, 1};
+        glm_mat4_mulv3(rot, bitangent, 0.0f, bitangent);
+        glm_vec3_normalize(bitangent);
+
         int base_v = i * 4;
         int base_i = i * 6;
 
@@ -655,6 +934,14 @@ static void generate_leaf_cluster(SceneNode* parent, vec3 tip_pos, vec3 directio
             mesh->normals[(base_v + j) * 3 + 0] = normal[0];
             mesh->normals[(base_v + j) * 3 + 1] = normal[1];
             mesh->normals[(base_v + j) * 3 + 2] = normal[2];
+
+            mesh->tangents[(base_v + j) * 3 + 0] = tangent[0];
+            mesh->tangents[(base_v + j) * 3 + 1] = tangent[1];
+            mesh->tangents[(base_v + j) * 3 + 2] = tangent[2];
+
+            mesh->bitangents[(base_v + j) * 3 + 0] = bitangent[0];
+            mesh->bitangents[(base_v + j) * 3 + 1] = bitangent[1];
+            mesh->bitangents[(base_v + j) * 3 + 2] = bitangent[2];
 
             mesh->tex_coords[(base_v + j) * 2 + 0] = uvs[j][0];
             mesh->tex_coords[(base_v + j) * 2 + 1] = uvs[j][1];
@@ -786,11 +1073,11 @@ static void free_tree_nodes(SceneNode* root) {
         return;
     }
 
-    // Free children that are part of tree (not light nodes)
+    // Free children that are part of tree (not light nodes or island)
     for (size_t i = 0; i < root->children_count;) {
         SceneNode* child = root->children[i];
-        if (child->light != NULL) {
-            // Skip light nodes
+        if (child->light != NULL || child == island_node) {
+            // Skip light nodes and island
             i++;
         } else {
             // Free this branch
@@ -1120,6 +1407,24 @@ int main(void) {
         set_material_normal_tex(leaf_material, leaf_normal_tex);
     }
 
+    // Create island material - earthy brown/green
+    island_material = create_material();
+    island_material->albedo[0] = 1.0f; // White base, texture provides color
+    island_material->albedo[1] = 1.0f;
+    island_material->albedo[2] = 1.0f;
+    island_material->roughness = 0.9f;
+    island_material->metallic = 0.0f;
+    island_material->ao = 1.0f;
+    set_material_shader_program(island_material, pbr_program);
+
+    // Apply island textures
+    if (island_albedo_tex) {
+        set_material_albedo_tex(island_material, island_albedo_tex);
+    }
+    if (island_normal_tex) {
+        set_material_normal_tex(island_material, island_normal_tex);
+    }
+
     // Create camera - positioned to see full tree
     Camera* camera = create_camera();
     vec3 cam_pos = {0.0f, 180.0f, 550.0f};
@@ -1144,6 +1449,9 @@ int main(void) {
     }
 
     create_scene_lights(scene);
+
+    // Create island
+    create_island(root);
 
     // Initialize tree parameters
     params.max_depth = 4;
