@@ -353,8 +353,7 @@ void configure_visor_materials(Scene* scene) {
         SceneNode* node = find_node_by_name(scene->root_node, visor_names[i]);
         if (node) {
             printf("Configuring iridescent visor for: %s\n", visor_names[i]);
-            // Mirror-like visor: low opacity (reflective), very glossy, 520nm (green center, purple
-            // edges)
+            // Mirror-like visor: low opacity (reflective), very glossy, 520nm iridescence
             set_node_iridescent_visor(node, 0.15f, 0.005f, 520.0f);
         }
     }
@@ -450,10 +449,26 @@ int main(int argc, char** argv) {
         return -1;
     }
 
-    create_scene_lights(scene);
     configure_visor_materials(scene);
 
     if (hdr_path) {
+        // When using IBL, add a single soft key light at reduced intensity
+        Light* key = create_light();
+        if (key) {
+            set_light_name(key, "key_light");
+            set_light_type(key, LIGHT_DIRECTIONAL);
+            vec3 key_dir = {-0.4f, -0.7f, -0.6f};
+            set_light_direction(key, key_dir);
+            set_light_intensity(key, 1.0f);
+            set_light_color(key, (vec3){1.0f, 1.0f, 1.0f});
+            add_light_to_scene(scene, key);
+
+            SceneNode* key_node = create_node();
+            set_node_light(key_node, key);
+            set_node_name(key_node, "key_light_node");
+            add_child_node(scene->root_node, key_node);
+        }
+
         IBLResources* ibl = create_ibl_resources();
         if (ibl && load_hdr_environment(ibl, hdr_path) == 0) {
             if (precompute_ibl(ibl, engine) == 0) {
@@ -470,6 +485,9 @@ int main(int argc, char** argv) {
             if (ibl)
                 free_ibl_resources(ibl);
         }
+    } else {
+        // No IBL - use directional lights for illumination
+        create_scene_lights(scene);
     }
 
     upload_buffers_to_gpu_for_nodes(scene->root_node);
