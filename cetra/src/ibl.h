@@ -7,10 +7,10 @@
 
 #include "program.h"
 
-#define IBL_CUBEMAP_SIZE         1024
+#define IBL_CUBEMAP_SIZE         2048
 #define IBL_IRRADIANCE_SIZE      32
-#define IBL_PREFILTER_SIZE       256
-#define IBL_PREFILTER_MIP_LEVELS 6
+#define IBL_PREFILTER_SIZE       1024
+#define IBL_PREFILTER_MIP_LEVELS 9
 #define IBL_BRDF_LUT_SIZE        512
 
 #define IBL_IRRADIANCE_TEXTURE_UNIT 14

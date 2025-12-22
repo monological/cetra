@@ -401,6 +401,9 @@ int precompute_ibl(IBLResources* ibl, Engine* engine) {
         return -1;
     }
 
+    // Enable seamless cubemap sampling to avoid artifacts at face edges
+    glEnable(GL_TEXTURE_CUBE_MAP_SEAMLESS);
+
     // Setup FBO and VAOs
     setup_capture_fbo(ibl, IBL_CUBEMAP_SIZE);
     init_cube_vao(ibl);
