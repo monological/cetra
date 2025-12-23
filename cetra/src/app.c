@@ -232,8 +232,6 @@ void mouse_drag_update(MouseDragController* ctrl, float time) {
 }
 
 bool camera_controller_on_key(MouseDragController* ctrl, int key, int action, int mods) {
-    (void)mods;
-
     if (!ctrl || !ctrl->engine || !ctrl->engine->camera) {
         return false;
     }
@@ -246,54 +244,64 @@ bool camera_controller_on_key(MouseDragController* ctrl, int key, int action, in
     Engine* engine = ctrl->engine;
     Camera* camera = engine->camera;
 
-    const float MOVE_SPEED = 1.0f;
-    const float ZOOM_SPEED = 0.1f;
+    static const float MOVE_SPEED = 300.0f;
+    static const float ORBIT_STEP = 0.1f;
+    static const float PAN_SPEED = 15.0f;
+    static const float ZOOM_FACTOR = 0.9f;
+    static const float MIN_ZOOM_DISTANCE = 10.0f;
 
     switch (key) {
-        // Forward/backward
         case GLFW_KEY_W:
-        case GLFW_KEY_UP:
             camera_move_forward(camera, MOVE_SPEED);
             return true;
 
         case GLFW_KEY_S:
-        case GLFW_KEY_DOWN:
             camera_move_forward(camera, -MOVE_SPEED);
             return true;
 
-        // Strafe left/right
         case GLFW_KEY_A:
-        case GLFW_KEY_LEFT:
-            camera_strafe(camera, -MOVE_SPEED);
-            return true;
-
-        case GLFW_KEY_D:
-        case GLFW_KEY_RIGHT:
             camera_strafe(camera, MOVE_SPEED);
             return true;
 
-        // Up/down
-        case GLFW_KEY_R:
-            camera_move_up(camera, MOVE_SPEED);
+        case GLFW_KEY_D:
+            camera_strafe(camera, -MOVE_SPEED);
             return true;
 
-        case GLFW_KEY_F:
-            camera_move_up(camera, -MOVE_SPEED);
-            return true;
-
-        // Zoom (orbit mode distance)
-        case GLFW_KEY_Q:
-            if (engine->camera_mode == CAMERA_MODE_ORBIT) {
-                camera->distance *= (1.0f + ZOOM_SPEED);
+        case GLFW_KEY_UP:
+            if (mods & GLFW_MOD_SHIFT) {
+                pan_camera(camera, 0.0f, PAN_SPEED);
+            } else if (engine->camera_mode == CAMERA_MODE_FREE) {
+                camera_zoom_toward_target(camera, ZOOM_FACTOR, MIN_ZOOM_DISTANCE);
+            } else if (engine->camera_mode == CAMERA_MODE_ORBIT) {
+                orbit_camera(camera, ORBIT_STEP, 0.0f);
             }
             return true;
 
-        case GLFW_KEY_E:
-            if (engine->camera_mode == CAMERA_MODE_ORBIT) {
-                camera->distance *= (1.0f - ZOOM_SPEED);
-                if (camera->distance < 0.1f) {
-                    camera->distance = 0.1f;
-                }
+        case GLFW_KEY_DOWN:
+            if (mods & GLFW_MOD_SHIFT) {
+                pan_camera(camera, 0.0f, -PAN_SPEED);
+            } else if (engine->camera_mode == CAMERA_MODE_FREE) {
+                camera_zoom_toward_target(camera, 1.0f / ZOOM_FACTOR, MIN_ZOOM_DISTANCE);
+            } else if (engine->camera_mode == CAMERA_MODE_ORBIT) {
+                orbit_camera(camera, -ORBIT_STEP, 0.0f);
+            }
+            return true;
+
+        case GLFW_KEY_LEFT:
+            if (mods & GLFW_MOD_SHIFT) {
+                pan_camera(camera, -PAN_SPEED, 0.0f);
+            } else {
+                camera_sync_spherical_from_position(camera);
+                orbit_camera(camera, 0.0f, ORBIT_STEP);
+            }
+            return true;
+
+        case GLFW_KEY_RIGHT:
+            if (mods & GLFW_MOD_SHIFT) {
+                pan_camera(camera, PAN_SPEED, 0.0f);
+            } else {
+                camera_sync_spherical_from_position(camera);
+                orbit_camera(camera, 0.0f, -ORBIT_STEP);
             }
             return true;
 

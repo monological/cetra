@@ -57,7 +57,7 @@ void mouse_drag_on_cursor(MouseDragController* ctrl, double x, double y);
 // Update (call each frame - handles auto-orbit animation and camera updates)
 void mouse_drag_update(MouseDragController* ctrl, float time);
 
-// Keyboard input for camera control (WASD, arrows, R/F up/down, Q/E zoom)
+// Keyboard input for camera control (WASD movement, arrows for orbit/pan/zoom)
 // Returns true if the key was handled
 bool camera_controller_on_key(MouseDragController* ctrl, int key, int action, int mods);
 
