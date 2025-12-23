@@ -276,7 +276,7 @@ static int _setup_engine_gui(Engine* engine) {
     if (!engine || !engine->window)
         return -1;
 
-    engine->nk_ctx = nk_glfw3_init(&engine->nk_glfw, engine->window, NK_GLFW3_INSTALL_CALLBACKS);
+    engine->nk_ctx = nk_glfw3_init(&engine->nk_glfw, engine->window, NK_GLFW3_DEFAULT);
 
     if (!engine->nk_ctx) {
         log_error("Failed to initialize Nuklear context");
