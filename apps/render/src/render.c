@@ -59,6 +59,55 @@ void mouse_button_callback(Engine* engine, int button, int action, int mods) {
     }
 }
 
+void key_callback(Engine* engine, int key, int scancode, int action, int mods) {
+    (void)scancode;
+
+    // Camera movement (WASD, arrows, etc.)
+    if (drag_controller && camera_controller_on_key(drag_controller, key, action, mods)) {
+        return;
+    }
+
+    // App controls (only on press)
+    if (action != GLFW_PRESS) {
+        return;
+    }
+
+    switch (key) {
+        case GLFW_KEY_ESCAPE:
+            glfwSetWindowShouldClose(engine->window, GLFW_TRUE);
+            break;
+        case GLFW_KEY_G:
+            set_engine_show_gui(engine, !engine->show_gui);
+            break;
+        case GLFW_KEY_X:
+            set_engine_show_xyz(engine, !engine->show_xyz);
+            break;
+        case GLFW_KEY_T:
+            set_engine_show_wireframe(engine, !engine->show_wireframe);
+            break;
+        case GLFW_KEY_1:
+            engine->current_render_mode = RENDER_MODE_PBR;
+            break;
+        case GLFW_KEY_2:
+            engine->current_render_mode = RENDER_MODE_NORMALS;
+            break;
+        case GLFW_KEY_3:
+            engine->current_render_mode = RENDER_MODE_WORLD_POS;
+            break;
+        case GLFW_KEY_4:
+            engine->current_render_mode = RENDER_MODE_TEX_COORDS;
+            break;
+        case GLFW_KEY_5:
+            engine->current_render_mode = RENDER_MODE_TANGENT_SPACE;
+            break;
+        case GLFW_KEY_6:
+            engine->current_render_mode = RENDER_MODE_FLAT_COLOR;
+            break;
+        default:
+            break;
+    }
+}
+
 void render_scene_callback(Engine* engine, Scene* current_scene) {
     SceneNode* root_node = current_scene->root_node;
 
@@ -147,6 +196,7 @@ int main(int argc, char** argv) {
 
     set_engine_error_callback(engine, app_error_callback);
     set_engine_mouse_button_callback(engine, mouse_button_callback);
+    set_engine_key_callback(engine, key_callback);
 
     /*
      * Set up shaders.

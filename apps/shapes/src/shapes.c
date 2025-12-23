@@ -20,6 +20,7 @@
 #include "cetra/geometry.h"
 #include "cetra/transform.h"
 #include "cetra/light.h"
+#include "cetra/app.h"
 
 #define NK_INCLUDE_FIXED_TYPES
 #define NK_INCLUDE_STANDARD_IO
@@ -45,6 +46,8 @@ const float ROTATION_SENSITIVITY = 0.005f;
 const float MIN_DIST = 2000.0f;
 const float MAX_DIST = 3000.0f;
 const float CAM_ANGULAR_SPEED = 0.5f; // Adjust this value as needed
+
+static MouseDragController* drag_controller = NULL;
 
 /*
  * Callbacks
@@ -76,16 +79,41 @@ void cursor_position_callback(Engine* engine, double xpos, double ypos) {
 }
 
 void mouse_button_callback(Engine* engine, int button, int action, int mods) {
-    if (engine->input.is_dragging) {
-        printf("dragging start %i %f %f\n", engine->input.is_dragging, engine->input.drag_fb_x,
-               engine->input.drag_fb_y);
-    } else {
-        printf("dragging stop  %i %f %f\n", engine->input.is_dragging, engine->input.drag_fb_x,
-               engine->input.drag_fb_y);
+    if (drag_controller) {
+        double x, y;
+        glfwGetCursorPos(engine->window, &x, &y);
+        mouse_drag_on_button(drag_controller, button, action, mods, x, y);
     }
 }
 
 void key_callback(Engine* engine, int key, int scancode, int action, int mods) {
+    (void)scancode;
+
+    // Camera movement
+    if (drag_controller && camera_controller_on_key(drag_controller, key, action, mods)) {
+        return;
+    }
+
+    if (action != GLFW_PRESS) {
+        return;
+    }
+
+    switch (key) {
+        case GLFW_KEY_ESCAPE:
+            glfwSetWindowShouldClose(engine->window, GLFW_TRUE);
+            break;
+        case GLFW_KEY_G:
+            set_engine_show_gui(engine, !engine->show_gui);
+            break;
+        case GLFW_KEY_X:
+            set_engine_show_xyz(engine, !engine->show_xyz);
+            break;
+        case GLFW_KEY_T:
+            set_engine_show_wireframe(engine, !engine->show_wireframe);
+            break;
+        default:
+            break;
+    }
 }
 
 void create_scene_light(Scene* scene) {
@@ -121,6 +149,11 @@ void render_scene_callback(Engine* engine, Scene* current_scene) {
         return;
 
     float time_value = glfwGetTime();
+
+    // Update camera via drag controller
+    if (drag_controller && app_can_process_3d_input(engine)) {
+        mouse_drag_update(drag_controller, time_value);
+    }
 
     Transform transform = {.position = {0.0f, 0.0f, 0.0f},
                            .rotation = {0.0f, 0.0f, 0.0f},
@@ -217,6 +250,9 @@ int main() {
 
     set_engine_camera(engine, camera);
     set_engine_camera_mode(engine, CAMERA_MODE_FREE);
+
+    // Create drag controller
+    drag_controller = create_mouse_drag_controller(engine);
 
     /*
      * Import fbx model.
@@ -450,6 +486,7 @@ int main() {
     run_engine_render_loop(engine, render_scene_callback);
 
     printf("Cleaning up...\n");
+    free_mouse_drag_controller(drag_controller);
     free_engine(engine);
 
     printf("Goodbye Friend...\n");
