@@ -43,6 +43,19 @@ typedef struct {
     int segments;
 } Cylinder;
 
+typedef struct {
+    vec3 position;
+    vec3 size; // width (x), height (y), depth (z)
+} Box;
+
+typedef struct {
+    vec3 position;
+    float width;
+    float depth;
+    int segments_w; // UV tiling segments
+    int segments_d;
+} Plane;
+
 /* Bezier functions */
 void cubic_bezier_curve_point(const Curve* curve, float t, vec3 result);
 Curve* generate_s_shaped_bezier_curve(vec3 start, vec3 end, float intensity, float line_width);
@@ -54,5 +67,7 @@ void generate_circle_to_mesh(Mesh* mesh, const Circle* circle);
 void generate_rect_to_mesh(Mesh* mesh, const Rect* rect);
 void generate_curve_to_mesh(Mesh* mesh, const Curve* curve);
 void generate_cylinder_to_mesh(Mesh* mesh, const Cylinder* cylinder);
+void generate_box_to_mesh(Mesh* mesh, const Box* box);
+void generate_plane_to_mesh(Mesh* mesh, const Plane* plane);
 
 #endif // GEOMETRY_H

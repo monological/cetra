@@ -568,3 +568,303 @@ void generate_cylinder_to_mesh(Mesh* mesh, const Cylinder* cylinder) {
 
     mesh->draw_mode = TRIANGLES;
 }
+
+void generate_box_to_mesh(Mesh* mesh, const Box* box) {
+    if (!mesh || !box) {
+        return;
+    }
+
+    float hw = box->size[0] * 0.5f;
+    float hh = box->size[1] * 0.5f;
+    float hd = box->size[2] * 0.5f;
+    float cx = box->position[0];
+    float cy = box->position[1];
+    float cz = box->position[2];
+
+    // 24 vertices (4 per face, 6 faces) for proper normals
+    mesh->vertex_count = 24;
+    mesh->index_count = 36;
+
+    float* new_vertices =
+        (float*)safe_realloc(mesh->vertices, mesh->vertex_count * 3 * sizeof(float));
+    float* new_normals =
+        (float*)safe_realloc(mesh->normals, mesh->vertex_count * 3 * sizeof(float));
+    float* new_tex_coords =
+        (float*)safe_realloc(mesh->tex_coords, mesh->vertex_count * 2 * sizeof(float));
+    float* new_tangents =
+        (float*)safe_realloc(mesh->tangents, mesh->vertex_count * 3 * sizeof(float));
+    float* new_bitangents =
+        (float*)safe_realloc(mesh->bitangents, mesh->vertex_count * 3 * sizeof(float));
+    unsigned int* new_indices =
+        (unsigned int*)safe_realloc(mesh->indices, mesh->index_count * sizeof(unsigned int));
+
+    if (!new_vertices || !new_normals || !new_tex_coords || !new_tangents || !new_bitangents ||
+        !new_indices) {
+        if (new_vertices)
+            mesh->vertices = new_vertices;
+        if (new_normals)
+            mesh->normals = new_normals;
+        if (new_tex_coords)
+            mesh->tex_coords = new_tex_coords;
+        if (new_tangents)
+            mesh->tangents = new_tangents;
+        if (new_bitangents)
+            mesh->bitangents = new_bitangents;
+        if (new_indices)
+            mesh->indices = new_indices;
+        return;
+    }
+    mesh->vertices = new_vertices;
+    mesh->normals = new_normals;
+    mesh->tex_coords = new_tex_coords;
+    mesh->tangents = new_tangents;
+    mesh->bitangents = new_bitangents;
+    mesh->indices = new_indices;
+
+    // Face data: vertices, normal, tangent for each face
+    // Front face (+Z)
+    float verts[] = {
+        // Front (+Z)
+        cx - hw,
+        cy - hh,
+        cz + hd,
+        cx + hw,
+        cy - hh,
+        cz + hd,
+        cx + hw,
+        cy + hh,
+        cz + hd,
+        cx - hw,
+        cy + hh,
+        cz + hd,
+        // Back (-Z)
+        cx + hw,
+        cy - hh,
+        cz - hd,
+        cx - hw,
+        cy - hh,
+        cz - hd,
+        cx - hw,
+        cy + hh,
+        cz - hd,
+        cx + hw,
+        cy + hh,
+        cz - hd,
+        // Top (+Y)
+        cx - hw,
+        cy + hh,
+        cz + hd,
+        cx + hw,
+        cy + hh,
+        cz + hd,
+        cx + hw,
+        cy + hh,
+        cz - hd,
+        cx - hw,
+        cy + hh,
+        cz - hd,
+        // Bottom (-Y)
+        cx - hw,
+        cy - hh,
+        cz - hd,
+        cx + hw,
+        cy - hh,
+        cz - hd,
+        cx + hw,
+        cy - hh,
+        cz + hd,
+        cx - hw,
+        cy - hh,
+        cz + hd,
+        // Right (+X)
+        cx + hw,
+        cy - hh,
+        cz + hd,
+        cx + hw,
+        cy - hh,
+        cz - hd,
+        cx + hw,
+        cy + hh,
+        cz - hd,
+        cx + hw,
+        cy + hh,
+        cz + hd,
+        // Left (-X)
+        cx - hw,
+        cy - hh,
+        cz - hd,
+        cx - hw,
+        cy - hh,
+        cz + hd,
+        cx - hw,
+        cy + hh,
+        cz + hd,
+        cx - hw,
+        cy + hh,
+        cz - hd,
+    };
+
+    float norms[] = {
+        0,  0,  1,  0,  0,  1,  0,  0,  1,  0,  0,  1,  // Front
+        0,  0,  -1, 0,  0,  -1, 0,  0,  -1, 0,  0,  -1, // Back
+        0,  1,  0,  0,  1,  0,  0,  1,  0,  0,  1,  0,  // Top
+        0,  -1, 0,  0,  -1, 0,  0,  -1, 0,  0,  -1, 0,  // Bottom
+        1,  0,  0,  1,  0,  0,  1,  0,  0,  1,  0,  0,  // Right
+        -1, 0,  0,  -1, 0,  0,  -1, 0,  0,  -1, 0,  0,  // Left
+    };
+
+    float uvs[] = {
+        0, 0, 1, 0, 1, 1, 0, 1, // Front
+        0, 0, 1, 0, 1, 1, 0, 1, // Back
+        0, 0, 1, 0, 1, 1, 0, 1, // Top
+        0, 0, 1, 0, 1, 1, 0, 1, // Bottom
+        0, 0, 1, 0, 1, 1, 0, 1, // Right
+        0, 0, 1, 0, 1, 1, 0, 1, // Left
+    };
+
+    float tangs[] = {
+        1,  0, 0,  1,  0, 0,  1,  0, 0,  1,  0, 0,  // Front
+        -1, 0, 0,  -1, 0, 0,  -1, 0, 0,  -1, 0, 0,  // Back
+        1,  0, 0,  1,  0, 0,  1,  0, 0,  1,  0, 0,  // Top
+        1,  0, 0,  1,  0, 0,  1,  0, 0,  1,  0, 0,  // Bottom
+        0,  0, -1, 0,  0, -1, 0,  0, -1, 0,  0, -1, // Right
+        0,  0, 1,  0,  0, 1,  0,  0, 1,  0,  0, 1,  // Left
+    };
+
+    float bitangs[] = {
+        0, 1, 0,  0, 1, 0,  0, 1, 0,  0, 1, 0,  // Front
+        0, 1, 0,  0, 1, 0,  0, 1, 0,  0, 1, 0,  // Back
+        0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1, // Top
+        0, 0, 1,  0, 0, 1,  0, 0, 1,  0, 0, 1,  // Bottom
+        0, 1, 0,  0, 1, 0,  0, 1, 0,  0, 1, 0,  // Right
+        0, 1, 0,  0, 1, 0,  0, 1, 0,  0, 1, 0,  // Left
+    };
+
+    unsigned int inds[] = {
+        0,  1,  2,  0,  2,  3,  // Front
+        4,  5,  6,  4,  6,  7,  // Back
+        8,  9,  10, 8,  10, 11, // Top
+        12, 13, 14, 12, 14, 15, // Bottom
+        16, 17, 18, 16, 18, 19, // Right
+        20, 21, 22, 20, 22, 23, // Left
+    };
+
+    memcpy(mesh->vertices, verts, sizeof(verts));
+    memcpy(mesh->normals, norms, sizeof(norms));
+    memcpy(mesh->tex_coords, uvs, sizeof(uvs));
+    memcpy(mesh->tangents, tangs, sizeof(tangs));
+    memcpy(mesh->bitangents, bitangs, sizeof(bitangs));
+    memcpy(mesh->indices, inds, sizeof(inds));
+
+    mesh->draw_mode = TRIANGLES;
+    calculate_aabb(mesh);
+}
+
+void generate_plane_to_mesh(Mesh* mesh, const Plane* plane) {
+    if (!mesh || !plane) {
+        return;
+    }
+
+    float hw = plane->width * 0.5f;
+    float hd = plane->depth * 0.5f;
+    float cx = plane->position[0];
+    float cy = plane->position[1];
+    float cz = plane->position[2];
+
+    int segs_w = plane->segments_w > 0 ? plane->segments_w : 1;
+    int segs_d = plane->segments_d > 0 ? plane->segments_d : 1;
+
+    int verts_w = segs_w + 1;
+    int verts_d = segs_d + 1;
+
+    mesh->vertex_count = verts_w * verts_d;
+    mesh->index_count = segs_w * segs_d * 6;
+
+    float* new_vertices =
+        (float*)safe_realloc(mesh->vertices, mesh->vertex_count * 3 * sizeof(float));
+    float* new_normals =
+        (float*)safe_realloc(mesh->normals, mesh->vertex_count * 3 * sizeof(float));
+    float* new_tex_coords =
+        (float*)safe_realloc(mesh->tex_coords, mesh->vertex_count * 2 * sizeof(float));
+    float* new_tangents =
+        (float*)safe_realloc(mesh->tangents, mesh->vertex_count * 3 * sizeof(float));
+    float* new_bitangents =
+        (float*)safe_realloc(mesh->bitangents, mesh->vertex_count * 3 * sizeof(float));
+    unsigned int* new_indices =
+        (unsigned int*)safe_realloc(mesh->indices, mesh->index_count * sizeof(unsigned int));
+
+    if (!new_vertices || !new_normals || !new_tex_coords || !new_tangents || !new_bitangents ||
+        !new_indices) {
+        if (new_vertices)
+            mesh->vertices = new_vertices;
+        if (new_normals)
+            mesh->normals = new_normals;
+        if (new_tex_coords)
+            mesh->tex_coords = new_tex_coords;
+        if (new_tangents)
+            mesh->tangents = new_tangents;
+        if (new_bitangents)
+            mesh->bitangents = new_bitangents;
+        if (new_indices)
+            mesh->indices = new_indices;
+        return;
+    }
+    mesh->vertices = new_vertices;
+    mesh->normals = new_normals;
+    mesh->tex_coords = new_tex_coords;
+    mesh->tangents = new_tangents;
+    mesh->bitangents = new_bitangents;
+    mesh->indices = new_indices;
+
+    // Generate vertices
+    size_t vi = 0;
+    for (int z = 0; z < verts_d; z++) {
+        for (int x = 0; x < verts_w; x++) {
+            float u = (float)x / segs_w;
+            float v = (float)z / segs_d;
+
+            mesh->vertices[vi * 3 + 0] = cx - hw + u * plane->width;
+            mesh->vertices[vi * 3 + 1] = cy;
+            mesh->vertices[vi * 3 + 2] = cz - hd + v * plane->depth;
+
+            mesh->normals[vi * 3 + 0] = 0.0f;
+            mesh->normals[vi * 3 + 1] = 1.0f;
+            mesh->normals[vi * 3 + 2] = 0.0f;
+
+            mesh->tex_coords[vi * 2 + 0] = u * segs_w;
+            mesh->tex_coords[vi * 2 + 1] = v * segs_d;
+
+            mesh->tangents[vi * 3 + 0] = 1.0f;
+            mesh->tangents[vi * 3 + 1] = 0.0f;
+            mesh->tangents[vi * 3 + 2] = 0.0f;
+
+            mesh->bitangents[vi * 3 + 0] = 0.0f;
+            mesh->bitangents[vi * 3 + 1] = 0.0f;
+            mesh->bitangents[vi * 3 + 2] = 1.0f;
+
+            vi++;
+        }
+    }
+
+    // Generate indices
+    size_t ii = 0;
+    for (int z = 0; z < segs_d; z++) {
+        for (int x = 0; x < segs_w; x++) {
+            unsigned int tl = z * verts_w + x;
+            unsigned int tr = tl + 1;
+            unsigned int bl = (z + 1) * verts_w + x;
+            unsigned int br = bl + 1;
+
+            mesh->indices[ii++] = tl;
+            mesh->indices[ii++] = bl;
+            mesh->indices[ii++] = tr;
+
+            mesh->indices[ii++] = tr;
+            mesh->indices[ii++] = bl;
+            mesh->indices[ii++] = br;
+        }
+    }
+
+    mesh->draw_mode = TRIANGLES;
+    calculate_aabb(mesh);
+}
