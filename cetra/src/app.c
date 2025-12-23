@@ -231,6 +231,77 @@ void mouse_drag_update(MouseDragController* ctrl, float time) {
     update_engine_camera_perspective(engine);
 }
 
+bool camera_controller_on_key(MouseDragController* ctrl, int key, int action, int mods) {
+    (void)mods;
+
+    if (!ctrl || !ctrl->engine || !ctrl->engine->camera) {
+        return false;
+    }
+
+    // Only handle press and repeat
+    if (action != GLFW_PRESS && action != GLFW_REPEAT) {
+        return false;
+    }
+
+    Engine* engine = ctrl->engine;
+    Camera* camera = engine->camera;
+
+    const float MOVE_SPEED = 1.0f;
+    const float ZOOM_SPEED = 0.1f;
+
+    switch (key) {
+        // Forward/backward
+        case GLFW_KEY_W:
+        case GLFW_KEY_UP:
+            camera_move_forward(camera, MOVE_SPEED);
+            return true;
+
+        case GLFW_KEY_S:
+        case GLFW_KEY_DOWN:
+            camera_move_forward(camera, -MOVE_SPEED);
+            return true;
+
+        // Strafe left/right
+        case GLFW_KEY_A:
+        case GLFW_KEY_LEFT:
+            camera_strafe(camera, -MOVE_SPEED);
+            return true;
+
+        case GLFW_KEY_D:
+        case GLFW_KEY_RIGHT:
+            camera_strafe(camera, MOVE_SPEED);
+            return true;
+
+        // Up/down
+        case GLFW_KEY_R:
+            camera_move_up(camera, MOVE_SPEED);
+            return true;
+
+        case GLFW_KEY_F:
+            camera_move_up(camera, -MOVE_SPEED);
+            return true;
+
+        // Zoom (orbit mode distance)
+        case GLFW_KEY_Q:
+            if (engine->camera_mode == CAMERA_MODE_ORBIT) {
+                camera->distance *= (1.0f + ZOOM_SPEED);
+            }
+            return true;
+
+        case GLFW_KEY_E:
+            if (engine->camera_mode == CAMERA_MODE_ORBIT) {
+                camera->distance *= (1.0f - ZOOM_SPEED);
+                if (camera->distance < 0.1f) {
+                    camera->distance = 0.1f;
+                }
+            }
+            return true;
+
+        default:
+            return false;
+    }
+}
+
 /*
  * Light Rigs
  */

@@ -178,6 +178,17 @@ void camera_strafe(Camera* camera, float distance) {
     glm_vec3_add(camera->look_at, movement, camera->look_at);
 }
 
+void camera_move_up(Camera* camera, float distance) {
+    if (!camera)
+        return;
+
+    vec3 movement;
+    glm_vec3_scale(camera->up_vector, distance, movement);
+
+    glm_vec3_add(camera->position, movement, camera->position);
+    glm_vec3_add(camera->look_at, movement, camera->look_at);
+}
+
 void camera_zoom_toward_target(Camera* camera, float factor, float min_distance) {
     if (!camera)
         return;

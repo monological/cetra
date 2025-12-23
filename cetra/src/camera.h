@@ -44,6 +44,7 @@ void pan_camera(Camera* camera, float delta_x, float delta_y);
 void zoom_camera(Camera* camera, float delta);
 void camera_move_forward(Camera* camera, float distance);
 void camera_strafe(Camera* camera, float distance);
+void camera_move_up(Camera* camera, float distance);
 void camera_zoom_toward_target(Camera* camera, float factor, float min_distance);
 
 // Sync spherical coordinates from current position

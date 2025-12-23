@@ -458,79 +458,10 @@ static void _engine_key_callback(GLFWwindow* window, int key, int scancode, int 
         return;
 
     Engine* engine = glfwGetWindowUserPointer(window);
-    if (!engine || !engine->camera)
+    if (!engine)
         return;
 
-    Camera* camera = engine->camera;
-
-    static const float MOVE_SPEED = 300.0f;
-    static const float ORBIT_STEP = 0.1f;
-    static const float PAN_SPEED = 15.0f;
-    static const float ZOOM_FACTOR = 0.9f;
-    static const float MIN_ZOOM_DISTANCE = 10.0f;
-
-    if (action == GLFW_PRESS || action == GLFW_REPEAT) {
-        switch (key) {
-            case GLFW_KEY_W:
-                camera_move_forward(camera, MOVE_SPEED);
-                break;
-
-            case GLFW_KEY_S:
-                camera_move_forward(camera, -MOVE_SPEED);
-                break;
-
-            case GLFW_KEY_A:
-                camera_strafe(camera, MOVE_SPEED);
-                break;
-
-            case GLFW_KEY_D:
-                camera_strafe(camera, -MOVE_SPEED);
-                break;
-
-            case GLFW_KEY_UP:
-                if (mods & GLFW_MOD_SHIFT) {
-                    pan_camera(camera, 0.0f, PAN_SPEED);
-                } else if (engine->camera_mode == CAMERA_MODE_FREE) {
-                    camera_zoom_toward_target(camera, ZOOM_FACTOR, MIN_ZOOM_DISTANCE);
-                } else if (engine->camera_mode == CAMERA_MODE_ORBIT) {
-                    // Tilt up: increase theta (vertical/elevation)
-                    orbit_camera(camera, ORBIT_STEP, 0.0f);
-                }
-                break;
-
-            case GLFW_KEY_DOWN:
-                if (mods & GLFW_MOD_SHIFT) {
-                    pan_camera(camera, 0.0f, -PAN_SPEED);
-                } else if (engine->camera_mode == CAMERA_MODE_FREE) {
-                    camera_zoom_toward_target(camera, 1.0f / ZOOM_FACTOR, MIN_ZOOM_DISTANCE);
-                } else if (engine->camera_mode == CAMERA_MODE_ORBIT) {
-                    // Tilt down: decrease theta (vertical/elevation)
-                    orbit_camera(camera, -ORBIT_STEP, 0.0f);
-                }
-                break;
-
-            case GLFW_KEY_LEFT:
-                if (mods & GLFW_MOD_SHIFT) {
-                    pan_camera(camera, -PAN_SPEED, 0.0f);
-                } else {
-                    // Orbit left: increase phi (horizontal/azimuth)
-                    camera_sync_spherical_from_position(camera);
-                    orbit_camera(camera, 0.0f, ORBIT_STEP);
-                }
-                break;
-
-            case GLFW_KEY_RIGHT:
-                if (mods & GLFW_MOD_SHIFT) {
-                    pan_camera(camera, PAN_SPEED, 0.0f);
-                } else {
-                    // Orbit right: decrease phi (horizontal/azimuth)
-                    camera_sync_spherical_from_position(camera);
-                    orbit_camera(camera, 0.0f, -ORBIT_STEP);
-                }
-                break;
-        }
-    }
-
+    // Just forward to user callback - engine doesn't interpret keys
     if (engine->key_callback) {
         engine->key_callback(engine, key, scancode, action, mods);
     }
