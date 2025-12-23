@@ -49,7 +49,7 @@ ifneq (, $(findstring CYGWIN, $(UNAME_S))$(findstring MINGW, $(UNAME_S))$(findst
 endif
 
 # Source files and object files
-SRC = $(wildcard src/*.c src/ext/*.c)
+SRC = $(wildcard src/*.c src/ext/*.c src/game/*.c)
 OBJ = $(SRC:.c=.o)
 
 SHADER_DIR = ./shaders
@@ -84,7 +84,7 @@ clean:
 # Format source files
 format:
 	@echo -e "$(BLUE)Formatting source files...$(NC)"
-	$(CLANG_FORMAT) -i src/*.c src/*.h src/ext/*.c src/ext/*.h 2>/dev/null || true
+	$(CLANG_FORMAT) -i src/*.c src/*.h src/ext/*.c src/ext/*.h src/game/*.c src/game/*.h 2>/dev/null || true
 
 # Quick lint with cppcheck (whole program analysis)
 lint:
