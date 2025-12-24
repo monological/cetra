@@ -202,6 +202,8 @@ typedef struct PhysicsWorld {
     Constraint** constraints;
     size_t constraint_count;
     size_t constraint_capacity;
+    // Body ID -> Entity map for lock-free lookups (internal, defined in physics.c)
+    void* body_entity_map;
 } PhysicsWorld;
 
 // RigidBody component data

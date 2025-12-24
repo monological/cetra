@@ -1,10 +1,18 @@
 #include "physics.h"
 #include "entity.h"
 #include "JoltC/JoltC.h"
+#include "uthash.h"
 
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+
+// Body ID -> Entity hash map for lock-free lookups in collision callbacks
+typedef struct BodyEntityEntry {
+    JPC_BodyID body_id;
+    Entity* entity;
+    UT_hash_handle hh;
+} BodyEntityEntry;
 
 // Forward declarations for collision system
 typedef struct CollisionEventQueue CollisionEventQueue;
@@ -65,6 +73,40 @@ static inline void jpc_to_quat(JPC_Quat jq, versor out) {
     out[1] = jq.y;
     out[2] = jq.z;
     out[3] = jq.w;
+}
+
+// Body ID -> Entity hash map helpers (lock-free entity lookup in callbacks)
+static void body_entity_map_add(PhysicsWorld* world, JPC_BodyID body_id, Entity* entity) {
+    if (!world || !entity)
+        return;
+    BodyEntityEntry* entry = malloc(sizeof(BodyEntityEntry));
+    if (!entry)
+        return;
+    entry->body_id = body_id;
+    entry->entity = entity;
+    BodyEntityEntry** map = (BodyEntityEntry**)&world->body_entity_map;
+    HASH_ADD_INT(*map, body_id, entry);
+}
+
+static void body_entity_map_remove(PhysicsWorld* world, JPC_BodyID body_id) {
+    if (!world)
+        return;
+    BodyEntityEntry** map = (BodyEntityEntry**)&world->body_entity_map;
+    BodyEntityEntry* entry = NULL;
+    HASH_FIND_INT(*map, &body_id, entry);
+    if (entry) {
+        HASH_DEL(*map, entry);
+        free(entry);
+    }
+}
+
+static Entity* body_entity_map_find(PhysicsWorld* world, JPC_BodyID body_id) {
+    if (!world)
+        return NULL;
+    BodyEntityEntry** map = (BodyEntityEntry**)&world->body_entity_map;
+    BodyEntityEntry* entry = NULL;
+    HASH_FIND_INT(*map, &body_id, entry);
+    return entry ? entry->entity : NULL;
 }
 
 // Layer callback implementations
@@ -219,17 +261,16 @@ void free_physics_world(PhysicsWorld* world) {
     if (!world)
         return;
 
-    // Free all constraints first
+    // Remove and release all constraints first (before touching bodies)
     for (size_t i = 0; i < world->constraint_count; i++) {
         Constraint* c = world->constraints[i];
-        if (c) {
+        if (c && c->jolt_constraint) {
             if (c->is_added) {
                 JPC_PhysicsSystem_RemoveConstraint(world->physics_system, c->jolt_constraint);
                 c->is_added = false;
             }
-            if (c->jolt_constraint) {
-                JPC_Constraint_Release(c->jolt_constraint);
-            }
+            JPC_Constraint_Release(c->jolt_constraint);
+            c->jolt_constraint = NULL;
             free(c);
         }
     }
@@ -237,6 +278,38 @@ void free_physics_world(PhysicsWorld* world) {
     world->constraints = NULL;
     world->constraint_count = 0;
     world->constraint_capacity = 0;
+
+    // Remove and destroy all bodies from physics system, clear rb pointers
+    // Note: DestroyBody releases the body's reference to the shape, so we must
+    // also NULL rb->shape to prevent double-free in free_rigid_body later
+    {
+        BodyEntityEntry** map = (BodyEntityEntry**)&world->body_entity_map;
+        BodyEntityEntry *entry, *tmp;
+        HASH_ITER(hh, *map, entry, tmp) {
+            if (entry->entity) {
+                RigidBody* rb = entity_get_rigid_body(entry->entity);
+                if (rb && rb->is_added && world->body_interface) {
+                    JPC_BodyInterface_RemoveBody(world->body_interface, rb->body_id);
+                    JPC_BodyInterface_DestroyBody(world->body_interface, rb->body_id);
+                    rb->shape = NULL; // Body released shape, don't double-free
+                }
+                if (rb) {
+                    rb->world = NULL;
+                    rb->is_added = false;
+                }
+            }
+        }
+    }
+
+    // Clean up body->entity map
+    {
+        BodyEntityEntry** map = (BodyEntityEntry**)&world->body_entity_map;
+        BodyEntityEntry *entry, *tmp;
+        HASH_ITER(hh, *map, entry, tmp) {
+            HASH_DEL(*map, entry);
+            free(entry);
+        }
+    }
 
     // Clean up collision system
     if (world->contact_listener) {
@@ -378,6 +451,11 @@ static void free_rigid_body(void* data) {
         physics_world_remove_constraints_for_body(rb->world, rb);
     }
 
+    // Remove from body->entity map
+    if (rb->world) {
+        body_entity_map_remove(rb->world, rb->body_id);
+    }
+
     if (rb->is_added && rb->world && rb->world->body_interface) {
         JPC_BodyInterface_RemoveBody(rb->world->body_interface, rb->body_id);
         JPC_BodyInterface_DestroyBody(rb->world->body_interface, rb->body_id);
@@ -466,6 +544,9 @@ RigidBody* entity_add_rigid_body(Entity* entity, PhysicsWorld* world,
     rb->body_id = JPC_Body_GetID(body);
     JPC_BodyInterface_AddBody(world->body_interface, rb->body_id, JPC_ACTIVATION_ACTIVATE);
     rb->is_added = true;
+
+    // Add to body->entity map for lock-free lookups in callbacks
+    body_entity_map_add(world, rb->body_id, entity);
 
     entity_add_component(entity, COMPONENT_RIGID_BODY, rb);
     entity_set_component_free(entity, COMPONENT_RIGID_BODY, free_rigid_body);
@@ -977,8 +1058,9 @@ static void on_contact_removed(void* self, const JPC_SubShapeIDPair* pair) {
     if (!ctx || !ctx->world || !ctx->world->event_queue)
         return;
 
-    Entity* e1 = get_entity_from_body_id(ctx->world, pair->Body1ID);
-    Entity* e2 = get_entity_from_body_id(ctx->world, pair->Body2ID);
+    // Use our hash map for lock-free entity lookup from body IDs
+    Entity* e1 = body_entity_map_find(ctx->world, pair->Body1ID);
+    Entity* e2 = body_entity_map_find(ctx->world, pair->Body2ID);
 
     CollisionEvent event = {.type = COLLISION_END,
                             .entity_a = e1,

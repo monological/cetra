@@ -74,16 +74,16 @@ void free_game(Game* game) {
         game->on_shutdown(game);
     }
 
-    // Free entity manager (frees all entities and their components)
-    if (game->entity_manager) {
-        free_entity_manager(game->entity_manager);
-        game->entity_manager = NULL;
-    }
-
-    // Free physics world
+    // Free physics world FIRST (clears body->world pointers, then destroys Jolt resources)
     if (game->physics_world) {
         free_physics_world(game->physics_world);
         game->physics_world = NULL;
+    }
+
+    // Free entity manager (frees entities; rigid bodies skip Jolt calls since world is NULL)
+    if (game->entity_manager) {
+        free_entity_manager(game->entity_manager);
+        game->entity_manager = NULL;
     }
 
     // Engine owns scenes, so don't free scene separately
