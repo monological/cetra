@@ -42,6 +42,8 @@ pkg_check_modules(ASSIMP REQUIRED assimp)
 
 # Build JoltC if enabled
 if(CETRA_BUILD_JOLTC)
+    # Enable debug renderer for JoltC (needed for DrawSettings, etc.)
+    set(DEBUG_RENDERER_IN_DISTRIBUTION ON CACHE BOOL "" FORCE)
     add_subdirectory(cetra/src/ext/JoltC)
 endif()
 

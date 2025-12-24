@@ -7,7 +7,7 @@
 typedef enum {
     COMPONENT_NONE = 0,
     COMPONENT_MESH_RENDERER, // Visual representation (links to SceneNode)
-    COMPONENT_RIGID_BODY,    // Physics body (Bullet)
+    COMPONENT_RIGID_BODY,    // Physics body (JoltC)
     COMPONENT_CHARACTER,     // Character controller
     COMPONENT_ANIMATOR,      // Skeletal animation
     COMPONENT_AUDIO_SOURCE,  // 3D audio emitter

@@ -96,6 +96,13 @@ endif()
 target_compile_options(cetra PRIVATE -Wall -g)
 target_compile_definitions(cetra PRIVATE _POSIX_C_SOURCE=200809L)
 
+# Link JoltC physics library if enabled
+if(CETRA_BUILD_JOLTC)
+    target_link_libraries(cetra PUBLIC joltc)
+    target_include_directories(cetra PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/ext/JoltC)
+endif()
+
 # Install targets
 install(TARGETS cetra
     ARCHIVE DESTINATION lib

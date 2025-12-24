@@ -10,6 +10,8 @@
 
 // Forward declarations
 struct Game;
+struct PhysicsWorld;
+struct EntityManager;
 
 // Game callbacks - implement these in your game
 typedef void (*GameInitFunc)(struct Game* game);
@@ -65,6 +67,12 @@ typedef struct Game {
 
     // User data pointer
     void* user_data;
+
+    // Physics (optional)
+    struct PhysicsWorld* physics_world;
+
+    // Entity management (optional)
+    struct EntityManager* entity_manager;
 } Game;
 
 // Default configuration
@@ -110,5 +118,13 @@ double game_get_time(const Game* game);
 
 // Get FPS
 double game_get_fps(const Game* game);
+
+// Physics management
+void game_set_physics_world(Game* game, struct PhysicsWorld* world);
+struct PhysicsWorld* game_get_physics_world(const Game* game);
+
+// Entity management
+void game_set_entity_manager(Game* game, struct EntityManager* em);
+struct EntityManager* game_get_entity_manager(const Game* game);
 
 #endif // _GAME_H_

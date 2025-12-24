@@ -1,4 +1,6 @@
 #include "game.h"
+#include "entity.h"
+#include "physics.h"
 #include "../render.h"
 #include "../transform.h"
 #include "../shadow.h"
@@ -70,6 +72,18 @@ void free_game(Game* game) {
     // Call shutdown callback
     if (game->on_shutdown) {
         game->on_shutdown(game);
+    }
+
+    // Free entity manager (frees all entities and their components)
+    if (game->entity_manager) {
+        free_entity_manager(game->entity_manager);
+        game->entity_manager = NULL;
+    }
+
+    // Free physics world
+    if (game->physics_world) {
+        free_physics_world(game->physics_world);
+        game->physics_world = NULL;
     }
 
     // Engine owns scenes, so don't free scene separately
@@ -220,9 +234,31 @@ void run_game(Game* game) {
             game->accumulator += frame_time;
 
             while (game->accumulator >= game->fixed_timestep) {
+                // Sync kinematic bodies from entity transforms before physics
+                if (game->entity_manager) {
+                    sync_entities_to_physics(game->entity_manager);
+                }
+
+                // User update callback
                 if (game->on_update) {
                     game->on_update(game, game->fixed_timestep);
                 }
+
+                // Step physics simulation
+                if (game->physics_world) {
+                    physics_world_update(game->physics_world, (float)game->fixed_timestep, 1);
+
+                    // Sync physics results back to entities
+                    if (game->entity_manager) {
+                        sync_physics_to_entities(game->physics_world, game->entity_manager);
+                    }
+                }
+
+                // Sync entity transforms to scene nodes
+                if (game->entity_manager) {
+                    sync_entity_transforms(game->entity_manager);
+                }
+
                 game->time += game->fixed_timestep;
                 game->accumulator -= game->fixed_timestep;
             }
@@ -263,4 +299,22 @@ void run_game(Game* game) {
         glfwSwapBuffers(engine->window);
         glfwPollEvents();
     }
+}
+
+void game_set_physics_world(Game* game, PhysicsWorld* world) {
+    if (game)
+        game->physics_world = world;
+}
+
+PhysicsWorld* game_get_physics_world(const Game* game) {
+    return game ? game->physics_world : NULL;
+}
+
+void game_set_entity_manager(Game* game, EntityManager* em) {
+    if (game)
+        game->entity_manager = em;
+}
+
+EntityManager* game_get_entity_manager(const Game* game) {
+    return game ? game->entity_manager : NULL;
 }
