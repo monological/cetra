@@ -497,7 +497,8 @@ static void sync_physics_entity_callback(Entity* entity, void* user_data) {
     RigidBody* rb = entity_get_rigid_body(entity);
     if (!rb || !rb->is_added)
         return;
-    if (rb->motion_type == MOTION_STATIC)
+    // Only sync dynamic bodies - static don't move, kinematic are user-controlled
+    if (rb->motion_type != MOTION_DYNAMIC)
         return;
 
     JPC_RVec3 pos;
@@ -533,4 +534,188 @@ void sync_entities_to_physics(EntityManager* em) {
         return;
     entity_manager_foreach_with(em, COMPONENT_BIT(COMPONENT_RIGID_BODY),
                                 sync_entity_to_physics_callback, NULL);
+}
+
+// Raycasting implementation
+
+// Helper to get entity from body ID via UserData
+static Entity* get_entity_from_body_id(PhysicsWorld* world, JPC_BodyID body_id) {
+    if (!world || !world->body_interface)
+        return NULL;
+
+    uint64_t user_data = JPC_BodyInterface_GetUserData(world->body_interface, body_id);
+    return (Entity*)(uintptr_t)user_data;
+}
+
+bool physics_world_raycast(PhysicsWorld* world, vec3 origin, vec3 direction, float max_distance,
+                           RaycastHit* out_hit) {
+    if (!world || !world->initialized || !out_hit)
+        return false;
+
+    memset(out_hit, 0, sizeof(RaycastHit));
+
+    // Scale direction by max_distance (JoltC uses direction length as max)
+    vec3 scaled_dir;
+    glm_vec3_scale(direction, max_distance, scaled_dir);
+
+    JPC_NarrowPhaseQuery_CastRayArgs args = {
+        .Ray = {.Origin = vec3_to_jpc_r(origin), .Direction = vec3_to_jpc(scaled_dir)},
+        .BroadPhaseLayerFilter = NULL,
+        .ObjectLayerFilter = NULL,
+        .BodyFilter = NULL,
+        .ShapeFilter = NULL};
+
+    const JPC_NarrowPhaseQuery* query =
+        JPC_PhysicsSystem_GetNarrowPhaseQuery(world->physics_system);
+
+    bool hit = JPC_NarrowPhaseQuery_CastRay(query, &args);
+
+    if (hit) {
+        out_hit->hit = true;
+        out_hit->fraction = args.Result.Fraction;
+        out_hit->distance = max_distance * args.Result.Fraction;
+
+        // Calculate hit position: origin + direction * distance
+        glm_vec3_scale(direction, out_hit->distance, out_hit->position);
+        glm_vec3_add(origin, out_hit->position, out_hit->position);
+
+        // Get entity from body UserData
+        out_hit->entity = get_entity_from_body_id(world, args.Result.BodyID);
+        if (out_hit->entity) {
+            out_hit->body = entity_get_rigid_body(out_hit->entity);
+        }
+
+        // Normal is zero for now (would need additional query)
+        glm_vec3_zero(out_hit->normal);
+    }
+
+    return hit;
+}
+
+// Filter context for layer-based filtering
+typedef struct {
+    uint32_t layer_mask;
+} LayerFilterContext;
+
+static bool layer_filter_should_collide(const void* self, JPC_ObjectLayer layer) {
+    const LayerFilterContext* ctx = (const LayerFilterContext*)self;
+    return (ctx->layer_mask & (1u << layer)) != 0;
+}
+
+bool physics_world_raycast_filtered(PhysicsWorld* world, vec3 origin, vec3 direction,
+                                    float max_distance, uint32_t layer_mask, RaycastHit* out_hit) {
+    if (!world || !world->initialized || !out_hit)
+        return false;
+
+    memset(out_hit, 0, sizeof(RaycastHit));
+
+    vec3 scaled_dir;
+    glm_vec3_scale(direction, max_distance, scaled_dir);
+
+    // Create layer filter
+    LayerFilterContext filter_ctx = {.layer_mask = layer_mask};
+    JPC_ObjectLayerFilterFns filter_fns = {.ShouldCollide = layer_filter_should_collide};
+    JPC_ObjectLayerFilter* layer_filter = JPC_ObjectLayerFilter_new(&filter_ctx, filter_fns);
+
+    JPC_NarrowPhaseQuery_CastRayArgs args = {
+        .Ray = {.Origin = vec3_to_jpc_r(origin), .Direction = vec3_to_jpc(scaled_dir)},
+        .BroadPhaseLayerFilter = NULL,
+        .ObjectLayerFilter = layer_filter,
+        .BodyFilter = NULL,
+        .ShapeFilter = NULL};
+
+    const JPC_NarrowPhaseQuery* query =
+        JPC_PhysicsSystem_GetNarrowPhaseQuery(world->physics_system);
+
+    bool hit = JPC_NarrowPhaseQuery_CastRay(query, &args);
+
+    JPC_ObjectLayerFilter_delete(layer_filter);
+
+    if (hit) {
+        out_hit->hit = true;
+        out_hit->fraction = args.Result.Fraction;
+        out_hit->distance = max_distance * args.Result.Fraction;
+
+        glm_vec3_scale(direction, out_hit->distance, out_hit->position);
+        glm_vec3_add(origin, out_hit->position, out_hit->position);
+
+        out_hit->entity = get_entity_from_body_id(world, args.Result.BodyID);
+        if (out_hit->entity) {
+            out_hit->body = entity_get_rigid_body(out_hit->entity);
+        }
+
+        glm_vec3_zero(out_hit->normal);
+    }
+
+    return hit;
+}
+
+// Filter context for ignoring specific body
+typedef struct {
+    JPC_BodyID ignore_id;
+} BodyIgnoreContext;
+
+static bool body_ignore_should_collide(const void* self, JPC_BodyID body_id) {
+    const BodyIgnoreContext* ctx = (const BodyIgnoreContext*)self;
+    return body_id != ctx->ignore_id;
+}
+
+static bool body_ignore_should_collide_locked(const void* self, const JPC_Body* body) {
+    const BodyIgnoreContext* ctx = (const BodyIgnoreContext*)self;
+    return JPC_Body_GetID(body) != ctx->ignore_id;
+}
+
+bool physics_world_raycast_ignore(PhysicsWorld* world, vec3 origin, vec3 direction,
+                                  float max_distance, const RigidBody* ignore,
+                                  RaycastHit* out_hit) {
+    if (!world || !world->initialized || !out_hit)
+        return false;
+
+    // If no body to ignore, use regular raycast
+    if (!ignore || !ignore->is_added) {
+        return physics_world_raycast(world, origin, direction, max_distance, out_hit);
+    }
+
+    memset(out_hit, 0, sizeof(RaycastHit));
+
+    vec3 scaled_dir;
+    glm_vec3_scale(direction, max_distance, scaled_dir);
+
+    // Create body filter
+    BodyIgnoreContext filter_ctx = {.ignore_id = ignore->body_id};
+    JPC_BodyFilterFns filter_fns = {.ShouldCollide = body_ignore_should_collide,
+                                    .ShouldCollideLocked = body_ignore_should_collide_locked};
+    JPC_BodyFilter* body_filter = JPC_BodyFilter_new(&filter_ctx, filter_fns);
+
+    JPC_NarrowPhaseQuery_CastRayArgs args = {
+        .Ray = {.Origin = vec3_to_jpc_r(origin), .Direction = vec3_to_jpc(scaled_dir)},
+        .BroadPhaseLayerFilter = NULL,
+        .ObjectLayerFilter = NULL,
+        .BodyFilter = body_filter,
+        .ShapeFilter = NULL};
+
+    const JPC_NarrowPhaseQuery* query =
+        JPC_PhysicsSystem_GetNarrowPhaseQuery(world->physics_system);
+
+    bool hit = JPC_NarrowPhaseQuery_CastRay(query, &args);
+
+    JPC_BodyFilter_delete(body_filter);
+
+    if (hit) {
+        out_hit->hit = true;
+        out_hit->fraction = args.Result.Fraction;
+        out_hit->distance = max_distance * args.Result.Fraction;
+
+        glm_vec3_scale(direction, out_hit->distance, out_hit->position);
+        glm_vec3_add(origin, out_hit->position, out_hit->position);
+
+        out_hit->entity = get_entity_from_body_id(world, args.Result.BodyID);
+        if (out_hit->entity) {
+            out_hit->body = entity_get_rigid_body(out_hit->entity);
+        }
+
+        glm_vec3_zero(out_hit->normal);
+    }
+
+    return hit;
 }

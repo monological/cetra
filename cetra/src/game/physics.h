@@ -103,6 +103,17 @@ typedef struct RigidBody {
     bool is_added;
 } RigidBody;
 
+// Raycast hit result
+typedef struct RaycastHit {
+    struct Entity* entity;  // Hit entity (NULL if body has no entity)
+    struct RigidBody* body; // Hit rigid body
+    vec3 position;          // World-space hit point
+    vec3 normal;            // Surface normal at hit point
+    float distance;         // Distance from ray origin
+    float fraction;         // 0.0-1.0 along ray length
+    bool hit;               // True if something was hit
+} RaycastHit;
+
 // PhysicsWorld lifecycle
 PhysicsConfig physics_default_config(void);
 PhysicsWorld* create_physics_world(const PhysicsConfig* config);
@@ -150,5 +161,13 @@ bool rigid_body_is_active(RigidBody* rb);
 // Transform synchronization
 void sync_physics_to_entities(PhysicsWorld* world, struct EntityManager* em);
 void sync_entities_to_physics(struct EntityManager* em);
+
+// Raycasting
+bool physics_world_raycast(PhysicsWorld* world, vec3 origin, vec3 direction, float max_distance,
+                           RaycastHit* out_hit);
+bool physics_world_raycast_filtered(PhysicsWorld* world, vec3 origin, vec3 direction,
+                                    float max_distance, uint32_t layer_mask, RaycastHit* out_hit);
+bool physics_world_raycast_ignore(PhysicsWorld* world, vec3 origin, vec3 direction,
+                                  float max_distance, const RigidBody* ignore, RaycastHit* out_hit);
 
 #endif // _PHYSICS_H_

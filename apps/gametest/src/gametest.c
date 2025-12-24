@@ -91,7 +91,7 @@ static void spawn_falling_box(Game* game) {
     vec3 half_extents = {scale, scale, scale};
 
     // Create visual
-    SceneNode* node = create_box_node(scene, half_extents, color, true);
+    SceneNode* node = create_box_node(scene, half_extents, color, false);
     set_node_name(node, name);
     box->node = node;
 
@@ -252,7 +252,7 @@ static void on_update(Game* game, double dt) {
     if (!player_entity)
         return;
 
-    const PhysicsWorld* physics = game_get_physics_world(game);
+    PhysicsWorld* physics = game_get_physics_world(game);
 
     // Get movement input
     vec3 input_dir;
@@ -301,6 +301,21 @@ static void on_update(Game* game, double dt) {
                 }
             }
             printf("Applied upward impulse to all boxes!\n");
+        }
+    }
+
+    // Raycast test on R key - cast ray downward from player
+    if (input_key_pressed(&game->input, GLFW_KEY_R) && physics) {
+        vec3 down = {0, -1, 0};
+        RaycastHit hit;
+        RigidBody* player_rb = entity_get_rigid_body(player_entity);
+        if (physics_world_raycast_ignore(physics, player_entity->position, down, 50.0f, player_rb,
+                                         &hit)) {
+            printf("Raycast hit: %s at distance %.2f (pos: %.1f, %.1f, %.1f)\n",
+                   hit.entity ? hit.entity->name : "unknown", hit.distance, hit.position[0],
+                   hit.position[1], hit.position[2]);
+        } else {
+            printf("Raycast: no hit\n");
         }
     }
 }
@@ -369,6 +384,7 @@ int main(int argc, const char* argv[]) {
     printf("  WASD - Move player cube\n");
     printf("  F - Spawn falling box\n");
     printf("  Space - Push all boxes up\n");
+    printf("  R - Raycast downward from player\n");
     printf("  P - Pause/unpause physics\n");
     printf("  Mouse drag - Orbit camera\n");
     printf("  Escape - Quit\n\n");
