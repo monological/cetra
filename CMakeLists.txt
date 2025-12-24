@@ -14,7 +14,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # Build options
 option(CETRA_BUILD_APPS "Build example applications" ON)
-option(CETRA_BUILD_JOLTC "Build JoltC physics library" OFF)
+option(CETRA_BUILD_JOLTC "Build JoltC physics library" ON)
 
 # Output directories
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
@@ -30,7 +30,8 @@ if(APPLE)
     link_directories(${HOMEBREW_PREFIX}/lib)
 endif()
 
-add_compile_definitions(_POSIX_C_SOURCE=200809L)
+# Note: _POSIX_C_SOURCE is set per-target in cetra/CMakeLists.txt
+# Setting it globally breaks JoltC build (alloca not declared)
 
 # Find required packages
 find_package(PkgConfig REQUIRED)
@@ -39,7 +40,7 @@ pkg_check_modules(GLEW REQUIRED glew)
 pkg_check_modules(CGLM REQUIRED cglm)
 pkg_check_modules(ASSIMP REQUIRED assimp)
 
-# Build JoltC if enabled (disabled by default - needs Jolt Physics version compatibility work)
+# Build JoltC if enabled
 if(CETRA_BUILD_JOLTC)
     add_subdirectory(cetra/src/ext/JoltC)
 endif()

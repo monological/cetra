@@ -94,6 +94,7 @@ if(WIN32)
 endif()
 
 target_compile_options(cetra PRIVATE -Wall -g)
+target_compile_definitions(cetra PRIVATE _POSIX_C_SOURCE=200809L)
 
 # Install targets
 install(TARGETS cetra
