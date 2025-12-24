@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-BUILD_DIR="build"
+BUILD_DIR="out"
 BUILD_TYPE="Debug"
 GENERATOR="Ninja"
 
@@ -10,19 +10,19 @@ usage() {
     echo "Options:"
     echo "  -r, --release    Build in Release mode"
     echo "  -c, --clean      Clean build directory first"
-    echo "  -j, --joltc      Enable JoltC physics library"
+    echo "  --no-joltc       Disable JoltC physics library"
     echo "  -h, --help       Show this help"
     exit 0
 }
 
 CLEAN=0
-JOLTC=OFF
+JOLTC=ON
 
 while [[ $# -gt 0 ]]; do
     case $1 in
         -r|--release) BUILD_TYPE="Release"; shift ;;
         -c|--clean) CLEAN=1; shift ;;
-        -j|--joltc) JOLTC=ON; shift ;;
+        --no-joltc) JOLTC=OFF; shift ;;
         -h|--help) usage ;;
         *) echo "Unknown option: $1"; usage ;;
     esac

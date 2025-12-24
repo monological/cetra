@@ -1,5 +1,5 @@
 .DS_Store
-build
+out
 my_models
 *.swp
 *.o
