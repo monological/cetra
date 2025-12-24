@@ -25,14 +25,16 @@
 #include "cetra/game/game.h"
 #include "cetra/game/entity.h"
 #include "cetra/game/physics.h"
+#include "cetra/ibl.h"
 
 static MouseDragController* drag_controller = NULL;
 static Entity* player_entity = NULL;
 static ShaderProgram* pbr_shader = NULL;
 static int box_count = 0;
+static const char* hdr_path = NULL;
 
 // Create a visual mesh node for an entity
-static SceneNode* create_box_node(Scene* scene, vec3 size, vec3 color) {
+static SceneNode* create_box_node(Scene* scene, vec3 size, vec3 color, bool glass) {
     SceneNode* node = create_node();
 
     Mesh* mesh = create_mesh();
@@ -41,8 +43,15 @@ static SceneNode* create_box_node(Scene* scene, vec3 size, vec3 color) {
 
     Material* mat = create_material();
     glm_vec3_copy(color, mat->albedo);
-    mat->roughness = 0.4f;
-    mat->metallic = 0.3f;
+    if (glass) {
+        mat->roughness = 0.05f;
+        mat->metallic = 0.0f;
+        mat->opacity = 0.2f;
+        mat->ior = 1.5f;
+    } else {
+        mat->roughness = 0.4f;
+        mat->metallic = 0.3f;
+    }
     set_material_shader_program(mat, pbr_shader);
     mesh->material = mat;
 
@@ -82,7 +91,7 @@ static void spawn_falling_box(Game* game) {
     vec3 half_extents = {scale, scale, scale};
 
     // Create visual
-    SceneNode* node = create_box_node(scene, half_extents, color);
+    SceneNode* node = create_box_node(scene, half_extents, color, true);
     set_node_name(node, name);
     box->node = node;
 
@@ -115,6 +124,26 @@ static void on_init(Game* game) {
 
     if (xyz) {
         set_scene_xyz_shader_program(scene, xyz);
+    }
+
+    // Load IBL environment if HDR path provided
+    if (hdr_path) {
+        IBLResources* ibl = create_ibl_resources();
+        if (ibl && load_hdr_environment(ibl, hdr_path) == 0) {
+            if (precompute_ibl(ibl, engine) == 0) {
+                scene->ibl = ibl;
+                scene->render_skybox = true;
+                scene->skybox_exposure = 1.0f;
+                printf("Loaded HDR environment: %s\n", hdr_path);
+            } else {
+                fprintf(stderr, "Failed to precompute IBL\n");
+                free_ibl_resources(ibl);
+            }
+        } else {
+            fprintf(stderr, "Failed to load HDR: %s\n", hdr_path);
+            if (ibl)
+                free_ibl_resources(ibl);
+        }
     }
 
     // Add lights
@@ -175,7 +204,7 @@ static void on_init(Game* game) {
     // Player visual
     vec3 player_size = {1.0f, 1.0f, 1.0f};
     vec3 player_color = {0.8f, 0.2f, 0.2f};
-    SceneNode* player_node = create_box_node(scene, player_size, player_color);
+    SceneNode* player_node = create_box_node(scene, player_size, player_color, false);
     set_node_name(player_node, "player");
     player_entity->node = player_node;
 
@@ -297,8 +326,14 @@ static void on_render(Game* game, double alpha) {
     reset_and_apply_transform(&engine->model_matrix, &t);
     apply_transform_to_nodes(scene->root_node, engine->model_matrix);
 
+    // Disable backface culling for glass transparency
+    glDisable(GL_CULL_FACE);
+
     // Render the scene
     render_current_scene(engine, game->time);
+
+    // Re-enable culling
+    glEnable(GL_CULL_FACE);
 }
 
 // Shutdown callback
@@ -321,8 +356,15 @@ static void mouse_button_callback(Engine* engine, int button, int action, int mo
     }
 }
 
-int main(void) {
+int main(int argc, const char* argv[]) {
     printf("=== Physics Test ===\n\n");
+
+    // Parse command line arguments
+    if (argc > 1) {
+        hdr_path = argv[1];
+        printf("Using HDR environment: %s\n\n", hdr_path);
+    }
+
     printf("Controls:\n");
     printf("  WASD - Move player cube\n");
     printf("  F - Spawn falling box\n");
