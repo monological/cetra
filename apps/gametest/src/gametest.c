@@ -8,6 +8,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
@@ -105,6 +106,28 @@ static void spawn_falling_box(Game* game) {
     printf("Spawned %s at (%.1f, %.1f, %.1f)\n", name, pos[0], pos[1], pos[2]);
 }
 
+// Collision callback
+static void on_collision(const CollisionEvent* event, void* user_data) {
+    (void)user_data;
+
+    // Only print BEGIN and END events (STAY would be too noisy)
+    if (event->type == COLLISION_STAY)
+        return;
+
+    const char* type_str = event->type == COLLISION_BEGIN ? "BEGIN" : "END";
+    const char* name_a = event->entity_a ? event->entity_a->name : "?";
+    const char* name_b = event->entity_b ? event->entity_b->name : "?";
+
+    // Check if player is involved
+    bool player_involved = (event->entity_a && strcmp(event->entity_a->name, "player") == 0) ||
+                           (event->entity_b && strcmp(event->entity_b->name, "player") == 0);
+
+    if (player_involved && event->type == COLLISION_BEGIN) {
+        printf("Player collision %s: %s <-> %s at (%.1f, %.1f, %.1f)\n", type_str, name_a, name_b,
+               event->contact_point[0], event->contact_point[1], event->contact_point[2]);
+    }
+}
+
 // Game init callback
 static void on_init(Game* game) {
     printf("Game initialized with physics!\n");
@@ -158,6 +181,9 @@ static void on_init(Game* game) {
     }
     game_set_physics_world(game, physics);
     printf("Physics world created\n");
+
+    // Set up collision callback
+    physics_world_set_collision_callback(physics, on_collision, game);
 
     // Create entity manager
     EntityManager* em = create_entity_manager(game);
