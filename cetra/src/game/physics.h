@@ -160,7 +160,7 @@ bool rigid_body_is_active(RigidBody* rb);
 
 // Transform synchronization
 void sync_physics_to_entities(PhysicsWorld* world, struct EntityManager* em);
-void sync_entities_to_physics(struct EntityManager* em);
+void sync_entities_to_physics(struct EntityManager* em, float dt);
 
 // Raycasting
 bool physics_world_raycast(PhysicsWorld* world, vec3 origin, vec3 direction, float max_distance,

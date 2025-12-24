@@ -236,7 +236,7 @@ void run_game(Game* game) {
             while (game->accumulator >= game->fixed_timestep) {
                 // Sync kinematic bodies from entity transforms before physics
                 if (game->entity_manager) {
-                    sync_entities_to_physics(game->entity_manager);
+                    sync_entities_to_physics(game->entity_manager, (float)game->fixed_timestep);
                 }
 
                 // User update callback

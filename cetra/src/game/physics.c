@@ -516,24 +516,31 @@ void sync_physics_to_entities(PhysicsWorld* world, EntityManager* em) {
                                 sync_physics_entity_callback, world);
 }
 
+typedef struct {
+    float dt;
+} SyncToPhysicsContext;
+
 static void sync_entity_to_physics_callback(Entity* entity, void* user_data) {
-    (void)user_data;
+    SyncToPhysicsContext* ctx = (SyncToPhysicsContext*)user_data;
     RigidBody* rb = entity_get_rigid_body(entity);
     if (!rb || !rb->is_added)
         return;
     if (rb->motion_type != MOTION_KINEMATIC)
         return;
 
-    JPC_BodyInterface_SetPositionAndRotation(
-        rb->world->body_interface, rb->body_id, vec3_to_jpc_r(entity->position),
-        quat_to_jpc(entity->rotation), JPC_ACTIVATION_ACTIVATE);
+    // Use MoveKinematic instead of SetPosition for proper collision response
+    // This tells Jolt where we want the body to be at the end of the timestep
+    JPC_BodyInterface_MoveKinematic(rb->world->body_interface, rb->body_id,
+                                    vec3_to_jpc_r(entity->position), quat_to_jpc(entity->rotation),
+                                    ctx->dt);
 }
 
-void sync_entities_to_physics(EntityManager* em) {
+void sync_entities_to_physics(EntityManager* em, float dt) {
     if (!em)
         return;
+    SyncToPhysicsContext ctx = {.dt = dt};
     entity_manager_foreach_with(em, COMPONENT_BIT(COMPONENT_RIGID_BODY),
-                                sync_entity_to_physics_callback, NULL);
+                                sync_entity_to_physics_callback, &ctx);
 }
 
 // Raycasting implementation
