@@ -2,6 +2,7 @@
 #include "entity.h"
 #include "JoltC/JoltC.h"
 
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -9,6 +10,9 @@
 typedef struct CollisionEventQueue CollisionEventQueue;
 static CollisionEventQueue* create_collision_event_queue(size_t initial_capacity);
 static void free_collision_event_queue(CollisionEventQueue* queue);
+
+// Forward declaration for constraint cleanup
+void physics_world_remove_constraints_for_body(PhysicsWorld* world, const RigidBody* body);
 
 // Contact listener context - defined here for sizeof
 typedef struct ContactListenerContext {
@@ -26,7 +30,7 @@ static void on_contact_persisted(void* self, const JPC_Body* body1, const JPC_Bo
 static void on_contact_removed(void* self, const JPC_SubShapeIDPair* pair);
 
 // Type conversion helpers
-static inline JPC_Vec3 vec3_to_jpc(vec3 v) {
+static inline JPC_Vec3 vec3_to_jpc(const vec3 v) {
     JPC_Vec3 result = {.x = v[0], .y = v[1], .z = v[2], ._w = 0.0f};
     return result;
 }
@@ -37,7 +41,7 @@ static inline void jpc_to_vec3(JPC_Vec3 jv, vec3 out) {
     out[2] = jv.z;
 }
 
-static inline JPC_RVec3 vec3_to_jpc_r(vec3 v) {
+static inline JPC_RVec3 vec3_to_jpc_r(const vec3 v) {
     JPC_RVec3 result;
     result.x = v[0];
     result.y = v[1];
@@ -51,7 +55,7 @@ static inline void jpc_r_to_vec3(JPC_RVec3 jv, vec3 out) {
     out[2] = (float)jv.z;
 }
 
-static inline JPC_Quat quat_to_jpc(versor q) {
+static inline JPC_Quat quat_to_jpc(const versor q) {
     JPC_Quat result = {.x = q[0], .y = q[1], .z = q[2], .w = q[3]};
     return result;
 }
@@ -215,6 +219,25 @@ void free_physics_world(PhysicsWorld* world) {
     if (!world)
         return;
 
+    // Free all constraints first
+    for (size_t i = 0; i < world->constraint_count; i++) {
+        Constraint* c = world->constraints[i];
+        if (c) {
+            if (c->is_added) {
+                JPC_PhysicsSystem_RemoveConstraint(world->physics_system, c->jolt_constraint);
+                c->is_added = false;
+            }
+            if (c->jolt_constraint) {
+                JPC_Constraint_Release(c->jolt_constraint);
+            }
+            free(c);
+        }
+    }
+    free(world->constraints);
+    world->constraints = NULL;
+    world->constraint_count = 0;
+    world->constraint_capacity = 0;
+
     // Clean up collision system
     if (world->contact_listener) {
         JPC_ContactListener_delete(world->contact_listener);
@@ -349,6 +372,11 @@ static void free_rigid_body(void* data) {
     RigidBody* rb = (RigidBody*)data;
     if (!rb)
         return;
+
+    // Remove all constraints involving this body first
+    if (rb->world) {
+        physics_world_remove_constraints_for_body(rb->world, rb);
+    }
 
     if (rb->is_added && rb->world && rb->world->body_interface) {
         JPC_BodyInterface_RemoveBody(rb->world->body_interface, rb->body_id);
@@ -991,4 +1019,373 @@ void physics_world_process_collisions(PhysicsWorld* world) {
 
     // Clear queue for next frame
     queue->count = 0;
+}
+
+// Helper to compute a perpendicular vector
+static void compute_perpendicular(const vec3 v, vec3 out) {
+    vec3 abs_v = {fabsf(v[0]), fabsf(v[1]), fabsf(v[2])};
+    if (abs_v[0] <= abs_v[1] && abs_v[0] <= abs_v[2]) {
+        vec3 x = {1, 0, 0};
+        glm_vec3_cross((float*)v, x, out);
+    } else if (abs_v[1] <= abs_v[2]) {
+        vec3 y = {0, 1, 0};
+        glm_vec3_cross((float*)v, y, out);
+    } else {
+        vec3 z = {0, 0, 1};
+        glm_vec3_cross((float*)v, z, out);
+    }
+    glm_vec3_normalize(out);
+}
+
+// Static constraint creators
+static JPC_Constraint* create_fixed_jolt_constraint(JPC_Body* body1, JPC_Body* body2,
+                                                    const ConstraintDesc* desc) {
+    JPC_FixedConstraintSettings settings;
+    JPC_FixedConstraintSettings_default(&settings);
+
+    settings.Space = JPC_CONSTRAINT_SPACE_LOCAL_TO_BODY_COM;
+    settings.Point1 = vec3_to_jpc_r(desc->anchor_a);
+    settings.Point2 = vec3_to_jpc_r(desc->anchor_b);
+
+    // Set reference frame axes
+    settings.AxisX1 = vec3_to_jpc(desc->fixed.axis_x);
+    settings.AxisY1 = vec3_to_jpc(desc->fixed.axis_y);
+    settings.AxisX2 = vec3_to_jpc(desc->fixed.axis_x);
+    settings.AxisY2 = vec3_to_jpc(desc->fixed.axis_y);
+
+    return JPC_FixedConstraintSettings_Create(&settings, body1, body2);
+}
+
+static JPC_Constraint* create_distance_jolt_constraint(JPC_Body* body1, JPC_Body* body2,
+                                                       const ConstraintDesc* desc) {
+    JPC_DistanceConstraintSettings settings;
+    JPC_DistanceConstraintSettings_default(&settings);
+
+    settings.Space = JPC_CONSTRAINT_SPACE_LOCAL_TO_BODY_COM;
+    settings.Point1 = vec3_to_jpc_r(desc->anchor_a);
+    settings.Point2 = vec3_to_jpc_r(desc->anchor_b);
+    settings.MinDistance = desc->distance.min_distance;
+    settings.MaxDistance = desc->distance.max_distance;
+
+    // Spring settings
+    if (desc->distance.spring.frequency > 0) {
+        settings.LimitsSpringSettings.Mode = JPC_SPRING_MODE_FREQUENCY_AND_DAMPING;
+        settings.LimitsSpringSettings.FrequencyOrStiffness = desc->distance.spring.frequency;
+        settings.LimitsSpringSettings.Damping = desc->distance.spring.damping;
+    }
+
+    return (JPC_Constraint*)JPC_DistanceConstraintSettings_Create(&settings, body1, body2);
+}
+
+static JPC_Constraint* create_hinge_jolt_constraint(JPC_Body* body1, JPC_Body* body2,
+                                                    const ConstraintDesc* desc) {
+    JPC_HingeConstraintSettings settings;
+    JPC_HingeConstraintSettings_default(&settings);
+
+    settings.Space = JPC_CONSTRAINT_SPACE_LOCAL_TO_BODY_COM;
+    settings.Point1 = vec3_to_jpc_r(desc->anchor_a);
+    settings.Point2 = vec3_to_jpc_r(desc->anchor_b);
+    settings.HingeAxis1 = vec3_to_jpc(desc->hinge.axis);
+    settings.HingeAxis2 = vec3_to_jpc(desc->hinge.axis);
+
+    // Compute normal axis perpendicular to hinge
+    vec3 normal = {0};
+    compute_perpendicular((float*)desc->hinge.axis, normal);
+    settings.NormalAxis1 = vec3_to_jpc(normal);
+    settings.NormalAxis2 = vec3_to_jpc(normal);
+
+    settings.LimitsMin = desc->hinge.min_angle;
+    settings.LimitsMax = desc->hinge.max_angle;
+    settings.MaxFrictionTorque = desc->hinge.max_friction_torque;
+
+    return (JPC_Constraint*)JPC_HingeConstraintSettings_Create(&settings, body1, body2);
+}
+
+static JPC_Constraint* create_slider_jolt_constraint(JPC_Body* body1, JPC_Body* body2,
+                                                     const ConstraintDesc* desc) {
+    JPC_SliderConstraintSettings settings;
+    JPC_SliderConstraintSettings_default(&settings);
+
+    settings.Space = JPC_CONSTRAINT_SPACE_LOCAL_TO_BODY_COM;
+    settings.Point1 = vec3_to_jpc_r(desc->anchor_a);
+    settings.Point2 = vec3_to_jpc_r(desc->anchor_b);
+    settings.SliderAxis1 = vec3_to_jpc(desc->slider.axis);
+    settings.SliderAxis2 = vec3_to_jpc(desc->slider.axis);
+
+    // Compute normal axis perpendicular to slider
+    vec3 normal = {0};
+    compute_perpendicular((float*)desc->slider.axis, normal);
+    settings.NormalAxis1 = vec3_to_jpc(normal);
+    settings.NormalAxis2 = vec3_to_jpc(normal);
+
+    settings.LimitsMin = desc->slider.min_distance;
+    settings.LimitsMax = desc->slider.max_distance;
+    settings.MaxFrictionForce = desc->slider.max_friction_force;
+
+    return (JPC_Constraint*)JPC_SliderConstraintSettings_Create(&settings, body1, body2);
+}
+
+static JPC_Constraint* create_sixdof_jolt_constraint(JPC_Body* body1, JPC_Body* body2,
+                                                     const ConstraintDesc* desc) {
+    JPC_SixDOFConstraintSettings settings;
+    JPC_SixDOFConstraintSettings_default(&settings);
+
+    settings.Space = JPC_CONSTRAINT_SPACE_LOCAL_TO_BODY_COM;
+    settings.Position1 = vec3_to_jpc_r(desc->anchor_a);
+    settings.Position2 = vec3_to_jpc_r(desc->anchor_b);
+    settings.AxisX1 = vec3_to_jpc(desc->sixdof.axis_x);
+    settings.AxisY1 = vec3_to_jpc(desc->sixdof.axis_y);
+    settings.AxisX2 = vec3_to_jpc(desc->sixdof.axis_x);
+    settings.AxisY2 = vec3_to_jpc(desc->sixdof.axis_y);
+
+    // Translation limits
+    settings.LimitMin[0] = desc->sixdof.translation_limits_min[0];
+    settings.LimitMin[1] = desc->sixdof.translation_limits_min[1];
+    settings.LimitMin[2] = desc->sixdof.translation_limits_min[2];
+    settings.LimitMax[0] = desc->sixdof.translation_limits_max[0];
+    settings.LimitMax[1] = desc->sixdof.translation_limits_max[1];
+    settings.LimitMax[2] = desc->sixdof.translation_limits_max[2];
+
+    // Rotation limits (indices 3, 4, 5)
+    settings.LimitMin[3] = desc->sixdof.rotation_limits_min[0];
+    settings.LimitMin[4] = desc->sixdof.rotation_limits_min[1];
+    settings.LimitMin[5] = desc->sixdof.rotation_limits_min[2];
+    settings.LimitMax[3] = desc->sixdof.rotation_limits_max[0];
+    settings.LimitMax[4] = desc->sixdof.rotation_limits_max[1];
+    settings.LimitMax[5] = desc->sixdof.rotation_limits_max[2];
+
+    return JPC_SixDOFConstraintSettings_Create(&settings, body1, body2);
+}
+
+// Get JPC_Body from body ID (uses write lock to get non-const body for constraint creation)
+static JPC_Body* get_body_ptr(PhysicsWorld* world, JPC_BodyID body_id) {
+    if (!world || !world->physics_system)
+        return NULL;
+    const JPC_BodyLockInterface* lock_interface =
+        JPC_PhysicsSystem_GetBodyLockInterface(world->physics_system);
+    JPC_BodyLockWrite* lock = JPC_BodyLockWrite_new(lock_interface, body_id);
+    if (!lock || !JPC_BodyLockWrite_Succeeded(lock)) {
+        if (lock)
+            JPC_BodyLockWrite_delete(lock);
+        return NULL;
+    }
+    JPC_Body* body = JPC_BodyLockWrite_GetBody(lock);
+    JPC_BodyLockWrite_delete(lock);
+    return body;
+}
+
+Constraint* create_constraint(PhysicsWorld* world, RigidBody* body_a, RigidBody* body_b,
+                              const ConstraintDesc* desc) {
+    if (!world || !body_a || !body_b || !desc)
+        return NULL;
+    if (!body_a->is_added || !body_b->is_added)
+        return NULL;
+
+    // Get JoltC body pointers
+    JPC_Body* jolt_a = get_body_ptr(world, body_a->body_id);
+    JPC_Body* jolt_b = get_body_ptr(world, body_b->body_id);
+    if (!jolt_a || !jolt_b)
+        return NULL;
+
+    // Create JoltC constraint based on type
+    JPC_Constraint* jolt_c = NULL;
+    switch (desc->type) {
+        case CONSTRAINT_FIXED:
+            jolt_c = create_fixed_jolt_constraint(jolt_a, jolt_b, desc);
+            break;
+        case CONSTRAINT_DISTANCE:
+            jolt_c = create_distance_jolt_constraint(jolt_a, jolt_b, desc);
+            break;
+        case CONSTRAINT_HINGE:
+            jolt_c = create_hinge_jolt_constraint(jolt_a, jolt_b, desc);
+            break;
+        case CONSTRAINT_SLIDER:
+            jolt_c = create_slider_jolt_constraint(jolt_a, jolt_b, desc);
+            break;
+        case CONSTRAINT_SIXDOF:
+            jolt_c = create_sixdof_jolt_constraint(jolt_a, jolt_b, desc);
+            break;
+        default:
+            return NULL;
+    }
+    if (!jolt_c)
+        return NULL;
+
+    // Allocate wrapper
+    Constraint* c = malloc(sizeof(Constraint));
+    if (!c) {
+        JPC_Constraint_Release(jolt_c);
+        return NULL;
+    }
+    memset(c, 0, sizeof(Constraint));
+
+    c->jolt_constraint = jolt_c;
+    c->type = desc->type;
+    c->world = world;
+    c->body_a = body_a;
+    c->body_b = body_b;
+    c->enabled = true;
+    c->is_added = false;
+
+    return c;
+}
+
+void free_constraint(Constraint* c) {
+    if (!c)
+        return;
+
+    // Remove from world if still added
+    if (c->is_added && c->world) {
+        physics_world_remove_constraint(c->world, c);
+    }
+
+    // Release JoltC constraint
+    if (c->jolt_constraint) {
+        JPC_Constraint_Release(c->jolt_constraint);
+    }
+
+    free(c);
+}
+
+void physics_world_add_constraint(PhysicsWorld* world, Constraint* c) {
+    if (!world || !c || c->is_added)
+        return;
+
+    // Add to Jolt physics system
+    JPC_PhysicsSystem_AddConstraint(world->physics_system, c->jolt_constraint);
+    c->is_added = true;
+
+    // Store in world's constraint array
+    if (world->constraint_count >= world->constraint_capacity) {
+        size_t new_cap = world->constraint_capacity == 0 ? 16 : world->constraint_capacity * 2;
+        Constraint** new_arr = realloc(world->constraints, sizeof(Constraint*) * new_cap);
+        if (!new_arr)
+            return;
+        world->constraints = new_arr;
+        world->constraint_capacity = new_cap;
+    }
+    world->constraints[world->constraint_count++] = c;
+}
+
+void physics_world_remove_constraint(PhysicsWorld* world, Constraint* c) {
+    if (!world || !c || !c->is_added)
+        return;
+
+    // Remove from Jolt physics system
+    JPC_PhysicsSystem_RemoveConstraint(world->physics_system, c->jolt_constraint);
+    c->is_added = false;
+
+    // Remove from world's constraint array
+    for (size_t i = 0; i < world->constraint_count; i++) {
+        if (world->constraints[i] == c) {
+            world->constraints[i] = world->constraints[world->constraint_count - 1];
+            world->constraint_count--;
+            break;
+        }
+    }
+}
+
+void physics_world_remove_constraints_for_body(PhysicsWorld* world, const RigidBody* body) {
+    if (!world || !body)
+        return;
+
+    // Iterate backwards to safely remove while iterating
+    for (size_t i = world->constraint_count; i > 0; i--) {
+        Constraint* c = world->constraints[i - 1];
+        if (c->body_a == body || c->body_b == body) {
+            free_constraint(c);
+        }
+    }
+}
+
+void constraint_set_enabled(Constraint* c, bool enabled) {
+    if (!c || !c->jolt_constraint)
+        return;
+    JPC_Constraint_SetEnabled(c->jolt_constraint, enabled);
+    c->enabled = enabled;
+}
+
+bool constraint_is_enabled(const Constraint* c) {
+    if (!c)
+        return false;
+    return c->enabled;
+}
+
+// Hinge motor control
+void constraint_hinge_set_motor_state(Constraint* c, MotorState state) {
+    if (!c || c->type != CONSTRAINT_HINGE || !c->jolt_constraint)
+        return;
+    JPC_MotorState jpc_state;
+    switch (state) {
+        case MOTOR_OFF:
+            jpc_state = JPC_MOTOR_STATE_OFF;
+            break;
+        case MOTOR_VELOCITY:
+            jpc_state = JPC_MOTOR_STATE_VELOCITY;
+            break;
+        case MOTOR_POSITION:
+            jpc_state = JPC_MOTOR_STATE_POSITION;
+            break;
+        default:
+            return;
+    }
+    JPC_HingeConstraint_SetMotorState((JPC_HingeConstraint*)c->jolt_constraint, jpc_state);
+}
+
+void constraint_hinge_set_target_velocity(Constraint* c, float velocity) {
+    if (!c || c->type != CONSTRAINT_HINGE || !c->jolt_constraint)
+        return;
+    JPC_HingeConstraint_SetTargetAngularVelocity((JPC_HingeConstraint*)c->jolt_constraint,
+                                                 velocity);
+}
+
+void constraint_hinge_set_target_angle(Constraint* c, float angle) {
+    if (!c || c->type != CONSTRAINT_HINGE || !c->jolt_constraint)
+        return;
+    JPC_HingeConstraint_SetTargetAngle((JPC_HingeConstraint*)c->jolt_constraint, angle);
+}
+
+float constraint_hinge_get_current_angle(const Constraint* c) {
+    if (!c || c->type != CONSTRAINT_HINGE || !c->jolt_constraint)
+        return 0.0f;
+    return JPC_HingeConstraint_GetTargetAngle((JPC_HingeConstraint*)c->jolt_constraint);
+}
+
+// Slider motor control
+void constraint_slider_set_motor_state(Constraint* c, MotorState state) {
+    if (!c || c->type != CONSTRAINT_SLIDER || !c->jolt_constraint)
+        return;
+    JPC_MotorState jpc_state;
+    switch (state) {
+        case MOTOR_OFF:
+            jpc_state = JPC_MOTOR_STATE_OFF;
+            break;
+        case MOTOR_VELOCITY:
+            jpc_state = JPC_MOTOR_STATE_VELOCITY;
+            break;
+        case MOTOR_POSITION:
+            jpc_state = JPC_MOTOR_STATE_POSITION;
+            break;
+        default:
+            return;
+    }
+    JPC_SliderConstraint_SetMotorState((JPC_SliderConstraint*)c->jolt_constraint, jpc_state);
+}
+
+void constraint_slider_set_target_velocity(Constraint* c, float velocity) {
+    if (!c || c->type != CONSTRAINT_SLIDER || !c->jolt_constraint)
+        return;
+    JPC_SliderConstraint_SetTargetVelocity((JPC_SliderConstraint*)c->jolt_constraint, velocity);
+}
+
+void constraint_slider_set_target_position(Constraint* c, float position) {
+    if (!c || c->type != CONSTRAINT_SLIDER || !c->jolt_constraint)
+        return;
+    JPC_SliderConstraint_SetTargetPosition((JPC_SliderConstraint*)c->jolt_constraint, position);
+}
+
+float constraint_slider_get_current_position(const Constraint* c) {
+    if (!c || c->type != CONSTRAINT_SLIDER || !c->jolt_constraint)
+        return 0.0f;
+    return JPC_SliderConstraint_GetTargetPosition((JPC_SliderConstraint*)c->jolt_constraint);
 }

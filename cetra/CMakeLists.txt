@@ -74,6 +74,8 @@ if(APPLE)
         "-framework IOKit"
         "-framework CoreVideo"
     )
+    # Suppress duplicate library warnings from CMake's transitive linking
+    target_link_options(cetra PUBLIC "LINKER:-no_warn_duplicate_libraries")
 endif()
 
 if(UNIX AND NOT APPLE)

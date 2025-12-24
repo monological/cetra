@@ -22,6 +22,7 @@ typedef struct JPC_ObjectLayerPairFilter JPC_ObjectLayerPairFilter;
 typedef struct JPC_BodyInterface JPC_BodyInterface;
 typedef struct JPC_Shape JPC_Shape;
 typedef struct JPC_ContactListener JPC_ContactListener;
+typedef struct JPC_Constraint JPC_Constraint;
 typedef uint32_t JPC_BodyID;
 
 // Internal forward declaration
@@ -45,6 +46,28 @@ typedef enum { MOTION_STATIC, MOTION_KINEMATIC, MOTION_DYNAMIC } PhysicsMotionTy
 // Shape types
 typedef enum { SHAPE_BOX, SHAPE_SPHERE, SHAPE_CAPSULE, SHAPE_CYLINDER } PhysicsShapeType;
 
+// Constraint types
+typedef enum {
+    CONSTRAINT_FIXED,    // Weld two bodies together
+    CONSTRAINT_DISTANCE, // Keep two points at fixed distance
+    CONSTRAINT_HINGE,    // Revolute joint (rotate around axis)
+    CONSTRAINT_SLIDER,   // Prismatic joint (slide along axis)
+    CONSTRAINT_SIXDOF    // 6 degrees of freedom (advanced)
+} ConstraintType;
+
+// Motor state for motorized constraints
+typedef enum {
+    MOTOR_OFF,      // Motor disabled
+    MOTOR_VELOCITY, // Maintain target velocity
+    MOTOR_POSITION  // Reach target position
+} MotorState;
+
+// Spring settings for constraint limits
+typedef struct SpringSettings {
+    float frequency; // Oscillation frequency in Hz (0 = rigid)
+    float damping;   // Damping ratio (0 = no damping, 1 = critical)
+} SpringSettings;
+
 // Shape description for creation
 typedef struct PhysicsShapeDesc {
     PhysicsShapeType type;
@@ -66,6 +89,65 @@ typedef struct PhysicsShapeDesc {
     };
     float density;
 } PhysicsShapeDesc;
+
+// Constraint description for creation
+typedef struct ConstraintDesc {
+    ConstraintType type;
+
+    // Anchor points in local body space (relative to center of mass)
+    vec3 anchor_a; // Anchor on body A
+    vec3 anchor_b; // Anchor on body B
+
+    union {
+        struct {
+            vec3 axis_x; // Local X axis for reference frame
+            vec3 axis_y; // Local Y axis for reference frame
+        } fixed;
+
+        struct {
+            float min_distance;
+            float max_distance;
+            SpringSettings spring;
+        } distance;
+
+        struct {
+            vec3 axis;       // Hinge axis (same for both bodies)
+            float min_angle; // Minimum angle in radians
+            float max_angle; // Maximum angle in radians
+            float max_friction_torque;
+        } hinge;
+
+        struct {
+            vec3 axis; // Slide axis (same for both bodies)
+            float min_distance;
+            float max_distance;
+            float max_friction_force;
+        } slider;
+
+        struct {
+            vec3 axis_x;                 // Reference frame X axis
+            vec3 axis_y;                 // Reference frame Y axis
+            vec3 translation_limits_min; // Min translation on each axis
+            vec3 translation_limits_max; // Max translation on each axis
+            vec3 rotation_limits_min;    // Min rotation on each axis (radians)
+            vec3 rotation_limits_max;    // Max rotation on each axis (radians)
+        } sixdof;
+    };
+} ConstraintDesc;
+
+// Forward declaration for Constraint
+struct Constraint;
+
+// Constraint wrapper
+typedef struct Constraint {
+    JPC_Constraint* jolt_constraint;
+    ConstraintType type;
+    struct PhysicsWorld* world;
+    struct RigidBody* body_a;
+    struct RigidBody* body_b;
+    bool is_added;
+    bool enabled;
+} Constraint;
 
 // Physics configuration
 typedef struct PhysicsConfig {
@@ -116,6 +198,10 @@ typedef struct PhysicsWorld {
     CollisionCallback collision_callback;
     void* collision_user_data;
     bool report_stay_events;
+    // Constraint storage
+    Constraint** constraints;
+    size_t constraint_count;
+    size_t constraint_capacity;
 } PhysicsWorld;
 
 // RigidBody component data
@@ -208,5 +294,31 @@ void physics_world_set_collision_callback(PhysicsWorld* world, CollisionCallback
                                           void* user_data);
 void physics_world_set_report_stay_events(PhysicsWorld* world, bool enabled);
 void physics_world_process_collisions(PhysicsWorld* world);
+
+// Constraint creation/destruction
+Constraint* create_constraint(PhysicsWorld* world, RigidBody* body_a, RigidBody* body_b,
+                              const ConstraintDesc* desc);
+void free_constraint(Constraint* constraint);
+
+// Constraint world management
+void physics_world_add_constraint(PhysicsWorld* world, Constraint* constraint);
+void physics_world_remove_constraint(PhysicsWorld* world, Constraint* constraint);
+void physics_world_remove_constraints_for_body(PhysicsWorld* world, const RigidBody* body);
+
+// Constraint enable/disable
+void constraint_set_enabled(Constraint* c, bool enabled);
+bool constraint_is_enabled(const Constraint* c);
+
+// Hinge constraint motor control
+void constraint_hinge_set_motor_state(Constraint* c, MotorState state);
+void constraint_hinge_set_target_velocity(Constraint* c, float velocity);
+void constraint_hinge_set_target_angle(Constraint* c, float angle);
+float constraint_hinge_get_current_angle(const Constraint* c);
+
+// Slider constraint motor control
+void constraint_slider_set_motor_state(Constraint* c, MotorState state);
+void constraint_slider_set_target_velocity(Constraint* c, float velocity);
+void constraint_slider_set_target_position(Constraint* c, float position);
+float constraint_slider_get_current_position(const Constraint* c);
 
 #endif // _PHYSICS_H_
