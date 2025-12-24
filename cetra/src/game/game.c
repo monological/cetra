@@ -248,6 +248,9 @@ void run_game(Game* game) {
                 if (game->physics_world) {
                     physics_world_update(game->physics_world, (float)game->fixed_timestep, 1);
 
+                    // Process collision events
+                    physics_world_process_collisions(game->physics_world);
+
                     // Sync physics results back to entities
                     if (game->entity_manager) {
                         sync_physics_to_entities(game->physics_world, game->entity_manager);

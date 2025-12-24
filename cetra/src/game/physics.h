@@ -21,7 +21,11 @@ typedef struct JPC_ObjectVsBroadPhaseLayerFilter JPC_ObjectVsBroadPhaseLayerFilt
 typedef struct JPC_ObjectLayerPairFilter JPC_ObjectLayerPairFilter;
 typedef struct JPC_BodyInterface JPC_BodyInterface;
 typedef struct JPC_Shape JPC_Shape;
+typedef struct JPC_ContactListener JPC_ContactListener;
 typedef uint32_t JPC_BodyID;
+
+// Internal forward declaration
+struct CollisionEventQueue;
 
 // Broad phase layers - determines which objects can potentially collide
 typedef enum { BP_LAYER_NON_MOVING = 0, BP_LAYER_MOVING = 1, BP_LAYER_COUNT } BroadPhaseLayer;
@@ -73,6 +77,28 @@ typedef struct PhysicsConfig {
     int num_threads;
 } PhysicsConfig;
 
+// Collision event types (defined early for use in PhysicsWorld)
+typedef enum {
+    COLLISION_BEGIN, // First frame of contact
+    COLLISION_STAY,  // Contact persists (optional, disabled by default)
+    COLLISION_END    // Contact ended
+} CollisionEventType;
+
+// Collision event data
+typedef struct CollisionEvent {
+    CollisionEventType type;
+    struct Entity* entity_a;
+    struct Entity* entity_b;
+    struct RigidBody* body_a;
+    struct RigidBody* body_b;
+    vec3 contact_point;  // World space (average of contact points)
+    vec3 contact_normal; // From A to B
+    float penetration_depth;
+} CollisionEvent;
+
+// Collision callback signature
+typedef void (*CollisionCallback)(const CollisionEvent* event, void* user_data);
+
 // Main physics world wrapper
 typedef struct PhysicsWorld {
     JPC_PhysicsSystem* physics_system;
@@ -83,6 +109,13 @@ typedef struct PhysicsWorld {
     JPC_ObjectLayerPairFilter* object_layer_pair_filter;
     JPC_BodyInterface* body_interface;
     bool initialized;
+    // Collision callbacks
+    JPC_ContactListener* contact_listener;
+    void* contact_listener_ctx; // Opaque pointer to internal context
+    struct CollisionEventQueue* event_queue;
+    CollisionCallback collision_callback;
+    void* collision_user_data;
+    bool report_stay_events;
 } PhysicsWorld;
 
 // RigidBody component data
@@ -169,5 +202,11 @@ bool physics_world_raycast_filtered(PhysicsWorld* world, vec3 origin, vec3 direc
                                     float max_distance, uint32_t layer_mask, RaycastHit* out_hit);
 bool physics_world_raycast_ignore(PhysicsWorld* world, vec3 origin, vec3 direction,
                                   float max_distance, const RigidBody* ignore, RaycastHit* out_hit);
+
+// Collision callbacks
+void physics_world_set_collision_callback(PhysicsWorld* world, CollisionCallback callback,
+                                          void* user_data);
+void physics_world_set_report_stay_events(PhysicsWorld* world, bool enabled);
+void physics_world_process_collisions(PhysicsWorld* world);
 
 #endif // _PHYSICS_H_

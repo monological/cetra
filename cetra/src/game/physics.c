@@ -5,6 +5,26 @@
 #include <stdlib.h>
 #include <string.h>
 
+// Forward declarations for collision system
+typedef struct CollisionEventQueue CollisionEventQueue;
+static CollisionEventQueue* create_collision_event_queue(size_t initial_capacity);
+static void free_collision_event_queue(CollisionEventQueue* queue);
+
+// Contact listener context - defined here for sizeof
+typedef struct ContactListenerContext {
+    PhysicsWorld* world;
+} ContactListenerContext;
+
+static JPC_ValidateResult on_contact_validate(void* self, const JPC_Body* body1,
+                                              const JPC_Body* body2, JPC_RVec3 base_offset,
+                                              const JPC_CollideShapeResult* collision_result);
+static void on_contact_added(void* self, const JPC_Body* body1, const JPC_Body* body2,
+                             const JPC_ContactManifold* manifold, JPC_ContactSettings* settings);
+static void on_contact_persisted(void* self, const JPC_Body* body1, const JPC_Body* body2,
+                                 const JPC_ContactManifold* manifold,
+                                 JPC_ContactSettings* settings);
+static void on_contact_removed(void* self, const JPC_SubShapeIDPair* pair);
+
 // Type conversion helpers
 static inline JPC_Vec3 vec3_to_jpc(vec3 v) {
     JPC_Vec3 result = {.x = v[0], .y = v[1], .z = v[2], ._w = 0.0f};
@@ -147,6 +167,45 @@ PhysicsWorld* create_physics_world(const PhysicsConfig* config) {
                            world->object_layer_pair_filter);
 
     world->body_interface = JPC_PhysicsSystem_GetBodyInterface(world->physics_system);
+
+    // Initialize collision event queue
+    world->event_queue = create_collision_event_queue(64);
+    if (!world->event_queue) {
+        JPC_PhysicsSystem_delete(world->physics_system);
+        JPC_ObjectLayerPairFilter_delete(world->object_layer_pair_filter);
+        JPC_ObjectVsBroadPhaseLayerFilter_delete(world->object_vs_broadphase_filter);
+        JPC_BroadPhaseLayerInterface_delete(world->broad_phase_layer_interface);
+        JPC_JobSystemThreadPool_delete(world->job_system);
+        JPC_TempAllocatorImpl_delete(world->temp_allocator);
+        free(world);
+        return NULL;
+    }
+
+    // Create contact listener context
+    ContactListenerContext* listener_ctx = malloc(sizeof(ContactListenerContext));
+    if (!listener_ctx) {
+        free_collision_event_queue(world->event_queue);
+        JPC_PhysicsSystem_delete(world->physics_system);
+        JPC_ObjectLayerPairFilter_delete(world->object_layer_pair_filter);
+        JPC_ObjectVsBroadPhaseLayerFilter_delete(world->object_vs_broadphase_filter);
+        JPC_BroadPhaseLayerInterface_delete(world->broad_phase_layer_interface);
+        JPC_JobSystemThreadPool_delete(world->job_system);
+        JPC_TempAllocatorImpl_delete(world->temp_allocator);
+        free(world);
+        return NULL;
+    }
+    listener_ctx->world = world;
+    world->contact_listener_ctx = listener_ctx;
+
+    // Create and register contact listener
+    JPC_ContactListenerFns contact_fns = {.OnContactValidate = on_contact_validate,
+                                          .OnContactAdded = on_contact_added,
+                                          .OnContactPersisted = on_contact_persisted,
+                                          .OnContactRemoved = on_contact_removed};
+    world->contact_listener = JPC_ContactListener_new(listener_ctx, contact_fns);
+    JPC_PhysicsSystem_SetContactListener(world->physics_system, world->contact_listener);
+
+    world->report_stay_events = false;
     world->initialized = true;
 
     return world;
@@ -155,6 +214,17 @@ PhysicsWorld* create_physics_world(const PhysicsConfig* config) {
 void free_physics_world(PhysicsWorld* world) {
     if (!world)
         return;
+
+    // Clean up collision system
+    if (world->contact_listener) {
+        JPC_ContactListener_delete(world->contact_listener);
+    }
+    if (world->contact_listener_ctx) {
+        free(world->contact_listener_ctx);
+    }
+    if (world->event_queue) {
+        free_collision_event_queue(world->event_queue);
+    }
 
     if (world->physics_system) {
         JPC_PhysicsSystem_delete(world->physics_system);
@@ -545,12 +615,20 @@ void sync_entities_to_physics(EntityManager* em, float dt) {
 
 // Raycasting implementation
 
-// Helper to get entity from body ID via UserData
+// Helper to get entity from body ID via UserData (requires lock - use outside callbacks)
 static Entity* get_entity_from_body_id(PhysicsWorld* world, JPC_BodyID body_id) {
     if (!world || !world->body_interface)
         return NULL;
 
     uint64_t user_data = JPC_BodyInterface_GetUserData(world->body_interface, body_id);
+    return (Entity*)(uintptr_t)user_data;
+}
+
+// Helper to get entity from body pointer directly (safe in callbacks - no lock needed)
+static Entity* get_entity_from_body(const JPC_Body* body) {
+    if (!body)
+        return NULL;
+    uint64_t user_data = JPC_Body_GetUserData(body);
     return (Entity*)(uintptr_t)user_data;
 }
 
@@ -725,4 +803,192 @@ bool physics_world_raycast_ignore(PhysicsWorld* world, vec3 origin, vec3 directi
     }
 
     return hit;
+}
+
+// Collision event queue implementation
+typedef struct CollisionEventQueue {
+    CollisionEvent* events;
+    size_t count;
+    size_t capacity;
+} CollisionEventQueue;
+
+static CollisionEventQueue* create_collision_event_queue(size_t initial_capacity) {
+    CollisionEventQueue* queue = malloc(sizeof(CollisionEventQueue));
+    if (!queue)
+        return NULL;
+
+    queue->events = malloc(sizeof(CollisionEvent) * initial_capacity);
+    if (!queue->events) {
+        free(queue);
+        return NULL;
+    }
+
+    queue->count = 0;
+    queue->capacity = initial_capacity;
+    return queue;
+}
+
+static void free_collision_event_queue(CollisionEventQueue* queue) {
+    if (!queue)
+        return;
+    free(queue->events);
+    free(queue);
+}
+
+static void queue_collision_event(CollisionEventQueue* queue, const CollisionEvent* event) {
+    if (!queue || !event)
+        return;
+
+    // Grow queue if needed
+    if (queue->count >= queue->capacity) {
+        size_t new_capacity = queue->capacity * 2;
+        CollisionEvent* new_events = realloc(queue->events, sizeof(CollisionEvent) * new_capacity);
+        if (!new_events)
+            return; // Drop event if allocation fails
+        queue->events = new_events;
+        queue->capacity = new_capacity;
+    }
+
+    queue->events[queue->count++] = *event;
+}
+
+// Contact listener callbacks
+static JPC_ValidateResult on_contact_validate(void* self, const JPC_Body* body1,
+                                              const JPC_Body* body2, JPC_RVec3 base_offset,
+                                              const JPC_CollideShapeResult* collision_result) {
+    (void)self;
+    (void)body1;
+    (void)body2;
+    (void)base_offset;
+    (void)collision_result;
+    return JPC_VALIDATE_RESULT_ACCEPT_ALL_CONTACTS;
+}
+
+static void on_contact_added(void* self, const JPC_Body* body1, const JPC_Body* body2,
+                             const JPC_ContactManifold* manifold, JPC_ContactSettings* settings) {
+    (void)settings;
+    ContactListenerContext* ctx = (ContactListenerContext*)self;
+    if (!ctx || !ctx->world || !ctx->world->event_queue)
+        return;
+
+    // Use direct body access (lock-free) instead of BodyInterface during callbacks
+    Entity* e1 = get_entity_from_body(body1);
+    Entity* e2 = get_entity_from_body(body2);
+
+    CollisionEvent event = {.type = COLLISION_BEGIN,
+                            .entity_a = e1,
+                            .entity_b = e2,
+                            .body_a = e1 ? entity_get_rigid_body(e1) : NULL,
+                            .body_b = e2 ? entity_get_rigid_body(e2) : NULL,
+                            .penetration_depth = manifold->PenetrationDepth};
+
+    // Copy contact normal
+    jpc_to_vec3(manifold->WorldSpaceNormal, event.contact_normal);
+
+    // Calculate average contact point from manifold
+    glm_vec3_zero(event.contact_point);
+    if (manifold->RelativeContactPointsOn1.length > 0) {
+        for (uint32_t i = 0; i < manifold->RelativeContactPointsOn1.length; i++) {
+            vec3 pt = {0};
+            jpc_to_vec3(manifold->RelativeContactPointsOn1.points[i], pt);
+            glm_vec3_add(event.contact_point, pt, event.contact_point);
+        }
+        glm_vec3_scale(event.contact_point, 1.0f / manifold->RelativeContactPointsOn1.length,
+                       event.contact_point);
+        // Add base offset to get world space
+        vec3 base = {0};
+        jpc_r_to_vec3(manifold->BaseOffset, base);
+        glm_vec3_add(event.contact_point, base, event.contact_point);
+    }
+
+    queue_collision_event(ctx->world->event_queue, &event);
+}
+
+static void on_contact_persisted(void* self, const JPC_Body* body1, const JPC_Body* body2,
+                                 const JPC_ContactManifold* manifold,
+                                 JPC_ContactSettings* settings) {
+    (void)settings;
+    ContactListenerContext* ctx = (ContactListenerContext*)self;
+    if (!ctx || !ctx->world || !ctx->world->event_queue)
+        return;
+    if (!ctx->world->report_stay_events)
+        return;
+
+    // Use direct body access (lock-free) instead of BodyInterface during callbacks
+    Entity* e1 = get_entity_from_body(body1);
+    Entity* e2 = get_entity_from_body(body2);
+
+    CollisionEvent event = {.type = COLLISION_STAY,
+                            .entity_a = e1,
+                            .entity_b = e2,
+                            .body_a = e1 ? entity_get_rigid_body(e1) : NULL,
+                            .body_b = e2 ? entity_get_rigid_body(e2) : NULL,
+                            .penetration_depth = manifold->PenetrationDepth};
+
+    jpc_to_vec3(manifold->WorldSpaceNormal, event.contact_normal);
+
+    glm_vec3_zero(event.contact_point);
+    if (manifold->RelativeContactPointsOn1.length > 0) {
+        for (uint32_t i = 0; i < manifold->RelativeContactPointsOn1.length; i++) {
+            vec3 pt = {0};
+            jpc_to_vec3(manifold->RelativeContactPointsOn1.points[i], pt);
+            glm_vec3_add(event.contact_point, pt, event.contact_point);
+        }
+        glm_vec3_scale(event.contact_point, 1.0f / manifold->RelativeContactPointsOn1.length,
+                       event.contact_point);
+        vec3 base = {0};
+        jpc_r_to_vec3(manifold->BaseOffset, base);
+        glm_vec3_add(event.contact_point, base, event.contact_point);
+    }
+
+    queue_collision_event(ctx->world->event_queue, &event);
+}
+
+static void on_contact_removed(void* self, const JPC_SubShapeIDPair* pair) {
+    ContactListenerContext* ctx = (ContactListenerContext*)self;
+    if (!ctx || !ctx->world || !ctx->world->event_queue)
+        return;
+
+    Entity* e1 = get_entity_from_body_id(ctx->world, pair->Body1ID);
+    Entity* e2 = get_entity_from_body_id(ctx->world, pair->Body2ID);
+
+    CollisionEvent event = {.type = COLLISION_END,
+                            .entity_a = e1,
+                            .entity_b = e2,
+                            .body_a = e1 ? entity_get_rigid_body(e1) : NULL,
+                            .body_b = e2 ? entity_get_rigid_body(e2) : NULL,
+                            .penetration_depth = 0.0f};
+
+    glm_vec3_zero(event.contact_point);
+    glm_vec3_zero(event.contact_normal);
+
+    queue_collision_event(ctx->world->event_queue, &event);
+}
+
+// Public collision API
+void physics_world_set_collision_callback(PhysicsWorld* world, CollisionCallback callback,
+                                          void* user_data) {
+    if (!world)
+        return;
+    world->collision_callback = callback;
+    world->collision_user_data = user_data;
+}
+
+void physics_world_set_report_stay_events(PhysicsWorld* world, bool enabled) {
+    if (!world)
+        return;
+    world->report_stay_events = enabled;
+}
+
+void physics_world_process_collisions(PhysicsWorld* world) {
+    if (!world || !world->event_queue || !world->collision_callback)
+        return;
+
+    CollisionEventQueue* queue = world->event_queue;
+    for (size_t i = 0; i < queue->count; i++) {
+        world->collision_callback(&queue->events[i], world->collision_user_data);
+    }
+
+    // Clear queue for next frame
+    queue->count = 0;
 }
