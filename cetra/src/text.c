@@ -85,8 +85,8 @@ static void generate_glyph_atlas(Font* font, const char* charset) {
     font->descent = descent_i * scale;
     font->line_height = (ascent_i - descent_i + line_gap) * scale;
 
-    // Calculate atlas size (start with 512, grow if needed)
-    int atlas_size = 512;
+    // Start with 1024 to avoid resize issues with large SDF glyphs
+    int atlas_size = 1024;
     int padding = font->is_sdf ? (int)(font->sdf_spread + 1) : 2;
     int on_edge_value = 180;
     float pixel_dist_scale = font->is_sdf ? (float)on_edge_value / font->sdf_spread : 0;
@@ -132,7 +132,7 @@ static void generate_glyph_atlas(Font* font, const char* charset) {
         }
 
         // Check if we need bigger atlas
-        if (cursor_y + glyph_h + padding > atlas_size) {
+        while (cursor_y + glyph_h + padding > atlas_size) {
             // Reallocate with larger size
             int new_size = atlas_size * 2;
             unsigned char* new_data = calloc(new_size * new_size, 1);
@@ -140,7 +140,7 @@ static void generate_glyph_atlas(Font* font, const char* charset) {
                 free(atlas_data);
                 return;
             }
-            // Copy old data
+            // Copy old data row by row (stride changes)
             for (int row = 0; row < atlas_size; row++) {
                 memcpy(new_data + row * new_size, atlas_data + row * atlas_size, atlas_size);
             }
@@ -170,7 +170,9 @@ static void generate_glyph_atlas(Font* font, const char* charset) {
             }
         }
 
-        // Create glyph info
+        // Create glyph info with UVs based on current atlas_size
+        // Note: if atlas resizes later, these UVs become invalid, but we resize
+        // BEFORE placing glyphs, so this glyph's UVs use the correct final size
         GlyphInfo* glyph = calloc(1, sizeof(GlyphInfo));
         if (glyph) {
             glyph->codepoint = codepoint;
