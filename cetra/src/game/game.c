@@ -244,9 +244,9 @@ void run_game(Game* game) {
                     game->on_update(game, game->fixed_timestep);
                 }
 
-                // Step physics simulation
+                // Step physics simulation (4 collision sub-steps for stable constraints)
                 if (game->physics_world) {
-                    physics_world_update(game->physics_world, (float)game->fixed_timestep, 1);
+                    physics_world_update(game->physics_world, (float)game->fixed_timestep, 4);
 
                     // Process collision events
                     physics_world_process_collisions(game->physics_world);
