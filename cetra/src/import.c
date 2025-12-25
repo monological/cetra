@@ -334,6 +334,11 @@ void process_ai_mesh_bones(Mesh* mesh, const struct aiMesh* ai_mesh, Skeleton* s
     int* bone_counts = calloc(vert_count, sizeof(int));
     if (!bone_counts) {
         log_error("Failed to allocate bone count tracking");
+        free(mesh->bone_ids);
+        free(mesh->bone_weights);
+        mesh->bone_ids = NULL;
+        mesh->bone_weights = NULL;
+        mesh->is_skinned = false;
         return;
     }
 
@@ -374,6 +379,8 @@ void process_ai_mesh_bones(Mesh* mesh, const struct aiMesh* ai_mesh, Skeleton* s
             for (int i = 0; i < BONES_PER_VERTEX; i++) {
                 mesh->bone_weights[v * BONES_PER_VERTEX + i] /= total;
             }
+        } else {
+            log_warn("Vertex %zu has no bone weights", v);
         }
     }
 

@@ -79,6 +79,10 @@ int add_bone_to_skeleton(Skeleton* skeleton, const char* name, int parent_index,
     Bone* bone = &skeleton->bones[bone_index];
 
     bone->name = strdup(name);
+    if (!bone->name) {
+        log_error("Failed to allocate bone name");
+        return -1;
+    }
     bone->parent_index = parent_index;
     glm_mat4_copy(inverse_bind_pose, bone->inverse_bind_pose);
     glm_mat4_copy(local_transform, bone->local_transform);
@@ -89,8 +93,12 @@ int add_bone_to_skeleton(Skeleton* skeleton, const char* name, int parent_index,
     BoneIndexEntry* entry = malloc(sizeof(BoneIndexEntry));
     if (entry) {
         entry->name = strdup(name);
-        entry->index = bone_index;
-        HASH_ADD_KEYPTR(hh, skeleton->bone_map, entry->name, strlen(entry->name), entry);
+        if (!entry->name) {
+            free(entry);
+        } else {
+            entry->index = bone_index;
+            HASH_ADD_KEYPTR(hh, skeleton->bone_map, entry->name, strlen(entry->name), entry);
+        }
     }
 
     return bone_index;
@@ -537,6 +545,10 @@ void interpolate_position(PositionKey* keys, size_t count, float time, vec3 out)
     // Interpolate between keys[idx] and keys[idx+1]
     float t1 = keys[idx].time;
     float t2 = keys[idx + 1].time;
+    if (t2 <= t1) {
+        glm_vec3_copy(keys[idx].position, out);
+        return;
+    }
     float factor = (time - t1) / (t2 - t1);
 
     glm_vec3_lerp(keys[idx].position, keys[idx + 1].position, factor, out);
@@ -568,6 +580,10 @@ void interpolate_rotation(RotationKey* keys, size_t count, float time, versor ou
     // Interpolate between keys[i] and keys[i+1] using SLERP
     float t1 = keys[i].time;
     float t2 = keys[i + 1].time;
+    if (t2 <= t1) {
+        glm_quat_copy(keys[i].rotation, out);
+        return;
+    }
     float factor = (time - t1) / (t2 - t1);
 
     glm_quat_slerp(keys[i].rotation, keys[i + 1].rotation, factor, out);
@@ -599,6 +615,10 @@ void interpolate_scale(ScaleKey* keys, size_t count, float time, vec3 out) {
     // Interpolate between keys[i] and keys[i+1]
     float t1 = keys[i].time;
     float t2 = keys[i + 1].time;
+    if (t2 <= t1) {
+        glm_vec3_copy(keys[i].scale, out);
+        return;
+    }
     float factor = (time - t1) / (t2 - t1);
 
     glm_vec3_lerp(keys[i].scale, keys[i + 1].scale, factor, out);
@@ -653,10 +673,13 @@ void compute_bone_matrices(AnimationState* state) {
         if (bone->parent_index < 0) {
             // Root bone - global = local
             glm_mat4_copy(state->local_transforms[i], state->global_transforms[i]);
-        } else {
+        } else if ((size_t)bone->parent_index < skeleton->bone_count) {
             // global = parent_global * local
             glm_mat4_mul(state->global_transforms[bone->parent_index], state->local_transforms[i],
                          state->global_transforms[i]);
+        } else {
+            // Invalid parent index, treat as root
+            glm_mat4_copy(state->local_transforms[i], state->global_transforms[i]);
         }
     }
 
@@ -682,9 +705,12 @@ void compute_bind_pose_matrices(AnimationState* state) {
 
         if (bone->parent_index < 0) {
             glm_mat4_copy(state->local_transforms[i], state->global_transforms[i]);
-        } else {
+        } else if ((size_t)bone->parent_index < skeleton->bone_count) {
             glm_mat4_mul(state->global_transforms[bone->parent_index], state->local_transforms[i],
                          state->global_transforms[i]);
+        } else {
+            // Invalid parent index, treat as root
+            glm_mat4_copy(state->local_transforms[i], state->global_transforms[i]);
         }
     }
 
