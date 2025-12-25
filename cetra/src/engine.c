@@ -349,7 +349,7 @@ int init_engine(Engine* engine) {
     // Initialize text renderer
     engine->text_renderer = create_text_renderer();
     if (engine->text_renderer) {
-        init_text_renderer(engine->text_renderer, engine->fb_width, engine->fb_height);
+        init_text_renderer(engine->text_renderer, engine->win_width, engine->win_height);
         // Create and cache text shader program
         ShaderProgram* text_prog = create_text_program();
         if (text_prog) {
