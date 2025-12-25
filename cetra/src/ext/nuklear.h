@@ -7021,6 +7021,7 @@ NK_LIB void nk_property(struct nk_context* ctx, const char* name,
 
 /* Allow consumer to define own STBTT_malloc/STBTT_free, and use the font atlas' allocator otherwise
  */
+#ifndef NK_NO_STB_TRUETYPE_IMPLEMENTATION
 #ifndef STBTT_malloc
 static void* nk_stbtt_malloc(nk_size size, void* user_data) {
     struct nk_allocator* alloc = (struct nk_allocator*)user_data;
@@ -7036,6 +7037,7 @@ static void nk_stbtt_free(void* ptr, void* user_data) {
 #define STBTT_free(x, u)   nk_stbtt_free(x, u)
 
 #endif /* STBTT_malloc */
+#endif /* NK_NO_STB_TRUETYPE_IMPLEMENTATION */
 
 #endif /* NK_INCLUDE_FONT_BAKING */
 
