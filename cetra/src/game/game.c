@@ -1,6 +1,7 @@
 #include "game.h"
 #include "entity.h"
 #include "physics.h"
+#include "character.h"
 #include "../render.h"
 #include "../transform.h"
 #include "../shadow.h"
@@ -74,16 +75,16 @@ void free_game(Game* game) {
         game->on_shutdown(game);
     }
 
-    // Free physics world FIRST (clears body->world pointers, then destroys Jolt resources)
-    if (game->physics_world) {
-        free_physics_world(game->physics_world);
-        game->physics_world = NULL;
-    }
-
-    // Free entity manager (frees entities; rigid bodies skip Jolt calls since world is NULL)
+    // Free entity manager FIRST (character controllers need physics system for inner body cleanup)
     if (game->entity_manager) {
         free_entity_manager(game->entity_manager);
         game->entity_manager = NULL;
+    }
+
+    // Free physics world (destroys Jolt resources)
+    if (game->physics_world) {
+        free_physics_world(game->physics_world);
+        game->physics_world = NULL;
     }
 
     // Engine owns scenes, so don't free scene separately
@@ -244,6 +245,13 @@ void run_game(Game* game) {
                     game->on_update(game, game->fixed_timestep);
                 }
 
+                // Update character controllers (after user sets velocities, before physics)
+                if (game->entity_manager && game->physics_world) {
+                    vec3 gravity = {0.0f, -9.81f, 0.0f};
+                    update_all_character_controllers(game->entity_manager, game->physics_world,
+                                                     (float)game->fixed_timestep, gravity);
+                }
+
                 // Step physics simulation (4 collision sub-steps for stable constraints)
                 if (game->physics_world) {
                     physics_world_update(game->physics_world, (float)game->fixed_timestep, 4);
@@ -255,6 +263,11 @@ void run_game(Game* game) {
                     if (game->entity_manager) {
                         sync_physics_to_entities(game->physics_world, game->entity_manager);
                     }
+                }
+
+                // Sync character controller positions to entities
+                if (game->entity_manager) {
+                    sync_character_controllers_to_entities(game->entity_manager);
                 }
 
                 // Sync entity transforms to scene nodes
