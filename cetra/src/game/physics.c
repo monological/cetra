@@ -586,6 +586,13 @@ void rigid_body_add_impulse(RigidBody* rb, vec3 impulse) {
     JPC_BodyInterface_AddImpulse(rb->world->body_interface, rb->body_id, vec3_to_jpc(impulse));
 }
 
+void rigid_body_add_impulse_at_point(RigidBody* rb, vec3 impulse, vec3 point) {
+    if (!rb || !rb->is_added || rb->motion_type != MOTION_DYNAMIC)
+        return;
+    JPC_BodyInterface_AddImpulse3(rb->world->body_interface, rb->body_id, vec3_to_jpc(impulse),
+                                  vec3_to_jpc_r(point));
+}
+
 void rigid_body_add_angular_impulse(RigidBody* rb, vec3 impulse) {
     if (!rb || !rb->is_added || rb->motion_type != MOTION_DYNAMIC)
         return;
@@ -912,6 +919,114 @@ bool physics_world_raycast_ignore(PhysicsWorld* world, vec3 origin, vec3 directi
     }
 
     return hit;
+}
+
+// Shape cast collector context for finding closest hit (stores full result)
+typedef struct ShapeCastContext {
+    float closest_fraction;
+    JPC_ShapeCastResult best_hit;
+    bool has_hit;
+} ShapeCastContext;
+
+static void shape_cast_add_hit(void* self, JPC_CastShapeCollector* base,
+                               const JPC_ShapeCastResult* result) {
+    ShapeCastContext* ctx = (ShapeCastContext*)self;
+
+    // Only keep the closest hit (no BodyInterface calls - filtering done via filters)
+    if (result->Fraction < ctx->closest_fraction) {
+        ctx->closest_fraction = result->Fraction;
+        ctx->best_hit = *result;
+        ctx->has_hit = true;
+        JPC_CastShapeCollector_UpdateEarlyOutFraction(base, result->Fraction);
+    }
+}
+
+bool physics_world_sweep_body(PhysicsWorld* world, const RigidBody* body, vec3 direction,
+                              float max_distance, uint32_t layer_mask, SweepHit* out_hit) {
+    if (!out_hit) {
+        return false;
+    }
+    memset(out_hit, 0, sizeof(SweepHit));
+
+    if (!world || !world->initialized || !body || !body->shape) {
+        return false;
+    }
+
+    // Get current body transform (full 4x4 matrix with proper rotation)
+    JPC_RMat44 transform =
+        JPC_BodyInterface_GetCenterOfMassTransform(world->body_interface, body->body_id);
+
+    // Scale direction by max_distance
+    vec3 scaled_dir;
+    glm_vec3_scale(direction, max_distance, scaled_dir);
+
+    // Create shape cast
+    JPC_RShapeCast shape_cast = {.Shape = body->shape,
+                                 .Scale = {1.0f, 1.0f, 1.0f},
+                                 .CenterOfMassStart = transform,
+                                 .Direction = vec3_to_jpc(scaled_dir)};
+
+    // Create collector (simple - just finds closest hit)
+    ShapeCastContext ctx = {.closest_fraction = 1.0f, .has_hit = false};
+    JPC_CastShapeCollectorFns collector_fns = {.AddHit = shape_cast_add_hit};
+    JPC_CastShapeCollector* collector = JPC_CastShapeCollector_new(&ctx, collector_fns);
+
+    // Create layer filter (filters BEFORE narrow phase - efficient)
+    LayerFilterContext layer_ctx = {.layer_mask = layer_mask};
+    JPC_ObjectLayerFilterFns layer_fns = {.ShouldCollide = layer_filter_should_collide};
+    JPC_ObjectLayerFilter* layer_filter = JPC_ObjectLayerFilter_new(&layer_ctx, layer_fns);
+
+    // Create body filter to ignore self (filters BEFORE narrow phase)
+    BodyIgnoreContext body_ctx = {.ignore_id = body->body_id};
+    JPC_BodyFilterFns body_fns = {.ShouldCollide = body_ignore_should_collide,
+                                  .ShouldCollideLocked = body_ignore_should_collide_locked};
+    JPC_BodyFilter* body_filter = JPC_BodyFilter_new(&body_ctx, body_fns);
+
+    // Settings
+    JPC_ShapeCastSettings settings;
+    JPC_ShapeCastSettings_default(&settings);
+
+    // Cast with proper filters
+    JPC_NarrowPhaseQuery_CastShapeArgs args = {.ShapeCast = shape_cast,
+                                               .Settings = settings,
+                                               .BaseOffset = {0, 0, 0},
+                                               .Collector = collector,
+                                               .BroadPhaseLayerFilter = NULL,
+                                               .ObjectLayerFilter = layer_filter,
+                                               .BodyFilter = body_filter,
+                                               .ShapeFilter = NULL};
+
+    const JPC_NarrowPhaseQuery* query =
+        JPC_PhysicsSystem_GetNarrowPhaseQuery(world->physics_system);
+    JPC_NarrowPhaseQuery_CastShape(query, &args);
+
+    // Clean up filters
+    JPC_BodyFilter_delete(body_filter);
+    JPC_ObjectLayerFilter_delete(layer_filter);
+    JPC_CastShapeCollector_delete(collector);
+
+    // Populate result
+    if (ctx.has_hit) {
+        out_hit->hit = true;
+        out_hit->fraction = ctx.best_hit.Fraction;
+
+        // ContactPointOn2 is the hit position on the other body
+        jpc_to_vec3(ctx.best_hit.ContactPointOn2, out_hit->position);
+
+        // PenetrationAxis points from shape 1 to shape 2 (normalize it for normal)
+        jpc_to_vec3(ctx.best_hit.PenetrationAxis, out_hit->normal);
+        glm_vec3_normalize(out_hit->normal);
+
+        // Look up entity from our body->entity map (lock-free)
+        out_hit->entity = body_entity_map_find(world, ctx.best_hit.BodyID2);
+        if (out_hit->entity) {
+            out_hit->body = entity_get_rigid_body(out_hit->entity);
+        }
+
+        return true;
+    }
+
+    return false;
 }
 
 // Collision event queue implementation

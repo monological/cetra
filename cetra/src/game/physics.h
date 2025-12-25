@@ -241,6 +241,16 @@ typedef struct RaycastHit {
     bool hit;               // True if something was hit
 } RaycastHit;
 
+// Sweep/shape cast hit result
+typedef struct SweepHit {
+    bool hit;               // True if something was hit
+    float fraction;         // 0.0-1.0 along sweep direction
+    vec3 position;          // World-space contact point
+    vec3 normal;            // Surface normal at hit (from sweep body toward hit)
+    struct Entity* entity;  // Hit entity (NULL if body has no entity)
+    struct RigidBody* body; // Hit rigid body
+} SweepHit;
+
 // PhysicsWorld lifecycle
 PhysicsConfig physics_default_config(void);
 PhysicsWorld* create_physics_world(const PhysicsConfig* config);
@@ -266,6 +276,7 @@ void entity_remove_rigid_body(struct Entity* entity);
 void rigid_body_add_force(RigidBody* rb, vec3 force);
 void rigid_body_add_force_at_point(RigidBody* rb, vec3 force, vec3 point);
 void rigid_body_add_impulse(RigidBody* rb, vec3 impulse);
+void rigid_body_add_impulse_at_point(RigidBody* rb, vec3 impulse, vec3 point);
 void rigid_body_add_angular_impulse(RigidBody* rb, vec3 impulse);
 void rigid_body_add_torque(RigidBody* rb, vec3 torque);
 
@@ -296,6 +307,12 @@ bool physics_world_raycast_filtered(PhysicsWorld* world, vec3 origin, vec3 direc
                                     float max_distance, uint32_t layer_mask, RaycastHit* out_hit);
 bool physics_world_raycast_ignore(PhysicsWorld* world, vec3 origin, vec3 direction,
                                   float max_distance, const RigidBody* ignore, RaycastHit* out_hit);
+
+// Shape casting (sweep test) - casts body shape along direction
+// Returns true if hit, populates out_hit with hit information
+// layer_mask: bitmask of layers to consider blocking (e.g., (1 << OBJ_LAYER_STATIC))
+bool physics_world_sweep_body(PhysicsWorld* world, const RigidBody* body, vec3 direction,
+                              float max_distance, uint32_t layer_mask, SweepHit* out_hit);
 
 // Collision callbacks
 void physics_world_set_collision_callback(PhysicsWorld* world, CollisionCallback callback,
