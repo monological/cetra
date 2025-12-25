@@ -1308,6 +1308,13 @@ static JPC_Constraint* create_hinge_jolt_constraint(JPC_Body* body1, JPC_Body* b
     settings.LimitsSpringSettings.FrequencyOrStiffness = desc->hinge.limits_spring.frequency;
     settings.LimitsSpringSettings.Damping = desc->hinge.limits_spring.damping;
 
+    // Motor settings - strong motor for position control
+    settings.MotorSettings.SpringSettings.Mode = JPC_SPRING_MODE_FREQUENCY_AND_DAMPING;
+    settings.MotorSettings.SpringSettings.FrequencyOrStiffness = 5.0f; // Fast response
+    settings.MotorSettings.SpringSettings.Damping = 0.5f;              // Some overshoot OK
+    settings.MotorSettings.MinTorqueLimit = -100000.0f;                // Very strong motor
+    settings.MotorSettings.MaxTorqueLimit = 100000.0f;
+
     return (JPC_Constraint*)JPC_HingeConstraintSettings_Create(&settings, body1, body2);
 }
 
