@@ -309,7 +309,7 @@ static void _heap_sift_down(LightDistancePair* heap, size_t size) {
 
 Light** get_closest_lights(Scene* scene, SceneNode* target_node, size_t max_lights,
                            size_t* returned_light_count) {
-    if (!scene || scene->light_count == 0) {
+    if (!scene || scene->light_count == 0 || max_lights == 0) {
         *returned_light_count = 0;
         return NULL;
     }
