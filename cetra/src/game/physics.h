@@ -314,6 +314,12 @@ bool physics_world_raycast_ignore(PhysicsWorld* world, vec3 origin, vec3 directi
 bool physics_world_sweep_body(PhysicsWorld* world, const RigidBody* body, vec3 direction,
                               float max_distance, uint32_t layer_mask, SweepHit* out_hit);
 
+// Entity lookup by body ID (for use in callbacks)
+struct Entity* physics_world_find_entity_by_body_id(PhysicsWorld* world, JPC_BodyID body_id);
+
+// Check if a body is attached to any constraint (e.g., door with hinge)
+bool physics_world_body_has_constraint(PhysicsWorld* world, JPC_BodyID body_id);
+
 // Collision callbacks
 void physics_world_set_collision_callback(PhysicsWorld* world, CollisionCallback callback,
                                           void* user_data);

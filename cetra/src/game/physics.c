@@ -109,6 +109,26 @@ static Entity* body_entity_map_find(PhysicsWorld* world, JPC_BodyID body_id) {
     return entry ? entry->entity : NULL;
 }
 
+// Public wrapper for finding entity by body ID
+Entity* physics_world_find_entity_by_body_id(PhysicsWorld* world, JPC_BodyID body_id) {
+    return body_entity_map_find(world, body_id);
+}
+
+bool physics_world_body_has_constraint(PhysicsWorld* world, JPC_BodyID body_id) {
+    if (!world)
+        return false;
+    for (size_t i = 0; i < world->constraint_count; i++) {
+        const Constraint* c = world->constraints[i];
+        if (!c)
+            continue;
+        if (c->body_a && c->body_a->body_id == body_id)
+            return true;
+        if (c->body_b && c->body_b->body_id == body_id)
+            return true;
+    }
+    return false;
+}
+
 // Layer callback implementations
 static unsigned int get_num_broad_phase_layers(const void* self) {
     (void)self;
@@ -1308,12 +1328,12 @@ static JPC_Constraint* create_hinge_jolt_constraint(JPC_Body* body1, JPC_Body* b
     settings.LimitsSpringSettings.FrequencyOrStiffness = desc->hinge.limits_spring.frequency;
     settings.LimitsSpringSettings.Damping = desc->hinge.limits_spring.damping;
 
-    // Motor settings - strong motor for position control
+    // Motor settings - very fast motor for door opening/closing
     settings.MotorSettings.SpringSettings.Mode = JPC_SPRING_MODE_FREQUENCY_AND_DAMPING;
-    settings.MotorSettings.SpringSettings.FrequencyOrStiffness = 5.0f; // Fast response
-    settings.MotorSettings.SpringSettings.Damping = 0.5f;              // Some overshoot OK
-    settings.MotorSettings.MinTorqueLimit = -100000.0f;                // Very strong motor
-    settings.MotorSettings.MaxTorqueLimit = 100000.0f;
+    settings.MotorSettings.SpringSettings.FrequencyOrStiffness = 8.0f; // Very fast
+    settings.MotorSettings.SpringSettings.Damping = 0.6f;              // Snappy
+    settings.MotorSettings.MinTorqueLimit = -500.0f;                   // Very strong
+    settings.MotorSettings.MaxTorqueLimit = 500.0f;
 
     return (JPC_Constraint*)JPC_HingeConstraintSettings_Create(&settings, body1, body2);
 }
@@ -1574,7 +1594,7 @@ void constraint_hinge_set_target_angle(Constraint* c, float angle) {
 float constraint_hinge_get_current_angle(const Constraint* c) {
     if (!c || c->type != CONSTRAINT_HINGE || !c->jolt_constraint)
         return 0.0f;
-    return JPC_HingeConstraint_GetTargetAngle((JPC_HingeConstraint*)c->jolt_constraint);
+    return JPC_HingeConstraint_GetCurrentAngle((JPC_HingeConstraint*)c->jolt_constraint);
 }
 
 // Slider motor control
