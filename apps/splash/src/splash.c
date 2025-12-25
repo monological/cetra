@@ -125,6 +125,10 @@ int main(int argc, const char* argv[]) {
     text_mesh_rebuild(title);
     text_mesh_upload(title);
 
+    // Plasma effect config
+    TextEffectConfig fx = {
+        .type = TEXT_EFFECT_PLASMA, .time = 0.0f, .plasma = {.speed = 1.0f, .intensity = 1.0f}};
+
     // Main loop
     while (!glfwWindowShouldClose(engine->window)) {
         glfwPollEvents();
@@ -134,14 +138,16 @@ int main(int argc, const char* argv[]) {
             break;
         }
 
+        fx.time = (float)glfwGetTime();
+
         // Clear screen with near-black background
         glClearColor(0.02f, 0.02f, 0.02f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        // Render text
-        render_text_2d(engine->text_renderer, title);
+        // Render text with plasma effect
+        render_text_2d_effect(engine->text_renderer, title, &fx);
         for (int i = 0; i < num_letters; i++) {
-            render_text_2d(engine->text_renderer, letter_meshes[i]);
+            render_text_2d_effect(engine->text_renderer, letter_meshes[i], &fx);
         }
 
         glfwSwapBuffers(engine->window);
