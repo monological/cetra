@@ -8,6 +8,7 @@
 #define GL_ATTR_TEXCOORD  2
 #define GL_ATTR_TANGENT   3
 #define GL_ATTR_BITANGENT 4
+#define GL_ATTR_COLOR     5
 
 #define MAX_VERTEX_BUFFER  512 * 1024
 #define MAX_ELEMENT_BUFFER 128 * 1024

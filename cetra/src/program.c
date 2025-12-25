@@ -514,3 +514,15 @@ ShaderProgram* create_ibl_brdf_program() {
 
     return program;
 }
+
+ShaderProgram* create_text_program() {
+    ShaderProgram* program = NULL;
+
+    if ((program = create_program_from_source("text", text_vert_shader_str, text_frag_shader_str,
+                                              NULL)) == NULL) {
+        log_error("Failed to initialize text shader program");
+        return NULL;
+    }
+
+    return program;
+}

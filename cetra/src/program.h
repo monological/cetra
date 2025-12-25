@@ -6,7 +6,7 @@
 
 #include "ext/uthash.h"
 
-typedef struct {
+typedef struct ShaderProgram {
     GLuint id;
     char* name;
     Shader** shaders;
@@ -51,6 +51,9 @@ ShaderProgram* create_ibl_equirect_to_cube_program();
 ShaderProgram* create_ibl_irradiance_program();
 ShaderProgram* create_ibl_prefilter_program();
 ShaderProgram* create_ibl_brdf_program();
+
+// Text Program
+ShaderProgram* create_text_program();
 
 size_t calculate_max_lights();
 
