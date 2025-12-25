@@ -1,9 +1,11 @@
-// Game Test - Demonstrates the physics integration
+// Game Test - Demonstrates the CharacterController integration
 //
-// Press WASD to move the player cube
-// Press Space to jump
+// Press WASD to move the player
+// Press Space to jump (only when grounded)
 // Press F to spawn a falling box
 // Press P to pause/unpause
+// Press G to print ground state
+// Press R to raycast downward
 // Press Escape to quit
 
 #include <stdio.h>
@@ -26,6 +28,7 @@
 #include "cetra/game/game.h"
 #include "cetra/game/entity.h"
 #include "cetra/game/physics.h"
+#include "cetra/game/character.h"
 #include "cetra/ibl.h"
 
 static MouseDragController* drag_controller = NULL;
@@ -35,6 +38,10 @@ static Constraint* door_hinge = NULL;
 static ShaderProgram* pbr_shader = NULL;
 static int box_count = 0;
 static const char* hdr_path = NULL;
+
+// Deferred door action (set in callback, applied in update)
+static bool door_open_pending = false;
+static float door_open_velocity = 0.0f;
 
 // Create a visual mesh node for an entity
 static SceneNode* create_box_node(Scene* scene, vec3 size, vec3 color, bool glass) {
@@ -116,11 +123,12 @@ static void create_door(Game* game, vec3 position) {
     set_node_name(door_node, "door");
     door_entity->node = door_node;
 
-    // Door physics (dynamic) - reasonable density for a wooden door (~50kg total)
+    // Door physics (dynamic) - wooden door ~20-30kg
+    // Volume = 4m * 6m * 0.3m = 7.2m³, density = 4 gives ~29kg
     PhysicsShapeDesc door_shape = {
         .type = SHAPE_BOX,
         .box.half_extents = {door_width / 2.0f, door_height / 2.0f, door_thickness / 2.0f},
-        .density = 10.0f};
+        .density = 4.0f};
     RigidBody* door_body =
         entity_add_rigid_body(door_entity, physics, &door_shape, MOTION_DYNAMIC, OBJ_LAYER_DYNAMIC);
 
@@ -179,14 +187,49 @@ static void spawn_falling_box(Game* game) {
     set_node_name(node, name);
     box->node = node;
 
-    // Add physics body
+    // Add physics body (density ~50 kg/m³, like a light wooden crate)
     PhysicsShapeDesc shape = {
         .type = SHAPE_BOX,
         .box.half_extents = {half_extents[0], half_extents[1], half_extents[2]},
-        .density = 1000.0f};
+        .density = 50.0f};
     entity_add_rigid_body(box, physics, &shape, MOTION_DYNAMIC, OBJ_LAYER_DYNAMIC);
 
     printf("Spawned %s at (%.1f, %.1f, %.1f)\n", name, pos[0], pos[1], pos[2]);
+}
+
+// Track if player is touching door this frame (declared before on_update uses it)
+static bool player_touching_door = false;
+
+// Character contact callback for door interaction
+static void on_player_contact(CharacterController* cc, Entity* hit_entity, vec3 contact_position,
+                              vec3 contact_normal, void* user_data) {
+    (void)contact_position;
+    (void)user_data;
+
+    // Check if we hit the door
+    if (hit_entity == door_entity && door_hinge) {
+        player_touching_door = true;
+
+        RigidBody* door_rb = entity_get_rigid_body(door_entity);
+        if (door_rb)
+            rigid_body_activate(door_rb);
+
+        // Get player velocity to determine push direction
+        vec3 player_vel;
+        character_controller_get_velocity(cc, player_vel);
+
+        // Only push door if player is moving
+        if (glm_vec3_norm(player_vel) > 0.1f) {
+            // Determine push direction based on velocity and position relative to door
+            vec3 to_door;
+            glm_vec3_sub(door_entity->position, player_entity->position, to_door);
+            float cross_y = to_door[0] * player_vel[2] - to_door[2] * player_vel[0];
+
+            // Defer motor change to update (can't call from callback - threading)
+            door_open_pending = true;
+            door_open_velocity = (cross_y > 0) ? 6.0f : -6.0f;
+        }
+    }
 }
 
 // Collision callback
@@ -312,23 +355,30 @@ static void on_init(Game* game) {
     entity_add_rigid_body(floor, physics, &floor_shape, MOTION_STATIC, OBJ_LAYER_STATIC);
     printf("Floor created with static physics\n");
 
-    // Create player entity (kinematic - we control it)
+    // Create player entity with CharacterController
     player_entity = create_entity(em, "player");
     entity_set_position(player_entity, (vec3){0, 2.0f, 0});
 
-    // Player visual
-    vec3 player_size = {1.0f, 1.0f, 1.0f};
+    // Player visual (capsule approximated as box for now)
+    vec3 player_size = {0.5f, 1.0f, 0.5f};
     vec3 player_color = {0.8f, 0.2f, 0.2f};
     SceneNode* player_node = create_box_node(scene, player_size, player_color, false);
     set_node_name(player_node, "player");
     player_entity->node = player_node;
 
-    // Player physics (kinematic)
-    PhysicsShapeDesc player_shape = {
-        .type = SHAPE_BOX, .box.half_extents = {1.0f, 1.0f, 1.0f}, .density = 1000.0f};
-    entity_add_rigid_body(player_entity, physics, &player_shape, MOTION_KINEMATIC,
-                          OBJ_LAYER_KINEMATIC);
-    printf("Player created with kinematic physics\n");
+    // Player character controller
+    CharacterControllerConfig player_config = character_controller_default_config();
+    player_config.capsule_radius = 0.5f;
+    player_config.capsule_half_height = 0.5f;
+    player_config.step_height = 0.4f;
+    player_config.max_strength = 200.0f; // Strong enough to push door
+
+    CharacterController* cc =
+        entity_add_character_controller(player_entity, physics, &player_config);
+    if (cc) {
+        character_controller_set_contact_callback(cc, on_player_contact, game);
+    }
+    printf("Player created with CharacterController\n");
 
     // Create a door with hinge constraint
     create_door(game, (vec3){5.0f, 0.0f, 0.0f});
@@ -371,74 +421,69 @@ static void on_update(Game* game, double dt) {
         return;
 
     PhysicsWorld* physics = game_get_physics_world(game);
+    CharacterController* cc = entity_get_character_controller(player_entity);
+    if (!cc)
+        return;
+
+    // Handle deferred door opening (from contact callback)
+    if (door_open_pending && door_hinge) {
+        constraint_hinge_set_motor_state(door_hinge, MOTOR_VELOCITY);
+        constraint_hinge_set_target_velocity(door_hinge, door_open_velocity);
+        RigidBody* door_rb = entity_get_rigid_body(door_entity);
+        if (door_rb)
+            rigid_body_activate(door_rb);
+        door_open_pending = false;
+    }
+    // Close door if player wasn't touching it last frame
+    else if (!player_touching_door && door_hinge) {
+        // Use velocity mode for constant closing speed
+        float current_angle = constraint_hinge_get_current_angle(door_hinge);
+        if (fabsf(current_angle) > 0.05f) {
+            // Door is open - close at constant velocity
+            float close_velocity = (current_angle > 0) ? -3.0f : 3.0f;
+            constraint_hinge_set_motor_state(door_hinge, MOTOR_VELOCITY);
+            constraint_hinge_set_target_velocity(door_hinge, close_velocity);
+        } else {
+            // Door is nearly closed - switch to position to hold at 0
+            constraint_hinge_set_motor_state(door_hinge, MOTOR_POSITION);
+            constraint_hinge_set_target_angle(door_hinge, 0.0f);
+        }
+        // Wake up the door so motor can move it
+        RigidBody* door_rb = entity_get_rigid_body(door_entity);
+        if (door_rb)
+            rigid_body_activate(door_rb);
+    }
+    // Reset for this frame - contact callbacks will set it if touching
+    player_touching_door = false;
 
     // Get movement input
     vec3 input_dir;
     input_wasd_direction(&game->input, input_dir);
 
-    // Apply movement to player position
+    // Get current velocity
+    vec3 vel;
+    character_controller_get_velocity(cc, vel);
+
+    // Apply horizontal movement
     float speed = 10.0f;
-    float move_dist = (float)(speed * dt);
+    vel[0] = input_dir[0] * speed;
+    vel[2] = input_dir[2] * speed;
 
-    // Sweep test: check if player can move in desired direction
-    // Only block on STATIC objects - dynamic objects (door) get pushed out of the way
-    RigidBody* player_rb = entity_get_rigid_body(player_entity);
-    bool pushing_door = false;
+    // Apply gravity
+    float gravity = 20.0f;
+    vel[1] -= gravity * (float)dt;
 
-    if (player_rb && glm_vec3_norm(input_dir) > 0.001f) {
-        // First check for door collision (dynamic layer)
-        uint32_t dynamic_only = (1u << OBJ_LAYER_DYNAMIC);
-        SweepHit door_sweep;
-        if (physics_world_sweep_body(physics, player_rb, input_dir, move_dist, dynamic_only,
-                                     &door_sweep)) {
-            // If we hit the door, activate the motor to swing it open
-            if (door_sweep.entity == door_entity && door_hinge) {
-                pushing_door = true;
-                RigidBody* door_rb = entity_get_rigid_body(door_entity);
-                if (door_rb)
-                    rigid_body_activate(door_rb);
-
-                // Determine push direction
-                vec3 to_door;
-                glm_vec3_sub(door_entity->position, player_entity->position, to_door);
-                float cross_y = to_door[0] * input_dir[2] - to_door[2] * input_dir[0];
-
-                float target_angle = (cross_y > 0) ? GLM_PI_2 : -GLM_PI_2;
-                constraint_hinge_set_motor_state(door_hinge, MOTOR_POSITION);
-                constraint_hinge_set_target_angle(door_hinge, target_angle);
-            }
-        }
-
-        // Now check for static collision (walls, floor, door frame) - these DO block
-        uint32_t static_only = (1u << OBJ_LAYER_STATIC);
-        SweepHit static_sweep;
-        if (physics_world_sweep_body(physics, player_rb, input_dir, move_dist, static_only,
-                                     &static_sweep)) {
-            float skin = 0.05f;
-            move_dist = fmaxf(0.0f, move_dist * static_sweep.fraction - skin);
-        }
+    // Jump when on ground
+    if (input_key_pressed(&game->input, GLFW_KEY_SPACE) && character_controller_is_grounded(cc)) {
+        vel[1] = 10.0f; // Jump velocity
+        printf("Jump!\n");
     }
 
-    // When not pushing door, return it to closed position
-    if (!pushing_door && door_hinge) {
-        constraint_hinge_set_motor_state(door_hinge, MOTOR_POSITION);
-        constraint_hinge_set_target_angle(door_hinge, 0.0f);
-    }
+    // Set velocity (CharacterController will handle collision response)
+    character_controller_set_velocity(cc, vel);
 
-    vec3 movement;
-    glm_vec3_scale(input_dir, move_dist, movement);
-
-    vec3 new_pos;
-    glm_vec3_copy(player_entity->position, new_pos);
-    glm_vec3_add(new_pos, movement, new_pos);
-
-    // Keep above floor
-    if (new_pos[1] < 2.0f) {
-        new_pos[1] = 2.0f;
-    }
-
-    // Update entity position (will be synced to physics as kinematic)
-    entity_set_position(player_entity, new_pos);
+    // Door closing is now handled at START of next frame, after we know contact state
+    // See beginning of on_update
 
     // Spawn box on F key
     if (input_key_pressed(&game->input, GLFW_KEY_F)) {
@@ -451,36 +496,38 @@ static void on_update(Game* game, double dt) {
         printf("Game %s\n", game_is_paused(game) ? "PAUSED" : "RESUMED");
     }
 
-    // Apply upward impulse with Space (jump-like effect on nearby dynamic bodies)
-    if (input_key_pressed(&game->input, GLFW_KEY_SPACE) && physics) {
-        EntityManager* em = game_get_entity_manager(game);
-        if (em) {
-            // Push all dynamic bodies up
-            for (size_t i = 0; i < em->count; i++) {
-                Entity* e = em->entities[i];
-                if (e == player_entity)
-                    continue;
-                RigidBody* body = entity_get_rigid_body(e);
-                if (body && body->motion_type == MOTION_DYNAMIC) {
-                    rigid_body_add_impulse(body, (vec3){0, 500.0f, 0});
-                }
-            }
-            printf("Applied upward impulse to all boxes!\n");
-        }
-    }
-
     // Raycast test on R key - cast ray downward from player
     if (input_key_pressed(&game->input, GLFW_KEY_R) && physics) {
         vec3 down = {0, -1, 0};
         RaycastHit hit;
-        RigidBody* rb = entity_get_rigid_body(player_entity);
-        if (physics_world_raycast_ignore(physics, player_entity->position, down, 50.0f, rb, &hit)) {
+        if (physics_world_raycast(physics, player_entity->position, down, 50.0f, &hit)) {
             printf("Raycast hit: %s at distance %.2f (pos: %.1f, %.1f, %.1f)\n",
                    hit.entity ? hit.entity->name : "unknown", hit.distance, hit.position[0],
                    hit.position[1], hit.position[2]);
         } else {
             printf("Raycast: no hit\n");
         }
+    }
+
+    // Print ground state on G key
+    if (input_key_pressed(&game->input, GLFW_KEY_G)) {
+        CharacterGroundState state = character_controller_get_ground_state(cc);
+        const char* state_str = "unknown";
+        switch (state) {
+            case CHAR_GROUND_ON_GROUND:
+                state_str = "ON_GROUND";
+                break;
+            case CHAR_GROUND_ON_STEEP_GROUND:
+                state_str = "ON_STEEP_GROUND";
+                break;
+            case CHAR_GROUND_NOT_SUPPORTED:
+                state_str = "NOT_SUPPORTED";
+                break;
+            case CHAR_GROUND_IN_AIR:
+                state_str = "IN_AIR";
+                break;
+        }
+        printf("Ground state: %s\n", state_str);
     }
 }
 
