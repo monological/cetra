@@ -116,11 +116,11 @@ static void create_door(Game* game, vec3 position) {
     set_node_name(door_node, "door");
     door_entity->node = door_node;
 
-    // Door physics (dynamic)
+    // Door physics (dynamic) - reasonable density for a wooden door (~50kg total)
     PhysicsShapeDesc door_shape = {
         .type = SHAPE_BOX,
         .box.half_extents = {door_width / 2.0f, door_height / 2.0f, door_thickness / 2.0f},
-        .density = 500.0f};
+        .density = 10.0f};
     RigidBody* door_body =
         entity_add_rigid_body(door_entity, physics, &door_shape, MOTION_DYNAMIC, OBJ_LAYER_DYNAMIC);
 
@@ -129,13 +129,13 @@ static void create_door(Game* game, vec3 position) {
     ConstraintDesc hinge_desc = {.type = CONSTRAINT_HINGE,
                                  .anchor_a = {frame_half_width, 0, 0},   // Right edge of frame
                                  .anchor_b = {-door_width / 2.0f, 0, 0}, // Left edge of door
-                                 .num_velocity_steps = 30, // More iterations = more rigid
-                                 .num_position_steps = 10,
+                                 .num_velocity_steps = 10,               // Moderate rigidity
+                                 .num_position_steps = 4,
                                  .hinge = {
-                                     .axis = {0, 1, 0}, // Vertical hinge axis
-                                     .min_angle = 0.0f,
-                                     .max_angle = GLM_PI * 0.6f,  // ~108 degrees
-                                     .max_friction_torque = 10.0f // Resistance
+                                     .axis = {0, 1, 0},           // Vertical hinge axis
+                                     .min_angle = -GLM_PI * 0.6f, // Allow swing when pushed
+                                     .max_angle = GLM_PI * 0.6f,
+                                     .max_friction_torque = 0.5f // Low friction for easy swing
                                  }};
 
     door_hinge = create_constraint(physics, frame_body, door_body, &hinge_desc);
@@ -201,28 +201,13 @@ static void on_collision(const CollisionEvent* event, void* user_data) {
     const char* name_b = event->entity_b ? event->entity_b->name : "?";
 
     // Check if player hit the door
-    bool player_hit_door = false;
-    RigidBody* door_body = NULL;
-    vec3 push_dir = {0};
+    bool player_hit_door = (event->entity_a == player_entity && event->entity_b == door_entity) ||
+                           (event->entity_b == player_entity && event->entity_a == door_entity);
 
-    if (event->entity_a == player_entity && event->entity_b == door_entity) {
-        player_hit_door = true;
-        door_body = event->body_b;
-        // Push in direction from player to door
-        glm_vec3_sub(event->entity_b->position, event->entity_a->position, push_dir);
-    } else if (event->entity_b == player_entity && event->entity_a == door_entity) {
-        player_hit_door = true;
-        door_body = event->body_a;
-        glm_vec3_sub(event->entity_a->position, event->entity_b->position, push_dir);
-    }
-
-    if (player_hit_door && door_body) {
-        // Normalize and apply horizontal push (ignore Y)
-        push_dir[1] = 0;
-        glm_vec3_normalize(push_dir);
-        glm_vec3_scale(push_dir, 800.0f, push_dir);
-        rigid_body_add_impulse(door_body, push_dir);
-        printf("Player pushed door!\n");
+    if (player_hit_door) {
+        // Don't apply explicit impulse - kinematic player contact forces push door naturally
+        // This is gentler and less likely to overwhelm the constraint solver
+        printf("Player touching door\n");
     }
 
     // Log player collisions
@@ -393,8 +378,55 @@ static void on_update(Game* game, double dt) {
 
     // Apply movement to player position
     float speed = 10.0f;
+    float move_dist = (float)(speed * dt);
+
+    // Sweep test: check if player can move in desired direction
+    // Only block on STATIC objects - dynamic objects (door) get pushed out of the way
+    RigidBody* player_rb = entity_get_rigid_body(player_entity);
+    bool pushing_door = false;
+
+    if (player_rb && glm_vec3_norm(input_dir) > 0.001f) {
+        // First check for door collision (dynamic layer)
+        uint32_t dynamic_only = (1u << OBJ_LAYER_DYNAMIC);
+        SweepHit door_sweep;
+        if (physics_world_sweep_body(physics, player_rb, input_dir, move_dist, dynamic_only,
+                                     &door_sweep)) {
+            // If we hit the door, activate the motor to swing it open
+            if (door_sweep.entity == door_entity && door_hinge) {
+                pushing_door = true;
+                RigidBody* door_rb = entity_get_rigid_body(door_entity);
+                if (door_rb)
+                    rigid_body_activate(door_rb);
+
+                // Determine push direction
+                vec3 to_door;
+                glm_vec3_sub(door_entity->position, player_entity->position, to_door);
+                float cross_y = to_door[0] * input_dir[2] - to_door[2] * input_dir[0];
+
+                float target_angle = (cross_y > 0) ? GLM_PI_2 : -GLM_PI_2;
+                constraint_hinge_set_motor_state(door_hinge, MOTOR_POSITION);
+                constraint_hinge_set_target_angle(door_hinge, target_angle);
+            }
+        }
+
+        // Now check for static collision (walls, floor, door frame) - these DO block
+        uint32_t static_only = (1u << OBJ_LAYER_STATIC);
+        SweepHit static_sweep;
+        if (physics_world_sweep_body(physics, player_rb, input_dir, move_dist, static_only,
+                                     &static_sweep)) {
+            float skin = 0.05f;
+            move_dist = fmaxf(0.0f, move_dist * static_sweep.fraction - skin);
+        }
+    }
+
+    // When not pushing door, return it to closed position
+    if (!pushing_door && door_hinge) {
+        constraint_hinge_set_motor_state(door_hinge, MOTOR_POSITION);
+        constraint_hinge_set_target_angle(door_hinge, 0.0f);
+    }
+
     vec3 movement;
-    glm_vec3_scale(input_dir, (float)(speed * dt), movement);
+    glm_vec3_scale(input_dir, move_dist, movement);
 
     vec3 new_pos;
     glm_vec3_copy(player_entity->position, new_pos);
@@ -441,9 +473,8 @@ static void on_update(Game* game, double dt) {
     if (input_key_pressed(&game->input, GLFW_KEY_R) && physics) {
         vec3 down = {0, -1, 0};
         RaycastHit hit;
-        RigidBody* player_rb = entity_get_rigid_body(player_entity);
-        if (physics_world_raycast_ignore(physics, player_entity->position, down, 50.0f, player_rb,
-                                         &hit)) {
+        RigidBody* rb = entity_get_rigid_body(player_entity);
+        if (physics_world_raycast_ignore(physics, player_entity->position, down, 50.0f, rb, &hit)) {
             printf("Raycast hit: %s at distance %.2f (pos: %.1f, %.1f, %.1f)\n",
                    hit.entity ? hit.entity->name : "unknown", hit.distance, hit.position[0],
                    hit.position[1], hit.position[2]);
