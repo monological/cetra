@@ -30,6 +30,8 @@
 
 static MouseDragController* drag_controller = NULL;
 static Entity* player_entity = NULL;
+static Entity* door_entity = NULL;
+static Constraint* door_hinge = NULL;
 static ShaderProgram* pbr_shader = NULL;
 static int box_count = 0;
 static const char* hdr_path = NULL;
@@ -61,6 +63,87 @@ static SceneNode* create_box_node(Scene* scene, vec3 size, vec3 color, bool glas
     upload_mesh_buffers_to_gpu(mesh);
 
     return node;
+}
+
+// Create a door with hinge constraint
+static void create_door(Game* game, vec3 position) {
+    EntityManager* em = game_get_entity_manager(game);
+    PhysicsWorld* physics = game_get_physics_world(game);
+    Scene* scene = game_get_scene(game);
+
+    if (!em || !physics || !scene)
+        return;
+
+    // Door dimensions
+    float door_width = 4.0f;
+    float door_height = 6.0f;
+    float door_thickness = 0.3f;
+
+    // Create door frame (static anchor point)
+    Entity* frame = create_entity(em, "door_frame");
+    vec3 frame_pos;
+    glm_vec3_copy(position, frame_pos);
+    frame_pos[1] = door_height / 2.0f; // Center vertically
+    entity_set_position(frame, frame_pos);
+
+    // Frame visual (post at hinge edge)
+    vec3 frame_size = {0.2f, door_height / 2.0f, 0.2f};
+    vec3 frame_color = {0.4f, 0.3f, 0.2f};
+    SceneNode* frame_node = create_box_node(scene, frame_size, frame_color, false);
+    set_node_name(frame_node, "door_frame");
+    frame->node = frame_node;
+
+    // Frame physics (static)
+    PhysicsShapeDesc frame_shape = {
+        .type = SHAPE_BOX, .box.half_extents = {0.2f, door_height / 2.0f, 0.2f}, .density = 0.0f};
+    RigidBody* frame_body =
+        entity_add_rigid_body(frame, physics, &frame_shape, MOTION_STATIC, OBJ_LAYER_STATIC);
+
+    // Create door panel (dynamic)
+    door_entity = create_entity(em, "door");
+    vec3 door_pos;
+    glm_vec3_copy(position, door_pos);
+    // Position door so its left edge aligns with frame's right edge (no overlap)
+    float frame_half_width = 0.2f;
+    door_pos[0] += frame_half_width + door_width / 2.0f;
+    door_pos[1] = door_height / 2.0f;
+    entity_set_position(door_entity, door_pos);
+
+    // Door visual
+    vec3 door_size = {door_width / 2.0f, door_height / 2.0f, door_thickness / 2.0f};
+    vec3 door_color = {0.6f, 0.4f, 0.2f}; // Wood brown
+    SceneNode* door_node = create_box_node(scene, door_size, door_color, false);
+    set_node_name(door_node, "door");
+    door_entity->node = door_node;
+
+    // Door physics (dynamic)
+    PhysicsShapeDesc door_shape = {
+        .type = SHAPE_BOX,
+        .box.half_extents = {door_width / 2.0f, door_height / 2.0f, door_thickness / 2.0f},
+        .density = 500.0f};
+    RigidBody* door_body =
+        entity_add_rigid_body(door_entity, physics, &door_shape, MOTION_DYNAMIC, OBJ_LAYER_DYNAMIC);
+
+    // Create hinge constraint
+    // Both anchors meet at frame's right edge = door's left edge
+    ConstraintDesc hinge_desc = {.type = CONSTRAINT_HINGE,
+                                 .anchor_a = {frame_half_width, 0, 0},   // Right edge of frame
+                                 .anchor_b = {-door_width / 2.0f, 0, 0}, // Left edge of door
+                                 .num_velocity_steps = 30, // More iterations = more rigid
+                                 .num_position_steps = 10,
+                                 .hinge = {
+                                     .axis = {0, 1, 0}, // Vertical hinge axis
+                                     .min_angle = 0.0f,
+                                     .max_angle = GLM_PI * 0.6f,  // ~108 degrees
+                                     .max_friction_torque = 10.0f // Resistance
+                                 }};
+
+    door_hinge = create_constraint(physics, frame_body, door_body, &hinge_desc);
+    if (door_hinge) {
+        physics_world_add_constraint(physics, door_hinge);
+        printf("Door created with hinge constraint at (%.1f, %.1f, %.1f)\n", position[0],
+               position[1], position[2]);
+    }
 }
 
 // Spawn a falling box at a random position above the scene
@@ -110,21 +193,42 @@ static void spawn_falling_box(Game* game) {
 static void on_collision(const CollisionEvent* event, void* user_data) {
     (void)user_data;
 
-    // Only print BEGIN and END events (STAY would be too noisy)
-    if (event->type == COLLISION_STAY)
+    // Only handle BEGIN events for gameplay
+    if (event->type != COLLISION_BEGIN)
         return;
 
-    const char* type_str = event->type == COLLISION_BEGIN ? "BEGIN" : "END";
     const char* name_a = event->entity_a ? event->entity_a->name : "?";
     const char* name_b = event->entity_b ? event->entity_b->name : "?";
 
-    // Check if player is involved
-    bool player_involved = (event->entity_a && strcmp(event->entity_a->name, "player") == 0) ||
-                           (event->entity_b && strcmp(event->entity_b->name, "player") == 0);
+    // Check if player hit the door
+    bool player_hit_door = false;
+    RigidBody* door_body = NULL;
+    vec3 push_dir = {0};
 
-    if (player_involved && event->type == COLLISION_BEGIN) {
-        printf("Player collision %s: %s <-> %s at (%.1f, %.1f, %.1f)\n", type_str, name_a, name_b,
-               event->contact_point[0], event->contact_point[1], event->contact_point[2]);
+    if (event->entity_a == player_entity && event->entity_b == door_entity) {
+        player_hit_door = true;
+        door_body = event->body_b;
+        // Push in direction from player to door
+        glm_vec3_sub(event->entity_b->position, event->entity_a->position, push_dir);
+    } else if (event->entity_b == player_entity && event->entity_a == door_entity) {
+        player_hit_door = true;
+        door_body = event->body_a;
+        glm_vec3_sub(event->entity_a->position, event->entity_b->position, push_dir);
+    }
+
+    if (player_hit_door && door_body) {
+        // Normalize and apply horizontal push (ignore Y)
+        push_dir[1] = 0;
+        glm_vec3_normalize(push_dir);
+        glm_vec3_scale(push_dir, 800.0f, push_dir);
+        rigid_body_add_impulse(door_body, push_dir);
+        printf("Player pushed door!\n");
+    }
+
+    // Log player collisions
+    bool player_involved = (event->entity_a == player_entity || event->entity_b == player_entity);
+    if (player_involved) {
+        printf("Player collision: %s <-> %s\n", name_a, name_b);
     }
 }
 
@@ -240,6 +344,9 @@ static void on_init(Game* game) {
     entity_add_rigid_body(player_entity, physics, &player_shape, MOTION_KINEMATIC,
                           OBJ_LAYER_KINEMATIC);
     printf("Player created with kinematic physics\n");
+
+    // Create a door with hinge constraint
+    create_door(game, (vec3){5.0f, 0.0f, 0.0f});
 
     // Upload all GPU buffers
     upload_buffers_to_gpu_for_nodes(root);
@@ -413,7 +520,8 @@ int main(int argc, const char* argv[]) {
     printf("  R - Raycast downward from player\n");
     printf("  P - Pause/unpause physics\n");
     printf("  Mouse drag - Orbit camera\n");
-    printf("  Escape - Quit\n\n");
+    printf("  Escape - Quit\n");
+    printf("\nWalk into the door (right side) to push it open!\n\n");
 
     srand(42); // Deterministic random for testing
 
