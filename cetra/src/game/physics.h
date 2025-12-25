@@ -98,6 +98,10 @@ typedef struct ConstraintDesc {
     vec3 anchor_a; // Anchor on body A
     vec3 anchor_b; // Anchor on body B
 
+    // Solver iterations (0 = use system default, higher = more rigid)
+    unsigned int num_velocity_steps; // Velocity solver iterations
+    unsigned int num_position_steps; // Position solver iterations
+
     union {
         struct {
             vec3 axis_x; // Local X axis for reference frame
@@ -115,6 +119,7 @@ typedef struct ConstraintDesc {
             float min_angle; // Minimum angle in radians
             float max_angle; // Maximum angle in radians
             float max_friction_torque;
+            SpringSettings limits_spring; // Spring at angle limits (frequency=0 for rigid)
         } hinge;
 
         struct {
@@ -122,6 +127,7 @@ typedef struct ConstraintDesc {
             float min_distance;
             float max_distance;
             float max_friction_force;
+            SpringSettings limits_spring; // Spring at position limits (frequency=0 for rigid)
         } slider;
 
         struct {

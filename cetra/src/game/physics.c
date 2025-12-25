@@ -1125,6 +1125,8 @@ static JPC_Constraint* create_fixed_jolt_constraint(JPC_Body* body1, JPC_Body* b
     JPC_FixedConstraintSettings settings;
     JPC_FixedConstraintSettings_default(&settings);
 
+    settings.ConstraintSettings.NumVelocityStepsOverride = desc->num_velocity_steps;
+    settings.ConstraintSettings.NumPositionStepsOverride = desc->num_position_steps;
     settings.Space = JPC_CONSTRAINT_SPACE_LOCAL_TO_BODY_COM;
     settings.Point1 = vec3_to_jpc_r(desc->anchor_a);
     settings.Point2 = vec3_to_jpc_r(desc->anchor_b);
@@ -1143,6 +1145,8 @@ static JPC_Constraint* create_distance_jolt_constraint(JPC_Body* body1, JPC_Body
     JPC_DistanceConstraintSettings settings;
     JPC_DistanceConstraintSettings_default(&settings);
 
+    settings.ConstraintSettings.NumVelocityStepsOverride = desc->num_velocity_steps;
+    settings.ConstraintSettings.NumPositionStepsOverride = desc->num_position_steps;
     settings.Space = JPC_CONSTRAINT_SPACE_LOCAL_TO_BODY_COM;
     settings.Point1 = vec3_to_jpc_r(desc->anchor_a);
     settings.Point2 = vec3_to_jpc_r(desc->anchor_b);
@@ -1164,6 +1168,10 @@ static JPC_Constraint* create_hinge_jolt_constraint(JPC_Body* body1, JPC_Body* b
     JPC_HingeConstraintSettings settings;
     JPC_HingeConstraintSettings_default(&settings);
 
+    // Solver iterations (higher = more rigid constraint)
+    settings.ConstraintSettings.NumVelocityStepsOverride = desc->num_velocity_steps;
+    settings.ConstraintSettings.NumPositionStepsOverride = desc->num_position_steps;
+
     settings.Space = JPC_CONSTRAINT_SPACE_LOCAL_TO_BODY_COM;
     settings.Point1 = vec3_to_jpc_r(desc->anchor_a);
     settings.Point2 = vec3_to_jpc_r(desc->anchor_b);
@@ -1180,6 +1188,11 @@ static JPC_Constraint* create_hinge_jolt_constraint(JPC_Body* body1, JPC_Body* b
     settings.LimitsMax = desc->hinge.max_angle;
     settings.MaxFrictionTorque = desc->hinge.max_friction_torque;
 
+    // Limit spring settings (frequency=0 means rigid/hard stop)
+    settings.LimitsSpringSettings.Mode = JPC_SPRING_MODE_FREQUENCY_AND_DAMPING;
+    settings.LimitsSpringSettings.FrequencyOrStiffness = desc->hinge.limits_spring.frequency;
+    settings.LimitsSpringSettings.Damping = desc->hinge.limits_spring.damping;
+
     return (JPC_Constraint*)JPC_HingeConstraintSettings_Create(&settings, body1, body2);
 }
 
@@ -1188,6 +1201,8 @@ static JPC_Constraint* create_slider_jolt_constraint(JPC_Body* body1, JPC_Body* 
     JPC_SliderConstraintSettings settings;
     JPC_SliderConstraintSettings_default(&settings);
 
+    settings.ConstraintSettings.NumVelocityStepsOverride = desc->num_velocity_steps;
+    settings.ConstraintSettings.NumPositionStepsOverride = desc->num_position_steps;
     settings.Space = JPC_CONSTRAINT_SPACE_LOCAL_TO_BODY_COM;
     settings.Point1 = vec3_to_jpc_r(desc->anchor_a);
     settings.Point2 = vec3_to_jpc_r(desc->anchor_b);
@@ -1204,6 +1219,11 @@ static JPC_Constraint* create_slider_jolt_constraint(JPC_Body* body1, JPC_Body* 
     settings.LimitsMax = desc->slider.max_distance;
     settings.MaxFrictionForce = desc->slider.max_friction_force;
 
+    // Limit spring settings (frequency=0 means rigid/hard stop)
+    settings.LimitsSpringSettings.Mode = JPC_SPRING_MODE_FREQUENCY_AND_DAMPING;
+    settings.LimitsSpringSettings.FrequencyOrStiffness = desc->slider.limits_spring.frequency;
+    settings.LimitsSpringSettings.Damping = desc->slider.limits_spring.damping;
+
     return (JPC_Constraint*)JPC_SliderConstraintSettings_Create(&settings, body1, body2);
 }
 
@@ -1212,6 +1232,8 @@ static JPC_Constraint* create_sixdof_jolt_constraint(JPC_Body* body1, JPC_Body* 
     JPC_SixDOFConstraintSettings settings;
     JPC_SixDOFConstraintSettings_default(&settings);
 
+    settings.ConstraintSettings.NumVelocityStepsOverride = desc->num_velocity_steps;
+    settings.ConstraintSettings.NumPositionStepsOverride = desc->num_position_steps;
     settings.Space = JPC_CONSTRAINT_SPACE_LOCAL_TO_BODY_COM;
     settings.Position1 = vec3_to_jpc_r(desc->anchor_a);
     settings.Position2 = vec3_to_jpc_r(desc->anchor_b);
