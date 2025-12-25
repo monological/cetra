@@ -18,7 +18,7 @@ int main(int argc, const char* argv[]) {
 
     printf("=== CETRA Splash Demo ===\n\n");
 
-    const char* font_path = "apps/splash/assets/Roboto-Bold.ttf";
+    const char* font_path = "apps/splash/assets/Silkscreen-Regular.ttf";
 
     // Create engine
     Engine* engine = create_engine("CETRA", 1280, 720);
