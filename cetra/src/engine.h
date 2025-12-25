@@ -14,6 +14,7 @@
 #include "common.h"
 #include "input.h"
 #include "async_loader.h"
+#include "text.h"
 
 #define NK_INCLUDE_FIXED_TYPES
 #define NK_INCLUDE_STANDARD_IO
@@ -97,6 +98,9 @@ typedef struct Engine {
 
     // Async loading
     AsyncLoader* async_loader;
+
+    // Text rendering
+    TextRenderer* text_renderer;
 } Engine;
 
 typedef void (*RenderSceneFunc)(Engine*, Scene*);

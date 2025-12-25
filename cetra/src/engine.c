@@ -26,8 +26,11 @@
 #define NK_INCLUDE_FONT_BAKING
 #define NK_INCLUDE_DEFAULT_FONT
 #define NK_KEYSTATE_BASED_INPUT
+#define NK_NO_STB_RECT_PACK_IMPLEMENTATION
+#define NK_NO_STB_TRUETYPE_IMPLEMENTATION
 #define NK_IMPLEMENTATION
 #define NK_GLFW_GL3_IMPLEMENTATION
+
 #include "ext/nuklear.h"
 #include "ext/nuklear_glfw_gl3.h"
 #include "ext/log.h"
@@ -120,6 +123,12 @@ Engine* create_engine(const char* window_title, int width, int height) {
 void free_engine(Engine* engine) {
     if (!engine)
         return;
+
+    // Free text renderer
+    if (engine->text_renderer) {
+        free_text_renderer(engine->text_renderer);
+        engine->text_renderer = NULL;
+    }
 
     // Free async loader before scenes (may have pending work)
     if (engine->async_loader) {
@@ -335,6 +344,18 @@ int init_engine(Engine* engine) {
     if (!engine->async_loader) {
         log_error("Failed to create async loader");
         return -1;
+    }
+
+    // Initialize text renderer
+    engine->text_renderer = create_text_renderer();
+    if (engine->text_renderer) {
+        init_text_renderer(engine->text_renderer, engine->fb_width, engine->fb_height);
+        // Create and cache text shader program
+        ShaderProgram* text_prog = create_text_program();
+        if (text_prog) {
+            add_shader_program_to_engine(engine, text_prog);
+            engine->text_renderer->text_program = text_prog;
+        }
     }
 
     return 0;
@@ -1013,6 +1034,10 @@ void get_mouse_world_position_on_drag_plane(Engine* engine, double mouse_fb_x, d
 
 static SceneNode* _perform_engine_ray_picking(Engine* engine, double mouse_fb_x,
                                               double mouse_fb_y) {
+    // Need camera for ray picking
+    if (!engine->camera)
+        return NULL;
+
     // Build projection and view matrices
     mat4 projection, view;
     glm_perspective(engine->camera->fov_radians, engine->camera->aspect_ratio,
