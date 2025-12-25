@@ -67,6 +67,12 @@ Scene* create_scene() {
     scene->render_skybox = false;
     scene->skybox_exposure = 1.0f;
 
+    // Initialize skeletal animation
+    scene->skeletons = NULL;
+    scene->skeleton_count = 0;
+    scene->animations = NULL;
+    scene->animation_count = 0;
+
     return scene;
 }
 
@@ -143,6 +149,28 @@ void free_scene(Scene* scene) {
     if (scene->ibl) {
         free_ibl_resources(scene->ibl);
         scene->ibl = NULL;
+    }
+
+    // Free all skeletons
+    if (scene->skeletons) {
+        for (size_t i = 0; i < scene->skeleton_count; i++) {
+            if (scene->skeletons[i]) {
+                free_skeleton(scene->skeletons[i]);
+            }
+        }
+        free(scene->skeletons);
+        scene->skeletons = NULL;
+    }
+
+    // Free all animations
+    if (scene->animations) {
+        for (size_t i = 0; i < scene->animation_count; i++) {
+            if (scene->animations[i]) {
+                free_animation(scene->animations[i]);
+            }
+        }
+        free(scene->animations);
+        scene->animations = NULL;
     }
 
     // Finally, free the scene itself
@@ -362,6 +390,78 @@ int add_material_to_scene(Scene* scene, Material* material) {
     scene->materials[scene->material_count] = material;
     scene->material_count = new_count;
     return 0;
+}
+
+int add_skeleton_to_scene(Scene* scene, Skeleton* skeleton) {
+    if (!scene || !skeleton)
+        return -1;
+
+    // Check if already added
+    for (size_t i = 0; i < scene->skeleton_count; i++) {
+        if (scene->skeletons[i] == skeleton)
+            return 0;
+    }
+
+    size_t new_count = scene->skeleton_count + 1;
+    Skeleton** new_skeletons = realloc(scene->skeletons, new_count * sizeof(Skeleton*));
+    if (!new_skeletons) {
+        log_error("Failed to allocate memory for new skeleton");
+        return -1;
+    }
+
+    scene->skeletons = new_skeletons;
+    scene->skeletons[scene->skeleton_count] = skeleton;
+    scene->skeleton_count = new_count;
+    return 0;
+}
+
+Skeleton* find_skeleton_by_name(Scene* scene, const char* name) {
+    if (!scene || !name)
+        return NULL;
+
+    for (size_t i = 0; i < scene->skeleton_count; i++) {
+        if (scene->skeletons[i] && scene->skeletons[i]->name &&
+            strcmp(scene->skeletons[i]->name, name) == 0) {
+            return scene->skeletons[i];
+        }
+    }
+    return NULL;
+}
+
+int add_animation_to_scene(Scene* scene, Animation* animation) {
+    if (!scene || !animation)
+        return -1;
+
+    // Check if already added
+    for (size_t i = 0; i < scene->animation_count; i++) {
+        if (scene->animations[i] == animation)
+            return 0;
+    }
+
+    size_t new_count = scene->animation_count + 1;
+    Animation** new_animations = realloc(scene->animations, new_count * sizeof(Animation*));
+    if (!new_animations) {
+        log_error("Failed to allocate memory for new animation");
+        return -1;
+    }
+
+    scene->animations = new_animations;
+    scene->animations[scene->animation_count] = animation;
+    scene->animation_count = new_count;
+    return 0;
+}
+
+Animation* find_animation_by_name(Scene* scene, const char* name) {
+    if (!scene || !name)
+        return NULL;
+
+    for (size_t i = 0; i < scene->animation_count; i++) {
+        if (scene->animations[i] && scene->animations[i]->name &&
+            strcmp(scene->animations[i]->name, name) == 0) {
+            return scene->animations[i];
+        }
+    }
+    return NULL;
 }
 
 GLboolean set_scene_xyz_shader_program(Scene* scene, ShaderProgram* xyz_shader_program) {

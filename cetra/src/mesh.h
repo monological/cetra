@@ -3,10 +3,14 @@
 
 #include <GL/glew.h>
 #include <cglm/cglm.h>
+#include <stdbool.h>
 
 #include "material.h"
 #include "util.h"
 #include "common.h"
+
+// Forward declaration
+struct Skeleton;
 
 // Axis-Aligned Bounding Box
 typedef struct {
@@ -51,6 +55,14 @@ typedef struct Mesh {
     GLuint bitangent_vbo; // Bitangent Buffer Object
 
     AABB aabb;
+
+    // Skinning data (NULL if not skinned)
+    int* bone_ids;             // BONES_PER_VERTEX ints per vertex (ivec4)
+    float* bone_weights;       // BONES_PER_VERTEX floats per vertex (vec4)
+    GLuint bone_id_vbo;        // VBO for bone IDs
+    GLuint bone_weight_vbo;    // VBO for bone weights
+    struct Skeleton* skeleton; // Shared skeleton pointer (not owned)
+    bool is_skinned;
 
 } Mesh;
 

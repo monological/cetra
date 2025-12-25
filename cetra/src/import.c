@@ -15,6 +15,7 @@
 #include "ext/stb_image.h"
 #include "ext/log.h"
 
+#include "animation.h"
 #include "scene.h"
 #include "mesh.h"
 #include "light.h"
@@ -23,6 +24,9 @@
 #include "texture.h"
 #include "material.h"
 #include "async_loader.h"
+
+// Forward declarations
+static void copy_aiMatrix_to_mat4(const struct aiMatrix4x4* from, mat4 to);
 
 /*
  * Texture mapping table for material loading
@@ -225,6 +229,227 @@ void process_ai_mesh(Mesh* mesh, struct aiMesh* ai_mesh) {
     }
 }
 
+/*
+ * Find aiNode by name in hierarchy (for bone lookup)
+ */
+static struct aiNode* find_ai_node_by_name(struct aiNode* root, const char* name) {
+    if (!root || !name)
+        return NULL;
+
+    if (strcmp(root->mName.data, name) == 0)
+        return root;
+
+    for (unsigned int i = 0; i < root->mNumChildren; i++) {
+        struct aiNode* result = find_ai_node_by_name(root->mChildren[i], name);
+        if (result)
+            return result;
+    }
+
+    return NULL;
+}
+
+/*
+ * Extract skeleton from aiMesh bone data
+ */
+Skeleton* process_ai_skeleton(const struct aiScene* ai_scene, const struct aiMesh* ai_mesh) {
+    if (!ai_scene || !ai_mesh || ai_mesh->mNumBones == 0)
+        return NULL;
+
+    // Create skeleton with mesh name
+    char skel_name[256];
+    snprintf(skel_name, sizeof(skel_name), "%s_skeleton", ai_mesh->mName.data);
+    Skeleton* skeleton = create_skeleton(skel_name);
+    if (!skeleton)
+        return NULL;
+
+    // First pass: add all bones to skeleton
+    // We need to determine parent relationships from the scene hierarchy
+    for (unsigned int i = 0; i < ai_mesh->mNumBones; i++) {
+        struct aiBone* ai_bone = ai_mesh->mBones[i];
+
+        // Get inverse bind pose matrix
+        mat4 inverse_bind = GLM_MAT4_IDENTITY_INIT;
+        copy_aiMatrix_to_mat4(&ai_bone->mOffsetMatrix, inverse_bind);
+
+        // Find bone node in scene hierarchy
+        const struct aiNode* bone_node =
+            find_ai_node_by_name(ai_scene->mRootNode, ai_bone->mName.data);
+
+        mat4 local_transform = GLM_MAT4_IDENTITY_INIT;
+        if (bone_node) {
+            copy_aiMatrix_to_mat4(&bone_node->mTransformation, local_transform);
+        }
+
+        // Add bone (parent will be resolved in second pass)
+        add_bone_to_skeleton(skeleton, ai_bone->mName.data, -1, inverse_bind, local_transform);
+    }
+
+    // Second pass: resolve parent indices using scene hierarchy
+    for (size_t i = 0; i < skeleton->bone_count; i++) {
+        Bone* bone = &skeleton->bones[i];
+        const struct aiNode* bone_node = find_ai_node_by_name(ai_scene->mRootNode, bone->name);
+
+        if (bone_node && bone_node->mParent) {
+            // Check if parent is also a bone in our skeleton
+            int parent_idx = get_bone_index_by_name(skeleton, bone_node->mParent->mName.data);
+            bone->parent_index = parent_idx;
+        }
+    }
+
+    log_info("Extracted skeleton '%s' with %zu bones", skeleton->name, skeleton->bone_count);
+    return skeleton;
+}
+
+/*
+ * Fill mesh bone_ids and bone_weights from aiMesh bone data
+ */
+void process_ai_mesh_bones(Mesh* mesh, const struct aiMesh* ai_mesh, Skeleton* skeleton) {
+    if (!mesh || !ai_mesh || !skeleton || ai_mesh->mNumBones == 0)
+        return;
+
+    mesh->skeleton = skeleton;
+    mesh->is_skinned = true;
+
+    // Allocate per-vertex bone data
+    size_t vert_count = mesh->vertex_count;
+    mesh->bone_ids = calloc(vert_count * BONES_PER_VERTEX, sizeof(int));
+    mesh->bone_weights = calloc(vert_count * BONES_PER_VERTEX, sizeof(float));
+
+    if (!mesh->bone_ids || !mesh->bone_weights) {
+        log_error("Failed to allocate bone data for mesh");
+        free(mesh->bone_ids);
+        free(mesh->bone_weights);
+        mesh->bone_ids = NULL;
+        mesh->bone_weights = NULL;
+        mesh->is_skinned = false;
+        return;
+    }
+
+    // Initialize bone IDs to -1 (no bone)
+    for (size_t i = 0; i < vert_count * BONES_PER_VERTEX; i++) {
+        mesh->bone_ids[i] = -1;
+    }
+
+    // Track how many bones assigned per vertex
+    int* bone_counts = calloc(vert_count, sizeof(int));
+    if (!bone_counts) {
+        log_error("Failed to allocate bone count tracking");
+        return;
+    }
+
+    // Process each bone's vertex weights
+    for (unsigned int b = 0; b < ai_mesh->mNumBones; b++) {
+        struct aiBone* ai_bone = ai_mesh->mBones[b];
+        int bone_index = get_bone_index_by_name(skeleton, ai_bone->mName.data);
+
+        if (bone_index < 0) {
+            log_warn("Bone '%s' not found in skeleton", ai_bone->mName.data);
+            continue;
+        }
+
+        for (unsigned int w = 0; w < ai_bone->mNumWeights; w++) {
+            const struct aiVertexWeight* weight = &ai_bone->mWeights[w];
+            unsigned int vertex_id = weight->mVertexId;
+            float bone_weight = weight->mWeight;
+
+            if (vertex_id >= vert_count)
+                continue;
+
+            int slot = bone_counts[vertex_id];
+            if (slot < BONES_PER_VERTEX) {
+                mesh->bone_ids[vertex_id * BONES_PER_VERTEX + slot] = bone_index;
+                mesh->bone_weights[vertex_id * BONES_PER_VERTEX + slot] = bone_weight;
+                bone_counts[vertex_id]++;
+            }
+        }
+    }
+
+    // Normalize weights (ensure they sum to 1.0)
+    for (size_t v = 0; v < vert_count; v++) {
+        float total = 0.0f;
+        for (int i = 0; i < BONES_PER_VERTEX; i++) {
+            total += mesh->bone_weights[v * BONES_PER_VERTEX + i];
+        }
+        if (total > 0.0f) {
+            for (int i = 0; i < BONES_PER_VERTEX; i++) {
+                mesh->bone_weights[v * BONES_PER_VERTEX + i] /= total;
+            }
+        }
+    }
+
+    free(bone_counts);
+    log_info("Processed %u bones for mesh with %zu vertices", ai_mesh->mNumBones, vert_count);
+}
+
+/*
+ * Extract animations from aiScene
+ */
+void process_ai_animations(const struct aiScene* ai_scene, Scene* scene, Skeleton* skeleton) {
+    if (!ai_scene || !scene || ai_scene->mNumAnimations == 0)
+        return;
+
+    for (unsigned int a = 0; a < ai_scene->mNumAnimations; a++) {
+        struct aiAnimation* ai_anim = ai_scene->mAnimations[a];
+
+        float duration = (float)ai_anim->mDuration;
+        float tps = (float)ai_anim->mTicksPerSecond;
+        if (tps <= 0.0f)
+            tps = 25.0f;
+
+        Animation* animation = create_animation(ai_anim->mName.data, duration, tps);
+        if (!animation)
+            continue;
+
+        animation->skeleton = skeleton;
+
+        // Process each channel (bone animation)
+        for (unsigned int c = 0; c < ai_anim->mNumChannels; c++) {
+            struct aiNodeAnim* ai_channel = ai_anim->mChannels[c];
+
+            // Find bone index in skeleton
+            int bone_index = -1;
+            if (skeleton) {
+                bone_index = get_bone_index_by_name(skeleton, ai_channel->mNodeName.data);
+            }
+
+            AnimationChannel* channel =
+                create_animation_channel(bone_index, ai_channel->mNodeName.data);
+            if (!channel)
+                continue;
+
+            // Position keys
+            for (unsigned int k = 0; k < ai_channel->mNumPositionKeys; k++) {
+                struct aiVectorKey* key = &ai_channel->mPositionKeys[k];
+                vec3 pos = {key->mValue.x, key->mValue.y, key->mValue.z};
+                add_position_key(channel, (float)key->mTime, pos);
+            }
+
+            // Rotation keys
+            for (unsigned int k = 0; k < ai_channel->mNumRotationKeys; k++) {
+                struct aiQuatKey* key = &ai_channel->mRotationKeys[k];
+                // Assimp quaternion: w, x, y, z
+                // cGLM versor: x, y, z, w
+                versor rot = {key->mValue.x, key->mValue.y, key->mValue.z, key->mValue.w};
+                add_rotation_key(channel, (float)key->mTime, rot);
+            }
+
+            // Scale keys
+            for (unsigned int k = 0; k < ai_channel->mNumScalingKeys; k++) {
+                struct aiVectorKey* key = &ai_channel->mScalingKeys[k];
+                vec3 scale = {key->mValue.x, key->mValue.y, key->mValue.z};
+                add_scale_key(channel, (float)key->mTime, scale);
+            }
+
+            add_channel_to_animation(animation, channel);
+            free(channel); // Content was transferred, free the shell
+        }
+
+        add_animation_to_scene(scene, animation);
+        log_info("Extracted animation '%s': %.2f ticks @ %.2f tps (%zu channels)", animation->name,
+                 animation->duration, animation->ticks_per_second, animation->channel_count);
+    }
+}
+
 void process_ai_lights(const struct aiScene* scene, Light*** lights, size_t* num_lights) {
     *num_lights = scene->mNumLights;
     *lights = malloc(sizeof(Light*) * (*num_lights));
@@ -297,12 +522,11 @@ void process_ai_cameras(const struct aiScene* scene, Camera*** cameras, size_t* 
     for (unsigned int i = 0; i < *num_cameras; i++) {
         const struct aiCamera* ai_camera = scene->mCameras[i];
         Camera* camera = malloc(sizeof(Camera));
-        camera->name = safe_strdup(ai_camera->mName.data);
-
         if (!camera) {
             log_error("Failed to allocate memory for camera\n");
             continue;
         }
+        camera->name = safe_strdup(ai_camera->mName.data);
 
         glm_vec3_copy(
             (vec3){ai_camera->mPosition.x, ai_camera->mPosition.y, ai_camera->mPosition.z},
@@ -332,7 +556,7 @@ void associate_cameras_and_lights_with_nodes(SceneNode* node, Scene* scene) {
     }
 }
 
-void copy_aiMatrix_to_mat4(const struct aiMatrix4x4* from, mat4 to) {
+static void copy_aiMatrix_to_mat4(const struct aiMatrix4x4* from, mat4 to) {
     to[0][0] = from->a1;
     to[1][0] = from->a2;
     to[2][0] = from->a3;
@@ -367,18 +591,37 @@ SceneNode* process_ai_node(Scene* scene, struct aiNode* ai_node, const struct ai
 
     for (unsigned int i = 0; i < node->mesh_count; i++) {
         unsigned int meshIndex = ai_node->mMeshes[i];
-        Mesh* mesh = create_mesh();
-        process_ai_mesh(mesh, ai_scene->mMeshes[meshIndex]);
-        if (ai_scene->mMeshes[meshIndex]->mMaterialIndex >= 0) {
-            unsigned int matIndex = ai_scene->mMeshes[meshIndex]->mMaterialIndex;
-            mesh->material = process_ai_material(ai_scene->mMaterials[matIndex], tex_pool);
+        struct aiMesh* ai_mesh = ai_scene->mMeshes[meshIndex];
 
-            // scene will manage the material
+        Mesh* mesh = create_mesh();
+        process_ai_mesh(mesh, ai_mesh);
+
+        // Process material
+        if (ai_mesh->mMaterialIndex >= 0) {
+            unsigned int matIndex = ai_mesh->mMaterialIndex;
+            mesh->material = process_ai_material(ai_scene->mMaterials[matIndex], tex_pool);
             add_material_to_scene(scene, mesh->material);
         }
 
-        calculate_aabb(mesh);
+        // Process skeleton and bone weights if mesh has bones
+        if (ai_mesh->mNumBones > 0) {
+            // Try to find existing skeleton or create new one
+            Skeleton* skeleton = NULL;
+            if (scene->skeleton_count > 0) {
+                skeleton = scene->skeletons[0]; // Use first skeleton for now
+            } else {
+                skeleton = process_ai_skeleton(ai_scene, ai_mesh);
+                if (skeleton) {
+                    add_skeleton_to_scene(scene, skeleton);
+                }
+            }
 
+            if (skeleton) {
+                process_ai_mesh_bones(mesh, ai_mesh, skeleton);
+            }
+        }
+
+        calculate_aabb(mesh);
         node->meshes[i] = mesh;
     }
 
@@ -425,10 +668,15 @@ Scene* create_scene_from_fbx_path(const char* path, const char* texture_director
     process_ai_lights(ai_scene, &scene->lights, &scene->light_count);
     process_ai_cameras(ai_scene, &scene->cameras, &scene->camera_count);
 
-    // Process the root node
+    // Process the root node (this also extracts skeletons and bone weights)
     scene->root_node = process_ai_node(scene, ai_scene->mRootNode, ai_scene, tex_pool);
 
     associate_cameras_and_lights_with_nodes(scene->root_node, scene);
+
+    // Process animations if any skeleton was extracted
+    if (ai_scene->mNumAnimations > 0 && scene->skeleton_count > 0) {
+        process_ai_animations(ai_scene, scene, scene->skeletons[0]);
+    }
 
     aiReleaseImport(ai_scene);
     return scene;
@@ -455,14 +703,34 @@ static SceneNode* process_ai_node_async(Scene* scene, struct aiNode* ai_node,
 
     for (unsigned int i = 0; i < node->mesh_count; i++) {
         unsigned int meshIndex = ai_node->mMeshes[i];
+        struct aiMesh* ai_mesh = ai_scene->mMeshes[meshIndex];
+
         Mesh* mesh = create_mesh();
-        process_ai_mesh(mesh, ai_scene->mMeshes[meshIndex]);
-        if (ai_scene->mMeshes[meshIndex]->mMaterialIndex >= 0) {
-            unsigned int matIndex = ai_scene->mMeshes[meshIndex]->mMaterialIndex;
-            // Use async material processing
+        process_ai_mesh(mesh, ai_mesh);
+
+        // Process material with async texture loading
+        if (ai_mesh->mMaterialIndex >= 0) {
+            unsigned int matIndex = ai_mesh->mMaterialIndex;
             mesh->material =
                 process_ai_material_async(ai_scene->mMaterials[matIndex], tex_pool, loader);
             add_material_to_scene(scene, mesh->material);
+        }
+
+        // Process skeleton and bone weights if mesh has bones
+        if (ai_mesh->mNumBones > 0) {
+            Skeleton* skeleton = NULL;
+            if (scene->skeleton_count > 0) {
+                skeleton = scene->skeletons[0];
+            } else {
+                skeleton = process_ai_skeleton(ai_scene, ai_mesh);
+                if (skeleton) {
+                    add_skeleton_to_scene(scene, skeleton);
+                }
+            }
+
+            if (skeleton) {
+                process_ai_mesh_bones(mesh, ai_mesh, skeleton);
+            }
         }
 
         calculate_aabb(mesh);
@@ -524,6 +792,11 @@ Scene* create_scene_from_fbx_path_async(const char* path, const char* texture_di
         process_ai_node_async(scene, ai_scene->mRootNode, ai_scene, tex_pool, loader);
 
     associate_cameras_and_lights_with_nodes(scene->root_node, scene);
+
+    // Process animations if any skeleton was extracted
+    if (ai_scene->mNumAnimations > 0 && scene->skeleton_count > 0) {
+        process_ai_animations(ai_scene, scene, scene->skeletons[0]);
+    }
 
     aiReleaseImport(ai_scene);
     return scene;

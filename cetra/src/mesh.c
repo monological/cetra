@@ -9,6 +9,7 @@
 #include <assimp/scene.h>
 #include <assimp/postprocess.h>
 
+#include "animation.h"
 #include "common.h"
 #include "ext/log.h"
 #include "material.h"
@@ -62,6 +63,14 @@ Mesh* create_mesh() {
     mesh->aabb.max[1] = 0.0f;
     mesh->aabb.max[2] = 0.0f;
 
+    // Initialize skinning data
+    mesh->bone_ids = NULL;
+    mesh->bone_weights = NULL;
+    mesh->bone_id_vbo = 0;
+    mesh->bone_weight_vbo = 0;
+    mesh->skeleton = NULL;
+    mesh->is_skinned = false;
+
     return mesh;
 }
 
@@ -91,6 +100,17 @@ void free_mesh(Mesh* mesh) {
         free(mesh->tex_coords);
     if (mesh->indices)
         free(mesh->indices);
+
+    // Free skinning data
+    if (mesh->bone_ids)
+        free(mesh->bone_ids);
+    if (mesh->bone_weights)
+        free(mesh->bone_weights);
+    if (mesh->bone_id_vbo)
+        glDeleteBuffers(1, &mesh->bone_id_vbo);
+    if (mesh->bone_weight_vbo)
+        glDeleteBuffers(1, &mesh->bone_weight_vbo);
+    // Do not free skeleton - it's shared and managed by Scene
 
     // Do not free material. Same material can be shared by multiple meshes.
     // Managed by scene.
@@ -183,6 +203,30 @@ void upload_mesh_buffers_to_gpu(Mesh* mesh) {
                      GL_STATIC_DRAW);
         glVertexAttribPointer(GL_ATTR_TEXCOORD, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), (void*)0);
         glEnableVertexAttribArray(GL_ATTR_TEXCOORD);
+    }
+
+    // Bone IDs (ivec4 per vertex)
+    if (mesh->is_skinned && mesh->bone_ids) {
+        if (mesh->bone_id_vbo == 0)
+            glGenBuffers(1, &mesh->bone_id_vbo);
+        glBindBuffer(GL_ARRAY_BUFFER, mesh->bone_id_vbo);
+        glBufferData(GL_ARRAY_BUFFER, mesh->vertex_count * BONES_PER_VERTEX * sizeof(int),
+                     mesh->bone_ids, GL_STATIC_DRAW);
+        glVertexAttribIPointer(GL_ATTR_BONE_IDS, BONES_PER_VERTEX, GL_INT,
+                               BONES_PER_VERTEX * sizeof(int), (void*)0);
+        glEnableVertexAttribArray(GL_ATTR_BONE_IDS);
+    }
+
+    // Bone Weights (vec4 per vertex)
+    if (mesh->is_skinned && mesh->bone_weights) {
+        if (mesh->bone_weight_vbo == 0)
+            glGenBuffers(1, &mesh->bone_weight_vbo);
+        glBindBuffer(GL_ARRAY_BUFFER, mesh->bone_weight_vbo);
+        glBufferData(GL_ARRAY_BUFFER, mesh->vertex_count * BONES_PER_VERTEX * sizeof(float),
+                     mesh->bone_weights, GL_STATIC_DRAW);
+        glVertexAttribPointer(GL_ATTR_BONE_WEIGHTS, BONES_PER_VERTEX, GL_FLOAT, GL_FALSE,
+                              BONES_PER_VERTEX * sizeof(float), (void*)0);
+        glEnableVertexAttribArray(GL_ATTR_BONE_WEIGHTS);
     }
 
     check_gl_error("mesh buffer upload");

@@ -12,7 +12,13 @@
 #include "light.h"
 #include "camera.h"
 #include "engine.h"
+#include "animation.h"
 
 void render_current_scene(Engine* engine, float time_value);
+
+// Animation state for skinned mesh rendering
+// Set before rendering to enable bone matrix upload for skinned meshes
+void set_render_animation_state(AnimationState* state);
+AnimationState* get_render_animation_state(void);
 
 #endif // _RENDER_H_

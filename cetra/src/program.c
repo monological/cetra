@@ -419,6 +419,18 @@ ShaderProgram* create_pbr_program() {
     return program;
 }
 
+ShaderProgram* create_pbr_skinned_program() {
+    ShaderProgram* program = NULL;
+
+    if ((program = create_program_from_source("pbr_skinned", pbr_skinned_vert_shader_str,
+                                              pbr_frag_shader_str, NULL)) == NULL) {
+        log_error("Failed to initialize skinned PBR shader program");
+        return NULL;
+    }
+
+    return program;
+}
+
 ShaderProgram* create_shape_program() {
     ShaderProgram* program = NULL;
 

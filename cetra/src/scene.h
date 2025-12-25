@@ -14,6 +14,7 @@
 #include "camera.h"
 #include "shadow.h"
 #include "ibl.h"
+#include "animation.h"
 
 /*
  * SceneNode
@@ -112,6 +113,12 @@ typedef struct Scene {
     IBLResources* ibl;
     bool render_skybox;
     float skybox_exposure;
+
+    // Skeletal Animation
+    Skeleton** skeletons;
+    size_t skeleton_count;
+    Animation** animations;
+    size_t animation_count;
 } Scene;
 
 // malloc
@@ -135,6 +142,14 @@ Light** get_closest_lights(Scene* scene, SceneNode* target_node, size_t max_ligh
 
 // material
 int add_material_to_scene(Scene* scene, Material* material);
+
+// skeleton
+int add_skeleton_to_scene(Scene* scene, Skeleton* skeleton);
+Skeleton* find_skeleton_by_name(Scene* scene, const char* name);
+
+// animation
+int add_animation_to_scene(Scene* scene, Animation* animation);
+Animation* find_animation_by_name(Scene* scene, const char* name);
 
 // viz
 GLboolean set_scene_xyz_shader_program(Scene* scene, ShaderProgram* xyz_shader_program);

@@ -6,6 +6,7 @@
 #include <GLFW/glfw3.h>
 #include <cglm/cglm.h>
 
+#include "animation.h"
 #include "ext/log.h"
 #include "scene.h"
 #include "program.h"
@@ -20,6 +21,38 @@
 #include "util.h"
 #include "shadow.h"
 #include "intersect.h"
+
+// Global animation state for skinned mesh rendering (set via set_render_animation_state)
+static AnimationState* g_current_animation_state = NULL;
+
+void set_render_animation_state(AnimationState* state) {
+    g_current_animation_state = state;
+}
+
+AnimationState* get_render_animation_state(void) {
+    return g_current_animation_state;
+}
+
+static void _update_skinning_uniforms(ShaderProgram* program, const Mesh* mesh) {
+    if (!program || !program->uniforms)
+        return;
+
+    UniformManager* u = program->uniforms;
+
+    if (mesh && mesh->is_skinned && g_current_animation_state &&
+        g_current_animation_state->active_bone_count > 0) {
+        uniform_set_int(u, "skinned", 1);
+
+        // Upload bone matrices
+        GLint loc = glGetUniformLocation(program->id, "boneMatrices[0]");
+        if (loc >= 0) {
+            glUniformMatrix4fv(loc, (GLsizei)g_current_animation_state->active_bone_count, GL_FALSE,
+                               (const GLfloat*)g_current_animation_state->bone_matrices);
+        }
+    } else {
+        uniform_set_int(u, "skinned", 0);
+    }
+}
 
 static void _update_program_light_uniforms(ShaderProgram* program, Light* light, size_t light_count,
                                            size_t index) {
@@ -295,6 +328,9 @@ static void _render_node(Scene* scene, SceneNode* node, Camera* camera, mat4 mod
             _update_program_material_uniforms(program, mat);
             *current_material = mat;
         }
+
+        // Update skinning uniforms for skinned meshes
+        _update_skinning_uniforms(program, mesh);
 
         glBindVertexArray(mesh->vao);
         glDrawElements(mesh->draw_mode, mesh->index_count, GL_UNSIGNED_INT, 0);
