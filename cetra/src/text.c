@@ -496,8 +496,9 @@ void text_mesh_rebuild(TextMesh* mesh) {
     if (!mesh->vertices || !mesh->indices)
         return;
 
+    // Start cursor at font ascent so position represents top-left of text
     float cursor_x = 0.0f;
-    float cursor_y = 0.0f;
+    float cursor_y = font->ascent * scale;
     size_t vi = 0;
     size_t ii = 0;
     size_t char_idx = 0;
@@ -505,10 +506,10 @@ void text_mesh_rebuild(TextMesh* mesh) {
     for (size_t i = 0; i < char_count; i++) {
         int codepoint = (unsigned char)mesh->text[i];
 
-        // Handle newlines
+        // Handle newlines (Y-down: increase y to go down)
         if (codepoint == '\n') {
             cursor_x = 0.0f;
-            cursor_y -= font->line_height * scale;
+            cursor_y += font->line_height * scale;
             char_idx++;
             continue;
         }
@@ -547,13 +548,14 @@ void text_mesh_rebuild(TextMesh* mesh) {
             a = mesh->color[3];
         }
 
-        // Create quad (bottom-left, bottom-right, top-right, top-left)
+        // Create quad (top-left, top-right, bottom-right, bottom-left)
+        // Y-down screen coords: y0=top, y1=bottom
         unsigned int base = (unsigned int)vi;
 
-        mesh->vertices[vi++] = (TextVertex){x0, y0, 0.0f, glyph->u0, glyph->v1, r, g, b, a};
-        mesh->vertices[vi++] = (TextVertex){x1, y0, 0.0f, glyph->u1, glyph->v1, r, g, b, a};
-        mesh->vertices[vi++] = (TextVertex){x1, y1, 0.0f, glyph->u1, glyph->v0, r, g, b, a};
-        mesh->vertices[vi++] = (TextVertex){x0, y1, 0.0f, glyph->u0, glyph->v0, r, g, b, a};
+        mesh->vertices[vi++] = (TextVertex){x0, y0, 0.0f, glyph->u0, glyph->v0, r, g, b, a};
+        mesh->vertices[vi++] = (TextVertex){x1, y0, 0.0f, glyph->u1, glyph->v0, r, g, b, a};
+        mesh->vertices[vi++] = (TextVertex){x1, y1, 0.0f, glyph->u1, glyph->v1, r, g, b, a};
+        mesh->vertices[vi++] = (TextVertex){x0, y1, 0.0f, glyph->u0, glyph->v1, r, g, b, a};
 
         // Indices (two triangles)
         mesh->indices[ii++] = base + 0;
@@ -650,6 +652,74 @@ float text_measure_height(const Font* font, const char* text, float size, float 
     return line_count * font->line_height * scale;
 }
 
+void text_measure_bounds(Font* font, const char* text, float size, float* out_x0, float* out_y0,
+                         float* out_x1, float* out_y1) {
+    if (!font || !text) {
+        if (out_x0)
+            *out_x0 = 0;
+        if (out_y0)
+            *out_y0 = 0;
+        if (out_x1)
+            *out_x1 = 0;
+        if (out_y1)
+            *out_y1 = 0;
+        return;
+    }
+
+    float scale = size / font->base_size;
+    float cursor_x = 0.0f;
+    float cursor_y = font->ascent * scale;
+
+    float min_x = 1e9f, min_y = 1e9f;
+    float max_x = -1e9f, max_y = -1e9f;
+    bool has_glyphs = false;
+
+    for (const char* p = text; *p; p++) {
+        int codepoint = (unsigned char)*p;
+
+        if (codepoint == '\n') {
+            cursor_x = 0.0f;
+            cursor_y += font->line_height * scale;
+            continue;
+        }
+
+        const GlyphInfo* glyph = font_get_glyph(font, codepoint);
+        if (!glyph)
+            continue;
+
+        // Match text_mesh_rebuild vertex calculation exactly
+        float x0 = cursor_x + glyph->x0 * scale;
+        float y0 = cursor_y - glyph->y1 * scale;
+        float x1 = cursor_x + glyph->x1 * scale;
+        float y1 = cursor_y - glyph->y0 * scale;
+
+        if (x0 < min_x)
+            min_x = x0;
+        if (y0 < min_y)
+            min_y = y0;
+        if (x1 > max_x)
+            max_x = x1;
+        if (y1 > max_y)
+            max_y = y1;
+        has_glyphs = true;
+
+        cursor_x += glyph->advance_x * scale;
+    }
+
+    if (!has_glyphs) {
+        min_x = min_y = max_x = max_y = 0;
+    }
+
+    if (out_x0)
+        *out_x0 = min_x;
+    if (out_y0)
+        *out_y0 = min_y;
+    if (out_x1)
+        *out_x1 = max_x;
+    if (out_y1)
+        *out_y1 = max_y;
+}
+
 // --- TextRenderer ---
 
 TextRenderer* create_text_renderer(void) {
@@ -683,7 +753,7 @@ int init_text_renderer(TextRenderer* renderer, int screen_width, int screen_heig
     renderer->screen_height = screen_height;
 
     // Create orthographic projection (origin at top-left, Y down)
-    glm_ortho(0.0f, (float)screen_width, 0.0f, (float)screen_height, -1.0f, 1.0f,
+    glm_ortho(0.0f, (float)screen_width, (float)screen_height, 0.0f, -1.0f, 1.0f,
               renderer->ortho_projection);
 
     return 0;
@@ -696,7 +766,7 @@ void text_renderer_update_screen_size(TextRenderer* renderer, int width, int hei
     renderer->screen_width = width;
     renderer->screen_height = height;
 
-    glm_ortho(0.0f, (float)width, 0.0f, (float)height, -1.0f, 1.0f, renderer->ortho_projection);
+    glm_ortho(0.0f, (float)width, (float)height, 0.0f, -1.0f, 1.0f, renderer->ortho_projection);
 }
 
 void render_text_2d(TextRenderer* renderer, TextMesh* mesh) {

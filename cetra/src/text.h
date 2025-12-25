@@ -153,6 +153,8 @@ void text_mesh_upload(TextMesh* mesh);
 // Text measurement
 float text_measure_width(Font* font, const char* text, float size);
 float text_measure_height(const Font* font, const char* text, float size, float max_width);
+void text_measure_bounds(Font* font, const char* text, float size, float* out_x0, float* out_y0,
+                         float* out_x1, float* out_y1);
 
 // TextRenderer
 TextRenderer* create_text_renderer(void);
