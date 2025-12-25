@@ -72,6 +72,29 @@ typedef struct TextVertex {
 // Text alignment
 typedef enum { TEXT_ALIGN_LEFT = 0, TEXT_ALIGN_CENTER = 1, TEXT_ALIGN_RIGHT = 2 } TextAlignment;
 
+// Text effects
+typedef enum {
+    TEXT_EFFECT_NONE = 0,   // Plain SDF text
+    TEXT_EFFECT_GLOW = 1,   // Solid color with outer glow
+    TEXT_EFFECT_PLASMA = 2, // Animated plasma swirl effect
+} TextEffect;
+
+// Effect configuration
+typedef struct TextEffectConfig {
+    TextEffect type;
+    float time;
+    union {
+        struct {
+            float intensity;
+            float color[3];
+        } glow;
+        struct {
+            float speed;
+            float intensity;
+        } plasma;
+    };
+} TextEffectConfig;
+
 // Text mesh for rendering
 typedef struct TextMesh {
     GLuint vao;
@@ -164,6 +187,7 @@ void text_renderer_update_screen_size(TextRenderer* renderer, int width, int hei
 
 // Rendering
 void render_text_2d(TextRenderer* renderer, TextMesh* mesh);
+void render_text_2d_effect(TextRenderer* renderer, TextMesh* mesh, const TextEffectConfig* config);
 void render_text_3d(TextRenderer* renderer, TextMesh* mesh, mat4 view, mat4 projection);
 
 // Convenience

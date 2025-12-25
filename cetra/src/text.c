@@ -769,8 +769,8 @@ void text_renderer_update_screen_size(TextRenderer* renderer, int width, int hei
     glm_ortho(0.0f, (float)width, (float)height, 0.0f, -1.0f, 1.0f, renderer->ortho_projection);
 }
 
-void render_text_2d(TextRenderer* renderer, TextMesh* mesh) {
-    if (!renderer || !mesh || !renderer->text_program || mesh->vertex_count == 0)
+void render_text_2d_effect(TextRenderer* renderer, TextMesh* mesh, const TextEffectConfig* config) {
+    if (!renderer || !mesh || !renderer->text_program || mesh->vertex_count == 0 || !config)
         return;
 
     if (mesh->needs_rebuild) {
@@ -791,6 +791,19 @@ void render_text_2d(TextRenderer* renderer, TextMesh* mesh) {
     uniform_set_float(u, "sdfEdge", 0.5f);
     uniform_set_float(u, "sdfSmoothing", 0.1f);
 
+    // Effect uniforms
+    uniform_set_int(u, "effectType", (int)config->type);
+    uniform_set_float(u, "time", config->time);
+
+    // Effect-specific uniforms
+    if (config->type == TEXT_EFFECT_GLOW) {
+        uniform_set_float(u, "glowIntensity", config->glow.intensity);
+        uniform_set_vec3(u, "glowColor", (float*)config->glow.color);
+    } else if (config->type == TEXT_EFFECT_PLASMA) {
+        uniform_set_float(u, "plasmaSpeed", config->plasma.speed);
+        uniform_set_float(u, "plasmaIntensity", config->plasma.intensity);
+    }
+
     // Bind font atlas
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, mesh->font->atlas_texture_id);
@@ -809,6 +822,11 @@ void render_text_2d(TextRenderer* renderer, TextMesh* mesh) {
     // Restore state
     glEnable(GL_DEPTH_TEST);
     glDisable(GL_BLEND);
+}
+
+void render_text_2d(TextRenderer* renderer, TextMesh* mesh) {
+    TextEffectConfig config = {.type = TEXT_EFFECT_NONE, .time = 0.0f};
+    render_text_2d_effect(renderer, mesh, &config);
 }
 
 void render_text_3d(TextRenderer* renderer, TextMesh* mesh, mat4 view, mat4 projection) {
