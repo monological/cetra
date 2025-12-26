@@ -814,6 +814,33 @@ void render_nuklear_gui(Engine* engine) {
             }
             engine->current_render_mode = selected_render_mode;
 
+            // Lighting section
+            Scene* current_scene = get_current_scene(engine);
+            if (current_scene && current_scene->light_count > 0) {
+                nk_layout_row_dynamic(engine->nk_ctx, 10, 1);
+                nk_spacing(engine->nk_ctx, 1);
+
+                nk_layout_row_dynamic(engine->nk_ctx, 20, 1);
+                nk_label(engine->nk_ctx, "Lighting", NK_TEXT_LEFT);
+
+                // Use first light's intensity as the master value
+                static float light_intensity = 3.0f;
+                float prev_intensity = light_intensity;
+
+                nk_layout_row_dynamic(engine->nk_ctx, 25, 1);
+                nk_property_float(engine->nk_ctx, "Intensity:", 0.0f, &light_intensity, 20.0f, 0.1f,
+                                  0.1f);
+
+                // Apply to all lights if changed
+                if (light_intensity != prev_intensity) {
+                    for (size_t i = 0; i < current_scene->light_count; i++) {
+                        if (current_scene->lights[i]) {
+                            current_scene->lights[i]->intensity = light_intensity;
+                        }
+                    }
+                }
+            }
+
             // bot margin
             nk_layout_row_dynamic(engine->nk_ctx, 10, 1); // 10 pixels of vertical space
             nk_spacing(engine->nk_ctx, 1);                // Creates a dummy widget for spacing
