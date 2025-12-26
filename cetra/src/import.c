@@ -165,12 +165,27 @@ Material* process_ai_material_async(struct aiMaterial* ai_mat, TexturePool* tex_
 }
 
 void process_ai_mesh(Mesh* mesh, struct aiMesh* ai_mesh) {
-    mesh->vertex_count = ai_mesh->mNumVertices;
-    mesh->index_count = ai_mesh->mNumFaces * 3; // Assuming the mesh is triangulated
+    size_t vert_count = ai_mesh->mNumVertices;
+    size_t idx_count = ai_mesh->mNumFaces * 3; // Assuming the mesh is triangulated
 
     // Allocate memory for vertices and normals
-    mesh->vertices = malloc(mesh->vertex_count * 3 * sizeof(float));
-    mesh->normals = malloc(mesh->vertex_count * 3 * sizeof(float));
+    mesh->vertices = malloc(vert_count * 3 * sizeof(float));
+    mesh->normals = malloc(vert_count * 3 * sizeof(float));
+
+    // Validate critical allocations
+    if (!mesh->vertices || !mesh->normals) {
+        log_error("Failed to allocate mesh vertex/normal buffers");
+        free(mesh->vertices);
+        free(mesh->normals);
+        mesh->vertices = NULL;
+        mesh->normals = NULL;
+        mesh->vertex_count = 0;
+        mesh->index_count = 0;
+        return;
+    }
+
+    mesh->vertex_count = vert_count;
+    mesh->index_count = idx_count;
 
     if (ai_mesh->mTangents && ai_mesh->mBitangents) {
         mesh->tangents = malloc(mesh->vertex_count * 3 * sizeof(float));
@@ -447,8 +462,11 @@ void process_ai_animations(const struct aiScene* ai_scene, Scene* scene, Skeleto
                 add_scale_key(channel, (float)key->mTime, scale);
             }
 
-            add_channel_to_animation(animation, channel);
-            free(channel); // Content was transferred, free the shell
+            if (add_channel_to_animation(animation, channel) < 0) {
+                free_animation_channel(channel);
+            } else {
+                free(channel); // Content was transferred, free the shell
+            }
         }
 
         add_animation_to_scene(scene, animation);
@@ -607,7 +625,9 @@ SceneNode* process_ai_node(Scene* scene, struct aiNode* ai_node, const struct ai
         if (ai_mesh->mMaterialIndex >= 0) {
             unsigned int matIndex = ai_mesh->mMaterialIndex;
             mesh->material = process_ai_material(ai_scene->mMaterials[matIndex], tex_pool);
-            add_material_to_scene(scene, mesh->material);
+            if (mesh->material) {
+                add_material_to_scene(scene, mesh->material);
+            }
         }
 
         // Process skeleton and bone weights if mesh has bones
@@ -637,7 +657,9 @@ SceneNode* process_ai_node(Scene* scene, struct aiNode* ai_node, const struct ai
     node->children = malloc(sizeof(SceneNode*) * node->children_count);
     for (unsigned int i = 0; i < node->children_count; i++) {
         node->children[i] = process_ai_node(scene, ai_node->mChildren[i], ai_scene, tex_pool);
-        node->children[i]->parent = node; // Set parent
+        if (node->children[i]) {
+            node->children[i]->parent = node;
+        }
     }
 
     node->name = safe_strdup(ai_node->mName.data);
@@ -750,7 +772,9 @@ static SceneNode* process_ai_node_async(Scene* scene, struct aiNode* ai_node,
     for (unsigned int i = 0; i < node->children_count; i++) {
         node->children[i] =
             process_ai_node_async(scene, ai_node->mChildren[i], ai_scene, tex_pool, loader);
-        node->children[i]->parent = node;
+        if (node->children[i]) {
+            node->children[i]->parent = node;
+        }
     }
 
     node->name = safe_strdup(ai_node->mName.data);

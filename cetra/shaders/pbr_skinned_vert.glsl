@@ -58,11 +58,18 @@ void main() {
     if (skinned) {
         // Apply bone transforms weighted by bone weights
         mat4 boneTransform = mat4(0.0);
+        float totalWeight = 0.0;
 
         for (int i = 0; i < 4; i++) {
             if (aBoneIds[i] >= 0 && aBoneIds[i] < MAX_BONES) {
                 boneTransform += boneMatrices[aBoneIds[i]] * aBoneWeights[i];
+                totalWeight += aBoneWeights[i];
             }
+        }
+
+        // Fallback to identity if no valid bones
+        if (totalWeight < 0.001) {
+            boneTransform = mat4(1.0);
         }
 
         // Transform position and normals by bone matrix
