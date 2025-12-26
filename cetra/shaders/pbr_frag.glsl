@@ -6,6 +6,8 @@ in vec3 FragPos;
 in float ClipDepth;
 in float FragDepth;
 in vec2 TexCoords;
+in vec2 TexCoords2;   // UV1 for lightmaps/AO
+in vec4 VertexColor;  // Vertex color (RGBA)
 in mat3 TBN;
 out vec4 FragColor;
 
@@ -49,6 +51,11 @@ uniform float normalScale;  // Normal map intensity scale (1.0 = full strength)
 uniform float aoStrength;   // Occlusion texture strength (1.0 = full effect)
 uniform float ior;
 uniform float filmThickness;
+uniform vec2 uvOffset;      // Texture coordinate offset (KHR_texture_transform)
+uniform vec2 uvScale;       // Texture coordinate scale (KHR_texture_transform)
+uniform float uvRotation;   // Texture coordinate rotation in radians
+uniform int vertexColorExists;  // Whether mesh has vertex colors
+uniform int texCoords2Exists;   // Whether mesh has UV1
 uniform vec3 camPos;
 uniform float time;
 
@@ -98,6 +105,16 @@ uniform float iblIntensity;
 uniform float maxReflectionLOD;
 
 const float PI = 3.14159265359;
+
+// UV transform for KHR_texture_transform
+vec2 transformUV(vec2 uv) {
+    // Apply rotation around origin
+    float s = sin(uvRotation);
+    float c = cos(uvRotation);
+    vec2 rotated = vec2(uv.x * c - uv.y * s, uv.x * s + uv.y * c);
+    // Apply scale and offset
+    return rotated * uvScale + uvOffset;
+}
 
 // Color space conversions
 vec3 sRGBToLinear(vec3 srgb) {
@@ -288,29 +305,44 @@ void main() {
     }
     if (renderMode == 6) {
         // Albedo Only - only sample albedo texture
-        vec3 albedoMap = albedo;
-        float texAlpha = 1.0;
+        vec2 uvAlbedo = transformUV(TexCoords);
+        vec3 albedoMapOnly = albedo;
+        float texAlphaOnly = 1.0;
         if (albedoTexExists > 0) {
-            vec4 albedoSample = texture(albedoTex, TexCoords);
-            albedoMap = sRGBToLinear(albedoSample.rgb);
-            texAlpha = albedoSample.a;
+            vec4 albedoSample = texture(albedoTex, uvAlbedo);
+            albedoMapOnly = sRGBToLinear(albedoSample.rgb);
+            texAlphaOnly = albedoSample.a;
+        }
+        // Apply vertex color
+        if (vertexColorExists > 0) {
+            albedoMapOnly *= sRGBToLinear(VertexColor.rgb);
+            texAlphaOnly *= VertexColor.a;
         }
         // Alpha cutoff for hair/foliage
-        if (alphaCutoff > 0.0 && texAlpha < alphaCutoff) {
+        if (alphaCutoff > 0.0 && texAlphaOnly < alphaCutoff) {
             discard;
         }
-        vec3 color = linearToSRGB(albedoMap);
-        FragColor = vec4(color, materialOpacity * texAlpha);
+        vec3 color = linearToSRGB(albedoMapOnly);
+        FragColor = vec4(color, materialOpacity * texAlphaOnly);
         return;
     }
+
+    // Apply UV transform for KHR_texture_transform
+    vec2 uv = transformUV(TexCoords);
 
     // Sample material properties from textures or use uniforms
     vec3 albedoMap = albedo;
     float texAlpha = 1.0;  // Alpha from albedo texture (for hair/foliage)
     if (albedoTexExists > 0) {
-        vec4 albedoSample = texture(albedoTex, TexCoords);
+        vec4 albedoSample = texture(albedoTex, uv);
         albedoMap = sRGBToLinear(albedoSample.rgb);
         texAlpha = albedoSample.a;
+    }
+
+    // Apply vertex color to tint albedo (glTF vertex colors)
+    if (vertexColorExists > 0) {
+        albedoMap *= sRGBToLinear(VertexColor.rgb);
+        texAlpha *= VertexColor.a;
     }
 
     // Alpha cutoff for hair/foliage - discard early before expensive lighting
@@ -320,7 +352,7 @@ void main() {
 
     vec3 N;
     if (normalTexExists > 0) {
-        N = texture(normalTex, TexCoords).rgb;
+        N = texture(normalTex, uv).rgb;
         N = N * 2.0 - 1.0;
         // Apply normal scale to XY components (glTF normalTexture.scale)
         N.xy *= normalScale;
@@ -332,7 +364,7 @@ void main() {
     float roughnessMap = roughness;
     if (roughnessTexExists > 0) {
         // glTF: G channel contains roughness (works for grayscale too since R=G=B)
-        roughnessMap = texture(roughnessTex, TexCoords).g;
+        roughnessMap = texture(roughnessTex, uv).g;
     }
     // Clamp roughness to avoid division issues
     roughnessMap = clamp(roughnessMap, 0.04, 1.0);
@@ -340,19 +372,21 @@ void main() {
     float metallicMap = metallic;
     if (metalnessTexExists > 0) {
         // glTF: B channel contains metallic (works for grayscale too since R=G=B)
-        metallicMap = texture(metalnessTex, TexCoords).b;
+        metallicMap = texture(metalnessTex, uv).b;
     }
 
     float aoMap = ao;
     if (aoTexExists > 0) {
+        // Use UV1 for AO if available (common glTF lightmap pattern), otherwise UV0
+        vec2 aoUV = (texCoords2Exists > 0) ? TexCoords2 : uv;
         // Apply occlusion strength (glTF occlusionTexture.strength)
-        float sampledAo = texture(aoTex, TexCoords).r;
+        float sampledAo = texture(aoTex, aoUV).r;
         aoMap = mix(1.0, sampledAo, aoStrength);
     }
 
     vec3 emissiveMap = vec3(0.0);
     if (emissiveTexExists > 0) {
-        vec3 texEmissive = sRGBToLinear(texture(emissiveTex, TexCoords).rgb);
+        vec3 texEmissive = sRGBToLinear(texture(emissiveTex, uv).rgb);
         // Scale by emissiveFactor if set, otherwise use texture directly (backward compat)
         float factorSum = emissiveFactor.r + emissiveFactor.g + emissiveFactor.b;
         emissiveMap = texEmissive * (factorSum > 0.001 ? emissiveFactor : vec3(1.0));
@@ -362,7 +396,7 @@ void main() {
 
     float opacity = materialOpacity;
     if (opacityTexExists > 0) {
-        opacity = texture(opacityTex, TexCoords).r * materialOpacity;
+        opacity = texture(opacityTex, uv).r * materialOpacity;
     } else if (texAlpha < 1.0) {
         // Use albedo texture alpha if no separate opacity texture
         opacity = texAlpha * materialOpacity;
@@ -370,20 +404,20 @@ void main() {
 
     // Microsurface detail - modulates roughness for fine surface detail
     if (microsurfaceTexExists > 0) {
-        float detail = texture(microsurfaceTex, TexCoords).r;
+        float detail = texture(microsurfaceTex, uv).r;
         roughnessMap = clamp(roughnessMap * (0.5 + detail), 0.04, 1.0);
     }
 
     // Anisotropy - for brushed metal, hair effects
     float anisotropyMap = 0.0;
     if (anisotropyTexExists > 0) {
-        anisotropyMap = texture(anisotropyTex, TexCoords).r;
+        anisotropyMap = texture(anisotropyTex, uv).r;
     }
 
     // Subsurface scattering thickness map
     float sssThickness = 1.0;
     if (subsurfaceTexExists > 0) {
-        sssThickness = texture(subsurfaceTex, TexCoords).r;
+        sssThickness = texture(subsurfaceTex, uv).r;
     }
 
     // Calculate view direction (must use WorldPos, not FragPos which is clip space)

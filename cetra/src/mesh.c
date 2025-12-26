@@ -32,6 +32,8 @@ Mesh* create_mesh() {
     mesh->tangents = NULL;
     mesh->bitangents = NULL;
     mesh->tex_coords = NULL;
+    mesh->tex_coords2 = NULL;
+    mesh->colors = NULL;
     mesh->indices = NULL;
 
     mesh->vertex_count = 0;
@@ -47,6 +49,10 @@ Mesh* create_mesh() {
     glGenBuffers(1, &mesh->nbo);
     // Generate Texture Buffer Object (tbo)
     glGenBuffers(1, &mesh->tbo);
+    // Generate Texture Buffer Object 2 (tbo2) for UV1
+    glGenBuffers(1, &mesh->tbo2);
+    // Generate Color Buffer Object
+    glGenBuffers(1, &mesh->color_vbo);
     // Generate Element Buffer Object (ebo)
     glGenBuffers(1, &mesh->ebo);
 
@@ -82,6 +88,8 @@ void free_mesh(Mesh* mesh) {
     glDeleteBuffers(1, &mesh->vbo);
     glDeleteBuffers(1, &mesh->nbo);
     glDeleteBuffers(1, &mesh->tbo);
+    glDeleteBuffers(1, &mesh->tbo2);
+    glDeleteBuffers(1, &mesh->color_vbo);
     glDeleteBuffers(1, &mesh->ebo);
     glDeleteVertexArrays(1, &mesh->vao);
     glDeleteBuffers(1, &mesh->tangent_vbo);
@@ -98,6 +106,10 @@ void free_mesh(Mesh* mesh) {
         free(mesh->bitangents);
     if (mesh->tex_coords)
         free(mesh->tex_coords);
+    if (mesh->tex_coords2)
+        free(mesh->tex_coords2);
+    if (mesh->colors)
+        free(mesh->colors);
     if (mesh->indices)
         free(mesh->indices);
 
@@ -196,13 +208,31 @@ void upload_mesh_buffers_to_gpu(Mesh* mesh) {
         glEnableVertexAttribArray(GL_ATTR_BITANGENT);
     }
 
-    // Texture coordinates
+    // Texture coordinates (UV0)
     if (mesh->tex_coords) {
         glBindBuffer(GL_ARRAY_BUFFER, mesh->tbo);
         glBufferData(GL_ARRAY_BUFFER, mesh->vertex_count * 2 * sizeof(float), mesh->tex_coords,
                      GL_STATIC_DRAW);
         glVertexAttribPointer(GL_ATTR_TEXCOORD, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), (void*)0);
         glEnableVertexAttribArray(GL_ATTR_TEXCOORD);
+    }
+
+    // Texture coordinates (UV1) for lightmaps/AO
+    if (mesh->tex_coords2) {
+        glBindBuffer(GL_ARRAY_BUFFER, mesh->tbo2);
+        glBufferData(GL_ARRAY_BUFFER, mesh->vertex_count * 2 * sizeof(float), mesh->tex_coords2,
+                     GL_STATIC_DRAW);
+        glVertexAttribPointer(GL_ATTR_TEXCOORD2, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), (void*)0);
+        glEnableVertexAttribArray(GL_ATTR_TEXCOORD2);
+    }
+
+    // Vertex colors (RGBA)
+    if (mesh->colors) {
+        glBindBuffer(GL_ARRAY_BUFFER, mesh->color_vbo);
+        glBufferData(GL_ARRAY_BUFFER, mesh->vertex_count * 4 * sizeof(float), mesh->colors,
+                     GL_STATIC_DRAW);
+        glVertexAttribPointer(GL_ATTR_COLOR, 4, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
+        glEnableVertexAttribArray(GL_ATTR_COLOR);
     }
 
     // Bone IDs (ivec4 per vertex)

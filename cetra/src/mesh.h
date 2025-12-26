@@ -38,7 +38,9 @@ typedef struct Mesh {
     float* normals;        // Array of normals
     float* tangents;       // Array of tangents
     float* bitangents;     // Array of bitangents
-    float* tex_coords;     // Array of texture coordinates
+    float* tex_coords;     // Array of texture coordinates (UV0)
+    float* tex_coords2;    // Array of texture coordinates (UV1) for lightmaps/AO
+    float* colors;         // Array of vertex colors (RGBA)
     unsigned int* indices; // Array of indices
 
     size_t vertex_count; // Number of vertices
@@ -50,7 +52,9 @@ typedef struct Mesh {
     GLuint vbo;           // Vertex Buffer Object
     GLuint ebo;           // Element Buffer Object (for indices)
     GLuint nbo;           // Normal Buffer Object
-    GLuint tbo;           // Texture Buffer Object (for UVs)
+    GLuint tbo;           // Texture Buffer Object (for UV0)
+    GLuint tbo2;          // Texture Buffer Object (for UV1)
+    GLuint color_vbo;     // Vertex Color Buffer Object
     GLuint tangent_vbo;   // Tangent Buffer Object
     GLuint bitangent_vbo; // Bitangent Buffer Object
 

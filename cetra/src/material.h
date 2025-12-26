@@ -19,6 +19,9 @@ typedef struct Material {
     float aoStrength;    // Occlusion texture strength (1.0 = full effect)
     float ior;           // Index of refraction (1.5 for plastic/glass, 1.33 for water)
     float filmThickness; // Thin-film thickness in nanometers (0 = disabled, 200-600nm typical)
+    vec2 uvOffset;       // Texture coordinate offset (KHR_texture_transform)
+    vec2 uvScale;        // Texture coordinate scale (KHR_texture_transform)
+    float uvRotation;    // Texture coordinate rotation in radians (KHR_texture_transform)
     bool doubleSided;    // Disable backface culling for this material
 
     // Core PBR Textures

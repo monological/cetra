@@ -135,6 +135,9 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
     uniform_set_float(u, "aoStrength", material->aoStrength);
     uniform_set_float(u, "ior", material->ior);
     uniform_set_float(u, "filmThickness", material->filmThickness);
+    uniform_set_vec2(u, "uvOffset", (const float*)&material->uvOffset);
+    uniform_set_vec2(u, "uvScale", (const float*)&material->uvScale);
+    uniform_set_float(u, "uvRotation", material->uvRotation);
 
     // Always set sampler uniforms to correct texture units (prevents stale values)
     uniform_set_int(u, "albedoTex", 0);
@@ -335,6 +338,10 @@ static void _render_node(Scene* scene, SceneNode* node, Camera* camera, mat4 mod
 
         // Update skinning uniforms for skinned meshes
         _update_skinning_uniforms(program, mesh);
+
+        // Set mesh-specific uniforms for vertex colors and UV1
+        uniform_set_int(u, "vertexColorExists", mesh->colors ? 1 : 0);
+        uniform_set_int(u, "texCoords2Exists", mesh->tex_coords2 ? 1 : 0);
 
         // Handle double-sided materials
         if (mat->doubleSided) {

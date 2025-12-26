@@ -37,6 +37,7 @@ GLint uniform_array_location(UniformManager* mgr, const char* array, size_t inde
 // Setters
 void uniform_set_int(UniformManager* mgr, const char* name, int value);
 void uniform_set_float(UniformManager* mgr, const char* name, float value);
+void uniform_set_vec2(UniformManager* mgr, const char* name, const float* value);
 void uniform_set_vec3(UniformManager* mgr, const char* name, const float* value);
 void uniform_set_mat4(UniformManager* mgr, const char* name, const float* value);
 

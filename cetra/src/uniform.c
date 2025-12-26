@@ -181,6 +181,12 @@ void uniform_set_float(UniformManager* mgr, const char* name, float value) {
         glUniform1f(loc, value);
 }
 
+void uniform_set_vec2(UniformManager* mgr, const char* name, const float* value) {
+    GLint loc = uniform_location(mgr, name);
+    if (loc >= 0)
+        glUniform2fv(loc, 1, value);
+}
+
 void uniform_set_vec3(UniformManager* mgr, const char* name, const float* value) {
     GLint loc = uniform_location(mgr, name);
     if (loc >= 0)

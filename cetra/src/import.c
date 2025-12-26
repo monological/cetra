@@ -141,6 +141,17 @@ static void extract_material_properties(struct aiMaterial* ai_mat, Material* mat
         }
         // OPAQUE and BLEND modes leave alphaCutoff at 0 (disabled)
     }
+
+    // Extract UV transform (KHR_texture_transform) from base color texture
+    struct aiUVTransform uvTransform;
+    if (AI_SUCCESS == aiGetMaterialFloatArray(ai_mat, AI_MATKEY_UVTRANSFORM(aiTextureType_DIFFUSE, 0),
+                                              (float*)&uvTransform, NULL)) {
+        material->uvOffset[0] = uvTransform.mTranslation.x;
+        material->uvOffset[1] = uvTransform.mTranslation.y;
+        material->uvScale[0] = uvTransform.mScaling.x;
+        material->uvScale[1] = uvTransform.mScaling.y;
+        material->uvRotation = uvTransform.mRotation;
+    }
 }
 
 /*
@@ -354,11 +365,25 @@ void process_ai_mesh(Mesh* mesh, struct aiMesh* ai_mesh) {
         mesh->bitangents = NULL;
     }
 
-    // Check for texture coordinates
+    // Check for texture coordinates (UV0)
     if (ai_mesh->mTextureCoords[0]) {
         mesh->tex_coords = malloc(mesh->vertex_count * 2 * sizeof(float));
     } else {
         mesh->tex_coords = NULL;
+    }
+
+    // Check for texture coordinates (UV1) for lightmaps/AO
+    if (ai_mesh->mTextureCoords[1]) {
+        mesh->tex_coords2 = malloc(mesh->vertex_count * 2 * sizeof(float));
+    } else {
+        mesh->tex_coords2 = NULL;
+    }
+
+    // Check for vertex colors
+    if (ai_mesh->mColors[0]) {
+        mesh->colors = malloc(mesh->vertex_count * 4 * sizeof(float));
+    } else {
+        mesh->colors = NULL;
     }
 
     // Allocate memory for indices
@@ -391,6 +416,18 @@ void process_ai_mesh(Mesh* mesh, struct aiMesh* ai_mesh) {
         if (mesh->tex_coords) {
             mesh->tex_coords[i * 2] = ai_mesh->mTextureCoords[0][i].x;
             mesh->tex_coords[i * 2 + 1] = ai_mesh->mTextureCoords[0][i].y;
+        }
+
+        if (mesh->tex_coords2) {
+            mesh->tex_coords2[i * 2] = ai_mesh->mTextureCoords[1][i].x;
+            mesh->tex_coords2[i * 2 + 1] = ai_mesh->mTextureCoords[1][i].y;
+        }
+
+        if (mesh->colors) {
+            mesh->colors[i * 4] = ai_mesh->mColors[0][i].r;
+            mesh->colors[i * 4 + 1] = ai_mesh->mColors[0][i].g;
+            mesh->colors[i * 4 + 2] = ai_mesh->mColors[0][i].b;
+            mesh->colors[i * 4 + 3] = ai_mesh->mColors[0][i].a;
         }
     }
 

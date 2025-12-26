@@ -11,6 +11,7 @@
 #define GL_ATTR_COLOR        5
 #define GL_ATTR_BONE_IDS     6 // ivec4 - bone indices per vertex
 #define GL_ATTR_BONE_WEIGHTS 7 // vec4  - bone weights per vertex
+#define GL_ATTR_TEXCOORD2    8 // UV1 for lightmaps/AO
 
 #define MAX_VERTEX_BUFFER  512 * 1024
 #define MAX_ELEMENT_BUFFER 128 * 1024

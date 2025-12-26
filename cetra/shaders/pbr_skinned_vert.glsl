@@ -4,8 +4,10 @@ layout(location = 1) in vec3 aNormal;
 layout(location = 2) in vec2 aTexCoords;
 layout(location = 3) in vec3 aTangent;
 layout(location = 4) in vec3 aBitangent;
+layout(location = 5) in vec4 aColor;
 layout(location = 6) in ivec4 aBoneIds;
 layout(location = 7) in vec4 aBoneWeights;
+layout(location = 8) in vec2 aTexCoords2;
 
 out vec3 Normal;
 out vec3 WorldPos;
@@ -14,6 +16,8 @@ out vec3 FragPos;
 out float ClipDepth;
 out float FragDepth;
 out vec2 TexCoords;
+out vec2 TexCoords2;
+out vec4 VertexColor;
 out mat3 TBN;
 
 #define MAX_LIGHTS 70
@@ -103,6 +107,8 @@ void main() {
     mat3 normalMatrix = mat3(transpose(inverse(model)));
     Normal = normalize(normalMatrix * localNormal);
     TexCoords = aTexCoords;
+    TexCoords2 = aTexCoords2;
+    VertexColor = aColor;
 
     // Calculate TBN matrix for normal mapping
     vec3 T = normalize(mat3(model) * localTangent);

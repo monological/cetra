@@ -28,6 +28,9 @@ Material* create_material() {
     material->aoStrength = 1.0f;
     material->ior = 1.5f;
     material->filmThickness = 0.0f;
+    glm_vec2_zero(material->uvOffset);
+    glm_vec2_one(material->uvScale);
+    material->uvRotation = 0.0f;
     material->doubleSided = false;
 
     material->albedo_tex = NULL;
