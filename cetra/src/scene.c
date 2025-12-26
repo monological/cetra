@@ -621,6 +621,30 @@ void set_shader_program_for_nodes(SceneNode* node, ShaderProgram* program) {
     }
 }
 
+void set_shader_programs_for_nodes(SceneNode* node, ShaderProgram* standard,
+                                   ShaderProgram* skinned) {
+    if (!node) {
+        return;
+    }
+
+    for (size_t i = 0; i < node->mesh_count; ++i) {
+        Mesh* mesh = node->meshes[i];
+
+        if (mesh && mesh->material) {
+            // Use skinned shader for meshes with bone data, standard otherwise
+            if (mesh->is_skinned && skinned) {
+                mesh->material->shader_program = skinned;
+            } else {
+                mesh->material->shader_program = standard;
+            }
+        }
+    }
+
+    for (size_t i = 0; i < node->children_count; ++i) {
+        set_shader_programs_for_nodes(node->children[i], standard, skinned);
+    }
+}
+
 static void _set_xyz_program_for_nodes(SceneNode* node, ShaderProgram* program) {
     if (!node) {
         return;
@@ -793,4 +817,98 @@ void print_scene(const Scene* scene) {
 
     print_scene_lights(scene);
     print_scene_node(scene->root_node, 0);
+}
+
+static void _compute_node_bounds(SceneNode* node, vec3 scene_min, vec3 scene_max,
+                                 bool* initialized) {
+    if (!node)
+        return;
+
+    for (size_t i = 0; i < node->mesh_count; i++) {
+        Mesh* mesh = node->meshes[i];
+        if (!mesh || mesh->vertex_count == 0)
+            continue;
+
+        // Transform mesh AABB corners by node's global transform
+        vec3 corners[8];
+        AABB* aabb = &mesh->aabb;
+
+        corners[0][0] = aabb->min[0];
+        corners[0][1] = aabb->min[1];
+        corners[0][2] = aabb->min[2];
+        corners[1][0] = aabb->max[0];
+        corners[1][1] = aabb->min[1];
+        corners[1][2] = aabb->min[2];
+        corners[2][0] = aabb->min[0];
+        corners[2][1] = aabb->max[1];
+        corners[2][2] = aabb->min[2];
+        corners[3][0] = aabb->max[0];
+        corners[3][1] = aabb->max[1];
+        corners[3][2] = aabb->min[2];
+        corners[4][0] = aabb->min[0];
+        corners[4][1] = aabb->min[1];
+        corners[4][2] = aabb->max[2];
+        corners[5][0] = aabb->max[0];
+        corners[5][1] = aabb->min[1];
+        corners[5][2] = aabb->max[2];
+        corners[6][0] = aabb->min[0];
+        corners[6][1] = aabb->max[1];
+        corners[6][2] = aabb->max[2];
+        corners[7][0] = aabb->max[0];
+        corners[7][1] = aabb->max[1];
+        corners[7][2] = aabb->max[2];
+
+        for (int c = 0; c < 8; c++) {
+            vec4 corner4 = {corners[c][0], corners[c][1], corners[c][2], 1.0f};
+            vec4 world_corner;
+            glm_mat4_mulv(node->global_transform, corner4, world_corner);
+
+            if (!*initialized) {
+                glm_vec3_copy((vec3){world_corner[0], world_corner[1], world_corner[2]}, scene_min);
+                glm_vec3_copy((vec3){world_corner[0], world_corner[1], world_corner[2]}, scene_max);
+                *initialized = true;
+            } else {
+                scene_min[0] = fminf(scene_min[0], world_corner[0]);
+                scene_min[1] = fminf(scene_min[1], world_corner[1]);
+                scene_min[2] = fminf(scene_min[2], world_corner[2]);
+                scene_max[0] = fmaxf(scene_max[0], world_corner[0]);
+                scene_max[1] = fmaxf(scene_max[1], world_corner[1]);
+                scene_max[2] = fmaxf(scene_max[2], world_corner[2]);
+            }
+        }
+    }
+
+    for (size_t i = 0; i < node->children_count; i++) {
+        _compute_node_bounds(node->children[i], scene_min, scene_max, initialized);
+    }
+}
+
+void compute_scene_bounds(Scene* scene, vec3 out_min, vec3 out_max) {
+    if (!scene || !scene->root_node) {
+        glm_vec3_zero(out_min);
+        glm_vec3_zero(out_max);
+        return;
+    }
+
+    bool initialized = false;
+    _compute_node_bounds(scene->root_node, out_min, out_max, &initialized);
+
+    if (!initialized) {
+        glm_vec3_zero(out_min);
+        glm_vec3_zero(out_max);
+    }
+}
+
+void compute_scene_center_and_radius(Scene* scene, vec3 out_center, float* out_radius) {
+    vec3 scene_min = {0}, scene_max = {0};
+    compute_scene_bounds(scene, scene_min, scene_max);
+
+    // Center is midpoint of min and max
+    glm_vec3_add(scene_min, scene_max, out_center);
+    glm_vec3_scale(out_center, 0.5f, out_center);
+
+    // Radius is half the diagonal
+    vec3 diagonal;
+    glm_vec3_sub(scene_max, scene_min, diagonal);
+    *out_radius = glm_vec3_norm(diagonal) * 0.5f;
 }

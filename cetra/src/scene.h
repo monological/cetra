@@ -65,6 +65,8 @@ void set_show_xyz_for_nodes(SceneNode* node, bool show_xyz);
 
 // shaders
 void set_shader_program_for_nodes(SceneNode* node, ShaderProgram* program);
+void set_shader_programs_for_nodes(SceneNode* node, ShaderProgram* standard,
+                                   ShaderProgram* skinned);
 
 // move
 void apply_transform_to_nodes(SceneNode* node, mat4 transform);
@@ -158,6 +160,10 @@ GLboolean set_scene_outlines_shader_program(Scene* scene, ShaderProgram* outline
 // print
 void print_scene_node(const SceneNode* node, int depth);
 void print_scene(const Scene* scene);
+
+// bounds
+void compute_scene_bounds(Scene* scene, vec3 out_min, vec3 out_max);
+void compute_scene_center_and_radius(Scene* scene, vec3 out_center, float* out_radius);
 
 // render
 void upload_buffers_to_gpu_for_nodes(SceneNode* node);
