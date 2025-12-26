@@ -244,34 +244,37 @@ bool camera_controller_on_key(MouseDragController* ctrl, int key, int action, in
     Engine* engine = ctrl->engine;
     Camera* camera = engine->camera;
 
-    static const float MOVE_SPEED = 300.0f;
+    // Scale movement speeds relative to camera distance for consistent feel across model sizes
+    float base_distance = fmaxf(camera->distance, 1.0f);
+    float move_speed = base_distance * 0.1f; // 10% of distance per keypress
+    float pan_speed = base_distance * 0.05f; // 5% of distance per keypress
+    float min_zoom = base_distance * 0.1f;   // Can zoom to 10% of initial distance
+
     static const float ORBIT_STEP = 0.1f;
-    static const float PAN_SPEED = 15.0f;
     static const float ZOOM_FACTOR = 0.9f;
-    static const float MIN_ZOOM_DISTANCE = 10.0f;
 
     switch (key) {
         case GLFW_KEY_W:
-            camera_move_forward(camera, MOVE_SPEED);
+            camera_move_forward(camera, move_speed);
             return true;
 
         case GLFW_KEY_S:
-            camera_move_forward(camera, -MOVE_SPEED);
+            camera_move_forward(camera, -move_speed);
             return true;
 
         case GLFW_KEY_A:
-            camera_strafe(camera, MOVE_SPEED);
+            camera_strafe(camera, move_speed);
             return true;
 
         case GLFW_KEY_D:
-            camera_strafe(camera, -MOVE_SPEED);
+            camera_strafe(camera, -move_speed);
             return true;
 
         case GLFW_KEY_UP:
             if (mods & GLFW_MOD_SHIFT) {
-                pan_camera(camera, 0.0f, PAN_SPEED);
+                pan_camera(camera, 0.0f, pan_speed);
             } else if (engine->camera_mode == CAMERA_MODE_FREE) {
-                camera_zoom_toward_target(camera, ZOOM_FACTOR, MIN_ZOOM_DISTANCE);
+                camera_zoom_toward_target(camera, ZOOM_FACTOR, min_zoom);
             } else if (engine->camera_mode == CAMERA_MODE_ORBIT) {
                 orbit_camera(camera, ORBIT_STEP, 0.0f);
             }
@@ -279,9 +282,9 @@ bool camera_controller_on_key(MouseDragController* ctrl, int key, int action, in
 
         case GLFW_KEY_DOWN:
             if (mods & GLFW_MOD_SHIFT) {
-                pan_camera(camera, 0.0f, -PAN_SPEED);
+                pan_camera(camera, 0.0f, -pan_speed);
             } else if (engine->camera_mode == CAMERA_MODE_FREE) {
-                camera_zoom_toward_target(camera, 1.0f / ZOOM_FACTOR, MIN_ZOOM_DISTANCE);
+                camera_zoom_toward_target(camera, 1.0f / ZOOM_FACTOR, min_zoom);
             } else if (engine->camera_mode == CAMERA_MODE_ORBIT) {
                 orbit_camera(camera, -ORBIT_STEP, 0.0f);
             }
@@ -289,7 +292,7 @@ bool camera_controller_on_key(MouseDragController* ctrl, int key, int action, in
 
         case GLFW_KEY_LEFT:
             if (mods & GLFW_MOD_SHIFT) {
-                pan_camera(camera, -PAN_SPEED, 0.0f);
+                pan_camera(camera, -pan_speed, 0.0f);
             } else {
                 camera_sync_spherical_from_position(camera);
                 orbit_camera(camera, 0.0f, ORBIT_STEP);
@@ -298,7 +301,7 @@ bool camera_controller_on_key(MouseDragController* ctrl, int key, int action, in
 
         case GLFW_KEY_RIGHT:
             if (mods & GLFW_MOD_SHIFT) {
-                pan_camera(camera, PAN_SPEED, 0.0f);
+                pan_camera(camera, pan_speed, 0.0f);
             } else {
                 camera_sync_spherical_from_position(camera);
                 orbit_camera(camera, 0.0f, -ORBIT_STEP);
