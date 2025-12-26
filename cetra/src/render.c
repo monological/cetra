@@ -131,6 +131,8 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
     uniform_set_float(u, "ao", material->ao);
     uniform_set_float(u, "materialOpacity", material->opacity);
     uniform_set_float(u, "alphaCutoff", material->alphaCutoff);
+    uniform_set_float(u, "normalScale", material->normalScale);
+    uniform_set_float(u, "aoStrength", material->aoStrength);
     uniform_set_float(u, "ior", material->ior);
     uniform_set_float(u, "filmThickness", material->filmThickness);
 

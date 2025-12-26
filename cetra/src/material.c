@@ -24,6 +24,8 @@ Material* create_material() {
     material->ao = 1.0f;
     material->opacity = 1.0f;
     material->alphaCutoff = 0.0f;  // Disabled by default
+    material->normalScale = 1.0f;
+    material->aoStrength = 1.0f;
     material->ior = 1.5f;
     material->filmThickness = 0.0f;
     material->doubleSided = false;

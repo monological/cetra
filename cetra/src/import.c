@@ -110,6 +110,22 @@ static void extract_material_properties(struct aiMaterial* ai_mat, Material* mat
         material->doubleSided = (twoSided != 0);
     }
 
+    // Extract normal map scale (glTF normalTexture.scale)
+    ai_real normalScale;
+    if (AI_SUCCESS ==
+        aiGetMaterialFloat(ai_mat, AI_MATKEY_GLTF_TEXTURE_SCALE(aiTextureType_NORMALS, 0),
+                           &normalScale)) {
+        material->normalScale = normalScale;
+    }
+
+    // Extract occlusion strength (glTF occlusionTexture.strength)
+    ai_real aoStrength;
+    if (AI_SUCCESS ==
+        aiGetMaterialFloat(ai_mat, AI_MATKEY_GLTF_TEXTURE_STRENGTH(aiTextureType_LIGHTMAP, 0),
+                           &aoStrength)) {
+        material->aoStrength = aoStrength;
+    }
+
     // Extract glTF alpha mode and cutoff for hair/foliage transparency
     struct aiString alphaMode;
     if (AI_SUCCESS == aiGetMaterialString(ai_mat, AI_MATKEY_GLTF_ALPHAMODE, &alphaMode)) {

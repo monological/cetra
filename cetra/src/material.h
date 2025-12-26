@@ -15,6 +15,8 @@ typedef struct Material {
     float ao;
     float opacity;
     float alphaCutoff;   // Alpha cutoff threshold for hair/foliage (0 = disabled, 0.5 typical)
+    float normalScale;   // Normal map intensity scale (1.0 = full strength)
+    float aoStrength;    // Occlusion texture strength (1.0 = full effect)
     float ior;           // Index of refraction (1.5 for plastic/glass, 1.33 for water)
     float filmThickness; // Thin-film thickness in nanometers (0 = disabled, 200-600nm typical)
     bool doubleSided;    // Disable backface culling for this material

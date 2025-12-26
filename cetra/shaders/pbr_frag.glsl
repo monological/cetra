@@ -45,6 +45,8 @@ uniform float roughness;
 uniform float ao;
 uniform float materialOpacity;
 uniform float alphaCutoff;  // Alpha cutoff threshold for hair/foliage (0 = disabled)
+uniform float normalScale;  // Normal map intensity scale (1.0 = full strength)
+uniform float aoStrength;   // Occlusion texture strength (1.0 = full effect)
 uniform float ior;
 uniform float filmThickness;
 uniform vec3 camPos;
@@ -320,6 +322,8 @@ void main() {
     if (normalTexExists > 0) {
         N = texture(normalTex, TexCoords).rgb;
         N = N * 2.0 - 1.0;
+        // Apply normal scale to XY components (glTF normalTexture.scale)
+        N.xy *= normalScale;
         N = normalize(TBN * N);
     } else {
         N = normalize(Normal);
@@ -327,19 +331,23 @@ void main() {
 
     float roughnessMap = roughness;
     if (roughnessTexExists > 0) {
-        roughnessMap = texture(roughnessTex, TexCoords).r;
+        // glTF: G channel contains roughness (works for grayscale too since R=G=B)
+        roughnessMap = texture(roughnessTex, TexCoords).g;
     }
     // Clamp roughness to avoid division issues
     roughnessMap = clamp(roughnessMap, 0.04, 1.0);
 
     float metallicMap = metallic;
     if (metalnessTexExists > 0) {
-        metallicMap = texture(metalnessTex, TexCoords).r;
+        // glTF: B channel contains metallic (works for grayscale too since R=G=B)
+        metallicMap = texture(metalnessTex, TexCoords).b;
     }
 
     float aoMap = ao;
     if (aoTexExists > 0) {
-        aoMap = texture(aoTex, TexCoords).r;
+        // Apply occlusion strength (glTF occlusionTexture.strength)
+        float sampledAo = texture(aoTex, TexCoords).r;
+        aoMap = mix(1.0, sampledAo, aoStrength);
     }
 
     vec3 emissiveMap = vec3(0.0);
