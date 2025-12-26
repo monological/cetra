@@ -12,6 +12,7 @@
 #include "camera.h"
 #include "scene.h"
 #include "texture.h"
+#include "animation.h"
 
 // Forward declaration
 struct AsyncLoader;
@@ -34,5 +35,10 @@ Scene* create_scene_from_model_path(const char* path, const char* texture_direct
 // Async variant - textures loaded in parallel
 Scene* create_scene_from_model_path_async(const char* path, const char* texture_directory,
                                           struct AsyncLoader* loader);
+
+// Load animations from a separate file (e.g., Mixamo "Without Skin" FBX)
+// Maps animation channels to the provided skeleton by bone name
+// Returns number of animations loaded, or -1 on error
+int load_animations_from_file(Scene* scene, Skeleton* skeleton, const char* filepath);
 
 #endif // IMPORT_H

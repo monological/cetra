@@ -671,6 +671,39 @@ void process_ai_animations(const struct aiScene* ai_scene, Scene* scene, Skeleto
     }
 }
 
+int load_animations_from_file(Scene* scene, Skeleton* skeleton, const char* filepath) {
+    if (!scene || !skeleton || !filepath) {
+        log_error("load_animations_from_file: NULL parameter");
+        return -1;
+    }
+
+    // Use minimal import flags - we only need animation data
+    unsigned int flags = aiProcess_ValidateDataStructure;
+
+    const struct aiScene* ai_scene = aiImportFile(filepath, flags);
+    if (!ai_scene) {
+        log_error("Failed to load animation file: %s - %s", filepath, aiGetErrorString());
+        return -1;
+    }
+
+    if (ai_scene->mNumAnimations == 0) {
+        log_warn("Animation file '%s' contains no animations", filepath);
+        aiReleaseImport(ai_scene);
+        return 0;
+    }
+
+    size_t initial_count = scene->animation_count;
+
+    // Process animations, mapping to the provided skeleton
+    process_ai_animations(ai_scene, scene, skeleton);
+
+    size_t loaded = scene->animation_count - initial_count;
+    log_info("Loaded %zu animation(s) from '%s'", loaded, filepath);
+
+    aiReleaseImport(ai_scene);
+    return (int)loaded;
+}
+
 void process_ai_lights(const struct aiScene* scene, Light*** lights, size_t* num_lights) {
     *num_lights = scene->mNumLights;
     *lights = malloc(sizeof(Light*) * (*num_lights));
