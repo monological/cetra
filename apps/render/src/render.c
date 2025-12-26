@@ -179,12 +179,12 @@ void configure_visor_materials(Scene* scene) {
 int main(int argc, char** argv) {
 
     if (argc < 2) {
-        fprintf(stderr, "Usage: %s <FBX_MODEL_PATH> [FBX_TEXTURE_DIR] [HDR_PATH]\n", argv[0]);
+        fprintf(stderr, "Usage: %s <MODEL_PATH> [TEXTURE_DIR] [HDR_PATH]\n", argv[0]);
         return -1;
     }
 
-    const char* fbx_model_path = argv[1];
-    const char* fbx_texture_dir = argc > 2 ? argv[2] : NULL;
+    const char* model_path = argv[1];
+    const char* texture_dir = argc > 2 ? argv[2] : NULL;
     const char* hdr_path = argc > 3 ? argv[3] : NULL;
 
     Engine* engine = create_engine("Cetra Engine", WIDTH, HEIGHT);
@@ -244,13 +244,13 @@ int main(int argc, char** argv) {
     set_mouse_drag_auto_orbit(drag_controller, true, CAM_ANGULAR_SPEED, MIN_DIST, MAX_DIST);
 
     /*
-     * Import fbx model with async texture loading.
+     * Import model with async texture loading.
      */
 
     Scene* scene =
-        create_scene_from_model_path_async(fbx_model_path, fbx_texture_dir, engine->async_loader);
+        create_scene_from_model_path_async(model_path, texture_dir, engine->async_loader);
     if (!scene) {
-        fprintf(stderr, "Failed to import FBX model: %s\n", fbx_model_path);
+        fprintf(stderr, "Failed to import model: %s\n", model_path);
         return -1;
     }
 
