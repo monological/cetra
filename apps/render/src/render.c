@@ -248,7 +248,7 @@ int main(int argc, char** argv) {
      */
 
     Scene* scene =
-        create_scene_from_fbx_path_async(fbx_model_path, fbx_texture_dir, engine->async_loader);
+        create_scene_from_model_path_async(fbx_model_path, fbx_texture_dir, engine->async_loader);
     if (!scene) {
         fprintf(stderr, "Failed to import FBX model: %s\n", fbx_model_path);
         return -1;

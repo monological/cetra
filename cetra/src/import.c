@@ -670,7 +670,7 @@ SceneNode* process_ai_node(Scene* scene, struct aiNode* ai_node, const struct ai
     return node;
 }
 
-Scene* create_scene_from_fbx_path(const char* path, const char* texture_directory) {
+Scene* create_scene_from_model_path(const char* path, const char* texture_directory) {
     const struct aiScene* ai_scene =
         aiImportFile(path, aiProcess_Triangulate | aiProcess_FlipUVs | aiProcess_CalcTangentSpace);
     if (!ai_scene || ai_scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !ai_scene->mRootNode) {
@@ -785,11 +785,11 @@ static SceneNode* process_ai_node_async(Scene* scene, struct aiNode* ai_node,
     return node;
 }
 
-Scene* create_scene_from_fbx_path_async(const char* path, const char* texture_directory,
-                                        AsyncLoader* loader) {
+Scene* create_scene_from_model_path_async(const char* path, const char* texture_directory,
+                                          AsyncLoader* loader) {
     if (!loader) {
         log_error("AsyncLoader is NULL, falling back to sync loading");
-        return create_scene_from_fbx_path(path, texture_directory);
+        return create_scene_from_model_path(path, texture_directory);
     }
 
     const struct aiScene* ai_scene =
