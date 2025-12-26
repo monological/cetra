@@ -121,7 +121,7 @@ void render_scene_callback(Engine* engine, Scene* current_scene) {
         mouse_drag_update(drag_controller, time_value);
     }
 
-    Transform transform = {.position = {0.0f, -80.0f, 0.0f},
+    Transform transform = {.position = {0.0f, 0.0f, 0.0f},
                            .rotation = {0.0f, 0.0f, 0.0f},
                            .scale = {1.0f, 1.0f, 1.0f}};
 
@@ -207,6 +207,14 @@ int main(int argc, char** argv) {
         fprintf(stderr, "Failed to get PBR shader program\n");
         return -1;
     }
+
+    // Create skinned PBR shader for skeletal animation
+    ShaderProgram* pbr_skinned_program = create_pbr_skinned_program();
+    if (!pbr_skinned_program) {
+        fprintf(stderr, "Failed to create PBR skinned shader program\n");
+        return -1;
+    }
+    add_shader_program_to_engine(engine, pbr_skinned_program);
 
     ShaderProgram* xyz_shader_program = get_engine_shader_program_by_name(engine, "xyz");
     if (!xyz_shader_program) {
@@ -304,12 +312,46 @@ int main(int argc, char** argv) {
         }
     } else {
         // No IBL - use directional lights for illumination
-        create_three_point_lights(scene, 1.0f);
+        create_three_point_lights(scene, 3.0f);
     }
 
     upload_buffers_to_gpu_for_nodes(scene->root_node);
 
-    set_shader_program_for_nodes(scene->root_node, pbr_shader_program);
+    set_shader_programs_for_nodes(scene->root_node, pbr_shader_program, pbr_skinned_program);
+
+    // Compute scene bounds and auto-position camera
+    vec3 scene_center;
+    float scene_radius;
+    compute_scene_center_and_radius(scene, scene_center, &scene_radius);
+    printf("Scene bounds: center=(%.2f, %.2f, %.2f), radius=%.2f\n", scene_center[0],
+           scene_center[1], scene_center[2], scene_radius);
+
+    // Position camera to view the entire scene
+    float camera_distance = scene_radius * 2.5f;
+    if (camera_distance < 1.0f)
+        camera_distance = 100.0f; // Fallback for empty scenes
+
+    vec3 auto_cam_pos = {scene_center[0], scene_center[1] + scene_radius * 0.3f,
+                         scene_center[2] + camera_distance};
+    set_camera_position(camera, auto_cam_pos);
+    set_camera_look_at(camera, scene_center);
+
+    // Adjust clip planes based on scene size
+    float auto_near = fmaxf(scene_radius * 0.01f, 0.01f);
+    float auto_far = scene_radius * 20.0f;
+    if (auto_far < 100.0f)
+        auto_far = 10000.0f;
+    set_camera_perspective(camera, fov_radians, auto_near, auto_far);
+    update_engine_camera_perspective(engine);
+    printf("Camera clip planes: near=%.4f, far=%.2f\n", auto_near, auto_far);
+
+    // Update orbit controller with appropriate distance
+    camera->distance = camera_distance;
+    camera->height = scene_center[1];
+    set_mouse_drag_auto_orbit(drag_controller, true, CAM_ANGULAR_SPEED, camera_distance * 0.5f,
+                              camera_distance * 2.0f);
+
+    update_engine_camera_lookat(engine);
 
     print_scene(scene);
 
