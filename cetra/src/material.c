@@ -22,6 +22,7 @@ Material* create_material() {
     material->roughness = 1.0f;
     material->ao = 1.0f;
     material->opacity = 1.0f;
+    material->alphaCutoff = 0.0f;  // Disabled by default
     material->ior = 1.5f;
     material->filmThickness = 0.0f;
 

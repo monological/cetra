@@ -43,6 +43,7 @@ uniform float metallic;
 uniform float roughness;
 uniform float ao;
 uniform float materialOpacity;
+uniform float alphaCutoff;  // Alpha cutoff threshold for hair/foliage (0 = disabled)
 uniform float ior;
 uniform float filmThickness;
 uniform vec3 camPos;
@@ -285,20 +286,33 @@ void main() {
     if (renderMode == 6) {
         // Albedo Only - only sample albedo texture
         vec3 albedoMap = albedo;
+        float texAlpha = 1.0;
         if (albedoTexExists > 0) {
-            albedoMap = texture(albedoTex, TexCoords).rgb;
-            albedoMap = sRGBToLinear(albedoMap);
+            vec4 albedoSample = texture(albedoTex, TexCoords);
+            albedoMap = sRGBToLinear(albedoSample.rgb);
+            texAlpha = albedoSample.a;
+        }
+        // Alpha cutoff for hair/foliage
+        if (alphaCutoff > 0.0 && texAlpha < alphaCutoff) {
+            discard;
         }
         vec3 color = linearToSRGB(albedoMap);
-        FragColor = vec4(color, materialOpacity);
+        FragColor = vec4(color, materialOpacity * texAlpha);
         return;
     }
 
     // Sample material properties from textures or use uniforms
     vec3 albedoMap = albedo;
+    float texAlpha = 1.0;  // Alpha from albedo texture (for hair/foliage)
     if (albedoTexExists > 0) {
-        albedoMap = texture(albedoTex, TexCoords).rgb;
-        albedoMap = sRGBToLinear(albedoMap);
+        vec4 albedoSample = texture(albedoTex, TexCoords);
+        albedoMap = sRGBToLinear(albedoSample.rgb);
+        texAlpha = albedoSample.a;
+    }
+
+    // Alpha cutoff for hair/foliage - discard early before expensive lighting
+    if (alphaCutoff > 0.0 && texAlpha < alphaCutoff) {
+        discard;
     }
 
     vec3 N;
@@ -335,6 +349,9 @@ void main() {
     float opacity = materialOpacity;
     if (opacityTexExists > 0) {
         opacity = texture(opacityTex, TexCoords).r * materialOpacity;
+    } else if (texAlpha < 1.0) {
+        // Use albedo texture alpha if no separate opacity texture
+        opacity = texAlpha * materialOpacity;
     }
 
     // Microsurface detail - modulates roughness for fine surface detail

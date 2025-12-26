@@ -12,6 +12,7 @@ typedef struct Material {
     float roughness;
     float ao;
     float opacity;
+    float alphaCutoff;   // Alpha cutoff threshold for hair/foliage (0 = disabled, 0.5 typical)
     float ior;           // Index of refraction (1.5 for plastic/glass, 1.33 for water)
     float filmThickness; // Thin-film thickness in nanometers (0 = disabled, 200-600nm typical)
 

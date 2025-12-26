@@ -9,6 +9,7 @@
 #include <assimp/cimport.h>
 #include <assimp/scene.h>
 #include <assimp/postprocess.h>
+#include <assimp/GltfMaterial.h>
 #include <GL/glew.h>
 
 #define STB_IMAGE_IMPLEMENTATION
@@ -38,6 +39,7 @@ typedef struct TextureMapping {
 } TextureMapping;
 
 static const TextureMapping texture_mappings[] = {
+    // Legacy/FBX texture types
     {aiTextureType_DIFFUSE, set_material_albedo_tex, "Diffuse"},
     {aiTextureType_NORMALS, set_material_normal_tex, "Normal"},
     {aiTextureType_METALNESS, set_material_metalness_tex, "Metalness"},
@@ -48,12 +50,16 @@ static const TextureMapping texture_mappings[] = {
     {aiTextureType_OPACITY, set_material_opacity_tex, "Opacity"},
     {aiTextureType_SHEEN, set_material_sheen_tex, "Sheen"},
     {aiTextureType_REFLECTION, set_material_reflectance_tex, "Reflectance"},
+    // glTF/GLB-specific texture types
+    {aiTextureType_BASE_COLOR, set_material_albedo_tex, "BaseColor"},
+    {aiTextureType_NORMAL_CAMERA, set_material_normal_tex, "NormalCamera"},
+    {aiTextureType_EMISSION_COLOR, set_material_emissive_tex, "EmissionColor"},
 };
 
 static const size_t texture_mapping_count = sizeof(texture_mappings) / sizeof(texture_mappings[0]);
 
 /*
- * Extract material properties (color, metallic, roughness) from assimp material
+ * Extract material properties (color, metallic, roughness, alphaCutoff) from assimp material
  */
 static void extract_material_properties(struct aiMaterial* ai_mat, Material* material) {
     struct aiColor4D color;
@@ -80,6 +86,22 @@ static void extract_material_properties(struct aiMaterial* ai_mat, Material* mat
         material->roughness = roughness;
     } else {
         material->roughness = 0.5;
+    }
+
+    // Extract glTF alpha mode and cutoff for hair/foliage transparency
+    struct aiString alphaMode;
+    if (AI_SUCCESS == aiGetMaterialString(ai_mat, AI_MATKEY_GLTF_ALPHAMODE, &alphaMode)) {
+        if (strcmp(alphaMode.data, "MASK") == 0) {
+            // Alpha masking mode - use alphaCutoff
+            ai_real cutoff;
+            if (AI_SUCCESS == aiGetMaterialFloat(ai_mat, AI_MATKEY_GLTF_ALPHACUTOFF, &cutoff)) {
+                material->alphaCutoff = cutoff;
+            } else {
+                material->alphaCutoff = 0.5f;  // glTF default
+            }
+            log_info("Material uses alpha mask mode with cutoff=%.2f", material->alphaCutoff);
+        }
+        // OPAQUE and BLEND modes leave alphaCutoff at 0 (disabled)
     }
 }
 
@@ -204,6 +226,26 @@ static void load_material_texture_async(AsyncLoader* loader, TexturePool* tex_po
     load_texture_async(loader, tex_pool, filepath, async_tex_callback, ctx);
 }
 
+// Helper to load a texture (embedded or file-based) for a material
+static void load_material_texture(Material* material, TexturePool* tex_pool,
+                                  const struct aiScene* ai_scene, AsyncLoader* loader,
+                                  const char* tex_path, void (*setter)(Material*, Texture*),
+                                  const char* tex_type_name) {
+    if (tex_path[0] == '*' && ai_scene) {
+        // Embedded textures are loaded synchronously (data already in memory)
+        Texture* tex = load_embedded_texture(tex_pool, ai_scene, tex_path);
+        if (tex) {
+            setter(material, tex);
+            log_info("%s texture loaded (embedded): %s", tex_type_name, tex->filepath);
+        } else {
+            log_warn("Failed to load embedded %s texture '%s'", tex_type_name, tex_path);
+        }
+    } else {
+        // File-based textures loaded asynchronously
+        load_material_texture_async(loader, tex_pool, material, tex_path, setter, tex_type_name);
+    }
+}
+
 Material* process_ai_material_async(struct aiMaterial* ai_mat, TexturePool* tex_pool,
                                     const struct aiScene* ai_scene, AsyncLoader* loader) {
     if (!ai_mat || !tex_pool || !loader) {
@@ -215,25 +257,28 @@ Material* process_ai_material_async(struct aiMaterial* ai_mat, TexturePool* tex_
 
     struct aiString str;
 
+    // Load textures from the mapping table
     for (size_t i = 0; i < texture_mapping_count; i++) {
         const TextureMapping* mapping = &texture_mappings[i];
         if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, mapping->ai_type, 0, &str, NULL, NULL, NULL,
                                                NULL, NULL, NULL)) {
-            // Check if this is an embedded texture (path starts with '*')
-            if (str.data[0] == '*' && ai_scene) {
-                // Embedded textures are loaded synchronously (data already in memory)
-                Texture* tex = load_embedded_texture(tex_pool, ai_scene, str.data);
-                if (tex) {
-                    mapping->setter(material, tex);
-                    log_info("%s texture loaded (embedded): %s", mapping->name, tex->filepath);
-                } else {
-                    log_warn("Failed to load embedded %s texture '%s'", mapping->name, str.data);
-                }
-            } else {
-                // File-based textures loaded asynchronously
-                load_material_texture_async(loader, tex_pool, material, str.data, mapping->setter,
-                                            mapping->name);
-            }
+            load_material_texture(material, tex_pool, ai_scene, loader, str.data, mapping->setter,
+                                  mapping->name);
+        }
+    }
+
+    // Handle glTF combined metallic-roughness texture (uses same texture for both)
+    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_UNKNOWN, 0, &str, NULL, NULL, NULL,
+                                           NULL, NULL, NULL)) {
+        // glTF often stores metallicRoughness as UNKNOWN type
+        // Only use if we don't already have metalness/roughness textures
+        if (!material->metalness_tex) {
+            load_material_texture(material, tex_pool, ai_scene, loader, str.data,
+                                  set_material_metalness_tex, "MetallicRoughness(metalness)");
+        }
+        if (!material->roughness_tex) {
+            load_material_texture(material, tex_pool, ai_scene, loader, str.data,
+                                  set_material_roughness_tex, "MetallicRoughness(roughness)");
         }
     }
 
