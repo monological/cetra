@@ -319,6 +319,11 @@ int main(int argc, char** argv) {
 
     set_shader_programs_for_nodes(scene->root_node, pbr_shader_program, pbr_skinned_program);
 
+    // Propagate transforms before computing bounds (needed for correct global_transform values)
+    mat4 identity;
+    glm_mat4_identity(identity);
+    apply_transform_to_nodes(scene->root_node, identity);
+
     // Compute scene bounds and auto-position camera
     vec3 scene_center;
     float scene_radius;
