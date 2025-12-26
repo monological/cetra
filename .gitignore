@@ -6,3 +6,4 @@ my_models
 cetra/src/shader_strings.h
 *.a
 
+plans/

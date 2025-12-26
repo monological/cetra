@@ -39,6 +39,7 @@ uniform float nearClip;
 uniform float farClip;
 
 uniform vec3 albedo;
+uniform vec3 emissiveFactor;  // Emissive color factor (multiplied with emissive texture)
 uniform float metallic;
 uniform float roughness;
 uniform float ao;
@@ -343,7 +344,12 @@ void main() {
 
     vec3 emissiveMap = vec3(0.0);
     if (emissiveTexExists > 0) {
-        emissiveMap = sRGBToLinear(texture(emissiveTex, TexCoords).rgb);
+        vec3 texEmissive = sRGBToLinear(texture(emissiveTex, TexCoords).rgb);
+        // Scale by emissiveFactor if set, otherwise use texture directly (backward compat)
+        float factorSum = emissiveFactor.r + emissiveFactor.g + emissiveFactor.b;
+        emissiveMap = texEmissive * (factorSum > 0.001 ? emissiveFactor : vec3(1.0));
+    } else {
+        emissiveMap = emissiveFactor;
     }
 
     float opacity = materialOpacity;

@@ -18,6 +18,7 @@ Material* create_material() {
     }
 
     glm_vec3_fill(material->albedo, 1.0f);
+    glm_vec3_zero(material->emissive);
     material->metallic = 0.0f;
     material->roughness = 1.0f;
     material->ao = 1.0f;
@@ -25,6 +26,7 @@ Material* create_material() {
     material->alphaCutoff = 0.0f;  // Disabled by default
     material->ior = 1.5f;
     material->filmThickness = 0.0f;
+    material->doubleSided = false;
 
     material->albedo_tex = NULL;
     material->normal_tex = NULL;

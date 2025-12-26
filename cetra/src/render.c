@@ -125,6 +125,7 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
     UniformManager* u = program->uniforms;
 
     uniform_set_vec3(u, "albedo", (const float*)&material->albedo);
+    uniform_set_vec3(u, "emissiveFactor", (const float*)&material->emissive);
     uniform_set_float(u, "metallic", material->metallic);
     uniform_set_float(u, "roughness", material->roughness);
     uniform_set_float(u, "ao", material->ao);
@@ -333,9 +334,18 @@ static void _render_node(Scene* scene, SceneNode* node, Camera* camera, mat4 mod
         // Update skinning uniforms for skinned meshes
         _update_skinning_uniforms(program, mesh);
 
+        // Handle double-sided materials
+        if (mat->doubleSided) {
+            glDisable(GL_CULL_FACE);
+        }
+
         glBindVertexArray(mesh->vao);
         glDrawElements(mesh->draw_mode, mesh->index_count, GL_UNSIGNED_INT, 0);
         glBindVertexArray(0);
+
+        if (mat->doubleSided) {
+            glEnable(GL_CULL_FACE);
+        }
     }
 }
 

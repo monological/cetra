@@ -59,12 +59,21 @@ static const TextureMapping texture_mappings[] = {
 static const size_t texture_mapping_count = sizeof(texture_mappings) / sizeof(texture_mappings[0]);
 
 /*
- * Extract material properties (color, metallic, roughness, alphaCutoff) from assimp material
+ * Extract material properties from assimp material
  */
 static void extract_material_properties(struct aiMaterial* ai_mat, Material* material) {
     struct aiColor4D color;
 
-    if (AI_SUCCESS == aiGetMaterialColor(ai_mat, AI_MATKEY_COLOR_DIFFUSE, &color)) {
+    // Try glTF baseColorFactor first, fall back to diffuse color
+    if (AI_SUCCESS == aiGetMaterialColor(ai_mat, AI_MATKEY_BASE_COLOR, &color)) {
+        material->albedo[0] = color.r;
+        material->albedo[1] = color.g;
+        material->albedo[2] = color.b;
+        // Use alpha from baseColorFactor for opacity
+        if (color.a < 1.0f) {
+            material->opacity = color.a;
+        }
+    } else if (AI_SUCCESS == aiGetMaterialColor(ai_mat, AI_MATKEY_COLOR_DIFFUSE, &color)) {
         material->albedo[0] = color.r;
         material->albedo[1] = color.g;
         material->albedo[2] = color.b;
@@ -72,6 +81,13 @@ static void extract_material_properties(struct aiMaterial* ai_mat, Material* mat
         material->albedo[0] = 0.1;
         material->albedo[1] = 0.1;
         material->albedo[2] = 0.1;
+    }
+
+    // Extract emissive factor
+    if (AI_SUCCESS == aiGetMaterialColor(ai_mat, AI_MATKEY_COLOR_EMISSIVE, &color)) {
+        material->emissive[0] = color.r;
+        material->emissive[1] = color.g;
+        material->emissive[2] = color.b;
     }
 
     ai_real metallic, roughness;
@@ -86,6 +102,12 @@ static void extract_material_properties(struct aiMaterial* ai_mat, Material* mat
         material->roughness = roughness;
     } else {
         material->roughness = 0.5;
+    }
+
+    // Extract doubleSided flag
+    int twoSided = 0;
+    if (AI_SUCCESS == aiGetMaterialInteger(ai_mat, AI_MATKEY_TWOSIDED, &twoSided)) {
+        material->doubleSided = (twoSided != 0);
     }
 
     // Extract glTF alpha mode and cutoff for hair/foliage transparency

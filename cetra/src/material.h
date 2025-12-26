@@ -1,6 +1,7 @@
 #ifndef _MATERIAL_H_
 #define _MATERIAL_H_
 
+#include <stdbool.h>
 #include <cglm/cglm.h>
 
 #include "texture.h"
@@ -8,6 +9,7 @@
 
 typedef struct Material {
     vec3 albedo;
+    vec3 emissive; // Emissive color factor (multiplied with emissive texture)
     float metallic;
     float roughness;
     float ao;
@@ -15,6 +17,7 @@ typedef struct Material {
     float alphaCutoff;   // Alpha cutoff threshold for hair/foliage (0 = disabled, 0.5 typical)
     float ior;           // Index of refraction (1.5 for plastic/glass, 1.33 for water)
     float filmThickness; // Thin-film thickness in nanometers (0 = disabled, 200-600nm typical)
+    bool doubleSided;    // Disable backface culling for this material
 
     // Core PBR Textures
     Texture* albedo_tex;            // Albedo (Diffuse) Map
