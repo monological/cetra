@@ -1,10 +1,15 @@
 repos:
+  - repo: local
+    hooks:
+      - id: clang-format
+        name: clang-format
+        entry: bash -c 'clang-format -i "$@" && git add "$@"' --
+        language: system
+        types: [c, c++]
+        exclude: '^cetra/src/ext/'
   - repo: https://github.com/pocc/pre-commit-hooks
     rev: v1.3.5
     hooks:
-      - id: clang-format
-        args: [-i]
-        exclude: '^cetra/src/ext/'
       - id: cppcheck
         args: [--std=c11, --suppress=missingIncludeSystem, --suppress=missingInclude, --suppress=unusedFunction, --suppress=unmatchedSuppression, --suppress=staticFunction, --suppress=unusedStructMember, --suppress=toomanyconfigs, --suppress=normalCheckLevelMaxBranches, --suppress=checkersReport, --suppress=unreachableCode, --suppress=variableScope, --suppress=knownConditionTrueFalse, --suppress=constParameterCallback, "--suppress=*:*ext/*"]
         exclude: '^cetra/src/ext/'
