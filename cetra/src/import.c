@@ -83,7 +83,62 @@ static void extract_material_properties(struct aiMaterial* ai_mat, Material* mat
     }
 }
 
-Material* process_ai_material(struct aiMaterial* ai_mat, TexturePool* tex_pool) {
+/*
+ * Load embedded texture from aiScene
+ */
+static Texture* load_embedded_texture(TexturePool* tex_pool, const struct aiScene* ai_scene,
+                                      const char* tex_path) {
+    if (!ai_scene || !tex_path || tex_path[0] != '*') {
+        return NULL;
+    }
+
+    // Parse embedded texture index from path (e.g., "*0" -> 0)
+    int tex_index = atoi(tex_path + 1);
+    if (tex_index < 0 || (unsigned int)tex_index >= ai_scene->mNumTextures) {
+        log_error("Invalid embedded texture index: %s (max: %u)", tex_path, ai_scene->mNumTextures);
+        return NULL;
+    }
+
+    const struct aiTexture* ai_tex = ai_scene->mTextures[tex_index];
+    if (!ai_tex) {
+        log_error("Embedded texture at index %d is NULL", tex_index);
+        return NULL;
+    }
+
+    unsigned char* pixels = NULL;
+    int width, height, channels;
+    bool needs_free = false;
+
+    if (ai_tex->mHeight == 0) {
+        // Compressed format (PNG/JPG) - mWidth is buffer size in bytes
+        pixels = stbi_load_from_memory((const unsigned char*)ai_tex->pcData, ai_tex->mWidth, &width,
+                                       &height, &channels, 0);
+        if (!pixels) {
+            log_error("Failed to decode embedded texture %s (format hint: %.4s)", tex_path,
+                      ai_tex->achFormatHint);
+            return NULL;
+        }
+        needs_free = true;
+    } else {
+        // Raw RGBA data - mWidth/mHeight are actual dimensions
+        pixels = (unsigned char*)ai_tex->pcData;
+        width = ai_tex->mWidth;
+        height = ai_tex->mHeight;
+        channels = 4; // Assimp raw textures are always ARGB8888
+        needs_free = false;
+    }
+
+    Texture* tex = load_texture_from_memory(tex_pool, tex_path, pixels, width, height, channels);
+
+    if (needs_free) {
+        stbi_image_free(pixels);
+    }
+
+    return tex;
+}
+
+Material* process_ai_material(struct aiMaterial* ai_mat, TexturePool* tex_pool,
+                              const struct aiScene* ai_scene) {
     if (!ai_mat || !tex_pool)
         return NULL;
 
@@ -96,7 +151,15 @@ Material* process_ai_material(struct aiMaterial* ai_mat, TexturePool* tex_pool) 
         const TextureMapping* mapping = &texture_mappings[i];
         if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, mapping->ai_type, 0, &str, NULL, NULL, NULL,
                                                NULL, NULL, NULL)) {
-            Texture* tex = load_texture_path_into_pool(tex_pool, str.data);
+            Texture* tex = NULL;
+
+            // Check if this is an embedded texture (path starts with '*')
+            if (str.data[0] == '*' && ai_scene) {
+                tex = load_embedded_texture(tex_pool, ai_scene, str.data);
+            } else {
+                tex = load_texture_path_into_pool(tex_pool, str.data);
+            }
+
             if (tex) {
                 mapping->setter(material, tex);
                 log_info("%s texture loaded: %s", mapping->name, tex->filepath);
@@ -142,7 +205,7 @@ static void load_material_texture_async(AsyncLoader* loader, TexturePool* tex_po
 }
 
 Material* process_ai_material_async(struct aiMaterial* ai_mat, TexturePool* tex_pool,
-                                    AsyncLoader* loader) {
+                                    const struct aiScene* ai_scene, AsyncLoader* loader) {
     if (!ai_mat || !tex_pool || !loader) {
         return NULL;
     }
@@ -156,8 +219,21 @@ Material* process_ai_material_async(struct aiMaterial* ai_mat, TexturePool* tex_
         const TextureMapping* mapping = &texture_mappings[i];
         if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, mapping->ai_type, 0, &str, NULL, NULL, NULL,
                                                NULL, NULL, NULL)) {
-            load_material_texture_async(loader, tex_pool, material, str.data, mapping->setter,
-                                        mapping->name);
+            // Check if this is an embedded texture (path starts with '*')
+            if (str.data[0] == '*' && ai_scene) {
+                // Embedded textures are loaded synchronously (data already in memory)
+                Texture* tex = load_embedded_texture(tex_pool, ai_scene, str.data);
+                if (tex) {
+                    mapping->setter(material, tex);
+                    log_info("%s texture loaded (embedded): %s", mapping->name, tex->filepath);
+                } else {
+                    log_warn("Failed to load embedded %s texture '%s'", mapping->name, str.data);
+                }
+            } else {
+                // File-based textures loaded asynchronously
+                load_material_texture_async(loader, tex_pool, material, str.data, mapping->setter,
+                                            mapping->name);
+            }
         }
     }
 
@@ -624,7 +700,8 @@ SceneNode* process_ai_node(Scene* scene, struct aiNode* ai_node, const struct ai
         // Process material
         if (ai_mesh->mMaterialIndex >= 0) {
             unsigned int matIndex = ai_mesh->mMaterialIndex;
-            mesh->material = process_ai_material(ai_scene->mMaterials[matIndex], tex_pool);
+            mesh->material =
+                process_ai_material(ai_scene->mMaterials[matIndex], tex_pool, ai_scene);
             if (mesh->material) {
                 add_material_to_scene(scene, mesh->material);
             }
@@ -740,8 +817,8 @@ static SceneNode* process_ai_node_async(Scene* scene, struct aiNode* ai_node,
         // Process material with async texture loading
         if (ai_mesh->mMaterialIndex >= 0) {
             unsigned int matIndex = ai_mesh->mMaterialIndex;
-            mesh->material =
-                process_ai_material_async(ai_scene->mMaterials[matIndex], tex_pool, loader);
+            mesh->material = process_ai_material_async(ai_scene->mMaterials[matIndex], tex_pool,
+                                                       ai_scene, loader);
             add_material_to_scene(scene, mesh->material);
         }
 

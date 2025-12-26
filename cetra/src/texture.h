@@ -61,6 +61,8 @@ void set_texture_pool_directory(TexturePool* pool, const char* directory);
 Texture* get_texture_from_pool(TexturePool* pool, const char* filepath);
 void add_texture_to_pool(TexturePool* pool, Texture* texture);
 Texture* load_texture_path_into_pool(TexturePool* pool, const char* filepath);
+Texture* load_texture_from_memory(TexturePool* pool, const char* key, const unsigned char* pixels,
+                                  int width, int height, int channels);
 void remove_texture_from_pool(TexturePool* pool, const char* filepath);
 void clear_texture_pool(TexturePool* pool);
 

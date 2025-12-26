@@ -291,6 +291,77 @@ Texture* load_texture_path_into_pool(TexturePool* pool, const char* filepath) {
     return new_texture;
 }
 
+Texture* load_texture_from_memory(TexturePool* pool, const char* key, const unsigned char* pixels,
+                                  int width, int height, int channels) {
+    if (!pool || !key || !pixels) {
+        log_error("Invalid pool, key, or pixel data");
+        return NULL;
+    }
+
+    // Check cache first
+    Texture* cached_texture = get_texture_from_pool(pool, key);
+    if (cached_texture) {
+        return cached_texture;
+    }
+
+    Texture* new_texture = create_texture();
+    if (!new_texture) {
+        return NULL;
+    }
+
+    // Generate texture
+    GLuint textureID = 0;
+    glGenTextures(1, &textureID);
+    glBindTexture(GL_TEXTURE_2D, textureID);
+
+    // Set texture parameters
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+    // Determine format
+    GLenum internal_format;
+    GLenum data_format;
+
+    if (channels == 1) {
+        internal_format = GL_RED;
+        data_format = GL_RED;
+    } else if (channels == 2) {
+        internal_format = GL_RG;
+        data_format = GL_RG;
+    } else if (channels == 3) {
+        internal_format = GL_SRGB;
+        data_format = GL_RGB;
+    } else {
+        internal_format = GL_SRGB_ALPHA;
+        data_format = GL_RGBA;
+    }
+
+    // Upload texture data
+    glTexImage2D(GL_TEXTURE_2D, 0, internal_format, width, height, 0, data_format, GL_UNSIGNED_BYTE,
+                 pixels);
+    check_gl_error("embedded texture upload");
+    glGenerateMipmap(GL_TEXTURE_2D);
+    check_gl_error("embedded mipmap generation");
+
+    // Update texture properties
+    new_texture->id = textureID;
+    new_texture->filepath = safe_strdup(key);
+    new_texture->width = width;
+    new_texture->height = height;
+    new_texture->internal_format = internal_format;
+    new_texture->data_format = data_format;
+
+    // Add texture to the pool
+    add_texture_to_pool(pool, new_texture);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    log_info("Loaded embedded texture '%s' (%dx%d, %d channels)", key, width, height, channels);
+
+    return new_texture;
+}
+
 void remove_texture_from_pool(TexturePool* pool, const char* filepath) {
     if (pool && filepath) {
         Texture* to_remove = NULL;

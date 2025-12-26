@@ -16,11 +16,12 @@
 // Forward declaration
 struct AsyncLoader;
 
-Material* process_ai_material(struct aiMaterial* ai_mat, TexturePool* tex_pool);
+Material* process_ai_material(struct aiMaterial* ai_mat, TexturePool* tex_pool,
+                              const struct aiScene* ai_scene);
 
 // Async variant - textures loaded in parallel, set via callbacks
 Material* process_ai_material_async(struct aiMaterial* ai_mat, TexturePool* tex_pool,
-                                    struct AsyncLoader* loader);
+                                    const struct aiScene* ai_scene, struct AsyncLoader* loader);
 
 void process_ai_mesh(Mesh* mesh, struct aiMesh* ai_mesh);
 
