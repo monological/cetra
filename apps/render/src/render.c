@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdint.h>
+#include <string.h>
 #include <assert.h>
 
 #include <GL/glew.h>
@@ -18,6 +19,7 @@
 #include "cetra/import.h"
 #include "cetra/render.h"
 #include "cetra/transform.h"
+#include "cetra/animation.h"
 #include "cetra/ibl.h"
 #include "cetra/app.h"
 
@@ -37,16 +39,136 @@
 /*
  * Constants
  */
-const unsigned int HEIGHT = 1080;
-const unsigned int WIDTH = 1920;
+#define DEFAULT_WIDTH 1920
+#define DEFAULT_HEIGHT 1080
+#define MAX_ANIM_FILES 32
+
 const float MIN_DIST = 2000.0f;
 const float MAX_DIST = 3000.0f;
 const float CAM_ANGULAR_SPEED = 0.5f;
 
 /*
+ * Command line arguments
+ */
+typedef struct {
+    const char* model_path;
+    const char* texture_dir;
+    const char* hdr_path;
+    const char* anim_files[MAX_ANIM_FILES];
+    int anim_count;
+    int width;
+    int height;
+    int show_help;
+} RenderArgs;
+
+static void print_usage(const char* prog) {
+    fprintf(stderr, "Usage: %s -m <model> [options]\n\n", prog);
+    fprintf(stderr, "Options:\n");
+    fprintf(stderr, "  -m, --model <path>     Model file (FBX, glTF, OBJ) [required]\n");
+    fprintf(stderr, "  -t, --textures <dir>   Texture directory\n");
+    fprintf(stderr, "  -e, --env <path>       HDR environment map for IBL\n");
+    fprintf(stderr, "  -a, --anim <path>      Animation file (can be repeated)\n");
+    fprintf(stderr, "  -W, --width <int>      Window width (default: %d)\n", DEFAULT_WIDTH);
+    fprintf(stderr, "  -H, --height <int>     Window height (default: %d)\n", DEFAULT_HEIGHT);
+    fprintf(stderr, "  -h, --help             Show this help message\n");
+    fprintf(stderr, "\nExamples:\n");
+    fprintf(stderr, "  %s -m character.fbx -t textures/\n", prog);
+    fprintf(stderr, "  %s -m character.fbx -a walk.fbx -a run.fbx -e sky.hdr\n", prog);
+}
+
+static int parse_args(int argc, char** argv, RenderArgs* args) {
+    memset(args, 0, sizeof(RenderArgs));
+    args->width = DEFAULT_WIDTH;
+    args->height = DEFAULT_HEIGHT;
+
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
+            args->show_help = 1;
+            return 0;
+        } else if (strcmp(argv[i], "-m") == 0 || strcmp(argv[i], "--model") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->model_path = argv[i];
+        } else if (strcmp(argv[i], "-t") == 0 || strcmp(argv[i], "--textures") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->texture_dir = argv[i];
+        } else if (strcmp(argv[i], "-e") == 0 || strcmp(argv[i], "--env") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->hdr_path = argv[i];
+        } else if (strcmp(argv[i], "-a") == 0 || strcmp(argv[i], "--anim") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            if (args->anim_count >= MAX_ANIM_FILES) {
+                fprintf(stderr, "Error: too many animation files (max %d)\n", MAX_ANIM_FILES);
+                return -1;
+            }
+            args->anim_files[args->anim_count++] = argv[i];
+        } else if (strcmp(argv[i], "-W") == 0 || strcmp(argv[i], "--width") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->width = atoi(argv[i]);
+            if (args->width <= 0) {
+                fprintf(stderr, "Error: invalid width '%s'\n", argv[i]);
+                return -1;
+            }
+        } else if (strcmp(argv[i], "-H") == 0 || strcmp(argv[i], "--height") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->height = atoi(argv[i]);
+            if (args->height <= 0) {
+                fprintf(stderr, "Error: invalid height '%s'\n", argv[i]);
+                return -1;
+            }
+        } else if (argv[i][0] == '-') {
+            fprintf(stderr, "Error: unknown option '%s'\n", argv[i]);
+            return -1;
+        } else {
+            // Positional argument - treat as model path for backwards compatibility
+            if (!args->model_path) {
+                args->model_path = argv[i];
+            } else if (!args->texture_dir) {
+                args->texture_dir = argv[i];
+            } else if (!args->hdr_path) {
+                args->hdr_path = argv[i];
+            } else {
+                fprintf(stderr, "Error: unexpected argument '%s'\n", argv[i]);
+                return -1;
+            }
+        }
+    }
+
+    if (!args->show_help && !args->model_path) {
+        fprintf(stderr, "Error: model path is required\n\n");
+        return -1;
+    }
+
+    return 0;
+}
+
+/*
  * Mouse drag controller
  */
 static MouseDragController* drag_controller = NULL;
+
+/*
+ * Animation playback state
+ */
+static AnimationState* anim_state = NULL;
+static float last_frame_time = 0.0f;
 
 /*
  * Callbacks
@@ -115,6 +237,14 @@ void render_scene_callback(Engine* engine, Scene* current_scene) {
         return;
 
     float time_value = glfwGetTime();
+    float delta_time = time_value - last_frame_time;
+    last_frame_time = time_value;
+
+    // Update animation
+    if (anim_state && anim_state->playing) {
+        update_animation(anim_state, delta_time);
+        set_render_animation_state(anim_state);
+    }
 
     // Update camera via drag controller
     if (drag_controller) {
@@ -177,17 +307,19 @@ void configure_visor_materials(Scene* scene) {
  * CETRA MAIN
  */
 int main(int argc, char** argv) {
+    RenderArgs args;
 
-    if (argc < 2) {
-        fprintf(stderr, "Usage: %s <MODEL_PATH> [TEXTURE_DIR] [HDR_PATH]\n", argv[0]);
+    if (parse_args(argc, argv, &args) != 0) {
+        print_usage(argv[0]);
         return -1;
     }
 
-    const char* model_path = argv[1];
-    const char* texture_dir = argc > 2 ? argv[2] : NULL;
-    const char* hdr_path = argc > 3 ? argv[3] : NULL;
+    if (args.show_help) {
+        print_usage(argv[0]);
+        return 0;
+    }
 
-    Engine* engine = create_engine("Cetra Engine", WIDTH, HEIGHT);
+    Engine* engine = create_engine("Cetra Engine", args.width, args.height);
 
     if (init_engine(engine) != 0) {
         fprintf(stderr, "Failed to initialize engine\n");
@@ -256,9 +388,9 @@ int main(int argc, char** argv) {
      */
 
     Scene* scene =
-        create_scene_from_model_path_async(model_path, texture_dir, engine->async_loader);
+        create_scene_from_model_path_async(args.model_path, args.texture_dir, engine->async_loader);
     if (!scene) {
-        fprintf(stderr, "Failed to import model: %s\n", model_path);
+        fprintf(stderr, "Failed to import model: %s\n", args.model_path);
         return -1;
     }
 
@@ -276,7 +408,7 @@ int main(int argc, char** argv) {
 
     configure_visor_materials(scene);
 
-    if (hdr_path) {
+    if (args.hdr_path) {
         // When using IBL, add a single soft key light at reduced intensity
         Light* key = create_light();
         if (key) {
@@ -295,24 +427,49 @@ int main(int argc, char** argv) {
         }
 
         IBLResources* ibl = create_ibl_resources();
-        if (ibl && load_hdr_environment(ibl, hdr_path) == 0) {
+        if (ibl && load_hdr_environment(ibl, args.hdr_path) == 0) {
             if (precompute_ibl(ibl, engine) == 0) {
                 scene->ibl = ibl;
                 scene->render_skybox = true;
                 scene->skybox_exposure = 1.0f;
-                printf("IBL loaded from: %s\n", hdr_path);
+                printf("IBL loaded from: %s\n", args.hdr_path);
             } else {
                 fprintf(stderr, "Failed to precompute IBL\n");
                 free_ibl_resources(ibl);
             }
         } else {
-            fprintf(stderr, "Failed to load HDR: %s\n", hdr_path);
+            fprintf(stderr, "Failed to load HDR: %s\n", args.hdr_path);
             if (ibl)
                 free_ibl_resources(ibl);
         }
     } else {
         // No IBL - use directional lights for illumination
         create_three_point_lights(scene, 3.0f);
+    }
+
+    // Load additional animation files if provided
+    if (args.anim_count > 0 && scene->skeleton_count > 0) {
+        Skeleton* skeleton = scene->skeletons[0];
+        for (int i = 0; i < args.anim_count; i++) {
+            int loaded = load_animations_from_file(scene, skeleton, args.anim_files[i]);
+            if (loaded < 0) {
+                fprintf(stderr, "Warning: failed to load animation '%s'\n", args.anim_files[i]);
+            }
+        }
+        printf("Total animations: %zu\n", scene->animation_count);
+    } else if (args.anim_count > 0) {
+        fprintf(stderr, "Warning: animation files specified but model has no skeleton\n");
+    }
+
+    // Start playing the first animation if available
+    if (scene->animation_count > 0 && scene->skeleton_count > 0) {
+        anim_state = create_animation_state(scene->skeletons[0]);
+        if (anim_state) {
+            set_animation(anim_state, scene->animations[0]);
+            anim_state->looping = true;
+            play_animation(anim_state);
+            printf("Playing animation: %s\n", scene->animations[0]->name);
+        }
     }
 
     upload_buffers_to_gpu_for_nodes(scene->root_node);
@@ -368,6 +525,9 @@ int main(int argc, char** argv) {
     run_engine_render_loop(engine, render_scene_callback);
 
     printf("Cleaning up...\n");
+    if (anim_state) {
+        free_animation_state(anim_state);
+    }
     free_mouse_drag_controller(drag_controller);
     free_engine(engine);
 
