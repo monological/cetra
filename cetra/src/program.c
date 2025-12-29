@@ -538,3 +538,15 @@ ShaderProgram* create_text_program() {
 
     return program;
 }
+
+ShaderProgram* create_bone_program() {
+    ShaderProgram* program = NULL;
+
+    if ((program = create_program_from_source("bone", bone_vert_shader_str, bone_frag_shader_str,
+                                              NULL)) == NULL) {
+        log_error("Failed to initialize bone shader program");
+        return NULL;
+    }
+
+    return program;
+}

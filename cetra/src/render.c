@@ -519,3 +519,121 @@ void render_current_scene(Engine* engine, float time_value) {
     // Reset program state at end of frame
     glUseProgram(0);
 }
+
+void render_skeleton_bones(Engine* engine, Skeleton* skeleton, AnimationState* anim_state) {
+    if (!engine || !engine->bone_program) {
+        return;
+    }
+
+    // Need at least skeleton or anim_state
+    Skeleton* skel = skeleton ? skeleton : (anim_state ? anim_state->skeleton : NULL);
+    if (!skel) return;
+
+    // Allocate for both bind pose (green) and animated pose (red)
+    // Max 2 sets of bones * 2 vertices per bone * 6 floats per vertex
+    float* vertices = malloc(skel->bone_count * 2 * 2 * 6 * sizeof(float));
+    if (!vertices) return;
+
+    size_t vertex_count = 0;
+
+    // First pass: Draw BIND POSE in GREEN (from skeleton's inverse_bind_pose)
+    if (skeleton) {
+        // Compute bind pose global transforms by inverting inverse_bind_pose
+        mat4* bind_globals = malloc(skel->bone_count * sizeof(mat4));
+        if (bind_globals) {
+            for (size_t i = 0; i < skel->bone_count; i++) {
+                glm_mat4_inv(skel->bones[i].inverse_bind_pose, bind_globals[i]);
+            }
+
+            for (size_t i = 0; i < skel->bone_count; i++) {
+                const Bone* bone = &skel->bones[i];
+                if (bone->parent_index < 0) continue;
+
+                float child_x = bind_globals[i][3][0];
+                float child_y = bind_globals[i][3][1];
+                float child_z = bind_globals[i][3][2];
+
+                float parent_x = bind_globals[bone->parent_index][3][0];
+                float parent_y = bind_globals[bone->parent_index][3][1];
+                float parent_z = bind_globals[bone->parent_index][3][2];
+
+                // GREEN for bind pose
+                float r = 0.0f, g = 1.0f, b = 0.0f;
+
+                vertices[vertex_count++] = parent_x;
+                vertices[vertex_count++] = parent_y;
+                vertices[vertex_count++] = parent_z;
+                vertices[vertex_count++] = r;
+                vertices[vertex_count++] = g;
+                vertices[vertex_count++] = b;
+
+                vertices[vertex_count++] = child_x;
+                vertices[vertex_count++] = child_y;
+                vertices[vertex_count++] = child_z;
+                vertices[vertex_count++] = r;
+                vertices[vertex_count++] = g;
+                vertices[vertex_count++] = b;
+            }
+            free(bind_globals);
+        }
+    }
+
+    // Second pass: Draw ANIMATED POSE in RED (from animation state)
+    if (anim_state && anim_state->global_transforms) {
+        for (size_t i = 0; i < skel->bone_count; i++) {
+            const Bone* bone = &skel->bones[i];
+            if (bone->parent_index < 0) continue;
+
+            float child_x = anim_state->global_transforms[i][3][0];
+            float child_y = anim_state->global_transforms[i][3][1];
+            float child_z = anim_state->global_transforms[i][3][2];
+
+            float parent_x = anim_state->global_transforms[bone->parent_index][3][0];
+            float parent_y = anim_state->global_transforms[bone->parent_index][3][1];
+            float parent_z = anim_state->global_transforms[bone->parent_index][3][2];
+
+            // RED for animated pose
+            float r = 1.0f, g = 0.0f, b = 0.0f;
+
+            vertices[vertex_count++] = parent_x;
+            vertices[vertex_count++] = parent_y;
+            vertices[vertex_count++] = parent_z;
+            vertices[vertex_count++] = r;
+            vertices[vertex_count++] = g;
+            vertices[vertex_count++] = b;
+
+            vertices[vertex_count++] = child_x;
+            vertices[vertex_count++] = child_y;
+            vertices[vertex_count++] = child_z;
+            vertices[vertex_count++] = r;
+            vertices[vertex_count++] = g;
+            vertices[vertex_count++] = b;
+        }
+    }
+
+    if (vertex_count == 0) {
+        free(vertices);
+        return;
+    }
+
+    // Upload to GPU and draw
+    glBindVertexArray(engine->bone_line_vao);
+    glBindBuffer(GL_ARRAY_BUFFER, engine->bone_line_vbo);
+    glBufferData(GL_ARRAY_BUFFER, vertex_count * sizeof(float), vertices, GL_DYNAMIC_DRAW);
+
+    // Use bone program
+    glUseProgram(engine->bone_program->id);
+    glUniformMatrix4fv(glGetUniformLocation(engine->bone_program->id, "view"),
+                       1, GL_FALSE, (float*)engine->view_matrix);
+    glUniformMatrix4fv(glGetUniformLocation(engine->bone_program->id, "projection"),
+                       1, GL_FALSE, (float*)engine->projection_matrix);
+
+    // Disable depth test for X-ray effect (bones always visible)
+    glDisable(GL_DEPTH_TEST);
+    glLineWidth(3.0f);
+    glDrawArrays(GL_LINES, 0, (GLsizei)(vertex_count / 6));
+    glEnable(GL_DEPTH_TEST);
+    glLineWidth(1.0f);
+
+    free(vertices);
+}

@@ -21,4 +21,10 @@ void render_current_scene(Engine* engine, float time_value);
 void set_render_animation_state(AnimationState* state);
 AnimationState* get_render_animation_state(void);
 
+// Bone X-ray visualization
+// Renders skeleton bones as colored lines overlaid on the model
+// If anim_state is provided, shows animated pose in red
+// If skeleton is provided, shows bind pose in green
+void render_skeleton_bones(Engine* engine, Skeleton* skeleton, AnimationState* anim_state);
+
 #endif // _RENDER_H_

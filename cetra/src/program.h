@@ -56,6 +56,9 @@ ShaderProgram* create_ibl_brdf_program();
 // Text Program
 ShaderProgram* create_text_program();
 
+// Bone Visualization Program
+ShaderProgram* create_bone_program();
+
 size_t calculate_max_lights();
 
 #endif // _PROGRAM_H_

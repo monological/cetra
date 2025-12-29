@@ -260,6 +260,12 @@ void render_scene_callback(Engine* engine, Scene* current_scene) {
     apply_transform_to_nodes(root_node, engine->model_matrix);
 
     render_current_scene(engine, time_value);
+
+    // Render skeleton bones if enabled
+    if (engine->show_bones) {
+        Skeleton* skel = (current_scene->skeleton_count > 0) ? current_scene->skeletons[0] : NULL;
+        render_skeleton_bones(engine, skel, anim_state);
+    }
 }
 
 /*
@@ -448,10 +454,11 @@ int main(int argc, char** argv) {
     }
 
     // Load additional animation files if provided
+    // Enable retargeting by default to support Mixamo animations on custom rigs
     if (args.anim_count > 0 && scene->skeleton_count > 0) {
         Skeleton* skeleton = scene->skeletons[0];
         for (int i = 0; i < args.anim_count; i++) {
-            int loaded = load_animations_from_file(scene, skeleton, args.anim_files[i]);
+            int loaded = load_animations_from_file(scene, skeleton, args.anim_files[i], true);
             if (loaded < 0) {
                 fprintf(stderr, "Warning: failed to load animation '%s'\n", args.anim_files[i]);
             }

@@ -86,6 +86,12 @@ typedef struct Engine {
     bool show_wireframe;
     bool show_xyz;
     bool show_fps;
+    bool show_bones; // X-ray bone visualization
+
+    // Bone visualization
+    ShaderProgram* bone_program;
+    GLuint bone_line_vao;
+    GLuint bone_line_vbo;
 
     InputState input;
 

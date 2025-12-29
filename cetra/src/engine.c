@@ -105,6 +105,11 @@ Engine* create_engine(const char* window_title, int width, int height) {
     engine->show_wireframe = false;
     engine->show_xyz = false;
     engine->show_fps = false;
+    engine->show_bones = false;
+
+    engine->bone_program = NULL;
+    engine->bone_line_vao = 0;
+    engine->bone_line_vbo = 0;
 
     init_input_state(&engine->input);
 
@@ -356,6 +361,24 @@ int init_engine(Engine* engine) {
             add_shader_program_to_engine(engine, text_prog);
             engine->text_renderer->text_program = text_prog;
         }
+    }
+
+    // Initialize bone visualization
+    glGenVertexArrays(1, &engine->bone_line_vao);
+    glGenBuffers(1, &engine->bone_line_vbo);
+    glBindVertexArray(engine->bone_line_vao);
+    glBindBuffer(GL_ARRAY_BUFFER, engine->bone_line_vbo);
+    // Position attribute (location 0)
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+    // Color attribute (location 1)
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
+    glEnableVertexAttribArray(1);
+    glBindVertexArray(0);
+
+    engine->bone_program = create_bone_program();
+    if (engine->bone_program) {
+        add_shader_program_to_engine(engine, engine->bone_program);
     }
 
     return 0;
@@ -774,6 +797,12 @@ void render_nuklear_gui(Engine* engine) {
             // Button for toggling wireframe
             if (nk_button_label(engine->nk_ctx, "Show Wireframe")) {
                 set_engine_show_wireframe(engine, !engine->show_wireframe);
+            }
+
+            // Button for toggling bone X-ray
+            nk_layout_row_dynamic(engine->nk_ctx, 30, 1);
+            if (nk_button_label(engine->nk_ctx, engine->show_bones ? "Hide Bones" : "Show Bones")) {
+                engine->show_bones = !engine->show_bones;
             }
 
             // cam modes
