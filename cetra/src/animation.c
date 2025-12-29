@@ -127,6 +127,36 @@ Bone* get_bone_by_index(Skeleton* skeleton, int index) {
     return &skeleton->bones[index];
 }
 
+void recalculate_inverse_bind_poses(Skeleton* skeleton) {
+    if (!skeleton || skeleton->bone_count == 0) return;
+
+    log_info("Recalculating inverse_bind_poses for skeleton '%s' (%zu bones)",
+             skeleton->name ? skeleton->name : "unnamed", skeleton->bone_count);
+
+    // Temporary storage for global transforms
+    mat4* globals = malloc(skeleton->bone_count * sizeof(mat4));
+    if (!globals) return;
+
+    // Bones are ordered parent-first, so parent is always processed before child
+    for (size_t i = 0; i < skeleton->bone_count; i++) {
+        Bone* bone = &skeleton->bones[i];
+
+        if (bone->parent_index < 0) {
+            // Root bone: global = local
+            glm_mat4_copy(bone->local_transform, globals[i]);
+        } else {
+            // Child bone: global = parent_global * local
+            glm_mat4_mul(globals[bone->parent_index], bone->local_transform, globals[i]);
+        }
+
+        // inverse_bind_pose = inverse(global)
+        glm_mat4_inv(globals[i], bone->inverse_bind_pose);
+    }
+
+    free(globals);
+    log_info("Recalculation complete");
+}
+
 // ============================================================================
 // Animation Channel
 // ============================================================================

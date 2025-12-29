@@ -48,6 +48,7 @@ int add_bone_to_skeleton(Skeleton* skeleton, const char* name, int parent_index,
 int get_bone_index_by_name(Skeleton* skeleton, const char* name);
 Bone* get_bone_by_name(Skeleton* skeleton, const char* name);
 Bone* get_bone_by_index(Skeleton* skeleton, int index);
+void recalculate_inverse_bind_poses(Skeleton* skeleton);
 
 // --- Keyframes ---
 

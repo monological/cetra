@@ -578,8 +578,8 @@ void render_skeleton_bones(Engine* engine, Skeleton* skeleton, AnimationState* a
         }
     }
 
-    // Second pass: Draw ANIMATED POSE in RED (from animation state)
-    if (anim_state && anim_state->global_transforms) {
+    // Second pass: Draw ANIMATED POSE in RED (when animation has been played)
+    if (anim_state && anim_state->global_transforms && anim_state->current_time > 0.0f) {
         for (size_t i = 0; i < skel->bone_count; i++) {
             const Bone* bone = &skel->bones[i];
             if (bone->parent_index < 0) continue;

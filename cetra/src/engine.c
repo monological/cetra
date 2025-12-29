@@ -17,6 +17,7 @@
 #include "transform.h"
 #include "intersect.h"
 #include "shadow.h"
+#include "render.h"
 
 #define NK_INCLUDE_FIXED_TYPES
 #define NK_INCLUDE_STANDARD_IO
@@ -803,6 +804,27 @@ void render_nuklear_gui(Engine* engine) {
             nk_layout_row_dynamic(engine->nk_ctx, 30, 1);
             if (nk_button_label(engine->nk_ctx, engine->show_bones ? "Hide Bones" : "Show Bones")) {
                 engine->show_bones = !engine->show_bones;
+            }
+
+            // Button for animation play/pause
+            AnimationState* anim = get_render_animation_state();
+            if (anim) {
+                nk_layout_row_dynamic(engine->nk_ctx, 30, 1);
+                if (nk_button_label(engine->nk_ctx, anim->playing ? "Pause Animation" : "Play Animation")) {
+                    if (anim->playing) {
+                        pause_animation(anim);
+                    } else {
+                        play_animation(anim);
+                    }
+                }
+
+                // Button to recalculate bind poses from skeleton hierarchy
+                if (anim->skeleton) {
+                    nk_layout_row_dynamic(engine->nk_ctx, 30, 1);
+                    if (nk_button_label(engine->nk_ctx, "Recalc Bind Pose")) {
+                        recalculate_inverse_bind_poses(anim->skeleton);
+                    }
+                }
             }
 
             // cam modes
