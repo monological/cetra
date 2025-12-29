@@ -41,8 +41,10 @@ Scene* create_scene_from_model_path_async(const char* path, const char* texture_
 // Maps animation channels to the provided skeleton by bone name
 // If enable_retargeting is true, uses smart bone matching and computes rotation
 // deltas to handle different skeleton rest poses (required for Mixamo -> custom rig)
+// source_skeleton: optional skeleton providing source rest poses for proper delta computation
+//                  (e.g., Mixamo T-pose skeleton). If NULL, uses target skeleton rest poses.
 // Returns number of animations loaded, or -1 on error
 int load_animations_from_file(Scene* scene, Skeleton* skeleton, const char* filepath,
-                              bool enable_retargeting);
+                              bool enable_retargeting, Skeleton* source_skeleton);
 
 #endif // IMPORT_H

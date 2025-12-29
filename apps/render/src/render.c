@@ -56,6 +56,7 @@ typedef struct {
     const char* hdr_path;
     const char* anim_files[MAX_ANIM_FILES];
     int anim_count;
+    const char* source_skeleton_path;  // Source skeleton for retargeting
     int width;
     int height;
     int show_help;
@@ -68,12 +69,13 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "  -t, --textures <dir>   Texture directory\n");
     fprintf(stderr, "  -e, --env <path>       HDR environment map for IBL\n");
     fprintf(stderr, "  -a, --anim <path>      Animation file (can be repeated)\n");
+    fprintf(stderr, "  -s, --source <path>    Source skeleton for retargeting (T-pose)\n");
     fprintf(stderr, "  -W, --width <int>      Window width (default: %d)\n", DEFAULT_WIDTH);
     fprintf(stderr, "  -H, --height <int>     Window height (default: %d)\n", DEFAULT_HEIGHT);
     fprintf(stderr, "  -h, --help             Show this help message\n");
     fprintf(stderr, "\nExamples:\n");
     fprintf(stderr, "  %s -m character.fbx -t textures/\n", prog);
-    fprintf(stderr, "  %s -m character.fbx -a walk.fbx -a run.fbx -e sky.hdr\n", prog);
+    fprintf(stderr, "  %s -m character.fbx -a walk.fbx -s mixamo_tpose.fbx\n", prog);
 }
 
 static int parse_args(int argc, char** argv, RenderArgs* args) {
@@ -113,6 +115,12 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 return -1;
             }
             args->anim_files[args->anim_count++] = argv[i];
+        } else if (strcmp(argv[i], "-s") == 0 || strcmp(argv[i], "--source") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->source_skeleton_path = argv[i];
         } else if (strcmp(argv[i], "-W") == 0 || strcmp(argv[i], "--width") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -457,8 +465,24 @@ int main(int argc, char** argv) {
     // Enable retargeting by default to support Mixamo animations on custom rigs
     if (args.anim_count > 0 && scene->skeleton_count > 0) {
         Skeleton* skeleton = scene->skeletons[0];
+
+        // Load source skeleton for retargeting if provided
+        Skeleton* source_skeleton = NULL;
+        if (args.source_skeleton_path) {
+            Scene* source_scene = create_scene_from_model_path(args.source_skeleton_path, NULL);
+            if (source_scene && source_scene->skeleton_count > 0) {
+                source_skeleton = source_scene->skeletons[0];
+                printf("Loaded source skeleton: %zu bones from '%s'\n",
+                       source_skeleton->bone_count, args.source_skeleton_path);
+            } else {
+                fprintf(stderr, "Warning: failed to load source skeleton '%s'\n",
+                        args.source_skeleton_path);
+            }
+        }
+
         for (int i = 0; i < args.anim_count; i++) {
-            int loaded = load_animations_from_file(scene, skeleton, args.anim_files[i], true);
+            int loaded = load_animations_from_file(scene, skeleton, args.anim_files[i],
+                                                   true, source_skeleton);
             if (loaded < 0) {
                 fprintf(stderr, "Warning: failed to load animation '%s'\n", args.anim_files[i]);
             }

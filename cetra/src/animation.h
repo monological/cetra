@@ -85,6 +85,12 @@ typedef struct AnimationChannel {
     // Retargeting support
     bool needs_retargeting; // True if smart matching was used with different rest poses
     versor rotation_delta;  // Correction quaternion: target_rest * inv(source_rest)
+
+    // Global-space retargeting (when source skeleton is provided)
+    bool use_global_retarget;     // True when source skeleton hierarchy is available
+    int source_bone_index;        // Index in source skeleton (-1 if unmatched)
+    int source_parent_bone_index; // Source parent's index in source skeleton
+    versor source_local_rest;     // Source bone's local rest rotation
 } AnimationChannel;
 
 // Channel functions

@@ -184,6 +184,12 @@ AnimationChannel* create_animation_channel(int bone_index, const char* bone_name
     channel->needs_retargeting = false;
     glm_quat_identity(channel->rotation_delta);
 
+    // Initialize global-space retargeting fields
+    channel->use_global_retarget = false;
+    channel->source_bone_index = -1;
+    channel->source_parent_bone_index = -1;
+    glm_quat_identity(channel->source_local_rest);
+
     return channel;
 }
 
@@ -670,12 +676,130 @@ void compute_bone_matrices(AnimationState* state) {
     const Animation* anim = state->current_animation;
     float time = state->current_time;
 
-    // Step 1: Compute local transforms from keyframes (or use bind pose)
+    // Check if any channel uses global retargeting
+    bool has_global_retarget = false;
+    if (anim) {
+        for (size_t c = 0; c < anim->channel_count; c++) {
+            if (anim->channels[c].use_global_retarget) {
+                has_global_retarget = true;
+                break;
+            }
+        }
+    }
+
+    // Scratch space for source skeleton global rotations (indexed by source_bone_index)
+    static versor source_globals_animated[MAX_BONES];  // Accumulated animated rotations
+    static versor source_globals_rest[MAX_BONES];      // Accumulated rest pose rotations
+    static bool source_global_computed[MAX_BONES];
+
+    if (has_global_retarget) {
+        // PASS 0: Compute source skeleton global rotations (both animated and rest)
+        // Process in order of source_bone_index (source skeleton is parent-first)
+        memset(source_global_computed, 0, sizeof(source_global_computed));
+
+        for (int src_idx = 0; src_idx < MAX_BONES; src_idx++) {
+            // Find channel that has this source_bone_index
+            AnimationChannel* channel = NULL;
+            for (size_t c = 0; c < anim->channel_count; c++) {
+                if (anim->channels[c].use_global_retarget &&
+                    anim->channels[c].source_bone_index == src_idx) {
+                    channel = &anim->channels[c];
+                    break;
+                }
+            }
+            if (!channel) continue;
+
+            // Interpolate keyframe rotation
+            versor keyframe = {0.0f, 0.0f, 0.0f, 1.0f};
+            interpolate_rotation(channel->rotation_keys, channel->rotation_key_count, time, keyframe);
+
+            // Compute source global ANIMATED:
+            // source_global_animated = source_parent_global_animated * keyframe
+            int src_parent = channel->source_parent_bone_index;
+            if (src_parent < 0 || !source_global_computed[src_parent]) {
+                // Root bone or parent not animated
+                glm_quat_copy(keyframe, source_globals_animated[src_idx]);
+                glm_quat_copy(channel->source_local_rest, source_globals_rest[src_idx]);
+            } else {
+                // Child bone: accumulate through parent
+                glm_quat_mul(source_globals_animated[src_parent], keyframe, source_globals_animated[src_idx]);
+                glm_quat_mul(source_globals_rest[src_parent], channel->source_local_rest, source_globals_rest[src_idx]);
+            }
+            glm_quat_normalize(source_globals_animated[src_idx]);
+            glm_quat_normalize(source_globals_rest[src_idx]);
+            source_global_computed[src_idx] = true;
+        }
+    }
+
+    // PASS 1: Compute local AND global transforms together (needed for global retargeting)
+    // We need parent's global to derive child's local, so we compute both in one pass
     for (size_t i = 0; i < skeleton->bone_count; i++) {
         Bone* bone = &skeleton->bones[i];
         AnimationChannel* channel = anim ? get_channel_for_bone(anim, (int)i) : NULL;
 
-        if (channel) {
+        if (channel && channel->use_global_retarget && source_global_computed[channel->source_bone_index]) {
+            // GLOBAL-SPACE RETARGETING WITH REST POSE COMPENSATION
+            int src_idx = channel->source_bone_index;
+
+            // Step 1: Extract MOTION from source skeleton
+            // motion = inv(source_global_rest) * source_global_animated
+            // This represents how the bone deviated from its rest pose
+            versor source_rest_inv;
+            glm_quat_inv(source_globals_rest[src_idx], source_rest_inv);
+            versor motion;
+            glm_quat_mul(source_rest_inv, source_globals_animated[src_idx], motion);
+            glm_quat_normalize(motion);
+
+            // Step 2: Get target bone's global rest rotation
+            // target_global_rest = inv(inverse_bind_pose) rotation
+            mat4 target_global_rest_mat;
+            glm_mat4_inv(bone->inverse_bind_pose, target_global_rest_mat);
+            versor target_global_rest;
+            glm_mat4_quat(target_global_rest_mat, target_global_rest);
+            glm_quat_normalize(target_global_rest);
+
+            // Step 3: Apply motion to target rest pose
+            // target_global_animated = target_global_rest * motion
+            versor target_global_animated;
+            glm_quat_mul(target_global_rest, motion, target_global_animated);
+            glm_quat_normalize(target_global_animated);
+
+            // Step 4: Get target parent's current global rotation (from animated transform)
+            versor target_parent_global_rot;
+            glm_quat_identity(target_parent_global_rot);
+            if (bone->parent_index >= 0) {
+                glm_mat4_quat(state->global_transforms[bone->parent_index], target_parent_global_rot);
+            }
+
+            // Step 5: Derive target local rotation
+            // target_local = inv(target_parent_global) * target_global_animated
+            versor target_parent_inv;
+            glm_quat_inv(target_parent_global_rot, target_parent_inv);
+            versor target_local_rot;
+            glm_quat_mul(target_parent_inv, target_global_animated, target_local_rot);
+            glm_quat_normalize(target_local_rot);
+
+            // Build local transform: T * R * S
+            // Position from bind pose (retargeted animations use bind pose position)
+            vec3 pos;
+            glm_vec3_copy(bone->local_transform[3], pos);
+
+            vec3 scale = {1.0f, 1.0f, 1.0f};
+            if (channel->scale_key_count > 0) {
+                interpolate_scale(channel->scale_keys, channel->scale_key_count, time, scale);
+            }
+
+            mat4 trans, rotation, scaling;
+            glm_translate_make(trans, pos);
+            glm_quat_mat4(target_local_rot, rotation);
+            glm_scale_make(scaling, scale);
+
+            mat4 temp;
+            glm_mat4_mul(trans, rotation, temp);
+            glm_mat4_mul(temp, scaling, state->local_transforms[i]);
+
+        } else if (channel) {
+            // ORIGINAL LOCAL-DELTA RETARGETING (fallback)
             vec3 pos = {0.0f, 0.0f, 0.0f};
             vec3 scale = {1.0f, 1.0f, 1.0f};
             versor rot = {0.0f, 0.0f, 0.0f, 1.0f};
@@ -683,63 +807,15 @@ void compute_bone_matrices(AnimationState* state) {
             interpolate_rotation(channel->rotation_keys, channel->rotation_key_count, time, rot);
             interpolate_scale(channel->scale_keys, channel->scale_key_count, time, scale);
 
-            // Apply retargeting correction if needed
-            if (channel->needs_retargeting) {
-                // CORRECT FORMULA derived from first principles:
-                //
-                // For bone_matrix = keyframe (the goal), we need:
-                //   animated_global * inv(bind_global) = keyframe
-                //   animated_global = keyframe * bind_global
-                //
-                // For a bone with parent:
-                //   animated_global = parent_animated_global * local_animated
-                //   keyframe * bind_global = parent_animated * local_animated
-                //
-                // If parent is correctly retargeted (parent_animated = parent_keyframe * parent_bind):
-                //   keyframe * parent_bind * local_bind = parent_keyframe * parent_bind * local_animated
-                //
-                // Assuming parent_keyframe ~ identity (or solving recursively):
-                //   keyframe * parent_bind * local_bind = parent_bind * local_animated
-                //   local_animated = inv(parent_bind) * keyframe * parent_bind * local_bind
-                //                  = conjugate(keyframe, parent_bind) * local_bind
-                //
-                // So: local = (parent_bind^-1 * keyframe * parent_bind) * local_rest
-                //
-                // parent_bind can be computed from parent's inverse_bind_pose:
-                //   parent_bind = inv(parent.inverse_bind_pose)
-
-                versor local_rest = {channel->rotation_delta[0], channel->rotation_delta[1],
-                                     channel->rotation_delta[2], channel->rotation_delta[3]};
-
-                // Get parent's global bind pose rotation
-                versor parent_bind = {0, 0, 0, 1};  // Identity if no parent
-                if (bone->parent_index >= 0) {
-                    Bone* parent_bone = &skeleton->bones[bone->parent_index];
-                    // parent_bind = inv(parent.inverse_bind_pose)
-                    // We need to invert the inverse_bind_pose matrix and extract rotation
-                    mat4 parent_bind_mat;
-                    glm_mat4_inv(parent_bone->inverse_bind_pose, parent_bind_mat);
-                    glm_mat4_quat(parent_bind_mat, parent_bind);
-                    glm_quat_normalize(parent_bind);
-                }
-
-                // Conjugate keyframe by parent_bind, then compose with local_rest
-                versor parent_bind_inv;
-                glm_quat_inv(parent_bind, parent_bind_inv);
-
-                versor temp1, conjugated, result;
-                glm_quat_mul(parent_bind_inv, rot, temp1);      // inv(parent_bind) * keyframe
-                glm_quat_mul(temp1, parent_bind, conjugated);   // * parent_bind = conjugated keyframe
-                glm_quat_mul(conjugated, local_rest, result);   // * local_rest
-
+            // Apply retargeting correction if needed (local delta approach)
+            if (channel->needs_retargeting && !channel->use_global_retarget) {
+                versor result;
+                glm_quat_mul(rot, channel->rotation_delta, result);
                 glm_quat_copy(result, rot);
             }
 
-            // For retargeted animations, ALWAYS use bind pose position
-            // Animation position keyframes are relative to source skeleton which may differ
-            // Only use animation position for non-retargeted (same skeleton) animations
+            // For retargeted animations, use bind pose position
             if (channel->needs_retargeting) {
-                // Position is in column 3 of the local_transform matrix
                 glm_vec3_copy(bone->local_transform[3], pos);
             } else {
                 interpolate_position(channel->position_keys, channel->position_key_count, time, pos);
@@ -751,34 +827,27 @@ void compute_bone_matrices(AnimationState* state) {
             glm_quat_mat4(rot, rotation);
             glm_scale_make(scaling, scale);
 
-            // local = T * R * S
             mat4 temp;
             glm_mat4_mul(trans, rotation, temp);
             glm_mat4_mul(temp, scaling, state->local_transforms[i]);
+
         } else {
-            // Use bind pose local transform
+            // No channel: use bind pose local transform
             glm_mat4_copy(bone->local_transform, state->local_transforms[i]);
         }
-    }
 
-    // Step 2: Compute global transforms (parent-first iteration)
-    for (size_t i = 0; i < skeleton->bone_count; i++) {
-        Bone* bone = &skeleton->bones[i];
-
+        // Compute global transform immediately (needed for next iteration's parent lookup)
         if (bone->parent_index < 0) {
-            // Root bone - global = local
             glm_mat4_copy(state->local_transforms[i], state->global_transforms[i]);
         } else if ((size_t)bone->parent_index < skeleton->bone_count) {
-            // global = parent_global * local
             glm_mat4_mul(state->global_transforms[bone->parent_index], state->local_transforms[i],
                          state->global_transforms[i]);
         } else {
-            // Invalid parent index, treat as root
             glm_mat4_copy(state->local_transforms[i], state->global_transforms[i]);
         }
     }
 
-    // Step 3: Compute final bone matrices (global * inverse bind pose)
+    // PASS 2: Compute final bone matrices (global * inverse bind pose)
     for (size_t i = 0; i < skeleton->bone_count; i++) {
         glm_mat4_mul(state->global_transforms[i], skeleton->bones[i].inverse_bind_pose,
                      state->bone_matrices[i]);
