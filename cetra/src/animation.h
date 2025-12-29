@@ -80,6 +80,10 @@ typedef struct AnimationChannel {
 
     ScaleKey* scale_keys;
     size_t scale_key_count;
+
+    // Retargeting support
+    bool needs_retargeting; // True if smart matching was used with different rest poses
+    versor rotation_delta;  // Correction quaternion: target_rest * inv(source_rest)
 } AnimationChannel;
 
 // Channel functions

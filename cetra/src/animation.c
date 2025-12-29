@@ -150,6 +150,10 @@ AnimationChannel* create_animation_channel(int bone_index, const char* bone_name
     channel->scale_keys = NULL;
     channel->scale_key_count = 0;
 
+    // Initialize retargeting fields
+    channel->needs_retargeting = false;
+    glm_quat_identity(channel->rotation_delta);
+
     return channel;
 }
 
@@ -646,9 +650,70 @@ void compute_bone_matrices(AnimationState* state) {
             vec3 scale = {1.0f, 1.0f, 1.0f};
             versor rot = {0.0f, 0.0f, 0.0f, 1.0f};
 
-            interpolate_position(channel->position_keys, channel->position_key_count, time, pos);
             interpolate_rotation(channel->rotation_keys, channel->rotation_key_count, time, rot);
             interpolate_scale(channel->scale_keys, channel->scale_key_count, time, scale);
+
+            // Apply retargeting correction if needed
+            if (channel->needs_retargeting) {
+                // CORRECT FORMULA derived from first principles:
+                //
+                // For bone_matrix = keyframe (the goal), we need:
+                //   animated_global * inv(bind_global) = keyframe
+                //   animated_global = keyframe * bind_global
+                //
+                // For a bone with parent:
+                //   animated_global = parent_animated_global * local_animated
+                //   keyframe * bind_global = parent_animated * local_animated
+                //
+                // If parent is correctly retargeted (parent_animated = parent_keyframe * parent_bind):
+                //   keyframe * parent_bind * local_bind = parent_keyframe * parent_bind * local_animated
+                //
+                // Assuming parent_keyframe ~ identity (or solving recursively):
+                //   keyframe * parent_bind * local_bind = parent_bind * local_animated
+                //   local_animated = inv(parent_bind) * keyframe * parent_bind * local_bind
+                //                  = conjugate(keyframe, parent_bind) * local_bind
+                //
+                // So: local = (parent_bind^-1 * keyframe * parent_bind) * local_rest
+                //
+                // parent_bind can be computed from parent's inverse_bind_pose:
+                //   parent_bind = inv(parent.inverse_bind_pose)
+
+                versor local_rest = {channel->rotation_delta[0], channel->rotation_delta[1],
+                                     channel->rotation_delta[2], channel->rotation_delta[3]};
+
+                // Get parent's global bind pose rotation
+                versor parent_bind = {0, 0, 0, 1};  // Identity if no parent
+                if (bone->parent_index >= 0) {
+                    Bone* parent_bone = &skeleton->bones[bone->parent_index];
+                    // parent_bind = inv(parent.inverse_bind_pose)
+                    // We need to invert the inverse_bind_pose matrix and extract rotation
+                    mat4 parent_bind_mat;
+                    glm_mat4_inv(parent_bone->inverse_bind_pose, parent_bind_mat);
+                    glm_mat4_quat(parent_bind_mat, parent_bind);
+                    glm_quat_normalize(parent_bind);
+                }
+
+                // Conjugate keyframe by parent_bind, then compose with local_rest
+                versor parent_bind_inv;
+                glm_quat_inv(parent_bind, parent_bind_inv);
+
+                versor temp1, conjugated, result;
+                glm_quat_mul(parent_bind_inv, rot, temp1);      // inv(parent_bind) * keyframe
+                glm_quat_mul(temp1, parent_bind, conjugated);   // * parent_bind = conjugated keyframe
+                glm_quat_mul(conjugated, local_rest, result);   // * local_rest
+
+                glm_quat_copy(result, rot);
+            }
+
+            // For retargeted animations, ALWAYS use bind pose position
+            // Animation position keyframes are relative to source skeleton which may differ
+            // Only use animation position for non-retargeted (same skeleton) animations
+            if (channel->needs_retargeting) {
+                // Position is in column 3 of the local_transform matrix
+                glm_vec3_copy(bone->local_transform[3], pos);
+            } else {
+                interpolate_position(channel->position_keys, channel->position_key_count, time, pos);
+            }
 
             // Build local transform: T * R * S
             mat4 trans, rotation, scaling;
@@ -687,6 +752,89 @@ void compute_bone_matrices(AnimationState* state) {
     for (size_t i = 0; i < skeleton->bone_count; i++) {
         glm_mat4_mul(state->global_transforms[i], skeleton->bones[i].inverse_bind_pose,
                      state->bone_matrices[i]);
+    }
+
+    // Comprehensive debug: print full bone tree with all transforms
+    static int bm_debug_count = 0;
+    if (bm_debug_count < 1 && anim) {
+        printf("\n========== ANIMATION DEBUG ==========\n");
+        printf("Animation: %s, Time: %.2f\n\n", anim->name, time);
+
+        // Print bone tree with indentation
+        printf("BONE TREE (showing transforms at each level):\n");
+        printf("Format: [idx] name | local_rest_angle | keyframe_angle | delta_angle | final_rot_angle | bone_matrix_angle\n");
+        printf("        local_rest_axis | keyframe_axis | final_rot_axis\n\n");
+
+        for (size_t i = 0; i < skeleton->bone_count && i < 60; i++) {  // Limit to first 60 bones
+            Bone* bone = &skeleton->bones[i];
+            AnimationChannel* channel = get_channel_for_bone(anim, (int)i);
+
+            // Calculate indentation based on parent chain depth
+            int depth = 0;
+            int parent = bone->parent_index;
+            while (parent >= 0 && depth < 10) {
+                depth++;
+                parent = skeleton->bones[parent].parent_index;
+            }
+
+            // Print indentation
+            for (int d = 0; d < depth; d++) printf("  ");
+
+            // Extract local rest rotation
+            versor local_rest;
+            glm_mat4_quat(bone->local_transform, local_rest);
+            float local_rest_angle = 2.0f * acosf(fabsf(local_rest[3])) * 57.2958f;
+
+            // Extract bone_matrix rotation
+            versor bm_rot;
+            glm_mat4_quat(state->bone_matrices[i], bm_rot);
+            float bm_angle = 2.0f * acosf(fabsf(bm_rot[3])) * 57.2958f;
+
+            if (channel) {
+                // Get keyframe
+                versor keyframe = {0, 0, 0, 1};
+                interpolate_rotation(channel->rotation_keys, channel->rotation_key_count, time, keyframe);
+                float key_angle = 2.0f * acosf(fabsf(keyframe[3])) * 57.2958f;
+
+                // Get delta
+                float delta_angle = 2.0f * acosf(fabsf(channel->rotation_delta[3])) * 57.2958f;
+
+                // Get final rotation (after retargeting)
+                versor final_rot = {0, 0, 0, 1};
+                glm_mat4_quat(state->local_transforms[i], final_rot);
+                float final_angle = 2.0f * acosf(fabsf(final_rot[3])) * 57.2958f;
+
+                // Compute axes (normalize xyz part of quaternion)
+                float key_axis_len = sqrtf(keyframe[0]*keyframe[0] + keyframe[1]*keyframe[1] + keyframe[2]*keyframe[2]);
+
+                // Compute bone_matrix axis
+                float bm_axis_len = sqrtf(bm_rot[0]*bm_rot[0] + bm_rot[1]*bm_rot[1] + bm_rot[2]*bm_rot[2]);
+                (void)final_angle;  // Used in printf below
+
+                printf("[%2zu] %-20s | rest=%5.1f | key=%5.1f | delta=%5.1f | final=%5.1f | bm=%5.1f%s\n",
+                       i, bone->name, local_rest_angle, key_angle, delta_angle, final_angle, bm_angle,
+                       channel->needs_retargeting ? " [R]" : "");
+
+                // Print axes: key vs bone_matrix (these should ideally match for correct retargeting)
+                for (int d = 0; d < depth; d++) printf("  ");
+                printf("     KEY axis=(%.2f,%.2f,%.2f) vs BM axis=(",
+                       key_axis_len > 0.001f ? keyframe[0]/key_axis_len : 0,
+                       key_axis_len > 0.001f ? keyframe[1]/key_axis_len : 0,
+                       key_axis_len > 0.001f ? keyframe[2]/key_axis_len : 0);
+                if (bm_axis_len > 0.001f) {
+                    printf("%.2f,%.2f,%.2f)\n",
+                           bm_rot[0]/bm_axis_len, bm_rot[1]/bm_axis_len, bm_rot[2]/bm_axis_len);
+                } else {
+                    printf("identity)\n");
+                }
+            } else {
+                printf("[%2zu] %-20s | rest=%5.1f | (no channel) | bm=%5.1f\n",
+                       i, bone->name, local_rest_angle, bm_angle);
+            }
+        }
+
+        printf("\n========== END DEBUG ==========\n\n");
+        bm_debug_count++;
     }
 
     state->active_bone_count = skeleton->bone_count;

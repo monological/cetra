@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <assert.h>
+#include <ctype.h>
 
 #include <assimp/scene.h>
 #include <assimp/light.h>
@@ -17,6 +18,7 @@
 #include "ext/log.h"
 
 #include "animation.h"
+#include "rigging.h"
 #include "scene.h"
 #include "mesh.h"
 #include "light.h"
@@ -28,6 +30,13 @@
 
 // Forward declarations
 static void copy_aiMatrix_to_mat4(const struct aiMatrix4x4* from, mat4 to);
+
+// Extract rotation quaternion from a mat4 transform
+static void extract_rotation_quat(mat4 transform, versor out) {
+    glm_mat4_quat(transform, out);
+    glm_quat_normalize(out);
+}
+
 
 /*
  * Texture mapping table for material loading
@@ -600,9 +609,32 @@ void process_ai_mesh_bones(Mesh* mesh, const struct aiMesh* ai_mesh, Skeleton* s
 }
 
 /*
- * Extract animations from aiScene
+ * Compute global rest pose for a bone by accumulating parent transforms
+ * This is needed for retargeting: delta must use GLOBAL rest poses, not local,
+ * because bone_matrix = global * inverse_bind_pose uses GLOBAL coordinates.
  */
-void process_ai_animations(const struct aiScene* ai_scene, Scene* scene, Skeleton* skeleton) {
+static void compute_bone_global_rest(Skeleton* skeleton, int bone_idx, mat4 out) {
+    if (!skeleton || bone_idx < 0 || (size_t)bone_idx >= skeleton->bone_count) {
+        glm_mat4_identity(out);
+        return;
+    }
+    Bone* bone = &skeleton->bones[bone_idx];
+    if (bone->parent_index < 0) {
+        // Root bone: global = local
+        glm_mat4_copy(bone->local_transform, out);
+    } else {
+        // Child bone: global = parent_global * local
+        mat4 parent_global = GLM_MAT4_IDENTITY_INIT;
+        compute_bone_global_rest(skeleton, bone->parent_index, parent_global);
+        glm_mat4_mul(parent_global, bone->local_transform, out);
+    }
+}
+
+/*
+ * Extract animations from aiScene with optional retargeting support
+ */
+static void process_ai_animations_internal(const struct aiScene* ai_scene, Scene* scene,
+                                           Skeleton* skeleton, bool enable_retargeting) {
     if (!ai_scene || !scene || ai_scene->mNumAnimations == 0)
         return;
 
@@ -621,13 +653,33 @@ void process_ai_animations(const struct aiScene* ai_scene, Scene* scene, Skeleto
         animation->skeleton = skeleton;
 
         // Process each channel (bone animation)
+        int matched_channels = 0;
+        int retargeted_channels = 0;
         for (unsigned int c = 0; c < ai_anim->mNumChannels; c++) {
             struct aiNodeAnim* ai_channel = ai_anim->mChannels[c];
 
             // Find bone index in skeleton
             int bone_index = -1;
+            bool used_smart_match = false;
+
             if (skeleton) {
+                // Try exact match first
                 bone_index = get_bone_index_by_name(skeleton, ai_channel->mNodeName.data);
+
+                // Fall back to smart matching if enabled and exact match failed
+                if (bone_index < 0 && enable_retargeting) {
+                    bone_index = find_matching_bone_smart(skeleton, ai_channel->mNodeName.data);
+                    if (bone_index >= 0) {
+                        used_smart_match = true;
+                    }
+                }
+
+                if (bone_index >= 0) {
+                    matched_channels++;
+                } else {
+                    log_debug("Animation channel '%s' has no matching bone in skeleton",
+                              ai_channel->mNodeName.data);
+                }
             }
 
             AnimationChannel* channel =
@@ -651,6 +703,41 @@ void process_ai_animations(const struct aiScene* ai_scene, Scene* scene, Skeleto
                 add_rotation_key(channel, (float)key->mTime, rot);
             }
 
+            // Compute retargeting for ALL matched bones when retargeting is enabled
+            // Not just smart-matched - even exact name matches may have different rest poses
+            // due to coordinate system conversion during FBX export/import
+            // We ALWAYS set needs_retargeting=true for matched bones so we use bind pose position
+            if (enable_retargeting && bone_index >= 0 && ai_channel->mNumRotationKeys > 0) {
+                // Use LOCAL rest pose for conjugation-based retargeting.
+                // The animation keyframe defines rotation relative to identity (source rest).
+                // We transform this rotation to the target skeleton's local coordinate system
+                // using conjugation: target_local = local_rest * keyframe * inv(local_rest)
+                //
+                // This correctly transforms the rotation AXIS, not just adds rotation.
+                Bone* target_bone = &skeleton->bones[bone_index];
+
+                // Extract LOCAL rest pose rotation from target bone
+                versor target_local_rest;
+                glm_mat4_quat(target_bone->local_transform, target_local_rest);
+                glm_quat_normalize(target_local_rest);
+
+                // Store the LOCAL rest pose as delta (for conjugation in animation.c)
+                glm_quat_copy(target_local_rest, channel->rotation_delta);
+
+                // Always enable retargeting for matched bones - this ensures:
+                // 1. Rotation delta is applied (minimal effect if delta is small)
+                // 2. Bind pose position is used instead of animation position
+                channel->needs_retargeting = true;
+                retargeted_channels++;
+
+                float delta_angle = 2.0f * acosf(fabsf(channel->rotation_delta[3])) * 57.2958f;
+                if (delta_angle > 5.0f) {
+                    log_debug("Retarget '%s' -> '%s': delta=%.1f deg (local)%s",
+                              ai_channel->mNodeName.data, target_bone->name,
+                              delta_angle, used_smart_match ? " (smart)" : "");
+                }
+            }
+
             // Scale keys
             for (unsigned int k = 0; k < ai_channel->mNumScalingKeys; k++) {
                 struct aiVectorKey* key = &ai_channel->mScalingKeys[k];
@@ -666,12 +753,48 @@ void process_ai_animations(const struct aiScene* ai_scene, Scene* scene, Skeleto
         }
 
         add_animation_to_scene(scene, animation);
-        log_info("Extracted animation '%s': %.2f ticks @ %.2f tps (%zu channels)", animation->name,
-                 animation->duration, animation->ticks_per_second, animation->channel_count);
+        if (retargeted_channels > 0) {
+            log_info("Extracted animation '%s': %.2f ticks @ %.2f tps (%zu channels, %d matched, %d retargeted)",
+                     animation->name, animation->duration, animation->ticks_per_second,
+                     animation->channel_count, matched_channels, retargeted_channels);
+        } else {
+            log_info("Extracted animation '%s': %.2f ticks @ %.2f tps (%zu channels, %d matched bones)",
+                     animation->name, animation->duration, animation->ticks_per_second,
+                     animation->channel_count, matched_channels);
+        }
+
+        // Print bone mapping debug table
+        if (enable_retargeting && animation->channel_count > 0) {
+            printf("\n==================== BONE MAPPING TABLE ====================\n");
+            printf("%-45s -> %-25s %s\n", "SOURCE (Mixamo)", "TARGET", "DELTA");
+            printf("-------------------------------------------------------------\n");
+            for (size_t ch = 0; ch < animation->channel_count; ch++) {
+                AnimationChannel* chan = &animation->channels[ch];
+                if (chan->bone_index >= 0) {
+                    const Bone* target_bone = &skeleton->bones[chan->bone_index];
+                    float delta_angle = 2.0f * acosf(fabsf(chan->rotation_delta[3])) * 57.2958f;
+                    printf("%-45s -> %-25s %6.1f deg%s\n",
+                           chan->bone_name ? chan->bone_name : "(unknown)",
+                           target_bone->name,
+                           delta_angle,
+                           chan->needs_retargeting ? " [R]" : "");
+                } else {
+                    printf("%-45s -> (UNMAPPED)\n",
+                           chan->bone_name ? chan->bone_name : "(unknown)");
+                }
+            }
+            printf("=============================================================\n\n");
+        }
     }
 }
 
-int load_animations_from_file(Scene* scene, Skeleton* skeleton, const char* filepath) {
+// Public wrapper without retargeting (for internal scene loading)
+void process_ai_animations(const struct aiScene* ai_scene, Scene* scene, Skeleton* skeleton) {
+    process_ai_animations_internal(ai_scene, scene, skeleton, false);
+}
+
+int load_animations_from_file(Scene* scene, Skeleton* skeleton, const char* filepath,
+                              bool enable_retargeting) {
     if (!scene || !skeleton || !filepath) {
         log_error("load_animations_from_file: NULL parameter");
         return -1;
@@ -694,11 +817,12 @@ int load_animations_from_file(Scene* scene, Skeleton* skeleton, const char* file
 
     size_t initial_count = scene->animation_count;
 
-    // Process animations, mapping to the provided skeleton
-    process_ai_animations(ai_scene, scene, skeleton);
+    // Process animations with retargeting support
+    process_ai_animations_internal(ai_scene, scene, skeleton, enable_retargeting);
 
     size_t loaded = scene->animation_count - initial_count;
-    log_info("Loaded %zu animation(s) from '%s'", loaded, filepath);
+    log_info("Loaded %zu animation(s) from '%s'%s", loaded, filepath,
+             enable_retargeting ? " (retargeting enabled)" : "");
 
     aiReleaseImport(ai_scene);
     return (int)loaded;

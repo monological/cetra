@@ -3,6 +3,7 @@
 
 #include <string.h>
 #include <stdio.h>
+#include <stdbool.h>
 
 #include <GL/glew.h>
 #include <assimp/scene.h>
@@ -38,7 +39,10 @@ Scene* create_scene_from_model_path_async(const char* path, const char* texture_
 
 // Load animations from a separate file (e.g., Mixamo "Without Skin" FBX)
 // Maps animation channels to the provided skeleton by bone name
+// If enable_retargeting is true, uses smart bone matching and computes rotation
+// deltas to handle different skeleton rest poses (required for Mixamo -> custom rig)
 // Returns number of animations loaded, or -1 on error
-int load_animations_from_file(Scene* scene, Skeleton* skeleton, const char* filepath);
+int load_animations_from_file(Scene* scene, Skeleton* skeleton, const char* filepath,
+                              bool enable_retargeting);
 
 #endif // IMPORT_H
