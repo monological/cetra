@@ -908,10 +908,37 @@ int load_animations_from_file(Scene* scene, Skeleton* skeleton, const char* file
         return 0;
     }
 
+    // If no source skeleton was provided, try to extract one from the animation
+    // file itself (Mixamo clips exported with skin embed the full rig). Global
+    // retargeting needs source rest poses; channels only copy indices and
+    // rotations out of the skeleton, so a temporary one is safe to free after.
+    Skeleton* own_source = NULL;
+    if (enable_retargeting && !source_skeleton) {
+        for (unsigned int m = 0; m < ai_scene->mNumMeshes; m++) {
+            if (ai_scene->mMeshes[m]->mNumBones > 0) {
+                own_source = process_ai_skeleton(ai_scene, ai_scene->mMeshes[m]);
+                break;
+            }
+        }
+        if (own_source) {
+            source_skeleton = own_source;
+            log_info("Using skeleton embedded in '%s' as retarget source (%zu bones)", filepath,
+                     own_source->bone_count);
+        } else {
+            log_warn("No source skeleton in '%s' and none provided (-s); cross-rig "
+                     "retargeting will be incorrect",
+                     filepath);
+        }
+    }
+
     size_t initial_count = scene->animation_count;
 
     // Process animations with retargeting support
     process_ai_animations_internal(ai_scene, scene, skeleton, enable_retargeting, source_skeleton);
+
+    if (own_source) {
+        free_skeleton(own_source);
+    }
 
     size_t loaded = scene->animation_count - initial_count;
     log_info("Loaded %zu animation(s) from '%s'%s", loaded, filepath,
