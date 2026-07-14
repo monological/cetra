@@ -958,9 +958,9 @@ void render_nuklear_gui(Engine* engine) {
                     }
                     sb->enabled = sb_enabled != 0;
 
-                    static float sb_stiffness = 0.15f;
-                    static float sb_damping = 0.2f;
-                    static float sb_gravity = 9.8f;
+                    static float sb_stiffness = 0.25f;
+                    static float sb_damping = 0.25f;
+                    static float sb_gravity = 4.0f;
                     nk_property_float(engine->nk_ctx, "Stiffness:", 0.0f, &sb_stiffness, 1.0f,
                                       0.05f, 0.005f);
                     nk_property_float(engine->nk_ctx, "Damping:", 0.0f, &sb_damping, 1.0f, 0.05f,

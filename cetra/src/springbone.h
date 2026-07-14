@@ -21,6 +21,7 @@ typedef struct SpringBoneParams {
     float damping;           // 0..1 velocity kill factor (0 = floppy, 1 = no inertia)
     float gravity;           // m/s^2 along model-space -Y
     float max_stretch;       // allowed stretch fraction beyond rest length
+    float max_angle_deg;     // max swing away from the animated pose (degrees)
     float teleport_distance; // snap the sim when the target jumps farther (meters)
 } SpringBoneParams;
 

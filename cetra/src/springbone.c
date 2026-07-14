@@ -11,10 +11,11 @@
 
 SpringBoneParams spring_bone_default_params(void) {
     SpringBoneParams params = {
-        .stiffness = 0.15f,
-        .damping = 0.2f,
-        .gravity = 9.8f,
+        .stiffness = 0.25f,
+        .damping = 0.25f,
+        .gravity = 4.0f,
         .max_stretch = 0.0f,
+        .max_angle_deg = 45.0f,
         .teleport_distance = 0.5f,
     };
     return params;
@@ -239,6 +240,41 @@ static void constrain_tip(SpringBoneJoint* joint, vec3 head, vec3 tip_target, fl
     glm_vec3_add(head, dir, joint->curr_tip);
 }
 
+/*
+ * Limit the swing angle between the animated direction and the simulated
+ * direction. Applied every substep so the deviation can never approach 180
+ * degrees, where the swing rotation axis becomes unstable (visible as the
+ * bone spinning erratically), and so stiff items keep their shape.
+ */
+static void clamp_swing_angle(SpringBoneJoint* joint, vec3 head, vec3 tip_target, float rest_len,
+                              float max_angle_deg) {
+    vec3 dir_target, dir_sim;
+    glm_vec3_sub(tip_target, head, dir_target);
+    glm_vec3_normalize(dir_target);
+    glm_vec3_sub(joint->curr_tip, head, dir_sim);
+    float sim_len = glm_vec3_norm(dir_sim);
+    if (sim_len < 1e-8f)
+        return;
+    glm_vec3_scale(dir_sim, 1.0f / sim_len, dir_sim);
+
+    float max_angle = glm_rad(max_angle_deg);
+    float cos_angle = glm_clamp(glm_vec3_dot(dir_target, dir_sim), -1.0f, 1.0f);
+    float angle = acosf(cos_angle);
+    if (angle <= max_angle)
+        return;
+
+    // Rotate the target direction only up to the limit toward the sim
+    versor full_swing, limited_swing, identity;
+    glm_quat_from_vecs(dir_target, dir_sim, full_swing);
+    glm_quat_identity(identity);
+    glm_quat_slerp(identity, full_swing, max_angle / angle, limited_swing);
+
+    vec3 limited_dir;
+    glm_quat_rotatev(limited_swing, dir_target, limited_dir);
+    glm_vec3_scale(limited_dir, sim_len, limited_dir);
+    glm_vec3_add(head, limited_dir, joint->curr_tip);
+}
+
 void spring_bone_update(SpringBoneSystem* system, mat4* local_transforms, mat4* global_transforms,
                         float delta_time) {
     if (!system || !system->enabled || system->joint_count == 0 || !local_transforms ||
@@ -320,11 +356,13 @@ void spring_bone_update(SpringBoneSystem* system, mat4* local_transforms, mat4* 
             joint->curr_tip[1] -= params->gravity * SPRING_STEP * SPRING_STEP;
 
             constrain_tip(joint, head, tip_target, rest_len, params->max_stretch);
+            clamp_swing_angle(joint, head, tip_target, rest_len, params->max_angle_deg);
         }
 
-        // Keep the tip on the sphere even on frames with no substep (the
-        // head moves with the animation every frame)
-        constrain_tip(joint, head, tip_target, rest_len, params->max_stretch);
+        // NOTE: no constraint on zero-substep frames. The swing below only
+        // uses the tip DIRECTION, so nothing stretches visually, and moving
+        // the tip against a fresh head without advancing prev_tip would
+        // inject phantom velocity into the next substep at high framerates.
 
         // Swing the animated orientation so the tip lands on the simulation
         vec3 dir_target, dir_sim;
