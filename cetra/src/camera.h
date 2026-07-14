@@ -22,6 +22,7 @@ typedef struct Camera {
     float theta;
     float phi;
     float distance;
+    float max_distance; // Max distance from look_at (0 = unlimited)
     float height;
     float zoom_speed;
     float orbit_speed;
@@ -46,6 +47,11 @@ void camera_move_forward(Camera* camera, float distance);
 void camera_strafe(Camera* camera, float distance);
 void camera_move_up(Camera* camera, float distance);
 void camera_zoom_toward_target(Camera* camera, float factor, float min_distance);
+
+// Pull the camera back to max_distance along its own view ray (no-op when
+// max_distance is 0). Clamping toward the origin instead would make the
+// camera slide around the boundary sphere.
+void camera_enforce_max_distance(Camera* camera);
 
 // Sync spherical coordinates from current position
 void camera_sync_spherical_from_position(Camera* camera);

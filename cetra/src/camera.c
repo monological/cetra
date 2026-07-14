@@ -26,6 +26,7 @@ Camera* create_camera() {
     camera->theta = 0.0f;
     camera->phi = 0.0f;
     camera->distance = 2000.0f;
+    camera->max_distance = 0.0f;
     camera->height = 0.0f;
     camera->zoom_speed = 0.005f;
     camera->orbit_speed = 0.001f;
@@ -98,6 +99,9 @@ void orbit_camera(Camera* camera, float delta_theta, float delta_phi) {
         camera->theta = limit;
     if (camera->theta < -limit)
         camera->theta = -limit;
+
+    if (camera->max_distance > 0.0f && camera->distance > camera->max_distance)
+        camera->distance = camera->max_distance;
 
     // Update position from spherical coordinates
     // theta = elevation angle (vertical), phi = azimuth angle (horizontal)
@@ -203,12 +207,31 @@ void camera_zoom_toward_target(Camera* camera, float factor, float min_distance)
     float new_dist = dist * factor;
     if (new_dist < min_distance)
         new_dist = min_distance;
+    if (camera->max_distance > 0.0f && new_dist > camera->max_distance)
+        new_dist = camera->max_distance;
 
     glm_vec3_normalize(to_camera);
     glm_vec3_scale(to_camera, new_dist, to_camera);
     glm_vec3_add(camera->look_at, to_camera, camera->position);
 
     camera->distance = new_dist;
+}
+
+void camera_enforce_max_distance(Camera* camera) {
+    if (!camera || camera->max_distance <= 0.0f)
+        return;
+
+    if (camera->distance > camera->max_distance)
+        camera->distance = camera->max_distance;
+
+    vec3 offset;
+    glm_vec3_sub(camera->position, camera->look_at, offset);
+    float dist = glm_vec3_norm(offset);
+
+    if (dist > camera->max_distance && dist > 1e-6f) {
+        glm_vec3_scale(offset, camera->max_distance / dist, offset);
+        glm_vec3_add(camera->look_at, offset, camera->position);
+    }
 }
 
 void camera_sync_spherical_from_position(Camera* camera) {

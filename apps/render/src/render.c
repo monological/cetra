@@ -488,38 +488,19 @@ void render_scene_callback(Engine* engine, Scene* current_scene) {
         }
     }
 
-    // Keep the camera where the ground projection renders at full strength:
-    // the clamp matches the fade start in skybox_frag.glsl (0.7R), so no
-    // reachable view ever shows the blend toward the infinite skybox.
-    // Raising Dome Radius extends the zoom range.
-    if (current_scene->render_skybox && current_scene->skybox_ground_projection &&
-        engine->camera) {
-        float max_dist = 0.7f * current_scene->skybox_gp_radius;
-        if (engine->camera->distance > max_dist) {
-            engine->camera->distance = max_dist;
-        }
+    // Sync the camera zoom limit with the ground-projection fade start every
+    // frame so GUI changes to Dome Radius take effect (enforcement lives in
+    // camera_enforce_max_distance, applied by mouse_drag_update).
+    if (engine->camera) {
+        engine->camera->max_distance =
+            (current_scene->render_skybox && current_scene->skybox_ground_projection)
+                ? SKYBOX_GP_FADE_START * current_scene->skybox_gp_radius
+                : 0.0f;
     }
 
     // Update camera via drag controller
     if (drag_controller) {
         mouse_drag_update(drag_controller, time_value);
-    }
-
-    // Hold the camera at the dome boundary along its own view ray (clamping
-    // toward the origin instead makes the camera slide around the sphere).
-    if (current_scene->render_skybox && current_scene->skybox_ground_projection &&
-        engine->camera) {
-        Camera* cam = engine->camera;
-        float max_dist = 0.7f * current_scene->skybox_gp_radius;
-
-        vec3 offset;
-        glm_vec3_sub(cam->position, cam->look_at, offset);
-        float dist = glm_vec3_norm(offset);
-
-        if (dist > max_dist && dist > 1e-6f) {
-            glm_vec3_scale(offset, max_dist / dist, offset);
-            glm_vec3_add(cam->look_at, offset, cam->position);
-        }
     }
 
     Transform transform = {.position = {0.0f, 0.0f, 0.0f},
@@ -874,7 +855,11 @@ int main(int argc, char** argv) {
     camera->height = scene_center[1];
     float orbit_max = camera_distance * 2.0f;
     if (scene->skybox_ground_projection) {
-        orbit_max = fminf(orbit_max, 0.7f * scene->skybox_gp_radius);
+        // Keep the camera where the ground projection renders at full
+        // strength; no reachable view ever shows the blend toward the
+        // infinite skybox. Raising Dome Radius extends the zoom range.
+        camera->max_distance = SKYBOX_GP_FADE_START * scene->skybox_gp_radius;
+        orbit_max = fminf(orbit_max, camera->max_distance);
     }
     set_mouse_drag_auto_orbit(drag_controller, !args.headless, CAM_ANGULAR_SPEED,
                               fminf(camera_distance * 0.5f, orbit_max), orbit_max);

@@ -13,6 +13,7 @@ uniform float exposure;
 uniform bool groundProjection;
 uniform float gpRadius;
 uniform float gpHeight;
+uniform float gpFadeStart; // Fraction of gpRadius where the fade begins
 uniform vec3 camPos;
 
 vec3 sample_direction(vec3 d)
@@ -22,10 +23,10 @@ vec3 sample_direction(vec3 d)
 
     // Fade the projection out smoothly as the camera moves away from the
     // capture region, ending at the plain infinite skybox instead of popping.
-    // The app clamps camera zoom to the fade start (0.7R), so no reachable
-    // view shows the blend; the fade is a safety net for unclamped cameras.
+    // Apps clamp camera zoom to the fade start, so no reachable view shows
+    // the blend; the fade is a safety net for unclamped cameras.
     vec3 c = camPos;
-    float fade = smoothstep(0.7 * gpRadius, 0.95 * gpRadius, length(c));
+    float fade = smoothstep(gpFadeStart * gpRadius, 0.95 * gpRadius, length(c));
     if (fade >= 1.0)
         return d;
 

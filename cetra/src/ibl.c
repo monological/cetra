@@ -615,6 +615,7 @@ void render_skybox(IBLResources* ibl, mat4 view, mat4 projection, float exposure
     uniform_set_int(program->uniforms, "groundProjection", ground_projection ? 1 : 0);
     uniform_set_float(program->uniforms, "gpRadius", gp_radius);
     uniform_set_float(program->uniforms, "gpHeight", gp_height);
+    uniform_set_float(program->uniforms, "gpFadeStart", SKYBOX_GP_FADE_START);
     uniform_set_vec3(program->uniforms, "camPos", cam_pos);
 
     glActiveTexture(GL_TEXTURE0 + IBL_SKYBOX_TEXTURE_UNIT);

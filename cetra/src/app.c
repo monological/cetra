@@ -227,6 +227,8 @@ void mouse_drag_update(MouseDragController* ctrl, float time) {
         }
     }
 
+    camera_enforce_max_distance(camera);
+
     update_engine_camera_lookat(engine);
     update_engine_camera_perspective(engine);
 }

@@ -21,6 +21,11 @@
 // Max bright light lobes extracted from an HDR (matches MAX_SHADOW_LIGHTS)
 #define IBL_MAX_EXTRACTED_LIGHTS 3
 
+// Fraction of the ground-projection dome radius where the projection starts
+// fading to the infinite skybox. Fed to skybox_frag.glsl as gpFadeStart;
+// apps clamp camera distance to this so no reachable view shows the blend.
+#define SKYBOX_GP_FADE_START 0.7f
+
 // Forward declarations
 struct Engine;
 
