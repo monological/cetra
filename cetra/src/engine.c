@@ -107,6 +107,7 @@ Engine* create_engine(const char* window_title, int width, int height) {
     engine->show_xyz = false;
     engine->show_fps = false;
     engine->show_bones = false;
+    engine->headless = false;
 
     engine->bone_program = NULL;
     engine->bone_line_vao = 0;
@@ -208,6 +209,10 @@ static int _setup_engine_glfw(Engine* engine) {
     glfwWindowHint(GLFW_SAMPLES, 4); // Enable 4x MSAA
     glfwWindowHint(GLFW_DEPTH_BITS, 32);
 
+    if (engine->headless) {
+        glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
+    }
+
     engine->window =
         glfwCreateWindow(engine->win_width, engine->win_height, engine->window_title, NULL, NULL);
     if (engine->window == NULL) {
@@ -218,12 +223,11 @@ static int _setup_engine_glfw(Engine* engine) {
 
     glfwMakeContextCurrent(engine->window);
 
-    // Enable V-Sync
-    glfwSwapInterval(1);
+    // V-Sync on for normal runs, off for headless so frames run at full speed
+    glfwSwapInterval(engine->headless ? 0 : 1);
 
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glfwSwapInterval(1);
 
     if (glewInit() != GLEW_OK) {
         log_error("Failed to initialize GLEW");
@@ -762,6 +766,12 @@ void set_engine_show_fps(Engine* engine, bool show_fps) {
     if (!engine)
         return;
     engine->show_fps = show_fps;
+}
+
+void set_engine_headless(Engine* engine, bool headless) {
+    if (!engine)
+        return;
+    engine->headless = headless;
 }
 
 void render_nuklear_gui(Engine* engine) {

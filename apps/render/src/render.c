@@ -59,6 +59,8 @@ typedef struct {
     const char* source_skeleton_path;  // Source skeleton for retargeting
     int width;
     int height;
+    int headless;
+    int max_frames; // Exit after this many frames (0 = run forever)
     int show_help;
 } RenderArgs;
 
@@ -72,6 +74,8 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "  -s, --source <path>    Source skeleton for retargeting (T-pose)\n");
     fprintf(stderr, "  -W, --width <int>      Window width (default: %d)\n", DEFAULT_WIDTH);
     fprintf(stderr, "  -H, --height <int>     Window height (default: %d)\n", DEFAULT_HEIGHT);
+    fprintf(stderr, "  -x, --headless         Hidden window (for debugging/CI)\n");
+    fprintf(stderr, "  -f, --frames <int>     Exit after N frames\n");
     fprintf(stderr, "  -h, --help             Show this help message\n");
     fprintf(stderr, "\nExamples:\n");
     fprintf(stderr, "  %s -m character.fbx -t textures/\n", prog);
@@ -141,6 +145,18 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 fprintf(stderr, "Error: invalid height '%s'\n", argv[i]);
                 return -1;
             }
+        } else if (strcmp(argv[i], "-x") == 0 || strcmp(argv[i], "--headless") == 0) {
+            args->headless = 1;
+        } else if (strcmp(argv[i], "-f") == 0 || strcmp(argv[i], "--frames") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->max_frames = atoi(argv[i]);
+            if (args->max_frames <= 0) {
+                fprintf(stderr, "Error: invalid frame count '%s'\n", argv[i]);
+                return -1;
+            }
         } else if (argv[i][0] == '-') {
             fprintf(stderr, "Error: unknown option '%s'\n", argv[i]);
             return -1;
@@ -177,6 +193,12 @@ static MouseDragController* drag_controller = NULL;
  */
 static AnimationState* anim_state = NULL;
 static float last_frame_time = 0.0f;
+
+/*
+ * Frame limit (--frames)
+ */
+static int max_frames = 0;
+static int frames_rendered = 0;
 
 /*
  * Callbacks
@@ -243,6 +265,10 @@ void render_scene_callback(Engine* engine, Scene* current_scene) {
 
     if (!engine || !root_node)
         return;
+
+    if (max_frames > 0 && ++frames_rendered >= max_frames) {
+        glfwSetWindowShouldClose(engine->window, GLFW_TRUE);
+    }
 
     float time_value = glfwGetTime();
     float delta_time = time_value - last_frame_time;
@@ -334,6 +360,9 @@ int main(int argc, char** argv) {
     }
 
     Engine* engine = create_engine("Cetra Engine", args.width, args.height);
+
+    set_engine_headless(engine, args.headless != 0);
+    max_frames = args.max_frames;
 
     if (init_engine(engine) != 0) {
         fprintf(stderr, "Failed to initialize engine\n");

@@ -87,6 +87,7 @@ typedef struct Engine {
     bool show_xyz;
     bool show_fps;
     bool show_bones; // X-ray bone visualization
+    bool headless;   // Hidden window, no vsync (set before init_engine)
 
     // Bone visualization
     ShaderProgram* bone_program;
@@ -115,6 +116,7 @@ Engine* create_engine(const char* window_title, int width, int height);
 void free_engine(Engine* engine);
 
 int init_engine(Engine* engine);
+void set_engine_headless(Engine* engine, bool headless);
 
 // GLFW callbacks
 void set_engine_error_callback(Engine* engine, GLFWerrorfun error_callback);
