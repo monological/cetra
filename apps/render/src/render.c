@@ -59,6 +59,11 @@ typedef struct {
     const char* source_skeleton_path;  // Source skeleton for retargeting
     const char* screenshot_path;       // Save final frame here (PPM)
     int screenshot_every;              // Also save numbered frames every N frames
+    float fov_deg;                     // Camera FOV in degrees (0 = default 50)
+    float ground_radius;               // Skybox ground projection dome radius (0 = default)
+    float ground_height;               // HDR capture height above ground (0 = default)
+    float camera_distance;             // Camera distance override in meters (0 = auto)
+    int no_ground;                     // Disable skybox ground projection
     int width;
     int height;
     int headless;
@@ -74,6 +79,11 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "  -m, --model <path>     Model file (FBX, glTF, OBJ) [required]\n");
     fprintf(stderr, "  -t, --textures <dir>   Texture directory\n");
     fprintf(stderr, "  -e, --env <path>       HDR environment map for IBL\n");
+    fprintf(stderr, "  -F, --fov <degrees>    Camera field of view (default: 50)\n");
+    fprintf(stderr, "      --ground <radius>  Ground projection dome radius (default: 5)\n");
+    fprintf(stderr, "      --ground-height <m> HDR capture height above ground (default: 1.2)\n");
+    fprintf(stderr, "      --no-ground        Disable HDR ground projection (infinite skybox)\n");
+    fprintf(stderr, "  -D, --distance <m>     Camera distance from model (default: auto)\n");
     fprintf(stderr, "  -a, --anim <path>      Animation file (can be repeated)\n");
     fprintf(stderr, "  -s, --source <path>    Source skeleton for retargeting (T-pose)\n");
     fprintf(stderr, "  -W, --width <int>      Window width (default: %d)\n", DEFAULT_WIDTH);
@@ -159,6 +169,48 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->show_bones = 1;
         } else if (strcmp(argv[i], "--check-stretch") == 0) {
             args->check_stretch = 1;
+        } else if (strcmp(argv[i], "-F") == 0 || strcmp(argv[i], "--fov") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->fov_deg = (float)atof(argv[i]);
+            if (args->fov_deg <= 0.0f || args->fov_deg >= 180.0f) {
+                fprintf(stderr, "Error: invalid fov '%s' (use 1-179 degrees)\n", argv[i]);
+                return -1;
+            }
+        } else if (strcmp(argv[i], "--no-ground") == 0) {
+            args->no_ground = 1;
+        } else if (strcmp(argv[i], "--ground") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->ground_radius = (float)atof(argv[i]);
+            if (args->ground_radius <= 0.0f) {
+                fprintf(stderr, "Error: invalid ground radius '%s'\n", argv[i]);
+                return -1;
+            }
+        } else if (strcmp(argv[i], "--ground-height") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->ground_height = (float)atof(argv[i]);
+            if (args->ground_height <= 0.0f) {
+                fprintf(stderr, "Error: invalid ground height '%s'\n", argv[i]);
+                return -1;
+            }
+        } else if (strcmp(argv[i], "-D") == 0 || strcmp(argv[i], "--distance") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->camera_distance = (float)atof(argv[i]);
+            if (args->camera_distance <= 0.0f) {
+                fprintf(stderr, "Error: invalid camera distance '%s'\n", argv[i]);
+                return -1;
+            }
         } else if (strcmp(argv[i], "-S") == 0 || strcmp(argv[i], "--screenshot") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -552,7 +604,7 @@ int main(int argc, char** argv) {
     vec3 camera_position = {0.0f, 150.0f, 100.0f};
     vec3 look_at_point = {0.0f, 150.0f, 0.0f};
     vec3 up_vector = {0.0f, 1.0f, 0.0f};
-    float fov_radians = 0.37;
+    float fov_radians = glm_rad(args.fov_deg > 0.0f ? args.fov_deg : 50.0f);
     float near_clip = 7.0f;
     float far_clip = 10000.0f;
 
@@ -626,6 +678,13 @@ int main(int argc, char** argv) {
                 scene->ibl = ibl;
                 scene->render_skybox = true;
                 scene->skybox_exposure = 1.0f;
+                // Ground projection on by default; --no-ground restores the
+                // infinite skybox
+                scene->skybox_ground_projection = !args.no_ground;
+                scene->skybox_gp_radius =
+                    args.ground_radius > 0.0f ? args.ground_radius : 5.0f;
+                scene->skybox_gp_height =
+                    args.ground_height > 0.0f ? args.ground_height : 1.2f;
                 printf("IBL loaded from: %s\n", args.hdr_path);
             } else {
                 fprintf(stderr, "Failed to precompute IBL\n");
@@ -708,6 +767,8 @@ int main(int argc, char** argv) {
     float camera_distance = scene_radius * 2.5f;
     if (camera_distance < 1.0f)
         camera_distance = 100.0f; // Fallback for empty scenes
+    if (args.camera_distance > 0.0f)
+        camera_distance = args.camera_distance;
 
     vec3 auto_cam_pos = {scene_center[0], scene_center[1] + scene_radius * 0.3f,
                          scene_center[2] + camera_distance};
