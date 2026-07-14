@@ -520,7 +520,9 @@ int main(int argc, char** argv) {
 
     // Load additional animation files if provided
     // Enable retargeting by default to support Mixamo animations on custom rigs
+    size_t first_cli_anim = 0; // Index of first animation loaded via -a (0 = embedded)
     if (args.anim_count > 0 && scene->skeleton_count > 0) {
+        first_cli_anim = scene->animation_count;
         Skeleton* skeleton = scene->skeletons[0];
 
         // Load source skeleton for retargeting if provided
@@ -549,14 +551,17 @@ int main(int argc, char** argv) {
         fprintf(stderr, "Warning: animation files specified but model has no skeleton\n");
     }
 
-    // Start playing the first animation if available
+    // Start playing an animation if available; prefer the first one loaded via -a
+    // over animations embedded in the model file
     if (scene->animation_count > 0 && scene->skeleton_count > 0) {
+        size_t play_idx = (first_cli_anim < scene->animation_count) ? first_cli_anim : 0;
         anim_state = create_animation_state(scene->skeletons[0]);
         if (anim_state) {
-            set_animation(anim_state, scene->animations[0]);
+            set_animation(anim_state, scene->animations[play_idx]);
             anim_state->looping = true;
             play_animation(anim_state);
-            printf("Playing animation: %s\n", scene->animations[0]->name);
+            printf("Playing animation: %s (index %zu of %zu)\n", scene->animations[play_idx]->name,
+                   play_idx, scene->animation_count);
         }
     }
 

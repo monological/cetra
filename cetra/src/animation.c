@@ -741,13 +741,16 @@ void compute_bone_matrices(AnimationState* state) {
             // GLOBAL-SPACE RETARGETING WITH REST POSE COMPENSATION
             int src_idx = channel->source_bone_index;
 
-            // Step 1: Extract MOTION from source skeleton
-            // motion = inv(source_global_rest) * source_global_animated
-            // This represents how the bone deviated from its rest pose
+            // Step 1: Extract MOTION from source skeleton in WORLD frame
+            // motion = source_global_animated * inv(source_global_rest)
+            // This is the world-space rotation taking the bone from rest to animated.
+            // World frame is used (not the bone's rest-local frame) because matched
+            // bones in different rigs share world orientation at rest (both characters
+            // stand upright facing forward) but do not share local axis conventions.
             versor source_rest_inv;
             glm_quat_inv(source_globals_rest[src_idx], source_rest_inv);
             versor motion;
-            glm_quat_mul(source_rest_inv, source_globals_animated[src_idx], motion);
+            glm_quat_mul(source_globals_animated[src_idx], source_rest_inv, motion);
             glm_quat_normalize(motion);
 
             // Step 2: Get target bone's global rest rotation
@@ -758,10 +761,10 @@ void compute_bone_matrices(AnimationState* state) {
             glm_mat4_quat(target_global_rest_mat, target_global_rest);
             glm_quat_normalize(target_global_rest);
 
-            // Step 3: Apply motion to target rest pose
-            // target_global_animated = target_global_rest * motion
+            // Step 3: Apply world-space motion to target rest pose
+            // target_global_animated = motion * target_global_rest
             versor target_global_animated;
-            glm_quat_mul(target_global_rest, motion, target_global_animated);
+            glm_quat_mul(motion, target_global_rest, target_global_animated);
             glm_quat_normalize(target_global_animated);
 
             // Step 4: Get target parent's current global rotation (from animated transform)

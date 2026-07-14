@@ -11,6 +11,7 @@
 #include <assimp/scene.h>
 #include <assimp/postprocess.h>
 #include <assimp/GltfMaterial.h>
+#include <assimp/config.h>
 #include <GL/glew.h>
 
 #define STB_IMAGE_IMPLEMENTATION
@@ -30,6 +31,24 @@
 
 // Forward declarations
 static void copy_aiMatrix_to_mat4(const struct aiMatrix4x4* from, mat4 to);
+
+/*
+ * Import a scene with FBX pivot preservation disabled. Assimp then collapses
+ * the $AssimpFbx$ pseudo-node chains (Translation/PreRotation/Rotation/...)
+ * and bakes pre/post rotations into node transforms and animation channels.
+ * Without this, Mixamo animation channels only carry the animated rotation
+ * curve (missing each joint's pre-rotation), which breaks retargeting.
+ */
+static const struct aiScene* import_ai_scene(const char* path, unsigned int flags) {
+    struct aiPropertyStore* props = aiCreatePropertyStore();
+    if (!props) {
+        return aiImportFile(path, flags);
+    }
+    aiSetImportPropertyInteger(props, AI_CONFIG_IMPORT_FBX_PRESERVE_PIVOTS, 0);
+    const struct aiScene* ai_scene = aiImportFileExWithProperties(path, flags, NULL, props);
+    aiReleasePropertyStore(props);
+    return ai_scene;
+}
 
 // Extract rotation quaternion from a mat4 transform
 static void extract_rotation_quat(mat4 transform, versor out) {
@@ -597,7 +616,31 @@ void process_ai_mesh_bones(Mesh* mesh, const struct aiMesh* ai_mesh, Skeleton* s
         }
     }
 
+    // Find the mesh's dominant bone (largest total weight) as a fallback
+    // for vertices that have no weights at all. Leaving such vertices
+    // untransformed pins them at their bind-pose position during animation,
+    // stretching their triangles into long spikes.
+    float* bone_weight_sums = calloc(skeleton->bone_count, sizeof(float));
+    int dominant_bone = 0;
+    if (bone_weight_sums) {
+        for (size_t v = 0; v < vert_count; v++) {
+            for (int i = 0; i < BONES_PER_VERTEX; i++) {
+                int id = mesh->bone_ids[v * BONES_PER_VERTEX + i];
+                if (id >= 0 && (size_t)id < skeleton->bone_count) {
+                    bone_weight_sums[id] += mesh->bone_weights[v * BONES_PER_VERTEX + i];
+                }
+            }
+        }
+        for (size_t b = 1; b < skeleton->bone_count; b++) {
+            if (bone_weight_sums[b] > bone_weight_sums[dominant_bone]) {
+                dominant_bone = (int)b;
+            }
+        }
+        free(bone_weight_sums);
+    }
+
     // Normalize weights (ensure they sum to 1.0)
+    size_t unweighted = 0;
     for (size_t v = 0; v < vert_count; v++) {
         float total = 0.0f;
         for (int i = 0; i < BONES_PER_VERTEX; i++) {
@@ -608,8 +651,14 @@ void process_ai_mesh_bones(Mesh* mesh, const struct aiMesh* ai_mesh, Skeleton* s
                 mesh->bone_weights[v * BONES_PER_VERTEX + i] /= total;
             }
         } else {
-            log_warn("Vertex %zu has no bone weights", v);
+            mesh->bone_ids[v * BONES_PER_VERTEX] = dominant_bone;
+            mesh->bone_weights[v * BONES_PER_VERTEX] = 1.0f;
+            unweighted++;
         }
+    }
+    if (unweighted > 0) {
+        log_warn("%zu vertices had no bone weights; bound to dominant bone '%s'", unweighted,
+                 skeleton->bones[dominant_bone].name);
     }
 
     free(bone_counts);
@@ -731,9 +780,12 @@ static void process_ai_animations_internal(const struct aiScene* ai_scene, Scene
                 channel->source_parent_bone_index = -1;
                 glm_quat_identity(channel->source_local_rest);
 
-                // Compute proper delta: delta = target_rest * inv(source_rest)
-                // This transforms rotations from source skeleton space to target skeleton space
-                versor source_local_rest = {0, 0, 0, 1};  // Identity = assume same rest pose
+                // Compute proper delta: delta = inv(source_rest) * target_rest
+                // Without a source skeleton, assume the animation comes from a skeleton
+                // with the same rest pose as the target, so the delta becomes identity
+                // and keyframes pass through unchanged.
+                versor source_local_rest;
+                glm_quat_copy(target_local_rest, source_local_rest);
 
                 if (source_skeleton) {
                     // Find matching bone in source skeleton
@@ -844,7 +896,7 @@ int load_animations_from_file(Scene* scene, Skeleton* skeleton, const char* file
     // Use minimal import flags - we only need animation data
     unsigned int flags = aiProcess_ValidateDataStructure;
 
-    const struct aiScene* ai_scene = aiImportFile(filepath, flags);
+    const struct aiScene* ai_scene = import_ai_scene(filepath, flags);
     if (!ai_scene) {
         log_error("Failed to load animation file: %s - %s", filepath, aiGetErrorString());
         return -1;
@@ -1067,7 +1119,7 @@ SceneNode* process_ai_node(Scene* scene, struct aiNode* ai_node, const struct ai
 
 Scene* create_scene_from_model_path(const char* path, const char* texture_directory) {
     const struct aiScene* ai_scene =
-        aiImportFile(path, aiProcess_Triangulate | aiProcess_FlipUVs | aiProcess_CalcTangentSpace);
+        import_ai_scene(path, aiProcess_Triangulate | aiProcess_FlipUVs | aiProcess_CalcTangentSpace);
     if (!ai_scene || ai_scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !ai_scene->mRootNode) {
         log_error("Error importing FBX file: %s\n", path);
         return NULL;
@@ -1188,7 +1240,7 @@ Scene* create_scene_from_model_path_async(const char* path, const char* texture_
     }
 
     const struct aiScene* ai_scene =
-        aiImportFile(path, aiProcess_Triangulate | aiProcess_FlipUVs | aiProcess_CalcTangentSpace);
+        import_ai_scene(path, aiProcess_Triangulate | aiProcess_FlipUVs | aiProcess_CalcTangentSpace);
     if (!ai_scene || ai_scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !ai_scene->mRootNode) {
         log_error("Error importing FBX file: %s\n", path);
         return NULL;
