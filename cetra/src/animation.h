@@ -124,6 +124,8 @@ AnimationChannel* get_channel_for_bone_name(Animation* animation, const char* bo
 
 // --- Animation State ---
 
+struct SpringBoneSystem;
+
 typedef struct AnimationState {
     Animation* current_animation;
     Skeleton* skeleton;
@@ -140,6 +142,10 @@ typedef struct AnimationState {
     // Scratch space for transform computation
     mat4* local_transforms;  // Per-bone local transforms (interpolated)
     mat4* global_transforms; // Per-bone global transforms (accumulated)
+
+    // Optional spring-bone secondary motion (see springbone.h)
+    struct SpringBoneSystem* springs;
+    float spring_delta_time; // Frame dt for the spring simulation
 } AnimationState;
 
 // Animation state functions

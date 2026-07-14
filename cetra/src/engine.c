@@ -18,6 +18,7 @@
 #include "intersect.h"
 #include "shadow.h"
 #include "render.h"
+#include "springbone.h"
 
 #define NK_INCLUDE_FIXED_TYPES
 #define NK_INCLUDE_STANDARD_IO
@@ -936,6 +937,40 @@ void render_nuklear_gui(Engine* engine) {
                     nk_layout_row_dynamic(engine->nk_ctx, 30, 1);
                     if (nk_button_label(engine->nk_ctx, "Recalc Bind Pose")) {
                         recalculate_inverse_bind_poses(anim->skeleton);
+                    }
+                }
+
+                // Spring-bone secondary motion controls
+                if (anim->springs) {
+                    SpringBoneSystem* sb = anim->springs;
+
+                    nk_layout_row_dynamic(engine->nk_ctx, 10, 1);
+                    nk_spacing(engine->nk_ctx, 1);
+
+                    nk_layout_row_dynamic(engine->nk_ctx, 20, 1);
+                    nk_label(engine->nk_ctx, "Spring Bones", NK_TEXT_LEFT);
+
+                    nk_layout_row_dynamic(engine->nk_ctx, 25, 1);
+                    nk_bool sb_enabled = sb->enabled;
+                    nk_checkbox_label(engine->nk_ctx, "Enabled", &sb_enabled);
+                    if (sb_enabled && !sb->enabled) {
+                        spring_bone_reset(sb); // Re-enable snaps instead of lurching
+                    }
+                    sb->enabled = sb_enabled != 0;
+
+                    static float sb_stiffness = 0.15f;
+                    static float sb_damping = 0.2f;
+                    static float sb_gravity = 9.8f;
+                    nk_property_float(engine->nk_ctx, "Stiffness:", 0.0f, &sb_stiffness, 1.0f,
+                                      0.05f, 0.005f);
+                    nk_property_float(engine->nk_ctx, "Damping:", 0.0f, &sb_damping, 1.0f, 0.05f,
+                                      0.005f);
+                    nk_property_float(engine->nk_ctx, "Gravity:", 0.0f, &sb_gravity, 30.0f, 0.5f,
+                                      0.1f);
+                    for (size_t c = 0; c < sb->chain_count; c++) {
+                        sb->chains[c].params.stiffness = sb_stiffness;
+                        sb->chains[c].params.damping = sb_damping;
+                        sb->chains[c].params.gravity = sb_gravity;
                     }
                 }
             }

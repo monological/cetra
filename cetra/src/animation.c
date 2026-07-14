@@ -1,4 +1,5 @@
 #include "animation.h"
+#include "springbone.h"
 #include "util.h"
 #include "ext/log.h"
 
@@ -409,6 +410,9 @@ AnimationState* create_animation_state(Skeleton* skeleton) {
         glm_mat4_identity(state->global_transforms[i]);
     }
 
+    state->springs = NULL;
+    state->spring_delta_time = 0.0f;
+
     // Compute initial bind pose
     compute_bind_pose_matrices(state);
 
@@ -418,6 +422,9 @@ AnimationState* create_animation_state(Skeleton* skeleton) {
 void free_animation_state(AnimationState* state) {
     if (!state)
         return;
+
+    if (state->springs)
+        free_spring_bone_system(state->springs);
 
     if (state->local_transforms)
         free(state->local_transforms);
@@ -433,6 +440,8 @@ void set_animation(AnimationState* state, Animation* animation) {
 
     state->current_animation = animation;
     state->current_time = 0.0f;
+    if (state->springs)
+        spring_bone_reset(state->springs);
 }
 
 void play_animation(AnimationState* state) {
@@ -451,6 +460,8 @@ void stop_animation(AnimationState* state) {
 
     state->playing = false;
     state->current_time = 0.0f;
+    if (state->springs)
+        spring_bone_reset(state->springs);
     compute_bind_pose_matrices(state);
 }
 
@@ -469,6 +480,8 @@ void reset_animation(AnimationState* state) {
 void update_animation(AnimationState* state, float delta_time) {
     if (!state || !state->playing || !state->current_animation)
         return;
+
+    state->spring_delta_time = delta_time;
 
     const Animation* anim = state->current_animation;
 
@@ -848,6 +861,14 @@ void compute_bone_matrices(AnimationState* state) {
         } else {
             glm_mat4_copy(state->local_transforms[i], state->global_transforms[i]);
         }
+    }
+
+    // Spring-bone secondary motion: simulate un-animated chains (scabbard,
+    // hair) on top of the animated pose before skinning matrices are built
+    if (state->springs) {
+        spring_bone_update(state->springs, state->local_transforms, state->global_transforms,
+                           state->spring_delta_time);
+        state->spring_delta_time = 0.0f;
     }
 
     // PASS 2: Compute final bone matrices (global * inverse bind pose)
