@@ -616,30 +616,10 @@ void process_ai_mesh_bones(Mesh* mesh, const struct aiMesh* ai_mesh, Skeleton* s
         }
     }
 
-    // Find the mesh's dominant bone (largest total weight) as a fallback
-    // for vertices that have no weights at all. Leaving such vertices
-    // untransformed pins them at their bind-pose position during animation,
-    // stretching their triangles into long spikes.
-    float* bone_weight_sums = calloc(skeleton->bone_count, sizeof(float));
-    int dominant_bone = 0;
-    if (bone_weight_sums) {
-        for (size_t v = 0; v < vert_count; v++) {
-            for (int i = 0; i < BONES_PER_VERTEX; i++) {
-                int id = mesh->bone_ids[v * BONES_PER_VERTEX + i];
-                if (id >= 0 && (size_t)id < skeleton->bone_count) {
-                    bone_weight_sums[id] += mesh->bone_weights[v * BONES_PER_VERTEX + i];
-                }
-            }
-        }
-        for (size_t b = 1; b < skeleton->bone_count; b++) {
-            if (bone_weight_sums[b] > bone_weight_sums[dominant_bone]) {
-                dominant_bone = (int)b;
-            }
-        }
-        free(bone_weight_sums);
-    }
-
-    // Normalize weights (ensure they sum to 1.0)
+    // Normalize weights (ensure they sum to 1.0). Track which vertices end up
+    // with no effective weight: Assimp can report weight entries of 0.0, so
+    // slot counts alone cannot identify them.
+    unsigned char* has_weights = calloc(vert_count, 1);
     size_t unweighted = 0;
     for (size_t v = 0; v < vert_count; v++) {
         float total = 0.0f;
@@ -650,17 +630,50 @@ void process_ai_mesh_bones(Mesh* mesh, const struct aiMesh* ai_mesh, Skeleton* s
             for (int i = 0; i < BONES_PER_VERTEX; i++) {
                 mesh->bone_weights[v * BONES_PER_VERTEX + i] /= total;
             }
+            if (has_weights)
+                has_weights[v] = 1;
         } else {
-            mesh->bone_ids[v * BONES_PER_VERTEX] = dominant_bone;
-            mesh->bone_weights[v * BONES_PER_VERTEX] = 1.0f;
             unweighted++;
         }
     }
-    if (unweighted > 0) {
-        log_warn("%zu vertices had no bone weights; bound to dominant bone '%s'", unweighted,
-                 skeleton->bones[dominant_bone].name);
+
+    // Vertices with no effective weights get the weights of a triangle
+    // neighbor. Left untransformed they pin at their bind-pose position
+    // during animation, stretching their triangles into long spikes; any
+    // other bone choice (e.g. the mesh's dominant bone) does the same because
+    // the vertex must move with the surface patch it is part of.
+    if (unweighted > 0 && has_weights && mesh->indices && mesh->index_count >= 3) {
+        size_t fixed = 0;
+        for (size_t v = 0; v < vert_count; v++) {
+            if (has_weights[v])
+                continue;
+
+            // Find a co-triangle vertex that has weights and copy them
+            for (size_t t = 0; t + 2 < mesh->index_count && !has_weights[v]; t += 3) {
+                if (mesh->indices[t] != v && mesh->indices[t + 1] != v &&
+                    mesh->indices[t + 2] != v)
+                    continue;
+                for (int e = 0; e < 3; e++) {
+                    size_t n = mesh->indices[t + e];
+                    if (n == v || n >= vert_count || !has_weights[n])
+                        continue;
+                    for (int i = 0; i < BONES_PER_VERTEX; i++) {
+                        mesh->bone_ids[v * BONES_PER_VERTEX + i] =
+                            mesh->bone_ids[n * BONES_PER_VERTEX + i];
+                        mesh->bone_weights[v * BONES_PER_VERTEX + i] =
+                            mesh->bone_weights[n * BONES_PER_VERTEX + i];
+                    }
+                    has_weights[v] = 1;
+                    fixed++;
+                    break;
+                }
+            }
+        }
+        log_warn("%zu vertices had no bone weights; %zu inherited a triangle neighbor's weights",
+                 unweighted, fixed);
     }
 
+    free(has_weights);
     free(bone_counts);
     log_info("Processed %u bones for mesh with %zu vertices", ai_mesh->mNumBones, vert_count);
 }
