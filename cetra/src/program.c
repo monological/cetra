@@ -550,3 +550,15 @@ ShaderProgram* create_bone_program() {
 
     return program;
 }
+
+ShaderProgram* create_shadow_catcher_program() {
+    ShaderProgram* program = NULL;
+
+    if ((program = create_program_from_source("shadow_catcher", catcher_vert_shader_str,
+                                              catcher_frag_shader_str, NULL)) == NULL) {
+        log_error("Failed to initialize shadow catcher shader program");
+        return NULL;
+    }
+
+    return program;
+}

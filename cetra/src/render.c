@@ -518,6 +518,71 @@ void render_current_scene(Engine* engine, float time_value) {
                       scene->skybox_gp_height);
     }
 
+    // Shadow catcher: darken the environment floor where the model blocks
+    // the shadow-casting lights (drawn over the skybox, blended)
+    if (scene->shadow_catcher && scene->shadow_system &&
+        scene->shadow_system->active_count > 0 && engine->shadow_catcher_program &&
+        engine->catcher_vao) {
+        ShaderProgram* catcher = engine->shadow_catcher_program;
+        ShadowSystem* ss = scene->shadow_system;
+
+        glUseProgram(catcher->id);
+        uniform_set_mat4(catcher->uniforms, "view", (const float*)*view);
+        uniform_set_mat4(catcher->uniforms, "projection", (const float*)*projection);
+        uniform_set_float(catcher->uniforms, "catcherStrength", scene->shadow_catcher_strength);
+        uniform_set_float(catcher->uniforms, "planeRadius", scene->skybox_gp_radius);
+        uniform_set_int(catcher->uniforms, "numShadowLights", (int)ss->active_count);
+        uniform_set_float(catcher->uniforms, "shadowBias", ss->casters[0].bias);
+
+        // Weight each caster's shadow by its light's share of analytic light
+        float weights[MAX_SHADOW_LIGHTS] = {0};
+        float weight_total = 0.0f;
+        for (size_t i = 0; i < scene->light_count; i++) {
+            const Light* light = scene->lights[i];
+            if (light && light->shadow_map_index >= 0 &&
+                light->shadow_map_index < MAX_SHADOW_LIGHTS) {
+                weights[light->shadow_map_index] = light->intensity;
+                weight_total += light->intensity;
+            }
+        }
+        for (size_t i = 0; i < ss->active_count && i < MAX_SHADOW_LIGHTS; i++) {
+            char name[64];
+            snprintf(name, sizeof(name), "lightSpaceMatrix[%zu]", i);
+            GLint mloc = uniform_location(catcher->uniforms, name);
+            if (mloc >= 0)
+                glUniformMatrix4fv(mloc, 1, GL_FALSE,
+                                   (const GLfloat*)ss->casters[i].light_space_matrix);
+
+            snprintf(name, sizeof(name), "shadowLightWeight[%zu]", i);
+            uniform_set_float(catcher->uniforms, name,
+                              weight_total > 0.0f ? weights[i] / weight_total : 0.0f);
+        }
+
+        float texel = 1.0f / (float)ss->default_map_size;
+        GLint loc = uniform_location(catcher->uniforms, "shadowTexelSize");
+        if (loc >= 0)
+            glUniform2f(loc, texel, texel);
+
+        glActiveTexture(GL_TEXTURE0 + SHADOW_MAP_TEXTURE_UNIT);
+        glBindTexture(GL_TEXTURE_2D_ARRAY, ss->shadow_map_array);
+        uniform_set_int(catcher->uniforms, "shadowMaps", SHADOW_MAP_TEXTURE_UNIT);
+
+        // Explicit state: blended, no depth writes, visible from both sides
+        GLboolean cull_was_enabled = glIsEnabled(GL_CULL_FACE);
+        glDisable(GL_CULL_FACE);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glDepthMask(GL_FALSE);
+
+        glBindVertexArray(engine->catcher_vao);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+        glBindVertexArray(0);
+
+        glDepthMask(GL_TRUE);
+        if (cull_was_enabled)
+            glEnable(GL_CULL_FACE);
+    }
+
     // Reset program state at end of frame
     glUseProgram(0);
 }

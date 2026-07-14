@@ -18,6 +18,9 @@
 #define IBL_BRDF_LUT_TEXTURE_UNIT   16
 #define IBL_SKYBOX_TEXTURE_UNIT     17
 
+// Max bright light lobes extracted from an HDR (matches MAX_SHADOW_LIGHTS)
+#define IBL_MAX_EXTRACTED_LIGHTS 3
+
 // Forward declarations
 struct Engine;
 
@@ -56,6 +59,13 @@ typedef struct IBLResources {
     // Parameters
     float intensity;
     float max_reflection_lod;
+
+    // Bright light lobes extracted from the environment during HDR load
+    // (for aiming analytic shadow-casting lights). Ordered by energy,
+    // energies normalized so they sum to 1.
+    vec3 light_dirs[IBL_MAX_EXTRACTED_LIGHTS];
+    float light_energies[IBL_MAX_EXTRACTED_LIGHTS];
+    int light_count;
 
     // State
     bool initialized;

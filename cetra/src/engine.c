@@ -116,6 +116,10 @@ Engine* create_engine(const char* window_title, int width, int height) {
     engine->bone_line_vao = 0;
     engine->bone_line_vbo = 0;
 
+    engine->shadow_catcher_program = NULL;
+    engine->catcher_vao = 0;
+    engine->catcher_vbo = 0;
+
     init_input_state(&engine->input);
 
     // FPS tracking initialization
@@ -180,6 +184,11 @@ void free_engine(Engine* engine) {
     glDeleteFramebuffers(1, &engine->framebuffer);
     glDeleteTextures(1, &engine->multisample_texture);
     glDeleteRenderbuffers(1, &engine->depth_renderbuffer);
+
+    if (engine->catcher_vao)
+        glDeleteVertexArrays(1, &engine->catcher_vao);
+    if (engine->catcher_vbo)
+        glDeleteBuffers(1, &engine->catcher_vbo);
 
     nk_glfw3_shutdown(&engine->nk_glfw);
 
@@ -391,6 +400,26 @@ int init_engine(Engine* engine) {
     engine->bone_program = create_bone_program();
     if (engine->bone_program) {
         add_shader_program_to_engine(engine, engine->bone_program);
+    }
+
+    // Shadow catcher: unit quad at y=0 (scaled by planeRadius in the shader)
+    engine->shadow_catcher_program = create_shadow_catcher_program();
+    if (engine->shadow_catcher_program) {
+        add_shader_program_to_engine(engine, engine->shadow_catcher_program);
+
+        // CCW as seen from above (+y) so the upward face is the front face
+        const float catcher_quad[] = {
+            -1.0f, 0.0f, -1.0f, -1.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f,
+            -1.0f, 0.0f, -1.0f, 1.0f,  0.0f, 1.0f, 1.0f, 0.0f, -1.0f,
+        };
+        glGenVertexArrays(1, &engine->catcher_vao);
+        glGenBuffers(1, &engine->catcher_vbo);
+        glBindVertexArray(engine->catcher_vao);
+        glBindBuffer(GL_ARRAY_BUFFER, engine->catcher_vbo);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(catcher_quad), catcher_quad, GL_STATIC_DRAW);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+        glEnableVertexAttribArray(0);
+        glBindVertexArray(0);
     }
 
     return 0;
@@ -994,6 +1023,19 @@ void render_nuklear_gui(Engine* engine) {
                                       &current_scene->skybox_gp_radius, 100.0f, 0.5f, 0.1f);
                     nk_property_float(engine->nk_ctx, "Capture Height:", 0.1f,
                                       &current_scene->skybox_gp_height, 10.0f, 0.1f, 0.05f);
+                }
+
+                nk_property_float(engine->nk_ctx, "IBL Intensity:", 0.0f,
+                                  &current_scene->ibl->intensity, 4.0f, 0.1f, 0.05f);
+
+                nk_bool sc = current_scene->shadow_catcher;
+                nk_checkbox_label(engine->nk_ctx, "Shadow Catcher", &sc);
+                current_scene->shadow_catcher = sc != 0;
+
+                if (current_scene->shadow_catcher) {
+                    nk_property_float(engine->nk_ctx, "Shadow Strength:", 0.0f,
+                                      &current_scene->shadow_catcher_strength, 1.0f, 0.05f,
+                                      0.01f);
                 }
             }
 

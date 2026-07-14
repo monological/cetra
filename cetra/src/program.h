@@ -59,6 +59,9 @@ ShaderProgram* create_text_program();
 // Bone Visualization Program
 ShaderProgram* create_bone_program();
 
+// Shadow Catcher Program
+ShaderProgram* create_shadow_catcher_program();
+
 size_t calculate_max_lights();
 
 #endif // _PROGRAM_H_

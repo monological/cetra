@@ -118,6 +118,8 @@ typedef struct Scene {
     bool skybox_ground_projection; // Project env onto finite dome + ground
     float skybox_gp_radius;        // Dome radius in world units (meters)
     float skybox_gp_height;        // HDR capture height above ground
+    bool shadow_catcher;           // Ground plane receiving shadows over the skybox
+    float shadow_catcher_strength; // Shadow darkness 0..1
 
     // Skeletal Animation
     Skeleton** skeletons;

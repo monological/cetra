@@ -69,6 +69,8 @@ Scene* create_scene() {
     scene->skybox_ground_projection = false;
     scene->skybox_gp_radius = 5.0f;
     scene->skybox_gp_height = 1.5f;
+    scene->shadow_catcher = false;
+    scene->shadow_catcher_strength = 0.55f;
 
     // Initialize skeletal animation
     scene->skeletons = NULL;

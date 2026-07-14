@@ -98,6 +98,11 @@ typedef struct Engine {
     GLuint bone_line_vao;
     GLuint bone_line_vbo;
 
+    // Shadow catcher (ground plane that receives shadows over the skybox)
+    ShaderProgram* shadow_catcher_program;
+    GLuint catcher_vao;
+    GLuint catcher_vbo;
+
     InputState input;
 
     // FPS tracking

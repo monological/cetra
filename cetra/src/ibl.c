@@ -121,6 +121,7 @@ IBLResources* create_ibl_resources(void) {
 
     ibl->intensity = 1.0f;
     ibl->max_reflection_lod = (float)(IBL_PREFILTER_MIP_LEVELS - 1);
+    ibl->light_count = 0;
     ibl->initialized = false;
     ibl->precomputed = false;
 
@@ -162,6 +163,127 @@ void free_ibl_resources(IBLResources* ibl) {
     free(ibl);
 }
 
+/*
+ * Extract up to IBL_MAX_EXTRACTED_LIGHTS bright light lobes from an equirect
+ * HDR by greedy angular clustering of the brightest pixels.
+ *
+ * Direction/uv mapping matches ibl_equirect_frag.glsl, with the image already
+ * vertically flipped by stbi: row r maps to y = sin((v-0.5)*pi), column c to
+ * azimuth phi = (u-0.5)*2*pi with x = cos(e)cos(phi), z = cos(e)sin(phi).
+ * cos(e) weights for per-row solid angle.
+ */
+static void extract_light_lobes(IBLResources* ibl, const float* data, int width, int height) {
+    const int stride = 4;
+    const float lobe_cos = cosf(glm_rad(35.0f)); // Cluster radius: 35 degrees
+
+    // Collect bright candidate pixels (top of the dynamic range)
+    int rows = (height + stride - 1) / stride;
+    int cols = (width + stride - 1) / stride;
+    size_t max_candidates = (size_t)rows * (size_t)cols;
+    float* cand = malloc(max_candidates * 4 * sizeof(float)); // x,y,z,energy
+    if (!cand)
+        return;
+
+    float max_lum = 0.0f;
+    double lum_sum = 0.0;
+    size_t lum_samples = 0;
+    for (int r = 0; r < height; r += stride) {
+        for (int c = 0; c < width; c += stride) {
+            const float* px = data + ((size_t)r * (size_t)width + (size_t)c) * 3;
+            float lum = 0.2126f * px[0] + 0.7152f * px[1] + 0.0722f * px[2];
+            if (lum > max_lum)
+                max_lum = lum;
+            lum_sum += lum;
+            lum_samples++;
+        }
+    }
+    if (max_lum <= 0.0f || lum_samples == 0) {
+        free(cand);
+        return;
+    }
+
+    // Threshold relative to the MEAN: emitters sit far above it while lit
+    // walls do not. A max-relative threshold fails here because a bare
+    // bulb's hot core can be orders of magnitude brighter than a large
+    // diffused source (softbox/umbrella) that carries comparable energy.
+    float mean_lum = (float)(lum_sum / (double)lum_samples);
+    float threshold = 5.0f * mean_lum;
+    size_t count = 0;
+    for (int r = 0; r < height; r += stride) {
+        float v = ((float)r + 0.5f) / (float)height;
+        float elev = (v - 0.5f) * (float)GLM_PI;
+        float y = sinf(elev);
+        float cos_e = cosf(elev);
+        for (int c = 0; c < width; c += stride) {
+            const float* px = data + ((size_t)r * (size_t)width + (size_t)c) * 3;
+            float lum = 0.2126f * px[0] + 0.7152f * px[1] + 0.0722f * px[2];
+            if (lum < threshold)
+                continue;
+            float u = ((float)c + 0.5f) / (float)width;
+            float phi = (u - 0.5f) * 2.0f * (float)GLM_PI;
+            cand[count * 4 + 0] = cosf(phi) * cos_e;
+            cand[count * 4 + 1] = y;
+            cand[count * 4 + 2] = sinf(phi) * cos_e;
+            cand[count * 4 + 3] = lum * cos_e;
+            count++;
+        }
+    }
+
+    // Greedy clustering: seed with the most energetic remaining pixel, absorb
+    // everything within the lobe radius, repeat
+    ibl->light_count = 0;
+    float total_energy = 0.0f;
+    while (ibl->light_count < IBL_MAX_EXTRACTED_LIGHTS) {
+        int seed = -1;
+        float seed_energy = 0.0f;
+        for (size_t i = 0; i < count; i++) {
+            if (cand[i * 4 + 3] > seed_energy) {
+                seed_energy = cand[i * 4 + 3];
+                seed = (int)i;
+            }
+        }
+        if (seed < 0)
+            break;
+
+        vec3 seed_dir = {cand[seed * 4], cand[seed * 4 + 1], cand[seed * 4 + 2]};
+        glm_vec3_normalize(seed_dir);
+
+        vec3 sum = {0.0f, 0.0f, 0.0f};
+        float energy = 0.0f;
+        for (size_t i = 0; i < count; i++) {
+            float e = cand[i * 4 + 3];
+            if (e <= 0.0f)
+                continue;
+            vec3 d = {cand[i * 4], cand[i * 4 + 1], cand[i * 4 + 2]};
+            glm_vec3_normalize(d);
+            if (glm_vec3_dot(d, seed_dir) < lobe_cos)
+                continue;
+            glm_vec3_muladds(d, e, sum);
+            energy += e;
+            cand[i * 4 + 3] = 0.0f; // Absorbed
+        }
+        if (energy <= 0.0f || glm_vec3_norm(sum) < 1e-6f)
+            break;
+
+        // Ignore weak lobes (below 10% of the strongest)
+        if (ibl->light_count > 0 && energy < 0.1f * ibl->light_energies[0])
+            break;
+
+        glm_vec3_normalize_to(sum, ibl->light_dirs[ibl->light_count]);
+        ibl->light_energies[ibl->light_count] = energy;
+        total_energy += energy;
+        ibl->light_count++;
+    }
+
+    free(cand);
+
+    for (int i = 0; i < ibl->light_count; i++) {
+        ibl->light_energies[i] /= total_energy;
+        log_info("HDR light %d: dir=(%.2f, %.2f, %.2f) energy=%.2f", i, ibl->light_dirs[i][0],
+                 ibl->light_dirs[i][1], ibl->light_dirs[i][2], ibl->light_energies[i]);
+    }
+}
+
 int load_hdr_environment(IBLResources* ibl, const char* hdr_path) {
     if (!ibl || !hdr_path)
         return -1;
@@ -186,6 +308,8 @@ int load_hdr_environment(IBLResources* ibl, const char* hdr_path) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+    extract_light_lobes(ibl, data, width, height);
 
     stbi_image_free(data);
 
