@@ -64,6 +64,7 @@ typedef struct {
     float ground_height;               // HDR capture height above ground (0 = default)
     float camera_distance;             // Camera distance override in meters (0 = auto)
     int no_ground;                     // Disable skybox ground projection
+    int no_key_light;                  // Pure IBL: skip the analytic key lights
     int width;
     int height;
     int headless;
@@ -83,6 +84,7 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --ground <radius>  Ground projection dome radius (default: 5)\n");
     fprintf(stderr, "      --ground-height <m> HDR capture height above ground (default: 1.2)\n");
     fprintf(stderr, "      --no-ground        Disable HDR ground projection (infinite skybox)\n");
+    fprintf(stderr, "      --no-key-light     Pure IBL lighting (no analytic lights/shadows)\n");
     fprintf(stderr, "  -D, --distance <m>     Camera distance from model (default: auto)\n");
     fprintf(stderr, "  -a, --anim <path>      Animation file (can be repeated)\n");
     fprintf(stderr, "  -s, --source <path>    Source skeleton for retargeting (T-pose)\n");
@@ -201,6 +203,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 fprintf(stderr, "Error: invalid ground height '%s'\n", argv[i]);
                 return -1;
             }
+        } else if (strcmp(argv[i], "--no-key-light") == 0) {
+            args->no_key_light = 1;
         } else if (strcmp(argv[i], "-D") == 0 || strcmp(argv[i], "--distance") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -655,23 +659,6 @@ int main(int argc, char** argv) {
     configure_visor_materials(scene);
 
     if (args.hdr_path) {
-        // When using IBL, add a single soft key light at reduced intensity
-        Light* key = create_light();
-        if (key) {
-            set_light_name(key, "key_light");
-            set_light_type(key, LIGHT_DIRECTIONAL);
-            vec3 key_dir = {-0.4f, -0.7f, -0.6f};
-            set_light_direction(key, key_dir);
-            set_light_intensity(key, 1.0f);
-            set_light_color(key, (vec3){1.0f, 1.0f, 1.0f});
-            add_light_to_scene(scene, key);
-
-            SceneNode* key_node = create_node();
-            set_node_light(key_node, key);
-            set_node_name(key_node, "key_light_node");
-            add_child_node(scene->root_node, key_node);
-        }
-
         IBLResources* ibl = create_ibl_resources();
         if (ibl && load_hdr_environment(ibl, args.hdr_path) == 0) {
             if (precompute_ibl(ibl, engine) == 0) {
@@ -689,11 +676,52 @@ int main(int argc, char** argv) {
             } else {
                 fprintf(stderr, "Failed to precompute IBL\n");
                 free_ibl_resources(ibl);
+                ibl = NULL;
             }
         } else {
             fprintf(stderr, "Failed to load HDR: %s\n", args.hdr_path);
             if (ibl)
                 free_ibl_resources(ibl);
+            ibl = NULL;
+        }
+
+        // Add one soft shadow-casting key light per bright lobe extracted
+        // from the HDR, so each visible studio light casts its own shadow.
+        // Total analytic intensity stays ~1.0, split by lobe energy.
+        // --no-key-light gives pure image-based lighting instead.
+        if (!args.no_key_light) {
+            int lobes = (scene->ibl && scene->ibl->light_count > 0) ? scene->ibl->light_count : 1;
+            for (int i = 0; i < lobes; i++) {
+                Light* key = create_light();
+                if (!key)
+                    continue;
+
+                char light_name[32];
+                snprintf(light_name, sizeof(light_name), "key_light_%d", i);
+                set_light_name(key, light_name);
+                set_light_type(key, LIGHT_DIRECTIONAL);
+
+                vec3 key_dir = {-0.4f, -0.7f, -0.6f}; // Fallback if no lobes
+                float intensity = 1.0f;
+                if (scene->ibl && scene->ibl->light_count > 0) {
+                    glm_vec3_negate_to(scene->ibl->light_dirs[i], key_dir);
+                    intensity = scene->ibl->light_energies[i];
+                }
+                set_light_direction(key, key_dir);
+                set_light_intensity(key, intensity);
+                set_light_color(key, (vec3){1.0f, 1.0f, 1.0f});
+                set_light_cast_shadows(key, true);
+                add_light_to_scene(scene, key);
+
+                SceneNode* key_node = create_node();
+                set_node_light(key_node, key);
+                set_node_name(key_node, light_name);
+                add_child_node(scene->root_node, key_node);
+            }
+
+            // Ground the model: catch the key light shadows on the
+            // projected environment floor
+            scene->shadow_catcher = scene->ibl != NULL;
         }
     } else {
         // No IBL - use directional lights for illumination
@@ -762,6 +790,14 @@ int main(int argc, char** argv) {
     compute_scene_center_and_radius(scene, scene_center, &scene_radius);
     printf("Scene bounds: center=(%.2f, %.2f, %.2f), radius=%.2f\n", scene_center[0],
            scene_center[1], scene_center[2], scene_radius);
+
+    // Fit the shadow frustum to the scene; the library default (ortho 2000)
+    // leaves a human-sized model with no effective shadow map resolution
+    if (scene->shadow_system && scene_radius > 0.0f) {
+        scene->shadow_system->ortho_size = scene_radius * 2.0f;
+        scene->shadow_system->near_plane = 0.1f;
+        scene->shadow_system->far_plane = scene_radius * 8.0f;
+    }
 
     // Position camera to view the entire scene
     float camera_distance = scene_radius * 2.5f;
