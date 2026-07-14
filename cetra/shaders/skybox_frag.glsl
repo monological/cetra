@@ -20,8 +20,10 @@ vec3 sample_direction(vec3 d)
     if (!groundProjection || gpRadius <= 0.0)
         return d;
 
-    // Fade the projection out smoothly as the camera nears the dome shell,
-    // ending at the plain infinite skybox instead of popping at a boundary
+    // Fade the projection out smoothly as the camera moves away from the
+    // capture region, ending at the plain infinite skybox instead of popping.
+    // The app clamps camera zoom to the fade start (0.7R), so no reachable
+    // view shows the blend; the fade is a safety net for unclamped cameras.
     vec3 c = camPos;
     float fade = smoothstep(0.7 * gpRadius, 0.95 * gpRadius, length(c));
     if (fade >= 1.0)

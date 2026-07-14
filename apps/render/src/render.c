@@ -289,6 +289,7 @@ static int frames_rendered = 0;
  */
 static int check_stretch = 0;
 
+
 /*
  * CPU-skin a vertex with the animation state's bone matrices, mirroring the
  * pbr_skinned vertex shader including its identity fallback.
@@ -482,9 +483,38 @@ void render_scene_callback(Engine* engine, Scene* current_scene) {
         }
     }
 
+    // Keep the camera where the ground projection renders at full strength:
+    // the clamp matches the fade start in skybox_frag.glsl (0.7R), so no
+    // reachable view ever shows the blend toward the infinite skybox.
+    // Raising Dome Radius extends the zoom range.
+    if (current_scene->render_skybox && current_scene->skybox_ground_projection &&
+        engine->camera) {
+        float max_dist = 0.7f * current_scene->skybox_gp_radius;
+        if (engine->camera->distance > max_dist) {
+            engine->camera->distance = max_dist;
+        }
+    }
+
     // Update camera via drag controller
     if (drag_controller) {
         mouse_drag_update(drag_controller, time_value);
+    }
+
+    // Hold the camera at the dome boundary along its own view ray (clamping
+    // toward the origin instead makes the camera slide around the sphere).
+    if (current_scene->render_skybox && current_scene->skybox_ground_projection &&
+        engine->camera) {
+        Camera* cam = engine->camera;
+        float max_dist = 0.7f * current_scene->skybox_gp_radius;
+
+        vec3 offset;
+        glm_vec3_sub(cam->position, cam->look_at, offset);
+        float dist = glm_vec3_norm(offset);
+
+        if (dist > max_dist && dist > 1e-6f) {
+            glm_vec3_scale(offset, max_dist / dist, offset);
+            glm_vec3_add(cam->look_at, offset, cam->position);
+        }
     }
 
     Transform transform = {.position = {0.0f, 0.0f, 0.0f},
@@ -823,8 +853,12 @@ int main(int argc, char** argv) {
     // Update orbit controller with appropriate distance
     camera->distance = camera_distance;
     camera->height = scene_center[1];
+    float orbit_max = camera_distance * 2.0f;
+    if (scene->skybox_ground_projection) {
+        orbit_max = fminf(orbit_max, 0.7f * scene->skybox_gp_radius);
+    }
     set_mouse_drag_auto_orbit(drag_controller, !args.headless, CAM_ANGULAR_SPEED,
-                              camera_distance * 0.5f, camera_distance * 2.0f);
+                              fminf(camera_distance * 0.5f, orbit_max), orbit_max);
 
     update_engine_camera_lookat(engine);
 
