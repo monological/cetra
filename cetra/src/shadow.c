@@ -13,6 +13,8 @@
 #include "mesh.h"
 #include "engine.h"
 #include "shadow.h"
+#include "render.h"
+#include "animation.h"
 #include "ext/log.h"
 
 ShadowSystem* create_shadow_system(int default_map_size) {
@@ -270,6 +272,19 @@ static void _render_shadow_node(SceneNode* node, ShaderProgram* program, GLuint*
             Mesh* mesh = node->meshes[i];
             if (!mesh || mesh->vao == 0)
                 continue;
+
+            // Skin animated meshes so they cast animated shadows
+            AnimationState* anim = get_render_animation_state();
+            if (mesh->is_skinned && anim && anim->active_bone_count > 0) {
+                uniform_set_int(program->uniforms, "skinned", 1);
+                GLint loc = glGetUniformLocation(program->id, "boneMatrices[0]");
+                if (loc >= 0) {
+                    glUniformMatrix4fv(loc, (GLsizei)anim->active_bone_count, GL_FALSE,
+                                       (const GLfloat*)anim->bone_matrices);
+                }
+            } else {
+                uniform_set_int(program->uniforms, "skinned", 0);
+            }
 
             glBindVertexArray(mesh->vao);
             glDrawElements(mesh->draw_mode, mesh->index_count, GL_UNSIGNED_INT, 0);
