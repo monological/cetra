@@ -808,10 +808,11 @@ int main(int argc, char** argv) {
             printf("Playing animation: %s (index %zu of %zu)\n", scene->animations[play_idx]->name,
                    play_idx, scene->animation_count);
 
-            // Spring-bone secondary motion for chains no animation drives
-            // (scabbard, hair); harmless no-op when the prefixes don't match
+            // Spring-bone secondary motion for chains no animation drives.
+            // Only hair: the "sheath root" chain is a rigid metal belt on
+            // this rig and must stay welded to its authored pose.
             SpringBoneParams spring_params = spring_bone_default_params();
-            const char* spring_prefixes[] = {"sheath root", "hair"};
+            const char* spring_prefixes[] = {"hair"};
             for (size_t k = 0; k < sizeof(spring_prefixes) / sizeof(spring_prefixes[0]); k++) {
                 int n = animation_add_spring_chains_by_prefix(anim_state, spring_prefixes[k],
                                                               &spring_params);

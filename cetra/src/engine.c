@@ -951,12 +951,13 @@ void render_nuklear_gui(Engine* engine) {
                     nk_label(engine->nk_ctx, "Spring Bones", NK_TEXT_LEFT);
 
                     nk_layout_row_dynamic(engine->nk_ctx, 25, 1);
-                    nk_bool sb_enabled = sb->enabled;
-                    nk_checkbox_label(engine->nk_ctx, "Enabled", &sb_enabled);
-                    if (sb_enabled && !sb->enabled) {
-                        spring_bone_reset(sb); // Re-enable snaps instead of lurching
+                    if (nk_button_label(engine->nk_ctx,
+                                        sb->enabled ? "Springs: On" : "Springs: Off")) {
+                        sb->enabled = !sb->enabled;
+                        if (sb->enabled) {
+                            spring_bone_reset(sb); // Re-enable snaps instead of lurching
+                        }
                     }
-                    sb->enabled = sb_enabled != 0;
 
                     static float sb_stiffness = 0.25f;
                     static float sb_damping = 0.25f;
@@ -1049,9 +1050,12 @@ void render_nuklear_gui(Engine* engine) {
                 nk_label(engine->nk_ctx, "Environment", NK_TEXT_LEFT);
 
                 nk_layout_row_dynamic(engine->nk_ctx, 25, 1);
-                nk_bool gp = current_scene->skybox_ground_projection;
-                nk_checkbox_label(engine->nk_ctx, "Ground Projection", &gp);
-                current_scene->skybox_ground_projection = gp != 0;
+                if (nk_button_label(engine->nk_ctx, current_scene->skybox_ground_projection
+                                                        ? "Ground Projection: On"
+                                                        : "Ground Projection: Off")) {
+                    current_scene->skybox_ground_projection =
+                        !current_scene->skybox_ground_projection;
+                }
 
                 if (current_scene->skybox_ground_projection) {
                     nk_property_float(engine->nk_ctx, "Dome Radius:", 1.0f,
@@ -1063,9 +1067,11 @@ void render_nuklear_gui(Engine* engine) {
                 nk_property_float(engine->nk_ctx, "IBL Intensity:", 0.0f,
                                   &current_scene->ibl->intensity, 4.0f, 0.1f, 0.05f);
 
-                nk_bool sc = current_scene->shadow_catcher;
-                nk_checkbox_label(engine->nk_ctx, "Shadow Catcher", &sc);
-                current_scene->shadow_catcher = sc != 0;
+                if (nk_button_label(engine->nk_ctx, current_scene->shadow_catcher
+                                                        ? "Shadow Catcher: On"
+                                                        : "Shadow Catcher: Off")) {
+                    current_scene->shadow_catcher = !current_scene->shadow_catcher;
+                }
 
                 if (current_scene->shadow_catcher) {
                     nk_property_float(engine->nk_ctx, "Shadow Strength:", 0.0f,
