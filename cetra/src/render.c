@@ -251,7 +251,7 @@ static void _render_node(Scene* scene, SceneNode* node, Camera* camera, mat4 mod
                          mat4 projection, float time_value, RenderMode render_mode,
                          Light** closest_lights, size_t returned_light_count,
                          GLuint* current_program, Material** current_material,
-                         const Frustum* frustum) {
+                         const Frustum* frustum, bool alpha_pass) {
 
     if (!node->meshes || node->mesh_count == 0)
         return;
@@ -259,6 +259,15 @@ static void _render_node(Scene* scene, SceneNode* node, Camera* camera, mat4 mod
     for (size_t i = 0; i < node->mesh_count; ++i) {
         Mesh* mesh = node->meshes[i];
         if (!mesh || !mesh->material)
+            continue;
+
+        // Blend-mode materials render in the transparent pass after the
+        // skybox so they composite against the real background; everything
+        // else (including alpha-masked hair) renders in the opaque pass
+        const Material* m = mesh->material;
+        bool is_transparent =
+            (m->opacity < 1.0f || m->opacity_tex) && m->alphaCutoff <= 0.0f;
+        if (is_transparent != alpha_pass)
             continue;
 
         // Frustum culling: skip mesh if its AABB is completely outside the view frustum
@@ -343,6 +352,16 @@ static void _render_node(Scene* scene, SceneNode* node, Camera* camera, mat4 mod
         uniform_set_int(u, "vertexColorExists", mesh->colors ? 1 : 0);
         uniform_set_int(u, "texCoords2Exists", mesh->tex_coords2 ? 1 : 0);
 
+        // Alpha-masked materials (hair/foliage) render with alpha-to-coverage:
+        // MSAA converts fractional alpha into sample coverage for soft,
+        // order-independent edges, and uncovered samples stay open for the
+        // skybox drawn later
+        bool use_a2c = mat->alphaCutoff > 0.0f;
+        uniform_set_int(u, "alphaToCoverage", use_a2c ? 1 : 0);
+        if (use_a2c) {
+            glEnable(GL_SAMPLE_ALPHA_TO_COVERAGE);
+        }
+
         // Handle double-sided materials
         if (mat->doubleSided) {
             glDisable(GL_CULL_FACE);
@@ -354,6 +373,9 @@ static void _render_node(Scene* scene, SceneNode* node, Camera* camera, mat4 mod
 
         if (mat->doubleSided) {
             glEnable(GL_CULL_FACE);
+        }
+        if (use_a2c) {
+            glDisable(GL_SAMPLE_ALPHA_TO_COVERAGE);
         }
     }
 }
@@ -410,7 +432,7 @@ static int _ensure_traversal_stack_capacity(Scene* scene, size_t required) {
 static void _render_scene_iterative(Scene* scene, SceneNode* root, Camera* camera, mat4 view,
                                     mat4 projection, float time_value, RenderMode render_mode,
                                     GLuint* current_program, Material** current_material,
-                                    const Frustum* frustum) {
+                                    const Frustum* frustum, bool alpha_pass) {
     if (!scene) {
         log_error("error: render called with NULL scene");
         return;
@@ -444,10 +466,10 @@ static void _render_scene_iterative(Scene* scene, SceneNode* root, Camera* camer
         // Render this node's meshes
         _render_node(scene, node, camera, node->global_transform, view, projection, time_value,
                      render_mode, closest_lights, returned_light_count, current_program,
-                     current_material, frustum);
+                     current_material, frustum, alpha_pass);
 
-        // Render xyz axes if enabled
-        if (node->show_xyz && node->xyz_shader_program) {
+        // Render xyz axes if enabled (opaque pass only, to avoid duplicates)
+        if (!alpha_pass && node->show_xyz && node->xyz_shader_program) {
             _render_xyz(node, view, projection, current_program);
         }
 
@@ -508,15 +530,26 @@ void render_current_scene(Engine* engine, float time_value) {
     GLuint current_program = 0;
     Material* current_material = NULL;
 
+    // Pass 1: opaque and alpha-masked meshes
     _render_scene_iterative(scene, root_node, camera, *view, *projection, time_value, render_mode,
-                            &current_program, &current_material, &frustum);
+                            &current_program, &current_material, &frustum, false);
 
-    // Render skybox last (if enabled)
+    // Skybox after opaques (depth-tested against them at the far plane)
     if (scene->render_skybox && scene->ibl && scene->ibl->precomputed) {
         render_skybox(scene->ibl, *view, *projection, scene->skybox_exposure,
                       scene->skybox_ground_projection, scene->skybox_gp_radius,
                       scene->skybox_gp_height);
     }
+
+    // Pass 2: blend-mode (translucent) meshes, composited over the real
+    // background. Depth writes off; not sorted back-to-front (typical models
+    // have few translucent meshes, e.g. a visor)
+    current_program = 0;
+    current_material = NULL;
+    glDepthMask(GL_FALSE);
+    _render_scene_iterative(scene, root_node, camera, *view, *projection, time_value, render_mode,
+                            &current_program, &current_material, &frustum, true);
+    glDepthMask(GL_TRUE);
 
     // Shadow catcher: darken the environment floor where the model blocks
     // the shadow-casting lights (drawn over the skybox, blended)
