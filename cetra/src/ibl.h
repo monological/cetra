@@ -73,7 +73,8 @@ int load_hdr_environment(IBLResources* ibl, const char* hdr_path);
 int precompute_ibl(IBLResources* ibl, struct Engine* engine);
 
 // Skybox rendering
-void render_skybox(IBLResources* ibl, mat4 view, mat4 projection, float exposure);
+void render_skybox(IBLResources* ibl, mat4 view, mat4 projection, float exposure,
+                   bool ground_projection, float gp_radius, float gp_height);
 
 // Binding for PBR rendering
 void bind_ibl_textures(IBLResources* ibl, ShaderProgram* program);

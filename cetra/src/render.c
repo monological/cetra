@@ -513,7 +513,9 @@ void render_current_scene(Engine* engine, float time_value) {
 
     // Render skybox last (if enabled)
     if (scene->render_skybox && scene->ibl && scene->ibl->precomputed) {
-        render_skybox(scene->ibl, *view, *projection, scene->skybox_exposure);
+        render_skybox(scene->ibl, *view, *projection, scene->skybox_exposure,
+                      scene->skybox_ground_projection, scene->skybox_gp_radius,
+                      scene->skybox_gp_height);
     }
 
     // Reset program state at end of frame

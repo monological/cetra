@@ -115,6 +115,9 @@ typedef struct Scene {
     IBLResources* ibl;
     bool render_skybox;
     float skybox_exposure;
+    bool skybox_ground_projection; // Project env onto finite dome + ground
+    float skybox_gp_radius;        // Dome radius in world units (meters)
+    float skybox_gp_height;        // HDR capture height above ground
 
     // Skeletal Animation
     Skeleton** skeletons;

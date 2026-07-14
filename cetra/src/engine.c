@@ -976,6 +976,27 @@ void render_nuklear_gui(Engine* engine) {
                 }
             }
 
+            // Environment/skybox section
+            if (current_scene && current_scene->render_skybox && current_scene->ibl) {
+                nk_layout_row_dynamic(engine->nk_ctx, 10, 1);
+                nk_spacing(engine->nk_ctx, 1);
+
+                nk_layout_row_dynamic(engine->nk_ctx, 20, 1);
+                nk_label(engine->nk_ctx, "Environment", NK_TEXT_LEFT);
+
+                nk_layout_row_dynamic(engine->nk_ctx, 25, 1);
+                nk_bool gp = current_scene->skybox_ground_projection;
+                nk_checkbox_label(engine->nk_ctx, "Ground Projection", &gp);
+                current_scene->skybox_ground_projection = gp != 0;
+
+                if (current_scene->skybox_ground_projection) {
+                    nk_property_float(engine->nk_ctx, "Dome Radius:", 1.0f,
+                                      &current_scene->skybox_gp_radius, 100.0f, 0.5f, 0.1f);
+                    nk_property_float(engine->nk_ctx, "Capture Height:", 0.1f,
+                                      &current_scene->skybox_gp_height, 10.0f, 0.1f, 0.05f);
+                }
+            }
+
             // bot margin
             nk_layout_row_dynamic(engine->nk_ctx, 10, 1); // 10 pixels of vertical space
             nk_spacing(engine->nk_ctx, 1);                // Creates a dummy widget for spacing

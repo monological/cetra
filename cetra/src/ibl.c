@@ -465,7 +465,8 @@ int precompute_ibl(IBLResources* ibl, Engine* engine) {
     return 0;
 }
 
-void render_skybox(IBLResources* ibl, mat4 view, mat4 projection, float exposure) {
+void render_skybox(IBLResources* ibl, mat4 view, mat4 projection, float exposure,
+                   bool ground_projection, float gp_radius, float gp_height) {
     if (!ibl || !ibl->precomputed || !ibl->skybox_program)
         return;
 
@@ -482,6 +483,15 @@ void render_skybox(IBLResources* ibl, mat4 view, mat4 projection, float exposure
     uniform_set_mat4(program->uniforms, "view", (float*)view_no_translation);
     uniform_set_mat4(program->uniforms, "projection", (float*)projection);
     uniform_set_float(program->uniforms, "exposure", exposure);
+
+    // Ground projection uniforms; camera world position from the inverse view
+    mat4 view_inv;
+    glm_mat4_inv(view, view_inv);
+    vec3 cam_pos = {view_inv[3][0], view_inv[3][1], view_inv[3][2]};
+    uniform_set_int(program->uniforms, "groundProjection", ground_projection ? 1 : 0);
+    uniform_set_float(program->uniforms, "gpRadius", gp_radius);
+    uniform_set_float(program->uniforms, "gpHeight", gp_height);
+    uniform_set_vec3(program->uniforms, "camPos", cam_pos);
 
     glActiveTexture(GL_TEXTURE0 + IBL_SKYBOX_TEXTURE_UNIT);
     glBindTexture(GL_TEXTURE_CUBE_MAP, ibl->environment_cubemap);

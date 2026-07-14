@@ -66,6 +66,9 @@ Scene* create_scene() {
     scene->ibl = NULL;
     scene->render_skybox = false;
     scene->skybox_exposure = 1.0f;
+    scene->skybox_ground_projection = false;
+    scene->skybox_gp_radius = 5.0f;
+    scene->skybox_gp_height = 1.5f;
 
     // Initialize skeletal animation
     scene->skeletons = NULL;
