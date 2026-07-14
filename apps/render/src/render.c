@@ -20,6 +20,7 @@
 #include "cetra/render.h"
 #include "cetra/transform.h"
 #include "cetra/animation.h"
+#include "cetra/springbone.h"
 #include "cetra/ibl.h"
 #include "cetra/app.h"
 
@@ -65,6 +66,7 @@ typedef struct {
     float camera_distance;             // Camera distance override in meters (0 = auto)
     int no_ground;                     // Disable skybox ground projection
     int no_key_light;                  // Pure IBL: skip the analytic key lights
+    int no_springs;                    // Disable spring-bone secondary motion
     int width;
     int height;
     int headless;
@@ -85,6 +87,7 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --ground-height <m> HDR capture height above ground (default: 1.2)\n");
     fprintf(stderr, "      --no-ground        Disable HDR ground projection (infinite skybox)\n");
     fprintf(stderr, "      --no-key-light     Pure IBL lighting (no analytic lights/shadows)\n");
+    fprintf(stderr, "      --no-springs       Disable spring-bone secondary motion\n");
     fprintf(stderr, "  -D, --distance <m>     Camera distance from model (default: auto)\n");
     fprintf(stderr, "  -a, --anim <path>      Animation file (can be repeated)\n");
     fprintf(stderr, "  -s, --source <path>    Source skeleton for retargeting (T-pose)\n");
@@ -205,6 +208,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             }
         } else if (strcmp(argv[i], "--no-key-light") == 0) {
             args->no_key_light = 1;
+        } else if (strcmp(argv[i], "--no-springs") == 0) {
+            args->no_springs = 1;
         } else if (strcmp(argv[i], "-D") == 0 || strcmp(argv[i], "--distance") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -802,6 +807,22 @@ int main(int argc, char** argv) {
             play_animation(anim_state);
             printf("Playing animation: %s (index %zu of %zu)\n", scene->animations[play_idx]->name,
                    play_idx, scene->animation_count);
+
+            // Spring-bone secondary motion for chains no animation drives
+            // (scabbard, hair); harmless no-op when the prefixes don't match
+            SpringBoneParams spring_params = spring_bone_default_params();
+            const char* spring_prefixes[] = {"sheath root", "hair"};
+            for (size_t k = 0; k < sizeof(spring_prefixes) / sizeof(spring_prefixes[0]); k++) {
+                int n = animation_add_spring_chains_by_prefix(anim_state, spring_prefixes[k],
+                                                              &spring_params);
+                if (n > 0) {
+                    printf("Spring bones: %d chain(s) under prefix '%s'\n", n,
+                           spring_prefixes[k]);
+                }
+            }
+            if (args.no_springs && anim_state->springs) {
+                anim_state->springs->enabled = false;
+            }
         }
     }
 
