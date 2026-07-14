@@ -57,10 +57,13 @@ typedef struct {
     const char* anim_files[MAX_ANIM_FILES];
     int anim_count;
     const char* source_skeleton_path;  // Source skeleton for retargeting
+    const char* screenshot_path;       // Save final frame here (PPM)
+    int screenshot_every;              // Also save numbered frames every N frames
     int width;
     int height;
     int headless;
     int max_frames; // Exit after this many frames (0 = run forever)
+    int show_bones;
     int show_help;
 } RenderArgs;
 
@@ -75,7 +78,10 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "  -W, --width <int>      Window width (default: %d)\n", DEFAULT_WIDTH);
     fprintf(stderr, "  -H, --height <int>     Window height (default: %d)\n", DEFAULT_HEIGHT);
     fprintf(stderr, "  -x, --headless         Hidden window (for debugging/CI)\n");
+    fprintf(stderr, "  -b, --show-bones       Enable bone X-ray overlay\n");
     fprintf(stderr, "  -f, --frames <int>     Exit after N frames\n");
+    fprintf(stderr, "  -S, --screenshot <path> Save final frame as PPM on exit\n");
+    fprintf(stderr, "      --screenshot-every <N> Also save numbered frames every N frames\n");
     fprintf(stderr, "  -h, --help             Show this help message\n");
     fprintf(stderr, "\nExamples:\n");
     fprintf(stderr, "  %s -m character.fbx -t textures/\n", prog);
@@ -147,6 +153,24 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             }
         } else if (strcmp(argv[i], "-x") == 0 || strcmp(argv[i], "--headless") == 0) {
             args->headless = 1;
+        } else if (strcmp(argv[i], "-b") == 0 || strcmp(argv[i], "--show-bones") == 0) {
+            args->show_bones = 1;
+        } else if (strcmp(argv[i], "-S") == 0 || strcmp(argv[i], "--screenshot") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->screenshot_path = argv[i];
+        } else if (strcmp(argv[i], "--screenshot-every") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->screenshot_every = atoi(argv[i]);
+            if (args->screenshot_every <= 0) {
+                fprintf(stderr, "Error: invalid screenshot interval '%s'\n", argv[i]);
+                return -1;
+            }
         } else if (strcmp(argv[i], "-f") == 0 || strcmp(argv[i], "--frames") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -362,6 +386,8 @@ int main(int argc, char** argv) {
     Engine* engine = create_engine("Cetra Engine", args.width, args.height);
 
     set_engine_headless(engine, args.headless != 0);
+    set_engine_screenshot_path(engine, args.screenshot_path);
+    set_engine_screenshot_every(engine, args.screenshot_every);
     max_frames = args.max_frames;
 
     if (init_engine(engine) != 0) {
@@ -422,9 +448,11 @@ int main(int argc, char** argv) {
 
     set_engine_camera(engine, camera);
 
-    // Create drag controller with auto-orbit
+    // Create drag controller with auto-orbit (fixed camera in headless mode for
+    // deterministic, comparable screenshots)
     drag_controller = create_mouse_drag_controller(engine);
-    set_mouse_drag_auto_orbit(drag_controller, true, CAM_ANGULAR_SPEED, MIN_DIST, MAX_DIST);
+    set_mouse_drag_auto_orbit(drag_controller, !args.headless, CAM_ANGULAR_SPEED, MIN_DIST,
+                              MAX_DIST);
 
     /*
      * Import model with async texture loading.
@@ -570,8 +598,8 @@ int main(int argc, char** argv) {
     // Update orbit controller with appropriate distance
     camera->distance = camera_distance;
     camera->height = scene_center[1];
-    set_mouse_drag_auto_orbit(drag_controller, true, CAM_ANGULAR_SPEED, camera_distance * 0.5f,
-                              camera_distance * 2.0f);
+    set_mouse_drag_auto_orbit(drag_controller, !args.headless, CAM_ANGULAR_SPEED,
+                              camera_distance * 0.5f, camera_distance * 2.0f);
 
     update_engine_camera_lookat(engine);
 
@@ -581,6 +609,7 @@ int main(int argc, char** argv) {
     set_engine_show_fps(engine, true);
     set_engine_show_wireframe(engine, false);
     set_engine_show_xyz(engine, false);
+    engine->show_bones = args.show_bones != 0;
 
     run_engine_render_loop(engine, render_scene_callback);
 

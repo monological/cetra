@@ -89,6 +89,10 @@ typedef struct Engine {
     bool show_bones; // X-ray bone visualization
     bool headless;   // Hidden window, no vsync (set before init_engine)
 
+    char* screenshot_path; // If set, save final frame here on exit (PPM)
+    int screenshot_every;  // Also save numbered frames every N frames (0 = off)
+    size_t total_frames;   // Monotonic frame counter for the render loop
+
     // Bone visualization
     ShaderProgram* bone_program;
     GLuint bone_line_vao;
@@ -117,6 +121,8 @@ void free_engine(Engine* engine);
 
 int init_engine(Engine* engine);
 void set_engine_headless(Engine* engine, bool headless);
+void set_engine_screenshot_path(Engine* engine, const char* path);
+void set_engine_screenshot_every(Engine* engine, int every);
 
 // GLFW callbacks
 void set_engine_error_callback(Engine* engine, GLFWerrorfun error_callback);

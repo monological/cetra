@@ -108,6 +108,9 @@ Engine* create_engine(const char* window_title, int width, int height) {
     engine->show_fps = false;
     engine->show_bones = false;
     engine->headless = false;
+    engine->screenshot_path = NULL;
+    engine->screenshot_every = 0;
+    engine->total_frames = 0;
 
     engine->bone_program = NULL;
     engine->bone_line_vao = 0;
@@ -163,6 +166,10 @@ void free_engine(Engine* engine) {
 
     if (engine->camera) {
         free_camera(engine->camera);
+    }
+
+    if (engine->screenshot_path) {
+        free(engine->screenshot_path);
     }
 
     // Destroy GLFW window
@@ -774,6 +781,73 @@ void set_engine_headless(Engine* engine, bool headless) {
     engine->headless = headless;
 }
 
+void set_engine_screenshot_path(Engine* engine, const char* path) {
+    if (!engine)
+        return;
+    if (engine->screenshot_path) {
+        free(engine->screenshot_path);
+        engine->screenshot_path = NULL;
+    }
+    if (path) {
+        engine->screenshot_path = strdup(path);
+    }
+}
+
+void set_engine_screenshot_every(Engine* engine, int every) {
+    if (!engine)
+        return;
+    engine->screenshot_every = every > 0 ? every : 0;
+}
+
+/*
+ * Build a numbered variant of a screenshot path: /tmp/shot.ppm -> /tmp/shot_000042.ppm
+ */
+static void _numbered_screenshot_path(const char* path, size_t frame, char* out, size_t out_size) {
+    const char* dot = strrchr(path, '.');
+    if (dot && dot != path) {
+        snprintf(out, out_size, "%.*s_%06zu%s", (int)(dot - path), path, frame, dot);
+    } else {
+        snprintf(out, out_size, "%s_%06zu", path, frame);
+    }
+}
+
+/*
+ * Save the default framebuffer (post-blit) to a binary PPM file.
+ */
+static void _save_framebuffer_ppm(const Engine* engine, const char* path) {
+    int w = engine->fb_width;
+    int h = engine->fb_height;
+    if (w <= 0 || h <= 0)
+        return;
+
+    unsigned char* pixels = malloc((size_t)w * (size_t)h * 3);
+    if (!pixels) {
+        log_error("Failed to allocate screenshot buffer");
+        return;
+    }
+
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+    glReadBuffer(GL_BACK);
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glReadPixels(0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, pixels);
+
+    FILE* f = fopen(path, "wb");
+    if (!f) {
+        log_error("Failed to open screenshot file: %s", path);
+        free(pixels);
+        return;
+    }
+
+    fprintf(f, "P6\n%d %d\n255\n", w, h);
+    // GL rows are bottom-up; PPM is top-down
+    for (int y = h - 1; y >= 0; y--) {
+        fwrite(pixels + (size_t)y * (size_t)w * 3, 1, (size_t)w * 3, f);
+    }
+    fclose(f);
+    free(pixels);
+    log_info("Saved screenshot: %s (%dx%d)", path, w, h);
+}
+
 void render_nuklear_gui(Engine* engine) {
     if (!engine || !engine->nk_ctx)
         return;
@@ -1093,6 +1167,22 @@ void run_engine_render_loop(Engine* engine, RenderSceneFunc render_func) {
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0); // Default framebuffer
         glBlitFramebuffer(0, 0, engine->fb_width, engine->fb_height, 0, 0, engine->fb_width,
                           engine->fb_height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+
+        engine->total_frames++;
+
+        // Periodic capture: numbered frames every N frames
+        if (engine->screenshot_path && engine->screenshot_every > 0 &&
+            engine->total_frames % (size_t)engine->screenshot_every == 0) {
+            char numbered[1024];
+            _numbered_screenshot_path(engine->screenshot_path, engine->total_frames, numbered,
+                                      sizeof(numbered));
+            _save_framebuffer_ppm(engine, numbered);
+        }
+
+        // Capture the final frame before exit if a screenshot was requested
+        if (engine->screenshot_path && glfwWindowShouldClose(engine->window)) {
+            _save_framebuffer_ppm(engine, engine->screenshot_path);
+        }
 
         glfwSwapBuffers(engine->window);
         glfwPollEvents();
