@@ -959,20 +959,12 @@ void render_nuklear_gui(Engine* engine) {
                         }
                     }
 
-                    static float sb_stiffness = 0.25f;
-                    static float sb_damping = 0.25f;
-                    static float sb_gravity = 4.0f;
-                    nk_property_float(engine->nk_ctx, "Stiffness:", 0.0f, &sb_stiffness, 1.0f,
+                    nk_property_float(engine->nk_ctx, "Stiffness:", 0.0f, &sb->params.stiffness,
+                                      1.0f, 0.05f, 0.005f);
+                    nk_property_float(engine->nk_ctx, "Damping:", 0.0f, &sb->params.damping, 1.0f,
                                       0.05f, 0.005f);
-                    nk_property_float(engine->nk_ctx, "Damping:", 0.0f, &sb_damping, 1.0f, 0.05f,
-                                      0.005f);
-                    nk_property_float(engine->nk_ctx, "Gravity:", 0.0f, &sb_gravity, 30.0f, 0.5f,
-                                      0.1f);
-                    for (size_t c = 0; c < sb->chain_count; c++) {
-                        sb->chains[c].params.stiffness = sb_stiffness;
-                        sb->chains[c].params.damping = sb_damping;
-                        sb->chains[c].params.gravity = sb_gravity;
-                    }
+                    nk_property_float(engine->nk_ctx, "Gravity:", 0.0f, &sb->params.gravity, 30.0f,
+                                      0.5f, 0.1f);
                 }
             }
 

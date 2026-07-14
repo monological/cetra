@@ -811,18 +811,15 @@ int main(int argc, char** argv) {
             // Spring-bone secondary motion for chains no animation drives.
             // Only hair: the "sheath root" chain is a rigid metal belt on
             // this rig and must stay welded to its authored pose.
-            SpringBoneParams spring_params = spring_bone_default_params();
-            const char* spring_prefixes[] = {"hair"};
-            for (size_t k = 0; k < sizeof(spring_prefixes) / sizeof(spring_prefixes[0]); k++) {
-                int n = animation_add_spring_chains_by_prefix(anim_state, spring_prefixes[k],
-                                                              &spring_params);
+            anim_state->springs = create_spring_bone_system(scene->skeletons[0]);
+            if (anim_state->springs) {
+                int n = spring_bone_add_chains_by_prefix(anim_state->springs, "hair");
                 if (n > 0) {
-                    printf("Spring bones: %d chain(s) under prefix '%s'\n", n,
-                           spring_prefixes[k]);
+                    printf("Spring bones: %d chain(s) under prefix 'hair'\n", n);
                 }
-            }
-            if (args.no_springs && anim_state->springs) {
-                anim_state->springs->enabled = false;
+                if (args.no_springs) {
+                    anim_state->springs->enabled = false;
+                }
             }
         }
     }

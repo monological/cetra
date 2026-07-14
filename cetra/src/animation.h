@@ -50,6 +50,10 @@ Bone* get_bone_by_name(Skeleton* skeleton, const char* name);
 Bone* get_bone_by_index(Skeleton* skeleton, int index);
 void recalculate_inverse_bind_poses(Skeleton* skeleton);
 
+// Accumulate bind-pose global transforms parent-first into globals
+// (caller provides bone_count entries)
+void skeleton_compute_bind_globals(Skeleton* skeleton, mat4* globals);
+
 // --- Keyframes ---
 
 typedef struct PositionKey {
@@ -145,7 +149,6 @@ typedef struct AnimationState {
 
     // Optional spring-bone secondary motion (see springbone.h)
     struct SpringBoneSystem* springs;
-    float spring_delta_time; // Frame dt for the spring simulation
 } AnimationState;
 
 // Animation state functions
@@ -166,7 +169,9 @@ void interpolate_scale(ScaleKey* keys, size_t count, float time, vec3 out);
 
 // --- Bone Matrix Computation ---
 
-void compute_bone_matrices(AnimationState* state);
+// delta_time drives the optional spring-bone simulation (pass 0 to pose
+// without advancing springs)
+void compute_bone_matrices(AnimationState* state, float delta_time);
 void compute_bind_pose_matrices(AnimationState* state);
 
 // --- Debug ---

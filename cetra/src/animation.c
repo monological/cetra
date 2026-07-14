@@ -128,30 +128,33 @@ Bone* get_bone_by_index(Skeleton* skeleton, int index) {
     return &skeleton->bones[index];
 }
 
+void skeleton_compute_bind_globals(Skeleton* skeleton, mat4* globals) {
+    if (!skeleton || !globals)
+        return;
+
+    // Bones are ordered parent-first, so parent is always processed before child
+    for (size_t i = 0; i < skeleton->bone_count; i++) {
+        Bone* bone = &skeleton->bones[i];
+        if (bone->parent_index < 0 || (size_t)bone->parent_index >= skeleton->bone_count) {
+            glm_mat4_copy(bone->local_transform, globals[i]);
+        } else {
+            glm_mat4_mul(globals[bone->parent_index], bone->local_transform, globals[i]);
+        }
+    }
+}
+
 void recalculate_inverse_bind_poses(Skeleton* skeleton) {
     if (!skeleton || skeleton->bone_count == 0) return;
 
     log_info("Recalculating inverse_bind_poses for skeleton '%s' (%zu bones)",
              skeleton->name ? skeleton->name : "unnamed", skeleton->bone_count);
 
-    // Temporary storage for global transforms
     mat4* globals = malloc(skeleton->bone_count * sizeof(mat4));
     if (!globals) return;
 
-    // Bones are ordered parent-first, so parent is always processed before child
+    skeleton_compute_bind_globals(skeleton, globals);
     for (size_t i = 0; i < skeleton->bone_count; i++) {
-        Bone* bone = &skeleton->bones[i];
-
-        if (bone->parent_index < 0) {
-            // Root bone: global = local
-            glm_mat4_copy(bone->local_transform, globals[i]);
-        } else {
-            // Child bone: global = parent_global * local
-            glm_mat4_mul(globals[bone->parent_index], bone->local_transform, globals[i]);
-        }
-
-        // inverse_bind_pose = inverse(global)
-        glm_mat4_inv(globals[i], bone->inverse_bind_pose);
+        glm_mat4_inv(globals[i], skeleton->bones[i].inverse_bind_pose);
     }
 
     free(globals);
@@ -411,7 +414,6 @@ AnimationState* create_animation_state(Skeleton* skeleton) {
     }
 
     state->springs = NULL;
-    state->spring_delta_time = 0.0f;
 
     // Compute initial bind pose
     compute_bind_pose_matrices(state);
@@ -471,7 +473,7 @@ void reset_animation(AnimationState* state) {
 
     state->current_time = 0.0f;
     if (state->current_animation) {
-        compute_bone_matrices(state);
+        compute_bone_matrices(state, 0.0f);
     } else {
         compute_bind_pose_matrices(state);
     }
@@ -480,8 +482,6 @@ void reset_animation(AnimationState* state) {
 void update_animation(AnimationState* state, float delta_time) {
     if (!state || !state->playing || !state->current_animation)
         return;
-
-    state->spring_delta_time = delta_time;
 
     const Animation* anim = state->current_animation;
 
@@ -507,7 +507,7 @@ void update_animation(AnimationState* state, float delta_time) {
     }
 
     // Recompute bone matrices
-    compute_bone_matrices(state);
+    compute_bone_matrices(state, delta_time);
 }
 
 // ============================================================================
@@ -681,7 +681,50 @@ void interpolate_scale(ScaleKey* keys, size_t count, float time, vec3 out) {
 // Bone Matrix Computation
 // ============================================================================
 
-void compute_bone_matrices(AnimationState* state) {
+/*
+ * One-shot diagnostic: per-bone bind vs animated global positions, drift,
+ * and skinning-matrix column scale (flags scale corruption)
+ */
+static void print_bone_drift_debug(AnimationState* state, const Animation* anim, float time) {
+    Skeleton* skeleton = state->skeleton;
+
+    printf("\n========== ANIMATION DEBUG ==========\n");
+    printf("Animation: %s, Time: %.2f\n\n", anim->name, time);
+    printf("Format: [idx] name | ch=has channel | bind global pos -> animated global pos | "
+           "drift | bone matrix scale\n\n");
+
+    mat4* bind_globals = malloc(skeleton->bone_count * sizeof(mat4));
+    if (bind_globals) {
+        skeleton_compute_bind_globals(skeleton, bind_globals);
+
+        for (size_t i = 0; i < skeleton->bone_count; i++) {
+            const AnimationChannel* channel = get_channel_for_bone(anim, (int)i);
+
+            vec3 bind_pos, anim_pos;
+            glm_vec3_copy(bind_globals[i][3], bind_pos);
+            glm_vec3_copy(state->global_transforms[i][3], anim_pos);
+            float drift = glm_vec3_distance(bind_pos, anim_pos);
+
+            // Column norms of the final skinning matrix reveal scale errors
+            float sx = glm_vec3_norm(state->bone_matrices[i][0]);
+            float sy = glm_vec3_norm(state->bone_matrices[i][1]);
+            float sz = glm_vec3_norm(state->bone_matrices[i][2]);
+
+            printf("[%3zu] %-24s | ch=%d | (%6.2f,%6.2f,%6.2f) -> (%6.2f,%6.2f,%6.2f) | "
+                   "drift=%6.2f | scale=(%.2f,%.2f,%.2f)%s\n",
+                   i, skeleton->bones[i].name, channel ? 1 : 0, bind_pos[0], bind_pos[1],
+                   bind_pos[2], anim_pos[0], anim_pos[1], anim_pos[2], drift, sx, sy, sz,
+                   (sx < 0.5f || sx > 2.0f || sy < 0.5f || sy > 2.0f || sz < 0.5f || sz > 2.0f)
+                       ? "  <<< SCALE"
+                       : "");
+        }
+        free(bind_globals);
+    }
+
+    printf("\n========== END DEBUG ==========\n\n");
+}
+
+void compute_bone_matrices(AnimationState* state, float delta_time) {
     if (!state || !state->skeleton)
         return;
 
@@ -867,8 +910,7 @@ void compute_bone_matrices(AnimationState* state) {
     // hair) on top of the animated pose before skinning matrices are built
     if (state->springs) {
         spring_bone_update(state->springs, state->local_transforms, state->global_transforms,
-                           state->spring_delta_time);
-        state->spring_delta_time = 0.0f;
+                           delta_time);
     }
 
     // PASS 2: Compute final bone matrices (global * inverse bind pose)
@@ -877,53 +919,10 @@ void compute_bone_matrices(AnimationState* state) {
                      state->bone_matrices[i]);
     }
 
-    // Comprehensive debug: print full bone tree with all transforms
+    // One-shot diagnostic dump of the first animated pose
     static int bm_debug_count = 0;
     if (bm_debug_count < 1 && anim) {
-        printf("\n========== ANIMATION DEBUG ==========\n");
-        printf("Animation: %s, Time: %.2f\n\n", anim->name, time);
-        printf("Format: [idx] name | ch=has channel | bind global pos -> animated global pos | "
-               "drift | bone matrix scale\n\n");
-
-        // Compute bind-pose global transforms for drift comparison
-        mat4* bind_globals = malloc(skeleton->bone_count * sizeof(mat4));
-        if (bind_globals) {
-            for (size_t i = 0; i < skeleton->bone_count; i++) {
-                Bone* bone = &skeleton->bones[i];
-                if (bone->parent_index < 0 || (size_t)bone->parent_index >= skeleton->bone_count) {
-                    glm_mat4_copy(bone->local_transform, bind_globals[i]);
-                } else {
-                    glm_mat4_mul(bind_globals[bone->parent_index], bone->local_transform,
-                                 bind_globals[i]);
-                }
-            }
-
-            for (size_t i = 0; i < skeleton->bone_count; i++) {
-                const AnimationChannel* channel = get_channel_for_bone(anim, (int)i);
-
-                vec3 bind_pos, anim_pos;
-                glm_vec3_copy(bind_globals[i][3], bind_pos);
-                glm_vec3_copy(state->global_transforms[i][3], anim_pos);
-                float drift = glm_vec3_distance(bind_pos, anim_pos);
-
-                // Column norms of the final skinning matrix reveal scale errors
-                float sx = glm_vec3_norm(state->bone_matrices[i][0]);
-                float sy = glm_vec3_norm(state->bone_matrices[i][1]);
-                float sz = glm_vec3_norm(state->bone_matrices[i][2]);
-
-                printf("[%3zu] %-24s | ch=%d | (%6.2f,%6.2f,%6.2f) -> (%6.2f,%6.2f,%6.2f) | "
-                       "drift=%6.2f | scale=(%.2f,%.2f,%.2f)%s\n",
-                       i, skeleton->bones[i].name, channel ? 1 : 0, bind_pos[0], bind_pos[1],
-                       bind_pos[2], anim_pos[0], anim_pos[1], anim_pos[2], drift, sx, sy, sz,
-                       (sx < 0.5f || sx > 2.0f || sy < 0.5f || sy > 2.0f || sz < 0.5f ||
-                        sz > 2.0f)
-                           ? "  <<< SCALE"
-                           : "");
-            }
-            free(bind_globals);
-        }
-
-        printf("\n========== END DEBUG ==========\n\n");
+        print_bone_drift_debug(state, anim, time);
         bm_debug_count++;
     }
 
@@ -936,21 +935,11 @@ void compute_bind_pose_matrices(AnimationState* state) {
 
     Skeleton* skeleton = state->skeleton;
 
-    // Compute global transforms from bind pose local transforms
+    // Bind pose: locals from the skeleton, globals accumulated parent-first
     for (size_t i = 0; i < skeleton->bone_count; i++) {
-        Bone* bone = &skeleton->bones[i];
-        glm_mat4_copy(bone->local_transform, state->local_transforms[i]);
-
-        if (bone->parent_index < 0) {
-            glm_mat4_copy(state->local_transforms[i], state->global_transforms[i]);
-        } else if ((size_t)bone->parent_index < skeleton->bone_count) {
-            glm_mat4_mul(state->global_transforms[bone->parent_index], state->local_transforms[i],
-                         state->global_transforms[i]);
-        } else {
-            // Invalid parent index, treat as root
-            glm_mat4_copy(state->local_transforms[i], state->global_transforms[i]);
-        }
+        glm_mat4_copy(skeleton->bones[i].local_transform, state->local_transforms[i]);
     }
+    skeleton_compute_bind_globals(skeleton, state->global_transforms);
 
     // Final bone matrices = global * inverse bind pose
     // For bind pose, this should result in identity matrices
