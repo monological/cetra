@@ -7,6 +7,13 @@
 #include "texture.h"
 #include "program.h"
 
+// How a material's alpha is rendered (glTF alphaMode semantics)
+typedef enum AlphaMode {
+    ALPHA_OPAQUE = 0, // Single opaque pass
+    ALPHA_MASK,       // Opaque pass with alpha-to-coverage (hair/foliage)
+    ALPHA_BLEND,      // Translucent pass after the skybox, no depth writes
+} AlphaMode;
+
 typedef struct Material {
     vec3 albedo;
     vec3 emissive; // Emissive color factor (multiplied with emissive texture)
@@ -14,6 +21,7 @@ typedef struct Material {
     float roughness;
     float ao;
     float opacity;
+    AlphaMode alpha_mode;
     float alphaCutoff;   // Alpha cutoff threshold for hair/foliage (0 = disabled, 0.5 typical)
     float normalScale;   // Normal map intensity scale (1.0 = full strength)
     float aoStrength;    // Occlusion texture strength (1.0 = full effect)
@@ -46,6 +54,10 @@ typedef struct Material {
 
 Material* create_material();
 void free_material(Material* material);
+
+// Derive ALPHA_BLEND from opacity/opacity_tex when no explicit mode was set
+// (call after all material properties and textures are assigned)
+void material_finalize_alpha_mode(Material* material);
 
 void set_material_shader_program(Material* material, ShaderProgram* shader_program);
 

@@ -23,6 +23,7 @@ Material* create_material() {
     material->roughness = 1.0f;
     material->ao = 1.0f;
     material->opacity = 1.0f;
+    material->alpha_mode = ALPHA_OPAQUE;
     material->alphaCutoff = 0.0f;  // Disabled by default
     material->normalScale = 1.0f;
     material->aoStrength = 1.0f;
@@ -51,6 +52,17 @@ Material* create_material() {
     material->shader_program = NULL;
 
     return material;
+}
+
+void material_finalize_alpha_mode(Material* material) {
+    if (!material)
+        return;
+    // Formats without an explicit alpha mode: translucency is implied by a
+    // fractional opacity or a dedicated opacity map
+    if (material->alpha_mode == ALPHA_OPAQUE &&
+        (material->opacity < 1.0f || material->opacity_tex)) {
+        material->alpha_mode = ALPHA_BLEND;
+    }
 }
 
 void free_material(Material* material) {

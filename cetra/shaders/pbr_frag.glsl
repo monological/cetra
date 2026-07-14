@@ -50,6 +50,16 @@ uniform float alphaCutoff;  // Alpha cutoff threshold for hair/foliage (0 = disa
 // Alpha-to-coverage: MSAA turns fractional alpha into sample coverage, so the
 // binary cutoff is skipped for soft, order-independent masked edges
 uniform int alphaToCoverage;
+
+// With alpha-to-coverage active only fully invisible fragments are discarded
+// (fractional alpha becomes MSAA coverage); otherwise the binary cutoff
+// applies (alphaCutoff of 0 never discards since alpha is non-negative)
+const float A2C_MIN_ALPHA = 0.02;
+
+bool alphaBelowCutoff(float a)
+{
+    return a < (alphaToCoverage > 0 ? A2C_MIN_ALPHA : alphaCutoff);
+}
 uniform float normalScale;  // Normal map intensity scale (1.0 = full strength)
 uniform float aoStrength;   // Occlusion texture strength (1.0 = full effect)
 uniform float ior;
@@ -322,11 +332,7 @@ void main() {
             texAlphaOnly *= VertexColor.a;
         }
         // Alpha cutoff for hair/foliage
-        if (alphaToCoverage > 0) {
-            if (texAlphaOnly < 0.02) {
-                discard;
-            }
-        } else if (alphaCutoff > 0.0 && texAlphaOnly < alphaCutoff) {
+        if (alphaBelowCutoff(texAlphaOnly)) {
             discard;
         }
         vec3 color = linearToSRGB(albedoMapOnly);
@@ -352,14 +358,8 @@ void main() {
         texAlpha *= VertexColor.a;
     }
 
-    // Alpha cutoff for hair/foliage - discard early before expensive lighting.
-    // With alpha-to-coverage active the fractional alpha becomes MSAA sample
-    // coverage instead, so only fully invisible fragments are discarded.
-    if (alphaToCoverage > 0) {
-        if (texAlpha < 0.02) {
-            discard;
-        }
-    } else if (alphaCutoff > 0.0 && texAlpha < alphaCutoff) {
+    // Alpha cutoff for hair/foliage - discard early before expensive lighting
+    if (alphaBelowCutoff(texAlpha)) {
         discard;
     }
 

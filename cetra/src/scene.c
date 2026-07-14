@@ -58,6 +58,7 @@ Scene* create_scene() {
         scene->traversal_transforms = NULL;
         scene->traversal_stack_capacity = 0;
     }
+    scene->transparent_mesh_count = 0;
 
     // Initialize shadow system
     scene->shadow_system = create_shadow_system(DEFAULT_SHADOW_MAP_SIZE);

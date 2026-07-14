@@ -107,6 +107,7 @@ typedef struct Scene {
     SceneNode** traversal_stack;
     mat4* traversal_transforms; // Used by apply_transform_to_nodes
     size_t traversal_stack_capacity;
+    size_t transparent_mesh_count; // Blend meshes seen in the last opaque pass
 
     // Shadow mapping
     ShadowSystem* shadow_system;

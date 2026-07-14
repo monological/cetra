@@ -154,11 +154,13 @@ static void extract_material_properties(struct aiMaterial* ai_mat, Material* mat
         material->aoStrength = aoStrength;
     }
 
-    // Extract glTF alpha mode and cutoff for hair/foliage transparency
+    // Extract glTF alpha mode and cutoff for hair/foliage transparency.
+    // Formats without alphaMode fall back to the opacity heuristic in
+    // material_finalize_alpha_mode once textures are loaded.
     struct aiString alphaMode;
     if (AI_SUCCESS == aiGetMaterialString(ai_mat, AI_MATKEY_GLTF_ALPHAMODE, &alphaMode)) {
         if (strcmp(alphaMode.data, "MASK") == 0) {
-            // Alpha masking mode - use alphaCutoff
+            material->alpha_mode = ALPHA_MASK;
             ai_real cutoff;
             if (AI_SUCCESS == aiGetMaterialFloat(ai_mat, AI_MATKEY_GLTF_ALPHACUTOFF, &cutoff)) {
                 material->alphaCutoff = cutoff;
@@ -166,8 +168,9 @@ static void extract_material_properties(struct aiMaterial* ai_mat, Material* mat
                 material->alphaCutoff = 0.5f;  // glTF default
             }
             log_info("Material uses alpha mask mode with cutoff=%.2f", material->alphaCutoff);
+        } else if (strcmp(alphaMode.data, "BLEND") == 0) {
+            material->alpha_mode = ALPHA_BLEND;
         }
-        // OPAQUE and BLEND modes leave alphaCutoff at 0 (disabled)
     }
 
     // Extract UV transform (KHR_texture_transform) from base color texture
@@ -268,6 +271,8 @@ Material* process_ai_material(struct aiMaterial* ai_mat, TexturePool* tex_pool,
         }
     }
 
+    material_finalize_alpha_mode(material);
+
     return material;
 }
 
@@ -284,6 +289,8 @@ static void async_tex_callback(Texture* tex, void* user_data) {
     AsyncTexCallback* ctx = (AsyncTexCallback*)user_data;
     if (tex && ctx->material && ctx->setter) {
         ctx->setter(ctx->material, tex);
+        // A late-arriving opacity map can flip the material to BLEND
+        material_finalize_alpha_mode(ctx->material);
         log_info("%s texture loaded async: %s", ctx->tex_type, tex->filepath);
     }
     free(ctx);
@@ -358,6 +365,8 @@ Material* process_ai_material_async(struct aiMaterial* ai_mat, TexturePool* tex_
                                   set_material_roughness_tex, "MetallicRoughness(roughness)");
         }
     }
+
+    material_finalize_alpha_mode(material);
 
     return material;
 }
