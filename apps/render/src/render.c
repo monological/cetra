@@ -64,6 +64,7 @@ typedef struct {
     int headless;
     int max_frames; // Exit after this many frames (0 = run forever)
     int show_bones;
+    int check_stretch; // One-shot CPU skinning stretch diagnostic
     int show_help;
 } RenderArgs;
 
@@ -79,6 +80,7 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "  -H, --height <int>     Window height (default: %d)\n", DEFAULT_HEIGHT);
     fprintf(stderr, "  -x, --headless         Hidden window (for debugging/CI)\n");
     fprintf(stderr, "  -b, --show-bones       Enable bone X-ray overlay\n");
+    fprintf(stderr, "      --check-stretch    Report triangle edges stretched by skinning\n");
     fprintf(stderr, "  -f, --frames <int>     Exit after N frames\n");
     fprintf(stderr, "  -S, --screenshot <path> Save final frame as PPM on exit\n");
     fprintf(stderr, "      --screenshot-every <N> Also save numbered frames every N frames\n");
@@ -155,6 +157,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->headless = 1;
         } else if (strcmp(argv[i], "-b") == 0 || strcmp(argv[i], "--show-bones") == 0) {
             args->show_bones = 1;
+        } else if (strcmp(argv[i], "--check-stretch") == 0) {
+            args->check_stretch = 1;
         } else if (strcmp(argv[i], "-S") == 0 || strcmp(argv[i], "--screenshot") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -223,6 +227,116 @@ static float last_frame_time = 0.0f;
  */
 static int max_frames = 0;
 static int frames_rendered = 0;
+
+/*
+ * Stretch diagnostic (--check-stretch)
+ */
+static int check_stretch = 0;
+
+/*
+ * CPU-skin a vertex with the animation state's bone matrices, mirroring the
+ * pbr_skinned vertex shader including its identity fallback.
+ */
+static void cpu_skin_vertex(const Mesh* mesh, const AnimationState* state, size_t v, vec3 out) {
+    mat4 skin = GLM_MAT4_ZERO_INIT;
+    float total = 0.0f;
+    for (int i = 0; i < BONES_PER_VERTEX; i++) {
+        int id = mesh->bone_ids[v * BONES_PER_VERTEX + i];
+        float w = mesh->bone_weights[v * BONES_PER_VERTEX + i];
+        if (id >= 0 && id < MAX_BONES && w > 0.0f) {
+            for (int c = 0; c < 4; c++) {
+                for (int r = 0; r < 4; r++) {
+                    skin[c][r] += state->bone_matrices[id][c][r] * w;
+                }
+            }
+            total += w;
+        }
+    }
+    vec3 pos = {mesh->vertices[v * 3], mesh->vertices[v * 3 + 1], mesh->vertices[v * 3 + 2]};
+    if (total < 0.001f) {
+        glm_vec3_copy(pos, out);
+        return;
+    }
+    glm_mat4_mulv3(skin, pos, 1.0f, out);
+}
+
+/*
+ * Report triangle edges whose skinned length grew far beyond their bind
+ * length. Rigid geometry stays at ratio ~1; skinning defects (vertices bound
+ * to the wrong bone) show up as large ratios.
+ */
+static void report_skinning_stretch(SceneNode* node, const AnimationState* state) {
+    if (!node)
+        return;
+
+    for (size_t m = 0; m < node->mesh_count; m++) {
+        Mesh* mesh = node->meshes[m];
+        if (!mesh || !mesh->is_skinned || !mesh->bone_ids || !mesh->indices ||
+            mesh->draw_mode != TRIANGLES)
+            continue;
+
+        float worst_ratio = 0.0f;
+        size_t worst_va = 0, worst_vb = 0;
+        size_t stretched_edges = 0;
+
+        for (size_t t = 0; t + 2 < mesh->index_count; t += 3) {
+            for (int e = 0; e < 3; e++) {
+                size_t va = mesh->indices[t + e];
+                size_t vb = mesh->indices[t + (e + 1) % 3];
+                if (va >= mesh->vertex_count || vb >= mesh->vertex_count)
+                    continue;
+
+                vec3 bind_a = {mesh->vertices[va * 3], mesh->vertices[va * 3 + 1],
+                               mesh->vertices[va * 3 + 2]};
+                vec3 bind_b = {mesh->vertices[vb * 3], mesh->vertices[vb * 3 + 1],
+                               mesh->vertices[vb * 3 + 2]};
+                float bind_len = glm_vec3_distance(bind_a, bind_b);
+                if (bind_len < 1e-6f)
+                    continue;
+
+                vec3 skin_a = {0.0f, 0.0f, 0.0f};
+                vec3 skin_b = {0.0f, 0.0f, 0.0f};
+                cpu_skin_vertex(mesh, state, va, skin_a);
+                cpu_skin_vertex(mesh, state, vb, skin_b);
+                float skin_len = glm_vec3_distance(skin_a, skin_b);
+
+                float ratio = skin_len / bind_len;
+                if (ratio > 3.0f)
+                    stretched_edges++;
+                if (ratio > worst_ratio) {
+                    worst_ratio = ratio;
+                    worst_va = va;
+                    worst_vb = vb;
+                }
+            }
+        }
+
+        if (stretched_edges > 0) {
+            printf("STRETCH mesh[%zu] (%zu verts): %zu edges >3x, worst=%.1fx (v%zu <-> v%zu)\n",
+                   m, mesh->vertex_count, stretched_edges, worst_ratio, worst_va, worst_vb);
+            for (int side = 0; side < 2; side++) {
+                size_t v = side == 0 ? worst_va : worst_vb;
+                printf("  v%zu bones:", v);
+                for (int i = 0; i < BONES_PER_VERTEX; i++) {
+                    int id = mesh->bone_ids[v * BONES_PER_VERTEX + i];
+                    float w = mesh->bone_weights[v * BONES_PER_VERTEX + i];
+                    if (id >= 0 && w > 0.0f && mesh->skeleton &&
+                        (size_t)id < mesh->skeleton->bone_count) {
+                        printf(" '%s'=%.2f", mesh->skeleton->bones[id].name, w);
+                    }
+                }
+                printf("\n");
+            }
+        } else {
+            printf("STRETCH mesh[%zu] (%zu verts): ok, worst=%.2fx\n", m, mesh->vertex_count,
+                   worst_ratio);
+        }
+    }
+
+    for (size_t c = 0; c < node->children_count; c++) {
+        report_skinning_stretch(node->children[c], state);
+    }
+}
 
 /*
  * Callbacks
@@ -302,6 +416,14 @@ void render_scene_callback(Engine* engine, Scene* current_scene) {
     if (anim_state && anim_state->playing) {
         update_animation(anim_state, delta_time);
         set_render_animation_state(anim_state);
+
+        // One-shot stretch diagnostic once the animation is mid-pose
+        if (check_stretch && frames_rendered == 60) {
+            printf("\n===== SKINNING STRETCH CHECK (time=%.1f ticks) =====\n",
+                   anim_state->current_time);
+            report_skinning_stretch(root_node, anim_state);
+            printf("===== END STRETCH CHECK =====\n\n");
+        }
     }
 
     // Update camera via drag controller
@@ -389,6 +511,7 @@ int main(int argc, char** argv) {
     set_engine_screenshot_path(engine, args.screenshot_path);
     set_engine_screenshot_every(engine, args.screenshot_every);
     max_frames = args.max_frames;
+    check_stretch = args.check_stretch;
 
     if (init_engine(engine) != 0) {
         fprintf(stderr, "Failed to initialize engine\n");

@@ -861,78 +861,45 @@ void compute_bone_matrices(AnimationState* state) {
     if (bm_debug_count < 1 && anim) {
         printf("\n========== ANIMATION DEBUG ==========\n");
         printf("Animation: %s, Time: %.2f\n\n", anim->name, time);
+        printf("Format: [idx] name | ch=has channel | bind global pos -> animated global pos | "
+               "drift | bone matrix scale\n\n");
 
-        // Print bone tree with indentation
-        printf("BONE TREE (showing transforms at each level):\n");
-        printf("Format: [idx] name | local_rest_angle | keyframe_angle | delta_angle | final_rot_angle | bone_matrix_angle\n");
-        printf("        local_rest_axis | keyframe_axis | final_rot_axis\n\n");
-
-        for (size_t i = 0; i < skeleton->bone_count && i < 60; i++) {  // Limit to first 60 bones
-            Bone* bone = &skeleton->bones[i];
-            AnimationChannel* channel = get_channel_for_bone(anim, (int)i);
-
-            // Calculate indentation based on parent chain depth
-            int depth = 0;
-            int parent = bone->parent_index;
-            while (parent >= 0 && depth < 10) {
-                depth++;
-                parent = skeleton->bones[parent].parent_index;
-            }
-
-            // Print indentation
-            for (int d = 0; d < depth; d++) printf("  ");
-
-            // Extract local rest rotation
-            versor local_rest;
-            glm_mat4_quat(bone->local_transform, local_rest);
-            float local_rest_angle = 2.0f * acosf(fabsf(local_rest[3])) * 57.2958f;
-
-            // Extract bone_matrix rotation
-            versor bm_rot;
-            glm_mat4_quat(state->bone_matrices[i], bm_rot);
-            float bm_angle = 2.0f * acosf(fabsf(bm_rot[3])) * 57.2958f;
-
-            if (channel) {
-                // Get keyframe
-                versor keyframe = {0, 0, 0, 1};
-                interpolate_rotation(channel->rotation_keys, channel->rotation_key_count, time, keyframe);
-                float key_angle = 2.0f * acosf(fabsf(keyframe[3])) * 57.2958f;
-
-                // Get delta
-                float delta_angle = 2.0f * acosf(fabsf(channel->rotation_delta[3])) * 57.2958f;
-
-                // Get final rotation (after retargeting)
-                versor final_rot = {0, 0, 0, 1};
-                glm_mat4_quat(state->local_transforms[i], final_rot);
-                float final_angle = 2.0f * acosf(fabsf(final_rot[3])) * 57.2958f;
-
-                // Compute axes (normalize xyz part of quaternion)
-                float key_axis_len = sqrtf(keyframe[0]*keyframe[0] + keyframe[1]*keyframe[1] + keyframe[2]*keyframe[2]);
-
-                // Compute bone_matrix axis
-                float bm_axis_len = sqrtf(bm_rot[0]*bm_rot[0] + bm_rot[1]*bm_rot[1] + bm_rot[2]*bm_rot[2]);
-                (void)final_angle;  // Used in printf below
-
-                printf("[%2zu] %-20s | rest=%5.1f | key=%5.1f | delta=%5.1f | final=%5.1f | bm=%5.1f%s\n",
-                       i, bone->name, local_rest_angle, key_angle, delta_angle, final_angle, bm_angle,
-                       channel->needs_retargeting ? " [R]" : "");
-
-                // Print axes: key vs bone_matrix (these should ideally match for correct retargeting)
-                for (int d = 0; d < depth; d++) printf("  ");
-                printf("     KEY axis=(%.2f,%.2f,%.2f) vs BM axis=(",
-                       key_axis_len > 0.001f ? keyframe[0]/key_axis_len : 0,
-                       key_axis_len > 0.001f ? keyframe[1]/key_axis_len : 0,
-                       key_axis_len > 0.001f ? keyframe[2]/key_axis_len : 0);
-                if (bm_axis_len > 0.001f) {
-                    printf("%.2f,%.2f,%.2f)\n",
-                           bm_rot[0]/bm_axis_len, bm_rot[1]/bm_axis_len, bm_rot[2]/bm_axis_len);
+        // Compute bind-pose global transforms for drift comparison
+        mat4* bind_globals = malloc(skeleton->bone_count * sizeof(mat4));
+        if (bind_globals) {
+            for (size_t i = 0; i < skeleton->bone_count; i++) {
+                Bone* bone = &skeleton->bones[i];
+                if (bone->parent_index < 0 || (size_t)bone->parent_index >= skeleton->bone_count) {
+                    glm_mat4_copy(bone->local_transform, bind_globals[i]);
                 } else {
-                    printf("identity)\n");
+                    glm_mat4_mul(bind_globals[bone->parent_index], bone->local_transform,
+                                 bind_globals[i]);
                 }
-            } else {
-                printf("[%2zu] %-20s | rest=%5.1f | (no channel) | bm=%5.1f\n",
-                       i, bone->name, local_rest_angle, bm_angle);
             }
+
+            for (size_t i = 0; i < skeleton->bone_count; i++) {
+                const AnimationChannel* channel = get_channel_for_bone(anim, (int)i);
+
+                vec3 bind_pos, anim_pos;
+                glm_vec3_copy(bind_globals[i][3], bind_pos);
+                glm_vec3_copy(state->global_transforms[i][3], anim_pos);
+                float drift = glm_vec3_distance(bind_pos, anim_pos);
+
+                // Column norms of the final skinning matrix reveal scale errors
+                float sx = glm_vec3_norm(state->bone_matrices[i][0]);
+                float sy = glm_vec3_norm(state->bone_matrices[i][1]);
+                float sz = glm_vec3_norm(state->bone_matrices[i][2]);
+
+                printf("[%3zu] %-24s | ch=%d | (%6.2f,%6.2f,%6.2f) -> (%6.2f,%6.2f,%6.2f) | "
+                       "drift=%6.2f | scale=(%.2f,%.2f,%.2f)%s\n",
+                       i, skeleton->bones[i].name, channel ? 1 : 0, bind_pos[0], bind_pos[1],
+                       bind_pos[2], anim_pos[0], anim_pos[1], anim_pos[2], drift, sx, sy, sz,
+                       (sx < 0.5f || sx > 2.0f || sy < 0.5f || sy > 2.0f || sz < 0.5f ||
+                        sz > 2.0f)
+                           ? "  <<< SCALE"
+                           : "");
+            }
+            free(bind_globals);
         }
 
         printf("\n========== END DEBUG ==========\n\n");
