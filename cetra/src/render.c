@@ -614,18 +614,19 @@ void render_current_scene(Engine* engine, float time_value) {
         glBindTexture(GL_TEXTURE_2D_ARRAY, ss->shadow_map_array);
         uniform_set_int(catcher->uniforms, "shadowMaps", SHADOW_MAP_TEXTURE_UNIT);
 
-        // Explicit state: blended, no depth writes, visible from both sides
+        // Explicit state: blended, visible from both sides. Depth writes
+        // stay ON: this is the last geometry of the frame, so its depth only
+        // feeds the postfx SSAO resolve, giving the model a contact shadow
+        // on the projected floor (which otherwise writes no depth)
         GLboolean cull_was_enabled = glIsEnabled(GL_CULL_FACE);
         glDisable(GL_CULL_FACE);
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        glDepthMask(GL_FALSE);
 
         glBindVertexArray(engine->catcher_vao);
         glDrawArrays(GL_TRIANGLES, 0, 6);
         glBindVertexArray(0);
 
-        glDepthMask(GL_TRUE);
         if (cull_was_enabled)
             glEnable(GL_CULL_FACE);
     }

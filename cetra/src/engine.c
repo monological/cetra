@@ -1131,6 +1131,17 @@ void render_nuklear_gui(Engine* engine) {
                     nk_property_float(engine->nk_ctx, "Bloom Threshold:", 0.0f,
                                       &fx->bloom_threshold, 8.0f, 0.1f, 0.02f);
                 }
+
+                if (nk_button_label(engine->nk_ctx, fx->ssao_enabled ? "SSAO: On" : "SSAO: Off")) {
+                    fx->ssao_enabled = !fx->ssao_enabled;
+                }
+
+                if (fx->ssao_enabled) {
+                    nk_property_float(engine->nk_ctx, "SSAO Radius:", 0.05f, &fx->ssao_radius,
+                                      5.0f, 0.05f, 0.01f);
+                    nk_property_float(engine->nk_ctx, "SSAO Strength:", 0.0f, &fx->ssao_strength,
+                                      1.0f, 0.05f, 0.01f);
+                }
             }
 
             // bot margin
@@ -1259,10 +1270,11 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode, bool draw_gui) 
     if (!engine)
         return;
 
-    // Only PBR frames are linear HDR and get bloom + exposure + tone
+    // Only PBR frames are linear HDR and get SSAO + bloom + exposure + tone
     // mapping; debug render modes emit display-ready colors and are copied
     // unchanged. The GUI draws after so it is never tone mapped.
-    postfx_run(engine->postfx, engine->framebuffer, 0, frame_mode == RENDER_MODE_PBR);
+    postfx_run(engine->postfx, engine->framebuffer, 0, frame_mode == RENDER_MODE_PBR,
+               engine->projection_matrix);
 
     if (draw_gui) {
         render_nuklear_gui(engine);

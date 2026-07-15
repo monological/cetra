@@ -598,3 +598,27 @@ ShaderProgram* create_tonemap_program() {
 
     return program;
 }
+
+ShaderProgram* create_ssao_program() {
+    ShaderProgram* program = NULL;
+
+    if ((program = create_program_from_source("ssao", post_vert_shader_str, ssao_frag_shader_str,
+                                              NULL)) == NULL) {
+        log_error("Failed to initialize SSAO shader program");
+        return NULL;
+    }
+
+    return program;
+}
+
+ShaderProgram* create_ssao_blur_program() {
+    ShaderProgram* program = NULL;
+
+    if ((program = create_program_from_source("ssao_blur", post_vert_shader_str,
+                                              ssao_blur_frag_shader_str, NULL)) == NULL) {
+        log_error("Failed to initialize SSAO blur shader program");
+        return NULL;
+    }
+
+    return program;
+}

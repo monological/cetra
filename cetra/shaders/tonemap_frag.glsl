@@ -7,9 +7,13 @@ out vec4 FragColor;
 // that are already display-ready (debug render modes, LDR-authored apps).
 uniform sampler2D hdrTex;
 uniform sampler2D bloomTex;
+uniform sampler2D aoTex; // Blurred SSAO, upsampled by its linear filter
 uniform float exposure;
 uniform float bloomStrength;
 uniform int bloomEnabled;
+uniform int aoEnabled;
+uniform float aoStrength;
+uniform int aoDebug; // Show the raw AO buffer for verification
 // 1 = ACES, 2 = PBR Neutral (passthrough frames are blitted by postfx_run
 // and never reach this pass)
 uniform int tonemapMode;
@@ -49,6 +53,18 @@ vec3 pbrNeutralTonemap(vec3 color)
 void main()
 {
     vec3 color = texture(hdrTex, TexCoords).rgb;
+
+    if (aoDebug == 1) {
+        FragColor = vec4(vec3(texture(aoTex, TexCoords).r), 1.0);
+        return;
+    }
+    if (aoEnabled == 1) {
+        // Occlude before adding bloom: bloom models lens scatter, which
+        // happens after the light already left the scene
+        float ao = texture(aoTex, TexCoords).r;
+        color *= mix(1.0, ao, aoStrength);
+    }
+
     if (bloomEnabled == 1) {
         color += bloomStrength * texture(bloomTex, TexCoords).rgb;
     }

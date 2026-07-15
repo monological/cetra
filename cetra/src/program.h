@@ -66,6 +66,8 @@ ShaderProgram* create_shadow_catcher_program();
 ShaderProgram* create_bloom_bright_program();
 ShaderProgram* create_bloom_blur_program();
 ShaderProgram* create_tonemap_program();
+ShaderProgram* create_ssao_program();
+ShaderProgram* create_ssao_blur_program();
 
 size_t calculate_max_lights();
 
