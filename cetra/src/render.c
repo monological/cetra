@@ -125,7 +125,9 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
     UniformManager* u = program->uniforms;
 
     uniform_set_vec3(u, "albedo", (const float*)&material->albedo);
-    uniform_set_vec3(u, "emissiveFactor", (const float*)&material->emissive);
+    vec3 emissive_hdr;
+    glm_vec3_scale(material->emissive, material->emissive_strength, emissive_hdr);
+    uniform_set_vec3(u, "emissiveFactor", (const float*)&emissive_hdr);
     uniform_set_float(u, "metallic", material->metallic);
     uniform_set_float(u, "roughness", material->roughness);
     uniform_set_float(u, "ao", material->ao);

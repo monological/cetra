@@ -19,6 +19,7 @@ Material* create_material() {
 
     glm_vec3_fill(material->albedo, 1.0f);
     glm_vec3_zero(material->emissive);
+    material->emissive_strength = 1.0f;
     material->metallic = 0.0f;
     material->roughness = 1.0f;
     material->ao = 1.0f;

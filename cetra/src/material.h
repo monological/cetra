@@ -16,7 +16,8 @@ typedef enum AlphaMode {
 
 typedef struct Material {
     vec3 albedo;
-    vec3 emissive; // Emissive color factor (multiplied with emissive texture)
+    vec3 emissive;           // Emissive color factor (multiplied with emissive texture)
+    float emissive_strength; // HDR multiplier (KHR_materials_emissive_strength), feeds bloom
     float metallic;
     float roughness;
     float ao;

@@ -118,6 +118,13 @@ static void extract_material_properties(struct aiMaterial* ai_mat, Material* mat
         material->emissive[2] = color.b;
     }
 
+    // HDR emissive multiplier (glTF KHR_materials_emissive_strength)
+    ai_real emissive_strength;
+    if (AI_SUCCESS == aiGetMaterialFloat(ai_mat, AI_MATKEY_EMISSIVE_INTENSITY,
+                                         &emissive_strength)) {
+        material->emissive_strength = emissive_strength;
+    }
+
     ai_real metallic, roughness;
 
     if (AI_SUCCESS == aiGetMaterialFloat(ai_mat, AI_MATKEY_METALLIC_FACTOR, &metallic)) {
