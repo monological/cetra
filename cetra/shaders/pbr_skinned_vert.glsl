@@ -79,7 +79,16 @@ void main() {
         // Transform position and normals by bone matrix
         localPos = boneTransform * vec4(aPos, 1.0);
         mat3 boneRotation = mat3(boneTransform);
-        localNormal = boneRotation * aNormal;
+        // Normals transform by the inverse-transpose, not the matrix itself.
+        // Cross-rig retargeting injects non-uniform scale/shear into the
+        // blended bone matrix; mat3(boneTransform) then skews the normal's
+        // DIRECTION (normalize only fixes length), which the sharp specular
+        // lobe turns into a field of bright specks on the animated mesh.
+        // Tangents/bitangents are surface vectors and use the forward matrix.
+        float boneDet = determinant(boneRotation);
+        mat3 boneNormalMatrix =
+            abs(boneDet) > 1e-8 ? transpose(inverse(boneRotation)) : boneRotation;
+        localNormal = boneNormalMatrix * aNormal;
         localTangent = boneRotation * aTangent;
         localBitangent = boneRotation * aBitangent;
     } else {
