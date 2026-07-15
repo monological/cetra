@@ -75,6 +75,8 @@ typedef struct {
     int no_springs;                    // Disable spring-bone secondary motion
     int no_ssao;                       // Disable screen-space ambient occlusion
     int ssao_debug;                    // Show the raw SSAO buffer
+    int no_normals_mrt;                // Disable the normals G-buffer
+    int normals_debug;                 // Show the resolved normals G-buffer
     float specular_aa;                 // Specular AA strength override (-1 = default)
     int width;
     int height;
@@ -103,6 +105,8 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --no-springs       Disable spring-bone secondary motion\n");
     fprintf(stderr, "      --no-ssao          Disable screen-space ambient occlusion\n");
     fprintf(stderr, "      --ssao-debug       Show the raw SSAO buffer\n");
+    fprintf(stderr, "      --no-normals-mrt   Disable the normals G-buffer (SSAO/SSR input)\n");
+    fprintf(stderr, "      --normals-debug    Show the resolved normals G-buffer\n");
     fprintf(stderr, "      --specular-aa <f>  Specular anti-aliasing strength (default: 1)\n");
     fprintf(stderr, "      --no-specular-aa   Disable specular anti-aliasing\n");
     fprintf(stderr, "  -D, --distance <m>     Camera distance from model (default: auto)\n");
@@ -258,6 +262,10 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->no_ssao = 1;
         } else if (strcmp(argv[i], "--ssao-debug") == 0) {
             args->ssao_debug = 1;
+        } else if (strcmp(argv[i], "--no-normals-mrt") == 0) {
+            args->no_normals_mrt = 1;
+        } else if (strcmp(argv[i], "--normals-debug") == 0) {
+            args->normals_debug = 1;
         } else if (strcmp(argv[i], "--specular-aa") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -656,6 +664,12 @@ int main(int argc, char** argv) {
     }
     if (args.ssao_debug && engine->postfx) {
         engine->postfx->ssao_debug = true;
+    }
+    if (args.no_normals_mrt && engine->postfx) {
+        engine->postfx->normals_enabled = false;
+    }
+    if (args.normals_debug && engine->postfx) {
+        engine->postfx->normals_debug = true;
     }
     if (args.specular_aa >= 0.0f) {
         engine->specular_aa_strength = args.specular_aa;

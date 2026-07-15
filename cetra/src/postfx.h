@@ -33,6 +33,8 @@ typedef struct PostFX {
     GLuint bloom_texture[2];
     GLuint depth_fbo; // Full-res resolved scene depth (blit target)
     GLuint depth_texture;
+    GLuint normal_fbo; // Full-res resolved view-space normals + roughness
+    GLuint normal_texture;
     GLuint ssao_fbo[2]; // Half-res: [0] raw AO, [1] blurred AO
     GLuint ssao_texture[2];
     GLuint noise_texture; // 4x4 random kernel rotations, tiled
@@ -58,6 +60,8 @@ typedef struct PostFX {
     float ssao_radius; // Occlusion reach in view-space units
     float ssao_strength;
     float ssao_bias;
+    bool normals_enabled; // Master switch for the normals G-buffer (MRT)
+    bool normals_debug;   // Present the resolved normals instead of the scene
     PostFXTonemapMode tonemap_mode;
 } PostFX;
 
@@ -71,5 +75,9 @@ void free_postfx(PostFX* fx);
 // display-ready colors (debug render modes): they are copied unchanged,
 // skipping SSAO, bloom, and tone mapping.
 void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hdr, mat4 projection);
+
+// True when some active effect consumes the normals G-buffer this frame, so
+// the scene pass should write color attachment 1 (and postfx_run resolve it)
+bool postfx_wants_normals(const PostFX* fx);
 
 #endif // _POSTFX_H_

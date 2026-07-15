@@ -54,9 +54,11 @@ typedef struct Engine {
     MouseButtonCallback mouse_button_callback;
     KeyCallback key_callback;
 
-    GLuint framebuffer;         // Framebuffer object
-    GLuint multisample_texture; // Multisample texture for MSAA
-    GLuint depth_renderbuffer;  // Depth renderbuffer
+    GLuint framebuffer;                // Framebuffer object
+    GLuint multisample_texture;        // Multisample HDR color (attachment 0)
+    GLuint normal_multisample_texture; // Multisample view-space normals + roughness (attachment 1)
+    GLuint depth_renderbuffer;         // Depth renderbuffer
+    bool normals_this_frame;           // Attachment 1 written this frame (PBR + consumer active)
 
     Camera* camera;         // main camera
     CameraMode camera_mode; // Current camera mode
@@ -172,6 +174,11 @@ void render_nuklear_gui(Engine* engine);
 // framebuffer, then optionally draw the GUI on top. Used by every render
 // loop that draws into engine->framebuffer.
 void engine_present_frame(Engine* engine, RenderMode frame_mode, bool draw_gui);
+
+// Select which color attachments the scene pass writes: attachment 0 only,
+// or 0 + the view-space normals target (used by SSAO/SSR). Render passes
+// that emit no normals (skybox, blend, overlays) switch to 0-only.
+void engine_set_scene_draw_buffers(const Engine* engine, bool with_normals);
 
 // Render
 void set_engine_show_wireframe(Engine* engine, bool show_wireframe);

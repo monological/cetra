@@ -84,7 +84,9 @@ Engine* create_engine(const char* window_title, int width, int height) {
 
     engine->framebuffer = 0;
     engine->multisample_texture = 0;
+    engine->normal_multisample_texture = 0;
     engine->depth_renderbuffer = 0;
+    engine->normals_this_frame = false;
 
     engine->camera = NULL;
     engine->camera_mode = CAMERA_MODE_ORBIT;
@@ -188,6 +190,7 @@ void free_engine(Engine* engine) {
 
     glDeleteFramebuffers(1, &engine->framebuffer);
     glDeleteTextures(1, &engine->multisample_texture);
+    glDeleteTextures(1, &engine->normal_multisample_texture);
     glDeleteRenderbuffers(1, &engine->depth_renderbuffer);
 
     if (engine->catcher_vao)
@@ -299,6 +302,17 @@ static int _setup_engine_msaa(Engine* engine) {
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D_MULTISAMPLE,
                            engine->multisample_texture, 0);
 
+    // Attachment 1: view-space normals (xyz) + roughness (a) for SSAO/SSR.
+    // Always allocated, only written when a consumer is active (see
+    // engine_set_scene_draw_buffers). RGBA16F so the MSAA resolve blit's
+    // format-match rule is satisfied against the float resolve target.
+    glGenTextures(1, &engine->normal_multisample_texture);
+    glBindTexture(GL_TEXTURE_2D_MULTISAMPLE, engine->normal_multisample_texture);
+    glTexImage2DMultisample(GL_TEXTURE_2D_MULTISAMPLE, samples, GL_RGBA16F, engine->fb_width,
+                            engine->fb_height, GL_TRUE);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D_MULTISAMPLE,
+                           engine->normal_multisample_texture, 0);
+
     glGenRenderbuffers(1, &engine->depth_renderbuffer);
     glBindRenderbuffer(GL_RENDERBUFFER, engine->depth_renderbuffer);
     glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples, GL_DEPTH24_STENCIL8,
@@ -311,9 +325,11 @@ static int _setup_engine_msaa(Engine* engine) {
         // Cleanup in case of framebuffer setup failure
         glDeleteFramebuffers(1, &engine->framebuffer);
         glDeleteTextures(1, &engine->multisample_texture);
+        glDeleteTextures(1, &engine->normal_multisample_texture);
         glDeleteRenderbuffers(1, &engine->depth_renderbuffer);
         engine->framebuffer = 0;
         engine->multisample_texture = 0;
+        engine->normal_multisample_texture = 0;
         engine->depth_renderbuffer = 0;
         return -1;
     }
@@ -1144,6 +1160,11 @@ void render_nuklear_gui(Engine* engine) {
                                       1.0f, 0.05f, 0.01f);
                 }
 
+                if (nk_button_label(engine->nk_ctx,
+                                    fx->normals_enabled ? "Normals: On" : "Normals: Off")) {
+                    fx->normals_enabled = !fx->normals_enabled;
+                }
+
                 nk_property_float(engine->nk_ctx, "Spec AA:", 0.0f,
                                   &engine->specular_aa_strength, 2.0f, 0.1f, 0.02f);
             }
@@ -1285,6 +1306,23 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode, bool draw_gui) 
     }
 }
 
+void engine_set_scene_draw_buffers(const Engine* engine, bool with_normals) {
+    if (!engine)
+        return;
+
+    if (with_normals && engine->normals_this_frame) {
+        const GLenum both[] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1};
+        glDrawBuffers(2, both);
+        // Blending is enabled globally; keep the normals target opaque.
+        // Indexed state is wiped by any blanket glEnable(GL_BLEND), so
+        // re-issue it at every pass boundary rather than once at init.
+        glDisablei(GL_BLEND, 1);
+    } else {
+        const GLenum color_only[] = {GL_COLOR_ATTACHMENT0};
+        glDrawBuffers(1, color_only);
+    }
+}
+
 void run_engine_render_loop(Engine* engine, RenderSceneFunc render_func) {
     if (!engine)
         return;
@@ -1334,8 +1372,15 @@ void run_engine_render_loop(Engine* engine, RenderSceneFunc render_func) {
         }
 
         glBindFramebuffer(GL_FRAMEBUFFER, engine->framebuffer);
+        engine->normals_this_frame =
+            frame_mode == RENDER_MODE_PBR && postfx_wants_normals(engine->postfx);
+        engine_set_scene_draw_buffers(engine, true);
         glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+        if (engine->normals_this_frame) {
+            const GLfloat zero_normal[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+            glClearBufferfv(GL_COLOR, 1, zero_normal);
+        }
 
         Scene* current_scene = get_current_scene(engine);
 

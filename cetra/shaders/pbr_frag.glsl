@@ -9,7 +9,10 @@ in vec2 TexCoords;
 in vec2 TexCoords2;   // UV1 for lightmaps/AO
 in vec4 VertexColor;  // Vertex color (RGBA)
 in mat3 TBN;
-out vec4 FragColor;
+layout(location = 0) out vec4 FragColor;
+// G-buffer for screen-space passes: view-space normal (xyz) + roughness (a).
+// Only lands when the engine enables color attachment 1; otherwise discarded.
+layout(location = 1) out vec4 NormalOut;
 
 #define MAX_LIGHTS 70
 
@@ -623,4 +626,11 @@ void main() {
     }
 
     FragColor = vec4(color, finalOpacity);
+
+    // G-buffer: view-space normal + roughness (post-spec-AA, so SSR sees
+    // the same lobe width the lighting used). Only lands when the engine
+    // binds color attachment 1, which never happens on alpha-to-coverage
+    // draws (see render.c: a second output's alpha corrupts A2C coverage
+    // on Apple's driver).
+    NormalOut = vec4(normalize(mat3(view) * N), roughnessMap);
 }
