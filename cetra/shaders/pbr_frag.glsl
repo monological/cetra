@@ -513,6 +513,18 @@ void main() {
     vec3 F0 = vec3(iorF0);
     F0 = mix(F0, albedoMap, metallicMap);
 
+    // Analytic keys act as small area lights (sphere-light approximation,
+    // Karis 2013): widen the GGX lobe by the light's angular size and
+    // scale by (a/a')^2 so reflected energy is conserved. Point lights
+    // otherwise produce needle lobes on polished texels that alias into
+    // per-pixel white speckle at close range — and widening WITHOUT the
+    // renormalization saturates entire surfaces instead. IBL is untouched
+    // and keeps the crisp environment reflections.
+    float ggxAlpha = roughnessMap * roughnessMap;
+    float areaAlpha = min(ggxAlpha + 0.05, 1.0);
+    float areaLightNorm = (ggxAlpha / areaAlpha) * (ggxAlpha / areaAlpha);
+    float areaLightRoughness = sqrt(areaAlpha);
+
     // Accumulate lighting from all lights
     vec3 Lo = vec3(0.0);
 
@@ -552,7 +564,7 @@ void main() {
         if (anisotropyTexExists > 0 && anisotropyMap > 0.01) {
             NDF = distributionGGXAnisotropic(N, H, T, B, roughnessMap, anisotropyMap);
         } else {
-            NDF = distributionGGX(N, H, roughnessMap);
+            NDF = areaLightNorm * distributionGGX(N, H, areaLightRoughness);
         }
         float G = geometrySmith(N, V, L, roughnessMap);
         vec3 F = fresnelSchlick(max(dot(H, V), 0.0), F0);
