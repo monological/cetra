@@ -373,6 +373,11 @@ void main() {
     } else {
         N = normalize(Normal);
     }
+    // Double-sided surfaces (hair cards, foliage): the back face must be lit
+    // as its own side, or it faces away from every light and renders black
+    if (!gl_FrontFacing) {
+        N = -N;
+    }
 
     float roughnessMap = roughness;
     if (roughnessTexExists > 0) {
