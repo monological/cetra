@@ -1170,6 +1170,20 @@ void render_nuklear_gui(Engine* engine) {
                 }
 
                 if (nk_button_label(engine->nk_ctx,
+                                    fx->ssr_enabled ? "SSR: On" : "SSR: Off")) {
+                    fx->ssr_enabled = !fx->ssr_enabled;
+                }
+
+                if (fx->ssr_enabled) {
+                    nk_property_float(engine->nk_ctx, "SSR Strength:", 0.0f, &fx->ssr_strength,
+                                      2.0f, 0.05f, 0.01f);
+                    nk_property_float(engine->nk_ctx, "SSR Distance:", 1.0f,
+                                      &fx->ssr_max_distance, 50.0f, 0.5f, 0.1f);
+                    nk_property_float(engine->nk_ctx, "SSR Floor Rough:", 0.0f,
+                                      &fx->ssr_floor_roughness, 1.0f, 0.05f, 0.01f);
+                }
+
+                if (nk_button_label(engine->nk_ctx,
                                     fx->normals_enabled ? "Normals: On" : "Normals: Off")) {
                     fx->normals_enabled = !fx->normals_enabled;
                 }

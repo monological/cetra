@@ -585,6 +585,15 @@ void render_current_scene(Engine* engine, float time_value) {
         uniform_set_mat4(catcher->uniforms, "projection", (const float*)*projection);
         uniform_set_float(catcher->uniforms, "catcherStrength", scene->shadow_catcher_strength);
         uniform_set_float(catcher->uniforms, "planeRadius", scene->skybox_gp_radius);
+
+        // With SSR active the floor publishes depth and normals across the
+        // whole quad (surfaceMode 1 skips the unshadowed discard) so the
+        // reflection march has a surface to start from
+        bool ssr_floor = engine->normals_this_frame && engine->postfx &&
+                         engine->postfx->ssr_enabled;
+        uniform_set_int(catcher->uniforms, "surfaceMode", ssr_floor ? 1 : 0);
+        uniform_set_float(catcher->uniforms, "floorRoughness",
+                          engine->postfx ? engine->postfx->ssr_floor_roughness : 1.0f);
         uniform_set_int(catcher->uniforms, "numShadowLights", (int)ss->active_count);
         uniform_set_float(catcher->uniforms, "shadowBias", ss->casters[0].bias);
 
@@ -629,11 +638,16 @@ void render_current_scene(Engine* engine, float time_value) {
         glDisable(GL_CULL_FACE);
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        // The floor contributes normals for the SSR march. Must come after
+        // the blanket blend enable above, which resets the indexed
+        // blend-off state this call establishes for attachment 1.
+        engine_set_scene_draw_buffers(engine, true);
 
         glBindVertexArray(engine->catcher_vao);
         glDrawArrays(GL_TRIANGLES, 0, 6);
         glBindVertexArray(0);
 
+        engine_set_scene_draw_buffers(engine, false);
         if (cull_was_enabled)
             glEnable(GL_CULL_FACE);
     }

@@ -155,6 +155,15 @@ PostFX* create_postfx(int width, int height) {
     // (the textbook 0.025) erases exactly the shallow occlusion we want
     fx->ssao_bias = 0.008f;
     fx->normals_enabled = true;
+    fx->ssr_enabled = true;
+    fx->ssr_strength = 1.0f;
+    fx->ssr_max_distance = 8.0f;
+    fx->ssr_thickness = 0.3f;
+    fx->ssr_steps = 64;
+    // Glossy surfaces only (the floor and polished trim): rougher curved
+    // surfaces self-graze their own silhouette in screen space and dash
+    fx->ssr_max_roughness = 0.25f;
+    fx->ssr_floor_roughness = 0.1f;
     fx->debug_view = POSTFX_DEBUG_NONE;
     fx->tonemap_mode = POSTFX_TONEMAP_NEUTRAL;
 
@@ -191,6 +200,12 @@ PostFX* create_postfx(int width, int height) {
             return NULL;
         }
     }
+    // Half-res reflection buffer; HDR since it carries scene color
+    if (!create_color_fbo(fx->ssao_width, fx->ssao_height, GL_RGBA16F, &fx->ssr_fbo,
+                          &fx->ssr_texture)) {
+        free_postfx(fx);
+        return NULL;
+    }
 
     unsigned int rng = 0x9E3779B9u;
     fx->noise_texture = create_ssao_noise_texture(&rng);
@@ -200,8 +215,10 @@ PostFX* create_postfx(int width, int height) {
     fx->tonemap_program = create_tonemap_program();
     fx->ssao_program = create_ssao_program();
     fx->ssao_blur_program = create_ssao_blur_program();
+    fx->ssr_program = create_ssr_program();
+    fx->ssr_composite_program = create_ssr_composite_program();
     if (!fx->bright_program || !fx->blur_program || !fx->tonemap_program || !fx->ssao_program ||
-        !fx->ssao_blur_program) {
+        !fx->ssao_blur_program || !fx->ssr_program || !fx->ssr_composite_program) {
         free_postfx(fx);
         return NULL;
     }
@@ -216,6 +233,14 @@ PostFX* create_postfx(int width, int height) {
     uniform_set_int(fx->tonemap_program->uniforms, "bloomTex", 1);
     uniform_set_int(fx->tonemap_program->uniforms, "aoTex", 2);
     uniform_set_int(fx->tonemap_program->uniforms, "normalsTex", 3);
+    uniform_set_int(fx->tonemap_program->uniforms, "ssrTex", 4);
+
+    glUseProgram(fx->ssr_program->id);
+    uniform_set_int(fx->ssr_program->uniforms, "depthTex", 0);
+    uniform_set_int(fx->ssr_program->uniforms, "normalsTex", 1);
+    uniform_set_int(fx->ssr_program->uniforms, "hdrTex", 2);
+    glUseProgram(fx->ssr_composite_program->id);
+    uniform_set_int(fx->ssr_composite_program->uniforms, "ssrTex", 0);
 
     glUseProgram(fx->ssao_program->id);
     uniform_set_int(fx->ssao_program->uniforms, "depthTex", 0);
@@ -257,12 +282,16 @@ void free_postfx(PostFX* fx) {
     glDeleteFramebuffers(2, fx->ssao_fbo);
     glDeleteTextures(2, fx->ssao_texture);
     glDeleteTextures(1, &fx->noise_texture);
+    glDeleteFramebuffers(1, &fx->ssr_fbo);
+    glDeleteTextures(1, &fx->ssr_texture);
 
     free_program(fx->bright_program);
     free_program(fx->blur_program);
     free_program(fx->tonemap_program);
     free_program(fx->ssao_program);
     free_program(fx->ssao_blur_program);
+    free_program(fx->ssr_program);
+    free_program(fx->ssr_composite_program);
 
     glDeleteVertexArrays(1, &fx->quad_vao);
     glDeleteBuffers(1, &fx->quad_vbo);
@@ -273,10 +302,10 @@ void free_postfx(PostFX* fx) {
 bool postfx_wants_normals(const PostFX* fx) {
     if (!fx || !fx->normals_enabled)
         return false;
-    // SSAO orients its sample hemisphere with these normals (SSR joins the
-    // list when it lands); the debug view forces the buffer on so it can
-    // be inspected with every consumer disabled
-    return fx->ssao_enabled || fx->debug_view == POSTFX_DEBUG_NORMALS;
+    // SSAO orients its sample hemisphere with these normals and SSR
+    // reflects off them; the debug view forces the buffer on so it can be
+    // inspected with every consumer disabled
+    return fx->ssao_enabled || fx->ssr_enabled || fx->debug_view == POSTFX_DEBUG_NORMALS;
 }
 
 void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hdr,
@@ -324,18 +353,23 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             check_gl_error("postfx normals resolve");
         }
 
-        if (fx->ssao_enabled) {
-            // Resolve depth alongside color so SSAO can reconstruct
-            // view-space positions (formats match: both DEPTH24_STENCIL8)
+        // Depth and its inverse-projection serve both screen-space passes
+        bool ssr_active = fx->ssr_enabled && have_normals;
+        mat4 inv_projection;
+        if (fx->ssao_enabled || ssr_active) {
+            // Resolve depth alongside color so screen-space passes can
+            // reconstruct view-space positions (formats match: both are
+            // DEPTH24_STENCIL8)
             glBindFramebuffer(GL_READ_FRAMEBUFFER, msaa_fbo);
             glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fx->depth_fbo);
             glBlitFramebuffer(0, 0, fx->width, fx->height, 0, 0, fx->width, fx->height,
                               GL_DEPTH_BUFFER_BIT, GL_NEAREST);
             check_gl_error("postfx depth resolve");
 
-            mat4 inv_projection;
             glm_mat4_inv(projection, inv_projection);
+        }
 
+        if (fx->ssao_enabled) {
             // Raw occlusion at half res
             glBindFramebuffer(GL_FRAMEBUFFER, fx->ssao_fbo[0]);
             glViewport(0, 0, fx->ssao_width, fx->ssao_height);
@@ -359,6 +393,45 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, fx->ssao_texture[0]);
             draw_fullscreen_quad(fx->quad_vao);
+        }
+
+        if (ssr_active) {
+            // March reflections into the half-res buffer (reads the scene,
+            // writes elsewhere: GL 4.1 has no texture barrier)
+            glBindFramebuffer(GL_FRAMEBUFFER, fx->ssr_fbo);
+            glViewport(0, 0, fx->ssao_width, fx->ssao_height);
+            glUseProgram(fx->ssr_program->id);
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, fx->depth_texture);
+            glActiveTexture(GL_TEXTURE1);
+            glBindTexture(GL_TEXTURE_2D, fx->normal_texture);
+            glActiveTexture(GL_TEXTURE2);
+            glBindTexture(GL_TEXTURE_2D, fx->hdr_texture);
+            uniform_set_mat4(fx->ssr_program->uniforms, "projection", (float*)projection);
+            uniform_set_mat4(fx->ssr_program->uniforms, "invProjection", (float*)inv_projection);
+            uniform_set_float(fx->ssr_program->uniforms, "maxDistance", fx->ssr_max_distance);
+            uniform_set_float(fx->ssr_program->uniforms, "thickness", fx->ssr_thickness);
+            uniform_set_int(fx->ssr_program->uniforms, "steps", fx->ssr_steps);
+            uniform_set_float(fx->ssr_program->uniforms, "maxRoughness", fx->ssr_max_roughness);
+            draw_fullscreen_quad(fx->quad_vao);
+
+            // Lerp the reflections onto the HDR scene before bloom so
+            // reflected highlights bloom like direct ones. The buffer is
+            // premultiplied, hence (ONE, ONE_MINUS_SRC_ALPHA). Restore the
+            // engine's blend function afterward: it is set once at init
+            // and everything else assumes it.
+            glBindFramebuffer(GL_FRAMEBUFFER, fx->hdr_fbo);
+            glViewport(0, 0, fx->width, fx->height);
+            glUseProgram(fx->ssr_composite_program->id);
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, fx->ssr_texture);
+            uniform_set_float(fx->ssr_composite_program->uniforms, "strength", fx->ssr_strength);
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+            draw_fullscreen_quad(fx->quad_vao);
+            glDisable(GL_BLEND);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            check_gl_error("postfx ssr");
         }
 
         if (fx->bloom_enabled) {
@@ -403,6 +476,8 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         glBindTexture(GL_TEXTURE_2D, fx->ssao_texture[1]);
         glActiveTexture(GL_TEXTURE3);
         glBindTexture(GL_TEXTURE_2D, have_normals ? fx->normal_texture : 0);
+        glActiveTexture(GL_TEXTURE4);
+        glBindTexture(GL_TEXTURE_2D, ssr_active ? fx->ssr_texture : 0);
         uniform_set_float(fx->tonemap_program->uniforms, "exposure", fx->exposure);
         uniform_set_float(fx->tonemap_program->uniforms, "bloomStrength", fx->bloom_strength);
         uniform_set_int(fx->tonemap_program->uniforms, "bloomEnabled", fx->bloom_enabled ? 1 : 0);
@@ -412,7 +487,8 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         // say so once per requested view rather than silently every frame
         PostFXDebugView debug_view = fx->debug_view;
         if ((debug_view == POSTFX_DEBUG_AO && !fx->ssao_enabled) ||
-            (debug_view == POSTFX_DEBUG_NORMALS && !have_normals)) {
+            (debug_view == POSTFX_DEBUG_NORMALS && !have_normals) ||
+            (debug_view == POSTFX_DEBUG_SSR && !ssr_active)) {
             static PostFXDebugView warned_view = POSTFX_DEBUG_NONE;
             if (warned_view != debug_view) {
                 log_warn("debug view %d suppressed: its source buffer is disabled",

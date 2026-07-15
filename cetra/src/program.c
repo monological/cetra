@@ -622,3 +622,27 @@ ShaderProgram* create_ssao_blur_program() {
 
     return program;
 }
+
+ShaderProgram* create_ssr_program() {
+    ShaderProgram* program = NULL;
+
+    if ((program = create_program_from_source("ssr", post_vert_shader_str, ssr_frag_shader_str,
+                                              NULL)) == NULL) {
+        log_error("Failed to initialize SSR shader program");
+        return NULL;
+    }
+
+    return program;
+}
+
+ShaderProgram* create_ssr_composite_program() {
+    ShaderProgram* program = NULL;
+
+    if ((program = create_program_from_source("ssr_composite", post_vert_shader_str,
+                                              ssr_composite_frag_shader_str, NULL)) == NULL) {
+        log_error("Failed to initialize SSR composite shader program");
+        return NULL;
+    }
+
+    return program;
+}

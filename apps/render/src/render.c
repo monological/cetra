@@ -78,6 +78,9 @@ typedef struct {
     int ssao_debug;                    // Show the raw SSAO buffer
     int no_normals_mrt;                // Disable the normals G-buffer
     int normals_debug;                 // Show the resolved normals G-buffer
+    int no_ssr;                        // Disable screen-space reflections
+    int ssr_debug;                     // Show the reflection buffer
+    float ssr_strength;                // SSR strength override (-1 = default)
     float specular_aa;                 // Specular AA strength override (-1 = default)
     int width;
     int height;
@@ -109,6 +112,9 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --ssao-debug       Show the raw SSAO buffer\n");
     fprintf(stderr, "      --no-normals-mrt   Disable the normals G-buffer (SSAO/SSR input)\n");
     fprintf(stderr, "      --normals-debug    Show the resolved normals G-buffer\n");
+    fprintf(stderr, "      --no-ssr           Disable screen-space reflections\n");
+    fprintf(stderr, "      --ssr-debug        Show the reflection buffer\n");
+    fprintf(stderr, "      --ssr-strength <f> Reflection strength (default: 1)\n");
     fprintf(stderr, "      --specular-aa <f>  Specular anti-aliasing strength (default: 1)\n");
     fprintf(stderr, "      --no-specular-aa   Disable specular anti-aliasing\n");
     fprintf(stderr, "  -D, --distance <m>     Camera distance from model (default: auto)\n");
@@ -132,7 +138,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     memset(args, 0, sizeof(RenderArgs));
     args->width = DEFAULT_WIDTH;
     args->height = DEFAULT_HEIGHT;
-    args->specular_aa = -1.0f; // -1 = keep the engine default
+    args->specular_aa = -1.0f;  // -1 = keep the engine default
+    args->ssr_strength = -1.0f; // -1 = keep the engine default
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
@@ -270,6 +277,16 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->no_normals_mrt = 1;
         } else if (strcmp(argv[i], "--normals-debug") == 0) {
             args->normals_debug = 1;
+        } else if (strcmp(argv[i], "--no-ssr") == 0) {
+            args->no_ssr = 1;
+        } else if (strcmp(argv[i], "--ssr-debug") == 0) {
+            args->ssr_debug = 1;
+        } else if (strcmp(argv[i], "--ssr-strength") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->ssr_strength = (float)atof(argv[i]);
         } else if (strcmp(argv[i], "--specular-aa") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -674,6 +691,15 @@ int main(int argc, char** argv) {
     }
     if (args.normals_debug && engine->postfx) {
         engine->postfx->debug_view = POSTFX_DEBUG_NORMALS;
+    }
+    if (args.no_ssr && engine->postfx) {
+        engine->postfx->ssr_enabled = false;
+    }
+    if (args.ssr_debug && engine->postfx) {
+        engine->postfx->debug_view = POSTFX_DEBUG_SSR;
+    }
+    if (args.ssr_strength >= 0.0f && engine->postfx) {
+        engine->postfx->ssr_strength = args.ssr_strength;
     }
     if (args.specular_aa >= 0.0f) {
         engine->specular_aa_strength = args.specular_aa;

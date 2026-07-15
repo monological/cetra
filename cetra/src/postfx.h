@@ -28,6 +28,7 @@ typedef enum PostFXDebugView {
     POSTFX_DEBUG_NONE = 0,
     POSTFX_DEBUG_AO = 1,      // Blurred SSAO buffer
     POSTFX_DEBUG_NORMALS = 2, // Resolved normals G-buffer
+    POSTFX_DEBUG_SSR = 3,     // Half-res reflection buffer
 } PostFXDebugView;
 
 typedef struct PostFX {
@@ -46,12 +47,16 @@ typedef struct PostFX {
     GLuint ssao_fbo[2]; // Half-res: [0] raw AO, [1] blurred AO
     GLuint ssao_texture[2];
     GLuint noise_texture; // 4x4 random kernel rotations, tiled
+    GLuint ssr_fbo;       // Half-res reflection buffer (march target)
+    GLuint ssr_texture;
 
     ShaderProgram* bright_program;
     ShaderProgram* blur_program;
     ShaderProgram* tonemap_program;
     ShaderProgram* ssao_program;
     ShaderProgram* ssao_blur_program;
+    ShaderProgram* ssr_program;
+    ShaderProgram* ssr_composite_program;
 
     GLuint quad_vao;
     GLuint quad_vbo;
@@ -68,6 +73,13 @@ typedef struct PostFX {
     float ssao_strength;
     float ssao_bias;
     bool normals_enabled; // Master switch for the normals G-buffer (MRT)
+    bool ssr_enabled;
+    float ssr_strength;        // Composite multiplier on the reflections
+    float ssr_max_distance;    // March length in view-space units
+    float ssr_thickness;       // Accepted depth gap behind a surface
+    int ssr_steps;             // Linear march steps
+    float ssr_max_roughness;   // Reflections fade out toward this roughness
+    float ssr_floor_roughness; // Roughness the shadow catcher publishes
     PostFXDebugView debug_view;
     PostFXTonemapMode tonemap_mode;
 } PostFX;

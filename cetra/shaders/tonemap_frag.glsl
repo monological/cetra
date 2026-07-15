@@ -14,7 +14,8 @@ uniform int bloomEnabled;
 uniform int aoEnabled;
 uniform float aoStrength;
 uniform sampler2D normalsTex; // Resolved view-space normals + roughness
-// Debug view dispatch (PostFXDebugView): 0 = none, 1 = AO, 2 = normals
+uniform sampler2D ssrTex;     // Half-res reflection buffer
+// Debug view dispatch (PostFXDebugView): 0=none, 1=AO, 2=normals, 3=SSR
 uniform int debugView;
 // 1 = ACES, 2 = PBR Neutral (passthrough frames are blitted by postfx_run
 // and never reach this pass)
@@ -66,6 +67,12 @@ void main()
         // Remap to display range; unwritten texels (sky, hair) stay black
         vec3 n = texture(normalsTex, TexCoords).xyz;
         FragColor = vec4(dot(n, n) > 0.001 ? normalize(n) * 0.5 + 0.5 : vec3(0.0), 1.0);
+        return;
+    }
+    if (debugView == 3) {
+        // Raw reflection buffer, gamma-corrected so dim hits are visible
+        vec3 ssr = texture(ssrTex, TexCoords).rgb;
+        FragColor = vec4(pow(clamp(ssr, 0.0, 1.0), vec3(1.0 / 2.2)), 1.0);
         return;
     }
     if (aoEnabled == 1) {
