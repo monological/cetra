@@ -98,6 +98,7 @@ Engine* create_engine(const char* window_title, int width, int height) {
     engine->program_map = NULL;
 
     engine->current_render_mode = RENDER_MODE_PBR;
+    engine->specular_aa_strength = 1.0f;
 
     glm_mat4_identity(engine->model_matrix);
     glm_mat4_identity(engine->view_matrix);
@@ -1142,6 +1143,9 @@ void render_nuklear_gui(Engine* engine) {
                     nk_property_float(engine->nk_ctx, "SSAO Strength:", 0.0f, &fx->ssao_strength,
                                       1.0f, 0.05f, 0.01f);
                 }
+
+                nk_property_float(engine->nk_ctx, "Spec AA:", 0.0f,
+                                  &engine->specular_aa_strength, 2.0f, 0.1f, 0.02f);
             }
 
             // bot margin
@@ -1341,6 +1345,7 @@ void run_engine_render_loop(Engine* engine, RenderSceneFunc render_func) {
         }
 
         if (render_func != NULL && current_scene != NULL) {
+            set_render_specular_aa_strength(engine->specular_aa_strength);
             render_func(engine, current_scene);
         }
 

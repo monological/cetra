@@ -74,6 +74,8 @@ typedef struct Engine {
 
     RenderMode current_render_mode; // default is PBR
 
+    float specular_aa_strength; // Geometric specular AA (0 disables)
+
     mat4 model_matrix;
     mat4 view_matrix;
     mat4 projection_matrix;

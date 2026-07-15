@@ -50,6 +50,8 @@ uniform float alphaCutoff;  // Alpha cutoff threshold for hair/foliage (0 = disa
 // Alpha-to-coverage: MSAA turns fractional alpha into sample coverage, so the
 // binary cutoff is skipped for soft, order-independent masked edges
 uniform int alphaToCoverage;
+// Geometric specular AA strength (0 disables)
+uniform float specularAAStrength;
 
 // With alpha-to-coverage active only fully invisible fragments are discarded
 // (fractional alpha becomes MSAA coverage); otherwise the binary cutoff
@@ -441,6 +443,21 @@ void main() {
     float sssThickness = 1.0;
     if (subsurfaceTexExists > 0) {
         sssThickness = texture(subsurfaceTex, uv).r;
+    }
+
+    // Geometric specular anti-aliasing (Kaplanyan 2016): where the normal
+    // varies quickly within a pixel (fine normal-mapped detail under
+    // minification), the true reflectance is a wider lobe than any single
+    // normal's — widen roughness by the normal variance to match, killing
+    // the sparkle/shimmer that GGX otherwise produces in motion
+    if (specularAAStrength > 0.0) {
+        vec3 dndu = dFdx(N);
+        vec3 dndv = dFdy(N);
+        float variance =
+            specularAAStrength * specularAAStrength * 0.25 * (dot(dndu, dndu) + dot(dndv, dndv));
+        float kernelRoughness2 = min(2.0 * variance, 0.18);
+        float a2 = roughnessMap * roughnessMap;
+        roughnessMap = clamp(sqrt(a2 + kernelRoughness2), roughnessMap, 1.0);
     }
 
     // Calculate view direction (must use WorldPos, not FragPos which is clip space)

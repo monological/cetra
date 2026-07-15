@@ -75,6 +75,7 @@ typedef struct {
     int no_springs;                    // Disable spring-bone secondary motion
     int no_ssao;                       // Disable screen-space ambient occlusion
     int ssao_debug;                    // Show the raw SSAO buffer
+    float specular_aa;                 // Specular AA strength override (-1 = default)
     int width;
     int height;
     int headless;
@@ -102,6 +103,8 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --no-springs       Disable spring-bone secondary motion\n");
     fprintf(stderr, "      --no-ssao          Disable screen-space ambient occlusion\n");
     fprintf(stderr, "      --ssao-debug       Show the raw SSAO buffer\n");
+    fprintf(stderr, "      --specular-aa <f>  Specular anti-aliasing strength (default: 1)\n");
+    fprintf(stderr, "      --no-specular-aa   Disable specular anti-aliasing\n");
     fprintf(stderr, "  -D, --distance <m>     Camera distance from model (default: auto)\n");
     fprintf(stderr, "  -a, --anim <path>      Animation file (can be repeated)\n");
     fprintf(stderr, "  -s, --source <path>    Source skeleton for retargeting (T-pose)\n");
@@ -123,6 +126,7 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     memset(args, 0, sizeof(RenderArgs));
     args->width = DEFAULT_WIDTH;
     args->height = DEFAULT_HEIGHT;
+    args->specular_aa = -1.0f; // -1 = keep the engine default
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
@@ -254,6 +258,14 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->no_ssao = 1;
         } else if (strcmp(argv[i], "--ssao-debug") == 0) {
             args->ssao_debug = 1;
+        } else if (strcmp(argv[i], "--specular-aa") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->specular_aa = (float)atof(argv[i]);
+        } else if (strcmp(argv[i], "--no-specular-aa") == 0) {
+            args->specular_aa = 0.0f;
         } else if (strcmp(argv[i], "--no-springs") == 0) {
             args->no_springs = 1;
         } else if (strcmp(argv[i], "-D") == 0 || strcmp(argv[i], "--distance") == 0) {
@@ -644,6 +656,9 @@ int main(int argc, char** argv) {
     }
     if (args.ssao_debug && engine->postfx) {
         engine->postfx->ssao_debug = true;
+    }
+    if (args.specular_aa >= 0.0f) {
+        engine->specular_aa_strength = args.specular_aa;
     }
     if (args.render_mode > 0) {
         engine->current_render_mode = (RenderMode)args.render_mode;

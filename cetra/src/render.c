@@ -33,6 +33,14 @@ AnimationState* get_render_animation_state(void) {
     return g_current_animation_state;
 }
 
+// Geometric specular AA strength, synced from the engine each frame
+// (same cross-cutting-state pattern as the animation state above)
+static float g_specular_aa_strength = 1.0f;
+
+void set_render_specular_aa_strength(float strength) {
+    g_specular_aa_strength = strength;
+}
+
 static void _update_skinning_uniforms(ShaderProgram* program, const Mesh* mesh) {
     if (!program || !program->uniforms)
         return;
@@ -303,6 +311,7 @@ static void _render_node(Scene* scene, SceneNode* node, Camera* camera, mat4 vie
             uniform_set_mat4(u, "projection", (const float*)projection);
             uniform_set_float(u, "time", time_value);
             uniform_set_int(u, "renderMode", render_mode);
+            uniform_set_float(u, "specularAAStrength", g_specular_aa_strength);
             _update_camera_uniforms(program, camera);
 
             // Update lights once per program switch for this node
