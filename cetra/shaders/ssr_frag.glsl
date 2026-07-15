@@ -11,14 +11,16 @@ out vec4 FragColor;
 // pass composites additively into the HDR target (GL 4.1 has no texture
 // barrier, so the scene texture cannot be read and written in one pass).
 uniform sampler2D depthTex;   // Full-res resolved scene depth
-uniform sampler2D normalsTex; // View-space normals (xyz) + roughness (a)
+uniform sampler2D normalsTex; // View-space normal (xyz) + reflective marker (a)
 uniform sampler2D hdrTex;     // Resolved linear HDR scene color
 uniform mat4 projection;
 uniform mat4 invProjection;
 uniform float maxDistance;  // March length in view-space units
 uniform float thickness;    // Accepted depth gap behind a surface
 uniform int steps;          // March samples along the screen segment
-uniform float maxRoughness; // Reflections fade out toward this roughness
+uniform float floorRoughness; // Roughness of the reflective floor
+uniform float maxRoughness;   // Reflections fade out toward this roughness
+uniform float strength;       // Reflection strength (folded into the weight)
 
 vec3 viewPosFromDepth(vec2 uv, float depth)
 {
@@ -44,20 +46,24 @@ void main()
 
     vec4 nr = texture(normalsTex, TexCoords);
     vec3 n = nr.xyz;
-    // Only surfaces marked reflective trace (the floor: alpha encoded as
-    // -1 - roughness by the catcher). Model surfaces carry positive
-    // roughness and rely on IBL for their reflections — screen-space rays
-    // off curved geometry graze their own silhouettes and sparkle.
+    // Only surfaces the catcher marked reflective trace: the marker is the
+    // SIGN of the G-buffer alpha (negative = reflective floor). Model
+    // surfaces write non-negative alpha and rely on IBL — screen-space rays
+    // off curved geometry graze their own silhouettes and sparkle. The
+    // floor's roughness is a scalar uniform, not carried per-texel.
     if (nr.a > -0.5 || dot(n, n) < 0.01) {
         FragColor = vec4(0.0);
         return;
     }
     n = normalize(n);
-    float roughness = clamp(-1.0 - nr.a, 0.0, 1.0);
-    if (roughness > maxRoughness) {
+    if (floorRoughness > maxRoughness) {
         FragColor = vec4(0.0);
         return;
     }
+
+    // Near plane recovered from the projection (the app's near clip varies),
+    // so the camera-facing-ray clamp below tracks the real frustum
+    float nearV = projection[3][2] / (projection[2][2] - 1.0);
 
     vec3 fragPos = viewPosFromDepth(TexCoords, depth);
     vec3 viewDir = normalize(fragPos); // camera at the view-space origin
@@ -67,13 +73,13 @@ void main()
     // against its own surface; clamp rays heading toward the camera so
     // the end point stays safely in front of the near plane.
     vec3 startV = fragPos + n * 0.02;
-    if (startV.z > -0.11) {
+    if (startV.z > -(nearV + 0.01)) {
         FragColor = vec4(0.0);
         return;
     }
     float tMax = maxDistance;
     if (R.z > 0.0) {
-        tMax = min(tMax, (-0.1 - startV.z) / R.z);
+        tMax = min(tMax, (-nearV - startV.z) / R.z);
     }
     if (tMax <= 0.0) {
         FragColor = vec4(0.0);
@@ -100,8 +106,8 @@ void main()
     for (int i = 0; i < steps; i++) {
         float s = (float(i) + jitter) / float(steps);
         vec3 p = mix(seg0, seg1, s);
-        if (p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0) {
-            break; // left the screen: no information beyond it
+        if (p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0 || p.z <= 0.0 || p.z >= 1.0) {
+            break; // left the screen or the depth range: no information there
         }
 
         float d = texture(depthTex, p.xy).r;
@@ -155,14 +161,16 @@ void main()
     float edgeFade = smoothstep(0.0, 0.1, min(edge.x, edge.y));
     float NdotV = max(dot(n, -viewDir), 0.0);
     float fresnel = 0.1 + 0.9 * pow(clamp(1.0 - NdotV, 0.0, 1.0), 5.0);
-    float roughnessFade = 1.0 - smoothstep(0.5 * maxRoughness, maxRoughness, roughness);
+    float roughnessFade = 1.0 - smoothstep(0.5 * maxRoughness, maxRoughness, floorRoughness);
     float distFade = 1.0 - clamp(sHit, 0.0, 1.0);
 
     // Premultiplied (color * weight, weight) for a lerp composite: a dark
     // reflection must DARKEN the bright floor, which additive blending
-    // cannot do. The sampled color is clamped — reflections carrying raw
-    // HDR spikes read as white discs after the half-res upsample.
-    float fade = edgeFade * fresnel * roughnessFade * distFade;
+    // cannot do. Strength folds into the weight, CLAMPED to [0,1] so the
+    // premultiplied pair stays consistent (strength > 1 saturates toward a
+    // full mirror instead of decoupling color from coverage). The sampled
+    // color is clamped — HDR spikes read as white discs after upsampling.
+    float weight = clamp(edgeFade * fresnel * roughnessFade * distFade * strength, 0.0, 1.0);
     vec3 reflection = min(texture(hdrTex, hitUV).rgb, vec3(2.0));
-    FragColor = vec4(reflection * fade, fade);
+    FragColor = vec4(reflection * weight, weight);
 }

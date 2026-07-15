@@ -21,11 +21,11 @@ uniform float shadowBias;
 uniform float catcherStrength;
 uniform float planeRadius;
 uniform mat4 view;
-// surfaceMode 1 (set when SSR is active) skips the unshadowed-fragment
-// discard so the whole floor writes depth and normals for the reflection
-// march; color still blends at alpha 0, leaving the image untouched.
+// surfaceMode 1 (set only when SSR is active) skips the unshadowed-fragment
+// discard so the whole floor writes depth and the reflective marker for the
+// reflection march; color still blends at alpha 0, leaving the image
+// untouched.
 uniform int surfaceMode;
-uniform float floorRoughness;
 
 float occlusion_from(int slot)
 {
@@ -62,8 +62,10 @@ void main()
         discard;
 
     FragColor = vec4(0.0, 0.0, 0.0, alpha);
-    // Alpha below -1 marks "reflective floor" for the SSR pass (encoded as
-    // -1 - roughness); model surfaces write plain positive roughness and
-    // are never traced. SSAO and the debug views read xyz only.
-    NormalOut = vec4(normalize(mat3(view) * vec3(0.0, 1.0, 0.0)), -1.0 - floorRoughness);
+    // Negative alpha is the "reflective floor" marker the SSR march traces;
+    // its magnitude is unused (floor roughness is a scalar uniform on the
+    // SSR pass). Only stamped when SSR is active — otherwise a non-negative
+    // marker keeps the floor out of the reflection set, and SSAO on this
+    // texel keeps using its derivative normal rather than this up-normal.
+    NormalOut = vec4(normalize(mat3(view) * vec3(0.0, 1.0, 0.0)), surfaceMode == 1 ? -1.0 : 0.0);
 }

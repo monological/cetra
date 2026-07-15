@@ -308,6 +308,14 @@ bool postfx_wants_normals(const PostFX* fx) {
     return fx->ssao_enabled || fx->ssr_enabled || fx->debug_view == POSTFX_DEBUG_NORMALS;
 }
 
+bool postfx_ssr_active(const PostFX* fx, bool normals_written) {
+    // The single "SSR runs this frame" predicate: the effect is enabled and
+    // the normals buffer it marches against was actually produced. Both the
+    // postfx pass and the shadow catcher's floor marker derive from this so
+    // they cannot disagree about whether the floor is being reflected.
+    return fx && fx->ssr_enabled && normals_written;
+}
+
 void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hdr,
                 bool normals_written, mat4 projection) {
     if (!fx)
@@ -354,7 +362,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         }
 
         // Depth and its inverse-projection serve both screen-space passes
-        bool ssr_active = fx->ssr_enabled && have_normals;
+        bool ssr_active = postfx_ssr_active(fx, have_normals);
         mat4 inv_projection;
         if (fx->ssao_enabled || ssr_active) {
             // Resolve depth alongside color so screen-space passes can
@@ -412,7 +420,11 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             uniform_set_float(fx->ssr_program->uniforms, "maxDistance", fx->ssr_max_distance);
             uniform_set_float(fx->ssr_program->uniforms, "thickness", fx->ssr_thickness);
             uniform_set_int(fx->ssr_program->uniforms, "steps", fx->ssr_steps);
+            uniform_set_float(fx->ssr_program->uniforms, "floorRoughness", fx->ssr_floor_roughness);
             uniform_set_float(fx->ssr_program->uniforms, "maxRoughness", fx->ssr_max_roughness);
+            // Strength folds into the march's premultiplied weight (clamped
+            // there) so the composite stays a straight premultiplied lerp
+            uniform_set_float(fx->ssr_program->uniforms, "strength", fx->ssr_strength);
             draw_fullscreen_quad(fx->quad_vao);
 
             // Lerp the reflections onto the HDR scene before bloom so
@@ -425,7 +437,6 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             glUseProgram(fx->ssr_composite_program->id);
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, fx->ssr_texture);
-            uniform_set_float(fx->ssr_composite_program->uniforms, "strength", fx->ssr_strength);
             glEnable(GL_BLEND);
             glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
             draw_fullscreen_quad(fx->quad_vao);

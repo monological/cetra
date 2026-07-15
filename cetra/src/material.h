@@ -9,14 +9,23 @@
 
 // How a material's alpha is rendered (glTF alphaMode semantics).
 //
+// The normals G-buffer's alpha channel (color attachment 1) is a shared
+// contract across producers/consumers; its meaning is the SIGN, not the
+// magnitude:
+//   - Opaque model surfaces write .a = 0 (non-reflective; SSAO reads .xyz).
+//   - The shadow catcher writes .a = -1 to mark the reflective floor, the
+//     only surface SSR traces (its roughness is a scalar uniform, not
+//     carried per-texel). Only stamped when SSR is active.
+//   - ALPHA_MASK surfaces write .a = FragColor's alpha (A2C coverage), a
+//     non-negative value: Apple's driver takes A2C coverage from the LAST
+//     color output's alpha, so it cannot carry anything else.
+//
 // ALPHA_MASK carries renderer-wide special cases beyond alpha-to-coverage
 // itself; the full contract, each enforced where it must live:
 //   - Shadow map: excluded entirely, neither casts (shadow.c mesh skip) nor
 //     receives (pbr_frag.glsl shadow loop) — map texels are millimeters,
 //     card strands alias into streaks/acne at that scale.
-//   - Normals G-buffer: writes a zero-normal invalid marker whose alpha
-//     mirrors FragColor's (pbr_frag.glsl NormalOut) because Apple's driver
-//     takes A2C coverage from the LAST color output's alpha; SSAO falls
+//   - Normals G-buffer: writes a zero-normal marker (see above); SSAO falls
 //     back to derivative normals on those texels (ssao_frag.glsl).
 //   - Occlusion for these surfaces comes from the AO texture and SSAO.
 typedef enum AlphaMode {

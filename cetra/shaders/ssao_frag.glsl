@@ -10,7 +10,7 @@ out vec4 FragColor;
 // back to depth derivatives, which facet on curved surfaces.
 uniform sampler2D depthTex;   // Full-res resolved scene depth
 uniform sampler2D noiseTex;   // 4x4 random rotation vectors, tiled
-uniform sampler2D normalsTex; // View-space normals (xyz) + roughness (a)
+uniform sampler2D normalsTex; // View-space normals (xyz); .a unused here
 uniform int useNormalsTex;
 uniform mat4 projection;
 uniform mat4 invProjection;

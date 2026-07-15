@@ -669,15 +669,16 @@ void main() {
 
     FragColor = vec4(color, finalOpacity);
 
-    // G-buffer: view-space normal + roughness (post-spec-AA, so SSR sees
-    // the same lobe width the lighting used). Alpha-to-coverage surfaces
-    // (hair) stamp zero normals instead: consumers must not trust normals
-    // at strand scale, and leaving the buffer unwritten is worse (stale
-    // normals of whatever drew behind the hair, under the hair's depth).
-    // Their alpha must mirror FragColor's: Apple's driver derives A2C
-    // coverage from the last color output's alpha, not output 0, and any
-    // other value here reshapes the card cutouts.
+    // G-buffer: view-space normal (xyz) for SSAO; alpha is a non-negative
+    // reflective marker — only the shadow catcher's negative alpha traces in
+    // SSR, so model surfaces stamp 0 (never reflected in screen space; they
+    // rely on IBL). Alpha-to-coverage surfaces (hair) stamp zero normals
+    // instead: consumers must not trust normals at strand scale, and leaving
+    // the buffer unwritten is worse (stale normals of whatever drew behind
+    // the hair, under the hair's depth). Their alpha must mirror FragColor's:
+    // Apple's driver derives A2C coverage from the last color output's alpha,
+    // not output 0, and any other value reshapes the card cutouts.
     NormalOut = alphaToCoverage > 0
                     ? vec4(0.0, 0.0, 0.0, finalOpacity)
-                    : vec4(normalize(mat3(view) * N), roughnessMap);
+                    : vec4(normalize(mat3(view) * N), 0.0);
 }

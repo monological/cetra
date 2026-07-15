@@ -104,4 +104,9 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
 // engine samples this at frame start and hands the result to postfx_run.
 bool postfx_wants_normals(const PostFX* fx);
 
+// The single "SSR runs this frame" predicate (enabled + normals produced).
+// The postfx pass and the shadow catcher's floor marker both derive from
+// it so they cannot disagree about whether the floor is reflected.
+bool postfx_ssr_active(const PostFX* fx, bool normals_written);
+
 #endif // _POSTFX_H_
