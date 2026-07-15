@@ -36,6 +36,7 @@ typedef struct ShadowSystem {
     float far_plane;
     GLuint shadow_map_array;
     bool initialized;
+    bool enabled; // Master switch: off skips the depth pass and all receives
 } ShadowSystem;
 
 // Creation and destruction

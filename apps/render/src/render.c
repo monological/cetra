@@ -72,6 +72,7 @@ typedef struct {
     float camera_distance;             // Camera distance override in meters (0 = auto)
     int no_ground;                     // Disable skybox ground projection
     int no_key_light;                  // Pure IBL: skip the analytic key lights
+    int no_shadows;                    // Keep key lights but disable shadow maps
     int no_springs;                    // Disable spring-bone secondary motion
     int no_ssao;                       // Disable screen-space ambient occlusion
     int ssao_debug;                    // Show the raw SSAO buffer
@@ -102,6 +103,7 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --ground-height <m> HDR capture height above ground (default: 1.2)\n");
     fprintf(stderr, "      --no-ground        Disable HDR ground projection (infinite skybox)\n");
     fprintf(stderr, "      --no-key-light     Pure IBL lighting (no analytic lights/shadows)\n");
+    fprintf(stderr, "      --no-shadows       Keep key lights but disable shadow maps\n");
     fprintf(stderr, "      --no-springs       Disable spring-bone secondary motion\n");
     fprintf(stderr, "      --no-ssao          Disable screen-space ambient occlusion\n");
     fprintf(stderr, "      --ssao-debug       Show the raw SSAO buffer\n");
@@ -258,6 +260,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             }
         } else if (strcmp(argv[i], "--no-key-light") == 0) {
             args->no_key_light = 1;
+        } else if (strcmp(argv[i], "--no-shadows") == 0) {
+            args->no_shadows = 1;
         } else if (strcmp(argv[i], "--no-ssao") == 0) {
             args->no_ssao = 1;
         } else if (strcmp(argv[i], "--ssao-debug") == 0) {
@@ -915,6 +919,9 @@ int main(int argc, char** argv) {
 
     // Fit the shadow frustum to the scene; the library default (ortho 2000)
     // leaves a human-sized model with no effective shadow map resolution
+    if (scene->shadow_system && args.no_shadows) {
+        scene->shadow_system->enabled = false;
+    }
     if (scene->shadow_system && scene_radius > 0.0f) {
         scene->shadow_system->ortho_size = scene_radius * 2.0f;
         scene->shadow_system->near_plane = 0.1f;

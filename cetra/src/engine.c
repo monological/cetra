@@ -1102,6 +1102,15 @@ void render_nuklear_gui(Engine* engine) {
                 nk_property_float(engine->nk_ctx, "IBL Intensity:", 0.0f,
                                   &current_scene->ibl->intensity, 4.0f, 0.1f, 0.05f);
 
+                if (current_scene->shadow_system) {
+                    if (nk_button_label(engine->nk_ctx, current_scene->shadow_system->enabled
+                                                            ? "Shadows: On"
+                                                            : "Shadows: Off")) {
+                        current_scene->shadow_system->enabled =
+                            !current_scene->shadow_system->enabled;
+                    }
+                }
+
                 if (nk_button_label(engine->nk_ctx, current_scene->shadow_catcher
                                                         ? "Shadow Catcher: On"
                                                         : "Shadow Catcher: Off")) {
@@ -1367,7 +1376,7 @@ void run_engine_render_loop(Engine* engine, RenderSceneFunc render_func) {
 
         // Shadow depth pass (before main render)
         Scene* shadow_scene = get_current_scene(engine);
-        if (shadow_scene && shadow_scene->shadow_system) {
+        if (shadow_scene && shadow_scene->shadow_system && shadow_scene->shadow_system->enabled) {
             render_shadow_depth_pass(engine, shadow_scene);
         }
 

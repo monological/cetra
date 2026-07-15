@@ -33,6 +33,7 @@ ShadowSystem* create_shadow_system(int default_map_size) {
     system->shadow_map_array = 0;
     system->depth_program = NULL;
     system->initialized = false;
+    system->enabled = true;
 
     for (int i = 0; i < MAX_SHADOW_LIGHTS; i++) {
         system->casters[i].initialized = false;

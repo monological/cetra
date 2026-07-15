@@ -322,7 +322,7 @@ static void _render_node(Scene* scene, SceneNode* node, Camera* camera, mat4 vie
 
             // Bind shadow maps (always bind texture to satisfy sampler2DArray)
             if (scene && scene->shadow_system) {
-                if (scene->shadow_system->active_count > 0) {
+                if (scene->shadow_system->active_count > 0 && scene->shadow_system->enabled) {
                     int shadow_indices[MAX_SHADOW_LIGHTS] = {-1, -1, -1};
                     for (size_t k = 0; k < returned_light_count && k < MAX_SHADOW_LIGHTS; ++k) {
                         shadow_indices[k] = closest_lights[k]->shadow_map_index;
@@ -581,7 +581,7 @@ void render_current_scene(Engine* engine, float time_value) {
 
     // Shadow catcher: darken the environment floor where the model blocks
     // the shadow-casting lights (drawn over the skybox, blended)
-    if (scene->shadow_catcher && scene->shadow_system &&
+    if (scene->shadow_catcher && scene->shadow_system && scene->shadow_system->enabled &&
         scene->shadow_system->active_count > 0 && engine->shadow_catcher_program &&
         engine->catcher_vao) {
         ShaderProgram* catcher = engine->shadow_catcher_program;
