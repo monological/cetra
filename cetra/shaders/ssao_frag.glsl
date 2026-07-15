@@ -4,10 +4,14 @@ out vec4 FragColor;
 
 // Screen-space ambient occlusion from the resolved depth buffer: for each
 // pixel, count how many hemisphere sample points around its reconstructed
-// view-space position are hidden behind nearer geometry. No G-buffer exists,
-// so the surface normal is reconstructed from depth derivatives.
-uniform sampler2D depthTex; // Full-res resolved scene depth
-uniform sampler2D noiseTex; // 4x4 random rotation vectors, tiled
+// view-space position are hidden behind nearer geometry. The hemisphere is
+// oriented by the scene pass's normals G-buffer (true shading normals,
+// including normal maps); when that buffer is disabled the normal falls
+// back to depth derivatives, which facet on curved surfaces.
+uniform sampler2D depthTex;   // Full-res resolved scene depth
+uniform sampler2D noiseTex;   // 4x4 random rotation vectors, tiled
+uniform sampler2D normalsTex; // View-space normals (xyz) + roughness (a)
+uniform int useNormalsTex;
 uniform mat4 projection;
 uniform mat4 invProjection;
 uniform vec3 samples[24]; // Hemisphere kernel (+Z oriented), set once
@@ -40,7 +44,15 @@ void main()
     }
 
     vec3 fragPos = viewPosFromDepth(TexCoords, depth);
-    vec3 N = normalize(cross(dFdx(fragPos), dFdy(fragPos)));
+    vec3 N;
+    vec3 gbufferN = texture(normalsTex, TexCoords).xyz;
+    // A2C draws (hair) skip the G-buffer, leaving cleared zero texels;
+    // fall back to derivatives there as well
+    if (useNormalsTex == 1 && dot(gbufferN, gbufferN) > 0.01) {
+        N = normalize(gbufferN);
+    } else {
+        N = normalize(cross(dFdx(fragPos), dFdy(fragPos)));
+    }
 
     // Per-pixel random kernel rotation turns banding into high-frequency
     // noise the box blur removes

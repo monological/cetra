@@ -22,6 +22,14 @@ typedef enum PostFXTonemapMode {
     POSTFX_TONEMAP_NEUTRAL = 2,     // Khronos PBR Neutral: faithful shadows/colors
 } PostFXTonemapMode;
 
+// Present an intermediate buffer instead of the composited scene (one view
+// at a time by construction; values match the shader's debugView dispatch)
+typedef enum PostFXDebugView {
+    POSTFX_DEBUG_NONE = 0,
+    POSTFX_DEBUG_AO = 1,      // Blurred SSAO buffer
+    POSTFX_DEBUG_NORMALS = 2, // Resolved normals G-buffer
+} PostFXDebugView;
+
 typedef struct PostFX {
     int width, height;             // Full-res HDR size (engine framebuffer)
     int bloom_width, bloom_height; // Half-res bloom chain size
@@ -56,12 +64,11 @@ typedef struct PostFX {
     bool bloom_enabled;
     int blur_iterations; // Each iteration is one horizontal + one vertical pass
     bool ssao_enabled;
-    bool ssao_debug;   // Present the raw AO buffer instead of the scene
     float ssao_radius; // Occlusion reach in view-space units
     float ssao_strength;
     float ssao_bias;
     bool normals_enabled; // Master switch for the normals G-buffer (MRT)
-    bool normals_debug;   // Present the resolved normals instead of the scene
+    PostFXDebugView debug_view;
     PostFXTonemapMode tonemap_mode;
 } PostFX;
 

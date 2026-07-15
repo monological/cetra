@@ -663,13 +663,13 @@ int main(int argc, char** argv) {
         engine->postfx->ssao_enabled = false;
     }
     if (args.ssao_debug && engine->postfx) {
-        engine->postfx->ssao_debug = true;
+        engine->postfx->debug_view = POSTFX_DEBUG_AO;
     }
     if (args.no_normals_mrt && engine->postfx) {
         engine->postfx->normals_enabled = false;
     }
     if (args.normals_debug && engine->postfx) {
-        engine->postfx->normals_debug = true;
+        engine->postfx->debug_view = POSTFX_DEBUG_NORMALS;
     }
     if (args.specular_aa >= 0.0f) {
         engine->specular_aa_strength = args.specular_aa;

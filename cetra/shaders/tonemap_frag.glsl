@@ -13,9 +13,9 @@ uniform float bloomStrength;
 uniform int bloomEnabled;
 uniform int aoEnabled;
 uniform float aoStrength;
-uniform int aoDebug; // Show the raw AO buffer for verification
 uniform sampler2D normalsTex; // Resolved view-space normals + roughness
-uniform int normalsDebug;     // Show the normals G-buffer for verification
+// Debug view dispatch (PostFXDebugView): 0 = none, 1 = AO, 2 = normals
+uniform int debugView;
 // 1 = ACES, 2 = PBR Neutral (passthrough frames are blitted by postfx_run
 // and never reach this pass)
 uniform int tonemapMode;
@@ -56,12 +56,12 @@ void main()
 {
     vec3 color = texture(hdrTex, TexCoords).rgb;
 
-    if (aoDebug == 1) {
+    if (debugView == 1) {
         FragColor = vec4(vec3(texture(aoTex, TexCoords).r), 1.0);
         return;
     }
-    if (normalsDebug == 1) {
-        // Remap to display range; unwritten texels (sky) stay black
+    if (debugView == 2) {
+        // Remap to display range; unwritten texels (sky, hair) stay black
         vec3 n = texture(normalsTex, TexCoords).xyz;
         FragColor = vec4(dot(n, n) > 0.001 ? normalize(n) * 0.5 + 0.5 : vec3(0.0), 1.0);
         return;

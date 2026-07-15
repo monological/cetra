@@ -149,14 +149,13 @@ PostFX* create_postfx(int width, int height) {
     fx->bloom_enabled = true;
     fx->blur_iterations = 2;
     fx->ssao_enabled = true;
-    fx->ssao_debug = false;
     fx->ssao_radius = 0.4f;
     fx->ssao_strength = 0.8f;
     // Small: the model's crevices are centimeter-scale, and a large bias
     // (the textbook 0.025) erases exactly the shallow occlusion we want
     fx->ssao_bias = 0.008f;
     fx->normals_enabled = true;
-    fx->normals_debug = false;
+    fx->debug_view = POSTFX_DEBUG_NONE;
     fx->tonemap_mode = POSTFX_TONEMAP_NEUTRAL;
 
     // The HDR resolve target must be RGBA16F to match the MSAA source
@@ -221,6 +220,7 @@ PostFX* create_postfx(int width, int height) {
     glUseProgram(fx->ssao_program->id);
     uniform_set_int(fx->ssao_program->uniforms, "depthTex", 0);
     uniform_set_int(fx->ssao_program->uniforms, "noiseTex", 1);
+    uniform_set_int(fx->ssao_program->uniforms, "normalsTex", 2);
     const float noise_scale[2] = {(float)fx->ssao_width / 4.0f, (float)fx->ssao_height / 4.0f};
     uniform_set_vec2(fx->ssao_program->uniforms, "noiseScale", noise_scale);
     float kernel[SSAO_KERNEL_SIZE * 3];
@@ -273,9 +273,10 @@ void free_postfx(PostFX* fx) {
 bool postfx_wants_normals(const PostFX* fx) {
     if (!fx || !fx->normals_enabled)
         return false;
-    // SSR joins this list when it lands; the debug view forces the buffer
-    // on so it can be inspected with every other consumer disabled
-    return fx->ssao_enabled || fx->normals_debug;
+    // SSAO orients its sample hemisphere with these normals (SSR joins the
+    // list when it lands); the debug view forces the buffer on so it can
+    // be inspected with every consumer disabled
+    return fx->ssao_enabled || fx->debug_view == POSTFX_DEBUG_NORMALS;
 }
 
 void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hdr,
@@ -306,19 +307,10 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         glBlitFramebuffer(0, 0, fx->width, fx->height, 0, 0, fx->width, fx->height,
                           GL_COLOR_BUFFER_BIT, GL_NEAREST);
     } else {
-        // Resolve depth alongside color so screen-space passes can
-        // reconstruct view-space positions (formats match: DEPTH24_STENCIL8)
-        if (fx->ssao_enabled) {
-            glBindFramebuffer(GL_READ_FRAMEBUFFER, msaa_fbo);
-            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fx->depth_fbo);
-            glBlitFramebuffer(0, 0, fx->width, fx->height, 0, 0, fx->width, fx->height,
-                              GL_DEPTH_BUFFER_BIT, GL_NEAREST);
-            check_gl_error("postfx depth resolve");
-        }
-
+        // Resolve the scene pass's second attachment (normals + roughness)
+        // ahead of its consumers (SSAO now, SSR later)
         bool have_normals = postfx_wants_normals(fx);
         if (have_normals) {
-            // Resolve the scene pass's second attachment (normals+roughness)
             glBindFramebuffer(GL_READ_FRAMEBUFFER, msaa_fbo);
             glReadBuffer(GL_COLOR_ATTACHMENT1);
             glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fx->normal_fbo);
@@ -331,6 +323,14 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         }
 
         if (fx->ssao_enabled) {
+            // Resolve depth alongside color so SSAO can reconstruct
+            // view-space positions (formats match: both DEPTH24_STENCIL8)
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, msaa_fbo);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fx->depth_fbo);
+            glBlitFramebuffer(0, 0, fx->width, fx->height, 0, 0, fx->width, fx->height,
+                              GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+            check_gl_error("postfx depth resolve");
+
             mat4 inv_projection;
             glm_mat4_inv(projection, inv_projection);
 
@@ -342,6 +342,9 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             glBindTexture(GL_TEXTURE_2D, fx->depth_texture);
             glActiveTexture(GL_TEXTURE1);
             glBindTexture(GL_TEXTURE_2D, fx->noise_texture);
+            glActiveTexture(GL_TEXTURE2);
+            glBindTexture(GL_TEXTURE_2D, have_normals ? fx->normal_texture : 0);
+            uniform_set_int(fx->ssao_program->uniforms, "useNormalsTex", have_normals ? 1 : 0);
             uniform_set_mat4(fx->ssao_program->uniforms, "projection", (float*)projection);
             uniform_set_mat4(fx->ssao_program->uniforms, "invProjection", (float*)inv_projection);
             uniform_set_float(fx->ssao_program->uniforms, "radius", fx->ssao_radius);
@@ -403,10 +406,13 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         uniform_set_int(fx->tonemap_program->uniforms, "bloomEnabled", fx->bloom_enabled ? 1 : 0);
         uniform_set_int(fx->tonemap_program->uniforms, "aoEnabled", fx->ssao_enabled ? 1 : 0);
         uniform_set_float(fx->tonemap_program->uniforms, "aoStrength", fx->ssao_strength);
-        uniform_set_int(fx->tonemap_program->uniforms, "aoDebug",
-                        fx->ssao_enabled && fx->ssao_debug ? 1 : 0);
-        uniform_set_int(fx->tonemap_program->uniforms, "normalsDebug",
-                        have_normals && fx->normals_debug ? 1 : 0);
+        // Suppress debug views whose source buffer was not produced
+        PostFXDebugView debug_view = fx->debug_view;
+        if ((debug_view == POSTFX_DEBUG_AO && !fx->ssao_enabled) ||
+            (debug_view == POSTFX_DEBUG_NORMALS && !have_normals)) {
+            debug_view = POSTFX_DEBUG_NONE;
+        }
+        uniform_set_int(fx->tonemap_program->uniforms, "debugView", (int)debug_view);
         uniform_set_int(fx->tonemap_program->uniforms, "tonemapMode", (int)mode);
         draw_fullscreen_quad(fx->quad_vao);
 
