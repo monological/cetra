@@ -80,6 +80,8 @@ typedef struct {
     int show_bones;
     int check_stretch; // One-shot CPU skinning stretch diagnostic
     int render_mode;   // RenderMode override for debugging (-1 = PBR)
+    float orbit_yaw;   // Camera yaw around the model in degrees (0 = front)
+    float orbit_pitch; // Camera pitch in degrees (0 = level, 90 = top-down)
     int show_help;
 } RenderArgs;
 
@@ -198,6 +200,18 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 return -1;
             }
             args->render_mode = atoi(argv[i]);
+        } else if (strcmp(argv[i], "--yaw") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->orbit_yaw = (float)atof(argv[i]);
+        } else if (strcmp(argv[i], "--pitch") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->orbit_pitch = (float)atof(argv[i]);
         } else if (strcmp(argv[i], "-E") == 0 || strcmp(argv[i], "--exposure") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -871,8 +885,11 @@ int main(int argc, char** argv) {
     if (args.camera_distance > 0.0f)
         camera_distance = args.camera_distance;
 
-    vec3 auto_cam_pos = {scene_center[0], scene_center[1] + scene_radius * 0.3f,
-                         scene_center[2] + camera_distance};
+    float yaw = glm_rad(args.orbit_yaw);
+    float pitch = glm_rad(args.orbit_pitch);
+    vec3 auto_cam_pos = {scene_center[0] + camera_distance * cosf(pitch) * sinf(yaw),
+                         scene_center[1] + scene_radius * 0.3f + camera_distance * sinf(pitch),
+                         scene_center[2] + camera_distance * cosf(pitch) * cosf(yaw)};
     set_camera_position(camera, auto_cam_pos);
     set_camera_look_at(camera, scene_center);
 
