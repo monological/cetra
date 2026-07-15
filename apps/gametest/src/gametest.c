@@ -288,7 +288,7 @@ static void on_init(Game* game) {
             if (precompute_ibl(ibl, engine) == 0) {
                 scene->ibl = ibl;
                 scene->render_skybox = true;
-                scene->skybox_exposure = 1.0f;
+                scene->skybox_brightness = 1.0f;
                 printf("Loaded HDR environment: %s\n", hdr_path);
             } else {
                 fprintf(stderr, "Failed to precompute IBL\n");

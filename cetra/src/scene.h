@@ -115,7 +115,7 @@ typedef struct Scene {
     // Image-Based Lighting
     IBLResources* ibl;
     bool render_skybox;
-    float skybox_exposure;
+    float skybox_brightness;       // Linear env multiplier (tone mapping is the post pass's job)
     bool skybox_ground_projection; // Project env onto finite dome + ground
     float skybox_gp_radius;        // Dome radius in world units (meters)
     float skybox_gp_height;        // HDR capture height above ground

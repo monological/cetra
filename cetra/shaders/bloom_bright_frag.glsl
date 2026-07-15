@@ -19,5 +19,5 @@ void main()
     soft = soft * soft / (4.0 * knee + 1e-5);
     float contribution = max(soft, brightness - threshold) / max(brightness, 1e-5);
 
-    FragColor = vec4(color * max(contribution, 0.0), 1.0);
+    FragColor = vec4(color * contribution, 1.0);
 }

@@ -179,14 +179,10 @@ void free_engine(Engine* engine) {
         free(engine->screenshot_path);
     }
 
-    // GL objects must be released while the context still exists
+    // GL objects must be released while the context still exists,
+    // i.e. before the window is destroyed
     if (engine->postfx) {
         free_postfx(engine->postfx);
-    }
-
-    // Destroy GLFW window
-    if (engine->window) {
-        glfwDestroyWindow(engine->window);
     }
 
     glDeleteFramebuffers(1, &engine->framebuffer);
@@ -199,6 +195,11 @@ void free_engine(Engine* engine) {
         glDeleteBuffers(1, &engine->catcher_vbo);
 
     nk_glfw3_shutdown(&engine->nk_glfw);
+
+    // Destroy GLFW window
+    if (engine->window) {
+        glfwDestroyWindow(engine->window);
+    }
 
     // Terminate GLFW
     glfwTerminate();
@@ -276,7 +277,11 @@ static int _setup_engine_msaa(Engine* engine) {
     // Set up MSAA anti-aliasing
     int samples = 4; // Number of samples for MSAA, adjust as needed
     GLint max_color_samples = 0;
+    GLint max_samples = 0;
     glGetIntegerv(GL_MAX_COLOR_TEXTURE_SAMPLES, &max_color_samples);
+    glGetIntegerv(GL_MAX_SAMPLES, &max_samples);
+    if (max_samples > 0 && max_samples < max_color_samples)
+        max_color_samples = max_samples;
     if (max_color_samples > 0 && samples > max_color_samples)
         samples = max_color_samples;
 
@@ -862,7 +867,8 @@ static void _numbered_screenshot_path(const char* path, size_t frame, char* out,
 }
 
 /*
- * Save the default framebuffer (post-blit) to a binary PPM file.
+ * Save the default framebuffer (after the post pass and GUI) to a binary
+ * PPM file.
  */
 static void _save_framebuffer_ppm(const Engine* engine, const char* path) {
     int w = engine->fb_width;
@@ -1103,6 +1109,14 @@ void render_nuklear_gui(Engine* engine) {
                 nk_label(engine->nk_ctx, "Post", NK_TEXT_LEFT);
 
                 nk_layout_row_dynamic(engine->nk_ctx, 25, 1);
+                if (nk_button_label(engine->nk_ctx, fx->tonemap_mode == POSTFX_TONEMAP_ACES
+                                                        ? "Tonemap: ACES"
+                                                        : "Tonemap: Neutral")) {
+                    fx->tonemap_mode = fx->tonemap_mode == POSTFX_TONEMAP_ACES
+                                           ? POSTFX_TONEMAP_NEUTRAL
+                                           : POSTFX_TONEMAP_ACES;
+                }
+
                 nk_property_float(engine->nk_ctx, "Exposure:", 0.05f, &fx->exposure, 8.0f, 0.05f,
                                   0.01f);
 
@@ -1241,6 +1255,20 @@ void set_engine_show_xyz(Engine* engine, bool show_xyz) {
     }
 }
 
+void engine_present_frame(Engine* engine, RenderMode frame_mode, bool draw_gui) {
+    if (!engine)
+        return;
+
+    // Only PBR frames are linear HDR and get bloom + exposure + tone
+    // mapping; debug render modes emit display-ready colors and are copied
+    // unchanged. The GUI draws after so it is never tone mapped.
+    postfx_run(engine->postfx, engine->framebuffer, 0, frame_mode == RENDER_MODE_PBR);
+
+    if (draw_gui) {
+        render_nuklear_gui(engine);
+    }
+}
+
 void run_engine_render_loop(Engine* engine, RenderSceneFunc render_func) {
     if (!engine)
         return;
@@ -1279,6 +1307,9 @@ void run_engine_render_loop(Engine* engine, RenderSceneFunc render_func) {
         } else {
             glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
         }
+        // The mode this frame actually renders with (wireframe substitutes
+        // ALBEDO), used by the present pass after the mode is restored
+        RenderMode frame_mode = engine->current_render_mode;
 
         // Shadow depth pass (before main render)
         Scene* shadow_scene = get_current_scene(engine);
@@ -1301,20 +1332,10 @@ void run_engine_render_loop(Engine* engine, RenderSceneFunc render_func) {
             render_func(engine, current_scene);
         }
 
-        // Debug render modes emit display-ready colors; only PBR frames are
-        // linear HDR and get exposure + ACES in the post pass
-        RenderMode frame_mode = engine->current_render_mode;
-
         glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
         engine->current_render_mode = saved_render_mode;
 
-        // Resolve + bloom + tone map into the default framebuffer, then
-        // draw the GUI on top so it is never tone mapped
-        postfx_run(engine->postfx, engine->framebuffer, 0,
-                   frame_mode == RENDER_MODE_PBR ? engine->postfx->tonemap_mode
-                                                 : POSTFX_TONEMAP_PASSTHROUGH);
-
-        render_nuklear_gui(engine);
+        engine_present_frame(engine, frame_mode, true);
 
         engine->total_frames++;
 

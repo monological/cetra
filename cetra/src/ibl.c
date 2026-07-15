@@ -7,6 +7,7 @@
 
 #include "ibl.h"
 #include "uniform.h"
+#include "util.h"
 #include "engine.h"
 #include "shader_strings.h"
 #include "ext/log.h"
@@ -34,13 +35,6 @@ static const float cube_vertices[] = {
 
     -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, 1.0f,  1.0f,  -1.0f, -1.0f,
     1.0f,  -1.0f, -1.0f, -1.0f, -1.0f, 1.0f,  1.0f,  -1.0f, 1.0f};
-
-// Fullscreen quad for BRDF LUT rendering
-static const float quad_vertices[] = {
-    // positions        // texCoords
-    -1.0f, 1.0f, 0.0f, 0.0f, 1.0f, -1.0f, -1.0f, 0.0f, 0.0f, 0.0f,
-    1.0f,  1.0f, 0.0f, 1.0f, 1.0f, 1.0f,  -1.0f, 0.0f, 1.0f, 0.0f,
-};
 
 // Cubemap face view matrices
 static void get_cubemap_view_matrices(mat4 views[6]) {
@@ -83,19 +77,7 @@ static int init_quad_vao(IBLResources* ibl) {
     if (ibl->quad_vao != 0)
         return 0;
 
-    glGenVertexArrays(1, &ibl->quad_vao);
-    glGenBuffers(1, &ibl->quad_vbo);
-
-    glBindVertexArray(ibl->quad_vao);
-    glBindBuffer(GL_ARRAY_BUFFER, ibl->quad_vbo);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(quad_vertices), quad_vertices, GL_STATIC_DRAW);
-
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)0);
-    glEnableVertexAttribArray(1);
-    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(3 * sizeof(float)));
-
-    glBindVertexArray(0);
+    create_fullscreen_quad_vao(&ibl->quad_vao, &ibl->quad_vbo);
     return 0;
 }
 
@@ -106,9 +88,7 @@ static void render_cube(IBLResources* ibl) {
 }
 
 static void render_quad(IBLResources* ibl) {
-    glBindVertexArray(ibl->quad_vao);
-    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-    glBindVertexArray(0);
+    draw_fullscreen_quad(ibl->quad_vao);
 }
 
 IBLResources* create_ibl_resources(void) {
@@ -589,7 +569,7 @@ int precompute_ibl(IBLResources* ibl, Engine* engine) {
     return 0;
 }
 
-void render_skybox(IBLResources* ibl, mat4 view, mat4 projection, float exposure,
+void render_skybox(IBLResources* ibl, mat4 view, mat4 projection, float brightness,
                    bool ground_projection, float gp_radius, float gp_height) {
     if (!ibl || !ibl->precomputed || !ibl->skybox_program)
         return;
@@ -606,7 +586,7 @@ void render_skybox(IBLResources* ibl, mat4 view, mat4 projection, float exposure
 
     uniform_set_mat4(program->uniforms, "view", (float*)view_no_translation);
     uniform_set_mat4(program->uniforms, "projection", (float*)projection);
-    uniform_set_float(program->uniforms, "exposure", exposure);
+    uniform_set_float(program->uniforms, "brightness", brightness);
 
     // Ground projection uniforms; camera world position from the inverse view
     mat4 view_inv;

@@ -301,16 +301,8 @@ void run_game(Game* game) {
             game->on_render(game, alpha);
         }
 
-        // Render Nuklear GUI (only if enabled)
-        if (game->show_debug_gui) {
-            render_nuklear_gui(engine);
-        }
-
-        // Blit MSAA framebuffer to screen
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, engine->framebuffer);
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
-        glBlitFramebuffer(0, 0, engine->fb_width, engine->fb_height, 0, 0, engine->fb_width,
-                          engine->fb_height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+        // Resolve + tone map to the screen, GUI on top (only if enabled)
+        engine_present_frame(engine, engine->current_render_mode, game->show_debug_gui);
 
         glfwSwapBuffers(engine->window);
         glfwPollEvents();

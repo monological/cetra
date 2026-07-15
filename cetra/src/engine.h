@@ -123,6 +123,10 @@ typedef struct Engine {
     TextRenderer* text_renderer;
 } Engine;
 
+// Per-frame scene render callback. Output is scene-referred linear HDR: in
+// PBR mode everything drawn here (including overlays) goes through bloom,
+// exposure, and tone mapping in the present pass. Only the Nuklear GUI is
+// drawn after tone mapping.
 typedef void (*RenderSceneFunc)(Engine*, Scene*);
 
 Engine* create_engine(const char* window_title, int width, int height);
@@ -160,6 +164,12 @@ ShaderProgram* get_engine_shader_program_by_name(Engine* engine, const char* pro
 void set_engine_show_gui(Engine* engine, bool show_gui);
 void set_engine_show_fps(Engine* engine, bool show_fps);
 void render_nuklear_gui(Engine* engine);
+
+// Present the frame: resolve the MSAA framebuffer through the post stack
+// (bloom + tone map, or a raw copy for non-PBR frame_mode) into the default
+// framebuffer, then optionally draw the GUI on top. Used by every render
+// loop that draws into engine->framebuffer.
+void engine_present_frame(Engine* engine, RenderMode frame_mode, bool draw_gui);
 
 // Render
 void set_engine_show_wireframe(Engine* engine, bool show_wireframe);

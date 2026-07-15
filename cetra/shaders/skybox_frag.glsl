@@ -3,7 +3,7 @@ in vec3 TexCoords;
 out vec4 FragColor;
 
 uniform samplerCube skyboxTex;
-uniform float exposure;
+uniform float brightness; // Linear env multiplier; tone mapping happens in post
 
 // Ground projection: instead of sampling the environment at infinity,
 // project it onto a finite dome (radius gpRadius, centered on the world
@@ -53,9 +53,5 @@ void main()
     vec3 dir = sample_direction(normalize(TexCoords));
     vec3 envColor = texture(skyboxTex, dir).rgb;
 
-    // Environment brightness scalar; output stays linear HDR — tone
-    // mapping and gamma happen in the post pass (tonemap_frag.glsl)
-    envColor *= exposure;
-
-    FragColor = vec4(envColor, 1.0);
+    FragColor = vec4(envColor * brightness, 1.0);
 }

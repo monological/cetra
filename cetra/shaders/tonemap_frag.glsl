@@ -10,13 +10,40 @@ uniform sampler2D bloomTex;
 uniform float exposure;
 uniform float bloomStrength;
 uniform int bloomEnabled;
-uniform int tonemapMode; // 0 = passthrough, 1 = ACES + gamma
+// 1 = ACES, 2 = PBR Neutral (passthrough frames are blitted by postfx_run
+// and never reach this pass)
+uniform int tonemapMode;
 
-// ACES filmic fit (Narkowicz 2015)
+// ACES filmic fit (Narkowicz 2015). High contrast: crushes shadows,
+// desaturates highlights — the cinematic look.
 vec3 acesTonemap(vec3 x)
 {
     return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14),
                  0.0, 1.0);
+}
+
+// Khronos PBR Neutral (2024). Identity below ~0.76 so shadows, midtones,
+// and material colors stay faithful; only highlights are compressed.
+// Made for product/model viewers where albedo fidelity matters.
+vec3 pbrNeutralTonemap(vec3 color)
+{
+    const float startCompression = 0.8 - 0.04;
+    const float desaturation = 0.15;
+
+    float x = min(color.r, min(color.g, color.b));
+    float offset = x < 0.08 ? x - 6.25 * x * x : 0.04;
+    color -= offset;
+
+    float peak = max(color.r, max(color.g, color.b));
+    if (peak < startCompression)
+        return color;
+
+    const float d = 1.0 - startCompression;
+    float newPeak = 1.0 - d * d / (peak + d - startCompression);
+    color *= newPeak / peak;
+
+    float g = 1.0 / (desaturation * (peak - newPeak) + 1.0);
+    return mix(color, newPeak * vec3(1.0), g);
 }
 
 void main()
@@ -26,10 +53,9 @@ void main()
         color += bloomStrength * texture(bloomTex, TexCoords).rgb;
     }
 
-    if (tonemapMode == 1) {
-        color = acesTonemap(color * exposure);
-        color = pow(color, vec3(1.0 / 2.2));
-    }
+    color *= exposure;
+    color = tonemapMode == 1 ? acesTonemap(color) : pbrNeutralTonemap(color);
+    color = pow(clamp(color, 0.0, 1.0), vec3(1.0 / 2.2));
 
     FragColor = vec4(color, 1.0);
 }

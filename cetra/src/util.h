@@ -2,6 +2,7 @@
 #define _UTIL_H_
 
 #include <stdbool.h>
+#include <GL/glew.h>
 #include <cglm/cglm.h>
 
 #include "common.h"
@@ -11,6 +12,11 @@
  */
 void check_gl_error(const char* where);
 size_t get_gl_max_lights();
+
+// Fullscreen NDC quad (loc0 vec3 position, loc1 vec2 uv, GL_TRIANGLE_STRIP).
+// The caller owns and deletes the returned VAO/VBO.
+void create_fullscreen_quad_vao(GLuint* vao, GLuint* vbo);
+void draw_fullscreen_quad(GLuint vao);
 
 /*
  * String

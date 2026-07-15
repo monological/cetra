@@ -66,7 +66,7 @@ Scene* create_scene() {
     // Initialize IBL (NULL by default, user must load HDR)
     scene->ibl = NULL;
     scene->render_skybox = false;
-    scene->skybox_exposure = 1.0f;
+    scene->skybox_brightness = 1.0f;
     scene->skybox_ground_projection = false;
     scene->skybox_gp_radius = 5.0f;
     scene->skybox_gp_height = 1.5f;

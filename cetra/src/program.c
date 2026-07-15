@@ -518,7 +518,7 @@ ShaderProgram* create_ibl_prefilter_program() {
 ShaderProgram* create_ibl_brdf_program() {
     ShaderProgram* program = NULL;
 
-    if ((program = create_program_from_source("ibl_brdf", ibl_brdf_vert_shader_str,
+    if ((program = create_program_from_source("ibl_brdf", post_vert_shader_str,
                                               ibl_brdf_frag_shader_str, NULL)) == NULL) {
         log_error("Failed to initialize IBL BRDF shader program");
         return NULL;

@@ -6,17 +6,15 @@
 
 #include "ext/log.h"
 
-// Fullscreen quad (GL_TRIANGLE_STRIP), loc0 = vec3 position, loc1 = vec2 uv
-static const float quad_vertices[] = {
-    -1.0f, 1.0f, 0.0f, 0.0f, 1.0f, -1.0f, -1.0f, 0.0f, 0.0f, 0.0f,
-    1.0f,  1.0f, 0.0f, 1.0f, 1.0f, 1.0f,  -1.0f, 0.0f, 1.0f, 0.0f,
-};
+// Creates a single-sample color-only FBO; returns false on failure
+static bool create_color_fbo(int width, int height, GLenum internal_format, GLuint* out_fbo,
+                             GLuint* out_texture) {
+    GLenum format = internal_format == GL_RGBA16F ? GL_RGBA : GL_RGB;
 
-// Creates a single-sample RGBA16F color-only FBO; returns false on failure
-static bool create_color_fbo(int width, int height, GLuint* out_fbo, GLuint* out_texture) {
     glGenTextures(1, out_texture);
     glBindTexture(GL_TEXTURE_2D, *out_texture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, width, height, 0, GL_RGBA, GL_FLOAT, NULL);
+    glTexImage2D(GL_TEXTURE_2D, 0, (GLint)internal_format, width, height, 0, format, GL_FLOAT,
+                 NULL);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     // Clamp so bloom sampling doesn't wrap around screen edges
@@ -60,15 +58,18 @@ PostFX* create_postfx(int width, int height) {
     fx->bloom_strength = 0.08f;
     fx->bloom_enabled = true;
     fx->blur_iterations = 2;
-    fx->tonemap_mode = POSTFX_TONEMAP_ACES;
+    fx->tonemap_mode = POSTFX_TONEMAP_NEUTRAL;
 
-    if (!create_color_fbo(fx->width, fx->height, &fx->hdr_fbo, &fx->hdr_texture)) {
+    // The HDR resolve target must be RGBA16F to match the MSAA source
+    // (multisample blits require identical formats); the bloom chain never
+    // reads alpha, so the cheaper packed-float format halves its bandwidth
+    if (!create_color_fbo(fx->width, fx->height, GL_RGBA16F, &fx->hdr_fbo, &fx->hdr_texture)) {
         free_postfx(fx);
         return NULL;
     }
     for (int i = 0; i < 2; i++) {
-        if (!create_color_fbo(fx->bloom_width, fx->bloom_height, &fx->bloom_fbo[i],
-                              &fx->bloom_texture[i])) {
+        if (!create_color_fbo(fx->bloom_width, fx->bloom_height, GL_R11F_G11F_B10F,
+                              &fx->bloom_fbo[i], &fx->bloom_texture[i])) {
             free_postfx(fx);
             return NULL;
         }
@@ -82,16 +83,17 @@ PostFX* create_postfx(int width, int height) {
         return NULL;
     }
 
-    glGenVertexArrays(1, &fx->quad_vao);
-    glGenBuffers(1, &fx->quad_vbo);
-    glBindVertexArray(fx->quad_vao);
-    glBindBuffer(GL_ARRAY_BUFFER, fx->quad_vbo);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(quad_vertices), quad_vertices, GL_STATIC_DRAW);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)0);
-    glEnableVertexAttribArray(1);
-    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(3 * sizeof(float)));
-    glBindVertexArray(0);
+    // Sampler bindings never change; set them once on the program objects
+    glUseProgram(fx->bright_program->id);
+    uniform_set_int(fx->bright_program->uniforms, "hdrTex", 0);
+    glUseProgram(fx->blur_program->id);
+    uniform_set_int(fx->blur_program->uniforms, "image", 0);
+    glUseProgram(fx->tonemap_program->id);
+    uniform_set_int(fx->tonemap_program->uniforms, "hdrTex", 0);
+    uniform_set_int(fx->tonemap_program->uniforms, "bloomTex", 1);
+    glUseProgram(0);
+
+    create_fullscreen_quad_vao(&fx->quad_vao, &fx->quad_vbo);
 
     check_gl_error("create_postfx");
     return fx;
@@ -101,43 +103,30 @@ void free_postfx(PostFX* fx) {
     if (!fx)
         return;
 
-    if (fx->hdr_fbo)
-        glDeleteFramebuffers(1, &fx->hdr_fbo);
-    if (fx->hdr_texture)
-        glDeleteTextures(1, &fx->hdr_texture);
-    for (int i = 0; i < 2; i++) {
-        if (fx->bloom_fbo[i])
-            glDeleteFramebuffers(1, &fx->bloom_fbo[i]);
-        if (fx->bloom_texture[i])
-            glDeleteTextures(1, &fx->bloom_texture[i]);
-    }
+    glDeleteFramebuffers(1, &fx->hdr_fbo);
+    glDeleteTextures(1, &fx->hdr_texture);
+    glDeleteFramebuffers(2, fx->bloom_fbo);
+    glDeleteTextures(2, fx->bloom_texture);
 
-    if (fx->bright_program)
-        free_program(fx->bright_program);
-    if (fx->blur_program)
-        free_program(fx->blur_program);
-    if (fx->tonemap_program)
-        free_program(fx->tonemap_program);
+    free_program(fx->bright_program);
+    free_program(fx->blur_program);
+    free_program(fx->tonemap_program);
 
-    if (fx->quad_vao)
-        glDeleteVertexArrays(1, &fx->quad_vao);
-    if (fx->quad_vbo)
-        glDeleteBuffers(1, &fx->quad_vbo);
+    glDeleteVertexArrays(1, &fx->quad_vao);
+    glDeleteBuffers(1, &fx->quad_vbo);
 
     free(fx);
 }
 
-static void draw_quad(PostFX* fx) {
-    glBindVertexArray(fx->quad_vao);
-    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-}
-
-void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, PostFXTonemapMode mode) {
+void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hdr) {
     if (!fx)
         return;
 
-    // The engine leaves blending and depth testing enabled for the whole
-    // frame; both must be off for fullscreen composite passes
+    PostFXTonemapMode mode = frame_is_hdr ? fx->tonemap_mode : POSTFX_TONEMAP_PASSTHROUGH;
+
+    // Fullscreen composite passes need blending and depth testing off
+    GLboolean depth_was_on = glIsEnabled(GL_DEPTH_TEST);
+    GLboolean blend_was_on = glIsEnabled(GL_BLEND);
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_BLEND);
 
@@ -148,56 +137,62 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, PostFXTonemapMod
     glBlitFramebuffer(0, 0, fx->width, fx->height, 0, 0, fx->width, fx->height,
                       GL_COLOR_BUFFER_BIT, GL_NEAREST);
 
-    if (fx->bloom_enabled) {
-        // Bright pass into half-res buffer 0 (linear sampling downsamples)
-        glBindFramebuffer(GL_FRAMEBUFFER, fx->bloom_fbo[0]);
-        glViewport(0, 0, fx->bloom_width, fx->bloom_height);
-        glUseProgram(fx->bright_program->id);
+    if (mode == POSTFX_TONEMAP_PASSTHROUGH) {
+        // Display-ready frame: plain copy to the target (single-sample
+        // blits may convert formats), skipping bloom and tone mapping
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, fx->hdr_fbo);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, target_fbo);
+        glBlitFramebuffer(0, 0, fx->width, fx->height, 0, 0, fx->width, fx->height,
+                          GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    } else {
+        if (fx->bloom_enabled) {
+            // Bright pass into half-res buffer 0 (linear sampling downsamples)
+            glBindFramebuffer(GL_FRAMEBUFFER, fx->bloom_fbo[0]);
+            glViewport(0, 0, fx->bloom_width, fx->bloom_height);
+            glUseProgram(fx->bright_program->id);
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, fx->hdr_texture);
+            uniform_set_float(fx->bright_program->uniforms, "threshold", fx->bloom_threshold);
+            uniform_set_float(fx->bright_program->uniforms, "knee", fx->bloom_knee);
+            draw_fullscreen_quad(fx->quad_vao);
+
+            // Separable Gaussian ping-pong; result ends in bloom_texture[0]
+            glUseProgram(fx->blur_program->id);
+            const float horizontal[2] = {1.0f / (float)fx->bloom_width, 0.0f};
+            const float vertical[2] = {0.0f, 1.0f / (float)fx->bloom_height};
+            for (int i = 0; i < fx->blur_iterations; i++) {
+                glBindFramebuffer(GL_FRAMEBUFFER, fx->bloom_fbo[1]);
+                glBindTexture(GL_TEXTURE_2D, fx->bloom_texture[0]);
+                uniform_set_vec2(fx->blur_program->uniforms, "direction", horizontal);
+                draw_fullscreen_quad(fx->quad_vao);
+
+                glBindFramebuffer(GL_FRAMEBUFFER, fx->bloom_fbo[0]);
+                glBindTexture(GL_TEXTURE_2D, fx->bloom_texture[1]);
+                uniform_set_vec2(fx->blur_program->uniforms, "direction", vertical);
+                draw_fullscreen_quad(fx->quad_vao);
+            }
+        }
+
+        // Composite + tone map into the target framebuffer
+        glBindFramebuffer(GL_FRAMEBUFFER, target_fbo);
+        glViewport(0, 0, fx->width, fx->height);
+        glUseProgram(fx->tonemap_program->id);
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, fx->hdr_texture);
-        uniform_set_int(fx->bright_program->uniforms, "hdrTex", 0);
-        uniform_set_float(fx->bright_program->uniforms, "threshold", fx->bloom_threshold);
-        uniform_set_float(fx->bright_program->uniforms, "knee", fx->bloom_knee);
-        draw_quad(fx);
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, fx->bloom_texture[0]);
+        uniform_set_float(fx->tonemap_program->uniforms, "exposure", fx->exposure);
+        uniform_set_float(fx->tonemap_program->uniforms, "bloomStrength", fx->bloom_strength);
+        uniform_set_int(fx->tonemap_program->uniforms, "bloomEnabled", fx->bloom_enabled ? 1 : 0);
+        uniform_set_int(fx->tonemap_program->uniforms, "tonemapMode", (int)mode);
+        draw_fullscreen_quad(fx->quad_vao);
 
-        // Separable Gaussian ping-pong; result ends in bloom_texture[0]
-        glUseProgram(fx->blur_program->id);
-        uniform_set_int(fx->blur_program->uniforms, "image", 0);
-        const float horizontal[2] = {1.0f / (float)fx->bloom_width, 0.0f};
-        const float vertical[2] = {0.0f, 1.0f / (float)fx->bloom_height};
-        for (int i = 0; i < fx->blur_iterations; i++) {
-            glBindFramebuffer(GL_FRAMEBUFFER, fx->bloom_fbo[1]);
-            glBindTexture(GL_TEXTURE_2D, fx->bloom_texture[0]);
-            uniform_set_vec2(fx->blur_program->uniforms, "direction", horizontal);
-            draw_quad(fx);
-
-            glBindFramebuffer(GL_FRAMEBUFFER, fx->bloom_fbo[0]);
-            glBindTexture(GL_TEXTURE_2D, fx->bloom_texture[1]);
-            uniform_set_vec2(fx->blur_program->uniforms, "direction", vertical);
-            draw_quad(fx);
-        }
+        glUseProgram(0);
+        glActiveTexture(GL_TEXTURE0);
     }
 
-    // Composite + tone map into the target framebuffer
-    glBindFramebuffer(GL_FRAMEBUFFER, target_fbo);
-    glViewport(0, 0, fx->width, fx->height);
-    glUseProgram(fx->tonemap_program->id);
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, fx->hdr_texture);
-    glActiveTexture(GL_TEXTURE1);
-    glBindTexture(GL_TEXTURE_2D, fx->bloom_texture[0]);
-    uniform_set_int(fx->tonemap_program->uniforms, "hdrTex", 0);
-    uniform_set_int(fx->tonemap_program->uniforms, "bloomTex", 1);
-    uniform_set_float(fx->tonemap_program->uniforms, "exposure", fx->exposure);
-    uniform_set_float(fx->tonemap_program->uniforms, "bloomStrength", fx->bloom_strength);
-    uniform_set_int(fx->tonemap_program->uniforms, "bloomEnabled", fx->bloom_enabled ? 1 : 0);
-    uniform_set_int(fx->tonemap_program->uniforms, "tonemapMode", (int)mode);
-    draw_quad(fx);
-
-    // Restore the engine's standing GL state
-    glBindVertexArray(0);
-    glUseProgram(0);
-    glActiveTexture(GL_TEXTURE0);
-    glEnable(GL_DEPTH_TEST);
-    glEnable(GL_BLEND);
+    if (depth_was_on)
+        glEnable(GL_DEPTH_TEST);
+    if (blend_was_on)
+        glEnable(GL_BLEND);
 }

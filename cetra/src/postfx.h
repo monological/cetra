@@ -16,7 +16,8 @@
 
 typedef enum PostFXTonemapMode {
     POSTFX_TONEMAP_PASSTHROUGH = 0, // Raw copy for display-ready LDR frames
-    POSTFX_TONEMAP_ACES = 1,        // Exposure + ACES fit + gamma 2.2
+    POSTFX_TONEMAP_ACES = 1,        // Filmic: high contrast, crushed shadows
+    POSTFX_TONEMAP_NEUTRAL = 2,     // Khronos PBR Neutral: faithful shadows/colors
 } PostFXTonemapMode;
 
 typedef struct PostFX {
@@ -47,9 +48,10 @@ typedef struct PostFX {
 PostFX* create_postfx(int width, int height);
 void free_postfx(PostFX* fx);
 
-// Resolve msaa_fbo, run bloom, and tone map into target_fbo (0 = default
-// framebuffer). mode overrides fx->tonemap_mode for this frame (pass
-// POSTFX_TONEMAP_PASSTHROUGH for debug render modes).
-void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, PostFXTonemapMode mode);
+// Resolve msaa_fbo, run bloom, and tone map (fx->tonemap_mode) into
+// target_fbo (0 = default framebuffer). Pass frame_is_hdr = false for frames
+// whose shaders already emitted display-ready colors (debug render modes):
+// they are copied unchanged, skipping bloom and tone mapping.
+void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hdr);
 
 #endif // _POSTFX_H_

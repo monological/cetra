@@ -7,6 +7,7 @@
 #include <stdbool.h>
 #include <unistd.h>
 #include <math.h>
+#include <GL/glew.h>
 #include <GLFW/glfw3.h>
 #include <cglm/cglm.h>
 
@@ -35,6 +36,34 @@ size_t get_gl_max_lights() {
     size_t max_lights = max_light_uniforms / COMPONENTS_PER_LIGHT;
 
     return max_lights;
+}
+
+void create_fullscreen_quad_vao(GLuint* vao, GLuint* vbo) {
+    // positions        // texCoords
+    static const float quad_vertices[] = {
+        -1.0f, 1.0f, 0.0f, 0.0f, 1.0f, -1.0f, -1.0f, 0.0f, 0.0f, 0.0f,
+        1.0f,  1.0f, 0.0f, 1.0f, 1.0f, 1.0f,  -1.0f, 0.0f, 1.0f, 0.0f,
+    };
+
+    glGenVertexArrays(1, vao);
+    glGenBuffers(1, vbo);
+
+    glBindVertexArray(*vao);
+    glBindBuffer(GL_ARRAY_BUFFER, *vbo);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(quad_vertices), quad_vertices, GL_STATIC_DRAW);
+
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(3 * sizeof(float)));
+
+    glBindVertexArray(0);
+}
+
+void draw_fullscreen_quad(GLuint vao) {
+    glBindVertexArray(vao);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    glBindVertexArray(0);
 }
 
 void print_indentation(int depth) {

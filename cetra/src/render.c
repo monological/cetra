@@ -127,6 +127,11 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
     uniform_set_vec3(u, "albedo", (const float*)&material->albedo);
     vec3 emissive_hdr;
     glm_vec3_scale(material->emissive, material->emissive_strength, emissive_hdr);
+    // The shader treats a black factor with an emissive texture as "use the
+    // texture as-is"; substitute the bare strength so it still applies there
+    if (material->emissive_tex && glm_vec3_norm2(material->emissive) < 1e-8f) {
+        glm_vec3_fill(emissive_hdr, material->emissive_strength);
+    }
     uniform_set_vec3(u, "emissiveFactor", (const float*)&emissive_hdr);
     uniform_set_float(u, "metallic", material->metallic);
     uniform_set_float(u, "roughness", material->roughness);
@@ -537,9 +542,12 @@ void render_current_scene(Engine* engine, float time_value) {
     _render_scene_iterative(scene, root_node, camera, *view, *projection, time_value, render_mode,
                             &current_program, &current_material, &frustum, false);
 
-    // Skybox after opaques (depth-tested against them at the far plane)
-    if (scene->render_skybox && scene->ibl && scene->ibl->precomputed) {
-        render_skybox(scene->ibl, *view, *projection, scene->skybox_exposure,
+    // Skybox after opaques (depth-tested against them at the far plane).
+    // Skipped in debug render modes: those frames bypass tone mapping, and
+    // the skybox shader emits linear HDR that would display uncorrected.
+    if (scene->render_skybox && scene->ibl && scene->ibl->precomputed &&
+        render_mode == RENDER_MODE_PBR) {
+        render_skybox(scene->ibl, *view, *projection, scene->skybox_brightness,
                       scene->skybox_ground_projection, scene->skybox_gp_radius,
                       scene->skybox_gp_height);
     }

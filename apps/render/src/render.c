@@ -61,6 +61,7 @@ typedef struct {
     const char* screenshot_path;       // Save final frame here (PPM)
     int screenshot_every;              // Also save numbered frames every N frames
     float fov_deg;                     // Camera FOV in degrees (0 = default 50)
+    float exposure;                    // Tonemap exposure override (0 = engine default)
     float ground_radius;               // Skybox ground projection dome radius (0 = default)
     float ground_height;               // HDR capture height above ground (0 = default)
     float camera_distance;             // Camera distance override in meters (0 = auto)
@@ -83,6 +84,7 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "  -t, --textures <dir>   Texture directory\n");
     fprintf(stderr, "  -e, --env <path>       HDR environment map for IBL\n");
     fprintf(stderr, "  -F, --fov <degrees>    Camera field of view (default: 50)\n");
+    fprintf(stderr, "  -E, --exposure <f>     Tonemap exposure (default: engine default)\n");
     fprintf(stderr, "      --ground <radius>  Ground projection dome radius (default: 5)\n");
     fprintf(stderr, "      --ground-height <m> HDR capture height above ground (default: 1.2)\n");
     fprintf(stderr, "      --no-ground        Disable HDR ground projection (infinite skybox)\n");
@@ -182,6 +184,16 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->fov_deg = (float)atof(argv[i]);
             if (args->fov_deg <= 0.0f || args->fov_deg >= 180.0f) {
                 fprintf(stderr, "Error: invalid fov '%s' (use 1-179 degrees)\n", argv[i]);
+                return -1;
+            }
+        } else if (strcmp(argv[i], "-E") == 0 || strcmp(argv[i], "--exposure") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->exposure = (float)atof(argv[i]);
+            if (args->exposure <= 0.0f) {
+                fprintf(stderr, "Error: invalid exposure '%s'\n", argv[i]);
                 return -1;
             }
         } else if (strcmp(argv[i], "--no-ground") == 0) {
@@ -590,6 +602,10 @@ int main(int argc, char** argv) {
         return -1;
     }
 
+    if (args.exposure > 0.0f && engine->postfx) {
+        engine->postfx->exposure = args.exposure;
+    }
+
     set_engine_error_callback(engine, app_error_callback);
     set_engine_mouse_button_callback(engine, mouse_button_callback);
     set_engine_key_callback(engine, key_callback);
@@ -680,7 +696,7 @@ int main(int argc, char** argv) {
             if (precompute_ibl(ibl, engine) == 0) {
                 scene->ibl = ibl;
                 scene->render_skybox = true;
-                scene->skybox_exposure = 1.0f;
+                scene->skybox_brightness = 1.0f;
                 // Ground projection on by default; --no-ground restores the
                 // infinite skybox
                 scene->skybox_ground_projection = !args.no_ground;
