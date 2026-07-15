@@ -399,6 +399,10 @@ static void render_irradiance_convolution(IBLResources* ibl, mat4 projection, co
     glBindTexture(GL_TEXTURE_CUBE_MAP, ibl->environment_cubemap);
     uniform_set_int(program->uniforms, "environmentMap", 0);
     uniform_set_mat4(program->uniforms, "projection", (float*)projection);
+    // Integrate from the mip whose faces are ~64px: dense enough for the
+    // convolution, coarse enough that small bright lights are pre-averaged in
+    uniform_set_float(program->uniforms, "sampleMipLevel",
+                      log2f((float)IBL_CUBEMAP_SIZE / 64.0f));
 
     glViewport(0, 0, IBL_IRRADIANCE_SIZE, IBL_IRRADIANCE_SIZE);
     glBindFramebuffer(GL_FRAMEBUFFER, ibl->capture_fbo);
@@ -428,6 +432,7 @@ static void render_prefilter_convolution(IBLResources* ibl, mat4 projection, con
     glBindTexture(GL_TEXTURE_CUBE_MAP, ibl->environment_cubemap);
     uniform_set_int(program->uniforms, "environmentMap", 0);
     uniform_set_mat4(program->uniforms, "projection", (float*)projection);
+    uniform_set_float(program->uniforms, "resolution", (float)IBL_CUBEMAP_SIZE);
 
     glBindFramebuffer(GL_FRAMEBUFFER, ibl->capture_fbo);
 
@@ -528,10 +533,17 @@ int precompute_ibl(IBLResources* ibl, Engine* engine) {
     // Disable face culling for inside-cube rendering
     glDisable(GL_CULL_FACE);
 
-    // Step 1: Convert equirectangular to cubemap
+    // Step 1: Convert equirectangular to cubemap. The mip chain is required
+    // by the convolutions below: this HDR class concentrates its energy in
+    // tiny, extremely bright light sources that sparse sampling of the
+    // full-res faces would statistically miss (under-lighting every model
+    // relative to the visible background); the mips pre-average that energy
+    // so the convolution integrals actually see it.
     log_info("  Converting equirectangular to cubemap...");
-    create_cubemap_texture(&ibl->environment_cubemap, IBL_CUBEMAP_SIZE, false);
+    create_cubemap_texture(&ibl->environment_cubemap, IBL_CUBEMAP_SIZE, true);
     render_equirect_to_cubemap(ibl, capture_projection, capture_views);
+    glBindTexture(GL_TEXTURE_CUBE_MAP, ibl->environment_cubemap);
+    glGenerateMipmap(GL_TEXTURE_CUBE_MAP);
 
     // Step 2: Generate irradiance map
     log_info("  Generating irradiance map...");

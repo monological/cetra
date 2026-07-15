@@ -3,6 +3,10 @@ in vec3 WorldPos;
 out vec4 FragColor;
 
 uniform samplerCube environmentMap;
+// Mip to integrate from: the ~1.5k hemisphere samples below would
+// statistically miss small ultra-bright sources (studio lamps, the sun) at
+// the full-res faces; a pre-averaged mip folds their energy into every texel
+uniform float sampleMipLevel;
 
 const float PI = 3.14159265359;
 
@@ -31,7 +35,7 @@ void main()
                              tangentSample.y * up +
                              tangentSample.z * N;
 
-            irradiance += texture(environmentMap, sampleVec).rgb *
+            irradiance += textureLod(environmentMap, sampleVec, sampleMipLevel).rgb *
                           cos(theta) * sin(theta);
             nrSamples++;
         }
