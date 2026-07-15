@@ -566,13 +566,13 @@ void render_current_scene(Engine* engine, float time_value) {
     GLuint current_program = 0;
     Material* current_material = NULL;
 
-    // Pass 1: opaque and alpha-masked meshes (counts skipped blend meshes)
+    // Pass 1: opaque and alpha-masked meshes (counts skipped blend meshes).
+    // The only pass that publishes the normals G-buffer; every later pass
+    // (skybox, translucents, catcher, overlays) writes color only.
+    engine_set_scene_draw_buffers(engine, true);
     scene->transparent_mesh_count = 0;
     _render_scene_iterative(scene, root_node, camera, *view, *projection, time_value, render_mode,
                             &current_program, &current_material, &frustum, false);
-
-    // The passes below emit no G-buffer data (skybox, translucents): write
-    // color only. The catcher switches back to publish the floor's normals.
     engine_set_scene_draw_buffers(engine, false);
 
     // Skybox after opaques (depth-tested against them at the far plane).
@@ -655,16 +655,11 @@ void render_current_scene(Engine* engine, float time_value) {
         glDisable(GL_CULL_FACE);
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        // The floor contributes normals for screen-space passes. Must come
-        // after the blanket blend enable above, which resets the indexed
-        // blend-off state this call establishes for attachment 1.
-        engine_set_scene_draw_buffers(engine, true);
 
         glBindVertexArray(engine->catcher_vao);
         glDrawArrays(GL_TRIANGLES, 0, 6);
         glBindVertexArray(0);
 
-        engine_set_scene_draw_buffers(engine, false);
         if (cull_was_enabled)
             glEnable(GL_CULL_FACE);
     }
