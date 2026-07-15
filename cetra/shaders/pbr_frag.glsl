@@ -285,16 +285,6 @@ float calculateShadow(int shadowIndex, vec3 worldPos, float NdotL) {
     return 1.0 - (shadow / 9.0);
 }
 
-// Find shadow slot for a given light index (-1 if not shadow-casting)
-int getShadowSlot(int lightIndex) {
-    for (int i = 0; i < numShadowLights && i < MAX_SHADOW_LIGHTS; i++) {
-        if (shadowLightIndex[i] == lightIndex) {
-            return i;
-        }
-    }
-    return -1;
-}
-
 void main() {
     // Early-out for simple render modes that don't need texture sampling
     if (renderMode == 5) {
@@ -378,11 +368,24 @@ void main() {
 
     vec3 N;
     if (normalTexExists > 0) {
-        N = texture(normalTex, uv).rgb;
-        N = N * 2.0 - 1.0;
+        // Re-orthonormalize the interpolated TBN (Gram-Schmidt) before
+        // applying the normal map. Vertex interpolation — and especially
+        // skinning, where cross-rig retargeting puts non-uniform scale/shear
+        // in the bone matrices — leaves the raw TBN non-orthonormal, which
+        // skews the normal-mapped normal (worst where the normal map is
+        // steep) into bright specks under the key lights on deformed poses.
+        // The geometric normal itself stays clean, so this never showed in
+        // the Normals render view (which visualizes the geometric normal).
+        vec3 Ng = normalize(Normal);
+        vec3 T = normalize(TBN[0] - dot(TBN[0], Ng) * Ng);
+        vec3 B = cross(Ng, T);
+        if (dot(B, TBN[1]) < 0.0) {
+            B = -B; // preserve the mesh's authored bitangent handedness
+        }
+        vec3 nTex = texture(normalTex, uv).rgb * 2.0 - 1.0;
         // Apply normal scale to XY components (glTF normalTexture.scale)
-        N.xy *= normalScale;
-        N = normalize(TBN * N);
+        nTex.xy *= normalScale;
+        N = normalize(mat3(T, B, Ng) * nTex);
     } else {
         N = normalize(Normal);
     }
@@ -600,9 +603,17 @@ void main() {
         // map: at map-texel scale (millimeters) card-on-card comparisons
         // are pure acne, drawing card-shaped streaks through the hair.
         // Their self-occlusion comes from the AO texture and SSAO instead.
+        //
+        // Each light carries its OWN shadow slot in shadowLightIndex[i];
+        // sample it directly. The old getShadowSlot() reverse lookup matched
+        // on light ordering, but get_closest_lights returns directional
+        // lights in a per-run-variable heap order (their positions aren't
+        // meaningful), so a light could sample a DIFFERENT light's shadow
+        // map — a per-run-random, constant-within-a-run wrong shadow that
+        // gated the specular highlights into shimmering speckle.
         float shadow = 1.0;
-        if (lights[i].type == 0 && alphaToCoverage == 0) {  // LIGHT_DIRECTIONAL = 0
-            int shadowSlot = getShadowSlot(i);
+        if (lights[i].type == 0 && alphaToCoverage == 0 && i < MAX_SHADOW_LIGHTS) {
+            int shadowSlot = shadowLightIndex[i];
             if (shadowSlot >= 0) {
                 shadow = calculateShadow(shadowSlot, WorldPos, NdotL);
             }
