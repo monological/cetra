@@ -80,11 +80,16 @@ void free_postfx(PostFX* fx);
 // used to render the frame (needed to reconstruct positions from depth).
 // Pass frame_is_hdr = false for frames whose shaders already emitted
 // display-ready colors (debug render modes): they are copied unchanged,
-// skipping SSAO, bloom, and tone mapping.
-void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hdr, mat4 projection);
+// skipping SSAO, bloom, and tone mapping. normals_written reports whether
+// the scene pass produced color attachment 1 this frame — the engine's
+// frame-start decision, passed through rather than re-derived from fx flags
+// that may have changed mid-frame.
+void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hdr,
+                bool normals_written, mat4 projection);
 
-// True when some active effect consumes the normals G-buffer this frame, so
-// the scene pass should write color attachment 1 (and postfx_run resolve it)
+// Producer-side predicate: true when some active effect will consume the
+// normals G-buffer, so the scene pass should write color attachment 1. The
+// engine samples this at frame start and hands the result to postfx_run.
 bool postfx_wants_normals(const PostFX* fx);
 
 #endif // _POSTFX_H_

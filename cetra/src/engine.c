@@ -1308,7 +1308,7 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode, bool draw_gui) 
     // mapping; debug render modes emit display-ready colors and are copied
     // unchanged. The GUI draws after so it is never tone mapped.
     postfx_run(engine->postfx, engine->framebuffer, 0, frame_mode == RENDER_MODE_PBR,
-               engine->projection_matrix);
+               engine->normals_this_frame, engine->projection_matrix);
 
     if (draw_gui) {
         render_nuklear_gui(engine);
@@ -1399,7 +1399,6 @@ void run_engine_render_loop(Engine* engine, RenderSceneFunc render_func) {
         }
 
         if (render_func != NULL && current_scene != NULL) {
-            set_render_specular_aa_strength(engine->specular_aa_strength);
             render_func(engine, current_scene);
         }
 

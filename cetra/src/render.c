@@ -33,15 +33,6 @@ AnimationState* get_render_animation_state(void) {
     return g_current_animation_state;
 }
 
-// Geometric specular AA strength, synced from the engine each frame
-// (same cross-cutting-state pattern as the animation state above)
-static float g_specular_aa_strength = 1.0f;
-
-void set_render_specular_aa_strength(float strength) {
-    g_specular_aa_strength = strength;
-}
-
-
 static void _update_skinning_uniforms(ShaderProgram* program, const Mesh* mesh) {
     if (!program || !program->uniforms)
         return;
@@ -264,10 +255,11 @@ static void _update_camera_uniforms(ShaderProgram* program, Camera* camera) {
     uniform_set_float(u, "farClip", camera->far_clip);
 }
 
-static void _render_node(Scene* scene, SceneNode* node, Camera* camera, mat4 view, mat4 projection,
-                         float time_value, RenderMode render_mode, Light** closest_lights,
-                         size_t returned_light_count, GLuint* current_program,
-                         Material** current_material, const Frustum* frustum, bool alpha_pass) {
+static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Camera* camera,
+                         mat4 view, mat4 projection, float time_value, RenderMode render_mode,
+                         Light** closest_lights, size_t returned_light_count,
+                         GLuint* current_program, Material** current_material,
+                         const Frustum* frustum, bool alpha_pass) {
 
     if (!node->meshes || node->mesh_count == 0)
         return;
@@ -312,7 +304,7 @@ static void _render_node(Scene* scene, SceneNode* node, Camera* camera, mat4 vie
             uniform_set_mat4(u, "projection", (const float*)projection);
             uniform_set_float(u, "time", time_value);
             uniform_set_int(u, "renderMode", render_mode);
-            uniform_set_float(u, "specularAAStrength", g_specular_aa_strength);
+            uniform_set_float(u, "specularAAStrength", engine->specular_aa_strength);
             _update_camera_uniforms(program, camera);
 
             // Update lights once per program switch for this node
@@ -446,10 +438,11 @@ static int _ensure_traversal_stack_capacity(Scene* scene, size_t required) {
     return 0;
 }
 
-static void _render_scene_iterative(Scene* scene, SceneNode* root, Camera* camera, mat4 view,
-                                    mat4 projection, float time_value, RenderMode render_mode,
-                                    GLuint* current_program, Material** current_material,
-                                    const Frustum* frustum, bool alpha_pass) {
+static void _render_scene_iterative(const Engine* engine, Scene* scene, SceneNode* root,
+                                    Camera* camera, mat4 view, mat4 projection, float time_value,
+                                    RenderMode render_mode, GLuint* current_program,
+                                    Material** current_material, const Frustum* frustum,
+                                    bool alpha_pass) {
     if (!scene) {
         log_error("error: render called with NULL scene");
         return;
@@ -481,7 +474,7 @@ static void _render_scene_iterative(Scene* scene, SceneNode* root, Camera* camer
         Light** closest_lights = get_closest_lights(scene, node, max_lights, &returned_light_count);
 
         // Render this node's meshes
-        _render_node(scene, node, camera, view, projection, time_value, render_mode,
+        _render_node(engine, scene, node, camera, view, projection, time_value, render_mode,
                      closest_lights, returned_light_count, current_program, current_material,
                      frustum, alpha_pass);
 
@@ -552,8 +545,8 @@ void render_current_scene(Engine* engine, float time_value) {
     // (skybox, translucents, catcher, overlays) writes color only.
     engine_set_scene_draw_buffers(engine, true);
     scene->transparent_mesh_count = 0;
-    _render_scene_iterative(scene, root_node, camera, *view, *projection, time_value, render_mode,
-                            &current_program, &current_material, &frustum, false);
+    _render_scene_iterative(engine, scene, root_node, camera, *view, *projection, time_value,
+                            render_mode, &current_program, &current_material, &frustum, false);
     engine_set_scene_draw_buffers(engine, false);
 
     // Skybox after opaques (depth-tested against them at the far plane).
@@ -574,7 +567,7 @@ void render_current_scene(Engine* engine, float time_value) {
         current_program = 0;
         current_material = NULL;
         glDepthMask(GL_FALSE);
-        _render_scene_iterative(scene, root_node, camera, *view, *projection, time_value,
+        _render_scene_iterative(engine, scene, root_node, camera, *view, *projection, time_value,
                                 render_mode, &current_program, &current_material, &frustum, true);
         glDepthMask(GL_TRUE);
     }

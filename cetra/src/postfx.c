@@ -280,7 +280,7 @@ bool postfx_wants_normals(const PostFX* fx) {
 }
 
 void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hdr,
-                mat4 projection) {
+                bool normals_written, mat4 projection) {
     if (!fx)
         return;
 
@@ -308,8 +308,10 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
                           GL_COLOR_BUFFER_BIT, GL_NEAREST);
     } else {
         // Resolve the scene pass's second attachment (normals + roughness)
-        // ahead of its consumers (SSAO now, SSR later)
-        bool have_normals = postfx_wants_normals(fx);
+        // ahead of its consumers (SSAO now, SSR later). The caller reports
+        // whether the attachment was written this frame; re-deriving it from
+        // fx flags here could disagree with what the scene pass produced.
+        bool have_normals = normals_written;
         if (have_normals) {
             glBindFramebuffer(GL_READ_FRAMEBUFFER, msaa_fbo);
             glReadBuffer(GL_COLOR_ATTACHMENT1);
