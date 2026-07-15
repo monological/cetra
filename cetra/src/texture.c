@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
 
 #include "ext/stb_image.h"
 #include "ext/uthash.h"
@@ -9,6 +10,68 @@
 
 #include "texture.h"
 #include "util.h"
+
+// Bleed visible RGB into fully-transparent texels. PNGs routinely store
+// garbage (often white) color behind alpha = 0; bilinear and mipmap
+// filtering mix it across the alpha edge, which renders as bright dashes
+// along the edges of hair/foliage cards. Runs until every transparent texel
+// carries a plausible color, so even the deepest mip levels average real
+// strand color instead of garbage.
+static void dilate_transparent_rgb(unsigned char* data, int width, int height) {
+    size_t count = (size_t)width * (size_t)height;
+    unsigned char* solid = malloc(count);
+    if (!solid)
+        return;
+    for (size_t i = 0; i < count; i++)
+        solid[i] = data[i * 4 + 3] >= 8;
+
+    int max_passes = width > height ? width : height;
+    for (int pass = 0; pass < max_passes; pass++) {
+        unsigned char* next = malloc(count);
+        if (!next)
+            break;
+        memcpy(next, solid, count);
+        bool changed = false;
+
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                size_t i = (size_t)y * (size_t)width + (size_t)x;
+                if (solid[i])
+                    continue;
+
+                static const int dx[4] = {1, -1, 0, 0};
+                static const int dy[4] = {0, 0, 1, -1};
+                int r = 0, g = 0, b = 0, n = 0;
+                for (int k = 0; k < 4; k++) {
+                    int nx = x + dx[k];
+                    int ny = y + dy[k];
+                    if (nx < 0 || ny < 0 || nx >= width || ny >= height)
+                        continue;
+                    size_t j = (size_t)ny * (size_t)width + (size_t)nx;
+                    if (!solid[j])
+                        continue;
+                    r += data[j * 4];
+                    g += data[j * 4 + 1];
+                    b += data[j * 4 + 2];
+                    n++;
+                }
+                if (n > 0) {
+                    data[i * 4] = (unsigned char)(r / n);
+                    data[i * 4 + 1] = (unsigned char)(g / n);
+                    data[i * 4 + 2] = (unsigned char)(b / n);
+                    next[i] = 1;
+                    changed = true;
+                }
+            }
+        }
+
+        free(solid);
+        solid = next;
+        if (!changed)
+            break;
+    }
+    free(solid);
+}
 
 Texture* create_texture() {
     Texture* texture = (Texture*)malloc(sizeof(Texture));
@@ -226,6 +289,10 @@ Texture* load_texture_path_into_pool(TexturePool* pool, const char* filepath) {
         return NULL;
     }
 
+    if (nrChannels == 4) {
+        dilate_transparent_rgb(data, width, height);
+    }
+
     Texture* new_texture = create_texture();
 
     if (!new_texture) {
@@ -309,6 +376,18 @@ Texture* load_texture_from_memory(TexturePool* pool, const char* key, const unsi
         return NULL;
     }
 
+    // RGBA sources need their transparent texels' color repaired; work on a
+    // mutable copy since the caller owns the pixel data
+    unsigned char* dilated = NULL;
+    if (channels == 4) {
+        size_t size = (size_t)width * (size_t)height * 4;
+        dilated = malloc(size);
+        if (dilated) {
+            memcpy(dilated, pixels, size);
+            dilate_transparent_rgb(dilated, width, height);
+        }
+    }
+
     // Generate texture
     GLuint textureID = 0;
     glGenTextures(1, &textureID);
@@ -340,7 +419,8 @@ Texture* load_texture_from_memory(TexturePool* pool, const char* key, const unsi
 
     // Upload texture data
     glTexImage2D(GL_TEXTURE_2D, 0, internal_format, width, height, 0, data_format, GL_UNSIGNED_BYTE,
-                 pixels);
+                 dilated ? dilated : pixels);
+    free(dilated);
     check_gl_error("embedded texture upload");
     glGenerateMipmap(GL_TEXTURE_2D);
     check_gl_error("embedded mipmap generation");
