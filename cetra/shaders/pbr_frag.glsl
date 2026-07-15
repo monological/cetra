@@ -632,9 +632,14 @@ void main() {
     FragColor = vec4(color, finalOpacity);
 
     // G-buffer: view-space normal + roughness (post-spec-AA, so SSR sees
-    // the same lobe width the lighting used). Only lands when the engine
-    // binds color attachment 1, which never happens on alpha-to-coverage
-    // draws (see render.c: a second output's alpha corrupts A2C coverage
-    // on Apple's driver).
-    NormalOut = vec4(normalize(mat3(view) * N), roughnessMap);
+    // the same lobe width the lighting used). Alpha-to-coverage surfaces
+    // (hair) stamp zero normals instead: consumers must not trust normals
+    // at strand scale, and leaving the buffer unwritten is worse (stale
+    // normals of whatever drew behind the hair, under the hair's depth).
+    // Their alpha must mirror FragColor's: Apple's driver derives A2C
+    // coverage from the last color output's alpha, not output 0, and any
+    // other value here reshapes the card cutouts.
+    NormalOut = alphaToCoverage > 0
+                    ? vec4(0.0, 0.0, 0.0, finalOpacity)
+                    : vec4(normalize(mat3(view) * N), roughnessMap);
 }

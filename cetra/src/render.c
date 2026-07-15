@@ -41,9 +41,6 @@ void set_render_specular_aa_strength(float strength) {
     g_specular_aa_strength = strength;
 }
 
-// True while the scene pass writes the normals G-buffer (attachment 1);
-// mirrors engine->normals_this_frame for the per-draw A2C exception below
-static bool g_normals_draw_set = false;
 
 static void _update_skinning_uniforms(ShaderProgram* program, const Mesh* mesh) {
     if (!program || !program->uniforms)
@@ -380,14 +377,6 @@ static void _render_node(Scene* scene, SceneNode* node, Camera* camera, mat4 vie
         bool use_a2c = mat->alpha_mode == ALPHA_MASK;
         if (use_a2c) {
             glEnable(GL_SAMPLE_ALPHA_TO_COVERAGE);
-            // Apple's driver derives A2C coverage from the LAST color
-            // output's alpha rather than output 0 (the spec), so a bound
-            // normals target corrupts the hair-card cutouts. Draw A2C
-            // meshes color-only; their normals are useless to SSAO/SSR.
-            if (g_normals_draw_set) {
-                const GLenum color_only[] = {GL_COLOR_ATTACHMENT0};
-                glDrawBuffers(1, color_only);
-            }
         }
 
         // Handle double-sided materials
@@ -404,13 +393,6 @@ static void _render_node(Scene* scene, SceneNode* node, Camera* camera, mat4 vie
         }
         if (use_a2c) {
             glDisable(GL_SAMPLE_ALPHA_TO_COVERAGE);
-            // Restore both targets (A2C meshes only draw in the opaque
-            // pass, which owns the normals attachment when it is active)
-            if (g_normals_draw_set) {
-                const GLenum both[] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1};
-                glDrawBuffers(2, both);
-                glDisablei(GL_BLEND, 1);
-            }
         }
     }
 }
@@ -554,7 +536,6 @@ void render_current_scene(Engine* engine, float time_value) {
     mat4* projection = &engine->projection_matrix;
 
     RenderMode render_mode = engine->current_render_mode;
-    g_normals_draw_set = engine->normals_this_frame;
 
     // Extract frustum from view-projection matrix for culling
     mat4 vp;
