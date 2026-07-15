@@ -55,6 +55,7 @@ PostFX* create_postfx(int width, int height) {
     fx->exposure = 1.0f;
     fx->bloom_threshold = 1.0f;
     fx->bloom_knee = 0.5f;
+    fx->bloom_max_brightness = 8.0f;
     fx->bloom_strength = 0.08f;
     fx->bloom_enabled = true;
     fx->blur_iterations = 2;
@@ -154,6 +155,8 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             glBindTexture(GL_TEXTURE_2D, fx->hdr_texture);
             uniform_set_float(fx->bright_program->uniforms, "threshold", fx->bloom_threshold);
             uniform_set_float(fx->bright_program->uniforms, "knee", fx->bloom_knee);
+            uniform_set_float(fx->bright_program->uniforms, "maxBrightness",
+                              fx->bloom_max_brightness);
             draw_fullscreen_quad(fx->quad_vao);
 
             // Separable Gaussian ping-pong; result ends in bloom_texture[0]

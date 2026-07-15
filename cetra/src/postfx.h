@@ -37,8 +37,9 @@ typedef struct PostFX {
     GLuint quad_vbo;
 
     float exposure;
-    float bloom_threshold; // Linear luminance where bloom starts
-    float bloom_knee;      // Soft-knee width around the threshold
+    float bloom_threshold;      // Linear luminance where bloom starts
+    float bloom_knee;           // Soft-knee width around the threshold
+    float bloom_max_brightness; // Firefly clamp on the bloom input
     float bloom_strength;
     bool bloom_enabled;
     int blur_iterations; // Each iteration is one horizontal + one vertical pass

@@ -9,10 +9,14 @@ out vec4 FragColor;
 uniform sampler2D hdrTex;
 uniform float threshold;
 uniform float knee;
+// Firefly clamp: single-pixel specular glints (thin hair strands at grazing
+// angles) can reach extreme HDR values; unclamped they turn into hard
+// blocky splats at the bloom chain's half resolution
+uniform float maxBrightness;
 
 void main()
 {
-    vec3 color = max(texture(hdrTex, TexCoords).rgb, vec3(0.0));
+    vec3 color = clamp(texture(hdrTex, TexCoords).rgb, vec3(0.0), vec3(maxBrightness));
     float brightness = max(color.r, max(color.g, color.b));
 
     float soft = clamp(brightness - threshold + knee, 0.0, 2.0 * knee);
