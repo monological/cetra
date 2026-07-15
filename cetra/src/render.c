@@ -33,7 +33,7 @@ AnimationState* get_render_animation_state(void) {
     return g_current_animation_state;
 }
 
-static void _update_skinning_uniforms(ShaderProgram* program, const Mesh* mesh) {
+void render_update_skinning_uniforms(ShaderProgram* program, const Mesh* mesh) {
     if (!program || !program->uniforms)
         return;
 
@@ -356,7 +356,7 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
         }
 
         // Update skinning uniforms for skinned meshes
-        _update_skinning_uniforms(program, mesh);
+        render_update_skinning_uniforms(program, mesh);
 
         // Set mesh-specific uniforms for vertex colors and UV1
         uniform_set_int(u, "vertexColorExists", mesh->colors ? 1 : 0);

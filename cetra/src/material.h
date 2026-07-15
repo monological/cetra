@@ -7,7 +7,18 @@
 #include "texture.h"
 #include "program.h"
 
-// How a material's alpha is rendered (glTF alphaMode semantics)
+// How a material's alpha is rendered (glTF alphaMode semantics).
+//
+// ALPHA_MASK carries renderer-wide special cases beyond alpha-to-coverage
+// itself; the full contract, each enforced where it must live:
+//   - Shadow map: excluded entirely, neither casts (shadow.c mesh skip) nor
+//     receives (pbr_frag.glsl shadow loop) — map texels are millimeters,
+//     card strands alias into streaks/acne at that scale.
+//   - Normals G-buffer: writes a zero-normal invalid marker whose alpha
+//     mirrors FragColor's (pbr_frag.glsl NormalOut) because Apple's driver
+//     takes A2C coverage from the LAST color output's alpha; SSAO falls
+//     back to derivative normals on those texels (ssao_frag.glsl).
+//   - Occlusion for these surfaces comes from the AO texture and SSAO.
 typedef enum AlphaMode {
     ALPHA_OPAQUE = 0, // Single opaque pass
     ALPHA_MASK,       // Opaque pass with alpha-to-coverage (hair/foliage)

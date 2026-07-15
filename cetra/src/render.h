@@ -21,6 +21,10 @@ void render_current_scene(Engine* engine, float time_value);
 void set_render_animation_state(AnimationState* state);
 AnimationState* get_render_animation_state(void);
 
+// Upload skinning state ("skinned" flag + bone matrices) for a mesh from
+// the active animation state; shared by the scene and shadow depth passes
+void render_update_skinning_uniforms(ShaderProgram* program, const Mesh* mesh);
+
 // Bone X-ray visualization
 // Renders skeleton bones as colored lines overlaid on the model
 // If anim_state is provided, shows animated pose in red

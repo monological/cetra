@@ -408,10 +408,17 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         uniform_set_int(fx->tonemap_program->uniforms, "bloomEnabled", fx->bloom_enabled ? 1 : 0);
         uniform_set_int(fx->tonemap_program->uniforms, "aoEnabled", fx->ssao_enabled ? 1 : 0);
         uniform_set_float(fx->tonemap_program->uniforms, "aoStrength", fx->ssao_strength);
-        // Suppress debug views whose source buffer was not produced
+        // Suppress debug views whose source buffer was not produced, and
+        // say so once per requested view rather than silently every frame
         PostFXDebugView debug_view = fx->debug_view;
         if ((debug_view == POSTFX_DEBUG_AO && !fx->ssao_enabled) ||
             (debug_view == POSTFX_DEBUG_NORMALS && !have_normals)) {
+            static PostFXDebugView warned_view = POSTFX_DEBUG_NONE;
+            if (warned_view != debug_view) {
+                log_warn("debug view %d suppressed: its source buffer is disabled",
+                         (int)debug_view);
+                warned_view = debug_view;
+            }
             debug_view = POSTFX_DEBUG_NONE;
         }
         uniform_set_int(fx->tonemap_program->uniforms, "debugView", (int)debug_view);
