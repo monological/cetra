@@ -273,6 +273,15 @@ static void _render_shadow_node(SceneNode* node, ShaderProgram* program, GLuint*
             if (!mesh || mesh->vao == 0)
                 continue;
 
+            // Alpha-masked materials (hair cards) are excluded from the
+            // shadow map entirely: at map-texel scale (millimeters) their
+            // strands can neither cast nor receive cleanly — solid-quad
+            // casting draws card-shaped streaks, alpha-tested casting
+            // draws strand-scale acne on whatever is beneath. Their
+            // occlusion comes from the AO texture and SSAO instead.
+            if (mesh->material && mesh->material->alpha_mode == ALPHA_MASK)
+                continue;
+
             // Skin animated meshes so they cast animated shadows
             AnimationState* anim = get_render_animation_state();
             if (mesh->is_skinned && anim && anim->active_bone_count > 0) {
@@ -284,20 +293,6 @@ static void _render_shadow_node(SceneNode* node, ShaderProgram* program, GLuint*
                 }
             } else {
                 uniform_set_int(program->uniforms, "skinned", 0);
-            }
-
-            // Alpha-masked materials cast alpha-tested shadows; everything
-            // else depth-writes its full geometry (see shadow_depth_frag)
-            Material* mat = mesh->material;
-            if (mat && mat->alpha_mode == ALPHA_MASK && mat->albedo_tex) {
-                glActiveTexture(GL_TEXTURE0);
-                glBindTexture(GL_TEXTURE_2D, mat->albedo_tex->id);
-                uniform_set_int(program->uniforms, "albedoTex", 0);
-                uniform_set_int(program->uniforms, "alphaTest", 1);
-                uniform_set_float(program->uniforms, "alphaCutoff",
-                                  mat->alphaCutoff > 0.0f ? mat->alphaCutoff : 0.5f);
-            } else {
-                uniform_set_int(program->uniforms, "alphaTest", 0);
             }
 
             glBindVertexArray(mesh->vao);

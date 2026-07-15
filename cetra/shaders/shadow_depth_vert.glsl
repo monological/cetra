@@ -1,10 +1,7 @@
 #version 330 core
 layout (location = 0) in vec3 aPos;
-layout (location = 2) in vec2 aTexCoords;
 layout (location = 6) in ivec4 aBoneIds;
 layout (location = 7) in vec4 aBoneWeights;
-
-out vec2 TexCoords;
 
 #define MAX_BONES 128
 
@@ -37,6 +34,5 @@ void main()
         }
     }
 
-    TexCoords = aTexCoords;
     gl_Position = lightSpaceMatrix * model * localPos;
 }
