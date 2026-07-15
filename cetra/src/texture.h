@@ -60,9 +60,20 @@ void set_texture_pool_directory(TexturePool* pool, const char* directory);
 
 Texture* get_texture_from_pool(TexturePool* pool, const char* filepath);
 void add_texture_to_pool(TexturePool* pool, Texture* texture);
-Texture* load_texture_path_into_pool(TexturePool* pool, const char* filepath);
+
+// Pick GL formats for an 8-bit image. is_srgb marks color data (albedo,
+// emissive) so the hardware decodes it to linear exactly once on sample;
+// data textures (normals, roughness/metalness, AO, ...) stay linear.
+void texture_gl_formats(int channels, bool is_srgb, GLenum* internal_format, GLenum* data_format);
+
+// Bleed visible RGB into transparent texels of an RGBA image so filtering
+// and mipmaps don't mix the garbage colors stored behind alpha = 0 into
+// visible edges (bright dashes on hair/foliage cards)
+void texture_dilate_transparent_rgb(unsigned char* data, int width, int height);
+
+Texture* load_texture_path_into_pool(TexturePool* pool, const char* filepath, bool is_srgb);
 Texture* load_texture_from_memory(TexturePool* pool, const char* key, const unsigned char* pixels,
-                                  int width, int height, int channels);
+                                  int width, int height, int channels, bool is_srgb);
 void remove_texture_from_pool(TexturePool* pool, const char* filepath);
 void clear_texture_pool(TexturePool* pool);
 

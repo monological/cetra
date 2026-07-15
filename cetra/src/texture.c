@@ -17,7 +17,7 @@
 // along the edges of hair/foliage cards. Runs until every transparent texel
 // carries a plausible color, so even the deepest mip levels average real
 // strand color instead of garbage.
-static void dilate_transparent_rgb(unsigned char* data, int width, int height) {
+void texture_dilate_transparent_rgb(unsigned char* data, int width, int height) {
     size_t count = (size_t)width * (size_t)height;
     unsigned char* solid = malloc(count);
     if (!solid)
@@ -71,6 +71,22 @@ static void dilate_transparent_rgb(unsigned char* data, int width, int height) {
             break;
     }
     free(solid);
+}
+
+void texture_gl_formats(int channels, bool is_srgb, GLenum* internal_format, GLenum* data_format) {
+    if (channels == 1) {
+        *internal_format = GL_RED;
+        *data_format = GL_RED;
+    } else if (channels == 2) {
+        *internal_format = GL_RG;
+        *data_format = GL_RG;
+    } else if (channels == 3) {
+        *internal_format = is_srgb ? GL_SRGB : GL_RGB;
+        *data_format = GL_RGB;
+    } else {
+        *internal_format = is_srgb ? GL_SRGB_ALPHA : GL_RGBA;
+        *data_format = GL_RGBA;
+    }
 }
 
 Texture* create_texture() {
@@ -238,7 +254,7 @@ void add_texture_to_pool(TexturePool* pool, Texture* texture) {
     }
 }
 
-Texture* load_texture_path_into_pool(TexturePool* pool, const char* filepath) {
+Texture* load_texture_path_into_pool(TexturePool* pool, const char* filepath, bool is_srgb) {
     if (!pool || !filepath) {
         log_error("Invalid pool or filepath");
         return NULL;
@@ -290,7 +306,7 @@ Texture* load_texture_path_into_pool(TexturePool* pool, const char* filepath) {
     }
 
     if (nrChannels == 4) {
-        dilate_transparent_rgb(data, width, height);
+        texture_dilate_transparent_rgb(data, width, height);
     }
 
     Texture* new_texture = create_texture();
@@ -315,20 +331,7 @@ Texture* load_texture_path_into_pool(TexturePool* pool, const char* filepath) {
     // Determine format
     GLenum internal_format;
     GLenum data_format;
-
-    if (nrChannels == 1) {
-        internal_format = GL_RED;
-        data_format = GL_RED;
-    } else if (nrChannels == 2) {
-        internal_format = GL_RG;
-        data_format = GL_RG;
-    } else if (nrChannels == 3) {
-        internal_format = GL_SRGB;
-        data_format = GL_RGB;
-    } else {
-        internal_format = GL_SRGB_ALPHA;
-        data_format = GL_RGBA;
-    }
+    texture_gl_formats(nrChannels, is_srgb, &internal_format, &data_format);
 
     // Upload texture data
     glTexImage2D(GL_TEXTURE_2D, 0, internal_format, width, height, 0, data_format, GL_UNSIGNED_BYTE,
@@ -359,7 +362,7 @@ Texture* load_texture_path_into_pool(TexturePool* pool, const char* filepath) {
 }
 
 Texture* load_texture_from_memory(TexturePool* pool, const char* key, const unsigned char* pixels,
-                                  int width, int height, int channels) {
+                                  int width, int height, int channels, bool is_srgb) {
     if (!pool || !key || !pixels) {
         log_error("Invalid pool, key, or pixel data");
         return NULL;
@@ -384,7 +387,7 @@ Texture* load_texture_from_memory(TexturePool* pool, const char* key, const unsi
         dilated = malloc(size);
         if (dilated) {
             memcpy(dilated, pixels, size);
-            dilate_transparent_rgb(dilated, width, height);
+            texture_dilate_transparent_rgb(dilated, width, height);
         }
     }
 
@@ -402,20 +405,7 @@ Texture* load_texture_from_memory(TexturePool* pool, const char* key, const unsi
     // Determine format
     GLenum internal_format;
     GLenum data_format;
-
-    if (channels == 1) {
-        internal_format = GL_RED;
-        data_format = GL_RED;
-    } else if (channels == 2) {
-        internal_format = GL_RG;
-        data_format = GL_RG;
-    } else if (channels == 3) {
-        internal_format = GL_SRGB;
-        data_format = GL_RGB;
-    } else {
-        internal_format = GL_SRGB_ALPHA;
-        data_format = GL_RGBA;
-    }
+    texture_gl_formats(channels, is_srgb, &internal_format, &data_format);
 
     // Upload texture data
     glTexImage2D(GL_TEXTURE_2D, 0, internal_format, width, height, 0, data_format, GL_UNSIGNED_BYTE,

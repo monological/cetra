@@ -322,8 +322,9 @@ void main() {
         vec3 albedoMapOnly = albedo;
         float texAlphaOnly = 1.0;
         if (albedoTexExists > 0) {
+            // sRGB texture: the hardware already decoded the sample to linear
             vec4 albedoSample = texture(albedoTex, uvAlbedo);
-            albedoMapOnly = sRGBToLinear(albedoSample.rgb);
+            albedoMapOnly = albedoSample.rgb;
             texAlphaOnly = albedoSample.a;
         }
         // Apply vertex color
@@ -347,8 +348,9 @@ void main() {
     vec3 albedoMap = albedo;
     float texAlpha = 1.0;  // Alpha from albedo texture (for hair/foliage)
     if (albedoTexExists > 0) {
+        // sRGB texture: the hardware already decoded the sample to linear
         vec4 albedoSample = texture(albedoTex, uv);
-        albedoMap = sRGBToLinear(albedoSample.rgb);
+        albedoMap = albedoSample.rgb;
         texAlpha = albedoSample.a;
     }
 
@@ -404,7 +406,8 @@ void main() {
 
     vec3 emissiveMap = vec3(0.0);
     if (emissiveTexExists > 0) {
-        vec3 texEmissive = sRGBToLinear(texture(emissiveTex, uv).rgb);
+        // sRGB texture: the hardware already decoded the sample to linear
+        vec3 texEmissive = texture(emissiveTex, uv).rgb;
         // Scale by emissiveFactor if set, otherwise use texture directly (backward compat)
         float factorSum = emissiveFactor.r + emissiveFactor.g + emissiveFactor.b;
         emissiveMap = texEmissive * (factorSum > 0.001 ? emissiveFactor : vec3(1.0));

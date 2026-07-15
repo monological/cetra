@@ -64,24 +64,25 @@ typedef struct TextureMapping {
     enum aiTextureType ai_type;
     void (*setter)(Material*, Texture*);
     const char* name;
+    bool is_srgb; // Color data; everything else is linear (normals, ORM, ...)
 } TextureMapping;
 
 static const TextureMapping texture_mappings[] = {
     // Legacy/FBX texture types
-    {aiTextureType_DIFFUSE, set_material_albedo_tex, "Diffuse"},
-    {aiTextureType_NORMALS, set_material_normal_tex, "Normal"},
-    {aiTextureType_METALNESS, set_material_metalness_tex, "Metalness"},
-    {aiTextureType_DIFFUSE_ROUGHNESS, set_material_roughness_tex, "Roughness"},
-    {aiTextureType_AMBIENT_OCCLUSION, set_material_ambient_occlusion_tex, "AO"},
-    {aiTextureType_EMISSIVE, set_material_emissive_tex, "Emissive"},
-    {aiTextureType_HEIGHT, set_material_height_tex, "Height"},
-    {aiTextureType_OPACITY, set_material_opacity_tex, "Opacity"},
-    {aiTextureType_SHEEN, set_material_sheen_tex, "Sheen"},
-    {aiTextureType_REFLECTION, set_material_reflectance_tex, "Reflectance"},
+    {aiTextureType_DIFFUSE, set_material_albedo_tex, "Diffuse", true},
+    {aiTextureType_NORMALS, set_material_normal_tex, "Normal", false},
+    {aiTextureType_METALNESS, set_material_metalness_tex, "Metalness", false},
+    {aiTextureType_DIFFUSE_ROUGHNESS, set_material_roughness_tex, "Roughness", false},
+    {aiTextureType_AMBIENT_OCCLUSION, set_material_ambient_occlusion_tex, "AO", false},
+    {aiTextureType_EMISSIVE, set_material_emissive_tex, "Emissive", true},
+    {aiTextureType_HEIGHT, set_material_height_tex, "Height", false},
+    {aiTextureType_OPACITY, set_material_opacity_tex, "Opacity", false},
+    {aiTextureType_SHEEN, set_material_sheen_tex, "Sheen", false},
+    {aiTextureType_REFLECTION, set_material_reflectance_tex, "Reflectance", false},
     // glTF/GLB-specific texture types
-    {aiTextureType_BASE_COLOR, set_material_albedo_tex, "BaseColor"},
-    {aiTextureType_NORMAL_CAMERA, set_material_normal_tex, "NormalCamera"},
-    {aiTextureType_EMISSION_COLOR, set_material_emissive_tex, "EmissionColor"},
+    {aiTextureType_BASE_COLOR, set_material_albedo_tex, "BaseColor", true},
+    {aiTextureType_NORMAL_CAMERA, set_material_normal_tex, "NormalCamera", false},
+    {aiTextureType_EMISSION_COLOR, set_material_emissive_tex, "EmissionColor", true},
 };
 
 static const size_t texture_mapping_count = sizeof(texture_mappings) / sizeof(texture_mappings[0]);
@@ -196,7 +197,7 @@ static void extract_material_properties(struct aiMaterial* ai_mat, Material* mat
  * Load embedded texture from aiScene
  */
 static Texture* load_embedded_texture(TexturePool* tex_pool, const struct aiScene* ai_scene,
-                                      const char* tex_path) {
+                                      const char* tex_path, bool is_srgb) {
     if (!ai_scene || !tex_path || tex_path[0] != '*') {
         return NULL;
     }
@@ -237,7 +238,8 @@ static Texture* load_embedded_texture(TexturePool* tex_pool, const struct aiScen
         needs_free = false;
     }
 
-    Texture* tex = load_texture_from_memory(tex_pool, tex_path, pixels, width, height, channels);
+    Texture* tex =
+        load_texture_from_memory(tex_pool, tex_path, pixels, width, height, channels, is_srgb);
 
     if (needs_free) {
         stbi_image_free(pixels);
@@ -264,9 +266,9 @@ Material* process_ai_material(struct aiMaterial* ai_mat, TexturePool* tex_pool,
 
             // Check if this is an embedded texture (path starts with '*')
             if (str.data[0] == '*' && ai_scene) {
-                tex = load_embedded_texture(tex_pool, ai_scene, str.data);
+                tex = load_embedded_texture(tex_pool, ai_scene, str.data, mapping->is_srgb);
             } else {
-                tex = load_texture_path_into_pool(tex_pool, str.data);
+                tex = load_texture_path_into_pool(tex_pool, str.data, mapping->is_srgb);
             }
 
             if (tex) {
@@ -304,7 +306,8 @@ static void async_tex_callback(Texture* tex, void* user_data) {
 }
 
 static void load_material_texture_async(AsyncLoader* loader, TexturePool* tex_pool, Material* mat,
-                                        const char* filepath, void (*setter)(Material*, Texture*),
+                                        const char* filepath, bool is_srgb,
+                                        void (*setter)(Material*, Texture*),
                                         const char* tex_type) {
     AsyncTexCallback* ctx = malloc(sizeof(AsyncTexCallback));
     if (!ctx) {
@@ -314,17 +317,18 @@ static void load_material_texture_async(AsyncLoader* loader, TexturePool* tex_po
     ctx->material = mat;
     ctx->setter = setter;
     ctx->tex_type = tex_type;
-    load_texture_async(loader, tex_pool, filepath, async_tex_callback, ctx);
+    load_texture_async(loader, tex_pool, filepath, is_srgb, async_tex_callback, ctx);
 }
 
 // Helper to load a texture (embedded or file-based) for a material
 static void load_material_texture(Material* material, TexturePool* tex_pool,
                                   const struct aiScene* ai_scene, AsyncLoader* loader,
-                                  const char* tex_path, void (*setter)(Material*, Texture*),
+                                  const char* tex_path, bool is_srgb,
+                                  void (*setter)(Material*, Texture*),
                                   const char* tex_type_name) {
     if (tex_path[0] == '*' && ai_scene) {
         // Embedded textures are loaded synchronously (data already in memory)
-        Texture* tex = load_embedded_texture(tex_pool, ai_scene, tex_path);
+        Texture* tex = load_embedded_texture(tex_pool, ai_scene, tex_path, is_srgb);
         if (tex) {
             setter(material, tex);
             log_info("%s texture loaded (embedded): %s", tex_type_name, tex->filepath);
@@ -333,7 +337,8 @@ static void load_material_texture(Material* material, TexturePool* tex_pool,
         }
     } else {
         // File-based textures loaded asynchronously
-        load_material_texture_async(loader, tex_pool, material, tex_path, setter, tex_type_name);
+        load_material_texture_async(loader, tex_pool, material, tex_path, is_srgb, setter,
+                                    tex_type_name);
     }
 }
 
@@ -353,8 +358,8 @@ Material* process_ai_material_async(struct aiMaterial* ai_mat, TexturePool* tex_
         const TextureMapping* mapping = &texture_mappings[i];
         if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, mapping->ai_type, 0, &str, NULL, NULL, NULL,
                                                NULL, NULL, NULL)) {
-            load_material_texture(material, tex_pool, ai_scene, loader, str.data, mapping->setter,
-                                  mapping->name);
+            load_material_texture(material, tex_pool, ai_scene, loader, str.data, mapping->is_srgb,
+                                  mapping->setter, mapping->name);
         }
     }
 
@@ -364,11 +369,11 @@ Material* process_ai_material_async(struct aiMaterial* ai_mat, TexturePool* tex_
         // glTF often stores metallicRoughness as UNKNOWN type
         // Only use if we don't already have metalness/roughness textures
         if (!material->metalness_tex) {
-            load_material_texture(material, tex_pool, ai_scene, loader, str.data,
+            load_material_texture(material, tex_pool, ai_scene, loader, str.data, false,
                                   set_material_metalness_tex, "MetallicRoughness(metalness)");
         }
         if (!material->roughness_tex) {
-            load_material_texture(material, tex_pool, ai_scene, loader, str.data,
+            load_material_texture(material, tex_pool, ai_scene, loader, str.data, false,
                                   set_material_roughness_tex, "MetallicRoughness(roughness)");
         }
     }

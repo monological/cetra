@@ -20,6 +20,7 @@
 typedef struct TextureLoadRequest {
     TexturePool* pool;
     char* filepath;
+    bool is_srgb; // Color data (albedo/emissive) vs linear data textures
     void* user_data;
     void (*callback)(Texture* tex, void* user_data);
 
@@ -79,7 +80,7 @@ void free_async_loader(AsyncLoader* loader);
 /*
  * Async texture loading
  */
-void load_texture_async(AsyncLoader* loader, TexturePool* pool, const char* filepath,
+void load_texture_async(AsyncLoader* loader, TexturePool* pool, const char* filepath, bool is_srgb,
                         void (*callback)(Texture* tex, void* user_data), void* user_data);
 
 /*

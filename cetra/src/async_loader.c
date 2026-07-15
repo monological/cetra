@@ -101,6 +101,11 @@ static void* worker_thread_func(void* arg) {
             goto enqueue_result;
         }
 
+        // Repair transparent texels off the main thread while we're here
+        if (channels == 4) {
+            texture_dilate_transparent_rgb(data, width, height);
+        }
+
         result->pixel_data = data;
         result->width = width;
         result->height = height;
@@ -108,16 +113,8 @@ static void* worker_thread_func(void* arg) {
         result->success = true;
 
         // Determine OpenGL format
-        if (channels == 1) {
-            result->internal_format = GL_RED;
-            result->data_format = GL_RED;
-        } else if (channels == 3) {
-            result->internal_format = GL_SRGB;
-            result->data_format = GL_RGB;
-        } else {
-            result->internal_format = GL_SRGB_ALPHA;
-            result->data_format = GL_RGBA;
-        }
+        texture_gl_formats(channels, req->is_srgb, &result->internal_format,
+                           &result->data_format);
 
     enqueue_result:
         // Add to completion queue
@@ -253,7 +250,7 @@ void free_async_loader(AsyncLoader* loader) {
 /*
  * Submit texture load request to worker queue
  */
-void load_texture_async(AsyncLoader* loader, TexturePool* pool, const char* filepath,
+void load_texture_async(AsyncLoader* loader, TexturePool* pool, const char* filepath, bool is_srgb,
                         void (*callback)(Texture* tex, void* user_data), void* user_data) {
     if (!loader || !pool || !filepath) {
         log_error("Invalid arguments to load_texture_async");
@@ -292,6 +289,7 @@ void load_texture_async(AsyncLoader* loader, TexturePool* pool, const char* file
 
     req->pool = pool;
     req->filepath = safe_strdup(filepath);
+    req->is_srgb = is_srgb;
     req->callback = callback;
     req->user_data = user_data;
     req->next = NULL;
