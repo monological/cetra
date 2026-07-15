@@ -596,8 +596,13 @@ void main() {
             }
         }
 
-        // Add this light's contribution with shadow
-        Lo += (kD * albedoMap / PI + specular) * radiance * NdotL * shadow;
+        // Add this light's contribution with shadow. Firefly clamp: a
+        // sub-pixel GGX spike carries far more energy than the pixel
+        // legitimately integrates, aliasing into white sparkle across
+        // low-roughness normal-mapped surfaces (and before the fp16 clamp,
+        // overflowing to NaN). Highlights saturate the tonemap well below
+        // this cap, so only the aliasing energy is lost.
+        Lo += min((kD * albedoMap / PI + specular) * radiance * NdotL * shadow, vec3(10.0));
 
         // Add subsurface scattering contribution
         if (subsurfaceTexExists > 0 && sssThickness < 0.99) {
