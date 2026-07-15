@@ -121,6 +121,8 @@ Engine* create_engine(const char* window_title, int width, int height) {
     engine->catcher_vao = 0;
     engine->catcher_vbo = 0;
 
+    engine->postfx = NULL;
+
     init_input_state(&engine->input);
 
     // FPS tracking initialization
@@ -175,6 +177,11 @@ void free_engine(Engine* engine) {
 
     if (engine->screenshot_path) {
         free(engine->screenshot_path);
+    }
+
+    // GL objects must be released while the context still exists
+    if (engine->postfx) {
+        free_postfx(engine->postfx);
     }
 
     // Destroy GLFW window
@@ -268,14 +275,20 @@ static int _setup_engine_msaa(Engine* engine) {
 
     // Set up MSAA anti-aliasing
     int samples = 4; // Number of samples for MSAA, adjust as needed
+    GLint max_color_samples = 0;
+    glGetIntegerv(GL_MAX_COLOR_TEXTURE_SAMPLES, &max_color_samples);
+    if (max_color_samples > 0 && samples > max_color_samples)
+        samples = max_color_samples;
 
-    // Create and set up the multisample framebuffer
+    // Create and set up the multisample framebuffer. The color target is
+    // float (RGBA16F) so the scene accumulates in linear HDR; the post
+    // stack tone maps it down to the display
     glGenFramebuffers(1, &engine->framebuffer);
     glBindFramebuffer(GL_FRAMEBUFFER, engine->framebuffer);
 
     glGenTextures(1, &engine->multisample_texture);
     glBindTexture(GL_TEXTURE_2D_MULTISAMPLE, engine->multisample_texture);
-    glTexImage2DMultisample(GL_TEXTURE_2D_MULTISAMPLE, samples, GL_RGB, engine->fb_width,
+    glTexImage2DMultisample(GL_TEXTURE_2D_MULTISAMPLE, samples, GL_RGBA16F, engine->fb_width,
                             engine->fb_height, GL_TRUE);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D_MULTISAMPLE,
                            engine->multisample_texture, 0);
@@ -421,6 +434,13 @@ int init_engine(Engine* engine) {
         glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
         glEnableVertexAttribArray(0);
         glBindVertexArray(0);
+    }
+
+    // HDR post-processing (resolve + bloom + tone map)
+    engine->postfx = create_postfx(engine->fb_width, engine->fb_height);
+    if (!engine->postfx) {
+        log_error("Failed to initialize engine post-processing");
+        return -1;
     }
 
     return 0;
@@ -1072,6 +1092,33 @@ void render_nuklear_gui(Engine* engine) {
                 }
             }
 
+            // Post-processing controls
+            if (engine->postfx) {
+                PostFX* fx = engine->postfx;
+
+                nk_layout_row_dynamic(engine->nk_ctx, 10, 1);
+                nk_spacing(engine->nk_ctx, 1);
+
+                nk_layout_row_dynamic(engine->nk_ctx, 20, 1);
+                nk_label(engine->nk_ctx, "Post", NK_TEXT_LEFT);
+
+                nk_layout_row_dynamic(engine->nk_ctx, 25, 1);
+                nk_property_float(engine->nk_ctx, "Exposure:", 0.05f, &fx->exposure, 8.0f, 0.05f,
+                                  0.01f);
+
+                if (nk_button_label(engine->nk_ctx,
+                                    fx->bloom_enabled ? "Bloom: On" : "Bloom: Off")) {
+                    fx->bloom_enabled = !fx->bloom_enabled;
+                }
+
+                if (fx->bloom_enabled) {
+                    nk_property_float(engine->nk_ctx, "Bloom Strength:", 0.0f,
+                                      &fx->bloom_strength, 1.0f, 0.02f, 0.005f);
+                    nk_property_float(engine->nk_ctx, "Bloom Threshold:", 0.0f,
+                                      &fx->bloom_threshold, 8.0f, 0.1f, 0.02f);
+                }
+            }
+
             // bot margin
             nk_layout_row_dynamic(engine->nk_ctx, 10, 1); // 10 pixels of vertical space
             nk_spacing(engine->nk_ctx, 1);                // Creates a dummy widget for spacing
@@ -1254,15 +1301,20 @@ void run_engine_render_loop(Engine* engine, RenderSceneFunc render_func) {
             render_func(engine, current_scene);
         }
 
+        // Debug render modes emit display-ready colors; only PBR frames are
+        // linear HDR and get exposure + ACES in the post pass
+        RenderMode frame_mode = engine->current_render_mode;
+
         glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
         engine->current_render_mode = saved_render_mode;
 
-        render_nuklear_gui(engine);
+        // Resolve + bloom + tone map into the default framebuffer, then
+        // draw the GUI on top so it is never tone mapped
+        postfx_run(engine->postfx, engine->framebuffer, 0,
+                   frame_mode == RENDER_MODE_PBR ? engine->postfx->tonemap_mode
+                                                 : POSTFX_TONEMAP_PASSTHROUGH);
 
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, engine->framebuffer);
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0); // Default framebuffer
-        glBlitFramebuffer(0, 0, engine->fb_width, engine->fb_height, 0, 0, engine->fb_width,
-                          engine->fb_height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+        render_nuklear_gui(engine);
 
         engine->total_frames++;
 

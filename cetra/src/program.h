@@ -62,6 +62,11 @@ ShaderProgram* create_bone_program();
 // Shadow Catcher Program
 ShaderProgram* create_shadow_catcher_program();
 
+// Post-Processing Programs
+ShaderProgram* create_bloom_bright_program();
+ShaderProgram* create_bloom_blur_program();
+ShaderProgram* create_tonemap_program();
+
 size_t calculate_max_lights();
 
 #endif // _PROGRAM_H_

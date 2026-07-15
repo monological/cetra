@@ -15,6 +15,7 @@
 #include "input.h"
 #include "async_loader.h"
 #include "text.h"
+#include "postfx.h"
 
 #define NK_INCLUDE_FIXED_TYPES
 #define NK_INCLUDE_STANDARD_IO
@@ -102,6 +103,9 @@ typedef struct Engine {
     ShaderProgram* shadow_catcher_program;
     GLuint catcher_vao;
     GLuint catcher_vbo;
+
+    // HDR post-processing (bloom + tone mapping)
+    PostFX* postfx;
 
     InputState input;
 

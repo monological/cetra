@@ -562,3 +562,39 @@ ShaderProgram* create_shadow_catcher_program() {
 
     return program;
 }
+
+ShaderProgram* create_bloom_bright_program() {
+    ShaderProgram* program = NULL;
+
+    if ((program = create_program_from_source("bloom_bright", post_vert_shader_str,
+                                              bloom_bright_frag_shader_str, NULL)) == NULL) {
+        log_error("Failed to initialize bloom bright-pass shader program");
+        return NULL;
+    }
+
+    return program;
+}
+
+ShaderProgram* create_bloom_blur_program() {
+    ShaderProgram* program = NULL;
+
+    if ((program = create_program_from_source("bloom_blur", post_vert_shader_str,
+                                              bloom_blur_frag_shader_str, NULL)) == NULL) {
+        log_error("Failed to initialize bloom blur shader program");
+        return NULL;
+    }
+
+    return program;
+}
+
+ShaderProgram* create_tonemap_program() {
+    ShaderProgram* program = NULL;
+
+    if ((program = create_program_from_source("tonemap", post_vert_shader_str,
+                                              tonemap_frag_shader_str, NULL)) == NULL) {
+        log_error("Failed to initialize tonemap shader program");
+        return NULL;
+    }
+
+    return program;
+}
