@@ -567,9 +567,13 @@ void main() {
         // Lambertian diffuse
         float NdotL = max(dot(N, L), 0.0);
 
-        // Shadow calculation for directional lights
+        // Shadow calculation for directional lights. Alpha-to-coverage
+        // surfaces (hair cards) cast shadows but never receive the shadow
+        // map: at map-texel scale (millimeters) card-on-card comparisons
+        // are pure acne, drawing card-shaped streaks through the hair.
+        // Their self-occlusion comes from the AO texture and SSAO instead.
         float shadow = 1.0;
-        if (lights[i].type == 0) {  // LIGHT_DIRECTIONAL = 0
+        if (lights[i].type == 0 && alphaToCoverage == 0) {  // LIGHT_DIRECTIONAL = 0
             int shadowSlot = getShadowSlot(i);
             if (shadowSlot >= 0) {
                 shadow = calculateShadow(shadowSlot, WorldPos, NdotL);
