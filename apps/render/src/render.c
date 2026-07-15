@@ -48,6 +48,11 @@ const float MIN_DIST = 2000.0f;
 const float MAX_DIST = 3000.0f;
 const float CAM_ANGULAR_SPEED = 0.5f;
 
+// Total analytic key-light intensity split across the HDR's light lobes.
+// Studio flashes overpower ambient by a few stops; matching that is what
+// makes dark, rough materials (near-black armor) read instead of flattening
+const float KEY_LIGHT_TOTAL_INTENSITY = 10.0f;
+
 /*
  * Command line arguments
  */
@@ -74,6 +79,7 @@ typedef struct {
     int max_frames; // Exit after this many frames (0 = run forever)
     int show_bones;
     int check_stretch; // One-shot CPU skinning stretch diagnostic
+    int render_mode;   // RenderMode override for debugging (-1 = PBR)
     int show_help;
 } RenderArgs;
 
@@ -186,6 +192,12 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 fprintf(stderr, "Error: invalid fov '%s' (use 1-179 degrees)\n", argv[i]);
                 return -1;
             }
+        } else if (strcmp(argv[i], "--render-mode") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->render_mode = atoi(argv[i]);
         } else if (strcmp(argv[i], "-E") == 0 || strcmp(argv[i], "--exposure") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -605,6 +617,9 @@ int main(int argc, char** argv) {
     if (args.exposure > 0.0f && engine->postfx) {
         engine->postfx->exposure = args.exposure;
     }
+    if (args.render_mode > 0) {
+        engine->current_render_mode = (RenderMode)args.render_mode;
+    }
 
     set_engine_error_callback(engine, app_error_callback);
     set_engine_mouse_button_callback(engine, mouse_button_callback);
@@ -734,10 +749,14 @@ int main(int argc, char** argv) {
                 set_light_type(key, LIGHT_DIRECTIONAL);
 
                 vec3 key_dir = {-0.4f, -0.7f, -0.6f}; // Fallback if no lobes
-                float intensity = 1.0f;
+                float intensity = KEY_LIGHT_TOTAL_INTENSITY;
                 if (scene->ibl && scene->ibl->light_count > 0) {
                     glm_vec3_negate_to(scene->ibl->light_dirs[i], key_dir);
-                    intensity = scene->ibl->light_energies[i];
+                    // Blend the HDR energy split toward an even split so weak
+                    // fill lobes still light their side (photographic fill
+                    // ratio) instead of leaving it to the rim light alone
+                    float share = 0.5f * scene->ibl->light_energies[i] + 0.5f / (float)lobes;
+                    intensity = share * KEY_LIGHT_TOTAL_INTENSITY;
                 }
                 set_light_direction(key, key_dir);
                 set_light_intensity(key, intensity);
