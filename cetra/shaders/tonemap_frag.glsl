@@ -54,7 +54,9 @@ vec3 pbrNeutralTonemap(vec3 color)
 
 void main()
 {
-    vec3 color = texture(hdrTex, TexCoords).rgb;
+    // Sanitized: a +INF texel (half-float overflow anywhere upstream) turns
+    // both tonemap curves into NaN, which displays as a black pixel
+    vec3 color = min(texture(hdrTex, TexCoords).rgb, vec3(60000.0));
 
     if (debugView == 1) {
         FragColor = vec4(vec3(texture(aoTex, TexCoords).r), 1.0);

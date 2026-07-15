@@ -161,10 +161,14 @@ vec3 thinFilmInterference(float thickness, float cosTheta, float filmIOR) {
     // Wavelengths in nanometers for RGB
     const vec3 wavelengths = vec3(650.0, 550.0, 450.0); // R, G, B
 
-    // Refracted angle in the film (Snell's law, assuming air n=1.0)
+    // Refracted angle in the film (Snell's law, assuming air n=1.0).
+    // cosTheta comes from a normalized dot product that can round above 1;
+    // an unclamped square makes these sqrt arguments negative, and the NaN
+    // poisons the whole light sum into black view-dependent flecks
+    cosTheta = clamp(cosTheta, 0.0, 1.0);
     float sinTheta = sqrt(1.0 - cosTheta * cosTheta);
     float sinThetaFilm = sinTheta / filmIOR;
-    float cosThetaFilm = sqrt(1.0 - sinThetaFilm * sinThetaFilm);
+    float cosThetaFilm = sqrt(max(1.0 - sinThetaFilm * sinThetaFilm, 0.0));
 
     // Optical path difference (2 * n * d * cos(theta_film))
     float opd = 2.0 * filmIOR * thickness * cosThetaFilm;
@@ -502,7 +506,10 @@ void main() {
     // Calculate F0 (surface reflection at zero incidence) from IOR
     // F0 = ((ior - 1) / (ior + 1))^2
     // For plastic/glass (ior=1.5): F0 = 0.04
-    float iorF0 = pow((ior - 1.0) / (ior + 1.0), 2.0);
+    // Squared by multiplication: pow is undefined for the negative base an
+    // ior below 1 would produce
+    float iorF0Base = (ior - 1.0) / (ior + 1.0);
+    float iorF0 = iorF0Base * iorF0Base;
     vec3 F0 = vec3(iorF0);
     F0 = mix(F0, albedoMap, metallicMap);
 
@@ -530,7 +537,14 @@ void main() {
                                                lights[i].linear, lights[i].quadratic);
         }
 
-        vec3 H = normalize(V + L);
+        // Half vector, guarded: where the light is directly behind the
+        // fragment along the view ray, V + L vanishes and normalize()
+        // returns garbage or NaN — and NaN * NdotL(0) stays NaN, painting
+        // black flecks around the light's vanishing point. The fallback N
+        // is harmless: NdotL is ~0 in that configuration anyway.
+        vec3 Hraw = V + L;
+        float hLen2 = dot(Hraw, Hraw);
+        vec3 H = hLen2 > 1e-8 ? Hraw * inversesqrt(hLen2) : N;
         vec3 radiance = lights[i].color * lights[i].intensity * attenuation;
 
         // Cook-Torrance BRDF with optional anisotropy
@@ -548,7 +562,9 @@ void main() {
             float NdotV = max(dot(N, V), 0.0);
             vec3 iridescence = thinFilmInterference(filmThickness, NdotV, 1.5);
             // Strong iridescent mirror effect
-            float fresnel = pow(1.0 - NdotV, 2.0);  // Broader fresnel for more color spread
+            // Clamped: pow with a negative base (NdotV rounding above 1) is
+            // undefined in GLSL and yields NaN on this driver
+            float fresnel = pow(clamp(1.0 - NdotV, 0.0, 1.0), 2.0);
             // Replace F entirely with strong iridescent reflection
             F = iridescence * (0.6 + fresnel * 0.4);
         }
@@ -616,15 +632,20 @@ void main() {
     }
 
     // Final color, linear HDR: tone mapping and gamma happen in the post
-    // pass (tonemap_frag.glsl) after MSAA resolve and bloom
-    vec3 color = ambient + Lo + emissiveMap;
+    // pass (tonemap_frag.glsl) after MSAA resolve and bloom.
+    // Clamped below half-float max (65504): the scene framebuffer is
+    // RGBA16F, and a tight GGX spike under the key lights (peak ~1.2e5 at
+    // the 0.04 roughness floor, times grazing Fresnel) overflows the store
+    // to +INF, which the tonemap turns into NaN and displays as black
+    // flecks tracing the specular highlights.
+    vec3 color = min(ambient + Lo + emissiveMap, vec3(60000.0));
 
     // For translucent materials, apply Fresnel-based alpha
     // Edges become more reflective (less transparent) at glancing angles
     float finalOpacity = opacity;
     if (opacity < 1.0) {
         float NdotV = max(dot(N, V), 0.0);
-        float fresnelOpacity = iorF0 + (1.0 - iorF0) * pow(1.0 - NdotV, 5.0);
+        float fresnelOpacity = iorF0 + (1.0 - iorF0) * pow(clamp(1.0 - NdotV, 0.0, 1.0), 5.0);
         // Blend between base opacity and full opacity based on Fresnel
         finalOpacity = mix(opacity, 1.0, fresnelOpacity);
     }
