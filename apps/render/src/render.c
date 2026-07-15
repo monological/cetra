@@ -73,6 +73,8 @@ typedef struct {
     int no_ground;                     // Disable skybox ground projection
     int no_key_light;                  // Pure IBL: skip the analytic key lights
     int no_springs;                    // Disable spring-bone secondary motion
+    int no_ssao;                       // Disable screen-space ambient occlusion
+    int ssao_debug;                    // Show the raw SSAO buffer
     int width;
     int height;
     int headless;
@@ -98,6 +100,8 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --no-ground        Disable HDR ground projection (infinite skybox)\n");
     fprintf(stderr, "      --no-key-light     Pure IBL lighting (no analytic lights/shadows)\n");
     fprintf(stderr, "      --no-springs       Disable spring-bone secondary motion\n");
+    fprintf(stderr, "      --no-ssao          Disable screen-space ambient occlusion\n");
+    fprintf(stderr, "      --ssao-debug       Show the raw SSAO buffer\n");
     fprintf(stderr, "  -D, --distance <m>     Camera distance from model (default: auto)\n");
     fprintf(stderr, "  -a, --anim <path>      Animation file (can be repeated)\n");
     fprintf(stderr, "  -s, --source <path>    Source skeleton for retargeting (T-pose)\n");
@@ -246,6 +250,10 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             }
         } else if (strcmp(argv[i], "--no-key-light") == 0) {
             args->no_key_light = 1;
+        } else if (strcmp(argv[i], "--no-ssao") == 0) {
+            args->no_ssao = 1;
+        } else if (strcmp(argv[i], "--ssao-debug") == 0) {
+            args->ssao_debug = 1;
         } else if (strcmp(argv[i], "--no-springs") == 0) {
             args->no_springs = 1;
         } else if (strcmp(argv[i], "-D") == 0 || strcmp(argv[i], "--distance") == 0) {
@@ -630,6 +638,12 @@ int main(int argc, char** argv) {
 
     if (args.exposure > 0.0f && engine->postfx) {
         engine->postfx->exposure = args.exposure;
+    }
+    if (args.no_ssao && engine->postfx) {
+        engine->postfx->ssao_enabled = false;
+    }
+    if (args.ssao_debug && engine->postfx) {
+        engine->postfx->ssao_debug = true;
     }
     if (args.render_mode > 0) {
         engine->current_render_mode = (RenderMode)args.render_mode;
