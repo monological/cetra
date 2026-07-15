@@ -969,11 +969,15 @@ int main(int argc, char** argv) {
     set_camera_position(camera, auto_cam_pos);
     set_camera_look_at(camera, scene_center);
 
-    // Adjust clip planes based on scene size
-    float auto_near = fmaxf(scene_radius * 0.01f, 0.01f);
-    float auto_far = scene_radius * 20.0f;
-    if (auto_far < 100.0f)
-        auto_far = 10000.0f;
+    // Clip planes tuned for depth precision, not just coverage. A huge
+    // near/far ratio wrecks the 24-bit depth buffer, and cross-rig
+    // retargeting pushes layered armor plates near-coplanar — with bad
+    // precision they z-fight into per-pixel speckle along every seam that
+    // shifts with each pose. Keep the range tight around the scene (the old
+    // "far < 100 -> 10000" fallback gave a ~700000:1 ratio on human-scale
+    // models). near is the dominant precision term, so lift it off zero.
+    float auto_near = fmaxf(scene_radius * 0.05f, 0.05f);
+    float auto_far = scene_radius * 40.0f;
     set_camera_perspective(camera, fov_radians, auto_near, auto_far);
     update_engine_camera_perspective(engine);
     printf("Camera clip planes: near=%.4f, far=%.2f\n", auto_near, auto_far);
