@@ -949,8 +949,11 @@ int main(int argc, char** argv) {
 
     print_scene(scene);
 
-    set_engine_show_gui(engine, true);
-    set_engine_show_fps(engine, true);
+    // No GUI/FPS overlay in headless runs: nuklear paints a software cursor
+    // at the live desktop mouse position and the FPS digits change per run,
+    // both of which land in screenshots and break byte-comparability
+    set_engine_show_gui(engine, !args.headless);
+    set_engine_show_fps(engine, !args.headless);
     set_engine_show_wireframe(engine, false);
     set_engine_show_xyz(engine, false);
     engine->show_bones = args.show_bones != 0;
