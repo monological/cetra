@@ -581,14 +581,9 @@ void main() {
         ambient = vec3(0.03) * albedoMap * aoMap;
     }
 
-    // Final color
+    // Final color, linear HDR: tone mapping and gamma happen in the post
+    // pass (tonemap_frag.glsl) after MSAA resolve and bloom
     vec3 color = ambient + Lo + emissiveMap;
-
-    // HDR tonemapping (Reinhard)
-    color = color / (color + vec3(1.0));
-
-    // Gamma correction
-    color = linearToSRGB(color);
 
     // For translucent materials, apply Fresnel-based alpha
     // Edges become more reflective (less transparent) at glancing angles
