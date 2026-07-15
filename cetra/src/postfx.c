@@ -122,10 +122,13 @@ static GLuint create_ssao_noise_texture(unsigned int* rng) {
 
 #define SSAO_KERNEL_SIZE 24
 
-PostFX* create_postfx(int width, int height) {
+PostFX* create_postfx(int width, int height, int ss_scale) {
     if (width <= 0 || height <= 0) {
         log_error("create_postfx: invalid size %dx%d", width, height);
         return NULL;
+    }
+    if (ss_scale < 1) {
+        ss_scale = 1;
     }
 
     PostFX* fx = calloc(1, sizeof(PostFX));
@@ -134,10 +137,14 @@ PostFX* create_postfx(int width, int height) {
         return NULL;
     }
 
-    fx->width = width;
-    fx->height = height;
-    fx->bloom_width = width / 2 > 0 ? width / 2 : 1;
-    fx->bloom_height = height / 2 > 0 ? height / 2 : 1;
+    // The scene and the entire post chain render at the supersampled
+    // resolution; the final tonemap pass box-downsamples to the display size.
+    fx->out_width = width;
+    fx->out_height = height;
+    fx->width = width * ss_scale;
+    fx->height = height * ss_scale;
+    fx->bloom_width = fx->width / 2 > 0 ? fx->width / 2 : 1;
+    fx->bloom_height = fx->height / 2 > 0 ? fx->height / 2 : 1;
     fx->ssao_width = fx->bloom_width;
     fx->ssao_height = fx->bloom_height;
 
@@ -337,12 +344,13 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
                       GL_COLOR_BUFFER_BIT, GL_NEAREST);
 
     if (mode == POSTFX_TONEMAP_PASSTHROUGH) {
-        // Display-ready frame: plain copy to the target (single-sample
-        // blits may convert formats), skipping bloom and tone mapping
+        // Display-ready frame: copy to the target, skipping bloom and tone
+        // mapping. Linear filtering box-downsamples the supersampled buffer to
+        // the display size (a 1:1 identity blit when supersampling is off).
         glBindFramebuffer(GL_READ_FRAMEBUFFER, fx->hdr_fbo);
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, target_fbo);
-        glBlitFramebuffer(0, 0, fx->width, fx->height, 0, 0, fx->width, fx->height,
-                          GL_COLOR_BUFFER_BIT, GL_NEAREST);
+        glBlitFramebuffer(0, 0, fx->width, fx->height, 0, 0, fx->out_width, fx->out_height,
+                          GL_COLOR_BUFFER_BIT, GL_LINEAR);
     } else {
         // Resolve the scene pass's second attachment (normals + roughness)
         // ahead of its consumers (SSAO now, SSR later). The caller reports
@@ -475,9 +483,13 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             }
         }
 
-        // Composite + tone map into the target framebuffer
+        // Composite + tone map into the target framebuffer. The quad runs at
+        // the display size while sampling the supersampled HDR texture, so each
+        // output pixel linearly averages its 2x2 source block (the SSAA
+        // resolve). Tone mapping the averaged linear radiance is correct; a 1:1
+        // pass-through when supersampling is off.
         glBindFramebuffer(GL_FRAMEBUFFER, target_fbo);
-        glViewport(0, 0, fx->width, fx->height);
+        glViewport(0, 0, fx->out_width, fx->out_height);
         glUseProgram(fx->tonemap_program->id);
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, fx->hdr_texture);

@@ -47,6 +47,9 @@ typedef struct Engine {
     int win_height;
     int fb_width;
     int fb_height;
+    int ss_scale; // Supersampling factor: scene + post render at ss_scale x
+                  // display resolution, box-downsampled at tone map (set
+                  // before init_engine). 1 = off, 2 = 2x SSAA.
 
     GLFWerrorfun error_callback;
 
@@ -138,6 +141,8 @@ void free_engine(Engine* engine);
 
 int init_engine(Engine* engine);
 void set_engine_headless(Engine* engine, bool headless);
+// Supersampling factor (clamped to >= 1). Call before init_engine.
+void set_engine_ss_scale(Engine* engine, int ss_scale);
 void set_engine_screenshot_path(Engine* engine, const char* path);
 void set_engine_screenshot_every(Engine* engine, int every);
 

@@ -32,7 +32,8 @@ typedef enum PostFXDebugView {
 } PostFXDebugView;
 
 typedef struct PostFX {
-    int width, height;             // Full-res HDR size (engine framebuffer)
+    int width, height;             // Internal (supersampled) HDR size
+    int out_width, out_height;     // Display size the final pass downsamples to
     int bloom_width, bloom_height; // Half-res bloom chain size
     int ssao_width, ssao_height;   // Half-res SSAO size
 
@@ -84,7 +85,9 @@ typedef struct PostFX {
     PostFXTonemapMode tonemap_mode;
 } PostFX;
 
-PostFX* create_postfx(int width, int height);
+// width/height are the display (downsample-target) size; ss_scale supersamples
+// the internal render + post chain by that integer factor (1 = off).
+PostFX* create_postfx(int width, int height, int ss_scale);
 void free_postfx(PostFX* fx);
 
 // Resolve msaa_fbo, run SSAO and bloom, and tone map (fx->tonemap_mode) into

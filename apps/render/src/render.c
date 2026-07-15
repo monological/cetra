@@ -82,6 +82,7 @@ typedef struct {
     int ssr_debug;                     // Show the reflection buffer
     float ssr_strength;                // SSR strength override (-1 = default)
     float specular_aa;                 // Specular AA strength override (-1 = default)
+    int ssaa;                          // Supersampling factor (0 = keep engine default)
     int width;
     int height;
     int headless;
@@ -117,6 +118,8 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --ssr-strength <f> Reflection strength (default: 1)\n");
     fprintf(stderr, "      --specular-aa <f>  Specular anti-aliasing strength (default: 1)\n");
     fprintf(stderr, "      --no-specular-aa   Disable specular anti-aliasing\n");
+    fprintf(stderr, "      --ssaa <int>       Supersampling factor (default: 1 = off; 2 = 2x SSAA)\n");
+    fprintf(stderr, "      --no-ssaa          Disable supersampling (render at 1x)\n");
     fprintf(stderr, "  -D, --distance <m>     Camera distance from model (default: auto)\n");
     fprintf(stderr, "  -a, --anim <path>      Animation file (can be repeated)\n");
     fprintf(stderr, "  -s, --source <path>    Source skeleton for retargeting (T-pose)\n");
@@ -295,6 +298,16 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->specular_aa = (float)atof(argv[i]);
         } else if (strcmp(argv[i], "--no-specular-aa") == 0) {
             args->specular_aa = 0.0f;
+        } else if (strcmp(argv[i], "--ssaa") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->ssaa = atoi(argv[i]);
+            if (args->ssaa < 1)
+                args->ssaa = 1;
+        } else if (strcmp(argv[i], "--no-ssaa") == 0) {
+            args->ssaa = 1;
         } else if (strcmp(argv[i], "--no-springs") == 0) {
             args->no_springs = 1;
         } else if (strcmp(argv[i], "-D") == 0 || strcmp(argv[i], "--distance") == 0) {
@@ -669,6 +682,8 @@ int main(int argc, char** argv) {
     set_engine_headless(engine, args.headless != 0);
     set_engine_screenshot_path(engine, args.screenshot_path);
     set_engine_screenshot_every(engine, args.screenshot_every);
+    if (args.ssaa > 0)
+        set_engine_ss_scale(engine, args.ssaa);
     max_frames = args.max_frames;
     check_stretch = args.check_stretch;
 

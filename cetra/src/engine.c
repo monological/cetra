@@ -77,6 +77,8 @@ Engine* create_engine(const char* window_title, int width, int height) {
     engine->win_height = height;
     engine->fb_width = 0;
     engine->fb_height = 0;
+    engine->ss_scale = 1; // Supersampling off by default (4x fragment cost);
+                          // opt in with --ssaa 2 for beauty shots
 
     engine->error_callback = NULL;
     engine->mouse_button_callback = NULL;
@@ -274,9 +276,20 @@ static int _setup_engine_glfw(Engine* engine) {
  * MSAA anti-aliasing
  *
  */
+// The scene renders into a target supersampled by ss_scale; the post chain
+// box-downsamples to display size at tone map. This render (not display)
+// resolution is shared by the MSAA allocation and the scene-pass viewport.
+static void engine_render_size(const Engine* engine, int* w, int* h) {
+    *w = engine->fb_width * engine->ss_scale;
+    *h = engine->fb_height * engine->ss_scale;
+}
+
 static int _setup_engine_msaa(Engine* engine) {
     if (!engine || !engine->window)
         return -1;
+
+    int rw, rh;
+    engine_render_size(engine, &rw, &rh);
 
     // Set up MSAA anti-aliasing
     int samples = 4; // Number of samples for MSAA, adjust as needed
@@ -297,8 +310,7 @@ static int _setup_engine_msaa(Engine* engine) {
 
     glGenTextures(1, &engine->multisample_texture);
     glBindTexture(GL_TEXTURE_2D_MULTISAMPLE, engine->multisample_texture);
-    glTexImage2DMultisample(GL_TEXTURE_2D_MULTISAMPLE, samples, GL_RGBA16F, engine->fb_width,
-                            engine->fb_height, GL_TRUE);
+    glTexImage2DMultisample(GL_TEXTURE_2D_MULTISAMPLE, samples, GL_RGBA16F, rw, rh, GL_TRUE);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D_MULTISAMPLE,
                            engine->multisample_texture, 0);
 
@@ -308,15 +320,13 @@ static int _setup_engine_msaa(Engine* engine) {
     // format-match rule is satisfied against the float resolve target.
     glGenTextures(1, &engine->normal_multisample_texture);
     glBindTexture(GL_TEXTURE_2D_MULTISAMPLE, engine->normal_multisample_texture);
-    glTexImage2DMultisample(GL_TEXTURE_2D_MULTISAMPLE, samples, GL_RGBA16F, engine->fb_width,
-                            engine->fb_height, GL_TRUE);
+    glTexImage2DMultisample(GL_TEXTURE_2D_MULTISAMPLE, samples, GL_RGBA16F, rw, rh, GL_TRUE);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D_MULTISAMPLE,
                            engine->normal_multisample_texture, 0);
 
     glGenRenderbuffers(1, &engine->depth_renderbuffer);
     glBindRenderbuffer(GL_RENDERBUFFER, engine->depth_renderbuffer);
-    glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples, GL_DEPTH24_STENCIL8,
-                                     engine->fb_width, engine->fb_height);
+    glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples, GL_DEPTH24_STENCIL8, rw, rh);
     glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER,
                               engine->depth_renderbuffer);
 
@@ -458,8 +468,10 @@ int init_engine(Engine* engine) {
         glBindVertexArray(0);
     }
 
-    // HDR post-processing (resolve + bloom + tone map)
-    engine->postfx = create_postfx(engine->fb_width, engine->fb_height);
+    // HDR post-processing (resolve + bloom + tone map). Sized at the display
+    // resolution; the supersample factor enlarges the internal chain to match
+    // the enlarged MSAA scene target.
+    engine->postfx = create_postfx(engine->fb_width, engine->fb_height, engine->ss_scale);
     if (!engine->postfx) {
         log_error("Failed to initialize engine post-processing");
         return -1;
@@ -851,6 +863,22 @@ void set_engine_headless(Engine* engine, bool headless) {
     if (!engine)
         return;
     engine->headless = headless;
+}
+
+void set_engine_ss_scale(Engine* engine, int ss_scale) {
+    if (!engine)
+        return;
+    if (ss_scale < 1)
+        ss_scale = 1;
+    // The tone-map downsample is an exact box filter only at 2x (GL linear
+    // sampling averages one 2x2 texel block); higher factors under-resolve and
+    // can also exceed GL_MAX_TEXTURE_SIZE. Cap until a proper mip/N-tap
+    // downsample exists.
+    if (ss_scale > 2) {
+        log_warn("SSAA %dx unsupported (exact downsample only at 2x); using 2x", ss_scale);
+        ss_scale = 2;
+    }
+    engine->ss_scale = ss_scale;
 }
 
 void set_engine_screenshot_path(Engine* engine, const char* path) {
@@ -1395,6 +1423,11 @@ void run_engine_render_loop(Engine* engine, RenderSceneFunc render_func) {
         }
 
         glBindFramebuffer(GL_FRAMEBUFFER, engine->framebuffer);
+        // The scene target is supersampled; the present pass left the viewport
+        // at display size, so set it to the full render size here.
+        int rw, rh;
+        engine_render_size(engine, &rw, &rh);
+        glViewport(0, 0, rw, rh);
         engine->normals_this_frame =
             frame_mode == RENDER_MODE_PBR && postfx_wants_normals(engine->postfx);
         engine_set_scene_draw_buffers(engine, true);
