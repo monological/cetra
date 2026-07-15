@@ -107,9 +107,11 @@ static void extract_material_properties(struct aiMaterial* ai_mat, Material* mat
         material->albedo[1] = color.g;
         material->albedo[2] = color.b;
     } else {
-        material->albedo[0] = 0.1;
-        material->albedo[1] = 0.1;
-        material->albedo[2] = 0.1;
+        // White: the factor multiplies the albedo texture (glTF semantics),
+        // so a missing factor must be the identity
+        material->albedo[0] = 1.0;
+        material->albedo[1] = 1.0;
+        material->albedo[2] = 1.0;
     }
 
     // Extract emissive factor
@@ -126,18 +128,21 @@ static void extract_material_properties(struct aiMaterial* ai_mat, Material* mat
         material->emissive_strength = emissive_strength;
     }
 
+    // The factors multiply their textures (glTF semantics); glTF assets
+    // always carry them, so the fallbacks only apply to legacy formats:
+    // rough dielectric, with roughness at the multiplicative identity
     ai_real metallic, roughness;
 
     if (AI_SUCCESS == aiGetMaterialFloat(ai_mat, AI_MATKEY_METALLIC_FACTOR, &metallic)) {
         material->metallic = metallic;
     } else {
-        material->metallic = 0.5;
+        material->metallic = 0.0;
     }
 
     if (AI_SUCCESS == aiGetMaterialFloat(ai_mat, AI_MATKEY_ROUGHNESS_FACTOR, &roughness)) {
         material->roughness = roughness;
     } else {
-        material->roughness = 0.5;
+        material->roughness = 1.0;
     }
 
     // Extract doubleSided flag

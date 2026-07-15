@@ -324,7 +324,7 @@ void main() {
         if (albedoTexExists > 0) {
             // sRGB texture: the hardware already decoded the sample to linear
             vec4 albedoSample = texture(albedoTex, uvAlbedo);
-            albedoMapOnly = albedoSample.rgb;
+            albedoMapOnly = albedo * albedoSample.rgb;
             texAlphaOnly = albedoSample.a;
         }
         // Apply vertex color
@@ -344,13 +344,15 @@ void main() {
     // Apply UV transform for KHR_texture_transform
     vec2 uv = transformUV(TexCoords);
 
-    // Sample material properties from textures or use uniforms
+    // Sample material properties. glTF semantics: the scalar factors
+    // modulate the texture (effective value = factor * texture), so a
+    // material can globally tint or gloss up its maps
     vec3 albedoMap = albedo;
     float texAlpha = 1.0;  // Alpha from albedo texture (for hair/foliage)
     if (albedoTexExists > 0) {
         // sRGB texture: the hardware already decoded the sample to linear
         vec4 albedoSample = texture(albedoTex, uv);
-        albedoMap = albedoSample.rgb;
+        albedoMap = albedo * albedoSample.rgb;
         texAlpha = albedoSample.a;
     }
 
@@ -384,7 +386,7 @@ void main() {
     float roughnessMap = roughness;
     if (roughnessTexExists > 0) {
         // glTF: G channel contains roughness (works for grayscale too since R=G=B)
-        roughnessMap = texture(roughnessTex, uv).g;
+        roughnessMap = roughness * texture(roughnessTex, uv).g;
     }
     // Clamp roughness to avoid division issues
     roughnessMap = clamp(roughnessMap, 0.04, 1.0);
@@ -392,7 +394,7 @@ void main() {
     float metallicMap = metallic;
     if (metalnessTexExists > 0) {
         // glTF: B channel contains metallic (works for grayscale too since R=G=B)
-        metallicMap = texture(metalnessTex, uv).b;
+        metallicMap = metallic * texture(metalnessTex, uv).b;
     }
 
     float aoMap = ao;
