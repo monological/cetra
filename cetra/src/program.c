@@ -646,3 +646,39 @@ ShaderProgram* create_ssr_composite_program() {
 
     return program;
 }
+
+ShaderProgram* create_dof_coc_program() {
+    ShaderProgram* program = NULL;
+
+    if ((program = create_program_from_source("dof_coc", post_vert_shader_str,
+                                              dof_coc_frag_shader_str, NULL)) == NULL) {
+        log_error("Failed to initialize DoF CoC shader program");
+        return NULL;
+    }
+
+    return program;
+}
+
+ShaderProgram* create_dof_blur_program() {
+    ShaderProgram* program = NULL;
+
+    if ((program = create_program_from_source("dof_blur", post_vert_shader_str,
+                                              dof_blur_frag_shader_str, NULL)) == NULL) {
+        log_error("Failed to initialize DoF blur shader program");
+        return NULL;
+    }
+
+    return program;
+}
+
+ShaderProgram* create_dof_composite_program() {
+    ShaderProgram* program = NULL;
+
+    if ((program = create_program_from_source("dof_composite", post_vert_shader_str,
+                                              dof_composite_frag_shader_str, NULL)) == NULL) {
+        log_error("Failed to initialize DoF composite shader program");
+        return NULL;
+    }
+
+    return program;
+}

@@ -1291,6 +1291,25 @@ void render_nuklear_gui(Engine* engine) {
                     nk_property_float(engine->nk_ctx, "GainB", 0.0f, &fx->grade_gain[2], 4.0f,
                                       0.02f, 0.005f);
                 }
+
+                // Grade uses a 3-column grid; restore single-column rows
+                nk_layout_row_dynamic(engine->nk_ctx, 25, 1);
+                if (nk_button_label(engine->nk_ctx, fx->dof_enabled ? "DoF: On" : "DoF: Off")) {
+                    fx->dof_enabled = !fx->dof_enabled;
+                }
+                if (fx->dof_enabled) {
+                    if (nk_button_label(engine->nk_ctx,
+                                        fx->dof_autofocus ? "Autofocus: On" : "Autofocus: Off")) {
+                        fx->dof_autofocus = !fx->dof_autofocus;
+                    }
+                    // With autofocus on, the engine drives Focus Dist each frame
+                    nk_property_float(engine->nk_ctx, "Focus Dist:", 0.0f, &fx->dof_focus_distance,
+                                      1000.0f, 0.1f, 0.05f);
+                    nk_property_float(engine->nk_ctx, "Focus Range:", 0.1f, &fx->dof_focus_range,
+                                      1000.0f, 0.1f, 0.05f);
+                    nk_property_float(engine->nk_ctx, "Max CoC:", 0.0f, &fx->dof_max_coc, 40.0f,
+                                      0.5f, 0.1f);
+                }
             }
 
             // bot margin
@@ -1425,6 +1444,13 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode, bool draw_gui) 
     // Seed the film grain off the frame counter so it animates live yet stays
     // deterministic across equal --frames runs.
     engine->postfx->frame_index = (int)engine->total_frames;
+    // Depth-of-field autofocus: keep the subject sharp as the camera orbits or
+    // zooms by refocusing on the point the camera looks at (the orbit target),
+    // unless a manual focus distance was pinned.
+    if (engine->postfx->dof_enabled && engine->postfx->dof_autofocus && engine->camera) {
+        engine->postfx->dof_focus_distance =
+            glm_vec3_distance(engine->camera->position, engine->camera->look_at);
+    }
     postfx_run(engine->postfx, engine->framebuffer, 0, frame_mode == RENDER_MODE_PBR,
                engine->normals_this_frame, engine->projection_matrix);
 

@@ -190,6 +190,15 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     fx->grain_strength = 0.04f;
     fx->frame_index = 0;
 
+    // Depth of field (off by default; targets allocated lazily on first enable)
+    fx->dof_enabled = false;
+    fx->dof_autofocus = true; // Track the camera's subject unless a focus is pinned
+    fx->dof_focus_distance = 3.0f;
+    fx->dof_focus_range = 1.5f;
+    fx->dof_max_coc = 6.0f; // ~12px max blur — a natural background falloff,
+                            // not the over-creamy look of a larger radius
+    fx->dof_ready = false;
+
     // The HDR resolve target must be RGBA16F to match the MSAA source
     // (multisample blits require identical formats); the bloom chain never
     // reads alpha, so the cheaper packed-float format halves its bandwidth
@@ -240,8 +249,12 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     fx->ssao_blur_program = create_ssao_blur_program();
     fx->ssr_program = create_ssr_program();
     fx->ssr_composite_program = create_ssr_composite_program();
+    fx->dof_coc_program = create_dof_coc_program();
+    fx->dof_blur_program = create_dof_blur_program();
+    fx->dof_composite_program = create_dof_composite_program();
     if (!fx->bright_program || !fx->blur_program || !fx->tonemap_program || !fx->ssao_program ||
-        !fx->ssao_blur_program || !fx->ssr_program || !fx->ssr_composite_program) {
+        !fx->ssao_blur_program || !fx->ssr_program || !fx->ssr_composite_program ||
+        !fx->dof_coc_program || !fx->dof_blur_program || !fx->dof_composite_program) {
         free_postfx(fx);
         return NULL;
     }
@@ -264,6 +277,16 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     uniform_set_int(fx->ssr_program->uniforms, "hdrTex", 2);
     glUseProgram(fx->ssr_composite_program->id);
     uniform_set_int(fx->ssr_composite_program->uniforms, "ssrTex", 0);
+
+    glUseProgram(fx->dof_coc_program->id);
+    uniform_set_int(fx->dof_coc_program->uniforms, "sceneTex", 0);
+    uniform_set_int(fx->dof_coc_program->uniforms, "depthTex", 1);
+    glUseProgram(fx->dof_blur_program->id);
+    uniform_set_int(fx->dof_blur_program->uniforms, "cocColorTex", 0);
+    glUseProgram(fx->dof_composite_program->id);
+    uniform_set_int(fx->dof_composite_program->uniforms, "sceneTex", 0);
+    uniform_set_int(fx->dof_composite_program->uniforms, "blurTex", 1);
+    uniform_set_int(fx->dof_composite_program->uniforms, "depthTex", 2);
 
     glUseProgram(fx->ssao_program->id);
     uniform_set_int(fx->ssao_program->uniforms, "depthTex", 0);
@@ -290,6 +313,71 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     return fx;
 }
 
+// Allocate the depth-of-field targets on first use so the feature is free when
+// off: two half-res buffers (CoC+colour, gathered blur) and a full-res
+// composite. Returns false and leaves DoF disabled if allocation fails.
+static bool postfx_ensure_dof_targets(PostFX* fx) {
+    if (fx->dof_ready)
+        return true;
+    if (!create_color_fbo(fx->bloom_width, fx->bloom_height, GL_RGBA16F, &fx->dof_coc_fbo,
+                          &fx->dof_coc_texture) ||
+        !create_color_fbo(fx->bloom_width, fx->bloom_height, GL_RGBA16F, &fx->dof_blur_fbo,
+                          &fx->dof_blur_texture) ||
+        !create_color_fbo(fx->width, fx->height, GL_RGBA16F, &fx->dof_fbo, &fx->dof_texture)) {
+        log_error("Failed to allocate depth-of-field targets");
+        return false;
+    }
+    fx->dof_ready = true;
+    return true;
+}
+
+// Depth of field: signed CoC + gather at half res, composite at full res into
+// fx->dof_texture. Callers must have ensured the targets exist and read
+// fx->dof_texture as the scene afterward.
+static void postfx_run_dof(PostFX* fx, mat4 projection) {
+    const float dof_texel[2] = {1.0f / (float)fx->bloom_width, 1.0f / (float)fx->bloom_height};
+
+    // Pass 1: signed CoC + half-res scene colour
+    glBindFramebuffer(GL_FRAMEBUFFER, fx->dof_coc_fbo);
+    glViewport(0, 0, fx->bloom_width, fx->bloom_height);
+    glUseProgram(fx->dof_coc_program->id);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, fx->hdr_texture);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, fx->depth_texture);
+    uniform_set_mat4(fx->dof_coc_program->uniforms, "projection", (float*)projection);
+    uniform_set_float(fx->dof_coc_program->uniforms, "focusDistance", fx->dof_focus_distance);
+    uniform_set_float(fx->dof_coc_program->uniforms, "focusRange", fx->dof_focus_range);
+    uniform_set_float(fx->dof_coc_program->uniforms, "maxCoC", fx->dof_max_coc);
+    draw_fullscreen_quad(fx->quad_vao);
+
+    // Pass 2: gather blur (half res)
+    glBindFramebuffer(GL_FRAMEBUFFER, fx->dof_blur_fbo);
+    glUseProgram(fx->dof_blur_program->id);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, fx->dof_coc_texture);
+    uniform_set_vec2(fx->dof_blur_program->uniforms, "texelSize", dof_texel);
+    draw_fullscreen_quad(fx->quad_vao);
+
+    // Pass 3: composite sharp + blur (full res)
+    glBindFramebuffer(GL_FRAMEBUFFER, fx->dof_fbo);
+    glViewport(0, 0, fx->width, fx->height);
+    glUseProgram(fx->dof_composite_program->id);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, fx->hdr_texture);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, fx->dof_blur_texture);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, fx->depth_texture);
+    uniform_set_mat4(fx->dof_composite_program->uniforms, "projection", (float*)projection);
+    uniform_set_float(fx->dof_composite_program->uniforms, "focusDistance", fx->dof_focus_distance);
+    uniform_set_float(fx->dof_composite_program->uniforms, "focusRange", fx->dof_focus_range);
+    uniform_set_float(fx->dof_composite_program->uniforms, "maxCoC", fx->dof_max_coc);
+    draw_fullscreen_quad(fx->quad_vao);
+
+    check_gl_error("postfx dof");
+}
+
 void free_postfx(PostFX* fx) {
     if (!fx)
         return;
@@ -307,6 +395,13 @@ void free_postfx(PostFX* fx) {
     glDeleteTextures(1, &fx->noise_texture);
     glDeleteFramebuffers(1, &fx->ssr_fbo);
     glDeleteTextures(1, &fx->ssr_texture);
+    // DoF targets are 0 (no-op delete) if never lazily allocated
+    glDeleteFramebuffers(1, &fx->dof_coc_fbo);
+    glDeleteTextures(1, &fx->dof_coc_texture);
+    glDeleteFramebuffers(1, &fx->dof_blur_fbo);
+    glDeleteTextures(1, &fx->dof_blur_texture);
+    glDeleteFramebuffers(1, &fx->dof_fbo);
+    glDeleteTextures(1, &fx->dof_texture);
 
     free_program(fx->bright_program);
     free_program(fx->blur_program);
@@ -315,6 +410,9 @@ void free_postfx(PostFX* fx) {
     free_program(fx->ssao_blur_program);
     free_program(fx->ssr_program);
     free_program(fx->ssr_composite_program);
+    free_program(fx->dof_coc_program);
+    free_program(fx->dof_blur_program);
+    free_program(fx->dof_composite_program);
 
     glDeleteVertexArrays(1, &fx->quad_vao);
     glDeleteBuffers(1, &fx->quad_vbo);
@@ -404,10 +502,11 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             check_gl_error("postfx normals resolve");
         }
 
-        // Depth and its inverse-projection serve both screen-space passes
+        // Depth (and its inverse) serves SSAO, SSR, and DoF's circle-of-confusion
         bool ssr_active = postfx_ssr_active(fx, have_normals);
+        bool dof_active = fx->dof_enabled;
         mat4 inv_projection;
-        if (fx->ssao_enabled || ssr_active) {
+        if (fx->ssao_enabled || ssr_active || dof_active) {
             // Resolve depth alongside color so screen-space passes can
             // reconstruct view-space positions (formats match: both are
             // DEPTH24_STENCIL8)
@@ -488,13 +587,21 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             check_gl_error("postfx ssr");
         }
 
+        // Depth of field replaces the scene that bloom and tone mapping read.
+        // scene_tex is the sharp HDR unless DoF ran into fx->dof_texture.
+        GLuint scene_tex = fx->hdr_texture;
+        if (dof_active && postfx_ensure_dof_targets(fx)) {
+            postfx_run_dof(fx, projection);
+            scene_tex = fx->dof_texture;
+        }
+
         if (fx->bloom_enabled) {
             // Bright pass into half-res buffer 0 (linear sampling downsamples)
             glBindFramebuffer(GL_FRAMEBUFFER, fx->bloom_fbo[0]);
             glViewport(0, 0, fx->bloom_width, fx->bloom_height);
             glUseProgram(fx->bright_program->id);
             glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, fx->hdr_texture);
+            glBindTexture(GL_TEXTURE_2D, scene_tex);
             uniform_set_float(fx->bright_program->uniforms, "threshold", fx->bloom_threshold);
             uniform_set_float(fx->bright_program->uniforms, "knee", fx->bloom_knee);
             uniform_set_float(fx->bright_program->uniforms, "maxBrightness",
@@ -527,7 +634,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         glViewport(0, 0, fx->out_width, fx->out_height);
         glUseProgram(fx->tonemap_program->id);
         glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, fx->hdr_texture);
+        glBindTexture(GL_TEXTURE_2D, scene_tex);
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_2D, fx->bloom_texture[0]);
         glActiveTexture(GL_TEXTURE2);

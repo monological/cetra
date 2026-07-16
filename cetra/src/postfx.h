@@ -98,6 +98,22 @@ typedef struct PostFX {
     bool grain_enabled;
     float grain_strength;
     int frame_index; // Copied from engine->total_frames; seeds deterministic grain
+
+    // Depth of field. Targets are lazily allocated on first enable (dof_ready)
+    // so the feature costs no memory while off. CoC + gather run at half the
+    // internal resolution; the composite is full-res.
+    bool dof_enabled;
+    bool dof_autofocus;                    // Recompute focus each frame from camera->subject
+    float dof_focus_distance;              // View-space distance kept sharp
+    float dof_focus_range;                 // Ramp width to full blur
+    float dof_max_coc;                     // Max blur radius, half-res texels
+    bool dof_ready;                        // Lazy-alloc guard for the targets below
+    GLuint dof_coc_fbo, dof_coc_texture;   // Half-res: scene + signed CoC in .a
+    GLuint dof_blur_fbo, dof_blur_texture; // Half-res: gathered blur
+    GLuint dof_fbo, dof_texture;           // Full-res: composited scene
+    ShaderProgram* dof_coc_program;
+    ShaderProgram* dof_blur_program;
+    ShaderProgram* dof_composite_program;
 } PostFX;
 
 // width/height are the display (downsample-target) size; ss_scale supersamples

@@ -96,6 +96,11 @@ typedef struct {
     float grade_lift[3];
     float grade_gamma[3];
     float grade_gain[3];
+    int dof;         // --dof: enable depth of field
+    int no_dof;      // Force DoF off (e.g. --film --no-dof)
+    float dof_focus; // Focus distance in view units (-1 = auto: subject)
+    float dof_range; // Ramp-to-full-blur width (-1 = scene-scaled default)
+    float dof_max_coc;
     int width;
     int height;
     int headless;
@@ -142,6 +147,11 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --grain <s>        Film grain strength (enables it)\n");
     fprintf(stderr, "      --sharpen <s>      Unsharp-mask strength (enables it)\n");
     fprintf(stderr, "      --grade-lift/gamma/gain r,g,b  Colour grade (enables it)\n");
+    fprintf(stderr, "      --dof              Depth of field, autofocused on the subject\n");
+    fprintf(stderr, "      --no-dof           Force depth of field off (e.g. with --film)\n");
+    fprintf(stderr, "      --dof-focus <m>    Pin focus distance (disables autofocus)\n");
+    fprintf(stderr, "      --dof-range <m>    Distance over which blur ramps in (default: auto)\n");
+    fprintf(stderr, "      --dof-max-coc <px> Max blur radius in half-res texels (default: 6)\n");
     fprintf(stderr, "  -D, --distance <m>     Camera distance from model (default: auto)\n");
     fprintf(stderr, "  -a, --anim <path>      Animation file (can be repeated)\n");
     fprintf(stderr, "  -s, --source <path>    Source skeleton for retargeting (T-pose)\n");
@@ -170,6 +180,9 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->sharpen = -1.0f;
     args->grade_gamma[0] = args->grade_gamma[1] = args->grade_gamma[2] = 1.0f;
     args->grade_gain[0] = args->grade_gain[1] = args->grade_gain[2] = 1.0f;
+    args->dof_focus = -1.0f;
+    args->dof_range = -1.0f;
+    args->dof_max_coc = -1.0f;
     args->light_size = -1.0f;     // -1 = scene-radius default
     args->shadow_softness = -1.0f; // -1 = keep the engine default
 
@@ -388,6 +401,28 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 return -1;
             }
             args->grade_set = 1;
+        } else if (strcmp(argv[i], "--dof") == 0) {
+            args->dof = 1;
+        } else if (strcmp(argv[i], "--no-dof") == 0) {
+            args->no_dof = 1;
+        } else if (strcmp(argv[i], "--dof-focus") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->dof_focus = (float)atof(argv[i]);
+        } else if (strcmp(argv[i], "--dof-range") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->dof_range = (float)atof(argv[i]);
+        } else if (strcmp(argv[i], "--dof-max-coc") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->dof_max_coc = (float)atof(argv[i]);
         } else if (strcmp(argv[i], "--no-springs") == 0) {
             args->no_springs = 1;
         } else if (strcmp(argv[i], "-D") == 0 || strcmp(argv[i], "--distance") == 0) {
@@ -1107,6 +1142,27 @@ int main(int argc, char** argv) {
                          scene_center[2] + camera_distance * cosf(pitch) * cosf(yaw)};
     set_camera_position(camera, auto_cam_pos);
     set_camera_look_at(camera, scene_center);
+
+    // Depth of field focuses on the subject (camera-to-model distance) unless
+    // overridden. --film turns it on too; --no-dof forces it off. Range scales
+    // with the scene so the model stays sharp and the backdrop falls away.
+    if ((args.dof || args.film_preset) && !args.no_dof && engine->postfx) {
+        PostFX* fx = engine->postfx;
+        fx->dof_enabled = true;
+        if (args.dof_focus > 0.0f) {
+            // A pinned manual focus plane turns autofocus off
+            fx->dof_focus_distance = args.dof_focus;
+            fx->dof_autofocus = false;
+        } else {
+            // Autofocus (the default) tracks the subject each frame; seed it
+            // with the initial camera-to-model distance for frame zero
+            fx->dof_focus_distance = glm_vec3_distance(auto_cam_pos, scene_center);
+            fx->dof_autofocus = true;
+        }
+        fx->dof_focus_range = args.dof_range > 0.0f ? args.dof_range : scene_radius * 1.5f;
+        if (args.dof_max_coc > 0.0f)
+            fx->dof_max_coc = args.dof_max_coc;
+    }
 
     // Clip planes tuned for depth precision, not just coverage. A huge
     // near/far ratio wrecks the 24-bit depth buffer, and cross-rig

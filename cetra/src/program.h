@@ -70,6 +70,9 @@ ShaderProgram* create_ssao_program();
 ShaderProgram* create_ssao_blur_program();
 ShaderProgram* create_ssr_program();
 ShaderProgram* create_ssr_composite_program();
+ShaderProgram* create_dof_coc_program();
+ShaderProgram* create_dof_blur_program();
+ShaderProgram* create_dof_composite_program();
 
 size_t calculate_max_lights();
 
