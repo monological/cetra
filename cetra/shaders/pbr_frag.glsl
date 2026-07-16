@@ -15,6 +15,9 @@ layout(location = 0) out vec4 FragColor;
 // G-buffer for screen-space passes: view-space normal (xyz) + roughness (a).
 // Only lands when the engine enables color attachment 1; otherwise discarded.
 layout(location = 1) out vec4 NormalOut;
+// Screen-space motion vector (.xy, UV units) for TAA. Only lands when the
+// engine enables color attachment 2 (TAA active); otherwise discarded.
+layout(location = 2) out vec4 VelocityOut;
 
 #define MAX_LIGHTS 70
 
@@ -794,4 +797,8 @@ void main() {
     NormalOut = alphaToCoverage > 0
                     ? vec4(0.0, 0.0, 0.0, finalOpacity)
                     : vec4(normalize(mat3(view) * N), 0.0);
+
+    // Screen-space motion vector for TAA (un-jittered current vs previous),
+    // in UV units so the resolve can reproject history by subtracting it.
+    VelocityOut = vec4((CurrClip.xy / CurrClip.w - PrevClip.xy / PrevClip.w) * 0.5, 0.0, 0.0);
 }

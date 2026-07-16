@@ -50,6 +50,10 @@ typedef struct PostFX {
     GLuint noise_texture; // 4x4 random kernel rotations, tiled
     GLuint ssr_fbo;       // Half-res reflection buffer (march target)
     GLuint ssr_texture;
+    GLuint velocity_fbo; // Full-res resolved screen-space motion vectors (.xy)
+    GLuint velocity_texture;
+    GLuint taa_history_fbo[2]; // Full-res history ping-pong (previous resolved frames)
+    GLuint taa_history_texture[2];
 
     ShaderProgram* bright_program;
     ShaderProgram* blur_program;
@@ -58,6 +62,7 @@ typedef struct PostFX {
     ShaderProgram* ssao_blur_program;
     ShaderProgram* ssr_program;
     ShaderProgram* ssr_composite_program;
+    ShaderProgram* taa_resolve_program;
 
     GLuint quad_vao;
     GLuint quad_vbo;
@@ -140,7 +145,7 @@ void postfx_apply_film_look(PostFX* fx);
 // frame-start decision, passed through rather than re-derived from fx flags
 // that may have changed mid-frame.
 void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hdr,
-                bool normals_written, mat4 projection);
+                bool normals_written, bool velocity_written, mat4 projection);
 
 // Producer-side predicate: true when some active effect will consume the
 // normals G-buffer, so the scene pass should write color attachment 1. The

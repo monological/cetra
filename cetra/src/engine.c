@@ -83,8 +83,10 @@ Engine* create_engine(const char* window_title, int width, int height) {
     engine->framebuffer = 0;
     engine->multisample_texture = 0;
     engine->normal_multisample_texture = 0;
+    engine->velocity_multisample_texture = 0;
     engine->depth_renderbuffer = 0;
     engine->normals_this_frame = false;
+    engine->velocity_this_frame = false;
 
     engine->camera = NULL;
     engine->camera_mode = CAMERA_MODE_ORBIT;
@@ -192,6 +194,7 @@ void free_engine(Engine* engine) {
     glDeleteFramebuffers(1, &engine->framebuffer);
     glDeleteTextures(1, &engine->multisample_texture);
     glDeleteTextures(1, &engine->normal_multisample_texture);
+    glDeleteTextures(1, &engine->velocity_multisample_texture);
     glDeleteRenderbuffers(1, &engine->depth_renderbuffer);
 
     if (engine->catcher_vao)
@@ -310,9 +313,11 @@ static int _clamp_msaa_samples(int samples) {
 static void _destroy_msaa_attachments(Engine* engine) {
     glDeleteTextures(1, &engine->multisample_texture);
     glDeleteTextures(1, &engine->normal_multisample_texture);
+    glDeleteTextures(1, &engine->velocity_multisample_texture);
     glDeleteRenderbuffers(1, &engine->depth_renderbuffer);
     engine->multisample_texture = 0;
     engine->normal_multisample_texture = 0;
+    engine->velocity_multisample_texture = 0;
     engine->depth_renderbuffer = 0;
 }
 
@@ -337,6 +342,15 @@ static int _create_msaa_attachments(Engine* engine, int rw, int rh, int samples)
     glTexImage2DMultisample(GL_TEXTURE_2D_MULTISAMPLE, samples, GL_RGBA16F, rw, rh, GL_TRUE);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D_MULTISAMPLE,
                            engine->normal_multisample_texture, 0);
+
+    // Attachment 2: screen-space motion vectors (.xy) for TAA. Like the normals
+    // target, always allocated but only written in the opaque pass when TAA is
+    // active (see engine_set_scene_draw_buffers). RGBA16F for the resolve blit.
+    glGenTextures(1, &engine->velocity_multisample_texture);
+    glBindTexture(GL_TEXTURE_2D_MULTISAMPLE, engine->velocity_multisample_texture);
+    glTexImage2DMultisample(GL_TEXTURE_2D_MULTISAMPLE, samples, GL_RGBA16F, rw, rh, GL_TRUE);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT2, GL_TEXTURE_2D_MULTISAMPLE,
+                           engine->velocity_multisample_texture, 0);
 
     glGenRenderbuffers(1, &engine->depth_renderbuffer);
     glBindRenderbuffer(GL_RENDERBUFFER, engine->depth_renderbuffer);
@@ -1379,7 +1393,7 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode, bool draw_gui) 
             glm_vec3_distance(engine->camera->position, engine->camera->look_at);
     }
     postfx_run(engine->postfx, engine->framebuffer, 0, frame_mode == RENDER_MODE_PBR,
-               engine->normals_this_frame, engine->projection_matrix);
+               engine->normals_this_frame, engine->velocity_this_frame, engine->projection_matrix);
 
     if (draw_gui) {
         render_engine_gui(engine);
@@ -1390,12 +1404,26 @@ void engine_set_scene_draw_buffers(const Engine* engine, bool with_normals) {
     if (!engine)
         return;
 
-    if (with_normals && engine->normals_this_frame) {
+    // The opaque pass may publish the normals G-buffer (attachment 1) and/or the
+    // velocity buffer (attachment 2) alongside color; every other pass is color
+    // only. GL_NONE preserves the fragment-output-location -> attachment mapping
+    // when an intermediate target is skipped this frame. Blending is enabled
+    // globally, so keep the auxiliary targets opaque via indexed disable (the
+    // indexed state is wiped by any blanket glEnable(GL_BLEND), so re-issue it
+    // at every pass boundary rather than once at init).
+    bool normals = with_normals && engine->normals_this_frame;
+    bool velocity = with_normals && engine->velocity_this_frame;
+
+    if (velocity) {
+        const GLenum bufs[] = {GL_COLOR_ATTACHMENT0,
+                               normals ? GL_COLOR_ATTACHMENT1 : GL_NONE, GL_COLOR_ATTACHMENT2};
+        glDrawBuffers(3, bufs);
+        if (normals)
+            glDisablei(GL_BLEND, 1);
+        glDisablei(GL_BLEND, 2);
+    } else if (normals) {
         const GLenum both[] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1};
         glDrawBuffers(2, both);
-        // Blending is enabled globally; keep the normals target opaque.
-        // Indexed state is wiped by any blanket glEnable(GL_BLEND), so
-        // re-issue it at every pass boundary rather than once at init.
         glDisablei(GL_BLEND, 1);
     } else {
         const GLenum color_only[] = {GL_COLOR_ATTACHMENT0};
@@ -1482,12 +1510,18 @@ void run_engine_render_loop(Engine* engine, RenderSceneFunc render_func) {
         glViewport(0, 0, rw, rh);
         engine->normals_this_frame =
             frame_mode == RENDER_MODE_PBR && postfx_wants_normals(engine->postfx);
+        engine->velocity_this_frame =
+            frame_mode == RENDER_MODE_PBR && engine->postfx && engine->postfx->taa_enabled;
         engine_set_scene_draw_buffers(engine, true);
         glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
         if (engine->normals_this_frame) {
             const GLfloat zero_normal[4] = {0.0f, 0.0f, 0.0f, 0.0f};
             glClearBufferfv(GL_COLOR, 1, zero_normal);
+        }
+        if (engine->velocity_this_frame) {
+            const GLfloat zero_velocity[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+            glClearBufferfv(GL_COLOR, 2, zero_velocity);
         }
 
         // Sub-pixel projection jitter for TAA: nudge the projection by a

@@ -647,6 +647,18 @@ ShaderProgram* create_ssr_composite_program() {
     return program;
 }
 
+ShaderProgram* create_taa_resolve_program() {
+    ShaderProgram* program = NULL;
+
+    if ((program = create_program_from_source("taa_resolve", post_vert_shader_str,
+                                              taa_resolve_frag_shader_str, NULL)) == NULL) {
+        log_error("Failed to initialize TAA resolve shader program");
+        return NULL;
+    }
+
+    return program;
+}
+
 ShaderProgram* create_dof_coc_program() {
     ShaderProgram* program = NULL;
 

@@ -190,7 +190,7 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     fx->grain_strength = 0.04f;
     fx->frame_index = 0;
 
-    fx->taa_enabled = false; // Enabled once the velocity buffer + resolve exist
+    fx->taa_enabled = false; // Enabled per-app (the render app turns it on when windowed)
 
     // Depth of field (off by default; targets allocated lazily on first enable)
     fx->dof_enabled = false;
@@ -240,6 +240,20 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
         free_postfx(fx);
         return NULL;
     }
+    // Full-res resolve target for the scene pass's velocity attachment, and the
+    // two full-res history buffers the TAA resolve ping-pongs across frames.
+    if (!create_color_fbo(fx->width, fx->height, GL_RGBA16F, &fx->velocity_fbo,
+                          &fx->velocity_texture)) {
+        free_postfx(fx);
+        return NULL;
+    }
+    for (int i = 0; i < 2; i++) {
+        if (!create_color_fbo(fx->width, fx->height, GL_RGBA16F, &fx->taa_history_fbo[i],
+                              &fx->taa_history_texture[i])) {
+            free_postfx(fx);
+            return NULL;
+        }
+    }
 
     unsigned int rng = 0x9E3779B9u;
     fx->noise_texture = create_ssao_noise_texture(&rng);
@@ -251,12 +265,14 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     fx->ssao_blur_program = create_ssao_blur_program();
     fx->ssr_program = create_ssr_program();
     fx->ssr_composite_program = create_ssr_composite_program();
+    fx->taa_resolve_program = create_taa_resolve_program();
     fx->dof_coc_program = create_dof_coc_program();
     fx->dof_blur_program = create_dof_blur_program();
     fx->dof_composite_program = create_dof_composite_program();
     if (!fx->bright_program || !fx->blur_program || !fx->tonemap_program || !fx->ssao_program ||
         !fx->ssao_blur_program || !fx->ssr_program || !fx->ssr_composite_program ||
-        !fx->dof_coc_program || !fx->dof_blur_program || !fx->dof_composite_program) {
+        !fx->taa_resolve_program || !fx->dof_coc_program || !fx->dof_blur_program ||
+        !fx->dof_composite_program) {
         free_postfx(fx);
         return NULL;
     }
@@ -397,6 +413,10 @@ void free_postfx(PostFX* fx) {
     glDeleteTextures(1, &fx->noise_texture);
     glDeleteFramebuffers(1, &fx->ssr_fbo);
     glDeleteTextures(1, &fx->ssr_texture);
+    glDeleteFramebuffers(1, &fx->velocity_fbo);
+    glDeleteTextures(1, &fx->velocity_texture);
+    glDeleteFramebuffers(2, fx->taa_history_fbo);
+    glDeleteTextures(2, fx->taa_history_texture);
     // DoF targets are 0 (no-op delete) if never lazily allocated
     glDeleteFramebuffers(1, &fx->dof_coc_fbo);
     glDeleteTextures(1, &fx->dof_coc_texture);
@@ -412,6 +432,7 @@ void free_postfx(PostFX* fx) {
     free_program(fx->ssao_blur_program);
     free_program(fx->ssr_program);
     free_program(fx->ssr_composite_program);
+    free_program(fx->taa_resolve_program);
     free_program(fx->dof_coc_program);
     free_program(fx->dof_blur_program);
     free_program(fx->dof_composite_program);
@@ -459,7 +480,7 @@ bool postfx_ssr_active(const PostFX* fx, bool normals_written) {
 }
 
 void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hdr,
-                bool normals_written, mat4 projection) {
+                bool normals_written, bool velocity_written, mat4 projection) {
     if (!fx)
         return;
 
@@ -487,6 +508,49 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         glBlitFramebuffer(0, 0, fx->width, fx->height, 0, 0, fx->out_width, fx->out_height,
                           GL_COLOR_BUFFER_BIT, GL_LINEAR);
     } else {
+        // Temporal AA resolve, before every other HDR pass: reproject the
+        // accumulated history by the velocity buffer, neighborhood-clamp it
+        // against the current frame, blend, and write the result back into
+        // hdr_fbo so SSR/DoF/bloom/tonemap consume the anti-aliased color.
+        if (fx->taa_enabled && velocity_written) {
+            // Resolve the velocity attachment (MSAA -> single-sample).
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, msaa_fbo);
+            glReadBuffer(GL_COLOR_ATTACHMENT2);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fx->velocity_fbo);
+            glBlitFramebuffer(0, 0, fx->width, fx->height, 0, 0, fx->width, fx->height,
+                              GL_COLOR_BUFFER_BIT, GL_NEAREST);
+            glReadBuffer(GL_COLOR_ATTACHMENT0);
+
+            int write = fx->frame_index & 1;
+            int read = write ^ 1;
+
+            glBindFramebuffer(GL_FRAMEBUFFER, fx->taa_history_fbo[write]);
+            glViewport(0, 0, fx->width, fx->height);
+            glUseProgram(fx->taa_resolve_program->id);
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, fx->hdr_texture);
+            glActiveTexture(GL_TEXTURE1);
+            glBindTexture(GL_TEXTURE_2D, fx->velocity_texture);
+            glActiveTexture(GL_TEXTURE2);
+            glBindTexture(GL_TEXTURE_2D, fx->taa_history_texture[read]);
+            UniformManager* tu = fx->taa_resolve_program->uniforms;
+            uniform_set_int(tu, "currentTex", 0);
+            uniform_set_int(tu, "velocityTex", 1);
+            uniform_set_int(tu, "historyTex", 2);
+            const float taa_texel[2] = {1.0f / (float)fx->width, 1.0f / (float)fx->height};
+            uniform_set_vec2(tu, "texelSize", taa_texel);
+            uniform_set_int(tu, "reset", fx->frame_index == 0 ? 1 : 0);
+            draw_fullscreen_quad(fx->quad_vao);
+
+            // Push the resolved frame back into hdr_fbo (history[write] is kept
+            // as next frame's accumulation buffer).
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, fx->taa_history_fbo[write]);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fx->hdr_fbo);
+            glBlitFramebuffer(0, 0, fx->width, fx->height, 0, 0, fx->width, fx->height,
+                              GL_COLOR_BUFFER_BIT, GL_NEAREST);
+            check_gl_error("postfx taa");
+        }
+
         // Resolve the scene pass's second attachment (normals + roughness)
         // ahead of its consumers (SSAO now, SSR later). The caller reports
         // whether the attachment was written this frame; re-deriving it from

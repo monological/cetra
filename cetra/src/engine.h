@@ -53,8 +53,11 @@ typedef struct Engine {
     GLuint framebuffer;                // Framebuffer object
     GLuint multisample_texture;        // Multisample HDR color (attachment 0)
     GLuint normal_multisample_texture; // Multisample view-space normals + roughness (attachment 1)
-    GLuint depth_renderbuffer;         // Depth renderbuffer
-    bool normals_this_frame;           // Attachment 1 written this frame (PBR + consumer active)
+    GLuint
+        velocity_multisample_texture; // Multisample screen-space motion vectors .xy (attachment 2)
+    GLuint depth_renderbuffer;        // Depth renderbuffer
+    bool normals_this_frame;          // Attachment 1 written this frame (PBR + consumer active)
+    bool velocity_this_frame;         // Attachment 2 written this frame (TAA active + PBR)
 
     Camera* camera;         // main camera
     CameraMode camera_mode; // Current camera mode

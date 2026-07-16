@@ -1192,6 +1192,15 @@ int main(int argc, char** argv) {
     set_engine_show_xyz(engine, false);
     engine->show_bones = args.show_bones != 0;
 
+    // Interactive default: TAA-only (drop to 1x MSAA and let temporal AA carry
+    // it) — much cheaper than 4x MSAA on this GPU and better on shading/specular
+    // aliasing. Headless keeps 4x MSAA with TAA off so screenshots stay
+    // deterministic (jitter + history accumulation would vary run to run).
+    if (!args.headless) {
+        set_engine_msaa_samples(engine, 1);
+        engine->postfx->taa_enabled = true;
+    }
+
     run_engine_render_loop(engine, render_scene_callback);
 
     printf("Cleaning up...\n");
