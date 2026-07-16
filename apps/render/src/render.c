@@ -678,6 +678,15 @@ void render_scene_callback(Engine* engine, Scene* current_scene) {
     float delta_time = time_value - last_frame_time;
     last_frame_time = time_value;
 
+    // Snapshot last frame's bone matrices for skinned motion vectors (TAA)
+    // before this frame recomputes them. Done every frame (even when paused) so
+    // a still pose reads zero deformation velocity instead of a frozen nonzero
+    // one that would smear it under TAA.
+    if (anim_state) {
+        memcpy(anim_state->prev_bone_matrices, anim_state->bone_matrices,
+               sizeof(anim_state->bone_matrices));
+    }
+
     // Update animation
     if (anim_state && anim_state->playing) {
         update_animation(anim_state, delta_time);

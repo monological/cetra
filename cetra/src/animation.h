@@ -141,6 +141,9 @@ typedef struct AnimationState {
 
     // Computed bone matrices (global transform * inverse bind pose)
     mat4 bone_matrices[MAX_BONES];
+    // Previous frame's bone matrices, for skinned motion vectors (TAA). Snapshot
+    // at the top of update_animation before this frame's matrices are rebuilt.
+    mat4 prev_bone_matrices[MAX_BONES];
     size_t active_bone_count;
 
     // Scratch space for transform computation

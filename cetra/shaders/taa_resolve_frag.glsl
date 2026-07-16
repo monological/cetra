@@ -92,9 +92,17 @@ void main() {
             nmax = max(nmax, n);
         }
     }
-    history = yCoCgToRgb(clamp(rgbToYCoCg(history), nmin, nmax));
+    vec3 historyYCoCg = clamp(rgbToYCoCg(history), nmin, nmax);
+    history = yCoCgToRgb(historyYCoCg);
 
-    // Blend: heavy history weight accumulates the sub-pixel-jittered samples
-    // into a stable, anti-aliased image.
-    FragColor = vec4(mix(current, history, 0.9), 1.0);
+    // Blend, weighted by inverse luminance (tonemapped space). A plain lerp lets
+    // a bright specular spark in either the current frame or the reprojected
+    // history survive the neighborhood clamp and accumulate into a field of
+    // sparkle on high-frequency surfaces (scratched metal). Down-weighting the
+    // brighter sample lets the temporal average actually resolve those fireflies
+    // — the standard fix for TAA on aliasing-prone specular. Y (YCoCg.x) is luma.
+    const float feedback = 0.9;
+    float wCurrent = (1.0 - feedback) / (1.0 + max(centerYCoCg.x, 0.0));
+    float wHistory = feedback / (1.0 + max(historyYCoCg.x, 0.0));
+    FragColor = vec4((current * wCurrent + history * wHistory) / (wCurrent + wHistory), 1.0);
 }

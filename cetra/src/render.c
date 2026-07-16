@@ -49,6 +49,27 @@ void render_update_skinning_uniforms(ShaderProgram* program, const Mesh* mesh) {
             glUniformMatrix4fv(loc, (GLsizei)g_current_animation_state->active_bone_count, GL_FALSE,
                                (const GLfloat*)g_current_animation_state->bone_matrices);
         }
+
+        // Previous-frame bones for skinned motion vectors (TAA), packed as 3
+        // affine rows per bone (12 floats vs 16) so a second full set fits the
+        // vertex uniform budget alongside the current mat4 array. Absent on
+        // programs without the uniform (e.g. the shadow depth pass) -> skipped.
+        GLint prevLoc = glGetUniformLocation(program->id, "uPrevBoneRows[0]");
+        if (prevLoc >= 0) {
+            size_t count = g_current_animation_state->active_bone_count;
+            float rows[3 * MAX_BONES * 4];
+            const mat4* pbm = g_current_animation_state->prev_bone_matrices;
+            for (size_t b = 0; b < count; b++) {
+                for (int r = 0; r < 3; r++) {
+                    float* dst = &rows[(b * 3 + (size_t)r) * 4];
+                    dst[0] = pbm[b][0][r];
+                    dst[1] = pbm[b][1][r];
+                    dst[2] = pbm[b][2][r];
+                    dst[3] = pbm[b][3][r];
+                }
+            }
+            glUniform4fv(prevLoc, (GLsizei)(count * 3), rows);
+        }
     } else {
         uniform_set_int(u, "skinned", 0);
     }
