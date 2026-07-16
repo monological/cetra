@@ -39,7 +39,6 @@ static int _setup_engine_gui(Engine* engine);
 static void _engine_cursor_position_callback(GLFWwindow* window, double xpos, double ypos);
 static void _engine_mouse_button_callback(GLFWwindow* window, int button, int action, int mods);
 static void _engine_key_callback(GLFWwindow* window, int key, int scancode, int action, int mods);
-static void _engine_char_callback(GLFWwindow* window, unsigned int codepoint);
 static void _engine_scroll_callback(GLFWwindow* window, double xoffset, double yoffset);
 static SceneNode* _perform_engine_ray_picking(Engine* engine, double mouse_fb_x, double mouse_fb_y);
 
@@ -110,6 +109,7 @@ Engine* create_engine(const char* window_title, int width, int height) {
     engine->show_fps = false;
     engine->show_bones = false;
     engine->headless = false;
+    engine->gui_frame_active = false;
     engine->screenshot_path = NULL;
     engine->screenshot_every = 0;
     engine->total_frames = 0;
@@ -370,7 +370,8 @@ static int _setup_engine_gui(Engine* engine) {
     glfwSetMouseButtonCallback(engine->window, _engine_mouse_button_callback);
     glfwSetCursorPosCallback(engine->window, _engine_cursor_position_callback);
     glfwSetKeyCallback(engine->window, _engine_key_callback);
-    glfwSetCharCallback(engine->window, _engine_char_callback);
+    // Text input has no engine-side logic, so hand it straight to the backend.
+    glfwSetCharCallback(engine->window, ImGui_ImplGlfw_CharCallback);
     glfwSetScrollCallback(engine->window, _engine_scroll_callback);
 
     return 0;
@@ -516,8 +517,7 @@ void set_engine_scroll_callback(Engine* engine, ScrollCallback scroll_callback) 
 
 // True when the GUI is capturing the pointer this frame, so 3D input is
 // suppressed. Driven by ImGui's io capture flags.
-bool engine_gui_wants_mouse(const Engine* engine) {
-    (void)engine;
+bool engine_gui_wants_mouse(void) {
     return igGetIO_Nil()->WantCaptureMouse;
 }
 
@@ -535,7 +535,7 @@ static void _engine_cursor_position_callback(GLFWwindow* window, double xpos, do
 
     ImGui_ImplGlfw_CursorPosCallback(window, xpos, ypos);
 
-    if (engine_gui_wants_mouse(engine)) {
+    if (engine_gui_wants_mouse()) {
         return;
     }
 
@@ -579,25 +579,18 @@ static void _engine_mouse_button_callback(GLFWwindow* window, int button, int ac
     mouse_fb_x = ((mouse_fb_x / engine->win_width) * engine->fb_width);
     mouse_fb_y = ((1.0 - (mouse_fb_y / engine->win_height)) * engine->fb_height);
 
-    // A release ALWAYS ends the drag, even over the GUI — otherwise a button-up
-    // that lands on a panel leaves the camera stuck orbiting.
+    // A LEFT release always ends the drag and is forwarded, even over the GUI —
+    // otherwise a button-up that lands on a panel leaves the camera stuck
+    // orbiting. A press is acted on (drag-start, picking) only when the GUI
+    // doesn't want the pointer. Either way the app callback fires exactly once.
     if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_RELEASE) {
         engine->input.is_dragging = false;
         engine->input.shift_held = false;
         engine->input.center_fb_x = mouse_fb_x;
         engine->input.center_fb_y = mouse_fb_y;
-        if (engine->mouse_button_callback) {
-            engine->mouse_button_callback(engine, button, action, mods);
-        }
+    } else if (engine_gui_wants_mouse()) {
         return;
-    }
-
-    // Presses (drag-start, picking) only when the GUI doesn't want the pointer.
-    if (engine_gui_wants_mouse(engine)) {
-        return;
-    }
-
-    if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
+    } else if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
         engine->input.is_dragging = true;
         engine->input.shift_held = (mods & GLFW_MOD_SHIFT) != 0;
         engine->input.center_fb_x = mouse_fb_x;
@@ -633,18 +626,13 @@ static void _engine_key_callback(GLFWwindow* window, int key, int scancode, int 
     }
 }
 
-// Text input goes only to ImGui.
-static void _engine_char_callback(GLFWwindow* window, unsigned int codepoint) {
-    ImGui_ImplGlfw_CharCallback(window, codepoint);
-}
-
 // Scroll feeds ImGui first; if the GUI isn't using the pointer, it forwards to
-// the app (e.g. camera zoom). This is the first scroll wiring in the engine.
+// the app (e.g. camera zoom).
 static void _engine_scroll_callback(GLFWwindow* window, double xoffset, double yoffset) {
     ImGui_ImplGlfw_ScrollCallback(window, xoffset, yoffset);
 
     Engine* engine = glfwGetWindowUserPointer(window);
-    if (!engine || engine_gui_wants_mouse(engine))
+    if (!engine || engine_gui_wants_mouse())
         return;
 
     if (engine->scroll_callback) {
@@ -1046,7 +1034,8 @@ static void _engine_gui_panel(Engine* engine) {
         "Tex Coords", "Tangent Space",   "Flat Color",
         "Albedo",     "Simple Lighting", "Metallic/Roughness"};
     int rm = engine->current_render_mode;
-    if (igCombo_Str_arr("Render Mode", &rm, render_modes, 9, -1))
+    int render_mode_count = (int)(sizeof(render_modes) / sizeof(render_modes[0]));
+    if (igCombo_Str_arr("Render Mode", &rm, render_modes, render_mode_count, -1))
         engine->current_render_mode = (RenderMode)rm;
 
     Scene* scene = get_current_scene(engine);
@@ -1171,9 +1160,10 @@ static void _engine_gui_fps_overlay(Engine* engine) {
 }
 
 // Build and render the engine's ImGui panels. NewFrame ran at the top of the
-// render loop; this adds the windows and flushes the draw data.
-void render_engine_gui(Engine* engine) {
-    if (!engine || (!engine->show_gui && !engine->show_fps))
+// render loop and latched gui_frame_active; this adds the windows and flushes
+// the draw data, gated on the same latch so igRender always pairs with it.
+static void render_engine_gui(Engine* engine) {
+    if (!engine || !engine->gui_frame_active)
         return;
 
     if (engine->show_gui && engine->camera)
@@ -1292,8 +1282,11 @@ void run_engine_render_loop(Engine* engine, RenderSceneFunc render_func) {
 
         // Begin the ImGui frame before the app's render_func, so both the app
         // (e.g. the tree app) and the engine panel can add windows between
-        // NewFrame and the Render/RenderDrawData at present time.
-        if (engine->show_gui || engine->show_fps) {
+        // NewFrame and the Render/RenderDrawData at present time. Latch the
+        // decision so render_engine_gui pairs its igRender with this NewFrame
+        // even if the panel flags are toggled mid-frame.
+        engine->gui_frame_active = engine->show_gui || engine->show_fps;
+        if (engine->gui_frame_active) {
             ImGui_ImplOpenGL3_NewFrame();
             ImGui_ImplGlfw_NewFrame();
             igNewFrame();

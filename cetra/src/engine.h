@@ -83,6 +83,10 @@ typedef struct Engine {
     bool show_bones; // X-ray bone visualization
     bool headless;   // Hidden window, no vsync (set before init_engine)
 
+    // Latched at NewFrame time: an ImGui frame is open this iteration and must
+    // be closed with a matching igRender. Pairs the begin/end across the loop.
+    bool gui_frame_active;
+
     char* screenshot_path; // If set, save final frame here on exit (PPM)
     int screenshot_every;  // Also save numbered frames every N frames (0 = off)
     size_t total_frames;   // Monotonic frame counter for the render loop
@@ -140,7 +144,7 @@ void set_engine_cursor_position_callback(Engine* engine,
 void set_engine_key_callback(Engine* engine, KeyCallback key_callback);
 void set_engine_scroll_callback(Engine* engine, ScrollCallback scroll_callback);
 // True when the GUI is capturing the pointer this frame; apps gate 3D input on it.
-bool engine_gui_wants_mouse(const Engine* engine);
+bool engine_gui_wants_mouse(void);
 
 // Camera
 void set_engine_camera(Engine* engine, Camera* camera);
@@ -161,7 +165,6 @@ ShaderProgram* get_engine_shader_program_by_name(Engine* engine, const char* pro
 // GUI
 void set_engine_show_gui(Engine* engine, bool show_gui);
 void set_engine_show_fps(Engine* engine, bool show_fps);
-void render_engine_gui(Engine* engine);
 
 // Present the frame: resolve the MSAA framebuffer through the post stack
 // (bloom + tone map, or a raw copy for non-PBR frame_mode) into the default

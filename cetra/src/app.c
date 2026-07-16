@@ -391,7 +391,7 @@ bool app_can_process_3d_input(const Engine* engine) {
     if (!engine) {
         return true;
     }
-    return !engine_gui_wants_mouse((Engine*)engine);
+    return !engine_gui_wants_mouse();
 }
 
 /*

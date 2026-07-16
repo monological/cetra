@@ -1103,8 +1103,10 @@ static void regenerate_tree(Scene* scene, TreeParams* p) {
  * Render tree parameters GUI
  */
 static void render_tree_gui(const Engine* engine, Scene* scene) {
-    (void)engine;
     (void)scene;
+
+    if (!engine || !engine->show_gui)
+        return;
 
     igSetNextWindowPos((ImVec2){15, 15}, ImGuiCond_FirstUseEver, (ImVec2){0, 0});
     igSetNextWindowSize((ImVec2){260, 540}, ImGuiCond_FirstUseEver);
