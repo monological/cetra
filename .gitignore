@@ -1,6 +1,7 @@
 .DS_Store
 out
 my_models
+imgui.ini
 *.swp
 *.o
 cetra/src/shader_strings.h

@@ -388,10 +388,10 @@ void create_three_point_lights(Scene* scene, float intensity_scale) {
  */
 
 bool app_can_process_3d_input(const Engine* engine) {
-    if (!engine || !engine->nk_ctx) {
+    if (!engine) {
         return true;
     }
-    return !nk_window_is_any_hovered(engine->nk_ctx);
+    return !engine_gui_wants_mouse((Engine*)engine);
 }
 
 /*

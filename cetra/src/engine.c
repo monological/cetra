@@ -54,6 +54,8 @@ static int _setup_engine_gui(Engine* engine);
 static void _engine_cursor_position_callback(GLFWwindow* window, double xpos, double ypos);
 static void _engine_mouse_button_callback(GLFWwindow* window, int button, int action, int mods);
 static void _engine_key_callback(GLFWwindow* window, int key, int scancode, int action, int mods);
+static void _engine_char_callback(GLFWwindow* window, unsigned int codepoint);
+static void _engine_scroll_callback(GLFWwindow* window, double xoffset, double yoffset);
 static SceneNode* _perform_engine_ray_picking(Engine* engine, double mouse_fb_x, double mouse_fb_y);
 
 /*
@@ -90,6 +92,8 @@ Engine* create_engine(const char* window_title, int width, int height) {
     engine->error_callback = NULL;
     engine->mouse_button_callback = NULL;
     engine->cursor_position_callback = NULL;
+    engine->key_callback = NULL;
+    engine->scroll_callback = NULL;
 
     engine->framebuffer = 0;
     engine->multisample_texture = 0;
@@ -399,6 +403,8 @@ static int _setup_engine_gui(Engine* engine) {
     glfwSetMouseButtonCallback(engine->window, _engine_mouse_button_callback);
     glfwSetCursorPosCallback(engine->window, _engine_cursor_position_callback);
     glfwSetKeyCallback(engine->window, _engine_key_callback);
+    glfwSetCharCallback(engine->window, _engine_char_callback);
+    glfwSetScrollCallback(engine->window, _engine_scroll_callback);
 
     return 0;
 }
@@ -531,9 +537,28 @@ void set_engine_key_callback(Engine* engine, KeyCallback key_callback) {
     engine->key_callback = key_callback;
 }
 
+void set_engine_scroll_callback(Engine* engine, ScrollCallback scroll_callback) {
+    if (!engine)
+        return;
+    engine->scroll_callback = scroll_callback;
+}
+
 /*
  * Mouse and Keyboard Callbacks
  */
+
+// True when the GUI wants the pointer/keyboard this frame, so 3D input is
+// suppressed. ImGui's io flags are authoritative; the Nuklear hover check is
+// kept only while both GUIs coexist (removed in the Nuklear-removal stage).
+bool engine_gui_wants_mouse(const Engine* engine) {
+    if (igGetIO_Nil()->WantCaptureMouse)
+        return true;
+    return engine->nk_ctx && nk_window_is_any_hovered(engine->nk_ctx);
+}
+
+static bool engine_gui_wants_keyboard(void) {
+    return igGetIO_Nil()->WantCaptureKeyboard;
+}
 
 static void _engine_cursor_position_callback(GLFWwindow* window, double xpos, double ypos) {
     if (!window)
@@ -543,8 +568,9 @@ static void _engine_cursor_position_callback(GLFWwindow* window, double xpos, do
     if (!engine || !engine->nk_ctx)
         return;
 
-    // Check if mouse is over any Nuklear window
-    if (nk_window_is_any_hovered(engine->nk_ctx)) {
+    ImGui_ImplGlfw_CursorPosCallback(window, xpos, ypos);
+
+    if (engine_gui_wants_mouse(engine)) {
         return;
     }
 
@@ -577,10 +603,7 @@ static void _engine_mouse_button_callback(GLFWwindow* window, int button, int ac
     if (!engine || !engine->nk_ctx)
         return;
 
-    // Check if mouse is over any Nuklear window
-    if (nk_window_is_any_hovered(engine->nk_ctx)) {
-        return;
-    }
+    ImGui_ImplGlfw_MouseButtonCallback(window, button, action, mods);
 
     glfwGetWindowSize(window, &engine->win_width, &engine->win_height);
     glfwGetFramebufferSize(window, &engine->fb_width, &engine->fb_height);
@@ -591,6 +614,24 @@ static void _engine_mouse_button_callback(GLFWwindow* window, int button, int ac
     mouse_fb_x = ((mouse_fb_x / engine->win_width) * engine->fb_width);
     mouse_fb_y = ((1.0 - (mouse_fb_y / engine->win_height)) * engine->fb_height);
 
+    // A release ALWAYS ends the drag, even over the GUI — otherwise a button-up
+    // that lands on a panel leaves the camera stuck orbiting.
+    if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_RELEASE) {
+        engine->input.is_dragging = false;
+        engine->input.shift_held = false;
+        engine->input.center_fb_x = mouse_fb_x;
+        engine->input.center_fb_y = mouse_fb_y;
+        if (engine->mouse_button_callback) {
+            engine->mouse_button_callback(engine, button, action, mods);
+        }
+        return;
+    }
+
+    // Presses (drag-start, picking) only when the GUI doesn't want the pointer.
+    if (engine_gui_wants_mouse(engine)) {
+        return;
+    }
+
     if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
         engine->input.is_dragging = true;
         engine->input.shift_held = (mods & GLFW_MOD_SHIFT) != 0;
@@ -600,12 +641,6 @@ static void _engine_mouse_button_callback(GLFWwindow* window, int button, int ac
         engine->input.prev_fb_y = mouse_fb_y;
 
         engine->input.selected_node = _perform_engine_ray_picking(engine, mouse_fb_x, mouse_fb_y);
-
-    } else if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_RELEASE) {
-        engine->input.is_dragging = false;
-        engine->input.shift_held = false;
-        engine->input.center_fb_x = mouse_fb_x;
-        engine->input.center_fb_y = mouse_fb_y;
     }
 
     if (engine->mouse_button_callback) {
@@ -621,9 +656,34 @@ static void _engine_key_callback(GLFWwindow* window, int key, int scancode, int 
     if (!engine)
         return;
 
-    // Just forward to user callback - engine doesn't interpret keys
+    ImGui_ImplGlfw_KeyCallback(window, key, scancode, action, mods);
+
+    // Don't drive the camera / app hotkeys while the GUI has keyboard focus
+    // (e.g. an active text field).
+    if (engine_gui_wants_keyboard())
+        return;
+
     if (engine->key_callback) {
         engine->key_callback(engine, key, scancode, action, mods);
+    }
+}
+
+// Text input goes only to ImGui.
+static void _engine_char_callback(GLFWwindow* window, unsigned int codepoint) {
+    ImGui_ImplGlfw_CharCallback(window, codepoint);
+}
+
+// Scroll feeds ImGui first; if the GUI isn't using the pointer, it forwards to
+// the app (e.g. camera zoom). This is the first scroll wiring in the engine.
+static void _engine_scroll_callback(GLFWwindow* window, double xoffset, double yoffset) {
+    ImGui_ImplGlfw_ScrollCallback(window, xoffset, yoffset);
+
+    Engine* engine = glfwGetWindowUserPointer(window);
+    if (!engine || engine_gui_wants_mouse(engine))
+        return;
+
+    if (engine->scroll_callback) {
+        engine->scroll_callback(engine, xoffset, yoffset);
     }
 }
 
@@ -1409,12 +1469,9 @@ void render_nuklear_gui(Engine* engine) {
     // Render Nuklear GUI
     nk_glfw3_render(&engine->nk_glfw, NK_ANTI_ALIASING_ON, MAX_VERTEX_BUFFER, MAX_ELEMENT_BUFFER);
 
-    // Stage A proof-of-life: render the ImGui demo window on top of Nuklear.
-    // (Temporary; Stage B moves NewFrame to the top of the loop and wires input,
-    // Stage C ports the panels, Stage D removes Nuklear.)
-    ImGui_ImplOpenGL3_NewFrame();
-    ImGui_ImplGlfw_NewFrame();
-    igNewFrame();
+    // ImGui: NewFrame ran at the top of the loop; build the demo window (the
+    // Stage A proof — replaced by the ported panel in Stage C) and render it
+    // over Nuklear. Stage D removes Nuklear entirely.
     igShowDemoWindow(NULL);
     igRender();
     ImGui_ImplOpenGL3_RenderDrawData(igGetDrawData());
@@ -1534,6 +1591,15 @@ void run_engine_render_loop(Engine* engine, RenderSceneFunc render_func) {
             engine->fps = (float)engine->frame_count / engine->fps_update_timer;
             engine->frame_count = 0;
             engine->fps_update_timer = 0.0f;
+        }
+
+        // Begin the ImGui frame before the app's render_func, so both the app
+        // (e.g. the tree demo) and the engine panel can add windows between
+        // NewFrame and the Render/RenderDrawData at present time.
+        if (engine->show_gui || engine->show_fps) {
+            ImGui_ImplOpenGL3_NewFrame();
+            ImGui_ImplGlfw_NewFrame();
+            igNewFrame();
         }
 
         // Wireframe mode: use albedo-only rendering for performance

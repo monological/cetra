@@ -38,6 +38,7 @@ struct Engine;
 typedef void (*CursorPositionCallback)(struct Engine* engine, double xpos, double ypos);
 typedef void (*MouseButtonCallback)(struct Engine* engine, int button, int action, int mods);
 typedef void (*KeyCallback)(struct Engine* engine, int key, int scancode, int action, int mods);
+typedef void (*ScrollCallback)(struct Engine* engine, double xoffset, double yoffset);
 
 typedef struct Engine {
     GLFWwindow* window;
@@ -56,6 +57,7 @@ typedef struct Engine {
     CursorPositionCallback cursor_position_callback;
     MouseButtonCallback mouse_button_callback;
     KeyCallback key_callback;
+    ScrollCallback scroll_callback;
 
     GLuint framebuffer;                // Framebuffer object
     GLuint multisample_texture;        // Multisample HDR color (attachment 0)
@@ -152,6 +154,9 @@ void set_engine_mouse_button_callback(Engine* engine, MouseButtonCallback mouse_
 void set_engine_cursor_position_callback(Engine* engine,
                                          CursorPositionCallback cursor_position_callback);
 void set_engine_key_callback(Engine* engine, KeyCallback key_callback);
+void set_engine_scroll_callback(Engine* engine, ScrollCallback scroll_callback);
+// True when the GUI is capturing the pointer this frame; apps gate 3D input on it.
+bool engine_gui_wants_mouse(const Engine* engine);
 
 // Camera
 void set_engine_camera(Engine* engine, Camera* camera);
