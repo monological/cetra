@@ -99,6 +99,11 @@ typedef struct PostFX {
     float grain_strength;
     int frame_index; // Copied from engine->total_frames; seeds deterministic grain
 
+    // Temporal anti-aliasing. Consumes the per-pixel velocity buffer and a
+    // reprojected history to resolve sub-pixel-jittered frames. History buffers
+    // and the resolve program live below (added with the resolve pass).
+    bool taa_enabled;
+
     // Depth of field. Targets are lazily allocated on first enable (dof_ready)
     // so the feature costs no memory while off. CoC + gather run at half the
     // internal resolution; the composite is full-res.

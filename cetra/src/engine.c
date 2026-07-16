@@ -72,6 +72,7 @@ Engine* create_engine(const char* window_title, int width, int height) {
     engine->fb_height = 0;
     engine->ss_scale = 1; // Supersampling off by default (4x fragment cost);
                           // opt in with --ssaa 2 for beauty shots
+    engine->msaa_samples = 4; // 4x MSAA by default (runtime-toggleable)
 
     engine->error_callback = NULL;
     engine->mouse_button_callback = NULL;
@@ -287,15 +288,10 @@ static void engine_render_size(const Engine* engine, int* w, int* h) {
     *h = engine->fb_height * engine->ss_scale;
 }
 
-static int _setup_engine_msaa(Engine* engine) {
-    if (!engine || !engine->window)
-        return -1;
-
-    int rw, rh;
-    engine_render_size(engine, &rw, &rh);
-
-    // Set up MSAA anti-aliasing
-    int samples = 4; // Number of samples for MSAA, adjust as needed
+// Clamp a requested MSAA sample count to [1, driver max]. Needs a live GL context.
+static int _clamp_msaa_samples(int samples) {
+    if (samples < 1)
+        samples = 1;
     GLint max_color_samples = 0;
     GLint max_samples = 0;
     glGetIntegerv(GL_MAX_COLOR_TEXTURE_SAMPLES, &max_color_samples);
@@ -304,11 +300,24 @@ static int _setup_engine_msaa(Engine* engine) {
         max_color_samples = max_samples;
     if (max_color_samples > 0 && samples > max_color_samples)
         samples = max_color_samples;
+    return samples;
+}
 
-    // Create and set up the multisample framebuffer. The color target is
-    // float (RGBA16F) so the scene accumulates in linear HDR; the post
-    // stack tone maps it down to the display
-    glGenFramebuffers(1, &engine->framebuffer);
+// Delete the multisample color/normal attachments and depth renderbuffer.
+// The framebuffer object itself is left intact for reuse.
+static void _destroy_msaa_attachments(Engine* engine) {
+    glDeleteTextures(1, &engine->multisample_texture);
+    glDeleteTextures(1, &engine->normal_multisample_texture);
+    glDeleteRenderbuffers(1, &engine->depth_renderbuffer);
+    engine->multisample_texture = 0;
+    engine->normal_multisample_texture = 0;
+    engine->depth_renderbuffer = 0;
+}
+
+// (Re)create the multisample attachments on engine->framebuffer at the given
+// sample count and render size. The color target is float (RGBA16F) so the
+// scene accumulates in linear HDR; the post stack tone maps it to the display.
+static int _create_msaa_attachments(Engine* engine, int rw, int rh, int samples) {
     glBindFramebuffer(GL_FRAMEBUFFER, engine->framebuffer);
 
     glGenTextures(1, &engine->multisample_texture);
@@ -335,21 +344,55 @@ static int _setup_engine_msaa(Engine* engine) {
 
     if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
         log_error("Error: MSAA Framebuffer is not complete!");
-        // Cleanup in case of framebuffer setup failure
-        glDeleteFramebuffers(1, &engine->framebuffer);
-        glDeleteTextures(1, &engine->multisample_texture);
-        glDeleteTextures(1, &engine->normal_multisample_texture);
-        glDeleteRenderbuffers(1, &engine->depth_renderbuffer);
-        engine->framebuffer = 0;
-        engine->multisample_texture = 0;
-        engine->normal_multisample_texture = 0;
-        engine->depth_renderbuffer = 0;
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
         return -1;
     }
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0); // Bind back to the default framebuffer
-
     return 0;
+}
+
+static int _setup_engine_msaa(Engine* engine) {
+    if (!engine || !engine->window)
+        return -1;
+
+    int rw, rh;
+    engine_render_size(engine, &rw, &rh);
+    engine->msaa_samples = _clamp_msaa_samples(engine->msaa_samples);
+
+    glGenFramebuffers(1, &engine->framebuffer);
+    if (_create_msaa_attachments(engine, rw, rh, engine->msaa_samples) != 0) {
+        _destroy_msaa_attachments(engine);
+        glDeleteFramebuffers(1, &engine->framebuffer);
+        engine->framebuffer = 0;
+        return -1;
+    }
+    return 0;
+}
+
+// Change the MSAA sample count. Before init_engine this just stores the request;
+// at runtime it rebuilds the multisample attachments in place (the single-sample
+// post-process resolve targets are unaffected by the sample count).
+void set_engine_msaa_samples(Engine* engine, int samples) {
+    if (!engine)
+        return;
+    if (samples < 1)
+        samples = 1;
+
+    if (!engine->framebuffer) {
+        engine->msaa_samples = samples; // pre-init: _setup_engine_msaa clamps
+        return;
+    }
+
+    samples = _clamp_msaa_samples(samples);
+    if (samples == engine->msaa_samples)
+        return;
+    engine->msaa_samples = samples;
+
+    int rw, rh;
+    engine_render_size(engine, &rw, &rh);
+    _destroy_msaa_attachments(engine);
+    _create_msaa_attachments(engine, rw, rh, samples);
 }
 
 /*
@@ -1167,6 +1210,14 @@ static void _engine_gui_panel(Engine* engine) {
     if (engine->postfx &&
         igCollapsingHeader_TreeNodeFlags("Post", ImGuiTreeNodeFlags_DefaultOpen)) {
         PostFX* fx = engine->postfx;
+
+        igSeparatorText("Anti-aliasing");
+        bool msaa = engine->msaa_samples > 1;
+        if (igCheckbox("MSAA 4x", &msaa))
+            set_engine_msaa_samples(engine, msaa ? 4 : 1);
+        igSameLine(0, -1);
+        igCheckbox("TAA", &fx->taa_enabled);
+
         bool aces = fx->tonemap_mode == POSTFX_TONEMAP_ACES;
         if (igCheckbox("ACES Tonemap", &aces))
             fx->tonemap_mode = aces ? POSTFX_TONEMAP_ACES : POSTFX_TONEMAP_NEUTRAL;

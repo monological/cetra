@@ -190,6 +190,8 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     fx->grain_strength = 0.04f;
     fx->frame_index = 0;
 
+    fx->taa_enabled = false; // Enabled once the velocity buffer + resolve exist
+
     // Depth of field (off by default; targets allocated lazily on first enable)
     fx->dof_enabled = false;
     fx->dof_autofocus = true; // Track the camera's subject unless a focus is pinned
