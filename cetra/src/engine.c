@@ -367,9 +367,10 @@ static void _apply_engine_gui_style(void) {
     style->ScrollbarRounding = 4.0f;
     style->WindowBorderSize = 1.0f;
     style->FrameBorderSize = 1.0f;
-    style->WindowPadding = (ImVec2){12.0f, 12.0f};
-    style->FramePadding = (ImVec2){8.0f, 4.0f};
-    style->ItemSpacing = (ImVec2){8.0f, 7.0f};
+    style->WindowPadding = (ImVec2){14.0f, 14.0f};
+    style->FramePadding = (ImVec2){9.0f, 6.0f};
+    style->ItemSpacing = (ImVec2){9.0f, 10.0f};
+    style->ItemInnerSpacing = (ImVec2){8.0f, 6.0f};
 
     const ImVec4 accent = {0.373f, 0.373f, 1.000f, 1.00f}; // #5f5fff
     const ImVec4 accent_hi = {0.500f, 0.500f, 1.000f, 1.00f};
@@ -1044,27 +1045,66 @@ static void _save_framebuffer_ppm(const Engine* engine, const char* path) {
     log_info("Saved screenshot: %s (%dx%d)", path, w, h);
 }
 
+// A checkbox that enables a group of dependent parameters. The parameters stay
+// visible but greyed out and inert until the effect is on — so toggling never
+// reflows the panel — and are indented one level so the grouping is obvious.
+// The enabling checkbox itself stays interactive. Pair with _end_effect_group().
+static void _begin_effect_group(const char* label, bool* enabled) {
+    igCheckbox(label, enabled);
+    igBeginDisabled(!*enabled);
+    igIndent(0.0f);
+}
+
+static void _end_effect_group(void) {
+    igUnindent(0.0f);
+    igEndDisabled();
+}
+
 // The main settings panel, in Dear ImGui. Sections are collapsing headers;
 // effect on/off states are checkboxes and their parameters appear indented
 // beneath them. Bound directly to the same engine/scene/postfx fields.
 static void _engine_gui_panel(Engine* engine) {
     Camera* camera = engine->camera;
     igSetNextWindowPos((ImVec2){15, 15}, ImGuiCond_FirstUseEver, (ImVec2){0, 0});
-    igSetNextWindowSize((ImVec2){290, 620}, ImGuiCond_FirstUseEver);
+    igSetNextWindowSize((ImVec2){320, 660}, ImGuiCond_FirstUseEver);
     if (!igBegin("Cetra", NULL, 0)) {
         igEnd();
         return;
     }
 
-    if (igButton("Show XYZ", (ImVec2){0, 0}))
-        set_engine_show_xyz(engine, !engine->show_xyz);
-    igSameLine(0, -1);
-    if (igButton("Wireframe", (ImVec2){0, 0}))
-        set_engine_show_wireframe(engine, !engine->show_wireframe);
-    igCheckbox("Show Bones", &engine->show_bones);
+    // --- View: render mode leads (the primary control), then the display
+    // overlays on one row (checkboxes so their on/off state is visible) and the
+    // camera mode. Global viewport controls, so they lead the panel.
+    static const char* const render_modes[] = {
+        "PBR",        "Normals",         "World Pos",
+        "Tex Coords", "Tangent Space",   "Flat Color",
+        "Albedo",     "Simple Lighting", "Metallic/Roughness"};
+    int rm = engine->current_render_mode;
+    int render_mode_count = (int)(sizeof(render_modes) / sizeof(render_modes[0]));
+    if (igCombo_Str_arr("Render Mode", &rm, render_modes, render_mode_count, -1))
+        engine->current_render_mode = (RenderMode)rm;
 
+    bool show_xyz = engine->show_xyz;
+    if (igCheckbox("XYZ", &show_xyz))
+        set_engine_show_xyz(engine, show_xyz);
+    igSameLine(0, -1);
+    bool wireframe = engine->show_wireframe;
+    if (igCheckbox("Wireframe", &wireframe))
+        set_engine_show_wireframe(engine, wireframe);
+    igSameLine(0, -1);
+    igCheckbox("Bones", &engine->show_bones);
+
+    if (igRadioButton_Bool("Free", engine->camera_mode == CAMERA_MODE_FREE))
+        engine->camera_mode = CAMERA_MODE_FREE;
+    igSameLine(0, -1);
+    if (igRadioButton_Bool("Orbit", engine->camera_mode == CAMERA_MODE_ORBIT))
+        engine->camera_mode = CAMERA_MODE_ORBIT;
+
+    // --- Animation: a collapsing section like the effect stacks below, shown
+    // only when a clip is loaded.
     AnimationState* anim = get_render_animation_state();
-    if (anim) {
+    if (anim &&
+        igCollapsingHeader_TreeNodeFlags("Animation", ImGuiTreeNodeFlags_DefaultOpen)) {
         if (igButton(anim->playing ? "Pause Animation" : "Play Animation", (ImVec2){0, 0})) {
             if (anim->playing)
                 pause_animation(anim);
@@ -1085,21 +1125,6 @@ static void _engine_gui_panel(Engine* engine) {
         }
     }
 
-    if (igRadioButton_Bool("Free", engine->camera_mode == CAMERA_MODE_FREE))
-        engine->camera_mode = CAMERA_MODE_FREE;
-    igSameLine(0, -1);
-    if (igRadioButton_Bool("Orbit", engine->camera_mode == CAMERA_MODE_ORBIT))
-        engine->camera_mode = CAMERA_MODE_ORBIT;
-
-    static const char* const render_modes[] = {
-        "PBR",        "Normals",         "World Pos",
-        "Tex Coords", "Tangent Space",   "Flat Color",
-        "Albedo",     "Simple Lighting", "Metallic/Roughness"};
-    int rm = engine->current_render_mode;
-    int render_mode_count = (int)(sizeof(render_modes) / sizeof(render_modes[0]));
-    if (igCombo_Str_arr("Render Mode", &rm, render_modes, render_mode_count, -1))
-        engine->current_render_mode = (RenderMode)rm;
-
     Scene* scene = get_current_scene(engine);
     if (scene && scene->light_count > 0 &&
         igCollapsingHeader_TreeNodeFlags("Lighting", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -1113,24 +1138,25 @@ static void _engine_gui_panel(Engine* engine) {
 
     if (scene && scene->render_skybox && scene->ibl &&
         igCollapsingHeader_TreeNodeFlags("Environment", ImGuiTreeNodeFlags_DefaultOpen)) {
-        igCheckbox("Ground Projection", &scene->skybox_ground_projection);
-        if (scene->skybox_ground_projection) {
-            igSliderFloat("Dome Radius", &scene->skybox_gp_radius, 1.0f, 100.0f, "%.2f", 0);
-            igSliderFloat("Capture Height", &scene->skybox_gp_height, 0.1f, 10.0f, "%.2f", 0);
-        }
+        _begin_effect_group("Ground Projection", &scene->skybox_ground_projection);
+        igSliderFloat("Dome Radius", &scene->skybox_gp_radius, 1.0f, 100.0f, "%.2f", 0);
+        igSliderFloat("Capture Height", &scene->skybox_gp_height, 0.1f, 10.0f, "%.2f", 0);
+        _end_effect_group();
+
         igSliderFloat("IBL Intensity", &scene->ibl->intensity, 0.0f, 4.0f, "%.2f", 0);
+
         if (scene->shadow_system) {
             ShadowSystem* ss = scene->shadow_system;
-            igCheckbox("Shadows", &ss->enabled);
-            if (ss->enabled) {
-                igCheckbox("PCSS", &ss->pcss_enabled);
-                if (ss->pcss_enabled)
-                    igSliderFloat("Shadow Softness", &ss->pcss_softness, 0.0f, 4.0f, "%.2f", 0);
-            }
+            _begin_effect_group("Shadows", &ss->enabled);
+            _begin_effect_group("PCSS", &ss->pcss_enabled);
+            igSliderFloat("Shadow Softness", &ss->pcss_softness, 0.0f, 4.0f, "%.2f", 0);
+            _end_effect_group();
+            _end_effect_group();
         }
-        igCheckbox("Shadow Catcher", &scene->shadow_catcher);
-        if (scene->shadow_catcher)
-            igSliderFloat("Shadow Strength", &scene->shadow_catcher_strength, 0.0f, 1.0f, "%.2f", 0);
+
+        _begin_effect_group("Shadow Catcher", &scene->shadow_catcher);
+        igSliderFloat("Shadow Strength", &scene->shadow_catcher_strength, 0.0f, 1.0f, "%.2f", 0);
+        _end_effect_group();
     }
 
     if (engine->postfx &&
@@ -1140,22 +1166,23 @@ static void _engine_gui_panel(Engine* engine) {
         if (igCheckbox("ACES Tonemap", &aces))
             fx->tonemap_mode = aces ? POSTFX_TONEMAP_ACES : POSTFX_TONEMAP_NEUTRAL;
         igSliderFloat("Exposure", &fx->exposure, 0.05f, 8.0f, "%.2f", 0);
-        igCheckbox("Bloom", &fx->bloom_enabled);
-        if (fx->bloom_enabled) {
-            igSliderFloat("Bloom Strength", &fx->bloom_strength, 0.0f, 1.0f, "%.3f", 0);
-            igSliderFloat("Bloom Threshold", &fx->bloom_threshold, 0.0f, 8.0f, "%.2f", 0);
-        }
-        igCheckbox("SSAO", &fx->ssao_enabled);
-        if (fx->ssao_enabled) {
-            igSliderFloat("SSAO Radius", &fx->ssao_radius, 0.05f, 5.0f, "%.2f", 0);
-            igSliderFloat("SSAO Strength", &fx->ssao_strength, 0.0f, 1.0f, "%.2f", 0);
-        }
-        igCheckbox("SSR", &fx->ssr_enabled);
-        if (fx->ssr_enabled) {
-            igSliderFloat("SSR Strength", &fx->ssr_strength, 0.0f, 2.0f, "%.2f", 0);
-            igSliderFloat("SSR Distance", &fx->ssr_max_distance, 1.0f, 50.0f, "%.2f", 0);
-            igSliderFloat("SSR Floor Rough", &fx->ssr_floor_roughness, 0.0f, 1.0f, "%.2f", 0);
-        }
+
+        _begin_effect_group("Bloom", &fx->bloom_enabled);
+        igSliderFloat("Bloom Strength", &fx->bloom_strength, 0.0f, 1.0f, "%.3f", 0);
+        igSliderFloat("Bloom Threshold", &fx->bloom_threshold, 0.0f, 8.0f, "%.2f", 0);
+        _end_effect_group();
+
+        _begin_effect_group("SSAO", &fx->ssao_enabled);
+        igSliderFloat("SSAO Radius", &fx->ssao_radius, 0.05f, 5.0f, "%.2f", 0);
+        igSliderFloat("SSAO Strength", &fx->ssao_strength, 0.0f, 1.0f, "%.2f", 0);
+        _end_effect_group();
+
+        _begin_effect_group("SSR", &fx->ssr_enabled);
+        igSliderFloat("SSR Strength", &fx->ssr_strength, 0.0f, 2.0f, "%.2f", 0);
+        igSliderFloat("SSR Distance", &fx->ssr_max_distance, 1.0f, 50.0f, "%.2f", 0);
+        igSliderFloat("SSR Floor Rough", &fx->ssr_floor_roughness, 0.0f, 1.0f, "%.2f", 0);
+        _end_effect_group();
+
         igCheckbox("Normals G-buffer", &fx->normals_enabled);
         igSliderFloat("Spec AA", &engine->specular_aa_strength, 0.0f, 2.0f, "%.2f", 0);
     }
@@ -1163,30 +1190,35 @@ static void _engine_gui_panel(Engine* engine) {
     if (engine->postfx &&
         igCollapsingHeader_TreeNodeFlags("Finishing", ImGuiTreeNodeFlags_DefaultOpen)) {
         PostFX* fx = engine->postfx;
-        igCheckbox("Vignette", &fx->vignette_enabled);
-        if (fx->vignette_enabled) {
-            igSliderFloat("Vig Strength", &fx->vignette_strength, 0.0f, 1.0f, "%.2f", 0);
-            igSliderFloat("Vig Radius", &fx->vignette_radius, 0.0f, 1.0f, "%.2f", 0);
-        }
-        igCheckbox("Sharpen", &fx->sharpen_enabled);
-        if (fx->sharpen_enabled)
-            igSliderFloat("Sharpen Amount", &fx->sharpen_strength, 0.0f, 3.0f, "%.2f", 0);
-        igCheckbox("Grain", &fx->grain_enabled);
-        if (fx->grain_enabled)
-            igSliderFloat("Grain Amount", &fx->grain_strength, 0.0f, 0.3f, "%.3f", 0);
-        igCheckbox("Color Grade", &fx->grade_enabled);
-        if (fx->grade_enabled) {
-            igDragFloat3("Lift", fx->grade_lift, 0.005f, -1.0f, 1.0f, "%.3f", 0);
-            igDragFloat3("Gamma", fx->grade_gamma, 0.01f, 0.1f, 4.0f, "%.3f", 0);
-            igDragFloat3("Gain", fx->grade_gain, 0.01f, 0.0f, 4.0f, "%.3f", 0);
-        }
-        igCheckbox("Depth of Field", &fx->dof_enabled);
-        if (fx->dof_enabled) {
-            igCheckbox("Autofocus", &fx->dof_autofocus);
-            igSliderFloat("Focus Dist", &fx->dof_focus_distance, 0.0f, 100.0f, "%.2f", 0);
-            igSliderFloat("Focus Range", &fx->dof_focus_range, 0.1f, 100.0f, "%.2f", 0);
-            igSliderFloat("Max CoC", &fx->dof_max_coc, 0.0f, 40.0f, "%.1f", 0);
-        }
+
+        _begin_effect_group("Vignette", &fx->vignette_enabled);
+        igSliderFloat("Vig Strength", &fx->vignette_strength, 0.0f, 1.0f, "%.2f", 0);
+        igSliderFloat("Vig Radius", &fx->vignette_radius, 0.0f, 1.0f, "%.2f", 0);
+        _end_effect_group();
+
+        _begin_effect_group("Sharpen", &fx->sharpen_enabled);
+        igSliderFloat("Sharpen Amount", &fx->sharpen_strength, 0.0f, 3.0f, "%.2f", 0);
+        _end_effect_group();
+
+        _begin_effect_group("Grain", &fx->grain_enabled);
+        igSliderFloat("Grain Amount", &fx->grain_strength, 0.0f, 0.3f, "%.3f", 0);
+        _end_effect_group();
+
+        _begin_effect_group("Color Grade", &fx->grade_enabled);
+        igDragFloat3("Lift", fx->grade_lift, 0.005f, -1.0f, 1.0f, "%.3f", 0);
+        igDragFloat3("Gamma", fx->grade_gamma, 0.01f, 0.1f, 4.0f, "%.3f", 0);
+        igDragFloat3("Gain", fx->grade_gain, 0.01f, 0.0f, 4.0f, "%.3f", 0);
+        _end_effect_group();
+
+        _begin_effect_group("Depth of Field", &fx->dof_enabled);
+        igCheckbox("Autofocus", &fx->dof_autofocus);
+        // Manual focus distance is only meaningful when autofocus is off.
+        igBeginDisabled(fx->dof_autofocus);
+        igSliderFloat("Focus Dist", &fx->dof_focus_distance, 0.0f, 100.0f, "%.2f", 0);
+        igEndDisabled();
+        igSliderFloat("Focus Range", &fx->dof_focus_range, 0.1f, 100.0f, "%.2f", 0);
+        igSliderFloat("Max CoC", &fx->dof_max_coc, 0.0f, 40.0f, "%.1f", 0);
+        _end_effect_group();
     }
 
     if (camera && igCollapsingHeader_TreeNodeFlags("Camera Transform", 0)) {
