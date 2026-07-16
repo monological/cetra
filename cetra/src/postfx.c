@@ -174,6 +174,22 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     fx->debug_view = POSTFX_DEBUG_NONE;
     fx->tonemap_mode = POSTFX_TONEMAP_NEUTRAL;
 
+    // Finishing grade: a subtle vignette is a safe, pleasing default for a
+    // viewer; sharpen/grade/grain are opt-in (grain in particular reads like
+    // specular speckle on metal, and a grade is a per-shot artistic choice)
+    fx->sharpen_enabled = false;
+    fx->sharpen_strength = 0.5f;
+    fx->grade_enabled = false;
+    glm_vec3_zero(fx->grade_lift);
+    glm_vec3_one(fx->grade_gamma);
+    glm_vec3_one(fx->grade_gain);
+    fx->vignette_enabled = true;
+    fx->vignette_strength = 0.25f;
+    fx->vignette_radius = 0.6f;
+    fx->grain_enabled = false;
+    fx->grain_strength = 0.04f;
+    fx->frame_index = 0;
+
     // The HDR resolve target must be RGBA16F to match the MSAA source
     // (multisample blits require identical formats); the bloom chain never
     // reads alpha, so the cheaper packed-float format halves its bandwidth
@@ -304,6 +320,25 @@ void free_postfx(PostFX* fx) {
     glDeleteBuffers(1, &fx->quad_vbo);
 
     free(fx);
+}
+
+void postfx_apply_film_look(PostFX* fx) {
+    if (!fx)
+        return;
+    fx->vignette_enabled = true;
+    fx->vignette_strength = 0.5f;
+    fx->vignette_radius = 0.55f;
+    fx->grain_enabled = true;
+    fx->grain_strength = 0.09f;
+    fx->sharpen_enabled = true;
+    // Kept gentle on purpose: the unsharp mask amplifies this model's fine
+    // scratched-metal specular into bright edge halos, so pushing it harder
+    // reads as speckle. Punch comes from the vignette + grain instead.
+    fx->sharpen_strength = 0.25f;
+    fx->grade_enabled = true;
+    glm_vec3_copy((vec3){0.0f, 0.0f, 0.01f}, fx->grade_lift); // whisper-cool shadows
+    glm_vec3_one(fx->grade_gamma);
+    glm_vec3_copy((vec3){1.05f, 1.0f, 0.95f}, fx->grade_gain); // warm highlights
 }
 
 bool postfx_wants_normals(const PostFX* fx) {
@@ -501,11 +536,12 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         glBindTexture(GL_TEXTURE_2D, have_normals ? fx->normal_texture : 0);
         glActiveTexture(GL_TEXTURE4);
         glBindTexture(GL_TEXTURE_2D, ssr_active ? fx->ssr_texture : 0);
-        uniform_set_float(fx->tonemap_program->uniforms, "exposure", fx->exposure);
-        uniform_set_float(fx->tonemap_program->uniforms, "bloomStrength", fx->bloom_strength);
-        uniform_set_int(fx->tonemap_program->uniforms, "bloomEnabled", fx->bloom_enabled ? 1 : 0);
-        uniform_set_int(fx->tonemap_program->uniforms, "aoEnabled", fx->ssao_enabled ? 1 : 0);
-        uniform_set_float(fx->tonemap_program->uniforms, "aoStrength", fx->ssao_strength);
+        UniformManager* tm = fx->tonemap_program->uniforms;
+        uniform_set_float(tm, "exposure", fx->exposure);
+        uniform_set_float(tm, "bloomStrength", fx->bloom_strength);
+        uniform_set_int(tm, "bloomEnabled", fx->bloom_enabled ? 1 : 0);
+        uniform_set_int(tm, "aoEnabled", fx->ssao_enabled ? 1 : 0);
+        uniform_set_float(tm, "aoStrength", fx->ssao_strength);
         // Suppress debug views whose source buffer was not produced, and
         // say so once per requested view rather than silently every frame
         PostFXDebugView debug_view = fx->debug_view;
@@ -520,8 +556,24 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             }
             debug_view = POSTFX_DEBUG_NONE;
         }
-        uniform_set_int(fx->tonemap_program->uniforms, "debugView", (int)debug_view);
-        uniform_set_int(fx->tonemap_program->uniforms, "tonemapMode", (int)mode);
+        uniform_set_int(tm, "debugView", (int)debug_view);
+        uniform_set_int(tm, "tonemapMode", (int)mode);
+
+        // Finishing grade (sharpen -> grade -> vignette -> gamma -> grain)
+        const float texel[2] = {1.0f / (float)fx->out_width, 1.0f / (float)fx->out_height};
+        uniform_set_vec2(tm, "texelSize", texel);
+        uniform_set_int(tm, "sharpenEnabled", fx->sharpen_enabled ? 1 : 0);
+        uniform_set_float(tm, "sharpenStrength", fx->sharpen_strength);
+        uniform_set_int(tm, "gradeEnabled", fx->grade_enabled ? 1 : 0);
+        uniform_set_vec3(tm, "gradeLift", fx->grade_lift);
+        uniform_set_vec3(tm, "gradeGamma", fx->grade_gamma);
+        uniform_set_vec3(tm, "gradeGain", fx->grade_gain);
+        uniform_set_int(tm, "vignetteEnabled", fx->vignette_enabled ? 1 : 0);
+        uniform_set_float(tm, "vignetteStrength", fx->vignette_strength);
+        uniform_set_float(tm, "vignetteRadius", fx->vignette_radius);
+        uniform_set_int(tm, "grainEnabled", fx->grain_enabled ? 1 : 0);
+        uniform_set_float(tm, "grainStrength", fx->grain_strength);
+        uniform_set_float(tm, "grainSeed", (float)fx->frame_index);
         draw_fullscreen_quad(fx->quad_vao);
 
         glUseProgram(0);

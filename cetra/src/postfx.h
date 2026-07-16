@@ -83,12 +83,31 @@ typedef struct PostFX {
     float ssr_floor_roughness; // Roughness the shadow catcher publishes
     PostFXDebugView debug_view;
     PostFXTonemapMode tonemap_mode;
+
+    // Finishing grade: a "look" stack applied in the composite pass after tone
+    // mapping. All optional; with every toggle off the frame is unchanged.
+    bool sharpen_enabled;
+    float sharpen_strength; // Unsharp-mask amount
+    bool grade_enabled;
+    vec3 grade_lift;  // Raises shadows (0 = none)
+    vec3 grade_gamma; // Per-channel midtone curve (1 = none)
+    vec3 grade_gain;  // Scales highlights (1 = none)
+    bool vignette_enabled;
+    float vignette_strength; // Edge darkening, 0..1
+    float vignette_radius;   // Fraction of the half-diagonal kept bright
+    bool grain_enabled;
+    float grain_strength;
+    int frame_index; // Copied from engine->total_frames; seeds deterministic grain
 } PostFX;
 
 // width/height are the display (downsample-target) size; ss_scale supersamples
 // the internal render + post chain by that integer factor (1 = off).
 PostFX* create_postfx(int width, int height, int ss_scale);
 void free_postfx(PostFX* fx);
+
+// Enable the whole finishing stack at a cinematic "film" look (stronger
+// vignette, visible grain, extra sharpen, teal-cool shadows / warm highlights).
+void postfx_apply_film_look(PostFX* fx);
 
 // Resolve msaa_fbo, run SSAO and bloom, and tone map (fx->tonemap_mode) into
 // target_fbo (0 = default framebuffer). projection is the camera projection

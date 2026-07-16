@@ -86,6 +86,16 @@ typedef struct {
     float ssr_strength;                // SSR strength override (-1 = default)
     float specular_aa;                 // Specular AA strength override (-1 = default)
     int ssaa;                          // Supersampling factor (0 = keep engine default)
+    // Finishing grade (-1 = keep engine default; >=0 enables + sets)
+    int film_preset; // --film: enable the whole finishing stack at sane defaults
+    float vignette;
+    int no_vignette; // Force the default vignette off
+    float grain;
+    float sharpen;
+    int grade_set; // A grade component was given -> enable the grade
+    float grade_lift[3];
+    float grade_gamma[3];
+    float grade_gain[3];
     int width;
     int height;
     int headless;
@@ -126,6 +136,12 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --no-specular-aa   Disable specular anti-aliasing\n");
     fprintf(stderr, "      --ssaa <int>       Supersampling factor (default: 1 = off; 2 = 2x SSAA)\n");
     fprintf(stderr, "      --no-ssaa          Disable supersampling (render at 1x)\n");
+    fprintf(stderr, "      --film             Cinematic finish preset (vignette+grain+sharpen+grade)\n");
+    fprintf(stderr, "      --vignette <s>     Vignette strength (enables it; default on ~0.25)\n");
+    fprintf(stderr, "      --no-vignette      Disable the default vignette\n");
+    fprintf(stderr, "      --grain <s>        Film grain strength (enables it)\n");
+    fprintf(stderr, "      --sharpen <s>      Unsharp-mask strength (enables it)\n");
+    fprintf(stderr, "      --grade-lift/gamma/gain r,g,b  Colour grade (enables it)\n");
     fprintf(stderr, "  -D, --distance <m>     Camera distance from model (default: auto)\n");
     fprintf(stderr, "  -a, --anim <path>      Animation file (can be repeated)\n");
     fprintf(stderr, "  -s, --source <path>    Source skeleton for retargeting (T-pose)\n");
@@ -149,6 +165,11 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->height = DEFAULT_HEIGHT;
     args->specular_aa = -1.0f;    // -1 = keep the engine default
     args->ssr_strength = -1.0f;   // -1 = keep the engine default
+    args->vignette = -1.0f;
+    args->grain = -1.0f;
+    args->sharpen = -1.0f;
+    args->grade_gamma[0] = args->grade_gamma[1] = args->grade_gamma[2] = 1.0f;
+    args->grade_gain[0] = args->grade_gain[1] = args->grade_gain[2] = 1.0f;
     args->light_size = -1.0f;     // -1 = scene-radius default
     args->shadow_softness = -1.0f; // -1 = keep the engine default
 
@@ -330,6 +351,43 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 args->ssaa = 1;
         } else if (strcmp(argv[i], "--no-ssaa") == 0) {
             args->ssaa = 1;
+        } else if (strcmp(argv[i], "--film") == 0) {
+            args->film_preset = 1;
+        } else if (strcmp(argv[i], "--vignette") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->vignette = (float)atof(argv[i]);
+        } else if (strcmp(argv[i], "--no-vignette") == 0) {
+            args->no_vignette = 1;
+        } else if (strcmp(argv[i], "--grain") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->grain = (float)atof(argv[i]);
+        } else if (strcmp(argv[i], "--sharpen") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->sharpen = (float)atof(argv[i]);
+        } else if (strcmp(argv[i], "--grade-lift") == 0 || strcmp(argv[i], "--grade-gamma") == 0 ||
+                   strcmp(argv[i], "--grade-gain") == 0) {
+            const char* flag = argv[i];
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an r,g,b argument\n", flag);
+                return -1;
+            }
+            float* dst = strcmp(flag, "--grade-lift") == 0     ? args->grade_lift
+                         : strcmp(flag, "--grade-gamma") == 0  ? args->grade_gamma
+                                                              : args->grade_gain;
+            if (sscanf(argv[i], "%f,%f,%f", &dst[0], &dst[1], &dst[2]) != 3) {
+                fprintf(stderr, "Error: %s expects r,g,b (e.g. 1.0,0.95,0.9)\n", flag);
+                return -1;
+            }
+            args->grade_set = 1;
         } else if (strcmp(argv[i], "--no-springs") == 0) {
             args->no_springs = 1;
         } else if (strcmp(argv[i], "-D") == 0 || strcmp(argv[i], "--distance") == 0) {
@@ -740,6 +798,35 @@ int main(int argc, char** argv) {
     }
     if (args.specular_aa >= 0.0f) {
         engine->specular_aa_strength = args.specular_aa;
+    }
+    if (engine->postfx) {
+        PostFX* fx = engine->postfx;
+        // --film applies the whole finishing look first, so individual
+        // finishing flags below can still override any part of it.
+        if (args.film_preset) {
+            postfx_apply_film_look(fx);
+        }
+        if (args.no_vignette) {
+            fx->vignette_enabled = false;
+        }
+        if (args.vignette >= 0.0f) {
+            fx->vignette_enabled = true;
+            fx->vignette_strength = args.vignette;
+        }
+        if (args.grain >= 0.0f) {
+            fx->grain_enabled = true;
+            fx->grain_strength = args.grain;
+        }
+        if (args.sharpen >= 0.0f) {
+            fx->sharpen_enabled = true;
+            fx->sharpen_strength = args.sharpen;
+        }
+        if (args.grade_set) {
+            fx->grade_enabled = true;
+            glm_vec3_copy(args.grade_lift, fx->grade_lift);
+            glm_vec3_copy(args.grade_gamma, fx->grade_gamma);
+            glm_vec3_copy(args.grade_gain, fx->grade_gain);
+        }
     }
     if (args.render_mode > 0) {
         engine->current_render_mode = (RenderMode)args.render_mode;

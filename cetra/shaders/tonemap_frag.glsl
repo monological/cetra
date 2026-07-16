@@ -20,6 +20,23 @@ uniform int debugView;
 // 1 = ACES, 2 = PBR Neutral (passthrough frames are blitted by postfx_run
 // and never reach this pass)
 uniform int tonemapMode;
+uniform vec2 texelSize; // Display-pixel size, for the sharpen taps
+
+// Finishing grade — a "look" stack applied after tone mapping. Each stage is
+// gated by its own toggle; with all off the output is the plain tonemapped
+// frame. Order: sharpen -> grade -> vignette -> gamma -> grain.
+uniform int sharpenEnabled;
+uniform float sharpenStrength;
+uniform int gradeEnabled;
+uniform vec3 gradeLift;  // Black point / shadow raise (0 = none)
+uniform vec3 gradeGamma; // Per-channel midtone curve (1 = none)
+uniform vec3 gradeGain;  // White point / highlight scale (1 = none)
+uniform int vignetteEnabled;
+uniform float vignetteStrength;
+uniform float vignetteRadius;
+uniform int grainEnabled;
+uniform float grainStrength;
+uniform float grainSeed; // Per-frame, deterministic across equal --frames runs
 
 // ACES filmic fit (Narkowicz 2015). High contrast: crushes shadows,
 // desaturates highlights — the cinematic look.
@@ -53,12 +70,21 @@ vec3 pbrNeutralTonemap(vec3 color)
     return mix(color, newPeak * vec3(1.0), g);
 }
 
+// Scene HDR sample -> tonemapped LDR-linear [0,1], applying the shared AO
+// factor and bloom addition (the same order the composite uses). Sharpen
+// neighbour taps reuse the centre's aoFactor/bloomAdd so the mask measures
+// scene edges, not AO/bloom gradients.
+vec3 sceneToToned(vec3 hdr, float aoFactor, vec3 bloomAdd)
+{
+    // Sanitize a +INF texel (half-float overflow upstream) — both tonemap
+    // curves turn INF into NaN, which displays as a black pixel
+    vec3 c = min(hdr, vec3(60000.0)) * aoFactor + bloomAdd;
+    c *= exposure;
+    return tonemapMode == 1 ? acesTonemap(c) : pbrNeutralTonemap(c);
+}
+
 void main()
 {
-    // Sanitized: a +INF texel (half-float overflow anywhere upstream) turns
-    // both tonemap curves into NaN, which displays as a black pixel
-    vec3 color = min(texture(hdrTex, TexCoords).rgb, vec3(60000.0));
-
     if (debugView == 1) {
         FragColor = vec4(vec3(texture(aoTex, TexCoords).r), 1.0);
         return;
@@ -75,20 +101,54 @@ void main()
         FragColor = vec4(pow(clamp(ssr, 0.0, 1.0), vec3(1.0 / 2.2)), 1.0);
         return;
     }
-    if (aoEnabled == 1) {
-        // Occlude before adding bloom: bloom models lens scatter, which
-        // happens after the light already left the scene
-        float ao = texture(aoTex, TexCoords).r;
-        color *= mix(1.0, ao, aoStrength);
+
+    // Occlude before adding bloom: bloom models lens scatter, which happens
+    // after the light already left the scene
+    float aoFactor = 1.0;
+    if (aoEnabled == 1)
+        aoFactor = mix(1.0, texture(aoTex, TexCoords).r, aoStrength);
+    vec3 bloomAdd = vec3(0.0);
+    if (bloomEnabled == 1)
+        bloomAdd = bloomStrength * texture(bloomTex, TexCoords).rgb;
+
+    vec3 color = sceneToToned(texture(hdrTex, TexCoords).rgb, aoFactor, bloomAdd);
+
+    // Sharpen: unsharp mask on the tonemapped result (4-tap cross)
+    if (sharpenEnabled == 1) {
+        vec3 blur =
+            sceneToToned(texture(hdrTex, TexCoords + vec2(texelSize.x, 0.0)).rgb, aoFactor, bloomAdd) +
+            sceneToToned(texture(hdrTex, TexCoords - vec2(texelSize.x, 0.0)).rgb, aoFactor, bloomAdd) +
+            sceneToToned(texture(hdrTex, TexCoords + vec2(0.0, texelSize.y)).rgb, aoFactor, bloomAdd) +
+            sceneToToned(texture(hdrTex, TexCoords - vec2(0.0, texelSize.y)).rgb, aoFactor, bloomAdd);
+        color = clamp(color + sharpenStrength * (color - blur * 0.25), 0.0, 1.0);
     }
 
-    if (bloomEnabled == 1) {
-        color += bloomStrength * texture(bloomTex, TexCoords).rgb;
+    // Colour grade: lift/gamma/gain (identity at the defaults)
+    if (gradeEnabled == 1) {
+        color = gradeLift + color * (gradeGain - gradeLift);
+        color = pow(max(color, 0.0), 1.0 / gradeGamma);
     }
 
-    color *= exposure;
-    color = tonemapMode == 1 ? acesTonemap(color) : pbrNeutralTonemap(color);
+    // Vignette: radial edge darkening. 0.7071 is the centre-to-corner UV
+    // distance, so radius is the fraction of that kept fully bright.
+    if (vignetteEnabled == 1) {
+        float d = length(TexCoords - 0.5);
+        float falloff = smoothstep(vignetteRadius * 0.7071, 0.7071, d);
+        color *= 1.0 - vignetteStrength * falloff;
+    }
+
+    // Gamma-encode to display space
     color = pow(clamp(color, 0.0, 1.0), vec3(1.0 / 2.2));
+
+    // Film grain: display-space, weighted toward midtones (invisible in flat
+    // black/white), animated by a deterministic per-frame seed
+    if (grainEnabled == 1) {
+        float n =
+            fract(sin(dot(gl_FragCoord.xy + grainSeed, vec2(12.9898, 78.233))) * 43758.5453) - 0.5;
+        float luma = dot(color, vec3(0.299, 0.587, 0.114));
+        float w = 1.0 - abs(2.0 * luma - 1.0);
+        color = clamp(color + n * grainStrength * w, 0.0, 1.0);
+    }
 
     FragColor = vec4(color, 1.0);
 }

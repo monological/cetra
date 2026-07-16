@@ -1227,6 +1227,70 @@ void render_nuklear_gui(Engine* engine) {
 
                 nk_property_float(engine->nk_ctx, "Spec AA:", 0.0f,
                                   &engine->specular_aa_strength, 2.0f, 0.1f, 0.02f);
+
+                // Finishing grade
+                nk_layout_row_dynamic(engine->nk_ctx, 10, 1);
+                nk_spacing(engine->nk_ctx, 1);
+                nk_layout_row_dynamic(engine->nk_ctx, 20, 1);
+                nk_label(engine->nk_ctx, "Finishing", NK_TEXT_LEFT);
+
+                nk_layout_row_dynamic(engine->nk_ctx, 25, 1);
+                if (nk_button_label(engine->nk_ctx,
+                                    fx->vignette_enabled ? "Vignette: On" : "Vignette: Off")) {
+                    fx->vignette_enabled = !fx->vignette_enabled;
+                }
+                if (fx->vignette_enabled) {
+                    nk_property_float(engine->nk_ctx, "Vig Strength:", 0.0f,
+                                      &fx->vignette_strength, 1.0f, 0.05f, 0.01f);
+                    nk_property_float(engine->nk_ctx, "Vig Radius:", 0.0f, &fx->vignette_radius,
+                                      1.0f, 0.05f, 0.01f);
+                }
+
+                if (nk_button_label(engine->nk_ctx,
+                                    fx->sharpen_enabled ? "Sharpen: On" : "Sharpen: Off")) {
+                    fx->sharpen_enabled = !fx->sharpen_enabled;
+                }
+                if (fx->sharpen_enabled) {
+                    nk_property_float(engine->nk_ctx, "Sharpen:", 0.0f, &fx->sharpen_strength,
+                                      3.0f, 0.05f, 0.01f);
+                }
+
+                if (nk_button_label(engine->nk_ctx,
+                                    fx->grain_enabled ? "Grain: On" : "Grain: Off")) {
+                    fx->grain_enabled = !fx->grain_enabled;
+                }
+                if (fx->grain_enabled) {
+                    nk_property_float(engine->nk_ctx, "Grain:", 0.0f, &fx->grain_strength, 0.3f,
+                                      0.005f, 0.002f);
+                }
+
+                if (nk_button_label(engine->nk_ctx,
+                                    fx->grade_enabled ? "Grade: On" : "Grade: Off")) {
+                    fx->grade_enabled = !fx->grade_enabled;
+                }
+                if (fx->grade_enabled) {
+                    // Three RGB rows: lift (shadows), gamma (mids), gain (highs).
+                    // Labels must be unique — Nuklear keys widget state by name.
+                    nk_layout_row_dynamic(engine->nk_ctx, 25, 3);
+                    nk_property_float(engine->nk_ctx, "LiftR", -1.0f, &fx->grade_lift[0], 1.0f,
+                                      0.02f, 0.005f);
+                    nk_property_float(engine->nk_ctx, "LiftG", -1.0f, &fx->grade_lift[1], 1.0f,
+                                      0.02f, 0.005f);
+                    nk_property_float(engine->nk_ctx, "LiftB", -1.0f, &fx->grade_lift[2], 1.0f,
+                                      0.02f, 0.005f);
+                    nk_property_float(engine->nk_ctx, "GammaR", 0.1f, &fx->grade_gamma[0], 4.0f,
+                                      0.02f, 0.005f);
+                    nk_property_float(engine->nk_ctx, "GammaG", 0.1f, &fx->grade_gamma[1], 4.0f,
+                                      0.02f, 0.005f);
+                    nk_property_float(engine->nk_ctx, "GammaB", 0.1f, &fx->grade_gamma[2], 4.0f,
+                                      0.02f, 0.005f);
+                    nk_property_float(engine->nk_ctx, "GainR", 0.0f, &fx->grade_gain[0], 4.0f,
+                                      0.02f, 0.005f);
+                    nk_property_float(engine->nk_ctx, "GainG", 0.0f, &fx->grade_gain[1], 4.0f,
+                                      0.02f, 0.005f);
+                    nk_property_float(engine->nk_ctx, "GainB", 0.0f, &fx->grade_gain[2], 4.0f,
+                                      0.02f, 0.005f);
+                }
             }
 
             // bot margin
@@ -1358,6 +1422,9 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode, bool draw_gui) 
     // Only PBR frames are linear HDR and get SSAO + bloom + exposure + tone
     // mapping; debug render modes emit display-ready colors and are copied
     // unchanged. The GUI draws after so it is never tone mapped.
+    // Seed the film grain off the frame counter so it animates live yet stays
+    // deterministic across equal --frames runs.
+    engine->postfx->frame_index = (int)engine->total_frames;
     postfx_run(engine->postfx, engine->framebuffer, 0, frame_mode == RENDER_MODE_PBR,
                engine->normals_this_frame, engine->projection_matrix);
 
