@@ -36,7 +36,9 @@ typedef struct ShadowSystem {
     float far_plane;
     GLuint shadow_map_array;
     bool initialized;
-    bool enabled; // Master switch: off skips the depth pass and all receives
+    bool enabled;        // Master switch: off skips the depth pass and all receives
+    bool pcss_enabled;   // Contact-hardening penumbra (off = fixed 3x3 PCF)
+    float pcss_softness; // Multiplier on each light's emitter size
 } ShadowSystem;
 
 // Creation and destruction

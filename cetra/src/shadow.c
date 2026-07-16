@@ -34,6 +34,8 @@ ShadowSystem* create_shadow_system(int default_map_size) {
     system->depth_program = NULL;
     system->initialized = false;
     system->enabled = true;
+    system->pcss_enabled = false; // library default off; the app opts in
+    system->pcss_softness = 1.0f;
 
     for (int i = 0; i < MAX_SHADOW_LIGHTS; i++) {
         system->casters[i].initialized = false;
@@ -240,6 +242,19 @@ void bind_shadow_maps_to_program(ShadowSystem* system, ShaderProgram* program,
     if (loc >= 0)
         glUniform2f(loc, texel_size, texel_size);
 
+    // Scalar shadow uniforms are shared across casters; set once (the bias
+    // was previously written inside the loop, where the last caster won)
+    uniform_set_float(u, "shadowBias", system->casters[0].bias);
+
+    // PCSS controls. The ortho projection is symmetric, so the frustum
+    // width is 2x ortho_size and depth linearizes over [near, far]
+    uniform_set_int(u, "pcssEnabled", system->pcss_enabled ? 1 : 0);
+    uniform_set_float(u, "pcssSoftness", system->pcss_softness);
+    uniform_set_float(u, "shadowFrustumWidth", 2.0f * system->ortho_size);
+    loc = uniform_location(u, "shadowNearFar");
+    if (loc >= 0)
+        glUniform2f(loc, system->near_plane, system->far_plane);
+
     for (size_t i = 0; i < system->active_count && i < MAX_SHADOW_LIGHTS; i++) {
         ShadowCaster* caster = &system->casters[i];
 
@@ -252,8 +267,6 @@ void bind_shadow_maps_to_program(ShadowSystem* system, ShaderProgram* program,
 
         snprintf(name, sizeof(name), "shadowLightIndex[%zu]", i);
         uniform_set_int(u, name, shadow_light_indices ? shadow_light_indices[i] : (int)i);
-
-        uniform_set_float(u, "shadowBias", caster->bias);
     }
 }
 

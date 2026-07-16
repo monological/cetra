@@ -1131,11 +1131,20 @@ void render_nuklear_gui(Engine* engine) {
                                   &current_scene->ibl->intensity, 4.0f, 0.1f, 0.05f);
 
                 if (current_scene->shadow_system) {
-                    if (nk_button_label(engine->nk_ctx, current_scene->shadow_system->enabled
-                                                            ? "Shadows: On"
-                                                            : "Shadows: Off")) {
-                        current_scene->shadow_system->enabled =
-                            !current_scene->shadow_system->enabled;
+                    ShadowSystem* ss = current_scene->shadow_system;
+                    if (nk_button_label(engine->nk_ctx,
+                                        ss->enabled ? "Shadows: On" : "Shadows: Off")) {
+                        ss->enabled = !ss->enabled;
+                    }
+                    if (ss->enabled) {
+                        if (nk_button_label(engine->nk_ctx,
+                                            ss->pcss_enabled ? "PCSS: On" : "PCSS: Off")) {
+                            ss->pcss_enabled = !ss->pcss_enabled;
+                        }
+                        if (ss->pcss_enabled) {
+                            nk_property_float(engine->nk_ctx, "Shadow Softness:", 0.0f,
+                                              &ss->pcss_softness, 4.0f, 0.1f, 0.02f);
+                        }
                     }
                 }
 

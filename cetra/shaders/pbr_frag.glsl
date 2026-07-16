@@ -113,6 +113,14 @@ uniform int shadowLightIndex[MAX_SHADOW_LIGHTS];
 uniform int numShadowLights;
 uniform float shadowBias;
 uniform vec2 shadowTexelSize;
+// PCSS (contact-hardening shadows). When disabled the 3x3 PCF fallback
+// runs, bit-identical to the pre-PCSS path. The ortho shadow projection
+// stores depth linearly in [near,far], so the blocker/receiver separation
+// that sets the penumbra width is measured on linearized depths.
+uniform int pcssEnabled;
+uniform float pcssSoftness;      // Multiplier on the light's angular size
+uniform float shadowFrustumWidth; // World units across the ortho shadow map
+uniform vec2 shadowNearFar;       // Ortho near/far planes (world units)
 
 // IBL (Image-Based Lighting) uniforms
 uniform samplerCube irradianceMap;
@@ -259,8 +267,51 @@ float calculateAttenuation(float distance, float constant, float linear, float q
     return 1.0 / (constant + linear * distance + quadratic * (distance * distance));
 }
 
-// PCF soft shadow calculation
-float calculateShadow(int shadowIndex, vec3 worldPos, float NdotL) {
+// 16-tap Poisson disk (unit radius) for the PCSS blocker search and filter.
+// Sampled UNROTATED: a per-pixel rotation decorrelates the pattern between
+// neighbours, which turns the 16-tap quantization into per-pixel shadow noise
+// — invisible on diffuse but riding the sharp specular lobe into a field of
+// bright speckle on the metal. An unrotated disk gives a spatially coherent,
+// smooth penumbra instead; the modest radius cap keeps 16 taps free of banding.
+const vec2 POISSON16[16] = vec2[](
+    vec2(-0.9420, -0.3991), vec2(0.9456, -0.7689), vec2(-0.0942, -0.9294),
+    vec2(0.3450, 0.2939), vec2(-0.9159, 0.4577), vec2(-0.8154, -0.8791),
+    vec2(-0.3828, 0.2768), vec2(0.9748, 0.7565), vec2(0.4432, -0.9751),
+    vec2(0.5374, -0.4737), vec2(-0.2650, -0.4189), vec2(0.7920, 0.1909),
+    vec2(-0.2419, 0.9971), vec2(-0.8141, 0.9144), vec2(0.1998, 0.7864),
+    vec2(0.1438, -0.1410));
+
+// Max PCSS filter/search radius in shadow-UV. Raising this past ~10 texels
+// (2048 map) reintroduces shadow noise that rides the specular into speckle
+// with a 16-tap unrotated disk — a hard cleanliness cap, not a look knob.
+const float PCSS_MAX_RADIUS_UV = 0.005;
+// Penumbra growth per unit of blocker-receiver separation.
+const float PCSS_PENUMBRA_SCALE = 4.0;
+
+// Ortho shadow depth is linear in [near,far]; recover world-space distance
+// from the light so blocker/receiver separation is a real length
+float linearizeOrthoDepth(float d01) {
+    return shadowNearFar.x + d01 * (shadowNearFar.y - shadowNearFar.x);
+}
+
+// Fixed 3x3 PCF: the pre-PCSS path, kept bit-identical as the fallback
+float shadowPCF3x3(int shadowIndex, vec2 uv, float currentDepth, float bias) {
+    float shadow = 0.0;
+    for (int x = -1; x <= 1; ++x) {
+        for (int y = -1; y <= 1; ++y) {
+            vec2 offset = vec2(float(x), float(y)) * shadowTexelSize;
+            float pcfDepth = texture(shadowMaps, vec3(uv + offset, float(shadowIndex))).r;
+            shadow += currentDepth - bias > pcfDepth ? 1.0 : 0.0;
+        }
+    }
+    return 1.0 - (shadow / 9.0);
+}
+
+// Contact-hardening soft shadow (PCSS). lightSize is the scalar emitter size
+// (world units of the emitter disk); larger = softer, faster-growing penumbra
+// with blocker distance. The algorithm is isotropic, so callers collapse a
+// rectangular emitter to a single dimension.
+float calculateShadow(int shadowIndex, vec3 worldPos, float NdotL, float lightSize) {
     vec4 fragPosLightSpace = lightSpaceMatrix[shadowIndex] * vec4(worldPos, 1.0);
     vec3 projCoords = fragPosLightSpace.xyz / fragPosLightSpace.w;
     projCoords = projCoords * 0.5 + 0.5;
@@ -273,16 +324,54 @@ float calculateShadow(int shadowIndex, vec3 worldPos, float NdotL) {
     float bias = max(shadowBias * (1.0 - NdotL), shadowBias * 0.1);
     float currentDepth = projCoords.z;
 
-    // PCF 3x3 kernel
-    float shadow = 0.0;
-    for (int x = -1; x <= 1; ++x) {
-        for (int y = -1; y <= 1; ++y) {
-            vec2 offset = vec2(float(x), float(y)) * shadowTexelSize;
-            float pcfDepth = texture(shadowMaps, vec3(projCoords.xy + offset, float(shadowIndex))).r;
-            shadow += currentDepth - bias > pcfDepth ? 1.0 : 0.0;
+    if (pcssEnabled == 0) {
+        return shadowPCF3x3(shadowIndex, projCoords.xy, currentDepth, bias);
+    }
+
+    // The emitter as a fraction of the shadow map. Capped low so the 16 taps
+    // stay dense enough to be free of banding, and so the penumbra saturates
+    // cleanly rather than growing past what the tap budget can resolve; the
+    // penumbra still grows with blocker distance for contact hardening.
+    float lightSizeUV =
+        clamp(pcssSoftness * lightSize / shadowFrustumWidth, 0.0, PCSS_MAX_RADIUS_UV);
+    if (lightSizeUV < shadowTexelSize.x) {
+        // Emitter smaller than a texel: no meaningful penumbra, stay crisp
+        return shadowPCF3x3(shadowIndex, projCoords.xy, currentDepth, bias);
+    }
+
+    // 1. Blocker search: average depth of texels nearer the light than the
+    //    receiver, over a disk the size of the emitter's shadow footprint
+    float zReceiver = linearizeOrthoDepth(currentDepth);
+    float blockerSum = 0.0;
+    float blockerCount = 0.0;
+    for (int i = 0; i < 16; i++) {
+        vec2 off = POISSON16[i] * lightSizeUV;
+        float d = texture(shadowMaps, vec3(projCoords.xy + off, float(shadowIndex))).r;
+        if (d < currentDepth - bias) {
+            blockerSum += linearizeOrthoDepth(d);
+            blockerCount += 1.0;
         }
     }
-    return 1.0 - (shadow / 9.0);
+    if (blockerCount < 0.5) {
+        return 1.0; // no blockers: fully lit
+    }
+    float zBlocker = blockerSum / blockerCount;
+
+    // 2. Penumbra: grows with blocker-receiver separation (feet touching the
+    //    floor stay sharp; the head 2m up casts a soft edge). Normalized by
+    //    frustum depth so the product with lightSizeUV is a clean ratio.
+    float penumbra = (zReceiver - zBlocker) / (shadowNearFar.y - shadowNearFar.x);
+    float filterRadiusUV =
+        clamp(lightSizeUV * penumbra * PCSS_PENUMBRA_SCALE, shadowTexelSize.x, PCSS_MAX_RADIUS_UV);
+
+    // 3. Variable-width PCF over the same disk
+    float shadow = 0.0;
+    for (int i = 0; i < 16; i++) {
+        vec2 off = POISSON16[i] * filterRadiusUV;
+        float d = texture(shadowMaps, vec3(projCoords.xy + off, float(shadowIndex))).r;
+        shadow += currentDepth - bias > d ? 1.0 : 0.0;
+    }
+    return 1.0 - (shadow / 16.0);
 }
 
 void main() {
@@ -615,7 +704,8 @@ void main() {
         if (lights[i].type == 0 && alphaToCoverage == 0 && i < MAX_SHADOW_LIGHTS) {
             int shadowSlot = shadowLightIndex[i];
             if (shadowSlot >= 0) {
-                shadow = calculateShadow(shadowSlot, WorldPos, NdotL);
+                shadow = calculateShadow(shadowSlot, WorldPos, NdotL,
+                                         max(lights[i].size.x, lights[i].size.y));
             }
         }
 

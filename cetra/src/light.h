@@ -51,6 +51,7 @@ void set_light_intensity(Light* light, float intensity);
 void set_light_attenuation(Light* light, float constant, float linear, float quadratic);
 void set_light_cutoff(Light* light, float cutOff, float outerCutOff);
 void set_light_cast_shadows(Light* light, bool cast_shadows);
+void set_light_size(Light* light, float width, float height);
 void free_light(Light* light);
 void print_light(const Light* light);
 

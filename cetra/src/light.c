@@ -151,6 +151,12 @@ void set_light_cast_shadows(Light* light, bool cast_shadows) {
     light->cast_shadows = cast_shadows;
 }
 
+void set_light_size(Light* light, float width, float height) {
+    if (!light)
+        return;
+    glm_vec2_copy((vec2){width, height}, light->size);
+}
+
 void free_light(Light* light) {
     if (!light)
         return;

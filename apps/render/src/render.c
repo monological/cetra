@@ -73,6 +73,9 @@ typedef struct {
     int no_ground;                     // Disable skybox ground projection
     int no_key_light;                  // Pure IBL: skip the analytic key lights
     int no_shadows;                    // Keep key lights but disable shadow maps
+    int no_pcss;                       // Fixed-width PCF instead of contact-hardening
+    float light_size;                  // Emitter size override (-1 = scene default)
+    float shadow_softness;             // PCSS softness override (-1 = default)
     int no_springs;                    // Disable spring-bone secondary motion
     int no_ssao;                       // Disable screen-space ambient occlusion
     int ssao_debug;                    // Show the raw SSAO buffer
@@ -108,6 +111,9 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --no-ground        Disable HDR ground projection (infinite skybox)\n");
     fprintf(stderr, "      --no-key-light     Pure IBL lighting (no analytic lights/shadows)\n");
     fprintf(stderr, "      --no-shadows       Keep key lights but disable shadow maps\n");
+    fprintf(stderr, "      --no-pcss          Fixed-width PCF instead of contact-hardening\n");
+    fprintf(stderr, "      --light-size <f>   Emitter size for penumbra (default: scene-scaled)\n");
+    fprintf(stderr, "      --shadow-softness <f> PCSS softness multiplier (default: 1)\n");
     fprintf(stderr, "      --no-springs       Disable spring-bone secondary motion\n");
     fprintf(stderr, "      --no-ssao          Disable screen-space ambient occlusion\n");
     fprintf(stderr, "      --ssao-debug       Show the raw SSAO buffer\n");
@@ -141,8 +147,10 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     memset(args, 0, sizeof(RenderArgs));
     args->width = DEFAULT_WIDTH;
     args->height = DEFAULT_HEIGHT;
-    args->specular_aa = -1.0f;  // -1 = keep the engine default
-    args->ssr_strength = -1.0f; // -1 = keep the engine default
+    args->specular_aa = -1.0f;    // -1 = keep the engine default
+    args->ssr_strength = -1.0f;   // -1 = keep the engine default
+    args->light_size = -1.0f;     // -1 = scene-radius default
+    args->shadow_softness = -1.0f; // -1 = keep the engine default
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
@@ -272,6 +280,20 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->no_key_light = 1;
         } else if (strcmp(argv[i], "--no-shadows") == 0) {
             args->no_shadows = 1;
+        } else if (strcmp(argv[i], "--no-pcss") == 0) {
+            args->no_pcss = 1;
+        } else if (strcmp(argv[i], "--light-size") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->light_size = (float)atof(argv[i]);
+        } else if (strcmp(argv[i], "--shadow-softness") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->shadow_softness = (float)atof(argv[i]);
         } else if (strcmp(argv[i], "--no-ssao") == 0) {
             args->no_ssao = 1;
         } else if (strcmp(argv[i], "--ssao-debug") == 0) {
@@ -967,6 +989,21 @@ int main(int argc, char** argv) {
         scene->shadow_system->ortho_size = scene_radius * 2.0f;
         scene->shadow_system->near_plane = 0.1f;
         scene->shadow_system->far_plane = scene_radius * 8.0f;
+
+        // Contact-hardening shadows on by default in the viewer. The library
+        // default light size (50m) is absurd against a ~2x-scene-radius ortho
+        // frustum, so size the emitter to the scene; --light-size overrides.
+        scene->shadow_system->pcss_enabled = !args.no_pcss;
+        if (args.shadow_softness >= 0.0f) {
+            scene->shadow_system->pcss_softness = args.shadow_softness;
+        }
+        float light_size = args.light_size >= 0.0f ? args.light_size : scene_radius * 0.08f;
+        for (size_t i = 0; i < scene->light_count; i++) {
+            Light* light = scene->lights[i];
+            if (light && light->type == LIGHT_DIRECTIONAL && light->cast_shadows) {
+                set_light_size(light, light_size, light_size);
+            }
+        }
     }
 
     // Position camera to view the entire scene
