@@ -264,6 +264,11 @@ static int _setup_engine_glfw(Engine* engine) {
         return -1;
     }
 
+    log_info("OpenGL %s | GLSL %s", (const char*)glGetString(GL_VERSION),
+             (const char*)glGetString(GL_SHADING_LANGUAGE_VERSION));
+    log_info("Renderer: %s | %s", (const char*)glGetString(GL_RENDERER),
+             (const char*)glGetString(GL_VENDOR));
+
     glfwGetFramebufferSize(engine->window, &(engine->fb_width), &(engine->fb_height));
     glViewport(0, 0, engine->fb_width, engine->fb_height);
 
