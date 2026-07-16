@@ -20,26 +20,11 @@
 #include "render.h"
 #include "springbone.h"
 
-#define NK_INCLUDE_FIXED_TYPES
-#define NK_INCLUDE_STANDARD_IO
-#define NK_INCLUDE_STANDARD_VARARGS
-#define NK_INCLUDE_DEFAULT_ALLOCATOR
-#define NK_INCLUDE_VERTEX_BUFFER_OUTPUT
-#define NK_INCLUDE_FONT_BAKING
-#define NK_INCLUDE_DEFAULT_FONT
-#define NK_KEYSTATE_BASED_INPUT
-#define NK_NO_STB_RECT_PACK_IMPLEMENTATION
-#define NK_NO_STB_TRUETYPE_IMPLEMENTATION
-#define NK_IMPLEMENTATION
-#define NK_GLFW_GL3_IMPLEMENTATION
-
-#include "ext/nuklear.h"
-#include "ext/nuklear_glfw_gl3.h"
 #include "ext/log.h"
 
-// Dear ImGui via cimgui (migrating off Nuklear). CIMGUI_DEFINE_ENUMS_AND_STRUCTS
-// gives the full struct/enum definitions to C; CIMGUI_USE_GLFW/OPENGL3 (compile
-// defs from CMake) expose the backend bindings in cimgui_impl.h.
+// Dear ImGui via cimgui. CIMGUI_DEFINE_ENUMS_AND_STRUCTS gives the full
+// struct/enum definitions to C; CIMGUI_USE_GLFW/OPENGL3 (compile defs from
+// CMake) expose the GLFW + OpenGL3 backend bindings in cimgui_impl.h.
 #define CIMGUI_DEFINE_ENUMS_AND_STRUCTS
 #include "cimgui.h"
 #include "cimgui_impl.h"
@@ -215,8 +200,6 @@ void free_engine(Engine* engine) {
     ImGui_ImplGlfw_Shutdown();
     igDestroyContext(NULL);
 
-    nk_glfw3_shutdown(&engine->nk_glfw);
-
     // Destroy GLFW window
     if (engine->window) {
         glfwDestroyWindow(engine->window);
@@ -365,28 +348,12 @@ static int _setup_engine_msaa(Engine* engine) {
 }
 
 /*
- * Nuklear GUI
+ * GUI
  *
  */
 static int _setup_engine_gui(Engine* engine) {
     if (!engine || !engine->window)
         return -1;
-
-    engine->nk_ctx = nk_glfw3_init(&engine->nk_glfw, engine->window, NK_GLFW3_DEFAULT);
-
-    if (!engine->nk_ctx) {
-        log_error("Failed to initialize Nuklear context");
-        return -1; // or handle the error appropriately
-    }
-
-    struct nk_font_atlas* atlas;
-    nk_glfw3_font_stash_begin(&engine->nk_glfw, &atlas);
-    nk_glfw3_font_stash_end(&engine->nk_glfw);
-
-    nk_style_load_all_cursors(engine->nk_ctx, atlas->cursors);
-
-    // Initialize default background color
-    engine->bg = nk_rgb(28, 48, 62);
 
     // Dear ImGui, sharing the same GLFW window + GL context. install_callbacks
     // = false: the engine owns the GLFW callbacks and forwards events to the
@@ -547,13 +514,11 @@ void set_engine_scroll_callback(Engine* engine, ScrollCallback scroll_callback) 
  * Mouse and Keyboard Callbacks
  */
 
-// True when the GUI wants the pointer/keyboard this frame, so 3D input is
-// suppressed. ImGui's io flags are authoritative; the Nuklear hover check is
-// kept only while both GUIs coexist (removed in the Nuklear-removal stage).
+// True when the GUI is capturing the pointer this frame, so 3D input is
+// suppressed. Driven by ImGui's io capture flags.
 bool engine_gui_wants_mouse(const Engine* engine) {
-    if (igGetIO_Nil()->WantCaptureMouse)
-        return true;
-    return engine->nk_ctx && nk_window_is_any_hovered(engine->nk_ctx);
+    (void)engine;
+    return igGetIO_Nil()->WantCaptureMouse;
 }
 
 static bool engine_gui_wants_keyboard(void) {
@@ -565,7 +530,7 @@ static void _engine_cursor_position_callback(GLFWwindow* window, double xpos, do
         return;
 
     Engine* engine = glfwGetWindowUserPointer(window);
-    if (!engine || !engine->nk_ctx)
+    if (!engine)
         return;
 
     ImGui_ImplGlfw_CursorPosCallback(window, xpos, ypos);
@@ -600,7 +565,7 @@ static void _engine_mouse_button_callback(GLFWwindow* window, int button, int ac
         return;
 
     Engine* engine = glfwGetWindowUserPointer(window);
-    if (!engine || !engine->nk_ctx)
+    if (!engine)
         return;
 
     ImGui_ImplGlfw_MouseButtonCallback(window, button, action, mods);
@@ -1220,465 +1185,6 @@ void render_engine_gui(Engine* engine) {
     ImGui_ImplOpenGL3_RenderDrawData(igGetDrawData());
 }
 
-void render_nuklear_gui(Engine* engine) {
-    if (!engine || !engine->nk_ctx)
-        return;
-
-    // Skip if nothing to show
-    if (!engine->show_gui && !engine->show_fps)
-        return;
-
-    // Save OpenGL state
-    GLint previousViewport[4];
-    glGetIntegerv(GL_VIEWPORT, previousViewport);
-    GLboolean depthTest = glIsEnabled(GL_DEPTH_TEST);
-    GLboolean blend = glIsEnabled(GL_BLEND);
-
-    // Start Nuklear frame
-    nk_glfw3_new_frame(&engine->nk_glfw);
-
-    Camera* camera = engine->camera;
-
-    // Camera controls window (only if show_gui and camera exists)
-    if (engine->show_gui && camera) {
-        if (nk_begin(engine->nk_ctx, "Camera", nk_rect(15, 15, 250, 500),
-                     NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_SCALABLE |
-                         NK_WINDOW_MINIMIZABLE | NK_WINDOW_TITLE)) {
-
-            // Button for toggling xyz
-            nk_layout_row_dynamic(engine->nk_ctx, 30, 2);
-            if (nk_button_label(engine->nk_ctx, "Show XYZ")) {
-                set_engine_show_xyz(engine, !engine->show_xyz);
-            }
-
-            // Button for toggling wireframe
-            if (nk_button_label(engine->nk_ctx, "Show Wireframe")) {
-                set_engine_show_wireframe(engine, !engine->show_wireframe);
-            }
-
-            // Button for toggling bone X-ray
-            nk_layout_row_dynamic(engine->nk_ctx, 30, 1);
-            if (nk_button_label(engine->nk_ctx, engine->show_bones ? "Hide Bones" : "Show Bones")) {
-                engine->show_bones = !engine->show_bones;
-            }
-
-            // Button for animation play/pause
-            AnimationState* anim = get_render_animation_state();
-            if (anim) {
-                nk_layout_row_dynamic(engine->nk_ctx, 30, 1);
-                if (nk_button_label(engine->nk_ctx, anim->playing ? "Pause Animation" : "Play Animation")) {
-                    if (anim->playing) {
-                        pause_animation(anim);
-                    } else {
-                        play_animation(anim);
-                    }
-                }
-
-                // Button to recalculate bind poses from skeleton hierarchy
-                if (anim->skeleton) {
-                    nk_layout_row_dynamic(engine->nk_ctx, 30, 1);
-                    if (nk_button_label(engine->nk_ctx, "Recalc Bind Pose")) {
-                        recalculate_inverse_bind_poses(anim->skeleton);
-                    }
-                }
-
-                // Spring-bone secondary motion controls
-                if (anim->springs) {
-                    SpringBoneSystem* sb = anim->springs;
-
-                    nk_layout_row_dynamic(engine->nk_ctx, 10, 1);
-                    nk_spacing(engine->nk_ctx, 1);
-
-                    nk_layout_row_dynamic(engine->nk_ctx, 20, 1);
-                    nk_label(engine->nk_ctx, "Spring Bones", NK_TEXT_LEFT);
-
-                    nk_layout_row_dynamic(engine->nk_ctx, 25, 1);
-                    if (nk_button_label(engine->nk_ctx,
-                                        sb->enabled ? "Springs: On" : "Springs: Off")) {
-                        sb->enabled = !sb->enabled;
-                        if (sb->enabled) {
-                            spring_bone_reset(sb); // Re-enable snaps instead of lurching
-                        }
-                    }
-
-                    nk_property_float(engine->nk_ctx, "Stiffness:", 0.0f, &sb->params.stiffness,
-                                      1.0f, 0.05f, 0.005f);
-                    nk_property_float(engine->nk_ctx, "Damping:", 0.0f, &sb->params.damping, 1.0f,
-                                      0.05f, 0.005f);
-                    nk_property_float(engine->nk_ctx, "Gravity:", 0.0f, &sb->params.gravity, 30.0f,
-                                      0.5f, 0.1f);
-                }
-            }
-
-            // cam modes
-            nk_layout_row_dynamic(engine->nk_ctx, 30, 2);
-
-            // Radio button for CAMERA_MODE_FREE
-            if (nk_option_label(engine->nk_ctx, "Free Mode",
-                                engine->camera_mode == CAMERA_MODE_FREE)) {
-                engine->camera_mode = CAMERA_MODE_FREE;
-            }
-
-            // Radio button for CAMERA_MODE_ORBIT
-            if (nk_option_label(engine->nk_ctx, "Orbit Mode",
-                                engine->camera_mode == CAMERA_MODE_ORBIT)) {
-                engine->camera_mode = CAMERA_MODE_ORBIT;
-            }
-
-            // top margin
-            nk_layout_row_dynamic(engine->nk_ctx, 10, 1); // 10 pixels of vertical space
-            nk_spacing(engine->nk_ctx, 1);                // Creates a dummy widget for spacing
-
-            nk_layout_row_dynamic(engine->nk_ctx, 30, 1);
-            const char* render_modes[] = {
-                "PBR",        "Normals",         "World Pos",
-                "Tex Coords", "Tangent Space",   "Flat Color",
-                "Albedo",     "Simple Lighting", "Metallic and Roughness",
-            };
-            int selected_render_mode = engine->current_render_mode;
-            if (nk_combo_begin_label(engine->nk_ctx, render_modes[selected_render_mode],
-                                     nk_vec2(nk_widget_width(engine->nk_ctx), 200))) {
-                nk_layout_row_dynamic(engine->nk_ctx, 25, 1);
-                for (int i = 0; i < sizeof(render_modes) / sizeof(render_modes[0]); i++) {
-                    if (nk_combo_item_label(engine->nk_ctx, render_modes[i], NK_TEXT_ALIGN_LEFT)) {
-                        selected_render_mode = i;
-                    }
-                }
-                nk_combo_end(engine->nk_ctx);
-            }
-            engine->current_render_mode = selected_render_mode;
-
-            // Lighting section
-            Scene* current_scene = get_current_scene(engine);
-            if (current_scene && current_scene->light_count > 0) {
-                nk_layout_row_dynamic(engine->nk_ctx, 10, 1);
-                nk_spacing(engine->nk_ctx, 1);
-
-                nk_layout_row_dynamic(engine->nk_ctx, 20, 1);
-                nk_label(engine->nk_ctx, "Lighting", NK_TEXT_LEFT);
-
-                // Use first light's intensity as the master value
-                static float light_intensity = 3.0f;
-                float prev_intensity = light_intensity;
-
-                nk_layout_row_dynamic(engine->nk_ctx, 25, 1);
-                nk_property_float(engine->nk_ctx, "Intensity:", 0.0f, &light_intensity, 20.0f, 0.1f,
-                                  0.1f);
-
-                // Apply to all lights if changed
-                if (light_intensity != prev_intensity) {
-                    for (size_t i = 0; i < current_scene->light_count; i++) {
-                        if (current_scene->lights[i]) {
-                            current_scene->lights[i]->intensity = light_intensity;
-                        }
-                    }
-                }
-            }
-
-            // Environment/skybox section
-            if (current_scene && current_scene->render_skybox && current_scene->ibl) {
-                nk_layout_row_dynamic(engine->nk_ctx, 10, 1);
-                nk_spacing(engine->nk_ctx, 1);
-
-                nk_layout_row_dynamic(engine->nk_ctx, 20, 1);
-                nk_label(engine->nk_ctx, "Environment", NK_TEXT_LEFT);
-
-                nk_layout_row_dynamic(engine->nk_ctx, 25, 1);
-                if (nk_button_label(engine->nk_ctx, current_scene->skybox_ground_projection
-                                                        ? "Ground Projection: On"
-                                                        : "Ground Projection: Off")) {
-                    current_scene->skybox_ground_projection =
-                        !current_scene->skybox_ground_projection;
-                }
-
-                if (current_scene->skybox_ground_projection) {
-                    nk_property_float(engine->nk_ctx, "Dome Radius:", 1.0f,
-                                      &current_scene->skybox_gp_radius, 100.0f, 0.5f, 0.1f);
-                    nk_property_float(engine->nk_ctx, "Capture Height:", 0.1f,
-                                      &current_scene->skybox_gp_height, 10.0f, 0.1f, 0.05f);
-                }
-
-                nk_property_float(engine->nk_ctx, "IBL Intensity:", 0.0f,
-                                  &current_scene->ibl->intensity, 4.0f, 0.1f, 0.05f);
-
-                if (current_scene->shadow_system) {
-                    ShadowSystem* ss = current_scene->shadow_system;
-                    if (nk_button_label(engine->nk_ctx,
-                                        ss->enabled ? "Shadows: On" : "Shadows: Off")) {
-                        ss->enabled = !ss->enabled;
-                    }
-                    if (ss->enabled) {
-                        if (nk_button_label(engine->nk_ctx,
-                                            ss->pcss_enabled ? "PCSS: On" : "PCSS: Off")) {
-                            ss->pcss_enabled = !ss->pcss_enabled;
-                        }
-                        if (ss->pcss_enabled) {
-                            nk_property_float(engine->nk_ctx, "Shadow Softness:", 0.0f,
-                                              &ss->pcss_softness, 4.0f, 0.1f, 0.02f);
-                        }
-                    }
-                }
-
-                if (nk_button_label(engine->nk_ctx, current_scene->shadow_catcher
-                                                        ? "Shadow Catcher: On"
-                                                        : "Shadow Catcher: Off")) {
-                    current_scene->shadow_catcher = !current_scene->shadow_catcher;
-                }
-
-                if (current_scene->shadow_catcher) {
-                    nk_property_float(engine->nk_ctx, "Shadow Strength:", 0.0f,
-                                      &current_scene->shadow_catcher_strength, 1.0f, 0.05f,
-                                      0.01f);
-                }
-            }
-
-            // Post-processing controls
-            if (engine->postfx) {
-                PostFX* fx = engine->postfx;
-
-                nk_layout_row_dynamic(engine->nk_ctx, 10, 1);
-                nk_spacing(engine->nk_ctx, 1);
-
-                nk_layout_row_dynamic(engine->nk_ctx, 20, 1);
-                nk_label(engine->nk_ctx, "Post", NK_TEXT_LEFT);
-
-                nk_layout_row_dynamic(engine->nk_ctx, 25, 1);
-                if (nk_button_label(engine->nk_ctx, fx->tonemap_mode == POSTFX_TONEMAP_ACES
-                                                        ? "Tonemap: ACES"
-                                                        : "Tonemap: Neutral")) {
-                    fx->tonemap_mode = fx->tonemap_mode == POSTFX_TONEMAP_ACES
-                                           ? POSTFX_TONEMAP_NEUTRAL
-                                           : POSTFX_TONEMAP_ACES;
-                }
-
-                nk_property_float(engine->nk_ctx, "Exposure:", 0.05f, &fx->exposure, 8.0f, 0.05f,
-                                  0.01f);
-
-                if (nk_button_label(engine->nk_ctx,
-                                    fx->bloom_enabled ? "Bloom: On" : "Bloom: Off")) {
-                    fx->bloom_enabled = !fx->bloom_enabled;
-                }
-
-                if (fx->bloom_enabled) {
-                    nk_property_float(engine->nk_ctx, "Bloom Strength:", 0.0f,
-                                      &fx->bloom_strength, 1.0f, 0.02f, 0.005f);
-                    nk_property_float(engine->nk_ctx, "Bloom Threshold:", 0.0f,
-                                      &fx->bloom_threshold, 8.0f, 0.1f, 0.02f);
-                }
-
-                if (nk_button_label(engine->nk_ctx, fx->ssao_enabled ? "SSAO: On" : "SSAO: Off")) {
-                    fx->ssao_enabled = !fx->ssao_enabled;
-                }
-
-                if (fx->ssao_enabled) {
-                    nk_property_float(engine->nk_ctx, "SSAO Radius:", 0.05f, &fx->ssao_radius,
-                                      5.0f, 0.05f, 0.01f);
-                    nk_property_float(engine->nk_ctx, "SSAO Strength:", 0.0f, &fx->ssao_strength,
-                                      1.0f, 0.05f, 0.01f);
-                }
-
-                if (nk_button_label(engine->nk_ctx,
-                                    fx->ssr_enabled ? "SSR: On" : "SSR: Off")) {
-                    fx->ssr_enabled = !fx->ssr_enabled;
-                }
-
-                if (fx->ssr_enabled) {
-                    nk_property_float(engine->nk_ctx, "SSR Strength:", 0.0f, &fx->ssr_strength,
-                                      2.0f, 0.05f, 0.01f);
-                    nk_property_float(engine->nk_ctx, "SSR Distance:", 1.0f,
-                                      &fx->ssr_max_distance, 50.0f, 0.5f, 0.1f);
-                    nk_property_float(engine->nk_ctx, "SSR Floor Rough:", 0.0f,
-                                      &fx->ssr_floor_roughness, 1.0f, 0.05f, 0.01f);
-                }
-
-                if (nk_button_label(engine->nk_ctx,
-                                    fx->normals_enabled ? "Normals: On" : "Normals: Off")) {
-                    fx->normals_enabled = !fx->normals_enabled;
-                }
-
-                nk_property_float(engine->nk_ctx, "Spec AA:", 0.0f,
-                                  &engine->specular_aa_strength, 2.0f, 0.1f, 0.02f);
-
-                // Finishing grade
-                nk_layout_row_dynamic(engine->nk_ctx, 10, 1);
-                nk_spacing(engine->nk_ctx, 1);
-                nk_layout_row_dynamic(engine->nk_ctx, 20, 1);
-                nk_label(engine->nk_ctx, "Finishing", NK_TEXT_LEFT);
-
-                nk_layout_row_dynamic(engine->nk_ctx, 25, 1);
-                if (nk_button_label(engine->nk_ctx,
-                                    fx->vignette_enabled ? "Vignette: On" : "Vignette: Off")) {
-                    fx->vignette_enabled = !fx->vignette_enabled;
-                }
-                if (fx->vignette_enabled) {
-                    nk_property_float(engine->nk_ctx, "Vig Strength:", 0.0f,
-                                      &fx->vignette_strength, 1.0f, 0.05f, 0.01f);
-                    nk_property_float(engine->nk_ctx, "Vig Radius:", 0.0f, &fx->vignette_radius,
-                                      1.0f, 0.05f, 0.01f);
-                }
-
-                if (nk_button_label(engine->nk_ctx,
-                                    fx->sharpen_enabled ? "Sharpen: On" : "Sharpen: Off")) {
-                    fx->sharpen_enabled = !fx->sharpen_enabled;
-                }
-                if (fx->sharpen_enabled) {
-                    nk_property_float(engine->nk_ctx, "Sharpen:", 0.0f, &fx->sharpen_strength,
-                                      3.0f, 0.05f, 0.01f);
-                }
-
-                if (nk_button_label(engine->nk_ctx,
-                                    fx->grain_enabled ? "Grain: On" : "Grain: Off")) {
-                    fx->grain_enabled = !fx->grain_enabled;
-                }
-                if (fx->grain_enabled) {
-                    nk_property_float(engine->nk_ctx, "Grain:", 0.0f, &fx->grain_strength, 0.3f,
-                                      0.005f, 0.002f);
-                }
-
-                if (nk_button_label(engine->nk_ctx,
-                                    fx->grade_enabled ? "Grade: On" : "Grade: Off")) {
-                    fx->grade_enabled = !fx->grade_enabled;
-                }
-                if (fx->grade_enabled) {
-                    // Three RGB rows: lift (shadows), gamma (mids), gain (highs).
-                    // Labels must be unique — Nuklear keys widget state by name.
-                    nk_layout_row_dynamic(engine->nk_ctx, 25, 3);
-                    nk_property_float(engine->nk_ctx, "LiftR", -1.0f, &fx->grade_lift[0], 1.0f,
-                                      0.02f, 0.005f);
-                    nk_property_float(engine->nk_ctx, "LiftG", -1.0f, &fx->grade_lift[1], 1.0f,
-                                      0.02f, 0.005f);
-                    nk_property_float(engine->nk_ctx, "LiftB", -1.0f, &fx->grade_lift[2], 1.0f,
-                                      0.02f, 0.005f);
-                    nk_property_float(engine->nk_ctx, "GammaR", 0.1f, &fx->grade_gamma[0], 4.0f,
-                                      0.02f, 0.005f);
-                    nk_property_float(engine->nk_ctx, "GammaG", 0.1f, &fx->grade_gamma[1], 4.0f,
-                                      0.02f, 0.005f);
-                    nk_property_float(engine->nk_ctx, "GammaB", 0.1f, &fx->grade_gamma[2], 4.0f,
-                                      0.02f, 0.005f);
-                    nk_property_float(engine->nk_ctx, "GainR", 0.0f, &fx->grade_gain[0], 4.0f,
-                                      0.02f, 0.005f);
-                    nk_property_float(engine->nk_ctx, "GainG", 0.0f, &fx->grade_gain[1], 4.0f,
-                                      0.02f, 0.005f);
-                    nk_property_float(engine->nk_ctx, "GainB", 0.0f, &fx->grade_gain[2], 4.0f,
-                                      0.02f, 0.005f);
-                }
-
-                // Grade uses a 3-column grid; restore single-column rows
-                nk_layout_row_dynamic(engine->nk_ctx, 25, 1);
-                if (nk_button_label(engine->nk_ctx, fx->dof_enabled ? "DoF: On" : "DoF: Off")) {
-                    fx->dof_enabled = !fx->dof_enabled;
-                }
-                if (fx->dof_enabled) {
-                    if (nk_button_label(engine->nk_ctx,
-                                        fx->dof_autofocus ? "Autofocus: On" : "Autofocus: Off")) {
-                        fx->dof_autofocus = !fx->dof_autofocus;
-                    }
-                    // With autofocus on, the engine drives Focus Dist each frame
-                    nk_property_float(engine->nk_ctx, "Focus Dist:", 0.0f, &fx->dof_focus_distance,
-                                      1000.0f, 0.1f, 0.05f);
-                    nk_property_float(engine->nk_ctx, "Focus Range:", 0.1f, &fx->dof_focus_range,
-                                      1000.0f, 0.1f, 0.05f);
-                    nk_property_float(engine->nk_ctx, "Max CoC:", 0.0f, &fx->dof_max_coc, 40.0f,
-                                      0.5f, 0.1f);
-                }
-            }
-
-            // bot margin
-            nk_layout_row_dynamic(engine->nk_ctx, 10, 1); // 10 pixels of vertical space
-            nk_spacing(engine->nk_ctx, 1);                // Creates a dummy widget for spacing
-
-            // Camera properties
-            nk_layout_row_dynamic(engine->nk_ctx, 25, 1);
-            nk_property_float(engine->nk_ctx, "Theta:", 0.0f, &camera->theta, GLM_PI_2, 0.1f, 1);
-            nk_property_float(engine->nk_ctx, "Phi:", 0.0f, &camera->phi, GLM_PI_2, 0.1f, 1);
-            nk_property_float(engine->nk_ctx, "Distance:", 0.0f, &camera->distance, 3000.0f, 100.0f,
-                              1);
-            nk_property_float(engine->nk_ctx, "Height:", -2000.0f, &camera->height, 2000.0f, 100.0f,
-                              1);
-            nk_property_float(engine->nk_ctx, "Fov:", 0.0f, &camera->fov_radians, GLM_PI, 0.01f,
-                              0.01f);
-
-            // LookAt Point properties
-            nk_layout_row_dynamic(engine->nk_ctx, 25, 1);
-            nk_property_float(engine->nk_ctx, "LookAt X:", -25.0f, &camera->look_at[0], 25.0f, 1.0f,
-                              1);
-            nk_property_float(engine->nk_ctx, "LookAt Y:", -25.0f, &camera->look_at[1], 25.0f, 1.0f,
-                              1);
-            nk_property_float(engine->nk_ctx, "LookAt Z:", -25.0f, &camera->look_at[2], 25.0f, 1.0f,
-                              1);
-
-            // Up Vector properties
-            nk_layout_row_dynamic(engine->nk_ctx, 25, 1);
-            nk_property_float(engine->nk_ctx, "up X:", -25.0f, &camera->up_vector[0], 25.0f, 1.0f,
-                              1);
-            nk_property_float(engine->nk_ctx, "up Y:", -25.0f, &camera->up_vector[1], 25.0f, 1.0f,
-                              1);
-            nk_property_float(engine->nk_ctx, "up Z:", -25.0f, &camera->up_vector[2], 25.0f, 1.0f,
-                              1);
-
-            // Additional camera control properties
-            nk_layout_row_dynamic(engine->nk_ctx, 25, 1);
-            nk_property_float(engine->nk_ctx, "Zoom:", 0.0f, &camera->zoom_speed, 2.0f, 0.01f, 1);
-            nk_property_float(engine->nk_ctx, "Orbit:", 0.0f, &camera->orbit_speed, 0.1f, 0.001f,
-                              1);
-            nk_property_float(engine->nk_ctx, "Amplitude:", 0.0f, &camera->amplitude, 50.0f, 1.0f,
-                              1);
-            nk_property_float(engine->nk_ctx, "Near Clip:", 5.0f, &camera->near_clip, 100.0f, 1.0f,
-                              1.0f);
-            nk_property_float(engine->nk_ctx, "Far Clip:", 0.1f, &camera->far_clip, 10000.0f,
-                              100.0f, 10.0f);
-        }
-        nk_end(engine->nk_ctx);
-    }
-
-    // FPS display - raw text overlay, no window chrome
-    if (engine->show_fps) {
-        // Make window completely transparent
-        struct nk_color transparent = nk_rgba(0, 0, 0, 0);
-        nk_style_push_color(engine->nk_ctx, &engine->nk_ctx->style.window.background, transparent);
-        nk_style_push_style_item(engine->nk_ctx, &engine->nk_ctx->style.window.fixed_background,
-                                 nk_style_item_color(transparent));
-
-        // Position in top-right, using window coords
-        struct nk_rect fps_rect = nk_rect(engine->win_width - 100, 10, 90, 25);
-
-        if (nk_begin(engine->nk_ctx, "##fps", fps_rect,
-                     NK_WINDOW_NO_SCROLLBAR | NK_WINDOW_NO_INPUT)) {
-            char fps_text[16];
-            snprintf(fps_text, sizeof(fps_text), "%.1f FPS", engine->fps);
-            nk_layout_row_dynamic(engine->nk_ctx, 20, 1);
-            nk_text_colored(engine->nk_ctx, fps_text, strlen(fps_text), NK_TEXT_RIGHT,
-                            nk_rgb(255, 255, 255));
-        }
-        nk_end(engine->nk_ctx);
-
-        // Restore styles
-        nk_style_pop_style_item(engine->nk_ctx);
-        nk_style_pop_color(engine->nk_ctx);
-    }
-
-    // Render Nuklear GUI
-    nk_glfw3_render(&engine->nk_glfw, NK_ANTI_ALIASING_ON, MAX_VERTEX_BUFFER, MAX_ELEMENT_BUFFER);
-
-    // ImGui: NewFrame ran at the top of the loop; build the demo window (the
-    // Stage A proof — replaced by the ported panel in Stage C) and render it
-    // over Nuklear. Stage D removes Nuklear entirely.
-    igShowDemoWindow(NULL);
-    igRender();
-    ImGui_ImplOpenGL3_RenderDrawData(igGetDrawData());
-
-    // Restore OpenGL state
-    glViewport(previousViewport[0], previousViewport[1], previousViewport[2], previousViewport[3]);
-    if (depthTest)
-        glEnable(GL_DEPTH_TEST);
-    else
-        glDisable(GL_DEPTH_TEST);
-    if (blend)
-        glEnable(GL_BLEND);
-    else
-        glDisable(GL_BLEND);
-}
-
 /*
  * Render
  */
@@ -1785,7 +1291,7 @@ void run_engine_render_loop(Engine* engine, RenderSceneFunc render_func) {
         }
 
         // Begin the ImGui frame before the app's render_func, so both the app
-        // (e.g. the tree demo) and the engine panel can add windows between
+        // (e.g. the tree app) and the engine panel can add windows between
         // NewFrame and the Render/RenderDrawData at present time.
         if (engine->show_gui || engine->show_fps) {
             ImGui_ImplOpenGL3_NewFrame();

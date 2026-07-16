@@ -26,17 +26,6 @@
 
 #include "cetra/shader_strings.h"
 
-#define NK_INCLUDE_FIXED_TYPES
-#define NK_INCLUDE_STANDARD_IO
-#define NK_INCLUDE_STANDARD_VARARGS
-#define NK_INCLUDE_DEFAULT_ALLOCATOR
-#define NK_INCLUDE_VERTEX_BUFFER_OUTPUT
-#define NK_INCLUDE_FONT_BAKING
-#define NK_INCLUDE_DEFAULT_FONT
-#define NK_KEYSTATE_BASED_INPUT
-#include "cetra/ext/nuklear.h"
-#include "cetra/ext/nuklear_glfw_gl3.h"
-
 /*
  * Constants
  */
@@ -1195,9 +1184,8 @@ int main(int argc, char** argv) {
 
     print_scene(scene);
 
-    // No GUI/FPS overlay in headless runs: nuklear paints a software cursor
-    // at the live desktop mouse position and the FPS digits change per run,
-    // both of which land in screenshots and break byte-comparability
+    // No GUI/FPS overlay in headless runs: the FPS digits change per run and
+    // land in screenshots, which breaks byte-comparability
     set_engine_show_gui(engine, !args.headless);
     set_engine_show_fps(engine, !args.headless);
     set_engine_show_wireframe(engine, false);

@@ -17,17 +17,6 @@
 #include "text.h"
 #include "postfx.h"
 
-#define NK_INCLUDE_FIXED_TYPES
-#define NK_INCLUDE_STANDARD_IO
-#define NK_INCLUDE_STANDARD_VARARGS
-#define NK_INCLUDE_DEFAULT_ALLOCATOR
-#define NK_INCLUDE_VERTEX_BUFFER_OUTPUT
-#define NK_INCLUDE_FONT_BAKING
-#define NK_INCLUDE_DEFAULT_FONT
-#define NK_KEYSTATE_BASED_INPUT
-#include "ext/nuklear.h"
-#include "ext/nuklear_glfw_gl3.h"
-
 typedef enum CameraMode {
     CAMERA_MODE_FREE,  // Free movement mode
     CAMERA_MODE_ORBIT, // Orbit around a point
@@ -87,11 +76,6 @@ typedef struct Engine {
     mat4 view_matrix;
     mat4 projection_matrix;
 
-    // nuklear gui
-    struct nk_context* nk_ctx;
-    struct nk_glfw nk_glfw;
-    struct nk_color bg;
-
     bool show_gui;
     bool show_wireframe;
     bool show_xyz;
@@ -134,8 +118,8 @@ typedef struct Engine {
 
 // Per-frame scene render callback. Output is scene-referred linear HDR: in
 // PBR mode everything drawn here (including overlays) goes through bloom,
-// exposure, and tone mapping in the present pass. Only the Nuklear GUI is
-// drawn after tone mapping.
+// exposure, and tone mapping in the present pass. Only the GUI is drawn
+// after tone mapping.
 typedef void (*RenderSceneFunc)(Engine*, Scene*);
 
 Engine* create_engine(const char* window_title, int width, int height);
@@ -177,7 +161,6 @@ ShaderProgram* get_engine_shader_program_by_name(Engine* engine, const char* pro
 // GUI
 void set_engine_show_gui(Engine* engine, bool show_gui);
 void set_engine_show_fps(Engine* engine, bool show_fps);
-void render_nuklear_gui(Engine* engine);
 void render_engine_gui(Engine* engine);
 
 // Present the frame: resolve the MSAA framebuffer through the post stack

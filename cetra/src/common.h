@@ -13,9 +13,6 @@
 #define GL_ATTR_BONE_WEIGHTS 7 // vec4  - bone weights per vertex
 #define GL_ATTR_TEXCOORD2    8 // UV1 for lightmaps/AO
 
-#define MAX_VERTEX_BUFFER  512 * 1024
-#define MAX_ELEMENT_BUFFER 128 * 1024
-
 #define USED_UNIFORM_COMPONENTS 77 // Number of components used by non-light uniforms
 #define COMPONENTS_PER_LIGHT    21 // Number of components per light
 

@@ -27,7 +27,7 @@ typedef struct GameConfig {
     double fixed_timestep; // Physics/logic update rate (default: 1/60)
     double max_frame_time; // Max frame time before clamping (default: 0.25)
     bool vsync;            // Enable vsync (default: true)
-    bool show_debug_gui;   // Show Nuklear debug GUI (default: false)
+    bool show_debug_gui;   // Show debug GUI (default: false)
 } GameConfig;
 
 // Main game structure
