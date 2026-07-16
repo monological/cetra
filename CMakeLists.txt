@@ -47,6 +47,24 @@ if(CETRA_BUILD_JOLTC)
     add_subdirectory(cetra/src/ext/JoltC)
 endif()
 
+# Dear ImGui via cimgui (C bindings). cimgui's own CMake builds the ImGui core
+# with IMGUI_IMPL_API=extern "C" (C linkage for the backend functions); we force
+# it static and append the GLFW + OpenGL3 backends (absent from the stock target)
+# plus the CIMGUI_USE_* switches that expose their C bindings in cimgui_impl.h.
+# The cetra library links this; the PUBLIC defines/includes reach engine.c.
+set(IMGUI_STATIC "yes" CACHE STRING "Build cimgui as a static library" FORCE)
+add_subdirectory(cetra/src/ext/cimgui)
+set(CIMGUI_DIR ${CMAKE_CURRENT_SOURCE_DIR}/cetra/src/ext/cimgui)
+target_sources(cimgui PRIVATE
+    ${CIMGUI_DIR}/cimgui_impl.cpp
+    ${CIMGUI_DIR}/imgui/backends/imgui_impl_glfw.cpp
+    ${CIMGUI_DIR}/imgui/backends/imgui_impl_opengl3.cpp)
+target_compile_definitions(cimgui PUBLIC CIMGUI_USE_GLFW CIMGUI_USE_OPENGL3)
+target_include_directories(cimgui PUBLIC
+    ${CIMGUI_DIR}/imgui/backends
+    ${GLFW_INCLUDE_DIRS})
+target_link_libraries(cimgui ${GLFW_LIBRARIES})
+
 # Build the cetra library
 add_subdirectory(cetra)
 

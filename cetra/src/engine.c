@@ -37,6 +37,13 @@
 #include "ext/nuklear_glfw_gl3.h"
 #include "ext/log.h"
 
+// Dear ImGui via cimgui (migrating off Nuklear). CIMGUI_DEFINE_ENUMS_AND_STRUCTS
+// gives the full struct/enum definitions to C; CIMGUI_USE_GLFW/OPENGL3 (compile
+// defs from CMake) expose the backend bindings in cimgui_impl.h.
+#define CIMGUI_DEFINE_ENUMS_AND_STRUCTS
+#include "cimgui.h"
+#include "cimgui_impl.h"
+
 /*
  * Private functions
  */
@@ -199,6 +206,10 @@ void free_engine(Engine* engine) {
         glDeleteVertexArrays(1, &engine->catcher_vao);
     if (engine->catcher_vbo)
         glDeleteBuffers(1, &engine->catcher_vbo);
+
+    ImGui_ImplOpenGL3_Shutdown();
+    ImGui_ImplGlfw_Shutdown();
+    igDestroyContext(NULL);
 
     nk_glfw3_shutdown(&engine->nk_glfw);
 
@@ -372,6 +383,15 @@ static int _setup_engine_gui(Engine* engine) {
 
     // Initialize default background color
     engine->bg = nk_rgb(28, 48, 62);
+
+    // Dear ImGui, sharing the same GLFW window + GL context. install_callbacks
+    // = false: the engine owns the GLFW callbacks and forwards events to the
+    // ImGui backend itself (see the input callbacks). "#version 150" is the
+    // core-profile GLSL the OpenGL3 backend needs on macOS.
+    igCreateContext(NULL);
+    ImGui_ImplGlfw_InitForOpenGL(engine->window, false);
+    ImGui_ImplOpenGL3_Init("#version 150");
+    igStyleColorsDark(NULL);
 
     // save engine to window so we can use it in callbacks
     glfwSetWindowUserPointer(engine->window, engine);
@@ -1388,6 +1408,16 @@ void render_nuklear_gui(Engine* engine) {
 
     // Render Nuklear GUI
     nk_glfw3_render(&engine->nk_glfw, NK_ANTI_ALIASING_ON, MAX_VERTEX_BUFFER, MAX_ELEMENT_BUFFER);
+
+    // Stage A proof-of-life: render the ImGui demo window on top of Nuklear.
+    // (Temporary; Stage B moves NewFrame to the top of the loop and wires input,
+    // Stage C ports the panels, Stage D removes Nuklear.)
+    ImGui_ImplOpenGL3_NewFrame();
+    ImGui_ImplGlfw_NewFrame();
+    igNewFrame();
+    igShowDemoWindow(NULL);
+    igRender();
+    ImGui_ImplOpenGL3_RenderDrawData(igGetDrawData());
 
     // Restore OpenGL state
     glViewport(previousViewport[0], previousViewport[1], previousViewport[2], previousViewport[3]);

@@ -105,6 +105,13 @@ if(CETRA_BUILD_JOLTC)
         ${CMAKE_CURRENT_SOURCE_DIR}/src/ext/JoltC)
 endif()
 
+# Dear ImGui via cimgui (defined at the top level). PUBLIC so all apps that
+# link cetra also get the GUI backend.
+target_link_libraries(cetra PUBLIC cimgui)
+target_include_directories(cetra PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ext/cimgui
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ext/cimgui/imgui/backends)
+
 # Install targets
 install(TARGETS cetra
     ARCHIVE DESTINATION lib
