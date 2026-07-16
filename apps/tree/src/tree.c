@@ -33,6 +33,9 @@
 #include "cetra/ext/nuklear.h"
 #include "cetra/ext/nuklear_glfw_gl3.h"
 
+#define CIMGUI_DEFINE_ENUMS_AND_STRUCTS
+#include "cimgui.h"
+
 #define CYLINDER_SEGMENTS 12
 #define TEXTURE_SIZE      512
 
@@ -1111,65 +1114,40 @@ static void regenerate_tree(Scene* scene, TreeParams* p) {
  * Render tree parameters GUI
  */
 static void render_tree_gui(const Engine* engine, Scene* scene) {
-    struct nk_context* ctx = engine->nk_ctx;
+    (void)engine;
+    (void)scene;
 
-    if (nk_begin(ctx, "Tree Parameters", nk_rect(15, 15, 260, 540),
-                 NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_TITLE)) {
+    igSetNextWindowPos((ImVec2){15, 15}, ImGuiCond_FirstUseEver, (ImVec2){0, 0});
+    igSetNextWindowSize((ImVec2){260, 540}, ImGuiCond_FirstUseEver);
+    if (igBegin("Tree Parameters", NULL, 0)) {
+        igSeparatorText("Seed");
+        igSliderInt("Seed", &params.seed, 0, 9999, "%d", 0);
 
-        nk_layout_row_dynamic(ctx, 25, 1);
+        igSeparatorText("Structure");
+        igSliderInt("Max Depth", &params.max_depth, 1, 7, "%d", 0);
+        igSliderInt("Branches", &params.branches_per_node, 1, 5, "%d", 0);
 
-        // Seed
-        nk_label(ctx, "Random Seed", NK_TEXT_LEFT);
-        nk_property_int(ctx, "#Seed:", 0, &params.seed, 9999, 1, 1);
+        igSeparatorText("Dimensions");
+        igSliderFloat("Trunk Len", &params.trunk_length, 10.0f, 200.0f, "%.1f", 0);
+        igSliderFloat("Trunk Rad", &params.trunk_radius, 1.0f, 30.0f, "%.1f", 0);
 
-        nk_layout_row_dynamic(ctx, 10, 1);
-        nk_spacing(ctx, 1);
+        igSeparatorText("Decay");
+        igSliderFloat("Len Decay", &params.length_decay, 0.3f, 0.95f, "%.3f", 0);
+        igSliderFloat("Rad Decay", &params.radius_decay, 0.3f, 0.95f, "%.3f", 0);
 
-        // Structure
-        nk_label(ctx, "Structure", NK_TEXT_LEFT);
-        nk_layout_row_dynamic(ctx, 25, 1);
-        nk_property_int(ctx, "#Max Depth:", 1, &params.max_depth, 7, 1, 1);
-        nk_property_int(ctx, "#Branches:", 1, &params.branches_per_node, 5, 1, 1);
+        igSeparatorText("Angles");
+        igSliderFloat("Angle", &params.branch_angle, 5.0f, 90.0f, "%.1f", 0);
+        igSliderFloat("Variance", &params.angle_variance, 0.0f, 45.0f, "%.1f", 0);
+        igSliderFloat("Twist", &params.twist, 0.0f, 180.0f, "%.1f", 0);
 
-        nk_layout_row_dynamic(ctx, 10, 1);
-        nk_spacing(ctx, 1);
-
-        // Dimensions
-        nk_label(ctx, "Dimensions", NK_TEXT_LEFT);
-        nk_layout_row_dynamic(ctx, 25, 1);
-        nk_property_float(ctx, "#Trunk Len:", 10.0f, &params.trunk_length, 200.0f, 5.0f, 1.0f);
-        nk_property_float(ctx, "#Trunk Rad:", 1.0f, &params.trunk_radius, 30.0f, 1.0f, 1.0f);
-
-        nk_layout_row_dynamic(ctx, 10, 1);
-        nk_spacing(ctx, 1);
-
-        // Decay
-        nk_label(ctx, "Decay", NK_TEXT_LEFT);
-        nk_layout_row_dynamic(ctx, 25, 1);
-        nk_property_float(ctx, "#Len Decay:", 0.3f, &params.length_decay, 0.95f, 0.02f, 2.0f);
-        nk_property_float(ctx, "#Rad Decay:", 0.3f, &params.radius_decay, 0.95f, 0.02f, 2.0f);
-
-        nk_layout_row_dynamic(ctx, 10, 1);
-        nk_spacing(ctx, 1);
-
-        // Angles
-        nk_label(ctx, "Angles", NK_TEXT_LEFT);
-        nk_layout_row_dynamic(ctx, 25, 1);
-        nk_property_float(ctx, "#Angle:", 5.0f, &params.branch_angle, 90.0f, 2.0f, 1.0f);
-        nk_property_float(ctx, "#Variance:", 0.0f, &params.angle_variance, 45.0f, 2.0f, 1.0f);
-        nk_property_float(ctx, "#Twist:", 0.0f, &params.twist, 180.0f, 5.0f, 1.0f);
-
-        nk_layout_row_dynamic(ctx, 10, 1);
-        nk_spacing(ctx, 1);
-
-        // Leaves
-        nk_label(ctx, "Leaves", NK_TEXT_LEFT);
-        nk_layout_row_dynamic(ctx, 25, 1);
-        nk_checkbox_label(ctx, "Show Leaves", &params.show_leaves);
-        nk_property_float(ctx, "#Leaf Size:", 1.0f, &params.leaf_size, 30.0f, 1.0f, 1.0f);
-        nk_property_int(ctx, "#Leaves/Tip:", 1, &params.leaves_per_tip, 15, 1, 1);
+        igSeparatorText("Leaves");
+        bool show_leaves = params.show_leaves != 0;
+        if (igCheckbox("Show Leaves", &show_leaves))
+            params.show_leaves = show_leaves;
+        igSliderFloat("Leaf Size", &params.leaf_size, 1.0f, 30.0f, "%.1f", 0);
+        igSliderInt("Leaves/Tip", &params.leaves_per_tip, 1, 15, "%d", 0);
     }
-    nk_end(ctx);
+    igEnd();
 }
 
 /*

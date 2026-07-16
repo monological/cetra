@@ -1029,6 +1029,197 @@ static void _save_framebuffer_ppm(const Engine* engine, const char* path) {
     log_info("Saved screenshot: %s (%dx%d)", path, w, h);
 }
 
+// The main settings panel, in Dear ImGui. Sections are collapsing headers;
+// effect on/off states are checkboxes and their parameters appear indented
+// beneath them. Bound directly to the same engine/scene/postfx fields.
+static void _engine_gui_panel(Engine* engine) {
+    Camera* camera = engine->camera;
+    igSetNextWindowPos((ImVec2){15, 15}, ImGuiCond_FirstUseEver, (ImVec2){0, 0});
+    igSetNextWindowSize((ImVec2){290, 620}, ImGuiCond_FirstUseEver);
+    if (!igBegin("Cetra", NULL, 0)) {
+        igEnd();
+        return;
+    }
+
+    if (igButton("Show XYZ", (ImVec2){0, 0}))
+        set_engine_show_xyz(engine, !engine->show_xyz);
+    igSameLine(0, -1);
+    if (igButton("Wireframe", (ImVec2){0, 0}))
+        set_engine_show_wireframe(engine, !engine->show_wireframe);
+    igCheckbox("Show Bones", &engine->show_bones);
+
+    AnimationState* anim = get_render_animation_state();
+    if (anim) {
+        if (igButton(anim->playing ? "Pause Animation" : "Play Animation", (ImVec2){0, 0})) {
+            if (anim->playing)
+                pause_animation(anim);
+            else
+                play_animation(anim);
+        }
+        if (anim->skeleton && igButton("Recalc Bind Pose", (ImVec2){0, 0}))
+            recalculate_inverse_bind_poses(anim->skeleton);
+
+        if (anim->springs &&
+            igCollapsingHeader_TreeNodeFlags("Spring Bones", ImGuiTreeNodeFlags_DefaultOpen)) {
+            SpringBoneSystem* sb = anim->springs;
+            if (igCheckbox("Springs Enabled", &sb->enabled) && sb->enabled)
+                spring_bone_reset(sb); // re-enable snaps instead of lurching
+            igSliderFloat("Stiffness", &sb->params.stiffness, 0.0f, 1.0f, "%.3f", 0);
+            igSliderFloat("Damping", &sb->params.damping, 0.0f, 1.0f, "%.3f", 0);
+            igSliderFloat("Gravity", &sb->params.gravity, 0.0f, 30.0f, "%.2f", 0);
+        }
+    }
+
+    if (igRadioButton_Bool("Free", engine->camera_mode == CAMERA_MODE_FREE))
+        engine->camera_mode = CAMERA_MODE_FREE;
+    igSameLine(0, -1);
+    if (igRadioButton_Bool("Orbit", engine->camera_mode == CAMERA_MODE_ORBIT))
+        engine->camera_mode = CAMERA_MODE_ORBIT;
+
+    static const char* const render_modes[] = {
+        "PBR",        "Normals",         "World Pos",
+        "Tex Coords", "Tangent Space",   "Flat Color",
+        "Albedo",     "Simple Lighting", "Metallic/Roughness"};
+    int rm = engine->current_render_mode;
+    if (igCombo_Str_arr("Render Mode", &rm, render_modes, 9, -1))
+        engine->current_render_mode = (RenderMode)rm;
+
+    Scene* scene = get_current_scene(engine);
+    if (scene && scene->light_count > 0 &&
+        igCollapsingHeader_TreeNodeFlags("Lighting", ImGuiTreeNodeFlags_DefaultOpen)) {
+        static float light_intensity = 3.0f;
+        if (igSliderFloat("Intensity", &light_intensity, 0.0f, 20.0f, "%.2f", 0)) {
+            for (size_t i = 0; i < scene->light_count; i++)
+                if (scene->lights[i])
+                    scene->lights[i]->intensity = light_intensity;
+        }
+    }
+
+    if (scene && scene->render_skybox && scene->ibl &&
+        igCollapsingHeader_TreeNodeFlags("Environment", ImGuiTreeNodeFlags_DefaultOpen)) {
+        igCheckbox("Ground Projection", &scene->skybox_ground_projection);
+        if (scene->skybox_ground_projection) {
+            igSliderFloat("Dome Radius", &scene->skybox_gp_radius, 1.0f, 100.0f, "%.2f", 0);
+            igSliderFloat("Capture Height", &scene->skybox_gp_height, 0.1f, 10.0f, "%.2f", 0);
+        }
+        igSliderFloat("IBL Intensity", &scene->ibl->intensity, 0.0f, 4.0f, "%.2f", 0);
+        if (scene->shadow_system) {
+            ShadowSystem* ss = scene->shadow_system;
+            igCheckbox("Shadows", &ss->enabled);
+            if (ss->enabled) {
+                igCheckbox("PCSS", &ss->pcss_enabled);
+                if (ss->pcss_enabled)
+                    igSliderFloat("Shadow Softness", &ss->pcss_softness, 0.0f, 4.0f, "%.2f", 0);
+            }
+        }
+        igCheckbox("Shadow Catcher", &scene->shadow_catcher);
+        if (scene->shadow_catcher)
+            igSliderFloat("Shadow Strength", &scene->shadow_catcher_strength, 0.0f, 1.0f, "%.2f", 0);
+    }
+
+    if (engine->postfx &&
+        igCollapsingHeader_TreeNodeFlags("Post", ImGuiTreeNodeFlags_DefaultOpen)) {
+        PostFX* fx = engine->postfx;
+        bool aces = fx->tonemap_mode == POSTFX_TONEMAP_ACES;
+        if (igCheckbox("ACES Tonemap", &aces))
+            fx->tonemap_mode = aces ? POSTFX_TONEMAP_ACES : POSTFX_TONEMAP_NEUTRAL;
+        igSliderFloat("Exposure", &fx->exposure, 0.05f, 8.0f, "%.2f", 0);
+        igCheckbox("Bloom", &fx->bloom_enabled);
+        if (fx->bloom_enabled) {
+            igSliderFloat("Bloom Strength", &fx->bloom_strength, 0.0f, 1.0f, "%.3f", 0);
+            igSliderFloat("Bloom Threshold", &fx->bloom_threshold, 0.0f, 8.0f, "%.2f", 0);
+        }
+        igCheckbox("SSAO", &fx->ssao_enabled);
+        if (fx->ssao_enabled) {
+            igSliderFloat("SSAO Radius", &fx->ssao_radius, 0.05f, 5.0f, "%.2f", 0);
+            igSliderFloat("SSAO Strength", &fx->ssao_strength, 0.0f, 1.0f, "%.2f", 0);
+        }
+        igCheckbox("SSR", &fx->ssr_enabled);
+        if (fx->ssr_enabled) {
+            igSliderFloat("SSR Strength", &fx->ssr_strength, 0.0f, 2.0f, "%.2f", 0);
+            igSliderFloat("SSR Distance", &fx->ssr_max_distance, 1.0f, 50.0f, "%.2f", 0);
+            igSliderFloat("SSR Floor Rough", &fx->ssr_floor_roughness, 0.0f, 1.0f, "%.2f", 0);
+        }
+        igCheckbox("Normals G-buffer", &fx->normals_enabled);
+        igSliderFloat("Spec AA", &engine->specular_aa_strength, 0.0f, 2.0f, "%.2f", 0);
+    }
+
+    if (engine->postfx &&
+        igCollapsingHeader_TreeNodeFlags("Finishing", ImGuiTreeNodeFlags_DefaultOpen)) {
+        PostFX* fx = engine->postfx;
+        igCheckbox("Vignette", &fx->vignette_enabled);
+        if (fx->vignette_enabled) {
+            igSliderFloat("Vig Strength", &fx->vignette_strength, 0.0f, 1.0f, "%.2f", 0);
+            igSliderFloat("Vig Radius", &fx->vignette_radius, 0.0f, 1.0f, "%.2f", 0);
+        }
+        igCheckbox("Sharpen", &fx->sharpen_enabled);
+        if (fx->sharpen_enabled)
+            igSliderFloat("Sharpen Amount", &fx->sharpen_strength, 0.0f, 3.0f, "%.2f", 0);
+        igCheckbox("Grain", &fx->grain_enabled);
+        if (fx->grain_enabled)
+            igSliderFloat("Grain Amount", &fx->grain_strength, 0.0f, 0.3f, "%.3f", 0);
+        igCheckbox("Color Grade", &fx->grade_enabled);
+        if (fx->grade_enabled) {
+            igDragFloat3("Lift", fx->grade_lift, 0.005f, -1.0f, 1.0f, "%.3f", 0);
+            igDragFloat3("Gamma", fx->grade_gamma, 0.01f, 0.1f, 4.0f, "%.3f", 0);
+            igDragFloat3("Gain", fx->grade_gain, 0.01f, 0.0f, 4.0f, "%.3f", 0);
+        }
+        igCheckbox("Depth of Field", &fx->dof_enabled);
+        if (fx->dof_enabled) {
+            igCheckbox("Autofocus", &fx->dof_autofocus);
+            igSliderFloat("Focus Dist", &fx->dof_focus_distance, 0.0f, 100.0f, "%.2f", 0);
+            igSliderFloat("Focus Range", &fx->dof_focus_range, 0.1f, 100.0f, "%.2f", 0);
+            igSliderFloat("Max CoC", &fx->dof_max_coc, 0.0f, 40.0f, "%.1f", 0);
+        }
+    }
+
+    if (camera && igCollapsingHeader_TreeNodeFlags("Camera Transform", 0)) {
+        igDragFloat3("Look At", camera->look_at, 0.1f, -100.0f, 100.0f, "%.2f", 0);
+        igDragFloat3("Up", camera->up_vector, 0.1f, -25.0f, 25.0f, "%.2f", 0);
+        igSliderFloat("Distance", &camera->distance, 0.0f, 3000.0f, "%.2f", 0);
+        igSliderFloat("Height", &camera->height, -2000.0f, 2000.0f, "%.1f", 0);
+        igSliderFloat("Theta", &camera->theta, 0.0f, GLM_PI_2, "%.3f", 0);
+        igSliderFloat("Phi", &camera->phi, 0.0f, GLM_PI_2, "%.3f", 0);
+        igSliderFloat("FOV", &camera->fov_radians, 0.1f, GLM_PI, "%.3f", 0);
+        igSliderFloat("Zoom Speed", &camera->zoom_speed, 0.0f, 2.0f, "%.3f", 0);
+        igSliderFloat("Orbit Speed", &camera->orbit_speed, 0.0f, 0.1f, "%.4f", 0);
+        igSliderFloat("Amplitude", &camera->amplitude, 0.0f, 50.0f, "%.2f", 0);
+        igSliderFloat("Near Clip", &camera->near_clip, 0.01f, 100.0f, "%.3f", 0);
+        igSliderFloat("Far Clip", &camera->far_clip, 0.1f, 10000.0f, "%.1f", 0);
+    }
+
+    igEnd();
+}
+
+// Frameless FPS readout pinned to the top-right corner.
+static void _engine_gui_fps_overlay(Engine* engine) {
+    igSetNextWindowPos((ImVec2){(float)engine->win_width - 90.0f, 10.0f}, ImGuiCond_Always,
+                       (ImVec2){0, 0});
+    igSetNextWindowBgAlpha(0.0f);
+    if (igBegin("##fps", NULL,
+                ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs |
+                    ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove |
+                    ImGuiWindowFlags_AlwaysAutoResize)) {
+        igText("%.1f FPS", engine->fps);
+    }
+    igEnd();
+}
+
+// Build and render the engine's ImGui panels. NewFrame ran at the top of the
+// render loop; this adds the windows and flushes the draw data.
+void render_engine_gui(Engine* engine) {
+    if (!engine || (!engine->show_gui && !engine->show_fps))
+        return;
+
+    if (engine->show_gui && engine->camera)
+        _engine_gui_panel(engine);
+    if (engine->show_fps)
+        _engine_gui_fps_overlay(engine);
+
+    igRender();
+    ImGui_ImplOpenGL3_RenderDrawData(igGetDrawData());
+}
+
 void render_nuklear_gui(Engine* engine) {
     if (!engine || !engine->nk_ctx)
         return;
@@ -1542,7 +1733,7 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode, bool draw_gui) 
                engine->normals_this_frame, engine->projection_matrix);
 
     if (draw_gui) {
-        render_nuklear_gui(engine);
+        render_engine_gui(engine);
     }
 }
 

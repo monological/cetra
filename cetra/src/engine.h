@@ -178,6 +178,7 @@ ShaderProgram* get_engine_shader_program_by_name(Engine* engine, const char* pro
 void set_engine_show_gui(Engine* engine, bool show_gui);
 void set_engine_show_fps(Engine* engine, bool show_fps);
 void render_nuklear_gui(Engine* engine);
+void render_engine_gui(Engine* engine);
 
 // Present the frame: resolve the MSAA framebuffer through the post stack
 // (bloom + tone map, or a raw copy for non-PBR frame_mode) into the default
