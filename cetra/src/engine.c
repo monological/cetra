@@ -103,6 +103,8 @@ Engine* create_engine(const char* window_title, int width, int height) {
     glm_mat4_identity(engine->model_matrix);
     glm_mat4_identity(engine->view_matrix);
     glm_mat4_identity(engine->projection_matrix);
+    glm_mat4_identity(engine->jittered_projection);
+    glm_mat4_identity(engine->prev_view_proj);
 
     engine->show_gui = false;
     engine->show_wireframe = false;
@@ -1126,7 +1128,8 @@ static void _engine_gui_panel(Engine* engine) {
     static const char* const render_modes[] = {
         "PBR",        "Normals",         "World Pos",
         "Tex Coords", "Tangent Space",   "Flat Color",
-        "Albedo",     "Simple Lighting", "Metallic/Roughness"};
+        "Albedo",     "Simple Lighting", "Metallic/Roughness",
+        "Velocity"};
     int rm = engine->current_render_mode;
     int render_mode_count = (int)(sizeof(render_modes) / sizeof(render_modes[0]));
     if (igCombo_Str_arr("Render Mode", &rm, render_modes, render_mode_count, -1))
@@ -1400,6 +1403,17 @@ void engine_set_scene_draw_buffers(const Engine* engine, bool with_normals) {
     }
 }
 
+// Halton low-discrepancy sequence element (1-based index), for sub-pixel jitter.
+static float _halton(int index, int base) {
+    float f = 1.0f;
+    float r = 0.0f;
+    for (int i = index; i > 0; i /= base) {
+        f /= (float)base;
+        r += f * (float)(i % base);
+    }
+    return r;
+}
+
 void run_engine_render_loop(Engine* engine, RenderSceneFunc render_func) {
     if (!engine)
         return;
@@ -1476,6 +1490,18 @@ void run_engine_render_loop(Engine* engine, RenderSceneFunc render_func) {
             glClearBufferfv(GL_COLOR, 1, zero_normal);
         }
 
+        // Sub-pixel projection jitter for TAA: nudge the projection by a
+        // Halton(2,3) fraction of a pixel each frame so the temporal resolve
+        // accumulates coverage. Kept separate from projection_matrix, which
+        // stays un-jittered for culling, postfx, and motion vectors. Off in
+        // headless (jitter would break deterministic screenshots).
+        glm_mat4_copy(engine->projection_matrix, engine->jittered_projection);
+        if (engine->postfx && engine->postfx->taa_enabled && !engine->headless) {
+            int j = (int)(engine->total_frames % 8) + 1;
+            engine->jittered_projection[2][0] += (_halton(j, 2) - 0.5f) * 2.0f / (float)rw;
+            engine->jittered_projection[2][1] += (_halton(j, 3) - 0.5f) * 2.0f / (float)rh;
+        }
+
         Scene* current_scene = get_current_scene(engine);
 
         // Process pending async texture uploads (max 5 per frame to avoid stutter)
@@ -1492,6 +1518,9 @@ void run_engine_render_loop(Engine* engine, RenderSceneFunc render_func) {
 
         engine_present_frame(engine, frame_mode, true);
 
+        // Remember this frame's un-jittered view-projection for next frame's
+        // motion vectors, then advance the frame counter.
+        glm_mat4_mul(engine->projection_matrix, engine->view_matrix, engine->prev_view_proj);
         engine->total_frames++;
 
         // Periodic capture: numbered frames every N frames

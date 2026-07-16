@@ -28,6 +28,7 @@ typedef struct SceneNode {
     size_t children_count;
     mat4 original_transform;
     mat4 global_transform;
+    mat4 prev_global_transform; // Last frame's global_transform, for motion vectors
 
     Mesh** meshes;
     size_t mesh_count;

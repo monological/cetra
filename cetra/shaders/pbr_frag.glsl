@@ -9,6 +9,8 @@ in vec2 TexCoords;
 in vec2 TexCoords2;   // UV1 for lightmaps/AO
 in vec4 VertexColor;  // Vertex color (RGBA)
 in mat3 TBN;
+in vec4 CurrClip;     // Un-jittered current clip position (motion vectors)
+in vec4 PrevClip;     // Previous-frame clip position
 layout(location = 0) out vec4 FragColor;
 // G-buffer for screen-space passes: view-space normal (xyz) + roughness (a).
 // Only lands when the engine enables color attachment 1; otherwise discarded.
@@ -379,6 +381,16 @@ void main() {
     if (renderMode == 5) {
         // Flat Color - no textures needed
         FragColor = vec4(1.0, 0.5, 0.2, 1.0);
+        return;
+    }
+    if (renderMode == 9) {
+        // Motion-vector visualization: per-pixel screen velocity as color
+        // (mid-gray = static; the large scale just makes small per-frame motion
+        // visible — X motion tints red, Y motion tints green). Static geometry
+        // resolves to exactly 0.5 gray regardless of scale, so there is no false
+        // colour when still.
+        vec2 velUv = (CurrClip.xy / CurrClip.w - PrevClip.xy / PrevClip.w) * 0.5;
+        FragColor = vec4(clamp(0.5 + velUv * 400.0, 0.0, 1.0), 0.5, 1.0);
         return;
     }
     if (renderMode == 1) {

@@ -76,7 +76,10 @@ typedef struct Engine {
 
     mat4 model_matrix;
     mat4 view_matrix;
-    mat4 projection_matrix;
+    mat4 projection_matrix;   // Un-jittered truth: frustum culling, postfx, motion vectors
+    mat4 jittered_projection; // projection_matrix + per-frame sub-pixel jitter; the scene draw
+                              // rasterizes with this when TAA is on (else equals projection_matrix)
+    mat4 prev_view_proj;      // Previous frame's un-jittered projection*view, for motion vectors
 
     bool show_gui;
     bool show_wireframe;

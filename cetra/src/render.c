@@ -299,9 +299,15 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
             // Force material update when program changes
             *current_material = NULL;
 
-            // Set view/projection/camera uniforms once per program switch
+            // Set view/projection/camera uniforms once per program switch.
+            // projection is the jittered matrix (rasterization); the motion-vector
+            // matrices below are the engine's real un-jittered ones.
             uniform_set_mat4(u, "view", (const float*)view);
             uniform_set_mat4(u, "projection", (const float*)projection);
+            mat4 curr_view_proj_no_jitter;
+            glm_mat4_mul(engine->projection_matrix, engine->view_matrix, curr_view_proj_no_jitter);
+            uniform_set_mat4(u, "uCurrViewProjNoJitter", (const float*)curr_view_proj_no_jitter);
+            uniform_set_mat4(u, "uPrevViewProj", (const float*)engine->prev_view_proj);
             uniform_set_float(u, "time", time_value);
             uniform_set_int(u, "renderMode", render_mode);
             uniform_set_float(u, "specularAAStrength", engine->specular_aa_strength);
@@ -347,6 +353,7 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
 
         // Per-mesh uniforms (model matrix is always per-mesh)
         uniform_set_mat4(u, "model", (const float*)node->global_transform);
+        uniform_set_mat4(u, "uPrevModel", (const float*)node->prev_global_transform);
         uniform_set_float(u, "lineWidth", mesh->line_width);
 
         // Only update material uniforms if material changed
@@ -527,6 +534,10 @@ void render_current_scene(Engine* engine, float time_value) {
 
     mat4* view = &engine->view_matrix;
     mat4* projection = &engine->projection_matrix;
+    // Geometry rasterizes with the sub-pixel-jittered projection (TAA); frustum
+    // culling and motion vectors use the un-jittered projection above. When TAA
+    // is off, jittered_projection equals projection_matrix.
+    mat4* draw_projection = &engine->jittered_projection;
 
     RenderMode render_mode = engine->current_render_mode;
 
@@ -545,7 +556,7 @@ void render_current_scene(Engine* engine, float time_value) {
     // (skybox, translucents, catcher, overlays) writes color only.
     engine_set_scene_draw_buffers(engine, true);
     scene->transparent_mesh_count = 0;
-    _render_scene_iterative(engine, scene, root_node, camera, *view, *projection, time_value,
+    _render_scene_iterative(engine, scene, root_node, camera, *view, *draw_projection, time_value,
                             render_mode, &current_program, &current_material, &frustum, false);
     engine_set_scene_draw_buffers(engine, false);
 
@@ -554,7 +565,7 @@ void render_current_scene(Engine* engine, float time_value) {
     // the skybox shader emits linear HDR that would display uncorrected.
     if (scene->render_skybox && scene->ibl && scene->ibl->precomputed &&
         render_mode == RENDER_MODE_PBR) {
-        render_skybox(scene->ibl, *view, *projection, scene->skybox_brightness,
+        render_skybox(scene->ibl, *view, *draw_projection, scene->skybox_brightness,
                       scene->skybox_ground_projection, scene->skybox_gp_radius,
                       scene->skybox_gp_height);
     }
@@ -567,7 +578,7 @@ void render_current_scene(Engine* engine, float time_value) {
         current_program = 0;
         current_material = NULL;
         glDepthMask(GL_FALSE);
-        _render_scene_iterative(engine, scene, root_node, camera, *view, *projection, time_value,
+        _render_scene_iterative(engine, scene, root_node, camera, *view, *draw_projection, time_value,
                                 render_mode, &current_program, &current_material, &frustum, true);
         glDepthMask(GL_TRUE);
     }
@@ -582,7 +593,7 @@ void render_current_scene(Engine* engine, float time_value) {
 
         glUseProgram(catcher->id);
         uniform_set_mat4(catcher->uniforms, "view", (const float*)*view);
-        uniform_set_mat4(catcher->uniforms, "projection", (const float*)*projection);
+        uniform_set_mat4(catcher->uniforms, "projection", (const float*)*draw_projection);
         uniform_set_float(catcher->uniforms, "catcherStrength", scene->shadow_catcher_strength);
         uniform_set_float(catcher->uniforms, "planeRadius", scene->skybox_gp_radius);
 

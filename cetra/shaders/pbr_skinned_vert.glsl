@@ -19,6 +19,8 @@ out vec2 TexCoords;
 out vec2 TexCoords2;
 out vec4 VertexColor;
 out mat3 TBN;
+out vec4 CurrClip;     // Un-jittered current clip position (motion vectors)
+out vec4 PrevClip;     // Previous-frame clip position
 
 #define MAX_LIGHTS 70
 #define MAX_BONES  128
@@ -44,7 +46,13 @@ uniform int numLights;
 
 uniform mat4 model;
 uniform mat4 view;
-uniform mat4 projection;
+uniform mat4 projection; // Jittered when TAA is on (rasterization only)
+
+// Motion-vector inputs (un-jittered). In M1 skinned meshes report rigid (node)
+// velocity only; per-bone deformation velocity is added later.
+uniform mat4 uCurrViewProjNoJitter;
+uniform mat4 uPrevViewProj;
+uniform mat4 uPrevModel;
 
 uniform vec3 camPos;
 uniform float time;
@@ -102,6 +110,12 @@ void main() {
     // Transform to world space
     vec4 worldPos = model * localPos;
     WorldPos = worldPos.xyz;
+
+    // Motion vectors (un-jittered). Rigid for now: the previous position uses
+    // the current skinned local pose with the previous node transform, so it
+    // captures camera + node motion but not per-bone deformation.
+    CurrClip = uCurrViewProjNoJitter * worldPos;
+    PrevClip = uPrevViewProj * uPrevModel * localPos;
 
     vec4 viewPos = view * worldPos;
     ViewPos = viewPos.xyz;

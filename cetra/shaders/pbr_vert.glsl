@@ -17,6 +17,8 @@ out vec2 TexCoords;
 out vec2 TexCoords2;   // UV1 for lightmaps/AO
 out vec4 VertexColor;  // Vertex color (RGBA)
 out mat3 TBN;
+out vec4 CurrClip;     // Un-jittered current clip position (motion vectors)
+out vec4 PrevClip;     // Previous-frame clip position
 
 #define MAX_LIGHTS 70
 
@@ -41,7 +43,13 @@ uniform int numLights;
 
 uniform mat4 model;
 uniform mat4 view;
-uniform mat4 projection;
+uniform mat4 projection; // Jittered when TAA is on (rasterization only)
+
+// Motion-vector inputs (un-jittered). Default to zero when unset, yielding zero
+// velocity, which the TAA resolve treats as static.
+uniform mat4 uCurrViewProjNoJitter;
+uniform mat4 uPrevViewProj;
+uniform mat4 uPrevModel;
 
 uniform vec3 camPos;
 uniform float time;
@@ -50,7 +58,11 @@ void main() {
 
     vec4 worldPos = model * vec4(aPos, 1.0);
     WorldPos = worldPos.xyz;
-    
+
+    // Motion vectors: current vs previous clip position, both un-jittered.
+    CurrClip = uCurrViewProjNoJitter * worldPos;
+    PrevClip = uPrevViewProj * uPrevModel * vec4(aPos, 1.0);
+
     vec4 viewPos = view * worldPos;
     ViewPos = viewPos.xyz;
 

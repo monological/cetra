@@ -34,7 +34,8 @@ typedef enum {
     RENDER_MODE_FLAT_COLOR,      // Flat Color Visualization
     RENDER_MODE_ALBEDO,          // Albedo Only
     RENDER_MODE_SIMPLE_LIGHTING, // Simple Diffuse Lighting
-    RENDER_MODE_METALLIC_ROUGH   // Metallic and Roughness Visualization
+    RENDER_MODE_METALLIC_ROUGH,  // Metallic and Roughness Visualization
+    RENDER_MODE_VELOCITY         // Motion-vector (velocity) visualization
 } RenderMode;
 
 // Axis vertices: 6 vertices, 2 for each line (origin and end)
