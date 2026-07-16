@@ -351,6 +351,68 @@ static int _setup_engine_msaa(Engine* engine) {
  * GUI
  *
  */
+
+// Dark panel with an indigo (#5f5fff) accent: the accent drives every
+// interactive element (title bar, buttons, collapsing headers, checkmarks,
+// sliders) while the surface stays a near-black blue-tinted charcoal.
+static void _apply_engine_gui_style(void) {
+    ImGuiStyle* style = igGetStyle();
+    igStyleColorsDark(style);
+
+    style->WindowRounding = 6.0f;
+    style->ChildRounding = 4.0f;
+    style->FrameRounding = 4.0f;
+    style->PopupRounding = 4.0f;
+    style->GrabRounding = 4.0f;
+    style->ScrollbarRounding = 4.0f;
+    style->WindowBorderSize = 1.0f;
+    style->FrameBorderSize = 1.0f;
+    style->WindowPadding = (ImVec2){12.0f, 12.0f};
+    style->FramePadding = (ImVec2){8.0f, 4.0f};
+    style->ItemSpacing = (ImVec2){8.0f, 7.0f};
+
+    const ImVec4 accent = {0.373f, 0.373f, 1.000f, 1.00f}; // #5f5fff
+    const ImVec4 accent_hi = {0.500f, 0.500f, 1.000f, 1.00f};
+
+    ImVec4* c = style->Colors;
+    c[ImGuiCol_Text] = (ImVec4){0.90f, 0.90f, 0.94f, 1.00f};
+    c[ImGuiCol_TextDisabled] = (ImVec4){0.50f, 0.50f, 0.55f, 1.00f};
+    c[ImGuiCol_WindowBg] = (ImVec4){0.055f, 0.055f, 0.075f, 0.97f};
+    c[ImGuiCol_ChildBg] = (ImVec4){0.00f, 0.00f, 0.00f, 0.00f};
+    c[ImGuiCol_PopupBg] = (ImVec4){0.070f, 0.070f, 0.095f, 0.98f};
+    c[ImGuiCol_Border] = (ImVec4){0.267f, 0.267f, 0.267f, 0.50f}; // #444, inactive
+
+    c[ImGuiCol_FrameBg] = (ImVec4){0.130f, 0.130f, 0.170f, 1.00f};
+    c[ImGuiCol_FrameBgHovered] = (ImVec4){0.200f, 0.200f, 0.300f, 1.00f};
+    c[ImGuiCol_FrameBgActive] = (ImVec4){0.260f, 0.260f, 0.420f, 1.00f};
+
+    c[ImGuiCol_TitleBg] = (ImVec4){0.080f, 0.080f, 0.110f, 1.00f};
+    c[ImGuiCol_TitleBgActive] = (ImVec4){0.190f, 0.190f, 0.400f, 1.00f};
+    c[ImGuiCol_TitleBgCollapsed] = (ImVec4){0.080f, 0.080f, 0.110f, 0.75f};
+
+    c[ImGuiCol_CheckMark] = accent;
+    c[ImGuiCol_SliderGrab] = accent;
+    c[ImGuiCol_SliderGrabActive] = accent_hi;
+
+    c[ImGuiCol_Button] = (ImVec4){0.373f, 0.373f, 1.000f, 0.55f};
+    c[ImGuiCol_ButtonHovered] = (ImVec4){0.373f, 0.373f, 1.000f, 0.90f};
+    c[ImGuiCol_ButtonActive] = accent_hi;
+
+    c[ImGuiCol_Header] = (ImVec4){0.373f, 0.373f, 1.000f, 0.45f};
+    c[ImGuiCol_HeaderHovered] = (ImVec4){0.373f, 0.373f, 1.000f, 0.70f};
+    c[ImGuiCol_HeaderActive] = (ImVec4){0.373f, 0.373f, 1.000f, 0.90f};
+
+    c[ImGuiCol_Separator] = (ImVec4){0.267f, 0.267f, 0.267f, 0.60f};
+    c[ImGuiCol_SeparatorHovered] = (ImVec4){0.373f, 0.373f, 1.000f, 0.78f};
+    c[ImGuiCol_SeparatorActive] = accent_hi;
+
+    c[ImGuiCol_ResizeGrip] = (ImVec4){0.373f, 0.373f, 1.000f, 0.25f};
+    c[ImGuiCol_ResizeGripHovered] = (ImVec4){0.373f, 0.373f, 1.000f, 0.55f};
+    c[ImGuiCol_ResizeGripActive] = (ImVec4){0.373f, 0.373f, 1.000f, 0.90f};
+
+    c[ImGuiCol_TextSelectedBg] = (ImVec4){0.373f, 0.373f, 1.000f, 0.40f};
+}
+
 static int _setup_engine_gui(Engine* engine) {
     if (!engine || !engine->window)
         return -1;
@@ -362,7 +424,7 @@ static int _setup_engine_gui(Engine* engine) {
     igCreateContext(NULL);
     ImGui_ImplGlfw_InitForOpenGL(engine->window, false);
     ImGui_ImplOpenGL3_Init("#version 150");
-    igStyleColorsDark(NULL);
+    _apply_engine_gui_style();
 
     // save engine to window so we can use it in callbacks
     glfwSetWindowUserPointer(engine->window, engine);
