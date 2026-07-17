@@ -6,6 +6,10 @@
 
 #include "ext/log.h"
 
+// Auto-exposure measure-target side; its full mip chain averages down to 1x1
+// at level log2(size). Must match MEASURE_TOP_MIP in lum_adapt_frag.glsl.
+#define LUM_MEASURE_SIZE 64
+
 // Creates a single-sample color-only FBO; returns false on failure
 static bool create_color_fbo(int width, int height, GLenum internal_format, GLuint* out_fbo,
                              GLuint* out_texture) {
@@ -128,6 +132,8 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     fx->ssao_height = fx->bloom_height;
 
     fx->exposure = 1.0f;
+    fx->auto_exposure = true; // Adapt to scene luminance; manual -E pins it off
+    fx->auto_exposure_key = 0.18f;
     fx->bloom_threshold = 1.0f;
     fx->bloom_knee = 0.5f;
     fx->bloom_max_brightness = 8.0f;
@@ -272,6 +278,25 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
         }
     }
 
+    // Auto-exposure: a 64x64 log2-luminance measure target whose mip chain is
+    // regenerated each frame (top mip = geometric-mean scene luminance), and a
+    // 1x1 adapted-luminance ping-pong the eye-adaptation pass blends across
+    // frames. R16F: log2 luminance is small-range but needs sub-ulp precision.
+    if (!create_color_fbo(LUM_MEASURE_SIZE, LUM_MEASURE_SIZE, GL_R16F, &fx->lum_fbo,
+                          &fx->lum_texture)) {
+        free_postfx(fx);
+        return NULL;
+    }
+    glBindTexture(GL_TEXTURE_2D, fx->lum_texture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glGenerateMipmap(GL_TEXTURE_2D); // Allocate the chain up front
+    for (int i = 0; i < 2; i++) {
+        if (!create_color_fbo(1, 1, GL_R16F, &fx->lum_adapt_fbo[i], &fx->lum_adapt_texture[i])) {
+            free_postfx(fx);
+            return NULL;
+        }
+    }
+
     unsigned int rng = 0x9E3779B9u;
     fx->noise_texture = create_ssao_noise_texture(&rng);
 
@@ -282,6 +307,8 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     fx->ssao_blur_program = create_ssao_blur_program();
     fx->ao_accum_program = create_ao_accum_program();
     fx->ssgi_composite_program = create_ssgi_composite_program();
+    fx->lum_measure_program = create_lum_measure_program();
+    fx->lum_adapt_program = create_lum_adapt_program();
     fx->ssr_program = create_ssr_program();
     fx->ssr_composite_program = create_ssr_composite_program();
     fx->taa_resolve_program = create_taa_resolve_program();
@@ -290,7 +317,7 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     fx->dof_composite_program = create_dof_composite_program();
     if (!fx->bright_program || !fx->blur_program || !fx->tonemap_program || !fx->gtao_program ||
         !fx->ssao_blur_program || !fx->ao_accum_program || !fx->ssgi_composite_program ||
-        !fx->ssr_program ||
+        !fx->lum_measure_program || !fx->lum_adapt_program || !fx->ssr_program ||
         !fx->ssr_composite_program || !fx->taa_resolve_program || !fx->dof_coc_program ||
         !fx->dof_blur_program || !fx->dof_composite_program) {
         free_postfx(fx);
@@ -310,6 +337,13 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     uniform_set_int(fx->tonemap_program->uniforms, "ssrTex", 4);
     uniform_set_int(fx->tonemap_program->uniforms, "albedoTex", 5);
     uniform_set_int(fx->tonemap_program->uniforms, "giTex", 6);
+    uniform_set_int(fx->tonemap_program->uniforms, "lumTex", 7);
+
+    glUseProgram(fx->lum_measure_program->id);
+    uniform_set_int(fx->lum_measure_program->uniforms, "hdrTex", 0);
+    glUseProgram(fx->lum_adapt_program->id);
+    uniform_set_int(fx->lum_adapt_program->uniforms, "measureTex", 0);
+    uniform_set_int(fx->lum_adapt_program->uniforms, "historyTex", 1);
 
     glUseProgram(fx->ssr_program->id);
     uniform_set_int(fx->ssr_program->uniforms, "depthTex", 0);
@@ -449,6 +483,10 @@ void free_postfx(PostFX* fx) {
     glDeleteTextures(1, &fx->albedo_texture);
     glDeleteFramebuffers(2, fx->taa_history_fbo);
     glDeleteTextures(2, fx->taa_history_texture);
+    glDeleteFramebuffers(1, &fx->lum_fbo);
+    glDeleteTextures(1, &fx->lum_texture);
+    glDeleteFramebuffers(2, fx->lum_adapt_fbo);
+    glDeleteTextures(2, fx->lum_adapt_texture);
     // DoF targets are 0 (no-op delete) if never lazily allocated
     glDeleteFramebuffers(1, &fx->dof_coc_fbo);
     glDeleteTextures(1, &fx->dof_coc_texture);
@@ -464,6 +502,8 @@ void free_postfx(PostFX* fx) {
     free_program(fx->ssao_blur_program);
     free_program(fx->ao_accum_program);
     free_program(fx->ssgi_composite_program);
+    free_program(fx->lum_measure_program);
+    free_program(fx->lum_adapt_program);
     free_program(fx->ssr_program);
     free_program(fx->ssr_composite_program);
     free_program(fx->taa_resolve_program);
@@ -803,6 +843,33 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             scene_tex = fx->dof_texture;
         }
 
+        // Auto-exposure: measure the scene's log2 luminance at 64x64, mip down
+        // to its geometric mean, and blend the 1x1 adapted value toward it
+        // (frame-count-based eye adaptation; the tonemap divides the key by it).
+        int lum_write = fx->frame_index & 1;
+        if (fx->auto_exposure) {
+            glBindFramebuffer(GL_FRAMEBUFFER, fx->lum_fbo);
+            glViewport(0, 0, LUM_MEASURE_SIZE, LUM_MEASURE_SIZE);
+            glUseProgram(fx->lum_measure_program->id);
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, scene_tex);
+            draw_fullscreen_quad(fx->quad_vao);
+            glBindTexture(GL_TEXTURE_2D, fx->lum_texture);
+            glGenerateMipmap(GL_TEXTURE_2D);
+
+            glBindFramebuffer(GL_FRAMEBUFFER, fx->lum_adapt_fbo[lum_write]);
+            glViewport(0, 0, 1, 1);
+            glUseProgram(fx->lum_adapt_program->id);
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, fx->lum_texture);
+            glActiveTexture(GL_TEXTURE1);
+            glBindTexture(GL_TEXTURE_2D, fx->lum_adapt_texture[lum_write ^ 1]);
+            uniform_set_int(fx->lum_adapt_program->uniforms, "reset",
+                            fx->frame_index == 0 ? 1 : 0);
+            draw_fullscreen_quad(fx->quad_vao);
+            check_gl_error("postfx auto exposure");
+        }
+
         if (fx->bloom_enabled) {
             // Bright pass into half-res buffer 0 (linear sampling downsamples)
             glBindFramebuffer(GL_FRAMEBUFFER, fx->bloom_fbo[0]);
@@ -855,8 +922,12 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         glBindTexture(GL_TEXTURE_2D, albedo_written ? fx->albedo_texture : 0);
         glActiveTexture(GL_TEXTURE6);
         glBindTexture(GL_TEXTURE_2D, fx->ssgi_enabled ? fx->ssgi_gi_texture : 0);
+        glActiveTexture(GL_TEXTURE7);
+        glBindTexture(GL_TEXTURE_2D, fx->auto_exposure ? fx->lum_adapt_texture[lum_write] : 0);
         UniformManager* tm = fx->tonemap_program->uniforms;
         uniform_set_float(tm, "exposure", fx->exposure);
+        uniform_set_int(tm, "autoExposure", fx->auto_exposure ? 1 : 0);
+        uniform_set_float(tm, "autoKey", fx->auto_exposure_key);
         uniform_set_float(tm, "bloomStrength", fx->bloom_strength);
         uniform_set_int(tm, "bloomEnabled", fx->bloom_enabled ? 1 : 0);
         uniform_set_int(tm, "aoEnabled", fx->ssao_enabled ? 1 : 0);

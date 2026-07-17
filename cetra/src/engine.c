@@ -1253,6 +1253,8 @@ static void _engine_gui_panel(Engine* engine) {
         bool aces = fx->tonemap_mode == POSTFX_TONEMAP_ACES;
         if (igCheckbox("ACES Tonemap", &aces))
             fx->tonemap_mode = aces ? POSTFX_TONEMAP_ACES : POSTFX_TONEMAP_NEUTRAL;
+        igCheckbox("Auto Exposure", &fx->auto_exposure);
+        // With auto on, the manual slider becomes an EV bias on the adapted value
         igSliderFloat("Exposure", &fx->exposure, 0.05f, 8.0f, "%.2f", 0);
 
         _begin_effect_group("Bloom", &fx->bloom_enabled);

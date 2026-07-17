@@ -60,6 +60,10 @@ typedef struct PostFX {
     GLuint aux_texture;
     GLuint albedo_fbo; // Full-res resolved base color / albedo (attachment 3) for SSGI composite
     GLuint albedo_texture;
+    GLuint lum_fbo; // 64x64 log2-luminance measure target, mipmapped each frame (auto-exposure)
+    GLuint lum_texture;
+    GLuint lum_adapt_fbo[2]; // 1x1 adapted log2-luminance ping-pong (eye adaptation)
+    GLuint lum_adapt_texture[2];
     GLuint taa_history_fbo[2]; // Full-res history ping-pong (previous resolved frames)
     GLuint taa_history_texture[2];
 
@@ -70,6 +74,8 @@ typedef struct PostFX {
     ShaderProgram* ssao_blur_program;
     ShaderProgram* ao_accum_program;
     ShaderProgram* ssgi_composite_program;
+    ShaderProgram* lum_measure_program;
+    ShaderProgram* lum_adapt_program;
     ShaderProgram* ssr_program;
     ShaderProgram* ssr_composite_program;
     ShaderProgram* taa_resolve_program;
@@ -77,7 +83,9 @@ typedef struct PostFX {
     GLuint quad_vao;
     GLuint quad_vbo;
 
-    float exposure;
+    float exposure;             // Manual exposure; an EV bias when auto_exposure is on
+    bool auto_exposure;         // Adapt exposure to the scene's mean luminance
+    float auto_exposure_key;    // Target middle gray the mean is mapped to (0.18)
     float bloom_threshold;      // Linear luminance where bloom starts
     float bloom_knee;           // Soft-knee width around the threshold
     float bloom_max_brightness; // Firefly clamp on the bloom input

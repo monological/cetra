@@ -683,6 +683,30 @@ ShaderProgram* create_ssgi_composite_program() {
     return program;
 }
 
+ShaderProgram* create_lum_measure_program() {
+    ShaderProgram* program = NULL;
+
+    if ((program = create_program_from_source("lum_measure", post_vert_shader_str,
+                                              lum_measure_frag_shader_str, NULL)) == NULL) {
+        log_error("Failed to initialize luminance measure shader program");
+        return NULL;
+    }
+
+    return program;
+}
+
+ShaderProgram* create_lum_adapt_program() {
+    ShaderProgram* program = NULL;
+
+    if ((program = create_program_from_source("lum_adapt", post_vert_shader_str,
+                                              lum_adapt_frag_shader_str, NULL)) == NULL) {
+        log_error("Failed to initialize luminance adapt shader program");
+        return NULL;
+    }
+
+    return program;
+}
+
 ShaderProgram* create_dof_coc_program() {
     ShaderProgram* program = NULL;
 

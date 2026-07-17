@@ -1,0 +1,27 @@
+#version 330 core
+in vec2 TexCoords;
+out vec4 FragColor;
+
+// Auto-exposure step 1: down-measure the linear HDR scene into a small target
+// storing log2 luminance. Mipmapping this target afterwards averages the logs,
+// so the top mip holds the scene's geometric-mean (photographic) luminance --
+// robust to a few very bright pixels, unlike an arithmetic mean.
+uniform sampler2D hdrTex; // Resolved linear HDR scene
+
+void main()
+{
+    vec3 hdr = texture(hdrTex, TexCoords).rgb;
+    // Sanitize like the tonemap does: a +INF texel would poison the whole
+    // average through the mip chain.
+    hdr = min(hdr, vec3(60000.0));
+    float lum = dot(hdr, vec3(0.2126, 0.7152, 0.0722));
+    // Clamp the metered range so extremes can't hijack the average. The floor
+    // sits at the middle-gray key itself: texels darker than the key meter AS
+    // the key, so the mean can never fall below it and the auto gain tops out
+    // at 1x -- auto-exposure only ever DARKENS an over-bright scene. Boosting
+    // dark scenes is what it must not do: a subject framed against black void
+    // (no environment) would otherwise meter low and blow out. The ceiling
+    // stops one sun pixel from crushing everything else.
+    lum = clamp(lum, 0.18, 10000.0);
+    FragColor = vec4(log2(lum), 0.0, 0.0, 1.0);
+}

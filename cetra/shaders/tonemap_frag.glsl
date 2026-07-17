@@ -17,6 +17,12 @@ uniform sampler2D normalsTex; // Resolved view-space normals + roughness
 uniform sampler2D ssrTex;     // Half-res reflection buffer
 uniform sampler2D albedoTex;  // Resolved albedo G-buffer (SSGI)
 uniform sampler2D giTex;      // Half-res gathered GI radiance (SSGI)
+// Auto-exposure: scale exposure by key / adapted average luminance, so the
+// scene's mean lands near photographic middle gray. The manual exposure
+// uniform then acts as an EV bias on top.
+uniform sampler2D lumTex; // 1x1 adapted log2 mean luminance
+uniform int autoExposure;
+uniform float autoKey; // Target middle gray (0.18)
 // Debug view dispatch (PostFXDebugView): 0=none, 1=AO, 2=normals, 3=SSR, 4=albedo, 5=GI
 uniform int debugView;
 // 1 = ACES, 2 = PBR Neutral (passthrough frames are blitted by postfx_run
@@ -72,6 +78,11 @@ vec3 pbrNeutralTonemap(vec3 color)
     return mix(color, newPeak * vec3(1.0), g);
 }
 
+// Effective exposure for this frame: manual, or auto x manual bias. Set once
+// in main() (it reads the adapted-luminance texture) and shared by every
+// sceneToToned tap.
+float effExposure;
+
 // Scene HDR sample -> tonemapped LDR-linear [0,1], applying the shared AO
 // factor and bloom addition (the same order the composite uses). Sharpen
 // neighbour taps reuse the centre's aoFactor/bloomAdd so the mask measures
@@ -81,12 +92,19 @@ vec3 sceneToToned(vec3 hdr, float aoFactor, vec3 bloomAdd)
     // Sanitize a +INF texel (half-float overflow upstream) — both tonemap
     // curves turn INF into NaN, which displays as a black pixel
     vec3 c = min(hdr, vec3(60000.0)) * aoFactor + bloomAdd;
-    c *= exposure;
+    c *= effExposure;
     return tonemapMode == 1 ? acesTonemap(c) : pbrNeutralTonemap(c);
 }
 
 void main()
 {
+    effExposure = exposure;
+    if (autoExposure == 1) {
+        float avgLum = exp2(texture(lumTex, vec2(0.5)).r);
+        // Clamp the auto gain so a pathological scene (all black / one sun
+        // pixel) can't push exposure to extremes
+        effExposure = exposure * clamp(autoKey / max(avgLum, 1e-4), 1.0 / 64.0, 64.0);
+    }
     if (debugView == 1) {
         FragColor = vec4(vec3(texture(aoTex, TexCoords).r), 1.0);
         return;
