@@ -172,7 +172,7 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     fx->vignette_strength = 0.25f;
     fx->vignette_radius = 0.6f;
     fx->grain_enabled = false;
-    fx->grain_strength = 0.04f;
+    fx->grain_strength = 0.015f;
     fx->frame_index = 0;
 
     fx->taa_enabled = false; // Enabled per-app (the render app turns it on when windowed)
