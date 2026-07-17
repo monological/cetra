@@ -1237,6 +1237,16 @@ static void _engine_gui_panel(Engine* engine) {
         _begin_effect_group("Shadow Catcher", &scene->shadow_catcher);
         igSliderFloat("Shadow Strength", &scene->shadow_catcher_strength, 0.0f, 1.0f, "%.2f", 0);
         _end_effect_group();
+
+        // Only after a capture exists: the toggle switches consumption, it
+        // does not recapture
+        if (scene->probe && scene->probe->captured) {
+            _begin_effect_group("Reflection Probe", &scene->probe->enabled);
+            igSliderFloat("Probe Intensity", &scene->probe->intensity, 0.0f, 4.0f, "%.2f", 0);
+            igSliderFloat("Box Fade", &scene->probe->box_fade, 0.0f, 0.5f, "%.2f", 0);
+            igCheckbox("Show Capture", &scene->probe->debug_background);
+            _end_effect_group();
+        }
     }
 
     if (engine->postfx &&
