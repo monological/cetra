@@ -524,6 +524,16 @@ static int check_stretch = 0;
  */
 static vec3 model_recenter_offset = {0.0f, 0.0f, 0.0f};
 
+/*
+ * Distance-adaptive near plane (set at load, 0 = disabled). The static
+ * scene-scaled near (0.05 x radius, chosen for depth precision) slices into
+ * geometry once the camera zooms closer than it; track the camera each frame
+ * and shrink near proportionally, clamped to the load-time value so the
+ * default framing renders exactly as before.
+ */
+static float clip_near_max = 0.0f;   // Load-time near (0.05 x scene radius)
+static float clip_near_floor = 0.0f; // Lower bound (matches the 10% min zoom)
+
 
 /*
  * CPU-skin a vertex with the animation state's bone matrices, mirroring the
@@ -736,6 +746,19 @@ void render_scene_callback(Engine* engine, Scene* current_scene) {
     // Update camera via drag controller
     if (drag_controller) {
         mouse_drag_update(drag_controller, time_value);
+    }
+
+    // Distance-adaptive near plane: 0.02 x camera-to-target distance equals the
+    // load-time near at the default 2.5x-radius framing (so nothing changes
+    // until the user zooms), then shrinks with the camera so close-ups don't
+    // clip into the model.
+    if (engine->camera && clip_near_max > 0.0f) {
+        float cam_dist = glm_vec3_distance(engine->camera->position, engine->camera->look_at);
+        float near_clip = fmaxf(fminf(0.02f * cam_dist, clip_near_max), clip_near_floor);
+        if (near_clip != engine->camera->near_clip) {
+            engine->camera->near_clip = near_clip;
+            update_engine_camera_perspective(engine);
+        }
     }
 
     Transform transform = {.position = {model_recenter_offset[0], model_recenter_offset[1],
@@ -1247,6 +1270,11 @@ int main(int argc, char** argv) {
     set_camera_perspective(camera, fov_radians, auto_near, auto_far);
     update_engine_camera_perspective(engine);
     printf("Camera clip planes: near=%.4f, far=%.2f\n", auto_near, auto_far);
+
+    // Arm the per-frame distance-adaptive near (see the render callback). The
+    // floor matches the orbit's 10% minimum zoom (0.02 * 0.25 * camera_distance).
+    clip_near_max = auto_near;
+    clip_near_floor = fmaxf(auto_near * 0.1f, 0.005f);
 
     // Update orbit controller with appropriate distance
     camera->distance = camera_distance;
