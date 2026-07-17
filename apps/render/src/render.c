@@ -1089,8 +1089,11 @@ int main(int argc, char** argv) {
             // projected environment floor
             scene->shadow_catcher = scene->ibl != NULL;
         }
-    } else {
-        // No IBL - use directional lights for illumination
+    } else if (scene->light_count == 0) {
+        // No IBL and the asset brings no lights of its own: add a neutral
+        // three-point rig so a bare model is visible. Scenes that ship their
+        // own lighting design (embedded lights, emissive surfaces) keep it --
+        // flooding them with a default rig erases the authored mood.
         create_three_point_lights(scene, 3.0f);
     }
 
