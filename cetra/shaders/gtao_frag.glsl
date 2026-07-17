@@ -126,6 +126,18 @@ void main()
     // UV delta reduces to 0.5 * focalX * radius / (-linZ).
     float screenRadius = min(0.5 * projection[0][0] * radius / (-linZ), MAX_SCREEN_RADIUS);
 
+    // Below sampling resolution the occlusion is unmeasurable: when the whole
+    // reach fits inside one depth texel, every NEAREST tap returns the center's
+    // own Z, and on a tilted surface the flat-Z sample vector fabricates a
+    // phantom step-up occluder -- distant grounds band with false occlusion
+    // (the texel-snap phase cycles with perspective). Declare such pixels
+    // unoccluded instead. noiseScale is ao-resolution / 4.
+    if (screenRadius * 4.0 * max(noiseScale.x, noiseScale.y) < 1.0) {
+        AoOut = vec4(1.0);
+        GiOut = vec4(0.0);
+        return;
+    }
+
     float occlusion = 0.0;
     vec3 gi = vec3(0.0); // one-bounce irradiance gathered from occluders (SSGI)
     for (int s = 0; s < SLICES; s++) {

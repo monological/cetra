@@ -14,7 +14,8 @@
 static bool create_color_fbo(int width, int height, GLenum internal_format, GLuint* out_fbo,
                              GLuint* out_texture) {
     GLenum format = GL_RGB;
-    if (internal_format == GL_RGBA16F || internal_format == GL_RGBA8)
+    if (internal_format == GL_RGBA16F || internal_format == GL_RGBA32F ||
+        internal_format == GL_RGBA8)
         format = GL_RGBA;
     else if (internal_format == GL_R8 || internal_format == GL_R16F)
         format = GL_RED;
@@ -252,7 +253,10 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     // Full-res resolve target for the scene pass's aux G-buffer (.xy motion +
     // .z linear view-Z), and the two full-res history buffers the TAA resolve
     // ping-pongs across frames.
-    if (!create_color_fbo(fx->width, fx->height, GL_RGBA16F, &fx->aux_fbo,
+    // Full float, matching the scene pass's aux attachment: the MSAA resolve
+    // blit requires identical formats, and fp16 view-Z staircases at scene
+    // scale (banded GTAO on large grounds).
+    if (!create_color_fbo(fx->width, fx->height, GL_RGBA32F, &fx->aux_fbo,
                           &fx->aux_texture)) {
         free_postfx(fx);
         return NULL;

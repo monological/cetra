@@ -346,12 +346,14 @@ static int _create_msaa_attachments(Engine* engine, int rw, int rh, int samples)
 
     // 0: HDR color. 1: view-space normals (.xyz) for SSAO/SSR. 2: aux G-buffer --
     // motion .xy (TAA) + linear view-Z .z (GTAO). 3: base color .rgb + metalness
-    // .a for SSGI. RGBA16F everywhere the resolve blit needs float; albedo is LDR.
+    // .a for SSGI. Albedo is LDR. The aux buffer is FULL float: half floats
+    // quantize linear Z into scene-scale steps on large scenes (fp16 ulp at
+    // z=7000 is ~8 units) and GTAO reads the staircase as banded occlusion.
     _add_msaa_color_attachment(&engine->multisample_texture, GL_RGBA16F, GL_COLOR_ATTACHMENT0, rw,
                                rh, samples);
     _add_msaa_color_attachment(&engine->normal_multisample_texture, GL_RGBA16F, GL_COLOR_ATTACHMENT1,
                                rw, rh, samples);
-    _add_msaa_color_attachment(&engine->aux_multisample_texture, GL_RGBA16F, GL_COLOR_ATTACHMENT2,
+    _add_msaa_color_attachment(&engine->aux_multisample_texture, GL_RGBA32F, GL_COLOR_ATTACHMENT2,
                                rw, rh, samples);
     _add_msaa_color_attachment(&engine->albedo_multisample_texture, GL_RGBA8, GL_COLOR_ATTACHMENT3,
                                rw, rh, samples);
