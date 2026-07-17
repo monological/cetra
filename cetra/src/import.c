@@ -1,4 +1,5 @@
 #include <string.h>
+#include <strings.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <assert.h>
@@ -31,6 +32,31 @@
 
 // Forward declarations
 static void copy_aiMatrix_to_mat4(const struct aiMatrix4x4* from, mat4 to);
+
+/*
+ * UV V-flip policy. glTF specifies a top-left UV origin while FBX data
+ * arrives bottom-left (verified against Blender: assimp's FBX UVs match
+ * Blender's raw values exactly), so relative to this engine's texture upload
+ * the V flip is needed for glTF and wrong for FBX. Default: decide per
+ * format. Bakes authored against the opposite convention exist in the wild
+ * (symptom: surfaces sample wrong atlas regions, labels mirror), so the
+ * application can override per asset.
+ */
+typedef enum UVFlipMode { UV_FLIP_AUTO = -1, UV_FLIP_OFF = 0, UV_FLIP_ON = 1 } UVFlipMode;
+static int import_flip_uvs = UV_FLIP_AUTO;
+
+void set_import_flip_uvs(bool flip) {
+    import_flip_uvs = flip ? UV_FLIP_ON : UV_FLIP_OFF;
+}
+
+static unsigned int uv_flip_flag(const char* path) {
+    if (import_flip_uvs != UV_FLIP_AUTO)
+        return import_flip_uvs == UV_FLIP_ON ? aiProcess_FlipUVs : 0u;
+    const char* dot = strrchr(path, '.');
+    if (dot && strcasecmp(dot, ".fbx") == 0)
+        return 0u;
+    return aiProcess_FlipUVs;
+}
 
 /*
  * Import a scene with FBX pivot preservation disabled. Assimp then collapses
@@ -1202,7 +1228,8 @@ SceneNode* process_ai_node(Scene* scene, struct aiNode* ai_node, const struct ai
 
 Scene* create_scene_from_model_path(const char* path, const char* texture_directory) {
     const struct aiScene* ai_scene =
-        import_ai_scene(path, aiProcess_Triangulate | aiProcess_FlipUVs | aiProcess_CalcTangentSpace);
+        import_ai_scene(path, aiProcess_Triangulate | aiProcess_CalcTangentSpace |
+                              uv_flip_flag(path));
     if (!ai_scene || ai_scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !ai_scene->mRootNode) {
         log_error("Error importing FBX file: %s\n", path);
         return NULL;
@@ -1323,7 +1350,8 @@ Scene* create_scene_from_model_path_async(const char* path, const char* texture_
     }
 
     const struct aiScene* ai_scene =
-        import_ai_scene(path, aiProcess_Triangulate | aiProcess_FlipUVs | aiProcess_CalcTangentSpace);
+        import_ai_scene(path, aiProcess_Triangulate | aiProcess_CalcTangentSpace |
+                              uv_flip_flag(path));
     if (!ai_scene || ai_scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !ai_scene->mRootNode) {
         log_error("Error importing FBX file: %s\n", path);
         return NULL;

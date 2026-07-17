@@ -31,6 +31,11 @@ void process_ai_lights(const struct aiScene* scene, Light*** lights, uint32_t* n
 
 void process_ai_cameras(const struct aiScene* scene, Camera*** cameras, uint32_t* num_cameras);
 
+// Import setting: flip UV V at import (default true). V orientation is
+// inconsistent across assets in the wild, so the application chooses per
+// asset; set before create_scene_from_model_path*.
+void set_import_flip_uvs(bool flip);
+
 Scene* create_scene_from_model_path(const char* path, const char* texture_directory);
 
 // Async variant - textures loaded in parallel

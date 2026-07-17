@@ -60,6 +60,8 @@ typedef struct {
     float ground_height;               // HDR capture height above ground (0 = default)
     float camera_distance;             // Camera distance override in meters (0 = auto)
     int no_recenter;                   // Keep the model's authored world position
+    int no_auto_exposure;              // Fixed exposure instead of eye adaptation
+    int no_flip_uv;                    // For assets baked with the opposite V convention
     int no_ground;                     // Disable skybox ground projection
     int no_key_light;                  // Pure IBL: skip the analytic key lights
     int no_shadows;                    // Keep key lights but disable shadow maps
@@ -113,9 +115,12 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "  -t, --textures <dir>   Texture directory\n");
     fprintf(stderr, "  -e, --env <path>       HDR environment map for IBL\n");
     fprintf(stderr, "  -F, --fov <degrees>    Camera field of view (default: 50)\n");
-    fprintf(stderr, "  -E, --exposure <f>     Tonemap exposure (default: engine default)\n");
+    fprintf(stderr, "  -E, --exposure <f>     Fixed tonemap exposure (disables auto-exposure)\n");
+    fprintf(stderr, "      --no-auto-exposure Fixed exposure instead of eye adaptation\n");
     fprintf(stderr, "      --ground <radius>  Ground projection dome radius (default: 5x scene)\n");
     fprintf(stderr, "      --no-recenter      Keep the model's authored world position\n");
+    fprintf(stderr, "      --no-flip-uv       For assets baked with the opposite UV V convention\n");
+    fprintf(stderr, "                         (symptom: scrambled/mirrored textures)\n");
     fprintf(stderr, "      --ground-height <m> HDR capture height above ground (default: 1.2)\n");
     fprintf(stderr, "      --no-ground        Disable HDR ground projection (infinite skybox)\n");
     fprintf(stderr, "      --no-key-light     Pure IBL lighting (no analytic lights/shadows)\n");
@@ -289,6 +294,10 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->no_ground = 1;
         } else if (strcmp(argv[i], "--no-recenter") == 0) {
             args->no_recenter = 1;
+        } else if (strcmp(argv[i], "--no-auto-exposure") == 0) {
+            args->no_auto_exposure = 1;
+        } else if (strcmp(argv[i], "--no-flip-uv") == 0) {
+            args->no_flip_uv = 1;
         } else if (strcmp(argv[i], "--ground") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -852,7 +861,12 @@ int main(int argc, char** argv) {
     }
 
     if (args.exposure > 0.0f && engine->postfx) {
+        // A manual exposure pins the frame: auto-adaptation off
         engine->postfx->exposure = args.exposure;
+        engine->postfx->auto_exposure = false;
+    }
+    if (args.no_auto_exposure && engine->postfx) {
+        engine->postfx->auto_exposure = false;
     }
     if (args.no_ssao && engine->postfx) {
         engine->postfx->ssao_enabled = false;
@@ -983,6 +997,8 @@ int main(int argc, char** argv) {
      * Import model with async texture loading.
      */
 
+    if (args.no_flip_uv)
+        set_import_flip_uvs(false);
     Scene* scene =
         create_scene_from_model_path_async(args.model_path, args.texture_dir, engine->async_loader);
     if (!scene) {
