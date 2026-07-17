@@ -1118,6 +1118,18 @@ int main(int argc, char** argv) {
     printf("Scene bounds: center=(%.2f, %.2f, %.2f), radius=%.2f\n", scene_center[0],
            scene_center[1], scene_center[2], scene_radius);
 
+    // Size the ground-projection dome to the scene, not a fixed 5 units. The
+    // camera's zoom cap derives from the dome radius (max_distance = fade_start
+    // * dome_radius), so a fixed dome clamped off-scale assets (e.g. a 773-unit
+    // scene) to a few units from center -- huge framing and dead zoom. Scaling
+    // it keeps framing and zoom range proportional at any model scale. An
+    // explicit --ground still wins. 5x radius leaves headroom past the 2.5x
+    // auto-framing distance (cap = 0.7 * 5 = 3.5x radius).
+    if (scene->render_skybox && scene->skybox_ground_projection &&
+        args.ground_radius <= 0.0f && scene_radius > 0.0f) {
+        scene->skybox_gp_radius = scene_radius * 5.0f;
+    }
+
     // Fit the shadow frustum to the scene; the library default (ortho 2000)
     // leaves a human-sized model with no effective shadow map resolution
     if (scene->shadow_system && args.no_shadows) {

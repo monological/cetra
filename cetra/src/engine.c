@@ -1213,7 +1213,11 @@ static void _engine_gui_panel(Engine* engine) {
     if (scene && scene->render_skybox && scene->ibl &&
         igCollapsingHeader_TreeNodeFlags("Environment", ImGuiTreeNodeFlags_DefaultOpen)) {
         _begin_effect_group("Ground Projection", &scene->skybox_ground_projection);
-        igSliderFloat("Dome Radius", &scene->skybox_gp_radius, 1.0f, 100.0f, "%.2f", 0);
+        // Log scale + wide range: the dome radius defaults to ~5x the scene
+        // radius, so it can be anywhere from a few units (meter-scale models) to
+        // thousands (large-unit assets).
+        igSliderFloat("Dome Radius", &scene->skybox_gp_radius, 1.0f, 10000.0f, "%.2f",
+                      ImGuiSliderFlags_Logarithmic);
         igSliderFloat("Capture Height", &scene->skybox_gp_height, 0.1f, 10.0f, "%.2f", 0);
         _end_effect_group();
 
