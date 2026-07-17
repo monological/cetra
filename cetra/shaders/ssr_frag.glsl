@@ -105,12 +105,21 @@ void main()
     vec3 viewDir = normalize(fragPos); // camera at the view-space origin
     vec3 R = normalize(reflect(viewDir, n));
 
+    // The probe answer for this ray, computed once for every exit below:
+    // full fallback on a miss, the faded tail's filler on a partial hit.
+    // Exact vec4(0) with the probe off, keeping every path bit-identical.
+    vec4 probe = probeSample(fragPos, n, R, viewDir);
+
     // Start biased along the normal so the ray does not immediately test
-    // against its own surface; clamp rays heading toward the camera so
-    // the end point stays safely in front of the near plane.
-    vec3 startV = fragPos + n * 0.02;
+    // against its own surface. The bias must grow with view distance: a
+    // fixed offset is sub-quantization on distant fragments of large scenes,
+    // where grazing rays hug their own surface for hundreds of units and
+    // depth rounding flips them "behind" it in row-aliased phase (banded
+    // false self-hits). Clamp rays heading toward the camera so the end
+    // point stays safely in front of the near plane.
+    vec3 startV = fragPos + n * max(0.02, 0.002 * length(fragPos));
     if (startV.z > -(nearV + 0.01)) {
-        FragColor = probeSample(fragPos, n, R, viewDir);
+        FragColor = probe;
         return;
     }
     float tMax = maxDistance;
@@ -118,7 +127,7 @@ void main()
         tMax = min(tMax, (-nearV - startV.z) / R.z);
     }
     if (tMax <= 0.0) {
-        FragColor = probeSample(fragPos, n, R, viewDir);
+        FragColor = probe;
         return;
     }
     vec3 endV = startV + R * tMax;
@@ -164,7 +173,7 @@ void main()
 
     if (!hit) {
         // Off-screen, out of steps, or occluded with no acceptable surface
-        FragColor = probeSample(fragPos, n, R, viewDir);
+        FragColor = probe;
         return;
     }
 
@@ -188,7 +197,7 @@ void main()
     // would actually see.
     vec3 hitN = texture(normalsTex, hitUV).xyz;
     if (dot(hitN, hitN) > 0.01 && dot(normalize(hitN), R) > 0.2) {
-        FragColor = probeSample(fragPos, n, R, viewDir);
+        FragColor = probe;
         return;
     }
 
@@ -211,6 +220,5 @@ void main()
     vec3 reflection = min(texture(hdrTex, hitUV).rgb, vec3(2.0));
     // Partial fades (screen edge, march distance) blend toward the probe
     // instead of toward nothing — premultiplied "SSR over probe"
-    FragColor = vec4(reflection * weight, weight) + probeSample(fragPos, n, R, viewDir)
-                                                        * (1.0 - weight);
+    FragColor = vec4(reflection * weight, weight) + probe * (1.0 - weight);
 }

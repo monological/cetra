@@ -91,6 +91,10 @@ int precompute_ibl(IBLResources* ibl, struct Engine* engine);
 void render_skybox(IBLResources* ibl, mat4 view, mat4 projection, float brightness,
                    bool ground_projection, float gp_radius, float gp_height);
 
+// Draw an arbitrary cubemap as the background with the skybox machinery
+// (no ground projection, unit brightness) — the probe debug view
+void render_skybox_cubemap(IBLResources* ibl, GLuint cubemap, mat4 view, mat4 projection);
+
 // Binding for PBR rendering
 void bind_ibl_textures(IBLResources* ibl, ShaderProgram* program);
 
@@ -102,17 +106,11 @@ void ibl_capture_views(vec3 origin, mat4 views[6]);
 // Allocate an RGB16F cubemap (optionally mip-filtered; mips are not generated)
 void ibl_create_cubemap_texture(GLuint* texture, int size, bool mipmap);
 
-// Draw the unit cube (skybox / cubemap-face rendering)
-void ibl_render_unit_cube(IBLResources* ibl);
-
-// Allocate an RGB16F cubemap with num_mip_levels manually-sized mip levels
-// (render target for per-mip prefiltering)
-void ibl_create_prefilter_cubemap(GLuint* texture, int size, int num_mip_levels);
-
-// GGX-prefilter src_cube (with full mip chain, src_resolution = face size)
-// into dst_cube's mip_levels levels, roughness = mip / (mip_levels - 1).
-// Requires precompute_ibl to have run (shares its program and capture FBO).
-void ibl_prefilter_cubemap(IBLResources* ibl, GLuint src_cube, float src_resolution,
-                           GLuint dst_cube, int dst_base_size, int mip_levels);
+// GGX-prefilter src_cube (which must carry a full mip chain) into *dst:
+// (re)allocates *dst with mip_levels manually-sized levels from
+// dst_base_size down, roughness = mip / (mip_levels - 1). Requires
+// precompute_ibl to have run (shares its program and capture FBO).
+void ibl_prefilter_cubemap(IBLResources* ibl, GLuint src_cube, GLuint* dst, int dst_base_size,
+                           int mip_levels);
 
 #endif // _IBL_H_

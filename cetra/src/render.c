@@ -360,9 +360,10 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
             }
 
             // Local reflection probe (parallax-corrected specular), rebinding
-            // the IBL prefilter unit to the probe capture. Gated on captured,
-            // so the capture pass itself never consumes the probe.
-            if (scene && scene->probe && scene->probe->captured && scene->probe->enabled) {
+            // the IBL prefilter unit to the probe capture. The probe joins
+            // the scene only after its capture, so the capture pass itself
+            // never consumes it.
+            if (scene && reflection_probe_active(scene->probe)) {
                 bind_reflection_probe(scene->probe, program);
             } else {
                 uniform_set_int(u, "probeEnabled", 0);
@@ -604,15 +605,19 @@ void render_current_scene(Engine* engine, float time_value) {
     // Skybox after opaques (depth-tested against them at the far plane).
     // Skipped in debug render modes: those frames bypass tone mapping, and
     // the skybox shader emits linear HDR that would display uncorrected.
-    // With the probe debug view on, the raw capture replaces the skybox.
-    if (scene->probe && scene->probe->captured && scene->probe->debug_background &&
-        scene->ibl && scene->ibl->precomputed && render_mode == RENDER_MODE_PBR) {
-        render_probe_debug_background(scene->probe, scene->ibl, *view, draw_projection);
-    } else if (scene->render_skybox && scene->ibl && scene->ibl->precomputed &&
-               render_mode == RENDER_MODE_PBR) {
-        render_skybox(scene->ibl, *view, draw_projection, scene->skybox_brightness,
-                      scene->skybox_ground_projection, scene->skybox_gp_radius,
-                      scene->skybox_gp_height);
+    // With the probe debug view on, the probe content replaces the skybox
+    // (environment-only probes have no capture; show their prefilter source).
+    if (scene->ibl && scene->ibl->precomputed && render_mode == RENDER_MODE_PBR) {
+        if (scene->probe && scene->probe->debug_background) {
+            render_skybox_cubemap(scene->ibl,
+                                  scene->probe->cubemap ? scene->probe->cubemap
+                                                        : scene->ibl->environment_cubemap,
+                                  *view, draw_projection);
+        } else if (scene->render_skybox) {
+            render_skybox(scene->ibl, *view, draw_projection, scene->skybox_brightness,
+                          scene->skybox_ground_projection, scene->skybox_gp_radius,
+                          scene->skybox_gp_height);
+        }
     }
 
     // Pass 2: blend-mode (translucent) meshes, composited over the real

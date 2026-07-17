@@ -1,5 +1,6 @@
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "probe.h"
 #include "engine.h"
@@ -35,15 +36,18 @@ void free_reflection_probe(ReflectionProbe* probe) {
     free(probe);
 }
 
-// Render the scene once into the probe cubemap and GGX-prefilter it.
+// Render the scene once into the probe cubemap and GGX-prefilter it — or,
+// for environment_only, prefilter the global environment straight into the
+// probe (see probe.h).
 //
-// Reuses the full scene pipeline (render_current_scene) with substituted
-// per-face view/projection and the camera moved to the probe position, into
-// the shared ibl capture FBO. Everything touched is saved and restored so a
-// capture at load leaves the first real frame bit-identical. Skinned meshes
-// capture at bind pose (no animation state has been evaluated at load).
+// The scene path reuses the full pipeline (render_current_scene) with
+// substituted per-face view/projection and the camera moved to the probe
+// position, into the shared ibl capture FBO. Everything touched is saved
+// and restored so a capture at load leaves the first real frame
+// bit-identical. Skinned meshes capture at bind pose (no animation state
+// has been evaluated at load).
 int reflection_probe_capture(ReflectionProbe* probe, struct Engine* engine, Scene* scene,
-                             float near_clip, float far_clip) {
+                             float near_clip, float far_clip, bool environment_only) {
     if (!probe || !engine || !scene || !engine->camera) {
         log_error("Invalid state for probe capture");
         return -1;
@@ -52,6 +56,44 @@ int reflection_probe_capture(ReflectionProbe* probe, struct Engine* engine, Scen
     if (!ibl || !ibl->precomputed) {
         log_error("Probe capture requires precomputed IBL");
         return -1;
+    }
+
+    probe->max_lod = (float)(PROBE_PREFILTER_MIP_LEVELS - 1);
+
+    if (environment_only) {
+        // No scene render: the probe is the global environment, re-prefiltered
+        // into a probe-owned chain so the parallax box can ground it
+        GLint saved_env_viewport[4];
+        GLint saved_env_fbo;
+        glGetIntegerv(GL_VIEWPORT, saved_env_viewport);
+        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &saved_env_fbo);
+
+        ibl_prefilter_cubemap(ibl, ibl->environment_cubemap, &probe->prefiltered,
+                              PROBE_PREFILTER_SIZE, PROBE_PREFILTER_MIP_LEVELS);
+
+        glBindFramebuffer(GL_FRAMEBUFFER, saved_env_fbo);
+        glViewport(saved_env_viewport[0], saved_env_viewport[1], saved_env_viewport[2],
+                   saved_env_viewport[3]);
+        glUseProgram(0);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
+
+        log_info("Reflection probe grounded the environment at (%.2f, %.2f, %.2f)",
+                 probe->position[0], probe->position[1], probe->position[2]);
+        return 0;
+    }
+
+    // Textures may still be streaming in from the async loader; a capture
+    // taken now would bake placeholder materials into the cubemap forever.
+    // Sleep between drains — process_pending returns immediately while the
+    // workers are still decoding.
+    if (engine->async_loader) {
+        while (async_loader_is_busy(engine->async_loader)) {
+            if (async_loader_process_pending(engine->async_loader, scene->tex_pool, 64) == 0) {
+                struct timespec ms = {0, 1000000};
+                nanosleep(&ms, NULL);
+            }
+        }
     }
 
     // Shadow maps have not been rendered at load time; bake them so the
@@ -104,10 +146,24 @@ int reflection_probe_capture(ReflectionProbe* probe, struct Engine* engine, Scen
         glDeleteTextures(1, &probe->cubemap);
     ibl_create_cubemap_texture(&probe->cubemap, PROBE_CUBEMAP_SIZE, true);
 
+    // Supersampled capture: render each face at 2x into a temporary target
+    // and box-downsample into the cube face (an exact 4-tap average at a 2:1
+    // blit). The capture has no MSAA, and single-sample grazing-angle
+    // aliasing at its horizon bakes in as stripe moire that mirror
+    // reflections then magnify into banded streaks.
+    const int ss_size = 2 * PROBE_CUBEMAP_SIZE;
+    GLuint ss_tex = 0, face_fbo = 0;
+    glGenTextures(1, &ss_tex);
+    glBindTexture(GL_TEXTURE_2D, ss_tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F, ss_size, ss_size, 0, GL_RGB, GL_FLOAT, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glGenFramebuffers(1, &face_fbo);
+
     glBindFramebuffer(GL_FRAMEBUFFER, ibl->capture_fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, ss_tex, 0);
     glBindRenderbuffer(GL_RENDERBUFFER, ibl->capture_rbo);
-    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, PROBE_CUBEMAP_SIZE,
-                          PROBE_CUBEMAP_SIZE);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, ss_size, ss_size);
 
     mat4 views[6];
     ibl_capture_views(probe->position, views);
@@ -119,24 +175,29 @@ int reflection_probe_capture(ReflectionProbe* probe, struct Engine* engine, Scen
     glm_perspective(glm_rad(90.0f), 1.0f, near_clip, far_clip, engine->projection_matrix);
 
     for (int i = 0; i < 6; ++i) {
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                               GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, probe->cubemap, 0);
-        glViewport(0, 0, PROBE_CUBEMAP_SIZE, PROBE_CUBEMAP_SIZE);
+        glBindFramebuffer(GL_FRAMEBUFFER, ibl->capture_fbo);
+        glViewport(0, 0, ss_size, ss_size);
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         glm_mat4_copy(views[i], engine->view_matrix);
         render_current_scene(engine, 0.0f);
+
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, ibl->capture_fbo);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, face_fbo);
+        glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                               GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, probe->cubemap, 0);
+        glBlitFramebuffer(0, 0, ss_size, ss_size, 0, 0, PROBE_CUBEMAP_SIZE, PROBE_CUBEMAP_SIZE,
+                          GL_COLOR_BUFFER_BIT, GL_LINEAR);
     }
+
+    glDeleteFramebuffers(1, &face_fbo);
+    glDeleteTextures(1, &ss_tex);
 
     glBindTexture(GL_TEXTURE_CUBE_MAP, probe->cubemap);
     glGenerateMipmap(GL_TEXTURE_CUBE_MAP);
 
-    if (probe->prefiltered)
-        glDeleteTextures(1, &probe->prefiltered);
-    ibl_create_prefilter_cubemap(&probe->prefiltered, PROBE_PREFILTER_SIZE,
-                                 PROBE_PREFILTER_MIP_LEVELS);
-    ibl_prefilter_cubemap(ibl, probe->cubemap, (float)PROBE_CUBEMAP_SIZE, probe->prefiltered,
-                          PROBE_PREFILTER_SIZE, PROBE_PREFILTER_MIP_LEVELS);
+    ibl_prefilter_cubemap(ibl, probe->cubemap, &probe->prefiltered, PROBE_PREFILTER_SIZE,
+                          PROBE_PREFILTER_MIP_LEVELS);
 
     // Restore
     glm_mat4_copy(saved_view, engine->view_matrix);
@@ -159,7 +220,6 @@ int reflection_probe_capture(ReflectionProbe* probe, struct Engine* engine, Scen
     glBindTexture(GL_TEXTURE_2D, 0);
     glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
 
-    probe->captured = true;
     log_info("Reflection probe captured at (%.2f, %.2f, %.2f)", probe->position[0],
              probe->position[1], probe->position[2]);
 
@@ -172,7 +232,7 @@ int reflection_probe_capture(ReflectionProbe* probe, struct Engine* engine, Scen
 // unit (call after bind_ibl_textures), and the shader switches the lookup
 // with probeEnabled.
 void bind_reflection_probe(const ReflectionProbe* probe, ShaderProgram* program) {
-    if (!probe || !probe->captured || !program || !program->uniforms)
+    if (!reflection_probe_active(probe) || !program || !program->uniforms)
         return;
 
     UniformManager* u = program->uniforms;
@@ -185,44 +245,27 @@ void bind_reflection_probe(const ReflectionProbe* probe, ShaderProgram* program)
     uniform_set_vec3(u, "probeBoxMin", probe->box_min);
     uniform_set_vec3(u, "probeBoxMax", probe->box_max);
     uniform_set_float(u, "probeIntensity", probe->intensity);
-    uniform_set_float(u, "probeMaxLOD", (float)(PROBE_PREFILTER_MIP_LEVELS - 1));
+    uniform_set_float(u, "probeMaxLOD", probe->max_lod);
     uniform_set_float(u, "probeBoxFade", probe->box_fade);
 
     glActiveTexture(GL_TEXTURE0);
 }
 
-// Draw the raw probe capture as the background (in place of the skybox) so
-// the capture can be inspected in situ
-void render_probe_debug_background(const ReflectionProbe* probe, IBLResources* ibl, mat4 view,
-                                   mat4 projection) {
-    if (!probe || !probe->captured || !ibl || !ibl->skybox_program)
+// Flatten the probe (or its absence) into postfx's per-frame uniform block
+void reflection_probe_publish_to_postfx(const ReflectionProbe* probe, PostFX* fx) {
+    if (!fx)
         return;
 
-    ShaderProgram* program = ibl->skybox_program;
-    glUseProgram(program->id);
-
-    // Remove translation from view matrix
-    mat4 view_no_translation;
-    glm_mat4_copy(view, view_no_translation);
-    view_no_translation[3][0] = 0.0f;
-    view_no_translation[3][1] = 0.0f;
-    view_no_translation[3][2] = 0.0f;
-
-    uniform_set_mat4(program->uniforms, "view", (float*)view_no_translation);
-    uniform_set_mat4(program->uniforms, "projection", (float*)projection);
-    uniform_set_float(program->uniforms, "brightness", 1.0f);
-    uniform_set_int(program->uniforms, "groundProjection", 0);
-
-    glActiveTexture(GL_TEXTURE0 + IBL_SKYBOX_TEXTURE_UNIT);
-    glBindTexture(GL_TEXTURE_CUBE_MAP, probe->cubemap);
-    uniform_set_int(program->uniforms, "skyboxTex", IBL_SKYBOX_TEXTURE_UNIT);
-
-    glDepthFunc(GL_LEQUAL);
-    glDepthMask(GL_FALSE);
-    ibl_render_unit_cube(ibl);
-    glDepthMask(GL_TRUE);
-    glDepthFunc(GL_LESS);
-
-    // The skybox proper binds its own cubemap next frame; leave unit state clean
-    glActiveTexture(GL_TEXTURE0);
+    if (reflection_probe_active(probe)) {
+        fx->probe_enabled = true;
+        fx->probe_cubemap = probe->prefiltered;
+        memcpy(fx->probe_pos, probe->position, sizeof(vec3));
+        memcpy(fx->probe_box_min, probe->box_min, sizeof(vec3));
+        memcpy(fx->probe_box_max, probe->box_max, sizeof(vec3));
+        fx->probe_max_lod = probe->max_lod;
+        fx->probe_intensity = probe->intensity;
+    } else {
+        fx->probe_enabled = false;
+        fx->probe_cubemap = 0;
+    }
 }

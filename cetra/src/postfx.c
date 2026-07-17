@@ -751,12 +751,6 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         bool ssr_active = postfx_ssr_active(fx, have_normals);
         bool dof_active = fx->dof_enabled;
         mat4 inv_projection;
-        mat4 inv_view;
-        if (ssr_active) {
-            // The probe fallback works in world space; SSR itself is
-            // view-space, so this is the only postfx consumer of the view
-            glm_mat4_inv(view, inv_view);
-        }
         if (ssr_active || dof_active) {
             // Resolve depth alongside color so screen-space passes can
             // reconstruct view-space positions (formats match: both are
@@ -895,9 +889,13 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             // Strength folds into the march's premultiplied weight (clamped
             // there) so the composite stays a straight premultiplied lerp
             uniform_set_float(fx->ssr_program->uniforms, "strength", fx->ssr_strength);
-            // Local-probe fallback for rays the march cannot answer
+            // Local-probe fallback for rays the march cannot answer. The
+            // probe lives in world space while SSR is view-space, so this is
+            // the only postfx consumer of the view matrix.
             uniform_set_int(fx->ssr_program->uniforms, "probeEnabled", fx->probe_enabled ? 1 : 0);
             if (fx->probe_enabled) {
+                mat4 inv_view;
+                glm_mat4_inv(view, inv_view);
                 glActiveTexture(GL_TEXTURE3);
                 glBindTexture(GL_TEXTURE_CUBE_MAP, fx->probe_cubemap);
                 glActiveTexture(GL_TEXTURE0);

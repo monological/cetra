@@ -1238,9 +1238,9 @@ static void _engine_gui_panel(Engine* engine) {
         igSliderFloat("Shadow Strength", &scene->shadow_catcher_strength, 0.0f, 1.0f, "%.2f", 0);
         _end_effect_group();
 
-        // Only after a capture exists: the toggle switches consumption, it
-        // does not recapture
-        if (scene->probe && scene->probe->captured) {
+        // Attached probes always carry a capture: the toggle switches
+        // consumption, it does not recapture
+        if (scene->probe) {
             _begin_effect_group("Reflection Probe", &scene->probe->enabled);
             igSliderFloat("Probe Intensity", &scene->probe->intensity, 0.0f, 4.0f, "%.2f", 0);
             igSliderFloat("Box Fade", &scene->probe->box_fade, 0.0f, 0.5f, "%.2f", 0);
@@ -1431,20 +1431,8 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode, bool draw_gui) 
     }
     // Hand the current scene's reflection probe to postfx (SSR miss fallback)
     // without postfx learning about Scene
-    Scene* fx_scene = get_current_scene(engine);
-    ReflectionProbe* probe = fx_scene ? fx_scene->probe : NULL;
-    if (probe && probe->captured && probe->enabled) {
-        engine->postfx->probe_enabled = true;
-        engine->postfx->probe_cubemap = probe->prefiltered;
-        glm_vec3_copy(probe->position, engine->postfx->probe_pos);
-        glm_vec3_copy(probe->box_min, engine->postfx->probe_box_min);
-        glm_vec3_copy(probe->box_max, engine->postfx->probe_box_max);
-        engine->postfx->probe_max_lod = (float)(PROBE_PREFILTER_MIP_LEVELS - 1);
-        engine->postfx->probe_intensity = probe->intensity;
-    } else {
-        engine->postfx->probe_enabled = false;
-        engine->postfx->probe_cubemap = 0;
-    }
+    const Scene* fx_scene = get_current_scene(engine);
+    reflection_probe_publish_to_postfx(fx_scene ? fx_scene->probe : NULL, engine->postfx);
     postfx_run(engine->postfx, engine->framebuffer, 0, frame_mode == RENDER_MODE_PBR,
                engine->normals_this_frame, engine->aux_this_frame, engine->albedo_this_frame,
                engine->projection_matrix, engine->view_matrix);

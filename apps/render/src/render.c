@@ -78,6 +78,7 @@ typedef struct {
     int probe;                         // Enable the local reflection probe
     int probe_pos_set;                 // --probe-pos given
     float probe_pos[3];                // Probe capture position override
+    int probe_scene;                   // Capture the scene meshes too (interiors)
     int probe_debug;                   // Show the raw capture as the background
     int albedo_debug;                  // Show the resolved albedo G-buffer
     int no_normals_mrt;                // Disable the normals G-buffer
@@ -147,8 +148,9 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --ssr-strength <f> Reflection strength (default: 1)\n");
     fprintf(stderr, "      --ssgi             Enable screen-space GI (one-bounce indirect diffuse)\n");
     fprintf(stderr, "      --ssgi-debug       Show the raw gathered GI radiance (implies --ssgi)\n");
-    fprintf(stderr, "      --probe            Capture a local reflection probe (SSR fallback + local specular)\n");
-    fprintf(stderr, "      --probe-pos x,y,z  Probe capture position (implies --probe; default: scene center)\n");
+    fprintf(stderr, "      --probe            Local reflection probe: grounded env reflections + SSR fallback\n");
+    fprintf(stderr, "      --probe-pos x,y,z  Probe parallax origin (implies --probe; default: auto)\n");
+    fprintf(stderr, "      --probe-scene      Capture the scene meshes into the probe (interiors)\n");
     fprintf(stderr, "      --probe-debug      Show the raw capture as the background (implies --probe)\n");
     fprintf(stderr, "      --albedo-debug     Show the resolved albedo G-buffer\n");
     fprintf(stderr, "      --specular-aa <f>  Specular anti-aliasing strength (default: 1)\n");
@@ -383,6 +385,9 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             }
             args->probe = 1;
             args->probe_pos_set = 1;
+        } else if (strcmp(argv[i], "--probe-scene") == 0) {
+            args->probe = 1;
+            args->probe_scene = 1;
         } else if (strcmp(argv[i], "--probe-debug") == 0) {
             args->probe = 1;
             args->probe_debug = 1;
@@ -573,6 +578,18 @@ static int check_stretch = 0;
  * from where the environment projects its floor.
  */
 static vec3 model_recenter_offset = {0.0f, 0.0f, 0.0f};
+
+// Bake the recenter offset into the model matrix and node globals. Called
+// before every frame's draw and before the load-time probe capture (which
+// renders node globals directly); re-application is idempotent.
+static void apply_model_recenter(Engine* engine, SceneNode* root_node) {
+    Transform transform = {.position = {model_recenter_offset[0], model_recenter_offset[1],
+                                        model_recenter_offset[2]},
+                           .rotation = {0.0f, 0.0f, 0.0f},
+                           .scale = {1.0f, 1.0f, 1.0f}};
+    reset_and_apply_transform(&engine->model_matrix, &transform);
+    apply_transform_to_nodes(root_node, engine->model_matrix);
+}
 
 /*
  * Distance-adaptive near plane (set at load, 0 = disabled). The static
@@ -811,14 +828,7 @@ void render_scene_callback(Engine* engine, Scene* current_scene) {
         }
     }
 
-    Transform transform = {.position = {model_recenter_offset[0], model_recenter_offset[1],
-                                        model_recenter_offset[2]},
-                           .rotation = {0.0f, 0.0f, 0.0f},
-                           .scale = {1.0f, 1.0f, 1.0f}};
-
-    reset_and_apply_transform(&engine->model_matrix, &transform);
-
-    apply_transform_to_nodes(root_node, engine->model_matrix);
+    apply_model_recenter(engine, root_node);
 
     render_current_scene(engine, time_value);
 
@@ -1349,6 +1359,18 @@ int main(int argc, char** argv) {
             engine->postfx->ssao_radius =
                 fmaxf(engine->postfx->ssao_radius, scene_radius * 0.01f);
         }
+
+        // The SSR march reach and thickness are world-space distances like
+        // the AO radius: the meter-scale defaults leave a large-unit scene
+        // with a march that spans a fraction of the model and a thickness
+        // below the depth quantization at its distances. Scale both up with
+        // the scene (never down: small scenes keep the tuned defaults).
+        if (scene_radius > 0.0f) {
+            engine->postfx->ssr_max_distance =
+                fmaxf(engine->postfx->ssr_max_distance, scene_radius * 2.0f);
+            engine->postfx->ssr_thickness =
+                fmaxf(engine->postfx->ssr_thickness, scene_radius * 0.002f);
+        }
     }
 
     // Update orbit controller with appropriate distance
@@ -1386,21 +1408,13 @@ int main(int argc, char** argv) {
         // The capture renders node globals directly, so bake in the recenter
         // transform the per-frame callback applies before every draw (the
         // callback re-applies the same transform; no residue)
-        Transform recenter = {.position = {model_recenter_offset[0], model_recenter_offset[1],
-                                           model_recenter_offset[2]},
-                              .rotation = {0.0f, 0.0f, 0.0f},
-                              .scale = {1.0f, 1.0f, 1.0f}};
-        reset_and_apply_transform(&engine->model_matrix, &recenter);
-        apply_transform_to_nodes(scene->root_node, engine->model_matrix);
+        apply_model_recenter(engine, scene->root_node);
 
-        // Textures stream in asynchronously during the render loop; drain the
-        // loader so the capture doesn't bake placeholder materials. (With
-        // auto-exposure, the fully-textured first frames give the adaptation
-        // a different history than the streamed-in no-probe path; it
-        // converges to the same target.)
-        while (async_loader_is_busy(engine->async_loader)) {
-            async_loader_process_pending(engine->async_loader, scene->tex_pool, 64);
-        }
+        // A dome stage grounds the environment itself (no scene render); the
+        // scene meshes join the capture only for interiors, where they ARE
+        // the environment
+        bool probe_env_only =
+            !args.probe_scene && scene->render_skybox && scene->skybox_ground_projection;
 
         ReflectionProbe* probe = create_reflection_probe();
         if (probe) {
@@ -1409,19 +1423,50 @@ int main(int argc, char** argv) {
 
             if (args.probe_pos_set) {
                 glm_vec3_copy(args.probe_pos, probe->position);
+            } else if (probe_env_only) {
+                // The parallax origin of a grounded environment must be the
+                // environment's own capture point: the box wall base then
+                // lines up with the env's floor/wall junction, so up-going
+                // reflection rays never map into the env's below-horizon
+                // floor content (which would tile the floor's own image
+                // into reflections as stripe rows).
+                probe->position[0] = 0.0f;
+                probe->position[1] = scene->skybox_gp_height;
+                probe->position[2] = 0.0f;
             } else {
-                glm_vec3_copy(scene_center, probe->position);
+                // Scene capture: the scene center sits INSIDE a solid model,
+                // where the capture photographs interior faces at point-blank
+                // range and reflections tile that garbage everywhere. Offset
+                // toward the initial camera into the empty space a viewer
+                // occupies — still well inside a room-scale interior.
+                vec3 to_cam;
+                glm_vec3_sub(auto_cam_pos, scene_center, to_cam);
+                glm_vec3_normalize(to_cam);
+                glm_vec3_scale(to_cam, 0.6f * scene_radius, to_cam);
+                glm_vec3_add(scene_center, to_cam, probe->position);
             }
 
             // Proxy box: bottom locked to the floor plane so floor-adjacent
-            // reflections parallax-correct exactly; 2x-radius lateral margin
-            // keeps the surroundings inside the box
-            probe->box_min[0] = scene_center[0] - 2.0f * scene_radius;
+            // reflections parallax-correct exactly. The walls/ceiling must
+            // sit where the captured content actually is: at the dome for a
+            // grounded environment (a scene-sized ceiling would warp its
+            // reflection into diagonal streaks sliding across the floor), at
+            // the scene bounds when the meshes themselves are captured
+            // (interior walls).
+            float box_half_w, box_top;
+            if (probe_env_only) {
+                box_half_w = scene->skybox_gp_radius;
+                box_top = scene->skybox_gp_radius;
+            } else {
+                box_half_w = 2.0f * scene_radius;
+                box_top = bb_max[1] + scene_radius;
+            }
+            probe->box_min[0] = scene_center[0] - box_half_w;
             probe->box_min[1] = bb_min[1];
-            probe->box_min[2] = scene_center[2] - 2.0f * scene_radius;
-            probe->box_max[0] = scene_center[0] + 2.0f * scene_radius;
-            probe->box_max[1] = bb_max[1] + scene_radius;
-            probe->box_max[2] = scene_center[2] + 2.0f * scene_radius;
+            probe->box_min[2] = scene_center[2] - box_half_w;
+            probe->box_max[0] = scene_center[0] + box_half_w;
+            probe->box_max[1] = box_top;
+            probe->box_max[2] = scene_center[2] + box_half_w;
 
             probe->debug_background = args.probe_debug != 0;
 
@@ -1431,9 +1476,13 @@ int main(int argc, char** argv) {
             float probe_far = (scene->render_skybox && scene->skybox_ground_projection)
                                   ? 2.0f * scene->skybox_gp_radius
                                   : 10.0f * fmaxf(scene_radius, 1.0f);
-            scene->probe = probe;
-            if (reflection_probe_capture(probe, engine, scene, probe_near, probe_far) != 0) {
-                scene->probe = NULL;
+            // Attach only after a successful capture: consumers treat an
+            // attached probe as ready, and the capture pass itself must
+            // never see one
+            if (reflection_probe_capture(probe, engine, scene, probe_near, probe_far,
+                                         probe_env_only) == 0) {
+                scene->probe = probe;
+            } else {
                 free_reflection_probe(probe);
             }
         }

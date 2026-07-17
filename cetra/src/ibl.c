@@ -81,7 +81,7 @@ static int init_quad_vao(IBLResources* ibl) {
     return 0;
 }
 
-void ibl_render_unit_cube(IBLResources* ibl) {
+static void ibl_render_unit_cube(IBLResources* ibl) {
     glBindVertexArray(ibl->cube_vao);
     glDrawArrays(GL_TRIANGLES, 0, 36);
     glBindVertexArray(0);
@@ -342,7 +342,7 @@ void ibl_create_cubemap_texture(GLuint* texture, int size, bool mipmap) {
 }
 
 // Create prefilter cubemap with manually allocated mip levels
-void ibl_create_prefilter_cubemap(GLuint* texture, int size, int num_mip_levels) {
+static void create_prefilter_cubemap(GLuint* texture, int size, int num_mip_levels) {
     glGenTextures(1, texture);
     glBindTexture(GL_TEXTURE_CUBE_MAP, *texture);
 
@@ -424,21 +424,29 @@ static void render_irradiance_convolution(IBLResources* ibl, mat4 projection, co
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
-// GGX-prefilter an arbitrary cubemap into a manually-mipped destination
-// (roughness = mip / (mip_levels - 1)). Direction-only unit-cube render, so
-// the source origin is irrelevant; src_resolution drives the importance
-// sampler's solid-angle mip selection. Uses the shared capture FBO/RBO and
-// leaves FBO 0 bound; caller restores its own viewport.
-void ibl_prefilter_cubemap(IBLResources* ibl, GLuint src_cube, float src_resolution,
-                           GLuint dst_cube, int dst_base_size, int mip_levels) {
+// GGX-prefilter an arbitrary cubemap into a manually-mipped destination it
+// (re)allocates (roughness = mip / (mip_levels - 1)). Direction-only
+// unit-cube render, so the source origin is irrelevant; the source face size
+// drives the importance sampler's solid-angle mip selection. Uses the shared
+// capture FBO/RBO and leaves FBO 0 bound; caller restores its own viewport.
+void ibl_prefilter_cubemap(IBLResources* ibl, GLuint src_cube, GLuint* dst, int dst_base_size,
+                           int mip_levels) {
     ShaderProgram* program = ibl->prefilter_program;
     if (!program)
         return;
+
+    if (*dst)
+        glDeleteTextures(1, dst);
+    create_prefilter_cubemap(dst, dst_base_size, mip_levels);
+    GLuint dst_cube = *dst;
 
     glUseProgram(program->id);
 
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_CUBE_MAP, src_cube);
+    GLint src_resolution = 0;
+    glGetTexLevelParameteriv(GL_TEXTURE_CUBE_MAP_POSITIVE_X, 0, GL_TEXTURE_WIDTH,
+                             &src_resolution);
     uniform_set_int(program->uniforms, "environmentMap", 0);
 
     mat4 views[6];
@@ -447,7 +455,7 @@ void ibl_prefilter_cubemap(IBLResources* ibl, GLuint src_cube, float src_resolut
     ibl_capture_views(origin, views);
     get_cubemap_projection(projection);
     uniform_set_mat4(program->uniforms, "projection", (float*)projection);
-    uniform_set_float(program->uniforms, "resolution", src_resolution);
+    uniform_set_float(program->uniforms, "resolution", (float)src_resolution);
 
     GLboolean cull_was_enabled = glIsEnabled(GL_CULL_FACE);
     GLboolean blend_was_enabled = glIsEnabled(GL_BLEND);
@@ -582,10 +590,8 @@ int precompute_ibl(IBLResources* ibl, Engine* engine) {
 
     // Step 3: Generate prefiltered map with mipmaps
     log_info("  Generating prefiltered environment map...");
-    ibl_create_prefilter_cubemap(&ibl->prefilter_map, IBL_PREFILTER_SIZE,
-                                 IBL_PREFILTER_MIP_LEVELS);
-    ibl_prefilter_cubemap(ibl, ibl->environment_cubemap, (float)IBL_CUBEMAP_SIZE,
-                          ibl->prefilter_map, IBL_PREFILTER_SIZE, IBL_PREFILTER_MIP_LEVELS);
+    ibl_prefilter_cubemap(ibl, ibl->environment_cubemap, &ibl->prefilter_map, IBL_PREFILTER_SIZE,
+                          IBL_PREFILTER_MIP_LEVELS);
 
     // Step 4: Generate BRDF LUT
     log_info("  Generating BRDF LUT...");
@@ -614,11 +620,9 @@ int precompute_ibl(IBLResources* ibl, Engine* engine) {
     return 0;
 }
 
-void render_skybox(IBLResources* ibl, mat4 view, mat4 projection, float brightness,
-                   bool ground_projection, float gp_radius, float gp_height) {
-    if (!ibl || !ibl->precomputed || !ibl->skybox_program)
-        return;
-
+static void draw_background_cube(IBLResources* ibl, GLuint cubemap, mat4 view, mat4 projection,
+                                 float brightness, bool ground_projection, float gp_radius,
+                                 float gp_height) {
     ShaderProgram* program = ibl->skybox_program;
     glUseProgram(program->id);
 
@@ -644,7 +648,7 @@ void render_skybox(IBLResources* ibl, mat4 view, mat4 projection, float brightne
     uniform_set_vec3(program->uniforms, "camPos", cam_pos);
 
     glActiveTexture(GL_TEXTURE0 + IBL_SKYBOX_TEXTURE_UNIT);
-    glBindTexture(GL_TEXTURE_CUBE_MAP, ibl->environment_cubemap);
+    glBindTexture(GL_TEXTURE_CUBE_MAP, cubemap);
     uniform_set_int(program->uniforms, "skyboxTex", IBL_SKYBOX_TEXTURE_UNIT);
 
     glDepthFunc(GL_LEQUAL);
@@ -652,6 +656,20 @@ void render_skybox(IBLResources* ibl, mat4 view, mat4 projection, float brightne
     ibl_render_unit_cube(ibl);
     glDepthMask(GL_TRUE); // Restore depth writes
     glDepthFunc(GL_LESS);
+}
+
+void render_skybox(IBLResources* ibl, mat4 view, mat4 projection, float brightness,
+                   bool ground_projection, float gp_radius, float gp_height) {
+    if (!ibl || !ibl->precomputed || !ibl->skybox_program)
+        return;
+    draw_background_cube(ibl, ibl->environment_cubemap, view, projection, brightness,
+                         ground_projection, gp_radius, gp_height);
+}
+
+void render_skybox_cubemap(IBLResources* ibl, GLuint cubemap, mat4 view, mat4 projection) {
+    if (!ibl || !ibl->precomputed || !ibl->skybox_program || !cubemap)
+        return;
+    draw_background_cube(ibl, cubemap, view, projection, 1.0f, false, 0.0f, 0.0f);
 }
 
 void bind_ibl_textures(IBLResources* ibl, ShaderProgram* program) {
