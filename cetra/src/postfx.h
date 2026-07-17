@@ -29,6 +29,7 @@ typedef enum PostFXDebugView {
     POSTFX_DEBUG_AO = 1,      // Blurred SSAO buffer
     POSTFX_DEBUG_NORMALS = 2, // Resolved normals G-buffer
     POSTFX_DEBUG_SSR = 3,     // Half-res reflection buffer
+    POSTFX_DEBUG_ALBEDO = 4,  // Resolved albedo G-buffer (SSGI)
 } PostFXDebugView;
 
 typedef struct PostFX {
@@ -55,6 +56,8 @@ typedef struct PostFX {
     GLuint aux_fbo; // Full-res resolved aux G-buffer: motion vectors .xy (TAA) + linear view-Z .z
                     // (GTAO)
     GLuint aux_texture;
+    GLuint albedo_fbo; // Full-res resolved base color / albedo (attachment 3) for SSGI composite
+    GLuint albedo_texture;
     GLuint taa_history_fbo[2]; // Full-res history ping-pong (previous resolved frames)
     GLuint taa_history_texture[2];
 
@@ -81,6 +84,8 @@ typedef struct PostFX {
     bool ssao_enabled;
     float ssao_radius; // Occlusion reach in view-space units
     float ssao_strength;
+    bool ssgi_enabled;    // Screen-space GI: one-bounce indirect diffuse (extends the GTAO sweep)
+    float ssgi_intensity; // Composite multiplier on the gathered indirect radiance
     bool normals_enabled; // Master switch for the normals G-buffer (MRT)
     bool ssr_enabled;
     float ssr_strength;        // Composite multiplier on the reflections
@@ -148,7 +153,7 @@ void postfx_apply_film_look(PostFX* fx);
 // frame-start decision, passed through rather than re-derived from fx flags
 // that may have changed mid-frame.
 void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hdr,
-                bool normals_written, bool aux_written, mat4 projection);
+                bool normals_written, bool aux_written, bool albedo_written, mat4 projection);
 
 // Producer-side predicate: true when some active effect will consume the
 // normals G-buffer, so the scene pass should write color attachment 1. The
@@ -163,6 +168,11 @@ bool postfx_taa_active(const PostFX* fx);
 // G-buffer (attachment 2: motion .xy for TAA + linear view-Z .z for GTAO).
 // Produced whenever TAA needs motion or GTAO needs linear depth.
 bool postfx_wants_aux_gbuffer(const PostFX* fx);
+
+// Producer-side predicate: true when the scene pass should write the albedo
+// G-buffer (attachment 3), i.e. when SSGI is active and needs it for the
+// indirect-diffuse composite.
+bool postfx_wants_albedo(const PostFX* fx);
 
 // The single "SSR runs this frame" predicate (enabled + normals produced).
 // The postfx pass and the shadow catcher's floor marker both derive from

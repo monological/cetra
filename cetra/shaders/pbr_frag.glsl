@@ -18,6 +18,10 @@ layout(location = 1) out vec4 NormalOut;
 // Screen-space motion vector (.xy, UV units) for TAA. Only lands when the
 // engine enables color attachment 2 (TAA active); otherwise discarded.
 layout(location = 2) out vec4 VelocityOut;
+// SSGI G-buffer: linear base color (.rgb) + metalness (.a) for the one-bounce
+// composite (indirect diffuse = (1-metallic) * albedo * gathered irradiance, so
+// metals get no bounced diffuse). Only lands when attachment 3 is enabled (SSGI).
+layout(location = 3) out vec4 AlbedoOut;
 
 #define MAX_LIGHTS 70
 
@@ -810,4 +814,5 @@ void main() {
     // non-linear DEPTH24 buffer, whose grazing-angle quantization staircases the
     // reconstructed floor into AO banding.
     VelocityOut = vec4(screenVelocity(), ViewPos.z, 0.0);
+    AlbedoOut = vec4(albedoMap, metallicMap);
 }

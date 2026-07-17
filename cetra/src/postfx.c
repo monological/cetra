@@ -10,7 +10,7 @@
 static bool create_color_fbo(int width, int height, GLenum internal_format, GLuint* out_fbo,
                              GLuint* out_texture) {
     GLenum format = GL_RGB;
-    if (internal_format == GL_RGBA16F)
+    if (internal_format == GL_RGBA16F || internal_format == GL_RGBA8)
         format = GL_RGBA;
     else if (internal_format == GL_R8 || internal_format == GL_R16F)
         format = GL_RED;
@@ -137,6 +137,8 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     fx->ssao_enabled = true;
     fx->ssao_radius = 0.4f;
     fx->ssao_strength = 0.8f;
+    fx->ssgi_enabled = false; // experimental; off by default
+    fx->ssgi_intensity = 1.0f;
     fx->normals_enabled = true;
     fx->ssr_enabled = true;
     fx->ssr_strength = 1.0f;
@@ -240,6 +242,12 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     glBindTexture(GL_TEXTURE_2D, fx->aux_texture);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    // Full-res resolve target for the scene pass's albedo G-buffer (attachment 3),
+    // consumed by the SSGI indirect-diffuse composite. RGBA8 (albedo is LDR).
+    if (!create_color_fbo(fx->width, fx->height, GL_RGBA8, &fx->albedo_fbo, &fx->albedo_texture)) {
+        free_postfx(fx);
+        return NULL;
+    }
     for (int i = 0; i < 2; i++) {
         if (!create_color_fbo(fx->width, fx->height, GL_RGBA16F, &fx->taa_history_fbo[i],
                               &fx->taa_history_texture[i])) {
@@ -282,6 +290,7 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     uniform_set_int(fx->tonemap_program->uniforms, "aoTex", 2);
     uniform_set_int(fx->tonemap_program->uniforms, "normalsTex", 3);
     uniform_set_int(fx->tonemap_program->uniforms, "ssrTex", 4);
+    uniform_set_int(fx->tonemap_program->uniforms, "albedoTex", 5);
 
     glUseProgram(fx->ssr_program->id);
     uniform_set_int(fx->ssr_program->uniforms, "depthTex", 0);
@@ -411,6 +420,8 @@ void free_postfx(PostFX* fx) {
     glDeleteTextures(1, &fx->ssr_texture);
     glDeleteFramebuffers(1, &fx->aux_fbo);
     glDeleteTextures(1, &fx->aux_texture);
+    glDeleteFramebuffers(1, &fx->albedo_fbo);
+    glDeleteTextures(1, &fx->albedo_texture);
     glDeleteFramebuffers(2, fx->taa_history_fbo);
     glDeleteTextures(2, fx->taa_history_texture);
     // DoF targets are 0 (no-op delete) if never lazily allocated
@@ -483,6 +494,11 @@ bool postfx_wants_aux_gbuffer(const PostFX* fx) {
     return fx && (fx->taa_enabled || fx->ssao_enabled);
 }
 
+bool postfx_wants_albedo(const PostFX* fx) {
+    // Attachment 3 (base color) is only needed by SSGI's indirect-diffuse composite.
+    return fx && fx->ssgi_enabled;
+}
+
 bool postfx_ssr_active(const PostFX* fx, bool normals_written) {
     // The single "SSR runs this frame" predicate: the effect is enabled and
     // the normals buffer it marches against was actually produced. Both the
@@ -504,7 +520,7 @@ static void resolve_color_attachment(GLuint msaa_fbo, GLenum attachment, GLuint 
 }
 
 void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hdr,
-                bool normals_written, bool aux_written, mat4 projection) {
+                bool normals_written, bool aux_written, bool albedo_written, mat4 projection) {
     if (!fx)
         return;
 
@@ -543,6 +559,13 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         // block so GTAO gets linear depth even when TAA is off.
         if (aux_written) {
             resolve_color_attachment(msaa_fbo, GL_COLOR_ATTACHMENT2, fx->aux_fbo, fx->width,
+                                     fx->height);
+        }
+        // Resolve the albedo G-buffer (attachment 3) for SSGI's indirect-diffuse
+        // composite, iff the scene pass actually wrote it (threaded from the
+        // engine's frame-start decision, like normals/aux -- not re-derived here).
+        if (albedo_written) {
+            resolve_color_attachment(msaa_fbo, GL_COLOR_ATTACHMENT3, fx->albedo_fbo, fx->width,
                                      fx->height);
         }
 
@@ -763,6 +786,8 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         glBindTexture(GL_TEXTURE_2D, have_normals ? fx->normal_texture : 0);
         glActiveTexture(GL_TEXTURE4);
         glBindTexture(GL_TEXTURE_2D, ssr_active ? fx->ssr_texture : 0);
+        glActiveTexture(GL_TEXTURE5);
+        glBindTexture(GL_TEXTURE_2D, albedo_written ? fx->albedo_texture : 0);
         UniformManager* tm = fx->tonemap_program->uniforms;
         uniform_set_float(tm, "exposure", fx->exposure);
         uniform_set_float(tm, "bloomStrength", fx->bloom_strength);
@@ -774,7 +799,8 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         PostFXDebugView debug_view = fx->debug_view;
         if ((debug_view == POSTFX_DEBUG_AO && !fx->ssao_enabled) ||
             (debug_view == POSTFX_DEBUG_NORMALS && !have_normals) ||
-            (debug_view == POSTFX_DEBUG_SSR && !ssr_active)) {
+            (debug_view == POSTFX_DEBUG_SSR && !ssr_active) ||
+            (debug_view == POSTFX_DEBUG_ALBEDO && !albedo_written)) {
             static PostFXDebugView warned_view = POSTFX_DEBUG_NONE;
             if (warned_view != debug_view) {
                 log_warn("debug view %d suppressed: its source buffer is disabled",

@@ -68,6 +68,8 @@ typedef struct {
     int no_springs;                    // Disable spring-bone secondary motion
     int no_ssao;                       // Disable screen-space ambient occlusion
     int ssao_debug;                    // Show the raw SSAO buffer
+    int ssgi;                          // Enable screen-space GI (indirect diffuse)
+    int albedo_debug;                  // Show the resolved albedo G-buffer
     int no_normals_mrt;                // Disable the normals G-buffer
     int normals_debug;                 // Show the resolved normals G-buffer
     int no_ssr;                        // Disable screen-space reflections
@@ -321,6 +323,10 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->no_ssao = 1;
         } else if (strcmp(argv[i], "--ssao-debug") == 0) {
             args->ssao_debug = 1;
+        } else if (strcmp(argv[i], "--ssgi") == 0) {
+            args->ssgi = 1;
+        } else if (strcmp(argv[i], "--albedo-debug") == 0) {
+            args->albedo_debug = 1;
         } else if (strcmp(argv[i], "--no-normals-mrt") == 0) {
             args->no_normals_mrt = 1;
         } else if (strcmp(argv[i], "--normals-debug") == 0) {
@@ -809,6 +815,12 @@ int main(int argc, char** argv) {
     }
     if (args.ssao_debug && engine->postfx) {
         engine->postfx->debug_view = POSTFX_DEBUG_AO;
+    }
+    if (args.ssgi && engine->postfx) {
+        engine->postfx->ssgi_enabled = true;
+    }
+    if (args.albedo_debug && engine->postfx) {
+        engine->postfx->debug_view = POSTFX_DEBUG_ALBEDO;
     }
     if (args.no_normals_mrt && engine->postfx) {
         engine->postfx->normals_enabled = false;

@@ -15,7 +15,8 @@ uniform int aoEnabled;
 uniform float aoStrength;
 uniform sampler2D normalsTex; // Resolved view-space normals + roughness
 uniform sampler2D ssrTex;     // Half-res reflection buffer
-// Debug view dispatch (PostFXDebugView): 0=none, 1=AO, 2=normals, 3=SSR
+uniform sampler2D albedoTex;  // Resolved albedo G-buffer (SSGI)
+// Debug view dispatch (PostFXDebugView): 0=none, 1=AO, 2=normals, 3=SSR, 4=albedo
 uniform int debugView;
 // 1 = ACES, 2 = PBR Neutral (passthrough frames are blitted by postfx_run
 // and never reach this pass)
@@ -99,6 +100,12 @@ void main()
         // Raw reflection buffer, gamma-corrected so dim hits are visible
         vec3 ssr = texture(ssrTex, TexCoords).rgb;
         FragColor = vec4(pow(clamp(ssr, 0.0, 1.0), vec3(1.0 / 2.2)), 1.0);
+        return;
+    }
+    if (debugView == 4) {
+        // Albedo G-buffer (stored linear); gamma-encode for display
+        vec3 a = texture(albedoTex, TexCoords).rgb;
+        FragColor = vec4(pow(clamp(a, 0.0, 1.0), vec3(1.0 / 2.2)), 1.0);
         return;
     }
 

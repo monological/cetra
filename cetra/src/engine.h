@@ -55,10 +55,12 @@ typedef struct Engine {
     GLuint normal_multisample_texture; // Multisample view-space normals + roughness (attachment 1)
     GLuint aux_multisample_texture;    // Multisample aux G-buffer: motion .xy + linear view-Z .z
                                        // (attachment 2)
+    GLuint albedo_multisample_texture; // Multisample base color for SSGI (attachment 3)
     GLuint depth_renderbuffer;         // Depth renderbuffer
     bool normals_this_frame;           // Attachment 1 written this frame (PBR + consumer active)
-    bool aux_this_frame; // Attachment 2 written this frame (TAA needs motion, or GTAO needs
-                         // linear-Z)
+    bool aux_this_frame;    // Attachment 2 written this frame (TAA needs motion, or GTAO needs
+                            // linear-Z)
+    bool albedo_this_frame; // Attachment 3 (albedo) written this frame (SSGI active)
 
     Camera* camera;         // main camera
     CameraMode camera_mode; // Current camera mode
