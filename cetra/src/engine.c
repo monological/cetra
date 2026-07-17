@@ -1419,9 +1419,25 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode, bool draw_gui) 
         engine->postfx->dof_focus_distance =
             glm_vec3_distance(engine->camera->position, engine->camera->look_at);
     }
+    // Hand the current scene's reflection probe to postfx (SSR miss fallback)
+    // without postfx learning about Scene
+    Scene* fx_scene = get_current_scene(engine);
+    ReflectionProbe* probe = fx_scene ? fx_scene->probe : NULL;
+    if (probe && probe->captured && probe->enabled) {
+        engine->postfx->probe_enabled = true;
+        engine->postfx->probe_cubemap = probe->prefiltered;
+        glm_vec3_copy(probe->position, engine->postfx->probe_pos);
+        glm_vec3_copy(probe->box_min, engine->postfx->probe_box_min);
+        glm_vec3_copy(probe->box_max, engine->postfx->probe_box_max);
+        engine->postfx->probe_max_lod = (float)(PROBE_PREFILTER_MIP_LEVELS - 1);
+        engine->postfx->probe_intensity = probe->intensity;
+    } else {
+        engine->postfx->probe_enabled = false;
+        engine->postfx->probe_cubemap = 0;
+    }
     postfx_run(engine->postfx, engine->framebuffer, 0, frame_mode == RENDER_MODE_PBR,
                engine->normals_this_frame, engine->aux_this_frame, engine->albedo_this_frame,
-               engine->projection_matrix);
+               engine->projection_matrix, engine->view_matrix);
 
     if (draw_gui) {
         render_engine_gui(engine);

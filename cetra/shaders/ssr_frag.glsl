@@ -22,6 +22,16 @@ uniform float floorRoughness; // Roughness of the reflective floor
 uniform float maxRoughness;   // Reflections fade out toward this roughness
 uniform float strength;       // Reflection strength (folded into the weight)
 
+// Local reflection probe fallback for rays the march cannot answer
+uniform mat4 invView;         // view -> world (camera pose)
+uniform samplerCube probeTex; // prefiltered local probe capture
+uniform int probeEnabled;
+uniform vec3 probePos;    // capture origin (world)
+uniform vec3 probeBoxMin; // parallax proxy AABB (world)
+uniform vec3 probeBoxMax;
+uniform float probeMaxLOD;
+uniform float probeIntensity;
+
 vec3 viewPosFromDepth(vec2 uv, float depth)
 {
     vec4 ndc = vec4(vec3(uv, depth) * 2.0 - 1.0, 1.0);
@@ -33,6 +43,32 @@ vec3 viewPosFromDepth(vec2 uv, float depth)
 float viewZFromNdcZ(float ndcZ)
 {
     return -projection[3][2] / (projection[2][2] + ndcZ);
+}
+
+// Probe fallback where the SSR ray misses (off-screen, grazing, occluded,
+// max steps): parallax-correct the world reflection ray against the probe's
+// proxy box and return the hit path's premultiplied (color*weight, weight)
+// contract. The screen-space fades don't apply — the probe has data in
+// every direction. Exact vec4(0) when the probe is off, so the miss sites
+// write today's values bit-identically.
+vec4 probeSample(vec3 fragPosV, vec3 n, vec3 RV, vec3 viewDir)
+{
+    if (probeEnabled == 0)
+        return vec4(0.0);
+    vec3 worldPos = (invView * vec4(fragPosV, 1.0)).xyz;
+    vec3 worldR = normalize(mat3(invView) * RV);
+    vec3 invR = 1.0 / worldR;
+    vec3 tMax3 = max((probeBoxMax - worldPos) * invR, (probeBoxMin - worldPos) * invR);
+    float t = min(min(tMax3.x, tMax3.y), tMax3.z);
+    // The floor lies ON the box's bottom face, so no inside-the-box fade;
+    // a ray starting outside the box keeps the uncorrected direction
+    vec3 dir = (t > 0.0) ? normalize((worldPos + worldR * t) - probePos) : worldR;
+    vec3 col = textureLod(probeTex, dir, floorRoughness * probeMaxLOD).rgb * probeIntensity;
+    float NdotV = max(dot(n, -viewDir), 0.0);
+    float fresnel = 0.1 + 0.9 * pow(clamp(1.0 - NdotV, 0.0, 1.0), 5.0);
+    float roughnessFade = 1.0 - smoothstep(0.5 * maxRoughness, maxRoughness, floorRoughness);
+    float w = clamp(fresnel * roughnessFade * strength, 0.0, 1.0);
+    return vec4(min(col, vec3(2.0)) * w, w);
 }
 
 void main()
@@ -74,7 +110,7 @@ void main()
     // the end point stays safely in front of the near plane.
     vec3 startV = fragPos + n * 0.02;
     if (startV.z > -(nearV + 0.01)) {
-        FragColor = vec4(0.0);
+        FragColor = probeSample(fragPos, n, R, viewDir);
         return;
     }
     float tMax = maxDistance;
@@ -82,7 +118,7 @@ void main()
         tMax = min(tMax, (-nearV - startV.z) / R.z);
     }
     if (tMax <= 0.0) {
-        FragColor = vec4(0.0);
+        FragColor = probeSample(fragPos, n, R, viewDir);
         return;
     }
     vec3 endV = startV + R * tMax;
@@ -127,7 +163,8 @@ void main()
     }
 
     if (!hit) {
-        FragColor = vec4(0.0);
+        // Off-screen, out of steps, or occluded with no acceptable surface
+        FragColor = probeSample(fragPos, n, R, viewDir);
         return;
     }
 
@@ -151,7 +188,7 @@ void main()
     // would actually see.
     vec3 hitN = texture(normalsTex, hitUV).xyz;
     if (dot(hitN, hitN) > 0.01 && dot(normalize(hitN), R) > 0.2) {
-        FragColor = vec4(0.0);
+        FragColor = probeSample(fragPos, n, R, viewDir);
         return;
     }
 
@@ -172,5 +209,8 @@ void main()
     // color is clamped — HDR spikes read as white discs after upsampling.
     float weight = clamp(edgeFade * fresnel * roughnessFade * distFade * strength, 0.0, 1.0);
     vec3 reflection = min(texture(hdrTex, hitUV).rgb, vec3(2.0));
-    FragColor = vec4(reflection * weight, weight);
+    // Partial fades (screen edge, march distance) blend toward the probe
+    // instead of toward nothing — premultiplied "SSR over probe"
+    FragColor = vec4(reflection * weight, weight) + probeSample(fragPos, n, R, viewDir)
+                                                        * (1.0 - weight);
 }

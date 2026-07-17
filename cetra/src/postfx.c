@@ -350,6 +350,7 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     uniform_set_int(fx->ssr_program->uniforms, "depthTex", 0);
     uniform_set_int(fx->ssr_program->uniforms, "normalsTex", 1);
     uniform_set_int(fx->ssr_program->uniforms, "hdrTex", 2);
+    uniform_set_int(fx->ssr_program->uniforms, "probeTex", 3);
     glUseProgram(fx->ssr_composite_program->id);
     uniform_set_int(fx->ssr_composite_program->uniforms, "ssrTex", 0);
 
@@ -656,7 +657,8 @@ static GLuint run_temporal_accum(PostFX* fx, ShaderProgram* prog, PingPong* pp, 
 }
 
 void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hdr,
-                bool normals_written, bool aux_written, bool albedo_written, mat4 projection) {
+                bool normals_written, bool aux_written, bool albedo_written, mat4 projection,
+                mat4 view) {
     if (!fx)
         return;
 
@@ -749,6 +751,12 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         bool ssr_active = postfx_ssr_active(fx, have_normals);
         bool dof_active = fx->dof_enabled;
         mat4 inv_projection;
+        mat4 inv_view;
+        if (ssr_active) {
+            // The probe fallback works in world space; SSR itself is
+            // view-space, so this is the only postfx consumer of the view
+            glm_mat4_inv(view, inv_view);
+        }
         if (ssr_active || dof_active) {
             // Resolve depth alongside color so screen-space passes can
             // reconstruct view-space positions (formats match: both are
@@ -887,6 +895,20 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             // Strength folds into the march's premultiplied weight (clamped
             // there) so the composite stays a straight premultiplied lerp
             uniform_set_float(fx->ssr_program->uniforms, "strength", fx->ssr_strength);
+            // Local-probe fallback for rays the march cannot answer
+            uniform_set_int(fx->ssr_program->uniforms, "probeEnabled", fx->probe_enabled ? 1 : 0);
+            if (fx->probe_enabled) {
+                glActiveTexture(GL_TEXTURE3);
+                glBindTexture(GL_TEXTURE_CUBE_MAP, fx->probe_cubemap);
+                glActiveTexture(GL_TEXTURE0);
+                uniform_set_mat4(fx->ssr_program->uniforms, "invView", (float*)inv_view);
+                uniform_set_vec3(fx->ssr_program->uniforms, "probePos", fx->probe_pos);
+                uniform_set_vec3(fx->ssr_program->uniforms, "probeBoxMin", fx->probe_box_min);
+                uniform_set_vec3(fx->ssr_program->uniforms, "probeBoxMax", fx->probe_box_max);
+                uniform_set_float(fx->ssr_program->uniforms, "probeMaxLOD", fx->probe_max_lod);
+                uniform_set_float(fx->ssr_program->uniforms, "probeIntensity",
+                                  fx->probe_intensity);
+            }
             draw_fullscreen_quad(fx->quad_vao);
 
             // Lerp the reflections onto the HDR scene before bloom so
