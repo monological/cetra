@@ -81,7 +81,7 @@ static int init_quad_vao(IBLResources* ibl) {
     return 0;
 }
 
-static void render_cube(IBLResources* ibl) {
+void ibl_render_unit_cube(IBLResources* ibl) {
     glBindVertexArray(ibl->cube_vao);
     glDrawArrays(GL_TRIANGLES, 0, 36);
     glBindVertexArray(0);
@@ -382,7 +382,7 @@ static void render_equirect_to_cubemap(IBLResources* ibl, mat4 projection, const
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
                                GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, ibl->environment_cubemap, 0);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-        render_cube(ibl);
+        ibl_render_unit_cube(ibl);
     }
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -415,7 +415,7 @@ static void render_irradiance_convolution(IBLResources* ibl, mat4 projection, co
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
                                GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, ibl->irradiance_map, 0);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-        render_cube(ibl);
+        ibl_render_unit_cube(ibl);
     }
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -465,7 +465,7 @@ void ibl_prefilter_cubemap(IBLResources* ibl, GLuint src_cube, float src_resolut
             glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
                                    GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, dst_cube, mip);
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-            render_cube(ibl);
+            ibl_render_unit_cube(ibl);
         }
     }
 
@@ -637,7 +637,7 @@ void render_skybox(IBLResources* ibl, mat4 view, mat4 projection, float brightne
 
     glDepthFunc(GL_LEQUAL);
     glDepthMask(GL_FALSE); // Don't write to depth buffer
-    render_cube(ibl);
+    ibl_render_unit_cube(ibl);
     glDepthMask(GL_TRUE); // Restore depth writes
     glDepthFunc(GL_LESS);
 }

@@ -75,6 +75,10 @@ typedef struct {
     int ssao_debug;                    // Show the raw SSAO buffer
     int ssgi;                          // Enable screen-space GI (indirect diffuse)
     int ssgi_debug;                    // Show the raw gathered GI radiance
+    int probe;                         // Enable the local reflection probe
+    int probe_pos_set;                 // --probe-pos given
+    float probe_pos[3];                // Probe capture position override
+    int probe_debug;                   // Show the raw capture as the background
     int albedo_debug;                  // Show the resolved albedo G-buffer
     int no_normals_mrt;                // Disable the normals G-buffer
     int normals_debug;                 // Show the resolved normals G-buffer
@@ -143,6 +147,9 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --ssr-strength <f> Reflection strength (default: 1)\n");
     fprintf(stderr, "      --ssgi             Enable screen-space GI (one-bounce indirect diffuse)\n");
     fprintf(stderr, "      --ssgi-debug       Show the raw gathered GI radiance (implies --ssgi)\n");
+    fprintf(stderr, "      --probe            Capture a local reflection probe (SSR fallback + local specular)\n");
+    fprintf(stderr, "      --probe-pos x,y,z  Probe capture position (implies --probe; default: scene center)\n");
+    fprintf(stderr, "      --probe-debug      Show the raw capture as the background (implies --probe)\n");
     fprintf(stderr, "      --albedo-debug     Show the resolved albedo G-buffer\n");
     fprintf(stderr, "      --specular-aa <f>  Specular anti-aliasing strength (default: 1)\n");
     fprintf(stderr, "      --no-specular-aa   Disable specular anti-aliasing\n");
@@ -362,6 +369,23 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
         } else if (strcmp(argv[i], "--ssgi-debug") == 0) {
             args->ssgi = 1;
             args->ssgi_debug = 1;
+        } else if (strcmp(argv[i], "--probe") == 0) {
+            args->probe = 1;
+        } else if (strcmp(argv[i], "--probe-pos") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            if (sscanf(argv[i], "%f,%f,%f", &args->probe_pos[0], &args->probe_pos[1],
+                       &args->probe_pos[2]) != 3) {
+                fprintf(stderr, "Error: --probe-pos expects x,y,z\n");
+                return -1;
+            }
+            args->probe = 1;
+            args->probe_pos_set = 1;
+        } else if (strcmp(argv[i], "--probe-debug") == 0) {
+            args->probe = 1;
+            args->probe_debug = 1;
         } else if (strcmp(argv[i], "--albedo-debug") == 0) {
             args->albedo_debug = 1;
         } else if (strcmp(argv[i], "--no-normals-mrt") == 0) {
@@ -1352,6 +1376,70 @@ int main(int argc, char** argv) {
     set_engine_show_wireframe(engine, false);
     set_engine_show_xyz(engine, false);
     engine->show_bones = args.show_bones != 0;
+
+    // Capture the local reflection probe: the scene rendered once into a
+    // prefiltered cubemap, consumed as parallax-corrected local specular and
+    // as the SSR miss fallback. Runs after every scene-scaled policy and the
+    // overlay flags above are final (debug overlays must not bake into the
+    // capture), but before the render loop starts.
+    if (args.probe && scene->ibl && scene->ibl->precomputed) {
+        // The capture renders node globals directly, so bake in the recenter
+        // transform the per-frame callback applies before every draw (the
+        // callback re-applies the same transform; no residue)
+        Transform recenter = {.position = {model_recenter_offset[0], model_recenter_offset[1],
+                                           model_recenter_offset[2]},
+                              .rotation = {0.0f, 0.0f, 0.0f},
+                              .scale = {1.0f, 1.0f, 1.0f}};
+        reset_and_apply_transform(&engine->model_matrix, &recenter);
+        apply_transform_to_nodes(scene->root_node, engine->model_matrix);
+
+        // Textures stream in asynchronously during the render loop; drain the
+        // loader so the capture doesn't bake placeholder materials. (With
+        // auto-exposure, the fully-textured first frames give the adaptation
+        // a different history than the streamed-in no-probe path; it
+        // converges to the same target.)
+        while (async_loader_is_busy(engine->async_loader)) {
+            async_loader_process_pending(engine->async_loader, scene->tex_pool, 64);
+        }
+
+        ReflectionProbe* probe = create_reflection_probe();
+        if (probe) {
+            vec3 bb_min, bb_max;
+            compute_scene_bounds(scene, bb_min, bb_max);
+
+            if (args.probe_pos_set) {
+                glm_vec3_copy(args.probe_pos, probe->position);
+            } else {
+                glm_vec3_copy(scene_center, probe->position);
+            }
+
+            // Proxy box: bottom locked to the floor plane so floor-adjacent
+            // reflections parallax-correct exactly; 2x-radius lateral margin
+            // keeps the surroundings inside the box
+            probe->box_min[0] = scene_center[0] - 2.0f * scene_radius;
+            probe->box_min[1] = bb_min[1];
+            probe->box_min[2] = scene_center[2] - 2.0f * scene_radius;
+            probe->box_max[0] = scene_center[0] + 2.0f * scene_radius;
+            probe->box_max[1] = bb_max[1] + scene_radius;
+            probe->box_max[2] = scene_center[2] + 2.0f * scene_radius;
+
+            probe->debug_background = args.probe_debug != 0;
+
+            // Capture frustum: scene-scaled near, far past the dome so the
+            // projected environment lands in the capture
+            float probe_near = fmaxf(0.005f * scene_radius, 0.01f);
+            float probe_far = (scene->render_skybox && scene->skybox_ground_projection)
+                                  ? 2.0f * scene->skybox_gp_radius
+                                  : 10.0f * fmaxf(scene_radius, 1.0f);
+            scene->probe = probe;
+            if (reflection_probe_capture(probe, engine, scene, probe_near, probe_far) != 0) {
+                scene->probe = NULL;
+                free_reflection_probe(probe);
+            }
+        }
+    } else if (args.probe) {
+        fprintf(stderr, "Warning: --probe requires an HDR environment (-e); skipping capture\n");
+    }
 
     // Interactive default: TAA-only (drop to 1x MSAA and let temporal AA carry
     // it) — much cheaper than 4x MSAA on this GPU and better on shading/specular

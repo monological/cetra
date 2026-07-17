@@ -102,6 +102,9 @@ void ibl_capture_views(vec3 origin, mat4 views[6]);
 // Allocate an RGB16F cubemap (optionally mip-filtered; mips are not generated)
 void ibl_create_cubemap_texture(GLuint* texture, int size, bool mipmap);
 
+// Draw the unit cube (skybox / cubemap-face rendering)
+void ibl_render_unit_cube(IBLResources* ibl);
+
 // Allocate an RGB16F cubemap with num_mip_levels manually-sized mip levels
 // (render target for per-mip prefiltering)
 void ibl_create_prefilter_cubemap(GLuint* texture, int size, int num_mip_levels);

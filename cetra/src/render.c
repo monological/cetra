@@ -595,8 +595,12 @@ void render_current_scene(Engine* engine, float time_value) {
     // Skybox after opaques (depth-tested against them at the far plane).
     // Skipped in debug render modes: those frames bypass tone mapping, and
     // the skybox shader emits linear HDR that would display uncorrected.
-    if (scene->render_skybox && scene->ibl && scene->ibl->precomputed &&
-        render_mode == RENDER_MODE_PBR) {
+    // With the probe debug view on, the raw capture replaces the skybox.
+    if (scene->probe && scene->probe->captured && scene->probe->debug_background &&
+        scene->ibl && scene->ibl->precomputed && render_mode == RENDER_MODE_PBR) {
+        render_probe_debug_background(scene->probe, scene->ibl, *view, draw_projection);
+    } else if (scene->render_skybox && scene->ibl && scene->ibl->precomputed &&
+               render_mode == RENDER_MODE_PBR) {
         render_skybox(scene->ibl, *view, draw_projection, scene->skybox_brightness,
                       scene->skybox_ground_projection, scene->skybox_gp_radius,
                       scene->skybox_gp_height);

@@ -39,7 +39,22 @@ typedef struct ReflectionProbe {
 
 } ReflectionProbe;
 
+// Forward declarations (scene.h includes this header)
+struct Engine;
+struct Scene;
+
 ReflectionProbe* create_reflection_probe(void);
 void free_reflection_probe(ReflectionProbe* probe);
+
+// One-shot scene capture into probe->cubemap + GGX prefilter into
+// probe->prefiltered. Call at load, after lights/shadows/IBL and any
+// scene-graph transforms are final. Near/far are the capture frustum
+// planes (scene-scaled, chosen by the app). Requires precomputed IBL.
+int reflection_probe_capture(ReflectionProbe* probe, struct Engine* engine, struct Scene* scene,
+                             float near_clip, float far_clip);
+
+// Draw the raw capture as the background, in place of the skybox
+void render_probe_debug_background(const ReflectionProbe* probe, IBLResources* ibl, mat4 view,
+                                   mat4 projection);
 
 #endif // _PROBE_H_

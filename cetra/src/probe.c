@@ -2,6 +2,10 @@
 #include <string.h>
 
 #include "probe.h"
+#include "engine.h"
+#include "render.h"
+#include "shadow.h"
+#include "postfx.h"
 #include "ext/log.h"
 
 ReflectionProbe* create_reflection_probe(void) {
@@ -29,4 +33,171 @@ void free_reflection_probe(ReflectionProbe* probe) {
         glDeleteTextures(1, &probe->prefiltered);
 
     free(probe);
+}
+
+// Render the scene once into the probe cubemap and GGX-prefilter it.
+//
+// Reuses the full scene pipeline (render_current_scene) with substituted
+// per-face view/projection and the camera moved to the probe position, into
+// the shared ibl capture FBO. Everything touched is saved and restored so a
+// capture at load leaves the first real frame bit-identical. Skinned meshes
+// capture at bind pose (no animation state has been evaluated at load).
+int reflection_probe_capture(ReflectionProbe* probe, struct Engine* engine, Scene* scene,
+                             float near_clip, float far_clip) {
+    if (!probe || !engine || !scene || !engine->camera) {
+        log_error("Invalid state for probe capture");
+        return -1;
+    }
+    IBLResources* ibl = scene->ibl;
+    if (!ibl || !ibl->precomputed) {
+        log_error("Probe capture requires precomputed IBL");
+        return -1;
+    }
+
+    // Shadow maps have not been rendered at load time; bake them so the
+    // capture contains shadowed direct light and catcher darkening.
+    render_shadow_depth_pass(engine, scene);
+
+    // Save everything the capture substitutes
+    mat4 saved_view, saved_projection, saved_view_proj, saved_prev_view_proj;
+    glm_mat4_copy(engine->view_matrix, saved_view);
+    glm_mat4_copy(engine->projection_matrix, saved_projection);
+    glm_mat4_copy(engine->view_proj, saved_view_proj);
+    glm_mat4_copy(engine->prev_view_proj, saved_prev_view_proj);
+
+    Camera* camera = engine->camera;
+    vec3 saved_cam_pos;
+    glm_vec3_copy(camera->position, saved_cam_pos);
+    float saved_near = camera->near_clip;
+    float saved_far = camera->far_clip;
+
+    bool saved_normals = engine->normals_this_frame;
+    bool saved_aux = engine->aux_this_frame;
+    bool saved_albedo = engine->albedo_this_frame;
+    bool saved_taa = engine->postfx ? engine->postfx->taa_enabled : false;
+
+    GLint saved_viewport[4];
+    GLint saved_fbo;
+    glGetIntegerv(GL_VIEWPORT, saved_viewport);
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &saved_fbo);
+
+    // Color-only target: keep the G-buffer draw-buffer list at attachment 0,
+    // and make sure the TAA branch can never jitter the capture projection
+    engine->normals_this_frame = false;
+    engine->aux_this_frame = false;
+    engine->albedo_this_frame = false;
+    if (engine->postfx)
+        engine->postfx->taa_enabled = false;
+
+    // Scene GL state: capture may run before the render loop's per-frame
+    // preamble has ever executed, so establish it explicitly
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LESS);
+    glDepthMask(GL_TRUE);
+    glEnable(GL_CULL_FACE);
+    glCullFace(GL_BACK);
+    glFrontFace(GL_CCW);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+    if (probe->cubemap)
+        glDeleteTextures(1, &probe->cubemap);
+    ibl_create_cubemap_texture(&probe->cubemap, PROBE_CUBEMAP_SIZE, true);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, ibl->capture_fbo);
+    glBindRenderbuffer(GL_RENDERBUFFER, ibl->capture_rbo);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, PROBE_CUBEMAP_SIZE,
+                          PROBE_CUBEMAP_SIZE);
+
+    mat4 views[6];
+    ibl_capture_views(probe->position, views);
+
+    // Per-face shading is evaluated from the probe point
+    glm_vec3_copy(probe->position, camera->position);
+    camera->near_clip = near_clip;
+    camera->far_clip = far_clip;
+    glm_perspective(glm_rad(90.0f), 1.0f, near_clip, far_clip, engine->projection_matrix);
+
+    for (int i = 0; i < 6; ++i) {
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                               GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, probe->cubemap, 0);
+        glViewport(0, 0, PROBE_CUBEMAP_SIZE, PROBE_CUBEMAP_SIZE);
+        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        glm_mat4_copy(views[i], engine->view_matrix);
+        render_current_scene(engine, 0.0f);
+    }
+
+    glBindTexture(GL_TEXTURE_CUBE_MAP, probe->cubemap);
+    glGenerateMipmap(GL_TEXTURE_CUBE_MAP);
+
+    if (probe->prefiltered)
+        glDeleteTextures(1, &probe->prefiltered);
+    ibl_create_prefilter_cubemap(&probe->prefiltered, PROBE_PREFILTER_SIZE,
+                                 PROBE_PREFILTER_MIP_LEVELS);
+    ibl_prefilter_cubemap(ibl, probe->cubemap, (float)PROBE_CUBEMAP_SIZE, probe->prefiltered,
+                          PROBE_PREFILTER_SIZE, PROBE_PREFILTER_MIP_LEVELS);
+
+    // Restore
+    glm_mat4_copy(saved_view, engine->view_matrix);
+    glm_mat4_copy(saved_projection, engine->projection_matrix);
+    glm_mat4_copy(saved_view_proj, engine->view_proj);
+    glm_mat4_copy(saved_prev_view_proj, engine->prev_view_proj);
+    glm_vec3_copy(saved_cam_pos, camera->position);
+    camera->near_clip = saved_near;
+    camera->far_clip = saved_far;
+    engine->normals_this_frame = saved_normals;
+    engine->aux_this_frame = saved_aux;
+    engine->albedo_this_frame = saved_albedo;
+    if (engine->postfx)
+        engine->postfx->taa_enabled = saved_taa;
+
+    glBindFramebuffer(GL_FRAMEBUFFER, saved_fbo);
+    glViewport(saved_viewport[0], saved_viewport[1], saved_viewport[2], saved_viewport[3]);
+    glUseProgram(0);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
+
+    probe->captured = true;
+    log_info("Reflection probe captured at (%.2f, %.2f, %.2f)", probe->position[0],
+             probe->position[1], probe->position[2]);
+
+    return 0;
+}
+
+// Draw the raw probe capture as the background (in place of the skybox) so
+// the capture can be inspected in situ
+void render_probe_debug_background(const ReflectionProbe* probe, IBLResources* ibl, mat4 view,
+                                   mat4 projection) {
+    if (!probe || !probe->captured || !ibl || !ibl->skybox_program)
+        return;
+
+    ShaderProgram* program = ibl->skybox_program;
+    glUseProgram(program->id);
+
+    // Remove translation from view matrix
+    mat4 view_no_translation;
+    glm_mat4_copy(view, view_no_translation);
+    view_no_translation[3][0] = 0.0f;
+    view_no_translation[3][1] = 0.0f;
+    view_no_translation[3][2] = 0.0f;
+
+    uniform_set_mat4(program->uniforms, "view", (float*)view_no_translation);
+    uniform_set_mat4(program->uniforms, "projection", (float*)projection);
+    uniform_set_float(program->uniforms, "brightness", 1.0f);
+    uniform_set_int(program->uniforms, "groundProjection", 0);
+
+    glActiveTexture(GL_TEXTURE0 + IBL_SKYBOX_TEXTURE_UNIT);
+    glBindTexture(GL_TEXTURE_CUBE_MAP, probe->cubemap);
+    uniform_set_int(program->uniforms, "skyboxTex", IBL_SKYBOX_TEXTURE_UNIT);
+
+    glDepthFunc(GL_LEQUAL);
+    glDepthMask(GL_FALSE);
+    ibl_render_unit_cube(ibl);
+    glDepthMask(GL_TRUE);
+    glDepthFunc(GL_LESS);
+
+    // The skybox proper binds its own cubemap next frame; leave unit state clean
+    glActiveTexture(GL_TEXTURE0);
 }
