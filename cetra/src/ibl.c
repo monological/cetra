@@ -360,6 +360,9 @@ void ibl_create_prefilter_cubemap(GLuint* texture, int size, int num_mip_levels)
     glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
     glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    // The chain deliberately stops above 1x1; without an explicit max level
+    // the texture is mipmap-incomplete and samples as black
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAX_LEVEL, num_mip_levels - 1);
 }
 
 static void render_equirect_to_cubemap(IBLResources* ibl, mat4 projection, const mat4 views[6]) {
@@ -447,7 +450,9 @@ void ibl_prefilter_cubemap(IBLResources* ibl, GLuint src_cube, float src_resolut
     uniform_set_float(program->uniforms, "resolution", src_resolution);
 
     GLboolean cull_was_enabled = glIsEnabled(GL_CULL_FACE);
+    GLboolean blend_was_enabled = glIsEnabled(GL_BLEND);
     glDisable(GL_CULL_FACE);
+    glDisable(GL_BLEND);
 
     glBindFramebuffer(GL_FRAMEBUFFER, ibl->capture_fbo);
 
@@ -473,6 +478,8 @@ void ibl_prefilter_cubemap(IBLResources* ibl, GLuint src_cube, float src_resolut
 
     if (cull_was_enabled)
         glEnable(GL_CULL_FACE);
+    if (blend_was_enabled)
+        glEnable(GL_BLEND);
 }
 
 static void render_brdf_lut(IBLResources* ibl) {
@@ -549,8 +556,12 @@ int precompute_ibl(IBLResources* ibl, Engine* engine) {
     glGetIntegerv(GL_VIEWPORT, prev_viewport);
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_framebuffer);
 
-    // Disable face culling for inside-cube rendering
+    // Disable face culling for inside-cube rendering, and blending for every
+    // capture pass: the BRDF LUT shader writes only RG, so with blending on
+    // its undefined source alpha feeds the blend equation and the LUT comes
+    // out different on every run
     glDisable(GL_CULL_FACE);
+    glDisable(GL_BLEND);
 
     // Step 1: Convert equirectangular to cubemap. The mip chain is required
     // by the convolutions below: this HDR class concentrates its energy in
@@ -580,8 +591,9 @@ int precompute_ibl(IBLResources* ibl, Engine* engine) {
     log_info("  Generating BRDF LUT...");
     render_brdf_lut(ibl);
 
-    // Re-enable face culling
+    // Re-enable face culling and the engine's default blending
     glEnable(GL_CULL_FACE);
+    glEnable(GL_BLEND);
 
     // Restore viewport and framebuffer
     glViewport(prev_viewport[0], prev_viewport[1], prev_viewport[2], prev_viewport[3]);
