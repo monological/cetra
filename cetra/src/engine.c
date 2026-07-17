@@ -1215,9 +1215,9 @@ static void _engine_gui_panel(Engine* engine) {
     if (scene && scene->render_skybox && scene->ibl &&
         igCollapsingHeader_TreeNodeFlags("Environment", ImGuiTreeNodeFlags_DefaultOpen)) {
         _begin_effect_group("Ground Projection", &scene->skybox_ground_projection);
-        // Log scale + wide range: the dome radius defaults to ~5x the scene
-        // radius, so it can be anywhere from a few units (meter-scale models) to
-        // thousands (large-unit assets).
+        // Log scale + wide range: the dome radius is a world-space distance
+        // apps typically scale to the scene, anywhere from a few units
+        // (meter-scale models) to thousands (large-unit assets).
         igSliderFloat("Dome Radius", &scene->skybox_gp_radius, 1.0f, 10000.0f, "%.2f",
                       ImGuiSliderFlags_Logarithmic);
         igSliderFloat("Capture Height", &scene->skybox_gp_height, 0.1f, 10.0f, "%.2f", 0);
@@ -1265,7 +1265,11 @@ static void _engine_gui_panel(Engine* engine) {
         _end_effect_group();
 
         _begin_effect_group("Ambient Occlusion (GTAO)", &fx->ssao_enabled);
-        igSliderFloat("AO Radius", &fx->ssao_radius, 0.05f, 5.0f, "%.2f", 0);
+        // Log scale + wide range: the AO/GI reach is a world-space distance, so
+        // apps scale it to the scene (meter-scale models sit near the bottom,
+        // large-unit scenes in the hundreds).
+        igSliderFloat("AO Radius", &fx->ssao_radius, 0.05f, 1000.0f, "%.2f",
+                      ImGuiSliderFlags_Logarithmic);
         igSliderFloat("AO Strength", &fx->ssao_strength, 0.0f, 1.0f, "%.2f", 0);
         _end_effect_group();
 

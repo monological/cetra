@@ -6,6 +6,9 @@
 #include "program.h"
 #include "util.h"
 
+// Fullscreen post-pass program helper (defined with the postfx constructors)
+static ShaderProgram* create_post_program(const char* name, const char* frag_src);
+
 ShaderProgram* create_program(const char* name) {
     ShaderProgram* program = malloc(sizeof(ShaderProgram));
     if (!program) {
@@ -672,63 +675,32 @@ ShaderProgram* create_ao_accum_program() {
 }
 
 ShaderProgram* create_ssgi_composite_program() {
-    ShaderProgram* program = NULL;
+    return create_post_program("ssgi_composite", ssgi_composite_frag_shader_str);
+}
 
-    if ((program = create_program_from_source("ssgi_composite", post_vert_shader_str,
-                                              ssgi_composite_frag_shader_str, NULL)) == NULL) {
-        log_error("Failed to initialize SSGI composite shader program");
-        return NULL;
-    }
-
+// Fullscreen post-pass program: the shared post vertex shader plus a fragment
+// source. Every postfx constructor is this call with a different pair.
+static ShaderProgram* create_post_program(const char* name, const char* frag_src) {
+    ShaderProgram* program = create_program_from_source(name, post_vert_shader_str, frag_src, NULL);
+    if (!program)
+        log_error("Failed to initialize %s shader program", name);
     return program;
 }
 
 ShaderProgram* create_ssgi_accum_program() {
-    ShaderProgram* program = NULL;
-
-    if ((program = create_program_from_source("ssgi_accum", post_vert_shader_str,
-                                              ssgi_accum_frag_shader_str, NULL)) == NULL) {
-        log_error("Failed to initialize SSGI accumulation shader program");
-        return NULL;
-    }
-
-    return program;
+    return create_post_program("ssgi_accum", ssgi_accum_frag_shader_str);
 }
 
 ShaderProgram* create_ssgi_atrous_program() {
-    ShaderProgram* program = NULL;
-
-    if ((program = create_program_from_source("ssgi_atrous", post_vert_shader_str,
-                                              ssgi_atrous_frag_shader_str, NULL)) == NULL) {
-        log_error("Failed to initialize SSGI a-trous shader program");
-        return NULL;
-    }
-
-    return program;
+    return create_post_program("ssgi_atrous", ssgi_atrous_frag_shader_str);
 }
 
 ShaderProgram* create_lum_measure_program() {
-    ShaderProgram* program = NULL;
-
-    if ((program = create_program_from_source("lum_measure", post_vert_shader_str,
-                                              lum_measure_frag_shader_str, NULL)) == NULL) {
-        log_error("Failed to initialize luminance measure shader program");
-        return NULL;
-    }
-
-    return program;
+    return create_post_program("lum_measure", lum_measure_frag_shader_str);
 }
 
 ShaderProgram* create_lum_adapt_program() {
-    ShaderProgram* program = NULL;
-
-    if ((program = create_program_from_source("lum_adapt", post_vert_shader_str,
-                                              lum_adapt_frag_shader_str, NULL)) == NULL) {
-        log_error("Failed to initialize luminance adapt shader program");
-        return NULL;
-    }
-
-    return program;
+    return create_post_program("lum_adapt", lum_adapt_frag_shader_str);
 }
 
 ShaderProgram* create_dof_coc_program() {

@@ -13,12 +13,13 @@
 // Creates a single-sample color-only FBO; returns false on failure
 static bool create_color_fbo(int width, int height, GLenum internal_format, GLuint* out_fbo,
                              GLuint* out_texture) {
-    GLenum format = GL_RGB;
-    if (internal_format == GL_RGBA16F || internal_format == GL_RGBA32F ||
-        internal_format == GL_RGBA8)
-        format = GL_RGBA;
-    else if (internal_format == GL_R8 || internal_format == GL_R16F)
+    // RGBA is the default; only the single-channel and packed-RGB formats
+    // need the narrower pixel-transfer format (data is always NULL anyway).
+    GLenum format = GL_RGBA;
+    if (internal_format == GL_R8 || internal_format == GL_R16F)
         format = GL_RED;
+    else if (internal_format == GL_R11F_G11F_B10F)
+        format = GL_RGB;
 
     glGenTextures(1, out_texture);
     glBindTexture(GL_TEXTURE_2D, *out_texture);
@@ -42,6 +43,21 @@ static bool create_color_fbo(int width, int height, GLenum internal_format, GLui
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     return true;
+}
+
+// A ping-pong pair: two color FBOs of the same size/format (see PingPong)
+static bool create_pingpong(int width, int height, GLenum internal_format, PingPong* pp) {
+    pp->valid = false;
+    for (int i = 0; i < 2; i++) {
+        if (!create_color_fbo(width, height, internal_format, &pp->fbo[i], &pp->tex[i]))
+            return false;
+    }
+    return true;
+}
+
+static void free_pingpong(PingPong* pp) {
+    glDeleteFramebuffers(2, pp->fbo);
+    glDeleteTextures(2, pp->tex);
 }
 
 // Depth-only FBO used as the blit target when resolving the MSAA depth
@@ -133,7 +149,7 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     fx->ssao_height = fx->bloom_height;
 
     fx->exposure = 1.0f;
-    fx->auto_exposure = true; // Adapt to scene luminance; manual -E pins it off
+    fx->auto_exposure = true; // Adapt to scene luminance; apps setting a manual exposure clear this
     fx->auto_exposure_key = 0.18f;
     fx->bloom_threshold = 1.0f;
     fx->bloom_knee = 0.5f;
@@ -219,45 +235,14 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
             return NULL;
         }
     }
-    // SSGI GI radiance target: a 2nd MRT attachment on the GTAO pass FBO (ssao_fbo[0]),
-    // written alongside the AO when SSGI gathers this frame. RGBA16F half-res (HDR
-    // bounce color). Attached permanently; the GTAO pass's draw-buffer list decides
-    // whether it is actually written.
-    glGenTextures(1, &fx->ssgi_gi_texture);
-    glBindTexture(GL_TEXTURE_2D, fx->ssgi_gi_texture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, fx->ssao_width, fx->ssao_height, 0, GL_RGBA, GL_FLOAT,
-                 NULL);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glBindFramebuffer(GL_FRAMEBUFFER, fx->ssao_fbo[0]);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, fx->ssgi_gi_texture,
-                           0);
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
     // Half-res temporal-AO accumulation ping-pong. R16F, not R8: an exponential
     // feedback blend needs more than 256 levels to avoid banding as it converges.
-    for (int i = 0; i < 2; i++) {
-        if (!create_color_fbo(fx->ssao_width, fx->ssao_height, GL_R16F, &fx->ao_history_fbo[i],
-                              &fx->ao_history_texture[i])) {
-            free_postfx(fx);
-            return NULL;
-        }
+    if (!create_pingpong(fx->ssao_width, fx->ssao_height, GL_R16F, &fx->ao_history)) {
+        free_postfx(fx);
+        return NULL;
     }
-    // SSGI denoise chain: temporal-GI accumulation ping-pong plus the a-trous
-    // blur ping-pong, all half-res HDR color.
-    for (int i = 0; i < 2; i++) {
-        if (!create_color_fbo(fx->ssao_width, fx->ssao_height, GL_RGBA16F,
-                              &fx->ssgi_history_fbo[i], &fx->ssgi_history_texture[i])) {
-            free_postfx(fx);
-            return NULL;
-        }
-        if (!create_color_fbo(fx->ssao_width, fx->ssao_height, GL_RGBA16F,
-                              &fx->ssgi_atrous_fbo[i], &fx->ssgi_atrous_texture[i])) {
-            free_postfx(fx);
-            return NULL;
-        }
-    }
+    // The SSGI targets (GI radiance MRT + accumulation/a-trous pairs) are
+    // lazily allocated on first enable -- see postfx_ensure_ssgi_targets.
     // Half-res reflection buffer; HDR since it carries scene color
     if (!create_color_fbo(fx->ssao_width, fx->ssao_height, GL_RGBA16F, &fx->ssr_fbo,
                           &fx->ssr_texture)) {
@@ -288,12 +273,9 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
         free_postfx(fx);
         return NULL;
     }
-    for (int i = 0; i < 2; i++) {
-        if (!create_color_fbo(fx->width, fx->height, GL_RGBA16F, &fx->taa_history_fbo[i],
-                              &fx->taa_history_texture[i])) {
-            free_postfx(fx);
-            return NULL;
-        }
+    if (!create_pingpong(fx->width, fx->height, GL_RGBA16F, &fx->taa_history)) {
+        free_postfx(fx);
+        return NULL;
     }
 
     // Auto-exposure: a 64x64 log2-luminance measure target whose mip chain is
@@ -308,11 +290,9 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     glBindTexture(GL_TEXTURE_2D, fx->lum_texture);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
     glGenerateMipmap(GL_TEXTURE_2D); // Allocate the chain up front
-    for (int i = 0; i < 2; i++) {
-        if (!create_color_fbo(1, 1, GL_R16F, &fx->lum_adapt_fbo[i], &fx->lum_adapt_texture[i])) {
-            free_postfx(fx);
-            return NULL;
-        }
+    if (!create_pingpong(1, 1, GL_R16F, &fx->lum_adapt)) {
+        free_postfx(fx);
+        return NULL;
     }
 
     unsigned int rng = 0x9E3779B9u;
@@ -443,6 +423,35 @@ static bool postfx_ensure_dof_targets(PostFX* fx) {
     return true;
 }
 
+// Allocate the SSGI targets on first enable so the feature is free while off
+// (mirrors the DoF pattern): the half-res GI radiance MRT plus the temporal
+// accumulation and a-trous ping-pongs, ~5 half-res RGBA16F surfaces. The GI
+// texture attaches to the GTAO FBO as attachment 1; until then the pass draws
+// only attachment 0, which keeps the FBO complete.
+static bool postfx_ensure_ssgi_targets(PostFX* fx) {
+    if (fx->ssgi_ready)
+        return true;
+    glGenTextures(1, &fx->ssgi_gi_texture);
+    glBindTexture(GL_TEXTURE_2D, fx->ssgi_gi_texture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, fx->ssao_width, fx->ssao_height, 0, GL_RGBA,
+                 GL_FLOAT, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glBindFramebuffer(GL_FRAMEBUFFER, fx->ssao_fbo[0]);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D,
+                           fx->ssgi_gi_texture, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    if (!create_pingpong(fx->ssao_width, fx->ssao_height, GL_RGBA16F, &fx->ssgi_history) ||
+        !create_pingpong(fx->ssao_width, fx->ssao_height, GL_RGBA16F, &fx->ssgi_atrous)) {
+        log_error("Failed to allocate SSGI targets");
+        return false;
+    }
+    fx->ssgi_ready = true;
+    return true;
+}
+
 // Depth of field: signed CoC + gather at half res, composite at full res into
 // fx->dof_texture. Callers must have ensured the targets exist and read
 // fx->dof_texture as the scene afterward.
@@ -505,12 +514,9 @@ void free_postfx(PostFX* fx) {
     glDeleteFramebuffers(2, fx->ssao_fbo);
     glDeleteTextures(2, fx->ssao_texture);
     glDeleteTextures(1, &fx->ssgi_gi_texture);
-    glDeleteFramebuffers(2, fx->ssgi_history_fbo);
-    glDeleteTextures(2, fx->ssgi_history_texture);
-    glDeleteFramebuffers(2, fx->ssgi_atrous_fbo);
-    glDeleteTextures(2, fx->ssgi_atrous_texture);
-    glDeleteFramebuffers(2, fx->ao_history_fbo);
-    glDeleteTextures(2, fx->ao_history_texture);
+    free_pingpong(&fx->ssgi_history);
+    free_pingpong(&fx->ssgi_atrous);
+    free_pingpong(&fx->ao_history);
     glDeleteTextures(1, &fx->noise_texture);
     glDeleteFramebuffers(1, &fx->ssr_fbo);
     glDeleteTextures(1, &fx->ssr_texture);
@@ -518,12 +524,10 @@ void free_postfx(PostFX* fx) {
     glDeleteTextures(1, &fx->aux_texture);
     glDeleteFramebuffers(1, &fx->albedo_fbo);
     glDeleteTextures(1, &fx->albedo_texture);
-    glDeleteFramebuffers(2, fx->taa_history_fbo);
-    glDeleteTextures(2, fx->taa_history_texture);
+    free_pingpong(&fx->taa_history);
     glDeleteFramebuffers(1, &fx->lum_fbo);
     glDeleteTextures(1, &fx->lum_texture);
-    glDeleteFramebuffers(2, fx->lum_adapt_fbo);
-    glDeleteTextures(2, fx->lum_adapt_texture);
+    free_pingpong(&fx->lum_adapt);
     // DoF targets are 0 (no-op delete) if never lazily allocated
     glDeleteFramebuffers(1, &fx->dof_coc_fbo);
     glDeleteTextures(1, &fx->dof_coc_texture);
@@ -578,10 +582,12 @@ void postfx_apply_film_look(PostFX* fx) {
 bool postfx_wants_normals(const PostFX* fx) {
     if (!fx || !fx->normals_enabled)
         return false;
-    // SSAO orients its sample hemisphere with these normals and SSR
-    // reflects off them; the debug view forces the buffer on so it can be
-    // inspected with every consumer disabled
-    return fx->ssao_enabled || fx->ssr_enabled || fx->debug_view == POSTFX_DEBUG_NORMALS;
+    // SSAO orients its sample hemisphere with these normals, SSR reflects off
+    // them, and SSGI's sweep + edge-aware denoise consume them (without the
+    // buffer both degrade to depth-derived normals); the debug view forces the
+    // buffer on so it can be inspected with every consumer disabled
+    return fx->ssao_enabled || fx->ssr_enabled || fx->ssgi_enabled ||
+           fx->debug_view == POSTFX_DEBUG_NORMALS;
 }
 
 bool postfx_taa_active(const PostFX* fx) {
@@ -623,6 +629,30 @@ static void resolve_color_attachment(GLuint msaa_fbo, GLenum attachment, GLuint 
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, dst_fbo);
     glBlitFramebuffer(0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
     glReadBuffer(GL_COLOR_ATTACHMENT0);
+}
+
+// Reproject-and-blend temporal accumulation, shared by the AO and GI
+// accumulators (their shaders share the currentTex/velocityTex/historyTex
+// unit layout). Indexes the pair by frame parity, resets when the history is
+// not valid (first use, or the accumulator was skipped last frame), and
+// returns the freshly written texture.
+static GLuint run_temporal_accum(PostFX* fx, ShaderProgram* prog, PingPong* pp, int w, int h,
+                                 GLuint current_tex) {
+    int write = fx->frame_index & 1;
+    int read = write ^ 1;
+    glBindFramebuffer(GL_FRAMEBUFFER, pp->fbo[write]);
+    glViewport(0, 0, w, h);
+    glUseProgram(prog->id);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, current_tex);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, fx->aux_texture);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, pp->tex[read]);
+    uniform_set_int(prog->uniforms, "reset", pp->valid ? 0 : 1);
+    draw_fullscreen_quad(fx->quad_vao);
+    pp->valid = true;
+    return pp->tex[write];
 }
 
 void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hdr,
@@ -680,34 +710,27 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         // against the current frame, blend, and write the result back into
         // hdr_fbo so SSR/DoF/bloom/tonemap consume the anti-aliased color.
         if (taa_resolving) {
-            int write = fx->frame_index & 1;
-            int read = write ^ 1;
-
-            glBindFramebuffer(GL_FRAMEBUFFER, fx->taa_history_fbo[write]);
-            glViewport(0, 0, fx->width, fx->height);
+            // Bind the program before setting its uniforms (glUniform* acts on
+            // the active program); run_temporal_accum re-binds it harmlessly.
             glUseProgram(fx->taa_resolve_program->id);
-            glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, fx->hdr_texture);
-            glActiveTexture(GL_TEXTURE1);
-            glBindTexture(GL_TEXTURE_2D, fx->aux_texture);
-            glActiveTexture(GL_TEXTURE2);
-            glBindTexture(GL_TEXTURE_2D, fx->taa_history_texture[read]);
             UniformManager* tu = fx->taa_resolve_program->uniforms;
             uniform_set_int(tu, "currentTex", 0);
             uniform_set_int(tu, "velocityTex", 1);
             uniform_set_int(tu, "historyTex", 2);
             const float taa_texel[2] = {1.0f / (float)fx->width, 1.0f / (float)fx->height};
             uniform_set_vec2(tu, "texelSize", taa_texel);
-            uniform_set_int(tu, "reset", fx->frame_index == 0 ? 1 : 0);
-            draw_fullscreen_quad(fx->quad_vao);
+            run_temporal_accum(fx, fx->taa_resolve_program, &fx->taa_history, fx->width,
+                               fx->height, fx->hdr_texture);
 
-            // Push the resolved frame back into hdr_fbo (history[write] is kept
-            // as next frame's accumulation buffer).
-            glBindFramebuffer(GL_READ_FRAMEBUFFER, fx->taa_history_fbo[write]);
+            // Push the resolved frame back into hdr_fbo (the history side is
+            // kept as next frame's accumulation buffer).
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, fx->taa_history.fbo[fx->frame_index & 1]);
             glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fx->hdr_fbo);
             glBlitFramebuffer(0, 0, fx->width, fx->height, 0, 0, fx->width, fx->height,
                               GL_COLOR_BUFFER_BIT, GL_NEAREST);
             check_gl_error("postfx taa");
+        } else {
+            fx->taa_history.valid = false;
         }
 
         // Resolve the scene pass's second attachment (normals + roughness)
@@ -745,7 +768,12 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         GLuint ao_result_tex = fx->ssao_texture[1];
         // The GTAO sweep runs when AO is shown OR SSGI needs it (they share the
         // pass). AO-only denoise (blur + temporal accum) stays gated on ssao_enabled.
-        const bool gtao_active = fx->ssao_enabled || fx->ssgi_enabled;
+        // SSGI implies the GTAO sweep (they share it); its targets are lazily
+        // allocated on first enable.
+        const bool ssgi_active = fx->ssgi_enabled && postfx_ensure_ssgi_targets(fx);
+        const bool gtao_active = fx->ssao_enabled || ssgi_active;
+        bool ao_accum_ran = false;
+        bool gi_accum_ran = false;
         if (gtao_active) {
             // Raw occlusion at half res. GTAO reads linear view-Z from the aux
             // buffer's .z (unit 0) and reconstructs positions from it -- the
@@ -755,7 +783,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             // SSGI rides the same sweep: when on, also draw the GI radiance into
             // attachment 1 (ssgi_gi_texture); when off, only AO is written so the
             // path is byte-identical to plain GTAO.
-            if (fx->ssgi_enabled) {
+            if (ssgi_active) {
                 const GLenum bufs[2] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1};
                 glDrawBuffers(2, bufs);
             } else {
@@ -769,13 +797,13 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             glActiveTexture(GL_TEXTURE2);
             glBindTexture(GL_TEXTURE_2D, have_normals ? fx->normal_texture : 0);
             glActiveTexture(GL_TEXTURE3);
-            glBindTexture(GL_TEXTURE_2D, fx->ssgi_enabled ? fx->hdr_texture : 0);
+            glBindTexture(GL_TEXTURE_2D, ssgi_active ? fx->hdr_texture : 0);
             uniform_set_int(fx->gtao_program->uniforms, "useNormalsTex", have_normals ? 1 : 0);
             uniform_set_mat4(fx->gtao_program->uniforms, "projection", (float*)projection);
             uniform_set_float(fx->gtao_program->uniforms, "radius", fx->ssao_radius);
             uniform_set_int(fx->gtao_program->uniforms, "temporal", taa_resolving ? 1 : 0);
             uniform_set_int(fx->gtao_program->uniforms, "frameIndex", fx->frame_index);
-            uniform_set_int(fx->gtao_program->uniforms, "gatherGI", fx->ssgi_enabled ? 1 : 0);
+            uniform_set_int(fx->gtao_program->uniforms, "gatherGI", ssgi_active ? 1 : 0);
             draw_fullscreen_quad(fx->quad_vao);
 
             if (fx->ssao_enabled) {
@@ -786,75 +814,56 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
                 glBindTexture(GL_TEXTURE_2D, fx->ssao_texture[0]);
                 draw_fullscreen_quad(fx->quad_vao);
 
-                // Temporal accumulation: reproject the history by velocity and blend
-                // so the per-frame jittered occlusion integrates into a stable result.
+                // Temporal accumulation: reproject the history by velocity and
+                // blend so the per-frame jittered occlusion integrates into a
+                // stable result.
                 if (taa_resolving) {
-                    int write = fx->frame_index & 1;
-                    int read = write ^ 1;
-                    glBindFramebuffer(GL_FRAMEBUFFER, fx->ao_history_fbo[write]);
-                    glViewport(0, 0, fx->ssao_width,
-                               fx->ssao_height); // don't rely on the blur's viewport
-                    glUseProgram(fx->ao_accum_program->id);
-                    glActiveTexture(GL_TEXTURE0);
-                    glBindTexture(GL_TEXTURE_2D, fx->ssao_texture[1]);
-                    glActiveTexture(GL_TEXTURE1);
-                    glBindTexture(GL_TEXTURE_2D, fx->aux_texture);
-                    glActiveTexture(GL_TEXTURE2);
-                    glBindTexture(GL_TEXTURE_2D, fx->ao_history_texture[read]);
-                    // reset keys off the global frame index, so toggling AO/TAA on
-                    // mid-run won't re-fire it -- the 3x3 neighborhood clamp bounds
-                    // the stale history and it self-heals within a frame or two.
-                    uniform_set_int(fx->ao_accum_program->uniforms, "reset",
-                                    fx->frame_index == 0 ? 1 : 0);
-                    draw_fullscreen_quad(fx->quad_vao);
-                    ao_result_tex = fx->ao_history_texture[write];
+                    ao_result_tex =
+                        run_temporal_accum(fx, fx->ao_accum_program, &fx->ao_history,
+                                           fx->ssao_width, fx->ssao_height, fx->ssao_texture[1]);
+                    ao_accum_ran = true;
                 }
             }
         }
+        if (!ao_accum_ran)
+            fx->ao_history.valid = false;
 
         // SSGI denoise chain: temporal accumulation of the raw gather (TAA
         // frames only -- it needs velocity and the per-frame slice jitter),
         // then an edge-aware a-trous blur. SVGF-style order: accumulate the
         // raw signal, smooth the accumulation.
         GLuint gi_result_tex = fx->ssgi_gi_texture;
-        if (fx->ssgi_enabled) {
+        if (ssgi_active) {
             if (taa_resolving) {
-                int gi_write = fx->frame_index & 1;
-                int gi_read = gi_write ^ 1;
-                glBindFramebuffer(GL_FRAMEBUFFER, fx->ssgi_history_fbo[gi_write]);
-                glViewport(0, 0, fx->ssao_width, fx->ssao_height);
-                glUseProgram(fx->ssgi_accum_program->id);
-                glActiveTexture(GL_TEXTURE0);
-                glBindTexture(GL_TEXTURE_2D, fx->ssgi_gi_texture);
-                glActiveTexture(GL_TEXTURE1);
-                glBindTexture(GL_TEXTURE_2D, fx->aux_texture);
-                glActiveTexture(GL_TEXTURE2);
-                glBindTexture(GL_TEXTURE_2D, fx->ssgi_history_texture[gi_read]);
-                uniform_set_int(fx->ssgi_accum_program->uniforms, "reset",
-                                fx->frame_index == 0 ? 1 : 0);
-                draw_fullscreen_quad(fx->quad_vao);
-                gi_result_tex = fx->ssgi_history_texture[gi_write];
+                gi_result_tex =
+                    run_temporal_accum(fx, fx->ssgi_accum_program, &fx->ssgi_history,
+                                       fx->ssao_width, fx->ssao_height, fx->ssgi_gi_texture);
+                gi_accum_ran = true;
             }
 
-            // Three a-trous iterations with doubling tap spacing (1, 2, 4)
+            // Three a-trous iterations with doubling tap spacing (1, 2, 4).
+            // Units 1/2 (depth, normals) are invariant across iterations;
+            // only the GI ping-pong on unit 0 changes.
             glUseProgram(fx->ssgi_atrous_program->id);
             uniform_set_int(fx->ssgi_atrous_program->uniforms, "useNormalsTex",
                             have_normals ? 1 : 0);
             glViewport(0, 0, fx->ssao_width, fx->ssao_height);
+            glActiveTexture(GL_TEXTURE1);
+            glBindTexture(GL_TEXTURE_2D, fx->aux_texture);
+            glActiveTexture(GL_TEXTURE2);
+            glBindTexture(GL_TEXTURE_2D, have_normals ? fx->normal_texture : 0);
             for (int i = 0; i < 3; i++) {
-                glBindFramebuffer(GL_FRAMEBUFFER, fx->ssgi_atrous_fbo[i & 1]);
+                glBindFramebuffer(GL_FRAMEBUFFER, fx->ssgi_atrous.fbo[i & 1]);
                 glActiveTexture(GL_TEXTURE0);
                 glBindTexture(GL_TEXTURE_2D, gi_result_tex);
-                glActiveTexture(GL_TEXTURE1);
-                glBindTexture(GL_TEXTURE_2D, fx->aux_texture);
-                glActiveTexture(GL_TEXTURE2);
-                glBindTexture(GL_TEXTURE_2D, have_normals ? fx->normal_texture : 0);
                 uniform_set_int(fx->ssgi_atrous_program->uniforms, "stepSize", 1 << i);
                 draw_fullscreen_quad(fx->quad_vao);
-                gi_result_tex = fx->ssgi_atrous_texture[i & 1];
+                gi_result_tex = fx->ssgi_atrous.tex[i & 1];
             }
             check_gl_error("postfx ssgi denoise");
         }
+        if (!gi_accum_ran)
+            fx->ssgi_history.valid = false;
 
         if (ssr_active) {
             // March reflections into the half-res buffer (reads the scene,
@@ -898,7 +907,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             check_gl_error("postfx ssr");
         }
 
-        if (fx->ssgi_enabled && albedo_written) {
+        if (ssgi_active && albedo_written) {
             // Add one bounce of indirect diffuse (albedo x gathered GI x intensity)
             // into the HDR scene before bloom, so bounce light blooms like direct
             // light. Half-res GI is bilinear-upsampled; albedo is full-res.
@@ -936,21 +945,32 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             glUseProgram(fx->lum_measure_program->id);
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, scene_tex);
+            // Metering floor == key (the "auto only darkens" invariant); the
+            // tonemap divides by the mean with the same uniform.
+            uniform_set_float(fx->lum_measure_program->uniforms, "autoKey",
+                              fx->auto_exposure_key);
             draw_fullscreen_quad(fx->quad_vao);
             glBindTexture(GL_TEXTURE_2D, fx->lum_texture);
             glGenerateMipmap(GL_TEXTURE_2D);
 
-            glBindFramebuffer(GL_FRAMEBUFFER, fx->lum_adapt_fbo[lum_write]);
+            glBindFramebuffer(GL_FRAMEBUFFER, fx->lum_adapt.fbo[lum_write]);
             glViewport(0, 0, 1, 1);
             glUseProgram(fx->lum_adapt_program->id);
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, fx->lum_texture);
             glActiveTexture(GL_TEXTURE1);
-            glBindTexture(GL_TEXTURE_2D, fx->lum_adapt_texture[lum_write ^ 1]);
+            glBindTexture(GL_TEXTURE_2D, fx->lum_adapt.tex[lum_write ^ 1]);
+            // Snap (reset) when the history is invalid: this accumulator has no
+            // neighborhood clamp, so unlike AO/GI/TAA it cannot self-heal from
+            // stale or never-written history (a mid-run enable would otherwise
+            // blend from undefined texels).
             uniform_set_int(fx->lum_adapt_program->uniforms, "reset",
-                            fx->frame_index == 0 ? 1 : 0);
+                            fx->lum_adapt.valid ? 0 : 1);
             draw_fullscreen_quad(fx->quad_vao);
+            fx->lum_adapt.valid = true;
             check_gl_error("postfx auto exposure");
+        } else {
+            fx->lum_adapt.valid = false;
         }
 
         if (fx->bloom_enabled) {
@@ -1005,9 +1025,9 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         glBindTexture(GL_TEXTURE_2D, albedo_written ? fx->albedo_texture : 0);
         glActiveTexture(GL_TEXTURE6);
         // Debug view shows the GI as composited (accumulated + denoised)
-        glBindTexture(GL_TEXTURE_2D, fx->ssgi_enabled ? gi_result_tex : 0);
+        glBindTexture(GL_TEXTURE_2D, ssgi_active ? gi_result_tex : 0);
         glActiveTexture(GL_TEXTURE7);
-        glBindTexture(GL_TEXTURE_2D, fx->auto_exposure ? fx->lum_adapt_texture[lum_write] : 0);
+        glBindTexture(GL_TEXTURE_2D, fx->auto_exposure ? fx->lum_adapt.tex[lum_write] : 0);
         UniformManager* tm = fx->tonemap_program->uniforms;
         uniform_set_float(tm, "exposure", fx->exposure);
         uniform_set_int(tm, "autoExposure", fx->auto_exposure ? 1 : 0);
@@ -1023,7 +1043,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             (debug_view == POSTFX_DEBUG_NORMALS && !have_normals) ||
             (debug_view == POSTFX_DEBUG_SSR && !ssr_active) ||
             (debug_view == POSTFX_DEBUG_ALBEDO && !albedo_written) ||
-            (debug_view == POSTFX_DEBUG_SSGI && !fx->ssgi_enabled)) {
+            (debug_view == POSTFX_DEBUG_SSGI && !ssgi_active)) {
             static PostFXDebugView warned_view = POSTFX_DEBUG_NONE;
             if (warned_view != debug_view) {
                 log_warn("debug view %d suppressed: its source buffer is disabled",

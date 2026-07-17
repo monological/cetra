@@ -1033,12 +1033,9 @@ int main(int argc, char** argv) {
                 scene->render_skybox = true;
                 scene->skybox_brightness = 1.0f;
                 // Ground projection on by default; --no-ground restores the
-                // infinite skybox
+                // infinite skybox. Dome radius/height are set with the other
+                // scene-scaled policies once the bounds are known.
                 scene->skybox_ground_projection = !args.no_ground;
-                scene->skybox_gp_radius =
-                    args.ground_radius > 0.0f ? args.ground_radius : 5.0f;
-                scene->skybox_gp_height =
-                    args.ground_height > 0.0f ? args.ground_height : 1.2f;
                 printf("IBL loaded from: %s\n", args.hdr_path);
             } else {
                 fprintf(stderr, "Failed to precompute IBL\n");
@@ -1172,33 +1169,31 @@ int main(int argc, char** argv) {
     glm_mat4_identity(identity);
     apply_transform_to_nodes(scene->root_node, identity);
 
+    // Compute scene bounds; center/radius drive every scene-scaled policy below
+    vec3 scene_center;
+    float scene_radius;
+    compute_scene_center_and_radius(scene, scene_center, &scene_radius);
+
     // Recenter the model: translate so the bounding-box base sits on the origin
     // (y=0, centered in x/z). Everything anchored at the origin -- the
     // ground-projection dome, the shadow catcher, the orbit pivot -- assumes the
     // model stands there; off-origin assets (e.g. authored floating at y=189)
     // otherwise streak the projected environment and z-fight. The offset rides
-    // the per-frame model matrix, so animation-driven node transforms compose
-    // under it untouched.
+    // the per-frame model matrix (so animation-driven node transforms compose
+    // under it untouched); a pure translation leaves the radius unchanged, so
+    // the cached center just shifts by the offset.
     if (!args.no_recenter) {
         vec3 bb_min, bb_max;
         compute_scene_bounds(scene, bb_min, bb_max);
-        model_recenter_offset[0] = -0.5f * (bb_min[0] + bb_max[0]);
+        model_recenter_offset[0] = -scene_center[0];
         model_recenter_offset[1] = -bb_min[1];
-        model_recenter_offset[2] = -0.5f * (bb_min[2] + bb_max[2]);
+        model_recenter_offset[2] = -scene_center[2];
         if (glm_vec3_norm(model_recenter_offset) > 1e-4f) {
             printf("Recentering model by (%.2f, %.2f, %.2f)\n", model_recenter_offset[0],
                    model_recenter_offset[1], model_recenter_offset[2]);
-            mat4 recenter;
-            glm_mat4_identity(recenter);
-            glm_translate(recenter, model_recenter_offset);
-            apply_transform_to_nodes(scene->root_node, recenter);
         }
+        glm_vec3_add(scene_center, model_recenter_offset, scene_center);
     }
-
-    // Compute scene bounds and auto-position camera
-    vec3 scene_center;
-    float scene_radius;
-    compute_scene_center_and_radius(scene, scene_center, &scene_radius);
     printf("Scene bounds: center=(%.2f, %.2f, %.2f), radius=%.2f\n", scene_center[0],
            scene_center[1], scene_center[2], scene_radius);
 
@@ -1209,15 +1204,19 @@ int main(int argc, char** argv) {
     // it keeps framing and zoom range proportional at any model scale. An
     // explicit --ground still wins. 5x radius leaves headroom past the 2.5x
     // auto-framing distance (cap = 0.7 * 5 = 3.5x radius).
-    if (scene->render_skybox && scene->skybox_ground_projection &&
-        args.ground_radius <= 0.0f && scene_radius > 0.0f) {
-        scene->skybox_gp_radius = scene_radius * 5.0f;
-        // Scale the capture height with the dome (same height/radius ratio as
-        // the old 1.2/5 defaults). A fixed human-scale height against a
-        // scene-scaled dome squashes the projection geometry: the panorama's
-        // floor smears into radial streaks around large models.
-        if (args.ground_height <= 0.0f)
-            scene->skybox_gp_height = scene->skybox_gp_radius * (1.2f / 5.0f);
+    if (scene->render_skybox && scene->skybox_ground_projection) {
+        // The single policy site for the dome geometry: an explicit arg wins,
+        // else scale to the scene, else keep the human-scale defaults. The
+        // height tracks the radius at the defaults' 1.2/5 ratio -- a fixed
+        // human-scale capture height against a scene-scaled dome squashes the
+        // projection geometry and smears the panorama's floor into radial
+        // streaks around large models.
+        scene->skybox_gp_radius = args.ground_radius > 0.0f ? args.ground_radius
+                                  : scene_radius > 0.0f    ? scene_radius * 5.0f
+                                                           : 5.0f;
+        scene->skybox_gp_height = args.ground_height > 0.0f
+                                      ? args.ground_height
+                                      : scene->skybox_gp_radius * (1.2f / 5.0f);
     }
 
     // Fit the shadow frustum to the scene; the library default (ortho 2000)
@@ -1340,13 +1339,11 @@ int main(int argc, char** argv) {
     // it) — much cheaper than 4x MSAA on this GPU and better on shading/specular
     // aliasing. Headless keeps 4x MSAA with TAA off so screenshots stay
     // deterministic (jitter + history accumulation would vary run to run).
-    if (!args.headless) {
-        set_engine_msaa_samples(engine, 1);
-        set_engine_taa_enabled(engine, true);
-    } else if (args.force_taa) {
-        // Diagnostic: exercise the temporal passes (TAA/AO/GI accumulation)
-        // headless. Jitter + history make output run-to-run sensitive to async
-        // load timing, so this is not for byte-compared screenshots.
+    // --taa additionally exercises the temporal passes (TAA/AO/GI
+    // accumulation) headless as a diagnostic: jitter + history make output
+    // run-to-run sensitive to async load timing, so it is not for
+    // byte-compared screenshots.
+    if (!args.headless || args.force_taa) {
         set_engine_msaa_samples(engine, 1);
         set_engine_taa_enabled(engine, true);
     }

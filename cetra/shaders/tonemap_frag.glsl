@@ -78,16 +78,18 @@ vec3 pbrNeutralTonemap(vec3 color)
     return mix(color, newPeak * vec3(1.0), g);
 }
 
-// Effective exposure for this frame: manual, or auto x manual bias. Set once
-// in main() (it reads the adapted-luminance texture) and shared by every
-// sceneToToned tap.
-float effExposure;
+// Gamma-encode a linear [0,1] color for display.
+vec3 displayEncode(vec3 c)
+{
+    return pow(clamp(c, 0.0, 1.0), vec3(1.0 / 2.2));
+}
 
 // Scene HDR sample -> tonemapped LDR-linear [0,1], applying the shared AO
 // factor and bloom addition (the same order the composite uses). Sharpen
 // neighbour taps reuse the centre's aoFactor/bloomAdd so the mask measures
-// scene edges, not AO/bloom gradients.
-vec3 sceneToToned(vec3 hdr, float aoFactor, vec3 bloomAdd)
+// scene edges, not AO/bloom gradients. effExposure is the frame's effective
+// exposure (manual, or auto x manual bias), computed once in main().
+vec3 sceneToToned(vec3 hdr, float aoFactor, vec3 bloomAdd, float effExposure)
 {
     // Sanitize a +INF texel (half-float overflow upstream) — both tonemap
     // curves turn INF into NaN, which displays as a black pixel
@@ -98,12 +100,13 @@ vec3 sceneToToned(vec3 hdr, float aoFactor, vec3 bloomAdd)
 
 void main()
 {
-    effExposure = exposure;
+    float effExposure = exposure;
     if (autoExposure == 1) {
+        // The metering floor equals the key (enforced structurally: the
+        // measure pass clamps with the same autoKey uniform), so avgLum >=
+        // autoKey and the gain tops out at 1 -- auto-exposure only darkens.
         float avgLum = exp2(texture(lumTex, vec2(0.5)).r);
-        // Clamp the auto gain so a pathological scene (all black / one sun
-        // pixel) can't push exposure to extremes
-        effExposure = exposure * clamp(autoKey / max(avgLum, 1e-4), 1.0 / 64.0, 64.0);
+        effExposure = exposure * clamp(autoKey / avgLum, 1.0 / 64.0, 1.0);
     }
     if (debugView == 1) {
         FragColor = vec4(vec3(texture(aoTex, TexCoords).r), 1.0);
@@ -117,22 +120,20 @@ void main()
     }
     if (debugView == 3) {
         // Raw reflection buffer, gamma-corrected so dim hits are visible
-        vec3 ssr = texture(ssrTex, TexCoords).rgb;
-        FragColor = vec4(pow(clamp(ssr, 0.0, 1.0), vec3(1.0 / 2.2)), 1.0);
+        FragColor = vec4(displayEncode(texture(ssrTex, TexCoords).rgb), 1.0);
         return;
     }
     if (debugView == 4) {
         // Albedo G-buffer (stored linear); gamma-encode for display
-        vec3 a = texture(albedoTex, TexCoords).rgb;
-        FragColor = vec4(pow(clamp(a, 0.0, 1.0), vec3(1.0 / 2.2)), 1.0);
+        FragColor = vec4(displayEncode(texture(albedoTex, TexCoords).rgb), 1.0);
         return;
     }
     if (debugView == 5) {
-        // Raw gathered GI radiance (linear HDR); tone map so bright bounces
+        // Gathered GI radiance (linear HDR); tone map so bright bounces
         // don't clip to white, gamma-encode for display
         vec3 gi = texture(giTex, TexCoords).rgb;
         gi = tonemapMode == 1 ? acesTonemap(gi) : pbrNeutralTonemap(gi);
-        FragColor = vec4(pow(clamp(gi, 0.0, 1.0), vec3(1.0 / 2.2)), 1.0);
+        FragColor = vec4(displayEncode(gi), 1.0);
         return;
     }
 
@@ -145,15 +146,18 @@ void main()
     if (bloomEnabled == 1)
         bloomAdd = bloomStrength * texture(bloomTex, TexCoords).rgb;
 
-    vec3 color = sceneToToned(texture(hdrTex, TexCoords).rgb, aoFactor, bloomAdd);
+    vec3 color = sceneToToned(texture(hdrTex, TexCoords).rgb, aoFactor, bloomAdd, effExposure);
 
     // Sharpen: unsharp mask on the tonemapped result (4-tap cross)
     if (sharpenEnabled == 1) {
-        vec3 blur =
-            sceneToToned(texture(hdrTex, TexCoords + vec2(texelSize.x, 0.0)).rgb, aoFactor, bloomAdd) +
-            sceneToToned(texture(hdrTex, TexCoords - vec2(texelSize.x, 0.0)).rgb, aoFactor, bloomAdd) +
-            sceneToToned(texture(hdrTex, TexCoords + vec2(0.0, texelSize.y)).rgb, aoFactor, bloomAdd) +
-            sceneToToned(texture(hdrTex, TexCoords - vec2(0.0, texelSize.y)).rgb, aoFactor, bloomAdd);
+        vec3 blur = sceneToToned(texture(hdrTex, TexCoords + vec2(texelSize.x, 0.0)).rgb, aoFactor,
+                                 bloomAdd, effExposure) +
+                    sceneToToned(texture(hdrTex, TexCoords - vec2(texelSize.x, 0.0)).rgb, aoFactor,
+                                 bloomAdd, effExposure) +
+                    sceneToToned(texture(hdrTex, TexCoords + vec2(0.0, texelSize.y)).rgb, aoFactor,
+                                 bloomAdd, effExposure) +
+                    sceneToToned(texture(hdrTex, TexCoords - vec2(0.0, texelSize.y)).rgb, aoFactor,
+                                 bloomAdd, effExposure);
         color = clamp(color + sharpenStrength * (color - blur * 0.25), 0.0, 1.0);
     }
 
@@ -172,7 +176,7 @@ void main()
     }
 
     // Gamma-encode to display space
-    color = pow(clamp(color, 0.0, 1.0), vec3(1.0 / 2.2));
+    color = displayEncode(color);
 
     // Film grain: display-space, weighted toward midtones (invisible in flat
     // black/white), animated by a deterministic per-frame seed

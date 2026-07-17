@@ -10,6 +10,9 @@ out vec4 FragColor;
 // clamp runs in YCoCg so disocclusions bound luma without dragging chroma,
 // and the blend is inverse-luma weighted so one bright gathered spark cannot
 // accumulate into a persistent firefly (same policy as the TAA resolve).
+// History is fetched BILINEAR on purpose (not the TAA resolve's Catmull-Rom):
+// its negative lobes overshoot on HDR bounce light, and half-res GI has no
+// sub-pixel detail worth preserving.
 uniform sampler2D currentTex;  // This frame's raw gathered GI (.rgb, linear HDR)
 uniform sampler2D velocityTex; // Screen-space motion .xy (UV units)
 uniform sampler2D historyTex;  // Last frame's accumulated GI (.rgb)

@@ -31,9 +31,13 @@ void process_ai_lights(const struct aiScene* scene, Light*** lights, uint32_t* n
 
 void process_ai_cameras(const struct aiScene* scene, Camera*** cameras, uint32_t* num_cameras);
 
-// Import setting: flip UV V at import (default true). V orientation is
-// inconsistent across assets in the wild, so the application chooses per
-// asset; set before create_scene_from_model_path*.
+// Import setting: override the UV V-flip. The default is per-format AUTO
+// (glTF flips, FBX does not — each format's spec convention relative to this
+// engine's texture upload); some bakes are authored against the opposite
+// convention (symptom: scrambled/mirrored textures), so the application can
+// pin the flip on or off before create_scene_from_model_path*. Note: pinning
+// is one-way for the process — there is no API back to AUTO — so set it per
+// run, not per asset.
 void set_import_flip_uvs(bool flip);
 
 Scene* create_scene_from_model_path(const char* path, const char* texture_directory);

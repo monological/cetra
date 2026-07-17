@@ -70,6 +70,10 @@ void texture_gl_formats(int channels, bool is_srgb, GLenum* internal_format, GLe
 // unsupported). Tiled textures at grazing angles alias into moire without it.
 void texture_set_max_anisotropy(void);
 
+// Default sampler state for model textures on the currently bound texture:
+// tiling wrap + trilinear + anisotropy.
+void texture_set_default_sampler_state(void);
+
 // Bleed visible RGB into transparent texels of an RGBA image so filtering
 // and mipmaps don't mix the garbage colors stored behind alpha = 0 into
 // visible edges (bright dashes on hair/foliage cards)

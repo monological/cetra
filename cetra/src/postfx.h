@@ -22,6 +22,17 @@ typedef enum PostFXTonemapMode {
     POSTFX_TONEMAP_NEUTRAL = 2,     // Khronos PBR Neutral: faithful shadows/colors
 } PostFXTonemapMode;
 
+// A two-target render pair for temporal accumulators (indexed by frame
+// parity) and iterative ping-pong blurs (indexed by iteration parity).
+// `valid` says tex[] holds a previous frame's accumulation: it is cleared
+// whenever a frame skips the accumulator, so re-enabling a temporal effect
+// mid-run resets cleanly instead of reading stale or never-written history.
+typedef struct PingPong {
+    GLuint fbo[2];
+    GLuint tex[2];
+    bool valid;
+} PingPong;
+
 // Present an intermediate buffer instead of the composited scene (one view
 // at a time by construction; values match the shader's debugView dispatch)
 typedef enum PostFXDebugView {
@@ -49,15 +60,13 @@ typedef struct PostFX {
     GLuint normal_texture;
     GLuint ssao_fbo[2]; // Half-res: [0] raw AO, [1] blurred AO
     GLuint ssao_texture[2];
-    GLuint ao_history_fbo[2]; // Half-res temporal-AO accumulation ping-pong (R16F)
-    GLuint ao_history_texture[2];
+    PingPong ao_history;    // Half-res temporal-AO accumulation (R16F)
     GLuint ssgi_gi_texture; // Half-res RGBA16F GI radiance, MRT attachment 1 on the GTAO FBO (SSGI)
-    GLuint ssgi_history_fbo[2]; // Half-res temporal-GI accumulation ping-pong (RGBA16F)
-    GLuint ssgi_history_texture[2];
-    GLuint ssgi_atrous_fbo[2]; // Half-res a-trous denoise ping-pong (RGBA16F)
-    GLuint ssgi_atrous_texture[2];
-    GLuint noise_texture; // 4x4 random slice rotations, tiled
-    GLuint ssr_fbo;       // Half-res reflection buffer (march target)
+    PingPong ssgi_history;  // Half-res temporal-GI accumulation (RGBA16F)
+    PingPong ssgi_atrous;   // Half-res a-trous denoise ping-pong (RGBA16F)
+    bool ssgi_ready;        // Lazy-alloc guard: GI target + the two pairs above
+    GLuint noise_texture;   // 4x4 random slice rotations, tiled
+    GLuint ssr_fbo;         // Half-res reflection buffer (march target)
     GLuint ssr_texture;
     GLuint aux_fbo; // Full-res resolved aux G-buffer: motion vectors .xy (TAA) + linear view-Z .z
                     // (GTAO)
@@ -66,10 +75,8 @@ typedef struct PostFX {
     GLuint albedo_texture;
     GLuint lum_fbo; // 64x64 log2-luminance measure target, mipmapped each frame (auto-exposure)
     GLuint lum_texture;
-    GLuint lum_adapt_fbo[2]; // 1x1 adapted log2-luminance ping-pong (eye adaptation)
-    GLuint lum_adapt_texture[2];
-    GLuint taa_history_fbo[2]; // Full-res history ping-pong (previous resolved frames)
-    GLuint taa_history_texture[2];
+    PingPong lum_adapt;   // 1x1 adapted log2-luminance (eye adaptation)
+    PingPong taa_history; // Full-res history (previous resolved frames)
 
     ShaderProgram* bright_program;
     ShaderProgram* blur_program;
