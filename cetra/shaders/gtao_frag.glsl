@@ -78,6 +78,11 @@ uint sectorBits(float lo, float hi)
 void main()
 {
     float linZ = texture(linDepthTex, TexCoords).z;
+    // Local depth-slope of the surface, one AO-res texel wide: the NEAREST
+    // linZ fetch snaps samples to the texel grid, so on a sloped surface a
+    // reconstructed neighbor carries up to ~a texel of depth-slope as phantom
+    // "height". Computed before any divergent branch (derivative rules).
+    float zGrain = fwidth(linZ);
     if (linZ >= -1e-4) {
         // Sky / background: the aux buffer clears to 0 there (opaque geometry
         // always has linear Z <= -near < 0). Fully unoccluded, no bounce.
@@ -182,7 +187,11 @@ void main()
                 // at a grazing angle, coplanar neighbours toward the camera map to
                 // small angles and would self-occlude into stable streaks; the
                 // bias keeps only geometry that genuinely rises above the surface.
-                if (dot(sVec, N) <= HEIGHT_BIAS * len)
+                // zGrain additionally rejects heights within the NEAREST-snap
+                // reconstruction noise (one texel of depth-slope): without it,
+                // sloped surfaces at large view distances band with phantom
+                // occlusion rows as the snap error crosses the fixed bias.
+                if (dot(sVec, N) <= HEIGHT_BIAS * len + zGrain)
                     continue;
 
                 // Front and back faces of the occluder (back pushed away from the

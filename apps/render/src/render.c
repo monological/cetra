@@ -62,6 +62,7 @@ typedef struct {
     int no_recenter;                   // Keep the model's authored world position
     int no_auto_exposure;              // Fixed exposure instead of eye adaptation
     int no_flip_uv;                    // For assets baked with the opposite V convention
+    float ao_radius;                   // AO/GI reach override in world units (0 = auto)
     int force_taa;                     // TAA even in headless (temporal passes active)
     int no_ground;                     // Disable skybox ground projection
     int no_key_light;                  // Pure IBL: skip the analytic key lights
@@ -134,6 +135,7 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --no-springs       Disable spring-bone secondary motion\n");
     fprintf(stderr, "      --no-ssao          Disable screen-space ambient occlusion\n");
     fprintf(stderr, "      --ssao-debug       Show the raw SSAO buffer\n");
+    fprintf(stderr, "      --ao-radius <f>    AO/GI reach in world units (default: scene-scaled)\n");
     fprintf(stderr, "      --no-normals-mrt   Disable the normals G-buffer (SSAO/SSR input)\n");
     fprintf(stderr, "      --normals-debug    Show the resolved normals G-buffer\n");
     fprintf(stderr, "      --no-ssr           Disable screen-space reflections\n");
@@ -301,6 +303,16 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->no_auto_exposure = 1;
         } else if (strcmp(argv[i], "--no-flip-uv") == 0) {
             args->no_flip_uv = 1;
+        } else if (strcmp(argv[i], "--ao-radius") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->ao_radius = (float)atof(argv[i]);
+            if (args->ao_radius <= 0.0f) {
+                fprintf(stderr, "Error: invalid AO radius '%s'\n", argv[i]);
+                return -1;
+            }
         } else if (strcmp(argv[i], "--taa") == 0) {
             args->force_taa = 1;
         } else if (strcmp(argv[i], "--ground") == 0) {
@@ -1304,9 +1316,15 @@ int main(int argc, char** argv) {
     // whole effect collapses below one depth texel and gates itself off. 1% of
     // the bounding radius keeps the reach local (contact occlusion, room-scale
     // bounce); much larger and the sparse 8-step march ring-aliases distant
-    // geometry into concentric bands. Small scenes keep the tuned default.
-    if (engine->postfx && scene_radius > 0.0f) {
-        engine->postfx->ssao_radius = fmaxf(engine->postfx->ssao_radius, scene_radius * 0.01f);
+    // geometry into concentric bands. Small scenes keep the tuned default;
+    // --ao-radius pins an explicit reach.
+    if (engine->postfx) {
+        if (args.ao_radius > 0.0f) {
+            engine->postfx->ssao_radius = args.ao_radius;
+        } else if (scene_radius > 0.0f) {
+            engine->postfx->ssao_radius =
+                fmaxf(engine->postfx->ssao_radius, scene_radius * 0.01f);
+        }
     }
 
     // Update orbit controller with appropriate distance
