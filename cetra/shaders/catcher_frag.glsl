@@ -4,6 +4,14 @@ layout(location = 0) out vec4 FragColor;
 // G-buffer for SSR: view-space up-normal + the floor's roughness. Only
 // lands when the engine enables color attachment 1 around this draw.
 layout(location = 1) out vec4 NormalOut;
+// When SSR enables the G-buffer around this draw, EVERY attachment in the
+// draw-buffer list must be written -- an unwritten one is undefined, and
+// stray garbage in the aux buffer's linear-Z paints nondeterministic GTAO/GI
+// artifacts across the floor. Zero is the deliberate value for both: aux 0 is
+// the "sky" sentinel (screen-space AO/GI skip the projected floor; velocity 0
+// suits a static plane) and albedo 0 means no bounce tint.
+layout(location = 2) out vec4 AuxOut;
+layout(location = 3) out vec4 AlbedoOut;
 
 // Shadow catcher: an invisible ground plane that only darkens where the
 // shadow maps say the shadow-casting lights are occluded. Drawn after the
@@ -68,4 +76,6 @@ void main()
     // marker keeps the floor out of the reflection set, and SSAO on this
     // texel keeps using its derivative normal rather than this up-normal.
     NormalOut = vec4(normalize(mat3(view) * vec3(0.0, 1.0, 0.0)), surfaceMode == 1 ? -1.0 : 0.0);
+    AuxOut = vec4(0.0);
+    AlbedoOut = vec4(0.0);
 }
