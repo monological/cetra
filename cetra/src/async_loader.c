@@ -364,6 +364,7 @@ size_t async_loader_process_pending(AsyncLoader* loader, TexturePool* pool, size
                     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
                     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
                     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+                    texture_set_max_anisotropy();
 
                     glTexImage2D(GL_TEXTURE_2D, 0, result->internal_format, result->width,
                                  result->height, 0, result->data_format, GL_UNSIGNED_BYTE,

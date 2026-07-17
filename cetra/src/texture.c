@@ -73,6 +73,18 @@ void texture_dilate_transparent_rgb(unsigned char* data, int width, int height) 
     free(solid);
 }
 
+// Anisotropic filtering on the currently bound texture. Without it, textures
+// tiled many times and viewed at grazing angles (floors, carpets) alias into
+// moire banding, and their mip average washes the surface color out --
+// trilinear alone cannot handle the anisotropic footprint. Ubiquitous
+// extension; a no-op where unsupported.
+void texture_set_max_anisotropy(void) {
+    GLfloat max_aniso = 0.0f;
+    glGetFloatv(GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT, &max_aniso);
+    if (max_aniso > 1.0f)
+        glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, fminf(8.0f, max_aniso));
+}
+
 void texture_gl_formats(int channels, bool is_srgb, GLenum* internal_format, GLenum* data_format) {
     if (channels == 1) {
         *internal_format = GL_RED;
@@ -327,6 +339,7 @@ Texture* load_texture_path_into_pool(TexturePool* pool, const char* filepath, bo
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    texture_set_max_anisotropy();
 
     // Determine format
     GLenum internal_format;
@@ -401,6 +414,7 @@ Texture* load_texture_from_memory(TexturePool* pool, const char* key, const unsi
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    texture_set_max_anisotropy();
 
     // Determine format
     GLenum internal_format;

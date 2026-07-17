@@ -66,6 +66,10 @@ void add_texture_to_pool(TexturePool* pool, Texture* texture);
 // data textures (normals, roughness/metalness, AO, ...) stay linear.
 void texture_gl_formats(int channels, bool is_srgb, GLenum* internal_format, GLenum* data_format);
 
+// Enable anisotropic filtering on the currently bound texture (no-op where
+// unsupported). Tiled textures at grazing angles alias into moire without it.
+void texture_set_max_anisotropy(void);
+
 // Bleed visible RGB into transparent texels of an RGBA image so filtering
 // and mipmaps don't mix the garbage colors stored behind alpha = 0 into
 // visible edges (bright dashes on hair/foliage cards)
