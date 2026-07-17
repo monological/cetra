@@ -1041,13 +1041,14 @@ void process_ai_lights(const struct aiScene* scene, Light*** lights, size_t* num
 
         // Attenuation: only adopt the file's profile when it is usable. Blender
         // FBX exports physical watts, not OpenGL attenuation coefficients -- its
-        // lights arrive with constant=linear=quadratic=0, and the shader's
-        // 1/(c + l*d + q*d^2) divides by zero: every lit pixel goes to +INF and
-        // the frame blows out no matter the exposure. Keep create_light()'s
-        // defaults in that case.
-        bool has_attenuation = ai_light->mAttenuationConstant > 0.0f ||
-                               ai_light->mAttenuationLinear > 0.0f ||
-                               ai_light->mAttenuationQuadratic > 0.0f;
+        // lights arrive with the coefficients zero (or denormal-tiny, which a
+        // plain > 0 test accepts but still explodes 1/(c + l*d + q*d^2) into
+        // absurd radiance: every lit pixel blows out no matter the exposure).
+        // Require magnitudes that keep the denominator sane; otherwise keep
+        // create_light()'s defaults.
+        bool has_attenuation = ai_light->mAttenuationConstant > 1e-3f ||
+                               ai_light->mAttenuationLinear > 1e-4f ||
+                               ai_light->mAttenuationQuadratic > 1e-6f;
 
         // Set intensity, attenuation, and cutoff based on light type
         switch (ai_light->mType) {
