@@ -1013,6 +1013,16 @@ void process_ai_lights(const struct aiScene* scene, Light*** lights, size_t* num
                              ai_light->mColorSpecular.b},
                       light->specular);
 
+        // Attenuation: only adopt the file's profile when it is usable. Blender
+        // FBX exports physical watts, not OpenGL attenuation coefficients -- its
+        // lights arrive with constant=linear=quadratic=0, and the shader's
+        // 1/(c + l*d + q*d^2) divides by zero: every lit pixel goes to +INF and
+        // the frame blows out no matter the exposure. Keep create_light()'s
+        // defaults in that case.
+        bool has_attenuation = ai_light->mAttenuationConstant > 0.0f ||
+                               ai_light->mAttenuationLinear > 0.0f ||
+                               ai_light->mAttenuationQuadratic > 0.0f;
+
         // Set intensity, attenuation, and cutoff based on light type
         switch (ai_light->mType) {
             case aiLightSource_DIRECTIONAL:
@@ -1021,26 +1031,33 @@ void process_ai_lights(const struct aiScene* scene, Light*** lights, size_t* num
                 break;
             case aiLightSource_POINT:
                 light->type = LIGHT_POINT;
-                light->constant = ai_light->mAttenuationConstant;
-                light->linear = ai_light->mAttenuationLinear;
-                light->quadratic = ai_light->mAttenuationQuadratic;
                 break;
             case aiLightSource_SPOT:
                 light->type = LIGHT_SPOT;
-                light->constant = ai_light->mAttenuationConstant;
-                light->linear = ai_light->mAttenuationLinear;
-                light->quadratic = ai_light->mAttenuationQuadratic;
                 light->cutOff = ai_light->mAngleInnerCone;
                 light->outerCutOff = ai_light->mAngleOuterCone;
                 break;
             default:
                 light->type = LIGHT_AREA;
-                light->constant = ai_light->mAttenuationConstant;
-                light->linear = ai_light->mAttenuationLinear;
-                light->quadratic = ai_light->mAttenuationQuadratic;
                 light->cutOff = ai_light->mAngleInnerCone;
                 light->outerCutOff = ai_light->mAngleOuterCone;
                 break;
+        }
+        if (light->type != LIGHT_DIRECTIONAL && has_attenuation) {
+            light->constant = ai_light->mAttenuationConstant;
+            light->linear = ai_light->mAttenuationLinear;
+            light->quadratic = ai_light->mAttenuationQuadratic;
+        }
+
+        // Blender also bakes the light's power into the color (e.g. an 800W
+        // point light imports as color=(800,800,800)). Re-express as a
+        // normalized color times intensity -- numerically identical (the shader
+        // multiplies color * intensity) but sane for the GUI and clamps.
+        float peak = fmaxf(light->color[0], fmaxf(light->color[1], light->color[2]));
+        if (peak > 1.0f) {
+            glm_vec3_divs(light->color, peak, light->color);
+            glm_vec3_divs(light->specular, peak, light->specular);
+            light->intensity *= peak;
         }
 
         (*lights)[i] = light;

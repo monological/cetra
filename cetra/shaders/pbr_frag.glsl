@@ -271,9 +271,11 @@ float geometrySmith(vec3 N, vec3 V, vec3 L, float roughness) {
     return ggx1 * ggx2;
 }
 
-// Attenuation for point/spot lights
+// Attenuation for point/spot lights. The denominator floor guards degenerate
+// all-zero coefficients (import sanitizes them, but bad data must not turn
+// into +INF radiance -- one INF pixel survives every clamp downstream).
 float calculateAttenuation(float distance, float constant, float linear, float quadratic) {
-    return 1.0 / (constant + linear * distance + quadratic * (distance * distance));
+    return 1.0 / max(constant + linear * distance + quadratic * (distance * distance), 1e-4);
 }
 
 // 16-tap Poisson disk (unit radius) for the PCSS blocker search and filter.
