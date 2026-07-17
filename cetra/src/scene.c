@@ -65,6 +65,7 @@ Scene* create_scene() {
 
     // Initialize IBL (NULL by default, user must load HDR)
     scene->ibl = NULL;
+    scene->probe = NULL;
     scene->render_skybox = false;
     scene->skybox_brightness = 1.0f;
     scene->skybox_ground_projection = false;
@@ -155,6 +156,12 @@ void free_scene(Scene* scene) {
     if (scene->ibl) {
         free_ibl_resources(scene->ibl);
         scene->ibl = NULL;
+    }
+
+    // Free reflection probe
+    if (scene->probe) {
+        free_reflection_probe(scene->probe);
+        scene->probe = NULL;
     }
 
     // Free all skeletons

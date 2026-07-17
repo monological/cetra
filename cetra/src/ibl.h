@@ -94,4 +94,22 @@ void render_skybox(IBLResources* ibl, mat4 view, mat4 projection, float brightne
 // Binding for PBR rendering
 void bind_ibl_textures(IBLResources* ibl, ShaderProgram* program);
 
+// Cubemap capture toolkit (shared with reflection probes)
+
+// Six cubemap-face view matrices looking out from origin
+void ibl_capture_views(vec3 origin, mat4 views[6]);
+
+// Allocate an RGB16F cubemap (optionally mip-filtered; mips are not generated)
+void ibl_create_cubemap_texture(GLuint* texture, int size, bool mipmap);
+
+// Allocate an RGB16F cubemap with num_mip_levels manually-sized mip levels
+// (render target for per-mip prefiltering)
+void ibl_create_prefilter_cubemap(GLuint* texture, int size, int num_mip_levels);
+
+// GGX-prefilter src_cube (with full mip chain, src_resolution = face size)
+// into dst_cube's mip_levels levels, roughness = mip / (mip_levels - 1).
+// Requires precompute_ibl to have run (shares its program and capture FBO).
+void ibl_prefilter_cubemap(IBLResources* ibl, GLuint src_cube, float src_resolution,
+                           GLuint dst_cube, int dst_base_size, int mip_levels);
+
 #endif // _IBL_H_

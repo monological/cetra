@@ -36,18 +36,18 @@ static const float cube_vertices[] = {
     -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, 1.0f,  1.0f,  -1.0f, -1.0f,
     1.0f,  -1.0f, -1.0f, -1.0f, -1.0f, 1.0f,  1.0f,  -1.0f, 1.0f};
 
-// Cubemap face view matrices
-static void get_cubemap_view_matrices(mat4 views[6]) {
+// Cubemap face view matrices looking out from origin
+void ibl_capture_views(vec3 origin, mat4 views[6]) {
     vec3 targets[6] = {{1.0f, 0.0f, 0.0f},  {-1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f},
                        {0.0f, -1.0f, 0.0f}, {0.0f, 0.0f, 1.0f},  {0.0f, 0.0f, -1.0f}};
 
     vec3 ups[6] = {{0.0f, -1.0f, 0.0f}, {0.0f, -1.0f, 0.0f}, {0.0f, 0.0f, 1.0f},
                    {0.0f, 0.0f, -1.0f}, {0.0f, -1.0f, 0.0f}, {0.0f, -1.0f, 0.0f}};
 
-    vec3 origin = {0.0f, 0.0f, 0.0f};
-
     for (int i = 0; i < 6; ++i) {
-        glm_lookat(origin, targets[i], ups[i], views[i]);
+        vec3 center;
+        glm_vec3_add(origin, targets[i], center);
+        glm_lookat(origin, center, ups[i], views[i]);
     }
 }
 
@@ -319,7 +319,7 @@ static int setup_capture_fbo(IBLResources* ibl, int size) {
     return 0;
 }
 
-static void create_cubemap_texture(GLuint* texture, int size, bool mipmap) {
+void ibl_create_cubemap_texture(GLuint* texture, int size, bool mipmap) {
     glGenTextures(1, texture);
     glBindTexture(GL_TEXTURE_CUBE_MAP, *texture);
 
@@ -342,7 +342,7 @@ static void create_cubemap_texture(GLuint* texture, int size, bool mipmap) {
 }
 
 // Create prefilter cubemap with manually allocated mip levels
-static void create_prefilter_cubemap(GLuint* texture, int size, int num_mip_levels) {
+void ibl_create_prefilter_cubemap(GLuint* texture, int size, int num_mip_levels) {
     glGenTextures(1, texture);
     glBindTexture(GL_TEXTURE_CUBE_MAP, *texture);
 
@@ -421,7 +421,13 @@ static void render_irradiance_convolution(IBLResources* ibl, mat4 projection, co
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
-static void render_prefilter_convolution(IBLResources* ibl, mat4 projection, const mat4 views[6]) {
+// GGX-prefilter an arbitrary cubemap into a manually-mipped destination
+// (roughness = mip / (mip_levels - 1)). Direction-only unit-cube render, so
+// the source origin is irrelevant; src_resolution drives the importance
+// sampler's solid-angle mip selection. Uses the shared capture FBO/RBO and
+// leaves FBO 0 bound; caller restores its own viewport.
+void ibl_prefilter_cubemap(IBLResources* ibl, GLuint src_cube, float src_resolution,
+                           GLuint dst_cube, int dst_base_size, int mip_levels) {
     ShaderProgram* program = ibl->prefilter_program;
     if (!program)
         return;
@@ -429,32 +435,44 @@ static void render_prefilter_convolution(IBLResources* ibl, mat4 projection, con
     glUseProgram(program->id);
 
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_CUBE_MAP, ibl->environment_cubemap);
+    glBindTexture(GL_TEXTURE_CUBE_MAP, src_cube);
     uniform_set_int(program->uniforms, "environmentMap", 0);
+
+    mat4 views[6];
+    mat4 projection = {{0}};
+    vec3 origin = {0.0f, 0.0f, 0.0f};
+    ibl_capture_views(origin, views);
+    get_cubemap_projection(projection);
     uniform_set_mat4(program->uniforms, "projection", (float*)projection);
-    uniform_set_float(program->uniforms, "resolution", (float)IBL_CUBEMAP_SIZE);
+    uniform_set_float(program->uniforms, "resolution", src_resolution);
+
+    GLboolean cull_was_enabled = glIsEnabled(GL_CULL_FACE);
+    glDisable(GL_CULL_FACE);
 
     glBindFramebuffer(GL_FRAMEBUFFER, ibl->capture_fbo);
 
-    for (int mip = 0; mip < IBL_PREFILTER_MIP_LEVELS; ++mip) {
-        int mip_size = IBL_PREFILTER_SIZE >> mip;
+    for (int mip = 0; mip < mip_levels; ++mip) {
+        int mip_size = dst_base_size >> mip;
         glBindRenderbuffer(GL_RENDERBUFFER, ibl->capture_rbo);
         glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, mip_size, mip_size);
         glViewport(0, 0, mip_size, mip_size);
 
-        float roughness = (float)mip / (float)(IBL_PREFILTER_MIP_LEVELS - 1);
+        float roughness = (float)mip / (float)(mip_levels - 1);
         uniform_set_float(program->uniforms, "roughness", roughness);
 
         for (int i = 0; i < 6; ++i) {
             uniform_set_mat4(program->uniforms, "view", (float*)views[i]);
             glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                                   GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, ibl->prefilter_map, mip);
+                                   GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, dst_cube, mip);
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
             render_cube(ibl);
         }
     }
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    if (cull_was_enabled)
+        glEnable(GL_CULL_FACE);
 }
 
 static void render_brdf_lut(IBLResources* ibl) {
@@ -521,7 +539,8 @@ int precompute_ibl(IBLResources* ibl, Engine* engine) {
     // Get view matrices
     mat4 capture_views[6];
     mat4 capture_projection = {{0}};
-    get_cubemap_view_matrices(capture_views);
+    vec3 capture_origin = {0.0f, 0.0f, 0.0f};
+    ibl_capture_views(capture_origin, capture_views);
     get_cubemap_projection(capture_projection);
 
     // Save current viewport and framebuffer
@@ -540,20 +559,22 @@ int precompute_ibl(IBLResources* ibl, Engine* engine) {
     // relative to the visible background); the mips pre-average that energy
     // so the convolution integrals actually see it.
     log_info("  Converting equirectangular to cubemap...");
-    create_cubemap_texture(&ibl->environment_cubemap, IBL_CUBEMAP_SIZE, true);
+    ibl_create_cubemap_texture(&ibl->environment_cubemap, IBL_CUBEMAP_SIZE, true);
     render_equirect_to_cubemap(ibl, capture_projection, capture_views);
     glBindTexture(GL_TEXTURE_CUBE_MAP, ibl->environment_cubemap);
     glGenerateMipmap(GL_TEXTURE_CUBE_MAP);
 
     // Step 2: Generate irradiance map
     log_info("  Generating irradiance map...");
-    create_cubemap_texture(&ibl->irradiance_map, IBL_IRRADIANCE_SIZE, false);
+    ibl_create_cubemap_texture(&ibl->irradiance_map, IBL_IRRADIANCE_SIZE, false);
     render_irradiance_convolution(ibl, capture_projection, capture_views);
 
     // Step 3: Generate prefiltered map with mipmaps
     log_info("  Generating prefiltered environment map...");
-    create_prefilter_cubemap(&ibl->prefilter_map, IBL_PREFILTER_SIZE, IBL_PREFILTER_MIP_LEVELS);
-    render_prefilter_convolution(ibl, capture_projection, capture_views);
+    ibl_create_prefilter_cubemap(&ibl->prefilter_map, IBL_PREFILTER_SIZE,
+                                 IBL_PREFILTER_MIP_LEVELS);
+    ibl_prefilter_cubemap(ibl, ibl->environment_cubemap, (float)IBL_CUBEMAP_SIZE,
+                          ibl->prefilter_map, IBL_PREFILTER_SIZE, IBL_PREFILTER_MIP_LEVELS);
 
     // Step 4: Generate BRDF LUT
     log_info("  Generating BRDF LUT...");
