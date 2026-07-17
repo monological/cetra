@@ -59,6 +59,7 @@ typedef struct {
     float ground_radius;               // Skybox ground projection dome radius (0 = default)
     float ground_height;               // HDR capture height above ground (0 = default)
     float camera_distance;             // Camera distance override in meters (0 = auto)
+    int no_recenter;                   // Keep the model's authored world position
     int no_ground;                     // Disable skybox ground projection
     int no_key_light;                  // Pure IBL: skip the analytic key lights
     int no_shadows;                    // Keep key lights but disable shadow maps
@@ -113,7 +114,8 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "  -e, --env <path>       HDR environment map for IBL\n");
     fprintf(stderr, "  -F, --fov <degrees>    Camera field of view (default: 50)\n");
     fprintf(stderr, "  -E, --exposure <f>     Tonemap exposure (default: engine default)\n");
-    fprintf(stderr, "      --ground <radius>  Ground projection dome radius (default: 5)\n");
+    fprintf(stderr, "      --ground <radius>  Ground projection dome radius (default: 5x scene)\n");
+    fprintf(stderr, "      --no-recenter      Keep the model's authored world position\n");
     fprintf(stderr, "      --ground-height <m> HDR capture height above ground (default: 1.2)\n");
     fprintf(stderr, "      --no-ground        Disable HDR ground projection (infinite skybox)\n");
     fprintf(stderr, "      --no-key-light     Pure IBL lighting (no analytic lights/shadows)\n");
@@ -285,6 +287,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             }
         } else if (strcmp(argv[i], "--no-ground") == 0) {
             args->no_ground = 1;
+        } else if (strcmp(argv[i], "--no-recenter") == 0) {
+            args->no_recenter = 1;
         } else if (strcmp(argv[i], "--ground") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -511,6 +515,15 @@ static int frames_rendered = 0;
  */
 static int check_stretch = 0;
 
+/*
+ * Recenter offset (computed at load): translates the model so its bounding-box
+ * base sits on the origin (y=0, centered in x/z). Off-origin assets otherwise
+ * misalign with everything anchored at the origin -- the ground-projection
+ * dome, the shadow catcher plane, the orbit pivot -- and float geometry far
+ * from where the environment projects its floor.
+ */
+static vec3 model_recenter_offset = {0.0f, 0.0f, 0.0f};
+
 
 /*
  * CPU-skin a vertex with the animation state's bone matrices, mirroring the
@@ -725,7 +738,8 @@ void render_scene_callback(Engine* engine, Scene* current_scene) {
         mouse_drag_update(drag_controller, time_value);
     }
 
-    Transform transform = {.position = {0.0f, 0.0f, 0.0f},
+    Transform transform = {.position = {model_recenter_offset[0], model_recenter_offset[1],
+                                        model_recenter_offset[2]},
                            .rotation = {0.0f, 0.0f, 0.0f},
                            .scale = {1.0f, 1.0f, 1.0f}};
 
@@ -1111,6 +1125,29 @@ int main(int argc, char** argv) {
     glm_mat4_identity(identity);
     apply_transform_to_nodes(scene->root_node, identity);
 
+    // Recenter the model: translate so the bounding-box base sits on the origin
+    // (y=0, centered in x/z). Everything anchored at the origin -- the
+    // ground-projection dome, the shadow catcher, the orbit pivot -- assumes the
+    // model stands there; off-origin assets (e.g. authored floating at y=189)
+    // otherwise streak the projected environment and z-fight. The offset rides
+    // the per-frame model matrix, so animation-driven node transforms compose
+    // under it untouched.
+    if (!args.no_recenter) {
+        vec3 bb_min, bb_max;
+        compute_scene_bounds(scene, bb_min, bb_max);
+        model_recenter_offset[0] = -0.5f * (bb_min[0] + bb_max[0]);
+        model_recenter_offset[1] = -bb_min[1];
+        model_recenter_offset[2] = -0.5f * (bb_min[2] + bb_max[2]);
+        if (glm_vec3_norm(model_recenter_offset) > 1e-4f) {
+            printf("Recentering model by (%.2f, %.2f, %.2f)\n", model_recenter_offset[0],
+                   model_recenter_offset[1], model_recenter_offset[2]);
+            mat4 recenter;
+            glm_mat4_identity(recenter);
+            glm_translate(recenter, model_recenter_offset);
+            apply_transform_to_nodes(scene->root_node, recenter);
+        }
+    }
+
     // Compute scene bounds and auto-position camera
     vec3 scene_center;
     float scene_radius;
@@ -1128,6 +1165,12 @@ int main(int argc, char** argv) {
     if (scene->render_skybox && scene->skybox_ground_projection &&
         args.ground_radius <= 0.0f && scene_radius > 0.0f) {
         scene->skybox_gp_radius = scene_radius * 5.0f;
+        // Scale the capture height with the dome (same height/radius ratio as
+        // the old 1.2/5 defaults). A fixed human-scale height against a
+        // scene-scaled dome squashes the projection geometry: the panorama's
+        // floor smears into radial streaks around large models.
+        if (args.ground_height <= 0.0f)
+            scene->skybox_gp_height = scene->skybox_gp_radius * (1.2f / 5.0f);
     }
 
     // Fit the shadow frustum to the scene; the library default (ortho 2000)
