@@ -34,6 +34,7 @@ uniform int gatherGI;     // 1 = also gather one-bounce irradiance into GiOut (S
 
 const float PI = 3.14159265359;
 const float HALF_PI = 1.57079632679;
+const float GI_MAX_RADIANCE = 4.0; // Firefly clamp on gathered bounce light
 const int SLICES = 2;                 // Screen-space sweep directions
 const int STEPS = 8;                  // Horizon-march samples per side
 const uint SECTOR_COUNT = 32u;        // Bits in the visibility mask
@@ -202,9 +203,13 @@ void main()
                 // farther occluders in already-covered sectors add nothing).
                 if (gatherGI == 1) {
                     uint newBits = sampleBits & ~bitfield;
-                    if (newBits != 0u)
-                        gi += texture(hdrTex, sUV).rgb * (float(popCount(newBits)) /
-                                                          float(SECTOR_COUNT));
+                    if (newBits != 0u) {
+                        // Clamp the source radiance: one specular-hot texel
+                        // gathered here becomes a firefly that the a-trous
+                        // blur smears into a bright splat downstream.
+                        vec3 rad = min(texture(hdrTex, sUV).rgb, vec3(GI_MAX_RADIANCE));
+                        gi += rad * (float(popCount(newBits)) / float(SECTOR_COUNT));
+                    }
                 }
                 bitfield |= sampleBits;
             }

@@ -683,6 +683,30 @@ ShaderProgram* create_ssgi_composite_program() {
     return program;
 }
 
+ShaderProgram* create_ssgi_accum_program() {
+    ShaderProgram* program = NULL;
+
+    if ((program = create_program_from_source("ssgi_accum", post_vert_shader_str,
+                                              ssgi_accum_frag_shader_str, NULL)) == NULL) {
+        log_error("Failed to initialize SSGI accumulation shader program");
+        return NULL;
+    }
+
+    return program;
+}
+
+ShaderProgram* create_ssgi_atrous_program() {
+    ShaderProgram* program = NULL;
+
+    if ((program = create_program_from_source("ssgi_atrous", post_vert_shader_str,
+                                              ssgi_atrous_frag_shader_str, NULL)) == NULL) {
+        log_error("Failed to initialize SSGI a-trous shader program");
+        return NULL;
+    }
+
+    return program;
+}
+
 ShaderProgram* create_lum_measure_program() {
     ShaderProgram* program = NULL;
 

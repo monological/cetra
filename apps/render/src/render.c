@@ -62,6 +62,7 @@ typedef struct {
     int no_recenter;                   // Keep the model's authored world position
     int no_auto_exposure;              // Fixed exposure instead of eye adaptation
     int no_flip_uv;                    // For assets baked with the opposite V convention
+    int force_taa;                     // TAA even in headless (temporal passes active)
     int no_ground;                     // Disable skybox ground projection
     int no_key_light;                  // Pure IBL: skip the analytic key lights
     int no_shadows;                    // Keep key lights but disable shadow maps
@@ -121,6 +122,8 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --no-recenter      Keep the model's authored world position\n");
     fprintf(stderr, "      --no-flip-uv       For assets baked with the opposite UV V convention\n");
     fprintf(stderr, "                         (symptom: scrambled/mirrored textures)\n");
+    fprintf(stderr, "      --taa              Enable TAA in headless (temporal passes active;\n");
+    fprintf(stderr, "                         output not byte-deterministic)\n");
     fprintf(stderr, "      --ground-height <m> HDR capture height above ground (default: 1.2)\n");
     fprintf(stderr, "      --no-ground        Disable HDR ground projection (infinite skybox)\n");
     fprintf(stderr, "      --no-key-light     Pure IBL lighting (no analytic lights/shadows)\n");
@@ -298,6 +301,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->no_auto_exposure = 1;
         } else if (strcmp(argv[i], "--no-flip-uv") == 0) {
             args->no_flip_uv = 1;
+        } else if (strcmp(argv[i], "--taa") == 0) {
+            args->force_taa = 1;
         } else if (strcmp(argv[i], "--ground") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -1295,6 +1300,16 @@ int main(int argc, char** argv) {
     clip_near_max = auto_near;
     clip_near_floor = fmaxf(auto_near * 0.1f, 0.005f);
 
+    // AO/GI reach scales with the scene like the shadow frustum and the dome:
+    // the meter-scale default (0.4) is sub-resolution on large scenes -- the
+    // whole effect collapses below one depth texel and gates itself off. 1% of
+    // the bounding radius keeps the reach local (contact occlusion, room-scale
+    // bounce); much larger and the sparse 8-step march ring-aliases distant
+    // geometry into concentric bands. Small scenes keep the tuned default.
+    if (engine->postfx && scene_radius > 0.0f) {
+        engine->postfx->ssao_radius = fmaxf(engine->postfx->ssao_radius, scene_radius * 0.01f);
+    }
+
     // Update orbit controller with appropriate distance
     camera->distance = camera_distance;
     camera->height = scene_center[1];
@@ -1326,6 +1341,12 @@ int main(int argc, char** argv) {
     // aliasing. Headless keeps 4x MSAA with TAA off so screenshots stay
     // deterministic (jitter + history accumulation would vary run to run).
     if (!args.headless) {
+        set_engine_msaa_samples(engine, 1);
+        set_engine_taa_enabled(engine, true);
+    } else if (args.force_taa) {
+        // Diagnostic: exercise the temporal passes (TAA/AO/GI accumulation)
+        // headless. Jitter + history make output run-to-run sensitive to async
+        // load timing, so this is not for byte-compared screenshots.
         set_engine_msaa_samples(engine, 1);
         set_engine_taa_enabled(engine, true);
     }

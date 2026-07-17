@@ -244,6 +244,20 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
             return NULL;
         }
     }
+    // SSGI denoise chain: temporal-GI accumulation ping-pong plus the a-trous
+    // blur ping-pong, all half-res HDR color.
+    for (int i = 0; i < 2; i++) {
+        if (!create_color_fbo(fx->ssao_width, fx->ssao_height, GL_RGBA16F,
+                              &fx->ssgi_history_fbo[i], &fx->ssgi_history_texture[i])) {
+            free_postfx(fx);
+            return NULL;
+        }
+        if (!create_color_fbo(fx->ssao_width, fx->ssao_height, GL_RGBA16F,
+                              &fx->ssgi_atrous_fbo[i], &fx->ssgi_atrous_texture[i])) {
+            free_postfx(fx);
+            return NULL;
+        }
+    }
     // Half-res reflection buffer; HDR since it carries scene color
     if (!create_color_fbo(fx->ssao_width, fx->ssao_height, GL_RGBA16F, &fx->ssr_fbo,
                           &fx->ssr_texture)) {
@@ -311,6 +325,8 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     fx->ssao_blur_program = create_ssao_blur_program();
     fx->ao_accum_program = create_ao_accum_program();
     fx->ssgi_composite_program = create_ssgi_composite_program();
+    fx->ssgi_accum_program = create_ssgi_accum_program();
+    fx->ssgi_atrous_program = create_ssgi_atrous_program();
     fx->lum_measure_program = create_lum_measure_program();
     fx->lum_adapt_program = create_lum_adapt_program();
     fx->ssr_program = create_ssr_program();
@@ -321,6 +337,7 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     fx->dof_composite_program = create_dof_composite_program();
     if (!fx->bright_program || !fx->blur_program || !fx->tonemap_program || !fx->gtao_program ||
         !fx->ssao_blur_program || !fx->ao_accum_program || !fx->ssgi_composite_program ||
+        !fx->ssgi_accum_program || !fx->ssgi_atrous_program ||
         !fx->lum_measure_program || !fx->lum_adapt_program || !fx->ssr_program ||
         !fx->ssr_composite_program || !fx->taa_resolve_program || !fx->dof_coc_program ||
         !fx->dof_blur_program || !fx->dof_composite_program) {
@@ -388,6 +405,18 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     glUseProgram(fx->ssgi_composite_program->id);
     uniform_set_int(fx->ssgi_composite_program->uniforms, "giTex", 0);
     uniform_set_int(fx->ssgi_composite_program->uniforms, "albedoTex", 1);
+
+    glUseProgram(fx->ssgi_accum_program->id);
+    uniform_set_int(fx->ssgi_accum_program->uniforms, "currentTex", 0);
+    uniform_set_int(fx->ssgi_accum_program->uniforms, "velocityTex", 1);
+    uniform_set_int(fx->ssgi_accum_program->uniforms, "historyTex", 2);
+    uniform_set_vec2(fx->ssgi_accum_program->uniforms, "texelSize", ao_texel);
+
+    glUseProgram(fx->ssgi_atrous_program->id);
+    uniform_set_int(fx->ssgi_atrous_program->uniforms, "giTex", 0);
+    uniform_set_int(fx->ssgi_atrous_program->uniforms, "linDepthTex", 1);
+    uniform_set_int(fx->ssgi_atrous_program->uniforms, "normalsTex", 2);
+    uniform_set_vec2(fx->ssgi_atrous_program->uniforms, "texelSize", ao_texel);
     glUseProgram(0);
 
     create_fullscreen_quad_vao(&fx->quad_vao, &fx->quad_vbo);
@@ -476,6 +505,10 @@ void free_postfx(PostFX* fx) {
     glDeleteFramebuffers(2, fx->ssao_fbo);
     glDeleteTextures(2, fx->ssao_texture);
     glDeleteTextures(1, &fx->ssgi_gi_texture);
+    glDeleteFramebuffers(2, fx->ssgi_history_fbo);
+    glDeleteTextures(2, fx->ssgi_history_texture);
+    glDeleteFramebuffers(2, fx->ssgi_atrous_fbo);
+    glDeleteTextures(2, fx->ssgi_atrous_texture);
     glDeleteFramebuffers(2, fx->ao_history_fbo);
     glDeleteTextures(2, fx->ao_history_texture);
     glDeleteTextures(1, &fx->noise_texture);
@@ -506,6 +539,8 @@ void free_postfx(PostFX* fx) {
     free_program(fx->ssao_blur_program);
     free_program(fx->ao_accum_program);
     free_program(fx->ssgi_composite_program);
+    free_program(fx->ssgi_accum_program);
+    free_program(fx->ssgi_atrous_program);
     free_program(fx->lum_measure_program);
     free_program(fx->lum_adapt_program);
     free_program(fx->ssr_program);
@@ -777,6 +812,50 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             }
         }
 
+        // SSGI denoise chain: temporal accumulation of the raw gather (TAA
+        // frames only -- it needs velocity and the per-frame slice jitter),
+        // then an edge-aware a-trous blur. SVGF-style order: accumulate the
+        // raw signal, smooth the accumulation.
+        GLuint gi_result_tex = fx->ssgi_gi_texture;
+        if (fx->ssgi_enabled) {
+            if (taa_resolving) {
+                int gi_write = fx->frame_index & 1;
+                int gi_read = gi_write ^ 1;
+                glBindFramebuffer(GL_FRAMEBUFFER, fx->ssgi_history_fbo[gi_write]);
+                glViewport(0, 0, fx->ssao_width, fx->ssao_height);
+                glUseProgram(fx->ssgi_accum_program->id);
+                glActiveTexture(GL_TEXTURE0);
+                glBindTexture(GL_TEXTURE_2D, fx->ssgi_gi_texture);
+                glActiveTexture(GL_TEXTURE1);
+                glBindTexture(GL_TEXTURE_2D, fx->aux_texture);
+                glActiveTexture(GL_TEXTURE2);
+                glBindTexture(GL_TEXTURE_2D, fx->ssgi_history_texture[gi_read]);
+                uniform_set_int(fx->ssgi_accum_program->uniforms, "reset",
+                                fx->frame_index == 0 ? 1 : 0);
+                draw_fullscreen_quad(fx->quad_vao);
+                gi_result_tex = fx->ssgi_history_texture[gi_write];
+            }
+
+            // Three a-trous iterations with doubling tap spacing (1, 2, 4)
+            glUseProgram(fx->ssgi_atrous_program->id);
+            uniform_set_int(fx->ssgi_atrous_program->uniforms, "useNormalsTex",
+                            have_normals ? 1 : 0);
+            glViewport(0, 0, fx->ssao_width, fx->ssao_height);
+            for (int i = 0; i < 3; i++) {
+                glBindFramebuffer(GL_FRAMEBUFFER, fx->ssgi_atrous_fbo[i & 1]);
+                glActiveTexture(GL_TEXTURE0);
+                glBindTexture(GL_TEXTURE_2D, gi_result_tex);
+                glActiveTexture(GL_TEXTURE1);
+                glBindTexture(GL_TEXTURE_2D, fx->aux_texture);
+                glActiveTexture(GL_TEXTURE2);
+                glBindTexture(GL_TEXTURE_2D, have_normals ? fx->normal_texture : 0);
+                uniform_set_int(fx->ssgi_atrous_program->uniforms, "stepSize", 1 << i);
+                draw_fullscreen_quad(fx->quad_vao);
+                gi_result_tex = fx->ssgi_atrous_texture[i & 1];
+            }
+            check_gl_error("postfx ssgi denoise");
+        }
+
         if (ssr_active) {
             // March reflections into the half-res buffer (reads the scene,
             // writes elsewhere: GL 4.1 has no texture barrier)
@@ -827,7 +906,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             glViewport(0, 0, fx->width, fx->height);
             glUseProgram(fx->ssgi_composite_program->id);
             glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, fx->ssgi_gi_texture);
+            glBindTexture(GL_TEXTURE_2D, gi_result_tex); // accumulated + denoised
             glActiveTexture(GL_TEXTURE1);
             glBindTexture(GL_TEXTURE_2D, fx->albedo_texture);
             uniform_set_float(fx->ssgi_composite_program->uniforms, "intensity", fx->ssgi_intensity);
@@ -925,7 +1004,8 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         glActiveTexture(GL_TEXTURE5);
         glBindTexture(GL_TEXTURE_2D, albedo_written ? fx->albedo_texture : 0);
         glActiveTexture(GL_TEXTURE6);
-        glBindTexture(GL_TEXTURE_2D, fx->ssgi_enabled ? fx->ssgi_gi_texture : 0);
+        // Debug view shows the GI as composited (accumulated + denoised)
+        glBindTexture(GL_TEXTURE_2D, fx->ssgi_enabled ? gi_result_tex : 0);
         glActiveTexture(GL_TEXTURE7);
         glBindTexture(GL_TEXTURE_2D, fx->auto_exposure ? fx->lum_adapt_texture[lum_write] : 0);
         UniformManager* tm = fx->tonemap_program->uniforms;
