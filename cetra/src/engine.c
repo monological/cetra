@@ -1267,6 +1267,10 @@ static void _engine_gui_panel(Engine* engine) {
         igSliderFloat("SSR Floor Rough", &fx->ssr_floor_roughness, 0.0f, 1.0f, "%.2f", 0);
         _end_effect_group();
 
+        _begin_effect_group("SSGI", &fx->ssgi_enabled);
+        igSliderFloat("GI Intensity", &fx->ssgi_intensity, 0.0f, 4.0f, "%.2f", 0);
+        _end_effect_group();
+
         igCheckbox("Normals G-buffer", &fx->normals_enabled);
         igSliderFloat("Spec AA", &engine->specular_aa_strength, 0.0f, 2.0f, "%.2f", 0);
     }

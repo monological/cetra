@@ -16,7 +16,8 @@ uniform float aoStrength;
 uniform sampler2D normalsTex; // Resolved view-space normals + roughness
 uniform sampler2D ssrTex;     // Half-res reflection buffer
 uniform sampler2D albedoTex;  // Resolved albedo G-buffer (SSGI)
-// Debug view dispatch (PostFXDebugView): 0=none, 1=AO, 2=normals, 3=SSR, 4=albedo
+uniform sampler2D giTex;      // Half-res gathered GI radiance (SSGI)
+// Debug view dispatch (PostFXDebugView): 0=none, 1=AO, 2=normals, 3=SSR, 4=albedo, 5=GI
 uniform int debugView;
 // 1 = ACES, 2 = PBR Neutral (passthrough frames are blitted by postfx_run
 // and never reach this pass)
@@ -106,6 +107,14 @@ void main()
         // Albedo G-buffer (stored linear); gamma-encode for display
         vec3 a = texture(albedoTex, TexCoords).rgb;
         FragColor = vec4(pow(clamp(a, 0.0, 1.0), vec3(1.0 / 2.2)), 1.0);
+        return;
+    }
+    if (debugView == 5) {
+        // Raw gathered GI radiance (linear HDR); tone map so bright bounces
+        // don't clip to white, gamma-encode for display
+        vec3 gi = texture(giTex, TexCoords).rgb;
+        gi = tonemapMode == 1 ? acesTonemap(gi) : pbrNeutralTonemap(gi);
+        FragColor = vec4(pow(clamp(gi, 0.0, 1.0), vec3(1.0 / 2.2)), 1.0);
         return;
     }
 

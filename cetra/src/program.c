@@ -671,6 +671,18 @@ ShaderProgram* create_ao_accum_program() {
     return program;
 }
 
+ShaderProgram* create_ssgi_composite_program() {
+    ShaderProgram* program = NULL;
+
+    if ((program = create_program_from_source("ssgi_composite", post_vert_shader_str,
+                                              ssgi_composite_frag_shader_str, NULL)) == NULL) {
+        log_error("Failed to initialize SSGI composite shader program");
+        return NULL;
+    }
+
+    return program;
+}
+
 ShaderProgram* create_dof_coc_program() {
     ShaderProgram* program = NULL;
 

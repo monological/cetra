@@ -1,6 +1,7 @@
 #version 330 core
 in vec2 TexCoords;
-out vec4 FragColor;
+layout(location = 0) out vec4 AoOut; // visibility (1 = unoccluded)
+layout(location = 1) out vec4 GiOut; // gathered one-bounce radiance (SSGI; only drawn when on)
 
 // Ground-Truth AO via the 2023 "Visibility Bitmask" (Therrien et al.). For each
 // pixel we reconstruct its view-space position and normal, then sweep a few
@@ -28,6 +29,8 @@ uniform vec2 noiseScale; // ao resolution / 4
 uniform float radius;    // Occlusion reach in view-space units
 uniform int temporal;    // 1 when the AO accumulation pass is active
 uniform int frameIndex;  // Drives the per-frame slice rotation when temporal
+uniform sampler2D hdrTex; // Resolved lit scene color -- the radiance SSGI gathers from occluders
+uniform int gatherGI;     // 1 = also gather one-bounce irradiance into GiOut (SSGI)
 
 const float PI = 3.14159265359;
 const float HALF_PI = 1.57079632679;
@@ -76,8 +79,9 @@ void main()
     float linZ = texture(linDepthTex, TexCoords).z;
     if (linZ >= -1e-4) {
         // Sky / background: the aux buffer clears to 0 there (opaque geometry
-        // always has linear Z <= -near < 0). Fully unoccluded.
-        FragColor = vec4(1.0);
+        // always has linear Z <= -near < 0). Fully unoccluded, no bounce.
+        AoOut = vec4(1.0);
+        GiOut = vec4(0.0);
         return;
     }
 
@@ -95,7 +99,8 @@ void main()
         // after TAA it never gets stabilised -- the jitter reshuffles the strands
         // each frame and the AO flickers. Skip these pixels; hair still receives
         // its baked material AO in the lighting pass.
-        FragColor = vec4(1.0);
+        AoOut = vec4(1.0);
+        GiOut = vec4(0.0);
         return;
     }
     // G-buffer normal when the MRT is on, else a depth-derivative normal (the
@@ -122,6 +127,7 @@ void main()
     float screenRadius = min(0.5 * projection[0][0] * radius / (-linZ), MAX_SCREEN_RADIUS);
 
     float occlusion = 0.0;
+    vec3 gi = vec3(0.0); // one-bounce irradiance gathered from occluders (SSGI)
     for (int s = 0; s < SLICES; s++) {
         float phi = (float(s) + sliceRot) * (PI / float(SLICES));
         vec2 dir = vec2(cos(phi), sin(phi));
@@ -177,13 +183,25 @@ void main()
                 // Map both angles into the normal hemisphere, normalised to [0,1].
                 float lo = (min(aFront, aBack) - hemiStart) / PI;
                 float hi = (max(aFront, aBack) - hemiStart) / PI;
-                bitfield |= sectorBits(lo, hi);
+                uint sampleBits = sectorBits(lo, hi);
+                // SSGI: the sectors this occluder covers for the FIRST time are the
+                // solid angle it newly blocks; weight its lit radiance by that
+                // fraction so the nearest occluder in each direction wins (later,
+                // farther occluders in already-covered sectors add nothing).
+                if (gatherGI == 1) {
+                    uint newBits = sampleBits & ~bitfield;
+                    if (newBits != 0u)
+                        gi += texture(hdrTex, sUV).rgb * (float(popCount(newBits)) /
+                                                          float(SECTOR_COUNT));
+                }
+                bitfield |= sampleBits;
             }
         }
         occlusion += float(popCount(bitfield)) / float(SECTOR_COUNT);
     }
     occlusion /= float(SLICES);
+    gi /= float(SLICES);
 
-    // Single-channel visibility (1 = unoccluded) to match the aoTex contract.
-    FragColor = vec4(vec3(1.0 - occlusion), 1.0);
+    AoOut = vec4(vec3(1.0 - occlusion), 1.0); // visibility (1 = unoccluded)
+    GiOut = vec4(gi, 1.0);                    // gathered one-bounce radiance
 }

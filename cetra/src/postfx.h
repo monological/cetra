@@ -30,6 +30,7 @@ typedef enum PostFXDebugView {
     POSTFX_DEBUG_NORMALS = 2, // Resolved normals G-buffer
     POSTFX_DEBUG_SSR = 3,     // Half-res reflection buffer
     POSTFX_DEBUG_ALBEDO = 4,  // Resolved albedo G-buffer (SSGI)
+    POSTFX_DEBUG_SSGI = 5,    // Raw gathered GI radiance (half-res, SSGI)
 } PostFXDebugView;
 
 typedef struct PostFX {
@@ -50,8 +51,9 @@ typedef struct PostFX {
     GLuint ssao_texture[2];
     GLuint ao_history_fbo[2]; // Half-res temporal-AO accumulation ping-pong (R16F)
     GLuint ao_history_texture[2];
-    GLuint noise_texture; // 4x4 random slice rotations, tiled
-    GLuint ssr_fbo;       // Half-res reflection buffer (march target)
+    GLuint ssgi_gi_texture; // Half-res RGBA16F GI radiance, MRT attachment 1 on the GTAO FBO (SSGI)
+    GLuint noise_texture;   // 4x4 random slice rotations, tiled
+    GLuint ssr_fbo;         // Half-res reflection buffer (march target)
     GLuint ssr_texture;
     GLuint aux_fbo; // Full-res resolved aux G-buffer: motion vectors .xy (TAA) + linear view-Z .z
                     // (GTAO)
@@ -67,6 +69,7 @@ typedef struct PostFX {
     ShaderProgram* gtao_program;
     ShaderProgram* ssao_blur_program;
     ShaderProgram* ao_accum_program;
+    ShaderProgram* ssgi_composite_program;
     ShaderProgram* ssr_program;
     ShaderProgram* ssr_composite_program;
     ShaderProgram* taa_resolve_program;

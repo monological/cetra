@@ -72,6 +72,7 @@ ShaderProgram* create_ssr_program();
 ShaderProgram* create_ssr_composite_program();
 ShaderProgram* create_taa_resolve_program();
 ShaderProgram* create_ao_accum_program();
+ShaderProgram* create_ssgi_composite_program();
 ShaderProgram* create_dof_coc_program();
 ShaderProgram* create_dof_blur_program();
 ShaderProgram* create_dof_composite_program();

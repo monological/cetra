@@ -11,5 +11,5 @@ repos:
     rev: v1.3.5
     hooks:
       - id: cppcheck
-        args: [--std=c11, --suppress=missingIncludeSystem, --suppress=missingInclude, --suppress=unusedFunction, --suppress=unmatchedSuppression, --suppress=staticFunction, --suppress=unusedStructMember, --suppress=toomanyconfigs, --suppress=normalCheckLevelMaxBranches, --suppress=checkersReport, --suppress=unreachableCode, --suppress=variableScope, --suppress=knownConditionTrueFalse, --suppress=constParameterCallback, "--suppress=*:*ext/*"]
+        args: [--std=c11, --suppress=missingIncludeSystem, --suppress=missingInclude, --suppress=unusedFunction, --suppress=unmatchedSuppression, --suppress=staticFunction, --suppress=unusedStructMember, --suppress=toomanyconfigs, --suppress=normalCheckLevelMaxBranches, --suppress=checkLevelNormal, --suppress=checkersReport, --suppress=unreachableCode, --suppress=variableScope, --suppress=knownConditionTrueFalse, --suppress=constParameterCallback, "--suppress=*:*ext/*"]
         exclude: '^cetra/src/ext/'

@@ -69,6 +69,7 @@ typedef struct {
     int no_ssao;                       // Disable screen-space ambient occlusion
     int ssao_debug;                    // Show the raw SSAO buffer
     int ssgi;                          // Enable screen-space GI (indirect diffuse)
+    int ssgi_debug;                    // Show the raw gathered GI radiance
     int albedo_debug;                  // Show the resolved albedo G-buffer
     int no_normals_mrt;                // Disable the normals G-buffer
     int normals_debug;                 // Show the resolved normals G-buffer
@@ -128,6 +129,9 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --no-ssr           Disable screen-space reflections\n");
     fprintf(stderr, "      --ssr-debug        Show the reflection buffer\n");
     fprintf(stderr, "      --ssr-strength <f> Reflection strength (default: 1)\n");
+    fprintf(stderr, "      --ssgi             Enable screen-space GI (one-bounce indirect diffuse)\n");
+    fprintf(stderr, "      --ssgi-debug       Show the raw gathered GI radiance (implies --ssgi)\n");
+    fprintf(stderr, "      --albedo-debug     Show the resolved albedo G-buffer\n");
     fprintf(stderr, "      --specular-aa <f>  Specular anti-aliasing strength (default: 1)\n");
     fprintf(stderr, "      --no-specular-aa   Disable specular anti-aliasing\n");
     fprintf(stderr, "      --ssaa <int>       Supersampling factor (default: 1 = off; 2 = 2x SSAA)\n");
@@ -325,6 +329,9 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->ssao_debug = 1;
         } else if (strcmp(argv[i], "--ssgi") == 0) {
             args->ssgi = 1;
+        } else if (strcmp(argv[i], "--ssgi-debug") == 0) {
+            args->ssgi = 1;
+            args->ssgi_debug = 1;
         } else if (strcmp(argv[i], "--albedo-debug") == 0) {
             args->albedo_debug = 1;
         } else if (strcmp(argv[i], "--no-normals-mrt") == 0) {
@@ -818,6 +825,9 @@ int main(int argc, char** argv) {
     }
     if (args.ssgi && engine->postfx) {
         engine->postfx->ssgi_enabled = true;
+    }
+    if (args.ssgi_debug && engine->postfx) {
+        engine->postfx->debug_view = POSTFX_DEBUG_SSGI;
     }
     if (args.albedo_debug && engine->postfx) {
         engine->postfx->debug_view = POSTFX_DEBUG_ALBEDO;

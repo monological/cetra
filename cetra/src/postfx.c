@@ -212,6 +212,22 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
             return NULL;
         }
     }
+    // SSGI GI radiance target: a 2nd MRT attachment on the GTAO pass FBO (ssao_fbo[0]),
+    // written alongside the AO when SSGI gathers this frame. RGBA16F half-res (HDR
+    // bounce color). Attached permanently; the GTAO pass's draw-buffer list decides
+    // whether it is actually written.
+    glGenTextures(1, &fx->ssgi_gi_texture);
+    glBindTexture(GL_TEXTURE_2D, fx->ssgi_gi_texture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, fx->ssao_width, fx->ssao_height, 0, GL_RGBA, GL_FLOAT,
+                 NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glBindFramebuffer(GL_FRAMEBUFFER, fx->ssao_fbo[0]);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, fx->ssgi_gi_texture,
+                           0);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
     // Half-res temporal-AO accumulation ping-pong. R16F, not R8: an exponential
     // feedback blend needs more than 256 levels to avoid banding as it converges.
     for (int i = 0; i < 2; i++) {
@@ -265,6 +281,7 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     fx->gtao_program = create_gtao_program();
     fx->ssao_blur_program = create_ssao_blur_program();
     fx->ao_accum_program = create_ao_accum_program();
+    fx->ssgi_composite_program = create_ssgi_composite_program();
     fx->ssr_program = create_ssr_program();
     fx->ssr_composite_program = create_ssr_composite_program();
     fx->taa_resolve_program = create_taa_resolve_program();
@@ -272,7 +289,8 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     fx->dof_blur_program = create_dof_blur_program();
     fx->dof_composite_program = create_dof_composite_program();
     if (!fx->bright_program || !fx->blur_program || !fx->tonemap_program || !fx->gtao_program ||
-        !fx->ssao_blur_program || !fx->ao_accum_program || !fx->ssr_program ||
+        !fx->ssao_blur_program || !fx->ao_accum_program || !fx->ssgi_composite_program ||
+        !fx->ssr_program ||
         !fx->ssr_composite_program || !fx->taa_resolve_program || !fx->dof_coc_program ||
         !fx->dof_blur_program || !fx->dof_composite_program) {
         free_postfx(fx);
@@ -291,6 +309,7 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     uniform_set_int(fx->tonemap_program->uniforms, "normalsTex", 3);
     uniform_set_int(fx->tonemap_program->uniforms, "ssrTex", 4);
     uniform_set_int(fx->tonemap_program->uniforms, "albedoTex", 5);
+    uniform_set_int(fx->tonemap_program->uniforms, "giTex", 6);
 
     glUseProgram(fx->ssr_program->id);
     uniform_set_int(fx->ssr_program->uniforms, "depthTex", 0);
@@ -313,6 +332,7 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     uniform_set_int(fx->gtao_program->uniforms, "linDepthTex", 0);
     uniform_set_int(fx->gtao_program->uniforms, "noiseTex", 1);
     uniform_set_int(fx->gtao_program->uniforms, "normalsTex", 2);
+    uniform_set_int(fx->gtao_program->uniforms, "hdrTex", 3); // SSGI radiance source
     const float noise_scale[2] = {(float)fx->ssao_width / 4.0f, (float)fx->ssao_height / 4.0f};
     uniform_set_vec2(fx->gtao_program->uniforms, "noiseScale", noise_scale);
 
@@ -326,6 +346,10 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     uniform_set_int(fx->ao_accum_program->uniforms, "velocityTex", 1);
     uniform_set_int(fx->ao_accum_program->uniforms, "historyTex", 2);
     uniform_set_vec2(fx->ao_accum_program->uniforms, "texelSize", ao_texel);
+
+    glUseProgram(fx->ssgi_composite_program->id);
+    uniform_set_int(fx->ssgi_composite_program->uniforms, "giTex", 0);
+    uniform_set_int(fx->ssgi_composite_program->uniforms, "albedoTex", 1);
     glUseProgram(0);
 
     create_fullscreen_quad_vao(&fx->quad_vao, &fx->quad_vbo);
@@ -413,6 +437,7 @@ void free_postfx(PostFX* fx) {
     glDeleteTextures(1, &fx->normal_texture);
     glDeleteFramebuffers(2, fx->ssao_fbo);
     glDeleteTextures(2, fx->ssao_texture);
+    glDeleteTextures(1, &fx->ssgi_gi_texture);
     glDeleteFramebuffers(2, fx->ao_history_fbo);
     glDeleteTextures(2, fx->ao_history_texture);
     glDeleteTextures(1, &fx->noise_texture);
@@ -438,6 +463,7 @@ void free_postfx(PostFX* fx) {
     free_program(fx->gtao_program);
     free_program(fx->ssao_blur_program);
     free_program(fx->ao_accum_program);
+    free_program(fx->ssgi_composite_program);
     free_program(fx->ssr_program);
     free_program(fx->ssr_composite_program);
     free_program(fx->taa_resolve_program);
@@ -490,8 +516,9 @@ bool postfx_wants_aux_gbuffer(const PostFX* fx) {
     // Attachment 2 carries motion vectors (.xy, for TAA reprojection) and linear
     // view-Z (.z, for GTAO position reconstruction). Produce it whenever either
     // consumer is active -- decoupled from TAA so GTAO gets linear depth even
-    // with TAA off (e.g. headless).
-    return fx && (fx->taa_enabled || fx->ssao_enabled);
+    // with TAA off (e.g. headless). SSGI rides the GTAO sweep, so it needs the
+    // linear depth too even if AO display is off (--ssgi --no-ssao).
+    return fx && (fx->taa_enabled || fx->ssao_enabled || fx->ssgi_enabled);
 }
 
 bool postfx_wants_albedo(const PostFX* fx) {
@@ -637,12 +664,24 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         // When temporal accumulation runs (taa_resolving) GTAO jitters its slices
         // per frame and the accum pass integrates them; otherwise it stays frame-static.
         GLuint ao_result_tex = fx->ssao_texture[1];
-        if (fx->ssao_enabled) {
+        // The GTAO sweep runs when AO is shown OR SSGI needs it (they share the
+        // pass). AO-only denoise (blur + temporal accum) stays gated on ssao_enabled.
+        const bool gtao_active = fx->ssao_enabled || fx->ssgi_enabled;
+        if (gtao_active) {
             // Raw occlusion at half res. GTAO reads linear view-Z from the aux
             // buffer's .z (unit 0) and reconstructs positions from it -- the
             // non-linear depth buffer staircased flat surfaces into AO banding.
             glBindFramebuffer(GL_FRAMEBUFFER, fx->ssao_fbo[0]);
             glViewport(0, 0, fx->ssao_width, fx->ssao_height);
+            // SSGI rides the same sweep: when on, also draw the GI radiance into
+            // attachment 1 (ssgi_gi_texture); when off, only AO is written so the
+            // path is byte-identical to plain GTAO.
+            if (fx->ssgi_enabled) {
+                const GLenum bufs[2] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1};
+                glDrawBuffers(2, bufs);
+            } else {
+                glDrawBuffer(GL_COLOR_ATTACHMENT0);
+            }
             glUseProgram(fx->gtao_program->id);
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, fx->aux_texture);
@@ -650,41 +689,47 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             glBindTexture(GL_TEXTURE_2D, fx->noise_texture);
             glActiveTexture(GL_TEXTURE2);
             glBindTexture(GL_TEXTURE_2D, have_normals ? fx->normal_texture : 0);
+            glActiveTexture(GL_TEXTURE3);
+            glBindTexture(GL_TEXTURE_2D, fx->ssgi_enabled ? fx->hdr_texture : 0);
             uniform_set_int(fx->gtao_program->uniforms, "useNormalsTex", have_normals ? 1 : 0);
             uniform_set_mat4(fx->gtao_program->uniforms, "projection", (float*)projection);
             uniform_set_float(fx->gtao_program->uniforms, "radius", fx->ssao_radius);
             uniform_set_int(fx->gtao_program->uniforms, "temporal", taa_resolving ? 1 : 0);
             uniform_set_int(fx->gtao_program->uniforms, "frameIndex", fx->frame_index);
+            uniform_set_int(fx->gtao_program->uniforms, "gatherGI", fx->ssgi_enabled ? 1 : 0);
             draw_fullscreen_quad(fx->quad_vao);
 
-            // 4x4 box blur cancels the rotation-noise tile
-            glBindFramebuffer(GL_FRAMEBUFFER, fx->ssao_fbo[1]);
-            glUseProgram(fx->ssao_blur_program->id);
-            glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, fx->ssao_texture[0]);
-            draw_fullscreen_quad(fx->quad_vao);
-
-            // Temporal accumulation: reproject the history by velocity and blend
-            // so the per-frame jittered occlusion integrates into a stable result.
-            if (taa_resolving) {
-                int write = fx->frame_index & 1;
-                int read = write ^ 1;
-                glBindFramebuffer(GL_FRAMEBUFFER, fx->ao_history_fbo[write]);
-                glViewport(0, 0, fx->ssao_width, fx->ssao_height); // don't rely on the blur's viewport
-                glUseProgram(fx->ao_accum_program->id);
+            if (fx->ssao_enabled) {
+                // 4x4 box blur cancels the rotation-noise tile
+                glBindFramebuffer(GL_FRAMEBUFFER, fx->ssao_fbo[1]);
+                glUseProgram(fx->ssao_blur_program->id);
                 glActiveTexture(GL_TEXTURE0);
-                glBindTexture(GL_TEXTURE_2D, fx->ssao_texture[1]);
-                glActiveTexture(GL_TEXTURE1);
-                glBindTexture(GL_TEXTURE_2D, fx->aux_texture);
-                glActiveTexture(GL_TEXTURE2);
-                glBindTexture(GL_TEXTURE_2D, fx->ao_history_texture[read]);
-                // reset keys off the global frame index, so toggling AO/TAA on
-                // mid-run won't re-fire it -- the 3x3 neighborhood clamp bounds
-                // the stale history and it self-heals within a frame or two.
-                uniform_set_int(fx->ao_accum_program->uniforms, "reset",
-                                fx->frame_index == 0 ? 1 : 0);
+                glBindTexture(GL_TEXTURE_2D, fx->ssao_texture[0]);
                 draw_fullscreen_quad(fx->quad_vao);
-                ao_result_tex = fx->ao_history_texture[write];
+
+                // Temporal accumulation: reproject the history by velocity and blend
+                // so the per-frame jittered occlusion integrates into a stable result.
+                if (taa_resolving) {
+                    int write = fx->frame_index & 1;
+                    int read = write ^ 1;
+                    glBindFramebuffer(GL_FRAMEBUFFER, fx->ao_history_fbo[write]);
+                    glViewport(0, 0, fx->ssao_width,
+                               fx->ssao_height); // don't rely on the blur's viewport
+                    glUseProgram(fx->ao_accum_program->id);
+                    glActiveTexture(GL_TEXTURE0);
+                    glBindTexture(GL_TEXTURE_2D, fx->ssao_texture[1]);
+                    glActiveTexture(GL_TEXTURE1);
+                    glBindTexture(GL_TEXTURE_2D, fx->aux_texture);
+                    glActiveTexture(GL_TEXTURE2);
+                    glBindTexture(GL_TEXTURE_2D, fx->ao_history_texture[read]);
+                    // reset keys off the global frame index, so toggling AO/TAA on
+                    // mid-run won't re-fire it -- the 3x3 neighborhood clamp bounds
+                    // the stale history and it self-heals within a frame or two.
+                    uniform_set_int(fx->ao_accum_program->uniforms, "reset",
+                                    fx->frame_index == 0 ? 1 : 0);
+                    draw_fullscreen_quad(fx->quad_vao);
+                    ao_result_tex = fx->ao_history_texture[write];
+                }
             }
         }
 
@@ -728,6 +773,26 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             glDisable(GL_BLEND);
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
             check_gl_error("postfx ssr");
+        }
+
+        if (fx->ssgi_enabled && albedo_written) {
+            // Add one bounce of indirect diffuse (albedo x gathered GI x intensity)
+            // into the HDR scene before bloom, so bounce light blooms like direct
+            // light. Half-res GI is bilinear-upsampled; albedo is full-res.
+            glBindFramebuffer(GL_FRAMEBUFFER, fx->hdr_fbo);
+            glViewport(0, 0, fx->width, fx->height);
+            glUseProgram(fx->ssgi_composite_program->id);
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, fx->ssgi_gi_texture);
+            glActiveTexture(GL_TEXTURE1);
+            glBindTexture(GL_TEXTURE_2D, fx->albedo_texture);
+            uniform_set_float(fx->ssgi_composite_program->uniforms, "intensity", fx->ssgi_intensity);
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_ONE, GL_ONE);
+            draw_fullscreen_quad(fx->quad_vao);
+            glDisable(GL_BLEND);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            check_gl_error("postfx ssgi composite");
         }
 
         // Depth of field replaces the scene that bloom and tone mapping read.
@@ -788,6 +853,8 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         glBindTexture(GL_TEXTURE_2D, ssr_active ? fx->ssr_texture : 0);
         glActiveTexture(GL_TEXTURE5);
         glBindTexture(GL_TEXTURE_2D, albedo_written ? fx->albedo_texture : 0);
+        glActiveTexture(GL_TEXTURE6);
+        glBindTexture(GL_TEXTURE_2D, fx->ssgi_enabled ? fx->ssgi_gi_texture : 0);
         UniformManager* tm = fx->tonemap_program->uniforms;
         uniform_set_float(tm, "exposure", fx->exposure);
         uniform_set_float(tm, "bloomStrength", fx->bloom_strength);
@@ -800,7 +867,8 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         if ((debug_view == POSTFX_DEBUG_AO && !fx->ssao_enabled) ||
             (debug_view == POSTFX_DEBUG_NORMALS && !have_normals) ||
             (debug_view == POSTFX_DEBUG_SSR && !ssr_active) ||
-            (debug_view == POSTFX_DEBUG_ALBEDO && !albedo_written)) {
+            (debug_view == POSTFX_DEBUG_ALBEDO && !albedo_written) ||
+            (debug_view == POSTFX_DEBUG_SSGI && !fx->ssgi_enabled)) {
             static PostFXDebugView warned_view = POSTFX_DEBUG_NONE;
             if (warned_view != debug_view) {
                 log_warn("debug view %d suppressed: its source buffer is disabled",
