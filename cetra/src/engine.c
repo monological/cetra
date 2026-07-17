@@ -105,7 +105,7 @@ Engine* create_engine(const char* window_title, int width, int height) {
     glm_mat4_identity(engine->model_matrix);
     glm_mat4_identity(engine->view_matrix);
     glm_mat4_identity(engine->projection_matrix);
-    glm_mat4_identity(engine->jittered_projection);
+    glm_mat4_identity(engine->view_proj);
     glm_mat4_identity(engine->prev_view_proj);
 
     engine->show_gui = false;
@@ -1025,6 +1025,11 @@ void set_engine_headless(Engine* engine, bool headless) {
     engine->headless = headless;
 }
 
+void set_engine_taa_enabled(Engine* engine, bool enabled) {
+    if (engine && engine->postfx)
+        engine->postfx->taa_enabled = enabled;
+}
+
 void set_engine_ss_scale(Engine* engine, int ss_scale) {
     if (!engine)
         return;
@@ -1233,7 +1238,9 @@ static void _engine_gui_panel(Engine* engine) {
         if (igCheckbox("MSAA 4x", &msaa))
             set_engine_msaa_samples(engine, msaa ? 4 : 1);
         igSameLine(0, -1);
-        igCheckbox("TAA", &fx->taa_enabled);
+        bool taa = fx->taa_enabled;
+        if (igCheckbox("TAA", &taa))
+            set_engine_taa_enabled(engine, taa);
 
         bool aces = fx->tonemap_mode == POSTFX_TONEMAP_ACES;
         if (igCheckbox("ACES Tonemap", &aces))
@@ -1400,46 +1407,30 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode, bool draw_gui) 
     }
 }
 
-void engine_set_scene_draw_buffers(const Engine* engine, bool with_normals) {
+void engine_set_scene_draw_buffers(const Engine* engine, bool with_gbuffer) {
     if (!engine)
         return;
 
     // The opaque pass may publish the normals G-buffer (attachment 1) and/or the
     // velocity buffer (attachment 2) alongside color; every other pass is color
-    // only. GL_NONE preserves the fragment-output-location -> attachment mapping
-    // when an intermediate target is skipped this frame. Blending is enabled
-    // globally, so keep the auxiliary targets opaque via indexed disable (the
-    // indexed state is wiped by any blanket glEnable(GL_BLEND), so re-issue it
-    // at every pass boundary rather than once at init).
-    bool normals = with_normals && engine->normals_this_frame;
-    bool velocity = with_normals && engine->velocity_this_frame;
-
-    if (velocity) {
-        const GLenum bufs[] = {GL_COLOR_ATTACHMENT0,
-                               normals ? GL_COLOR_ATTACHMENT1 : GL_NONE, GL_COLOR_ATTACHMENT2};
-        glDrawBuffers(3, bufs);
-        if (normals)
-            glDisablei(GL_BLEND, 1);
-        glDisablei(GL_BLEND, 2);
-    } else if (normals) {
-        const GLenum both[] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1};
-        glDrawBuffers(2, both);
+    // only. Build the draw-buffer list left to right: GL_NONE fills a skipped
+    // slot so the fragment-output-location -> attachment mapping is preserved,
+    // and count extends to the highest enabled attachment. Blending is enabled
+    // globally, so keep each aux target opaque via indexed disable (re-issued at
+    // every pass boundary because any blanket glEnable(GL_BLEND) wipes it).
+    GLenum bufs[3] = {GL_COLOR_ATTACHMENT0, GL_NONE, GL_NONE};
+    int count = 1;
+    if (with_gbuffer && engine->normals_this_frame) {
+        bufs[1] = GL_COLOR_ATTACHMENT1;
         glDisablei(GL_BLEND, 1);
-    } else {
-        const GLenum color_only[] = {GL_COLOR_ATTACHMENT0};
-        glDrawBuffers(1, color_only);
+        count = 2;
     }
-}
-
-// Halton low-discrepancy sequence element (1-based index), for sub-pixel jitter.
-static float _halton(int index, int base) {
-    float f = 1.0f;
-    float r = 0.0f;
-    for (int i = index; i > 0; i /= base) {
-        f /= (float)base;
-        r += f * (float)(i % base);
+    if (with_gbuffer && engine->velocity_this_frame) {
+        bufs[2] = GL_COLOR_ATTACHMENT2;
+        glDisablei(GL_BLEND, 2);
+        count = 3;
     }
-    return r;
+    glDrawBuffers(count, bufs);
 }
 
 void run_engine_render_loop(Engine* engine, RenderSceneFunc render_func) {
@@ -1511,7 +1502,7 @@ void run_engine_render_loop(Engine* engine, RenderSceneFunc render_func) {
         engine->normals_this_frame =
             frame_mode == RENDER_MODE_PBR && postfx_wants_normals(engine->postfx);
         engine->velocity_this_frame =
-            frame_mode == RENDER_MODE_PBR && engine->postfx && engine->postfx->taa_enabled;
+            frame_mode == RENDER_MODE_PBR && postfx_taa_active(engine->postfx);
         engine_set_scene_draw_buffers(engine, true);
         glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
@@ -1522,18 +1513,6 @@ void run_engine_render_loop(Engine* engine, RenderSceneFunc render_func) {
         if (engine->velocity_this_frame) {
             const GLfloat zero_velocity[4] = {0.0f, 0.0f, 0.0f, 0.0f};
             glClearBufferfv(GL_COLOR, 2, zero_velocity);
-        }
-
-        // Sub-pixel projection jitter for TAA: nudge the projection by a
-        // Halton(2,3) fraction of a pixel each frame so the temporal resolve
-        // accumulates coverage. Kept separate from projection_matrix, which
-        // stays un-jittered for culling, postfx, and motion vectors. Off in
-        // headless (jitter would break deterministic screenshots).
-        glm_mat4_copy(engine->projection_matrix, engine->jittered_projection);
-        if (engine->postfx && engine->postfx->taa_enabled && !engine->headless) {
-            int j = (int)(engine->total_frames % 8) + 1;
-            engine->jittered_projection[2][0] += (_halton(j, 2) - 0.5f) * 2.0f / (float)rw;
-            engine->jittered_projection[2][1] += (_halton(j, 3) - 0.5f) * 2.0f / (float)rh;
         }
 
         Scene* current_scene = get_current_scene(engine);
@@ -1552,9 +1531,6 @@ void run_engine_render_loop(Engine* engine, RenderSceneFunc render_func) {
 
         engine_present_frame(engine, frame_mode, true);
 
-        // Remember this frame's un-jittered view-projection for next frame's
-        // motion vectors, then advance the frame counter.
-        glm_mat4_mul(engine->projection_matrix, engine->view_matrix, engine->prev_view_proj);
         engine->total_frames++;
 
         // Periodic capture: numbered frames every N frames

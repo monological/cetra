@@ -79,10 +79,11 @@ typedef struct Engine {
 
     mat4 model_matrix;
     mat4 view_matrix;
-    mat4 projection_matrix;   // Un-jittered truth: frustum culling, postfx, motion vectors
-    mat4 jittered_projection; // projection_matrix + per-frame sub-pixel jitter; the scene draw
-                              // rasterizes with this when TAA is on (else equals projection_matrix)
-    mat4 prev_view_proj;      // Previous frame's un-jittered projection*view, for motion vectors
+    mat4 projection_matrix; // Un-jittered truth: frustum culling, postfx, motion vectors
+    mat4 view_proj;         // Un-jittered projection*view for the current frame, computed once in
+                            // render_current_scene (frustum + motion vectors); the scene draws with
+                    // a locally sub-pixel-jittered projection derived from projection_matrix
+    mat4 prev_view_proj; // Previous frame's view_proj, for motion vectors
 
     bool show_gui;
     bool show_wireframe;
@@ -145,6 +146,8 @@ void set_engine_ss_scale(Engine* engine, int ss_scale);
 // 1 disables MSAA. Safe to call before init_engine (stored) or at runtime
 // (rebuilds the multisample attachments).
 void set_engine_msaa_samples(Engine* engine, int samples);
+// Enable/disable temporal anti-aliasing. Call after init_engine (needs postfx).
+void set_engine_taa_enabled(Engine* engine, bool enabled);
 void set_engine_screenshot_path(Engine* engine, const char* path);
 void set_engine_screenshot_every(Engine* engine, int every);
 
@@ -187,7 +190,7 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode, bool draw_gui);
 // Select which color attachments the scene pass writes: attachment 0 only,
 // or 0 + the view-space normals target (used by SSAO/SSR). Render passes
 // that emit no normals (skybox, blend, overlays) switch to 0-only.
-void engine_set_scene_draw_buffers(const Engine* engine, bool with_normals);
+void engine_set_scene_draw_buffers(const Engine* engine, bool with_gbuffer);
 
 // Render
 void set_engine_show_wireframe(Engine* engine, bool show_wireframe);

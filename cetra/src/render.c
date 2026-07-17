@@ -43,32 +43,21 @@ void render_update_skinning_uniforms(ShaderProgram* program, const Mesh* mesh) {
         g_current_animation_state->active_bone_count > 0) {
         uniform_set_int(u, "skinned", 1);
 
+        GLsizei count = (GLsizei)g_current_animation_state->active_bone_count;
+
         // Upload bone matrices
-        GLint loc = glGetUniformLocation(program->id, "boneMatrices[0]");
+        GLint loc = uniform_location(u, "boneMatrices[0]");
         if (loc >= 0) {
-            glUniformMatrix4fv(loc, (GLsizei)g_current_animation_state->active_bone_count, GL_FALSE,
+            glUniformMatrix4fv(loc, count, GL_FALSE,
                                (const GLfloat*)g_current_animation_state->bone_matrices);
         }
 
-        // Previous-frame bones for skinned motion vectors (TAA), packed as 3
-        // affine rows per bone (12 floats vs 16) so a second full set fits the
-        // vertex uniform budget alongside the current mat4 array. Absent on
-        // programs without the uniform (e.g. the shadow depth pass) -> skipped.
-        GLint prevLoc = glGetUniformLocation(program->id, "uPrevBoneRows[0]");
+        // Previous-frame bones for skinned motion vectors (TAA), packed once per
+        // frame by animation_snapshot_prev_pose. Absent on programs without the
+        // uniform (e.g. the shadow depth pass) -> skipped.
+        GLint prevLoc = uniform_location(u, "uPrevBoneRows[0]");
         if (prevLoc >= 0) {
-            size_t count = g_current_animation_state->active_bone_count;
-            float rows[3 * MAX_BONES * 4];
-            const mat4* pbm = g_current_animation_state->prev_bone_matrices;
-            for (size_t b = 0; b < count; b++) {
-                for (int r = 0; r < 3; r++) {
-                    float* dst = &rows[(b * 3 + (size_t)r) * 4];
-                    dst[0] = pbm[b][0][r];
-                    dst[1] = pbm[b][1][r];
-                    dst[2] = pbm[b][2][r];
-                    dst[3] = pbm[b][3][r];
-                }
-            }
-            glUniform4fv(prevLoc, (GLsizei)(count * 3), rows);
+            glUniform4fv(prevLoc, count * 3, g_current_animation_state->prev_bone_rows);
         }
     } else {
         uniform_set_int(u, "skinned", 0);
@@ -322,12 +311,11 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
 
             // Set view/projection/camera uniforms once per program switch.
             // projection is the jittered matrix (rasterization); the motion-vector
-            // matrices below are the engine's real un-jittered ones.
+            // matrices are the engine's real un-jittered ones, computed once per
+            // frame in render_current_scene.
             uniform_set_mat4(u, "view", (const float*)view);
             uniform_set_mat4(u, "projection", (const float*)projection);
-            mat4 curr_view_proj_no_jitter;
-            glm_mat4_mul(engine->projection_matrix, engine->view_matrix, curr_view_proj_no_jitter);
-            uniform_set_mat4(u, "uCurrViewProjNoJitter", (const float*)curr_view_proj_no_jitter);
+            uniform_set_mat4(u, "uCurrViewProjNoJitter", (const float*)engine->view_proj);
             uniform_set_mat4(u, "uPrevViewProj", (const float*)engine->prev_view_proj);
             uniform_set_float(u, "time", time_value);
             uniform_set_int(u, "renderMode", render_mode);
@@ -529,6 +517,17 @@ static void _render_scene_iterative(const Engine* engine, Scene* scene, SceneNod
     }
 }
 
+// Halton low-discrepancy sequence element (1-based index), for sub-pixel jitter.
+static float _halton(int index, int base) {
+    float f = 1.0f;
+    float r = 0.0f;
+    for (int i = index; i > 0; i /= base) {
+        f /= (float)base;
+        r += f * (float)(i % base);
+    }
+    return r;
+}
+
 void render_current_scene(Engine* engine, float time_value) {
     if (!engine) {
         log_error("error: render called with NULL engine");
@@ -554,19 +553,31 @@ void render_current_scene(Engine* engine, float time_value) {
     }
 
     mat4* view = &engine->view_matrix;
-    mat4* projection = &engine->projection_matrix;
-    // Geometry rasterizes with the sub-pixel-jittered projection (TAA); frustum
-    // culling and motion vectors use the un-jittered projection above. When TAA
-    // is off, jittered_projection equals projection_matrix.
-    mat4* draw_projection = &engine->jittered_projection;
+    mat4* projection = &engine->projection_matrix; // un-jittered
 
     RenderMode render_mode = engine->current_render_mode;
 
-    // Extract frustum from view-projection matrix for culling
-    mat4 vp;
-    glm_mat4_mul(*projection, *view, vp);
+    // Un-jittered view-projection, computed once per frame for frustum culling
+    // and motion vectors (and stashed as next frame's prev at the end). Held on
+    // the engine so _render_node uploads it without recomputing per program.
+    glm_mat4_mul(*projection, *view, engine->view_proj);
     Frustum frustum;
-    frustum_extract_from_vp(vp, &frustum);
+    frustum_extract_from_vp(engine->view_proj, &frustum);
+
+    // Draw projection: the un-jittered projection, sub-pixel-jittered when TAA
+    // runs so the temporal resolve accumulates coverage. Computed locally (not a
+    // persistent engine field) so every render loop — including apps that call
+    // render_current_scene from their own loop — gets a correct projection. Off
+    // in headless (jitter would break deterministic screenshots).
+    mat4 draw_projection;
+    glm_mat4_copy(*projection, draw_projection);
+    if (render_mode == RENDER_MODE_PBR && postfx_taa_active(engine->postfx) && !engine->headless) {
+        int j = (int)(engine->total_frames % 8) + 1;
+        int rw = engine->fb_width * engine->ss_scale;
+        int rh = engine->fb_height * engine->ss_scale;
+        draw_projection[2][0] += (_halton(j, 2) - 0.5f) * 2.0f / (float)rw;
+        draw_projection[2][1] += (_halton(j, 3) - 0.5f) * 2.0f / (float)rh;
+    }
 
     // Track current program and material to avoid redundant state changes
     GLuint current_program = 0;
@@ -577,7 +588,7 @@ void render_current_scene(Engine* engine, float time_value) {
     // (skybox, translucents, catcher, overlays) writes color only.
     engine_set_scene_draw_buffers(engine, true);
     scene->transparent_mesh_count = 0;
-    _render_scene_iterative(engine, scene, root_node, camera, *view, *draw_projection, time_value,
+    _render_scene_iterative(engine, scene, root_node, camera, *view, draw_projection, time_value,
                             render_mode, &current_program, &current_material, &frustum, false);
     engine_set_scene_draw_buffers(engine, false);
 
@@ -586,7 +597,7 @@ void render_current_scene(Engine* engine, float time_value) {
     // the skybox shader emits linear HDR that would display uncorrected.
     if (scene->render_skybox && scene->ibl && scene->ibl->precomputed &&
         render_mode == RENDER_MODE_PBR) {
-        render_skybox(scene->ibl, *view, *draw_projection, scene->skybox_brightness,
+        render_skybox(scene->ibl, *view, draw_projection, scene->skybox_brightness,
                       scene->skybox_ground_projection, scene->skybox_gp_radius,
                       scene->skybox_gp_height);
     }
@@ -599,7 +610,7 @@ void render_current_scene(Engine* engine, float time_value) {
         current_program = 0;
         current_material = NULL;
         glDepthMask(GL_FALSE);
-        _render_scene_iterative(engine, scene, root_node, camera, *view, *draw_projection, time_value,
+        _render_scene_iterative(engine, scene, root_node, camera, *view, draw_projection, time_value,
                                 render_mode, &current_program, &current_material, &frustum, true);
         glDepthMask(GL_TRUE);
     }
@@ -614,7 +625,7 @@ void render_current_scene(Engine* engine, float time_value) {
 
         glUseProgram(catcher->id);
         uniform_set_mat4(catcher->uniforms, "view", (const float*)*view);
-        uniform_set_mat4(catcher->uniforms, "projection", (const float*)*draw_projection);
+        uniform_set_mat4(catcher->uniforms, "projection", (const float*)draw_projection);
         uniform_set_float(catcher->uniforms, "catcherStrength", scene->shadow_catcher_strength);
         uniform_set_float(catcher->uniforms, "planeRadius", scene->skybox_gp_radius);
 
@@ -686,6 +697,10 @@ void render_current_scene(Engine* engine, float time_value) {
 
     // Reset program state at end of frame
     glUseProgram(0);
+
+    // Remember this frame's un-jittered view-projection for next frame's motion
+    // vectors. Done here (not in the engine loop) so every render path keeps it.
+    glm_mat4_copy(engine->view_proj, engine->prev_view_proj);
 }
 
 void render_skeleton_bones(Engine* engine, Skeleton* skeleton, AnimationState* anim_state) {

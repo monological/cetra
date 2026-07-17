@@ -510,6 +510,23 @@ void update_animation(AnimationState* state, float delta_time) {
     compute_bone_matrices(state, delta_time);
 }
 
+void animation_snapshot_prev_pose(AnimationState* state) {
+    if (!state)
+        return;
+    // Pack each bone matrix as 3 affine rows (12 floats) — half a mat4 — so a
+    // full previous-pose set fits the vertex uniform budget next to the current
+    // mat4[MAX_BONES]. The bone matrices are affine, so the 4th row is implicit.
+    for (size_t b = 0; b < state->active_bone_count; b++) {
+        for (int r = 0; r < 3; r++) {
+            float* dst = &state->prev_bone_rows[(b * 3 + (size_t)r) * 4];
+            dst[0] = state->bone_matrices[b][0][r];
+            dst[1] = state->bone_matrices[b][1][r];
+            dst[2] = state->bone_matrices[b][2][r];
+            dst[3] = state->bone_matrices[b][3][r];
+        }
+    }
+}
+
 // ============================================================================
 // Keyframe Interpolation
 // ============================================================================

@@ -471,12 +471,31 @@ bool postfx_wants_normals(const PostFX* fx) {
     return fx->ssao_enabled || fx->ssr_enabled || fx->debug_view == POSTFX_DEBUG_NORMALS;
 }
 
+bool postfx_taa_active(const PostFX* fx) {
+    // The single "TAA runs this frame" producer predicate: the engine gates the
+    // jitter and the velocity buffer on it, and the resolve pass runs on it, so
+    // they cannot disagree. Mirrors postfx_wants_normals.
+    return fx && fx->taa_enabled;
+}
+
 bool postfx_ssr_active(const PostFX* fx, bool normals_written) {
     // The single "SSR runs this frame" predicate: the effect is enabled and
     // the normals buffer it marches against was actually produced. Both the
     // postfx pass and the shadow catcher's floor marker derive from this so
     // they cannot disagree about whether the floor is being reflected.
     return fx && fx->ssr_enabled && normals_written;
+}
+
+// Resolve one color attachment of the MSAA framebuffer into a single-sample FBO,
+// then restore the read buffer to attachment 0 (the sticky selection would
+// otherwise break the next frame's color resolve).
+static void resolve_color_attachment(GLuint msaa_fbo, GLenum attachment, GLuint dst_fbo, int w,
+                                     int h) {
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, msaa_fbo);
+    glReadBuffer(attachment);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, dst_fbo);
+    glBlitFramebuffer(0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    glReadBuffer(GL_COLOR_ATTACHMENT0);
 }
 
 void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hdr,
@@ -513,13 +532,8 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         // against the current frame, blend, and write the result back into
         // hdr_fbo so SSR/DoF/bloom/tonemap consume the anti-aliased color.
         if (fx->taa_enabled && velocity_written) {
-            // Resolve the velocity attachment (MSAA -> single-sample).
-            glBindFramebuffer(GL_READ_FRAMEBUFFER, msaa_fbo);
-            glReadBuffer(GL_COLOR_ATTACHMENT2);
-            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fx->velocity_fbo);
-            glBlitFramebuffer(0, 0, fx->width, fx->height, 0, 0, fx->width, fx->height,
-                              GL_COLOR_BUFFER_BIT, GL_NEAREST);
-            glReadBuffer(GL_COLOR_ATTACHMENT0);
+            resolve_color_attachment(msaa_fbo, GL_COLOR_ATTACHMENT2, fx->velocity_fbo, fx->width,
+                                     fx->height);
 
             int write = fx->frame_index & 1;
             int read = write ^ 1;
@@ -557,14 +571,8 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         // fx flags here could disagree with what the scene pass produced.
         bool have_normals = normals_written;
         if (have_normals) {
-            glBindFramebuffer(GL_READ_FRAMEBUFFER, msaa_fbo);
-            glReadBuffer(GL_COLOR_ATTACHMENT1);
-            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fx->normal_fbo);
-            glBlitFramebuffer(0, 0, fx->width, fx->height, 0, 0, fx->width, fx->height,
-                              GL_COLOR_BUFFER_BIT, GL_NEAREST);
-            // Read-buffer selection sticks to the FBO; put attachment 0 back
-            // so the next frame's color resolve reads the right buffer
-            glReadBuffer(GL_COLOR_ATTACHMENT0);
+            resolve_color_attachment(msaa_fbo, GL_COLOR_ATTACHMENT1, fx->normal_fbo, fx->width,
+                                     fx->height);
             check_gl_error("postfx normals resolve");
         }
 

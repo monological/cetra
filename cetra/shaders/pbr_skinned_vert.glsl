@@ -28,8 +28,7 @@ uniform mat4 model;
 uniform mat4 view;
 uniform mat4 projection; // Jittered when TAA is on (rasterization only)
 
-// Motion-vector inputs (un-jittered). In M1 skinned meshes report rigid (node)
-// velocity only; per-bone deformation velocity is added later.
+// Motion-vector inputs (un-jittered), for the per-pixel screen velocity.
 uniform mat4 uCurrViewProjNoJitter;
 uniform mat4 uPrevViewProj;
 uniform mat4 uPrevModel;

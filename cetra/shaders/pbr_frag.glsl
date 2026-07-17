@@ -379,6 +379,12 @@ float calculateShadow(int shadowIndex, vec3 worldPos, float NdotL, float lightSi
     return 1.0 - (shadow / 16.0);
 }
 
+// Per-pixel screen-space motion vector in UV units: current vs previous
+// un-jittered clip position. Shared by the velocity G-buffer and the debug view.
+vec2 screenVelocity() {
+    return (CurrClip.xy / CurrClip.w - PrevClip.xy / PrevClip.w) * 0.5;
+}
+
 void main() {
     // Early-out for simple render modes that don't need texture sampling
     if (renderMode == 5) {
@@ -392,7 +398,7 @@ void main() {
         // visible — X motion tints red, Y motion tints green). Static geometry
         // resolves to exactly 0.5 gray regardless of scale, so there is no false
         // colour when still.
-        vec2 velUv = (CurrClip.xy / CurrClip.w - PrevClip.xy / PrevClip.w) * 0.5;
+        vec2 velUv = screenVelocity();
         FragColor = vec4(clamp(0.5 + velUv * 400.0, 0.0, 1.0), 0.5, 1.0);
         return;
     }
@@ -800,5 +806,5 @@ void main() {
 
     // Screen-space motion vector for TAA (un-jittered current vs previous),
     // in UV units so the resolve can reproject history by subtracting it.
-    VelocityOut = vec4((CurrClip.xy / CurrClip.w - PrevClip.xy / PrevClip.w) * 0.5, 0.0, 0.0);
+    VelocityOut = vec4(screenVelocity(), 0.0, 0.0);
 }

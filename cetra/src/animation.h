@@ -141,9 +141,10 @@ typedef struct AnimationState {
 
     // Computed bone matrices (global transform * inverse bind pose)
     mat4 bone_matrices[MAX_BONES];
-    // Previous frame's bone matrices, for skinned motion vectors (TAA). Snapshot
-    // at the top of update_animation before this frame's matrices are rebuilt.
-    mat4 prev_bone_matrices[MAX_BONES];
+    // Previous frame's bones for skinned motion vectors (TAA), packed as 3 affine
+    // rows per bone (upload-ready — the implicit 4th row is 0,0,0,1). Filled by
+    // animation_snapshot_prev_pose once per frame, before the pose is rebuilt.
+    float prev_bone_rows[3 * MAX_BONES * 4];
     size_t active_bone_count;
 
     // Scratch space for transform computation
@@ -163,6 +164,11 @@ void pause_animation(AnimationState* state);
 void stop_animation(AnimationState* state);
 void reset_animation(AnimationState* state);
 void update_animation(AnimationState* state, float delta_time);
+// Snapshot the current bone matrices into prev_bone_rows (packed affine rows)
+// for next frame's skinned motion vectors. Call once per frame BEFORE
+// update_animation, unconditionally — so a paused pose reads zero deformation
+// velocity rather than a frozen nonzero one.
+void animation_snapshot_prev_pose(AnimationState* state);
 
 // --- Keyframe Interpolation ---
 

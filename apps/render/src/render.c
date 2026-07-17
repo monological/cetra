@@ -678,14 +678,10 @@ void render_scene_callback(Engine* engine, Scene* current_scene) {
     float delta_time = time_value - last_frame_time;
     last_frame_time = time_value;
 
-    // Snapshot last frame's bone matrices for skinned motion vectors (TAA)
-    // before this frame recomputes them. Done every frame (even when paused) so
-    // a still pose reads zero deformation velocity instead of a frozen nonzero
-    // one that would smear it under TAA.
-    if (anim_state) {
-        memcpy(anim_state->prev_bone_matrices, anim_state->bone_matrices,
-               sizeof(anim_state->bone_matrices));
-    }
+    // Snapshot last frame's pose for skinned motion vectors (TAA) before this
+    // frame recomputes it. Every frame (even paused) so a still pose reads zero
+    // deformation velocity instead of a frozen nonzero one that would smear it.
+    animation_snapshot_prev_pose(anim_state);
 
     // Update animation
     if (anim_state && anim_state->playing) {
@@ -1207,7 +1203,7 @@ int main(int argc, char** argv) {
     // deterministic (jitter + history accumulation would vary run to run).
     if (!args.headless) {
         set_engine_msaa_samples(engine, 1);
-        engine->postfx->taa_enabled = true;
+        set_engine_taa_enabled(engine, true);
     }
 
     run_engine_render_loop(engine, render_scene_callback);
