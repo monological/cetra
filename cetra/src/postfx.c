@@ -12,7 +12,7 @@ static bool create_color_fbo(int width, int height, GLenum internal_format, GLui
     GLenum format = GL_RGB;
     if (internal_format == GL_RGBA16F)
         format = GL_RGBA;
-    else if (internal_format == GL_R8)
+    else if (internal_format == GL_R8 || internal_format == GL_R16F)
         format = GL_RED;
 
     glGenTextures(1, out_texture);
@@ -71,7 +71,7 @@ static bool create_depth_fbo(int width, int height, GLuint* out_fbo, GLuint* out
     return true;
 }
 
-// Deterministic PRNG (xorshift32): the SSAO kernel and noise must be
+// Deterministic PRNG (xorshift32): the AO rotation noise must be
 // bit-identical across runs so headless screenshots stay comparable
 static float prng_float(unsigned int* state) {
     unsigned int x = *state;
@@ -80,25 +80,6 @@ static float prng_float(unsigned int* state) {
     x ^= x << 5;
     *state = x;
     return (float)(x & 0xFFFFFF) / (float)0x1000000; // [0, 1)
-}
-
-// Hemisphere kernel (+Z) with samples packed toward the center so nearby
-// geometry contributes more occlusion than the radius fringe
-static void generate_ssao_kernel(float* kernel, int count, unsigned int* rng) {
-    for (int i = 0; i < count; i++) {
-        vec3 sample = {prng_float(rng) * 2.0f - 1.0f, prng_float(rng) * 2.0f - 1.0f,
-                       prng_float(rng)};
-        glm_vec3_normalize(sample);
-        glm_vec3_scale(sample, prng_float(rng), sample);
-
-        float t = (float)i / (float)count;
-        float scale = 0.1f + 0.9f * t * t;
-        glm_vec3_scale(sample, scale, sample);
-
-        kernel[i * 3] = sample[0];
-        kernel[i * 3 + 1] = sample[1];
-        kernel[i * 3 + 2] = sample[2];
-    }
 }
 
 static GLuint create_ssao_noise_texture(unsigned int* rng) {
@@ -119,8 +100,6 @@ static GLuint create_ssao_noise_texture(unsigned int* rng) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
     return texture;
 }
-
-#define SSAO_KERNEL_SIZE 24
 
 PostFX* create_postfx(int width, int height, int ss_scale) {
     if (width <= 0 || height <= 0) {
@@ -158,9 +137,6 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     fx->ssao_enabled = true;
     fx->ssao_radius = 0.4f;
     fx->ssao_strength = 0.8f;
-    // Small: the model's crevices are centimeter-scale, and a large bias
-    // (the textbook 0.025) erases exactly the shallow occlusion we want
-    fx->ssao_bias = 0.008f;
     fx->normals_enabled = true;
     fx->ssr_enabled = true;
     fx->ssr_strength = 1.0f;
@@ -234,19 +210,36 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
             return NULL;
         }
     }
+    // Half-res temporal-AO accumulation ping-pong. R16F, not R8: an exponential
+    // feedback blend needs more than 256 levels to avoid banding as it converges.
+    for (int i = 0; i < 2; i++) {
+        if (!create_color_fbo(fx->ssao_width, fx->ssao_height, GL_R16F, &fx->ao_history_fbo[i],
+                              &fx->ao_history_texture[i])) {
+            free_postfx(fx);
+            return NULL;
+        }
+    }
     // Half-res reflection buffer; HDR since it carries scene color
     if (!create_color_fbo(fx->ssao_width, fx->ssao_height, GL_RGBA16F, &fx->ssr_fbo,
                           &fx->ssr_texture)) {
         free_postfx(fx);
         return NULL;
     }
-    // Full-res resolve target for the scene pass's velocity attachment, and the
-    // two full-res history buffers the TAA resolve ping-pongs across frames.
-    if (!create_color_fbo(fx->width, fx->height, GL_RGBA16F, &fx->velocity_fbo,
-                          &fx->velocity_texture)) {
+    // Full-res resolve target for the scene pass's aux G-buffer (.xy motion +
+    // .z linear view-Z), and the two full-res history buffers the TAA resolve
+    // ping-pongs across frames.
+    if (!create_color_fbo(fx->width, fx->height, GL_RGBA16F, &fx->aux_fbo,
+                          &fx->aux_texture)) {
         free_postfx(fx);
         return NULL;
     }
+    // Point-sample the aux buffer: view-space Z is NOT screen-linear under
+    // perspective, so LINEAR filtering would bend flat surfaces (banding) and
+    // mangle GTAO's half-res reconstruction on fine geometry (bright speckle).
+    // TAA reads it full-res 1:1, where NEAREST and LINEAR coincide.
+    glBindTexture(GL_TEXTURE_2D, fx->aux_texture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     for (int i = 0; i < 2; i++) {
         if (!create_color_fbo(fx->width, fx->height, GL_RGBA16F, &fx->taa_history_fbo[i],
                               &fx->taa_history_texture[i])) {
@@ -261,18 +254,19 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     fx->bright_program = create_bloom_bright_program();
     fx->blur_program = create_bloom_blur_program();
     fx->tonemap_program = create_tonemap_program();
-    fx->ssao_program = create_ssao_program();
+    fx->gtao_program = create_gtao_program();
     fx->ssao_blur_program = create_ssao_blur_program();
+    fx->ao_accum_program = create_ao_accum_program();
     fx->ssr_program = create_ssr_program();
     fx->ssr_composite_program = create_ssr_composite_program();
     fx->taa_resolve_program = create_taa_resolve_program();
     fx->dof_coc_program = create_dof_coc_program();
     fx->dof_blur_program = create_dof_blur_program();
     fx->dof_composite_program = create_dof_composite_program();
-    if (!fx->bright_program || !fx->blur_program || !fx->tonemap_program || !fx->ssao_program ||
-        !fx->ssao_blur_program || !fx->ssr_program || !fx->ssr_composite_program ||
-        !fx->taa_resolve_program || !fx->dof_coc_program || !fx->dof_blur_program ||
-        !fx->dof_composite_program) {
+    if (!fx->bright_program || !fx->blur_program || !fx->tonemap_program || !fx->gtao_program ||
+        !fx->ssao_blur_program || !fx->ao_accum_program || !fx->ssr_program ||
+        !fx->ssr_composite_program || !fx->taa_resolve_program || !fx->dof_coc_program ||
+        !fx->dof_blur_program || !fx->dof_composite_program) {
         free_postfx(fx);
         return NULL;
     }
@@ -306,23 +300,23 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     uniform_set_int(fx->dof_composite_program->uniforms, "blurTex", 1);
     uniform_set_int(fx->dof_composite_program->uniforms, "depthTex", 2);
 
-    glUseProgram(fx->ssao_program->id);
-    uniform_set_int(fx->ssao_program->uniforms, "depthTex", 0);
-    uniform_set_int(fx->ssao_program->uniforms, "noiseTex", 1);
-    uniform_set_int(fx->ssao_program->uniforms, "normalsTex", 2);
+    glUseProgram(fx->gtao_program->id);
+    uniform_set_int(fx->gtao_program->uniforms, "linDepthTex", 0);
+    uniform_set_int(fx->gtao_program->uniforms, "noiseTex", 1);
+    uniform_set_int(fx->gtao_program->uniforms, "normalsTex", 2);
     const float noise_scale[2] = {(float)fx->ssao_width / 4.0f, (float)fx->ssao_height / 4.0f};
-    uniform_set_vec2(fx->ssao_program->uniforms, "noiseScale", noise_scale);
-    float kernel[SSAO_KERNEL_SIZE * 3];
-    generate_ssao_kernel(kernel, SSAO_KERNEL_SIZE, &rng);
-    GLint samples_loc = uniform_location(fx->ssao_program->uniforms, "samples[0]");
-    if (samples_loc >= 0) {
-        glUniform3fv(samples_loc, SSAO_KERNEL_SIZE, kernel);
-    }
+    uniform_set_vec2(fx->gtao_program->uniforms, "noiseScale", noise_scale);
 
     glUseProgram(fx->ssao_blur_program->id);
     uniform_set_int(fx->ssao_blur_program->uniforms, "aoTex", 0);
     const float ao_texel[2] = {1.0f / (float)fx->ssao_width, 1.0f / (float)fx->ssao_height};
     uniform_set_vec2(fx->ssao_blur_program->uniforms, "texelSize", ao_texel);
+
+    glUseProgram(fx->ao_accum_program->id);
+    uniform_set_int(fx->ao_accum_program->uniforms, "currentTex", 0);
+    uniform_set_int(fx->ao_accum_program->uniforms, "velocityTex", 1);
+    uniform_set_int(fx->ao_accum_program->uniforms, "historyTex", 2);
+    uniform_set_vec2(fx->ao_accum_program->uniforms, "texelSize", ao_texel);
     glUseProgram(0);
 
     create_fullscreen_quad_vao(&fx->quad_vao, &fx->quad_vbo);
@@ -410,11 +404,13 @@ void free_postfx(PostFX* fx) {
     glDeleteTextures(1, &fx->normal_texture);
     glDeleteFramebuffers(2, fx->ssao_fbo);
     glDeleteTextures(2, fx->ssao_texture);
+    glDeleteFramebuffers(2, fx->ao_history_fbo);
+    glDeleteTextures(2, fx->ao_history_texture);
     glDeleteTextures(1, &fx->noise_texture);
     glDeleteFramebuffers(1, &fx->ssr_fbo);
     glDeleteTextures(1, &fx->ssr_texture);
-    glDeleteFramebuffers(1, &fx->velocity_fbo);
-    glDeleteTextures(1, &fx->velocity_texture);
+    glDeleteFramebuffers(1, &fx->aux_fbo);
+    glDeleteTextures(1, &fx->aux_texture);
     glDeleteFramebuffers(2, fx->taa_history_fbo);
     glDeleteTextures(2, fx->taa_history_texture);
     // DoF targets are 0 (no-op delete) if never lazily allocated
@@ -428,8 +424,9 @@ void free_postfx(PostFX* fx) {
     free_program(fx->bright_program);
     free_program(fx->blur_program);
     free_program(fx->tonemap_program);
-    free_program(fx->ssao_program);
+    free_program(fx->gtao_program);
     free_program(fx->ssao_blur_program);
+    free_program(fx->ao_accum_program);
     free_program(fx->ssr_program);
     free_program(fx->ssr_composite_program);
     free_program(fx->taa_resolve_program);
@@ -478,6 +475,14 @@ bool postfx_taa_active(const PostFX* fx) {
     return fx && fx->taa_enabled;
 }
 
+bool postfx_wants_aux_gbuffer(const PostFX* fx) {
+    // Attachment 2 carries motion vectors (.xy, for TAA reprojection) and linear
+    // view-Z (.z, for GTAO position reconstruction). Produce it whenever either
+    // consumer is active -- decoupled from TAA so GTAO gets linear depth even
+    // with TAA off (e.g. headless).
+    return fx && (fx->taa_enabled || fx->ssao_enabled);
+}
+
 bool postfx_ssr_active(const PostFX* fx, bool normals_written) {
     // The single "SSR runs this frame" predicate: the effect is enabled and
     // the normals buffer it marches against was actually produced. Both the
@@ -499,7 +504,7 @@ static void resolve_color_attachment(GLuint msaa_fbo, GLenum attachment, GLuint 
 }
 
 void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hdr,
-                bool normals_written, bool velocity_written, mat4 projection) {
+                bool normals_written, bool aux_written, mat4 projection) {
     if (!fx)
         return;
 
@@ -527,14 +532,25 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         glBlitFramebuffer(0, 0, fx->width, fx->height, 0, 0, fx->out_width, fx->out_height,
                           GL_COLOR_BUFFER_BIT, GL_LINEAR);
     } else {
+        // The color TAA resolves iff it is enabled and its velocity buffer was
+        // produced. The single invariant behind both the TAA pass and the AO
+        // temporal accumulation: AO accumulates exactly when color TAA does.
+        bool taa_resolving = postfx_taa_active(fx) && aux_written;
+
+        // Resolve the aux G-buffer (attachment 2: motion .xy + linear view-Z .z)
+        // once, ahead of both consumers -- TAA reprojection reads the motion,
+        // GTAO reconstructs positions from the linear Z. Hoisted out of the TAA
+        // block so GTAO gets linear depth even when TAA is off.
+        if (aux_written) {
+            resolve_color_attachment(msaa_fbo, GL_COLOR_ATTACHMENT2, fx->aux_fbo, fx->width,
+                                     fx->height);
+        }
+
         // Temporal AA resolve, before every other HDR pass: reproject the
         // accumulated history by the velocity buffer, neighborhood-clamp it
         // against the current frame, blend, and write the result back into
         // hdr_fbo so SSR/DoF/bloom/tonemap consume the anti-aliased color.
-        if (fx->taa_enabled && velocity_written) {
-            resolve_color_attachment(msaa_fbo, GL_COLOR_ATTACHMENT2, fx->velocity_fbo, fx->width,
-                                     fx->height);
-
+        if (taa_resolving) {
             int write = fx->frame_index & 1;
             int read = write ^ 1;
 
@@ -544,7 +560,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, fx->hdr_texture);
             glActiveTexture(GL_TEXTURE1);
-            glBindTexture(GL_TEXTURE_2D, fx->velocity_texture);
+            glBindTexture(GL_TEXTURE_2D, fx->aux_texture);
             glActiveTexture(GL_TEXTURE2);
             glBindTexture(GL_TEXTURE_2D, fx->taa_history_texture[read]);
             UniformManager* tu = fx->taa_resolve_program->uniforms;
@@ -576,11 +592,12 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             check_gl_error("postfx normals resolve");
         }
 
-        // Depth (and its inverse) serves SSAO, SSR, and DoF's circle-of-confusion
+        // Depth (and its inverse) serve SSR and DoF's circle-of-confusion. GTAO
+        // no longer needs it -- it reconstructs from the aux buffer's linear Z.
         bool ssr_active = postfx_ssr_active(fx, have_normals);
         bool dof_active = fx->dof_enabled;
         mat4 inv_projection;
-        if (fx->ssao_enabled || ssr_active || dof_active) {
+        if (ssr_active || dof_active) {
             // Resolve depth alongside color so screen-space passes can
             // reconstruct view-space positions (formats match: both are
             // DEPTH24_STENCIL8)
@@ -593,22 +610,28 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             glm_mat4_inv(projection, inv_projection);
         }
 
+        // Tonemap reads AO from here; the accumulate pass repoints it below.
+        // When temporal accumulation runs (taa_resolving) GTAO jitters its slices
+        // per frame and the accum pass integrates them; otherwise it stays frame-static.
+        GLuint ao_result_tex = fx->ssao_texture[1];
         if (fx->ssao_enabled) {
-            // Raw occlusion at half res
+            // Raw occlusion at half res. GTAO reads linear view-Z from the aux
+            // buffer's .z (unit 0) and reconstructs positions from it -- the
+            // non-linear depth buffer staircased flat surfaces into AO banding.
             glBindFramebuffer(GL_FRAMEBUFFER, fx->ssao_fbo[0]);
             glViewport(0, 0, fx->ssao_width, fx->ssao_height);
-            glUseProgram(fx->ssao_program->id);
+            glUseProgram(fx->gtao_program->id);
             glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, fx->depth_texture);
+            glBindTexture(GL_TEXTURE_2D, fx->aux_texture);
             glActiveTexture(GL_TEXTURE1);
             glBindTexture(GL_TEXTURE_2D, fx->noise_texture);
             glActiveTexture(GL_TEXTURE2);
             glBindTexture(GL_TEXTURE_2D, have_normals ? fx->normal_texture : 0);
-            uniform_set_int(fx->ssao_program->uniforms, "useNormalsTex", have_normals ? 1 : 0);
-            uniform_set_mat4(fx->ssao_program->uniforms, "projection", (float*)projection);
-            uniform_set_mat4(fx->ssao_program->uniforms, "invProjection", (float*)inv_projection);
-            uniform_set_float(fx->ssao_program->uniforms, "radius", fx->ssao_radius);
-            uniform_set_float(fx->ssao_program->uniforms, "bias", fx->ssao_bias);
+            uniform_set_int(fx->gtao_program->uniforms, "useNormalsTex", have_normals ? 1 : 0);
+            uniform_set_mat4(fx->gtao_program->uniforms, "projection", (float*)projection);
+            uniform_set_float(fx->gtao_program->uniforms, "radius", fx->ssao_radius);
+            uniform_set_int(fx->gtao_program->uniforms, "temporal", taa_resolving ? 1 : 0);
+            uniform_set_int(fx->gtao_program->uniforms, "frameIndex", fx->frame_index);
             draw_fullscreen_quad(fx->quad_vao);
 
             // 4x4 box blur cancels the rotation-noise tile
@@ -617,6 +640,29 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, fx->ssao_texture[0]);
             draw_fullscreen_quad(fx->quad_vao);
+
+            // Temporal accumulation: reproject the history by velocity and blend
+            // so the per-frame jittered occlusion integrates into a stable result.
+            if (taa_resolving) {
+                int write = fx->frame_index & 1;
+                int read = write ^ 1;
+                glBindFramebuffer(GL_FRAMEBUFFER, fx->ao_history_fbo[write]);
+                glViewport(0, 0, fx->ssao_width, fx->ssao_height); // don't rely on the blur's viewport
+                glUseProgram(fx->ao_accum_program->id);
+                glActiveTexture(GL_TEXTURE0);
+                glBindTexture(GL_TEXTURE_2D, fx->ssao_texture[1]);
+                glActiveTexture(GL_TEXTURE1);
+                glBindTexture(GL_TEXTURE_2D, fx->aux_texture);
+                glActiveTexture(GL_TEXTURE2);
+                glBindTexture(GL_TEXTURE_2D, fx->ao_history_texture[read]);
+                // reset keys off the global frame index, so toggling AO/TAA on
+                // mid-run won't re-fire it -- the 3x3 neighborhood clamp bounds
+                // the stale history and it self-heals within a frame or two.
+                uniform_set_int(fx->ao_accum_program->uniforms, "reset",
+                                fx->frame_index == 0 ? 1 : 0);
+                draw_fullscreen_quad(fx->quad_vao);
+                ao_result_tex = fx->ao_history_texture[write];
+            }
         }
 
         if (ssr_active) {
@@ -712,7 +758,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_2D, fx->bloom_texture[0]);
         glActiveTexture(GL_TEXTURE2);
-        glBindTexture(GL_TEXTURE_2D, fx->ssao_texture[1]);
+        glBindTexture(GL_TEXTURE_2D, ao_result_tex); // accumulated AO when TAA on, else blurred
         glActiveTexture(GL_TEXTURE3);
         glBindTexture(GL_TEXTURE_2D, have_normals ? fx->normal_texture : 0);
         glActiveTexture(GL_TEXTURE4);

@@ -47,19 +47,23 @@ typedef struct PostFX {
     GLuint normal_texture;
     GLuint ssao_fbo[2]; // Half-res: [0] raw AO, [1] blurred AO
     GLuint ssao_texture[2];
-    GLuint noise_texture; // 4x4 random kernel rotations, tiled
+    GLuint ao_history_fbo[2]; // Half-res temporal-AO accumulation ping-pong (R16F)
+    GLuint ao_history_texture[2];
+    GLuint noise_texture; // 4x4 random slice rotations, tiled
     GLuint ssr_fbo;       // Half-res reflection buffer (march target)
     GLuint ssr_texture;
-    GLuint velocity_fbo; // Full-res resolved screen-space motion vectors (.xy)
-    GLuint velocity_texture;
+    GLuint aux_fbo; // Full-res resolved aux G-buffer: motion vectors .xy (TAA) + linear view-Z .z
+                    // (GTAO)
+    GLuint aux_texture;
     GLuint taa_history_fbo[2]; // Full-res history ping-pong (previous resolved frames)
     GLuint taa_history_texture[2];
 
     ShaderProgram* bright_program;
     ShaderProgram* blur_program;
     ShaderProgram* tonemap_program;
-    ShaderProgram* ssao_program;
+    ShaderProgram* gtao_program;
     ShaderProgram* ssao_blur_program;
+    ShaderProgram* ao_accum_program;
     ShaderProgram* ssr_program;
     ShaderProgram* ssr_composite_program;
     ShaderProgram* taa_resolve_program;
@@ -77,7 +81,6 @@ typedef struct PostFX {
     bool ssao_enabled;
     float ssao_radius; // Occlusion reach in view-space units
     float ssao_strength;
-    float ssao_bias;
     bool normals_enabled; // Master switch for the normals G-buffer (MRT)
     bool ssr_enabled;
     float ssr_strength;        // Composite multiplier on the reflections
@@ -145,7 +148,7 @@ void postfx_apply_film_look(PostFX* fx);
 // frame-start decision, passed through rather than re-derived from fx flags
 // that may have changed mid-frame.
 void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hdr,
-                bool normals_written, bool velocity_written, mat4 projection);
+                bool normals_written, bool aux_written, mat4 projection);
 
 // Producer-side predicate: true when some active effect will consume the
 // normals G-buffer, so the scene pass should write color attachment 1. The
@@ -155,6 +158,11 @@ bool postfx_wants_normals(const PostFX* fx);
 // Producer-side predicate: true when TAA runs this frame (jitter + velocity
 // buffer + resolve all gate on it). Mirrors postfx_wants_normals.
 bool postfx_taa_active(const PostFX* fx);
+
+// Producer-side predicate: true when the scene pass should write the aux
+// G-buffer (attachment 2: motion .xy for TAA + linear view-Z .z for GTAO).
+// Produced whenever TAA needs motion or GTAO needs linear depth.
+bool postfx_wants_aux_gbuffer(const PostFX* fx);
 
 // The single "SSR runs this frame" predicate (enabled + normals produced).
 // The postfx pass and the shadow catcher's floor marker both derive from

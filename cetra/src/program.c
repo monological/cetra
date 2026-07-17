@@ -599,12 +599,12 @@ ShaderProgram* create_tonemap_program() {
     return program;
 }
 
-ShaderProgram* create_ssao_program() {
+ShaderProgram* create_gtao_program() {
     ShaderProgram* program = NULL;
 
-    if ((program = create_program_from_source("ssao", post_vert_shader_str, ssao_frag_shader_str,
+    if ((program = create_program_from_source("gtao", post_vert_shader_str, gtao_frag_shader_str,
                                               NULL)) == NULL) {
-        log_error("Failed to initialize SSAO shader program");
+        log_error("Failed to initialize GTAO shader program");
         return NULL;
     }
 
@@ -653,6 +653,18 @@ ShaderProgram* create_taa_resolve_program() {
     if ((program = create_program_from_source("taa_resolve", post_vert_shader_str,
                                               taa_resolve_frag_shader_str, NULL)) == NULL) {
         log_error("Failed to initialize TAA resolve shader program");
+        return NULL;
+    }
+
+    return program;
+}
+
+ShaderProgram* create_ao_accum_program() {
+    ShaderProgram* program = NULL;
+
+    if ((program = create_program_from_source("ao_accum", post_vert_shader_str,
+                                              ao_accum_frag_shader_str, NULL)) == NULL) {
+        log_error("Failed to initialize AO accumulation shader program");
         return NULL;
     }
 

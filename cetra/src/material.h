@@ -25,9 +25,10 @@
 //   - Shadow map: excluded entirely, neither casts (shadow.c mesh skip) nor
 //     receives (pbr_frag.glsl shadow loop) — map texels are millimeters,
 //     card strands alias into streaks/acne at that scale.
-//   - Normals G-buffer: writes a zero-normal marker (see above); SSAO falls
-//     back to derivative normals on those texels (ssao_frag.glsl).
-//   - Occlusion for these surfaces comes from the AO texture and SSAO.
+//   - Normals G-buffer: writes a zero-normal marker (see above), which GTAO
+//     reads to skip these texels (gtao_frag.glsl) — screen-space AO on the
+//     strand tangle is depth-derivative noise that flickers under TAA.
+//   - Occlusion for these surfaces comes from the baked AO texture only.
 typedef enum AlphaMode {
     ALPHA_OPAQUE = 0, // Single opaque pass
     ALPHA_MASK,       // Opaque pass with alpha-to-coverage (hair/foliage)

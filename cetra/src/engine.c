@@ -83,10 +83,10 @@ Engine* create_engine(const char* window_title, int width, int height) {
     engine->framebuffer = 0;
     engine->multisample_texture = 0;
     engine->normal_multisample_texture = 0;
-    engine->velocity_multisample_texture = 0;
+    engine->aux_multisample_texture = 0;
     engine->depth_renderbuffer = 0;
     engine->normals_this_frame = false;
-    engine->velocity_this_frame = false;
+    engine->aux_this_frame = false;
 
     engine->camera = NULL;
     engine->camera_mode = CAMERA_MODE_ORBIT;
@@ -194,7 +194,7 @@ void free_engine(Engine* engine) {
     glDeleteFramebuffers(1, &engine->framebuffer);
     glDeleteTextures(1, &engine->multisample_texture);
     glDeleteTextures(1, &engine->normal_multisample_texture);
-    glDeleteTextures(1, &engine->velocity_multisample_texture);
+    glDeleteTextures(1, &engine->aux_multisample_texture);
     glDeleteRenderbuffers(1, &engine->depth_renderbuffer);
 
     if (engine->catcher_vao)
@@ -313,11 +313,11 @@ static int _clamp_msaa_samples(int samples) {
 static void _destroy_msaa_attachments(Engine* engine) {
     glDeleteTextures(1, &engine->multisample_texture);
     glDeleteTextures(1, &engine->normal_multisample_texture);
-    glDeleteTextures(1, &engine->velocity_multisample_texture);
+    glDeleteTextures(1, &engine->aux_multisample_texture);
     glDeleteRenderbuffers(1, &engine->depth_renderbuffer);
     engine->multisample_texture = 0;
     engine->normal_multisample_texture = 0;
-    engine->velocity_multisample_texture = 0;
+    engine->aux_multisample_texture = 0;
     engine->depth_renderbuffer = 0;
 }
 
@@ -343,14 +343,15 @@ static int _create_msaa_attachments(Engine* engine, int rw, int rh, int samples)
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D_MULTISAMPLE,
                            engine->normal_multisample_texture, 0);
 
-    // Attachment 2: screen-space motion vectors (.xy) for TAA. Like the normals
-    // target, always allocated but only written in the opaque pass when TAA is
-    // active (see engine_set_scene_draw_buffers). RGBA16F for the resolve blit.
-    glGenTextures(1, &engine->velocity_multisample_texture);
-    glBindTexture(GL_TEXTURE_2D_MULTISAMPLE, engine->velocity_multisample_texture);
+    // Attachment 2: aux G-buffer -- motion vectors (.xy) for TAA + linear view-Z
+    // (.z) for GTAO. Like the normals target, always allocated but only written
+    // in the opaque pass when a consumer is active (see engine_set_scene_draw_buffers
+    // / postfx_wants_aux_gbuffer). RGBA16F for the resolve blit.
+    glGenTextures(1, &engine->aux_multisample_texture);
+    glBindTexture(GL_TEXTURE_2D_MULTISAMPLE, engine->aux_multisample_texture);
     glTexImage2DMultisample(GL_TEXTURE_2D_MULTISAMPLE, samples, GL_RGBA16F, rw, rh, GL_TRUE);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT2, GL_TEXTURE_2D_MULTISAMPLE,
-                           engine->velocity_multisample_texture, 0);
+                           engine->aux_multisample_texture, 0);
 
     glGenRenderbuffers(1, &engine->depth_renderbuffer);
     glBindRenderbuffer(GL_RENDERBUFFER, engine->depth_renderbuffer);
@@ -1252,9 +1253,9 @@ static void _engine_gui_panel(Engine* engine) {
         igSliderFloat("Bloom Threshold", &fx->bloom_threshold, 0.0f, 8.0f, "%.2f", 0);
         _end_effect_group();
 
-        _begin_effect_group("SSAO", &fx->ssao_enabled);
-        igSliderFloat("SSAO Radius", &fx->ssao_radius, 0.05f, 5.0f, "%.2f", 0);
-        igSliderFloat("SSAO Strength", &fx->ssao_strength, 0.0f, 1.0f, "%.2f", 0);
+        _begin_effect_group("Ambient Occlusion (GTAO)", &fx->ssao_enabled);
+        igSliderFloat("AO Radius", &fx->ssao_radius, 0.05f, 5.0f, "%.2f", 0);
+        igSliderFloat("AO Strength", &fx->ssao_strength, 0.0f, 1.0f, "%.2f", 0);
         _end_effect_group();
 
         _begin_effect_group("SSR", &fx->ssr_enabled);
@@ -1400,7 +1401,7 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode, bool draw_gui) 
             glm_vec3_distance(engine->camera->position, engine->camera->look_at);
     }
     postfx_run(engine->postfx, engine->framebuffer, 0, frame_mode == RENDER_MODE_PBR,
-               engine->normals_this_frame, engine->velocity_this_frame, engine->projection_matrix);
+               engine->normals_this_frame, engine->aux_this_frame, engine->projection_matrix);
 
     if (draw_gui) {
         render_engine_gui(engine);
@@ -1412,12 +1413,13 @@ void engine_set_scene_draw_buffers(const Engine* engine, bool with_gbuffer) {
         return;
 
     // The opaque pass may publish the normals G-buffer (attachment 1) and/or the
-    // velocity buffer (attachment 2) alongside color; every other pass is color
-    // only. Build the draw-buffer list left to right: GL_NONE fills a skipped
-    // slot so the fragment-output-location -> attachment mapping is preserved,
-    // and count extends to the highest enabled attachment. Blending is enabled
-    // globally, so keep each aux target opaque via indexed disable (re-issued at
-    // every pass boundary because any blanket glEnable(GL_BLEND) wipes it).
+    // aux G-buffer (attachment 2: motion .xy + linear view-Z .z) alongside color;
+    // every other pass is color only. Build the draw-buffer list left to right:
+    // GL_NONE fills a skipped slot so the fragment-output-location -> attachment
+    // mapping is preserved, and count extends to the highest enabled attachment.
+    // Blending is enabled globally, so keep each aux target opaque via indexed
+    // disable (re-issued at every pass boundary because any blanket
+    // glEnable(GL_BLEND) wipes it).
     GLenum bufs[3] = {GL_COLOR_ATTACHMENT0, GL_NONE, GL_NONE};
     int count = 1;
     if (with_gbuffer && engine->normals_this_frame) {
@@ -1425,7 +1427,7 @@ void engine_set_scene_draw_buffers(const Engine* engine, bool with_gbuffer) {
         glDisablei(GL_BLEND, 1);
         count = 2;
     }
-    if (with_gbuffer && engine->velocity_this_frame) {
+    if (with_gbuffer && engine->aux_this_frame) {
         bufs[2] = GL_COLOR_ATTACHMENT2;
         glDisablei(GL_BLEND, 2);
         count = 3;
@@ -1501,8 +1503,8 @@ void run_engine_render_loop(Engine* engine, RenderSceneFunc render_func) {
         glViewport(0, 0, rw, rh);
         engine->normals_this_frame =
             frame_mode == RENDER_MODE_PBR && postfx_wants_normals(engine->postfx);
-        engine->velocity_this_frame =
-            frame_mode == RENDER_MODE_PBR && postfx_taa_active(engine->postfx);
+        engine->aux_this_frame =
+            frame_mode == RENDER_MODE_PBR && postfx_wants_aux_gbuffer(engine->postfx);
         engine_set_scene_draw_buffers(engine, true);
         glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
@@ -1510,9 +1512,11 @@ void run_engine_render_loop(Engine* engine, RenderSceneFunc render_func) {
             const GLfloat zero_normal[4] = {0.0f, 0.0f, 0.0f, 0.0f};
             glClearBufferfv(GL_COLOR, 1, zero_normal);
         }
-        if (engine->velocity_this_frame) {
-            const GLfloat zero_velocity[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-            glClearBufferfv(GL_COLOR, 2, zero_velocity);
+        if (engine->aux_this_frame) {
+            // .xy motion = 0 (static), .z linear-Z = 0 marks sky/background so
+            // GTAO can early-out on uncovered texels.
+            const GLfloat zero_aux[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+            glClearBufferfv(GL_COLOR, 2, zero_aux);
         }
 
         Scene* current_scene = get_current_scene(engine);

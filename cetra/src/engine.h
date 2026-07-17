@@ -53,11 +53,12 @@ typedef struct Engine {
     GLuint framebuffer;                // Framebuffer object
     GLuint multisample_texture;        // Multisample HDR color (attachment 0)
     GLuint normal_multisample_texture; // Multisample view-space normals + roughness (attachment 1)
-    GLuint
-        velocity_multisample_texture; // Multisample screen-space motion vectors .xy (attachment 2)
-    GLuint depth_renderbuffer;        // Depth renderbuffer
-    bool normals_this_frame;          // Attachment 1 written this frame (PBR + consumer active)
-    bool velocity_this_frame;         // Attachment 2 written this frame (TAA active + PBR)
+    GLuint aux_multisample_texture;    // Multisample aux G-buffer: motion .xy + linear view-Z .z
+                                       // (attachment 2)
+    GLuint depth_renderbuffer;         // Depth renderbuffer
+    bool normals_this_frame;           // Attachment 1 written this frame (PBR + consumer active)
+    bool aux_this_frame; // Attachment 2 written this frame (TAA needs motion, or GTAO needs
+                         // linear-Z)
 
     Camera* camera;         // main camera
     CameraMode camera_mode; // Current camera mode
@@ -82,7 +83,7 @@ typedef struct Engine {
     mat4 projection_matrix; // Un-jittered truth: frustum culling, postfx, motion vectors
     mat4 view_proj;         // Un-jittered projection*view for the current frame, computed once in
                             // render_current_scene (frustum + motion vectors); the scene draws with
-                    // a locally sub-pixel-jittered projection derived from projection_matrix
+    // a locally sub-pixel-jittered projection derived from projection_matrix
     mat4 prev_view_proj; // Previous frame's view_proj, for motion vectors
 
     bool show_gui;
