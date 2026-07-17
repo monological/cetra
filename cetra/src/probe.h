@@ -15,9 +15,6 @@
 #define PROBE_PREFILTER_SIZE       128
 #define PROBE_PREFILTER_MIP_LEVELS 6
 
-// 0-12 material/shadow, 14-16 IBL, 17 skybox
-#define PROBE_TEXTURE_UNIT 18
-
 typedef struct ReflectionProbe {
     vec3 position; // capture origin (world)
 
@@ -52,6 +49,9 @@ void free_reflection_probe(ReflectionProbe* probe);
 // planes (scene-scaled, chosen by the app). Requires precomputed IBL.
 int reflection_probe_capture(ReflectionProbe* probe, struct Engine* engine, struct Scene* scene,
                              float near_clip, float far_clip);
+
+// Bind the prefiltered probe + uniforms on PROBE_TEXTURE_UNIT for a PBR draw
+void bind_reflection_probe(const ReflectionProbe* probe, ShaderProgram* program);
 
 // Draw the raw capture as the background, in place of the skybox
 void render_probe_debug_background(const ReflectionProbe* probe, IBLResources* ibl, mat4 view,

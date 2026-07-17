@@ -358,6 +358,15 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
                 uniform_set_int(u, "brdfLUT", 16);
                 uniform_set_int(u, "iblEnabled", 0);
             }
+
+            // Local reflection probe (parallax-corrected specular), rebinding
+            // the IBL prefilter unit to the probe capture. Gated on captured,
+            // so the capture pass itself never consumes the probe.
+            if (scene && scene->probe && scene->probe->captured && scene->probe->enabled) {
+                bind_reflection_probe(scene->probe, program);
+            } else {
+                uniform_set_int(u, "probeEnabled", 0);
+            }
         }
 
         // Per-mesh uniforms (model matrix is always per-mesh)

@@ -166,6 +166,31 @@ int reflection_probe_capture(ReflectionProbe* probe, struct Engine* engine, Scen
     return 0;
 }
 
+// Bind the probe for PBR consumption. The fragment stage is already at the
+// driver's sampler limit, so the probe reuses the prefilteredMap slot: its
+// prefiltered cubemap replaces the global environment on the IBL prefilter
+// unit (call after bind_ibl_textures), and the shader switches the lookup
+// with probeEnabled.
+void bind_reflection_probe(const ReflectionProbe* probe, ShaderProgram* program) {
+    if (!probe || !probe->captured || !program || !program->uniforms)
+        return;
+
+    UniformManager* u = program->uniforms;
+
+    glActiveTexture(GL_TEXTURE0 + IBL_PREFILTER_TEXTURE_UNIT);
+    glBindTexture(GL_TEXTURE_CUBE_MAP, probe->prefiltered);
+
+    uniform_set_int(u, "probeEnabled", 1);
+    uniform_set_vec3(u, "probePos", probe->position);
+    uniform_set_vec3(u, "probeBoxMin", probe->box_min);
+    uniform_set_vec3(u, "probeBoxMax", probe->box_max);
+    uniform_set_float(u, "probeIntensity", probe->intensity);
+    uniform_set_float(u, "probeMaxLOD", (float)(PROBE_PREFILTER_MIP_LEVELS - 1));
+    uniform_set_float(u, "probeBoxFade", probe->box_fade);
+
+    glActiveTexture(GL_TEXTURE0);
+}
+
 // Draw the raw probe capture as the background (in place of the skybox) so
 // the capture can be inspected in situ
 void render_probe_debug_background(const ReflectionProbe* probe, IBLResources* ibl, mat4 view,

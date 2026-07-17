@@ -139,6 +139,19 @@ uniform int iblEnabled;
 uniform float iblIntensity;
 uniform float maxReflectionLOD;
 
+// Local reflection probe: the scene captured into a prefiltered cubemap,
+// parallax-corrected against a proxy AABB (Lagarde 2012). When enabled, the
+// probe is bound INTO the prefilteredMap slot (the fragment stage is already
+// at the driver's sampler limit, so no extra samplerCube) and replaces the
+// infinite-distance global environment for specular.
+uniform int probeEnabled;
+uniform vec3 probePos;
+uniform vec3 probeBoxMin;
+uniform vec3 probeBoxMax;
+uniform float probeIntensity;
+uniform float probeMaxLOD;
+uniform float probeBoxFade;
+
 const float PI = 3.14159265359;
 
 // UV transform for KHR_texture_transform
@@ -766,7 +779,29 @@ void main() {
 
         // Specular IBL: sample prefiltered env map with reflection vector
         vec3 R = reflect(-V, N);
-        vec3 prefilteredColor = textureLod(prefilteredMap, R, roughnessMap * maxReflectionLOD).rgb;
+        vec3 prefilteredColor;
+        if (probeEnabled > 0) {
+            // Parallax correction: intersect the world reflection ray with
+            // the probe's proxy AABB and sample toward the intersection. The
+            // correction degenerates at the proxy walls (it collapses toward
+            // the surface point), so feather it back to the plain reflection
+            // direction near the box faces; a ray starting outside the box
+            // (t <= 0) keeps the uncorrected direction too.
+            vec3 invR = 1.0 / R;
+            vec3 tMax3 = max((probeBoxMax - WorldPos) * invR, (probeBoxMin - WorldPos) * invR);
+            float t = min(min(tMax3.x, tMax3.y), tMax3.z);
+            vec3 corrected = (t > 0.0) ? normalize((WorldPos + R * t) - probePos) : R;
+            vec3 boxCenter = 0.5 * (probeBoxMin + probeBoxMax);
+            vec3 halfExt = max(0.5 * (probeBoxMax - probeBoxMin), vec3(1e-4));
+            vec3 dd = abs(WorldPos - boxCenter) / halfExt;
+            float inside = 1.0 - smoothstep(1.0 - probeBoxFade, 1.0,
+                                            max(dd.x, max(dd.y, dd.z)));
+            vec3 dir = normalize(mix(R, corrected, inside));
+            prefilteredColor = textureLod(prefilteredMap, dir, roughnessMap * probeMaxLOD).rgb
+                               * probeIntensity;
+        } else {
+            prefilteredColor = textureLod(prefilteredMap, R, roughnessMap * maxReflectionLOD).rgb;
+        }
         vec2 brdf = texture(brdfLUT, vec2(NdotV, roughnessMap)).rg;
         vec3 specular = prefilteredColor * (F * brdf.x + brdf.y);
 
