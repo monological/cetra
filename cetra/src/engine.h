@@ -81,6 +81,8 @@ typedef struct Engine {
     float specular_aa_strength; // Geometric specular AA (0 disables)
     bool energy_comp_enabled;   // Multi-scatter specular energy compensation;
                                 // inert without an IBL environment (needs the BRDF LUT)
+    bool refraction_enabled;    // Screen-space refraction for transmissive materials;
+                                // off = transmissive surfaces fall back to alpha blending
 
     mat4 model_matrix;
     mat4 view_matrix;

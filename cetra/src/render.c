@@ -202,10 +202,10 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
         glBindTexture(GL_TEXTURE_2D, material->emissive_tex->id);
     }
 
-    if (material->height_tex) {
-        glActiveTexture(GL_TEXTURE6);
-        glBindTexture(GL_TEXTURE_2D, material->height_tex->id);
-    }
+    // height_tex is deliberately NOT bound: pbr_frag declares heightTex but
+    // never samples it (POM is unimplemented), and unit 6 now carries the
+    // refraction pass's scene-color texture -- binding a height map here
+    // would stomp it for every later draw in the pass.
 
     if (material->opacity_tex) {
         glActiveTexture(GL_TEXTURE7);
