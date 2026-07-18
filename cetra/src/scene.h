@@ -109,7 +109,9 @@ typedef struct Scene {
     SceneNode** traversal_stack;
     mat4* traversal_transforms; // Used by apply_transform_to_nodes
     size_t traversal_stack_capacity;
-    size_t transparent_mesh_count; // Blend meshes seen in the last opaque pass
+    size_t transparent_mesh_count;  // Late-pass meshes seen in this frame's opaque pass
+    size_t transmissive_mesh_count; // Subset with transmission > 0; gates the mid-frame
+                                    // opaque-color resolve refraction samples from
 
     // Shadow mapping
     ShadowSystem* shadow_system;

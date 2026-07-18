@@ -29,6 +29,8 @@ Material* create_material() {
     material->normalScale = 1.0f;
     material->aoStrength = 1.0f;
     material->ior = 1.5f;
+    material->transmission = 0.0f;
+    material->thickness = 0.0f;
     material->filmThickness = 0.0f;
     glm_vec2_zero(material->uvOffset);
     glm_vec2_one(material->uvScale);

@@ -212,6 +212,31 @@ static void extract_material_properties(struct aiMaterial* ai_mat, Material* mat
         }
     }
 
+    // KHR_materials_transmission: see-through glass. IOR and volume
+    // thickness are read ONLY for transmissive materials: only glTF
+    // produces transmission, so this scopes them to glTF for free -- FBX
+    // and OBJ exporters commonly bake a meaningless refracti (Ni 1.0 is a
+    // stock default) that would silently kill dielectric specular if
+    // imported unconditionally.
+    ai_real transmission;
+    if (AI_SUCCESS ==
+        aiGetMaterialFloat(ai_mat, AI_MATKEY_TRANSMISSION_FACTOR, &transmission)) {
+        material->transmission = transmission;
+        if (transmission > 0.0f) {
+            ai_real ior;
+            if (AI_SUCCESS == aiGetMaterialFloat(ai_mat, AI_MATKEY_REFRACTI, &ior)) {
+                material->ior = ior;
+            }
+            ai_real thickness;
+            if (AI_SUCCESS ==
+                aiGetMaterialFloat(ai_mat, AI_MATKEY_VOLUME_THICKNESS_FACTOR, &thickness)) {
+                material->thickness = thickness;
+            }
+            log_info("Material is transmissive: transmission=%.2f ior=%.2f thickness=%.2f",
+                     material->transmission, material->ior, material->thickness);
+        }
+    }
+
     // Extract UV transform (KHR_texture_transform) from base color texture
     struct aiUVTransform uvTransform;
     if (AI_SUCCESS == aiGetMaterialFloatArray(ai_mat, AI_MATKEY_UVTRANSFORM(aiTextureType_DIFFUSE, 0),

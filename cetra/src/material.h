@@ -48,6 +48,10 @@ typedef struct Material {
     float normalScale;   // Normal map intensity scale (1.0 = full strength)
     float aoStrength;    // Occlusion texture strength (1.0 = full effect)
     float ior;           // Index of refraction (1.5 for plastic/glass, 1.33 for water)
+    float transmission;  // KHR_materials_transmission factor (0 = opaque; > 0 joins the
+                         // late pass and samples the resolved opaque scene color)
+    float thickness;     // KHR_materials_volume thickness in world units (0 = thin: no
+                         // refraction bend, only tint/blur)
     float filmThickness; // Thin-film thickness in nanometers (0 = disabled, 200-600nm typical)
     vec2 uvOffset;       // Texture coordinate offset (KHR_texture_transform)
     vec2 uvScale;        // Texture coordinate scale (KHR_texture_transform)

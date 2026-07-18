@@ -152,6 +152,8 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
     uniform_set_float(u, "normalScale", material->normalScale);
     uniform_set_float(u, "aoStrength", material->aoStrength);
     uniform_set_float(u, "ior", material->ior);
+    uniform_set_float(u, "transmission", material->transmission);
+    uniform_set_float(u, "transmissionThickness", material->thickness);
     uniform_set_float(u, "filmThickness", material->filmThickness);
     uniform_set_vec2(u, "uvOffset", (const float*)&material->uvOffset);
     uniform_set_vec2(u, "uvScale", (const float*)&material->uvScale);
@@ -279,13 +281,19 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
         if (!mesh || !mesh->material)
             continue;
 
-        // Blend materials render in the transparent pass after the skybox so
-        // they composite against the real background; everything else
-        // (including alpha-masked hair) renders in the opaque pass
-        bool is_transparent = mesh->material->alpha_mode == ALPHA_BLEND;
-        if (is_transparent != alpha_pass) {
-            if (is_transparent)
+        // Blend and transmissive materials render in the late pass after the
+        // skybox so they composite against the real background; everything
+        // else (including alpha-masked hair) renders in the opaque pass.
+        // Transmissive meshes are counted separately: their count gates the
+        // mid-frame opaque-color resolve refraction samples from.
+        bool is_transmissive = mesh->material->transmission > 0.0f;
+        bool is_late = mesh->material->alpha_mode == ALPHA_BLEND || is_transmissive;
+        if (is_late != alpha_pass) {
+            if (is_late) {
                 scene->transparent_mesh_count++;
+                if (is_transmissive)
+                    scene->transmissive_mesh_count++;
+            }
             continue;
         }
 
@@ -602,6 +610,7 @@ void render_current_scene(Engine* engine, float time_value) {
     // (skybox, translucents, catcher, overlays) writes color only.
     engine_set_scene_draw_buffers(engine, true);
     scene->transparent_mesh_count = 0;
+    scene->transmissive_mesh_count = 0;
     _render_scene_iterative(engine, scene, root_node, camera, *view, draw_projection, time_value,
                             render_mode, &current_program, &current_material, &frustum, false);
     engine_set_scene_draw_buffers(engine, false);
