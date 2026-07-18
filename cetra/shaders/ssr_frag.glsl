@@ -177,10 +177,12 @@ void main()
             if (abs(dseg.y) > 1e-8)
                 tExit = min(tExit, ((dseg.y >= 0.0 ? cellUV1.y : cellUV0.y) - seg0.y) / dseg.y);
             tExit = max(tExit, t);
-            // Quarter-texel (at this level) nudge past the boundary so the
-            // next iteration lands in the next cell
-            float tEps = 0.25 / (float(max(levelSize.x, levelSize.y)) *
-                                 max(length(dseg.xy), 1e-6));
+            // Quarter-texel nudge past the boundary so the next iteration
+            // lands in the next cell — at the FINEST level's texel size
+            // regardless of the current level: a coarse-level nudge
+            // overshoots whole fine cells after every big skip, snapping
+            // hit boundaries to the coarse grid (stair-stepped reflections)
+            float tEps = 0.25 / (float(max(hizWidth, hizHeight)) * max(length(dseg.xy), 1e-6));
 
             float zExit = seg0.z + dseg.z * min(tExit, 1.0);
             if (zExit >= cellMin && cellMin < 1.0) {
@@ -197,21 +199,41 @@ void main()
                 // different sub-texel. The bracket [t, tExit] spans only a
                 // couple of full-res texels here, so a short dense scan
                 // resolves the true crossing per pixel.
+                float sFront = t;
                 for (int r = 0; r < 8; r++) {
                     float s = mix(t, tExit, (float(r) + 0.5) / 8.0);
                     vec3 q = seg0 + dseg * s;
                     float dq = texture(depthTex, q.xy).r;
                     if (dq < 1.0 && q.z > dq) {
-                        // Behind a surface; accept if within its thickness
-                        float sceneZ = viewZFromNdcZ(dq * 2.0 - 1.0);
-                        float rayZ = viewZFromNdcZ(q.z * 2.0 - 1.0);
+                        // Behind a surface: bisect between the last in-front
+                        // sample and this one so the hit position resolves
+                        // below tap granularity, then accept within thickness
+                        float lo = sFront;
+                        float hi = s;
+                        float dHit = dq;
+                        vec2 uvHit = q.xy;
+                        for (int b = 0; b < 3; b++) {
+                            float mid = 0.5 * (lo + hi);
+                            vec3 m = seg0 + dseg * mid;
+                            float dm = texture(depthTex, m.xy).r;
+                            if (dm < 1.0 && m.z > dm) {
+                                hi = mid;
+                                dHit = dm;
+                                uvHit = m.xy;
+                            } else {
+                                lo = mid;
+                            }
+                        }
+                        float sceneZ = viewZFromNdcZ(dHit * 2.0 - 1.0);
+                        float rayZ = viewZFromNdcZ((seg0.z + dseg.z * hi) * 2.0 - 1.0);
                         if (sceneZ - rayZ < thickness) {
                             hit = true;
-                            sHit = s;
-                            hitUV = q.xy;
+                            sHit = hi;
+                            hitUV = uvHit;
                         }
                         break; // too far behind: tunneling, not a hit
                     }
+                    sFront = s;
                 }
                 if (hit)
                     break;
