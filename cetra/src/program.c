@@ -650,16 +650,8 @@ ShaderProgram* create_ssr_hiz_program() {
     return program;
 }
 
-ShaderProgram* create_ssr_composite_program() {
-    ShaderProgram* program = NULL;
-
-    if ((program = create_program_from_source("ssr_composite", post_vert_shader_str,
-                                              ssr_composite_frag_shader_str, NULL)) == NULL) {
-        log_error("Failed to initialize SSR composite shader program");
-        return NULL;
-    }
-
-    return program;
+ShaderProgram* create_upsample_tent_program() {
+    return create_post_program("upsample_tent", upsample_tent_frag_shader_str);
 }
 
 ShaderProgram* create_taa_resolve_program() {
@@ -674,16 +666,8 @@ ShaderProgram* create_taa_resolve_program() {
     return program;
 }
 
-ShaderProgram* create_ao_accum_program() {
-    ShaderProgram* program = NULL;
-
-    if ((program = create_program_from_source("ao_accum", post_vert_shader_str,
-                                              ao_accum_frag_shader_str, NULL)) == NULL) {
-        log_error("Failed to initialize AO accumulation shader program");
-        return NULL;
-    }
-
-    return program;
+ShaderProgram* create_temporal_accum_program() {
+    return create_post_program("temporal_accum", temporal_accum_frag_shader_str);
 }
 
 ShaderProgram* create_ssgi_composite_program() {
@@ -711,13 +695,6 @@ ShaderProgram* create_fog_program() {
     return create_post_program("fog", fog_frag_shader_str);
 }
 
-ShaderProgram* create_fog_composite_program() {
-    return create_post_program("fog_composite", fog_composite_frag_shader_str);
-}
-
-ShaderProgram* create_fog_accum_program() {
-    return create_post_program("fog_accum", fog_accum_frag_shader_str);
-}
 
 ShaderProgram* create_lum_measure_program() {
     return create_post_program("lum_measure", lum_measure_frag_shader_str);

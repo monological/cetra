@@ -346,7 +346,7 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     fx->tonemap_program = create_tonemap_program();
     fx->gtao_program = create_gtao_program();
     fx->ssao_blur_program = create_ssao_blur_program();
-    fx->ao_accum_program = create_ao_accum_program();
+    fx->temporal_accum_program = create_temporal_accum_program();
     fx->ssgi_composite_program = create_ssgi_composite_program();
     fx->ssgi_accum_program = create_ssgi_accum_program();
     fx->ssgi_atrous_program = create_ssgi_atrous_program();
@@ -354,20 +354,18 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     fx->lum_adapt_program = create_lum_adapt_program();
     fx->ssr_program = create_ssr_program();
     fx->ssr_hiz_program = create_ssr_hiz_program();
-    fx->ssr_composite_program = create_ssr_composite_program();
+    fx->upsample_tent_program = create_upsample_tent_program();
     fx->fog_program = create_fog_program();
-    fx->fog_composite_program = create_fog_composite_program();
-    fx->fog_accum_program = create_fog_accum_program();
     fx->taa_resolve_program = create_taa_resolve_program();
     fx->dof_coc_program = create_dof_coc_program();
     fx->dof_blur_program = create_dof_blur_program();
     fx->dof_composite_program = create_dof_composite_program();
     if (!fx->bright_program || !fx->blur_program || !fx->tonemap_program || !fx->gtao_program ||
-        !fx->ssao_blur_program || !fx->ao_accum_program || !fx->ssgi_composite_program ||
+        !fx->ssao_blur_program || !fx->temporal_accum_program || !fx->ssgi_composite_program ||
         !fx->ssgi_accum_program || !fx->ssgi_atrous_program ||
         !fx->lum_measure_program || !fx->lum_adapt_program || !fx->ssr_program ||
-        !fx->ssr_composite_program || !fx->fog_program || !fx->fog_composite_program ||
-        !fx->fog_accum_program || !fx->taa_resolve_program || !fx->dof_coc_program ||
+        !fx->upsample_tent_program || !fx->fog_program ||
+        !fx->taa_resolve_program || !fx->dof_coc_program ||
         !fx->dof_blur_program || !fx->dof_composite_program) {
         free_postfx(fx);
         return NULL;
@@ -404,12 +402,8 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     glUseProgram(fx->ssr_hiz_program->id);
     uniform_set_int(fx->ssr_hiz_program->uniforms, "srcTex", 0);
     glUseProgram(fx->fog_program->id);
-    uniform_set_int(fx->fog_program->uniforms, "auxTex", 0);
+    uniform_set_int(fx->fog_program->uniforms, "linDepthTex", 0);
     uniform_set_int(fx->fog_program->uniforms, "shadowMaps", 1);
-    glUseProgram(fx->fog_composite_program->id);
-    uniform_set_int(fx->fog_composite_program->uniforms, "fogTex", 0);
-    glUseProgram(fx->ssr_composite_program->id);
-    uniform_set_int(fx->ssr_composite_program->uniforms, "ssrTex", 0);
 
     glUseProgram(fx->dof_coc_program->id);
     uniform_set_int(fx->dof_coc_program->uniforms, "sceneTex", 0);
@@ -434,11 +428,17 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     const float ao_texel[2] = {1.0f / (float)fx->ssao_width, 1.0f / (float)fx->ssao_height};
     uniform_set_vec2(fx->ssao_blur_program->uniforms, "texelSize", ao_texel);
 
-    glUseProgram(fx->ao_accum_program->id);
-    uniform_set_int(fx->ao_accum_program->uniforms, "currentTex", 0);
-    uniform_set_int(fx->ao_accum_program->uniforms, "velocityTex", 1);
-    uniform_set_int(fx->ao_accum_program->uniforms, "historyTex", 2);
-    uniform_set_vec2(fx->ao_accum_program->uniforms, "texelSize", ao_texel);
+    // Half-res effect resolution never changes after create, so the shared
+    // tent composite and accumulator take their texel size once here
+    glUseProgram(fx->upsample_tent_program->id);
+    uniform_set_int(fx->upsample_tent_program->uniforms, "srcTex", 0);
+    uniform_set_vec2(fx->upsample_tent_program->uniforms, "texelSize", ao_texel);
+
+    glUseProgram(fx->temporal_accum_program->id);
+    uniform_set_int(fx->temporal_accum_program->uniforms, "currentTex", 0);
+    uniform_set_int(fx->temporal_accum_program->uniforms, "velocityTex", 1);
+    uniform_set_int(fx->temporal_accum_program->uniforms, "historyTex", 2);
+    uniform_set_vec2(fx->temporal_accum_program->uniforms, "texelSize", ao_texel);
 
     glUseProgram(fx->ssgi_composite_program->id);
     uniform_set_int(fx->ssgi_composite_program->uniforms, "giTex", 0);
@@ -449,12 +449,6 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     uniform_set_int(fx->ssgi_accum_program->uniforms, "velocityTex", 1);
     uniform_set_int(fx->ssgi_accum_program->uniforms, "historyTex", 2);
     uniform_set_vec2(fx->ssgi_accum_program->uniforms, "texelSize", ao_texel);
-
-    glUseProgram(fx->fog_accum_program->id);
-    uniform_set_int(fx->fog_accum_program->uniforms, "currentTex", 0);
-    uniform_set_int(fx->fog_accum_program->uniforms, "velocityTex", 1);
-    uniform_set_int(fx->fog_accum_program->uniforms, "historyTex", 2);
-    uniform_set_vec2(fx->fog_accum_program->uniforms, "texelSize", ao_texel);
 
     glUseProgram(fx->ssgi_atrous_program->id);
     uniform_set_int(fx->ssgi_atrous_program->uniforms, "giTex", 0);
@@ -626,7 +620,7 @@ void free_postfx(PostFX* fx) {
     free_program(fx->tonemap_program);
     free_program(fx->gtao_program);
     free_program(fx->ssao_blur_program);
-    free_program(fx->ao_accum_program);
+    free_program(fx->temporal_accum_program);
     free_program(fx->ssgi_composite_program);
     free_program(fx->ssgi_accum_program);
     free_program(fx->ssgi_atrous_program);
@@ -634,10 +628,8 @@ void free_postfx(PostFX* fx) {
     free_program(fx->lum_adapt_program);
     free_program(fx->ssr_program);
     free_program(fx->ssr_hiz_program);
-    free_program(fx->ssr_composite_program);
+    free_program(fx->upsample_tent_program);
     free_program(fx->fog_program);
-    free_program(fx->fog_composite_program);
-    free_program(fx->fog_accum_program);
     free_program(fx->taa_resolve_program);
     free_program(fx->dof_coc_program);
     free_program(fx->dof_blur_program);
@@ -743,6 +735,84 @@ static GLuint run_temporal_accum(PostFX* fx, ShaderProgram* prog, PingPong* pp, 
     draw_fullscreen_quad(fx->quad_vao);
     pp->valid = true;
     return pp->tex[write];
+}
+
+// Volumetric fog: march the half-res buffer, then fold it into the HDR
+// scene before DoF/bloom/tonemap so shafts defocus, bloom, and meter like
+// direct light. Owns the fog history lifecycle -- the history is only
+// fresh when the accumulator ran, so every other path invalidates it.
+// Returns the half-res fog texture for the debug view, 0 when fog is off.
+static GLuint postfx_run_fog(PostFX* fx, bool aux_written, bool taa_resolving, mat4 projection,
+                             mat4 view) {
+    if (!fx->fog_enabled || !aux_written || !postfx_ensure_fog_targets(fx)) {
+        fx->fog_history.valid = false;
+        return 0;
+    }
+
+    glBindFramebuffer(GL_FRAMEBUFFER, fx->fog_fbo);
+    glViewport(0, 0, fx->ssao_width, fx->ssao_height);
+    glUseProgram(fx->fog_program->id);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, fx->aux_texture);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, fx->fog_shadow_map_array);
+    glActiveTexture(GL_TEXTURE0);
+    mat4 inv_view;
+    glm_mat4_inv(view, inv_view);
+    UniformManager* fu = fx->fog_program->uniforms;
+    uniform_set_mat4(fu, "invView", (float*)inv_view);
+    uniform_set_mat4(fu, "projection", (float*)projection);
+    uniform_set_vec3(fu, "ambientColor", fx->fog_ambient);
+    uniform_set_float(fu, "density", fx->fog_density);
+    uniform_set_float(fu, "heightFalloff", fx->fog_height_falloff);
+    uniform_set_float(fu, "floorY", fx->fog_floor_y);
+    uniform_set_float(fu, "fogFar", fx->fog_far);
+    uniform_set_float(fu, "anisotropy", fx->fog_anisotropy);
+    uniform_set_float(fu, "sunBoost", fx->fog_sun_boost);
+    uniform_set_float(fu, "shadowBias", fx->fog_shadow_bias);
+    uniform_set_int(fu, "steps", fx->fog_steps);
+    // Count 0 (shadows off or absent) degrades the march to plain ambient
+    // haze; the publish guarantees the map array is valid whenever the
+    // count is nonzero.
+    uniform_set_int(fu, "numLights", fx->fog_light_count);
+    for (int i = 0; i < fx->fog_light_count; i++) {
+        char name[48];
+        snprintf(name, sizeof(name), "lightSpaceMatrix[%d]", i);
+        uniform_set_mat4(fu, name, (const float*)fx->fog_light_space[i]);
+        snprintf(name, sizeof(name), "lightColor[%d]", i);
+        uniform_set_vec3(fu, name, fx->fog_light_color[i]);
+        snprintf(name, sizeof(name), "lightDir[%d]", i);
+        uniform_set_vec3(fu, name, fx->fog_light_dir[i]);
+    }
+    // Under TAA the march's dither rotates per frame and the accumulator
+    // integrates it; headless/no-TAA keeps the static dither so equal runs
+    // stay byte-identical.
+    uniform_set_int(fu, "temporal", taa_resolving ? 1 : 0);
+    uniform_set_int(fu, "frameIndex", fx->frame_index);
+    draw_fullscreen_quad(fx->quad_vao);
+
+    GLuint result = fx->fog_texture;
+    if (taa_resolving) {
+        result = run_temporal_accum(fx, fx->temporal_accum_program, &fx->fog_history,
+                                    fx->ssao_width, fx->ssao_height, fx->fog_texture);
+    } else {
+        fx->fog_history.valid = false;
+    }
+
+    // Fold into the scene: out = inscatter + scene * transmittance.
+    // Same enable/draw/restore idiom as the SSR composite.
+    glBindFramebuffer(GL_FRAMEBUFFER, fx->hdr_fbo);
+    glViewport(0, 0, fx->width, fx->height);
+    glUseProgram(fx->upsample_tent_program->id);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, result);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_ONE, GL_SRC_ALPHA);
+    draw_fullscreen_quad(fx->quad_vao);
+    glDisable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    check_gl_error("postfx fog");
+    return result;
 }
 
 void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hdr,
@@ -865,7 +935,6 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         const bool gtao_active = fx->ssao_enabled || ssgi_active;
         bool ao_accum_ran = false;
         bool gi_accum_ran = false;
-        bool fog_accum_ran = false;
         if (gtao_active) {
             // Raw occlusion at half res. GTAO reads linear view-Z from the aux
             // buffer's .z (unit 0) and reconstructs positions from it -- the
@@ -911,7 +980,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
                 // stable result.
                 if (taa_resolving) {
                     ao_result_tex =
-                        run_temporal_accum(fx, fx->ao_accum_program, &fx->ao_history,
+                        run_temporal_accum(fx, fx->temporal_accum_program, &fx->ao_history,
                                            fx->ssao_width, fx->ssao_height, fx->ssao_texture[1]);
                     ao_accum_ran = true;
                 }
@@ -1050,9 +1119,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             // and everything else assumes it.
             glBindFramebuffer(GL_FRAMEBUFFER, fx->hdr_fbo);
             glViewport(0, 0, fx->width, fx->height);
-            glUseProgram(fx->ssr_composite_program->id);
-            uniform_set_vec2(fx->ssr_composite_program->uniforms, "texelSize",
-                             (vec2){1.0f / (float)fx->ssao_width, 1.0f / (float)fx->ssao_height});
+            glUseProgram(fx->upsample_tent_program->id);
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, fx->ssr_texture);
             glEnable(GL_BLEND);
@@ -1083,80 +1150,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             check_gl_error("postfx ssgi composite");
         }
 
-        // Volumetric fog: march the half-res buffer, then fold it into the
-        // HDR scene before DoF/bloom/tonemap so shafts defocus, bloom, and
-        // meter like direct light.
-        bool fog_active = fx->fog_enabled && aux_written && postfx_ensure_fog_targets(fx);
-        GLuint fog_result_tex = 0;
-        if (fog_active) {
-            glBindFramebuffer(GL_FRAMEBUFFER, fx->fog_fbo);
-            glViewport(0, 0, fx->ssao_width, fx->ssao_height);
-            glUseProgram(fx->fog_program->id);
-            glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, fx->aux_texture);
-            glActiveTexture(GL_TEXTURE1);
-            glBindTexture(GL_TEXTURE_2D_ARRAY, fx->fog_shadow_map_array);
-            glActiveTexture(GL_TEXTURE0);
-            mat4 fog_inv_view;
-            glm_mat4_inv(view, fog_inv_view);
-            UniformManager* fu = fx->fog_program->uniforms;
-            uniform_set_mat4(fu, "invView", (float*)fog_inv_view);
-            uniform_set_mat4(fu, "projection", (float*)projection);
-            uniform_set_vec3(fu, "ambientColor", fx->fog_ambient);
-            uniform_set_float(fu, "density", fx->fog_density);
-            uniform_set_float(fu, "heightFalloff", fx->fog_height_falloff);
-            uniform_set_float(fu, "floorY", fx->fog_floor_y);
-            uniform_set_float(fu, "fogFar", fx->fog_far);
-            uniform_set_float(fu, "anisotropy", fx->fog_anisotropy);
-            uniform_set_float(fu, "sunBoost", fx->fog_sun_boost);
-            uniform_set_float(fu, "shadowBias", fx->fog_shadow_bias);
-            uniform_set_int(fu, "steps", fx->fog_steps);
-            // Shafts need the shadow map array bound; without it the march
-            // degrades to the ambient haze
-            int fog_lights = fx->fog_shadow_map_array ? fx->fog_light_count : 0;
-            uniform_set_int(fu, "numLights", fog_lights);
-            for (int i = 0; i < fog_lights; i++) {
-                char name[48];
-                snprintf(name, sizeof(name), "lightSpaceMatrix[%d]", i);
-                uniform_set_mat4(fu, name, (const float*)fx->fog_light_space[i]);
-                snprintf(name, sizeof(name), "lightColor[%d]", i);
-                uniform_set_vec3(fu, name, fx->fog_light_color[i]);
-                snprintf(name, sizeof(name), "lightDir[%d]", i);
-                uniform_set_vec3(fu, name, fx->fog_light_dir[i]);
-            }
-            // Under TAA the march's dither rotates per frame and the
-            // accumulator below integrates it; headless/no-TAA keeps the
-            // static dither so equal runs stay byte-identical.
-            uniform_set_int(fu, "temporal", taa_resolving ? 1 : 0);
-            uniform_set_int(fu, "frameIndex", fx->frame_index);
-            draw_fullscreen_quad(fx->quad_vao);
-            fog_result_tex = fx->fog_texture;
-
-            if (taa_resolving) {
-                fog_result_tex =
-                    run_temporal_accum(fx, fx->fog_accum_program, &fx->fog_history,
-                                       fx->ssao_width, fx->ssao_height, fx->fog_texture);
-                fog_accum_ran = true;
-            }
-
-            // Fold into the scene: out = inscatter + scene * transmittance.
-            // Same enable/draw/restore idiom as the SSR composite.
-            glBindFramebuffer(GL_FRAMEBUFFER, fx->hdr_fbo);
-            glViewport(0, 0, fx->width, fx->height);
-            glUseProgram(fx->fog_composite_program->id);
-            uniform_set_vec2(fx->fog_composite_program->uniforms, "texelSize",
-                             (vec2){1.0f / (float)fx->ssao_width, 1.0f / (float)fx->ssao_height});
-            glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, fog_result_tex);
-            glEnable(GL_BLEND);
-            glBlendFunc(GL_ONE, GL_SRC_ALPHA);
-            draw_fullscreen_quad(fx->quad_vao);
-            glDisable(GL_BLEND);
-            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-            check_gl_error("postfx fog");
-        }
-        if (!fog_accum_ran)
-            fx->fog_history.valid = false;
+        GLuint fog_result_tex = postfx_run_fog(fx, aux_written, taa_resolving, projection, view);
 
         // Depth of field replaces the scene that bloom and tone mapping read.
         // scene_tex is the sharp HDR unless DoF ran into fx->dof_texture.
@@ -1260,7 +1254,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         glActiveTexture(GL_TEXTURE7);
         glBindTexture(GL_TEXTURE_2D, fx->auto_exposure ? fx->lum_adapt.tex[lum_write] : 0);
         glActiveTexture(GL_TEXTURE8);
-        glBindTexture(GL_TEXTURE_2D, fog_active ? fog_result_tex : 0);
+        glBindTexture(GL_TEXTURE_2D, fog_result_tex); // 0 when fog did not run
         UniformManager* tm = fx->tonemap_program->uniforms;
         uniform_set_float(tm, "exposure", fx->exposure);
         uniform_set_int(tm, "autoExposure", fx->auto_exposure ? 1 : 0);
@@ -1277,7 +1271,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             (debug_view == POSTFX_DEBUG_SSR && !ssr_active) ||
             (debug_view == POSTFX_DEBUG_ALBEDO && !albedo_written) ||
             (debug_view == POSTFX_DEBUG_SSGI && !ssgi_active) ||
-            (debug_view == POSTFX_DEBUG_FOG && !fog_active)) {
+            (debug_view == POSTFX_DEBUG_FOG && fog_result_tex == 0)) {
             static PostFXDebugView warned_view = POSTFX_DEBUG_NONE;
             if (warned_view != debug_view) {
                 log_warn("debug view %d suppressed: its source buffer is disabled",

@@ -393,13 +393,22 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     glViewport(prev_viewport[0], prev_viewport[1], prev_viewport[2], prev_viewport[3]);
 }
 
-// Flatten this frame's shadow casters + their lights into postfx's fog block
+// Flatten this frame's shadow casters + their lights into postfx's fog block.
+// The consumer indexes its POSTFX_FOG_MAX_LIGHTS-sized arrays by the count
+// published here, so the two slot capacities must never diverge.
+_Static_assert(POSTFX_FOG_MAX_LIGHTS == MAX_SHADOW_LIGHTS,
+               "postfx caster mirror must match the shadow slot count");
+
 void shadow_publish_to_postfx(const Scene* scene, PostFX* fx) {
     if (!fx)
         return;
 
+    // Publishing count 0 with a zero array handle is the single "no
+    // shadowed in-scatter" state consumers rely on: a nonzero count
+    // guarantees the map array and every slot below it are valid.
     ShadowSystem* ss = scene ? scene->shadow_system : NULL;
-    if (!ss || !ss->enabled || ss->active_count == 0 || !scene->lights) {
+    if (!ss || !ss->enabled || ss->active_count == 0 || !ss->shadow_map_array ||
+        !scene->lights) {
         fx->fog_light_count = 0;
         fx->fog_shadow_map_array = 0;
         return;

@@ -11,7 +11,7 @@ out vec4 FragColor;
 
 #define MAX_FOG_LIGHTS 3
 
-uniform sampler2D auxTex;          // Full-res: .z = linear view-Z (0 = sky)
+uniform sampler2D linDepthTex;     // Full-res aux: .z = linear view-Z (0 = sky)
 uniform sampler2DArray shadowMaps; // The scene's shadow map array
 uniform mat4 invView;              // view -> world (camera pose)
 uniform mat4 projection;           // Only the focal terms are used
@@ -49,12 +49,11 @@ float phaseHG(float c, float g)
     return (1.0 - g2) / (4.0 * PI * pow(1.0 + g2 - 2.0 * g * c, 1.5));
 }
 
-// One shadow tap: is the air at P lit by caster `slot`? Outside the shadow
-// volume counts as lit (the ortho box only covers the scene's neighborhood).
-float fogVisibility(int slot, vec3 P)
+// One shadow tap: is the air at shadow-map position `proj` lit by caster
+// `slot`? Outside the shadow volume counts as lit (the ortho box only
+// covers the scene's neighborhood).
+float fogVisibility(int slot, vec3 proj)
 {
-    vec4 ls = lightSpaceMatrix[slot] * vec4(P, 1.0);
-    vec3 proj = ls.xyz / ls.w * 0.5 + 0.5;
     if (proj.z > 1.0 || proj.x < 0.0 || proj.x > 1.0 || proj.y < 0.0 || proj.y > 1.0) {
         return 1.0;
     }
@@ -65,7 +64,7 @@ float fogVisibility(int slot, vec3 P)
 void main()
 {
     vec2 invFocal = 1.0 / vec2(projection[0][0], projection[1][1]);
-    float linZ = texture(auxTex, TexCoords).z;
+    float linZ = texture(linDepthTex, TexCoords).z;
     bool sky = (linZ >= -1e-4); // aux sentinel: sky/background writes 0
 
     vec3 camPos = invView[3].xyz;
@@ -96,10 +95,18 @@ void main()
         jitter = fract(jitter + float(frameIndex) * 0.61803398875);
     }
 
-    // Directional lights: the phase term is constant along the ray
-    float phaseK[MAX_FOG_LIGHTS];
+    // Directional ortho casters make everything about a light constant or
+    // affine along the ray: phase and color fold into one gain, and the
+    // light-space projection (w == 1 under an ortho matrix, so no divide)
+    // collapses to origin + t * direction — one fma per step instead of a
+    // full matrix transform.
+    vec3 lightK[MAX_FOG_LIGHTS];
+    vec3 lsBase[MAX_FOG_LIGHTS];
+    vec3 lsDelta[MAX_FOG_LIGHTS];
     for (int j = 0; j < numLights; j++) {
-        phaseK[j] = phaseHG(dot(lightDir[j], -rayDir), anisotropy) * sunBoost;
+        lightK[j] = lightColor[j] * (phaseHG(dot(lightDir[j], -rayDir), anisotropy) * sunBoost);
+        lsBase[j] = (lightSpaceMatrix[j] * vec4(camPos, 1.0)).xyz * 0.5 + 0.5;
+        lsDelta[j] = (lightSpaceMatrix[j] * vec4(rayDir, 0.0)).xyz * 0.5;
     }
 
     float dt = tEnd / float(steps);
@@ -115,7 +122,7 @@ void main()
         float stepTrans = exp(-sigma * dt);
         vec3 S = ambientColor;
         for (int j = 0; j < numLights; j++) {
-            S += lightColor[j] * phaseK[j] * fogVisibility(j, P);
+            S += lightK[j] * fogVisibility(j, lsBase[j] + t * lsDelta[j]);
         }
         L += T * (1.0 - stepTrans) * S;
         T *= stepTrans;

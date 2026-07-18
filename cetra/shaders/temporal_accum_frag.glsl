@@ -2,19 +2,19 @@
 in vec2 TexCoords;
 out vec4 FragColor;
 
-// Temporal accumulation for volumetric fog -- the ssgi_accum idiom on the
-// half-res (inscatter.rgb, transmittance.a) march output. Under TAA the
-// march's dither rotates per frame (golden-ratio IGN offset); this pass
-// reprojects last frame's accumulation by the motion vectors and blends,
-// integrating the rotating jitter into a stable volume. Unlike the GI
-// accumulator this stays in plain RGBA: the fog signal is low-frequency
-// (no chroma-vs-luma disocclusion tension worth a YCoCg trip, no gathered
-// fireflies worth an inverse-luma blend), and the transmittance in .a must
-// ride through the same neighborhood clamp as the inscatter it belongs to.
-uniform sampler2D currentTex;  // This frame's raw march (.rgb inscatter, .a T)
+// Shared plain-RGBA temporal accumulator, driven by run_temporal_accum for
+// every effect whose per-frame jitter should integrate over time without
+// signal-specific tricks: AO accumulates its occlusion in .r (the R16F
+// history target discards the rest), volumetric fog its (inscatter.rgb,
+// transmittance.a). Reprojects last frame's accumulation by the motion
+// vectors, bounds it per channel to the current 3x3 neighborhood so a
+// surface that just disoccluded can't bleed stale history through, and
+// blends at fixed feedback. SSGI keeps its own accumulator: its YCoCg
+// clamp and inverse-luma firefly blend are real signal differences.
+uniform sampler2D currentTex;  // This frame's raw effect output
 uniform sampler2D velocityTex; // Screen-space motion .xy (UV units)
-uniform sampler2D historyTex;  // Last frame's accumulated fog
-uniform vec2 texelSize;        // 1 / fog resolution
+uniform sampler2D historyTex;  // Last frame's accumulation
+uniform vec2 texelSize;        // 1 / effect resolution
 uniform int reset;             // 1 on the first frame -> no history yet
 
 const float FEEDBACK = 0.9; // History weight; ~10-frame effective window

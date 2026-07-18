@@ -93,7 +93,7 @@ typedef struct PostFX {
     ShaderProgram* tonemap_program;
     ShaderProgram* gtao_program;
     ShaderProgram* ssao_blur_program;
-    ShaderProgram* ao_accum_program;
+    ShaderProgram* temporal_accum_program; // Shared plain-RGBA accumulator (AO .r, fog .rgba)
     ShaderProgram* ssgi_composite_program;
     ShaderProgram* ssgi_accum_program;
     ShaderProgram* ssgi_atrous_program;
@@ -101,10 +101,8 @@ typedef struct PostFX {
     ShaderProgram* lum_adapt_program;
     ShaderProgram* ssr_program;
     ShaderProgram* ssr_hiz_program;
-    ShaderProgram* ssr_composite_program;
+    ShaderProgram* upsample_tent_program; // Shared half-res composite (SSR, fog)
     ShaderProgram* fog_program;
-    ShaderProgram* fog_composite_program;
-    ShaderProgram* fog_accum_program;
     ShaderProgram* taa_resolve_program;
 
     GLuint quad_vao;

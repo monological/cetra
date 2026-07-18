@@ -86,6 +86,13 @@ vec3 displayEncode(vec3 c)
     return pow(clamp(c, 0.0, 1.0), vec3(1.0 / 2.2));
 }
 
+// The frame's selected tonemap curve, shared by the scene path and the
+// HDR debug views.
+vec3 toneSelect(vec3 c)
+{
+    return tonemapMode == 1 ? acesTonemap(c) : pbrNeutralTonemap(c);
+}
+
 // Scene HDR sample -> tonemapped LDR-linear [0,1], applying the shared AO
 // factor and bloom addition (the same order the composite uses). Sharpen
 // neighbour taps reuse the centre's aoFactor/bloomAdd so the mask measures
@@ -97,7 +104,7 @@ vec3 sceneToToned(vec3 hdr, float aoFactor, vec3 bloomAdd, float effExposure)
     // curves turn INF into NaN, which displays as a black pixel
     vec3 c = min(hdr, vec3(60000.0)) * aoFactor + bloomAdd;
     c *= effExposure;
-    return tonemapMode == 1 ? acesTonemap(c) : pbrNeutralTonemap(c);
+    return toneSelect(c);
 }
 
 void main()
@@ -133,15 +140,13 @@ void main()
     if (debugView == 5) {
         // Gathered GI radiance (linear HDR); tone map so bright bounces
         // don't clip to white, gamma-encode for display
-        vec3 gi = texture(giTex, TexCoords).rgb;
-        gi = tonemapMode == 1 ? acesTonemap(gi) : pbrNeutralTonemap(gi);
+        vec3 gi = toneSelect(texture(giTex, TexCoords).rgb);
         FragColor = vec4(displayEncode(gi), 1.0);
         return;
     }
     if (debugView == 6) {
         // Fog in-scatter (linear HDR); tone map so bright shafts read
-        vec3 fog = texture(fogTex, TexCoords).rgb;
-        fog = tonemapMode == 1 ? acesTonemap(fog) : pbrNeutralTonemap(fog);
+        vec3 fog = toneSelect(texture(fogTex, TexCoords).rgb);
         FragColor = vec4(displayEncode(fog), 1.0);
         return;
     }

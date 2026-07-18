@@ -1261,12 +1261,9 @@ int main(int argc, char** argv) {
     // the per-frame model matrix (so animation-driven node transforms compose
     // under it untouched); a pure translation leaves the radius unchanged, so
     // the cached center just shifts by the offset.
-    // World height of the ground plane after this block: 0 when recentered,
-    // the model's authored base otherwise (the fog density anchors to it)
-    float scene_floor_y = 0.0f;
+    vec3 bb_min, bb_max;
+    compute_scene_bounds(scene, bb_min, bb_max);
     if (!args.no_recenter) {
-        vec3 bb_min, bb_max;
-        compute_scene_bounds(scene, bb_min, bb_max);
         model_recenter_offset[0] = -scene_center[0];
         model_recenter_offset[1] = -bb_min[1];
         model_recenter_offset[2] = -scene_center[2];
@@ -1275,11 +1272,12 @@ int main(int argc, char** argv) {
                    model_recenter_offset[1], model_recenter_offset[2]);
         }
         glm_vec3_add(scene_center, model_recenter_offset, scene_center);
-    } else {
-        vec3 bb_min, bb_max;
-        compute_scene_bounds(scene, bb_min, bb_max);
-        scene_floor_y = bb_min[1];
     }
+    // World height of the ground plane wherever the model ended up (0 when
+    // recentered, the authored base otherwise) -- the fog density anchors
+    // to it, and deriving it from the offset keeps it correct under any
+    // future recenter rule
+    float scene_floor_y = bb_min[1] + model_recenter_offset[1];
     printf("Scene bounds: center=(%.2f, %.2f, %.2f), radius=%.2f\n", scene_center[0],
            scene_center[1], scene_center[2], scene_radius);
 
@@ -1471,8 +1469,10 @@ int main(int argc, char** argv) {
 
         ReflectionProbe* probe = create_reflection_probe();
         if (probe) {
-            vec3 bb_min, bb_max;
-            compute_scene_bounds(scene, bb_min, bb_max);
+            // Fresh bounds: the pre-recenter ones above no longer describe
+            // where the model sits
+            vec3 probe_bb_min, probe_bb_max;
+            compute_scene_bounds(scene, probe_bb_min, probe_bb_max);
 
             if (args.probe_pos_set) {
                 glm_vec3_copy(args.probe_pos, probe->position);
@@ -1512,10 +1512,10 @@ int main(int argc, char** argv) {
                 box_top = scene->skybox_gp_radius;
             } else {
                 box_half_w = 2.0f * scene_radius;
-                box_top = bb_max[1] + scene_radius;
+                box_top = probe_bb_max[1] + scene_radius;
             }
             probe->box_min[0] = scene_center[0] - box_half_w;
-            probe->box_min[1] = bb_min[1];
+            probe->box_min[1] = probe_bb_min[1];
             probe->box_min[2] = scene_center[2] - box_half_w;
             probe->box_max[0] = scene_center[0] + box_half_w;
             probe->box_max[1] = box_top;
