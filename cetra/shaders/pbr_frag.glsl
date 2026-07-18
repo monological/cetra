@@ -370,19 +370,9 @@ float shadowPCF3x3(int layer, vec2 uv, float currentDepth, float bias) {
 // with blocker distance. The algorithm is isotropic, so callers collapse a
 // rectangular emitter to a single dimension. cascade is the fragment's
 // cascade, hoisted by the caller (caster-independent).
-float calculateShadow(int shadowIndex, int cascade, vec3 worldPos, float NdotL, float lightSize) {
-    // Layer within the caster's cascade block; at cascadeCount 1 this is
-    // exactly the classic shadowIndex (the byte-identity bridge)
-    int layer = shadowIndex * cascadeCount + cascade;
-    vec4 fragPosLightSpace = lightSpaceMatrix[layer] * vec4(worldPos, 1.0);
-    vec3 projCoords = fragPosLightSpace.xyz / fragPosLightSpace.w;
-    projCoords = projCoords * 0.5 + 0.5;
-
-    if (projCoords.z > 1.0 || projCoords.x < 0.0 || projCoords.x > 1.0 ||
-        projCoords.y < 0.0 || projCoords.y > 1.0) {
-        return 1.0;
-    }
-
+// One cascade's shadow estimate for a projected position already known to be
+// in bounds: PCSS when enabled and the emitter resolves, else 3x3 PCF.
+float cascadeShadowTap(int layer, vec3 projCoords, float NdotL, float lightSize) {
     // cascadeParams.w = (legacyRange/range) * (width/legacyWidth): first
     // re-expresses the app-tuned 0..1 bias in this cascade's depth scale
     // (the range factor is what keeps the comparison dimensionally sound --
@@ -445,6 +435,34 @@ float calculateShadow(int shadowIndex, int cascade, vec3 worldPos, float NdotL, 
         shadow += currentDepth - bias > d ? 1.0 : 0.0;
     }
     return 1.0 - (shadow / 16.0);
+}
+
+float calculateShadow(int shadowIndex, int cascade, vec3 worldPos, float NdotL, float lightSize) {
+    // Union the occlusion of the fragment's cascade and every wider one
+    // (visibility = MIN across the walk). A tight near box can clip a
+    // distant occluder out of its depth render -- partially or entirely --
+    // while still covering the receiver, so it under-reports: a hard
+    // straight cut (or lightening band) across the shadow at the box edge
+    // that MOVES with the camera. A tight map's partial answer never vetoes
+    // a wider map's full one; wider maps only ever ADD occlusion they saw.
+    // At cascadeCount 1 this is exactly the classic bounds-check + tap.
+    float visibility = 1.0;
+    for (int c = cascade; c < cascadeCount; c++) {
+        int layer = shadowIndex * cascadeCount + c;
+        vec4 fragPosLightSpace = lightSpaceMatrix[layer] * vec4(worldPos, 1.0);
+        vec3 projCoords = fragPosLightSpace.xyz / fragPosLightSpace.w;
+        projCoords = projCoords * 0.5 + 0.5;
+
+        if (projCoords.z > 1.0 || projCoords.x < 0.0 || projCoords.x > 1.0 ||
+            projCoords.y < 0.0 || projCoords.y > 1.0) {
+            continue;
+        }
+
+        visibility = min(visibility, cascadeShadowTap(layer, projCoords, NdotL, lightSize));
+        if (visibility <= 0.0)
+            break; // fully occluded; wider maps cannot add more
+    }
+    return visibility;
 }
 
 // Per-pixel screen-space motion vector in UV units: current vs previous

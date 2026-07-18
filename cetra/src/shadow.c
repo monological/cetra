@@ -536,7 +536,13 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
                 // reference (the acne guard).
                 float legacy_range = ss->far_plane - ss->near_plane;
                 float legacy_width = 2.0f * ss->ortho_size;
-                for (int c = 0; c < cc; c++) {
+                // Camera-fit cascades sharpen the near slices; the OUTERMOST
+                // cascade is the classic scene-fit map, camera-independent
+                // and complete for every caster in the scene by construction.
+                // Anything the tight frustum-fit boxes clip falls back to it,
+                // so no shadow can ever end at a boundary that moves with the
+                // camera -- worst case equals the classic single-map look.
+                for (int c = 0; c < cc - 1; c++) {
                     int layer = (int)slot * cc + c;
                     vec4* params = &ss->cascade_params[layer];
                     compute_cascade_light_space_matrix(
@@ -546,6 +552,15 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
                     (*params)[3] = (legacy_range / range) * ((*params)[0] / legacy_width);
                     slice_near = ss->cascade_splits[c];
                 }
+                int last = (int)slot * cc + (cc - 1);
+                compute_directional_light_space_matrix(light->direction, scene_center,
+                                                       ss->ortho_size, ss->near_plane,
+                                                       ss->far_plane,
+                                                       ss->cascade_matrices[last]);
+                ss->cascade_params[last][0] = legacy_width;
+                ss->cascade_params[last][1] = ss->near_plane;
+                ss->cascade_params[last][2] = ss->far_plane;
+                ss->cascade_params[last][3] = 1.0f;
             }
             light->shadow_map_index = (int)slot;
             slot++;

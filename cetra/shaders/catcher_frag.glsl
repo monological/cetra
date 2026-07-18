@@ -26,7 +26,6 @@ uniform sampler2DArray shadowMaps;
 // so at cascadeCount 1 the indices match the classic single-map layout
 uniform mat4 lightSpaceMatrix[MAX_SHADOW_LIGHTS * SHADOW_CASCADES];
 uniform vec4 cascadeParams[MAX_SHADOW_LIGHTS * SHADOW_CASCADES]; // width, near, far, biasScale
-uniform vec4 cascadeSplits; // View-depth far bound per cascade (.xyz)
 uniform int cascadeCount;
 uniform float shadowLightWeight[MAX_SHADOW_LIGHTS];
 uniform int numShadowLights;
@@ -44,37 +43,25 @@ uniform mat4 view;
 // untouched.
 uniform int surfaceMode;
 
-// Cascade for a view depth: the first cascade whose far bound contains it.
-// At cascadeCount 1 the loop never runs (cascade 0).
-int selectCascade(float viewDepth)
+float occlusion_from(int slot)
 {
-    int cascade = 0;
-    for (int c = 0; c < cascadeCount - 1; c++) {
-        if (viewDepth > cascadeSplits[c])
-            cascade = c + 1;
-    }
-    return cascade;
-}
-
-float occlusion_from(int slot, int cascade)
-{
-    // Layer within the caster's cascade block; at cascadeCount 1 this is
-    // exactly the classic slot index
-    int layer = slot * cascadeCount + cascade;
+    // The catcher is a soft scene-scale grounding shadow: it samples the
+    // OUTERMOST cascade, which is the classic camera-independent scene-fit
+    // map (complete for every caster in the scene by construction). One map
+    // means no per-fragment selection, no seams, and no boundary that can
+    // move with the camera -- exactly the pre-cascade floor behavior. At
+    // cascadeCount 1 the layer is the classic slot index.
+    int layer = slot * cascadeCount + (cascadeCount - 1);
     vec4 lightSpace = lightSpaceMatrix[layer] * vec4(WorldPos, 1.0);
     vec3 proj = lightSpace.xyz / lightSpace.w * 0.5 + 0.5;
     if (proj.z > 1.0 || proj.x < 0.0 || proj.x > 1.0 || proj.y < 0.0 || proj.y > 1.0)
         return 0.0;
 
-    // cascadeParams.w = (legacyRange/range) * (width/legacyWidth): first
-    // re-expresses the app-tuned 0..1 bias in this cascade's depth scale,
-    // then grows it with the real texel size. Exactly 1.0 at cascadeCount 1.
+    // params.w and the kernel ratio are exactly 1.0 for the scene-fit map;
+    // kept so the expressions stay uniform with the pbr consumer
     float bias = shadowBias * cascadeParams[layer].w;
 
-    // 5x5 PCF with a widened kernel for soft edges. The kernel is a LOOK,
-    // tuned in world units against the scene-fit map: normalize its UV step
-    // by this cascade's width so the blur neither dilutes in wide far
-    // cascades nor jumps at a seam (exactly 1.0 at cascadeCount 1).
+    // 5x5 PCF with a widened kernel for soft edges
     vec2 kernelStep = shadowTexelSize * 1.5 * (sceneOrthoWidth / cascadeParams[layer].x);
     float shadow = 0.0;
     for (int x = -2; x <= 2; x++) {
@@ -89,12 +76,9 @@ float occlusion_from(int slot, int cascade)
 
 void main()
 {
-    // The fragment's cascade is caster-independent: view depth vs the splits
-    int cascade = selectCascade(-(view * vec4(WorldPos, 1.0)).z);
-
     float darkness = 0.0;
     for (int i = 0; i < numShadowLights && i < MAX_SHADOW_LIGHTS; i++) {
-        darkness += shadowLightWeight[i] * occlusion_from(i, cascade);
+        darkness += shadowLightWeight[i] * occlusion_from(i);
     }
 
     // Fade out toward the plane edge so the quad boundary is invisible
