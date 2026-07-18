@@ -1266,9 +1266,10 @@ static void _engine_gui_panel(Engine* engine) {
 
         // Index maps to the enum minus PASSTHROUGH, which is not a look and
         // stays out of the picker
-        static const char* tonemap_names[] = {"ACES", "PBR Neutral", "AgX"};
+        static const char* const tonemap_names[] = {"ACES", "PBR Neutral", "AgX"};
         int tm = (int)fx->tonemap_mode - 1;
-        if (igCombo_Str_arr("Tonemap", &tm, tonemap_names, 3, -1))
+        if (igCombo_Str_arr("Tonemap", &tm, tonemap_names,
+                            (int)(sizeof(tonemap_names) / sizeof(tonemap_names[0])), -1))
             fx->tonemap_mode = (PostFXTonemapMode)(tm + 1);
         igCheckbox("Auto Exposure", &fx->auto_exposure);
         // With auto on, the manual slider becomes an EV bias on the adapted value

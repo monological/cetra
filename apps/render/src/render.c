@@ -93,7 +93,9 @@ typedef struct {
     float specular_aa;                 // Specular AA strength override (-1 = default)
     int no_energy_comp;                // Disable multi-scatter energy compensation
     int no_bloom;                      // Disable bloom
-    int tonemap_mode;                  // PostFXTonemapMode override (0 = keep default)
+    int tonemap_mode;                  // PostFXTonemapMode override (0 = keep default;
+                                       // coincides with PASSTHROUGH, which is a blit
+                                       // path and never user-set)
     int ssaa;                          // Supersampling factor (0 = keep engine default)
     // Finishing grade (-1 = keep engine default; >=0 enables + sets)
     int film_preset; // --film: enable the whole finishing stack at sane defaults
