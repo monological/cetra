@@ -50,6 +50,9 @@ typedef enum PostFXDebugView {
 // Mirrors MAX_SHADOW_LIGHTS (shadow.h) without postfx learning about the
 // shadow system; the publish step fills at most this many caster slots
 #define POSTFX_FOG_MAX_LIGHTS 3
+// Mirrors SHADOW_CASCADES the same way; fog_light_space layers stride by
+// the RUNTIME published cascade count (layer = slot * count + cascade)
+#define POSTFX_FOG_CASCADES 3
 
 typedef struct PostFX {
     int width, height;             // Internal (supersampled) HDR size
@@ -169,7 +172,8 @@ typedef struct PostFX {
     // block; postfx never learns about the shadow system): the casters'
     // matrices, radiance, and map array. Count 0 = ambient-only fog.
     int fog_light_count;
-    mat4 fog_light_space[POSTFX_FOG_MAX_LIGHTS];
+    int fog_cascade_count; // Layers per caster in fog_light_space (1 = classic)
+    mat4 fog_light_space[POSTFX_FOG_MAX_LIGHTS * POSTFX_FOG_CASCADES];
     vec3 fog_light_color[POSTFX_FOG_MAX_LIGHTS]; // color * intensity
     vec3 fog_light_dir[POSTFX_FOG_MAX_LIGHTS];   // normalized travel direction
     GLuint fog_shadow_map_array;                 // 0 when shadows are off

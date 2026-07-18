@@ -21,7 +21,6 @@ typedef struct ShadowCaster {
     GLuint fbo;
     GLuint depth_texture;
     int map_size;
-    mat4 light_space_matrix;
     float bias;
     float normal_bias;
     bool initialized;
@@ -47,9 +46,7 @@ typedef struct ShadowSystem {
     int allocated_cascades; // Cascade capacity the map array was built for; a
                             // count change triggers a rebuild
     bool csm_debug;         // Tint fragments by cascade (the split/snap acceptance tool)
-    // Per-layer state, count-strided (layer = slot * cascade_count + cascade).
-    // casters[slot].light_space_matrix always mirrors the slot's cascade 0 so
-    // single-matrix consumers (catcher, fog publish) stay valid pre-cascade.
+    // Per-layer state, count-strided (layer = slot * cascade_count + cascade)
     mat4 cascade_matrices[MAX_SHADOW_LIGHTS * SHADOW_CASCADES];
     vec4 cascade_params[MAX_SHADOW_LIGHTS * SHADOW_CASCADES]; // width, near, far, biasScale
     float cascade_splits[SHADOW_CASCADES];                    // View-depth far bound per cascade
@@ -105,9 +102,10 @@ struct PostFX;
 
 // Flatten this frame's shadow casters + their lights into postfx's fog block
 // (mirrors reflection_probe_publish_to_postfx; postfx never learns about the
-// shadow system): per caster the light-space matrix, travel direction, and
-// color * intensity, plus the map array handle. Publishes count 0 when
-// shadows are off or absent — fog degrades to ambient haze.
+// shadow system): per caster the count-strided cascade matrices, travel
+// direction, and color * intensity, plus the map array handle and cascade
+// count. Publishes count 0 when shadows are off or absent — fog degrades to
+// ambient haze.
 void shadow_publish_to_postfx(const struct Scene* scene, struct PostFX* fx);
 
 #endif // _SHADOW_H_

@@ -885,10 +885,16 @@ static GLuint postfx_run_fog(PostFX* fx, bool aux_written, bool taa_resolving, m
     // haze; the publish guarantees the map array is valid whenever the
     // count is nonzero.
     uniform_set_int(fu, "numLights", fx->fog_light_count);
+    uniform_set_int(fu, "cascadeCount", fx->fog_cascade_count);
     for (int i = 0; i < fx->fog_light_count; i++) {
         char name[48];
-        snprintf(name, sizeof(name), "lightSpaceMatrix[%d]", i);
-        uniform_set_mat4(fu, name, (const float*)fx->fog_light_space[i]);
+        // Cascade layers stride by the published runtime count (slot
+        // indices at count 1)
+        for (int c = 0; c < fx->fog_cascade_count; c++) {
+            int layer = i * fx->fog_cascade_count + c;
+            snprintf(name, sizeof(name), "lightSpaceMatrix[%d]", layer);
+            uniform_set_mat4(fu, name, (const float*)fx->fog_light_space[layer]);
+        }
         snprintf(name, sizeof(name), "lightColor[%d]", i);
         uniform_set_vec3(fu, name, fx->fog_light_color[i]);
         snprintf(name, sizeof(name), "lightDir[%d]", i);

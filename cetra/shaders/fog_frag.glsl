@@ -10,12 +10,16 @@ out vec4 FragColor;
 // scene * transmittance + inscatter into the HDR target.
 
 #define MAX_FOG_LIGHTS 3
+#define FOG_CASCADES 3
 
 uniform sampler2D linDepthTex;     // Full-res aux: .z = linear view-Z (0 = sky)
 uniform sampler2DArray shadowMaps; // The scene's shadow map array
 uniform mat4 invView;              // view -> world (camera pose)
 uniform mat4 projection;           // Only the focal terms are used
-uniform mat4 lightSpaceMatrix[MAX_FOG_LIGHTS];
+// Layers stride by the RUNTIME cascadeCount (layer = slot*cascadeCount + c),
+// so at cascadeCount 1 the indices match the classic single-map layout
+uniform mat4 lightSpaceMatrix[MAX_FOG_LIGHTS * FOG_CASCADES];
+uniform int cascadeCount;
 uniform vec3 lightColor[MAX_FOG_LIGHTS]; // color * intensity
 uniform vec3 lightDir[MAX_FOG_LIGHTS];   // normalized travel direction
 uniform int numLights;
@@ -49,16 +53,31 @@ float phaseHG(float c, float g)
     return (1.0 - g2) / (4.0 * PI * pow(1.0 + g2 - 2.0 * g * c, 1.5));
 }
 
-// One shadow tap: is the air at shadow-map position `proj` lit by caster
-// `slot`? Outside the shadow volume counts as lit (the ortho box only
-// covers the scene's neighborhood).
-float fogVisibility(int slot, vec3 proj)
+// Per-(caster, cascade) affine march coordinates, hoisted once in main
+// before the step loop (an ortho light-space projection is affine along
+// the ray, so each step is one fma instead of a matrix transform)
+vec3 lsBase[MAX_FOG_LIGHTS * FOG_CASCADES];
+vec3 lsDelta[MAX_FOG_LIGHTS * FOG_CASCADES];
+
+// One shadow tap: is the air at ray parameter `t` lit by the caster whose
+// cascade block starts at `layer0`? Walks the cascades in index order and
+// taps the FIRST whose box contains the point — the tightest covering
+// cascade (every cascade renders the whole scene, so any in-bounds layer
+// holds correct depth). Outside every cascade counts as lit (the boxes
+// only cover the scene's neighborhood). At cascadeCount 1 this is exactly
+// the classic single bounds-check + tap.
+float fogVisibility(int layer0, float t)
 {
-    if (proj.z > 1.0 || proj.x < 0.0 || proj.x > 1.0 || proj.y < 0.0 || proj.y > 1.0) {
-        return 1.0;
+    for (int c = 0; c < cascadeCount; c++) {
+        int layer = layer0 + c;
+        vec3 proj = lsBase[layer] + t * lsDelta[layer];
+        if (proj.z > 1.0 || proj.x < 0.0 || proj.x > 1.0 || proj.y < 0.0 || proj.y > 1.0) {
+            continue;
+        }
+        float d = texture(shadowMaps, vec3(proj.xy, float(layer))).r;
+        return proj.z - shadowBias > d ? 0.0 : 1.0;
     }
-    float d = texture(shadowMaps, vec3(proj.xy, float(slot))).r;
-    return proj.z - shadowBias > d ? 0.0 : 1.0;
+    return 1.0;
 }
 
 void main()
@@ -98,15 +117,15 @@ void main()
     // Directional ortho casters make everything about a light constant or
     // affine along the ray: phase and color fold into one gain, and the
     // light-space projection (w == 1 under an ortho matrix, so no divide)
-    // collapses to origin + t * direction — one fma per step instead of a
-    // full matrix transform.
+    // collapses to origin + t * direction, hoisted per cascade layer.
     vec3 lightK[MAX_FOG_LIGHTS];
-    vec3 lsBase[MAX_FOG_LIGHTS];
-    vec3 lsDelta[MAX_FOG_LIGHTS];
     for (int j = 0; j < numLights; j++) {
         lightK[j] = lightColor[j] * (phaseHG(dot(lightDir[j], -rayDir), anisotropy) * sunBoost);
-        lsBase[j] = (lightSpaceMatrix[j] * vec4(camPos, 1.0)).xyz * 0.5 + 0.5;
-        lsDelta[j] = (lightSpaceMatrix[j] * vec4(rayDir, 0.0)).xyz * 0.5;
+        for (int c = 0; c < cascadeCount; c++) {
+            int layer = j * cascadeCount + c;
+            lsBase[layer] = (lightSpaceMatrix[layer] * vec4(camPos, 1.0)).xyz * 0.5 + 0.5;
+            lsDelta[layer] = (lightSpaceMatrix[layer] * vec4(rayDir, 0.0)).xyz * 0.5;
+        }
     }
 
     float dt = tEnd / float(steps);
@@ -122,7 +141,7 @@ void main()
         float stepTrans = exp(-sigma * dt);
         vec3 S = ambientColor;
         for (int j = 0; j < numLights; j++) {
-            S += lightK[j] * fogVisibility(j, lsBase[j] + t * lsDelta[j]);
+            S += lightK[j] * fogVisibility(j * cascadeCount, t);
         }
         L += T * (1.0 - stepTrans) * S;
         T *= stepTrans;

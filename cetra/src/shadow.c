@@ -54,7 +54,6 @@ ShadowSystem* create_shadow_system(int default_map_size) {
         system->casters[i].map_size = default_map_size;
         system->casters[i].bias = 0.005f;
         system->casters[i].normal_bias = 0.02f;
-        glm_mat4_identity(system->casters[i].light_space_matrix);
     }
 
     return system;
@@ -109,7 +108,6 @@ int init_shadow_caster(ShadowCaster* caster, int map_size) {
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     caster->initialized = true;
-    glm_mat4_identity(caster->light_space_matrix);
 
     return 0;
 }
@@ -477,9 +475,7 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
 
     // Fit each caster's cascades. Count 1 takes the classic scene-fit path
     // VERBATIM (the byte-identity bridge); count > 1 fits each view slice's
-    // bounding sphere with texel snapping. casters[slot].light_space_matrix
-    // always mirrors cascade 0 for single-matrix consumers (catcher, fog
-    // publish) until they learn cascade selection.
+    // bounding sphere with texel snapping.
     size_t slot = 0;
     for (size_t i = 0; i < scene->light_count && slot < MAX_SHADOW_LIGHTS; ++i) {
         Light* light = scene->lights[i];
@@ -524,9 +520,6 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
                                                    (ss->cascade_params[layer][0] / legacy_width);
                 }
             }
-            glm_mat4_copy(ss->cascade_matrices[slot * (size_t)cc],
-                          ss->casters[slot].light_space_matrix);
-
             light->shadow_map_index = (int)slot;
             slot++;
         }
@@ -566,6 +559,8 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
 // published here, so the two slot capacities must never diverge.
 _Static_assert(POSTFX_FOG_MAX_LIGHTS == MAX_SHADOW_LIGHTS,
                "postfx caster mirror must match the shadow slot count");
+_Static_assert(POSTFX_FOG_CASCADES == SHADOW_CASCADES,
+               "postfx cascade mirror must match the shadow cascade count");
 
 void shadow_publish_to_postfx(const Scene* scene, PostFX* fx) {
     if (!fx)
@@ -578,10 +573,12 @@ void shadow_publish_to_postfx(const Scene* scene, PostFX* fx) {
     if (!ss || !ss->enabled || ss->active_count == 0 || !ss->shadow_map_array ||
         !scene->lights) {
         fx->fog_light_count = 0;
+        fx->fog_cascade_count = 1;
         fx->fog_shadow_map_array = 0;
         return;
     }
 
+    int cc = ss->cascade_count;
     for (size_t i = 0; i < scene->light_count; i++) {
         Light* light = scene->lights[i];
         if (!light || light->shadow_map_index < 0 ||
@@ -589,11 +586,16 @@ void shadow_publish_to_postfx(const Scene* scene, PostFX* fx) {
             continue;
         }
         int slot = light->shadow_map_index;
-        glm_mat4_copy(ss->casters[slot].light_space_matrix, fx->fog_light_space[slot]);
+        // Layers stride by the runtime count (slot indices at count 1)
+        for (int c = 0; c < cc; c++) {
+            int layer = slot * cc + c;
+            glm_mat4_copy(ss->cascade_matrices[layer], fx->fog_light_space[layer]);
+        }
         glm_vec3_normalize_to(light->direction, fx->fog_light_dir[slot]);
         glm_vec3_scale(light->color, light->intensity, fx->fog_light_color[slot]);
     }
     fx->fog_light_count = (int)ss->active_count;
+    fx->fog_cascade_count = cc;
     fx->fog_shadow_map_array = ss->shadow_map_array;
     fx->fog_shadow_bias = ss->casters[0].bias;
 }
