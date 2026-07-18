@@ -37,13 +37,22 @@ typedef struct ShadowSystem {
     float far_plane;
     GLuint shadow_map_array;
     bool initialized;
-    bool enabled;        // Master switch: off skips the depth pass and all receives
-    bool pcss_enabled;   // Contact-hardening penumbra (off = fixed 3x3 PCF)
-    float pcss_softness; // Multiplier on each light's emitter size
-    int cascade_count;   // Cascades per caster (1..SHADOW_CASCADES). 1 = the classic
-                         // scene-fit single map, byte-identical to the pre-CSM path;
-                         // layers stride by THIS value (layer = slot*cascade_count+c)
-                         // so count 1 keeps master's layer indices
+    bool enabled;           // Master switch: off skips the depth pass and all receives
+    bool pcss_enabled;      // Contact-hardening penumbra (off = fixed 3x3 PCF)
+    float pcss_softness;    // Multiplier on each light's emitter size
+    int cascade_count;      // Cascades per caster (1..SHADOW_CASCADES). 1 = the classic
+                            // scene-fit single map, byte-identical to the pre-CSM path;
+                            // layers stride by THIS value (layer = slot*cascade_count+c)
+                            // so count 1 keeps master's layer indices
+    int allocated_cascades; // Cascade capacity the map array was built for; a
+                            // count change triggers a rebuild
+    bool csm_debug;         // Tint fragments by cascade (the split/snap acceptance tool)
+    // Per-layer state, count-strided (layer = slot * cascade_count + cascade).
+    // casters[slot].light_space_matrix always mirrors the slot's cascade 0 so
+    // single-matrix consumers (catcher, fog publish) stay valid pre-cascade.
+    mat4 cascade_matrices[MAX_SHADOW_LIGHTS * SHADOW_CASCADES];
+    vec4 cascade_params[MAX_SHADOW_LIGHTS * SHADOW_CASCADES]; // width, near, far, biasScale
+    float cascade_splits[SHADOW_CASCADES];                    // View-depth far bound per cascade
 } ShadowSystem;
 
 // Creation and destruction
@@ -65,6 +74,25 @@ void end_shadow_pass(ShadowSystem* system);
 // Light space matrix computation
 void compute_directional_light_space_matrix(vec3 direction, vec3 scene_center, float ortho_size,
                                             float near_plane, float far_plane, mat4 dest);
+
+// Camera slice for cascade fitting (kept small so shadow.c never learns
+// about Engine); forward must be normalized
+typedef struct CascadeCamera {
+    vec3 position;
+    vec3 forward;
+    float fov_radians;
+    float aspect_ratio;
+} CascadeCamera;
+
+// Fit one cascade: ortho box sized from the [slice_near, slice_far] view
+// slice's bounding sphere (rotation-invariant -> stable under orbit), center
+// snapped to shadow-texel increments in light view space, eye pushed back by
+// scene_pad so out-of-slice geometry toward the light still casts. Writes the
+// matrix and (width, near, far, 1.0) into out_params; the caller sets .w to
+// the per-cascade bias scale.
+void compute_cascade_light_space_matrix(vec3 direction, const CascadeCamera* cam, float slice_near,
+                                        float slice_far, float scene_pad, int map_size, mat4 dest,
+                                        vec4 out_params);
 
 // Shadow map binding for main render pass
 void bind_shadow_maps_to_program(ShadowSystem* system, ShaderProgram* program,

@@ -13,7 +13,11 @@
 #define GL_ATTR_BONE_WEIGHTS 7 // vec4  - bone weights per vertex
 #define GL_ATTR_TEXCOORD2    8 // UV1 for lightmaps/AO
 
-#define USED_UNIFORM_COMPONENTS 77 // Number of components used by non-light uniforms
+// Fixed non-light uniform overhead the max-light math subtracts. The CSM
+// arrays dominate: lightSpaceMatrix[9] (144) + cascadeParams[9] (36) +
+// cascadeSplits (4) + counts/toggles; audit when the shadow uniform block
+// changes shape.
+#define USED_UNIFORM_COMPONENTS 215
 #define COMPONENTS_PER_LIGHT    21 // Number of components per light
 
 #define CETRA_RED_COLOR     ((vec3){1.0f, 0.0f, 0.0f})

@@ -4,6 +4,7 @@
 #include "common.h"
 #include "ext/log.h"
 #include "program.h"
+#include "shadow.h"
 #include "util.h"
 
 // Fullscreen post-pass program helper (defined with the postfx constructors)
@@ -407,7 +408,7 @@ void setup_program_uniforms(ShaderProgram* program) {
 
     uniform_cache_standard(program->uniforms);
     uniform_cache_lights(program->uniforms, get_gl_max_lights());
-    uniform_cache_shadows(program->uniforms, 3);
+    uniform_cache_shadows(program->uniforms, MAX_SHADOW_LIGHTS, SHADOW_CASCADES);
 }
 
 ShaderProgram* create_pbr_program() {

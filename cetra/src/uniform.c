@@ -151,7 +151,9 @@ void uniform_cache_lights(UniformManager* mgr, size_t max_lights) {
     }
 }
 
-void uniform_cache_shadows(UniformManager* mgr, size_t max_shadow_lights) {
+// max_shadow_lights is the caster slot count; the per-layer arrays
+// (lightSpaceMatrix, cascadeParams) span slots x cascades
+void uniform_cache_shadows(UniformManager* mgr, size_t max_shadow_lights, size_t max_cascades) {
     if (!mgr)
         return;
 
@@ -159,11 +161,19 @@ void uniform_cache_shadows(UniformManager* mgr, size_t max_shadow_lights) {
     uniform_location(mgr, "numShadowLights");
     uniform_location(mgr, "shadowBias");
     uniform_location(mgr, "shadowTexelSize");
+    uniform_location(mgr, "cascadeCount");
+    uniform_location(mgr, "cascadeSplits");
+    uniform_location(mgr, "csmDebug");
 
-    for (size_t i = 0; i < max_shadow_lights; i++) {
+    for (size_t i = 0; i < max_shadow_lights * max_cascades; i++) {
         char name[64];
         snprintf(name, sizeof(name), "lightSpaceMatrix[%zu]", i);
         uniform_location(mgr, name);
+        snprintf(name, sizeof(name), "cascadeParams[%zu]", i);
+        uniform_location(mgr, name);
+    }
+    for (size_t i = 0; i < max_shadow_lights; i++) {
+        char name[64];
         snprintf(name, sizeof(name), "shadowLightIndex[%zu]", i);
         uniform_location(mgr, name);
     }

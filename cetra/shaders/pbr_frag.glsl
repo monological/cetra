@@ -23,7 +23,10 @@ layout(location = 2) out vec4 VelocityOut;
 // metals get no bounced diffuse). Only lands when attachment 3 is enabled (SSGI).
 layout(location = 3) out vec4 AlbedoOut;
 
-#define MAX_LIGHTS 70
+// Sized against GL_MAX_FRAGMENT_UNIFORM_COMPONENTS (4096 on the target GL 4.1
+// tier): the light array plus the fixed uniforms (the CSM matrix/param arrays
+// dominate) must stay under the limit or the program fails to link.
+#define MAX_LIGHTS 64
 
 struct Light {
     int type;
@@ -124,8 +127,15 @@ uniform int subsurfaceTexExists;
 
 // Shadow mapping uniforms
 #define MAX_SHADOW_LIGHTS 3
+#define SHADOW_CASCADES 3
 uniform sampler2DArray shadowMaps;
-uniform mat4 lightSpaceMatrix[MAX_SHADOW_LIGHTS];
+// Layers stride by the RUNTIME cascadeCount (layer = slot*cascadeCount + c),
+// so at cascadeCount 1 the indices match the classic single-map layout
+uniform mat4 lightSpaceMatrix[MAX_SHADOW_LIGHTS * SHADOW_CASCADES];
+uniform vec4 cascadeParams[MAX_SHADOW_LIGHTS * SHADOW_CASCADES]; // width, near, far, biasScale
+uniform vec4 cascadeSplits; // View-depth far bound per cascade (.xyz)
+uniform int cascadeCount;
+uniform int csmDebug; // Tint fragments by selected cascade
 uniform int shadowLightIndex[MAX_SHADOW_LIGHTS];
 uniform int numShadowLights;
 uniform float shadowBias;
@@ -138,6 +148,18 @@ uniform int pcssEnabled;
 uniform float pcssSoftness;      // Multiplier on the light's angular size
 uniform float shadowFrustumWidth; // World units across the ortho shadow map
 uniform vec2 shadowNearFar;       // Ortho near/far planes (world units)
+
+// Cascade for this fragment's view depth: the first cascade whose far
+// bound contains it. At cascadeCount 1 the loop never runs (cascade 0).
+int selectCascade()
+{
+    int cascade = 0;
+    for (int c = 0; c < cascadeCount - 1; c++) {
+        if (-ViewPos.z > cascadeSplits[c])
+            cascade = c + 1;
+    }
+    return cascade;
+}
 
 // IBL (Image-Based Lighting) uniforms
 uniform samplerCube irradianceMap;
@@ -328,13 +350,14 @@ float linearizeOrthoDepth(float d01) {
     return shadowNearFar.x + d01 * (shadowNearFar.y - shadowNearFar.x);
 }
 
-// Fixed 3x3 PCF: the pre-PCSS path, kept bit-identical as the fallback
-float shadowPCF3x3(int shadowIndex, vec2 uv, float currentDepth, float bias) {
+// Fixed 3x3 PCF: the pre-PCSS path, kept bit-identical as the fallback.
+// layer is a shadow-array layer (slot * cascadeCount + cascade).
+float shadowPCF3x3(int layer, vec2 uv, float currentDepth, float bias) {
     float shadow = 0.0;
     for (int x = -1; x <= 1; ++x) {
         for (int y = -1; y <= 1; ++y) {
             vec2 offset = vec2(float(x), float(y)) * shadowTexelSize;
-            float pcfDepth = texture(shadowMaps, vec3(uv + offset, float(shadowIndex))).r;
+            float pcfDepth = texture(shadowMaps, vec3(uv + offset, float(layer))).r;
             shadow += currentDepth - bias > pcfDepth ? 1.0 : 0.0;
         }
     }
@@ -346,7 +369,10 @@ float shadowPCF3x3(int shadowIndex, vec2 uv, float currentDepth, float bias) {
 // with blocker distance. The algorithm is isotropic, so callers collapse a
 // rectangular emitter to a single dimension.
 float calculateShadow(int shadowIndex, vec3 worldPos, float NdotL, float lightSize) {
-    vec4 fragPosLightSpace = lightSpaceMatrix[shadowIndex] * vec4(worldPos, 1.0);
+    // Layer within the caster's cascade block; at cascadeCount 1 this is
+    // exactly the classic shadowIndex (the byte-identity bridge)
+    int layer = shadowIndex * cascadeCount + selectCascade();
+    vec4 fragPosLightSpace = lightSpaceMatrix[layer] * vec4(worldPos, 1.0);
     vec3 projCoords = fragPosLightSpace.xyz / fragPosLightSpace.w;
     projCoords = projCoords * 0.5 + 0.5;
 
@@ -355,11 +381,15 @@ float calculateShadow(int shadowIndex, vec3 worldPos, float NdotL, float lightSi
         return 1.0;
     }
 
-    float bias = max(shadowBias * (1.0 - NdotL), shadowBias * 0.1);
+    // Coarser cascades scale the depth bias with their texel size
+    // (cascadeParams.w is exactly 1.0 at cascadeCount 1)
+    float bias = max(shadowBias * (1.0 - NdotL), shadowBias * 0.1) * cascadeParams[layer].w;
     float currentDepth = projCoords.z;
 
-    if (pcssEnabled == 0) {
-        return shadowPCF3x3(shadowIndex, projCoords.xy, currentDepth, bias);
+    // PCSS's blocker/penumbra math still reads the single-map globals; under
+    // cascades it falls back to PCF until the per-cascade params land
+    if (pcssEnabled == 0 || cascadeCount > 1) {
+        return shadowPCF3x3(layer, projCoords.xy, currentDepth, bias);
     }
 
     // The emitter as a fraction of the shadow map. Capped low so the 16 taps
@@ -370,7 +400,7 @@ float calculateShadow(int shadowIndex, vec3 worldPos, float NdotL, float lightSi
         clamp(pcssSoftness * lightSize / shadowFrustumWidth, 0.0, PCSS_MAX_RADIUS_UV);
     if (lightSizeUV < shadowTexelSize.x) {
         // Emitter smaller than a texel: no meaningful penumbra, stay crisp
-        return shadowPCF3x3(shadowIndex, projCoords.xy, currentDepth, bias);
+        return shadowPCF3x3(layer, projCoords.xy, currentDepth, bias);
     }
 
     // 1. Blocker search: average depth of texels nearer the light than the
@@ -380,7 +410,7 @@ float calculateShadow(int shadowIndex, vec3 worldPos, float NdotL, float lightSi
     float blockerCount = 0.0;
     for (int i = 0; i < 16; i++) {
         vec2 off = POISSON16[i] * lightSizeUV;
-        float d = texture(shadowMaps, vec3(projCoords.xy + off, float(shadowIndex))).r;
+        float d = texture(shadowMaps, vec3(projCoords.xy + off, float(layer))).r;
         if (d < currentDepth - bias) {
             blockerSum += linearizeOrthoDepth(d);
             blockerCount += 1.0;
@@ -402,7 +432,7 @@ float calculateShadow(int shadowIndex, vec3 worldPos, float NdotL, float lightSi
     float shadow = 0.0;
     for (int i = 0; i < 16; i++) {
         vec2 off = POISSON16[i] * filterRadiusUV;
-        float d = texture(shadowMaps, vec3(projCoords.xy + off, float(shadowIndex))).r;
+        float d = texture(shadowMaps, vec3(projCoords.xy + off, float(layer))).r;
         shadow += currentDepth - bias > d ? 1.0 : 0.0;
     }
     return 1.0 - (shadow / 16.0);
@@ -883,6 +913,15 @@ void main() {
     // to +INF, which the tonemap turns into NaN and displays as black
     // flecks tracing the specular highlights.
     vec3 color = min(ambient + Lo + transmitted + emissiveMap, vec3(60000.0));
+
+    // Cascade acceptance view: tint by the fragment's selected cascade so
+    // split geometry and snap stability are visible (dead when csmDebug 0)
+    if (csmDebug > 0 && cascadeCount > 1) {
+        vec3 tint = selectCascade() == 0   ? vec3(1.0, 0.35, 0.35)
+                    : selectCascade() == 1 ? vec3(0.35, 1.0, 0.35)
+                                           : vec3(0.35, 0.55, 1.0);
+        color = mix(color, tint, 0.35);
+    }
 
     // For translucent materials, apply Fresnel-based alpha
     // Edges become more reflective (less transparent) at glancing angles

@@ -118,6 +118,7 @@ int reflection_probe_capture(ReflectionProbe* probe, struct Engine* engine, Scen
     bool saved_albedo = engine->albedo_this_frame;
     bool saved_taa = engine->postfx ? engine->postfx->taa_enabled : false;
     bool saved_refraction = engine->refraction_enabled;
+    int saved_cascades = scene->shadow_system ? scene->shadow_system->cascade_count : 1;
 
     GLint saved_viewport[4];
     GLint saved_fbo;
@@ -133,6 +134,11 @@ int reflection_probe_capture(ReflectionProbe* probe, struct Engine* engine, Scen
     engine->aux_this_frame = false;
     engine->albedo_this_frame = false;
     engine->refraction_enabled = false;
+    // Cascades fit the MAIN camera frustum; the capture's six cube-face
+    // cameras need the camera-independent scene-fit map, so force the
+    // classic single cascade for the whole capture (depth bake + faces)
+    if (scene->shadow_system)
+        scene->shadow_system->cascade_count = 1;
     if (engine->postfx)
         engine->postfx->taa_enabled = false;
 
@@ -216,6 +222,8 @@ int reflection_probe_capture(ReflectionProbe* probe, struct Engine* engine, Scen
     engine->aux_this_frame = saved_aux;
     engine->albedo_this_frame = saved_albedo;
     engine->refraction_enabled = saved_refraction;
+    if (scene->shadow_system)
+        scene->shadow_system->cascade_count = saved_cascades;
     if (engine->postfx)
         engine->postfx->taa_enabled = saved_taa;
 

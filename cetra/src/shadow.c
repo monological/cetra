@@ -37,6 +37,15 @@ ShadowSystem* create_shadow_system(int default_map_size) {
     system->pcss_enabled = false; // library default off; the app opts in
     system->pcss_softness = 1.0f;
     system->cascade_count = 1; // library default = classic single map; the app opts in
+    system->allocated_cascades = 0;
+    system->csm_debug = false;
+    for (int i = 0; i < MAX_SHADOW_LIGHTS * SHADOW_CASCADES; i++) {
+        glm_mat4_identity(system->cascade_matrices[i]);
+        glm_vec4_copy((vec4){1.0f, 0.0f, 1.0f, 1.0f}, system->cascade_params[i]);
+    }
+    for (int i = 0; i < SHADOW_CASCADES; i++) {
+        system->cascade_splits[i] = 0.0f;
+    }
 
     for (int i = 0; i < MAX_SHADOW_LIGHTS; i++) {
         system->casters[i].initialized = false;
@@ -129,9 +138,13 @@ int init_shadow_map_array(ShadowSystem* system) {
 
     int size = system->default_map_size;
 
+    // Layers are count-strided (slot * cascade_count + cascade), sized to the
+    // ACTIVE cascade count so the classic single-map default never pays the
+    // 3x VRAM of a full 9-layer array; a count change rebuilds the array
+    int layers = MAX_SHADOW_LIGHTS * system->cascade_count;
     glGenTextures(1, &system->shadow_map_array);
     glBindTexture(GL_TEXTURE_2D_ARRAY, system->shadow_map_array);
-    glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_DEPTH_COMPONENT24, size, size, MAX_SHADOW_LIGHTS, 0,
+    glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_DEPTH_COMPONENT24, size, size, layers, 0,
                  GL_DEPTH_COMPONENT, GL_FLOAT, NULL);
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
@@ -147,6 +160,7 @@ int init_shadow_map_array(ShadowSystem* system) {
     glReadBuffer(GL_NONE);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
+    system->allocated_cascades = system->cascade_count;
     system->initialized = true;
     return 0;
 }
@@ -168,8 +182,9 @@ void free_shadow_map_array(ShadowSystem* system) {
     system->initialized = false;
 }
 
+// caster_index is a LAYER index (slot * cascade_count + cascade)
 void begin_shadow_pass(ShadowSystem* system, size_t caster_index) {
-    if (!system || caster_index >= MAX_SHADOW_LIGHTS)
+    if (!system || caster_index >= (size_t)(MAX_SHADOW_LIGHTS * SHADOW_CASCADES))
         return;
 
     if (!system->initialized) {
@@ -225,6 +240,71 @@ void compute_directional_light_space_matrix(vec3 direction, vec3 scene_center, f
     glm_mat4_mul(light_projection, light_view, dest);
 }
 
+void compute_cascade_light_space_matrix(vec3 direction, const CascadeCamera* cam,
+                                        float slice_near, float slice_far, float scene_pad,
+                                        int map_size, mat4 dest, vec4 out_params) {
+    vec3 light_dir;
+    glm_vec3_normalize_to(direction, light_dir);
+
+    // Bounding sphere of the view slice: center on the view axis at the
+    // radius-minimizing depth, radius from the far corners. Depends only on
+    // fov/aspect and the split depths, never on camera pose -> the box size
+    // is constant per cascade and cannot breathe as the camera moves.
+    float k = tanf(cam->fov_radians * 0.5f);
+    float k2 = k * k * (1.0f + cam->aspect_ratio * cam->aspect_ratio);
+    float zc = 0.5f * (slice_near + slice_far) * (1.0f + k2);
+    if (zc > slice_far)
+        zc = slice_far;
+    float dz = slice_far - zc;
+    float radius = sqrtf(dz * dz + slice_far * slice_far * k2);
+
+    vec3 center;
+    glm_vec3_scale((float*)cam->forward, zc, center);
+    glm_vec3_add(center, (float*)cam->position, center);
+
+    vec3 up = {0.0f, 1.0f, 0.0f};
+    if (fabsf(glm_vec3_dot(light_dir, up)) > 0.99f) {
+        up[0] = 1.0f;
+        up[1] = 0.0f;
+        up[2] = 0.0f;
+    }
+
+    // Snap the sphere center to shadow-texel increments in light view space:
+    // with the diameter constant, the box then slides in whole texels and
+    // shadow edges stay put while the camera translates (Valient)
+    mat4 snap_view;
+    vec3 origin = {0.0f, 0.0f, 0.0f};
+    glm_lookat(origin, light_dir, up, snap_view);
+    vec3 center_ls;
+    glm_mat4_mulv3(snap_view, center, 1.0f, center_ls);
+    float texel = (2.0f * radius) / (float)map_size;
+    center_ls[0] = floorf(center_ls[0] / texel) * texel;
+    center_ls[1] = floorf(center_ls[1] / texel) * texel;
+    mat4 inv_snap;
+    glm_mat4_inv(snap_view, inv_snap);
+    glm_mat4_mulv3(inv_snap, center_ls, 1.0f, center);
+
+    // Eye pushed back past the slice by the scene pad so tall geometry
+    // OUTSIDE the slice but toward the light still casts into it
+    float back = radius + scene_pad;
+    vec3 eye;
+    glm_vec3_scale(light_dir, -back, eye);
+    glm_vec3_add(eye, center, eye);
+    mat4 light_view;
+    glm_lookat(eye, center, up, light_view);
+
+    float ortho_near = 0.1f;
+    float ortho_far = back + radius;
+    mat4 light_projection;
+    glm_ortho(-radius, radius, -radius, radius, ortho_near, ortho_far, light_projection);
+    glm_mat4_mul(light_projection, light_view, dest);
+
+    out_params[0] = 2.0f * radius;
+    out_params[1] = ortho_near;
+    out_params[2] = ortho_far;
+    out_params[3] = 1.0f; // bias scale; caller fills per cascade
+}
+
 void bind_shadow_maps_to_program(ShadowSystem* system, ShaderProgram* program,
                                  const int* shadow_light_indices) {
     if (!system || !program || !program->uniforms)
@@ -256,15 +336,32 @@ void bind_shadow_maps_to_program(ShadowSystem* system, ShaderProgram* program,
     if (loc >= 0)
         glUniform2f(loc, system->near_plane, system->far_plane);
 
-    for (size_t i = 0; i < system->active_count && i < MAX_SHADOW_LIGHTS; i++) {
-        ShadowCaster* caster = &system->casters[i];
+    // Cascade state. At count 1 the layer indices and matrices match the
+    // classic path exactly (the byte-identity bridge)
+    int cc = system->cascade_count;
+    uniform_set_int(u, "cascadeCount", cc);
+    uniform_set_int(u, "csmDebug", system->csm_debug ? 1 : 0);
+    loc = uniform_location(u, "cascadeSplits");
+    if (loc >= 0)
+        glUniform4f(loc, system->cascade_splits[0], system->cascade_splits[1],
+                    system->cascade_splits[2], 0.0f);
 
+    for (size_t i = 0; i < system->active_count && i < MAX_SHADOW_LIGHTS; i++) {
         char name[64];
 
-        snprintf(name, sizeof(name), "lightSpaceMatrix[%zu]", i);
-        loc = uniform_location(u, name);
-        if (loc >= 0)
-            glUniformMatrix4fv(loc, 1, GL_FALSE, (const GLfloat*)caster->light_space_matrix);
+        for (int c = 0; c < cc; c++) {
+            size_t layer = i * (size_t)cc + (size_t)c;
+            snprintf(name, sizeof(name), "lightSpaceMatrix[%zu]", layer);
+            loc = uniform_location(u, name);
+            if (loc >= 0)
+                glUniformMatrix4fv(loc, 1, GL_FALSE,
+                                   (const GLfloat*)system->cascade_matrices[layer]);
+
+            snprintf(name, sizeof(name), "cascadeParams[%zu]", layer);
+            loc = uniform_location(u, name);
+            if (loc >= 0)
+                glUniform4fv(loc, 1, (const GLfloat*)system->cascade_params[layer]);
+        }
 
         snprintf(name, sizeof(name), "shadowLightIndex[%zu]", i);
         uniform_set_int(u, name, shadow_light_indices ? shadow_light_indices[i] : (int)i);
@@ -333,6 +430,11 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
         }
     }
 
+    // Rebuild the array when the cascade count changed (layer count differs)
+    if (ss->initialized && ss->allocated_cascades != ss->cascade_count) {
+        free_shadow_map_array(ss);
+    }
+
     // Always initialize the shadow map array texture (needed for sampler2DArray in shader)
     if (!ss->initialized) {
         if (init_shadow_map_array(ss) != 0)
@@ -351,7 +453,38 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
         }
     }
 
-    // Compute light space matrices for shadow-casting lights
+    // Cascade split depths (count > 1): the practical lambda mix of
+    // logarithmic (resolution where the eye is) and uniform (coverage)
+    // splits over [camera near, shadow distance]
+    int cc = ss->cascade_count;
+    CascadeCamera cam = {0};
+    if (cc > 1) {
+        const Camera* camera = engine->camera;
+        glm_vec3_copy((float*)camera->position, cam.position);
+        // World-space view forward from the view matrix's third row
+        cam.forward[0] = -engine->view_matrix[0][2];
+        cam.forward[1] = -engine->view_matrix[1][2];
+        cam.forward[2] = -engine->view_matrix[2][2];
+        glm_vec3_normalize(cam.forward);
+        cam.fov_radians = camera->fov_radians;
+        cam.aspect_ratio = camera->aspect_ratio;
+
+        const float lambda = 0.75f;
+        float cam_near = camera->near_clip;
+        float shadow_dist = fminf(ss->far_plane, camera->far_clip);
+        for (int c = 0; c < cc; c++) {
+            float t = (float)(c + 1) / (float)cc;
+            float uniform_split = cam_near + (shadow_dist - cam_near) * t;
+            float log_split = cam_near * powf(shadow_dist / cam_near, t);
+            ss->cascade_splits[c] = lambda * log_split + (1.0f - lambda) * uniform_split;
+        }
+    }
+
+    // Fit each caster's cascades. Count 1 takes the classic scene-fit path
+    // VERBATIM (the byte-identity bridge); count > 1 fits each view slice's
+    // bounding sphere with texel snapping. casters[slot].light_space_matrix
+    // always mirrors cascade 0 for single-matrix consumers (catcher, fog
+    // publish) until they learn cascade selection.
     size_t slot = 0;
     for (size_t i = 0; i < scene->light_count && slot < MAX_SHADOW_LIGHTS; ++i) {
         Light* light = scene->lights[i];
@@ -359,9 +492,38 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
             continue;
 
         if (light->type == LIGHT_DIRECTIONAL && light->cast_shadows) {
-            compute_directional_light_space_matrix(light->direction, scene_center, ss->ortho_size,
-                                                   ss->near_plane, ss->far_plane,
-                                                   ss->casters[slot].light_space_matrix);
+            if (cc == 1) {
+                compute_directional_light_space_matrix(light->direction, scene_center,
+                                                       ss->ortho_size, ss->near_plane,
+                                                       ss->far_plane,
+                                                       ss->cascade_matrices[slot]);
+                ss->cascade_params[slot][0] = 2.0f * ss->ortho_size;
+                ss->cascade_params[slot][1] = ss->near_plane;
+                ss->cascade_params[slot][2] = ss->far_plane;
+                ss->cascade_params[slot][3] = 1.0f;
+            } else {
+                float slice_near = engine->camera->near_clip;
+                // The scene pad covers casters toward the light outside the
+                // slice; the legacy fit's eye sat at far/2, reuse that scale
+                float scene_pad = ss->far_plane * 0.5f;
+                for (int c = 0; c < cc; c++) {
+                    int layer = (int)slot * cc + c;
+                    compute_cascade_light_space_matrix(
+                        light->direction, &cam, slice_near, ss->cascade_splits[c], scene_pad,
+                        ss->default_map_size, ss->cascade_matrices[layer],
+                        ss->cascade_params[layer]);
+                    slice_near = ss->cascade_splits[c];
+                }
+                // Coarser cascades need proportionally more depth bias: their
+                // texels span more world units
+                float width0 = ss->cascade_params[(int)slot * cc][0];
+                for (int c = 0; c < cc; c++) {
+                    int layer = (int)slot * cc + c;
+                    ss->cascade_params[layer][3] = ss->cascade_params[layer][0] / width0;
+                }
+            }
+            glm_mat4_copy(ss->cascade_matrices[slot * (size_t)cc],
+                          ss->casters[slot].light_space_matrix);
 
             light->shadow_map_index = (int)slot;
             slot++;
@@ -378,14 +540,17 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     current_program = ss->depth_program->id;
 
     for (size_t i = 0; i < ss->active_count; ++i) {
-        begin_shadow_pass(ss, i);
+        for (int c = 0; c < cc; ++c) {
+            size_t layer = i * (size_t)cc + (size_t)c;
+            begin_shadow_pass(ss, layer);
 
-        uniform_set_mat4(ss->depth_program->uniforms, "lightSpaceMatrix",
-                         (const float*)ss->casters[i].light_space_matrix);
+            uniform_set_mat4(ss->depth_program->uniforms, "lightSpaceMatrix",
+                             (const float*)ss->cascade_matrices[layer]);
 
-        _render_shadow_node(scene->root_node, ss->depth_program, &current_program);
+            _render_shadow_node(scene->root_node, ss->depth_program, &current_program);
 
-        end_shadow_pass(ss);
+            end_shadow_pass(ss);
+        }
     }
 
     glCullFace(GL_BACK);
