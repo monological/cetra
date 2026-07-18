@@ -79,7 +79,8 @@ typedef struct Engine {
     RenderMode current_render_mode; // default is PBR
 
     float specular_aa_strength; // Geometric specular AA (0 disables)
-    bool energy_comp_enabled;   // Multi-scatter specular energy compensation
+    bool energy_comp_enabled;   // Multi-scatter specular energy compensation;
+                                // inert without an IBL environment (needs the BRDF LUT)
 
     mat4 model_matrix;
     mat4 view_matrix;

@@ -138,8 +138,7 @@ uniform sampler2D brdfLUT;
 uniform int iblEnabled;
 uniform float iblIntensity;
 uniform float maxReflectionLOD;
-// Multi-scatter energy compensation toggle (needs the LUT, so it only
-// takes effect when iblEnabled is set)
+// Multi-scatter energy compensation toggle (inert unless iblEnabled)
 uniform int energyCompEnabled;
 
 // Local reflection probe: the scene captured into a prefiltered cubemap,
@@ -648,20 +647,20 @@ void main() {
     vec3 F0 = vec3(iorF0);
     F0 = mix(F0, albedoMap, metallicMap);
 
+    float NdotV = max(dot(N, V), 0.0);
+
     // Multi-scatter energy compensation (Kulla-Conty / Fdez-Agüera):
     // single-scatter GGX discards light that bounces between microfacets
     // more than once, dimming rough metals. The split-sum LUT's A+B is the
     // single-scatter directional albedo Ess; scaling specular by
     // 1 + F0*(1/Ess - 1) restores the multi-bounce energy (Fresnel-
-    // weighted: dielectrics barely move, metals recover fully). Gated on
-    // iblEnabled — the predicate for the LUT actually being bound.
-    float NdotV = max(dot(N, V), 0.0);
+    // weighted: dielectrics barely move, metals recover fully).
     vec2 brdf = vec2(0.0);
     vec3 energyComp = vec3(1.0);
     if (iblEnabled > 0) {
         // Fetched inside the gate: with no environment the LUT is unbound
         // and must not be sampled. The ambient block below reuses this
-        // fetch (same coordinates), so IBL-on fetch count is unchanged.
+        // fetch (same coordinates).
         brdf = texture(brdfLUT, vec2(NdotV, roughnessMap)).rg;
         float Ess = brdf.x + brdf.y;
         if (energyCompEnabled > 0 && Ess > 1e-4) {
@@ -736,9 +735,11 @@ void main() {
             F = iridescence * (0.6 + fresnel * 0.4);
         }
 
+        float NdotL = max(dot(N, L), 0.0);
+
         // Specular contribution, multi-scatter compensated
         vec3 numerator = NDF * G * F;
-        float denominator = 4.0 * NdotV * max(dot(N, L), 0.0) + 0.0001;
+        float denominator = 4.0 * NdotV * NdotL + 0.0001;
         vec3 specular = numerator / denominator * energyComp;
 
         // Energy conservation: diffuse and specular must not exceed 1.0
@@ -746,9 +747,6 @@ void main() {
         vec3 kD = vec3(1.0) - kS;
         // Metals have no diffuse reflection
         kD *= 1.0 - metallicMap;
-
-        // Lambertian diffuse
-        float NdotL = max(dot(N, L), 0.0);
 
         // Shadow calculation for directional lights. Alpha-to-coverage
         // surfaces (hair cards) cast shadows but never receive the shadow
@@ -824,7 +822,7 @@ void main() {
         } else {
             prefilteredColor = textureLod(prefilteredMap, R, roughnessMap * maxReflectionLOD).rgb;
         }
-        // brdf was fetched with the energy-compensation hoist (same coords)
+        // Reuses the brdf fetched before the light loop (same coordinates)
         vec3 specular = prefilteredColor * (F * brdf.x + brdf.y) * energyComp;
 
         ambient = (kD * diffuse + specular) * aoMap * iblIntensity;

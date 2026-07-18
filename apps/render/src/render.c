@@ -991,6 +991,10 @@ int main(int argc, char** argv) {
     }
     if (args.no_energy_comp) {
         engine->energy_comp_enabled = false;
+    } else if (!args.hdr_path) {
+        // Default-on but needs the IBL BRDF LUT, which only exists with an
+        // environment -- say so instead of leaving a silently inert toggle
+        fprintf(stderr, "Note: energy compensation is inactive without an HDR environment (-e)\n");
     }
     if (engine->postfx) {
         PostFX* fx = engine->postfx;
