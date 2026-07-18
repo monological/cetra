@@ -320,6 +320,7 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
             uniform_set_float(u, "time", time_value);
             uniform_set_int(u, "renderMode", render_mode);
             uniform_set_float(u, "specularAAStrength", engine->specular_aa_strength);
+            uniform_set_int(u, "energyCompEnabled", engine->energy_comp_enabled ? 1 : 0);
             _update_camera_uniforms(program, camera);
 
             // Update lights once per program switch for this node

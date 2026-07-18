@@ -138,6 +138,9 @@ uniform sampler2D brdfLUT;
 uniform int iblEnabled;
 uniform float iblIntensity;
 uniform float maxReflectionLOD;
+// Multi-scatter energy compensation toggle (needs the LUT, so it only
+// takes effect when iblEnabled is set)
+uniform int energyCompEnabled;
 
 // Local reflection probe: the scene captured into a prefiltered cubemap,
 // parallax-corrected against a proxy AABB (Lagarde 2012). When enabled, the
@@ -645,6 +648,27 @@ void main() {
     vec3 F0 = vec3(iorF0);
     F0 = mix(F0, albedoMap, metallicMap);
 
+    // Multi-scatter energy compensation (Kulla-Conty / Fdez-Agüera):
+    // single-scatter GGX discards light that bounces between microfacets
+    // more than once, dimming rough metals. The split-sum LUT's A+B is the
+    // single-scatter directional albedo Ess; scaling specular by
+    // 1 + F0*(1/Ess - 1) restores the multi-bounce energy (Fresnel-
+    // weighted: dielectrics barely move, metals recover fully). Gated on
+    // iblEnabled — the predicate for the LUT actually being bound.
+    float NdotV = max(dot(N, V), 0.0);
+    vec2 brdf = vec2(0.0);
+    vec3 energyComp = vec3(1.0);
+    if (iblEnabled > 0) {
+        // Fetched inside the gate: with no environment the LUT is unbound
+        // and must not be sampled. The ambient block below reuses this
+        // fetch (same coordinates), so IBL-on fetch count is unchanged.
+        brdf = texture(brdfLUT, vec2(NdotV, roughnessMap)).rg;
+        float Ess = brdf.x + brdf.y;
+        if (energyCompEnabled > 0 && Ess > 1e-4) {
+            energyComp = 1.0 + F0 * (1.0 / Ess - 1.0);
+        }
+    }
+
     // Analytic keys act as small area lights (sphere-light approximation,
     // Karis 2013): widen the GGX lobe by the light's angular size and
     // scale by (a/a')^2 so reflected energy is conserved. Point lights
@@ -703,7 +727,6 @@ void main() {
 
         // Apply thin-film interference for iridescent coatings (pilot visor style)
         if (filmThickness > 0.0) {
-            float NdotV = max(dot(N, V), 0.0);
             vec3 iridescence = thinFilmInterference(filmThickness, NdotV, 1.5);
             // Strong iridescent mirror effect
             // Clamped: pow with a negative base (NdotV rounding above 1) is
@@ -713,10 +736,10 @@ void main() {
             F = iridescence * (0.6 + fresnel * 0.4);
         }
 
-        // Specular contribution
+        // Specular contribution, multi-scatter compensated
         vec3 numerator = NDF * G * F;
-        float denominator = 4.0 * max(dot(N, V), 0.0) * max(dot(N, L), 0.0) + 0.0001;
-        vec3 specular = numerator / denominator;
+        float denominator = 4.0 * NdotV * max(dot(N, L), 0.0) + 0.0001;
+        vec3 specular = numerator / denominator * energyComp;
 
         // Energy conservation: diffuse and specular must not exceed 1.0
         vec3 kS = F;
@@ -766,7 +789,6 @@ void main() {
     // Ambient lighting with IBL
     vec3 ambient;
     if (iblEnabled > 0) {
-        float NdotV = max(dot(N, V), 0.0);
         vec3 F = fresnelSchlickRoughness(NdotV, F0, roughnessMap);
 
         vec3 kS = F;
@@ -802,8 +824,8 @@ void main() {
         } else {
             prefilteredColor = textureLod(prefilteredMap, R, roughnessMap * maxReflectionLOD).rgb;
         }
-        vec2 brdf = texture(brdfLUT, vec2(NdotV, roughnessMap)).rg;
-        vec3 specular = prefilteredColor * (F * brdf.x + brdf.y);
+        // brdf was fetched with the energy-compensation hoist (same coords)
+        vec3 specular = prefilteredColor * (F * brdf.x + brdf.y) * energyComp;
 
         ambient = (kD * diffuse + specular) * aoMap * iblIntensity;
     } else {
@@ -824,7 +846,6 @@ void main() {
     // Edges become more reflective (less transparent) at glancing angles
     float finalOpacity = opacity;
     if (opacity < 1.0) {
-        float NdotV = max(dot(N, V), 0.0);
         float fresnelOpacity = iorF0 + (1.0 - iorF0) * pow(clamp(1.0 - NdotV, 0.0, 1.0), 5.0);
         // Blend between base opacity and full opacity based on Fresnel
         finalOpacity = mix(opacity, 1.0, fresnelOpacity);

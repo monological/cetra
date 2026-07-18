@@ -103,6 +103,7 @@ Engine* create_engine(const char* window_title, int width, int height) {
 
     engine->current_render_mode = RENDER_MODE_PBR;
     engine->specular_aa_strength = 1.0f;
+    engine->energy_comp_enabled = true; // Correctness fix; ships on
 
     glm_mat4_identity(engine->model_matrix);
     glm_mat4_identity(engine->view_matrix);
@@ -1314,6 +1315,7 @@ static void _engine_gui_panel(Engine* engine) {
 
         igCheckbox("Normals G-buffer", &fx->normals_enabled);
         igSliderFloat("Spec AA", &engine->specular_aa_strength, 0.0f, 2.0f, "%.2f", 0);
+        igCheckbox("Energy Comp", &engine->energy_comp_enabled);
     }
 
     if (engine->postfx &&

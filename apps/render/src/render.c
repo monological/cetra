@@ -91,6 +91,7 @@ typedef struct {
     int ssr_debug;                     // Show the reflection buffer
     float ssr_strength;                // SSR strength override (-1 = default)
     float specular_aa;                 // Specular AA strength override (-1 = default)
+    int no_energy_comp;                // Disable multi-scatter energy compensation
     int ssaa;                          // Supersampling factor (0 = keep engine default)
     // Finishing grade (-1 = keep engine default; >=0 enables + sets)
     int film_preset; // --film: enable the whole finishing stack at sane defaults
@@ -163,6 +164,7 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --albedo-debug     Show the resolved albedo G-buffer\n");
     fprintf(stderr, "      --specular-aa <f>  Specular anti-aliasing strength (default: 1)\n");
     fprintf(stderr, "      --no-specular-aa   Disable specular anti-aliasing\n");
+    fprintf(stderr, "      --no-energy-comp   Disable multi-scatter specular energy comp\n");
     fprintf(stderr, "      --ssaa <int>       Supersampling factor (default: 1 = off; 2 = 2x SSAA)\n");
     fprintf(stderr, "      --no-ssaa          Disable supersampling (render at 1x)\n");
     fprintf(stderr, "      --film             Cinematic finish preset (vignette+grain+sharpen+grade)\n");
@@ -442,6 +444,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->specular_aa = (float)atof(argv[i]);
         } else if (strcmp(argv[i], "--no-specular-aa") == 0) {
             args->specular_aa = 0.0f;
+        } else if (strcmp(argv[i], "--no-energy-comp") == 0) {
+            args->no_energy_comp = 1;
         } else if (strcmp(argv[i], "--ssaa") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -984,6 +988,9 @@ int main(int argc, char** argv) {
     }
     if (args.specular_aa >= 0.0f) {
         engine->specular_aa_strength = args.specular_aa;
+    }
+    if (args.no_energy_comp) {
+        engine->energy_comp_enabled = false;
     }
     if (engine->postfx) {
         PostFX* fx = engine->postfx;
