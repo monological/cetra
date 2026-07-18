@@ -898,10 +898,14 @@ void render_scene_callback(Engine* engine, Scene* current_scene) {
 }
 
 /*
- * Configure iridescent visor material (pilot helmet style).
+ * Configure iridescent visor material (pilot helmet style): a thin-film
+ * coating over real transmissive glass. The film tints the specular
+ * reflection (the rainbow sheen); transmission carries the refracted
+ * scene through the shell. Opacity stays 1.0 -- transmission replaces
+ * alpha as the see-through mechanism (mixing both composes wrongly).
  * filmThickness: coating thickness in nanometers (300-500nm for gold/rainbow effect)
  */
-void set_node_iridescent_visor(SceneNode* node, float opacity, float roughness,
+void set_node_iridescent_visor(SceneNode* node, float transmission, float roughness,
                                float filmThickness) {
     if (!node)
         return;
@@ -909,7 +913,8 @@ void set_node_iridescent_visor(SceneNode* node, float opacity, float roughness,
     for (size_t i = 0; i < node->mesh_count; i++) {
         Mesh* mesh = node->meshes[i];
         if (mesh && mesh->material) {
-            mesh->material->opacity = opacity;
+            mesh->material->opacity = 1.0f;
+            mesh->material->transmission = transmission;
             mesh->material->roughness = roughness;
             mesh->material->metallic = 0.0f;
             mesh->material->ior = 1.5f;
@@ -932,8 +937,8 @@ void configure_visor_materials(Scene* scene) {
         SceneNode* node = find_node_by_name(scene->root_node, visor_names[i]);
         if (node) {
             printf("Configuring iridescent visor for: %s\n", visor_names[i]);
-            // Mirror-like visor: low opacity (reflective), very glossy, 520nm iridescence
-            set_node_iridescent_visor(node, 0.15f, 0.005f, 520.0f);
+            // Refractive visor: high transmission, very glossy, 520nm iridescence
+            set_node_iridescent_visor(node, 0.9f, 0.005f, 520.0f);
         }
     }
 }
