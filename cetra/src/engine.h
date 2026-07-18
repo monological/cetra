@@ -57,9 +57,10 @@ typedef struct Engine {
                                        // (attachment 2)
     GLuint albedo_multisample_texture; // Multisample base color for SSGI (attachment 3)
     GLuint depth_renderbuffer;         // Depth renderbuffer
-    GLuint opaque_color_fbo;           // Refraction source: mid-frame resolve of the opaque
-    GLuint opaque_color_texture;       // scene (mipped RGBA16F, lazy -- exists only once a
-                                       // transmissive mesh has been drawn)
+    // Refraction source: mid-frame resolve of the opaque scene into a mipped
+    // RGBA16F texture, created lazily on the first transmissive frame
+    GLuint opaque_color_fbo;
+    GLuint opaque_color_texture;
     int opaque_color_w, opaque_color_h;
     bool scene_color_this_frame; // Resolve ran this frame; transmissive draws may sample
     bool normals_this_frame;     // Attachment 1 written this frame (PBR + consumer active)
@@ -87,7 +88,8 @@ typedef struct Engine {
     bool energy_comp_enabled;   // Multi-scatter specular energy compensation;
                                 // inert without an IBL environment (needs the BRDF LUT)
     bool refraction_enabled;    // Screen-space refraction for transmissive materials;
-                                // off = transmissive surfaces fall back to alpha blending
+                                // off = no resolve, and the shader treats transmission
+                                // as 0 (glass renders as a plain lit surface)
 
     mat4 model_matrix;
     mat4 view_matrix;

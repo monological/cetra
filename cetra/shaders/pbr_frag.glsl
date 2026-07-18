@@ -83,6 +83,9 @@ uniform float transmission;
 uniform float transmissionThickness; // KHR_materials_volume, world units
 uniform sampler2D sceneColorTex;     // Mipped opaque-scene resolve (unit 6)
 uniform int sceneColorAvailable;     // 1 only in the late pass after the resolve
+// Coarsest blur mip the transmission sample may select (the resolve's mip
+// generation stops here too -- keep in step with OPAQUE_COLOR_MAX_LOD)
+const float TRANSMISSION_MAX_LOD = 6.0;
 uniform float filmThickness;
 uniform vec2 uvOffset;      // Texture coordinate offset (KHR_texture_transform)
 uniform vec2 uvScale;       // Texture coordinate scale (KHR_texture_transform)
@@ -98,7 +101,6 @@ uniform sampler2D roughnessTex;
 uniform sampler2D metalnessTex;
 uniform sampler2D aoTex;
 uniform sampler2D emissiveTex;
-uniform sampler2D heightTex;
 uniform sampler2D opacityTex;
 uniform sampler2D sheenTex;
 uniform sampler2D reflectanceTex;
@@ -655,6 +657,12 @@ void main() {
 
     float NdotV = max(dot(N, V), 0.0);
 
+    // Transmission is only real when this pass has the opaque resolve to
+    // sample; without it (refraction disabled, debug modes, probe capture)
+    // it must read as 0 so the diffuse term it would replace stays lit --
+    // glass falls back to a plain lit surface instead of going dark
+    float transmissionEff = sceneColorAvailable > 0 ? transmission : 0.0;
+
     // Multi-scatter energy compensation (Kulla-Conty / Fdez-Agüera):
     // single-scatter GGX discards light that bounces between microfacets
     // more than once, dimming rough metals. The split-sum LUT's A+B is the
@@ -755,7 +763,7 @@ void main() {
         // with the transmitted scene term added after the loop (KHR:
         // mix(diffuse_brdf, specular_btdf, transmission) under specular)
         kD *= 1.0 - metallicMap;
-        kD *= 1.0 - transmission;
+        kD *= 1.0 - transmissionEff;
 
         // Shadow calculation for directional lights. Alpha-to-coverage
         // surfaces (hair cards) cast shadows but never receive the shadow
@@ -801,7 +809,7 @@ void main() {
         vec3 kS = F;
         vec3 kD = vec3(1.0) - kS;
         kD *= 1.0 - metallicMap;
-        kD *= 1.0 - transmission; // diffuse yields to the transmitted term
+        kD *= 1.0 - transmissionEff; // diffuse yields to the transmitted term
 
         // Diffuse IBL: sample irradiance map with surface normal
         vec3 irradiance = texture(irradianceMap, N).rgb;
@@ -839,7 +847,7 @@ void main() {
     } else {
         // Fallback to simple ambient when IBL is disabled (diffuse-only, so
         // it yields to transmission like the other diffuse terms)
-        ambient = vec3(0.03) * albedoMap * aoMap * (1.0 - transmission);
+        ambient = vec3(0.03) * albedoMap * aoMap * (1.0 - transmissionEff);
     }
 
     // Screen-space transmission (KHR_materials_transmission): the diffuse
@@ -851,17 +859,20 @@ void main() {
     // and blur without a bend, per the glTF spec. Specular and emissive
     // are untouched -- glass keeps its reflections.
     vec3 transmitted = vec3(0.0);
-    if (transmission > 0.0 && sceneColorAvailable > 0) {
+    if (transmissionEff > 0.0) {
         vec3 refrDir = refract(-V, N, 1.0 / ior);
         vec3 exitPos = WorldPos + refrDir * transmissionThickness;
-        vec4 refrClip = projection * view * vec4(exitPos, 1.0);
+        // Right-associated: two mat4*vec4 instead of a per-fragment
+        // mat4*mat4 (compilers do not reliably hoist the uniform product)
+        vec4 refrClip = projection * (view * vec4(exitPos, 1.0));
         vec2 refrUV = clamp(refrClip.xy / refrClip.w * 0.5 + 0.5, 0.0, 1.0);
         // Box mips: one level per doubling of blur width; frosted surfaces
         // read a progressively softer background
-        vec3 sceneSample = textureLod(sceneColorTex, refrUV, roughnessMap * 6.0).rgb;
+        vec3 sceneSample =
+            textureLod(sceneColorTex, refrUV, roughnessMap * TRANSMISSION_MAX_LOD).rgb;
         vec3 Ft = fresnelSchlickRoughness(NdotV, F0, roughnessMap);
         transmitted =
-            sceneSample * albedoMap * (1.0 - Ft) * transmission * (1.0 - metallicMap);
+            sceneSample * albedoMap * (1.0 - Ft) * transmissionEff * (1.0 - metallicMap);
     }
 
     // Final color, linear HDR: tone mapping and gamma happen in the post

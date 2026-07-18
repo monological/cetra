@@ -166,7 +166,7 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
     uniform_set_int(u, "metalnessTex", 3);
     uniform_set_int(u, "aoTex", 4);
     uniform_set_int(u, "emissiveTex", 5);
-    uniform_set_int(u, "heightTex", 6);
+    uniform_set_int(u, "sceneColorTex", 6); // refraction source (was heightTex's slot)
     uniform_set_int(u, "opacityTex", 7);
     uniform_set_int(u, "sheenTex", 8);
     uniform_set_int(u, "reflectanceTex", 9);
@@ -291,7 +291,14 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
         if (is_late != alpha_pass) {
             if (is_late) {
                 scene->transparent_mesh_count++;
-                if (is_transmissive)
+                // Frustum-gate the transmissive count: it triggers the
+                // full-frame resolve, which off-screen glass must not pay
+                // for (the late-pass re-traversal it shares with blend
+                // meshes is cheap and keeps its pre-cull count)
+                if (is_transmissive &&
+                    (!frustum || frustum_test_aabb_transformed(frustum, mesh->aabb.min,
+                                                               mesh->aabb.max,
+                                                               node->global_transform)))
                     scene->transmissive_mesh_count++;
             }
             continue;
@@ -334,7 +341,6 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
             // resetting current_program, so this always re-uploads there)
             uniform_set_int(u, "sceneColorAvailable", engine->scene_color_this_frame ? 1 : 0);
             if (engine->scene_color_this_frame) {
-                uniform_set_int(u, "sceneColorTex", 6);
                 glActiveTexture(GL_TEXTURE6);
                 glBindTexture(GL_TEXTURE_2D, engine->opaque_color_texture);
                 glActiveTexture(GL_TEXTURE0);
@@ -621,6 +627,9 @@ void render_current_scene(Engine* engine, float time_value) {
     engine_set_scene_draw_buffers(engine, true);
     scene->transparent_mesh_count = 0;
     scene->transmissive_mesh_count = 0;
+    // False until this frame's resolve runs, so pass 1 never uploads or
+    // binds a stale refraction source
+    engine->scene_color_this_frame = false;
     _render_scene_iterative(engine, scene, root_node, camera, *view, draw_projection, time_value,
                             render_mode, &current_program, &current_material, &frustum, false);
     engine_set_scene_draw_buffers(engine, false);
@@ -647,7 +656,6 @@ void render_current_scene(Engine* engine, float time_value) {
     // just drawn) into the mipped color texture transmissive surfaces
     // sample. Gated on this frame's count, the engine toggle, and PBR mode
     // (debug modes skip the skybox and never reach the shader branch).
-    engine->scene_color_this_frame = false;
     if (scene->transmissive_mesh_count > 0 && render_mode == RENDER_MODE_PBR &&
         engine->refraction_enabled) {
         engine->scene_color_this_frame = engine_resolve_opaque_color(engine);

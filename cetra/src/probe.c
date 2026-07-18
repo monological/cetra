@@ -117,6 +117,7 @@ int reflection_probe_capture(ReflectionProbe* probe, struct Engine* engine, Scen
     bool saved_aux = engine->aux_this_frame;
     bool saved_albedo = engine->albedo_this_frame;
     bool saved_taa = engine->postfx ? engine->postfx->taa_enabled : false;
+    bool saved_refraction = engine->refraction_enabled;
 
     GLint saved_viewport[4];
     GLint saved_fbo;
@@ -124,10 +125,14 @@ int reflection_probe_capture(ReflectionProbe* probe, struct Engine* engine, Scen
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &saved_fbo);
 
     // Color-only target: keep the G-buffer draw-buffer list at attachment 0,
-    // and make sure the TAA branch can never jitter the capture projection
+    // and make sure the TAA branch can never jitter the capture projection.
+    // Refraction must sit out too: its mid-frame resolve reads and rebinds
+    // engine->framebuffer, which is NOT the capture target -- it would blit
+    // a stale main frame and hijack the rest of the capture pass.
     engine->normals_this_frame = false;
     engine->aux_this_frame = false;
     engine->albedo_this_frame = false;
+    engine->refraction_enabled = false;
     if (engine->postfx)
         engine->postfx->taa_enabled = false;
 
@@ -210,6 +215,7 @@ int reflection_probe_capture(ReflectionProbe* probe, struct Engine* engine, Scen
     engine->normals_this_frame = saved_normals;
     engine->aux_this_frame = saved_aux;
     engine->albedo_this_frame = saved_albedo;
+    engine->refraction_enabled = saved_refraction;
     if (engine->postfx)
         engine->postfx->taa_enabled = saved_taa;
 

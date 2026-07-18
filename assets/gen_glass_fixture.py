@@ -23,12 +23,10 @@ indices = [0, 1, 2, 0, 2, 3]
 pos_bytes = b"".join(struct.pack("<3f", *p) for p in positions)
 nrm_bytes = b"".join(struct.pack("<3f", *n) for n in normals)
 idx_bytes = b"".join(struct.pack("<H", i) for i in indices)
-if len(idx_bytes) % 4:
-    idx_bytes += b"\x00\x00"  # 4-byte alignment for the buffer tail
 buffer_bytes = pos_bytes + nrm_bytes + idx_bytes
 
 
-def material(name, color, rough, transmission=None, ior=None, thickness=None):
+def material(name, color, rough, emissive=None, transmission=None, ior=None, thickness=None):
     m = {
         "name": name,
         "doubleSided": True,
@@ -38,6 +36,8 @@ def material(name, color, rough, transmission=None, ior=None, thickness=None):
             "roughnessFactor": rough,
         },
     }
+    if emissive is not None:
+        m["emissiveFactor"] = list(emissive)
     ext = {}
     if transmission is not None:
         ext["KHR_materials_transmission"] = {"transmissionFactor": transmission}
@@ -50,11 +50,20 @@ def material(name, color, rough, transmission=None, ior=None, thickness=None):
     return m
 
 
+# The backdrop is EMISSIVE on black: an emitter's radiance equals its
+# factor exactly, independent of scene lighting. Lit-diffuse quads under
+# the studio HDR + the viewer's key rig land several times above 1.0 and
+# the tonemap's highlight desaturation washes them to pastel; emission at
+# sub-1 values stays saturated under any environment or exposure.
+def backdrop(name, color):
+    return material(name, (0.0, 0.0, 0.0), 1.0, emissive=color)
+
+
 materials = [
-    material("backdrop_red", (0.85, 0.10, 0.10), 0.9),
-    material("backdrop_green", (0.10, 0.75, 0.15), 0.9),
-    material("backdrop_blue", (0.10, 0.25, 0.85), 0.9),
-    material("backdrop_yellow", (0.90, 0.80, 0.10), 0.9),
+    backdrop("backdrop_red", (0.60, 0.04, 0.04)),
+    backdrop("backdrop_green", (0.04, 0.50, 0.07)),
+    backdrop("backdrop_blue", (0.05, 0.12, 0.60)),
+    backdrop("backdrop_yellow", (0.60, 0.52, 0.05)),
     material("glass_clear", (1.0, 1.0, 1.0), 0.0, transmission=1.0, ior=1.5, thickness=0.3),
     material("glass_frosted", (1.0, 1.0, 1.0), 0.4, transmission=1.0, ior=1.5),
 ]
