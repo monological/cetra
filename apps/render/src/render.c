@@ -1413,12 +1413,12 @@ int main(int argc, char** argv) {
 
             // Fog parameters are world-space too: fixed meter-scale density
             // on a large-unit scene is invisible (or opaque soup on a tiny
-            // one). Density targets ~30% extinction over the default
+            // one). Density targets ~18% extinction over the default
             // camera-to-subject path at ground level — present, not
             // smothering; the falloff spans half the model height; sky rays
             // march the whole dome interior.
             engine->postfx->fog_density =
-                args.fog_density > 0.0f ? args.fog_density : 0.15f / scene_radius;
+                args.fog_density > 0.0f ? args.fog_density : 0.08f / scene_radius;
             engine->postfx->fog_height_falloff =
                 args.fog_height > 0.0f ? args.fog_height : scene_radius * 0.5f;
             engine->postfx->fog_far = scene_radius * 5.0f;

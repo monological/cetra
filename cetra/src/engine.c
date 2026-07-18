@@ -1298,6 +1298,20 @@ static void _engine_gui_panel(Engine* engine) {
         igSliderFloat("GI Intensity", &fx->ssgi_intensity, 0.0f, 4.0f, "%.2f", 0);
         _end_effect_group();
 
+        _begin_effect_group("Volumetric Fog", &fx->fog_enabled);
+        // Log scale + wide range: density and falloff are world-space
+        // quantities apps scale to the scene (tiny values on large-unit
+        // assets) — the SSR Distance slider precedent
+        igSliderFloat("Fog Density", &fx->fog_density, 0.00001f, 1.0f, "%.5f",
+                      ImGuiSliderFlags_Logarithmic);
+        igSliderFloat("Height Falloff", &fx->fog_height_falloff, 0.05f, 5000.0f, "%.2f",
+                      ImGuiSliderFlags_Logarithmic);
+        igSliderFloat("Anisotropy", &fx->fog_anisotropy, -0.9f, 0.9f, "%.2f", 0);
+        igSliderFloat("Sun Boost", &fx->fog_sun_boost, 0.0f, 8.0f, "%.2f", 0);
+        igColorEdit3("Fog Ambient", fx->fog_ambient, 0);
+        igSliderInt("Fog Steps", &fx->fog_steps, 8, 48, "%d", 0);
+        _end_effect_group();
+
         igCheckbox("Normals G-buffer", &fx->normals_enabled);
         igSliderFloat("Spec AA", &engine->specular_aa_strength, 0.0f, 2.0f, "%.2f", 0);
     }
