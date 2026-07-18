@@ -21,9 +21,11 @@ uniform sampler2D giTex;      // Half-res gathered GI radiance (SSGI)
 // scene's mean lands near photographic middle gray. The manual exposure
 // uniform then acts as an EV bias on top.
 uniform sampler2D lumTex; // 1x1 adapted log2 mean luminance
+uniform sampler2D fogTex; // Half-res fog in-scatter (debug view)
 uniform int autoExposure;
 uniform float autoKey; // Target middle gray (0.18)
-// Debug view dispatch (PostFXDebugView): 0=none, 1=AO, 2=normals, 3=SSR, 4=albedo, 5=GI
+// Debug view dispatch (PostFXDebugView): 0=none, 1=AO, 2=normals, 3=SSR,
+// 4=albedo, 5=GI, 6=fog
 uniform int debugView;
 // 1 = ACES, 2 = PBR Neutral (passthrough frames are blitted by postfx_run
 // and never reach this pass)
@@ -134,6 +136,13 @@ void main()
         vec3 gi = texture(giTex, TexCoords).rgb;
         gi = tonemapMode == 1 ? acesTonemap(gi) : pbrNeutralTonemap(gi);
         FragColor = vec4(displayEncode(gi), 1.0);
+        return;
+    }
+    if (debugView == 6) {
+        // Fog in-scatter (linear HDR); tone map so bright shafts read
+        vec3 fog = texture(fogTex, TexCoords).rgb;
+        fog = tonemapMode == 1 ? acesTonemap(fog) : pbrNeutralTonemap(fog);
+        FragColor = vec4(displayEncode(fog), 1.0);
         return;
     }
 

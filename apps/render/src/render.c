@@ -81,6 +81,7 @@ typedef struct {
     int probe_scene;                   // Capture the scene meshes too (interiors)
     int probe_debug;                   // Show the raw capture as the background
     int fog;                           // Enable volumetric fog
+    int fog_debug;                     // Show the raw fog in-scatter buffer
     float fog_density;                 // Extinction override (0 = scene-scaled)
     float fog_height;                  // Height falloff override (0 = scene-scaled)
     int albedo_debug;                  // Show the resolved albedo G-buffer
@@ -156,6 +157,7 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --probe-scene      Capture the scene meshes into the probe (interiors)\n");
     fprintf(stderr, "      --probe-debug      Show the raw capture as the background (implies --probe)\n");
     fprintf(stderr, "      --fog              Volumetric fog: god rays + height haze\n");
+    fprintf(stderr, "      --fog-debug        Show the raw fog in-scatter buffer (implies --fog)\n");
     fprintf(stderr, "      --fog-density <f>  Fog extinction per world unit (implies --fog)\n");
     fprintf(stderr, "      --fog-height <f>   Fog height falloff in world units (implies --fog)\n");
     fprintf(stderr, "      --albedo-debug     Show the resolved albedo G-buffer\n");
@@ -399,6 +401,9 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->probe_debug = 1;
         } else if (strcmp(argv[i], "--fog") == 0) {
             args->fog = 1;
+        } else if (strcmp(argv[i], "--fog-debug") == 0) {
+            args->fog = 1;
+            args->fog_debug = 1;
         } else if (strcmp(argv[i], "--fog-density") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -955,6 +960,9 @@ int main(int argc, char** argv) {
     }
     if (args.fog && engine->postfx) {
         engine->postfx->fog_enabled = true;
+    }
+    if (args.fog_debug && engine->postfx) {
+        engine->postfx->debug_view = POSTFX_DEBUG_FOG;
     }
     if (args.albedo_debug && engine->postfx) {
         engine->postfx->debug_view = POSTFX_DEBUG_ALBEDO;

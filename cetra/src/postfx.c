@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include <stdlib.h>
 
 #include "postfx.h"
@@ -1101,7 +1102,19 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             uniform_set_float(fu, "sunBoost", fx->fog_sun_boost);
             uniform_set_float(fu, "shadowBias", fx->fog_shadow_bias);
             uniform_set_int(fu, "steps", fx->fog_steps);
-            uniform_set_int(fu, "numLights", 0); // shafts arrive with the caster upload
+            // Shafts need the shadow map array bound; without it the march
+            // degrades to the ambient haze
+            int fog_lights = fx->fog_shadow_map_array ? fx->fog_light_count : 0;
+            uniform_set_int(fu, "numLights", fog_lights);
+            for (int i = 0; i < fog_lights; i++) {
+                char name[48];
+                snprintf(name, sizeof(name), "lightSpaceMatrix[%d]", i);
+                uniform_set_mat4(fu, name, (const float*)fx->fog_light_space[i]);
+                snprintf(name, sizeof(name), "lightColor[%d]", i);
+                uniform_set_vec3(fu, name, fx->fog_light_color[i]);
+                snprintf(name, sizeof(name), "lightDir[%d]", i);
+                uniform_set_vec3(fu, name, fx->fog_light_dir[i]);
+            }
             uniform_set_int(fu, "temporal", 0);
             uniform_set_int(fu, "frameIndex", fx->frame_index);
             draw_fullscreen_quad(fx->quad_vao);
@@ -1125,7 +1138,6 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         } else {
             fx->fog_history.valid = false;
         }
-        (void)fog_result_tex; // consumed by the debug view once it exists
 
         // Depth of field replaces the scene that bloom and tone mapping read.
         // scene_tex is the sharp HDR unless DoF ran into fx->dof_texture.
@@ -1228,6 +1240,8 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         glBindTexture(GL_TEXTURE_2D, ssgi_active ? gi_result_tex : 0);
         glActiveTexture(GL_TEXTURE7);
         glBindTexture(GL_TEXTURE_2D, fx->auto_exposure ? fx->lum_adapt.tex[lum_write] : 0);
+        glActiveTexture(GL_TEXTURE8);
+        glBindTexture(GL_TEXTURE_2D, fog_active ? fog_result_tex : 0);
         UniformManager* tm = fx->tonemap_program->uniforms;
         uniform_set_float(tm, "exposure", fx->exposure);
         uniform_set_int(tm, "autoExposure", fx->auto_exposure ? 1 : 0);
@@ -1243,7 +1257,8 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             (debug_view == POSTFX_DEBUG_NORMALS && !have_normals) ||
             (debug_view == POSTFX_DEBUG_SSR && !ssr_active) ||
             (debug_view == POSTFX_DEBUG_ALBEDO && !albedo_written) ||
-            (debug_view == POSTFX_DEBUG_SSGI && !ssgi_active)) {
+            (debug_view == POSTFX_DEBUG_SSGI && !ssgi_active) ||
+            (debug_view == POSTFX_DEBUG_FOG && !fog_active)) {
             static PostFXDebugView warned_view = POSTFX_DEBUG_NONE;
             if (warned_view != debug_view) {
                 log_warn("debug view %d suppressed: its source buffer is disabled",
