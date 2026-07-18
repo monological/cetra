@@ -36,6 +36,7 @@ ShadowSystem* create_shadow_system(int default_map_size) {
     system->enabled = true;
     system->pcss_enabled = false; // library default off; the app opts in
     system->pcss_softness = 1.0f;
+    system->cascade_count = 1; // library default = classic single map; the app opts in
 
     for (int i = 0; i < MAX_SHADOW_LIGHTS; i++) {
         system->casters[i].initialized = false;

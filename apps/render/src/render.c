@@ -70,6 +70,7 @@ typedef struct {
     int no_pcss;                       // Fixed-width PCF instead of contact-hardening
     float light_size;                  // Emitter size override (-1 = scene default)
     float shadow_softness;             // PCSS softness override (-1 = default)
+    int shadow_cascades;               // Cascades per caster (0 = keep engine default)
     int no_springs;                    // Disable spring-bone secondary motion
     int no_ssao;                       // Disable screen-space ambient occlusion
     int ssao_debug;                    // Show the raw SSAO buffer
@@ -147,6 +148,7 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --no-pcss          Fixed-width PCF instead of contact-hardening\n");
     fprintf(stderr, "      --light-size <f>   Emitter size for penumbra (default: scene-scaled)\n");
     fprintf(stderr, "      --shadow-softness <f> PCSS softness multiplier (default: 1)\n");
+    fprintf(stderr, "      --shadow-cascades <n> Shadow cascades per caster, 1-3 (default: 1)\n");
     fprintf(stderr, "      --no-springs       Disable spring-bone secondary motion\n");
     fprintf(stderr, "      --no-ssao          Disable screen-space ambient occlusion\n");
     fprintf(stderr, "      --ssao-debug       Show the raw SSAO buffer\n");
@@ -380,6 +382,16 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 return -1;
             }
             args->shadow_softness = (float)atof(argv[i]);
+        } else if (strcmp(argv[i], "--shadow-cascades") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->shadow_cascades = atoi(argv[i]);
+            if (args->shadow_cascades < 1 || args->shadow_cascades > SHADOW_CASCADES) {
+                fprintf(stderr, "Error: --shadow-cascades must be 1..%d\n", SHADOW_CASCADES);
+                return -1;
+            }
         } else if (strcmp(argv[i], "--no-ssao") == 0) {
             args->no_ssao = 1;
         } else if (strcmp(argv[i], "--ssao-debug") == 0) {
@@ -1371,6 +1383,9 @@ int main(int argc, char** argv) {
         scene->shadow_system->pcss_enabled = !args.no_pcss;
         if (args.shadow_softness >= 0.0f) {
             scene->shadow_system->pcss_softness = args.shadow_softness;
+        }
+        if (args.shadow_cascades > 0) {
+            scene->shadow_system->cascade_count = args.shadow_cascades;
         }
         float light_size = args.light_size >= 0.0f ? args.light_size : scene_radius * 0.08f;
         for (size_t i = 0; i < scene->light_count; i++) {

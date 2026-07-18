@@ -9,6 +9,7 @@
 #include "program.h"
 
 #define MAX_SHADOW_LIGHTS       3
+#define SHADOW_CASCADES         3 // Compile-time cascade ceiling (runtime: cascade_count)
 #define DEFAULT_SHADOW_MAP_SIZE 2048
 #define SHADOW_MAP_TEXTURE_UNIT 13
 
@@ -39,6 +40,10 @@ typedef struct ShadowSystem {
     bool enabled;        // Master switch: off skips the depth pass and all receives
     bool pcss_enabled;   // Contact-hardening penumbra (off = fixed 3x3 PCF)
     float pcss_softness; // Multiplier on each light's emitter size
+    int cascade_count;   // Cascades per caster (1..SHADOW_CASCADES). 1 = the classic
+                         // scene-fit single map, byte-identical to the pre-CSM path;
+                         // layers stride by THIS value (layer = slot*cascade_count+c)
+                         // so count 1 keeps master's layer indices
 } ShadowSystem;
 
 // Creation and destruction
