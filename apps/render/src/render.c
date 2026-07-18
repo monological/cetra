@@ -149,7 +149,7 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --no-pcss          Fixed-width PCF instead of contact-hardening\n");
     fprintf(stderr, "      --light-size <f>   Emitter size for penumbra (default: scene-scaled)\n");
     fprintf(stderr, "      --shadow-softness <f> PCSS softness multiplier (default: 1)\n");
-    fprintf(stderr, "      --shadow-cascades <n> Shadow cascades per caster, 1-3 (default: 1)\n");
+    fprintf(stderr, "      --shadow-cascades <n> Shadow cascades per caster, 1-3 (default: 3)\n");
     fprintf(stderr, "      --csm-debug        Tint fragments by selected shadow cascade\n");
     fprintf(stderr, "      --no-springs       Disable spring-bone secondary motion\n");
     fprintf(stderr, "      --no-ssao          Disable screen-space ambient occlusion\n");
@@ -1388,9 +1388,11 @@ int main(int argc, char** argv) {
         if (args.shadow_softness >= 0.0f) {
             scene->shadow_system->pcss_softness = args.shadow_softness;
         }
-        if (args.shadow_cascades > 0) {
-            scene->shadow_system->cascade_count = args.shadow_cascades;
-        }
+        // Cascaded maps on by default in the viewer (the library default
+        // stays 1): near shadows at high effective resolution, snap-stable
+        // under orbit. --shadow-cascades 1 restores the classic single map.
+        scene->shadow_system->cascade_count =
+            args.shadow_cascades > 0 ? args.shadow_cascades : SHADOW_CASCADES;
         if (args.csm_debug) {
             scene->shadow_system->csm_debug = true;
         }
