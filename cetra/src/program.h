@@ -69,6 +69,7 @@ ShaderProgram* create_tonemap_program();
 ShaderProgram* create_gtao_program();
 ShaderProgram* create_ssao_blur_program();
 ShaderProgram* create_ssr_program();
+ShaderProgram* create_ssr_hiz_program();
 ShaderProgram* create_ssr_composite_program();
 ShaderProgram* create_taa_resolve_program();
 ShaderProgram* create_ao_accum_program();

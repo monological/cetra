@@ -108,6 +108,7 @@ Engine* create_engine(const char* window_title, int width, int height) {
     glm_mat4_identity(engine->view_matrix);
     glm_mat4_identity(engine->projection_matrix);
     glm_mat4_identity(engine->view_proj);
+    glm_mat4_identity(engine->draw_projection);
     glm_mat4_identity(engine->prev_view_proj);
 
     engine->show_gui = false;
@@ -1285,7 +1286,11 @@ static void _engine_gui_panel(Engine* engine) {
 
         _begin_effect_group("SSR", &fx->ssr_enabled);
         igSliderFloat("SSR Strength", &fx->ssr_strength, 0.0f, 2.0f, "%.2f", 0);
-        igSliderFloat("SSR Distance", &fx->ssr_max_distance, 1.0f, 50.0f, "%.2f", 0);
+        // Log scale + wide range: the march reach is a world-space distance
+        // the app scales to the scene (a couple of units on meter-scale
+        // models, thousands on large-unit assets)
+        igSliderFloat("SSR Distance", &fx->ssr_max_distance, 1.0f, 20000.0f, "%.2f",
+                      ImGuiSliderFlags_Logarithmic);
         igSliderFloat("SSR Floor Rough", &fx->ssr_floor_roughness, 0.0f, 1.0f, "%.2f", 0);
         _end_effect_group();
 
@@ -1435,7 +1440,7 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode, bool draw_gui) 
     reflection_probe_publish_to_postfx(fx_scene ? fx_scene->probe : NULL, engine->postfx);
     postfx_run(engine->postfx, engine->framebuffer, 0, frame_mode == RENDER_MODE_PBR,
                engine->normals_this_frame, engine->aux_this_frame, engine->albedo_this_frame,
-               engine->projection_matrix, engine->view_matrix);
+               engine->draw_projection, engine->view_matrix);
 
     if (draw_gui) {
         render_engine_gui(engine);

@@ -68,6 +68,11 @@ typedef struct PostFX {
     GLuint noise_texture;   // 4x4 random slice rotations, tiled
     GLuint ssr_fbo;         // Half-res reflection buffer (march target)
     GLuint ssr_texture;
+    GLuint hiz_fbo;     // Min-depth pyramid build target (re-attached per mip)
+    GLuint hiz_texture; // R32F, half-res base + full mip chain; the SSR
+                        // traversal walks it so rays cannot step over thin
+                        // geometry regardless of march length
+    int hiz_mips;
     GLuint aux_fbo; // Full-res resolved aux G-buffer: motion vectors .xy (TAA) + linear view-Z .z
                     // (GTAO)
     GLuint aux_texture;
@@ -90,6 +95,7 @@ typedef struct PostFX {
     ShaderProgram* lum_measure_program;
     ShaderProgram* lum_adapt_program;
     ShaderProgram* ssr_program;
+    ShaderProgram* ssr_hiz_program;
     ShaderProgram* ssr_composite_program;
     ShaderProgram* taa_resolve_program;
 

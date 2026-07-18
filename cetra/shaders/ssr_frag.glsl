@@ -13,6 +13,10 @@ out vec4 FragColor;
 uniform sampler2D depthTex;   // Full-res resolved scene depth
 uniform sampler2D normalsTex; // View-space normal (xyz) + reflective marker (a)
 uniform sampler2D hdrTex;     // Resolved linear HDR scene color
+uniform sampler2D hizTex;     // Min-depth pyramid (half-res base) for the traversal
+uniform int hizWidth;         // Pyramid base dimensions
+uniform int hizHeight;
+uniform int hizMips;
 uniform mat4 projection;
 uniform mat4 invProjection;
 uniform float maxDistance;  // March length in view-space units
@@ -138,58 +142,139 @@ void main()
     vec3 seg0 = vec3(clip0.xy / clip0.w, clip0.z / clip0.w) * 0.5 + 0.5;
     vec3 seg1 = vec3(clip1.xy / clip1.w, clip1.z / clip1.w) * 0.5 + 0.5;
 
-    // Deterministic per-pixel jitter (interleaved gradient noise) turns
-    // stepping banding into noise the half-res upsample averages away
-    float jitter =
-        fract(52.9829189 * fract(0.06711056 * gl_FragCoord.x + 0.00583715 * gl_FragCoord.y));
+    vec3 dseg = seg1 - seg0;
 
     bool hit = false;
-    float sPrev = 0.0;
     float sHit = 0.0;
     vec2 hitUV = vec2(0.0);
 
-    for (int i = 0; i < steps; i++) {
-        float s = (float(i) + jitter) / float(steps);
-        vec3 p = mix(seg0, seg1, s);
-        if (p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0 || p.z <= 0.0 || p.z >= 1.0) {
-            break; // left the screen or the depth range: no information there
+    if (dseg.z >= 0.0) {
+        // Hi-Z traversal (rays marching away from the camera — the common
+        // case, and the one a fixed-step march breaks on): walk the
+        // min-depth pyramid, skipping whole cells at coarse levels and
+        // descending wherever the ray dips behind the nearest surface in a
+        // cell. It cannot step over sub-pixel geometry (a one-texel cable
+        // survives every min level), needs no jitter, and its cost grows
+        // with the log of the march length instead of eating sample density.
+        int level = 0;
+        float t = 1e-4;
+        for (int i = 0; i < 256; i++) {
+            vec3 p = seg0 + dseg * t;
+            if (t >= 1.0 || p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0 || p.z >= 1.0) {
+                break; // left the screen or the depth range: no information
+            }
+
+            ivec2 levelSize = max(ivec2(hizWidth, hizHeight) >> level, ivec2(1));
+            ivec2 cell = ivec2(clamp(p.xy, vec2(0.0), vec2(0.99999)) * vec2(levelSize));
+            float cellMin = texelFetch(hizTex, cell, level).r;
+
+            // Ray parameter at which we leave this cell laterally
+            vec2 cellUV0 = vec2(cell) / vec2(levelSize);
+            vec2 cellUV1 = vec2(cell + 1) / vec2(levelSize);
+            float tExit = 1.0;
+            if (abs(dseg.x) > 1e-8)
+                tExit = min(tExit, ((dseg.x >= 0.0 ? cellUV1.x : cellUV0.x) - seg0.x) / dseg.x);
+            if (abs(dseg.y) > 1e-8)
+                tExit = min(tExit, ((dseg.y >= 0.0 ? cellUV1.y : cellUV0.y) - seg0.y) / dseg.y);
+            tExit = max(tExit, t);
+            // Quarter-texel (at this level) nudge past the boundary so the
+            // next iteration lands in the next cell
+            float tEps = 0.25 / (float(max(levelSize.x, levelSize.y)) *
+                                 max(length(dseg.xy), 1e-6));
+
+            float zExit = seg0.z + dseg.z * min(tExit, 1.0);
+            if (zExit >= cellMin && cellMin < 1.0) {
+                // The ray dips behind the nearest surface within this cell
+                if (level > 0) {
+                    level--; // look closer without advancing
+                    continue;
+                }
+                // Finest level: verify against the FULL-RES depth. The
+                // cell's min is conservative (nearest of its 2x2) and
+                // piecewise constant — accepting it directly quantizes hit
+                // positions to cells (regular content moires into scallops)
+                // and inflates silhouettes where the min came from a
+                // different sub-texel. The bracket [t, tExit] spans only a
+                // couple of full-res texels here, so a short dense scan
+                // resolves the true crossing per pixel.
+                for (int r = 0; r < 8; r++) {
+                    float s = mix(t, tExit, (float(r) + 0.5) / 8.0);
+                    vec3 q = seg0 + dseg * s;
+                    float dq = texture(depthTex, q.xy).r;
+                    if (dq < 1.0 && q.z > dq) {
+                        // Behind a surface; accept if within its thickness
+                        float sceneZ = viewZFromNdcZ(dq * 2.0 - 1.0);
+                        float rayZ = viewZFromNdcZ(q.z * 2.0 - 1.0);
+                        if (sceneZ - rayZ < thickness) {
+                            hit = true;
+                            sHit = s;
+                            hitUV = q.xy;
+                        }
+                        break; // too far behind: tunneling, not a hit
+                    }
+                }
+                if (hit)
+                    break;
+                t = tExit + tEps; // nothing real here: march on
+            } else {
+                t = tExit + tEps;
+                level = min(level + 1, hizMips - 1);
+            }
+        }
+    } else {
+        // Rays marching toward the camera are clamped short by the
+        // near-plane bound above; the fixed-step march is dense enough
+        // there. Deterministic per-pixel jitter (interleaved gradient
+        // noise) turns its stepping banding into noise the half-res
+        // upsample averages away.
+        float jitter = fract(52.9829189 *
+                             fract(0.06711056 * gl_FragCoord.x + 0.00583715 * gl_FragCoord.y));
+        float sPrev = 0.0;
+        for (int i = 0; i < steps; i++) {
+            float s = (float(i) + jitter) / float(steps);
+            vec3 p = mix(seg0, seg1, s);
+            if (p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0 || p.z <= 0.0 || p.z >= 1.0) {
+                break; // left the screen or the depth range: no information
+            }
+
+            float d = texture(depthTex, p.xy).r;
+            if (d < 1.0 && p.z > d) {
+                // Behind a surface; accept if within its assumed thickness
+                float sceneZ = viewZFromNdcZ(d * 2.0 - 1.0);
+                float rayZ = viewZFromNdcZ(p.z * 2.0 - 1.0);
+                if (sceneZ - rayZ < thickness) {
+                    hit = true;
+                    sHit = s;
+                    hitUV = p.xy;
+                }
+                // Either way stop: everything farther along is occluded
+                break;
+            }
+            sPrev = s;
         }
 
-        float d = texture(depthTex, p.xy).r;
-        if (d < 1.0 && p.z > d) {
-            // Behind a surface; accept if within its assumed thickness
-            float sceneZ = viewZFromNdcZ(d * 2.0 - 1.0);
-            float rayZ = viewZFromNdcZ(p.z * 2.0 - 1.0);
-            if (sceneZ - rayZ < thickness) {
-                hit = true;
-                sHit = s;
-                hitUV = p.xy;
+        if (hit) {
+            // Binary refinement between the last miss and the hit
+            float lo = sPrev;
+            float hi = sHit;
+            for (int i = 0; i < 4; i++) {
+                float mid = 0.5 * (lo + hi);
+                vec3 p = mix(seg0, seg1, mid);
+                float d = texture(depthTex, p.xy).r;
+                if (d < 1.0 && p.z > d) {
+                    hi = mid;
+                    hitUV = p.xy;
+                } else {
+                    lo = mid;
+                }
             }
-            // Either way stop: everything farther along is occluded
-            break;
         }
-        sPrev = s;
     }
 
     if (!hit) {
-        // Off-screen, out of steps, or occluded with no acceptable surface
+        // Off-screen, exhausted, or occluded with no acceptable surface
         FragColor = probe;
         return;
-    }
-
-    // Binary refinement between the last miss and the hit
-    float lo = sPrev;
-    float hi = sHit;
-    for (int i = 0; i < 4; i++) {
-        float mid = 0.5 * (lo + hi);
-        vec3 p = mix(seg0, seg1, mid);
-        float d = texture(depthTex, p.xy).r;
-        if (d < 1.0 && p.z > d) {
-            hi = mid;
-            hitUV = p.xy;
-        } else {
-            lo = mid;
-        }
     }
 
     // Reject hits on surfaces seen from behind (their normal points along

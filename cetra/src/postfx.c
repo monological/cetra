@@ -249,6 +249,35 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
         free_postfx(fx);
         return NULL;
     }
+    // Min-depth pyramid for the SSR traversal: half-res base with a full mip
+    // chain, each level the min (nearest) of the 2x2 below. R32F: fp16 depth
+    // staircases at scene scale. The chain stops nowhere special, but set
+    // the max level anyway — an incomplete chain samples as black.
+    {
+        int hw = fx->ssao_width;
+        int hh = fx->ssao_height;
+        fx->hiz_mips = 1;
+        while ((hw > 1 || hh > 1) && fx->hiz_mips < 16) {
+            hw = hw > 1 ? hw / 2 : 1;
+            hh = hh > 1 ? hh / 2 : 1;
+            fx->hiz_mips++;
+        }
+        glGenTextures(1, &fx->hiz_texture);
+        glBindTexture(GL_TEXTURE_2D, fx->hiz_texture);
+        int mw = fx->ssao_width;
+        int mh = fx->ssao_height;
+        for (int mip = 0; mip < fx->hiz_mips; mip++) {
+            glTexImage2D(GL_TEXTURE_2D, mip, GL_R32F, mw, mh, 0, GL_RED, GL_FLOAT, NULL);
+            mw = mw > 1 ? mw / 2 : 1;
+            mh = mh > 1 ? mh / 2 : 1;
+        }
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, fx->hiz_mips - 1);
+        glGenFramebuffers(1, &fx->hiz_fbo);
+    }
     // Full-res resolve target for the scene pass's aux G-buffer (.xy motion +
     // .z linear view-Z), and the two full-res history buffers the TAA resolve
     // ping-pongs across frames.
@@ -310,6 +339,7 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     fx->lum_measure_program = create_lum_measure_program();
     fx->lum_adapt_program = create_lum_adapt_program();
     fx->ssr_program = create_ssr_program();
+    fx->ssr_hiz_program = create_ssr_hiz_program();
     fx->ssr_composite_program = create_ssr_composite_program();
     fx->taa_resolve_program = create_taa_resolve_program();
     fx->dof_coc_program = create_dof_coc_program();
@@ -351,6 +381,9 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     uniform_set_int(fx->ssr_program->uniforms, "normalsTex", 1);
     uniform_set_int(fx->ssr_program->uniforms, "hdrTex", 2);
     uniform_set_int(fx->ssr_program->uniforms, "probeTex", 3);
+    uniform_set_int(fx->ssr_program->uniforms, "hizTex", 4);
+    glUseProgram(fx->ssr_hiz_program->id);
+    uniform_set_int(fx->ssr_hiz_program->uniforms, "srcTex", 0);
     glUseProgram(fx->ssr_composite_program->id);
     uniform_set_int(fx->ssr_composite_program->uniforms, "ssrTex", 0);
 
@@ -521,6 +554,8 @@ void free_postfx(PostFX* fx) {
     glDeleteTextures(1, &fx->noise_texture);
     glDeleteFramebuffers(1, &fx->ssr_fbo);
     glDeleteTextures(1, &fx->ssr_texture);
+    glDeleteFramebuffers(1, &fx->hiz_fbo);
+    glDeleteTextures(1, &fx->hiz_texture);
     glDeleteFramebuffers(1, &fx->aux_fbo);
     glDeleteTextures(1, &fx->aux_texture);
     glDeleteFramebuffers(1, &fx->albedo_fbo);
@@ -549,6 +584,7 @@ void free_postfx(PostFX* fx) {
     free_program(fx->lum_measure_program);
     free_program(fx->lum_adapt_program);
     free_program(fx->ssr_program);
+    free_program(fx->ssr_hiz_program);
     free_program(fx->ssr_composite_program);
     free_program(fx->taa_resolve_program);
     free_program(fx->dof_coc_program);
@@ -868,6 +904,44 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             fx->ssgi_history.valid = false;
 
         if (ssr_active) {
+            // Rebuild the min-depth pyramid the traversal walks: level 0
+            // takes the conservative min over the full-res depth, every
+            // further level the min of the 2x2 below. The source level is
+            // pinned via BASE/MAX_LEVEL so a level never reads itself.
+            glBindFramebuffer(GL_FRAMEBUFFER, fx->hiz_fbo);
+            glUseProgram(fx->ssr_hiz_program->id);
+            glActiveTexture(GL_TEXTURE0);
+            {
+                int mip_w = fx->ssao_width;
+                int mip_h = fx->ssao_height;
+                int src_w = fx->width;
+                int src_h = fx->height;
+                for (int mip = 0; mip < fx->hiz_mips; mip++) {
+                    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                                           fx->hiz_texture, mip);
+                    glViewport(0, 0, mip_w, mip_h);
+                    if (mip == 0) {
+                        glBindTexture(GL_TEXTURE_2D, fx->depth_texture);
+                    } else {
+                        glBindTexture(GL_TEXTURE_2D, fx->hiz_texture);
+                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, mip - 1);
+                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, mip - 1);
+                    }
+                    uniform_set_int(fx->ssr_hiz_program->uniforms, "srcWidth", src_w);
+                    uniform_set_int(fx->ssr_hiz_program->uniforms, "srcHeight", src_h);
+                    draw_fullscreen_quad(fx->quad_vao);
+                    src_w = mip_w;
+                    src_h = mip_h;
+                    mip_w = mip_w > 1 ? mip_w / 2 : 1;
+                    mip_h = mip_h > 1 ? mip_h / 2 : 1;
+                }
+                // Reopen the whole chain for the traversal's mip fetches
+                glBindTexture(GL_TEXTURE_2D, fx->hiz_texture);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, fx->hiz_mips - 1);
+            }
+            check_gl_error("postfx hiz build");
+
             // March reflections into the half-res buffer (reads the scene,
             // writes elsewhere: GL 4.1 has no texture barrier)
             glBindFramebuffer(GL_FRAMEBUFFER, fx->ssr_fbo);
@@ -879,6 +953,12 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             glBindTexture(GL_TEXTURE_2D, fx->normal_texture);
             glActiveTexture(GL_TEXTURE2);
             glBindTexture(GL_TEXTURE_2D, fx->hdr_texture);
+            glActiveTexture(GL_TEXTURE4);
+            glBindTexture(GL_TEXTURE_2D, fx->hiz_texture);
+            glActiveTexture(GL_TEXTURE0);
+            uniform_set_int(fx->ssr_program->uniforms, "hizWidth", fx->ssao_width);
+            uniform_set_int(fx->ssr_program->uniforms, "hizHeight", fx->ssao_height);
+            uniform_set_int(fx->ssr_program->uniforms, "hizMips", fx->hiz_mips);
             uniform_set_mat4(fx->ssr_program->uniforms, "projection", (float*)projection);
             uniform_set_mat4(fx->ssr_program->uniforms, "invProjection", (float*)inv_projection);
             uniform_set_float(fx->ssr_program->uniforms, "maxDistance", fx->ssr_max_distance);
@@ -917,6 +997,8 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             glBindFramebuffer(GL_FRAMEBUFFER, fx->hdr_fbo);
             glViewport(0, 0, fx->width, fx->height);
             glUseProgram(fx->ssr_composite_program->id);
+            uniform_set_vec2(fx->ssr_composite_program->uniforms, "texelSize",
+                             (vec2){1.0f / (float)fx->ssao_width, 1.0f / (float)fx->ssao_height});
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, fx->ssr_texture);
             glEnable(GL_BLEND);

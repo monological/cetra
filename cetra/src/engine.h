@@ -82,11 +82,16 @@ typedef struct Engine {
 
     mat4 model_matrix;
     mat4 view_matrix;
-    mat4 projection_matrix; // Un-jittered truth: frustum culling, postfx, motion vectors
+    mat4 projection_matrix; // Un-jittered truth: frustum culling, motion vectors
     mat4 view_proj;         // Un-jittered projection*view for the current frame, computed once in
                             // render_current_scene (frustum + motion vectors); the scene draws with
     // a locally sub-pixel-jittered projection derived from projection_matrix
-    mat4 prev_view_proj; // Previous frame's view_proj, for motion vectors
+    mat4 draw_projection; // The projection this frame actually rasterized with (jittered under
+                          // TAA, == projection_matrix otherwise). Postfx passes reconstructing
+                          // positions from the depth buffer must use THIS one: marching rays
+                          // with the un-jittered matrix flips marginal hits every jitter phase,
+                          // and TAA bakes the flicker into stationary crosshatch.
+    mat4 prev_view_proj;  // Previous frame's view_proj, for motion vectors
 
     bool show_gui;
     bool show_wireframe;

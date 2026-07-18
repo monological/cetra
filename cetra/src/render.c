@@ -575,10 +575,10 @@ void render_current_scene(Engine* engine, float time_value) {
     frustum_extract_from_vp(engine->view_proj, &frustum);
 
     // Draw projection: the un-jittered projection, sub-pixel-jittered when TAA
-    // runs so the temporal resolve accumulates coverage. Computed locally (not a
-    // persistent engine field) so every render loop — including apps that call
-    // render_current_scene from their own loop — gets a correct projection. Off
-    // in headless (jitter would break deterministic screenshots).
+    // runs so the temporal resolve accumulates coverage. Recomputed here every
+    // call so every render loop — including apps that call
+    // render_current_scene from their own loop — gets a correct projection.
+    // Off in headless (jitter would break deterministic screenshots).
     mat4 draw_projection;
     glm_mat4_copy(*projection, draw_projection);
     if (render_mode == RENDER_MODE_PBR && postfx_taa_active(engine->postfx) && !engine->headless) {
@@ -588,6 +588,9 @@ void render_current_scene(Engine* engine, float time_value) {
         draw_projection[2][0] += (_halton(j, 2) - 0.5f) * 2.0f / (float)rw;
         draw_projection[2][1] += (_halton(j, 3) - 0.5f) * 2.0f / (float)rh;
     }
+    // Published for postfx: depth-buffer reconstruction must invert the
+    // projection the depth was actually rasterized with
+    glm_mat4_copy(draw_projection, engine->draw_projection);
 
     // Track current program and material to avoid redundant state changes
     GLuint current_program = 0;

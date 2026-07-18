@@ -638,6 +638,18 @@ ShaderProgram* create_ssr_program() {
     return program;
 }
 
+ShaderProgram* create_ssr_hiz_program() {
+    ShaderProgram* program = NULL;
+
+    if ((program = create_program_from_source("ssr_hiz", post_vert_shader_str,
+                                              ssr_hiz_frag_shader_str, NULL)) == NULL) {
+        log_error("Failed to initialize SSR hi-z shader program");
+        return NULL;
+    }
+
+    return program;
+}
+
 ShaderProgram* create_ssr_composite_program() {
     ShaderProgram* program = NULL;
 
