@@ -57,8 +57,10 @@ typedef struct PostFX {
 
     GLuint hdr_fbo; // Single-sample resolve target, no depth
     GLuint hdr_texture;
-    GLuint bloom_fbo[2]; // Half-res ping-pong pair
-    GLuint bloom_texture[2];
+    GLuint bloom_fbo;     // One FBO, re-attached per pyramid level (hiz idiom)
+    GLuint bloom_texture; // Mipped pyramid: level 0 at bloom_width/height,
+                          // halving to ~8-16 px; tonemap magnifies level 0
+    int bloom_mips;
     GLuint depth_fbo; // Full-res resolved scene depth (blit target)
     GLuint depth_texture;
     GLuint normal_fbo; // Full-res resolved view-space normals + roughness
@@ -89,7 +91,8 @@ typedef struct PostFX {
     PingPong taa_history; // Full-res history (previous resolved frames)
 
     ShaderProgram* bright_program;
-    ShaderProgram* blur_program;
+    ShaderProgram* bloom_down_program; // Pyramid 13-tap downsample
+    ShaderProgram* bloom_up_program;   // Pyramid tent upsample (additive)
     ShaderProgram* tonemap_program;
     ShaderProgram* gtao_program;
     ShaderProgram* ssao_blur_program;
@@ -116,7 +119,6 @@ typedef struct PostFX {
     float bloom_max_brightness; // Firefly clamp on the bloom input
     float bloom_strength;
     bool bloom_enabled;
-    int blur_iterations; // Each iteration is one horizontal + one vertical pass
     bool ssao_enabled;
     float ssao_radius; // Occlusion reach in view-space units
     float ssao_strength;

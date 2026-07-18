@@ -64,7 +64,8 @@ ShaderProgram* create_shadow_catcher_program();
 
 // Post-Processing Programs
 ShaderProgram* create_bloom_bright_program();
-ShaderProgram* create_bloom_blur_program();
+ShaderProgram* create_bloom_down_program();
+ShaderProgram* create_bloom_up_program();
 ShaderProgram* create_tonemap_program();
 ShaderProgram* create_gtao_program();
 ShaderProgram* create_ssao_blur_program();

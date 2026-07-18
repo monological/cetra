@@ -578,16 +578,12 @@ ShaderProgram* create_bloom_bright_program() {
     return program;
 }
 
-ShaderProgram* create_bloom_blur_program() {
-    ShaderProgram* program = NULL;
+ShaderProgram* create_bloom_down_program() {
+    return create_post_program("bloom_downsample", bloom_downsample_frag_shader_str);
+}
 
-    if ((program = create_program_from_source("bloom_blur", post_vert_shader_str,
-                                              bloom_blur_frag_shader_str, NULL)) == NULL) {
-        log_error("Failed to initialize bloom blur shader program");
-        return NULL;
-    }
-
-    return program;
+ShaderProgram* create_bloom_up_program() {
+    return create_post_program("bloom_upsample", bloom_upsample_frag_shader_str);
 }
 
 ShaderProgram* create_tonemap_program() {

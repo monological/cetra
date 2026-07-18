@@ -155,9 +155,11 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     fx->bloom_threshold = 1.0f;
     fx->bloom_knee = 0.5f;
     fx->bloom_max_brightness = 8.0f;
-    fx->bloom_strength = 0.08f;
+    // The pyramid's level 0 accumulates every coarser level, carrying
+    // several times the energy one blurred buffer did -- the composite
+    // strength drops to match
+    fx->bloom_strength = 0.015f;
     fx->bloom_enabled = true;
-    fx->blur_iterations = 2;
     fx->ssao_enabled = true;
     fx->ssao_radius = 0.4f;
     fx->ssao_strength = 0.8f;
@@ -223,12 +225,46 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
         free_postfx(fx);
         return NULL;
     }
-    for (int i = 0; i < 2; i++) {
-        if (!create_color_fbo(fx->bloom_width, fx->bloom_height, GL_R11F_G11F_B10F,
-                              &fx->bloom_fbo[i], &fx->bloom_texture[i])) {
+    // Bloom pyramid: one packed-float texture whose mip chain the pyramid
+    // passes walk, level 0 at half res down to a ~8-16 px coarsest level.
+    // Hand-built chain, so MAX_LEVEL is mandatory (an incomplete chain
+    // samples as black); one FBO gets re-attached per level like the hi-z
+    // build. MIN filter samples bilinearly WITHIN the level the passes pin.
+    {
+        int bw = fx->bloom_width;
+        int bh = fx->bloom_height;
+        fx->bloom_mips = 1;
+        while (bw > 15 && bh > 15 && fx->bloom_mips < 8) {
+            bw /= 2;
+            bh /= 2;
+            fx->bloom_mips++;
+        }
+        glGenTextures(1, &fx->bloom_texture);
+        glBindTexture(GL_TEXTURE_2D, fx->bloom_texture);
+        int mw = fx->bloom_width;
+        int mh = fx->bloom_height;
+        for (int mip = 0; mip < fx->bloom_mips; mip++) {
+            glTexImage2D(GL_TEXTURE_2D, mip, GL_R11F_G11F_B10F, mw, mh, 0, GL_RGB, GL_FLOAT,
+                         NULL);
+            mw = mw > 1 ? mw / 2 : 1;
+            mh = mh > 1 ? mh / 2 : 1;
+        }
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, fx->bloom_mips - 1);
+        glGenFramebuffers(1, &fx->bloom_fbo);
+        glBindFramebuffer(GL_FRAMEBUFFER, fx->bloom_fbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                               fx->bloom_texture, 0);
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+            log_error("Bloom pyramid framebuffer incomplete");
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
             free_postfx(fx);
             return NULL;
         }
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
     }
 
     if (!create_depth_fbo(fx->width, fx->height, &fx->depth_fbo, &fx->depth_texture)) {
@@ -342,7 +378,8 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     fx->noise_texture = create_ssao_noise_texture(&rng);
 
     fx->bright_program = create_bloom_bright_program();
-    fx->blur_program = create_bloom_blur_program();
+    fx->bloom_down_program = create_bloom_down_program();
+    fx->bloom_up_program = create_bloom_up_program();
     fx->tonemap_program = create_tonemap_program();
     fx->gtao_program = create_gtao_program();
     fx->ssao_blur_program = create_ssao_blur_program();
@@ -360,7 +397,8 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     fx->dof_coc_program = create_dof_coc_program();
     fx->dof_blur_program = create_dof_blur_program();
     fx->dof_composite_program = create_dof_composite_program();
-    if (!fx->bright_program || !fx->blur_program || !fx->tonemap_program || !fx->gtao_program ||
+    if (!fx->bright_program || !fx->bloom_down_program || !fx->bloom_up_program ||
+        !fx->tonemap_program || !fx->gtao_program ||
         !fx->ssao_blur_program || !fx->temporal_accum_program || !fx->ssgi_composite_program ||
         !fx->ssgi_accum_program || !fx->ssgi_atrous_program ||
         !fx->lum_measure_program || !fx->lum_adapt_program || !fx->ssr_program ||
@@ -374,8 +412,10 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     // Sampler bindings never change; set them once on the program objects
     glUseProgram(fx->bright_program->id);
     uniform_set_int(fx->bright_program->uniforms, "hdrTex", 0);
-    glUseProgram(fx->blur_program->id);
-    uniform_set_int(fx->blur_program->uniforms, "image", 0);
+    glUseProgram(fx->bloom_down_program->id);
+    uniform_set_int(fx->bloom_down_program->uniforms, "srcTex", 0);
+    glUseProgram(fx->bloom_up_program->id);
+    uniform_set_int(fx->bloom_up_program->uniforms, "srcTex", 0);
     glUseProgram(fx->tonemap_program->id);
     uniform_set_int(fx->tonemap_program->uniforms, "hdrTex", 0);
     uniform_set_int(fx->tonemap_program->uniforms, "bloomTex", 1);
@@ -579,8 +619,8 @@ void free_postfx(PostFX* fx) {
 
     glDeleteFramebuffers(1, &fx->hdr_fbo);
     glDeleteTextures(1, &fx->hdr_texture);
-    glDeleteFramebuffers(2, fx->bloom_fbo);
-    glDeleteTextures(2, fx->bloom_texture);
+    glDeleteFramebuffers(1, &fx->bloom_fbo);
+    glDeleteTextures(1, &fx->bloom_texture);
     glDeleteFramebuffers(1, &fx->depth_fbo);
     glDeleteTextures(1, &fx->depth_texture);
     glDeleteFramebuffers(1, &fx->normal_fbo);
@@ -616,7 +656,8 @@ void free_postfx(PostFX* fx) {
     free_pingpong(&fx->fog_history);
 
     free_program(fx->bright_program);
-    free_program(fx->blur_program);
+    free_program(fx->bloom_down_program);
+    free_program(fx->bloom_up_program);
     free_program(fx->tonemap_program);
     free_program(fx->gtao_program);
     free_program(fx->ssao_blur_program);
@@ -1199,8 +1240,10 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         }
 
         if (fx->bloom_enabled) {
-            // Bright pass into half-res buffer 0 (linear sampling downsamples)
-            glBindFramebuffer(GL_FRAMEBUFFER, fx->bloom_fbo[0]);
+            // Bright pass into pyramid level 0 (linear sampling downsamples)
+            glBindFramebuffer(GL_FRAMEBUFFER, fx->bloom_fbo);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                                   fx->bloom_texture, 0);
             glViewport(0, 0, fx->bloom_width, fx->bloom_height);
             glUseProgram(fx->bright_program->id);
             glActiveTexture(GL_TEXTURE0);
@@ -1211,21 +1254,56 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
                               fx->bloom_max_brightness);
             draw_fullscreen_quad(fx->quad_vao);
 
-            // Separable Gaussian ping-pong; result ends in bloom_texture[0]
-            glUseProgram(fx->blur_program->id);
-            const float horizontal[2] = {1.0f / (float)fx->bloom_width, 0.0f};
-            const float vertical[2] = {0.0f, 1.0f / (float)fx->bloom_height};
-            for (int i = 0; i < fx->blur_iterations; i++) {
-                glBindFramebuffer(GL_FRAMEBUFFER, fx->bloom_fbo[1]);
-                glBindTexture(GL_TEXTURE_2D, fx->bloom_texture[0]);
-                uniform_set_vec2(fx->blur_program->uniforms, "direction", horizontal);
+            // Downsample the chain: each level reads a 13-tap filter of the
+            // level above it. Sampling and writing the same texture is safe
+            // because BASE/MAX_LEVEL pin the sampled set to the source level
+            // (the hi-z build idiom).
+            glUseProgram(fx->bloom_down_program->id);
+            glBindTexture(GL_TEXTURE_2D, fx->bloom_texture);
+            int lw = fx->bloom_width;
+            int lh = fx->bloom_height;
+            for (int mip = 1; mip < fx->bloom_mips; mip++) {
+                int dw = lw > 1 ? lw / 2 : 1;
+                int dh = lh > 1 ? lh / 2 : 1;
+                glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                                       fx->bloom_texture, mip);
+                glViewport(0, 0, dw, dh);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, mip - 1);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, mip - 1);
+                uniform_set_vec2(fx->bloom_down_program->uniforms, "texelSize",
+                                 (vec2){1.0f / (float)lw, 1.0f / (float)lh});
                 draw_fullscreen_quad(fx->quad_vao);
+                lw = dw;
+                lh = dh;
+            }
 
-                glBindFramebuffer(GL_FRAMEBUFFER, fx->bloom_fbo[0]);
-                glBindTexture(GL_TEXTURE_2D, fx->bloom_texture[1]);
-                uniform_set_vec2(fx->blur_program->uniforms, "direction", vertical);
+            // Upsample back: tent-filter each coarser level additively onto
+            // the finer one, so level 0 ends as the sum of progressively
+            // wider blurs -- one smooth wide kernel instead of ringed bands.
+            glUseProgram(fx->bloom_up_program->id);
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_ONE, GL_ONE);
+            for (int mip = fx->bloom_mips - 2; mip >= 0; mip--) {
+                int sw = fx->bloom_width >> (mip + 1);
+                int sh = fx->bloom_height >> (mip + 1);
+                sw = sw > 1 ? sw : 1;
+                sh = sh > 1 ? sh : 1;
+                glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                                       fx->bloom_texture, mip);
+                glViewport(0, 0, fx->bloom_width >> mip, fx->bloom_height >> mip);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, mip + 1);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, mip + 1);
+                uniform_set_vec2(fx->bloom_up_program->uniforms, "texelSize",
+                                 (vec2){1.0f / (float)sw, 1.0f / (float)sh});
                 draw_fullscreen_quad(fx->quad_vao);
             }
+            glDisable(GL_BLEND);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+            // Reopen the full chain; the tonemap magnifies level 0
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, fx->bloom_mips - 1);
+            check_gl_error("postfx bloom pyramid");
         }
 
         // Composite + tone map into the target framebuffer. The quad runs at
@@ -1239,7 +1317,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, scene_tex);
         glActiveTexture(GL_TEXTURE1);
-        glBindTexture(GL_TEXTURE_2D, fx->bloom_texture[0]);
+        glBindTexture(GL_TEXTURE_2D, fx->bloom_texture); // magnified -> level 0
         glActiveTexture(GL_TEXTURE2);
         glBindTexture(GL_TEXTURE_2D, ao_result_tex); // accumulated AO when TAA on, else blurred
         glActiveTexture(GL_TEXTURE3);
