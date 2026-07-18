@@ -80,6 +80,9 @@ typedef struct {
     float probe_pos[3];                // Probe capture position override
     int probe_scene;                   // Capture the scene meshes too (interiors)
     int probe_debug;                   // Show the raw capture as the background
+    int fog;                           // Enable volumetric fog
+    float fog_density;                 // Extinction override (0 = scene-scaled)
+    float fog_height;                  // Height falloff override (0 = scene-scaled)
     int albedo_debug;                  // Show the resolved albedo G-buffer
     int no_normals_mrt;                // Disable the normals G-buffer
     int normals_debug;                 // Show the resolved normals G-buffer
@@ -152,6 +155,9 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --probe-pos x,y,z  Probe parallax origin (implies --probe; default: auto)\n");
     fprintf(stderr, "      --probe-scene      Capture the scene meshes into the probe (interiors)\n");
     fprintf(stderr, "      --probe-debug      Show the raw capture as the background (implies --probe)\n");
+    fprintf(stderr, "      --fog              Volumetric fog: god rays + height haze\n");
+    fprintf(stderr, "      --fog-density <f>  Fog extinction per world unit (implies --fog)\n");
+    fprintf(stderr, "      --fog-height <f>   Fog height falloff in world units (implies --fog)\n");
     fprintf(stderr, "      --albedo-debug     Show the resolved albedo G-buffer\n");
     fprintf(stderr, "      --specular-aa <f>  Specular anti-aliasing strength (default: 1)\n");
     fprintf(stderr, "      --no-specular-aa   Disable specular anti-aliasing\n");
@@ -391,6 +397,22 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
         } else if (strcmp(argv[i], "--probe-debug") == 0) {
             args->probe = 1;
             args->probe_debug = 1;
+        } else if (strcmp(argv[i], "--fog") == 0) {
+            args->fog = 1;
+        } else if (strcmp(argv[i], "--fog-density") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->fog_density = (float)atof(argv[i]);
+            args->fog = 1;
+        } else if (strcmp(argv[i], "--fog-height") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->fog_height = (float)atof(argv[i]);
+            args->fog = 1;
         } else if (strcmp(argv[i], "--albedo-debug") == 0) {
             args->albedo_debug = 1;
         } else if (strcmp(argv[i], "--no-normals-mrt") == 0) {
@@ -931,6 +953,9 @@ int main(int argc, char** argv) {
     if (args.ssgi_debug && engine->postfx) {
         engine->postfx->debug_view = POSTFX_DEBUG_SSGI;
     }
+    if (args.fog && engine->postfx) {
+        engine->postfx->fog_enabled = true;
+    }
     if (args.albedo_debug && engine->postfx) {
         engine->postfx->debug_view = POSTFX_DEBUG_ALBEDO;
     }
@@ -1228,6 +1253,9 @@ int main(int argc, char** argv) {
     // the per-frame model matrix (so animation-driven node transforms compose
     // under it untouched); a pure translation leaves the radius unchanged, so
     // the cached center just shifts by the offset.
+    // World height of the ground plane after this block: 0 when recentered,
+    // the model's authored base otherwise (the fog density anchors to it)
+    float scene_floor_y = 0.0f;
     if (!args.no_recenter) {
         vec3 bb_min, bb_max;
         compute_scene_bounds(scene, bb_min, bb_max);
@@ -1239,6 +1267,10 @@ int main(int argc, char** argv) {
                    model_recenter_offset[1], model_recenter_offset[2]);
         }
         glm_vec3_add(scene_center, model_recenter_offset, scene_center);
+    } else {
+        vec3 bb_min, bb_max;
+        compute_scene_bounds(scene, bb_min, bb_max);
+        scene_floor_y = bb_min[1];
     }
     printf("Scene bounds: center=(%.2f, %.2f, %.2f), radius=%.2f\n", scene_center[0],
            scene_center[1], scene_center[2], scene_radius);
@@ -1370,6 +1402,19 @@ int main(int argc, char** argv) {
                 fmaxf(engine->postfx->ssr_max_distance, scene_radius * 2.0f);
             engine->postfx->ssr_thickness =
                 fmaxf(engine->postfx->ssr_thickness, scene_radius * 0.002f);
+
+            // Fog parameters are world-space too: fixed meter-scale density
+            // on a large-unit scene is invisible (or opaque soup on a tiny
+            // one). Density targets ~30% extinction over the default
+            // camera-to-subject path at ground level — present, not
+            // smothering; the falloff spans half the model height; sky rays
+            // march the whole dome interior.
+            engine->postfx->fog_density =
+                args.fog_density > 0.0f ? args.fog_density : 0.15f / scene_radius;
+            engine->postfx->fog_height_falloff =
+                args.fog_height > 0.0f ? args.fog_height : scene_radius * 0.5f;
+            engine->postfx->fog_far = scene_radius * 5.0f;
+            engine->postfx->fog_floor_y = scene_floor_y;
         }
     }
 

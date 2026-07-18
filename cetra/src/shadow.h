@@ -68,4 +68,13 @@ void bind_shadow_maps_to_program(ShadowSystem* system, ShaderProgram* program,
 // Main shadow rendering function
 void render_shadow_depth_pass(struct Engine* engine, struct Scene* scene);
 
+struct PostFX;
+
+// Flatten this frame's shadow casters + their lights into postfx's fog block
+// (mirrors reflection_probe_publish_to_postfx; postfx never learns about the
+// shadow system): per caster the light-space matrix, travel direction, and
+// color * intensity, plus the map array handle. Publishes count 0 when
+// shadows are off or absent — fog degrades to ambient haze.
+void shadow_publish_to_postfx(const struct Scene* scene, struct PostFX* fx);
+
 #endif // _SHADOW_H_

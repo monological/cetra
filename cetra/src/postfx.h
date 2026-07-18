@@ -42,7 +42,12 @@ typedef enum PostFXDebugView {
     POSTFX_DEBUG_SSR = 3,     // Half-res reflection buffer
     POSTFX_DEBUG_ALBEDO = 4,  // Resolved albedo G-buffer (SSGI)
     POSTFX_DEBUG_SSGI = 5,    // Raw gathered GI radiance (half-res, SSGI)
+    POSTFX_DEBUG_FOG = 6,     // Half-res fog in-scatter buffer
 } PostFXDebugView;
+
+// Mirrors MAX_SHADOW_LIGHTS (shadow.h) without postfx learning about the
+// shadow system; the publish step fills at most this many caster slots
+#define POSTFX_FOG_MAX_LIGHTS 3
 
 typedef struct PostFX {
     int width, height;             // Internal (supersampled) HDR size
@@ -97,6 +102,8 @@ typedef struct PostFX {
     ShaderProgram* ssr_program;
     ShaderProgram* ssr_hiz_program;
     ShaderProgram* ssr_composite_program;
+    ShaderProgram* fog_program;
+    ShaderProgram* fog_composite_program;
     ShaderProgram* taa_resolve_program;
 
     GLuint quad_vao;
@@ -135,6 +142,35 @@ typedef struct PostFX {
     vec3 probe_box_max;
     float probe_max_lod;
     float probe_intensity;
+
+    // Volumetric fog: a half-res raymarch toward each pixel's depth gathers
+    // single-scattered light from the shadow casters plus an ambient term
+    // through an exponential height-fog density, composited into the HDR
+    // scene before DoF/bloom as scene*transmittance + inscatter. Off by
+    // default; fog_enabled false leaves the frame untouched. World-space
+    // parameters are scene-scaled by apps.
+    bool fog_enabled;
+    float fog_density;           // Extinction at floor height (1/world units)
+    float fog_height_falloff;    // World units for a 1/e density drop
+    float fog_floor_y;           // World height of max density
+    float fog_far;               // March length for sky rays / march cap
+    float fog_anisotropy;        // Henyey-Greenstein g (forward scattering)
+    float fog_sun_boost;         // Artistic multiplier on the shaft in-scatter
+    vec3 fog_ambient;            // Isotropic ambient in-scatter radiance
+    int fog_steps;               // March steps
+    bool fog_ready;              // Lazy-alloc guard for the targets below
+    GLuint fog_fbo, fog_texture; // Half-res RGBA16F: inscatter.rgb + transmittance.a
+    PingPong fog_history;        // Half-res temporal accumulation
+
+    // Published per frame by shadow_publish_to_postfx (mirrors the probe
+    // block; postfx never learns about the shadow system): the casters'
+    // matrices, radiance, and map array. Count 0 = ambient-only fog.
+    int fog_light_count;
+    mat4 fog_light_space[POSTFX_FOG_MAX_LIGHTS];
+    vec3 fog_light_color[POSTFX_FOG_MAX_LIGHTS]; // color * intensity
+    vec3 fog_light_dir[POSTFX_FOG_MAX_LIGHTS];   // normalized travel direction
+    GLuint fog_shadow_map_array;                 // 0 when shadows are off
+    float fog_shadow_bias;
 
     PostFXDebugView debug_view;
     PostFXTonemapMode tonemap_mode;

@@ -707,6 +707,14 @@ ShaderProgram* create_ssgi_atrous_program() {
     return create_post_program("ssgi_atrous", ssgi_atrous_frag_shader_str);
 }
 
+ShaderProgram* create_fog_program() {
+    return create_post_program("fog", fog_frag_shader_str);
+}
+
+ShaderProgram* create_fog_composite_program() {
+    return create_post_program("fog_composite", fog_composite_frag_shader_str);
+}
+
 ShaderProgram* create_lum_measure_program() {
     return create_post_program("lum_measure", lum_measure_frag_shader_str);
 }

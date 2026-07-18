@@ -392,3 +392,31 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
 
     glViewport(prev_viewport[0], prev_viewport[1], prev_viewport[2], prev_viewport[3]);
 }
+
+// Flatten this frame's shadow casters + their lights into postfx's fog block
+void shadow_publish_to_postfx(const Scene* scene, PostFX* fx) {
+    if (!fx)
+        return;
+
+    ShadowSystem* ss = scene ? scene->shadow_system : NULL;
+    if (!ss || !ss->enabled || ss->active_count == 0 || !scene->lights) {
+        fx->fog_light_count = 0;
+        fx->fog_shadow_map_array = 0;
+        return;
+    }
+
+    for (size_t i = 0; i < scene->light_count; i++) {
+        Light* light = scene->lights[i];
+        if (!light || light->shadow_map_index < 0 ||
+            light->shadow_map_index >= POSTFX_FOG_MAX_LIGHTS) {
+            continue;
+        }
+        int slot = light->shadow_map_index;
+        glm_mat4_copy(ss->casters[slot].light_space_matrix, fx->fog_light_space[slot]);
+        glm_vec3_normalize_to(light->direction, fx->fog_light_dir[slot]);
+        glm_vec3_scale(light->color, light->intensity, fx->fog_light_color[slot]);
+    }
+    fx->fog_light_count = (int)ss->active_count;
+    fx->fog_shadow_map_array = ss->shadow_map_array;
+    fx->fog_shadow_bias = ss->casters[0].bias;
+}

@@ -1434,10 +1434,11 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode, bool draw_gui) 
         engine->postfx->dof_focus_distance =
             glm_vec3_distance(engine->camera->position, engine->camera->look_at);
     }
-    // Hand the current scene's reflection probe to postfx (SSR miss fallback)
-    // without postfx learning about Scene
+    // Hand the current scene's reflection probe and shadow casters to postfx
+    // (SSR miss fallback / fog march) without postfx learning about Scene
     const Scene* fx_scene = get_current_scene(engine);
     reflection_probe_publish_to_postfx(fx_scene ? fx_scene->probe : NULL, engine->postfx);
+    shadow_publish_to_postfx(fx_scene, engine->postfx);
     postfx_run(engine->postfx, engine->framebuffer, 0, frame_mode == RENDER_MODE_PBR,
                engine->normals_this_frame, engine->aux_this_frame, engine->albedo_this_frame,
                engine->draw_projection, engine->view_matrix);

@@ -202,6 +202,19 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
                             // not the over-creamy look of a larger radius
     fx->dof_ready = false;
 
+    // Volumetric fog (off by default; targets allocated lazily on first
+    // enable). World-space defaults are meter-scale; apps scene-scale them.
+    fx->fog_enabled = false;
+    fx->fog_density = 0.02f;
+    fx->fog_height_falloff = 4.0f;
+    fx->fog_floor_y = 0.0f;
+    fx->fog_far = 60.0f;
+    fx->fog_anisotropy = 0.45f;
+    fx->fog_sun_boost = 1.0f;
+    glm_vec3_copy((vec3){0.05f, 0.05f, 0.05f}, fx->fog_ambient);
+    fx->fog_steps = 24;
+    fx->fog_ready = false;
+
     // The HDR resolve target must be RGBA16F to match the MSAA source
     // (multisample blits require identical formats); the bloom chain never
     // reads alpha, so the cheaper packed-float format halves its bandwidth
@@ -341,6 +354,8 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     fx->ssr_program = create_ssr_program();
     fx->ssr_hiz_program = create_ssr_hiz_program();
     fx->ssr_composite_program = create_ssr_composite_program();
+    fx->fog_program = create_fog_program();
+    fx->fog_composite_program = create_fog_composite_program();
     fx->taa_resolve_program = create_taa_resolve_program();
     fx->dof_coc_program = create_dof_coc_program();
     fx->dof_blur_program = create_dof_blur_program();
@@ -349,7 +364,8 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
         !fx->ssao_blur_program || !fx->ao_accum_program || !fx->ssgi_composite_program ||
         !fx->ssgi_accum_program || !fx->ssgi_atrous_program ||
         !fx->lum_measure_program || !fx->lum_adapt_program || !fx->ssr_program ||
-        !fx->ssr_composite_program || !fx->taa_resolve_program || !fx->dof_coc_program ||
+        !fx->ssr_composite_program || !fx->fog_program || !fx->fog_composite_program ||
+        !fx->taa_resolve_program || !fx->dof_coc_program ||
         !fx->dof_blur_program || !fx->dof_composite_program) {
         free_postfx(fx);
         return NULL;
@@ -369,6 +385,7 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     uniform_set_int(fx->tonemap_program->uniforms, "albedoTex", 5);
     uniform_set_int(fx->tonemap_program->uniforms, "giTex", 6);
     uniform_set_int(fx->tonemap_program->uniforms, "lumTex", 7);
+    uniform_set_int(fx->tonemap_program->uniforms, "fogTex", 8);
 
     glUseProgram(fx->lum_measure_program->id);
     uniform_set_int(fx->lum_measure_program->uniforms, "hdrTex", 0);
@@ -384,6 +401,11 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     uniform_set_int(fx->ssr_program->uniforms, "hizTex", 4);
     glUseProgram(fx->ssr_hiz_program->id);
     uniform_set_int(fx->ssr_hiz_program->uniforms, "srcTex", 0);
+    glUseProgram(fx->fog_program->id);
+    uniform_set_int(fx->fog_program->uniforms, "auxTex", 0);
+    uniform_set_int(fx->fog_program->uniforms, "shadowMaps", 1);
+    glUseProgram(fx->fog_composite_program->id);
+    uniform_set_int(fx->fog_composite_program->uniforms, "fogTex", 0);
     glUseProgram(fx->ssr_composite_program->id);
     uniform_set_int(fx->ssr_composite_program->uniforms, "ssrTex", 0);
 
@@ -486,6 +508,22 @@ static bool postfx_ensure_ssgi_targets(PostFX* fx) {
     return true;
 }
 
+// Allocate the volumetric fog targets on first enable so the feature is free
+// while off (DoF pattern): the half-res march buffer plus the temporal
+// accumulation ping-pong.
+static bool postfx_ensure_fog_targets(PostFX* fx) {
+    if (fx->fog_ready)
+        return true;
+    if (!create_color_fbo(fx->ssao_width, fx->ssao_height, GL_RGBA16F, &fx->fog_fbo,
+                          &fx->fog_texture) ||
+        !create_pingpong(fx->ssao_width, fx->ssao_height, GL_RGBA16F, &fx->fog_history)) {
+        log_error("Failed to allocate volumetric fog targets");
+        return false;
+    }
+    fx->fog_ready = true;
+    return true;
+}
+
 // Depth of field: signed CoC + gather at half res, composite at full res into
 // fx->dof_texture. Callers must have ensured the targets exist and read
 // fx->dof_texture as the scene afterward.
@@ -564,13 +602,16 @@ void free_postfx(PostFX* fx) {
     glDeleteFramebuffers(1, &fx->lum_fbo);
     glDeleteTextures(1, &fx->lum_texture);
     free_pingpong(&fx->lum_adapt);
-    // DoF targets are 0 (no-op delete) if never lazily allocated
+    // DoF/fog targets are 0 (no-op delete) if never lazily allocated
     glDeleteFramebuffers(1, &fx->dof_coc_fbo);
     glDeleteTextures(1, &fx->dof_coc_texture);
     glDeleteFramebuffers(1, &fx->dof_blur_fbo);
     glDeleteTextures(1, &fx->dof_blur_texture);
     glDeleteFramebuffers(1, &fx->dof_fbo);
     glDeleteTextures(1, &fx->dof_texture);
+    glDeleteFramebuffers(1, &fx->fog_fbo);
+    glDeleteTextures(1, &fx->fog_texture);
+    free_pingpong(&fx->fog_history);
 
     free_program(fx->bright_program);
     free_program(fx->blur_program);
@@ -586,6 +627,8 @@ void free_postfx(PostFX* fx) {
     free_program(fx->ssr_program);
     free_program(fx->ssr_hiz_program);
     free_program(fx->ssr_composite_program);
+    free_program(fx->fog_program);
+    free_program(fx->fog_composite_program);
     free_program(fx->taa_resolve_program);
     free_program(fx->dof_coc_program);
     free_program(fx->dof_blur_program);
@@ -639,8 +682,9 @@ bool postfx_wants_aux_gbuffer(const PostFX* fx) {
     // view-Z (.z, for GTAO position reconstruction). Produce it whenever either
     // consumer is active -- decoupled from TAA so GTAO gets linear depth even
     // with TAA off (e.g. headless). SSGI rides the GTAO sweep, so it needs the
-    // linear depth too even if AO display is off (--ssgi --no-ssao).
-    return fx && (fx->taa_enabled || fx->ssao_enabled || fx->ssgi_enabled);
+    // linear depth too even if AO display is off (--ssgi --no-ssao). The fog
+    // march reconstructs its ray endpoints from the linear Z as well.
+    return fx && (fx->taa_enabled || fx->ssao_enabled || fx->ssgi_enabled || fx->fog_enabled);
 }
 
 bool postfx_wants_albedo(const PostFX* fx) {
@@ -1028,6 +1072,60 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
             check_gl_error("postfx ssgi composite");
         }
+
+        // Volumetric fog: march the half-res buffer, then fold it into the
+        // HDR scene before DoF/bloom/tonemap so shafts defocus, bloom, and
+        // meter like direct light.
+        bool fog_active = fx->fog_enabled && aux_written && postfx_ensure_fog_targets(fx);
+        GLuint fog_result_tex = 0;
+        if (fog_active) {
+            glBindFramebuffer(GL_FRAMEBUFFER, fx->fog_fbo);
+            glViewport(0, 0, fx->ssao_width, fx->ssao_height);
+            glUseProgram(fx->fog_program->id);
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, fx->aux_texture);
+            glActiveTexture(GL_TEXTURE1);
+            glBindTexture(GL_TEXTURE_2D_ARRAY, fx->fog_shadow_map_array);
+            glActiveTexture(GL_TEXTURE0);
+            mat4 fog_inv_view;
+            glm_mat4_inv(view, fog_inv_view);
+            UniformManager* fu = fx->fog_program->uniforms;
+            uniform_set_mat4(fu, "invView", (float*)fog_inv_view);
+            uniform_set_mat4(fu, "projection", (float*)projection);
+            uniform_set_vec3(fu, "ambientColor", fx->fog_ambient);
+            uniform_set_float(fu, "density", fx->fog_density);
+            uniform_set_float(fu, "heightFalloff", fx->fog_height_falloff);
+            uniform_set_float(fu, "floorY", fx->fog_floor_y);
+            uniform_set_float(fu, "fogFar", fx->fog_far);
+            uniform_set_float(fu, "anisotropy", fx->fog_anisotropy);
+            uniform_set_float(fu, "sunBoost", fx->fog_sun_boost);
+            uniform_set_float(fu, "shadowBias", fx->fog_shadow_bias);
+            uniform_set_int(fu, "steps", fx->fog_steps);
+            uniform_set_int(fu, "numLights", 0); // shafts arrive with the caster upload
+            uniform_set_int(fu, "temporal", 0);
+            uniform_set_int(fu, "frameIndex", fx->frame_index);
+            draw_fullscreen_quad(fx->quad_vao);
+            fog_result_tex = fx->fog_texture;
+
+            // Fold into the scene: out = inscatter + scene * transmittance.
+            // Same enable/draw/restore idiom as the SSR composite.
+            glBindFramebuffer(GL_FRAMEBUFFER, fx->hdr_fbo);
+            glViewport(0, 0, fx->width, fx->height);
+            glUseProgram(fx->fog_composite_program->id);
+            uniform_set_vec2(fx->fog_composite_program->uniforms, "texelSize",
+                             (vec2){1.0f / (float)fx->ssao_width, 1.0f / (float)fx->ssao_height});
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, fx->fog_texture);
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_ONE, GL_SRC_ALPHA);
+            draw_fullscreen_quad(fx->quad_vao);
+            glDisable(GL_BLEND);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            check_gl_error("postfx fog");
+        } else {
+            fx->fog_history.valid = false;
+        }
+        (void)fog_result_tex; // consumed by the debug view once it exists
 
         // Depth of field replaces the scene that bloom and tone mapping read.
         // scene_tex is the sharp HDR unless DoF ran into fx->dof_texture.
