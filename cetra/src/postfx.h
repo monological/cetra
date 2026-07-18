@@ -104,6 +104,7 @@ typedef struct PostFX {
     ShaderProgram* ssr_composite_program;
     ShaderProgram* fog_program;
     ShaderProgram* fog_composite_program;
+    ShaderProgram* fog_accum_program;
     ShaderProgram* taa_resolve_program;
 
     GLuint quad_vao;

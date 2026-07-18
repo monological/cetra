@@ -715,6 +715,10 @@ ShaderProgram* create_fog_composite_program() {
     return create_post_program("fog_composite", fog_composite_frag_shader_str);
 }
 
+ShaderProgram* create_fog_accum_program() {
+    return create_post_program("fog_accum", fog_accum_frag_shader_str);
+}
+
 ShaderProgram* create_lum_measure_program() {
     return create_post_program("lum_measure", lum_measure_frag_shader_str);
 }

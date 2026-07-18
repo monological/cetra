@@ -357,6 +357,7 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     fx->ssr_composite_program = create_ssr_composite_program();
     fx->fog_program = create_fog_program();
     fx->fog_composite_program = create_fog_composite_program();
+    fx->fog_accum_program = create_fog_accum_program();
     fx->taa_resolve_program = create_taa_resolve_program();
     fx->dof_coc_program = create_dof_coc_program();
     fx->dof_blur_program = create_dof_blur_program();
@@ -366,7 +367,7 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
         !fx->ssgi_accum_program || !fx->ssgi_atrous_program ||
         !fx->lum_measure_program || !fx->lum_adapt_program || !fx->ssr_program ||
         !fx->ssr_composite_program || !fx->fog_program || !fx->fog_composite_program ||
-        !fx->taa_resolve_program || !fx->dof_coc_program ||
+        !fx->fog_accum_program || !fx->taa_resolve_program || !fx->dof_coc_program ||
         !fx->dof_blur_program || !fx->dof_composite_program) {
         free_postfx(fx);
         return NULL;
@@ -448,6 +449,12 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     uniform_set_int(fx->ssgi_accum_program->uniforms, "velocityTex", 1);
     uniform_set_int(fx->ssgi_accum_program->uniforms, "historyTex", 2);
     uniform_set_vec2(fx->ssgi_accum_program->uniforms, "texelSize", ao_texel);
+
+    glUseProgram(fx->fog_accum_program->id);
+    uniform_set_int(fx->fog_accum_program->uniforms, "currentTex", 0);
+    uniform_set_int(fx->fog_accum_program->uniforms, "velocityTex", 1);
+    uniform_set_int(fx->fog_accum_program->uniforms, "historyTex", 2);
+    uniform_set_vec2(fx->fog_accum_program->uniforms, "texelSize", ao_texel);
 
     glUseProgram(fx->ssgi_atrous_program->id);
     uniform_set_int(fx->ssgi_atrous_program->uniforms, "giTex", 0);
@@ -630,6 +637,7 @@ void free_postfx(PostFX* fx) {
     free_program(fx->ssr_composite_program);
     free_program(fx->fog_program);
     free_program(fx->fog_composite_program);
+    free_program(fx->fog_accum_program);
     free_program(fx->taa_resolve_program);
     free_program(fx->dof_coc_program);
     free_program(fx->dof_blur_program);
@@ -857,6 +865,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         const bool gtao_active = fx->ssao_enabled || ssgi_active;
         bool ao_accum_ran = false;
         bool gi_accum_ran = false;
+        bool fog_accum_ran = false;
         if (gtao_active) {
             // Raw occlusion at half res. GTAO reads linear view-Z from the aux
             // buffer's .z (unit 0) and reconstructs positions from it -- the
@@ -1115,10 +1124,20 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
                 snprintf(name, sizeof(name), "lightDir[%d]", i);
                 uniform_set_vec3(fu, name, fx->fog_light_dir[i]);
             }
-            uniform_set_int(fu, "temporal", 0);
+            // Under TAA the march's dither rotates per frame and the
+            // accumulator below integrates it; headless/no-TAA keeps the
+            // static dither so equal runs stay byte-identical.
+            uniform_set_int(fu, "temporal", taa_resolving ? 1 : 0);
             uniform_set_int(fu, "frameIndex", fx->frame_index);
             draw_fullscreen_quad(fx->quad_vao);
             fog_result_tex = fx->fog_texture;
+
+            if (taa_resolving) {
+                fog_result_tex =
+                    run_temporal_accum(fx, fx->fog_accum_program, &fx->fog_history,
+                                       fx->ssao_width, fx->ssao_height, fx->fog_texture);
+                fog_accum_ran = true;
+            }
 
             // Fold into the scene: out = inscatter + scene * transmittance.
             // Same enable/draw/restore idiom as the SSR composite.
@@ -1128,16 +1147,16 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             uniform_set_vec2(fx->fog_composite_program->uniforms, "texelSize",
                              (vec2){1.0f / (float)fx->ssao_width, 1.0f / (float)fx->ssao_height});
             glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, fx->fog_texture);
+            glBindTexture(GL_TEXTURE_2D, fog_result_tex);
             glEnable(GL_BLEND);
             glBlendFunc(GL_ONE, GL_SRC_ALPHA);
             draw_fullscreen_quad(fx->quad_vao);
             glDisable(GL_BLEND);
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
             check_gl_error("postfx fog");
-        } else {
-            fx->fog_history.valid = false;
         }
+        if (!fog_accum_ran)
+            fx->fog_history.valid = false;
 
         // Depth of field replaces the scene that bloom and tone mapping read.
         // scene_tex is the sharp HDR unless DoF ran into fx->dof_texture.
