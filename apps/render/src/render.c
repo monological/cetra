@@ -168,7 +168,7 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --no-specular-aa   Disable specular anti-aliasing\n");
     fprintf(stderr, "      --no-energy-comp   Disable multi-scatter specular energy comp\n");
     fprintf(stderr, "      --no-bloom         Disable bloom\n");
-    fprintf(stderr, "      --tonemap <m>      Tonemap mode: aces, neutral (default: neutral)\n");
+    fprintf(stderr, "      --tonemap <m>      Tonemap mode: aces, neutral, agx (default: neutral)\n");
     fprintf(stderr, "      --ssaa <int>       Supersampling factor (default: 1 = off; 2 = 2x SSAA)\n");
     fprintf(stderr, "      --no-ssaa          Disable supersampling (render at 1x)\n");
     fprintf(stderr, "      --film             Cinematic finish preset (vignette+grain+sharpen+grade)\n");
@@ -461,6 +461,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 args->tonemap_mode = POSTFX_TONEMAP_ACES;
             } else if (strcmp(argv[i], "neutral") == 0) {
                 args->tonemap_mode = POSTFX_TONEMAP_NEUTRAL;
+            } else if (strcmp(argv[i], "agx") == 0) {
+                args->tonemap_mode = POSTFX_TONEMAP_AGX;
             } else {
                 fprintf(stderr, "Error: unknown tonemap mode '%s'\n", argv[i]);
                 return -1;

@@ -27,8 +27,8 @@ uniform float autoKey; // Target middle gray (0.18)
 // Debug view dispatch (PostFXDebugView): 0=none, 1=AO, 2=normals, 3=SSR,
 // 4=albedo, 5=GI, 6=fog
 uniform int debugView;
-// 1 = ACES, 2 = PBR Neutral (passthrough frames are blitted by postfx_run
-// and never reach this pass)
+// 1 = ACES, 2 = PBR Neutral, 3 = AgX (passthrough frames are blitted by
+// postfx_run and never reach this pass)
 uniform int tonemapMode;
 uniform vec2 texelSize; // Display-pixel size, for the sharpen taps
 
@@ -80,6 +80,43 @@ vec3 pbrNeutralTonemap(vec3 color)
     return mix(color, newPeak * vec3(1.0), g);
 }
 
+// AgX (Sobotka; Blender 4+'s default view transform), Wrensch's fitted
+// minification. Desaturates toward white as radiance climbs, so saturated
+// HDR highlights roll off without the hue skew ACES produces. The inset/
+// outset matrices and sigmoid coefficients are the published constants and
+// are inverses of each other through the curve's 2.2 encoding -- transcribe
+// exactly or everything takes a global color cast.
+vec3 agxContrastApprox(vec3 x)
+{
+    // 6th-order polynomial fit of the AgX base sigmoid
+    vec3 x2 = x * x;
+    vec3 x4 = x2 * x2;
+    return 15.5 * x4 * x2 - 40.14 * x4 * x + 31.96 * x4 - 6.868 * x2 * x + 0.4298 * x2 +
+           0.1191 * x - 0.00232;
+}
+
+vec3 agxTonemap(vec3 c)
+{
+    const mat3 AGX_INSET = mat3(0.842479062253094, 0.0423282422610123, 0.0423756549057051,
+                                0.0784335999999992, 0.878468636469772, 0.0784336,
+                                0.0792237451477643, 0.0791661274605434, 0.879142973793104);
+    const mat3 AGX_OUTSET = mat3(1.19687900512017, -0.0528968517574562, -0.0529716355144438,
+                                 -0.0980208811401368, 1.15190312990417, -0.0980434501171241,
+                                 -0.0990297440797205, -0.0989611768448433, 1.15107367264116);
+    const float MIN_EV = -12.47393;
+    const float MAX_EV = 4.026069;
+
+    c = AGX_INSET * c;
+    // log2 of black is -inf; the floor keeps the clamp finite
+    c = clamp(log2(max(c, vec3(1e-10))), MIN_EV, MAX_EV);
+    c = (c - MIN_EV) / (MAX_EV - MIN_EV);
+    c = agxContrastApprox(c); // output is 2.2-encoded by construction
+    c = AGX_OUTSET * c;
+    // Linearize: toneSelect's contract is LDR-linear, displayEncode does
+    // the gamma later
+    return pow(max(c, vec3(0.0)), vec3(2.2));
+}
+
 // Gamma-encode a linear [0,1] color for display.
 vec3 displayEncode(vec3 c)
 {
@@ -90,7 +127,9 @@ vec3 displayEncode(vec3 c)
 // HDR debug views.
 vec3 toneSelect(vec3 c)
 {
-    return tonemapMode == 1 ? acesTonemap(c) : pbrNeutralTonemap(c);
+    return tonemapMode == 3   ? agxTonemap(c)
+           : tonemapMode == 1 ? acesTonemap(c)
+                              : pbrNeutralTonemap(c);
 }
 
 // Scene HDR sample -> tonemapped LDR-linear [0,1], applying the shared AO

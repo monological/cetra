@@ -20,6 +20,8 @@ typedef enum PostFXTonemapMode {
     POSTFX_TONEMAP_PASSTHROUGH = 0, // Raw copy for display-ready LDR frames
     POSTFX_TONEMAP_ACES = 1,        // Filmic: high contrast, crushed shadows
     POSTFX_TONEMAP_NEUTRAL = 2,     // Khronos PBR Neutral: faithful shadows/colors
+    POSTFX_TONEMAP_AGX = 3,         // AgX: desaturates toward white as radiance
+                                    // climbs; no hue skew on saturated highlights
 } PostFXTonemapMode;
 
 // A two-target render pair for temporal accumulators (indexed by frame

@@ -1264,9 +1264,12 @@ static void _engine_gui_panel(Engine* engine) {
         if (igCheckbox("TAA", &taa))
             set_engine_taa_enabled(engine, taa);
 
-        bool aces = fx->tonemap_mode == POSTFX_TONEMAP_ACES;
-        if (igCheckbox("ACES Tonemap", &aces))
-            fx->tonemap_mode = aces ? POSTFX_TONEMAP_ACES : POSTFX_TONEMAP_NEUTRAL;
+        // Index maps to the enum minus PASSTHROUGH, which is not a look and
+        // stays out of the picker
+        static const char* tonemap_names[] = {"ACES", "PBR Neutral", "AgX"};
+        int tm = (int)fx->tonemap_mode - 1;
+        if (igCombo_Str_arr("Tonemap", &tm, tonemap_names, 3, -1))
+            fx->tonemap_mode = (PostFXTonemapMode)(tm + 1);
         igCheckbox("Auto Exposure", &fx->auto_exposure);
         // With auto on, the manual slider becomes an EV bias on the adapted value
         igSliderFloat("Exposure", &fx->exposure, 0.05f, 8.0f, "%.2f", 0);
