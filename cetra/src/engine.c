@@ -1272,7 +1272,7 @@ static void _engine_gui_panel(Engine* engine) {
         igSliderFloat("Exposure", &fx->exposure, 0.05f, 8.0f, "%.2f", 0);
 
         _begin_effect_group("Bloom", &fx->bloom_enabled);
-        igSliderFloat("Bloom Strength", &fx->bloom_strength, 0.0f, 1.0f, "%.3f", 0);
+        igSliderFloat("Bloom Strength", &fx->bloom_strength, 0.0f, 0.1f, "%.3f", 0);
         igSliderFloat("Bloom Threshold", &fx->bloom_threshold, 0.0f, 8.0f, "%.2f", 0);
         _end_effect_group();
 

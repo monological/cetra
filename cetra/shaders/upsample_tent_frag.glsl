@@ -2,18 +2,21 @@
 in vec2 TexCoords;
 out vec4 FragColor;
 
-// Shared 3x3 tent upsample of a half-res effect buffer onto the full-res
-// HDR scene. The call site's blend state defines the composite: SSR draws
-// its premultiplied (color * weight, weight) buffer with (GL_ONE,
-// GL_ONE_MINUS_SRC_ALPHA) so a dark reflection can darken the floor
-// beneath it; fog draws (inscatter, transmittance) with (GL_ONE,
-// GL_SRC_ALPHA) so the output is inscatter + scene * transmittance. The
+// Shared 3x3 tent upsample of a coarser effect buffer. The call site's
+// blend state defines the composite: SSR draws its premultiplied
+// (color * weight, weight) buffer with (GL_ONE, GL_ONE_MINUS_SRC_ALPHA)
+// so a dark reflection can darken the floor beneath it; fog draws
+// (inscatter, transmittance) with (GL_ONE, GL_SRC_ALPHA) so the output is
+// inscatter + scene * transmittance; the bloom pyramid walks its mip
+// chain with (GL_ONE, GL_ONE) so each coarser level accumulates onto the
+// finer one (via a separate program object -- bloom re-uploads texelSize
+// per level, while SSR/fog's shared program sets it once at init). The
 // tent matters where a jittered march's per-pixel outcome is marginal
 // (hit-or-miss grazing reflections, dithered step positions): averaging
 // the neighborhood turns that per-pixel coin-flip into a smooth local
 // fraction instead of structured noise.
 uniform sampler2D srcTex;
-uniform vec2 texelSize; // One half-res source texel
+uniform vec2 texelSize; // One coarser-level source texel
 
 void main()
 {

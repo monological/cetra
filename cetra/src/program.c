@@ -567,23 +567,18 @@ ShaderProgram* create_shadow_catcher_program() {
 }
 
 ShaderProgram* create_bloom_bright_program() {
-    ShaderProgram* program = NULL;
-
-    if ((program = create_program_from_source("bloom_bright", post_vert_shader_str,
-                                              bloom_bright_frag_shader_str, NULL)) == NULL) {
-        log_error("Failed to initialize bloom bright-pass shader program");
-        return NULL;
-    }
-
-    return program;
+    return create_post_program("bloom_bright", bloom_bright_frag_shader_str);
 }
 
 ShaderProgram* create_bloom_down_program() {
     return create_post_program("bloom_downsample", bloom_downsample_frag_shader_str);
 }
 
+// Same tent source as the SSR/fog composite, but its own program object:
+// bloom re-uploads texelSize per pyramid level, the shared program's is
+// set once at init
 ShaderProgram* create_bloom_up_program() {
-    return create_post_program("bloom_upsample", bloom_upsample_frag_shader_str);
+    return create_post_program("bloom_upsample", upsample_tent_frag_shader_str);
 }
 
 ShaderProgram* create_tonemap_program() {

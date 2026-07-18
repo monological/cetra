@@ -1000,11 +1000,11 @@ int main(int argc, char** argv) {
         // environment -- say so instead of leaving a silently inert toggle
         fprintf(stderr, "Note: energy compensation is inactive without an HDR environment (-e)\n");
     }
-    if (args.no_bloom && engine->postfx) {
-        engine->postfx->bloom_enabled = false;
-    }
     if (engine->postfx) {
         PostFX* fx = engine->postfx;
+        if (args.no_bloom) {
+            fx->bloom_enabled = false;
+        }
         // --film applies the whole finishing look first, so individual
         // finishing flags below can still override any part of it.
         if (args.film_preset) {

@@ -90,7 +90,7 @@ typedef struct PostFX {
     PingPong lum_adapt;   // 1x1 adapted log2-luminance (eye adaptation)
     PingPong taa_history; // Full-res history (previous resolved frames)
 
-    ShaderProgram* bright_program;
+    ShaderProgram* bloom_bright_program;
     ShaderProgram* bloom_down_program; // Pyramid 13-tap downsample
     ShaderProgram* bloom_up_program;   // Pyramid tent upsample (additive)
     ShaderProgram* tonemap_program;
