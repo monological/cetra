@@ -93,6 +93,7 @@ typedef struct {
     float specular_aa;                 // Specular AA strength override (-1 = default)
     int no_energy_comp;                // Disable multi-scatter energy compensation
     int no_bloom;                      // Disable bloom
+    int tonemap_mode;                  // PostFXTonemapMode override (0 = keep default)
     int ssaa;                          // Supersampling factor (0 = keep engine default)
     // Finishing grade (-1 = keep engine default; >=0 enables + sets)
     int film_preset; // --film: enable the whole finishing stack at sane defaults
@@ -167,6 +168,7 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --no-specular-aa   Disable specular anti-aliasing\n");
     fprintf(stderr, "      --no-energy-comp   Disable multi-scatter specular energy comp\n");
     fprintf(stderr, "      --no-bloom         Disable bloom\n");
+    fprintf(stderr, "      --tonemap <m>      Tonemap mode: aces, neutral (default: neutral)\n");
     fprintf(stderr, "      --ssaa <int>       Supersampling factor (default: 1 = off; 2 = 2x SSAA)\n");
     fprintf(stderr, "      --no-ssaa          Disable supersampling (render at 1x)\n");
     fprintf(stderr, "      --film             Cinematic finish preset (vignette+grain+sharpen+grade)\n");
@@ -450,6 +452,19 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->no_energy_comp = 1;
         } else if (strcmp(argv[i], "--no-bloom") == 0) {
             args->no_bloom = 1;
+        } else if (strcmp(argv[i], "--tonemap") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            if (strcmp(argv[i], "aces") == 0) {
+                args->tonemap_mode = POSTFX_TONEMAP_ACES;
+            } else if (strcmp(argv[i], "neutral") == 0) {
+                args->tonemap_mode = POSTFX_TONEMAP_NEUTRAL;
+            } else {
+                fprintf(stderr, "Error: unknown tonemap mode '%s'\n", argv[i]);
+                return -1;
+            }
         } else if (strcmp(argv[i], "--ssaa") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -1004,6 +1019,9 @@ int main(int argc, char** argv) {
         PostFX* fx = engine->postfx;
         if (args.no_bloom) {
             fx->bloom_enabled = false;
+        }
+        if (args.tonemap_mode != 0) {
+            fx->tonemap_mode = (PostFXTonemapMode)args.tonemap_mode;
         }
         // --film applies the whole finishing look first, so individual
         // finishing flags below can still override any part of it.
