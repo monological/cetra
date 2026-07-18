@@ -1239,8 +1239,11 @@ static void _engine_gui_panel(Engine* engine) {
             ShadowSystem* ss = scene->shadow_system;
             _begin_effect_group("Shadows", &ss->enabled);
             // Count change takes effect next frame via the depth pass's
-            // rebuild-on-change; 1 = the classic scene-fit single map
-            igSliderInt("Cascades", &ss->cascade_count, 1, SHADOW_CASCADES, "%d", 0);
+            // rebuild-on-change; 1 = the classic scene-fit single map.
+            // AlwaysClamp: Ctrl+Click text entry must not escape the range
+            // (the count sizes heap array writes in the depth pass).
+            igSliderInt("Cascades", &ss->cascade_count, 1, SHADOW_CASCADES, "%d",
+                        ImGuiSliderFlags_AlwaysClamp);
             igCheckbox("Cascade Tint", &ss->csm_debug);
             _begin_effect_group("PCSS", &ss->pcss_enabled);
             igSliderFloat("Shadow Softness", &ss->pcss_softness, 0.0f, 4.0f, "%.2f", 0);

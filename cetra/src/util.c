@@ -35,6 +35,11 @@ size_t get_gl_max_lights() {
     size_t max_light_uniforms = max_uniform_components - USED_UNIFORM_COMPONENTS;
     size_t max_lights = max_light_uniforms / COMPONENTS_PER_LIGHT;
 
+    // The shader's lights[] array is the hard ceiling: uploading more sets
+    // numLights past the array and the shader loop reads out of bounds
+    if (max_lights > PBR_MAX_LIGHTS)
+        max_lights = PBR_MAX_LIGHTS;
+
     return max_lights;
 }
 

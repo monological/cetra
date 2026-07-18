@@ -886,19 +886,20 @@ static GLuint postfx_run_fog(PostFX* fx, bool aux_written, bool taa_resolving, m
     // count is nonzero.
     uniform_set_int(fu, "numLights", fx->fog_light_count);
     uniform_set_int(fu, "cascadeCount", fx->fog_cascade_count);
-    for (int i = 0; i < fx->fog_light_count; i++) {
-        char name[48];
+    if (fx->fog_light_count > 0) {
         // Cascade layers stride by the published runtime count (slot
-        // indices at count 1)
-        for (int c = 0; c < fx->fog_cascade_count; c++) {
-            int layer = i * fx->fog_cascade_count + c;
-            snprintf(name, sizeof(name), "lightSpaceMatrix[%d]", layer);
-            uniform_set_mat4(fu, name, (const float*)fx->fog_light_space[layer]);
-        }
-        snprintf(name, sizeof(name), "lightColor[%d]", i);
-        uniform_set_vec3(fu, name, fx->fog_light_color[i]);
-        snprintf(name, sizeof(name), "lightDir[%d]", i);
-        uniform_set_vec3(fu, name, fx->fog_light_dir[i]);
+        // indices at count 1) and are contiguous from element 0, as are
+        // the per-slot arrays -- ranged uploads cover them all
+        GLint lloc = uniform_location(fu, "lightSpaceMatrix[0]");
+        if (lloc >= 0)
+            glUniformMatrix4fv(lloc, fx->fog_light_count * fx->fog_cascade_count, GL_FALSE,
+                               (const GLfloat*)fx->fog_light_space);
+        lloc = uniform_location(fu, "lightColor[0]");
+        if (lloc >= 0)
+            glUniform3fv(lloc, fx->fog_light_count, (const GLfloat*)fx->fog_light_color);
+        lloc = uniform_location(fu, "lightDir[0]");
+        if (lloc >= 0)
+            glUniform3fv(lloc, fx->fog_light_count, (const GLfloat*)fx->fog_light_dir);
     }
     // Under TAA the march's dither rotates per frame and the accumulator
     // integrates it; headless/no-TAA keeps the static dither so equal runs

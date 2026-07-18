@@ -84,12 +84,20 @@ typedef struct CascadeCamera {
 // Fit one cascade: ortho box sized from the [slice_near, slice_far] view
 // slice's bounding sphere (rotation-invariant -> stable under orbit), center
 // snapped to shadow-texel increments in light view space, eye pushed back by
-// scene_pad so out-of-slice geometry toward the light still casts. Writes the
-// matrix and (width, near, far, 1.0) into out_params; the caller sets .w to
-// the per-cascade bias scale.
+// scene_pad so out-of-slice geometry toward the light still casts. Writes
+// the matrix and (width, orthoNear, orthoFar, 1.0) into out_params; .w is a
+// bias factor defaulting to no scaling (the depth pass overrides it with
+// the legacy-normalized value).
 void compute_cascade_light_space_matrix(vec3 direction, const CascadeCamera* cam, float slice_near,
                                         float slice_far, float scene_pad, int map_size, mat4 dest,
                                         vec4 out_params);
+
+// Upload the cascade uniform contract (cascadeCount, cascadeSplits,
+// sceneOrthoWidth, and the count-strided lightSpaceMatrix/cascadeParams
+// layers as ranged array uploads) to any program that samples the shadow
+// maps. Location-guarded: programs lacking a uniform skip it. The layer
+// layout law lives HERE and nowhere else.
+void shadow_upload_cascade_uniforms(const ShadowSystem* system, UniformManager* u);
 
 // Shadow map binding for main render pass
 void bind_shadow_maps_to_program(ShadowSystem* system, ShaderProgram* program,

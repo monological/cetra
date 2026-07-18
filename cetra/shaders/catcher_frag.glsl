@@ -66,8 +66,9 @@ float occlusion_from(int slot, int cascade)
     if (proj.z > 1.0 || proj.x < 0.0 || proj.x > 1.0 || proj.y < 0.0 || proj.y > 1.0)
         return 0.0;
 
-    // Coarser cascades scale the depth bias with their texel size
-    // (cascadeParams.w is exactly 1.0 at cascadeCount 1)
+    // cascadeParams.w = (legacyRange/range) * (width/legacyWidth): first
+    // re-expresses the app-tuned 0..1 bias in this cascade's depth scale,
+    // then grows it with the real texel size. Exactly 1.0 at cascadeCount 1.
     float bias = shadowBias * cascadeParams[layer].w;
 
     // 5x5 PCF with a widened kernel for soft edges. The kernel is a LOOK,

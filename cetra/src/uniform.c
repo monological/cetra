@@ -152,7 +152,8 @@ void uniform_cache_lights(UniformManager* mgr, size_t max_lights) {
 }
 
 // max_shadow_lights is the caster slot count; the per-layer arrays
-// (lightSpaceMatrix, cascadeParams) span slots x cascades
+// (lightSpaceMatrix, cascadeParams) span slots x cascades but upload as
+// ranged calls from element 0, so only that location is cached.
 void uniform_cache_shadows(UniformManager* mgr, size_t max_shadow_lights, size_t max_cascades) {
     if (!mgr)
         return;
@@ -164,16 +165,23 @@ void uniform_cache_shadows(UniformManager* mgr, size_t max_shadow_lights, size_t
     uniform_location(mgr, "cascadeCount");
     uniform_location(mgr, "cascadeSplits");
     uniform_location(mgr, "csmDebug");
+    uniform_location(mgr, "lightSpaceMatrix[0]");
+    uniform_location(mgr, "cascadeParams[0]");
 
-    for (size_t i = 0; i < max_shadow_lights * max_cascades; i++) {
-        char name[64];
-        snprintf(name, sizeof(name), "lightSpaceMatrix[%zu]", i);
-        uniform_location(mgr, name);
-        snprintf(name, sizeof(name), "cascadeParams[%zu]", i);
-        uniform_location(mgr, name);
+    // Drift check: the GLSL array sizes are hardcoded literals the C
+    // constants only mirror. A dynamically-indexed array is active over its
+    // full declared size, so if the last layer's name fails to resolve
+    // while element 0 exists, the shader arrays are SMALLER than the C
+    // side claims and ranged uploads would silently truncate.
+    char name[64];
+    snprintf(name, sizeof(name), "lightSpaceMatrix[%zu]", max_shadow_lights * max_cascades - 1);
+    if (uniform_location(mgr, "lightSpaceMatrix[0]") >= 0 && uniform_location(mgr, name) < 0) {
+        log_warn("Shader lightSpaceMatrix[] smaller than %zu layers -- "
+                 "GLSL cascade constants drifted from the C mirrors",
+                 max_shadow_lights * max_cascades);
     }
+
     for (size_t i = 0; i < max_shadow_lights; i++) {
-        char name[64];
         snprintf(name, sizeof(name), "shadowLightIndex[%zu]", i);
         uniform_location(mgr, name);
     }
@@ -201,6 +209,12 @@ void uniform_set_vec3(UniformManager* mgr, const char* name, const float* value)
     GLint loc = uniform_location(mgr, name);
     if (loc >= 0)
         glUniform3fv(loc, 1, value);
+}
+
+void uniform_set_vec4(UniformManager* mgr, const char* name, const float* value) {
+    GLint loc = uniform_location(mgr, name);
+    if (loc >= 0)
+        glUniform4fv(loc, 1, value);
 }
 
 void uniform_set_mat4(UniformManager* mgr, const char* name, const float* value) {

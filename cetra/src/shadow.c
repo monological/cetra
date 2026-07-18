@@ -182,13 +182,18 @@ void free_shadow_map_array(ShadowSystem* system) {
 
 // caster_index is a LAYER index (slot * cascade_count + cascade)
 void begin_shadow_pass(ShadowSystem* system, size_t caster_index) {
-    if (!system || caster_index >= (size_t)(MAX_SHADOW_LIGHTS * SHADOW_CASCADES))
+    if (!system)
         return;
 
     if (!system->initialized) {
         if (init_shadow_map_array(system) != 0)
             return;
     }
+
+    // Bound by the array's ALLOCATED layer capacity, not the compile-time
+    // ceiling -- a stale layer index should fail here, not at the driver
+    if (caster_index >= (size_t)MAX_SHADOW_LIGHTS * (size_t)system->allocated_cascades)
+        return;
 
     int size = system->default_map_size;
 
@@ -212,6 +217,19 @@ void end_shadow_pass(ShadowSystem* system) {
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
+// Basis up-vector for a light view: world up, unless the light looks along
+// it. The threshold and fallback axis define the light-space orientation --
+// both fit paths MUST share them or the basis flips with cascade count.
+static void light_space_up(const vec3 light_dir, vec3 up) {
+    up[0] = 0.0f;
+    up[1] = 1.0f;
+    up[2] = 0.0f;
+    if (fabsf(glm_vec3_dot((float*)light_dir, up)) > 0.99f) {
+        up[0] = 1.0f;
+        up[1] = 0.0f;
+    }
+}
+
 void compute_directional_light_space_matrix(vec3 direction, vec3 scene_center, float ortho_size,
                                             float near_plane, float far_plane, mat4 dest) {
     vec3 light_dir;
@@ -221,12 +239,8 @@ void compute_directional_light_space_matrix(vec3 direction, vec3 scene_center, f
     glm_vec3_scale(light_dir, -far_plane * 0.5f, light_pos);
     glm_vec3_add(light_pos, scene_center, light_pos);
 
-    vec3 up = {0.0f, 1.0f, 0.0f};
-    if (fabsf(glm_vec3_dot(light_dir, up)) > 0.99f) {
-        up[0] = 1.0f;
-        up[1] = 0.0f;
-        up[2] = 0.0f;
-    }
+    vec3 up = GLM_VEC3_ZERO_INIT;
+    light_space_up(light_dir, up);
 
     mat4 light_view;
     glm_lookat(light_pos, scene_center, up, light_view);
@@ -260,12 +274,8 @@ void compute_cascade_light_space_matrix(vec3 direction, const CascadeCamera* cam
     glm_vec3_scale((float*)cam->forward, zc, center);
     glm_vec3_add(center, (float*)cam->position, center);
 
-    vec3 up = {0.0f, 1.0f, 0.0f};
-    if (fabsf(glm_vec3_dot(light_dir, up)) > 0.99f) {
-        up[0] = 1.0f;
-        up[1] = 0.0f;
-        up[2] = 0.0f;
-    }
+    vec3 up = GLM_VEC3_ZERO_INIT;
+    light_space_up(light_dir, up);
 
     // Snap the sphere center to shadow-texel increments in light view space:
     // with the diameter constant, the box then slides in whole texels and
@@ -300,7 +310,35 @@ void compute_cascade_light_space_matrix(vec3 direction, const CascadeCamera* cam
     out_params[0] = 2.0f * radius;
     out_params[1] = ortho_near;
     out_params[2] = ortho_far;
-    out_params[3] = 1.0f; // bias scale; caller fills per cascade
+    out_params[3] = 1.0f; // bias factor default (no scaling)
+}
+
+void shadow_upload_cascade_uniforms(const ShadowSystem* system, UniformManager* u) {
+    if (!system || !u)
+        return;
+
+    // At count 1 the layer indices and matrices match the classic path
+    // exactly (the byte-identity bridge)
+    int cc = system->cascade_count;
+    uniform_set_int(u, "cascadeCount", cc);
+    vec4 splits = {system->cascade_splits[0], system->cascade_splits[1],
+                   system->cascade_splits[2], 0.0f};
+    uniform_set_vec4(u, "cascadeSplits", splits);
+    // The scene-fit map's world width: the reference receiver-side filter
+    // kernels were tuned against (consumed by the catcher)
+    uniform_set_float(u, "sceneOrthoWidth", 2.0f * system->ortho_size);
+
+    // Used layers are contiguous from element 0 (layer = slot * cc + c,
+    // slots compact), so the per-layer arrays upload as one ranged call
+    GLsizei layers = (GLsizei)(system->active_count * (size_t)cc);
+    if (layers <= 0)
+        return;
+    GLint loc = uniform_location(u, "lightSpaceMatrix[0]");
+    if (loc >= 0)
+        glUniformMatrix4fv(loc, layers, GL_FALSE, (const GLfloat*)system->cascade_matrices);
+    loc = uniform_location(u, "cascadeParams[0]");
+    if (loc >= 0)
+        glUniform4fv(loc, layers, (const GLfloat*)system->cascade_params);
 }
 
 void bind_shadow_maps_to_program(ShadowSystem* system, ShaderProgram* program,
@@ -329,33 +367,11 @@ void bind_shadow_maps_to_program(ShadowSystem* system, ShaderProgram* program,
     uniform_set_int(u, "pcssEnabled", system->pcss_enabled ? 1 : 0);
     uniform_set_float(u, "pcssSoftness", system->pcss_softness);
 
-    // Cascade state. At count 1 the layer indices and matrices match the
-    // classic path exactly (the byte-identity bridge)
-    int cc = system->cascade_count;
-    uniform_set_int(u, "cascadeCount", cc);
     uniform_set_int(u, "csmDebug", system->csm_debug ? 1 : 0);
-    loc = uniform_location(u, "cascadeSplits");
-    if (loc >= 0)
-        glUniform4f(loc, system->cascade_splits[0], system->cascade_splits[1],
-                    system->cascade_splits[2], 0.0f);
+    shadow_upload_cascade_uniforms(system, u);
 
     for (size_t i = 0; i < system->active_count && i < MAX_SHADOW_LIGHTS; i++) {
         char name[64];
-
-        for (int c = 0; c < cc; c++) {
-            size_t layer = i * (size_t)cc + (size_t)c;
-            snprintf(name, sizeof(name), "lightSpaceMatrix[%zu]", layer);
-            loc = uniform_location(u, name);
-            if (loc >= 0)
-                glUniformMatrix4fv(loc, 1, GL_FALSE,
-                                   (const GLfloat*)system->cascade_matrices[layer]);
-
-            snprintf(name, sizeof(name), "cascadeParams[%zu]", layer);
-            loc = uniform_location(u, name);
-            if (loc >= 0)
-                glUniform4fv(loc, 1, (const GLfloat*)system->cascade_params[layer]);
-        }
-
         snprintf(name, sizeof(name), "shadowLightIndex[%zu]", i);
         uniform_set_int(u, name, shadow_light_indices ? shadow_light_indices[i] : (int)i);
     }
@@ -423,8 +439,22 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
         }
     }
 
-    // Rebuild the array when the cascade count changed (layer count differs)
-    if (ss->initialized && ss->allocated_cascades != ss->cascade_count) {
+    // Clamp the runtime count into the compile-time ceiling: the splits and
+    // matrix arrays are sized by SHADOW_CASCADES and the count is writable
+    // from the GUI. Cascade fitting needs the camera; without one, fall
+    // back to the classic scene-fit single map.
+    if (ss->cascade_count < 1)
+        ss->cascade_count = 1;
+    if (ss->cascade_count > SHADOW_CASCADES)
+        ss->cascade_count = SHADOW_CASCADES;
+    if (!engine->camera)
+        ss->cascade_count = 1;
+
+    // Grow the array when the cascade count exceeds its layer capacity. A
+    // larger array serves any smaller count (layers stride by the runtime
+    // count from 0), so shrinking never reallocates -- this keeps the
+    // probe's capture-time force to count 1 realloc-free.
+    if (ss->initialized && ss->allocated_cascades < ss->cascade_count) {
         free_shadow_map_array(ss);
     }
 
@@ -497,27 +527,24 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
                 // The scene pad covers casters toward the light outside the
                 // slice; the legacy fit's eye sat at far/2, reuse that scale
                 float scene_pad = ss->far_plane * 0.5f;
-                for (int c = 0; c < cc; c++) {
-                    int layer = (int)slot * cc + c;
-                    compute_cascade_light_space_matrix(
-                        light->direction, &cam, slice_near, ss->cascade_splits[c], scene_pad,
-                        ss->default_map_size, ss->cascade_matrices[layer],
-                        ss->cascade_params[layer]);
-                    slice_near = ss->cascade_splits[c];
-                }
-                // shadowBias is a 0..1-depth value tuned by apps against the
-                // scene-fit map. Each cascade reinterprets 0..1 over its own
-                // [near, far] and width, so normalize: undo the depth-range
-                // stretch (a long-range cascade turns the same 0..1 bias into
-                // more world units) and grow with the real texel size ratio
-                // vs the scene-fit reference (the acne guard).
+                // Bias references: shadowBias is a 0..1-depth value tuned by
+                // apps against the scene-fit map. Each cascade reinterprets
+                // 0..1 over its own [near, far] and width, so params.w
+                // normalizes: undo the depth-range stretch (a long-range
+                // cascade turns the same 0..1 bias into more world units)
+                // and grow with the real texel size ratio vs the scene-fit
+                // reference (the acne guard).
                 float legacy_range = ss->far_plane - ss->near_plane;
                 float legacy_width = 2.0f * ss->ortho_size;
                 for (int c = 0; c < cc; c++) {
                     int layer = (int)slot * cc + c;
-                    float range = ss->cascade_params[layer][2] - ss->cascade_params[layer][1];
-                    ss->cascade_params[layer][3] = (legacy_range / range) *
-                                                   (ss->cascade_params[layer][0] / legacy_width);
+                    vec4* params = &ss->cascade_params[layer];
+                    compute_cascade_light_space_matrix(
+                        light->direction, &cam, slice_near, ss->cascade_splits[c], scene_pad,
+                        ss->default_map_size, ss->cascade_matrices[layer], *params);
+                    float range = (*params)[2] - (*params)[1];
+                    (*params)[3] = (legacy_range / range) * ((*params)[0] / legacy_width);
+                    slice_near = ss->cascade_splits[c];
                 }
             }
             light->shadow_map_index = (int)slot;
@@ -561,6 +588,12 @@ _Static_assert(POSTFX_FOG_MAX_LIGHTS == MAX_SHADOW_LIGHTS,
                "postfx caster mirror must match the shadow slot count");
 _Static_assert(POSTFX_FOG_CASCADES == SHADOW_CASCADES,
                "postfx cascade mirror must match the shadow cascade count");
+_Static_assert(SHADOW_CASCADES <= 4, "cascadeSplits packs the split depths into a vec4");
+// 29 = pre-CSM overhead minus the old lightSpaceMatrix[3]; the CSM arrays
+// add slots*cascades mat4+vec4 layers plus splits and the count/debug ints
+_Static_assert(USED_UNIFORM_COMPONENTS >=
+                   29 + MAX_SHADOW_LIGHTS * SHADOW_CASCADES * (16 + 4) + 4 + 2,
+               "USED_UNIFORM_COMPONENTS is stale for the CSM array shapes");
 
 void shadow_publish_to_postfx(const Scene* scene, PostFX* fx) {
     if (!fx)

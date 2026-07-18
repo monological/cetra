@@ -26,6 +26,7 @@ layout(location = 3) out vec4 AlbedoOut;
 // Sized against GL_MAX_FRAGMENT_UNIFORM_COMPONENTS (4096 on the target GL 4.1
 // tier): the light array plus the fixed uniforms (the CSM matrix/param arrays
 // dominate) must stay under the limit or the program fails to link.
+// Mirrored as PBR_MAX_LIGHTS in common.h, which caps the CPU-side numLights.
 #define MAX_LIGHTS 64
 
 struct Light {
@@ -148,13 +149,13 @@ uniform vec2 shadowTexelSize;
 uniform int pcssEnabled;
 uniform float pcssSoftness; // Multiplier on the light's angular size
 
-// Cascade for this fragment's view depth: the first cascade whose far
-// bound contains it. At cascadeCount 1 the loop never runs (cascade 0).
-int selectCascade()
+// Cascade for a view depth: the first cascade whose far bound contains it.
+// At cascadeCount 1 the loop never runs (cascade 0).
+int selectCascade(float viewDepth)
 {
     int cascade = 0;
     for (int c = 0; c < cascadeCount - 1; c++) {
-        if (-ViewPos.z > cascadeSplits[c])
+        if (viewDepth > cascadeSplits[c])
             cascade = c + 1;
     }
     return cascade;
@@ -367,11 +368,12 @@ float shadowPCF3x3(int layer, vec2 uv, float currentDepth, float bias) {
 // Contact-hardening soft shadow (PCSS). lightSize is the scalar emitter size
 // (world units of the emitter disk); larger = softer, faster-growing penumbra
 // with blocker distance. The algorithm is isotropic, so callers collapse a
-// rectangular emitter to a single dimension.
-float calculateShadow(int shadowIndex, vec3 worldPos, float NdotL, float lightSize) {
+// rectangular emitter to a single dimension. cascade is the fragment's
+// cascade, hoisted by the caller (caster-independent).
+float calculateShadow(int shadowIndex, int cascade, vec3 worldPos, float NdotL, float lightSize) {
     // Layer within the caster's cascade block; at cascadeCount 1 this is
     // exactly the classic shadowIndex (the byte-identity bridge)
-    int layer = shadowIndex * cascadeCount + selectCascade();
+    int layer = shadowIndex * cascadeCount + cascade;
     vec4 fragPosLightSpace = lightSpaceMatrix[layer] * vec4(worldPos, 1.0);
     vec3 projCoords = fragPosLightSpace.xyz / fragPosLightSpace.w;
     projCoords = projCoords * 0.5 + 0.5;
@@ -381,8 +383,11 @@ float calculateShadow(int shadowIndex, vec3 worldPos, float NdotL, float lightSi
         return 1.0;
     }
 
-    // Coarser cascades scale the depth bias with their texel size
-    // (cascadeParams.w is exactly 1.0 at cascadeCount 1)
+    // cascadeParams.w = (legacyRange/range) * (width/legacyWidth): first
+    // re-expresses the app-tuned 0..1 bias in this cascade's depth scale
+    // (the range factor is what keeps the comparison dimensionally sound --
+    // don't "simplify" it away), then grows it with the real texel size.
+    // Exactly 1.0 at cascadeCount 1.
     float bias = max(shadowBias * (1.0 - NdotL), shadowBias * 0.1) * cascadeParams[layer].w;
     float currentDepth = projCoords.z;
 
@@ -735,6 +740,10 @@ void main() {
     vec3 T = normalize(TBN[0]);
     vec3 B = normalize(TBN[1]);
 
+    // The fragment's shadow cascade is caster-independent: hoist it out of
+    // the light loop (mirrors catcher_frag)
+    int fragCascade = selectCascade(-ViewPos.z);
+
     for (int i = 0; i < numLights; i++) {
         // Calculate per-light radiance
         vec3 L;
@@ -816,7 +825,7 @@ void main() {
         if (lights[i].type == 0 && alphaToCoverage == 0 && i < MAX_SHADOW_LIGHTS) {
             int shadowSlot = shadowLightIndex[i];
             if (shadowSlot >= 0) {
-                shadow = calculateShadow(shadowSlot, WorldPos, NdotL,
+                shadow = calculateShadow(shadowSlot, fragCascade, WorldPos, NdotL,
                                          max(lights[i].size.x, lights[i].size.y));
             }
         }
@@ -921,9 +930,9 @@ void main() {
     // Cascade acceptance view: tint by the fragment's selected cascade so
     // split geometry and snap stability are visible (dead when csmDebug 0)
     if (csmDebug > 0 && cascadeCount > 1) {
-        vec3 tint = selectCascade() == 0   ? vec3(1.0, 0.35, 0.35)
-                    : selectCascade() == 1 ? vec3(0.35, 1.0, 0.35)
-                                           : vec3(0.35, 0.55, 1.0);
+        vec3 tint = fragCascade == 0   ? vec3(1.0, 0.35, 0.35)
+                    : fragCascade == 1 ? vec3(0.35, 1.0, 0.35)
+                                       : vec3(0.35, 0.55, 1.0);
         color = mix(color, tint, 0.35);
     }
 

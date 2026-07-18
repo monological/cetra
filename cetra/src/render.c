@@ -696,7 +696,6 @@ void render_current_scene(Engine* engine, float time_value) {
         uniform_set_int(catcher->uniforms, "surfaceMode", ssr_floor ? 1 : 0);
         uniform_set_int(catcher->uniforms, "numShadowLights", (int)ss->active_count);
         uniform_set_float(catcher->uniforms, "shadowBias", ss->casters[0].bias);
-        uniform_set_float(catcher->uniforms, "sceneOrthoWidth", 2.0f * ss->ortho_size);
 
         // Weight each caster's shadow by its light's share of analytic light
         float weights[MAX_SHADOW_LIGHTS] = {0};
@@ -709,31 +708,10 @@ void render_current_scene(Engine* engine, float time_value) {
                 weight_total += light->intensity;
             }
         }
-        // Cascade state mirrors the PBR upload: per-layer matrices/params
-        // strided by the runtime count (slot indices at count 1)
-        int cc = ss->cascade_count;
-        uniform_set_int(catcher->uniforms, "cascadeCount", cc);
-        GLint sloc = uniform_location(catcher->uniforms, "cascadeSplits");
-        if (sloc >= 0)
-            glUniform4f(sloc, ss->cascade_splits[0], ss->cascade_splits[1],
-                        ss->cascade_splits[2], 0.0f);
+        shadow_upload_cascade_uniforms(ss, catcher->uniforms);
 
         for (size_t i = 0; i < ss->active_count && i < MAX_SHADOW_LIGHTS; i++) {
             char name[64];
-            for (int c = 0; c < cc; c++) {
-                size_t layer = i * (size_t)cc + (size_t)c;
-                snprintf(name, sizeof(name), "lightSpaceMatrix[%zu]", layer);
-                GLint mloc = uniform_location(catcher->uniforms, name);
-                if (mloc >= 0)
-                    glUniformMatrix4fv(mloc, 1, GL_FALSE,
-                                       (const GLfloat*)ss->cascade_matrices[layer]);
-
-                snprintf(name, sizeof(name), "cascadeParams[%zu]", layer);
-                GLint ploc = uniform_location(catcher->uniforms, name);
-                if (ploc >= 0)
-                    glUniform4fv(ploc, 1, (const GLfloat*)ss->cascade_params[layer]);
-            }
-
             snprintf(name, sizeof(name), "shadowLightWeight[%zu]", i);
             uniform_set_float(catcher->uniforms, name,
                               weight_total > 0.0f ? weights[i] / weight_total : 0.0f);
