@@ -329,6 +329,16 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
             uniform_set_int(u, "renderMode", render_mode);
             uniform_set_float(u, "specularAAStrength", engine->specular_aa_strength);
             uniform_set_int(u, "energyCompEnabled", engine->energy_comp_enabled ? 1 : 0);
+            // Refraction source: valid only in the late pass, after the
+            // mid-frame resolve ran (pass 2 forces a program re-switch by
+            // resetting current_program, so this always re-uploads there)
+            uniform_set_int(u, "sceneColorAvailable", engine->scene_color_this_frame ? 1 : 0);
+            if (engine->scene_color_this_frame) {
+                uniform_set_int(u, "sceneColorTex", 6);
+                glActiveTexture(GL_TEXTURE6);
+                glBindTexture(GL_TEXTURE_2D, engine->opaque_color_texture);
+                glActiveTexture(GL_TEXTURE0);
+            }
             _update_camera_uniforms(program, camera);
 
             // Update lights once per program switch for this node
@@ -633,10 +643,20 @@ void render_current_scene(Engine* engine, float time_value) {
         }
     }
 
-    // Pass 2: blend-mode (translucent) meshes, composited over the real
-    // background. Depth writes off; not sorted back-to-front (typical models
-    // have few translucent meshes, e.g. a visor). Skipped entirely when
-    // pass 1 saw none.
+    // Refraction source: resolve the opaque scene (including the skybox
+    // just drawn) into the mipped color texture transmissive surfaces
+    // sample. Gated on this frame's count, the engine toggle, and PBR mode
+    // (debug modes skip the skybox and never reach the shader branch).
+    engine->scene_color_this_frame = false;
+    if (scene->transmissive_mesh_count > 0 && render_mode == RENDER_MODE_PBR &&
+        engine->refraction_enabled) {
+        engine->scene_color_this_frame = engine_resolve_opaque_color(engine);
+    }
+
+    // Pass 2: blend-mode (translucent) and transmissive meshes, composited
+    // over the real background. Depth writes off; not sorted back-to-front
+    // (typical models have few translucent meshes, e.g. a visor). Skipped
+    // entirely when pass 1 saw none.
     if (scene->transparent_mesh_count > 0) {
         current_program = 0;
         current_material = NULL;

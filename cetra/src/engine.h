@@ -57,10 +57,15 @@ typedef struct Engine {
                                        // (attachment 2)
     GLuint albedo_multisample_texture; // Multisample base color for SSGI (attachment 3)
     GLuint depth_renderbuffer;         // Depth renderbuffer
-    bool normals_this_frame;           // Attachment 1 written this frame (PBR + consumer active)
-    bool aux_this_frame;    // Attachment 2 written this frame (TAA needs motion, or GTAO needs
-                            // linear-Z)
-    bool albedo_this_frame; // Attachment 3 (albedo) written this frame (SSGI active)
+    GLuint opaque_color_fbo;           // Refraction source: mid-frame resolve of the opaque
+    GLuint opaque_color_texture;       // scene (mipped RGBA16F, lazy -- exists only once a
+                                       // transmissive mesh has been drawn)
+    int opaque_color_w, opaque_color_h;
+    bool scene_color_this_frame; // Resolve ran this frame; transmissive draws may sample
+    bool normals_this_frame;     // Attachment 1 written this frame (PBR + consumer active)
+    bool aux_this_frame;         // Attachment 2 written this frame (TAA needs motion, or GTAO needs
+                                 // linear-Z)
+    bool albedo_this_frame;      // Attachment 3 (albedo) written this frame (SSGI active)
 
     Camera* camera;         // main camera
     CameraMode camera_mode; // Current camera mode
@@ -203,6 +208,10 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode, bool draw_gui);
 // or 0 + the view-space normals target (used by SSAO/SSR). Render passes
 // that emit no normals (skybox, blend, overlays) switch to 0-only.
 void engine_set_scene_draw_buffers(const Engine* engine, bool with_gbuffer);
+// Mid-frame resolve of the opaque scene into the mipped refraction source
+// (see the definition for the lifecycle); called by render_current_scene
+// between the skybox and the late pass when transmissive meshes exist.
+bool engine_resolve_opaque_color(Engine* engine);
 
 // Render
 void set_engine_show_wireframe(Engine* engine, bool show_wireframe);

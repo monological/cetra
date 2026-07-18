@@ -77,6 +77,12 @@ bool alphaBelowCutoff(float a)
 uniform float normalScale;  // Normal map intensity scale (1.0 = full strength)
 uniform float aoStrength;   // Occlusion texture strength (1.0 = full effect)
 uniform float ior;
+// KHR_materials_transmission: 0 = opaque; > 0 replaces the diffuse term
+// with the resolved opaque scene color sampled through the surface
+uniform float transmission;
+uniform float transmissionThickness; // KHR_materials_volume, world units
+uniform sampler2D sceneColorTex;     // Mipped opaque-scene resolve (unit 6)
+uniform int sceneColorAvailable;     // 1 only in the late pass after the resolve
 uniform float filmThickness;
 uniform vec2 uvOffset;      // Texture coordinate offset (KHR_texture_transform)
 uniform vec2 uvScale;       // Texture coordinate scale (KHR_texture_transform)
@@ -745,8 +751,11 @@ void main() {
         // Energy conservation: diffuse and specular must not exceed 1.0
         vec3 kS = F;
         vec3 kD = vec3(1.0) - kS;
-        // Metals have no diffuse reflection
+        // Metals have no diffuse reflection; transmission replaces diffuse
+        // with the transmitted scene term added after the loop (KHR:
+        // mix(diffuse_brdf, specular_btdf, transmission) under specular)
         kD *= 1.0 - metallicMap;
+        kD *= 1.0 - transmission;
 
         // Shadow calculation for directional lights. Alpha-to-coverage
         // surfaces (hair cards) cast shadows but never receive the shadow
@@ -792,6 +801,7 @@ void main() {
         vec3 kS = F;
         vec3 kD = vec3(1.0) - kS;
         kD *= 1.0 - metallicMap;
+        kD *= 1.0 - transmission; // diffuse yields to the transmitted term
 
         // Diffuse IBL: sample irradiance map with surface normal
         vec3 irradiance = texture(irradianceMap, N).rgb;
@@ -827,8 +837,31 @@ void main() {
 
         ambient = (kD * diffuse + specular) * aoMap * iblIntensity;
     } else {
-        // Fallback to simple ambient when IBL is disabled
-        ambient = vec3(0.03) * albedoMap * aoMap;
+        // Fallback to simple ambient when IBL is disabled (diffuse-only, so
+        // it yields to transmission like the other diffuse terms)
+        ambient = vec3(0.03) * albedoMap * aoMap * (1.0 - transmission);
+    }
+
+    // Screen-space transmission (KHR_materials_transmission): the diffuse
+    // term the kD scaling gave up comes back as light seen THROUGH the
+    // surface -- the resolved opaque scene color, tinted by base color,
+    // roughness-blurred via the resolve's mip chain, and bent by the
+    // volume thickness along the refracted view ray. Thickness 0 (thin
+    // glass) projects to exactly the fragment's own screen position: tint
+    // and blur without a bend, per the glTF spec. Specular and emissive
+    // are untouched -- glass keeps its reflections.
+    vec3 transmitted = vec3(0.0);
+    if (transmission > 0.0 && sceneColorAvailable > 0) {
+        vec3 refrDir = refract(-V, N, 1.0 / ior);
+        vec3 exitPos = WorldPos + refrDir * transmissionThickness;
+        vec4 refrClip = projection * view * vec4(exitPos, 1.0);
+        vec2 refrUV = clamp(refrClip.xy / refrClip.w * 0.5 + 0.5, 0.0, 1.0);
+        // Box mips: one level per doubling of blur width; frosted surfaces
+        // read a progressively softer background
+        vec3 sceneSample = textureLod(sceneColorTex, refrUV, roughnessMap * 6.0).rgb;
+        vec3 Ft = fresnelSchlickRoughness(NdotV, F0, roughnessMap);
+        transmitted =
+            sceneSample * albedoMap * (1.0 - Ft) * transmission * (1.0 - metallicMap);
     }
 
     // Final color, linear HDR: tone mapping and gamma happen in the post
@@ -838,7 +871,7 @@ void main() {
     // the 0.04 roughness floor, times grazing Fresnel) overflows the store
     // to +INF, which the tonemap turns into NaN and displays as black
     // flecks tracing the specular highlights.
-    vec3 color = min(ambient + Lo + emissiveMap, vec3(60000.0));
+    vec3 color = min(ambient + Lo + transmitted + emissiveMap, vec3(60000.0));
 
     // For translucent materials, apply Fresnel-based alpha
     // Edges become more reflective (less transparent) at glancing angles

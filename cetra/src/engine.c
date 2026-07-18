@@ -202,6 +202,8 @@ void free_engine(Engine* engine) {
     glDeleteTextures(1, &engine->aux_multisample_texture);
     glDeleteTextures(1, &engine->albedo_multisample_texture);
     glDeleteRenderbuffers(1, &engine->depth_renderbuffer);
+    glDeleteFramebuffers(1, &engine->opaque_color_fbo);
+    glDeleteTextures(1, &engine->opaque_color_texture);
 
     if (engine->catcher_vao)
         glDeleteVertexArrays(1, &engine->catcher_vao);
@@ -1493,6 +1495,60 @@ void engine_set_scene_draw_buffers(const Engine* engine, bool with_gbuffer) {
         }
     }
     glDrawBuffers(count, bufs);
+}
+
+// Resolve the MSAA color attachment (opaques + skybox) into the mipped
+// single-sample texture transmissive surfaces sample for screen-space
+// refraction. The copy is what makes sampling legal: reading the scene
+// FBO while drawing into it would be a framebuffer feedback loop. Lazy:
+// the target is created on first use at the internal render size and
+// recreated if that ever changes. Leaves engine->framebuffer bound with
+// its draw-buffer list intact (per-FBO state) so the late pass resumes
+// untouched. Returns false if the target cannot be created.
+bool engine_resolve_opaque_color(Engine* engine) {
+    int rw, rh;
+    engine_render_size(engine, &rw, &rh);
+    if (engine->opaque_color_texture == 0 || engine->opaque_color_w != rw ||
+        engine->opaque_color_h != rh) {
+        if (engine->opaque_color_texture) {
+            glDeleteTextures(1, &engine->opaque_color_texture);
+            glDeleteFramebuffers(1, &engine->opaque_color_fbo);
+        }
+        glGenTextures(1, &engine->opaque_color_texture);
+        glBindTexture(GL_TEXTURE_2D, engine->opaque_color_texture);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, rw, rh, 0, GL_RGBA, GL_FLOAT, NULL);
+        // CLAMP: refraction offsets must not wrap to the far edge; LINEAR
+        // mipmap so roughness-scaled textureLod blends between blur levels
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glGenerateMipmap(GL_TEXTURE_2D); // allocate the full chain
+        glGenFramebuffers(1, &engine->opaque_color_fbo);
+        glBindFramebuffer(GL_FRAMEBUFFER, engine->opaque_color_fbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                               engine->opaque_color_texture, 0);
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+            log_error("Opaque-color resolve framebuffer incomplete");
+            glDeleteTextures(1, &engine->opaque_color_texture);
+            glDeleteFramebuffers(1, &engine->opaque_color_fbo);
+            engine->opaque_color_texture = 0;
+            engine->opaque_color_fbo = 0;
+            glBindFramebuffer(GL_FRAMEBUFFER, engine->framebuffer);
+            return false;
+        }
+        engine->opaque_color_w = rw;
+        engine->opaque_color_h = rh;
+    }
+
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, engine->framebuffer);
+    glReadBuffer(GL_COLOR_ATTACHMENT0);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, engine->opaque_color_fbo);
+    glBlitFramebuffer(0, 0, rw, rh, 0, 0, rw, rh, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    glBindTexture(GL_TEXTURE_2D, engine->opaque_color_texture);
+    glGenerateMipmap(GL_TEXTURE_2D); // box mips = the roughness blur chain
+    glBindFramebuffer(GL_FRAMEBUFFER, engine->framebuffer);
+    return true;
 }
 
 void run_engine_render_loop(Engine* engine, RenderSceneFunc render_func) {
