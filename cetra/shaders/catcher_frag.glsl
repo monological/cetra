@@ -19,13 +19,22 @@ layout(location = 3) out vec4 AlbedoOut;
 // environment floor. Each light's shadow is weighted by that light's share
 // of the total analytic light so secondary lights cast fainter shadows.
 #define MAX_SHADOW_LIGHTS 3
+#define SHADOW_CASCADES 3
 
 uniform sampler2DArray shadowMaps;
-uniform mat4 lightSpaceMatrix[MAX_SHADOW_LIGHTS];
+// Layers stride by the RUNTIME cascadeCount (layer = slot*cascadeCount + c),
+// so at cascadeCount 1 the indices match the classic single-map layout
+uniform mat4 lightSpaceMatrix[MAX_SHADOW_LIGHTS * SHADOW_CASCADES];
+uniform vec4 cascadeParams[MAX_SHADOW_LIGHTS * SHADOW_CASCADES]; // width, near, far, biasScale
+uniform vec4 cascadeSplits; // View-depth far bound per cascade (.xyz)
+uniform int cascadeCount;
 uniform float shadowLightWeight[MAX_SHADOW_LIGHTS];
 uniform int numShadowLights;
 uniform vec2 shadowTexelSize;
 uniform float shadowBias;
+// World width of the scene-fit (single-cascade) ortho map: the reference
+// the PCF kernel's world size was tuned against
+uniform float sceneOrthoWidth;
 uniform float catcherStrength;
 uniform float planeRadius;
 uniform mat4 view;
@@ -35,20 +44,43 @@ uniform mat4 view;
 // untouched.
 uniform int surfaceMode;
 
-float occlusion_from(int slot)
+// Cascade for a view depth: the first cascade whose far bound contains it.
+// At cascadeCount 1 the loop never runs (cascade 0).
+int selectCascade(float viewDepth)
 {
-    vec4 lightSpace = lightSpaceMatrix[slot] * vec4(WorldPos, 1.0);
+    int cascade = 0;
+    for (int c = 0; c < cascadeCount - 1; c++) {
+        if (viewDepth > cascadeSplits[c])
+            cascade = c + 1;
+    }
+    return cascade;
+}
+
+float occlusion_from(int slot, int cascade)
+{
+    // Layer within the caster's cascade block; at cascadeCount 1 this is
+    // exactly the classic slot index
+    int layer = slot * cascadeCount + cascade;
+    vec4 lightSpace = lightSpaceMatrix[layer] * vec4(WorldPos, 1.0);
     vec3 proj = lightSpace.xyz / lightSpace.w * 0.5 + 0.5;
     if (proj.z > 1.0 || proj.x < 0.0 || proj.x > 1.0 || proj.y < 0.0 || proj.y > 1.0)
         return 0.0;
 
-    // 5x5 PCF with a widened kernel for soft edges
+    // Coarser cascades scale the depth bias with their texel size
+    // (cascadeParams.w is exactly 1.0 at cascadeCount 1)
+    float bias = shadowBias * cascadeParams[layer].w;
+
+    // 5x5 PCF with a widened kernel for soft edges. The kernel is a LOOK,
+    // tuned in world units against the scene-fit map: normalize its UV step
+    // by this cascade's width so the blur neither dilutes in wide far
+    // cascades nor jumps at a seam (exactly 1.0 at cascadeCount 1).
+    vec2 kernelStep = shadowTexelSize * 1.5 * (sceneOrthoWidth / cascadeParams[layer].x);
     float shadow = 0.0;
     for (int x = -2; x <= 2; x++) {
         for (int y = -2; y <= 2; y++) {
-            vec2 offset = vec2(float(x), float(y)) * shadowTexelSize * 1.5;
-            float depth = texture(shadowMaps, vec3(proj.xy + offset, float(slot))).r;
-            shadow += proj.z - shadowBias > depth ? 1.0 : 0.0;
+            vec2 offset = vec2(float(x), float(y)) * kernelStep;
+            float depth = texture(shadowMaps, vec3(proj.xy + offset, float(layer))).r;
+            shadow += proj.z - bias > depth ? 1.0 : 0.0;
         }
     }
     return shadow / 25.0;
@@ -56,9 +88,12 @@ float occlusion_from(int slot)
 
 void main()
 {
+    // The fragment's cascade is caster-independent: view depth vs the splits
+    int cascade = selectCascade(-(view * vec4(WorldPos, 1.0)).z);
+
     float darkness = 0.0;
     for (int i = 0; i < numShadowLights && i < MAX_SHADOW_LIGHTS; i++) {
-        darkness += shadowLightWeight[i] * occlusion_from(i);
+        darkness += shadowLightWeight[i] * occlusion_from(i, cascade);
     }
 
     // Fade out toward the plane edge so the quad boundary is invisible

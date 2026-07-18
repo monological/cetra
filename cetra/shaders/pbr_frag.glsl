@@ -143,11 +143,10 @@ uniform vec2 shadowTexelSize;
 // PCSS (contact-hardening shadows). When disabled the 3x3 PCF fallback
 // runs, bit-identical to the pre-PCSS path. The ortho shadow projection
 // stores depth linearly in [near,far], so the blocker/receiver separation
-// that sets the penumbra width is measured on linearized depths.
+// that sets the penumbra width is measured on linearized depths; the
+// per-cascade ortho geometry comes from cascadeParams.
 uniform int pcssEnabled;
-uniform float pcssSoftness;      // Multiplier on the light's angular size
-uniform float shadowFrustumWidth; // World units across the ortho shadow map
-uniform vec2 shadowNearFar;       // Ortho near/far planes (world units)
+uniform float pcssSoftness; // Multiplier on the light's angular size
 
 // Cascade for this fragment's view depth: the first cascade whose far
 // bound contains it. At cascadeCount 1 the loop never runs (cascade 0).
@@ -345,9 +344,10 @@ const float PCSS_MAX_RADIUS_UV = 0.005;
 const float PCSS_PENUMBRA_SCALE = 4.0;
 
 // Ortho shadow depth is linear in [near,far]; recover world-space distance
-// from the light so blocker/receiver separation is a real length
-float linearizeOrthoDepth(float d01) {
-    return shadowNearFar.x + d01 * (shadowNearFar.y - shadowNearFar.x);
+// from the light so blocker/receiver separation is a real length. nf is the
+// sampled cascade's ortho near/far pair (cascadeParams.yz).
+float linearizeOrthoDepth(float d01, vec2 nf) {
+    return nf.x + d01 * (nf.y - nf.x);
 }
 
 // Fixed 3x3 PCF: the pre-PCSS path, kept bit-identical as the fallback.
@@ -386,18 +386,22 @@ float calculateShadow(int shadowIndex, vec3 worldPos, float NdotL, float lightSi
     float bias = max(shadowBias * (1.0 - NdotL), shadowBias * 0.1) * cascadeParams[layer].w;
     float currentDepth = projCoords.z;
 
-    // PCSS's blocker/penumbra math still reads the single-map globals; under
-    // cascades it falls back to PCF until the per-cascade params land
-    if (pcssEnabled == 0 || cascadeCount > 1) {
+    if (pcssEnabled == 0) {
         return shadowPCF3x3(layer, projCoords.xy, currentDepth, bias);
     }
+
+    // The sampled cascade's ortho geometry: frustum width and near/far pair.
+    // Wider (coarser) cascades shrink the same emitter's UV footprint, so the
+    // penumbra stays a consistent world-space width across a cascade seam.
+    float frustumWidth = cascadeParams[layer].x;
+    vec2 nearFar = cascadeParams[layer].yz;
 
     // The emitter as a fraction of the shadow map. Capped low so the 16 taps
     // stay dense enough to be free of banding, and so the penumbra saturates
     // cleanly rather than growing past what the tap budget can resolve; the
     // penumbra still grows with blocker distance for contact hardening.
     float lightSizeUV =
-        clamp(pcssSoftness * lightSize / shadowFrustumWidth, 0.0, PCSS_MAX_RADIUS_UV);
+        clamp(pcssSoftness * lightSize / frustumWidth, 0.0, PCSS_MAX_RADIUS_UV);
     if (lightSizeUV < shadowTexelSize.x) {
         // Emitter smaller than a texel: no meaningful penumbra, stay crisp
         return shadowPCF3x3(layer, projCoords.xy, currentDepth, bias);
@@ -405,14 +409,14 @@ float calculateShadow(int shadowIndex, vec3 worldPos, float NdotL, float lightSi
 
     // 1. Blocker search: average depth of texels nearer the light than the
     //    receiver, over a disk the size of the emitter's shadow footprint
-    float zReceiver = linearizeOrthoDepth(currentDepth);
+    float zReceiver = linearizeOrthoDepth(currentDepth, nearFar);
     float blockerSum = 0.0;
     float blockerCount = 0.0;
     for (int i = 0; i < 16; i++) {
         vec2 off = POISSON16[i] * lightSizeUV;
         float d = texture(shadowMaps, vec3(projCoords.xy + off, float(layer))).r;
         if (d < currentDepth - bias) {
-            blockerSum += linearizeOrthoDepth(d);
+            blockerSum += linearizeOrthoDepth(d, nearFar);
             blockerCount += 1.0;
         }
     }
@@ -424,7 +428,7 @@ float calculateShadow(int shadowIndex, vec3 worldPos, float NdotL, float lightSi
     // 2. Penumbra: grows with blocker-receiver separation (feet touching the
     //    floor stay sharp; the head 2m up casts a soft edge). Normalized by
     //    frustum depth so the product with lightSizeUV is a clean ratio.
-    float penumbra = (zReceiver - zBlocker) / (shadowNearFar.y - shadowNearFar.x);
+    float penumbra = (zReceiver - zBlocker) / (nearFar.y - nearFar.x);
     float filterRadiusUV =
         clamp(lightSizeUV * penumbra * PCSS_PENUMBRA_SCALE, shadowTexelSize.x, PCSS_MAX_RADIUS_UV);
 

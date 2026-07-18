@@ -327,14 +327,9 @@ void bind_shadow_maps_to_program(ShadowSystem* system, ShaderProgram* program,
     // was previously written inside the loop, where the last caster won)
     uniform_set_float(u, "shadowBias", system->casters[0].bias);
 
-    // PCSS controls. The ortho projection is symmetric, so the frustum
-    // width is 2x ortho_size and depth linearizes over [near, far]
+    // PCSS controls; the per-cascade ortho geometry rides in cascadeParams
     uniform_set_int(u, "pcssEnabled", system->pcss_enabled ? 1 : 0);
     uniform_set_float(u, "pcssSoftness", system->pcss_softness);
-    uniform_set_float(u, "shadowFrustumWidth", 2.0f * system->ortho_size);
-    loc = uniform_location(u, "shadowNearFar");
-    if (loc >= 0)
-        glUniform2f(loc, system->near_plane, system->far_plane);
 
     // Cascade state. At count 1 the layer indices and matrices match the
     // classic path exactly (the byte-identity bridge)
@@ -514,12 +509,19 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
                         ss->cascade_params[layer]);
                     slice_near = ss->cascade_splits[c];
                 }
-                // Coarser cascades need proportionally more depth bias: their
-                // texels span more world units
-                float width0 = ss->cascade_params[(int)slot * cc][0];
+                // shadowBias is a 0..1-depth value tuned by apps against the
+                // scene-fit map. Each cascade reinterprets 0..1 over its own
+                // [near, far] and width, so normalize: undo the depth-range
+                // stretch (a long-range cascade turns the same 0..1 bias into
+                // more world units) and grow with the real texel size ratio
+                // vs the scene-fit reference (the acne guard).
+                float legacy_range = ss->far_plane - ss->near_plane;
+                float legacy_width = 2.0f * ss->ortho_size;
                 for (int c = 0; c < cc; c++) {
                     int layer = (int)slot * cc + c;
-                    ss->cascade_params[layer][3] = ss->cascade_params[layer][0] / width0;
+                    float range = ss->cascade_params[layer][2] - ss->cascade_params[layer][1];
+                    ss->cascade_params[layer][3] = (legacy_range / range) *
+                                                   (ss->cascade_params[layer][0] / legacy_width);
                 }
             }
             glm_mat4_copy(ss->cascade_matrices[slot * (size_t)cc],
