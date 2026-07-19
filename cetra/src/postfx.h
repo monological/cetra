@@ -81,10 +81,12 @@ typedef struct PostFX {
     GLuint noise_texture;   // 4x4 random slice rotations, tiled
     GLuint ssr_fbo;         // Half-res reflection buffer (march target)
     GLuint ssr_texture;
-    GLuint hiz_fbo;     // Min-depth pyramid build target (re-attached per mip)
-    GLuint hiz_texture; // R32F, half-res base + full mip chain; the SSR
-                        // traversal walks it so rays cannot step over thin
-                        // geometry regardless of march length
+    PingPong ssr_history; // Temporal-SSR accumulation (RGBA16F): averages the jittered march
+                          // across frames so the single-frame step banding washes out (TAA only)
+    GLuint hiz_fbo;       // Min-depth pyramid build target (re-attached per mip)
+    GLuint hiz_texture;   // R32F, half-res base + full mip chain; the SSR
+                          // traversal walks it so rays cannot step over thin
+                          // geometry regardless of march length
     int hiz_mips;
     GLuint aux_fbo; // Full-res resolved aux G-buffer: motion vectors .xy (TAA) + linear view-Z .z
                     // (GTAO)
@@ -140,6 +142,8 @@ typedef struct PostFX {
     int ssr_steps;             // Linear march steps
     float ssr_max_roughness;   // Reflections fade out toward this roughness
     float ssr_floor_roughness; // Roughness the shadow catcher publishes
+    bool ssr_temporal;         // Temporally accumulate the reflection (needs TAA; averages march
+                               // step-banding into a smooth reflection)
     bool ssr_full_res;         // Trace SSR at full res (sharp; kills the half-res march's serrated
                                // reflection edges); off = half-res, byte-identical to the old path
 

@@ -1401,6 +1401,7 @@ static void _engine_gui_panel(Engine* engine) {
         bool ssr_full_res = fx->ssr_full_res;
         if (igCheckbox("SSR Full Res", &ssr_full_res))
             postfx_set_ssr_full_res(fx, ssr_full_res);
+        igCheckbox("SSR Temporal (needs TAA)", &fx->ssr_temporal);
         _end_effect_group();
 
         _begin_effect_group("SSGI", &fx->ssgi_enabled);

@@ -98,6 +98,9 @@ static bool create_ssr_buffers(PostFX* fx) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, fx->hiz_mips - 1);
     glGenFramebuffers(1, &fx->hiz_fbo);
+    // History pair for temporal accumulation, at the SSR resolution.
+    if (!create_pingpong(w, h, GL_RGBA16F, &fx->ssr_history))
+        return false;
     return true;
 }
 
@@ -110,6 +113,7 @@ void postfx_set_ssr_full_res(PostFX* fx, bool full_res) {
     glDeleteTextures(1, &fx->ssr_texture);
     glDeleteFramebuffers(1, &fx->hiz_fbo);
     glDeleteTextures(1, &fx->hiz_texture);
+    free_pingpong(&fx->ssr_history);
     fx->ssr_full_res = full_res;
     create_ssr_buffers(fx);
 }
@@ -354,6 +358,7 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     // (see create_ssr_buffers). Full-res tracing is what keeps the reflection
     // sharp instead of half-res serrated.
     fx->ssr_full_res = true;
+    fx->ssr_temporal = true;
     if (!create_ssr_buffers(fx)) {
         free_postfx(fx);
         return NULL;
@@ -733,6 +738,7 @@ void free_postfx(PostFX* fx) {
     glDeleteTextures(1, &fx->noise_texture);
     glDeleteFramebuffers(1, &fx->ssr_fbo);
     glDeleteTextures(1, &fx->ssr_texture);
+    free_pingpong(&fx->ssr_history);
     glDeleteFramebuffers(1, &fx->hiz_fbo);
     glDeleteTextures(1, &fx->hiz_texture);
     glDeleteFramebuffers(1, &fx->aux_fbo);
@@ -1277,6 +1283,20 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             }
             draw_fullscreen_quad(fx->quad_vao);
 
+            // Temporal accumulation: reproject the previous reflection by the
+            // motion vectors, neighborhood-clamp it, and blend, so the jittered
+            // march averages across frames and its single-frame step banding
+            // washes out. Reuses the shared accumulator (the premultiplied
+            // (color*weight, weight) buffer is exactly its RGBA contract). Needs
+            // TAA (per-frame jitter + motion); off/no-TAA leaves the raw march.
+            GLuint ssr_result = fx->ssr_texture;
+            if (fx->ssr_temporal && taa_resolving) {
+                ssr_result = run_temporal_accum(fx, fx->temporal_accum_program, &fx->ssr_history,
+                                                ssr_w, ssr_h, fx->ssr_texture);
+            } else {
+                fx->ssr_history.valid = false;
+            }
+
             // Lerp the reflections onto the HDR scene before bloom so
             // reflected highlights bloom like direct ones. The buffer is
             // premultiplied, hence (ONE, ONE_MINUS_SRC_ALPHA). Restore the
@@ -1292,7 +1312,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             const float ssr_texel[2] = {1.0f / (float)ssr_w, 1.0f / (float)ssr_h};
             uniform_set_vec2(fx->upsample_tent_program->uniforms, "texelSize", ssr_texel);
             glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, fx->ssr_texture);
+            glBindTexture(GL_TEXTURE_2D, ssr_result);
             glEnable(GL_BLEND);
             glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
             draw_fullscreen_quad(fx->quad_vao);

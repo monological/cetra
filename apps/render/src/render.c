@@ -99,6 +99,7 @@ typedef struct {
     int normals_debug;                 // Show the resolved normals G-buffer
     int no_ssr;                        // Disable screen-space reflections
     int no_ssr_full_res;               // Trace SSR at half res (the old, serrated path)
+    int no_ssr_temporal;               // Disable SSR temporal accumulation (raw single-frame march)
     int ssr_debug;                     // Show the reflection buffer
     float ssr_strength;                // SSR strength override (-1 = default)
     float specular_aa;                 // Specular AA strength override (-1 = default)
@@ -186,6 +187,7 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --normals-debug    Show the resolved normals G-buffer\n");
     fprintf(stderr, "      --no-ssr           Disable screen-space reflections\n");
     fprintf(stderr, "      --no-ssr-full-res  Trace SSR at half res (old serrated path)\n");
+    fprintf(stderr, "      --no-ssr-temporal  Disable SSR temporal accumulation (needs TAA)\n");
     fprintf(stderr, "      --ssr-debug        Show the reflection buffer\n");
     fprintf(stderr, "      --ssr-strength <f> Reflection strength (default: 1)\n");
     fprintf(stderr, "      --ssgi             Enable screen-space GI (one-bounce indirect diffuse)\n");
@@ -554,6 +556,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->no_ssr = 1;
         } else if (strcmp(argv[i], "--no-ssr-full-res") == 0) {
             args->no_ssr_full_res = 1;
+        } else if (strcmp(argv[i], "--no-ssr-temporal") == 0) {
+            args->no_ssr_temporal = 1;
         } else if (strcmp(argv[i], "--ssr-debug") == 0) {
             args->ssr_debug = 1;
         } else if (strcmp(argv[i], "--ssr-strength") == 0) {
@@ -1151,6 +1155,9 @@ int main(int argc, char** argv) {
     }
     if (args.no_ssr_full_res && engine->postfx) {
         postfx_set_ssr_full_res(engine->postfx, false);
+    }
+    if (args.no_ssr_temporal && engine->postfx) {
+        engine->postfx->ssr_temporal = false;
     }
     if (args.ssr_debug && engine->postfx) {
         engine->postfx->debug_view = POSTFX_DEBUG_SSR;
