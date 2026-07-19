@@ -1212,6 +1212,11 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
                     }
                     uniform_set_int(fx->ssr_hiz_program->uniforms, "srcWidth", src_w);
                     uniform_set_int(fx->ssr_hiz_program->uniforms, "srcHeight", src_h);
+                    // Full-res level 0 is the same size as the depth buffer, so it
+                    // is a 1:1 copy, not a 2x2 reduction (which would sample depth
+                    // at twice the coordinate and corrupt the whole pyramid).
+                    uniform_set_int(fx->ssr_hiz_program->uniforms, "copySrc",
+                                    (mip == 0 && fx->ssr_full_res) ? 1 : 0);
                     draw_fullscreen_quad(fx->quad_vao);
                     src_w = mip_w;
                     src_h = mip_h;

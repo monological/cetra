@@ -10,6 +10,11 @@ out vec4 FragColor;
 uniform sampler2D srcTex; // full-res depth (level 0) or the previous level
 uniform int srcWidth;
 uniform int srcHeight;
+// Full-res tracing builds level 0 at the same size as the depth buffer, so it
+// is a straight 1:1 copy (min over one texel = the depth itself), not the 2:1
+// reduction every other level does. Half-res level 0 and all deeper levels
+// leave this 0 and reduce 2x2.
+uniform int copySrc;
 
 float srcAt(ivec2 p)
 {
@@ -18,6 +23,10 @@ float srcAt(ivec2 p)
 
 void main()
 {
+    if (copySrc != 0) {
+        FragColor = vec4(srcAt(ivec2(gl_FragCoord.xy)), 0.0, 0.0, 1.0);
+        return;
+    }
     ivec2 s = ivec2(gl_FragCoord.xy) * 2;
 
     float m = min(min(srcAt(s), srcAt(s + ivec2(1, 0))),
