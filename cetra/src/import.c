@@ -254,6 +254,26 @@ static void extract_material_properties(struct aiMaterial* ai_mat, Material* mat
         }
     }
 
+    // KHR_materials_specular: re-parameterizes the dielectric specular --
+    // specularFactor weights it, specularColorFactor tints F0. The factor key
+    // ($mat.specularFactor) is glTF-KHR-specific, so it gates the read of the
+    // legacy-shared specular COLOR key ($clr.specular); otherwise an FBX/OBJ
+    // Phong specular color would be imported as a bogus F0 tint. specular_factor
+    // stays -1 (extension absent) for non-glTF, leaving the base BRDF unchanged.
+    ai_real specular;
+    if (AI_SUCCESS == aiGetMaterialFloat(ai_mat, AI_MATKEY_SPECULAR_FACTOR, &specular)) {
+        material->specular_factor = specular;
+        struct aiColor4D spec_color;
+        if (AI_SUCCESS == aiGetMaterialColor(ai_mat, AI_MATKEY_COLOR_SPECULAR, &spec_color)) {
+            material->specular_color_factor[0] = spec_color.r;
+            material->specular_color_factor[1] = spec_color.g;
+            material->specular_color_factor[2] = spec_color.b;
+        }
+        log_info("Material has KHR specular: factor=%.2f color=(%.2f %.2f %.2f)",
+                 material->specular_factor, material->specular_color_factor[0],
+                 material->specular_color_factor[1], material->specular_color_factor[2]);
+    }
+
     // Extract UV transform (KHR_texture_transform) from base color texture
     struct aiUVTransform uvTransform;
     if (AI_SUCCESS == aiGetMaterialFloatArray(ai_mat, AI_MATKEY_UVTRANSFORM(aiTextureType_DIFFUSE, 0),

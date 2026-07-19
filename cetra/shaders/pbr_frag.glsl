@@ -93,6 +93,8 @@ const float TRANSMISSION_MAX_LOD = 6.0;
 uniform float filmThickness;
 uniform float clearcoat;          // KHR_materials_clearcoat weight (0 = no coat lobe)
 uniform float clearcoatRoughness; // coat lobe roughness
+uniform float specularFactor;     // KHR_materials_specular weight (-1 = extension absent)
+uniform vec3 specularColorFactor; // KHR_materials_specular F0 tint (white = no tint)
 uniform vec2 uvOffset;      // Texture coordinate offset (KHR_texture_transform)
 uniform vec2 uvScale;       // Texture coordinate scale (KHR_texture_transform)
 uniform float uvRotation;   // Texture coordinate rotation in radians
@@ -174,6 +176,7 @@ uniform float maxReflectionLOD;
 // Multi-scatter energy compensation toggle (inert unless iblEnabled)
 uniform int energyCompEnabled;
 uniform int clearcoatEnabled; // Global clearcoat lobe toggle (--no-clearcoat)
+uniform int specularEnabled;  // Global KHR_materials_specular toggle (--no-specular)
 
 // Local reflection probe: the scene captured into a prefiltered cubemap,
 // parallax-corrected against a proxy AABB (Lagarde 2012). When enabled, the

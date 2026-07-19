@@ -113,6 +113,7 @@ Engine* create_engine(const char* window_title, int width, int height) {
     engine->energy_comp_enabled = true; // Correctness fix; ships on
     engine->refraction_enabled = true;  // Transmissive materials refract by default
     engine->clearcoat_enabled = true;   // Clearcoat lobe on; inert unless a material carries it
+    engine->specular_enabled = true;    // KHR specular on; inert unless a material carries it
 
     glm_mat4_identity(engine->model_matrix);
     glm_mat4_identity(engine->view_matrix);
@@ -1417,6 +1418,7 @@ static void _engine_gui_panel(Engine* engine) {
         igSliderFloat("Spec AA", &engine->specular_aa_strength, 0.0f, 2.0f, "%.2f", 0);
         igCheckbox("Energy Comp", &engine->energy_comp_enabled);
         igCheckbox("Clearcoat", &engine->clearcoat_enabled);
+        igCheckbox("Specular", &engine->specular_enabled);
     }
 
     if (engine->postfx &&

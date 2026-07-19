@@ -95,6 +95,9 @@ typedef struct Engine {
     bool clearcoat_enabled;     // KHR_materials_clearcoat second specular lobe; off
                                 // skips the lobe (materials with clearcoat 0 are
                                 // unaffected either way)
+    bool specular_enabled;      // KHR_materials_specular F0 tint + specular weight; off
+                                // leaves the base dielectric BRDF unchanged (materials
+                                // without the extension are unaffected either way)
 
     mat4 model_matrix;
     mat4 view_matrix;

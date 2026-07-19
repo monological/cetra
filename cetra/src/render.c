@@ -177,6 +177,8 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
     uniform_set_float(u, "filmThickness", material->filmThickness);
     uniform_set_float(u, "clearcoat", material->clearcoat);
     uniform_set_float(u, "clearcoatRoughness", material->clearcoat_roughness);
+    uniform_set_float(u, "specularFactor", material->specular_factor);
+    uniform_set_vec3(u, "specularColorFactor", (const float*)&material->specular_color_factor);
     uniform_set_vec2(u, "uvOffset", (const float*)&material->uvOffset);
     uniform_set_vec2(u, "uvScale", (const float*)&material->uvScale);
     uniform_set_float(u, "uvRotation", material->uvRotation);
@@ -328,6 +330,7 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
             uniform_set_float(u, "specularAAStrength", engine->specular_aa_strength);
             uniform_set_int(u, "energyCompEnabled", engine->energy_comp_enabled ? 1 : 0);
             uniform_set_int(u, "clearcoatEnabled", engine->clearcoat_enabled ? 1 : 0);
+            uniform_set_int(u, "specularEnabled", engine->specular_enabled ? 1 : 0);
             // Refraction source: valid only in the late pass, after the
             // mid-frame resolve ran (pass 2 forces a program re-switch by
             // resetting current_program, so this always re-uploads there)

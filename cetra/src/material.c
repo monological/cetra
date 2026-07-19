@@ -34,6 +34,8 @@ Material* create_material() {
     material->filmThickness = 0.0f;
     material->clearcoat = 0.0f;
     material->clearcoat_roughness = 0.0f;
+    material->specular_factor = -1.0f;  // KHR_materials_specular absent until imported
+    glm_vec3_one(material->specular_color_factor);
     glm_vec2_zero(material->uvOffset);
     glm_vec2_one(material->uvScale);
     material->uvRotation = 0.0f;
