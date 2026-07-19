@@ -8,14 +8,16 @@
 #include "util.h"
 #include "ext/log.h"
 
-// Unit cube (position only) for the environment-face and background draws
+// Unit cube (position only, 36 verts) for the environment-face and
+// background draws. Culling is disabled at draw time, so winding is
+// irrelevant -- every face renders from inside.
 static const float SKY_CUBE_VERTS[] = {
-    -1, -1, -1, 1,  1,  -1, 1,  -1, -1, 1,  1,  -1, -1, -1, -1, -1, 1,  -1,
-    -1, -1, 1,  1,  -1, 1,  1,  1,  1,  1,  1,  1,  -1, 1,  1,  -1, -1, 1,
-    -1, 1,  1,  -1, 1,  -1, -1, -1, -1, -1, -1, -1, -1, -1, 1,  -1, 1,  1,
-    1,  1,  1,  1,  -1, -1, 1,  1,  -1, 1,  -1, -1, 1,  1,  1,  1,  1,  -1,
-    -1, -1, -1, 1,  -1, -1, 1,  -1, 1,  1,  -1, 1,  -1, -1, 1,  -1, -1, -1,
-    -1, 1,  -1, 1,  1,  1,  1,  1,  -1, 1,  1,  -1, 1,  1,  -1, 1,  -1};
+    -1, 1,  -1, -1, -1, -1, 1,  -1, -1, 1,  -1, -1, 1,  1,  -1, -1, 1,  -1, // -Z
+    -1, -1, 1,  -1, -1, -1, -1, 1,  -1, -1, 1,  -1, -1, 1,  1,  -1, -1, 1,  // -X
+    1,  -1, -1, 1,  -1, 1,  1,  1,  1,  1,  1,  1,  1,  1,  -1, 1,  -1, -1, // +X
+    -1, -1, 1,  -1, 1,  1,  1,  1,  1,  1,  1,  1,  1,  -1, 1,  -1, -1, 1,  // +Z
+    -1, 1,  -1, 1,  1,  -1, 1,  1,  1,  1,  1,  1,  -1, 1,  1,  -1, 1,  -1, // +Y
+    -1, -1, -1, -1, -1, 1,  1,  -1, -1, 1,  -1, -1, -1, -1, 1,  1,  -1, 1}; // -Y
 
 static void sky_init_cube(SkyAtmosphere* sky) {
     if (sky->cube_vao)
