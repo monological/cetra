@@ -72,6 +72,13 @@ void free_sky_atmosphere(SkyAtmosphere* sky);
 // Derive sun_dir from sun_elevation_deg / sun_azimuth_deg
 void sky_update_sun_dir(SkyAtmosphere* sky);
 
+// CPU evaluation of the atmospheric transmittance toward the sun at the
+// current sun elevation (the same integral the transmittance LUT bakes),
+// giving the sun's color: white at the zenith, reddening toward the
+// horizon. Zero below the horizon. Used to tint the directional key light
+// so the analytic sun matches the visible sky. No GPU readback.
+void sky_sun_transmittance(const SkyAtmosphere* sky, vec3 out_color);
+
 // Bake the sun-independent LUTs (transmittance, then multiple-scattering
 // which samples it). One-time; logs timings. Requires the sky_* programs
 // to be registered with the engine.

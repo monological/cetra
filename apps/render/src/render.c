@@ -85,6 +85,8 @@ typedef struct {
     int probe_debug;                   // Show the raw capture as the background
     int sky;                           // Procedural physically-based sky instead of -e
     int sky_debug;                     // Blit the sky LUTs into the frame corner
+    float sun_elevation;               // Sky sun elevation in degrees (-999 = default)
+    float sun_azimuth;                 // Sky sun azimuth in degrees (-999 = default)
     int fog;                           // Enable volumetric fog
     int fog_debug;                     // Show the raw fog in-scatter buffer
     float fog_density;                 // Extinction override (0 = scene-scaled)
@@ -171,6 +173,8 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --probe-debug      Show the raw capture as the background (implies --probe)\n");
     fprintf(stderr, "      --sky              Procedural physically-based sky (instead of -e)\n");
     fprintf(stderr, "      --sky-debug        Blit the sky LUTs into the frame corner\n");
+    fprintf(stderr, "      --sun-elevation <d> Sky sun elevation in degrees (implies --sky)\n");
+    fprintf(stderr, "      --sun-azimuth <d>  Sky sun azimuth in degrees (implies --sky)\n");
     fprintf(stderr, "      --fog              Volumetric fog: god rays + height haze\n");
     fprintf(stderr, "      --fog-debug        Show the raw fog in-scatter buffer (implies --fog)\n");
     fprintf(stderr, "      --fog-density <f>  Fog extinction per world unit (implies --fog)\n");
@@ -228,6 +232,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->dof_max_coc = -1.0f;
     args->light_size = -1.0f;     // -1 = scene-radius default
     args->shadow_softness = -1.0f; // -1 = keep the engine default
+    args->sun_elevation = -999.0f; // -999 = keep the sky default
+    args->sun_azimuth = -999.0f;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
@@ -435,6 +441,20 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
         } else if (strcmp(argv[i], "--sky-debug") == 0) {
             args->sky = 1;
             args->sky_debug = 1;
+        } else if (strcmp(argv[i], "--sun-elevation") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->sun_elevation = (float)atof(argv[i]);
+            args->sky = 1;
+        } else if (strcmp(argv[i], "--sun-azimuth") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->sun_azimuth = (float)atof(argv[i]);
+            args->sky = 1;
         } else if (strcmp(argv[i], "--fog") == 0) {
             args->fog = 1;
         } else if (strcmp(argv[i], "--fog-debug") == 0) {
@@ -1197,6 +1217,15 @@ int main(int argc, char** argv) {
         // consumes.
         SkyAtmosphere* sky = create_sky_atmosphere();
         IBLResources* ibl = create_ibl_resources();
+        if (sky) {
+            // CLI sun placement must land before the bake (the LUTs depend
+            // on the sun position)
+            if (args.sun_elevation > -900.0f)
+                sky->sun_elevation_deg = args.sun_elevation;
+            if (args.sun_azimuth > -900.0f)
+                sky->sun_azimuth_deg = args.sun_azimuth;
+            sky_update_sun_dir(sky);
+        }
         if (sky && ibl && sky_bake_static_luts(sky, engine) == 0 &&
             sky_bake(sky, ibl, engine) == 0) {
             sky->debug_luts = args.sky_debug != 0;
@@ -1208,11 +1237,39 @@ int main(int argc, char** argv) {
             // grounds the model instead
             scene->skybox_ground_projection = false;
             // The sun is the authoritative directional light: one lobe
-            // TOWARD the sun (the extract_light_lobes convention), consumed
-            // by the key-light rig in M3.
+            // TOWARD the sun (the extract_light_lobes convention).
             glm_vec3_copy(sky->sun_dir, ibl->light_dirs[0]);
             ibl->light_energies[0] = 1.0f;
             ibl->light_count = 1;
+
+            // Create the sun as a shadow-casting directional key light,
+            // tinted by atmospheric transmittance so the analytic sun
+            // matches the visible disc (warm near the horizon), unless
+            // --no-key-light asked for pure IBL. Fades out below the
+            // horizon so a night sky casts no direct light.
+            if (!args.no_key_light) {
+                vec3 sun_color;
+                sky_sun_transmittance(sky, sun_color);
+                float horizon_fade = glm_clamp(sky->sun_elevation_deg / 3.0f, 0.0f, 1.0f);
+                Light* sun = create_light();
+                if (sun) {
+                    set_light_name(sun, "sky_sun");
+                    set_light_type(sun, LIGHT_DIRECTIONAL);
+                    vec3 travel;
+                    glm_vec3_negate_to(sky->sun_dir, travel); // light travels away from the sun
+                    set_light_direction(sun, travel);
+                    set_light_color(sun, sun_color);
+                    set_light_intensity(sun, KEY_LIGHT_TOTAL_INTENSITY * horizon_fade);
+                    set_light_cast_shadows(sun, horizon_fade > 0.0f);
+                    add_light_to_scene(scene, sun);
+                    SceneNode* sun_node = create_node();
+                    set_node_light(sun_node, sun);
+                    set_node_name(sun_node, "sky_sun");
+                    add_child_node(scene->root_node, sun_node);
+                }
+                // Ground the model on the virtual floor
+                scene->shadow_catcher = true;
+            }
             printf("Procedural sky: sun at elevation %.1f azimuth %.1f\n",
                    sky->sun_elevation_deg, sky->sun_azimuth_deg);
         } else {

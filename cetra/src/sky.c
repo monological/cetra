@@ -86,6 +86,54 @@ void sky_update_sun_dir(SkyAtmosphere* sky) {
     sky->sun_dir[2] = cosf(el) * cosf(az);
 }
 
+// Earth atmosphere constants, mirroring the sky_* shaders (kilometers)
+#define SKY_RG 6360.0f
+#define SKY_RT 6460.0f
+
+// Optical-depth extinction at altitude h (km), matching the shader profiles
+static void sky_extinction_at(float h, float out[3]) {
+    float rayleighD = expf(-h / 8.0f);
+    float mieD = expf(-h / 1.2f);
+    float ozoneD = fmaxf(0.0f, 1.0f - fabsf(h - 25.0f) / 15.0f);
+    const float ray[3] = {5.802e-3f, 13.558e-3f, 33.1e-3f};
+    const float mie_ext = 3.996e-3f / 0.9f;
+    const float ozone[3] = {0.650e-3f, 1.881e-3f, 0.085e-3f};
+    for (int c = 0; c < 3; c++)
+        out[c] = ray[c] * rayleighD + mie_ext * mieD + ozone[c] * ozoneD;
+}
+
+void sky_sun_transmittance(const SkyAtmosphere* sky, vec3 out_color) {
+    if (!sky) {
+        out_color[0] = out_color[1] = out_color[2] = 0.0f;
+        return;
+    }
+    float mu = sky->sun_dir[1]; // cos(zenith) = sin(elevation)
+    if (mu <= 0.0f) {
+        out_color[0] = out_color[1] = out_color[2] = 0.0f;
+        return;
+    }
+
+    // March from the ground observer to the top of the atmosphere along the
+    // sun direction, accumulating optical depth (the same integral the
+    // transmittance LUT bakes, done on the CPU so no GPU readback is needed)
+    const float r = SKY_RG + 0.5f;
+    float disc = r * r * (mu * mu - 1.0f) + SKY_RT * SKY_RT;
+    float dist = -r * mu + sqrtf(fmaxf(disc, 0.0f));
+    const int steps = 40;
+    float dt = dist / (float)steps;
+    float depth[3] = {0.0f, 0.0f, 0.0f};
+    for (int i = 0; i < steps; i++) {
+        float t = ((float)i + 0.5f) * dt;
+        float rt = sqrtf(r * r + t * t + 2.0f * r * t * mu);
+        float e[3];
+        sky_extinction_at(rt - SKY_RG, e);
+        for (int c = 0; c < 3; c++)
+            depth[c] += e[c] * dt;
+    }
+    for (int c = 0; c < 3; c++)
+        out_color[c] = expf(-depth[c]);
+}
+
 // Bake one 2D LUT with a fullscreen pass into a fresh RGBA16F texture
 // (delete-before-gen; the render_brdf_lut local-FBO shape). The destination
 // texture is created on a SCRATCH unit so it never clobbers a source LUT the
