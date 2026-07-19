@@ -744,6 +744,17 @@ void main() {
     float iorF0Base = (ior - 1.0) / (ior + 1.0);
     float iorF0 = iorF0Base * iorF0Base;
     vec3 F0 = vec3(iorF0);
+    // KHR_materials_specular re-parameterizes the DIELECTRIC F0: specularColorFactor
+    // tints it and specularFactor weights it (metals keep their albedo-derived F0
+    // through the mix below, so both are dielectric-only). Folding the weight into
+    // F0 -- rather than scaling the specular term -- keeps analytic and IBL specular
+    // consistent AND byte-identical off (grazing Fresnel still reaches 1, so the
+    // weight approximates KHR's full-angle dim; a documented v1 simplification).
+    // Guarded on the -1 sentinel so non-specular materials compile the exact
+    // original F0 = vec3(iorF0) expression -> byte-identical.
+    if (specularEnabled > 0 && specularFactor >= 0.0) {
+        F0 = min(F0 * specularColorFactor * specularFactor, vec3(1.0));
+    }
     F0 = mix(F0, albedoMap, metallicMap);
 
     float NdotV = max(dot(N, V), 0.0);
@@ -957,7 +968,9 @@ void main() {
         } else {
             prefilteredColor = textureLod(prefilteredMap, R, roughnessMap * maxReflectionLOD).rgb;
         }
-        // Reuses the brdf fetched before the light loop (same coordinates)
+        // Reuses the brdf fetched before the light loop (same coordinates). The
+        // KHR_materials_specular tint + weight reach IBL specular through F (F0 was
+        // re-parameterized above), so no change to this line is needed.
         vec3 specular = prefilteredColor * (F * brdf.x + brdf.y) * energyComp;
 
         ambient = (kD * diffuse + specular) * aoMap * iblIntensity;
