@@ -294,6 +294,11 @@ static int _setup_engine_glfw(Engine* engine) {
     engine->max_array_texture_layers = get_gl_max_array_texture_layers();
     log_info("GL sampler budget: %d fragment texture image units, %d array layers",
              engine->max_texture_image_units, engine->max_array_texture_layers);
+    // The renderer binds material + engine samplers up to IBL_SKYBOX_TEXTURE_UNIT
+    // (see the static-assert chain in render.c); a GPU under that is out of spec.
+    if (engine->max_texture_image_units <= IBL_SKYBOX_TEXTURE_UNIT)
+        log_error("GL reports only %d fragment texture units; the renderer needs %d",
+                  engine->max_texture_image_units, IBL_SKYBOX_TEXTURE_UNIT + 1);
 
     glfwGetFramebufferSize(engine->window, &(engine->fb_width), &(engine->fb_height));
     glViewport(0, 0, engine->fb_width, engine->fb_height);
@@ -1760,18 +1765,9 @@ void run_engine_render_loop(Engine* engine, RenderSceneFunc render_func) {
             async_loader_process_pending(engine->async_loader, current_scene->tex_pool, 5);
         }
 
-        // (Re)build the material mask array once its source masks have finished
-        // loading. The dirty flag + idle-loader check covers both the sync path
-        // (loader never busy -> builds the first frame) and streaming (masks
-        // fall back to their scalar factors until the array snaps in).
-        if (current_scene && current_scene->mask_array_dirty &&
-            (!engine->async_loader || !async_loader_is_busy(engine->async_loader))) {
-            if (!current_scene->mask_array)
-                current_scene->mask_array = create_material_mask_array();
-            if (current_scene->mask_array &&
-                mask_array_build(current_scene->mask_array, current_scene, engine) == 0)
-                current_scene->mask_array_dirty = false;
-        }
+        // (Re)build the material mask array once its source masks have loaded
+        // (a no-op until then; masks fall back to their scalar factors).
+        mask_array_ensure_built(current_scene, engine);
 
         if (render_func != NULL && current_scene != NULL) {
             render_func(engine, current_scene);

@@ -16,9 +16,10 @@
 #define MASK_ARRAY_CAP 2048
 
 static void mask_array_alloc_dummy(MaterialMaskArray* arr) {
-    // A 1x1 single-layer array so mask_array_bind is always valid (the shader
-    // gates every read on layer >= 0, but binding a live array avoids sampling
-    // an unbound unit on drivers that evaluate both ternary branches).
+    // A 1x1 single-layer array so mask_array_bind always points the unit at a
+    // COMPLETE texture. The shader gates every read on layer >= 0 (so a scene
+    // with no masks never samples it), but a sampler2DArray bound to a unit
+    // should still reference a complete texture at draw time.
     glGenTextures(1, &arr->texture);
     glBindTexture(GL_TEXTURE_2D_ARRAY, arr->texture);
     glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGBA8, 1, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
@@ -46,34 +47,28 @@ void free_material_mask_array(MaterialMaskArray* arr) {
         return;
     if (arr->texture)
         glDeleteTextures(1, &arr->texture);
+    if (arr->quad_vao)
+        glDeleteVertexArrays(1, &arr->quad_vao);
+    if (arr->quad_vbo)
+        glDeleteBuffers(1, &arr->quad_vbo);
     free(arr);
 }
 
+// Number of scalar-mask slots per material (roughness/metallic/ao/opacity/
+// microsurface/anisotropy/subsurface); bounds the unique-texture buffer.
+#define MASKS_PER_MATERIAL 7
+
 // Find texture t's layer in the dedup list (by GL id, so a shared glTF ORM
 // texture yields one layer), appending it if new. Returns -1 for an absent map.
-static int mask_layer_for(GLuint** ids, Texture*** texs, int* count, int* cap, Texture* t) {
+// The list is pre-sized to the upper bound, so no growth is needed.
+static int mask_layer_for(GLuint* ids, Texture** texs, int* count, Texture* t) {
     if (!t || t->id == 0)
         return -1;
     for (int i = 0; i < *count; i++)
-        if ((*ids)[i] == t->id)
+        if (ids[i] == t->id)
             return i;
-    if (*count == *cap) {
-        int nc = *cap ? *cap * 2 : 8;
-        GLuint* ni = realloc(*ids, (size_t)nc * sizeof(GLuint));
-        Texture** nt = realloc(*texs, (size_t)nc * sizeof(Texture*));
-        if (!ni || !nt) {
-            free(ni ? ni : *ids);
-            free(nt ? nt : *texs);
-            *ids = NULL;
-            *texs = NULL;
-            return -1;
-        }
-        *ids = ni;
-        *texs = nt;
-        *cap = nc;
-    }
-    (*ids)[*count] = t->id;
-    (*texs)[*count] = t;
+    ids[*count] = t->id;
+    texs[*count] = t;
     return (*count)++;
 }
 
@@ -82,22 +77,28 @@ int mask_array_build(MaterialMaskArray* arr, struct Scene* scene, struct Engine*
         return -1;
 
     // 1. Dedup the scene's unique mask textures and assign each material's
-    //    per-mask layer indices in one pass.
-    GLuint* ids = NULL;
-    Texture** texs = NULL;
-    int count = 0, cap = 0;
+    //    per-mask layer indices in one pass. The unique count is bounded by
+    //    MASKS_PER_MATERIAL per material, so one up-front allocation suffices.
+    size_t bound = scene->material_count * MASKS_PER_MATERIAL;
+    GLuint* ids = malloc(bound * sizeof(GLuint));
+    Texture** texs = malloc(bound * sizeof(Texture*));
+    if (bound && (!ids || !texs)) {
+        free(ids);
+        free(texs);
+        return -1;
+    }
+    int count = 0;
     for (size_t m = 0; m < scene->material_count; m++) {
         Material* mat = scene->materials[m];
         if (!mat)
             continue;
-        mat->roughness_layer = mask_layer_for(&ids, &texs, &count, &cap, mat->roughness_tex);
-        mat->metallic_layer = mask_layer_for(&ids, &texs, &count, &cap, mat->metalness_tex);
-        mat->ao_layer = mask_layer_for(&ids, &texs, &count, &cap, mat->ambient_occlusion_tex);
-        mat->opacity_layer = mask_layer_for(&ids, &texs, &count, &cap, mat->opacity_tex);
-        mat->microsurface_layer = mask_layer_for(&ids, &texs, &count, &cap, mat->microsurface_tex);
-        mat->anisotropy_layer = mask_layer_for(&ids, &texs, &count, &cap, mat->anisotropy_tex);
-        mat->subsurface_layer =
-            mask_layer_for(&ids, &texs, &count, &cap, mat->subsurface_scattering_tex);
+        mat->roughness_layer = mask_layer_for(ids, texs, &count, mat->roughness_tex);
+        mat->metallic_layer = mask_layer_for(ids, texs, &count, mat->metalness_tex);
+        mat->ao_layer = mask_layer_for(ids, texs, &count, mat->ambient_occlusion_tex);
+        mat->opacity_layer = mask_layer_for(ids, texs, &count, mat->opacity_tex);
+        mat->microsurface_layer = mask_layer_for(ids, texs, &count, mat->microsurface_tex);
+        mat->anisotropy_layer = mask_layer_for(ids, texs, &count, mat->anisotropy_tex);
+        mat->subsurface_layer = mask_layer_for(ids, texs, &count, mat->subsurface_scattering_tex);
     }
 
     if (count == 0) {
@@ -107,9 +108,20 @@ int mask_array_build(MaterialMaskArray* arr, struct Scene* scene, struct Engine*
         return 0;
     }
 
+    if (count > engine->max_array_texture_layers) {
+        log_error("mask_array_build: %d unique masks exceeds GL_MAX_ARRAY_TEXTURE_LAYERS (%d)",
+                  count, engine->max_array_texture_layers);
+        free(ids);
+        free(texs);
+        return -1;
+    }
+
     // 2. Canonical size = the largest present mask dimension, capped. Smaller
     //    masks upsample; nothing downsamples below the largest (no detail loss
-    //    unless a mask exceeds the cap).
+    //    unless a mask exceeds the cap). Every layer shares this size, so a mix
+    //    of a large and several small masks over-allocates the small ones
+    //    (memory = layer_count * size^2 * 4 bytes); lowering MASK_ARRAY_CAP
+    //    trades mask detail for VRAM if that ever bites.
     int size = 1;
     for (int i = 0; i < count; i++) {
         if (texs[i]->width > size)
@@ -154,8 +166,8 @@ int mask_array_build(MaterialMaskArray* arr, struct Scene* scene, struct Engine*
     glDisable(GL_CULL_FACE);
     glDisable(GL_DEPTH_TEST);
 
-    GLuint quad_vao = 0, quad_vbo = 0;
-    create_fullscreen_quad_vao(&quad_vao, &quad_vbo);
+    if (arr->quad_vao == 0)
+        create_fullscreen_quad_vao(&arr->quad_vao, &arr->quad_vbo);
     GLuint fbo = 0;
     glGenFramebuffers(1, &fbo);
     glBindFramebuffer(GL_FRAMEBUFFER, fbo);
@@ -166,16 +178,14 @@ int mask_array_build(MaterialMaskArray* arr, struct Scene* scene, struct Engine*
     for (int i = 0; i < count; i++) {
         glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, arr->texture, 0, i);
         glBindTexture(GL_TEXTURE_2D, ids[i]);
-        draw_fullscreen_quad(quad_vao);
+        draw_fullscreen_quad(arr->quad_vao);
     }
 
     glBindTexture(GL_TEXTURE_2D_ARRAY, arr->texture);
     glGenerateMipmap(GL_TEXTURE_2D_ARRAY);
 
-    // Restore
+    // Restore (the quad VAO is cached on the array for the next rebuild)
     glDeleteFramebuffers(1, &fbo);
-    glDeleteVertexArrays(1, &quad_vao);
-    glDeleteBuffers(1, &quad_vbo);
     glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prev_fbo);
     glViewport(prev_viewport[0], prev_viewport[1], prev_viewport[2], prev_viewport[3]);
     if (blend_was)
@@ -199,4 +209,18 @@ int mask_array_build(MaterialMaskArray* arr, struct Scene* scene, struct Engine*
 void mask_array_bind(const MaterialMaskArray* arr, int unit) {
     glActiveTexture(GL_TEXTURE0 + unit);
     glBindTexture(GL_TEXTURE_2D_ARRAY, arr ? arr->texture : 0);
+}
+
+void mask_array_ensure_built(struct Scene* scene, struct Engine* engine) {
+    if (!scene || !engine || !scene->mask_array_dirty)
+        return;
+    // Defer until streaming finishes so every source mask is present; the
+    // materials render with their scalar factors in the meantime. Covers the
+    // sync path too (loader never busy -> builds the first frame).
+    if (engine->async_loader && async_loader_is_busy(engine->async_loader))
+        return;
+    if (!scene->mask_array)
+        scene->mask_array = create_material_mask_array();
+    if (scene->mask_array && mask_array_build(scene->mask_array, scene, engine) == 0)
+        scene->mask_array_dirty = false;
 }

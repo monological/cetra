@@ -4,6 +4,7 @@
 
 #include "probe.h"
 #include "engine.h"
+#include "mask_array.h"
 #include "render.h"
 #include "shadow.h"
 #include "postfx.h"
@@ -95,6 +96,11 @@ int reflection_probe_capture(ReflectionProbe* probe, struct Engine* engine, Scen
             }
         }
     }
+
+    // Pack the scalar-mask array now the loader has drained: the render loop's
+    // build runs after this pre-loop capture, so without this the probe would
+    // bake every material's scalar-fallback masks into the cubemap.
+    mask_array_ensure_built(scene, engine);
 
     // Cascades fit the MAIN camera frustum; the capture's six cube-face
     // cameras need the camera-independent scene-fit map, so force the

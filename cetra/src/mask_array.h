@@ -20,9 +20,10 @@ struct Engine;
 // masks are uncompressed 8-bit and read as data (linear), so RGBA8 is lossless
 // per channel and the per-mask channel reads (.g/.b/.r) are preserved.
 typedef struct MaterialMaskArray {
-    GLuint texture;  // GL_TEXTURE_2D_ARRAY, RGBA8, linear, mipped (never 0 once created)
-    int size;        // canonical square layer size in texels
-    int layer_count; // populated layers (0 = a scene with no mask textures)
+    GLuint texture;            // GL_TEXTURE_2D_ARRAY, RGBA8, linear, mipped (never 0 once created)
+    int size;                  // canonical square layer size in texels
+    int layer_count;           // populated layers (0 = a scene with no mask textures)
+    GLuint quad_vao, quad_vbo; // fullscreen quad for the resample pass (created once)
 } MaterialMaskArray;
 
 MaterialMaskArray* create_material_mask_array(void);
@@ -37,5 +38,10 @@ int mask_array_build(MaterialMaskArray* arr, struct Scene* scene, struct Engine*
 // Bind the array to a texture unit. Always valid -- a 1x1 dummy layer exists
 // before the first build, so the shader never samples an unbound array.
 void mask_array_bind(const MaterialMaskArray* arr, int unit);
+
+// Build scene->mask_array if a rebuild is pending and the source textures have
+// finished loading (lazily creates it on first need). Idempotent per frame;
+// the engine render loop calls this every frame.
+void mask_array_ensure_built(struct Scene* scene, struct Engine* engine);
 
 #endif // _MASK_ARRAY_H_

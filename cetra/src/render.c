@@ -24,12 +24,23 @@
 #include "shadow.h"
 #include "intersect.h"
 
-// The material sampler units (common.h) must not collide with the engine-owned
-// shadow-map-array unit that follows them; both stay under the queried
-// GL_MAX_TEXTURE_IMAGE_UNITS. Relocating the IBL units below 16 (A3) removes the
-// last out-of-spec bind (brdfLUT was at unit 16).
+// The 0-15 fragment texture-unit budget is one global resource whose slots are
+// declared across common.h (material) + shadow.h + ibl.h (engine). Pin the whole
+// ordered map here so a change to any one #define that would collide with its
+// neighbour fails the build (the queried GL_MAX_TEXTURE_IMAGE_UNITS is 16, so the
+// top unit must stay < 16 -- A3 relocated brdfLUT/skybox off units 16/17).
 _Static_assert(TEXUNIT_MATERIAL_MAX < SHADOW_MAP_TEXTURE_UNIT,
                "material texture units overlap the shadow map array unit");
+_Static_assert(SHADOW_MAP_TEXTURE_UNIT < IBL_IRRADIANCE_TEXTURE_UNIT,
+               "shadow unit overlaps the IBL irradiance unit");
+_Static_assert(IBL_IRRADIANCE_TEXTURE_UNIT < IBL_PREFILTER_TEXTURE_UNIT,
+               "IBL irradiance overlaps prefilter unit");
+_Static_assert(IBL_PREFILTER_TEXTURE_UNIT < IBL_BRDF_LUT_TEXTURE_UNIT,
+               "IBL prefilter overlaps brdfLUT unit");
+_Static_assert(IBL_BRDF_LUT_TEXTURE_UNIT < IBL_SKYBOX_TEXTURE_UNIT,
+               "IBL brdfLUT overlaps skybox unit");
+_Static_assert(IBL_SKYBOX_TEXTURE_UNIT < 16,
+               "engine texture units exceed GL_MAX_TEXTURE_IMAGE_UNITS (16)");
 
 // Global animation state for skinned mesh rendering (set via set_render_animation_state)
 static AnimationState* g_current_animation_state = NULL;
