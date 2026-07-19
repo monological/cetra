@@ -611,7 +611,8 @@ void render_current_scene(Engine* engine, float time_value) {
     // Off in headless (jitter would break deterministic screenshots).
     mat4 draw_projection;
     glm_mat4_copy(*projection, draw_projection);
-    if (render_mode == RENDER_MODE_PBR && postfx_taa_active(engine->postfx) && !engine->headless) {
+    if (render_mode == RENDER_MODE_PBR && postfx_taa_active(engine->postfx) &&
+        (!engine->headless || engine->headless_jitter)) {
         int j = (int)(engine->total_frames % 8) + 1;
         int rw = engine->fb_width * engine->ss_scale;
         int rh = engine->fb_height * engine->ss_scale;

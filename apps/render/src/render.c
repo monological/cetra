@@ -131,6 +131,7 @@ typedef struct {
     int width;
     int height;
     int headless;
+    int headless_jitter;               // Apply TAA jitter in headless (lets temporal effects converge)
     int max_frames; // Exit after this many frames (0 = run forever)
     int show_bones;
     int check_stretch; // One-shot CPU skinning stretch diagnostic
@@ -233,6 +234,8 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "  -W, --width <int>      Window width (default: %d)\n", DEFAULT_WIDTH);
     fprintf(stderr, "  -H, --height <int>     Window height (default: %d)\n", DEFAULT_HEIGHT);
     fprintf(stderr, "  -x, --headless         Hidden window (for debugging/CI)\n");
+    fprintf(stderr, "      --headless-jitter  Apply TAA sub-pixel jitter in headless (needs --taa;\n");
+    fprintf(stderr, "                         non-deterministic, but converges temporal SSR/AA)\n");
     fprintf(stderr, "  -b, --show-bones       Enable bone X-ray overlay\n");
     fprintf(stderr, "      --check-stretch    Report triangle edges stretched by skinning\n");
     fprintf(stderr, "  -f, --frames <int>     Exit after N frames\n");
@@ -323,6 +326,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             }
         } else if (strcmp(argv[i], "-x") == 0 || strcmp(argv[i], "--headless") == 0) {
             args->headless = 1;
+        } else if (strcmp(argv[i], "--headless-jitter") == 0) {
+            args->headless_jitter = 1;
         } else if (strcmp(argv[i], "-b") == 0 || strcmp(argv[i], "--show-bones") == 0) {
             args->show_bones = 1;
         } else if (strcmp(argv[i], "--check-stretch") == 0) {
@@ -1097,6 +1102,7 @@ int main(int argc, char** argv) {
     Engine* engine = create_engine("Cetra Engine", args.width, args.height);
 
     set_engine_headless(engine, args.headless != 0);
+    engine->headless_jitter = args.headless_jitter != 0;
     set_engine_screenshot_path(engine, args.screenshot_path);
     set_engine_screenshot_every(engine, args.screenshot_every);
     if (args.ssaa > 0)

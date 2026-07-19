@@ -130,6 +130,7 @@ Engine* create_engine(const char* window_title, int width, int height) {
     engine->show_camera_hud = false;
     engine->show_bones = false;
     engine->headless = false;
+    engine->headless_jitter = false;
     engine->gui_frame_active = false;
     engine->screenshot_path = NULL;
     engine->screenshot_every = 0;
