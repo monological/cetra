@@ -120,6 +120,13 @@ typedef struct Scene {
     IBLResources* ibl;
     ReflectionProbe* probe;    // local reflection probe (optional)
     struct SkyAtmosphere* sky; // procedural sky feeding ibl (optional)
+
+    // Scalar material masks packed into one GL_TEXTURE_2D_ARRAY (built lazily
+    // once the source textures have loaded; see mask_array.h). dirty triggers a
+    // (re)build in the render loop when the async loader is idle.
+    struct MaterialMaskArray* mask_array;
+    bool mask_array_dirty;
+
     bool render_skybox;
     float skybox_brightness;       // Linear env multiplier (tone mapping is the post pass's job)
     bool skybox_ground_projection; // Project env onto finite dome + ground

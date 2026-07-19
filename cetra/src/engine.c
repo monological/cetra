@@ -18,6 +18,7 @@
 #include "intersect.h"
 #include "shadow.h"
 #include "sky.h"
+#include "mask_array.h"
 #include "render.h"
 #include "springbone.h"
 
@@ -1006,6 +1007,11 @@ static int _create_default_shaders_for_engine(Engine* engine) {
         add_shader_program_to_engine(engine, sky_background_program);
     }
 
+    ShaderProgram* mask_copy_program = create_mask_copy_program();
+    if (mask_copy_program) {
+        add_shader_program_to_engine(engine, mask_copy_program);
+    }
+
     return 0;
 }
 
@@ -1752,6 +1758,19 @@ void run_engine_render_loop(Engine* engine, RenderSceneFunc render_func) {
         // Process pending async texture uploads (max 5 per frame to avoid stutter)
         if (current_scene && current_scene->tex_pool && engine->async_loader) {
             async_loader_process_pending(engine->async_loader, current_scene->tex_pool, 5);
+        }
+
+        // (Re)build the material mask array once its source masks have finished
+        // loading. The dirty flag + idle-loader check covers both the sync path
+        // (loader never busy -> builds the first frame) and streaming (masks
+        // fall back to their scalar factors until the array snaps in).
+        if (current_scene && current_scene->mask_array_dirty &&
+            (!engine->async_loader || !async_loader_is_busy(engine->async_loader))) {
+            if (!current_scene->mask_array)
+                current_scene->mask_array = create_material_mask_array();
+            if (current_scene->mask_array &&
+                mask_array_build(current_scene->mask_array, current_scene, engine) == 0)
+                current_scene->mask_array_dirty = false;
         }
 
         if (render_func != NULL && current_scene != NULL) {

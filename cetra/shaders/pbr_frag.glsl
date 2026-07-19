@@ -101,30 +101,29 @@ uniform float time;
 
 uniform sampler2D albedoTex;
 uniform sampler2D normalTex;
-uniform sampler2D roughnessTex;
-uniform sampler2D metalnessTex;
-uniform sampler2D aoTex;
 uniform sampler2D emissiveTex;
-uniform sampler2D opacityTex;
-uniform sampler2D sheenTex;
-uniform sampler2D reflectanceTex;
-uniform sampler2D microsurfaceTex;
-uniform sampler2D anisotropyTex;
-uniform sampler2D subsurfaceTex;
+uniform sampler2D sheenTex;       // reserved (unsampled)
+uniform sampler2D reflectanceTex; // reserved (unsampled)
+
+// The scalar masks (roughness/metallic/ao/opacity/microsurface/anisotropy/
+// subsurface) share ONE array texture. Each material selects a layer per mask;
+// a layer < 0 means no texture -> fall back to the scalar factor. roughness
+// reads .g and metallic reads .b (glTF ORM); the rest read .r.
+uniform sampler2DArray maskArray;
+uniform int roughnessLayer;
+uniform int metallicLayer;
+uniform int aoLayer;
+uniform int opacityLayer;
+uniform int microsurfaceLayer;
+uniform int anisotropyLayer;
+uniform int subsurfaceLayer;
 
 uniform int albedoTexExists;
 uniform int normalTexExists;
-uniform int roughnessTexExists;
-uniform int metalnessTexExists;
-uniform int aoTexExists;
 uniform int emissiveTexExists;
 uniform int heightTexExists;
-uniform int opacityTexExists;
 uniform int sheenTexExists;
 uniform int reflectanceTexExists;
-uniform int microsurfaceTexExists;
-uniform int anisotropyTexExists;
-uniform int subsurfaceTexExists;
 
 // Shadow mapping uniforms
 #define MAX_SHADOW_LIGHTS 3
@@ -592,25 +591,25 @@ void main() {
     }
 
     float roughnessMap = roughness;
-    if (roughnessTexExists > 0) {
+    if (roughnessLayer >= 0) {
         // glTF: G channel contains roughness (works for grayscale too since R=G=B)
-        roughnessMap = roughness * texture(roughnessTex, uv).g;
+        roughnessMap = roughness * texture(maskArray, vec3(uv, float(roughnessLayer))).g;
     }
     // Clamp roughness to avoid division issues
     roughnessMap = clamp(roughnessMap, 0.04, 1.0);
 
     float metallicMap = metallic;
-    if (metalnessTexExists > 0) {
+    if (metallicLayer >= 0) {
         // glTF: B channel contains metallic (works for grayscale too since R=G=B)
-        metallicMap = metallic * texture(metalnessTex, uv).b;
+        metallicMap = metallic * texture(maskArray, vec3(uv, float(metallicLayer))).b;
     }
 
     float aoMap = ao;
-    if (aoTexExists > 0) {
+    if (aoLayer >= 0) {
         // Use UV1 for AO if available (common glTF lightmap pattern), otherwise UV0
         vec2 aoUV = (texCoords2Exists > 0) ? TexCoords2 : uv;
         // Apply occlusion strength (glTF occlusionTexture.strength)
-        float sampledAo = texture(aoTex, aoUV).r;
+        float sampledAo = texture(maskArray, vec3(aoUV, float(aoLayer))).r;
         aoMap = mix(1.0, sampledAo, aoStrength);
     }
 
@@ -626,29 +625,29 @@ void main() {
     }
 
     float opacity = materialOpacity;
-    if (opacityTexExists > 0) {
-        opacity = texture(opacityTex, uv).r * materialOpacity;
+    if (opacityLayer >= 0) {
+        opacity = texture(maskArray, vec3(uv, float(opacityLayer))).r * materialOpacity;
     } else if (texAlpha < 1.0) {
         // Use albedo texture alpha if no separate opacity texture
         opacity = texAlpha * materialOpacity;
     }
 
     // Microsurface detail - modulates roughness for fine surface detail
-    if (microsurfaceTexExists > 0) {
-        float detail = texture(microsurfaceTex, uv).r;
+    if (microsurfaceLayer >= 0) {
+        float detail = texture(maskArray, vec3(uv, float(microsurfaceLayer))).r;
         roughnessMap = clamp(roughnessMap * (0.5 + detail), 0.04, 1.0);
     }
 
     // Anisotropy - for brushed metal, hair effects
     float anisotropyMap = 0.0;
-    if (anisotropyTexExists > 0) {
-        anisotropyMap = texture(anisotropyTex, uv).r;
+    if (anisotropyLayer >= 0) {
+        anisotropyMap = texture(maskArray, vec3(uv, float(anisotropyLayer))).r;
     }
 
     // Subsurface scattering thickness map
     float sssThickness = 1.0;
-    if (subsurfaceTexExists > 0) {
-        sssThickness = texture(subsurfaceTex, uv).r;
+    if (subsurfaceLayer >= 0) {
+        sssThickness = texture(maskArray, vec3(uv, float(subsurfaceLayer))).r;
     }
 
     // Geometric specular anti-aliasing (Kaplanyan 2016): where the normal
@@ -791,7 +790,7 @@ void main() {
 
         // Cook-Torrance BRDF with optional anisotropy
         float NDF;
-        if (anisotropyTexExists > 0 && anisotropyMap > 0.01) {
+        if (anisotropyLayer >= 0 && anisotropyMap > 0.01) {
             NDF = distributionGGXAnisotropic(N, H, T, B, roughnessMap, anisotropyMap);
         } else {
             NDF = areaLightNorm * distributionGGX(N, H, areaLightRoughness);
@@ -857,7 +856,7 @@ void main() {
         Lo += min((kD * albedoMap / PI + specular) * radiance * NdotL * shadow, vec3(10.0));
 
         // Add subsurface scattering contribution
-        if (subsurfaceTexExists > 0 && sssThickness < 0.99) {
+        if (subsurfaceLayer >= 0 && sssThickness < 0.99) {
             Lo += subsurfaceScattering(N, L, V, albedoMap, sssThickness, lights[i].color * lights[i].intensity * attenuation);
         }
     }

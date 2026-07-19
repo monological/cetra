@@ -579,6 +579,18 @@ ShaderProgram* create_sky_view_program() {
     return program;
 }
 
+ShaderProgram* create_mask_copy_program() {
+    ShaderProgram* program = NULL;
+
+    if ((program = create_program_from_source("mask_copy", post_vert_shader_str,
+                                              mask_copy_frag_shader_str, NULL)) == NULL) {
+        log_error("Failed to initialize mask copy shader program");
+        return NULL;
+    }
+
+    return program;
+}
+
 ShaderProgram* create_sky_env_program() {
     ShaderProgram* program = NULL;
 

@@ -52,6 +52,15 @@ Material* create_material() {
     material->sheen_tex = NULL;
     material->reflectance_tex = NULL;
 
+    // No mask array layers until the array is built from loaded textures
+    material->roughness_layer = -1;
+    material->metallic_layer = -1;
+    material->ao_layer = -1;
+    material->opacity_layer = -1;
+    material->microsurface_layer = -1;
+    material->anisotropy_layer = -1;
+    material->subsurface_layer = -1;
+
     material->shader_program = NULL;
 
     return material;

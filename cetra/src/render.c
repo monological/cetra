@@ -15,6 +15,7 @@
 #include "shader.h"
 #include "mesh.h"
 #include "material.h"
+#include "mask_array.h"
 #include "light.h"
 #include "camera.h"
 #include "common.h"
@@ -167,99 +168,61 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
     uniform_set_vec2(u, "uvScale", (const float*)&material->uvScale);
     uniform_set_float(u, "uvRotation", material->uvRotation);
 
-    // Always set sampler uniforms to correct texture units (prevents stale values)
+    // Dedicated (native-resolution) sampler units. The scalar masks
+    // (roughness/metallic/ao/opacity/microsurface/anisotropy/subsurface) are no
+    // longer per-slot samplers -- they live in the mask sampler2DArray, bound
+    // once per program in the draw loop and selected per material by layer.
     uniform_set_int(u, "albedoTex", TEXUNIT_ALBEDO);
     uniform_set_int(u, "normalTex", TEXUNIT_NORMAL);
-    uniform_set_int(u, "roughnessTex", TEXUNIT_ROUGHNESS);
-    uniform_set_int(u, "metalnessTex", TEXUNIT_METALNESS);
-    uniform_set_int(u, "aoTex", TEXUNIT_AO);
     uniform_set_int(u, "emissiveTex", TEXUNIT_EMISSIVE);
-    uniform_set_int(u, "sceneColorTex", TEXUNIT_SCENE_COLOR); // refraction source (was heightTex's slot)
-    uniform_set_int(u, "opacityTex", TEXUNIT_OPACITY);
-    uniform_set_int(u, "sheenTex", TEXUNIT_SHEEN);
-    uniform_set_int(u, "reflectanceTex", TEXUNIT_REFLECTANCE);
-    uniform_set_int(u, "microsurfaceTex", TEXUNIT_MICROSURFACE);
-    uniform_set_int(u, "anisotropyTex", TEXUNIT_ANISOTROPY);
-    uniform_set_int(u, "subsurfaceTex", TEXUNIT_SUBSURFACE);
+    uniform_set_int(u, "sceneColorTex", TEXUNIT_SCENE_COLOR); // refraction source
+    uniform_set_int(u, "sheenTex", TEXUNIT_SHEEN);            // reserved (unsampled)
+    uniform_set_int(u, "reflectanceTex", TEXUNIT_REFLECTANCE); // reserved (unsampled)
+
+    // Per-mask layer into the mask array (-1 = no texture -> scalar factor)
+    uniform_set_int(u, "roughnessLayer", material->roughness_layer);
+    uniform_set_int(u, "metallicLayer", material->metallic_layer);
+    uniform_set_int(u, "aoLayer", material->ao_layer);
+    uniform_set_int(u, "opacityLayer", material->opacity_layer);
+    uniform_set_int(u, "microsurfaceLayer", material->microsurface_layer);
+    uniform_set_int(u, "anisotropyLayer", material->anisotropy_layer);
+    uniform_set_int(u, "subsurfaceLayer", material->subsurface_layer);
 
     if (material->albedo_tex) {
-        glActiveTexture(GL_TEXTURE0);
+        glActiveTexture(GL_TEXTURE0 + TEXUNIT_ALBEDO);
         glBindTexture(GL_TEXTURE_2D, material->albedo_tex->id);
     }
 
     if (material->normal_tex) {
-        glActiveTexture(GL_TEXTURE1);
+        glActiveTexture(GL_TEXTURE0 + TEXUNIT_NORMAL);
         glBindTexture(GL_TEXTURE_2D, material->normal_tex->id);
     }
 
-    if (material->roughness_tex) {
-        glActiveTexture(GL_TEXTURE2);
-        glBindTexture(GL_TEXTURE_2D, material->roughness_tex->id);
-    }
-
-    if (material->metalness_tex) {
-        glActiveTexture(GL_TEXTURE3);
-        glBindTexture(GL_TEXTURE_2D, material->metalness_tex->id);
-    }
-
-    if (material->ambient_occlusion_tex) {
-        glActiveTexture(GL_TEXTURE4);
-        glBindTexture(GL_TEXTURE_2D, material->ambient_occlusion_tex->id);
-    }
-
     if (material->emissive_tex) {
-        glActiveTexture(GL_TEXTURE5);
+        glActiveTexture(GL_TEXTURE0 + TEXUNIT_EMISSIVE);
         glBindTexture(GL_TEXTURE_2D, material->emissive_tex->id);
     }
 
     // height_tex is deliberately NOT bound: pbr_frag declares heightTex but
-    // never samples it (POM is unimplemented), and unit 6 now carries the
-    // refraction pass's scene-color texture -- binding a height map here
-    // would stomp it for every later draw in the pass.
-
-    if (material->opacity_tex) {
-        glActiveTexture(GL_TEXTURE7);
-        glBindTexture(GL_TEXTURE_2D, material->opacity_tex->id);
-    }
-
+    // never samples it (POM is unimplemented), and TEXUNIT_SCENE_COLOR carries
+    // the refraction pass's scene-color texture. sheen/reflectance are reserved
+    // (compiler-dropped until KHR sheen/specular land).
     if (material->sheen_tex) {
-        glActiveTexture(GL_TEXTURE8);
+        glActiveTexture(GL_TEXTURE0 + TEXUNIT_SHEEN);
         glBindTexture(GL_TEXTURE_2D, material->sheen_tex->id);
     }
 
     if (material->reflectance_tex) {
-        glActiveTexture(GL_TEXTURE9);
+        glActiveTexture(GL_TEXTURE0 + TEXUNIT_REFLECTANCE);
         glBindTexture(GL_TEXTURE_2D, material->reflectance_tex->id);
-    }
-
-    if (material->microsurface_tex) {
-        glActiveTexture(GL_TEXTURE10);
-        glBindTexture(GL_TEXTURE_2D, material->microsurface_tex->id);
-    }
-
-    if (material->anisotropy_tex) {
-        glActiveTexture(GL_TEXTURE11);
-        glBindTexture(GL_TEXTURE_2D, material->anisotropy_tex->id);
-    }
-
-    if (material->subsurface_scattering_tex) {
-        glActiveTexture(GL_TEXTURE12);
-        glBindTexture(GL_TEXTURE_2D, material->subsurface_scattering_tex->id);
     }
 
     uniform_set_int(u, "albedoTexExists", material->albedo_tex ? 1 : 0);
     uniform_set_int(u, "normalTexExists", material->normal_tex ? 1 : 0);
-    uniform_set_int(u, "roughnessTexExists", material->roughness_tex ? 1 : 0);
-    uniform_set_int(u, "metalnessTexExists", material->metalness_tex ? 1 : 0);
-    uniform_set_int(u, "aoTexExists", material->ambient_occlusion_tex ? 1 : 0);
     uniform_set_int(u, "emissiveTexExists", material->emissive_tex ? 1 : 0);
     uniform_set_int(u, "heightTexExists", material->height_tex ? 1 : 0);
-    uniform_set_int(u, "opacityTexExists", material->opacity_tex ? 1 : 0);
     uniform_set_int(u, "sheenTexExists", material->sheen_tex ? 1 : 0);
     uniform_set_int(u, "reflectanceTexExists", material->reflectance_tex ? 1 : 0);
-    uniform_set_int(u, "microsurfaceTexExists", material->microsurface_tex ? 1 : 0);
-    uniform_set_int(u, "anisotropyTexExists", material->anisotropy_tex ? 1 : 0);
-    uniform_set_int(u, "subsurfaceTexExists", material->subsurface_scattering_tex ? 1 : 0);
 
     // Reset active texture unit
     glActiveTexture(GL_TEXTURE0);
@@ -378,6 +341,13 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
             } else {
                 uniform_set_int(u, "numShadowLights", 0);
             }
+
+            // Bind the material mask array (roughness/metallic/ao/opacity/
+            // microsurface/anisotropy/subsurface packed into one layered
+            // texture). Always bind to satisfy the sampler2DArray; each
+            // material's per-mask layer indices select or skip a layer.
+            mask_array_bind(scene ? scene->mask_array : NULL, TEXUNIT_MASKS);
+            uniform_set_int(u, "maskArray", TEXUNIT_MASKS);
 
             // Bind IBL textures if available
             if (scene && scene->ibl && scene->ibl->precomputed) {

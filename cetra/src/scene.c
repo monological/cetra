@@ -9,6 +9,7 @@
 #include "ext/log.h"
 #include "scene.h"
 #include "sky.h"
+#include "mask_array.h"
 #include "program.h"
 #include "shader.h"
 #include "mesh.h"
@@ -171,6 +172,12 @@ void free_scene(Scene* scene) {
     if (scene->sky) {
         free_sky_atmosphere(scene->sky);
         scene->sky = NULL;
+    }
+
+    // Free the material mask texture array
+    if (scene->mask_array) {
+        free_material_mask_array(scene->mask_array);
+        scene->mask_array = NULL;
     }
 
     // Free all skeletons
@@ -411,6 +418,7 @@ int add_material_to_scene(Scene* scene, Material* material) {
     scene->materials = new_materials;
     scene->materials[scene->material_count] = material;
     scene->material_count = new_count;
+    scene->mask_array_dirty = true; // a new material's masks must be (re)packed
     return 0;
 }
 

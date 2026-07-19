@@ -61,6 +61,9 @@ ShaderProgram* create_sky_view_program();
 ShaderProgram* create_sky_env_program();
 ShaderProgram* create_sky_background_program();
 
+// Copies/resamples a 2D mask texture into a material-mask-array layer
+ShaderProgram* create_mask_copy_program();
+
 // Text Program
 ShaderProgram* create_text_program();
 

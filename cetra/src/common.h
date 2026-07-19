@@ -16,21 +16,20 @@
 // PBR material fragment sampler units (render.c _update_program_material_uniforms).
 // The engine-side units (shadow map array, IBL) follow in shadow.h / ibl.h; all
 // of them must stay distinct and within GL_MAX_TEXTURE_IMAGE_UNITS, which the
-// engine now queries at init (get_gl_max_texture_image_units).
+// engine queries at init (get_gl_max_texture_image_units).
+//
+// The seven scalar masks (roughness/metallic/ao/opacity/microsurface/anisotropy/
+// subsurface) collapsed into ONE sampler2DArray (TEXUNIT_MASKS, mask_array.h),
+// freeing units 3, 4, 7, 10, 11, 12 for future textured material features
+// (clearcoat normal, plus the reserved sheen/specular slots below).
 #define TEXUNIT_ALBEDO       0
 #define TEXUNIT_NORMAL       1
-#define TEXUNIT_ROUGHNESS    2
-#define TEXUNIT_METALNESS    3
-#define TEXUNIT_AO           4
+#define TEXUNIT_MASKS        2 // sampler2DArray: packed scalar masks
 #define TEXUNIT_EMISSIVE     5
 #define TEXUNIT_SCENE_COLOR  6 // refraction opaque-scene resolve (engine-bound)
-#define TEXUNIT_OPACITY      7
 #define TEXUNIT_SHEEN        8 // reserved (KHR_materials_sheen; unsampled today)
 #define TEXUNIT_REFLECTANCE  9 // reserved (KHR_materials_specular; unsampled today)
-#define TEXUNIT_MICROSURFACE 10
-#define TEXUNIT_ANISOTROPY   11
-#define TEXUNIT_SUBSURFACE   12
-#define TEXUNIT_MATERIAL_MAX TEXUNIT_SUBSURFACE
+#define TEXUNIT_MATERIAL_MAX TEXUNIT_REFLECTANCE
 
 // Fixed non-light uniform overhead the max-light math subtracts. The CSM
 // arrays dominate: lightSpaceMatrix[9] (144) + cascadeParams[9] (36) +

@@ -75,6 +75,19 @@ typedef struct Material {
     Texture* sheen_tex;                 // Sheen Map (for fabrics)
     Texture* reflectance_tex;           // Reflectance Map
 
+    // Per-mask layer indices into the scene's material mask sampler2DArray
+    // (-1 = no texture -> the shader falls back to the scalar factor). The
+    // *_tex pointers above are the load-time source; these are resolved when
+    // the mask array is (re)built. roughness/metallic/ao read .g/.b/.r of
+    // their layer (glTF ORM), the rest read .r.
+    int roughness_layer;
+    int metallic_layer;
+    int ao_layer;
+    int opacity_layer;
+    int microsurface_layer;
+    int anisotropy_layer;
+    int subsurface_layer;
+
     ShaderProgram* shader_program;
 } Material;
 
