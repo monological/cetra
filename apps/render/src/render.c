@@ -22,6 +22,7 @@
 #include "cetra/animation.h"
 #include "cetra/springbone.h"
 #include "cetra/ibl.h"
+#include "cetra/sky.h"
 #include "cetra/app.h"
 
 #include "cetra/shader_strings.h"
@@ -82,6 +83,8 @@ typedef struct {
     float probe_pos[3];                // Probe capture position override
     int probe_scene;                   // Capture the scene meshes too (interiors)
     int probe_debug;                   // Show the raw capture as the background
+    int sky;                           // Procedural physically-based sky instead of -e
+    int sky_debug;                     // Blit the sky LUTs into the frame corner
     int fog;                           // Enable volumetric fog
     int fog_debug;                     // Show the raw fog in-scatter buffer
     float fog_density;                 // Extinction override (0 = scene-scaled)
@@ -166,6 +169,8 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --probe-pos x,y,z  Probe parallax origin (implies --probe; default: auto)\n");
     fprintf(stderr, "      --probe-scene      Capture the scene meshes into the probe (interiors)\n");
     fprintf(stderr, "      --probe-debug      Show the raw capture as the background (implies --probe)\n");
+    fprintf(stderr, "      --sky              Procedural physically-based sky (instead of -e)\n");
+    fprintf(stderr, "      --sky-debug        Blit the sky LUTs into the frame corner\n");
     fprintf(stderr, "      --fog              Volumetric fog: god rays + height haze\n");
     fprintf(stderr, "      --fog-debug        Show the raw fog in-scatter buffer (implies --fog)\n");
     fprintf(stderr, "      --fog-density <f>  Fog extinction per world unit (implies --fog)\n");
@@ -425,6 +430,11 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
         } else if (strcmp(argv[i], "--probe-debug") == 0) {
             args->probe = 1;
             args->probe_debug = 1;
+        } else if (strcmp(argv[i], "--sky") == 0) {
+            args->sky = 1;
+        } else if (strcmp(argv[i], "--sky-debug") == 0) {
+            args->sky = 1;
+            args->sky_debug = 1;
         } else if (strcmp(argv[i], "--fog") == 0) {
             args->fog = 1;
         } else if (strcmp(argv[i], "--fog-debug") == 0) {
@@ -975,6 +985,13 @@ int main(int argc, char** argv) {
         return 0;
     }
 
+    // Two environment sources cannot coexist; silent precedence would hide
+    // the mistake, so refuse outright
+    if (args.sky && args.hdr_path) {
+        fprintf(stderr, "Error: --sky and -e are mutually exclusive\n");
+        return -1;
+    }
+
     Engine* engine = create_engine("Cetra Engine", args.width, args.height);
 
     set_engine_headless(engine, args.headless != 0);
@@ -1171,6 +1188,21 @@ int main(int argc, char** argv) {
     }
 
     configure_visor_materials(scene);
+
+    if (args.sky) {
+        // Procedural sky: bake the sun-independent atmosphere LUTs now; the
+        // sky-view/environment chain that consumes them lands with the
+        // background render (the -e sibling below stays untouched).
+        SkyAtmosphere* sky = create_sky_atmosphere();
+        if (sky && sky_bake_static_luts(sky, engine) == 0) {
+            sky->debug_luts = args.sky_debug != 0;
+            scene->sky = sky;
+        } else {
+            fprintf(stderr, "Failed to bake sky atmosphere LUTs\n");
+            if (sky)
+                free_sky_atmosphere(sky);
+        }
+    }
 
     if (args.hdr_path) {
         IBLResources* ibl = create_ibl_resources();

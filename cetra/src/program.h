@@ -53,6 +53,11 @@ ShaderProgram* create_ibl_irradiance_program();
 ShaderProgram* create_ibl_prefilter_program();
 ShaderProgram* create_ibl_brdf_program();
 
+// Sky atmosphere LUT programs
+ShaderProgram* create_sky_transmittance_program();
+ShaderProgram* create_sky_multiscatter_program();
+ShaderProgram* create_sky_debug_program();
+
 // Text Program
 ShaderProgram* create_text_program();
 

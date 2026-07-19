@@ -118,7 +118,8 @@ typedef struct Scene {
 
     // Image-Based Lighting
     IBLResources* ibl;
-    ReflectionProbe* probe; // local reflection probe (optional)
+    ReflectionProbe* probe;    // local reflection probe (optional)
+    struct SkyAtmosphere* sky; // procedural sky feeding ibl (optional)
     bool render_skybox;
     float skybox_brightness;       // Linear env multiplier (tone mapping is the post pass's job)
     bool skybox_ground_projection; // Project env onto finite dome + ground

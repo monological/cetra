@@ -8,6 +8,7 @@
 
 #include "ext/log.h"
 #include "scene.h"
+#include "sky.h"
 #include "program.h"
 #include "shader.h"
 #include "mesh.h"
@@ -67,6 +68,7 @@ Scene* create_scene() {
     // Initialize IBL (NULL by default, user must load HDR)
     scene->ibl = NULL;
     scene->probe = NULL;
+    scene->sky = NULL;
     scene->render_skybox = false;
     scene->skybox_brightness = 1.0f;
     scene->skybox_ground_projection = false;
@@ -163,6 +165,12 @@ void free_scene(Scene* scene) {
     if (scene->probe) {
         free_reflection_probe(scene->probe);
         scene->probe = NULL;
+    }
+
+    // Free procedural sky
+    if (scene->sky) {
+        free_sky_atmosphere(scene->sky);
+        scene->sky = NULL;
     }
 
     // Free all skeletons

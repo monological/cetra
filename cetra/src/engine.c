@@ -17,6 +17,7 @@
 #include "transform.h"
 #include "intersect.h"
 #include "shadow.h"
+#include "sky.h"
 #include "render.h"
 #include "springbone.h"
 
@@ -969,6 +970,22 @@ static int _create_default_shaders_for_engine(Engine* engine) {
         add_shader_program_to_engine(engine, ibl_brdf_program);
     }
 
+    // Sky atmosphere LUT programs
+    ShaderProgram* sky_transmittance_program = create_sky_transmittance_program();
+    if (sky_transmittance_program) {
+        add_shader_program_to_engine(engine, sky_transmittance_program);
+    }
+
+    ShaderProgram* sky_multiscatter_program = create_sky_multiscatter_program();
+    if (sky_multiscatter_program) {
+        add_shader_program_to_engine(engine, sky_multiscatter_program);
+    }
+
+    ShaderProgram* sky_debug_program = create_sky_debug_program();
+    if (sky_debug_program) {
+        add_shader_program_to_engine(engine, sky_debug_program);
+    }
+
     return 0;
 }
 
@@ -1477,6 +1494,12 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode, bool draw_gui) 
     postfx_run(engine->postfx, engine->framebuffer, 0, frame_mode == RENDER_MODE_PBR,
                engine->normals_this_frame, engine->aux_this_frame, engine->albedo_this_frame,
                engine->draw_projection, engine->view_matrix);
+
+    // Sky LUT debug overlay onto the composited frame (an acceptance tool,
+    // the csm_debug shape: a library-side flag the app/GUI toggles)
+    if (fx_scene && fx_scene->sky && fx_scene->sky->debug_luts) {
+        sky_debug_blit_luts(fx_scene->sky, engine->fb_width, engine->fb_height);
+    }
 
     if (draw_gui) {
         render_engine_gui(engine);

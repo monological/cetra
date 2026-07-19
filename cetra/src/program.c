@@ -531,6 +531,42 @@ ShaderProgram* create_ibl_brdf_program() {
     return program;
 }
 
+ShaderProgram* create_sky_transmittance_program() {
+    ShaderProgram* program = NULL;
+
+    if ((program = create_program_from_source("sky_transmittance", post_vert_shader_str,
+                                              sky_transmittance_frag_shader_str, NULL)) == NULL) {
+        log_error("Failed to initialize sky transmittance shader program");
+        return NULL;
+    }
+
+    return program;
+}
+
+ShaderProgram* create_sky_multiscatter_program() {
+    ShaderProgram* program = NULL;
+
+    if ((program = create_program_from_source("sky_multiscatter", post_vert_shader_str,
+                                              sky_multiscatter_frag_shader_str, NULL)) == NULL) {
+        log_error("Failed to initialize sky multiscatter shader program");
+        return NULL;
+    }
+
+    return program;
+}
+
+ShaderProgram* create_sky_debug_program() {
+    ShaderProgram* program = NULL;
+
+    if ((program = create_program_from_source("sky_debug", post_vert_shader_str,
+                                              sky_debug_frag_shader_str, NULL)) == NULL) {
+        log_error("Failed to initialize sky debug shader program");
+        return NULL;
+    }
+
+    return program;
+}
+
 ShaderProgram* create_text_program() {
     ShaderProgram* program = NULL;
 
