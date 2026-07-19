@@ -57,6 +57,9 @@ ShaderProgram* create_ibl_brdf_program();
 ShaderProgram* create_sky_transmittance_program();
 ShaderProgram* create_sky_multiscatter_program();
 ShaderProgram* create_sky_debug_program();
+ShaderProgram* create_sky_view_program();
+ShaderProgram* create_sky_env_program();
+ShaderProgram* create_sky_background_program();
 
 // Text Program
 ShaderProgram* create_text_program();

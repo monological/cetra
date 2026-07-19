@@ -1190,17 +1190,37 @@ int main(int argc, char** argv) {
     configure_visor_materials(scene);
 
     if (args.sky) {
-        // Procedural sky: bake the sun-independent atmosphere LUTs now; the
-        // sky-view/environment chain that consumes them lands with the
-        // background render (the -e sibling below stays untouched).
+        // Procedural sky: bake the atmosphere LUTs + sky-view + environment
+        // cubemap into a fresh IBLResources so the entire IBL/skybox/probe/
+        // fog pipeline follows the sun exactly like an -e HDR would. The sun
+        // becomes the single extracted "lobe" the key-light rig below
+        // consumes.
         SkyAtmosphere* sky = create_sky_atmosphere();
-        if (sky && sky_bake_static_luts(sky, engine) == 0) {
+        IBLResources* ibl = create_ibl_resources();
+        if (sky && ibl && sky_bake_static_luts(sky, engine) == 0 &&
+            sky_bake(sky, ibl, engine) == 0) {
             sky->debug_luts = args.sky_debug != 0;
             scene->sky = sky;
+            scene->ibl = ibl;
+            scene->render_skybox = true;
+            scene->skybox_brightness = 1.0f;
+            // No photographic floor to project; the sky's virtual ground
+            // grounds the model instead
+            scene->skybox_ground_projection = false;
+            // The sun is the authoritative directional light: one lobe
+            // TOWARD the sun (the extract_light_lobes convention), consumed
+            // by the key-light rig in M3.
+            glm_vec3_copy(sky->sun_dir, ibl->light_dirs[0]);
+            ibl->light_energies[0] = 1.0f;
+            ibl->light_count = 1;
+            printf("Procedural sky: sun at elevation %.1f azimuth %.1f\n",
+                   sky->sun_elevation_deg, sky->sun_azimuth_deg);
         } else {
-            fprintf(stderr, "Failed to bake sky atmosphere LUTs\n");
+            fprintf(stderr, "Failed to bake procedural sky\n");
             if (sky)
                 free_sky_atmosphere(sky);
+            if (ibl)
+                free_ibl_resources(ibl);
         }
     }
 

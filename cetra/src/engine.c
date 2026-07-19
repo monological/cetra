@@ -986,6 +986,21 @@ static int _create_default_shaders_for_engine(Engine* engine) {
         add_shader_program_to_engine(engine, sky_debug_program);
     }
 
+    ShaderProgram* sky_view_program = create_sky_view_program();
+    if (sky_view_program) {
+        add_shader_program_to_engine(engine, sky_view_program);
+    }
+
+    ShaderProgram* sky_env_program = create_sky_env_program();
+    if (sky_env_program) {
+        add_shader_program_to_engine(engine, sky_env_program);
+    }
+
+    ShaderProgram* sky_background_program = create_sky_background_program();
+    if (sky_background_program) {
+        add_shader_program_to_engine(engine, sky_background_program);
+    }
+
     return 0;
 }
 

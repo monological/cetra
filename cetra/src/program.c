@@ -567,6 +567,42 @@ ShaderProgram* create_sky_debug_program() {
     return program;
 }
 
+ShaderProgram* create_sky_view_program() {
+    ShaderProgram* program = NULL;
+
+    if ((program = create_program_from_source("sky_view", post_vert_shader_str,
+                                              sky_view_frag_shader_str, NULL)) == NULL) {
+        log_error("Failed to initialize sky view shader program");
+        return NULL;
+    }
+
+    return program;
+}
+
+ShaderProgram* create_sky_env_program() {
+    ShaderProgram* program = NULL;
+
+    if ((program = create_program_from_source("sky_env", ibl_cubemap_vert_shader_str,
+                                              sky_env_frag_shader_str, NULL)) == NULL) {
+        log_error("Failed to initialize sky env shader program");
+        return NULL;
+    }
+
+    return program;
+}
+
+ShaderProgram* create_sky_background_program() {
+    ShaderProgram* program = NULL;
+
+    if ((program = create_program_from_source("sky_background", skybox_vert_shader_str,
+                                              sky_background_frag_shader_str, NULL)) == NULL) {
+        log_error("Failed to initialize sky background shader program");
+        return NULL;
+    }
+
+    return program;
+}
+
 ShaderProgram* create_text_program() {
     ShaderProgram* program = NULL;
 

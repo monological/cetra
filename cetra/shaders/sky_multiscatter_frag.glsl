@@ -33,10 +33,26 @@ const float GROUND_ALBEDO = 0.3;
 const int SPHERE_DIRS = 64; // 8x8 lat-long quadrature over the sphere
 const int MARCH_STEPS = 20;
 
-float distanceToSphere(float r, float mu, float R)
+// FAR intersection (exit through the atmosphere top)
+float distanceToTop(float r, float mu, float R)
 {
     float disc = r * r * (mu * mu - 1.0) + R * R;
     return max(0.0, -r * mu + sqrt(max(disc, 0.0)));
+}
+
+// NEAR intersection (first ground hit ahead of the ray -- so the march
+// stops at the surface instead of continuing through the planet to the far
+// root, which produced huge/NaN samples)
+float distanceToGround(float r, float mu, float R)
+{
+    float disc = r * r * (mu * mu - 1.0) + R * R;
+    return max(0.0, -r * mu - sqrt(max(disc, 0.0)));
+}
+
+// Alias for the transmittance UV mapping (always the top/exit)
+float distanceToSphere(float r, float mu, float R)
+{
+    return distanceToTop(r, mu, R);
 }
 
 // Does the ray from radius r with cos-zenith mu hit the ground?
@@ -93,8 +109,7 @@ void main()
         float dOmega = 4.0 * PI / float(SPHERE_DIRS);
 
         bool ground = hitsGround(r, dir.y);
-        float tMax = ground ? distanceToSphere(r, dir.y, Rg)
-                            : distanceToSphere(r, dir.y, Rt);
+        float tMax = ground ? distanceToGround(r, dir.y, Rg) : distanceToTop(r, dir.y, Rt);
         float dt = tMax / float(MARCH_STEPS);
 
         vec3 through = vec3(1.0); // transmittance from the point to the sample
