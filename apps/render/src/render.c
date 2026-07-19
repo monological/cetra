@@ -87,6 +87,7 @@ typedef struct {
     int sky_debug;                     // Blit the sky LUTs into the frame corner
     float sun_elevation;               // Sky sun elevation in degrees (-999 = default)
     float sun_azimuth;                 // Sky sun azimuth in degrees (-999 = default)
+    int sky_rebake_stress;             // Diagnostic: N headless sun re-bakes then restore
     int fog;                           // Enable volumetric fog
     int fog_debug;                     // Show the raw fog in-scatter buffer
     float fog_density;                 // Extinction override (0 = scene-scaled)
@@ -454,6 +455,13 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 return -1;
             }
             args->sun_azimuth = (float)atof(argv[i]);
+            args->sky = 1;
+        } else if (strcmp(argv[i], "--sky-rebake-stress") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->sky_rebake_stress = atoi(argv[i]);
             args->sky = 1;
         } else if (strcmp(argv[i], "--fog") == 0) {
             args->fog = 1;
@@ -1236,31 +1244,20 @@ int main(int argc, char** argv) {
             // No photographic floor to project; the sky's virtual ground
             // grounds the model instead
             scene->skybox_ground_projection = false;
-            // The sun is the authoritative directional light: one lobe
-            // TOWARD the sun (the extract_light_lobes convention).
-            glm_vec3_copy(sky->sun_dir, ibl->light_dirs[0]);
-            ibl->light_energies[0] = 1.0f;
-            ibl->light_count = 1;
-
-            // Create the sun as a shadow-casting directional key light,
-            // tinted by atmospheric transmittance so the analytic sun
-            // matches the visible disc (warm near the horizon), unless
-            // --no-key-light asked for pure IBL. Fades out below the
-            // horizon so a night sky casts no direct light.
+            // Create the sun as a shadow-casting directional key light and
+            // couple it to the atmosphere: the sky module owns its direction,
+            // transmittance tint (warm near the horizon), and below-horizon
+            // fade, so a moving sun drives the light, shadows, and fog through
+            // one path. --no-key-light leaves a pure-IBL sky. The IBL lobe
+            // toward the sun is set inside sky_bake.
             if (!args.no_key_light) {
-                vec3 sun_color;
-                sky_sun_transmittance(sky, sun_color);
-                float horizon_fade = glm_clamp(sky->sun_elevation_deg / 3.0f, 0.0f, 1.0f);
                 Light* sun = create_light();
                 if (sun) {
                     set_light_name(sun, "sky_sun");
                     set_light_type(sun, LIGHT_DIRECTIONAL);
-                    vec3 travel;
-                    glm_vec3_negate_to(sky->sun_dir, travel); // light travels away from the sun
-                    set_light_direction(sun, travel);
-                    set_light_color(sun, sun_color);
-                    set_light_intensity(sun, KEY_LIGHT_TOTAL_INTENSITY * horizon_fade);
-                    set_light_cast_shadows(sun, horizon_fade > 0.0f);
+                    sky->sun_light = sun;
+                    sky->sun_base_intensity = KEY_LIGHT_TOTAL_INTENSITY;
+                    sky_apply_sun_to_light(sky);
                     add_light_to_scene(scene, sun);
                     SceneNode* sun_node = create_node();
                     set_node_light(sun_node, sun);
@@ -1272,6 +1269,30 @@ int main(int argc, char** argv) {
             }
             printf("Procedural sky: sun at elevation %.1f azimuth %.1f\n",
                    sky->sun_elevation_deg, sky->sun_azimuth_deg);
+
+            // Diagnostic soak (the M4 leak gate): drive the dynamic-sun
+            // re-bake path (the GUI's sky_update_sun) N times across the whole
+            // elevation/azimuth range -- including below-horizon, where the
+            // key light fades and the sky-view LUT hits its ground branch --
+            // then restore the requested sun. GL errors along the way flag a
+            // resource leak or state corruption; a clean run proves the
+            // re-bake is safe to fire per-frame during a GUI drag.
+            if (args.sky_rebake_stress > 0) {
+                float el0 = sky->sun_elevation_deg, az0 = sky->sun_azimuth_deg;
+                int gl_errors = 0;
+                for (int i = 0; i < args.sky_rebake_stress; i++) {
+                    sky->sun_elevation_deg = -6.0f + (float)(i % 96);
+                    sky->sun_azimuth_deg = (float)((i * 37) % 360);
+                    sky_update_sun(sky, ibl, engine);
+                    if (glGetError() != GL_NO_ERROR)
+                        gl_errors++;
+                }
+                sky->sun_elevation_deg = el0;
+                sky->sun_azimuth_deg = az0;
+                sky_update_sun(sky, ibl, engine);
+                printf("Sky rebake stress: %d cycles complete, %d GL errors\n",
+                       args.sky_rebake_stress, gl_errors);
+            }
         } else {
             fprintf(stderr, "Failed to bake procedural sky\n");
             if (sky)

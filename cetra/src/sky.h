@@ -34,6 +34,7 @@
 
 struct Engine;
 struct IBLResources;
+struct Light;
 
 typedef struct SkyAtmosphere {
     bool enabled;
@@ -45,6 +46,12 @@ typedef struct SkyAtmosphere {
     float sun_azimuth_deg;
     float sun_disc_deg;
     vec3 sun_dir; // unit vector TOWARD the sun (derived; sky_update_sun_dir)
+
+    // Optional coupling to the scene's directional key light (set by the app
+    // once; NULL = pure-IBL sky). sky_apply_sun_to_light retints/redirects it
+    // from the atmosphere so a sun move drives the shadows and fog too.
+    struct Light* sun_light;
+    float sun_base_intensity; // key-light intensity at full elevation
 
     GLuint transmittance_lut; // 256x64  RGBA16F, baked once
     GLuint multiscatter_lut;  // 32x32   RGBA16F, baked once
@@ -89,6 +96,18 @@ int sky_bake_static_luts(SkyAtmosphere* sky, struct Engine* engine);
 // passed IBLResources so the whole downstream (skybox/IBL/probe/fog) follows
 // the sun. Call after sky_bake_static_luts and after setting sun_dir.
 int sky_bake(SkyAtmosphere* sky, struct IBLResources* ibl, struct Engine* engine);
+
+// Apply the current sun to the coupled key light (sky->sun_light): direction
+// away from the sun, color from atmospheric transmittance, intensity faded to
+// zero as the disc sinks below the horizon (shadows off once it fades out).
+// No-op when no light is coupled. The single owner of the sun->light policy,
+// shared by the app's setup and the GUI's live re-bake.
+void sky_apply_sun_to_light(SkyAtmosphere* sky);
+
+// One "the sun moved" entry point: re-derive sun_dir, re-bake everything the
+// sun drives (sky_bake) and retint the coupled key light. Used by the GUI's
+// dynamic sun; cheap enough (small env) to run live per slider change.
+int sky_update_sun(SkyAtmosphere* sky, struct IBLResources* ibl, struct Engine* engine);
 
 // Draw the procedural sky as the frame background (sky-view LUT + analytic
 // sun disc), replacing render_skybox in sky mode. Strips translation from

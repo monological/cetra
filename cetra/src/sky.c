@@ -5,6 +5,7 @@
 #include "sky.h"
 #include "engine.h"
 #include "ibl.h"
+#include "light.h"
 #include "util.h"
 #include "ext/log.h"
 
@@ -361,7 +362,45 @@ int sky_bake(SkyAtmosphere* sky, struct IBLResources* ibl, struct Engine* engine
         return -1;
     double t2 = glfwGetTime();
 
+    // The sun is the single authoritative directional lobe toward the sun (the
+    // extract_light_lobes convention); keep it in sync on every re-bake so a
+    // moving sun stays coherent with the specular-occlusion term.
+    glm_vec3_copy(sky->sun_dir, ibl->light_dirs[0]);
+    ibl->light_energies[0] = 1.0f;
+    ibl->light_count = 1;
+
     log_info("Sky bake: view+env %.1f ms, IBL %.1f ms", (t1 - t0) * 1000.0, (t2 - t1) * 1000.0);
+    return 0;
+}
+
+void sky_apply_sun_to_light(SkyAtmosphere* sky) {
+    if (!sky || !sky->sun_light)
+        return;
+
+    // Direction: the light travels away from the sun. Color: atmospheric
+    // transmittance toward the disc (warm near the horizon). Intensity: the
+    // base scaled by a fade that reaches zero as the disc sinks below the
+    // horizon, so a night sky casts no direct light (and no shadow).
+    vec3 travel;
+    glm_vec3_negate_to(sky->sun_dir, travel);
+    set_light_direction(sky->sun_light, travel);
+
+    vec3 color = {0};
+    sky_sun_transmittance(sky, color);
+    set_light_color(sky->sun_light, color);
+
+    float fade = glm_clamp(sky->sun_elevation_deg / 3.0f, 0.0f, 1.0f);
+    set_light_intensity(sky->sun_light, sky->sun_base_intensity * fade);
+    set_light_cast_shadows(sky->sun_light, fade > 0.0f);
+}
+
+int sky_update_sun(SkyAtmosphere* sky, struct IBLResources* ibl, struct Engine* engine) {
+    if (!sky)
+        return -1;
+    sky_update_sun_dir(sky);
+    if (sky_bake(sky, ibl, engine) != 0)
+        return -1;
+    sky_apply_sun_to_light(sky);
     return 0;
 }
 

@@ -1256,6 +1256,38 @@ static void _engine_gui_panel(Engine* engine) {
 
     if (scene && scene->render_skybox && scene->ibl &&
         igCollapsingHeader_TreeNodeFlags("Environment", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (scene->sky) {
+            SkyAtmosphere* sky = scene->sky;
+            igSeparatorText("Sky");
+            // Elevation dips a few degrees below the horizon for dusk; the
+            // atmosphere fades the key light out there. A sun move re-derives
+            // the direction and re-bakes the LUT/env/IBL live (cheap at this
+            // env size) and retints the coupled key light through one path.
+            bool sun_moved = false;
+            bool sun_released = false;
+            sun_moved |= igSliderFloat("Sun Elevation", &sky->sun_elevation_deg, -6.0f, 89.0f,
+                                       "%.1f", 0);
+            sun_released |= igIsItemDeactivatedAfterEdit();
+            sun_moved |= igSliderFloat("Sun Azimuth", &sky->sun_azimuth_deg, 0.0f, 360.0f, "%.1f",
+                                       0);
+            sun_released |= igIsItemDeactivatedAfterEdit();
+            // Disc size feeds only the analytic background sun (sampled live);
+            // it is not in the env cube, so it needs no re-bake.
+            igSliderFloat("Sun Disc", &sky->sun_disc_deg, 0.1f, 3.0f, "%.2f", 0);
+            if (sun_moved)
+                sky_update_sun(sky, scene->ibl, engine);
+            // On release, refresh a probe that only mirrors the sky
+            // (environment-only: probe->cubemap == 0). A scene-captured probe
+            // (--probe-scene) is left stale -- re-rendering the scene per sun
+            // move is too costly; its baked reflections stay as shot.
+            if (sun_released && scene->probe) {
+                if (scene->probe->cubemap == 0)
+                    reflection_probe_capture(scene->probe, engine, scene, 0.1f, 100.0f, true);
+                else
+                    log_info("Sky: scene-captured probe not refreshed on sun move");
+            }
+        }
+
         _begin_effect_group("Ground Projection", &scene->skybox_ground_projection);
         // Log scale + wide range: the dome radius is a world-space distance
         // apps typically scale to the scene, anywhere from a few units
