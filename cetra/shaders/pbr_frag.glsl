@@ -91,6 +91,8 @@ uniform int sceneColorAvailable;     // 1 only in the late pass after the resolv
 // generation stops here too -- keep in step with OPAQUE_COLOR_MAX_LOD)
 const float TRANSMISSION_MAX_LOD = 6.0;
 uniform float filmThickness;
+uniform float clearcoat;          // KHR_materials_clearcoat weight (0 = no coat lobe)
+uniform float clearcoatRoughness; // coat lobe roughness
 uniform vec2 uvOffset;      // Texture coordinate offset (KHR_texture_transform)
 uniform vec2 uvScale;       // Texture coordinate scale (KHR_texture_transform)
 uniform float uvRotation;   // Texture coordinate rotation in radians
@@ -169,6 +171,7 @@ uniform float iblIntensity;
 uniform float maxReflectionLOD;
 // Multi-scatter energy compensation toggle (inert unless iblEnabled)
 uniform int energyCompEnabled;
+uniform int clearcoatEnabled; // Global clearcoat lobe toggle (--no-clearcoat)
 
 // Local reflection probe: the scene captured into a prefiltered cubemap,
 // parallax-corrected against a proxy AABB (Lagarde 2012). When enabled, the

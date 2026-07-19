@@ -92,6 +92,9 @@ typedef struct Engine {
     bool refraction_enabled;    // Screen-space refraction for transmissive materials;
                                 // off = no resolve, and the shader treats transmission
                                 // as 0 (glass renders as a plain lit surface)
+    bool clearcoat_enabled;     // KHR_materials_clearcoat second specular lobe; off
+                                // skips the lobe (materials with clearcoat 0 are
+                                // unaffected either way)
 
     mat4 model_matrix;
     mat4 view_matrix;

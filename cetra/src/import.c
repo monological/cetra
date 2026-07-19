@@ -237,6 +237,23 @@ static void extract_material_properties(struct aiMaterial* ai_mat, Material* mat
         }
     }
 
+    // KHR_materials_clearcoat: a thin smooth dielectric coat over the base
+    // BRDF (car paint, lacquer, varnish). glTF-only, so the guarded reads
+    // leave FBX/OBJ at the scalar defaults (no coat).
+    ai_real clearcoat;
+    if (AI_SUCCESS == aiGetMaterialFloat(ai_mat, AI_MATKEY_CLEARCOAT_FACTOR, &clearcoat)) {
+        material->clearcoat = clearcoat;
+        if (clearcoat > 0.0f) {
+            ai_real coat_rough;
+            if (AI_SUCCESS ==
+                aiGetMaterialFloat(ai_mat, AI_MATKEY_CLEARCOAT_ROUGHNESS_FACTOR, &coat_rough)) {
+                material->clearcoat_roughness = coat_rough;
+            }
+            log_info("Material has clearcoat: factor=%.2f roughness=%.2f", material->clearcoat,
+                     material->clearcoat_roughness);
+        }
+    }
+
     // Extract UV transform (KHR_texture_transform) from base color texture
     struct aiUVTransform uvTransform;
     if (AI_SUCCESS == aiGetMaterialFloatArray(ai_mat, AI_MATKEY_UVTRANSFORM(aiTextureType_DIFFUSE, 0),

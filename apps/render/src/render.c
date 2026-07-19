@@ -101,6 +101,7 @@ typedef struct {
     float specular_aa;                 // Specular AA strength override (-1 = default)
     int no_energy_comp;                // Disable multi-scatter energy compensation
     int no_refraction;                 // Disable screen-space refraction
+    int no_clearcoat;                  // Disable the clearcoat second specular lobe
     int no_bloom;                      // Disable bloom
     int tonemap_mode;                  // PostFXTonemapMode override (0 = keep default;
                                        // coincides with PASSTHROUGH, which is a blit
@@ -185,6 +186,7 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --no-specular-aa   Disable specular anti-aliasing\n");
     fprintf(stderr, "      --no-energy-comp   Disable multi-scatter specular energy comp\n");
     fprintf(stderr, "      --no-refraction    Disable screen-space refraction\n");
+    fprintf(stderr, "      --no-clearcoat     Disable the clearcoat specular lobe\n");
     fprintf(stderr, "      --no-bloom         Disable bloom\n");
     fprintf(stderr, "      --tonemap <m>      Tonemap mode: aces, neutral, agx (default: neutral)\n");
     fprintf(stderr, "      --ssaa <int>       Supersampling factor (default: 1 = off; 2 = 2x SSAA)\n");
@@ -510,6 +512,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->no_energy_comp = 1;
         } else if (strcmp(argv[i], "--no-refraction") == 0) {
             args->no_refraction = 1;
+        } else if (strcmp(argv[i], "--no-clearcoat") == 0) {
+            args->no_clearcoat = 1;
         } else if (strcmp(argv[i], "--no-bloom") == 0) {
             args->no_bloom = 1;
         } else if (strcmp(argv[i], "--tonemap") == 0) {
@@ -1091,6 +1095,9 @@ int main(int argc, char** argv) {
     }
     if (args.no_refraction) {
         engine->refraction_enabled = false;
+    }
+    if (args.no_clearcoat) {
+        engine->clearcoat_enabled = false;
     }
     if (engine->postfx) {
         PostFX* fx = engine->postfx;

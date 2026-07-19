@@ -53,10 +53,12 @@ typedef struct Material {
     float thickness;     // KHR_materials_volume thickness in world units (0 = thin: no
                          // refraction bend, only tint/blur)
     float filmThickness; // Thin-film thickness in nanometers (0 = disabled, 200-600nm typical)
-    vec2 uvOffset;       // Texture coordinate offset (KHR_texture_transform)
-    vec2 uvScale;        // Texture coordinate scale (KHR_texture_transform)
-    float uvRotation;    // Texture coordinate rotation in radians (KHR_texture_transform)
-    bool doubleSided;    // Disable backface culling for this material
+    float clearcoat;     // KHR_materials_clearcoat weight (0 = no coat lobe)
+    float clearcoat_roughness; // Clearcoat lobe roughness (glTF default 0 = mirror-smooth)
+    vec2 uvOffset;             // Texture coordinate offset (KHR_texture_transform)
+    vec2 uvScale;              // Texture coordinate scale (KHR_texture_transform)
+    float uvRotation;          // Texture coordinate rotation in radians (KHR_texture_transform)
+    bool doubleSided;          // Disable backface culling for this material
 
     // Core PBR Textures
     Texture* albedo_tex;            // Albedo (Diffuse) Map

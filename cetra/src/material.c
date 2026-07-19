@@ -32,6 +32,8 @@ Material* create_material() {
     material->transmission = 0.0f;
     material->thickness = 0.0f;
     material->filmThickness = 0.0f;
+    material->clearcoat = 0.0f;
+    material->clearcoat_roughness = 0.0f;
     glm_vec2_zero(material->uvOffset);
     glm_vec2_one(material->uvScale);
     material->uvRotation = 0.0f;

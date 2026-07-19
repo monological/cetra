@@ -1,0 +1,132 @@
+#!/usr/bin/env python3
+"""Generate assets/clearcoat_fixture.gltf, the clearcoat (4.10) test asset.
+
+A row of UV spheres exercising KHR_materials_clearcoat, meant to be viewed under
+an HDR environment (-e ...) so the smooth coat lobe reflects the surroundings:
+  - car_paint      : dark-red dielectric base (rough 0.55) + clearcoat 1.0,
+                     coat roughness 0.03 -> a broad soft base highlight PLUS a
+                     tight sharp coat highlight/reflection (the dual-lobe look)
+  - car_paint_nocoat: the same base with NO clearcoat, for an in-frame A/B of
+                      what the coat adds (the global --no-clearcoat flag also
+                      toggles it)
+  - carbon         : near-black metallic base (rough 0.4) + clearcoat 1.0, coat
+                     roughness 0.05 -> lacquered carbon-fibre look
+Geometry is one shared UV sphere; materials are flat factors (no textures), so
+the fixture has no external dependencies. Regenerate with:
+  python3 assets/gen_clearcoat_fixture.py
+"""
+
+import base64
+import json
+import struct
+import math
+import os
+
+# ---- one unit UV sphere (radius 0.5), position + normal + uv ---------------
+STACKS = 48
+SECTORS = 96
+positions, normals, uvs, indices = [], [], [], []
+for i in range(STACKS + 1):
+    phi = math.pi * i / STACKS  # 0..pi (top to bottom)
+    for j in range(SECTORS + 1):
+        theta = 2.0 * math.pi * j / SECTORS  # 0..2pi
+        nx = math.sin(phi) * math.cos(theta)
+        ny = math.cos(phi)
+        nz = math.sin(phi) * math.sin(theta)
+        positions.append((0.5 * nx, 0.5 * ny, 0.5 * nz))
+        normals.append((nx, ny, nz))
+        uvs.append((j / SECTORS, i / STACKS))
+for i in range(STACKS):
+    for j in range(SECTORS):
+        a = i * (SECTORS + 1) + j
+        b = a + SECTORS + 1
+        indices += [a, b, a + 1, a + 1, b, b + 1]
+
+pos_bytes = b"".join(struct.pack("<3f", *p) for p in positions)
+nrm_bytes = b"".join(struct.pack("<3f", *n) for n in normals)
+uv_bytes = b"".join(struct.pack("<2f", *u) for u in uvs)
+idx_bytes = b"".join(struct.pack("<I", i) for i in indices)
+buffer_bytes = pos_bytes + nrm_bytes + uv_bytes + idx_bytes
+
+pmin = [min(p[k] for p in positions) for k in range(3)]
+pmax = [max(p[k] for p in positions) for k in range(3)]
+
+
+def material(name, color, rough, metallic=0.0, clearcoat=None, coat_rough=None):
+    m = {
+        "name": name,
+        "pbrMetallicRoughness": {
+            "baseColorFactor": list(color) + [1.0],
+            "metallicFactor": metallic,
+            "roughnessFactor": rough,
+        },
+    }
+    if clearcoat is not None:
+        cc = {"clearcoatFactor": clearcoat}
+        if coat_rough is not None:
+            cc["clearcoatRoughnessFactor"] = coat_rough
+        m["extensions"] = {"KHR_materials_clearcoat": cc}
+    return m
+
+
+materials = [
+    material("car_paint", (0.35, 0.02, 0.03), 0.55, clearcoat=1.0, coat_rough=0.03),
+    material("car_paint_nocoat", (0.35, 0.02, 0.03), 0.55),
+    material("carbon", (0.02, 0.02, 0.025), 0.4, metallic=1.0, clearcoat=1.0, coat_rough=0.05),
+]
+
+# (material index, x translation) -- a row spaced along X at eye height
+nodes_spec = [(0, -1.2), (1, 0.0), (2, 1.2)]
+
+gltf = {
+    "asset": {"version": "2.0", "generator": "gen_clearcoat_fixture.py"},
+    "extensionsUsed": ["KHR_materials_clearcoat"],
+    "scene": 0,
+    "scenes": [{"nodes": list(range(len(nodes_spec)))}],
+    "nodes": [
+        {"name": materials[mat]["name"], "mesh": i, "translation": [x, 0.0, 0.0]}
+        for i, (mat, x) in enumerate(nodes_spec)
+    ],
+    "meshes": [
+        {
+            "name": materials[mat]["name"],
+            "primitives": [
+                {
+                    "attributes": {"POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2},
+                    "indices": 3,
+                    "material": mat,
+                }
+            ],
+        }
+        for mat, _ in nodes_spec
+    ],
+    "materials": materials,
+    "accessors": [
+        {"bufferView": 0, "componentType": 5126, "count": len(positions), "type": "VEC3",
+         "min": pmin, "max": pmax},
+        {"bufferView": 1, "componentType": 5126, "count": len(normals), "type": "VEC3"},
+        {"bufferView": 2, "componentType": 5126, "count": len(uvs), "type": "VEC2"},
+        {"bufferView": 3, "componentType": 5125, "count": len(indices), "type": "SCALAR"},
+    ],
+    "bufferViews": [
+        {"buffer": 0, "byteOffset": 0, "byteLength": len(pos_bytes), "target": 34962},
+        {"buffer": 0, "byteOffset": len(pos_bytes), "byteLength": len(nrm_bytes), "target": 34962},
+        {"buffer": 0, "byteOffset": len(pos_bytes) + len(nrm_bytes), "byteLength": len(uv_bytes),
+         "target": 34962},
+        {"buffer": 0, "byteOffset": len(pos_bytes) + len(nrm_bytes) + len(uv_bytes),
+         "byteLength": len(idx_bytes), "target": 34963},
+    ],
+    "buffers": [
+        {
+            "uri": "data:application/octet-stream;base64,"
+            + base64.b64encode(buffer_bytes).decode("ascii"),
+            "byteLength": len(buffer_bytes),
+        }
+    ],
+}
+
+out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "clearcoat_fixture.gltf")
+with open(out, "w") as f:
+    json.dump(gltf, f, indent=1)
+    f.write("\n")
+print("wrote", out, "(", len(buffer_bytes), "buffer bytes )")
