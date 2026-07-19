@@ -11,7 +11,11 @@
 #define MAX_SHADOW_LIGHTS       3
 #define SHADOW_CASCADES         3 // Compile-time cascade ceiling (runtime: cascade_count)
 #define DEFAULT_SHADOW_MAP_SIZE 2048
-#define SHADOW_MAP_TEXTURE_UNIT 13
+// Engine-owned sampler units sit just above the material units (common.h).
+// Packing the scalar masks into one array freed the 10-12 range, letting the
+// shadow + IBL units drop below 16 so brdfLUT/skybox are no longer bound
+// out of spec (GL_MAX_TEXTURE_IMAGE_UNITS = 16, valid 0-15).
+#define SHADOW_MAP_TEXTURE_UNIT 10
 
 // Forward declarations
 struct Scene;

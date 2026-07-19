@@ -356,9 +356,9 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
                 // Set IBL sampler uniforms to their designated texture units even when disabled
                 // This prevents type mismatch when samplerCube defaults to unit 0 (which has 2D
                 // textures)
-                uniform_set_int(u, "irradianceMap", 14);
-                uniform_set_int(u, "prefilteredMap", 15);
-                uniform_set_int(u, "brdfLUT", 16);
+                uniform_set_int(u, "irradianceMap", IBL_IRRADIANCE_TEXTURE_UNIT);
+                uniform_set_int(u, "prefilteredMap", IBL_PREFILTER_TEXTURE_UNIT);
+                uniform_set_int(u, "brdfLUT", IBL_BRDF_LUT_TEXTURE_UNIT);
                 uniform_set_int(u, "iblEnabled", 0);
             }
 

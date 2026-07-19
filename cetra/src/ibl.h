@@ -13,10 +13,15 @@
 #define IBL_PREFILTER_MIP_LEVELS 9
 #define IBL_BRDF_LUT_SIZE        512
 
-#define IBL_IRRADIANCE_TEXTURE_UNIT 14
-#define IBL_PREFILTER_TEXTURE_UNIT  15
-#define IBL_BRDF_LUT_TEXTURE_UNIT   16
-#define IBL_SKYBOX_TEXTURE_UNIT     17
+// Relocated below 16 after the scalar-mask array freed the mid material units
+// (see shadow.h). All engine sampler units now bind within
+// GL_MAX_TEXTURE_IMAGE_UNITS (16); brdfLUT/skybox were previously at 16/17.
+#define IBL_IRRADIANCE_TEXTURE_UNIT 11
+#define IBL_PREFILTER_TEXTURE_UNIT  12
+#define IBL_BRDF_LUT_TEXTURE_UNIT   13
+#define IBL_SKYBOX_TEXTURE_UNIT     14
+_Static_assert(IBL_SKYBOX_TEXTURE_UNIT < 16,
+               "engine sampler units must stay within GL_MAX_TEXTURE_IMAGE_UNITS");
 
 // Max bright light lobes extracted from an HDR (matches MAX_SHADOW_LIGHTS)
 #define IBL_MAX_EXTRACTED_LIGHTS 3
