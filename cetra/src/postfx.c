@@ -276,7 +276,7 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
         return NULL;
     }
     // Resolve target for the scene pass's second color attachment
-    // (view-space normals + roughness); RGBA16F to match the MSAA source
+    // (view-space normal .xyz + SSR marker .a); RGBA16F to match the MSAA source
     if (!create_color_fbo(fx->width, fx->height, GL_RGBA16F, &fx->normal_fbo,
                           &fx->normal_texture)) {
         free_postfx(fx);
@@ -1015,7 +1015,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             fx->taa_history.valid = false;
         }
 
-        // Resolve the scene pass's second attachment (normals + roughness)
+        // Resolve the scene pass's second attachment (normal .xyz + SSR marker .a)
         // ahead of its consumers (SSAO now, SSR later). The caller reports
         // whether the attachment was written this frame; re-deriving it from
         // fx flags here could disagree with what the scene pass produced.
@@ -1367,8 +1367,8 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         // Specular occlusion keeps GTAO off reflections. Needs the aux buffer
         // (linZ + roughness) and the normals; both ride the same AO-on gating,
         // so require them here too. Metallic is opportunistic (SSGI's albedo).
-        uniform_set_int(tm, "specOccEnabled",
-                        (fx->spec_occlusion_enabled && aux_written && have_normals) ? 1 : 0);
+        const bool spec_occ_active = fx->spec_occlusion_enabled && aux_written && have_normals;
+        uniform_set_int(tm, "specOccEnabled", spec_occ_active ? 1 : 0);
         uniform_set_int(tm, "specOccHasMetallic", albedo_written ? 1 : 0);
         const float inv_focal[2] = {1.0f / projection[0][0], 1.0f / projection[1][1]};
         uniform_set_vec2(tm, "invFocal", inv_focal);
@@ -1381,7 +1381,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             (debug_view == POSTFX_DEBUG_ALBEDO && !albedo_written) ||
             (debug_view == POSTFX_DEBUG_SSGI && !ssgi_active) ||
             (debug_view == POSTFX_DEBUG_FOG && fog_result_tex == 0) ||
-            (debug_view == POSTFX_DEBUG_SPEC_OCC && !fx->ssao_enabled)) {
+            (debug_view == POSTFX_DEBUG_SPEC_OCC && !spec_occ_active)) {
             static PostFXDebugView warned_view = POSTFX_DEBUG_NONE;
             if (warned_view != debug_view) {
                 log_warn("debug view %d suppressed: its source buffer is disabled",

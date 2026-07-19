@@ -143,14 +143,6 @@ vec3 toneSelect(vec3 c)
     return pbrNeutralTonemap(c);
 }
 
-// View-space position from screen UV + stored linear view-Z (RH, z<0). Matches
-// the GTAO reconstruction so spec-occ and GTAO agree on the reconstructed NdotV.
-vec3 viewPosFromLinZ(vec2 uv, float linZ, vec2 invF)
-{
-    vec2 ndc = uv * 2.0 - 1.0;
-    return vec3(ndc * (-linZ) * invF, linZ);
-}
-
 // Screen-space AO visibility with specular occlusion. GTAO measures DIFFUSE
 // hemispherical occlusion; a smooth reflection instead sees the environment in
 // its mirror direction, past the local occluders GTAO sampled -- so it must not
@@ -169,9 +161,13 @@ float aoVisibility()
     // marker), and a > -0.5 excludes the shadow-catcher floor (a = -1).
     if (dot(nrm.xyz, nrm.xyz) < 0.01 || nrm.a <= -0.5)
         return ao;
-    vec4 aux = texture(auxTex, TexCoords);
-    vec3 P = viewPosFromLinZ(TexCoords, aux.z, invFocal);
-    float NdotV = clamp(dot(normalize(nrm.xyz), normalize(-P)), 0.0, 1.0);
+    vec4 aux = texture(auxTex, TexCoords); // .w = effective roughness
+    // View direction from screen UV. normalize(-viewPos) is independent of depth
+    // (same direction everywhere along a camera ray), so linZ cancels -- no need
+    // to reconstruct the view position, just the ray direction from NDC + focal.
+    vec2 ndc = TexCoords * 2.0 - 1.0;
+    vec3 V = normalize(vec3(-ndc * invFocal, 1.0));
+    float NdotV = clamp(dot(normalize(nrm.xyz), V), 0.0, 1.0);
     float metallic = specOccHasMetallic == 1 ? texture(albedoTex, TexCoords).a : 0.0;
     float fresnel = 0.04 + 0.96 * pow(1.0 - NdotV, 5.0); // dielectric specular fraction
     float specWeight = mix(fresnel, 1.0, metallic) * (1.0 - aux.w); // x mirror-ness

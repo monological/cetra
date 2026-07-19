@@ -1,8 +1,8 @@
 #version 330 core
 in vec3 WorldPos;
 layout(location = 0) out vec4 FragColor;
-// G-buffer for SSR: view-space up-normal + the floor's roughness. Only
-// lands when the engine enables color attachment 1 around this draw.
+// G-buffer for SSR: view-space up-normal .xyz + the reflective marker .a (see
+// the write below). Only lands when the engine enables color attachment 1.
 layout(location = 1) out vec4 NormalOut;
 // When SSR enables the G-buffer around this draw, EVERY attachment in the
 // draw-buffer list must be written -- an unwritten one is undefined, and

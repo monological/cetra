@@ -69,7 +69,7 @@ typedef struct PostFX {
     int bloom_mips;
     GLuint depth_fbo; // Full-res resolved scene depth (blit target)
     GLuint depth_texture;
-    GLuint normal_fbo; // Full-res resolved view-space normals + roughness
+    GLuint normal_fbo; // Full-res resolved view-space normal .xyz + SSR marker .a
     GLuint normal_texture;
     GLuint ssao_fbo[2]; // Half-res: [0] raw AO, [1] blurred AO
     GLuint ssao_texture[2];
