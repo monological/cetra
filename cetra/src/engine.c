@@ -1386,6 +1386,7 @@ static void _engine_gui_panel(Engine* engine) {
                       ImGuiSliderFlags_Logarithmic);
         igSliderFloat("AO Strength", &fx->ssao_strength, 0.0f, 1.0f, "%.2f", 0);
         igCheckbox("Specular Occlusion", &fx->spec_occlusion_enabled);
+        igCheckbox("AO Edge Filter", &fx->ao_edge_filter_enabled);
         _end_effect_group();
 
         _begin_effect_group("SSR", &fx->ssr_enabled);

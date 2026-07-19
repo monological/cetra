@@ -77,6 +77,7 @@ typedef struct {
     int no_ssao;                       // Disable screen-space ambient occlusion
     int ssao_debug;                    // Show the raw SSAO buffer
     int no_spec_occlusion;             // Let GTAO darken specular (disable spec-occ)
+    int no_ao_edge_filter;             // Disable the depth-aware AO blur (allow silhouette bleed)
     int ssgi;                          // Enable screen-space GI (indirect diffuse)
     int ssgi_debug;                    // Show the raw gathered GI radiance
     int probe;                         // Enable the local reflection probe
@@ -165,6 +166,7 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --no-ssao          Disable screen-space ambient occlusion\n");
     fprintf(stderr, "      --ssao-debug       Show the raw SSAO buffer\n");
     fprintf(stderr, "      --no-spec-occlusion Let GTAO darken specular (disable spec-occlusion)\n");
+    fprintf(stderr, "      --no-ao-edge-filter Disable the depth-aware AO blur\n");
     fprintf(stderr, "      --ao-radius <f>    AO/GI reach in world units (default: scene-scaled)\n");
     fprintf(stderr, "      --no-normals-mrt   Disable the normals G-buffer (SSAO/SSR input)\n");
     fprintf(stderr, "      --normals-debug    Show the resolved normals G-buffer\n");
@@ -422,6 +424,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->ssao_debug = 1;
         } else if (strcmp(argv[i], "--no-spec-occlusion") == 0) {
             args->no_spec_occlusion = 1;
+        } else if (strcmp(argv[i], "--no-ao-edge-filter") == 0) {
+            args->no_ao_edge_filter = 1;
         } else if (strcmp(argv[i], "--ssgi") == 0) {
             args->ssgi = 1;
         } else if (strcmp(argv[i], "--ssgi-debug") == 0) {
@@ -1064,6 +1068,9 @@ int main(int argc, char** argv) {
     }
     if (args.no_spec_occlusion && engine->postfx) {
         engine->postfx->spec_occlusion_enabled = false;
+    }
+    if (args.no_ao_edge_filter && engine->postfx) {
+        engine->postfx->ao_edge_filter_enabled = false;
     }
     if (args.ssao_debug && engine->postfx) {
         engine->postfx->debug_view = POSTFX_DEBUG_AO;

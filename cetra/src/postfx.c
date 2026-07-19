@@ -164,6 +164,7 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     fx->ssao_radius = 0.4f;
     fx->ssao_strength = 0.8f;
     fx->spec_occlusion_enabled = true; // Keep GTAO off specular; on when AO is on
+    fx->ao_edge_filter_enabled = true; // Depth-aware AO blur (no silhouette bleed)
     fx->ssgi_enabled = false; // experimental; off by default
     fx->ssgi_intensity = 1.0f;
     fx->normals_enabled = true;
@@ -469,6 +470,7 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
 
     glUseProgram(fx->ssao_blur_program->id);
     uniform_set_int(fx->ssao_blur_program->uniforms, "aoTex", 0);
+    uniform_set_int(fx->ssao_blur_program->uniforms, "auxTex", 1); // linZ for the bilateral weight
     const float ao_texel[2] = {1.0f / (float)fx->ssao_width, 1.0f / (float)fx->ssao_height};
     uniform_set_vec2(fx->ssao_blur_program->uniforms, "texelSize", ao_texel);
 
@@ -1087,11 +1089,16 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             draw_fullscreen_quad(fx->quad_vao);
 
             if (fx->ssao_enabled) {
-                // 4x4 box blur cancels the rotation-noise tile
+                // 4x4 box blur cancels the rotation-noise tile; depth-bilateral
+                // when the edge filter is on so it does not bleed across silhouettes.
                 glBindFramebuffer(GL_FRAMEBUFFER, fx->ssao_fbo[1]);
                 glUseProgram(fx->ssao_blur_program->id);
                 glActiveTexture(GL_TEXTURE0);
                 glBindTexture(GL_TEXTURE_2D, fx->ssao_texture[0]);
+                glActiveTexture(GL_TEXTURE1);
+                glBindTexture(GL_TEXTURE_2D, fx->aux_texture);
+                uniform_set_int(fx->ssao_blur_program->uniforms, "edgeAware",
+                                fx->ao_edge_filter_enabled ? 1 : 0);
                 draw_fullscreen_quad(fx->quad_vao);
 
                 // Temporal accumulation: reproject the history by velocity and

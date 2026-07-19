@@ -128,7 +128,8 @@ typedef struct PostFX {
     bool ssao_enabled;
     float ssao_radius; // Occlusion reach in view-space units
     float ssao_strength;
-    bool spec_occlusion_enabled; // Keep GTAO off specular/reflections (Lagarde spec-occ at tonemap)
+    bool spec_occlusion_enabled; // Keep GTAO off specular/reflections (spec-occ at tonemap)
+    bool ao_edge_filter_enabled; // Depth-bilateral AO blur (no silhouette bleed onto the floor)
     bool ssgi_enabled;    // Screen-space GI: one-bounce indirect diffuse (extends the GTAO sweep)
     float ssgi_intensity; // Composite multiplier on the gathered indirect radiance
     bool normals_enabled; // Master switch for the normals G-buffer (MRT)
