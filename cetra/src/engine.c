@@ -1403,6 +1403,8 @@ static void _engine_gui_panel(Engine* engine) {
         if (igCheckbox("SSR Full Res", &ssr_full_res))
             postfx_set_ssr_full_res(fx, ssr_full_res);
         igCheckbox("SSR Temporal (needs TAA)", &fx->ssr_temporal);
+        igCheckbox("SSR Denoise", &fx->ssr_denoise);
+        igSliderFloat("SSR Jitter", &fx->ssr_jitter, 0.0f, 0.2f, "%.3f", 0);
         _end_effect_group();
 
         _begin_effect_group("SSGI", &fx->ssgi_enabled);

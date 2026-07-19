@@ -26,6 +26,15 @@ uniform float floorRoughness; // Roughness of the reflective floor
 uniform float maxRoughness;   // Reflections fade out toward this roughness
 uniform float strength;       // Reflection strength (folded into the weight)
 
+// Stochastic march (SSR denoiser): perturb the reflection ray per pixel + per
+// frame so the deterministic Hi-Z traversal's step/cell grid stops producing
+// fixed-position stripes and instead scatters them into per-frame noise, which
+// the temporal accumulator + a-trous denoise then resolve. Off -> the exact
+// deterministic ray, bit-identical.
+uniform int ssrStochastic;   // 1 = jitter the reflection ray
+uniform int ssrFrameIndex;   // Advances the per-frame random
+uniform float ssrJitter;     // Base ray-jitter spread (a floor under roughness)
+
 // Local reflection probe fallback for rays the march cannot answer
 uniform mat4 invView;         // view -> world (camera pose)
 uniform samplerCube probeTex; // prefiltered local probe capture
@@ -108,6 +117,23 @@ void main()
     vec3 fragPos = viewPosFromDepth(TexCoords, depth);
     vec3 viewDir = normalize(fragPos); // camera at the view-space origin
     vec3 R = normalize(reflect(viewDir, n));
+
+    if (ssrStochastic == 1) {
+        // Cosine-ish disk jitter in R's tangent frame, spread by roughness with
+        // a small floor so even the near-mirror grid breaks up. The per-frame
+        // index rotates the interleaved-gradient noise so each frame draws a
+        // different sample; the temporal accumulator averages them.
+        vec2 fc = gl_FragCoord.xy + vec2(float(ssrFrameIndex) * 5.588238);
+        float r0 = fract(52.9829189 * fract(0.06711056 * fc.x + 0.00583715 * fc.y));
+        float r1 = fract(52.9829189 * fract(0.06711056 * (fc.y + 41.0) + 0.00583715 * fc.x));
+        float spread = max(floorRoughness, ssrJitter);
+        float ang = 6.2831853 * r0;
+        float rad = spread * sqrt(r1);
+        vec3 up = abs(R.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+        vec3 tang = normalize(cross(up, R));
+        vec3 bitang = cross(R, tang);
+        R = normalize(R + (cos(ang) * tang + sin(ang) * bitang) * rad);
+    }
 
     // The probe answer for this ray, computed once for every exit below:
     // full fallback on a miss, the faded tail's filler on a partial hit.

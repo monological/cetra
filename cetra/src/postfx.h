@@ -144,8 +144,11 @@ typedef struct PostFX {
     float ssr_floor_roughness; // Roughness the shadow catcher publishes
     bool ssr_temporal;         // Temporally accumulate the reflection (needs TAA; averages march
                                // step-banding into a smooth reflection)
-    bool ssr_full_res;         // Trace SSR at full res (sharp; kills the half-res march's serrated
-                               // reflection edges); off = half-res, byte-identical to the old path
+    bool ssr_denoise;          // SSR denoiser: stochastic march (grid stripes -> noise) + spatial
+                      // a-trous, so temporal/a-trous can resolve it into a clean reflection
+    float ssr_jitter;  // Base stochastic ray-jitter spread (floor under roughness)
+    bool ssr_full_res; // Trace SSR at full res (sharp; kills the half-res march's serrated
+                       // reflection edges); off = half-res, byte-identical to the old path
 
     // Local reflection probe, filled per frame by the engine from the current
     // scene (postfx never learns about Scene): the SSR pass samples it where

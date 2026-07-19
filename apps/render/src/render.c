@@ -100,6 +100,8 @@ typedef struct {
     int no_ssr;                        // Disable screen-space reflections
     int no_ssr_full_res;               // Trace SSR at half res (the old, serrated path)
     int no_ssr_temporal;               // Disable SSR temporal accumulation (raw single-frame march)
+    int no_ssr_denoise;                // Disable the SSR denoiser (deterministic march, no jitter)
+    float ssr_jitter;                  // SSR stochastic ray-jitter spread override (-1 = default)
     int ssr_debug;                     // Show the reflection buffer
     float ssr_strength;                // SSR strength override (-1 = default)
     float specular_aa;                 // Specular AA strength override (-1 = default)
@@ -189,6 +191,8 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --no-ssr           Disable screen-space reflections\n");
     fprintf(stderr, "      --no-ssr-full-res  Trace SSR at half res (old serrated path)\n");
     fprintf(stderr, "      --no-ssr-temporal  Disable SSR temporal accumulation (needs TAA)\n");
+    fprintf(stderr, "      --no-ssr-denoise   Disable the SSR denoiser (deterministic march)\n");
+    fprintf(stderr, "      --ssr-jitter <f>   SSR stochastic ray-jitter spread (default: 0.03)\n");
     fprintf(stderr, "      --ssr-debug        Show the reflection buffer\n");
     fprintf(stderr, "      --ssr-strength <f> Reflection strength (default: 1)\n");
     fprintf(stderr, "      --ssgi             Enable screen-space GI (one-bounce indirect diffuse)\n");
@@ -253,6 +257,7 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->height = DEFAULT_HEIGHT;
     args->specular_aa = -1.0f;    // -1 = keep the engine default
     args->ssr_strength = -1.0f;   // -1 = keep the engine default
+    args->ssr_jitter = -1.0f;     // -1 = keep the engine default
     args->vignette = -1.0f;
     args->grain = -1.0f;
     args->sharpen = -1.0f;
@@ -563,6 +568,14 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->no_ssr_full_res = 1;
         } else if (strcmp(argv[i], "--no-ssr-temporal") == 0) {
             args->no_ssr_temporal = 1;
+        } else if (strcmp(argv[i], "--no-ssr-denoise") == 0) {
+            args->no_ssr_denoise = 1;
+        } else if (strcmp(argv[i], "--ssr-jitter") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->ssr_jitter = (float)atof(argv[i]);
         } else if (strcmp(argv[i], "--ssr-debug") == 0) {
             args->ssr_debug = 1;
         } else if (strcmp(argv[i], "--ssr-strength") == 0) {
@@ -1164,6 +1177,12 @@ int main(int argc, char** argv) {
     }
     if (args.no_ssr_temporal && engine->postfx) {
         engine->postfx->ssr_temporal = false;
+    }
+    if (args.no_ssr_denoise && engine->postfx) {
+        engine->postfx->ssr_denoise = false;
+    }
+    if (args.ssr_jitter >= 0.0f && engine->postfx) {
+        engine->postfx->ssr_jitter = args.ssr_jitter;
     }
     if (args.ssr_debug && engine->postfx) {
         engine->postfx->debug_view = POSTFX_DEBUG_SSR;

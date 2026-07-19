@@ -359,6 +359,8 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     // sharp instead of half-res serrated.
     fx->ssr_full_res = true;
     fx->ssr_temporal = true;
+    fx->ssr_denoise = true;
+    fx->ssr_jitter = 0.03f;
     if (!create_ssr_buffers(fx)) {
         free_postfx(fx);
         return NULL;
@@ -1263,6 +1265,18 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             // Strength folds into the march's premultiplied weight (clamped
             // there) so the composite stays a straight premultiplied lerp
             uniform_set_float(fx->ssr_program->uniforms, "strength", fx->ssr_strength);
+            // Stochastic march: jitter the ray per pixel + per frame so the
+            // deterministic Hi-Z grid stripes scatter into noise the temporal
+            // accumulator + a-trous resolve. frame_index advances the per-frame
+            // random (independent of the projection jitter, so it converges
+            // even in headless with TAA on).
+            // Only jitter when the temporal accumulator is there to resolve it
+            // (M3b's a-trous will let this run per-frame without TAA too). No
+            // resolver -> deterministic march, so the no-TAA default stays clean.
+            int ssr_stochastic = (fx->ssr_denoise && fx->ssr_temporal && taa_resolving) ? 1 : 0;
+            uniform_set_int(fx->ssr_program->uniforms, "ssrStochastic", ssr_stochastic);
+            uniform_set_int(fx->ssr_program->uniforms, "ssrFrameIndex", fx->frame_index);
+            uniform_set_float(fx->ssr_program->uniforms, "ssrJitter", fx->ssr_jitter);
             // Local-probe fallback for rays the march cannot answer. The
             // probe lives in world space while SSR is view-space, so this is
             // the only postfx consumer of the view matrix.
