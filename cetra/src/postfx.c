@@ -61,6 +61,59 @@ static void free_pingpong(PingPong* pp) {
     glDeleteTextures(2, pp->tex);
 }
 
+// (Re)create the SSR reflection buffer + the Hi-Z traversal pyramid at the
+// current SSR resolution: full-res when fx->ssr_full_res (sharp reflections;
+// the half-res march's hard hit/miss coverage edge was the striping source),
+// else half-res. Depth/HDR sources the march samples are already full-res.
+// The caller must delete any existing ssr_fbo/ssr_texture/hiz_fbo/hiz_texture
+// first (postfx_set_ssr_full_res); create_postfx calls this on a fresh PostFX.
+static bool create_ssr_buffers(PostFX* fx) {
+    int w = fx->ssr_full_res ? fx->width : fx->ssao_width;
+    int h = fx->ssr_full_res ? fx->height : fx->ssao_height;
+    // HDR reflection buffer; carries premultiplied scene color * weight.
+    if (!create_color_fbo(w, h, GL_RGBA16F, &fx->ssr_fbo, &fx->ssr_texture))
+        return false;
+    // Min-depth pyramid for the SSR traversal: base at the SSR resolution with a
+    // full mip chain, each level the min (nearest) of the 2x2 below. R32F: fp16
+    // depth staircases at scene scale. Set the max level — an incomplete chain
+    // samples as black.
+    int cw = w, ch = h;
+    fx->hiz_mips = 1;
+    while ((cw > 1 || ch > 1) && fx->hiz_mips < 16) {
+        cw = cw > 1 ? cw / 2 : 1;
+        ch = ch > 1 ? ch / 2 : 1;
+        fx->hiz_mips++;
+    }
+    glGenTextures(1, &fx->hiz_texture);
+    glBindTexture(GL_TEXTURE_2D, fx->hiz_texture);
+    int mw = w, mh = h;
+    for (int mip = 0; mip < fx->hiz_mips; mip++) {
+        glTexImage2D(GL_TEXTURE_2D, mip, GL_R32F, mw, mh, 0, GL_RED, GL_FLOAT, NULL);
+        mw = mw > 1 ? mw / 2 : 1;
+        mh = mh > 1 ? mh / 2 : 1;
+    }
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, fx->hiz_mips - 1);
+    glGenFramebuffers(1, &fx->hiz_fbo);
+    return true;
+}
+
+// Runtime resolution switch: delete the SSR buffers and rebuild them at the new
+// resolution. No-op if unchanged.
+void postfx_set_ssr_full_res(PostFX* fx, bool full_res) {
+    if (!fx || fx->ssr_full_res == full_res)
+        return;
+    glDeleteFramebuffers(1, &fx->ssr_fbo);
+    glDeleteTextures(1, &fx->ssr_texture);
+    glDeleteFramebuffers(1, &fx->hiz_fbo);
+    glDeleteTextures(1, &fx->hiz_texture);
+    fx->ssr_full_res = full_res;
+    create_ssr_buffers(fx);
+}
+
 // Depth-only FBO used as the blit target when resolving the MSAA depth
 // buffer. The format must match the engine's GL_DEPTH24_STENCIL8 exactly
 // (multisample blits require identical formats), and a color-less FBO is
@@ -297,40 +350,13 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     }
     // The SSGI targets (GI radiance MRT + accumulation/a-trous pairs) are
     // lazily allocated on first enable -- see postfx_ensure_ssgi_targets.
-    // Half-res reflection buffer; HDR since it carries scene color
-    if (!create_color_fbo(fx->ssao_width, fx->ssao_height, GL_RGBA16F, &fx->ssr_fbo,
-                          &fx->ssr_texture)) {
+    // SSR reflection buffer + Hi-Z traversal pyramid, at full res by default
+    // (see create_ssr_buffers). Full-res tracing is what keeps the reflection
+    // sharp instead of half-res serrated.
+    fx->ssr_full_res = true;
+    if (!create_ssr_buffers(fx)) {
         free_postfx(fx);
         return NULL;
-    }
-    // Min-depth pyramid for the SSR traversal: half-res base with a full mip
-    // chain, each level the min (nearest) of the 2x2 below. R32F: fp16 depth
-    // staircases at scene scale. The chain stops nowhere special, but set
-    // the max level anyway — an incomplete chain samples as black.
-    {
-        int hw = fx->ssao_width;
-        int hh = fx->ssao_height;
-        fx->hiz_mips = 1;
-        while ((hw > 1 || hh > 1) && fx->hiz_mips < 16) {
-            hw = hw > 1 ? hw / 2 : 1;
-            hh = hh > 1 ? hh / 2 : 1;
-            fx->hiz_mips++;
-        }
-        glGenTextures(1, &fx->hiz_texture);
-        glBindTexture(GL_TEXTURE_2D, fx->hiz_texture);
-        int mw = fx->ssao_width;
-        int mh = fx->ssao_height;
-        for (int mip = 0; mip < fx->hiz_mips; mip++) {
-            glTexImage2D(GL_TEXTURE_2D, mip, GL_R32F, mw, mh, 0, GL_RED, GL_FLOAT, NULL);
-            mw = mw > 1 ? mw / 2 : 1;
-            mh = mh > 1 ? mh / 2 : 1;
-        }
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, fx->hiz_mips - 1);
-        glGenFramebuffers(1, &fx->hiz_fbo);
     }
     // Full-res resolve target for the scene pass's aux G-buffer (.xy motion +
     // .z linear view-Z), and the two full-res history buffers the TAA resolve
@@ -925,6 +951,10 @@ static GLuint postfx_run_fog(PostFX* fx, bool aux_written, bool taa_resolving, m
     glBindFramebuffer(GL_FRAMEBUFFER, fx->hdr_fbo);
     glViewport(0, 0, fx->width, fx->height);
     glUseProgram(fx->upsample_tent_program->id);
+    // Fog is half-res; own the shared tent's texelSize so a full-res SSR
+    // composite earlier in the frame doesn't leave it upsampling at the wrong rate.
+    const float fog_texel[2] = {1.0f / (float)fx->ssao_width, 1.0f / (float)fx->ssao_height};
+    uniform_set_vec2(fx->upsample_tent_program->uniforms, "texelSize", fog_texel);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, result);
     glEnable(GL_BLEND);
@@ -1153,6 +1183,10 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             fx->ssgi_history.valid = false;
 
         if (ssr_active) {
+            // SSR traces at full res (sharp) or half res, per ssr_full_res; the
+            // buffer + Hi-Z pyramid were sized to match in create_ssr_buffers.
+            int ssr_w = fx->ssr_full_res ? fx->width : fx->ssao_width;
+            int ssr_h = fx->ssr_full_res ? fx->height : fx->ssao_height;
             // Rebuild the min-depth pyramid the traversal walks: level 0
             // takes the conservative min over the full-res depth, every
             // further level the min of the 2x2 below. The source level is
@@ -1161,8 +1195,8 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             glUseProgram(fx->ssr_hiz_program->id);
             glActiveTexture(GL_TEXTURE0);
             {
-                int mip_w = fx->ssao_width;
-                int mip_h = fx->ssao_height;
+                int mip_w = ssr_w;
+                int mip_h = ssr_h;
                 int src_w = fx->width;
                 int src_h = fx->height;
                 for (int mip = 0; mip < fx->hiz_mips; mip++) {
@@ -1191,10 +1225,10 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             }
             check_gl_error("postfx hiz build");
 
-            // March reflections into the half-res buffer (reads the scene,
+            // March reflections into the reflection buffer (reads the scene,
             // writes elsewhere: GL 4.1 has no texture barrier)
             glBindFramebuffer(GL_FRAMEBUFFER, fx->ssr_fbo);
-            glViewport(0, 0, fx->ssao_width, fx->ssao_height);
+            glViewport(0, 0, ssr_w, ssr_h);
             glUseProgram(fx->ssr_program->id);
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, fx->depth_texture);
@@ -1205,8 +1239,8 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             glActiveTexture(GL_TEXTURE4);
             glBindTexture(GL_TEXTURE_2D, fx->hiz_texture);
             glActiveTexture(GL_TEXTURE0);
-            uniform_set_int(fx->ssr_program->uniforms, "hizWidth", fx->ssao_width);
-            uniform_set_int(fx->ssr_program->uniforms, "hizHeight", fx->ssao_height);
+            uniform_set_int(fx->ssr_program->uniforms, "hizWidth", ssr_w);
+            uniform_set_int(fx->ssr_program->uniforms, "hizHeight", ssr_h);
             uniform_set_int(fx->ssr_program->uniforms, "hizMips", fx->hiz_mips);
             uniform_set_mat4(fx->ssr_program->uniforms, "projection", (float*)projection);
             uniform_set_mat4(fx->ssr_program->uniforms, "invProjection", (float*)inv_projection);
@@ -1246,6 +1280,12 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             glBindFramebuffer(GL_FRAMEBUFFER, fx->hdr_fbo);
             glViewport(0, 0, fx->width, fx->height);
             glUseProgram(fx->upsample_tent_program->id);
+            // Sample the tent at the reflection buffer's own texel: full-res is
+            // a 1px tent (light AA on the sharp reflection); half-res is the
+            // upsample. Each tent consumer sets its own texelSize (fog resets
+            // it to the half-res value) so nothing leaks through the shared program.
+            const float ssr_texel[2] = {1.0f / (float)ssr_w, 1.0f / (float)ssr_h};
+            uniform_set_vec2(fx->upsample_tent_program->uniforms, "texelSize", ssr_texel);
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, fx->ssr_texture);
             glEnable(GL_BLEND);

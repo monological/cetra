@@ -140,6 +140,8 @@ typedef struct PostFX {
     int ssr_steps;             // Linear march steps
     float ssr_max_roughness;   // Reflections fade out toward this roughness
     float ssr_floor_roughness; // Roughness the shadow catcher publishes
+    bool ssr_full_res;         // Trace SSR at full res (sharp; kills the half-res march's serrated
+                               // reflection edges); off = half-res, byte-identical to the old path
 
     // Local reflection probe, filled per frame by the engine from the current
     // scene (postfx never learns about Scene): the SSR pass samples it where
@@ -267,5 +269,9 @@ bool postfx_wants_albedo(const PostFX* fx);
 // The postfx pass and the shadow catcher's floor marker both derive from
 // it so they cannot disagree about whether the floor is reflected.
 bool postfx_ssr_active(const PostFX* fx, bool normals_written);
+
+// Switch SSR tracing between full-res (sharp) and half-res, reallocating the
+// reflection buffer + Hi-Z pyramid at the new resolution. Safe to call at runtime.
+void postfx_set_ssr_full_res(PostFX* fx, bool full_res);
 
 #endif // _POSTFX_H_

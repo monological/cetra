@@ -1398,6 +1398,9 @@ static void _engine_gui_panel(Engine* engine) {
         igSliderFloat("SSR Distance", &fx->ssr_max_distance, 1.0f, 20000.0f, "%.2f",
                       ImGuiSliderFlags_Logarithmic);
         igSliderFloat("SSR Floor Rough", &fx->ssr_floor_roughness, 0.0f, 1.0f, "%.2f", 0);
+        bool ssr_full_res = fx->ssr_full_res;
+        if (igCheckbox("SSR Full Res", &ssr_full_res))
+            postfx_set_ssr_full_res(fx, ssr_full_res);
         _end_effect_group();
 
         _begin_effect_group("SSGI", &fx->ssgi_enabled);
