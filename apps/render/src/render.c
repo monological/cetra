@@ -76,6 +76,7 @@ typedef struct {
     int no_springs;                    // Disable spring-bone secondary motion
     int no_ssao;                       // Disable screen-space ambient occlusion
     int ssao_debug;                    // Show the raw SSAO buffer
+    int no_spec_occlusion;             // Let GTAO darken specular (disable spec-occ)
     int ssgi;                          // Enable screen-space GI (indirect diffuse)
     int ssgi_debug;                    // Show the raw gathered GI radiance
     int probe;                         // Enable the local reflection probe
@@ -163,6 +164,7 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --no-springs       Disable spring-bone secondary motion\n");
     fprintf(stderr, "      --no-ssao          Disable screen-space ambient occlusion\n");
     fprintf(stderr, "      --ssao-debug       Show the raw SSAO buffer\n");
+    fprintf(stderr, "      --no-spec-occlusion Let GTAO darken specular (disable spec-occlusion)\n");
     fprintf(stderr, "      --ao-radius <f>    AO/GI reach in world units (default: scene-scaled)\n");
     fprintf(stderr, "      --no-normals-mrt   Disable the normals G-buffer (SSAO/SSR input)\n");
     fprintf(stderr, "      --normals-debug    Show the resolved normals G-buffer\n");
@@ -418,6 +420,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->no_ssao = 1;
         } else if (strcmp(argv[i], "--ssao-debug") == 0) {
             args->ssao_debug = 1;
+        } else if (strcmp(argv[i], "--no-spec-occlusion") == 0) {
+            args->no_spec_occlusion = 1;
         } else if (strcmp(argv[i], "--ssgi") == 0) {
             args->ssgi = 1;
         } else if (strcmp(argv[i], "--ssgi-debug") == 0) {
@@ -1057,6 +1061,9 @@ int main(int argc, char** argv) {
     }
     if (args.no_ssao && engine->postfx) {
         engine->postfx->ssao_enabled = false;
+    }
+    if (args.no_spec_occlusion && engine->postfx) {
+        engine->postfx->spec_occlusion_enabled = false;
     }
     if (args.ssao_debug && engine->postfx) {
         engine->postfx->debug_view = POSTFX_DEBUG_AO;

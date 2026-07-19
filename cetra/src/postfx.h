@@ -39,12 +39,13 @@ typedef struct PingPong {
 // at a time by construction; values match the shader's debugView dispatch)
 typedef enum PostFXDebugView {
     POSTFX_DEBUG_NONE = 0,
-    POSTFX_DEBUG_AO = 1,      // Blurred SSAO buffer
-    POSTFX_DEBUG_NORMALS = 2, // Resolved normals G-buffer
-    POSTFX_DEBUG_SSR = 3,     // Half-res reflection buffer
-    POSTFX_DEBUG_ALBEDO = 4,  // Resolved albedo G-buffer (SSGI)
-    POSTFX_DEBUG_SSGI = 5,    // Raw gathered GI radiance (half-res, SSGI)
-    POSTFX_DEBUG_FOG = 6,     // Half-res fog in-scatter buffer
+    POSTFX_DEBUG_AO = 1,       // Blurred SSAO buffer
+    POSTFX_DEBUG_NORMALS = 2,  // Resolved normals G-buffer
+    POSTFX_DEBUG_SSR = 3,      // Half-res reflection buffer
+    POSTFX_DEBUG_ALBEDO = 4,   // Resolved albedo G-buffer (SSGI)
+    POSTFX_DEBUG_SSGI = 5,     // Raw gathered GI radiance (half-res, SSGI)
+    POSTFX_DEBUG_FOG = 6,      // Half-res fog in-scatter buffer
+    POSTFX_DEBUG_SPEC_OCC = 7, // AO visibility after specular occlusion
 } PostFXDebugView;
 
 // Mirrors MAX_SHADOW_LIGHTS (shadow.h) without postfx learning about the
@@ -127,6 +128,7 @@ typedef struct PostFX {
     bool ssao_enabled;
     float ssao_radius; // Occlusion reach in view-space units
     float ssao_strength;
+    bool spec_occlusion_enabled; // Keep GTAO off specular/reflections (Lagarde spec-occ at tonemap)
     bool ssgi_enabled;    // Screen-space GI: one-bounce indirect diffuse (extends the GTAO sweep)
     float ssgi_intensity; // Composite multiplier on the gathered indirect radiance
     bool normals_enabled; // Master switch for the normals G-buffer (MRT)

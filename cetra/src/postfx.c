@@ -163,6 +163,7 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     fx->ssao_enabled = true;
     fx->ssao_radius = 0.4f;
     fx->ssao_strength = 0.8f;
+    fx->spec_occlusion_enabled = true; // Keep GTAO off specular; on when AO is on
     fx->ssgi_enabled = false; // experimental; off by default
     fx->ssgi_intensity = 1.0f;
     fx->normals_enabled = true;
@@ -428,6 +429,7 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     uniform_set_int(fx->tonemap_program->uniforms, "giTex", 6);
     uniform_set_int(fx->tonemap_program->uniforms, "lumTex", 7);
     uniform_set_int(fx->tonemap_program->uniforms, "fogTex", 8);
+    uniform_set_int(fx->tonemap_program->uniforms, "auxTex", 9); // linZ + roughness for spec-occ
 
     glUseProgram(fx->lum_measure_program->id);
     uniform_set_int(fx->lum_measure_program->uniforms, "hdrTex", 0);
@@ -1345,6 +1347,8 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         glBindTexture(GL_TEXTURE_2D, fx->auto_exposure ? fx->lum_adapt.tex[lum_write] : 0);
         glActiveTexture(GL_TEXTURE8);
         glBindTexture(GL_TEXTURE_2D, fog_result_tex); // 0 when fog did not run
+        glActiveTexture(GL_TEXTURE9);
+        glBindTexture(GL_TEXTURE_2D, aux_written ? fx->aux_texture : 0); // linZ + roughness (spec-occ)
         UniformManager* tm = fx->tonemap_program->uniforms;
         uniform_set_float(tm, "exposure", fx->exposure);
         uniform_set_int(tm, "autoExposure", fx->auto_exposure ? 1 : 0);
@@ -1353,6 +1357,14 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         uniform_set_int(tm, "bloomEnabled", fx->bloom_enabled ? 1 : 0);
         uniform_set_int(tm, "aoEnabled", fx->ssao_enabled ? 1 : 0);
         uniform_set_float(tm, "aoStrength", fx->ssao_strength);
+        // Specular occlusion keeps GTAO off reflections. Needs the aux buffer
+        // (linZ + roughness) and the normals; both ride the same AO-on gating,
+        // so require them here too. Metallic is opportunistic (SSGI's albedo).
+        uniform_set_int(tm, "specOccEnabled",
+                        (fx->spec_occlusion_enabled && aux_written && have_normals) ? 1 : 0);
+        uniform_set_int(tm, "specOccHasMetallic", albedo_written ? 1 : 0);
+        const float inv_focal[2] = {1.0f / projection[0][0], 1.0f / projection[1][1]};
+        uniform_set_vec2(tm, "invFocal", inv_focal);
         // Suppress debug views whose source buffer was not produced, and
         // say so once per requested view rather than silently every frame
         PostFXDebugView debug_view = fx->debug_view;
@@ -1361,7 +1373,8 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             (debug_view == POSTFX_DEBUG_SSR && !ssr_active) ||
             (debug_view == POSTFX_DEBUG_ALBEDO && !albedo_written) ||
             (debug_view == POSTFX_DEBUG_SSGI && !ssgi_active) ||
-            (debug_view == POSTFX_DEBUG_FOG && fog_result_tex == 0)) {
+            (debug_view == POSTFX_DEBUG_FOG && fog_result_tex == 0) ||
+            (debug_view == POSTFX_DEBUG_SPEC_OCC && !fx->ssao_enabled)) {
             static PostFXDebugView warned_view = POSTFX_DEBUG_NONE;
             if (warned_view != debug_view) {
                 log_warn("debug view %d suppressed: its source buffer is disabled",

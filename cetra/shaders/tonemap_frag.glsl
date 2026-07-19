@@ -13,7 +13,7 @@ uniform float bloomStrength;
 uniform int bloomEnabled;
 uniform int aoEnabled;
 uniform float aoStrength;
-uniform sampler2D normalsTex; // Resolved view-space normals + roughness
+uniform sampler2D normalsTex; // Resolved view-space normal .xyz + SSR marker .a
 uniform sampler2D ssrTex;     // Half-res reflection buffer
 uniform sampler2D albedoTex;  // Resolved albedo G-buffer (SSGI)
 uniform sampler2D giTex;      // Half-res gathered GI radiance (SSGI)
@@ -22,10 +22,18 @@ uniform sampler2D giTex;      // Half-res gathered GI radiance (SSGI)
 // uniform then acts as an EV bias on top.
 uniform sampler2D lumTex; // 1x1 adapted log2 mean luminance
 uniform sampler2D fogTex; // Half-res fog in-scatter (debug view)
+// Specular occlusion: GTAO approximates DIFFUSE occlusion, so multiplying it
+// onto specular/reflections is wrong -- it darkens (and, at silhouettes,
+// shimmers) a bright grazing specular. These recover the reflection: aux .z/.w
+// give view-Z + roughness, normalsTex the view normal, for a Lagarde term.
+uniform sampler2D auxTex;       // Aux G-buffer: linear view-Z (.z) + roughness (.w)
+uniform vec2 invFocal;          // 1/projection focal terms, for view-pos reconstruction
+uniform int specOccEnabled;     // Apply specular occlusion to the AO factor
+uniform int specOccHasMetallic; // albedoTex.a carries metallic this frame (SSGI wrote it)
 uniform int autoExposure;
 uniform float autoKey; // Target middle gray (0.18)
 // Debug view dispatch (PostFXDebugView): 0=none, 1=AO, 2=normals, 3=SSR,
-// 4=albedo, 5=GI, 6=fog
+// 4=albedo, 5=GI, 6=fog, 7=spec-occ AO
 uniform int debugView;
 // 1 = ACES, 2 = PBR Neutral, 3 = AgX (passthrough frames are blitted by
 // postfx_run and never reach this pass)
@@ -135,6 +143,41 @@ vec3 toneSelect(vec3 c)
     return pbrNeutralTonemap(c);
 }
 
+// View-space position from screen UV + stored linear view-Z (RH, z<0). Matches
+// the GTAO reconstruction so spec-occ and GTAO agree on the reconstructed NdotV.
+vec3 viewPosFromLinZ(vec2 uv, float linZ, vec2 invF)
+{
+    vec2 ndc = uv * 2.0 - 1.0;
+    return vec3(ndc * (-linZ) * invF, linZ);
+}
+
+// Screen-space AO visibility with specular occlusion. GTAO measures DIFFUSE
+// hemispherical occlusion; a smooth reflection instead sees the environment in
+// its mirror direction, past the local occluders GTAO sampled -- so it must not
+// be dimmed (nor jittered) by that AO. We blend the AO toward unoccluded (1.0)
+// by the pixel's specular fraction x smoothness: a smooth grazing specular (high
+// dielectric Fresnel or a metal, low roughness) goes fully unoccluded, killing
+// the AO's silhouette shimmer off it; diffuse/rough pixels keep the plain AO.
+// Off (specOccEnabled 0) returns raw ao -> byte-identical to the pre-feature path.
+float aoVisibility()
+{
+    float ao = texture(aoTex, TexCoords).r;
+    if (specOccEnabled == 0)
+        return ao;
+    vec4 nrm = texture(normalsTex, TexCoords);
+    // Real model surfaces only: a non-zero normal excludes sky/hair (zero
+    // marker), and a > -0.5 excludes the shadow-catcher floor (a = -1).
+    if (dot(nrm.xyz, nrm.xyz) < 0.01 || nrm.a <= -0.5)
+        return ao;
+    vec4 aux = texture(auxTex, TexCoords);
+    vec3 P = viewPosFromLinZ(TexCoords, aux.z, invFocal);
+    float NdotV = clamp(dot(normalize(nrm.xyz), normalize(-P)), 0.0, 1.0);
+    float metallic = specOccHasMetallic == 1 ? texture(albedoTex, TexCoords).a : 0.0;
+    float fresnel = 0.04 + 0.96 * pow(1.0 - NdotV, 5.0); // dielectric specular fraction
+    float specWeight = mix(fresnel, 1.0, metallic) * (1.0 - aux.w); // x mirror-ness
+    return mix(ao, 1.0, specWeight);
+}
+
 // Scene HDR sample -> tonemapped LDR-linear [0,1], applying the shared AO
 // factor and bloom addition (the same order the composite uses). Sharpen
 // neighbour taps reuse the centre's aoFactor/bloomAdd so the mask measures
@@ -192,12 +235,18 @@ void main()
         FragColor = vec4(displayEncode(fog), 1.0);
         return;
     }
+    if (debugView == 7) {
+        // Spec-occ AO visibility (what actually multiplies the scene) -- the
+        // reflection relief vs the raw AO of debug view 1.
+        FragColor = vec4(vec3(aoVisibility()), 1.0);
+        return;
+    }
 
     // Occlude before adding bloom: bloom models lens scatter, which happens
     // after the light already left the scene
     float aoFactor = 1.0;
     if (aoEnabled == 1)
-        aoFactor = mix(1.0, texture(aoTex, TexCoords).r, aoStrength);
+        aoFactor = mix(1.0, aoVisibility(), aoStrength);
     vec3 bloomAdd = vec3(0.0);
     if (bloomEnabled == 1)
         bloomAdd = bloomStrength * texture(bloomTex, TexCoords).rgb;
