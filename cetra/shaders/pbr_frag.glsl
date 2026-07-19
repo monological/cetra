@@ -274,6 +274,21 @@ float distributionGGX(vec3 N, vec3 H, float roughness) {
     return num / denom;
 }
 
+// Charlie sheen distribution (Estevez-Kulla, "Production Friendly Microfacet
+// Sheen"): an inverted-Gaussian NDF giving cloth its retroreflective grazing
+// rim. sheenRoughness is used directly as alpha, per the glTF/KHR reference.
+float distributionCharlie(vec3 N, vec3 H, float sheenRoughness) {
+    float invAlpha = 1.0 / max(sheenRoughness, 0.0001);
+    float NdotH = max(dot(N, H), 0.0);
+    float sin2h = max(1.0 - NdotH * NdotH, 0.0078125); // fp16-safe floor
+    return (2.0 + invAlpha) * pow(sin2h, invAlpha * 0.5) / (2.0 * PI);
+}
+
+// Ashikhmin visibility term, paired with the Charlie NDF for sheen (glTF ref).
+float visibilityAshikhmin(float NdotL, float NdotV) {
+    return clamp(1.0 / (4.0 * (NdotL + NdotV - NdotL * NdotV)), 0.0, 1.0);
+}
+
 // Anisotropic GGX distribution (for brushed metal, hair, etc.)
 float distributionGGXAnisotropic(vec3 N, vec3 H, vec3 T, vec3 B, float roughness, float anisotropy) {
     float at = max(roughness * (1.0 + anisotropy), 0.001);
@@ -916,14 +931,36 @@ void main() {
             coatAtten = clearcoat * Fc;
         }
 
+        // Sheen (KHR_materials_sheen): a retroreflective Charlie lobe for cloth
+        // (velvet / satin) -- no Fresnel, per glTF. Added over the base, which is
+        // scaled by (1 - max(sheenColor)) as a cheap directional-albedo
+        // approximation (a baked Charlie E-LUT is the follow-up). All sheen work
+        // stays inside this uniform-gated block so a non-sheen material keeps the
+        // exact pre-sheen accumulation grouping below (byte-identical off).
+        vec3 sheenSpec = vec3(0.0);
+        float sheenScale = 1.0;
+        if (sheenEnabled > 0 &&
+            max(max(sheenColorFactor.r, sheenColorFactor.g), sheenColorFactor.b) > 0.0) {
+            vec3 sheenColor = sheenColorFactor;
+            if (sheenTexExists > 0) {
+                sheenColor *= texture(sheenTex, uv).rgb;
+            }
+            float shR = clamp(sheenRoughnessFactor, 0.07, 1.0);
+            float Dsh = distributionCharlie(N, H, shR);
+            float Vsh = visibilityAshikhmin(NdotL, NdotV);
+            sheenSpec = sheenColor * Dsh * Vsh;
+            sheenScale = 1.0 - max(max(sheenColor.r, sheenColor.g), sheenColor.b);
+        }
+
         // Add this light's contribution with shadow. Firefly clamp: a
         // sub-pixel GGX spike carries far more energy than the pixel
         // legitimately integrates, aliasing into white sparkle across
         // low-roughness normal-mapped surfaces (and before the fp16 clamp,
         // overflowing to NaN). Highlights saturate the tonemap well below
         // this cap, so only the aliasing energy is lost.
-        Lo += min(((kD * albedoMap / PI + specular) * (1.0 - coatAtten) + coatSpec) * radiance *
-                      NdotL * shadow,
+        Lo += min((((kD * albedoMap / PI + specular) * sheenScale + sheenSpec) * (1.0 - coatAtten) +
+                   coatSpec) *
+                      radiance * NdotL * shadow,
                   vec3(10.0));
 
         // Add subsurface scattering contribution
@@ -992,6 +1029,25 @@ void main() {
             vec3 ccPre = textureLod(prefilteredMap, Rc, ccR * maxReflectionLOD).rgb;
             vec3 coatIBL = clearcoat * ccPre * (0.04 * ccBrdf.x + ccBrdf.y);
             ambient = ambient * (1.0 - ccF) + coatIBL * aoMap * iblIntensity;
+        }
+
+        // Sheen IBL: the Charlie cloth lobe lit by the environment. Reuses the
+        // prefiltered env at the sheen roughness (no new sampler). With no baked
+        // Charlie directional-albedo (E) LUT, the env sheen is concentrated toward
+        // grazing by pow(1 - NdotV, 2) -- an approximation of the retroreflective
+        // rim that avoids flooding the whole surface white (the E-LUT is the
+        // follow-up). Guarded so the base ambient lines above stay byte-identical
+        // when sheen is off.
+        if (sheenEnabled > 0 &&
+            max(max(sheenColorFactor.r, sheenColorFactor.g), sheenColorFactor.b) > 0.0) {
+            vec3 sheenColor = sheenColorFactor;
+            if (sheenTexExists > 0) {
+                sheenColor *= texture(sheenTex, uv).rgb;
+            }
+            float shR = clamp(sheenRoughnessFactor, 0.07, 1.0);
+            vec3 sheenPre = textureLod(prefilteredMap, R, shR * maxReflectionLOD).rgb;
+            float sheenE = pow(1.0 - NdotV, 2.0);
+            ambient += sheenColor * sheenPre * sheenE * aoMap * iblIntensity;
         }
     } else {
         // Fallback to simple ambient when IBL is disabled (diffuse-only, so
