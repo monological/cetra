@@ -487,6 +487,9 @@ vec3 clearcoatNormal(vec2 uv) {
     if (clearcoatNormalExists > 0) {
         vec3 Tc = normalize(TBN[0] - dot(TBN[0], Ngeo) * Ngeo);
         vec3 Bc = cross(Ngeo, Tc);
+        if (dot(Bc, TBN[1]) < 0.0) {
+            Bc = -Bc; // preserve the mesh's authored bitangent handedness (mirrored UVs)
+        }
         vec3 cn = texture(clearcoatNormalTex, uv).xyz * 2.0 - 1.0;
         return normalize(mat3(Tc, Bc, Ngeo) * cn);
     }
@@ -879,8 +882,7 @@ void main() {
         // Clearcoat: a second thin smooth dielectric GGX lobe (fixed F0 = 0.04,
         // IOR 1.5) over the base, on the coat normal Nc. The base term is
         // attenuated by the coat's Fresnel -- light the coat reflects never
-        // reaches it (Kelemen-Szirmay-Kalos / Filament layering). The coat uses
-        // its OWN cosine NcdotL (== NdotL when it has no normal map).
+        // reaches it (Kelemen-Szirmay-Kalos / Filament layering).
         // The coat's microfacet term uses the coat normal Nc (so a coat normal
         // map's weave shows in the highlight); it shares the base N*L cosine in
         // the accumulation below, which keeps the pre-clearcoat grouping exactly
@@ -893,7 +895,7 @@ void main() {
             float Dc = distributionGGX(Nc, H, ccR);
             float Gc = geometrySmith(Nc, V, L, ccR);
             float Fc = fresnelSchlick(max(dot(H, V), 0.0), vec3(0.04)).r;
-            coatSpec = vec3(clearcoat * Dc * Gc * Fc / (4.0 * NdotV * NdotL + 0.0001));
+            coatSpec = vec3(clearcoat * Dc * Gc * Fc / denominator);
             coatAtten = clearcoat * Fc;
         }
 
