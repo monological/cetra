@@ -37,11 +37,13 @@ typedef struct Engine {
     int win_height;
     int fb_width;
     int fb_height;
-    int ss_scale;     // Supersampling factor: scene + post render at ss_scale x
-                      // display resolution, box-downsampled at tone map (set
-                      // before init_engine). 1 = off, 2 = 2x SSAA.
-    int msaa_samples; // MSAA sample count for the scene framebuffer (1 = off,
-                      // 4 = 4x). Runtime-changeable via set_engine_msaa_samples.
+    GLint max_texture_image_units;  // GL_MAX_TEXTURE_IMAGE_UNITS (queried at init)
+    GLint max_array_texture_layers; // GL_MAX_ARRAY_TEXTURE_LAYERS (mask array budget)
+    int ss_scale;                   // Supersampling factor: scene + post render at ss_scale x
+                                    // display resolution, box-downsampled at tone map (set
+                                    // before init_engine). 1 = off, 2 = 2x SSAA.
+    int msaa_samples;               // MSAA sample count for the scene framebuffer (1 = off,
+                                    // 4 = 4x). Runtime-changeable via set_engine_msaa_samples.
 
     GLFWerrorfun error_callback;
 

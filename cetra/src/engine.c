@@ -289,6 +289,11 @@ static int _setup_engine_glfw(Engine* engine) {
     log_info("Renderer: %s | %s", (const char*)glGetString(GL_RENDERER),
              (const char*)glGetString(GL_VENDOR));
 
+    engine->max_texture_image_units = get_gl_max_texture_image_units();
+    engine->max_array_texture_layers = get_gl_max_array_texture_layers();
+    log_info("GL sampler budget: %d fragment texture image units, %d array layers",
+             engine->max_texture_image_units, engine->max_array_texture_layers);
+
     glfwGetFramebufferSize(engine->window, &(engine->fb_width), &(engine->fb_height));
     glViewport(0, 0, engine->fb_width, engine->fb_height);
 

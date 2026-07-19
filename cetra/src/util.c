@@ -23,6 +23,18 @@ void check_gl_error(const char* where) {
     }
 }
 
+GLint get_gl_max_texture_image_units(void) {
+    GLint n = 0;
+    glGetIntegerv(GL_MAX_TEXTURE_IMAGE_UNITS, &n);
+    return n;
+}
+
+GLint get_gl_max_array_texture_layers(void) {
+    GLint n = 0;
+    glGetIntegerv(GL_MAX_ARRAY_TEXTURE_LAYERS, &n);
+    return n;
+}
+
 size_t get_gl_max_lights() {
     GLint max_uniform_components;
     glGetIntegerv(GL_MAX_FRAGMENT_UNIFORM_COMPONENTS, &max_uniform_components);

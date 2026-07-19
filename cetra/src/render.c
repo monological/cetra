@@ -23,6 +23,13 @@
 #include "shadow.h"
 #include "intersect.h"
 
+// The material sampler units (common.h) must not collide with the engine-owned
+// shadow-map-array unit that follows them; both stay under the queried
+// GL_MAX_TEXTURE_IMAGE_UNITS. Relocating the IBL units below 16 (A3) removes the
+// last out-of-spec bind (brdfLUT was at unit 16).
+_Static_assert(TEXUNIT_MATERIAL_MAX < SHADOW_MAP_TEXTURE_UNIT,
+               "material texture units overlap the shadow map array unit");
+
 // Global animation state for skinned mesh rendering (set via set_render_animation_state)
 static AnimationState* g_current_animation_state = NULL;
 
@@ -161,19 +168,19 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
     uniform_set_float(u, "uvRotation", material->uvRotation);
 
     // Always set sampler uniforms to correct texture units (prevents stale values)
-    uniform_set_int(u, "albedoTex", 0);
-    uniform_set_int(u, "normalTex", 1);
-    uniform_set_int(u, "roughnessTex", 2);
-    uniform_set_int(u, "metalnessTex", 3);
-    uniform_set_int(u, "aoTex", 4);
-    uniform_set_int(u, "emissiveTex", 5);
-    uniform_set_int(u, "sceneColorTex", 6); // refraction source (was heightTex's slot)
-    uniform_set_int(u, "opacityTex", 7);
-    uniform_set_int(u, "sheenTex", 8);
-    uniform_set_int(u, "reflectanceTex", 9);
-    uniform_set_int(u, "microsurfaceTex", 10);
-    uniform_set_int(u, "anisotropyTex", 11);
-    uniform_set_int(u, "subsurfaceTex", 12);
+    uniform_set_int(u, "albedoTex", TEXUNIT_ALBEDO);
+    uniform_set_int(u, "normalTex", TEXUNIT_NORMAL);
+    uniform_set_int(u, "roughnessTex", TEXUNIT_ROUGHNESS);
+    uniform_set_int(u, "metalnessTex", TEXUNIT_METALNESS);
+    uniform_set_int(u, "aoTex", TEXUNIT_AO);
+    uniform_set_int(u, "emissiveTex", TEXUNIT_EMISSIVE);
+    uniform_set_int(u, "sceneColorTex", TEXUNIT_SCENE_COLOR); // refraction source (was heightTex's slot)
+    uniform_set_int(u, "opacityTex", TEXUNIT_OPACITY);
+    uniform_set_int(u, "sheenTex", TEXUNIT_SHEEN);
+    uniform_set_int(u, "reflectanceTex", TEXUNIT_REFLECTANCE);
+    uniform_set_int(u, "microsurfaceTex", TEXUNIT_MICROSURFACE);
+    uniform_set_int(u, "anisotropyTex", TEXUNIT_ANISOTROPY);
+    uniform_set_int(u, "subsurfaceTex", TEXUNIT_SUBSURFACE);
 
     if (material->albedo_tex) {
         glActiveTexture(GL_TEXTURE0);

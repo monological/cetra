@@ -13,6 +13,25 @@
 #define GL_ATTR_BONE_WEIGHTS 7 // vec4  - bone weights per vertex
 #define GL_ATTR_TEXCOORD2    8 // UV1 for lightmaps/AO
 
+// PBR material fragment sampler units (render.c _update_program_material_uniforms).
+// The engine-side units (shadow map array, IBL) follow in shadow.h / ibl.h; all
+// of them must stay distinct and within GL_MAX_TEXTURE_IMAGE_UNITS, which the
+// engine now queries at init (get_gl_max_texture_image_units).
+#define TEXUNIT_ALBEDO       0
+#define TEXUNIT_NORMAL       1
+#define TEXUNIT_ROUGHNESS    2
+#define TEXUNIT_METALNESS    3
+#define TEXUNIT_AO           4
+#define TEXUNIT_EMISSIVE     5
+#define TEXUNIT_SCENE_COLOR  6 // refraction opaque-scene resolve (engine-bound)
+#define TEXUNIT_OPACITY      7
+#define TEXUNIT_SHEEN        8 // reserved (KHR_materials_sheen; unsampled today)
+#define TEXUNIT_REFLECTANCE  9 // reserved (KHR_materials_specular; unsampled today)
+#define TEXUNIT_MICROSURFACE 10
+#define TEXUNIT_ANISOTROPY   11
+#define TEXUNIT_SUBSURFACE   12
+#define TEXUNIT_MATERIAL_MAX TEXUNIT_SUBSURFACE
+
 // Fixed non-light uniform overhead the max-light math subtracts. The CSM
 // arrays dominate: lightSpaceMatrix[9] (144) + cascadeParams[9] (36) +
 // cascadeSplits (4) + counts/toggles; audit when the shadow uniform block
