@@ -103,7 +103,7 @@ static const TextureMapping texture_mappings[] = {
     {aiTextureType_EMISSIVE, set_material_emissive_tex, "Emissive", true},
     {aiTextureType_HEIGHT, set_material_height_tex, "Height", false},
     {aiTextureType_OPACITY, set_material_opacity_tex, "Opacity", false},
-    {aiTextureType_SHEEN, set_material_sheen_tex, "Sheen", false},
+    {aiTextureType_SHEEN, set_material_sheen_tex, "Sheen", true}, // KHR sheen color (sRGB)
     {aiTextureType_REFLECTION, set_material_reflectance_tex, "Reflectance", false},
     // glTF/GLB-specific texture types
     {aiTextureType_BASE_COLOR, set_material_albedo_tex, "BaseColor", true},
@@ -272,6 +272,24 @@ static void extract_material_properties(struct aiMaterial* ai_mat, Material* mat
         log_info("Material has KHR specular: factor=%.2f color=(%.2f %.2f %.2f)",
                  material->specular_factor, material->specular_color_factor[0],
                  material->specular_color_factor[1], material->specular_color_factor[2]);
+    }
+
+    // KHR_materials_sheen: a retroreflective cloth lobe (velvet / satin). The
+    // color factor ($clr.sheen.factor) is a dedicated glTF-KHR key, so it cleanly
+    // scopes to glTF; sheen_color_factor stays (0,0,0) -> no lobe for non-glTF.
+    struct aiColor4D sheen_color;
+    if (AI_SUCCESS == aiGetMaterialColor(ai_mat, AI_MATKEY_SHEEN_COLOR_FACTOR, &sheen_color)) {
+        material->sheen_color_factor[0] = sheen_color.r;
+        material->sheen_color_factor[1] = sheen_color.g;
+        material->sheen_color_factor[2] = sheen_color.b;
+        ai_real sheen_rough;
+        if (AI_SUCCESS ==
+            aiGetMaterialFloat(ai_mat, AI_MATKEY_SHEEN_ROUGHNESS_FACTOR, &sheen_rough)) {
+            material->sheen_roughness_factor = sheen_rough;
+        }
+        log_info("Material has KHR sheen: color=(%.2f %.2f %.2f) roughness=%.2f",
+                 material->sheen_color_factor[0], material->sheen_color_factor[1],
+                 material->sheen_color_factor[2], material->sheen_roughness_factor);
     }
 
     // Extract UV transform (KHR_texture_transform) from base color texture

@@ -98,6 +98,8 @@ typedef struct Engine {
     bool specular_enabled;      // KHR_materials_specular F0 tint + specular weight; off
                                 // leaves the base dielectric BRDF unchanged (materials
                                 // without the extension are unaffected either way)
+    bool sheen_enabled;         // KHR_materials_sheen cloth lobe; off skips the lobe
+                                // (materials with sheen color 0 are unaffected either way)
 
     mat4 model_matrix;
     mat4 view_matrix;
