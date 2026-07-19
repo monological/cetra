@@ -127,6 +127,7 @@ Engine* create_engine(const char* window_title, int width, int height) {
     engine->show_wireframe = false;
     engine->show_xyz = false;
     engine->show_fps = false;
+    engine->show_camera_hud = false;
     engine->show_bones = false;
     engine->headless = false;
     engine->gui_frame_active = false;
@@ -1472,21 +1473,46 @@ static void _engine_gui_panel(Engine* engine) {
         igSliderFloat("Amplitude", &camera->amplitude, 0.0f, 50.0f, "%.2f", 0);
         igSliderFloat("Near Clip", &camera->near_clip, 0.01f, 100.0f, "%.3f", 0);
         igSliderFloat("Far Clip", &camera->far_clip, 0.1f, 10000.0f, "%.1f", 0);
+        // Camera diagnostic: overlay the live pose next to the FPS, and print an
+        // exact-repro CLI line to stdout so a grazing interactive view can be
+        // reproduced headlessly (--cam-eye/--cam-target override the orbit framing).
+        igCheckbox("Camera Info (HUD)", &engine->show_camera_hud);
+        if (igButton("Print Camera", (ImVec2){0, 0})) {
+            printf("-W %d -H %d --fov %.1f --cam-eye %.3f,%.3f,%.3f "
+                   "--cam-target %.3f,%.3f,%.3f --cam-up %.3f,%.3f,%.3f\n",
+                   engine->fb_width, engine->fb_height, glm_deg(camera->fov_radians),
+                   camera->position[0], camera->position[1], camera->position[2],
+                   camera->look_at[0], camera->look_at[1], camera->look_at[2],
+                   camera->up_vector[0], camera->up_vector[1], camera->up_vector[2]);
+            fflush(stdout);
+        }
     }
 
     igEnd();
 }
 
-// Frameless FPS readout pinned to the top-right corner.
+// Frameless FPS readout pinned to the top-right corner, with an optional live
+// camera-pose block (show_camera_hud) beneath it. FPS-only keeps the original
+// 90px/transparent placement byte-for-byte.
 static void _engine_gui_fps_overlay(Engine* engine) {
-    igSetNextWindowPos((ImVec2){(float)engine->win_width - 90.0f, 10.0f}, ImGuiCond_Always,
+    bool cam = engine->show_camera_hud && engine->camera;
+    float width = cam ? 300.0f : 90.0f;
+    igSetNextWindowPos((ImVec2){(float)engine->win_width - width, 10.0f}, ImGuiCond_Always,
                        (ImVec2){0, 0});
-    igSetNextWindowBgAlpha(0.0f);
+    igSetNextWindowBgAlpha(cam ? 0.35f : 0.0f);
     if (igBegin("##fps", NULL,
                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs |
                     ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove |
                     ImGuiWindowFlags_AlwaysAutoResize)) {
-        igText("%.1f FPS", engine->fps);
+        if (engine->show_fps)
+            igText("%.1f FPS", engine->fps);
+        if (cam) {
+            Camera* c = engine->camera;
+            igText("eye    %.1f %.1f %.1f", c->position[0], c->position[1], c->position[2]);
+            igText("target %.1f %.1f %.1f", c->look_at[0], c->look_at[1], c->look_at[2]);
+            igText("fov %.1f  dist %.1f  %dx%d", glm_deg(c->fov_radians),
+                   glm_vec3_distance(c->position, c->look_at), engine->fb_width, engine->fb_height);
+        }
     }
     igEnd();
 }
@@ -1500,7 +1526,7 @@ static void render_engine_gui(Engine* engine) {
 
     if (engine->show_gui && engine->camera)
         _engine_gui_panel(engine);
-    if (engine->show_fps)
+    if (engine->show_fps || engine->show_camera_hud)
         _engine_gui_fps_overlay(engine);
 
     igRender();
@@ -1710,7 +1736,7 @@ void run_engine_render_loop(Engine* engine, RenderSceneFunc render_func) {
         // NewFrame and the Render/RenderDrawData at present time. Latch the
         // decision so render_engine_gui pairs its igRender with this NewFrame
         // even if the panel flags are toggled mid-frame.
-        engine->gui_frame_active = engine->show_gui || engine->show_fps;
+        engine->gui_frame_active = engine->show_gui || engine->show_fps || engine->show_camera_hud;
         if (engine->gui_frame_active) {
             ImGui_ImplOpenGL3_NewFrame();
             ImGui_ImplGlfw_NewFrame();

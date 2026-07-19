@@ -135,6 +135,16 @@ typedef struct {
     int render_mode;   // RenderMode override for debugging (-1 = PBR)
     float orbit_yaw;   // Camera yaw around the model in degrees (0 = front)
     float orbit_pitch; // Camera pitch in degrees (0 = level, 90 = top-down)
+    // Explicit camera pose (reproduces any interactive view; overrides the
+    // yaw/pitch/distance orbit framing). --cam-eye and --cam-target must both
+    // be given; --cam-up is optional (default 0,1,0). Print them from the GUI
+    // "Print Camera" button.
+    int cam_eye_set;    // --cam-eye given
+    float cam_eye[3];   // Explicit eye position (world)
+    int cam_target_set; // --cam-target given
+    float cam_target[3];// Explicit look-at target (world)
+    int cam_up_set;     // --cam-up given
+    float cam_up[3];    // Explicit up vector (default 0,1,0)
     int show_help;
 } RenderArgs;
 
@@ -145,6 +155,9 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "  -t, --textures <dir>   Texture directory\n");
     fprintf(stderr, "  -e, --env <path>       HDR environment map for IBL\n");
     fprintf(stderr, "  -F, --fov <degrees>    Camera field of view (default: 50)\n");
+    fprintf(stderr, "      --cam-eye x,y,z    Explicit camera position (exact-repro; needs --cam-target)\n");
+    fprintf(stderr, "      --cam-target x,y,z Explicit look-at target (overrides --yaw/--pitch/--distance)\n");
+    fprintf(stderr, "      --cam-up x,y,z     Explicit up vector (default: 0,1,0)\n");
     fprintf(stderr, "  -E, --exposure <f>     Fixed tonemap exposure (disables auto-exposure)\n");
     fprintf(stderr, "      --no-auto-exposure Fixed exposure instead of eye adaptation\n");
     fprintf(stderr, "      --ground <radius>  Ground projection dome radius (default: 5x scene)\n");
@@ -338,6 +351,39 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 return -1;
             }
             args->orbit_pitch = (float)atof(argv[i]);
+        } else if (strcmp(argv[i], "--cam-eye") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            if (sscanf(argv[i], "%f,%f,%f", &args->cam_eye[0], &args->cam_eye[1],
+                       &args->cam_eye[2]) != 3) {
+                fprintf(stderr, "Error: --cam-eye expects x,y,z\n");
+                return -1;
+            }
+            args->cam_eye_set = 1;
+        } else if (strcmp(argv[i], "--cam-target") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            if (sscanf(argv[i], "%f,%f,%f", &args->cam_target[0], &args->cam_target[1],
+                       &args->cam_target[2]) != 3) {
+                fprintf(stderr, "Error: --cam-target expects x,y,z\n");
+                return -1;
+            }
+            args->cam_target_set = 1;
+        } else if (strcmp(argv[i], "--cam-up") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            if (sscanf(argv[i], "%f,%f,%f", &args->cam_up[0], &args->cam_up[1],
+                       &args->cam_up[2]) != 3) {
+                fprintf(stderr, "Error: --cam-up expects x,y,z\n");
+                return -1;
+            }
+            args->cam_up_set = 1;
         } else if (strcmp(argv[i], "-E") == 0 || strcmp(argv[i], "--exposure") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -1680,6 +1726,25 @@ int main(int argc, char** argv) {
                               fminf(camera_distance * 0.5f, orbit_max), orbit_max);
 
     update_engine_camera_lookat(engine);
+
+    // Explicit camera pose override (--cam-eye/--cam-target): reproduce any
+    // interactive view exactly, bypassing the yaw/pitch/distance orbit framing
+    // above (which always looks at scene_center and cannot express a panned
+    // view). Reuses the scene-derived clip planes and orbit limits set above;
+    // the per-frame distance-adaptive near tracks the new cam-to-target span.
+    if (args.cam_eye_set && args.cam_target_set) {
+        vec3 up = {0.0f, 1.0f, 0.0f};
+        if (args.cam_up_set)
+            glm_vec3_copy(args.cam_up, up);
+        set_camera_position(camera, args.cam_eye);
+        set_camera_look_at(camera, args.cam_target);
+        set_camera_up_vector(camera, up);
+        camera->distance = glm_vec3_distance(args.cam_eye, args.cam_target);
+        update_engine_camera_lookat(engine);
+    } else if (args.cam_eye_set || args.cam_target_set) {
+        fprintf(stderr,
+                "Warning: --cam-eye and --cam-target must both be given; ignoring camera pose.\n");
+    }
 
     print_scene(scene);
 
