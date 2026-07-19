@@ -108,8 +108,8 @@ uniform float time;
 uniform sampler2D albedoTex;
 uniform sampler2D normalTex;
 uniform sampler2D emissiveTex;
-uniform sampler2D sheenTex;          // reserved (unsampled)
-uniform sampler2D reflectanceTex;    // reserved (unsampled)
+uniform sampler2D sheenTex;          // KHR sheen color (sRGB, unit 8)
+uniform sampler2D reflectanceTex;    // reserved (unsampled; KHR specular color deferred)
 uniform sampler2D clearcoatNormalTex; // clearcoat normal map (freed unit)
 
 // The scalar masks (roughness/metallic/ao/opacity/microsurface/anisotropy/
@@ -287,6 +287,21 @@ float distributionCharlie(vec3 N, vec3 H, float sheenRoughness) {
 // Ashikhmin visibility term, paired with the Charlie NDF for sheen (glTF ref).
 float visibilityAshikhmin(float NdotL, float NdotV) {
     return clamp(1.0 / (4.0 * (NdotL + NdotV - NdotL * NdotV)), 0.0, 1.0);
+}
+
+// Peak RGB channel (the engine's inline max(r, max(g, b)) idiom).
+float maxComp(vec3 v) {
+    return max(v.r, max(v.g, v.b));
+}
+
+// Resolved KHR sheen color: the factor, optionally modulated by the sheen color
+// texture (unit 8, sRGB). (0,0,0) for a material carrying no sheen.
+vec3 sheenColorAt(vec2 uv) {
+    vec3 c = sheenColorFactor;
+    if (sheenTexExists > 0) {
+        c *= texture(sheenTex, uv).rgb;
+    }
+    return c;
 }
 
 // Anisotropic GGX distribution (for brushed metal, hair, etc.)
@@ -939,17 +954,13 @@ void main() {
         // exact pre-sheen accumulation grouping below (byte-identical off).
         vec3 sheenSpec = vec3(0.0);
         float sheenScale = 1.0;
-        if (sheenEnabled > 0 &&
-            max(max(sheenColorFactor.r, sheenColorFactor.g), sheenColorFactor.b) > 0.0) {
-            vec3 sheenColor = sheenColorFactor;
-            if (sheenTexExists > 0) {
-                sheenColor *= texture(sheenTex, uv).rgb;
-            }
+        if (sheenEnabled > 0 && maxComp(sheenColorFactor) > 0.0) {
+            vec3 sheenColor = sheenColorAt(uv);
             float shR = clamp(sheenRoughnessFactor, 0.07, 1.0);
             float Dsh = distributionCharlie(N, H, shR);
             float Vsh = visibilityAshikhmin(NdotL, NdotV);
             sheenSpec = sheenColor * Dsh * Vsh;
-            sheenScale = 1.0 - max(max(sheenColor.r, sheenColor.g), sheenColor.b);
+            sheenScale = 1.0 - maxComp(sheenColor);
         }
 
         // Add this light's contribution with shadow. Firefly clamp: a
@@ -1038,16 +1049,16 @@ void main() {
         // rim that avoids flooding the whole surface white (the E-LUT is the
         // follow-up). Guarded so the base ambient lines above stay byte-identical
         // when sheen is off.
-        if (sheenEnabled > 0 &&
-            max(max(sheenColorFactor.r, sheenColorFactor.g), sheenColorFactor.b) > 0.0) {
-            vec3 sheenColor = sheenColorFactor;
-            if (sheenTexExists > 0) {
-                sheenColor *= texture(sheenTex, uv).rgb;
-            }
+        if (sheenEnabled > 0 && maxComp(sheenColorFactor) > 0.0) {
+            vec3 sheenColor = sheenColorAt(uv);
             float shR = clamp(sheenRoughnessFactor, 0.07, 1.0);
             vec3 sheenPre = textureLod(prefilteredMap, R, shR * maxReflectionLOD).rgb;
             float sheenE = pow(1.0 - NdotV, 2.0);
-            ambient += sheenColor * sheenPre * sheenE * aoMap * iblIntensity;
+            // Dim the base ambient like the analytic path (and the coat IBL above),
+            // then add the grazing-concentrated sheen -- keeps the layer-over-base
+            // energy convention consistent across analytic and IBL.
+            ambient = ambient * (1.0 - maxComp(sheenColor)) +
+                      sheenColor * sheenPre * sheenE * aoMap * iblIntensity;
         }
     } else {
         // Fallback to simple ambient when IBL is disabled (diffuse-only, so

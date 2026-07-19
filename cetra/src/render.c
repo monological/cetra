@@ -193,8 +193,8 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
     uniform_set_int(u, "normalTex", TEXUNIT_NORMAL);
     uniform_set_int(u, "emissiveTex", TEXUNIT_EMISSIVE);
     uniform_set_int(u, "sceneColorTex", TEXUNIT_SCENE_COLOR); // refraction source
-    uniform_set_int(u, "sheenTex", TEXUNIT_SHEEN);            // reserved (unsampled)
-    uniform_set_int(u, "reflectanceTex", TEXUNIT_REFLECTANCE); // reserved (unsampled)
+    uniform_set_int(u, "sheenTex", TEXUNIT_SHEEN);            // KHR sheen color (sRGB)
+    uniform_set_int(u, "reflectanceTex", TEXUNIT_REFLECTANCE); // reserved (KHR specular color deferred)
     uniform_set_int(u, "clearcoatNormalTex", TEXUNIT_CLEARCOAT_NORMAL);
 
     // Per-mask layer into the mask array (-1 = no texture -> scalar factor)
@@ -223,8 +223,8 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
 
     // height_tex is deliberately NOT bound: pbr_frag declares heightTex but
     // never samples it (POM is unimplemented), and TEXUNIT_SCENE_COLOR carries
-    // the refraction pass's scene-color texture. sheen/reflectance are reserved
-    // (compiler-dropped until KHR sheen/specular land).
+    // the refraction pass's scene-color texture. sheen color is now live (KHR
+    // sheen); reflectance stays reserved (KHR specular color texture deferred).
     if (material->sheen_tex) {
         glActiveTexture(GL_TEXTURE0 + TEXUNIT_SHEEN);
         glBindTexture(GL_TEXTURE_2D, material->sheen_tex->id);
