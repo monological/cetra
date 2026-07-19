@@ -850,13 +850,30 @@ void main() {
             }
         }
 
+        // Clearcoat: a second thin smooth dielectric GGX lobe (fixed F0 = 0.04,
+        // IOR 1.5) over the base, using the base normal. The base term is
+        // attenuated by the coat's Fresnel -- light the coat reflects never
+        // reaches it (Kelemen-Szirmay-Kalos / Filament layering).
+        vec3 coatSpec = vec3(0.0);
+        float coatAtten = 0.0;
+        if (clearcoatEnabled > 0 && clearcoat > 0.0) {
+            float ccR = clamp(clearcoatRoughness, 0.04, 1.0);
+            float Dc = distributionGGX(N, H, ccR);
+            float Gc = geometrySmith(N, V, L, ccR);
+            float Fc = fresnelSchlick(max(dot(H, V), 0.0), vec3(0.04)).r;
+            coatSpec = vec3(clearcoat * Dc * Gc * Fc / (4.0 * NdotV * NdotL + 0.0001));
+            coatAtten = clearcoat * Fc;
+        }
+
         // Add this light's contribution with shadow. Firefly clamp: a
         // sub-pixel GGX spike carries far more energy than the pixel
         // legitimately integrates, aliasing into white sparkle across
         // low-roughness normal-mapped surfaces (and before the fp16 clamp,
         // overflowing to NaN). Highlights saturate the tonemap well below
         // this cap, so only the aliasing energy is lost.
-        Lo += min((kD * albedoMap / PI + specular) * radiance * NdotL * shadow, vec3(10.0));
+        Lo += min(((kD * albedoMap / PI + specular) * (1.0 - coatAtten) + coatSpec) * radiance *
+                      NdotL * shadow,
+                  vec3(10.0));
 
         // Add subsurface scattering contribution
         if (subsurfaceLayer >= 0 && sssThickness < 0.99) {
@@ -907,6 +924,19 @@ void main() {
         vec3 specular = prefilteredColor * (F * brdf.x + brdf.y) * energyComp;
 
         ambient = (kD * diffuse + specular) * aoMap * iblIntensity;
+
+        // Clearcoat IBL: a second env reflection at the coat roughness (its own
+        // split-sum with F0 = 0.04), attenuating the base ambient by the coat's
+        // grazing Fresnel. Reuses the prefiltered env + BRDF LUT -- no new
+        // sampler. Uses the plain reflection R (the coat has no parallax proxy).
+        if (clearcoatEnabled > 0 && clearcoat > 0.0) {
+            float ccR = clamp(clearcoatRoughness, 0.04, 1.0);
+            float ccF = fresnelSchlickRoughness(NdotV, vec3(0.04), ccR).r * clearcoat;
+            vec2 ccBrdf = texture(brdfLUT, vec2(NdotV, ccR)).rg;
+            vec3 ccPre = textureLod(prefilteredMap, R, ccR * maxReflectionLOD).rgb;
+            vec3 coatIBL = clearcoat * ccPre * (0.04 * ccBrdf.x + ccBrdf.y);
+            ambient = ambient * (1.0 - ccF) + coatIBL * aoMap * iblIntensity;
+        }
     } else {
         // Fallback to simple ambient when IBL is disabled (diffuse-only, so
         // it yields to transmission like the other diffuse terms)
