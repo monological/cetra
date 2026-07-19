@@ -54,9 +54,10 @@ typedef struct Engine {
 
     GLuint framebuffer;                // Framebuffer object
     GLuint multisample_texture;        // Multisample HDR color (attachment 0)
-    GLuint normal_multisample_texture; // Multisample view-space normals + roughness (attachment 1)
-    GLuint aux_multisample_texture;    // Multisample aux G-buffer: motion .xy + linear view-Z .z
-                                       // (attachment 2)
+    GLuint normal_multisample_texture; // Multisample view-space normal .xyz + SSR reflective marker
+                                       // .a (0 model / -1 floor / +alpha A2C) (attachment 1)
+    GLuint aux_multisample_texture;    // Multisample aux G-buffer: motion .xy + linear view-Z .z +
+                                       // effective roughness .w (attachment 2)
     GLuint albedo_multisample_texture; // Multisample base color for SSGI (attachment 3)
     GLuint depth_renderbuffer;         // Depth renderbuffer
     // Refraction source: mid-frame resolve of the opaque scene into a mipped

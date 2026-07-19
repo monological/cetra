@@ -1134,10 +1134,11 @@ void main() {
                     : vec4(normalize(mat3(view) * N), 0.0);
 
     // Auxiliary G-buffer: screen-space motion vector (.xy, un-jittered current
-    // vs previous, UV units) for TAA reprojection, plus linear view-space Z (.z)
-    // for GTAO. Reconstructing occlusion positions from a linear Z avoids the
-    // non-linear DEPTH24 buffer, whose grazing-angle quantization staircases the
-    // reconstructed floor into AO banding.
-    VelocityOut = vec4(screenVelocity(), ViewPos.z, 0.0);
+    // vs previous, UV units) for TAA reprojection, linear view-space Z (.z) for
+    // GTAO position reconstruction, and effective perceptual roughness (.w) for
+    // the tonemap specular-occlusion pass. Reconstructing occlusion positions
+    // from a linear Z avoids the non-linear DEPTH24 buffer, whose grazing-angle
+    // quantization staircases the reconstructed floor into AO banding.
+    VelocityOut = vec4(screenVelocity(), ViewPos.z, roughnessMap);
     AlbedoOut = vec4(albedoMap, metallicMap);
 }
