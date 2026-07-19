@@ -87,6 +87,14 @@ int load_hdr_environment(IBLResources* ibl, const char* hdr_path);
 // Precomputation (run once after HDR load)
 int precompute_ibl(IBLResources* ibl, struct Engine* engine);
 
+// The environment-independent half of the bake: irradiance + GGX prefilter
+// (+ BRDF LUT once) from an already-populated, MIPPED environment_cubemap of
+// face size env_size. Sets max_reflection_lod from prefilter_mips. Safe to
+// call repeatedly (delete-before-gen) — the re-bake entry point for
+// procedural environments whose content changes.
+int ibl_bake_from_cubemap(IBLResources* ibl, struct Engine* engine, int env_size,
+                          int prefilter_size, int prefilter_mips);
+
 // Skybox rendering
 void render_skybox(IBLResources* ibl, mat4 view, mat4 projection, float brightness,
                    bool ground_projection, float gp_radius, float gp_height);

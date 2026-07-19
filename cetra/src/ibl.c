@@ -391,7 +391,8 @@ static void render_equirect_to_cubemap(IBLResources* ibl, mat4 projection, const
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
-static void render_irradiance_convolution(IBLResources* ibl, mat4 projection, const mat4 views[6]) {
+static void render_irradiance_convolution(IBLResources* ibl, mat4 projection, const mat4 views[6],
+                                          int env_size) {
     ShaderProgram* program = ibl->irradiance_program;
     if (!program)
         return;
@@ -404,8 +405,7 @@ static void render_irradiance_convolution(IBLResources* ibl, mat4 projection, co
     uniform_set_mat4(program->uniforms, "projection", (float*)projection);
     // Integrate from the mip whose faces are ~64px: dense enough for the
     // convolution, coarse enough that small bright lights are pre-averaged in
-    uniform_set_float(program->uniforms, "sampleMipLevel",
-                      log2f((float)IBL_CUBEMAP_SIZE / 64.0f));
+    uniform_set_float(program->uniforms, "sampleMipLevel", log2f((float)env_size / 64.0f));
 
     glViewport(0, 0, IBL_IRRADIANCE_SIZE, IBL_IRRADIANCE_SIZE);
     glBindFramebuffer(GL_FRAMEBUFFER, ibl->capture_fbo);
@@ -495,7 +495,9 @@ static void render_brdf_lut(IBLResources* ibl) {
     if (!program)
         return;
 
-    // Create BRDF LUT texture
+    // Create BRDF LUT texture (delete-before-gen keeps re-bakes leak-free)
+    if (ibl->brdf_lut)
+        glDeleteTextures(1, &ibl->brdf_lut);
     glGenTextures(1, &ibl->brdf_lut);
     glBindTexture(GL_TEXTURE_2D, ibl->brdf_lut);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RG16F, IBL_BRDF_LUT_SIZE, IBL_BRDF_LUT_SIZE, 0, GL_RG,
@@ -521,24 +523,27 @@ static void render_brdf_lut(IBLResources* ibl) {
     glDeleteFramebuffers(1, &brdf_fbo);
 }
 
-int precompute_ibl(IBLResources* ibl, Engine* engine) {
-    if (!ibl || !engine || ibl->hdr_texture == 0) {
-        log_error("Invalid IBL state for precomputation");
+// Run the environment-independent half of the IBL bake: irradiance
+// convolution, GGX prefilter, and (once) the BRDF LUT, all derived from an
+// already-populated, mipped ibl->environment_cubemap. env_size is that
+// cubemap's face size (it drives the irradiance convolution's mip
+// selection); prefilter_size/mips size the specular chain and set
+// max_reflection_lod. Safe to call repeatedly (delete-before-gen
+// throughout) -- this is the re-bake entry point for procedural
+// environments whose content changes (a sky following its sun).
+int ibl_bake_from_cubemap(IBLResources* ibl, Engine* engine, int env_size, int prefilter_size,
+                          int prefilter_mips) {
+    if (!ibl || !engine || ibl->environment_cubemap == 0) {
+        log_error("Invalid IBL state for bake");
         return -1;
     }
 
-    log_info("Starting IBL precomputation...");
-
-    // Get or create shader programs
-    ibl->equirect_to_cubemap_program =
-        get_engine_shader_program_by_name(engine, "ibl_equirect_to_cube");
     ibl->irradiance_program = get_engine_shader_program_by_name(engine, "ibl_irradiance");
     ibl->prefilter_program = get_engine_shader_program_by_name(engine, "ibl_prefilter");
     ibl->brdf_program = get_engine_shader_program_by_name(engine, "ibl_brdf");
     ibl->skybox_program = get_engine_shader_program_by_name(engine, "skybox");
-
-    if (!ibl->equirect_to_cubemap_program || !ibl->irradiance_program || !ibl->prefilter_program ||
-        !ibl->brdf_program || !ibl->skybox_program) {
+    if (!ibl->irradiance_program || !ibl->prefilter_program || !ibl->brdf_program ||
+        !ibl->skybox_program) {
         log_error("Failed to get IBL shader programs");
         return -1;
     }
@@ -546,19 +551,16 @@ int precompute_ibl(IBLResources* ibl, Engine* engine) {
     // Enable seamless cubemap sampling to avoid artifacts at face edges
     glEnable(GL_TEXTURE_CUBE_MAP_SEAMLESS);
 
-    // Setup FBO and VAOs
-    setup_capture_fbo(ibl, IBL_CUBEMAP_SIZE);
+    setup_capture_fbo(ibl, env_size);
     init_cube_vao(ibl);
     init_quad_vao(ibl);
 
-    // Get view matrices
     mat4 capture_views[6];
     mat4 capture_projection = {{0}};
     vec3 capture_origin = {0.0f, 0.0f, 0.0f};
     ibl_capture_views(capture_origin, capture_views);
     get_cubemap_projection(capture_projection);
 
-    // Save current viewport and framebuffer
     GLint prev_viewport[4];
     GLint prev_framebuffer;
     glGetIntegerv(GL_VIEWPORT, prev_viewport);
@@ -571,31 +573,22 @@ int precompute_ibl(IBLResources* ibl, Engine* engine) {
     glDisable(GL_CULL_FACE);
     glDisable(GL_BLEND);
 
-    // Step 1: Convert equirectangular to cubemap. The mip chain is required
-    // by the convolutions below: this HDR class concentrates its energy in
-    // tiny, extremely bright light sources that sparse sampling of the
-    // full-res faces would statistically miss (under-lighting every model
-    // relative to the visible background); the mips pre-average that energy
-    // so the convolution integrals actually see it.
-    log_info("  Converting equirectangular to cubemap...");
-    ibl_create_cubemap_texture(&ibl->environment_cubemap, IBL_CUBEMAP_SIZE, true);
-    render_equirect_to_cubemap(ibl, capture_projection, capture_views);
-    glBindTexture(GL_TEXTURE_CUBE_MAP, ibl->environment_cubemap);
-    glGenerateMipmap(GL_TEXTURE_CUBE_MAP);
-
-    // Step 2: Generate irradiance map
     log_info("  Generating irradiance map...");
+    if (ibl->irradiance_map)
+        glDeleteTextures(1, &ibl->irradiance_map);
     ibl_create_cubemap_texture(&ibl->irradiance_map, IBL_IRRADIANCE_SIZE, false);
-    render_irradiance_convolution(ibl, capture_projection, capture_views);
+    render_irradiance_convolution(ibl, capture_projection, capture_views, env_size);
 
-    // Step 3: Generate prefiltered map with mipmaps
     log_info("  Generating prefiltered environment map...");
-    ibl_prefilter_cubemap(ibl, ibl->environment_cubemap, &ibl->prefilter_map, IBL_PREFILTER_SIZE,
-                          IBL_PREFILTER_MIP_LEVELS);
+    ibl_prefilter_cubemap(ibl, ibl->environment_cubemap, &ibl->prefilter_map, prefilter_size,
+                          prefilter_mips);
+    ibl->max_reflection_lod = (float)(prefilter_mips - 1);
 
-    // Step 4: Generate BRDF LUT
-    log_info("  Generating BRDF LUT...");
-    render_brdf_lut(ibl);
+    // The BRDF LUT is environment-independent; bake it once and keep it
+    if (ibl->brdf_lut == 0) {
+        log_info("  Generating BRDF LUT...");
+        render_brdf_lut(ibl);
+    }
 
     // Re-enable face culling and the engine's default blending
     glEnable(GL_CULL_FACE);
@@ -615,9 +608,66 @@ int precompute_ibl(IBLResources* ibl, Engine* engine) {
     glEnable(GL_DEPTH_TEST);
 
     ibl->precomputed = true;
-    log_info("IBL precomputation complete!");
-
     return 0;
+}
+
+int precompute_ibl(IBLResources* ibl, Engine* engine) {
+    if (!ibl || !engine || ibl->hdr_texture == 0) {
+        log_error("Invalid IBL state for precomputation");
+        return -1;
+    }
+
+    log_info("Starting IBL precomputation...");
+
+    ibl->equirect_to_cubemap_program =
+        get_engine_shader_program_by_name(engine, "ibl_equirect_to_cube");
+    if (!ibl->equirect_to_cubemap_program) {
+        log_error("Failed to get IBL shader programs");
+        return -1;
+    }
+
+    glEnable(GL_TEXTURE_CUBE_MAP_SEAMLESS);
+    setup_capture_fbo(ibl, IBL_CUBEMAP_SIZE);
+    init_cube_vao(ibl);
+
+    mat4 capture_views[6];
+    mat4 capture_projection = {{0}};
+    vec3 capture_origin = {0.0f, 0.0f, 0.0f};
+    ibl_capture_views(capture_origin, capture_views);
+    get_cubemap_projection(capture_projection);
+
+    GLint prev_viewport[4];
+    GLint prev_framebuffer;
+    glGetIntegerv(GL_VIEWPORT, prev_viewport);
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_framebuffer);
+
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_BLEND);
+
+    // Convert equirectangular to cubemap. The mip chain is required by the
+    // convolutions in the bake below: this HDR class concentrates its energy
+    // in tiny, extremely bright light sources that sparse sampling of the
+    // full-res faces would statistically miss (under-lighting every model
+    // relative to the visible background); the mips pre-average that energy
+    // so the convolution integrals actually see it.
+    log_info("  Converting equirectangular to cubemap...");
+    if (ibl->environment_cubemap)
+        glDeleteTextures(1, &ibl->environment_cubemap);
+    ibl_create_cubemap_texture(&ibl->environment_cubemap, IBL_CUBEMAP_SIZE, true);
+    render_equirect_to_cubemap(ibl, capture_projection, capture_views);
+    glBindTexture(GL_TEXTURE_CUBE_MAP, ibl->environment_cubemap);
+    glGenerateMipmap(GL_TEXTURE_CUBE_MAP);
+
+    glEnable(GL_CULL_FACE);
+    glEnable(GL_BLEND);
+    glViewport(prev_viewport[0], prev_viewport[1], prev_viewport[2], prev_viewport[3]);
+    glBindFramebuffer(GL_FRAMEBUFFER, prev_framebuffer);
+
+    int rc = ibl_bake_from_cubemap(ibl, engine, IBL_CUBEMAP_SIZE, IBL_PREFILTER_SIZE,
+                                   IBL_PREFILTER_MIP_LEVELS);
+    if (rc == 0)
+        log_info("IBL precomputation complete!");
+    return rc;
 }
 
 static void draw_background_cube(IBLResources* ibl, GLuint cubemap, mat4 view, mat4 projection,
