@@ -106,10 +106,16 @@ void render_skybox_cubemap(IBLResources* ibl, GLuint cubemap, mat4 view, mat4 pr
 // Binding for PBR rendering
 void bind_ibl_textures(IBLResources* ibl, ShaderProgram* program);
 
-// Cubemap capture toolkit (shared with reflection probes)
+// Cubemap capture toolkit (shared with reflection probes and the sky)
 
 // Six cubemap-face view matrices looking out from origin
 void ibl_capture_views(vec3 origin, mat4 views[6]);
+
+// Lazily create the shared position-only unit-cube VAO (no-op if present) and
+// draw it (36 verts, culling-agnostic) — reused for cubemap-face and skybox
+// draws so callers need not carry their own cube.
+int ibl_init_cube_vao(IBLResources* ibl);
+void ibl_render_unit_cube(IBLResources* ibl);
 
 // Allocate an RGB16F cubemap (optionally mip-filtered; mips are not generated)
 void ibl_create_cubemap_texture(GLuint* texture, int size, bool mipmap);

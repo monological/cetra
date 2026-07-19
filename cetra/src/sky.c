@@ -9,30 +9,6 @@
 #include "util.h"
 #include "ext/log.h"
 
-// Unit cube (position only, 36 verts) for the environment-face and
-// background draws. Culling is disabled at draw time, so winding is
-// irrelevant -- every face renders from inside.
-static const float SKY_CUBE_VERTS[] = {
-    -1, 1,  -1, -1, -1, -1, 1,  -1, -1, 1,  -1, -1, 1,  1,  -1, -1, 1,  -1, // -Z
-    -1, -1, 1,  -1, -1, -1, -1, 1,  -1, -1, 1,  -1, -1, 1,  1,  -1, -1, 1,  // -X
-    1,  -1, -1, 1,  -1, 1,  1,  1,  1,  1,  1,  1,  1,  1,  -1, 1,  -1, -1, // +X
-    -1, -1, 1,  -1, 1,  1,  1,  1,  1,  1,  1,  1,  1,  -1, 1,  -1, -1, 1,  // +Z
-    -1, 1,  -1, 1,  1,  -1, 1,  1,  1,  1,  1,  1,  -1, 1,  1,  -1, 1,  -1, // +Y
-    -1, -1, -1, -1, -1, 1,  1,  -1, -1, 1,  -1, -1, -1, -1, 1,  1,  -1, 1}; // -Y
-
-static void sky_init_cube(SkyAtmosphere* sky) {
-    if (sky->cube_vao)
-        return;
-    glGenVertexArrays(1, &sky->cube_vao);
-    glGenBuffers(1, &sky->cube_vbo);
-    glBindVertexArray(sky->cube_vao);
-    glBindBuffer(GL_ARRAY_BUFFER, sky->cube_vbo);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(SKY_CUBE_VERTS), SKY_CUBE_VERTS, GL_STATIC_DRAW);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
-    glBindVertexArray(0);
-}
-
 SkyAtmosphere* create_sky_atmosphere(void) {
     SkyAtmosphere* sky = malloc(sizeof(SkyAtmosphere));
     if (!sky) {
@@ -64,14 +40,6 @@ void free_sky_atmosphere(SkyAtmosphere* sky) {
         glDeleteVertexArrays(1, &sky->quad_vao);
     if (sky->quad_vbo)
         glDeleteBuffers(1, &sky->quad_vbo);
-    if (sky->cube_vao)
-        glDeleteVertexArrays(1, &sky->cube_vao);
-    if (sky->cube_vbo)
-        glDeleteBuffers(1, &sky->cube_vbo);
-    if (sky->capture_fbo)
-        glDeleteFramebuffers(1, &sky->capture_fbo);
-    if (sky->capture_rbo)
-        glDeleteRenderbuffers(1, &sky->capture_rbo);
 
     free(sky);
 }
@@ -87,7 +55,10 @@ void sky_update_sun_dir(SkyAtmosphere* sky) {
     sky->sun_dir[2] = cosf(el) * cosf(az);
 }
 
-// Earth atmosphere constants, mirroring the sky_* shaders (kilometers)
+// Earth atmosphere constants, mirroring the sky_* shaders (kilometers).
+// SOURCE OF TRUTH is sky_transmittance_frag.glsl / sky_view_frag.glsl — these
+// C copies exist only for the no-readback CPU transmittance eval and MUST be
+// kept in sync with the shader profiles if the atmosphere is ever retuned.
 #define SKY_RG 6360.0f
 #define SKY_RT 6460.0f
 
@@ -241,24 +212,9 @@ static void sky_debug_draw(SkyAtmosphere* sky, GLuint lut, int x, int y, int w, 
 // Bake the sky-view LUT from the current sun (samples transmittance +
 // multiscatter on units 0/1). Small fullscreen RGBA16F pass.
 static void sky_bake_view_lut(SkyAtmosphere* sky) {
-    if (sky->sky_view_lut)
-        glDeleteTextures(1, &sky->sky_view_lut);
-    glActiveTexture(GL_TEXTURE0 + SKY_BAKE_SCRATCH_UNIT);
-    glGenTextures(1, &sky->sky_view_lut);
-    glBindTexture(GL_TEXTURE_2D, sky->sky_view_lut);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, SKY_VIEW_W, SKY_VIEW_H, 0, GL_RGBA, GL_FLOAT, NULL);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glActiveTexture(GL_TEXTURE0);
-
-    GLuint fbo;
-    glGenFramebuffers(1, &fbo);
-    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, sky->sky_view_lut,
-                           0);
-    glViewport(0, 0, SKY_VIEW_W, SKY_VIEW_H);
+    // Bind the two source LUTs on units 0/1 and set the sun before the bake;
+    // bake_lut_2d re-uses this program, allocates the dest on the scratch unit
+    // (6), and draws — leaving these bindings intact.
     glUseProgram(sky->view_program->id);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, sky->transmittance_lut);
@@ -267,10 +223,8 @@ static void sky_bake_view_lut(SkyAtmosphere* sky) {
     glBindTexture(GL_TEXTURE_2D, sky->multiscatter_lut);
     uniform_set_int(sky->view_program->uniforms, "multiscatterLut", 1);
     uniform_set_float(sky->view_program->uniforms, "sunCosZenith", sky->sun_dir[1]);
-    draw_fullscreen_quad(sky->quad_vao);
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    glDeleteFramebuffers(1, &fbo);
     glActiveTexture(GL_TEXTURE0);
+    bake_lut_2d(sky, sky->view_program, &sky->sky_view_lut, SKY_VIEW_W, SKY_VIEW_H);
 }
 
 int sky_bake(SkyAtmosphere* sky, struct IBLResources* ibl, struct Engine* engine) {
@@ -287,7 +241,9 @@ int sky_bake(SkyAtmosphere* sky, struct IBLResources* ibl, struct Engine* engine
     }
     if (sky->quad_vao == 0)
         create_fullscreen_quad_vao(&sky->quad_vao, &sky->quad_vbo);
-    sky_init_cube(sky);
+    // Reuse the IBL toolkit's unit cube for the six env-face draws (the probe
+    // sibling reuses ibl's capture scaffolding the same way).
+    ibl_init_cube_vao(ibl);
 
     GLint prev_viewport[4];
     GLint prev_framebuffer;
@@ -308,15 +264,17 @@ int sky_bake(SkyAtmosphere* sky, struct IBLResources* ibl, struct Engine* engine
         glDeleteTextures(1, &ibl->environment_cubemap);
     ibl_create_cubemap_texture(&ibl->environment_cubemap, SKY_ENV_SIZE, true);
 
-    if (sky->capture_fbo == 0)
-        glGenFramebuffers(1, &sky->capture_fbo);
-    if (sky->capture_rbo == 0)
-        glGenRenderbuffers(1, &sky->capture_rbo);
-    glBindFramebuffer(GL_FRAMEBUFFER, sky->capture_fbo);
-    glBindRenderbuffer(GL_RENDERBUFFER, sky->capture_rbo);
+    // Reuse the IBL capture FBO/RBO (created here if this is the first bake;
+    // ibl_bake_from_cubemap below reuses the same handles). Matches probe.c.
+    if (ibl->capture_fbo == 0)
+        glGenFramebuffers(1, &ibl->capture_fbo);
+    if (ibl->capture_rbo == 0)
+        glGenRenderbuffers(1, &ibl->capture_rbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, ibl->capture_fbo);
+    glBindRenderbuffer(GL_RENDERBUFFER, ibl->capture_rbo);
     glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, SKY_ENV_SIZE, SKY_ENV_SIZE);
     glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER,
-                              sky->capture_rbo);
+                              ibl->capture_rbo);
     glViewport(0, 0, SKY_ENV_SIZE, SKY_ENV_SIZE);
 
     mat4 views[6];
@@ -339,10 +297,8 @@ int sky_bake(SkyAtmosphere* sky, struct IBLResources* ibl, struct Engine* engine
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
                                GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, ibl->environment_cubemap, 0);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-        glBindVertexArray(sky->cube_vao);
-        glDrawArrays(GL_TRIANGLES, 0, 36);
+        ibl_render_unit_cube(ibl);
     }
-    glBindVertexArray(0);
     glBindTexture(GL_TEXTURE_CUBE_MAP, ibl->environment_cubemap);
     glGenerateMipmap(GL_TEXTURE_CUBE_MAP);
     double t1 = glfwGetTime();
@@ -361,13 +317,6 @@ int sky_bake(SkyAtmosphere* sky, struct IBLResources* ibl, struct Engine* engine
         0)
         return -1;
     double t2 = glfwGetTime();
-
-    // The sun is the single authoritative directional lobe toward the sun (the
-    // extract_light_lobes convention); keep it in sync on every re-bake so a
-    // moving sun stays coherent with the specular-occlusion term.
-    glm_vec3_copy(sky->sun_dir, ibl->light_dirs[0]);
-    ibl->light_energies[0] = 1.0f;
-    ibl->light_count = 1;
 
     log_info("Sky bake: view+env %.1f ms, IBL %.1f ms", (t1 - t0) * 1000.0, (t2 - t1) * 1000.0);
     return 0;
@@ -404,8 +353,9 @@ int sky_update_sun(SkyAtmosphere* sky, struct IBLResources* ibl, struct Engine* 
     return 0;
 }
 
-void sky_render_background(SkyAtmosphere* sky, mat4 view, mat4 projection) {
-    if (!sky || !sky->background_program || !sky->sky_view_lut)
+void sky_render_background(SkyAtmosphere* sky, struct IBLResources* ibl, mat4 view,
+                           mat4 projection) {
+    if (!sky || !ibl || !sky->background_program || !sky->sky_view_lut)
         return;
 
     // Strip translation so the background sits at infinity
@@ -434,9 +384,7 @@ void sky_render_background(SkyAtmosphere* sky, mat4 view, mat4 projection) {
     glDisable(GL_CULL_FACE);
     glDepthFunc(GL_LEQUAL);
     glDepthMask(GL_FALSE);
-    glBindVertexArray(sky->cube_vao);
-    glDrawArrays(GL_TRIANGLES, 0, 36);
-    glBindVertexArray(0);
+    ibl_render_unit_cube(ibl);
     glDepthMask(GL_TRUE);
     glDepthFunc(GL_LESS);
     if (cull_was)

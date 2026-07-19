@@ -649,7 +649,7 @@ void render_current_scene(Engine* engine, float time_value) {
         } else if (scene->sky && scene->sky->enabled) {
             // Procedural sky owns the background (sky-view LUT + sun disc)
             // rather than the cubemap skybox
-            sky_render_background(scene->sky, *view, draw_projection);
+            sky_render_background(scene->sky, scene->ibl, *view, draw_projection);
         } else if (scene->render_skybox) {
             render_skybox(scene->ibl, *view, draw_projection, scene->skybox_brightness,
                           scene->skybox_ground_projection, scene->skybox_gp_radius,

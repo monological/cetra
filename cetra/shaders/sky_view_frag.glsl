@@ -62,12 +62,6 @@ float distanceToGround(float r, float mu, float R)
     return max(0.0, -r * mu - sqrt(disc));
 }
 
-// Back-compat alias for the transmittance UV mapping (always the top/exit)
-float distanceToSphere(float r, float mu, float R)
-{
-    return distanceToTop(r, mu, R);
-}
-
 bool hitsGround(float r, float mu)
 {
     return mu < 0.0 && r * r * (mu * mu - 1.0) + Rg * Rg >= 0.0;
@@ -77,7 +71,7 @@ vec2 transmittanceUv(float r, float mu)
 {
     float H = sqrt(Rt * Rt - Rg * Rg);
     float rho = sqrt(max(r * r - Rg * Rg, 0.0));
-    float d = distanceToSphere(r, mu, Rt);
+    float d = distanceToTop(r, mu, Rt);
     float d_min = Rt - r;
     float d_max = rho + H;
     return vec2((d - d_min) / (d_max - d_min), rho / H);

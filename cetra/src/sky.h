@@ -66,9 +66,9 @@ typedef struct SkyAtmosphere {
     ShaderProgram* env_program;
     ShaderProgram* background_program;
 
-    // Cube-face capture scaffolding (shares the IBL toolkit's shape)
-    GLuint capture_fbo, capture_rbo;
-    GLuint cube_vao, cube_vbo;
+    // Env-face capture (FBO/RBO) and the unit cube are borrowed from the
+    // passed IBLResources at bake time (the probe sibling's reuse pattern),
+    // so the sky owns none of that scaffolding itself.
 
     bool luts_baked; // the static (sun-independent) LUT pair is valid
 } SkyAtmosphere;
@@ -111,8 +111,10 @@ int sky_update_sun(SkyAtmosphere* sky, struct IBLResources* ibl, struct Engine* 
 
 // Draw the procedural sky as the frame background (sky-view LUT + analytic
 // sun disc), replacing render_skybox in sky mode. Strips translation from
-// view like the skybox path.
-void sky_render_background(SkyAtmosphere* sky, mat4 view, mat4 projection);
+// view like the skybox path. Borrows the unit cube from ibl (populated during
+// sky_bake).
+void sky_render_background(SkyAtmosphere* sky, struct IBLResources* ibl, mat4 view,
+                           mat4 projection);
 
 // Debug: blit the LUTs into the bottom-left corner of the default
 // framebuffer (transmittance above multiscatter), scaled up for

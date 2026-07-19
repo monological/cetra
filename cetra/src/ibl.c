@@ -55,7 +55,7 @@ static void get_cubemap_projection(mat4 projection) {
     glm_perspective(glm_rad(90.0f), 1.0f, 0.1f, 10.0f, projection);
 }
 
-static int init_cube_vao(IBLResources* ibl) {
+int ibl_init_cube_vao(IBLResources* ibl) {
     if (ibl->cube_vao != 0)
         return 0;
 
@@ -81,7 +81,7 @@ static int init_quad_vao(IBLResources* ibl) {
     return 0;
 }
 
-static void ibl_render_unit_cube(IBLResources* ibl) {
+void ibl_render_unit_cube(IBLResources* ibl) {
     glBindVertexArray(ibl->cube_vao);
     glDrawArrays(GL_TRIANGLES, 0, 36);
     glBindVertexArray(0);
@@ -552,7 +552,7 @@ int ibl_bake_from_cubemap(IBLResources* ibl, Engine* engine, int env_size, int p
     glEnable(GL_TEXTURE_CUBE_MAP_SEAMLESS);
 
     setup_capture_fbo(ibl, env_size);
-    init_cube_vao(ibl);
+    ibl_init_cube_vao(ibl);
     init_quad_vao(ibl);
 
     mat4 capture_views[6];
@@ -628,7 +628,7 @@ int precompute_ibl(IBLResources* ibl, Engine* engine) {
 
     glEnable(GL_TEXTURE_CUBE_MAP_SEAMLESS);
     setup_capture_fbo(ibl, IBL_CUBEMAP_SIZE);
-    init_cube_vao(ibl);
+    ibl_init_cube_vao(ibl);
 
     mat4 capture_views[6];
     mat4 capture_projection = {{0}};
