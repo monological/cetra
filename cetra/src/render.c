@@ -191,6 +191,7 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
     uniform_set_int(u, "sceneColorTex", TEXUNIT_SCENE_COLOR); // refraction source
     uniform_set_int(u, "sheenTex", TEXUNIT_SHEEN);            // reserved (unsampled)
     uniform_set_int(u, "reflectanceTex", TEXUNIT_REFLECTANCE); // reserved (unsampled)
+    uniform_set_int(u, "clearcoatNormalTex", TEXUNIT_CLEARCOAT_NORMAL);
 
     // Per-mask layer into the mask array (-1 = no texture -> scalar factor)
     uniform_set_int(u, "roughnessLayer", material->roughness_layer);
@@ -230,12 +231,18 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
         glBindTexture(GL_TEXTURE_2D, material->reflectance_tex->id);
     }
 
+    if (material->clearcoat_normal_tex) {
+        glActiveTexture(GL_TEXTURE0 + TEXUNIT_CLEARCOAT_NORMAL);
+        glBindTexture(GL_TEXTURE_2D, material->clearcoat_normal_tex->id);
+    }
+
     uniform_set_int(u, "albedoTexExists", material->albedo_tex ? 1 : 0);
     uniform_set_int(u, "normalTexExists", material->normal_tex ? 1 : 0);
     uniform_set_int(u, "emissiveTexExists", material->emissive_tex ? 1 : 0);
     uniform_set_int(u, "heightTexExists", material->height_tex ? 1 : 0);
     uniform_set_int(u, "sheenTexExists", material->sheen_tex ? 1 : 0);
     uniform_set_int(u, "reflectanceTexExists", material->reflectance_tex ? 1 : 0);
+    uniform_set_int(u, "clearcoatNormalExists", material->clearcoat_normal_tex ? 1 : 0);
 
     // Reset active texture unit
     glActiveTexture(GL_TEXTURE0);

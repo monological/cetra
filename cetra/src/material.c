@@ -53,6 +53,7 @@ Material* create_material() {
     material->subsurface_scattering_tex = NULL;
     material->sheen_tex = NULL;
     material->reflectance_tex = NULL;
+    material->clearcoat_normal_tex = NULL;
 
     // No mask array layers until the array is built from loaded textures
     material->roughness_layer = -1;
@@ -108,6 +109,8 @@ void free_material(Material* material) {
             texture_release(material->sheen_tex);
         if (material->reflectance_tex)
             texture_release(material->reflectance_tex);
+        if (material->clearcoat_normal_tex)
+            texture_release(material->clearcoat_normal_tex);
 
         // Shader program managed by engine. Do not free here.
         free(material);
@@ -205,6 +208,14 @@ void set_material_reflectance_tex(Material* material, Texture* texture) {
     if (material->reflectance_tex)
         texture_release(material->reflectance_tex);
     material->reflectance_tex = texture_retain(texture);
+}
+
+void set_material_clearcoat_normal_tex(Material* material, Texture* texture) {
+    if (!material)
+        return;
+    if (material->clearcoat_normal_tex)
+        texture_release(material->clearcoat_normal_tex);
+    material->clearcoat_normal_tex = texture_retain(texture);
 }
 
 void set_material_microsurface_tex(Material* material, Texture* texture) {

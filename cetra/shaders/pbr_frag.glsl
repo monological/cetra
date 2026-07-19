@@ -104,8 +104,9 @@ uniform float time;
 uniform sampler2D albedoTex;
 uniform sampler2D normalTex;
 uniform sampler2D emissiveTex;
-uniform sampler2D sheenTex;       // reserved (unsampled)
-uniform sampler2D reflectanceTex; // reserved (unsampled)
+uniform sampler2D sheenTex;          // reserved (unsampled)
+uniform sampler2D reflectanceTex;    // reserved (unsampled)
+uniform sampler2D clearcoatNormalTex; // clearcoat normal map (freed unit)
 
 // The scalar masks (roughness/metallic/ao/opacity/microsurface/anisotropy/
 // subsurface) share ONE array texture. Each material selects a layer per mask;
@@ -126,6 +127,7 @@ uniform int emissiveTexExists;
 uniform int heightTexExists;
 uniform int sheenTexExists;
 uniform int reflectanceTexExists;
+uniform int clearcoatNormalExists;
 
 // Shadow mapping uniforms
 #define MAX_SHADOW_LIGHTS 3
@@ -473,6 +475,24 @@ vec2 screenVelocity() {
     return (CurrClip.xy / CurrClip.w - PrevClip.xy / PrevClip.w) * 0.5;
 }
 
+// Clearcoat normal: the geometric normal, perturbed by the coat normal map if
+// present (glTF: the coat normal is independent of the base normal map). Only
+// called from the coat lobes (clearcoat > 0), so a coat-free draw compiles the
+// base path unchanged.
+vec3 clearcoatNormal(vec2 uv) {
+    vec3 Ngeo = normalize(Normal);
+    if (!gl_FrontFacing) {
+        Ngeo = -Ngeo;
+    }
+    if (clearcoatNormalExists > 0) {
+        vec3 Tc = normalize(TBN[0] - dot(TBN[0], Ngeo) * Ngeo);
+        vec3 Bc = cross(Ngeo, Tc);
+        vec3 cn = texture(clearcoatNormalTex, uv).xyz * 2.0 - 1.0;
+        return normalize(mat3(Tc, Bc, Ngeo) * cn);
+    }
+    return Ngeo;
+}
+
 void main() {
     // Early-out for simple render modes that don't need texture sampling
     if (renderMode == 5) {
@@ -592,6 +612,12 @@ void main() {
     if (!gl_FrontFacing) {
         N = -N;
     }
+
+    // Clearcoat normal Nc: independent of the base normal map (glTF), so it
+    // defaults to the geometric normal -- a coat over a normal-mapped base
+    // stays smooth unless it carries its own coat normal. Computed only when
+    // the coat is active (clearcoatNormal() below) so the clearcoat-off path
+    // is byte-identical to a coat-free build.
 
     float roughnessMap = roughness;
     if (roughnessLayer >= 0) {
@@ -851,15 +877,21 @@ void main() {
         }
 
         // Clearcoat: a second thin smooth dielectric GGX lobe (fixed F0 = 0.04,
-        // IOR 1.5) over the base, using the base normal. The base term is
+        // IOR 1.5) over the base, on the coat normal Nc. The base term is
         // attenuated by the coat's Fresnel -- light the coat reflects never
-        // reaches it (Kelemen-Szirmay-Kalos / Filament layering).
+        // reaches it (Kelemen-Szirmay-Kalos / Filament layering). The coat uses
+        // its OWN cosine NcdotL (== NdotL when it has no normal map).
+        // The coat's microfacet term uses the coat normal Nc (so a coat normal
+        // map's weave shows in the highlight); it shares the base N*L cosine in
+        // the accumulation below, which keeps the pre-clearcoat grouping exactly
+        // (byte-identical when the coat is off, and when Nc == N).
         vec3 coatSpec = vec3(0.0);
         float coatAtten = 0.0;
         if (clearcoatEnabled > 0 && clearcoat > 0.0) {
+            vec3 Nc = clearcoatNormal(uv);
             float ccR = clamp(clearcoatRoughness, 0.04, 1.0);
-            float Dc = distributionGGX(N, H, ccR);
-            float Gc = geometrySmith(N, V, L, ccR);
+            float Dc = distributionGGX(Nc, H, ccR);
+            float Gc = geometrySmith(Nc, V, L, ccR);
             float Fc = fresnelSchlick(max(dot(H, V), 0.0), vec3(0.04)).r;
             coatSpec = vec3(clearcoat * Dc * Gc * Fc / (4.0 * NdotV * NdotL + 0.0001));
             coatAtten = clearcoat * Fc;
@@ -926,14 +958,17 @@ void main() {
         ambient = (kD * diffuse + specular) * aoMap * iblIntensity;
 
         // Clearcoat IBL: a second env reflection at the coat roughness (its own
-        // split-sum with F0 = 0.04), attenuating the base ambient by the coat's
-        // grazing Fresnel. Reuses the prefiltered env + BRDF LUT -- no new
-        // sampler. Uses the plain reflection R (the coat has no parallax proxy).
+        // split-sum with F0 = 0.04) around the coat normal Nc, attenuating the
+        // base ambient by the coat's grazing Fresnel. Reuses the prefiltered env
+        // + BRDF LUT -- no new sampler. Plain reflection (no parallax proxy).
         if (clearcoatEnabled > 0 && clearcoat > 0.0) {
+            vec3 Nc = clearcoatNormal(uv);
             float ccR = clamp(clearcoatRoughness, 0.04, 1.0);
-            float ccF = fresnelSchlickRoughness(NdotV, vec3(0.04), ccR).r * clearcoat;
-            vec2 ccBrdf = texture(brdfLUT, vec2(NdotV, ccR)).rg;
-            vec3 ccPre = textureLod(prefilteredMap, R, ccR * maxReflectionLOD).rgb;
+            float NcdotVi = max(dot(Nc, V), 0.0);
+            vec3 Rc = reflect(-V, Nc);
+            float ccF = fresnelSchlickRoughness(NcdotVi, vec3(0.04), ccR).r * clearcoat;
+            vec2 ccBrdf = texture(brdfLUT, vec2(NcdotVi, ccR)).rg;
+            vec3 ccPre = textureLod(prefilteredMap, Rc, ccR * maxReflectionLOD).rgb;
             vec3 coatIBL = clearcoat * ccPre * (0.04 * ccBrdf.x + ccBrdf.y);
             ambient = ambient * (1.0 - ccF) + coatIBL * aoMap * iblIntensity;
         }

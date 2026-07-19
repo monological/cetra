@@ -24,14 +24,15 @@
 // textured material features (e.g. a clearcoat normal map); the relocated shadow
 // and IBL engine units took 10-14 (shadow.h / ibl.h). The full ordered budget is
 // pinned by the _Static_assert chain in render.c.
-#define TEXUNIT_ALBEDO       0
-#define TEXUNIT_NORMAL       1
-#define TEXUNIT_MASKS        2 // sampler2DArray: packed scalar masks
-#define TEXUNIT_EMISSIVE     5
-#define TEXUNIT_SCENE_COLOR  6 // refraction opaque-scene resolve (engine-bound)
-#define TEXUNIT_SHEEN        8 // reserved (KHR_materials_sheen; unsampled today)
-#define TEXUNIT_REFLECTANCE  9 // reserved (KHR_materials_specular; unsampled today)
-#define TEXUNIT_MATERIAL_MAX TEXUNIT_REFLECTANCE
+#define TEXUNIT_ALBEDO           0
+#define TEXUNIT_NORMAL           1
+#define TEXUNIT_MASKS            2 // sampler2DArray: packed scalar masks
+#define TEXUNIT_CLEARCOAT_NORMAL 3 // clearcoat normal map (a freed mask unit)
+#define TEXUNIT_EMISSIVE         5
+#define TEXUNIT_SCENE_COLOR      6 // refraction opaque-scene resolve (engine-bound)
+#define TEXUNIT_SHEEN            8 // reserved (KHR_materials_sheen; unsampled today)
+#define TEXUNIT_REFLECTANCE      9 // reserved (KHR_materials_specular; unsampled today)
+#define TEXUNIT_MATERIAL_MAX     TEXUNIT_REFLECTANCE
 
 // Fixed non-light uniform overhead the max-light math subtracts. The CSM
 // arrays dominate: lightSpaceMatrix[9] (144) + cascadeParams[9] (36) +

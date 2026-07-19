@@ -353,6 +353,19 @@ Material* process_ai_material(struct aiMaterial* ai_mat, TexturePool* tex_pool,
         }
     }
 
+    // The clearcoat normal shares aiTextureType_CLEARCOAT at index 2, which the
+    // index-0 mapping table above can't reach; read it directly (linear data).
+    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_CLEARCOAT, 2, &str, NULL, NULL,
+                                           NULL, NULL, NULL, NULL)) {
+        Texture* tex = (str.data[0] == '*' && ai_scene)
+                           ? load_embedded_texture(tex_pool, ai_scene, str.data, false)
+                           : load_texture_path_into_pool(tex_pool, str.data, false);
+        if (tex) {
+            set_material_clearcoat_normal_tex(material, tex);
+            log_info("Clearcoat normal texture loaded: %s", tex->filepath);
+        }
+    }
+
     material_finalize_alpha_mode(material);
 
     return material;
@@ -449,6 +462,14 @@ Material* process_ai_material_async(struct aiMaterial* ai_mat, TexturePool* tex_
             load_material_texture(material, tex_pool, ai_scene, loader, str.data, false,
                                   set_material_roughness_tex, "MetallicRoughness(roughness)");
         }
+    }
+
+    // Clearcoat normal at aiTextureType_CLEARCOAT index 2 (the index-0 table
+    // can't reach it); linear normal data.
+    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_CLEARCOAT, 2, &str, NULL, NULL,
+                                           NULL, NULL, NULL, NULL)) {
+        load_material_texture(material, tex_pool, ai_scene, loader, str.data, false,
+                              set_material_clearcoat_normal_tex, "ClearcoatNormal");
     }
 
     material_finalize_alpha_mode(material);

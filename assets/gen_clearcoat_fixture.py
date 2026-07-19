@@ -17,10 +17,38 @@ the fixture has no external dependencies. Regenerate with:
 """
 
 import base64
+import io
 import json
 import struct
 import math
 import os
+
+import numpy as np
+from PIL import Image
+
+
+def carbon_weave_normal_datauri(size=256):
+    """A 2x2 twill carbon-fibre weave as a tangent-space normal map (data URI).
+
+    Height = smooth over/under ridges whose direction alternates per weave cell;
+    normals are the height gradient. Encoded RGB = (n*0.5+0.5)."""
+    ax = np.linspace(0, 2 * np.pi, size, endpoint=False)
+    u, v = np.meshgrid(ax, ax)
+    cells = 8  # weave repeats
+    cu = np.floor(u / (2 * np.pi) * cells).astype(int)
+    cv = np.floor(v / (2 * np.pi) * cells).astype(int)
+    # Twill: strands run horizontal on even (cu+cv), vertical on odd
+    horiz = ((cu + cv) % 2) == 0
+    h = np.where(horiz, np.sin(v * cells), np.sin(u * cells)) * 0.5 + 0.5
+    strength = 2.5
+    gy, gx = np.gradient(h * strength)
+    nx, ny, nz = -gx, -gy, np.ones_like(h)
+    inv = 1.0 / np.sqrt(nx * nx + ny * ny + nz * nz)
+    rgb = np.stack([nx * inv, ny * inv, nz * inv], axis=-1) * 0.5 + 0.5
+    img = Image.fromarray((rgb * 255).astype(np.uint8), "RGB")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
 
 # ---- one unit UV sphere (radius 0.5), position + normal + uv ---------------
 STACKS = 48
@@ -52,7 +80,7 @@ pmin = [min(p[k] for p in positions) for k in range(3)]
 pmax = [max(p[k] for p in positions) for k in range(3)]
 
 
-def material(name, color, rough, metallic=0.0, clearcoat=None, coat_rough=None):
+def material(name, color, rough, metallic=0.0, clearcoat=None, coat_rough=None, coat_normal=False):
     m = {
         "name": name,
         "pbrMetallicRoughness": {
@@ -65,14 +93,17 @@ def material(name, color, rough, metallic=0.0, clearcoat=None, coat_rough=None):
         cc = {"clearcoatFactor": clearcoat}
         if coat_rough is not None:
             cc["clearcoatRoughnessFactor"] = coat_rough
+        if coat_normal:
+            cc["clearcoatNormalTexture"] = {"index": 0}
         m["extensions"] = {"KHR_materials_clearcoat": cc}
     return m
 
 
 materials = [
-    material("car_paint", (0.35, 0.02, 0.03), 0.55, clearcoat=1.0, coat_rough=0.03),
+    material("car_paint", (0.35, 0.02, 0.03), 0.55, clearcoat=1.0, coat_rough=0.06, coat_normal=True),
     material("car_paint_nocoat", (0.35, 0.02, 0.03), 0.55),
-    material("carbon", (0.02, 0.02, 0.025), 0.4, metallic=1.0, clearcoat=1.0, coat_rough=0.05),
+    material("carbon", (0.02, 0.02, 0.025), 0.4, metallic=1.0, clearcoat=1.0, coat_rough=0.08,
+             coat_normal=True),
 ]
 
 # (material index, x translation) -- a row spaced along X at eye height
@@ -81,6 +112,9 @@ nodes_spec = [(0, -1.2), (1, 0.0), (2, 1.2)]
 gltf = {
     "asset": {"version": "2.0", "generator": "gen_clearcoat_fixture.py"},
     "extensionsUsed": ["KHR_materials_clearcoat"],
+    "samplers": [{"wrapS": 10497, "wrapT": 10497}],
+    "images": [{"uri": carbon_weave_normal_datauri()}],
+    "textures": [{"source": 0, "sampler": 0}],
     "scene": 0,
     "scenes": [{"nodes": list(range(len(nodes_spec)))}],
     "nodes": [
