@@ -37,12 +37,17 @@ indices = []
 for r in range(RINGS):
     for s in range(SECTORS):
         a = r * (SECTORS + 1) + s
-        b = a + SECTORS + 1
-        indices.extend([a, b, a + 1, a + 1, b, b + 1])  # CCW from outside
+        b = a + (SECTORS + 1)
+        # CCW from OUTSIDE (glTF front face). The reversed order (a, b, a+1) winds
+        # inward: on a doubleSided mesh that flips gl_FrontFacing so the shader
+        # negates the normals (N = -N) at a hard seam. Matches gen_glass_sphere.py.
+        indices.extend((a, a + 1, b))
+        indices.extend((a + 1, b + 1, b))
 
 pos_bytes = b"".join(struct.pack("<3f", *p) for p in positions)
 nrm_bytes = b"".join(struct.pack("<3f", *n) for n in normals)
-idx_bytes = b"".join(struct.pack("<H", i) for i in indices)  # max index < 65535
+# uint32 indices (5125): correct at any tessellation (matches gen_glass_sphere.py).
+idx_bytes = b"".join(struct.pack("<I", i) for i in indices)
 buffer_bytes = pos_bytes + nrm_bytes + idx_bytes
 
 mn = [min(p[i] for p in positions) for i in range(3)]
@@ -83,7 +88,7 @@ gltf = {
         {"bufferView": 0, "componentType": 5126, "count": len(positions), "type": "VEC3",
          "min": mn, "max": mx},
         {"bufferView": 1, "componentType": 5126, "count": len(normals), "type": "VEC3"},
-        {"bufferView": 2, "componentType": 5123, "count": len(indices), "type": "SCALAR"},
+        {"bufferView": 2, "componentType": 5125, "count": len(indices), "type": "SCALAR"},
     ],
     "bufferViews": [
         {"buffer": 0, "byteOffset": 0, "byteLength": len(pos_bytes), "target": 34962},
