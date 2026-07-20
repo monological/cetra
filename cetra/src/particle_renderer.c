@@ -1,5 +1,8 @@
 #include "particle_renderer.h"
 #include "uniform.h"
+#include "scene.h"
+#include "shadow.h"
+#include "light.h"
 
 #include <stddef.h>
 #include <stdlib.h>
@@ -85,6 +88,25 @@ static void billboard_draw(ParticleRenderer* r, const ParticleInstanceView* view
     uniform_set_mat4(u, "view", (const float*)ctx->view);
     uniform_set_mat4(u, "projection", (const float*)ctx->proj);
     uniform_set_float(u, "hdrGain", 6.0f);
+
+    // Directional key + CSM shadow (M3): the motes brighten in the light and
+    // fall to the ambient floor in shadow. bind_shadow_maps_to_program uploads
+    // the whole cascade uniform block + binds the shadow array (unit 10); it is
+    // location-guarded, so it only touches uniforms the particle shader declares.
+    uniform_set_float(u, "uAmbient", 0.18f);
+    if (ctx->scene) {
+        const Light* sun = NULL;
+        for (size_t i = 0; i < ctx->scene->light_count; i++) {
+            if (ctx->scene->lights[i] && ctx->scene->lights[i]->type == LIGHT_DIRECTIONAL) {
+                sun = ctx->scene->lights[i];
+                break;
+            }
+        }
+        if (sun)
+            uniform_set_vec3(u, "uSunColor", sun->color);
+        if (ctx->scene->shadow_system)
+            bind_shadow_maps_to_program(ctx->scene->shadow_system, b->program, NULL);
+    }
 
     glBindVertexArray(b->vao);
     glDrawArraysInstanced(GL_TRIANGLES, 0, 6, (GLsizei)b->upload_count);

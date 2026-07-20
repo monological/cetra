@@ -15,6 +15,7 @@ uniform mat4 projection;
 out vec2 vCorner;
 out vec4 vColor;
 out float vLifeFrac;
+out vec3 vWorldPos;
 
 void main() {
     float size = iParams.x;
@@ -35,4 +36,5 @@ void main() {
     vCorner = aCorner;
     vColor = iColor;
     vLifeFrac = iParams.z;
+    vWorldPos = worldPos;
 }
