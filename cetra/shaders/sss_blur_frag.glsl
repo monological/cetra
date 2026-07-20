@@ -18,8 +18,11 @@ uniform sampler2D auxTex;   // .z = linear view-space Z (negative in front; 0 = 
 uniform vec2 texelSize;     // 1 / render resolution
 uniform vec2 dir;           // (1,0) horizontal pass, (0,1) vertical pass
 uniform float projScale;    // 0.5 * projection[1][1] * renderHeight (world radius -> px)
-uniform float sssRadius;    // world-space scatter radius
-uniform vec3 sssColor;      // per-channel scatter weight (skin ~(1,0.3,0.2); R widest)
+#define MAX_SSS_PROFILES 8 // mirror of postfx.h MAX_SSS_PROFILES
+// Per-material scatter profiles: rgb = per-channel weight (skin ~(1,0.3,0.2), red
+// widest), w = world scatter radius. The center pixel's profile index arrives in
+// the skin-diffuse alpha (from pbr_frag), selecting its kernel width + color.
+uniform vec4 sssProfiles[MAX_SSS_PROFILES];
 uniform int subtractCenter; // 1 in the V/composite pass -> output blur - origDiffuse
 
 const int HALF_TAPS = 12;   // samples per side (cover the broad tail Gaussian)
@@ -45,14 +48,22 @@ vec3 profileWeight(float t, vec3 sigma) {
 void main()
 {
     float centerZ = texture(auxTex, TexCoords).z;
-    vec3 centerSrc = texture(srcTex, TexCoords).rgb;
+    vec4 center = texture(srcTex, TexCoords);
+    vec3 centerSrc = center.rgb;
+    float centerA = center.a; // this material's profile index, carried in the alpha
 
     // Sky / uncovered (z >= 0): no skin here. The composite pass emits 0 (adds
-    // nothing to hdr, including alpha); the H pass passes the source through.
+    // nothing to hdr, including alpha); the H pass passes the source through,
+    // keeping the alpha so the V pass reads the same profile index.
     if (centerZ >= 0.0) {
-        FragColor = subtractCenter > 0 ? vec4(0.0) : vec4(centerSrc, 1.0);
+        FragColor = subtractCenter > 0 ? vec4(0.0) : vec4(centerSrc, centerA);
         return;
     }
+
+    // Select this pixel's per-material scatter profile (color + radius).
+    int idx = clamp(int(centerA + 0.5), 0, MAX_SSS_PROFILES - 1);
+    vec3 sssColor = sssProfiles[idx].rgb;
+    float sssRadius = sssProfiles[idx].w;
 
     float depth = -centerZ;
     float radPx = clamp(sssRadius * projScale / depth, 1.0, MAX_PX);
@@ -84,5 +95,5 @@ void main()
     // alpha 0 so the additive fold leaves hdr alpha untouched; the H pass just
     // emits the horizontal blur for the V pass to read.
     FragColor = subtractCenter > 0 ? vec4(blur - texture(origTex, TexCoords).rgb, 0.0)
-                                   : vec4(blur, 1.0);
+                                   : vec4(blur, centerA);
 }

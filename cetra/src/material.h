@@ -61,15 +61,17 @@ typedef struct Material {
     vec3 sheen_color_factor;    // KHR_materials_sheen color ((0,0,0) = no sheen lobe)
     float sheen_roughness_factor; // KHR_materials_sheen roughness (glTF default 0)
     float parallax_scale;         // POM height-march depth in UV units (0 = off, §4.11)
-    float subsurface;      // Separable SSS strength (0 = off); blends the diffuse sharp<->blurred,
-                           // so it is also the per-material skin flag
-    vec3 subsurface_color; // Scatter tint: the back-light transmission color, and the per-channel
-                           // blur profile (skin ~(1.0,0.3,0.2); red scatters widest). The blur
-                           // radius is a per-scene value on PostFX, not per-material.
-    vec2 uvOffset;         // Texture coordinate offset (KHR_texture_transform)
-    vec2 uvScale;          // Texture coordinate scale (KHR_texture_transform)
-    float uvRotation;      // Texture coordinate rotation in radians (KHR_texture_transform)
-    bool doubleSided;      // Disable backface culling for this material
+    float subsurface;       // Separable SSS strength (0 = off); blends the diffuse sharp<->blurred,
+                            // so it is also the per-material skin flag
+    vec3 subsurface_color;  // Back-light transmission tint (skin ~(1.0,0.3,0.2)). The screen-space
+                            // blur's per-channel profile + radius live in subsurface_profile.
+    int subsurface_profile; // Index into PostFX's per-material scatter profiles (color + radius);
+                            // -1 = unassigned. pbr_frag writes it into the skin-diffuse alpha so
+                            // the blur picks this material's profile per pixel.
+    vec2 uvOffset;    // Texture coordinate offset (KHR_texture_transform)
+    vec2 uvScale;     // Texture coordinate scale (KHR_texture_transform)
+    float uvRotation; // Texture coordinate rotation in radians (KHR_texture_transform)
+    bool doubleSided; // Disable backface culling for this material
 
     // Core PBR Textures
     Texture* albedo_tex;            // Albedo (Diffuse) Map

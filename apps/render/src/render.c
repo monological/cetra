@@ -1142,36 +1142,50 @@ void configure_visor_materials(Scene* scene) {
 }
 
 /*
- * Configure the SSS fixture's skin material. glTF carries no subsurface, so mark
- * the "sss_skin" material as skin (subsurface strength 1) and set its scatter
- * color; --sss-color overrides the color, --sss-radius the (per-scene) blur
- * radius (both < 0 keep defaults). The global --no-sss toggle gates the effect.
+ * Configure the SSS fixture's skin materials. glTF carries no subsurface, so tag
+ * each named skin node with a distinct scatter profile (per-channel color +
+ * world radius) in PostFX and mark its material as skin (subsurface strength 1),
+ * recording the profile slot on the material so pbr_frag can flag its pixels.
+ * The two fixture spheres scatter differently (warm+wide vs cool+tight) -- the
+ * per-material-profile A/B. --sss-radius overrides every profile's radius,
+ * --sss-color the first profile's color (both < 0 keep the per-material
+ * defaults). The global --no-sss toggle gates the effect.
  */
 void configure_sss_materials(Engine* engine, Scene* scene, float radius, const float* color) {
-    if (!scene || !scene->root_node)
+    if (!engine || !engine->postfx || !scene || !scene->root_node)
         return;
-    SceneNode* node = find_node_by_name(scene->root_node, "sss_skin");
-    if (!node)
-        return;
-    for (size_t i = 0; i < node->mesh_count; i++) {
-        Mesh* mesh = node->meshes[i];
-        if (!mesh || !mesh->material)
+    // node name -> scatter profile (per-channel weight with red widest; world
+    // radius). Defaults differ per material so the two spheres read distinctly.
+    struct {
+        const char* node;
+        float color[3];
+        float radius;
+    } skins[] = {
+        {"sss_skin_a", {1.0f, 0.35f, 0.25f}, 0.6f},  // warm skin, wide scatter
+        {"sss_skin_b", {0.4f, 0.75f, 0.55f}, 0.15f}, // cool wax, tight scatter
+    };
+    postfx_reset_sss_profiles(engine->postfx);
+    for (size_t k = 0; k < sizeof(skins) / sizeof(skins[0]); k++) {
+        SceneNode* node = find_node_by_name(scene->root_node, skins[k].node);
+        if (!node)
             continue;
-        Material* m = mesh->material;
-        m->subsurface = 1.0f; // mark as skin
-        if (color && color[0] >= 0.0f)
-            glm_vec3_copy((float*)color, m->subsurface_color);
-        // The screen-space blur is one profile per scene (v1): the per-channel
-        // scatter color comes from this skin material; the radius is a blur-pass
-        // global (--sss-radius overrides the PostFX default directly).
-        if (engine && engine->postfx) {
-            glm_vec3_copy(m->subsurface_color, engine->postfx->sss_color);
-            if (radius >= 0.0f)
-                engine->postfx->sss_radius = radius;
+        vec3 prof_color;
+        glm_vec3_copy(skins[k].color, prof_color);
+        if (k == 0 && color && color[0] >= 0.0f)
+            glm_vec3_copy((float*)color, prof_color); // --sss-color overrides the first
+        float prof_radius = radius >= 0.0f ? radius : skins[k].radius;
+        int slot = postfx_add_sss_profile(engine->postfx, prof_color, prof_radius);
+        for (size_t i = 0; i < node->mesh_count; i++) {
+            Mesh* mesh = node->meshes[i];
+            if (!mesh || !mesh->material)
+                continue;
+            Material* m = mesh->material;
+            m->subsurface = 1.0f;          // mark as skin
+            m->subsurface_profile = slot;  // pbr_frag writes this into the diffuse alpha
+            glm_vec3_copy(prof_color, m->subsurface_color); // transmission tint follows the profile
         }
-        printf("Configured SSS skin material (radius %.3f, color %.2f,%.2f,%.2f)\n",
-               engine && engine->postfx ? engine->postfx->sss_radius : radius,
-               m->subsurface_color[0], m->subsurface_color[1], m->subsurface_color[2]);
+        printf("Configured SSS material %s (slot %d, radius %.3f, color %.2f,%.2f,%.2f)\n",
+               skins[k].node, slot, prof_radius, prof_color[0], prof_color[1], prof_color[2]);
     }
 }
 

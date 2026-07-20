@@ -298,8 +298,10 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
 
     // Separable SSS profile ( targets allocated lazily on first skin frame).
     // The engine toggle gates the effect; these set the blur width/tint.
-    fx->sss_radius = 0.2f; // world-space scatter radius (scene-scale dependent)
-    glm_vec3_copy((vec3){1.0f, 0.3f, 0.2f}, fx->sss_color); // skin: red scatters widest
+    // Default skin profile in slot 0 (rgb = per-channel scatter weight with red
+    // widest, w = world radius); the app overwrites/extends this per skin material.
+    glm_vec4_copy((vec4){1.0f, 0.3f, 0.2f, 0.2f}, fx->sss_profiles[0]);
+    fx->sss_profile_count = 1;
     fx->sss_ready = false;
 
     // The HDR resolve target must be RGBA16F to match the MSAA source
@@ -751,6 +753,19 @@ static bool postfx_ensure_sss_targets(PostFX* fx) {
     return true;
 }
 
+void postfx_reset_sss_profiles(PostFX* fx) {
+    if (fx)
+        fx->sss_profile_count = 0;
+}
+
+int postfx_add_sss_profile(PostFX* fx, const float* color, float radius) {
+    if (!fx || fx->sss_profile_count >= MAX_SSS_PROFILES)
+        return -1;
+    int slot = fx->sss_profile_count++;
+    glm_vec4_copy((vec4){color[0], color[1], color[2], radius}, fx->sss_profiles[slot]);
+    return slot;
+}
+
 // Separable screen-space SSS: the skin-diffuse buffer (D, attachment 4,
 // already resolved to sss_diffuse_texture) is blurred H then V with a depth-
 // aware per-channel profile, and the V pass folds the recomposite -- it outputs
@@ -774,8 +789,11 @@ static void postfx_run_sss(PostFX* fx, mat4 projection) {
     uniform_set_vec2(fx->sss_blur_program->uniforms, "texelSize", texel);
     uniform_set_vec2(fx->sss_blur_program->uniforms, "dir", (const float[]){1.0f, 0.0f});
     uniform_set_float(fx->sss_blur_program->uniforms, "projScale", proj_scale);
-    uniform_set_float(fx->sss_blur_program->uniforms, "sssRadius", fx->sss_radius);
-    uniform_set_vec3(fx->sss_blur_program->uniforms, "sssColor", fx->sss_color);
+    for (int i = 0; i < fx->sss_profile_count; i++) {
+        char pname[24];
+        snprintf(pname, sizeof(pname), "sssProfiles[%d]", i);
+        uniform_set_vec4(fx->sss_blur_program->uniforms, pname, fx->sss_profiles[i]);
+    }
     uniform_set_int(fx->sss_blur_program->uniforms, "subtractCenter", 0);
     draw_fullscreen_quad(fx->quad_vao);
 

@@ -7,16 +7,26 @@
  "scenes": [
   {
    "nodes": [
-    0
+    0,
+    1
    ]
   }
  ],
  "nodes": [
   {
-   "name": "sss_skin",
+   "name": "sss_skin_a",
    "mesh": 0,
    "translation": [
-    0.0,
+    -1.3,
+    1.0,
+    0.0
+   ]
+  },
+  {
+   "name": "sss_skin_b",
+   "mesh": 1,
+   "translation": [
+    1.3,
     1.0,
     0.0
    ]
@@ -24,7 +34,7 @@
  ],
  "meshes": [
   {
-   "name": "sss_skin",
+   "name": "sss_skin_a",
    "primitives": [
     {
      "attributes": {
@@ -35,16 +45,42 @@
      "material": 0
     }
    ]
+  },
+  {
+   "name": "sss_skin_b",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1
+     },
+     "indices": 2,
+     "material": 1
+    }
+   ]
   }
  ],
  "materials": [
   {
-   "name": "sss_skin",
+   "name": "sss_skin_a",
    "pbrMetallicRoughness": {
     "baseColorFactor": [
      0.62,
      0.44,
      0.36,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 0.6
+   }
+  },
+  {
+   "name": "sss_skin_b",
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     0.42,
+     0.52,
+     0.48,
      1.0
     ],
     "metallicFactor": 0.0,

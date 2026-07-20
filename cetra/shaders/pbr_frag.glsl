@@ -189,6 +189,8 @@ uniform int sheenEnabled;     // Global KHR_materials_sheen toggle (--no-sheen)
 uniform int parallaxEnabled;  // Global POM toggle (--no-parallax, §4.11)
 uniform int sssEnabled;       // Global separable-SSS toggle (--no-sss)
 uniform float subsurface;     // Per-material SSS strength (0 = off; also the skin flag)
+uniform int sssProfileIndex;  // This material's scatter-profile slot; written into DiffuseOut.a so
+                              // the screen-space blur can look up the profile per pixel
 uniform vec3 subsurfaceColor; // Scatter tint; here it colors the back-light transmission (the
                               // front-scatter radius/color live on the global SSS blur pass)
 
@@ -1262,9 +1264,10 @@ void main() {
     // quantization staircases the reconstructed floor into AO banding.
     VelocityOut = vec4(screenVelocity(), ViewPos.z, roughnessMap);
     AlbedoOut = vec4(albedoMap, metallicMap);
-    // SSS diffuse: subsurface-scaled skin diffuse (0 off-skin). The SSS
-    // post pass blurs this and composites hdr + blur - this, so the diffuse
-    // softens while FragColor's specular stays sharp. Discarded unless the engine
-    // enables attachment 4 (sssEnabled).
-    DiffuseOut = vec4(subsurface * sssDiffuse, 1.0);
+    // SSS diffuse: subsurface-scaled skin diffuse (0 off-skin) in .rgb, this
+    // material's scatter-profile index in .a. The SSS post pass blurs .rgb and
+    // composites hdr + blur - this (diffuse softens, FragColor's specular stays
+    // sharp), reading .a per pixel to select the profile. Discarded unless the
+    // engine enables attachment 4 (sssEnabled).
+    DiffuseOut = vec4(subsurface * sssDiffuse, float(max(sssProfileIndex, 0)));
 }

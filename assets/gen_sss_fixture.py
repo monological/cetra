@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""Generate assets/sss_fixture.gltf, the separable-SSS (§4.12) test asset.
+"""Generate assets/sss_fixture.gltf, the separable-SSS test asset.
 
-A single UV sphere with a flat skin-tone material and a mid roughness. glTF
-carries no subsurface, so the render app sets subsurface / subsurface_color /
-subsurface_radius on the "sss_skin" material after load (--sss-radius / --sss-
-color override). Under the key light the sphere has a clean shadow terminator
-where the SSS diffuse blur softens + reddens the falloff; a back/rim light (or a
-moody env) shows the thin-edge translucency. Flat color, no texture deps.
+Two UV spheres side by side (nodes "sss_skin_a" / "sss_skin_b"), each with a flat
+skin/wax-tone material and a mid roughness. glTF carries no subsurface, so the
+render app tags each named material with a distinct scatter profile after load
+(configure_sss_materials): a warm, wide-scattering skin on the left and a cooler,
+tight-scattering wax on the right, so the two read differently under the same
+light -- the per-material-profile A/B. Under the key light each sphere has a
+clean shadow terminator where the SSS blur softens + tints the falloff; a moody
+env shows the thin-edge translucency. Flat color, no texture deps.
 Regenerate with: python3 assets/gen_sss_fixture.py
 """
 
@@ -53,29 +55,46 @@ mx = [max(p[i] for p in positions) for i in range(3)]
 gltf = {
     "asset": {"version": "2.0", "generator": "gen_sss_fixture.py"},
     "scene": 0,
-    "scenes": [{"nodes": [0]}],
-    "nodes": [{"name": "sss_skin", "mesh": 0, "translation": [0.0, 1.0, 0.0]}],
+    "scenes": [{"nodes": [0, 1]}],
+    "nodes": [
+        {"name": "sss_skin_a", "mesh": 0, "translation": [-1.3, 1.0, 0.0]},
+        {"name": "sss_skin_b", "mesh": 1, "translation": [1.3, 1.0, 0.0]},
+    ],
     "meshes": [
         {
-            "name": "sss_skin",
+            "name": "sss_skin_a",
             "primitives": [
                 {"attributes": {"POSITION": 0, "NORMAL": 1}, "indices": 2, "material": 0}
             ],
-        }
+        },
+        {
+            "name": "sss_skin_b",
+            "primitives": [
+                {"attributes": {"POSITION": 0, "NORMAL": 1}, "indices": 2, "material": 1}
+            ],
+        },
     ],
+    # Both mid-value (not near-white) so bright IBL doesn't clip the diffuse -- a
+    # blown-out sphere has no gradient for SSS to scatter. Roughness high-ish for
+    # a soft, non-glossy wax sheen. The two base tones differ so the distinct
+    # scatter profiles (set app-side) read against distinct surfaces.
     "materials": [
         {
-            "name": "sss_skin",
+            "name": "sss_skin_a",  # warm skin
             "pbrMetallicRoughness": {
-                # A warm wax/skin tone. Kept mid-value (not near-white) so bright
-                # IBL doesn't clip the diffuse -- a blown-out sphere has no
-                # gradient for SSS to scatter. Roughness high-ish for a soft,
-                # non-glossy wax sheen.
                 "baseColorFactor": [0.62, 0.44, 0.36, 1.0],
                 "metallicFactor": 0.0,
                 "roughnessFactor": 0.6,
             },
-        }
+        },
+        {
+            "name": "sss_skin_b",  # cool wax/jade
+            "pbrMetallicRoughness": {
+                "baseColorFactor": [0.42, 0.52, 0.48, 1.0],
+                "metallicFactor": 0.0,
+                "roughnessFactor": 0.6,
+            },
+        },
     ],
     "accessors": [
         {

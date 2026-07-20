@@ -186,12 +186,13 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
     uniform_set_float(u, "parallaxScale", material->parallax_scale); // POM depth (0 = off)
     uniform_set_float(u, "subsurface", material->subsurface); // SSS strength (0 = off)
     uniform_set_vec3(u, "subsurfaceColor", (const float*)&material->subsurface_color);
+    uniform_set_int(u, "sssProfileIndex", material->subsurface_profile); // scatter-profile slot
     uniform_set_vec2(u, "uvOffset", (const float*)&material->uvOffset);
     uniform_set_vec2(u, "uvScale", (const float*)&material->uvScale);
     uniform_set_float(u, "uvRotation", material->uvRotation);
 
     // Dedicated (native-resolution) sampler units. The scalar masks
-    // (roughness/metallic/ao/opacity/microsurface/anisotropy/subsurface) are no
+    // (roughness/metallic/ao/opacity/microsurface/anisotropy) are no
     // longer per-slot samplers -- they live in the mask sampler2DArray, bound
     // once per program in the draw loop and selected per material by layer.
     uniform_set_int(u, "albedoTex", TEXUNIT_ALBEDO);

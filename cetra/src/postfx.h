@@ -7,6 +7,10 @@
 
 #include "program.h"
 
+// Max distinct per-material SSS scatter profiles per scene. Mirrored as the
+// sssProfiles[] array size in sss_blur_frag.glsl -- keep the two in sync.
+#define MAX_SSS_PROFILES 8
+
 /*
  * Post-processing stack: the scene renders in linear HDR into the engine's
  * multisampled RGBA16F framebuffer; postfx_run resolves it, computes
@@ -254,9 +258,14 @@ typedef struct PostFX {
     // per-channel), and additive-blends blur - diffuse into hdr_fbo so the
     // diffuse softens while specular stays sharp. Lazily allocated (sss_ready).
     // Off when engine->sss_enabled is off (attachment 4 unwritten -> pass skipped).
-    float sss_radius; // World-space scatter radius (the blur width source)
-    vec3 sss_color;   // Per-channel scatter weight (skin ~(1,0.3,0.2); R widest)
-    bool sss_ready;   // Lazy-alloc guard for the targets below
+    // Per-material scatter profiles: rgb = per-channel scatter weight (skin
+    // ~(1,0.3,0.2), red widest), w = world-space blur radius. pbr_frag tags each
+    // skin pixel with its material's profile index (in the diffuse alpha); the
+    // blur reads that per pixel and looks the profile up here. Slot 0 is the
+    // default skin profile (used when a scene configures no profiles).
+    vec4 sss_profiles[MAX_SSS_PROFILES];
+    int sss_profile_count;
+    bool sss_ready; // Lazy-alloc guard for the targets below
     GLuint sss_diffuse_fbo,
         sss_diffuse_texture;               // Full-res resolve of attachment 4 (skin diffuse D)
     GLuint sss_blur_fbo, sss_blur_texture; // Full-res H-blur scratch (V pass composites to hdr)
@@ -267,6 +276,14 @@ typedef struct PostFX {
 // the internal render + post chain by that integer factor (1 = off).
 PostFX* create_postfx(int width, int height, int ss_scale);
 void free_postfx(PostFX* fx);
+
+// Per-material SSS scatter profiles. The app resets the table when it configures
+// a scene's skin materials, then adds one profile per distinct skin material
+// (color = per-channel scatter weight, radius = world-space blur width); the
+// returned slot index is written to material->subsurface_profile so pbr_frag can
+// tag each of that material's pixels. Returns -1 if the table is full.
+void postfx_reset_sss_profiles(PostFX* fx);
+int postfx_add_sss_profile(PostFX* fx, const float* color, float radius);
 
 // Enable the whole finishing stack at a cinematic "film" look (stronger
 // vignette, visible grain, extra sharpen, teal-cool shadows / warm highlights).
