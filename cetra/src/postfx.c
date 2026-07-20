@@ -10,6 +10,10 @@
 // Auto-exposure measure-target side; its full mip chain averages down to 1x1
 // at level log2(size). Must match MEASURE_TOP_MIP in lum_adapt_frag.glsl.
 #define LUM_MEASURE_SIZE 64
+// Motion-blur tile size (px): tile-max reduces velocity to one dominant vector
+// per MOTION_BLUR_TILE^2 tile, which also bounds the max blur radius. Must match
+// TILE_SIZE reasoning in motion_blur_frag.glsl (MAX_PIXELS clamp).
+#define MOTION_BLUR_TILE 20
 
 // Creates a single-sample color-only FBO; returns false on failure
 static bool create_color_fbo(int width, int height, GLenum internal_format, GLuint* out_fbo,
@@ -451,8 +455,11 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     fx->dof_blur_program = create_dof_blur_program();
     fx->dof_composite_program = create_dof_composite_program();
     fx->motion_blur_program = create_motion_blur_program();
-    if (!fx->motion_blur_program || !fx->bloom_bright_program || !fx->bloom_down_program ||
-        !fx->bloom_up_program ||
+    fx->motion_blur_tilemax_program = create_motion_blur_tilemax_program();
+    fx->motion_blur_neighbormax_program = create_motion_blur_neighbormax_program();
+    if (!fx->motion_blur_program || !fx->motion_blur_tilemax_program ||
+        !fx->motion_blur_neighbormax_program || !fx->bloom_bright_program ||
+        !fx->bloom_down_program || !fx->bloom_up_program ||
         !fx->tonemap_program || !fx->gtao_program ||
         !fx->ssao_blur_program || !fx->temporal_accum_program || !fx->ssgi_composite_program ||
         !fx->ssgi_accum_program || !fx->ssgi_atrous_program || !fx->ssr_atrous_program ||
@@ -511,9 +518,13 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     uniform_set_int(fx->dof_composite_program->uniforms, "blurTex", 1);
     uniform_set_int(fx->dof_composite_program->uniforms, "depthTex", 2);
 
+    glUseProgram(fx->motion_blur_tilemax_program->id);
+    uniform_set_int(fx->motion_blur_tilemax_program->uniforms, "auxTex", 0);
+    glUseProgram(fx->motion_blur_neighbormax_program->id);
+    uniform_set_int(fx->motion_blur_neighbormax_program->uniforms, "tileTex", 0);
     glUseProgram(fx->motion_blur_program->id);
     uniform_set_int(fx->motion_blur_program->uniforms, "sceneTex", 0);
-    uniform_set_int(fx->motion_blur_program->uniforms, "auxTex", 1);
+    uniform_set_int(fx->motion_blur_program->uniforms, "neighborMaxTex", 1);
 
     glUseProgram(fx->gtao_program->id);
     uniform_set_int(fx->gtao_program->uniforms, "linDepthTex", 0);
@@ -636,15 +647,21 @@ static bool postfx_ensure_fog_targets(PostFX* fx) {
     return true;
 }
 
-// Allocate the motion-blur reconstruction scratch on first enable so the
-// feature is free while off (DoF pattern): one full-res RGBA16F target the
-// reconstruction writes into before it is blitted back over the HDR scene.
+// Allocate the motion-blur targets on first enable so the feature is free while
+// off (DoF pattern): a full-res RGBA16F reconstruction scratch plus the two
+// RG16F tile buffers (tile-max + neighbor-max velocity) at tile resolution.
 static bool postfx_ensure_motion_blur_targets(PostFX* fx) {
     if (fx->motion_blur_ready)
         return true;
+    fx->motion_blur_tile_w = (fx->width + MOTION_BLUR_TILE - 1) / MOTION_BLUR_TILE;
+    fx->motion_blur_tile_h = (fx->height + MOTION_BLUR_TILE - 1) / MOTION_BLUR_TILE;
     if (!create_color_fbo(fx->width, fx->height, GL_RGBA16F, &fx->motion_blur_fbo,
-                          &fx->motion_blur_texture)) {
-        log_error("Failed to allocate motion blur target");
+                          &fx->motion_blur_texture) ||
+        !create_color_fbo(fx->motion_blur_tile_w, fx->motion_blur_tile_h, GL_RG16F,
+                          &fx->motion_blur_tile_fbo, &fx->motion_blur_tile_texture) ||
+        !create_color_fbo(fx->motion_blur_tile_w, fx->motion_blur_tile_h, GL_RG16F,
+                          &fx->motion_blur_neighbor_fbo, &fx->motion_blur_neighbor_texture)) {
+        log_error("Failed to allocate motion blur targets");
         return false;
     }
     fx->motion_blur_ready = true;
@@ -652,21 +669,43 @@ static bool postfx_ensure_motion_blur_targets(PostFX* fx) {
 }
 
 // Motion blur (4.15): reconstruct plausible blur from the aux velocity buffer.
-// Reads the resolved linear HDR + the velocity (.xy), gathers colour along the
-// velocity into the scratch target, then blits it back over the HDR scene so
-// DoF/bloom/tonemap all read the blurred result (GL 4.1 has no texture barrier,
-// so the pass cannot read+write hdr_texture in place). M1 gathers along each
-// pixel's own velocity; M2/M3 add tile dilation + depth-aware weights.
+// (1) tile-max reduces the full-res velocity to one dominant vector per tile,
+// (2) neighbor-max spreads it across the 3x3 tile neighborhood so a fast object
+// blurs past its silhouette, (3) the reconstruction gathers the HDR scene along
+// that dominant velocity. The result is blitted back over the HDR scene so
+// DoF/bloom/tonemap read the blurred image (GL 4.1 has no texture barrier, so
+// the pass cannot read+write hdr_texture in place). M3 adds depth-aware weights.
 static void postfx_run_motion_blur(PostFX* fx) {
-    const float texel[2] = {1.0f / (float)fx->width, 1.0f / (float)fx->height};
+    // Pass 1: tile-max -- full-res velocity -> per-tile dominant velocity.
+    const float aux_texel[2] = {1.0f / (float)fx->width, 1.0f / (float)fx->height};
+    glBindFramebuffer(GL_FRAMEBUFFER, fx->motion_blur_tile_fbo);
+    glViewport(0, 0, fx->motion_blur_tile_w, fx->motion_blur_tile_h);
+    glUseProgram(fx->motion_blur_tilemax_program->id);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, fx->aux_texture);
+    uniform_set_vec2(fx->motion_blur_tilemax_program->uniforms, "auxTexel", aux_texel);
+    uniform_set_int(fx->motion_blur_tilemax_program->uniforms, "tileSize", MOTION_BLUR_TILE);
+    draw_fullscreen_quad(fx->quad_vao);
+
+    // Pass 2: neighbor-max -- max over each tile's 3x3 neighborhood.
+    const float tile_texel[2] = {1.0f / (float)fx->motion_blur_tile_w,
+                                 1.0f / (float)fx->motion_blur_tile_h};
+    glBindFramebuffer(GL_FRAMEBUFFER, fx->motion_blur_neighbor_fbo);
+    glUseProgram(fx->motion_blur_neighbormax_program->id);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, fx->motion_blur_tile_texture);
+    uniform_set_vec2(fx->motion_blur_neighbormax_program->uniforms, "tileTexel", tile_texel);
+    draw_fullscreen_quad(fx->quad_vao);
+
+    // Pass 3: reconstruction -- gather the HDR scene along the dominant velocity.
     glBindFramebuffer(GL_FRAMEBUFFER, fx->motion_blur_fbo);
     glViewport(0, 0, fx->width, fx->height);
     glUseProgram(fx->motion_blur_program->id);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, fx->hdr_texture);
     glActiveTexture(GL_TEXTURE1);
-    glBindTexture(GL_TEXTURE_2D, fx->aux_texture);
-    uniform_set_vec2(fx->motion_blur_program->uniforms, "texelSize", texel);
+    glBindTexture(GL_TEXTURE_2D, fx->motion_blur_neighbor_texture);
+    uniform_set_vec2(fx->motion_blur_program->uniforms, "texelSize", aux_texel);
     uniform_set_float(fx->motion_blur_program->uniforms, "scale", fx->motion_blur_scale);
     draw_fullscreen_quad(fx->quad_vao);
 
@@ -834,6 +873,10 @@ void free_postfx(PostFX* fx) {
     free_pingpong(&fx->fog_history);
     glDeleteFramebuffers(1, &fx->motion_blur_fbo);
     glDeleteTextures(1, &fx->motion_blur_texture);
+    glDeleteFramebuffers(1, &fx->motion_blur_tile_fbo);
+    glDeleteTextures(1, &fx->motion_blur_tile_texture);
+    glDeleteFramebuffers(1, &fx->motion_blur_neighbor_fbo);
+    glDeleteTextures(1, &fx->motion_blur_neighbor_texture);
 
     free_program(fx->bloom_bright_program);
     free_program(fx->bloom_down_program);
@@ -857,6 +900,8 @@ void free_postfx(PostFX* fx) {
     free_program(fx->dof_blur_program);
     free_program(fx->dof_composite_program);
     free_program(fx->motion_blur_program);
+    free_program(fx->motion_blur_tilemax_program);
+    free_program(fx->motion_blur_neighbormax_program);
 
     glDeleteVertexArrays(1, &fx->quad_vao);
     glDeleteBuffers(1, &fx->quad_vbo);

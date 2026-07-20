@@ -240,9 +240,14 @@ typedef struct PostFX {
     // the pass is skipped and the frame is byte-identical to master.
     bool motion_blur_enabled;
     float motion_blur_scale;                     // Shutter: velocity multiplier (1 = full frame)
-    bool motion_blur_ready;                      // Lazy-alloc guard for the target below
+    bool motion_blur_ready;                      // Lazy-alloc guard for the targets below
+    int motion_blur_tile_w, motion_blur_tile_h;  // Tile-max resolution (width/TILE, ceil)
     GLuint motion_blur_fbo, motion_blur_texture; // Full-res RGBA16F reconstruction scratch
+    GLuint motion_blur_tile_fbo, motion_blur_tile_texture;         // RG16F per-tile max velocity
+    GLuint motion_blur_neighbor_fbo, motion_blur_neighbor_texture; // RG16F 3x3-tile max velocity
     ShaderProgram* motion_blur_program;
+    ShaderProgram* motion_blur_tilemax_program;
+    ShaderProgram* motion_blur_neighbormax_program;
 } PostFX;
 
 // width/height are the display (downsample-target) size; ss_scale supersamples
