@@ -42,6 +42,9 @@ void setup_program_uniforms(ShaderProgram* program);
  */
 ShaderProgram* create_pbr_program();
 ShaderProgram* create_pbr_skinned_program();
+
+// Particle Program (instanced camera-facing billboards)
+ShaderProgram* create_particle_program();
 ShaderProgram* create_shape_program();
 ShaderProgram* create_xyz_program();
 ShaderProgram* create_shadow_depth_program();

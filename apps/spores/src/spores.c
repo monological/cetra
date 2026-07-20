@@ -1,8 +1,9 @@
 // Spores - cordyceps spore-room demo, the test bed for the general particle
 // system (specs/5.0-particle-system.md).
 //
-// M0: dark interior lit by one directional key, orbit camera, game loop
-// without physics. Particles arrive in M1.
+// A dark interior lit by one directional key, with a drifting spore particle
+// emitter, driven by the game loop (no physics). Curl-noise turbulence and the
+// tuned spore palette land in M2; lighting/shadow on the motes in M3.
 //
 // Flags: --headless, --frames N, --screenshot PATH (deterministic CI capture).
 
@@ -26,9 +27,12 @@
 #include "cetra/transform.h"
 #include "cetra/app.h"
 #include "cetra/game/game.h"
+#include "cetra/particle_system.h"
+#include "cetra/particle_module.h"
 
 static ShaderProgram* g_pbr = NULL;
 static MouseDragController* g_drag = NULL;
+static ParticleSystem* g_sys = NULL;
 
 // A static, unlit-until-the-key-hits-it surface. Geometry is generated at
 // `pos` so the node transform can stay identity (matches the shapes app).
@@ -54,11 +58,8 @@ static void add_box(SceneNode* root, vec3 pos, vec3 size, vec3 albedo) {
 static void add_floor(SceneNode* root, float extent, vec3 albedo) {
     SceneNode* node = create_node();
     Mesh* mesh = create_mesh();
-    Plane p = {.position = {0, 0, 0},
-               .width = extent,
-               .depth = extent,
-               .segments_w = 1,
-               .segments_d = 1};
+    Plane p = {
+        .position = {0, 0, 0}, .width = extent, .depth = extent, .segments_w = 1, .segments_d = 1};
     generate_plane_to_mesh(mesh, &p);
 
     Material* mat = create_material();
@@ -126,6 +127,32 @@ static void on_init(Game* game) {
     g_drag = create_mouse_drag_controller(engine);
 
     upload_buffers_to_gpu_for_nodes(root);
+
+    // Particle system: one cordyceps-spore emitter. M1 uses constant drift only
+    // (curl-noise turbulence and the spore palette land in M2).
+    ShaderProgram* particle_prog = create_particle_program();
+    add_shader_program_to_engine(engine, particle_prog);
+
+    g_sys = create_particle_system("spores");
+    particle_system_set_backend(g_sys, create_cpu_particle_sim_backend());
+
+    ParticleEmitter* em = create_emitter("spore", 20000);
+    particle_emitter_set_renderer(em, create_billboard_particle_renderer(particle_prog));
+    particle_emitter_add_module(em, particle_module_spawn_rate(2000.0f));
+    particle_emitter_add_module(
+        em, particle_module_init_box_location((vec3){-8, 0, -8}, (vec3){8, 6, 8}));
+    particle_emitter_add_module(em, particle_module_init_lifetime(6.0f, 12.0f));
+    particle_emitter_add_module(em, particle_module_init_size(0.04f, 0.09f));
+    particle_emitter_add_module(em,
+                                particle_module_init_color((vec4){0.7f, 0.75f, 0.5f, 1.0f}, 0.1f));
+    particle_emitter_add_module(em, particle_module_update_drift((vec3){0.0f, 0.05f, 0.0f}));
+    particle_emitter_add_module(em, particle_module_update_integrate(0.99f));
+    particle_system_add_emitter(g_sys, em);
+}
+
+static void on_update(Game* game, double dt) {
+    if (g_sys)
+        particle_system_update(g_sys, (float)dt, (float)game->time);
 }
 
 static void on_render(Game* game, double alpha) {
@@ -144,10 +171,36 @@ static void on_render(Game* game, double alpha) {
     apply_transform_to_nodes(scene->root_node, engine->model_matrix);
 
     render_current_scene(engine, game->time);
+
+    // Particle pass: transparent, drawn into the HDR framebuffer right after the
+    // scene (like render_skeleton_bones) so bloom/tonemap apply. Depth-test
+    // against the scene, no depth write; premultiplied alpha. Restore the
+    // engine's baseline blend func afterward (blending stays globally enabled).
+    if (g_sys) {
+        glDepthMask(GL_FALSE);
+        glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+
+        ParticleRenderContext ctx = {0};
+        glm_mat4_copy(engine->view_matrix, ctx.view);
+        glm_mat4_copy(engine->draw_projection, ctx.proj);
+        if (engine->camera)
+            glm_vec3_copy(engine->camera->position, ctx.camera_pos);
+        ctx.time = (float)game->time;
+        ctx.scene = scene;
+        ctx.scene_depth_texture = 0;
+        particle_system_render(g_sys, &ctx);
+
+        glDepthMask(GL_TRUE);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    }
 }
 
 static void on_shutdown(Game* game) {
     (void)game;
+    if (g_sys) {
+        free_particle_system(g_sys);
+        g_sys = NULL;
+    }
     if (g_drag) {
         free_mouse_drag_controller(g_drag);
         g_drag = NULL;
@@ -188,6 +241,7 @@ int main(int argc, char** argv) {
 
     set_engine_mouse_button_callback(game->engine, mouse_button_callback);
     game_set_init(game, on_init);
+    game_set_update(game, on_update);
     game_set_render(game, on_render);
     game_set_shutdown(game, on_shutdown);
 

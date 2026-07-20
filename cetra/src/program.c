@@ -423,6 +423,18 @@ ShaderProgram* create_pbr_program() {
     return program;
 }
 
+ShaderProgram* create_particle_program() {
+    ShaderProgram* program = NULL;
+
+    if ((program = create_program_from_source("particle", particle_vert_shader_str,
+                                              particle_frag_shader_str, NULL)) == NULL) {
+        log_error("Failed to initialize particle shader program");
+        return NULL;
+    }
+
+    return program;
+}
+
 ShaderProgram* create_pbr_skinned_program() {
     ShaderProgram* program = NULL;
 
@@ -794,7 +806,6 @@ ShaderProgram* create_sss_blur_program() {
 ShaderProgram* create_oit_resolve_program() {
     return create_post_program("oit_resolve", oit_resolve_frag_shader_str);
 }
-
 
 ShaderProgram* create_lum_measure_program() {
     return create_post_program("lum_measure", lum_measure_frag_shader_str);
