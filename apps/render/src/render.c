@@ -112,7 +112,7 @@ typedef struct {
     int no_sheen;                      // Disable KHR_materials_sheen cloth lobe
     int no_parallax;                   // Disable parallax occlusion mapping (POM)
     float parallax_scale;              // POM depth override (< 0 = keep engine default)
-    int no_sss;                        // Disable separable subsurface scattering (§4.12)
+    int no_sss;                        // Disable separable subsurface scattering
     float sss_radius;                  // SSS scatter radius override (< 0 = fixture default)
     float sss_color[3];                // SSS scatter color override (< 0 in [0] = fixture default)
     int no_bloom;                      // Disable bloom
@@ -226,7 +226,7 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --no-sheen         Disable KHR_materials_sheen (cloth lobe)\n");
     fprintf(stderr, "      --no-parallax      Disable parallax occlusion mapping (POM)\n");
     fprintf(stderr, "      --parallax-scale <f> POM depth (default 0.05; 0 = off)\n");
-    fprintf(stderr, "      --no-sss           Disable separable subsurface scattering (§4.12)\n");
+    fprintf(stderr, "      --no-sss           Disable separable subsurface scattering\n");
     fprintf(stderr, "      --sss-radius <f>   SSS scatter radius (world units)\n");
     fprintf(stderr, "      --sss-color <r,g,b> SSS per-channel scatter color (e.g. 1.0,0.3,0.2)\n");
     fprintf(stderr, "      --no-bloom         Disable bloom\n");
@@ -1142,10 +1142,10 @@ void configure_visor_materials(Scene* scene) {
 }
 
 /*
- * Configure the SSS fixture's skin material (§4.12). glTF carries no subsurface,
- * so mark the "sss_skin" material as skin (subsurface strength 1) and set its
- * scatter color/radius, with optional CLI overrides (radius < 0 / color[0] < 0
- * keep the material defaults). The global --no-sss toggle still gates the effect.
+ * Configure the SSS fixture's skin material. glTF carries no subsurface, so mark
+ * the "sss_skin" material as skin (subsurface strength 1) and set its scatter
+ * color; --sss-color overrides the color, --sss-radius the (per-scene) blur
+ * radius (both < 0 keep defaults). The global --no-sss toggle gates the effect.
  */
 void configure_sss_materials(Engine* engine, Scene* scene, float radius, const float* color) {
     if (!scene || !scene->root_node)
@@ -1159,19 +1159,19 @@ void configure_sss_materials(Engine* engine, Scene* scene, float radius, const f
             continue;
         Material* m = mesh->material;
         m->subsurface = 1.0f; // mark as skin
-        if (radius >= 0.0f)
-            m->subsurface_radius = radius;
         if (color && color[0] >= 0.0f)
             glm_vec3_copy((float*)color, m->subsurface_color);
-        // The screen-space blur is one profile per scene (v1): propagate this
-        // skin material's scatter radius/color to the global SSS pass.
+        // The screen-space blur is one profile per scene (v1): the per-channel
+        // scatter color comes from this skin material; the radius is a blur-pass
+        // global (--sss-radius overrides the PostFX default directly).
         if (engine && engine->postfx) {
-            engine->postfx->sss_radius = m->subsurface_radius;
             glm_vec3_copy(m->subsurface_color, engine->postfx->sss_color);
+            if (radius >= 0.0f)
+                engine->postfx->sss_radius = radius;
         }
         printf("Configured SSS skin material (radius %.3f, color %.2f,%.2f,%.2f)\n",
-               m->subsurface_radius, m->subsurface_color[0], m->subsurface_color[1],
-               m->subsurface_color[2]);
+               engine && engine->postfx ? engine->postfx->sss_radius : radius,
+               m->subsurface_color[0], m->subsurface_color[1], m->subsurface_color[2]);
     }
 }
 

@@ -2,7 +2,7 @@
 in vec2 TexCoords;
 out vec4 FragColor;
 
-// Separable screen-space subsurface scattering blur (§4.12), one axis per pass.
+// Separable screen-space subsurface scattering blur, one axis per pass.
 // Blurs the skin diffuse buffer (0 off-skin) with a depth-aware Gaussian whose
 // screen-space width comes from a fixed world radius / view depth, per-channel-
 // scaled by the scatter color so red bleeds widest. A view-Z bilateral weight
@@ -10,8 +10,8 @@ out vec4 FragColor;
 // background (and off-skin taps don't dilute the edge). The vertical pass also
 // folds the composite: it outputs blur - originalDiffuse, which the C side
 // additive-blends into the HDR scene (hdr + blur - D), softening the diffuse
-// while FragColor's specular stays sharp. M4 swaps the single Gaussian for the
-// Jimenez multi-Gaussian profile.
+// while FragColor's specular stays sharp. The profile is a per-channel sum of
+// Gaussians (profileWeight below) approximating the skin diffusion falloff.
 uniform sampler2D srcTex;   // buffer being blurred (diffuse D in H, H-blur in V)
 uniform sampler2D origTex;  // original diffuse D (for the composite subtract; V pass)
 uniform sampler2D auxTex;   // .z = linear view-space Z (negative in front; 0 = sky/off-skin)
@@ -48,9 +48,9 @@ void main()
     vec3 centerSrc = texture(srcTex, TexCoords).rgb;
 
     // Sky / uncovered (z >= 0): no skin here. The composite pass emits 0 (adds
-    // nothing to hdr); the H pass passes the source through.
+    // nothing to hdr, including alpha); the H pass passes the source through.
     if (centerZ >= 0.0) {
-        FragColor = vec4(subtractCenter > 0 ? vec3(0.0) : centerSrc, 1.0);
+        FragColor = subtractCenter > 0 ? vec4(0.0) : vec4(centerSrc, 1.0);
         return;
     }
 
@@ -59,10 +59,11 @@ void main()
     vec3 sigma = max(sssColor, vec3(1e-3)) * radPx; // per-channel base width
     float sigmaZ = max(sssRadius, 1e-3);            // view-Z bilateral extent (world units)
 
-    vec3 sum = centerSrc * profileWeight(0.0, sigma); // center tap
-    vec3 sumW = profileWeight(0.0, sigma);
+    vec3 sum = centerSrc;   // center tap; profileWeight(0) = 0.35+0.40+0.25 = 1.0 exactly
+    vec3 sumW = vec3(1.0);
     for (int i = 1; i <= HALF_TAPS; i++) {
         float t = float(i) / float(HALF_TAPS) * radPx * TAIL; // reach the broad tail
+        vec3 pw = profileWeight(t, sigma); // independent of the ±side below -- hoist it
         vec2 off = dir * t * texelSize;
         for (int s = -1; s <= 1; s += 2) {
             vec2 uv = TexCoords + off * float(s);
@@ -72,14 +73,16 @@ void main()
             // depth step fall off, so the scatter stays on the skin surface.
             float dz = abs(-tapZ - depth);
             float bilat = (tapZ < 0.0) ? exp(-dz * dz / (2.0 * sigmaZ * sigmaZ)) : 0.0;
-            vec3 w = profileWeight(t, sigma) * bilat;
+            vec3 w = pw * bilat;
             sum += tapSrc * w;
             sumW += w;
         }
     }
     vec3 blur = sum / max(sumW, vec3(1e-5));
 
-    // V/composite pass folds the recomposite delta (blur - sharp diffuse); the H
-    // pass just emits the horizontal blur for the V pass to read.
-    FragColor = vec4(subtractCenter > 0 ? blur - texture(origTex, TexCoords).rgb : blur, 1.0);
+    // V/composite pass folds the recomposite delta (blur - sharp diffuse), with
+    // alpha 0 so the additive fold leaves hdr alpha untouched; the H pass just
+    // emits the horizontal blur for the V pass to read.
+    FragColor = subtractCenter > 0 ? vec4(blur - texture(origTex, TexCoords).rgb, 0.0)
+                                   : vec4(blur, 1.0);
 }

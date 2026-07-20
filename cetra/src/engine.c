@@ -217,6 +217,7 @@ void free_engine(Engine* engine) {
     glDeleteTextures(1, &engine->normal_multisample_texture);
     glDeleteTextures(1, &engine->aux_multisample_texture);
     glDeleteTextures(1, &engine->albedo_multisample_texture);
+    glDeleteTextures(1, &engine->sss_diffuse_multisample_texture);
     glDeleteRenderbuffers(1, &engine->depth_renderbuffer);
     glDeleteFramebuffers(1, &engine->opaque_color_fbo);
     glDeleteTextures(1, &engine->opaque_color_texture);
@@ -399,7 +400,7 @@ static int _create_msaa_attachments(Engine* engine, int rw, int rh, int samples)
                                rw, rh, samples);
     _add_msaa_color_attachment(&engine->albedo_multisample_texture, GL_RGBA8, GL_COLOR_ATTACHMENT3,
                                rw, rh, samples);
-    // 4: skin diffuse irradiance for separable SSS (§4.12); RGBA16F (linear HDR
+    // 4: skin diffuse irradiance for separable SSS; RGBA16F (linear HDR
     // diffuse), 0 off-skin so it doubles as the SSS mask. Written only when SSS
     // is active (engine_set_scene_draw_buffers gates on sss_this_frame). GL 4.1
     // guarantees >= 8 draw buffers; assert we cleared 5 (queried once at init).
@@ -1748,6 +1749,20 @@ static void heights_ensure_resolved(Scene* scene, Engine* engine) {
     scene->heights_resolved = true;
 }
 
+// True when any material in the scene carries subsurface > 0, i.e. the SSS pass
+// has real work. Gates the whole SSS path (attachment 4 + aux + blur) so a
+// non-skin scene stays byte-identical to master AND pays nothing (materials are
+// static after load, so this is a cheap per-frame scan).
+static bool scene_has_subsurface(const Scene* scene) {
+    if (!scene)
+        return false;
+    for (size_t i = 0; i < scene->material_count; i++) {
+        if (scene->materials[i] && scene->materials[i]->subsurface > 0.0f)
+            return true;
+    }
+    return false;
+}
+
 void run_engine_render_loop(Engine* engine, RenderSceneFunc render_func) {
     if (!engine)
         return;
@@ -1816,14 +1831,18 @@ void run_engine_render_loop(Engine* engine, RenderSceneFunc render_func) {
         glViewport(0, 0, rw, rh);
         engine->normals_this_frame =
             frame_mode == RENDER_MODE_PBR && postfx_wants_normals(engine->postfx);
-        engine->aux_this_frame =
-            frame_mode == RENDER_MODE_PBR && postfx_wants_aux_gbuffer(engine->postfx);
+        // SSS writes attachment 4 (skin diffuse) only when it has real work: the
+        // feature is on AND the scene carries a subsurface material. This keeps a
+        // non-skin scene byte-identical to master (the blur/composite would add 0)
+        // AND free of the pass's per-frame cost. Mirrors the albedo-on-SSGI gate.
+        engine->sss_this_frame =
+            frame_mode == RENDER_MODE_PBR && engine->sss_enabled && scene_has_subsurface(shadow_scene);
+        // SSS reads aux .z for the depth-aware profile, so it must force the aux
+        // G-buffer (like motion blur), else --no-ssao + SSS reads stale/undefined Z.
+        engine->aux_this_frame = frame_mode == RENDER_MODE_PBR &&
+                                 (postfx_wants_aux_gbuffer(engine->postfx) || engine->sss_this_frame);
         engine->albedo_this_frame =
             frame_mode == RENDER_MODE_PBR && postfx_wants_albedo(engine->postfx);
-        // SSS writes attachment 4 (skin diffuse) whenever the feature is on; it is
-        // inert (all-zero, so the blur/composite is a no-op) unless a material
-        // carries subsurface > 0. Mirrors the albedo-on-SSGI gate.
-        engine->sss_this_frame = frame_mode == RENDER_MODE_PBR && engine->sss_enabled;
         engine_set_scene_draw_buffers(engine, true);
         glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);

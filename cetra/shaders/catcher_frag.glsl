@@ -12,6 +12,7 @@ layout(location = 1) out vec4 NormalOut;
 // suits a static plane) and albedo 0 means no bounce tint.
 layout(location = 2) out vec4 AuxOut;
 layout(location = 3) out vec4 AlbedoOut;
+layout(location = 4) out vec4 DiffuseOut; // SSS skin-diffuse; the floor is never skin
 
 // Shadow catcher: an invisible ground plane that only darkens where the
 // shadow maps say the shadow-casting lights are occluded. Drawn after the
@@ -98,4 +99,5 @@ void main()
     NormalOut = vec4(normalize(mat3(view) * vec3(0.0, 1.0, 0.0)), surfaceMode == 1 ? -1.0 : 0.0);
     AuxOut = vec4(0.0);
     AlbedoOut = vec4(0.0);
+    DiffuseOut = vec4(0.0);
 }

@@ -22,7 +22,7 @@ layout(location = 2) out vec4 VelocityOut;
 // composite (indirect diffuse = (1-metallic) * albedo * gathered irradiance, so
 // metals get no bounced diffuse). Only lands when attachment 3 is enabled (SSGI).
 layout(location = 3) out vec4 AlbedoOut;
-// SSS diffuse (§4.12): skin diffuse irradiance * subsurface, 0 off-skin (so it
+// SSS diffuse: skin diffuse irradiance * subsurface, 0 off-skin (so it
 // doubles as the mask). The SSS post pass blurs this and composites
 // hdr + blur - this, softening diffuse while FragColor's specular stays sharp.
 // Only lands when attachment 4 is enabled (sssEnabled); otherwise discarded.
@@ -130,7 +130,6 @@ uniform int aoLayer;
 uniform int opacityLayer;
 uniform int microsurfaceLayer;
 uniform int anisotropyLayer;
-uniform int subsurfaceLayer;
 
 uniform int albedoTexExists;
 uniform int normalTexExists;
@@ -188,7 +187,7 @@ uniform int clearcoatEnabled; // Global clearcoat lobe toggle (--no-clearcoat)
 uniform int specularEnabled;  // Global KHR_materials_specular toggle (--no-specular)
 uniform int sheenEnabled;     // Global KHR_materials_sheen toggle (--no-sheen)
 uniform int parallaxEnabled;  // Global POM toggle (--no-parallax, §4.11)
-uniform int sssEnabled;       // Global separable-SSS toggle (--no-sss, §4.12)
+uniform int sssEnabled;       // Global separable-SSS toggle (--no-sss)
 uniform float subsurface;     // Per-material SSS strength (0 = off; also the skin flag)
 uniform vec3 subsurfaceColor; // Scatter tint; here it colors the back-light transmission (the
                               // front-scatter radius/color live on the global SSS blur pass)
@@ -393,7 +392,7 @@ float distributionGGXAnisotropic(vec3 N, vec3 H, vec3 T, vec3 B, float roughness
     return a2 * w2 * w2 / PI;
 }
 
-// Back-light transmission (§4.12): approximate light scattering THROUGH a thin
+// Back-light transmission: approximate light scattering THROUGH a thin
 // translucent surface toward the viewer (Barre-Brisebois). When a light sits
 // behind the surface relative to the camera, a tinted (reddish) glow shows on
 // the shadow side -- the backlit-wax/ear look. The screen-space SSS blur handles
@@ -926,7 +925,7 @@ void main() {
     // Accumulate lighting from all lights
     vec3 Lo = vec3(0.0);
 
-    // SSS (§4.12): separately accumulate skin diffuse irradiance into DiffuseOut
+    // SSS: separately accumulate skin diffuse irradiance into DiffuseOut
     // (blurred + recomposited by the SSS post pass). Guarded so a non-skin
     // material or --no-sss leaves the FragColor path byte-identical; the taps
     // below REUSE the exact diffuse sub-expression already in Lo/ambient and
@@ -1088,7 +1087,7 @@ void main() {
             sssDiffuse += kD * albedoMap / PI * radiance * NdotL * shadow;
         }
 
-        // SSS back-light transmission (§4.12): thin-region glow when the light is
+        // SSS back-light transmission: thin-region glow when the light is
         // behind the surface. Guarded so non-skin / --no-sss is byte-identical.
         if (sss) {
             Lo += subsurfaceTransmission(N, L, V, albedoMap, subsurfaceColor, subsurface,
@@ -1263,7 +1262,7 @@ void main() {
     // quantization staircases the reconstructed floor into AO banding.
     VelocityOut = vec4(screenVelocity(), ViewPos.z, roughnessMap);
     AlbedoOut = vec4(albedoMap, metallicMap);
-    // SSS diffuse (§4.12): subsurface-scaled skin diffuse (0 off-skin). The SSS
+    // SSS diffuse: subsurface-scaled skin diffuse (0 off-skin). The SSS
     // post pass blurs this and composites hdr + blur - this, so the diffuse
     // softens while FragColor's specular stays sharp. Discarded unless the engine
     // enables attachment 4 (sssEnabled).

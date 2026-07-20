@@ -296,7 +296,7 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     fx->motion_blur_scale = 1.0f; // full-shutter velocity
     fx->motion_blur_ready = false;
 
-    // Separable SSS profile (§4.12; targets allocated lazily on first skin frame).
+    // Separable SSS profile ( targets allocated lazily on first skin frame).
     // The engine toggle gates the effect; these set the blur width/tint.
     fx->sss_radius = 0.2f; // world-space scatter radius (scene-scale dependent)
     glm_vec3_copy((vec3){1.0f, 0.3f, 0.2f}, fx->sss_color); // skin: red scatters widest
@@ -687,7 +687,7 @@ static bool postfx_ensure_motion_blur_targets(PostFX* fx) {
 // blurs past its silhouette, (3) the reconstruction gathers the HDR scene along
 // that dominant velocity. The result is blitted back over the HDR scene so
 // DoF/bloom/tonemap read the blurred image (GL 4.1 has no texture barrier, so
-// the pass cannot read+write hdr_texture in place). M3 adds depth-aware weights.
+// the pass cannot read+write hdr_texture in place).
 static void postfx_run_motion_blur(PostFX* fx) {
     // Pass 1: tile-max -- full-res velocity -> per-tile dominant velocity.
     const float aux_texel[2] = {1.0f / (float)fx->width, 1.0f / (float)fx->height};
@@ -742,7 +742,8 @@ static bool postfx_ensure_sss_targets(PostFX* fx) {
         return true;
     if (!create_color_fbo(fx->width, fx->height, GL_RGBA16F, &fx->sss_diffuse_fbo,
                           &fx->sss_diffuse_texture) ||
-        !create_pingpong(fx->width, fx->height, GL_RGBA16F, &fx->sss_blur)) {
+        !create_color_fbo(fx->width, fx->height, GL_RGBA16F, &fx->sss_blur_fbo,
+                          &fx->sss_blur_texture)) {
         log_error("Failed to allocate SSS targets");
         return false;
     }
@@ -750,7 +751,7 @@ static bool postfx_ensure_sss_targets(PostFX* fx) {
     return true;
 }
 
-// Separable screen-space SSS (§4.12): the skin-diffuse buffer (D, attachment 4,
+// Separable screen-space SSS: the skin-diffuse buffer (D, attachment 4,
 // already resolved to sss_diffuse_texture) is blurred H then V with a depth-
 // aware per-channel profile, and the V pass folds the recomposite -- it outputs
 // blur - D, additive-blended into hdr_fbo (hdr + blur - D). Diffuse softens;
@@ -763,7 +764,7 @@ static void postfx_run_sss(PostFX* fx, mat4 projection) {
     const float proj_scale = 0.5f * projection[1][1] * (float)fx->height;
 
     // Pass 1: horizontal blur of D into ping-pong slot 0.
-    glBindFramebuffer(GL_FRAMEBUFFER, fx->sss_blur.fbo[0]);
+    glBindFramebuffer(GL_FRAMEBUFFER, fx->sss_blur_fbo);
     glViewport(0, 0, fx->width, fx->height);
     glUseProgram(fx->sss_blur_program->id);
     glActiveTexture(GL_TEXTURE0);
@@ -784,7 +785,7 @@ static void postfx_run_sss(PostFX* fx, mat4 projection) {
     glBindFramebuffer(GL_FRAMEBUFFER, fx->hdr_fbo);
     glUseProgram(fx->sss_blur_program->id);
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, fx->sss_blur.tex[0]);
+    glBindTexture(GL_TEXTURE_2D, fx->sss_blur_texture);
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, fx->sss_diffuse_texture);
     uniform_set_vec2(fx->sss_blur_program->uniforms, "dir", (const float[]){0.0f, 1.0f});
@@ -957,7 +958,8 @@ void free_postfx(PostFX* fx) {
     glDeleteTextures(1, &fx->motion_blur_neighbor_texture);
     glDeleteFramebuffers(1, &fx->sss_diffuse_fbo);
     glDeleteTextures(1, &fx->sss_diffuse_texture);
-    free_pingpong(&fx->sss_blur);
+    glDeleteFramebuffers(1, &fx->sss_blur_fbo);
+    glDeleteTextures(1, &fx->sss_blur_texture);
 
     free_program(fx->bloom_bright_program);
     free_program(fx->bloom_down_program);
@@ -1615,7 +1617,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
 
         GLuint fog_result_tex = postfx_run_fog(fx, aux_written, taa_resolving, projection, view);
 
-        // Separable SSS (§4.12): blur the resolved skin-diffuse buffer and fold
+        // Separable SSS: blur the resolved skin-diffuse buffer and fold
         // blur - diffuse into the HDR scene, softening diffuse while specular
         // stays sharp. Runs on the composited HDR, before motion blur / DoF.
         // Skipped when SSS is off (attachment 4 unwritten); a no-op (adds 0) on

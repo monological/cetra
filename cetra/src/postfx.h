@@ -249,7 +249,7 @@ typedef struct PostFX {
     ShaderProgram* motion_blur_tilemax_program;
     ShaderProgram* motion_blur_neighbormax_program;
 
-    // Separable screen-space subsurface scattering (§4.12). Resolves the scene
+    // Separable screen-space subsurface scattering. Resolves the scene
     // pass's skin-diffuse attachment (4), blurs it separably (depth-aware,
     // per-channel), and additive-blends blur - diffuse into hdr_fbo so the
     // diffuse softens while specular stays sharp. Lazily allocated (sss_ready).
@@ -258,8 +258,8 @@ typedef struct PostFX {
     vec3 sss_color;   // Per-channel scatter weight (skin ~(1,0.3,0.2); R widest)
     bool sss_ready;   // Lazy-alloc guard for the targets below
     GLuint sss_diffuse_fbo,
-        sss_diffuse_texture; // Full-res resolve of attachment 4 (skin diffuse D)
-    PingPong sss_blur;       // Full-res H/V separable-blur ping-pong
+        sss_diffuse_texture;               // Full-res resolve of attachment 4 (skin diffuse D)
+    GLuint sss_blur_fbo, sss_blur_texture; // Full-res H-blur scratch (V pass composites to hdr)
     ShaderProgram* sss_blur_program;
 } PostFX;
 

@@ -184,7 +184,7 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
     uniform_set_vec3(u, "sheenColorFactor", (const float*)&material->sheen_color_factor);
     uniform_set_float(u, "sheenRoughnessFactor", material->sheen_roughness_factor);
     uniform_set_float(u, "parallaxScale", material->parallax_scale); // POM depth (0 = off)
-    uniform_set_float(u, "subsurface", material->subsurface); // SSS strength (0 = off, §4.12)
+    uniform_set_float(u, "subsurface", material->subsurface); // SSS strength (0 = off)
     uniform_set_vec3(u, "subsurfaceColor", (const float*)&material->subsurface_color);
     uniform_set_vec2(u, "uvOffset", (const float*)&material->uvOffset);
     uniform_set_vec2(u, "uvScale", (const float*)&material->uvScale);
@@ -210,7 +210,6 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
     uniform_set_int(u, "opacityLayer", material->opacity_layer);
     uniform_set_int(u, "microsurfaceLayer", material->microsurface_layer);
     uniform_set_int(u, "anisotropyLayer", material->anisotropy_layer);
-    uniform_set_int(u, "subsurfaceLayer", material->subsurface_layer);
 
     if (material->albedo_tex) {
         glActiveTexture(GL_TEXTURE0 + TEXUNIT_ALBEDO);
