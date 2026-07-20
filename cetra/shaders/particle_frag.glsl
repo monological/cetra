@@ -9,12 +9,27 @@ in vec2 vCorner;
 in vec4 vColor;
 in float vLifeFrac;
 in vec3 vWorldPos;
+in float vViewZ;
 
 layout(location = 0) out vec4 FragColor;
 
-uniform float hdrGain;  // push color above 1.0 so bloom catches the motes
-uniform vec3 uSunColor; // key light color (subtle warm tint where it hits)
-uniform float uAmbient; // brightness floor for shadowed motes
+uniform float hdrGain;    // push color above 1.0 so bloom catches the motes
+uniform vec3 uSunColor;   // key light color (subtle warm tint where it hits)
+uniform float uAmbient;   // brightness floor for shadowed motes
+uniform mat4 projection;  // for soft-particle depth linearization
+
+// Soft particles (M4): fade the sprite as it approaches the opaque surface
+// behind it, so billboards don't show a hard edge where they cut into geometry.
+uniform sampler2D sceneDepth; // resolved single-sample scene depth
+uniform int uSoftEnabled;     // 0 when no depth texture is bound
+uniform float softDist;       // world-space fade band
+
+// Window-space depth [0,1] -> positive view-space distance from the camera.
+float sceneViewDist(float d) {
+    float zndc = 2.0 * d - 1.0;
+    float zeye = projection[3][2] / (-zndc - projection[2][2]);
+    return -zeye;
+}
 
 // CSM subset filled by bind_shadow_maps_to_program (location-guarded on the C
 // side, so declaring only what we sample is fine). occlusion_from samples the
@@ -60,6 +75,14 @@ void main() {
     float fadeIn = smoothstep(0.0, 0.1, vLifeFrac);
     float fadeOut = 1.0 - smoothstep(0.7, 1.0, vLifeFrac);
     a *= fadeIn * fadeOut;
+
+    // Soft particles: fade as the mote nears the opaque surface behind it.
+    if (uSoftEnabled == 1) {
+        vec2 uv = gl_FragCoord.xy / vec2(textureSize(sceneDepth, 0));
+        float sceneDist = sceneViewDist(texture(sceneDepth, uv).r);
+        float partDist = -vViewZ; // positive distance from camera
+        a *= clamp((sceneDist - partDist) / softDist, 0.0, 1.0);
+    }
 
     // Motes brighten in the key, fall to the ambient floor in shadow. Billboards
     // have no meaningful normal, so this is a light-vs-shadow term, not N.L.

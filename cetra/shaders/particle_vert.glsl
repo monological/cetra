@@ -16,6 +16,7 @@ out vec2 vCorner;
 out vec4 vColor;
 out float vLifeFrac;
 out vec3 vWorldPos;
+out float vViewZ;
 
 void main() {
     float size = iParams.x;
@@ -31,10 +32,12 @@ void main() {
     vec2 rc = vec2(aCorner.x * c - aCorner.y * s, aCorner.x * s + aCorner.y * c);
 
     vec3 worldPos = iCenter + (camRight * rc.x + camUp * rc.y) * size;
-    gl_Position = projection * view * vec4(worldPos, 1.0);
+    vec4 viewPos = view * vec4(worldPos, 1.0);
+    gl_Position = projection * viewPos;
 
     vCorner = aCorner;
     vColor = iColor;
     vLifeFrac = iParams.z;
     vWorldPos = worldPos;
+    vViewZ = viewPos.z; // negative (looking down -Z)
 }

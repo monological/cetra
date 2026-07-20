@@ -131,6 +131,10 @@ Engine* create_engine(const char* window_title, int width, int height) {
     engine->opaque_color_texture = 0;
     engine->opaque_color_w = 0;
     engine->opaque_color_h = 0;
+    engine->scene_depth_fbo = 0;
+    engine->scene_depth_texture = 0;
+    engine->scene_depth_w = 0;
+    engine->scene_depth_h = 0;
     engine->oit_fbo = 0;
     engine->oit_accum_multisample_texture = 0;
     engine->oit_revealage_multisample_texture = 0;
@@ -262,6 +266,8 @@ void free_engine(Engine* engine) {
     _destroy_msaa_attachments(engine); // color attachments + depth renderbuffer
     glDeleteFramebuffers(1, &engine->opaque_color_fbo);
     glDeleteTextures(1, &engine->opaque_color_texture);
+    glDeleteFramebuffers(1, &engine->scene_depth_fbo);
+    glDeleteTextures(1, &engine->scene_depth_texture);
 
     if (engine->catcher_vao)
         glDeleteVertexArrays(1, &engine->catcher_vao);
@@ -1783,6 +1789,63 @@ bool engine_resolve_opaque_color(Engine* engine) {
     glGenerateMipmap(GL_TEXTURE_2D); // box mips (to MAX_LEVEL) = the blur chain
     glBindFramebuffer(GL_FRAMEBUFFER, engine->framebuffer);
     return true;
+}
+
+// Lazy single-sample depth resolve target (mirrors _ensure_opaque_color_target).
+// DEPTH24_STENCIL8 matches the multisample depth renderbuffer so the depth blit
+// is format-compatible; sampled as sampler2D it returns window-space depth in .r.
+static bool _ensure_scene_depth_target(Engine* engine, int rw, int rh) {
+    if (engine->scene_depth_texture != 0 && engine->scene_depth_w == rw &&
+        engine->scene_depth_h == rh) {
+        return true;
+    }
+    if (engine->scene_depth_texture) {
+        glDeleteTextures(1, &engine->scene_depth_texture);
+        glDeleteFramebuffers(1, &engine->scene_depth_fbo);
+    }
+    glGenTextures(1, &engine->scene_depth_texture);
+    glBindTexture(GL_TEXTURE_2D, engine->scene_depth_texture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH24_STENCIL8, rw, rh, 0, GL_DEPTH_STENCIL,
+                 GL_UNSIGNED_INT_24_8, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glGenFramebuffers(1, &engine->scene_depth_fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, engine->scene_depth_fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D,
+                           engine->scene_depth_texture, 0);
+    glDrawBuffer(GL_NONE);
+    glReadBuffer(GL_NONE);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        log_error("Scene-depth resolve framebuffer incomplete");
+        glDeleteTextures(1, &engine->scene_depth_texture);
+        glDeleteFramebuffers(1, &engine->scene_depth_fbo);
+        engine->scene_depth_texture = 0;
+        engine->scene_depth_fbo = 0;
+        return false;
+    }
+    engine->scene_depth_w = rw;
+    engine->scene_depth_h = rh;
+    return true;
+}
+
+GLuint engine_resolve_scene_depth(Engine* engine) {
+    if (!engine)
+        return 0;
+    int rw, rh;
+    engine_render_size(engine, &rw, &rh);
+    if (rw <= 0 || rh <= 0)
+        return 0;
+    if (!_ensure_scene_depth_target(engine, rw, rh)) {
+        glBindFramebuffer(GL_FRAMEBUFFER, engine->framebuffer);
+        return 0;
+    }
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, engine->framebuffer);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, engine->scene_depth_fbo);
+    glBlitFramebuffer(0, 0, rw, rh, 0, 0, rw, rh, GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+    glBindFramebuffer(GL_FRAMEBUFFER, engine->framebuffer);
+    return engine->scene_depth_texture;
 }
 
 // Lazy allocation for the weighted-blended OIT targets: two multisample color

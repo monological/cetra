@@ -108,6 +108,18 @@ static void billboard_draw(ParticleRenderer* r, const ParticleInstanceView* view
             bind_shadow_maps_to_program(ctx->scene->shadow_system, b->program, NULL);
     }
 
+    // Soft particles (M4): bind the resolved scene depth on a free unit (7) and
+    // let the shader fade motes as they approach the surface behind them.
+    if (ctx->scene_depth_texture) {
+        glActiveTexture(GL_TEXTURE0 + 7);
+        glBindTexture(GL_TEXTURE_2D, ctx->scene_depth_texture);
+        uniform_set_int(u, "sceneDepth", 7);
+        uniform_set_int(u, "uSoftEnabled", 1);
+        uniform_set_float(u, "softDist", 0.5f);
+    } else {
+        uniform_set_int(u, "uSoftEnabled", 0);
+    }
+
     glBindVertexArray(b->vao);
     glDrawArraysInstanced(GL_TRIANGLES, 0, 6, (GLsizei)b->upload_count);
     glBindVertexArray(0);

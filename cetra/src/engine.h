@@ -68,6 +68,12 @@ typedef struct Engine {
     GLuint opaque_color_fbo;
     GLuint opaque_color_texture;
     int opaque_color_w, opaque_color_h;
+    // Soft-particle source: mid-frame resolve of the scene depth into a
+    // single-sample depth texture (the MSAA depth renderbuffer isn't sampleable),
+    // created lazily on the first engine_resolve_scene_depth call.
+    GLuint scene_depth_fbo;
+    GLuint scene_depth_texture;
+    int scene_depth_w, scene_depth_h;
     // Weighted-blended OIT: a lazily-created multisample FBO that shares
     // depth_renderbuffer (so transparent frags depth-test against opaque geometry
     // without writing depth). accum (color attachment 5, RGBA16F) sums premultiplied
@@ -252,6 +258,12 @@ void engine_set_scene_draw_buffers(const Engine* engine, bool with_gbuffer);
 // (see the definition for the lifecycle); called by render_current_scene
 // between the skybox and the late pass when transmissive meshes exist.
 bool engine_resolve_opaque_color(Engine* engine);
+// Mid-frame resolve of the scene depth (from the multisample framebuffer) into
+// a sampleable single-sample depth texture, for soft particles / other passes
+// that need scene depth before postfx. Returns the depth texture (0 on failure),
+// and re-binds engine->framebuffer so drawing can continue. Lazily sized to the
+// render resolution.
+GLuint engine_resolve_scene_depth(Engine* engine);
 
 // Weighted-blended OIT accumulate sub-pass bracket: engine_begin_oit_pass binds
 // the OIT FBO (accum + revealage, sharing the scene depth), clears it, and sets

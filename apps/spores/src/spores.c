@@ -183,6 +183,10 @@ static void on_render(Game* game, double alpha) {
     // against the scene, no depth write; premultiplied alpha. Restore the
     // engine's baseline blend func afterward (blending stays globally enabled).
     if (g_sys) {
+        // Resolve scene depth for soft particles before drawing (re-binds the
+        // scene framebuffer itself).
+        GLuint depth_tex = engine_resolve_scene_depth(engine);
+
         glDepthMask(GL_FALSE);
         glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
 
@@ -193,7 +197,7 @@ static void on_render(Game* game, double alpha) {
             glm_vec3_copy(engine->camera->position, ctx.camera_pos);
         ctx.time = (float)game->time;
         ctx.scene = scene;
-        ctx.scene_depth_texture = 0;
+        ctx.scene_depth_texture = depth_tex;
         particle_system_render(g_sys, &ctx);
 
         glDepthMask(GL_TRUE);
