@@ -38,6 +38,9 @@ Game* create_game(const GameConfig* config) {
         return NULL;
     }
 
+    // Headless must be set before init_engine (read during GLFW window setup)
+    set_engine_headless(game->engine, config->headless);
+
     // Initialize engine
     if (init_engine(game->engine) != 0) {
         free_engine(game->engine);
@@ -45,8 +48,13 @@ Game* create_game(const GameConfig* config) {
         return NULL;
     }
 
-    // Set vsync
-    glfwSwapInterval(config->vsync ? 1 : 0);
+    // Set vsync (always off in headless so frame-count runs don't block on refresh)
+    glfwSwapInterval((config->vsync && !config->headless) ? 1 : 0);
+
+    // Headless / CI verification
+    game->exit_after_frames = config->exit_after_frames;
+    game->screenshot_path = config->screenshot_path;
+    game->total_frames = 0;
 
     // Initialize input
     input_init(&game->input, game->engine->window);
@@ -303,6 +311,19 @@ void run_game(Game* game) {
 
         // Resolve + tone map to the screen, GUI on top (only if enabled)
         engine_present_frame(engine, engine->current_render_mode, game->show_debug_gui);
+
+        // Headless / CI: capture the final frame from GL_BACK before the swap
+        // (matches run_engine_render_loop), then exit on the frame limit.
+        game->total_frames++;
+        bool frame_limit_hit = game->exit_after_frames > 0 &&
+                               game->total_frames >= (size_t)game->exit_after_frames;
+        if (game->screenshot_path &&
+            (frame_limit_hit || glfwWindowShouldClose(engine->window))) {
+            engine_capture_screenshot(engine, game->screenshot_path);
+        }
+        if (frame_limit_hit) {
+            game->running = false;
+        }
 
         glfwSwapBuffers(engine->window);
         glfwPollEvents();

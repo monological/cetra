@@ -203,6 +203,10 @@ void set_engine_msaa_samples(Engine* engine, int samples);
 void set_engine_taa_enabled(Engine* engine, bool enabled);
 void set_engine_screenshot_path(Engine* engine, const char* path);
 void set_engine_screenshot_every(Engine* engine, int every);
+// Capture the current default framebuffer (GL_BACK, after present + GUI) to a
+// binary PPM immediately. Public wrapper around the internal writer, for render
+// loops other than run_engine_render_loop (e.g. run_game) that capture outside it.
+void engine_capture_screenshot(const Engine* engine, const char* path);
 
 // GLFW callbacks
 void set_engine_error_callback(Engine* engine, GLFWerrorfun error_callback);

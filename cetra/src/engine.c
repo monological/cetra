@@ -1243,6 +1243,12 @@ static void _save_framebuffer_ppm(const Engine* engine, const char* path) {
     log_info("Saved screenshot: %s (%dx%d)", path, w, h);
 }
 
+void engine_capture_screenshot(const Engine* engine, const char* path) {
+    if (!engine || !path)
+        return;
+    _save_framebuffer_ppm(engine, path);
+}
+
 // A checkbox that enables a group of dependent parameters. The parameters stay
 // visible but greyed out and inert until the effect is on — so toggling never
 // reflows the panel — and are indented one level so the grouping is obvious.
