@@ -83,6 +83,8 @@ typedef struct PostFX {
     GLuint ssr_texture;
     PingPong ssr_history; // Temporal-SSR accumulation (RGBA16F): averages the jittered march
                           // across frames so the single-frame step banding washes out (TAA only)
+    PingPong ssr_atrous;  // SSR a-trous denoise ping-pong (RGBA16F): resolves the stochastic
+                          // march's per-pixel noise into a clean reflection in a single frame
     GLuint hiz_fbo;       // Min-depth pyramid build target (re-attached per mip)
     GLuint hiz_texture;   // R32F, half-res base + full mip chain; the SSR
                           // traversal walks it so rays cannot step over thin
@@ -108,6 +110,7 @@ typedef struct PostFX {
     ShaderProgram* ssgi_composite_program;
     ShaderProgram* ssgi_accum_program;
     ShaderProgram* ssgi_atrous_program;
+    ShaderProgram* ssr_atrous_program; // Edge-aware a-trous denoise for the SSR reflection buffer
     ShaderProgram* lum_measure_program;
     ShaderProgram* lum_adapt_program;
     ShaderProgram* ssr_program;

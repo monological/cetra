@@ -88,6 +88,7 @@ ShaderProgram* create_temporal_accum_program();
 ShaderProgram* create_ssgi_composite_program();
 ShaderProgram* create_ssgi_accum_program();
 ShaderProgram* create_ssgi_atrous_program();
+ShaderProgram* create_ssr_atrous_program();
 ShaderProgram* create_fog_program();
 ShaderProgram* create_lum_measure_program();
 ShaderProgram* create_lum_adapt_program();

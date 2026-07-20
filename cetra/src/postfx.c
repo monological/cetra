@@ -98,8 +98,10 @@ static bool create_ssr_buffers(PostFX* fx) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, fx->hiz_mips - 1);
     glGenFramebuffers(1, &fx->hiz_fbo);
-    // History pair for temporal accumulation, at the SSR resolution.
-    if (!create_pingpong(w, h, GL_RGBA16F, &fx->ssr_history))
+    // History pair for temporal accumulation, and the a-trous denoise
+    // ping-pong, both at the SSR resolution.
+    if (!create_pingpong(w, h, GL_RGBA16F, &fx->ssr_history) ||
+        !create_pingpong(w, h, GL_RGBA16F, &fx->ssr_atrous))
         return false;
     return true;
 }
@@ -114,6 +116,7 @@ void postfx_set_ssr_full_res(PostFX* fx, bool full_res) {
     glDeleteFramebuffers(1, &fx->hiz_fbo);
     glDeleteTextures(1, &fx->hiz_texture);
     free_pingpong(&fx->ssr_history);
+    free_pingpong(&fx->ssr_atrous);
     fx->ssr_full_res = full_res;
     create_ssr_buffers(fx);
 }
@@ -424,6 +427,7 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     fx->ssgi_composite_program = create_ssgi_composite_program();
     fx->ssgi_accum_program = create_ssgi_accum_program();
     fx->ssgi_atrous_program = create_ssgi_atrous_program();
+    fx->ssr_atrous_program = create_ssr_atrous_program();
     fx->lum_measure_program = create_lum_measure_program();
     fx->lum_adapt_program = create_lum_adapt_program();
     fx->ssr_program = create_ssr_program();
@@ -437,7 +441,7 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     if (!fx->bloom_bright_program || !fx->bloom_down_program || !fx->bloom_up_program ||
         !fx->tonemap_program || !fx->gtao_program ||
         !fx->ssao_blur_program || !fx->temporal_accum_program || !fx->ssgi_composite_program ||
-        !fx->ssgi_accum_program || !fx->ssgi_atrous_program ||
+        !fx->ssgi_accum_program || !fx->ssgi_atrous_program || !fx->ssr_atrous_program ||
         !fx->lum_measure_program || !fx->lum_adapt_program || !fx->ssr_program ||
         !fx->upsample_tent_program || !fx->fog_program ||
         !fx->taa_resolve_program || !fx->dof_coc_program ||
@@ -534,6 +538,13 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     uniform_set_int(fx->ssgi_atrous_program->uniforms, "linDepthTex", 1);
     uniform_set_int(fx->ssgi_atrous_program->uniforms, "normalsTex", 2);
     uniform_set_vec2(fx->ssgi_atrous_program->uniforms, "texelSize", ao_texel);
+
+    // texelSize is set per frame in the SSR block (it tracks the SSR
+    // resolution, which the full-res toggle changes at runtime).
+    glUseProgram(fx->ssr_atrous_program->id);
+    uniform_set_int(fx->ssr_atrous_program->uniforms, "reflTex", 0);
+    uniform_set_int(fx->ssr_atrous_program->uniforms, "linDepthTex", 1);
+    uniform_set_int(fx->ssr_atrous_program->uniforms, "normalsTex", 2);
     glUseProgram(0);
 
     create_fullscreen_quad_vao(&fx->quad_vao, &fx->quad_vbo);
@@ -741,6 +752,7 @@ void free_postfx(PostFX* fx) {
     glDeleteFramebuffers(1, &fx->ssr_fbo);
     glDeleteTextures(1, &fx->ssr_texture);
     free_pingpong(&fx->ssr_history);
+    free_pingpong(&fx->ssr_atrous);
     glDeleteFramebuffers(1, &fx->hiz_fbo);
     glDeleteTextures(1, &fx->hiz_texture);
     glDeleteFramebuffers(1, &fx->aux_fbo);
@@ -772,6 +784,7 @@ void free_postfx(PostFX* fx) {
     free_program(fx->ssgi_composite_program);
     free_program(fx->ssgi_accum_program);
     free_program(fx->ssgi_atrous_program);
+    free_program(fx->ssr_atrous_program);
     free_program(fx->lum_measure_program);
     free_program(fx->lum_adapt_program);
     free_program(fx->ssr_program);
@@ -1265,17 +1278,20 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             // Strength folds into the march's premultiplied weight (clamped
             // there) so the composite stays a straight premultiplied lerp
             uniform_set_float(fx->ssr_program->uniforms, "strength", fx->ssr_strength);
-            // Stochastic march: jitter the ray per pixel + per frame so the
-            // deterministic Hi-Z grid stripes scatter into noise the temporal
-            // accumulator + a-trous resolve. frame_index advances the per-frame
-            // random (independent of the projection jitter, so it converges
-            // even in headless with TAA on).
-            // Only jitter when the temporal accumulator is there to resolve it
-            // (M3b's a-trous will let this run per-frame without TAA too). No
-            // resolver -> deterministic march, so the no-TAA default stays clean.
-            int ssr_stochastic = (fx->ssr_denoise && fx->ssr_temporal && taa_resolving) ? 1 : 0;
+            // Stochastic march: jitter the ray per pixel so the deterministic
+            // Hi-Z grid stripes scatter into noise a resolver can clean. The
+            // a-trous denoise (below) resolves it spatially every frame, so this
+            // runs whenever the denoiser is on -- no TAA required. Off ->
+            // deterministic march, bit-identical.
+            int ssr_stochastic = fx->ssr_denoise ? 1 : 0;
             uniform_set_int(fx->ssr_program->uniforms, "ssrStochastic", ssr_stochastic);
-            uniform_set_int(fx->ssr_program->uniforms, "ssrFrameIndex", fx->frame_index);
+            // Advance the per-pixel random each frame ONLY when the temporal
+            // accumulator is there to average the frames (independent of the
+            // projection jitter, so it converges even in headless with TAA on).
+            // Without temporal, freeze the seed: the a-trous denoises a stable
+            // per-frame pattern instead of a boiling one.
+            int ssr_seed = (fx->ssr_temporal && taa_resolving) ? fx->frame_index : 0;
+            uniform_set_int(fx->ssr_program->uniforms, "ssrFrameIndex", ssr_seed);
             uniform_set_float(fx->ssr_program->uniforms, "ssrJitter", fx->ssr_jitter);
             // Local-probe fallback for rays the march cannot answer. The
             // probe lives in world space while SSR is view-space, so this is
@@ -1309,6 +1325,36 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
                                                 ssr_w, ssr_h, fx->ssr_texture);
             } else {
                 fx->ssr_history.valid = false;
+            }
+
+            // Spatial a-trous denoise: three edge-aware B3-spline passes at
+            // doubling tap spacing (1, 2, 4) resolve the stochastic march's
+            // per-pixel noise into a clean reflection every frame (no temporal
+            // convergence wait, and it holds up under motion). It smooths the
+            // premultiplied (color*weight, weight) buffer; the depth/normal
+            // weights (units 1/2, invariant across iterations) keep the blur on
+            // the floor and stop it at the silhouette. SVGF order: denoise the
+            // accumulation. Skipped when the denoiser is off -> bit-identical M2.
+            if (fx->ssr_denoise) {
+                glUseProgram(fx->ssr_atrous_program->id);
+                uniform_set_int(fx->ssr_atrous_program->uniforms, "useNormalsTex",
+                                have_normals ? 1 : 0);
+                const float ssr_atrous_texel[2] = {1.0f / (float)ssr_w, 1.0f / (float)ssr_h};
+                uniform_set_vec2(fx->ssr_atrous_program->uniforms, "texelSize", ssr_atrous_texel);
+                glViewport(0, 0, ssr_w, ssr_h);
+                glActiveTexture(GL_TEXTURE1);
+                glBindTexture(GL_TEXTURE_2D, fx->aux_texture);
+                glActiveTexture(GL_TEXTURE2);
+                glBindTexture(GL_TEXTURE_2D, have_normals ? fx->normal_texture : 0);
+                for (int i = 0; i < 3; i++) {
+                    glBindFramebuffer(GL_FRAMEBUFFER, fx->ssr_atrous.fbo[i & 1]);
+                    glActiveTexture(GL_TEXTURE0);
+                    glBindTexture(GL_TEXTURE_2D, ssr_result);
+                    uniform_set_int(fx->ssr_atrous_program->uniforms, "stepSize", 1 << i);
+                    draw_fullscreen_quad(fx->quad_vao);
+                    ssr_result = fx->ssr_atrous.tex[i & 1];
+                }
+                check_gl_error("postfx ssr denoise");
             }
 
             // Lerp the reflections onto the HDR scene before bloom so

@@ -767,6 +767,10 @@ ShaderProgram* create_ssgi_atrous_program() {
     return create_post_program("ssgi_atrous", ssgi_atrous_frag_shader_str);
 }
 
+ShaderProgram* create_ssr_atrous_program() {
+    return create_post_program("ssr_atrous", ssr_atrous_frag_shader_str);
+}
+
 ShaderProgram* create_fog_program() {
     return create_post_program("fog", fog_frag_shader_str);
 }
