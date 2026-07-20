@@ -126,6 +126,10 @@ typedef struct Scene {
     // (re)build in the render loop when the async loader is idle.
     struct MaterialMaskArray* mask_array;
     bool mask_array_dirty;
+    // POM (§4.11): height maps are resolved by filename convention once the async
+    // texture loader drains (so the albedo/normal paths are populated); set after
+    // the one-time resolve so the render loop does not re-scan every frame.
+    bool heights_resolved;
 
     bool render_skybox;
     float skybox_brightness;       // Linear env multiplier (tone mapping is the post pass's job)

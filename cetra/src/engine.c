@@ -19,6 +19,7 @@
 #include "shadow.h"
 #include "sky.h"
 #include "mask_array.h"
+#include "import.h" // resolve_height_maps (POM height convention)
 #include "render.h"
 #include "springbone.h"
 
@@ -1811,6 +1812,15 @@ void run_engine_render_loop(Engine* engine, RenderSceneFunc render_func) {
         // (Re)build the material mask array once its source masks have loaded
         // (a no-op until then; masks fall back to their scalar factors).
         mask_array_ensure_built(current_scene, engine);
+
+        // POM (§4.11): resolve "<name>_height" sibling maps once the async
+        // texture loader drains (so albedo/normal paths are populated). Same
+        // defer-until-idle idiom as the mask array; runs once per scene.
+        if (current_scene && !current_scene->heights_resolved &&
+            !(engine->async_loader && async_loader_is_busy(engine->async_loader))) {
+            resolve_height_maps(current_scene);
+            current_scene->heights_resolved = true;
+        }
 
         if (render_func != NULL && current_scene != NULL) {
             render_func(engine, current_scene);

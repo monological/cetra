@@ -46,6 +46,17 @@ Scene* create_scene_from_model_path(const char* path, const char* texture_direct
 Scene* create_scene_from_model_path_async(const char* path, const char* texture_directory,
                                           struct AsyncLoader* loader);
 
+// POM (§4.11): resolve "<name>_height" sibling maps into materials that have an
+// albedo/normal texture but no height map yet (glTF carries no height slot).
+// Idempotent + no-op unless a sibling is on disk. The sync import path calls it
+// at load; the render loop calls it once the async texture loader drains.
+void resolve_height_maps(Scene* scene);
+
+// POM (§4.11): default depth auto-applied to a material whose height map is
+// resolved by convention (glTF/FBX have no POM scale). --parallax-scale sets it;
+// 0 leaves POM off even where a height map exists. Set before loading a model.
+void set_parallax_default_scale(float scale);
+
 // Load animations from a separate file (e.g., Mixamo "Without Skin" FBX)
 // Maps animation channels to the provided skeleton by bone name
 // If enable_retargeting is true, uses smart bone matching and computes rotation

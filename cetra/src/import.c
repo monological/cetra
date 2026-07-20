@@ -33,6 +33,16 @@
 // Forward declarations
 static void copy_aiMatrix_to_mat4(const struct aiMatrix4x4* from, mat4 to);
 
+// POM (§4.11): depth applied to a material when its height map is resolved by
+// filename convention (glTF/FBX carry no POM scale). Auto-enabling POM wherever
+// a height map exists is the "drop a _height.png next to the textures and it
+// works" model; --parallax-scale overrides the default, --no-parallax disables
+// the whole path. 0 leaves POM off even with a height map.
+static float g_parallax_default_scale = 0.05f;
+void set_parallax_default_scale(float scale) {
+    g_parallax_default_scale = scale;
+}
+
 /*
  * UV V-flip policy. glTF specifies a top-left UV origin while FBX data
  * arrives bottom-left (verified against Blender: assimp's FBX UVs match
@@ -1328,6 +1338,77 @@ SceneNode* process_ai_node(Scene* scene, struct aiNode* ai_node, const struct ai
     return node;
 }
 
+// glTF carries no height/displacement texture (the KHR_materials_displacement
+// draft was abandoned; assimp surfaces nothing), so height maps reach the engine
+// by a filename convention -- the same "the pipeline resolves it" model every
+// engine uses for POM. For each material that has no height texture yet but does
+// have an albedo/normal texture with a file path, derive a "<name>_height.<ext>"
+// sibling (swapping a known base-map suffix, else appending) and load it LINEAR
+// into height_tex if the file exists. Materials with a height map already (e.g.
+// FBX aiTextureType_HEIGHT), no source texture, or no sibling on disk are left
+// untouched, so assets without a height map stay byte-identical. Idempotent
+// (skips materials that already have height), so the render loop can also call
+// it once the async texture loader drains (the render app streams textures on
+// background threads, so at import time the *_tex paths are not yet populated).
+void resolve_height_maps(Scene* scene) {
+    if (!scene)
+        return;
+    static const char* const SUFFIXES[] = {"_albedo", "_basecolor", "_basecolour",
+                                            "_diffuse", "_normal", "_norm", "_nrm"};
+    for (size_t m = 0; m < scene->material_count; m++) {
+        Material* mat = scene->materials[m];
+        if (!mat || mat->height_tex)
+            continue;
+        const char* src = mat->albedo_tex ? mat->albedo_tex->filepath
+                          : (mat->normal_tex ? mat->normal_tex->filepath : NULL);
+        if (!src || !src[0])
+            continue;
+
+        const char* slash = strrchr(src, '/');
+        const char* name = slash ? slash + 1 : src;
+        const char* dot = strrchr(name, '.');
+        size_t stem_len = dot ? (size_t)(dot - name) : strlen(name);
+        const char* ext = dot ? dot : ""; // includes the leading '.'
+        size_t prefix_len = (size_t)(name - src);
+
+        size_t core_len = stem_len; // stem with a known base-map suffix stripped
+        for (size_t s = 0; s < sizeof(SUFFIXES) / sizeof(SUFFIXES[0]); s++) {
+            size_t sl = strlen(SUFFIXES[s]);
+            if (stem_len >= sl && strncasecmp(name + stem_len - sl, SUFFIXES[s], sl) == 0) {
+                core_len = stem_len - sl;
+                break;
+            }
+        }
+
+        char base[1024];
+        int n = snprintf(base, sizeof(base), "%.*s%.*s_height", (int)prefix_len, src,
+                         (int)core_len, name);
+        if (n <= 0 || (size_t)n >= sizeof(base))
+            continue;
+
+        const char* try_ext[] = {".png", ext}; // prefer .png, else the source extension
+        for (size_t e = 0; e < sizeof(try_ext) / sizeof(try_ext[0]); e++) {
+            if (!try_ext[e][0])
+                continue;
+            char cand[1100];
+            if (snprintf(cand, sizeof(cand), "%s%s", base, try_ext[e]) >= (int)sizeof(cand))
+                continue;
+            if (!path_exists(cand))
+                continue;
+            Texture* h = load_texture_path_into_pool(scene->tex_pool, cand, false);
+            if (h) {
+                set_material_height_tex(mat, h);
+                // Auto-enable POM with the default depth (glTF/FBX carry no POM
+                // scale); an author who set one keeps it.
+                if (mat->parallax_scale == 0.0f)
+                    mat->parallax_scale = g_parallax_default_scale;
+                log_info("POM: resolved height map %s (scale %.3f)", cand, mat->parallax_scale);
+            }
+            break;
+        }
+    }
+}
+
 Scene* create_scene_from_model_path(const char* path, const char* texture_directory) {
     const struct aiScene* ai_scene =
         import_ai_scene(path, aiProcess_Triangulate | aiProcess_CalcTangentSpace |
@@ -1365,6 +1446,12 @@ Scene* create_scene_from_model_path(const char* path, const char* texture_direct
     if (ai_scene->mNumAnimations > 0 && scene->skeleton_count > 0) {
         process_ai_animations(ai_scene, scene, scene->skeletons[0]);
     }
+
+    // POM (§4.11): resolve "<name>_height" sibling maps for materials that carry
+    // an albedo/normal texture but no height map yet. No-op unless a sibling is
+    // on disk. Sync path only -- the async loader populates *_tex on background
+    // threads, so a post-import pass there would race.
+    resolve_height_maps(scene);
 
     aiReleaseImport(ai_scene);
     return scene;
