@@ -773,6 +773,19 @@ int postfx_add_sss_profile(PostFX* fx, const float* color, float radius) {
 static GLuint run_temporal_accum(PostFX* fx, ShaderProgram* prog, PingPong* pp, int w, int h,
                                  GLuint current_tex);
 
+// Additive-fold the currently-bound fullscreen setup (sss_blur_program + its
+// textures/uniforms) into the HDR scene (GL_ONE,GL_ONE), restoring blend state.
+static void _sss_fold_into_hdr(PostFX* fx) {
+    glBindFramebuffer(GL_FRAMEBUFFER, fx->hdr_fbo);
+    glViewport(0, 0, fx->width, fx->height);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_ONE, GL_ONE);
+    draw_fullscreen_quad(fx->quad_vao);
+    glDisable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    check_gl_error("postfx sss");
+}
+
 // Separable screen-space SSS: the skin-diffuse buffer (D, attachment 4, already
 // resolved to sss_diffuse_texture) is blurred H then V with a depth-aware
 // per-channel profile; the V pass forms the recomposite delta blur - D, additive-
@@ -797,12 +810,12 @@ static void postfx_run_sss(PostFX* fx, mat4 projection, bool taa_resolving) {
     uniform_set_vec2(fx->sss_blur_program->uniforms, "texelSize", texel);
     uniform_set_vec2(fx->sss_blur_program->uniforms, "dir", (const float[]){1.0f, 0.0f});
     uniform_set_float(fx->sss_blur_program->uniforms, "projScale", proj_scale);
-    for (int i = 0; i < fx->sss_profile_count; i++) {
-        char pname[24];
-        snprintf(pname, sizeof(pname), "sssProfiles[%d]", i);
-        uniform_set_vec4(fx->sss_blur_program->uniforms, pname, fx->sss_profiles[i]);
-    }
-    uniform_set_int(fx->sss_blur_program->uniforms, "subtractCenter", 0);
+    // One ranged upload of the contiguous profile array (the fog/CSM idiom), not
+    // a per-element snprintf loop.
+    GLint prof_loc = uniform_location(fx->sss_blur_program->uniforms, "sssProfiles[0]");
+    if (prof_loc >= 0)
+        glUniform4fv(prof_loc, fx->sss_profile_count, (const GLfloat*)fx->sss_profiles);
+    uniform_set_int(fx->sss_blur_program->uniforms, "mode", 0);
     draw_fullscreen_quad(fx->quad_vao);
 
     // Pass 2: vertical blur of the H result, forming the composite delta blur - D
@@ -813,25 +826,18 @@ static void postfx_run_sss(PostFX* fx, mat4 projection, bool taa_resolving) {
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, fx->sss_diffuse_texture);
     uniform_set_vec2(fx->sss_blur_program->uniforms, "dir", (const float[]){0.0f, 1.0f});
-    uniform_set_int(fx->sss_blur_program->uniforms, "subtractCenter", 1);
+    uniform_set_int(fx->sss_blur_program->uniforms, "mode", 1);
 
     if (!taa_resolving) {
         // No TAA: additive-fold the composite delta straight into the HDR scene.
         fx->sss_history.valid = false;
-        glBindFramebuffer(GL_FRAMEBUFFER, fx->hdr_fbo);
-        glViewport(0, 0, fx->width, fx->height);
-        glEnable(GL_BLEND);
-        glBlendFunc(GL_ONE, GL_ONE);
-        draw_fullscreen_quad(fx->quad_vao);
-        glDisable(GL_BLEND);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        check_gl_error("postfx sss");
+        _sss_fold_into_hdr(fx);
         return;
     }
 
     // TAA: render the delta to a scratch, temporally accumulate it (reproject by
     // velocity + neighbour clamp, like fog/SSR), then additive-fold the stabilized
-    // delta into hdr with a passthrough copy (subtractCenter 2).
+    // delta into hdr with a passthrough copy (mode 2).
     glBindFramebuffer(GL_FRAMEBUFFER, fx->sss_delta_fbo);
     glViewport(0, 0, fx->width, fx->height);
     draw_fullscreen_quad(fx->quad_vao);
@@ -839,18 +845,11 @@ static void postfx_run_sss(PostFX* fx, mat4 projection, bool taa_resolving) {
     GLuint stable = run_temporal_accum(fx, fx->temporal_accum_program, &fx->sss_history, fx->width,
                                        fx->height, fx->sss_delta_texture);
 
-    glBindFramebuffer(GL_FRAMEBUFFER, fx->hdr_fbo);
-    glViewport(0, 0, fx->width, fx->height);
     glUseProgram(fx->sss_blur_program->id);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, stable);
-    uniform_set_int(fx->sss_blur_program->uniforms, "subtractCenter", 2);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_ONE, GL_ONE);
-    draw_fullscreen_quad(fx->quad_vao);
-    glDisable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    check_gl_error("postfx sss");
+    uniform_set_int(fx->sss_blur_program->uniforms, "mode", 2);
+    _sss_fold_into_hdr(fx);
 }
 
 // Bloom pyramid (Jimenez dual-filter): bright pass into mip 0, 13-tap

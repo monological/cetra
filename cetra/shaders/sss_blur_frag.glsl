@@ -23,8 +23,8 @@ uniform float projScale;    // 0.5 * projection[1][1] * renderHeight (world radi
 // widest), w = world scatter radius. The center pixel's profile index arrives in
 // the skin-diffuse alpha (from pbr_frag), selecting its kernel width + color.
 uniform vec4 sssProfiles[MAX_SSS_PROFILES];
-uniform int subtractCenter; // 0 = H blur, 1 = V/composite (blur - origDiffuse),
-                            // 2 = passthrough copy of srcTex (TAA delta fold)
+uniform int mode; // 0 = H blur, 1 = V/composite (blur - origDiffuse),
+                  // 2 = passthrough copy of srcTex (TAA delta fold)
 
 const int HALF_TAPS = 12;   // samples per side (cover the broad tail Gaussian)
 const float MAX_PX = 48.0;  // clamp the screen-space blur radius
@@ -49,7 +49,7 @@ vec3 profileWeight(float t, vec3 sigma) {
 void main()
 {
     // Fold pass (TAA): additive copy of the temporally-accumulated composite delta.
-    if (subtractCenter == 2) {
+    if (mode == 2) {
         FragColor = texture(srcTex, TexCoords);
         return;
     }
@@ -63,7 +63,7 @@ void main()
     // nothing to hdr, including alpha); the H pass passes the source through,
     // keeping the alpha so the V pass reads the same profile index.
     if (centerZ >= 0.0) {
-        FragColor = subtractCenter > 0 ? vec4(0.0) : vec4(centerSrc, centerA);
+        FragColor = mode > 0 ? vec4(0.0) : vec4(centerSrc, centerA);
         return;
     }
 
@@ -108,6 +108,6 @@ void main()
     // V/composite pass folds the recomposite delta (blur - sharp diffuse), with
     // alpha 0 so the additive fold leaves hdr alpha untouched; the H pass just
     // emits the horizontal blur for the V pass to read.
-    FragColor = subtractCenter > 0 ? vec4(blur - texture(origTex, TexCoords).rgb, 0.0)
-                                   : vec4(blur, centerA);
+    FragColor = mode > 0 ? vec4(blur - texture(origTex, TexCoords).rgb, 0.0)
+                         : vec4(blur, centerA);
 }

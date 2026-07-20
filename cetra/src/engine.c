@@ -1670,12 +1670,15 @@ void engine_set_scene_draw_buffers(const Engine* engine, bool with_gbuffer) {
     // enabled globally, so keep each aux target opaque via indexed disable
     // (re-issued at every pass boundary because any blanket glEnable(GL_BLEND)
     // wipes it).
-    const bool written[5] = {true, engine->normals_this_frame, engine->aux_this_frame,
-                             engine->albedo_this_frame, engine->sss_this_frame};
-    GLenum bufs[5] = {GL_COLOR_ATTACHMENT0, GL_NONE, GL_NONE, GL_NONE, GL_NONE};
+    // Read each attachment's per-frame write gate from the same descriptor table
+    // that drives create/clear (const cast: this only reads the this_frame flags).
+    // Attachment 0 (this_frame NULL) is always written and starts the list.
+    GBufferAttachment gb[GBUFFER_ATTACHMENT_COUNT];
+    _gbuffer_attachments((Engine*)engine, gb);
+    GLenum bufs[GBUFFER_ATTACHMENT_COUNT] = {GL_COLOR_ATTACHMENT0}; // rest GL_NONE (0)
     int count = 1;
-    for (int i = 1; i < 5; i++) {
-        if (with_gbuffer && written[i]) {
+    for (int i = 1; i < GBUFFER_ATTACHMENT_COUNT; i++) {
+        if (with_gbuffer && *gb[i].this_frame) {
             bufs[i] = GL_COLOR_ATTACHMENT0 + i;
             glDisablei(GL_BLEND, i);
             count = i + 1;
