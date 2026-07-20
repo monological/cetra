@@ -7,13 +7,14 @@ out vec4 FragColor;
 // hit. Projective transforms map lines to lines, so interpolating the
 // NDC endpoints linearly walks the exact projected ray — unlike a
 // view-space march, whose fixed world steps alias into dotted hits on
-// thin geometry. Writes a half-res reflection buffer that a separate
-// pass composites additively into the HDR target (GL 4.1 has no texture
-// barrier, so the scene texture cannot be read and written in one pass).
+// thin geometry. Writes a reflection buffer (full-res by default, half-res
+// when ssr_full_res is off) that a separate pass composites into the HDR
+// target (GL 4.1 has no texture barrier, so the scene texture cannot be
+// read and written in one pass).
 uniform sampler2D depthTex;   // Full-res resolved scene depth
 uniform sampler2D normalsTex; // View-space normal (xyz) + reflective marker (a)
 uniform sampler2D hdrTex;     // Resolved linear HDR scene color
-uniform sampler2D hizTex;     // Min-depth pyramid (half-res base) for the traversal
+uniform sampler2D hizTex;     // Min-depth pyramid (SSR-res base) for the traversal
 uniform int hizWidth;         // Pyramid base dimensions
 uniform int hizHeight;
 uniform int hizMips;

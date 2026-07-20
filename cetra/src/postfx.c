@@ -106,17 +106,24 @@ static bool create_ssr_buffers(PostFX* fx) {
     return true;
 }
 
-// Runtime resolution switch: delete the SSR buffers and rebuild them at the new
-// resolution. No-op if unchanged.
-void postfx_set_ssr_full_res(PostFX* fx, bool full_res) {
-    if (!fx || fx->ssr_full_res == full_res)
-        return;
+// Tear down everything create_ssr_buffers allocated (reflection FBO + Hi-Z
+// pyramid + the history/denoise ping-pongs). Paired with it so the runtime
+// resolution switch and free_postfx share one teardown list.
+static void destroy_ssr_buffers(PostFX* fx) {
     glDeleteFramebuffers(1, &fx->ssr_fbo);
     glDeleteTextures(1, &fx->ssr_texture);
     glDeleteFramebuffers(1, &fx->hiz_fbo);
     glDeleteTextures(1, &fx->hiz_texture);
     free_pingpong(&fx->ssr_history);
     free_pingpong(&fx->ssr_atrous);
+}
+
+// Runtime resolution switch: delete the SSR buffers and rebuild them at the new
+// resolution. No-op if unchanged.
+void postfx_set_ssr_full_res(PostFX* fx, bool full_res) {
+    if (!fx || fx->ssr_full_res == full_res)
+        return;
+    destroy_ssr_buffers(fx);
     fx->ssr_full_res = full_res;
     create_ssr_buffers(fx);
 }
@@ -511,8 +518,11 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     const float ao_texel[2] = {1.0f / (float)fx->ssao_width, 1.0f / (float)fx->ssao_height};
     uniform_set_vec2(fx->ssao_blur_program->uniforms, "texelSize", ao_texel);
 
-    // Half-res effect resolution never changes after create, so the shared
-    // tent composite and accumulator take their texel size once here
+    // The accumulator's half-res resolution is fixed at create, so it takes its
+    // texel size once here. The shared tent composite is seeded with the same
+    // default, but its consumers each re-set texelSize before drawing (fog at
+    // half-res, SSR at full or half res per ssr_full_res) since they no longer
+    // share one resolution.
     glUseProgram(fx->upsample_tent_program->id);
     uniform_set_int(fx->upsample_tent_program->uniforms, "srcTex", 0);
     uniform_set_vec2(fx->upsample_tent_program->uniforms, "texelSize", ao_texel);
@@ -533,14 +543,13 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     uniform_set_int(fx->ssgi_accum_program->uniforms, "historyTex", 2);
     uniform_set_vec2(fx->ssgi_accum_program->uniforms, "texelSize", ao_texel);
 
+    // Both a-trous programs get texelSize per call from run_atrous (the SSR one
+    // tracks the full-res toggle; the SSGI one reproduces ao_texel bit-for-bit).
     glUseProgram(fx->ssgi_atrous_program->id);
     uniform_set_int(fx->ssgi_atrous_program->uniforms, "giTex", 0);
     uniform_set_int(fx->ssgi_atrous_program->uniforms, "linDepthTex", 1);
     uniform_set_int(fx->ssgi_atrous_program->uniforms, "normalsTex", 2);
-    uniform_set_vec2(fx->ssgi_atrous_program->uniforms, "texelSize", ao_texel);
 
-    // texelSize is set per frame in the SSR block (it tracks the SSR
-    // resolution, which the full-res toggle changes at runtime).
     glUseProgram(fx->ssr_atrous_program->id);
     uniform_set_int(fx->ssr_atrous_program->uniforms, "reflTex", 0);
     uniform_set_int(fx->ssr_atrous_program->uniforms, "linDepthTex", 1);
@@ -749,12 +758,7 @@ void free_postfx(PostFX* fx) {
     free_pingpong(&fx->ssgi_atrous);
     free_pingpong(&fx->ao_history);
     glDeleteTextures(1, &fx->noise_texture);
-    glDeleteFramebuffers(1, &fx->ssr_fbo);
-    glDeleteTextures(1, &fx->ssr_texture);
-    free_pingpong(&fx->ssr_history);
-    free_pingpong(&fx->ssr_atrous);
-    glDeleteFramebuffers(1, &fx->hiz_fbo);
-    glDeleteTextures(1, &fx->hiz_texture);
+    destroy_ssr_buffers(fx);
     glDeleteFramebuffers(1, &fx->aux_fbo);
     glDeleteTextures(1, &fx->aux_texture);
     glDeleteFramebuffers(1, &fx->albedo_fbo);
@@ -898,6 +902,36 @@ static GLuint run_temporal_accum(PostFX* fx, ShaderProgram* prog, PingPong* pp, 
     return pp->tex[write];
 }
 
+// Edge-aware a-trous denoise, shared by the SSGI and SSR denoisers (their
+// a-trous shaders share the reflTex/giTex + linDepthTex + normalsTex unit layout
+// and the stepSize/texelSize/useNormalsTex uniforms). Three B3-spline passes at
+// doubling tap spacing (1, 2, 4) smooth input_tex across the ping-pong pp,
+// weighted by aux depth (unit 1) and, when present, view normals (unit 2).
+// texelSize is set per call (the SSR resolution changes with the full-res
+// toggle; for SSGI it reproduces the fixed ao_texel value bit-for-bit). Returns
+// the final smoothed texture.
+static GLuint run_atrous(PostFX* fx, ShaderProgram* prog, PingPong* pp, int w, int h,
+                         GLuint input_tex, bool have_normals) {
+    glUseProgram(prog->id);
+    uniform_set_int(prog->uniforms, "useNormalsTex", have_normals ? 1 : 0);
+    const float texel[2] = {1.0f / (float)w, 1.0f / (float)h};
+    uniform_set_vec2(prog->uniforms, "texelSize", texel);
+    glViewport(0, 0, w, h);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, fx->aux_texture);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, have_normals ? fx->normal_texture : 0);
+    for (int i = 0; i < 3; i++) {
+        glBindFramebuffer(GL_FRAMEBUFFER, pp->fbo[i & 1]);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, input_tex);
+        uniform_set_int(prog->uniforms, "stepSize", 1 << i);
+        draw_fullscreen_quad(fx->quad_vao);
+        input_tex = pp->tex[i & 1];
+    }
+    return input_tex;
+}
+
 // Volumetric fog: march the half-res buffer, then fold it into the HDR
 // scene before DoF/bloom/tonemap so shafts defocus, bloom, and meter like
 // direct light. Owns the fog history lifecycle -- the history is only
@@ -985,6 +1019,179 @@ static GLuint postfx_run_fog(PostFX* fx, bool aux_written, bool taa_resolving, m
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     check_gl_error("postfx fog");
     return result;
+}
+
+// Screen-space reflections: rebuild the Hi-Z min-depth pyramid, march the
+// reflection buffer (stochastic when denoising), temporally accumulate + a-trous
+// denoise, then premultiplied-composite onto the HDR scene before bloom so
+// reflected highlights bloom like direct ones. Owns the ssr_history/ssr_atrous
+// lifecycle. Traces at full or half res per fx->ssr_full_res. Same extracted-
+// stage shape as postfx_run_fog; inv_projection is passed in (shared with DoF).
+static void postfx_run_ssr(PostFX* fx, bool have_normals, bool taa_resolving, mat4 projection,
+                           mat4 inv_projection, mat4 view) {
+    // SSR traces at full res (sharp) or half res, per ssr_full_res; the
+    // buffer + Hi-Z pyramid were sized to match in create_ssr_buffers.
+    int ssr_w = fx->ssr_full_res ? fx->width : fx->ssao_width;
+    int ssr_h = fx->ssr_full_res ? fx->height : fx->ssao_height;
+    // Rebuild the min-depth pyramid the traversal walks: level 0
+    // takes the conservative min over the full-res depth, every
+    // further level the min of the 2x2 below. The source level is
+    // pinned via BASE/MAX_LEVEL so a level never reads itself.
+    glBindFramebuffer(GL_FRAMEBUFFER, fx->hiz_fbo);
+    glUseProgram(fx->ssr_hiz_program->id);
+    glActiveTexture(GL_TEXTURE0);
+    {
+        int mip_w = ssr_w;
+        int mip_h = ssr_h;
+        int src_w = fx->width;
+        int src_h = fx->height;
+        for (int mip = 0; mip < fx->hiz_mips; mip++) {
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                                   fx->hiz_texture, mip);
+            glViewport(0, 0, mip_w, mip_h);
+            if (mip == 0) {
+                glBindTexture(GL_TEXTURE_2D, fx->depth_texture);
+            } else {
+                glBindTexture(GL_TEXTURE_2D, fx->hiz_texture);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, mip - 1);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, mip - 1);
+            }
+            uniform_set_int(fx->ssr_hiz_program->uniforms, "srcWidth", src_w);
+            uniform_set_int(fx->ssr_hiz_program->uniforms, "srcHeight", src_h);
+            // Full-res level 0 is the same size as the depth buffer, so it
+            // is a 1:1 copy, not a 2x2 reduction (which would sample depth
+            // at twice the coordinate and corrupt the whole pyramid).
+            uniform_set_int(fx->ssr_hiz_program->uniforms, "copySrc",
+                            (mip == 0 && fx->ssr_full_res) ? 1 : 0);
+            draw_fullscreen_quad(fx->quad_vao);
+            src_w = mip_w;
+            src_h = mip_h;
+            mip_w = mip_w > 1 ? mip_w / 2 : 1;
+            mip_h = mip_h > 1 ? mip_h / 2 : 1;
+        }
+        // Reopen the whole chain for the traversal's mip fetches
+        glBindTexture(GL_TEXTURE_2D, fx->hiz_texture);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, fx->hiz_mips - 1);
+    }
+    check_gl_error("postfx hiz build");
+
+    // March reflections into the reflection buffer (reads the scene,
+    // writes elsewhere: GL 4.1 has no texture barrier)
+    glBindFramebuffer(GL_FRAMEBUFFER, fx->ssr_fbo);
+    glViewport(0, 0, ssr_w, ssr_h);
+    glUseProgram(fx->ssr_program->id);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, fx->depth_texture);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, fx->normal_texture);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, fx->hdr_texture);
+    glActiveTexture(GL_TEXTURE4);
+    glBindTexture(GL_TEXTURE_2D, fx->hiz_texture);
+    glActiveTexture(GL_TEXTURE0);
+    uniform_set_int(fx->ssr_program->uniforms, "hizWidth", ssr_w);
+    uniform_set_int(fx->ssr_program->uniforms, "hizHeight", ssr_h);
+    uniform_set_int(fx->ssr_program->uniforms, "hizMips", fx->hiz_mips);
+    uniform_set_mat4(fx->ssr_program->uniforms, "projection", (float*)projection);
+    uniform_set_mat4(fx->ssr_program->uniforms, "invProjection", (float*)inv_projection);
+    uniform_set_float(fx->ssr_program->uniforms, "maxDistance", fx->ssr_max_distance);
+    uniform_set_float(fx->ssr_program->uniforms, "thickness", fx->ssr_thickness);
+    uniform_set_int(fx->ssr_program->uniforms, "steps", fx->ssr_steps);
+    uniform_set_float(fx->ssr_program->uniforms, "floorRoughness", fx->ssr_floor_roughness);
+    uniform_set_float(fx->ssr_program->uniforms, "maxRoughness", fx->ssr_max_roughness);
+    // Strength folds into the march's premultiplied weight (clamped
+    // there) so the composite stays a straight premultiplied lerp
+    uniform_set_float(fx->ssr_program->uniforms, "strength", fx->ssr_strength);
+    // Stochastic march: jitter the ray per pixel so the deterministic
+    // Hi-Z grid stripes scatter into noise a resolver can clean. The
+    // a-trous denoise (below) resolves it spatially every frame, so this
+    // runs whenever the denoiser is on -- no TAA required. Off ->
+    // deterministic march, bit-identical.
+    int ssr_stochastic = fx->ssr_denoise ? 1 : 0;
+    uniform_set_int(fx->ssr_program->uniforms, "ssrStochastic", ssr_stochastic);
+    // Temporal accumulation runs when enabled AND TAA is resolving (it
+    // needs per-frame jitter + motion vectors). The seed and the
+    // accumulator pass below share this one predicate so the seed only
+    // advances when there's an accumulator to average it.
+    bool ssr_temporal_on = fx->ssr_temporal && taa_resolving;
+    // Advance the per-pixel random each frame ONLY when temporal is on
+    // (independent of the projection jitter, so it converges even in
+    // headless with TAA on). Without temporal, freeze the seed: the
+    // a-trous denoises a stable per-frame pattern, not a boiling one.
+    int ssr_seed = ssr_temporal_on ? fx->frame_index : 0;
+    uniform_set_int(fx->ssr_program->uniforms, "ssrFrameIndex", ssr_seed);
+    uniform_set_float(fx->ssr_program->uniforms, "ssrJitter", fx->ssr_jitter);
+    // Local-probe fallback for rays the march cannot answer. The
+    // probe lives in world space while SSR is view-space, so this is
+    // the only postfx consumer of the view matrix.
+    uniform_set_int(fx->ssr_program->uniforms, "probeEnabled", fx->probe_enabled ? 1 : 0);
+    if (fx->probe_enabled) {
+        mat4 inv_view;
+        glm_mat4_inv(view, inv_view);
+        glActiveTexture(GL_TEXTURE3);
+        glBindTexture(GL_TEXTURE_CUBE_MAP, fx->probe_cubemap);
+        glActiveTexture(GL_TEXTURE0);
+        uniform_set_mat4(fx->ssr_program->uniforms, "invView", (float*)inv_view);
+        uniform_set_vec3(fx->ssr_program->uniforms, "probePos", fx->probe_pos);
+        uniform_set_vec3(fx->ssr_program->uniforms, "probeBoxMin", fx->probe_box_min);
+        uniform_set_vec3(fx->ssr_program->uniforms, "probeBoxMax", fx->probe_box_max);
+        uniform_set_float(fx->ssr_program->uniforms, "probeMaxLOD", fx->probe_max_lod);
+        uniform_set_float(fx->ssr_program->uniforms, "probeIntensity",
+                          fx->probe_intensity);
+    }
+    draw_fullscreen_quad(fx->quad_vao);
+
+    // Temporal accumulation: reproject the previous reflection by the
+    // motion vectors, neighborhood-clamp it, and blend, so the jittered
+    // march averages across frames and its single-frame step banding
+    // washes out. Reuses the shared accumulator (the premultiplied
+    // (color*weight, weight) buffer is exactly its RGBA contract). Needs
+    // TAA (per-frame jitter + motion); off/no-TAA leaves the raw march.
+    GLuint ssr_result = fx->ssr_texture;
+    if (ssr_temporal_on) {
+        ssr_result = run_temporal_accum(fx, fx->temporal_accum_program, &fx->ssr_history,
+                                        ssr_w, ssr_h, fx->ssr_texture);
+    } else {
+        fx->ssr_history.valid = false;
+    }
+
+    // Spatial a-trous denoise: three edge-aware B3-spline passes at
+    // doubling tap spacing (1, 2, 4) resolve the stochastic march's
+    // per-pixel noise into a clean reflection every frame (no temporal
+    // convergence wait, and it holds up under motion). It smooths the
+    // premultiplied (color*weight, weight) buffer; the depth/normal
+    // weights keep the blur on the floor and stop it at the silhouette.
+    // SVGF order: denoise the accumulation. Skipped when the denoiser is
+    // off -> bit-identical to the pre-denoise reflection.
+    if (fx->ssr_denoise) {
+        ssr_result = run_atrous(fx, fx->ssr_atrous_program, &fx->ssr_atrous,
+                                ssr_w, ssr_h, ssr_result, have_normals);
+        check_gl_error("postfx ssr denoise");
+    }
+
+    // Lerp the reflections onto the HDR scene before bloom so
+    // reflected highlights bloom like direct ones. The buffer is
+    // premultiplied, hence (ONE, ONE_MINUS_SRC_ALPHA). Restore the
+    // engine's blend function afterward: it is set once at init
+    // and everything else assumes it.
+    glBindFramebuffer(GL_FRAMEBUFFER, fx->hdr_fbo);
+    glViewport(0, 0, fx->width, fx->height);
+    glUseProgram(fx->upsample_tent_program->id);
+    // Sample the tent at the reflection buffer's own texel: full-res is
+    // a 1px tent (light AA on the sharp reflection); half-res is the
+    // upsample. Each tent consumer sets its own texelSize (fog resets
+    // it to the half-res value) so nothing leaks through the shared program.
+    const float ssr_texel[2] = {1.0f / (float)ssr_w, 1.0f / (float)ssr_h};
+    uniform_set_vec2(fx->upsample_tent_program->uniforms, "texelSize", ssr_texel);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, ssr_result);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+    draw_fullscreen_quad(fx->quad_vao);
+    glDisable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    check_gl_error("postfx ssr");
 }
 
 void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hdr,
@@ -1180,206 +1387,16 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             }
 
             // Three a-trous iterations with doubling tap spacing (1, 2, 4).
-            // Units 1/2 (depth, normals) are invariant across iterations;
-            // only the GI ping-pong on unit 0 changes.
-            glUseProgram(fx->ssgi_atrous_program->id);
-            uniform_set_int(fx->ssgi_atrous_program->uniforms, "useNormalsTex",
-                            have_normals ? 1 : 0);
-            glViewport(0, 0, fx->ssao_width, fx->ssao_height);
-            glActiveTexture(GL_TEXTURE1);
-            glBindTexture(GL_TEXTURE_2D, fx->aux_texture);
-            glActiveTexture(GL_TEXTURE2);
-            glBindTexture(GL_TEXTURE_2D, have_normals ? fx->normal_texture : 0);
-            for (int i = 0; i < 3; i++) {
-                glBindFramebuffer(GL_FRAMEBUFFER, fx->ssgi_atrous.fbo[i & 1]);
-                glActiveTexture(GL_TEXTURE0);
-                glBindTexture(GL_TEXTURE_2D, gi_result_tex);
-                uniform_set_int(fx->ssgi_atrous_program->uniforms, "stepSize", 1 << i);
-                draw_fullscreen_quad(fx->quad_vao);
-                gi_result_tex = fx->ssgi_atrous.tex[i & 1];
-            }
+            gi_result_tex = run_atrous(fx, fx->ssgi_atrous_program, &fx->ssgi_atrous,
+                                       fx->ssao_width, fx->ssao_height, gi_result_tex,
+                                       have_normals);
             check_gl_error("postfx ssgi denoise");
         }
         if (!gi_accum_ran)
             fx->ssgi_history.valid = false;
 
-        if (ssr_active) {
-            // SSR traces at full res (sharp) or half res, per ssr_full_res; the
-            // buffer + Hi-Z pyramid were sized to match in create_ssr_buffers.
-            int ssr_w = fx->ssr_full_res ? fx->width : fx->ssao_width;
-            int ssr_h = fx->ssr_full_res ? fx->height : fx->ssao_height;
-            // Rebuild the min-depth pyramid the traversal walks: level 0
-            // takes the conservative min over the full-res depth, every
-            // further level the min of the 2x2 below. The source level is
-            // pinned via BASE/MAX_LEVEL so a level never reads itself.
-            glBindFramebuffer(GL_FRAMEBUFFER, fx->hiz_fbo);
-            glUseProgram(fx->ssr_hiz_program->id);
-            glActiveTexture(GL_TEXTURE0);
-            {
-                int mip_w = ssr_w;
-                int mip_h = ssr_h;
-                int src_w = fx->width;
-                int src_h = fx->height;
-                for (int mip = 0; mip < fx->hiz_mips; mip++) {
-                    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
-                                           fx->hiz_texture, mip);
-                    glViewport(0, 0, mip_w, mip_h);
-                    if (mip == 0) {
-                        glBindTexture(GL_TEXTURE_2D, fx->depth_texture);
-                    } else {
-                        glBindTexture(GL_TEXTURE_2D, fx->hiz_texture);
-                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, mip - 1);
-                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, mip - 1);
-                    }
-                    uniform_set_int(fx->ssr_hiz_program->uniforms, "srcWidth", src_w);
-                    uniform_set_int(fx->ssr_hiz_program->uniforms, "srcHeight", src_h);
-                    // Full-res level 0 is the same size as the depth buffer, so it
-                    // is a 1:1 copy, not a 2x2 reduction (which would sample depth
-                    // at twice the coordinate and corrupt the whole pyramid).
-                    uniform_set_int(fx->ssr_hiz_program->uniforms, "copySrc",
-                                    (mip == 0 && fx->ssr_full_res) ? 1 : 0);
-                    draw_fullscreen_quad(fx->quad_vao);
-                    src_w = mip_w;
-                    src_h = mip_h;
-                    mip_w = mip_w > 1 ? mip_w / 2 : 1;
-                    mip_h = mip_h > 1 ? mip_h / 2 : 1;
-                }
-                // Reopen the whole chain for the traversal's mip fetches
-                glBindTexture(GL_TEXTURE_2D, fx->hiz_texture);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, fx->hiz_mips - 1);
-            }
-            check_gl_error("postfx hiz build");
-
-            // March reflections into the reflection buffer (reads the scene,
-            // writes elsewhere: GL 4.1 has no texture barrier)
-            glBindFramebuffer(GL_FRAMEBUFFER, fx->ssr_fbo);
-            glViewport(0, 0, ssr_w, ssr_h);
-            glUseProgram(fx->ssr_program->id);
-            glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, fx->depth_texture);
-            glActiveTexture(GL_TEXTURE1);
-            glBindTexture(GL_TEXTURE_2D, fx->normal_texture);
-            glActiveTexture(GL_TEXTURE2);
-            glBindTexture(GL_TEXTURE_2D, fx->hdr_texture);
-            glActiveTexture(GL_TEXTURE4);
-            glBindTexture(GL_TEXTURE_2D, fx->hiz_texture);
-            glActiveTexture(GL_TEXTURE0);
-            uniform_set_int(fx->ssr_program->uniforms, "hizWidth", ssr_w);
-            uniform_set_int(fx->ssr_program->uniforms, "hizHeight", ssr_h);
-            uniform_set_int(fx->ssr_program->uniforms, "hizMips", fx->hiz_mips);
-            uniform_set_mat4(fx->ssr_program->uniforms, "projection", (float*)projection);
-            uniform_set_mat4(fx->ssr_program->uniforms, "invProjection", (float*)inv_projection);
-            uniform_set_float(fx->ssr_program->uniforms, "maxDistance", fx->ssr_max_distance);
-            uniform_set_float(fx->ssr_program->uniforms, "thickness", fx->ssr_thickness);
-            uniform_set_int(fx->ssr_program->uniforms, "steps", fx->ssr_steps);
-            uniform_set_float(fx->ssr_program->uniforms, "floorRoughness", fx->ssr_floor_roughness);
-            uniform_set_float(fx->ssr_program->uniforms, "maxRoughness", fx->ssr_max_roughness);
-            // Strength folds into the march's premultiplied weight (clamped
-            // there) so the composite stays a straight premultiplied lerp
-            uniform_set_float(fx->ssr_program->uniforms, "strength", fx->ssr_strength);
-            // Stochastic march: jitter the ray per pixel so the deterministic
-            // Hi-Z grid stripes scatter into noise a resolver can clean. The
-            // a-trous denoise (below) resolves it spatially every frame, so this
-            // runs whenever the denoiser is on -- no TAA required. Off ->
-            // deterministic march, bit-identical.
-            int ssr_stochastic = fx->ssr_denoise ? 1 : 0;
-            uniform_set_int(fx->ssr_program->uniforms, "ssrStochastic", ssr_stochastic);
-            // Advance the per-pixel random each frame ONLY when the temporal
-            // accumulator is there to average the frames (independent of the
-            // projection jitter, so it converges even in headless with TAA on).
-            // Without temporal, freeze the seed: the a-trous denoises a stable
-            // per-frame pattern instead of a boiling one.
-            int ssr_seed = (fx->ssr_temporal && taa_resolving) ? fx->frame_index : 0;
-            uniform_set_int(fx->ssr_program->uniforms, "ssrFrameIndex", ssr_seed);
-            uniform_set_float(fx->ssr_program->uniforms, "ssrJitter", fx->ssr_jitter);
-            // Local-probe fallback for rays the march cannot answer. The
-            // probe lives in world space while SSR is view-space, so this is
-            // the only postfx consumer of the view matrix.
-            uniform_set_int(fx->ssr_program->uniforms, "probeEnabled", fx->probe_enabled ? 1 : 0);
-            if (fx->probe_enabled) {
-                mat4 inv_view;
-                glm_mat4_inv(view, inv_view);
-                glActiveTexture(GL_TEXTURE3);
-                glBindTexture(GL_TEXTURE_CUBE_MAP, fx->probe_cubemap);
-                glActiveTexture(GL_TEXTURE0);
-                uniform_set_mat4(fx->ssr_program->uniforms, "invView", (float*)inv_view);
-                uniform_set_vec3(fx->ssr_program->uniforms, "probePos", fx->probe_pos);
-                uniform_set_vec3(fx->ssr_program->uniforms, "probeBoxMin", fx->probe_box_min);
-                uniform_set_vec3(fx->ssr_program->uniforms, "probeBoxMax", fx->probe_box_max);
-                uniform_set_float(fx->ssr_program->uniforms, "probeMaxLOD", fx->probe_max_lod);
-                uniform_set_float(fx->ssr_program->uniforms, "probeIntensity",
-                                  fx->probe_intensity);
-            }
-            draw_fullscreen_quad(fx->quad_vao);
-
-            // Temporal accumulation: reproject the previous reflection by the
-            // motion vectors, neighborhood-clamp it, and blend, so the jittered
-            // march averages across frames and its single-frame step banding
-            // washes out. Reuses the shared accumulator (the premultiplied
-            // (color*weight, weight) buffer is exactly its RGBA contract). Needs
-            // TAA (per-frame jitter + motion); off/no-TAA leaves the raw march.
-            GLuint ssr_result = fx->ssr_texture;
-            if (fx->ssr_temporal && taa_resolving) {
-                ssr_result = run_temporal_accum(fx, fx->temporal_accum_program, &fx->ssr_history,
-                                                ssr_w, ssr_h, fx->ssr_texture);
-            } else {
-                fx->ssr_history.valid = false;
-            }
-
-            // Spatial a-trous denoise: three edge-aware B3-spline passes at
-            // doubling tap spacing (1, 2, 4) resolve the stochastic march's
-            // per-pixel noise into a clean reflection every frame (no temporal
-            // convergence wait, and it holds up under motion). It smooths the
-            // premultiplied (color*weight, weight) buffer; the depth/normal
-            // weights (units 1/2, invariant across iterations) keep the blur on
-            // the floor and stop it at the silhouette. SVGF order: denoise the
-            // accumulation. Skipped when the denoiser is off -> bit-identical M2.
-            if (fx->ssr_denoise) {
-                glUseProgram(fx->ssr_atrous_program->id);
-                uniform_set_int(fx->ssr_atrous_program->uniforms, "useNormalsTex",
-                                have_normals ? 1 : 0);
-                const float ssr_atrous_texel[2] = {1.0f / (float)ssr_w, 1.0f / (float)ssr_h};
-                uniform_set_vec2(fx->ssr_atrous_program->uniforms, "texelSize", ssr_atrous_texel);
-                glViewport(0, 0, ssr_w, ssr_h);
-                glActiveTexture(GL_TEXTURE1);
-                glBindTexture(GL_TEXTURE_2D, fx->aux_texture);
-                glActiveTexture(GL_TEXTURE2);
-                glBindTexture(GL_TEXTURE_2D, have_normals ? fx->normal_texture : 0);
-                for (int i = 0; i < 3; i++) {
-                    glBindFramebuffer(GL_FRAMEBUFFER, fx->ssr_atrous.fbo[i & 1]);
-                    glActiveTexture(GL_TEXTURE0);
-                    glBindTexture(GL_TEXTURE_2D, ssr_result);
-                    uniform_set_int(fx->ssr_atrous_program->uniforms, "stepSize", 1 << i);
-                    draw_fullscreen_quad(fx->quad_vao);
-                    ssr_result = fx->ssr_atrous.tex[i & 1];
-                }
-                check_gl_error("postfx ssr denoise");
-            }
-
-            // Lerp the reflections onto the HDR scene before bloom so
-            // reflected highlights bloom like direct ones. The buffer is
-            // premultiplied, hence (ONE, ONE_MINUS_SRC_ALPHA). Restore the
-            // engine's blend function afterward: it is set once at init
-            // and everything else assumes it.
-            glBindFramebuffer(GL_FRAMEBUFFER, fx->hdr_fbo);
-            glViewport(0, 0, fx->width, fx->height);
-            glUseProgram(fx->upsample_tent_program->id);
-            // Sample the tent at the reflection buffer's own texel: full-res is
-            // a 1px tent (light AA on the sharp reflection); half-res is the
-            // upsample. Each tent consumer sets its own texelSize (fog resets
-            // it to the half-res value) so nothing leaks through the shared program.
-            const float ssr_texel[2] = {1.0f / (float)ssr_w, 1.0f / (float)ssr_h};
-            uniform_set_vec2(fx->upsample_tent_program->uniforms, "texelSize", ssr_texel);
-            glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, ssr_result);
-            glEnable(GL_BLEND);
-            glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
-            draw_fullscreen_quad(fx->quad_vao);
-            glDisable(GL_BLEND);
-            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-            check_gl_error("postfx ssr");
-        }
+        if (ssr_active)
+            postfx_run_ssr(fx, have_normals, taa_resolving, projection, inv_projection, view);
 
         if (ssgi_active && albedo_written) {
             // Add one bounce of indirect diffuse (albedo x gathered GI x intensity)
