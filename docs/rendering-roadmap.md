@@ -786,13 +786,13 @@ Three tiers, cheapest first:
 | 4.9 | Screen-space refraction | 3 | M | opaque color tex | ✅ **done** — real glass/liquids |
 | 4.10 | Clearcoat | 3 | S/M | — | ✅ **done** — car paint / lacquer / carbon-fibre + sampler-array foundation |
 | 4.10.1 | KHR specular + sheen | 3 | S/M | reserved slots (have) | ✅ **done** — tinted dielectric specular + velvet/satin cloth |
-| 4.11 | Parallax occlusion mapping | 3 | S/M | height slot (have) | cheap surface relief |
-| 4.12 | Separable SSS | 3 | M | material id | film-grade skin |
+| 4.11 | Parallax occlusion mapping | 3 | S/M | height slot (have) | ✅ **done** — cheap surface relief |
+| 4.12 | Separable SSS | 3 | M | material id | ✅ **done** — film-grade skin |
 | 4.13 | Bloom pyramid | 3 | S | — | ✅ **done** — smoother/stabler bloom |
 | 4.14 | Auto-exposure | 4 | S/M | — | ✅ **done** — lighting "just works" |
-| 4.15 | Motion blur | 4 | M | velocity buffer | motion cohesion |
+| 4.15 | Motion blur | 4 | M | velocity buffer | ✅ **done** — motion cohesion |
 | 4.16 | AgX tonemap | 4 | S | — | ✅ **done** — modern highlight rolloff |
 | 4.17 | Weighted-blended OIT | 4 | M | — | ✅ **shipped** — order-independent alpha-blend, `--oit` |
 | 4.18 | Forward+ (clustered) | arch | L | — | many dynamic lights |
 
-**Start here:** ~~4.1 (TAA)~~ ✅ → ~~4.2 (GTAO)~~ ✅ → ~~4.3 (SSGI)~~ ✅ → ~~4.4 (probes)~~ ✅ → ~~4.5 (fog)~~ ✅ → ~~4.8 (energy comp)~~ ✅ → ~~4.13 (bloom pyramid)~~ ✅ → ~~4.16 (AgX)~~ ✅ → ~~4.9 (refraction)~~ ✅ → ~~4.6 (CSM)~~ ✅ → ~~4.7 (sky)~~ ✅ → ~~4.10 (clearcoat)~~ ✅ → ~~4.10.1 (specular+sheen)~~ ✅ → ~~4.2.1 (spec-occ + AO edge)~~ ✅ → **pick: 4.11-4.12 (materials), or SSR reflection quality (the real floor-striping fix)**.
+**Start here:** ~~4.1 (TAA)~~ ✅ → ~~4.2 (GTAO)~~ ✅ → ~~4.3 (SSGI)~~ ✅ → ~~4.4 (probes)~~ ✅ → ~~4.5 (fog)~~ ✅ → ~~4.8 (energy comp)~~ ✅ → ~~4.13 (bloom pyramid)~~ ✅ → ~~4.16 (AgX)~~ ✅ → ~~4.9 (refraction)~~ ✅ → ~~4.6 (CSM)~~ ✅ → ~~4.7 (sky)~~ ✅ → ~~4.10 (clearcoat)~~ ✅ → ~~4.10.1 (specular+sheen)~~ ✅ → ~~4.2.1 (spec-occ + AO edge)~~ ✅ → ~~4.11 (POM)~~ ✅ → ~~4.15 (motion blur)~~ ✅ → ~~4.12 (SSS)~~ ✅ → ~~4.17 (OIT)~~ ✅ → **4.18 (Forward+ clustered) — the last Tier-4 item**.
