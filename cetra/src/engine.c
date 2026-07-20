@@ -44,6 +44,44 @@ static void _engine_mouse_button_callback(GLFWwindow* window, int button, int ac
 static void _engine_key_callback(GLFWwindow* window, int key, int scancode, int action, int mods);
 static void _engine_scroll_callback(GLFWwindow* window, double xoffset, double yoffset);
 static SceneNode* _perform_engine_ray_picking(Engine* engine, double mouse_fb_x, double mouse_fb_y);
+static void _destroy_msaa_attachments(Engine* engine);
+
+// One scene-MRT color attachment. The engine drives several draw buffers into a
+// single multisample framebuffer; describing each one's format + clear + write
+// gate in a single list keeps create / destroy / clear iterating off one source
+// of truth, so a new attachment is one row rather than an edit scattered across
+// half a dozen sites (each a place to forget one).
+//
+// Index i maps to GL_COLOR_ATTACHMENT0 + i. Attachment 0 is HDR scene color:
+// always written, and cleared with the scene background by the shared glClear
+// (which also clears depth/stencil), so its write gate is NULL and the 1..N
+// clear loop skips it.
+typedef struct GBufferAttachment {
+    GLuint* tex;            // storage on the Engine
+    bool* this_frame;       // per-frame write gate (NULL = always written)
+    GLenum internal_format; // multisample texture format
+    GLfloat clear[4];       // per-frame clear color
+} GBufferAttachment;
+
+#define GBUFFER_ATTACHMENT_COUNT 5
+
+// Describe this engine's scene-MRT attachments in draw-buffer order. Pure (no
+// GL): the tex/this_frame pointers alias Engine fields so create/destroy/clear
+// share one description of what each attachment is. The aux buffer is full float
+// (RGBA32F): fp16 quantizes linear Z into scene-scale steps on large scenes and
+// GTAO reads the staircase as banded occlusion.
+static void _gbuffer_attachments(Engine* engine, GBufferAttachment out[GBUFFER_ATTACHMENT_COUNT]) {
+    out[0] = (GBufferAttachment){&engine->multisample_texture, NULL, GL_RGBA16F,
+                                 {0.1f, 0.1f, 0.1f, 1.0f}};
+    out[1] = (GBufferAttachment){&engine->normal_multisample_texture, &engine->normals_this_frame,
+                                 GL_RGBA16F, {0.0f, 0.0f, 0.0f, 0.0f}};
+    out[2] = (GBufferAttachment){&engine->aux_multisample_texture, &engine->aux_this_frame,
+                                 GL_RGBA32F, {0.0f, 0.0f, 0.0f, 0.0f}};
+    out[3] = (GBufferAttachment){&engine->albedo_multisample_texture, &engine->albedo_this_frame,
+                                 GL_RGBA8, {0.0f, 0.0f, 0.0f, 0.0f}};
+    out[4] = (GBufferAttachment){&engine->sss_diffuse_multisample_texture, &engine->sss_this_frame,
+                                 GL_RGBA16F, {0.0f, 0.0f, 0.0f, 0.0f}};
+}
 
 /*
  * Engine
@@ -84,10 +122,10 @@ Engine* create_engine(const char* window_title, int width, int height) {
     engine->scroll_callback = NULL;
 
     engine->framebuffer = 0;
-    engine->multisample_texture = 0;
-    engine->normal_multisample_texture = 0;
-    engine->aux_multisample_texture = 0;
-    engine->albedo_multisample_texture = 0;
+    GBufferAttachment gb_init[GBUFFER_ATTACHMENT_COUNT];
+    _gbuffer_attachments(engine, gb_init);
+    for (int i = 0; i < GBUFFER_ATTACHMENT_COUNT; i++)
+        *gb_init[i].tex = 0;
     engine->depth_renderbuffer = 0;
     engine->opaque_color_fbo = 0;
     engine->opaque_color_texture = 0;
@@ -213,12 +251,7 @@ void free_engine(Engine* engine) {
     }
 
     glDeleteFramebuffers(1, &engine->framebuffer);
-    glDeleteTextures(1, &engine->multisample_texture);
-    glDeleteTextures(1, &engine->normal_multisample_texture);
-    glDeleteTextures(1, &engine->aux_multisample_texture);
-    glDeleteTextures(1, &engine->albedo_multisample_texture);
-    glDeleteTextures(1, &engine->sss_diffuse_multisample_texture);
-    glDeleteRenderbuffers(1, &engine->depth_renderbuffer);
+    _destroy_msaa_attachments(engine); // color attachments + depth renderbuffer
     glDeleteFramebuffers(1, &engine->opaque_color_fbo);
     glDeleteTextures(1, &engine->opaque_color_texture);
 
@@ -346,17 +379,13 @@ static int _clamp_msaa_samples(int samples) {
 // Delete the multisample color/normal attachments and depth renderbuffer.
 // The framebuffer object itself is left intact for reuse.
 static void _destroy_msaa_attachments(Engine* engine) {
-    glDeleteTextures(1, &engine->multisample_texture);
-    glDeleteTextures(1, &engine->normal_multisample_texture);
-    glDeleteTextures(1, &engine->aux_multisample_texture);
-    glDeleteTextures(1, &engine->albedo_multisample_texture);
-    glDeleteTextures(1, &engine->sss_diffuse_multisample_texture);
+    GBufferAttachment gb[GBUFFER_ATTACHMENT_COUNT];
+    _gbuffer_attachments(engine, gb);
+    for (int i = 0; i < GBUFFER_ATTACHMENT_COUNT; i++) {
+        glDeleteTextures(1, gb[i].tex);
+        *gb[i].tex = 0;
+    }
     glDeleteRenderbuffers(1, &engine->depth_renderbuffer);
-    engine->multisample_texture = 0;
-    engine->normal_multisample_texture = 0;
-    engine->aux_multisample_texture = 0;
-    engine->albedo_multisample_texture = 0;
-    engine->sss_diffuse_multisample_texture = 0;
     engine->depth_renderbuffer = 0;
 }
 
@@ -378,34 +407,25 @@ static void _add_msaa_color_attachment(GLuint* out_tex, GLenum internal_format, 
 static int _create_msaa_attachments(Engine* engine, int rw, int rh, int samples) {
     glBindFramebuffer(GL_FRAMEBUFFER, engine->framebuffer);
 
-    // We drive 5 draw buffers (0 HDR, 1 normal, 2 aux, 3 albedo, 4 SSS diffuse).
-    // GL 4.1 guarantees >= 8, but query once so a hypothetical thin driver fails
-    // loudly here instead of silently dropping the SSS attachment.
+    // We drive one draw buffer per scene-MRT attachment. GL 4.1 guarantees >= 8,
+    // but query once so a hypothetical thin driver fails loudly here instead of
+    // silently dropping the last attachment.
     GLint max_draw_buffers = 0;
     glGetIntegerv(GL_MAX_DRAW_BUFFERS, &max_draw_buffers);
-    if (max_draw_buffers < 5)
-        log_error("GL_MAX_DRAW_BUFFERS is %d (< 5): the SSS diffuse attachment (4) will not bind",
-                  max_draw_buffers);
+    if (max_draw_buffers < GBUFFER_ATTACHMENT_COUNT)
+        log_error("GL_MAX_DRAW_BUFFERS is %d (< %d): the last scene-MRT attachment will not bind",
+                  max_draw_buffers, GBUFFER_ATTACHMENT_COUNT);
 
-    // 0: HDR color. 1: view-space normals (.xyz) for SSAO/SSR. 2: aux G-buffer --
-    // motion .xy (TAA) + linear view-Z .z (GTAO). 3: base color .rgb + metalness
-    // .a for SSGI. Albedo is LDR. The aux buffer is FULL float: half floats
-    // quantize linear Z into scene-scale steps on large scenes (fp16 ulp at
-    // z=7000 is ~8 units) and GTAO reads the staircase as banded occlusion.
-    _add_msaa_color_attachment(&engine->multisample_texture, GL_RGBA16F, GL_COLOR_ATTACHMENT0, rw,
-                               rh, samples);
-    _add_msaa_color_attachment(&engine->normal_multisample_texture, GL_RGBA16F, GL_COLOR_ATTACHMENT1,
-                               rw, rh, samples);
-    _add_msaa_color_attachment(&engine->aux_multisample_texture, GL_RGBA32F, GL_COLOR_ATTACHMENT2,
-                               rw, rh, samples);
-    _add_msaa_color_attachment(&engine->albedo_multisample_texture, GL_RGBA8, GL_COLOR_ATTACHMENT3,
-                               rw, rh, samples);
-    // 4: skin diffuse irradiance for separable SSS; RGBA16F (linear HDR
-    // diffuse), 0 off-skin so it doubles as the SSS mask. Written only when SSS
-    // is active (engine_set_scene_draw_buffers gates on sss_this_frame). GL 4.1
-    // guarantees >= 8 draw buffers; assert we cleared 5 (queried once at init).
-    _add_msaa_color_attachment(&engine->sss_diffuse_multisample_texture, GL_RGBA16F,
-                               GL_COLOR_ATTACHMENT4, rw, rh, samples);
+    // Draw-buffer layout: 0 HDR color, 1 view normals (SSAO/SSR), 2 aux (TAA
+    // motion + GTAO linear-Z), 3 albedo (SSGI), 4 skin diffuse (SSS). Every
+    // target is allocated each (re)build for a stable FBO layout, but written
+    // only when its consumer is active (see engine_set_scene_draw_buffers).
+    GBufferAttachment gb[GBUFFER_ATTACHMENT_COUNT];
+    _gbuffer_attachments(engine, gb);
+    for (int i = 0; i < GBUFFER_ATTACHMENT_COUNT; i++) {
+        _add_msaa_color_attachment(gb[i].tex, gb[i].internal_format, GL_COLOR_ATTACHMENT0 + i, rw, rh,
+                                   samples);
+    }
 
     glGenRenderbuffers(1, &engine->depth_renderbuffer);
     glBindRenderbuffer(GL_RENDERBUFFER, engine->depth_renderbuffer);
@@ -1844,29 +1864,18 @@ void run_engine_render_loop(Engine* engine, RenderSceneFunc render_func) {
         engine->albedo_this_frame =
             frame_mode == RENDER_MODE_PBR && postfx_wants_albedo(engine->postfx);
         engine_set_scene_draw_buffers(engine, true);
-        glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
+        GBufferAttachment gb[GBUFFER_ATTACHMENT_COUNT];
+        _gbuffer_attachments(engine, gb);
+        glClearColor(gb[0].clear[0], gb[0].clear[1], gb[0].clear[2], gb[0].clear[3]);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
-        if (engine->normals_this_frame) {
-            const GLfloat zero_normal[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-            glClearBufferfv(GL_COLOR, 1, zero_normal);
-        }
-        if (engine->aux_this_frame) {
-            // .xy motion = 0 (static), .z linear-Z = 0 marks sky/background so
-            // GTAO can early-out on uncovered texels.
-            const GLfloat zero_aux[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-            glClearBufferfv(GL_COLOR, 2, zero_aux);
-        }
-        if (engine->albedo_this_frame) {
-            // Albedo 0 on uncovered/sky texels; SSGI only composites where GI is nonzero.
-            const GLfloat zero_albedo[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-            glClearBufferfv(GL_COLOR, 3, zero_albedo);
-        }
-        if (engine->sss_this_frame) {
-            // Skin diffuse 0 on uncovered/sky/non-skin texels, so the SSS
-            // blur/composite is a no-op there (blur(0) - 0 = 0). Skybox +
-            // shadow-catcher draw color-only, so they keep this cleared 0.
-            const GLfloat zero_sss[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-            glClearBufferfv(GL_COLOR, 4, zero_sss);
+        // Each written G-buffer target carries 0 on uncovered/sky/no-signal
+        // texels so its consumer early-outs there (GTAO on linear-Z, SSGI on
+        // albedo, SSS on skin diffuse). glClear painted them the scene
+        // background above, so re-clear the written ones to 0; the skybox and
+        // shadow catcher draw color-only and leave them cleared.
+        for (int i = 1; i < GBUFFER_ATTACHMENT_COUNT; i++) {
+            if (*gb[i].this_frame)
+                glClearBufferfv(GL_COLOR, i, gb[i].clear);
         }
 
         Scene* current_scene = get_current_scene(engine);
