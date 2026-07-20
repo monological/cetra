@@ -57,7 +57,6 @@ Material* create_material() {
     material->opacity_tex = NULL;
     material->microsurface_tex = NULL;
     material->anisotropy_tex = NULL;
-    material->subsurface_scattering_tex = NULL;
     material->sheen_tex = NULL;
     material->reflectance_tex = NULL;
     material->clearcoat_normal_tex = NULL;
@@ -69,7 +68,6 @@ Material* create_material() {
     material->opacity_layer = -1;
     material->microsurface_layer = -1;
     material->anisotropy_layer = -1;
-    material->subsurface_layer = -1;
 
     material->shader_program = NULL;
 
@@ -110,8 +108,6 @@ void free_material(Material* material) {
             texture_release(material->microsurface_tex);
         if (material->anisotropy_tex)
             texture_release(material->anisotropy_tex);
-        if (material->subsurface_scattering_tex)
-            texture_release(material->subsurface_scattering_tex);
         if (material->sheen_tex)
             texture_release(material->sheen_tex);
         if (material->reflectance_tex)
@@ -239,12 +235,4 @@ void set_material_anisotropy_tex(Material* material, Texture* texture) {
     if (material->anisotropy_tex)
         texture_release(material->anisotropy_tex);
     material->anisotropy_tex = texture_retain(texture);
-}
-
-void set_material_subsurface_scattering_tex(Material* material, Texture* texture) {
-    if (!material)
-        return;
-    if (material->subsurface_scattering_tex)
-        texture_release(material->subsurface_scattering_tex);
-    material->subsurface_scattering_tex = texture_retain(texture);
 }

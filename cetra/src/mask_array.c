@@ -55,8 +55,8 @@ void free_material_mask_array(MaterialMaskArray* arr) {
 }
 
 // Number of scalar-mask slots per material (roughness/metallic/ao/opacity/
-// microsurface/anisotropy/subsurface); bounds the unique-texture buffer.
-#define MASKS_PER_MATERIAL 7
+// microsurface/anisotropy); bounds the unique-texture buffer.
+#define MASKS_PER_MATERIAL 6
 
 // Find texture t's layer in the dedup list (by GL id, so a shared glTF ORM
 // texture yields one layer), appending it if new. Returns -1 for an absent map.
@@ -98,7 +98,6 @@ int mask_array_build(MaterialMaskArray* arr, struct Scene* scene, struct Engine*
         mat->opacity_layer = mask_layer_for(ids, texs, &count, mat->opacity_tex);
         mat->microsurface_layer = mask_layer_for(ids, texs, &count, mat->microsurface_tex);
         mat->anisotropy_layer = mask_layer_for(ids, texs, &count, mat->anisotropy_tex);
-        mat->subsurface_layer = mask_layer_for(ids, texs, &count, mat->subsurface_scattering_tex);
     }
 
     if (count == 0) {

@@ -81,13 +81,12 @@ typedef struct Material {
     Texture* height_tex;            // Height Map (Displacement Map)
 
     // Additional Advanced PBR Textures
-    Texture* opacity_tex;               // Opacity Map
-    Texture* microsurface_tex;          // Microsurface (Detail) Map
-    Texture* anisotropy_tex;            // Anisotropy Map
-    Texture* subsurface_scattering_tex; // Subsurface Scattering Map
-    Texture* sheen_tex;                 // Sheen Map (for fabrics)
-    Texture* reflectance_tex;           // Reflectance Map
-    Texture* clearcoat_normal_tex;      // Clearcoat normal map (orange-peel / weave)
+    Texture* opacity_tex;          // Opacity Map
+    Texture* microsurface_tex;     // Microsurface (Detail) Map
+    Texture* anisotropy_tex;       // Anisotropy Map
+    Texture* sheen_tex;            // Sheen Map (for fabrics)
+    Texture* reflectance_tex;      // Reflectance Map
+    Texture* clearcoat_normal_tex; // Clearcoat normal map (orange-peel / weave)
 
     // Per-mask layer indices into the scene's material mask sampler2DArray
     // (-1 = no texture -> the shader falls back to the scalar factor). The
@@ -100,7 +99,6 @@ typedef struct Material {
     int opacity_layer;
     int microsurface_layer;
     int anisotropy_layer;
-    int subsurface_layer;
 
     ShaderProgram* shader_program;
 } Material;
@@ -127,6 +125,5 @@ void set_material_reflectance_tex(Material* material, Texture* texture);
 void set_material_clearcoat_normal_tex(Material* material, Texture* texture);
 void set_material_microsurface_tex(Material* material, Texture* texture);
 void set_material_anisotropy_tex(Material* material, Texture* texture);
-void set_material_subsurface_scattering_tex(Material* material, Texture* texture);
 
 #endif // _MATERIAL_H_
