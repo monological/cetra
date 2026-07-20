@@ -110,6 +110,8 @@ typedef struct {
     int no_clearcoat;                  // Disable the clearcoat second specular lobe
     int no_specular;                   // Disable KHR_materials_specular F0 tint + weight
     int no_sheen;                      // Disable KHR_materials_sheen cloth lobe
+    int no_parallax;                   // Disable parallax occlusion mapping (POM)
+    float parallax_scale;              // POM depth override (< 0 = keep engine default)
     int no_bloom;                      // Disable bloom
     int tonemap_mode;                  // PostFXTonemapMode override (0 = keep default;
                                        // coincides with PASSTHROUGH, which is a blit
@@ -217,6 +219,8 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --no-clearcoat     Disable the clearcoat specular lobe\n");
     fprintf(stderr, "      --no-specular      Disable KHR_materials_specular (F0 tint + weight)\n");
     fprintf(stderr, "      --no-sheen         Disable KHR_materials_sheen (cloth lobe)\n");
+    fprintf(stderr, "      --no-parallax      Disable parallax occlusion mapping (POM)\n");
+    fprintf(stderr, "      --parallax-scale <f> POM depth (default 0.05; 0 = off)\n");
     fprintf(stderr, "      --no-bloom         Disable bloom\n");
     fprintf(stderr, "      --tonemap <m>      Tonemap mode: aces, neutral, agx (default: neutral)\n");
     fprintf(stderr, "      --ssaa <int>       Supersampling factor (default: 1 = off; 2 = 2x SSAA)\n");
@@ -258,6 +262,7 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->specular_aa = -1.0f;    // -1 = keep the engine default
     args->ssr_strength = -1.0f;   // -1 = keep the engine default
     args->ssr_jitter = -1.0f;     // -1 = keep the engine default
+    args->parallax_scale = -1.0f; // -1 = keep the engine default POM depth
     args->vignette = -1.0f;
     args->grain = -1.0f;
     args->sharpen = -1.0f;
@@ -602,6 +607,16 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->no_specular = 1;
         } else if (strcmp(argv[i], "--no-sheen") == 0) {
             args->no_sheen = 1;
+        } else if (strcmp(argv[i], "--no-parallax") == 0) {
+            args->no_parallax = 1;
+        } else if (strcmp(argv[i], "--parallax") == 0) {
+            args->no_parallax = 0; // explicit on (POM auto-enables where a height map exists)
+        } else if (strcmp(argv[i], "--parallax-scale") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->parallax_scale = (float)atof(argv[i]);
         } else if (strcmp(argv[i], "--no-bloom") == 0) {
             args->no_bloom = 1;
         } else if (strcmp(argv[i], "--tonemap") == 0) {
@@ -1212,6 +1227,14 @@ int main(int argc, char** argv) {
     if (args.no_sheen) {
         engine->sheen_enabled = false;
     }
+    if (args.no_parallax) {
+        engine->parallax_enabled = false;
+    }
+    // Set the POM default depth before the model loads (the height convention
+    // loader stamps it onto materials as it resolves their height maps).
+    if (args.parallax_scale >= 0.0f) {
+        set_parallax_default_scale(args.parallax_scale);
+    }
     if (engine->postfx) {
         PostFX* fx = engine->postfx;
         if (args.no_bloom) {
@@ -1316,8 +1339,22 @@ int main(int argc, char** argv) {
 
     if (args.no_flip_uv)
         set_import_flip_uvs(false);
+    // Default the texture directory to the model's own directory so a glTF with
+    // EXTERNAL textures (like the POM fixture + its sibling PNGs) loads without
+    // an explicit -t. Embedded-texture models ignore the directory, so this is
+    // harmless for them.
+    char model_dir[1024];
+    const char* texture_dir = args.texture_dir;
+    if (!texture_dir) {
+        const char* slash = strrchr(args.model_path, '/');
+        if (slash && (size_t)(slash - args.model_path) < sizeof(model_dir)) {
+            snprintf(model_dir, sizeof(model_dir), "%.*s", (int)(slash - args.model_path),
+                     args.model_path);
+            texture_dir = model_dir;
+        }
+    }
     Scene* scene =
-        create_scene_from_model_path_async(args.model_path, args.texture_dir, engine->async_loader);
+        create_scene_from_model_path_async(args.model_path, texture_dir, engine->async_loader);
     if (!scene) {
         fprintf(stderr, "Failed to import model: %s\n", args.model_path);
         return -1;
