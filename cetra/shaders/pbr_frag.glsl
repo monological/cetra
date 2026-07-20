@@ -27,6 +27,10 @@ layout(location = 3) out vec4 AlbedoOut;
 // hdr + blur - this, softening diffuse while FragColor's specular stays sharp.
 // Only lands when attachment 4 is enabled (sssEnabled); otherwise discarded.
 layout(location = 4) out vec4 DiffuseOut;
+// Weighted-blended OIT (only bound during the OIT accumulate pass, oitPass > 0):
+// AccumOut = premultiplied color * depth weight, RevealageOut = alpha (.r).
+layout(location = 5) out vec4 AccumOut;
+layout(location = 6) out vec4 RevealageOut;
 
 // Sized against GL_MAX_FRAGMENT_UNIFORM_COMPONENTS (4096 on the target GL 4.1
 // tier): the light array plus the fixed uniforms (the CSM matrix/param arrays
@@ -187,6 +191,7 @@ uniform int clearcoatEnabled; // Global clearcoat lobe toggle (--no-clearcoat)
 uniform int specularEnabled;  // Global KHR_materials_specular toggle (--no-specular)
 uniform int sheenEnabled;     // Global KHR_materials_sheen toggle (--no-sheen)
 uniform int parallaxEnabled;  // Global POM toggle (--no-parallax, §4.11)
+uniform int oitPass;          // 1 during the weighted-blended OIT accumulate pass (else 0)
 uniform int sssEnabled;       // Global separable-SSS toggle (--no-sss)
 uniform float subsurface;     // Per-material SSS strength (0 = off; also the skin flag)
 uniform int sssProfileIndex;  // This material's scatter-profile slot; written into DiffuseOut.a so
@@ -603,6 +608,13 @@ vec3 clearcoatNormal(vec2 uv) {
         return normalize(mat3(Tc, Bc, Ngeo) * cn);
     }
     return Ngeo;
+}
+
+// Weighted-blended OIT depth weight (McGuire & Bavoil 2013, eq. 9): nearer
+// fragments dominate the accumulation, so the composite approximates back-to-
+// front order without sorting. z is positive view distance (-ViewPos.z).
+float oitWeight(float z) {
+    return clamp(0.03 / (1e-5 + pow(z / 200.0, 4.0)), 1e-2, 3e3);
 }
 
 void main() {
@@ -1271,4 +1283,14 @@ void main() {
     // FragColor's specular stays sharp), reading .a per pixel to select the
     // profile. Discarded unless the engine enables attachment 4 (sssEnabled).
     DiffuseOut = vec4(subsurface * sssDiffuse, float(max(sssProfileIndex + 1, 0)));
+
+    // Weighted-blended OIT accumulate (guarded so oitPass 0 leaves FragColor and
+    // the opaque/alpha-blend paths byte-identical): premultiplied color * depth
+    // weight into AccumOut, alpha into RevealageOut. Indexed blend on the OIT FBO
+    // sums the first (GL_ONE,GL_ONE) and multiplies (1 - alpha) into the second.
+    if (oitPass > 0) {
+        float w = oitWeight(-ViewPos.z);
+        AccumOut = vec4(color * finalOpacity, finalOpacity) * w;
+        RevealageOut = vec4(finalOpacity);
+    }
 }

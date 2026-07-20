@@ -131,6 +131,11 @@ Engine* create_engine(const char* window_title, int width, int height) {
     engine->opaque_color_texture = 0;
     engine->opaque_color_w = 0;
     engine->opaque_color_h = 0;
+    engine->oit_fbo = 0;
+    engine->oit_accum_multisample_texture = 0;
+    engine->oit_revealage_multisample_texture = 0;
+    engine->oit_w = 0;
+    engine->oit_h = 0;
     engine->scene_color_this_frame = false;
     engine->normals_this_frame = false;
     engine->aux_this_frame = false;
@@ -157,6 +162,8 @@ Engine* create_engine(const char* window_title, int width, int height) {
     engine->sheen_enabled = true;       // KHR sheen on; inert unless a material carries it
     engine->parallax_enabled = true;    // POM on; inert unless a material carries height + scale
     engine->sss_enabled = true;         // SSS on; inert unless a material carries subsurface > 0
+    engine->oit_enabled = false;        // OIT off by default (--oit opt-in); keeps the byte-identical
+                                        // unsorted alpha-blend late pass
 
     glm_mat4_identity(engine->model_matrix);
     glm_mat4_identity(engine->view_matrix);
@@ -387,6 +394,16 @@ static void _destroy_msaa_attachments(Engine* engine) {
     }
     glDeleteRenderbuffers(1, &engine->depth_renderbuffer);
     engine->depth_renderbuffer = 0;
+    // The OIT FBO shares depth_renderbuffer; tear it down too so it is rebuilt
+    // against the fresh depth on the next OIT frame (0 handles when never created).
+    glDeleteFramebuffers(1, &engine->oit_fbo);
+    glDeleteTextures(1, &engine->oit_accum_multisample_texture);
+    glDeleteTextures(1, &engine->oit_revealage_multisample_texture);
+    engine->oit_fbo = 0;
+    engine->oit_accum_multisample_texture = 0;
+    engine->oit_revealage_multisample_texture = 0;
+    engine->oit_w = 0;
+    engine->oit_h = 0;
 }
 
 // Create one multisample color attachment (texture + framebuffer binding) on
@@ -1475,6 +1492,7 @@ static void _engine_gui_panel(Engine* engine) {
         igCheckbox("Sheen", &engine->sheen_enabled);
         igCheckbox("Parallax (POM)", &engine->parallax_enabled);
         igCheckbox("Subsurface (SSS)", &engine->sss_enabled);
+        igCheckbox("OIT (weighted blended)", &engine->oit_enabled);
     }
 
     if (engine->postfx &&

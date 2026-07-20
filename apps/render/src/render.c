@@ -113,6 +113,7 @@ typedef struct {
     int no_parallax;                   // Disable parallax occlusion mapping (POM)
     float parallax_scale;              // POM depth override (< 0 = keep engine default)
     int no_sss;                        // Disable separable subsurface scattering
+    int oit;                           // Enable weighted-blended OIT (default off)
     float sss_radius;                  // SSS scatter radius override (< 0 = fixture default)
     float sss_color[3];                // SSS scatter color override (< 0 in [0] = fixture default)
     int no_bloom;                      // Disable bloom
@@ -227,6 +228,7 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --no-parallax      Disable parallax occlusion mapping (POM)\n");
     fprintf(stderr, "      --parallax-scale <f> POM depth (default 0.05; 0 = off)\n");
     fprintf(stderr, "      --no-sss           Disable separable subsurface scattering\n");
+    fprintf(stderr, "      --oit              Weighted-blended OIT for translucent meshes\n");
     fprintf(stderr, "      --sss-radius <f>   SSS scatter radius (world units)\n");
     fprintf(stderr, "      --sss-color <r,g,b> SSS per-channel scatter color (e.g. 1.0,0.3,0.2)\n");
     fprintf(stderr, "      --no-bloom         Disable bloom\n");
@@ -630,6 +632,10 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->parallax_scale = (float)atof(argv[i]);
         } else if (strcmp(argv[i], "--no-sss") == 0) {
             args->no_sss = 1;
+        } else if (strcmp(argv[i], "--oit") == 0) {
+            args->oit = 1;
+        } else if (strcmp(argv[i], "--no-oit") == 0) {
+            args->oit = 0;
         } else if (strcmp(argv[i], "--sss-radius") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -1317,6 +1323,9 @@ int main(int argc, char** argv) {
     }
     if (args.no_sss) {
         engine->sss_enabled = false;
+    }
+    if (args.oit) {
+        engine->oit_enabled = true;
     }
     // Set the POM default depth before the model loads (the height convention
     // loader stamps it onto materials as it resolves their height maps).

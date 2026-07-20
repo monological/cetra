@@ -68,6 +68,15 @@ typedef struct Engine {
     GLuint opaque_color_fbo;
     GLuint opaque_color_texture;
     int opaque_color_w, opaque_color_h;
+    // Weighted-blended OIT: a lazily-created multisample FBO that shares
+    // depth_renderbuffer (so transparent frags depth-test against opaque geometry
+    // without writing depth). accum (color attachment 5, RGBA16F) sums premultiplied
+    // weighted color; revealage (attachment 6, R16F) multiplies the alpha product.
+    // Only allocated/drawn when oit_enabled; postfx resolves + composites them.
+    GLuint oit_fbo;
+    GLuint oit_accum_multisample_texture;
+    GLuint oit_revealage_multisample_texture;
+    int oit_w, oit_h;
     bool scene_color_this_frame; // Resolve ran this frame; transmissive draws may sample
     bool normals_this_frame;     // Attachment 1 written this frame (PBR + consumer active)
     bool aux_this_frame;         // Attachment 2 written this frame (TAA needs motion, or GTAO needs
@@ -109,6 +118,8 @@ typedef struct Engine {
                                 // (materials with no height map / scale 0 are unaffected)
     bool sss_enabled;           // Separable screen-space SSS; off skips the diffuse
                                 // separation + blur (materials with subsurface 0 are unaffected)
+    bool oit_enabled;           // Weighted-blended OIT for ALPHA_BLEND meshes (--oit); off keeps
+                                // the unsorted alpha-blend late pass
 
     mat4 model_matrix;
     mat4 view_matrix;
