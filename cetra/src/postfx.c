@@ -525,6 +525,7 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     glUseProgram(fx->motion_blur_program->id);
     uniform_set_int(fx->motion_blur_program->uniforms, "sceneTex", 0);
     uniform_set_int(fx->motion_blur_program->uniforms, "neighborMaxTex", 1);
+    uniform_set_int(fx->motion_blur_program->uniforms, "velocityTex", 2);
 
     glUseProgram(fx->gtao_program->id);
     uniform_set_int(fx->gtao_program->uniforms, "linDepthTex", 0);
@@ -705,6 +706,8 @@ static void postfx_run_motion_blur(PostFX* fx) {
     glBindTexture(GL_TEXTURE_2D, fx->hdr_texture);
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, fx->motion_blur_neighbor_texture);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, fx->aux_texture);
     uniform_set_vec2(fx->motion_blur_program->uniforms, "texelSize", aux_texel);
     uniform_set_float(fx->motion_blur_program->uniforms, "scale", fx->motion_blur_scale);
     draw_fullscreen_quad(fx->quad_vao);
