@@ -112,6 +112,9 @@ typedef struct {
     int no_sheen;                      // Disable KHR_materials_sheen cloth lobe
     int no_parallax;                   // Disable parallax occlusion mapping (POM)
     float parallax_scale;              // POM depth override (< 0 = keep engine default)
+    int no_sss;                        // Disable separable subsurface scattering (§4.12)
+    float sss_radius;                  // SSS scatter radius override (< 0 = fixture default)
+    float sss_color[3];                // SSS scatter color override (< 0 in [0] = fixture default)
     int no_bloom;                      // Disable bloom
     int tonemap_mode;                  // PostFXTonemapMode override (0 = keep default;
                                        // coincides with PASSTHROUGH, which is a blit
@@ -223,6 +226,9 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --no-sheen         Disable KHR_materials_sheen (cloth lobe)\n");
     fprintf(stderr, "      --no-parallax      Disable parallax occlusion mapping (POM)\n");
     fprintf(stderr, "      --parallax-scale <f> POM depth (default 0.05; 0 = off)\n");
+    fprintf(stderr, "      --no-sss           Disable separable subsurface scattering (§4.12)\n");
+    fprintf(stderr, "      --sss-radius <f>   SSS scatter radius (world units)\n");
+    fprintf(stderr, "      --sss-color <r,g,b> SSS per-channel scatter color (e.g. 1.0,0.3,0.2)\n");
     fprintf(stderr, "      --no-bloom         Disable bloom\n");
     fprintf(stderr, "      --tonemap <m>      Tonemap mode: aces, neutral, agx (default: neutral)\n");
     fprintf(stderr, "      --ssaa <int>       Supersampling factor (default: 1 = off; 2 = 2x SSAA)\n");
@@ -267,6 +273,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->ssr_strength = -1.0f;   // -1 = keep the engine default
     args->ssr_jitter = -1.0f;     // -1 = keep the engine default
     args->parallax_scale = -1.0f; // -1 = keep the engine default POM depth
+    args->sss_radius = -1.0f;     // -1 = keep the fixture default SSS radius
+    args->sss_color[0] = -1.0f;   // -1 = keep the fixture default SSS scatter color
     args->vignette = -1.0f;
     args->grain = -1.0f;
     args->sharpen = -1.0f;
@@ -620,6 +628,24 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 return -1;
             }
             args->parallax_scale = (float)atof(argv[i]);
+        } else if (strcmp(argv[i], "--no-sss") == 0) {
+            args->no_sss = 1;
+        } else if (strcmp(argv[i], "--sss-radius") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->sss_radius = (float)atof(argv[i]);
+        } else if (strcmp(argv[i], "--sss-color") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            if (sscanf(argv[i], "%f,%f,%f", &args->sss_color[0], &args->sss_color[1],
+                       &args->sss_color[2]) != 3) {
+                fprintf(stderr, "Error: --sss-color needs r,g,b (e.g. 1.0,0.3,0.2)\n");
+                return -1;
+            }
         } else if (strcmp(argv[i], "--no-bloom") == 0) {
             args->no_bloom = 1;
         } else if (strcmp(argv[i], "--tonemap") == 0) {
@@ -1116,6 +1142,32 @@ void configure_visor_materials(Scene* scene) {
 }
 
 /*
+ * Configure the SSS fixture's skin material (§4.12). glTF carries no subsurface,
+ * so mark the "sss_skin" material as skin (subsurface strength 1) and set its
+ * scatter color/radius, with optional CLI overrides (radius < 0 / color[0] < 0
+ * keep the material defaults). The global --no-sss toggle still gates the effect.
+ */
+void configure_sss_materials(Scene* scene, float radius, const float* color) {
+    if (!scene || !scene->root_node)
+        return;
+    SceneNode* node = find_node_by_name(scene->root_node, "sss_skin");
+    if (!node)
+        return;
+    for (size_t i = 0; i < node->mesh_count; i++) {
+        Mesh* mesh = node->meshes[i];
+        if (!mesh || !mesh->material)
+            continue;
+        mesh->material->subsurface = 1.0f;
+        if (radius >= 0.0f)
+            mesh->material->subsurface_radius = radius;
+        if (color && color[0] >= 0.0f)
+            glm_vec3_copy((float*)color, mesh->material->subsurface_color);
+    }
+    printf("Configured SSS skin material (radius %.3f)\n",
+           radius >= 0.0f ? radius : -1.0f);
+}
+
+/*
  * CETRA MAIN
  */
 int main(int argc, char** argv) {
@@ -1240,6 +1292,9 @@ int main(int argc, char** argv) {
     }
     if (args.no_parallax) {
         engine->parallax_enabled = false;
+    }
+    if (args.no_sss) {
+        engine->sss_enabled = false;
     }
     // Set the POM default depth before the model loads (the height convention
     // loader stamps it onto materials as it resolves their height maps).
@@ -1373,6 +1428,7 @@ int main(int argc, char** argv) {
     }
 
     configure_visor_materials(scene);
+    configure_sss_materials(scene, args.sss_radius, args.sss_color);
 
     if (args.sky) {
         // Procedural sky: bake the atmosphere LUTs + sky-view + environment

@@ -1453,6 +1453,7 @@ static void _engine_gui_panel(Engine* engine) {
         igCheckbox("Specular", &engine->specular_enabled);
         igCheckbox("Sheen", &engine->sheen_enabled);
         igCheckbox("Parallax (POM)", &engine->parallax_enabled);
+        igCheckbox("Subsurface (SSS)", &engine->sss_enabled);
     }
 
     if (engine->postfx &&

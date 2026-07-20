@@ -189,8 +189,9 @@ uniform int specularEnabled;  // Global KHR_materials_specular toggle (--no-spec
 uniform int sheenEnabled;     // Global KHR_materials_sheen toggle (--no-sheen)
 uniform int parallaxEnabled;  // Global POM toggle (--no-parallax, §4.11)
 uniform int sssEnabled;       // Global separable-SSS toggle (--no-sss, §4.12)
-uniform float subsurface;     // Per-material SSS strength (0 = off; also the skin flag)
-uniform vec3 subsurfaceColor; // Per-channel scatter tint (drives the profile in the SSS pass)
+uniform float subsurface;     // Per-material SSS strength (0 = off; also the skin flag). The
+                              // per-channel scatter color/radius drive the SSS blur pass (global), not
+                              // this shader, so they are not uploaded here.
 
 // Local reflection probe: the scene captured into a prefiltered cubemap,
 // parallax-corrected against a proxy AABB (Lagarde 2012). When enabled, the
