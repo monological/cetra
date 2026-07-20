@@ -23,7 +23,8 @@ uniform float projScale;    // 0.5 * projection[1][1] * renderHeight (world radi
 // widest), w = world scatter radius. The center pixel's profile index arrives in
 // the skin-diffuse alpha (from pbr_frag), selecting its kernel width + color.
 uniform vec4 sssProfiles[MAX_SSS_PROFILES];
-uniform int subtractCenter; // 1 in the V/composite pass -> output blur - origDiffuse
+uniform int subtractCenter; // 0 = H blur, 1 = V/composite (blur - origDiffuse),
+                            // 2 = passthrough copy of srcTex (TAA delta fold)
 
 const int HALF_TAPS = 12;   // samples per side (cover the broad tail Gaussian)
 const float MAX_PX = 48.0;  // clamp the screen-space blur radius
@@ -47,6 +48,12 @@ vec3 profileWeight(float t, vec3 sigma) {
 
 void main()
 {
+    // Fold pass (TAA): additive copy of the temporally-accumulated composite delta.
+    if (subtractCenter == 2) {
+        FragColor = texture(srcTex, TexCoords);
+        return;
+    }
+
     float centerZ = texture(auxTex, TexCoords).z;
     vec4 center = texture(srcTex, TexCoords);
     vec3 centerSrc = center.rgb;

@@ -745,7 +745,10 @@ static bool postfx_ensure_sss_targets(PostFX* fx) {
     if (!create_color_fbo(fx->width, fx->height, GL_RGBA16F, &fx->sss_diffuse_fbo,
                           &fx->sss_diffuse_texture) ||
         !create_color_fbo(fx->width, fx->height, GL_RGBA16F, &fx->sss_blur_fbo,
-                          &fx->sss_blur_texture)) {
+                          &fx->sss_blur_texture) ||
+        !create_color_fbo(fx->width, fx->height, GL_RGBA16F, &fx->sss_delta_fbo,
+                          &fx->sss_delta_texture) ||
+        !create_pingpong(fx->width, fx->height, GL_RGBA16F, &fx->sss_history)) {
         log_error("Failed to allocate SSS targets");
         return false;
     }
@@ -766,13 +769,18 @@ int postfx_add_sss_profile(PostFX* fx, const float* color, float radius) {
     return slot;
 }
 
-// Separable screen-space SSS: the skin-diffuse buffer (D, attachment 4,
-// already resolved to sss_diffuse_texture) is blurred H then V with a depth-
-// aware per-channel profile, and the V pass folds the recomposite -- it outputs
-// blur - D, additive-blended into hdr_fbo (hdr + blur - D). Diffuse softens;
-// FragColor's specular is untouched. projection scales the world scatter radius
-// to screen pixels per depth.
-static void postfx_run_sss(PostFX* fx, mat4 projection) {
+// Defined below (with fog/SSR, its other callers); SSS is the first user in file order.
+static GLuint run_temporal_accum(PostFX* fx, ShaderProgram* prog, PingPong* pp, int w, int h,
+                                 GLuint current_tex);
+
+// Separable screen-space SSS: the skin-diffuse buffer (D, attachment 4, already
+// resolved to sss_diffuse_texture) is blurred H then V with a depth-aware
+// per-channel profile; the V pass forms the recomposite delta blur - D, additive-
+// blended into hdr_fbo (hdr + blur - D). Diffuse softens; FragColor's specular is
+// untouched. projection scales the world scatter radius to screen pixels per
+// depth. Under TAA the delta is temporally accumulated first (its own history,
+// like fog/SSR) so the screen-space scatter doesn't shimmer under motion.
+static void postfx_run_sss(PostFX* fx, mat4 projection, bool taa_resolving) {
     const float texel[2] = {1.0f / (float)fx->width, 1.0f / (float)fx->height};
     // World radius -> screen pixels: a world unit at view depth d spans
     // 0.5 * proj[1][1] * height / d pixels.
@@ -797,10 +805,8 @@ static void postfx_run_sss(PostFX* fx, mat4 projection) {
     uniform_set_int(fx->sss_blur_program->uniforms, "subtractCenter", 0);
     draw_fullscreen_quad(fx->quad_vao);
 
-    // Pass 2: vertical blur of the H result + composite. Reads the H-blur (unit 0)
-    // and the original D (unit 1); outputs blur - D, additive-blended into the HDR
-    // scene so the diffuse is replaced by its blurred version.
-    glBindFramebuffer(GL_FRAMEBUFFER, fx->hdr_fbo);
+    // Pass 2: vertical blur of the H result, forming the composite delta blur - D
+    // (H-blur on unit 0, original D on unit 1).
     glUseProgram(fx->sss_blur_program->id);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, fx->sss_blur_texture);
@@ -808,6 +814,37 @@ static void postfx_run_sss(PostFX* fx, mat4 projection) {
     glBindTexture(GL_TEXTURE_2D, fx->sss_diffuse_texture);
     uniform_set_vec2(fx->sss_blur_program->uniforms, "dir", (const float[]){0.0f, 1.0f});
     uniform_set_int(fx->sss_blur_program->uniforms, "subtractCenter", 1);
+
+    if (!taa_resolving) {
+        // No TAA: additive-fold the composite delta straight into the HDR scene.
+        fx->sss_history.valid = false;
+        glBindFramebuffer(GL_FRAMEBUFFER, fx->hdr_fbo);
+        glViewport(0, 0, fx->width, fx->height);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_ONE, GL_ONE);
+        draw_fullscreen_quad(fx->quad_vao);
+        glDisable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        check_gl_error("postfx sss");
+        return;
+    }
+
+    // TAA: render the delta to a scratch, temporally accumulate it (reproject by
+    // velocity + neighbour clamp, like fog/SSR), then additive-fold the stabilized
+    // delta into hdr with a passthrough copy (subtractCenter 2).
+    glBindFramebuffer(GL_FRAMEBUFFER, fx->sss_delta_fbo);
+    glViewport(0, 0, fx->width, fx->height);
+    draw_fullscreen_quad(fx->quad_vao);
+
+    GLuint stable = run_temporal_accum(fx, fx->temporal_accum_program, &fx->sss_history, fx->width,
+                                       fx->height, fx->sss_delta_texture);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, fx->hdr_fbo);
+    glViewport(0, 0, fx->width, fx->height);
+    glUseProgram(fx->sss_blur_program->id);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, stable);
+    uniform_set_int(fx->sss_blur_program->uniforms, "subtractCenter", 2);
     glEnable(GL_BLEND);
     glBlendFunc(GL_ONE, GL_ONE);
     draw_fullscreen_quad(fx->quad_vao);
@@ -978,6 +1015,9 @@ void free_postfx(PostFX* fx) {
     glDeleteTextures(1, &fx->sss_diffuse_texture);
     glDeleteFramebuffers(1, &fx->sss_blur_fbo);
     glDeleteTextures(1, &fx->sss_blur_texture);
+    glDeleteFramebuffers(1, &fx->sss_delta_fbo);
+    glDeleteTextures(1, &fx->sss_delta_texture);
+    free_pingpong(&fx->sss_history);
 
     free_program(fx->bloom_bright_program);
     free_program(fx->bloom_down_program);
@@ -1641,7 +1681,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         // Skipped when SSS is off (attachment 4 unwritten); a no-op (adds 0) on
         // scenes with no skin material.
         if (sss_written && fx->sss_ready)
-            postfx_run_sss(fx, projection);
+            postfx_run_sss(fx, projection, taa_resolving);
 
         // Motion blur (4.15): velocity-driven blur on the linear HDR scene,
         // blitted back into hdr_fbo so DoF/bloom/tonemap see it. Needs the aux

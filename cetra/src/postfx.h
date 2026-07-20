@@ -269,6 +269,11 @@ typedef struct PostFX {
     GLuint sss_diffuse_fbo,
         sss_diffuse_texture;               // Full-res resolve of attachment 4 (skin diffuse D)
     GLuint sss_blur_fbo, sss_blur_texture; // Full-res H-blur scratch (V pass composites to hdr)
+    // Under TAA the V pass writes the composite delta (blur - D) here instead of
+    // straight into hdr, so it can be temporally accumulated (its own history, like
+    // fog/SSR) before the additive fold; without TAA these stay unused.
+    GLuint sss_delta_fbo, sss_delta_texture;
+    PingPong sss_history;
     ShaderProgram* sss_blur_program;
 } PostFX;
 
