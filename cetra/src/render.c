@@ -666,6 +666,7 @@ void render_current_scene(Engine* engine, float time_value) {
     // False until this frame's resolve runs, so pass 1 never uploads or
     // binds a stale refraction source
     engine->scene_color_this_frame = false;
+    engine->oit_this_frame = false; // set true below if the OIT accumulate pass runs
     _render_scene_iterative(engine, scene, root_node, camera, *view, draw_projection, time_value,
                             render_mode, &current_program, &current_material, &frustum, false, false);
     engine_set_scene_draw_buffers(engine, false);
@@ -714,6 +715,7 @@ void render_current_scene(Engine* engine, float time_value) {
         // transmissive/refraction meshes over the scene as before. Off, non-PBR, or
         // if the targets fail to allocate: one classic unsorted late pass.
         if (engine->oit_enabled && render_mode == RENDER_MODE_PBR && engine_begin_oit_pass(engine)) {
+            engine->oit_this_frame = true; // postfx will resolve + composite the OIT FBO
             _render_scene_iterative(engine, scene, root_node, camera, *view, draw_projection,
                                     time_value, render_mode, &current_program, &current_material,
                                     &frustum, true, true); // OIT accumulate: blend meshes

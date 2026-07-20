@@ -141,6 +141,7 @@ Engine* create_engine(const char* window_title, int width, int height) {
     engine->aux_this_frame = false;
     engine->albedo_this_frame = false;
     engine->sss_this_frame = false;
+    engine->oit_this_frame = false;
 
     engine->camera = NULL;
     engine->camera_mode = CAMERA_MODE_ORBIT;
@@ -1663,7 +1664,8 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode, bool draw_gui) 
     shadow_publish_to_postfx(fx_scene, engine->postfx);
     postfx_run(engine->postfx, engine->framebuffer, 0, frame_mode == RENDER_MODE_PBR,
                engine->normals_this_frame, engine->aux_this_frame, engine->albedo_this_frame,
-               engine->sss_this_frame, engine->draw_projection, engine->view_matrix);
+               engine->sss_this_frame, engine->oit_this_frame ? engine->oit_fbo : 0,
+               engine->draw_projection, engine->view_matrix);
 
     // Sky LUT debug overlay onto the composited frame (an acceptance tool,
     // the csm_debug shape: a library-side flag the app/GUI toggles)

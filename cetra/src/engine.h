@@ -83,6 +83,7 @@ typedef struct Engine {
                                  // linear-Z)
     bool albedo_this_frame;      // Attachment 3 (albedo) written this frame (SSGI active)
     bool sss_this_frame;         // Attachment 4 (skin diffuse) written this frame (SSS active)
+    bool oit_this_frame;         // OIT accumulate pass ran this frame (postfx composites oit_fbo)
 
     Camera* camera;         // main camera
     CameraMode camera_mode; // Current camera mode

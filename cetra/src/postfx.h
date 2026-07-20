@@ -275,6 +275,15 @@ typedef struct PostFX {
     GLuint sss_delta_fbo, sss_delta_texture;
     PingPong sss_history;
     ShaderProgram* sss_blur_program;
+
+    // Weighted-blended OIT: single-sample resolves of the engine's OIT MSAA
+    // accum/revealage attachments (a separate FBO sharing the scene depth), then a
+    // resolve shader folds them over the opaque scene in hdr_fbo before TAA/etc.
+    // Lazily allocated on the first OIT frame.
+    GLuint oit_accum_fbo, oit_accum_texture;         // RGBA16F: sum(color*a*w) + sum(a*w)
+    GLuint oit_revealage_fbo, oit_revealage_texture; // R16F: product(1 - a)
+    bool oit_ready;
+    ShaderProgram* oit_resolve_program;
 } PostFX;
 
 // width/height are the display (downsample-target) size; ss_scale supersamples
@@ -305,7 +314,7 @@ void postfx_apply_film_look(PostFX* fx);
 // that may have changed mid-frame.
 void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hdr,
                 bool normals_written, bool aux_written, bool albedo_written, bool sss_written,
-                mat4 projection, mat4 view);
+                GLuint oit_fbo, mat4 projection, mat4 view);
 
 // Producer-side predicate: true when some active effect will consume the
 // normals G-buffer, so the scene pass should write color attachment 1. The

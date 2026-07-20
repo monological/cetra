@@ -466,7 +466,9 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     fx->motion_blur_tilemax_program = create_motion_blur_tilemax_program();
     fx->motion_blur_neighbormax_program = create_motion_blur_neighbormax_program();
     fx->sss_blur_program = create_sss_blur_program();
-    if (!fx->sss_blur_program || !fx->motion_blur_program || !fx->motion_blur_tilemax_program ||
+    fx->oit_resolve_program = create_oit_resolve_program();
+    if (!fx->oit_resolve_program || !fx->sss_blur_program || !fx->motion_blur_program ||
+        !fx->motion_blur_tilemax_program ||
         !fx->motion_blur_neighbormax_program || !fx->bloom_bright_program ||
         !fx->bloom_down_program || !fx->bloom_up_program ||
         !fx->tonemap_program || !fx->gtao_program ||
@@ -540,6 +542,9 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     uniform_set_int(fx->sss_blur_program->uniforms, "srcTex", 0);
     uniform_set_int(fx->sss_blur_program->uniforms, "origTex", 1);
     uniform_set_int(fx->sss_blur_program->uniforms, "auxTex", 2);
+    glUseProgram(fx->oit_resolve_program->id);
+    uniform_set_int(fx->oit_resolve_program->uniforms, "accumTex", 0);
+    uniform_set_int(fx->oit_resolve_program->uniforms, "revealageTex", 1);
 
     glUseProgram(fx->gtao_program->id);
     uniform_set_int(fx->gtao_program->uniforms, "linDepthTex", 0);
@@ -1017,6 +1022,10 @@ void free_postfx(PostFX* fx) {
     glDeleteFramebuffers(1, &fx->sss_delta_fbo);
     glDeleteTextures(1, &fx->sss_delta_texture);
     free_pingpong(&fx->sss_history);
+    glDeleteFramebuffers(1, &fx->oit_accum_fbo);
+    glDeleteTextures(1, &fx->oit_accum_texture);
+    glDeleteFramebuffers(1, &fx->oit_revealage_fbo);
+    glDeleteTextures(1, &fx->oit_revealage_texture);
 
     free_program(fx->bloom_bright_program);
     free_program(fx->bloom_down_program);
@@ -1043,6 +1052,7 @@ void free_postfx(PostFX* fx) {
     free_program(fx->motion_blur_tilemax_program);
     free_program(fx->motion_blur_neighbormax_program);
     free_program(fx->sss_blur_program);
+    free_program(fx->oit_resolve_program);
 
     glDeleteVertexArrays(1, &fx->quad_vao);
     glDeleteBuffers(1, &fx->quad_vbo);
@@ -1441,9 +1451,49 @@ static void postfx_run_ssr(PostFX* fx, bool have_normals, bool taa_resolving, ma
     check_gl_error("postfx ssr");
 }
 
+// Lazy single-sample resolve targets for the OIT accumulate/revealage attachments.
+static bool postfx_ensure_oit_targets(PostFX* fx) {
+    if (fx->oit_ready)
+        return true;
+    if (!create_color_fbo(fx->width, fx->height, GL_RGBA16F, &fx->oit_accum_fbo,
+                          &fx->oit_accum_texture) ||
+        !create_color_fbo(fx->width, fx->height, GL_R16F, &fx->oit_revealage_fbo,
+                          &fx->oit_revealage_texture)) {
+        log_error("Failed to allocate OIT resolve targets");
+        return false;
+    }
+    fx->oit_ready = true;
+    return true;
+}
+
+// Weighted-blended OIT resolve: resolve the engine's MSAA accum (attachment 5) +
+// revealage (attachment 6) to single-sample, then fold the weighted-average color
+// over the opaque scene in hdr_fbo (out = avgColor*(1-reveal) + hdr*reveal). Runs
+// before every downstream HDR pass so TAA/SSR/bloom/tonemap see the transparency.
+static void postfx_run_oit(PostFX* fx, GLuint oit_fbo) {
+    if (!postfx_ensure_oit_targets(fx))
+        return;
+    resolve_color_attachment(oit_fbo, GL_COLOR_ATTACHMENT5, fx->oit_accum_fbo, fx->width, fx->height);
+    resolve_color_attachment(oit_fbo, GL_COLOR_ATTACHMENT6, fx->oit_revealage_fbo, fx->width,
+                             fx->height);
+    glBindFramebuffer(GL_FRAMEBUFFER, fx->hdr_fbo);
+    glViewport(0, 0, fx->width, fx->height);
+    glUseProgram(fx->oit_resolve_program->id);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, fx->oit_accum_texture);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, fx->oit_revealage_texture);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_ONE_MINUS_SRC_ALPHA, GL_SRC_ALPHA); // avgColor*(1-reveal) + scene*reveal
+    draw_fullscreen_quad(fx->quad_vao);
+    glDisable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    check_gl_error("postfx oit");
+}
+
 void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hdr,
                 bool normals_written, bool aux_written, bool albedo_written, bool sss_written,
-                mat4 projection,
+                GLuint oit_fbo, mat4 projection,
                 mat4 view) {
     if (!fx)
         return;
@@ -1462,6 +1512,12 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fx->hdr_fbo);
     glBlitFramebuffer(0, 0, fx->width, fx->height, 0, 0, fx->width, fx->height,
                       GL_COLOR_BUFFER_BIT, GL_NEAREST);
+
+    // Weighted-blended OIT: composite the accumulated transparent layer over the
+    // resolved opaque scene before any downstream HDR pass (TAA/SSR/bloom/tonemap)
+    // reads it. oit_fbo is 0 when the OIT accumulate pass did not run this frame.
+    if (oit_fbo != 0)
+        postfx_run_oit(fx, oit_fbo);
 
     if (mode == POSTFX_TONEMAP_PASSTHROUGH) {
         // Display-ready frame: copy to the target, skipping bloom and tone
