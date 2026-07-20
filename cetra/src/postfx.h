@@ -248,6 +248,19 @@ typedef struct PostFX {
     ShaderProgram* motion_blur_program;
     ShaderProgram* motion_blur_tilemax_program;
     ShaderProgram* motion_blur_neighbormax_program;
+
+    // Separable screen-space subsurface scattering (§4.12). Resolves the scene
+    // pass's skin-diffuse attachment (4), blurs it separably (depth-aware,
+    // per-channel), and additive-blends blur - diffuse into hdr_fbo so the
+    // diffuse softens while specular stays sharp. Lazily allocated (sss_ready).
+    // Off when engine->sss_enabled is off (attachment 4 unwritten -> pass skipped).
+    float sss_radius; // World-space scatter radius (the blur width source)
+    vec3 sss_color;   // Per-channel scatter weight (skin ~(1,0.3,0.2); R widest)
+    bool sss_ready;   // Lazy-alloc guard for the targets below
+    GLuint sss_diffuse_fbo,
+        sss_diffuse_texture; // Full-res resolve of attachment 4 (skin diffuse D)
+    PingPong sss_blur;       // Full-res H/V separable-blur ping-pong
+    ShaderProgram* sss_blur_program;
 } PostFX;
 
 // width/height are the display (downsample-target) size; ss_scale supersamples
@@ -269,8 +282,8 @@ void postfx_apply_film_look(PostFX* fx);
 // frame-start decision, passed through rather than re-derived from fx flags
 // that may have changed mid-frame.
 void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hdr,
-                bool normals_written, bool aux_written, bool albedo_written, mat4 projection,
-                mat4 view);
+                bool normals_written, bool aux_written, bool albedo_written, bool sss_written,
+                mat4 projection, mat4 view);
 
 // Producer-side predicate: true when some active effect will consume the
 // normals G-buffer, so the scene pass should write color attachment 1. The

@@ -296,6 +296,12 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     fx->motion_blur_scale = 1.0f; // full-shutter velocity
     fx->motion_blur_ready = false;
 
+    // Separable SSS profile (§4.12; targets allocated lazily on first skin frame).
+    // The engine toggle gates the effect; these set the blur width/tint.
+    fx->sss_radius = 0.05f; // world-space scatter radius (scene-scale dependent)
+    glm_vec3_copy((vec3){1.0f, 0.3f, 0.2f}, fx->sss_color); // skin: red scatters widest
+    fx->sss_ready = false;
+
     // The HDR resolve target must be RGBA16F to match the MSAA source
     // (multisample blits require identical formats); the bloom chain never
     // reads alpha, so the cheaper packed-float format halves its bandwidth
@@ -457,7 +463,8 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     fx->motion_blur_program = create_motion_blur_program();
     fx->motion_blur_tilemax_program = create_motion_blur_tilemax_program();
     fx->motion_blur_neighbormax_program = create_motion_blur_neighbormax_program();
-    if (!fx->motion_blur_program || !fx->motion_blur_tilemax_program ||
+    fx->sss_blur_program = create_sss_blur_program();
+    if (!fx->sss_blur_program || !fx->motion_blur_program || !fx->motion_blur_tilemax_program ||
         !fx->motion_blur_neighbormax_program || !fx->bloom_bright_program ||
         !fx->bloom_down_program || !fx->bloom_up_program ||
         !fx->tonemap_program || !fx->gtao_program ||
@@ -526,6 +533,11 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     uniform_set_int(fx->motion_blur_program->uniforms, "sceneTex", 0);
     uniform_set_int(fx->motion_blur_program->uniforms, "neighborMaxTex", 1);
     uniform_set_int(fx->motion_blur_program->uniforms, "velocityTex", 2);
+
+    glUseProgram(fx->sss_blur_program->id);
+    uniform_set_int(fx->sss_blur_program->uniforms, "srcTex", 0);
+    uniform_set_int(fx->sss_blur_program->uniforms, "origTex", 1);
+    uniform_set_int(fx->sss_blur_program->uniforms, "auxTex", 2);
 
     glUseProgram(fx->gtao_program->id);
     uniform_set_int(fx->gtao_program->uniforms, "linDepthTex", 0);
@@ -723,6 +735,68 @@ static void postfx_run_motion_blur(PostFX* fx) {
     check_gl_error("postfx motion blur");
 }
 
+// Allocate the SSS targets on first skin frame (DoF pattern): the full-res
+// resolve of the skin-diffuse attachment plus the H/V separable-blur ping-pong.
+static bool postfx_ensure_sss_targets(PostFX* fx) {
+    if (fx->sss_ready)
+        return true;
+    if (!create_color_fbo(fx->width, fx->height, GL_RGBA16F, &fx->sss_diffuse_fbo,
+                          &fx->sss_diffuse_texture) ||
+        !create_pingpong(fx->width, fx->height, GL_RGBA16F, &fx->sss_blur)) {
+        log_error("Failed to allocate SSS targets");
+        return false;
+    }
+    fx->sss_ready = true;
+    return true;
+}
+
+// Separable screen-space SSS (§4.12): the skin-diffuse buffer (D, attachment 4,
+// already resolved to sss_diffuse_texture) is blurred H then V with a depth-
+// aware per-channel profile, and the V pass folds the recomposite -- it outputs
+// blur - D, additive-blended into hdr_fbo (hdr + blur - D). Diffuse softens;
+// FragColor's specular is untouched. projection scales the world scatter radius
+// to screen pixels per depth.
+static void postfx_run_sss(PostFX* fx, mat4 projection) {
+    const float texel[2] = {1.0f / (float)fx->width, 1.0f / (float)fx->height};
+    // World radius -> screen pixels: a world unit at view depth d spans
+    // 0.5 * proj[1][1] * height / d pixels.
+    const float proj_scale = 0.5f * projection[1][1] * (float)fx->height;
+
+    // Pass 1: horizontal blur of D into ping-pong slot 0.
+    glBindFramebuffer(GL_FRAMEBUFFER, fx->sss_blur.fbo[0]);
+    glViewport(0, 0, fx->width, fx->height);
+    glUseProgram(fx->sss_blur_program->id);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, fx->sss_diffuse_texture);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, fx->aux_texture);
+    uniform_set_vec2(fx->sss_blur_program->uniforms, "texelSize", texel);
+    uniform_set_vec2(fx->sss_blur_program->uniforms, "dir", (const float[]){1.0f, 0.0f});
+    uniform_set_float(fx->sss_blur_program->uniforms, "projScale", proj_scale);
+    uniform_set_float(fx->sss_blur_program->uniforms, "sssRadius", fx->sss_radius);
+    uniform_set_vec3(fx->sss_blur_program->uniforms, "sssColor", fx->sss_color);
+    uniform_set_int(fx->sss_blur_program->uniforms, "subtractCenter", 0);
+    draw_fullscreen_quad(fx->quad_vao);
+
+    // Pass 2: vertical blur of the H result + composite. Reads the H-blur (unit 0)
+    // and the original D (unit 1); outputs blur - D, additive-blended into the HDR
+    // scene so the diffuse is replaced by its blurred version.
+    glBindFramebuffer(GL_FRAMEBUFFER, fx->hdr_fbo);
+    glUseProgram(fx->sss_blur_program->id);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, fx->sss_blur.tex[0]);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, fx->sss_diffuse_texture);
+    uniform_set_vec2(fx->sss_blur_program->uniforms, "dir", (const float[]){0.0f, 1.0f});
+    uniform_set_int(fx->sss_blur_program->uniforms, "subtractCenter", 1);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_ONE, GL_ONE);
+    draw_fullscreen_quad(fx->quad_vao);
+    glDisable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    check_gl_error("postfx sss");
+}
+
 // Bloom pyramid (Jimenez dual-filter): bright pass into mip 0, 13-tap
 // downsample chain, additive tent upsample back up, all on one packed-float
 // mip texture via FBO re-attach + BASE/MAX_LEVEL pinning (the hi-z idiom;
@@ -881,6 +955,9 @@ void free_postfx(PostFX* fx) {
     glDeleteTextures(1, &fx->motion_blur_tile_texture);
     glDeleteFramebuffers(1, &fx->motion_blur_neighbor_fbo);
     glDeleteTextures(1, &fx->motion_blur_neighbor_texture);
+    glDeleteFramebuffers(1, &fx->sss_diffuse_fbo);
+    glDeleteTextures(1, &fx->sss_diffuse_texture);
+    free_pingpong(&fx->sss_blur);
 
     free_program(fx->bloom_bright_program);
     free_program(fx->bloom_down_program);
@@ -906,6 +983,7 @@ void free_postfx(PostFX* fx) {
     free_program(fx->motion_blur_program);
     free_program(fx->motion_blur_tilemax_program);
     free_program(fx->motion_blur_neighbormax_program);
+    free_program(fx->sss_blur_program);
 
     glDeleteVertexArrays(1, &fx->quad_vao);
     glDeleteBuffers(1, &fx->quad_vbo);
@@ -1305,7 +1383,8 @@ static void postfx_run_ssr(PostFX* fx, bool have_normals, bool taa_resolving, ma
 }
 
 void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hdr,
-                bool normals_written, bool aux_written, bool albedo_written, mat4 projection,
+                bool normals_written, bool aux_written, bool albedo_written, bool sss_written,
+                mat4 projection,
                 mat4 view) {
     if (!fx)
         return;
@@ -1352,6 +1431,12 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         // engine's frame-start decision, like normals/aux -- not re-derived here).
         if (albedo_written) {
             resolve_color_attachment(msaa_fbo, GL_COLOR_ATTACHMENT3, fx->albedo_fbo, fx->width,
+                                     fx->height);
+        }
+        // Resolve the skin-diffuse G-buffer (attachment 4) for separable SSS, iff
+        // the scene pass wrote it (engine's frame-start decision, like albedo).
+        if (sss_written && postfx_ensure_sss_targets(fx)) {
+            resolve_color_attachment(msaa_fbo, GL_COLOR_ATTACHMENT4, fx->sss_diffuse_fbo, fx->width,
                                      fx->height);
         }
 
@@ -1529,6 +1614,14 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         }
 
         GLuint fog_result_tex = postfx_run_fog(fx, aux_written, taa_resolving, projection, view);
+
+        // Separable SSS (§4.12): blur the resolved skin-diffuse buffer and fold
+        // blur - diffuse into the HDR scene, softening diffuse while specular
+        // stays sharp. Runs on the composited HDR, before motion blur / DoF.
+        // Skipped when SSS is off (attachment 4 unwritten); a no-op (adds 0) on
+        // scenes with no skin material.
+        if (sss_written && fx->sss_ready)
+            postfx_run_sss(fx, projection);
 
         // Motion blur (4.15): velocity-driven blur on the linear HDR scene,
         // blitted back into hdr_fbo so DoF/bloom/tonemap see it. Needs the aux

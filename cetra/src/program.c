@@ -787,6 +787,10 @@ ShaderProgram* create_motion_blur_neighbormax_program() {
     return create_post_program("motion_blur_neighbormax", motion_blur_neighbormax_frag_shader_str);
 }
 
+ShaderProgram* create_sss_blur_program() {
+    return create_post_program("sss_blur", sss_blur_frag_shader_str);
+}
+
 
 ShaderProgram* create_lum_measure_program() {
     return create_post_program("lum_measure", lum_measure_frag_shader_str);

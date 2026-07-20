@@ -1147,7 +1147,7 @@ void configure_visor_materials(Scene* scene) {
  * scatter color/radius, with optional CLI overrides (radius < 0 / color[0] < 0
  * keep the material defaults). The global --no-sss toggle still gates the effect.
  */
-void configure_sss_materials(Scene* scene, float radius, const float* color) {
+void configure_sss_materials(Engine* engine, Scene* scene, float radius, const float* color) {
     if (!scene || !scene->root_node)
         return;
     SceneNode* node = find_node_by_name(scene->root_node, "sss_skin");
@@ -1157,14 +1157,22 @@ void configure_sss_materials(Scene* scene, float radius, const float* color) {
         Mesh* mesh = node->meshes[i];
         if (!mesh || !mesh->material)
             continue;
-        mesh->material->subsurface = 1.0f;
+        Material* m = mesh->material;
+        m->subsurface = 1.0f; // mark as skin
         if (radius >= 0.0f)
-            mesh->material->subsurface_radius = radius;
+            m->subsurface_radius = radius;
         if (color && color[0] >= 0.0f)
-            glm_vec3_copy((float*)color, mesh->material->subsurface_color);
+            glm_vec3_copy((float*)color, m->subsurface_color);
+        // The screen-space blur is one profile per scene (v1): propagate this
+        // skin material's scatter radius/color to the global SSS pass.
+        if (engine && engine->postfx) {
+            engine->postfx->sss_radius = m->subsurface_radius;
+            glm_vec3_copy(m->subsurface_color, engine->postfx->sss_color);
+        }
+        printf("Configured SSS skin material (radius %.3f, color %.2f,%.2f,%.2f)\n",
+               m->subsurface_radius, m->subsurface_color[0], m->subsurface_color[1],
+               m->subsurface_color[2]);
     }
-    printf("Configured SSS skin material (radius %.3f)\n",
-           radius >= 0.0f ? radius : -1.0f);
 }
 
 /*
@@ -1428,7 +1436,7 @@ int main(int argc, char** argv) {
     }
 
     configure_visor_materials(scene);
-    configure_sss_materials(scene, args.sss_radius, args.sss_color);
+    configure_sss_materials(engine, scene, args.sss_radius, args.sss_color);
 
     if (args.sky) {
         // Procedural sky: bake the atmosphere LUTs + sky-view + environment

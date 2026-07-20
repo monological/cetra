@@ -98,6 +98,7 @@ ShaderProgram* create_dof_composite_program();
 ShaderProgram* create_motion_blur_program();
 ShaderProgram* create_motion_blur_tilemax_program();
 ShaderProgram* create_motion_blur_neighbormax_program();
+ShaderProgram* create_sss_blur_program();
 
 size_t calculate_max_lights();
 

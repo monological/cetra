@@ -41,7 +41,7 @@ Material* create_material() {
     material->parallax_scale = 0.0f; // POM off until a material opts in (§4.11)
     material->subsurface = 0.0f;     // SSS off until a material opts in (§4.12)
     glm_vec3_copy((vec3){1.0f, 0.3f, 0.2f}, material->subsurface_color); // skin-ish default tint
-    material->subsurface_radius = 1.0f;
+    material->subsurface_radius = 0.05f; // world units; scene-scale dependent
     glm_vec2_zero(material->uvOffset);
     glm_vec2_one(material->uvScale);
     material->uvRotation = 0.0f;
