@@ -1711,6 +1711,19 @@ bool engine_resolve_opaque_color(Engine* engine) {
     return true;
 }
 
+// POM (§4.11): resolve "<name>_height" sibling maps once the async texture
+// loader drains (so albedo/normal paths are populated). Mirrors
+// mask_array_ensure_built's defer-until-idle idiom: owns its own idle-check and
+// the run-once flag, so the render loop reads as one symmetric call.
+static void heights_ensure_resolved(Scene* scene, Engine* engine) {
+    if (!scene || scene->heights_resolved)
+        return;
+    if (engine && engine->async_loader && async_loader_is_busy(engine->async_loader))
+        return;
+    resolve_height_maps(scene);
+    scene->heights_resolved = true;
+}
+
 void run_engine_render_loop(Engine* engine, RenderSceneFunc render_func) {
     if (!engine)
         return;
@@ -1813,14 +1826,8 @@ void run_engine_render_loop(Engine* engine, RenderSceneFunc render_func) {
         // (a no-op until then; masks fall back to their scalar factors).
         mask_array_ensure_built(current_scene, engine);
 
-        // POM (§4.11): resolve "<name>_height" sibling maps once the async
-        // texture loader drains (so albedo/normal paths are populated). Same
-        // defer-until-idle idiom as the mask array; runs once per scene.
-        if (current_scene && !current_scene->heights_resolved &&
-            !(engine->async_loader && async_loader_is_busy(engine->async_loader))) {
-            resolve_height_maps(current_scene);
-            current_scene->heights_resolved = true;
-        }
+        // POM (§4.11): resolve height maps once the async texture loader drains.
+        heights_ensure_resolved(current_scene, engine);
 
         if (render_func != NULL && current_scene != NULL) {
             render_func(engine, current_scene);

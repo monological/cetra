@@ -609,8 +609,6 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->no_sheen = 1;
         } else if (strcmp(argv[i], "--no-parallax") == 0) {
             args->no_parallax = 1;
-        } else if (strcmp(argv[i], "--parallax") == 0) {
-            args->no_parallax = 0; // explicit on (POM auto-enables where a height map exists)
         } else if (strcmp(argv[i], "--parallax-scale") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -1339,22 +1337,11 @@ int main(int argc, char** argv) {
 
     if (args.no_flip_uv)
         set_import_flip_uvs(false);
-    // Default the texture directory to the model's own directory so a glTF with
-    // EXTERNAL textures (like the POM fixture + its sibling PNGs) loads without
-    // an explicit -t. Embedded-texture models ignore the directory, so this is
-    // harmless for them.
-    char model_dir[1024];
-    const char* texture_dir = args.texture_dir;
-    if (!texture_dir) {
-        const char* slash = strrchr(args.model_path, '/');
-        if (slash && (size_t)(slash - args.model_path) < sizeof(model_dir)) {
-            snprintf(model_dir, sizeof(model_dir), "%.*s", (int)(slash - args.model_path),
-                     args.model_path);
-            texture_dir = model_dir;
-        }
-    }
+    // The importer defaults the texture dir to the model's own directory when
+    // none is given (so an external-texture glTF like the POM fixture loads
+    // without -t), so just pass args.texture_dir through.
     Scene* scene =
-        create_scene_from_model_path_async(args.model_path, texture_dir, engine->async_loader);
+        create_scene_from_model_path_async(args.model_path, args.texture_dir, engine->async_loader);
     if (!scene) {
         fprintf(stderr, "Failed to import model: %s\n", args.model_path);
         return -1;

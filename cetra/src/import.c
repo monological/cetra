@@ -43,6 +43,22 @@ void set_parallax_default_scale(float scale) {
     g_parallax_default_scale = scale;
 }
 
+// Default the texture directory to the model file's own directory when the
+// caller passes none, so a glTF/OBJ with EXTERNAL textures resolves its siblings
+// (and the POM height convention) without an explicit texture dir. Returns
+// texture_directory unchanged when set, else dirname(path) written into buf (or
+// NULL when path has no directory component -- unchanged behaviour there).
+static const char* effective_texture_dir(const char* path, const char* texture_directory, char* buf,
+                                         size_t bufsize) {
+    if (texture_directory || !path)
+        return texture_directory;
+    const char* slash = strrchr(path, '/');
+    if (!slash || (size_t)(slash - path) >= bufsize)
+        return NULL;
+    snprintf(buf, bufsize, "%.*s", (int)(slash - path), path);
+    return buf;
+}
+
 /*
  * UV V-flip policy. glTF specifies a top-left UV origin while FBX data
  * arrives bottom-left (verified against Blender: assimp's FBX UVs match
@@ -1388,8 +1404,8 @@ void resolve_height_maps(Scene* scene) {
 
         const char* try_ext[] = {".png", ext}; // prefer .png, else the source extension
         for (size_t e = 0; e < sizeof(try_ext) / sizeof(try_ext[0]); e++) {
-            if (!try_ext[e][0])
-                continue;
+            if (!try_ext[e][0] || (e > 0 && strcasecmp(try_ext[e], try_ext[0]) == 0))
+                continue; // empty, or a duplicate of an extension already tried
             char cand[1100];
             if (snprintf(cand, sizeof(cand), "%s%s", base, try_ext[e]) >= (int)sizeof(cand))
                 continue;
@@ -1431,6 +1447,8 @@ Scene* create_scene_from_model_path(const char* path, const char* texture_direct
         return NULL;
     }
 
+    char texdir_buf[1024];
+    texture_directory = effective_texture_dir(path, texture_directory, texdir_buf, sizeof(texdir_buf));
     set_texture_pool_directory(tex_pool, texture_directory);
 
     // Process lights and cameras
@@ -1446,12 +1464,6 @@ Scene* create_scene_from_model_path(const char* path, const char* texture_direct
     if (ai_scene->mNumAnimations > 0 && scene->skeleton_count > 0) {
         process_ai_animations(ai_scene, scene, scene->skeletons[0]);
     }
-
-    // POM (§4.11): resolve "<name>_height" sibling maps for materials that carry
-    // an albedo/normal texture but no height map yet. No-op unless a sibling is
-    // on disk. Sync path only -- the async loader populates *_tex on background
-    // threads, so a post-import pass there would race.
-    resolve_height_maps(scene);
 
     aiReleaseImport(ai_scene);
     return scene;
@@ -1559,6 +1571,8 @@ Scene* create_scene_from_model_path_async(const char* path, const char* texture_
         return NULL;
     }
 
+    char texdir_buf[1024];
+    texture_directory = effective_texture_dir(path, texture_directory, texdir_buf, sizeof(texdir_buf));
     set_texture_pool_directory(tex_pool, texture_directory);
 
     // Process lights and cameras

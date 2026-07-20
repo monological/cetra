@@ -239,7 +239,9 @@ vec2 parallaxOcclusion(vec2 uv0, vec3 Vts) {
     vec2 prevUV = curUV + dUV;
     float afterD = curH - curDepth;                                                 // <= 0
     float beforeD = (1.0 - texture(heightTex, prevUV).r) - (curDepth - layerDepth); // >= 0
-    float w = afterD / (afterD - beforeD);
+    // Guard the degenerate flat-plateau crossing (afterD == beforeD == 0 -> 0/0 -> NaN).
+    float denom = afterD - beforeD;
+    float w = abs(denom) > 1e-6 ? afterD / denom : 1.0;
     return mix(curUV, prevUV, clamp(w, 0.0, 1.0));
 }
 
@@ -252,8 +254,8 @@ float parallaxSelfShadow(vec2 uv, float h0, vec3 Lts) {
     if (Lts.z <= 0.0)
         return 1.0;
     const int LAYERS = 16;
-    float dh = (1.0 - h0) / float(LAYERS);            // march from the hit up to the crest
-    vec2 duv = (Lts.xy / Lts.z) * parallaxScale * dh; // UV shift per height step
+    float dh = (1.0 - h0) / float(LAYERS);                       // march from the hit up to the crest
+    vec2 duv = (Lts.xy / max(Lts.z, 0.1)) * parallaxScale * dh;  // floored like the view march
     float shadow = 0.0;
     vec2 curUV = uv;
     float rayH = h0;
@@ -666,8 +668,12 @@ void main() {
     // read `uv`). Guarded so a material without POM (no height map / scale 0 /
     // --no-parallax) runs the exact pre-feature path. TBN maps tangent->world, so
     // its transpose takes the world-space view direction into tangent space.
+    // POM active for this material (§4.11). Named once and reused by the
+    // self-shadow in the light loop; it is a bool of integer/uniform comparisons,
+    // so the OFF path stays byte-identical to the pre-feature code.
+    bool pom = parallaxEnabled > 0 && heightTexExists > 0 && parallaxScale > 0.0;
     float parallaxHeight = 0.0; // height at the POM hit, for the self-shadow march
-    if (parallaxEnabled > 0 && heightTexExists > 0 && parallaxScale > 0.0) {
+    if (pom) {
         vec3 Vts = normalize(transpose(TBN) * normalize(camPos - WorldPos));
         vec2 uv0 = uv;
         uv = parallaxOcclusion(uv, Vts);
@@ -1011,7 +1017,7 @@ void main() {
         }
 
         // POM self-shadow: raised relief casts into the grooves toward each light.
-        if (parallaxEnabled > 0 && heightTexExists > 0 && parallaxScale > 0.0) {
+        if (pom) {
             shadow *= parallaxSelfShadow(uv, parallaxHeight, normalize(transpose(TBN) * L));
         }
 
