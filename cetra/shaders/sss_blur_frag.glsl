@@ -22,8 +22,25 @@ uniform float sssRadius;    // world-space scatter radius
 uniform vec3 sssColor;      // per-channel scatter weight (skin ~(1,0.3,0.2); R widest)
 uniform int subtractCenter; // 1 in the V/composite pass -> output blur - origDiffuse
 
-const int HALF_TAPS = 8;   // samples per side
-const float MAX_PX = 40.0; // clamp the screen-space blur radius
+const int HALF_TAPS = 12;   // samples per side (cover the broad tail Gaussian)
+const float MAX_PX = 48.0;  // clamp the screen-space blur radius
+const float TAIL = 2.2;     // how far (x the base radius) the widest Gaussian reaches
+
+// Jimenez-style separable skin diffusion profile: a sum of three Gaussians per
+// channel (sharp core + mid + broad colored tail) gives the characteristic skin
+// falloff -- a bright, tight highlight core that bleeds into a long reddish tail
+// -- far better than one Gaussian. Per-channel sigma comes from the scatter
+// color (red widest). Returns the per-channel weight at pixel distance t.
+vec3 profileWeight(float t, vec3 sigma) {
+    vec3 s1 = sigma * 0.30; // sharp core
+    vec3 s2 = sigma * 1.00; // mid
+    vec3 s3 = sigma * TAIL; // broad tail
+    float t2 = t * t;
+    vec3 g1 = exp(-t2 / (2.0 * s1 * s1));
+    vec3 g2 = exp(-t2 / (2.0 * s2 * s2));
+    vec3 g3 = exp(-t2 / (2.0 * s3 * s3));
+    return 0.35 * g1 + 0.40 * g2 + 0.25 * g3;
+}
 
 void main()
 {
@@ -39,14 +56,13 @@ void main()
 
     float depth = -centerZ;
     float radPx = clamp(sssRadius * projScale / depth, 1.0, MAX_PX);
-    vec3 sigma = max(sssColor, vec3(1e-3)) * radPx; // per-channel Gaussian width
-    vec3 twoSigma2 = 2.0 * sigma * sigma;
-    float sigmaZ = max(sssRadius, 1e-3); // view-Z bilateral extent (world units)
+    vec3 sigma = max(sssColor, vec3(1e-3)) * radPx; // per-channel base width
+    float sigmaZ = max(sssRadius, 1e-3);            // view-Z bilateral extent (world units)
 
-    vec3 sum = centerSrc;  // center tap, weight 1 (gauss(0))
-    vec3 sumW = vec3(1.0);
+    vec3 sum = centerSrc * profileWeight(0.0, sigma); // center tap
+    vec3 sumW = profileWeight(0.0, sigma);
     for (int i = 1; i <= HALF_TAPS; i++) {
-        float t = float(i) / float(HALF_TAPS) * radPx; // pixel distance along dir
+        float t = float(i) / float(HALF_TAPS) * radPx * TAIL; // reach the broad tail
         vec2 off = dir * t * texelSize;
         for (int s = -1; s <= 1; s += 2) {
             vec2 uv = TexCoords + off * float(s);
@@ -56,12 +72,12 @@ void main()
             // depth step fall off, so the scatter stays on the skin surface.
             float dz = abs(-tapZ - depth);
             float bilat = (tapZ < 0.0) ? exp(-dz * dz / (2.0 * sigmaZ * sigmaZ)) : 0.0;
-            vec3 w = exp(-vec3(t * t) / twoSigma2) * bilat;
+            vec3 w = profileWeight(t, sigma) * bilat;
             sum += tapSrc * w;
             sumW += w;
         }
     }
-    vec3 blur = sum / sumW;
+    vec3 blur = sum / max(sumW, vec3(1e-5));
 
     // V/composite pass folds the recomposite delta (blur - sharp diffuse); the H
     // pass just emits the horizontal blur for the V pass to read.

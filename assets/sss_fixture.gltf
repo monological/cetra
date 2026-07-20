@@ -42,13 +42,13 @@
    "name": "sss_skin",
    "pbrMetallicRoughness": {
     "baseColorFactor": [
-     0.85,
      0.62,
-     0.52,
+     0.44,
+     0.36,
      1.0
     ],
     "metallicFactor": 0.0,
-    "roughnessFactor": 0.45
+    "roughnessFactor": 0.6
    }
   }
  ],

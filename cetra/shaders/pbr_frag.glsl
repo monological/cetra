@@ -189,9 +189,9 @@ uniform int specularEnabled;  // Global KHR_materials_specular toggle (--no-spec
 uniform int sheenEnabled;     // Global KHR_materials_sheen toggle (--no-sheen)
 uniform int parallaxEnabled;  // Global POM toggle (--no-parallax, §4.11)
 uniform int sssEnabled;       // Global separable-SSS toggle (--no-sss, §4.12)
-uniform float subsurface;     // Per-material SSS strength (0 = off; also the skin flag). The
-                              // per-channel scatter color/radius drive the SSS blur pass (global), not
-                              // this shader, so they are not uploaded here.
+uniform float subsurface;     // Per-material SSS strength (0 = off; also the skin flag)
+uniform vec3 subsurfaceColor; // Scatter tint; here it colors the back-light transmission (the
+                              // front-scatter radius/color live on the global SSS blur pass)
 
 // Local reflection probe: the scene captured into a prefiltered cubemap,
 // parallax-corrected against a proxy AABB (Lagarde 2012). When enabled, the
@@ -393,18 +393,18 @@ float distributionGGXAnisotropic(vec3 N, vec3 H, vec3 T, vec3 B, float roughness
     return a2 * w2 * w2 / PI;
 }
 
-// Subsurface scattering approximation using wrap lighting
-vec3 subsurfaceScattering(vec3 N, vec3 L, vec3 V, vec3 albedo, float thickness, vec3 lightColor) {
-    // Wrap lighting for diffuse transmission
-    float wrap = 0.5;
-    float NdotL = dot(N, L);
-    float wrapDiffuse = max(0.0, (NdotL + wrap) / (1.0 + wrap));
-
-    // Back-lighting transmission
-    float transmittance = exp(-thickness * 2.0);
-    vec3 backLight = albedo * lightColor * transmittance * max(0.0, -NdotL);
-
-    return backLight * 0.5;
+// Back-light transmission (§4.12): approximate light scattering THROUGH a thin
+// translucent surface toward the viewer (Barre-Brisebois). When a light sits
+// behind the surface relative to the camera, a tinted (reddish) glow shows on
+// the shadow side -- the backlit-wax/ear look. The screen-space SSS blur handles
+// FRONT scatter; this is the separate transmitted term, added per light.
+vec3 subsurfaceTransmission(vec3 N, vec3 L, vec3 V, vec3 albedo, vec3 tint, float strength,
+                            vec3 lightColor) {
+    const float distortion = 0.3; // bend the transmission direction by the normal
+    const float power = 4.0;      // tighten the glow toward directly-behind lights
+    vec3 tL = normalize(L + N * distortion);
+    float t = pow(clamp(dot(V, -tL), 0.0, 1.0), power);
+    return albedo * tint * lightColor * (t * strength);
 }
 
 // Smith's Schlick-GGX geometry function for a single direction
@@ -811,11 +811,6 @@ void main() {
         anisotropyMap = texture(maskArray, vec3(uv, float(anisotropyLayer))).r;
     }
 
-    // Subsurface scattering thickness map
-    float sssThickness = 1.0;
-    if (subsurfaceLayer >= 0) {
-        sssThickness = texture(maskArray, vec3(uv, float(subsurfaceLayer))).r;
-    }
 
     // Geometric specular anti-aliasing (Kaplanyan 2016): where the normal
     // varies quickly within a pixel (fine normal-mapped detail under
@@ -1093,9 +1088,11 @@ void main() {
             sssDiffuse += kD * albedoMap / PI * radiance * NdotL * shadow;
         }
 
-        // Add subsurface scattering contribution
-        if (subsurfaceLayer >= 0 && sssThickness < 0.99) {
-            Lo += subsurfaceScattering(N, L, V, albedoMap, sssThickness, lights[i].color * lights[i].intensity * attenuation);
+        // SSS back-light transmission (§4.12): thin-region glow when the light is
+        // behind the surface. Guarded so non-skin / --no-sss is byte-identical.
+        if (sss) {
+            Lo += subsurfaceTransmission(N, L, V, albedoMap, subsurfaceColor, subsurface,
+                                         lights[i].color * lights[i].intensity * attenuation);
         }
     }
 

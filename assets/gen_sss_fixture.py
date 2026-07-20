@@ -67,11 +67,13 @@ gltf = {
         {
             "name": "sss_skin",
             "pbrMetallicRoughness": {
-                # A warm skin/wax tone; SSS reads best on a light, saturated-warm
-                # base so the red scatter is visible at the terminator.
-                "baseColorFactor": [0.85, 0.62, 0.52, 1.0],
+                # A warm wax/skin tone. Kept mid-value (not near-white) so bright
+                # IBL doesn't clip the diffuse -- a blown-out sphere has no
+                # gradient for SSS to scatter. Roughness high-ish for a soft,
+                # non-glossy wax sheen.
+                "baseColorFactor": [0.62, 0.44, 0.36, 1.0],
                 "metallicFactor": 0.0,
-                "roughnessFactor": 0.45,
+                "roughnessFactor": 0.6,
             },
         }
     ],

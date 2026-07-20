@@ -298,7 +298,7 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
 
     // Separable SSS profile (§4.12; targets allocated lazily on first skin frame).
     // The engine toggle gates the effect; these set the blur width/tint.
-    fx->sss_radius = 0.05f; // world-space scatter radius (scene-scale dependent)
+    fx->sss_radius = 0.2f; // world-space scatter radius (scene-scale dependent)
     glm_vec3_copy((vec3){1.0f, 0.3f, 0.2f}, fx->sss_color); // skin: red scatters widest
     fx->sss_ready = false;
 
