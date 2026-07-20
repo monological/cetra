@@ -1777,6 +1777,83 @@ bool engine_resolve_opaque_color(Engine* engine) {
     return true;
 }
 
+// Lazy allocation for the weighted-blended OIT targets: two multisample color
+// textures -- accum (RGBA16F, attachment 5) and revealage (R16F, attachment 6) --
+// on a dedicated FBO that SHARES engine->depth_renderbuffer, so transparent frags
+// depth-test against opaque geometry (without writing depth). Same sample count as
+// the scene depth (engine->msaa_samples is the clamped effective value) or the FBO
+// would be incomplete. Recreated on a size change; torn down with the MSAA
+// attachments (they share the depth renderbuffer).
+static bool _ensure_oit_targets(Engine* engine, int rw, int rh) {
+    if (engine->oit_fbo != 0 && engine->oit_w == rw && engine->oit_h == rh)
+        return true;
+    if (engine->oit_fbo) {
+        glDeleteTextures(1, &engine->oit_accum_multisample_texture);
+        glDeleteTextures(1, &engine->oit_revealage_multisample_texture);
+        glDeleteFramebuffers(1, &engine->oit_fbo);
+    }
+    glGenFramebuffers(1, &engine->oit_fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, engine->oit_fbo);
+    _add_msaa_color_attachment(&engine->oit_accum_multisample_texture, GL_RGBA16F,
+                               GL_COLOR_ATTACHMENT5, rw, rh, engine->msaa_samples);
+    _add_msaa_color_attachment(&engine->oit_revealage_multisample_texture, GL_R16F,
+                               GL_COLOR_ATTACHMENT6, rw, rh, engine->msaa_samples);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER,
+                              engine->depth_renderbuffer);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        log_error("OIT framebuffer incomplete");
+        glDeleteTextures(1, &engine->oit_accum_multisample_texture);
+        glDeleteTextures(1, &engine->oit_revealage_multisample_texture);
+        glDeleteFramebuffers(1, &engine->oit_fbo);
+        engine->oit_fbo = 0;
+        engine->oit_accum_multisample_texture = 0;
+        engine->oit_revealage_multisample_texture = 0;
+        return false;
+    }
+    engine->oit_w = rw;
+    engine->oit_h = rh;
+    return true;
+}
+
+// Begin the weighted-blended OIT accumulate sub-pass: bind the OIT FBO (accum +
+// revealage sharing the scene depth), clear accum to 0 / revealage to 1, and set
+// the independent per-target blend (accum sums, revealage multiplies 1-alpha).
+// Returns false if the targets couldn't be allocated (caller falls back to the
+// classic unsorted late pass). Leaves depth-write to the caller (off).
+bool engine_begin_oit_pass(Engine* engine) {
+    int rw, rh;
+    engine_render_size(engine, &rw, &rh);
+    if (!_ensure_oit_targets(engine, rw, rh))
+        return false;
+    glBindFramebuffer(GL_FRAMEBUFFER, engine->oit_fbo);
+    glViewport(0, 0, rw, rh);
+    // Only slots 5 (accum) and 6 (revealage) active; the shader's AccumOut /
+    // RevealageOut (locations 5/6) land there, FragColor + G-buffer are discarded.
+    GLenum bufs[7] = {GL_NONE, GL_NONE, GL_NONE,          GL_NONE,
+                      GL_NONE, GL_COLOR_ATTACHMENT5, GL_COLOR_ATTACHMENT6};
+    glDrawBuffers(7, bufs);
+    const GLfloat zero[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    const GLfloat one[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+    glClearBufferfv(GL_COLOR, 5, zero); // accum: additive identity
+    glClearBufferfv(GL_COLOR, 6, one);  // revealage: full reveal before the product
+    glEnablei(GL_BLEND, 5);
+    glEnablei(GL_BLEND, 6);
+    glBlendFunci(5, GL_ONE, GL_ONE);                    // accum += premultiplied * weight
+    glBlendFunci(6, GL_ZERO, GL_ONE_MINUS_SRC_COLOR);   // revealage *= (1 - alpha)
+    return true;
+}
+
+// End the OIT accumulate sub-pass: back to the scene FBO, color-only draw buffer,
+// and the standard alpha blend for the refraction sub-pass and later draws.
+void engine_end_oit_pass(Engine* engine) {
+    int rw, rh;
+    engine_render_size(engine, &rw, &rh);
+    glBindFramebuffer(GL_FRAMEBUFFER, engine->framebuffer);
+    glViewport(0, 0, rw, rh);
+    engine_set_scene_draw_buffers(engine, false);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+}
+
 // POM (§4.11): resolve "<name>_height" sibling maps once the async texture
 // loader drains (so albedo/normal paths are populated). Mirrors
 // mask_array_ensure_built's defer-until-idle idiom: owns its own idle-check and

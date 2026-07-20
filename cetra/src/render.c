@@ -277,7 +277,7 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
                          mat4 view, mat4 projection, float time_value, RenderMode render_mode,
                          Light** closest_lights, size_t returned_light_count,
                          GLuint* current_program, Material** current_material,
-                         const Frustum* frustum, bool alpha_pass) {
+                         const Frustum* frustum, bool alpha_pass, bool oit_accumulate) {
 
     if (!node->meshes || node->mesh_count == 0)
         return;
@@ -293,9 +293,25 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
         // Transmissive meshes are counted separately: their count gates the
         // mid-frame opaque-color resolve refraction samples from.
         bool is_transmissive = mesh->material->transmission > 0.0f;
-        bool is_late = mesh->material->alpha_mode == ALPHA_BLEND || is_transmissive;
-        if (is_late != alpha_pass) {
-            if (is_late) {
+        bool is_blend = mesh->material->alpha_mode == ALPHA_BLEND;
+        bool is_late = is_blend || is_transmissive;
+        // Which (sub-)pass draws this mesh: opaque -> non-late; OIT accumulate ->
+        // pure alpha-blend (transmission keeps its refraction path); refraction
+        // sub-pass (OIT on) -> transmissive only (blend already went to OIT);
+        // classic late pass (OIT off) -> all late.
+        bool draw_here;
+        if (!alpha_pass)
+            draw_here = !is_late;
+        else if (oit_accumulate)
+            draw_here = is_blend && !is_transmissive;
+        else if (engine->oit_enabled)
+            draw_here = is_transmissive;
+        else
+            draw_here = is_late;
+        if (!draw_here) {
+            // Count late meshes once, in the opaque pass -- gates the late pass and
+            // (for transmissive) the mid-frame refraction resolve. Unchanged by OIT.
+            if (!alpha_pass && is_late) {
                 scene->transparent_mesh_count++;
                 // Frustum-gate the transmissive count: it triggers the
                 // full-frame resolve, which off-screen glass must not pay
@@ -347,6 +363,7 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
             uniform_set_int(u, "sheenEnabled", engine->sheen_enabled ? 1 : 0);
             uniform_set_int(u, "parallaxEnabled", engine->parallax_enabled ? 1 : 0);
             uniform_set_int(u, "sssEnabled", engine->sss_enabled ? 1 : 0);
+            uniform_set_int(u, "oitPass", oit_accumulate ? 1 : 0);
             // Refraction source: valid only in the late pass, after the
             // mid-frame resolve ran (pass 2 forces a program re-switch by
             // resetting current_program, so this always re-uploads there)
@@ -511,7 +528,7 @@ static void _render_scene_iterative(const Engine* engine, Scene* scene, SceneNod
                                     Camera* camera, mat4 view, mat4 projection, float time_value,
                                     RenderMode render_mode, GLuint* current_program,
                                     Material** current_material, const Frustum* frustum,
-                                    bool alpha_pass) {
+                                    bool alpha_pass, bool oit_accumulate) {
     if (!scene) {
         log_error("error: render called with NULL scene");
         return;
@@ -545,7 +562,7 @@ static void _render_scene_iterative(const Engine* engine, Scene* scene, SceneNod
         // Render this node's meshes
         _render_node(engine, scene, node, camera, view, projection, time_value, render_mode,
                      closest_lights, returned_light_count, current_program, current_material,
-                     frustum, alpha_pass);
+                     frustum, alpha_pass, oit_accumulate);
 
         // Render xyz axes if enabled (opaque pass only, to avoid duplicates)
         if (!alpha_pass && node->show_xyz && node->xyz_shader_program) {
@@ -650,7 +667,7 @@ void render_current_scene(Engine* engine, float time_value) {
     // binds a stale refraction source
     engine->scene_color_this_frame = false;
     _render_scene_iterative(engine, scene, root_node, camera, *view, draw_projection, time_value,
-                            render_mode, &current_program, &current_material, &frustum, false);
+                            render_mode, &current_program, &current_material, &frustum, false, false);
     engine_set_scene_draw_buffers(engine, false);
 
     // Skybox after opaques (depth-tested against them at the far plane).
@@ -692,8 +709,25 @@ void render_current_scene(Engine* engine, float time_value) {
         current_program = 0;
         current_material = NULL;
         glDepthMask(GL_FALSE);
-        _render_scene_iterative(engine, scene, root_node, camera, *view, draw_projection, time_value,
-                                render_mode, &current_program, &current_material, &frustum, true);
+        // OIT (--oit, PBR only): accumulate alpha-blend meshes into the OIT FBO
+        // (weighted, unsorted -- postfx resolves + composites them), then draw the
+        // transmissive/refraction meshes over the scene as before. Off, non-PBR, or
+        // if the targets fail to allocate: one classic unsorted late pass.
+        if (engine->oit_enabled && render_mode == RENDER_MODE_PBR && engine_begin_oit_pass(engine)) {
+            _render_scene_iterative(engine, scene, root_node, camera, *view, draw_projection,
+                                    time_value, render_mode, &current_program, &current_material,
+                                    &frustum, true, true); // OIT accumulate: blend meshes
+            engine_end_oit_pass(engine);
+            current_program = 0;
+            current_material = NULL;
+            _render_scene_iterative(engine, scene, root_node, camera, *view, draw_projection,
+                                    time_value, render_mode, &current_program, &current_material,
+                                    &frustum, true, false); // transmissive/refraction only
+        } else {
+            _render_scene_iterative(engine, scene, root_node, camera, *view, draw_projection,
+                                    time_value, render_mode, &current_program, &current_material,
+                                    &frustum, true, false);
+        }
         glDepthMask(GL_TRUE);
     }
 

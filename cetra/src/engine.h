@@ -248,6 +248,14 @@ void engine_set_scene_draw_buffers(const Engine* engine, bool with_gbuffer);
 // between the skybox and the late pass when transmissive meshes exist.
 bool engine_resolve_opaque_color(Engine* engine);
 
+// Weighted-blended OIT accumulate sub-pass bracket: engine_begin_oit_pass binds
+// the OIT FBO (accum + revealage, sharing the scene depth), clears it, and sets
+// the independent per-target blend; engine_end_oit_pass restores the scene FBO,
+// color-only draw buffer, and standard alpha blend. begin returns false if the
+// targets couldn't allocate (caller falls back to the classic late pass).
+bool engine_begin_oit_pass(Engine* engine);
+void engine_end_oit_pass(Engine* engine);
+
 // Render
 void set_engine_show_wireframe(Engine* engine, bool show_wireframe);
 void set_engine_show_xyz(Engine* engine, bool show_xyz);
