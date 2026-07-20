@@ -232,6 +232,17 @@ typedef struct PostFX {
     ShaderProgram* dof_coc_program;
     ShaderProgram* dof_blur_program;
     ShaderProgram* dof_composite_program;
+
+    // Motion blur (McGuire velocity reconstruction, 4.15). Reads the aux
+    // velocity buffer (.xy) + resolved HDR, gathers along the velocity, and
+    // blits the result back into hdr_fbo. Target lazily allocated
+    // (motion_blur_ready) so the feature is free while off; off by default, so
+    // the pass is skipped and the frame is byte-identical to master.
+    bool motion_blur_enabled;
+    float motion_blur_scale;                     // Shutter: velocity multiplier (1 = full frame)
+    bool motion_blur_ready;                      // Lazy-alloc guard for the target below
+    GLuint motion_blur_fbo, motion_blur_texture; // Full-res RGBA16F reconstruction scratch
+    ShaderProgram* motion_blur_program;
 } PostFX;
 
 // width/height are the display (downsample-target) size; ss_scale supersamples

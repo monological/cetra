@@ -132,6 +132,8 @@ typedef struct {
     float dof_focus; // Focus distance in view units (-1 = auto: subject)
     float dof_range; // Ramp-to-full-blur width (-1 = scene-scaled default)
     float dof_max_coc;
+    int motion_blur;         // --motion-blur: enable motion blur
+    float motion_blur_scale; // --motion-blur-scale shutter (-1 = engine default)
     int width;
     int height;
     int headless;
@@ -236,6 +238,8 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --dof-focus <m>    Pin focus distance (disables autofocus)\n");
     fprintf(stderr, "      --dof-range <m>    Distance over which blur ramps in (default: auto)\n");
     fprintf(stderr, "      --dof-max-coc <px> Max blur radius in half-res texels (default: 6)\n");
+    fprintf(stderr, "      --motion-blur      Velocity-buffer motion blur (McGuire reconstruction)\n");
+    fprintf(stderr, "      --motion-blur-scale <s> Shutter/velocity multiplier (default: 1)\n");
     fprintf(stderr, "  -D, --distance <m>     Camera distance from model (default: auto)\n");
     fprintf(stderr, "  -a, --anim <path>      Animation file (can be repeated)\n");
     fprintf(stderr, "  -s, --source <path>    Source skeleton for retargeting (T-pose)\n");
@@ -271,6 +275,7 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->dof_focus = -1.0f;
     args->dof_range = -1.0f;
     args->dof_max_coc = -1.0f;
+    args->motion_blur_scale = -1.0f;
     args->light_size = -1.0f;     // -1 = scene-radius default
     args->shadow_softness = -1.0f; // -1 = keep the engine default
     args->sun_elevation = -999.0f; // -999 = keep the sky default
@@ -701,6 +706,14 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 return -1;
             }
             args->dof_max_coc = (float)atof(argv[i]);
+        } else if (strcmp(argv[i], "--motion-blur") == 0) {
+            args->motion_blur = 1;
+        } else if (strcmp(argv[i], "--motion-blur-scale") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->motion_blur_scale = (float)atof(argv[i]);
         } else if (strcmp(argv[i], "--no-springs") == 0) {
             args->no_springs = 1;
         } else if (strcmp(argv[i], "-D") == 0 || strcmp(argv[i], "--distance") == 0) {
@@ -1713,6 +1726,15 @@ int main(int argc, char** argv) {
         fx->dof_focus_range = args.dof_range > 0.0f ? args.dof_range : scene_radius * 1.5f;
         if (args.dof_max_coc > 0.0f)
             fx->dof_max_coc = args.dof_max_coc;
+    }
+
+    // Motion blur: off unless requested. Velocity comes from the aux buffer
+    // (already produced for TAA/SSAO), so this is a toggle plus an optional
+    // shutter scale.
+    if (args.motion_blur && engine->postfx) {
+        engine->postfx->motion_blur_enabled = true;
+        if (args.motion_blur_scale >= 0.0f)
+            engine->postfx->motion_blur_scale = args.motion_blur_scale;
     }
 
     // Clip planes tuned for depth precision, not just coverage. A huge

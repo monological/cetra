@@ -287,6 +287,11 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     fx->fog_steps = 24;
     fx->fog_ready = false;
 
+    // Motion blur (off by default; target allocated lazily on first enable).
+    fx->motion_blur_enabled = false;
+    fx->motion_blur_scale = 1.0f; // full-shutter velocity
+    fx->motion_blur_ready = false;
+
     // The HDR resolve target must be RGBA16F to match the MSAA source
     // (multisample blits require identical formats); the bloom chain never
     // reads alpha, so the cheaper packed-float format halves its bandwidth
@@ -445,7 +450,9 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     fx->dof_coc_program = create_dof_coc_program();
     fx->dof_blur_program = create_dof_blur_program();
     fx->dof_composite_program = create_dof_composite_program();
-    if (!fx->bloom_bright_program || !fx->bloom_down_program || !fx->bloom_up_program ||
+    fx->motion_blur_program = create_motion_blur_program();
+    if (!fx->motion_blur_program || !fx->bloom_bright_program || !fx->bloom_down_program ||
+        !fx->bloom_up_program ||
         !fx->tonemap_program || !fx->gtao_program ||
         !fx->ssao_blur_program || !fx->temporal_accum_program || !fx->ssgi_composite_program ||
         !fx->ssgi_accum_program || !fx->ssgi_atrous_program || !fx->ssr_atrous_program ||
@@ -503,6 +510,10 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     uniform_set_int(fx->dof_composite_program->uniforms, "sceneTex", 0);
     uniform_set_int(fx->dof_composite_program->uniforms, "blurTex", 1);
     uniform_set_int(fx->dof_composite_program->uniforms, "depthTex", 2);
+
+    glUseProgram(fx->motion_blur_program->id);
+    uniform_set_int(fx->motion_blur_program->uniforms, "sceneTex", 0);
+    uniform_set_int(fx->motion_blur_program->uniforms, "auxTex", 1);
 
     glUseProgram(fx->gtao_program->id);
     uniform_set_int(fx->gtao_program->uniforms, "linDepthTex", 0);
@@ -623,6 +634,50 @@ static bool postfx_ensure_fog_targets(PostFX* fx) {
     }
     fx->fog_ready = true;
     return true;
+}
+
+// Allocate the motion-blur reconstruction scratch on first enable so the
+// feature is free while off (DoF pattern): one full-res RGBA16F target the
+// reconstruction writes into before it is blitted back over the HDR scene.
+static bool postfx_ensure_motion_blur_targets(PostFX* fx) {
+    if (fx->motion_blur_ready)
+        return true;
+    if (!create_color_fbo(fx->width, fx->height, GL_RGBA16F, &fx->motion_blur_fbo,
+                          &fx->motion_blur_texture)) {
+        log_error("Failed to allocate motion blur target");
+        return false;
+    }
+    fx->motion_blur_ready = true;
+    return true;
+}
+
+// Motion blur (4.15): reconstruct plausible blur from the aux velocity buffer.
+// Reads the resolved linear HDR + the velocity (.xy), gathers colour along the
+// velocity into the scratch target, then blits it back over the HDR scene so
+// DoF/bloom/tonemap all read the blurred result (GL 4.1 has no texture barrier,
+// so the pass cannot read+write hdr_texture in place). M1 gathers along each
+// pixel's own velocity; M2/M3 add tile dilation + depth-aware weights.
+static void postfx_run_motion_blur(PostFX* fx) {
+    const float texel[2] = {1.0f / (float)fx->width, 1.0f / (float)fx->height};
+    glBindFramebuffer(GL_FRAMEBUFFER, fx->motion_blur_fbo);
+    glViewport(0, 0, fx->width, fx->height);
+    glUseProgram(fx->motion_blur_program->id);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, fx->hdr_texture);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, fx->aux_texture);
+    uniform_set_vec2(fx->motion_blur_program->uniforms, "texelSize", texel);
+    uniform_set_float(fx->motion_blur_program->uniforms, "scale", fx->motion_blur_scale);
+    draw_fullscreen_quad(fx->quad_vao);
+
+    // Copy the reconstructed scene back over the HDR buffer (same size/format,
+    // NEAREST -> exact copy) so the rest of the chain reads the blurred result.
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, fx->motion_blur_fbo);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fx->hdr_fbo);
+    glBlitFramebuffer(0, 0, fx->width, fx->height, 0, 0, fx->width, fx->height,
+                      GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    check_gl_error("postfx motion blur");
 }
 
 // Bloom pyramid (Jimenez dual-filter): bright pass into mip 0, 13-tap
@@ -777,6 +832,8 @@ void free_postfx(PostFX* fx) {
     glDeleteFramebuffers(1, &fx->fog_fbo);
     glDeleteTextures(1, &fx->fog_texture);
     free_pingpong(&fx->fog_history);
+    glDeleteFramebuffers(1, &fx->motion_blur_fbo);
+    glDeleteTextures(1, &fx->motion_blur_texture);
 
     free_program(fx->bloom_bright_program);
     free_program(fx->bloom_down_program);
@@ -799,6 +856,7 @@ void free_postfx(PostFX* fx) {
     free_program(fx->dof_coc_program);
     free_program(fx->dof_blur_program);
     free_program(fx->dof_composite_program);
+    free_program(fx->motion_blur_program);
 
     glDeleteVertexArrays(1, &fx->quad_vao);
     glDeleteBuffers(1, &fx->quad_vbo);
@@ -850,7 +908,10 @@ bool postfx_wants_aux_gbuffer(const PostFX* fx) {
     // with TAA off (e.g. headless). SSGI rides the GTAO sweep, so it needs the
     // linear depth too even if AO display is off (--ssgi --no-ssao). The fog
     // march reconstructs its ray endpoints from the linear Z as well.
-    return fx && (fx->taa_enabled || fx->ssao_enabled || fx->ssgi_enabled || fx->fog_enabled);
+    // Motion blur consumes the .xy velocity, so it too forces the aux buffer
+    // (otherwise it would silently no-op under, e.g., --no-ssao).
+    return fx && (fx->taa_enabled || fx->ssao_enabled || fx->ssgi_enabled || fx->fog_enabled ||
+                  fx->motion_blur_enabled);
 }
 
 bool postfx_wants_albedo(const PostFX* fx) {
@@ -1419,6 +1480,12 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         }
 
         GLuint fog_result_tex = postfx_run_fog(fx, aux_written, taa_resolving, projection, view);
+
+        // Motion blur (4.15): velocity-driven blur on the linear HDR scene,
+        // blitted back into hdr_fbo so DoF/bloom/tonemap see it. Needs the aux
+        // velocity buffer; skipped (frame untouched) when off or unavailable.
+        if (fx->motion_blur_enabled && aux_written && postfx_ensure_motion_blur_targets(fx))
+            postfx_run_motion_blur(fx);
 
         // Depth of field replaces the scene that bloom and tone mapping read.
         // scene_tex is the sharp HDR unless DoF ran into fx->dof_texture.

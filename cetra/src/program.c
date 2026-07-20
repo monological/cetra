@@ -775,6 +775,10 @@ ShaderProgram* create_fog_program() {
     return create_post_program("fog", fog_frag_shader_str);
 }
 
+ShaderProgram* create_motion_blur_program() {
+    return create_post_program("motion_blur", motion_blur_frag_shader_str);
+}
+
 
 ShaderProgram* create_lum_measure_program() {
     return create_post_program("lum_measure", lum_measure_frag_shader_str);

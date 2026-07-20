@@ -1468,6 +1468,10 @@ static void _engine_gui_panel(Engine* engine) {
         igSliderFloat("Focus Range", &fx->dof_focus_range, 0.1f, 100.0f, "%.2f", 0);
         igSliderFloat("Max CoC", &fx->dof_max_coc, 0.0f, 40.0f, "%.1f", 0);
         _end_effect_group();
+
+        _begin_effect_group("Motion Blur", &fx->motion_blur_enabled);
+        igSliderFloat("Shutter", &fx->motion_blur_scale, 0.0f, 2.0f, "%.2f", 0);
+        _end_effect_group();
     }
 
     if (camera && igCollapsingHeader_TreeNodeFlags("Camera Transform", 0)) {
