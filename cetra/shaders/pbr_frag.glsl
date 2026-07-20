@@ -669,7 +669,18 @@ void main() {
     float parallaxHeight = 0.0; // height at the POM hit, for the self-shadow march
     if (parallaxEnabled > 0 && heightTexExists > 0 && parallaxScale > 0.0) {
         vec3 Vts = normalize(transpose(TBN) * normalize(camPos - WorldPos));
+        vec2 uv0 = uv;
         uv = parallaxOcclusion(uv, Vts);
+        // Silhouette clipping: when the march pushed the UV past the [0,1] relief
+        // tile, that surface has receded beyond the mesh edge -- drop the fragment
+        // so the background shows through instead of a flat cutoff, giving the
+        // contour a relief-shaped edge at grazing. Gated on uv0 being inside the
+        // first tile so tiled/wrapped UVs (whose relief is interior, not at a mesh
+        // edge) are never clipped mid-surface. Assumes the relief maps 1:1 to the
+        // surface -- the standard silhouette-POM constraint.
+        if (uv0.x >= 0.0 && uv0.x <= 1.0 && uv0.y >= 0.0 && uv0.y <= 1.0 &&
+            (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0))
+            discard;
         parallaxHeight = texture(heightTex, uv).r;
     }
 
