@@ -59,7 +59,10 @@ typedef struct Engine {
     GLuint aux_multisample_texture;    // Multisample aux G-buffer: motion .xy + linear view-Z .z +
                                        // effective roughness .w (attachment 2)
     GLuint albedo_multisample_texture; // Multisample base color for SSGI (attachment 3)
-    GLuint depth_renderbuffer;         // Depth renderbuffer
+    GLuint
+        sss_diffuse_multisample_texture; // Multisample skin diffuse irradiance for SSS (attachment
+                                         // 4); 0 off-skin, so it doubles as the SSS mask (§4.12)
+    GLuint depth_renderbuffer;           // Depth renderbuffer
     // Refraction source: mid-frame resolve of the opaque scene into a mipped
     // RGBA16F texture, created lazily on the first transmissive frame
     GLuint opaque_color_fbo;
@@ -70,6 +73,7 @@ typedef struct Engine {
     bool aux_this_frame;         // Attachment 2 written this frame (TAA needs motion, or GTAO needs
                                  // linear-Z)
     bool albedo_this_frame;      // Attachment 3 (albedo) written this frame (SSGI active)
+    bool sss_this_frame; // Attachment 4 (skin diffuse) written this frame (SSS active, §4.12)
 
     Camera* camera;         // main camera
     CameraMode camera_mode; // Current camera mode
@@ -103,6 +107,8 @@ typedef struct Engine {
                                 // (materials with sheen color 0 are unaffected either way)
     bool parallax_enabled;      // POM height-march (§4.11); off skips the march
                                 // (materials with no height map / scale 0 are unaffected)
+    bool sss_enabled;           // Separable screen-space SSS (§4.12); off skips the diffuse
+                                // separation + blur (materials with subsurface 0 are unaffected)
 
     mat4 model_matrix;
     mat4 view_matrix;

@@ -97,6 +97,7 @@ Engine* create_engine(const char* window_title, int width, int height) {
     engine->normals_this_frame = false;
     engine->aux_this_frame = false;
     engine->albedo_this_frame = false;
+    engine->sss_this_frame = false;
 
     engine->camera = NULL;
     engine->camera_mode = CAMERA_MODE_ORBIT;
@@ -117,6 +118,7 @@ Engine* create_engine(const char* window_title, int width, int height) {
     engine->specular_enabled = true;    // KHR specular on; inert unless a material carries it
     engine->sheen_enabled = true;       // KHR sheen on; inert unless a material carries it
     engine->parallax_enabled = true;    // POM on; inert unless a material carries height + scale
+    engine->sss_enabled = true;         // SSS on; inert unless a material carries subsurface > 0
 
     glm_mat4_identity(engine->model_matrix);
     glm_mat4_identity(engine->view_matrix);
@@ -347,11 +349,13 @@ static void _destroy_msaa_attachments(Engine* engine) {
     glDeleteTextures(1, &engine->normal_multisample_texture);
     glDeleteTextures(1, &engine->aux_multisample_texture);
     glDeleteTextures(1, &engine->albedo_multisample_texture);
+    glDeleteTextures(1, &engine->sss_diffuse_multisample_texture);
     glDeleteRenderbuffers(1, &engine->depth_renderbuffer);
     engine->multisample_texture = 0;
     engine->normal_multisample_texture = 0;
     engine->aux_multisample_texture = 0;
     engine->albedo_multisample_texture = 0;
+    engine->sss_diffuse_multisample_texture = 0;
     engine->depth_renderbuffer = 0;
 }
 
@@ -373,6 +377,15 @@ static void _add_msaa_color_attachment(GLuint* out_tex, GLenum internal_format, 
 static int _create_msaa_attachments(Engine* engine, int rw, int rh, int samples) {
     glBindFramebuffer(GL_FRAMEBUFFER, engine->framebuffer);
 
+    // We drive 5 draw buffers (0 HDR, 1 normal, 2 aux, 3 albedo, 4 SSS diffuse).
+    // GL 4.1 guarantees >= 8, but query once so a hypothetical thin driver fails
+    // loudly here instead of silently dropping the SSS attachment.
+    GLint max_draw_buffers = 0;
+    glGetIntegerv(GL_MAX_DRAW_BUFFERS, &max_draw_buffers);
+    if (max_draw_buffers < 5)
+        log_error("GL_MAX_DRAW_BUFFERS is %d (< 5): the SSS diffuse attachment (4) will not bind",
+                  max_draw_buffers);
+
     // 0: HDR color. 1: view-space normals (.xyz) for SSAO/SSR. 2: aux G-buffer --
     // motion .xy (TAA) + linear view-Z .z (GTAO). 3: base color .rgb + metalness
     // .a for SSGI. Albedo is LDR. The aux buffer is FULL float: half floats
@@ -386,6 +399,12 @@ static int _create_msaa_attachments(Engine* engine, int rw, int rh, int samples)
                                rw, rh, samples);
     _add_msaa_color_attachment(&engine->albedo_multisample_texture, GL_RGBA8, GL_COLOR_ATTACHMENT3,
                                rw, rh, samples);
+    // 4: skin diffuse irradiance for separable SSS (§4.12); RGBA16F (linear HDR
+    // diffuse), 0 off-skin so it doubles as the SSS mask. Written only when SSS
+    // is active (engine_set_scene_draw_buffers gates on sss_this_frame). GL 4.1
+    // guarantees >= 8 draw buffers; assert we cleared 5 (queried once at init).
+    _add_msaa_color_attachment(&engine->sss_diffuse_multisample_texture, GL_RGBA16F,
+                               GL_COLOR_ATTACHMENT4, rw, rh, samples);
 
     glGenRenderbuffers(1, &engine->depth_renderbuffer);
     glBindRenderbuffer(GL_RENDERBUFFER, engine->depth_renderbuffer);
@@ -1629,11 +1648,11 @@ void engine_set_scene_draw_buffers(const Engine* engine, bool with_gbuffer) {
     // enabled globally, so keep each aux target opaque via indexed disable
     // (re-issued at every pass boundary because any blanket glEnable(GL_BLEND)
     // wipes it).
-    const bool written[4] = {true, engine->normals_this_frame, engine->aux_this_frame,
-                             engine->albedo_this_frame};
-    GLenum bufs[4] = {GL_COLOR_ATTACHMENT0, GL_NONE, GL_NONE, GL_NONE};
+    const bool written[5] = {true, engine->normals_this_frame, engine->aux_this_frame,
+                             engine->albedo_this_frame, engine->sss_this_frame};
+    GLenum bufs[5] = {GL_COLOR_ATTACHMENT0, GL_NONE, GL_NONE, GL_NONE, GL_NONE};
     int count = 1;
-    for (int i = 1; i < 4; i++) {
+    for (int i = 1; i < 5; i++) {
         if (with_gbuffer && written[i]) {
             bufs[i] = GL_COLOR_ATTACHMENT0 + i;
             glDisablei(GL_BLEND, i);
@@ -1800,6 +1819,10 @@ void run_engine_render_loop(Engine* engine, RenderSceneFunc render_func) {
             frame_mode == RENDER_MODE_PBR && postfx_wants_aux_gbuffer(engine->postfx);
         engine->albedo_this_frame =
             frame_mode == RENDER_MODE_PBR && postfx_wants_albedo(engine->postfx);
+        // SSS writes attachment 4 (skin diffuse) whenever the feature is on; it is
+        // inert (all-zero, so the blur/composite is a no-op) unless a material
+        // carries subsurface > 0. Mirrors the albedo-on-SSGI gate.
+        engine->sss_this_frame = frame_mode == RENDER_MODE_PBR && engine->sss_enabled;
         engine_set_scene_draw_buffers(engine, true);
         glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
@@ -1817,6 +1840,13 @@ void run_engine_render_loop(Engine* engine, RenderSceneFunc render_func) {
             // Albedo 0 on uncovered/sky texels; SSGI only composites where GI is nonzero.
             const GLfloat zero_albedo[4] = {0.0f, 0.0f, 0.0f, 0.0f};
             glClearBufferfv(GL_COLOR, 3, zero_albedo);
+        }
+        if (engine->sss_this_frame) {
+            // Skin diffuse 0 on uncovered/sky/non-skin texels, so the SSS
+            // blur/composite is a no-op there (blur(0) - 0 = 0). Skybox +
+            // shadow-catcher draw color-only, so they keep this cleared 0.
+            const GLfloat zero_sss[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+            glClearBufferfv(GL_COLOR, 4, zero_sss);
         }
 
         Scene* current_scene = get_current_scene(engine);

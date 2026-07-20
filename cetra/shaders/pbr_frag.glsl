@@ -22,6 +22,11 @@ layout(location = 2) out vec4 VelocityOut;
 // composite (indirect diffuse = (1-metallic) * albedo * gathered irradiance, so
 // metals get no bounced diffuse). Only lands when attachment 3 is enabled (SSGI).
 layout(location = 3) out vec4 AlbedoOut;
+// SSS diffuse (§4.12): skin diffuse irradiance * subsurface, 0 off-skin (so it
+// doubles as the mask). The SSS post pass blurs this and composites
+// hdr + blur - this, softening diffuse while FragColor's specular stays sharp.
+// Only lands when attachment 4 is enabled (sssEnabled); otherwise discarded.
+layout(location = 4) out vec4 DiffuseOut;
 
 // Sized against GL_MAX_FRAGMENT_UNIFORM_COMPONENTS (4096 on the target GL 4.1
 // tier): the light array plus the fixed uniforms (the CSM matrix/param arrays
@@ -183,6 +188,9 @@ uniform int clearcoatEnabled; // Global clearcoat lobe toggle (--no-clearcoat)
 uniform int specularEnabled;  // Global KHR_materials_specular toggle (--no-specular)
 uniform int sheenEnabled;     // Global KHR_materials_sheen toggle (--no-sheen)
 uniform int parallaxEnabled;  // Global POM toggle (--no-parallax, §4.11)
+uniform int sssEnabled;       // Global separable-SSS toggle (--no-sss, §4.12)
+uniform float subsurface;     // Per-material SSS strength (0 = off; also the skin flag)
+uniform vec3 subsurfaceColor; // Per-channel scatter tint (drives the profile in the SSS pass)
 
 // Local reflection probe: the scene captured into a prefiltered cubemap,
 // parallax-corrected against a proxy AABB (Lagarde 2012). When enabled, the
@@ -922,6 +930,14 @@ void main() {
     // Accumulate lighting from all lights
     vec3 Lo = vec3(0.0);
 
+    // SSS (§4.12): separately accumulate skin diffuse irradiance into DiffuseOut
+    // (blurred + recomposited by the SSS post pass). Guarded so a non-skin
+    // material or --no-sss leaves the FragColor path byte-identical; the taps
+    // below REUSE the exact diffuse sub-expression already in Lo/ambient and
+    // never touch those accumulations.
+    bool sss = sssEnabled > 0 && subsurface > 0.0;
+    vec3 sssDiffuse = vec3(0.0);
+
     // Get tangent and bitangent for anisotropy
     vec3 T = normalize(TBN[0]);
     vec3 B = normalize(TBN[1]);
@@ -1069,6 +1085,13 @@ void main() {
                       radiance * NdotL * shadow,
                   vec3(10.0));
 
+        // SSS: tap this light's Lambert diffuse into the separated skin-diffuse
+        // buffer (blurred later; specular stays in FragColor). Separate accumulate
+        // -- does not modify the Lo expression above.
+        if (sss) {
+            sssDiffuse += kD * albedoMap / PI * radiance * NdotL * shadow;
+        }
+
         // Add subsurface scattering contribution
         if (subsurfaceLayer >= 0 && sssThickness < 0.99) {
             Lo += subsurfaceScattering(N, L, V, albedoMap, sssThickness, lights[i].color * lights[i].intensity * attenuation);
@@ -1120,6 +1143,12 @@ void main() {
         vec3 specular = prefilteredColor * (F * brdf.x + brdf.y) * energyComp;
 
         ambient = (kD * diffuse + specular) * aoMap * iblIntensity;
+
+        // SSS: tap the IBL Lambert diffuse into the skin-diffuse buffer too
+        // (reuses the exact sub-expression; does not touch the ambient line).
+        if (sss) {
+            sssDiffuse += kD * diffuse * aoMap * iblIntensity;
+        }
 
         // Clearcoat IBL: a second env reflection at the coat roughness (its own
         // split-sum with F0 = 0.04) around the coat normal Nc, attenuating the
@@ -1236,4 +1265,9 @@ void main() {
     // quantization staircases the reconstructed floor into AO banding.
     VelocityOut = vec4(screenVelocity(), ViewPos.z, roughnessMap);
     AlbedoOut = vec4(albedoMap, metallicMap);
+    // SSS diffuse (§4.12): subsurface-scaled skin diffuse (0 off-skin). The SSS
+    // post pass blurs this and composites hdr + blur - this, so the diffuse
+    // softens while FragColor's specular stays sharp. Discarded unless the engine
+    // enables attachment 4 (sssEnabled).
+    DiffuseOut = vec4(subsurface * sssDiffuse, 1.0);
 }

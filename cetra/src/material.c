@@ -39,6 +39,9 @@ Material* create_material() {
     glm_vec3_zero(material->sheen_color_factor);  // (0,0,0) = no sheen until imported
     material->sheen_roughness_factor = 0.0f;
     material->parallax_scale = 0.0f; // POM off until a material opts in (§4.11)
+    material->subsurface = 0.0f;     // SSS off until a material opts in (§4.12)
+    glm_vec3_copy((vec3){1.0f, 0.3f, 0.2f}, material->subsurface_color); // skin-ish default tint
+    material->subsurface_radius = 1.0f;
     glm_vec2_zero(material->uvOffset);
     glm_vec2_one(material->uvScale);
     material->uvRotation = 0.0f;
