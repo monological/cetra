@@ -17,8 +17,12 @@ import struct
 import math
 import os
 
-RINGS = 32    # latitude divisions
-SECTORS = 48  # longitude divisions
+# Silhouette smoothness matters for translucent spheres (the Fresnel rim rides the
+# outline, and every layer's edge is visible), so tessellate finely -- same counts
+# as gen_glass_sphere.py. uint32 indices (below) keep this valid past the uint16
+# vertex ceiling.
+RINGS = 128    # latitude divisions
+SECTORS = 256  # longitude divisions
 RADIUS = 0.8
 
 positions = []
