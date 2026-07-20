@@ -243,6 +243,30 @@ vec2 parallaxOcclusion(vec2 uv0, vec3 Vts) {
     return mix(curUV, prevUV, clamp(w, 0.0, 1.0));
 }
 
+// Soft POM self-shadow (§4.11 M4): march the height field from the resolved hit
+// (uv, h0 = height there) toward the tangent-space light direction Lts; relief
+// between the point and the light occludes it, darkening the grooves. Returns 1
+// (lit) .. 0 (shadowed); a penumbra falls out of weighting nearer occluders more.
+// Lts.z <= 0 (light below the tangent horizon) is left to the NdotL term.
+float parallaxSelfShadow(vec2 uv, float h0, vec3 Lts) {
+    if (Lts.z <= 0.0)
+        return 1.0;
+    const int LAYERS = 16;
+    float dh = (1.0 - h0) / float(LAYERS);            // march from the hit up to the crest
+    vec2 duv = (Lts.xy / Lts.z) * parallaxScale * dh; // UV shift per height step
+    float shadow = 0.0;
+    vec2 curUV = uv;
+    float rayH = h0;
+    for (int i = 1; i <= LAYERS; i++) {
+        rayH += dh;
+        curUV += duv;
+        float sH = texture(heightTex, curUV).r;
+        if (sH > rayH)
+            shadow = max(shadow, (sH - rayH) * (1.0 - float(i) / float(LAYERS)));
+    }
+    return 1.0 - clamp(shadow * 2.0, 0.0, 1.0);
+}
+
 // Color space conversions
 vec3 sRGBToLinear(vec3 srgb) {
     return pow(srgb, vec3(2.2));
@@ -642,9 +666,11 @@ void main() {
     // read `uv`). Guarded so a material without POM (no height map / scale 0 /
     // --no-parallax) runs the exact pre-feature path. TBN maps tangent->world, so
     // its transpose takes the world-space view direction into tangent space.
+    float parallaxHeight = 0.0; // height at the POM hit, for the self-shadow march
     if (parallaxEnabled > 0 && heightTexExists > 0 && parallaxScale > 0.0) {
         vec3 Vts = normalize(transpose(TBN) * normalize(camPos - WorldPos));
         uv = parallaxOcclusion(uv, Vts);
+        parallaxHeight = texture(heightTex, uv).r;
     }
 
     // Sample material properties. glTF semantics: the scalar factors
@@ -971,6 +997,11 @@ void main() {
                 shadow = calculateShadow(shadowSlot, fragCascade, WorldPos, NdotL,
                                          max(lights[i].size.x, lights[i].size.y));
             }
+        }
+
+        // POM self-shadow: raised relief casts into the grooves toward each light.
+        if (parallaxEnabled > 0 && heightTexExists > 0 && parallaxScale > 0.0) {
+            shadow *= parallaxSelfShadow(uv, parallaxHeight, normalize(transpose(TBN) * L));
         }
 
         // Clearcoat: a second thin smooth dielectric GGX lobe (fixed F0 = 0.04,
