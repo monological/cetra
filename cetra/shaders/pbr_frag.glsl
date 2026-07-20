@@ -97,6 +97,7 @@ uniform float specularFactor;     // KHR_materials_specular weight (-1 = extensi
 uniform vec3 specularColorFactor; // KHR_materials_specular F0 tint (white = no tint)
 uniform vec3 sheenColorFactor;      // KHR_materials_sheen color ((0,0,0) = no sheen lobe)
 uniform float sheenRoughnessFactor; // KHR_materials_sheen roughness
+uniform float parallaxScale;        // POM march depth in UV units (0 = off, §4.11)
 uniform vec2 uvOffset;      // Texture coordinate offset (KHR_texture_transform)
 uniform vec2 uvScale;       // Texture coordinate scale (KHR_texture_transform)
 uniform float uvRotation;   // Texture coordinate rotation in radians
@@ -111,6 +112,7 @@ uniform sampler2D emissiveTex;
 uniform sampler2D sheenTex;          // KHR sheen color (sRGB, unit 8)
 uniform sampler2D reflectanceTex;    // reserved (unsampled; KHR specular color deferred)
 uniform sampler2D clearcoatNormalTex; // clearcoat normal map (freed unit)
+uniform sampler2D heightTex;          // POM height field (unit 4, §4.11); white = raised
 
 // The scalar masks (roughness/metallic/ao/opacity/microsurface/anisotropy/
 // subsurface) share ONE array texture. Each material selects a layer per mask;
@@ -180,6 +182,7 @@ uniform int energyCompEnabled;
 uniform int clearcoatEnabled; // Global clearcoat lobe toggle (--no-clearcoat)
 uniform int specularEnabled;  // Global KHR_materials_specular toggle (--no-specular)
 uniform int sheenEnabled;     // Global KHR_materials_sheen toggle (--no-sheen)
+uniform int parallaxEnabled;  // Global POM toggle (--no-parallax, §4.11)
 
 // Local reflection probe: the scene captured into a prefiltered cubemap,
 // parallax-corrected against a proxy AABB (Lagarde 2012). When enabled, the

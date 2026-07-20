@@ -115,6 +115,7 @@ Engine* create_engine(const char* window_title, int width, int height) {
     engine->clearcoat_enabled = true;   // Clearcoat lobe on; inert unless a material carries it
     engine->specular_enabled = true;    // KHR specular on; inert unless a material carries it
     engine->sheen_enabled = true;       // KHR sheen on; inert unless a material carries it
+    engine->parallax_enabled = true;    // POM on; inert unless a material carries height + scale
 
     glm_mat4_identity(engine->model_matrix);
     glm_mat4_identity(engine->view_matrix);
@@ -1431,6 +1432,7 @@ static void _engine_gui_panel(Engine* engine) {
         igCheckbox("Clearcoat", &engine->clearcoat_enabled);
         igCheckbox("Specular", &engine->specular_enabled);
         igCheckbox("Sheen", &engine->sheen_enabled);
+        igCheckbox("Parallax (POM)", &engine->parallax_enabled);
     }
 
     if (engine->postfx &&

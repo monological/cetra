@@ -60,6 +60,7 @@ typedef struct Material {
     vec3 specular_color_factor; // KHR_materials_specular F0 tint (glTF default white = no tint)
     vec3 sheen_color_factor;    // KHR_materials_sheen color ((0,0,0) = no sheen lobe)
     float sheen_roughness_factor; // KHR_materials_sheen roughness (glTF default 0)
+    float parallax_scale;         // POM height-march depth in UV units (0 = off, §4.11)
     vec2 uvOffset;                // Texture coordinate offset (KHR_texture_transform)
     vec2 uvScale;                 // Texture coordinate scale (KHR_texture_transform)
     float uvRotation;             // Texture coordinate rotation in radians (KHR_texture_transform)

@@ -101,6 +101,8 @@ typedef struct Engine {
                                 // without the extension are unaffected either way)
     bool sheen_enabled;         // KHR_materials_sheen cloth lobe; off skips the lobe
                                 // (materials with sheen color 0 are unaffected either way)
+    bool parallax_enabled;      // POM height-march (§4.11); off skips the march
+                                // (materials with no height map / scale 0 are unaffected)
 
     mat4 model_matrix;
     mat4 view_matrix;

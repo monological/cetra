@@ -38,6 +38,7 @@ Material* create_material() {
     glm_vec3_one(material->specular_color_factor);
     glm_vec3_zero(material->sheen_color_factor);  // (0,0,0) = no sheen until imported
     material->sheen_roughness_factor = 0.0f;
+    material->parallax_scale = 0.0f; // POM off until a material opts in (§4.11)
     glm_vec2_zero(material->uvOffset);
     glm_vec2_one(material->uvScale);
     material->uvRotation = 0.0f;

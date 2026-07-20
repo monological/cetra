@@ -29,6 +29,8 @@
 // ordered map here so a change to any one #define that would collide with its
 // neighbour fails the build (the queried GL_MAX_TEXTURE_IMAGE_UNITS is 16, so the
 // top unit must stay < 16 -- A3 relocated brdfLUT/skybox off units 16/17).
+_Static_assert(TEXUNIT_CLEARCOAT_NORMAL < TEXUNIT_HEIGHT && TEXUNIT_HEIGHT < TEXUNIT_EMISSIVE,
+               "POM height unit must sit between clearcoat-normal and emissive");
 _Static_assert(TEXUNIT_MATERIAL_MAX < SHADOW_MAP_TEXTURE_UNIT,
                "material texture units overlap the shadow map array unit");
 _Static_assert(SHADOW_MAP_TEXTURE_UNIT < IBL_IRRADIANCE_TEXTURE_UNIT,
@@ -181,6 +183,7 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
     uniform_set_vec3(u, "specularColorFactor", (const float*)&material->specular_color_factor);
     uniform_set_vec3(u, "sheenColorFactor", (const float*)&material->sheen_color_factor);
     uniform_set_float(u, "sheenRoughnessFactor", material->sheen_roughness_factor);
+    uniform_set_float(u, "parallaxScale", material->parallax_scale); // POM depth (0 = off)
     uniform_set_vec2(u, "uvOffset", (const float*)&material->uvOffset);
     uniform_set_vec2(u, "uvScale", (const float*)&material->uvScale);
     uniform_set_float(u, "uvRotation", material->uvRotation);
@@ -196,6 +199,7 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
     uniform_set_int(u, "sheenTex", TEXUNIT_SHEEN);            // KHR sheen color (sRGB)
     uniform_set_int(u, "reflectanceTex", TEXUNIT_REFLECTANCE); // reserved (KHR specular color deferred)
     uniform_set_int(u, "clearcoatNormalTex", TEXUNIT_CLEARCOAT_NORMAL);
+    uniform_set_int(u, "heightTex", TEXUNIT_HEIGHT); // POM height map (§4.11)
 
     // Per-mask layer into the mask array (-1 = no texture -> scalar factor)
     uniform_set_int(u, "roughnessLayer", material->roughness_layer);
@@ -221,10 +225,15 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
         glBindTexture(GL_TEXTURE_2D, material->emissive_tex->id);
     }
 
-    // height_tex is deliberately NOT bound: pbr_frag declares heightTex but
-    // never samples it (POM is unimplemented), and TEXUNIT_SCENE_COLOR carries
-    // the refraction pass's scene-color texture. sheen color is now live (KHR
-    // sheen); reflectance stays reserved (KHR specular color texture deferred).
+    // POM height map (§4.11): the parallax march samples it before every
+    // material lookup. Guarded in-shader by parallaxEnabled/heightTexExists/
+    // parallaxScale, so binding it is inert until a material opts in. sheen
+    // color is live; reflectance stays reserved (KHR specular color deferred).
+    if (material->height_tex) {
+        glActiveTexture(GL_TEXTURE0 + TEXUNIT_HEIGHT);
+        glBindTexture(GL_TEXTURE_2D, material->height_tex->id);
+    }
+
     if (material->sheen_tex) {
         glActiveTexture(GL_TEXTURE0 + TEXUNIT_SHEEN);
         glBindTexture(GL_TEXTURE_2D, material->sheen_tex->id);
@@ -334,6 +343,7 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
             uniform_set_int(u, "clearcoatEnabled", engine->clearcoat_enabled ? 1 : 0);
             uniform_set_int(u, "specularEnabled", engine->specular_enabled ? 1 : 0);
             uniform_set_int(u, "sheenEnabled", engine->sheen_enabled ? 1 : 0);
+            uniform_set_int(u, "parallaxEnabled", engine->parallax_enabled ? 1 : 0);
             // Refraction source: valid only in the late pass, after the
             // mid-frame resolve ran (pass 2 forces a program re-switch by
             // resetting current_program, so this always re-uploads there)

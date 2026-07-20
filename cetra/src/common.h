@@ -20,14 +20,15 @@
 //
 // The seven scalar masks (roughness/metallic/ao/opacity/microsurface/anisotropy/
 // subsurface) collapsed into ONE sampler2DArray (TEXUNIT_MASKS, mask_array.h),
-// freeing the mid material units. Units 3, 4, 7 (and 15) are now free for future
-// textured material features (e.g. a clearcoat normal map); the relocated shadow
-// and IBL engine units took 10-14 (shadow.h / ibl.h). The full ordered budget is
-// pinned by the _Static_assert chain in render.c.
+// freeing the mid material units. Units 7 and 15 are now free for future
+// textured material features; the relocated shadow and IBL engine units took
+// 10-14 (shadow.h / ibl.h). The full ordered budget is pinned by the
+// _Static_assert chain in render.c.
 #define TEXUNIT_ALBEDO           0
 #define TEXUNIT_NORMAL           1
 #define TEXUNIT_MASKS            2 // sampler2DArray: packed scalar masks
 #define TEXUNIT_CLEARCOAT_NORMAL 3 // clearcoat normal map (a freed mask unit)
+#define TEXUNIT_HEIGHT           4 // POM height map (a freed mask unit, §4.11)
 #define TEXUNIT_EMISSIVE         5
 #define TEXUNIT_SCENE_COLOR      6 // refraction opaque-scene resolve (engine-bound)
 #define TEXUNIT_SHEEN            8 // reserved (KHR_materials_sheen; unsampled today)
