@@ -60,8 +60,10 @@ void main()
         return;
     }
 
-    // Select this pixel's per-material scatter profile (color + radius).
-    int idx = clamp(int(centerA + 0.5), 0, MAX_SSS_PROFILES - 1);
+    // Decode this pixel's material tag (0 = non-skin, skin = profile index + 1)
+    // and select its per-material scatter profile (color + radius).
+    int centerTag = int(centerA + 0.5);
+    int idx = clamp(centerTag - 1, 0, MAX_SSS_PROFILES - 1);
     vec3 sssColor = sssProfiles[idx].rgb;
     float sssRadius = sssProfiles[idx].w;
 
@@ -78,12 +80,17 @@ void main()
         vec2 off = dir * t * texelSize;
         for (int s = -1; s <= 1; s += 2) {
             vec2 uv = TexCoords + off * float(s);
-            vec3 tapSrc = texture(srcTex, uv).rgb;
+            vec4 tap = texture(srcTex, uv);
+            vec3 tapSrc = tap.rgb;
             float tapZ = texture(auxTex, uv).z;
-            // Reject across the silhouette: sky (tapZ 0 -> big gap) and any large
-            // depth step fall off, so the scatter stays on the skin surface.
+            // Reject across the silhouette (sky: tapZ 0 -> big gap; any large depth
+            // step) AND across a material boundary (a different tag: another skin
+            // profile, or a non-skin/background surface at near-equal depth), so
+            // one material's scatter never bleeds into its neighbour.
             float dz = abs(-tapZ - depth);
-            float bilat = (tapZ < 0.0) ? exp(-dz * dz / (2.0 * sigmaZ * sigmaZ)) : 0.0;
+            float bilat = (tapZ < 0.0 && int(tap.a + 0.5) == centerTag)
+                              ? exp(-dz * dz / (2.0 * sigmaZ * sigmaZ))
+                              : 0.0;
             vec3 w = pw * bilat;
             sum += tapSrc * w;
             sumW += w;

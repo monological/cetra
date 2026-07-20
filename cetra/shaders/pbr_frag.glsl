@@ -1265,9 +1265,10 @@ void main() {
     VelocityOut = vec4(screenVelocity(), ViewPos.z, roughnessMap);
     AlbedoOut = vec4(albedoMap, metallicMap);
     // SSS diffuse: subsurface-scaled skin diffuse (0 off-skin) in .rgb, this
-    // material's scatter-profile index in .a. The SSS post pass blurs .rgb and
-    // composites hdr + blur - this (diffuse softens, FragColor's specular stays
-    // sharp), reading .a per pixel to select the profile. Discarded unless the
-    // engine enables attachment 4 (sssEnabled).
-    DiffuseOut = vec4(subsurface * sssDiffuse, float(max(sssProfileIndex, 0)));
+    // material's scatter-profile index + 1 in .a (0 = non-skin, so the blur
+    // rejects taps that cross into another material or the background). The SSS
+    // post pass blurs .rgb and composites hdr + blur - this (diffuse softens,
+    // FragColor's specular stays sharp), reading .a per pixel to select the
+    // profile. Discarded unless the engine enables attachment 4 (sssEnabled).
+    DiffuseOut = vec4(subsurface * sssDiffuse, float(max(sssProfileIndex + 1, 0)));
 }
