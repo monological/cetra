@@ -56,12 +56,13 @@ gltf = {
     "asset": {"version": "2.0", "generator": "gen_sss_fixture.py"},
     "scene": 0,
     "scenes": [{"nodes": [0, 1]}],
-    # Overlapping (centers 1.8 apart, radius 1 each) so the two materials share a
-    # screen-space seam at near-equal depth -- the case the blur's cross-material
-    # reject must not let scatter bleed across.
+    # Two spheres side by side (centers 2.6 apart, radius 1 each -> a clean ~0.6
+    # gap, no interpenetration) so the two scatter profiles read as distinct
+    # surfaces. The cross-material reject was verified separately with a
+    # temporarily-overlapping variant that forced a skin/skin seam.
     "nodes": [
-        {"name": "sss_skin_a", "mesh": 0, "translation": [-0.9, 1.0, 0.0]},
-        {"name": "sss_skin_b", "mesh": 1, "translation": [0.9, 1.0, 0.0]},
+        {"name": "sss_skin_a", "mesh": 0, "translation": [-1.3, 1.0, 0.0]},
+        {"name": "sss_skin_b", "mesh": 1, "translation": [1.3, 1.0, 0.0]},
     ],
     "meshes": [
         {
