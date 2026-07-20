@@ -1853,6 +1853,10 @@ void engine_end_oit_pass(Engine* engine) {
     glBindFramebuffer(GL_FRAMEBUFFER, engine->framebuffer);
     glViewport(0, 0, rw, rh);
     engine_set_scene_draw_buffers(engine, false);
+    // Undo the indexed blend we set on draw buffers 5/6 (symmetry -- benign today
+    // since the scene MRT stops at slot 4, but a latent trap if it ever widens).
+    glDisablei(GL_BLEND, 5);
+    glDisablei(GL_BLEND, 6);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 }
 

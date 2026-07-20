@@ -112,6 +112,8 @@ typedef struct Scene {
     size_t transparent_mesh_count;  // Late-pass meshes seen in this frame's opaque pass
     size_t transmissive_mesh_count; // Subset with transmission > 0; gates the mid-frame
                                     // opaque-color resolve refraction samples from
+    size_t oit_mesh_count;          // Subset that is ALPHA_BLEND && !transmissive; gates the
+                                    // weighted-blended OIT accumulate sub-pass
 
     // Shadow mapping
     ShadowSystem* shadow_system;

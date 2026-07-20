@@ -303,6 +303,7 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     glm_vec4_copy((vec4){1.0f, 0.3f, 0.2f, 0.2f}, fx->sss_profiles[0]);
     fx->sss_profile_count = 1;
     fx->sss_ready = false;
+    fx->oit_ready = false;
 
     // The HDR resolve target must be RGBA16F to match the MSAA source
     // (multisample blits require identical formats); the bloom chain never

@@ -1290,7 +1290,10 @@ void main() {
     // sums the first (GL_ONE,GL_ONE) and multiplies (1 - alpha) into the second.
     if (oitPass > 0) {
         float w = oitWeight(-ViewPos.z);
-        AccumOut = vec4(color * finalOpacity, finalOpacity) * w;
+        // Clamp the premultiplied weighted color to the fp16 ceiling (the accum
+        // target is RGBA16F) so a bright near-camera translucent frag -- where the
+        // depth weight nears its max -- can't write Inf and resolve to a white blob.
+        AccumOut = vec4(min(color * finalOpacity * w, vec3(65504.0)), finalOpacity * w);
         RevealageOut = vec4(finalOpacity);
     }
 }
