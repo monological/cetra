@@ -53,6 +53,12 @@ ParticleModule* particle_module_init_size(float min_size, float max_size);
 // INIT: base HDR color, each rgb channel jittered by +/- rgb_jitter.
 ParticleModule* particle_module_init_color(vec4 base_rgba, float rgb_jitter);
 
+// UPDATE: divergence-free curl-noise turbulence advecting velocity. `scale` is
+// the spatial frequency, `strength` the acceleration magnitude, `timescale` the
+// rate the noise domain drifts over time (organic, non-repeating swirl).
+ParticleModule* particle_module_update_curl_noise(float scale, float strength, float timescale);
+void particle_module_curl_set_strength(ParticleModule* m, float strength);
+
 // UPDATE: add a constant acceleration (m/s^2), e.g. faint upward buoyancy.
 ParticleModule* particle_module_update_drift(vec3 accel);
 // UPDATE: integrate position by velocity and apply a per-step velocity damping

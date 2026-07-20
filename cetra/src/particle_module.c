@@ -1,5 +1,6 @@
 #include "particle_module.h"
 #include "particle_emitter.h"
+#include "noise.h"
 
 #include <math.h>
 #include <stdlib.h>
@@ -164,6 +165,41 @@ ParticleModule* particle_module_init_color(vec4 base_rgba, float rgb_jitter) {
     glm_vec4_copy(base_rgba, p->base);
     p->jitter = rgb_jitter;
     return module_new("init_color", PARTICLE_PHASE_INIT, init_color_run, p);
+}
+
+// --- UPDATE: curl-noise turbulence ---
+
+typedef struct {
+    float scale;
+    float strength;
+    float timescale;
+} CurlParams;
+
+static void update_curl_run(ParticleModule* m, ParticleEmitter* e, size_t begin, size_t end,
+                            float dt, float t) {
+    const CurlParams* p = m->params;
+    for (size_t i = begin; i < end; i++) {
+        vec3 c = {0.0f, 0.0f, 0.0f}; // noise_curl3 writes it (out-param)
+        noise_curl3(e->pool->position[i][0] * p->scale, e->pool->position[i][1] * p->scale,
+                    e->pool->position[i][2] * p->scale + t * p->timescale, c);
+        for (int k = 0; k < 3; k++)
+            e->pool->velocity[i][k] += c[k] * p->strength * dt;
+    }
+}
+
+ParticleModule* particle_module_update_curl_noise(float scale, float strength, float timescale) {
+    CurlParams* p = calloc(1, sizeof(CurlParams));
+    if (!p)
+        return NULL;
+    p->scale = scale;
+    p->strength = strength;
+    p->timescale = timescale;
+    return module_new("update_curl_noise", PARTICLE_PHASE_UPDATE, update_curl_run, p);
+}
+
+void particle_module_curl_set_strength(ParticleModule* m, float strength) {
+    if (m && m->params)
+        ((CurlParams*)m->params)->strength = strength;
 }
 
 // --- UPDATE: drift (constant acceleration) ---

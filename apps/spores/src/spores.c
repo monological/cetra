@@ -1,9 +1,9 @@
 // Spores - cordyceps spore-room demo, the test bed for the general particle
 // system (specs/5.0-particle-system.md).
 //
-// A dark interior lit by one directional key, with a drifting spore particle
-// emitter, driven by the game loop (no physics). Curl-noise turbulence and the
-// tuned spore palette land in M2; lighting/shadow on the motes in M3.
+// A dark interior lit by one directional key, with a cordyceps-spore emitter
+// (pale green motes on curl-noise turbulence), driven by the game loop (no
+// physics). Lighting/shadow on the motes lands in M3, soft particles in M4.
 //
 // Flags: --headless, --frames N, --screenshot PATH (deterministic CI capture).
 
@@ -27,6 +27,7 @@
 #include "cetra/transform.h"
 #include "cetra/app.h"
 #include "cetra/game/game.h"
+#include "cetra/noise.h"
 #include "cetra/particle_system.h"
 #include "cetra/particle_module.h"
 
@@ -128,8 +129,10 @@ static void on_init(Game* game) {
 
     upload_buffers_to_gpu_for_nodes(root);
 
-    // Particle system: one cordyceps-spore emitter. M1 uses constant drift only
-    // (curl-noise turbulence and the spore palette land in M2).
+    // Particle system: one cordyceps-spore emitter filling the room's air with
+    // fine, pale sickly-green motes on curl-noise turbulence.
+    noise_seed(1337u);
+
     ShaderProgram* particle_prog = create_particle_program();
     add_shader_program_to_engine(engine, particle_prog);
 
@@ -140,13 +143,16 @@ static void on_init(Game* game) {
     particle_emitter_set_renderer(em, create_billboard_particle_renderer(particle_prog));
     particle_emitter_add_module(em, particle_module_spawn_rate(2000.0f));
     particle_emitter_add_module(
-        em, particle_module_init_box_location((vec3){-8, 0, -8}, (vec3){8, 6, 8}));
+        em, particle_module_init_box_location((vec3){-8, 0, -8}, (vec3){8, 7, 8}));
     particle_emitter_add_module(em, particle_module_init_lifetime(6.0f, 12.0f));
-    particle_emitter_add_module(em, particle_module_init_size(0.04f, 0.09f));
-    particle_emitter_add_module(em,
-                                particle_module_init_color((vec4){0.7f, 0.75f, 0.5f, 1.0f}, 0.1f));
-    particle_emitter_add_module(em, particle_module_update_drift((vec3){0.0f, 0.05f, 0.0f}));
-    particle_emitter_add_module(em, particle_module_update_integrate(0.99f));
+    particle_emitter_add_module(em, particle_module_init_size(0.02f, 0.07f));
+    // Pale, faintly-green cordyceps tone (HDR base; the shader's hdrGain pushes
+    // it over 1.0 so bloom haloes the motes).
+    particle_emitter_add_module(
+        em, particle_module_init_color((vec4){0.50f, 0.60f, 0.36f, 1.0f}, 0.07f));
+    particle_emitter_add_module(em, particle_module_update_curl_noise(0.25f, 0.5f, 0.15f));
+    particle_emitter_add_module(em, particle_module_update_drift((vec3){0.0f, 0.02f, 0.0f}));
+    particle_emitter_add_module(em, particle_module_update_integrate(0.985f));
     particle_system_add_emitter(g_sys, em);
 }
 
