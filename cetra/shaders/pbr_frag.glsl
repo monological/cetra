@@ -209,6 +209,40 @@ vec2 transformUV(vec2 uv) {
     return rotated * uvScale + uvOffset;
 }
 
+// Parallax Occlusion Mapping (§4.11): march the height field along the
+// tangent-space view direction Vts and return the UV where the ray first dips
+// below the surface, so a flat plane fakes real relief with self-occlusion.
+// Height convention: depth = 1 - height (white = raised). Adaptive step count
+// (more steps at grazing, where the lateral offset is longest and aliases
+// worst), then interpolate the last two samples for a sub-step-accurate hit
+// (the "occlusion" in POM). Vts.z is floored so the offset cannot blow up as the
+// view grazes the surface.
+vec2 parallaxOcclusion(vec2 uv0, vec3 Vts) {
+    const float MAX_LAYERS = 32.0;
+    const float MIN_LAYERS = 8.0;
+    float numLayers = mix(MAX_LAYERS, MIN_LAYERS, clamp(abs(Vts.z), 0.0, 1.0));
+    float layerDepth = 1.0 / numLayers;
+    // Per-step UV offset: the deepest layer shifts by (Vts.xy / Vts.z) * scale.
+    vec2 dUV = (Vts.xy / max(abs(Vts.z), 0.1)) * parallaxScale / numLayers;
+
+    float curDepth = 0.0;
+    vec2 curUV = uv0;
+    float curH = 1.0 - texture(heightTex, curUV).r;
+    for (int i = 0; i < int(MAX_LAYERS); i++) {
+        if (curDepth >= curH)
+            break;
+        curUV -= dUV;
+        curH = 1.0 - texture(heightTex, curUV).r;
+        curDepth += layerDepth;
+    }
+    // Interpolate between the current (under the surface) and previous (over) tap.
+    vec2 prevUV = curUV + dUV;
+    float afterD = curH - curDepth;                                                 // <= 0
+    float beforeD = (1.0 - texture(heightTex, prevUV).r) - (curDepth - layerDepth); // >= 0
+    float w = afterD / (afterD - beforeD);
+    return mix(curUV, prevUV, clamp(w, 0.0, 1.0));
+}
+
 // Color space conversions
 vec3 sRGBToLinear(vec3 srgb) {
     return pow(srgb, vec3(2.2));
@@ -602,6 +636,16 @@ void main() {
 
     // Apply UV transform for KHR_texture_transform
     vec2 uv = transformUV(TexCoords);
+
+    // Parallax occlusion mapping (§4.11): offset the UV by marching the height
+    // field in tangent space, BEFORE every material sampler below (all of them
+    // read `uv`). Guarded so a material without POM (no height map / scale 0 /
+    // --no-parallax) runs the exact pre-feature path. TBN maps tangent->world, so
+    // its transpose takes the world-space view direction into tangent space.
+    if (parallaxEnabled > 0 && heightTexExists > 0 && parallaxScale > 0.0) {
+        vec3 Vts = normalize(transpose(TBN) * normalize(camPos - WorldPos));
+        uv = parallaxOcclusion(uv, Vts);
+    }
 
     // Sample material properties. glTF semantics: the scalar factors
     // modulate the texture (effective value = factor * texture), so a
