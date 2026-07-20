@@ -14,14 +14,22 @@ uniform sampler2D neighborMaxTex; // Per-tile dominant velocity (UV units, un-ji
 uniform sampler2D velocityTex;    // aux G-buffer: .xy per-pixel velocity (UV), .z view-space Z
 uniform vec2 texelSize;           // 1 / render resolution
 uniform float scale;              // Shutter: velocity multiplier (motion_blur_scale)
+uniform float maxBlurPx;          // Blur-radius clamp = MOTION_BLUR_TILE (neighbor-max reach)
 
 const int SAMPLES = 16;
-const float MAX_PIXELS = 20.0; // clamp blur to the tile size (neighbor-max reach)
-const float SOFT_Z = 1.0;      // soft depth-compare extent (view-space units)
+const float SOFT_Z = 1.0; // soft depth-compare extent (view-space units)
 
 // Interleaved-gradient noise in [0,1) (Jimenez) -- cheap per-pixel dither.
 float ign(vec2 p) {
     return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715))));
+}
+
+// aux .z is view-space Z (negative in front); sky/uncovered texels are cleared
+// to 0 (no geometry). Map those to "infinitely far" so a moving foreground
+// blurs OVER the background instead of being clipped at its silhouette (z=0
+// would otherwise read as the nearest possible surface and invert the compare).
+float viewDist(float z) {
+    return z < 0.0 ? -z : 1.0e6;
 }
 
 // 1 when a is (softly) in front of b, 0 behind. Distances are POSITIVE.
@@ -53,12 +61,12 @@ void main()
         FragColor = vec4(centerColor, 1.0);
         return;
     }
-    vN *= min(vNlenPx, MAX_PIXELS) / vNlenPx; // clamp to the tile reach
+    vN *= min(vNlenPx, maxBlurPx) / vNlenPx; // clamp to the tile reach
 
     // This pixel's own velocity + depth.
     vec4 cx = texture(velocityTex, TexCoords);
     float vClenPx = max(length(cx.xy * scale / texelSize), 0.5);
-    float depthX = -cx.z; // view Z is negative in front -> positive distance
+    float depthX = viewDist(cx.z); // positive distance; sky/uncovered -> far
 
     float jitter = ign(gl_FragCoord.xy) - 0.5;
 
@@ -74,7 +82,7 @@ void main()
         float distPx = length(offUv / texelSize);
 
         vec4 sy = texture(velocityTex, sampUv);
-        float depthY = -sy.z;
+        float depthY = viewDist(sy.z);
         float vYlenPx = max(length(sy.xy * scale / texelSize), 0.5);
 
         // Soft depth ordering: does Y sit in front of X (Y's blur covers X), or

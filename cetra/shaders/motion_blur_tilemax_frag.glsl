@@ -19,10 +19,9 @@ void main()
     float maxLen2 = 0.0;
     for (int y = 0; y < tileSize; y++) {
         for (int x = 0; x < tileSize; x++) {
-            // Clamp so the last (partial) tile never wraps to the opposite edge.
-            vec2 uv = clamp((base + vec2(float(x) + 0.5, float(y) + 0.5)) * auxTexel,
-                            vec2(0.0), vec2(1.0));
-            vec2 v = texture(auxTex, uv).xy;
+            // auxTex is CLAMP_TO_EDGE, so a partial-tile sample past uv=1 already
+            // resolves to the edge texel -- no explicit clamp/wrap guard needed.
+            vec2 v = texture(auxTex, (base + vec2(float(x) + 0.5, float(y) + 0.5)) * auxTexel).xy;
             float l2 = dot(v, v);
             if (l2 > maxLen2) {
                 maxLen2 = l2;

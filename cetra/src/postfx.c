@@ -710,6 +710,7 @@ static void postfx_run_motion_blur(PostFX* fx) {
     glBindTexture(GL_TEXTURE_2D, fx->aux_texture);
     uniform_set_vec2(fx->motion_blur_program->uniforms, "texelSize", aux_texel);
     uniform_set_float(fx->motion_blur_program->uniforms, "scale", fx->motion_blur_scale);
+    uniform_set_float(fx->motion_blur_program->uniforms, "maxBlurPx", (float)MOTION_BLUR_TILE);
     draw_fullscreen_quad(fx->quad_vao);
 
     // Copy the reconstructed scene back over the HDR buffer (same size/format,
