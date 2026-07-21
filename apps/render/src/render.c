@@ -1006,10 +1006,10 @@ static void attach_window_dust(Engine* engine, Scene* scene, vec3 center, float 
 
     ParticleEmitter* em = create_particle_emitter("dust", 3600);
     particle_emitter_set_renderer(em, create_billboard_particle_renderer(prog));
-    particle_emitter_add_module(em, particle_module_spawn_rate(110.0f));      // sparse but present
+    particle_emitter_add_module(em, particle_module_spawn_rate(110.0f)); // sparse but present
     particle_emitter_add_module(em, particle_module_init_box_location(lo, hi));
     particle_emitter_add_module(em, particle_module_init_lifetime(15.0f, 30.0f)); // long, drifty
-    particle_emitter_add_module(em, particle_module_init_size(0.0015f, 0.006f));  // very small motes
+    particle_emitter_add_module(em, particle_module_init_size(0.0015f, 0.006f)); // very small motes
     // Dim base so shadowed motes nearly vanish and only sun-lit ones pop; the
     // warm SunKey tints them and bloom haloes the brightest in the beam.
     particle_emitter_add_module(em,
