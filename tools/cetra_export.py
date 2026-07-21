@@ -732,7 +732,21 @@ def collect_camera(exported, manifest):
             if along > 0.1:
                 dist = along
     target_b = eye_b + fwd_b * dist
-    vfov = math.degrees(cam.data.angle_y)
+    # Vertical FOV as the camera actually frames it: with AUTO/HORIZONTAL
+    # sensor fit (the default on landscape renders) the lens maps to the
+    # sensor width, so derive vfov from angle_x and the render aspect.
+    # angle_y alone would report the 24mm-sensor-height FOV, which is wider
+    # than what the camera view shows.
+    r = bpy.context.scene.render
+    aspect = (r.resolution_x * r.pixel_aspect_x) / (r.resolution_y * r.pixel_aspect_y)
+    fit = cam.data.sensor_fit
+    if fit == "AUTO":
+        fit = "HORIZONTAL" if aspect >= 1.0 else "VERTICAL"
+    if fit == "VERTICAL":
+        vfov_rad = cam.data.angle_y
+    else:
+        vfov_rad = 2.0 * math.atan(math.tan(cam.data.angle_x / 2.0) / aspect)
+    vfov = math.degrees(vfov_rad)
     manifest.append("camera '%s' (vfov %.1f, target %.1fm along view)" % (cam.name, vfov, dist))
     return {"eye": yup(eye_b), "target": yup(target_b), "fov": round(vfov, 2)}
 
