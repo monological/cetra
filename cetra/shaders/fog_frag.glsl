@@ -148,6 +148,13 @@ void main()
     float spotPhase = (spotEnabled == 1)
                           ? phaseHG(dot(spotDir, -rayDir), anisotropy) * sunBoost
                           : 0.0;
+    // The spot-shadow projection is affine along the ray (as for the directional
+    // casters), so hoist base + t*delta and skip the per-step matrix multiply.
+    vec4 spotLsBase = vec4(0.0), spotLsDelta = vec4(0.0);
+    if (spotEnabled == 1 && spotShadowed == 1) {
+        spotLsBase = spotLightSpaceMatrix * vec4(camPos, 1.0);
+        spotLsDelta = spotLightSpaceMatrix * vec4(rayDir, 0.0);
+    }
 
     float dt = tEnd / float(steps);
     vec3 L = vec3(0.0);
@@ -164,9 +171,8 @@ void main()
         for (int j = 0; j < numLights; j++) {
             S += lightK[j] * fogVisibility(j * cascadeCount, t);
         }
-        // Spot in-scatter at P: inside the cone, falling off with distance. The
-        // cone axis alignment mirrors pbr_frag's spotConeFactor. (Phase 2 will
-        // multiply this by a per-step spot-shadow visibility.)
+        // Spot in-scatter at P: inside the cone, falling off with distance, cut
+        // by the spot's shadow. Cone alignment mirrors pbr_frag's spotConeFactor.
         if (spotEnabled == 1) {
             vec3 toL = spotPos - P;
             float d = length(toL);
@@ -178,10 +184,12 @@ void main()
                 // Perspective spot shadow: is P visible to the flashlight?
                 float vis = 1.0;
                 if (spotShadowed == 1) {
-                    vec4 ls = spotLightSpaceMatrix * vec4(P, 1.0);
-                    vec3 pc = ls.xyz / ls.w * 0.5 + 0.5;
-                    if (pc.z <= 1.0 && pc.x >= 0.0 && pc.x <= 1.0 && pc.y >= 0.0 && pc.y <= 1.0)
-                        vis = (pc.z - shadowBias > texture(spotShadowMap, pc.xy).r) ? 0.0 : 1.0;
+                    vec4 ls = spotLsBase + t * spotLsDelta; // affine, no per-step matrix
+                    if (ls.w > 0.0) {                       // in front of the light plane
+                        vec3 pc = ls.xyz / ls.w * 0.5 + 0.5;
+                        if (pc.z <= 1.0 && pc.x >= 0.0 && pc.x <= 1.0 && pc.y >= 0.0 && pc.y <= 1.0)
+                            vis = (pc.z - shadowBias > texture(spotShadowMap, pc.xy).r) ? 0.0 : 1.0;
+                    }
                 }
                 S += spotColor * (cone * atten * spotPhase * vis);
             }

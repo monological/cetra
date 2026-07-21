@@ -68,11 +68,7 @@ void free_shadow_system(ShadowSystem* system) {
     for (int i = 0; i < MAX_SHADOW_LIGHTS; i++) {
         free_shadow_caster(&system->casters[i]);
     }
-
-    if (system->spot_fbo)
-        glDeleteFramebuffers(1, &system->spot_fbo);
-    if (system->spot_shadow_map)
-        glDeleteTextures(1, &system->spot_shadow_map);
+    free_shadow_caster(&system->spot_caster);
 
     free(system);
 }
@@ -360,7 +356,7 @@ void bind_shadow_maps_to_program(ShadowSystem* system, ShaderProgram* program,
     // Perspective spot shadow map (the flashlight) on its own unit above IBL, so
     // a shadow-casting spot occludes surfaces (e.g. the ball's shadow on the floor).
     glActiveTexture(GL_TEXTURE0 + SPOT_SHADOW_MAP_TEXTURE_UNIT);
-    glBindTexture(GL_TEXTURE_2D, system->spot_active ? system->spot_shadow_map : 0);
+    glBindTexture(GL_TEXTURE_2D, system->spot_active ? system->spot_caster.depth_texture : 0);
     uniform_set_int(u, "spotShadowMap", SPOT_SHADOW_MAP_TEXTURE_UNIT);
     uniform_set_int(u, "spotShadowActive", system->spot_active ? 1 : 0);
     if (system->spot_active)
@@ -431,34 +427,18 @@ static void _render_shadow_node(SceneNode* node, ShaderProgram* program, GLuint*
     }
 }
 
-// Lazily allocate the standalone perspective spot shadow map (2D depth + FBO),
-// mirroring init_shadow_caster. Kept apart from the directional cascade array.
-static bool ensure_spot_shadow_map(ShadowSystem* system) {
-    if (system->spot_shadow_map)
-        return true;
-    system->spot_map_size = system->spot_map_size > 0 ? system->spot_map_size : 1024;
-    int size = system->spot_map_size;
-    glGenFramebuffers(1, &system->spot_fbo);
-    glBindFramebuffer(GL_FRAMEBUFFER, system->spot_fbo);
-    glGenTextures(1, &system->spot_shadow_map);
-    glBindTexture(GL_TEXTURE_2D, system->spot_shadow_map);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, size, size, 0, GL_DEPTH_COMPONENT, GL_FLOAT,
-                 NULL);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
-    float border[] = {1.0f, 1.0f, 1.0f, 1.0f}; // out-of-cone reads = lit
-    glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, border);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D,
-                           system->spot_shadow_map, 0);
-    glDrawBuffer(GL_NONE);
-    glReadBuffer(GL_NONE);
-    bool ok = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
-    if (!ok)
-        log_error("Spot shadow framebuffer incomplete");
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    return ok;
+// v1: "the flashlight" is the first spot light in the scene. Shared by the depth
+// pass (renders its map iff it casts) and the fog publish (scatters its cone), so
+// the in-scatter and the shadow can never refer to different lights.
+static const Light* scene_first_spot_light(const Scene* scene) {
+    if (!scene || !scene->lights)
+        return NULL;
+    for (size_t i = 0; i < scene->light_count; i++) {
+        const Light* l = scene->lights[i];
+        if (l && l->type == LIGHT_SPOT)
+            return l;
+    }
+    return NULL;
 }
 
 // Perspective light-space matrix for a spot: eye at the spot looking along its
@@ -503,16 +483,10 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
         }
     }
 
-    // A shadow-casting spot (v1: the first) drives the standalone perspective
-    // spot map, independent of the directional caster count / early-out below.
-    const Light* spot_light = NULL;
-    for (size_t i = 0; i < scene->light_count; ++i) {
-        const Light* l = scene->lights[i];
-        if (l && l->type == LIGHT_SPOT && l->cast_shadows) {
-            spot_light = l;
-            break;
-        }
-    }
+    // The flashlight (v1: the first spot) drives the standalone perspective spot
+    // map when it casts, independent of the directional caster count / early-out.
+    const Light* flashlight = scene_first_spot_light(scene);
+    const Light* spot_light = (flashlight && flashlight->cast_shadows) ? flashlight : NULL;
 
     // Clamp the runtime count into the compile-time ceiling: the splits and
     // matrix arrays are sized by SHADOW_CASCADES and the count is writable
@@ -665,11 +639,12 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     }
 
     // Standalone perspective spot shadow map (for the volumetric beam + surface
-    // spot shadows). Reuses the bound depth program + front-face cull.
-    if (spot_light && ensure_spot_shadow_map(ss)) {
+    // spot shadows). Reuses the ShadowCaster fbo/depth_texture pair (init is a
+    // no-op after the first frame), the bound depth program, and front-face cull.
+    if (spot_light && init_shadow_caster(&ss->spot_caster, SPOT_SHADOW_MAP_SIZE) == 0) {
         compute_spot_light_space_matrix(spot_light, 1.0f, 55.0f, ss->spot_light_space);
-        glBindFramebuffer(GL_FRAMEBUFFER, ss->spot_fbo);
-        glViewport(0, 0, ss->spot_map_size, ss->spot_map_size);
+        glBindFramebuffer(GL_FRAMEBUFFER, ss->spot_caster.fbo);
+        glViewport(0, 0, ss->spot_caster.map_size, ss->spot_caster.map_size);
         glClear(GL_DEPTH_BUFFER_BIT);
         uniform_set_mat4(ss->depth_program->uniforms, "lightSpaceMatrix",
                          (const float*)ss->spot_light_space);
@@ -702,26 +677,20 @@ void shadow_publish_to_postfx(const Scene* scene, PostFX* fx) {
     if (!fx)
         return;
 
-    // Volumetric spot (the flashlight): the fog scatters it into a beam shaft.
-    // Published independently of the directional shadow path below, so it works
-    // even with the shadow system off. v1 takes the first LIGHT_SPOT.
-    fx->fog_spot_enabled = false;
-    if (scene && scene->lights) {
-        for (size_t i = 0; i < scene->light_count; i++) {
-            const Light* sp = scene->lights[i];
-            if (!sp || sp->type != LIGHT_SPOT)
-                continue;
-            glm_vec3_copy((float*)sp->global_position, fx->fog_spot_pos);
-            glm_vec3_normalize_to((float*)sp->direction, fx->fog_spot_dir);
-            glm_vec3_scale((float*)sp->color, sp->intensity, fx->fog_spot_color);
-            fx->fog_spot_atten[0] = sp->constant;
-            fx->fog_spot_atten[1] = sp->linear;
-            fx->fog_spot_atten[2] = sp->quadratic;
-            fx->fog_spot_cos_inner = sp->cutOff;
-            fx->fog_spot_cos_outer = sp->outerCutOff;
-            fx->fog_spot_enabled = true;
-            break;
-        }
+    // Volumetric spot (the flashlight): the fog scatters its cone into a beam
+    // shaft. Same light the depth pass renders, so in-scatter and shadow agree.
+    // Published even with the shadow system off (an unshadowed beam still works).
+    const Light* sp = scene_first_spot_light(scene);
+    fx->fog_spot_enabled = sp != NULL;
+    if (sp) {
+        glm_vec3_copy((float*)sp->global_position, fx->fog_spot_pos);
+        glm_vec3_normalize_to((float*)sp->direction, fx->fog_spot_dir);
+        glm_vec3_scale((float*)sp->color, sp->intensity, fx->fog_spot_color);
+        fx->fog_spot_atten[0] = sp->constant;
+        fx->fog_spot_atten[1] = sp->linear;
+        fx->fog_spot_atten[2] = sp->quadratic;
+        fx->fog_spot_cos_inner = sp->cutOff;
+        fx->fog_spot_cos_outer = sp->outerCutOff;
     }
 
     // Spot shadow (Phase 2): occludes the beam by geometry. Published
@@ -729,9 +698,9 @@ void shadow_publish_to_postfx(const Scene* scene, PostFX* fx) {
     // directional casters).
     fx->fog_spot_shadowed = false;
     const ShadowSystem* sss = scene ? scene->shadow_system : NULL;
-    if (sss && sss->spot_active && sss->spot_shadow_map) {
+    if (sss && sss->spot_active && sss->spot_caster.depth_texture) {
         glm_mat4_copy((vec4*)sss->spot_light_space, fx->fog_spot_light_space);
-        fx->fog_spot_shadow_map = sss->spot_shadow_map;
+        fx->fog_spot_shadow_map = sss->spot_caster.depth_texture;
         fx->fog_spot_shadowed = true;
     }
 

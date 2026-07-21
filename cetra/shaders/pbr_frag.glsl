@@ -602,6 +602,20 @@ float calculateShadow(int shadowIndex, int cascade, vec3 worldPos, float NdotL, 
     return visibility;
 }
 
+// Perspective spot (flashlight) shadow: 1 = lit, 0 = occluded. A single tap with
+// a slope-scaled bias (grazing floor pool stays acne-free); out of the frustum
+// (behind the light or past its far plane / cone) stays lit via the white border.
+float calculateSpotShadow(vec3 worldPos, float NdotL) {
+    vec4 ls = spotShadowMatrix * vec4(worldPos, 1.0);
+    if (ls.w <= 0.0)
+        return 1.0;
+    vec3 pc = ls.xyz / ls.w * 0.5 + 0.5;
+    if (pc.z > 1.0 || pc.x < 0.0 || pc.x > 1.0 || pc.y < 0.0 || pc.y > 1.0)
+        return 1.0;
+    float bias = max(0.0015 * (1.0 - NdotL), 0.0004);
+    return (pc.z - bias > texture(spotShadowMap, pc.xy).r) ? 0.0 : 1.0;
+}
+
 // Per-pixel screen-space motion vector in UV units: current vs previous
 // un-jittered clip position. Shared by the velocity G-buffer and the debug view.
 vec2 screenVelocity() {
@@ -1061,17 +1075,9 @@ void main() {
                                          max(lights[i].size.x, lights[i].size.y));
             }
         }
-        // Spot (flashlight) shadow: sample its perspective map (w-divide). A
-        // slope-scaled bias keeps the grazing floor pool free of acne.
+        // Spot (flashlight) shadow: its own perspective map (see calculateSpotShadow).
         if (lights[i].type == 2 && spotShadowActive == 1 && alphaToCoverage == 0) {
-            vec4 ls = spotShadowMatrix * vec4(WorldPos, 1.0);
-            vec3 pc = ls.xyz / ls.w * 0.5 + 0.5;
-            if (ls.w > 0.0 && pc.z <= 1.0 && pc.x >= 0.0 && pc.x <= 1.0 && pc.y >= 0.0 &&
-                pc.y <= 1.0) {
-                float bias = max(0.0015 * (1.0 - NdotL), 0.0004);
-                if (pc.z - bias > texture(spotShadowMap, pc.xy).r)
-                    shadow = 0.0;
-            }
+            shadow = calculateSpotShadow(WorldPos, NdotL);
         }
 
         // POM self-shadow: raised relief casts into the grooves toward each light.

@@ -11,6 +11,7 @@
 #define MAX_SHADOW_LIGHTS       3
 #define SHADOW_CASCADES         3 // Compile-time cascade ceiling (runtime: cascade_count)
 #define DEFAULT_SHADOW_MAP_SIZE 2048
+#define SPOT_SHADOW_MAP_SIZE    1024 // the standalone perspective spot (flashlight) map
 // Engine-owned sampler units sit just above the material units (common.h).
 // Packing the scalar masks into one array freed the 10-12 range, letting the
 // shadow + IBL units drop below 16 so brdfLUT/skybox are no longer bound
@@ -58,11 +59,11 @@ typedef struct ShadowSystem {
     vec4 cascade_params[MAX_SHADOW_LIGHTS * SHADOW_CASCADES]; // width, near, far, biasScale
     float cascade_splits[SHADOW_CASCADES];                    // View-depth far bound per cascade
 
-    // One perspective spot shadow map (v1: the flashlight), a standalone
-    // GL_TEXTURE_2D depth map kept apart from the directional cascade array so
-    // its perspective projection doesn't disturb the ortho affine-shadow path.
-    GLuint spot_fbo, spot_shadow_map;
-    int spot_map_size;
+    // One perspective spot shadow map (v1: the flashlight), a standalone 2D
+    // depth map kept apart from the directional cascade array so its perspective
+    // projection doesn't disturb the ortho affine-shadow path. Reuses the
+    // ShadowCaster fbo/depth_texture pair (the array path never used it).
+    ShadowCaster spot_caster;
     mat4 spot_light_space; // perspective proj * lookAt from the spot
     bool spot_active;      // a shadow-casting spot was rendered this frame
 } ShadowSystem;
