@@ -441,6 +441,18 @@ float calculateAttenuation(float distance, float constant, float linear, float q
     return 1.0 / max(constant + linear * distance + quadratic * (distance * distance), 1e-4);
 }
 
+// Spot-cone falloff (LIGHT_SPOT = type 2): 1 inside the inner cone, smoothly to
+// 0 across to the outer cone; 1 for every non-spot light. cutOff/outerCutOff are
+// the cosines of the inner/outer half-angles. `L` is the frag->light direction;
+// the spot aims along `direction`, so -direction points back up the beam axis.
+float spotConeFactor(Light light, vec3 L) {
+    if (light.type != 2)
+        return 1.0;
+    float theta = dot(L, normalize(-light.direction));
+    float epsilon = max(light.cutOff - light.outerCutOff, 1e-4);
+    return clamp((theta - light.outerCutOff) / epsilon, 0.0, 1.0);
+}
+
 // 16-tap Poisson disk (unit radius) for the PCSS blocker search and filter.
 // Sampled UNROTATED: a per-pixel rotation decorrelates the pattern between
 // neighbours, which turns the 16-tap quantization into per-pixel shadow noise
@@ -858,6 +870,7 @@ void main() {
                 float distance = length(lights[i].position - WorldPos);
                 attenuation = calculateAttenuation(distance, lights[i].constant,
                                                    lights[i].linear, lights[i].quadratic);
+                attenuation *= spotConeFactor(lights[i], L);
             }
             float NdotL = max(dot(N, L), 0.0);
             Lo += albedoMap * lights[i].color * lights[i].intensity * attenuation * NdotL;
@@ -970,6 +983,7 @@ void main() {
             float distance = length(lights[i].position - WorldPos);
             attenuation = calculateAttenuation(distance, lights[i].constant,
                                                lights[i].linear, lights[i].quadratic);
+            attenuation *= spotConeFactor(lights[i], L);
         }
 
         // Half vector, guarded: where the light is directly behind the

@@ -158,6 +158,24 @@ static void on_init(Game* game) {
     set_node_light(key_node, key);
     add_child_node(root, key_node);
 
+    // A flashlight: a crisp white spot cone from the left of the camera aimed at
+    // the scene center, raking across the room. Spot lights now shade their cone
+    // (pbr_frag spotConeFactor); the tight inner->outer band gives a sharp edge.
+    Light* flash = create_light();
+    set_light_name(flash, "flashlight");
+    set_light_type(flash, LIGHT_SPOT);
+    set_light_original_position(flash, (vec3){-14.0f, 7.0f, 19.0f}); // left of the camera
+    set_light_direction(flash, (vec3){14.0f, -7.0f, -21.0f});        // toward the scene center (floor)
+    set_light_color(flash, (vec3){1.0f, 0.97f, 0.90f});
+    set_light_intensity(flash, 45.0f);
+    set_light_attenuation(flash, 1.0f, 0.018f, 0.0012f); // carries across the ~24u room
+    set_light_cutoff(flash, cosf(glm_rad(18.0f)), cosf(glm_rad(20.0f))); // sharp 18->20 deg edge
+    add_light_to_scene(scene, flash);
+    SceneNode* flash_node = create_node();
+    set_node_name(flash_node, "flashlight");
+    set_node_light(flash_node, flash);
+    add_child_node(root, flash_node);
+
     // Room-scale shadows.
     if (scene->shadow_system) {
         scene->shadow_system->ortho_size = 14.0f;
