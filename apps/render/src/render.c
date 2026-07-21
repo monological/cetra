@@ -45,7 +45,6 @@ const float CAM_ANGULAR_SPEED = 0.5f;
 // makes dark, rough materials (near-black armor) read instead of flattening
 const float KEY_LIGHT_TOTAL_INTENSITY = 10.0f;
 
-
 static void print_usage(const char* prog) {
     fprintf(stderr, "Usage: %s -m <model> [options]\n\n", prog);
     fprintf(stderr, "Options:\n");
@@ -199,11 +198,11 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->shadow_softness = -1.0f; // -1 = keep the engine default
     args->sun_elevation = -999.0f; // -999 = keep the sky default
     args->sun_azimuth = -999.0f;
-    args->bloom_enable = -1;       // -1 = keep the engine default
-    args->bloom_strength = -1.0f;  // -1 = keep the engine default
-    args->bloom_threshold = -1.0f; // -1 = keep the engine default
+    args->bloom_enable = -1;        // -1 = keep the engine default
+    args->bloom_strength = -1.0f;   // -1 = keep the engine default
+    args->bloom_threshold = -1.0f;  // -1 = keep the engine default
     args->fog_anisotropy = -999.0f; // -999 = keep default (-1..1 is valid)
-    args->ibl_intensity = -1.0f;   // -1 = keep the engine default
+    args->ibl_intensity = -1.0f;    // -1 = keep the engine default
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
@@ -762,9 +761,9 @@ static AnimationState* anim_state = NULL;
 static float last_frame_time = 0.0f;
 
 /*
- * Frame limit (--frames)
+ * Frame counter (for the --check-stretch gate; --frames now uses the engine's
+ * own exit_after_frames)
  */
-static int max_frames = 0;
 static int frames_rendered = 0;
 
 /*
@@ -974,9 +973,7 @@ void render_scene_callback(Engine* engine, Scene* current_scene) {
     if (!engine || !root_node)
         return;
 
-    if (max_frames > 0 && ++frames_rendered >= max_frames) {
-        glfwSetWindowShouldClose(engine->window, GLFW_TRUE);
-    }
+    frames_rendered++; // drives the --check-stretch gate below
 
     float time_value = glfwGetTime();
     float delta_time = time_value - last_frame_time;
@@ -1214,7 +1211,7 @@ int main(int argc, char** argv) {
     set_engine_screenshot_every(engine, args.screenshot_every);
     if (args.ssaa > 0)
         set_engine_ss_scale(engine, args.ssaa);
-    max_frames = args.max_frames;
+    set_engine_exit_after_frames(engine, args.max_frames);
     check_stretch = args.check_stretch;
 
     if (init_engine(engine) != 0) {
@@ -2067,7 +2064,7 @@ int main(int argc, char** argv) {
         set_engine_taa_enabled(engine, true);
     }
 
-    run_engine_render_loop(engine, render_scene_callback);
+    engine_run(engine, NULL, render_scene_callback);
 
     printf("Cleaning up...\n");
     if (anim_state) {

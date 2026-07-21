@@ -28,9 +28,9 @@ typedef struct GameConfig {
     double max_frame_time; // Max frame time before clamping (default: 0.25)
     bool vsync;            // Enable vsync (default: true)
     bool show_debug_gui;   // Show debug GUI (default: false)
-    // Headless / CI verification (mirrors run_engine_render_loop's own support,
-    // which run_game otherwise lacks): hidden window + no vsync, deterministic
-    // frame-count exit, and a final-frame PPM screenshot.
+    // Headless / CI verification (routed onto the engine, which owns the loop):
+    // hidden window + no vsync, deterministic frame-count exit, and a final-frame
+    // PPM screenshot.
     bool headless;               // Hidden window, no vsync (set before init_engine)
     int exit_after_frames;       // Exit cleanly after N rendered frames (0 = run forever)
     const char* screenshot_path; // Save the final frame here as PPM (NULL = off)
@@ -47,28 +47,15 @@ typedef struct Game {
     // Input state (polled)
     GameInputState input;
 
-    // Timing
+    // Timing (fixed-timestep sim only; frame dt / FPS / screenshot / frame-limit
+    // all live on the Engine now that it owns the loop)
     double fixed_timestep;
     double accumulator;
-    double time; // Total game time
-    double last_time;
-    double max_frame_time;
-
-    // Frame info
-    double delta_time; // Time since last frame (variable)
-    double fps;
-    int frame_count;
-    double fps_timer;
+    double time;           // Total game (sim) time
+    double max_frame_time; // Frame-time clamp (spiral-of-death guard)
 
     // State
-    bool running;
     bool paused;
-    bool show_debug_gui;
-
-    // Headless / CI verification (see GameConfig)
-    int exit_after_frames;       // Exit after N rendered frames (0 = run forever)
-    const char* screenshot_path; // Final-frame PPM path (NULL = off)
-    size_t total_frames;         // Monotonic rendered-frame counter (distinct from fps frame_count)
 
     // Callbacks
     GameInitFunc on_init;

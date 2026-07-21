@@ -79,6 +79,10 @@ static void on_init(Game* game) {
     Engine* engine = game->engine;
     g_pbr = get_engine_shader_program_by_name(engine, "pbr");
 
+    // FPS readout pinned top-right (like the render app). Skipped in headless: the
+    // digits change per run and would break screenshot determinism.
+    set_engine_show_fps(engine, !engine->headless);
+
     Scene* scene = create_scene();
     SceneNode* root = create_node();
     set_node_name(root, "root");

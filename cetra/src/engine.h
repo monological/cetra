@@ -157,7 +157,9 @@ typedef struct Engine {
 
     char* screenshot_path; // If set, save final frame here on exit (PPM)
     int screenshot_every;  // Also save numbered frames every N frames (0 = off)
+    int exit_after_frames; // Close the loop after N frames (0 = off); CI/headless
     size_t total_frames;   // Monotonic frame counter for the render loop
+    void* user_data;       // Opaque context for engine_run's callbacks (GLFW-style)
 
     // Bone visualization
     ShaderProgram* bone_program;
@@ -188,11 +190,13 @@ typedef struct Engine {
     TextRenderer* text_renderer;
 } Engine;
 
-// Per-frame scene render callback. Output is scene-referred linear HDR: in
-// PBR mode everything drawn here (including overlays) goes through bloom,
-// exposure, and tone mapping in the present pass. Only the GUI is drawn
-// after tone mapping.
-typedef void (*RenderSceneFunc)(Engine*, Scene*);
+// Unified main-loop callbacks (engine_run). `update` runs once per frame before
+// the render, with the real (unclamped) frame dt; pass NULL for a pure render
+// loop. `render` draws the scene -- its output is scene-referred linear HDR
+// (bloom/exposure/tone mapping run in the present pass; only the GUI draws after
+// tone mapping).
+typedef void (*EngineUpdateFunc)(Engine* engine, float dt);
+typedef void (*EngineRenderFunc)(Engine* engine, Scene* scene);
 
 Engine* create_engine(const char* window_title, int width, int height);
 void free_engine(Engine* engine);
@@ -209,10 +213,9 @@ void set_engine_msaa_samples(Engine* engine, int samples);
 void set_engine_taa_enabled(Engine* engine, bool enabled);
 void set_engine_screenshot_path(Engine* engine, const char* path);
 void set_engine_screenshot_every(Engine* engine, int every);
-// Capture the current default framebuffer (GL_BACK, after present + GUI) to a
-// binary PPM immediately. Public wrapper around the internal writer, for render
-// loops other than run_engine_render_loop (e.g. run_game) that capture outside it.
-void engine_capture_screenshot(const Engine* engine, const char* path);
+// Exit the main loop after `frames` rendered frames (0 = run until the window
+// closes). Fires the same final-frame screenshot path as a normal quit.
+void set_engine_exit_after_frames(Engine* engine, int frames);
 
 // GLFW callbacks
 void set_engine_error_callback(Engine* engine, GLFWerrorfun error_callback);
@@ -246,9 +249,9 @@ void set_engine_show_fps(Engine* engine, bool show_fps);
 
 // Present the frame: resolve the MSAA framebuffer through the post stack
 // (bloom + tone map, or a raw copy for non-PBR frame_mode) into the default
-// framebuffer, then optionally draw the GUI on top. Used by every render
-// loop that draws into engine->framebuffer.
-void engine_present_frame(Engine* engine, RenderMode frame_mode, bool draw_gui);
+// framebuffer, then draw the GUI on top (auto-gated on the panel flags via
+// gui_frame_active). Called by engine_run.
+void engine_present_frame(Engine* engine, RenderMode frame_mode);
 
 // Select which color attachments the scene pass writes: attachment 0 only,
 // or 0 + the view-space normals target (used by SSAO/SSR). Render passes
@@ -276,7 +279,20 @@ void engine_end_oit_pass(Engine* engine);
 // Render
 void set_engine_show_wireframe(Engine* engine, bool show_wireframe);
 void set_engine_show_xyz(Engine* engine, bool show_xyz);
-void run_engine_render_loop(Engine* engine, RenderSceneFunc render_func);
+
+// Opaque context for engine_run's callbacks (like glfwSetWindowUserPointer): the
+// render callbacks stay untyped (Engine*, Scene*); a caller that needs its own
+// state (e.g. the game framework) stashes it here and reads it back in the callback.
+// NOTE: run_game reserves this slot for its Game* -- a game app must NOT set it
+// (use game_set_user_data / game->user_data for app state instead).
+void engine_set_user_data(Engine* engine, void* user_data);
+void* engine_get_user_data(const Engine* engine);
+
+// The unified main loop: owns the frame skeleton (dt, FPS, GUI frame, shadow
+// pass, G-buffer setup, present, screenshot, swap). `update` runs once per frame
+// before rendering (NULL for pure render loops); `render` draws the scene. The
+// render apps and the game framework's run_game all drive the engine through it.
+void engine_run(Engine* engine, EngineUpdateFunc update, EngineRenderFunc render);
 
 // Drag/pick helpers
 void get_mouse_world_position_on_drag_plane(Engine* engine, double mouse_fb_x, double mouse_fb_y,

@@ -472,7 +472,7 @@ int main() {
     set_engine_show_wireframe(engine, false);
     set_engine_show_xyz(engine, false);
 
-    run_engine_render_loop(engine, render_scene_callback);
+    engine_run(engine, NULL, render_scene_callback);
 
     printf("Cleaning up...\n");
     free_mouse_drag_controller(drag_controller);

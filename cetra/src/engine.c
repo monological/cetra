@@ -196,7 +196,9 @@ Engine* create_engine(const char* window_title, int width, int height) {
     engine->gui_frame_active = false;
     engine->screenshot_path = NULL;
     engine->screenshot_every = 0;
+    engine->exit_after_frames = 0;
     engine->total_frames = 0;
+    engine->user_data = NULL;
 
     engine->bone_program = NULL;
     engine->bone_line_vao = 0;
@@ -1207,6 +1209,12 @@ void set_engine_screenshot_every(Engine* engine, int every) {
     engine->screenshot_every = every > 0 ? every : 0;
 }
 
+void set_engine_exit_after_frames(Engine* engine, int frames) {
+    if (!engine)
+        return;
+    engine->exit_after_frames = frames > 0 ? frames : 0;
+}
+
 /*
  * Build a numbered variant of a screenshot path: /tmp/shot.ppm -> /tmp/shot_000042.ppm
  */
@@ -1257,10 +1265,13 @@ static void _save_framebuffer_ppm(const Engine* engine, const char* path) {
     log_info("Saved screenshot: %s (%dx%d)", path, w, h);
 }
 
-void engine_capture_screenshot(const Engine* engine, const char* path) {
-    if (!engine || !path)
-        return;
-    _save_framebuffer_ppm(engine, path);
+void engine_set_user_data(Engine* engine, void* user_data) {
+    if (engine)
+        engine->user_data = user_data;
+}
+
+void* engine_get_user_data(const Engine* engine) {
+    return engine ? engine->user_data : NULL;
 }
 
 // A checkbox that enables a group of dependent parameters. The parameters stay
@@ -1657,7 +1668,7 @@ void set_engine_show_xyz(Engine* engine, bool show_xyz) {
     }
 }
 
-void engine_present_frame(Engine* engine, RenderMode frame_mode, bool draw_gui) {
+void engine_present_frame(Engine* engine, RenderMode frame_mode) {
     if (!engine)
         return;
 
@@ -1690,9 +1701,9 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode, bool draw_gui) 
         sky_debug_blit_luts(fx_scene->sky, engine->fb_width, engine->fb_height);
     }
 
-    if (draw_gui) {
-        render_engine_gui(engine);
-    }
+    // GUI last, after tone mapping. render_engine_gui self-gates on
+    // gui_frame_active, so it no-ops when no panel/overlay is enabled.
+    render_engine_gui(engine);
 }
 
 void engine_set_scene_draw_buffers(const Engine* engine, bool with_gbuffer) {
@@ -1961,7 +1972,7 @@ static bool scene_has_subsurface(const Scene* scene) {
     return false;
 }
 
-void run_engine_render_loop(Engine* engine, RenderSceneFunc render_func) {
+void engine_run(Engine* engine, EngineUpdateFunc update, EngineRenderFunc render) {
     if (!engine)
         return;
 
@@ -1973,17 +1984,16 @@ void run_engine_render_loop(Engine* engine, RenderSceneFunc render_func) {
     engine->last_frame_time = glfwGetTime();
 
     while (!glfwWindowShouldClose(engine->window)) {
-        // Calculate delta time and FPS
+        // delta_time holds the honest (unclamped) per-frame dt; only the FPS
+        // average uses a clamped copy (a game re-clamps to its own max_frame_time
+        // for sim stability).
         double current_time = glfwGetTime();
         engine->delta_time = current_time - engine->last_frame_time;
         engine->last_frame_time = current_time;
 
-        // Clamp delta time to prevent physics explosions on frame drops
-        if (engine->delta_time > 0.1)
-            engine->delta_time = 0.1;
-
         engine->frame_count++;
-        engine->fps_update_timer += (float)engine->delta_time;
+        double fps_dt = engine->delta_time > 0.1 ? 0.1 : engine->delta_time;
+        engine->fps_update_timer += (float)fps_dt;
 
         if (engine->fps_update_timer >= 0.5f) {
             engine->fps = (float)engine->frame_count / engine->fps_update_timer;
@@ -2002,6 +2012,11 @@ void run_engine_render_loop(Engine* engine, RenderSceneFunc render_func) {
             ImGui_ImplGlfw_NewFrame();
             igNewFrame();
         }
+
+        // Per-frame update (input, physics, fixed-timestep sim for game apps),
+        // before the shadow pass so transform/particle updates land first.
+        if (update)
+            update(engine, (float)engine->delta_time);
 
         // Wireframe mode: use albedo-only rendering for performance
         RenderMode saved_render_mode = engine->current_render_mode;
@@ -2071,16 +2086,23 @@ void run_engine_render_loop(Engine* engine, RenderSceneFunc render_func) {
         // POM (§4.11): resolve height maps once the async texture loader drains.
         heights_ensure_resolved(current_scene, engine);
 
-        if (render_func != NULL && current_scene != NULL) {
-            render_func(engine, current_scene);
+        if (render != NULL && current_scene != NULL) {
+            render(engine, current_scene);
         }
 
         glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
         engine->current_render_mode = saved_render_mode;
 
-        engine_present_frame(engine, frame_mode, true);
+        engine_present_frame(engine, frame_mode);
 
         engine->total_frames++;
+
+        // Engine-owned frame limit (CI/headless): request close so the
+        // final-frame screenshot below fires this same iteration.
+        if (engine->exit_after_frames > 0 &&
+            engine->total_frames >= (size_t)engine->exit_after_frames) {
+            glfwSetWindowShouldClose(engine->window, GLFW_TRUE);
+        }
 
         // Periodic capture: numbered frames every N frames
         if (engine->screenshot_path && engine->screenshot_every > 0 &&
