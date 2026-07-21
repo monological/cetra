@@ -974,14 +974,13 @@ void key_callback(Engine* engine, int key, int scancode, int action, int mods) {
 
 // engine_run's per-frame update hook (the render app used NULL): tick any
 // particle systems on the current scene so they animate. A no-op when the scene
-// has no particle systems, so it is harmless for every model. `t` accumulates
-// real dt for the curl-noise clock.
-static double g_particle_time = 0.0;
+// has no particle systems, so it is harmless for every model. glfwGetTime() is
+// the monotonic curl-noise clock -- the same wall clock the app samples
+// everywhere else (render_scene_callback), so no separate accumulator is needed.
 static void render_frame_update(Engine* engine, float dt) {
     Scene* s = get_current_scene(engine);
     if (s)
-        scene_update_particle_systems(s, dt, (float)g_particle_time);
-    g_particle_time += (double)dt;
+        scene_update_particle_systems(s, dt, (float)glfwGetTime());
 }
 
 // Subtle sun-catching dust for the abandoned-window scene: a sparse cloud of
@@ -1000,12 +999,12 @@ static void attach_window_dust(Engine* engine, Scene* scene, vec3 center, float 
     particle_system_set_backend(sys, create_tf_particle_sim_backend());
 
     // Spawn box: the middle of the scene, a bit flatter than wide. Capacity must
-    // clear spawn_rate * max_lifetime (60 * 30 = 1800); 2500 leaves margin.
+    // clear spawn_rate * max_lifetime (110 * 30 = 3300); 3600 leaves margin.
     float ext = radius * 0.6f;
     vec3 lo = {center[0] - ext, center[1] - ext * 0.6f, center[2] - ext};
     vec3 hi = {center[0] + ext, center[1] + ext * 0.6f, center[2] + ext};
 
-    ParticleEmitter* em = create_particle_emitter("dust", 4000);
+    ParticleEmitter* em = create_particle_emitter("dust", 3600);
     particle_emitter_set_renderer(em, create_billboard_particle_renderer(prog));
     particle_emitter_add_module(em, particle_module_spawn_rate(110.0f));      // sparse but present
     particle_emitter_add_module(em, particle_module_init_box_location(lo, hi));
