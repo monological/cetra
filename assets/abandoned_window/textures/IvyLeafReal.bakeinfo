@@ -1,1 +1,1 @@
-{"res": 512, "passes": ["base", "rough"], "emit_strength": 1.0}
+{"res": 512, "passes": ["alpha", "base"], "emit_strength": 1.0}
