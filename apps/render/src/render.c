@@ -1933,6 +1933,22 @@ int main(int argc, char** argv) {
         set_camera_look_at(camera, args.cam_target);
         set_camera_up_vector(camera, up);
         camera->distance = glm_vec3_distance(args.cam_eye, args.cam_target);
+        // An explicit pose must survive interactive mode too: kill the
+        // auto-orbit animation (it recomputes the camera from theta/phi
+        // every frame, clobbering the pose one frame in) and seed the orbit
+        // angles from eye-target so a mouse drag continues from this exact
+        // view instead of snapping back to the default framing. Start in
+        // FREE mode (mirrored by the GUI radio) -- a pinned pose is a free
+        // camera; switching the radio to Orbit picks up the seeded angles.
+        set_mouse_drag_auto_orbit(drag_controller, false, CAM_ANGULAR_SPEED,
+                                  fminf(camera_distance * 0.5f, orbit_max), orbit_max);
+        set_engine_camera_mode(engine, CAMERA_MODE_FREE);
+        if (camera->distance > 1e-6f) {
+            vec3 offset;
+            glm_vec3_sub(args.cam_eye, args.cam_target, offset);
+            camera->theta = asinf(glm_clamp(offset[1] / camera->distance, -1.0f, 1.0f));
+            camera->phi = atan2f(offset[2], offset[0]);
+        }
         update_engine_camera_lookat(engine);
     } else if (args.cam_eye_set || args.cam_target_set) {
         fprintf(stderr,
