@@ -25,7 +25,7 @@ Material* create_material() {
     material->ao = 1.0f;
     material->opacity = 1.0f;
     material->alpha_mode = ALPHA_OPAQUE;
-    material->alphaCutoff = 0.0f;  // Disabled by default
+    material->alphaCutoff = 0.0f; // Disabled by default
     material->normalScale = 1.0f;
     material->aoStrength = 1.0f;
     material->ior = 1.5f;
@@ -34,9 +34,9 @@ Material* create_material() {
     material->filmThickness = 0.0f;
     material->clearcoat = 0.0f;
     material->clearcoat_roughness = 0.0f;
-    material->specular_factor = -1.0f;  // KHR_materials_specular absent until imported
+    material->specular_factor = -1.0f; // KHR_materials_specular absent until imported
     glm_vec3_one(material->specular_color_factor);
-    glm_vec3_zero(material->sheen_color_factor);  // (0,0,0) = no sheen until imported
+    glm_vec3_zero(material->sheen_color_factor); // (0,0,0) = no sheen until imported
     material->sheen_roughness_factor = 0.0f;
     material->parallax_scale = 0.0f; // POM off until a material opts in (§4.11)
     material->subsurface = 0.0f;     // SSS off until a material opts in

@@ -108,7 +108,6 @@ static void extract_rotation_quat(mat4 transform, versor out) {
     glm_quat_normalize(out);
 }
 
-
 /*
  * Texture mapping table for material loading
  */
@@ -175,8 +174,8 @@ static void extract_material_properties(struct aiMaterial* ai_mat, Material* mat
 
     // HDR emissive multiplier (glTF KHR_materials_emissive_strength)
     ai_real emissive_strength;
-    if (AI_SUCCESS == aiGetMaterialFloat(ai_mat, AI_MATKEY_EMISSIVE_INTENSITY,
-                                         &emissive_strength)) {
+    if (AI_SUCCESS ==
+        aiGetMaterialFloat(ai_mat, AI_MATKEY_EMISSIVE_INTENSITY, &emissive_strength)) {
         material->emissive_strength = emissive_strength;
     }
 
@@ -205,17 +204,17 @@ static void extract_material_properties(struct aiMaterial* ai_mat, Material* mat
 
     // Extract normal map scale (glTF normalTexture.scale)
     ai_real normalScale;
-    if (AI_SUCCESS ==
-        aiGetMaterialFloat(ai_mat, AI_MATKEY_GLTF_TEXTURE_SCALE(aiTextureType_NORMALS, 0),
-                           &normalScale)) {
+    if (AI_SUCCESS == aiGetMaterialFloat(ai_mat,
+                                         AI_MATKEY_GLTF_TEXTURE_SCALE(aiTextureType_NORMALS, 0),
+                                         &normalScale)) {
         material->normalScale = normalScale;
     }
 
     // Extract occlusion strength (glTF occlusionTexture.strength)
     ai_real aoStrength;
-    if (AI_SUCCESS ==
-        aiGetMaterialFloat(ai_mat, AI_MATKEY_GLTF_TEXTURE_STRENGTH(aiTextureType_LIGHTMAP, 0),
-                           &aoStrength)) {
+    if (AI_SUCCESS == aiGetMaterialFloat(ai_mat,
+                                         AI_MATKEY_GLTF_TEXTURE_STRENGTH(aiTextureType_LIGHTMAP, 0),
+                                         &aoStrength)) {
         material->aoStrength = aoStrength;
     }
 
@@ -230,7 +229,7 @@ static void extract_material_properties(struct aiMaterial* ai_mat, Material* mat
             if (AI_SUCCESS == aiGetMaterialFloat(ai_mat, AI_MATKEY_GLTF_ALPHACUTOFF, &cutoff)) {
                 material->alphaCutoff = cutoff;
             } else {
-                material->alphaCutoff = 0.5f;  // glTF default
+                material->alphaCutoff = 0.5f; // glTF default
             }
             log_info("Material uses alpha mask mode with cutoff=%.2f", material->alphaCutoff);
         } else if (strcmp(alphaMode.data, "BLEND") == 0) {
@@ -245,8 +244,7 @@ static void extract_material_properties(struct aiMaterial* ai_mat, Material* mat
     // stock default) that would silently kill dielectric specular if
     // imported unconditionally.
     ai_real transmission;
-    if (AI_SUCCESS ==
-        aiGetMaterialFloat(ai_mat, AI_MATKEY_TRANSMISSION_FACTOR, &transmission)) {
+    if (AI_SUCCESS == aiGetMaterialFloat(ai_mat, AI_MATKEY_TRANSMISSION_FACTOR, &transmission)) {
         material->transmission = transmission;
         if (transmission > 0.0f) {
             ai_real ior;
@@ -320,7 +318,8 @@ static void extract_material_properties(struct aiMaterial* ai_mat, Material* mat
 
     // Extract UV transform (KHR_texture_transform) from base color texture
     struct aiUVTransform uvTransform;
-    if (AI_SUCCESS == aiGetMaterialFloatArray(ai_mat, AI_MATKEY_UVTRANSFORM(aiTextureType_DIFFUSE, 0),
+    if (AI_SUCCESS == aiGetMaterialFloatArray(ai_mat,
+                                              AI_MATKEY_UVTRANSFORM(aiTextureType_DIFFUSE, 0),
                                               (float*)&uvTransform, NULL)) {
         material->uvOffset[0] = uvTransform.mTranslation.x;
         material->uvOffset[1] = uvTransform.mTranslation.y;
@@ -457,8 +456,7 @@ static void async_tex_callback(Texture* tex, void* user_data) {
 
 static void load_material_texture_async(AsyncLoader* loader, TexturePool* tex_pool, Material* mat,
                                         const char* filepath, bool is_srgb,
-                                        void (*setter)(Material*, Texture*),
-                                        const char* tex_type) {
+                                        void (*setter)(Material*, Texture*), const char* tex_type) {
     AsyncTexCallback* ctx = malloc(sizeof(AsyncTexCallback));
     if (!ctx) {
         log_error("Failed to allocate AsyncTexCallback");
@@ -474,8 +472,7 @@ static void load_material_texture_async(AsyncLoader* loader, TexturePool* tex_po
 static void load_material_texture(Material* material, TexturePool* tex_pool,
                                   const struct aiScene* ai_scene, AsyncLoader* loader,
                                   const char* tex_path, bool is_srgb,
-                                  void (*setter)(Material*, Texture*),
-                                  const char* tex_type_name) {
+                                  void (*setter)(Material*, Texture*), const char* tex_type_name) {
     if (tex_path[0] == '*' && ai_scene) {
         // Embedded textures are loaded synchronously (data already in memory)
         Texture* tex = load_embedded_texture(tex_pool, ai_scene, tex_path, is_srgb);
@@ -829,8 +826,7 @@ void process_ai_mesh_bones(Mesh* mesh, const struct aiMesh* ai_mesh, Skeleton* s
 
             // Find a co-triangle vertex that has weights and copy them
             for (size_t t = 0; t + 2 < mesh->index_count && !has_weights[v]; t += 3) {
-                if (mesh->indices[t] != v && mesh->indices[t + 1] != v &&
-                    mesh->indices[t + 2] != v)
+                if (mesh->indices[t] != v && mesh->indices[t + 1] != v && mesh->indices[t + 2] != v)
                     continue;
                 for (int e = 0; e < 3; e++) {
                     size_t n = mesh->indices[t + e];
@@ -981,8 +977,8 @@ static void process_ai_animations_internal(const struct aiScene* ai_scene, Scene
 
                 if (source_skeleton) {
                     // Find matching bone in source skeleton
-                    int source_idx = find_matching_bone_smart(source_skeleton,
-                                                              ai_channel->mNodeName.data);
+                    int source_idx =
+                        find_matching_bone_smart(source_skeleton, ai_channel->mNodeName.data);
                     if (source_idx >= 0) {
                         const Bone* source_bone = &source_skeleton->bones[source_idx];
                         glm_mat4_quat(source_bone->local_transform, source_local_rest);
@@ -1016,8 +1012,7 @@ static void process_ai_animations_internal(const struct aiScene* ai_scene, Scene
                 float delta_angle = 2.0f * acosf(fabsf(channel->rotation_delta[3])) * 57.2958f;
                 if (delta_angle > 5.0f) {
                     log_debug("Retarget '%s' -> '%s': delta=%.1f deg%s%s",
-                              ai_channel->mNodeName.data, target_bone->name,
-                              delta_angle,
+                              ai_channel->mNodeName.data, target_bone->name, delta_angle,
                               source_skeleton ? " (with source)" : " (no source)",
                               used_smart_match ? " (smart)" : "");
                 }
@@ -1039,13 +1034,15 @@ static void process_ai_animations_internal(const struct aiScene* ai_scene, Scene
 
         add_animation_to_scene(scene, animation);
         if (retargeted_channels > 0) {
-            log_info("Extracted animation '%s': %.2f ticks @ %.2f tps (%zu channels, %d matched, %d retargeted)",
+            log_info("Extracted animation '%s': %.2f ticks @ %.2f tps (%zu channels, %d matched, "
+                     "%d retargeted)",
                      animation->name, animation->duration, animation->ticks_per_second,
                      animation->channel_count, matched_channels, retargeted_channels);
         } else {
-            log_info("Extracted animation '%s': %.2f ticks @ %.2f tps (%zu channels, %d matched bones)",
-                     animation->name, animation->duration, animation->ticks_per_second,
-                     animation->channel_count, matched_channels);
+            log_info(
+                "Extracted animation '%s': %.2f ticks @ %.2f tps (%zu channels, %d matched bones)",
+                animation->name, animation->duration, animation->ticks_per_second,
+                animation->channel_count, matched_channels);
         }
 
         // Print bone mapping debug table
@@ -1059,10 +1056,8 @@ static void process_ai_animations_internal(const struct aiScene* ai_scene, Scene
                     const Bone* target_bone = &skeleton->bones[chan->bone_index];
                     float delta_angle = 2.0f * acosf(fabsf(chan->rotation_delta[3])) * 57.2958f;
                     printf("%-45s -> %-25s %6.1f deg%s\n",
-                           chan->bone_name ? chan->bone_name : "(unknown)",
-                           target_bone->name,
-                           delta_angle,
-                           chan->needs_retargeting ? " [R]" : "");
+                           chan->bone_name ? chan->bone_name : "(unknown)", target_bone->name,
+                           delta_angle, chan->needs_retargeting ? " [R]" : "");
                 } else {
                     printf("%-45s -> (UNMAPPED)\n",
                            chan->bone_name ? chan->bone_name : "(unknown)");
@@ -1369,14 +1364,14 @@ SceneNode* process_ai_node(Scene* scene, struct aiNode* ai_node, const struct ai
 void resolve_height_maps(Scene* scene) {
     if (!scene)
         return;
-    static const char* const SUFFIXES[] = {"_albedo", "_basecolor", "_basecolour",
-                                            "_diffuse", "_normal", "_norm", "_nrm"};
+    static const char* const SUFFIXES[] = {"_albedo", "_basecolor", "_basecolour", "_diffuse",
+                                           "_normal", "_norm",      "_nrm"};
     for (size_t m = 0; m < scene->material_count; m++) {
         Material* mat = scene->materials[m];
         if (!mat || mat->height_tex)
             continue;
         const char* src = mat->albedo_tex ? mat->albedo_tex->filepath
-                          : (mat->normal_tex ? mat->normal_tex->filepath : NULL);
+                                          : (mat->normal_tex ? mat->normal_tex->filepath : NULL);
         if (!src || !src[0])
             continue;
 
@@ -1397,8 +1392,8 @@ void resolve_height_maps(Scene* scene) {
         }
 
         char base[1024];
-        int n = snprintf(base, sizeof(base), "%.*s%.*s_height", (int)prefix_len, src,
-                         (int)core_len, name);
+        int n = snprintf(base, sizeof(base), "%.*s%.*s_height", (int)prefix_len, src, (int)core_len,
+                         name);
         if (n <= 0 || (size_t)n >= sizeof(base))
             continue;
 
@@ -1426,9 +1421,8 @@ void resolve_height_maps(Scene* scene) {
 }
 
 Scene* create_scene_from_model_path(const char* path, const char* texture_directory) {
-    const struct aiScene* ai_scene =
-        import_ai_scene(path, aiProcess_Triangulate | aiProcess_CalcTangentSpace |
-                              uv_flip_flag(path));
+    const struct aiScene* ai_scene = import_ai_scene(
+        path, aiProcess_Triangulate | aiProcess_CalcTangentSpace | uv_flip_flag(path));
     if (!ai_scene || ai_scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !ai_scene->mRootNode) {
         log_error("Error importing FBX file: %s\n", path);
         return NULL;
@@ -1448,7 +1442,8 @@ Scene* create_scene_from_model_path(const char* path, const char* texture_direct
     }
 
     char texdir_buf[1024];
-    texture_directory = effective_texture_dir(path, texture_directory, texdir_buf, sizeof(texdir_buf));
+    texture_directory =
+        effective_texture_dir(path, texture_directory, texdir_buf, sizeof(texdir_buf));
     set_texture_pool_directory(tex_pool, texture_directory);
 
     // Process lights and cameras
@@ -1550,9 +1545,8 @@ Scene* create_scene_from_model_path_async(const char* path, const char* texture_
         return create_scene_from_model_path(path, texture_directory);
     }
 
-    const struct aiScene* ai_scene =
-        import_ai_scene(path, aiProcess_Triangulate | aiProcess_CalcTangentSpace |
-                              uv_flip_flag(path));
+    const struct aiScene* ai_scene = import_ai_scene(
+        path, aiProcess_Triangulate | aiProcess_CalcTangentSpace | uv_flip_flag(path));
     if (!ai_scene || ai_scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !ai_scene->mRootNode) {
         log_error("Error importing FBX file: %s\n", path);
         return NULL;
@@ -1572,7 +1566,8 @@ Scene* create_scene_from_model_path_async(const char* path, const char* texture_
     }
 
     char texdir_buf[1024];
-    texture_directory = effective_texture_dir(path, texture_directory, texdir_buf, sizeof(texdir_buf));
+    texture_directory =
+        effective_texture_dir(path, texture_directory, texdir_buf, sizeof(texdir_buf));
     set_texture_pool_directory(tex_pool, texture_directory);
 
     // Process lights and cameras

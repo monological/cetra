@@ -252,9 +252,9 @@ void compute_directional_light_space_matrix(vec3 direction, vec3 scene_center, f
     glm_mat4_mul(light_projection, light_view, dest);
 }
 
-void compute_cascade_light_space_matrix(vec3 direction, const CascadeCamera* cam,
-                                        float slice_near, float slice_far, float scene_pad,
-                                        int map_size, mat4 dest, vec4 out_params) {
+void compute_cascade_light_space_matrix(vec3 direction, const CascadeCamera* cam, float slice_near,
+                                        float slice_far, float scene_pad, int map_size, mat4 dest,
+                                        vec4 out_params) {
     vec3 light_dir;
     glm_vec3_normalize_to(direction, light_dir);
 
@@ -321,8 +321,8 @@ void shadow_upload_cascade_uniforms(const ShadowSystem* system, UniformManager* 
     // exactly (the byte-identity bridge)
     int cc = system->cascade_count;
     uniform_set_int(u, "cascadeCount", cc);
-    vec4 splits = {system->cascade_splits[0], system->cascade_splits[1],
-                   system->cascade_splits[2], 0.0f};
+    vec4 splits = {system->cascade_splits[0], system->cascade_splits[1], system->cascade_splits[2],
+                   0.0f};
     uniform_set_vec4(u, "cascadeSplits", splits);
     // The scene-fit map's world width: the reference receiver-side filter
     // kernels were tuned against (consumed by the catcher)
@@ -516,8 +516,7 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
             if (cc == 1) {
                 compute_directional_light_space_matrix(light->direction, scene_center,
                                                        ss->ortho_size, ss->near_plane,
-                                                       ss->far_plane,
-                                                       ss->cascade_matrices[slot]);
+                                                       ss->far_plane, ss->cascade_matrices[slot]);
                 ss->cascade_params[slot][0] = 2.0f * ss->ortho_size;
                 ss->cascade_params[slot][1] = ss->near_plane;
                 ss->cascade_params[slot][2] = ss->far_plane;
@@ -555,8 +554,7 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
                 int last = (int)slot * cc + (cc - 1);
                 compute_directional_light_space_matrix(light->direction, scene_center,
                                                        ss->ortho_size, ss->near_plane,
-                                                       ss->far_plane,
-                                                       ss->cascade_matrices[last]);
+                                                       ss->far_plane, ss->cascade_matrices[last]);
                 ss->cascade_params[last][0] = legacy_width;
                 ss->cascade_params[last][1] = ss->near_plane;
                 ss->cascade_params[last][2] = ss->far_plane;
@@ -618,8 +616,7 @@ void shadow_publish_to_postfx(const Scene* scene, PostFX* fx) {
     // shadowed in-scatter" state consumers rely on: a nonzero count
     // guarantees the map array and every slot below it are valid.
     ShadowSystem* ss = scene ? scene->shadow_system : NULL;
-    if (!ss || !ss->enabled || ss->active_count == 0 || !ss->shadow_map_array ||
-        !scene->lights) {
+    if (!ss || !ss->enabled || ss->active_count == 0 || !ss->shadow_map_array || !scene->lights) {
         fx->fog_light_count = 0;
         fx->fog_cascade_count = 1;
         fx->fog_shadow_map_array = 0;

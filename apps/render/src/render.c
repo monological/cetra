@@ -30,7 +30,7 @@
 /*
  * Constants
  */
-#define DEFAULT_WIDTH 1920
+#define DEFAULT_WIDTH  1920
 #define DEFAULT_HEIGHT 1080
 #define MAX_ANIM_FILES 32
 
@@ -52,75 +52,75 @@ typedef struct {
     const char* hdr_path;
     const char* anim_files[MAX_ANIM_FILES];
     int anim_count;
-    const char* source_skeleton_path;  // Source skeleton for retargeting
-    const char* screenshot_path;       // Save final frame here (PPM)
-    int screenshot_every;              // Also save numbered frames every N frames
-    float fov_deg;                     // Camera FOV in degrees (0 = default 50)
-    float exposure;                    // Tonemap exposure override (0 = engine default)
-    float ground_radius;               // Skybox ground projection dome radius (0 = default)
-    float ground_height;               // HDR capture height above ground (0 = default)
-    float camera_distance;             // Camera distance override in meters (0 = auto)
-    int no_recenter;                   // Keep the model's authored world position
-    int no_auto_exposure;              // Fixed exposure instead of eye adaptation
-    int no_flip_uv;                    // For assets baked with the opposite V convention
-    float ao_radius;                   // AO/GI reach override in world units (0 = auto)
-    int force_taa;                     // TAA even in headless (temporal passes active)
-    int no_ground;                     // Disable skybox ground projection
-    int no_key_light;                  // Pure IBL: skip the analytic key lights
-    int no_shadows;                    // Keep key lights but disable shadow maps
-    int no_pcss;                       // Fixed-width PCF instead of contact-hardening
-    float light_size;                  // Emitter size override (-1 = scene default)
-    float shadow_softness;             // PCSS softness override (-1 = default)
-    int shadow_cascades;               // Cascades per caster (0 = keep engine default)
-    int csm_debug;                     // Tint fragments by selected cascade
-    int no_springs;                    // Disable spring-bone secondary motion
-    int no_ssao;                       // Disable screen-space ambient occlusion
-    int ssao_debug;                    // Show the raw SSAO buffer
-    int no_spec_occlusion;             // Let GTAO darken specular (disable spec-occ)
-    int no_ao_edge_filter;             // Disable the depth-aware AO blur (allow silhouette bleed)
-    int ssgi;                          // Enable screen-space GI (indirect diffuse)
-    int ssgi_debug;                    // Show the raw gathered GI radiance
-    int probe;                         // Enable the local reflection probe
-    int probe_pos_set;                 // --probe-pos given
-    float probe_pos[3];                // Probe capture position override
-    int probe_scene;                   // Capture the scene meshes too (interiors)
-    int probe_debug;                   // Show the raw capture as the background
-    int sky;                           // Procedural physically-based sky instead of -e
-    int sky_debug;                     // Blit the sky LUTs into the frame corner
-    float sun_elevation;               // Sky sun elevation in degrees (-999 = default)
-    float sun_azimuth;                 // Sky sun azimuth in degrees (-999 = default)
-    int sky_rebake_stress;             // Diagnostic: N headless sun re-bakes then restore
-    int fog;                           // Enable volumetric fog
-    int fog_debug;                     // Show the raw fog in-scatter buffer
-    float fog_density;                 // Extinction override (0 = scene-scaled)
-    float fog_height;                  // Height falloff override (0 = scene-scaled)
-    int albedo_debug;                  // Show the resolved albedo G-buffer
-    int no_normals_mrt;                // Disable the normals G-buffer
-    int normals_debug;                 // Show the resolved normals G-buffer
-    int no_ssr;                        // Disable screen-space reflections
-    int no_ssr_full_res;               // Trace SSR at half res (the old, serrated path)
-    int no_ssr_temporal;               // Disable SSR temporal accumulation (raw single-frame march)
-    int no_ssr_denoise;                // Disable the SSR denoiser (deterministic march, no jitter)
-    float ssr_jitter;                  // SSR stochastic ray-jitter spread override (-1 = default)
-    int ssr_debug;                     // Show the reflection buffer
-    float ssr_strength;                // SSR strength override (-1 = default)
-    float specular_aa;                 // Specular AA strength override (-1 = default)
-    int no_energy_comp;                // Disable multi-scatter energy compensation
-    int no_refraction;                 // Disable screen-space refraction
-    int no_clearcoat;                  // Disable the clearcoat second specular lobe
-    int no_specular;                   // Disable KHR_materials_specular F0 tint + weight
-    int no_sheen;                      // Disable KHR_materials_sheen cloth lobe
-    int no_parallax;                   // Disable parallax occlusion mapping (POM)
-    float parallax_scale;              // POM depth override (< 0 = keep engine default)
-    int no_sss;                        // Disable separable subsurface scattering
-    int oit;                           // Enable weighted-blended OIT (default off)
-    float sss_radius;                  // SSS scatter radius override (< 0 = fixture default)
-    float sss_color[3];                // SSS scatter color override (< 0 in [0] = fixture default)
-    int no_bloom;                      // Disable bloom
-    int tonemap_mode;                  // PostFXTonemapMode override (0 = keep default;
-                                       // coincides with PASSTHROUGH, which is a blit
-                                       // path and never user-set)
-    int ssaa;                          // Supersampling factor (0 = keep engine default)
+    const char* source_skeleton_path; // Source skeleton for retargeting
+    const char* screenshot_path;      // Save final frame here (PPM)
+    int screenshot_every;             // Also save numbered frames every N frames
+    float fov_deg;                    // Camera FOV in degrees (0 = default 50)
+    float exposure;                   // Tonemap exposure override (0 = engine default)
+    float ground_radius;              // Skybox ground projection dome radius (0 = default)
+    float ground_height;              // HDR capture height above ground (0 = default)
+    float camera_distance;            // Camera distance override in meters (0 = auto)
+    int no_recenter;                  // Keep the model's authored world position
+    int no_auto_exposure;             // Fixed exposure instead of eye adaptation
+    int no_flip_uv;                   // For assets baked with the opposite V convention
+    float ao_radius;                  // AO/GI reach override in world units (0 = auto)
+    int force_taa;                    // TAA even in headless (temporal passes active)
+    int no_ground;                    // Disable skybox ground projection
+    int no_key_light;                 // Pure IBL: skip the analytic key lights
+    int no_shadows;                   // Keep key lights but disable shadow maps
+    int no_pcss;                      // Fixed-width PCF instead of contact-hardening
+    float light_size;                 // Emitter size override (-1 = scene default)
+    float shadow_softness;            // PCSS softness override (-1 = default)
+    int shadow_cascades;              // Cascades per caster (0 = keep engine default)
+    int csm_debug;                    // Tint fragments by selected cascade
+    int no_springs;                   // Disable spring-bone secondary motion
+    int no_ssao;                      // Disable screen-space ambient occlusion
+    int ssao_debug;                   // Show the raw SSAO buffer
+    int no_spec_occlusion;            // Let GTAO darken specular (disable spec-occ)
+    int no_ao_edge_filter;            // Disable the depth-aware AO blur (allow silhouette bleed)
+    int ssgi;                         // Enable screen-space GI (indirect diffuse)
+    int ssgi_debug;                   // Show the raw gathered GI radiance
+    int probe;                        // Enable the local reflection probe
+    int probe_pos_set;                // --probe-pos given
+    float probe_pos[3];               // Probe capture position override
+    int probe_scene;                  // Capture the scene meshes too (interiors)
+    int probe_debug;                  // Show the raw capture as the background
+    int sky;                          // Procedural physically-based sky instead of -e
+    int sky_debug;                    // Blit the sky LUTs into the frame corner
+    float sun_elevation;              // Sky sun elevation in degrees (-999 = default)
+    float sun_azimuth;                // Sky sun azimuth in degrees (-999 = default)
+    int sky_rebake_stress;            // Diagnostic: N headless sun re-bakes then restore
+    int fog;                          // Enable volumetric fog
+    int fog_debug;                    // Show the raw fog in-scatter buffer
+    float fog_density;                // Extinction override (0 = scene-scaled)
+    float fog_height;                 // Height falloff override (0 = scene-scaled)
+    int albedo_debug;                 // Show the resolved albedo G-buffer
+    int no_normals_mrt;               // Disable the normals G-buffer
+    int normals_debug;                // Show the resolved normals G-buffer
+    int no_ssr;                       // Disable screen-space reflections
+    int no_ssr_full_res;              // Trace SSR at half res (the old, serrated path)
+    int no_ssr_temporal;              // Disable SSR temporal accumulation (raw single-frame march)
+    int no_ssr_denoise;               // Disable the SSR denoiser (deterministic march, no jitter)
+    float ssr_jitter;                 // SSR stochastic ray-jitter spread override (-1 = default)
+    int ssr_debug;                    // Show the reflection buffer
+    float ssr_strength;               // SSR strength override (-1 = default)
+    float specular_aa;                // Specular AA strength override (-1 = default)
+    int no_energy_comp;               // Disable multi-scatter energy compensation
+    int no_refraction;                // Disable screen-space refraction
+    int no_clearcoat;                 // Disable the clearcoat second specular lobe
+    int no_specular;                  // Disable KHR_materials_specular F0 tint + weight
+    int no_sheen;                     // Disable KHR_materials_sheen cloth lobe
+    int no_parallax;                  // Disable parallax occlusion mapping (POM)
+    float parallax_scale;             // POM depth override (< 0 = keep engine default)
+    int no_sss;                       // Disable separable subsurface scattering
+    int oit;                          // Enable weighted-blended OIT (default off)
+    float sss_radius;                 // SSS scatter radius override (< 0 = fixture default)
+    float sss_color[3];               // SSS scatter color override (< 0 in [0] = fixture default)
+    int no_bloom;                     // Disable bloom
+    int tonemap_mode;                 // PostFXTonemapMode override (0 = keep default;
+                                      // coincides with PASSTHROUGH, which is a blit
+                                      // path and never user-set)
+    int ssaa;                         // Supersampling factor (0 = keep engine default)
     // Finishing grade (-1 = keep engine default; >=0 enables + sets)
     int film_preset; // --film: enable the whole finishing stack at sane defaults
     float vignette;
@@ -141,8 +141,8 @@ typedef struct {
     int width;
     int height;
     int headless;
-    int headless_jitter;               // Apply TAA jitter in headless (lets temporal effects converge)
-    int max_frames; // Exit after this many frames (0 = run forever)
+    int headless_jitter; // Apply TAA jitter in headless (lets temporal effects converge)
+    int max_frames;      // Exit after this many frames (0 = run forever)
     int show_bones;
     int check_stretch; // One-shot CPU skinning stretch diagnostic
     int render_mode;   // RenderMode override for debugging (-1 = PBR)
@@ -152,12 +152,12 @@ typedef struct {
     // yaw/pitch/distance orbit framing). --cam-eye and --cam-target must both
     // be given; --cam-up is optional (default 0,1,0). Print them from the GUI
     // "Print Camera" button.
-    int cam_eye_set;    // --cam-eye given
-    float cam_eye[3];   // Explicit eye position (world)
-    int cam_target_set; // --cam-target given
-    float cam_target[3];// Explicit look-at target (world)
-    int cam_up_set;     // --cam-up given
-    float cam_up[3];    // Explicit up vector (default 0,1,0)
+    int cam_eye_set;     // --cam-eye given
+    float cam_eye[3];    // Explicit eye position (world)
+    int cam_target_set;  // --cam-target given
+    float cam_target[3]; // Explicit look-at target (world)
+    int cam_up_set;      // --cam-up given
+    float cam_up[3];     // Explicit up vector (default 0,1,0)
     int show_help;
 } RenderArgs;
 
@@ -168,14 +168,19 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "  -t, --textures <dir>   Texture directory\n");
     fprintf(stderr, "  -e, --env <path>       HDR environment map for IBL\n");
     fprintf(stderr, "  -F, --fov <degrees>    Camera field of view (default: 50)\n");
-    fprintf(stderr, "      --cam-eye x,y,z    Explicit camera position (exact-repro; needs --cam-target)\n");
-    fprintf(stderr, "      --cam-target x,y,z Explicit look-at target (overrides --yaw/--pitch/--distance)\n");
+    fprintf(
+        stderr,
+        "      --cam-eye x,y,z    Explicit camera position (exact-repro; needs --cam-target)\n");
+    fprintf(
+        stderr,
+        "      --cam-target x,y,z Explicit look-at target (overrides --yaw/--pitch/--distance)\n");
     fprintf(stderr, "      --cam-up x,y,z     Explicit up vector (default: 0,1,0)\n");
     fprintf(stderr, "  -E, --exposure <f>     Fixed tonemap exposure (disables auto-exposure)\n");
     fprintf(stderr, "      --no-auto-exposure Fixed exposure instead of eye adaptation\n");
     fprintf(stderr, "      --ground <radius>  Ground projection dome radius (default: 5x scene)\n");
     fprintf(stderr, "      --no-recenter      Keep the model's authored world position\n");
-    fprintf(stderr, "      --no-flip-uv       For assets baked with the opposite UV V convention\n");
+    fprintf(stderr,
+            "      --no-flip-uv       For assets baked with the opposite UV V convention\n");
     fprintf(stderr, "                         (symptom: scrambled/mirrored textures)\n");
     fprintf(stderr, "      --taa              Enable TAA in headless (temporal passes active;\n");
     fprintf(stderr, "                         output not byte-deterministic)\n");
@@ -191,9 +196,11 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --no-springs       Disable spring-bone secondary motion\n");
     fprintf(stderr, "      --no-ssao          Disable screen-space ambient occlusion\n");
     fprintf(stderr, "      --ssao-debug       Show the raw SSAO buffer\n");
-    fprintf(stderr, "      --no-spec-occlusion Let GTAO darken specular (disable spec-occlusion)\n");
+    fprintf(stderr,
+            "      --no-spec-occlusion Let GTAO darken specular (disable spec-occlusion)\n");
     fprintf(stderr, "      --no-ao-edge-filter Disable the depth-aware AO blur\n");
-    fprintf(stderr, "      --ao-radius <f>    AO/GI reach in world units (default: scene-scaled)\n");
+    fprintf(stderr,
+            "      --ao-radius <f>    AO/GI reach in world units (default: scene-scaled)\n");
     fprintf(stderr, "      --no-normals-mrt   Disable the normals G-buffer (SSAO/SSR input)\n");
     fprintf(stderr, "      --normals-debug    Show the resolved normals G-buffer\n");
     fprintf(stderr, "      --no-ssr           Disable screen-space reflections\n");
@@ -203,18 +210,25 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --ssr-jitter <f>   SSR stochastic ray-jitter spread (default: 0.03)\n");
     fprintf(stderr, "      --ssr-debug        Show the reflection buffer\n");
     fprintf(stderr, "      --ssr-strength <f> Reflection strength (default: 1)\n");
-    fprintf(stderr, "      --ssgi             Enable screen-space GI (one-bounce indirect diffuse)\n");
-    fprintf(stderr, "      --ssgi-debug       Show the raw gathered GI radiance (implies --ssgi)\n");
-    fprintf(stderr, "      --probe            Local reflection probe: grounded env reflections + SSR fallback\n");
-    fprintf(stderr, "      --probe-pos x,y,z  Probe parallax origin (implies --probe; default: auto)\n");
-    fprintf(stderr, "      --probe-scene      Capture the scene meshes into the probe (interiors)\n");
-    fprintf(stderr, "      --probe-debug      Show the raw capture as the background (implies --probe)\n");
+    fprintf(stderr,
+            "      --ssgi             Enable screen-space GI (one-bounce indirect diffuse)\n");
+    fprintf(stderr,
+            "      --ssgi-debug       Show the raw gathered GI radiance (implies --ssgi)\n");
+    fprintf(stderr, "      --probe            Local reflection probe: grounded env reflections + "
+                    "SSR fallback\n");
+    fprintf(stderr,
+            "      --probe-pos x,y,z  Probe parallax origin (implies --probe; default: auto)\n");
+    fprintf(stderr,
+            "      --probe-scene      Capture the scene meshes into the probe (interiors)\n");
+    fprintf(stderr,
+            "      --probe-debug      Show the raw capture as the background (implies --probe)\n");
     fprintf(stderr, "      --sky              Procedural physically-based sky (instead of -e)\n");
     fprintf(stderr, "      --sky-debug        Blit the sky LUTs into the frame corner\n");
     fprintf(stderr, "      --sun-elevation <d> Sky sun elevation in degrees (implies --sky)\n");
     fprintf(stderr, "      --sun-azimuth <d>  Sky sun azimuth in degrees (implies --sky)\n");
     fprintf(stderr, "      --fog              Volumetric fog: god rays + height haze\n");
-    fprintf(stderr, "      --fog-debug        Show the raw fog in-scatter buffer (implies --fog)\n");
+    fprintf(stderr,
+            "      --fog-debug        Show the raw fog in-scatter buffer (implies --fog)\n");
     fprintf(stderr, "      --fog-density <f>  Fog extinction per world unit (implies --fog)\n");
     fprintf(stderr, "      --fog-height <f>   Fog height falloff in world units (implies --fog)\n");
     fprintf(stderr, "      --albedo-debug     Show the resolved albedo G-buffer\n");
@@ -232,10 +246,13 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --sss-radius <f>   SSS scatter radius (world units)\n");
     fprintf(stderr, "      --sss-color <r,g,b> SSS per-channel scatter color (e.g. 1.0,0.3,0.2)\n");
     fprintf(stderr, "      --no-bloom         Disable bloom\n");
-    fprintf(stderr, "      --tonemap <m>      Tonemap mode: aces, neutral, agx (default: neutral)\n");
-    fprintf(stderr, "      --ssaa <int>       Supersampling factor (default: 1 = off; 2 = 2x SSAA)\n");
+    fprintf(stderr,
+            "      --tonemap <m>      Tonemap mode: aces, neutral, agx (default: neutral)\n");
+    fprintf(stderr,
+            "      --ssaa <int>       Supersampling factor (default: 1 = off; 2 = 2x SSAA)\n");
     fprintf(stderr, "      --no-ssaa          Disable supersampling (render at 1x)\n");
-    fprintf(stderr, "      --film             Cinematic finish preset (vignette+grain+sharpen+grade)\n");
+    fprintf(stderr,
+            "      --film             Cinematic finish preset (vignette+grain+sharpen+grade)\n");
     fprintf(stderr, "      --vignette <s>     Vignette strength (enables it; default on ~0.25)\n");
     fprintf(stderr, "      --no-vignette      Disable the default vignette\n");
     fprintf(stderr, "      --grain <s>        Film grain strength (enables it)\n");
@@ -246,7 +263,8 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --dof-focus <m>    Pin focus distance (disables autofocus)\n");
     fprintf(stderr, "      --dof-range <m>    Distance over which blur ramps in (default: auto)\n");
     fprintf(stderr, "      --dof-max-coc <px> Max blur radius in half-res texels (default: 6)\n");
-    fprintf(stderr, "      --motion-blur      Velocity-buffer motion blur (McGuire reconstruction)\n");
+    fprintf(stderr,
+            "      --motion-blur      Velocity-buffer motion blur (McGuire reconstruction)\n");
     fprintf(stderr, "      --motion-blur-scale <s> Shutter/velocity multiplier (default: 1)\n");
     fprintf(stderr, "  -D, --distance <m>     Camera distance from model (default: auto)\n");
     fprintf(stderr, "  -a, --anim <path>      Animation file (can be repeated)\n");
@@ -254,7 +272,8 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "  -W, --width <int>      Window width (default: %d)\n", DEFAULT_WIDTH);
     fprintf(stderr, "  -H, --height <int>     Window height (default: %d)\n", DEFAULT_HEIGHT);
     fprintf(stderr, "  -x, --headless         Hidden window (for debugging/CI)\n");
-    fprintf(stderr, "      --headless-jitter  Apply TAA sub-pixel jitter in headless (needs --taa;\n");
+    fprintf(stderr,
+            "      --headless-jitter  Apply TAA sub-pixel jitter in headless (needs --taa;\n");
     fprintf(stderr, "                         non-deterministic, but converges temporal SSR/AA)\n");
     fprintf(stderr, "  -b, --show-bones       Enable bone X-ray overlay\n");
     fprintf(stderr, "      --check-stretch    Report triangle edges stretched by skinning\n");
@@ -286,7 +305,7 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->dof_range = -1.0f;
     args->dof_max_coc = -1.0f;
     args->motion_blur_scale = -1.0f;
-    args->light_size = -1.0f;     // -1 = scene-radius default
+    args->light_size = -1.0f;      // -1 = scene-radius default
     args->shadow_softness = -1.0f; // -1 = keep the engine default
     args->sun_elevation = -999.0f; // -999 = keep the sky default
     args->sun_azimuth = -999.0f;
@@ -412,8 +431,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
                 return -1;
             }
-            if (sscanf(argv[i], "%f,%f,%f", &args->cam_up[0], &args->cam_up[1],
-                       &args->cam_up[2]) != 3) {
+            if (sscanf(argv[i], "%f,%f,%f", &args->cam_up[0], &args->cam_up[1], &args->cam_up[2]) !=
+                3) {
                 fprintf(stderr, "Error: --cam-up expects x,y,z\n");
                 return -1;
             }
@@ -708,8 +727,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 fprintf(stderr, "Error: %s requires an r,g,b argument\n", flag);
                 return -1;
             }
-            float* dst = strcmp(flag, "--grade-lift") == 0     ? args->grade_lift
-                         : strcmp(flag, "--grade-gamma") == 0  ? args->grade_gamma
+            float* dst = strcmp(flag, "--grade-lift") == 0    ? args->grade_lift
+                         : strcmp(flag, "--grade-gamma") == 0 ? args->grade_gamma
                                                               : args->grade_gain;
             if (sscanf(argv[i], "%f,%f,%f", &dst[0], &dst[1], &dst[2]) != 3) {
                 fprintf(stderr, "Error: %s expects r,g,b (e.g. 1.0,0.95,0.9)\n", flag);
@@ -845,10 +864,10 @@ static vec3 model_recenter_offset = {0.0f, 0.0f, 0.0f};
 // before every frame's draw and before the load-time probe capture (which
 // renders node globals directly); re-application is idempotent.
 static void apply_model_recenter(Engine* engine, SceneNode* root_node) {
-    Transform transform = {.position = {model_recenter_offset[0], model_recenter_offset[1],
-                                        model_recenter_offset[2]},
-                           .rotation = {0.0f, 0.0f, 0.0f},
-                           .scale = {1.0f, 1.0f, 1.0f}};
+    Transform transform = {
+        .position = {model_recenter_offset[0], model_recenter_offset[1], model_recenter_offset[2]},
+        .rotation = {0.0f, 0.0f, 0.0f},
+        .scale = {1.0f, 1.0f, 1.0f}};
     reset_and_apply_transform(&engine->model_matrix, &transform);
     apply_transform_to_nodes(root_node, engine->model_matrix);
 }
@@ -862,7 +881,6 @@ static void apply_model_recenter(Engine* engine, SceneNode* root_node) {
  */
 static float clip_near_max = 0.0f;   // Load-time near (0.05 x scene radius)
 static float clip_near_floor = 0.0f; // Lower bound (matches the 10% min zoom)
-
 
 /*
  * CPU-skin a vertex with the animation state's bone matrices, mirroring the
@@ -943,8 +961,8 @@ static void report_skinning_stretch(SceneNode* node, const AnimationState* state
         }
 
         if (stretched_edges > 0) {
-            printf("STRETCH mesh[%zu] (%zu verts): %zu edges >3x, worst=%.1fx (v%zu <-> v%zu)\n",
-                   m, mesh->vertex_count, stretched_edges, worst_ratio, worst_va, worst_vb);
+            printf("STRETCH mesh[%zu] (%zu verts): %zu edges >3x, worst=%.1fx (v%zu <-> v%zu)\n", m,
+                   mesh->vertex_count, stretched_edges, worst_ratio, worst_va, worst_vb);
             for (int side = 0; side < 2; side++) {
                 size_t v = side == 0 ? worst_va : worst_vb;
                 printf("  v%zu bones:", v);
@@ -1186,8 +1204,8 @@ void configure_sss_materials(Engine* engine, Scene* scene, float radius, const f
             if (!mesh || !mesh->material)
                 continue;
             Material* m = mesh->material;
-            m->subsurface = 1.0f;          // mark as skin
-            m->subsurface_profile = slot;  // pbr_frag writes this into the diffuse alpha
+            m->subsurface = 1.0f;         // mark as skin
+            m->subsurface_profile = slot; // pbr_frag writes this into the diffuse alpha
             glm_vec3_copy(prof_color, m->subsurface_color); // transmission tint follows the profile
         }
         printf("Configured SSS material %s (slot %d, radius %.3f, color %.2f,%.2f,%.2f)\n",
@@ -1511,8 +1529,8 @@ int main(int argc, char** argv) {
                 // Ground the model on the virtual floor
                 scene->shadow_catcher = true;
             }
-            printf("Procedural sky: sun at elevation %.1f azimuth %.1f\n",
-                   sky->sun_elevation_deg, sky->sun_azimuth_deg);
+            printf("Procedural sky: sun at elevation %.1f azimuth %.1f\n", sky->sun_elevation_deg,
+                   sky->sun_azimuth_deg);
 
             // Diagnostic soak (the M4 leak gate): drive the dynamic-sun
             // re-bake path (the GUI's sky_update_sun) N times across the whole
@@ -1633,8 +1651,8 @@ int main(int argc, char** argv) {
             Scene* source_scene = create_scene_from_model_path(args.source_skeleton_path, NULL);
             if (source_scene && source_scene->skeleton_count > 0) {
                 source_skeleton = source_scene->skeletons[0];
-                printf("Loaded source skeleton: %zu bones from '%s'\n",
-                       source_skeleton->bone_count, args.source_skeleton_path);
+                printf("Loaded source skeleton: %zu bones from '%s'\n", source_skeleton->bone_count,
+                       args.source_skeleton_path);
             } else {
                 fprintf(stderr, "Warning: failed to load source skeleton '%s'\n",
                         args.source_skeleton_path);
@@ -1642,8 +1660,8 @@ int main(int argc, char** argv) {
         }
 
         for (int i = 0; i < args.anim_count; i++) {
-            int loaded = load_animations_from_file(scene, skeleton, args.anim_files[i],
-                                                   true, source_skeleton);
+            int loaded = load_animations_from_file(scene, skeleton, args.anim_files[i], true,
+                                                   source_skeleton);
             if (loaded < 0) {
                 fprintf(stderr, "Warning: failed to load animation '%s'\n", args.anim_files[i]);
             }
@@ -1738,8 +1756,8 @@ int main(int argc, char** argv) {
         // projection geometry and smears the panorama's floor into radial
         // streaks around large models.
         scene->skybox_gp_radius = args.ground_radius > 0.0f ? args.ground_radius
-                                  : scene_radius > 0.0f    ? scene_radius * 5.0f
-                                                           : 5.0f;
+                                  : scene_radius > 0.0f     ? scene_radius * 5.0f
+                                                            : 5.0f;
         scene->skybox_gp_height = args.ground_height > 0.0f
                                       ? args.ground_height
                                       : scene->skybox_gp_radius * (1.2f / 5.0f);
@@ -1853,8 +1871,7 @@ int main(int argc, char** argv) {
         if (args.ao_radius > 0.0f) {
             engine->postfx->ssao_radius = args.ao_radius;
         } else if (scene_radius > 0.0f) {
-            engine->postfx->ssao_radius =
-                fmaxf(engine->postfx->ssao_radius, scene_radius * 0.01f);
+            engine->postfx->ssao_radius = fmaxf(engine->postfx->ssao_radius, scene_radius * 0.01f);
         }
 
         // The SSR march reach and thickness are world-space distances like

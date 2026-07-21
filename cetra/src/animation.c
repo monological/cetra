@@ -144,13 +144,15 @@ void skeleton_compute_bind_globals(Skeleton* skeleton, mat4* globals) {
 }
 
 void recalculate_inverse_bind_poses(Skeleton* skeleton) {
-    if (!skeleton || skeleton->bone_count == 0) return;
+    if (!skeleton || skeleton->bone_count == 0)
+        return;
 
     log_info("Recalculating inverse_bind_poses for skeleton '%s' (%zu bones)",
              skeleton->name ? skeleton->name : "unnamed", skeleton->bone_count);
 
     mat4* globals = malloc(skeleton->bone_count * sizeof(mat4));
-    if (!globals) return;
+    if (!globals)
+        return;
 
     skeleton_compute_bind_globals(skeleton, globals);
     for (size_t i = 0; i < skeleton->bone_count; i++) {
@@ -761,8 +763,8 @@ void compute_bone_matrices(AnimationState* state, float delta_time) {
     }
 
     // Scratch space for source skeleton global rotations (indexed by source_bone_index)
-    static versor source_globals_animated[MAX_BONES];  // Accumulated animated rotations
-    static versor source_globals_rest[MAX_BONES];      // Accumulated rest pose rotations
+    static versor source_globals_animated[MAX_BONES]; // Accumulated animated rotations
+    static versor source_globals_rest[MAX_BONES];     // Accumulated rest pose rotations
     static bool source_global_computed[MAX_BONES];
 
     if (has_global_retarget) {
@@ -780,11 +782,13 @@ void compute_bone_matrices(AnimationState* state, float delta_time) {
                     break;
                 }
             }
-            if (!channel) continue;
+            if (!channel)
+                continue;
 
             // Interpolate keyframe rotation
             versor keyframe = {0.0f, 0.0f, 0.0f, 1.0f};
-            interpolate_rotation(channel->rotation_keys, channel->rotation_key_count, time, keyframe);
+            interpolate_rotation(channel->rotation_keys, channel->rotation_key_count, time,
+                                 keyframe);
 
             // Compute source global ANIMATED:
             // source_global_animated = source_parent_global_animated * keyframe
@@ -795,8 +799,10 @@ void compute_bone_matrices(AnimationState* state, float delta_time) {
                 glm_quat_copy(channel->source_local_rest, source_globals_rest[src_idx]);
             } else {
                 // Child bone: accumulate through parent
-                glm_quat_mul(source_globals_animated[src_parent], keyframe, source_globals_animated[src_idx]);
-                glm_quat_mul(source_globals_rest[src_parent], channel->source_local_rest, source_globals_rest[src_idx]);
+                glm_quat_mul(source_globals_animated[src_parent], keyframe,
+                             source_globals_animated[src_idx]);
+                glm_quat_mul(source_globals_rest[src_parent], channel->source_local_rest,
+                             source_globals_rest[src_idx]);
             }
             glm_quat_normalize(source_globals_animated[src_idx]);
             glm_quat_normalize(source_globals_rest[src_idx]);
@@ -810,7 +816,8 @@ void compute_bone_matrices(AnimationState* state, float delta_time) {
         Bone* bone = &skeleton->bones[i];
         AnimationChannel* channel = anim ? get_channel_for_bone(anim, (int)i) : NULL;
 
-        if (channel && channel->use_global_retarget && source_global_computed[channel->source_bone_index]) {
+        if (channel && channel->use_global_retarget &&
+            source_global_computed[channel->source_bone_index]) {
             // GLOBAL-SPACE RETARGETING WITH REST POSE COMPENSATION
             int src_idx = channel->source_bone_index;
 
@@ -844,7 +851,8 @@ void compute_bone_matrices(AnimationState* state, float delta_time) {
             versor target_parent_global_rot;
             glm_quat_identity(target_parent_global_rot);
             if (bone->parent_index >= 0) {
-                glm_mat4_quat(state->global_transforms[bone->parent_index], target_parent_global_rot);
+                glm_mat4_quat(state->global_transforms[bone->parent_index],
+                              target_parent_global_rot);
             }
 
             // Step 5: Derive target local rotation
@@ -894,7 +902,8 @@ void compute_bone_matrices(AnimationState* state, float delta_time) {
             if (channel->needs_retargeting) {
                 glm_vec3_copy(bone->local_transform[3], pos);
             } else {
-                interpolate_position(channel->position_keys, channel->position_key_count, time, pos);
+                interpolate_position(channel->position_keys, channel->position_key_count, time,
+                                     pos);
             }
 
             // Build local transform: T * R * S

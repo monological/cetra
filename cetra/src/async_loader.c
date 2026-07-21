@@ -113,8 +113,7 @@ static void* worker_thread_func(void* arg) {
         result->success = true;
 
         // Determine OpenGL format
-        texture_gl_formats(channels, req->is_srgb, &result->internal_format,
-                           &result->data_format);
+        texture_gl_formats(channels, req->is_srgb, &result->internal_format, &result->data_format);
 
     enqueue_result:
         // Add to completion queue

@@ -149,8 +149,8 @@ static bool create_depth_fbo(int width, int height, GLuint* out_fbo, GLuint* out
 
     glGenFramebuffers(1, out_fbo);
     glBindFramebuffer(GL_FRAMEBUFFER, *out_fbo);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D,
-                           *out_texture, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D, *out_texture,
+                           0);
     glDrawBuffer(GL_NONE);
     glReadBuffer(GL_NONE);
 
@@ -236,7 +236,7 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     fx->ssao_strength = 0.8f;
     fx->spec_occlusion_enabled = true; // Keep GTAO off specular; on when AO is on
     fx->ao_edge_filter_enabled = true; // Depth-aware AO blur (no silhouette bleed)
-    fx->ssgi_enabled = false; // experimental; off by default
+    fx->ssgi_enabled = false;          // experimental; off by default
     fx->ssgi_intensity = 1.0f;
     fx->normals_enabled = true;
     fx->ssr_enabled = true;
@@ -333,8 +333,7 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
         int mw = fx->bloom_width;
         int mh = fx->bloom_height;
         for (int mip = 0; mip < fx->bloom_mips; mip++) {
-            glTexImage2D(GL_TEXTURE_2D, mip, GL_R11F_G11F_B10F, mw, mh, 0, GL_RGB, GL_FLOAT,
-                         NULL);
+            glTexImage2D(GL_TEXTURE_2D, mip, GL_R11F_G11F_B10F, mw, mh, 0, GL_RGB, GL_FLOAT, NULL);
             mw = mw > 1 ? mw / 2 : 1;
             mh = mh > 1 ? mh / 2 : 1;
         }
@@ -399,8 +398,7 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     // Full float, matching the scene pass's aux attachment: the MSAA resolve
     // blit requires identical formats, and fp16 view-Z staircases at scene
     // scale (banded GTAO on large grounds).
-    if (!create_color_fbo(fx->width, fx->height, GL_RGBA32F, &fx->aux_fbo,
-                          &fx->aux_texture)) {
+    if (!create_color_fbo(fx->width, fx->height, GL_RGBA32F, &fx->aux_fbo, &fx->aux_texture)) {
         free_postfx(fx);
         return NULL;
     }
@@ -469,15 +467,13 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     fx->sss_blur_program = create_sss_blur_program();
     fx->oit_resolve_program = create_oit_resolve_program();
     if (!fx->oit_resolve_program || !fx->sss_blur_program || !fx->motion_blur_program ||
-        !fx->motion_blur_tilemax_program ||
-        !fx->motion_blur_neighbormax_program || !fx->bloom_bright_program ||
-        !fx->bloom_down_program || !fx->bloom_up_program ||
-        !fx->tonemap_program || !fx->gtao_program ||
-        !fx->ssao_blur_program || !fx->temporal_accum_program || !fx->ssgi_composite_program ||
-        !fx->ssgi_accum_program || !fx->ssgi_atrous_program || !fx->ssr_atrous_program ||
-        !fx->lum_measure_program || !fx->lum_adapt_program || !fx->ssr_program ||
-        !fx->upsample_tent_program || !fx->fog_program ||
-        !fx->taa_resolve_program || !fx->dof_coc_program ||
+        !fx->motion_blur_tilemax_program || !fx->motion_blur_neighbormax_program ||
+        !fx->bloom_bright_program || !fx->bloom_down_program || !fx->bloom_up_program ||
+        !fx->tonemap_program || !fx->gtao_program || !fx->ssao_blur_program ||
+        !fx->temporal_accum_program || !fx->ssgi_composite_program || !fx->ssgi_accum_program ||
+        !fx->ssgi_atrous_program || !fx->ssr_atrous_program || !fx->lum_measure_program ||
+        !fx->lum_adapt_program || !fx->ssr_program || !fx->upsample_tent_program ||
+        !fx->fog_program || !fx->taa_resolve_program || !fx->dof_coc_program ||
         !fx->dof_blur_program || !fx->dof_composite_program) {
         free_postfx(fx);
         return NULL;
@@ -640,8 +636,8 @@ static bool postfx_ensure_ssgi_targets(PostFX* fx) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glBindFramebuffer(GL_FRAMEBUFFER, fx->ssao_fbo[0]);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D,
-                           fx->ssgi_gi_texture, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, fx->ssgi_gi_texture,
+                           0);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     if (!create_pingpong(fx->ssao_width, fx->ssao_height, GL_RGBA16F, &fx->ssgi_history) ||
         !create_pingpong(fx->ssao_width, fx->ssao_height, GL_RGBA16F, &fx->ssgi_atrous)) {
@@ -737,8 +733,8 @@ static void postfx_run_motion_blur(PostFX* fx) {
     // NEAREST -> exact copy) so the rest of the chain reads the blurred result.
     glBindFramebuffer(GL_READ_FRAMEBUFFER, fx->motion_blur_fbo);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fx->hdr_fbo);
-    glBlitFramebuffer(0, 0, fx->width, fx->height, 0, 0, fx->width, fx->height,
-                      GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    glBlitFramebuffer(0, 0, fx->width, fx->height, 0, 0, fx->width, fx->height, GL_COLOR_BUFFER_BIT,
+                      GL_NEAREST);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     check_gl_error("postfx motion blur");
 }
@@ -869,8 +865,8 @@ static void postfx_run_sss(PostFX* fx, mat4 projection, bool taa_resolving) {
 static void postfx_run_bloom(PostFX* fx, GLuint scene_tex) {
     // Bright pass into pyramid level 0 (linear sampling downsamples)
     glBindFramebuffer(GL_FRAMEBUFFER, fx->bloom_fbo);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
-                           fx->bloom_texture, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, fx->bloom_texture,
+                           0);
     glViewport(0, 0, fx->bloom_width, fx->bloom_height);
     glUseProgram(fx->bloom_bright_program->id);
     glActiveTexture(GL_TEXTURE0);
@@ -1395,8 +1391,7 @@ static void postfx_run_ssr(PostFX* fx, bool have_normals, bool taa_resolving, ma
         uniform_set_vec3(fx->ssr_program->uniforms, "probeBoxMin", fx->probe_box_min);
         uniform_set_vec3(fx->ssr_program->uniforms, "probeBoxMax", fx->probe_box_max);
         uniform_set_float(fx->ssr_program->uniforms, "probeMaxLOD", fx->probe_max_lod);
-        uniform_set_float(fx->ssr_program->uniforms, "probeIntensity",
-                          fx->probe_intensity);
+        uniform_set_float(fx->ssr_program->uniforms, "probeIntensity", fx->probe_intensity);
     }
     draw_fullscreen_quad(fx->quad_vao);
 
@@ -1408,8 +1403,8 @@ static void postfx_run_ssr(PostFX* fx, bool have_normals, bool taa_resolving, ma
     // TAA (per-frame jitter + motion); off/no-TAA leaves the raw march.
     GLuint ssr_result = fx->ssr_texture;
     if (ssr_temporal_on) {
-        ssr_result = run_temporal_accum(fx, fx->temporal_accum_program, &fx->ssr_history,
-                                        ssr_w, ssr_h, fx->ssr_texture);
+        ssr_result = run_temporal_accum(fx, fx->temporal_accum_program, &fx->ssr_history, ssr_w,
+                                        ssr_h, fx->ssr_texture);
     } else {
         fx->ssr_history.valid = false;
     }
@@ -1423,8 +1418,8 @@ static void postfx_run_ssr(PostFX* fx, bool have_normals, bool taa_resolving, ma
     // SVGF order: denoise the accumulation. Skipped when the denoiser is
     // off -> bit-identical to the pre-denoise reflection.
     if (fx->ssr_denoise) {
-        ssr_result = run_atrous(fx, fx->ssr_atrous_program, &fx->ssr_atrous,
-                                ssr_w, ssr_h, ssr_result, have_normals);
+        ssr_result = run_atrous(fx, fx->ssr_atrous_program, &fx->ssr_atrous, ssr_w, ssr_h,
+                                ssr_result, have_normals);
         check_gl_error("postfx ssr denoise");
     }
 
@@ -1474,7 +1469,8 @@ static bool postfx_ensure_oit_targets(PostFX* fx) {
 static void postfx_run_oit(PostFX* fx, GLuint oit_fbo) {
     if (!postfx_ensure_oit_targets(fx))
         return;
-    resolve_color_attachment(oit_fbo, GL_COLOR_ATTACHMENT5, fx->oit_accum_fbo, fx->width, fx->height);
+    resolve_color_attachment(oit_fbo, GL_COLOR_ATTACHMENT5, fx->oit_accum_fbo, fx->width,
+                             fx->height);
     resolve_color_attachment(oit_fbo, GL_COLOR_ATTACHMENT6, fx->oit_revealage_fbo, fx->width,
                              fx->height);
     glBindFramebuffer(GL_FRAMEBUFFER, fx->hdr_fbo);
@@ -1494,8 +1490,7 @@ static void postfx_run_oit(PostFX* fx, GLuint oit_fbo) {
 
 void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hdr,
                 bool normals_written, bool aux_written, bool albedo_written, bool sss_written,
-                GLuint oit_fbo, mat4 projection,
-                mat4 view) {
+                GLuint oit_fbo, mat4 projection, mat4 view) {
     if (!fx)
         return;
 
@@ -1511,8 +1506,8 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
     // match exactly for a multisample blit, both are RGBA16F)
     glBindFramebuffer(GL_READ_FRAMEBUFFER, msaa_fbo);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fx->hdr_fbo);
-    glBlitFramebuffer(0, 0, fx->width, fx->height, 0, 0, fx->width, fx->height,
-                      GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    glBlitFramebuffer(0, 0, fx->width, fx->height, 0, 0, fx->width, fx->height, GL_COLOR_BUFFER_BIT,
+                      GL_NEAREST);
 
     // Weighted-blended OIT: composite the accumulated transparent layer over the
     // resolved opaque scene before any downstream HDR pass (TAA/SSR/bloom/tonemap)
@@ -1570,8 +1565,8 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             uniform_set_int(tu, "historyTex", 2);
             const float taa_texel[2] = {1.0f / (float)fx->width, 1.0f / (float)fx->height};
             uniform_set_vec2(tu, "texelSize", taa_texel);
-            run_temporal_accum(fx, fx->taa_resolve_program, &fx->taa_history, fx->width,
-                               fx->height, fx->hdr_texture);
+            run_temporal_accum(fx, fx->taa_resolve_program, &fx->taa_history, fx->width, fx->height,
+                               fx->hdr_texture);
 
             // Push the resolved frame back into hdr_fbo (the history side is
             // kept as next frame's accumulation buffer).
@@ -1698,9 +1693,9 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             }
 
             // Three a-trous iterations with doubling tap spacing (1, 2, 4).
-            gi_result_tex = run_atrous(fx, fx->ssgi_atrous_program, &fx->ssgi_atrous,
-                                       fx->ssao_width, fx->ssao_height, gi_result_tex,
-                                       have_normals);
+            gi_result_tex =
+                run_atrous(fx, fx->ssgi_atrous_program, &fx->ssgi_atrous, fx->ssao_width,
+                           fx->ssao_height, gi_result_tex, have_normals);
             check_gl_error("postfx ssgi denoise");
         }
         if (!gi_accum_ran)
@@ -1720,7 +1715,8 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             glBindTexture(GL_TEXTURE_2D, gi_result_tex); // accumulated + denoised
             glActiveTexture(GL_TEXTURE1);
             glBindTexture(GL_TEXTURE_2D, fx->albedo_texture);
-            uniform_set_float(fx->ssgi_composite_program->uniforms, "intensity", fx->ssgi_intensity);
+            uniform_set_float(fx->ssgi_composite_program->uniforms, "intensity",
+                              fx->ssgi_intensity);
             glEnable(GL_BLEND);
             glBlendFunc(GL_ONE, GL_ONE);
             draw_fullscreen_quad(fx->quad_vao);
@@ -1765,8 +1761,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             glBindTexture(GL_TEXTURE_2D, scene_tex);
             // Metering floor == key (the "auto only darkens" invariant); the
             // tonemap divides by the mean with the same uniform.
-            uniform_set_float(fx->lum_measure_program->uniforms, "autoKey",
-                              fx->auto_exposure_key);
+            uniform_set_float(fx->lum_measure_program->uniforms, "autoKey", fx->auto_exposure_key);
             draw_fullscreen_quad(fx->quad_vao);
             glBindTexture(GL_TEXTURE_2D, fx->lum_texture);
             glGenerateMipmap(GL_TEXTURE_2D);
@@ -1782,8 +1777,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             // neighborhood clamp, so unlike AO/GI/TAA it cannot self-heal from
             // stale or never-written history (a mid-run enable would otherwise
             // blend from undefined texels).
-            uniform_set_int(fx->lum_adapt_program->uniforms, "reset",
-                            fx->lum_adapt.valid ? 0 : 1);
+            uniform_set_int(fx->lum_adapt_program->uniforms, "reset", fx->lum_adapt.valid ? 0 : 1);
             draw_fullscreen_quad(fx->quad_vao);
             fx->lum_adapt.valid = true;
             check_gl_error("postfx auto exposure");
@@ -1822,7 +1816,8 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         glActiveTexture(GL_TEXTURE8);
         glBindTexture(GL_TEXTURE_2D, fog_result_tex); // 0 when fog did not run
         glActiveTexture(GL_TEXTURE9);
-        glBindTexture(GL_TEXTURE_2D, aux_written ? fx->aux_texture : 0); // linZ + roughness (spec-occ)
+        glBindTexture(GL_TEXTURE_2D,
+                      aux_written ? fx->aux_texture : 0); // linZ + roughness (spec-occ)
         UniformManager* tm = fx->tonemap_program->uniforms;
         uniform_set_float(tm, "exposure", fx->exposure);
         uniform_set_int(tm, "autoExposure", fx->auto_exposure ? 1 : 0);

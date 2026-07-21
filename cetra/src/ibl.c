@@ -445,8 +445,7 @@ void ibl_prefilter_cubemap(IBLResources* ibl, GLuint src_cube, GLuint* dst, int 
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_CUBE_MAP, src_cube);
     GLint src_resolution = 0;
-    glGetTexLevelParameteriv(GL_TEXTURE_CUBE_MAP_POSITIVE_X, 0, GL_TEXTURE_WIDTH,
-                             &src_resolution);
+    glGetTexLevelParameteriv(GL_TEXTURE_CUBE_MAP_POSITIVE_X, 0, GL_TEXTURE_WIDTH, &src_resolution);
     uniform_set_int(program->uniforms, "environmentMap", 0);
 
     mat4 views[6];

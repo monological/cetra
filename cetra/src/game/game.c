@@ -319,10 +319,9 @@ void run_game(Game* game) {
         // Headless / CI: capture the final frame from GL_BACK before the swap
         // (matches run_engine_render_loop), then exit on the frame limit.
         game->total_frames++;
-        bool frame_limit_hit = game->exit_after_frames > 0 &&
-                               game->total_frames >= (size_t)game->exit_after_frames;
-        if (game->screenshot_path &&
-            (frame_limit_hit || glfwWindowShouldClose(engine->window))) {
+        bool frame_limit_hit =
+            game->exit_after_frames > 0 && game->total_frames >= (size_t)game->exit_after_frames;
+        if (game->screenshot_path && (frame_limit_hit || glfwWindowShouldClose(engine->window))) {
             engine_capture_screenshot(engine, game->screenshot_path);
         }
         if (frame_limit_hit) {

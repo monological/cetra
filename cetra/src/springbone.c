@@ -6,9 +6,9 @@
 
 // Fixed simulation substep so behavior is framerate independent. The dt clamp
 // bounds the accumulator so at most SPRING_MAX_SUBSTEPS run per frame.
-#define SPRING_STEP (1.0f / 120.0f)
+#define SPRING_STEP         (1.0f / 120.0f)
 #define SPRING_MAX_SUBSTEPS 4
-#define SPRING_MAX_DT (SPRING_MAX_SUBSTEPS * SPRING_STEP)
+#define SPRING_MAX_DT       (SPRING_MAX_SUBSTEPS * SPRING_STEP)
 
 SpringBoneParams spring_bone_default_params(void) {
     SpringBoneParams params = {

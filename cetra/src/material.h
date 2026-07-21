@@ -68,10 +68,10 @@ typedef struct Material {
     int subsurface_profile; // Index into PostFX's per-material scatter profiles (color + radius);
                             // -1 = unassigned. pbr_frag writes it into the skin-diffuse alpha so
                             // the blur picks this material's profile per pixel.
-    vec2 uvOffset;    // Texture coordinate offset (KHR_texture_transform)
-    vec2 uvScale;     // Texture coordinate scale (KHR_texture_transform)
-    float uvRotation; // Texture coordinate rotation in radians (KHR_texture_transform)
-    bool doubleSided; // Disable backface culling for this material
+    vec2 uvOffset;          // Texture coordinate offset (KHR_texture_transform)
+    vec2 uvScale;           // Texture coordinate scale (KHR_texture_transform)
+    float uvRotation;       // Texture coordinate rotation in radians (KHR_texture_transform)
+    bool doubleSided;       // Disable backface culling for this material
 
     // Core PBR Textures
     Texture* albedo_tex;            // Albedo (Diffuse) Map

@@ -185,7 +185,7 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
     uniform_set_vec3(u, "sheenColorFactor", (const float*)&material->sheen_color_factor);
     uniform_set_float(u, "sheenRoughnessFactor", material->sheen_roughness_factor);
     uniform_set_float(u, "parallaxScale", material->parallax_scale); // POM depth (0 = off)
-    uniform_set_float(u, "subsurface", material->subsurface); // SSS strength (0 = off)
+    uniform_set_float(u, "subsurface", material->subsurface);        // SSS strength (0 = off)
     uniform_set_vec3(u, "subsurfaceColor", (const float*)&material->subsurface_color);
     uniform_set_int(u, "sssProfileIndex", material->subsurface_profile); // scatter-profile slot
     uniform_set_vec2(u, "uvOffset", (const float*)&material->uvOffset);
@@ -201,7 +201,8 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
     uniform_set_int(u, "emissiveTex", TEXUNIT_EMISSIVE);
     uniform_set_int(u, "sceneColorTex", TEXUNIT_SCENE_COLOR); // refraction source
     uniform_set_int(u, "sheenTex", TEXUNIT_SHEEN);            // KHR sheen color (sRGB)
-    uniform_set_int(u, "reflectanceTex", TEXUNIT_REFLECTANCE); // reserved (KHR specular color deferred)
+    uniform_set_int(u, "reflectanceTex",
+                    TEXUNIT_REFLECTANCE); // reserved (KHR specular color deferred)
     uniform_set_int(u, "clearcoatNormalTex", TEXUNIT_CLEARCOAT_NORMAL);
     uniform_set_int(u, "heightTex", TEXUNIT_HEIGHT); // POM height map (§4.11)
 
@@ -321,10 +322,9 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
                 // full-frame resolve, which off-screen glass must not pay
                 // for (the late-pass re-traversal it shares with blend
                 // meshes is cheap and keeps its pre-cull count)
-                if (is_transmissive &&
-                    (!frustum || frustum_test_aabb_transformed(frustum, mesh->aabb.min,
-                                                               mesh->aabb.max,
-                                                               node->global_transform)))
+                if (is_transmissive && (!frustum || frustum_test_aabb_transformed(
+                                                        frustum, mesh->aabb.min, mesh->aabb.max,
+                                                        node->global_transform)))
                     scene->transmissive_mesh_count++;
             }
             continue;
@@ -673,7 +673,8 @@ void render_current_scene(Engine* engine, float time_value) {
     engine->scene_color_this_frame = false;
     engine->oit_this_frame = false; // set true below if the OIT accumulate pass runs
     _render_scene_iterative(engine, scene, root_node, camera, *view, draw_projection, time_value,
-                            render_mode, &current_program, &current_material, &frustum, false, false);
+                            render_mode, &current_program, &current_material, &frustum, false,
+                            false);
     engine_set_scene_draw_buffers(engine, false);
 
     // Skybox after opaques (depth-tested against them at the far plane).
@@ -732,9 +733,9 @@ void render_current_scene(Engine* engine, float time_value) {
             current_program = 0;
             current_material = NULL;
         }
-        _render_scene_iterative(engine, scene, root_node, camera, *view, draw_projection, time_value,
-                                render_mode, &current_program, &current_material, &frustum, true,
-                                false);
+        _render_scene_iterative(engine, scene, root_node, camera, *view, draw_projection,
+                                time_value, render_mode, &current_program, &current_material,
+                                &frustum, true, false);
         glDepthMask(GL_TRUE);
     }
 
@@ -779,8 +780,8 @@ void render_current_scene(Engine* engine, float time_value) {
         // With SSR active the floor publishes depth and the reflective
         // marker across the whole quad (surfaceMode 1 skips the unshadowed
         // discard) so the reflection march has a surface to start from
-        bool ssr_floor = engine->postfx && postfx_ssr_active(engine->postfx,
-                                                             engine->normals_this_frame);
+        bool ssr_floor =
+            engine->postfx && postfx_ssr_active(engine->postfx, engine->normals_this_frame);
         uniform_set_int(catcher->uniforms, "surfaceMode", ssr_floor ? 1 : 0);
         uniform_set_int(catcher->uniforms, "numShadowLights", (int)ss->active_count);
         uniform_set_float(catcher->uniforms, "shadowBias", ss->casters[0].bias);
@@ -853,12 +854,14 @@ void render_skeleton_bones(Engine* engine, Skeleton* skeleton, AnimationState* a
 
     // Need at least skeleton or anim_state
     Skeleton* skel = skeleton ? skeleton : (anim_state ? anim_state->skeleton : NULL);
-    if (!skel) return;
+    if (!skel)
+        return;
 
     // Allocate for both bind pose (green) and animated pose (red)
     // Max 2 sets of bones * 2 vertices per bone * 6 floats per vertex
     float* vertices = malloc(skel->bone_count * 2 * 2 * 6 * sizeof(float));
-    if (!vertices) return;
+    if (!vertices)
+        return;
 
     size_t vertex_count = 0;
 
@@ -873,7 +876,8 @@ void render_skeleton_bones(Engine* engine, Skeleton* skeleton, AnimationState* a
 
             for (size_t i = 0; i < skel->bone_count; i++) {
                 const Bone* bone = &skel->bones[i];
-                if (bone->parent_index < 0) continue;
+                if (bone->parent_index < 0)
+                    continue;
 
                 float child_x = bind_globals[i][3][0];
                 float child_y = bind_globals[i][3][1];
@@ -908,7 +912,8 @@ void render_skeleton_bones(Engine* engine, Skeleton* skeleton, AnimationState* a
     if (anim_state && anim_state->global_transforms && anim_state->current_time > 0.0f) {
         for (size_t i = 0; i < skel->bone_count; i++) {
             const Bone* bone = &skel->bones[i];
-            if (bone->parent_index < 0) continue;
+            if (bone->parent_index < 0)
+                continue;
 
             float child_x = anim_state->global_transforms[i][3][0];
             float child_y = anim_state->global_transforms[i][3][1];
@@ -949,10 +954,10 @@ void render_skeleton_bones(Engine* engine, Skeleton* skeleton, AnimationState* a
 
     // Use bone program
     glUseProgram(engine->bone_program->id);
-    glUniformMatrix4fv(glGetUniformLocation(engine->bone_program->id, "view"),
-                       1, GL_FALSE, (float*)engine->view_matrix);
-    glUniformMatrix4fv(glGetUniformLocation(engine->bone_program->id, "projection"),
-                       1, GL_FALSE, (float*)engine->projection_matrix);
+    glUniformMatrix4fv(glGetUniformLocation(engine->bone_program->id, "view"), 1, GL_FALSE,
+                       (float*)engine->view_matrix);
+    glUniformMatrix4fv(glGetUniformLocation(engine->bone_program->id, "projection"), 1, GL_FALSE,
+                       (float*)engine->projection_matrix);
 
     // Disable depth test for X-ray effect (bones always visible)
     glDisable(GL_DEPTH_TEST);

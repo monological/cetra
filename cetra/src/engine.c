@@ -71,16 +71,24 @@ typedef struct GBufferAttachment {
 // (RGBA32F): fp16 quantizes linear Z into scene-scale steps on large scenes and
 // GTAO reads the staircase as banded occlusion.
 static void _gbuffer_attachments(Engine* engine, GBufferAttachment out[GBUFFER_ATTACHMENT_COUNT]) {
-    out[0] = (GBufferAttachment){&engine->multisample_texture, NULL, GL_RGBA16F,
-                                 {0.1f, 0.1f, 0.1f, 1.0f}};
-    out[1] = (GBufferAttachment){&engine->normal_multisample_texture, &engine->normals_this_frame,
-                                 GL_RGBA16F, {0.0f, 0.0f, 0.0f, 0.0f}};
-    out[2] = (GBufferAttachment){&engine->aux_multisample_texture, &engine->aux_this_frame,
-                                 GL_RGBA32F, {0.0f, 0.0f, 0.0f, 0.0f}};
-    out[3] = (GBufferAttachment){&engine->albedo_multisample_texture, &engine->albedo_this_frame,
-                                 GL_RGBA8, {0.0f, 0.0f, 0.0f, 0.0f}};
-    out[4] = (GBufferAttachment){&engine->sss_diffuse_multisample_texture, &engine->sss_this_frame,
-                                 GL_RGBA16F, {0.0f, 0.0f, 0.0f, 0.0f}};
+    out[0] = (GBufferAttachment){
+        &engine->multisample_texture, NULL, GL_RGBA16F, {0.1f, 0.1f, 0.1f, 1.0f}};
+    out[1] = (GBufferAttachment){&engine->normal_multisample_texture,
+                                 &engine->normals_this_frame,
+                                 GL_RGBA16F,
+                                 {0.0f, 0.0f, 0.0f, 0.0f}};
+    out[2] = (GBufferAttachment){&engine->aux_multisample_texture,
+                                 &engine->aux_this_frame,
+                                 GL_RGBA32F,
+                                 {0.0f, 0.0f, 0.0f, 0.0f}};
+    out[3] = (GBufferAttachment){&engine->albedo_multisample_texture,
+                                 &engine->albedo_this_frame,
+                                 GL_RGBA8,
+                                 {0.0f, 0.0f, 0.0f, 0.0f}};
+    out[4] = (GBufferAttachment){&engine->sss_diffuse_multisample_texture,
+                                 &engine->sss_this_frame,
+                                 GL_RGBA16F,
+                                 {0.0f, 0.0f, 0.0f, 0.0f}};
 }
 
 /*
@@ -111,8 +119,8 @@ Engine* create_engine(const char* window_title, int width, int height) {
     engine->win_height = height;
     engine->fb_width = 0;
     engine->fb_height = 0;
-    engine->ss_scale = 1; // Supersampling off by default (4x fragment cost);
-                          // opt in with --ssaa 2 for beauty shots
+    engine->ss_scale = 1;     // Supersampling off by default (4x fragment cost);
+                              // opt in with --ssaa 2 for beauty shots
     engine->msaa_samples = 4; // 4x MSAA by default (runtime-toggleable)
 
     engine->error_callback = NULL;
@@ -167,8 +175,8 @@ Engine* create_engine(const char* window_title, int width, int height) {
     engine->sheen_enabled = true;       // KHR sheen on; inert unless a material carries it
     engine->parallax_enabled = true;    // POM on; inert unless a material carries height + scale
     engine->sss_enabled = true;         // SSS on; inert unless a material carries subsurface > 0
-    engine->oit_enabled = false;        // OIT off by default (--oit opt-in); keeps the byte-identical
-                                        // unsorted alpha-blend late pass
+    engine->oit_enabled = false; // OIT off by default (--oit opt-in); keeps the byte-identical
+                                 // unsorted alpha-blend late pass
 
     glm_mat4_identity(engine->model_matrix);
     glm_mat4_identity(engine->view_matrix);
@@ -447,8 +455,8 @@ static int _create_msaa_attachments(Engine* engine, int rw, int rh, int samples)
     GBufferAttachment gb[GBUFFER_ATTACHMENT_COUNT];
     _gbuffer_attachments(engine, gb);
     for (int i = 0; i < GBUFFER_ATTACHMENT_COUNT; i++) {
-        _add_msaa_color_attachment(gb[i].tex, gb[i].internal_format, GL_COLOR_ATTACHMENT0 + i, rw, rh,
-                                   samples);
+        _add_msaa_color_attachment(gb[i].tex, gb[i].internal_format, GL_COLOR_ATTACHMENT0 + i, rw,
+                                   rh, samples);
     }
 
     glGenRenderbuffers(1, &engine->depth_renderbuffer);
@@ -1286,10 +1294,8 @@ static void _engine_gui_panel(Engine* engine) {
     // overlays on one row (checkboxes so their on/off state is visible) and the
     // camera mode. Global viewport controls, so they lead the panel.
     static const char* const render_modes[] = {
-        "PBR",        "Normals",         "World Pos",
-        "Tex Coords", "Tangent Space",   "Flat Color",
-        "Albedo",     "Simple Lighting", "Metallic/Roughness",
-        "Velocity"};
+        "PBR",        "Normals", "World Pos",       "Tex Coords",         "Tangent Space",
+        "Flat Color", "Albedo",  "Simple Lighting", "Metallic/Roughness", "Velocity"};
     int rm = engine->current_render_mode;
     int render_mode_count = (int)(sizeof(render_modes) / sizeof(render_modes[0]));
     if (igCombo_Str_arr("Render Mode", &rm, render_modes, render_mode_count, -1))
@@ -1314,8 +1320,7 @@ static void _engine_gui_panel(Engine* engine) {
     // --- Animation: a collapsing section like the effect stacks below, shown
     // only when a clip is loaded.
     AnimationState* anim = get_render_animation_state();
-    if (anim &&
-        igCollapsingHeader_TreeNodeFlags("Animation", ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (anim && igCollapsingHeader_TreeNodeFlags("Animation", ImGuiTreeNodeFlags_DefaultOpen)) {
         if (igButton(anim->playing ? "Pause Animation" : "Play Animation", (ImVec2){0, 0})) {
             if (anim->playing)
                 pause_animation(anim);
@@ -1358,11 +1363,11 @@ static void _engine_gui_panel(Engine* engine) {
             // env size) and retints the coupled key light through one path.
             bool sun_moved = false;
             bool sun_released = false;
-            sun_moved |= igSliderFloat("Sun Elevation", &sky->sun_elevation_deg, -6.0f, 89.0f,
-                                       "%.1f", 0);
+            sun_moved |=
+                igSliderFloat("Sun Elevation", &sky->sun_elevation_deg, -6.0f, 89.0f, "%.1f", 0);
             sun_released |= igIsItemDeactivatedAfterEdit();
-            sun_moved |= igSliderFloat("Sun Azimuth", &sky->sun_azimuth_deg, 0.0f, 360.0f, "%.1f",
-                                       0);
+            sun_moved |=
+                igSliderFloat("Sun Azimuth", &sky->sun_azimuth_deg, 0.0f, 360.0f, "%.1f", 0);
             sun_released |= igIsItemDeactivatedAfterEdit();
             // Disc size feeds only the analytic background sun (sampled live);
             // it is not in the env cube, so it needs no re-bake.
@@ -1568,8 +1573,8 @@ static void _engine_gui_panel(Engine* engine) {
                    "--cam-target %.3f,%.3f,%.3f --cam-up %.3f,%.3f,%.3f\n",
                    engine->fb_width, engine->fb_height, glm_deg(camera->fov_radians),
                    camera->position[0], camera->position[1], camera->position[2],
-                   camera->look_at[0], camera->look_at[1], camera->look_at[2],
-                   camera->up_vector[0], camera->up_vector[1], camera->up_vector[2]);
+                   camera->look_at[0], camera->look_at[1], camera->look_at[2], camera->up_vector[0],
+                   camera->up_vector[1], camera->up_vector[2]);
             fflush(stdout);
         }
     }
@@ -1900,8 +1905,8 @@ bool engine_begin_oit_pass(Engine* engine) {
     glViewport(0, 0, rw, rh);
     // Only slots 5 (accum) and 6 (revealage) active; the shader's AccumOut /
     // RevealageOut (locations 5/6) land there, FragColor + G-buffer are discarded.
-    GLenum bufs[7] = {GL_NONE, GL_NONE, GL_NONE,          GL_NONE,
-                      GL_NONE, GL_COLOR_ATTACHMENT5, GL_COLOR_ATTACHMENT6};
+    GLenum bufs[7] = {
+        GL_NONE, GL_NONE, GL_NONE, GL_NONE, GL_NONE, GL_COLOR_ATTACHMENT5, GL_COLOR_ATTACHMENT6};
     glDrawBuffers(7, bufs);
     const GLfloat zero[4] = {0.0f, 0.0f, 0.0f, 0.0f};
     const GLfloat one[4] = {1.0f, 1.0f, 1.0f, 1.0f};
@@ -1909,8 +1914,8 @@ bool engine_begin_oit_pass(Engine* engine) {
     glClearBufferfv(GL_COLOR, 6, one);  // revealage: full reveal before the product
     glEnablei(GL_BLEND, 5);
     glEnablei(GL_BLEND, 6);
-    glBlendFunci(5, GL_ONE, GL_ONE);                    // accum += premultiplied * weight
-    glBlendFunci(6, GL_ZERO, GL_ONE_MINUS_SRC_COLOR);   // revealage *= (1 - alpha)
+    glBlendFunci(5, GL_ONE, GL_ONE);                  // accum += premultiplied * weight
+    glBlendFunci(6, GL_ZERO, GL_ONE_MINUS_SRC_COLOR); // revealage *= (1 - alpha)
     return true;
 }
 
@@ -2028,12 +2033,13 @@ void run_engine_render_loop(Engine* engine, RenderSceneFunc render_func) {
         // feature is on AND the scene carries a subsurface material. This keeps a
         // non-skin scene byte-identical to master (the blur/composite would add 0)
         // AND free of the pass's per-frame cost. Mirrors the albedo-on-SSGI gate.
-        engine->sss_this_frame =
-            frame_mode == RENDER_MODE_PBR && engine->sss_enabled && scene_has_subsurface(shadow_scene);
+        engine->sss_this_frame = frame_mode == RENDER_MODE_PBR && engine->sss_enabled &&
+                                 scene_has_subsurface(shadow_scene);
         // SSS reads aux .z for the depth-aware profile, so it must force the aux
         // G-buffer (like motion blur), else --no-ssao + SSS reads stale/undefined Z.
-        engine->aux_this_frame = frame_mode == RENDER_MODE_PBR &&
-                                 (postfx_wants_aux_gbuffer(engine->postfx) || engine->sss_this_frame);
+        engine->aux_this_frame =
+            frame_mode == RENDER_MODE_PBR &&
+            (postfx_wants_aux_gbuffer(engine->postfx) || engine->sss_this_frame);
         engine->albedo_this_frame =
             frame_mode == RENDER_MODE_PBR && postfx_wants_albedo(engine->postfx);
         engine_set_scene_draw_buffers(engine, true);

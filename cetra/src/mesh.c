@@ -222,7 +222,8 @@ void upload_mesh_buffers_to_gpu(Mesh* mesh) {
         glBindBuffer(GL_ARRAY_BUFFER, mesh->tbo2);
         glBufferData(GL_ARRAY_BUFFER, mesh->vertex_count * 2 * sizeof(float), mesh->tex_coords2,
                      GL_STATIC_DRAW);
-        glVertexAttribPointer(GL_ATTR_TEXCOORD2, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), (void*)0);
+        glVertexAttribPointer(GL_ATTR_TEXCOORD2, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float),
+                              (void*)0);
         glEnableVertexAttribArray(GL_ATTR_TEXCOORD2);
     }
 
