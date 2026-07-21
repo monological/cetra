@@ -74,14 +74,12 @@ typedef struct Material {
     float uvRotation;       // Texture coordinate rotation in radians (KHR_texture_transform)
     bool doubleSided;       // Disable backface culling for this material
 
-    // Wind response (World-Position Offset cloth; see wind.h). This is the
-    // per-material half of the wind split: the Scene owns the wind field, a
-    // material opts in here. 0 = rigid (the shader early-outs -> no motion).
-    // The height mask pins the top (max_y) and lets the hem (min_y) swing; both
-    // are the mesh's local-space AABB Y bounds, set when the material opts in.
+    // Wind response (World-Position Offset cloth; see wind.h). The per-material
+    // half of the wind split: the Scene owns the wind field, a material opts in
+    // here. 0 = rigid (the shader early-outs -> no motion). The height-mask
+    // bounds that pin the top and free the hem are per-mesh geometry, uploaded
+    // per draw from the mesh's AABB -- not stored here (a material is shared).
     float wind_response;
-    float wind_mask_min_y;
-    float wind_mask_max_y;
 
     // Core PBR Textures
     Texture* albedo_tex;            // Albedo (Diffuse) Map

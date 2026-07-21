@@ -7,7 +7,6 @@
 #include "cetra/cscene.h"
 #include "cetra/ext/cwalk.h"
 #include "cetra/light.h"
-#include "cetra/mesh.h"
 #include "cetra/postfx.h"
 #include "cetra/scene.h"
 #include "cetra/util.h"
@@ -170,28 +169,6 @@ void apply_cscene_light_overrides(Scene* scene, const CetraSceneDesc* cscn, floa
     }
 }
 
-// Opt every mesh whose material matches `mat_name` into the scene wind, and set
-// its top-pinned/hem-free mask from the mesh's local-space AABB Y bounds.
-static int apply_wind_response_to_meshes(SceneNode* node, const char* mat_name, float response) {
-    if (!node)
-        return 0;
-    int count = 0;
-    for (size_t i = 0; i < node->mesh_count; i++) {
-        Mesh* mesh = node->meshes[i];
-        if (!mesh || !mesh->material || !mesh->material->name)
-            continue;
-        if (strcmp(mesh->material->name, mat_name) == 0) {
-            mesh->material->wind_response = response;
-            mesh->material->wind_mask_min_y = mesh->aabb.min[1];
-            mesh->material->wind_mask_max_y = mesh->aabb.max[1];
-            count++;
-        }
-    }
-    for (size_t c = 0; c < node->children_count; c++)
-        count += apply_wind_response_to_meshes(node->children[c], mat_name, response);
-    return count;
-}
-
 void apply_cscene_wind(Scene* scene, const CetraSceneDesc* cscn) {
     if (!scene || !cscn)
         return;
@@ -219,16 +196,24 @@ void apply_cscene_wind(Scene* scene, const CetraSceneDesc* cscn) {
         }
     }
 
-    // 2. Per-material opt-in: mark responsive materials and derive their mask.
+    // 2. Per-material opt-in: mark responsive materials by name (keyed against
+    //    the scene's flat material registry, like configure_sss_materials). The
+    //    mask bounds are supplied per-mesh at draw time from each mesh's AABB.
     for (int k = 0; k < cscn->material_count; k++) {
         const CSceneMaterialOverride* mo = &cscn->materials[k];
         if (!mo->has_wind_response)
             continue;
-        int tagged =
-            apply_wind_response_to_meshes(scene->root_node, mo->material, mo->wind_response);
-        printf("Scene file: wind response %.2f on material '%s' (%d mesh(es))\n", mo->wind_response,
-               mo->material, tagged);
+        int tagged = 0;
+        for (size_t i = 0; i < scene->material_count; i++) {
+            Material* m = scene->materials[i];
+            if (m && m->name && strcmp(m->name, mo->material) == 0) {
+                m->wind_response = mo->wind_response;
+                tagged++;
+            }
+        }
+        printf("Scene file: wind response %.2f on material '%s' (%d material(s))\n",
+               mo->wind_response, mo->material, tagged);
         if (tagged == 0)
-            fprintf(stderr, "Warning: wind material '%s' matches no mesh in scene\n", mo->material);
+            fprintf(stderr, "Warning: wind material '%s' not found in scene\n", mo->material);
     }
 }

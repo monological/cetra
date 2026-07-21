@@ -48,8 +48,6 @@ Material* create_material() {
     material->uvRotation = 0.0f;
     material->doubleSided = false;
     material->wind_response = 0.0f; // rigid until a material opts into wind
-    material->wind_mask_min_y = 0.0f;
-    material->wind_mask_max_y = 0.0f;
 
     material->albedo_tex = NULL;
     material->normal_tex = NULL;

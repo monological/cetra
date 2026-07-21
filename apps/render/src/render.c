@@ -1171,13 +1171,15 @@ void configure_sss_materials(Engine* engine, Scene* scene, float radius, const f
     // registry (every imported material lands there via add_material_to_scene).
     // --sss-radius/--sss-color still override.
     if (cscn && cscn->material_count > 0) {
+        int sss_index = 0; // counts SSS entries only (the table also holds wind overrides)
         for (int k = 0; k < cscn->material_count; k++) {
             const CSceneMaterialOverride* mo = &cscn->materials[k];
             if (!mo->has_sss) // wind-only overrides live in the same table
                 continue;
+            bool first_sss = (sss_index++ == 0); // --sss-color tints the first SSS profile
             vec3 prof_color;
             glm_vec3_copy((float*)mo->sss_color, prof_color);
-            if (k == 0 && color && color[0] >= 0.0f)
+            if (first_sss && color && color[0] >= 0.0f)
                 glm_vec3_copy((float*)color, prof_color);
             float prof_radius = radius >= 0.0f ? radius : mo->sss_radius;
             int slot = postfx_add_sss_profile(engine->postfx, prof_color, prof_radius);

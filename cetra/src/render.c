@@ -193,10 +193,9 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
     uniform_set_vec2(u, "uvScale", (const float*)&material->uvScale);
     uniform_set_float(u, "uvRotation", material->uvRotation);
     // Wind response (0 = rigid). Uploaded per material switch, so non-cloth
-    // materials reset it to 0 and the shader early-outs for them.
+    // materials reset it to 0 and the shader early-outs for them. The mask
+    // bounds are per-mesh (uploaded in the draw loop from the mesh's AABB).
     uniform_set_float(u, "uWindResponse", material->wind_response);
-    uniform_set_float(u, "uWindMaskMinY", material->wind_mask_min_y);
-    uniform_set_float(u, "uWindMaskMaxY", material->wind_mask_max_y);
 
     // Dedicated (native-resolution) sampler units. The scalar masks
     // (roughness/metallic/ao/opacity/microsurface/anisotropy) are no
@@ -448,6 +447,10 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
         uniform_set_mat4(u, "model", (const float*)node->global_transform);
         uniform_set_mat4(u, "uPrevModel", (const float*)node->prev_global_transform);
         uniform_set_float(u, "lineWidth", mesh->line_width);
+        // Wind cloth-mask bounds: per-mesh geometry (local AABB Y). The shader
+        // uses them only when this mesh's material opted in (uWindResponse > 0).
+        uniform_set_float(u, "uWindMaskMinY", mesh->aabb.min[1]);
+        uniform_set_float(u, "uWindMaskMaxY", mesh->aabb.max[1]);
 
         // Only update material uniforms if material changed
         if (*current_material != mat) {
