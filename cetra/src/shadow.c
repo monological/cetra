@@ -612,6 +612,28 @@ void shadow_publish_to_postfx(const Scene* scene, PostFX* fx) {
     if (!fx)
         return;
 
+    // Volumetric spot (the flashlight): the fog scatters it into a beam shaft.
+    // Published independently of the directional shadow path below, so it works
+    // even with the shadow system off. v1 takes the first LIGHT_SPOT.
+    fx->fog_spot_enabled = false;
+    if (scene && scene->lights) {
+        for (size_t i = 0; i < scene->light_count; i++) {
+            const Light* sp = scene->lights[i];
+            if (!sp || sp->type != LIGHT_SPOT)
+                continue;
+            glm_vec3_copy((float*)sp->global_position, fx->fog_spot_pos);
+            glm_vec3_normalize_to((float*)sp->direction, fx->fog_spot_dir);
+            glm_vec3_scale((float*)sp->color, sp->intensity, fx->fog_spot_color);
+            fx->fog_spot_atten[0] = sp->constant;
+            fx->fog_spot_atten[1] = sp->linear;
+            fx->fog_spot_atten[2] = sp->quadratic;
+            fx->fog_spot_cos_inner = sp->cutOff;
+            fx->fog_spot_cos_outer = sp->outerCutOff;
+            fx->fog_spot_enabled = true;
+            break;
+        }
+    }
+
     // Publishing count 0 with a zero array handle is the single "no
     // shadowed in-scatter" state consumers rely on: a nonzero count
     // guarantees the map array and every slot below it are valid.

@@ -198,6 +198,17 @@ typedef struct PostFX {
     GLuint fog_shadow_map_array;                 // 0 when shadows are off
     float fog_shadow_bias;
 
+    // One volumetric spot light (the flashlight), published alongside the
+    // directional casters. The fog march scatters it per step (cone + distance
+    // attenuation + phase) to draw a beam shaft. enabled = false -> no-op.
+    bool fog_spot_enabled;
+    vec3 fog_spot_pos;        // world position
+    vec3 fog_spot_dir;        // normalized cone axis (travel direction)
+    vec3 fog_spot_color;      // color * intensity
+    vec3 fog_spot_atten;      // constant, linear, quadratic
+    float fog_spot_cos_inner; // cutOff (cos inner half-angle)
+    float fog_spot_cos_outer; // outerCutOff (cos outer half-angle)
+
     PostFXDebugView debug_view;
     PostFXTonemapMode tonemap_mode;
 

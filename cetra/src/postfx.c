@@ -290,6 +290,7 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     glm_vec3_copy((vec3){0.05f, 0.05f, 0.05f}, fx->fog_ambient);
     fx->fog_steps = 24;
     fx->fog_ready = false;
+    fx->fog_spot_enabled = false; // published per frame by shadow_publish_to_postfx
 
     // Motion blur (off by default; target allocated lazily on first enable).
     fx->motion_blur_enabled = false;
@@ -1241,6 +1242,16 @@ static GLuint postfx_run_fog(PostFX* fx, bool aux_written, bool taa_resolving, m
         lloc = uniform_location(fu, "lightDir[0]");
         if (lloc >= 0)
             glUniform3fv(lloc, fx->fog_light_count, (const GLfloat*)fx->fog_light_dir);
+    }
+    // Volumetric spot (the flashlight): scattered per march step when present.
+    uniform_set_int(fu, "spotEnabled", fx->fog_spot_enabled ? 1 : 0);
+    if (fx->fog_spot_enabled) {
+        uniform_set_vec3(fu, "spotPos", fx->fog_spot_pos);
+        uniform_set_vec3(fu, "spotDir", fx->fog_spot_dir);
+        uniform_set_vec3(fu, "spotColor", fx->fog_spot_color);
+        uniform_set_vec3(fu, "spotAtten", fx->fog_spot_atten);
+        uniform_set_float(fu, "spotCosInner", fx->fog_spot_cos_inner);
+        uniform_set_float(fu, "spotCosOuter", fx->fog_spot_cos_outer);
     }
     // Under TAA the march's dither rotates per frame and the accumulator
     // integrates it; headless/no-TAA keeps the static dither so equal runs

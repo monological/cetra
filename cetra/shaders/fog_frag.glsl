@@ -35,6 +35,17 @@ uniform int steps;
 uniform int temporal; // 1 when the temporal accumulator integrates frames
 uniform int frameIndex;
 
+// One volumetric spot light (the flashlight): scattered per march step to draw
+// a beam shaft. cos-cutoffs match pbr_frag's surface cone so the shaft edge
+// lines up with the floor pool. spotEnabled == 0 -> skipped.
+uniform int spotEnabled;
+uniform vec3 spotPos;      // world position
+uniform vec3 spotDir;      // normalized cone axis (travel direction)
+uniform vec3 spotColor;    // color * intensity
+uniform vec3 spotAtten;    // (constant, linear, quadratic)
+uniform float spotCosInner;
+uniform float spotCosOuter;
+
 const float PI = 3.14159265359;
 
 // View-space position from screen UV + stored linear view Z (RH, z < 0) —
@@ -127,6 +138,11 @@ void main()
             lsDelta[layer] = (lightSpaceMatrix[layer] * vec4(rayDir, 0.0)).xyz * 0.5;
         }
     }
+    // The spot's phase depends only on its (fixed) axis and the view ray, so it
+    // hoists out of the step loop; cone + distance attenuation stay per step.
+    float spotPhase = (spotEnabled == 1)
+                          ? phaseHG(dot(spotDir, -rayDir), anisotropy) * sunBoost
+                          : 0.0;
 
     float dt = tEnd / float(steps);
     vec3 L = vec3(0.0);
@@ -142,6 +158,20 @@ void main()
         vec3 S = ambientColor;
         for (int j = 0; j < numLights; j++) {
             S += lightK[j] * fogVisibility(j * cascadeCount, t);
+        }
+        // Spot in-scatter at P: inside the cone, falling off with distance. The
+        // cone axis alignment mirrors pbr_frag's spotConeFactor. (Phase 2 will
+        // multiply this by a per-step spot-shadow visibility.)
+        if (spotEnabled == 1) {
+            vec3 toL = spotPos - P;
+            float d = length(toL);
+            float cosT = dot(-toL / max(d, 1e-4), spotDir);
+            float cone = clamp((cosT - spotCosOuter) / max(spotCosInner - spotCosOuter, 1e-4),
+                               0.0, 1.0);
+            if (cone > 0.0) {
+                float atten = 1.0 / max(spotAtten.x + spotAtten.y * d + spotAtten.z * d * d, 1e-4);
+                S += spotColor * (cone * atten * spotPhase);
+            }
         }
         L += T * (1.0 - stepTrans) * S;
         T *= stepTrans;

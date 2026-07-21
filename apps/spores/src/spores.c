@@ -127,8 +127,20 @@ static void on_init(Game* game) {
     // normalizes the metered mean toward middle gray, which for this lit room
     // is too bright for the intended dim interior -- the bias underexposes it
     // back down (photographic exposure compensation; auto-adaptation stays on).
-    if (engine->postfx)
+    if (engine->postfx) {
         engine->postfx->exposure = 0.15f;
+        // Thin volumetric haze so the flashlight throws a visible beam shaft.
+        // Kept low-density with near-zero ambient so the room stays moody and
+        // the beam dominates rather than a general grey wash.
+        engine->postfx->fog_enabled = true;
+        engine->postfx->fog_density = 0.03f;
+        engine->postfx->fog_height_falloff = 8.0f;
+        engine->postfx->fog_floor_y = 0.0f;
+        engine->postfx->fog_far = 40.0f;
+        engine->postfx->fog_anisotropy = 0.7f; // forward scatter -> beam glow
+        engine->postfx->fog_sun_boost = 1.0f;
+        glm_vec3_copy((vec3){0.006f, 0.006f, 0.006f}, engine->postfx->fog_ambient);
+    }
 
     Scene* scene = create_scene();
     SceneNode* root = create_node();
