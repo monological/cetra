@@ -29,19 +29,6 @@ static void copy_string(char* dst, size_t cap, const cJSON* item) {
     }
 }
 
-static bool get_vec3(const cJSON* obj, const char* key, float out[3]) {
-    const cJSON* arr = cJSON_GetObjectItemCaseSensitive(obj, key);
-    if (!cJSON_IsArray(arr) || cJSON_GetArraySize(arr) != 3)
-        return false;
-    for (int i = 0; i < 3; i++) {
-        const cJSON* v = cJSON_GetArrayItem(arr, i);
-        if (!cJSON_IsNumber(v))
-            return false;
-        out[i] = (float)v->valuedouble;
-    }
-    return true;
-}
-
 static bool get_floats(const cJSON* obj, const char* key, float* out, int n) {
     const cJSON* arr = cJSON_GetObjectItemCaseSensitive(obj, key);
     if (!cJSON_IsArray(arr) || cJSON_GetArraySize(arr) != n)
@@ -53,6 +40,10 @@ static bool get_floats(const cJSON* obj, const char* key, float* out, int n) {
         out[i] = (float)v->valuedouble;
     }
     return true;
+}
+
+static bool get_vec3(const cJSON* obj, const char* key, float out[3]) {
+    return get_floats(obj, key, out, 3);
 }
 
 static bool get_float(const cJSON* obj, const char* key, float* out) {
