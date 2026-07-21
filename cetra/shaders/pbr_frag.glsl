@@ -166,6 +166,13 @@ uniform vec2 shadowTexelSize;
 uniform int pcssEnabled;
 uniform float pcssSoftness; // Multiplier on the light's angular size
 
+// Perspective spot shadow map (the flashlight): occludes surfaces (e.g. the
+// glass ball's shadow on the floor). Separate from the directional cascade
+// array; perspective, so its tap needs a per-fragment w-divide.
+uniform sampler2D spotShadowMap;
+uniform mat4 spotShadowMatrix;
+uniform int spotShadowActive;
+
 // Cascade for a view depth: the first cascade whose far bound contains it.
 // At cascadeCount 1 the loop never runs (cascade 0).
 int selectCascade(float viewDepth)
@@ -1052,6 +1059,18 @@ void main() {
             if (shadowSlot >= 0) {
                 shadow = calculateShadow(shadowSlot, fragCascade, WorldPos, NdotL,
                                          max(lights[i].size.x, lights[i].size.y));
+            }
+        }
+        // Spot (flashlight) shadow: sample its perspective map (w-divide). A
+        // slope-scaled bias keeps the grazing floor pool free of acne.
+        if (lights[i].type == 2 && spotShadowActive == 1 && alphaToCoverage == 0) {
+            vec4 ls = spotShadowMatrix * vec4(WorldPos, 1.0);
+            vec3 pc = ls.xyz / ls.w * 0.5 + 0.5;
+            if (ls.w > 0.0 && pc.z <= 1.0 && pc.x >= 0.0 && pc.x <= 1.0 && pc.y >= 0.0 &&
+                pc.y <= 1.0) {
+                float bias = max(0.0015 * (1.0 - NdotL), 0.0004);
+                if (pc.z - bias > texture(spotShadowMap, pc.xy).r)
+                    shadow = 0.0;
             }
         }
 

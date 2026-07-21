@@ -357,6 +357,15 @@ void bind_shadow_maps_to_program(ShadowSystem* system, ShaderProgram* program,
     glBindTexture(GL_TEXTURE_2D_ARRAY, system->shadow_map_array);
     uniform_set_int(u, "shadowMaps", SHADOW_MAP_TEXTURE_UNIT);
 
+    // Perspective spot shadow map (the flashlight) on its own unit above IBL, so
+    // a shadow-casting spot occludes surfaces (e.g. the ball's shadow on the floor).
+    glActiveTexture(GL_TEXTURE0 + SPOT_SHADOW_MAP_TEXTURE_UNIT);
+    glBindTexture(GL_TEXTURE_2D, system->spot_active ? system->spot_shadow_map : 0);
+    uniform_set_int(u, "spotShadowMap", SPOT_SHADOW_MAP_TEXTURE_UNIT);
+    uniform_set_int(u, "spotShadowActive", system->spot_active ? 1 : 0);
+    if (system->spot_active)
+        uniform_set_mat4(u, "spotShadowMatrix", (const float*)system->spot_light_space);
+
     uniform_set_int(u, "numShadowLights", (int)system->active_count);
 
     float texel_size = 1.0f / (float)system->default_map_size;

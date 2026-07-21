@@ -16,6 +16,9 @@
 // shadow + IBL units drop below 16 so brdfLUT/skybox are no longer bound
 // out of spec (GL_MAX_TEXTURE_IMAGE_UNITS = 16, valid 0-15).
 #define SHADOW_MAP_TEXTURE_UNIT 10
+// The perspective spot shadow map sits above the shadow array + IBL units
+// (11-14); 15 is the last valid unit (GL_MAX_TEXTURE_IMAGE_UNITS = 16).
+#define SPOT_SHADOW_MAP_TEXTURE_UNIT 15
 
 // Forward declarations
 struct Scene;
