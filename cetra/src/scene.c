@@ -10,6 +10,7 @@
 #include "scene.h"
 #include "particle_system.h"
 #include "sky.h"
+#include "wind.h"
 #include "mask_array.h"
 #include "program.h"
 #include "shader.h"
@@ -73,6 +74,7 @@ Scene* create_scene() {
     scene->ibl = NULL;
     scene->probe = NULL;
     scene->sky = NULL;
+    scene->wind = NULL;
     scene->render_skybox = false;
     scene->skybox_brightness = 1.0f;
     scene->skybox_ground_projection = false;
@@ -186,6 +188,12 @@ void free_scene(Scene* scene) {
     if (scene->sky) {
         free_sky_atmosphere(scene->sky);
         scene->sky = NULL;
+    }
+
+    // Free the scene wind
+    if (scene->wind) {
+        free_wind(scene->wind);
+        scene->wind = NULL;
     }
 
     // Free the material mask texture array
@@ -459,6 +467,14 @@ int add_material_to_scene(Scene* scene, Material* material) {
     scene->material_count = new_count;
     scene->mask_array_dirty = true; // a new material's masks must be (re)packed
     return 0;
+}
+
+void set_scene_wind(Scene* scene, struct Wind* wind) {
+    if (!scene)
+        return;
+    if (scene->wind && scene->wind != wind)
+        free_wind(scene->wind);
+    scene->wind = wind;
 }
 
 int add_skeleton_to_scene(Scene* scene, Skeleton* skeleton) {

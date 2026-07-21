@@ -1173,6 +1173,8 @@ void configure_sss_materials(Engine* engine, Scene* scene, float radius, const f
     if (cscn && cscn->material_count > 0) {
         for (int k = 0; k < cscn->material_count; k++) {
             const CSceneMaterialOverride* mo = &cscn->materials[k];
+            if (!mo->has_sss) // wind-only overrides live in the same table
+                continue;
             vec3 prof_color;
             glm_vec3_copy((float*)mo->sss_color, prof_color);
             if (k == 0 && color && color[0] >= 0.0f)
@@ -1515,6 +1517,7 @@ int main(int argc, char** argv) {
 
     configure_visor_materials(scene);
     configure_sss_materials(engine, scene, args.sss_radius, args.sss_color, cscn);
+    apply_cscene_wind(scene, cscn);
 
     // Scene-file lights precede the environment/key-light logic so they
     // count as "model ships lights" for the auto-key-light skip.

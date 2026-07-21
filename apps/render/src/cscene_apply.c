@@ -7,9 +7,11 @@
 #include "cetra/cscene.h"
 #include "cetra/ext/cwalk.h"
 #include "cetra/light.h"
+#include "cetra/mesh.h"
 #include "cetra/postfx.h"
 #include "cetra/scene.h"
 #include "cetra/util.h"
+#include "cetra/wind.h"
 
 #include "cscene_apply.h"
 
@@ -153,8 +155,7 @@ void apply_cscene_light_overrides(Scene* scene, const CetraSceneDesc* cscn, floa
         const CSceneLightOverride* ov = &cscn->light_overrides[k];
         Light* light = find_light_by_name(scene, ov->name);
         if (!light) {
-            fprintf(stderr, "Warning: scene-file light override '%s' matches no light\n",
-                    ov->name);
+            fprintf(stderr, "Warning: scene-file light override '%s' matches no light\n", ov->name);
             continue;
         }
         if (ov->has_size_from_angle) {
@@ -166,5 +167,68 @@ void apply_cscene_light_overrides(Scene* scene, const CetraSceneDesc* cscn, floa
         if (ov->has_intensity) {
             set_light_intensity(light, ov->intensity);
         }
+    }
+}
+
+// Opt every mesh whose material matches `mat_name` into the scene wind, and set
+// its top-pinned/hem-free mask from the mesh's local-space AABB Y bounds.
+static int apply_wind_response_to_meshes(SceneNode* node, const char* mat_name, float response) {
+    if (!node)
+        return 0;
+    int count = 0;
+    for (size_t i = 0; i < node->mesh_count; i++) {
+        Mesh* mesh = node->meshes[i];
+        if (!mesh || !mesh->material || !mesh->material->name)
+            continue;
+        if (strcmp(mesh->material->name, mat_name) == 0) {
+            mesh->material->wind_response = response;
+            mesh->material->wind_mask_min_y = mesh->aabb.min[1];
+            mesh->material->wind_mask_max_y = mesh->aabb.max[1];
+            count++;
+        }
+    }
+    for (size_t c = 0; c < node->children_count; c++)
+        count += apply_wind_response_to_meshes(node->children[c], mat_name, response);
+    return count;
+}
+
+void apply_cscene_wind(Scene* scene, const CetraSceneDesc* cscn) {
+    if (!scene || !cscn)
+        return;
+
+    // 1. The scene wind field -- a first-class scene object (like the sky).
+    //    Absent fields keep create_wind's gentle-draft defaults.
+    if (cscn->wind_enabled) {
+        Wind* wind = create_wind("SceneWind");
+        if (wind) {
+            if (cscn->has_wind_direction)
+                glm_vec3_copy((float*)cscn->wind_direction, wind->direction);
+            if (cscn->has_wind_strength)
+                wind->strength = cscn->wind_strength;
+            if (cscn->has_wind_speed)
+                wind->speed = cscn->wind_speed;
+            if (cscn->has_wind_gust_frequency)
+                wind->gust_frequency = cscn->wind_gust_frequency;
+            if (cscn->has_wind_gust_amount)
+                wind->gust_amount = cscn->wind_gust_amount;
+            if (cscn->has_wind_turbulence)
+                wind->turbulence = cscn->wind_turbulence;
+            set_scene_wind(scene, wind);
+            printf("Scene file: wind dir=(%.2f, %.2f, %.2f), strength %.3f\n", wind->direction[0],
+                   wind->direction[1], wind->direction[2], wind->strength);
+        }
+    }
+
+    // 2. Per-material opt-in: mark responsive materials and derive their mask.
+    for (int k = 0; k < cscn->material_count; k++) {
+        const CSceneMaterialOverride* mo = &cscn->materials[k];
+        if (!mo->has_wind_response)
+            continue;
+        int tagged =
+            apply_wind_response_to_meshes(scene->root_node, mo->material, mo->wind_response);
+        printf("Scene file: wind response %.2f on material '%s' (%d mesh(es))\n", mo->wind_response,
+               mo->material, tagged);
+        if (tagged == 0)
+            fprintf(stderr, "Warning: wind material '%s' matches no mesh in scene\n", mo->material);
     }
 }

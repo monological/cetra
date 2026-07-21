@@ -20,6 +20,8 @@
 // Forward-declared so scene.h and particle_system.h never include each other
 // (particle_system.h forward-declares SceneNode in turn) -- avoids a cycle.
 struct ParticleSystem;
+// Directional wind field (wind.h); a scene-owned environmental object like sky.
+struct Wind;
 
 /*
  * SceneNode
@@ -133,6 +135,7 @@ typedef struct Scene {
     IBLResources* ibl;
     ReflectionProbe* probe;    // local reflection probe (optional)
     struct SkyAtmosphere* sky; // procedural sky feeding ibl (optional)
+    struct Wind* wind;         // dominant directional wind (optional; owned)
 
     // Scalar material masks packed into one GL_TEXTURE_2D_ARRAY (built lazily
     // once the source textures have loaded; see mask_array.h). dirty triggers a
@@ -187,6 +190,9 @@ Light** get_closest_lights(Scene* scene, SceneNode* target_node, size_t max_ligh
 
 // material
 int add_material_to_scene(Scene* scene, Material* material);
+
+// wind (scene-owned; freed in free_scene). Replaces any existing wind.
+void set_scene_wind(Scene* scene, struct Wind* wind);
 
 // skeleton
 int add_skeleton_to_scene(Scene* scene, Skeleton* skeleton);

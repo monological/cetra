@@ -53,8 +53,11 @@ typedef struct CSceneLightOverride {
 
 typedef struct CSceneMaterialOverride {
     char material[CSCENE_MAX_NAME];
+    bool has_sss;
     float sss_color[3];
     float sss_radius;
+    bool has_wind_response; // opts the material into the scene wind (WPO cloth)
+    float wind_response;    // 0 = rigid; 1 = full sway
 } CSceneMaterialOverride;
 
 typedef struct CetraSceneDesc {
@@ -91,6 +94,22 @@ typedef struct CetraSceneDesc {
     float fog_density;
     bool has_fog_anisotropy;
     float fog_anisotropy;
+
+    // wind -- a first-class directional scene wind (wind.h). Each value carries
+    // its own presence flag; absent fields keep the Wind's built-in defaults.
+    bool wind_enabled;
+    bool has_wind_direction;
+    float wind_direction[3];
+    bool has_wind_strength;
+    float wind_strength;
+    bool has_wind_speed;
+    float wind_speed;
+    bool has_wind_gust_frequency;
+    float wind_gust_frequency;
+    bool has_wind_gust_amount;
+    float wind_gust_amount;
+    bool has_wind_turbulence;
+    float wind_turbulence;
 
     CSceneMaterialOverride materials[CSCENE_MAX_MATERIALS];
     int material_count;

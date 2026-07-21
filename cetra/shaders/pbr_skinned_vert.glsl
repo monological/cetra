@@ -36,6 +36,34 @@ uniform mat4 uPrevModel;
 uniform vec3 camPos;
 uniform float time;
 
+// Directional wind (wind.h) -- global scene field + per-material response.
+uniform float uDeltaTime;
+uniform vec3 uWindDir;
+uniform float uWindStrength;
+uniform float uWindSpeed;
+uniform float uWindGustFreq;
+uniform float uWindGustAmount;
+uniform float uWindTurbulence;
+uniform float uWindResponse;
+uniform float uWindMaskMinY;
+uniform float uWindMaskMaxY;
+
+// World-Position Offset wind for cloth (see pbr_vert.glsl for the full note).
+// Masked by object-space height so the hem swings and the top stays pinned.
+vec3 windOffset(vec3 p, float t) {
+    if (uWindStrength <= 0.0 || uWindResponse <= 0.0)
+        return vec3(0.0);
+    float denom = max(uWindMaskMaxY - uWindMaskMinY, 1e-4);
+    float h = clamp((uWindMaskMaxY - p.y) / denom, 0.0, 1.0);
+    float mask = h * h;
+    float gust = mix(1.0 - uWindGustAmount, 1.0, pow(0.5 + 0.5 * sin(t * uWindGustFreq), 3.0));
+    float ph = t * uWindSpeed + p.y * 2.0 + p.x * 1.3;
+    float sway = 0.5 + 0.5 * sin(ph);
+    float amp = uWindStrength * uWindResponse * mask * gust;
+    vec3 flutter = vec3(sin(ph * 3.1), 0.0, cos(ph * 2.7)) * (uWindTurbulence * amp * 0.3);
+    return normalize(uWindDir) * (sway * amp) + flutter;
+}
+
 // Skinning uniforms
 uniform bool skinned;
 uniform mat4 boneMatrices[MAX_BONES];
@@ -106,6 +134,11 @@ void main() {
         localTangent = aTangent;
         localBitangent = aBitangent;
     }
+
+    // Wind (object-space displacement, masked by height). aPos is the un-skinned
+    // rest position -- the right reference for the top-pinned/hem-free mask.
+    localPos.xyz += windOffset(aPos, time);
+    prevLocalPos.xyz += windOffset(aPos, time - uDeltaTime);
 
     // Transform to world space
     vec4 worldPos = model * localPos;

@@ -172,6 +172,20 @@ static void parse_post(CetraSceneDesc* d, const cJSON* root) {
     }
 }
 
+static void parse_wind(CetraSceneDesc* d, const cJSON* root) {
+    const cJSON* wind = cJSON_GetObjectItemCaseSensitive(root, "wind");
+    if (!cJSON_IsObject(wind))
+        return;
+    d->wind_enabled = true; // presence implies on unless "enabled": false
+    get_bool(wind, "enabled", &d->wind_enabled);
+    d->has_wind_direction = get_vec3(wind, "direction", d->wind_direction);
+    d->has_wind_strength = get_float(wind, "strength", &d->wind_strength);
+    d->has_wind_speed = get_float(wind, "speed", &d->wind_speed);
+    d->has_wind_gust_frequency = get_float(wind, "gustFrequency", &d->wind_gust_frequency);
+    d->has_wind_gust_amount = get_float(wind, "gustAmount", &d->wind_gust_amount);
+    d->has_wind_turbulence = get_float(wind, "turbulence", &d->wind_turbulence);
+}
+
 static void parse_materials(CetraSceneDesc* d, const cJSON* root) {
     const cJSON* mats = cJSON_GetObjectItemCaseSensitive(root, "materials");
     if (!cJSON_IsObject(mats))
@@ -187,10 +201,15 @@ static void parse_materials(CetraSceneDesc* d, const cJSON* root) {
             continue;
         CSceneMaterialOverride* out = &d->materials[d->material_count];
         snprintf(out->material, CSCENE_MAX_NAME, "%s", m->string);
+
         const cJSON* sss = cJSON_GetObjectItemCaseSensitive(m, "sss");
-        if (!cJSON_IsObject(sss) || !get_vec3(sss, "color", out->sss_color) ||
-            !get_float(sss, "radius", &out->sss_radius)) {
-            log_warn("cscene: material '%s' needs sss with color[3] and radius; skipped",
+        out->has_sss = cJSON_IsObject(sss) && get_vec3(sss, "color", out->sss_color) &&
+                       get_float(sss, "radius", &out->sss_radius);
+
+        out->has_wind_response = get_float(m, "windResponse", &out->wind_response);
+
+        if (!out->has_sss && !out->has_wind_response) {
+            log_warn("cscene: material '%s' has no usable sss or windResponse; skipped",
                      out->material);
             continue;
         }
@@ -242,6 +261,7 @@ CetraSceneDesc* cscene_load(const char* path) {
     parse_lights(d, root);
     parse_light_overrides(d, root);
     parse_post(d, root);
+    parse_wind(d, root);
     parse_materials(d, root);
     parse_camera(d, root);
     cJSON_Delete(root);

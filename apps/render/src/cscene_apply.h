@@ -29,4 +29,9 @@ void add_cscene_lights(Scene* scene, const CetraSceneDesc* cscn);
 // the global light sizing pass.
 void apply_cscene_light_overrides(Scene* scene, const CetraSceneDesc* cscn, float scene_radius);
 
+// Create the scene's directional wind (if any) and opt matching materials into
+// it (windResponse), deriving each cloth mesh's sway mask from its AABB. Runs
+// after the scene graph and materials exist.
+void apply_cscene_wind(Scene* scene, const CetraSceneDesc* cscn);
+
 #endif // CSCENE_APPLY_H

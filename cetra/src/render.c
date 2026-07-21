@@ -10,6 +10,7 @@
 #include "ext/log.h"
 #include "scene.h"
 #include "sky.h"
+#include "wind.h"
 #include "program.h"
 #include "uniform.h"
 #include "shader.h"
@@ -191,6 +192,11 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
     uniform_set_vec2(u, "uvOffset", (const float*)&material->uvOffset);
     uniform_set_vec2(u, "uvScale", (const float*)&material->uvScale);
     uniform_set_float(u, "uvRotation", material->uvRotation);
+    // Wind response (0 = rigid). Uploaded per material switch, so non-cloth
+    // materials reset it to 0 and the shader early-outs for them.
+    uniform_set_float(u, "uWindResponse", material->wind_response);
+    uniform_set_float(u, "uWindMaskMinY", material->wind_mask_min_y);
+    uniform_set_float(u, "uWindMaskMaxY", material->wind_mask_max_y);
 
     // Dedicated (native-resolution) sampler units. The scalar masks
     // (roughness/metallic/ao/opacity/microsurface/anisotropy) are no
@@ -359,6 +365,10 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
             uniform_set_mat4(u, "uCurrViewProjNoJitter", (const float*)engine->view_proj);
             uniform_set_mat4(u, "uPrevViewProj", (const float*)engine->prev_view_proj);
             uniform_set_float(u, "time", time_value);
+            // Global directional wind (NULL -> uWindStrength 0 -> shader early-out);
+            // dt feeds the previous-frame position so wind stays motion-correct.
+            uniform_set_float(u, "uDeltaTime", (float)engine->delta_time);
+            wind_upload_to_program(scene ? scene->wind : NULL, u);
             uniform_set_int(u, "renderMode", render_mode);
             uniform_set_float(u, "specularAAStrength", engine->specular_aa_strength);
             uniform_set_int(u, "energyCompEnabled", engine->energy_comp_enabled ? 1 : 0);
