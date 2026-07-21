@@ -59,8 +59,12 @@ BAKE_SAMPLES = 8
 BAKE_MARGIN = 8  # px dilation past island borders
 REBAKE = False   # force re-bake even when cached textures are up to date
 BAKE_UV = "cetra_bake"
-# Atlas resolution by summed world-space surface area of the material's users.
-BAKE_RES_TIERS = [(20.0, 2048), (2.0, 1024), (0.0, 512)]
+# Atlas resolution from a texel-density target: res ~= sqrt(area) * density,
+# rounded up to a power of two. Keeps px/m roughly constant instead of
+# splitting one fixed-size atlas across arbitrarily large surfaces.
+BAKE_TEXEL_DENSITY = 384  # px per meter
+BAKE_RES_MIN = 512
+BAKE_RES_MAX = 4096
 
 # ---------------------------------------------------------------------------
 
@@ -259,10 +263,11 @@ def collect_bake_set(exported):
 
 
 def bake_resolution(area):
-    for threshold, res in BAKE_RES_TIERS:
-        if area >= threshold:
-            return res
-    return 512
+    want = math.sqrt(max(area, 0.01)) * BAKE_TEXEL_DENSITY
+    res = BAKE_RES_MIN
+    while res < want and res < BAKE_RES_MAX:
+        res *= 2
+    return res
 
 
 def tex_paths(tex_dir, mat, passes):
@@ -300,8 +305,10 @@ def ensure_bake_uv(entry):
     bpy.context.view_layer.objects.active = objs[0]
     bpy.ops.object.mode_set(mode="EDIT")
     bpy.ops.mesh.select_all(action="SELECT")
-    bpy.ops.uv.smart_project(angle_limit=math.radians(66.0), island_margin=0.02)
-    bpy.ops.uv.pack_islands(margin=0.02)
+    # Tight margins: the bake's pixel dilation (BAKE_MARGIN) handles bleed;
+    # fat UV gutters just waste atlas area.
+    bpy.ops.uv.smart_project(angle_limit=math.radians(66.0), island_margin=0.005)
+    bpy.ops.uv.pack_islands(margin=0.003)
     bpy.ops.object.mode_set(mode="OBJECT")
 
 
@@ -683,7 +690,9 @@ def collect_sss(manifest):
         radius_v = socket_value(node, "Subsurface Radius", (1.0, 0.2, 0.1))
         scale = socket_value(node, "Subsurface Scale", 0.05)
         peak = max(radius_v[0], radius_v[1], radius_v[2], 1e-6)
-        color = [round(radius_v[i] / peak, 3) for i in range(3)]
+        # Temper the normalized radius toward neutral: the raw ratio makes an
+        # oversaturated transmission tint (acid green on foliage).
+        color = [round(0.5 + 0.5 * (radius_v[i] / peak), 3) for i in range(3)]
         materials[m.name] = {"sss": {"color": color, "radius": round(float(scale), 4)}}
         manifest.append("sss material '%s' (radius %.3f)" % (m.name, scale))
     return materials
