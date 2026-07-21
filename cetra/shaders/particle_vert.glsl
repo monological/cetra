@@ -7,7 +7,6 @@ layout(location = 0) in vec2 aCorner; // unit quad corner in [-1,1]
 layout(location = 9) in vec3 iCenter;
 layout(location = 10) in vec4 iParams; // x=size, y=rotation, z=lifeFrac, w=seed
 layout(location = 11) in vec4 iColor;
-layout(location = 12) in vec3 iVelocity; // reserved for velocity stretch (M5)
 
 uniform mat4 view;
 uniform mat4 projection;

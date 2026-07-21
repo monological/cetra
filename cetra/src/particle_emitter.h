@@ -35,8 +35,8 @@ typedef struct ParticleEmitter {
     struct ParticleRenderer* renderer; // owned; may be NULL
 } ParticleEmitter;
 
-ParticleEmitter* create_emitter(const char* name, size_t capacity);
-void free_emitter(ParticleEmitter* e);
+ParticleEmitter* create_particle_emitter(const char* name, size_t capacity);
+void free_particle_emitter(ParticleEmitter* e);
 
 // Append a module to its phase list (routed by m->phase). The emitter takes
 // ownership of the module.
@@ -47,8 +47,5 @@ void particle_emitter_set_renderer(ParticleEmitter* e, struct ParticleRenderer* 
 
 // Deterministic per-emitter random in [0,1), advancing rng_state.
 float particle_emitter_rand01(ParticleEmitter* e);
-
-// Clear all live particles and re-arm the RNG (for deterministic A/B runs).
-void particle_emitter_reset(ParticleEmitter* e);
 
 #endif // _PARTICLE_EMITTER_H_

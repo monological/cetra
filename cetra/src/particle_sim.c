@@ -24,8 +24,11 @@ static void cpu_simulate(ParticleSimBackend* b, ParticleEmitter* e, float dt, fl
     // 2. Spawn, then stamp infrastructure defaults on the new slice. Seeding,
     //    age, and the div-by-zero lifetime guard are backend bookkeeping -- not
     //    behavior -- so they live here, not in a module.
+    // Guard the float->size_t cast: a net-negative spawn_request (e.g. a
+    // negative rate) would otherwise be UB and flood the pool.
     size_t old_count = pool->count;
-    particle_pool_spawn(pool, (size_t)(e->spawn_request + 0.5f));
+    size_t want = e->spawn_request > 0.0f ? (size_t)(e->spawn_request + 0.5f) : 0;
+    particle_pool_spawn(pool, want);
     for (size_t i = old_count; i < pool->count; i++) {
         pool->age[i] = 0.0f;
         pool->lifetime[i] = 1.0f; // guard; init_lifetime overwrites
@@ -78,8 +81,6 @@ static void cpu_acquire_instances(ParticleSimBackend* b, ParticleEmitter* e,
         d->params[2] = pool->lifetime[i] > 0.0f ? pool->age[i] / pool->lifetime[i] : 0.0f;
         d->params[3] = pool->seed[i];
         glm_vec4_copy(pool->color[i], d->color);
-        glm_vec3_copy(pool->velocity[i], d->velocity);
-        d->_pad1 = 0.0f;
     }
 
     out->count = pool->count;

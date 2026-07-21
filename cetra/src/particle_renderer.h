@@ -14,8 +14,6 @@ struct Scene;
 typedef struct ParticleRenderContext {
     mat4 view;
     mat4 proj;
-    vec3 camera_pos;
-    float time;
     struct Scene* scene;        // lights[] + shadow_system (used from M3)
     GLuint scene_depth_texture; // single-sample scene depth for soft particles (0 = off, M4)
 } ParticleRenderContext;

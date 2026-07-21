@@ -64,11 +64,6 @@ ParticleModule* particle_module_spawn_rate(float rate) {
     return module_new("spawn_rate", PARTICLE_PHASE_SPAWN, spawn_rate_run, p);
 }
 
-void particle_module_spawn_rate_set(ParticleModule* m, float rate) {
-    if (m && m->params)
-        ((SpawnRateParams*)m->params)->rate = rate;
-}
-
 // --- INIT: box location ---
 
 typedef struct {
@@ -182,8 +177,7 @@ static void update_curl_run(ParticleModule* m, ParticleEmitter* e, size_t begin,
         vec3 c = {0.0f, 0.0f, 0.0f}; // noise_curl3 writes it (out-param)
         noise_curl3(e->pool->position[i][0] * p->scale, e->pool->position[i][1] * p->scale,
                     e->pool->position[i][2] * p->scale + t * p->timescale, c);
-        for (int k = 0; k < 3; k++)
-            e->pool->velocity[i][k] += c[k] * p->strength * dt;
+        glm_vec3_muladds(c, p->strength * dt, e->pool->velocity[i]);
     }
 }
 
@@ -197,11 +191,6 @@ ParticleModule* particle_module_update_curl_noise(float scale, float strength, f
     return module_new("update_curl_noise", PARTICLE_PHASE_UPDATE, update_curl_run, p);
 }
 
-void particle_module_curl_set_strength(ParticleModule* m, float strength) {
-    if (m && m->params)
-        ((CurlParams*)m->params)->strength = strength;
-}
-
 // --- UPDATE: drift (constant acceleration) ---
 
 typedef struct {
@@ -211,10 +200,9 @@ typedef struct {
 static void update_drift_run(ParticleModule* m, ParticleEmitter* e, size_t begin, size_t end,
                              float dt, float t) {
     (void)t;
-    DriftParams* p = m->params;
+    const DriftParams* p = m->params;
     for (size_t i = begin; i < end; i++)
-        for (int k = 0; k < 3; k++)
-            e->pool->velocity[i][k] += p->accel[k] * dt;
+        glm_vec3_muladds(p->accel, dt, e->pool->velocity[i]);
 }
 
 ParticleModule* particle_module_update_drift(vec3 accel) {
@@ -236,10 +224,8 @@ static void update_integrate_run(ParticleModule* m, ParticleEmitter* e, size_t b
     (void)t;
     const IntegrateParams* p = m->params;
     for (size_t i = begin; i < end; i++) {
-        for (int k = 0; k < 3; k++)
-            e->pool->position[i][k] += e->pool->velocity[i][k] * dt;
-        for (int k = 0; k < 3; k++)
-            e->pool->velocity[i][k] *= p->drag;
+        glm_vec3_muladds(e->pool->velocity[i], dt, e->pool->position[i]);
+        glm_vec3_scale(e->pool->velocity[i], p->drag, e->pool->velocity[i]);
     }
 }
 

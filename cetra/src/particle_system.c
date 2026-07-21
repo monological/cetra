@@ -27,8 +27,10 @@ void particle_system_add_emitter(ParticleSystem* s, ParticleEmitter* e) {
     if (s->emitter_count == s->emitter_cap) {
         size_t nc = s->emitter_cap ? s->emitter_cap * 2 : INITIAL_EMITTER_CAP;
         ParticleEmitter** grown = realloc(s->emitters, nc * sizeof(ParticleEmitter*));
-        if (!grown)
+        if (!grown) {
+            free_particle_emitter(e); // ownership was transferred to us
             return;
+        }
         s->emitters = grown;
         s->emitter_cap = nc;
     }
@@ -45,6 +47,11 @@ void particle_system_update(ParticleSystem* s, float dt, float t) {
 void particle_system_render(ParticleSystem* s, const ParticleRenderContext* ctx) {
     if (!s || !s->backend)
         return;
+    // Per emitter: acquire -> prepare -> draw, kept paired on purpose. The CPU
+    // backend hands back a view into ONE shared staging buffer, so the next
+    // emitter's acquire overwrites it; prepare uploads to that emitter's own VBO
+    // before we move on. A future "acquire all, then draw all" refactor would
+    // need per-emitter staging.
     for (size_t i = 0; i < s->emitter_count; i++) {
         ParticleEmitter* e = s->emitters[i];
         if (!e->renderer)
@@ -63,7 +70,7 @@ void free_particle_system(ParticleSystem* s) {
     if (!s)
         return;
     for (size_t i = 0; i < s->emitter_count; i++)
-        free_emitter(s->emitters[i]);
+        free_particle_emitter(s->emitters[i]);
     free(s->emitters);
     if (s->backend && s->backend->free_fn)
         s->backend->free_fn(s->backend);

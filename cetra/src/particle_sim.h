@@ -9,15 +9,14 @@ struct ParticleEmitter;
 
 // Canonical per-instance layout: the SINGLE contract shared by the CPU backend
 // (which packs it) and the billboard renderer (which binds it as instanced
-// vertex attributes). 64 bytes with explicit padding, std430-friendly for a
+// vertex attributes). 48 bytes with explicit padding, std430-friendly for a
 // future GL 4.3 compute backend. See specs/5.0-particle-system.md.
+// (A per-instance velocity for M5 velocity-stretch will re-add a vec4 here.)
 typedef struct ParticleInstanceData {
     vec3 center;
     float _pad0; // offset 0
     vec4 params; // offset 16: x=size, y=rotation, z=lifeFrac, w=seed
     vec4 color;  // offset 32: linear HDR rgba (base)
-    vec3 velocity;
-    float _pad1; // offset 48: velocity for stretch
 } ParticleInstanceData;
 
 // What a renderer consumes -- never the pool. The CPU path fills cpu_instances;

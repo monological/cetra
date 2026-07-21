@@ -139,7 +139,7 @@ static void on_init(Game* game) {
     g_sys = create_particle_system("spores");
     particle_system_set_backend(g_sys, create_cpu_particle_sim_backend());
 
-    ParticleEmitter* em = create_emitter("spore", 20000);
+    ParticleEmitter* em = create_particle_emitter("spore", 20000);
     particle_emitter_set_renderer(em, create_billboard_particle_renderer(particle_prog));
     particle_emitter_add_module(em, particle_module_spawn_rate(2000.0f));
     particle_emitter_add_module(
@@ -193,9 +193,6 @@ static void on_render(Game* game, double alpha) {
         ParticleRenderContext ctx = {0};
         glm_mat4_copy(engine->view_matrix, ctx.view);
         glm_mat4_copy(engine->draw_projection, ctx.proj);
-        if (engine->camera)
-            glm_vec3_copy(engine->camera->position, ctx.camera_pos);
-        ctx.time = (float)game->time;
         ctx.scene = scene;
         ctx.scene_depth_texture = depth_tex;
         particle_system_render(g_sys, &ctx);

@@ -7,7 +7,7 @@
 #define INITIAL_MODULE_CAP 4
 #define EMITTER_RNG_SEED   0x9E3779B9u
 
-ParticleEmitter* create_emitter(const char* name, size_t capacity) {
+ParticleEmitter* create_particle_emitter(const char* name, size_t capacity) {
     ParticleEmitter* e = calloc(1, sizeof(ParticleEmitter));
     if (!e)
         return NULL;
@@ -31,7 +31,7 @@ static void free_module_list(ParticleModule** list, size_t n) {
     free(list);
 }
 
-void free_emitter(ParticleEmitter* e) {
+void free_particle_emitter(ParticleEmitter* e) {
     if (!e)
         return;
     free_module_list(e->spawn, e->n_spawn);
@@ -48,8 +48,10 @@ static void list_push(ParticleModule*** list, size_t* n, size_t* cap, ParticleMo
     if (*n == *cap) {
         size_t nc = *cap ? *cap * 2 : INITIAL_MODULE_CAP;
         ParticleModule** grown = realloc(*list, nc * sizeof(ParticleModule*));
-        if (!grown)
+        if (!grown) {
+            free_particle_module(m); // ownership was transferred to us
             return;
+        }
         *list = grown;
         *cap = nc;
     }
@@ -87,13 +89,4 @@ float particle_emitter_rand01(ParticleEmitter* e) {
     x ^= x << 5;
     e->rng_state = x;
     return (float)(x >> 8) * (1.0f / 16777216.0f);
-}
-
-void particle_emitter_reset(ParticleEmitter* e) {
-    if (!e)
-        return;
-    if (e->pool)
-        e->pool->count = 0;
-    e->spawn_request = 0.0f;
-    e->rng_state = EMITTER_RNG_SEED;
 }

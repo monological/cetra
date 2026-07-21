@@ -4,8 +4,8 @@
 #include <stdlib.h>
 
 // Permutation table (Ken Perlin's improved-noise scheme), doubled to 512 so the
-// gradient index math never wraps. Promoted from the app-local 2D version in
-// apps/tree with a 3D gradient + curl added.
+// gradient index math never wraps. Uses the same Fisher-Yates build as the
+// separate 2D Perlin in apps/tree, with a 3D gradient + curl added here.
 static int s_perm[512];
 static int s_seeded = 0;
 
@@ -68,20 +68,6 @@ float noise_perlin3(float x, float y, float z) {
                       grad3(s_perm[BB + 1], xf - 1, yf - 1, zf - 1), u),
                v),
         w);
-}
-
-float noise_fbm3(float x, float y, float z, int octaves, float persistence) {
-    float total = 0.0f;
-    float amplitude = 1.0f;
-    float frequency = 1.0f;
-    float max_value = 0.0f;
-    for (int i = 0; i < octaves; i++) {
-        total += noise_perlin3(x * frequency, y * frequency, z * frequency) * amplitude;
-        max_value += amplitude;
-        amplitude *= persistence;
-        frequency *= 2.0f;
-    }
-    return max_value > 0.0f ? total / max_value : 0.0f;
 }
 
 void noise_curl3(float x, float y, float z, vec3 out) {

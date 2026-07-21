@@ -42,7 +42,6 @@ void free_particle_module(ParticleModule* m);
 // SPAWN: emit `rate` particles per second (fractional remainder accumulated so
 // rates below 1/dt still spawn).
 ParticleModule* particle_module_spawn_rate(float rate);
-void particle_module_spawn_rate_set(ParticleModule* m, float rate);
 
 // INIT: uniformly random position inside the AABB [min,max].
 ParticleModule* particle_module_init_box_location(vec3 min, vec3 max);
@@ -57,7 +56,6 @@ ParticleModule* particle_module_init_color(vec4 base_rgba, float rgb_jitter);
 // the spatial frequency, `strength` the acceleration magnitude, `timescale` the
 // rate the noise domain drifts over time (organic, non-repeating swirl).
 ParticleModule* particle_module_update_curl_noise(float scale, float strength, float timescale);
-void particle_module_curl_set_strength(ParticleModule* m, float strength);
 
 // UPDATE: add a constant acceleration (m/s^2), e.g. faint upward buoyancy.
 ParticleModule* particle_module_update_drift(vec3 accel);
