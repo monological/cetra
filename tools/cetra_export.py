@@ -16,9 +16,12 @@ Exclusions: objects with a custom property `cetra_exclude`, wire-display
 helpers, volume-material objects (they become fog), and anything in a
 collection named `_cetra_exclude`.
 
-Milestone 2 will replace FLATTEN_OVERRIDES with real texture baking; until
-then, materials with procedural node graphs (which glTF cannot express) are
-swapped to flat colors from this table during export and restored afterward.
+Materials whose node graphs glTF cannot express are BAKED to texture sets
+(diffuse/roughness/normal/emissive, alpha packed into base color) on a
+generated `cetra_bake` UV layer, one atlas per material across all its user
+meshes. Bakes are cached in <out_dir>/textures/ and skipped when up to date;
+pass -- --rebake (or set REBAKE) to force. During export the materials are
+swapped to baked stand-ins (name-preserving) and restored afterward.
 """
 
 import json
@@ -49,19 +52,15 @@ BLOOM_STRENGTH_K = 0.75
 # this; it turns the environment light into local bounce).
 PROBE_SCENE = True
 
-# Procedural-material flatten table (milestone-2 baking replaces this).
-# material name -> dict(color=(r,g,b), rough=f, alpha=f|None, emissive=(r,g,b,strength)|None)
-FLATTEN_OVERRIDES = {
-    "IvyLeafReal": {"color": (0.10, 0.30, 0.05), "rough": 0.5},
-    "LaceCurtain": {"color": (0.92, 0.90, 0.86), "rough": 0.6, "alpha": 0.55},
-    "SheerCurtain": {"color": (0.90, 0.88, 0.84), "rough": 0.6, "alpha": 0.7},
-    "Glass_Grime": {"color": (0.80, 0.85, 0.80), "rough": 0.3, "alpha": 0.15},
-    "PaintFlake": {"color": (0.33, 0.31, 0.27), "rough": 0.8},
-    "grey_plaster_02": {"color": (0.145, 0.125, 0.105), "rough": 0.95},
-    "sill_painted_mossy": {"color": (0.30, 0.28, 0.23), "rough": 0.85},
-    "distressed_painted_planks": {"color": (0.52, 0.50, 0.45), "rough": 0.7},
-    "SkyGlow": {"color": (1.0, 1.0, 1.0), "rough": 1.0, "emissive": (1.0, 0.96, 0.86, 2.5)},
-}
+# --- baking ---
+# Bake sample count: these are value maps (albedo/roughness/normals), not
+# light transport, so a handful of samples converges.
+BAKE_SAMPLES = 8
+BAKE_MARGIN = 8  # px dilation past island borders
+REBAKE = False   # force re-bake even when cached textures are up to date
+BAKE_UV = "cetra_bake"
+# Atlas resolution by summed world-space surface area of the material's users.
+BAKE_RES_TIERS = [(20.0, 2048), (2.0, 1024), (0.0, 512)]
 
 # ---------------------------------------------------------------------------
 
@@ -115,56 +114,31 @@ def socket_value(node, name, default=None):
 
 
 # ---------------------------------------------------------------------------
-# Material flattening (restore-after-export)
+# Name-preserving material swap (stand-ins keep the authored name so the GLB
+# and the .cscn keep matching on it; originals are renamed aside and restored)
 
 
-def build_flat_material(name, spec):
-    m = bpy.data.materials.new(name)
-    m.use_nodes = True
-    nt = m.node_tree
-    for n in list(nt.nodes):
-        nt.nodes.remove(n)
-    out = nt.nodes.new("ShaderNodeOutputMaterial")
-    b = nt.nodes.new("ShaderNodeBsdfPrincipled")
-    b.inputs["Base Color"].default_value = (*spec["color"], 1.0)
-    b.inputs["Roughness"].default_value = spec.get("rough", 0.8)
-    if spec.get("alpha") is not None:
-        b.inputs["Alpha"].default_value = spec["alpha"]
-        try:
-            m.surface_render_method = "BLENDED"
-        except AttributeError:
-            m.blend_method = "BLEND"
-    emissive = spec.get("emissive")
-    if emissive:
-        b.inputs["Emission Color"].default_value = (*emissive[:3], 1.0)
-        b.inputs["Emission Strength"].default_value = emissive[3]
-    nt.links.new(b.outputs[0], out.inputs["Surface"])
-    return m
-
-
-def flatten_materials():
-    """Swap procedural materials to flat export stand-ins that KEEP the
-    authored material name (the .cscn matches overrides on it). The original
-    is renamed aside for the duration and restored afterward. Returns the
-    restore list."""
+def swap_in_materials(standins):
+    """standins: {authored_name: stand_in_material}. The stand-in takes over
+    the authored name for the duration. Returns the restore list."""
     restore = []
-    for name, spec in FLATTEN_OVERRIDES.items():
+    for name, standin in standins.items():
         orig = bpy.data.materials.get(name)
-        if not orig:
+        if not orig or orig is standin:
             continue
         aside = name + ".cscn_orig"
         stale = bpy.data.materials.get(aside)  # crashed prior run
         if stale is not None and stale is not orig:
             stale.name = aside + ".stale"
         orig.name = aside
-        flat = build_flat_material(name, spec)  # takes the vacated name
+        standin.name = name
         for obj in bpy.data.objects:
             if obj.type not in ("MESH", "CURVE"):
                 continue
             for i, slot in enumerate(obj.material_slots):
                 if slot.material is orig:
                     restore.append((obj.name, i, name))
-                    slot.material = flat
+                    slot.material = standin
     return restore
 
 
@@ -178,10 +152,399 @@ def restore_materials(restore):
     for name, orig in origs.items():
         if not orig:
             continue
-        flat = bpy.data.materials.get(name)
-        if flat is not None and flat is not orig:
-            bpy.data.materials.remove(flat)
+        standin = bpy.data.materials.get(name)
+        if standin is not None and standin is not orig:
+            bpy.data.materials.remove(standin)
         orig.name = name
+
+
+# ---------------------------------------------------------------------------
+# Baking: procedural materials -> texture sets on a generated UV layer
+
+
+def socket_is_expressible(node, name):
+    """glTF can carry this input iff it's a flat value or a direct image."""
+    s = node.inputs.get(name)
+    if s is None or not s.links:
+        return True
+    src = s.links[0].from_node
+    if src.type == "TEX_IMAGE":
+        return True
+    if name == "Normal" and src.type == "NORMAL_MAP":
+        col = src.inputs.get("Color")
+        return bool(col and col.links and col.links[0].from_node.type == "TEX_IMAGE")
+    return False
+
+
+def emission_node(mat):
+    for n in mat.node_tree.nodes:
+        if n.type == "EMISSION":
+            return n
+    return None
+
+
+def alpha_chain_source(mat):
+    """The socket driving this material's opacity, if procedural: a linked
+    Principled Alpha, or the Fac of a Mix Shader blending a Transparent BSDF."""
+    p = principled_node(mat)
+    if p:
+        s = p.inputs.get("Alpha")
+        if s is not None and s.links:
+            return s.links[0].from_socket
+    for n in mat.node_tree.nodes:
+        if n.type != "MIX_SHADER":
+            continue
+        feeds = [l.from_node.type for l in mat.node_tree.links if l.to_node == n]
+        if "BSDF_TRANSPARENT" in feeds:
+            fac = n.inputs.get("Fac")
+            if fac is not None and fac.links:
+                return fac.links[0].from_socket
+    return None
+
+
+def material_bake_passes(mat):
+    """Which passes this material needs, or [] when glTF can carry it as-is."""
+    if not mat or not mat.use_nodes or mat.get("cetra_no_bake"):
+        return []
+    passes = []
+    p = principled_node(mat)
+    if p:
+        if not socket_is_expressible(p, "Base Color"):
+            passes.append("base")
+        if not socket_is_expressible(p, "Roughness"):
+            passes.append("rough")
+        if not socket_is_expressible(p, "Normal"):
+            passes.append("normal")
+        es = p.inputs.get("Emission Strength")
+        ec = p.inputs.get("Emission Color")
+        if ec is not None and ec.links and es is not None:
+            passes.append("emit")
+    else:
+        em = emission_node(mat)
+        if em and em.inputs["Color"].links:
+            passes.append("emit")
+        # Non-principled shading graphs (diffuse/translucent mixes): bake the
+        # diffuse color; roughness on such graphs is rarely meaningful.
+        for n in mat.node_tree.nodes:
+            if n.type in ("BSDF_DIFFUSE",) and n.inputs["Color"].links:
+                if "base" not in passes:
+                    passes.append("base")
+    if alpha_chain_source(mat) is not None:
+        if "base" not in passes:
+            passes.append("base")  # alpha packs into the base texture
+        passes.append("alpha")
+    return passes
+
+
+def collect_bake_set(exported):
+    """{material: {passes, meshes, objects}} over the exported objects.
+    Meshes are unique datablocks (instances bake once); objects holds one
+    representative per mesh."""
+    bake = {}
+    for obj in exported:
+        if obj.type != "MESH":
+            continue
+        for slot in obj.material_slots:
+            mat = slot.material
+            if not mat:
+                continue
+            if mat not in bake:
+                bake[mat] = {"passes": material_bake_passes(mat), "meshes": {}, "area": 0.0}
+            entry = bake[mat]
+            if entry["passes"] and obj.data.name not in entry["meshes"]:
+                entry["meshes"][obj.data.name] = obj
+                scale = obj.matrix_world.median_scale
+                entry["area"] += sum(p.area for p in obj.data.polygons) * scale * scale
+    return {m: e for m, e in bake.items() if e["passes"]}
+
+
+def bake_resolution(area):
+    for threshold, res in BAKE_RES_TIERS:
+        if area >= threshold:
+            return res
+    return 512
+
+
+def tex_paths(tex_dir, mat, passes):
+    safe = bpy.path.clean_name(mat.name)
+    files = {p: os.path.join(tex_dir, "%s_%s.png" % (safe, p)) for p in passes if p != "alpha"}
+    info = os.path.join(tex_dir, safe + ".bakeinfo")
+    return files, info
+
+
+def bake_cached(tex_dir, mat, passes, res):
+    files, info = tex_paths(tex_dir, mat, passes)
+    if REBAKE or not os.path.exists(info):
+        return False
+    try:
+        with open(info) as f:
+            saved = json.load(f)
+    except (OSError, ValueError):
+        return False
+    if saved.get("res") != res or saved.get("passes") != sorted(passes):
+        return False
+    return all(os.path.exists(p) for p in files.values())
+
+
+def ensure_bake_uv(entry):
+    """Smart-project all of the material's user meshes into BAKE_UV and pack
+    their islands jointly so they share one atlas."""
+    objs = list(entry["meshes"].values())
+    bpy.ops.object.select_all(action="DESELECT")
+    for o in objs:
+        o.select_set(True)
+        uv = o.data.uv_layers.get(BAKE_UV)
+        if uv is None:
+            uv = o.data.uv_layers.new(name=BAKE_UV)
+        o.data.uv_layers.active = uv
+    bpy.context.view_layer.objects.active = objs[0]
+    bpy.ops.object.mode_set(mode="EDIT")
+    bpy.ops.mesh.select_all(action="SELECT")
+    bpy.ops.uv.smart_project(angle_limit=math.radians(66.0), island_margin=0.02)
+    bpy.ops.uv.pack_islands(margin=0.02)
+    bpy.ops.object.mode_set(mode="OBJECT")
+
+
+def strip_superseded_uvs(bake_set, manifest):
+    """Baked meshes must expose BAKE_UV as TEXCOORD_0 (engines read channel
+    0). Their prior UV layers are superseded by the bake (default-cube or
+    absent), so remove them."""
+    stripped = 0
+    for entry in bake_set.values():
+        for obj in entry["meshes"].values():
+            uvs = obj.data.uv_layers
+            for name in [u.name for u in uvs if u.name != BAKE_UV]:
+                uvs.remove(uvs[name])
+                stripped += 1
+            if BAKE_UV in uvs:
+                uvs.active = uvs[BAKE_UV]
+    if stripped:
+        manifest.append("removed %d superseded UV layer(s) on baked meshes" % stripped)
+
+
+def new_bake_image(name, res, non_color=False, fill=(0, 0, 0, 1)):
+    img = bpy.data.images.get(name)
+    if img:
+        bpy.data.images.remove(img)
+    img = bpy.data.images.new(name, res, res, alpha=True)
+    img.generated_color = fill
+    if non_color:
+        img.colorspace_settings.name = "Non-Color"
+    return img
+
+
+def run_bake_pass(mat, entry, img, bake_type, pass_filter=None):
+    """Bake one pass for every user mesh, accumulating into the shared image."""
+    nt = mat.node_tree
+    target = nt.nodes.new("ShaderNodeTexImage")
+    target.image = img
+    nt.nodes.active = target
+    target.select = True
+    try:
+        for obj in entry["meshes"].values():
+            bpy.ops.object.select_all(action="DESELECT")
+            obj.select_set(True)
+            bpy.context.view_layer.objects.active = obj
+            kwargs = {"type": bake_type, "margin": BAKE_MARGIN, "use_clear": False,
+                      "uv_layer": BAKE_UV}
+            if pass_filter is not None:
+                kwargs["pass_filter"] = pass_filter
+            bpy.ops.object.bake(**kwargs)
+    finally:
+        nt.nodes.remove(target)
+
+
+def bake_alpha_pass(mat, entry, img):
+    """EMIT-bake the alpha chain through a temporary emission rig."""
+    nt = mat.node_tree
+    src = alpha_chain_source(mat)
+    out = next((n for n in nt.nodes if n.type == "OUTPUT_MATERIAL" and n.is_active_output), None)
+    if src is None or out is None:
+        return False
+    surf = out.inputs["Surface"]
+    prev = surf.links[0].from_socket if surf.links else None
+    em = nt.nodes.new("ShaderNodeEmission")
+    nt.links.new(src, em.inputs["Color"])
+    nt.links.new(em.outputs[0], surf)
+    try:
+        run_bake_pass(mat, entry, img, "EMIT")
+    finally:
+        nt.nodes.remove(em)
+        if prev is not None:
+            nt.links.new(prev, surf)
+    return True
+
+
+def pack_alpha_into(base_img, alpha_img):
+    import numpy as np
+    base = np.array(base_img.pixels[:], dtype=np.float32).reshape(-1, 4)
+    alpha = np.array(alpha_img.pixels[:], dtype=np.float32).reshape(-1, 4)
+    base[:, 3] = alpha[:, 0]
+    base_img.pixels = base.ravel()
+
+
+def save_image(img, path):
+    img.filepath_raw = path
+    img.file_format = "PNG"
+    img.save()
+
+
+def bake_material(mat, entry, tex_dir, manifest):
+    passes = entry["passes"]
+    res = bake_resolution(entry["area"])
+    files, info = tex_paths(tex_dir, mat, passes)
+    if bake_cached(tex_dir, mat, passes, res):
+        manifest.append("bake '%s': cached (%s, %d)" % (mat.name, "+".join(passes), res))
+        return files
+    ensure_bake_uv(entry)
+    safe = bpy.path.clean_name(mat.name)
+
+    # Emission strength must be 1.0 during the EMIT bake or the radiance
+    # clips in the PNG; the stand-in restores the strength as a factor.
+    emit_strength = 1.0
+    strength_socket = None
+    p = principled_node(mat)
+    em = emission_node(mat)
+    if "emit" in passes:
+        s = (p.inputs.get("Emission Strength") if p else None) or \
+            (em.inputs.get("Strength") if em else None)
+        if s is not None and not s.links:
+            strength_socket = s
+            emit_strength = float(s.default_value)
+            s.default_value = 1.0
+
+    try:
+        if "base" in passes:
+            img = new_bake_image(safe + "_base", res)
+            run_bake_pass(mat, entry, img, "DIFFUSE", pass_filter={"COLOR"})
+            if "alpha" in passes:
+                a_img = new_bake_image(safe + "_alpha", res, non_color=True)
+                if bake_alpha_pass(mat, entry, a_img):
+                    pack_alpha_into(img, a_img)
+                bpy.data.images.remove(a_img)
+            save_image(img, files["base"])
+        if "rough" in passes:
+            img = new_bake_image(safe + "_rough", res, non_color=True)
+            run_bake_pass(mat, entry, img, "ROUGHNESS")
+            save_image(img, files["rough"])
+        if "normal" in passes:
+            img = new_bake_image(safe + "_normal", res, non_color=True,
+                                 fill=(0.5, 0.5, 1.0, 1.0))
+            run_bake_pass(mat, entry, img, "NORMAL")
+            save_image(img, files["normal"])
+        if "emit" in passes:
+            img = new_bake_image(safe + "_emit", res)
+            run_bake_pass(mat, entry, img, "EMIT")
+            save_image(img, files["emit"])
+    finally:
+        if strength_socket is not None:
+            strength_socket.default_value = emit_strength
+
+    with open(info, "w") as f:
+        json.dump({"res": res, "passes": sorted(passes), "emit_strength": emit_strength}, f)
+    manifest.append("bake '%s': %s @ %d (%d mesh(es), area %.1f)"
+                    % (mat.name, "+".join(passes), res, len(entry["meshes"]), entry["area"]))
+    return files
+
+
+def build_baked_material(name, files, passes, emit_strength, alpha):
+    """Stand-in Principled wired to the baked textures via the BAKE_UV map."""
+    m = bpy.data.materials.new(name + ".baked_tmp")
+    m.use_nodes = True
+    nt = m.node_tree
+    for n in list(nt.nodes):
+        nt.nodes.remove(n)
+    out = nt.nodes.new("ShaderNodeOutputMaterial")
+    b = nt.nodes.new("ShaderNodeBsdfPrincipled")
+    nt.links.new(b.outputs[0], out.inputs["Surface"])
+    uvn = nt.nodes.new("ShaderNodeUVMap")
+    uvn.uv_map = BAKE_UV
+
+    def img_node(path, non_color=False):
+        n = nt.nodes.new("ShaderNodeTexImage")
+        n.image = bpy.data.images.load(path, check_existing=True)
+        if non_color:
+            n.image.colorspace_settings.name = "Non-Color"
+        nt.links.new(uvn.outputs[0], n.inputs["Vector"])
+        return n
+
+    if "base" in passes:
+        n = img_node(files["base"])
+        nt.links.new(n.outputs["Color"], b.inputs["Base Color"])
+        if alpha:
+            nt.links.new(n.outputs["Alpha"], b.inputs["Alpha"])
+            try:
+                m.surface_render_method = "BLENDED"
+            except AttributeError:
+                m.blend_method = "BLEND"
+    if "rough" in passes:
+        n = img_node(files["rough"], non_color=True)
+        nt.links.new(n.outputs["Color"], b.inputs["Roughness"])
+    if "normal" in passes:
+        n = img_node(files["normal"], non_color=True)
+        nm = nt.nodes.new("ShaderNodeNormalMap")
+        nm.uv_map = BAKE_UV
+        nt.links.new(n.outputs["Color"], nm.inputs["Color"])
+        nt.links.new(nm.outputs[0], b.inputs["Normal"])
+    if "emit" in passes:
+        n = img_node(files["emit"])
+        nt.links.new(n.outputs["Color"], b.inputs["Emission Color"])
+        b.inputs["Emission Strength"].default_value = emit_strength
+    return m
+
+
+def cycles_for_bake():
+    """Enable Cycles (GPU when available), switch the scene to it, and return
+    a restore callable."""
+    import addon_utils
+    addon_utils.enable("cycles")
+    scene = bpy.context.scene
+    prev_engine = scene.render.engine
+    scene.render.engine = "CYCLES"
+    scene.cycles.samples = BAKE_SAMPLES
+    scene.cycles.use_denoising = False
+    try:
+        prefs = bpy.context.preferences.addons["cycles"].preferences
+        prefs.compute_device_type = "METAL"
+        prefs.get_devices()
+        for d in prefs.devices:
+            d.use = True
+        scene.cycles.device = "GPU"
+    except Exception:
+        scene.cycles.device = "CPU"
+
+    def restore():
+        scene.render.engine = prev_engine
+
+    return restore
+
+
+def bake_all(bake_set, tex_dir, manifest):
+    os.makedirs(tex_dir, exist_ok=True)
+    restore_engine = cycles_for_bake()
+    results = {}
+    try:
+        for mat, entry in bake_set.items():
+            results[mat] = bake_material(mat, entry, tex_dir, manifest)
+    finally:
+        restore_engine()
+    return results
+
+
+def baked_standins(bake_set, tex_dir):
+    standins = {}
+    for mat, entry in bake_set.items():
+        files, info = tex_paths(tex_dir, mat, entry["passes"])
+        emit_strength = 1.0
+        try:
+            with open(info) as f:
+                emit_strength = float(json.load(f).get("emit_strength", 1.0))
+        except (OSError, ValueError):
+            pass
+        standins[mat.name] = build_baked_material(
+            mat.name, files, entry["passes"], emit_strength,
+            alpha="alpha" in entry["passes"])
+    return standins
 
 
 # ---------------------------------------------------------------------------
@@ -414,8 +777,18 @@ def export(out_path):
         json.dump(cscn, f, indent=2)
         f.write("\n")
 
-    # ----- GLB (flatten procedural materials, restore after) -----
-    restore = flatten_materials()
+    # ----- bake procedural materials, swap to baked stand-ins, export -----
+    bake_set = collect_bake_set(exported)
+    tex_dir = os.path.join(out_dir, "textures")
+    restore = []
+    if bake_set:
+        bake_all(bake_set, tex_dir, manifest)
+        strip_superseded_uvs(bake_set, manifest)
+        # bake ops clobber the selection; restore it for use_selection export
+        bpy.ops.object.select_all(action="DESELECT")
+        for obj in exported:
+            obj.select_set(True)
+        restore = swap_in_materials(baked_standins(bake_set, tex_dir))
     try:
         bpy.ops.export_scene.gltf(
             filepath=out_path,
@@ -436,23 +809,69 @@ def export(out_path):
     if excluded:
         print("  excluded: " + ", ".join(sorted(excluded)))
     if restore:
-        flattened = sorted(set(m for (_o, _i, m) in restore))
-        print("  flattened materials (milestone-2 baking pending): " + ", ".join(flattened))
+        baked = sorted(set(m for (_o, _i, m) in restore))
+        print("  baked materials: " + ", ".join(baked))
     return out_path
 
 
-def _parse_cli_out():
+# ---------------------------------------------------------------------------
+# Stepwise driving (keeps individual calls short when run over MCP): call
+# prepare_bake(out_path) once, bake_one(i) per material, then export(out_path)
+# which hits the bake cache.
+
+_BAKE_STATE = {}
+
+
+def collect_exported():
+    volume_mats = volume_materials()
+    return [o for o in bpy.context.view_layer.objects if not is_excluded(o, volume_mats)]
+
+
+def prepare_bake(out_path):
+    out_dir = os.path.dirname(os.path.abspath(out_path))
+    tex_dir = os.path.join(out_dir, "textures")
+    bake_set = collect_bake_set(collect_exported())
+    _BAKE_STATE.clear()
+    _BAKE_STATE["tex_dir"] = tex_dir
+    _BAKE_STATE["entries"] = list(bake_set.items())
+    report = []
+    for mat, entry in _BAKE_STATE["entries"]:
+        res = bake_resolution(entry["area"])
+        cached = bake_cached(tex_dir, mat, entry["passes"], res)
+        report.append("%s: %s @ %d, %d mesh(es)%s"
+                      % (mat.name, "+".join(entry["passes"]), res, len(entry["meshes"]),
+                         " [cached]" if cached else ""))
+    return report
+
+
+def bake_one(index):
+    mat, entry = _BAKE_STATE["entries"][index]
+    os.makedirs(_BAKE_STATE["tex_dir"], exist_ok=True)
+    manifest = []
+    restore_engine = cycles_for_bake()
+    try:
+        bake_material(mat, entry, _BAKE_STATE["tex_dir"], manifest)
+    finally:
+        restore_engine()
+    return manifest
+
+
+def _parse_cli():
+    global REBAKE
+    out = OUT_PATH
     argv = sys.argv
     if "--" in argv:
         rest = argv[argv.index("--") + 1:]
         for i, a in enumerate(rest):
             if a == "--out" and i + 1 < len(rest):
-                return rest[i + 1]
-    return OUT_PATH
+                out = rest[i + 1]
+            elif a == "--rebake":
+                REBAKE = True
+    return out
 
 
 if __name__ == "__main__":
-    out = _parse_cli_out()
+    out = _parse_cli()
     if not out:
         raise SystemExit("cetra_export: set OUT_PATH or pass -- --out <path>")
     export(out)
