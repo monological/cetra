@@ -45,6 +45,8 @@ ShaderProgram* create_pbr_skinned_program();
 
 // Particle Program (instanced camera-facing billboards)
 ShaderProgram* create_particle_program();
+// Particle GPU-sim UPDATE program (transform feedback; vertex-only, spec 5.2)
+ShaderProgram* create_particle_sim_program();
 ShaderProgram* create_shape_program();
 ShaderProgram* create_xyz_program();
 ShaderProgram* create_shadow_depth_program();

@@ -4,6 +4,7 @@
 
 #include <math.h>
 #include <stdlib.h>
+#include <string.h>
 
 // Every v1 module frees just its params + itself (name is a string literal).
 static void module_default_free(ParticleModule* m) {
@@ -241,4 +242,40 @@ ParticleModule* particle_module_update_integrate(float drag) {
         return NULL;
     p->drag = drag;
     return module_new("update_integrate", PARTICLE_PHASE_UPDATE, update_integrate_run, p);
+}
+
+// --- GPU-backend introspection (see particle_module.h) ---
+// Names below match the module_new() labels in the factories above.
+
+bool particle_module_read_curl(const ParticleModule* m, float* scale, float* strength,
+                               float* timescale) {
+    if (!m || strcmp(m->name, "update_curl_noise") != 0)
+        return false;
+    const CurlParams* p = m->params;
+    if (scale)
+        *scale = p->scale;
+    if (strength)
+        *strength = p->strength;
+    if (timescale)
+        *timescale = p->timescale;
+    return true;
+}
+
+bool particle_module_read_drift(const ParticleModule* m, vec3 accel_out) {
+    if (!m || strcmp(m->name, "update_drift") != 0)
+        return false;
+    const DriftParams* p = m->params;
+    accel_out[0] = p->accel[0];
+    accel_out[1] = p->accel[1];
+    accel_out[2] = p->accel[2];
+    return true;
+}
+
+bool particle_module_read_integrate(const ParticleModule* m, float* drag) {
+    if (!m || strcmp(m->name, "update_integrate") != 0)
+        return false;
+    const IntegrateParams* p = m->params;
+    if (drag)
+        *drag = p->drag;
+    return true;
 }

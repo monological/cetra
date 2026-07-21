@@ -34,6 +34,7 @@
 
 static ShaderProgram* g_pbr = NULL;
 static MouseDragController* g_drag = NULL;
+static bool g_use_cpu = false; // --cpu: use the CPU sim backend instead of GPU transform feedback
 
 // A static, unlit-until-the-key-hits-it surface. Geometry is generated at
 // `pos` so the node transform can stay identity (matches the shapes app).
@@ -138,10 +139,15 @@ static void on_init(Game* game) {
     ShaderProgram* particle_prog = create_particle_program();
     add_shader_program_to_engine(engine, particle_prog);
 
+    // GPU transform-feedback backend by default (spec 5.2); --cpu selects the CPU
+    // backend for A/B comparison. Capacity must satisfy the ring invariant
+    // C >= spawn_rate * max_lifetime (2000/s * 12s = 24000) so the emit head only
+    // laps onto already-dead slots; 32000 leaves margin.
     ParticleSystem* sys = create_particle_system("spores");
-    particle_system_set_backend(sys, create_cpu_particle_sim_backend());
+    particle_system_set_backend(sys, g_use_cpu ? create_cpu_particle_sim_backend()
+                                               : create_tf_particle_sim_backend());
 
-    ParticleEmitter* em = create_particle_emitter("spore", 20000);
+    ParticleEmitter* em = create_particle_emitter("spore", 32000);
     particle_emitter_set_renderer(em, create_billboard_particle_renderer(particle_prog));
     particle_emitter_add_module(em, particle_module_spawn_rate(2000.0f));
     particle_emitter_add_module(
@@ -216,6 +222,8 @@ int main(int argc, char** argv) {
         } else if ((strcmp(argv[i], "--screenshot") == 0 || strcmp(argv[i], "-S") == 0) &&
                    i + 1 < argc) {
             config.screenshot_path = argv[++i];
+        } else if (strcmp(argv[i], "--cpu") == 0) {
+            g_use_cpu = true;
         }
     }
 

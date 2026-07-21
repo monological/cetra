@@ -435,6 +435,41 @@ ShaderProgram* create_particle_program() {
     return program;
 }
 
+// GPU particle-sim UPDATE program (spec 5.2). Vertex-only: it captures its
+// outputs into a transform-feedback buffer under GL_RASTERIZER_DISCARD and never
+// rasterizes, so create_program_from_source (which requires a fragment shader)
+// can't build it. Assemble it from the primitives and set the feedback varyings
+// between attach and link.
+ShaderProgram* create_particle_sim_program() {
+    ShaderProgram* program = create_program("particle_sim");
+    if (!program) {
+        log_error("Failed to create particle sim program");
+        return NULL;
+    }
+
+    Shader* vs = create_shader(VERTEX_SHADER, particle_sim_vert_shader_str);
+    if (!vs || !compile_shader(vs)) {
+        log_error("Particle sim vertex shader compilation failed");
+        free_program(program);
+        return NULL;
+    }
+    attach_shader_to_program(program, vs);
+
+    // Capture the 5 out vec4s interleaved into one buffer. Order MUST match the
+    // ParticleGpuState field layout (particle_sim.h). Must precede linking.
+    const char* varyings[] = {"oCenter", "oParams", "oColor", "oVelAge", "oLife"};
+    glTransformFeedbackVaryings(program->id, 5, varyings, GL_INTERLEAVED_ATTRIBS);
+
+    if (!link_program(program)) {
+        log_error("Particle sim program linking failed");
+        free_program(program);
+        return NULL;
+    }
+
+    setup_program_uniforms(program);
+    return program;
+}
+
 ShaderProgram* create_pbr_skinned_program() {
     ShaderProgram* program = NULL;
 

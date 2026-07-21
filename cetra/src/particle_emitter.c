@@ -38,6 +38,8 @@ void free_particle_emitter(ParticleEmitter* e) {
     free_module_list(e->update, e->n_update);
     if (e->renderer && e->renderer->free_fn)
         e->renderer->free_fn(e->renderer);
+    if (e->sim_state && e->sim_state_free)
+        e->sim_state_free(e->sim_state);
     free_particle_pool(e->pool);
     free(e->name);
     free(e);

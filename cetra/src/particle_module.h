@@ -2,6 +2,7 @@
 #define _PARTICLE_MODULE_H_
 
 #include <stddef.h>
+#include <stdbool.h>
 #include <cglm/cglm.h>
 
 // A ParticleModule is one composable behavior in an emitter's stack. Modules
@@ -62,5 +63,17 @@ ParticleModule* particle_module_update_drift(vec3 accel);
 // UPDATE: integrate position by velocity and apply a per-step velocity damping
 // factor `drag` in (0,1].
 ParticleModule* particle_module_update_integrate(float drag);
+
+// --- GPU-backend introspection ---
+// The transform-feedback backend reuses the CPU spawn/init modules verbatim but
+// runs the UPDATE phase on the GPU, so it needs the update modules' parameters as
+// shader uniforms. These readers extract them without exposing the params'
+// concrete (module-private) types. Each returns true and fills the out-params iff
+// `m` is that update module (matched by name); otherwise false, out-params
+// untouched.
+bool particle_module_read_curl(const ParticleModule* m, float* scale, float* strength,
+                               float* timescale);
+bool particle_module_read_drift(const ParticleModule* m, vec3 accel_out);
+bool particle_module_read_integrate(const ParticleModule* m, float* drag);
 
 #endif // _PARTICLE_MODULE_H_

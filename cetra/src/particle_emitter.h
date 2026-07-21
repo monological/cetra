@@ -29,6 +29,12 @@ typedef struct ParticleEmitter {
     mat4 local_to_world; // emitter->world spawn frame (synced from the attached node each tick)
 
     struct ParticleRenderer* renderer; // owned; may be NULL
+
+    // Backend-owned GPU scratch (e.g. the transform-feedback backend's ping-pong
+    // state buffers + VAOs). NULL for the CPU backend. Freed via sim_state_free
+    // in free_particle_emitter -- mirrors the renderer's impl/free_fn idiom.
+    void* sim_state;
+    void (*sim_state_free)(void* sim_state);
 } ParticleEmitter;
 
 ParticleEmitter* create_particle_emitter(const char* name, size_t capacity);
