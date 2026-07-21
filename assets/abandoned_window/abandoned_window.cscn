@@ -1,0 +1,76 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "path": "abandoned_window.glb"
+    }
+  ],
+  "environment": {
+    "mode": "hdr",
+    "hdr": "abandoned_window_env.hdr",
+    "probe_scene": true,
+    "intensity": 0.15
+  },
+  "lights": [
+    {
+      "name": "BounceFill",
+      "type": "point",
+      "position": [
+        2.4,
+        1.8,
+        0.35
+      ],
+      "color": [
+        1.0,
+        0.82,
+        0.42
+      ],
+      "intensity": 5.94
+    }
+  ],
+  "light_overrides": [
+    {
+      "name": "SunKey",
+      "size_from_angle": 0.11
+    }
+  ],
+  "post": {
+    "tonemap": "agx",
+    "exposure": 1.3379,
+    "bloom": {
+      "enabled": true,
+      "strength": 0.487,
+      "threshold": 1.0
+    },
+    "fog": {
+      "enabled": true,
+      "density": 0.008,
+      "anisotropy": 0.25
+    }
+  },
+  "materials": {
+    "IvyLeafReal": {
+      "sss": {
+        "color": [
+          0.727,
+          1.0,
+          0.614
+        ],
+        "radius": 0.06
+      }
+    }
+  },
+  "camera": {
+    "eye": [
+      -0.0188,
+      1.2885,
+      2.3642
+    ],
+    "target": [
+      2.0249,
+      1.54,
+      0.3676
+    ],
+    "fov": 46.4
+  }
+}
