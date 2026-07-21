@@ -37,6 +37,8 @@ Scene* create_scene() {
     scene->root_node = NULL;
     scene->lights = NULL;
     scene->light_count = 0;
+    scene->particle_systems = NULL;
+    scene->particle_system_count = 0;
     scene->cameras = NULL;
     scene->camera_count = 0;
 
@@ -312,17 +314,24 @@ int add_particle_system_to_scene(Scene* scene, struct ParticleSystem* sys) {
         return -1;
 
     size_t new_count = scene->particle_system_count + 1;
-    struct ParticleSystem** grown =
+    struct ParticleSystem** new_particle_systems =
         realloc(scene->particle_systems, new_count * sizeof(struct ParticleSystem*));
-    if (!grown) {
+    if (!new_particle_systems) {
         log_error("Failed to reallocate memory for new particle system");
         return -1;
     }
 
-    scene->particle_systems = grown;
+    scene->particle_systems = new_particle_systems;
     scene->particle_systems[scene->particle_system_count] = sys;
     scene->particle_system_count = new_count;
     return 0;
+}
+
+void scene_update_particle_systems(Scene* scene, float dt, float t) {
+    if (!scene)
+        return;
+    for (size_t i = 0; i < scene->particle_system_count; i++)
+        particle_system_update(scene->particle_systems[i], dt, t);
 }
 
 // Max-heap helpers for O(n log k) light selection
@@ -589,9 +598,11 @@ void free_node(SceneNode* node) {
         free(node->name);
     }
 
-    // Note: Do not free camera and light, as they are managed by the Scene.
-    // Similarly, shaders and programs are usually shared and should be managed
-    // separately.
+    // Note: Do not free camera, light, or particle_system -- they are borrowed;
+    // the Scene owns them. Lifetime invariant: never free a node whose particle
+    // system is still registered on the Scene, or the system's sys->node back-ref
+    // dangles (free_scene frees systems before the root node, so teardown is safe).
+    // Shaders and programs are usually shared and managed separately.
 
     free(node);
 }

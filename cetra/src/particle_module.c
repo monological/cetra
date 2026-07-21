@@ -65,6 +65,9 @@ ParticleModule* particle_module_spawn_rate(float rate) {
 }
 
 // --- INIT: box location ---
+// NB: location/position init modules must place particles through the emitter's
+// local_to_world (below), so the node transform is honored. A new location
+// module that writes pool->position directly would silently ignore the node.
 
 typedef struct {
     vec3 min, max;

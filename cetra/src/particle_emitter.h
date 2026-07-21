@@ -9,11 +9,6 @@
 
 struct ParticleRenderer;
 
-// Simulation space. WORLD only today (particles spawn in the emitter's world
-// frame, then live in world space); LOCAL (cloud rigidly follows the transform)
-// is reserved.
-typedef enum { PARTICLE_SPACE_WORLD, PARTICLE_SPACE_LOCAL } ParticleSimSpace;
-
 // An emitter is DATA: a pool, three phase-ordered module lists, a deterministic
 // RNG, and an owned renderer. It has no tick of its own -- the sim backend owns
 // the stepping (see particle_sim.h). See specs/5.0-particle-system.md.
@@ -31,7 +26,6 @@ typedef struct ParticleEmitter {
     float spawn_request; // written by spawn modules, consumed + cleared by the backend
     uint32_t rng_state;  // per-emitter xorshift32 (deterministic)
 
-    ParticleSimSpace space;
     mat4 local_to_world; // emitter->world spawn frame (synced from the attached node each tick)
 
     struct ParticleRenderer* renderer; // owned; may be NULL

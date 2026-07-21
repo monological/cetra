@@ -1,9 +1,10 @@
 // Spores - cordyceps spore-room demo, the test bed for the general particle
-// system (specs/5.0-particle-system.md).
+// system (specs/5.0-particle-system.md, specs/5.1-particle-scene-integration.md).
 //
-// A dark interior lit by one directional key, with a cordyceps-spore emitter
-// (pale green motes on curl-noise turbulence), driven by the game loop (no
-// physics). Lighting/shadow on the motes lands in M3, soft particles in M4.
+// A dark interior lit by one directional key, with a cordyceps-spore particle
+// system (pale green motes on curl-noise turbulence, soft + shadow-lit) attached
+// to a scene node -- the engine ticks and renders it, the app just builds and
+// attaches. Driven by the game loop (no physics).
 //
 // Flags: --headless, --frames N, --screenshot PATH (deterministic CI capture).
 
@@ -155,12 +156,12 @@ static void on_init(Game* game) {
     particle_emitter_add_module(em, particle_module_update_drift((vec3){0.0f, 0.02f, 0.0f}));
     particle_emitter_add_module(em, particle_module_update_integrate(0.985f));
     particle_system_add_emitter(sys, em);
+    add_particle_system_to_scene(scene, sys); // scene owns it (ticked + drawn automatically)
 
     SceneNode* spore_node = create_node();
     set_node_name(spore_node, "spore_emitter");
     set_node_particle_system(spore_node, sys); // node transform = emitter spawn frame
     add_child_node(root, spore_node);
-    add_particle_system_to_scene(scene, sys); // scene owns it (ticked + drawn automatically)
 }
 
 static void on_render(Game* game, double alpha) {

@@ -29,6 +29,10 @@ void particle_system_set_backend(ParticleSystem* s, ParticleSimBackend* backend)
 // Add an emitter (takes ownership).
 void particle_system_add_emitter(ParticleSystem* s, ParticleEmitter* e);
 
+// Total live particles across all emitters. Cheap O(emitters); lets the renderer
+// skip the scene-depth resolve + draw on frames where nothing is alive.
+size_t particle_system_live_count(const ParticleSystem* s);
+
 // Step every emitter through the backend (call from the fixed-timestep update).
 void particle_system_update(ParticleSystem* s, float dt, float t);
 

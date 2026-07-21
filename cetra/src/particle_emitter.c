@@ -20,7 +20,6 @@ ParticleEmitter* create_particle_emitter(const char* name, size_t capacity) {
         return NULL;
     }
     e->rng_state = EMITTER_RNG_SEED;
-    e->space = PARTICLE_SPACE_WORLD;
     glm_mat4_identity(e->local_to_world);
     return e;
 }

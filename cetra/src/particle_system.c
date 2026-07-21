@@ -38,6 +38,15 @@ void particle_system_add_emitter(ParticleSystem* s, ParticleEmitter* e) {
     s->emitters[s->emitter_count++] = e;
 }
 
+size_t particle_system_live_count(const ParticleSystem* s) {
+    if (!s)
+        return 0;
+    size_t n = 0;
+    for (size_t i = 0; i < s->emitter_count; i++)
+        n += s->emitters[i]->pool->count;
+    return n;
+}
+
 void particle_system_update(ParticleSystem* s, float dt, float t) {
     if (!s || !s->backend || !s->backend->simulate)
         return;

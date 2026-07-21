@@ -742,8 +742,12 @@ void render_current_scene(Engine* engine, float time_value) {
     // framebuffer (so bloom/tonemap apply), with their own depth/blend bracket.
     // A separate block because the transparent pass above is gated on mesh count
     // and particles must draw even in an all-opaque scene. engine_resolve_scene_depth
-    // re-binds the scene FBO before returning.
-    if (scene->particle_system_count > 0) {
+    // re-binds the scene FBO before returning. Skip the whole thing (incl. the
+    // full-res depth blit) on frames where nothing is alive.
+    size_t live_particles = 0;
+    for (size_t i = 0; i < scene->particle_system_count && live_particles == 0; i++)
+        live_particles = particle_system_live_count(scene->particle_systems[i]);
+    if (live_particles > 0) {
         GLuint particle_depth = engine_resolve_scene_depth(engine);
         glDepthMask(GL_FALSE);
         glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA); // premultiplied

@@ -178,6 +178,10 @@ Light* find_light_by_name(Scene* scene, const char* name);
 
 // particle systems (scene-owned; ticked + rendered automatically by the engine)
 int add_particle_system_to_scene(Scene* scene, struct ParticleSystem* sys);
+// Advance every particle system's sim. Call from a fixed-timestep update (run_game
+// does; a run_engine_render_loop host may call it too). Rendering is automatic in
+// render_current_scene.
+void scene_update_particle_systems(Scene* scene, float dt, float t);
 Light** get_closest_lights(Scene* scene, SceneNode* target_node, size_t max_lights,
                            size_t* returned_light_count);
 
