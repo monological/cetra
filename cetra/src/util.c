@@ -122,6 +122,34 @@ void* safe_realloc(void* ptr, size_t size) {
     return new_ptr;
 }
 
+char* read_entire_file(const char* path, long* out_len) {
+    FILE* f = fopen(path, "rb");
+    if (!f)
+        return NULL;
+    fseek(f, 0, SEEK_END);
+    long len = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (len <= 0) {
+        fclose(f);
+        return NULL;
+    }
+    char* buf = malloc((size_t)len + 1);
+    if (!buf) {
+        fclose(f);
+        return NULL;
+    }
+    size_t got = fread(buf, 1, (size_t)len, f);
+    fclose(f);
+    if (got != (size_t)len) {
+        free(buf);
+        return NULL;
+    }
+    buf[got] = '\0';
+    if (out_len)
+        *out_len = (long)got;
+    return buf;
+}
+
 bool path_exists(const char* path) {
     struct stat statbuf;
 

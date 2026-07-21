@@ -158,6 +158,13 @@ static const size_t texture_mapping_count = sizeof(texture_mappings) / sizeof(te
 static void extract_material_properties(struct aiMaterial* ai_mat, Material* material) {
     struct aiColor4D color;
 
+    // Authored material name -- scene files (.cscn) match overrides on it
+    struct aiString mat_name;
+    if (AI_SUCCESS == aiGetMaterialString(ai_mat, AI_MATKEY_NAME, &mat_name) &&
+        mat_name.length > 0) {
+        material->name = safe_strdup(mat_name.data);
+    }
+
     // Try glTF baseColorFactor first, fall back to diffuse color
     if (AI_SUCCESS == aiGetMaterialColor(ai_mat, AI_MATKEY_BASE_COLOR, &color)) {
         material->albedo[0] = color.r;

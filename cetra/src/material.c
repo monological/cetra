@@ -17,6 +17,7 @@ Material* create_material() {
         return NULL;
     }
 
+    material->name = NULL;
     glm_vec3_fill(material->albedo, 1.0f);
     glm_vec3_zero(material->emissive);
     material->emissive_strength = 1.0f;
@@ -88,6 +89,8 @@ void material_finalize_alpha_mode(Material* material) {
 
 void free_material(Material* material) {
     if (material) {
+        if (material->name)
+            free(material->name);
         // Release all texture references
         if (material->albedo_tex)
             texture_release(material->albedo_tex);

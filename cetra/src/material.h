@@ -36,6 +36,7 @@ typedef enum AlphaMode {
 } AlphaMode;
 
 typedef struct Material {
+    char* name; // authored material name (glTF/FBX); scene files match on it
     vec3 albedo;
     vec3 emissive;           // Emissive color factor (multiplied with emissive texture)
     float emissive_strength; // HDR multiplier (KHR_materials_emissive_strength), feeds bloom

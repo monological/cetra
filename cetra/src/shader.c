@@ -7,41 +7,17 @@
 #include "util.h"
 
 char* _read_shader_source(const char* filePath) {
-    FILE* file = fopen(filePath, "r");
-    if (!file) {
-        log_error("Failed to open shader file: %s", filePath);
-        return NULL;
-    }
-
-    fseek(file, 0, SEEK_END);
-    long length = ftell(file);
-    if (length <= 0 || length > 10 * 1024 * 1024) { // Max 10MB
-        if (length == -1) {
-            perror("Error occurred in ftell");
-        }
-        fclose(file);
-        return NULL;
-    }
-    fseek(file, 0, SEEK_SET);
-
-    size_t len = (size_t)length;
-    char* buffer = malloc(len + 1);
+    long length = 0;
+    char* buffer = read_entire_file(filePath, &length);
     if (!buffer) {
-        log_error("Failed to allocate memory for shader source");
-        fclose(file);
+        log_error("Failed to read shader file: %s", filePath);
         return NULL;
     }
-
-    size_t readSize = fread(buffer, 1, len, file);
-    if (readSize != len) {
-        log_error("Error reading shader file: %s", filePath);
+    if (length > 10 * 1024 * 1024) { // Max 10MB
+        log_error("Shader file too large: %s", filePath);
         free(buffer);
-        fclose(file);
         return NULL;
     }
-    buffer[len] = '\0'; // NOLINT(clang-analyzer-security.ArrayBound) - len validated above
-    fclose(file);
-
     return buffer;
 }
 

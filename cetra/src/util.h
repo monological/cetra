@@ -38,6 +38,11 @@ void* safe_realloc(void* ptr, size_t size);
  * Path
  */
 bool path_exists(const char* path);
+
+// Read a whole file into a NUL-terminated malloc'd buffer (caller frees).
+// Returns NULL on open/short-read failure; *out_len (optional) gets the byte
+// count excluding the terminator.
+char* read_entire_file(const char* path, long* out_len);
 bool find_existing_subpath(const char* base_dir, char** subpath_ptr);
 char* convert_windows_path_to_unix(const char* windows_path);
 char* convert_and_normalize_path(const char* input_path);

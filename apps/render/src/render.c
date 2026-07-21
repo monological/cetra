@@ -27,12 +27,14 @@
 
 #include "cetra/shader_strings.h"
 
+#include "cscene_apply.h"
+#include "render_args.h"
+
 /*
  * Constants
  */
 #define DEFAULT_WIDTH  1920
 #define DEFAULT_HEIGHT 1080
-#define MAX_ANIM_FILES 32
 
 const float MIN_DIST = 2000.0f;
 const float MAX_DIST = 3000.0f;
@@ -43,123 +45,6 @@ const float CAM_ANGULAR_SPEED = 0.5f;
 // makes dark, rough materials (near-black armor) read instead of flattening
 const float KEY_LIGHT_TOTAL_INTENSITY = 10.0f;
 
-/*
- * Command line arguments
- */
-typedef struct {
-    const char* model_path;
-    const char* texture_dir;
-    const char* hdr_path;
-    const char* anim_files[MAX_ANIM_FILES];
-    int anim_count;
-    const char* source_skeleton_path; // Source skeleton for retargeting
-    const char* screenshot_path;      // Save final frame here (PPM)
-    int screenshot_every;             // Also save numbered frames every N frames
-    float fov_deg;                    // Camera FOV in degrees (0 = default 50)
-    float exposure;                   // Tonemap exposure override (0 = engine default)
-    float ground_radius;              // Skybox ground projection dome radius (0 = default)
-    float ground_height;              // HDR capture height above ground (0 = default)
-    float camera_distance;            // Camera distance override in meters (0 = auto)
-    int no_recenter;                  // Keep the model's authored world position
-    int no_auto_exposure;             // Fixed exposure instead of eye adaptation
-    int no_flip_uv;                   // For assets baked with the opposite V convention
-    float ao_radius;                  // AO/GI reach override in world units (0 = auto)
-    int force_taa;                    // TAA even in headless (temporal passes active)
-    int no_ground;                    // Disable skybox ground projection
-    int no_key_light;                 // Pure IBL: skip the analytic key lights
-    int no_shadows;                   // Keep key lights but disable shadow maps
-    int no_pcss;                      // Fixed-width PCF instead of contact-hardening
-    float light_size;                 // Emitter size override (-1 = scene default)
-    float shadow_softness;            // PCSS softness override (-1 = default)
-    int shadow_cascades;              // Cascades per caster (0 = keep engine default)
-    int csm_debug;                    // Tint fragments by selected cascade
-    int no_springs;                   // Disable spring-bone secondary motion
-    int no_ssao;                      // Disable screen-space ambient occlusion
-    int ssao_debug;                   // Show the raw SSAO buffer
-    int no_spec_occlusion;            // Let GTAO darken specular (disable spec-occ)
-    int no_ao_edge_filter;            // Disable the depth-aware AO blur (allow silhouette bleed)
-    int ssgi;                         // Enable screen-space GI (indirect diffuse)
-    int ssgi_debug;                   // Show the raw gathered GI radiance
-    int probe;                        // Enable the local reflection probe
-    int probe_pos_set;                // --probe-pos given
-    float probe_pos[3];               // Probe capture position override
-    int probe_scene;                  // Capture the scene meshes too (interiors)
-    int probe_debug;                  // Show the raw capture as the background
-    int sky;                          // Procedural physically-based sky instead of -e
-    int sky_debug;                    // Blit the sky LUTs into the frame corner
-    float sun_elevation;              // Sky sun elevation in degrees (-999 = default)
-    float sun_azimuth;                // Sky sun azimuth in degrees (-999 = default)
-    int sky_rebake_stress;            // Diagnostic: N headless sun re-bakes then restore
-    int fog;                          // Enable volumetric fog
-    int fog_debug;                    // Show the raw fog in-scatter buffer
-    float fog_density;                // Extinction override (0 = scene-scaled)
-    float fog_height;                 // Height falloff override (0 = scene-scaled)
-    int albedo_debug;                 // Show the resolved albedo G-buffer
-    int no_normals_mrt;               // Disable the normals G-buffer
-    int normals_debug;                // Show the resolved normals G-buffer
-    int no_ssr;                       // Disable screen-space reflections
-    int no_ssr_full_res;              // Trace SSR at half res (the old, serrated path)
-    int no_ssr_temporal;              // Disable SSR temporal accumulation (raw single-frame march)
-    int no_ssr_denoise;               // Disable the SSR denoiser (deterministic march, no jitter)
-    float ssr_jitter;                 // SSR stochastic ray-jitter spread override (-1 = default)
-    int ssr_debug;                    // Show the reflection buffer
-    float ssr_strength;               // SSR strength override (-1 = default)
-    float specular_aa;                // Specular AA strength override (-1 = default)
-    int no_energy_comp;               // Disable multi-scatter energy compensation
-    int no_refraction;                // Disable screen-space refraction
-    int no_clearcoat;                 // Disable the clearcoat second specular lobe
-    int no_specular;                  // Disable KHR_materials_specular F0 tint + weight
-    int no_sheen;                     // Disable KHR_materials_sheen cloth lobe
-    int no_parallax;                  // Disable parallax occlusion mapping (POM)
-    float parallax_scale;             // POM depth override (< 0 = keep engine default)
-    int no_sss;                       // Disable separable subsurface scattering
-    int oit;                          // Enable weighted-blended OIT (default off)
-    float sss_radius;                 // SSS scatter radius override (< 0 = fixture default)
-    float sss_color[3];               // SSS scatter color override (< 0 in [0] = fixture default)
-    int no_bloom;                     // Disable bloom
-    int tonemap_mode;                 // PostFXTonemapMode override (0 = keep default;
-                                      // coincides with PASSTHROUGH, which is a blit
-                                      // path and never user-set)
-    int ssaa;                         // Supersampling factor (0 = keep engine default)
-    // Finishing grade (-1 = keep engine default; >=0 enables + sets)
-    int film_preset; // --film: enable the whole finishing stack at sane defaults
-    float vignette;
-    int no_vignette; // Force the default vignette off
-    float grain;
-    float sharpen;
-    int grade_set; // A grade component was given -> enable the grade
-    float grade_lift[3];
-    float grade_gamma[3];
-    float grade_gain[3];
-    int dof;         // --dof: enable depth of field
-    int no_dof;      // Force DoF off (e.g. --film --no-dof)
-    float dof_focus; // Focus distance in view units (-1 = auto: subject)
-    float dof_range; // Ramp-to-full-blur width (-1 = scene-scaled default)
-    float dof_max_coc;
-    int motion_blur;         // --motion-blur: enable motion blur
-    float motion_blur_scale; // --motion-blur-scale shutter (-1 = engine default)
-    int width;
-    int height;
-    int headless;
-    int headless_jitter; // Apply TAA jitter in headless (lets temporal effects converge)
-    int max_frames;      // Exit after this many frames (0 = run forever)
-    int show_bones;
-    int check_stretch; // One-shot CPU skinning stretch diagnostic
-    int render_mode;   // RenderMode override for debugging (-1 = PBR)
-    float orbit_yaw;   // Camera yaw around the model in degrees (0 = front)
-    float orbit_pitch; // Camera pitch in degrees (0 = level, 90 = top-down)
-    // Explicit camera pose (reproduces any interactive view; overrides the
-    // yaw/pitch/distance orbit framing). --cam-eye and --cam-target must both
-    // be given; --cam-up is optional (default 0,1,0). Print them from the GUI
-    // "Print Camera" button.
-    int cam_eye_set;     // --cam-eye given
-    float cam_eye[3];    // Explicit eye position (world)
-    int cam_target_set;  // --cam-target given
-    float cam_target[3]; // Explicit look-at target (world)
-    int cam_up_set;      // --cam-up given
-    float cam_up[3];     // Explicit up vector (default 0,1,0)
-    int show_help;
-} RenderArgs;
 
 static void print_usage(const char* prog) {
     fprintf(stderr, "Usage: %s -m <model> [options]\n\n", prog);
@@ -246,6 +131,11 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --sss-radius <f>   SSS scatter radius (world units)\n");
     fprintf(stderr, "      --sss-color <r,g,b> SSS per-channel scatter color (e.g. 1.0,0.3,0.2)\n");
     fprintf(stderr, "      --no-bloom         Disable bloom\n");
+    fprintf(stderr, "      --bloom-strength <f> Bloom strength (default: engine)\n");
+    fprintf(stderr, "      --bloom-threshold <f> Bloom threshold (default: engine)\n");
+    fprintf(stderr, "      --fog-anisotropy <f> Fog scatter anisotropy -1..1 (implies --fog)\n");
+    fprintf(stderr, "      --ibl-intensity <f>  Environment light strength (default: engine)\n");
+    fprintf(stderr, "      --no-scene-file    Ignore any .cscn scene file (model loads bare)\n");
     fprintf(stderr,
             "      --tonemap <m>      Tonemap mode: aces, neutral, agx (default: neutral)\n");
     fprintf(stderr,
@@ -309,6 +199,11 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->shadow_softness = -1.0f; // -1 = keep the engine default
     args->sun_elevation = -999.0f; // -999 = keep the sky default
     args->sun_azimuth = -999.0f;
+    args->bloom_enable = -1;       // -1 = keep the engine default
+    args->bloom_strength = -1.0f;  // -1 = keep the engine default
+    args->bloom_threshold = -1.0f; // -1 = keep the engine default
+    args->fog_anisotropy = -999.0f; // -999 = keep default (-1..1 is valid)
+    args->ibl_intensity = -1.0f;   // -1 = keep the engine default
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
@@ -673,6 +568,32 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             }
         } else if (strcmp(argv[i], "--no-bloom") == 0) {
             args->no_bloom = 1;
+        } else if (strcmp(argv[i], "--bloom-strength") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->bloom_strength = (float)atof(argv[i]);
+        } else if (strcmp(argv[i], "--bloom-threshold") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->bloom_threshold = (float)atof(argv[i]);
+        } else if (strcmp(argv[i], "--fog-anisotropy") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->fog_anisotropy = (float)atof(argv[i]);
+        } else if (strcmp(argv[i], "--ibl-intensity") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->ibl_intensity = (float)atof(argv[i]);
+        } else if (strcmp(argv[i], "--no-scene-file") == 0) {
+            args->no_scene_file = 1;
         } else if (strcmp(argv[i], "--tonemap") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -1175,11 +1096,56 @@ void configure_visor_materials(Scene* scene) {
  * --sss-color the first profile's color (both < 0 keep the per-material
  * defaults). The global --no-sss toggle gates the effect.
  */
-void configure_sss_materials(Engine* engine, Scene* scene, float radius, const float* color) {
+// Mark a material as skin: profile slot lands in the diffuse-attachment
+// alpha (pbr_frag) so the separable blur can look up its scatter per pixel.
+static void tag_material_sss(Material* m, int slot, const float* prof_color) {
+    m->subsurface = 1.0f;
+    m->subsurface_profile = slot;
+    glm_vec3_copy((float*)prof_color, m->subsurface_color);
+}
+
+void configure_sss_materials(Engine* engine, Scene* scene, float radius, const float* color,
+                             const CetraSceneDesc* cscn) {
     if (!engine || !engine->postfx || !scene || !scene->root_node)
         return;
-    // node name -> scatter profile (per-channel weight with red widest; world
-    // radius). Defaults differ per material so the two spheres read distinctly.
+    postfx_reset_sss_profiles(engine->postfx);
+
+    // Scene file (.cscn) material overrides take priority: profiles are keyed
+    // by authored material name, matched against the scene's flat material
+    // registry (every imported material lands there via add_material_to_scene).
+    // --sss-radius/--sss-color still override.
+    if (cscn && cscn->material_count > 0) {
+        for (int k = 0; k < cscn->material_count; k++) {
+            const CSceneMaterialOverride* mo = &cscn->materials[k];
+            vec3 prof_color;
+            glm_vec3_copy((float*)mo->sss_color, prof_color);
+            if (k == 0 && color && color[0] >= 0.0f)
+                glm_vec3_copy((float*)color, prof_color);
+            float prof_radius = radius >= 0.0f ? radius : mo->sss_radius;
+            int slot = postfx_add_sss_profile(engine->postfx, prof_color, prof_radius);
+            if (slot < 0) {
+                fprintf(stderr, "Warning: SSS profile table full; '%s' skipped\n", mo->material);
+                continue;
+            }
+            int tagged = 0;
+            for (size_t i = 0; i < scene->material_count; i++) {
+                Material* m = scene->materials[i];
+                if (m && m->name && strcmp(m->name, mo->material) == 0) {
+                    tag_material_sss(m, slot, prof_color);
+                    tagged++;
+                }
+            }
+            printf("Configured SSS material '%s' (slot %d, radius %.3f, %d material(s))\n",
+                   mo->material, slot, prof_radius, tagged);
+            if (tagged == 0)
+                fprintf(stderr, "Warning: SSS material '%s' not found in scene\n", mo->material);
+        }
+        return;
+    }
+
+    // Fixture fallback: node name -> scatter profile (per-channel weight with
+    // red widest; world radius). Defaults differ per material so the two
+    // spheres read distinctly.
     struct {
         const char* node;
         float color[3];
@@ -1188,7 +1154,6 @@ void configure_sss_materials(Engine* engine, Scene* scene, float radius, const f
         {"sss_skin_a", {1.0f, 0.35f, 0.25f}, 0.6f},  // warm skin, wide scatter
         {"sss_skin_b", {0.4f, 0.75f, 0.55f}, 0.15f}, // cool wax, tight scatter
     };
-    postfx_reset_sss_profiles(engine->postfx);
     for (size_t k = 0; k < sizeof(skins) / sizeof(skins[0]); k++) {
         SceneNode* node = find_node_by_name(scene->root_node, skins[k].node);
         if (!node)
@@ -1203,10 +1168,7 @@ void configure_sss_materials(Engine* engine, Scene* scene, float radius, const f
             Mesh* mesh = node->meshes[i];
             if (!mesh || !mesh->material)
                 continue;
-            Material* m = mesh->material;
-            m->subsurface = 1.0f;         // mark as skin
-            m->subsurface_profile = slot; // pbr_frag writes this into the diffuse alpha
-            glm_vec3_copy(prof_color, m->subsurface_color); // transmission tint follows the profile
+            tag_material_sss(mesh->material, slot, prof_color);
         }
         printf("Configured SSS material %s (slot %d, radius %.3f, color %.2f,%.2f,%.2f)\n",
                skins[k].node, slot, prof_radius, prof_color[0], prof_color[1], prof_color[2]);
@@ -1233,6 +1195,14 @@ int main(int argc, char** argv) {
     // the mistake, so refuse outright
     if (args.sky && args.hdr_path) {
         fprintf(stderr, "Error: --sky and -e are mutually exclusive\n");
+        return -1;
+    }
+
+    // Cetra scene file (.cscn): resolve the input (the .cscn itself or one
+    // sitting next to a bare model) and merge its look into args, leaving
+    // CLI-given values untouched. See cscene_setup above main.
+    CetraSceneDesc* cscn = NULL;
+    if (cscene_setup(&args, &cscn) != 0) {
         return -1;
     }
 
@@ -1354,6 +1324,17 @@ int main(int argc, char** argv) {
         PostFX* fx = engine->postfx;
         if (args.no_bloom) {
             fx->bloom_enabled = false;
+        } else if (args.bloom_enable >= 0) {
+            fx->bloom_enabled = args.bloom_enable != 0;
+        }
+        if (args.bloom_strength >= 0.0f) {
+            fx->bloom_strength = args.bloom_strength;
+        }
+        if (args.bloom_threshold >= 0.0f) {
+            fx->bloom_threshold = args.bloom_threshold;
+        }
+        if (args.fog_anisotropy > -900.0f) {
+            fx->fog_anisotropy = args.fog_anisotropy;
         }
         if (args.tonemap_mode != 0) {
             fx->tonemap_mode = (PostFXTonemapMode)args.tonemap_mode;
@@ -1477,7 +1458,11 @@ int main(int argc, char** argv) {
     }
 
     configure_visor_materials(scene);
-    configure_sss_materials(engine, scene, args.sss_radius, args.sss_color);
+    configure_sss_materials(engine, scene, args.sss_radius, args.sss_color, cscn);
+
+    // Scene-file lights precede the environment/key-light logic so they
+    // count as "model ships lights" for the auto-key-light skip.
+    add_cscene_lights(scene, cscn);
 
     if (args.sky) {
         // Procedural sky: bake the atmosphere LUTs + sky-view + environment
@@ -1642,6 +1627,13 @@ int main(int argc, char** argv) {
         create_three_point_lights(scene, 3.0f);
     }
 
+    // Environment light strength: authored (scene file world strength) or
+    // --ibl-intensity. Applies to whichever IBL the branches above produced.
+    if (args.ibl_intensity >= 0.0f && scene->ibl) {
+        scene->ibl->intensity = args.ibl_intensity;
+        printf("IBL intensity: %.2f\n", args.ibl_intensity);
+    }
+
     // Load additional animation files if provided
     // Enable retargeting by default to support Mixamo animations on custom rigs
     size_t first_cli_anim = 0; // Index of first animation loaded via -a (0 = embedded)
@@ -1799,6 +1791,10 @@ int main(int argc, char** argv) {
                 set_light_size(light, light_size, light_size);
             }
         }
+
+        // Scene-file per-light overrides run after the global sizing so an
+        // authored softness (e.g. a sun's angular size) wins for its light.
+        apply_cscene_light_overrides(scene, cscn, scene_radius);
     }
 
     // Position camera to view the entire scene
@@ -2076,6 +2072,9 @@ int main(int argc, char** argv) {
     printf("Cleaning up...\n");
     if (anim_state) {
         free_animation_state(anim_state);
+    }
+    if (cscn) {
+        cscene_free(cscn);
     }
     free_mouse_drag_controller(drag_controller);
     free_engine(engine);

@@ -231,28 +231,11 @@ Font* load_font(FontPool* pool, const char* filepath, float base_size, bool use_
     }
 
     // Load TTF file
-    FILE* f = fopen(filepath, "rb");
-    if (!f) {
-        log_error("Failed to open font file: %s", filepath);
-        return NULL;
-    }
-
-    fseek(f, 0, SEEK_END);
-    long file_size = ftell(f);
-    fseek(f, 0, SEEK_SET);
-
-    unsigned char* ttf_buffer = malloc(file_size);
+    unsigned char* ttf_buffer = (unsigned char*)read_entire_file(filepath, NULL);
     if (!ttf_buffer) {
-        fclose(f);
+        log_error("Failed to read font file: %s", filepath);
         return NULL;
     }
-
-    if (fread(ttf_buffer, 1, file_size, f) != (size_t)file_size) {
-        free(ttf_buffer);
-        fclose(f);
-        return NULL;
-    }
-    fclose(f);
 
     // Initialize stb_truetype
     stbtt_fontinfo* info = malloc(sizeof(stbtt_fontinfo));
