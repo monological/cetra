@@ -83,6 +83,13 @@ static void on_init(Game* game) {
     // digits change per run and would break screenshot determinism.
     set_engine_show_fps(engine, !engine->headless);
 
+    // Low-key mood: a deliberate EV bias under auto-exposure. Auto-exposure
+    // normalizes the metered mean toward middle gray, which for this lit room
+    // is too bright for the intended dim interior -- the bias underexposes it
+    // back down (photographic exposure compensation; auto-adaptation stays on).
+    if (engine->postfx)
+        engine->postfx->exposure = 0.15f;
+
     Scene* scene = create_scene();
     SceneNode* root = create_node();
     set_node_name(root, "root");
