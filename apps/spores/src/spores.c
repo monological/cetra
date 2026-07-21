@@ -133,13 +133,15 @@ static void on_init(Game* game) {
         // Kept low-density with near-zero ambient so the room stays moody and
         // the beam dominates rather than a general grey wash.
         engine->postfx->fog_enabled = true;
-        engine->postfx->fog_density = 0.03f;
-        engine->postfx->fog_height_falloff = 8.0f;
+        // Low density keeps extinction (scene dimming) small; sun_boost scales
+        // the in-scatter only, so it brightens the beam without washing the room.
+        engine->postfx->fog_density = 0.035f;
+        engine->postfx->fog_height_falloff = 9.0f;
         engine->postfx->fog_floor_y = 0.0f;
         engine->postfx->fog_far = 40.0f;
-        engine->postfx->fog_anisotropy = 0.7f; // forward scatter -> beam glow
-        engine->postfx->fog_sun_boost = 1.0f;
-        glm_vec3_copy((vec3){0.006f, 0.006f, 0.006f}, engine->postfx->fog_ambient);
+        engine->postfx->fog_anisotropy = 0.82f; // strong forward scatter -> punchy beam
+        engine->postfx->fog_sun_boost = 3.5f;
+        glm_vec3_copy((vec3){0.004f, 0.004f, 0.004f}, engine->postfx->fog_ambient);
     }
 
     Scene* scene = create_scene();
@@ -182,6 +184,7 @@ static void on_init(Game* game) {
     set_light_intensity(flash, 45.0f);
     set_light_attenuation(flash, 1.0f, 0.018f, 0.0012f); // carries across the ~24u room
     set_light_cutoff(flash, cosf(glm_rad(18.0f)), cosf(glm_rad(20.0f))); // sharp 18->20 deg edge
+    set_light_cast_shadows(flash, true); // renders the perspective spot shadow map (occludes the beam)
     add_light_to_scene(scene, flash);
     SceneNode* flash_node = create_node();
     set_node_name(flash_node, "flashlight");

@@ -54,6 +54,14 @@ typedef struct ShadowSystem {
     mat4 cascade_matrices[MAX_SHADOW_LIGHTS * SHADOW_CASCADES];
     vec4 cascade_params[MAX_SHADOW_LIGHTS * SHADOW_CASCADES]; // width, near, far, biasScale
     float cascade_splits[SHADOW_CASCADES];                    // View-depth far bound per cascade
+
+    // One perspective spot shadow map (v1: the flashlight), a standalone
+    // GL_TEXTURE_2D depth map kept apart from the directional cascade array so
+    // its perspective projection doesn't disturb the ortho affine-shadow path.
+    GLuint spot_fbo, spot_shadow_map;
+    int spot_map_size;
+    mat4 spot_light_space; // perspective proj * lookAt from the spot
+    bool spot_active;      // a shadow-casting spot was rendered this frame
 } ShadowSystem;
 
 // Creation and destruction

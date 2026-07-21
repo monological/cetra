@@ -45,6 +45,11 @@ uniform vec3 spotColor;    // color * intensity
 uniform vec3 spotAtten;    // (constant, linear, quadratic)
 uniform float spotCosInner;
 uniform float spotCosOuter;
+// Perspective spot shadow map (Phase 2): occludes the beam. spotShadowed == 0
+// -> unshadowed beam. Perspective, so the tap needs a per-step w-divide.
+uniform int spotShadowed;
+uniform sampler2D spotShadowMap;
+uniform mat4 spotLightSpaceMatrix;
 
 const float PI = 3.14159265359;
 
@@ -170,7 +175,15 @@ void main()
                                0.0, 1.0);
             if (cone > 0.0) {
                 float atten = 1.0 / max(spotAtten.x + spotAtten.y * d + spotAtten.z * d * d, 1e-4);
-                S += spotColor * (cone * atten * spotPhase);
+                // Perspective spot shadow: is P visible to the flashlight?
+                float vis = 1.0;
+                if (spotShadowed == 1) {
+                    vec4 ls = spotLightSpaceMatrix * vec4(P, 1.0);
+                    vec3 pc = ls.xyz / ls.w * 0.5 + 0.5;
+                    if (pc.z <= 1.0 && pc.x >= 0.0 && pc.x <= 1.0 && pc.y >= 0.0 && pc.y <= 1.0)
+                        vis = (pc.z - shadowBias > texture(spotShadowMap, pc.xy).r) ? 0.0 : 1.0;
+                }
+                S += spotColor * (cone * atten * spotPhase * vis);
             }
         }
         L += T * (1.0 - stepTrans) * S;

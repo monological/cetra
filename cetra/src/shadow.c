@@ -69,6 +69,11 @@ void free_shadow_system(ShadowSystem* system) {
         free_shadow_caster(&system->casters[i]);
     }
 
+    if (system->spot_fbo)
+        glDeleteFramebuffers(1, &system->spot_fbo);
+    if (system->spot_shadow_map)
+        glDeleteTextures(1, &system->spot_shadow_map);
+
     free(system);
 }
 
@@ -417,6 +422,55 @@ static void _render_shadow_node(SceneNode* node, ShaderProgram* program, GLuint*
     }
 }
 
+// Lazily allocate the standalone perspective spot shadow map (2D depth + FBO),
+// mirroring init_shadow_caster. Kept apart from the directional cascade array.
+static bool ensure_spot_shadow_map(ShadowSystem* system) {
+    if (system->spot_shadow_map)
+        return true;
+    system->spot_map_size = system->spot_map_size > 0 ? system->spot_map_size : 1024;
+    int size = system->spot_map_size;
+    glGenFramebuffers(1, &system->spot_fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, system->spot_fbo);
+    glGenTextures(1, &system->spot_shadow_map);
+    glBindTexture(GL_TEXTURE_2D, system->spot_shadow_map);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, size, size, 0, GL_DEPTH_COMPONENT, GL_FLOAT,
+                 NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+    float border[] = {1.0f, 1.0f, 1.0f, 1.0f}; // out-of-cone reads = lit
+    glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, border);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D,
+                           system->spot_shadow_map, 0);
+    glDrawBuffer(GL_NONE);
+    glReadBuffer(GL_NONE);
+    bool ok = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+    if (!ok)
+        log_error("Spot shadow framebuffer incomplete");
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    return ok;
+}
+
+// Perspective light-space matrix for a spot: eye at the spot looking along its
+// cone axis, FOV from the outer cutoff (+ margin so the cone edge isn't clipped).
+static void compute_spot_light_space_matrix(const Light* spot, float near_plane, float far_plane,
+                                            mat4 dest) {
+    vec3 dir;
+    glm_vec3_normalize_to((float*)spot->direction, dir);
+    float fov = 2.0f * acosf(spot->outerCutOff) * 1.15f; // outerCutOff = cos(outer half-angle)
+    if (fov > glm_rad(175.0f))
+        fov = glm_rad(175.0f);
+    vec3 up = GLM_VEC3_ZERO_INIT;
+    light_space_up(dir, up);
+    vec3 target;
+    glm_vec3_add((float*)spot->global_position, dir, target);
+    mat4 view, proj;
+    glm_lookat((float*)spot->global_position, target, up, view);
+    glm_perspective(fov, 1.0f, near_plane, far_plane, proj);
+    glm_mat4_mul(proj, view, dest);
+}
+
 void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     if (!engine || !scene || !scene->shadow_system)
         return;
@@ -425,6 +479,7 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
 
     // First count shadow-casting lights before doing any GL operations
     ss->active_count = 0;
+    ss->spot_active = false;
     vec3 scene_center = {0.0f, 0.0f, 0.0f};
 
     for (size_t i = 0; i < scene->light_count && ss->active_count < MAX_SHADOW_LIGHTS; ++i) {
@@ -436,6 +491,17 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
             ss->active_count++;
         } else {
             light->shadow_map_index = -1;
+        }
+    }
+
+    // A shadow-casting spot (v1: the first) drives the standalone perspective
+    // spot map, independent of the directional caster count / early-out below.
+    const Light* spot_light = NULL;
+    for (size_t i = 0; i < scene->light_count; ++i) {
+        const Light* l = scene->lights[i];
+        if (l && l->type == LIGHT_SPOT && l->cast_shadows) {
+            spot_light = l;
+            break;
         }
     }
 
@@ -464,8 +530,9 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
             return;
     }
 
-    // Early exit if no shadow-casting lights - but texture is already initialized
-    if (ss->active_count == 0)
+    // Early exit if nothing casts - but the array texture is already initialized.
+    // A shadow-casting spot keeps the pass alive even with no directional casters.
+    if (ss->active_count == 0 && !spot_light)
         return;
 
     // Now get the depth program for shadow rendering
@@ -588,6 +655,20 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
         }
     }
 
+    // Standalone perspective spot shadow map (for the volumetric beam + surface
+    // spot shadows). Reuses the bound depth program + front-face cull.
+    if (spot_light && ensure_spot_shadow_map(ss)) {
+        compute_spot_light_space_matrix(spot_light, 1.0f, 55.0f, ss->spot_light_space);
+        glBindFramebuffer(GL_FRAMEBUFFER, ss->spot_fbo);
+        glViewport(0, 0, ss->spot_map_size, ss->spot_map_size);
+        glClear(GL_DEPTH_BUFFER_BIT);
+        uniform_set_mat4(ss->depth_program->uniforms, "lightSpaceMatrix",
+                         (const float*)ss->spot_light_space);
+        _render_shadow_node(scene->root_node, ss->depth_program, &current_program);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        ss->spot_active = true;
+    }
+
     glCullFace(GL_BACK);
     glUseProgram(0);
 
@@ -632,6 +713,17 @@ void shadow_publish_to_postfx(const Scene* scene, PostFX* fx) {
             fx->fog_spot_enabled = true;
             break;
         }
+    }
+
+    // Spot shadow (Phase 2): occludes the beam by geometry. Published
+    // independently of the directional early-out below (works even with no
+    // directional casters).
+    fx->fog_spot_shadowed = false;
+    const ShadowSystem* sss = scene ? scene->shadow_system : NULL;
+    if (sss && sss->spot_active && sss->spot_shadow_map) {
+        glm_mat4_copy((vec4*)sss->spot_light_space, fx->fog_spot_light_space);
+        fx->fog_spot_shadow_map = sss->spot_shadow_map;
+        fx->fog_spot_shadowed = true;
     }
 
     // Publishing count 0 with a zero array handle is the single "no

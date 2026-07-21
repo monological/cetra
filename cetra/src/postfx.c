@@ -1245,6 +1245,13 @@ static GLuint postfx_run_fog(PostFX* fx, bool aux_written, bool taa_resolving, m
     }
     // Volumetric spot (the flashlight): scattered per march step when present.
     uniform_set_int(fu, "spotEnabled", fx->fog_spot_enabled ? 1 : 0);
+    int spot_shadowed = (fx->fog_spot_enabled && fx->fog_spot_shadowed) ? 1 : 0;
+    uniform_set_int(fu, "spotShadowed", spot_shadowed);
+    // The perspective spot depth map on its own unit (0 = linDepth, 1 = the
+    // directional array). Bound each frame (0 when none) so the sampler is valid.
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, fx->fog_spot_shadow_map);
+    uniform_set_int(fu, "spotShadowMap", 2);
     if (fx->fog_spot_enabled) {
         uniform_set_vec3(fu, "spotPos", fx->fog_spot_pos);
         uniform_set_vec3(fu, "spotDir", fx->fog_spot_dir);
@@ -1252,6 +1259,8 @@ static GLuint postfx_run_fog(PostFX* fx, bool aux_written, bool taa_resolving, m
         uniform_set_vec3(fu, "spotAtten", fx->fog_spot_atten);
         uniform_set_float(fu, "spotCosInner", fx->fog_spot_cos_inner);
         uniform_set_float(fu, "spotCosOuter", fx->fog_spot_cos_outer);
+        if (spot_shadowed)
+            uniform_set_mat4(fu, "spotLightSpaceMatrix", (float*)fx->fog_spot_light_space);
     }
     // Under TAA the march's dither rotates per frame and the accumulator
     // integrates it; headless/no-TAA keeps the static dither so equal runs
