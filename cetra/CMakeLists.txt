@@ -32,6 +32,7 @@ add_custom_target(shaders DEPENDS ${SHADER_HEADER})
 file(GLOB CETRA_SOURCES
     src/*.c
     src/ext/cwalk.c
+    src/ext/cJSON.c
     src/ext/log.c
     src/ext/progressbar.c
     src/game/*.c
