@@ -6,6 +6,7 @@
 #include "../transform.h"
 #include "../shadow.h"
 #include "../async_loader.h"
+#include "../particle_system.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -251,6 +252,13 @@ void run_game(Game* game) {
                 // User update callback
                 if (game->on_update) {
                     game->on_update(game, game->fixed_timestep);
+                }
+
+                // Tick scene-attached particle systems (engine-driven, like physics)
+                if (game->scene) {
+                    for (size_t i = 0; i < game->scene->particle_system_count; i++)
+                        particle_system_update(game->scene->particle_systems[i],
+                                               (float)game->fixed_timestep, (float)game->time);
                 }
 
                 // Update character controllers (after user sets velocities, before physics)

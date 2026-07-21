@@ -23,6 +23,7 @@
 #include "util.h"
 #include "shadow.h"
 #include "intersect.h"
+#include "particle_system.h" // scene-attached particle systems (auto-rendered)
 
 // The 0-15 fragment texture-unit budget is one global resource whose slots are
 // declared across common.h (material) + shadow.h + ibl.h (engine). Pin the whole
@@ -735,6 +736,26 @@ void render_current_scene(Engine* engine, float time_value) {
                                 render_mode, &current_program, &current_material, &frustum, true,
                                 false);
         glDepthMask(GL_TRUE);
+    }
+
+    // Particle systems attached to scene nodes: transparent pass into the HDR
+    // framebuffer (so bloom/tonemap apply), with their own depth/blend bracket.
+    // A separate block because the transparent pass above is gated on mesh count
+    // and particles must draw even in an all-opaque scene. engine_resolve_scene_depth
+    // re-binds the scene FBO before returning.
+    if (scene->particle_system_count > 0) {
+        GLuint particle_depth = engine_resolve_scene_depth(engine);
+        glDepthMask(GL_FALSE);
+        glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA); // premultiplied
+        ParticleRenderContext pctx = {0};
+        glm_mat4_copy(*view, pctx.view);
+        glm_mat4_copy(draw_projection, pctx.proj);
+        pctx.scene = scene;
+        pctx.scene_depth_texture = particle_depth;
+        for (size_t i = 0; i < scene->particle_system_count; i++)
+            particle_system_render(scene->particle_systems[i], &pctx);
+        glDepthMask(GL_TRUE);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); // restore engine baseline
     }
 
     // Shadow catcher: darken the environment floor where the model blocks

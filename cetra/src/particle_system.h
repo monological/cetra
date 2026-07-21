@@ -7,13 +7,17 @@
 #include "particle_sim.h"
 #include "particle_renderer.h"
 
-// The whole effect: a set of emitters driven by one sim backend. See
-// specs/5.0-particle-system.md.
+struct SceneNode; // forward-declared: scene.h holds ParticleSystem*, we hold SceneNode* -- no cycle
+
+// The whole effect: a set of emitters driven by one sim backend. Optionally
+// attached to a SceneNode, whose world transform becomes the emitters' spawn
+// frame. See specs/5.0-particle-system.md, specs/5.1-particle-scene-integration.md.
 typedef struct ParticleSystem {
     char* name;
     ParticleEmitter** emitters;
     size_t emitter_count, emitter_cap;
     ParticleSimBackend* backend; // owned
+    struct SceneNode* node;      // borrowed; NULL = world origin
 } ParticleSystem;
 
 ParticleSystem* create_particle_system(const char* name);

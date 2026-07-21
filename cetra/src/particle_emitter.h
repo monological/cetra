@@ -9,7 +9,9 @@
 
 struct ParticleRenderer;
 
-// World-space sim only in v1; LOCAL is reserved (local_to_world stubbed).
+// Simulation space. WORLD only today (particles spawn in the emitter's world
+// frame, then live in world space); LOCAL (cloud rigidly follows the transform)
+// is reserved.
 typedef enum { PARTICLE_SPACE_WORLD, PARTICLE_SPACE_LOCAL } ParticleSimSpace;
 
 // An emitter is DATA: a pool, three phase-ordered module lists, a deterministic
@@ -30,7 +32,7 @@ typedef struct ParticleEmitter {
     uint32_t rng_state;  // per-emitter xorshift32 (deterministic)
 
     ParticleSimSpace space;
-    mat4 local_to_world; // reserved (LOCAL space deferred)
+    mat4 local_to_world; // emitter->world spawn frame (synced from the attached node each tick)
 
     struct ParticleRenderer* renderer; // owned; may be NULL
 } ParticleEmitter;

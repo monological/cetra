@@ -33,7 +33,6 @@
 
 static ShaderProgram* g_pbr = NULL;
 static MouseDragController* g_drag = NULL;
-static ParticleSystem* g_sys = NULL;
 
 // A static, unlit-until-the-key-hits-it surface. Geometry is generated at
 // `pos` so the node transform can stay identity (matches the shapes app).
@@ -129,15 +128,17 @@ static void on_init(Game* game) {
 
     upload_buffers_to_gpu_for_nodes(root);
 
-    // Particle system: one cordyceps-spore emitter filling the room's air with
-    // fine, pale sickly-green motes on curl-noise turbulence.
+    // Cordyceps-spore particle system: fine pale-green motes on curl-noise
+    // turbulence. Attached to a scene node -- the engine ticks + renders it, the
+    // app just builds and attaches. The node sits at the origin (identity), so
+    // the emitter box is world-space; move the node to move the whole cloud.
     noise_seed(1337u);
 
     ShaderProgram* particle_prog = create_particle_program();
     add_shader_program_to_engine(engine, particle_prog);
 
-    g_sys = create_particle_system("spores");
-    particle_system_set_backend(g_sys, create_cpu_particle_sim_backend());
+    ParticleSystem* sys = create_particle_system("spores");
+    particle_system_set_backend(sys, create_cpu_particle_sim_backend());
 
     ParticleEmitter* em = create_particle_emitter("spore", 20000);
     particle_emitter_set_renderer(em, create_billboard_particle_renderer(particle_prog));
@@ -153,12 +154,13 @@ static void on_init(Game* game) {
     particle_emitter_add_module(em, particle_module_update_curl_noise(0.25f, 0.5f, 0.15f));
     particle_emitter_add_module(em, particle_module_update_drift((vec3){0.0f, 0.02f, 0.0f}));
     particle_emitter_add_module(em, particle_module_update_integrate(0.985f));
-    particle_system_add_emitter(g_sys, em);
-}
+    particle_system_add_emitter(sys, em);
 
-static void on_update(Game* game, double dt) {
-    if (g_sys)
-        particle_system_update(g_sys, (float)dt, (float)game->time);
+    SceneNode* spore_node = create_node();
+    set_node_name(spore_node, "spore_emitter");
+    set_node_particle_system(spore_node, sys); // node transform = emitter spawn frame
+    add_child_node(root, spore_node);
+    add_particle_system_to_scene(scene, sys); // scene owns it (ticked + drawn automatically)
 }
 
 static void on_render(Game* game, double alpha) {
@@ -176,38 +178,14 @@ static void on_render(Game* game, double alpha) {
     reset_and_apply_transform(&engine->model_matrix, &t);
     apply_transform_to_nodes(scene->root_node, engine->model_matrix);
 
+    // The scene's particle systems are ticked + drawn by the engine; nothing to
+    // do here but render the scene.
     render_current_scene(engine, game->time);
-
-    // Particle pass: transparent, drawn into the HDR framebuffer right after the
-    // scene (like render_skeleton_bones) so bloom/tonemap apply. Depth-test
-    // against the scene, no depth write; premultiplied alpha. Restore the
-    // engine's baseline blend func afterward (blending stays globally enabled).
-    if (g_sys) {
-        // Resolve scene depth for soft particles before drawing (re-binds the
-        // scene framebuffer itself).
-        GLuint depth_tex = engine_resolve_scene_depth(engine);
-
-        glDepthMask(GL_FALSE);
-        glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
-
-        ParticleRenderContext ctx = {0};
-        glm_mat4_copy(engine->view_matrix, ctx.view);
-        glm_mat4_copy(engine->draw_projection, ctx.proj);
-        ctx.scene = scene;
-        ctx.scene_depth_texture = depth_tex;
-        particle_system_render(g_sys, &ctx);
-
-        glDepthMask(GL_TRUE);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    }
 }
 
 static void on_shutdown(Game* game) {
     (void)game;
-    if (g_sys) {
-        free_particle_system(g_sys);
-        g_sys = NULL;
-    }
+    // The particle system is owned by the scene (freed in free_scene).
     if (g_drag) {
         free_mouse_drag_controller(g_drag);
         g_drag = NULL;
@@ -248,7 +226,6 @@ int main(int argc, char** argv) {
 
     set_engine_mouse_button_callback(game->engine, mouse_button_callback);
     game_set_init(game, on_init);
-    game_set_update(game, on_update);
     game_set_render(game, on_render);
     game_set_shutdown(game, on_shutdown);
 

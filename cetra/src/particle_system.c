@@ -1,4 +1,5 @@
 #include "particle_system.h"
+#include "scene.h" // SceneNode->global_transform for the spawn frame
 
 #include <stdlib.h>
 #include <string.h>
@@ -40,8 +41,15 @@ void particle_system_add_emitter(ParticleSystem* s, ParticleEmitter* e) {
 void particle_system_update(ParticleSystem* s, float dt, float t) {
     if (!s || !s->backend || !s->backend->simulate)
         return;
-    for (size_t i = 0; i < s->emitter_count; i++)
-        s->backend->simulate(s->backend, s->emitters[i], dt, t);
+    for (size_t i = 0; i < s->emitter_count; i++) {
+        ParticleEmitter* e = s->emitters[i];
+        // The node's world transform is the emitter's spawn frame (identity if
+        // unattached). global_transform is last render frame's -- one frame of
+        // spawn-origin latency, fine for static/slow emitters.
+        if (s->node)
+            glm_mat4_copy(s->node->global_transform, e->local_to_world);
+        s->backend->simulate(s->backend, e, dt, t);
+    }
 }
 
 void particle_system_render(ParticleSystem* s, const ParticleRenderContext* ctx) {

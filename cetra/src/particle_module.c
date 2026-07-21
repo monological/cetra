@@ -74,11 +74,14 @@ static void init_box_run(ParticleModule* m, ParticleEmitter* e, size_t begin, si
                          float t) {
     (void)dt;
     (void)t;
-    BoxLocParams* p = m->params;
+    const BoxLocParams* p = m->params;
     for (size_t i = begin; i < end; i++) {
+        // Sample the box in the emitter's LOCAL frame, then place it in the
+        // world via the emitter's spawn transform (identity if unattached).
+        vec3 local = {0.0f, 0.0f, 0.0f};
         for (int k = 0; k < 3; k++)
-            e->pool->position[i][k] =
-                p->min[k] + (p->max[k] - p->min[k]) * particle_emitter_rand01(e);
+            local[k] = p->min[k] + (p->max[k] - p->min[k]) * particle_emitter_rand01(e);
+        glm_mat4_mulv3(e->local_to_world, local, 1.0f, e->pool->position[i]);
     }
 }
 

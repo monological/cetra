@@ -8,6 +8,7 @@
 
 #include "ext/log.h"
 #include "scene.h"
+#include "particle_system.h"
 #include "sky.h"
 #include "mask_array.h"
 #include "program.h"
@@ -107,6 +108,17 @@ void free_scene(Scene* scene) {
         }
         free(scene->lights);
         scene->lights = NULL;
+    }
+
+    // Free all particle systems (the scene owns them; nodes only borrow)
+    if (scene->particle_systems) {
+        for (size_t i = 0; i < scene->particle_system_count; i++) {
+            if (scene->particle_systems[i]) {
+                free_particle_system(scene->particle_systems[i]);
+            }
+        }
+        free(scene->particle_systems);
+        scene->particle_systems = NULL;
     }
 
     // Free all cameras
@@ -293,6 +305,24 @@ Light* find_light_by_name(Scene* scene, const char* name) {
         }
     }
     return NULL;
+}
+
+int add_particle_system_to_scene(Scene* scene, struct ParticleSystem* sys) {
+    if (!scene || !sys)
+        return -1;
+
+    size_t new_count = scene->particle_system_count + 1;
+    struct ParticleSystem** grown =
+        realloc(scene->particle_systems, new_count * sizeof(struct ParticleSystem*));
+    if (!grown) {
+        log_error("Failed to reallocate memory for new particle system");
+        return -1;
+    }
+
+    scene->particle_systems = grown;
+    scene->particle_systems[scene->particle_system_count] = sys;
+    scene->particle_system_count = new_count;
+    return 0;
 }
 
 // Max-heap helpers for O(n log k) light selection
@@ -527,6 +557,7 @@ SceneNode* create_node() {
     node->mesh_count = 0;
     node->light = NULL;
     node->camera = NULL;
+    node->particle_system = NULL;
 
     // xyz
     node->show_xyz = true;
@@ -616,6 +647,14 @@ void set_node_camera(SceneNode* node, Camera* camera) {
     if (!node)
         return;
     node->camera = camera;
+}
+
+void set_node_particle_system(SceneNode* node, struct ParticleSystem* sys) {
+    if (!node)
+        return;
+    node->particle_system = sys;
+    if (sys)
+        sys->node = node; // back-ref: the system's world transform is this node's
 }
 
 SceneNode* find_node_by_name(SceneNode* root, const char* name) {

@@ -17,6 +17,10 @@
 #include "probe.h"
 #include "animation.h"
 
+// Forward-declared so scene.h and particle_system.h never include each other
+// (particle_system.h forward-declares SceneNode in turn) -- avoids a cycle.
+struct ParticleSystem;
+
 /*
  * SceneNode
  */
@@ -38,6 +42,8 @@ typedef struct SceneNode {
 
     Camera* camera;
 
+    struct ParticleSystem* particle_system; // borrowed; owned by the Scene
+
     bool show_xyz;
     GLuint xyz_vao;
     GLuint xyz_vbo;
@@ -58,6 +64,8 @@ int add_mesh_to_node(SceneNode* node, Mesh* mesh);
 void set_node_name(SceneNode* node, const char* name);
 void set_node_light(SceneNode* node, Light* light);
 void set_node_camera(SceneNode* node, Camera* camera);
+// Attach a particle system (borrowed) whose world transform is this node's.
+void set_node_particle_system(SceneNode* node, struct ParticleSystem* sys);
 
 // find
 SceneNode* find_node_by_name(SceneNode* root, const char* name);
@@ -87,6 +95,9 @@ typedef struct Scene {
 
     Light** lights;
     size_t light_count;
+
+    struct ParticleSystem** particle_systems; // owned (freed in free_scene)
+    size_t particle_system_count;
 
     Camera** cameras;
     size_t camera_count;
@@ -164,6 +175,9 @@ Camera* find_camera_by_name(Scene* scene, const char* name);
 void set_scene_lights(Scene* scene, Light** lights, size_t light_count);
 int add_light_to_scene(Scene* scene, Light* light);
 Light* find_light_by_name(Scene* scene, const char* name);
+
+// particle systems (scene-owned; ticked + rendered automatically by the engine)
+int add_particle_system_to_scene(Scene* scene, struct ParticleSystem* sys);
 Light** get_closest_lights(Scene* scene, SceneNode* target_node, size_t max_lights,
                            size_t* returned_light_count);
 
