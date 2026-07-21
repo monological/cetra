@@ -42,6 +42,19 @@ static bool get_vec3(const cJSON* obj, const char* key, float out[3]) {
     return true;
 }
 
+static bool get_floats(const cJSON* obj, const char* key, float* out, int n) {
+    const cJSON* arr = cJSON_GetObjectItemCaseSensitive(obj, key);
+    if (!cJSON_IsArray(arr) || cJSON_GetArraySize(arr) != n)
+        return false;
+    for (int i = 0; i < n; i++) {
+        const cJSON* v = cJSON_GetArrayItem(arr, i);
+        if (!cJSON_IsNumber(v))
+            return false;
+        out[i] = (float)v->valuedouble;
+    }
+    return true;
+}
+
 static bool get_float(const cJSON* obj, const char* key, float* out) {
     const cJSON* v = cJSON_GetObjectItemCaseSensitive(obj, key);
     if (!cJSON_IsNumber(v))
@@ -186,6 +199,29 @@ static void parse_wind(CetraSceneDesc* d, const cJSON* root) {
     d->has_wind_turbulence = get_float(wind, "turbulence", &d->wind_turbulence);
 }
 
+static void parse_dust(CetraSceneDesc* d, const cJSON* root) {
+    const cJSON* dust = cJSON_GetObjectItemCaseSensitive(root, "dust");
+    if (!cJSON_IsObject(dust))
+        return;
+    CSceneDust* out = &d->dust;
+    out->enabled = true; // presence implies on unless "enabled": false
+    get_bool(dust, "enabled", &out->enabled);
+    out->has_spawn_rate = get_float(dust, "spawnRate", &out->spawn_rate);
+    out->has_lifetime = get_floats(dust, "lifetime", out->lifetime, 2);
+    out->has_size = get_floats(dust, "size", out->size, 2);
+    out->has_color = get_floats(dust, "color", out->color, 4);
+    out->has_color_jitter = get_float(dust, "colorJitter", &out->color_jitter);
+    const cJSON* curl = cJSON_GetObjectItemCaseSensitive(dust, "curl");
+    if (cJSON_IsObject(curl)) {
+        // All three or none, so a partial curl block never half-overrides.
+        out->has_curl = get_float(curl, "scale", &out->curl[0]) &&
+                        get_float(curl, "strength", &out->curl[1]) &&
+                        get_float(curl, "timescale", &out->curl[2]);
+    }
+    out->has_drift = get_vec3(dust, "drift", out->drift);
+    out->has_damping = get_float(dust, "damping", &out->damping);
+}
+
 static void parse_materials(CetraSceneDesc* d, const cJSON* root) {
     const cJSON* mats = cJSON_GetObjectItemCaseSensitive(root, "materials");
     if (!cJSON_IsObject(mats))
@@ -262,6 +298,7 @@ CetraSceneDesc* cscene_load(const char* path) {
     parse_light_overrides(d, root);
     parse_post(d, root);
     parse_wind(d, root);
+    parse_dust(d, root);
     parse_materials(d, root);
     parse_camera(d, root);
     cJSON_Delete(root);

@@ -6,6 +6,8 @@
 
 #include "render_args.h"
 
+struct Engine;
+
 /*
  * App-side policy for cetra scene files (.cscn): merge the parsed description
  * into RenderArgs (CLI wins) and apply the scene-graph-dependent pieces at
@@ -33,5 +35,10 @@ void apply_cscene_light_overrides(Scene* scene, const CetraSceneDesc* cscn, floa
 // it (windResponse), deriving each cloth mesh's sway mask from its AABB. Runs
 // after the scene graph and materials exist.
 void apply_cscene_wind(Scene* scene, const CetraSceneDesc* cscn);
+
+// Build the scene's ambient dust particle system (if the .cscn declares a dust
+// block), sized to the scene bounds. Replaces the old hardcoded filename gate.
+void apply_cscene_dust(struct Engine* engine, Scene* scene, const CetraSceneDesc* cscn, vec3 center,
+                       float radius);
 
 #endif // CSCENE_APPLY_H

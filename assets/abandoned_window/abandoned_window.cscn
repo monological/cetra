@@ -60,6 +60,18 @@
     "gustAmount": 0.7,
     "turbulence": 0.25
   },
+  "dust": {
+    "curl": {
+      "scale": 0.3,
+      "strength": 0.035,
+      "timescale": 0.04
+    },
+    "drift": [
+      0.0,
+      0.0025,
+      0.0
+    ]
+  },
   "materials": {
     "IvyLeafReal": {
       "sss": {

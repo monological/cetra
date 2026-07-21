@@ -60,6 +60,28 @@ typedef struct CSceneMaterialOverride {
     float wind_response;    // 0 = rigid; 1 = full sway
 } CSceneMaterialOverride;
 
+// Ambient dust: a scene-level particle effect (like fog). Each field carries a
+// presence flag; absent fields keep the recipe defaults in apply_cscene_dust.
+typedef struct CSceneDust {
+    bool enabled;
+    bool has_spawn_rate;
+    float spawn_rate;
+    bool has_lifetime;
+    float lifetime[2]; // min, max seconds
+    bool has_size;
+    float size[2]; // min, max
+    bool has_color;
+    float color[4]; // rgba
+    bool has_color_jitter;
+    float color_jitter;
+    bool has_curl;
+    float curl[3]; // scale, strength, timescale
+    bool has_drift;
+    float drift[3];
+    bool has_damping;
+    float damping;
+} CSceneDust;
+
 typedef struct CetraSceneDesc {
     // Paths are resolved against the scene file's directory at load time;
     // consumers receive directly usable paths.
@@ -110,6 +132,8 @@ typedef struct CetraSceneDesc {
     float wind_gust_amount;
     bool has_wind_turbulence;
     float wind_turbulence;
+
+    CSceneDust dust;
 
     CSceneMaterialOverride materials[CSCENE_MAX_MATERIALS];
     int material_count;

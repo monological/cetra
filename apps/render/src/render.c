@@ -24,11 +24,6 @@
 #include "cetra/ibl.h"
 #include "cetra/sky.h"
 #include "cetra/app.h"
-#include "cetra/noise.h"
-#include "cetra/particle_system.h"
-#include "cetra/particle_emitter.h"
-#include "cetra/particle_module.h"
-#include "cetra/particle_renderer.h"
 
 #include "cetra/shader_strings.h"
 
@@ -983,49 +978,6 @@ static void render_frame_update(Engine* engine, float dt) {
         scene_update_particle_systems(s, dt, (float)glfwGetTime());
 }
 
-// Subtle sun-catching dust for the abandoned-window scene: a sparse cloud of
-// tiny, long-lived motes filling the middle of the scene. The billboards are lit
-// by the scene's directional SunKey (and shadowed by the muntins), so they glow
-// in the shafts through the panes; bloom haloes the brightest. The spores app is
-// the fuller version of this same recipe.
-static void attach_window_dust(Engine* engine, Scene* scene, vec3 center, float radius) {
-    if (!engine || !scene || !scene->root_node)
-        return;
-    noise_seed(20240720u);
-    ShaderProgram* prog = create_particle_program();
-    add_shader_program_to_engine(engine, prog);
-
-    ParticleSystem* sys = create_particle_system("window_dust");
-    particle_system_set_backend(sys, create_tf_particle_sim_backend());
-
-    // Spawn box: the middle of the scene, a bit flatter than wide. Capacity must
-    // clear spawn_rate * max_lifetime (110 * 30 = 3300); 3600 leaves margin.
-    float ext = radius * 0.6f;
-    vec3 lo = {center[0] - ext, center[1] - ext * 0.6f, center[2] - ext};
-    vec3 hi = {center[0] + ext, center[1] + ext * 0.6f, center[2] + ext};
-
-    ParticleEmitter* em = create_particle_emitter("dust", 3600);
-    particle_emitter_set_renderer(em, create_billboard_particle_renderer(prog));
-    particle_emitter_add_module(em, particle_module_spawn_rate(110.0f)); // sparse but present
-    particle_emitter_add_module(em, particle_module_init_box_location(lo, hi));
-    particle_emitter_add_module(em, particle_module_init_lifetime(15.0f, 30.0f)); // long, drifty
-    particle_emitter_add_module(em, particle_module_init_size(0.0015f, 0.006f)); // very small motes
-    // Dim base so shadowed motes nearly vanish and only sun-lit ones pop; the
-    // warm SunKey tints them and bloom haloes the brightest in the beam.
-    particle_emitter_add_module(em,
-                                particle_module_init_color((vec4){0.4f, 0.4f, 0.4f, 0.35f}, 0.04f));
-    particle_emitter_add_module(em, particle_module_update_curl_noise(0.3f, 0.06f, 0.05f)); // faint
-    particle_emitter_add_module(em, particle_module_update_drift((vec3){0.0f, 0.004f, 0.0f}));
-    particle_emitter_add_module(em, particle_module_update_integrate(0.99f));
-    particle_system_add_emitter(sys, em);
-    add_particle_system_to_scene(scene, sys); // scene owns it (freed in free_scene)
-
-    SceneNode* node = create_node();
-    set_node_name(node, "window_dust");
-    set_node_particle_system(node, sys);
-    add_child_node(scene->root_node, node);
-}
-
 void render_scene_callback(Engine* engine, Scene* current_scene) {
     SceneNode* root_node = current_scene->root_node;
 
@@ -1798,11 +1750,9 @@ int main(int argc, char** argv) {
     printf("Scene bounds: center=(%.2f, %.2f, %.2f), radius=%.2f\n", scene_center[0],
            scene_center[1], scene_center[2], scene_radius);
 
-    // Subtle sun-catching dust, always on for the abandoned-window scene. Sized
-    // to the scene bounds; the render app now ticks particles (render_frame_update).
-    if (args.model_path && strstr(args.model_path, "abandoned_window")) {
-        attach_window_dust(engine, scene, scene_center, scene_radius);
-    }
+    // Ambient dust, if the scene file declares a `dust` block. Sized to the
+    // scene bounds; the render app ticks particles via render_frame_update.
+    apply_cscene_dust(engine, scene, cscn, scene_center, scene_radius);
 
     // Size the ground-projection dome to the scene, not a fixed 5 units. The
     // camera's zoom cap derives from the dome radius (max_distance = fade_start

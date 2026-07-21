@@ -5,9 +5,17 @@
 #include <cglm/cglm.h>
 
 #include "cetra/cscene.h"
+#include "cetra/engine.h"
 #include "cetra/ext/cwalk.h"
 #include "cetra/light.h"
+#include "cetra/noise.h"
+#include "cetra/particle_emitter.h"
+#include "cetra/particle_module.h"
+#include "cetra/particle_renderer.h"
+#include "cetra/particle_sim.h"
+#include "cetra/particle_system.h"
 #include "cetra/postfx.h"
+#include "cetra/program.h"
 #include "cetra/scene.h"
 #include "cetra/util.h"
 #include "cetra/wind.h"
@@ -216,4 +224,81 @@ void apply_cscene_wind(Scene* scene, const CetraSceneDesc* cscn) {
         if (tagged == 0)
             fprintf(stderr, "Warning: wind material '%s' not found in scene\n", mo->material);
     }
+}
+
+void apply_cscene_dust(Engine* engine, Scene* scene, const CetraSceneDesc* cscn, vec3 center,
+                       float radius) {
+    if (!engine || !scene || !scene->root_node || !cscn || !cscn->dust.enabled)
+        return;
+    const CSceneDust* d = &cscn->dust;
+
+    // Defaults reproduce the historical ambient-dust recipe; the .cscn overrides
+    // only what it authors (like apply_cscene_wind over create_wind's defaults).
+    float spawn_rate = 110.0f;
+    float life_min = 15.0f, life_max = 30.0f;
+    float size_min = 0.0015f, size_max = 0.006f;
+    vec4 color = {0.4f, 0.4f, 0.4f, 0.35f};
+    float color_jitter = 0.04f;
+    float curl_scale = 0.3f, curl_strength = 0.06f, curl_timescale = 0.05f;
+    vec3 drift = {0.0f, 0.004f, 0.0f};
+    float damping = 0.99f;
+
+    if (d->has_spawn_rate)
+        spawn_rate = d->spawn_rate;
+    if (d->has_lifetime) {
+        life_min = d->lifetime[0];
+        life_max = d->lifetime[1];
+    }
+    if (d->has_size) {
+        size_min = d->size[0];
+        size_max = d->size[1];
+    }
+    if (d->has_color)
+        glm_vec4_copy((float*)d->color, color);
+    if (d->has_color_jitter)
+        color_jitter = d->color_jitter;
+    if (d->has_curl) {
+        curl_scale = d->curl[0];
+        curl_strength = d->curl[1];
+        curl_timescale = d->curl[2];
+    }
+    if (d->has_drift)
+        glm_vec3_copy((float*)d->drift, drift);
+    if (d->has_damping)
+        damping = d->damping;
+
+    noise_seed(20240720u);
+    ShaderProgram* prog = create_particle_program();
+    add_shader_program_to_engine(engine, prog);
+
+    ParticleSystem* sys = create_particle_system("window_dust");
+    particle_system_set_backend(sys, create_tf_particle_sim_backend());
+
+    // Spawn box: the middle of the scene, a bit flatter than wide. Capacity must
+    // clear spawn_rate * max_lifetime; +10% and a small floor leave margin.
+    float ext = radius * 0.6f;
+    vec3 lo = {center[0] - ext, center[1] - ext * 0.6f, center[2] - ext};
+    vec3 hi = {center[0] + ext, center[1] + ext * 0.6f, center[2] + ext};
+    size_t capacity = (size_t)(spawn_rate * life_max * 1.1f) + 64;
+
+    ParticleEmitter* em = create_particle_emitter("dust", capacity);
+    particle_emitter_set_renderer(em, create_billboard_particle_renderer(prog));
+    particle_emitter_add_module(em, particle_module_spawn_rate(spawn_rate));
+    particle_emitter_add_module(em, particle_module_init_box_location(lo, hi));
+    particle_emitter_add_module(em, particle_module_init_lifetime(life_min, life_max));
+    particle_emitter_add_module(em, particle_module_init_size(size_min, size_max));
+    particle_emitter_add_module(em, particle_module_init_color(color, color_jitter));
+    particle_emitter_add_module(
+        em, particle_module_update_curl_noise(curl_scale, curl_strength, curl_timescale));
+    particle_emitter_add_module(em, particle_module_update_drift(drift));
+    particle_emitter_add_module(em, particle_module_update_integrate(damping));
+    particle_system_add_emitter(sys, em);
+    add_particle_system_to_scene(scene, sys); // scene owns it (freed in free_scene)
+
+    SceneNode* node = create_node();
+    set_node_name(node, "window_dust");
+    set_node_particle_system(node, sys);
+    add_child_node(scene->root_node, node);
+    printf("Scene file: dust spawnRate=%.0f, curl.strength=%.3f (capacity %zu)\n", spawn_rate,
+           curl_strength, capacity);
 }
