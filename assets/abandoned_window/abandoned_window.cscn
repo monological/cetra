@@ -48,31 +48,6 @@
       "anisotropy": 0.25
     }
   },
-  "wind": {
-    "direction": [
-      0.15,
-      -0.1,
-      1.0
-    ],
-    "strength": 0.06,
-    "speed": 1.2,
-    "gustFrequency": 0.6,
-    "gustAmount": 0.7,
-    "turbulence": 0.25
-  },
-  "dust": {
-    "curl": {
-      "scale": 0.3,
-      "strength": 0.02,
-      "timescale": 0.03
-    },
-    "drift": [
-      0.0,
-      0.0015,
-      0.0
-    ],
-    "damping": 0.95
-  },
   "materials": {
     "IvyLeafReal": {
       "sss": {
@@ -103,5 +78,30 @@
       0.0245
     ],
     "fov": 51.98
+  },
+  "wind": {
+    "direction": [
+      0.15,
+      -0.1,
+      1.0
+    ],
+    "strength": 0.06,
+    "speed": 1.2,
+    "gustFrequency": 0.6,
+    "gustAmount": 0.7,
+    "turbulence": 0.25
+  },
+  "dust": {
+    "curl": {
+      "scale": 0.3,
+      "strength": 0.02,
+      "timescale": 0.03
+    },
+    "drift": [
+      0.0,
+      0.0015,
+      0.0
+    ],
+    "damping": 0.95
   }
 }
