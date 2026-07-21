@@ -1108,8 +1108,10 @@ bool postfx_wants_aux_gbuffer(const PostFX* fx) {
 }
 
 bool postfx_wants_albedo(const PostFX* fx) {
-    // Attachment 3 (base color) is only needed by SSGI's indirect-diffuse composite.
-    return fx && fx->ssgi_enabled;
+    // Attachment 3 (base color) is needed by SSGI's indirect-diffuse composite
+    // and by the albedo debug view -- without the latter, --albedo-debug alone
+    // was silently suppressed and showed the normal render instead.
+    return fx && (fx->ssgi_enabled || fx->debug_view == POSTFX_DEBUG_ALBEDO);
 }
 
 bool postfx_ssr_active(const PostFX* fx, bool normals_written) {

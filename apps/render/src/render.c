@@ -1591,8 +1591,12 @@ int main(int argc, char** argv) {
         // Add one soft shadow-casting key light per bright lobe extracted
         // from the HDR, so each visible studio light casts its own shadow.
         // Total analytic intensity stays ~1.0, split by lobe energy.
-        // --no-key-light gives pure image-based lighting instead.
-        if (!args.no_key_light) {
+        // --no-key-light gives pure image-based lighting instead. Scenes that
+        // ship their own lighting design keep it (same policy as the no-IBL
+        // path below): stacking the key rig on top erases the authored mood.
+        if (scene->light_count > 0) {
+            printf("Model provides %zu light(s); skipping auto key light\n", scene->light_count);
+        } else if (!args.no_key_light) {
             int lobes = (scene->ibl && scene->ibl->light_count > 0) ? scene->ibl->light_count : 1;
             for (int i = 0; i < lobes; i++) {
                 Light* key = create_light();

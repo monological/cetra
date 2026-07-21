@@ -84,6 +84,20 @@ static unsigned int uv_flip_flag(const char* path) {
     return aiProcess_FlipUVs;
 }
 
+// glTF punctual lights use photometric units (directional in lux, point/spot
+// in candela) per KHR_lights_punctual; every other format we import carries
+// renderer-scale radiometric-ish intensities.
+static bool is_gltf_path(const char* path) {
+    const char* dot = path ? strrchr(path, '.') : NULL;
+    return dot && (strcasecmp(dot, ".gltf") == 0 || strcasecmp(dot, ".glb") == 0);
+}
+
+// Ceiling for imported light intensity. Formats without spec-defined units
+// (FBX "percent" scales, watt-baked Blender FBX exports) can arrive orders of
+// magnitude above renderer scale (~1-10); anything past this bound would blow
+// out every lit pixel regardless of exposure.
+static const float IMPORTED_LIGHT_INTENSITY_MAX = 100.0f;
+
 /*
  * Import a scene with FBX pivot preservation disabled. Assimp then collapses
  * the $AssimpFbx$ pseudo-node chains (Translation/PreRotation/Rotation/...)
@@ -1135,7 +1149,8 @@ int load_animations_from_file(Scene* scene, Skeleton* skeleton, const char* file
     return (int)loaded;
 }
 
-void process_ai_lights(const struct aiScene* scene, Light*** lights, size_t* num_lights) {
+void process_ai_lights(const struct aiScene* scene, Light*** lights, size_t* num_lights,
+                       bool photometric_units) {
     *num_lights = scene->mNumLights;
     *lights = malloc(sizeof(Light*) * (*num_lights));
 
@@ -1150,7 +1165,8 @@ void process_ai_lights(const struct aiScene* scene, Light*** lights, size_t* num
                       light->global_position);
         glm_vec3_copy(
             (vec3){ai_light->mDirection.x, ai_light->mDirection.y, ai_light->mDirection.z},
-            light->direction);
+            light->original_direction);
+        glm_vec3_copy(light->original_direction, light->direction);
         glm_vec3_copy(
             (vec3){ai_light->mColorAmbient.r, ai_light->mColorAmbient.g, ai_light->mColorAmbient.b},
             light->ambient);
@@ -1207,6 +1223,25 @@ void process_ai_lights(const struct aiScene* scene, Light*** lights, size_t* num
             glm_vec3_divs(light->color, peak, light->color);
             glm_vec3_divs(light->specular, peak, light->specular);
             light->intensity *= peak;
+        }
+
+        // glTF punctual lights are photometric (KHR_lights_punctual:
+        // directional in lux, point/spot in candela). Blender exports a sun's
+        // W/m^2 as lux (x683); undo that so authored intensities land at
+        // renderer scale (a 17 W sun imports as 17, not 11611).
+        if (photometric_units && light->intensity > 1.0f) {
+            float photometric = light->intensity;
+            light->intensity /= 683.0f;
+            log_info("Light '%s': photometric intensity %.0f -> %.2f (lux/candela to renderer scale)",
+                     ai_light->mName.data, photometric, light->intensity);
+        }
+
+        // Units without a spec (see IMPORTED_LIGHT_INTENSITY_MAX) can still
+        // arrive absurdly hot; clamp rather than blow out every lit pixel.
+        if (light->intensity > IMPORTED_LIGHT_INTENSITY_MAX) {
+            log_warn("Light '%s': intensity %.0f exceeds sane ceiling, clamped to %.0f",
+                     ai_light->mName.data, light->intensity, IMPORTED_LIGHT_INTENSITY_MAX);
+            light->intensity = IMPORTED_LIGHT_INTENSITY_MAX;
         }
 
         (*lights)[i] = light;
@@ -1447,7 +1482,7 @@ Scene* create_scene_from_model_path(const char* path, const char* texture_direct
     set_texture_pool_directory(tex_pool, texture_directory);
 
     // Process lights and cameras
-    process_ai_lights(ai_scene, &scene->lights, &scene->light_count);
+    process_ai_lights(ai_scene, &scene->lights, &scene->light_count, is_gltf_path(path));
     process_ai_cameras(ai_scene, &scene->cameras, &scene->camera_count);
 
     // Process the root node (this also extracts skeletons and bone weights)
@@ -1571,7 +1606,7 @@ Scene* create_scene_from_model_path_async(const char* path, const char* texture_
     set_texture_pool_directory(tex_pool, texture_directory);
 
     // Process lights and cameras
-    process_ai_lights(ai_scene, &scene->lights, &scene->light_count);
+    process_ai_lights(ai_scene, &scene->lights, &scene->light_count, is_gltf_path(path));
     process_ai_cameras(ai_scene, &scene->cameras, &scene->camera_count);
 
     // Process the root node with async texture loading

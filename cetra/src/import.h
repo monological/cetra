@@ -27,7 +27,8 @@ Material* process_ai_material_async(struct aiMaterial* ai_mat, TexturePool* tex_
 
 void process_ai_mesh(Mesh* mesh, struct aiMesh* ai_mesh);
 
-void process_ai_lights(const struct aiScene* scene, Light*** lights, uint32_t* num_lights);
+void process_ai_lights(const struct aiScene* scene, Light*** lights, uint32_t* num_lights,
+                       bool photometric_units);
 
 void process_ai_cameras(const struct aiScene* scene, Camera*** cameras, uint32_t* num_cameras);
 

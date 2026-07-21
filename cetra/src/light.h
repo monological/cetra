@@ -15,6 +15,10 @@ typedef struct Light {
     vec3 original_position;
     vec3 global_position;
 
+    // Authored light-local direction; the scene graph rotates it by the
+    // owning node's global transform into `direction` each update (same
+    // split as original_position/global_position).
+    vec3 original_direction;
     vec3 direction;
     vec3 color;
     vec3 specular;

@@ -831,12 +831,23 @@ void apply_transform_to_nodes(SceneNode* root, mat4 transform) {
         glm_mat4_copy(node->global_transform, node->prev_global_transform);
         glm_mat4_mul(parent_transform, node->original_transform, node->global_transform);
 
-        // Update light position if present
+        // Update light position and direction if present
         if (node->light) {
             vec3 light_position;
             glm_mat4_mulv3(node->global_transform, node->light->original_position, 1.0f,
                            light_position);
             glm_vec3_copy(light_position, node->light->global_position);
+            // Rotate the authored local direction by the node's global
+            // transform (w=0: no translation) so imported directional/spot
+            // lights aim where the file says, not along their import-local
+            // axis. Guard the normalize: a zero direction stays zero.
+            vec3 light_direction;
+            glm_mat4_mulv3(node->global_transform, node->light->original_direction, 0.0f,
+                           light_direction);
+            if (glm_vec3_norm(light_direction) > 1e-6f) {
+                glm_vec3_normalize(light_direction);
+                glm_vec3_copy(light_direction, node->light->direction);
+            }
         }
 
         // Push children (in reverse order to maintain left-to-right traversal)

@@ -23,6 +23,7 @@ Light* create_light() {
     glm_vec3_copy((vec3){0.0f, 0.0f, 0.0f}, light->original_position);
     glm_vec3_copy((vec3){0.0f, 0.0f, 0.0f}, light->global_position);
 
+    glm_vec3_copy((vec3){0.0f, -1.0f, 0.0f}, light->original_direction);
     glm_vec3_copy((vec3){0.0f, -1.0f, 0.0f}, light->direction);
     glm_vec3_copy((vec3){1.0f, 1.0f, 1.0f}, light->color);
     glm_vec3_copy((vec3){1.0f, 1.0f, 1.0f}, light->specular);
@@ -84,6 +85,10 @@ void set_light_global_position(Light* light, vec3 global_position) {
 void set_light_direction(Light* light, vec3 direction) {
     if (!light)
         return;
+    // Authored direction: both the immutable local copy and the world-space
+    // one the renderer reads. Nodes with a non-identity global transform
+    // re-derive `direction` from `original_direction` during scene update.
+    glm_vec3_copy(direction, light->original_direction);
     glm_vec3_copy(direction, light->direction);
 }
 
