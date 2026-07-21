@@ -15,29 +15,13 @@ static void cpu_simulate(ParticleSimBackend* b, ParticleEmitter* e, float dt, fl
     (void)b;
     ParticlePool* pool = e->pool;
 
-    // 1. SPAWN phase: spawn modules accumulate into spawn_request (whole-valued
-    //    after each module's fractional accumulator).
-    e->spawn_request = 0.0f;
-    for (size_t i = 0; i < e->n_spawn; i++)
-        e->spawn[i]->run(e->spawn[i], e, 0, 0, dt, t);
-
-    // 2. Spawn, then stamp infrastructure defaults on the new slice. Seeding,
-    //    age, and the div-by-zero lifetime guard are backend bookkeeping -- not
-    //    behavior -- so they live here, not in a module.
-    // Guard the float->size_t cast: a net-negative spawn_request (e.g. a
-    // negative rate) would otherwise be UB and flood the pool.
+    // 1-3. SPAWN, then init the new slice (both shared with every backend so the
+    //       contract lives in one place). init_slice gives the new particles a
+    //       clean slate and runs the INIT modules over them.
+    size_t want = particle_emitter_run_spawn(e, dt, t);
     size_t old_count = pool->count;
-    size_t want = e->spawn_request > 0.0f ? (size_t)(e->spawn_request + 0.5f) : 0;
     particle_pool_spawn(pool, want);
-    for (size_t i = old_count; i < pool->count; i++) {
-        pool->age[i] = 0.0f;
-        pool->lifetime[i] = 1.0f; // guard; init_lifetime overwrites
-        pool->seed[i] = particle_emitter_rand01(e);
-    }
-
-    // 3. INIT modules over just the new slice.
-    for (size_t i = 0; i < e->n_init; i++)
-        e->init[i]->run(e->init[i], e, old_count, pool->count, dt, t);
+    particle_emitter_init_slice(e, old_count, pool->count, dt, t);
 
     // 4. UPDATE modules over all live particles (they never kill).
     for (size_t i = 0; i < e->n_update; i++)
@@ -88,6 +72,11 @@ static void cpu_acquire_instances(ParticleSimBackend* b, ParticleEmitter* e,
     out->gpu_instance_vbo = 0;
 }
 
+static size_t cpu_live_count(ParticleSimBackend* b, ParticleEmitter* e) {
+    (void)b;
+    return e->pool ? e->pool->count : 0;
+}
+
 static void cpu_free(ParticleSimBackend* b) {
     CpuSimBackend* self = (CpuSimBackend*)b;
     free(self->staging);
@@ -101,6 +90,7 @@ ParticleSimBackend* create_cpu_particle_sim_backend(void) {
     self->base.name = "cpu";
     self->base.simulate = cpu_simulate;
     self->base.acquire_instances = cpu_acquire_instances;
+    self->base.live_count = cpu_live_count;
     self->base.free_fn = cpu_free;
     return &self->base;
 }

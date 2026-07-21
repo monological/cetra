@@ -4,7 +4,6 @@
 
 #include <math.h>
 #include <stdlib.h>
-#include <string.h>
 
 // Every v1 module frees just its params + itself (name is a string literal).
 static void module_default_free(ParticleModule* m) {
@@ -245,11 +244,12 @@ ParticleModule* particle_module_update_integrate(float drag) {
 }
 
 // --- GPU-backend introspection (see particle_module.h) ---
-// Names below match the module_new() labels in the factories above.
+// Matched on the run-fn pointer (compiler-checked) rather than the name string,
+// so a renamed label can't silently break the GPU translation.
 
 bool particle_module_read_curl(const ParticleModule* m, float* scale, float* strength,
                                float* timescale) {
-    if (!m || strcmp(m->name, "update_curl_noise") != 0)
+    if (!m || m->run != update_curl_run)
         return false;
     const CurlParams* p = m->params;
     if (scale)
@@ -262,7 +262,7 @@ bool particle_module_read_curl(const ParticleModule* m, float* scale, float* str
 }
 
 bool particle_module_read_drift(const ParticleModule* m, vec3 accel_out) {
-    if (!m || strcmp(m->name, "update_drift") != 0)
+    if (!m || m->run != update_drift_run)
         return false;
     const DriftParams* p = m->params;
     accel_out[0] = p->accel[0];
@@ -272,7 +272,7 @@ bool particle_module_read_drift(const ParticleModule* m, vec3 accel_out) {
 }
 
 bool particle_module_read_integrate(const ParticleModule* m, float* drag) {
-    if (!m || strcmp(m->name, "update_integrate") != 0)
+    if (!m || m->run != update_integrate_run)
         return false;
     const IntegrateParams* p = m->params;
     if (drag)

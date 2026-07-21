@@ -31,23 +31,29 @@ static const float k_quad[12] = {
     -1.0f, -1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, -1.0f, 1.0f, 1.0f, -1.0f, 1.0f,
 };
 
-// Point the VAO's per-instance attributes (slots 9/10/11 = center/params/color)
-// at `buffer` with the given byte stride, divisor 1. center/params/color sit at
-// the same offsets in ParticleInstanceData (CPU path, stride 48) and
-// ParticleGpuState (GPU path, stride 80), so only the buffer + stride vary. The
-// caller must have the target VAO bound.
-static void billboard_bind_instance_attribs(GLuint buffer, GLsizei stride) {
+// Point slots 9/10/11 (center/params/color) at `buffer` with `stride`.
+// center/params/color sit at the same offsets in ParticleInstanceData (CPU path,
+// stride 48) and ParticleGpuState (GPU path, stride 80), so only buffer + stride
+// vary. Enable + divisor are VAO-persistent (set once by ..._setup_instance_attribs),
+// so re-pointing is all the GPU path needs each frame as its buffer ping-pongs.
+// The caller must have the target VAO bound.
+static void billboard_point_instance_attribs(GLuint buffer, GLsizei stride) {
     glBindBuffer(GL_ARRAY_BUFFER, buffer);
     glVertexAttribPointer(9, 3, GL_FLOAT, GL_FALSE, stride,
                           (void*)offsetof(ParticleInstanceData, center));
-    glEnableVertexAttribArray(9);
-    glVertexAttribDivisor(9, 1);
     glVertexAttribPointer(10, 4, GL_FLOAT, GL_FALSE, stride,
                           (void*)offsetof(ParticleInstanceData, params));
-    glEnableVertexAttribArray(10);
-    glVertexAttribDivisor(10, 1);
     glVertexAttribPointer(11, 4, GL_FLOAT, GL_FALSE, stride,
                           (void*)offsetof(ParticleInstanceData, color));
+}
+
+// One-time VAO setup: point + enable + per-instance divisor for slots 9/10/11.
+static void billboard_setup_instance_attribs(GLuint buffer, GLsizei stride) {
+    billboard_point_instance_attribs(buffer, stride);
+    glEnableVertexAttribArray(9);
+    glVertexAttribDivisor(9, 1);
+    glEnableVertexAttribArray(10);
+    glVertexAttribDivisor(10, 1);
     glEnableVertexAttribArray(11);
     glVertexAttribDivisor(11, 1);
 }
@@ -67,7 +73,7 @@ static void billboard_setup(BillboardRenderer* b) {
 
     // Per-instance attributes (slots 9/10/11) bound to our own instance_vbo for
     // the CPU path; the GPU path re-points them at the sim buffer in prepare().
-    billboard_bind_instance_attribs(b->instance_vbo, (GLsizei)sizeof(ParticleInstanceData));
+    billboard_setup_instance_attribs(b->instance_vbo, (GLsizei)sizeof(ParticleInstanceData));
 
     glBindVertexArray(0);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
@@ -87,7 +93,7 @@ static void billboard_prepare(ParticleRenderer* r, const ParticleInstanceView* v
         // ping-pongs each frame, so this is re-issued per frame -- with the
         // ParticleGpuState stride. No upload.
         glBindVertexArray(b->vao);
-        billboard_bind_instance_attribs(view->gpu_instance_vbo, (GLsizei)sizeof(ParticleGpuState));
+        billboard_point_instance_attribs(view->gpu_instance_vbo, (GLsizei)sizeof(ParticleGpuState));
         glBindVertexArray(0);
         glBindBuffer(GL_ARRAY_BUFFER, 0);
         b->upload_count = view->count;

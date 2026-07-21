@@ -33,8 +33,21 @@ typedef struct ParticleGpuState {
     vec4 params;  // x=size, y=rotation, z=lifeFrac, w=seed  (offset 16)
     vec4 color;   // linear HDR rgba (base)                  (offset 32)
     vec4 vel_age; // xyz = velocity, w = age                 (offset 48)
-    vec4 life;    // x = lifetime, yzw = free                (offset 64)
+    vec4 life;    // x = lifetime, yzw reserved (future sim fields) (offset 64)
 } ParticleGpuState;
+
+// The zero-readback design binds ParticleGpuState directly as instance data and
+// captures it through interleaved transform feedback, so center/params/color must
+// alias ParticleInstanceData's offsets exactly and the struct must stay tightly
+// packed as 5 vec4. Lock both at compile time.
+_Static_assert(offsetof(ParticleGpuState, center) == offsetof(ParticleInstanceData, center),
+               "GPU state center must alias instance-data center");
+_Static_assert(offsetof(ParticleGpuState, params) == offsetof(ParticleInstanceData, params),
+               "GPU state params must alias instance-data params");
+_Static_assert(offsetof(ParticleGpuState, color) == offsetof(ParticleInstanceData, color),
+               "GPU state color must alias instance-data color");
+_Static_assert(sizeof(ParticleGpuState) == 5 * sizeof(vec4),
+               "TF interleaved varyings require ParticleGpuState tightly packed as 5 vec4");
 
 // What a renderer consumes -- never the pool. The CPU path fills cpu_instances;
 // a future GPU backend would fill gpu_instance_vbo with zero readback and the
@@ -54,6 +67,10 @@ typedef struct ParticleSimBackend {
     void (*simulate)(struct ParticleSimBackend* b, struct ParticleEmitter* e, float dt, float t);
     void (*acquire_instances)(struct ParticleSimBackend* b, struct ParticleEmitter* e,
                               ParticleInstanceView* out);
+    // Live count for this emitter, driving the render gate + soft-particle depth
+    // resolve. CPU backends return the pool count; GPU backends that keep their
+    // state off-CPU return their own count. NULL falls back to pool->count.
+    size_t (*live_count)(struct ParticleSimBackend* b, struct ParticleEmitter* e);
     void (*free_fn)(struct ParticleSimBackend* b);
 } ParticleSimBackend;
 

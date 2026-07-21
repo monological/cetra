@@ -91,3 +91,34 @@ float particle_emitter_rand01(ParticleEmitter* e) {
     e->rng_state = x;
     return (float)(x >> 8) * (1.0f / 16777216.0f);
 }
+
+size_t particle_emitter_run_spawn(ParticleEmitter* e, float dt, float t) {
+    e->spawn_request = 0.0f;
+    for (size_t i = 0; i < e->n_spawn; i++)
+        e->spawn[i]->run(e->spawn[i], e, 0, 0, dt, t);
+    // Guard the float->size_t cast: a net-negative request (e.g. a negative rate)
+    // would otherwise be UB and flood the pool.
+    size_t want = e->spawn_request > 0.0f ? (size_t)(e->spawn_request + 0.5f) : 0;
+    if (e->pool && want > e->pool->capacity)
+        want = e->pool->capacity;
+    return want;
+}
+
+void particle_emitter_init_slice(ParticleEmitter* e, size_t begin, size_t end, float dt, float t) {
+    ParticlePool* pool = e->pool;
+    for (size_t i = begin; i < end; i++) {
+        // Clean slate first: any field an init module doesn't set stays zero
+        // instead of inheriting stale data from a previously-killed/recycled slot.
+        glm_vec3_zero(pool->position[i]);
+        glm_vec3_zero(pool->velocity[i]);
+        glm_vec4_zero(pool->color[i]);
+        pool->size[i] = 0.0f;
+        pool->rotation[i] = 0.0f;
+        // Infrastructure defaults (backend bookkeeping, not behavior).
+        pool->age[i] = 0.0f;
+        pool->lifetime[i] = 1.0f; // guard; init_lifetime overwrites
+        pool->seed[i] = particle_emitter_rand01(e);
+    }
+    for (size_t i = 0; i < e->n_init; i++)
+        e->init[i]->run(e->init[i], e, begin, end, dt, t);
+}

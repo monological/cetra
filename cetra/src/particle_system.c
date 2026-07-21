@@ -42,8 +42,13 @@ size_t particle_system_live_count(const ParticleSystem* s) {
     if (!s)
         return 0;
     size_t n = 0;
-    for (size_t i = 0; i < s->emitter_count; i++)
-        n += s->emitters[i]->pool->count;
+    for (size_t i = 0; i < s->emitter_count; i++) {
+        ParticleEmitter* e = s->emitters[i];
+        if (s->backend && s->backend->live_count)
+            n += s->backend->live_count(s->backend, e);
+        else
+            n += e->pool->count;
+    }
     return n;
 }
 

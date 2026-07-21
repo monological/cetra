@@ -50,4 +50,15 @@ void particle_emitter_set_renderer(ParticleEmitter* e, struct ParticleRenderer* 
 // Deterministic per-emitter random in [0,1), advancing rng_state.
 float particle_emitter_rand01(ParticleEmitter* e);
 
+// Run the SPAWN phase and return how many particles to spawn this step (clamped
+// to pool capacity). Shared by every sim backend so the spawn contract lives in
+// one place.
+size_t particle_emitter_run_spawn(ParticleEmitter* e, float dt, float t);
+
+// Make pool slots [begin, end) a fresh set of particles: zero every field to a
+// clean slate (so an emitter that omits an init module never packs stale data),
+// stamp the infrastructure defaults (age 0, guard lifetime, per-particle seed),
+// then run the INIT modules over the slice. Shared by every sim backend.
+void particle_emitter_init_slice(ParticleEmitter* e, size_t begin, size_t end, float dt, float t);
+
 #endif // _PARTICLE_EMITTER_H_
