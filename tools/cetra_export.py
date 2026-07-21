@@ -795,7 +795,37 @@ def export(out_path):
     if camera:
         cscn["camera"] = camera
 
+    # The exporter owns only the keys it generates. An existing .cscn may
+    # carry hand-authored scene data Blender knows nothing about (wind, dust,
+    # per-material extras); preserve every key we did not produce, and merge
+    # per-material entries so e.g. authored windResponse survives next to the
+    # exported sss.
     cscn_path = os.path.join(out_dir, base + ".cscn")
+    if os.path.exists(cscn_path):
+        try:
+            with open(cscn_path) as f:
+                existing = json.load(f)
+        except (OSError, ValueError) as e:
+            existing = None
+            manifest.append("WARNING: could not parse existing %s (%s); overwriting"
+                            % (os.path.basename(cscn_path), e))
+        if isinstance(existing, dict):
+            kept = []
+            for key, value in existing.items():
+                if key == "materials":
+                    merged = {}
+                    for name, entry in value.items():
+                        merged[name] = dict(entry)
+                    for name, entry in cscn.get("materials", {}).items():
+                        merged.setdefault(name, {}).update(entry)
+                    if merged:
+                        cscn["materials"] = merged
+                elif key not in cscn:
+                    cscn[key] = value
+                    kept.append(key)
+            if kept:
+                manifest.append("preserved hand-authored scene data: " + ", ".join(kept))
+
     with open(cscn_path, "w") as f:
         json.dump(cscn, f, indent=2)
         f.write("\n")
