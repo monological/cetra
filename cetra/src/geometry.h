@@ -56,6 +56,13 @@ typedef struct {
     int segments_d;
 } Plane;
 
+typedef struct {
+    vec3 position;
+    float radius;
+    int segments_lon; // longitude divisions (around Y); <=2 falls back to a default
+    int segments_lat; // latitude divisions (pole to pole); <=1 falls back to a default
+} Sphere;
+
 /* Bezier functions */
 void cubic_bezier_curve_point(const Curve* curve, float t, vec3 result);
 Curve* generate_s_shaped_bezier_curve(vec3 start, vec3 end, float intensity, float line_width);
@@ -69,5 +76,6 @@ void generate_curve_to_mesh(Mesh* mesh, const Curve* curve);
 void generate_cylinder_to_mesh(Mesh* mesh, const Cylinder* cylinder);
 void generate_box_to_mesh(Mesh* mesh, const Box* box);
 void generate_plane_to_mesh(Mesh* mesh, const Plane* plane);
+void generate_sphere_to_mesh(Mesh* mesh, const Sphere* sphere);
 
 #endif // GEOMETRY_H

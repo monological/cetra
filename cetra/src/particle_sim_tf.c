@@ -4,10 +4,23 @@
 #include "program.h"
 #include "uniform.h"
 #include "util.h"
+#include "ext/log.h"
 
 #include <GL/glew.h>
 #include <stdbool.h>
 #include <stdlib.h>
+
+// Matches MAX_COLLIDERS in particle_sim_vert.glsl.
+#define TF_MAX_COLLIDERS 8
+
+// The collider shape/mode ordinals are a wire contract: tf_upload_colliders ships
+// them as floats and particle_sim_vert.glsl dispatches on the raw integers. Pin
+// them so a reorder of the enums is a compile error, not silent GPU misrouting.
+_Static_assert(COLLIDER_SPHERE == 0 && COLLIDER_BOX == 1 && COLLIDER_PLANE == 2 &&
+                   COLLIDER_CAPSULE == 3 && COLLIDER_CYLINDER == 4,
+               "ColliderShape ordinals must match particle_sim_vert.glsl");
+_Static_assert(COLLIDER_KEEP_OUT == 0 && COLLIDER_KEEP_IN == 1,
+               "ColliderMode ordinals must match particle_sim_vert.glsl");
 
 // Transform-feedback GPU sim backend (spec 5.2). The CPU still owns emission and
 // lifecycle -- it runs the emitter's spawn/init modules (via particle_emitter_*)
@@ -37,6 +50,7 @@ typedef struct {
     vec3 drift;
     float drag;
     bool setup_done;
+    bool collider_overflow_warned; // logged once if an emitter exceeds TF_MAX_COLLIDERS
 } TfEmitterState;
 
 typedef struct {
@@ -161,6 +175,59 @@ static void tf_emit_ring(ParticleEmitter* e, TfEmitterState* s, int read, size_t
     s->head = (head + want) % cap;
 }
 
+// Pack every collider module on the emitter into the sim program's uniform arrays.
+// Uploaded EVERY frame (colliders are few and may move) -- no setup_done caching,
+// which is what lets a moving collider stay in sync with the CPU backend.
+static void tf_upload_colliders(const ParticleEmitter* e, TfEmitterState* s, UniformManager* u,
+                                float dt) {
+    // Pack into contiguous vec4 arrays and ranged-upload (the shadow/SSS/fog
+    // idiom, e.g. shadow.c:336) -- four glUniform4fv calls, not a per-element
+    // snprintf loop. P=(shape,mode,radius,rest) A=(a,wake) B=(b,_) V=(vel,_).
+    vec4 P[TF_MAX_COLLIDERS], A[TF_MAX_COLLIDERS], B[TF_MAX_COLLIDERS], V[TF_MAX_COLLIDERS];
+    int count = 0;
+    bool overflow = false;
+    for (size_t i = 0; i < e->n_update; i++) {
+        ColliderState c;
+        if (!particle_module_read_collider(e->update[i], &c, dt))
+            continue;
+        if (count >= TF_MAX_COLLIDERS) {
+            overflow = true;
+            break;
+        }
+        P[count][0] = (float)c.shape;
+        P[count][1] = (float)c.mode;
+        P[count][2] = c.radius;
+        P[count][3] = c.restitution;
+        glm_vec3_copy(c.a, A[count]);
+        A[count][3] = c.wake;
+        glm_vec3_copy(c.b, B[count]);
+        B[count][3] = 0.0f;
+        glm_vec3_copy(c.vel, V[count]);
+        V[count][3] = 0.0f;
+        count++;
+    }
+    uniform_set_int(u, "colliderCount", count);
+    if (count > 0) {
+        GLint lp = uniform_location(u, "colliderP[0]");
+        GLint la = uniform_location(u, "colliderA[0]");
+        GLint lb = uniform_location(u, "colliderB[0]");
+        GLint lv = uniform_location(u, "colliderV[0]");
+        if (lp >= 0)
+            glUniform4fv(lp, count, (const GLfloat*)P);
+        if (la >= 0)
+            glUniform4fv(la, count, (const GLfloat*)A);
+        if (lb >= 0)
+            glUniform4fv(lb, count, (const GLfloat*)B);
+        if (lv >= 0)
+            glUniform4fv(lv, count, (const GLfloat*)V);
+    }
+    if (overflow && !s->collider_overflow_warned) {
+        log_warn("particle emitter has >%d colliders; extras ignored on the GPU backend",
+                 TF_MAX_COLLIDERS);
+        s->collider_overflow_warned = true;
+    }
+}
+
 static void tf_simulate(ParticleSimBackend* b, ParticleEmitter* e, float dt, float t) {
     TfSimBackend* self = (TfSimBackend*)b;
     if (!self->program)
@@ -201,6 +268,7 @@ static void tf_simulate(ParticleSimBackend* b, ParticleEmitter* e, float dt, flo
     }
     uniform_set_float(u, "dt", dt);
     uniform_set_float(u, "time", t);
+    tf_upload_colliders(e, s, u, dt);
 
     glBindVertexArray(s->vao[read]);
     glBindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER, 0, s->vbo[write]);

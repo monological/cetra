@@ -868,3 +868,122 @@ void generate_plane_to_mesh(Mesh* mesh, const Plane* plane) {
     mesh->draw_mode = TRIANGLES;
     calculate_aabb(mesh);
 }
+
+void generate_sphere_to_mesh(Mesh* mesh, const Sphere* sphere) {
+    if (!mesh || !sphere) {
+        return;
+    }
+
+    int segs_lon = sphere->segments_lon > 2 ? sphere->segments_lon : 32;
+    int segs_lat = sphere->segments_lat > 1 ? sphere->segments_lat : 16;
+    float r = sphere->radius;
+    float cx = sphere->position[0];
+    float cy = sphere->position[1];
+    float cz = sphere->position[2];
+
+    int verts_lon = segs_lon + 1;
+    int verts_lat = segs_lat + 1;
+
+    mesh->vertex_count = verts_lon * verts_lat;
+    mesh->index_count = segs_lon * segs_lat * 6;
+
+    float* new_vertices =
+        (float*)safe_realloc(mesh->vertices, mesh->vertex_count * 3 * sizeof(float));
+    float* new_normals =
+        (float*)safe_realloc(mesh->normals, mesh->vertex_count * 3 * sizeof(float));
+    float* new_tex_coords =
+        (float*)safe_realloc(mesh->tex_coords, mesh->vertex_count * 2 * sizeof(float));
+    float* new_tangents =
+        (float*)safe_realloc(mesh->tangents, mesh->vertex_count * 3 * sizeof(float));
+    float* new_bitangents =
+        (float*)safe_realloc(mesh->bitangents, mesh->vertex_count * 3 * sizeof(float));
+    unsigned int* new_indices =
+        (unsigned int*)safe_realloc(mesh->indices, mesh->index_count * sizeof(unsigned int));
+
+    if (!new_vertices || !new_normals || !new_tex_coords || !new_tangents || !new_bitangents ||
+        !new_indices) {
+        if (new_vertices)
+            mesh->vertices = new_vertices;
+        if (new_normals)
+            mesh->normals = new_normals;
+        if (new_tex_coords)
+            mesh->tex_coords = new_tex_coords;
+        if (new_tangents)
+            mesh->tangents = new_tangents;
+        if (new_bitangents)
+            mesh->bitangents = new_bitangents;
+        if (new_indices)
+            mesh->indices = new_indices;
+        return;
+    }
+    mesh->vertices = new_vertices;
+    mesh->normals = new_normals;
+    mesh->tex_coords = new_tex_coords;
+    mesh->tangents = new_tangents;
+    mesh->bitangents = new_bitangents;
+    mesh->indices = new_indices;
+
+    // A latitude/longitude grid. Row j spans the pole-to-pole angle theta (0 at
+    // +Y), column i the around-Y angle phi. The normal is the unit position;
+    // winding (below) is CCW from OUTSIDE, single-sided (matches the glass asset
+    // -- an inward winding would split the reflection at the equator seam).
+    size_t vi = 0;
+    for (int j = 0; j < verts_lat; j++) {
+        float theta = GLM_PI * (float)j / (float)segs_lat; // 0..pi
+        float st = sinf(theta), ct = cosf(theta);
+        for (int i = 0; i < verts_lon; i++) {
+            float phi = 2.0f * GLM_PI * (float)i / (float)segs_lon; // 0..2pi
+            float sp = sinf(phi), cp = cosf(phi);
+
+            float nx = st * cp, ny = ct, nz = st * sp;
+
+            mesh->vertices[vi * 3 + 0] = cx + r * nx;
+            mesh->vertices[vi * 3 + 1] = cy + r * ny;
+            mesh->vertices[vi * 3 + 2] = cz + r * nz;
+
+            mesh->normals[vi * 3 + 0] = nx;
+            mesh->normals[vi * 3 + 1] = ny;
+            mesh->normals[vi * 3 + 2] = nz;
+
+            mesh->tex_coords[vi * 2 + 0] = (float)i / (float)segs_lon;
+            mesh->tex_coords[vi * 2 + 1] = (float)j / (float)segs_lat;
+
+            // Tangent along +phi; bitangent = normal x tangent. Degenerate at the
+            // poles (st==0) -> fall back to a fixed axis.
+            float tx = -sp, ty = 0.0f, tz = cp;
+            if (st < 1e-5f) {
+                tx = 1.0f;
+                tz = 0.0f;
+            }
+            mesh->tangents[vi * 3 + 0] = tx;
+            mesh->tangents[vi * 3 + 1] = ty;
+            mesh->tangents[vi * 3 + 2] = tz;
+            mesh->bitangents[vi * 3 + 0] = ny * tz - nz * ty;
+            mesh->bitangents[vi * 3 + 1] = nz * tx - nx * tz;
+            mesh->bitangents[vi * 3 + 2] = nx * ty - ny * tx;
+
+            vi++;
+        }
+    }
+
+    size_t ii = 0;
+    for (int j = 0; j < segs_lat; j++) {
+        for (int i = 0; i < segs_lon; i++) {
+            unsigned int tl = j * verts_lon + i;
+            unsigned int tr = tl + 1;
+            unsigned int bl = (j + 1) * verts_lon + i;
+            unsigned int br = bl + 1;
+
+            mesh->indices[ii++] = tl;
+            mesh->indices[ii++] = tr;
+            mesh->indices[ii++] = bl;
+
+            mesh->indices[ii++] = tr;
+            mesh->indices[ii++] = br;
+            mesh->indices[ii++] = bl;
+        }
+    }
+
+    mesh->draw_mode = TRIANGLES;
+    calculate_aabb(mesh);
+}

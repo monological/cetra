@@ -8,6 +8,7 @@
 //
 // Flags: --headless, --frames N, --screenshot PATH (deterministic CI capture).
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -35,6 +36,18 @@
 static ShaderProgram* g_pbr = NULL;
 static MouseDragController* g_drag = NULL;
 static bool g_use_cpu = false; // --cpu: use the CPU sim backend instead of GPU transform feedback
+
+// A glass sphere that wanders through the cloud, pushing the dust (keep-OUT
+// collider) -- the demo for spec 5.3 colliders. The room walls/floor contain the
+// dust (keep-IN box). g_sphere_collider is fed the sphere's world center each
+// fixed step; g_sphere_node is the rendered mesh moved to match.
+static SceneNode* g_sphere_node = NULL;
+static ParticleModule* g_sphere_collider = NULL;
+
+// Visual glass radius; the collision radius is a touch larger so the dust keeps a
+// clean shell around the glass instead of clipping into it.
+#define SPHERE_RADIUS 2.5f
+#define COLLIDE_RADIUS 3.1f
 
 // A static, unlit-until-the-key-hits-it surface. Geometry is generated at
 // `pos` so the node transform can stay identity (matches the shapes app).
@@ -73,6 +86,33 @@ static void add_floor(SceneNode* root, float extent, vec3 albedo) {
 
     add_mesh_to_node(node, mesh);
     add_child_node(root, node);
+}
+
+// A procedural glass sphere at the origin (the node transform moves it). Glass is
+// the engine's PBR transmission path (refraction is on by default), so no
+// engine setup is needed -- just the material fields.
+static SceneNode* add_glass_sphere(SceneNode* root, float radius) {
+    SceneNode* node = create_node();
+    set_node_name(node, "glass_sphere");
+    Mesh* mesh = create_mesh();
+    Sphere s = {.position = {0, 0, 0}, .radius = radius, .segments_lon = 48*3, .segments_lat = 24*3};
+    generate_sphere_to_mesh(mesh, &s);
+
+    Material* mat = create_material();
+    glm_vec3_copy((vec3){1.0f, 1.0f, 1.0f}, mat->albedo);
+    mat->roughness = 0.05f;
+    mat->metallic = 0.0f;
+    mat->transmission = 0.9f;
+    mat->ior = 1.5f;
+    mat->thickness = 1.0f;
+    mat->opacity = 1.0f;
+    mat->doubleSided = false;
+    set_material_shader_program(mat, g_pbr);
+    mesh->material = mat;
+
+    add_mesh_to_node(node, mesh);
+    add_child_node(root, node);
+    return node;
 }
 
 static void on_init(Game* game) {
@@ -139,6 +179,9 @@ static void on_init(Game* game) {
 
     g_drag = create_mouse_drag_controller(engine);
 
+    // The wandering glass sphere (moved each fixed step in on_update).
+    g_sphere_node = add_glass_sphere(root, SPHERE_RADIUS);
+
     upload_buffers_to_gpu_for_nodes(root);
 
     // Cordyceps-spore particle system: fine pale-green motes on curl-noise
@@ -172,6 +215,17 @@ static void on_init(Game* game) {
     particle_emitter_add_module(em, particle_module_update_curl_noise(0.25f, 0.5f, 0.15f));
     particle_emitter_add_module(em, particle_module_update_drift((vec3){0.0f, 0.02f, 0.0f}));
     particle_emitter_add_module(em, particle_module_update_integrate(0.985f));
+    // Colliders run AFTER integrate. The glass sphere pushes the dust (keep-OUT,
+    // with a wake so its motion drags the motes); the room's interior AABB keeps
+    // the dust contained (keep-IN) -- an invisible front plane at z=+11.6 stops
+    // motes drifting at the camera while the room keeps its open-front look.
+    g_sphere_collider = particle_module_collider_sphere((vec3){0.0f, 3.5f, 0.0f}, COLLIDE_RADIUS,
+                                                        COLLIDER_KEEP_OUT, 0.2f, 0.8f);
+    particle_emitter_add_module(em, g_sphere_collider);
+    particle_emitter_add_module(em,
+                                particle_module_collider_box((vec3){-11.6f, 0.05f, -11.6f},
+                                                             (vec3){11.6f, 10.0f, 11.6f},
+                                                             COLLIDER_KEEP_IN, 0.3f));
     particle_system_add_emitter(sys, em);
     add_particle_system_to_scene(scene, sys); // scene owns it (ticked + drawn automatically)
 
@@ -179,6 +233,24 @@ static void on_init(Game* game) {
     set_node_name(spore_node, "spore_emitter");
     set_node_particle_system(spore_node, sys); // node transform = emitter spawn frame
     add_child_node(root, spore_node);
+}
+
+// Runs each fixed step BEFORE the particle tick. Move the glass sphere along a
+// deterministic lissajous path (driven by game->time, phase-locked to the
+// particle clock -- no wall-clock, so headless stays reproducible), feed the new
+// world center to its collider, and move the rendered node to match.
+static void on_update(Game* game, double dt) {
+    (void)dt;
+    float t = (float)game->time;
+    vec3 p = {6.0f * sinf(0.50f * t), 3.5f + 1.5f * sinf(0.90f * t + 1.0f),
+              5.0f * cosf(0.37f * t)};
+    if (g_sphere_collider)
+        particle_module_collider_set(g_sphere_collider, p, p, COLLIDE_RADIUS);
+    if (g_sphere_node) {
+        g_sphere_node->original_transform[3][0] = p[0];
+        g_sphere_node->original_transform[3][1] = p[1];
+        g_sphere_node->original_transform[3][2] = p[2];
+    }
 }
 
 static void on_render(Game* game, double alpha) {
@@ -246,6 +318,7 @@ int main(int argc, char** argv) {
 
     set_engine_mouse_button_callback(game->engine, mouse_button_callback);
     game_set_init(game, on_init);
+    game_set_update(game, on_update);
     game_set_render(game, on_render);
     game_set_shutdown(game, on_shutdown);
 

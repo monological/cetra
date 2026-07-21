@@ -64,6 +64,46 @@ ParticleModule* particle_module_update_drift(vec3 accel);
 // factor `drag` in (0,1].
 ParticleModule* particle_module_update_integrate(float drag);
 
+// UPDATE: analytic collider -- ONE primitive; the shape and mode are data.
+// Add AFTER update_integrate so it corrects the just-moved position.
+//   shape: which analytic surface (extend with capsule/plane/... later -- a new
+//          enum case + one kernel branch + one shader branch, no new module).
+//   mode:  KEEP_OUT repels particles out of the shape (obstacles); KEEP_IN clamps
+//          them inside it (containment). Orthogonal -- every shape supports both.
+//   restitution: bounce of the into-surface velocity (0 = slide, 1 = elastic).
+//   wake: KEEP_OUT only -- fraction of the shape's OWN velocity imparted to
+//         touched particles, so a MOVING collider shoves dust along its travel.
+typedef enum {
+    COLLIDER_SPHERE,
+    COLLIDER_BOX,
+    COLLIDER_PLANE,   // half-space: particles stay on the +normal side
+    COLLIDER_CAPSULE, // segment [p0,p1] swept by `radius` (rounded ends)
+    COLLIDER_CYLINDER // finite cylinder: axis [p0,p1], `radius`, flat end caps
+} ColliderShape;
+typedef enum { COLLIDER_KEEP_OUT, COLLIDER_KEEP_IN } ColliderMode;
+
+// Sphere collider at `center`, radius `radius`.
+ParticleModule* particle_module_collider_sphere(vec3 center, float radius, ColliderMode mode,
+                                                float restitution, float wake);
+// Box (AABB) collider spanning [min,max].
+ParticleModule* particle_module_collider_box(vec3 min, vec3 max, ColliderMode mode,
+                                             float restitution);
+// Infinite plane through `point` with unit `normal`: particles are kept on the
+// +normal side (flip the normal for the other side). Ideal for a floor/wall.
+ParticleModule* particle_module_collider_plane(vec3 point, vec3 normal, float restitution);
+// Capsule: the segment [p0,p1] swept by `radius` (a cylinder with hemispherical
+// ends). KEEP_OUT = an obstacle; KEEP_IN = a capsule-shaped bound.
+ParticleModule* particle_module_collider_capsule(vec3 p0, vec3 p1, float radius, ColliderMode mode,
+                                                 float restitution, float wake);
+// Finite cylinder: axis [p0,p1], `radius`, with two flat end caps.
+ParticleModule* particle_module_collider_cylinder(vec3 p0, vec3 p1, float radius, ColliderMode mode,
+                                                  float restitution, float wake);
+// Move a collider's shape for the next step (a moving obstacle). The module
+// tracks the previous placement internally to derive the wake velocity. `a`/`b`
+// are the shape's anchors: sphere `a`=center; box `a`/`b`=min/max; plane
+// `a`=point,`b`=normal; capsule/cylinder `a`/`b`=endpoints (`radius` as given).
+void particle_module_collider_set(ParticleModule* m, vec3 a, vec3 b, float radius);
+
 // --- GPU-backend introspection ---
 // The transform-feedback backend reuses the CPU spawn/init modules verbatim but
 // runs the UPDATE phase on the GPU, so it needs the update modules' parameters as
@@ -75,5 +115,20 @@ bool particle_module_read_curl(const ParticleModule* m, float* scale, float* str
                                float* timescale);
 bool particle_module_read_drift(const ParticleModule* m, vec3 accel_out);
 bool particle_module_read_integrate(const ParticleModule* m, float* drag);
+
+// A collider's full state, resolved for the GPU backend. `vel` is the shape's
+// translation velocity this step ((placement - prev)/dt), used for the wake.
+// For a sphere, `a` = center; for a box, `a`/`b` = min/max.
+typedef struct {
+    int shape; // ColliderShape
+    int mode;  // ColliderMode
+    vec3 a, b;
+    vec3 vel;
+    float radius;
+    float restitution;
+    float wake;
+} ColliderState;
+// Reads any collider module (matched on the run-fn pointer); `dt` derives `vel`.
+bool particle_module_read_collider(const ParticleModule* m, ColliderState* out, float dt);
 
 #endif // _PARTICLE_MODULE_H_
