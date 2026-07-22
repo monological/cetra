@@ -1568,8 +1568,10 @@ static SceneNode* process_ai_node_async(Scene* scene, struct aiNode* ai_node,
             if (!mat) {
                 mat = process_ai_material_async(ai_scene->mMaterials[matIndex], tex_pool, ai_scene,
                                                 loader);
-                mat_cache[matIndex] = mat;
-                add_material_to_scene(scene, mat);
+                if (mat) {
+                    mat_cache[matIndex] = mat;
+                    add_material_to_scene(scene, mat);
+                }
             }
             mesh->material = mat;
         }
