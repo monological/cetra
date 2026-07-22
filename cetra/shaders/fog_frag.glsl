@@ -9,6 +9,15 @@ out vec4 FragColor;
 // (inscatter.rgb, transmittance.a) at half res; a separate pass composites
 // scene * transmittance + inscatter into the HDR target.
 
+// These are the SAME two constants as MAX_SHADOW_LIGHTS / SHADOW_CASCADES in
+// include/csm.glsl and shadow.h -- fog indexes the same lightSpaceMatrix[]
+// array with the same slot*cascadeCount + c stride, under private names.
+// Deliberately not sharing the chunk: fog omits cascadeParams and is fed by
+// its own upload path in postfx.c rather than bind_shadow_maps_to_program, so
+// unifying means reconciling two C paths for no rendering gain.
+//
+// They must still track: raise SHADOW_CASCADES to 4 and leaving these at 3
+// silently corrupts fog's layer indexing.
 #define MAX_FOG_LIGHTS 3
 #define FOG_CASCADES 3
 

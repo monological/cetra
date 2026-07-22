@@ -37,39 +37,14 @@ float sceneViewDist(float d) {
     return -zeye;
 }
 
-// CSM subset filled by bind_shadow_maps_to_program (location-guarded on the C
-// side, so declaring only what we sample is fine). occlusion_from samples the
-// outermost scene-fit cascade -- no per-fragment cascade selection, no seams --
-// which is exactly right for volumetric motes (mirrors catcher_frag.glsl).
-#define MAX_SHADOW_LIGHTS 3
-#define SHADOW_CASCADES 3
-uniform sampler2DArray shadowMaps;
-uniform mat4 lightSpaceMatrix[MAX_SHADOW_LIGHTS * SHADOW_CASCADES];
-uniform vec4 cascadeParams[MAX_SHADOW_LIGHTS * SHADOW_CASCADES]; // width, near, far, biasScale
-uniform int cascadeCount;
-uniform vec2 shadowTexelSize;
-uniform float shadowBias;
-uniform float sceneOrthoWidth;
-uniform int numShadowLights;
+// 3x3 PCF: cheaper than the catcher's, and motes are small enough that the
+// wider kernel buys nothing.
+#define CSM_OUTERMOST_PCF
+#define CSM_PCF_HALF_KERNEL 1
+#include "csm.glsl"
 
 float occlusion_from(int slot) {
-    int layer = slot * cascadeCount + (cascadeCount - 1);
-    vec4 lightSpace = lightSpaceMatrix[layer] * vec4(vWorldPos, 1.0);
-    vec3 proj = lightSpace.xyz / lightSpace.w * 0.5 + 0.5;
-    if (proj.z > 1.0 || proj.x < 0.0 || proj.x > 1.0 || proj.y < 0.0 || proj.y > 1.0)
-        return 0.0;
-
-    float bias = shadowBias * cascadeParams[layer].w;
-    vec2 kernelStep = shadowTexelSize * 1.5 * (sceneOrthoWidth / cascadeParams[layer].x);
-    float shadow = 0.0;
-    for (int x = -1; x <= 1; x++) {
-        for (int y = -1; y <= 1; y++) {
-            vec2 offset = vec2(float(x), float(y)) * kernelStep;
-            float depth = texture(shadowMaps, vec3(proj.xy + offset, float(layer))).r;
-            shadow += proj.z - bias > depth ? 1.0 : 0.0;
-        }
-    }
-    return shadow / 9.0;
+    return csmOutermostOcclusion(vWorldPos, slot);
 }
 
 void main() {

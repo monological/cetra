@@ -19,22 +19,15 @@ layout(location = 4) out vec4 DiffuseOut; // SSS skin-diffuse; the floor is neve
 // skybox with alpha blending so it grounds the model on the projected
 // environment floor. Each light's shadow is weighted by that light's share
 // of the total analytic light so secondary lights cast fainter shadows.
-#define MAX_SHADOW_LIGHTS 3
-#define SHADOW_CASCADES 3
+// 5x5 PCF: the catcher is a soft scene-scale grounding shadow, so it takes a
+// wider kernel than the particle motes do.
+#define CSM_OUTERMOST_PCF
+#define CSM_PCF_HALF_KERNEL 2
+#include "csm.glsl"
 
-uniform sampler2DArray shadowMaps;
-// Layers stride by the RUNTIME cascadeCount (layer = slot*cascadeCount + c),
-// so at cascadeCount 1 the indices match the classic single-map layout
-uniform mat4 lightSpaceMatrix[MAX_SHADOW_LIGHTS * SHADOW_CASCADES];
-uniform vec4 cascadeParams[MAX_SHADOW_LIGHTS * SHADOW_CASCADES]; // width, near, far, biasScale
-uniform int cascadeCount;
+// Catcher-only: each light's shadow is weighted by that light's share of the
+// total analytic light, so secondary lights cast fainter shadows.
 uniform float shadowLightWeight[MAX_SHADOW_LIGHTS];
-uniform int numShadowLights;
-uniform vec2 shadowTexelSize;
-uniform float shadowBias;
-// World width of the scene-fit (single-cascade) ortho map: the reference
-// the PCF kernel's world size was tuned against
-uniform float sceneOrthoWidth;
 uniform float catcherStrength;
 uniform float planeRadius;
 uniform mat4 view;
@@ -46,33 +39,7 @@ uniform int surfaceMode;
 
 float occlusion_from(int slot)
 {
-    // The catcher is a soft scene-scale grounding shadow: it samples the
-    // OUTERMOST cascade, which is the classic camera-independent scene-fit
-    // map (complete for every caster in the scene by construction). One map
-    // means no per-fragment selection, no seams, and no boundary that can
-    // move with the camera -- exactly the pre-cascade floor behavior. At
-    // cascadeCount 1 the layer is the classic slot index.
-    int layer = slot * cascadeCount + (cascadeCount - 1);
-    vec4 lightSpace = lightSpaceMatrix[layer] * vec4(WorldPos, 1.0);
-    vec3 proj = lightSpace.xyz / lightSpace.w * 0.5 + 0.5;
-    if (proj.z > 1.0 || proj.x < 0.0 || proj.x > 1.0 || proj.y < 0.0 || proj.y > 1.0)
-        return 0.0;
-
-    // params.w and the kernel ratio are exactly 1.0 for the scene-fit map;
-    // kept so the expressions stay uniform with the pbr consumer
-    float bias = shadowBias * cascadeParams[layer].w;
-
-    // 5x5 PCF with a widened kernel for soft edges
-    vec2 kernelStep = shadowTexelSize * 1.5 * (sceneOrthoWidth / cascadeParams[layer].x);
-    float shadow = 0.0;
-    for (int x = -2; x <= 2; x++) {
-        for (int y = -2; y <= 2; y++) {
-            vec2 offset = vec2(float(x), float(y)) * kernelStep;
-            float depth = texture(shadowMaps, vec3(proj.xy + offset, float(layer))).r;
-            shadow += proj.z - bias > depth ? 1.0 : 0.0;
-        }
-    }
-    return shadow / 25.0;
+    return csmOutermostOcclusion(WorldPos, slot);
 }
 
 void main()
