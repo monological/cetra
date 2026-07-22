@@ -6,6 +6,7 @@
 
 #include "program.h"
 #include "particle_sim.h"
+#include "texture.h"
 
 struct Scene;
 
@@ -32,5 +33,12 @@ typedef struct ParticleRenderer {
 
 // Instanced camera-facing billboards. `program` is borrowed (engine-owned).
 ParticleRenderer* create_billboard_particle_renderer(ShaderProgram* program);
+
+// Draw `tex` on each billboard instead of the built-in procedural soft disc,
+// with the quad corner as the UV -- the per-particle roll already spins it, so
+// a leaf sprite tumbles for free. `hdr_gain` replaces the default mote gain of
+// 6.0 (pass 1.0 for an albedo sprite that should not glow). Passing NULL
+// restores the disc. No-op on a renderer that is not a billboard.
+void billboard_renderer_set_sprite(ParticleRenderer* r, Texture* tex, float hdr_gain);
 
 #endif // _PARTICLE_RENDERER_H_

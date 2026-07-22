@@ -47,7 +47,9 @@ Material* create_material() {
     glm_vec2_one(material->uvScale);
     material->uvRotation = 0.0f;
     material->doubleSided = false;
-    material->wind_response = 0.0f; // rigid until a material opts into wind
+    material->foliage_shadows = false; // masked surfaces stay out of the shadow map
+    material->wind_response = 0.0f;    // rigid until a material opts into wind
+    material->wind_mode = 0;           // cloth displacement unless a material asks for vegetation
 
     material->albedo_tex = NULL;
     material->normal_tex = NULL;
