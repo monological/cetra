@@ -990,6 +990,14 @@ void render_scene_callback(Engine* engine, Scene* current_scene) {
     float delta_time = time_value - last_frame_time;
     last_frame_time = time_value;
 
+    // Headless exists so runs are comparable frame-for-frame (it already pins
+    // the orbit and the TAA jitter for that reason), but an animation advanced
+    // by the wall clock lands on a different pose every run -- two runs of one
+    // build differ by ~0.06 RMSE, which drowns any change being measured. Step
+    // the clip a fixed 1/60 per frame instead, so frame N is always pose N.
+    if (engine->headless)
+        delta_time = 1.0f / 60.0f;
+
     // Snapshot last frame's pose for skinned motion vectors (TAA) before this
     // frame recomputes it. Every frame (even paused) so a still pose reads zero
     // deformation velocity instead of a frozen nonzero one that would smear it.
