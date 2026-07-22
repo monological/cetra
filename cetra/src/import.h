@@ -18,13 +18,6 @@
 // Forward declaration
 struct AsyncLoader;
 
-Material* process_ai_material(struct aiMaterial* ai_mat, TexturePool* tex_pool,
-                              const struct aiScene* ai_scene);
-
-// Async variant - textures loaded in parallel, set via callbacks
-Material* process_ai_material_async(struct aiMaterial* ai_mat, TexturePool* tex_pool,
-                                    const struct aiScene* ai_scene, struct AsyncLoader* loader);
-
 void process_ai_mesh(Mesh* mesh, struct aiMesh* ai_mesh);
 
 void process_ai_lights(const struct aiScene* scene, Light*** lights, uint32_t* num_lights,
@@ -41,16 +34,18 @@ void process_ai_cameras(const struct aiScene* scene, Camera*** cameras, uint32_t
 // run, not per asset.
 void set_import_flip_uvs(bool flip);
 
-Scene* create_scene_from_model_path(const char* path, const char* texture_directory);
-
-// Async variant - textures loaded in parallel
-Scene* create_scene_from_model_path_async(const char* path, const char* texture_directory,
-                                          struct AsyncLoader* loader);
+// Load a model file into a Scene. Textures stream on the loader's worker pool
+// and may still be decoding on return -- file paths and compressed embedded
+// images alike (only raw embedded pixels, which are rare, decode inline);
+// meshes and skeletons are ready. The loader is required; NULL returns NULL.
+Scene* create_scene_from_model_path(const char* path, const char* texture_directory,
+                                    struct AsyncLoader* loader);
 
 // POM (§4.11): resolve "<name>_height" sibling maps into materials that have an
 // albedo/normal texture but no height map yet (glTF carries no height slot).
-// Idempotent + no-op unless a sibling is on disk. The sync import path calls it
-// at load; the render loop calls it once the async texture loader drains.
+// Idempotent + no-op unless a sibling is on disk. Import never calls it: the
+// render loop does, once the async texture loader drains and the material's
+// albedo/normal pointers have actually been attached.
 void resolve_height_maps(Scene* scene);
 
 // POM (§4.11): default depth auto-applied to a material whose height map is

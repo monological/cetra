@@ -1451,7 +1451,7 @@ int main(int argc, char** argv) {
     // none is given (so an external-texture glTF like the POM fixture loads
     // without -t), so just pass args.texture_dir through.
     Scene* scene =
-        create_scene_from_model_path_async(args.model_path, args.texture_dir, engine->async_loader);
+        create_scene_from_model_path(args.model_path, args.texture_dir, engine->async_loader);
     if (!scene) {
         fprintf(stderr, "Failed to import model: %s\n", args.model_path);
         return -1;
@@ -1657,7 +1657,8 @@ int main(int argc, char** argv) {
         // Load source skeleton for retargeting if provided
         Skeleton* source_skeleton = NULL;
         if (args.source_skeleton_path) {
-            Scene* source_scene = create_scene_from_model_path(args.source_skeleton_path, NULL);
+            Scene* source_scene =
+                create_scene_from_model_path(args.source_skeleton_path, NULL, engine->async_loader);
             if (source_scene && source_scene->skeleton_count > 0) {
                 source_skeleton = source_scene->skeletons[0];
                 printf("Loaded source skeleton: %zu bones from '%s'\n", source_skeleton->bone_count,

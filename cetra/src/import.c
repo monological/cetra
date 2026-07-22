@@ -412,56 +412,6 @@ static Texture* load_embedded_texture(TexturePool* tex_pool, const struct aiScen
     return tex;
 }
 
-Material* process_ai_material(struct aiMaterial* ai_mat, TexturePool* tex_pool,
-                              const struct aiScene* ai_scene) {
-    if (!ai_mat || !tex_pool)
-        return NULL;
-
-    Material* material = create_material();
-    extract_material_properties(ai_mat, material);
-
-    struct aiString str;
-
-    for (size_t i = 0; i < texture_mapping_count; i++) {
-        const TextureMapping* mapping = &texture_mappings[i];
-        if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, mapping->ai_type, 0, &str, NULL, NULL, NULL,
-                                               NULL, NULL, NULL)) {
-            Texture* tex = NULL;
-
-            // Check if this is an embedded texture (path starts with '*')
-            if (str.data[0] == '*' && ai_scene) {
-                tex = load_embedded_texture(tex_pool, ai_scene, str.data, mapping->is_srgb);
-            } else {
-                tex = load_texture_path_into_pool(tex_pool, str.data, mapping->is_srgb);
-            }
-
-            if (tex) {
-                mapping->setter(material, tex);
-                log_info("%s texture loaded: %s", mapping->name, tex->filepath);
-            } else {
-                log_warn("Failed to load %s texture '%s'", mapping->name, str.data);
-            }
-        }
-    }
-
-    // The clearcoat normal shares aiTextureType_CLEARCOAT at index 2, which the
-    // index-0 mapping table above can't reach; read it directly (linear data).
-    if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_CLEARCOAT, 2, &str, NULL, NULL,
-                                           NULL, NULL, NULL, NULL)) {
-        Texture* tex = (str.data[0] == '*' && ai_scene)
-                           ? load_embedded_texture(tex_pool, ai_scene, str.data, false)
-                           : load_texture_path_into_pool(tex_pool, str.data, false);
-        if (tex) {
-            set_material_clearcoat_normal_tex(material, tex);
-            log_info("Clearcoat normal texture loaded: %s", tex->filepath);
-        }
-    }
-
-    material_finalize_alpha_mode(material);
-
-    return material;
-}
-
 /*
  * Async texture load callback context
  */
@@ -482,43 +432,58 @@ static void async_tex_callback(Texture* tex, void* user_data) {
     free(ctx);
 }
 
-static void load_material_texture_async(AsyncLoader* loader, TexturePool* tex_pool, Material* mat,
-                                        const char* filepath, bool is_srgb,
-                                        void (*setter)(Material*, Texture*), const char* tex_type) {
+static AsyncTexCallback* make_async_tex_ctx(Material* mat, void (*setter)(Material*, Texture*),
+                                            const char* tex_type) {
     AsyncTexCallback* ctx = malloc(sizeof(AsyncTexCallback));
     if (!ctx) {
         log_error("Failed to allocate AsyncTexCallback");
-        return;
+        return NULL;
     }
     ctx->material = mat;
     ctx->setter = setter;
     ctx->tex_type = tex_type;
-    load_texture_async(loader, tex_pool, filepath, is_srgb, async_tex_callback, ctx);
+    return ctx;
 }
 
-// Helper to load a texture (embedded or file-based) for a material
+// Load a texture for a material. Both file and (compressed) embedded textures
+// decode on the loader's worker pool and attach via callback; only rare raw
+// (uncompressed) embedded pixels are handled inline.
 static void load_material_texture(Material* material, TexturePool* tex_pool,
                                   const struct aiScene* ai_scene, AsyncLoader* loader,
                                   const char* tex_path, bool is_srgb,
                                   void (*setter)(Material*, Texture*), const char* tex_type_name) {
     if (tex_path[0] == '*' && ai_scene) {
-        // Embedded textures are loaded synchronously (data already in memory)
-        Texture* tex = load_embedded_texture(tex_pool, ai_scene, tex_path, is_srgb);
-        if (tex) {
-            setter(material, tex);
-            log_info("%s texture loaded (embedded): %s", tex_type_name, tex->filepath);
+        int idx = atoi(tex_path + 1);
+        const struct aiTexture* ai_tex =
+            (idx >= 0 && (unsigned int)idx < ai_scene->mNumTextures) ? ai_scene->mTextures[idx]
+                                                                     : NULL;
+        if (ai_tex && ai_tex->mHeight == 0) {
+            // Compressed embedded (PNG/JPG): decode on a worker like a file. For
+            // a compressed aiTexture, mWidth is the byte size of pcData.
+            AsyncTexCallback* ctx = make_async_tex_ctx(material, setter, tex_type_name);
+            if (ctx) {
+                load_texture_from_memory_async(loader, tex_pool, tex_path,
+                                               (const unsigned char*)ai_tex->pcData,
+                                               (int)ai_tex->mWidth, is_srgb, async_tex_callback,
+                                               ctx);
+            }
         } else {
-            log_warn("Failed to load embedded %s texture '%s'", tex_type_name, tex_path);
+            // Raw (uncompressed) embedded pixels: decode inline (rare).
+            Texture* tex = load_embedded_texture(tex_pool, ai_scene, tex_path, is_srgb);
+            if (tex) {
+                setter(material, tex);
+            }
         }
     } else {
-        // File-based textures loaded asynchronously
-        load_material_texture_async(loader, tex_pool, material, tex_path, is_srgb, setter,
-                                    tex_type_name);
+        AsyncTexCallback* ctx = make_async_tex_ctx(material, setter, tex_type_name);
+        if (ctx) {
+            load_texture_async(loader, tex_pool, tex_path, is_srgb, async_tex_callback, ctx);
+        }
     }
 }
 
-Material* process_ai_material_async(struct aiMaterial* ai_mat, TexturePool* tex_pool,
-                                    const struct aiScene* ai_scene, AsyncLoader* loader) {
+static Material* process_ai_material(struct aiMaterial* ai_mat, TexturePool* tex_pool,
+                                     const struct aiScene* ai_scene, AsyncLoader* loader) {
     if (!ai_mat || !tex_pool || !loader) {
         return NULL;
     }
@@ -1327,9 +1292,12 @@ static void copy_aiMatrix_to_mat4(const struct aiMatrix4x4* from, mat4 to) {
     to[3][3] = from->d4;
 }
 
-SceneNode* process_ai_node(Scene* scene, struct aiNode* ai_node, const struct aiScene* ai_scene,
-                           TexturePool* tex_pool, Material** mat_cache) {
-    if (!scene || !ai_node || !ai_scene || !tex_pool || !mat_cache)
+// Walk the aiNode tree into cetra SceneNodes. Textures stream on the loader's
+// worker pool; skeletons/bones are extracted synchronously here regardless.
+static SceneNode* process_ai_node(Scene* scene, struct aiNode* ai_node,
+                                  const struct aiScene* ai_scene, TexturePool* tex_pool,
+                                  AsyncLoader* loader, Material** mat_cache) {
+    if (!scene || !ai_node || !ai_scene || !tex_pool || !loader || !mat_cache)
         return NULL;
 
     SceneNode* node = create_node();
@@ -1348,12 +1316,18 @@ SceneNode* process_ai_node(Scene* scene, struct aiNode* ai_node, const struct ai
         Mesh* mesh = create_mesh();
         process_ai_mesh(mesh, ai_mesh);
 
-        // Process material, deduped by aiMaterial index (see the async twin).
+        // Material, deduped by aiMaterial index: one aiMaterial can be shared by
+        // hundreds of meshes (e.g. ivy leaves), so build the cetra Material once
+        // per index and reuse it -- the ~30 property queries + texture resolution
+        // + embedded decodes happen once, not per mesh. Meshes safely share the
+        // Material* (textures refcounted; per-mesh AABB on the Mesh; wind mask is
+        // a per-mesh uniform).
         unsigned int matIndex = ai_mesh->mMaterialIndex;
         if (matIndex < ai_scene->mNumMaterials) {
             Material* mat = mat_cache[matIndex];
             if (!mat) {
-                mat = process_ai_material(ai_scene->mMaterials[matIndex], tex_pool, ai_scene);
+                mat = process_ai_material(ai_scene->mMaterials[matIndex], tex_pool, ai_scene,
+                                          loader);
                 if (mat) {
                     mat_cache[matIndex] = mat;
                     add_material_to_scene(scene, mat);
@@ -1389,7 +1363,7 @@ SceneNode* process_ai_node(Scene* scene, struct aiNode* ai_node, const struct ai
     node->children = malloc(sizeof(SceneNode*) * node->children_count);
     for (unsigned int i = 0; i < node->children_count; i++) {
         node->children[i] =
-            process_ai_node(scene, ai_node->mChildren[i], ai_scene, tex_pool, mat_cache);
+            process_ai_node(scene, ai_node->mChildren[i], ai_scene, tex_pool, loader, mat_cache);
         if (node->children[i]) {
             node->children[i]->parent = node;
         }
@@ -1474,7 +1448,15 @@ void resolve_height_maps(Scene* scene) {
     }
 }
 
-Scene* create_scene_from_model_path(const char* path, const char* texture_directory) {
+// Load a model file into a Scene. Textures stream on the loader's worker pool
+// (they may still be decoding when this returns); skeletons/meshes are ready.
+Scene* create_scene_from_model_path(const char* path, const char* texture_directory,
+                                    AsyncLoader* loader) {
+    if (!loader) {
+        log_error("create_scene_from_model_path: an AsyncLoader is required");
+        return NULL;
+    }
+
     const struct aiScene* ai_scene = import_ai_scene(
         path, aiProcess_Triangulate | aiProcess_CalcTangentSpace | uv_flip_flag(path));
     if (!ai_scene || ai_scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !ai_scene->mRootNode) {
@@ -1491,6 +1473,7 @@ Scene* create_scene_from_model_path(const char* path, const char* texture_direct
     TexturePool* tex_pool = scene->tex_pool;
     if (!tex_pool) {
         log_error("Failed to create texture pool\n");
+        free_scene(scene);
         aiReleaseImport(ai_scene);
         return NULL;
     }
@@ -1516,157 +1499,8 @@ Scene* create_scene_from_model_path(const char* path, const char* texture_direct
         aiReleaseImport(ai_scene);
         return NULL;
     }
-    scene->root_node = process_ai_node(scene, ai_scene->mRootNode, ai_scene, tex_pool, mat_cache);
-    free(mat_cache);
-
-    associate_cameras_and_lights_with_nodes(scene->root_node, scene);
-
-    // Process animations if any skeleton was extracted
-    if (ai_scene->mNumAnimations > 0 && scene->skeleton_count > 0) {
-        process_ai_animations(ai_scene, scene, scene->skeletons[0]);
-    }
-
-    aiReleaseImport(ai_scene);
-    return scene;
-}
-
-/*
- * Async variant of process_ai_node - uses async texture loading
- */
-static SceneNode* process_ai_node_async(Scene* scene, struct aiNode* ai_node,
-                                        const struct aiScene* ai_scene, TexturePool* tex_pool,
-                                        AsyncLoader* loader, Material** mat_cache) {
-    if (!scene || !ai_node || !ai_scene || !tex_pool || !loader || !mat_cache) {
-        return NULL;
-    }
-
-    SceneNode* node = create_node();
-    if (!node) {
-        return NULL;
-    }
-
-    // Process meshes for this node
-    node->mesh_count = ai_node->mNumMeshes;
-    node->meshes = malloc(sizeof(Mesh*) * node->mesh_count);
-
-    for (unsigned int i = 0; i < node->mesh_count; i++) {
-        unsigned int meshIndex = ai_node->mMeshes[i];
-        struct aiMesh* ai_mesh = ai_scene->mMeshes[meshIndex];
-
-        Mesh* mesh = create_mesh();
-        process_ai_mesh(mesh, ai_mesh);
-
-        // Process material with async texture loading. One aiMaterial can be
-        // shared by hundreds of meshes (e.g. ivy leaves); build the cetra
-        // Material once per material index and reuse it, so the ~30 property
-        // queries + texture resolution + embedded decodes happen once, not per
-        // mesh. Meshes safely share the Material* (textures refcounted; per-mesh
-        // AABB lives on the Mesh; the wind mask is a per-mesh uniform).
-        unsigned int matIndex = ai_mesh->mMaterialIndex;
-        if (matIndex < ai_scene->mNumMaterials) {
-            Material* mat = mat_cache[matIndex];
-            if (!mat) {
-                mat = process_ai_material_async(ai_scene->mMaterials[matIndex], tex_pool, ai_scene,
-                                                loader);
-                if (mat) {
-                    mat_cache[matIndex] = mat;
-                    add_material_to_scene(scene, mat);
-                }
-            }
-            mesh->material = mat;
-        }
-
-        // Process skeleton and bone weights if mesh has bones
-        if (ai_mesh->mNumBones > 0) {
-            Skeleton* skeleton = NULL;
-            if (scene->skeleton_count > 0) {
-                skeleton = scene->skeletons[0];
-            } else {
-                skeleton = process_ai_skeleton(ai_scene, ai_mesh);
-                if (skeleton) {
-                    add_skeleton_to_scene(scene, skeleton);
-                }
-            }
-
-            if (skeleton) {
-                process_ai_mesh_bones(mesh, ai_mesh, skeleton);
-            }
-        }
-
-        calculate_aabb(mesh);
-        node->meshes[i] = mesh;
-    }
-
-    // Recursively process children nodes
-    node->children_count = ai_node->mNumChildren;
-    node->children = malloc(sizeof(SceneNode*) * node->children_count);
-    for (unsigned int i = 0; i < node->children_count; i++) {
-        node->children[i] = process_ai_node_async(scene, ai_node->mChildren[i], ai_scene, tex_pool,
-                                                  loader, mat_cache);
-        if (node->children[i]) {
-            node->children[i]->parent = node;
-        }
-    }
-
-    node->name = safe_strdup(ai_node->mName.data);
-
-    struct aiMatrix4x4 ai_mat = ai_node->mTransformation;
-    copy_aiMatrix_to_mat4(&ai_mat, node->original_transform);
-
-    return node;
-}
-
-Scene* create_scene_from_model_path_async(const char* path, const char* texture_directory,
-                                          AsyncLoader* loader) {
-    if (!loader) {
-        log_error("AsyncLoader is NULL, falling back to sync loading");
-        return create_scene_from_model_path(path, texture_directory);
-    }
-
-    const struct aiScene* ai_scene = import_ai_scene(
-        path, aiProcess_Triangulate | aiProcess_CalcTangentSpace | uv_flip_flag(path));
-    if (!ai_scene || ai_scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !ai_scene->mRootNode) {
-        log_error("Error importing FBX file: %s\n", path);
-        return NULL;
-    }
-
-    Scene* scene = create_scene();
-    if (!scene) {
-        aiReleaseImport(ai_scene);
-        return NULL;
-    }
-
-    TexturePool* tex_pool = scene->tex_pool;
-    if (!tex_pool) {
-        log_error("Failed to create texture pool\n");
-        aiReleaseImport(ai_scene);
-        return NULL;
-    }
-
-    char texdir_buf[1024];
-    texture_directory =
-        effective_texture_dir(path, texture_directory, texdir_buf, sizeof(texdir_buf));
-    set_texture_pool_directory(tex_pool, texture_directory);
-
-    // Process lights and cameras
-    process_ai_lights(ai_scene, &scene->lights, &scene->light_count, is_gltf_path(path));
-    process_ai_cameras(ai_scene, &scene->cameras, &scene->camera_count);
-
-    // Process the root node with async texture loading. mat_cache dedups the
-    // cetra Material per aiMaterial index across the whole tree (built lazily,
-    // reused by every mesh sharing an index). At least one slot so calloc(0) for
-    // a material-less scene can't be mistaken for OOM.
-    Material** mat_cache =
-        calloc(ai_scene->mNumMaterials ? ai_scene->mNumMaterials : 1, sizeof(Material*));
-    if (!mat_cache) {
-        log_error("import: failed to allocate material cache (%u materials)",
-                  ai_scene->mNumMaterials);
-        free_scene(scene);
-        aiReleaseImport(ai_scene);
-        return NULL;
-    }
     scene->root_node =
-        process_ai_node_async(scene, ai_scene->mRootNode, ai_scene, tex_pool, loader, mat_cache);
+        process_ai_node(scene, ai_scene->mRootNode, ai_scene, tex_pool, loader, mat_cache);
     free(mat_cache);
 
     associate_cameras_and_lights_with_nodes(scene->root_node, scene);
