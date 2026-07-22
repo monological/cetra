@@ -64,6 +64,12 @@ ParticleModule* particle_module_spawn_rate(float rate) {
     return module_new("spawn_rate", PARTICLE_PHASE_SPAWN, spawn_rate_run, p);
 }
 
+void particle_module_spawn_rate_set(ParticleModule* m, float rate) {
+    if (!m || m->phase != PARTICLE_PHASE_SPAWN || !m->params)
+        return;
+    ((SpawnRateParams*)m->params)->rate = rate;
+}
+
 // --- INIT: box location ---
 // NB: location/position init modules must place particles through the emitter's
 // local_to_world (below), so the node transform is honored. A new location
@@ -217,6 +223,38 @@ ParticleModule* particle_module_update_drift(vec3 accel) {
         return NULL;
     glm_vec3_copy(accel, p->accel);
     return module_new("update_drift", PARTICLE_PHASE_UPDATE, update_drift_run, p);
+}
+
+// --- UPDATE: rotation (billboard roll) ---
+// Spin rate is derived from the particle's own seed rather than stored, so it
+// stays constant over the particle's life without widening the pool. The sign
+// alternates by seed so a drift of falling leaves tumbles both ways.
+
+typedef struct {
+    float min_rate;
+    float max_rate;
+} RotationParams;
+
+static void update_rotation_run(ParticleModule* m, ParticleEmitter* e, size_t begin, size_t end,
+                                float dt, float t) {
+    (void)t;
+    const RotationParams* p = m->params;
+    for (size_t i = begin; i < end; i++) {
+        float s = e->pool->seed[i];
+        float frac = s * 7.31f;
+        frac -= floorf(frac); // decorrelate from whatever else reads the seed
+        float rate = p->min_rate + (p->max_rate - p->min_rate) * frac;
+        e->pool->rotation[i] += (s < 0.5f ? -rate : rate) * dt;
+    }
+}
+
+ParticleModule* particle_module_update_rotation(float min_rate, float max_rate) {
+    RotationParams* p = calloc(1, sizeof(RotationParams));
+    if (!p)
+        return NULL;
+    p->min_rate = min_rate;
+    p->max_rate = max_rate;
+    return module_new("update_rotation", PARTICLE_PHASE_UPDATE, update_rotation_run, p);
 }
 
 // --- UPDATE: integrate + damping ---

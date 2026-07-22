@@ -15,6 +15,7 @@
 #include "shadow.h"
 #include "render.h"
 #include "animation.h"
+#include "wind.h"
 #include "ext/log.h"
 
 ShadowSystem* create_shadow_system(int default_map_size) {
@@ -404,21 +405,56 @@ static void _render_shadow_node(SceneNode* node, ShaderProgram* program, GLuint*
             if (!mesh || mesh->vao == 0)
                 continue;
 
+            Material* mat = mesh->material;
+            UniformManager* u = program->uniforms;
+
             // Alpha-masked materials (hair cards) are excluded from the
             // shadow map entirely: at map-texel scale (millimeters) their
             // strands can neither cast nor receive cleanly — solid-quad
             // casting draws card-shaped streaks, alpha-tested casting
             // draws strand-scale acne on whatever is beneath. Their
             // occlusion comes from the AO texture and SSAO instead.
-            if (mesh->material && mesh->material->alpha_mode == ALPHA_MASK)
+            //
+            // Foliage opts back in (material.h foliage_shadows): leaf cards
+            // are centimeters across, so an alpha test resolves them cleanly,
+            // and the dappled canopy shadow they cast is the reason the
+            // surface exists at all.
+            bool masked = mat && mat->alpha_mode == ALPHA_MASK;
+            bool foliage =
+                masked && mat->foliage_shadows && mat->alphaCutoff > 0.0f && mat->albedo_tex;
+            if (masked && !foliage)
                 continue;
+
+            uniform_set_int(u, "alphaTested", foliage ? 1 : 0);
+            if (foliage) {
+                uniform_set_float(u, "alphaCutoff", mat->alphaCutoff);
+                uniform_set_int(u, "albedoTex", 0);
+                glActiveTexture(GL_TEXTURE0);
+                glBindTexture(GL_TEXTURE_2D, mat->albedo_tex->id);
+            }
+
+            // Wind must displace the caster exactly as the shading pass
+            // displaces the surface, or the shadow detaches from what casts it.
+            uniform_set_float(u, "uWindResponse", mat ? mat->wind_response : 0.0f);
+            uniform_set_int(u, "uWindMode", mat ? mat->wind_mode : 0);
+            uniform_set_float(u, "uWindMaskMinY", mesh->aabb.min[1]);
+            uniform_set_float(u, "uWindMaskMaxY", mesh->aabb.max[1]);
 
             // Skin animated meshes so they cast animated shadows
             render_update_skinning_uniforms(program, mesh);
 
+            // The pass front-face culls to push acne behind the surface; a
+            // two-sided card has no back face to keep, so it would vanish.
+            bool two_sided = mat && mat->doubleSided;
+            if (two_sided)
+                glDisable(GL_CULL_FACE);
+
             glBindVertexArray(mesh->vao);
             glDrawElements(mesh->draw_mode, mesh->index_count, GL_UNSIGNED_INT, 0);
             glBindVertexArray(0);
+
+            if (two_sided)
+                glEnable(GL_CULL_FACE);
         }
     }
 
@@ -623,6 +659,12 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     GLuint current_program = 0;
     glUseProgram(ss->depth_program->id);
     current_program = ss->depth_program->id;
+
+    // Wind globals for the whole pass (per-mesh response/mask ride along in the
+    // node walk). last_frame_time is this frame's stamp -- the same clock the
+    // shading pass reads, so caster and surface displace in lockstep.
+    wind_upload_to_program(scene->wind, ss->depth_program->uniforms);
+    uniform_set_float(ss->depth_program->uniforms, "time", (float)engine->last_frame_time);
 
     for (size_t i = 0; i < ss->active_count; ++i) {
         for (int c = 0; c < cc; ++c) {

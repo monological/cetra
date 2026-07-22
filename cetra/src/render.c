@@ -173,6 +173,7 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
     uniform_set_float(u, "materialOpacity", material->opacity);
     uniform_set_float(u, "alphaCutoff", material->alphaCutoff);
     uniform_set_int(u, "alphaToCoverage", material->alpha_mode == ALPHA_MASK ? 1 : 0);
+    uniform_set_int(u, "uFoliageShadows", material->foliage_shadows ? 1 : 0);
     uniform_set_float(u, "normalScale", material->normalScale);
     uniform_set_float(u, "aoStrength", material->aoStrength);
     uniform_set_float(u, "ior", material->ior);
@@ -196,6 +197,7 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
     // materials reset it to 0 and the shader early-outs for them. The mask
     // bounds are per-mesh (uploaded in the draw loop from the mesh's AABB).
     uniform_set_float(u, "uWindResponse", material->wind_response);
+    uniform_set_int(u, "uWindMode", material->wind_mode);
 
     // Dedicated (native-resolution) sampler units. The scalar masks
     // (roughness/metallic/ao/opacity/microsurface/anisotropy) are no
@@ -452,9 +454,19 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
         uniform_set_float(u, "uWindMaskMinY", mesh->aabb.min[1]);
         uniform_set_float(u, "uWindMaskMaxY", mesh->aabb.max[1]);
 
+        // Alpha-to-coverage needs real MSAA samples to dither into; on a
+        // 1-sample buffer glEnable(GL_SAMPLE_ALPHA_TO_COVERAGE) is a no-op and
+        // the shader's A2C path would keep every fragment down to alpha 0.02 --
+        // masked geometry would render as solid quads. Fall back to the binary
+        // cutoff there. No effect at MSAA > 1.
+        bool a2c_capable = engine->msaa_samples > 1;
+
         // Only update material uniforms if material changed
         if (*current_material != mat) {
             _update_program_material_uniforms(program, mat);
+            if (mat->alpha_mode == ALPHA_MASK && !a2c_capable) {
+                uniform_set_int(u, "alphaToCoverage", 0);
+            }
             *current_material = mat;
         }
 
@@ -469,7 +481,7 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
         // MSAA converts fractional alpha into sample coverage for soft,
         // order-independent edges, and uncovered samples stay open for the
         // skybox drawn later
-        bool use_a2c = mat->alpha_mode == ALPHA_MASK;
+        bool use_a2c = mat->alpha_mode == ALPHA_MASK && a2c_capable;
         if (use_a2c) {
             glEnable(GL_SAMPLE_ALPHA_TO_COVERAGE);
         }

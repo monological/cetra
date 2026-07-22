@@ -75,6 +75,10 @@ uniform float alphaCutoff;  // Alpha cutoff threshold for hair/foliage (0 = disa
 // Alpha-to-coverage: MSAA turns fractional alpha into sample coverage, so the
 // binary cutoff is skipped for soft, order-independent masked edges
 uniform int alphaToCoverage;
+// Masked material that opted back into the shadow map (material.h
+// foliage_shadows). Leaf cards are large enough to resolve at map-texel scale,
+// so they read the cascades like opaque geometry does.
+uniform int uFoliageShadows;
 // Geometric specular AA strength (0 disables)
 uniform float specularAAStrength;
 
@@ -1068,7 +1072,8 @@ void main() {
         // map — a per-run-random, constant-within-a-run wrong shadow that
         // gated the specular highlights into shimmering speckle.
         float shadow = 1.0;
-        if (lights[i].type == 0 && alphaToCoverage == 0 && i < MAX_SHADOW_LIGHTS) {
+        if (lights[i].type == 0 && (alphaToCoverage == 0 || uFoliageShadows == 1) &&
+            i < MAX_SHADOW_LIGHTS) {
             int shadowSlot = shadowLightIndex[i];
             if (shadowSlot >= 0) {
                 shadow = calculateShadow(shadowSlot, fragCascade, WorldPos, NdotL,

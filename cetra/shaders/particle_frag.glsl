@@ -24,6 +24,12 @@ uniform sampler2D sceneDepth; // resolved single-sample scene depth
 uniform int uSoftEnabled;     // 0 when no depth texture is bound
 uniform float softDist;       // world-space fade band
 
+// Optional sprite (billboard_renderer_set_sprite): a texture with its own shape
+// and cutout replaces the procedural disc. Everything downstream -- life fade,
+// soft particles, sun/shadow lighting -- applies to both paths alike.
+uniform sampler2D uSpriteTex;
+uniform int uSpriteEnabled;
+
 // Window-space depth [0,1] -> positive view-space distance from the camera.
 float sceneViewDist(float d) {
     float zndc = 2.0 * d - 1.0;
@@ -67,9 +73,18 @@ float occlusion_from(int slot) {
 }
 
 void main() {
-    // Soft round sprite from the radial distance across the quad.
-    float r = length(vCorner);
-    float a = smoothstep(1.0, 0.35, r) * vColor.a;
+    vec3 baseRgb = vColor.rgb;
+    float a;
+    if (uSpriteEnabled == 1) {
+        vec4 s = texture(uSpriteTex, vCorner * 0.5 + 0.5);
+        if (s.a < 0.02)
+            discard; // outside the sprite's cutout
+        baseRgb *= s.rgb;
+        a = s.a * vColor.a;
+    } else {
+        // Soft round sprite from the radial distance across the quad.
+        a = smoothstep(1.0, 0.35, length(vCorner)) * vColor.a;
+    }
 
     // Life alpha envelope: fade in over the first 10%, out over the last 30%.
     float fadeIn = smoothstep(0.0, 0.1, vLifeFrac);
@@ -91,7 +106,7 @@ void main() {
     float bright = uAmbient + (1.0 - uAmbient) * sun;
     vec3 tint = mix(vec3(1.0), uSunColor, 0.4 * sun); // subtle warmth where lit
 
-    vec3 rgb = vColor.rgb * hdrGain * bright * tint;
+    vec3 rgb = baseRgb * hdrGain * bright * tint;
 
     FragColor = vec4(rgb * a, a);
 }

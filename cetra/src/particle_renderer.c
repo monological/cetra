@@ -13,6 +13,7 @@
 #define PARTICLE_AMBIENT_FLOOR  0.18f // brightness of motes in full shadow
 #define PARTICLE_SOFT_FADE_DIST 0.5f  // world-space soft-particle fade band
 #define PARTICLE_DEPTH_UNIT     7     // free sampler unit for the resolved scene depth
+#define PARTICLE_SPRITE_UNIT    8     // free sampler unit for the optional sprite
 
 // Billboard renderer: one static unit-quad, one dynamic per-instance buffer,
 // drawn with glDrawArraysInstanced. This is the engine's first instanced-draw
@@ -23,6 +24,8 @@ typedef struct {
     GLuint quad_vbo;
     GLuint instance_vbo;
     size_t upload_count; // instances uploaded in prepare(), drawn in draw()
+    GLuint sprite_tex;   // 0 = draw the built-in procedural disc
+    float hdr_gain;      // defaults to PARTICLE_HDR_GAIN
 } BillboardRenderer;
 
 // Unit quad corners in [-1,1], two triangles. The corner doubles as the radial
@@ -120,7 +123,18 @@ static void billboard_draw(ParticleRenderer* r, const ParticleInstanceView* view
     UniformManager* u = b->program->uniforms;
     uniform_set_mat4(u, "view", (const float*)ctx->view);
     uniform_set_mat4(u, "projection", (const float*)ctx->proj);
-    uniform_set_float(u, "hdrGain", PARTICLE_HDR_GAIN);
+    uniform_set_float(u, "hdrGain", b->hdr_gain);
+
+    // Optional sprite: replaces the procedural disc with a texture (leaves,
+    // embers, anything with a shape). The quad corner doubles as the UV.
+    if (b->sprite_tex) {
+        glActiveTexture(GL_TEXTURE0 + PARTICLE_SPRITE_UNIT);
+        glBindTexture(GL_TEXTURE_2D, b->sprite_tex);
+        uniform_set_int(u, "uSpriteTex", PARTICLE_SPRITE_UNIT);
+        uniform_set_int(u, "uSpriteEnabled", 1);
+    } else {
+        uniform_set_int(u, "uSpriteEnabled", 0);
+    }
 
     // Directional key + CSM shadow (M3): the motes brighten in the light and
     // fall to the ambient floor in shadow. bind_shadow_maps_to_program uploads
@@ -184,6 +198,8 @@ ParticleRenderer* create_billboard_particle_renderer(ShaderProgram* program) {
         return NULL;
     }
     b->program = program;
+    b->sprite_tex = 0;
+    b->hdr_gain = PARTICLE_HDR_GAIN;
     billboard_setup(b);
 
     r->name = "billboard";
@@ -192,4 +208,12 @@ ParticleRenderer* create_billboard_particle_renderer(ShaderProgram* program) {
     r->free_fn = billboard_free;
     r->impl = b;
     return r;
+}
+
+void billboard_renderer_set_sprite(ParticleRenderer* r, Texture* tex, float hdr_gain) {
+    if (!r || r->prepare != billboard_prepare || !r->impl)
+        return;
+    BillboardRenderer* b = r->impl;
+    b->sprite_tex = tex ? tex->id : 0;
+    b->hdr_gain = hdr_gain;
 }

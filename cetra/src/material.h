@@ -24,10 +24,14 @@
 // itself; the full contract, each enforced where it must live:
 //   - Shadow map: excluded entirely, neither casts (shadow.c mesh skip) nor
 //     receives (pbr_frag.glsl shadow loop) — map texels are millimeters,
-//     card strands alias into streaks/acne at that scale.
+//     card strands alias into streaks/acne at that scale. Foliage opts back
+//     in per material (foliage_shadows below): leaf cards are centimeters, so
+//     an alpha-tested depth pass resolves them cleanly and the canopy shadow
+//     it casts is the whole point of the surface.
 //   - Normals G-buffer: writes a zero-normal marker (see above), which GTAO
 //     reads to skip these texels (gtao_frag.glsl) — screen-space AO on the
-//     strand tangle is depth-derivative noise that flickers under TAA.
+//     strand tangle is depth-derivative noise that flickers under TAA. This
+//     holds for foliage too; its occlusion comes from the shadow map instead.
 //   - Occlusion for these surfaces comes from the baked AO texture only.
 typedef enum AlphaMode {
     ALPHA_OPAQUE = 0, // Single opaque pass
@@ -74,12 +78,27 @@ typedef struct Material {
     float uvRotation;       // Texture coordinate rotation in radians (KHR_texture_transform)
     bool doubleSided;       // Disable backface culling for this material
 
+    // ALPHA_MASK opt-in to the shadow map: the depth pass draws this material
+    // with an alpha test (casts) and the shading pass samples the map for it
+    // (receives). Default false keeps the blanket exclusion documented above,
+    // which is what hair cards need. Effective only when the material is
+    // ALPHA_MASK with a positive alphaCutoff and an albedo texture to test.
+    bool foliage_shadows;
+
     // Wind response (World-Position Offset cloth; see wind.h). The per-material
     // half of the wind split: the Scene owns the wind field, a material opts in
     // here. 0 = rigid (the shader early-outs -> no motion). The height-mask
     // bounds that pin the top and free the hem are per-mesh geometry, uploaded
     // per draw from the mesh's AABB -- not stored here (a material is shared).
     float wind_response;
+
+    // Which displacement model wind_response drives (pbr_vert.glsl windOffset):
+    //   0 = cloth: the AABB height gradient that pins the top and swings the hem
+    //   1 = vegetation branch: whole-trunk lean + per-branch de-phased sway
+    //   2 = vegetation leaf: the branch ride plus high-frequency flutter
+    // The vegetation modes read UV1 per vertex (x = branch phase, y = flex
+    // weight), so they only work on geometry authored with that data.
+    int wind_mode;
 
     // Core PBR Textures
     Texture* albedo_tex;            // Albedo (Diffuse) Map

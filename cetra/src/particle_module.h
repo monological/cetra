@@ -43,6 +43,9 @@ void free_particle_module(ParticleModule* m);
 // SPAWN: emit `rate` particles per second (fractional remainder accumulated so
 // rates below 1/dt still spawn).
 ParticleModule* particle_module_spawn_rate(float rate);
+// Retune an existing spawn-rate module. Setting 0 stops new spawns while the
+// particles already alive finish their lives (a hard stop would pop them out).
+void particle_module_spawn_rate_set(ParticleModule* m, float rate);
 
 // INIT: uniformly random position inside the AABB [min,max].
 ParticleModule* particle_module_init_box_location(vec3 min, vec3 max);
@@ -60,6 +63,11 @@ ParticleModule* particle_module_update_curl_noise(float scale, float strength, f
 
 // UPDATE: add a constant acceleration (m/s^2), e.g. faint upward buoyancy.
 ParticleModule* particle_module_update_drift(vec3 accel);
+// UPDATE: spin the billboard roll at a per-particle rate in [min,max] rad/s,
+// direction alternating by seed (tumbling leaves, spinning embers). Only the
+// CPU backend runs modules, so the transform-feedback backend ignores this.
+ParticleModule* particle_module_update_rotation(float min_rate, float max_rate);
+
 // UPDATE: integrate position by velocity and apply a per-step velocity damping
 // factor `drag` in (0,1].
 ParticleModule* particle_module_update_integrate(float drag);
