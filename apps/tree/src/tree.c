@@ -1329,8 +1329,8 @@ int main(int argc, char** argv) {
     // Camera: low and off-axis so the canopy tops the frame and the low sun
     // rakes its shadows toward the viewer.
     Camera* camera = create_camera();
-    vec3 cam_pos = {110.0f, 70.0f, 380.0f};
-    vec3 look_at = {0.0f, 85.0f, 0.0f};
+    vec3 cam_pos = {140.0f, 95.0f, 600.0f};
+    vec3 look_at = {0.0f, 145.0f, 0.0f};
     vec3 up = {0.0f, 1.0f, 0.0f};
     set_camera_position(camera, cam_pos);
     set_camera_look_at(camera, look_at);
@@ -1500,8 +1500,8 @@ int main(int argc, char** argv) {
 
         fx->dof_enabled = true;
         fx->dof_autofocus = true;
-        fx->dof_focus_distance = 400.0f;
-        fx->dof_focus_range = 220.0f;
+        fx->dof_focus_distance = 620.0f;
+        fx->dof_focus_range = 320.0f;
 
         if (fx->ssao_radius < 1.6f)
             fx->ssao_radius = 1.6f;
@@ -1512,24 +1512,27 @@ int main(int argc, char** argv) {
     // Tree shape
     params.seed = args.seed;
     params.max_depth = 4;
-    params.trunk_length = 80.0f;
-    params.trunk_radius = 8.0f;
+    // A tall, upright habit: a long trunk, branches held closer to vertical,
+    // and a stronger pull toward the light, which narrows the crown rather
+    // than letting it spread into a ball.
+    params.trunk_length = 125.0f;
+    params.trunk_radius = 9.0f;
     params.branches_per_node = 3;
-    params.length_decay = 0.72f;
+    params.length_decay = 0.70f;
     params.taper = 0.62f;
-    params.branch_angle = 32.0f;
+    params.branch_angle = 27.0f;
     params.angle_variance = 12.0f;
     params.twist = 137.5f;
-    params.droop = 0.35f;
+    params.droop = 0.32f;
     params.curve_noise = 0.4f;
-    params.phototropism = 0.3f;
-    params.lateral_density = 1.2f;
+    params.phototropism = 0.45f;
+    params.lateral_density = 1.0f;
     params.twig_scale = 1.0f;
     params.show_leaves = 1;
-    // A card now carries a whole sprig, so it is sized as one and there are
-    // fewer of them: roughly the same vertex count for many times the leaves.
+    // A card carries a whole sprig, so it is sized as one and spaced sparsely:
+    // the canopy should show its branch structure through the foliage.
     params.leaf_size = 15.0f;
-    params.leaf_density = 2.5f;
+    params.leaf_density = 1.3f;
 
     // The tree node is created once and outlives every rebuild; regeneration
     // only swaps its meshes, so nothing else parented to the root is at risk.
