@@ -14,7 +14,12 @@
 
 // World units covered by one tile of the bark texture, both around the trunk
 // and along it -- equal on both axes so texel density stays square.
-#define TG_BARK_TILE 6.0f
+//
+// Sized so a trunk carries only a few tiles around its girth. Tiling finer
+// than this is self-defeating: the trunk is a hundred-odd pixels wide on
+// screen, so a dozen repeats land several mip levels down and average out to
+// flat colour, which is exactly what makes bark read as smooth plastic.
+#define TG_BARK_TILE 18.0f
 
 // Spine samples per generation. The trunk carries the most because its curve is
 // the one the eye follows; twigs are nearly straight and would only cost verts.
@@ -490,17 +495,44 @@ static float branch_phase_at(const Branch* b, float t_arc) {
     return b->parent_phase + (b->phase - b->parent_phase) * tg_smoothstep(0.0f, 0.25f, t_arc);
 }
 
-static void sweep_branch(MeshBuilder* mb, const TreeSkeleton* s, const Branch* b) {
-    int segs = 5 + (int)ceilf(b->base_radius * 1.5f);
-    if (segs > 20)
-        segs = 20;
-    if (segs < 5)
-        segs = 5;
+// Ring segments for a branch. Thick wood needs enough of them to resolve its
+// flutes; twigs are a few pixels wide and would only cost vertices. Shared by
+// the sweep and the vertex census, which must agree exactly.
+static int branch_segs(const Branch* b) {
+    int segs = 6 + (int)ceilf(b->base_radius * 2.0f);
+    return segs > 26 ? 26 : segs;
+}
 
+// Bark cross-section profile: how far the surface departs from a circle at
+// angle `a`, as a signed fraction in [-1,1], plus its derivative in `a`.
+//
+// A trunk is not a cylinder -- it has flutes and ridges running up it, and a
+// normal map cannot express that because it never touches the silhouette. The
+// harmonics use whole-number frequencies so the profile closes exactly at the
+// seam, and each one drifts slowly along the branch so the flutes wander
+// rather than running dead straight.
+static float bark_profile(float a, float arc, float ph0, float ph1, float ph2, float* d_da) {
+    const float f0 = 3.0f, f1 = 5.0f, f2 = 8.0f;
+    const float w0 = 0.55f, w1 = 0.30f, w2 = 0.15f; // sum to 1
+    float t0 = a * f0 + ph0 + arc * 0.020f;
+    float t1 = a * f1 + ph1 - arc * 0.014f;
+    float t2 = a * f2 + ph2 + arc * 0.030f;
+    if (d_da)
+        *d_da = w0 * f0 * cosf(t0) + w1 * f1 * cosf(t1) + w2 * f2 * cosf(t2);
+    return w0 * sinf(t0) + w1 * sinf(t1) + w2 * sinf(t2);
+}
+
+static void sweep_branch(MeshBuilder* mb, const TreeSkeleton* s, const Branch* b) {
+    int segs = branch_segs(b);
     int ring_verts = segs + 1; // duplicated seam vertex so u can reach its last tile
     float slope = (b->tip_radius - b->base_radius) / (b->length > 1e-4f ? b->length : 1e-4f);
 
     unsigned int first_ring = mb->vcount;
+
+    // Per-branch profile phases, so no two branches share a cross-section.
+    float ph0 = b->phase * 6.2831853f;
+    float ph1 = ph0 * 1.7f + 1.3f;
+    float ph2 = ph0 * 2.3f + 2.7f;
 
     // Parallel-transport frame: rotating the previous ring's normal by the
     // twist between consecutive tangents keeps the rings from spinning around
@@ -538,6 +570,13 @@ static void sweep_branch(MeshBuilder* mb, const TreeSkeleton* s, const Branch* b
                                     : 1.0f + 0.30f * (1.0f - tg_smoothstep(0.0f, 0.22f, t_arc));
         float r = bp->radius * flare;
 
+        // How far the cross-section departs from a circle. Thick wood carries
+        // pronounced flutes; twigs are nearly round. The base of the trunk
+        // deepens further still, which is what reads as buttress roots.
+        float ridge_amp = 0.04f + 0.07f * tg_smoothstep(1.0f, 8.0f, b->base_radius);
+        if (b->depth == 0)
+            ridge_amp *= 1.0f + 1.6f * (1.0f - tg_smoothstep(0.0f, 0.30f, t_arc));
+
         float phase = branch_phase_at(b, t_arc);
         float flex = powf(bp->root_dist / s->max_root_dist, 1.2f);
         float v = b->uv_v0 + bp->arc / TG_BARK_TILE;
@@ -546,21 +585,40 @@ static void sweep_branch(MeshBuilder* mb, const TreeSkeleton* s, const Branch* b
             float a = 2.0f * (float)M_PI * (float)j / (float)segs;
             float ca = cosf(a), sa = sinf(a);
 
-            vec3 radial, vpos, nrm, tng, btn;
+            vec3 radial, tangential, vpos, nrm, tng, btn;
             glm_vec3_scale(N, ca, radial);
             glm_vec3_muladds(B, sa, radial);
+            // d(radial)/da
+            glm_vec3_scale(N, -sa, tangential);
+            glm_vec3_muladds(B, ca, tangential);
+
+            float dprofile_da = 0.0f;
+            float profile = bark_profile(a, bp->arc, ph0, ph1, ph2, &dprofile_da);
+            float rr = r * (1.0f + ridge_amp * profile);
+            float dr_da = r * ridge_amp * dprofile_da;
 
             glm_vec3_copy((float*)bp->pos, vpos);
-            glm_vec3_muladds(radial, r, vpos);
+            glm_vec3_muladds(radial, rr, vpos);
 
-            // Normal leans by the taper slope: a cone's surface normal is not
-            // its radial direction.
-            glm_vec3_copy(radial, nrm);
-            glm_vec3_muladds(T, -slope, nrm);
+            // Exact surface normal for the fluted sweep: cross the two surface
+            // derivatives. Keeping the plain radial normal here would light the
+            // trunk as a smooth cylinder that merely happens to have a bumpy
+            // outline -- the flutes would only show in silhouette.
+            //   dP/da = tangential * rr + radial * dr/da
+            //   dP/ds = T           + radial * taper slope
+            vec3 dPda, dPds;
+            glm_vec3_scale(tangential, rr, dPda);
+            glm_vec3_muladds(radial, dr_da, dPda);
+            glm_vec3_copy(T, dPds);
+            glm_vec3_muladds(radial, slope, dPds);
+
+            glm_vec3_cross(dPda, dPds, nrm);
             glm_vec3_normalize(nrm);
 
-            glm_vec3_scale(N, -sa, tng);
-            glm_vec3_muladds(B, ca, tng);
+            // Tangent follows +u (around the circumference), re-orthogonalized
+            // against the real normal so the bark normal map stays square.
+            glm_vec3_copy(tangential, tng);
+            glm_vec3_muladds(nrm, -glm_vec3_dot(tng, nrm), tng);
             glm_vec3_normalize(tng);
 
             glm_vec3_cross(nrm, tng, btn);
@@ -616,11 +674,7 @@ bool tree_mesh_bark(const TreeSkeleton* skel, const TreeParams* p, Mesh* mesh) {
     size_t vres = 0, ires = 0;
     for (int i = 0; i < skel->branch_count; i++) {
         const Branch* b = &skel->branches[i];
-        int segs = 5 + (int)ceilf(b->base_radius * 1.5f);
-        if (segs > 20)
-            segs = 20;
-        if (segs < 5)
-            segs = 5;
+        int segs = branch_segs(b);
         vres += (size_t)b->num_points * (size_t)(segs + 1) + 1;
         ires += (size_t)(b->num_points - 1) * (size_t)segs * 6 + (size_t)segs * 3;
     }
