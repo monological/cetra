@@ -329,6 +329,13 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EngineRenderFunc render
 // and before the shadow pass. NULL restores the wall clock.
 void engine_set_render_clock(Engine* engine, const EngineFrameClock* clock);
 
+// The render (not display) resolution: the scene target is supersampled by
+// ss_scale and box-downsampled at tone map, so this is the size the scene pass
+// and every full-res post buffer actually rasterize into. Exported because
+// callers outside engine.c kept re-deriving fb_size * ss_scale by hand, and a
+// change to how render size is computed would silently miss them.
+void engine_render_size(const Engine* engine, int* w, int* h);
+
 // Set the frame's animation clock directly, for callers that do not go through
 // engine_run: an app driving render_current_scene from its own loop, or a
 // capture that pins the clock. `delta` is how far `time` advanced since the last

@@ -30,11 +30,13 @@ uniform float softDist;       // world-space fade band
 uniform sampler2D uSpriteTex;
 uniform int uSpriteEnabled;
 
+#include "depth.glsl"
+
 // Window-space depth [0,1] -> positive view-space distance from the camera.
+// This was the fourth copy of the projection-convention reconstruction; it had
+// drifted in FORM (sign folded differently) but not in value.
 float sceneViewDist(float d) {
-    float zndc = 2.0 * d - 1.0;
-    float zeye = projection[3][2] / (-zndc - projection[2][2]);
-    return -zeye;
+    return -viewZFromNdcZ(2.0 * d - 1.0);
 }
 
 // 3x3 PCF: cheaper than the catcher's, and motes are small enough that the

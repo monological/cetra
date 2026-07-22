@@ -18,23 +18,6 @@ uniform sampler2D transmittanceLut;
 const int SPHERE_DIRS = 64; // 8x8 lat-long quadrature over the sphere
 const int MARCH_STEPS = 20;
 
-// No ground cut here: this bake integrates THROUGH, unlike the three shaders
-// that sample the sky-view LUT.
-vec3 transmittanceTo(float r, float mu)
-{
-    return transmittanceLookup(transmittanceLut, r, mu);
-}
-
-// Combined in-scatter (Rayleigh + Mie) -- the isotropic-phase approximation
-// this LUT is built on does not need them separated.
-void scatteringAt(float h, out vec3 scatter, out vec3 extinction)
-{
-    vec3 rayleigh;
-    float mie;
-    atmosphereSample(h, rayleigh, mie, extinction);
-    scatter = rayleigh + vec3(mie);
-}
-
 void main()
 {
     // LUT axes: x = sun cos-zenith remapped from [-1,1], y = altitude
@@ -57,7 +40,7 @@ void main()
 
         bool ground = hitsGround(r, dir.y);
         float tMax =
-            ground ? distanceToGroundClamped(r, dir.y, Rg) : distanceToTopClamped(r, dir.y, Rt);
+            ground ? distanceToGround(r, dir.y) : distanceToTop(r, dir.y);
         float dt = tMax / float(MARCH_STEPS);
 
         vec3 through = vec3(1.0); // transmittance from the point to the sample
@@ -72,16 +55,17 @@ void main()
             vec3 up = normalize(vec3(0.0, r, 0.0) + dir * t);
             float mu_s_t = clamp(dot(up, sunDir), -1.0, 1.0);
 
-            vec3 scatter, extinction;
-            scatteringAt(rt - Rg, scatter, extinction);
+            // Isotropic-phase approximation: Rayleigh and Mie in-scatter combined.
+            Atmosphere atm = atmosphereAt(rt - Rg);
+            vec3 scatter = atm.rayleigh + vec3(atm.mie);
+            vec3 extinction = atm.extinction;
             vec3 stepTrans = exp(-extinction * dt);
             vec3 integ = (vec3(1.0) - stepTrans) / max(extinction, vec3(1e-6));
 
             // Sun light reaching the sample (zero if the sun is below the
             // local horizon; the transmittance LUT rows only cover
             // non-ground rays, hence the explicit test)
-            vec3 sunT = hitsGround(rt, mu_s_t) ? vec3(0.0)
-                                               : transmittanceTo(rt, mu_s_t);
+            vec3 sunT = transmittanceToSky(transmittanceLut, rt, mu_s_t);
 
             Ldir += through * scatter * integ * sunT * ISO_PHASE;
             fdir += through * scatter * integ;
@@ -92,7 +76,7 @@ void main()
             // Sun light bounced off the ground back toward the point
             vec3 groundPoint = vec3(0.0, r, 0.0) + dir * tMax;
             float mu_g = clamp(dot(normalize(groundPoint), sunDir), -1.0, 1.0);
-            vec3 sunT = mu_g > 0.0 ? transmittanceTo(Rg, mu_g) : vec3(0.0);
+            vec3 sunT = mu_g > 0.0 ? transmittanceLookup(transmittanceLut, Rg, mu_g) : vec3(0.0);
             Ldir += through * sunT * max(mu_g, 0.0) * (GROUND_ALBEDO / PI);
         }
 

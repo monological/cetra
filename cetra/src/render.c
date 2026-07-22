@@ -258,10 +258,12 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
         glBindTexture(GL_TEXTURE_2D, material->sheen_tex->id);
     }
 
-    if (material->reflectance_tex) {
-        glActiveTexture(GL_TEXTURE0 + TEXUNIT_REFLECTANCE);
-        glBindTexture(GL_TEXTURE_2D, material->reflectance_tex->id);
-    }
+    // No reflectance bind: nothing samples TEXUNIT_REFLECTANCE (the sampler
+    // uniform went with the rest of the dead KHR-specular plumbing), so this
+    // was a real glActiveTexture + glBindTexture per material switch feeding a
+    // unit no shader reads -- the costlier half of the pair whose cached,
+    // location-guarded uniform upload was already removed. common.h keeps the
+    // unit reserved for when the feature actually lands.
 
     if (material->clearcoat_normal_tex) {
         glActiveTexture(GL_TEXTURE0 + TEXUNIT_CLEARCOAT_NORMAL);
@@ -693,8 +695,8 @@ void render_current_scene(Engine* engine) {
     if (render_mode == RENDER_MODE_PBR && postfx_taa_active(engine->postfx) &&
         (!engine->headless || engine->headless_jitter)) {
         int j = (int)(engine->total_frames % 8) + 1;
-        int rw = engine->fb_width * engine->ss_scale;
-        int rh = engine->fb_height * engine->ss_scale;
+        int rw, rh;
+        engine_render_size(engine, &rw, &rh);
         draw_projection[2][0] += (_halton(j, 2) - 0.5f) * 2.0f / (float)rw;
         draw_projection[2][1] += (_halton(j, 3) - 0.5f) * 2.0f / (float)rh;
     }
@@ -976,9 +978,9 @@ void render_skeleton_bones(Engine* engine, Skeleton* skeleton, AnimationState* a
     // height. Multiplying by a point's distance gives the world size of one
     // pixel there, which is what keeps the quads a constant screen thickness.
     // Render (not display) height: the scene target is supersampled, so a
-    // "pixel" here is a render-target pixel, which is what the quads rasterize
-    // into. Mirrors engine_render_size, which is static to engine.c.
-    int render_h = engine->fb_height * engine->ss_scale;
+    // "pixel" here is a render-target pixel, which is what the quads rasterize into.
+    int render_w, render_h;
+    engine_render_size(engine, &render_w, &render_h);
     Camera* bone_cam = engine->camera;
     float world_per_px = (render_h > 0 && bone_cam)
                              ? (2.0f * tanf(bone_cam->fov_radians * 0.5f) / (float)render_h)

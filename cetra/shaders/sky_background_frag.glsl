@@ -17,11 +17,6 @@ uniform float sunIntensity; // scalar disc radiance scale
 
 #include "sky_lut.glsl"
 
-vec3 transmittanceTo(float r, float mu)
-{
-    return transmittanceToSky(transmittanceLut, r, mu);
-}
-
 void main()
 {
     vec3 dir = normalize(TexCoords);
@@ -36,7 +31,7 @@ void main()
     if (cosVS > sunCosRadius && dir.y > 0.0) {
         float edge = (cosVS - sunCosRadius) / (1.0 - sunCosRadius);
         float limb = 0.4 + 0.6 * sqrt(max(edge, 0.0)); // darker toward the rim
-        vec3 sunT = transmittanceTo(r, sunDir.y);
+        vec3 sunT = transmittanceToSky(transmittanceLut, r, sunDir.y);
         sky += sunT * sunIntensity * limb;
     }
 

@@ -9,12 +9,14 @@ layout(location = 0) in vec3 aPos;
 out vec3 WorldPos_vs;
 
 uniform mat4 model;
-uniform mat4 view;
-uniform mat4 projection;
 
 void main() {
     vec4 worldPos = model * vec4(aPos, 1.0);
     WorldPos_vs = worldPos.xyz;
 
-    gl_Position = projection * view * worldPos;
+    // shape_geo re-projects both endpoints itself from WorldPos_vs and never
+    // reads gl_in[].gl_Position, so nothing downstream consumes this -- the
+    // input primitive of a geometry stage is not rasterized. Written anyway so
+    // the output is defined, but with no view/projection multiply behind it.
+    gl_Position = worldPos;
 }
