@@ -2,8 +2,7 @@
 layout(location = 0) in vec3 aPos;
 layout(location = 1) in vec3 aNormal;
 layout(location = 2) in vec2 aTexCoords;
-layout(location = 3) in vec3 aTangent;
-layout(location = 4) in vec3 aBitangent;
+layout(location = 3) in vec4 aTangent; // xyz tangent, w bitangent handedness
 layout(location = 5) in vec4 aColor;
 layout(location = 8) in vec2 aTexCoords2;
 
@@ -150,10 +149,12 @@ void main() {
     TexCoords2 = aTexCoords2;
     VertexColor = aColor;
 
-    // Calculate the TBN matrix
-    vec3 T = normalize(mat3(model) * aTangent);
-    vec3 B = normalize(mat3(model) * aBitangent);
+    // TBN. The bitangent is derived rather than stored: aTangent.w carries its
+    // handedness (+1, or -1 on mirrored UV islands), which is the only thing
+    // the fragment stage ever took from an authored bitangent anyway.
+    vec3 T = normalize(mat3(model) * aTangent.xyz);
     vec3 N = normalize(mat3(model) * aNormal);
+    vec3 B = cross(N, T) * aTangent.w;
     TBN = mat3(T, B, N);
 
 

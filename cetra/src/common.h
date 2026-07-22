@@ -3,11 +3,13 @@
 
 #include <cglm/cglm.h>
 
-#define GL_ATTR_POSITION     0
-#define GL_ATTR_NORMAL       1
-#define GL_ATTR_TEXCOORD     2
-#define GL_ATTR_TANGENT      3
-#define GL_ATTR_BITANGENT    4
+#define GL_ATTR_POSITION 0
+#define GL_ATTR_NORMAL   1
+#define GL_ATTR_TEXCOORD 2
+#define GL_ATTR_TANGENT  3 // vec4 - xyz tangent, w bitangent handedness
+// Slot 4 is free. It held a bitangent stream until that turned out to be dead
+// weight: the fragment shader reconstructs B = cross(N, T) regardless and only
+// ever read the stored one for its sign, which now rides in tangent.w.
 #define GL_ATTR_COLOR        5
 #define GL_ATTR_BONE_IDS     6 // ivec4 - bone indices per vertex
 #define GL_ATTR_BONE_WEIGHTS 7 // vec4  - bone weights per vertex

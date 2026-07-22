@@ -2,8 +2,7 @@
 layout(location = 0) in vec3 aPos;
 layout(location = 1) in vec3 aNormal;
 layout(location = 2) in vec2 aTexCoords;
-layout(location = 3) in vec3 aTangent;
-layout(location = 4) in vec3 aBitangent;
+layout(location = 3) in vec4 aTangent; // xyz tangent, w handedness
 layout(location = 5) in vec4 aColor;
 layout(location = 6) in ivec4 aBoneIds;
 layout(location = 7) in vec4 aBoneWeights;
@@ -113,7 +112,6 @@ void main() {
     vec4 prevLocalPos; // Skinned position under last frame's pose (motion vectors)
     vec3 localNormal;
     vec3 localTangent;
-    vec3 localBitangent;
 
     if (skinned) {
         // Apply bone transforms weighted by bone weights (current and previous
@@ -145,20 +143,18 @@ void main() {
         // blended bone matrix; mat3(boneTransform) then skews the normal's
         // DIRECTION (normalize only fixes length), which the sharp specular
         // lobe turns into a field of bright specks on the animated mesh.
-        // Tangents/bitangents are surface vectors and use the forward matrix.
+        // Tangents are surface vectors and use the forward matrix.
         float boneDet = determinant(boneRotation);
         mat3 boneNormalMatrix =
             abs(boneDet) > 1e-8 ? transpose(inverse(boneRotation)) : boneRotation;
         localNormal = boneNormalMatrix * aNormal;
-        localTangent = boneRotation * aTangent;
-        localBitangent = boneRotation * aBitangent;
+        localTangent = boneRotation * aTangent.xyz;
     } else {
         // Non-skinned: pass through unchanged
         localPos = vec4(aPos, 1.0);
         prevLocalPos = vec4(aPos, 1.0);
         localNormal = aNormal;
-        localTangent = aTangent;
-        localBitangent = aBitangent;
+        localTangent = aTangent.xyz;
     }
 
     // Wind (object-space displacement, masked by height). aPos is the un-skinned
@@ -191,10 +187,13 @@ void main() {
     TexCoords2 = aTexCoords2;
     VertexColor = aColor;
 
-    // Calculate TBN matrix for normal mapping
+    // TBN. Deriving the bitangent AFTER the bone and model transforms is also
+    // more correct than rotating an authored one: a blended bone matrix can
+    // carry non-uniform scale, which shears a transformed bitangent out of
+    // square with its own normal and tangent.
     vec3 T = normalize(mat3(model) * localTangent);
-    vec3 B = normalize(mat3(model) * localBitangent);
     vec3 N = normalize(mat3(model) * localNormal);
+    vec3 B = cross(N, T) * aTangent.w;
     TBN = mat3(T, B, N);
 
     gl_Position = clipPos;

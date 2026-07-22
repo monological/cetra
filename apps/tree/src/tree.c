@@ -812,8 +812,7 @@ static void generate_island_mesh(Mesh* mesh, float radius, float height, int rin
     mesh->vertices = malloc(num_vertices * 3 * sizeof(float));
     mesh->normals = malloc(num_vertices * 3 * sizeof(float));
     mesh->tex_coords = malloc(num_vertices * 2 * sizeof(float));
-    mesh->tangents = malloc(num_vertices * 3 * sizeof(float));
-    mesh->bitangents = malloc(num_vertices * 3 * sizeof(float));
+    mesh->tangents = malloc(num_vertices * 4 * sizeof(float)); // xyz + handedness
     mesh->index_count = num_triangles * 3;
     mesh->indices = malloc(mesh->index_count * sizeof(unsigned int));
 
@@ -827,9 +826,7 @@ static void generate_island_mesh(Mesh* mesh, float radius, float height, int rin
     mesh->tangents[0] = 1.0f;
     mesh->tangents[1] = 0.0f;
     mesh->tangents[2] = 0.0f;
-    mesh->bitangents[0] = 0.0f;
-    mesh->bitangents[1] = 0.0f;
-    mesh->bitangents[2] = 1.0f;
+    mesh->tangents[3] = 1.0f; // cross((0,1,0), (1,0,0)) = (0,0,1)
     mesh->tex_coords[0] = 0.5f * uv_tiles;
     mesh->tex_coords[1] = 0.5f * uv_tiles;
 
@@ -859,18 +856,14 @@ static void generate_island_mesh(Mesh* mesh, float radius, float height, int rin
             mesh->normals[vi * 3 + 1] = normal[1];
             mesh->normals[vi * 3 + 2] = normal[2];
 
-            // Tangent along the circle (perpendicular to radial)
-            mesh->tangents[vi * 3] = -sinf(angle);
-            mesh->tangents[vi * 3 + 1] = 0.0f;
-            mesh->tangents[vi * 3 + 2] = cosf(angle);
-
-            // Bitangent (cross of normal and tangent), which tilts with the
-            // slope so the TBN stays orthonormal for the normal map
-            vec3 bitangent = {cosf(angle), -slope, sinf(angle)};
-            glm_vec3_normalize(bitangent);
-            mesh->bitangents[vi * 3] = bitangent[0];
-            mesh->bitangents[vi * 3 + 1] = bitangent[1];
-            mesh->bitangents[vi * 3 + 2] = bitangent[2];
+            // Tangent along the circle (perpendicular to radial). The shader
+            // derives the bitangent as cross(N, T), which for this normal and
+            // tangent works out to (cos, -slope, sin) -- the slope-tilted
+            // vector this used to store explicitly -- so the handedness is +1.
+            mesh->tangents[vi * 4] = -sinf(angle);
+            mesh->tangents[vi * 4 + 1] = 0.0f;
+            mesh->tangents[vi * 4 + 2] = cosf(angle);
+            mesh->tangents[vi * 4 + 3] = 1.0f;
 
             // UV coordinates, tiled so a terrain-sized disc keeps texel detail
             mesh->tex_coords[vi * 2] = (0.5f + 0.5f * x / radius) * uv_tiles;

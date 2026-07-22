@@ -440,14 +440,11 @@ void generate_cylinder_to_mesh(Mesh* mesh, const Cylinder* cylinder) {
     float* new_tex_coords =
         (float*)safe_realloc(mesh->tex_coords, mesh->vertex_count * 2 * sizeof(float));
     float* new_tangents =
-        (float*)safe_realloc(mesh->tangents, mesh->vertex_count * 3 * sizeof(float));
-    float* new_bitangents =
-        (float*)safe_realloc(mesh->bitangents, mesh->vertex_count * 3 * sizeof(float));
+        (float*)safe_realloc(mesh->tangents, mesh->vertex_count * 4 * sizeof(float));
     unsigned int* new_indices =
         (unsigned int*)safe_realloc(mesh->indices, mesh->index_count * sizeof(unsigned int));
 
-    if (!new_vertices || !new_normals || !new_tex_coords || !new_tangents || !new_bitangents ||
-        !new_indices) {
+    if (!new_vertices || !new_normals || !new_tex_coords || !new_tangents || !new_indices) {
         if (new_vertices)
             mesh->vertices = new_vertices;
         if (new_normals)
@@ -456,8 +453,6 @@ void generate_cylinder_to_mesh(Mesh* mesh, const Cylinder* cylinder) {
             mesh->tex_coords = new_tex_coords;
         if (new_tangents)
             mesh->tangents = new_tangents;
-        if (new_bitangents)
-            mesh->bitangents = new_bitangents;
         if (new_indices)
             mesh->indices = new_indices;
         return;
@@ -466,7 +461,6 @@ void generate_cylinder_to_mesh(Mesh* mesh, const Cylinder* cylinder) {
     mesh->normals = new_normals;
     mesh->tex_coords = new_tex_coords;
     mesh->tangents = new_tangents;
-    mesh->bitangents = new_bitangents;
     mesh->indices = new_indices;
 
     // Generate vertices for bottom and top rings
@@ -515,32 +509,16 @@ void generate_cylinder_to_mesh(Mesh* mesh, const Cylinder* cylinder) {
         float ty = 0.0f;
         float tz = cos_t;
 
-        mesh->tangents[i * 3 + 0] = tx;
-        mesh->tangents[i * 3 + 1] = ty;
-        mesh->tangents[i * 3 + 2] = tz;
+        // w = 1: the bitangent is cross(N, T), which is what the shader derives.
+        mesh->tangents[i * 4 + 0] = tx;
+        mesh->tangents[i * 4 + 1] = ty;
+        mesh->tangents[i * 4 + 2] = tz;
+        mesh->tangents[i * 4 + 3] = 1.0f;
 
-        mesh->tangents[top_idx * 3 + 0] = tx;
-        mesh->tangents[top_idx * 3 + 1] = ty;
-        mesh->tangents[top_idx * 3 + 2] = tz;
-
-        // Bitangent: cross(normal, tangent) for proper TBN
-        float bx = ny * tz - nz * ty;
-        float by = nz * tx - nx * tz;
-        float bz = nx * ty - ny * tx;
-        float blen = sqrtf(bx * bx + by * by + bz * bz);
-        if (blen > 0.0001f) {
-            bx /= blen;
-            by /= blen;
-            bz /= blen;
-        }
-
-        mesh->bitangents[i * 3 + 0] = bx;
-        mesh->bitangents[i * 3 + 1] = by;
-        mesh->bitangents[i * 3 + 2] = bz;
-
-        mesh->bitangents[top_idx * 3 + 0] = bx;
-        mesh->bitangents[top_idx * 3 + 1] = by;
-        mesh->bitangents[top_idx * 3 + 2] = bz;
+        mesh->tangents[top_idx * 4 + 0] = tx;
+        mesh->tangents[top_idx * 4 + 1] = ty;
+        mesh->tangents[top_idx * 4 + 2] = tz;
+        mesh->tangents[top_idx * 4 + 3] = 1.0f;
 
         // UV coordinates: U wraps around, V goes 0 at bottom to 1 at top
         mesh->tex_coords[i * 2 + 0] = u;
@@ -592,14 +570,11 @@ void generate_box_to_mesh(Mesh* mesh, const Box* box) {
     float* new_tex_coords =
         (float*)safe_realloc(mesh->tex_coords, mesh->vertex_count * 2 * sizeof(float));
     float* new_tangents =
-        (float*)safe_realloc(mesh->tangents, mesh->vertex_count * 3 * sizeof(float));
-    float* new_bitangents =
-        (float*)safe_realloc(mesh->bitangents, mesh->vertex_count * 3 * sizeof(float));
+        (float*)safe_realloc(mesh->tangents, mesh->vertex_count * 4 * sizeof(float));
     unsigned int* new_indices =
         (unsigned int*)safe_realloc(mesh->indices, mesh->index_count * sizeof(unsigned int));
 
-    if (!new_vertices || !new_normals || !new_tex_coords || !new_tangents || !new_bitangents ||
-        !new_indices) {
+    if (!new_vertices || !new_normals || !new_tex_coords || !new_tangents || !new_indices) {
         if (new_vertices)
             mesh->vertices = new_vertices;
         if (new_normals)
@@ -608,8 +583,6 @@ void generate_box_to_mesh(Mesh* mesh, const Box* box) {
             mesh->tex_coords = new_tex_coords;
         if (new_tangents)
             mesh->tangents = new_tangents;
-        if (new_bitangents)
-            mesh->bitangents = new_bitangents;
         if (new_indices)
             mesh->indices = new_indices;
         return;
@@ -618,7 +591,6 @@ void generate_box_to_mesh(Mesh* mesh, const Box* box) {
     mesh->normals = new_normals;
     mesh->tex_coords = new_tex_coords;
     mesh->tangents = new_tangents;
-    mesh->bitangents = new_bitangents;
     mesh->indices = new_indices;
 
     // Face data: vertices, normal, tangent for each face
@@ -722,22 +694,15 @@ void generate_box_to_mesh(Mesh* mesh, const Box* box) {
         0, 0, 1, 0, 1, 1, 0, 1, // Left
     };
 
+    // xyz tangent, w handedness. Every face's bitangent is exactly cross(N, T),
+    // so w is +1 throughout -- a box has no mirrored UVs to encode.
     float tangs[] = {
-        1,  0, 0,  1,  0, 0,  1,  0, 0,  1,  0, 0,  // Front
-        -1, 0, 0,  -1, 0, 0,  -1, 0, 0,  -1, 0, 0,  // Back
-        1,  0, 0,  1,  0, 0,  1,  0, 0,  1,  0, 0,  // Top
-        1,  0, 0,  1,  0, 0,  1,  0, 0,  1,  0, 0,  // Bottom
-        0,  0, -1, 0,  0, -1, 0,  0, -1, 0,  0, -1, // Right
-        0,  0, 1,  0,  0, 1,  0,  0, 1,  0,  0, 1,  // Left
-    };
-
-    float bitangs[] = {
-        0, 1, 0,  0, 1, 0,  0, 1, 0,  0, 1, 0,  // Front
-        0, 1, 0,  0, 1, 0,  0, 1, 0,  0, 1, 0,  // Back
-        0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1, // Top
-        0, 0, 1,  0, 0, 1,  0, 0, 1,  0, 0, 1,  // Bottom
-        0, 1, 0,  0, 1, 0,  0, 1, 0,  0, 1, 0,  // Right
-        0, 1, 0,  0, 1, 0,  0, 1, 0,  0, 1, 0,  // Left
+        1,  0, 0,  1, 1,  0, 0,  1, 1,  0, 0,  1, 1,  0, 0,  1, // Front
+        -1, 0, 0,  1, -1, 0, 0,  1, -1, 0, 0,  1, -1, 0, 0,  1, // Back
+        1,  0, 0,  1, 1,  0, 0,  1, 1,  0, 0,  1, 1,  0, 0,  1, // Top
+        1,  0, 0,  1, 1,  0, 0,  1, 1,  0, 0,  1, 1,  0, 0,  1, // Bottom
+        0,  0, -1, 1, 0,  0, -1, 1, 0,  0, -1, 1, 0,  0, -1, 1, // Right
+        0,  0, 1,  1, 0,  0, 1,  1, 0,  0, 1,  1, 0,  0, 1,  1, // Left
     };
 
     unsigned int inds[] = {
@@ -753,7 +718,6 @@ void generate_box_to_mesh(Mesh* mesh, const Box* box) {
     memcpy(mesh->normals, norms, sizeof(norms));
     memcpy(mesh->tex_coords, uvs, sizeof(uvs));
     memcpy(mesh->tangents, tangs, sizeof(tangs));
-    memcpy(mesh->bitangents, bitangs, sizeof(bitangs));
     memcpy(mesh->indices, inds, sizeof(inds));
 
     mesh->draw_mode = TRIANGLES;
@@ -787,14 +751,11 @@ void generate_plane_to_mesh(Mesh* mesh, const Plane* plane) {
     float* new_tex_coords =
         (float*)safe_realloc(mesh->tex_coords, mesh->vertex_count * 2 * sizeof(float));
     float* new_tangents =
-        (float*)safe_realloc(mesh->tangents, mesh->vertex_count * 3 * sizeof(float));
-    float* new_bitangents =
-        (float*)safe_realloc(mesh->bitangents, mesh->vertex_count * 3 * sizeof(float));
+        (float*)safe_realloc(mesh->tangents, mesh->vertex_count * 4 * sizeof(float));
     unsigned int* new_indices =
         (unsigned int*)safe_realloc(mesh->indices, mesh->index_count * sizeof(unsigned int));
 
-    if (!new_vertices || !new_normals || !new_tex_coords || !new_tangents || !new_bitangents ||
-        !new_indices) {
+    if (!new_vertices || !new_normals || !new_tex_coords || !new_tangents || !new_indices) {
         if (new_vertices)
             mesh->vertices = new_vertices;
         if (new_normals)
@@ -803,8 +764,6 @@ void generate_plane_to_mesh(Mesh* mesh, const Plane* plane) {
             mesh->tex_coords = new_tex_coords;
         if (new_tangents)
             mesh->tangents = new_tangents;
-        if (new_bitangents)
-            mesh->bitangents = new_bitangents;
         if (new_indices)
             mesh->indices = new_indices;
         return;
@@ -813,7 +772,6 @@ void generate_plane_to_mesh(Mesh* mesh, const Plane* plane) {
     mesh->normals = new_normals;
     mesh->tex_coords = new_tex_coords;
     mesh->tangents = new_tangents;
-    mesh->bitangents = new_bitangents;
     mesh->indices = new_indices;
 
     // Generate vertices
@@ -834,13 +792,11 @@ void generate_plane_to_mesh(Mesh* mesh, const Plane* plane) {
             mesh->tex_coords[vi * 2 + 0] = u * segs_w;
             mesh->tex_coords[vi * 2 + 1] = v * segs_d;
 
-            mesh->tangents[vi * 3 + 0] = 1.0f;
-            mesh->tangents[vi * 3 + 1] = 0.0f;
-            mesh->tangents[vi * 3 + 2] = 0.0f;
-
-            mesh->bitangents[vi * 3 + 0] = 0.0f;
-            mesh->bitangents[vi * 3 + 1] = 0.0f;
-            mesh->bitangents[vi * 3 + 2] = 1.0f;
+            // cross(N, T) = cross((0,1,0), (1,0,0)) = (0,0,1), so w = +1.
+            mesh->tangents[vi * 4 + 0] = 1.0f;
+            mesh->tangents[vi * 4 + 1] = 0.0f;
+            mesh->tangents[vi * 4 + 2] = 0.0f;
+            mesh->tangents[vi * 4 + 3] = 1.0f;
 
             vi++;
         }
@@ -894,14 +850,11 @@ void generate_sphere_to_mesh(Mesh* mesh, const Sphere* sphere) {
     float* new_tex_coords =
         (float*)safe_realloc(mesh->tex_coords, mesh->vertex_count * 2 * sizeof(float));
     float* new_tangents =
-        (float*)safe_realloc(mesh->tangents, mesh->vertex_count * 3 * sizeof(float));
-    float* new_bitangents =
-        (float*)safe_realloc(mesh->bitangents, mesh->vertex_count * 3 * sizeof(float));
+        (float*)safe_realloc(mesh->tangents, mesh->vertex_count * 4 * sizeof(float));
     unsigned int* new_indices =
         (unsigned int*)safe_realloc(mesh->indices, mesh->index_count * sizeof(unsigned int));
 
-    if (!new_vertices || !new_normals || !new_tex_coords || !new_tangents || !new_bitangents ||
-        !new_indices) {
+    if (!new_vertices || !new_normals || !new_tex_coords || !new_tangents || !new_indices) {
         if (new_vertices)
             mesh->vertices = new_vertices;
         if (new_normals)
@@ -910,8 +863,6 @@ void generate_sphere_to_mesh(Mesh* mesh, const Sphere* sphere) {
             mesh->tex_coords = new_tex_coords;
         if (new_tangents)
             mesh->tangents = new_tangents;
-        if (new_bitangents)
-            mesh->bitangents = new_bitangents;
         if (new_indices)
             mesh->indices = new_indices;
         return;
@@ -920,7 +871,6 @@ void generate_sphere_to_mesh(Mesh* mesh, const Sphere* sphere) {
     mesh->normals = new_normals;
     mesh->tex_coords = new_tex_coords;
     mesh->tangents = new_tangents;
-    mesh->bitangents = new_bitangents;
     mesh->indices = new_indices;
 
     // A latitude/longitude grid. Row j spans the pole-to-pole angle theta (0 at
@@ -948,19 +898,18 @@ void generate_sphere_to_mesh(Mesh* mesh, const Sphere* sphere) {
             mesh->tex_coords[vi * 2 + 0] = (float)i / (float)segs_lon;
             mesh->tex_coords[vi * 2 + 1] = (float)j / (float)segs_lat;
 
-            // Tangent along +phi; bitangent = normal x tangent. Degenerate at the
-            // poles (st==0) -> fall back to a fixed axis.
+            // Tangent along +phi; the shader derives the bitangent as
+            // cross(N, T), so w = +1. Degenerate at the poles (st==0) -> fall
+            // back to a fixed axis.
             float tx = -sp, ty = 0.0f, tz = cp;
             if (st < 1e-5f) {
                 tx = 1.0f;
                 tz = 0.0f;
             }
-            mesh->tangents[vi * 3 + 0] = tx;
-            mesh->tangents[vi * 3 + 1] = ty;
-            mesh->tangents[vi * 3 + 2] = tz;
-            mesh->bitangents[vi * 3 + 0] = ny * tz - nz * ty;
-            mesh->bitangents[vi * 3 + 1] = nz * tx - nx * tz;
-            mesh->bitangents[vi * 3 + 2] = nx * ty - ny * tx;
+            mesh->tangents[vi * 4 + 0] = tx;
+            mesh->tangents[vi * 4 + 1] = ty;
+            mesh->tangents[vi * 4 + 2] = tz;
+            mesh->tangents[vi * 4 + 3] = 1.0f;
 
             vi++;
         }

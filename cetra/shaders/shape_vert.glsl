@@ -2,8 +2,7 @@
 layout(location = 0) in vec3 aPos;
 layout(location = 1) in vec3 aNormal;
 layout(location = 2) in vec2 aTexCoords;
-layout(location = 3) in vec3 aTangent;
-layout(location = 4) in vec3 aBitangent;
+layout(location = 3) in vec4 aTangent; // xyz tangent, w handedness
 
 out vec3 Normal_vs;
 out vec3 WorldPos_vs;     // World position
@@ -60,10 +59,10 @@ void main() {
     Normal_vs = normalize(mat3(transpose(inverse(model))) * aNormal);
     TexCoords_vs = aTexCoords;
 
-    // Calculate the TBN matrix
-    vec3 T = normalize(mat3(model) * aTangent);
-    vec3 B = normalize(mat3(model) * aBitangent);
+    // TBN, bitangent derived from the tangent's handedness (see pbr_vert).
+    vec3 T = normalize(mat3(model) * aTangent.xyz);
     vec3 N = normalize(mat3(model) * aNormal);
+    vec3 B = cross(N, T) * aTangent.w;
     TBN_vs = mat3(T, B, N);
 
     gl_Position = clipPos;
