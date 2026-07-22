@@ -6,7 +6,7 @@ subsystem sweep. Companion to `rendering-roadmap.md` — **that** doc owns the
 graphics pipeline in depth; **this** doc owns everything else (physics, gameplay,
 assets, core, and the gaps between "engine" and "shippable game").
 
-_Last updated: 2026-07-20._
+_Last updated: 2026-07-21._
 
 ---
 
@@ -77,9 +77,37 @@ Built on **Jolt Physics** via the JoltC C wrapper (`cetra/src/game/`).
 - **Asset import (Assimp)** — FBX/glTF/GLB/OBJ; full PBR material extraction
   incl. KHR extensions; embedded textures; skeletons; animations; lights;
   cameras. Per-format UV-flip and FBX pivot handling.
-- **Async loading** — 4-thread pool for texture decode with main-thread GL
-  upload handoff. _Textures only; geometry/skeleton/animation parse is
-  synchronous._
+- **Async loading** — worker pool for texture decode with main-thread GL upload
+  handoff, sized from the machine (cores-2, clamped to [2,8]). File paths and
+  compressed embedded images both stream; requests for a key already decoding
+  attach to it rather than decoding twice. Loading the `abandoned_window` scene
+  went 11.2s → 4.7s this way (§5.7). _Textures only; geometry/skeleton/animation
+  parse is still synchronous._
+
+### Particles & VFX (shipped)
+
+A general Niagara-style system, not a one-off effect: **System → Emitter →
+composable spawn/init/update Modules → pluggable Renderer**, over SoA pools with
+swap-remove compaction. Particle systems are scene citizens — a `SceneNode`
+borrows one, the `Scene` owns it, and the framework auto-ticks and auto-renders
+it. Two sim backends behind a vtable: CPU, and **GPU via transform feedback**
+(GL 4.1 has no compute). Curl-noise/drift/collider modules, soft depth-faded
+billboards. Demos: `spores`, and the `abandoned_window` dust. (§5.0–5.3)
+
+### Wind (shipped)
+
+First-class directional wind as a scene object (direction/strength/speed/gust/
+turbulence), applied as world-position offset in the vertex shader with a
+per-mesh height mask, and displaced at both current and previous time so motion
+vectors stay correct under TAA. Per-material `wind_response` opts geometry in.
+Authored in `.cscn`, not hardcoded. (§5.5)
+
+### Scene format (`.cscn`)
+
+A text scene-description format (`cscene.c`) layered over imported models:
+environment, lights, post-processing, wind, dust, material overrides and camera,
+using a presence-flag pattern so unspecified fields keep engine defaults. This is
+authoring/description, **not** save-game state. (§6.0)
 
 ### Core, scene, text, input (functional)
 
@@ -97,16 +125,22 @@ Built on **Jolt Physics** via the JoltC C wrapper (`cetra/src/game/`).
 
 ### Apps (working demos)
 
-`render` (flagship model/scene viewer + CI screenshot driver), `gametest` (a
-genuinely playable physics sandbox: WASD character with jump, spawnable crates,
-raycasts, a motorized hinge door you push open), `tree` (procedural trees),
-`shapes` / `pcb` (2D primitive demos), `splash` (SDF text showcase).
+`render` (flagship model/scene viewer, `.cscn` driver + CI screenshot harness),
+`gametest` (a genuinely playable physics sandbox: WASD character with jump,
+spawnable crates, raycasts, a motorized hinge door you push open), `spores`
+(curl-noise particle room on the game loop, headless-capable), `tree`
+(procedural trees), `shapes` / `pcb` (2D primitive demos), `splash` (SDF text
+showcase).
 
 ### Build & dependencies
 
-CMake + Ninja (`build.sh`), clang C11 / C++17. System deps: GLFW3, GLEW, cglm,
-Assimp. Vendored: JoltC (Jolt Physics), cimgui/Dear ImGui, stb, cwalk, uthash,
-log.c. Python3 generates `shader_strings.h` from `shaders/*.glsl` at build time.
+CMake + Ninja (`build.sh`), clang `gnu11` / `gnu++17` (CMake's `C_EXTENSIONS`
+defaults to ON, so the emitted flag is `gnu11`, not `c11`). The `cetra` target
+also compiles with `-D_POSIX_C_SOURCE=200809L` for JoltC, which on macOS hides
+Darwin extensions — a file needing them defines `_DARWIN_C_SOURCE` first (see
+`util.c`). System deps found via pkg-config: GLFW3, GLEW, cglm, Assimp.
+Vendored: JoltC (Jolt Physics), cimgui/Dear ImGui, stb, cwalk, uthash, log.c.
+Python3 generates `shader_strings.h` from `shaders/*.glsl` at build time.
 
 ---
 
@@ -119,13 +153,12 @@ are rough and assume a single experienced dev.
 |---|---|---|---|
 | **Audio** | Absent (only an unimplemented `AUDIO_SOURCE` enum) | No game ships silent. Needs SFX, music, 3D positional audio. | ~1 week (drop in miniaudio) |
 | **Gamepad input** | Absent (kb/mouse only) | Steam players expect controller support. GLFW already exposes `glfwGetGamepadState`. | ~1–2 days |
-| **Save / serialization** | Absent (no state or scene persistence) | Save games, settings, level format. No JSON/binary serializer yet. | ~1–2 weeks |
+| **Save / serialization** | Partial — `.cscn` describes scenes, but nothing persists runtime state | The level/authoring half exists (§6.0). Still missing: save games, settings persistence, and any entity/physics state serializer. | ~1–2 weeks |
 | **Game UI / menus** | Absent (ImGui is dev-only; SDF text exists) | Main menu, HUD, pause, inventory, settings screens. | ~2–3 weeks |
 | **Animation blending** | Absent (one clip at a time) | Smooth locomotion (idle↔walk↔run), layered actions. Needed for believable characters. | ~1–2 weeks |
-| **Particle system** | Absent | Dust, smoke, embers, weather, impacts. (Actively being designed.) | ~1–2 weeks first pass |
 | **Steamworks integration** | Absent | Achievements, cloud saves, overlay, input API. Needed near ship. | ~1 week |
 | **IK** | Absent | Foot planting, look-at/aim. Quality-of-life, not blocking. | ~1 week (two-bone) |
-| **Particles/VFX authoring, scripting, navmesh/AI, networking** | Absent | Only needed depending on genre. Scripting (Lua) speeds iteration; navmesh/AI for enemies; networking for multiplayer. | genre-dependent |
+| **VFX authoring, scripting, navmesh/AI, networking** | Absent | Only needed depending on genre. The particle system exists but emitters are built in code — an authoring/preset layer would come before heavy VFX work. Scripting (Lua) speeds iteration; navmesh/AI for enemies; networking for multiplayer. | genre-dependent |
 
 Also worth noting (not "gaps" but design ceilings):
 
@@ -150,9 +183,8 @@ its own branch.
 4. **Game UI layer** (~2–3 weeks) — retained-mode menu/HUD built on the SDF text
    renderer (or a thin immediate-mode game UI distinct from debug ImGui).
 5. **Save/settings serialization** (~1–2 weeks) — start with settings + a simple
-   scene/entity save format.
-6. **Particle/VFX system** (~1–2 weeks first pass) — atmosphere and impact FX.
-7. **Steamworks** (~week, near ship) — achievements, cloud, overlay.
+   entity/state save format; `.cscn` already covers scene description.
+6. **Steamworks** (~week, near ship) — achievements, cloud, overlay.
 
 Fill in genre-specific systems (scripting, AI/navmesh, networking) only as the
 actual game design demands them (YAGNI).
