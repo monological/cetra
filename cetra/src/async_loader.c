@@ -9,6 +9,40 @@
 #include "async_loader.h"
 #include "util.h"
 
+/*
+ * A caller that asked for a key already being decoded. Rather than decoding the
+ * image a second time it rides along on the in-flight load, and is invoked with
+ * the same Texture when that load lands.
+ */
+typedef struct TextureWaiter {
+    void (*callback)(Texture* tex, void* user_data);
+    void* user_data;
+
+    struct TextureWaiter* next;
+} TextureWaiter;
+
+/*
+ * One decode in flight, keyed by the caller's submit key. Lives from submit
+ * until async_loader_process_pending finalizes it. The texture pool cannot fill
+ * this role: nothing reaches the pool until the GL upload, which is many frames
+ * after the requests were queued.
+ *
+ * "In flight" means "this key has an owner you can join", which is very slightly
+ * weaker than "exactly one decode is running for this key" -- see the allocation
+ * fallbacks in inflight_join_or_claim.
+ */
+struct InFlightLoad {
+    // Identity is (pool, key), not key alone: one AsyncLoader is owned by the
+    // Engine while a TexturePool belongs to a Scene, and embedded keys ("*0",
+    // "*1", ...) repeat in every glTF. Matching on the string alone would hand
+    // one scene's image to another scene's material.
+    TexturePool* pool;
+    char* key;
+    TextureWaiter* waiters;
+
+    struct InFlightLoad* next;
+};
+
 // Fill a result from freshly decoded pixels: repair transparent texels (RGBA
 // only) off the main thread, then record what the GL upload will need. Shared
 // by both decode sources so file and embedded textures cannot drift.
@@ -35,7 +69,7 @@ static void finalize_decoded_result(TextureLoadResult* result, unsigned char* pi
 // and BASE_COLOR, metallicRoughness as both METALNESS and DIFFUSE_ROUGHNESS),
 // so a material resolves the same key repeatedly, and every one of those lands
 // before the first decode has finished and reached the pool.
-static bool inflight_join_or_claim(AsyncLoader* loader, const char* key,
+static bool inflight_join_or_claim(AsyncLoader* loader, TexturePool* pool, const char* key,
                                    void (*callback)(Texture* tex, void* user_data),
                                    void* user_data) {
     bool joined = false;
@@ -43,7 +77,7 @@ static bool inflight_join_or_claim(AsyncLoader* loader, const char* key,
     pthread_mutex_lock(&loader->inflight_mutex);
 
     InFlightLoad* entry = loader->inflight;
-    while (entry && strcmp(entry->key, key) != 0) {
+    while (entry && (entry->pool != pool || strcmp(entry->key, key) != 0)) {
         entry = entry->next;
     }
 
@@ -63,11 +97,23 @@ static bool inflight_join_or_claim(AsyncLoader* loader, const char* key,
         if (fresh) {
             fresh->key = safe_strdup(key);
             if (fresh->key) {
+                fresh->pool = pool;
                 fresh->next = loader->inflight;
                 loader->inflight = fresh;
             } else {
                 free(fresh);
+                fresh = NULL;
             }
+        }
+        // Registration failed. Still reported as a claim, so this caller decodes
+        // and is answered normally -- only dedup is lost, and concurrent
+        // duplicates of this key each decode their own copy. Wasteful, never
+        // wrong, and worth knowing about because it looks identical to dedup
+        // simply not being hit.
+        if (!fresh) {
+            log_warn("Texture dedup registry allocation failed for '%s'; "
+                     "duplicate requests will each decode",
+                     key);
         }
     }
 
@@ -76,9 +122,15 @@ static bool inflight_join_or_claim(AsyncLoader* loader, const char* key,
 }
 
 // Detach `key`'s in-flight entry and hand back its waiter list (caller owns and
-// must free it). Returns NULL when nothing joined, which is also the correct
-// answer for a failed decode -- the waiters still get invoked, with NULL.
-static TextureWaiter* inflight_release(AsyncLoader* loader, const char* key) {
+// must free it).
+//
+// NULL covers three distinct cases: the key was registered but nobody joined it,
+// the decode failed (waiters are still delivered, with NULL), or the key was
+// never registered at all. Every current caller treats those identically; a
+// caller that must tell them apart should return found/not-found separately
+// rather than overloading the return.
+static TextureWaiter* inflight_release(AsyncLoader* loader, const TexturePool* pool,
+                                       const char* key) {
     if (!key) {
         return NULL;
     }
@@ -88,7 +140,7 @@ static TextureWaiter* inflight_release(AsyncLoader* loader, const char* key) {
     pthread_mutex_lock(&loader->inflight_mutex);
     InFlightLoad** link = &loader->inflight;
     while (*link) {
-        if (strcmp((*link)->key, key) == 0) {
+        if ((*link)->pool == pool && strcmp((*link)->key, key) == 0) {
             InFlightLoad* entry = *link;
             *link = entry->next;
             waiters = entry->waiters;
@@ -116,19 +168,20 @@ static void waiters_deliver(TextureWaiter* waiter, Texture* texture) {
     }
 }
 
-// Give up a key claimed by inflight_join_or_claim when the submission then
-// fails. Without this the key stays registered against a decode that will never
-// run, and every later request for it would wait forever.
-static void inflight_abandon(AsyncLoader* loader, const char* key) {
-    waiters_deliver(inflight_release(loader, key), NULL);
-}
-
 // Publish a filled request to the work queue and wake a worker. pending_count
-// counts submitted-but-not-yet-finalized work, so it must rise here and fall
-// only in async_loader_process_pending -- the load-time drains that gate the
-// mask-array build and probe capture wait on it reaching zero.
+// counts submitted-but-not-yet-finalized work; the load-time drains that gate
+// the mask-array build and the probe capture wait on it reaching zero. It falls
+// again in async_loader_process_pending, or in the worker if the request has to
+// be dropped there.
+//
+// The count rises BEFORE the request is visible to a worker: a fast-failing
+// decode can otherwise reach the completion queue and be decremented before the
+// increment lands, underflowing an unsigned counter that would then never read
+// zero again.
 static void async_loader_enqueue(AsyncLoader* loader, TextureLoadRequest* req) {
     req->next = NULL;
+
+    atomic_fetch_add(&loader->pending_count, 1);
 
     pthread_mutex_lock(&loader->work_mutex);
     if (loader->work_tail) {
@@ -139,8 +192,6 @@ static void async_loader_enqueue(AsyncLoader* loader, TextureLoadRequest* req) {
     loader->work_tail = req;
     pthread_cond_signal(&loader->work_cond);
     pthread_mutex_unlock(&loader->work_mutex);
-
-    atomic_fetch_add(&loader->pending_count, 1);
 }
 
 /*
@@ -186,7 +237,7 @@ static void* worker_thread_func(void* arg) {
             // request must be free to start its own decode instead of waiting
             // forever. The waiters are discarded rather than invoked: their
             // callbacks touch materials and may only run on the main thread.
-            TextureWaiter* orphaned = inflight_release(loader, req->filepath);
+            TextureWaiter* orphaned = inflight_release(loader, req->pool, req->filepath);
             while (orphaned) {
                 TextureWaiter* next_orphan = orphaned->next;
                 free(orphaned);
@@ -201,37 +252,39 @@ static void* worker_thread_func(void* arg) {
 
         result->callback = req->callback;
         result->user_data = req->user_data;
-        // Kept distinct from filepath below: the file branch resolves that to
-        // an on-disk path, but the in-flight registry is keyed by what the
-        // caller submitted.
-        result->key = safe_strdup(req->filepath);
+        // Moved, not copied. submit_key is the only handle back to the in-flight
+        // registry, so it must exist for every result -- a copy here could fail
+        // and strand the key claimed forever.
+        result->submit_key = req->filepath;
+        req->filepath = NULL;
 
         // Embedded texture: decode the compressed bytes we copied from the
-        // aiScene (which may already be released). filepath doubles as the key.
+        // aiScene (which may already be released). The submit key is the pool
+        // key too -- there is no path to resolve.
         if (req->embedded_data) {
-            result->filepath = safe_strdup(req->filepath);
+            result->pool_key = safe_strdup(result->submit_key);
             int ew, eh, ec;
             unsigned char* edata =
-                result->filepath ? stbi_load_from_memory(req->embedded_data, req->embedded_size,
-                                                          &ew, &eh, &ec, 0)
-                                  : NULL;
+                result->pool_key ? stbi_load_from_memory(req->embedded_data, req->embedded_size,
+                                                         &ew, &eh, &ec, 0)
+                                 : NULL;
             if (edata) {
                 finalize_decoded_result(result, edata, ew, eh, ec, req->is_srgb);
             } else {
                 result->success = false;
                 snprintf(result->error_msg, ASYNC_LOADER_MAX_ERROR_MSG,
                          "Failed to decode embedded texture: %s",
-                         result->filepath ? req->filepath : "(alloc failed)");
+                         result->pool_key ? result->submit_key : "(alloc failed)");
             }
             goto enqueue_result;
         }
 
         // Normalize path
-        char* normalized_path = convert_and_normalize_path(req->filepath);
+        char* normalized_path = convert_and_normalize_path(result->submit_key);
         if (!normalized_path) {
             result->success = false;
             snprintf(result->error_msg, ASYNC_LOADER_MAX_ERROR_MSG, "Failed to normalize path: %s",
-                     req->filepath);
+                     result->submit_key);
             goto enqueue_result;
         }
 
@@ -254,25 +307,27 @@ static void* worker_thread_func(void* arg) {
             goto enqueue_result;
         }
 
-        result->filepath = safe_strdup(subpath);
+        // The resolved path, which is what the finished texture is pooled under
+        // -- deliberately not the submit key, which stays as handed in.
+        result->pool_key = safe_strdup(subpath);
         free(normalized_path);
         free(subpath);
 
-        if (!result->filepath) {
+        if (!result->pool_key) {
             result->success = false;
             snprintf(result->error_msg, ASYNC_LOADER_MAX_ERROR_MSG,
-                     "Memory allocation failed for filepath");
+                     "Memory allocation failed for resolved texture path");
             goto enqueue_result;
         }
 
         // Load image data (this is the slow part we're parallelizing)
         int width, height, channels;
-        unsigned char* data = stbi_load(result->filepath, &width, &height, &channels, 0);
+        unsigned char* data = stbi_load(result->pool_key, &width, &height, &channels, 0);
 
         if (!data) {
             result->success = false;
             snprintf(result->error_msg, ASYNC_LOADER_MAX_ERROR_MSG, "stbi_load failed: %s",
-                     result->filepath);
+                     result->pool_key);
             goto enqueue_result;
         }
 
@@ -409,8 +464,8 @@ void free_async_loader(AsyncLoader* loader) {
         if (result->pixel_data) {
             stbi_image_free(result->pixel_data);
         }
-        free(result->key);
-        free(result->filepath);
+        free(result->submit_key);
+        free(result->pool_key);
         free(result);
         result = next;
     }
@@ -440,6 +495,70 @@ void free_async_loader(AsyncLoader* loader) {
 }
 
 /*
+ * Shared submit path. `bytes` non-NULL means the compressed image is already in
+ * memory (a glTF-embedded PNG); NULL means load `key` from disk.
+ *
+ * Ordering matters here. Everything that can fail is allocated FIRST, and the
+ * key is claimed last, immediately before the request is published. A claim
+ * therefore always reaches the queue, so there is no window in which a key is
+ * claimed by a load that will never run -- the failure that would strand it
+ * cannot be expressed.
+ */
+static void submit_load(AsyncLoader* loader, TexturePool* pool, const char* key,
+                        const unsigned char* bytes, int nbytes, bool is_srgb,
+                        void (*callback)(Texture* tex, void* user_data), void* user_data) {
+    // Already decoded and uploaded under this key?
+    Texture* cached = get_texture_from_pool_threadsafe(pool, key);
+    if (cached) {
+        if (callback) {
+            callback(cached, user_data);
+        }
+        return;
+    }
+
+    TextureLoadRequest* req = calloc(1, sizeof(TextureLoadRequest));
+    char* key_copy = safe_strdup(key);
+    // Allocated but not filled yet: if this turns out to be a duplicate we drop
+    // it below without ever paying for the copy, which for an embedded image is
+    // several megabytes.
+    unsigned char* copy = bytes ? malloc((size_t)nbytes) : NULL;
+
+    if (!req || !key_copy || (bytes && !copy)) {
+        log_error("Failed to allocate texture load request for '%s'", key);
+        free(req);
+        free(key_copy);
+        free(copy);
+        if (callback) {
+            callback(NULL, user_data);
+        }
+        return;
+    }
+
+    // Nothing above touched shared state, so this is the first and only point
+    // of no return.
+    if (inflight_join_or_claim(loader, pool, key, callback, user_data)) {
+        free(req);
+        free(key_copy);
+        free(copy);
+        return;
+    }
+
+    if (bytes) {
+        memcpy(copy, bytes, (size_t)nbytes);
+    }
+
+    req->pool = pool;
+    req->filepath = key_copy;
+    req->is_srgb = is_srgb;
+    req->embedded_data = copy;
+    req->embedded_size = bytes ? nbytes : 0;
+    req->callback = callback;
+    req->user_data = user_data;
+
+    async_loader_enqueue(loader, req);
+}
+
+/*
  * Submit texture load request to worker queue
  */
 void load_texture_async(AsyncLoader* loader, TexturePool* pool, const char* filepath, bool is_srgb,
@@ -460,48 +579,7 @@ void load_texture_async(AsyncLoader* loader, TexturePool* pool, const char* file
         return;
     }
 
-    // Check if already cached (thread-safe lookup)
-    Texture* cached = get_texture_from_pool_threadsafe(pool, filepath);
-    if (cached) {
-        if (callback) {
-            callback(cached, user_data);
-        }
-        return;
-    }
-
-    // Not in the pool, but it may already be decoding
-    if (inflight_join_or_claim(loader, filepath, callback, user_data)) {
-        return;
-    }
-
-    // Create request
-    TextureLoadRequest* req = calloc(1, sizeof(TextureLoadRequest));
-    if (!req) {
-        log_error("Failed to allocate TextureLoadRequest");
-        inflight_abandon(loader, filepath);
-        if (callback) {
-            callback(NULL, user_data);
-        }
-        return;
-    }
-
-    req->pool = pool;
-    req->filepath = safe_strdup(filepath);
-    req->is_srgb = is_srgb;
-    req->callback = callback;
-    req->user_data = user_data;
-
-    if (!req->filepath) {
-        log_error("Failed to duplicate filepath");
-        free(req);
-        inflight_abandon(loader, filepath);
-        if (callback) {
-            callback(NULL, user_data);
-        }
-        return;
-    }
-
-    async_loader_enqueue(loader, req);
+    submit_load(loader, pool, filepath, NULL, 0, is_srgb, callback, user_data);
 }
 
 void load_texture_from_memory_async(AsyncLoader* loader, TexturePool* pool, const char* key,
@@ -516,57 +594,7 @@ void load_texture_from_memory_async(AsyncLoader* loader, TexturePool* pool, cons
         return;
     }
 
-    // Already decoded + cached under this key?
-    Texture* cached = get_texture_from_pool_threadsafe(pool, key);
-    if (cached) {
-        if (callback) {
-            callback(cached, user_data);
-        }
-        return;
-    }
-
-    // Not in the pool, but it may already be decoding. Checked before the copy
-    // below: the aliased slots that make this fire are precisely the case where
-    // duplicating a multi-megabyte compressed image would be wasted.
-    if (inflight_join_or_claim(loader, key, callback, user_data)) {
-        return;
-    }
-
-    // Copy the compressed bytes so the caller can release the source (the
-    // aiScene) immediately; the worker owns and frees the copy.
-    TextureLoadRequest* req = calloc(1, sizeof(TextureLoadRequest));
-    unsigned char* copy = req ? malloc((size_t)data_size) : NULL;
-    if (!req || !copy) {
-        log_error("Failed to allocate embedded texture request");
-        free(req);
-        free(copy);
-        inflight_abandon(loader, key);
-        if (callback) {
-            callback(NULL, user_data);
-        }
-        return;
-    }
-    memcpy(copy, data, (size_t)data_size);
-
-    req->pool = pool;
-    req->filepath = safe_strdup(key); // the cache key ("*N")
-    req->is_srgb = is_srgb;
-    req->embedded_data = copy;
-    req->embedded_size = data_size;
-    req->callback = callback;
-    req->user_data = user_data;
-
-    if (!req->filepath) {
-        log_error("Failed to duplicate embedded texture key");
-        free(copy);
-        free(req);
-        if (callback) {
-            callback(NULL, user_data);
-        }
-        return;
-    }
-
-    async_loader_enqueue(loader, req);
+    submit_load(loader, pool, key, data, data_size, is_srgb, callback, user_data);
 }
 
 /*
@@ -602,7 +630,7 @@ size_t async_loader_process_pending(AsyncLoader* loader, TexturePool* pool, size
 
         if (result->success) {
             // Check cache again (another thread may have loaded same texture)
-            texture = get_texture_from_pool_threadsafe(pool, result->filepath);
+            texture = get_texture_from_pool_threadsafe(pool, result->pool_key);
 
             if (!texture) {
                 // Create texture and upload to GPU
@@ -620,7 +648,7 @@ size_t async_loader_process_pending(AsyncLoader* loader, TexturePool* pool, size
                     glGenerateMipmap(GL_TEXTURE_2D);
 
                     texture->id = textureID;
-                    texture->filepath = safe_strdup(result->filepath);
+                    texture->filepath = safe_strdup(result->pool_key);
                     texture->width = result->width;
                     texture->height = result->height;
                     texture->internal_format = result->internal_format;
@@ -641,21 +669,24 @@ size_t async_loader_process_pending(AsyncLoader* loader, TexturePool* pool, size
 
         // Retire the key first: this decode is done, so a request arriving
         // afterwards must start a fresh one rather than join a finished load.
-        TextureWaiter* waiters = inflight_release(loader, result->key);
+        TextureWaiter* waiters = inflight_release(loader, pool, result->submit_key);
 
         // Invoke callback
         if (result->callback) {
             result->callback(texture, result->user_data);
         }
 
-        // ...then everyone who asked for the same key while it was decoding
+        // ...then everyone who asked for the same key while it was decoding.
+        // Must happen before the decrement below: async_loader_is_busy promises
+        // that once it reads false, every owed callback has run, and a joined
+        // waiter is only covered by its owner's count.
         waiters_deliver(waiters, texture);
 
         atomic_fetch_sub(&loader->pending_count, 1);
         atomic_fetch_add(&loader->completed_count, 1);
 
-        free(result->key);
-        free(result->filepath);
+        free(result->submit_key);
+        free(result->pool_key);
         free(result);
         processed++;
     }
