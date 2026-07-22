@@ -5,6 +5,16 @@ project(cetra
     DESCRIPTION "Cetra Graphics Engine"
     LANGUAGES C CXX)
 
+# MSVC debug info as /Z7 (Embedded) rather than /Zi (ProgramDatabase): with
+# Ninja, parallel compiles sharing one .pdb need /FS serialization and are a
+# known source of flaky failures. Must be set before any target is created.
+# No effect on non-MSVC toolchains.
+if(POLICY CMP0141)
+    cmake_policy(SET CMP0141 NEW)
+    set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT
+        "$<$<CONFIG:Debug,RelWithDebInfo>:Embedded>")
+endif()
+
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_STANDARD 17)
@@ -32,6 +42,31 @@ endif()
 
 # Note: _POSIX_C_SOURCE is set per-target in cetra/CMakeLists.txt
 # Setting it globally breaks JoltC build (alloca not declared)
+
+# Warning/diagnostic flags, carried on an interface target so the library and
+# every app share one definition.
+#
+# Branch on MSVC, not on CMAKE_C_COMPILER_ID: for clang-cl the compiler id is
+# "Clang" but the driver takes MSVC-style flags, so keying off the id would feed
+# -Wall to a /-style driver.
+add_library(cetra_warnings INTERFACE)
+
+if(MSVC)
+    target_compile_options(cetra_warnings INTERFACE
+        /W4
+        /wd4100  # unreferenced formal parameter
+        /wd4244  # conversion, possible loss of data
+        /wd4267  # size_t -> smaller type
+        /wd4996) # POSIX/CRT deprecation
+    if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
+        # clang-cl: quiet the MSVC-isms clang does not implement
+        target_compile_options(cetra_warnings INTERFACE
+            -Wno-unused-command-line-argument
+            -Wno-microsoft-include)
+    endif()
+else()
+    target_compile_options(cetra_warnings INTERFACE -Wall)
+endif()
 
 # Find required packages
 find_package(PkgConfig REQUIRED)

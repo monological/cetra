@@ -101,7 +101,9 @@ if(WIN32)
     )
 endif()
 
-target_compile_options(cetra PRIVATE -Wall -g)
+# -g dropped: CMAKE_BUILD_TYPE already supplies debug info for Debug builds, and
+# hardcoding it defeated Release.
+target_link_libraries(cetra PRIVATE cetra_warnings)
 target_compile_definitions(cetra PRIVATE _POSIX_C_SOURCE=200809L)
 
 # Link JoltC physics library if enabled

@@ -11,7 +11,7 @@ function(add_cetra_app APP_NAME)
         ${CMAKE_BINARY_DIR}/include
     )
 
-    target_compile_options(${APP_NAME} PRIVATE -Wall -g)
+    target_link_libraries(${APP_NAME} PRIVATE cetra_warnings)
 
     if(APPLE)
         target_compile_definitions(${APP_NAME} PRIVATE GL_SILENCE_DEPRECATION)
