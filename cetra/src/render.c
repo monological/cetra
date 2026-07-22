@@ -892,6 +892,68 @@ void render_current_scene(Engine* engine) {
     glm_mat4_copy(engine->view_proj, engine->prev_view_proj);
 }
 
+// Bone-overlay line thickness, in PIXELS of the rendered image. Held in screen
+// space so a bone reads the same whether the camera is close or far.
+#define BONE_LINE_PIXELS 3.0f
+
+// Emit one bone segment as two triangles: 6 vertices of (xyz, rgb).
+//
+// This is a quad rather than a GL_LINES draw with glLineWidth because core
+// profile deprecated wide lines -- Apple reports GL_ALIASED_LINE_WIDTH_RANGE
+// 1.0..1.0 and errors on anything else, so the old glLineWidth(3.0) raised
+// GL_INVALID_VALUE every frame and silently drew 1px. (It also poisoned error
+// reporting: the stale error surfaced at the next check_gl_error, in the postfx
+// normals resolve, which had nothing to do with it.)
+//
+// The offset direction is cross(segment, toCamera), so the quad always faces
+// the viewer. shape_geo.glsl solves the same problem with a world-space XY
+// perpendicular, which is correct only for the flat, head-on layouts the pcb
+// and shapes apps draw; a skeleton is fully 3D under an orbiting camera and
+// would thin out or vanish at unlucky angles.
+static void _emit_bone_quad(float* v, size_t* n, const vec3 a, const vec3 b, const vec3 cam_pos,
+                            float world_per_pixel_at_unit_depth, float r, float g, float bl) {
+    vec3 seg;
+    glm_vec3_sub((float*)b, (float*)a, seg);
+    if (glm_vec3_norm2(seg) < 1e-12f)
+        return; // zero-length bone: nothing to face
+
+    vec3 mid;
+    glm_vec3_add((float*)a, (float*)b, mid);
+    glm_vec3_scale(mid, 0.5f, mid);
+
+    vec3 to_cam;
+    glm_vec3_sub((float*)cam_pos, mid, to_cam);
+    float depth = glm_vec3_norm(to_cam);
+    if (depth < 1e-6f)
+        return;
+
+    vec3 side;
+    glm_vec3_cross(seg, to_cam, side);
+    if (glm_vec3_norm2(side) < 1e-12f)
+        return; // segment points straight at the camera; no stable perpendicular
+    glm_vec3_normalize(side);
+
+    // Half-width that subtends BONE_LINE_PIXELS at this segment's depth.
+    float half_w = 0.5f * BONE_LINE_PIXELS * world_per_pixel_at_unit_depth * depth;
+    glm_vec3_scale(side, half_w, side);
+
+    vec3 corner[4];
+    glm_vec3_sub((float*)a, side, corner[0]);
+    glm_vec3_add((float*)a, side, corner[1]);
+    glm_vec3_add((float*)b, side, corner[2]);
+    glm_vec3_sub((float*)b, side, corner[3]);
+
+    const int tri[6] = {0, 1, 2, 0, 2, 3};
+    for (int i = 0; i < 6; i++) {
+        v[(*n)++] = corner[tri[i]][0];
+        v[(*n)++] = corner[tri[i]][1];
+        v[(*n)++] = corner[tri[i]][2];
+        v[(*n)++] = r;
+        v[(*n)++] = g;
+        v[(*n)++] = bl;
+    }
+}
+
 void render_skeleton_bones(Engine* engine, Skeleton* skeleton, AnimationState* anim_state) {
     if (!engine || !engine->bone_program) {
         return;
@@ -902,13 +964,27 @@ void render_skeleton_bones(Engine* engine, Skeleton* skeleton, AnimationState* a
     if (!skel)
         return;
 
-    // Allocate for both bind pose (green) and animated pose (red)
-    // Max 2 sets of bones * 2 vertices per bone * 6 floats per vertex
-    float* vertices = malloc(skel->bone_count * 2 * 2 * 6 * sizeof(float));
+    // Both poses (bind green, animated red), each bone a quad:
+    // 2 sets * 6 vertices * 6 floats per vertex.
+    float* vertices = malloc(skel->bone_count * 2 * 6 * 6 * sizeof(float));
     if (!vertices)
         return;
 
     size_t vertex_count = 0;
+
+    // World units per pixel at unit depth, from the vertical FOV and the render
+    // height. Multiplying by a point's distance gives the world size of one
+    // pixel there, which is what keeps the quads a constant screen thickness.
+    // Render (not display) height: the scene target is supersampled, so a
+    // "pixel" here is a render-target pixel, which is what the quads rasterize
+    // into. Mirrors engine_render_size, which is static to engine.c.
+    int render_h = engine->fb_height * engine->ss_scale;
+    Camera* bone_cam = engine->camera;
+    float world_per_px = (render_h > 0 && bone_cam)
+                             ? (2.0f * tanf(bone_cam->fov_radians * 0.5f) / (float)render_h)
+                             : 0.002f;
+    vec3 cam_pos;
+    glm_vec3_copy(bone_cam ? bone_cam->position : (vec3){0.0f, 0.0f, 0.0f}, cam_pos);
 
     // First pass: Draw BIND POSE in GREEN (from skeleton's inverse_bind_pose)
     if (skeleton) {
@@ -933,21 +1009,9 @@ void render_skeleton_bones(Engine* engine, Skeleton* skeleton, AnimationState* a
                 float parent_z = bind_globals[bone->parent_index][3][2];
 
                 // GREEN for bind pose
-                float r = 0.0f, g = 1.0f, b = 0.0f;
-
-                vertices[vertex_count++] = parent_x;
-                vertices[vertex_count++] = parent_y;
-                vertices[vertex_count++] = parent_z;
-                vertices[vertex_count++] = r;
-                vertices[vertex_count++] = g;
-                vertices[vertex_count++] = b;
-
-                vertices[vertex_count++] = child_x;
-                vertices[vertex_count++] = child_y;
-                vertices[vertex_count++] = child_z;
-                vertices[vertex_count++] = r;
-                vertices[vertex_count++] = g;
-                vertices[vertex_count++] = b;
+                _emit_bone_quad(vertices, &vertex_count, (vec3){parent_x, parent_y, parent_z},
+                                (vec3){child_x, child_y, child_z}, cam_pos, world_per_px, 0.0f,
+                                1.0f, 0.0f); // GREEN: bind pose
             }
             free(bind_globals);
         }
@@ -968,22 +1032,9 @@ void render_skeleton_bones(Engine* engine, Skeleton* skeleton, AnimationState* a
             float parent_y = anim_state->global_transforms[bone->parent_index][3][1];
             float parent_z = anim_state->global_transforms[bone->parent_index][3][2];
 
-            // RED for animated pose
-            float r = 1.0f, g = 0.0f, b = 0.0f;
-
-            vertices[vertex_count++] = parent_x;
-            vertices[vertex_count++] = parent_y;
-            vertices[vertex_count++] = parent_z;
-            vertices[vertex_count++] = r;
-            vertices[vertex_count++] = g;
-            vertices[vertex_count++] = b;
-
-            vertices[vertex_count++] = child_x;
-            vertices[vertex_count++] = child_y;
-            vertices[vertex_count++] = child_z;
-            vertices[vertex_count++] = r;
-            vertices[vertex_count++] = g;
-            vertices[vertex_count++] = b;
+            _emit_bone_quad(vertices, &vertex_count, (vec3){parent_x, parent_y, parent_z},
+                            (vec3){child_x, child_y, child_z}, cam_pos, world_per_px, 1.0f, 0.0f,
+                            0.0f); // RED: animated pose
         }
     }
 
@@ -1004,12 +1055,16 @@ void render_skeleton_bones(Engine* engine, Skeleton* skeleton, AnimationState* a
     glUniformMatrix4fv(glGetUniformLocation(engine->bone_program->id, "projection"), 1, GL_FALSE,
                        (float*)engine->projection_matrix);
 
-    // Disable depth test for X-ray effect (bones always visible)
+    // Disable depth test for X-ray effect (bones always visible). Quads are
+    // camera-facing but built without regard to winding, so back-face culling
+    // has to stand down or half the bones vanish depending on orientation.
+    GLboolean cull_was_on = glIsEnabled(GL_CULL_FACE);
     glDisable(GL_DEPTH_TEST);
-    glLineWidth(3.0f);
-    glDrawArrays(GL_LINES, 0, (GLsizei)(vertex_count / 6));
+    glDisable(GL_CULL_FACE);
+    glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(vertex_count / 6));
     glEnable(GL_DEPTH_TEST);
-    glLineWidth(1.0f);
+    if (cull_was_on)
+        glEnable(GL_CULL_FACE);
 
     free(vertices);
 }
