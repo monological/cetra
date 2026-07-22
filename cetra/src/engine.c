@@ -1283,6 +1283,13 @@ void engine_set_render_clock(Engine* engine, const EngineFrameClock* clock) {
         engine->render_clock = clock;
 }
 
+void engine_set_render_time(Engine* engine, double time, double delta) {
+    if (!engine)
+        return;
+    engine->render_time = time;
+    engine->render_delta = delta;
+}
+
 // A checkbox that enables a group of dependent parameters. The parameters stay
 // visible but greyed out and inert until the effect is on — so toggling never
 // reflows the panel — and are indented one level so the grouping is obvious.
@@ -2035,11 +2042,10 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EngineRenderFunc render
         // substituted clock simply not advanced, which is the truth, instead of
         // silently reverting this frame to the wall clock.
         if (engine->render_clock) {
-            engine->render_time = engine->render_clock->time;
-            engine->render_delta = engine->render_clock->delta;
+            engine_set_render_time(engine, engine->render_clock->time,
+                                   engine->render_clock->delta);
         } else {
-            engine->render_time = current_time;
-            engine->render_delta = engine->delta_time;
+            engine_set_render_time(engine, current_time, engine->delta_time);
         }
 
         // Wireframe mode: use albedo-only rendering for performance

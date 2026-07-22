@@ -122,8 +122,7 @@ int reflection_probe_capture(ReflectionProbe* probe, struct Engine* engine, Scen
     // bake's motion vectors are zero rather than describing a step it never took.
     double saved_render_time = engine->render_time;
     double saved_render_delta = engine->render_delta;
-    engine->render_time = 0.0;
-    engine->render_delta = 0.0;
+    engine_set_render_time(engine, 0.0, 0.0);
 
     // Shadow maps have not been rendered at load time; bake them so the
     // capture contains shadowed direct light and catcher darkening.
@@ -245,8 +244,7 @@ int reflection_probe_capture(ReflectionProbe* probe, struct Engine* engine, Scen
     engine->aux_this_frame = saved_aux;
     engine->albedo_this_frame = saved_albedo;
     engine->refraction_enabled = saved_refraction;
-    engine->render_time = saved_render_time;
-    engine->render_delta = saved_render_delta;
+    engine_set_render_time(engine, saved_render_time, saved_render_delta);
     if (scene->shadow_system)
         scene->shadow_system->cascade_count = saved_cascades;
     if (engine->postfx)

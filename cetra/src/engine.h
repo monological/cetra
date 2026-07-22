@@ -327,10 +327,18 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EngineRenderFunc render
 // Substitute an animation clock for the wall clock. `clock` is borrowed and must
 // outlive the loop; engine_run samples it each frame after the update callback
 // and before the shadow pass. NULL restores the wall clock.
-//
-// Apps that drive render_current_scene from their own loop rather than
-// engine_run must set render_time/render_delta themselves -- nothing else does.
 void engine_set_render_clock(Engine* engine, const EngineFrameClock* clock);
+
+// Set the frame's animation clock directly, for callers that do not go through
+// engine_run: an app driving render_current_scene from its own loop, or a
+// capture that pins the clock. `delta` is how far `time` advanced since the last
+// render -- 0 for a frozen or first frame, so the wind's previous position
+// equals its current one and motion vectors come out zero.
+//
+// A foreign loop that never calls this renders at t = 0 forever: wind holds
+// still, silently. Call it once per frame BEFORE the shadow pass, or the depth
+// and shading passes displace wind from different instants.
+void engine_set_render_time(Engine* engine, double time, double delta);
 
 // Drag/pick helpers
 void get_mouse_world_position_on_drag_plane(Engine* engine, double mouse_fb_x, double mouse_fb_y,
