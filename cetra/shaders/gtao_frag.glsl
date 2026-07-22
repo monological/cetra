@@ -45,11 +45,7 @@ const float HEIGHT_BIAS = 0.04;       // Min sin(elevation) a sample needs to co
 // View-space position from screen UV + stored linear view Z (RH, z < 0):
 // Xv = ndc.x * (-z) / focalX, Yv likewise; a jitter-constant XY offset cancels
 // in the relative sVec the occlusion math uses.
-vec3 viewPosFromLinZ(vec2 uv, float linZ, vec2 invFocal)
-{
-    vec2 ndc = uv * 2.0 - 1.0;
-    return vec3(ndc * (-linZ) * invFocal, linZ);
-}
+#include "depth.glsl"
 
 // 32-bit population count (SWAR). GLSL 3.30 has uint + bit ops but not the
 // bitCount() builtin (added in 4.00), so we roll our own to stay on 330.

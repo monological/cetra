@@ -21,16 +21,7 @@ uniform int reset;             // 1 on the first frame -> no history yet
 
 const float FEEDBACK = 0.9; // History weight; ~10-frame effective window
 
-vec3 rgbToYCoCg(vec3 c) {
-    return vec3(0.25 * c.r + 0.5 * c.g + 0.25 * c.b,
-                0.5 * c.r - 0.5 * c.b,
-                -0.25 * c.r + 0.5 * c.g - 0.25 * c.b);
-}
-
-vec3 yCoCgToRgb(vec3 c) {
-    float t = c.x - c.z;
-    return vec3(t + c.y, c.x + c.z, t - c.y);
-}
+#include "color.glsl"
 
 void main()
 {

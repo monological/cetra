@@ -54,10 +54,7 @@ vec3 viewPosFromDepth(vec2 uv, float depth)
 }
 
 // Analytic view-space Z from an NDC depth (cglm right-handed perspective)
-float viewZFromNdcZ(float ndcZ)
-{
-    return -projection[3][2] / (projection[2][2] + ndcZ);
-}
+#include "depth.glsl"
 
 // Probe fallback where the SSR ray misses (off-screen, grazing, occluded,
 // max steps): parallax-correct the world reflection ray against the probe's

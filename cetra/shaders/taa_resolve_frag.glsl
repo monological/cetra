@@ -11,16 +11,7 @@ uniform int reset;             // 1 on the very first frame: no valid history ye
 // YCoCg separates luma from chroma, so the neighborhood clamp below bounds
 // ghosting far better than clamping in RGB (a small luma change no longer drags
 // the full colour). The transform is linear, so it is safe on linear HDR.
-vec3 rgbToYCoCg(vec3 c) {
-    return vec3(0.25 * c.r + 0.5 * c.g + 0.25 * c.b,
-                0.5 * c.r - 0.5 * c.b,
-                -0.25 * c.r + 0.5 * c.g - 0.25 * c.b);
-}
-
-vec3 yCoCgToRgb(vec3 c) {
-    float t = c.x - c.z;
-    return vec3(t + c.y, c.x + c.z, t - c.y);
-}
+#include "color.glsl"
 
 // Sharp (bicubic) history sampling. Plain bilinear reprojection smears the
 // history a little every frame, which compounds into the classic TAA blur;

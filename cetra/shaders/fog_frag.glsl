@@ -64,11 +64,7 @@ const float PI = 3.14159265359;
 
 // View-space position from screen UV + stored linear view Z (RH, z < 0) —
 // the same reconstruction the AO pass uses
-vec3 viewPosFromLinZ(vec2 uv, float linZ, vec2 invFocal)
-{
-    vec2 ndc = uv * 2.0 - 1.0;
-    return vec3(ndc * (-linZ) * invFocal, linZ);
-}
+#include "depth.glsl"
 
 // Normalized Henyey-Greenstein; c = cos(angle between light travel and the
 // direction toward the camera)
