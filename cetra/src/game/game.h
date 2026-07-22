@@ -54,6 +54,15 @@ typedef struct Game {
     double time;           // Total game (sim) time
     double max_frame_time; // Frame-time clamp (spiral-of-death guard)
 
+    // The sim clock, published for the engine to sample as the frame's animation
+    // clock (engine_set_render_clock, wired once in run_game). `.time` mirrors
+    // `time` above; `.delta` is how far the sim actually advanced this frame --
+    // a whole number of fixed steps, so 0 on a frame that did not step and 0
+    // while paused. Wind then holds still when the sim does, and its motion
+    // vectors describe the step that really happened rather than a wall-clock
+    // interval the sim never took.
+    EngineFrameClock sim_clock;
+
     // State
     bool paused;
 

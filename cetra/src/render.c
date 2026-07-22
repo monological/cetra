@@ -379,9 +379,14 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
             uniform_set_mat4(u, "uCurrViewProjNoJitter", (const float*)engine->view_proj);
             uniform_set_mat4(u, "uPrevViewProj", (const float*)engine->prev_view_proj);
             uniform_set_float(u, "time", (float)engine->render_time);
-            // Global directional wind (NULL -> uWindStrength 0 -> shader early-out);
-            // dt feeds the previous-frame position so wind stays motion-correct.
-            uniform_set_float(u, "uDeltaTime", (float)engine->delta_time);
+            // Global directional wind (NULL -> uWindStrength 0 -> shader early-out).
+            // The shader evaluates the previous-frame position at
+            // time - uDeltaTime, so this must be the advance of the SAME clock
+            // `time` came from -- render_delta, not the wall-clock delta_time.
+            // Under a game those differ: the sim advances in whole fixed steps
+            // and stops entirely when paused, so a wall-clock delta would report
+            // wind motion on geometry that never moved.
+            uniform_set_float(u, "uDeltaTime", (float)engine->render_delta);
             wind_upload_to_program(scene ? scene->wind : NULL, u);
             uniform_set_int(u, "renderMode", render_mode);
             uniform_set_float(u, "specularAAStrength", engine->specular_aa_strength);
