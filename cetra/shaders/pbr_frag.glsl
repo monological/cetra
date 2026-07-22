@@ -121,6 +121,12 @@ uniform vec2 uvScale;       // Texture coordinate scale (KHR_texture_transform)
 uniform float uvRotation;   // Texture coordinate rotation in radians
 uniform int vertexColorExists;  // Whether mesh has vertex colors
 uniform int texCoords2Exists;   // Whether mesh has UV1
+// Which displacement model this material uses (material.h wind_mode). Read here
+// only to know what UV1 MEANS: the vegetation modes redefine it as wind data
+// (branch phase, flex weight) rather than a texture coordinate set, so the AO
+// path below must not sample a map with it. Shares its location with the
+// vertex stage's declaration; the existing per-material upload feeds both.
+uniform int uWindMode;
 uniform vec3 camPos;
 uniform float time;
 
@@ -828,8 +834,12 @@ void main() {
 
     float aoMap = ao;
     if (aoLayer >= 0) {
-        // Use UV1 for AO if available (common glTF lightmap pattern), otherwise UV0
-        vec2 aoUV = (texCoords2Exists > 0) ? TexCoords2 : uv;
+        // Use UV1 for AO if available (common glTF lightmap pattern), otherwise
+        // UV0 -- but only when UV1 actually holds texture coordinates. Under
+        // the vegetation wind modes it holds (branch phase, flex weight), and
+        // sampling a map with those would produce plausible-looking garbage
+        // with nothing to warn about, so those materials fall back to UV0.
+        vec2 aoUV = (texCoords2Exists > 0 && uWindMode == 0) ? TexCoords2 : uv;
         // Apply occlusion strength (glTF occlusionTexture.strength)
         float sampledAo = texture(maskArray, vec3(aoUV, float(aoLayer))).r;
         aoMap = mix(1.0, sampledAo, aoStrength);

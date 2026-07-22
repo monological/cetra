@@ -11,7 +11,15 @@
 #define GL_ATTR_COLOR        5
 #define GL_ATTR_BONE_IDS     6 // ivec4 - bone indices per vertex
 #define GL_ATTR_BONE_WEIGHTS 7 // vec4  - bone weights per vertex
-#define GL_ATTR_TEXCOORD2    8 // UV1 for lightmaps/AO
+#define GL_ATTR_TEXCOORD2 \
+    8 // UV1 for lightmaps/AO, or wind data under the
+      // vegetation wind modes (see material.h wind_mode)
+
+// Slots 9-11 are NOT free: the particle billboard renderer binds per-instance
+// center/params/color there (particle_renderer.c, particle_vert.glsl), as bare
+// literals rather than defines. It is a separate VAO from any mesh, so there is
+// no runtime conflict -- but reusing 9-11 for mesh geometry would collide with
+// that convention. 12-15 are unclaimed; GL 4.1 guarantees at least 16.
 
 // PBR material fragment sampler units (render.c _update_program_material_uniforms).
 // The engine-side units (shadow map array, IBL) follow in shadow.h / ibl.h; all

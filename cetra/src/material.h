@@ -98,6 +98,12 @@ typedef struct Material {
     //   2 = vegetation leaf: the branch ride plus high-frequency flutter
     // The vegetation modes read UV1 per vertex (x = branch phase, y = flex
     // weight), so they only work on geometry authored with that data.
+    //
+    // This field therefore also declares what UV1 MEANS on a material: modes
+    // >= 1 redefine it as wind data rather than a second texture coordinate
+    // set. pbr_frag reads wind_mode for exactly that reason and falls the AO
+    // map back to UV0 for those materials, so binding an occlusion texture on
+    // vegetation is safe rather than silently wrong.
     int wind_mode;
 
     // Core PBR Textures
