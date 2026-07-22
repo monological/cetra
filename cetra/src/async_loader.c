@@ -9,6 +9,42 @@
 #include "async_loader.h"
 #include "util.h"
 
+// Fill a result from freshly decoded pixels: repair transparent texels (RGBA
+// only) off the main thread, then record what the GL upload will need. Shared
+// by both decode sources so file and embedded textures cannot drift.
+static void finalize_decoded_result(TextureLoadResult* result, unsigned char* pixels, int width,
+                                    int height, int channels, bool is_srgb) {
+    if (channels == 4) {
+        texture_dilate_transparent_rgb(pixels, width, height);
+    }
+    result->pixel_data = pixels;
+    result->width = width;
+    result->height = height;
+    result->channels = channels;
+    result->success = true;
+    texture_gl_formats(channels, is_srgb, &result->internal_format, &result->data_format);
+}
+
+// Publish a filled request to the work queue and wake a worker. pending_count
+// counts submitted-but-not-yet-finalized work, so it must rise here and fall
+// only in async_loader_process_pending -- the load-time drains that gate the
+// mask-array build and probe capture wait on it reaching zero.
+static void async_loader_enqueue(AsyncLoader* loader, TextureLoadRequest* req) {
+    req->next = NULL;
+
+    pthread_mutex_lock(&loader->work_mutex);
+    if (loader->work_tail) {
+        loader->work_tail->next = req;
+    } else {
+        loader->work_head = req;
+    }
+    loader->work_tail = req;
+    pthread_cond_signal(&loader->work_cond);
+    pthread_mutex_unlock(&loader->work_mutex);
+
+    atomic_fetch_add(&loader->pending_count, 1);
+}
+
 /*
  * Internal: Worker thread function
  */
@@ -68,16 +104,7 @@ static void* worker_thread_func(void* arg) {
                                                           &ew, &eh, &ec, 0)
                                   : NULL;
             if (edata) {
-                if (ec == 4) {
-                    texture_dilate_transparent_rgb(edata, ew, eh);
-                }
-                result->pixel_data = edata;
-                result->width = ew;
-                result->height = eh;
-                result->channels = ec;
-                result->success = true;
-                texture_gl_formats(ec, req->is_srgb, &result->internal_format,
-                                   &result->data_format);
+                finalize_decoded_result(result, edata, ew, eh, ec, req->is_srgb);
             } else {
                 result->success = false;
                 snprintf(result->error_msg, ASYNC_LOADER_MAX_ERROR_MSG,
@@ -137,19 +164,7 @@ static void* worker_thread_func(void* arg) {
             goto enqueue_result;
         }
 
-        // Repair transparent texels off the main thread while we're here
-        if (channels == 4) {
-            texture_dilate_transparent_rgb(data, width, height);
-        }
-
-        result->pixel_data = data;
-        result->width = width;
-        result->height = height;
-        result->channels = channels;
-        result->success = true;
-
-        // Determine OpenGL format
-        texture_gl_formats(channels, req->is_srgb, &result->internal_format, &result->data_format);
+        finalize_decoded_result(result, data, width, height, channels, req->is_srgb);
 
     enqueue_result:
         // Add to completion queue
@@ -329,7 +344,6 @@ void load_texture_async(AsyncLoader* loader, TexturePool* pool, const char* file
     req->is_srgb = is_srgb;
     req->callback = callback;
     req->user_data = user_data;
-    req->next = NULL;
 
     if (!req->filepath) {
         log_error("Failed to duplicate filepath");
@@ -340,18 +354,7 @@ void load_texture_async(AsyncLoader* loader, TexturePool* pool, const char* file
         return;
     }
 
-    // Add to work queue
-    pthread_mutex_lock(&loader->work_mutex);
-    if (loader->work_tail) {
-        loader->work_tail->next = req;
-    } else {
-        loader->work_head = req;
-    }
-    loader->work_tail = req;
-    pthread_cond_signal(&loader->work_cond);
-    pthread_mutex_unlock(&loader->work_mutex);
-
-    atomic_fetch_add(&loader->pending_count, 1);
+    async_loader_enqueue(loader, req);
 }
 
 void load_texture_from_memory_async(AsyncLoader* loader, TexturePool* pool, const char* key,
@@ -397,7 +400,6 @@ void load_texture_from_memory_async(AsyncLoader* loader, TexturePool* pool, cons
     req->embedded_size = data_size;
     req->callback = callback;
     req->user_data = user_data;
-    req->next = NULL;
 
     if (!req->filepath) {
         log_error("Failed to duplicate embedded texture key");
@@ -409,17 +411,7 @@ void load_texture_from_memory_async(AsyncLoader* loader, TexturePool* pool, cons
         return;
     }
 
-    pthread_mutex_lock(&loader->work_mutex);
-    if (loader->work_tail) {
-        loader->work_tail->next = req;
-    } else {
-        loader->work_head = req;
-    }
-    loader->work_tail = req;
-    pthread_cond_signal(&loader->work_cond);
-    pthread_mutex_unlock(&loader->work_mutex);
-
-    atomic_fetch_add(&loader->pending_count, 1);
+    async_loader_enqueue(loader, req);
 }
 
 /*

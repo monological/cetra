@@ -482,8 +482,8 @@ static void load_material_texture(Material* material, TexturePool* tex_pool,
     }
 }
 
-Material* process_ai_material_async(struct aiMaterial* ai_mat, TexturePool* tex_pool,
-                                    const struct aiScene* ai_scene, AsyncLoader* loader) {
+static Material* process_ai_material(struct aiMaterial* ai_mat, TexturePool* tex_pool,
+                                     const struct aiScene* ai_scene, AsyncLoader* loader) {
     if (!ai_mat || !tex_pool || !loader) {
         return NULL;
     }
@@ -1326,8 +1326,8 @@ static SceneNode* process_ai_node(Scene* scene, struct aiNode* ai_node,
         if (matIndex < ai_scene->mNumMaterials) {
             Material* mat = mat_cache[matIndex];
             if (!mat) {
-                mat = process_ai_material_async(ai_scene->mMaterials[matIndex], tex_pool, ai_scene,
-                                                loader);
+                mat = process_ai_material(ai_scene->mMaterials[matIndex], tex_pool, ai_scene,
+                                          loader);
                 if (mat) {
                     mat_cache[matIndex] = mat;
                     add_material_to_scene(scene, mat);
@@ -1452,6 +1452,11 @@ void resolve_height_maps(Scene* scene) {
 // (they may still be decoding when this returns); skeletons/meshes are ready.
 Scene* create_scene_from_model_path(const char* path, const char* texture_directory,
                                     AsyncLoader* loader) {
+    if (!loader) {
+        log_error("create_scene_from_model_path: an AsyncLoader is required");
+        return NULL;
+    }
+
     const struct aiScene* ai_scene = import_ai_scene(
         path, aiProcess_Triangulate | aiProcess_CalcTangentSpace | uv_flip_flag(path));
     if (!ai_scene || ai_scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !ai_scene->mRootNode) {
@@ -1508,4 +1513,3 @@ Scene* create_scene_from_model_path(const char* path, const char* texture_direct
     aiReleaseImport(ai_scene);
     return scene;
 }
-
