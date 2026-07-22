@@ -14,23 +14,15 @@ uniform float focusDistance;
 uniform float focusRange;
 uniform float maxCoC;
 
-float viewZFromNdcZ(float ndcZ)
-{
-    return -projection[3][2] / (projection[2][2] + ndcZ);
-}
+#define DOF_COC
+#include "depth.glsl"
 
 void main()
 {
     vec3 sharp = texture(sceneTex, TexCoords).rgb;
 
     float depth = texture(depthTex, TexCoords).r;
-    float coc;
-    if (depth >= 1.0) {
-        coc = maxCoC;
-    } else {
-        float dist = -viewZFromNdcZ(depth * 2.0 - 1.0);
-        coc = clamp((dist - focusDistance) / focusRange, -1.0, 1.0) * maxCoC;
-    }
+    float coc = cocAtNdcZ(depth * 2.0 - 1.0, depth >= 1.0);
 
     float blend = clamp(abs(coc) / max(maxCoC, 1e-4), 0.0, 1.0);
     if (blend <= 0.0) {

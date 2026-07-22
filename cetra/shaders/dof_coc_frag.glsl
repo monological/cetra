@@ -14,23 +14,15 @@ uniform float focusRange;    // Distance over which CoC ramps to max
 uniform float maxCoC;        // Max blur radius, half-res texels
 
 // Analytic view-space Z from an NDC depth (cglm right-handed perspective)
-float viewZFromNdcZ(float ndcZ)
-{
-    return -projection[3][2] / (projection[2][2] + ndcZ);
-}
+#define DOF_COC
+#include "depth.glsl"
 
 void main()
 {
     vec3 color = texture(sceneTex, TexCoords).rgb;
     float depth = texture(depthTex, TexCoords).r;
 
-    float coc;
-    if (depth >= 1.0) {
-        coc = maxCoC; // sky/background: fully defocused far
-    } else {
-        float dist = -viewZFromNdcZ(depth * 2.0 - 1.0); // positive view distance
-        coc = clamp((dist - focusDistance) / focusRange, -1.0, 1.0) * maxCoC;
-    }
+    float coc = cocAtNdcZ(depth * 2.0 - 1.0, depth >= 1.0);
 
     FragColor = vec4(color, coc);
 }
