@@ -30,9 +30,35 @@ typedef struct TextureLoadRequest {
 } TextureLoadRequest;
 
 /*
+ * A caller that asked for a key already being decoded. Rather than decoding the
+ * image a second time, it rides along on the in-flight load and is invoked with
+ * the same Texture when it lands.
+ */
+typedef struct TextureWaiter {
+    void (*callback)(Texture* tex, void* user_data);
+    void* user_data;
+
+    struct TextureWaiter* next;
+} TextureWaiter;
+
+/*
+ * One decode in flight, keyed by the caller's submit key. Exists from submit
+ * until async_loader_process_pending finalizes it. The texture pool can't serve
+ * this role: nothing lands in the pool until the GL upload, which is many
+ * frames after the requests were queued.
+ */
+typedef struct InFlightLoad {
+    char* key;
+    TextureWaiter* waiters;
+
+    struct InFlightLoad* next;
+} InFlightLoad;
+
+/*
  * Texture Load Result - intermediate data between load and GPU upload
  */
 typedef struct TextureLoadResult {
+    char* key; // submit key; the pool path below may be resolved elsewhere
     char* filepath;
     unsigned char* pixel_data;
     int width;
@@ -67,6 +93,11 @@ typedef struct AsyncLoader {
     TextureLoadResult* complete_head;
     TextureLoadResult* complete_tail;
     pthread_mutex_t complete_mutex;
+
+    // Keys currently being decoded, so a repeat request joins the running load
+    // instead of decoding the same image again
+    InFlightLoad* inflight;
+    pthread_mutex_t inflight_mutex;
 
     // Statistics
     atomic_size_t pending_count;

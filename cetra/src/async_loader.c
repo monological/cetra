@@ -25,6 +25,104 @@ static void finalize_decoded_result(TextureLoadResult* result, unsigned char* pi
     texture_gl_formats(channels, is_srgb, &result->internal_format, &result->data_format);
 }
 
+// Join the decode already running for `key`, or claim the key for this caller.
+// Returns true if it joined: an identical decode is in flight, this caller has
+// been recorded as a waiter, and it must NOT submit its own request. Returns
+// false if it now owns the decode and should proceed to enqueue one.
+//
+// This is what keeps aliased slots from decoding the same image twice: assimp
+// reports one glTF image under several texture types (baseColor as both DIFFUSE
+// and BASE_COLOR, metallicRoughness as both METALNESS and DIFFUSE_ROUGHNESS),
+// so a material resolves the same key repeatedly, and every one of those lands
+// before the first decode has finished and reached the pool.
+static bool inflight_join_or_claim(AsyncLoader* loader, const char* key,
+                                   void (*callback)(Texture* tex, void* user_data),
+                                   void* user_data) {
+    bool joined = false;
+
+    pthread_mutex_lock(&loader->inflight_mutex);
+
+    InFlightLoad* entry = loader->inflight;
+    while (entry && strcmp(entry->key, key) != 0) {
+        entry = entry->next;
+    }
+
+    if (entry) {
+        TextureWaiter* waiter = calloc(1, sizeof(TextureWaiter));
+        if (waiter) {
+            waiter->callback = callback;
+            waiter->user_data = user_data;
+            waiter->next = entry->waiters;
+            entry->waiters = waiter;
+            joined = true;
+        }
+        // On allocation failure fall through as a claim: decoding a redundant
+        // copy is wasteful but correct, whereas dropping the callback is not.
+    } else {
+        InFlightLoad* fresh = calloc(1, sizeof(InFlightLoad));
+        if (fresh) {
+            fresh->key = safe_strdup(key);
+            if (fresh->key) {
+                fresh->next = loader->inflight;
+                loader->inflight = fresh;
+            } else {
+                free(fresh);
+            }
+        }
+    }
+
+    pthread_mutex_unlock(&loader->inflight_mutex);
+    return joined;
+}
+
+// Detach `key`'s in-flight entry and hand back its waiter list (caller owns and
+// must free it). Returns NULL when nothing joined, which is also the correct
+// answer for a failed decode -- the waiters still get invoked, with NULL.
+static TextureWaiter* inflight_release(AsyncLoader* loader, const char* key) {
+    if (!key) {
+        return NULL;
+    }
+
+    TextureWaiter* waiters = NULL;
+
+    pthread_mutex_lock(&loader->inflight_mutex);
+    InFlightLoad** link = &loader->inflight;
+    while (*link) {
+        if (strcmp((*link)->key, key) == 0) {
+            InFlightLoad* entry = *link;
+            *link = entry->next;
+            waiters = entry->waiters;
+            free(entry->key);
+            free(entry);
+            break;
+        }
+        link = &(*link)->next;
+    }
+    pthread_mutex_unlock(&loader->inflight_mutex);
+
+    return waiters;
+}
+
+// Invoke every waiter with the finished texture (NULL if the decode failed) and
+// free the list.
+static void waiters_deliver(TextureWaiter* waiter, Texture* texture) {
+    while (waiter) {
+        TextureWaiter* next = waiter->next;
+        if (waiter->callback) {
+            waiter->callback(texture, waiter->user_data);
+        }
+        free(waiter);
+        waiter = next;
+    }
+}
+
+// Give up a key claimed by inflight_join_or_claim when the submission then
+// fails. Without this the key stays registered against a decode that will never
+// run, and every later request for it would wait forever.
+static void inflight_abandon(AsyncLoader* loader, const char* key) {
+    waiters_deliver(inflight_release(loader, key), NULL);
+}
+
 // Publish a filled request to the work queue and wake a worker. pending_count
 // counts submitted-but-not-yet-finalized work, so it must rise here and fall
 // only in async_loader_process_pending -- the load-time drains that gate the
@@ -84,6 +182,16 @@ static void* worker_thread_func(void* arg) {
         TextureLoadResult* result = calloc(1, sizeof(TextureLoadResult));
         if (!result) {
             log_error("Failed to allocate TextureLoadResult");
+            // Nothing will finalize this key now, so drop the claim -- a later
+            // request must be free to start its own decode instead of waiting
+            // forever. The waiters are discarded rather than invoked: their
+            // callbacks touch materials and may only run on the main thread.
+            TextureWaiter* orphaned = inflight_release(loader, req->filepath);
+            while (orphaned) {
+                TextureWaiter* next_orphan = orphaned->next;
+                free(orphaned);
+                orphaned = next_orphan;
+            }
             free(req->filepath);
             free(req->embedded_data);
             free(req);
@@ -93,6 +201,10 @@ static void* worker_thread_func(void* arg) {
 
         result->callback = req->callback;
         result->user_data = req->user_data;
+        // Kept distinct from filepath below: the file branch resolves that to
+        // an on-disk path, but the in-flight registry is keyed by what the
+        // caller submitted.
+        result->key = safe_strdup(req->filepath);
 
         // Embedded texture: decode the compressed bytes we copied from the
         // aiScene (which may already be released). filepath doubles as the key.
@@ -204,6 +316,7 @@ AsyncLoader* create_async_loader(void) {
     loader->work_tail = NULL;
     loader->complete_head = NULL;
     loader->complete_tail = NULL;
+    loader->inflight = NULL;
 
     if (pthread_mutex_init(&loader->work_mutex, NULL) != 0) {
         log_error("Failed to init work_mutex");
@@ -226,6 +339,15 @@ AsyncLoader* create_async_loader(void) {
         return NULL;
     }
 
+    if (pthread_mutex_init(&loader->inflight_mutex, NULL) != 0) {
+        log_error("Failed to init inflight_mutex");
+        pthread_mutex_destroy(&loader->complete_mutex);
+        pthread_cond_destroy(&loader->work_cond);
+        pthread_mutex_destroy(&loader->work_mutex);
+        free(loader);
+        return NULL;
+    }
+
     // Start worker threads
     for (int i = 0; i < ASYNC_LOADER_WORKER_COUNT; i++) {
         if (pthread_create(&loader->workers[i], NULL, worker_thread_func, loader) != 0) {
@@ -236,6 +358,7 @@ AsyncLoader* create_async_loader(void) {
             for (int j = 0; j < i; j++) {
                 pthread_join(loader->workers[j], NULL);
             }
+            pthread_mutex_destroy(&loader->inflight_mutex);
             pthread_mutex_destroy(&loader->complete_mutex);
             pthread_cond_destroy(&loader->work_cond);
             pthread_mutex_destroy(&loader->work_mutex);
@@ -286,11 +409,28 @@ void free_async_loader(AsyncLoader* loader) {
         if (result->pixel_data) {
             stbi_image_free(result->pixel_data);
         }
+        free(result->key);
         free(result->filepath);
         free(result);
         result = next;
     }
 
+    // Free any in-flight entries whose decode never got finalized
+    InFlightLoad* entry = loader->inflight;
+    while (entry) {
+        InFlightLoad* next_entry = entry->next;
+        TextureWaiter* waiter = entry->waiters;
+        while (waiter) {
+            TextureWaiter* next_waiter = waiter->next;
+            free(waiter);
+            waiter = next_waiter;
+        }
+        free(entry->key);
+        free(entry);
+        entry = next_entry;
+    }
+
+    pthread_mutex_destroy(&loader->inflight_mutex);
     pthread_mutex_destroy(&loader->complete_mutex);
     pthread_cond_destroy(&loader->work_cond);
     pthread_mutex_destroy(&loader->work_mutex);
@@ -329,10 +469,16 @@ void load_texture_async(AsyncLoader* loader, TexturePool* pool, const char* file
         return;
     }
 
+    // Not in the pool, but it may already be decoding
+    if (inflight_join_or_claim(loader, filepath, callback, user_data)) {
+        return;
+    }
+
     // Create request
     TextureLoadRequest* req = calloc(1, sizeof(TextureLoadRequest));
     if (!req) {
         log_error("Failed to allocate TextureLoadRequest");
+        inflight_abandon(loader, filepath);
         if (callback) {
             callback(NULL, user_data);
         }
@@ -348,6 +494,7 @@ void load_texture_async(AsyncLoader* loader, TexturePool* pool, const char* file
     if (!req->filepath) {
         log_error("Failed to duplicate filepath");
         free(req);
+        inflight_abandon(loader, filepath);
         if (callback) {
             callback(NULL, user_data);
         }
@@ -378,6 +525,13 @@ void load_texture_from_memory_async(AsyncLoader* loader, TexturePool* pool, cons
         return;
     }
 
+    // Not in the pool, but it may already be decoding. Checked before the copy
+    // below: the aliased slots that make this fire are precisely the case where
+    // duplicating a multi-megabyte compressed image would be wasted.
+    if (inflight_join_or_claim(loader, key, callback, user_data)) {
+        return;
+    }
+
     // Copy the compressed bytes so the caller can release the source (the
     // aiScene) immediately; the worker owns and frees the copy.
     TextureLoadRequest* req = calloc(1, sizeof(TextureLoadRequest));
@@ -386,6 +540,7 @@ void load_texture_from_memory_async(AsyncLoader* loader, TexturePool* pool, cons
         log_error("Failed to allocate embedded texture request");
         free(req);
         free(copy);
+        inflight_abandon(loader, key);
         if (callback) {
             callback(NULL, user_data);
         }
@@ -484,14 +639,22 @@ size_t async_loader_process_pending(AsyncLoader* loader, TexturePool* pool, size
             log_error("Async texture load failed: %s", result->error_msg);
         }
 
+        // Retire the key first: this decode is done, so a request arriving
+        // afterwards must start a fresh one rather than join a finished load.
+        TextureWaiter* waiters = inflight_release(loader, result->key);
+
         // Invoke callback
         if (result->callback) {
             result->callback(texture, result->user_data);
         }
 
+        // ...then everyone who asked for the same key while it was decoding
+        waiters_deliver(waiters, texture);
+
         atomic_fetch_sub(&loader->pending_count, 1);
         atomic_fetch_add(&loader->completed_count, 1);
 
+        free(result->key);
         free(result->filepath);
         free(result);
         processed++;
