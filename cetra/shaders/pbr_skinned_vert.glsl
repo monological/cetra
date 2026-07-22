@@ -24,6 +24,10 @@ out vec4 PrevClip;     // Previous-frame clip position
 #define MAX_BONES 128
 
 uniform mat4 model;
+// transpose(inverse(model)), uploaded per node (render.c) -- see pbr_vert.
+// The BONE inverse-transpose below is different: bone matrices are a per-vertex
+// blend, so that one genuinely cannot be hoisted.
+uniform mat3 uNormalMatrix;
 uniform mat4 view;
 uniform mat4 projection; // Jittered when TAA is on (rasterization only)
 
@@ -130,18 +134,16 @@ void main() {
 
     FragDepth = clipPos.z / clipPos.w;
 
-    // Transform normals to world space
-    mat3 normalMatrix = mat3(transpose(inverse(model)));
-    Normal = normalize(normalMatrix * localNormal);
+    Normal = normalize(uNormalMatrix * localNormal);
     TexCoords = aTexCoords;
     TexCoords2 = aTexCoords2;
     VertexColor = aColor;
 
     // Built AFTER the bone and model transforms: a blended bone matrix can
     // carry non-uniform scale, which would shear a transformed bitangent out
-    // of square with its own normal and tangent.
-    vec3 N = normalize(mat3(model) * localNormal);
-    TBN = buildTBN(N, mat3(model) * localTangent, aTangent.w);
+    // of square with its own normal and tangent. N is the Normal varying, the
+    // one the fragment stage orthogonalizes against.
+    TBN = buildTBN(Normal, mat3(model) * localTangent, aTangent.w);
 
     gl_Position = clipPos;
 }
