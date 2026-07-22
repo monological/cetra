@@ -35,6 +35,14 @@ char* safe_strdup(const char* s);
 void* safe_realloc(void* ptr, size_t size);
 
 /*
+ * System
+ */
+// Logical CPU count, or 1 if the platform cannot be queried. Callers sizing a
+// thread pool should leave headroom rather than spawning one thread per core --
+// the main thread still has work to do while they run.
+int get_cpu_cores(void);
+
+/*
  * Path
  */
 bool path_exists(const char* path);

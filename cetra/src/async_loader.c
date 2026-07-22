@@ -354,6 +354,30 @@ static void* worker_thread_func(void* arg) {
 }
 
 /*
+ * Size the decode pool to the machine.
+ *
+ * Two cores are held back rather than one: while these workers decode, the main
+ * thread is still walking the scene graph, uploading finished textures and
+ * driving GL, and the driver has threads of its own. Oversubscribing slows that
+ * critical path down without decoding any faster.
+ *
+ * The ceiling matters as much as the count. A scene has tens of distinct
+ * textures and the tail is one or two large images, so past a handful of workers
+ * the wall clock is bounded by the single slowest decode, not by how many run
+ * alongside it -- extra threads just cost memory and scheduling.
+ */
+static int async_loader_worker_count(void) {
+    int workers = get_cpu_cores() - 2;
+    if (workers < ASYNC_LOADER_MIN_WORKERS) {
+        workers = ASYNC_LOADER_MIN_WORKERS;
+    }
+    if (workers > ASYNC_LOADER_MAX_WORKERS) {
+        workers = ASYNC_LOADER_MAX_WORKERS;
+    }
+    return (int)workers;
+}
+
+/*
  * Create async loader with thread pool
  */
 AsyncLoader* create_async_loader(void) {
@@ -403,16 +427,35 @@ AsyncLoader* create_async_loader(void) {
         return NULL;
     }
 
+    loader->worker_count = async_loader_worker_count();
+    loader->workers = calloc((size_t)loader->worker_count, sizeof(pthread_t));
+    if (!loader->workers) {
+        log_error("Failed to allocate %d worker threads", loader->worker_count);
+        pthread_mutex_destroy(&loader->inflight_mutex);
+        pthread_mutex_destroy(&loader->complete_mutex);
+        pthread_cond_destroy(&loader->work_cond);
+        pthread_mutex_destroy(&loader->work_mutex);
+        free(loader);
+        return NULL;
+    }
+
     // Start worker threads
-    for (int i = 0; i < ASYNC_LOADER_WORKER_COUNT; i++) {
+    for (int i = 0; i < loader->worker_count; i++) {
         if (pthread_create(&loader->workers[i], NULL, worker_thread_func, loader) != 0) {
             log_error("Failed to create worker thread %d", i);
+            // Carry on with the workers that did start -- a smaller pool only
+            // decodes more slowly, whereas failing the loader fails the load.
+            if (i >= ASYNC_LOADER_MIN_WORKERS) {
+                loader->worker_count = i;
+                break;
+            }
             // Shutdown already-created threads
             atomic_store(&loader->shutdown, true);
             pthread_cond_broadcast(&loader->work_cond);
             for (int j = 0; j < i; j++) {
                 pthread_join(loader->workers[j], NULL);
             }
+            free(loader->workers);
             pthread_mutex_destroy(&loader->inflight_mutex);
             pthread_mutex_destroy(&loader->complete_mutex);
             pthread_cond_destroy(&loader->work_cond);
@@ -422,7 +465,8 @@ AsyncLoader* create_async_loader(void) {
         }
     }
 
-    log_info("Created async loader with %d worker threads", ASYNC_LOADER_WORKER_COUNT);
+    log_info("Created async loader with %d worker threads (%d cores)", loader->worker_count,
+             get_cpu_cores());
     return loader;
 }
 
@@ -443,9 +487,10 @@ void free_async_loader(AsyncLoader* loader) {
     pthread_mutex_unlock(&loader->work_mutex);
 
     // Join all workers
-    for (int i = 0; i < ASYNC_LOADER_WORKER_COUNT; i++) {
+    for (int i = 0; i < loader->worker_count; i++) {
         pthread_join(loader->workers[i], NULL);
     }
+    free(loader->workers);
 
     // Free remaining work queue items
     TextureLoadRequest* req = loader->work_head;

@@ -11,7 +11,14 @@
 
 #include "texture.h"
 
-#define ASYNC_LOADER_WORKER_COUNT  4
+// The decode pool is sized from the machine at startup (see
+// async_loader_worker_count): enough workers to keep image decoding off the
+// critical path, but fewer than the core count so the main thread -- which is
+// walking the scene graph and driving GL while they run -- is not competing
+// with them for a core. The ceiling is deliberately low: a scene has tens of
+// distinct textures, so extra workers idle rather than help.
+#define ASYNC_LOADER_MIN_WORKERS   2
+#define ASYNC_LOADER_MAX_WORKERS   8
 #define ASYNC_LOADER_MAX_ERROR_MSG 256
 
 /*
@@ -65,7 +72,8 @@ typedef struct TextureLoadResult {
  * Async Loader - thread pool for parallel texture loading
  */
 typedef struct AsyncLoader {
-    pthread_t workers[ASYNC_LOADER_WORKER_COUNT];
+    pthread_t* workers; // worker_count entries, sized to the machine at startup
+    int worker_count;
     atomic_bool shutdown;
 
     // Work queue (main thread -> workers)
