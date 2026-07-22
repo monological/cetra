@@ -21,12 +21,24 @@
 #include "cetra/light.h"
 #include "cetra/texture.h"
 #include "cetra/app.h"
+#include "cetra/sky.h"
+#include "cetra/ibl.h"
+#include "cetra/shadow.h"
+#include "cetra/wind.h"
+#include "cetra/postfx.h"
+#include "cetra/particle_system.h"
+#include "cetra/particle_emitter.h"
+#include "cetra/particle_module.h"
+#include "cetra/particle_renderer.h"
+#include "cetra/particle_sim.h"
+
+#include "tree_gen.h"
 
 #define CIMGUI_DEFINE_ENUMS_AND_STRUCTS
 #include "cimgui.h"
 
-#define CYLINDER_SEGMENTS 12
 #define TEXTURE_SIZE      512
+#define BARK_TEXTURE_SIZE 1024
 
 /*
  * Perlin Noise Implementation
@@ -248,6 +260,38 @@ static unsigned char* generate_bark_normal(int width, int height) {
 }
 
 /*
+ * Generate bark height map (parallax occlusion mapping)
+ *
+ * Same field the normal map differentiates, kept as a scalar so POM can march
+ * it -- the ridges then occlude each other at grazing angles instead of being
+ * a flat surface wearing a picture of ridges.
+ */
+static unsigned char* generate_bark_height(int width, int height) {
+    unsigned char* data = malloc(width * height);
+    if (!data)
+        return NULL;
+
+    init_perlin(42);
+
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            float u = (float)x / width;
+            float v = (float)y / height;
+
+            float noise = fbm_noise(u * 8.0f, v * 16.0f, 4, 0.5f);
+            float crack = worley_noise_2d(u * 6.0f, v * 12.0f, 123);
+            crack = fmaxf(0.0f, 1.0f - crack * 2.5f);
+
+            float h = noise * 0.6f + (1.0f - crack) * 0.4f;
+            h = fmaxf(0.0f, fminf(1.0f, h));
+            data[y * width + x] = (unsigned char)(h * 255);
+        }
+    }
+
+    return data;
+}
+
+/*
  * Helper: smoothstep function
  */
 static float smoothstep(float edge0, float edge1, float x) {
@@ -329,9 +373,12 @@ static unsigned char* generate_leaf_albedo(int width, int height) {
             // Base green with variation
             float noise = fbm_noise(u * 8.0f, v * 8.0f, 3, 0.5f);
 
-            float base_r = 0.12f + noise * 0.08f;
-            float base_g = 0.45f + noise * 0.15f;
-            float base_b = 0.08f + noise * 0.05f;
+            // Real foliage is a muted olive, not a pure green: the red and blue
+            // floors here are what keep it from reading as neon once the sky
+            // ambient and the transmission term pile on.
+            float base_r = 0.19f + noise * 0.10f;
+            float base_g = 0.38f + noise * 0.14f;
+            float base_b = 0.13f + noise * 0.06f;
 
             // Main vein (center vertical)
             float vein_dist = fabsf(u - 0.5f);
@@ -429,67 +476,12 @@ static unsigned char* generate_leaf_normal(int width, int height) {
 }
 
 /*
- * Create OpenGL texture from data
- */
-static Texture* create_texture_from_data(unsigned char* data, int width, int height, GLenum format,
-                                         const char* name) {
-    Texture* tex = create_texture();
-    if (!tex)
-        return NULL;
-
-    tex->width = width;
-    tex->height = height;
-    tex->filepath = strdup(name);
-
-    glGenTextures(1, &tex->id);
-    glBindTexture(GL_TEXTURE_2D, tex->id);
-
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-
-    // Use sized internal formats
-    GLenum internal_format;
-    if (format == GL_RGBA) {
-        internal_format = GL_RGBA8;
-    } else if (format == GL_RED) {
-        internal_format = GL_R8;
-    } else {
-        internal_format = GL_RGB8;
-    }
-
-    tex->internal_format = internal_format;
-    tex->data_format = format;
-
-    glTexImage2D(GL_TEXTURE_2D, 0, internal_format, width, height, 0, format, GL_UNSIGNED_BYTE,
-                 data);
-
-    GLenum err = glGetError();
-    if (err != GL_NO_ERROR) {
-        printf("OpenGL error after glTexImage2D for %s: %d\n", name, err);
-    }
-
-    glGenerateMipmap(GL_TEXTURE_2D);
-
-    err = glGetError();
-    if (err != GL_NO_ERROR) {
-        printf("OpenGL error after glGenerateMipmap for %s: %d\n", name, err);
-    }
-
-    glBindTexture(GL_TEXTURE_2D, 0);
-
-    printf("Created texture %s: id=%u, %dx%d\n", name, tex->id, width, height);
-
-    return tex;
-}
-
-/*
  * Generate all procedural textures
  */
 static Texture* bark_albedo_tex = NULL;
 static Texture* bark_normal_tex = NULL;
 static Texture* bark_roughness_tex = NULL;
+static Texture* bark_height_tex = NULL;
 static Texture* leaf_albedo_tex = NULL;
 static Texture* leaf_normal_tex = NULL;
 static Texture* island_albedo_tex = NULL;
@@ -581,61 +573,40 @@ static unsigned char* generate_island_albedo(int width, int height) {
     return data;
 }
 
-static void generate_procedural_textures(void) {
+// Bake one CPU buffer into a pooled texture and release the buffer. Going
+// through the pool (rather than a hand-rolled glTexImage2D) is what gets the
+// albedo maps decoded as sRGB and, for the leaf cutout, gets the transparent
+// texels' RGB dilated so mipping doesn't fringe the leaf edges with black.
+static Texture* bake_texture(Scene* scene, unsigned char* data, int size, int channels,
+                             bool is_srgb, const char* key) {
+    if (!data)
+        return NULL;
+    Texture* tex = load_texture_from_memory(scene->tex_pool, key, data, size, size, channels,
+                                            is_srgb);
+    free(data);
+    return tex;
+}
+
+static void generate_procedural_textures(Scene* scene) {
+    const int B = BARK_TEXTURE_SIZE;
+    const int T = TEXTURE_SIZE;
+
     printf("Generating procedural bark textures...\n");
-
-    unsigned char* bark_albedo_data = generate_bark_albedo(TEXTURE_SIZE, TEXTURE_SIZE);
-    if (bark_albedo_data) {
-        bark_albedo_tex = create_texture_from_data(bark_albedo_data, TEXTURE_SIZE, TEXTURE_SIZE,
-                                                   GL_RGB, "proc_bark_albedo");
-        free(bark_albedo_data);
-    }
-
-    unsigned char* bark_normal_data = generate_bark_normal(TEXTURE_SIZE, TEXTURE_SIZE);
-    if (bark_normal_data) {
-        bark_normal_tex = create_texture_from_data(bark_normal_data, TEXTURE_SIZE, TEXTURE_SIZE,
-                                                   GL_RGB, "proc_bark_normal");
-        free(bark_normal_data);
-    }
-
-    unsigned char* bark_rough_data = generate_bark_roughness(TEXTURE_SIZE, TEXTURE_SIZE);
-    if (bark_rough_data) {
-        bark_roughness_tex = create_texture_from_data(bark_rough_data, TEXTURE_SIZE, TEXTURE_SIZE,
-                                                      GL_RED, "proc_bark_roughness");
-        free(bark_rough_data);
-    }
+    bark_albedo_tex = bake_texture(scene, generate_bark_albedo(B, B), B, 3, true, "proc_bark_albedo");
+    bark_normal_tex = bake_texture(scene, generate_bark_normal(B, B), B, 3, false, "proc_bark_normal");
+    bark_roughness_tex =
+        bake_texture(scene, generate_bark_roughness(B, B), B, 1, false, "proc_bark_roughness");
+    bark_height_tex = bake_texture(scene, generate_bark_height(B, B), B, 1, false, "proc_bark_height");
 
     printf("Generating procedural leaf textures...\n");
-
-    unsigned char* leaf_albedo_data = generate_leaf_albedo(TEXTURE_SIZE, TEXTURE_SIZE);
-    if (leaf_albedo_data) {
-        leaf_albedo_tex = create_texture_from_data(leaf_albedo_data, TEXTURE_SIZE, TEXTURE_SIZE,
-                                                   GL_RGBA, "proc_leaf_albedo");
-        free(leaf_albedo_data);
-    }
-
-    unsigned char* leaf_normal_data = generate_leaf_normal(TEXTURE_SIZE, TEXTURE_SIZE);
-    if (leaf_normal_data) {
-        leaf_normal_tex = create_texture_from_data(leaf_normal_data, TEXTURE_SIZE, TEXTURE_SIZE,
-                                                   GL_RGB, "proc_leaf_normal");
-        free(leaf_normal_data);
-    }
+    leaf_albedo_tex = bake_texture(scene, generate_leaf_albedo(T, T), T, 4, true, "proc_leaf_albedo");
+    leaf_normal_tex = bake_texture(scene, generate_leaf_normal(T, T), T, 3, false, "proc_leaf_normal");
 
     printf("Generating procedural island textures...\n");
-
-    unsigned char* island_albedo_data = generate_island_albedo(TEXTURE_SIZE, TEXTURE_SIZE);
-    if (island_albedo_data) {
-        island_albedo_tex = create_texture_from_data(island_albedo_data, TEXTURE_SIZE, TEXTURE_SIZE,
-                                                     GL_RGB, "proc_island_albedo");
-        free(island_albedo_data);
-    }
-
-    unsigned char* island_normal_data = generate_island_normal(TEXTURE_SIZE, TEXTURE_SIZE);
-    if (island_normal_data) {
-        island_normal_tex = create_texture_from_data(island_normal_data, TEXTURE_SIZE, TEXTURE_SIZE,
-                                                     GL_RGB, "proc_island_normal");
-        free(island_normal_data);
-    }
+    island_albedo_tex =
+        bake_texture(scene, generate_island_albedo(T, T), T, 3, true, "proc_island_albedo");
+    island_normal_tex =
+        bake_texture(scene, generate_island_normal(T, T), T, 3, false, "proc_island_normal");
 
     printf("Procedural textures generated.\n");
 
@@ -656,25 +627,6 @@ const unsigned int HEIGHT = 900;
 const unsigned int WIDTH = 1400;
 
 /*
- * Tree Parameters
- */
-typedef struct {
-    int max_depth;
-    float trunk_length;
-    float trunk_radius;
-    int branches_per_node;
-    float length_decay;
-    float radius_decay;
-    float branch_angle;
-    float angle_variance;
-    float twist;
-    int seed;
-    int show_leaves;
-    float leaf_size;
-    int leaves_per_tip;
-} TreeParams;
-
-/*
  * Globals
  */
 static TreeParams params;
@@ -685,17 +637,28 @@ static SceneNode* tree_root = NULL;
 static SceneNode* island_node = NULL;
 static Material* island_material = NULL;
 
+static SkyAtmosphere* sky = NULL;
+static IBLResources* ibl = NULL;
+static Light* sun_light = NULL;
+static Wind* scene_wind = NULL;
+
+// Falling leaves: the spawn module is held so the GUI can gate it without
+// tearing down the emitter (existing leaves finish their fall).
+static ParticleModule* leaf_spawn_module = NULL;
+static bool falling_leaves_on = true;
+static float leaf_spawn_rate = 2.5f;
+
+// Season tint multiplies the leaf albedo texture: 0 = summer green, 1 = autumn.
+static float season = 0.0f;
+static float prev_season = -1.0f;
+
+static float sun_elevation = 14.0f;
+static float sun_azimuth = 235.0f;
+
 /*
  * Mouse drag controller
  */
 static MouseDragController* drag_controller = NULL;
-
-/*
- * Random float in range
- */
-static float rand_range(float min_val, float max_val) {
-    return min_val + (float)rand() / RAND_MAX * (max_val - min_val);
-}
 
 /*
  * Generate island mesh - a domed disc
@@ -825,233 +788,6 @@ static void create_island(SceneNode* parent) {
 }
 
 /*
- * Generate leaf cluster at branch tip
- */
-static void generate_leaf_cluster(SceneNode* parent, vec3 tip_pos, vec3 direction,
-                                  const TreeParams* p, Material* mat) {
-    if (!p->show_leaves || p->leaves_per_tip <= 0) {
-        return;
-    }
-
-    SceneNode* leaf_node = create_node();
-    set_node_name(leaf_node, "leaves");
-
-    Mesh* mesh = create_mesh();
-    mesh->material = mat;
-
-    int num_leaves = p->leaves_per_tip;
-    float size = p->leaf_size;
-
-    // Each leaf is a quad: 4 vertices, 6 indices
-    mesh->vertex_count = num_leaves * 4;
-    mesh->index_count = num_leaves * 6;
-
-    mesh->vertices = malloc(mesh->vertex_count * 3 * sizeof(float));
-    mesh->normals = malloc(mesh->vertex_count * 3 * sizeof(float));
-    mesh->tex_coords = malloc(mesh->vertex_count * 2 * sizeof(float));
-    mesh->tangents = malloc(mesh->vertex_count * 3 * sizeof(float));
-    mesh->bitangents = malloc(mesh->vertex_count * 3 * sizeof(float));
-    mesh->indices = malloc(mesh->index_count * sizeof(unsigned int));
-
-    if (!mesh->vertices || !mesh->normals || !mesh->tex_coords || !mesh->indices ||
-        !mesh->tangents || !mesh->bitangents) {
-        free_mesh(mesh);
-        free_node(leaf_node);
-        return;
-    }
-
-    // UV coordinates for quad corners
-    float uvs[4][2] = {{0.0f, 0.0f}, {1.0f, 0.0f}, {1.0f, 1.0f}, {0.0f, 1.0f}};
-
-    for (int i = 0; i < num_leaves; i++) {
-        // Random offset from tip
-        vec3 offset;
-        offset[0] = rand_range(-size * 0.5f, size * 0.5f);
-        offset[1] = rand_range(-size * 0.3f, size * 0.5f);
-        offset[2] = rand_range(-size * 0.5f, size * 0.5f);
-
-        vec3 center;
-        glm_vec3_add(tip_pos, offset, center);
-
-        // Random rotation angles
-        float rot_x = rand_range(-0.5f, 0.5f);
-        float rot_y = rand_range(0, GLM_PI * 2);
-        float rot_z = rand_range(-0.3f, 0.3f);
-
-        // Create a rotated quad
-        float half = size * 0.5f;
-
-        // Base quad corners (before rotation)
-        vec3 corners[4] = {{-half, 0, -half}, {half, 0, -half}, {half, 0, half}, {-half, 0, half}};
-
-        // Simple rotation
-        mat4 rot;
-        glm_mat4_identity(rot);
-        glm_rotate(rot, rot_x, (vec3){1, 0, 0});
-        glm_rotate(rot, rot_y, (vec3){0, 1, 0});
-        glm_rotate(rot, rot_z, (vec3){0, 0, 1});
-
-        // Normal (up vector rotated)
-        vec3 normal = {0, 1, 0};
-        glm_mat4_mulv3(rot, normal, 0.0f, normal);
-        glm_vec3_normalize(normal);
-
-        // Tangent (X-axis of quad, along U direction)
-        vec3 tangent = {1, 0, 0};
-        glm_mat4_mulv3(rot, tangent, 0.0f, tangent);
-        glm_vec3_normalize(tangent);
-
-        // Bitangent (Z-axis of quad, along V direction)
-        vec3 bitangent = {0, 0, 1};
-        glm_mat4_mulv3(rot, bitangent, 0.0f, bitangent);
-        glm_vec3_normalize(bitangent);
-
-        int base_v = i * 4;
-        int base_i = i * 6;
-
-        for (int j = 0; j < 4; j++) {
-            vec3 rotated;
-            glm_mat4_mulv3(rot, corners[j], 0.0f, rotated);
-
-            mesh->vertices[(base_v + j) * 3 + 0] = center[0] + rotated[0];
-            mesh->vertices[(base_v + j) * 3 + 1] = center[1] + rotated[1];
-            mesh->vertices[(base_v + j) * 3 + 2] = center[2] + rotated[2];
-
-            mesh->normals[(base_v + j) * 3 + 0] = normal[0];
-            mesh->normals[(base_v + j) * 3 + 1] = normal[1];
-            mesh->normals[(base_v + j) * 3 + 2] = normal[2];
-
-            mesh->tangents[(base_v + j) * 3 + 0] = tangent[0];
-            mesh->tangents[(base_v + j) * 3 + 1] = tangent[1];
-            mesh->tangents[(base_v + j) * 3 + 2] = tangent[2];
-
-            mesh->bitangents[(base_v + j) * 3 + 0] = bitangent[0];
-            mesh->bitangents[(base_v + j) * 3 + 1] = bitangent[1];
-            mesh->bitangents[(base_v + j) * 3 + 2] = bitangent[2];
-
-            mesh->tex_coords[(base_v + j) * 2 + 0] = uvs[j][0];
-            mesh->tex_coords[(base_v + j) * 2 + 1] = uvs[j][1];
-        }
-
-        // Two triangles for quad
-        mesh->indices[base_i + 0] = base_v + 0;
-        mesh->indices[base_i + 1] = base_v + 1;
-        mesh->indices[base_i + 2] = base_v + 2;
-        mesh->indices[base_i + 3] = base_v + 0;
-        mesh->indices[base_i + 4] = base_v + 2;
-        mesh->indices[base_i + 5] = base_v + 3;
-    }
-
-    mesh->draw_mode = TRIANGLES;
-    calculate_aabb(mesh);
-
-    add_mesh_to_node(leaf_node, mesh);
-    add_child_node(parent, leaf_node);
-}
-
-/*
- * Generate a branch recursively
- */
-static void generate_branch(SceneNode* parent, vec3 base_pos, vec3 direction, float length,
-                            float radius, int depth, TreeParams* p) {
-    if (depth > p->max_depth || radius < 0.1f || length < 0.5f) {
-        return;
-    }
-
-    SceneNode* branch_node = create_node();
-    char name[32];
-    snprintf(name, sizeof(name), "branch_d%d", depth);
-    set_node_name(branch_node, name);
-
-    // Create cylinder mesh
-    Mesh* mesh = create_mesh();
-    mesh->material = bark_material;
-
-    float top_radius = radius * p->radius_decay;
-
-    Cylinder cyl = {.position = {0, 0, 0},
-                    .base_radius = radius,
-                    .top_radius = top_radius,
-                    .height = length,
-                    .segments = CYLINDER_SEGMENTS};
-    generate_cylinder_to_mesh(mesh, &cyl);
-    calculate_aabb(mesh);
-
-    add_mesh_to_node(branch_node, mesh);
-
-    // Build transform: translate to base_pos, then rotate to align Y-axis with direction
-    mat4 transform;
-    glm_mat4_identity(transform);
-
-    // Translate to base position
-    glm_translate(transform, base_pos);
-
-    // Rotate to align (0,1,0) with direction
-    vec3 up = {0, 1, 0};
-    vec3 dir_norm;
-    glm_vec3_copy(direction, dir_norm);
-    glm_vec3_normalize(dir_norm);
-
-    float dot = glm_vec3_dot(up, dir_norm);
-    if (dot < 0.9999f && dot > -0.9999f) {
-        vec3 axis;
-        glm_vec3_cross(up, dir_norm, axis);
-        glm_vec3_normalize(axis);
-        float angle = acosf(dot);
-        glm_rotate(transform, angle, axis);
-    } else if (dot <= -0.9999f) {
-        // Flip 180 degrees
-        glm_rotate(transform, GLM_PI, (vec3){1, 0, 0});
-    }
-
-    glm_mat4_copy(transform, branch_node->original_transform);
-
-    add_child_node(parent, branch_node);
-
-    // Calculate tip position in local space (will be transformed by parent)
-    vec3 tip_local = {0, length, 0};
-    vec3 tip_world;
-    glm_mat4_mulv3(transform, tip_local, 1.0f, tip_world);
-
-    // If at max depth, add leaves
-    if (depth == p->max_depth) {
-        generate_leaf_cluster(branch_node, tip_local, dir_norm, p, leaf_material);
-        return;
-    }
-
-    // Generate child branches
-    float new_length = length * p->length_decay;
-    float new_radius = radius * p->radius_decay;
-    float angle_rad = p->branch_angle * GLM_PI / 180.0f;
-    float variance_rad = p->angle_variance * GLM_PI / 180.0f;
-    float twist_rad = p->twist * GLM_PI / 180.0f;
-
-    for (int i = 0; i < p->branches_per_node; i++) {
-        // Distribute branches around the stem
-        float base_twist = twist_rad + (2.0f * GLM_PI * i / p->branches_per_node);
-        float actual_angle = angle_rad + rand_range(-variance_rad, variance_rad);
-
-        // Create rotation for branch direction
-        mat4 branch_rot;
-        glm_mat4_identity(branch_rot);
-
-        // Rotate around Y (twist)
-        glm_rotate(branch_rot, base_twist + rand_range(-0.2f, 0.2f), (vec3){0, 1, 0});
-
-        // Tilt away from vertical
-        glm_rotate(branch_rot, actual_angle, (vec3){1, 0, 0});
-
-        // Apply to up vector to get new direction
-        vec3 new_dir = {0, 1, 0};
-        glm_mat4_mulv3(branch_rot, new_dir, 0.0f, new_dir);
-        glm_vec3_normalize(new_dir);
-
-        // Branch starts at tip of current branch (in local coordinates)
-        generate_branch(branch_node, tip_local, new_dir, new_length, new_radius, depth + 1, p);
-    }
-}
-
-/*
  * Free all tree nodes (but not lights)
  */
 static void free_tree_nodes(SceneNode* root) {
@@ -1081,22 +817,59 @@ static void free_tree_nodes(SceneNode* root) {
 
 /*
  * Regenerate tree
+ *
+ * All the bark lands in one mesh and all the leaves in another, so the whole
+ * tree is two draw calls no matter how many branches the sliders ask for.
  */
-static void regenerate_tree(Scene* scene, TreeParams* p) {
+static void regenerate_tree(Scene* scene, const TreeParams* p) {
     free_tree_nodes(scene->root_node);
 
-    srand(p->seed);
+    TreeSkeleton skel;
+    memset(&skel, 0, sizeof(skel));
+    tree_skeleton_build(&skel, p);
 
     tree_root = create_node();
-    set_node_name(tree_root, "tree_root");
+    set_node_name(tree_root, "tree");
     add_child_node(scene->root_node, tree_root);
 
-    vec3 origin = {0, 0, 0};
-    vec3 up = {0, 1, 0};
+    Mesh* bark = create_mesh();
+    if (tree_mesh_bark(&skel, p, bark)) {
+        bark->material = bark_material;
+        add_mesh_to_node(tree_root, bark);
+    } else {
+        free_mesh(bark);
+    }
 
-    generate_branch(tree_root, origin, up, p->trunk_length, p->trunk_radius, 0, p);
+    Mesh* leaves = create_mesh();
+    if (tree_mesh_leaves(&skel, p, leaves)) {
+        leaves->material = leaf_material;
+        add_mesh_to_node(tree_root, leaves);
+    } else {
+        free_mesh(leaves);
+    }
+
+    printf("Tree: %d branches, %zu bark verts, %zu leaf verts\n", skel.branch_count,
+           tree_root->mesh_count > 0 ? tree_root->meshes[0]->vertex_count : (size_t)0,
+           tree_root->mesh_count > 1 ? tree_root->meshes[1]->vertex_count : (size_t)0);
+
+    tree_skeleton_free(&skel);
 
     upload_buffers_to_gpu_for_nodes(scene->root_node);
+}
+
+// Leaf color across the season slider. The albedo factor multiplies the leaf
+// texture, so this rides on top of the procedural green rather than replacing
+// it; the subsurface tint follows so backlit leaves warm up with the canopy.
+static void apply_season(float t) {
+    if (!leaf_material)
+        return;
+    vec3 summer = {1.0f, 1.0f, 1.0f};
+    vec3 autumn = {1.35f, 0.62f, 0.18f};
+    glm_vec3_lerp(summer, autumn, t, leaf_material->albedo);
+
+    vec3 green_sss = {0.5f, 0.8f, 0.15f};
+    vec3 amber_sss = {0.95f, 0.5f, 0.1f};
+    glm_vec3_lerp(green_sss, amber_sss, t, leaf_material->subsurface_color);
 }
 
 /*
@@ -1109,34 +882,76 @@ static void render_tree_gui(const Engine* engine, Scene* scene) {
         return;
 
     igSetNextWindowPos((ImVec2){15, 15}, ImGuiCond_FirstUseEver, (ImVec2){0, 0});
-    igSetNextWindowSize((ImVec2){260, 540}, ImGuiCond_FirstUseEver);
-    if (igBegin("Tree Parameters", NULL, 0)) {
+    igSetNextWindowSize((ImVec2){300, 720}, ImGuiCond_FirstUseEver);
+    if (igBegin("Tree", NULL, 0)) {
         igSeparatorText("Seed");
         igSliderInt("Seed", &params.seed, 0, 9999, "%d", 0);
 
         igSeparatorText("Structure");
-        igSliderInt("Max Depth", &params.max_depth, 1, 7, "%d", 0);
+        igSliderInt("Max Depth", &params.max_depth, 1, 6, "%d", 0);
         igSliderInt("Branches", &params.branches_per_node, 1, 5, "%d", 0);
+        igSliderFloat("Laterals", &params.lateral_density, 0.0f, 3.0f, "%.2f", 0);
 
         igSeparatorText("Dimensions");
         igSliderFloat("Trunk Len", &params.trunk_length, 10.0f, 200.0f, "%.1f", 0);
         igSliderFloat("Trunk Rad", &params.trunk_radius, 1.0f, 30.0f, "%.1f", 0);
-
-        igSeparatorText("Decay");
         igSliderFloat("Len Decay", &params.length_decay, 0.3f, 0.95f, "%.3f", 0);
-        igSliderFloat("Rad Decay", &params.radius_decay, 0.3f, 0.95f, "%.3f", 0);
+        igSliderFloat("Taper", &params.taper, 0.45f, 0.85f, "%.3f", 0);
+        igSliderFloat("Twig Scale", &params.twig_scale, 0.5f, 2.0f, "%.2f", 0);
 
         igSeparatorText("Angles");
         igSliderFloat("Angle", &params.branch_angle, 5.0f, 90.0f, "%.1f", 0);
         igSliderFloat("Variance", &params.angle_variance, 0.0f, 45.0f, "%.1f", 0);
         igSliderFloat("Twist", &params.twist, 0.0f, 180.0f, "%.1f", 0);
 
+        igSeparatorText("Curvature");
+        igSliderFloat("Droop", &params.droop, 0.0f, 1.0f, "%.2f", 0);
+        igSliderFloat("Curve Noise", &params.curve_noise, 0.0f, 1.0f, "%.2f", 0);
+        igSliderFloat("Phototropism", &params.phototropism, 0.0f, 1.0f, "%.2f", 0);
+
         igSeparatorText("Leaves");
         bool show_leaves = params.show_leaves != 0;
         if (igCheckbox("Show Leaves", &show_leaves))
             params.show_leaves = show_leaves;
         igSliderFloat("Leaf Size", &params.leaf_size, 1.0f, 30.0f, "%.1f", 0);
-        igSliderInt("Leaves/Tip", &params.leaves_per_tip, 1, 15, "%d", 0);
+        igSliderFloat("Leaf Density", &params.leaf_density, 0.5f, 8.0f, "%.2f", 0);
+        igSliderFloat("Season", &season, 0.0f, 1.0f, "%.2f", 0);
+
+        igSeparatorText("Wind");
+        if (scene_wind) {
+            igSliderFloat("Strength", &scene_wind->strength, 0.0f, 8.0f, "%.2f", 0);
+            igSliderFloat("Speed", &scene_wind->speed, 0.0f, 4.0f, "%.2f", 0);
+            igSliderFloat("Gust Freq", &scene_wind->gust_frequency, 0.0f, 2.0f, "%.2f", 0);
+            igSliderFloat("Gust Amount", &scene_wind->gust_amount, 0.0f, 1.0f, "%.2f", 0);
+            igSliderFloat("Turbulence", &scene_wind->turbulence, 0.0f, 1.0f, "%.2f", 0);
+        }
+
+        igSeparatorText("Falling Leaves");
+        if (igCheckbox("Enabled", &falling_leaves_on) && leaf_spawn_module) {
+            particle_module_spawn_rate_set(leaf_spawn_module,
+                                           falling_leaves_on ? leaf_spawn_rate : 0.0f);
+        }
+        if (igSliderFloat("Rate", &leaf_spawn_rate, 0.0f, 15.0f, "%.1f", 0) && leaf_spawn_module &&
+            falling_leaves_on) {
+            particle_module_spawn_rate_set(leaf_spawn_module, leaf_spawn_rate);
+        }
+
+        igSeparatorText("Atmosphere");
+        if (engine->postfx) {
+            igCheckbox("Fog", &engine->postfx->fog_enabled);
+            igSliderFloat("Fog Density", &engine->postfx->fog_density, 0.0f, 0.0015f, "%.5f", 0);
+            igSliderFloat("Fog Height", &engine->postfx->fog_height_falloff, 5.0f, 200.0f, "%.0f",
+                          0);
+        }
+
+        igSeparatorText("Sun");
+        bool sun_moved = igSliderFloat("Elevation", &sun_elevation, -5.0f, 89.0f, "%.1f", 0);
+        sun_moved |= igSliderFloat("Azimuth", &sun_azimuth, 0.0f, 360.0f, "%.1f", 0);
+        if (sun_moved && sky) {
+            sky->sun_elevation_deg = sun_elevation;
+            sky->sun_azimuth_deg = sun_azimuth;
+            sky_update_sun(sky, ibl, (Engine*)engine);
+        }
     }
     igEnd();
 }
@@ -1182,6 +997,14 @@ void key_callback(Engine* engine, int key, int scancode, int action, int mods) {
     }
 }
 
+// Ticks the falling-leaf emitter. The engine drives the render pass; particles
+// need a simulation step of their own.
+void tree_update_callback(Engine* engine, float delta_time) {
+    Scene* scene = get_current_scene(engine);
+    if (scene)
+        scene_update_particle_systems(scene, delta_time, (float)engine->last_frame_time);
+}
+
 void render_scene_callback(Engine* engine, Scene* scene) {
     if (!engine || !scene || !scene->root_node) {
         return;
@@ -1196,6 +1019,11 @@ void render_scene_callback(Engine* engine, Scene* scene) {
         memcpy(&prev_params, &params, sizeof(TreeParams));
     }
 
+    if (season != prev_season) {
+        apply_season(season);
+        prev_season = season;
+    }
+
     // Update camera - only if not hovering over GUI
     if (drag_controller && app_can_process_3d_input(engine)) {
         mouse_drag_update(drag_controller, glfwGetTime());
@@ -1206,14 +1034,168 @@ void render_scene_callback(Engine* engine, Scene* scene) {
     reset_and_apply_transform(&engine->model_matrix, &t);
     apply_transform_to_nodes(scene->root_node, engine->model_matrix);
 
-    render_current_scene(engine, glfwGetTime());
+    // Same clock the shadow depth pass reads, so wind-displaced geometry and
+    // its shadow stay locked together.
+    render_current_scene(engine, (float)engine->last_frame_time);
+}
+
+/*
+ * Command line
+ */
+typedef struct {
+    int headless;
+    int frames;
+    int screenshot_every;
+    const char* screenshot;
+    int width, height;
+    int no_shadows;
+    int no_falling_leaves;
+    int seed;
+    float sun_elevation;
+    float sun_azimuth;
+} TreeArgs;
+
+static void print_usage(const char* prog) {
+    printf("Usage: %s [options]\n", prog);
+    printf("  -x, --headless          Run with a hidden window (for capture / CI)\n");
+    printf("  -f, --frames N          Exit after N frames\n");
+    printf("  -S, --screenshot PATH   Write the final frame as a binary PPM\n");
+    printf("      --screenshot-every N  Also write every Nth frame\n");
+    printf("  -W, --width N           Window width (default %u)\n", WIDTH);
+    printf("  -H, --height N          Window height (default %u)\n", HEIGHT);
+    printf("      --seed N            Tree seed\n");
+    printf("      --sun-elevation D   Sun elevation in degrees\n");
+    printf("      --sun-azimuth D     Sun azimuth in degrees\n");
+    printf("      --no-shadows        Disable the shadow pass\n");
+    printf("      --no-falling-leaves Disable the falling-leaf particles\n");
+    printf("  -h, --help              This message\n");
+}
+
+static bool parse_args(int argc, char** argv, TreeArgs* a) {
+    memset(a, 0, sizeof(*a));
+    a->width = (int)WIDTH;
+    a->height = (int)HEIGHT;
+    a->seed = 42;
+    a->sun_elevation = 14.0f;
+    a->sun_azimuth = 235.0f;
+
+    for (int i = 1; i < argc; i++) {
+        const char* s = argv[i];
+        bool has_next = (i + 1) < argc;
+
+        if (!strcmp(s, "-x") || !strcmp(s, "--headless")) {
+            a->headless = 1;
+        } else if ((!strcmp(s, "-f") || !strcmp(s, "--frames")) && has_next) {
+            a->frames = atoi(argv[++i]);
+        } else if ((!strcmp(s, "-S") || !strcmp(s, "--screenshot")) && has_next) {
+            a->screenshot = argv[++i];
+        } else if (!strcmp(s, "--screenshot-every") && has_next) {
+            a->screenshot_every = atoi(argv[++i]);
+        } else if ((!strcmp(s, "-W") || !strcmp(s, "--width")) && has_next) {
+            a->width = atoi(argv[++i]);
+        } else if ((!strcmp(s, "-H") || !strcmp(s, "--height")) && has_next) {
+            a->height = atoi(argv[++i]);
+        } else if (!strcmp(s, "--seed") && has_next) {
+            a->seed = atoi(argv[++i]);
+        } else if (!strcmp(s, "--sun-elevation") && has_next) {
+            a->sun_elevation = (float)atof(argv[++i]);
+        } else if (!strcmp(s, "--sun-azimuth") && has_next) {
+            a->sun_azimuth = (float)atof(argv[++i]);
+        } else if (!strcmp(s, "--no-shadows")) {
+            a->no_shadows = 1;
+        } else if (!strcmp(s, "--no-falling-leaves")) {
+            a->no_falling_leaves = 1;
+        } else if (!strcmp(s, "-h") || !strcmp(s, "--help")) {
+            print_usage(argv[0]);
+            return false;
+        } else {
+            fprintf(stderr, "Unknown or incomplete option: %s\n", s);
+            print_usage(argv[0]);
+            return false;
+        }
+    }
+    return true;
+}
+
+/*
+ * Falling leaves
+ *
+ * Sparse enough to read as individual leaves rather than weather. They spawn in
+ * a box around the canopy, tumble on their own roll, drift downwind, and stop
+ * on the island rather than sinking through it.
+ */
+static void create_falling_leaves(Engine* engine, Scene* scene, float canopy_radius,
+                                  float canopy_top) {
+    ShaderProgram* particle_prog = create_particle_program();
+    if (!particle_prog)
+        return;
+    add_shader_program_to_engine(engine, particle_prog);
+
+    ParticleSystem* sys = create_particle_system("falling_leaves");
+    if (!sys)
+        return;
+    particle_system_set_backend(sys, create_cpu_particle_sim_backend());
+
+    ParticleEmitter* em = create_particle_emitter("leaf", 256);
+    if (!em)
+        return;
+
+    ParticleRenderer* pr = create_billboard_particle_renderer(particle_prog);
+    // hdr_gain 1.0: these are lit surfaces, not glowing motes -- the mote
+    // default of 6.0 would blow them into bloom.
+    billboard_renderer_set_sprite(pr, leaf_albedo_tex, 1.0f);
+    particle_emitter_set_renderer(em, pr);
+
+    leaf_spawn_module = particle_module_spawn_rate(leaf_spawn_rate);
+    particle_emitter_add_module(em, leaf_spawn_module);
+
+    vec3 spawn_min = {-canopy_radius, canopy_top * 0.45f, -canopy_radius};
+    vec3 spawn_max = {canopy_radius, canopy_top, canopy_radius};
+    particle_emitter_add_module(em, particle_module_init_box_location(spawn_min, spawn_max));
+    particle_emitter_add_module(em, particle_module_init_lifetime(14.0f, 22.0f));
+    particle_emitter_add_module(em, particle_module_init_size(2.0f, 3.5f));
+    particle_emitter_add_module(em,
+                                particle_module_init_color((vec4){1.0f, 0.85f, 0.55f, 1.0f}, 0.1f));
+
+    particle_emitter_add_module(em, particle_module_update_rotation(0.4f, 1.2f));
+    particle_emitter_add_module(em, particle_module_update_curl_noise(0.02f, 5.0f, 0.1f));
+
+    vec3 fall = {scene_wind ? scene_wind->direction[0] * 1.5f : 1.5f, -3.5f,
+                 scene_wind ? scene_wind->direction[2] * 1.5f : 0.0f};
+    particle_emitter_add_module(em, particle_module_update_drift(fall));
+    particle_emitter_add_module(em, particle_module_update_integrate(0.96f));
+
+    // The island's crown sits at y = 10 (dome height 15, node at -5).
+    vec3 ground_p = {0.0f, 10.0f, 0.0f};
+    vec3 ground_n = {0.0f, 1.0f, 0.0f};
+    particle_emitter_add_module(
+        em, particle_module_collider_plane(ground_p, ground_n, 0.0f));
+
+    particle_system_add_emitter(sys, em);
+    add_particle_system_to_scene(scene, sys);
+
+    SceneNode* node = create_node();
+    set_node_name(node, "falling_leaves");
+    set_node_particle_system(node, sys);
+    add_child_node(scene->root_node, node);
 }
 
 /*
  * Main
  */
-int main(void) {
-    Engine* engine = create_engine("Procedural Tree", WIDTH, HEIGHT);
+int main(int argc, char** argv) {
+    TreeArgs args;
+    if (!parse_args(argc, argv, &args))
+        return 0;
+
+    sun_elevation = args.sun_elevation;
+    sun_azimuth = args.sun_azimuth;
+
+    Engine* engine = create_engine("Procedural Tree", args.width, args.height);
+    set_engine_headless(engine, args.headless != 0);
+    set_engine_screenshot_path(engine, args.screenshot);
+    set_engine_screenshot_every(engine, args.screenshot_every);
+    set_engine_exit_after_frames(engine, args.frames);
 
     if (init_engine(engine) != 0) {
         fprintf(stderr, "Failed to initialize engine\n");
@@ -1223,92 +1205,28 @@ int main(void) {
     set_engine_mouse_button_callback(engine, mouse_button_callback);
     set_engine_key_callback(engine, key_callback);
 
-    // Get shaders
     ShaderProgram* pbr_program = get_engine_shader_program_by_name(engine, "pbr");
     if (!pbr_program) {
         fprintf(stderr, "Failed to get PBR shader\n");
         return -1;
     }
-
     ShaderProgram* xyz_program = get_engine_shader_program_by_name(engine, "xyz");
 
-    // Create materials
-    // Generate procedural textures
-    generate_procedural_textures();
-
-    // Create bark material with procedural textures
-    bark_material = create_material();
-    bark_material->albedo[0] = 1.0f; // White base, texture provides color
-    bark_material->albedo[1] = 1.0f;
-    bark_material->albedo[2] = 1.0f;
-    bark_material->roughness = 0.75f;
-    bark_material->metallic = 0.0f;
-    bark_material->ao = 1.0f;
-    set_material_shader_program(bark_material, pbr_program);
-
-    // Apply bark textures
-    if (bark_albedo_tex) {
-        set_material_albedo_tex(bark_material, bark_albedo_tex);
-    }
-    if (bark_normal_tex) {
-        set_material_normal_tex(bark_material, bark_normal_tex);
-    }
-    if (bark_roughness_tex) {
-        set_material_roughness_tex(bark_material, bark_roughness_tex);
-    }
-
-    // Create leaf material with procedural textures
-    leaf_material = create_material();
-    leaf_material->albedo[0] = 1.0f; // White base, texture provides color
-    leaf_material->albedo[1] = 1.0f;
-    leaf_material->albedo[2] = 1.0f;
-    leaf_material->roughness = 0.4f; // Leaves have some sheen
-    leaf_material->metallic = 0.0f;
-    leaf_material->ao = 1.0f;
-    set_material_shader_program(leaf_material, pbr_program);
-
-    // Apply leaf textures
-    if (leaf_albedo_tex) {
-        set_material_albedo_tex(leaf_material, leaf_albedo_tex);
-    }
-    if (leaf_normal_tex) {
-        set_material_normal_tex(leaf_material, leaf_normal_tex);
-    }
-
-    // Create island material - earthy brown/green
-    island_material = create_material();
-    island_material->albedo[0] = 1.0f; // White base, texture provides color
-    island_material->albedo[1] = 1.0f;
-    island_material->albedo[2] = 1.0f;
-    island_material->roughness = 0.9f;
-    island_material->metallic = 0.0f;
-    island_material->ao = 1.0f;
-    set_material_shader_program(island_material, pbr_program);
-
-    // Apply island textures
-    if (island_albedo_tex) {
-        set_material_albedo_tex(island_material, island_albedo_tex);
-    }
-    if (island_normal_tex) {
-        set_material_normal_tex(island_material, island_normal_tex);
-    }
-
-    // Create camera - positioned to see full tree
+    // Camera: low and off-axis so the canopy tops the frame and the low sun
+    // rakes its shadows toward the viewer.
     Camera* camera = create_camera();
-    vec3 cam_pos = {0.0f, 180.0f, 550.0f};
-    vec3 look_at = {0.0f, 100.0f, 0.0f};
+    vec3 cam_pos = {110.0f, 70.0f, 380.0f};
+    vec3 look_at = {0.0f, 85.0f, 0.0f};
     vec3 up = {0.0f, 1.0f, 0.0f};
     set_camera_position(camera, cam_pos);
     set_camera_look_at(camera, look_at);
     set_camera_up_vector(camera, up);
-    set_camera_perspective(camera, 0.5f, 1.0f, 5000.0f);
+    set_camera_perspective(camera, 0.55f, 2.0f, 3000.0f);
     set_engine_camera(engine, camera);
-    camera->distance = 550.0f;
+    camera->distance = glm_vec3_distance(cam_pos, look_at);
 
-    // Create drag controller (no auto-orbit for tree app)
     drag_controller = create_mouse_drag_controller(engine);
 
-    // Create scene
     Scene* scene = create_scene();
     SceneNode* root = create_node();
     set_node_name(root, "root");
@@ -1319,38 +1237,209 @@ int main(void) {
         set_scene_xyz_shader_program(scene, xyz_program);
     }
 
-    create_three_point_lights(scene, 1.0f);
+    // Textures go through the scene's pool, so the scene must exist first.
+    generate_procedural_textures(scene);
 
-    // Create island
+    /*
+     * Lighting: physically based sky, IBL baked from it, and one sun coupled
+     * to the atmosphere. A tree is mostly ambient-lit -- without an environment
+     * to sample, every leaf that faces away from the key light goes black.
+     */
+    sky = create_sky_atmosphere();
+    ibl = create_ibl_resources();
+    if (sky && ibl) {
+        sky->sun_elevation_deg = sun_elevation;
+        sky->sun_azimuth_deg = sun_azimuth;
+        sky_update_sun_dir(sky);
+
+        if (sky_bake_static_luts(sky, engine) == 0 && sky_bake(sky, ibl, engine) == 0) {
+            scene->sky = sky;
+            scene->ibl = ibl;
+            scene->render_skybox = true;
+            scene->skybox_brightness = 1.0f;
+            scene->skybox_ground_projection = false;
+
+            sun_light = create_light();
+            set_light_name(sun_light, "sun");
+            set_light_type(sun_light, LIGHT_DIRECTIONAL);
+            set_light_cast_shadows(sun_light, true);
+            // Emitter size drives the PCSS penumbra: contact shadows stay
+            // crisp under the canopy and soften further from the caster.
+            set_light_size(sun_light, 6.0f, 6.0f);
+            sky->sun_light = sun_light;
+            sky->sun_base_intensity = 10.0f;
+            sky_apply_sun_to_light(sky);
+            add_light_to_scene(scene, sun_light);
+
+            SceneNode* sun_node = create_node();
+            set_node_name(sun_node, "sun");
+            set_node_light(sun_node, sun_light);
+            add_child_node(root, sun_node);
+
+            printf("Sky: sun at elevation %.1f azimuth %.1f\n", sky->sun_elevation_deg,
+                   sky->sun_azimuth_deg);
+        }
+    }
+
+    // Shadows, sized to the tree rather than the engine's 2000-unit default.
+    ShadowSystem* ss = scene->shadow_system;
+    if (ss) {
+        ss->enabled = args.no_shadows == 0;
+        ss->ortho_size = 300.0f;
+        ss->near_plane = 0.1f;
+        ss->far_plane = 1200.0f;
+        ss->pcss_enabled = true;
+        ss->pcss_softness = 1.5f;
+        ss->cascade_count = SHADOW_CASCADES;
+    }
+
+    /*
+     * Wind. The tree's materials opt in per-mode; the island stays rigid.
+     */
+    scene_wind = create_wind("breeze");
+    glm_vec3_copy((vec3){1.0f, 0.0f, 0.35f}, scene_wind->direction);
+    scene_wind->strength = 2.5f;
+    scene_wind->speed = 1.2f;
+    scene_wind->gust_frequency = 0.35f;
+    scene_wind->gust_amount = 0.55f;
+    scene_wind->turbulence = 0.5f;
+    set_scene_wind(scene, scene_wind);
+
+    /*
+     * Materials
+     *
+     * None of these may take an AO texture: the PBR shader reads UV1 as the AO
+     * map's UV, and UV1 on the tree meshes carries wind data.
+     */
+    bark_material = create_material();
+    glm_vec3_one(bark_material->albedo);
+    bark_material->roughness = 0.75f;
+    bark_material->metallic = 0.0f;
+    bark_material->ao = 1.0f;
+    bark_material->wind_response = 1.0f;
+    bark_material->wind_mode = 1; // vegetation branch
+    bark_material->parallax_scale = 0.03f;
+    set_material_shader_program(bark_material, pbr_program);
+    set_material_albedo_tex(bark_material, bark_albedo_tex);
+    set_material_normal_tex(bark_material, bark_normal_tex);
+    set_material_roughness_tex(bark_material, bark_roughness_tex);
+    set_material_height_tex(bark_material, bark_height_tex);
+
+    leaf_material = create_material();
+    glm_vec3_one(leaf_material->albedo);
+    leaf_material->roughness = 0.5f;
+    leaf_material->metallic = 0.0f;
+    leaf_material->ao = 1.0f;
+    // Alpha-masked cutout, drawn from both sides, and -- unlike hair cards --
+    // allowed into the shadow map, which is what dapples the ground.
+    leaf_material->alpha_mode = ALPHA_MASK;
+    leaf_material->alphaCutoff = 0.4f;
+    leaf_material->doubleSided = true;
+    leaf_material->foliage_shadows = true;
+    leaf_material->wind_response = 1.0f;
+    leaf_material->wind_mode = 2; // vegetation leaf (adds flutter)
+    // Thin leaves transmit light: without this the canopy reads as opaque
+    // plastic whenever the sun is behind it.
+    leaf_material->subsurface = 0.6f;
+    set_material_shader_program(leaf_material, pbr_program);
+    set_material_albedo_tex(leaf_material, leaf_albedo_tex);
+    set_material_normal_tex(leaf_material, leaf_normal_tex);
+
+    if (engine->postfx) {
+        postfx_reset_sss_profiles(engine->postfx);
+        leaf_material->subsurface_profile =
+            postfx_add_sss_profile(engine->postfx, (vec3){0.45f, 0.75f, 0.2f}, 1.5f);
+    }
+    apply_season(season);
+    prev_season = season;
+
+    island_material = create_material();
+    glm_vec3_one(island_material->albedo);
+    island_material->roughness = 0.9f;
+    island_material->metallic = 0.0f;
+    island_material->ao = 1.0f;
+    set_material_shader_program(island_material, pbr_program);
+    set_material_albedo_tex(island_material, island_albedo_tex);
+    set_material_normal_tex(island_material, island_normal_tex);
+
     create_island(root);
 
-    // Initialize tree parameters
+    /*
+     * Post-processing: a film look rather than the engine defaults. AgX holds
+     * the saturated foliage and the sun disc without skewing hue.
+     */
+    PostFX* fx = engine->postfx;
+    if (fx) {
+        fx->tonemap_mode = POSTFX_TONEMAP_AGX;
+        postfx_apply_film_look(fx);
+        fx->grain_strength = 0.05f;
+
+        fx->fog_enabled = true;
+        fx->fog_density = 0.0005f;
+        fx->fog_height_falloff = 75.0f;
+        fx->fog_floor_y = -5.0f;
+        fx->fog_far = 800.0f;
+
+        fx->dof_enabled = true;
+        fx->dof_autofocus = true;
+        fx->dof_focus_distance = 400.0f;
+        fx->dof_focus_range = 220.0f;
+
+        if (fx->ssao_radius < 1.6f)
+            fx->ssao_radius = 1.6f;
+        // Nothing here is smooth enough to reflect; SSR would be pure cost.
+        fx->ssr_enabled = false;
+    }
+
+    // Tree shape
+    params.seed = args.seed;
     params.max_depth = 4;
     params.trunk_length = 80.0f;
     params.trunk_radius = 8.0f;
     params.branches_per_node = 3;
-    params.length_decay = 0.7f;
-    params.radius_decay = 0.65f;
-    params.branch_angle = 35.0f;
-    params.angle_variance = 15.0f;
-    params.twist = 45.0f;
-    params.seed = 42;
+    params.length_decay = 0.72f;
+    params.taper = 0.62f;
+    params.branch_angle = 32.0f;
+    params.angle_variance = 12.0f;
+    params.twist = 137.5f;
+    params.droop = 0.35f;
+    params.curve_noise = 0.4f;
+    params.phototropism = 0.3f;
+    params.lateral_density = 1.2f;
+    params.twig_scale = 1.0f;
     params.show_leaves = 1;
-    params.leaf_size = 8.0f;
-    params.leaves_per_tip = 5;
+    params.leaf_size = 6.5f;
+    params.leaf_density = 5.5f;
 
-    // Force initial generation
-    memset(&prev_params, 0, sizeof(TreeParams));
+    // Build once here so the canopy bounds are known before the leaf emitter
+    // is sized; the render callback picks up any later slider change.
+    regenerate_tree(scene, &params);
+    memcpy(&prev_params, &params, sizeof(TreeParams));
 
-    set_engine_show_gui(engine, true);
-    set_engine_show_fps(engine, true);
+    if (!args.no_falling_leaves) {
+        float canopy_top = 200.0f;
+        float canopy_radius = 110.0f;
+        if (tree_root && tree_root->mesh_count > 0) {
+            canopy_top = tree_root->meshes[0]->aabb.max[1];
+            float rx = fmaxf(fabsf(tree_root->meshes[0]->aabb.min[0]),
+                             fabsf(tree_root->meshes[0]->aabb.max[0]));
+            float rz = fmaxf(fabsf(tree_root->meshes[0]->aabb.min[2]),
+                             fabsf(tree_root->meshes[0]->aabb.max[2]));
+            canopy_radius = fmaxf(rx, rz);
+        }
+        create_falling_leaves(engine, scene, canopy_radius, canopy_top);
+    }
+
+    set_engine_show_gui(engine, !args.headless);
+    set_engine_show_fps(engine, !args.headless);
     set_engine_show_wireframe(engine, false);
     set_engine_show_xyz(engine, false);
 
-    engine_run(engine, NULL, render_scene_callback);
+    engine_run(engine, tree_update_callback, render_scene_callback);
 
     printf("Cleaning up...\n");
     free_mouse_drag_controller(drag_controller);
+    // The scene owns the wind, sky, and IBL; free_engine takes them with it.
     free_engine(engine);
 
     printf("Goodbye!\n");
