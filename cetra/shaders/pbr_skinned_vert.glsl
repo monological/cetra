@@ -34,60 +34,10 @@ uniform mat4 uPrevModel;
 
 uniform vec3 camPos;
 uniform float time;
+uniform float uDeltaTime; // render clock advance, for the previous-frame position
 
-// Directional wind (wind.h) -- global scene field + per-material response.
-uniform float uDeltaTime;
-uniform vec3 uWindDir;
-uniform float uWindStrength;
-uniform float uWindSpeed;
-uniform float uWindGustFreq;
-uniform float uWindGustAmount;
-uniform float uWindTurbulence;
-uniform float uWindResponse;
-uniform float uWindMaskMinY;
-uniform float uWindMaskMaxY;
-uniform int uWindMode;
-
-// World-Position Offset wind (see pbr_vert.glsl for the full note). Cloth is
-// masked by object-space height so the hem swings and the top stays pinned;
-// the vegetation modes read UV1 for a per-branch phase and a flex weight.
-vec3 windOffset(vec3 p, vec2 uv0, vec2 uv1, float t) {
-    if (uWindStrength <= 0.0 || uWindResponse <= 0.0)
-        return vec3(0.0);
-
-    float gust = mix(1.0 - uWindGustAmount, 1.0, pow(0.5 + 0.5 * sin(t * uWindGustFreq), 3.0));
-    vec3 dir = normalize(uWindDir);
-
-    if (uWindMode == 0) {
-        float denom = max(uWindMaskMaxY - uWindMaskMinY, 1e-4);
-        float h = clamp((uWindMaskMaxY - p.y) / denom, 0.0, 1.0);
-        float mask = h * h;
-        float ph = t * uWindSpeed + p.y * 2.0 + p.x * 1.3;
-        float sway = 0.5 + 0.5 * sin(ph);
-        float amp = uWindStrength * uWindResponse * mask * gust;
-        vec3 flutter = vec3(sin(ph * 3.1), 0.0, cos(ph * 2.7)) * (uWindTurbulence * amp * 0.3);
-        return dir * (sway * amp) + flutter;
-    }
-
-    float phase = uv1.x * 6.2831853;
-    float flex = uv1.y;
-    float amp = uWindStrength * uWindResponse * gust;
-
-    float denom = max(uWindMaskMaxY - uWindMaskMinY, 1e-4);
-    float h = clamp((p.y - uWindMaskMinY) / denom, 0.0, 1.0);
-    vec3 off = dir * ((0.5 + 0.5 * sin(t * uWindSpeed * 0.35)) * amp * h * h * 0.6);
-
-    off += dir * (sin(t * uWindSpeed + phase) * amp * flex * 0.5);
-    off += vec3(sin(t * uWindSpeed * 1.7 + phase * 2.0), 0.0,
-                cos(t * uWindSpeed * 1.3 + phase)) *
-           (uWindTurbulence * amp * flex * 0.25);
-
-    if (uWindMode == 2) {
-        float f = sin(t * uWindSpeed * 6.0 + phase * 7.0 + p.x * 3.0 + p.z * 2.7);
-        off += vec3(f, f * 0.4, -f * 0.6) * (amp * flex * uv0.y * uWindTurbulence);
-    }
-    return off;
-}
+#include "wind.glsl"
+#include "tbn.glsl"
 
 // Skinning uniforms
 uniform bool skinned;
@@ -187,14 +137,11 @@ void main() {
     TexCoords2 = aTexCoords2;
     VertexColor = aColor;
 
-    // TBN. Deriving the bitangent AFTER the bone and model transforms is also
-    // more correct than rotating an authored one: a blended bone matrix can
-    // carry non-uniform scale, which shears a transformed bitangent out of
-    // square with its own normal and tangent.
-    vec3 T = normalize(mat3(model) * localTangent);
+    // Built AFTER the bone and model transforms: a blended bone matrix can
+    // carry non-uniform scale, which would shear a transformed bitangent out
+    // of square with its own normal and tangent.
     vec3 N = normalize(mat3(model) * localNormal);
-    vec3 B = cross(N, T) * aTangent.w;
-    TBN = mat3(T, B, N);
+    TBN = buildTBN(N, mat3(model) * localTangent, aTangent.w);
 
     gl_Position = clipPos;
 }
