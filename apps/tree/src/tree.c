@@ -33,6 +33,8 @@
 #include "cetra/particle_sim.h"
 
 #include "tree_gen.h"
+#include "ground.h"
+#include "grass.h"
 
 #define CIMGUI_DEFINE_ENUMS_AND_STRUCTS
 #include "cimgui.h"
@@ -769,6 +771,11 @@ static SceneNode* tree_root = NULL;
 static SceneNode* island_node = NULL;
 static Material* island_material = NULL;
 
+static GrassParams grass_params;
+static GrassParams prev_grass_params;
+static SceneNode* grass_node = NULL;
+static Material* grass_material = NULL;
+
 static SkyAtmosphere* sky = NULL;
 static IBLResources* ibl = NULL;
 static Light* sun_light = NULL;
@@ -924,8 +931,17 @@ static void generate_island_mesh(Mesh* mesh, float radius, float height, int rin
  * it is dropped by its own height so its crown lands at y = 0, where the tree
  * roots start.
  */
-#define GROUND_RADIUS 900.0f
-#define GROUND_HEIGHT 20.0f
+// The one place the dome's shape is defined. generate_island_mesh builds its
+// rings from the same expression, and grass roots itself with this, so the
+// surface and the things standing on it cannot drift apart. Includes the node
+// translation, so the value is a world height ready to use.
+float ground_height_at(float x, float z) {
+    float d = sqrtf(x * x + z * z);
+    if (d >= GROUND_RADIUS)
+        return -GROUND_HEIGHT;
+    float t = d / GROUND_RADIUS;
+    return GROUND_HEIGHT * (1.0f - t * t) - GROUND_HEIGHT;
+}
 
 static void create_island(SceneNode* parent) {
     island_node = create_node();
@@ -995,6 +1011,32 @@ static void regenerate_tree(const TreeParams* p) {
     upload_buffers_to_gpu_for_nodes(tree_root);
 }
 
+/*
+ * Regenerate the grass field
+ *
+ * Same shape as the tree: the node outlives every rebuild and only its mesh is
+ * swapped, so nothing else parented to the root is ever at risk.
+ */
+static void regenerate_grass(const GrassParams* p) {
+    if (!grass_node)
+        return;
+
+    for (size_t i = 0; i < grass_node->mesh_count; i++)
+        free_mesh(grass_node->meshes[i]);
+    grass_node->mesh_count = 0;
+
+    Mesh* grass = create_mesh();
+    if (grass_build_mesh(p, grass)) {
+        grass->material = grass_material;
+        add_mesh_to_node(grass_node, grass);
+        printf("Grass: %zu verts\n", grass->vertex_count);
+    } else {
+        free_mesh(grass);
+    }
+
+    upload_buffers_to_gpu_for_nodes(grass_node);
+}
+
 // Leaf color across the season slider. The albedo factor multiplies the leaf
 // texture, so this rides on top of the procedural green rather than replacing
 // it; the subsurface tint follows so backlit leaves warm up with the canopy.
@@ -1054,6 +1096,15 @@ static void render_tree_gui(const Engine* engine, Scene* scene) {
         igSliderFloat("Leaf Size", &params.leaf_size, 1.0f, 30.0f, "%.1f", 0);
         igSliderFloat("Leaf Density", &params.leaf_density, 0.5f, 8.0f, "%.2f", 0);
         igSliderFloat("Season", &season, 0.0f, 1.0f, "%.2f", 0);
+
+        igSeparatorText("Grass");
+        igSliderFloat("Density", &grass_params.density, 0.0f, 12.0f, "%.2f", 0);
+        igSliderFloat("Patchiness", &grass_params.patchiness, 0.0f, 1.0f, "%.2f", 0);
+        igSliderFloat("Blade Height", &grass_params.height, 1.0f, 14.0f, "%.2f", 0);
+        igSliderFloat("Bend", &grass_params.bend, 0.0f, 1.2f, "%.2f", 0);
+        igSliderFloat("Flowers", &grass_params.flower_amount, 0.0f, 0.3f, "%.3f", 0);
+        igSliderFloat("Seed Heads", &grass_params.seed_head_amount, 0.0f, 0.4f, "%.3f", 0);
+        igSliderFloat("Field Radius", &grass_params.radius, 20.0f, 220.0f, "%.0f", 0);
 
         igSeparatorText("Wind");
         if (scene_wind) {
@@ -1160,6 +1211,11 @@ void render_scene_callback(Engine* engine, Scene* scene) {
     if (season != prev_season) {
         apply_season(season);
         prev_season = season;
+    }
+
+    if (memcmp(&grass_params, &prev_grass_params, sizeof(GrassParams)) != 0) {
+        regenerate_grass(&grass_params);
+        memcpy(&prev_grass_params, &grass_params, sizeof(GrassParams));
     }
 
     // Update camera - only if not hovering over GUI
@@ -1511,6 +1567,31 @@ int main(int argc, char** argv) {
     set_material_albedo_tex(island_material, island_albedo_tex);
     set_material_normal_tex(island_material, island_normal_tex);
 
+    // Grass. Opaque, so it casts and receives shadows with no special handling
+    // -- the canopy dapple landing on it is the point of having it. Colour is
+    // entirely per-vertex, so no textures and no AO map to collide with UV1.
+    grass_material = create_material();
+    glm_vec3_one(grass_material->albedo);
+    grass_material->roughness = 0.78f;
+    grass_material->metallic = 0.0f;
+    grass_material->ao = 1.0f;
+    grass_material->doubleSided = true;
+    // Grass is far more mobile than wood.
+    grass_material->wind_response = 1.7f;
+    grass_material->wind_mode = 2; // vegetation leaf: sway plus tip flutter
+    // Thin blades glow when the sun is behind them, like the leaves.
+    grass_material->subsurface = 0.45f;
+    glm_vec3_copy((vec3){0.45f, 0.70f, 0.18f}, grass_material->subsurface_color);
+    // A real profile slot is not optional once subsurface is non-zero: the
+    // shader tags the skin-diffuse buffer with profile + 1, so an unassigned
+    // -1 writes the tag reserved for "not a subsurface surface". The blur then
+    // skips those pixels while their diffuse is still sitting in the buffer,
+    // and the unblurred energy composites back as blown-out speckle.
+    if (engine->postfx)
+        grass_material->subsurface_profile =
+            postfx_add_sss_profile(engine->postfx, (vec3){0.40f, 0.70f, 0.16f}, 1.0f);
+    set_material_shader_program(grass_material, pbr_program);
+
     create_island(root);
 
     /*
@@ -1565,11 +1646,29 @@ int main(int argc, char** argv) {
     params.leaf_size = 15.0f;
     params.leaf_density = 1.3f;
 
+    // Grass field
+    grass_params.seed = args.seed;
+    grass_params.radius = 130.0f;
+    grass_params.clear_radius = 11.0f;
+    grass_params.density = 5.5f;
+    grass_params.patchiness = 0.55f;
+    grass_params.height = 5.5f;
+    grass_params.blade_width = 0.55f;
+    grass_params.bend = 0.42f;
+    grass_params.flower_amount = 0.02f;
+    grass_params.seed_head_amount = 0.09f;
+
     // The tree node is created once and outlives every rebuild; regeneration
     // only swaps its meshes, so nothing else parented to the root is at risk.
     tree_root = create_node();
     set_node_name(tree_root, "tree");
     add_child_node(root, tree_root);
+
+    grass_node = create_node();
+    set_node_name(grass_node, "grass");
+    add_child_node(root, grass_node);
+    regenerate_grass(&grass_params);
+    memcpy(&prev_grass_params, &grass_params, sizeof(GrassParams));
 
     // Build once here so the canopy bounds are known before the leaf emitter
     // is sized; the render callback picks up any later slider change.
