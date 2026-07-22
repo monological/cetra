@@ -9,6 +9,9 @@ in vec2 TexCoords;
 in vec2 TexCoords2;   // UV1 for lightmaps/AO
 in vec4 VertexColor;  // Vertex color (RGBA)
 in mat3 TBN;
+// Bitangent handedness (tangent.w), flat because it is constant per UV island
+// -- interpolating across a mirror seam would blend +1 toward -1.
+flat in float TangentW;
 in vec4 CurrClip;     // Un-jittered current clip position (motion vectors)
 in vec4 PrevClip;     // Previous-frame clip position
 layout(location = 0) out vec4 FragColor;
@@ -648,10 +651,11 @@ vec3 clearcoatNormal(vec2 uv) {
     }
     if (clearcoatNormalExists > 0) {
         vec3 Tc = normalize(TBN[0] - dot(TBN[0], Ngeo) * Ngeo);
-        vec3 Bc = cross(Ngeo, Tc);
-        if (dot(Bc, TBN[1]) < 0.0) {
-            Bc = -Bc; // preserve the mesh's authored bitangent handedness (mirrored UVs)
-        }
+        // TangentW is the exact handedness bit (see the base normal path). On
+        // back faces Ngeo is already flipped above, so the derived Bc flips
+        // with it -- the basis stays consistent with the normal it shades,
+        // where the old sign-recovery kept the front-face bitangent.
+        vec3 Bc = cross(Ngeo, Tc) * TangentW;
         vec3 cn = texture(clearcoatNormalTex, uv).xyz * 2.0 - 1.0;
         return normalize(mat3(Tc, Bc, Ngeo) * cn);
     }
@@ -795,10 +799,10 @@ void main() {
         // the Normals render view (which visualizes the geometric normal).
         vec3 Ng = normalize(Normal);
         vec3 T = normalize(TBN[0] - dot(TBN[0], Ng) * Ng);
-        vec3 B = cross(Ng, T);
-        if (dot(B, TBN[1]) < 0.0) {
-            B = -B; // preserve the mesh's authored bitangent handedness
-        }
+        // The handedness comes over as a flat varying -- the exact bit, not a
+        // sign recovered by dotting against the interpolated TBN[1], which
+        // goes near-degenerate on slivers and mirrored-UV seams.
+        vec3 B = cross(Ng, T) * TangentW;
         vec3 nTex = texture(normalTex, uv).rgb * 2.0 - 1.0;
         // Apply normal scale to XY components (glTF normalTexture.scale)
         nTex.xy *= normalScale;

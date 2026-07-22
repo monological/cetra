@@ -16,6 +16,7 @@ out vec2 TexCoords;
 out vec2 TexCoords2;   // UV1 for lightmaps/AO
 out vec4 VertexColor;  // Vertex color (RGBA)
 out mat3 TBN;
+flat out float TangentW; // bitangent handedness, per-island constant
 out vec4 CurrClip;     // Un-jittered current clip position (motion vectors)
 out vec4 PrevClip;     // Previous-frame clip position
 
@@ -94,6 +95,7 @@ void main() {
     // transformed normal here would tilt the basis relative to the shading
     // normal under non-uniform scale.
     TBN = buildTBN(Normal, mat3(model) * aTangent.xyz, aTangent.w);
+    TangentW = aTangent.w;
 
     gl_Position = clipPos;
 }
