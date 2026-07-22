@@ -197,6 +197,28 @@ static void bark_height_field(float* out, int width, int height) {
             float plate = smoothstep(0.02f, 0.14f, cell);
 
             float h = fissure * 0.62f + plate * 0.38f;
+
+            // Sparse cross-breaks. Bark does split across the grain, but never
+            // at a regular spacing, so these are the CONTOUR of a noise field
+            // rather than a wave: the level set of a field that varies quickly
+            // up the trunk and slowly around it runs horizontally, wanders, and
+            // reappears at irregular heights with no period to detect. (A wave
+            // cannot do this -- warping shifts each crack but leaves the average
+            // spacing intact, which reads as brickwork.)
+            float across_field = fbm_noise(u * 2.2f, v * 6.0f, 4, 0.5f);
+            float contour = fabsf(across_field - 0.5f);
+            float split = smoothstep(0.0f, 0.060f, contour);
+
+            // A second, slower field decides where breaks are allowed at all,
+            // so most of the trunk carries none and a few stretches carry one.
+            float gate = smoothstep(0.56f, 0.78f,
+                                    fbm_noise(u * 1.3f + 31.0f, v * 1.1f + 17.0f, 3, 0.5f));
+            split = 1.0f - (1.0f - split) * gate;
+
+            // Shallower than the vertical fissures: a cross-break interrupts a
+            // plate, it does not cut the trunk open.
+            h *= 0.44f + 0.56f * split;
+
             // Fine grain on top, small enough to only matter up close.
             h += (fbm_noise(u * 22.0f, v * 7.0f, 3, 0.5f) - 0.5f) * 0.14f;
 
