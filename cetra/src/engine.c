@@ -217,6 +217,8 @@ Engine* create_engine(const char* window_title, int width, int height) {
     engine->delta_time = 0.0;
     // Load-time work (probe bakes) renders before the loop starts, at t = 0.
     engine->render_time = 0.0;
+    engine->render_delta = 0.0;
+    engine->render_clock = NULL;
     engine->fps = 0.0f;
     engine->fps_update_timer = 0.0f;
     engine->frame_count = 0;
@@ -1276,6 +1278,11 @@ void* engine_get_user_data(const Engine* engine) {
     return engine ? engine->user_data : NULL;
 }
 
+void engine_set_render_clock(Engine* engine, const EngineFrameClock* clock) {
+    if (engine)
+        engine->render_clock = clock;
+}
+
 // A checkbox that enables a group of dependent parameters. The parameters stay
 // visible but greyed out and inert until the effect is on — so toggling never
 // reflows the panel — and are indented one level so the grouping is obvious.
@@ -1993,12 +2000,6 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EngineRenderFunc render
         engine->delta_time = current_time - engine->last_frame_time;
         engine->last_frame_time = current_time;
 
-        // The frame's render clock, latched before any pass runs. Wall clock by
-        // default; the update callback below may replace it (the game framework
-        // substitutes its sim clock), and either way it is settled before the
-        // shadow pass so caster and surface animate from the same instant.
-        engine->render_time = current_time;
-
         engine->frame_count++;
         double fps_dt = engine->delta_time > 0.1 ? 0.1 : engine->delta_time;
         engine->fps_update_timer += (float)fps_dt;
@@ -2025,6 +2026,21 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EngineRenderFunc render
         // before the shadow pass so transform/particle updates land first.
         if (update)
             update(engine, (float)engine->delta_time);
+
+        // Latch the frame's animation clock: after the update callback, so an
+        // embedder's sim has advanced, and before the shadow pass, so the depth
+        // and shading passes displace wind from the same instant. Sampled here
+        // rather than written by the embedder because the sample cannot be
+        // skipped by a control path -- an early return inside `update` leaves a
+        // substituted clock simply not advanced, which is the truth, instead of
+        // silently reverting this frame to the wall clock.
+        if (engine->render_clock) {
+            engine->render_time = engine->render_clock->time;
+            engine->render_delta = engine->render_clock->delta;
+        } else {
+            engine->render_time = current_time;
+            engine->render_delta = engine->delta_time;
+        }
 
         // Wireframe mode: use albedo-only rendering for performance
         RenderMode saved_render_mode = engine->current_render_mode;

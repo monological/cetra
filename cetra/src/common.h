@@ -7,9 +7,12 @@
 #define GL_ATTR_NORMAL   1
 #define GL_ATTR_TEXCOORD 2
 #define GL_ATTR_TANGENT  3 // vec4 - xyz tangent, w bitangent handedness
-// Slot 4 is free. It held a bitangent stream until that turned out to be dead
-// weight: the fragment shader reconstructs B = cross(N, T) regardless and only
-// ever read the stored one for its sign, which now rides in tangent.w.
+// Slot 4 is free FOR MESH VAOs. It held a bitangent stream until that turned
+// out to be dead weight: the fragment shader reconstructs B = cross(N, T)
+// regardless and only ever read the stored one for its sign, which now rides in
+// tangent.w. It is not unclaimed, though -- particle_sim_vert.glsl binds
+// location 4 as iLife on the GPU-sim VAO, exactly as the billboard renderer
+// holds 9-11 below. Separate VAOs, so no runtime conflict either way.
 #define GL_ATTR_COLOR        5
 #define GL_ATTR_BONE_IDS     6 // ivec4 - bone indices per vertex
 #define GL_ATTR_BONE_WEIGHTS 7 // vec4  - bone weights per vertex

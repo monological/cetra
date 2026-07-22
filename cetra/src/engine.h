@@ -29,6 +29,14 @@ typedef void (*MouseButtonCallback)(struct Engine* engine, int button, int actio
 typedef void (*KeyCallback)(struct Engine* engine, int key, int scancode, int action, int mods);
 typedef void (*ScrollCallback)(struct Engine* engine, double xoffset, double yoffset);
 
+// An animation clock an embedder can substitute for the wall clock (see
+// Engine.render_clock). The embedder owns the storage and keeps it current;
+// engine_run samples it once per frame.
+typedef struct EngineFrameClock {
+    double time;  // the instant this frame renders at
+    double delta; // advance since the previous frame; 0 if it did not advance
+} EngineFrameClock;
+
 typedef struct Engine {
     GLFWwindow* window;
     char* window_title; // Title of the GLFW window
@@ -155,16 +163,27 @@ typedef struct Engine {
     // be closed with a matching igRender. Pairs the begin/end across the loop.
     bool gui_frame_active;
 
-    // The time this frame renders at. Every pass that animates from time reads
-    // this one value, so they cannot disagree -- wind displaces the shadow
-    // caster and the visible surface identically only because both read here.
+    // The frame's animation clock. Every pass that animates from time reads
+    // these two, so they cannot disagree -- wind displaces the shadow caster and
+    // the visible surface identically only because both read here, and the
+    // previous-frame position used for motion vectors is exactly
+    // render_time - render_delta.
     //
-    // Latched once per iteration by whoever drives the loop, BEFORE the shadow
-    // pass: engine_run seeds it from the wall clock, and the game framework
-    // overwrites it with its fixed-timestep sim clock (which is why a paused
-    // game freezes its wind). It is deliberately not last_frame_time -- that is
-    // FPS bookkeeping, and a game's render clock is not the wall clock.
+    // Both are latched by engine_run alone, after the update callback and before
+    // the shadow pass. They are deliberately not last_frame_time/delta_time --
+    // those are FPS bookkeeping on the wall clock, and an embedder's render
+    // clock need not be the wall clock.
     double render_time;
+    double render_delta;
+
+    // Substitutes an embedder's clock for the wall clock. Borrowed, sampled once
+    // per frame; NULL means wall clock. The game framework points this at its
+    // fixed-timestep sim clock, which is why a paused game freezes its wind.
+    //
+    // Sampled rather than pushed on purpose: a writer would have to reach every
+    // control path through the update callback, and game_frame_update already
+    // has an early return (escape key) that a store would silently skip.
+    const EngineFrameClock* render_clock;
 
     char* screenshot_path; // If set, save final frame here on exit (PPM)
     int screenshot_every;  // Also save numbered frames every N frames (0 = off)
@@ -304,6 +323,14 @@ void* engine_get_user_data(const Engine* engine);
 // before rendering (NULL for pure render loops); `render` draws the scene. The
 // render apps and the game framework's run_game all drive the engine through it.
 void engine_run(Engine* engine, EngineUpdateFunc update, EngineRenderFunc render);
+
+// Substitute an animation clock for the wall clock. `clock` is borrowed and must
+// outlive the loop; engine_run samples it each frame after the update callback
+// and before the shadow pass. NULL restores the wall clock.
+//
+// Apps that drive render_current_scene from their own loop rather than
+// engine_run must set render_time/render_delta themselves -- nothing else does.
+void engine_set_render_clock(Engine* engine, const EngineFrameClock* clock);
 
 // Drag/pick helpers
 void get_mouse_world_position_on_drag_plane(Engine* engine, double mouse_fb_x, double mouse_fb_y,

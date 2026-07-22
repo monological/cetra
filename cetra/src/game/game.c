@@ -179,6 +179,11 @@ double game_get_fps(const Game* game) {
 static void game_frame_update(Engine* engine, float dt) {
     Game* game = engine_get_user_data(engine);
 
+    // No steps taken yet this frame. Set before the early return below so a
+    // frame that bails still reports an honest zero advance rather than last
+    // frame's.
+    game->sim_clock.delta = 0.0;
+
     input_update(&game->input);
     if (input_key_pressed(&game->input, GLFW_KEY_ESCAPE)) {
         glfwSetWindowShouldClose(engine->window, GLFW_TRUE);
@@ -241,15 +246,14 @@ static void game_frame_update(Engine* engine, float dt) {
 
             game->time += game->fixed_timestep;
             game->accumulator -= game->fixed_timestep;
+            game->sim_clock.delta += game->fixed_timestep;
         }
     }
 
-    // Substitute the sim clock for the frame's render clock. A game animates
-    // from its own deterministic time, not the wall clock, and this runs before
-    // the shadow pass so both the depth and shading passes see the same value.
-    // It sits outside the paused check on purpose: a paused game holds its time
-    // steady, so its wind holds too.
-    game->engine->render_time = game->time;
+    // Publish the sim clock. Outside the paused check on purpose: a paused game
+    // holds its time steady and takes no steps, so wind holds still and reports
+    // no motion. engine_run samples this after we return.
+    game->sim_clock.time = game->time;
 }
 
 // engine_run's render hook: hand the app its on_render with the interpolation
@@ -275,6 +279,8 @@ void run_game(Game* game) {
     // The engine owns the frame loop; the game plugs in its per-frame sim + render,
     // and stashes itself as the engine's user data so the callbacks can find it.
     engine_set_user_data(game->engine, game);
+    // Animate from the sim clock, not the wall clock, for the whole loop.
+    engine_set_render_clock(game->engine, &game->sim_clock);
     engine_run(game->engine, game_frame_update, game_scene_render);
 }
 

@@ -118,8 +118,12 @@ int reflection_probe_capture(ReflectionProbe* probe, struct Engine* engine, Scen
     // today only because a load-time capture happens before the clock starts,
     // and a re-capture mid-run would otherwise bake a shadow from one instant
     // and the surface from another.
+    // The delta goes with it: a frozen instant advanced by nothing, so the
+    // bake's motion vectors are zero rather than describing a step it never took.
     double saved_render_time = engine->render_time;
+    double saved_render_delta = engine->render_delta;
     engine->render_time = 0.0;
+    engine->render_delta = 0.0;
 
     // Shadow maps have not been rendered at load time; bake them so the
     // capture contains shadowed direct light and catcher darkening.
@@ -242,6 +246,7 @@ int reflection_probe_capture(ReflectionProbe* probe, struct Engine* engine, Scen
     engine->albedo_this_frame = saved_albedo;
     engine->refraction_enabled = saved_refraction;
     engine->render_time = saved_render_time;
+    engine->render_delta = saved_render_delta;
     if (scene->shadow_system)
         scene->shadow_system->cascade_count = saved_cascades;
     if (engine->postfx)
