@@ -215,6 +215,8 @@ Engine* create_engine(const char* window_title, int width, int height) {
     // FPS tracking initialization
     engine->last_frame_time = 0.0;
     engine->delta_time = 0.0;
+    // Load-time work (probe bakes) renders before the loop starts, at t = 0.
+    engine->render_time = 0.0;
     engine->fps = 0.0f;
     engine->fps_update_timer = 0.0f;
     engine->frame_count = 0;
@@ -1990,6 +1992,12 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EngineRenderFunc render
         double current_time = glfwGetTime();
         engine->delta_time = current_time - engine->last_frame_time;
         engine->last_frame_time = current_time;
+
+        // The frame's render clock, latched before any pass runs. Wall clock by
+        // default; the update callback below may replace it (the game framework
+        // substitutes its sim clock), and either way it is settled before the
+        // shadow pass so caster and surface animate from the same instant.
+        engine->render_time = current_time;
 
         engine->frame_count++;
         double fps_dt = engine->delta_time > 0.1 ? 0.1 : engine->delta_time;

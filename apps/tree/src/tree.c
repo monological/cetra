@@ -1228,9 +1228,7 @@ void render_scene_callback(Engine* engine, Scene* scene) {
     reset_and_apply_transform(&engine->model_matrix, &t);
     apply_transform_to_nodes(scene->root_node, engine->model_matrix);
 
-    // Same clock the shadow depth pass reads, so wind-displaced geometry and
-    // its shadow stay locked together.
-    render_current_scene(engine, (float)engine->last_frame_time);
+    render_current_scene(engine);
 }
 
 /*

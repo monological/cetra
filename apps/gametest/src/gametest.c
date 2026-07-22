@@ -556,7 +556,7 @@ static void on_render(Game* game, double alpha) {
     glDisable(GL_CULL_FACE);
 
     // Render the scene
-    render_current_scene(engine, game->time);
+    render_current_scene(engine);
 
     // Re-enable culling
     glEnable(GL_CULL_FACE);

@@ -290,7 +290,7 @@ static void _update_camera_uniforms(ShaderProgram* program, Camera* camera) {
 }
 
 static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Camera* camera,
-                         mat4 view, mat4 projection, float time_value, RenderMode render_mode,
+                         mat4 view, mat4 projection, RenderMode render_mode,
                          Light** closest_lights, size_t returned_light_count,
                          GLuint* current_program, Material** current_material,
                          const Frustum* frustum, bool alpha_pass, bool oit_accumulate) {
@@ -378,7 +378,7 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
             uniform_set_mat4(u, "projection", (const float*)projection);
             uniform_set_mat4(u, "uCurrViewProjNoJitter", (const float*)engine->view_proj);
             uniform_set_mat4(u, "uPrevViewProj", (const float*)engine->prev_view_proj);
-            uniform_set_float(u, "time", time_value);
+            uniform_set_float(u, "time", (float)engine->render_time);
             // Global directional wind (NULL -> uWindStrength 0 -> shader early-out);
             // dt feeds the previous-frame position so wind stays motion-correct.
             uniform_set_float(u, "uDeltaTime", (float)engine->delta_time);
@@ -557,7 +557,7 @@ static int _ensure_traversal_stack_capacity(Scene* scene, size_t required) {
 }
 
 static void _render_scene_iterative(const Engine* engine, Scene* scene, SceneNode* root,
-                                    Camera* camera, mat4 view, mat4 projection, float time_value,
+                                    Camera* camera, mat4 view, mat4 projection,
                                     RenderMode render_mode, GLuint* current_program,
                                     Material** current_material, const Frustum* frustum,
                                     bool alpha_pass, bool oit_accumulate) {
@@ -592,7 +592,7 @@ static void _render_scene_iterative(const Engine* engine, Scene* scene, SceneNod
         Light** closest_lights = get_closest_lights(scene, node, max_lights, &returned_light_count);
 
         // Render this node's meshes
-        _render_node(engine, scene, node, camera, view, projection, time_value, render_mode,
+        _render_node(engine, scene, node, camera, view, projection, render_mode,
                      closest_lights, returned_light_count, current_program, current_material,
                      frustum, alpha_pass, oit_accumulate);
 
@@ -630,7 +630,7 @@ static float _halton(int index, int base) {
     return r;
 }
 
-void render_current_scene(Engine* engine, float time_value) {
+void render_current_scene(Engine* engine) {
     if (!engine) {
         log_error("error: render called with NULL engine");
         return;
@@ -700,7 +700,7 @@ void render_current_scene(Engine* engine, float time_value) {
     // binds a stale refraction source
     engine->scene_color_this_frame = false;
     engine->oit_this_frame = false; // set true below if the OIT accumulate pass runs
-    _render_scene_iterative(engine, scene, root_node, camera, *view, draw_projection, time_value,
+    _render_scene_iterative(engine, scene, root_node, camera, *view, draw_projection,
                             render_mode, &current_program, &current_material, &frustum, false,
                             false);
     engine_set_scene_draw_buffers(engine, false);
@@ -755,14 +755,14 @@ void render_current_scene(Engine* engine, float time_value) {
             engine_begin_oit_pass(engine)) {
             engine->oit_this_frame = true;
             _render_scene_iterative(engine, scene, root_node, camera, *view, draw_projection,
-                                    time_value, render_mode, &current_program, &current_material,
+                                    render_mode, &current_program, &current_material,
                                     &frustum, true, true); // OIT accumulate: blend meshes
             engine_end_oit_pass(engine);
             current_program = 0;
             current_material = NULL;
         }
         _render_scene_iterative(engine, scene, root_node, camera, *view, draw_projection,
-                                time_value, render_mode, &current_program, &current_material,
+                                render_mode, &current_program, &current_material,
                                 &frustum, true, false);
         glDepthMask(GL_TRUE);
     }

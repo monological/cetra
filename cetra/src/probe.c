@@ -111,6 +111,16 @@ int reflection_probe_capture(ReflectionProbe* probe, struct Engine* engine, Scen
     if (scene->shadow_system)
         scene->shadow_system->cascade_count = 1;
 
+    // Freeze animation time for the whole bake, before the shadow pass runs.
+    // A probe is a static capture, so wind-displaced geometry should be caught
+    // at rest -- consistent with skinned meshes capturing at bind pose. It has
+    // to span BOTH the depth bake below and the six shading passes: they agree
+    // today only because a load-time capture happens before the clock starts,
+    // and a re-capture mid-run would otherwise bake a shadow from one instant
+    // and the surface from another.
+    double saved_render_time = engine->render_time;
+    engine->render_time = 0.0;
+
     // Shadow maps have not been rendered at load time; bake them so the
     // capture contains shadowed direct light and catcher darkening.
     render_shadow_depth_pass(engine, scene);
@@ -200,7 +210,7 @@ int reflection_probe_capture(ReflectionProbe* probe, struct Engine* engine, Scen
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         glm_mat4_copy(views[i], engine->view_matrix);
-        render_current_scene(engine, 0.0f);
+        render_current_scene(engine);
 
         glBindFramebuffer(GL_READ_FRAMEBUFFER, ibl->capture_fbo);
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, face_fbo);
@@ -231,6 +241,7 @@ int reflection_probe_capture(ReflectionProbe* probe, struct Engine* engine, Scen
     engine->aux_this_frame = saved_aux;
     engine->albedo_this_frame = saved_albedo;
     engine->refraction_enabled = saved_refraction;
+    engine->render_time = saved_render_time;
     if (scene->shadow_system)
         scene->shadow_system->cascade_count = saved_cascades;
     if (engine->postfx)

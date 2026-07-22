@@ -155,6 +155,17 @@ typedef struct Engine {
     // be closed with a matching igRender. Pairs the begin/end across the loop.
     bool gui_frame_active;
 
+    // The time this frame renders at. Every pass that animates from time reads
+    // this one value, so they cannot disagree -- wind displaces the shadow
+    // caster and the visible surface identically only because both read here.
+    //
+    // Latched once per iteration by whoever drives the loop, BEFORE the shadow
+    // pass: engine_run seeds it from the wall clock, and the game framework
+    // overwrites it with its fixed-timestep sim clock (which is why a paused
+    // game freezes its wind). It is deliberately not last_frame_time -- that is
+    // FPS bookkeeping, and a game's render clock is not the wall clock.
+    double render_time;
+
     char* screenshot_path; // If set, save final frame here on exit (PPM)
     int screenshot_every;  // Also save numbered frames every N frames (0 = off)
     int exit_after_frames; // Close the loop after N frames (0 = off); CI/headless
