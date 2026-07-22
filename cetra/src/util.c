@@ -1,3 +1,12 @@
+// This target compiles with -D_POSIX_C_SOURCE=200809L (cetra/CMakeLists.txt,
+// added for the JoltC build). On macOS that pins __DARWIN_C_LEVEL to the POSIX
+// level, which hides the Darwin extensions get_cpu_cores needs below -- both
+// the BSD types <sys/sysctl.h> is declared in terms of and _SC_NPROCESSORS_ONLN.
+// Ask for them back before any system header is pulled in.
+#if defined(__APPLE__)
+#define _DARWIN_C_SOURCE
+#endif
+
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -7,6 +16,15 @@
 #include <stdbool.h>
 #include <unistd.h>
 #include <math.h>
+
+// Querying the CPU count has no portable API; each platform needs its own
+// header. Kept here so this is the one place in the engine that has to know.
+#if defined(_WIN32)
+#include <windows.h>
+#elif defined(__APPLE__)
+#include <sys/param.h>
+#include <sys/sysctl.h>
+#endif
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
 #include <cglm/cglm.h>
@@ -105,6 +123,34 @@ char* safe_strdup(const char* s) {
     memcpy(d, s, len + 1); // Use memcpy instead of strcpy to avoid potential issues
                            // and copy exactly len + 1 bytes (including null terminator)
     return d;
+}
+
+int get_cpu_cores(void) {
+#if defined(_WIN32)
+    SYSTEM_INFO sysinfo;
+    GetSystemInfo(&sysinfo);
+    return (int)sysinfo.dwNumberOfProcessors;
+#elif defined(__APPLE__)
+    // HW_AVAILCPU excludes cores taken offline, so prefer it and fall back to
+    // the configured total. (sysconf works here too once _DARWIN_C_SOURCE is
+    // set, but sysctl is the native query and needs no extra guarantees.)
+    int mib[2] = {CTL_HW, HW_AVAILCPU};
+    uint32_t count = 0;
+    size_t len = sizeof(count);
+    if (sysctl(mib, 2, &count, &len, NULL, 0) != 0 || count < 1) {
+        mib[1] = HW_NCPU;
+        len = sizeof(count);
+        if (sysctl(mib, 2, &count, &len, NULL, 0) != 0) {
+            return 1;
+        }
+    }
+    return count > 0 ? (int)count : 1;
+#elif defined(_SC_NPROCESSORS_ONLN)
+    long count = sysconf(_SC_NPROCESSORS_ONLN);
+    return count > 0 ? (int)count : 1;
+#else
+    return 1; // Unknown platform: callers treat this as "assume single core"
+#endif
 }
 
 void* safe_realloc(void* ptr, size_t size) {
