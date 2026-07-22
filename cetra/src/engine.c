@@ -384,7 +384,7 @@ static int _setup_engine_glfw(Engine* engine) {
 // The scene renders into a target supersampled by ss_scale; the post chain
 // box-downsamples to display size at tone map. This render (not display)
 // resolution is shared by the MSAA allocation and the scene-pass viewport.
-static void engine_render_size(const Engine* engine, int* w, int* h) {
+void engine_render_size(const Engine* engine, int* w, int* h) {
     *w = engine->fb_width * engine->ss_scale;
     *h = engine->fb_height * engine->ss_scale;
 }

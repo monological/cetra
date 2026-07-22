@@ -23,11 +23,6 @@ const float MIE_G = 0.8;
 
 const int SKY_STEPS = 32;
 
-vec3 transmittanceTo(float r, float mu)
-{
-    return transmittanceToSky(transmittanceLut, r, mu);
-}
-
 vec3 multiscatterAt(float r, float mu_s)
 {
     vec2 uv = vec2(mu_s * 0.5 + 0.5, (r - Rg) / (Rt - Rg));
@@ -83,11 +78,9 @@ void main()
     float cosVS = dot(viewDir, sunDir);
 
     bool ground = hitsGround(r, mu);
-    float tMax = ground ? distanceToGroundOrMiss(r, mu, Rg) : distanceToTopOrMiss(r, mu, Rt);
-    if (tMax < 0.0) {
-        FragColor = vec4(0.0, 0.0, 0.0, 1.0);
-        return;
-    }
+    // No miss case: the observer is inside the atmosphere, so both roots
+    // exist for every mu (see atmosphere.glsl).
+    float tMax = ground ? distanceToGround(r, mu) : distanceToTop(r, mu);
     float dt = tMax / float(SKY_STEPS);
 
     float phaseR = rayleighPhase(cosVS);
@@ -104,20 +97,18 @@ void main()
         vec3 up = normalize(samplePos);
         float mu_s = dot(up, sunDir);
 
-        vec3 rayleigh, extinction;
-        float mie;
-        atmosphereSample(rt - Rg, rayleigh, mie, extinction);
+        Atmosphere atm = atmosphereAt(rt - Rg);
 
-        vec3 stepTrans = exp(-extinction * dt);
-        vec3 sunT = transmittanceTo(rt, mu_s);
+        vec3 stepTrans = exp(-atm.extinction * dt);
+        vec3 sunT = transmittanceToSky(transmittanceLut, rt, mu_s);
 
         // Single scattering: sun light * phase-weighted scattering
-        vec3 single = sunT * (rayleigh * phaseR + vec3(mie * phaseM));
+        vec3 single = sunT * (atm.rayleigh * phaseR + vec3(atm.mie * phaseM));
         // Multiple scattering: isotropic Psi * total scattering
-        vec3 multi = multiscatterAt(rt, mu_s) * (rayleigh + vec3(mie));
+        vec3 multi = multiscatterAt(rt, mu_s) * (atm.rayleigh + vec3(atm.mie));
 
         vec3 scatterIntegral =
-            (single + multi) * (vec3(1.0) - stepTrans) / max(extinction, vec3(1e-6));
+            (single + multi) * (vec3(1.0) - stepTrans) / max(atm.extinction, vec3(1e-6));
         L += through * scatterIntegral;
         through *= stepTrans;
     }

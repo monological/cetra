@@ -42,12 +42,3 @@ vec2 skyViewUv(vec3 dir, vec3 sun, float r)
     return vec2(u, v);
 }
 
-// Transmittance with the below-horizon cut: the three LUT-sampling shaders all
-// want black under the ground. The multiscatter bake does NOT (it integrates
-// through), so it calls transmittanceLookup directly.
-vec3 transmittanceToSky(sampler2D lut, float r, float mu)
-{
-    if (hitsGround(r, mu))
-        return vec3(0.0);
-    return transmittanceLookup(lut, r, mu);
-}

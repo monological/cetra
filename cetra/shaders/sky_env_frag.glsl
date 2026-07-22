@@ -16,11 +16,6 @@ uniform vec3 sunDir; // world-space unit vector TOWARD the sun
 
 #include "sky_lut.glsl"
 
-vec3 transmittanceTo(float r, float mu)
-{
-    return transmittanceToSky(transmittanceLut, r, mu);
-}
-
 void main()
 {
     vec3 dir = normalize(WorldPos);
@@ -36,7 +31,7 @@ void main()
     // groundSky already carries SUN_ILLUMINANCE (baked into the sky-view
     // LUT); the direct bounce must match it
     vec3 groundSky = texture(skyViewLut, skyViewUv(dir, sunDir, r)).rgb;
-    vec3 sunT = transmittanceTo(r, sunDir.y);
+    vec3 sunT = transmittanceToSky(transmittanceLut, r, sunDir.y);
     vec3 direct = sunT * max(sunDir.y, 0.0) * (GROUND_ALBEDO / PI) * SUN_ILLUMINANCE;
     FragColor = vec4(direct + groundSky * GROUND_ALBEDO, 1.0);
 }

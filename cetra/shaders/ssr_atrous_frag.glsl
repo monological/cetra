@@ -14,10 +14,15 @@ out vec4 FragColor;
 // weights come from the REFLECTING surface's G-buffer, so the blur stays on the
 // floor and stops at its silhouette instead of bleeding reflection off the edge.
 //
-// Sibling of ssgi_atrous_frag.glsl -- deliberately cloned (no GLSL #include
-// here, and touching the shipped SSGI shader risks its byte-identity gate). The
-// ONLY functional delta is this one filters the full premultiplied vec4; SSGI
-// filters .rgb. Keep the kernel/weights in sync between the two.
+// Sibling of ssgi_atrous_frag.glsl, still a clone. The original reason ("no
+// GLSL #include here") stopped being true once the include mechanism landed;
+// the reason it is STILL cloned is that the two filter different types -- this
+// one the full premultiplied vec4, SSGI only .rgb -- and GLSL 330 has no
+// overloading on return type worth the contortion for ~28 lines.
+//
+// Drift here is untidy rather than a bug: each denoiser is internally
+// consistent, and they are tuned against different signals. But the kernel and
+// weights ARE meant to match, so if you change one, change the other.
 uniform sampler2D reflTex;     // Premultiplied reflection (color*weight, weight)
 uniform sampler2D linDepthTex; // Aux G-buffer; .z = linear view-space Z (<0), 0 = sky
 uniform sampler2D normalsTex;  // View-space normals (xyz) + reflective marker (a)

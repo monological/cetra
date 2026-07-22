@@ -27,23 +27,13 @@ void uvToTransmittanceParams(vec2 uv, out float r, out float mu)
     mu = clamp(mu, -1.0, 1.0);
 }
 
-// Extinction coefficient of the mixed atmosphere at altitude h (km)
-vec3 extinctionAt(float h)
-{
-    vec3 rayleigh;
-    float mie;
-    vec3 extinction;
-    atmosphereSample(h, rayleigh, mie, extinction);
-    return extinction;
-}
-
 void main()
 {
     float r, mu;
     uvToTransmittanceParams(TexCoords, r, mu);
 
     // March from (r, mu) to the top boundary
-    float dist = distanceToTopClamped(r, mu, Rt);
+    float dist = distanceToTop(r, mu);
     float dt = dist / float(TRANSMITTANCE_STEPS);
 
     vec3 depth = vec3(0.0);
@@ -51,7 +41,7 @@ void main()
         float t = (float(i) + 0.5) * dt;
         // Radius at parameter t along the ray (law of cosines)
         float rt = sqrt(r * r + t * t + 2.0 * r * t * mu);
-        depth += extinctionAt(rt - Rg) * dt;
+        depth += atmosphereAt(rt - Rg).extinction * dt;
     }
 
     FragColor = vec4(exp(-depth), 1.0);

@@ -40,45 +40,36 @@ const vec3 OZONE_ABSORB = vec3(0.650e-3, 1.881e-3, 0.085e-3);
 const float OZONE_CENTER = 25.0;
 const float OZONE_WIDTH = 15.0;
 
-// Ray/sphere intersection comes in two contracts, and the sky shaders had
-// forked into BOTH under three different names before this chunk existed
-// (distanceToSphere in two files, distanceToTop in two more, with two distinct
-// bodies). They are not interchangeable, so both are spelled out here and each
-// caller picks deliberately.
+// Ray/sphere intersection. The sky shaders had forked this into two bodies
+// under three names -- some clamping the discriminant to zero, some returning
+// -1.0 to signal a miss -- and an earlier pass at this chunk preserved BOTH
+// contracts on the assumption that callers depended on the difference. They do
+// not: every live call site is provably inside the atmosphere, so the
+// discriminant is never negative and the miss path is unreachable.
 //
-// ...Clamped: never negative; a miss reads as 0 distance.
-// ...OrMiss:  returns -1.0 on a miss, so the caller can branch.
+//   Ground (near root): only ever called under hitsGround(), which tests the
+//   SAME discriminant with the SAME R, so disc >= 0 by construction.
+//   Top (far root): the observer sits at r = Rg + VIEW_ALTITUDE = 6360.5 < Rt,
+//   so disc = Rt^2 - r^2(1 - mu^2) >= Rt^2 - r^2 = 1.28e6 > 0 for every mu.
 //
-// Far root (exit through sphere R, for an observer inside it).
-float distanceToTopClamped(float r, float mu, float R)
+// So one contract each. If a caller ever sits OUTSIDE the atmosphere (r > Rt)
+// the miss case becomes real and needs reintroducing -- deliberately, with
+// that reason stated, rather than because two copies once disagreed.
+
+// Far root: exit through sphere R, for an observer inside it.
+float distanceToTop(float r, float mu)
 {
-    float disc = r * r * (mu * mu - 1.0) + R * R;
+    float disc = r * r * (mu * mu - 1.0) + Rt * Rt;
     return max(0.0, -r * mu + sqrt(max(disc, 0.0)));
 }
 
-float distanceToTopOrMiss(float r, float mu, float R)
-{
-    float disc = r * r * (mu * mu - 1.0) + R * R;
-    if (disc < 0.0)
-        return -1.0;
-    return max(0.0, -r * mu + sqrt(disc));
-}
-
-// Near root (first hit ahead of the ray). Used for the ground so a march stops
+// Near root: first hit ahead of the ray. Used for the ground so a march stops
 // at the surface instead of continuing through the planet to the far root,
 // which produced huge/NaN samples.
-float distanceToGroundClamped(float r, float mu, float R)
+float distanceToGround(float r, float mu)
 {
-    float disc = r * r * (mu * mu - 1.0) + R * R;
+    float disc = r * r * (mu * mu - 1.0) + Rg * Rg;
     return max(0.0, -r * mu - sqrt(max(disc, 0.0)));
-}
-
-float distanceToGroundOrMiss(float r, float mu, float R)
-{
-    float disc = r * r * (mu * mu - 1.0) + R * R;
-    if (disc < 0.0)
-        return -1.0;
-    return max(0.0, -r * mu - sqrt(disc));
 }
 
 bool hitsGround(float r, float mu)
@@ -86,20 +77,28 @@ bool hitsGround(float r, float mu)
     return mu < 0.0 && r * r * (mu * mu - 1.0) + Rg * Rg >= 0.0;
 }
 
-// Rayleigh scattering, Mie scattering and total extinction at altitude h (km).
-// The three sky shaders each wanted a different subset of this; taking the
-// superset keeps one copy of the density profile. Callers that want combined
-// in-scatter use rayleigh + vec3(mie), which is the same sum the multiscatter
-// bake wrote by hand.
-void atmosphereSample(float h, out vec3 rayleigh, out float mie, out vec3 extinction)
+// The density profile at altitude h (km). The three sky shaders each want a
+// different subset -- extinction alone, combined in-scatter, or the Rayleigh
+// and Mie terms separated for the phase functions -- so this returns all
+// three and each caller reads what it needs. Returning a struct rather than
+// three out-params matters: the out-param form made a caller that wanted one
+// value declare three locals, which is why two shaders had grown wrapper
+// functions purely to hide the ceremony.
+struct Atmosphere {
+    vec3 rayleigh;   // Rayleigh scattering coefficient
+    float mie;       // Mie scattering coefficient
+    vec3 extinction; // total extinction (Rayleigh + Mie + ozone)
+};
+
+Atmosphere atmosphereAt(float h)
 {
     float rayleighD = exp(-h / RAYLEIGH_H);
     float mieD = exp(-h / MIE_H);
     float ozoneD = max(0.0, 1.0 - abs(h - OZONE_CENTER) / OZONE_WIDTH);
-    rayleigh = RAYLEIGH_SCATTER * rayleighD;
-    mie = MIE_SCATTER * mieD;
-    extinction = RAYLEIGH_SCATTER * rayleighD + vec3(MIE_EXTINCTION * mieD)
-                 + OZONE_ABSORB * ozoneD;
+    return Atmosphere(RAYLEIGH_SCATTER * rayleighD,
+                      MIE_SCATTER * mieD,
+                      RAYLEIGH_SCATTER * rayleighD + vec3(MIE_EXTINCTION * mieD)
+                          + OZONE_ABSORB * ozoneD);
 }
 
 // Bruneton transmittance UV forward mapping. The inverse lives in the
@@ -112,16 +111,28 @@ vec2 transmittanceUv(float r, float mu)
 {
     float H = sqrt(Rt * Rt - Rg * Rg);
     float rho = sqrt(max(r * r - Rg * Rg, 0.0));
-    float d = distanceToTopClamped(r, mu, Rt);
+    float d = distanceToTop(r, mu);
     float d_min = Rt - r;
     float d_max = rho + H;
     return vec2((d - d_min) / (d_max - d_min), rho / H);
 }
 
-// Raw LUT fetch with NO ground test -- the multiscatter bake wants this.
-// Shaders that must return black below the horizon wrap it themselves; that
-// policy genuinely differs between consumers, so it is not baked in here.
+// Raw LUT fetch with NO ground test. Only the multiscatter bake's ground-bounce
+// term wants this -- it has already established mu > 0, so the horizon test
+// would be redundant there.
 vec3 transmittanceLookup(sampler2D lut, float r, float mu)
 {
     return texture(lut, transmittanceUv(r, mu)).rgb;
+}
+
+// Transmittance with the below-horizon cut: black under the ground. This is
+// what every sun-facing lookup wants, and it lives here rather than in a
+// caller-side wrapper because four sibling shaders had each grown their own
+// `transmittanceTo` -- three meaning THIS, one meaning the raw lookup above.
+// One name, one meaning.
+vec3 transmittanceToSky(sampler2D lut, float r, float mu)
+{
+    if (hitsGround(r, mu))
+        return vec3(0.0);
+    return transmittanceLookup(lut, r, mu);
 }
