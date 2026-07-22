@@ -143,22 +143,18 @@ uniform int heightTexExists;
 uniform int sheenTexExists;
 uniform int clearcoatNormalExists;
 
-// Shadow mapping uniforms
-#define MAX_SHADOW_LIGHTS 3
-#define SHADOW_CASCADES 3
-uniform sampler2DArray shadowMaps;
-// Layers stride by the RUNTIME cascadeCount (layer = slot*cascadeCount + c),
-// so at cascadeCount 1 the indices match the classic single-map layout
-uniform mat4 lightSpaceMatrix[MAX_SHADOW_LIGHTS * SHADOW_CASCADES];
-uniform vec4 cascadeParams[MAX_SHADOW_LIGHTS * SHADOW_CASCADES]; // width, near, far, biasScale
+// Shadow mapping. The shared block (maps, matrices, cascade params, bias,
+// texel size) comes from the chunk; everything below is specific to this
+// shader's per-fragment cascade selection and PCSS, which the catcher and
+// particle consumers do not do. No CSM_OUTERMOST_PCF: they sample one
+// scene-fit cascade, this one selects per fragment.
+#include "csm.glsl"
+
 uniform vec4 cascadeSplits; // View-depth far bound per cascade (.xyz)
-uniform int cascadeCount;
 uniform int csmDebug; // Tint fragments by selected cascade
 uniform int shadowLightIndex[MAX_SHADOW_LIGHTS];
 // (no numShadowLights here: this shader iterates shadowLightIndex[] instead.
 // shadow.c still uploads it -- catcher_frag and particle_frag do read it.)
-uniform float shadowBias;
-uniform vec2 shadowTexelSize;
 // PCSS (contact-hardening shadows). When disabled the 3x3 PCF fallback
 // runs, bit-identical to the pre-PCSS path. The ortho shadow projection
 // stores depth linearly in [near,far], so the blocker/receiver separation
