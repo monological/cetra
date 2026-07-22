@@ -9,96 +9,29 @@ out vec4 FragColor;
 // the sun moves. Single scattering marched directly; multiple scattering
 // folded in from the Psi LUT.
 //
-// Units KILOMETERS. Atmosphere constants duplicated across the sky_*
-// shaders (no GLSL includes) and MUST stay in sync.
+// Units KILOMETERS.
 
 uniform sampler2D transmittanceLut;
 uniform sampler2D multiscatterLut;
 uniform float sunCosZenith; // dot(sunDir, up) -- the sun's elevation
 
-const float PI = 3.14159265359;
+#include "sky_lut.glsl"
 
-const float Rg = 6360.0;
-const float Rt = 6460.0;
-// Fixed observer altitude (km): cetra cameras never leave the ground, so
-// the sky-view LUT's altitude input is constant
-const float VIEW_ALTITUDE = 0.5;
-
-const vec3 RAYLEIGH_SCATTER = vec3(5.802e-3, 13.558e-3, 33.1e-3);
-const float RAYLEIGH_H = 8.0;
-const float MIE_SCATTER = 3.996e-3;
-const float MIE_EXTINCTION = MIE_SCATTER / 0.9;
+// Mie asymmetry: only this shader evaluates a phase function (the LUT bakes
+// the phase in), so it stays local rather than joining the shared model.
 const float MIE_G = 0.8;
-const float MIE_H = 1.2;
-const vec3 OZONE_ABSORB = vec3(0.650e-3, 1.881e-3, 0.085e-3);
-const float OZONE_CENTER = 25.0;
-const float OZONE_WIDTH = 15.0;
 
 const int SKY_STEPS = 32;
-// Sun illuminance: the atmosphere integral is computed per unit sun
-// illuminance (physical sky radiance ~ 0.04), so scale into the engine's
-// linear range (daytime zenith ~ a couple units, comparable to a studio
-// HDR sky). Duplicated in sky_env / sky_background -- keep in sync.
-const float SUN_ILLUMINANCE = 3.0;
-
-// Distance to the FAR intersection with sphere R (the exit point when the
-// observer is inside R -- used for the atmosphere top)
-float distanceToTop(float r, float mu, float R)
-{
-    float disc = r * r * (mu * mu - 1.0) + R * R;
-    if (disc < 0.0)
-        return -1.0;
-    return max(0.0, -r * mu + sqrt(disc));
-}
-
-// Distance to the NEAR intersection with sphere R (the first hit ahead of
-// the ray -- used for the ground, so the march stops at the surface instead
-// of continuing through the planet to the far root)
-float distanceToGround(float r, float mu, float R)
-{
-    float disc = r * r * (mu * mu - 1.0) + R * R;
-    if (disc < 0.0)
-        return -1.0;
-    return max(0.0, -r * mu - sqrt(disc));
-}
-
-bool hitsGround(float r, float mu)
-{
-    return mu < 0.0 && r * r * (mu * mu - 1.0) + Rg * Rg >= 0.0;
-}
-
-vec2 transmittanceUv(float r, float mu)
-{
-    float H = sqrt(Rt * Rt - Rg * Rg);
-    float rho = sqrt(max(r * r - Rg * Rg, 0.0));
-    float d = distanceToTop(r, mu, Rt);
-    float d_min = Rt - r;
-    float d_max = rho + H;
-    return vec2((d - d_min) / (d_max - d_min), rho / H);
-}
 
 vec3 transmittanceTo(float r, float mu)
 {
-    if (hitsGround(r, mu))
-        return vec3(0.0);
-    return texture(transmittanceLut, transmittanceUv(r, mu)).rgb;
+    return transmittanceToSky(transmittanceLut, r, mu);
 }
 
 vec3 multiscatterAt(float r, float mu_s)
 {
     vec2 uv = vec2(mu_s * 0.5 + 0.5, (r - Rg) / (Rt - Rg));
     return texture(multiscatterLut, uv).rgb;
-}
-
-void scatteringAt(float h, out vec3 rayleigh, out float mie, out vec3 extinction)
-{
-    float rayleighD = exp(-h / RAYLEIGH_H);
-    float mieD = exp(-h / MIE_H);
-    float ozoneD = max(0.0, 1.0 - abs(h - OZONE_CENTER) / OZONE_WIDTH);
-    rayleigh = RAYLEIGH_SCATTER * rayleighD;
-    mie = MIE_SCATTER * mieD;
-    extinction = RAYLEIGH_SCATTER * rayleighD + vec3(MIE_EXTINCTION * mieD)
-                 + OZONE_ABSORB * ozoneD;
 }
 
 float rayleighPhase(float c)
@@ -150,7 +83,7 @@ void main()
     float cosVS = dot(viewDir, sunDir);
 
     bool ground = hitsGround(r, mu);
-    float tMax = ground ? distanceToGround(r, mu, Rg) : distanceToTop(r, mu, Rt);
+    float tMax = ground ? distanceToGroundOrMiss(r, mu, Rg) : distanceToTopOrMiss(r, mu, Rt);
     if (tMax < 0.0) {
         FragColor = vec4(0.0, 0.0, 0.0, 1.0);
         return;
@@ -173,7 +106,7 @@ void main()
 
         vec3 rayleigh, extinction;
         float mie;
-        scatteringAt(rt - Rg, rayleigh, mie, extinction);
+        atmosphereSample(rt - Rg, rayleigh, mie, extinction);
 
         vec3 stepTrans = exp(-extinction * dt);
         vec3 sunT = transmittanceTo(rt, mu_s);

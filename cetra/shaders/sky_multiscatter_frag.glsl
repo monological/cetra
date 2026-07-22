@@ -9,77 +9,30 @@ out vec4 FragColor;
 // bounce series closes as Psi = L2 / (1 - f_ms). Baked ONCE: the sun's
 // zenith angle is an AXIS of this LUT, not an input.
 //
-// Units are KILOMETERS. Atmosphere constants duplicated across the sky_*
-// shaders (no GLSL includes) and MUST stay in sync.
+// Units are KILOMETERS.
 
 uniform sampler2D transmittanceLut;
 
-const float PI = 3.14159265359;
-
-const float Rg = 6360.0;
-const float Rt = 6460.0;
-
-const vec3 RAYLEIGH_SCATTER = vec3(5.802e-3, 13.558e-3, 33.1e-3);
-const float RAYLEIGH_H = 8.0;
-const float MIE_SCATTER = 3.996e-3;
-const float MIE_EXTINCTION = MIE_SCATTER / 0.9;
-const float MIE_H = 1.2;
-const vec3 OZONE_ABSORB = vec3(0.650e-3, 1.881e-3, 0.085e-3);
-const float OZONE_CENTER = 25.0;
-const float OZONE_WIDTH = 15.0;
-
-const float GROUND_ALBEDO = 0.3;
+#include "atmosphere.glsl"
 
 const int SPHERE_DIRS = 64; // 8x8 lat-long quadrature over the sphere
 const int MARCH_STEPS = 20;
 
-// FAR intersection (exit through the atmosphere top)
-float distanceToTop(float r, float mu, float R)
-{
-    float disc = r * r * (mu * mu - 1.0) + R * R;
-    return max(0.0, -r * mu + sqrt(max(disc, 0.0)));
-}
-
-// NEAR intersection (first ground hit ahead of the ray -- so the march
-// stops at the surface instead of continuing through the planet to the far
-// root, which produced huge/NaN samples)
-float distanceToGround(float r, float mu, float R)
-{
-    float disc = r * r * (mu * mu - 1.0) + R * R;
-    return max(0.0, -r * mu - sqrt(max(disc, 0.0)));
-}
-
-// Does the ray from radius r with cos-zenith mu hit the ground?
-bool hitsGround(float r, float mu)
-{
-    return mu < 0.0 && r * r * (mu * mu - 1.0) + Rg * Rg >= 0.0;
-}
-
-// Bruneton transmittance UV forward mapping (inverse lives in the
-// transmittance bake shader; keep in sync)
-vec2 transmittanceUv(float r, float mu)
-{
-    float H = sqrt(Rt * Rt - Rg * Rg);
-    float rho = sqrt(max(r * r - Rg * Rg, 0.0));
-    float d = distanceToTop(r, mu, Rt);
-    float d_min = Rt - r;
-    float d_max = rho + H;
-    return vec2((d - d_min) / (d_max - d_min), rho / H);
-}
-
+// No ground cut here: this bake integrates THROUGH, unlike the three shaders
+// that sample the sky-view LUT.
 vec3 transmittanceTo(float r, float mu)
 {
-    return texture(transmittanceLut, transmittanceUv(r, mu)).rgb;
+    return transmittanceLookup(transmittanceLut, r, mu);
 }
 
+// Combined in-scatter (Rayleigh + Mie) -- the isotropic-phase approximation
+// this LUT is built on does not need them separated.
 void scatteringAt(float h, out vec3 scatter, out vec3 extinction)
 {
-    float rayleighD = exp(-h / RAYLEIGH_H);
-    float mieD = exp(-h / MIE_H);
-    float ozoneD = max(0.0, 1.0 - abs(h - OZONE_CENTER) / OZONE_WIDTH);
-    scatter = RAYLEIGH_SCATTER * rayleighD + vec3(MIE_SCATTER * mieD);
-    extinction = RAYLEIGH_SCATTER * rayleighD + vec3(MIE_EXTINCTION * mieD)
-                 + OZONE_ABSORB * ozoneD;
+    vec3 rayleigh;
+    float mie;
+    atmosphereSample(h, rayleigh, mie, extinction);
+    scatter = rayleigh + vec3(mie);
 }
 
 void main()
@@ -103,7 +56,8 @@ void main()
         float dOmega = 4.0 * PI / float(SPHERE_DIRS);
 
         bool ground = hitsGround(r, dir.y);
-        float tMax = ground ? distanceToGround(r, dir.y, Rg) : distanceToTop(r, dir.y, Rt);
+        float tMax =
+            ground ? distanceToGroundClamped(r, dir.y, Rg) : distanceToTopClamped(r, dir.y, Rt);
         float dt = tMax / float(MARCH_STEPS);
 
         vec3 through = vec3(1.0); // transmittance from the point to the sample
