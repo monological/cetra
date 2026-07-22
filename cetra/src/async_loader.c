@@ -15,6 +15,12 @@
 static void* worker_thread_func(void* arg) {
     AsyncLoader* loader = (AsyncLoader*)arg;
 
+    // stb_image's vertical-flip setting is process-global unless a thread pins
+    // its own: decodes here must never inherit a flip another thread set for an
+    // unrelated image (the IBL equirect load sets it). Model textures are
+    // uploaded unflipped -- UV orientation is handled per-format at import.
+    stbi_set_flip_vertically_on_load_thread(0);
+
     while (!atomic_load(&loader->shutdown)) {
         TextureLoadRequest* req = NULL;
 

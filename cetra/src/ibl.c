@@ -268,11 +268,16 @@ int load_hdr_environment(IBLResources* ibl, const char* hdr_path) {
     if (!ibl || !hdr_path)
         return -1;
 
+    // Equirect HDRs are stored bottom-up relative to this engine's upload. The
+    // flag is process-global in stb_image, so scope it to this one load: async
+    // texture workers decode concurrently and must not inherit the flip.
     stbi_set_flip_vertically_on_load(1);
 
     int width, height, nrComponents;
     // Force 3 channels (RGB) to match GL_RGB format
     float* data = stbi_loadf(hdr_path, &width, &height, &nrComponents, 3);
+
+    stbi_set_flip_vertically_on_load(0);
 
     if (!data) {
         log_error("Failed to load HDR image: %s", hdr_path);
