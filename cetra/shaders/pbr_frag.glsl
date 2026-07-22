@@ -75,10 +75,15 @@ uniform float alphaCutoff;  // Alpha cutoff threshold for hair/foliage (0 = disa
 // Alpha-to-coverage: MSAA turns fractional alpha into sample coverage, so the
 // binary cutoff is skipped for soft, order-independent masked edges
 uniform int alphaToCoverage;
+// Whether this material is ALPHA_MASK at all. Distinct from alphaToCoverage,
+// which says only that A2C is live for this draw: A2C needs MSAA samples to
+// dither into and switches off on a 1-sample buffer, but the material is still
+// masked, and the shadow/GTAO rules below key off the material, not the AA mode.
+uniform int alphaMasked;
 // Masked material that opted back into the shadow map (material.h
 // foliage_shadows). Leaf cards are large enough to resolve at map-texel scale,
 // so they read the cascades like opaque geometry does.
-uniform int uFoliageShadows;
+uniform int foliageShadows;
 // Geometric specular AA strength (0 disables)
 uniform float specularAAStrength;
 
@@ -1072,7 +1077,7 @@ void main() {
         // map — a per-run-random, constant-within-a-run wrong shadow that
         // gated the specular highlights into shimmering speckle.
         float shadow = 1.0;
-        if (lights[i].type == 0 && (alphaToCoverage == 0 || uFoliageShadows == 1) &&
+        if (lights[i].type == 0 && (alphaMasked == 0 || foliageShadows == 1) &&
             i < MAX_SHADOW_LIGHTS) {
             int shadowSlot = shadowLightIndex[i];
             if (shadowSlot >= 0) {
@@ -1081,7 +1086,7 @@ void main() {
             }
         }
         // Spot (flashlight) shadow: its own perspective map (see calculateSpotShadow).
-        if (lights[i].type == 2 && spotShadowActive == 1 && alphaToCoverage == 0) {
+        if (lights[i].type == 2 && spotShadowActive == 1 && alphaMasked == 0) {
             shadow = calculateSpotShadow(WorldPos, NdotL);
         }
 
@@ -1308,7 +1313,7 @@ void main() {
     // the hair, under the hair's depth). Their alpha must mirror FragColor's:
     // Apple's driver derives A2C coverage from the last color output's alpha,
     // not output 0, and any other value reshapes the card cutouts.
-    NormalOut = alphaToCoverage > 0
+    NormalOut = alphaMasked > 0
                     ? vec4(0.0, 0.0, 0.0, finalOpacity)
                     : vec4(normalize(mat3(view) * N), 0.0);
 

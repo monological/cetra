@@ -152,11 +152,17 @@ static void _update_program_light_uniforms(ShaderProgram* program, Light* light,
     uniform_set_int(u, "numLights", (int)light_count);
 }
 
-void _update_program_material_uniforms(ShaderProgram* program, Material* material) {
+// `a2c_capable` is whether the current target has MSAA samples for
+// alpha-to-coverage to dither into. It gates only the coverage path -- whether
+// the material is masked at all is uploaded separately, because the shadow and
+// GTAO rules key off the material and must not move with the AA mode.
+void _update_program_material_uniforms(ShaderProgram* program, Material* material,
+                                       bool a2c_capable) {
     if (!program || !program->uniforms || !material)
         return;
 
     UniformManager* u = program->uniforms;
+    bool masked = material->alpha_mode == ALPHA_MASK;
 
     uniform_set_vec3(u, "albedo", (const float*)&material->albedo);
     vec3 emissive_hdr;
@@ -172,8 +178,9 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
     uniform_set_float(u, "ao", material->ao);
     uniform_set_float(u, "materialOpacity", material->opacity);
     uniform_set_float(u, "alphaCutoff", material->alphaCutoff);
-    uniform_set_int(u, "alphaToCoverage", material->alpha_mode == ALPHA_MASK ? 1 : 0);
-    uniform_set_int(u, "uFoliageShadows", material->foliage_shadows ? 1 : 0);
+    uniform_set_int(u, "alphaToCoverage", masked && a2c_capable ? 1 : 0);
+    uniform_set_int(u, "alphaMasked", masked ? 1 : 0);
+    uniform_set_int(u, "foliageShadows", material->foliage_shadows ? 1 : 0);
     uniform_set_float(u, "normalScale", material->normalScale);
     uniform_set_float(u, "aoStrength", material->aoStrength);
     uniform_set_float(u, "ior", material->ior);
@@ -290,6 +297,12 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
 
     if (!node->meshes || node->mesh_count == 0)
         return;
+
+    // Alpha-to-coverage needs real MSAA samples to dither into; on a 1-sample
+    // buffer glEnable(GL_SAMPLE_ALPHA_TO_COVERAGE) is a no-op and the shader's
+    // A2C path would keep every fragment down to alpha 0.02, so masked geometry
+    // would render as solid quads. Fall back to the binary cutoff there.
+    bool a2c_capable = engine->msaa_samples > 1;
 
     for (size_t i = 0; i < node->mesh_count; ++i) {
         Mesh* mesh = node->meshes[i];
@@ -454,19 +467,9 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
         uniform_set_float(u, "uWindMaskMinY", mesh->aabb.min[1]);
         uniform_set_float(u, "uWindMaskMaxY", mesh->aabb.max[1]);
 
-        // Alpha-to-coverage needs real MSAA samples to dither into; on a
-        // 1-sample buffer glEnable(GL_SAMPLE_ALPHA_TO_COVERAGE) is a no-op and
-        // the shader's A2C path would keep every fragment down to alpha 0.02 --
-        // masked geometry would render as solid quads. Fall back to the binary
-        // cutoff there. No effect at MSAA > 1.
-        bool a2c_capable = engine->msaa_samples > 1;
-
         // Only update material uniforms if material changed
         if (*current_material != mat) {
-            _update_program_material_uniforms(program, mat);
-            if (mat->alpha_mode == ALPHA_MASK && !a2c_capable) {
-                uniform_set_int(u, "alphaToCoverage", 0);
-            }
+            _update_program_material_uniforms(program, mat, a2c_capable);
             *current_material = mat;
         }
 
