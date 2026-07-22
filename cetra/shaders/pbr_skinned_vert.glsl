@@ -19,8 +19,6 @@ flat out float TangentW; // bitangent handedness, per-island constant
 out vec4 CurrClip;     // Un-jittered current clip position (motion vectors)
 out vec4 PrevClip;     // Previous-frame clip position
 
-#define MAX_BONES 128
-
 uniform mat4 model;
 // transpose(inverse(model)), uploaded per node (render.c) -- see pbr_vert.
 // The BONE inverse-transpose below is different: bone matrices are a per-vertex
@@ -40,23 +38,9 @@ uniform float uDeltaTime; // render clock advance, for the previous-frame positi
 #include "wind.glsl"
 #include "tbn.glsl"
 
-// Skinning uniforms
-uniform bool skinned;
-uniform mat4 boneMatrices[MAX_BONES];
-// Previous frame's bones for motion vectors, packed as 3 affine rows per bone
-// (the implicit 4th row is 0,0,0,1) so a second full set fits the vertex
-// uniform budget alongside boneMatrices.
-uniform vec4 uPrevBoneRows[3 * MAX_BONES];
-
-mat4 prevBone(int i) {
-    vec4 r0 = uPrevBoneRows[3 * i + 0];
-    vec4 r1 = uPrevBoneRows[3 * i + 1];
-    vec4 r2 = uPrevBoneRows[3 * i + 2];
-    return mat4(r0.x, r1.x, r2.x, 0.0,
-                r0.y, r1.y, r2.y, 0.0,
-                r0.z, r1.z, r2.z, 0.0,
-                r0.w, r1.w, r2.w, 1.0);
-}
+// This stage writes motion vectors, so it takes the previous-pose half too.
+#define SKIN_PREV_POSE
+#include "skin.glsl"
 
 void main() {
     vec4 localPos;
@@ -65,25 +49,10 @@ void main() {
     vec3 localTangent;
 
     if (skinned) {
-        // Apply bone transforms weighted by bone weights (current and previous
-        // pose in one pass so the motion vector captures the deformation).
-        mat4 boneTransform = mat4(0.0);
-        mat4 prevBoneTransform = mat4(0.0);
-        float totalWeight = 0.0;
-
-        for (int i = 0; i < 4; i++) {
-            if (aBoneIds[i] >= 0 && aBoneIds[i] < MAX_BONES) {
-                boneTransform += boneMatrices[aBoneIds[i]] * aBoneWeights[i];
-                prevBoneTransform += prevBone(aBoneIds[i]) * aBoneWeights[i];
-                totalWeight += aBoneWeights[i];
-            }
-        }
-
-        // Fallback to identity if no valid bones
-        if (totalWeight < 0.001) {
-            boneTransform = mat4(1.0);
-            prevBoneTransform = mat4(1.0);
-        }
+        // Current and previous pose in one pass, so the motion vector captures
+        // the deformation and not just the node transform.
+        mat4 boneTransform = skinMatrix(aBoneIds, aBoneWeights);
+        mat4 prevBoneTransform = skinMatrixPrev(aBoneIds, aBoneWeights);
 
         // Transform position and normals by bone matrix
         localPos = boneTransform * vec4(aPos, 1.0);
