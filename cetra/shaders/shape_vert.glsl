@@ -41,6 +41,8 @@ uniform mat4 projection;
 uniform vec3 camPos;
 uniform float time;
 
+#include "tbn.glsl"
+
 void main() {
 
     vec4 worldPos = model * vec4(aPos, 1.0);
@@ -59,11 +61,8 @@ void main() {
     Normal_vs = normalize(mat3(transpose(inverse(model))) * aNormal);
     TexCoords_vs = aTexCoords;
 
-    // TBN, bitangent derived from the tangent's handedness (see pbr_vert).
-    vec3 T = normalize(mat3(model) * aTangent.xyz);
     vec3 N = normalize(mat3(model) * aNormal);
-    vec3 B = cross(N, T) * aTangent.w;
-    TBN_vs = mat3(T, B, N);
+    TBN_vs = buildTBN(N, mat3(model) * aTangent.xyz, aTangent.w);
 
     gl_Position = clipPos;
 }

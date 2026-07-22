@@ -15,7 +15,12 @@ endif()
 set(SHADER_DIR ${CMAKE_CURRENT_SOURCE_DIR}/shaders)
 set(SHADER_HEADER ${CMAKE_CURRENT_SOURCE_DIR}/src/shader_strings.h)
 
-file(GLOB SHADER_FILES ${SHADER_DIR}/*.glsl)
+# Recursive so shared chunks under include/ are dependencies too: without them
+# a chunk edit would not retrigger generation and the build would quietly keep
+# the stale expansion baked into shader_strings.h. CONFIGURE_DEPENDS re-globs
+# at build time, so a brand-new shader or chunk is picked up without a manual
+# reconfigure. (pbr_frag.glsl.old stays excluded -- it does not match *.glsl.)
+file(GLOB_RECURSE SHADER_FILES CONFIGURE_DEPENDS ${SHADER_DIR}/*.glsl)
 
 add_custom_command(
     OUTPUT ${SHADER_HEADER}
