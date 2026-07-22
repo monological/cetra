@@ -2,9 +2,6 @@
 in vec3 Normal;
 in vec3 WorldPos;
 in vec3 ViewPos;
-in vec3 FragPos;
-in float ClipDepth;
-in float FragDepth;
 in vec2 TexCoords;
 in vec2 TexCoords2;   // UV1 for lightmaps/AO
 in vec4 VertexColor;  // Vertex color (RGBA)
@@ -61,12 +58,9 @@ uniform Light lights[MAX_LIGHTS];
 uniform int numLights;
 
 uniform mat4 view;
-uniform mat4 model;
 uniform mat4 projection;
 
 uniform int renderMode;
-uniform float nearClip;
-uniform float farClip;
 
 uniform vec3 albedo;
 uniform vec3 emissiveFactor;  // Emissive color factor (multiplied with emissive texture)
@@ -90,15 +84,6 @@ uniform int foliageShadows;
 // Geometric specular AA strength (0 disables)
 uniform float specularAAStrength;
 
-// With alpha-to-coverage active only fully invisible fragments are discarded
-// (fractional alpha becomes MSAA coverage); otherwise the binary cutoff
-// applies (alphaCutoff of 0 never discards since alpha is non-negative)
-const float A2C_MIN_ALPHA = 0.02;
-
-bool alphaBelowCutoff(float a)
-{
-    return a < (alphaToCoverage > 0 ? A2C_MIN_ALPHA : alphaCutoff);
-}
 uniform float normalScale;  // Normal map intensity scale (1.0 = full strength)
 uniform float aoStrength;   // Occlusion texture strength (1.0 = full effect)
 uniform float ior;
@@ -131,13 +116,11 @@ uniform int texCoords2Exists;   // Whether mesh has UV1
 // vertex stage's declaration; the existing per-material upload feeds both.
 uniform int uWindMode;
 uniform vec3 camPos;
-uniform float time;
 
 uniform sampler2D albedoTex;
 uniform sampler2D normalTex;
 uniform sampler2D emissiveTex;
 uniform sampler2D sheenTex;          // KHR sheen color (sRGB, unit 8)
-uniform sampler2D reflectanceTex;    // reserved (unsampled; KHR specular color deferred)
 uniform sampler2D clearcoatNormalTex; // clearcoat normal map (freed unit)
 uniform sampler2D heightTex;          // POM height field (unit 4, §4.11); white = raised
 
@@ -158,7 +141,6 @@ uniform int normalTexExists;
 uniform int emissiveTexExists;
 uniform int heightTexExists;
 uniform int sheenTexExists;
-uniform int reflectanceTexExists;
 uniform int clearcoatNormalExists;
 
 // Shadow mapping uniforms
@@ -173,7 +155,8 @@ uniform vec4 cascadeSplits; // View-depth far bound per cascade (.xyz)
 uniform int cascadeCount;
 uniform int csmDebug; // Tint fragments by selected cascade
 uniform int shadowLightIndex[MAX_SHADOW_LIGHTS];
-uniform int numShadowLights;
+// (no numShadowLights here: this shader iterates shadowLightIndex[] instead.
+// shadow.c still uploads it -- catcher_frag and particle_frag do read it.)
 uniform float shadowBias;
 uniform vec2 shadowTexelSize;
 // PCSS (contact-hardening shadows). When disabled the 3x3 PCF fallback
@@ -238,6 +221,16 @@ uniform float probeMaxLOD;
 uniform float probeBoxFade;
 
 const float PI = 3.14159265359;
+
+// With alpha-to-coverage active only fully invisible fragments are discarded
+// (fractional alpha becomes MSAA coverage); otherwise the binary cutoff
+// applies (alphaCutoff of 0 never discards since alpha is non-negative)
+const float A2C_MIN_ALPHA = 0.02;
+
+bool alphaBelowCutoff(float a)
+{
+    return a < (alphaToCoverage > 0 ? A2C_MIN_ALPHA : alphaCutoff);
+}
 
 // UV transform for KHR_texture_transform
 vec2 transformUV(vec2 uv) {
@@ -816,12 +809,6 @@ void main() {
         N = -N;
     }
 
-    // Clearcoat normal Nc: independent of the base normal map (glTF), so it
-    // defaults to the geometric normal -- a coat over a normal-mapped base
-    // stays smooth unless it carries its own coat normal. Computed only when
-    // the coat is active (clearcoatNormal() below) so the clearcoat-off path
-    // is byte-identical to a coat-free build.
-
     float roughnessMap = roughness;
     if (roughnessLayer >= 0) {
         // glTF: G channel contains roughness (works for grayscale too since R=G=B)
@@ -896,7 +883,7 @@ void main() {
         roughnessMap = clamp(sqrt(a2 + kernelRoughness2), roughnessMap, 1.0);
     }
 
-    // Calculate view direction (must use WorldPos, not FragPos which is clip space)
+    // Calculate view direction (WorldPos -- world space, as the maths needs)
     vec3 V = normalize(camPos - WorldPos);
 
     // Render modes that need texture data

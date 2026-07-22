@@ -9,7 +9,6 @@
 #include "uniform.h"
 #include "util.h"
 #include "engine.h"
-#include "shader_strings.h"
 #include "ext/log.h"
 
 #define STB_IMAGE_IMPLEMENTATION_ALREADY_DONE
