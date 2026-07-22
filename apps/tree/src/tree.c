@@ -509,11 +509,14 @@ static unsigned char* generate_island_normal(int width, int height) {
             float hx = fbm_noise(nx + 0.1f, ny, 3, 0.5f) * 0.1f;
             float hy = fbm_noise(nx, ny + 0.1f, 3, 0.5f) * 0.1f;
 
-            // Derive normal from height differences
+            // Derive normal from height differences. Tangent space puts the
+            // surface normal on +Z, as the bark map does -- writing it on +Y
+            // (the world-space convention) aims every ground texel sideways
+            // along its bitangent, and the ground then never faces the sun.
             float dx = (hx - h) * 2.0f;
             float dy = (hy - h) * 2.0f;
 
-            vec3 normal = {-dx, 1.0f, -dy};
+            vec3 normal = {-dx, -dy, 1.0f};
             glm_vec3_normalize(normal);
 
             // Convert to 0-255 range
@@ -663,7 +666,8 @@ static MouseDragController* drag_controller = NULL;
 /*
  * Generate island mesh - a domed disc
  */
-static void generate_island_mesh(Mesh* mesh, float radius, float height, int rings, int segments) {
+static void generate_island_mesh(Mesh* mesh, float radius, float height, int rings, int segments,
+                                 float uv_tiles) {
     // Create a domed disc with rings from center to edge
     int num_vertices = 1 + rings * segments; // center + rings
     int num_triangles = segments + (rings - 1) * segments * 2;
@@ -690,8 +694,8 @@ static void generate_island_mesh(Mesh* mesh, float radius, float height, int rin
     mesh->bitangents[0] = 0.0f;
     mesh->bitangents[1] = 0.0f;
     mesh->bitangents[2] = 1.0f;
-    mesh->tex_coords[0] = 0.5f;
-    mesh->tex_coords[1] = 0.5f;
+    mesh->tex_coords[0] = 0.5f * uv_tiles;
+    mesh->tex_coords[1] = 0.5f * uv_tiles;
 
     // Generate ring vertices
     int vi = 1;
@@ -708,8 +712,12 @@ static void generate_island_mesh(Mesh* mesh, float radius, float height, int rin
             mesh->vertices[vi * 3 + 1] = ring_height;
             mesh->vertices[vi * 3 + 2] = z;
 
-            // Normal pointing up and slightly outward
-            vec3 normal = {x, ring_radius * 0.5f, z};
+            // True surface normal of the dome y = height * (1 - (d/radius)^2),
+            // whose slope at distance d is 2*height*d/radius^2. The old normal
+            // was the radial direction, which tilted the ground up to 60 degrees
+            // off vertical -- it faced sideways and never caught the sun.
+            float slope = 2.0f * height * ring_radius / (radius * radius);
+            vec3 normal = {cosf(angle) * slope, 1.0f, sinf(angle) * slope};
             glm_vec3_normalize(normal);
             mesh->normals[vi * 3] = normal[0];
             mesh->normals[vi * 3 + 1] = normal[1];
@@ -720,14 +728,17 @@ static void generate_island_mesh(Mesh* mesh, float radius, float height, int rin
             mesh->tangents[vi * 3 + 1] = 0.0f;
             mesh->tangents[vi * 3 + 2] = cosf(angle);
 
-            // Bitangent (cross of normal and tangent)
-            mesh->bitangents[vi * 3] = cosf(angle);
-            mesh->bitangents[vi * 3 + 1] = 0.0f;
-            mesh->bitangents[vi * 3 + 2] = sinf(angle);
+            // Bitangent (cross of normal and tangent), which tilts with the
+            // slope so the TBN stays orthonormal for the normal map
+            vec3 bitangent = {cosf(angle), -slope, sinf(angle)};
+            glm_vec3_normalize(bitangent);
+            mesh->bitangents[vi * 3] = bitangent[0];
+            mesh->bitangents[vi * 3 + 1] = bitangent[1];
+            mesh->bitangents[vi * 3 + 2] = bitangent[2];
 
-            // UV coordinates
-            mesh->tex_coords[vi * 2] = 0.5f + 0.5f * x / radius;
-            mesh->tex_coords[vi * 2 + 1] = 0.5f + 0.5f * z / radius;
+            // UV coordinates, tiled so a terrain-sized disc keeps texel detail
+            mesh->tex_coords[vi * 2] = (0.5f + 0.5f * x / radius) * uv_tiles;
+            mesh->tex_coords[vi * 2 + 1] = (0.5f + 0.5f * z / radius) * uv_tiles;
 
             vi++;
         }
@@ -736,11 +747,14 @@ static void generate_island_mesh(Mesh* mesh, float radius, float height, int rin
     // Generate indices
     int ii = 0;
 
-    // Center fan (first ring)
+    // Center fan (first ring). Wound counter-clockwise as seen from above, so
+    // the lit side faces the sky -- the original order was reversed, which put
+    // every ground triangle's front face underground where back-face culling
+    // threw it away.
     for (int s = 0; s < segments; s++) {
         mesh->indices[ii++] = 0;
-        mesh->indices[ii++] = 1 + s;
         mesh->indices[ii++] = 1 + (s + 1) % segments;
+        mesh->indices[ii++] = 1 + s;
     }
 
     // Remaining rings
@@ -756,32 +770,44 @@ static void generate_island_mesh(Mesh* mesh, float radius, float height, int rin
 
             // Two triangles per quad
             mesh->indices[ii++] = curr;
-            mesh->indices[ii++] = curr_outer;
             mesh->indices[ii++] = next_outer;
+            mesh->indices[ii++] = curr_outer;
 
             mesh->indices[ii++] = curr;
-            mesh->indices[ii++] = next_outer;
             mesh->indices[ii++] = next;
+            mesh->indices[ii++] = next_outer;
         }
     }
 
     mesh->draw_mode = TRIANGLES;
+    // Required: the renderer frustum-culls on this. Left at the zero AABB
+    // create_mesh starts with, the ground collapses to a point at the origin
+    // and gets culled the moment that point leaves the view.
+    calculate_aabb(mesh);
 }
 
 /*
- * Create island node with mesh
+ * Create the ground
+ *
+ * Wide enough to reach the horizon: at the old radius of 120 the disc read as
+ * a saucer floating in the sky's dark virtual ground rather than as terrain.
+ * The dome is nearly flat across the near field and falls away at the rim, and
+ * it is dropped by its own height so its crown lands at y = 0, where the tree
+ * roots start.
  */
+#define GROUND_RADIUS 900.0f
+#define GROUND_HEIGHT 20.0f
+
 static void create_island(SceneNode* parent) {
     island_node = create_node();
-    set_node_name(island_node, "island");
+    set_node_name(island_node, "ground");
 
     Mesh* mesh = create_mesh();
-    generate_island_mesh(mesh, 120.0f, 15.0f, 8, 32);
+    generate_island_mesh(mesh, GROUND_RADIUS, GROUND_HEIGHT, 24, 64, 40.0f);
     mesh->material = island_material;
 
-    // Position slightly below ground level
     glm_mat4_identity(island_node->original_transform);
-    glm_translate(island_node->original_transform, (vec3){0.0f, -5.0f, 0.0f});
+    glm_translate(island_node->original_transform, (vec3){0.0f, -GROUND_HEIGHT, 0.0f});
 
     add_mesh_to_node(island_node, mesh);
     add_child_node(parent, island_node);
@@ -855,6 +881,7 @@ static void regenerate_tree(Scene* scene, const TreeParams* p) {
     tree_skeleton_free(&skel);
 
     upload_buffers_to_gpu_for_nodes(scene->root_node);
+
 }
 
 // Leaf color across the season slider. The albedo factor multiplies the leaf
@@ -1049,6 +1076,7 @@ typedef struct {
     const char* screenshot;
     int width, height;
     int no_shadows;
+    int no_fog;
     int no_falling_leaves;
     int seed;
     float sun_elevation;
@@ -1067,6 +1095,7 @@ static void print_usage(const char* prog) {
     printf("      --sun-elevation D   Sun elevation in degrees\n");
     printf("      --sun-azimuth D     Sun azimuth in degrees\n");
     printf("      --no-shadows        Disable the shadow pass\n");
+    printf("      --no-fog            Disable the volumetric fog\n");
     printf("      --no-falling-leaves Disable the falling-leaf particles\n");
     printf("  -h, --help              This message\n");
 }
@@ -1103,6 +1132,8 @@ static bool parse_args(int argc, char** argv, TreeArgs* a) {
             a->sun_azimuth = (float)atof(argv[++i]);
         } else if (!strcmp(s, "--no-shadows")) {
             a->no_shadows = 1;
+        } else if (!strcmp(s, "--no-fog")) {
+            a->no_fog = 1;
         } else if (!strcmp(s, "--no-falling-leaves")) {
             a->no_falling_leaves = 1;
         } else if (!strcmp(s, "-h") || !strcmp(s, "--help")) {
@@ -1165,8 +1196,8 @@ static void create_falling_leaves(Engine* engine, Scene* scene, float canopy_rad
     particle_emitter_add_module(em, particle_module_update_drift(fall));
     particle_emitter_add_module(em, particle_module_update_integrate(0.96f));
 
-    // The island's crown sits at y = 10 (dome height 15, node at -5).
-    vec3 ground_p = {0.0f, 10.0f, 0.0f};
+    // The ground's crown sits at y = 0.
+    vec3 ground_p = {0.0f, 0.0f, 0.0f};
     vec3 ground_n = {0.0f, 1.0f, 0.0f};
     particle_emitter_add_module(
         em, particle_module_collider_plane(ground_p, ground_n, 0.0f));
@@ -1374,10 +1405,10 @@ int main(int argc, char** argv) {
         postfx_apply_film_look(fx);
         fx->grain_strength = 0.05f;
 
-        fx->fog_enabled = true;
+        fx->fog_enabled = args.no_fog == 0;
         fx->fog_density = 0.0005f;
         fx->fog_height_falloff = 75.0f;
-        fx->fog_floor_y = -5.0f;
+        fx->fog_floor_y = 0.0f;
         fx->fog_far = 800.0f;
 
         fx->dof_enabled = true;
