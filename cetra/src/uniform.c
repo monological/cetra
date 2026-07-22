@@ -87,8 +87,6 @@ void uniform_cache_standard(UniformManager* mgr) {
 
     // Render settings
     uniform_location(mgr, "renderMode");
-    uniform_location(mgr, "nearClip");
-    uniform_location(mgr, "farClip");
 
     // Material properties
     uniform_location(mgr, "albedo");
@@ -109,7 +107,6 @@ void uniform_cache_standard(UniformManager* mgr) {
     uniform_location(mgr, "heightTex");
     uniform_location(mgr, "opacityTex");
     uniform_location(mgr, "sheenTex");
-    uniform_location(mgr, "reflectanceTex");
 
     // Texture exists flags
     uniform_location(mgr, "albedoTexExists");
@@ -121,7 +118,6 @@ void uniform_cache_standard(UniformManager* mgr) {
     uniform_location(mgr, "heightTexExists");
     uniform_location(mgr, "opacityTexExists");
     uniform_location(mgr, "sheenTexExists");
-    uniform_location(mgr, "reflectanceTexExists");
 
     // Misc
     uniform_location(mgr, "numLights");

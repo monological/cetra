@@ -1,5 +1,6 @@
 #version 330 core
-in vec2 TexCoords;
+// post_vert emits TexCoords; this 1x1 pass does not sample by UV, so it is
+// deliberately not declared here (an unread stage input is legal).
 out vec4 FragColor;
 
 // Auto-exposure step 2: eye adaptation. Blend the measured mean log-luminance

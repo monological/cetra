@@ -215,8 +215,9 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
     uniform_set_int(u, "emissiveTex", TEXUNIT_EMISSIVE);
     uniform_set_int(u, "sceneColorTex", TEXUNIT_SCENE_COLOR); // refraction source
     uniform_set_int(u, "sheenTex", TEXUNIT_SHEEN);            // KHR sheen color (sRGB)
-    uniform_set_int(u, "reflectanceTex",
-                    TEXUNIT_REFLECTANCE); // reserved (KHR specular color deferred)
+    // No reflectanceTex bind: TEXUNIT_REFLECTANCE stays reserved for KHR
+    // specular color, but nothing samples it yet, so binding it every material
+    // switch was a hash lookup and a no-op set for a uniform that did not exist.
     uniform_set_int(u, "clearcoatNormalTex", TEXUNIT_CLEARCOAT_NORMAL);
     uniform_set_int(u, "heightTex", TEXUNIT_HEIGHT); // POM height map (§4.11)
 
@@ -272,7 +273,6 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
     uniform_set_int(u, "emissiveTexExists", material->emissive_tex ? 1 : 0);
     uniform_set_int(u, "heightTexExists", material->height_tex ? 1 : 0);
     uniform_set_int(u, "sheenTexExists", material->sheen_tex ? 1 : 0);
-    uniform_set_int(u, "reflectanceTexExists", material->reflectance_tex ? 1 : 0);
     uniform_set_int(u, "clearcoatNormalExists", material->clearcoat_normal_tex ? 1 : 0);
 
     // Reset active texture unit
@@ -285,8 +285,9 @@ static void _update_camera_uniforms(ShaderProgram* program, Camera* camera) {
 
     UniformManager* u = program->uniforms;
     uniform_set_vec3(u, "camPos", (const float*)&camera->position);
-    uniform_set_float(u, "nearClip", camera->near_clip);
-    uniform_set_float(u, "farClip", camera->far_clip);
+    // nearClip/farClip are NOT uploaded: no shader in the corpus reads them.
+    // The depth linearization they fed lives in pbr_frag.glsl.old, which is not
+    // built. Post passes reconstruct view-Z from the projection matrix instead.
 }
 
 static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Camera* camera,

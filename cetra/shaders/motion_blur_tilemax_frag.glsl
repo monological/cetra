@@ -1,5 +1,6 @@
 #version 330 core
-in vec2 TexCoords;
+// post_vert emits TexCoords; this pass addresses by gl_FragCoord instead, so
+// it is deliberately not declared here (an unread stage input is legal).
 out vec4 FragColor;
 
 // Motion blur (4.15) tile-max: reduce the full-res velocity buffer to one

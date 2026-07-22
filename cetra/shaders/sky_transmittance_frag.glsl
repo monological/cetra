@@ -12,7 +12,6 @@ out vec4 FragColor;
 // The atmosphere constants are duplicated across the sky_* shaders (GLSL
 // has no includes here) and MUST stay in sync.
 
-const float PI = 3.14159265359;
 
 // Earth
 const float Rg = 6360.0; // ground radius (km)

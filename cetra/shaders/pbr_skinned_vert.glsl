@@ -11,9 +11,6 @@ layout(location = 8) in vec2 aTexCoords2;
 out vec3 Normal;
 out vec3 WorldPos;
 out vec3 ViewPos;
-out vec3 FragPos;
-out float ClipDepth;
-out float FragDepth;
 out vec2 TexCoords;
 out vec2 TexCoords2;
 out vec4 VertexColor;
@@ -37,7 +34,6 @@ uniform mat4 uCurrViewProjNoJitter;
 uniform mat4 uPrevViewProj;
 uniform mat4 uPrevModel;
 
-uniform vec3 camPos;
 uniform float time;
 uniform float uDeltaTime; // render clock advance, for the previous-frame position
 
@@ -130,10 +126,6 @@ void main() {
     ViewPos = viewPos.xyz;
 
     vec4 clipPos = projection * viewPos;
-    FragPos = clipPos.xyz;
-    ClipDepth = clipPos.z;
-
-    FragDepth = clipPos.z / clipPos.w;
 
     Normal = normalize(uNormalMatrix * localNormal);
     TexCoords = aTexCoords;

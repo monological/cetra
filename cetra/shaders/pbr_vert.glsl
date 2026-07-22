@@ -9,9 +9,6 @@ layout(location = 8) in vec2 aTexCoords2;
 out vec3 Normal;
 out vec3 WorldPos;     // World position
 out vec3 ViewPos;      // View position
-out vec3 FragPos;      // Fragment position in clip space
-out float ClipDepth;   // Depth in clip space
-out float FragDepth;
 out vec2 TexCoords;
 out vec2 TexCoords2;   // UV1 for lightmaps/AO
 out vec4 VertexColor;  // Vertex color (RGBA)
@@ -20,26 +17,12 @@ flat out float TangentW; // bitangent handedness, per-island constant
 out vec4 CurrClip;     // Un-jittered current clip position (motion vectors)
 out vec4 PrevClip;     // Previous-frame clip position
 
-#define MAX_LIGHTS 70
-
-struct Light {
-    int type;
-    vec3 position;
-    vec3 direction;
-    vec3 color;
-    vec3 specular;
-    vec3 ambient;
-    float intensity;
-    float constant;
-    float linear;
-    float quadratic;
-    float cutOff;
-    float outerCutOff;
-    vec2 size;
-};
-
-uniform Light lights[MAX_LIGHTS];
-uniform int numLights;
+// No Light struct / lights[] here on purpose: this stage does no lighting. It
+// used to carry a copy declaring MAX_LIGHTS 70 while pbr_frag declares 64 --
+// the same-named uniform array at two sizes in one linked program, which is a
+// link error by spec and only linked because the vertex copy was inactive and
+// stripped. pbr_frag owns that declaration (mirrored by PBR_MAX_LIGHTS in
+// common.h); the moment a vertex shader needs lighting, include it once.
 
 uniform mat4 model;
 // transpose(inverse(model)), uploaded per node (render.c). Normals need it
@@ -55,7 +38,6 @@ uniform mat4 uCurrViewProjNoJitter;
 uniform mat4 uPrevViewProj;
 uniform mat4 uPrevModel;
 
-uniform vec3 camPos;
 uniform float time;
 uniform float uDeltaTime; // render clock advance, for the previous-frame position
 
@@ -80,10 +62,6 @@ void main() {
     ViewPos = viewPos.xyz;
 
     vec4 clipPos = projection * viewPos;
-    FragPos = clipPos.xyz;
-    ClipDepth = clipPos.z; // Depth in clip space
-
-    FragDepth = gl_Position.z / gl_Position.w; // Perspective divide to get normalized device coordinates
 
     Normal = normalize(uNormalMatrix * aNormal);
     TexCoords = aTexCoords;

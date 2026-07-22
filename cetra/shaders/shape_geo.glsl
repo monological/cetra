@@ -7,7 +7,6 @@ in vec3 WorldPos_vs[2]; // World position from vertex shader
 uniform mat4 projection;
 uniform mat4 view;
 uniform float lineWidth;
-uniform float time;
 
 void main() {
     vec3 startPosition = WorldPos_vs[0];
