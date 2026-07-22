@@ -18,10 +18,8 @@
 // Forward declaration
 struct AsyncLoader;
 
-Material* process_ai_material(struct aiMaterial* ai_mat, TexturePool* tex_pool,
-                              const struct aiScene* ai_scene);
-
-// Async variant - textures loaded in parallel, set via callbacks
+// Build a cetra Material from an aiMaterial; file textures stream on the loader's
+// worker pool, embedded textures decode inline.
 Material* process_ai_material_async(struct aiMaterial* ai_mat, TexturePool* tex_pool,
                                     const struct aiScene* ai_scene, struct AsyncLoader* loader);
 
@@ -41,11 +39,10 @@ void process_ai_cameras(const struct aiScene* scene, Camera*** cameras, uint32_t
 // run, not per asset.
 void set_import_flip_uvs(bool flip);
 
-Scene* create_scene_from_model_path(const char* path, const char* texture_directory);
-
-// Async variant - textures loaded in parallel
-Scene* create_scene_from_model_path_async(const char* path, const char* texture_directory,
-                                          struct AsyncLoader* loader);
+// Load a model file into a Scene. File textures stream on the loader's worker
+// pool (may still be decoding on return); meshes and skeletons are ready.
+Scene* create_scene_from_model_path(const char* path, const char* texture_directory,
+                                    struct AsyncLoader* loader);
 
 // POM (§4.11): resolve "<name>_height" sibling maps into materials that have an
 // albedo/normal texture but no height map yet (glTF carries no height slot).
