@@ -18,6 +18,7 @@ out vec2 TexCoords;
 out vec2 TexCoords2;
 out vec4 VertexColor;
 out mat3 TBN;
+flat out float TangentW; // bitangent handedness, per-island constant
 out vec4 CurrClip;     // Un-jittered current clip position (motion vectors)
 out vec4 PrevClip;     // Previous-frame clip position
 
@@ -144,6 +145,7 @@ void main() {
     // of square with its own normal and tangent. N is the Normal varying, the
     // one the fragment stage orthogonalizes against.
     TBN = buildTBN(Normal, mat3(model) * localTangent, aTangent.w);
+    TangentW = aTangent.w;
 
     gl_Position = clipPos;
 }
