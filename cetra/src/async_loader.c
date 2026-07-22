@@ -43,6 +43,7 @@ static void* worker_thread_func(void* arg) {
         if (!result) {
             log_error("Failed to allocate TextureLoadResult");
             free(req->filepath);
+            free(req->embedded_data);
             free(req);
             atomic_fetch_sub(&loader->pending_count, 1);
             continue;
@@ -50,6 +51,35 @@ static void* worker_thread_func(void* arg) {
 
         result->callback = req->callback;
         result->user_data = req->user_data;
+
+        // Embedded texture: decode the compressed bytes we copied from the
+        // aiScene (which may already be released). filepath doubles as the key.
+        if (req->embedded_data) {
+            result->filepath = safe_strdup(req->filepath);
+            int ew, eh, ec;
+            unsigned char* edata =
+                result->filepath ? stbi_load_from_memory(req->embedded_data, req->embedded_size,
+                                                          &ew, &eh, &ec, 0)
+                                  : NULL;
+            if (edata) {
+                if (ec == 4) {
+                    texture_dilate_transparent_rgb(edata, ew, eh);
+                }
+                result->pixel_data = edata;
+                result->width = ew;
+                result->height = eh;
+                result->channels = ec;
+                result->success = true;
+                texture_gl_formats(ec, req->is_srgb, &result->internal_format,
+                                   &result->data_format);
+            } else {
+                result->success = false;
+                snprintf(result->error_msg, ASYNC_LOADER_MAX_ERROR_MSG,
+                         "Failed to decode embedded texture: %s",
+                         result->filepath ? req->filepath : "(alloc failed)");
+            }
+            goto enqueue_result;
+        }
 
         // Normalize path
         char* normalized_path = convert_and_normalize_path(req->filepath);
@@ -128,6 +158,7 @@ static void* worker_thread_func(void* arg) {
         pthread_mutex_unlock(&loader->complete_mutex);
 
         free(req->filepath);
+        free(req->embedded_data);
         free(req);
     }
 
@@ -222,6 +253,7 @@ void free_async_loader(AsyncLoader* loader) {
     while (req) {
         TextureLoadRequest* next = req->next;
         free(req->filepath);
+        free(req->embedded_data);
         free(req);
         req = next;
     }
@@ -303,6 +335,74 @@ void load_texture_async(AsyncLoader* loader, TexturePool* pool, const char* file
     }
 
     // Add to work queue
+    pthread_mutex_lock(&loader->work_mutex);
+    if (loader->work_tail) {
+        loader->work_tail->next = req;
+    } else {
+        loader->work_head = req;
+    }
+    loader->work_tail = req;
+    pthread_cond_signal(&loader->work_cond);
+    pthread_mutex_unlock(&loader->work_mutex);
+
+    atomic_fetch_add(&loader->pending_count, 1);
+}
+
+void load_texture_from_memory_async(AsyncLoader* loader, TexturePool* pool, const char* key,
+                                    const unsigned char* data, int data_size, bool is_srgb,
+                                    void (*callback)(Texture* tex, void* user_data),
+                                    void* user_data) {
+    if (!loader || !pool || !key || !data || data_size <= 0) {
+        log_error("Invalid arguments to load_texture_from_memory_async");
+        if (callback) {
+            callback(NULL, user_data);
+        }
+        return;
+    }
+
+    // Already decoded + cached under this key?
+    Texture* cached = get_texture_from_pool_threadsafe(pool, key);
+    if (cached) {
+        if (callback) {
+            callback(cached, user_data);
+        }
+        return;
+    }
+
+    // Copy the compressed bytes so the caller can release the source (the
+    // aiScene) immediately; the worker owns and frees the copy.
+    TextureLoadRequest* req = calloc(1, sizeof(TextureLoadRequest));
+    unsigned char* copy = req ? malloc((size_t)data_size) : NULL;
+    if (!req || !copy) {
+        log_error("Failed to allocate embedded texture request");
+        free(req);
+        free(copy);
+        if (callback) {
+            callback(NULL, user_data);
+        }
+        return;
+    }
+    memcpy(copy, data, (size_t)data_size);
+
+    req->pool = pool;
+    req->filepath = safe_strdup(key); // the cache key ("*N")
+    req->is_srgb = is_srgb;
+    req->embedded_data = copy;
+    req->embedded_size = data_size;
+    req->callback = callback;
+    req->user_data = user_data;
+    req->next = NULL;
+
+    if (!req->filepath) {
+        log_error("Failed to duplicate embedded texture key");
+        free(copy);
+        free(req);
+        if (callback) {
+            callback(NULL, user_data);
+        }
+        return;
+    }
+
     pthread_mutex_lock(&loader->work_mutex);
     if (loader->work_tail) {
         loader->work_tail->next = req;

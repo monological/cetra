@@ -432,38 +432,53 @@ static void async_tex_callback(Texture* tex, void* user_data) {
     free(ctx);
 }
 
-static void load_material_texture_async(AsyncLoader* loader, TexturePool* tex_pool, Material* mat,
-                                        const char* filepath, bool is_srgb,
-                                        void (*setter)(Material*, Texture*), const char* tex_type) {
+static AsyncTexCallback* make_async_tex_ctx(Material* mat, void (*setter)(Material*, Texture*),
+                                            const char* tex_type) {
     AsyncTexCallback* ctx = malloc(sizeof(AsyncTexCallback));
     if (!ctx) {
         log_error("Failed to allocate AsyncTexCallback");
-        return;
+        return NULL;
     }
     ctx->material = mat;
     ctx->setter = setter;
     ctx->tex_type = tex_type;
-    load_texture_async(loader, tex_pool, filepath, is_srgb, async_tex_callback, ctx);
+    return ctx;
 }
 
-// Helper to load a texture (embedded or file-based) for a material
+// Load a texture for a material. Both file and (compressed) embedded textures
+// decode on the loader's worker pool and attach via callback; only rare raw
+// (uncompressed) embedded pixels are handled inline.
 static void load_material_texture(Material* material, TexturePool* tex_pool,
                                   const struct aiScene* ai_scene, AsyncLoader* loader,
                                   const char* tex_path, bool is_srgb,
                                   void (*setter)(Material*, Texture*), const char* tex_type_name) {
     if (tex_path[0] == '*' && ai_scene) {
-        // Embedded textures are loaded synchronously (data already in memory)
-        Texture* tex = load_embedded_texture(tex_pool, ai_scene, tex_path, is_srgb);
-        if (tex) {
-            setter(material, tex);
-            log_info("%s texture loaded (embedded): %s", tex_type_name, tex->filepath);
+        int idx = atoi(tex_path + 1);
+        const struct aiTexture* ai_tex =
+            (idx >= 0 && (unsigned int)idx < ai_scene->mNumTextures) ? ai_scene->mTextures[idx]
+                                                                     : NULL;
+        if (ai_tex && ai_tex->mHeight == 0) {
+            // Compressed embedded (PNG/JPG): decode on a worker like a file. For
+            // a compressed aiTexture, mWidth is the byte size of pcData.
+            AsyncTexCallback* ctx = make_async_tex_ctx(material, setter, tex_type_name);
+            if (ctx) {
+                load_texture_from_memory_async(loader, tex_pool, tex_path,
+                                               (const unsigned char*)ai_tex->pcData,
+                                               (int)ai_tex->mWidth, is_srgb, async_tex_callback,
+                                               ctx);
+            }
         } else {
-            log_warn("Failed to load embedded %s texture '%s'", tex_type_name, tex_path);
+            // Raw (uncompressed) embedded pixels: decode inline (rare).
+            Texture* tex = load_embedded_texture(tex_pool, ai_scene, tex_path, is_srgb);
+            if (tex) {
+                setter(material, tex);
+            }
         }
     } else {
-        // File-based textures loaded asynchronously
-        load_material_texture_async(loader, tex_pool, material, tex_path, is_srgb, setter,
-                                    tex_type_name);
+        AsyncTexCallback* ctx = make_async_tex_ctx(material, setter, tex_type_name);
+        if (ctx) {
+            load_texture_async(loader, tex_pool, tex_path, is_srgb, async_tex_callback, ctx);
+        }
     }
 }
 
