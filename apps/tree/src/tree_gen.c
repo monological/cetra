@@ -643,9 +643,11 @@ bool tree_mesh_bark(const TreeSkeleton* skel, const TreeParams* p, Mesh* mesh) {
 // tip row can droop. Flat cards read as stickers from every angle but head-on.
 static void emit_leaf_card(MeshBuilder* mb, const vec3 attach, const vec3 L, const vec3 Nl,
                            const vec3 S, float len, float width, float phase, float flex,
-                           const float* rgba) {
+                           const float* rgba, int variant, bool mirror,
+                           const vec3 canopy_center) {
     unsigned int base = mb->vcount;
     vec3 down = {0.0f, -1.0f, 0.0f};
+    const float inv_variants = 1.0f / (float)TG_LEAF_VARIANTS;
 
     for (int row = 0; row < 2; row++) {
         float vv = (float)row;
@@ -661,17 +663,41 @@ static void emit_leaf_card(MeshBuilder* mb, const vec3 attach, const vec3 L, con
             // Tip droop.
             glm_vec3_muladds(down, vv * len * 0.15f, pv);
 
-            vec3 nrm, tng, btn;
+            vec3 nrm = GLM_VEC3_ZERO_INIT, tng = GLM_VEC3_ZERO_INIT, btn = GLM_VEC3_ZERO_INIT;
             glm_vec3_copy((float*)Nl, nrm);
             glm_vec3_muladds((float*)S, uu * 0.6f, nrm);
             glm_vec3_normalize(nrm);
+
+            // Canopy-volume normal. Shading each card by its own plane normal
+            // is what makes a canopy read as confetti: a thousand cards catch
+            // the light a thousand ways. Bending the normal toward the vector
+            // out of the canopy centre makes the crown shade as one soft body,
+            // lit on the sunward side and falling into shadow behind -- the
+            // single biggest lighting difference in vegetation rendering.
+            vec3 vol;
+            glm_vec3_sub(pv, (float*)canopy_center, vol);
+            if (glm_vec3_norm(vol) > 1e-4f) {
+                glm_vec3_normalize(vol);
+                glm_vec3_lerp(nrm, vol, 0.5f, nrm);
+                glm_vec3_normalize(nrm);
+            }
+
+            // Re-orthogonalize the tangent against the bent normal so the
+            // normal map now perturbs around the volume normal.
             glm_vec3_copy((float*)S, tng);
+            glm_vec3_muladds(nrm, -glm_vec3_dot(tng, nrm), tng);
+            glm_vec3_normalize(tng);
             glm_vec3_cross(nrm, tng, btn);
             glm_vec3_normalize(btn);
 
             // UV0.v runs stem (0) to tip (1): the leaf texture points that way,
-            // and the wind shader pivots flutter about v = 0.
-            mb_vertex(mb, pv, nrm, tng, btn, uu + 0.5f, vv, phase, flex, rgba);
+            // and the wind shader pivots flutter about v = 0. U is remapped into
+            // this card's cluster cell in the atlas.
+            // Mirroring doubles the distinct arrangements for free -- with only
+            // the raw variant count, the repeated sprig is easy to spot.
+            float cell_u = mirror ? 0.5f - uu : uu + 0.5f;
+            float u_tex = ((float)variant + cell_u) * inv_variants;
+            mb_vertex(mb, pv, nrm, tng, btn, u_tex, vv, phase, flex, rgba);
         }
     }
 
@@ -818,7 +844,13 @@ bool tree_mesh_leaves(const TreeSkeleton* skel, const TreeParams* p, Mesh* mesh)
             const float tint[4] = {ao * bright * (1.0f + warm), ao * bright * (1.0f - warm * 0.35f),
                              ao * bright * (1.0f - warm), 1.0f};
 
-            emit_leaf_card(&mb, attach, L, Nl, S, len, width, ph, flex, tint);
+            int variant = (int)(tg_randf(&rng, 0.0f, (float)TG_LEAF_VARIANTS));
+            if (variant >= TG_LEAF_VARIANTS)
+                variant = TG_LEAF_VARIANTS - 1;
+            bool mirror = tg_randf(&rng, 0.0f, 1.0f) < 0.5f;
+
+            emit_leaf_card(&mb, attach, L, Nl, S, len, width, ph, flex, tint, variant, mirror,
+                           canopy_center);
 
             if (!mb.ok)
                 break;

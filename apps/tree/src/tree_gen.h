@@ -21,6 +21,14 @@
 // NB for the caller: neither mesh may carry an AO texture. The PBR shader reads
 // UV1 as the AO map's UV when one is bound, which would sample wind data.
 
+// Leaf cluster variants in the foliage atlas. Each card picks one and may
+// mirror it, for 2x this many distinct arrangements -- with only a handful the
+// eye picks the repeated sprig out of the canopy immediately.
+//
+// The atlas tiles along U only: the wind shader reads UV0.y as the flutter
+// weight so a card pivots about its stem, and rows would move that pivot.
+#define TG_LEAF_VARIANTS 8
+
 // Live-tunable shape. Compared with memcmp to decide when to rebuild, so it
 // holds no pointers and must be zeroed before its first assignment.
 typedef struct TreeParams {

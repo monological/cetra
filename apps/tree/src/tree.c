@@ -302,8 +302,13 @@ static float smoothstep(float edge0, float edge1, float x) {
 /*
  * Generate bark roughness map
  */
+// NB three channels, with the value replicated. The mask array is sampled with
+// glTF ORM semantics -- roughness comes from GREEN (pbr_frag.glsl), metallic
+// from blue, occlusion from red -- and a single-channel source samples as
+// (r, 0, 0, 1), i.e. roughness 0, a mirror. Replicating keeps the map correct
+// whichever slot it is bound to.
 static unsigned char* generate_bark_roughness(int width, int height) {
-    unsigned char* data = malloc(width * height);
+    unsigned char* data = malloc((size_t)width * height * 3);
     if (!data)
         return NULL;
 
@@ -323,156 +328,236 @@ static unsigned char* generate_bark_roughness(int width, int height) {
             float roughness = 0.85f + noise * 0.1f - crack * 0.15f;
             roughness = fmaxf(0.5f, fminf(1.0f, roughness));
 
-            data[y * width + x] = (unsigned char)(roughness * 255);
-        }
-    }
-
-    return data;
-}
-
-/*
- * Generate leaf albedo with veins
- */
-static unsigned char* generate_leaf_albedo(int width, int height) {
-    unsigned char* data = malloc(width * height * 4); // RGBA for transparency
-    if (!data)
-        return NULL;
-
-    init_perlin(789);
-
-    float cx = width * 0.5f;
-    float cy = height * 0.5f;
-
-    for (int y = 0; y < height; y++) {
-        for (int x = 0; x < width; x++) {
-            float u = (float)x / width;
-            float v = (float)y / height;
-
-            // Leaf shape - ellipse with pointed tip
-            float dx = (x - cx) / (width * 0.4f);
-            float dy = (y - cy) / (height * 0.45f);
-
-            // Pointed tip at top
-            float tip_factor = 1.0f + (v - 0.5f) * 0.5f;
-            dx *= tip_factor;
-
-            float dist = sqrtf(dx * dx + dy * dy);
-
-            // Leaf mask with soft edge
-            float alpha = 1.0f - smoothstep(0.8f, 1.0f, dist);
-
-            if (alpha < 0.01f) {
-                int idx = (y * width + x) * 4;
-                data[idx + 0] = 0;
-                data[idx + 1] = 0;
-                data[idx + 2] = 0;
-                data[idx + 3] = 0;
-                continue;
-            }
-
-            // Base green with variation
-            float noise = fbm_noise(u * 8.0f, v * 8.0f, 3, 0.5f);
-
-            // Real foliage is a muted olive, not a pure green: the red and blue
-            // floors here are what keep it from reading as neon once the sky
-            // ambient and the transmission term pile on.
-            float base_r = 0.19f + noise * 0.10f;
-            float base_g = 0.38f + noise * 0.14f;
-            float base_b = 0.13f + noise * 0.06f;
-
-            // Main vein (center vertical)
-            float vein_dist = fabsf(u - 0.5f);
-            float main_vein = expf(-vein_dist * vein_dist * 800.0f) * 0.3f;
-
-            // Secondary veins branching from center
-            float secondary_veins = 0.0f;
-            for (int i = 1; i <= 6; i++) {
-                float vein_y = 0.15f + (float)i * 0.12f;
-                float vein_angle = 0.4f + (float)i * 0.05f;
-
-                // Left side
-                float vy_left = v - vein_y;
-                float vx_left = (u - 0.5f) + vy_left * vein_angle;
-                float d_left = fabsf(vy_left * cosf(vein_angle) - vx_left * sinf(vein_angle));
-                if (u < 0.5f && v > vein_y && v < vein_y + 0.3f) {
-                    secondary_veins += expf(-d_left * d_left * 2000.0f) * 0.15f;
-                }
-
-                // Right side
-                float vx_right = (u - 0.5f) - vy_left * vein_angle;
-                float d_right = fabsf(vy_left * cosf(vein_angle) + vx_right * sinf(vein_angle));
-                if (u > 0.5f && v > vein_y && v < vein_y + 0.3f) {
-                    secondary_veins += expf(-d_right * d_right * 2000.0f) * 0.15f;
-                }
-            }
-
-            // Veins are slightly darker and more yellow-green
-            float vein = main_vein + secondary_veins;
-            base_r += vein * 0.1f;
-            base_g -= vein * 0.1f;
-            base_b -= vein * 0.02f;
-
-            // Edge yellowing
-            float edge = smoothstep(0.5f, 0.9f, dist);
-            base_r += edge * 0.15f;
-            base_g += edge * 0.05f;
-
-            // Clamp
-            base_r = fmaxf(0.0f, fminf(1.0f, base_r));
-            base_g = fmaxf(0.0f, fminf(1.0f, base_g));
-            base_b = fmaxf(0.0f, fminf(1.0f, base_b));
-
-            int idx = (y * width + x) * 4;
-            data[idx + 0] = (unsigned char)(base_r * 255);
-            data[idx + 1] = (unsigned char)(base_g * 255);
-            data[idx + 2] = (unsigned char)(base_b * 255);
-            data[idx + 3] = (unsigned char)(alpha * 255);
-        }
-    }
-
-    return data;
-}
-
-/*
- * Generate leaf normal map
- */
-static unsigned char* generate_leaf_normal(int width, int height) {
-    unsigned char* data = malloc(width * height * 3);
-    if (!data)
-        return NULL;
-
-    for (int y = 0; y < height; y++) {
-        for (int x = 0; x < width; x++) {
-            float u = (float)x / width;
-            float v = (float)y / height;
-
-            // Base normal pointing up
-            vec3 normal = {0.0f, 0.0f, 1.0f};
-
-            // Main vein creates a ridge
-            float vein_dist = (u - 0.5f);
-            float main_vein_bump = expf(-vein_dist * vein_dist * 400.0f);
-            normal[0] -= vein_dist * main_vein_bump * 3.0f;
-
-            // Leaf curvature - curves down at edges
-            float edge_curve = (u - 0.5f) * 0.3f;
-            normal[0] += edge_curve;
-
-            // Subtle surface bumps
-            float bump = fbm_noise(u * 20.0f, v * 20.0f, 2, 0.5f) - 0.5f;
-            normal[0] += bump * 0.1f;
-            normal[1] += bump * 0.1f;
-
-            glm_vec3_normalize(normal);
-
+            unsigned char q = (unsigned char)(roughness * 255);
             int idx = (y * width + x) * 3;
-            data[idx + 0] = (unsigned char)((normal[0] * 0.5f + 0.5f) * 255);
-            data[idx + 1] = (unsigned char)((normal[1] * 0.5f + 0.5f) * 255);
-            data[idx + 2] = (unsigned char)((normal[2] * 0.5f + 0.5f) * 255);
+            data[idx + 0] = q;
+            data[idx + 1] = q;
+            data[idx + 2] = q;
         }
     }
 
     return data;
+}
+
+/*
+ * Leaf cluster atlas
+ *
+ * A production foliage card carries a whole sprig, not one leaf: several
+ * overlapping leaves baked into one alpha texture, so a single quad buys an
+ * irregular silhouette and the canopy densifies without more geometry. One leaf
+ * per quad is what made the old canopy read as a pile of ovals.
+ *
+ * The atlas tiles along U only. The wind shader uses UV0.y as the flutter
+ * weight so a card pivots about its stem at v = 0; splitting V across rows
+ * would move that pivot and scale flutter differently per row.
+ *
+ * Albedo, normal, and roughness are rasterized in one pass so all three agree
+ * per texel -- each leaf writes its own vein ridge and its own cuticle
+ * roughness at the same time it writes its color.
+ */
+
+// Leaves per cluster and clusters per atlas.
+#define LEAVES_PER_CLUSTER 6
+#define LEAF_VARIANTS      TG_LEAF_VARIANTS
+
+// Half-width of a leaf blade at `t` along its length (0 = stem, 1 = tip), in
+// units of the blade's half-length. Widest just under halfway, tapering to a
+// point, with a toothed edge and a thin petiole at the base.
+static float leaf_half_width(float t, float skew) {
+    if (t < 0.10f)
+        return 0.035f; // petiole: a stalk, so the blade attaches to something
+    float body = sinf((float)M_PI * powf(t, 0.55f));
+    float serration = 1.0f + 0.035f * sinf(t * 14.0f * (float)M_PI);
+    return 0.72f * body * serration * (1.0f + skew);
+}
+
+// Texture-space randomness only. The tree generator keeps its own stream
+// (tree_gen.c) so shape never depends on how much texture work ran first.
+static float rand_range(float min_val, float max_val) {
+    return min_val + (float)rand() / (float)RAND_MAX * (max_val - min_val);
+}
+
+// Secondary veins, as a 0..1 mask. Each one leaves the midrib at its own point
+// along the blade and runs diagonally out toward the tip, so they nest inside
+// one another. (Expressing the vein position as a repeating ramp instead draws
+// a ladder of parallel bars straight across the leaf -- a comb, not a leaf.)
+// `across` is -1..1 edge to edge, `t` is 0..1 stem to tip.
+#define LEAF_SECONDARY_VEINS 6
+
+static float secondary_veins(float across, float t) {
+    float a = fabsf(across);
+    float sum = 0.0f;
+    for (int k = 0; k < LEAF_SECONDARY_VEINS; k++) {
+        float base = 0.14f + (float)k * 0.13f; // where it leaves the midrib
+        float reach = (t - base) / 0.5f;       // how far out it has travelled
+        if (reach <= 0.02f || reach >= 1.0f)
+            continue;
+        float d = a - reach;
+        // Fade each vein out as it nears the blade edge.
+        sum += expf(-d * d * 320.0f) * (1.0f - reach * 0.35f);
+    }
+    return sum > 1.0f ? 1.0f : sum;
+}
+
+// Rasterize one leaf into the RGBA/normal/roughness buffers. The leaf is placed
+// at (cx, cy) in pixels, rotated by `rot`, with half-length `len` in pixels.
+static void draw_leaf(unsigned char* albedo, unsigned char* normal, unsigned char* rough, int w,
+                      int h, float cx, float cy, float rot, float len, float hue, float bright,
+                      float roughness, float skew) {
+    float ca = cosf(rot), sa = sinf(rot);
+    int pad = (int)(len * 1.2f) + 2;
+    int x0 = (int)cx - pad, x1 = (int)cx + pad;
+    int y0 = (int)cy - pad, y1 = (int)cy + pad;
+    if (x0 < 0)
+        x0 = 0;
+    if (y0 < 0)
+        y0 = 0;
+    if (x1 > w - 1)
+        x1 = w - 1;
+    if (y1 > h - 1)
+        y1 = h - 1;
+
+    for (int y = y0; y <= y1; y++) {
+        for (int x = x0; x <= x1; x++) {
+            // Into leaf-local space: `lv` runs stem(0) to tip(1), `lu` across.
+            float dx = ((float)x + 0.5f - cx) / len;
+            float dy = ((float)y + 0.5f - cy) / len;
+            float lu = dx * ca + dy * sa;
+            float lv = (-dx * sa + dy * ca) * 0.5f + 0.5f;
+            if (lv < 0.0f || lv > 1.0f)
+                continue;
+
+            float hw = leaf_half_width(lv, skew);
+            float edge = fabsf(lu) - hw;
+            // Soft edge about a pixel wide, so mips have something to filter.
+            float alpha = 1.0f - smoothstep(-1.5f / len, 0.5f / len, edge);
+            if (alpha <= 0.003f)
+                continue;
+
+            float across = hw > 1e-4f ? lu / hw : 0.0f;
+
+            // Veins: a midrib plus angled secondaries, slightly lighter and
+            // yellower than the blade.
+            float midrib = expf(-across * across * 90.0f);
+            float vein = fminf(1.0f, midrib + secondary_veins(across, lv) * 0.5f);
+
+            float r = (0.17f + 0.10f * hue) * bright;
+            float g = (0.36f + 0.10f * (1.0f - hue)) * bright;
+            float b = (0.12f + 0.05f * hue) * bright;
+            // Blade darkens toward the edge, lightens along the veins.
+            float shade = 0.82f + 0.18f * (1.0f - fabsf(across));
+            r = r * shade + vein * 0.07f;
+            g = g * shade + vein * 0.06f;
+            b = b * shade + vein * 0.02f;
+
+            int ia = (y * w + x) * 4;
+            float dst_a = albedo[ia + 3] / 255.0f;
+            // Painted in order, later leaves over earlier ones.
+            float out_a = alpha + dst_a * (1.0f - alpha);
+            float wsrc = out_a > 1e-4f ? alpha / out_a : 0.0f;
+            albedo[ia + 0] = (unsigned char)(fminf(1.0f, r) * 255 * wsrc + albedo[ia + 0] * (1.0f - wsrc));
+            albedo[ia + 1] = (unsigned char)(fminf(1.0f, g) * 255 * wsrc + albedo[ia + 1] * (1.0f - wsrc));
+            albedo[ia + 2] = (unsigned char)(fminf(1.0f, b) * 255 * wsrc + albedo[ia + 2] * (1.0f - wsrc));
+            albedo[ia + 3] = (unsigned char)(out_a * 255);
+
+            if (wsrc > 0.5f) {
+                // Vein ridge: the blade folds up along the midrib and tips down
+                // toward each edge, rotated back into atlas space.
+                float slope_u = -across * 0.55f - midrib * across * 1.6f;
+                vec3 n = {slope_u * ca, slope_u * sa, 1.0f};
+                glm_vec3_normalize(n);
+                int in3 = (y * w + x) * 3;
+                normal[in3 + 0] = (unsigned char)((n[0] * 0.5f + 0.5f) * 255);
+                normal[in3 + 1] = (unsigned char)((n[1] * 0.5f + 0.5f) * 255);
+                normal[in3 + 2] = (unsigned char)((n[2] * 0.5f + 0.5f) * 255);
+                // Cuticle: tighter on the blade, duller along the veins.
+                // Replicated across RGB: the mask array reads roughness from
+                // green (glTF ORM), and a 1-channel source samples green as 0.
+                unsigned char q = (unsigned char)(fminf(1.0f, roughness + vein * 0.12f) * 255);
+                rough[(y * w + x) * 3 + 0] = q;
+                rough[(y * w + x) * 3 + 1] = q;
+                rough[(y * w + x) * 3 + 2] = q;
+            }
+        }
+    }
+}
+
+// A single leaf on its own transparent tile, for the falling-leaf particles.
+// They cannot use the cluster atlas: a billboard samples UV 0..1 across its
+// quad, which would squash all LEAF_VARIANTS cells into one sprite. A drifting
+// leaf should be one leaf anyway, not a whole sprig.
+static unsigned char* generate_leaf_sprite(int size) {
+    unsigned char* albedo = calloc((size_t)size * size * 4, 1);
+    unsigned char* normal = malloc((size_t)size * size * 3);
+    unsigned char* rough = malloc((size_t)size * size * 3);
+    if (!albedo || !normal || !rough) {
+        free(albedo);
+        free(normal);
+        free(rough);
+        return NULL;
+    }
+
+    srand(77);
+    draw_leaf(albedo, normal, rough, size, size, size * 0.5f, size * 0.5f, 0.0f, size * 0.46f,
+              0.45f, 1.0f, 0.6f, 0.0f);
+
+    free(normal);
+    free(rough);
+    return albedo;
+}
+
+// Rasterize the whole atlas: LEAF_VARIANTS clusters side by side.
+static void generate_leaf_cluster_maps(int width, int height, unsigned char** out_albedo,
+                                       unsigned char** out_normal, unsigned char** out_rough) {
+    unsigned char* albedo = calloc((size_t)width * height * 4, 1);
+    unsigned char* normal = malloc((size_t)width * height * 3);
+    unsigned char* rough = malloc((size_t)width * height * 3);
+    if (!albedo || !normal || !rough) {
+        free(albedo);
+        free(normal);
+        free(rough);
+        *out_albedo = *out_normal = *out_rough = NULL;
+        return;
+    }
+
+    // Flat normal and mid roughness everywhere the leaves do not cover.
+    for (int i = 0; i < width * height; i++) {
+        normal[i * 3 + 0] = 128;
+        normal[i * 3 + 1] = 128;
+        normal[i * 3 + 2] = 255;
+        rough[i * 3 + 0] = 160;
+        rough[i * 3 + 1] = 160;
+        rough[i * 3 + 2] = 160;
+    }
+
+    srand(4242);
+    int cell_w = width / LEAF_VARIANTS;
+
+    for (int v = 0; v < LEAF_VARIANTS; v++) {
+        float ox = (float)(v * cell_w);
+        // Vary the sprig's own build, not just where its leaves land, so the
+        // variants differ in structure and the repeat is harder to spot.
+        int count = LEAVES_PER_CLUSTER + (int)rand_range(-2.0f, 2.99f);
+        float fan = rand_range(0.35f, 0.75f);
+        float reach = rand_range(0.52f, 0.72f);
+        for (int i = 0; i < count; i++) {
+            // Fan the sprig out from a stem near the bottom of the cell so the
+            // cluster has a direction rather than being a random scatter.
+            float along = (float)i / (float)(count - 1);
+            float spread = rand_range(-fan, fan);
+            float cx = ox + cell_w * (0.5f + spread * (0.15f + along * 0.30f));
+            float cy = (float)height * (0.88f - along * reach + rand_range(-0.05f, 0.05f));
+            float rot = spread * 1.5f + rand_range(-0.35f, 0.35f);
+            float len = (float)height * (0.30f - along * 0.09f) * rand_range(0.8f, 1.15f);
+            draw_leaf(albedo, normal, rough, width, height, cx, cy, rot, len,
+                      rand_range(0.0f, 1.0f), rand_range(0.82f, 1.18f), rand_range(0.55f, 0.78f),
+                      rand_range(-0.12f, 0.12f));
+        }
+    }
+
+    *out_albedo = albedo;
+    *out_normal = normal;
+    *out_rough = rough;
 }
 
 /*
@@ -484,6 +569,8 @@ static Texture* bark_roughness_tex = NULL;
 static Texture* bark_height_tex = NULL;
 static Texture* leaf_albedo_tex = NULL;
 static Texture* leaf_normal_tex = NULL;
+static Texture* leaf_roughness_tex = NULL;
+static Texture* leaf_sprite_tex = NULL;
 static Texture* island_albedo_tex = NULL;
 static Texture* island_normal_tex = NULL;
 
@@ -580,12 +667,12 @@ static unsigned char* generate_island_albedo(int width, int height) {
 // through the pool (rather than a hand-rolled glTexImage2D) is what gets the
 // albedo maps decoded as sRGB and, for the leaf cutout, gets the transparent
 // texels' RGB dilated so mipping doesn't fringe the leaf edges with black.
-static Texture* bake_texture(Scene* scene, unsigned char* data, int size, int channels,
-                             bool is_srgb, const char* key) {
+static Texture* bake_texture(Scene* scene, unsigned char* data, int width, int height,
+                             int channels, bool is_srgb, const char* key) {
     if (!data)
         return NULL;
-    Texture* tex = load_texture_from_memory(scene->tex_pool, key, data, size, size, channels,
-                                            is_srgb);
+    Texture* tex =
+        load_texture_from_memory(scene->tex_pool, key, data, width, height, channels, is_srgb);
     free(data);
     return tex;
 }
@@ -593,23 +680,34 @@ static Texture* bake_texture(Scene* scene, unsigned char* data, int size, int ch
 static void generate_procedural_textures(Scene* scene) {
     const int B = BARK_TEXTURE_SIZE;
     const int T = TEXTURE_SIZE;
+    // The leaf atlas is one row of square cluster cells.
+    const int LW = TEXTURE_SIZE * LEAF_VARIANTS;
+    const int LH = TEXTURE_SIZE;
 
     printf("Generating procedural bark textures...\n");
-    bark_albedo_tex = bake_texture(scene, generate_bark_albedo(B, B), B, 3, true, "proc_bark_albedo");
-    bark_normal_tex = bake_texture(scene, generate_bark_normal(B, B), B, 3, false, "proc_bark_normal");
+    bark_albedo_tex =
+        bake_texture(scene, generate_bark_albedo(B, B), B, B, 3, true, "proc_bark_albedo");
+    bark_normal_tex =
+        bake_texture(scene, generate_bark_normal(B, B), B, B, 3, false, "proc_bark_normal");
     bark_roughness_tex =
-        bake_texture(scene, generate_bark_roughness(B, B), B, 1, false, "proc_bark_roughness");
-    bark_height_tex = bake_texture(scene, generate_bark_height(B, B), B, 1, false, "proc_bark_height");
+        bake_texture(scene, generate_bark_roughness(B, B), B, B, 3, false, "proc_bark_roughness");
+    bark_height_tex =
+        bake_texture(scene, generate_bark_height(B, B), B, B, 1, false, "proc_bark_height");
 
-    printf("Generating procedural leaf textures...\n");
-    leaf_albedo_tex = bake_texture(scene, generate_leaf_albedo(T, T), T, 4, true, "proc_leaf_albedo");
-    leaf_normal_tex = bake_texture(scene, generate_leaf_normal(T, T), T, 3, false, "proc_leaf_normal");
+    printf("Generating procedural leaf cluster atlas...\n");
+    unsigned char *leaf_a = NULL, *leaf_n = NULL, *leaf_r = NULL;
+    generate_leaf_cluster_maps(LW, LH, &leaf_a, &leaf_n, &leaf_r);
+    leaf_albedo_tex = bake_texture(scene, leaf_a, LW, LH, 4, true, "proc_leaf_albedo");
+    leaf_normal_tex = bake_texture(scene, leaf_n, LW, LH, 3, false, "proc_leaf_normal");
+    leaf_roughness_tex = bake_texture(scene, leaf_r, LW, LH, 3, false, "proc_leaf_roughness");
+    leaf_sprite_tex =
+        bake_texture(scene, generate_leaf_sprite(T), T, T, 4, true, "proc_leaf_sprite");
 
     printf("Generating procedural island textures...\n");
     island_albedo_tex =
-        bake_texture(scene, generate_island_albedo(T, T), T, 3, true, "proc_island_albedo");
+        bake_texture(scene, generate_island_albedo(T, T), T, T, 3, true, "proc_island_albedo");
     island_normal_tex =
-        bake_texture(scene, generate_island_normal(T, T), T, 3, false, "proc_island_normal");
+        bake_texture(scene, generate_island_normal(T, T), T, T, 3, false, "proc_island_normal");
 
     printf("Procedural textures generated.\n");
 
@@ -811,34 +909,9 @@ static void create_island(SceneNode* parent) {
 
     add_mesh_to_node(island_node, mesh);
     add_child_node(parent, island_node);
-}
-
-/*
- * Free all tree nodes (but not lights)
- */
-static void free_tree_nodes(SceneNode* root) {
-    if (!root) {
-        return;
-    }
-
-    // Free children that are part of tree (not light nodes or island)
-    for (size_t i = 0; i < root->children_count;) {
-        SceneNode* child = root->children[i];
-        if (child->light != NULL || child == island_node) {
-            // Skip light nodes and island
-            i++;
-        } else {
-            // Free this branch
-            free_node(child);
-            // Shift remaining children
-            for (size_t j = i; j < root->children_count - 1; j++) {
-                root->children[j] = root->children[j + 1];
-            }
-            root->children_count--;
-        }
-    }
-
-    tree_root = NULL;
+    // Static for the program's lifetime, so it uploads once here rather than
+    // riding along with every tree rebuild.
+    upload_buffers_to_gpu_for_nodes(island_node);
 }
 
 /*
@@ -846,17 +919,24 @@ static void free_tree_nodes(SceneNode* root) {
  *
  * All the bark lands in one mesh and all the leaves in another, so the whole
  * tree is two draw calls no matter how many branches the sliders ask for.
+ *
+ * The node itself outlives every rebuild and only its meshes are swapped. An
+ * earlier version rebuilt by walking the root and freeing any child that was
+ * not a light or the ground -- a blacklist, which silently freed the
+ * falling-leaves node as soon as that was added, while the Scene still held
+ * its particle system and dereferenced the dead node every tick.
  */
-static void regenerate_tree(Scene* scene, const TreeParams* p) {
-    free_tree_nodes(scene->root_node);
+static void regenerate_tree(const TreeParams* p) {
+    if (!tree_root)
+        return;
+
+    for (size_t i = 0; i < tree_root->mesh_count; i++)
+        free_mesh(tree_root->meshes[i]);
+    tree_root->mesh_count = 0;
 
     TreeSkeleton skel;
     memset(&skel, 0, sizeof(skel));
     tree_skeleton_build(&skel, p);
-
-    tree_root = create_node();
-    set_node_name(tree_root, "tree");
-    add_child_node(scene->root_node, tree_root);
 
     Mesh* bark = create_mesh();
     if (tree_mesh_bark(&skel, p, bark)) {
@@ -880,8 +960,8 @@ static void regenerate_tree(Scene* scene, const TreeParams* p) {
 
     tree_skeleton_free(&skel);
 
-    upload_buffers_to_gpu_for_nodes(scene->root_node);
-
+    // Only the tree's own meshes: the ground is static and uploaded once.
+    upload_buffers_to_gpu_for_nodes(tree_root);
 }
 
 // Leaf color across the season slider. The albedo factor multiplies the leaf
@@ -1042,7 +1122,7 @@ void render_scene_callback(Engine* engine, Scene* scene) {
 
     // Check for parameter changes
     if (memcmp(&params, &prev_params, sizeof(TreeParams)) != 0) {
-        regenerate_tree(scene, &params);
+        regenerate_tree(&params);
         memcpy(&prev_params, &params, sizeof(TreeParams));
     }
 
@@ -1174,7 +1254,10 @@ static void create_falling_leaves(Engine* engine, Scene* scene, float canopy_rad
     ParticleRenderer* pr = create_billboard_particle_renderer(particle_prog);
     // hdr_gain 1.0: these are lit surfaces, not glowing motes -- the mote
     // default of 6.0 would blow them into bloom.
-    billboard_renderer_set_sprite(pr, leaf_albedo_tex, 1.0f);
+    // The single-leaf sprite, not the cluster atlas: a billboard samples UV
+    // 0..1 across its quad, so the atlas would arrive as all its cells crushed
+    // into one particle.
+    billboard_renderer_set_sprite(pr, leaf_sprite_tex, 1.0f);
     particle_emitter_set_renderer(em, pr);
 
     leaf_spawn_module = particle_module_spawn_rate(leaf_spawn_rate);
@@ -1344,7 +1427,7 @@ int main(int argc, char** argv) {
      */
     bark_material = create_material();
     glm_vec3_one(bark_material->albedo);
-    bark_material->roughness = 0.75f;
+    bark_material->roughness = 1.0f; // the map carries it (factor x map)
     bark_material->metallic = 0.0f;
     bark_material->ao = 1.0f;
     bark_material->wind_response = 1.0f;
@@ -1358,7 +1441,10 @@ int main(int argc, char** argv) {
 
     leaf_material = create_material();
     glm_vec3_one(leaf_material->albedo);
-    leaf_material->roughness = 0.5f;
+    // 1.0 because the roughness map is authoritative: the shader multiplies
+    // factor by map, so any factor below 1 darkens the whole range and pushes
+    // the canopy glossy enough to mirror the sky.
+    leaf_material->roughness = 1.0f;
     leaf_material->metallic = 0.0f;
     leaf_material->ao = 1.0f;
     // Alpha-masked cutout, drawn from both sides, and -- unlike hair cards --
@@ -1375,6 +1461,7 @@ int main(int argc, char** argv) {
     set_material_shader_program(leaf_material, pbr_program);
     set_material_albedo_tex(leaf_material, leaf_albedo_tex);
     set_material_normal_tex(leaf_material, leaf_normal_tex);
+    set_material_roughness_tex(leaf_material, leaf_roughness_tex);
 
     if (engine->postfx) {
         postfx_reset_sss_profiles(engine->postfx);
@@ -1439,12 +1526,20 @@ int main(int argc, char** argv) {
     params.lateral_density = 1.2f;
     params.twig_scale = 1.0f;
     params.show_leaves = 1;
-    params.leaf_size = 6.5f;
-    params.leaf_density = 5.5f;
+    // A card now carries a whole sprig, so it is sized as one and there are
+    // fewer of them: roughly the same vertex count for many times the leaves.
+    params.leaf_size = 15.0f;
+    params.leaf_density = 2.5f;
+
+    // The tree node is created once and outlives every rebuild; regeneration
+    // only swaps its meshes, so nothing else parented to the root is at risk.
+    tree_root = create_node();
+    set_node_name(tree_root, "tree");
+    add_child_node(root, tree_root);
 
     // Build once here so the canopy bounds are known before the leaf emitter
     // is sized; the render callback picks up any later slider change.
-    regenerate_tree(scene, &params);
+    regenerate_tree(&params);
     memcpy(&prev_params, &params, sizeof(TreeParams));
 
     if (!args.no_falling_leaves) {
