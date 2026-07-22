@@ -33,11 +33,14 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 # Platform-specific settings
 if(APPLE)
-    add_compile_definitions(GL_SILENCE_DEPRECATION)
+    # CMAKE_PREFIX_PATH only, deliberately: the global include_directories and
+    # link_directories that used to live here put Homebrew's prefix on every
+    # target's search path, which masked the fact that cetra's public headers
+    # include <GL/glew.h>, <GLFW/glfw3.h> and <cglm/cglm.h> while those
+    # dependencies were attached PRIVATE. Apps compiled by accident. They now
+    # come through cetra_deps, linked PUBLIC.
     set(HOMEBREW_PREFIX "/opt/homebrew" CACHE PATH "Homebrew prefix")
     list(APPEND CMAKE_PREFIX_PATH ${HOMEBREW_PREFIX})
-    include_directories(${HOMEBREW_PREFIX}/include)
-    link_directories(${HOMEBREW_PREFIX}/lib)
 endif()
 
 # Note: _POSIX_C_SOURCE is set per-target in cetra/CMakeLists.txt
@@ -68,12 +71,48 @@ else()
     target_compile_options(cetra_warnings INTERFACE -Wall)
 endif()
 
-# Find required packages
+# Third-party dependencies, gathered onto one interface target so that consumers
+# link a single name and the discovery mechanism can vary by platform.
+#
+# IMPORTED_TARGET is what makes this correct rather than merely tidy: the plain
+# pkg_check_modules variables give bare library names with the search path in a
+# separate _LIBRARY_DIRS variable that nothing here ever consumed, so linking
+# only worked for libraries already on the linker's default path. PkgConfig::*
+# carries include dirs, link dirs and libraries together. GLOBAL is required
+# because cetra_deps is consumed from subdirectories.
+add_library(cetra_deps INTERFACE)
+
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(GLFW REQUIRED glfw3)
-pkg_check_modules(GLEW REQUIRED glew)
-pkg_check_modules(CGLM REQUIRED cglm)
-pkg_check_modules(ASSIMP REQUIRED assimp)
+pkg_check_modules(GLFW   REQUIRED IMPORTED_TARGET GLOBAL glfw3)
+pkg_check_modules(GLEW   REQUIRED IMPORTED_TARGET GLOBAL glew)
+pkg_check_modules(CGLM   REQUIRED IMPORTED_TARGET GLOBAL cglm)
+pkg_check_modules(ASSIMP REQUIRED IMPORTED_TARGET GLOBAL assimp)
+
+target_link_libraries(cetra_deps INTERFACE
+    PkgConfig::GLFW
+    PkgConfig::GLEW
+    PkgConfig::CGLM
+    PkgConfig::ASSIMP)
+
+find_package(OpenGL REQUIRED)
+find_package(Threads REQUIRED)
+target_link_libraries(cetra_deps INTERFACE OpenGL::GL Threads::Threads)
+
+if(UNIX)
+    target_link_libraries(cetra_deps INTERFACE m)
+endif()
+
+if(APPLE)
+    target_link_libraries(cetra_deps INTERFACE
+        "-framework Cocoa"
+        "-framework IOKit"
+        "-framework CoreVideo")
+    # Suppress duplicate library warnings from CMake's transitive linking
+    target_link_options(cetra_deps INTERFACE "LINKER:-no_warn_duplicate_libraries")
+endif()
+
+target_compile_definitions(cetra_deps INTERFACE
+    $<$<PLATFORM_ID:Darwin>:GL_SILENCE_DEPRECATION>)
 
 # Build JoltC if enabled
 if(CETRA_BUILD_JOLTC)
@@ -95,10 +134,10 @@ target_sources(cimgui PRIVATE
     ${CIMGUI_DIR}/imgui/backends/imgui_impl_glfw.cpp
     ${CIMGUI_DIR}/imgui/backends/imgui_impl_opengl3.cpp)
 target_compile_definitions(cimgui PUBLIC CIMGUI_USE_GLFW CIMGUI_USE_OPENGL3)
-target_include_directories(cimgui PUBLIC
-    ${CIMGUI_DIR}/imgui/backends
-    ${GLFW_INCLUDE_DIRS})
-target_link_libraries(cimgui ${GLFW_LIBRARIES})
+target_include_directories(cimgui PUBLIC ${CIMGUI_DIR}/imgui/backends)
+# Plain signature, deliberately: cimgui's own CMakeLists links with the plain
+# form, and CMake hard-errors if plain and keyword forms are mixed on one target.
+target_link_libraries(cimgui cetra_deps)
 
 # Build the cetra library
 add_subdirectory(cetra)

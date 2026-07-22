@@ -55,51 +55,21 @@ target_include_directories(cetra
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/ext>
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/game>
         $<INSTALL_INTERFACE:include/cetra>
-    PRIVATE
-        ${GLFW_INCLUDE_DIRS}
-        ${GLEW_INCLUDE_DIRS}
-        ${CGLM_INCLUDE_DIRS}
-        ${ASSIMP_INCLUDE_DIRS}
 )
 
-target_link_libraries(cetra
-    PUBLIC
-        ${GLFW_LIBRARIES}
-        ${GLEW_LIBRARIES}
-        ${CGLM_LIBRARIES}
-        ${ASSIMP_LIBRARIES}
-        m
-        pthread
-)
+# PUBLIC, not PRIVATE: engine.h and 20-odd other public headers include
+# <GL/glew.h>, <GLFW/glfw3.h> and <cglm/cglm.h>, so consumers genuinely need
+# these include paths. cetra_deps also carries the platform frameworks, libm and
+# the threading library.
+target_link_libraries(cetra PUBLIC cetra_deps)
 
-# Platform-specific frameworks
-if(APPLE)
-    target_link_libraries(cetra PUBLIC
-        "-framework Cocoa"
-        "-framework OpenGL"
-        "-framework IOKit"
-        "-framework CoreVideo"
-    )
-    # Suppress duplicate library warnings from CMake's transitive linking
-    target_link_options(cetra PUBLIC "LINKER:-no_warn_duplicate_libraries")
-endif()
-
-if(UNIX AND NOT APPLE)
-    target_link_libraries(cetra PUBLIC
-        X11
-        GL
-        ncurses
-    )
-endif()
-
-if(WIN32)
-    target_link_libraries(cetra PUBLIC
-        glu32
-        gdi32
-        opengl32
-        kernel32
-    )
-endif()
+# The former per-platform link lists are gone:
+#   - Apple frameworks and -no_warn_duplicate_libraries moved to cetra_deps.
+#   - "-framework OpenGL" / GL / opengl32 are all OpenGL::GL.
+#   - X11 and ncurses were linked on Linux but referenced by no source file;
+#     they broke Wayland-only and minimal images for nothing.
+#   - glu32 was unused (no glu.h anywhere); gdi32/user32/shell32 arrive
+#     transitively from GLFW; kernel32 is linked automatically.
 
 # -g dropped: CMAKE_BUILD_TYPE already supplies debug info for Debug builds, and
 # hardcoding it defeated Release.
