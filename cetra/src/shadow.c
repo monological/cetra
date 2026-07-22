@@ -426,8 +426,12 @@ static void _render_shadow_node(SceneNode* node, ShaderProgram* program, GLuint*
                 continue;
 
             uniform_set_int(u, "alphaTested", foliage ? 1 : 0);
-            if (foliage) {
+            if (foliage)
                 uniform_set_float(u, "alphaCutoff", mat->alphaCutoff);
+            // Bind whenever one exists, not just for foliage: a sampler left
+            // pointing at an empty unit makes some drivers warn even though
+            // this shader only reads it under alphaTested.
+            if (mat && mat->albedo_tex) {
                 uniform_set_int(u, "albedoTex", 0);
                 glActiveTexture(GL_TEXTURE0);
                 glBindTexture(GL_TEXTURE_2D, mat->albedo_tex->id);
