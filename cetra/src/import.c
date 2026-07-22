@@ -372,6 +372,13 @@ static Texture* load_embedded_texture(TexturePool* tex_pool, const struct aiScen
         return NULL;
     }
 
+    // The pool is keyed by tex_path ("*0", ...) -- the same key
+    // load_texture_from_memory uses below. Check it BEFORE decoding, so an
+    // embedded texture shared across many meshes decodes once, not once per mesh.
+    Texture* cached = get_texture_from_pool(tex_pool, tex_path);
+    if (cached)
+        return cached;
+
     unsigned char* pixels = NULL;
     int width, height, channels;
     bool needs_free = false;
@@ -1321,8 +1328,8 @@ static void copy_aiMatrix_to_mat4(const struct aiMatrix4x4* from, mat4 to) {
 }
 
 SceneNode* process_ai_node(Scene* scene, struct aiNode* ai_node, const struct aiScene* ai_scene,
-                           TexturePool* tex_pool) {
-    if (!scene || !ai_node || !ai_scene || !tex_pool)
+                           TexturePool* tex_pool, Material** mat_cache) {
+    if (!scene || !ai_node || !ai_scene || !tex_pool || !mat_cache)
         return NULL;
 
     SceneNode* node = create_node();
@@ -1341,14 +1348,18 @@ SceneNode* process_ai_node(Scene* scene, struct aiNode* ai_node, const struct ai
         Mesh* mesh = create_mesh();
         process_ai_mesh(mesh, ai_mesh);
 
-        // Process material
-        if (ai_mesh->mMaterialIndex >= 0) {
-            unsigned int matIndex = ai_mesh->mMaterialIndex;
-            mesh->material =
-                process_ai_material(ai_scene->mMaterials[matIndex], tex_pool, ai_scene);
-            if (mesh->material) {
-                add_material_to_scene(scene, mesh->material);
+        // Process material, deduped by aiMaterial index (see the async twin).
+        unsigned int matIndex = ai_mesh->mMaterialIndex;
+        if (matIndex < ai_scene->mNumMaterials) {
+            Material* mat = mat_cache[matIndex];
+            if (!mat) {
+                mat = process_ai_material(ai_scene->mMaterials[matIndex], tex_pool, ai_scene);
+                if (mat) {
+                    mat_cache[matIndex] = mat;
+                    add_material_to_scene(scene, mat);
+                }
             }
+            mesh->material = mat;
         }
 
         // Process skeleton and bone weights if mesh has bones
@@ -1377,7 +1388,8 @@ SceneNode* process_ai_node(Scene* scene, struct aiNode* ai_node, const struct ai
     node->children_count = ai_node->mNumChildren;
     node->children = malloc(sizeof(SceneNode*) * node->children_count);
     for (unsigned int i = 0; i < node->children_count; i++) {
-        node->children[i] = process_ai_node(scene, ai_node->mChildren[i], ai_scene, tex_pool);
+        node->children[i] =
+            process_ai_node(scene, ai_node->mChildren[i], ai_scene, tex_pool, mat_cache);
         if (node->children[i]) {
             node->children[i]->parent = node;
         }
@@ -1492,8 +1504,20 @@ Scene* create_scene_from_model_path(const char* path, const char* texture_direct
     process_ai_lights(ai_scene, &scene->lights, &scene->light_count, is_gltf_path(path));
     process_ai_cameras(ai_scene, &scene->cameras, &scene->camera_count);
 
-    // Process the root node (this also extracts skeletons and bone weights)
-    scene->root_node = process_ai_node(scene, ai_scene->mRootNode, ai_scene, tex_pool);
+    // Process the root node (this also extracts skeletons and bone weights).
+    // mat_cache dedups the cetra Material per aiMaterial index across the tree;
+    // at least one slot so calloc(0) can't be mistaken for OOM.
+    Material** mat_cache =
+        calloc(ai_scene->mNumMaterials ? ai_scene->mNumMaterials : 1, sizeof(Material*));
+    if (!mat_cache) {
+        log_error("import: failed to allocate material cache (%u materials)",
+                  ai_scene->mNumMaterials);
+        free_scene(scene);
+        aiReleaseImport(ai_scene);
+        return NULL;
+    }
+    scene->root_node = process_ai_node(scene, ai_scene->mRootNode, ai_scene, tex_pool, mat_cache);
+    free(mat_cache);
 
     associate_cameras_and_lights_with_nodes(scene->root_node, scene);
 
@@ -1511,8 +1535,8 @@ Scene* create_scene_from_model_path(const char* path, const char* texture_direct
  */
 static SceneNode* process_ai_node_async(Scene* scene, struct aiNode* ai_node,
                                         const struct aiScene* ai_scene, TexturePool* tex_pool,
-                                        AsyncLoader* loader) {
-    if (!scene || !ai_node || !ai_scene || !tex_pool || !loader) {
+                                        AsyncLoader* loader, Material** mat_cache) {
+    if (!scene || !ai_node || !ai_scene || !tex_pool || !loader || !mat_cache) {
         return NULL;
     }
 
@@ -1532,12 +1556,22 @@ static SceneNode* process_ai_node_async(Scene* scene, struct aiNode* ai_node,
         Mesh* mesh = create_mesh();
         process_ai_mesh(mesh, ai_mesh);
 
-        // Process material with async texture loading
-        if (ai_mesh->mMaterialIndex >= 0) {
-            unsigned int matIndex = ai_mesh->mMaterialIndex;
-            mesh->material = process_ai_material_async(ai_scene->mMaterials[matIndex], tex_pool,
-                                                       ai_scene, loader);
-            add_material_to_scene(scene, mesh->material);
+        // Process material with async texture loading. One aiMaterial can be
+        // shared by hundreds of meshes (e.g. ivy leaves); build the cetra
+        // Material once per material index and reuse it, so the ~30 property
+        // queries + texture resolution + embedded decodes happen once, not per
+        // mesh. Meshes safely share the Material* (textures refcounted; per-mesh
+        // AABB lives on the Mesh; the wind mask is a per-mesh uniform).
+        unsigned int matIndex = ai_mesh->mMaterialIndex;
+        if (matIndex < ai_scene->mNumMaterials) {
+            Material* mat = mat_cache[matIndex];
+            if (!mat) {
+                mat = process_ai_material_async(ai_scene->mMaterials[matIndex], tex_pool, ai_scene,
+                                                loader);
+                mat_cache[matIndex] = mat;
+                add_material_to_scene(scene, mat);
+            }
+            mesh->material = mat;
         }
 
         // Process skeleton and bone weights if mesh has bones
@@ -1565,8 +1599,8 @@ static SceneNode* process_ai_node_async(Scene* scene, struct aiNode* ai_node,
     node->children_count = ai_node->mNumChildren;
     node->children = malloc(sizeof(SceneNode*) * node->children_count);
     for (unsigned int i = 0; i < node->children_count; i++) {
-        node->children[i] =
-            process_ai_node_async(scene, ai_node->mChildren[i], ai_scene, tex_pool, loader);
+        node->children[i] = process_ai_node_async(scene, ai_node->mChildren[i], ai_scene, tex_pool,
+                                                  loader, mat_cache);
         if (node->children[i]) {
             node->children[i]->parent = node;
         }
@@ -1616,9 +1650,22 @@ Scene* create_scene_from_model_path_async(const char* path, const char* texture_
     process_ai_lights(ai_scene, &scene->lights, &scene->light_count, is_gltf_path(path));
     process_ai_cameras(ai_scene, &scene->cameras, &scene->camera_count);
 
-    // Process the root node with async texture loading
+    // Process the root node with async texture loading. mat_cache dedups the
+    // cetra Material per aiMaterial index across the whole tree (built lazily,
+    // reused by every mesh sharing an index). At least one slot so calloc(0) for
+    // a material-less scene can't be mistaken for OOM.
+    Material** mat_cache =
+        calloc(ai_scene->mNumMaterials ? ai_scene->mNumMaterials : 1, sizeof(Material*));
+    if (!mat_cache) {
+        log_error("import: failed to allocate material cache (%u materials)",
+                  ai_scene->mNumMaterials);
+        free_scene(scene);
+        aiReleaseImport(ai_scene);
+        return NULL;
+    }
     scene->root_node =
-        process_ai_node_async(scene, ai_scene->mRootNode, ai_scene, tex_pool, loader);
+        process_ai_node_async(scene, ai_scene->mRootNode, ai_scene, tex_pool, loader, mat_cache);
+    free(mat_cache);
 
     associate_cameras_and_lights_with_nodes(scene->root_node, scene);
 
