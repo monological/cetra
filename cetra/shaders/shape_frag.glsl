@@ -8,4 +8,3 @@ void main()
 {
     FragColor = vec4(albedo, 1.0);
 }
-
