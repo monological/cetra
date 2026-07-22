@@ -14,7 +14,10 @@
 #include "engine.h"
 #include "animation.h"
 
-void render_current_scene(Engine* engine, float time_value);
+// Draws the engine's current scene. Animation time comes from
+// engine->render_time, latched once per frame before any pass, so this and the
+// shadow depth pass cannot disagree about where wind-displaced geometry is.
+void render_current_scene(Engine* engine);
 
 // Animation state for skinned mesh rendering
 // Set before rendering to enable bone matrix upload for skinned meshes

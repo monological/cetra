@@ -155,7 +155,7 @@ void render_scene_callback(Engine* engine, Scene* current_scene) {
 
     apply_transform_to_nodes(root_node, engine->model_matrix);
 
-    render_current_scene(engine, time_value);
+    render_current_scene(engine);
 }
 
 /*

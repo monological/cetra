@@ -665,10 +665,11 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     current_program = ss->depth_program->id;
 
     // Wind globals for the whole pass (per-mesh response/mask ride along in the
-    // node walk). last_frame_time is this frame's stamp -- the same clock the
-    // shading pass reads, so caster and surface displace in lockstep.
+    // node walk). render_time is the frame's single render clock, which the
+    // shading pass reads too -- that is what keeps a swaying caster and its
+    // shadow in lockstep rather than merely close.
     wind_upload_to_program(scene->wind, ss->depth_program->uniforms);
-    uniform_set_float(ss->depth_program->uniforms, "time", (float)engine->last_frame_time);
+    uniform_set_float(ss->depth_program->uniforms, "time", (float)engine->render_time);
 
     for (size_t i = 0; i < ss->active_count; ++i) {
         for (int c = 0; c < cc; ++c) {

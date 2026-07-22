@@ -243,6 +243,13 @@ static void game_frame_update(Engine* engine, float dt) {
             game->accumulator -= game->fixed_timestep;
         }
     }
+
+    // Substitute the sim clock for the frame's render clock. A game animates
+    // from its own deterministic time, not the wall clock, and this runs before
+    // the shadow pass so both the depth and shading passes see the same value.
+    // It sits outside the paused check on purpose: a paused game holds its time
+    // steady, so its wind holds too.
+    game->engine->render_time = game->time;
 }
 
 // engine_run's render hook: hand the app its on_render with the interpolation

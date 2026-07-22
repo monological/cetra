@@ -303,7 +303,7 @@ static void on_render(Game* game, double alpha) {
 
     // The scene's particle systems are ticked + drawn by the engine; nothing to
     // do here but render the scene.
-    render_current_scene(engine, game->time);
+    render_current_scene(engine);
 }
 
 static void on_shutdown(Game* game) {

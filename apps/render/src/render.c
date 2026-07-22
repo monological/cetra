@@ -1039,7 +1039,7 @@ void render_scene_callback(Engine* engine, Scene* current_scene) {
 
     apply_model_recenter(engine, root_node);
 
-    render_current_scene(engine, time_value);
+    render_current_scene(engine);
 
     // Render skeleton bones if enabled
     if (engine->show_bones) {
