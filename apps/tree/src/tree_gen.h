@@ -18,8 +18,10 @@
 // modes): .x is a per-branch phase, .y a flex weight. Both are continuous
 // across branch joints, so wind displacement cannot tear an attachment apart.
 //
-// NB for the caller: neither mesh may carry an AO texture. The PBR shader reads
-// UV1 as the AO map's UV when one is bound, which would sample wind data.
+// The material's wind_mode is what declares that, and the PBR shader reads it
+// before deciding whether UV1 is a usable texture coordinate set -- so an AO
+// map on a vegetation material falls back to UV0 rather than sampling phase and
+// flex. Nothing is required of the caller here.
 
 // Leaf cluster variants in the foliage atlas. Each card picks one and may
 // mirror it, for 2x this many distinct arrangements -- with only a handful the
