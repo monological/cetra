@@ -149,11 +149,21 @@ static float worley_noise_2d(float x, float y, unsigned int seed) {
 /*
  * Generate bark albedo texture
  */
-static unsigned char* generate_bark_albedo(int width, int height) {
-    unsigned char* data = malloc(width * height * 3);
-    if (!data)
-        return NULL;
+static float smoothstep(float edge0, float edge1, float x) {
+    x = fmaxf(0.0f, fminf(1.0f, (x - edge0) / (edge1 - edge0)));
+    return x * x * (3.0f - 2.0f * x);
+}
 
+// The bark relief, in [0,1]: 0 deep in a fissure, 1 on a plate face. Every bark
+// map derives from this one field, so the albedo's dark cracks, the normal
+// map's ridges and the POM displacement all describe the same surface instead
+// of three independently-noisy ones that happen to sit on the same texel.
+//
+// The structure that matters is LARGE: fissures running the length of the trunk
+// with plates between them. Fine mottling alone -- what this used to be -- has
+// no feature big enough to survive minification, so the trunk averages out to
+// flat colour at any real viewing distance.
+static void bark_height_field(float* out, int width, int height) {
     init_perlin(42);
 
     for (int y = 0; y < height; y++) {
@@ -161,79 +171,112 @@ static unsigned char* generate_bark_albedo(int width, int height) {
             float u = (float)x / width;
             float v = (float)y / height;
 
-            // Base brown color
-            float base_r = 0.35f;
-            float base_g = 0.22f;
-            float base_b = 0.12f;
+            // Warp the fissure coordinate so the cracks wander up the trunk
+            // rather than running as straight parallel stripes.
+            float warp = (fbm_noise(u * 2.5f, v * 0.9f, 4, 0.5f) - 0.5f) * 0.9f;
 
-            // Large scale color variation
-            float noise1 = fbm_noise(u * 4.0f, v * 8.0f, 4, 0.5f);
+            // Vertical fissures. The ridged |sin| gives sharp valleys between
+            // broad plates; the power sharpens the valley floor.
+            // Narrow V-grooves, not broad swells. The normal map is a finite
+            // difference between adjacent texels, so a fissure a hundred texels
+            // wide has a per-texel slope near zero and lights up flat no matter
+            // how strong the map is. Compressing the transition into a fraction
+            // of the period is what actually produces a normal to catch light.
+            float fissure = fabsf(sinf((u * 5.0f + warp) * (float)M_PI));
+            fissure = smoothstep(0.0f, 0.22f, fissure);
 
-            // Vertical grain stretching
-            float grain = fbm_noise(u * 8.0f, v * 2.0f, 3, 0.6f);
+            // Vary the plates along their length, gently -- break them up hard
+            // and the fissures stop reading as continuous grooves and turn into
+            // a scatter of dashes.
+            float along = fbm_noise(u * 3.0f, v * 1.6f, 4, 0.55f);
+            fissure *= 0.74f + 0.26f * along;
 
-            // Worley noise for cracks
-            float crack = worley_noise_2d(u * 6.0f, v * 12.0f, 123);
-            crack = fmaxf(0.0f, 1.0f - crack * 2.0f);
+            // Cellular plate boundaries, stretched vertically like real bark.
+            // Tight edges for the same reason as the fissures above.
+            float cell = worley_noise_2d(u * 5.0f, v * 2.0f, 91);
+            float plate = smoothstep(0.02f, 0.14f, cell);
 
-            // Combine
-            float variation = noise1 * 0.3f + grain * 0.2f;
-            float darkness = crack * 0.4f;
+            float h = fissure * 0.62f + plate * 0.38f;
+            // Fine grain on top, small enough to only matter up close.
+            h += (fbm_noise(u * 22.0f, v * 7.0f, 3, 0.5f) - 0.5f) * 0.14f;
 
-            float r = base_r + variation * 0.15f - darkness * 0.2f;
-            float g = base_g + variation * 0.1f - darkness * 0.15f;
-            float b = base_b + variation * 0.05f - darkness * 0.1f;
+            out[y * width + x] = fmaxf(0.0f, fminf(1.0f, h));
+        }
+    }
+}
 
-            // Add some reddish tones in cracks
-            r += crack * 0.05f;
+static unsigned char* generate_bark_albedo(int width, int height, const float* field) {
+    unsigned char* data = malloc((size_t)width * height * 3);
+    if (!data)
+        return NULL;
 
-            // Clamp
-            r = fmaxf(0.0f, fminf(1.0f, r));
-            g = fmaxf(0.0f, fminf(1.0f, g));
-            b = fmaxf(0.0f, fminf(1.0f, b));
+    init_perlin(7);
+
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            float u = (float)x / width;
+            float v = (float)y / height;
+
+            // Widen the grooves for colour purposes by taking the darkest
+            // sample across a short horizontal span. The relief needs sharp
+            // edges to produce a normal at all, but a one-texel-wide dark line
+            // vanishes the moment the texture is minified -- so the shading
+            // keeps the sharp field while the colour gets bands broad enough to
+            // still read from across the field.
+            float h = field[y * width + x];
+            for (int d = -7; d <= 7; d += 2) {
+                int xs = ((x + d) % width + width) % width;
+                float s = field[y * width + xs];
+                if (s < h)
+                    h = s;
+            }
+
+            // Weathered grey-brown on the exposed plates, dark damp wood down
+            // in the fissures. The spread between the two is what actually
+            // reads as bark from a distance.
+            const float fissure_rgb[3] = {0.040f, 0.030f, 0.024f};
+            const float plate_rgb[3] = {0.28f, 0.215f, 0.150f};
+
+            float t = smoothstep(0.20f, 0.86f, h);
+            float r = fissure_rgb[0] + (plate_rgb[0] - fissure_rgb[0]) * t;
+            float g = fissure_rgb[1] + (plate_rgb[1] - fissure_rgb[1]) * t;
+            float b = fissure_rgb[2] + (plate_rgb[2] - fissure_rgb[2]) * t;
+
+            // Patchy lichen-ish greying on the plate faces only.
+            float lichen = fbm_noise(u * 6.0f, v * 3.0f, 4, 0.5f);
+            float grey = smoothstep(0.58f, 0.88f, lichen) * t * 0.40f;
+            r += (0.26f - r) * grey;
+            g += (0.28f - g) * grey;
+            b += (0.24f - b) * grey;
+
+            // Fine tonal break-up so the plates are not flat swatches.
+            float grain = (fbm_noise(u * 30.0f, v * 10.0f, 3, 0.5f) - 0.5f) * 0.09f;
+            r += grain;
+            g += grain * 0.85f;
+            b += grain * 0.7f;
 
             int idx = (y * width + x) * 3;
-            data[idx + 0] = (unsigned char)(r * 255);
-            data[idx + 1] = (unsigned char)(g * 255);
-            data[idx + 2] = (unsigned char)(b * 255);
+            data[idx + 0] = (unsigned char)(fmaxf(0.0f, fminf(1.0f, r)) * 255);
+            data[idx + 1] = (unsigned char)(fmaxf(0.0f, fminf(1.0f, g)) * 255);
+            data[idx + 2] = (unsigned char)(fmaxf(0.0f, fminf(1.0f, b)) * 255);
         }
     }
 
     return data;
 }
 
-/*
- * Generate bark normal map from height
- */
-static unsigned char* generate_bark_normal(int width, int height) {
-    unsigned char* data = malloc(width * height * 3);
+// Differentiate the shared relief. Strong, because the fissures are the whole
+// point: a timid normal map on a cylinder is indistinguishable from no normal
+// map at all.
+static unsigned char* generate_bark_normal(int width, int height, const float* field) {
+    unsigned char* data = malloc((size_t)width * height * 3);
     if (!data)
         return NULL;
 
-    // First generate height map
-    float* heightmap = malloc(width * height * sizeof(float));
-    if (!heightmap) {
-        free(data);
-        return NULL;
-    }
-
-    init_perlin(42);
-
-    for (int y = 0; y < height; y++) {
-        for (int x = 0; x < width; x++) {
-            float u = (float)x / width;
-            float v = (float)y / height;
-
-            float noise = fbm_noise(u * 8.0f, v * 16.0f, 4, 0.5f);
-            float crack = worley_noise_2d(u * 6.0f, v * 12.0f, 123);
-            crack = fmaxf(0.0f, 1.0f - crack * 2.5f);
-
-            heightmap[y * width + x] = noise * 0.6f + (1.0f - crack) * 0.4f;
-        }
-    }
-
-    // Calculate normals using Sobel filter
-    float strength = 2.0f;
+    // Tuned against the tile size: one tile spans TG_BARK_TILE world units
+    // across 1024 texels, so this is roughly what a couple of centimetres of
+    // bark relief works out to as a per-texel slope.
+    const float strength = 14.0f;
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++) {
             int x0 = (x - 1 + width) % width;
@@ -241,13 +284,12 @@ static unsigned char* generate_bark_normal(int width, int height) {
             int y0 = (y - 1 + height) % height;
             int y1 = (y + 1) % height;
 
-            float dX = heightmap[y * width + x1] - heightmap[y * width + x0];
-            float dY = heightmap[y1 * width + x] - heightmap[y0 * width + x];
+            float dX = field[y * width + x1] - field[y * width + x0];
+            float dY = field[y1 * width + x] - field[y0 * width + x];
 
             vec3 normal = {-dX * strength, -dY * strength, 1.0f};
             glm_vec3_normalize(normal);
 
-            // Convert from [-1,1] to [0,255]
             int idx = (y * width + x) * 3;
             data[idx + 0] = (unsigned char)((normal[0] * 0.5f + 0.5f) * 255);
             data[idx + 1] = (unsigned char)((normal[1] * 0.5f + 0.5f) * 255);
@@ -255,48 +297,18 @@ static unsigned char* generate_bark_normal(int width, int height) {
         }
     }
 
-    free(heightmap);
     return data;
 }
 
-/*
- * Generate bark height map (parallax occlusion mapping)
- *
- * Same field the normal map differentiates, kept as a scalar so POM can march
- * it -- the ridges then occlude each other at grazing angles instead of being
- * a flat surface wearing a picture of ridges.
- */
-static unsigned char* generate_bark_height(int width, int height) {
-    unsigned char* data = malloc(width * height);
+// The same relief as a scalar, so POM can march it and the plates occlude each
+// other at grazing angles instead of being a flat surface wearing a picture.
+static unsigned char* generate_bark_height(int width, int height, const float* field) {
+    unsigned char* data = malloc((size_t)width * height);
     if (!data)
         return NULL;
-
-    init_perlin(42);
-
-    for (int y = 0; y < height; y++) {
-        for (int x = 0; x < width; x++) {
-            float u = (float)x / width;
-            float v = (float)y / height;
-
-            float noise = fbm_noise(u * 8.0f, v * 16.0f, 4, 0.5f);
-            float crack = worley_noise_2d(u * 6.0f, v * 12.0f, 123);
-            crack = fmaxf(0.0f, 1.0f - crack * 2.5f);
-
-            float h = noise * 0.6f + (1.0f - crack) * 0.4f;
-            h = fmaxf(0.0f, fminf(1.0f, h));
-            data[y * width + x] = (unsigned char)(h * 255);
-        }
-    }
-
+    for (int i = 0; i < width * height; i++)
+        data[i] = (unsigned char)(field[i] * 255);
     return data;
-}
-
-/*
- * Helper: smoothstep function
- */
-static float smoothstep(float edge0, float edge1, float x) {
-    x = fmaxf(0.0f, fminf(1.0f, (x - edge0) / (edge1 - edge0)));
-    return x * x * (3.0f - 2.0f * x);
 }
 
 /*
@@ -307,33 +319,19 @@ static float smoothstep(float edge0, float edge1, float x) {
 // from blue, occlusion from red -- and a single-channel source samples as
 // (r, 0, 0, 1), i.e. roughness 0, a mirror. Replicating keeps the map correct
 // whichever slot it is bound to.
-static unsigned char* generate_bark_roughness(int width, int height) {
+static unsigned char* generate_bark_roughness(int width, int height, const float* field) {
     unsigned char* data = malloc((size_t)width * height * 3);
     if (!data)
         return NULL;
 
-    init_perlin(42);
-
-    for (int y = 0; y < height; y++) {
-        for (int x = 0; x < width; x++) {
-            float u = (float)x / width;
-            float v = (float)y / height;
-
-            // High base roughness with variation
-            float noise = fbm_noise(u * 6.0f, v * 12.0f, 3, 0.5f);
-            float crack = worley_noise_2d(u * 6.0f, v * 12.0f, 123);
-            crack = fmaxf(0.0f, 1.0f - crack * 2.0f);
-
-            // Rougher on ridges, slightly smoother in worn cracks
-            float roughness = 0.85f + noise * 0.1f - crack * 0.15f;
-            roughness = fmaxf(0.5f, fminf(1.0f, roughness));
-
-            unsigned char q = (unsigned char)(roughness * 255);
-            int idx = (y * width + x) * 3;
-            data[idx + 0] = q;
-            data[idx + 1] = q;
-            data[idx + 2] = q;
-        }
+    for (int i = 0; i < width * height; i++) {
+        // Weathered plate faces are the roughest; the sheltered fissures keep a
+        // little more sheen. All of it is rough -- wood is never glossy.
+        float roughness = 0.72f + 0.26f * field[i];
+        unsigned char q = (unsigned char)(fminf(1.0f, roughness) * 255);
+        data[i * 3 + 0] = q;
+        data[i * 3 + 1] = q;
+        data[i * 3 + 2] = q;
     }
 
     return data;
@@ -685,14 +683,25 @@ static void generate_procedural_textures(Scene* scene) {
     const int LH = TEXTURE_SIZE;
 
     printf("Generating procedural bark textures...\n");
-    bark_albedo_tex =
-        bake_texture(scene, generate_bark_albedo(B, B), B, B, 3, true, "proc_bark_albedo");
-    bark_normal_tex =
-        bake_texture(scene, generate_bark_normal(B, B), B, B, 3, false, "proc_bark_normal");
-    bark_roughness_tex =
-        bake_texture(scene, generate_bark_roughness(B, B), B, B, 3, false, "proc_bark_roughness");
-    bark_height_tex =
-        bake_texture(scene, generate_bark_height(B, B), B, B, 1, false, "proc_bark_height");
+    // One relief, four maps derived from it -- they describe the same surface,
+    // and the field is only built once instead of per map.
+    float* bark_field = malloc((size_t)B * B * sizeof(float));
+    if (bark_field) {
+        bark_height_field(bark_field, B, B);
+        bark_albedo_tex =
+            bake_texture(scene, generate_bark_albedo(B, B, bark_field), B, B, 3, true,
+                         "proc_bark_albedo");
+        bark_normal_tex =
+            bake_texture(scene, generate_bark_normal(B, B, bark_field), B, B, 3, false,
+                         "proc_bark_normal");
+        bark_roughness_tex =
+            bake_texture(scene, generate_bark_roughness(B, B, bark_field), B, B, 3, false,
+                         "proc_bark_roughness");
+        bark_height_tex =
+            bake_texture(scene, generate_bark_height(B, B, bark_field), B, B, 1, false,
+                         "proc_bark_height");
+        free(bark_field);
+    }
 
     printf("Generating procedural leaf cluster atlas...\n");
     unsigned char *leaf_a = NULL, *leaf_n = NULL, *leaf_r = NULL;
