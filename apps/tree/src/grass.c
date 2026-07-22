@@ -103,7 +103,7 @@ static void emit_blade(MeshBuilder* mb, const vec3 root, float lean, float heigh
             vec3 pv;
             glm_vec3_copy(centre, pv);
             glm_vec3_muladds(side, sgn * w, pv);
-            mb_vertex(mb, pv, nrm, side, along, s == 0 ? 0.0f : 1.0f, t, phase, flex, col);
+            mb_vertex(mb, pv, nrm, side, s == 0 ? 0.0f : 1.0f, t, phase, flex, col);
         }
     }
 
@@ -139,7 +139,7 @@ static void emit_flower(MeshBuilder* mb, const vec3 at, float size, float phase,
                 glm_vec3_copy((float*)at, pv);
                 glm_vec3_muladds(side, (s == 0 ? -0.5f : 0.5f) * size, pv);
                 glm_vec3_muladds(up, (float)row * size, pv);
-                mb_vertex(mb, pv, nrm, side, up, s == 0 ? 0.0f : 1.0f, (float)row, phase, flex,
+                mb_vertex(mb, pv, nrm, side, s == 0 ? 0.0f : 1.0f, (float)row, phase, flex,
                           col);
             }
         }

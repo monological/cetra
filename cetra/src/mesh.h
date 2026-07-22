@@ -34,10 +34,15 @@ typedef struct Mesh {
     // if we are drawing lines
     float line_width;
 
-    float* vertices;       // Array of vertex positions
-    float* normals;        // Array of normals
-    float* tangents;       // Array of tangents
-    float* bitangents;     // Array of bitangents
+    float* vertices; // Array of vertex positions
+    float* normals;  // Array of normals
+    // Array of tangents, 4 floats per vertex (glTF/mikktspace convention): xyz
+    // is the tangent, w is the bitangent handedness, +1 or -1. There is no
+    // bitangent stream -- the shader derives B = cross(N, T) * w, which is how
+    // the fragment stage always reconstructed it anyway. Storing a full
+    // bitangent only ever contributed that sign, and only mirrored-UV imports
+    // set it to anything but +1.
+    float* tangents;
     float* tex_coords;     // Array of texture coordinates (UV0)
     float* tex_coords2;    // Array of texture coordinates (UV1) for lightmaps/AO
     float* colors;         // Array of vertex colors (RGBA)
@@ -48,15 +53,14 @@ typedef struct Mesh {
 
     Material* material;
 
-    GLuint vao;           // Vertex Array Object
-    GLuint vbo;           // Vertex Buffer Object
-    GLuint ebo;           // Element Buffer Object (for indices)
-    GLuint nbo;           // Normal Buffer Object
-    GLuint tbo;           // Texture Buffer Object (for UV0)
-    GLuint tbo2;          // Texture Buffer Object (for UV1)
-    GLuint color_vbo;     // Vertex Color Buffer Object
-    GLuint tangent_vbo;   // Tangent Buffer Object
-    GLuint bitangent_vbo; // Bitangent Buffer Object
+    GLuint vao;         // Vertex Array Object
+    GLuint vbo;         // Vertex Buffer Object
+    GLuint ebo;         // Element Buffer Object (for indices)
+    GLuint nbo;         // Normal Buffer Object
+    GLuint tbo;         // Texture Buffer Object (for UV0)
+    GLuint tbo2;        // Texture Buffer Object (for UV1)
+    GLuint color_vbo;   // Vertex Color Buffer Object
+    GLuint tangent_vbo; // Tangent Buffer Object (vec4: xyz tangent, w handedness)
 
     AABB aabb;
 

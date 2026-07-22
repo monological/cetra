@@ -30,7 +30,6 @@ Mesh* create_mesh() {
     mesh->vertices = NULL;
     mesh->normals = NULL;
     mesh->tangents = NULL;
-    mesh->bitangents = NULL;
     mesh->tex_coords = NULL;
     mesh->tex_coords2 = NULL;
     mesh->colors = NULL;
@@ -57,7 +56,6 @@ Mesh* create_mesh() {
     glGenBuffers(1, &mesh->ebo);
 
     glGenBuffers(1, &mesh->tangent_vbo);
-    glGenBuffers(1, &mesh->bitangent_vbo);
 
     // Unbind the vao
     glBindVertexArray(0);
@@ -93,7 +91,6 @@ void free_mesh(Mesh* mesh) {
     glDeleteBuffers(1, &mesh->ebo);
     glDeleteVertexArrays(1, &mesh->vao);
     glDeleteBuffers(1, &mesh->tangent_vbo);
-    glDeleteBuffers(1, &mesh->bitangent_vbo);
 
     // Free the allocated memory
     if (mesh->vertices)
@@ -102,8 +99,6 @@ void free_mesh(Mesh* mesh) {
         free(mesh->normals);
     if (mesh->tangents)
         free(mesh->tangents);
-    if (mesh->bitangents)
-        free(mesh->bitangents);
     if (mesh->tex_coords)
         free(mesh->tex_coords);
     if (mesh->tex_coords2)
@@ -189,23 +184,13 @@ void upload_mesh_buffers_to_gpu(Mesh* mesh) {
         glEnableVertexAttribArray(GL_ATTR_NORMAL);
     }
 
-    // Tangents
+    // Tangents (vec4: xyz tangent, w bitangent handedness)
     if (mesh->tangents) {
         glBindBuffer(GL_ARRAY_BUFFER, mesh->tangent_vbo);
-        glBufferData(GL_ARRAY_BUFFER, mesh->vertex_count * 3 * sizeof(float), mesh->tangents,
+        glBufferData(GL_ARRAY_BUFFER, mesh->vertex_count * 4 * sizeof(float), mesh->tangents,
                      GL_STATIC_DRAW);
-        glVertexAttribPointer(GL_ATTR_TANGENT, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+        glVertexAttribPointer(GL_ATTR_TANGENT, 4, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
         glEnableVertexAttribArray(GL_ATTR_TANGENT);
-    }
-
-    // Bitangents
-    if (mesh->bitangents) {
-        glBindBuffer(GL_ARRAY_BUFFER, mesh->bitangent_vbo);
-        glBufferData(GL_ARRAY_BUFFER, mesh->vertex_count * 3 * sizeof(float), mesh->bitangents,
-                     GL_STATIC_DRAW);
-        glVertexAttribPointer(GL_ATTR_BITANGENT, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float),
-                              (void*)0);
-        glEnableVertexAttribArray(GL_ATTR_BITANGENT);
     }
 
     // Texture coordinates (UV0)

@@ -18,7 +18,11 @@
 // channel on a six-figure vertex count is not free. Everything else is always
 // present.
 typedef struct MeshBuilder {
-    float *pos, *nrm, *tan, *btn, *uv0, *uv1, *col;
+    // `tan` is 4 floats per vertex: xyz tangent, w bitangent handedness. The
+    // builder always writes w = +1 -- procedurally generated geometry has no
+    // mirrored UV islands, so its bitangent is always cross(N, T), which is
+    // what the shader derives. Callers therefore never supply a bitangent.
+    float *pos, *nrm, *tan, *uv0, *uv1, *col;
     unsigned int* idx;
     size_t vcount, vcap, icount, icap;
     bool want_colors;
@@ -31,8 +35,8 @@ bool mb_init(MeshBuilder* mb, size_t vres, size_t ires, bool want_colors);
 void mb_free(MeshBuilder* mb);
 
 // `rgba` is read only when the builder was initialised with colours.
-unsigned int mb_vertex(MeshBuilder* mb, const vec3 p, const vec3 n, const vec3 t, const vec3 b,
-                       float u0, float v0, float u1, float v1, const float* rgba);
+unsigned int mb_vertex(MeshBuilder* mb, const vec3 p, const vec3 n, const vec3 t, float u0,
+                       float v0, float u1, float v1, const float* rgba);
 void mb_tri(MeshBuilder* mb, unsigned int a, unsigned int b, unsigned int c);
 
 // Hand the arrays to the mesh rather than copying them; the builder is emptied

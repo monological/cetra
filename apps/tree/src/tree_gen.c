@@ -448,7 +448,7 @@ static void sweep_branch(MeshBuilder* mb, const TreeSkeleton* s, const Branch* b
             float a = 2.0f * (float)M_PI * (float)j / (float)segs;
             float ca = cosf(a), sa = sinf(a);
 
-            vec3 radial, tangential, vpos, nrm, tng, btn;
+            vec3 radial, tangential, vpos, nrm, tng;
             glm_vec3_scale(N, ca, radial);
             glm_vec3_muladds(B, sa, radial);
             // d(radial)/da
@@ -484,11 +484,8 @@ static void sweep_branch(MeshBuilder* mb, const TreeSkeleton* s, const Branch* b
             glm_vec3_muladds(nrm, -glm_vec3_dot(tng, nrm), tng);
             glm_vec3_normalize(tng);
 
-            glm_vec3_cross(nrm, tng, btn);
-            glm_vec3_normalize(btn);
-
-            mb_vertex(mb, vpos, nrm, tng, btn, (float)j / (float)segs * (float)b->uv_tiles_u, v,
-                      phase, flex, NULL);
+            mb_vertex(mb, vpos, nrm, tng, (float)j / (float)segs * (float)b->uv_tiles_u, v, phase,
+                      flex, NULL);
         }
     }
 
@@ -511,14 +508,13 @@ static void sweep_branch(MeshBuilder* mb, const TreeSkeleton* s, const Branch* b
     glm_vec3_copy((float*)last->pos, apex);
     glm_vec3_muladds((float*)last->tangent, b->tip_radius * (b->is_terminal ? 2.0f : 0.6f), apex);
 
-    vec3 an = GLM_VEC3_ZERO_INIT, at = GLM_VEC3_ZERO_INIT, ab = GLM_VEC3_ZERO_INIT;
+    vec3 an = GLM_VEC3_ZERO_INIT, at = GLM_VEC3_ZERO_INIT;
     glm_vec3_copy((float*)last->tangent, an);
     perp_to(an, at);
-    glm_vec3_cross(an, at, ab);
 
     float t_arc_tip = 1.0f;
     unsigned int apex_i =
-        mb_vertex(mb, apex, an, at, ab, 0.5f * (float)b->uv_tiles_u,
+        mb_vertex(mb, apex, an, at, 0.5f * (float)b->uv_tiles_u,
                   b->uv_v0 + last->arc / TG_BARK_TILE, branch_phase_at(b, t_arc_tip),
                   powf(last->root_dist / s->max_root_dist, 1.2f), NULL);
 
@@ -580,7 +576,7 @@ static void emit_leaf_card(MeshBuilder* mb, const vec3 attach, const vec3 L, con
             // Tip droop.
             glm_vec3_muladds(down, vv * len * 0.15f, pv);
 
-            vec3 nrm = GLM_VEC3_ZERO_INIT, tng = GLM_VEC3_ZERO_INIT, btn = GLM_VEC3_ZERO_INIT;
+            vec3 nrm = GLM_VEC3_ZERO_INIT, tng = GLM_VEC3_ZERO_INIT;
             glm_vec3_copy((float*)Nl, nrm);
             glm_vec3_muladds((float*)S, uu * 0.6f, nrm);
             glm_vec3_normalize(nrm);
@@ -604,8 +600,6 @@ static void emit_leaf_card(MeshBuilder* mb, const vec3 attach, const vec3 L, con
             glm_vec3_copy((float*)S, tng);
             glm_vec3_muladds(nrm, -glm_vec3_dot(tng, nrm), tng);
             glm_vec3_normalize(tng);
-            glm_vec3_cross(nrm, tng, btn);
-            glm_vec3_normalize(btn);
 
             // UV0.v runs stem (0) to tip (1): the leaf texture points that way,
             // and the wind shader pivots flutter about v = 0. U is remapped into
@@ -614,7 +608,7 @@ static void emit_leaf_card(MeshBuilder* mb, const vec3 attach, const vec3 L, con
             // the raw variant count, the repeated sprig is easy to spot.
             float cell_u = mirror ? 0.5f - uu : uu + 0.5f;
             float u_tex = ((float)variant + cell_u) * inv_variants;
-            mb_vertex(mb, pv, nrm, tng, btn, u_tex, vv, phase, flex, rgba);
+            mb_vertex(mb, pv, nrm, tng, u_tex, vv, phase, flex, rgba);
         }
     }
 

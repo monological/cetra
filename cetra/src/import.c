@@ -554,12 +554,11 @@ void process_ai_mesh(Mesh* mesh, struct aiMesh* ai_mesh) {
     mesh->vertex_count = vert_count;
     mesh->index_count = idx_count;
 
+    // vec4: xyz tangent, w handedness derived from Assimp's bitangent below.
     if (ai_mesh->mTangents && ai_mesh->mBitangents) {
-        mesh->tangents = malloc(mesh->vertex_count * 3 * sizeof(float));
-        mesh->bitangents = malloc(mesh->vertex_count * 3 * sizeof(float));
+        mesh->tangents = malloc(mesh->vertex_count * 4 * sizeof(float));
     } else {
         mesh->tangents = NULL;
-        mesh->bitangents = NULL;
     }
 
     // Check for texture coordinates (UV0)
@@ -597,17 +596,22 @@ void process_ai_mesh(Mesh* mesh, struct aiMesh* ai_mesh) {
         mesh->normals[i * 3 + 2] = ai_mesh->mNormals[i].z;
 
         if (mesh->tangents) {
-            // Tangents
-            mesh->tangents[i * 3] = ai_mesh->mTangents[i].x;
-            mesh->tangents[i * 3 + 1] = ai_mesh->mTangents[i].y;
-            mesh->tangents[i * 3 + 2] = ai_mesh->mTangents[i].z;
-        }
+            mesh->tangents[i * 4] = ai_mesh->mTangents[i].x;
+            mesh->tangents[i * 4 + 1] = ai_mesh->mTangents[i].y;
+            mesh->tangents[i * 4 + 2] = ai_mesh->mTangents[i].z;
 
-        if (mesh->bitangents) {
-            // Bitangents
-            mesh->bitangents[i * 3] = ai_mesh->mBitangents[i].x;
-            mesh->bitangents[i * 3 + 1] = ai_mesh->mBitangents[i].y;
-            mesh->bitangents[i * 3 + 2] = ai_mesh->mBitangents[i].z;
+            // Handedness: Assimp derives the bitangent from the real UV
+            // gradient, so on mirrored UV islands it points opposite
+            // cross(N, T). That sign is the only part of its bitangent the
+            // renderer ever used, and it is the only thing here that carries
+            // information a procedural generator could not have produced.
+            vec3 n = {ai_mesh->mNormals[i].x, ai_mesh->mNormals[i].y, ai_mesh->mNormals[i].z};
+            vec3 t = {ai_mesh->mTangents[i].x, ai_mesh->mTangents[i].y, ai_mesh->mTangents[i].z};
+            vec3 b = {ai_mesh->mBitangents[i].x, ai_mesh->mBitangents[i].y,
+                      ai_mesh->mBitangents[i].z};
+            vec3 derived;
+            glm_vec3_cross(n, t, derived);
+            mesh->tangents[i * 4 + 3] = glm_vec3_dot(derived, b) < 0.0f ? -1.0f : 1.0f;
         }
 
         if (mesh->tex_coords) {
