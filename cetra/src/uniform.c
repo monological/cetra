@@ -217,6 +217,12 @@ void uniform_set_vec4(UniformManager* mgr, const char* name, const float* value)
         glUniform4fv(loc, 1, value);
 }
 
+void uniform_set_mat3(UniformManager* mgr, const char* name, const float* value) {
+    GLint loc = uniform_location(mgr, name);
+    if (loc >= 0)
+        glUniformMatrix3fv(loc, 1, GL_FALSE, value);
+}
+
 void uniform_set_mat4(UniformManager* mgr, const char* name, const float* value) {
     GLint loc = uniform_location(mgr, name);
     if (loc >= 0)

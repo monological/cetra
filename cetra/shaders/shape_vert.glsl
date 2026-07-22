@@ -35,6 +35,7 @@ uniform Light lights[MAX_LIGHTS];
 uniform int numLights;
 
 uniform mat4 model;
+uniform mat3 uNormalMatrix; // transpose(inverse(model)), per node -- see pbr_vert
 uniform mat4 view;
 uniform mat4 projection;
 
@@ -58,11 +59,10 @@ void main() {
     // Perspective divide to get normalized device coordinates
     FragDepth_vs = gl_Position.z / gl_Position.w;
 
-    Normal_vs = normalize(mat3(transpose(inverse(model))) * aNormal);
+    Normal_vs = normalize(uNormalMatrix * aNormal);
     TexCoords_vs = aTexCoords;
 
-    vec3 N = normalize(mat3(model) * aNormal);
-    TBN_vs = buildTBN(N, mat3(model) * aTangent.xyz, aTangent.w);
+    TBN_vs = buildTBN(Normal_vs, mat3(model) * aTangent.xyz, aTangent.w);
 
     gl_Position = clipPos;
 }

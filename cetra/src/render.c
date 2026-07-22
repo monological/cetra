@@ -466,6 +466,17 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
         // Per-mesh uniforms (model matrix is always per-mesh)
         uniform_set_mat4(u, "model", (const float*)node->global_transform);
         uniform_set_mat4(u, "uPrevModel", (const float*)node->prev_global_transform);
+        // Normal matrix = transpose(inverse(model)), the transform normals need
+        // under non-uniform scale. The vertex shaders used to compute it
+        // themselves, which meant a full mat4 inverse PER VERTEX for a value
+        // that is constant across the draw -- hundreds of thousands of times a
+        // frame on the grass mesh. Once per node here instead. Location-guarded,
+        // so programs without the uniform (shadow depth, particles) no-op.
+        mat4 inv_model;
+        glm_mat4_inv(node->global_transform, inv_model);
+        mat3 normal_matrix;
+        glm_mat4_pick3t(inv_model, normal_matrix);
+        uniform_set_mat3(u, "uNormalMatrix", (const float*)normal_matrix);
         uniform_set_float(u, "lineWidth", mesh->line_width);
         // Wind cloth-mask bounds: per-mesh geometry (local AABB Y). The shader
         // uses them only when this mesh's material opted in (uWindResponse > 0).

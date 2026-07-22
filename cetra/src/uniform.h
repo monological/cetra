@@ -40,6 +40,7 @@ void uniform_set_float(UniformManager* mgr, const char* name, float value);
 void uniform_set_vec2(UniformManager* mgr, const char* name, const float* value);
 void uniform_set_vec3(UniformManager* mgr, const char* name, const float* value);
 void uniform_set_vec4(UniformManager* mgr, const char* name, const float* value);
+void uniform_set_mat3(UniformManager* mgr, const char* name, const float* value);
 void uniform_set_mat4(UniformManager* mgr, const char* name, const float* value);
 
 #endif // _UNIFORM_H_

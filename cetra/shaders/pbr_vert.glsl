@@ -41,6 +41,10 @@ uniform Light lights[MAX_LIGHTS];
 uniform int numLights;
 
 uniform mat4 model;
+// transpose(inverse(model)), uploaded per node (render.c). Normals need it
+// rather than `model` under non-uniform scale; computing it here would be a
+// full mat4 inverse per vertex for a value constant across the draw.
+uniform mat3 uNormalMatrix;
 uniform mat4 view;
 uniform mat4 projection; // Jittered when TAA is on (rasterization only)
 
@@ -80,13 +84,16 @@ void main() {
 
     FragDepth = gl_Position.z / gl_Position.w; // Perspective divide to get normalized device coordinates
 
-    Normal = normalize(mat3(transpose(inverse(model))) * aNormal);
+    Normal = normalize(uNormalMatrix * aNormal);
     TexCoords = aTexCoords;
     TexCoords2 = aTexCoords2;
     VertexColor = aColor;
 
-    vec3 N = normalize(mat3(model) * aNormal);
-    TBN = buildTBN(N, mat3(model) * aTangent.xyz, aTangent.w);
+    // TBN carries the SAME normal as the Normal varying: the fragment stage
+    // orthogonalizes the basis against that varying, so a second, differently
+    // transformed normal here would tilt the basis relative to the shading
+    // normal under non-uniform scale.
+    TBN = buildTBN(Normal, mat3(model) * aTangent.xyz, aTangent.w);
 
     gl_Position = clipPos;
 }
