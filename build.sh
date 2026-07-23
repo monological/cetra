@@ -5,10 +5,12 @@ set -e
 # and binary directory -- this script only translates the flags people already
 # have in their fingers into a preset name.
 #
-# --target dispatches a build to a remote VM: from macOS, `--target linux` and
-# `--target windows` sync the working tree to the Linux / Windows build VM and
-# build there. Addresses live in ~/.ssh/config (aliases cetra-linux / cetra-win),
-# not here. See specs/8.6-remote-build-orchestration.md.
+# With no --target it builds locally for whatever host it runs on. `--target
+# <macos|linux|windows>` instead syncs the working tree to that OS's build VM and
+# builds there -- so any of the three can be built from any host, with no
+# assumption that this machine is the target OS. Addresses live in ~/.ssh/config
+# (aliases cetra-macos / cetra-linux / cetra-win), not here. See
+# specs/8.6-remote-build-orchestration.md.
 #
 # On Windows directly, use the presets from an x64 Native Tools prompt:
 #   cmake --workflow --preset windows-debug
@@ -16,8 +18,8 @@ set -e
 usage() {
     echo "Usage: $0 [options]"
     echo "Options:"
-    echo "  -t, --target <os>  macos|linux|windows (default: this host). linux/windows"
-    echo "                     from macOS build on the corresponding remote VM."
+    echo "  -t, --target <os>  Build on the macos|linux|windows build VM. Omit to"
+    echo "                     build locally for this host."
     echo "  -r, --release      Build in Release mode"
     echo "  -c, --clean        Clean build directory first"
     echo "  --no-joltc         Disable JoltC physics library"
@@ -47,11 +49,9 @@ case "$(uname -s)" in
     *)      HOST_PLATFORM="unknown" ;;
 esac
 
-# Default target is the host platform -> an ordinary local build.
-[[ -z "$TARGET" ]] && TARGET="$HOST_PLATFORM"
-
-# SSH aliases; overridable so CI can point elsewhere. The addresses (and the
+# SSH aliases; overridable so CI can point elsewhere. The addresses (and any
 # jump through the KVM host) live in ~/.ssh/config, never in the repo.
+CETRA_MACOS_SSH="${CETRA_MACOS_SSH:-cetra-macos}"
 CETRA_LINUX_SSH="${CETRA_LINUX_SSH:-cetra-linux}"
 CETRA_WIN_SSH="${CETRA_WIN_SSH:-cetra-win}"
 
@@ -71,17 +71,22 @@ remote_flags() {
     printf '%s' "$f"
 }
 
-# ---- Remote dispatch (target differs from this host) ----
-if [[ "$TARGET" != "$HOST_PLATFORM" ]]; then
+# ---- Remote dispatch: --target names a build VM, never the local host ----
+if [[ -n "$TARGET" ]]; then
     case "$TARGET" in
-        linux)
-            # rsync: delta transfer + --delete, both ends have rsync.
+        macos|linux)
+            # Unix VMs sync with rsync (delta transfer + --delete) and recurse
+            # into build.sh, which does an ordinary local build on the VM.
+            [[ "$TARGET" == "macos" ]] && SSH="$CETRA_MACOS_SSH" || SSH="$CETRA_LINUX_SSH"
             EX=(); for d in "${SYNC_EXCLUDE_DIRS[@]}"; do EX+=(--exclude="/$d"); done
-            echo "Syncing working tree -> $CETRA_LINUX_SSH:~/cetra ..."
+            echo "Syncing working tree -> $SSH:~/cetra ..."
             rsync -az --delete -e ssh "${EX[@]}" --exclude='.DS_Store' --exclude='._*' \
-                ./ "$CETRA_LINUX_SSH:cetra/"
-            echo "Building on $CETRA_LINUX_SSH (linux-$BUILD_TYPE)..."
-            exec ssh "$CETRA_LINUX_SSH" "cd ~/cetra && ./build.sh$(remote_flags -r -c --no-joltc)"
+                ./ "$SSH:cetra/"
+            echo "Building on $SSH ($TARGET-$BUILD_TYPE)..."
+            # Run through the VM's login shell ($SHELL -l) so its profile is
+            # sourced: a non-interactive `ssh host cmd` otherwise gets a bare PATH
+            # that on macOS misses Homebrew's cmake/ninja.
+            exec ssh "$SSH" "\$SHELL -lc 'cd ~/cetra && ./build.sh$(remote_flags -r -c --no-joltc)'"
             ;;
         windows)
             # Windows has no rsync; a tar archive over scp preserves mtimes on
@@ -107,19 +112,17 @@ if [[ "$TARGET" != "$HOST_PLATFORM" ]]; then
             echo "Building on $CETRA_WIN_SSH (windows-$BUILD_TYPE)..."
             exec ssh "$CETRA_WIN_SSH" "powershell -ExecutionPolicy Bypass -File $DEST/tools/build.ps1$(remote_flags -Release -Clean -NoJoltc)"
             ;;
-        macos)
-            echo "No remote macOS build host configured -- build macOS locally on a Mac."; exit 1 ;;
         *)
             echo "Unknown target: $TARGET (expected macos|linux|windows)"; exit 1 ;;
     esac
 fi
 
-# ---- Local build (host == target) ----
+# ---- Local build (no --target: build for whatever host this is) ----
 if [[ "$HOST_PLATFORM" == "unknown" ]]; then
     echo "Unsupported host: $(uname -s). On Windows use: cmake --workflow --preset windows-debug"; exit 1
 fi
 
-PRESET="${TARGET}-${BUILD_TYPE}"
+PRESET="${HOST_PLATFORM}-${BUILD_TYPE}"
 
 # --fresh wipes the cache and reconfigures from scratch, so the script never has
 # to know where the preset builds. (CMake >= 3.24; the presets require 3.25.)
