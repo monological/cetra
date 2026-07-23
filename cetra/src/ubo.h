@@ -24,7 +24,7 @@
 // GL 4.1 guaranteed GL_MAX_UNIFORM_BLOCK_SIZE minimum of 16384.
 #define UBO_LIGHTS_BLOCK_SIZE          12512
 #define UBO_CLUSTERS_BLOCK_SIZE        12288
-#define UBO_CLUSTER_INDICES_BLOCK_SIZE 8192
+#define UBO_CLUSTER_INDICES_BLOCK_SIZE 12288
 
 typedef struct Ubo {
     GLuint id;

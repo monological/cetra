@@ -48,7 +48,7 @@ layout(std140) uniform ClusterBlock {
 };
 
 layout(std140) uniform ClusterIndexBlock {
-    uvec4 lightIndices[512]; // 4096 16-bit light indices, two per uint, low half first
+    uvec4 lightIndices[768]; // 6144 16-bit light indices, two per uint, low half first
 };
 
 // The two block accessors are deliberately the only places that decode the

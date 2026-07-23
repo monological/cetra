@@ -68,6 +68,40 @@ static int _clampi(int v, int lo, int hi) {
     return v < lo ? lo : (v > hi ? hi : v);
 }
 
+static float _clampf(float v, float lo, float hi) {
+    return v < lo ? lo : (v > hi ? hi : v);
+}
+
+// Sphere-vs-cluster refinement: does the light's view-space bounding sphere
+// touch the cluster's view-space AABB? The tile/slice range box alone
+// over-fills badly for near-camera lights (a fullscreen-rect sphere only
+// intersects a curved shell of the box's clusters), which is what blows the
+// index-pool budget. The cluster wedge's AABB comes from its 8 corners:
+// x = ndc_x * depth / P00 (symmetric projection), z = -depth.
+static bool _sphere_touches_cluster(const float* sphere, int x, int y, int z,
+                                    const float* slice_depths, float p00, float p11) {
+    if (sphere[3] < 0.0f)
+        return true; // uncullable
+    float d0 = slice_depths[z], d1 = slice_depths[z + 1];
+    float nx0 = (float)x * (2.0f / (float)LC_CLUSTER_X) - 1.0f;
+    float nx1 = nx0 + 2.0f / (float)LC_CLUSTER_X;
+    float ny0 = (float)y * (2.0f / (float)LC_CLUSTER_Y) - 1.0f;
+    float ny1 = ny0 + 2.0f / (float)LC_CLUSTER_Y;
+    float xa = nx0 * d0 / p00, xb = nx0 * d1 / p00;
+    float xc = nx1 * d0 / p00, xd = nx1 * d1 / p00;
+    float ya = ny0 * d0 / p11, yb = ny0 * d1 / p11;
+    float yc = ny1 * d0 / p11, yd = ny1 * d1 / p11;
+    float min_x = fminf(fminf(xa, xb), fminf(xc, xd));
+    float max_x = fmaxf(fmaxf(xa, xb), fmaxf(xc, xd));
+    float min_y = fminf(fminf(ya, yb), fminf(yc, yd));
+    float max_y = fmaxf(fmaxf(ya, yb), fmaxf(yc, yd));
+    // Closest point on the AABB to the sphere center (view space, z = -depth)
+    float cx = _clampf(sphere[0], min_x, max_x) - sphere[0];
+    float cy = _clampf(sphere[1], min_y, max_y) - sphere[1];
+    float cz = _clampf(sphere[2], -d1, -d0) - sphere[2];
+    return cx * cx + cy * cy + cz * cz <= sphere[3] * sphere[3];
+}
+
 // Conservative screen-tile range of a view-space sphere: project the four
 // extreme points at the sphere's closest depth (max magnification over its
 // depth range) with the real projection matrix, clamp NDC, map to tiles.
@@ -206,6 +240,7 @@ void light_cluster_build_and_upload(LightClusterContext* ctx, struct Engine* eng
         dst->spot_shadow_size[3] = light->size[1];
 
         // Cluster coverage: exponential Z slices + conservative screen tiles
+        // (refined per cluster against the view-space sphere in the fill)
         LightClusterRange* range = &ctx->ranges[num_packed];
         if (uncullable) {
             range->x0 = 0;
@@ -214,6 +249,7 @@ void light_cluster_build_and_upload(LightClusterContext* ctx, struct Engine* eng
             range->y1 = LC_CLUSTER_Y - 1;
             range->z0 = 0;
             range->z1 = LC_CLUSTER_Z - 1;
+            ctx->view_spheres[num_packed][3] = -1.0f; // marker: skip the refinement
         } else {
             vec3 view_center;
             glm_mat4_mulv3(view, light->global_position, 1.0f, view_center);
@@ -224,6 +260,10 @@ void light_cluster_build_and_upload(LightClusterContext* ctx, struct Engine* eng
             range->z0 = _slice_for_z(fmaxf(zc - radius, near_clip), slice_scale, slice_bias);
             range->z1 = _slice_for_z(fminf(zc + radius, far_clip), slice_scale, slice_bias);
             _tile_range_for_sphere(projection, view_center, radius, near_clip, range);
+            ctx->view_spheres[num_packed][0] = view_center[0];
+            ctx->view_spheres[num_packed][1] = view_center[1];
+            ctx->view_spheres[num_packed][2] = view_center[2];
+            ctx->view_spheres[num_packed][3] = radius;
         }
         num_packed++;
     }
@@ -231,13 +271,23 @@ void light_cluster_build_and_upload(LightClusterContext* ctx, struct Engine* eng
     ctx->lights.light_counts[0] = num_dir;
     ctx->lights.light_counts[1] = num_packed;
 
+    // Slice depth bounds for the per-cluster refinement (inverse of the
+    // exponential slice mapping; slice s spans [slice_depths[s], [s+1]])
+    float slice_depths[LC_CLUSTER_Z + 1];
+    for (int s = 0; s <= LC_CLUSTER_Z; s++)
+        slice_depths[s] = near_clip * powf(far_clip / near_clip, (float)s / (float)LC_CLUSTER_Z);
+    float p00 = projection[0][0];
+    float p11 = projection[1][1];
+
     // Fill pass 1: count lights per covered cluster
     for (int li = 0; li < num_packed; li++) {
         const LightClusterRange* r = &ctx->ranges[li];
         for (int z = r->z0; z <= r->z1; z++)
             for (int y = r->y0; y <= r->y1; y++)
                 for (int x = r->x0; x <= r->x1; x++)
-                    ctx->counts[x + LC_CLUSTER_X * (y + LC_CLUSTER_Y * z)]++;
+                    if (_sphere_touches_cluster(ctx->view_spheres[li], x, y, z, slice_depths, p00,
+                                                p11))
+                        ctx->counts[x + LC_CLUSTER_X * (y + LC_CLUSTER_Y * z)]++;
     }
 
     // Prefix sum into index-pool offsets, truncating at the pool cap; a
@@ -270,6 +320,9 @@ void light_cluster_build_and_upload(LightClusterContext* ctx, struct Engine* eng
         for (int z = r->z0; z <= r->z1; z++)
             for (int y = r->y0; y <= r->y1; y++)
                 for (int x = r->x0; x <= r->x1; x++) {
+                    if (!_sphere_touches_cluster(ctx->view_spheres[li], x, y, z, slice_depths, p00,
+                                                 p11))
+                        continue;
                     int ci = x + LC_CLUSTER_X * (y + LC_CLUSTER_Y * z);
                     uint32_t slot = ctx->offsets[ci] + ctx->counts[ci];
                     if (slot >= LC_MAX_CLUSTER_INDICES)

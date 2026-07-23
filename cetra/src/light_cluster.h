@@ -27,7 +27,7 @@ struct Light;
 #define LC_CLUSTER_COUNT       (LC_CLUSTER_X * LC_CLUSTER_Y * LC_CLUSTER_Z)
 #define LC_MAX_DIR_LIGHTS      4
 #define LC_MAX_CLUSTER_LIGHTS  128
-#define LC_MAX_CLUSTER_INDICES 4096
+#define LC_MAX_CLUSTER_INDICES 6144
 
 // C mirrors of the std140 blocks (lights_ubo.glsl). Every member is a 16-byte
 // row (float[4] / int32_t[4]) or packs to whole rows, so the C layout equals
@@ -84,6 +84,9 @@ typedef struct LightClusterContext {
     GpuClusterBlock grid;
     GpuClusterIndexBlock index_pool;
     LightClusterRange ranges[LC_MAX_CLUSTER_LIGHTS];
+    // View-space bounding sphere per packed light (xyz center, w radius;
+    // w < 0 = uncullable) for the per-cluster AABB refinement in the fill
+    float view_spheres[LC_MAX_CLUSTER_LIGHTS][4];
     uint16_t counts[LC_CLUSTER_COUNT];  // per-cluster light counts (fill pass 1)
     uint32_t offsets[LC_CLUSTER_COUNT]; // per-cluster index-pool offsets (prefix sum)
     bool warned_dir_overflow;
