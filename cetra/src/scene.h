@@ -87,11 +87,6 @@ void apply_transform_to_nodes(SceneNode* node, mat4 transform);
  * Scene
  */
 
-typedef struct {
-    Light* light;
-    float distance;
-} LightDistancePair;
-
 typedef struct Scene {
     SceneNode* root_node;
 
@@ -112,11 +107,6 @@ typedef struct Scene {
     // used by all nodes
     ShaderProgram* xyz_shader_program;
     ShaderProgram* outlines_shader_program;
-
-    // Pre-allocated cache for light selection (avoids per-frame malloc)
-    LightDistancePair* light_cache_pairs;
-    Light** light_cache_result;
-    size_t light_cache_capacity;
 
     // Pre-allocated traversal stack (avoids per-frame malloc)
     SceneNode** traversal_stack;
@@ -185,8 +175,6 @@ int add_particle_system_to_scene(Scene* scene, struct ParticleSystem* sys);
 // does; an engine_run host may call it too). Rendering is automatic in
 // render_current_scene.
 void scene_update_particle_systems(Scene* scene, float dt, float t);
-Light** get_closest_lights(Scene* scene, SceneNode* target_node, size_t max_lights,
-                           size_t* returned_light_count);
 
 // material
 int add_material_to_scene(Scene* scene, Material* material);

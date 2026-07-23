@@ -48,16 +48,9 @@
 #define TEXUNIT_REFLECTANCE      9 // reserved (KHR_materials_specular; unsampled today)
 #define TEXUNIT_MATERIAL_MAX     TEXUNIT_REFLECTANCE
 
-// Fixed non-light uniform overhead the max-light math subtracts. The CSM
-// arrays dominate: lightSpaceMatrix[9] (144) + cascadeParams[9] (36) +
-// cascadeSplits (4) + counts/toggles; audit when the shadow uniform block
-// changes shape (shadow.c static-asserts a floor from the shadow constants).
-#define USED_UNIFORM_COMPONENTS 215
-#define COMPONENTS_PER_LIGHT    21 // Number of components per light
-// Mirror of pbr_frag.glsl's MAX_LIGHTS (the shader array is a hardcoded
-// literal; shaders see no C defines). get_gl_max_lights() clamps to this so
-// numLights can never exceed the shader array and read out of bounds.
-#define PBR_MAX_LIGHTS 64
+// (Light data moved off the default uniform block entirely: analytic lights
+// live in the clustered-forward std140 UBOs -- see light_cluster.h / ubo.h --
+// so the old per-light uniform-component budget accounting is gone.)
 
 #define CETRA_RED_COLOR     ((vec3){1.0f, 0.0f, 0.0f})
 #define CETRA_GREEN_COLOR   ((vec3){0.0f, 1.0f, 0.0f})

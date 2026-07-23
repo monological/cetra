@@ -17,12 +17,9 @@ flat out float TangentW; // bitangent handedness, per-island constant
 out vec4 CurrClip;     // Un-jittered current clip position (motion vectors)
 out vec4 PrevClip;     // Previous-frame clip position
 
-// No Light struct / lights[] here on purpose: this stage does no lighting. It
-// used to carry a copy declaring MAX_LIGHTS 70 while pbr_frag declares 64 --
-// the same-named uniform array at two sizes in one linked program, which is a
-// link error by spec and only linked because the vertex copy was inactive and
-// stripped. pbr_frag owns that declaration (mirrored by PBR_MAX_LIGHTS in
-// common.h); the moment a vertex shader needs lighting, include it once.
+// No light data here on purpose: this stage does no lighting. Analytic lights
+// live in the clustered-forward UBO blocks (lights_ubo.glsl), consumed by
+// pbr_frag alone; the moment a vertex shader needs lighting, include it once.
 
 uniform mat4 model;
 // transpose(inverse(model)), uploaded per node (render.c). Normals need it

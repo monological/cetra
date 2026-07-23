@@ -11,7 +11,6 @@
  * OpenGL
  */
 void check_gl_error(const char* where);
-size_t get_gl_max_lights();
 // Per-fragment-stage sampler count (GL 4.1 min 16; the M1 Max reports 16) and
 // max array-texture layers — queried once at engine init to budget the material
 // sampler units and the mask texture array explicitly.

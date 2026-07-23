@@ -32,31 +32,6 @@ layout(location = 4) out vec4 DiffuseOut;
 layout(location = 5) out vec4 AccumOut;
 layout(location = 6) out vec4 RevealageOut;
 
-// Sized against GL_MAX_FRAGMENT_UNIFORM_COMPONENTS (4096 on the target GL 4.1
-// tier): the light array plus the fixed uniforms (the CSM matrix/param arrays
-// dominate) must stay under the limit or the program fails to link.
-// Mirrored as PBR_MAX_LIGHTS in common.h, which caps the CPU-side numLights.
-#define MAX_LIGHTS 64
-
-struct Light {
-    int type;
-    vec3 position;
-    vec3 direction;
-    vec3 color;
-    vec3 specular;
-    vec3 ambient;
-    float intensity;
-    float constant;
-    float linear;
-    float quadratic;
-    float cutOff;
-    float outerCutOff;
-    vec2 size;
-};
-
-uniform Light lights[MAX_LIGHTS];
-uniform int numLights;
-
 uniform mat4 view;
 uniform mat4 projection;
 
@@ -152,8 +127,7 @@ uniform int clearcoatNormalExists;
 
 uniform vec4 cascadeSplits; // View-depth far bound per cascade (.xyz)
 uniform int csmDebug; // Tint fragments by selected cascade
-uniform int shadowLightIndex[MAX_SHADOW_LIGHTS];
-// (no numShadowLights here: this shader iterates shadowLightIndex[] instead.
+// (no numShadowLights here: each DirLight carries its own CSM slot.
 // shadow.c still uploads it -- catcher_frag and particle_frag do read it.)
 // PCSS (contact-hardening shadows). When disabled the 3x3 PCF fallback
 // runs, bit-identical to the pre-PCSS path. The ortho shadow projection
@@ -170,13 +144,12 @@ uniform sampler2D spotShadowMap;
 uniform mat4 spotShadowMatrix;
 uniform int spotShadowActive;
 
-// Clustered-forward light blocks (spec 9.1). Declared alongside the legacy
-// lights[] array during bring-up; the clustered path consumes these, the
-// legacy path above ignores them.
+// Clustered-forward light blocks (spec 9.1): all analytic lights arrive
+// through these UBOs -- directionals in a small unconditional array, the
+// point/spot/area set via the per-fragment cluster index list.
 #include "lights_ubo.glsl"
 
-uniform int clusteredEnabled; // 1 = shade from the UBO blocks; 0 = legacy lights[]
-uniform int clusterDebug;     // Tint fragments by cluster light count (heatmap)
+uniform int clusterDebug; // Tint fragments by cluster light count (heatmap)
 
 // Cascade for a view depth: the first cascade whose far bound contains it.
 // At cascadeCount 1 the loop never runs (cascade 0).
@@ -461,18 +434,6 @@ float geometrySmith(vec3 N, vec3 V, vec3 L, float roughness) {
 // into +INF radiance -- one INF pixel survives every clamp downstream).
 float calculateAttenuation(float distance, float constant, float linear, float quadratic) {
     return 1.0 / max(constant + linear * distance + quadratic * (distance * distance), 1e-4);
-}
-
-// Spot-cone falloff (LIGHT_SPOT = type 2): 1 inside the inner cone, smoothly to
-// 0 across to the outer cone; 1 for every non-spot light. cutOff/outerCutOff are
-// the cosines of the inner/outer half-angles. `L` is the frag->light direction;
-// the spot aims along `direction`, so -direction points back up the beam axis.
-float spotConeFactor(Light light, vec3 L) {
-    if (light.type != 2)
-        return 1.0;
-    float theta = dot(L, normalize(-light.direction));
-    float epsilon = max(light.cutOff - light.outerCutOff, 1e-4);
-    return clamp((theta - light.outerCutOff) / epsilon, 0.0, 1.0);
 }
 
 // 16-tap Poisson disk (unit radius) for the PCSS blocker search and filter.
@@ -892,23 +853,40 @@ void main() {
 
     // Render modes that need texture data
     if (renderMode == 7) {
-        // Simple Diffuse Lighting
+        // Simple Diffuse Lighting (same fused dir+cluster fetch as the PBR loop)
         vec3 Lo = vec3(0.0);
-        for (int i = 0; i < numLights; i++) {
+        int sTileX = min(int(gl_FragCoord.x * clusterParams.z), CLUSTER_X - 1);
+        int sTileY = min(int(gl_FragCoord.y * clusterParams.w), CLUSTER_Y - 1);
+        int sSlice = clamp(int(log2(max(-ViewPos.z, 1e-4)) * clusterParams.x + clusterParams.y),
+                           0, CLUSTER_Z - 1);
+        uint sWord = clusterWord(uint(sTileX + CLUSTER_X * (sTileY + CLUSTER_Y * sSlice)));
+        uint sOffset = sWord >> 12u;
+        int sCount = int(sWord & 0xFFFu);
+        int sNumDir = lightCounts.x;
+        for (int k = 0; k < sNumDir + sCount; k++) {
             vec3 L;
             float attenuation;
-            if (lights[i].type == 0) {
-                L = normalize(-lights[i].direction);
+            vec3 lightCI;
+            if (k < sNumDir) {
+                L = normalize(-dirLights[k].dirShadow.xyz);
                 attenuation = 1.0;
+                lightCI = dirLights[k].colorIntensity.xyz;
             } else {
-                L = normalize(lights[i].position - WorldPos);
-                float distance = length(lights[i].position - WorldPos);
-                attenuation = calculateAttenuation(distance, lights[i].constant,
-                                                   lights[i].linear, lights[i].quadratic);
-                attenuation *= spotConeFactor(lights[i], L);
+                uint li = lightIndexAt(sOffset + uint(k - sNumDir));
+                vec3 lightPos = clusterLights[li].posRange.xyz;
+                L = normalize(lightPos - WorldPos);
+                float distance = length(lightPos - WorldPos);
+                attenuation = calculateAttenuation(distance, clusterLights[li].attenCutoff.x,
+                                                   clusterLights[li].attenCutoff.y,
+                                                   clusterLights[li].attenCutoff.z);
+                attenuation *=
+                    spotConeFactorP(clusterLights[li].dirType.w, clusterLights[li].dirType.xyz,
+                                    clusterLights[li].attenCutoff.w,
+                                    clusterLights[li].spotShadowSize.x, L);
+                lightCI = clusterLights[li].colorIntensity.xyz;
             }
             float NdotL = max(dot(N, L), 0.0);
-            Lo += albedoMap * lights[i].color * lights[i].intensity * attenuation * NdotL;
+            Lo += albedoMap * lightCI * attenuation * NdotL;
         }
         vec3 color = Lo + vec3(0.03) * albedoMap;
         color = color / (color + vec3(1.0));
@@ -1003,174 +981,13 @@ void main() {
     // the light loop (mirrors catcher_frag)
     int fragCascade = selectCascade(-ViewPos.z);
 
-    if (clusteredEnabled == 0) {
-    for (int i = 0; i < numLights; i++) {
-        // Calculate per-light radiance
-        vec3 L;
-        float attenuation;
-
-        if (lights[i].type == 0) {
-            // LIGHT_DIRECTIONAL: use direction, no attenuation
-            L = normalize(-lights[i].direction);
-            attenuation = 1.0;
-        } else {
-            // Point/Spot lights: use position-based calculation
-            L = normalize(lights[i].position - WorldPos);
-            float distance = length(lights[i].position - WorldPos);
-            attenuation = calculateAttenuation(distance, lights[i].constant,
-                                               lights[i].linear, lights[i].quadratic);
-            attenuation *= spotConeFactor(lights[i], L);
-        }
-
-        // Half vector, guarded: where the light is directly behind the
-        // fragment along the view ray, V + L vanishes and normalize()
-        // returns garbage or NaN — and NaN * NdotL(0) stays NaN, painting
-        // black flecks around the light's vanishing point. The fallback N
-        // is harmless: NdotL is ~0 in that configuration anyway.
-        vec3 Hraw = V + L;
-        float hLen2 = dot(Hraw, Hraw);
-        vec3 H = hLen2 > 1e-8 ? Hraw * inversesqrt(hLen2) : N;
-        vec3 radiance = lights[i].color * lights[i].intensity * attenuation;
-
-        // Cook-Torrance BRDF with optional anisotropy
-        float NDF;
-        if (anisotropyLayer >= 0 && anisotropyMap > 0.01) {
-            NDF = distributionGGXAnisotropic(N, H, T, B, roughnessMap, anisotropyMap);
-        } else {
-            NDF = areaLightNorm * distributionGGX(N, H, areaLightRoughness);
-        }
-        float G = geometrySmith(N, V, L, roughnessMap);
-        vec3 F = fresnelSchlick(max(dot(H, V), 0.0), F0);
-
-        // Apply thin-film interference for iridescent coatings (pilot visor style)
-        if (filmThickness > 0.0) {
-            vec3 iridescence = thinFilmInterference(filmThickness, NdotV, 1.5);
-            // Strong iridescent mirror effect
-            // Clamped: pow with a negative base (NdotV rounding above 1) is
-            // undefined in GLSL and yields NaN on this driver
-            float fresnel = pow(clamp(1.0 - NdotV, 0.0, 1.0), 2.0);
-            // Replace F entirely with strong iridescent reflection
-            F = iridescence * (0.6 + fresnel * 0.4);
-        }
-
-        float NdotL = max(dot(N, L), 0.0);
-
-        // Specular contribution, multi-scatter compensated
-        vec3 numerator = NDF * G * F;
-        float denominator = 4.0 * NdotV * NdotL + 0.0001;
-        vec3 specular = numerator / denominator * energyComp;
-
-        // Energy conservation: diffuse and specular must not exceed 1.0
-        vec3 kS = F;
-        vec3 kD = vec3(1.0) - kS;
-        // Metals have no diffuse reflection; transmission replaces diffuse
-        // with the transmitted scene term added after the loop (KHR:
-        // mix(diffuse_brdf, specular_btdf, transmission) under specular)
-        kD *= 1.0 - metallicMap;
-        kD *= 1.0 - transmissionEff;
-
-        // Shadow calculation for directional lights. Alpha-to-coverage
-        // surfaces (hair cards) cast shadows but never receive the shadow
-        // map: at map-texel scale (millimeters) card-on-card comparisons
-        // are pure acne, drawing card-shaped streaks through the hair.
-        // Their self-occlusion comes from the AO texture and SSAO instead.
-        //
-        // Each light carries its OWN shadow slot in shadowLightIndex[i];
-        // sample it directly. The old getShadowSlot() reverse lookup matched
-        // on light ordering, but get_closest_lights returns directional
-        // lights in a per-run-variable heap order (their positions aren't
-        // meaningful), so a light could sample a DIFFERENT light's shadow
-        // map — a per-run-random, constant-within-a-run wrong shadow that
-        // gated the specular highlights into shimmering speckle.
-        float shadow = 1.0;
-        if (lights[i].type == 0 && (alphaMasked == 0 || foliageShadows == 1) &&
-            i < MAX_SHADOW_LIGHTS) {
-            int shadowSlot = shadowLightIndex[i];
-            if (shadowSlot >= 0) {
-                shadow = calculateShadow(shadowSlot, fragCascade, WorldPos, NdotL,
-                                         max(lights[i].size.x, lights[i].size.y));
-            }
-        }
-        // Spot (flashlight) shadow: its own perspective map (see calculateSpotShadow).
-        if (lights[i].type == 2 && spotShadowActive == 1 && alphaMasked == 0) {
-            shadow = calculateSpotShadow(WorldPos, NdotL);
-        }
-
-        // POM self-shadow: raised relief casts into the grooves toward each light.
-        if (pom) {
-            shadow *= parallaxSelfShadow(uv, parallaxHeight, normalize(transpose(TBN) * L));
-        }
-
-        // Clearcoat: a second thin smooth dielectric GGX lobe (fixed F0 = 0.04,
-        // IOR 1.5) over the base, on the coat normal Nc. The base term is
-        // attenuated by the coat's Fresnel -- light the coat reflects never
-        // reaches it (Kelemen-Szirmay-Kalos / Filament layering).
-        // The coat's microfacet term uses the coat normal Nc (so a coat normal
-        // map's weave shows in the highlight); it shares the base N*L cosine in
-        // the accumulation below, which keeps the pre-clearcoat grouping exactly
-        // (byte-identical when the coat is off, and when Nc == N).
-        vec3 coatSpec = vec3(0.0);
-        float coatAtten = 0.0;
-        if (clearcoatEnabled > 0 && clearcoat > 0.0) {
-            vec3 Nc = clearcoatNormal(uv);
-            float ccR = clamp(clearcoatRoughness, 0.04, 1.0);
-            float Dc = distributionGGX(Nc, H, ccR);
-            float Gc = geometrySmith(Nc, V, L, ccR);
-            float Fc = fresnelSchlick(max(dot(H, V), 0.0), vec3(0.04)).r;
-            coatSpec = vec3(clearcoat * Dc * Gc * Fc / denominator);
-            coatAtten = clearcoat * Fc;
-        }
-
-        // Sheen (KHR_materials_sheen): a retroreflective Charlie lobe for cloth
-        // (velvet / satin) -- no Fresnel, per glTF. Added over the base, which is
-        // scaled by (1 - max(sheenColor)) as a cheap directional-albedo
-        // approximation (a baked Charlie E-LUT is the follow-up). All sheen work
-        // stays inside this uniform-gated block so a non-sheen material keeps the
-        // exact pre-sheen accumulation grouping below (byte-identical off).
-        vec3 sheenSpec = vec3(0.0);
-        float sheenScale = 1.0;
-        if (sheenEnabled > 0 && maxComp(sheenColorFactor) > 0.0) {
-            vec3 sheenColor = sheenColorAt(uv);
-            float shR = clamp(sheenRoughnessFactor, 0.07, 1.0);
-            float Dsh = distributionCharlie(N, H, shR);
-            float Vsh = visibilityAshikhmin(NdotL, NdotV);
-            sheenSpec = sheenColor * Dsh * Vsh;
-            sheenScale = 1.0 - maxComp(sheenColor);
-        }
-
-        // Add this light's contribution with shadow. Firefly clamp: a
-        // sub-pixel GGX spike carries far more energy than the pixel
-        // legitimately integrates, aliasing into white sparkle across
-        // low-roughness normal-mapped surfaces (and before the fp16 clamp,
-        // overflowing to NaN). Highlights saturate the tonemap well below
-        // this cap, so only the aliasing energy is lost.
-        Lo += min((((kD * albedoMap / PI + specular) * sheenScale + sheenSpec) * (1.0 - coatAtten) +
-                   coatSpec) *
-                      radiance * NdotL * shadow,
-                  vec3(10.0));
-
-        // SSS: tap this light's Lambert diffuse into the separated skin-diffuse
-        // buffer (blurred later; specular stays in FragColor). Separate accumulate
-        // -- does not modify the Lo expression above.
-        if (sss) {
-            sssDiffuse += kD * albedoMap / PI * radiance * NdotL * shadow;
-        }
-
-        // SSS back-light transmission: thin-region glow when the light is
-        // behind the surface. Guarded so non-skin / --no-sss is byte-identical.
-        if (sss) {
-            Lo += subsurfaceTransmission(N, L, V, albedoMap, subsurfaceColor, subsurface,
-                                         lights[i].color * lights[i].intensity * attenuation);
-        }
-    }
-    } else {
     // Clustered forward (spec 9.1): directional lights shade unconditionally
     // (they reach every fragment), then the fragment's cluster supplies the
-    // point/spot/area list. The shading body below is the legacy body with the
-    // per-light fetches swapped for the packed UBO fields -- radiance uses the
-    // CPU-premultiplied color*intensity, the directional CSM slot rides in the
-    // DirLight itself (no shadowLightIndex[] ordering indirection), and the
-    // spot flag replaces the type==2 test.
+    // point/spot/area list. Radiance uses the CPU-premultiplied
+    // color*intensity, and the directional CSM slot rides in the DirLight
+    // itself -- each light samples its OWN shadow slot, immune to the light
+    // ordering (the retired per-node path matched shadow slots by loop index,
+    // which shimmered when the k-nearest heap reordered directionals).
     int tileX = min(int(gl_FragCoord.x * clusterParams.z), CLUSTER_X - 1);
     int tileY = min(int(gl_FragCoord.y * clusterParams.w), CLUSTER_Y - 1);
     int slice = clamp(int(log2(max(-ViewPos.z, 1e-4)) * clusterParams.x + clusterParams.y), 0,
@@ -1211,7 +1028,11 @@ void main() {
             isSpot = clusterLights[li].dirType.w == 2.0;
         }
 
-        // Half vector, guarded (see the legacy loop for the NaN rationale)
+        // Half vector, guarded: where the light is directly behind the
+        // fragment along the view ray, V + L vanishes and normalize()
+        // returns garbage or NaN — and NaN * NdotL(0) stays NaN, painting
+        // black flecks around the light's vanishing point. The fallback N
+        // is harmless: NdotL is ~0 in that configuration anyway.
         vec3 Hraw = V + L;
         float hLen2 = dot(Hraw, Hraw);
         vec3 H = hLen2 > 1e-8 ? Hraw * inversesqrt(hLen2) : N;
@@ -1227,10 +1048,14 @@ void main() {
         float G = geometrySmith(N, V, L, roughnessMap);
         vec3 F = fresnelSchlick(max(dot(H, V), 0.0), F0);
 
-        // Thin-film interference (see the legacy loop)
+        // Apply thin-film interference for iridescent coatings (pilot visor style)
         if (filmThickness > 0.0) {
             vec3 iridescence = thinFilmInterference(filmThickness, NdotV, 1.5);
+            // Strong iridescent mirror effect
+            // Clamped: pow with a negative base (NdotV rounding above 1) is
+            // undefined in GLSL and yields NaN on this driver
             float fresnel = pow(clamp(1.0 - NdotV, 0.0, 1.0), 2.0);
+            // Replace F entirely with strong iridescent reflection
             F = iridescence * (0.6 + fresnel * 0.4);
         }
 
@@ -1241,14 +1066,20 @@ void main() {
         float denominator = 4.0 * NdotV * NdotL + 0.0001;
         vec3 specular = numerator / denominator * energyComp;
 
-        // Energy conservation (see the legacy loop)
+        // Energy conservation: diffuse and specular must not exceed 1.0
         vec3 kS = F;
         vec3 kD = vec3(1.0) - kS;
+        // Metals have no diffuse reflection; transmission replaces diffuse
+        // with the transmitted scene term added after the loop (KHR:
+        // mix(diffuse_brdf, specular_btdf, transmission) under specular)
         kD *= 1.0 - metallicMap;
         kD *= 1.0 - transmissionEff;
 
-        // Directional shadow: the light's own CSM slot (alpha-to-coverage
-        // surfaces skip the map -- see the legacy loop for the rationale)
+        // Directional shadow: the light's own CSM slot. Alpha-to-coverage
+        // surfaces (hair cards) cast shadows but never receive the shadow
+        // map: at map-texel scale (millimeters) card-on-card comparisons
+        // are pure acne, drawing card-shaped streaks through the hair.
+        // Their self-occlusion comes from the AO texture and SSAO instead.
         float shadow = 1.0;
         if (dirShadowSlot >= 0 && (alphaMasked == 0 || foliageShadows == 1)) {
             shadow = calculateShadow(dirShadowSlot, fragCascade, WorldPos, NdotL,
@@ -1264,7 +1095,10 @@ void main() {
             shadow *= parallaxSelfShadow(uv, parallaxHeight, normalize(transpose(TBN) * L));
         }
 
-        // Clearcoat lobe (see the legacy loop)
+        // Clearcoat: a second thin smooth dielectric GGX lobe (fixed F0 = 0.04,
+        // IOR 1.5) over the base, on the coat normal Nc. The base term is
+        // attenuated by the coat's Fresnel -- light the coat reflects never
+        // reaches it (Kelemen-Szirmay-Kalos / Filament layering).
         vec3 coatSpec = vec3(0.0);
         float coatAtten = 0.0;
         if (clearcoatEnabled > 0 && clearcoat > 0.0) {
@@ -1277,7 +1111,10 @@ void main() {
             coatAtten = clearcoat * Fc;
         }
 
-        // Sheen lobe (see the legacy loop)
+        // Sheen (KHR_materials_sheen): a retroreflective Charlie lobe for cloth
+        // (velvet / satin) -- no Fresnel, per glTF. Added over the base, which is
+        // scaled by (1 - max(sheenColor)) as a cheap directional-albedo
+        // approximation (a baked Charlie E-LUT is the follow-up).
         vec3 sheenSpec = vec3(0.0);
         float sheenScale = 1.0;
         if (sheenEnabled > 0 && maxComp(sheenColorFactor) > 0.0) {
@@ -1289,23 +1126,30 @@ void main() {
             sheenScale = 1.0 - maxComp(sheenColor);
         }
 
-        // Accumulate with the firefly clamp (see the legacy loop)
+        // Add this light's contribution with shadow. Firefly clamp: a
+        // sub-pixel GGX spike carries far more energy than the pixel
+        // legitimately integrates, aliasing into white sparkle across
+        // low-roughness normal-mapped surfaces (and before the fp16 clamp,
+        // overflowing to NaN). Highlights saturate the tonemap well below
+        // this cap, so only the aliasing energy is lost.
         Lo += min((((kD * albedoMap / PI + specular) * sheenScale + sheenSpec) * (1.0 - coatAtten) +
                    coatSpec) *
                       radiance * NdotL * shadow,
                   vec3(10.0));
 
-        // SSS separated diffuse tap (see the legacy loop)
+        // SSS: tap this light's Lambert diffuse into the separated skin-diffuse
+        // buffer (blurred later; specular stays in FragColor). Separate accumulate
+        // -- does not modify the Lo expression above.
         if (sss) {
             sssDiffuse += kD * albedoMap / PI * radiance * NdotL * shadow;
         }
 
-        // SSS back-light transmission (see the legacy loop)
+        // SSS back-light transmission: thin-region glow when the light is
+        // behind the surface. Guarded so non-skin / --no-sss is byte-identical.
         if (sss) {
             Lo += subsurfaceTransmission(N, L, V, albedoMap, subsurfaceColor, subsurface,
                                          lightCI * attenuation);
         }
-    }
     }
 
     // Ambient lighting with IBL
@@ -1445,8 +1289,8 @@ void main() {
 
     // Cluster occupancy heatmap: tint by this fragment's cluster light count
     // (blue 1 .. red >= 16; empty clusters stay untinted). Dead when
-    // clusterDebug 0 or in legacy mode.
-    if (clusterDebug > 0 && clusteredEnabled > 0) {
+    // clusterDebug 0.
+    if (clusterDebug > 0) {
         int dTileX = min(int(gl_FragCoord.x * clusterParams.z), CLUSTER_X - 1);
         int dTileY = min(int(gl_FragCoord.y * clusterParams.w), CLUSTER_Y - 1);
         int dSlice = clamp(int(log2(max(-ViewPos.z, 1e-4)) * clusterParams.x + clusterParams.y),

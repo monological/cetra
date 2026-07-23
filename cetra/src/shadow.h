@@ -116,8 +116,7 @@ void compute_cascade_light_space_matrix(vec3 direction, const CascadeCamera* cam
 void shadow_upload_cascade_uniforms(const ShadowSystem* system, UniformManager* u);
 
 // Shadow map binding for main render pass
-void bind_shadow_maps_to_program(ShadowSystem* system, ShaderProgram* program,
-                                 const int* shadow_light_indices);
+void bind_shadow_maps_to_program(ShadowSystem* system, ShaderProgram* program);
 
 // Main shadow rendering function
 void render_shadow_depth_pass(struct Engine* engine, struct Scene* scene);

@@ -100,8 +100,6 @@ typedef struct Engine {
     Ubo* clusters_ubo;                         // ClusterBlock      (UBO_BINDING_CLUSTERS)
     Ubo* cluster_indices_ubo;                  // ClusterIndexBlock (UBO_BINDING_CLUSTER_INDICES)
     struct LightClusterContext* light_cluster; // per-invocation cluster build scratch
-    bool clustered_lighting;                   // Shade via the clustered UBO path (--clustered);
-                                               // off = the legacy per-node lights[] upload
     bool cluster_debug;                        // Tint fragments by cluster light count (heatmap)
     bool scene_color_this_frame; // Resolve ran this frame; transmissive draws may sample
     bool normals_this_frame;     // Attachment 1 written this frame (PBR + consumer active)

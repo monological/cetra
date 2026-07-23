@@ -300,7 +300,6 @@ GLboolean reload_program_from_paths(ShaderProgram* program, const char* vert_pat
     program->uniforms = create_uniform_manager(program->id);
     if (program->uniforms) {
         uniform_cache_standard(program->uniforms);
-        uniform_cache_lights(program->uniforms, get_gl_max_lights());
     }
 
     // Block bindings are program state reset by re-linking; re-wire them
@@ -413,7 +412,6 @@ void setup_program_uniforms(ShaderProgram* program) {
     }
 
     uniform_cache_standard(program->uniforms);
-    uniform_cache_lights(program->uniforms, get_gl_max_lights());
     uniform_cache_shadows(program->uniforms, MAX_SHADOW_LIGHTS, SHADOW_CASCADES);
 
     // Clustered-forward blocks (spec 9.1): wire each named block to its global

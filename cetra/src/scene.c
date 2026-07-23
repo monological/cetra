@@ -47,11 +47,6 @@ Scene* create_scene() {
 
     scene->xyz_shader_program = NULL;
 
-    // Initialize light cache (will be allocated on first use)
-    scene->light_cache_pairs = NULL;
-    scene->light_cache_result = NULL;
-    scene->light_cache_capacity = 0;
-
     // Pre-allocate traversal stack (avoids per-frame malloc)
     scene->traversal_stack_capacity = 64;
     scene->traversal_stack = malloc(scene->traversal_stack_capacity * sizeof(SceneNode*));
@@ -148,14 +143,6 @@ void free_scene(Scene* scene) {
     // Free the root node and its subtree
     if (scene->root_node) {
         free_node(scene->root_node);
-    }
-
-    // Free light cache
-    if (scene->light_cache_pairs) {
-        free(scene->light_cache_pairs);
-    }
-    if (scene->light_cache_result) {
-        free(scene->light_cache_result);
     }
 
     // Free traversal stack
@@ -340,110 +327,6 @@ void scene_update_particle_systems(Scene* scene, float dt, float t) {
         return;
     for (size_t i = 0; i < scene->particle_system_count; i++)
         particle_system_update(scene->particle_systems[i], dt, t);
-}
-
-// Max-heap helpers for O(n log k) light selection
-// Heap is ordered by distance with maximum at root (index 0)
-static void _heap_sift_up(LightDistancePair* heap, size_t idx) {
-    while (idx > 0) {
-        size_t parent = (idx - 1) / 2;
-        if (heap[idx].distance > heap[parent].distance) {
-            LightDistancePair tmp = heap[idx];
-            heap[idx] = heap[parent];
-            heap[parent] = tmp;
-            idx = parent;
-        } else {
-            break;
-        }
-    }
-}
-
-static void _heap_sift_down(LightDistancePair* heap, size_t size) {
-    size_t idx = 0;
-    while (1) {
-        size_t left = 2 * idx + 1;
-        size_t right = 2 * idx + 2;
-        size_t largest = idx;
-
-        if (left < size && heap[left].distance > heap[largest].distance) {
-            largest = left;
-        }
-        if (right < size && heap[right].distance > heap[largest].distance) {
-            largest = right;
-        }
-
-        if (largest != idx) {
-            LightDistancePair tmp = heap[idx];
-            heap[idx] = heap[largest];
-            heap[largest] = tmp;
-            idx = largest;
-        } else {
-            break;
-        }
-    }
-}
-
-Light** get_closest_lights(Scene* scene, SceneNode* target_node, size_t max_lights,
-                           size_t* returned_light_count) {
-    if (!scene || scene->light_count == 0 || max_lights == 0) {
-        *returned_light_count = 0;
-        return NULL;
-    }
-
-    // Grow cache if needed (only reallocates when light count increases)
-    if (scene->light_count > scene->light_cache_capacity) {
-        free(scene->light_cache_pairs);
-        free(scene->light_cache_result);
-
-        scene->light_cache_pairs = malloc(scene->light_count * sizeof(LightDistancePair));
-        scene->light_cache_result = malloc(scene->light_count * sizeof(Light*));
-        scene->light_cache_capacity = scene->light_count;
-
-        if (!scene->light_cache_pairs || !scene->light_cache_result) {
-            free(scene->light_cache_pairs);
-            free(scene->light_cache_result);
-            scene->light_cache_pairs = NULL;
-            scene->light_cache_result = NULL;
-            scene->light_cache_capacity = 0;
-            *returned_light_count = 0;
-            return NULL;
-        }
-    }
-
-    // Extract target position from node's global transform
-    vec3 target_pos;
-    glm_vec3_copy((vec3){target_node->global_transform[3][0], target_node->global_transform[3][1],
-                         target_node->global_transform[3][2]},
-                  target_pos);
-
-    // Use max-heap for O(n log k) selection of k closest lights
-    // Heap stored in light_cache_pairs[0..heap_size-1], max distance at root
-    size_t heap_size = 0;
-
-    for (size_t i = 0; i < scene->light_count; i++) {
-        float distance = glm_vec3_distance(scene->lights[i]->global_position, target_pos);
-
-        if (heap_size < max_lights) {
-            // Heap not full, add this light
-            scene->light_cache_pairs[heap_size].light = scene->lights[i];
-            scene->light_cache_pairs[heap_size].distance = distance;
-            _heap_sift_up(scene->light_cache_pairs, heap_size);
-            heap_size++;
-        } else if (distance < scene->light_cache_pairs[0].distance) {
-            // New light is closer than the farthest in heap, replace root
-            scene->light_cache_pairs[0].light = scene->lights[i];
-            scene->light_cache_pairs[0].distance = distance;
-            _heap_sift_down(scene->light_cache_pairs, heap_size);
-        }
-    }
-
-    // Copy heap contents to result array
-    for (size_t i = 0; i < heap_size; i++) {
-        scene->light_cache_result[i] = scene->light_cache_pairs[i].light;
-    }
-
-    *returned_light_count = heap_size;
-    return scene->light_cache_result;
 }
 
 int add_material_to_scene(Scene* scene, Material* material) {

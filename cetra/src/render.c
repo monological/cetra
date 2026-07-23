@@ -89,70 +89,6 @@ void render_update_skinning_uniforms(ShaderProgram* program, const Mesh* mesh) {
     }
 }
 
-static void _update_program_light_uniforms(ShaderProgram* program, Light* light, size_t light_count,
-                                           size_t index) {
-    if (!program || !program->uniforms || !light)
-        return;
-
-    UniformManager* u = program->uniforms;
-
-    GLint loc;
-
-    loc = uniform_array_location(u, "lights", index, "position");
-    if (loc >= 0)
-        glUniform3fv(loc, 1, (const GLfloat*)&light->global_position);
-
-    loc = uniform_array_location(u, "lights", index, "direction");
-    if (loc >= 0)
-        glUniform3fv(loc, 1, (const GLfloat*)&light->direction);
-
-    loc = uniform_array_location(u, "lights", index, "color");
-    if (loc >= 0)
-        glUniform3fv(loc, 1, (const GLfloat*)&light->color);
-
-    loc = uniform_array_location(u, "lights", index, "specular");
-    if (loc >= 0)
-        glUniform3fv(loc, 1, (const GLfloat*)&light->specular);
-
-    loc = uniform_array_location(u, "lights", index, "ambient");
-    if (loc >= 0)
-        glUniform3fv(loc, 1, (const GLfloat*)&light->ambient);
-
-    loc = uniform_array_location(u, "lights", index, "intensity");
-    if (loc >= 0)
-        glUniform1f(loc, light->intensity);
-
-    loc = uniform_array_location(u, "lights", index, "constant");
-    if (loc >= 0)
-        glUniform1f(loc, light->constant);
-
-    loc = uniform_array_location(u, "lights", index, "linear");
-    if (loc >= 0)
-        glUniform1f(loc, light->linear);
-
-    loc = uniform_array_location(u, "lights", index, "quadratic");
-    if (loc >= 0)
-        glUniform1f(loc, light->quadratic);
-
-    loc = uniform_array_location(u, "lights", index, "cutOff");
-    if (loc >= 0)
-        glUniform1f(loc, light->cutOff);
-
-    loc = uniform_array_location(u, "lights", index, "outerCutOff");
-    if (loc >= 0)
-        glUniform1f(loc, light->outerCutOff);
-
-    loc = uniform_array_location(u, "lights", index, "type");
-    if (loc >= 0)
-        glUniform1i(loc, light->type);
-
-    loc = uniform_array_location(u, "lights", index, "size");
-    if (loc >= 0)
-        glUniform2f(loc, light->size[0], light->size[1]);
-
-    uniform_set_int(u, "numLights", (int)light_count);
-}
-
 // `a2c_capable` is whether the current target has MSAA samples for
 // alpha-to-coverage to dither into. It gates only the coverage path -- whether
 // the material is masked at all is uploaded separately, because the shadow and
@@ -295,7 +231,6 @@ static void _update_camera_uniforms(ShaderProgram* program, Camera* camera) {
 
 static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Camera* camera,
                          mat4 view, mat4 projection, RenderMode render_mode,
-                         Light** closest_lights, size_t returned_light_count,
                          GLuint* current_program, Material** current_material,
                          const Frustum* frustum, bool alpha_pass, bool oit_accumulate) {
 
@@ -400,7 +335,6 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
             uniform_set_int(u, "sheenEnabled", engine->sheen_enabled ? 1 : 0);
             uniform_set_int(u, "parallaxEnabled", engine->parallax_enabled ? 1 : 0);
             uniform_set_int(u, "sssEnabled", engine->sss_enabled ? 1 : 0);
-            uniform_set_int(u, "clusteredEnabled", engine->clustered_lighting ? 1 : 0);
             uniform_set_int(u, "clusterDebug", engine->cluster_debug ? 1 : 0);
             uniform_set_int(u, "oitPass", oit_accumulate ? 1 : 0);
             // Refraction source: valid only in the late pass, after the
@@ -414,19 +348,13 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
             }
             _update_camera_uniforms(program, camera);
 
-            // Update lights once per program switch for this node
-            for (size_t j = 0; j < returned_light_count; ++j) {
-                _update_program_light_uniforms(program, closest_lights[j], returned_light_count, j);
-            }
+            // Light data arrives via the clustered UBOs (uploaded once per
+            // frame in render_current_scene) -- no per-node upload.
 
             // Bind shadow maps (always bind texture to satisfy sampler2DArray)
             if (scene && scene->shadow_system) {
                 if (scene->shadow_system->active_count > 0 && scene->shadow_system->enabled) {
-                    int shadow_indices[MAX_SHADOW_LIGHTS] = {-1, -1, -1};
-                    for (size_t k = 0; k < returned_light_count && k < MAX_SHADOW_LIGHTS; ++k) {
-                        shadow_indices[k] = closest_lights[k]->shadow_map_index;
-                    }
-                    bind_shadow_maps_to_program(scene->shadow_system, program, shadow_indices);
+                    bind_shadow_maps_to_program(scene->shadow_system, program);
                 } else {
                     // No active shadows, but still bind texture for sampler2DArray
                     glActiveTexture(GL_TEXTURE0 + SHADOW_MAP_TEXTURE_UNIT);
@@ -600,7 +528,6 @@ static void _render_scene_iterative(const Engine* engine, Scene* scene, SceneNod
     }
 
     size_t stack_size = 0;
-    size_t max_lights = get_gl_max_lights();
 
     // Push root node
     scene->traversal_stack[stack_size++] = root;
@@ -609,14 +536,10 @@ static void _render_scene_iterative(const Engine* engine, Scene* scene, SceneNod
         // Pop from stack
         SceneNode* node = scene->traversal_stack[--stack_size];
 
-        // Get closest lights for this node
-        size_t returned_light_count;
-        Light** closest_lights = get_closest_lights(scene, node, max_lights, &returned_light_count);
-
-        // Render this node's meshes
-        _render_node(engine, scene, node, camera, view, projection, render_mode,
-                     closest_lights, returned_light_count, current_program, current_material,
-                     frustum, alpha_pass, oit_accumulate);
+        // Render this node's meshes (lights arrive via the clustered UBOs,
+        // uploaded once per frame -- no per-node selection)
+        _render_node(engine, scene, node, camera, view, projection, render_mode, current_program,
+                     current_material, frustum, alpha_pass, oit_accumulate);
 
         // Render xyz axes if enabled (opaque pass only, to avoid duplicates)
         if (!alpha_pass && node->show_xyz && node->xyz_shader_program) {
@@ -691,8 +614,7 @@ void render_current_scene(Engine* engine) {
     // Clustered forward (spec 9.1): rebuild the light grid + UBOs for THIS
     // invocation's camera and viewport -- probe-capture faces re-enter here
     // with their own view/projection, so each face gets a correct grid.
-    // Inert while the flag is off.
-    if (engine->clustered_lighting && engine->light_cluster) {
+    if (engine->light_cluster) {
         GLint cluster_viewport[4];
         glGetIntegerv(GL_VIEWPORT, cluster_viewport);
         light_cluster_build_and_upload(engine->light_cluster, engine, scene, *view, *projection,

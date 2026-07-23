@@ -343,8 +343,7 @@ void shadow_upload_cascade_uniforms(const ShadowSystem* system, UniformManager* 
         glUniform4fv(loc, layers, (const GLfloat*)system->cascade_params);
 }
 
-void bind_shadow_maps_to_program(ShadowSystem* system, ShaderProgram* program,
-                                 const int* shadow_light_indices) {
+void bind_shadow_maps_to_program(ShadowSystem* system, ShaderProgram* program) {
     if (!system || !program || !program->uniforms)
         return;
 
@@ -380,12 +379,8 @@ void bind_shadow_maps_to_program(ShadowSystem* system, ShaderProgram* program,
 
     uniform_set_int(u, "csmDebug", system->csm_debug ? 1 : 0);
     shadow_upload_cascade_uniforms(system, u);
-
-    for (size_t i = 0; i < system->active_count && i < MAX_SHADOW_LIGHTS; i++) {
-        char name[64];
-        snprintf(name, sizeof(name), "shadowLightIndex[%zu]", i);
-        uniform_set_int(u, name, shadow_light_indices ? shadow_light_indices[i] : (int)i);
-    }
+    // (pbr_frag reads each light's CSM slot from its DirLight UBO entry; the
+    // old shadowLightIndex[] loop-order indirection is gone)
 }
 
 static void _render_shadow_node(SceneNode* node, ShaderProgram* program, GLuint* current_program) {
@@ -714,11 +709,6 @@ _Static_assert(POSTFX_FOG_MAX_LIGHTS == MAX_SHADOW_LIGHTS,
 _Static_assert(POSTFX_FOG_CASCADES == SHADOW_CASCADES,
                "postfx cascade mirror must match the shadow cascade count");
 _Static_assert(SHADOW_CASCADES <= 4, "cascadeSplits packs the split depths into a vec4");
-// 29 = pre-CSM overhead minus the old lightSpaceMatrix[3]; the CSM arrays
-// add slots*cascades mat4+vec4 layers plus splits and the count/debug ints
-_Static_assert(USED_UNIFORM_COMPONENTS >=
-                   29 + MAX_SHADOW_LIGHTS * SHADOW_CASCADES * (16 + 4) + 4 + 2,
-               "USED_UNIFORM_COMPONENTS is stale for the CSM array shapes");
 
 void shadow_publish_to_postfx(const Scene* scene, PostFX* fx) {
     if (!fx)

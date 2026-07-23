@@ -16,7 +16,6 @@ typedef struct UniformBinding {
 typedef struct UniformManager {
     UniformBinding* cache;
     GLuint program_id;
-    size_t max_lights;
 } UniformManager;
 
 UniformManager* create_uniform_manager(GLuint program_id);
@@ -24,15 +23,10 @@ void free_uniform_manager(UniformManager* manager);
 
 // Cache uniforms at setup time
 void uniform_cache_standard(UniformManager* mgr);
-void uniform_cache_lights(UniformManager* mgr, size_t max_lights);
 void uniform_cache_shadows(UniformManager* mgr, size_t max_shadow_lights, size_t max_cascades);
 
 // Get cached location (caches on first call if not found)
 GLint uniform_location(UniformManager* mgr, const char* name);
-
-// For array uniforms: lights[index].field
-GLint uniform_array_location(UniformManager* mgr, const char* array, size_t index,
-                             const char* field);
 
 // Setters
 void uniform_set_int(UniformManager* mgr, const char* name, int value);

@@ -16,7 +16,6 @@ UniformManager* create_uniform_manager(GLuint program_id) {
     }
     mgr->cache = NULL;
     mgr->program_id = program_id;
-    mgr->max_lights = 0;
     return mgr;
 }
 
@@ -67,13 +66,6 @@ GLint uniform_location(UniformManager* mgr, const char* name) {
     return cache_uniform(mgr, name);
 }
 
-GLint uniform_array_location(UniformManager* mgr, const char* array, size_t index,
-                             const char* field) {
-    char name[128];
-    snprintf(name, sizeof(name), "%s[%zu].%s", array, index, field);
-    return uniform_location(mgr, name);
-}
-
 void uniform_cache_standard(UniformManager* mgr) {
     if (!mgr)
         return;
@@ -120,31 +112,7 @@ void uniform_cache_standard(UniformManager* mgr) {
     uniform_location(mgr, "sheenTexExists");
 
     // Misc
-    uniform_location(mgr, "numLights");
     uniform_location(mgr, "lineWidth");
-}
-
-void uniform_cache_lights(UniformManager* mgr, size_t max_lights) {
-    if (!mgr)
-        return;
-
-    mgr->max_lights = max_lights;
-
-    for (size_t i = 0; i < max_lights; i++) {
-        uniform_array_location(mgr, "lights", i, "position");
-        uniform_array_location(mgr, "lights", i, "direction");
-        uniform_array_location(mgr, "lights", i, "color");
-        uniform_array_location(mgr, "lights", i, "specular");
-        uniform_array_location(mgr, "lights", i, "ambient");
-        uniform_array_location(mgr, "lights", i, "intensity");
-        uniform_array_location(mgr, "lights", i, "constant");
-        uniform_array_location(mgr, "lights", i, "linear");
-        uniform_array_location(mgr, "lights", i, "quadratic");
-        uniform_array_location(mgr, "lights", i, "cutOff");
-        uniform_array_location(mgr, "lights", i, "outerCutOff");
-        uniform_array_location(mgr, "lights", i, "type");
-        uniform_array_location(mgr, "lights", i, "size");
-    }
 }
 
 // max_shadow_lights is the caster slot count; the per-layer arrays

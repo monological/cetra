@@ -152,7 +152,7 @@ static void billboard_draw(ParticleRenderer* r, const ParticleInstanceView* view
         if (sun)
             uniform_set_vec3(u, "uSunColor", sun->color);
         if (ctx->scene->shadow_system)
-            bind_shadow_maps_to_program(ctx->scene->shadow_system, b->program, NULL);
+            bind_shadow_maps_to_program(ctx->scene->shadow_system, b->program);
     }
 
     // Soft particles (M4): bind the resolved scene depth on a free unit and let

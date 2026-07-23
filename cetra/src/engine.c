@@ -154,7 +154,6 @@ Engine* create_engine(const char* window_title, int width, int height) {
     engine->clusters_ubo = NULL;
     engine->cluster_indices_ubo = NULL;
     engine->light_cluster = NULL;
-    engine->clustered_lighting = false;
     engine->cluster_debug = false;
     engine->scene_color_this_frame = false;
     engine->normals_this_frame = false;
@@ -1481,9 +1480,7 @@ static void _engine_gui_panel(Engine* engine) {
         igSliderFloat("Shadow Strength", &scene->shadow_catcher_strength, 0.0f, 1.0f, "%.2f", 0);
         _end_effect_group();
 
-        _begin_effect_group("Clustered Lighting", &engine->clustered_lighting);
         igCheckbox("Cluster Heatmap", &engine->cluster_debug);
-        _end_effect_group();
 
         // Attached probes always carry a capture: the toggle switches
         // consumption, it does not recapture
