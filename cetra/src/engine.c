@@ -1401,6 +1401,9 @@ static void _engine_gui_panel(Engine* engine) {
                 if (scene->lights[i])
                     scene->lights[i]->intensity = light_intensity;
         }
+        // Clustered-forward occupancy: tint each fragment by how many lights
+        // its cluster carries (blue 1 .. red >= 16)
+        igCheckbox("Cluster Heatmap", &engine->cluster_debug);
     }
 
     if (scene && scene->render_skybox && scene->ibl &&
@@ -1467,8 +1470,6 @@ static void _engine_gui_panel(Engine* engine) {
         _begin_effect_group("Shadow Catcher", &scene->shadow_catcher);
         igSliderFloat("Shadow Strength", &scene->shadow_catcher_strength, 0.0f, 1.0f, "%.2f", 0);
         _end_effect_group();
-
-        igCheckbox("Cluster Heatmap", &engine->cluster_debug);
 
         // Attached probes always carry a capture: the toggle switches
         // consumption, it does not recapture
