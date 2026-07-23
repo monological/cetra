@@ -1,8 +1,9 @@
-// This target compiles with -D_POSIX_C_SOURCE=200809L (cetra/CMakeLists.txt,
-// added for the JoltC build). On macOS that pins __DARWIN_C_LEVEL to the POSIX
-// level, which hides the Darwin extensions get_cpu_cores needs below -- both
-// the BSD types <sys/sysctl.h> is declared in terms of and _SC_NPROCESSORS_ONLN.
-// Ask for them back before any system header is pulled in.
+// _DARWIN_C_SOURCE exposes the Darwin extensions get_cpu_cores needs below --
+// the BSD types <sys/sysctl.h> is declared in terms of, and _SC_NPROCESSORS_ONLN.
+// The build no longer defines _POSIX_C_SOURCE on macOS (it is Linux-only, see
+// cetra/CMakeLists.txt), so __DARWIN_C_LEVEL already defaults to full and this
+// is defensive: it keeps the file correct if that ever changes. Must precede any
+// system header.
 #if defined(__APPLE__)
 #define _DARWIN_C_SOURCE
 #endif

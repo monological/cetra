@@ -40,8 +40,9 @@ if(APPLE)
     list(APPEND CMAKE_PREFIX_PATH ${HOMEBREW_PREFIX})
 endif()
 
-# Note: _POSIX_C_SOURCE is set per-target in cetra/CMakeLists.txt
-# Setting it globally breaks JoltC build (alloca not declared)
+# Note: _POSIX_C_SOURCE is set on the cetra target, Linux-only, in
+# cetra/CMakeLists.txt. Setting it globally breaks the JoltC build (alloca not
+# declared), and on macOS it hides Darwin extensions.
 
 # Warning/diagnostic flags, carried on an interface target so the library and
 # every app share one definition.

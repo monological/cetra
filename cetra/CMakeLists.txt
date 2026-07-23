@@ -89,7 +89,11 @@ target_include_directories(cetra
 # <GLFW/glfw3.h> and <cglm/cglm.h>, so consumers need these include paths.
 target_link_libraries(cetra PUBLIC cetra_deps)
 target_link_libraries(cetra PRIVATE cetra_warnings)
-target_compile_definitions(cetra PRIVATE _POSIX_C_SOURCE=200809L)
+# Linux only. glibc needs it for the POSIX APIs used here; on macOS it pins
+# __DARWIN_C_LEVEL down and hides Darwin extensions (which is why util.c has to
+# re-enable _DARWIN_C_SOURCE), and on Windows it is meaningless.
+target_compile_definitions(cetra PRIVATE
+    $<$<PLATFORM_ID:Linux>:_POSIX_C_SOURCE=200809L>)
 
 # Link JoltC physics library if enabled
 if(CETRA_BUILD_JOLTC)
