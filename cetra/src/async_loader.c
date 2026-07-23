@@ -74,7 +74,7 @@ static bool inflight_join_or_claim(AsyncLoader* loader, TexturePool* pool, const
                                    void* user_data) {
     bool joined = false;
 
-    pthread_mutex_lock(&loader->inflight_mutex);
+    cetra_mutex_lock(&loader->inflight_mutex);
 
     InFlightLoad* entry = loader->inflight;
     while (entry && (entry->pool != pool || strcmp(entry->key, key) != 0)) {
@@ -117,7 +117,7 @@ static bool inflight_join_or_claim(AsyncLoader* loader, TexturePool* pool, const
         }
     }
 
-    pthread_mutex_unlock(&loader->inflight_mutex);
+    cetra_mutex_unlock(&loader->inflight_mutex);
     return joined;
 }
 
@@ -137,7 +137,7 @@ static TextureWaiter* inflight_release(AsyncLoader* loader, const TexturePool* p
 
     TextureWaiter* waiters = NULL;
 
-    pthread_mutex_lock(&loader->inflight_mutex);
+    cetra_mutex_lock(&loader->inflight_mutex);
     InFlightLoad** link = &loader->inflight;
     while (*link) {
         if ((*link)->pool == pool && strcmp((*link)->key, key) == 0) {
@@ -150,7 +150,7 @@ static TextureWaiter* inflight_release(AsyncLoader* loader, const TexturePool* p
         }
         link = &(*link)->next;
     }
-    pthread_mutex_unlock(&loader->inflight_mutex);
+    cetra_mutex_unlock(&loader->inflight_mutex);
 
     return waiters;
 }
@@ -183,15 +183,15 @@ static void async_loader_enqueue(AsyncLoader* loader, TextureLoadRequest* req) {
 
     atomic_fetch_add(&loader->pending_count, 1);
 
-    pthread_mutex_lock(&loader->work_mutex);
+    cetra_mutex_lock(&loader->work_mutex);
     if (loader->work_tail) {
         loader->work_tail->next = req;
     } else {
         loader->work_head = req;
     }
     loader->work_tail = req;
-    pthread_cond_signal(&loader->work_cond);
-    pthread_mutex_unlock(&loader->work_mutex);
+    cetra_cond_signal(&loader->work_cond);
+    cetra_mutex_unlock(&loader->work_mutex);
 }
 
 /*
@@ -210,9 +210,9 @@ static void* worker_thread_func(void* arg) {
         TextureLoadRequest* req = NULL;
 
         // Wait for work
-        pthread_mutex_lock(&loader->work_mutex);
+        cetra_mutex_lock(&loader->work_mutex);
         while (!loader->work_head && !atomic_load(&loader->shutdown)) {
-            pthread_cond_wait(&loader->work_cond, &loader->work_mutex);
+            cetra_cond_wait(&loader->work_cond, &loader->work_mutex);
         }
 
         // Pop from work queue
@@ -223,7 +223,7 @@ static void* worker_thread_func(void* arg) {
                 loader->work_tail = NULL;
             }
         }
-        pthread_mutex_unlock(&loader->work_mutex);
+        cetra_mutex_unlock(&loader->work_mutex);
 
         if (!req) {
             continue;
@@ -336,14 +336,14 @@ static void* worker_thread_func(void* arg) {
     enqueue_result:
         // Add to completion queue
         result->next = NULL;
-        pthread_mutex_lock(&loader->complete_mutex);
+        cetra_mutex_lock(&loader->complete_mutex);
         if (loader->complete_tail) {
             loader->complete_tail->next = result;
         } else {
             loader->complete_head = result;
         }
         loader->complete_tail = result;
-        pthread_mutex_unlock(&loader->complete_mutex);
+        cetra_mutex_unlock(&loader->complete_mutex);
 
         free(req->filepath);
         free(req->embedded_data);
@@ -397,51 +397,51 @@ AsyncLoader* create_async_loader(void) {
     loader->complete_tail = NULL;
     loader->inflight = NULL;
 
-    if (pthread_mutex_init(&loader->work_mutex, NULL) != 0) {
+    if (!cetra_mutex_init(&loader->work_mutex)) {
         log_error("Failed to init work_mutex");
         free(loader);
         return NULL;
     }
 
-    if (pthread_cond_init(&loader->work_cond, NULL) != 0) {
+    if (!cetra_cond_init(&loader->work_cond)) {
         log_error("Failed to init work_cond");
-        pthread_mutex_destroy(&loader->work_mutex);
+        cetra_mutex_destroy(&loader->work_mutex);
         free(loader);
         return NULL;
     }
 
-    if (pthread_mutex_init(&loader->complete_mutex, NULL) != 0) {
+    if (!cetra_mutex_init(&loader->complete_mutex)) {
         log_error("Failed to init complete_mutex");
-        pthread_cond_destroy(&loader->work_cond);
-        pthread_mutex_destroy(&loader->work_mutex);
+        cetra_cond_destroy(&loader->work_cond);
+        cetra_mutex_destroy(&loader->work_mutex);
         free(loader);
         return NULL;
     }
 
-    if (pthread_mutex_init(&loader->inflight_mutex, NULL) != 0) {
+    if (!cetra_mutex_init(&loader->inflight_mutex)) {
         log_error("Failed to init inflight_mutex");
-        pthread_mutex_destroy(&loader->complete_mutex);
-        pthread_cond_destroy(&loader->work_cond);
-        pthread_mutex_destroy(&loader->work_mutex);
+        cetra_mutex_destroy(&loader->complete_mutex);
+        cetra_cond_destroy(&loader->work_cond);
+        cetra_mutex_destroy(&loader->work_mutex);
         free(loader);
         return NULL;
     }
 
     loader->worker_count = async_loader_worker_count();
-    loader->workers = calloc((size_t)loader->worker_count, sizeof(pthread_t));
+    loader->workers = calloc((size_t)loader->worker_count, sizeof(cetra_thread_t));
     if (!loader->workers) {
         log_error("Failed to allocate %d worker threads", loader->worker_count);
-        pthread_mutex_destroy(&loader->inflight_mutex);
-        pthread_mutex_destroy(&loader->complete_mutex);
-        pthread_cond_destroy(&loader->work_cond);
-        pthread_mutex_destroy(&loader->work_mutex);
+        cetra_mutex_destroy(&loader->inflight_mutex);
+        cetra_mutex_destroy(&loader->complete_mutex);
+        cetra_cond_destroy(&loader->work_cond);
+        cetra_mutex_destroy(&loader->work_mutex);
         free(loader);
         return NULL;
     }
 
     // Start worker threads
     for (int i = 0; i < loader->worker_count; i++) {
-        if (pthread_create(&loader->workers[i], NULL, worker_thread_func, loader) != 0) {
+        if (!cetra_thread_create(&loader->workers[i], worker_thread_func, loader)) {
             log_error("Failed to create worker thread %d", i);
             // Carry on with the workers that did start -- a smaller pool only
             // decodes more slowly, whereas failing the loader fails the load.
@@ -451,15 +451,15 @@ AsyncLoader* create_async_loader(void) {
             }
             // Shutdown already-created threads
             atomic_store(&loader->shutdown, true);
-            pthread_cond_broadcast(&loader->work_cond);
+            cetra_cond_broadcast(&loader->work_cond);
             for (int j = 0; j < i; j++) {
-                pthread_join(loader->workers[j], NULL);
+                cetra_thread_join(loader->workers[j]);
             }
             free(loader->workers);
-            pthread_mutex_destroy(&loader->inflight_mutex);
-            pthread_mutex_destroy(&loader->complete_mutex);
-            pthread_cond_destroy(&loader->work_cond);
-            pthread_mutex_destroy(&loader->work_mutex);
+            cetra_mutex_destroy(&loader->inflight_mutex);
+            cetra_mutex_destroy(&loader->complete_mutex);
+            cetra_cond_destroy(&loader->work_cond);
+            cetra_mutex_destroy(&loader->work_mutex);
             free(loader);
             return NULL;
         }
@@ -482,13 +482,13 @@ void free_async_loader(AsyncLoader* loader) {
     atomic_store(&loader->shutdown, true);
 
     // Wake all workers
-    pthread_mutex_lock(&loader->work_mutex);
-    pthread_cond_broadcast(&loader->work_cond);
-    pthread_mutex_unlock(&loader->work_mutex);
+    cetra_mutex_lock(&loader->work_mutex);
+    cetra_cond_broadcast(&loader->work_cond);
+    cetra_mutex_unlock(&loader->work_mutex);
 
     // Join all workers
     for (int i = 0; i < loader->worker_count; i++) {
-        pthread_join(loader->workers[i], NULL);
+        cetra_thread_join(loader->workers[i]);
     }
     free(loader->workers);
 
@@ -530,10 +530,10 @@ void free_async_loader(AsyncLoader* loader) {
         entry = next_entry;
     }
 
-    pthread_mutex_destroy(&loader->inflight_mutex);
-    pthread_mutex_destroy(&loader->complete_mutex);
-    pthread_cond_destroy(&loader->work_cond);
-    pthread_mutex_destroy(&loader->work_mutex);
+    cetra_mutex_destroy(&loader->inflight_mutex);
+    cetra_mutex_destroy(&loader->complete_mutex);
+    cetra_cond_destroy(&loader->work_cond);
+    cetra_mutex_destroy(&loader->work_mutex);
 
     free(loader);
     log_info("Freed async loader");
@@ -657,7 +657,7 @@ size_t async_loader_process_pending(AsyncLoader* loader, TexturePool* pool, size
         // Pop from completion queue
         TextureLoadResult* result = NULL;
 
-        pthread_mutex_lock(&loader->complete_mutex);
+        cetra_mutex_lock(&loader->complete_mutex);
         if (loader->complete_head) {
             result = loader->complete_head;
             loader->complete_head = result->next;
@@ -665,7 +665,7 @@ size_t async_loader_process_pending(AsyncLoader* loader, TexturePool* pool, size
                 loader->complete_tail = NULL;
             }
         }
-        pthread_mutex_unlock(&loader->complete_mutex);
+        cetra_mutex_unlock(&loader->complete_mutex);
 
         if (!result) {
             break;

@@ -1,8 +1,8 @@
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 
 #include "probe.h"
+#include "thread.h" // cetra_sleep_ms
 #include "engine.h"
 #include "mask_array.h"
 #include "render.h"
@@ -91,8 +91,7 @@ int reflection_probe_capture(ReflectionProbe* probe, struct Engine* engine, Scen
     if (engine->async_loader) {
         while (async_loader_is_busy(engine->async_loader)) {
             if (async_loader_process_pending(engine->async_loader, scene->tex_pool, 64) == 0) {
-                struct timespec ms = {0, 1000000};
-                nanosleep(&ms, NULL);
+                cetra_sleep_ms(1);
             }
         }
     }
