@@ -10,7 +10,11 @@
  * on the command line (to stderr).
  */
 
+#ifdef _WIN32
+#include <windows.h> /* GetConsoleScreenBufferInfo */
+#else
 #include <termcap.h> /* tgetent, tgetnum */
+#endif
 #include <assert.h>
 #include <limits.h>
 #include "progressbar.h"
@@ -109,12 +113,21 @@ static int progressbar_max(int x, int y) {
 }
 
 static unsigned int get_screen_width(void) {
+#ifdef _WIN32
+    CONSOLE_SCREEN_BUFFER_INFO csbi;
+    if (GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi)) {
+        return (unsigned int)(csbi.srWindow.Right - csbi.srWindow.Left + 1);
+    } else {
+        return DEFAULT_SCREEN_WIDTH;
+    }
+#else
     char termbuf[2048];
     if (tgetent(termbuf, getenv("TERM")) >= 0) {
         return tgetnum("co") /* -2 */;
     } else {
         return DEFAULT_SCREEN_WIDTH;
     }
+#endif
 }
 
 static int progressbar_bar_width(int screen_width, int label_length) {
