@@ -11,12 +11,13 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdbool.h>
+#include <math.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <unistd.h>
-#include <stdbool.h>
-#include <unistd.h>
-#include <math.h>
+#if !defined(_WIN32)
+#include <unistd.h> // sysconf (Linux get_cpu_cores)
+#endif
 
 // Querying the CPU count has no portable API; each platform needs its own
 // header. Kept here so this is the one place in the engine that has to know.
@@ -198,6 +199,13 @@ char* read_entire_file(const char* path, long* out_len) {
 }
 
 bool path_exists(const char* path) {
+#if defined(_WIN32)
+    // MSVC has neither lstat nor S_ISLNK. GetFileAttributes reports existence
+    // directly; the symlink/reparse-point distinction the POSIX path draws is
+    // not needed here (callers only ask "is there a file"). Narrow ASCII asset
+    // paths only -- wide-char paths are a later refinement.
+    return GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES;
+#else
     struct stat statbuf;
 
     // Use lstat to get info about the link itself
@@ -216,6 +224,7 @@ bool path_exists(const char* path) {
     }
 
     return true;
+#endif
 }
 
 /**

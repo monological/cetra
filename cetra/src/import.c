@@ -1,5 +1,5 @@
 #include <string.h>
-#include <strings.h>
+#include "compat.h" // strcasecmp/strncasecmp
 #include <stdio.h>
 #include <stdlib.h>
 #include <assert.h>

@@ -1212,7 +1212,7 @@ void set_engine_screenshot_path(Engine* engine, const char* path) {
         engine->screenshot_path = NULL;
     }
     if (path) {
-        engine->screenshot_path = strdup(path);
+        engine->screenshot_path = safe_strdup(path);
     }
 }
 

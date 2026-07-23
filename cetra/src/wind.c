@@ -2,6 +2,7 @@
 #include <string.h>
 
 #include "wind.h"
+#include "util.h" // safe_strdup
 
 Wind* create_wind(const char* name) {
     Wind* wind = malloc(sizeof(Wind));
@@ -30,7 +31,7 @@ void set_wind_name(Wind* wind, const char* name) {
     if (!wind)
         return;
     free(wind->name);
-    wind->name = name ? strdup(name) : NULL;
+    wind->name = safe_strdup(name);
 }
 
 void wind_upload_to_program(const Wind* wind, UniformManager* u) {

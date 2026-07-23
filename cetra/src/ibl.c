@@ -299,7 +299,7 @@ int load_hdr_environment(IBLResources* ibl, const char* hdr_path) {
 
     ibl->hdr_width = width;
     ibl->hdr_height = height;
-    ibl->hdr_filepath = strdup(hdr_path);
+    ibl->hdr_filepath = safe_strdup(hdr_path);
     ibl->initialized = true;
 
     return 0;
