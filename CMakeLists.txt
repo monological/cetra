@@ -146,16 +146,19 @@ if(APPLE)
 endif()
 
 target_compile_definitions(cetra_deps INTERFACE
-    $<$<PLATFORM_ID:Darwin>:GL_SILENCE_DEPRECATION>
-    # Windows/MSVC: expose M_PI from <math.h> (used in ~6 files); silence the
-    # deprecation of POSIX-ish names like strdup; and slim <windows.h> down,
-    # including NOMINMAX so its min/max macros don't collide with C++ std::min/max
-    # in the Jolt and ImGui translation units.
-    $<$<PLATFORM_ID:Windows>:_USE_MATH_DEFINES>
-    $<$<PLATFORM_ID:Windows>:_CRT_SECURE_NO_WARNINGS>
-    $<$<PLATFORM_ID:Windows>:_CRT_NONSTDC_NO_WARNINGS>
-    $<$<PLATFORM_ID:Windows>:WIN32_LEAN_AND_MEAN>
-    $<$<PLATFORM_ID:Windows>:NOMINMAX>)
+    $<$<PLATFORM_ID:Darwin>:GL_SILENCE_DEPRECATION>)
+
+if(WIN32)
+    # Expose M_PI from <math.h> (used in ~6 files); silence the deprecation of
+    # POSIX-ish names like strdup; slim <windows.h>, with NOMINMAX so its min/max
+    # macros don't collide with C++ std::min/max in the Jolt/ImGui units.
+    target_compile_definitions(cetra_deps INTERFACE
+        _USE_MATH_DEFINES
+        _CRT_SECURE_NO_WARNINGS
+        _CRT_NONSTDC_NO_WARNINGS
+        WIN32_LEAN_AND_MEAN
+        NOMINMAX)
+endif()
 
 # Jolt defaults that only bite under MSVC; force them before its add_subdirectory
 # so the cached values win in its scope. All inert on macOS/Linux.
