@@ -22,10 +22,6 @@ if (-not $vs) { throw 'Visual Studio Build Tools with the C++ x64 toolset not fo
 Import-Module (Join-Path $vs 'Common7\Tools\Microsoft.VisualStudio.DevShell.dll')
 Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation -DevCmdArguments '-arch=x64 -host_arch=x64' | Out-Null
 
-# Use the standalone bootstrapped vcpkg, not the older VS-bundled one that
-# Enter-VsDevShell points VCPKG_ROOT at.
-$env:VCPKG_ROOT = 'C:\vcpkg'
-
 $preset = if ($Release) { 'windows-release' } else { 'windows-debug' }
 $joltc  = if ($NoJoltc) { 'OFF' } else { 'ON' }
 

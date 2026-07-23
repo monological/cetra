@@ -55,42 +55,57 @@ esac
 CETRA_LINUX_SSH="${CETRA_LINUX_SSH:-cetra-linux}"
 CETRA_WIN_SSH="${CETRA_WIN_SSH:-cetra-win}"
 
+# Paths kept out of the working-tree sync: build output, VCS, the big runtime
+# asset dir, and assimp's 200MB+ vendored test-model corpus (the build never
+# uses it -- ASSIMP_BUILD_TESTS is OFF).
+SYNC_EXCLUDE_DIRS=(out .git my_models cetra/src/ext/assimp/test)
+
+# This invocation's build knobs as a flag string in the target's own spelling
+# ($1 release, $2 clean, $3 no-joltc) -- so the two remote arms don't each
+# re-derive the same three predicates.
+remote_flags() {
+    local f=""
+    [[ "$BUILD_TYPE" == "release" ]] && f+=" $1"
+    [[ $CLEAN -eq 1 ]] && f+=" $2"
+    [[ "$JOLTC" == "OFF" ]] && f+=" $3"
+    printf '%s' "$f"
+}
+
 # ---- Remote dispatch (target differs from this host) ----
 if [[ "$TARGET" != "$HOST_PLATFORM" ]]; then
     case "$TARGET" in
         linux)
             # rsync: delta transfer + --delete, both ends have rsync.
+            EX=(); for d in "${SYNC_EXCLUDE_DIRS[@]}"; do EX+=(--exclude="/$d"); done
             echo "Syncing working tree -> $CETRA_LINUX_SSH:~/cetra ..."
-            rsync -az --delete -e ssh \
-                --exclude='/out' --exclude='/.git' --exclude='/my_models' \
-                --exclude='.DS_Store' --exclude='._*' \
+            rsync -az --delete -e ssh "${EX[@]}" --exclude='.DS_Store' --exclude='._*' \
                 ./ "$CETRA_LINUX_SSH:cetra/"
-            RFLAGS=""
-            [[ "$BUILD_TYPE" == "release" ]] && RFLAGS="$RFLAGS -r"
-            [[ $CLEAN -eq 1 ]] && RFLAGS="$RFLAGS -c"
-            [[ "$JOLTC" == "OFF" ]] && RFLAGS="$RFLAGS --no-joltc"
             echo "Building on $CETRA_LINUX_SSH (linux-$BUILD_TYPE)..."
-            exec ssh "$CETRA_LINUX_SSH" "cd ~/cetra && ./build.sh$RFLAGS"
+            exec ssh "$CETRA_LINUX_SSH" "cd ~/cetra && ./build.sh$(remote_flags -r -c --no-joltc)"
             ;;
         windows)
             # Windows has no rsync; a tar archive over scp preserves mtimes on
             # extract, so rebuilds stay incremental (only the transfer is full).
             DEST="C:/Users/dev/cetra"
+            WIN_TGZ="C:/Users/dev/cetra-sync.tgz"
             TB="${TMPDIR:-/tmp}/cetra-sync-$$.tgz"
+            # COPYFILE_DISABLE stops macOS bsdtar emitting AppleDouble (._*) entries
+            # from xattrs; the nested excludes drop any on-disk macOS cruft too
+            # (CMake's source glob would otherwise try to compile ._*.c on Windows).
+            EX=(); for d in "${SYNC_EXCLUDE_DIRS[@]}"; do EX+=(--exclude="./$d"); done
             echo "Packing working tree..."
-            tar czf "$TB" \
-                --exclude='./out' --exclude='./.git' --exclude='./my_models' \
-                --exclude='.DS_Store' --exclude='._*' .
+            COPYFILE_DISABLE=1 tar czf "$TB" "${EX[@]}" \
+                --exclude='.DS_Store' --exclude='*/.DS_Store' \
+                --exclude='._*' --exclude='*/._*' .
             echo "Syncing -> $CETRA_WIN_SSH:$DEST ..."
-            scp -q "$TB" "$CETRA_WIN_SSH:C:/Users/dev/cetra-sync.tgz"
+            scp -q "$TB" "$CETRA_WIN_SSH:$WIN_TGZ"
             rm -f "$TB"
-            ssh "$CETRA_WIN_SSH" "New-Item -ItemType Directory -Force $DEST | Out-Null; tar xzf C:/Users/dev/cetra-sync.tgz -C $DEST"
-            PFLAGS=""
-            [[ "$BUILD_TYPE" == "release" ]] && PFLAGS="$PFLAGS -Release"
-            [[ $CLEAN -eq 1 ]] && PFLAGS="$PFLAGS -Clean"
-            [[ "$JOLTC" == "OFF" ]] && PFLAGS="$PFLAGS -NoJoltc"
+            # tar has no --delete, so clear the previous source first (keeping out/
+            # for the build cache) or files removed upstream would linger, then
+            # extract. tar restores the archived mtimes, so rebuilds stay incremental.
+            ssh "$CETRA_WIN_SSH" "if (Test-Path '$DEST') { Get-ChildItem -Path '$DEST/*' -Force -Exclude out | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue }; New-Item -ItemType Directory -Force '$DEST' | Out-Null; tar xzf $WIN_TGZ -C '$DEST'"
             echo "Building on $CETRA_WIN_SSH (windows-$BUILD_TYPE)..."
-            exec ssh "$CETRA_WIN_SSH" "powershell -ExecutionPolicy Bypass -File $DEST/tools/build.ps1$PFLAGS"
+            exec ssh "$CETRA_WIN_SSH" "powershell -ExecutionPolicy Bypass -File $DEST/tools/build.ps1$(remote_flags -Release -Clean -NoJoltc)"
             ;;
         macos)
             echo "No remote macOS build host configured -- build macOS locally on a Mac."; exit 1 ;;
