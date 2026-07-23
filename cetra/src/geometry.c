@@ -109,8 +109,8 @@ void generate_point_to_mesh(Mesh* mesh, const Point* point) {
 void generate_circle_to_mesh(Mesh* mesh, const Circle* circle) {
     const int segments = NUM_CIRCLE_SEGMENTS; // Number of segments for approximation
 
-    MeshDrawMode draw_mode = circle->filled ? TRIANGLES : LINE_STRIP;
-    if (draw_mode == TRIANGLES) {
+    MeshDrawMode draw_mode = circle->filled ? MESH_TRIANGLES : MESH_LINE_STRIP;
+    if (draw_mode == MESH_TRIANGLES) {
         // Set up for filled circle
         mesh->vertex_count = segments + 1; // One vertex per segment plus the center
         mesh->index_count = segments * 3;  // Three indices per triangle
@@ -149,7 +149,7 @@ void generate_circle_to_mesh(Mesh* mesh, const Circle* circle) {
             mesh->indices[i * 3 + 1] = i + 1;
             mesh->indices[i * 3 + 2] = (i + 1) % segments + 1;
         }
-    } else if (draw_mode == LINE_STRIP) {
+    } else if (draw_mode == MESH_LINE_STRIP) {
         mesh->vertex_count = segments + 1; // One vertex per segment plus one to close the loop
         mesh->index_count = segments + 1;  // One index per vertex
 
@@ -180,7 +180,7 @@ void generate_circle_to_mesh(Mesh* mesh, const Circle* circle) {
         mesh->indices[segments] = 0; // Close the loop
     }
 
-    if (draw_mode == LINE_STRIP) {
+    if (draw_mode == MESH_LINE_STRIP) {
         mesh->line_width = circle->line_width;
     }
     mesh->draw_mode = draw_mode;
@@ -270,7 +270,7 @@ void generate_rect_to_mesh(Mesh* mesh, const Rect* rect) {
                 mesh->indices[index_index++] = i;
             }
 
-            mesh->draw_mode = TRIANGLES;
+            mesh->draw_mode = MESH_TRIANGLES;
         } else {
             // Set indices for non-filled rect (line strip)
             mesh->index_count = resolution * 4 + 1; // +1 to close the loop
@@ -286,7 +286,7 @@ void generate_rect_to_mesh(Mesh* mesh, const Rect* rect) {
             }
 
             mesh->line_width = rect->line_width;
-            mesh->draw_mode = LINE_STRIP;
+            mesh->draw_mode = MESH_LINE_STRIP;
         }
     } else {
         // Assuming rect->position is the center of the rect
@@ -338,7 +338,7 @@ void generate_rect_to_mesh(Mesh* mesh, const Rect* rect) {
             unsigned int rect_indices[6] = {0, 2, 1, 1, 2, 3};
             memcpy(mesh->indices, rect_indices, sizeof(rect_indices));
 
-            mesh->draw_mode = TRIANGLES;
+            mesh->draw_mode = MESH_TRIANGLES;
         } else {
             mesh->vertex_count = 4;
             mesh->index_count = 5; // Line loop (4 corners + close loop)
@@ -367,7 +367,7 @@ void generate_rect_to_mesh(Mesh* mesh, const Rect* rect) {
             unsigned int rect_indices[5] = {0, 1, 2, 3, 0};
             memcpy(mesh->indices, rect_indices, sizeof(rect_indices));
 
-            mesh->draw_mode = LINE_LOOP;
+            mesh->draw_mode = MESH_LINE_LOOP;
             mesh->line_width = rect->line_width;
         }
     }
@@ -416,7 +416,7 @@ void generate_curve_to_mesh(Mesh* mesh, const Curve* curve) {
     }
 
     mesh->line_width = curve->line_width;
-    mesh->draw_mode = LINE_STRIP;
+    mesh->draw_mode = MESH_LINE_STRIP;
 }
 
 void generate_cylinder_to_mesh(Mesh* mesh, const Cylinder* cylinder) {
@@ -544,7 +544,7 @@ void generate_cylinder_to_mesh(Mesh* mesh, const Cylinder* cylinder) {
         mesh->indices[idx++] = segments + next;
     }
 
-    mesh->draw_mode = TRIANGLES;
+    mesh->draw_mode = MESH_TRIANGLES;
 }
 
 void generate_box_to_mesh(Mesh* mesh, const Box* box) {
@@ -720,7 +720,7 @@ void generate_box_to_mesh(Mesh* mesh, const Box* box) {
     memcpy(mesh->tangents, tangs, sizeof(tangs));
     memcpy(mesh->indices, inds, sizeof(inds));
 
-    mesh->draw_mode = TRIANGLES;
+    mesh->draw_mode = MESH_TRIANGLES;
     calculate_aabb(mesh);
 }
 
@@ -821,7 +821,7 @@ void generate_plane_to_mesh(Mesh* mesh, const Plane* plane) {
         }
     }
 
-    mesh->draw_mode = TRIANGLES;
+    mesh->draw_mode = MESH_TRIANGLES;
     calculate_aabb(mesh);
 }
 
@@ -933,6 +933,6 @@ void generate_sphere_to_mesh(Mesh* mesh, const Sphere* sphere) {
         }
     }
 
-    mesh->draw_mode = TRIANGLES;
+    mesh->draw_mode = MESH_TRIANGLES;
     calculate_aabb(mesh);
 }
