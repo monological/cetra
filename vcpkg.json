@@ -1,0 +1,11 @@
+{
+  "name": "cetra",
+  "version": "0.1.0",
+  "description": "Cetra graphics engine dependencies (Windows / vcpkg builds).",
+  "dependencies": [
+    "glfw3",
+    "glew",
+    "cglm",
+    "assimp"
+  ]
+}

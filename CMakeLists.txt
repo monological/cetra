@@ -2,6 +2,17 @@
 # also makes CMP0141 (below) NEW by default.
 cmake_minimum_required(VERSION 3.25 FATAL_ERROR)
 
+# On a Windows manifest build, chainload vcpkg's toolchain if VCPKG_ROOT is set
+# and nothing else supplied one. The windows preset sets this explicitly too;
+# this only rescues a bare `cmake -B` invocation. Must precede project().
+if(NOT DEFINED CMAKE_TOOLCHAIN_FILE
+   AND CMAKE_HOST_WIN32
+   AND DEFINED ENV{VCPKG_ROOT}
+   AND EXISTS "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake")
+    set(CMAKE_TOOLCHAIN_FILE "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+        CACHE FILEPATH "vcpkg toolchain")
+endif()
+
 project(cetra
     VERSION 0.1
     DESCRIPTION "Cetra Graphics Engine"
@@ -71,26 +82,51 @@ else()
     target_compile_options(cetra_warnings INTERFACE -Wall)
 endif()
 
-# Third-party dependencies on one interface target: consumers link a single
-# name, and the discovery mechanism can vary by platform (vcpkg is planned).
-#
-# IMPORTED_TARGET so the PkgConfig::* targets carry include dirs, link dirs and
-# libraries together -- the bare pkg_check_modules variables drop the link dirs.
-# GLOBAL promotes them out of this directory scope so a subdirectory may name
-# PkgConfig::GLFW directly.
+# Third-party dependencies on one interface target: consumers link the single
+# name cetra_deps, and only the discovery block below varies by platform.
 add_library(cetra_deps INTERFACE)
 
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(GLFW   REQUIRED IMPORTED_TARGET GLOBAL glfw3)
-pkg_check_modules(GLEW   REQUIRED IMPORTED_TARGET GLOBAL glew)
-pkg_check_modules(CGLM   REQUIRED IMPORTED_TARGET GLOBAL cglm)
-pkg_check_modules(ASSIMP REQUIRED IMPORTED_TARGET GLOBAL assimp)
+# pkg-config on macOS/Linux; find_package (vcpkg) on Windows. 'auto' picks the
+# latter when a vcpkg toolchain is active, so the Windows path can also be
+# exercised on macOS with -DCETRA_DEP_PROVIDER=cmake.
+set(CETRA_DEP_PROVIDER "auto" CACHE STRING "Dependency discovery: auto | pkgconfig | cmake")
+set_property(CACHE CETRA_DEP_PROVIDER PROPERTY STRINGS auto pkgconfig cmake)
 
-target_link_libraries(cetra_deps INTERFACE
-    PkgConfig::GLFW
-    PkgConfig::GLEW
-    PkgConfig::CGLM
-    PkgConfig::ASSIMP)
+set(_cetra_provider "${CETRA_DEP_PROVIDER}")
+if(_cetra_provider STREQUAL "auto")
+    if(WIN32 OR CMAKE_TOOLCHAIN_FILE MATCHES "vcpkg")
+        set(_cetra_provider "cmake")
+    else()
+        set(_cetra_provider "pkgconfig")
+    endif()
+endif()
+
+if(_cetra_provider STREQUAL "pkgconfig")
+    # IMPORTED_TARGET so PkgConfig::* carry include dirs, link dirs and libraries
+    # together -- the bare pkg_check_modules variables drop the link dirs. GLOBAL
+    # promotes them out of this directory scope so subdirectories may name them.
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(GLFW   REQUIRED IMPORTED_TARGET GLOBAL glfw3)
+    pkg_check_modules(GLEW   REQUIRED IMPORTED_TARGET GLOBAL glew)
+    pkg_check_modules(CGLM   REQUIRED IMPORTED_TARGET GLOBAL cglm)
+    pkg_check_modules(ASSIMP REQUIRED IMPORTED_TARGET GLOBAL assimp)
+    target_link_libraries(cetra_deps INTERFACE
+        PkgConfig::GLFW
+        PkgConfig::GLEW
+        PkgConfig::CGLM
+        PkgConfig::ASSIMP)
+else()
+    # vcpkg exports these config packages; the target names are their own.
+    find_package(glfw3  CONFIG REQUIRED)
+    find_package(GLEW   CONFIG REQUIRED)
+    find_package(assimp CONFIG REQUIRED)
+    find_package(cglm   CONFIG REQUIRED)
+    target_link_libraries(cetra_deps INTERFACE
+        glfw
+        GLEW::GLEW
+        assimp::assimp
+        cglm::cglm)
+endif()
 
 find_package(OpenGL REQUIRED)
 find_package(Threads REQUIRED)
