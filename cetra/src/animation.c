@@ -19,7 +19,7 @@ Skeleton* create_skeleton(const char* name) {
         return NULL;
     }
 
-    skeleton->name = name ? safe_strdup(name) : NULL;
+    skeleton->name = safe_strdup(name);
     skeleton->bones = NULL;
     skeleton->bone_count = 0;
     skeleton->bone_map = NULL;
@@ -175,7 +175,7 @@ AnimationChannel* create_animation_channel(int bone_index, const char* bone_name
     }
 
     channel->bone_index = bone_index;
-    channel->bone_name = bone_name ? safe_strdup(bone_name) : NULL;
+    channel->bone_name = safe_strdup(bone_name);
 
     channel->position_keys = NULL;
     channel->position_key_count = 0;
@@ -277,7 +277,7 @@ Animation* create_animation(const char* name, float duration, float ticks_per_se
         return NULL;
     }
 
-    animation->name = name ? safe_strdup(name) : NULL;
+    animation->name = safe_strdup(name);
     animation->duration = duration;
     animation->ticks_per_second = ticks_per_second > 0.0f ? ticks_per_second : 25.0f;
 

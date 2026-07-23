@@ -1,8 +1,6 @@
-// _DARWIN_C_SOURCE exposes the Darwin extensions get_cpu_cores needs below --
-// the BSD types <sys/sysctl.h> is declared in terms of, and _SC_NPROCESSORS_ONLN.
-// The build no longer defines _POSIX_C_SOURCE on macOS (it is Linux-only, see
-// cetra/CMakeLists.txt), so __DARWIN_C_LEVEL already defaults to full and this
-// is defensive: it keeps the file correct if that ever changes. Must precede any
+// Defensive: expose the Darwin extensions get_cpu_cores uses (the BSD types
+// <sys/sysctl.h> needs, and _SC_NPROCESSORS_ONLN) in case _POSIX_C_SOURCE is
+// ever set on macOS again -- the build now scopes it to Linux. Must precede any
 // system header.
 #if defined(__APPLE__)
 #define _DARWIN_C_SOURCE
@@ -196,6 +194,13 @@ char* read_entire_file(const char* path, long* out_len) {
     if (out_len)
         *out_len = (long)got;
     return buf;
+}
+
+bool path_is_absolute(const char* path) {
+    if (path[0] == '/')
+        return true;
+    bool drive_letter = (path[0] >= 'A' && path[0] <= 'Z') || (path[0] >= 'a' && path[0] <= 'z');
+    return drive_letter && path[1] == ':';
 }
 
 bool path_exists(const char* path) {

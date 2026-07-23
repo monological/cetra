@@ -47,6 +47,11 @@ int get_cpu_cores(void);
  */
 bool path_exists(const char* path);
 
+// True for an absolute path under the engine's forward-slash convention: a
+// leading '/', or a drive-qualified path (C:/...). cwk_path_is_absolute is not
+// used because cwalk is pinned to UNIX style and would not recognize a drive.
+bool path_is_absolute(const char* path);
+
 // Read a whole file into a NUL-terminated malloc'd buffer (caller frees).
 // Returns NULL on open/short-read failure; *out_len (optional) gets the byte
 // count excluding the terminator.

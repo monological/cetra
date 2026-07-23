@@ -5,12 +5,22 @@
 // this engine uses -- a worker pool plus mutex/condvar work queues, nothing
 // exotic (no cancel, detach, custom attrs, recursive/timed locks, or TLS).
 // POSIX maps to pthreads; Windows to SRWLOCK + CONDITION_VARIABLE (lightweight,
-// no teardown) and _beginthreadex. Housing the opaque types here is what keeps
-// <pthread.h> out of the public async_loader.h / texture.h.
+// no teardown) and _beginthreadex. The types live here so the pthread/Win32 API
+// stays out of the public async_loader.h / texture.h -- callers see only cetra_*
+// and cannot reach a pthread_* by accident.
 
 #include <stdbool.h>
 
 #if defined(_WIN32)
+// This header is included engine-wide (via async_loader.h/texture.h), so bound
+// <windows.h> here rather than trusting a build-level define: NOMINMAX keeps its
+// min/max macros from colliding with C++ std::min/max.
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 typedef HANDLE cetra_thread_t;
 typedef SRWLOCK cetra_mutex_t;

@@ -41,8 +41,10 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter)
 set(SHADER_DIR ${CMAKE_CURRENT_SOURCE_DIR}/shaders)
 set(SHADER_HEADER ${CETRA_PUBLIC_INCLUDE_DIR}/cetra/shader_strings.h)
 
-# CONFIGURE_DEPENDS re-globs at build time, so a new shader is picked up without
-# a manual reconfigure. (pbr_frag.glsl.old stays excluded -- not *.glsl.)
+# Recursive so an edit to a shared chunk under shaders/include/ retriggers
+# generation, not just top-level shaders. CONFIGURE_DEPENDS re-globs at build
+# time, so a new shader is picked up without a manual reconfigure.
+# (pbr_frag.glsl.old stays excluded -- not *.glsl.)
 file(GLOB_RECURSE SHADER_FILES CONFIGURE_DEPENDS ${SHADER_DIR}/*.glsl)
 
 add_custom_command(
