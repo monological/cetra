@@ -1,37 +1,60 @@
 # Cetra Graphics Engine Library
 
-# Create include directory structure for apps (cetra/xxx.h includes)
-# This creates a symlink so apps can use #include "cetra/common.h"
-file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/include)
-if(NOT EXISTS ${CMAKE_BINARY_DIR}/include/cetra)
-    file(CREATE_LINK
-        ${CMAKE_CURRENT_SOURCE_DIR}/src
-        ${CMAKE_BINARY_DIR}/include/cetra
-        SYMBOLIC
-    )
+# A stale in-tree shader_strings.h (this file used to be generated into src/,
+# and it is gitignored, so old checkouts still have one) would silently shadow
+# the build-tree copy below -- a quoted #include finds the including file's own
+# directory first. Refuse to build until it is gone. Must run before the header
+# glob, which would otherwise forward it too.
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/src/shader_strings.h)
+    message(FATAL_ERROR
+        "Stale cetra/src/shader_strings.h will shadow the generated header. "
+        "Delete it and re-configure.")
 endif()
 
-# Shader header generation
-set(SHADER_DIR ${CMAKE_CURRENT_SOURCE_DIR}/shaders)
-set(SHADER_HEADER ${CMAKE_CURRENT_SOURCE_DIR}/src/shader_strings.h)
+# Public include tree at ${CMAKE_BINARY_DIR}/include so apps can #include
+# "cetra/foo.h". Holds a forwarding header per real header, plus the generated
+# shader_strings.h (below).
+set(CETRA_PUBLIC_INCLUDE_DIR ${CMAKE_BINARY_DIR}/include)
 
-# Recursive so shared chunks under include/ are dependencies too: without them
-# a chunk edit would not retrigger generation and the build would quietly keep
-# the stale expansion baked into shader_strings.h. CONFIGURE_DEPENDS re-globs
-# at build time, so a brand-new shader or chunk is picked up without a manual
-# reconfigure. (pbr_frag.glsl.old stays excluded -- it does not match *.glsl.)
+# Forwarding headers replace a CREATE_LINK symlink (which needs Developer Mode
+# on Windows). Each include/cetra/<rel> just #includes the real header by
+# absolute path; a quoted include inside that header still resolves against its
+# own directory, so nested includes need no extra -I, and editing a real header
+# needs no reconfigure since the forwarder never changes. A NEW header does need
+# a reconfigure -- same as the source glob below. src/ext is shallow on purpose:
+# the JoltC/cimgui subtrees come through their own targets.
+file(GLOB _cetra_public_headers RELATIVE ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/*.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/game/*.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ext/*.h)
+foreach(_rel IN LISTS _cetra_public_headers)
+    file(CONFIGURE
+        OUTPUT  "${CETRA_PUBLIC_INCLUDE_DIR}/cetra/${_rel}"
+        CONTENT "#include \"${CMAKE_CURRENT_SOURCE_DIR}/src/${_rel}\"\n")
+endforeach()
+
+# Shader header generation. Generated into the include tree, not the source
+# tree, so a read-only checkout builds and two build dirs never fight over one
+# file. gen_shader_header.py is stdlib-only and emits its own MSVC pragmas.
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+
+set(SHADER_DIR ${CMAKE_CURRENT_SOURCE_DIR}/shaders)
+set(SHADER_HEADER ${CETRA_PUBLIC_INCLUDE_DIR}/cetra/shader_strings.h)
+
+# CONFIGURE_DEPENDS re-globs at build time, so a new shader is picked up without
+# a manual reconfigure. (pbr_frag.glsl.old stays excluded -- not *.glsl.)
 file(GLOB_RECURSE SHADER_FILES CONFIGURE_DEPENDS ${SHADER_DIR}/*.glsl)
 
 add_custom_command(
     OUTPUT ${SHADER_HEADER}
     COMMAND ${CMAKE_COMMAND} -E echo "Generating shader header..."
-    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/gen_shader_header.py ${SHADER_DIR} ${SHADER_HEADER}
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/gen_shader_header.py ${SHADER_DIR} ${SHADER_HEADER}
     DEPENDS ${SHADER_FILES} ${CMAKE_CURRENT_SOURCE_DIR}/gen_shader_header.py
     COMMENT "Generating shader_strings.h from GLSL files"
     VERBATIM
 )
 
-add_custom_target(shaders DEPENDS ${SHADER_HEADER})
+add_custom_target(cetra_shaders DEPENDS ${SHADER_HEADER})
 
 # Collect source files
 file(GLOB CETRA_SOURCES
@@ -47,13 +70,18 @@ file(GLOB CETRA_SOURCES
 add_library(cetra STATIC ${CETRA_SOURCES})
 
 # Ensure shaders are generated before building
-add_dependencies(cetra shaders)
+add_dependencies(cetra cetra_shaders)
 
 target_include_directories(cetra
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/ext>
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/game>
+        # Forwarding-header tree, for apps' #include "cetra/foo.h".
+        $<BUILD_INTERFACE:${CETRA_PUBLIC_INCLUDE_DIR}>
+        # Generated shader_strings.h lives at include/cetra/, so shader.h's bare
+        # #include "shader_strings.h" resolves here (for the library and apps).
+        $<BUILD_INTERFACE:${CETRA_PUBLIC_INCLUDE_DIR}/cetra>
         $<INSTALL_INTERFACE:include/cetra>
 )
 
