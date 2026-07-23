@@ -5,6 +5,7 @@
 #include "ext/log.h"
 #include "program.h"
 #include "shadow.h"
+#include "ubo.h"
 #include "util.h"
 
 // Fullscreen post-pass program helper (defined with the postfx constructors)
@@ -302,6 +303,11 @@ GLboolean reload_program_from_paths(ShaderProgram* program, const char* vert_pat
         uniform_cache_lights(program->uniforms, get_gl_max_lights());
     }
 
+    // Block bindings are program state reset by re-linking; re-wire them
+    ubo_bind_program_block(program->id, "LightsBlock", UBO_BINDING_LIGHTS);
+    ubo_bind_program_block(program->id, "ClusterBlock", UBO_BINDING_CLUSTERS);
+    ubo_bind_program_block(program->id, "ClusterIndexBlock", UBO_BINDING_CLUSTER_INDICES);
+
     log_info("Reloaded shader program: %s", program->name);
     return GL_TRUE;
 }
@@ -409,6 +415,12 @@ void setup_program_uniforms(ShaderProgram* program) {
     uniform_cache_standard(program->uniforms);
     uniform_cache_lights(program->uniforms, get_gl_max_lights());
     uniform_cache_shadows(program->uniforms, MAX_SHADOW_LIGHTS, SHADOW_CASCADES);
+
+    // Clustered-forward blocks (spec 9.1): wire each named block to its global
+    // binding point. No-ops for programs that don't declare (or strip) them.
+    ubo_bind_program_block(program->id, "LightsBlock", UBO_BINDING_LIGHTS);
+    ubo_bind_program_block(program->id, "ClusterBlock", UBO_BINDING_CLUSTERS);
+    ubo_bind_program_block(program->id, "ClusterIndexBlock", UBO_BINDING_CLUSTER_INDICES);
 }
 
 ShaderProgram* create_pbr_program() {

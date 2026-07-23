@@ -170,6 +170,11 @@ uniform sampler2D spotShadowMap;
 uniform mat4 spotShadowMatrix;
 uniform int spotShadowActive;
 
+// Clustered-forward light blocks (spec 9.1). Declared alongside the legacy
+// lights[] array during bring-up; the clustered path consumes these, the
+// legacy path above ignores them.
+#include "lights_ubo.glsl"
+
 // Cascade for a view depth: the first cascade whose far bound contains it.
 // At cascadeCount 1 the loop never runs (cascade 0).
 int selectCascade(float viewDepth)
