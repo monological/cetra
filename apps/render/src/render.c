@@ -841,7 +841,7 @@ static void report_skinning_stretch(SceneNode* node, const AnimationState* state
     for (size_t m = 0; m < node->mesh_count; m++) {
         Mesh* mesh = node->meshes[m];
         if (!mesh || !mesh->is_skinned || !mesh->bone_ids || !mesh->indices ||
-            mesh->draw_mode != TRIANGLES)
+            mesh->draw_mode != MESH_TRIANGLES)
             continue;
 
         float worst_ratio = 0.0f;

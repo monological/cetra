@@ -908,7 +908,7 @@ static void generate_island_mesh(Mesh* mesh, float radius, float height, int rin
         }
     }
 
-    mesh->draw_mode = TRIANGLES;
+    mesh->draw_mode = MESH_TRIANGLES;
     // Required: the renderer frustum-culls on this. Left at the zero AABB
     // create_mesh starts with, the ground collapses to a point at the origin
     // and gets culled the moment that point leaves the view.

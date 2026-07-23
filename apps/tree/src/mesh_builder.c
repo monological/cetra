@@ -110,7 +110,7 @@ bool mb_transfer(MeshBuilder* mb, Mesh* mesh) {
     mesh->indices = mb->idx;
     mesh->vertex_count = mb->vcount;
     mesh->index_count = mb->icount;
-    mesh->draw_mode = TRIANGLES;
+    mesh->draw_mode = MESH_TRIANGLES;
     memset(mb, 0, sizeof(*mb));
     calculate_aabb(mesh);
     return true;
