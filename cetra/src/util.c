@@ -290,10 +290,14 @@ char* convert_windows_path_to_unix(const char* windows_path) {
     }
 
     int i = 0, j = 0;
-    // Skip drive letter if present
+#if !defined(_WIN32)
+    // On a non-Windows host a drive-qualified absolute path (C:\...) cannot be
+    // used as-is, so drop the drive and let what remains resolve against cwd. On
+    // Windows the drive is load-bearing -- keep it, just flip the separators.
     if (len > 2 && windows_path[1] == ':' && windows_path[2] == '\\') {
         i = 3;
     }
+#endif
 
     // Convert the path
     for (; i < len; i++) {

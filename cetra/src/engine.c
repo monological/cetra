@@ -13,6 +13,7 @@
 #include "shader.h"
 #include "program.h"
 #include "util.h"
+#include "ext/cwalk.h" // cwk_path_set_style: pin UNIX separators (see init_engine)
 #include "engine.h"
 #include "transform.h"
 #include "intersect.h"
@@ -627,6 +628,14 @@ int init_engine(Engine* engine) {
     printf("┗┛┗┛ ┻ ┛┗┛┗\n");
 
     printf("\nInitializing Cetra Graphics Engine...\n");
+
+    // cwalk picks its separator style from a compile-time global that defaults
+    // to backslashes on Windows. The engine keeps paths forward-slashed
+    // everywhere (Windows file APIs accept them), so pin UNIX style before any
+    // path is normalized -- otherwise cwk_path_normalize would emit backslashes
+    // that the engine's '/'-scanning path code silently fails to match. No-op on
+    // macOS/Linux, which already default to UNIX.
+    cwk_path_set_style(CWK_STYLE_UNIX);
 
     if (_setup_engine_glfw(engine) != 0) {
         log_error("Failed to initialize engine GLFW");
