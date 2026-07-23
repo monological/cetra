@@ -86,7 +86,7 @@ def main(input_dir, output_file):
     # appear expanded into a shader.
     shaders = sorted(f for f in os.listdir(input_dir) if f.endswith('.glsl'))
 
-    with open(output_file, 'w') as header_file:
+    with open(output_file, 'w', encoding='utf-8') as header_file:
         header_file.write("#ifndef SHADER_STRINGS_H\n")
         header_file.write("#define SHADER_STRINGS_H\n\n")
 
