@@ -144,11 +144,6 @@ void uniform_cache_shadows(UniformManager* mgr, size_t max_shadow_lights, size_t
                  "GLSL cascade constants drifted from the C mirrors",
                  max_shadow_lights * max_cascades);
     }
-
-    for (size_t i = 0; i < max_shadow_lights; i++) {
-        snprintf(name, sizeof(name), "shadowLightIndex[%zu]", i);
-        uniform_location(mgr, name);
-    }
 }
 
 void uniform_set_int(UniformManager* mgr, const char* name, int value) {

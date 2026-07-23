@@ -1128,6 +1128,69 @@ void configure_visor_materials(Scene* scene) {
  * --sss-color the first profile's color (both < 0 keep the per-material
  * defaults). The global --no-sss toggle gates the effect.
  */
+// Clustered-lighting test harness (spec 9.1): an N x N grid of hue-swept point
+// lights on XZ around the origin. Attenuation is derived so each light visually
+// dies at its cull radius, making cluster-assignment errors show as hard edges.
+// Call AFTER the key-light setup so the normal lighting rig is unchanged
+// underneath. No-op unless --point-light-grid was passed.
+static void spawn_point_light_grid(Scene* scene, const RenderArgs* args) {
+    if (args->point_light_grid <= 0)
+        return;
+
+    int n = args->point_light_grid;
+    if (n * n > 128) {
+        n = 11; // 128 packed-light budget (11 x 11 = 121)
+        fprintf(stderr, "point-light-grid clamped to 11x11 (128 clusterable lights)\n");
+    }
+    float radius = args->plg_radius;
+    float intensity = args->plg_intensity;
+    // Die exactly at the cull radius: 1 + q*r^2 = intensity * 256
+    float grid_q = (intensity * 256.0f - 1.0f) / (radius * radius);
+
+    for (int gi = 0; gi < n; gi++) {
+        for (int gj = 0; gj < n; gj++) {
+            Light* pl = create_light();
+            if (!pl)
+                continue;
+
+            char plname[32];
+            snprintf(plname, sizeof(plname), "grid_%d_%d", gi, gj);
+            set_light_name(pl, plname);
+            set_light_type(pl, LIGHT_POINT);
+
+            vec3 pos = {((float)gi - (float)(n - 1) * 0.5f) * radius, 0.25f * radius,
+                        ((float)gj - (float)(n - 1) * 0.5f) * radius};
+            set_light_original_position(pl, pos);
+
+            // HSV(hue, 0.8, 1.0) -> RGB, hue swept across the grid so each
+            // light's reach is visually distinguishable from its neighbours
+            float hue = (float)(gi * n + gj) / (float)(n * n) * 6.0f;
+            float hf = hue - floorf(hue);
+            float lo = 0.2f, down = 1.0f - 0.8f * hf, up = 1.0f - 0.8f * (1.0f - hf);
+            vec3 c;
+            switch ((int)hue % 6) {
+            case 0: c[0] = 1.0f, c[1] = up, c[2] = lo; break;
+            case 1: c[0] = down, c[1] = 1.0f, c[2] = lo; break;
+            case 2: c[0] = lo, c[1] = 1.0f, c[2] = up; break;
+            case 3: c[0] = lo, c[1] = down, c[2] = 1.0f; break;
+            case 4: c[0] = up, c[1] = lo, c[2] = 1.0f; break;
+            default: c[0] = 1.0f, c[1] = lo, c[2] = down; break;
+            }
+            set_light_color(pl, c);
+            set_light_intensity(pl, intensity);
+            set_light_attenuation(pl, 1.0f, 0.0f, grid_q);
+            set_light_range(pl, radius);
+            add_light_to_scene(scene, pl);
+
+            SceneNode* pl_node = create_node();
+            set_node_light(pl_node, pl);
+            set_node_name(pl_node, plname);
+            add_child_node(scene->root_node, pl_node);
+        }
+    }
+    printf("Point-light grid: %dx%d, radius %.1f, intensity %.1f\n", n, n, radius, intensity);
+}
+
 // Mark a material as skin: profile slot lands in the diffuse-attachment
 // alpha (pbr_frag) so the separable blur can look up its scatter per pixel.
 static void tag_material_sss(Material* m, int slot, const float* prof_color) {
@@ -1671,60 +1734,7 @@ int main(int argc, char** argv) {
         printf("IBL intensity: %.2f\n", args.ibl_intensity);
     }
 
-    // Clustered-lighting test harness (spec 9.1): an N x N grid of hue-swept
-    // point lights on XZ around the origin. Attenuation is derived so each
-    // light visually dies at its cull radius, making cluster-assignment
-    // errors show as hard edges; added AFTER the key-light setup so the
-    // normal lighting rig is unchanged underneath.
-    if (args.point_light_grid > 0) {
-        int n = args.point_light_grid;
-        if (n * n > 128) {
-            n = 11; // 128 packed-light budget (11 x 11 = 121)
-            fprintf(stderr, "point-light-grid clamped to 11x11 (128 clusterable lights)\n");
-        }
-        float radius = args.plg_radius;
-        float intensity = args.plg_intensity;
-        // Die exactly at the cull radius: 1 + q*r^2 = intensity * 256
-        float grid_q = (intensity * 256.0f - 1.0f) / (radius * radius);
-        for (int gi = 0; gi < n; gi++) {
-            for (int gj = 0; gj < n; gj++) {
-                Light* pl = create_light();
-                if (!pl)
-                    continue;
-                char plname[32];
-                snprintf(plname, sizeof(plname), "grid_%d_%d", gi, gj);
-                set_light_name(pl, plname);
-                set_light_type(pl, LIGHT_POINT);
-                vec3 pos = {((float)gi - (float)(n - 1) * 0.5f) * radius, 0.25f * radius,
-                            ((float)gj - (float)(n - 1) * 0.5f) * radius};
-                set_light_original_position(pl, pos);
-                float hue = (float)(gi * n + gj) / (float)(n * n) * 6.0f;
-                float hf = hue - floorf(hue);
-                int hi = (int)hue % 6;
-                vec3 c = {1.0f, 1.0f, 1.0f}; // HSV (hue, 0.8, 1.0) -> RGB
-                float p = 0.2f, q_ = 1.0f - 0.8f * hf, t_ = 1.0f - 0.8f * (1.0f - hf);
-                switch (hi) {
-                case 0: c[0] = 1.0f, c[1] = t_, c[2] = p; break;
-                case 1: c[0] = q_, c[1] = 1.0f, c[2] = p; break;
-                case 2: c[0] = p, c[1] = 1.0f, c[2] = t_; break;
-                case 3: c[0] = p, c[1] = q_, c[2] = 1.0f; break;
-                case 4: c[0] = t_, c[1] = p, c[2] = 1.0f; break;
-                default: c[0] = 1.0f, c[1] = p, c[2] = q_; break;
-                }
-                set_light_color(pl, c);
-                set_light_intensity(pl, intensity);
-                set_light_attenuation(pl, 1.0f, 0.0f, grid_q);
-                set_light_range(pl, radius);
-                add_light_to_scene(scene, pl);
-
-                SceneNode* pl_node = create_node();
-                set_node_light(pl_node, pl);
-                set_node_name(pl_node, plname);
-                add_child_node(scene->root_node, pl_node);
-            }
-        }
-        printf("Point-light grid: %dx%d, radius %.1f, intensity %.1f\n", n, n, radius, intensity);
-    }
+    spawn_point_light_grid(scene, &args);
 
     // Load additional animation files if provided
     // Enable retargeting by default to support Mixamo animations on custom rigs

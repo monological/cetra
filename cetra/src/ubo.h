@@ -43,15 +43,17 @@ void free_ubo(Ubo* ubo);
 // store the previous frame may still be reading. size must be <= create size.
 void ubo_upload(Ubo* ubo, const void* data, GLsizeiptr size);
 
-// Wire a program's named block to a binding point; call once after link. A
-// program without the block (absent, or stripped as unreferenced) is a no-op:
-// glGetUniformBlockIndex returns GL_INVALID_INDEX.
-void ubo_bind_program_block(GLuint program_id, const char* block_name, GLuint binding);
+// Wire a program's named block to a binding point and check the driver's
+// std140 size against the C-side expectation (the guard against the
+// silent-garbage failure mode of a C/GLSL layout drift, which logs on
+// mismatch). Call once after link. A program without the block -- absent, or
+// stripped as unreferenced -- is a no-op: glGetUniformBlockIndex returns
+// GL_INVALID_INDEX, so one lookup answers both questions.
+void ubo_wire_program_block(GLuint program_id, const char* block_name, GLuint binding,
+                            GLsizeiptr expected_size);
 
-// Compare the driver's std140 size of a program's block against the C-side
-// expectation; logs and returns false on mismatch -- the guard against the
-// silent-garbage failure mode of a C/GLSL layout drift. A program without the
-// block returns true.
-bool ubo_validate_program_block(GLuint program_id, const char* block_name, GLsizeiptr expected);
+// Wire all three clustered-forward light blocks (spec 9.1). Programs that
+// don't sample them are unaffected.
+void ubo_wire_light_blocks(GLuint program_id);
 
 #endif // _UBO_H_

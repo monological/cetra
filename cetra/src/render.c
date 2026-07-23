@@ -617,9 +617,9 @@ void render_current_scene(Engine* engine) {
     if (engine->light_cluster) {
         GLint cluster_viewport[4];
         glGetIntegerv(GL_VIEWPORT, cluster_viewport);
-        light_cluster_build_and_upload(engine->light_cluster, engine, scene, *view, *projection,
-                                       cluster_viewport[2], cluster_viewport[3],
-                                       camera->near_clip, camera->far_clip);
+        light_cluster_build_and_upload(engine->light_cluster, scene, *view, *projection,
+                                       cluster_viewport[2], cluster_viewport[3], camera->near_clip,
+                                       camera->far_clip);
     }
 
     // Draw projection: the un-jittered projection, sub-pixel-jittered when TAA

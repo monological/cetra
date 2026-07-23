@@ -177,7 +177,8 @@ void main()
             S += lightK[j] * fogVisibility(j * cascadeCount, t);
         }
         // Spot in-scatter at P: inside the cone, falling off with distance, cut
-        // by the spot's shadow. Cone alignment mirrors pbr_frag's spotConeFactor.
+        // by the spot's shadow. Cone alignment mirrors spotConeFactor
+        // (shaders/include/lights_ubo.glsl).
         if (spotEnabled == 1) {
             vec3 toL = spotPos - P;
             float d = length(toL);

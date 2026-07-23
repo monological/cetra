@@ -16,7 +16,6 @@
 #include "async_loader.h"
 #include "text.h"
 #include "postfx.h"
-#include "ubo.h"
 
 typedef enum CameraMode {
     CAMERA_MODE_FREE,  // Free movement mode
@@ -93,14 +92,10 @@ typedef struct Engine {
     GLuint oit_accum_multisample_texture;
     GLuint oit_revealage_multisample_texture;
     int oit_w, oit_h;
-    // Clustered-forward light data (spec 9.1): three std140 UBOs rebuilt per
-    // render_current_scene invocation. Created at init; inert until the
-    // clustered shader path consumes them.
-    Ubo* lights_ubo;                           // LightsBlock       (UBO_BINDING_LIGHTS)
-    Ubo* clusters_ubo;                         // ClusterBlock      (UBO_BINDING_CLUSTERS)
-    Ubo* cluster_indices_ubo;                  // ClusterIndexBlock (UBO_BINDING_CLUSTER_INDICES)
-    struct LightClusterContext* light_cluster; // per-invocation cluster build scratch
-    bool cluster_debug;                        // Tint fragments by cluster light count (heatmap)
+    // Clustered-forward lighting (spec 9.1). The module owns its own GPU
+    // buffers and scratch; rebuilt per render_current_scene invocation.
+    struct LightClusterContext* light_cluster;
+    bool cluster_debug;          // Tint fragments by cluster light count (heatmap)
     bool scene_color_this_frame; // Resolve ran this frame; transmissive draws may sample
     bool normals_this_frame;     // Attachment 1 written this frame (PBR + consumer active)
     bool aux_this_frame;         // Attachment 2 written this frame (TAA needs motion, or GTAO needs

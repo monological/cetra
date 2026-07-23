@@ -51,7 +51,7 @@ layout(std140) uniform ClusterIndexBlock {
     uvec4 lightIndices[768]; // 6144 16-bit light indices, two per uint, low half first
 };
 
-// The two block accessors are deliberately the only places that decode the
+// The block accessors are deliberately the only places that decode the
 // packing -- the single point of repair if a driver mishandles them.
 uint clusterWord(uint ci) {
     return clusters[ci >> 2u][ci & 3u];
@@ -62,9 +62,24 @@ uint lightIndexAt(uint i) {
     return (i & 1u) == 0u ? (w & 0xFFFFu) : (w >> 16u);
 }
 
-// Packed-field spot cone, mirroring spotConeFactor (pbr_frag) exactly: 1 inside
-// the inner cone, smooth to 0 at the outer cone, 1 for every non-spot light.
-float spotConeFactorP(float typeF, vec3 lightDir, float cutOff, float outerCutOff, vec3 L) {
+// A fragment's cluster light list: .x = index-pool offset, .y = light count.
+// The fragment -> cluster mapping (screen tile + exponential-Z slice) and the
+// offset|count word layout live HERE and nowhere else -- every consumer goes
+// through this, so the slicing formula has exactly one edit site.
+uvec2 clusterLightList(vec2 fragCoord, float viewZ) {
+    int tileX = min(int(fragCoord.x * clusterParams.z), CLUSTER_X - 1);
+    int tileY = min(int(fragCoord.y * clusterParams.w), CLUSTER_Y - 1);
+    int slice =
+        clamp(int(log2(max(viewZ, 1e-4)) * clusterParams.x + clusterParams.y), 0, CLUSTER_Z - 1);
+    uint word = clusterWord(uint(tileX + CLUSTER_X * (tileY + CLUSTER_Y * slice)));
+    return uvec2(word >> 12u, word & 0xFFFu);
+}
+
+// Spot cone from packed fields: 1 inside the inner cone, smooth to 0 at the
+// outer cone, 1 for every non-spot light. cutOff/outerCutOff are cosines of
+// the inner/outer half-angles; `L` is the frag->light direction, and the spot
+// aims along lightDir, so -lightDir points back up the beam axis.
+float spotConeFactor(float typeF, vec3 lightDir, float cutOff, float outerCutOff, vec3 L) {
     if (typeF != 2.0)
         return 1.0;
     float theta = dot(L, normalize(-lightDir));

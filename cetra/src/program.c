@@ -303,9 +303,7 @@ GLboolean reload_program_from_paths(ShaderProgram* program, const char* vert_pat
     }
 
     // Block bindings are program state reset by re-linking; re-wire them
-    ubo_bind_program_block(program->id, "LightsBlock", UBO_BINDING_LIGHTS);
-    ubo_bind_program_block(program->id, "ClusterBlock", UBO_BINDING_CLUSTERS);
-    ubo_bind_program_block(program->id, "ClusterIndexBlock", UBO_BINDING_CLUSTER_INDICES);
+    ubo_wire_light_blocks(program->id);
 
     log_info("Reloaded shader program: %s", program->name);
     return GL_TRUE;
@@ -414,15 +412,10 @@ void setup_program_uniforms(ShaderProgram* program) {
     uniform_cache_standard(program->uniforms);
     uniform_cache_shadows(program->uniforms, MAX_SHADOW_LIGHTS, SHADOW_CASCADES);
 
-    // Clustered-forward blocks (spec 9.1): wire each named block to its global
-    // binding point. No-ops for programs that don't declare (or strip) them.
-    ubo_bind_program_block(program->id, "LightsBlock", UBO_BINDING_LIGHTS);
-    ubo_bind_program_block(program->id, "ClusterBlock", UBO_BINDING_CLUSTERS);
-    ubo_bind_program_block(program->id, "ClusterIndexBlock", UBO_BINDING_CLUSTER_INDICES);
-    // Guard against C/GLSL std140 layout drift (silent-garbage failure mode)
-    ubo_validate_program_block(program->id, "LightsBlock", UBO_LIGHTS_BLOCK_SIZE);
-    ubo_validate_program_block(program->id, "ClusterBlock", UBO_CLUSTERS_BLOCK_SIZE);
-    ubo_validate_program_block(program->id, "ClusterIndexBlock", UBO_CLUSTER_INDICES_BLOCK_SIZE);
+    // Clustered-forward blocks (spec 9.1): bind to the global binding points
+    // and guard against C/GLSL layout drift. No-ops for programs that don't
+    // declare (or strip) them.
+    ubo_wire_light_blocks(program->id);
 }
 
 ShaderProgram* create_pbr_program() {

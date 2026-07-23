@@ -39,7 +39,12 @@ typedef struct GpuDirLight {
 } GpuDirLight;
 
 typedef struct GpuPackedLight {
-    float pos_range[4];        // xyz = world position, w = cull radius
+    // w = cull radius (0 = unbounded). Not sampled by any shader today -- the
+    // GPU never needs the radius, since cluster membership already answers
+    // "does this light reach me". Kept because it costs nothing (the vec4 row
+    // exists for the position regardless) and it is what a range-windowed
+    // falloff would read.
+    float pos_range[4];
     float dir_type[4];         // xyz = direction, w = 1 point / 2 spot / 3 area
     float color_intensity[4];  // xyz = color * intensity (premultiplied)
     float atten_cutoff[4];     // constant, linear, quadratic, cos inner cone
@@ -78,8 +83,17 @@ typedef struct LightClusterRange {
     int x0, x1, y0, y1, z0, z1; // inclusive tile/slice ranges
 } LightClusterRange;
 
-// Fixed-size working set, allocated once (no per-frame allocation)
+#define LC_TOUCH_STRIDE (LC_CLUSTER_COUNT / 8) // bytes per light in the touch bitset
+
+// Fixed-size working set, allocated once (no per-frame allocation). Owns the
+// three GPU buffers too: nothing outside this module touches them, so they
+// live here rather than as loose fields on Engine (mirrors how PostFX owns its
+// own targets).
 typedef struct LightClusterContext {
+    struct Ubo* lights_ubo;          // LightsBlock       (UBO_BINDING_LIGHTS)
+    struct Ubo* clusters_ubo;        // ClusterBlock      (UBO_BINDING_CLUSTERS)
+    struct Ubo* cluster_indices_ubo; // ClusterIndexBlock (UBO_BINDING_CLUSTER_INDICES)
+
     GpuLightsBlock lights;
     GpuClusterBlock grid;
     GpuClusterIndexBlock index_pool;
@@ -87,6 +101,12 @@ typedef struct LightClusterContext {
     // View-space bounding sphere per packed light (xyz center, w radius;
     // w < 0 = uncullable) for the per-cluster AABB refinement in the fill
     float view_spheres[LC_MAX_CLUSTER_LIGHTS][4];
+    // One bit per (light, cluster): set by the counting pass, replayed by the
+    // writing pass. Without it both passes would re-run the same ~40-flop
+    // sphere-vs-AABB test over the same cells -- up to ~390k redundant tests a
+    // frame at the light cap -- and the two loops would have to be kept in
+    // lockstep by hand.
+    uint8_t touched[LC_MAX_CLUSTER_LIGHTS][LC_TOUCH_STRIDE];
     uint16_t counts[LC_CLUSTER_COUNT];  // per-cluster light counts (fill pass 1)
     uint32_t offsets[LC_CLUSTER_COUNT]; // per-cluster index-pool offsets (prefix sum)
     bool warned_dir_overflow;
@@ -106,10 +126,10 @@ void free_light_cluster_context(LightClusterContext* ctx);
 float light_cull_radius(const struct Light* light);
 
 // Build the three blocks from scene->lights for this invocation's camera and
-// upload them to the engine's UBOs. fb_width/fb_height are the render-target
-// dimensions gl_FragCoord is measured in (the current viewport).
-void light_cluster_build_and_upload(LightClusterContext* ctx, struct Engine* engine,
-                                    struct Scene* scene, mat4 view, mat4 projection, int fb_width,
-                                    int fb_height, float near_clip, float far_clip);
+// upload them. fb_width/fb_height are the render-target dimensions
+// gl_FragCoord is measured in (the current viewport).
+void light_cluster_build_and_upload(LightClusterContext* ctx, struct Scene* scene, mat4 view,
+                                    mat4 projection, int fb_width, int fb_height, float near_clip,
+                                    float far_clip);
 
 #endif // _LIGHT_CLUSTER_H_

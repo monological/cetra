@@ -855,13 +855,9 @@ void main() {
     if (renderMode == 7) {
         // Simple Diffuse Lighting (same fused dir+cluster fetch as the PBR loop)
         vec3 Lo = vec3(0.0);
-        int sTileX = min(int(gl_FragCoord.x * clusterParams.z), CLUSTER_X - 1);
-        int sTileY = min(int(gl_FragCoord.y * clusterParams.w), CLUSTER_Y - 1);
-        int sSlice = clamp(int(log2(max(-ViewPos.z, 1e-4)) * clusterParams.x + clusterParams.y),
-                           0, CLUSTER_Z - 1);
-        uint sWord = clusterWord(uint(sTileX + CLUSTER_X * (sTileY + CLUSTER_Y * sSlice)));
-        uint sOffset = sWord >> 12u;
-        int sCount = int(sWord & 0xFFFu);
+        uvec2 sList = clusterLightList(gl_FragCoord.xy, -ViewPos.z);
+        uint sOffset = sList.x;
+        int sCount = int(sList.y);
         int sNumDir = lightCounts.x;
         for (int k = 0; k < sNumDir + sCount; k++) {
             vec3 L;
@@ -880,7 +876,7 @@ void main() {
                                                    clusterLights[li].attenCutoff.y,
                                                    clusterLights[li].attenCutoff.z);
                 attenuation *=
-                    spotConeFactorP(clusterLights[li].dirType.w, clusterLights[li].dirType.xyz,
+                    spotConeFactor(clusterLights[li].dirType.w, clusterLights[li].dirType.xyz,
                                     clusterLights[li].attenCutoff.w,
                                     clusterLights[li].spotShadowSize.x, L);
                 lightCI = clusterLights[li].colorIntensity.xyz;
@@ -988,13 +984,9 @@ void main() {
     // itself -- each light samples its OWN shadow slot, immune to the light
     // ordering (the retired per-node path matched shadow slots by loop index,
     // which shimmered when the k-nearest heap reordered directionals).
-    int tileX = min(int(gl_FragCoord.x * clusterParams.z), CLUSTER_X - 1);
-    int tileY = min(int(gl_FragCoord.y * clusterParams.w), CLUSTER_Y - 1);
-    int slice = clamp(int(log2(max(-ViewPos.z, 1e-4)) * clusterParams.x + clusterParams.y), 0,
-                      CLUSTER_Z - 1);
-    uint clusterData = clusterWord(uint(tileX + CLUSTER_X * (tileY + CLUSTER_Y * slice)));
-    uint clusterOffset = clusterData >> 12u;
-    int clusterCount = int(clusterData & 0xFFFu);
+    uvec2 clusterList = clusterLightList(gl_FragCoord.xy, -ViewPos.z);
+    uint clusterOffset = clusterList.x;
+    int clusterCount = int(clusterList.y);
     int numDir = lightCounts.x;
 
     for (int k = 0; k < numDir + clusterCount; k++) {
@@ -1020,7 +1012,7 @@ void main() {
                                                clusterLights[li].attenCutoff.y,
                                                clusterLights[li].attenCutoff.z);
             attenuation *=
-                spotConeFactorP(clusterLights[li].dirType.w, clusterLights[li].dirType.xyz,
+                spotConeFactor(clusterLights[li].dirType.w, clusterLights[li].dirType.xyz,
                                 clusterLights[li].attenCutoff.w,
                                 clusterLights[li].spotShadowSize.x, L);
             lightCI = clusterLights[li].colorIntensity.xyz;
@@ -1291,14 +1283,9 @@ void main() {
     // (blue 1 .. red >= 16; empty clusters stay untinted). Dead when
     // clusterDebug 0.
     if (clusterDebug > 0) {
-        int dTileX = min(int(gl_FragCoord.x * clusterParams.z), CLUSTER_X - 1);
-        int dTileY = min(int(gl_FragCoord.y * clusterParams.w), CLUSTER_Y - 1);
-        int dSlice = clamp(int(log2(max(-ViewPos.z, 1e-4)) * clusterParams.x + clusterParams.y),
-                           0, CLUSTER_Z - 1);
-        uint dWord = clusterWord(uint(dTileX + CLUSTER_X * (dTileY + CLUSTER_Y * dSlice)));
-        int dCount = int(dWord & 0xFFFu);
-        if (dCount > 0) {
-            float t = clamp(float(dCount) / 16.0, 0.0, 1.0);
+        // clusterCount is the list this fragment actually shaded with
+        if (clusterCount > 0) {
+            float t = clamp(float(clusterCount) / 16.0, 0.0, 1.0);
             vec3 ramp = t < 0.25   ? mix(vec3(0.0, 0.0, 1.0), vec3(0.0, 1.0, 1.0), t * 4.0)
                         : t < 0.5  ? mix(vec3(0.0, 1.0, 1.0), vec3(0.0, 1.0, 0.0), (t - 0.25) * 4.0)
                         : t < 0.75 ? mix(vec3(0.0, 1.0, 0.0), vec3(1.0, 1.0, 0.0), (t - 0.5) * 4.0)
