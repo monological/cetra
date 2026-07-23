@@ -1402,8 +1402,23 @@ static void _engine_gui_panel(Engine* engine) {
                     scene->lights[i]->intensity = light_intensity;
         }
         // Clustered-forward occupancy: tint each fragment by how many lights
-        // its cluster carries (blue 1 .. red >= 16)
-        igCheckbox("Cluster Heatmap", &engine->cluster_debug);
+        // its cluster carries (blue 1 .. red >= 16). Directional lights are
+        // shaded unclustered (they reach every fragment), so a scene lit only
+        // by a key rig + IBL has nothing to show -- surface the split and grey
+        // the toggle out there, rather than letting it look broken.
+        if (engine->light_cluster) {
+            int n_dir = engine->light_cluster->lights.light_counts[0];
+            int n_clustered = engine->light_cluster->lights.light_counts[1];
+            igText("%d directional (unclustered), %d clustered", n_dir, n_clustered);
+            if (n_clustered == 0)
+                igBeginDisabled(true);
+            igCheckbox("Cluster Heatmap", &engine->cluster_debug);
+            if (n_clustered == 0) {
+                igEndDisabled();
+                igSameLine(0, -1);
+                igTextDisabled("(needs point/spot lights)");
+            }
+        }
     }
 
     if (scene && scene->render_skybox && scene->ibl &&
