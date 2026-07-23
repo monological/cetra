@@ -148,6 +148,30 @@ endif()
 target_compile_definitions(cetra_deps INTERFACE
     $<$<PLATFORM_ID:Darwin>:GL_SILENCE_DEPRECATION>)
 
+# Jolt defaults that only bite under MSVC; force them before its add_subdirectory
+# so the cached values win in its scope. All inert on macOS/Linux.
+if(MSVC)
+    # Jolt forces the static CRT (/MT) while everything else defaults to dynamic
+    # (/MD) -- a guaranteed LNK2038. Pin dynamic and stop Jolt overriding it. The
+    # x64-windows-static-md triplet matches: static deps, dynamic CRT, no DLLs to
+    # ship next to the exe.
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL"
+        CACHE STRING "" FORCE)
+    set(USE_STATIC_MSVC_RUNTIME_LIBRARY OFF CACHE BOOL "" FORCE)
+    # Jolt's MSVC branch is /Wall /WX, which clang-cl maps to -Weverything
+    # -Werror and cannot survive; and its LTO emits bitcode .lib link.exe can't
+    # consume.
+    set(ENABLE_ALL_WARNINGS OFF CACHE BOOL "" FORCE)
+    set(INTERPROCEDURAL_OPTIMIZATION OFF CACHE BOOL "" FORCE)
+    set(OVERRIDE_CXX_FLAGS OFF CACHE BOOL "" FORCE)
+    # These default ON and emit AVX2/BMI, which a KVM guest's default CPU model
+    # does not expose -- a SIGILL at the first physics tick, not a build error.
+    # Re-enable once the guest is CPU-passthrough. SSE4.1/4.2 stay on (universal).
+    foreach(_jolt_isa USE_AVX2 USE_AVX512 USE_F16C USE_FMADD USE_LZCNT USE_TZCNT)
+        set(${_jolt_isa} OFF CACHE BOOL "" FORCE)
+    endforeach()
+endif()
+
 # Build JoltC if enabled
 if(CETRA_BUILD_JOLTC)
     # Enable debug renderer for JoltC (needed for DrawSettings, etc.)
@@ -172,6 +196,18 @@ target_include_directories(cimgui PUBLIC ${CIMGUI_DIR}/imgui/backends)
 # Plain signature, deliberately: cimgui's own CMakeLists links with the plain
 # form, and CMake hard-errors if plain and keyword forms are mixed on one target.
 target_link_libraries(cimgui cetra_deps)
+
+# cimgui sets IMGUI_IMPL_API to __declspec(dllexport) on Windows even in the
+# static config we force, which pushes the backend symbols into every consumer's
+# export table. Rewrite it to plain C linkage. Inert off Windows.
+if(WIN32)
+    get_target_property(_cimgui_defs cimgui INTERFACE_COMPILE_DEFINITIONS)
+    if(_cimgui_defs)
+        list(FILTER _cimgui_defs EXCLUDE REGEX "^IMGUI_IMPL_API=")
+        list(APPEND _cimgui_defs "IMGUI_IMPL_API=extern \"C\" ")
+        set_target_properties(cimgui PROPERTIES INTERFACE_COMPILE_DEFINITIONS "${_cimgui_defs}")
+    endif()
+endif()
 
 # Build the cetra library
 add_subdirectory(cetra)
