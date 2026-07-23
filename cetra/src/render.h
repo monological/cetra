@@ -34,4 +34,9 @@ void render_update_skinning_uniforms(ShaderProgram* program, const Mesh* mesh);
 // If skeleton is provided, shows bind pose in green
 void render_skeleton_bones(Engine* engine, Skeleton* skeleton, AnimationState* anim_state);
 
+// X-ray light overlay: position cross per light (tinted by the light's color)
+// plus a wireframe sphere at its clustered-lighting cull radius. Called by
+// render_current_scene when engine->show_lights is set.
+void render_light_overlay(Engine* engine, Scene* scene);
+
 #endif // _RENDER_H_

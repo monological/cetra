@@ -78,6 +78,8 @@ typedef struct {
     float parallax_scale;             // POM depth override (< 0 = keep engine default)
     int no_sss;                       // Disable separable subsurface scattering
     int oit;                          // Enable weighted-blended OIT (default off)
+    int show_lights;                  // Draw light gizmos (position + cull radius)
+    int cluster_heatmap;              // Tint by cluster light count
     int point_light_grid;             // N: spawn an NxN point-light test grid (0 = off)
     float plg_radius;                 // Grid spacing == per-light cull radius
     float plg_intensity;              // Grid light intensity

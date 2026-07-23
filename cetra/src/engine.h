@@ -160,6 +160,7 @@ typedef struct Engine {
     bool show_fps;
     bool show_camera_hud; // Live camera pose overlay next to the FPS readout
     bool show_bones;      // X-ray bone visualization
+    bool show_lights;     // Light overlay: position cross + cull-radius wireframe
     bool headless;        // Hidden window, no vsync (set before init_engine)
     bool headless_jitter; // Apply the TAA sub-pixel jitter even in headless (non-deterministic
                           // screenshots, but lets temporal accumulation converge for verification)

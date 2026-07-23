@@ -195,6 +195,7 @@ Engine* create_engine(const char* window_title, int width, int height) {
     engine->show_fps = false;
     engine->show_camera_hud = false;
     engine->show_bones = false;
+    engine->show_lights = false;
     engine->headless = false;
     engine->headless_jitter = false;
     engine->gui_frame_active = false;
@@ -1358,6 +1359,8 @@ static void _engine_gui_panel(Engine* engine) {
         set_engine_show_wireframe(engine, wireframe);
     igSameLine(0, -1);
     igCheckbox("Bones", &engine->show_bones);
+    igSameLine(0, -1);
+    igCheckbox("Lights", &engine->show_lights);
 
     if (igRadioButton_Bool("Free", engine->camera_mode == CAMERA_MODE_FREE))
         engine->camera_mode = CAMERA_MODE_FREE;

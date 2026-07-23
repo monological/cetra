@@ -21,6 +21,7 @@
 #include "camera.h"
 #include "common.h"
 #include "engine.h"
+#include "render.h"
 #include "light_cluster.h"
 #include "util.h"
 #include "shadow.h"
@@ -823,12 +824,162 @@ void render_current_scene(Engine* engine) {
             glEnable(GL_CULL_FACE);
     }
 
+    // Light overlay last, so the X-ray lines sit on top of the finished scene
+    if (engine->show_lights)
+        render_light_overlay(engine, scene);
+
     // Reset program state at end of frame
     glUseProgram(0);
 
     // Remember this frame's un-jittered view-projection for next frame's motion
     // vectors. Done here (not in the engine loop) so every render path keeps it.
     glm_mat4_copy(engine->view_proj, engine->prev_view_proj);
+}
+
+/*
+ * Light overlay
+ *
+ * Draws every scene light as an X-ray line overlay: a cross at its position
+ * tinted by the light's own color, plus a wireframe sphere at the cull radius
+ * light_cluster.c derives for clustered assignment (spec 9.1). That radius is
+ * the one quantity in the light pipeline with no other visible consequence --
+ * it comes from an epsilon heuristic, and a wrong one shows up only indirectly
+ * as popping or an index-pool overflow warning. Directional lights get a
+ * direction ray instead of a sphere (they have no falloff); lights whose
+ * radius rounds to nothing are drawn grey, which is how an authored-but-dead
+ * light announces itself.
+ */
+#define LIGHT_OVERLAY_RING_SEGMENTS 24
+#define LIGHT_OVERLAY_CROSS_PIXELS  14.0f
+// cross (3 segs) + 3 rings + direction ray, 2 verts per seg, 6 floats per vert
+#define LIGHT_OVERLAY_FLOATS_PER_LIGHT ((3 + 3 * LIGHT_OVERLAY_RING_SEGMENTS + 1) * 2 * 6)
+
+static void _overlay_line(float* v, size_t* n, const vec3 a, const vec3 b, const vec3 color) {
+    const float* ends[2] = {a, b};
+    for (int e = 0; e < 2; e++) {
+        v[(*n)++] = ends[e][0];
+        v[(*n)++] = ends[e][1];
+        v[(*n)++] = ends[e][2];
+        v[(*n)++] = color[0];
+        v[(*n)++] = color[1];
+        v[(*n)++] = color[2];
+    }
+}
+
+// One great circle of the radius sphere, in the plane spanned by axis_u/axis_v
+static void _overlay_ring(float* v, size_t* n, const vec3 center, float radius, const vec3 axis_u,
+                        const vec3 axis_v, const vec3 color) {
+    vec3 prev;
+    for (int i = 0; i <= LIGHT_OVERLAY_RING_SEGMENTS; i++) {
+        float t = (float)i / (float)LIGHT_OVERLAY_RING_SEGMENTS * 2.0f * GLM_PIf;
+        vec3 p, tmp;
+        glm_vec3_scale((float*)axis_u, cosf(t) * radius, p);
+        glm_vec3_scale((float*)axis_v, sinf(t) * radius, tmp);
+        glm_vec3_add(p, tmp, p);
+        glm_vec3_add(p, (float*)center, p);
+        if (i > 0)
+            _overlay_line(v, n, prev, p, color);
+        glm_vec3_copy(p, prev);
+    }
+}
+
+void render_light_overlay(Engine* engine, Scene* scene) {
+    if (!engine || !engine->bone_program || !scene || scene->light_count == 0)
+        return;
+
+    float* vertices = malloc(scene->light_count * LIGHT_OVERLAY_FLOATS_PER_LIGHT * sizeof(float));
+    if (!vertices)
+        return;
+    size_t vertex_floats = 0;
+
+    // Screen-constant cross size: world units per pixel at unit depth, scaled
+    // by each light's distance (same trick the bone overlay uses)
+    int render_w, render_h;
+    engine_render_size(engine, &render_w, &render_h);
+    Camera* cam = engine->camera;
+    float world_per_px = (render_h > 0 && cam)
+                             ? (2.0f * tanf(cam->fov_radians * 0.5f) / (float)render_h)
+                             : 0.002f;
+    vec3 cam_pos;
+    glm_vec3_copy(cam ? cam->position : (vec3){0.0f, 0.0f, 0.0f}, cam_pos);
+
+    for (size_t i = 0; i < scene->light_count; i++) {
+        Light* light = scene->lights[i];
+        if (!light || light->type == LIGHT_UNKNOWN)
+            continue;
+
+        float radius = light_cull_radius(light);
+        bool dead = (light->type != LIGHT_DIRECTIONAL) && radius == 0.0f;
+
+        // Normalize the tint so a dim light still reads; grey marks a light
+        // culled to nothing
+        vec3 color;
+        if (dead) {
+            glm_vec3_copy((vec3){0.35f, 0.35f, 0.35f}, color);
+        } else {
+            float peak = fmaxf(light->color[0], fmaxf(light->color[1], light->color[2]));
+            glm_vec3_scale((float*)light->color, peak > 1e-4f ? 1.0f / peak : 1.0f, color);
+        }
+
+        vec3 pos;
+        glm_vec3_copy(light->global_position, pos);
+
+        vec3 to_cam;
+        glm_vec3_sub(cam_pos, pos, to_cam);
+        float depth = fmaxf(glm_vec3_norm(to_cam), 1e-4f);
+        float cross = 0.5f * LIGHT_OVERLAY_CROSS_PIXELS * world_per_px * depth;
+
+        for (int axis = 0; axis < 3; axis++) {
+            vec3 d = {0.0f, 0.0f, 0.0f}, a, b;
+            d[axis] = cross;
+            glm_vec3_sub(pos, d, a);
+            glm_vec3_add(pos, d, b);
+            _overlay_line(vertices, &vertex_floats, a, b, color);
+        }
+
+        if (light->type == LIGHT_DIRECTIONAL) {
+            // No falloff to show: point a ray down the beam instead
+            vec3 dir, tip;
+            glm_vec3_copy(light->direction, dir);
+            if (glm_vec3_norm2(dir) > 1e-8f) {
+                glm_vec3_normalize(dir);
+                glm_vec3_scale(dir, cross * 6.0f, dir);
+                glm_vec3_add(pos, dir, tip);
+                _overlay_line(vertices, &vertex_floats, pos, tip, color);
+            }
+        } else if (radius > 0.0f) {
+            // Wireframe sphere at the clustered-lighting cull radius
+            _overlay_ring(vertices, &vertex_floats, pos, radius, (vec3){1, 0, 0}, (vec3){0, 1, 0},
+                        color);
+            _overlay_ring(vertices, &vertex_floats, pos, radius, (vec3){1, 0, 0}, (vec3){0, 0, 1},
+                        color);
+            _overlay_ring(vertices, &vertex_floats, pos, radius, (vec3){0, 1, 0}, (vec3){0, 0, 1},
+                        color);
+        }
+    }
+
+    if (vertex_floats == 0) {
+        free(vertices);
+        return;
+    }
+
+    glBindVertexArray(engine->bone_line_vao);
+    glBindBuffer(GL_ARRAY_BUFFER, engine->bone_line_vbo);
+    glBufferData(GL_ARRAY_BUFFER, vertex_floats * sizeof(float), vertices, GL_DYNAMIC_DRAW);
+
+    glUseProgram(engine->bone_program->id);
+    glUniformMatrix4fv(glGetUniformLocation(engine->bone_program->id, "view"), 1, GL_FALSE,
+                       (float*)engine->view_matrix);
+    glUniformMatrix4fv(glGetUniformLocation(engine->bone_program->id, "projection"), 1, GL_FALSE,
+                       (float*)engine->projection_matrix);
+
+    // X-ray: lights are usually inside or behind geometry
+    glDisable(GL_DEPTH_TEST);
+    glDrawArrays(GL_LINES, 0, (GLsizei)(vertex_floats / 6));
+    glEnable(GL_DEPTH_TEST);
+    glBindVertexArray(0);
+
+    free(vertices);
 }
 
 // Bone-overlay line thickness, in PIXELS of the rendered image. Held in screen

@@ -73,6 +73,8 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --no-key-light     Pure IBL lighting (no analytic lights/shadows)\n");
     fprintf(stderr,
             "      --point-light-grid N[,radius,intensity]  NxN point-light test grid\n");
+    fprintf(stderr, "      --show-lights      Light gizmos (position + cull radius)\n");
+    fprintf(stderr, "      --cluster-heatmap  Tint fragments by cluster light count\n");
     fprintf(stderr, "      --no-shadows       Keep key lights but disable shadow maps\n");
     fprintf(stderr, "      --no-pcss          Fixed-width PCF instead of contact-hardening\n");
     fprintf(stderr, "      --light-size <f>   Emitter size for penumbra (default: scene-scaled)\n");
@@ -554,6 +556,10 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->oit = 1;
         } else if (strcmp(argv[i], "--no-oit") == 0) {
             args->oit = 0;
+        } else if (strcmp(argv[i], "--show-lights") == 0) {
+            args->show_lights = 1;
+        } else if (strcmp(argv[i], "--cluster-heatmap") == 0) {
+            args->cluster_heatmap = 1;
         } else if (strcmp(argv[i], "--point-light-grid") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -1414,6 +1420,8 @@ int main(int argc, char** argv) {
     if (args.oit) {
         engine->oit_enabled = true;
     }
+    engine->show_lights = args.show_lights != 0;
+    engine->cluster_debug = args.cluster_heatmap != 0;
     // Set the POM default depth before the model loads (the height convention
     // loader stamps it onto materials as it resolves their height maps).
     if (args.parallax_scale >= 0.0f) {
