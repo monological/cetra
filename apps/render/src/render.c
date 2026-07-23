@@ -71,6 +71,7 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --ground-height <m> HDR capture height above ground (default: 1.2)\n");
     fprintf(stderr, "      --no-ground        Disable HDR ground projection (infinite skybox)\n");
     fprintf(stderr, "      --no-key-light     Pure IBL lighting (no analytic lights/shadows)\n");
+    fprintf(stderr, "      --clustered        Clustered forward lighting (UBO light path)\n");
     fprintf(stderr, "      --no-shadows       Keep key lights but disable shadow maps\n");
     fprintf(stderr, "      --no-pcss          Fixed-width PCF instead of contact-hardening\n");
     fprintf(stderr, "      --light-size <f>   Emitter size for penumbra (default: scene-scaled)\n");
@@ -549,6 +550,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->oit = 1;
         } else if (strcmp(argv[i], "--no-oit") == 0) {
             args->oit = 0;
+        } else if (strcmp(argv[i], "--clustered") == 0) {
+            args->clustered = 1;
         } else if (strcmp(argv[i], "--sss-radius") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -1334,6 +1337,9 @@ int main(int argc, char** argv) {
     }
     if (args.oit) {
         engine->oit_enabled = true;
+    }
+    if (args.clustered) {
+        engine->clustered_lighting = true;
     }
     // Set the POM default depth before the model loads (the height convention
     // loader stamps it onto materials as it resolves their height maps).

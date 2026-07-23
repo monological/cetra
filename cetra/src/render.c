@@ -400,6 +400,7 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
             uniform_set_int(u, "sheenEnabled", engine->sheen_enabled ? 1 : 0);
             uniform_set_int(u, "parallaxEnabled", engine->parallax_enabled ? 1 : 0);
             uniform_set_int(u, "sssEnabled", engine->sss_enabled ? 1 : 0);
+            uniform_set_int(u, "clusteredEnabled", engine->clustered_lighting ? 1 : 0);
             uniform_set_int(u, "oitPass", oit_accumulate ? 1 : 0);
             // Refraction source: valid only in the late pass, after the
             // mid-frame resolve ran (pass 2 forces a program re-switch by

@@ -421,6 +421,10 @@ void setup_program_uniforms(ShaderProgram* program) {
     ubo_bind_program_block(program->id, "LightsBlock", UBO_BINDING_LIGHTS);
     ubo_bind_program_block(program->id, "ClusterBlock", UBO_BINDING_CLUSTERS);
     ubo_bind_program_block(program->id, "ClusterIndexBlock", UBO_BINDING_CLUSTER_INDICES);
+    // Guard against C/GLSL std140 layout drift (silent-garbage failure mode)
+    ubo_validate_program_block(program->id, "LightsBlock", UBO_LIGHTS_BLOCK_SIZE);
+    ubo_validate_program_block(program->id, "ClusterBlock", UBO_CLUSTERS_BLOCK_SIZE);
+    ubo_validate_program_block(program->id, "ClusterIndexBlock", UBO_CLUSTER_INDICES_BLOCK_SIZE);
 }
 
 ShaderProgram* create_pbr_program() {

@@ -78,6 +78,7 @@ typedef struct {
     float parallax_scale;             // POM depth override (< 0 = keep engine default)
     int no_sss;                       // Disable separable subsurface scattering
     int oit;                          // Enable weighted-blended OIT (default off)
+    int clustered;                    // Shade via clustered forward light UBOs (default off)
     float sss_radius;                 // SSS scatter radius override (< 0 = fixture default)
     float sss_color[3];               // SSS scatter color override (< 0 in [0] = fixture default)
     int no_bloom;                     // Disable bloom

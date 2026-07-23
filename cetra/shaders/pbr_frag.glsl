@@ -175,6 +175,8 @@ uniform int spotShadowActive;
 // legacy path above ignores them.
 #include "lights_ubo.glsl"
 
+uniform int clusteredEnabled; // 1 = shade from the UBO blocks; 0 = legacy lights[]
+
 // Cascade for a view depth: the first cascade whose far bound contains it.
 // At cascadeCount 1 the loop never runs (cascade 0).
 int selectCascade(float viewDepth)
@@ -1000,6 +1002,7 @@ void main() {
     // the light loop (mirrors catcher_frag)
     int fragCascade = selectCascade(-ViewPos.z);
 
+    if (clusteredEnabled == 0) {
     for (int i = 0; i < numLights; i++) {
         // Calculate per-light radiance
         vec3 L;
@@ -1158,6 +1161,150 @@ void main() {
             Lo += subsurfaceTransmission(N, L, V, albedoMap, subsurfaceColor, subsurface,
                                          lights[i].color * lights[i].intensity * attenuation);
         }
+    }
+    } else {
+    // Clustered forward (spec 9.1): directional lights shade unconditionally
+    // (they reach every fragment), then the fragment's cluster supplies the
+    // point/spot/area list. The shading body below is the legacy body with the
+    // per-light fetches swapped for the packed UBO fields -- radiance uses the
+    // CPU-premultiplied color*intensity, the directional CSM slot rides in the
+    // DirLight itself (no shadowLightIndex[] ordering indirection), and the
+    // spot flag replaces the type==2 test.
+    int tileX = min(int(gl_FragCoord.x * clusterParams.z), CLUSTER_X - 1);
+    int tileY = min(int(gl_FragCoord.y * clusterParams.w), CLUSTER_Y - 1);
+    int slice = clamp(int(log2(max(-ViewPos.z, 1e-4)) * clusterParams.x + clusterParams.y), 0,
+                      CLUSTER_Z - 1);
+    uint clusterData = clusterWord(uint(tileX + CLUSTER_X * (tileY + CLUSTER_Y * slice)));
+    uint clusterOffset = clusterData >> 12u;
+    int clusterCount = int(clusterData & 0xFFFu);
+    int numDir = lightCounts.x;
+
+    for (int k = 0; k < numDir + clusterCount; k++) {
+        vec3 L;
+        float attenuation;
+        vec3 lightCI;   // color * intensity (premultiplied on CPU)
+        vec2 lightSize; // PCSS emitter size
+        int dirShadowSlot = -1;
+        bool isSpot = false;
+
+        if (k < numDir) {
+            L = normalize(-dirLights[k].dirShadow.xyz);
+            attenuation = 1.0;
+            lightCI = dirLights[k].colorIntensity.xyz;
+            lightSize = dirLights[k].sizeMisc.xy;
+            dirShadowSlot = int(dirLights[k].dirShadow.w);
+        } else {
+            uint li = lightIndexAt(clusterOffset + uint(k - numDir));
+            vec3 lightPos = clusterLights[li].posRange.xyz;
+            L = normalize(lightPos - WorldPos);
+            float distance = length(lightPos - WorldPos);
+            attenuation = calculateAttenuation(distance, clusterLights[li].attenCutoff.x,
+                                               clusterLights[li].attenCutoff.y,
+                                               clusterLights[li].attenCutoff.z);
+            attenuation *=
+                spotConeFactorP(clusterLights[li].dirType.w, clusterLights[li].dirType.xyz,
+                                clusterLights[li].attenCutoff.w,
+                                clusterLights[li].spotShadowSize.x, L);
+            lightCI = clusterLights[li].colorIntensity.xyz;
+            lightSize = clusterLights[li].spotShadowSize.zw;
+            isSpot = clusterLights[li].dirType.w == 2.0;
+        }
+
+        // Half vector, guarded (see the legacy loop for the NaN rationale)
+        vec3 Hraw = V + L;
+        float hLen2 = dot(Hraw, Hraw);
+        vec3 H = hLen2 > 1e-8 ? Hraw * inversesqrt(hLen2) : N;
+        vec3 radiance = lightCI * attenuation;
+
+        // Cook-Torrance BRDF with optional anisotropy
+        float NDF;
+        if (anisotropyLayer >= 0 && anisotropyMap > 0.01) {
+            NDF = distributionGGXAnisotropic(N, H, T, B, roughnessMap, anisotropyMap);
+        } else {
+            NDF = areaLightNorm * distributionGGX(N, H, areaLightRoughness);
+        }
+        float G = geometrySmith(N, V, L, roughnessMap);
+        vec3 F = fresnelSchlick(max(dot(H, V), 0.0), F0);
+
+        // Thin-film interference (see the legacy loop)
+        if (filmThickness > 0.0) {
+            vec3 iridescence = thinFilmInterference(filmThickness, NdotV, 1.5);
+            float fresnel = pow(clamp(1.0 - NdotV, 0.0, 1.0), 2.0);
+            F = iridescence * (0.6 + fresnel * 0.4);
+        }
+
+        float NdotL = max(dot(N, L), 0.0);
+
+        // Specular contribution, multi-scatter compensated
+        vec3 numerator = NDF * G * F;
+        float denominator = 4.0 * NdotV * NdotL + 0.0001;
+        vec3 specular = numerator / denominator * energyComp;
+
+        // Energy conservation (see the legacy loop)
+        vec3 kS = F;
+        vec3 kD = vec3(1.0) - kS;
+        kD *= 1.0 - metallicMap;
+        kD *= 1.0 - transmissionEff;
+
+        // Directional shadow: the light's own CSM slot (alpha-to-coverage
+        // surfaces skip the map -- see the legacy loop for the rationale)
+        float shadow = 1.0;
+        if (dirShadowSlot >= 0 && (alphaMasked == 0 || foliageShadows == 1)) {
+            shadow = calculateShadow(dirShadowSlot, fragCascade, WorldPos, NdotL,
+                                     max(lightSize.x, lightSize.y));
+        }
+        // Spot (flashlight) shadow: its own perspective map
+        if (isSpot && spotShadowActive == 1 && alphaMasked == 0) {
+            shadow = calculateSpotShadow(WorldPos, NdotL);
+        }
+
+        // POM self-shadow
+        if (pom) {
+            shadow *= parallaxSelfShadow(uv, parallaxHeight, normalize(transpose(TBN) * L));
+        }
+
+        // Clearcoat lobe (see the legacy loop)
+        vec3 coatSpec = vec3(0.0);
+        float coatAtten = 0.0;
+        if (clearcoatEnabled > 0 && clearcoat > 0.0) {
+            vec3 Nc = clearcoatNormal(uv);
+            float ccR = clamp(clearcoatRoughness, 0.04, 1.0);
+            float Dc = distributionGGX(Nc, H, ccR);
+            float Gc = geometrySmith(Nc, V, L, ccR);
+            float Fc = fresnelSchlick(max(dot(H, V), 0.0), vec3(0.04)).r;
+            coatSpec = vec3(clearcoat * Dc * Gc * Fc / denominator);
+            coatAtten = clearcoat * Fc;
+        }
+
+        // Sheen lobe (see the legacy loop)
+        vec3 sheenSpec = vec3(0.0);
+        float sheenScale = 1.0;
+        if (sheenEnabled > 0 && maxComp(sheenColorFactor) > 0.0) {
+            vec3 sheenColor = sheenColorAt(uv);
+            float shR = clamp(sheenRoughnessFactor, 0.07, 1.0);
+            float Dsh = distributionCharlie(N, H, shR);
+            float Vsh = visibilityAshikhmin(NdotL, NdotV);
+            sheenSpec = sheenColor * Dsh * Vsh;
+            sheenScale = 1.0 - maxComp(sheenColor);
+        }
+
+        // Accumulate with the firefly clamp (see the legacy loop)
+        Lo += min((((kD * albedoMap / PI + specular) * sheenScale + sheenSpec) * (1.0 - coatAtten) +
+                   coatSpec) *
+                      radiance * NdotL * shadow,
+                  vec3(10.0));
+
+        // SSS separated diffuse tap (see the legacy loop)
+        if (sss) {
+            sssDiffuse += kD * albedoMap / PI * radiance * NdotL * shadow;
+        }
+
+        // SSS back-light transmission (see the legacy loop)
+        if (sss) {
+            Lo += subsurfaceTransmission(N, L, V, albedoMap, subsurfaceColor, subsurface,
+                                         lightCI * attenuation);
+        }
+    }
     }
 
     // Ambient lighting with IBL
