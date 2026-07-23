@@ -6,13 +6,11 @@ function(add_cetra_app APP_NAME)
     add_executable(${APP_NAME} ${APP_SOURCES})
 
     target_link_libraries(${APP_NAME} PRIVATE cetra)
-
-    target_include_directories(${APP_NAME} PRIVATE
-        ${CMAKE_BINARY_DIR}/include
-    )
-
     target_link_libraries(${APP_NAME} PRIVATE cetra_warnings)
-    # GL_SILENCE_DEPRECATION arrives transitively from cetra -> cetra_deps.
+    # The cetra/ include tree (forwarders + shader_strings.h) and
+    # GL_SILENCE_DEPRECATION both arrive transitively from cetra. An app source
+    # includes "cetra/shader_strings.h" directly, so depend on its generation.
+    add_dependencies(${APP_NAME} cetra_shaders)
 endfunction()
 
 # Add each app subdirectory

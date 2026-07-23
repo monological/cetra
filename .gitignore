@@ -4,7 +4,6 @@ my_models
 imgui.ini
 *.swp
 *.o
-cetra/src/shader_strings.h
 *.a
 
 plans/
