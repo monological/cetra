@@ -50,6 +50,10 @@ void frustum_extract_from_vp(mat4 vp, Frustum* frustum);
 bool frustum_test_aabb_transformed(const Frustum* frustum, vec3 aabb_min, vec3 aabb_max,
                                    mat4 model);
 
+// Test if a world-space sphere is inside or intersects the frustum
+// (conservative: false only when completely outside a plane)
+bool frustum_test_sphere(const Frustum* frustum, vec3 center, float radius);
+
 // Transform AABB to world space (computes world-space AABB from local AABB and transform)
 void aabb_transform(vec3 aabb_min, vec3 aabb_max, mat4 transform, vec3 out_min, vec3 out_max);
 

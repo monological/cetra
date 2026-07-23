@@ -30,6 +30,11 @@ typedef struct Light {
     float linear;
     float quadratic;
 
+    // Authored cull radius for clustered lighting (spec 9.1). 0 = derive from
+    // the attenuation coefficients (light_cull_radius); an explicit range is
+    // the escape hatch when the epsilon heuristic clips a light too early.
+    float range;
+
     // Spot light specific properties
     float cutOff;      // Cut-off angle
     float outerCutOff; // Outer cut-off angle
@@ -53,6 +58,7 @@ void set_light_direction(Light* light, vec3 direction);
 void set_light_color(Light* light, vec3 color);
 void set_light_intensity(Light* light, float intensity);
 void set_light_attenuation(Light* light, float constant, float linear, float quadratic);
+void set_light_range(Light* light, float range);
 void set_light_cutoff(Light* light, float cutOff, float outerCutOff);
 void set_light_cast_shadows(Light* light, bool cast_shadows);
 void set_light_size(Light* light, float width, float height);

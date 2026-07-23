@@ -246,3 +246,17 @@ bool frustum_test_aabb_transformed(const Frustum* frustum, vec3 aabb_min, vec3 a
 
     return true; // AABB is inside or intersects the frustum
 }
+
+bool frustum_test_sphere(const Frustum* frustum, vec3 center, float radius) {
+    // Planes are normalized (frustum_extract_from_vp), so the signed distance
+    // is in world units and compares directly against the radius
+    for (int i = 0; i < 6; i++) {
+        const float* plane = frustum->planes[i];
+        float distance =
+            plane[0] * center[0] + plane[1] * center[1] + plane[2] * center[2] + plane[3];
+        if (distance < -radius) {
+            return false; // sphere is completely outside this plane
+        }
+    }
+    return true;
+}

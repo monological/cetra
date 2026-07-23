@@ -15,6 +15,7 @@
 #include "util.h"
 #include "ext/cwalk.h" // cwk_path_set_style: pin UNIX separators (see init_engine)
 #include "engine.h"
+#include "light_cluster.h"
 #include "transform.h"
 #include "intersect.h"
 #include "shadow.h"
@@ -152,6 +153,8 @@ Engine* create_engine(const char* window_title, int width, int height) {
     engine->lights_ubo = NULL;
     engine->clusters_ubo = NULL;
     engine->cluster_indices_ubo = NULL;
+    engine->light_cluster = NULL;
+    engine->clustered_lighting = false;
     engine->scene_color_this_frame = false;
     engine->normals_this_frame = false;
     engine->aux_this_frame = false;
@@ -280,6 +283,7 @@ void free_engine(Engine* engine) {
         free_postfx(engine->postfx);
     }
 
+    free_light_cluster_context(engine->light_cluster);
     free_ubo(engine->lights_ubo);
     free_ubo(engine->clusters_ubo);
     free_ubo(engine->cluster_indices_ubo);
@@ -661,6 +665,11 @@ int init_engine(Engine* engine) {
         create_ubo(UBO_CLUSTER_INDICES_BLOCK_SIZE, UBO_BINDING_CLUSTER_INDICES);
     if (!engine->lights_ubo || !engine->clusters_ubo || !engine->cluster_indices_ubo) {
         log_error("Failed to create clustered light UBOs");
+        return -1;
+    }
+    engine->light_cluster = create_light_cluster_context();
+    if (!engine->light_cluster) {
+        log_error("Failed to create light cluster context");
         return -1;
     }
     if (_setup_engine_gui(engine) != 0) {

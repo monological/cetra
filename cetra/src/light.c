@@ -32,6 +32,7 @@ Light* create_light() {
     light->constant = 1.0f;
     light->linear = 0.09f;
     light->quadratic = 0.032f;
+    light->range = 0.0f; // 0 = derive from attenuation (light_cull_radius)
     light->cutOff = cosf(glm_rad(12.5f));
     light->outerCutOff = cosf(glm_rad(15.0f));
 
@@ -131,6 +132,12 @@ void set_light_attenuation(Light* light, float constant, float linear, float qua
     light->constant = constant;
     light->linear = linear;
     light->quadratic = quadratic;
+}
+
+void set_light_range(Light* light, float range) {
+    if (!light)
+        return;
+    light->range = range;
 }
 
 /**

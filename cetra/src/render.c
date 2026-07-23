@@ -21,6 +21,7 @@
 #include "camera.h"
 #include "common.h"
 #include "engine.h"
+#include "light_cluster.h"
 #include "util.h"
 #include "shadow.h"
 #include "intersect.h"
@@ -684,6 +685,18 @@ void render_current_scene(Engine* engine) {
     glm_mat4_mul(*projection, *view, engine->view_proj);
     Frustum frustum;
     frustum_extract_from_vp(engine->view_proj, &frustum);
+
+    // Clustered forward (spec 9.1): rebuild the light grid + UBOs for THIS
+    // invocation's camera and viewport -- probe-capture faces re-enter here
+    // with their own view/projection, so each face gets a correct grid.
+    // Inert while the flag is off.
+    if (engine->clustered_lighting && engine->light_cluster) {
+        GLint cluster_viewport[4];
+        glGetIntegerv(GL_VIEWPORT, cluster_viewport);
+        light_cluster_build_and_upload(engine->light_cluster, engine, scene, *view, *projection,
+                                       cluster_viewport[2], cluster_viewport[3],
+                                       camera->near_clip, camera->far_clip);
+    }
 
     // Draw projection: the un-jittered projection, sub-pixel-jittered when TAA
     // runs so the temporal resolve accumulates coverage. Recomputed here every
