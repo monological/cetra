@@ -1,16 +1,16 @@
-cmake_minimum_required(VERSION 3.16 FATAL_ERROR)
+# 3.25 matches CMakePresets.json, the way this project is meant to be built; it
+# also makes CMP0141 (below) NEW by default.
+cmake_minimum_required(VERSION 3.25 FATAL_ERROR)
 
 project(cetra
     VERSION 0.1
     DESCRIPTION "Cetra Graphics Engine"
     LANGUAGES C CXX)
 
-# MSVC debug info as /Z7 (Embedded) rather than /Zi (ProgramDatabase): with
-# Ninja, parallel compiles sharing one .pdb need /FS serialization and are a
-# known source of flaky failures. Must be set before any target is created.
-# No effect on non-MSVC toolchains.
-if(POLICY CMP0141)
-    cmake_policy(SET CMP0141 NEW)
+if(MSVC)
+    # /Z7 (Embedded) over /Zi (ProgramDatabase): with Ninja, parallel compiles
+    # sharing one .pdb need /FS serialization and flake. Read at target creation,
+    # so it must precede any target.
     set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT
         "$<$<CONFIG:Debug,RelWithDebInfo>:Embedded>")
 endif()
@@ -33,12 +33,9 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 # Platform-specific settings
 if(APPLE)
-    # CMAKE_PREFIX_PATH only, deliberately: the global include_directories and
-    # link_directories that used to live here put Homebrew's prefix on every
-    # target's search path, which masked the fact that cetra's public headers
-    # include <GL/glew.h>, <GLFW/glfw3.h> and <cglm/cglm.h> while those
-    # dependencies were attached PRIVATE. Apps compiled by accident. They now
-    # come through cetra_deps, linked PUBLIC.
+    # Prefix path for find_package / pkg-config. Deliberately not
+    # include_directories/link_directories: dependency paths belong on
+    # cetra_deps, not on every target globally.
     set(HOMEBREW_PREFIX "/opt/homebrew" CACHE PATH "Homebrew prefix")
     list(APPEND CMAKE_PREFIX_PATH ${HOMEBREW_PREFIX})
 endif()
@@ -68,18 +65,18 @@ if(MSVC)
             -Wno-microsoft-include)
     endif()
 else()
+    # -Wall only, not -Wextra: match the existing macOS warning surface. Raising
+    # it is a separate cleanup, not this refactor.
     target_compile_options(cetra_warnings INTERFACE -Wall)
 endif()
 
-# Third-party dependencies, gathered onto one interface target so that consumers
-# link a single name and the discovery mechanism can vary by platform.
+# Third-party dependencies on one interface target: consumers link a single
+# name, and the discovery mechanism can vary by platform (vcpkg is planned).
 #
-# IMPORTED_TARGET is what makes this correct rather than merely tidy: the plain
-# pkg_check_modules variables give bare library names with the search path in a
-# separate _LIBRARY_DIRS variable that nothing here ever consumed, so linking
-# only worked for libraries already on the linker's default path. PkgConfig::*
-# carries include dirs, link dirs and libraries together. GLOBAL is required
-# because cetra_deps is consumed from subdirectories.
+# IMPORTED_TARGET so the PkgConfig::* targets carry include dirs, link dirs and
+# libraries together -- the bare pkg_check_modules variables drop the link dirs.
+# GLOBAL promotes them out of this directory scope so a subdirectory may name
+# PkgConfig::GLFW directly.
 add_library(cetra_deps INTERFACE)
 
 find_package(PkgConfig REQUIRED)

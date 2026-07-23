@@ -40,16 +40,11 @@ esac
 
 PRESET="${PLATFORM}-${BUILD_TYPE}"
 
-# Mirrors the binaryDir in CMakePresets.json; keep the two in step.
-if [[ "$BUILD_TYPE" == "release" ]]; then
-    BUILD_DIR="out/release"
-else
-    BUILD_DIR="out"
-fi
-
+# --fresh wipes the cache and reconfigures from scratch, so the script never has
+# to know where the preset builds. (CMake >= 3.24; the presets require 3.25.)
+FRESH=""
 if [[ $CLEAN -eq 1 ]]; then
-    echo "Cleaning build directory..."
-    rm -rf "$BUILD_DIR"
+    FRESH="--fresh"
 fi
 
 # Initialize submodules if needed
@@ -59,9 +54,9 @@ if [[ ! -f cetra/src/ext/JoltC/CMakeLists.txt ]]; then
 fi
 
 echo "Configuring ($PRESET)..."
-cmake --preset "$PRESET" -DCETRA_BUILD_JOLTC="$JOLTC"
+cmake --preset "$PRESET" $FRESH -DCETRA_BUILD_JOLTC="$JOLTC"
 
 echo "Building..."
 cmake --build --preset "$PRESET"
 
-echo "Done. Outputs in $BUILD_DIR/bin/"
+echo "Done ($PRESET)."
