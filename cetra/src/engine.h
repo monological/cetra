@@ -102,6 +102,7 @@ typedef struct Engine {
     struct LightClusterContext* light_cluster; // per-invocation cluster build scratch
     bool clustered_lighting;                   // Shade via the clustered UBO path (--clustered);
                                                // off = the legacy per-node lights[] upload
+    bool cluster_debug;                        // Tint fragments by cluster light count (heatmap)
     bool scene_color_this_frame; // Resolve ran this frame; transmissive draws may sample
     bool normals_this_frame;     // Attachment 1 written this frame (PBR + consumer active)
     bool aux_this_frame;         // Attachment 2 written this frame (TAA needs motion, or GTAO needs

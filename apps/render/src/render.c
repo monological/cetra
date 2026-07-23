@@ -72,6 +72,8 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --no-ground        Disable HDR ground projection (infinite skybox)\n");
     fprintf(stderr, "      --no-key-light     Pure IBL lighting (no analytic lights/shadows)\n");
     fprintf(stderr, "      --clustered        Clustered forward lighting (UBO light path)\n");
+    fprintf(stderr,
+            "      --point-light-grid N[,radius,intensity]  NxN point-light test grid\n");
     fprintf(stderr, "      --no-shadows       Keep key lights but disable shadow maps\n");
     fprintf(stderr, "      --no-pcss          Fixed-width PCF instead of contact-hardening\n");
     fprintf(stderr, "      --light-size <f>   Emitter size for penumbra (default: scene-scaled)\n");
@@ -196,6 +198,9 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->dof_max_coc = -1.0f;
     args->motion_blur_scale = -1.0f;
     args->light_size = -1.0f;      // -1 = scene-radius default
+    args->point_light_grid = 0;    // off
+    args->plg_radius = 10.0f;
+    args->plg_intensity = 5.0f;
     args->shadow_softness = -1.0f; // -1 = keep the engine default
     args->sun_elevation = -999.0f; // -999 = keep the sky default
     args->sun_azimuth = -999.0f;
@@ -552,6 +557,17 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->oit = 0;
         } else if (strcmp(argv[i], "--clustered") == 0) {
             args->clustered = 1;
+        } else if (strcmp(argv[i], "--point-light-grid") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            if (sscanf(argv[i], "%d,%f,%f", &args->point_light_grid, &args->plg_radius,
+                       &args->plg_intensity) < 1 ||
+                args->point_light_grid < 1) {
+                fprintf(stderr, "Error: --point-light-grid wants N[,radius,intensity]\n");
+                return -1;
+            }
         } else if (strcmp(argv[i], "--sss-radius") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -1659,6 +1675,61 @@ int main(int argc, char** argv) {
     if (args.ibl_intensity >= 0.0f && scene->ibl) {
         scene->ibl->intensity = args.ibl_intensity;
         printf("IBL intensity: %.2f\n", args.ibl_intensity);
+    }
+
+    // Clustered-lighting test harness (spec 9.1): an N x N grid of hue-swept
+    // point lights on XZ around the origin. Attenuation is derived so each
+    // light visually dies at its cull radius, making cluster-assignment
+    // errors show as hard edges; added AFTER the key-light setup so the
+    // normal lighting rig is unchanged underneath.
+    if (args.point_light_grid > 0) {
+        int n = args.point_light_grid;
+        if (n * n > 128) {
+            n = 11; // 128 packed-light budget (11 x 11 = 121)
+            fprintf(stderr, "point-light-grid clamped to 11x11 (128 clusterable lights)\n");
+        }
+        float radius = args.plg_radius;
+        float intensity = args.plg_intensity;
+        // Die exactly at the cull radius: 1 + q*r^2 = intensity * 256
+        float grid_q = (intensity * 256.0f - 1.0f) / (radius * radius);
+        for (int gi = 0; gi < n; gi++) {
+            for (int gj = 0; gj < n; gj++) {
+                Light* pl = create_light();
+                if (!pl)
+                    continue;
+                char plname[32];
+                snprintf(plname, sizeof(plname), "grid_%d_%d", gi, gj);
+                set_light_name(pl, plname);
+                set_light_type(pl, LIGHT_POINT);
+                vec3 pos = {((float)gi - (float)(n - 1) * 0.5f) * radius, 0.25f * radius,
+                            ((float)gj - (float)(n - 1) * 0.5f) * radius};
+                set_light_original_position(pl, pos);
+                float hue = (float)(gi * n + gj) / (float)(n * n) * 6.0f;
+                float hf = hue - floorf(hue);
+                int hi = (int)hue % 6;
+                vec3 c = {1.0f, 1.0f, 1.0f}; // HSV (hue, 0.8, 1.0) -> RGB
+                float p = 0.2f, q_ = 1.0f - 0.8f * hf, t_ = 1.0f - 0.8f * (1.0f - hf);
+                switch (hi) {
+                case 0: c[0] = 1.0f, c[1] = t_, c[2] = p; break;
+                case 1: c[0] = q_, c[1] = 1.0f, c[2] = p; break;
+                case 2: c[0] = p, c[1] = 1.0f, c[2] = t_; break;
+                case 3: c[0] = p, c[1] = q_, c[2] = 1.0f; break;
+                case 4: c[0] = t_, c[1] = p, c[2] = 1.0f; break;
+                default: c[0] = 1.0f, c[1] = p, c[2] = q_; break;
+                }
+                set_light_color(pl, c);
+                set_light_intensity(pl, intensity);
+                set_light_attenuation(pl, 1.0f, 0.0f, grid_q);
+                set_light_range(pl, radius);
+                add_light_to_scene(scene, pl);
+
+                SceneNode* pl_node = create_node();
+                set_node_light(pl_node, pl);
+                set_node_name(pl_node, plname);
+                add_child_node(scene->root_node, pl_node);
+            }
+        }
+        printf("Point-light grid: %dx%d, radius %.1f, intensity %.1f\n", n, n, radius, intensity);
     }
 
     // Load additional animation files if provided

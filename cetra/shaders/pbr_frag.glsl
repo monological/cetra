@@ -176,6 +176,7 @@ uniform int spotShadowActive;
 #include "lights_ubo.glsl"
 
 uniform int clusteredEnabled; // 1 = shade from the UBO blocks; 0 = legacy lights[]
+uniform int clusterDebug;     // Tint fragments by cluster light count (heatmap)
 
 // Cascade for a view depth: the first cascade whose far bound contains it.
 // At cascadeCount 1 the loop never runs (cascade 0).
@@ -1440,6 +1441,26 @@ void main() {
                     : fragCascade == 1 ? vec3(0.35, 1.0, 0.35)
                                        : vec3(0.35, 0.55, 1.0);
         color = mix(color, tint, 0.35);
+    }
+
+    // Cluster occupancy heatmap: tint by this fragment's cluster light count
+    // (blue 1 .. red >= 16; empty clusters stay untinted). Dead when
+    // clusterDebug 0 or in legacy mode.
+    if (clusterDebug > 0 && clusteredEnabled > 0) {
+        int dTileX = min(int(gl_FragCoord.x * clusterParams.z), CLUSTER_X - 1);
+        int dTileY = min(int(gl_FragCoord.y * clusterParams.w), CLUSTER_Y - 1);
+        int dSlice = clamp(int(log2(max(-ViewPos.z, 1e-4)) * clusterParams.x + clusterParams.y),
+                           0, CLUSTER_Z - 1);
+        uint dWord = clusterWord(uint(dTileX + CLUSTER_X * (dTileY + CLUSTER_Y * dSlice)));
+        int dCount = int(dWord & 0xFFFu);
+        if (dCount > 0) {
+            float t = clamp(float(dCount) / 16.0, 0.0, 1.0);
+            vec3 ramp = t < 0.25   ? mix(vec3(0.0, 0.0, 1.0), vec3(0.0, 1.0, 1.0), t * 4.0)
+                        : t < 0.5  ? mix(vec3(0.0, 1.0, 1.0), vec3(0.0, 1.0, 0.0), (t - 0.25) * 4.0)
+                        : t < 0.75 ? mix(vec3(0.0, 1.0, 0.0), vec3(1.0, 1.0, 0.0), (t - 0.5) * 4.0)
+                                   : mix(vec3(1.0, 1.0, 0.0), vec3(1.0, 0.0, 0.0), (t - 0.75) * 4.0);
+            color = mix(color, ramp, 0.6);
+        }
     }
 
     // For translucent materials, apply Fresnel-based alpha
