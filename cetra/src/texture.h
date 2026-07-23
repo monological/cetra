@@ -2,12 +2,11 @@
 #ifndef TEXTURE_H
 #define TEXTURE_H
 
-#include <pthread.h>
-
 #include <GL/glew.h>
 #include <stdbool.h>
 
 #include "ext/uthash.h"
+#include "thread.h"
 
 /*
  * Texture
@@ -50,7 +49,7 @@ typedef struct TexturePool {
 
     Texture* texture_cache; // Hash table for cached textures
 
-    pthread_mutex_t cache_mutex; // Protects texture_cache and textures array
+    cetra_mutex_t cache_mutex; // Protects texture_cache and textures array
 } TexturePool;
 
 TexturePool* create_texture_pool();

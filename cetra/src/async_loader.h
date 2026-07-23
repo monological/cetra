@@ -2,10 +2,11 @@
 #ifndef ASYNC_LOADER_H
 #define ASYNC_LOADER_H
 
-#include <pthread.h>
 #include <stdbool.h>
 #include <stdatomic.h>
 #include <stddef.h>
+
+#include "thread.h"
 
 #include <GL/glew.h>
 
@@ -72,25 +73,25 @@ typedef struct TextureLoadResult {
  * Async Loader - thread pool for parallel texture loading
  */
 typedef struct AsyncLoader {
-    pthread_t* workers; // worker_count entries, sized to the machine at startup
+    cetra_thread_t* workers; // worker_count entries, sized to the machine at startup
     int worker_count;
     atomic_bool shutdown;
 
     // Work queue (main thread -> workers)
     TextureLoadRequest* work_head;
     TextureLoadRequest* work_tail;
-    pthread_mutex_t work_mutex;
-    pthread_cond_t work_cond;
+    cetra_mutex_t work_mutex;
+    cetra_cond_t work_cond;
 
     // Completion queue (workers -> main thread)
     TextureLoadResult* complete_head;
     TextureLoadResult* complete_tail;
-    pthread_mutex_t complete_mutex;
+    cetra_mutex_t complete_mutex;
 
     // Keys currently being decoded, so a repeat request joins the running load
     // instead of decoding the same image again
     InFlightLoad* inflight;
-    pthread_mutex_t inflight_mutex;
+    cetra_mutex_t inflight_mutex;
 
     // Statistics
     atomic_size_t pending_count;

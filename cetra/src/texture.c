@@ -204,7 +204,7 @@ TexturePool* create_texture_pool() {
     pool->texture_count = 0;
     pool->texture_cache = NULL;
 
-    if (pthread_mutex_init(&pool->cache_mutex, NULL) != 0) {
+    if (!cetra_mutex_init(&pool->cache_mutex)) {
         log_error("Failed to init cache_mutex");
         free(pool);
         return NULL;
@@ -225,7 +225,7 @@ void free_texture_pool(TexturePool* pool) {
         // This will handle freeing of all Texture objects
         clear_texture_pool(pool);
 
-        pthread_mutex_destroy(&pool->cache_mutex);
+        cetra_mutex_destroy(&pool->cache_mutex);
 
         free(pool);
     }
@@ -500,10 +500,10 @@ Texture* get_texture_from_pool_threadsafe(TexturePool* pool, const char* filepat
         return NULL;
     }
 
-    pthread_mutex_lock(&pool->cache_mutex);
+    cetra_mutex_lock(&pool->cache_mutex);
     Texture* found;
     HASH_FIND_STR(pool->texture_cache, filepath, found);
-    pthread_mutex_unlock(&pool->cache_mutex);
+    cetra_mutex_unlock(&pool->cache_mutex);
 
     return found;
 }
@@ -513,7 +513,7 @@ void add_texture_to_pool_threadsafe(TexturePool* pool, Texture* texture) {
         return;
     }
 
-    pthread_mutex_lock(&pool->cache_mutex);
+    cetra_mutex_lock(&pool->cache_mutex);
 
     // Check if already exists
     Texture* existing;
@@ -532,7 +532,7 @@ void add_texture_to_pool_threadsafe(TexturePool* pool, Texture* texture) {
         }
     }
 
-    pthread_mutex_unlock(&pool->cache_mutex);
+    cetra_mutex_unlock(&pool->cache_mutex);
 }
 
 void remove_texture_from_pool_threadsafe(TexturePool* pool, const char* filepath) {
@@ -540,7 +540,7 @@ void remove_texture_from_pool_threadsafe(TexturePool* pool, const char* filepath
         return;
     }
 
-    pthread_mutex_lock(&pool->cache_mutex);
+    cetra_mutex_lock(&pool->cache_mutex);
 
     Texture* to_remove = NULL;
 
@@ -559,7 +559,7 @@ void remove_texture_from_pool_threadsafe(TexturePool* pool, const char* filepath
         }
     }
 
-    pthread_mutex_unlock(&pool->cache_mutex);
+    cetra_mutex_unlock(&pool->cache_mutex);
 
     // Release reference outside the lock to avoid potential deadlock
     if (to_remove) {
