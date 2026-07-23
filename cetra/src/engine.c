@@ -149,6 +149,9 @@ Engine* create_engine(const char* window_title, int width, int height) {
     engine->oit_revealage_multisample_texture = 0;
     engine->oit_w = 0;
     engine->oit_h = 0;
+    engine->lights_ubo = NULL;
+    engine->clusters_ubo = NULL;
+    engine->cluster_indices_ubo = NULL;
     engine->scene_color_this_frame = false;
     engine->normals_this_frame = false;
     engine->aux_this_frame = false;
@@ -276,6 +279,10 @@ void free_engine(Engine* engine) {
     if (engine->postfx) {
         free_postfx(engine->postfx);
     }
+
+    free_ubo(engine->lights_ubo);
+    free_ubo(engine->clusters_ubo);
+    free_ubo(engine->cluster_indices_ubo);
 
     glDeleteFramebuffers(1, &engine->framebuffer);
     _destroy_msaa_attachments(engine); // color attachments + depth renderbuffer
@@ -643,6 +650,17 @@ int init_engine(Engine* engine) {
     }
     if (_setup_engine_msaa(engine) != 0) {
         log_error("Failed to initialize engine MSAA");
+        return -1;
+    }
+
+    // Clustered-forward light buffers (spec 9.1); inert until the clustered
+    // shader path consumes them.
+    engine->lights_ubo = create_ubo(UBO_LIGHTS_BLOCK_SIZE, UBO_BINDING_LIGHTS);
+    engine->clusters_ubo = create_ubo(UBO_CLUSTERS_BLOCK_SIZE, UBO_BINDING_CLUSTERS);
+    engine->cluster_indices_ubo =
+        create_ubo(UBO_CLUSTER_INDICES_BLOCK_SIZE, UBO_BINDING_CLUSTER_INDICES);
+    if (!engine->lights_ubo || !engine->clusters_ubo || !engine->cluster_indices_ubo) {
+        log_error("Failed to create clustered light UBOs");
         return -1;
     }
     if (_setup_engine_gui(engine) != 0) {
