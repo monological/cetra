@@ -13,10 +13,20 @@ bool cscene_path_is_scene(const char* path) {
     return dot && strcasecmp(dot, ".cscn") == 0;
 }
 
+// True for an absolute path: a Unix '/...' or a Windows drive ('C:\...' or
+// 'C:/...'). cwk_path_is_absolute is not used here because the engine pins
+// cwalk to UNIX style, under which it would not recognize a drive.
+static bool path_is_absolute(const char* path) {
+    if (path[0] == '/')
+        return true;
+    bool drive_letter = (path[0] >= 'A' && path[0] <= 'Z') || (path[0] >= 'a' && path[0] <= 'z');
+    return drive_letter && path[1] == ':';
+}
+
 // Resolve a scene-file path against the file's directory in place
 // (absolute paths pass through).
 static void resolve_in_place(char* path, size_t cap, const char* dir) {
-    if (!path[0] || path[0] == '/')
+    if (!path[0] || path_is_absolute(path))
         return;
     char joined[CSCENE_MAX_PATH];
     snprintf(joined, sizeof(joined), "%s/%s", dir, path);
