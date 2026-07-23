@@ -2,17 +2,6 @@
 # also makes CMP0141 (below) NEW by default.
 cmake_minimum_required(VERSION 3.25 FATAL_ERROR)
 
-# On a Windows manifest build, chainload vcpkg's toolchain if VCPKG_ROOT is set
-# and nothing else supplied one. The windows preset sets this explicitly too;
-# this only rescues a bare `cmake -B` invocation. Must precede project().
-if(NOT DEFINED CMAKE_TOOLCHAIN_FILE
-   AND CMAKE_HOST_WIN32
-   AND DEFINED ENV{VCPKG_ROOT}
-   AND EXISTS "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake")
-    set(CMAKE_TOOLCHAIN_FILE "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
-        CACHE FILEPATH "vcpkg toolchain")
-endif()
-
 project(cetra
     VERSION 0.1
     DESCRIPTION "Cetra Graphics Engine"
@@ -82,51 +71,55 @@ else()
     target_compile_options(cetra_warnings INTERFACE -Wall)
 endif()
 
-# Third-party dependencies on one interface target: consumers link the single
-# name cetra_deps, and only the discovery block below varies by platform.
+# Third-party libraries, vendored as pinned submodules under cetra/src/ext and
+# built static from source so the versions are identical on every platform (see
+# specs/8.7-vendor-dependencies.md). Consumers link the single name cetra_deps;
+# the system libraries (OpenGL, X11, Apple frameworks, CRT) stay dynamic and are
+# added below.
 add_library(cetra_deps INTERFACE)
 
-# pkg-config on macOS/Linux; find_package (vcpkg) on Windows. 'auto' picks the
-# latter when a vcpkg toolchain is active, so the Windows path can also be
-# exercised on macOS with -DCETRA_DEP_PROVIDER=cmake.
-set(CETRA_DEP_PROVIDER "auto" CACHE STRING "Dependency discovery: auto | pkgconfig | cmake")
-set_property(CACHE CETRA_DEP_PROVIDER PROPERTY STRINGS auto pkgconfig cmake)
+# Build the four vendored libraries static. Scoped before their add_subdirectory
+# calls; Jolt and cimgui manage their own linkage further down.
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 
-set(_cetra_provider "${CETRA_DEP_PROVIDER}")
-if(_cetra_provider STREQUAL "auto")
-    if(WIN32 OR CMAKE_TOOLCHAIN_FILE MATCHES "vcpkg")
-        set(_cetra_provider "cmake")
-    else()
-        set(_cetra_provider "pkgconfig")
-    endif()
-endif()
+# GLFW. On Linux it enables both the X11 and Wayland backends by default (chosen
+# at runtime), which needs the X11 + Wayland dev headers on the build machine --
+# system-level, not vendorable (the display-server protocol is the OS's). No
+# backend override is needed: GLFW's own cmake_dependent_option turns both on for
+# Linux and uses the native Cocoa/Win32 backend on macOS/Windows.
+set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(GLFW_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
+set(GLFW_BUILD_DOCS     OFF CACHE BOOL "" FORCE)
+add_subdirectory(cetra/src/ext/glfw)
 
-if(_cetra_provider STREQUAL "pkgconfig")
-    # IMPORTED_TARGET so PkgConfig::* carry include dirs, link dirs and libraries
-    # together -- the bare pkg_check_modules variables drop the link dirs. GLOBAL
-    # promotes them out of this directory scope so subdirectories may name them.
-    find_package(PkgConfig REQUIRED)
-    pkg_check_modules(GLFW   REQUIRED IMPORTED_TARGET GLOBAL glfw3)
-    pkg_check_modules(GLEW   REQUIRED IMPORTED_TARGET GLOBAL glew)
-    pkg_check_modules(CGLM   REQUIRED IMPORTED_TARGET GLOBAL cglm)
-    pkg_check_modules(ASSIMP REQUIRED IMPORTED_TARGET GLOBAL assimp)
-    target_link_libraries(cetra_deps INTERFACE
-        PkgConfig::GLFW
-        PkgConfig::GLEW
-        PkgConfig::CGLM
-        PkgConfig::ASSIMP)
-else()
-    # vcpkg exports these config packages; the target names are their own.
-    find_package(glfw3  CONFIG REQUIRED)
-    find_package(GLEW   CONFIG REQUIRED)
-    find_package(assimp CONFIG REQUIRED)
-    find_package(cglm   CONFIG REQUIRED)
-    target_link_libraries(cetra_deps INTERFACE
-        glfw
-        GLEW::GLEW
-        assimp::assimp
-        cglm::cglm)
-endif()
+# GLEW (Perlmint/glew-cmake fork ships pre-generated sources + CMake).
+# libglew_static carries GLEW_STATIC as a PUBLIC define.
+set(glew-cmake_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+set(glew-cmake_BUILD_STATIC ON  CACHE BOOL "" FORCE)
+set(ONLY_LIBS ON CACHE BOOL "" FORCE)
+add_subdirectory(cetra/src/ext/glew)
+
+# cglm -- header-only; the cglm_headers interface target is include-dirs only.
+set(CGLM_USE_TEST OFF CACHE BOOL "" FORCE)
+add_subdirectory(cetra/src/ext/cglm)
+
+# Assimp. Let it choose zlib: the system copy on macOS/Linux, its own bundled
+# copy on Windows (where there is no system zlib). Forcing the bundled zlib
+# everywhere fails on modern macOS SDKs -- its vendored zlib is too old -- and
+# zlib's on-disk format is stable, so this is not a version-pin concern the way
+# the four libraries above are.
+set(ASSIMP_BUILD_TESTS        OFF CACHE BOOL "" FORCE)
+set(ASSIMP_BUILD_ASSIMP_TOOLS OFF CACHE BOOL "" FORCE)
+set(ASSIMP_BUILD_SAMPLES      OFF CACHE BOOL "" FORCE)
+set(ASSIMP_INSTALL            OFF CACHE BOOL "" FORCE)
+set(ASSIMP_WARNINGS_AS_ERRORS OFF CACHE BOOL "" FORCE)
+add_subdirectory(cetra/src/ext/assimp)
+
+target_link_libraries(cetra_deps INTERFACE
+    glfw
+    libglew_static
+    cglm_headers
+    assimp::assimp)
 
 find_package(OpenGL REQUIRED)
 find_package(Threads REQUIRED)
@@ -164,9 +157,9 @@ endif()
 # so the cached values win in its scope. All inert on macOS/Linux.
 if(MSVC)
     # Jolt forces the static CRT (/MT) while everything else defaults to dynamic
-    # (/MD) -- a guaranteed LNK2038. Pin dynamic and stop Jolt overriding it. The
-    # x64-windows-static-md triplet matches: static deps, dynamic CRT, no DLLs to
-    # ship next to the exe.
+    # (/MD) -- a guaranteed LNK2038. Pin dynamic and stop Jolt overriding it. Our
+    # vendored deps build static against this same dynamic CRT, so there are no
+    # DLLs to ship next to the exe.
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL"
         CACHE STRING "" FORCE)
     set(USE_STATIC_MSVC_RUNTIME_LIBRARY OFF CACHE BOOL "" FORCE)

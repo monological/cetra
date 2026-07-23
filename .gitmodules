@@ -4,3 +4,15 @@
 [submodule "cetra/src/ext/cimgui"]
 	path = cetra/src/ext/cimgui
 	url = https://github.com/cimgui/cimgui.git
+[submodule "cetra/src/ext/glfw"]
+	path = cetra/src/ext/glfw
+	url = https://github.com/glfw/glfw
+[submodule "cetra/src/ext/cglm"]
+	path = cetra/src/ext/cglm
+	url = https://github.com/recp/cglm
+[submodule "cetra/src/ext/glew"]
+	path = cetra/src/ext/glew
+	url = https://github.com/Perlmint/glew-cmake
+[submodule "cetra/src/ext/assimp"]
+	path = cetra/src/ext/assimp
+	url = https://github.com/assimp/assimp
