@@ -1,5 +1,6 @@
 #include "particle_system.h"
 #include "scene.h" // SceneNode->global_transform for the spawn frame
+#include "util.h"  // safe_strdup
 
 #include <stdlib.h>
 #include <string.h>
@@ -10,7 +11,7 @@ ParticleSystem* create_particle_system(const char* name) {
     ParticleSystem* s = calloc(1, sizeof(ParticleSystem));
     if (!s)
         return NULL;
-    s->name = name ? strdup(name) : NULL;
+    s->name = safe_strdup(name);
     return s;
 }
 

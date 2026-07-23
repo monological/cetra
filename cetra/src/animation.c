@@ -19,7 +19,7 @@ Skeleton* create_skeleton(const char* name) {
         return NULL;
     }
 
-    skeleton->name = name ? strdup(name) : NULL;
+    skeleton->name = name ? safe_strdup(name) : NULL;
     skeleton->bones = NULL;
     skeleton->bone_count = 0;
     skeleton->bone_map = NULL;
@@ -79,7 +79,7 @@ int add_bone_to_skeleton(Skeleton* skeleton, const char* name, int parent_index,
     int bone_index = (int)skeleton->bone_count;
     Bone* bone = &skeleton->bones[bone_index];
 
-    bone->name = strdup(name);
+    bone->name = safe_strdup(name);
     if (!bone->name) {
         log_error("Failed to allocate bone name");
         return -1;
@@ -93,7 +93,7 @@ int add_bone_to_skeleton(Skeleton* skeleton, const char* name, int parent_index,
     // Add to hash map for name lookup
     BoneIndexEntry* entry = malloc(sizeof(BoneIndexEntry));
     if (entry) {
-        entry->name = strdup(name);
+        entry->name = safe_strdup(name);
         if (!entry->name) {
             free(entry);
         } else {
@@ -175,7 +175,7 @@ AnimationChannel* create_animation_channel(int bone_index, const char* bone_name
     }
 
     channel->bone_index = bone_index;
-    channel->bone_name = bone_name ? strdup(bone_name) : NULL;
+    channel->bone_name = bone_name ? safe_strdup(bone_name) : NULL;
 
     channel->position_keys = NULL;
     channel->position_key_count = 0;
@@ -277,7 +277,7 @@ Animation* create_animation(const char* name, float duration, float ticks_per_se
         return NULL;
     }
 
-    animation->name = name ? strdup(name) : NULL;
+    animation->name = name ? safe_strdup(name) : NULL;
     animation->duration = duration;
     animation->ticks_per_second = ticks_per_second > 0.0f ? ticks_per_second : 25.0f;
 

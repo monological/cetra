@@ -1,5 +1,6 @@
 #include "particle_emitter.h"
 #include "particle_renderer.h"
+#include "util.h" // safe_strdup
 
 #include <stdlib.h>
 #include <string.h>
@@ -12,7 +13,7 @@ ParticleEmitter* create_particle_emitter(const char* name, size_t capacity) {
     if (!e)
         return NULL;
 
-    e->name = name ? strdup(name) : NULL;
+    e->name = safe_strdup(name);
     e->pool = create_particle_pool(capacity);
     if (!e->pool) {
         free(e->name);
