@@ -57,22 +57,9 @@ target_include_directories(cetra
         $<INSTALL_INTERFACE:include/cetra>
 )
 
-# PUBLIC, not PRIVATE: engine.h and 20-odd other public headers include
-# <GL/glew.h>, <GLFW/glfw3.h> and <cglm/cglm.h>, so consumers genuinely need
-# these include paths. cetra_deps also carries the platform frameworks, libm and
-# the threading library.
+# PUBLIC: engine.h and other public headers include <GL/glew.h>,
+# <GLFW/glfw3.h> and <cglm/cglm.h>, so consumers need these include paths.
 target_link_libraries(cetra PUBLIC cetra_deps)
-
-# The former per-platform link lists are gone:
-#   - Apple frameworks and -no_warn_duplicate_libraries moved to cetra_deps.
-#   - "-framework OpenGL" / GL / opengl32 are all OpenGL::GL.
-#   - X11 and ncurses were linked on Linux but referenced by no source file;
-#     they broke Wayland-only and minimal images for nothing.
-#   - glu32 was unused (no glu.h anywhere); gdi32/user32/shell32 arrive
-#     transitively from GLFW; kernel32 is linked automatically.
-
-# -g dropped: CMAKE_BUILD_TYPE already supplies debug info for Debug builds, and
-# hardcoding it defeated Release.
 target_link_libraries(cetra PRIVATE cetra_warnings)
 target_compile_definitions(cetra PRIVATE _POSIX_C_SOURCE=200809L)
 

@@ -9,10 +9,7 @@
     {
       "name": "base",
       "hidden": true,
-      "generator": "Ninja",
-      "cacheVariables": {
-        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
-      }
+      "generator": "Ninja"
     },
 
     {
@@ -125,27 +122,6 @@
   ],
 
   "workflowPresets": [
-    {
-      "name": "macos-debug",
-      "steps": [
-        { "type": "configure", "name": "macos-debug" },
-        { "type": "build",     "name": "macos-debug" }
-      ]
-    },
-    {
-      "name": "macos-release",
-      "steps": [
-        { "type": "configure", "name": "macos-release" },
-        { "type": "build",     "name": "macos-release" }
-      ]
-    },
-    {
-      "name": "linux-debug",
-      "steps": [
-        { "type": "configure", "name": "linux-debug" },
-        { "type": "build",     "name": "linux-debug" }
-      ]
-    },
     {
       "name": "windows-debug",
       "steps": [

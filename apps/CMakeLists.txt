@@ -12,10 +12,7 @@ function(add_cetra_app APP_NAME)
     )
 
     target_link_libraries(${APP_NAME} PRIVATE cetra_warnings)
-
-    if(APPLE)
-        target_compile_definitions(${APP_NAME} PRIVATE GL_SILENCE_DEPRECATION)
-    endif()
+    # GL_SILENCE_DEPRECATION arrives transitively from cetra -> cetra_deps.
 endfunction()
 
 # Add each app subdirectory
