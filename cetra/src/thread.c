@@ -3,6 +3,7 @@
 #if defined(_WIN32)
 
 #include <process.h> // _beginthreadex
+#include <stdint.h>  // uintptr_t (_beginthreadex's return type)
 #include <stdlib.h>
 
 // _beginthreadex wants an `unsigned __stdcall (*)(void*)` entry, so route the
