@@ -46,6 +46,7 @@
       "name": "linux-base",
       "hidden": true,
       "inherits": "base",
+      "description": "Pin clang to match the project's clang-everywhere stance (macOS clang, Windows clang-cl). Linux's default gcc rejects JoltC's file-scope fixed arrays (variably-modified at file scope) that clang accepts.",
       "condition": {
         "type": "equals",
         "lhs": "${hostSystemName}",
@@ -79,7 +80,7 @@
       "name": "windows-base",
       "hidden": true,
       "inherits": "base",
-      "description": "Must be configured from an x64 Native Tools prompt (or after Enter-VsDevShell): CMake can locate clang-cl.exe but cannot synthesize the Windows SDK INCLUDE/LIB paths. Also add a builtin-baseline to vcpkg.json first (`vcpkg x-update-baseline --add-initial-baseline`) -- it is omitted from the repo because the SHA must come from your vcpkg checkout.",
+      "description": "Must be configured from an x64 Native Tools prompt (or after Enter-VsDevShell): CMake can locate clang-cl.exe but cannot synthesize the Windows SDK INCLUDE/LIB paths, which presets have no mechanism for. Dependencies are vendored (see specs/8.7); no vcpkg needed.",
       "condition": {
         "type": "equals",
         "lhs": "${hostSystemName}",
@@ -89,11 +90,9 @@
         "value": "x64",
         "strategy": "external"
       },
-      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
       "cacheVariables": {
         "CMAKE_C_COMPILER": "clang-cl",
-        "CMAKE_CXX_COMPILER": "clang-cl",
-        "VCPKG_TARGET_TRIPLET": "x64-windows-static-md"
+        "CMAKE_CXX_COMPILER": "clang-cl"
       }
     },
     {
