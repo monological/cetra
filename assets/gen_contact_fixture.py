@@ -14,18 +14,18 @@ ground) shows them. This fixture is built for the effect:
     or floating?" cue that grounds an object. The cube resting flush (gap 0) is
     the baseline; the high-gap cube should get little to none.
 
-A low sun keeps the cast shadows long and the plane bright between them. View
-from a raised 3/4 angle so the contact region under each cube is visible:
+The sibling assets/contact_fixture.cscn ships the lighting (a shadow-casting
+directional sun) and the 3/4 camera, so the fixture is self-contained -- no
+--sky/-e and no camera flags:
 
-  ./out/bin/render -m assets/contact_fixture.gltf --no-scene-file --sky \\
-      --sun-elevation 18 --sun-azimuth 35 --cam-eye 0,2.2,5 --cam-target 0,0.3,0 \\
-      --contact-shadows
+  ./out/bin/render -m assets/contact_fixture.gltf --contact-shadows
 
 Toggle --contact-shadows (or the GUI checkbox) and watch the plane under the
-left cubes darken. --cs-strength / --cs-distance tune it.
+cubes darken. --cs-strength / --cs-distance tune it.
 
-Regenerate with:
+Regenerate the geometry with:
   python3 assets/gen_contact_fixture.py
+(the .cscn is hand-authored, not generated.)
 """
 
 import base64
