@@ -1,63 +1,118 @@
 #!/usr/bin/env python3
 """Generate assets/contact_fixture.gltf, the screen-space contact-shadow test asset (spec 9.3).
 
-Contact shadows fill the near-contact darkening a cascaded shadow map's texels
-are too coarse to draw. They only read on MATTE surfaces (a metal's contacts are
-already dark crevices) and only where an occluder sits close to a lit receiver --
-so neither raiden (chrome) nor the LTC sphere fixture (glossy, tangent to the
-ground) shows them. This fixture is built for the effect:
+Contact shadows are a SHORT-RANGE supplement to the shadow map: they darken the
+near-contact seam a cascaded shadow map's texels are too coarse to draw, and they
+only read on MATTE receivers. Crucially, the "big" shadow of an object cast on the
+ground is the CSM's job (a large depth delta); a canonical contact shadow keeps
+only the SMALL-delta near-contact and rejects the rest. So a single primitive on a
+plane shows almost nothing -- its only genuine contact is a razor-thin sliver at
+the tangent line.
 
-  - a large MATTE ground plane (dielectric, rough) so darkening on it is visible;
-  - a row of matte cubes hovering at increasing gaps above the plane
-    (0.0, 0.06, 0.15, 0.30). Contact shadows darken the plane directly under the
-    low-gap cubes and fade out as the gap grows -- the textbook "is it touching
-    or floating?" cue that grounds an object. The cube resting flush (gap 0) is
-    the baseline; the high-gap cube should get little to none.
+What the feature is actually FOR is fine near-contact DETAIL: many surfaces coming
+close together at a scale below a shadow-map texel. This fixture is a mound of
+matte pebbles -- dozens of overlapping rocks -- so the frame is full of crevices
+(rock-to-rock and rock-to-ground), each a genuine small-delta contact the CSM
+blurs over. That is where contact shadows read, and it is a curved-surface pile,
+so no hard silhouette edge self-graze streaks.
 
-The sibling assets/contact_fixture.cscn ships the lighting (a shadow-casting
-directional sun) and the 3/4 camera, so the fixture is self-contained -- no
---sky/-e and no camera flags:
+The sibling assets/contact_fixture.cscn ships a shadow-casting sun and the camera,
+so the fixture is self-contained -- no --sky/-e and no camera flags:
 
   ./out/bin/render -m assets/contact_fixture.gltf --contact-shadows
 
-Toggle --contact-shadows (or the GUI checkbox) and watch the plane under the
-cubes darken. --cs-strength / --cs-distance tune it.
+Toggle --contact-shadows (or the GUI checkbox) and watch the crevices between the
+rocks deepen. --cs-strength / --cs-distance tune it.
 
 Regenerate the geometry with:
   python3 assets/gen_contact_fixture.py
-(the .cscn is hand-authored, not generated.)
+(the .cscn is hand-authored, not generated. Generation is seeded, so the mound is
+deterministic and the golden reproduces.)
 """
 
 import base64
 import json
-import struct
+import math
 import os
+import random
+import struct
+
+random.seed(20260724)   # deterministic mound: same rocks every run, golden reproduces
 
 positions, normals, uvs, indices = [], [], [], []
 
-# ---- one unit cube, half-extent 0.4, per-face normals (flat-shaded box) ------
-HALF = 0.4
-# face: (normal, four corner offsets CCW seen from outside)
-faces = [
-    ((0, 0, 1), [(-1, -1, 1), (1, -1, 1), (1, 1, 1), (-1, 1, 1)]),    # +Z
-    ((0, 0, -1), [(1, -1, -1), (-1, -1, -1), (-1, 1, -1), (1, 1, -1)]),  # -Z
-    ((1, 0, 0), [(1, -1, 1), (1, -1, -1), (1, 1, -1), (1, 1, 1)]),    # +X
-    ((-1, 0, 0), [(-1, -1, -1), (-1, -1, 1), (-1, 1, 1), (-1, 1, -1)]),  # -X
-    ((0, 1, 0), [(-1, 1, 1), (1, 1, 1), (1, 1, -1), (-1, 1, -1)]),    # +Y
-    ((0, -1, 0), [(-1, -1, -1), (1, -1, -1), (1, -1, 1), (-1, -1, 1)]),  # -Y
-]
-for n, corners in faces:
+
+# ---- unit sphere template (reused, deformed per rock) ------------------------
+def unit_sphere(rings, segs):
+    verts, norms = [], []
+    for i in range(rings + 1):
+        phi = (i / rings) * math.pi
+        sp, cp = math.sin(phi), math.cos(phi)
+        for j in range(segs + 1):
+            th = (j / segs) * 2.0 * math.pi
+            verts.append((sp * math.cos(th), cp, sp * math.sin(th)))
+    tris = []
+    for i in range(rings):
+        for j in range(segs):
+            a = i * (segs + 1) + j
+            b, c, d = a + 1, a + (segs + 1), a + (segs + 2)
+            tris += [a, c, b, b, c, d]              # CCW seen from outside
+    return verts, tris
+
+
+SPHERE_V, SPHERE_TRIS = unit_sphere(12, 18)
+
+
+def norm3(x, y, z):
+    m = math.sqrt(x * x + y * y + z * z) or 1.0
+    return (x / m, y / m, z / m)
+
+
+def add_rock(cx, cz, cy, r, sx, sy, sz, yaw):
+    """A sphere scaled to (r*sx, r*sy, r*sz), yawed, placed at (cx, cy, cz)."""
     base = len(positions)
-    for cx, cy, cz in corners:
-        positions.append((cx * HALF, cy * HALF, cz * HALF))
-        normals.append(n)
+    cyaw, syaw = math.cos(yaw), math.sin(yaw)
+    for (vx, vy, vz) in SPHERE_V:
+        # ellipsoid position; normal of a scaled sphere is (n/scale) normalized
+        px, py, pz = vx * r * sx, vy * r * sy, vz * r * sz
+        nx, ny, nz = norm3(vx / sx, vy / sy, vz / sz)
+        # yaw about Y (keeps the lowest point, so resting height stays cy)
+        px, pz = px * cyaw + pz * syaw, -px * syaw + pz * cyaw
+        nx, nz = nx * cyaw + nz * syaw, -nx * syaw + nz * cyaw
+        positions.append((cx + px, cy + py, cz + pz))
+        normals.append((nx, ny, nz))
         uvs.append((0.0, 0.0))
-    indices += [base, base + 1, base + 2, base, base + 2, base + 3]
+    for t in SPHERE_TRIS:
+        indices.append(base + t)
 
-cube_vertex_count = len(positions)
-cube_index_count = len(indices)
 
-# ---- ground quad in XZ, normal +Y, wide enough to catch the shadows ----------
+# ---- a mound of matte rocks --------------------------------------------------
+# Scatter overlapping rocks in a disc, taller toward the centre so the pile heaps
+# up: rocks interpenetrate and rest in each other's valleys, filling the frame
+# with rock-to-rock and rock-to-ground crevices -- the near-contacts the feature
+# draws. Overlap (not physical rest) is fine: a crevice where two rock surfaces
+# come close IS the small-delta contact.
+CLUSTER_R = 1.7
+MOUND_H = 0.9
+N_ROCKS = 70
+for _ in range(N_ROCKS):
+    # sample (x,z) biased toward the centre (sqrt for area-uniform, then squared
+    # to concentrate) so the mound is denser and taller in the middle
+    ang = random.uniform(0.0, 2.0 * math.pi)
+    rad = CLUSTER_R * (random.random() ** 0.7)
+    cx, cz = rad * math.cos(ang), rad * math.sin(ang)
+    r = random.uniform(0.16, 0.30)
+    sx, sy, sz = (random.uniform(0.8, 1.2) for _ in range(3))
+    # mound profile: centre rocks sit higher (on top of others), rim rocks on the
+    # ground; jitter so they nestle at varied heights.
+    heap = MOUND_H * max(0.0, 1.0 - (rad / CLUSTER_R) ** 2)
+    cy = r * sy + heap * random.uniform(0.0, 1.0)
+    add_rock(cx, cz, cy, r, sx, sy, sz, random.uniform(0.0, 2.0 * math.pi))
+
+rocks_vertex_count = len(positions)
+rocks_index_count = len(indices)
+
+# ---- ground quad in XZ, normal +Y --------------------------------------------
 QUAD = 6.0
 quad_positions = [(-QUAD, 0.0, -QUAD), (QUAD, 0.0, -QUAD), (QUAD, 0.0, QUAD), (-QUAD, 0.0, QUAD)]
 quad_normals = [(0.0, 1.0, 0.0)] * 4
@@ -67,7 +122,7 @@ quad_indices = [0, 1, 2, 0, 2, 3]
 positions += quad_positions
 normals += quad_normals
 uvs += quad_uvs
-indices += [i + cube_vertex_count for i in quad_indices]
+indices += [i + rocks_vertex_count for i in quad_indices]
 
 pos_bytes = b"".join(struct.pack("<3f", *p) for p in positions)
 nrm_bytes = b"".join(struct.pack("<3f", *n) for n in normals)
@@ -94,24 +149,15 @@ def matte(name, color):
     }
 
 
-materials = [matte("contact_ground", (0.55, 0.55, 0.55)), matte("contact_cube", (0.6, 0.6, 0.62))]
-
-# Cubes hover at increasing gaps: contact shadow strong under the low ones,
-# gone under the high one. Cube center sits at HALF + gap so its base is `gap`
-# above the plane.
-GAPS = [0.0, 0.06, 0.15, 0.30]
-SPACING = 1.4
-cube_x = [(i - (len(GAPS) - 1) * 0.5) * SPACING for i in range(len(GAPS))]
+materials = [matte("contact_ground", (0.55, 0.55, 0.55)), matte("contact_rock", (0.58, 0.56, 0.53))]
 
 nodes = [
-    {"name": "cube_gap_%02d" % int(g * 100), "mesh": 0,
-     "translation": [x, HALF + g, 0.0]}
-    for x, g in zip(cube_x, GAPS)
+    {"name": "rock_pile", "mesh": 0, "translation": [0.0, 0.0, 0.0]},
+    {"name": "contact_ground", "mesh": 1, "translation": [0.0, 0.0, 0.0]},
 ]
-nodes.append({"name": "contact_ground", "mesh": 1, "translation": [0.0, 0.0, 0.0]})
 
 meshes = [
-    {"name": "contact_cube",
+    {"name": "contact_rocks",
      "primitives": [{"attributes": {"POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2},
                      "indices": 3, "material": 1}]},
     {"name": "contact_ground",
@@ -131,8 +177,8 @@ gltf = {
          "min": all_min, "max": all_max},
         {"bufferView": 1, "componentType": 5126, "count": len(normals), "type": "VEC3"},
         {"bufferView": 2, "componentType": 5126, "count": len(uvs), "type": "VEC2"},
-        {"bufferView": 3, "componentType": 5125, "count": cube_index_count, "type": "SCALAR"},
-        {"bufferView": 3, "byteOffset": cube_index_count * 4, "componentType": 5125,
+        {"bufferView": 3, "componentType": 5125, "count": rocks_index_count, "type": "SCALAR"},
+        {"bufferView": 3, "byteOffset": rocks_index_count * 4, "componentType": 5125,
          "count": len(quad_indices), "type": "SCALAR"},
     ],
     "bufferViews": [
@@ -154,4 +200,4 @@ out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "contact_fixture.
 with open(out, "w") as f:
     json.dump(gltf, f, indent=1)
     f.write("\n")
-print("wrote %s (%d cubes over a matte plane)" % (out, len(GAPS)))
+print("wrote %s (%d rocks over a matte plane)" % (out, N_ROCKS))
