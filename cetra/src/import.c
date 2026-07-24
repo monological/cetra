@@ -1185,10 +1185,27 @@ void process_ai_lights(const struct aiScene* scene, Light*** lights, size_t* num
                 light->cutOff = ai_light->mAngleInnerCone;
                 light->outerCutOff = ai_light->mAngleOuterCone;
                 break;
-            default:
+            case aiLightSource_AREA:
                 light->type = LIGHT_AREA;
-                light->cutOff = ai_light->mAngleInnerCone;
-                light->outerCutOff = ai_light->mAngleOuterCone;
+                // Authored panel extent; without one, a 1 m panel -- NEVER the
+                // 50x50 create_light() default, which LTC turns into a wall of
+                // light (spec 9.2)
+                if (ai_light->mSize.x > 0.0f && ai_light->mSize.y > 0.0f) {
+                    set_light_size(light, ai_light->mSize.x, ai_light->mSize.y);
+                } else {
+                    set_light_size(light, 1.0f, 1.0f);
+                    log_info("Area light '%s' imported without a size; defaulting to 1x1 m",
+                             light->name ? light->name : "unnamed");
+                }
+                break;
+            default:
+                // AMBIENT/UNDEFINED: no renderable analytic equivalent. These
+                // used to fall through to LIGHT_AREA and shade as fake point
+                // lights; with LTC that would make them glowing panels, so
+                // drop them loudly instead (the light gather skips UNKNOWN).
+                light->type = LIGHT_UNKNOWN;
+                log_warn("Light '%s' has unsupported type %d (ambient/undefined); ignored",
+                         light->name ? light->name : "unnamed", (int)ai_light->mType);
                 break;
         }
         if (light->type != LIGHT_DIRECTIONAL && has_attenuation) {
