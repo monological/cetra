@@ -33,10 +33,12 @@
 //
 // The seven scalar masks (roughness/metallic/ao/opacity/microsurface/anisotropy/
 // subsurface) collapsed into ONE sampler2DArray (TEXUNIT_MASKS, mask_array.h),
-// freeing the mid material units. Units 7 and 15 are now free for future
-// textured material features; the relocated shadow and IBL engine units took
-// 10-14 (shadow.h / ibl.h). The full ordered budget is pinned by the
-// _Static_assert chain in render.c.
+// freeing the mid material units. The relocated shadow and IBL engine units took
+// 10-14 (shadow.h / ibl.h), and spec 9.2 claimed 7 + 9 for the two LTC
+// area-light tables (unit 9 was TEXUNIT_REFLECTANCE, reserved for
+// KHR_materials_specular but never bound -- that extension shipped sampling
+// nothing). Unit 15 is the spot shadow map. The full ordered budget is pinned
+// by the _Static_assert chain in render.c.
 #define TEXUNIT_ALBEDO           0
 #define TEXUNIT_NORMAL           1
 #define TEXUNIT_MASKS            2 // sampler2DArray: packed scalar masks
@@ -44,9 +46,10 @@
 #define TEXUNIT_HEIGHT           4 // POM height map (a freed mask unit, §4.11)
 #define TEXUNIT_EMISSIVE         5
 #define TEXUNIT_SCENE_COLOR      6 // refraction opaque-scene resolve (engine-bound)
+#define TEXUNIT_LTC_MAT          7 // LTC inverse-M table (engine-bound, §9.2)
 #define TEXUNIT_SHEEN            8 // reserved (KHR_materials_sheen; unsampled today)
-#define TEXUNIT_REFLECTANCE      9 // reserved (KHR_materials_specular; unsampled today)
-#define TEXUNIT_MATERIAL_MAX     TEXUNIT_REFLECTANCE
+#define TEXUNIT_LTC_AMP          9 // LTC magnitude/Fresnel table (engine-bound, §9.2)
+#define TEXUNIT_MATERIAL_MAX     TEXUNIT_LTC_AMP
 
 // (Light data moved off the default uniform block entirely: analytic lights
 // live in the clustered-forward std140 UBOs -- see light_cluster.h / ubo.h --

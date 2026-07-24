@@ -65,6 +65,12 @@ void add_texture_to_pool(TexturePool* pool, Texture* texture);
 // data textures (normals, roughness/metalness, AO, ...) stay linear.
 void texture_gl_formats(int channels, bool is_srgb, GLenum* internal_format, GLenum* data_format);
 
+// Float LUT upload from memory (LINEAR / CLAMP_TO_EDGE / no mips baked in).
+// Returns the raw GL name; the caller owns deletion. First user: the LTC
+// area-light tables (spec 9.2).
+GLuint create_texture_2d_float(int width, int height, GLenum internal_format, GLenum data_format,
+                               const float* pixels);
+
 // Enable anisotropic filtering on the currently bound texture (no-op where
 // unsupported). Tiled textures at grazing angles alias into moire without it.
 void texture_set_max_anisotropy(void);

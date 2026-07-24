@@ -100,6 +100,25 @@ void texture_set_default_sampler_state(void) {
     texture_set_max_anisotropy();
 }
 
+// Float LUT upload (first user: the LTC area-light tables, spec 9.2). Data
+// textures, not model textures: LINEAR filtering, CLAMP_TO_EDGE, no mips --
+// the state the IBL BRDF LUT uses, baked in so LUT call sites cannot drift
+// onto the tiling/trilinear model-texture defaults.
+GLuint create_texture_2d_float(int width, int height, GLenum internal_format, GLenum data_format,
+                               const float* pixels) {
+    GLuint tex = 0;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, (GLint)internal_format, width, height, 0, data_format, GL_FLOAT,
+                 pixels);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    return tex;
+}
+
 void texture_gl_formats(int channels, bool is_srgb, GLenum* internal_format, GLenum* data_format) {
     if (channels == 1) {
         *internal_format = GL_RED;

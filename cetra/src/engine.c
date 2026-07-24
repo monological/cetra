@@ -21,6 +21,8 @@
 #include "shadow.h"
 #include "sky.h"
 #include "mask_array.h"
+#include "texture.h"
+#include "ltc_lut.h" // generated LTC tables (spec 9.2); see tools/gen_ltc_lut.py
 #include "import.h" // resolve_height_maps (POM height convention)
 #include "render.h"
 #include "springbone.h"
@@ -205,6 +207,8 @@ Engine* create_engine(const char* window_title, int width, int height) {
     engine->total_frames = 0;
     engine->user_data = NULL;
 
+    engine->ltc_mat_tex = 0;
+    engine->ltc_amp_tex = 0;
     engine->bone_program = NULL;
     engine->bone_line_vao = 0;
     engine->bone_line_vbo = 0;
@@ -294,6 +298,11 @@ void free_engine(Engine* engine) {
         glDeleteVertexArrays(1, &engine->catcher_vao);
     if (engine->catcher_vbo)
         glDeleteBuffers(1, &engine->catcher_vbo);
+
+    if (engine->ltc_mat_tex)
+        glDeleteTextures(1, &engine->ltc_mat_tex);
+    if (engine->ltc_amp_tex)
+        glDeleteTextures(1, &engine->ltc_amp_tex);
 
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
@@ -684,6 +693,18 @@ int init_engine(Engine* engine) {
             add_shader_program_to_engine(engine, text_prog);
             engine->text_renderer->text_program = text_prog;
         }
+    }
+
+    // LTC area-light tables (spec 9.2): static fitted data, uploaded once.
+    // RGBA32F because the inverse-M entries leave [0,1] and the published fit
+    // is float32; 128 KB for both.
+    engine->ltc_mat_tex =
+        create_texture_2d_float(LTC_LUT_DIM, LTC_LUT_DIM, GL_RGBA32F, GL_RGBA, LTC_MAT_TABLE);
+    engine->ltc_amp_tex =
+        create_texture_2d_float(LTC_LUT_DIM, LTC_LUT_DIM, GL_RGBA32F, GL_RGBA, LTC_AMP_TABLE);
+    if (!engine->ltc_mat_tex || !engine->ltc_amp_tex) {
+        log_error("Failed to create LTC area-light lookup tables");
+        return -1;
     }
 
     // Initialize bone visualization

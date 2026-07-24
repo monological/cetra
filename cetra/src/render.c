@@ -35,6 +35,10 @@
 // top unit must stay < 16 -- A3 relocated brdfLUT/skybox off units 16/17).
 _Static_assert(TEXUNIT_CLEARCOAT_NORMAL < TEXUNIT_HEIGHT && TEXUNIT_HEIGHT < TEXUNIT_EMISSIVE,
                "POM height unit must sit between clearcoat-normal and emissive");
+_Static_assert(TEXUNIT_SCENE_COLOR < TEXUNIT_LTC_MAT && TEXUNIT_LTC_MAT < TEXUNIT_SHEEN,
+               "LTC matrix unit must sit between scene-color and sheen");
+_Static_assert(TEXUNIT_SHEEN < TEXUNIT_LTC_AMP,
+               "LTC amplitude unit overlaps the sheen unit");
 _Static_assert(TEXUNIT_MATERIAL_MAX < SHADOW_MAP_TEXTURE_UNIT,
                "material texture units overlap the shadow map array unit");
 _Static_assert(SHADOW_MAP_TEXTURE_UNIT < IBL_IRRADIANCE_TEXTURE_UNIT,
