@@ -1,8 +1,11 @@
 # LTC area-light goldens (spec 9.2)
 
-Reference renders for `--area-light`. All use `assets/area_light_fixture.gltf`
-(roughness sweep 0.05 -> 0.95, left to right, over a diffuse ground quad) with
-the panel as the only light in the frame:
+Reference renders for `--area-light`. The sweep and backface goldens use
+`assets/area_light_fixture.gltf` (roughness 0.15 -> 0.95, left to right, over
+a diffuse ground quad); the guard golden uses `assets/area_light_guard.gltf`
+(one sphere below the roughness floor). Both are written by
+`assets/gen_area_light_fixture.py`. In every image the panel is the only light
+in the frame:
 
 - No `-e <hdr>`: the fixture ships no lights of its own, and `--area-light` is
   spawned before the app decides whether to install a default rig, so the panel
@@ -31,11 +34,10 @@ by 0.95, over otherwise dark bodies (there is no environment to reflect). A
 rotated or smeared rectangle at low roughness means the inverse-M
 reconstruction is transposed.
 
-Note the first two spheres look similar: the authored 0.05 is clamped up to
-`LTC_MIN_ROUGHNESS` (0.12), so it shades close to the 0.20 next to it. That is
-the cost of the floor -- see the shader comment in pbr_frag.glsl. It also means
-this fixture no longer probes the LUT's bottom row, which it was built to do;
-the sweep still covers the top end and the whole middle.
+The sweep starts at 0.15, just above `LTC_MIN_ROUGHNESS` (0.12): below the
+floor every authored value shades identically, so a sweep entry there would be
+a dead test showing the same highlight twice. The below-floor regime is pinned
+by the guard golden instead.
 
 **Zoom in when checking this.** The artifact this floor exists to suppress is
 invisible at thumbnail scale and obvious at 1:1 -- it shipped in an earlier
@@ -46,6 +48,29 @@ version of this golden precisely because it was only ever reviewed small.
 Same command with the panel normal negated (`0,0.6,0.8`). Every sphere must be
 pure black: a panel lights only the half-space its direction points into. If
 anything is lit here, the single-sided plane test or the corner winding flipped.
+
+## guard_thin_panel.png
+
+The regression guard for the `LTC_MIN_ROUGHNESS` floor. One sphere at
+roughness 0.05 -- below the floor -- under a 7:1 sliver panel, viewed at a
+grazing offset: exactly the regime where the quad integral hits its edge
+singularity (an edge subtending ~pi makes `theta/sin(theta)` genuinely
+infinite; fp32 lands on the arbitrary 1e-7 clamp and emits a structured
+radial fan instead of a highlight).
+
+```
+./out/bin/render -m assets/area_light_guard.gltf --no-scene-file -W 800 -H 600 \
+    --fov 50.0 -x -f 2 --no-auto-exposure -E 1.0 \
+    --cam-eye 0.549,0.780,1.525 --cam-target 0.549,0.500,0.000 \
+    --area-light 0,2.2,1.2,0,-0.6,-0.8,0.25,1.8,30
+```
+
+What to look for: one clean, smooth highlight (it shades at the floor, 0.12).
+Any speckled fan radiating from it means the floor was lowered, removed, or a
+change re-degenerated the integral. Verified to trip: with `LTC_MIN_ROUGHNESS`
+set to 0.0 this exact command produces a violent fan. The framing is
+load-bearing -- dead-on the artifact is faint; the grazing offset is where it
+blows up.
 
 ## Energy checks (not stored as images -- run and compare)
 

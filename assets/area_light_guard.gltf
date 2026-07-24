@@ -7,84 +7,24 @@
  "scenes": [
   {
    "nodes": [
-    0,
-    1,
-    2,
-    3,
-    4,
-    5,
-    6
+    0
    ]
   }
  ],
  "nodes": [
   {
-   "name": "ltc_rough_15",
+   "name": "ltc_guard_sphere",
    "mesh": 0,
    "translation": [
-    -3.25,
-    0.5,
-    0.0
-   ]
-  },
-  {
-   "name": "ltc_rough_30",
-   "mesh": 1,
-   "translation": [
-    -1.9500000000000002,
-    0.5,
-    0.0
-   ]
-  },
-  {
-   "name": "ltc_rough_45",
-   "mesh": 2,
-   "translation": [
-    -0.65,
-    0.5,
-    0.0
-   ]
-  },
-  {
-   "name": "ltc_rough_60",
-   "mesh": 3,
-   "translation": [
-    0.65,
-    0.5,
-    0.0
-   ]
-  },
-  {
-   "name": "ltc_rough_80",
-   "mesh": 4,
-   "translation": [
-    1.9500000000000002,
-    0.5,
-    0.0
-   ]
-  },
-  {
-   "name": "ltc_rough_95",
-   "mesh": 5,
-   "translation": [
-    3.25,
-    0.5,
-    0.0
-   ]
-  },
-  {
-   "name": "ltc_ground",
-   "mesh": 6,
-   "translation": [
     0.0,
-    0.0,
+    0.5,
     0.0
    ]
   }
  ],
  "meshes": [
   {
-   "name": "ltc_rough_15",
+   "name": "ltc_guard_sphere",
    "primitives": [
     {
      "attributes": {
@@ -96,95 +36,11 @@
      "material": 0
     }
    ]
-  },
-  {
-   "name": "ltc_rough_30",
-   "primitives": [
-    {
-     "attributes": {
-      "POSITION": 0,
-      "NORMAL": 1,
-      "TEXCOORD_0": 2
-     },
-     "indices": 3,
-     "material": 1
-    }
-   ]
-  },
-  {
-   "name": "ltc_rough_45",
-   "primitives": [
-    {
-     "attributes": {
-      "POSITION": 0,
-      "NORMAL": 1,
-      "TEXCOORD_0": 2
-     },
-     "indices": 3,
-     "material": 2
-    }
-   ]
-  },
-  {
-   "name": "ltc_rough_60",
-   "primitives": [
-    {
-     "attributes": {
-      "POSITION": 0,
-      "NORMAL": 1,
-      "TEXCOORD_0": 2
-     },
-     "indices": 3,
-     "material": 3
-    }
-   ]
-  },
-  {
-   "name": "ltc_rough_80",
-   "primitives": [
-    {
-     "attributes": {
-      "POSITION": 0,
-      "NORMAL": 1,
-      "TEXCOORD_0": 2
-     },
-     "indices": 3,
-     "material": 4
-    }
-   ]
-  },
-  {
-   "name": "ltc_rough_95",
-   "primitives": [
-    {
-     "attributes": {
-      "POSITION": 0,
-      "NORMAL": 1,
-      "TEXCOORD_0": 2
-     },
-     "indices": 3,
-     "material": 5
-    }
-   ]
-  },
-  {
-   "name": "ltc_ground",
-   "primitives": [
-    {
-     "attributes": {
-      "POSITION": 0,
-      "NORMAL": 1,
-      "TEXCOORD_0": 2
-     },
-     "indices": 4,
-     "material": 6
-    }
-   ]
   }
  ],
  "materials": [
   {
-   "name": "ltc_rough_15",
+   "name": "ltc_guard_rough_05",
    "pbrMetallicRoughness": {
     "baseColorFactor": [
      0.6,
@@ -193,85 +49,7 @@
      1.0
     ],
     "metallicFactor": 0.0,
-    "roughnessFactor": 0.15
-   }
-  },
-  {
-   "name": "ltc_rough_30",
-   "pbrMetallicRoughness": {
-    "baseColorFactor": [
-     0.6,
-     0.6,
-     0.6,
-     1.0
-    ],
-    "metallicFactor": 0.0,
-    "roughnessFactor": 0.3
-   }
-  },
-  {
-   "name": "ltc_rough_45",
-   "pbrMetallicRoughness": {
-    "baseColorFactor": [
-     0.6,
-     0.6,
-     0.6,
-     1.0
-    ],
-    "metallicFactor": 0.0,
-    "roughnessFactor": 0.45
-   }
-  },
-  {
-   "name": "ltc_rough_60",
-   "pbrMetallicRoughness": {
-    "baseColorFactor": [
-     0.6,
-     0.6,
-     0.6,
-     1.0
-    ],
-    "metallicFactor": 0.0,
-    "roughnessFactor": 0.6
-   }
-  },
-  {
-   "name": "ltc_rough_80",
-   "pbrMetallicRoughness": {
-    "baseColorFactor": [
-     0.6,
-     0.6,
-     0.6,
-     1.0
-    ],
-    "metallicFactor": 0.0,
-    "roughnessFactor": 0.8
-   }
-  },
-  {
-   "name": "ltc_rough_95",
-   "pbrMetallicRoughness": {
-    "baseColorFactor": [
-     0.6,
-     0.6,
-     0.6,
-     1.0
-    ],
-    "metallicFactor": 0.0,
-    "roughnessFactor": 0.95
-   }
-  },
-  {
-   "name": "ltc_ground",
-   "pbrMetallicRoughness": {
-    "baseColorFactor": [
-     0.35,
-     0.35,
-     0.35,
-     1.0
-    ],
-    "metallicFactor": 0.0,
-    "roughnessFactor": 0.9
+    "roughnessFactor": 0.05
    }
   }
  ],

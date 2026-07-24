@@ -4,7 +4,7 @@
 The canonical LTC validation image: a roughness sweep over a diffuse ground
 plane, lit by one rectangular panel. Each element checks something the analytic
 point-light path cannot show:
-  - the SPHERES sweep roughness 0.05 -> 0.95 across the row, so the specular
+  - the SPHERES sweep roughness 0.15 -> 0.95 across the row, so the specular
     reflection of the panel goes from a sharp rectangle (you can read the
     panel's shape and aspect in it) to a broad wash. A sharp low-roughness
     sphere that shows a rotated or smeared rectangle means the inverse-M
@@ -18,6 +18,10 @@ point-light path cannot show:
 
 All materials are dielectric (metallic 0) -- a metallic subject has no diffuse
 response at all, which makes it useless for validating the diffuse half.
+
+This script also writes area_light_guard.gltf: a single sphere at roughness
+0.05, BELOW the shader's LTC_MIN_ROUGHNESS floor (ltc.glsl). goldens/9.2 uses
+it to pin the floor's artifact suppression -- see that README.
 
 The sibling area_light_fixture.cscn already carries a panel, so plain
 `-m assets/area_light_fixture.gltf` renders the intended scene. To drive the
@@ -98,9 +102,11 @@ def material(name, color, rough):
     }
 
 
-# Roughness sweep incl. the LUT's extremes, which is where a half-texel or
-# orientation error in the table fetch shows up first
-ROUGHNESS = [0.05, 0.2, 0.4, 0.6, 0.8, 0.95]
+# Starts at 0.15, just above LTC_MIN_ROUGHNESS (0.12, ltc.glsl): below the
+# floor every value shades identically, so a sweep entry there would be a dead
+# test. The below-floor regime is exercised by the guard fixture written at
+# the bottom of this file instead.
+ROUGHNESS = [0.15, 0.3, 0.45, 0.6, 0.8, 0.95]
 SPACING = 1.3
 sphere_color = (0.6, 0.6, 0.6)
 
@@ -185,3 +191,40 @@ with open(out, "w") as f:
     json.dump(gltf, f, indent=1)
     f.write("\n")
 print("wrote %s (%d spheres + ground)" % (out, len(ROUGHNESS)))
+
+# ---- guard fixture: one sphere BELOW the roughness floor --------------------
+# LTC_MIN_ROUGHNESS exists because the quad integral hits a real singularity
+# when an edge subtends ~pi: at very low roughness the fitted Minv collapses
+# the transformed corners together and the highlight explodes into a radial
+# fan of striations. The sweep above deliberately stays out of that regime, so
+# this sphere is the regression subject: lit by a sliver panel it must render
+# a clean (merely clamped) highlight. Lower or remove the floor and the fan
+# returns, tripping goldens/9.2/guard_thin_panel.png.
+guard = {
+    "asset": {"version": "2.0", "generator": "gen_area_light_fixture.py"},
+    "scene": 0,
+    "scenes": [{"nodes": [0]}],
+    "nodes": [{"name": "ltc_guard_sphere", "mesh": 0, "translation": [0.0, 0.5, 0.0]}],
+    "meshes": [
+        {
+            "name": "ltc_guard_sphere",
+            "primitives": [
+                {
+                    "attributes": {"POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2},
+                    "indices": 3,
+                    "material": 0,
+                }
+            ],
+        }
+    ],
+    "materials": [material("ltc_guard_rough_05", sphere_color, 0.05)],
+    "accessors": gltf["accessors"],
+    "bufferViews": gltf["bufferViews"],
+    "buffers": gltf["buffers"],
+}
+
+guard_out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "area_light_guard.gltf")
+with open(guard_out, "w") as f:
+    json.dump(guard, f, indent=1)
+    f.write("\n")
+print("wrote %s (guard sphere, roughness 0.05)" % guard_out)
