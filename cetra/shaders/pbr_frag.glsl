@@ -148,6 +148,7 @@ uniform int spotShadowActive;
 // through these UBOs -- directionals in a small unconditional array, the
 // point/spot/area set via the per-fragment cluster index list.
 #include "lights_ubo.glsl"
+#include "ltc.glsl"
 
 uniform int clusterDebug; // Tint fragments by cluster light count (heatmap)
 
@@ -989,6 +990,19 @@ void main() {
     int clusterCount = int(clusterList.y);
     int numDir = lightCounts.x;
 
+    // LTC tables (spec 9.2). Both lookups depend only on this fragment's
+    // roughness and view angle, so they hoist out of the light loop: the
+    // per-light work is just the quad integral. Gated on the scene's area
+    // count, which is uniform across the draw, so a scene without panels
+    // never touches the LUTs.
+    mat3 ltcMinv = mat3(1.0);
+    vec4 ltcAmp = vec4(0.0);
+    if (lightCounts.z > 0) {
+        vec2 ltcUV = ltcCoords(roughnessMap, NdotV);
+        ltcMinv = ltcMatrix(ltcUV);
+        ltcAmp = textureLod(ltcAmpTex, ltcUV, 0.0);
+    }
+
     for (int k = 0; k < numDir + clusterCount; k++) {
         vec3 L;
         float attenuation;
@@ -996,6 +1010,8 @@ void main() {
         vec2 lightSize; // PCSS emitter size
         int dirShadowSlot = -1;
         bool isSpot = false;
+        bool isArea = false;
+        uint areaIndex = 0u;
 
         if (k < numDir) {
             L = normalize(-dirLights[k].dirShadow.xyz);
@@ -1018,6 +1034,40 @@ void main() {
             lightCI = clusterLights[li].colorIntensity.xyz;
             lightSize = clusterLights[li].spotShadowSize.zw;
             isSpot = clusterLights[li].dirType.w == 2.0;
+            isArea = clusterLights[li].dirType.w == 3.0;
+            areaIndex = li;
+        }
+
+        // Area panels (spec 9.2) integrate the whole rectangle analytically
+        // instead of treating it as a point, so they skip the Cook-Torrance
+        // body entirely. That also implements the v1 limits by construction:
+        // no shadows, clearcoat, sheen, SSS or POM from a panel.
+        if (isArea) {
+            vec3 panelPos = clusterLights[areaIndex].posRange.xyz;
+            vec3 panelDir = clusterLights[areaIndex].dirType.xyz;
+            vec3 panelUp = clusterLights[areaIndex].upReserved.xyz;
+
+            // Single-sided: a panel only lights the half-space its normal
+            // points into. Exact plane test, so it also pins the sign
+            // convention independently of the corner winding below.
+            if (dot(WorldPos - panelPos, panelDir) <= 0.0)
+                continue;
+
+            vec3 p0, p1, p2, p3;
+            ltcPanelCorners(panelPos, panelDir, panelUp, lightSize * 0.5, p0, p1, p2, p3);
+
+            // Specular through the fitted lobe transform, diffuse through the
+            // identity (a plain clamped cosine). See the normalization
+            // contract in ltc.glsl: no 2*pi, no 1/pi.
+            float ltSpec = ltcEvaluate(N, V, WorldPos, ltcMinv, p0, p1, p2, p3);
+            float ltDiff = ltcEvaluate(N, V, WorldPos, mat3(1.0), p0, p1, p2, p3);
+
+            vec3 areaSpec = (F0 * ltcAmp.x + (1.0 - F0) * ltcAmp.y) * ltSpec;
+            vec3 areaDiff =
+                (1.0 - metallicMap) * (1.0 - transmissionEff) * albedoMap * ltDiff;
+
+            Lo += min((areaDiff + areaSpec) * lightCI, vec3(10.0));
+            continue;
         }
 
         // Half vector, guarded: where the light is directly behind the

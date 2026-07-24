@@ -378,6 +378,18 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
             mask_array_bind(scene ? scene->mask_array : NULL, TEXUNIT_MASKS);
             uniform_set_int(u, "maskArray", TEXUNIT_MASKS);
 
+            // LTC area-light tables (spec 9.2). Engine-lifetime statics, so
+            // bind unconditionally -- the shader only samples them when the
+            // scene has panels, and programs without the samplers no-op on
+            // the uniform lookup.
+            glActiveTexture(GL_TEXTURE0 + TEXUNIT_LTC_MAT);
+            glBindTexture(GL_TEXTURE_2D, engine->ltc_mat_tex);
+            uniform_set_int(u, "ltcMatTex", TEXUNIT_LTC_MAT);
+            glActiveTexture(GL_TEXTURE0 + TEXUNIT_LTC_AMP);
+            glBindTexture(GL_TEXTURE_2D, engine->ltc_amp_tex);
+            uniform_set_int(u, "ltcAmpTex", TEXUNIT_LTC_AMP);
+            glActiveTexture(GL_TEXTURE0);
+
             // Bind IBL textures if available
             if (scene && scene->ibl && scene->ibl->precomputed) {
                 bind_ibl_textures(scene->ibl, program);
