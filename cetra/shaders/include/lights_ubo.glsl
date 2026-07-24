@@ -63,17 +63,31 @@ uint lightIndexAt(uint i) {
     return (i & 1u) == 0u ? (w & 0xFFFFu) : (w >> 16u);
 }
 
-// A fragment's cluster light list: .x = index-pool offset, .y = light count.
-// The fragment -> cluster mapping (screen tile + exponential-Z slice) and the
-// offset|count word layout live HERE and nowhere else -- every consumer goes
-// through this, so the slicing formula has exactly one edit site.
-uvec2 clusterLightList(vec2 fragCoord, float viewZ) {
-    int tileX = min(int(fragCoord.x * clusterParams.z), CLUSTER_X - 1);
-    int tileY = min(int(fragCoord.y * clusterParams.w), CLUSTER_Y - 1);
+// The cluster light list at a NORMALIZED screen position: .x = index-pool
+// offset, .y = light count. The screen tile + exponential-Z slice mapping and
+// the offset|count word layout live HERE and nowhere else -- every consumer
+// goes through this, so the slicing formula has exactly one edit site.
+//
+// Takes uv rather than pixels because clusterParams.zw bakes in the scene
+// pass's framebuffer size: a consumer at a different resolution (the froxel fog
+// volume, spec 9.5) has no pixel coordinate in that space, but its normalized
+// position is directly comparable.
+uvec2 clusterLightListUv(vec2 uv, float viewZ) {
+    int tileX = min(int(uv.x * float(CLUSTER_X)), CLUSTER_X - 1);
+    int tileY = min(int(uv.y * float(CLUSTER_Y)), CLUSTER_Y - 1);
     int slice =
         clamp(int(log2(max(viewZ, 1e-4)) * clusterParams.x + clusterParams.y), 0, CLUSTER_Z - 1);
     uint word = clusterWord(uint(tileX + CLUSTER_X * (tileY + CLUSTER_Y * slice)));
     return uvec2(word >> 12u, word & 0xFFFu);
+}
+
+// A fragment's cluster light list, from its pixel coordinate in the scene
+// pass's framebuffer. clusterParams.zw carries CLUSTER_X/fbWidth and
+// CLUSTER_Y/fbHeight, so this is the same mapping expressed in pixels.
+uvec2 clusterLightList(vec2 fragCoord, float viewZ) {
+    return clusterLightListUv(vec2(fragCoord.x * clusterParams.z / float(CLUSTER_X),
+                                   fragCoord.y * clusterParams.w / float(CLUSTER_Y)),
+                              viewZ);
 }
 
 // Spot cone from packed fields: 1 inside the inner cone, smooth to 0 at the

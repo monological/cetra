@@ -55,6 +55,11 @@ uniform mat4 spotLightSpaceMatrix;
 
 const float PI = 3.14159265359;
 
+// The point of the whole feature: local lights scatter into the medium. The
+// screen-space march could not afford this -- it would pay per light per step
+// per pixel -- but a froxel consults its cluster once per cell. Including this
+// chunk also wires the three light UBOs automatically (setup_program_uniforms).
+#include "lights_ubo.glsl"
 #include "froxel.glsl"
 
 // Normalized Henyey-Greenstein; c = cos(angle between light travel and the
@@ -131,6 +136,38 @@ void main() {
             float spotPhase = phaseHG(dot(spotDir, -rayDir), anisotropy) * sunBoost;
             S += spotColor * (cone * atten * spotPhase * vis);
         }
+    }
+
+    // Clustered point/spot lights (spec 9.1's list). Unshadowed: the engine has
+    // one global spot shadow map, handled above, and none at all for point
+    // lights -- so this is in-scatter from the local rig, not shadowed shafts.
+    // Attenuation and cone match pbr_frag so a light's glow in the air agrees
+    // with the pool it casts on the floor.
+    // No enable flag: the UBOs are zero-initialised and always bound, so a
+    // scene without clustered lights reports count 0 and this costs nothing --
+    // the degradation to sun+spot coverage is structural, not a toggle.
+    uvec2 list = clusterLightListUv(TexCoords, -viewPos.z);
+    for (uint k = 0u; k < list.y; k++) {
+        uint li = lightIndexAt(list.x + k);
+        // Skip area panels (no scattering in v1) and ALL spots: the scene's
+        // first spot is already scattered above, with its shadow map, and it is
+        // also in this list -- adding it again would double its contribution.
+        // Further spots go unscattered, exactly as in the screen-space march.
+        if (clusterLights[li].dirType.w != 1.0)
+            continue;
+        vec3 toL = clusterLights[li].posRange.xyz - P;
+        float d = length(toL);
+        // Same 1/(c + l*d + q*d^2) falloff pbr_frag uses, so a light's glow in
+        // the air agrees with the pool it casts on the floor.
+        float atten =
+            1.0 / max(clusterLights[li].attenCutoff.x + clusterLights[li].attenCutoff.y * d +
+                          clusterLights[li].attenCutoff.z * d * d,
+                      1e-4);
+        // Phase against the light's travel direction toward this cell (toL
+        // points at the light, so -toL/d is how the light travels), the
+        // punctual analogue of the directional case above.
+        float phase = phaseHG(dot(-toL / max(d, 1e-4), -rayDir), anisotropy) * sunBoost;
+        S += clusterLights[li].colorIntensity.xyz * (atten * phase);
     }
 
     // Keep shafts HDR (they must bloom) but bound hostile parameter combos away
