@@ -701,6 +701,18 @@ typedef struct {
     mat4 parent_transform;
 } TransformStackEntry;
 
+// Rotate an authored light axis into world space (w=0: rotation only, no
+// translation). A degenerate axis leaves the destination untouched rather than
+// writing a NaN.
+static void _rotate_light_axis(mat4 global_transform, const vec3 local, vec3 out) {
+    vec3 rotated;
+    glm_mat4_mulv3(global_transform, (float*)local, 0.0f, rotated);
+    if (glm_vec3_norm(rotated) > 1e-6f) {
+        glm_vec3_normalize(rotated);
+        glm_vec3_copy(rotated, out);
+    }
+}
+
 void apply_transform_to_nodes(SceneNode* root, mat4 transform) {
     if (!root)
         return;
@@ -736,25 +748,14 @@ void apply_transform_to_nodes(SceneNode* root, mat4 transform) {
             glm_mat4_mulv3(node->global_transform, node->light->original_position, 1.0f,
                            light_position);
             glm_vec3_copy(light_position, node->light->global_position);
-            // Rotate the authored local direction by the node's global
-            // transform (w=0: no translation) so imported directional/spot
-            // lights aim where the file says, not along their import-local
-            // axis. Guard the normalize: a zero direction stays zero.
-            vec3 light_direction;
-            glm_mat4_mulv3(node->global_transform, node->light->original_direction, 0.0f,
-                           light_direction);
-            if (glm_vec3_norm(light_direction) > 1e-6f) {
-                glm_vec3_normalize(light_direction);
-                glm_vec3_copy(light_direction, node->light->direction);
-            }
-            // Same for the area-panel height axis, so a rotated node spins the
-            // panel with it instead of leaving it axis-locked (spec 9.2)
-            vec3 light_up;
-            glm_mat4_mulv3(node->global_transform, node->light->original_up, 0.0f, light_up);
-            if (glm_vec3_norm(light_up) > 1e-6f) {
-                glm_vec3_normalize(light_up);
-                glm_vec3_copy(light_up, node->light->up);
-            }
+            // Aim axes: the authored local direction so imported directional/
+            // spot lights point where the file says rather than along their
+            // import-local axis, and the area-panel height axis so a rotated
+            // node spins the panel with it (spec 9.2).
+            _rotate_light_axis(node->global_transform, node->light->original_direction,
+                               node->light->direction);
+            _rotate_light_axis(node->global_transform, node->light->original_up,
+                               node->light->up);
         }
 
         // Push children (in reverse order to maintain left-to-right traversal)

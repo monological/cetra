@@ -994,24 +994,26 @@ void main() {
     // roughness and view angle, so they hoist out of the light loop: the
     // per-light work is just the quad integral. Gated on the scene's area
     // count, which is uniform across the draw, so a scene without panels
-    // never touches the LUTs.
+    // never touches the LUTs. The initializers are dead values, present only
+    // because the compiler cannot see that this gate and the area test in the
+    // loop agree; nothing reads them.
     mat3 ltcMinv = mat3(1.0);
-    vec4 ltcAmp = vec4(0.0);
+    vec2 ltcAmp = vec2(0.0);
     if (lightCounts.z > 0) {
         vec2 ltcUV = ltcCoords(roughnessMap, NdotV);
         ltcMinv = ltcMatrix(ltcUV);
-        ltcAmp = textureLod(ltcAmpTex, ltcUV, 0.0);
+        // .zw are meaningless at THIS uv -- the sphere form factor in .w is
+        // indexed separately inside ltcPanel (see ltc.glsl)
+        ltcAmp = textureLod(ltcAmpTex, ltcUV, 0.0).xy;
     }
 
     for (int k = 0; k < numDir + clusterCount; k++) {
         vec3 L;
         float attenuation;
         vec3 lightCI;   // color * intensity (premultiplied on CPU)
-        vec2 lightSize; // PCSS emitter size
+        vec2 lightSize; // PCSS emitter size (directional/spot) or panel extent (area)
         int dirShadowSlot = -1;
         bool isSpot = false;
-        bool isArea = false;
-        uint areaIndex = 0u;
 
         if (k < numDir) {
             L = normalize(-dirLights[k].dirShadow.xyz);
@@ -1022,6 +1024,30 @@ void main() {
         } else {
             uint li = lightIndexAt(clusterOffset + uint(k - numDir));
             vec3 lightPos = clusterLights[li].posRange.xyz;
+
+            // Area panels (spec 9.2) integrate the whole rectangle
+            // analytically rather than treating it as a point, so they take
+            // none of the point/spot path -- neither the attenuation below
+            // nor the Cook-Torrance body. That also implements the v1 limits
+            // by construction: no shadows, clearcoat, sheen, SSS or POM from
+            // a panel. A panel can only ever arrive through the cluster list,
+            // which is why this test lives here and not after the branch.
+            if (clusterLights[li].dirType.w == 3.0) {
+                vec2 ff = ltcPanel(N, V, WorldPos, ltcMinv, lightPos,
+                                   clusterLights[li].dirType.xyz,
+                                   clusterLights[li].upArea.xyz,
+                                   clusterLights[li].spotShadowSize.zw * 0.5);
+
+                // See the normalization contract in ltc.glsl: no 2*pi, no 1/pi
+                vec3 areaSpec = (F0 * ltcAmp.x + (1.0 - F0) * ltcAmp.y) * ff.y;
+                vec3 areaDiff =
+                    (1.0 - metallicMap) * (1.0 - transmissionEff) * albedoMap * ff.x;
+
+                Lo += min((areaDiff + areaSpec) * clusterLights[li].colorIntensity.xyz,
+                          vec3(10.0));
+                continue;
+            }
+
             L = normalize(lightPos - WorldPos);
             float distance = length(lightPos - WorldPos);
             attenuation = calculateAttenuation(distance, clusterLights[li].attenCutoff.x,
@@ -1034,40 +1060,6 @@ void main() {
             lightCI = clusterLights[li].colorIntensity.xyz;
             lightSize = clusterLights[li].spotShadowSize.zw;
             isSpot = clusterLights[li].dirType.w == 2.0;
-            isArea = clusterLights[li].dirType.w == 3.0;
-            areaIndex = li;
-        }
-
-        // Area panels (spec 9.2) integrate the whole rectangle analytically
-        // instead of treating it as a point, so they skip the Cook-Torrance
-        // body entirely. That also implements the v1 limits by construction:
-        // no shadows, clearcoat, sheen, SSS or POM from a panel.
-        if (isArea) {
-            vec3 panelPos = clusterLights[areaIndex].posRange.xyz;
-            vec3 panelDir = clusterLights[areaIndex].dirType.xyz;
-            vec3 panelUp = clusterLights[areaIndex].upReserved.xyz;
-
-            // Single-sided: a panel only lights the half-space its normal
-            // points into. Exact plane test, so it also pins the sign
-            // convention independently of the corner winding below.
-            if (dot(WorldPos - panelPos, panelDir) <= 0.0)
-                continue;
-
-            vec3 p0, p1, p2, p3;
-            ltcPanelCorners(panelPos, panelDir, panelUp, lightSize * 0.5, p0, p1, p2, p3);
-
-            // Specular through the fitted lobe transform, diffuse through the
-            // identity (a plain clamped cosine). See the normalization
-            // contract in ltc.glsl: no 2*pi, no 1/pi.
-            float ltSpec = ltcEvaluate(N, V, WorldPos, ltcMinv, p0, p1, p2, p3);
-            float ltDiff = ltcEvaluate(N, V, WorldPos, mat3(1.0), p0, p1, p2, p3);
-
-            vec3 areaSpec = (F0 * ltcAmp.x + (1.0 - F0) * ltcAmp.y) * ltSpec;
-            vec3 areaDiff =
-                (1.0 - metallicMap) * (1.0 - transmissionEff) * albedoMap * ltDiff;
-
-            Lo += min((areaDiff + areaSpec) * lightCI, vec3(10.0));
-            continue;
         }
 
         // Half vector, guarded: where the light is directly behind the

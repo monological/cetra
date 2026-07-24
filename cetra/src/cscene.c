@@ -138,13 +138,10 @@ static void parse_lights(CetraSceneDesc* d, const cJSON* root) {
                 log_warn("cscene: area light '%s' missing direction; skipped", out->name);
                 continue;
             }
-            const cJSON* size = cJSON_GetObjectItemCaseSensitive(l, "size");
-            if (!cJSON_IsArray(size) || cJSON_GetArraySize(size) != 2) {
+            if (!get_floats(l, "size", out->size, 2)) {
                 log_warn("cscene: area light '%s' needs size [w, h]; skipped", out->name);
                 continue;
             }
-            out->size[0] = (float)cJSON_GetArrayItem(size, 0)->valuedouble;
-            out->size[1] = (float)cJSON_GetArrayItem(size, 1)->valuedouble;
             if (out->size[0] <= 0.0f || out->size[1] <= 0.0f) {
                 log_warn("cscene: area light '%s' has non-positive size; skipped", out->name);
                 continue;

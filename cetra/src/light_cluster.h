@@ -49,11 +49,12 @@ typedef struct GpuPackedLight {
     float color_intensity[4];  // xyz = color * intensity (premultiplied)
     float atten_cutoff[4];     // constant, linear, quadratic, cos inner cone
     float spot_shadow_size[4]; // cos outer cone, shadow slot (spare), size.xy
-    float up_reserved[4];      // RESERVED: LTC area-light `up` (spec 9.0 / A2)
+    float up_area[4];          // AREA only: panel height axis, orthonormal to dir (spec 9.2)
 } GpuPackedLight;
 
 typedef struct GpuLightsBlock {
-    int32_t light_counts[4]; // x = dir count, y = clustered count
+    int32_t light_counts[4]; // x = dir count, y = clustered count,
+                             // z = area count (gates the LTC LUT fetches), w unused
     float cluster_params[4]; // sliceScale, sliceBias, LC_CLUSTER_X/fbW, LC_CLUSTER_Y/fbH
     GpuDirLight dir_lights[LC_MAX_DIR_LIGHTS];
     GpuPackedLight cluster_lights[LC_MAX_CLUSTER_LIGHTS];
@@ -118,11 +119,14 @@ typedef struct LightClusterContext {
 LightClusterContext* create_light_cluster_context(void);
 void free_light_cluster_context(LightClusterContext* ctx);
 
-// Cull radius for a punctual light: the authored range if set, else the
-// distance where attenuated intensity falls under ~1/256 (LDR LSB at the
-// project-standard -E 1.0). Area lights add half their diagonal. Returns 0
-// for a light that never reaches the epsilon (drop it) and a negative value
-// for an uncullable light (constant-only attenuation: assign everywhere).
+// Cull radius for a light: the authored range if set, else the distance where
+// the light falls under ~1/256 (LDR LSB at the project-standard -E 1.0).
+// Punctual lights solve that against their attenuation coefficients; area
+// panels ignore those entirely (the LTC form factor carries the falloff) and
+// instead invert the head-on far-field irradiance, plus half the panel
+// diagonal to cover its own extent. Returns 0 for a light that never reaches
+// the epsilon (drop it) and a negative value for an uncullable light
+// (constant-only attenuation: assign everywhere).
 float light_cull_radius(const struct Light* light);
 
 // Build the three blocks from scene->lights for this invocation's camera and

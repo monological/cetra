@@ -50,17 +50,15 @@ vec3 ltcIntegrateEdgeVec(vec3 v1, vec3 v2) {
     return cross(v1, v2) * theta_sintheta;
 }
 
-// Integrate a quad against the cosine lobe that Minv maps the BRDF onto.
-// Clipless formulation: rather than clipping the polygon to the horizon, sum
-// the four edge vectors and look the result up in the sphere table, which
-// carries the clip. Pass mat3(1.0) for Lambert diffuse.
-float ltcEvaluate(vec3 N, vec3 V, vec3 P, mat3 Minv, vec3 p0, vec3 p1, vec3 p2, vec3 p3) {
-    // Orthonormal basis around N, aligned so V lies in the T1-N plane
-    vec3 T1 = normalize(V - N * dot(V, N));
-    vec3 T2 = cross(N, T1);
-
-    mat3 M = Minv * transpose(mat3(T1, T2, N));
-
+// Integrate a quad against the cosine lobe. Clipless formulation: rather than
+// clipping the polygon to the horizon, sum the four edge vectors and look the
+// result up in the sphere table, which carries the clip.
+//
+// `M` maps a world-space corner offset into the lobe's own space: the plain
+// (T1,T2,N) shading basis for diffuse, that basis pre-multiplied by Minv for
+// specular, which is what warps the cosine into the GGX lobe. Folding Minv
+// into the basis once beats transforming four corners twice.
+float _ltcIntegrate(mat3 M, vec3 P, vec3 p0, vec3 p1, vec3 p2, vec3 p3) {
     vec3 L0 = normalize(M * (p0 - P));
     vec3 L1 = normalize(M * (p1 - P));
     vec3 L2 = normalize(M * (p2 - P));
@@ -77,22 +75,41 @@ float ltcEvaluate(vec3 N, vec3 V, vec3 P, mat3 Minv, vec3 p0, vec3 p1, vec3 p2, 
         return 0.0;
 
     // Horizon-clipped sphere: indexed by the sum's tilt and magnitude at its
-    // own uv, NOT the roughness/NdotV coordinate above
+    // own uv, NOT the roughness/NdotV coordinate the tables were fetched with
     float z = vsum.z / len;
     vec2 uv = vec2(z * 0.5 + 0.5, len) * LTC_LUT_SCALE + LTC_LUT_BIAS;
     return len * textureLod(ltcAmpTex, uv, 0.0).w;
 }
 
-// Panel corners from center + orientation. `up` spans the height axis and
-// `dir` is the emitting normal (both arrive orthonormal from the CPU), so
-// width follows from cross(up, dir) and the winding below puts the polygon
-// normal along +dir -- the side the panel lights.
-void ltcPanelCorners(vec3 center, vec3 dir, vec3 up, vec2 halfSize, out vec3 p0, out vec3 p1,
-                     out vec3 p2, out vec3 p3) {
+// Both form factors for one rectangular panel: .x diffuse (Lambert), .y
+// specular (the GGX lobe Minv maps onto the cosine). Returns zero for a
+// fragment behind the panel -- v1 panels are single-sided, and this exact
+// plane test pins that convention independently of the corner winding.
+//
+// `up` spans the panel's height axis and `dir` is its emitting normal (both
+// arrive orthonormal from the CPU), so width is cross(up, dir) and the winding
+// puts the polygon normal along +dir: the side the panel lights.
+//
+// The shading basis and the corner vectors are shared by both lobes -- only
+// the matrix applied to them differs -- so this computes them once rather than
+// integrating the quad twice from scratch.
+vec2 ltcPanel(vec3 N, vec3 V, vec3 P, mat3 Minv, vec3 center, vec3 dir, vec3 up, vec2 halfSize) {
+    if (dot(P - center, dir) <= 0.0)
+        return vec2(0.0);
+
     vec3 right = cross(up, dir) * halfSize.x;
     vec3 top = up * halfSize.y;
-    p0 = center - right - top;
-    p1 = center + right - top;
-    p2 = center + right + top;
-    p3 = center - right + top;
+    vec3 p0 = center - right - top;
+    vec3 p1 = center + right - top;
+    vec3 p2 = center + right + top;
+    vec3 p3 = center - right + top;
+
+    // Orthonormal basis around N, aligned so V lies in the T1-N plane
+    vec3 T1 = normalize(V - N * dot(V, N));
+    vec3 T2 = cross(N, T1);
+    mat3 basis = transpose(mat3(T1, T2, N));
+
+    // Diffuse is the cosine lobe itself, so it takes the basis unwarped
+    return vec2(_ltcIntegrate(basis, P, p0, p1, p2, p3),
+                _ltcIntegrate(Minv * basis, P, p0, p1, p2, p3));
 }

@@ -30,11 +30,12 @@ struct PackedLight {
     vec4 attenCutoff;    // x = constant, y = linear, z = quadratic, w = cos inner cone
     vec4 spotShadowSize; // x = cos outer cone, y = float(shadow slot) (spare -- the
                          //     spot map is global today), zw = emitter size
-    vec4 upReserved;     // RESERVED: LTC area-light `up` frame (spec 9.0 item A2)
+    vec4 upArea;     // AREA only: panel height axis, orthonormal to dir (spec 9.2)
 };
 
 layout(std140) uniform LightsBlock {
-    ivec4 lightCounts;  // x = dir count, y = clustered count, zw unused
+    ivec4 lightCounts;  // x = dir count, y = clustered count,
+                        // z = area count (gates the LTC LUT fetches), w unused
     vec4 clusterParams; // x = sliceScale, y = sliceBias,
                         // z = CLUSTER_X / fbWidth, w = CLUSTER_Y / fbHeight
     DirLight dirLights[MAX_DIR_LIGHTS];

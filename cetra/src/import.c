@@ -1197,6 +1197,15 @@ void process_ai_lights(const struct aiScene* scene, Light*** lights, size_t* num
                     log_info("Area light '%s' imported without a size; defaulting to 1x1 m",
                              light->name ? light->name : "unnamed");
                 }
+                // Panel roll. assimp's mUp is only meaningful for area lights,
+                // and it decides which of the panel's two extents is the width:
+                // dropping it silently transposes a non-square panel. Left at
+                // the Light default when the file does not author one --
+                // packing orthonormalizes whatever arrives.
+                if (fabsf(ai_light->mUp.x) + fabsf(ai_light->mUp.y) + fabsf(ai_light->mUp.z) >
+                    1e-6f) {
+                    set_light_up(light, (vec3){ai_light->mUp.x, ai_light->mUp.y, ai_light->mUp.z});
+                }
                 break;
             default:
                 // AMBIENT/UNDEFINED: no renderable analytic equivalent. These

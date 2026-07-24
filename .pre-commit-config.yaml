@@ -6,10 +6,13 @@ repos:
         entry: bash -c 'clang-format -i "$@" && git add "$@"' --
         language: system
         types: [c, c++]
-        exclude: '^cetra/src/ext/'
+        # ltc_lut.h is generated and checked in; reformatting it here would make
+        # `python3 tools/gen_ltc_lut.py && git diff --exit-code` impossible to
+        # pass, which is the only thing that keeps it honest about its source.
+        exclude: '^(cetra/src/ext/|cetra/src/ltc_lut\.h$)'
   - repo: https://github.com/pocc/pre-commit-hooks
     rev: v1.3.5
     hooks:
       - id: cppcheck
         args: [--std=c11, --suppress=missingIncludeSystem, --suppress=missingInclude, --suppress=unusedFunction, --suppress=unmatchedSuppression, --suppress=staticFunction, --suppress=unusedStructMember, --suppress=toomanyconfigs, --suppress=normalCheckLevelMaxBranches, --suppress=checkLevelNormal, --suppress=checkersReport, --suppress=unreachableCode, --suppress=variableScope, --suppress=knownConditionTrueFalse, --suppress=constParameterCallback, "--suppress=*:*ext/*"]
-        exclude: '^cetra/src/ext/'
+        exclude: '^(cetra/src/ext/|cetra/src/ltc_lut\.h$)'

@@ -157,9 +157,6 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
     uniform_set_int(u, "emissiveTex", TEXUNIT_EMISSIVE);
     uniform_set_int(u, "sceneColorTex", TEXUNIT_SCENE_COLOR); // refraction source
     uniform_set_int(u, "sheenTex", TEXUNIT_SHEEN);            // KHR sheen color (sRGB)
-    // No reflectanceTex bind: TEXUNIT_REFLECTANCE stays reserved for KHR
-    // specular color, but nothing samples it yet, so binding it every material
-    // switch was a hash lookup and a no-op set for a uniform that did not exist.
     uniform_set_int(u, "clearcoatNormalTex", TEXUNIT_CLEARCOAT_NORMAL);
     uniform_set_int(u, "heightTex", TEXUNIT_HEIGHT); // POM height map (§4.11)
 
@@ -188,8 +185,7 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
 
     // POM height map (§4.11): the parallax march samples it before every
     // material lookup. Guarded in-shader by parallaxEnabled/heightTexExists/
-    // parallaxScale, so binding it is inert until a material opts in. sheen
-    // color is live; reflectance stays reserved (KHR specular color deferred).
+    // parallaxScale, so binding it is inert until a material opts in.
     if (material->height_tex) {
         glActiveTexture(GL_TEXTURE0 + TEXUNIT_HEIGHT);
         glBindTexture(GL_TEXTURE_2D, material->height_tex->id);
@@ -200,12 +196,11 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
         glBindTexture(GL_TEXTURE_2D, material->sheen_tex->id);
     }
 
-    // No reflectance bind: nothing samples TEXUNIT_REFLECTANCE (the sampler
-    // uniform went with the rest of the dead KHR-specular plumbing), so this
-    // was a real glActiveTexture + glBindTexture per material switch feeding a
-    // unit no shader reads -- the costlier half of the pair whose cached,
-    // location-guarded uniform upload was already removed. common.h keeps the
-    // unit reserved for when the feature actually lands.
+    // material->reflectance_tex is loaded and owned but deliberately not bound:
+    // no shader samples it (KHR specular color is deferred), and it has no
+    // reserved unit any more -- unit 9 became TEXUNIT_LTC_AMP in spec 9.2.
+    // Binding it would cost a glActiveTexture + glBindTexture per material
+    // switch feeding a unit nothing reads.
 
     if (material->clearcoat_normal_tex) {
         glActiveTexture(GL_TEXTURE0 + TEXUNIT_CLEARCOAT_NORMAL);

@@ -211,6 +211,11 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->bloom_threshold = -1.0f;  // -1 = keep the engine default
     args->fog_anisotropy = -999.0f; // -999 = keep default (-1..1 is valid)
     args->ibl_intensity = -1.0f;    // -1 = keep the engine default
+    // --area-light's trailing r,g,b are optional; parsing a 9-field form
+    // leaves these untouched
+    args->area_light_color[0] = 1.0f;
+    args->area_light_color[1] = 1.0f;
+    args->area_light_color[2] = 1.0f;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
@@ -573,11 +578,6 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             if (n != 9 && n != 12) {
                 fprintf(stderr, "Error: --area-light wants px,py,pz,dx,dy,dz,w,h,I[,r,g,b]\n");
                 return -1;
-            }
-            if (n == 9) {
-                args->area_light_color[0] = 1.0f;
-                args->area_light_color[1] = 1.0f;
-                args->area_light_color[2] = 1.0f;
             }
             args->area_light = 1;
         } else if (strcmp(argv[i], "--show-lights") == 0) {
@@ -1193,8 +1193,7 @@ static void spawn_area_light(Scene* scene, const RenderArgs* args) {
 // Clustered-lighting test harness (spec 9.1): an N x N grid of hue-swept point
 // lights on XZ around the origin. Attenuation is derived so each light visually
 // dies at its cull radius, making cluster-assignment errors show as hard edges.
-// Call AFTER the key-light setup so the normal lighting rig is unchanged
-// underneath. No-op unless --point-light-grid was passed.
+// No-op unless --point-light-grid was passed.
 static void spawn_point_light_grid(Scene* scene, const RenderArgs* args) {
     if (args->point_light_grid <= 0)
         return;
@@ -1624,9 +1623,13 @@ int main(int argc, char** argv) {
     configure_sss_materials(engine, scene, args.sss_radius, args.sss_color, cscn);
     apply_cscene_wind(scene, cscn);
 
-    // Scene-file lights precede the environment/key-light logic so they
-    // count as "model ships lights" for the auto-key-light skip.
+    // Scene-file and CLI-authored lights precede the environment/key-light
+    // logic so they count as "model ships lights" for the auto-key-light skip
+    // and the no-IBL three-point fallback. Spawning them after that decision
+    // silently stacks a default rig on top of the light you asked for.
     add_cscene_lights(scene, cscn);
+    spawn_point_light_grid(scene, &args);
+    spawn_area_light(scene, &args);
 
     if (args.sky) {
         // Procedural sky: bake the atmosphere LUTs + sky-view + environment
@@ -1797,9 +1800,6 @@ int main(int argc, char** argv) {
         scene->ibl->intensity = args.ibl_intensity;
         printf("IBL intensity: %.2f\n", args.ibl_intensity);
     }
-
-    spawn_point_light_grid(scene, &args);
-    spawn_area_light(scene, &args);
 
     // Load additional animation files if provided
     // Enable retargeting by default to support Mixamo animations on custom rigs

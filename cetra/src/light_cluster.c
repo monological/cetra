@@ -194,10 +194,32 @@ static void _pack_dir_light(GpuDirLight* dst, const struct Light* light) {
     glm_vec2_copy((float*)light->size, dst->size_misc);
 }
 
+// Normalized emitting normal for a panel, substituting the default -Y for a
+// degenerate authored direction so the frame below is always buildable.
+static void _area_panel_dir(const struct Light* light, vec3 out) {
+    glm_vec3_copy((float*)light->direction, out);
+    if (glm_vec3_norm(out) < 1e-6f)
+        glm_vec3_copy((vec3){0.0f, -1.0f, 0.0f}, out);
+    glm_vec3_normalize(out);
+}
+
+// Orthonormal height axis for a panel, so the shader can build corners without
+// trusting the authored `up`. Gram-Schmidt against the normal; if the two are
+// parallel (or up is degenerate) any orthogonal vector will do -- the panel's
+// roll is undefined in that case -- so take the canonical one.
+static void _area_panel_up(const struct Light* light, const vec3 dir, vec3 out) {
+    vec3 proj;
+    glm_vec3_proj((float*)light->up, (float*)dir, proj);
+    glm_vec3_sub((float*)light->up, proj, out);
+
+    if (glm_vec3_norm(out) < 1e-4f)
+        glm_vec3_ortho((float*)dir, out);
+    glm_vec3_normalize(out);
+}
+
 static void _pack_cluster_light(GpuPackedLight* dst, const struct Light* light, float radius) {
     glm_vec3_copy((float*)light->global_position, dst->pos_range);
     dst->pos_range[3] = radius > 0.0f ? radius : 0.0f; // 0 = unbounded
-    glm_vec3_copy((float*)light->direction, dst->dir_type);
     dst->dir_type[3] = (float)light->type; // 1 point / 2 spot / 3 area
     glm_vec3_scale((float*)light->color, light->intensity, dst->color_intensity);
     dst->atten_cutoff[0] = light->constant;
@@ -208,34 +230,21 @@ static void _pack_cluster_light(GpuPackedLight* dst, const struct Light* light, 
     dst->spot_shadow_size[1] = (float)light->shadow_map_index;
     glm_vec2_copy((float*)light->size, &dst->spot_shadow_size[2]);
 
-    // Area panels: ship an orthonormal height axis so the shader can build
-    // corners without trusting the authored `up`. Gram-Schmidt against the
-    // normal; if the two are parallel (or up is degenerate) fall back to
-    // crossing the direction with the world axis it leans on least, which is
-    // always well-conditioned. Other light types leave the row zeroed.
+    // Area panels also ship a height axis; other light types leave it zeroed.
+    // The panel's direction is normalized (the LTC plane test and corner frame
+    // both assume a unit normal); spot/point ship theirs as authored, which is
+    // what spotConeFactor has always consumed.
     if (light->type == LIGHT_AREA) {
-        vec3 dir, up;
-        glm_vec3_copy((float*)light->direction, dir);
-        if (glm_vec3_norm(dir) < 1e-6f)
-            glm_vec3_copy((vec3){0.0f, -1.0f, 0.0f}, dir);
-        glm_vec3_normalize(dir);
-
-        vec3 proj;
-        glm_vec3_scale(dir, glm_vec3_dot((float*)light->up, dir), proj);
-        glm_vec3_sub((float*)light->up, proj, up);
-
-        if (glm_vec3_norm(up) < 1e-4f) {
-            float ax = fabsf(dir[0]), ay = fabsf(dir[1]), az = fabsf(dir[2]);
-            vec3 axis = {0.0f, 0.0f, 1.0f};
-            if (ax <= ay && ax <= az)
-                glm_vec3_copy((vec3){1.0f, 0.0f, 0.0f}, axis);
-            else if (ay <= az)
-                glm_vec3_copy((vec3){0.0f, 1.0f, 0.0f}, axis);
-            glm_vec3_cross(dir, axis, up);
-        }
-        glm_vec3_normalize(up);
-        glm_vec3_copy(up, dst->up_reserved);
-        dst->up_reserved[3] = 0.0f;
+        // Zero-init is dead -- both helpers write unconditionally -- but
+        // cppcheck cannot see through cglm's inlines to know that
+        vec3 dir = {0.0f, 0.0f, 0.0f}, up = {0.0f, 0.0f, 0.0f};
+        _area_panel_dir(light, dir);
+        _area_panel_up(light, dir, up);
+        glm_vec3_copy(dir, dst->dir_type);
+        glm_vec3_copy(up, dst->up_area);
+        dst->up_area[3] = 0.0f;
+    } else {
+        glm_vec3_copy((float*)light->direction, dst->dir_type);
     }
 }
 

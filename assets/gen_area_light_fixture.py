@@ -19,9 +19,12 @@ point-light path cannot show:
 All materials are dielectric (metallic 0) -- a metallic subject has no diffuse
 response at all, which makes it useless for validating the diffuse half.
 
-Pair it with a panel, e.g.:
-  ./out/bin/render -m assets/area_light_fixture.gltf --no-key-light \\
-      --ibl-intensity 0 --area-light 0,2,0,0,-1,0,1.5,0.6,30
+The sibling area_light_fixture.cscn already carries a panel, so plain
+`-m assets/area_light_fixture.gltf` renders the intended scene. To drive the
+panel from the CLI instead, --no-scene-file is required -- without it the
+sibling loads too and you light the scene with two panels:
+  ./out/bin/render -m assets/area_light_fixture.gltf --no-scene-file \\
+      --area-light 0,2,0,0,-1,0,1.5,0.6,30
 
 Regenerate with:
   python3 assets/gen_area_light_fixture.py
