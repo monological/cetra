@@ -117,6 +117,9 @@ typedef struct CetraSceneDesc {
     bool env_probe_scene;
     bool has_env_intensity;
     float env_intensity; // IBL/world ambient strength
+    bool has_env_sun;    // sky-mode sun angles authored (else the sky default)
+    float env_sun_elevation_deg;
+    float env_sun_azimuth_deg;
 
     CSceneLight lights[CSCENE_MAX_LIGHTS];
     int light_count;

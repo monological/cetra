@@ -77,6 +77,12 @@ int cscene_setup(RenderArgs* args, CetraSceneDesc** out_cscn) {
     if (args->ibl_intensity < 0.0f && cscn->has_env_intensity) {
         args->ibl_intensity = cscn->env_intensity;
     }
+    if (cscn->has_env_sun) {
+        if (args->sun_elevation < -900.0f)
+            args->sun_elevation = cscn->env_sun_elevation_deg;
+        if (args->sun_azimuth < -900.0f)
+            args->sun_azimuth = cscn->env_sun_azimuth_deg;
+    }
     if (args->tonemap_mode == 0) {
         switch (cscn->tonemap) {
             case CSCENE_TONEMAP_AGX:

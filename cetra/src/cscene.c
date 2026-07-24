@@ -91,6 +91,13 @@ static void parse_environment(CetraSceneDesc* d, const cJSON* root) {
     copy_string(d->env_hdr, CSCENE_MAX_PATH, cJSON_GetObjectItemCaseSensitive(env, "hdr"));
     get_bool(env, "probe_scene", &d->env_probe_scene);
     d->has_env_intensity = get_float(env, "intensity", &d->env_intensity);
+    // sky-mode sun angles (degrees): both required, else the sky's own default.
+    const cJSON* sun = cJSON_GetObjectItemCaseSensitive(env, "sun");
+    if (cJSON_IsObject(sun)) {
+        bool ge = get_float(sun, "elevation", &d->env_sun_elevation_deg);
+        bool ga = get_float(sun, "azimuth", &d->env_sun_azimuth_deg);
+        d->has_env_sun = ge && ga;
+    }
 }
 
 static void parse_lights(CetraSceneDesc* d, const cJSON* root) {
