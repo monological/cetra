@@ -221,9 +221,18 @@ typedef struct PostFX {
     bool fog_volumetric;
     bool froxel_ready;        // Lazy-alloc guard for the volumes below
     GLuint froxel_fbo;        // Attachment-less; a layer is bound per slice draw
-    GLuint froxel_scatter;    // RGBA16F volume: in-scatter radiance + extinction
+    GLuint froxel_scatter[2]; // RGBA16F volumes: in-scatter radiance + extinction, indexed by
+                              // frame parity so a frame reprojects against the previous one
+                              // without copying a whole volume
     GLuint froxel_integrated; // RGBA16F volume: front-to-back inscatter + transmittance
-    GLuint froxel_history;    // Previous frame's scatter volume (temporal reprojection)
+    // The camera the previous froxel frame was built with. PostFX keeps its own
+    // copy because engine->prev_view_proj already holds THIS frame's matrix by
+    // the time postfx runs (the scene pass stashes it at its end). valid=false
+    // whenever a frame skipped the volume, so re-enabling fog never reprojects
+    // against a stale or never-written frame.
+    mat4 froxel_prev_view;
+    mat4 froxel_prev_proj;
+    bool froxel_history_valid;
 
     // Published per frame by shadow_publish_to_postfx (mirrors the probe
     // block; postfx never learns about the shadow system): the casters'

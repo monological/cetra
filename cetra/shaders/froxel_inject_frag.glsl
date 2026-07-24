@@ -53,6 +53,15 @@ uniform int spotShadowed;
 uniform sampler2D spotShadowMap;
 uniform mat4 spotLightSpaceMatrix;
 
+// Temporal reprojection against the previous frame's volume. 0 freezes the
+// jitter and skips the blend, so headless renders stay byte-deterministic --
+// the same contract every other accumulator in this stack honours.
+uniform int temporal;
+uniform int frameIndex;
+uniform sampler3D historyVolume;
+uniform mat4 prevView;       // World -> the previous frame's view space
+uniform mat4 prevProjection; // Its focal terms map that to the previous volume
+
 const float PI = 3.14159265359;
 
 // The point of the whole feature: local lights scatter into the medium. The
@@ -94,7 +103,17 @@ void main() {
     float nearZ = projection[3][2] / (projection[2][2] - 1.0);
     vec2 invFocal = 1.0 / vec2(projection[0][0], projection[1][1]);
 
-    vec3 viewPos = froxelViewPos(TexCoords, float(sliceIndex), 0.5, nearZ, fogFar, invFocal);
+    // Sample position within the cell. Frozen at the centre without temporal so
+    // headless is deterministic; under TAA it walks the cell over frames and
+    // the reprojected blend below averages the results, which is what hides the
+    // volume's low resolution.
+    float jitter = 0.5;
+    if (temporal == 1) {
+        jitter = fract(52.9829189 * fract(0.06711056 * gl_FragCoord.x +
+                                          0.00583715 * gl_FragCoord.y) +
+                       float(frameIndex) * 0.61803398875);
+    }
+    vec3 viewPos = froxelViewPos(TexCoords, float(sliceIndex), jitter, nearZ, fogFar, invFocal);
     vec3 camPos = invView[3].xyz;
     vec3 P = (invView * vec4(viewPos, 1.0)).xyz;
     // Direction from the camera toward this cell: the phase function's second
@@ -172,5 +191,29 @@ void main() {
 
     // Keep shafts HDR (they must bloom) but bound hostile parameter combos away
     // from fp16 overflow, as the screen-space march does.
-    FragColor = vec4(min(S, vec3(500.0)), sigma);
+    vec4 result = vec4(min(S, vec3(500.0)), sigma);
+
+    // Temporal reprojection: find where this cell's world position sat in the
+    // previous frame's volume and blend against it. Unlike the screen-space
+    // passes there is no velocity buffer to reproject by -- a froxel is a
+    // volume of air, not a surface -- so the previous camera does the mapping.
+    if (temporal == 1) {
+        vec4 prevViewPos = prevView * vec4(P, 1.0);
+        float prevZ = -prevViewPos.z;
+        if (prevZ > nearZ) {
+            vec2 prevFocal = vec2(prevProjection[0][0], prevProjection[1][1]);
+            vec2 prevUv = (prevViewPos.xy * prevFocal / prevZ) * 0.5 + 0.5;
+            float prevSlice = froxelViewZToSlice(prevZ, nearZ, fogFar);
+            vec3 prevUvw = vec3(prevUv, prevSlice / float(FROXEL_Z));
+            // Off-volume reprojection has no history to blend, so those cells
+            // keep the current frame -- the standard disocclusion fallback.
+            if (all(greaterThanEqual(prevUvw, vec3(0.0))) &&
+                all(lessThanEqual(prevUvw, vec3(1.0)))) {
+                vec4 history = texture(historyVolume, prevUvw);
+                result = mix(result, history, 0.9);
+            }
+        }
+    }
+
+    FragColor = result;
 }

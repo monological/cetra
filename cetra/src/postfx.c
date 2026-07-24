@@ -733,17 +733,18 @@ static bool postfx_ensure_froxel_targets(PostFX* fx) {
     if (fx->froxel_ready)
         return true;
     if (!create_volume_fbo(POSTFX_FROXEL_X, POSTFX_FROXEL_Y, POSTFX_FROXEL_Z, GL_RGBA16F,
-                           &fx->froxel_fbo, &fx->froxel_scatter)) {
+                           &fx->froxel_fbo, &fx->froxel_scatter[0])) {
         return false;
     }
+    fx->froxel_scatter[1] = create_texture_3d(POSTFX_FROXEL_X, POSTFX_FROXEL_Y, POSTFX_FROXEL_Z,
+                                              GL_RGBA16F, GL_RGBA, NULL);
     fx->froxel_integrated = create_texture_3d(POSTFX_FROXEL_X, POSTFX_FROXEL_Y, POSTFX_FROXEL_Z,
                                               GL_RGBA16F, GL_RGBA, NULL);
-    fx->froxel_history = create_texture_3d(POSTFX_FROXEL_X, POSTFX_FROXEL_Y, POSTFX_FROXEL_Z,
-                                           GL_RGBA16F, GL_RGBA, NULL);
-    if (!fx->froxel_integrated || !fx->froxel_history) {
+    if (!fx->froxel_scatter[1] || !fx->froxel_integrated) {
         log_error("Failed to allocate froxel fog volumes");
         return false;
     }
+    fx->froxel_history_valid = false;
     fx->froxel_ready = true;
     return true;
 }
@@ -1109,9 +1110,8 @@ void free_postfx(PostFX* fx) {
     glDeleteTextures(1, &fx->fog_texture);
     free_pingpong(&fx->fog_history);
     glDeleteFramebuffers(1, &fx->froxel_fbo);
-    glDeleteTextures(1, &fx->froxel_scatter);
+    glDeleteTextures(2, fx->froxel_scatter);
     glDeleteTextures(1, &fx->froxel_integrated);
-    glDeleteTextures(1, &fx->froxel_history);
     glDeleteFramebuffers(2, fx->cs_fbo);
     glDeleteTextures(2, fx->cs_texture);
     free_pingpong(&fx->cs_history);
@@ -1309,9 +1309,18 @@ static GLuint run_atrous(PostFX* fx, ShaderProgram* prog, PingPong* pp, int w, i
 // like direct light. Returns 0 (nothing to show in the debug view yet).
 static GLuint postfx_run_froxel_fog(PostFX* fx, bool aux_written, bool taa_resolving,
                                     mat4 projection, mat4 view) {
-    (void)taa_resolving;
-    if (!fx->fog_enabled || !aux_written || !postfx_ensure_froxel_targets(fx))
+    if (!fx->fog_enabled || !aux_written || !postfx_ensure_froxel_targets(fx)) {
+        fx->froxel_history_valid = false;
         return 0;
+    }
+
+    // Frame parity picks this frame's write target; the other volume still
+    // holds the previous frame's scattering for reprojection.
+    const int write = fx->frame_index & 1;
+    const int read = write ^ 1;
+    // Temporal only under TAA, matching every other accumulator here. Without
+    // it the jitter stays frozen and headless renders remain byte-identical.
+    const int temporal = (taa_resolving && fx->froxel_history_valid) ? 1 : 0;
 
     // 1. Inject: scattering + extinction per cell, one draw per slice.
     glUseProgram(fx->froxel_inject_program->id);
@@ -1320,7 +1329,13 @@ static GLuint postfx_run_froxel_fog(PostFX* fx, bool aux_written, bool taa_resol
     glBindTexture(GL_TEXTURE_2D_ARRAY, fx->fog_shadow_map_array);
     glActiveTexture(GL_TEXTURE2);
     glBindTexture(GL_TEXTURE_2D, fx->fog_spot_shadow_map);
+    glActiveTexture(GL_TEXTURE3);
+    glBindTexture(GL_TEXTURE_3D, fx->froxel_scatter[read]);
     glActiveTexture(GL_TEXTURE0);
+    uniform_set_int(iu, "temporal", temporal);
+    uniform_set_int(iu, "frameIndex", fx->frame_index);
+    uniform_set_mat4(iu, "prevView", (float*)fx->froxel_prev_view);
+    uniform_set_mat4(iu, "prevProjection", (float*)fx->froxel_prev_proj);
     mat4 inv_view;
     glm_mat4_inv(view, inv_view);
     uniform_set_mat4(iu, "projection", (float*)projection);
@@ -1362,15 +1377,15 @@ static GLuint postfx_run_froxel_fog(PostFX* fx, bool aux_written, bool taa_resol
         if (spot_shadowed)
             uniform_set_mat4(iu, "spotLightSpaceMatrix", (float*)fx->fog_spot_light_space);
     }
-    draw_volume_slices(fx, fx->froxel_fbo, fx->froxel_scatter, POSTFX_FROXEL_X, POSTFX_FROXEL_Y,
-                       POSTFX_FROXEL_Z, iu);
+    draw_volume_slices(fx, fx->froxel_fbo, fx->froxel_scatter[write], POSTFX_FROXEL_X,
+                       POSTFX_FROXEL_Y, POSTFX_FROXEL_Z, iu);
 
     // 2. Integrate: slice k gathers 0..k. Reads the scatter volume, writes the
     // integrated one -- different textures, so no read-write hazard.
     glUseProgram(fx->froxel_integrate_program->id);
     UniformManager* gu = fx->froxel_integrate_program->uniforms;
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_3D, fx->froxel_scatter);
+    glBindTexture(GL_TEXTURE_3D, fx->froxel_scatter[write]);
     uniform_set_mat4(gu, "projection", (float*)projection);
     uniform_set_float(gu, "fogFar", fx->fog_far);
     draw_volume_slices(fx, fx->froxel_fbo, fx->froxel_integrated, POSTFX_FROXEL_X, POSTFX_FROXEL_Y,
@@ -1394,6 +1409,13 @@ static GLuint postfx_run_froxel_fog(PostFX* fx, bool aux_written, bool taa_resol
     draw_fullscreen_quad(fx->quad_vao);
     glDisable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+    // Remember the camera this volume was built with; next frame reprojects
+    // its cells through it to find where they were.
+    glm_mat4_copy(view, fx->froxel_prev_view);
+    glm_mat4_copy(projection, fx->froxel_prev_proj);
+    fx->froxel_history_valid = true;
+
     check_gl_error("postfx froxel fog");
     return 0;
 }
