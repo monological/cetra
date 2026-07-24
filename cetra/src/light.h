@@ -20,6 +20,14 @@ typedef struct Light {
     // split as original_position/global_position).
     vec3 original_direction;
     vec3 direction;
+
+    // Area-light panel orientation: `up` spans the height axis, `direction`
+    // the panel normal, and width follows from cross(up, direction). Same
+    // authored/rotated split as direction. Orthonormalized against direction
+    // at pack time (light_cluster.c), so a sloppy authored up is fine.
+    // Ignored by every other light type.
+    vec3 original_up;
+    vec3 up;
     vec3 color;
     vec3 specular;
     vec3 ambient;
@@ -55,6 +63,7 @@ void set_light_ambient(Light* light, vec3 ambient);
 void set_light_original_position(Light* light, vec3 original_position);
 void set_light_global_position(Light* light, vec3 global_position);
 void set_light_direction(Light* light, vec3 direction);
+void set_light_up(Light* light, vec3 up);
 void set_light_color(Light* light, vec3 color);
 void set_light_intensity(Light* light, float intensity);
 void set_light_attenuation(Light* light, float constant, float linear, float quadratic);

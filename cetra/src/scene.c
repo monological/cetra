@@ -747,6 +747,14 @@ void apply_transform_to_nodes(SceneNode* root, mat4 transform) {
                 glm_vec3_normalize(light_direction);
                 glm_vec3_copy(light_direction, node->light->direction);
             }
+            // Same for the area-panel height axis, so a rotated node spins the
+            // panel with it instead of leaving it axis-locked (spec 9.2)
+            vec3 light_up;
+            glm_mat4_mulv3(node->global_transform, node->light->original_up, 0.0f, light_up);
+            if (glm_vec3_norm(light_up) > 1e-6f) {
+                glm_vec3_normalize(light_up);
+                glm_vec3_copy(light_up, node->light->up);
+            }
         }
 
         // Push children (in reverse order to maintain left-to-right traversal)

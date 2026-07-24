@@ -25,6 +25,10 @@ Light* create_light() {
 
     glm_vec3_copy((vec3){0.0f, -1.0f, 0.0f}, light->original_direction);
     glm_vec3_copy((vec3){0.0f, -1.0f, 0.0f}, light->direction);
+    // Area-panel height axis. With the default downward direction this makes
+    // width = cross(up, dir) = +X: a ceiling panel spanning X by Z.
+    glm_vec3_copy((vec3){0.0f, 0.0f, 1.0f}, light->original_up);
+    glm_vec3_copy((vec3){0.0f, 0.0f, 1.0f}, light->up);
     glm_vec3_copy((vec3){1.0f, 1.0f, 1.0f}, light->color);
     glm_vec3_copy((vec3){1.0f, 1.0f, 1.0f}, light->specular);
     glm_vec3_copy((vec3){1.0f, 1.0f, 1.0f}, light->ambient);
@@ -91,6 +95,16 @@ void set_light_direction(Light* light, vec3 direction) {
     // re-derive `direction` from `original_direction` during scene update.
     glm_vec3_copy(direction, light->original_direction);
     glm_vec3_copy(direction, light->direction);
+}
+
+void set_light_up(Light* light, vec3 up) {
+    if (!light)
+        return;
+    // Same authored/world split as set_light_direction. Only area lights read
+    // it, and pack time orthonormalizes against direction, so callers may pass
+    // any non-parallel vector.
+    glm_vec3_copy(up, light->original_up);
+    glm_vec3_copy(up, light->up);
 }
 
 void set_light_color(Light* light, vec3 color) {

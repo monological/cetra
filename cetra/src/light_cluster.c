@@ -58,6 +58,21 @@ float light_cull_radius(const struct Light* light) {
     if (i_eff <= 0.0f)
         return 0.0f;
 
+    // Area panels ignore the attenuation coefficients entirely -- the LTC
+    // form factor carries the falloff, and `intensity` is emitted radiance.
+    // Bound the reach by the head-on far-field irradiance I*A/(pi*d^2),
+    // solved against the same 1/256 visibility floor the point path uses.
+    // Head-on is the directional maximum (real response is that times NdotL),
+    // so this is conservative; the half-diagonal covers the panel's own extent.
+    if (light->type == LIGHT_AREA) {
+        float area = light->size[0] * light->size[1];
+        if (area <= 0.0f)
+            return 0.0f;
+        float half_diagonal =
+            0.5f * sqrtf(light->size[0] * light->size[0] + light->size[1] * light->size[1]);
+        return sqrtf(i_eff * area / (LC_CULL_EPSILON * (float)M_PI)) + half_diagonal;
+    }
+
     // Solve constant + linear*d + quadratic*d^2 = i_eff / epsilon for d
     float target = i_eff / LC_CULL_EPSILON;
     float c = light->constant, l = light->linear, q = light->quadratic;
@@ -75,8 +90,6 @@ float light_cull_radius(const struct Light* light) {
     if (r <= 0.0f)
         return 0.0f;
 
-    if (light->type == LIGHT_AREA)
-        r += 0.5f * sqrtf(light->size[0] * light->size[0] + light->size[1] * light->size[1]);
     return r;
 }
 
@@ -194,6 +207,36 @@ static void _pack_cluster_light(GpuPackedLight* dst, const struct Light* light, 
     dst->spot_shadow_size[0] = light->outerCutOff;
     dst->spot_shadow_size[1] = (float)light->shadow_map_index;
     glm_vec2_copy((float*)light->size, &dst->spot_shadow_size[2]);
+
+    // Area panels: ship an orthonormal height axis so the shader can build
+    // corners without trusting the authored `up`. Gram-Schmidt against the
+    // normal; if the two are parallel (or up is degenerate) fall back to
+    // crossing the direction with the world axis it leans on least, which is
+    // always well-conditioned. Other light types leave the row zeroed.
+    if (light->type == LIGHT_AREA) {
+        vec3 dir, up;
+        glm_vec3_copy((float*)light->direction, dir);
+        if (glm_vec3_norm(dir) < 1e-6f)
+            glm_vec3_copy((vec3){0.0f, -1.0f, 0.0f}, dir);
+        glm_vec3_normalize(dir);
+
+        vec3 proj;
+        glm_vec3_scale(dir, glm_vec3_dot((float*)light->up, dir), proj);
+        glm_vec3_sub((float*)light->up, proj, up);
+
+        if (glm_vec3_norm(up) < 1e-4f) {
+            float ax = fabsf(dir[0]), ay = fabsf(dir[1]), az = fabsf(dir[2]);
+            vec3 axis = {0.0f, 0.0f, 1.0f};
+            if (ax <= ay && ax <= az)
+                glm_vec3_copy((vec3){1.0f, 0.0f, 0.0f}, axis);
+            else if (ay <= az)
+                glm_vec3_copy((vec3){0.0f, 1.0f, 0.0f}, axis);
+            glm_vec3_cross(dir, axis, up);
+        }
+        glm_vec3_normalize(up);
+        glm_vec3_copy(up, dst->up_reserved);
+        dst->up_reserved[3] = 0.0f;
+    }
 }
 
 // Classify, cull and pack scene->lights. Directionals shade unclustered (they
@@ -202,7 +245,7 @@ static void _pack_cluster_light(GpuPackedLight* dst, const struct Light* light, 
 // the shading loop order -- is deterministic.
 static void _gather_lights(LightClusterContext* ctx, struct Scene* scene, const Frustum* frustum,
                            mat4 view, mat4 projection, const ClusterFrame* cf) {
-    int num_dir = 0, num_packed = 0;
+    int num_dir = 0, num_packed = 0, num_area = 0;
 
     for (size_t i = 0; i < scene->light_count; i++) {
         struct Light* light = scene->lights[i];
@@ -260,10 +303,15 @@ static void _gather_lights(LightClusterContext* ctx, struct Scene* scene, const 
 
         _pack_cluster_light(&ctx->lights.cluster_lights[num_packed], light, radius);
         num_packed++;
+        if (light->type == LIGHT_AREA)
+            num_area++;
     }
 
     ctx->lights.light_counts[0] = num_dir;
     ctx->lights.light_counts[1] = num_packed;
+    // Lets the shader skip the LTC lookups entirely on scenes with no panels
+    // -- a dynamically uniform branch, so area-free frames pay nothing
+    ctx->lights.light_counts[2] = num_area;
 }
 
 // Pass 1: record which clusters each light touches (one bit per pair) and
