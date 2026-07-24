@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "path": "area_light_fixture.gltf"
+    }
+  ],
+  "lights": [
+    {
+      "name": "KeyPanel",
+      "type": "area",
+      "position": [
+        0.0,
+        2.2,
+        1.2
+      ],
+      "direction": [
+        0.0,
+        -0.6,
+        -0.8
+      ],
+      "size": [
+        2.0,
+        0.7
+      ],
+      "color": [
+        1.0,
+        0.96,
+        0.9
+      ],
+      "intensity": 30.0
+    }
+  ],
+  "post": {
+    "tonemap": "neutral",
+    "exposure": 1.0
+  }
+}

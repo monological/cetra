@@ -104,14 +104,23 @@ static void parse_lights(CetraSceneDesc* d, const cJSON* root) {
             break;
         }
         CSceneLight* out = &d->lights[d->light_count];
+        memset(out, 0, sizeof(*out));
         copy_string(out->name, CSCENE_MAX_NAME, cJSON_GetObjectItemCaseSensitive(l, "name"));
-        // v1 renders point lights only; refuse rather than silently coerce.
+
+        // Point (the default) and area; anything else is refused rather than
+        // silently coerced into the wrong shape.
         const cJSON* type = cJSON_GetObjectItemCaseSensitive(l, "type");
-        if (cJSON_IsString(type) && strcasecmp(type->valuestring, "point") != 0) {
-            log_warn("cscene: light '%s' type '%s' unsupported (v1 is point-only); skipped",
-                     out->name, type->valuestring);
-            continue;
+        out->type = CSCENE_LIGHT_POINT;
+        if (cJSON_IsString(type)) {
+            if (strcasecmp(type->valuestring, "area") == 0) {
+                out->type = CSCENE_LIGHT_AREA;
+            } else if (strcasecmp(type->valuestring, "point") != 0) {
+                log_warn("cscene: light '%s' type '%s' unsupported (point/area); skipped",
+                         out->name, type->valuestring);
+                continue;
+            }
         }
+
         if (!get_vec3(l, "position", out->position)) {
             log_warn("cscene: light '%s' missing position; skipped", out->name);
             continue;
@@ -121,6 +130,27 @@ static void parse_lights(CetraSceneDesc* d, const cJSON* root) {
         }
         if (!get_float(l, "intensity", &out->intensity))
             out->intensity = 1.0f;
+
+        if (out->type == CSCENE_LIGHT_AREA) {
+            // A panel with no normal or no extent has no defined shape, so
+            // these are required rather than defaulted to something arbitrary
+            if (!get_vec3(l, "direction", out->direction)) {
+                log_warn("cscene: area light '%s' missing direction; skipped", out->name);
+                continue;
+            }
+            const cJSON* size = cJSON_GetObjectItemCaseSensitive(l, "size");
+            if (!cJSON_IsArray(size) || cJSON_GetArraySize(size) != 2) {
+                log_warn("cscene: area light '%s' needs size [w, h]; skipped", out->name);
+                continue;
+            }
+            out->size[0] = (float)cJSON_GetArrayItem(size, 0)->valuedouble;
+            out->size[1] = (float)cJSON_GetArrayItem(size, 1)->valuedouble;
+            if (out->size[0] <= 0.0f || out->size[1] <= 0.0f) {
+                log_warn("cscene: area light '%s' has non-positive size; skipped", out->name);
+                continue;
+            }
+            out->has_up = get_vec3(l, "up", out->up);
+        }
         d->light_count++;
     }
 }

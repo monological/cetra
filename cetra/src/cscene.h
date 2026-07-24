@@ -31,14 +31,27 @@ typedef enum {
     CSCENE_TONEMAP_NEUTRAL,
 } CSceneTonemap;
 
-// v1 lights are point lights only (the exporter converts Blender area fills
-// to points; spot/directional land here once the format carries their
-// defining parameters -- cutoffs, direction).
+typedef enum CSceneLightType {
+    CSCENE_LIGHT_POINT = 0,
+    CSCENE_LIGHT_AREA, // rectangular LTC panel (spec 9.2)
+} CSceneLightType;
+
+// Point lights and rectangular area panels. Spot/directional land here once
+// the format carries their defining parameters (cutoffs). An area light needs
+// `direction` (the normal, and it lights only the side that points at) and
+// `size`; `up` is optional -- the renderer orthonormalizes whatever it gets
+// against the direction, so it only matters when you care which way the
+// rectangle's width runs.
 typedef struct CSceneLight {
     char name[CSCENE_MAX_NAME];
+    CSceneLightType type;
     float position[3];
     float color[3];
     float intensity;
+    float direction[3]; // area only
+    float size[2];      // area only: width x height
+    bool has_up;
+    float up[3]; // area only, optional
 } CSceneLight;
 
 typedef struct CSceneLightOverride {
