@@ -28,6 +28,7 @@ LightClusterContext* create_light_cluster_context(void) {
         log_error("Failed to allocate light cluster context");
         return NULL;
     }
+    ctx->area_lights_enabled = true;
     ctx->lights_ubo = create_ubo(UBO_LIGHTS_BLOCK_SIZE, UBO_BINDING_LIGHTS);
     ctx->clusters_ubo = create_ubo(UBO_CLUSTERS_BLOCK_SIZE, UBO_BINDING_CLUSTERS);
     ctx->cluster_indices_ubo =
@@ -259,6 +260,8 @@ static void _gather_lights(LightClusterContext* ctx, struct Scene* scene, const 
     for (size_t i = 0; i < scene->light_count; i++) {
         struct Light* light = scene->lights[i];
         if (!light || light->type == LIGHT_UNKNOWN)
+            continue;
+        if (light->type == LIGHT_AREA && !ctx->area_lights_enabled)
             continue;
 
         if (light->type == LIGHT_DIRECTIONAL) {

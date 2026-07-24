@@ -1417,6 +1417,22 @@ static void _engine_gui_panel(Engine* engine) {
         // by a key rig + IBL has nothing to show -- surface the split and grey
         // the toggle out there, rather than letting it look broken.
         if (engine->light_cluster) {
+            // Grey-out keys off the scene's area-light count, not the packed
+            // count: unchecking zeroes the packed count, which would lock the
+            // checkbox off.
+            int n_area = 0;
+            for (size_t i = 0; i < scene->light_count; i++)
+                if (scene->lights[i] && scene->lights[i]->type == LIGHT_AREA)
+                    n_area++;
+            if (n_area == 0)
+                igBeginDisabled(true);
+            igCheckbox("Area Lights", &engine->light_cluster->area_lights_enabled);
+            if (n_area == 0) {
+                igEndDisabled();
+                igSameLine(0, -1);
+                igTextDisabled("(no area panels in scene)");
+            }
+
             int n_dir = engine->light_cluster->lights.light_counts[0];
             int n_clustered = engine->light_cluster->lights.light_counts[1];
             igText("%d directional (unclustered), %d clustered", n_dir, n_clustered);

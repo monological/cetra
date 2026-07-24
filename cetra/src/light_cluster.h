@@ -114,6 +114,7 @@ typedef struct LightClusterContext {
     bool warned_packed_overflow;
     bool warned_index_overflow;
     bool logged_first_build;
+    bool area_lights_enabled; // false = LIGHT_AREA lights are skipped at gather
 } LightClusterContext;
 
 LightClusterContext* create_light_cluster_context(void);
