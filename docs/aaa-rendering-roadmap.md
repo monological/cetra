@@ -165,7 +165,7 @@ single-tap prefiltered shadow sampling. **Do not schedule until the rest of Trac
 
 ## Track B — Atmosphere, Volumetrics, Character & Post
 
-### B1. Froxel volumetric fog + aerial perspective (Wronski 2014 / Hillaire 2016) — Effort L
+### B1. Froxel volumetric fog (Wronski 2014 / Hillaire 2016) — Effort L
 Replace the screen-space fog march with a camera-frustum 3D froxel volume. GL 4.1 trick: **layered
 rendering via geometry shader** — one `glDrawArraysInstanced(triangle, depth)` draw, trivial GS sets
 `gl_Layer` (GS plumbing proven by `shape_geo.glsl`). Three passes: (1) **inject+light** into
@@ -174,13 +174,13 @@ block, HG phase, height-fog sigma verbatim from fog_frag; per-frame jittered sam
 vs reprojected previous volume; static jitter headless = deterministic); (2) **integrate** —
 deliberately O(n²) front-to-back gather per slice (~30M cheap taps at 64 slices — sidesteps the
 read-write hazard a sequential scan would hit without glTextureBarrier, which is 4.2);
-(3) **composite** — full-res, 1 trilinear tap + 1 aerial-perspective tap, existing
-`glBlendFunc(GL_ONE, GL_SRC_ALPHA)` idiom. Kills fog half-res buffer/history/tent-upsample.
-**Aerial perspective**: second 32×32×32 volume marching Rayleigh/Mie from the atmosphere include +
-existing transmittance/multiscatter LUTs, rebuilt every frame (negligible), applied to scene pixels
-only. Fog sun/ambient switch from app-set to sky-published (with app override). Old fog kept behind
-`fog_volumetric` toggle for one release.
-New: `volume_vert/geo.glsl`, `froxel_inject/integrate/composite_frag.glsl`, `aerial_lut_frag.glsl`,
+(3) **composite** — full-res, 1 trilinear tap, existing
+`glBlendFunc(GL_ONE, GL_SRC_ALPHA)` idiom (B9 adds its aerial tap here later). Kills fog half-res
+buffer/history/tent-upsample. Old fog kept behind `fog_volumetric` toggle for one release. Fog
+sun/ambient stay **app-set** in this item — moving them to sky-published lands in B9, so the froxel
+pass keeps a clean A/B against the old screen-space pass (changing the color source at the same time
+would confound the parity gate).
+New: `volume_vert/geo.glsl`, `froxel_inject/integrate/composite_frag.glsl`,
 `include/froxel.glsl`. CLI: `--fog-volumetric[=0]`.
 **Owns foundations:** `create_texture_3d()` (first 3D texture in the codebase); layered-GS
 volume-draw machinery (`create_volume_program`, `draw_volume_slices`); `include/froxel.glsl`
@@ -269,6 +269,19 @@ the existing 4× MSAA** (masked-foliage precedent); soft tips opt into MBOIT. Im
 from glTF extras, card tangents derived at import, flow map as a mask_array layer. Test content: a
 card-based groom (check raiden's hair; else CC0 asset). Last by decree.
 
+### B9. Aerial perspective (Hillaire 2016) — Effort S
+The distance haze that sells outdoor scale: geometry fading into the atmosphere's own colour rather
+than a flat fog tint. A 32×32×32 volume marches Rayleigh/Mie via the atmosphere include against the
+existing transmittance + multiscatter LUTs, rebuilt every frame (negligible at this size), applied to
+scene pixels only as one extra tap in B1's composite. Also switches fog sun/ambient from app-set to
+**sky-published** (app override retained) — deferred out of B1 so that item keeps a clean A/B against
+the old screen-space fog pass. Split from B1 because it is a different subsystem (sky/atmosphere, not
+postfx lighting), carries none of the fog item's risk (purely additive, no legacy pass to retire, no
+temporal reprojection), and is S once the 3D machinery exists.
+New: `aerial_lut_frag.glsl`. CLI: `--aerial[=0]`.
+**Owns foundations:** none (reuses B1's `create_texture_3d` + layered volume draw).
+**Depends on:** B1's `create_texture_3d` + volume-draw machinery (hard).
+
 ## Sequencing — tiers & rationale
 
 **Tier 1 — the AAA leap (environments):**
@@ -277,27 +290,28 @@ card-based groom (check raiden's hair; else CC0 asset). Last by decree.
 | 1 | A1 Clustered forward | L | **DONE** (spec 9.1). The disruptive light-pipeline rewrite goes first so every later item edits the final loop + UBO layout once. NB the CPU-cost claim went unvalidated — see 9.1's as-built notes. |
 | 2 | A2 LTC area lights | M | **DONE** (spec 9.2). Signature environment feature; contained M on the now-stable loop; must precede DDGI so probes capture area-lit rooms. |
 | 3 | A3 Contact shadows | S | **DONE** (spec 9.3). Post-only depth march along the key light; no shadow.c changes (postfx already had the light dir + view matrix). Default off. |
-| 4 | B1 Froxel fog + aerial perspective | L | Owns the 3D-texture + layered-volume machinery all volumetrics need; consumes A1's light list on day one. |
-| 5 | A4 DDGI probe volume | XL | The "why does UE5 look like that" answer; after A1+A2 so rasterized captures see clustered lights and LTC panels. |
-| 6 | B2 Volumetric clouds | XL | Biggest sky payoff; needs B1's 3D helpers; landing after A4 means probe captures include clouds automatically. |
+| 4 | B1 Froxel volumetric fog | L | Owns the 3D-texture + layered-volume machinery all volumetrics need; consumes A1's light list on day one. |
+| 5 | B9 Aerial perspective | S | Cheap once B1's 3D machinery exists; completes the outdoor atmosphere and lands the sky-published fog colours B1 deferred. |
+| 6 | A4 DDGI probe volume | XL | The "why does UE5 look like that" answer; after A1+A2 so rasterized captures see clustered lights and LTC panels. |
+| 7 | B2 Volumetric clouds | XL | Biggest sky payoff; needs B1's 3D helpers; landing after A4 means probe captures include clouds automatically. |
 
-(5↔6 are swappable — no hard dependency either way.)
+(6↔7 are swappable — no hard dependency either way.)
 
 **Tier 2 — image quality & performance:**
 | # | Item | Effort | Why here |
 |---|------|--------|----------|
-| 7 | A5 Bent-normal spec-occ | M | Near-free on the existing GTAO; hands DDGI a better sampling direction as a follow-up toggle. |
-| 8 | B5 Bokeh DoF | M | Self-contained palate cleanser between the big lifts. |
-| 9 | B4 TAAU | L | After B1's composite settles so the post-res migration happens once; funds Tier 1 at 4K. |
-| 10 | B3 Pre-integrated skin | S | Character tier begins; S effort, zero infra. |
+| 8 | A5 Bent-normal spec-occ | M | Near-free on the existing GTAO; hands DDGI a better sampling direction as a follow-up toggle. |
+| 9 | B5 Bokeh DoF | M | Self-contained palate cleanser between the big lifts. |
+| 10 | B4 TAAU | L | After B1's composite settles so the post-res migration happens once; funds Tier 1 at 4K. |
+| 11 | B3 Pre-integrated skin | S | Character tier begins; S effort, zero infra. |
 
 **Tier 3 — polish & late-tier (parked until Tiers 1-2 land):**
 | # | Item | Effort |
 |---|------|--------|
-| 11 | B6 Moment-based OIT | L |
-| 12 | B7 Lens flare / finishing | S/M |
-| 13 | A6 Moment shadow maps | L |
-| 14 | B8 Hair | XL |
+| 12 | B6 Moment-based OIT | L |
+| 13 | B7 Lens flare / finishing | S/M |
+| 14 | A6 Moment shadow maps | L |
+| 15 | B8 Hair | XL |
 
 ## Foundations ownership (just-in-time)
 
@@ -311,7 +325,7 @@ card-based groom (check raiden's hair; else CC0 asset). Last by decree.
 | Octahedral encode/decode include | A4 | bent-normal storage, oct G-buffer normals |
 | Capture-at-position helper (extracted from probe.c) | A4 | future probe features |
 | Bent normal in the AO chain | A5 | SSGI directionality, SSR occlusion, DDGI sampling |
-| `create_texture_3d` + layered-GS volume draws + `include/froxel.glsl` | B1 | B2 clouds, future volumetrics |
+| `create_texture_3d` + layered-GS volume draws + `include/froxel.glsl` | B1 | B9 aerial perspective, B2 clouds, future volumetrics |
 | CPU 3D noise (`noise_worley3`, Perlin-Worley packing, threaded bake) | B2 | ground fog detail, media |
 | Render-res/post-res split (`post_width/post_height`) | B4 | B5, B7, tonemap |
 
@@ -339,7 +353,7 @@ card-based groom (check raiden's hair; else CC0 asset). Last by decree.
 3. Every feature gets a CLI flag in the render app (`parse_args` pattern) + an ImGui toggle
    (`igCheckbox` bound to Engine/PostFX field pattern).
 4. New test content needed along the way: `--area-light` CLI flag (A2), cornell-box GLB (A4),
-   curvature-sweep GLB (B3), bokeh-chart GLB (B5), low-sun fog/cloud goldens (B1/B2).
+   curvature-sweep GLB (B3), bokeh-chart GLB (B5), low-sun fog/cloud goldens (B1/B9/B2).
 
 ## Execution workflow
 
@@ -357,6 +371,6 @@ card-based groom (check raiden's hair; else CC0 asset). Last by decree.
 - `cetra/src/postfx.c/h` — A3, A5, B1, B4, B5 (pass order, targets, temporal)
 - `cetra/src/render.c` — A1 (delete per-node upload), unit assert chain, material uniforms
 - `cetra/src/engine.c` — G-buffer table, frame loop hooks (A4 probe updates, B2 cloud pass)
-- `cetra/src/sky.c/h` — B1 sky-published fog colors, B2 clouds
+- `cetra/src/sky.c/h` — B9 aerial perspective + sky-published fog colors, B2 clouds
 - `cetra/src/probe.c` — A4 capture-core extraction
 - `apps/render/src/render.c` — CLI flags for every feature
