@@ -73,6 +73,7 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --no-key-light     Pure IBL lighting (no analytic lights/shadows)\n");
     fprintf(stderr,
             "      --point-light-grid N[,radius,intensity]  NxN point-light test grid\n");
+    fprintf(stderr, "      --area-light px,py,pz,dx,dy,dz,w,h,I[,r,g,b]  LTC area panel\n");
     fprintf(stderr, "      --show-lights      Light gizmos (position + cull radius)\n");
     fprintf(stderr, "      --cluster-heatmap  Tint fragments by cluster light count\n");
     fprintf(stderr, "      --no-shadows       Keep key lights but disable shadow maps\n");
@@ -556,6 +557,29 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->oit = 1;
         } else if (strcmp(argv[i], "--no-oit") == 0) {
             args->oit = 0;
+        } else if (strcmp(argv[i], "--area-light") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            // px,py,pz,dx,dy,dz,w,h,I[,r,g,b] -- color optional (white)
+            int n = sscanf(argv[i], "%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f",
+                           &args->area_light_pos[0], &args->area_light_pos[1],
+                           &args->area_light_pos[2], &args->area_light_dir[0],
+                           &args->area_light_dir[1], &args->area_light_dir[2],
+                           &args->area_light_size[0], &args->area_light_size[1],
+                           &args->area_light_intensity, &args->area_light_color[0],
+                           &args->area_light_color[1], &args->area_light_color[2]);
+            if (n != 9 && n != 12) {
+                fprintf(stderr, "Error: --area-light wants px,py,pz,dx,dy,dz,w,h,I[,r,g,b]\n");
+                return -1;
+            }
+            if (n == 9) {
+                args->area_light_color[0] = 1.0f;
+                args->area_light_color[1] = 1.0f;
+                args->area_light_color[2] = 1.0f;
+            }
+            args->area_light = 1;
         } else if (strcmp(argv[i], "--show-lights") == 0) {
             args->show_lights = 1;
         } else if (strcmp(argv[i], "--cluster-heatmap") == 0) {
@@ -1134,6 +1158,38 @@ void configure_visor_materials(Scene* scene) {
  * --sss-color the first profile's color (both < 0 keep the per-material
  * defaults). The global --no-sss toggle gates the effect.
  */
+// LTC area-light test asset (spec 9.2): one rectangular panel from
+// --area-light. The panel lights the half-space its direction points into;
+// `up` stays at the create_light default and gets orthonormalized against the
+// direction at pack time, so any orientation works without an authored up.
+// No-op unless the flag was passed.
+static void spawn_area_light(Scene* scene, const RenderArgs* args) {
+    if (!args->area_light)
+        return;
+
+    Light* al = create_light();
+    if (!al)
+        return;
+
+    set_light_name(al, "area_light");
+    set_light_type(al, LIGHT_AREA);
+    set_light_original_position(al, (float*)args->area_light_pos);
+    set_light_direction(al, (float*)args->area_light_dir);
+    set_light_size(al, args->area_light_size[0], args->area_light_size[1]);
+    set_light_intensity(al, args->area_light_intensity);
+    set_light_color(al, (float*)args->area_light_color);
+    add_light_to_scene(scene, al);
+
+    SceneNode* al_node = create_node();
+    set_node_light(al_node, al);
+    set_node_name(al_node, "area_light");
+    add_child_node(scene->root_node, al_node);
+
+    printf("Area light: %.2fx%.2f at (%.2f, %.2f, %.2f), radiance %.2f\n",
+           args->area_light_size[0], args->area_light_size[1], args->area_light_pos[0],
+           args->area_light_pos[1], args->area_light_pos[2], args->area_light_intensity);
+}
+
 // Clustered-lighting test harness (spec 9.1): an N x N grid of hue-swept point
 // lights on XZ around the origin. Attenuation is derived so each light visually
 // dies at its cull radius, making cluster-assignment errors show as hard edges.
@@ -1743,6 +1799,7 @@ int main(int argc, char** argv) {
     }
 
     spawn_point_light_grid(scene, &args);
+    spawn_area_light(scene, &args);
 
     // Load additional animation files if provided
     // Enable retargeting by default to support Mixamo animations on custom rigs

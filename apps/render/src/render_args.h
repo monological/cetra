@@ -80,6 +80,12 @@ typedef struct {
     int oit;                          // Enable weighted-blended OIT (default off)
     int show_lights;                  // Draw light gizmos (position + cull radius)
     int cluster_heatmap;              // Tint by cluster light count
+    int area_light;                   // --area-light given: spawn one LTC panel
+    float area_light_pos[3];          // Panel center (world)
+    float area_light_dir[3];          // Panel normal; it lights the side this points at
+    float area_light_size[2];         // Panel width x height (world units)
+    float area_light_intensity;       // Emitted radiance
+    float area_light_color[3];        // Panel tint (default white)
     int point_light_grid;             // N: spawn an NxN point-light test grid (0 = off)
     float plg_radius;                 // Grid spacing == per-light cull radius
     float plg_intensity;              // Grid light intensity
