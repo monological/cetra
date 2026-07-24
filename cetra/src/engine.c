@@ -1563,6 +1563,18 @@ static void _engine_gui_panel(Engine* engine) {
         igCheckbox("AO Edge Filter", &fx->ao_edge_filter_enabled);
         _end_effect_group();
 
+        _begin_effect_group("Contact Shadows", &fx->contact_shadows_enabled);
+        igSliderFloat("CS Strength", &fx->cs_strength, 0.0f, 1.0f, "%.2f", 0);
+        // Log scale + wide range: the march reach is a world-space distance the
+        // app scales to the scene, like SSR Distance.
+        igSliderFloat("CS Distance", &fx->cs_distance, 0.01f, 1000.0f, "%.3f",
+                      ImGuiSliderFlags_Logarithmic);
+        // The pass needs a shadow-casting directional (its published direction);
+        // say so rather than let the toggle look inert.
+        if (fx->fog_light_count == 0)
+            igTextDisabled("(needs a shadow-casting directional light)");
+        _end_effect_group();
+
         _begin_effect_group("SSR", &fx->ssr_enabled);
         igSliderFloat("SSR Strength", &fx->ssr_strength, 0.0f, 2.0f, "%.2f", 0);
         // Log scale + wide range: the march reach is a world-space distance
