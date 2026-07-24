@@ -150,8 +150,11 @@ void add_cscene_lights(Scene* scene, const CetraSceneDesc* cscn) {
             set_light_size(light, sl->size[0], sl->size[1]);
             if (sl->has_up)
                 set_light_up(light, (float*)sl->up);
+            printf("Scene file light '%s' (area %.2fx%.2f, radiance %.2f)\n", light->name,
+                   sl->size[0], sl->size[1], sl->intensity);
         } else {
             set_light_type(light, LIGHT_POINT);
+            printf("Scene file light '%s' (point, intensity %.2f)\n", light->name, sl->intensity);
         }
         add_light_to_scene(scene, light);
 
@@ -159,13 +162,6 @@ void add_cscene_lights(Scene* scene, const CetraSceneDesc* cscn) {
         set_node_light(light_node, light);
         set_node_name(light_node, light->name);
         add_child_node(scene->root_node, light_node);
-
-        if (sl->type == CSCENE_LIGHT_AREA) {
-            printf("Scene file light '%s' (area %.2fx%.2f, radiance %.2f)\n", light->name,
-                   sl->size[0], sl->size[1], sl->intensity);
-        } else {
-            printf("Scene file light '%s' (point, intensity %.2f)\n", light->name, sl->intensity);
-        }
     }
 }
 
