@@ -38,7 +38,7 @@ typedef enum CSceneLightType {
     CSCENE_LIGHT_SPOT,        // cone light
 } CSceneLightType;
 
-// All four engine light types (spec 6.1). Shared keys: name, type, position
+// All four engine light types (spec 6.2). Shared keys: name, type, position
 // (point/spot/area; ignored for directional), color, intensity. Per type:
 //   directional -- `direction` (travel direction); shadow-capable via cast_shadows.
 //   spot        -- `direction`, `cone` [inner, outer] half-angles in DEGREES,

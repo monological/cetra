@@ -173,7 +173,7 @@ void add_cscene_lights(Scene* scene, const CetraSceneDesc* cscn) {
             set_light_type(light, LIGHT_SPOT);
             set_light_direction(light, (float*)sl->direction);
             // The engine stores cutoffs as cosines of the half-angles; authors
-            // write degrees (see spec 6.1).
+            // write degrees (see spec 6.2).
             set_light_cutoff(light, cosf(glm_rad(sl->cone[0])), cosf(glm_rad(sl->cone[1])));
             if (sl->cast_shadows)
                 set_light_cast_shadows(light, true);
