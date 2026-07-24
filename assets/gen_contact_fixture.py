@@ -6,18 +6,24 @@ near-contact seam a cascaded shadow map's texels are too coarse to draw, and the
 only read on MATTE receivers. Crucially, the "big" shadow of an object cast on the
 ground is the CSM's job (a large depth delta); a canonical contact shadow keeps
 only the SMALL-delta near-contact and rejects the rest. So a single primitive on a
-plane shows almost nothing -- its only genuine contact is a razor-thin sliver at
-the tangent line.
+plane shows almost nothing -- its only genuine contact is a razor-thin sliver.
 
-What the feature is actually FOR is fine near-contact DETAIL: many surfaces coming
-close together at a scale below a shadow-map texel. This fixture is a mound of
-matte pebbles -- dozens of overlapping rocks -- so the frame is full of crevices
-(rock-to-rock and rock-to-ground), each a genuine small-delta contact the CSM
-blurs over. That is where contact shadows read, and it is a curved-surface pile,
-so no hard silhouette edge self-graze streaks.
+What the feature is FOR is fine near-contact DETAIL: many surfaces coming close
+together at a scale below a shadow-map texel. This fixture is a pile of matte
+rocks -- so the frame is full of crevices (rock-to-rock and rock-to-ground), each
+a genuine small-delta contact the CSM blurs over.
 
-The sibling assets/contact_fixture.cscn ships a shadow-casting sun and the camera,
-so the fixture is self-contained -- no --sky/-e and no camera flags:
+Two things matter for the pile to look like rocks and not garbage:
+  - rocks are DROPPED and settle ON each other (rest, touching), never
+    interpenetrating -- interpenetrating spheres show hard intersection curves
+    that look awful and read as "balls jammed together", not a pile;
+  - each rock is a sphere DEFORMED by a few smooth lumps (normals recomputed), so
+    it reads as a stone, not a billiard ball.
+
+The sibling assets/contact_fixture.cscn ships a procedural-sky environment (the
+ambient the crevices need so the term has something to darken, plus a
+shadow-casting sun at an authored angle) and the camera, so the fixture is fully
+self-contained -- no --sky/-e and no camera flags:
 
   ./out/bin/render -m assets/contact_fixture.gltf --contact-shadows
 
@@ -26,7 +32,7 @@ rocks deepen. --cs-strength / --cs-distance tune it.
 
 Regenerate the geometry with:
   python3 assets/gen_contact_fixture.py
-(the .cscn is hand-authored, not generated. Generation is seeded, so the mound is
+(the .cscn is hand-authored, not generated. Generation is seeded, so the pile is
 deterministic and the golden reproduces.)
 """
 
@@ -37,77 +43,102 @@ import os
 import random
 import struct
 
-random.seed(20260724)   # deterministic mound: same rocks every run, golden reproduces
+rng = random.Random(20260724)   # deterministic pile: same rocks every run
 
 positions, normals, uvs, indices = [], [], [], []
 
+RINGS = 18
+SEGS = 24
 
-# ---- unit sphere template (reused, deformed per rock) ------------------------
-def unit_sphere(rings, segs):
-    verts, norms = [], []
-    for i in range(rings + 1):
-        phi = (i / rings) * math.pi
-        sp, cp = math.sin(phi), math.cos(phi)
-        for j in range(segs + 1):
-            th = (j / segs) * 2.0 * math.pi
-            verts.append((sp * math.cos(th), cp, sp * math.sin(th)))
+
+def _sphere_topology(rings, segs):
     tris = []
     for i in range(rings):
         for j in range(segs):
             a = i * (segs + 1) + j
             b, c, d = a + 1, a + (segs + 1), a + (segs + 2)
-            tris += [a, c, b, b, c, d]              # CCW seen from outside
-    return verts, tris
+            tris += [(a, c, b), (b, c, d)]   # CCW seen from outside
+    return tris
 
 
-SPHERE_V, SPHERE_TRIS = unit_sphere(12, 18)
+TOPOLOGY = _sphere_topology(RINGS, SEGS)
 
 
-def norm3(x, y, z):
-    m = math.sqrt(x * x + y * y + z * z) or 1.0
-    return (x / m, y / m, z / m)
+def _normalize(v):
+    m = math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]) or 1.0
+    return (v[0] / m, v[1] / m, v[2] / m)
 
 
-def add_rock(cx, cz, cy, r, sx, sy, sz, yaw):
-    """A sphere scaled to (r*sx, r*sy, r*sz), yawed, placed at (cx, cy, cz)."""
+def make_rock():
+    """A unit sphere deformed by a few smooth lumps; returns (verts, normals).
+
+    Displacement is a sum of positive directional lobes (dot^3, so smooth and
+    C1), which pushes out rounded bumps -- lumpy stone, not spikes. Normals are
+    recomputed from the deformed mesh, so the lighting follows the real surface.
+    """
+    lobes = [(_normalize((rng.gauss(0, 1), rng.gauss(0, 1), rng.gauss(0, 1))),
+              rng.uniform(0.06, 0.16)) for _ in range(rng.randint(4, 6))]
+    # gentle overall ellipsoid so silhouettes vary too
+    es = (rng.uniform(0.85, 1.15), rng.uniform(0.85, 1.15), rng.uniform(0.85, 1.15))
+    verts = []
+    for i in range(RINGS + 1):
+        phi = (i / RINGS) * math.pi
+        sp, cp = math.sin(phi), math.cos(phi)
+        for j in range(SEGS + 1):
+            th = (j / SEGS) * 2.0 * math.pi
+            n = (sp * math.cos(th), cp, sp * math.sin(th))
+            disp = 1.0
+            for (d, a) in lobes:
+                dp = n[0] * d[0] + n[1] * d[1] + n[2] * d[2]
+                if dp > 0.0:
+                    disp += a * dp * dp * dp
+            verts.append((n[0] * es[0] * disp, n[1] * es[1] * disp, n[2] * es[2] * disp))
+    acc = [(0.0, 0.0, 0.0)] * len(verts)
+    for (a, b, c) in TOPOLOGY:
+        va, vb, vc = verts[a], verts[b], verts[c]
+        e1 = (vb[0] - va[0], vb[1] - va[1], vb[2] - va[2])
+        e2 = (vc[0] - va[0], vc[1] - va[1], vc[2] - va[2])
+        # cross(e2, e1): the TOPOLOGY winding (a, c, b) makes cross(e1, e2) point
+        # INWARD, so swap the operands for the outward face normal.
+        fn = (e2[1] * e1[2] - e2[2] * e1[1], e2[2] * e1[0] - e2[0] * e1[2],
+              e2[0] * e1[1] - e2[1] * e1[0])
+        for k in (a, b, c):
+            acc[k] = (acc[k][0] + fn[0], acc[k][1] + fn[1], acc[k][2] + fn[2])
+    return verts, [_normalize(v) for v in acc]
+
+
+def add_rock(cx, cy, cz, r, verts, norms):
     base = len(positions)
-    cyaw, syaw = math.cos(yaw), math.sin(yaw)
-    for (vx, vy, vz) in SPHERE_V:
-        # ellipsoid position; normal of a scaled sphere is (n/scale) normalized
-        px, py, pz = vx * r * sx, vy * r * sy, vz * r * sz
-        nx, ny, nz = norm3(vx / sx, vy / sy, vz / sz)
-        # yaw about Y (keeps the lowest point, so resting height stays cy)
-        px, pz = px * cyaw + pz * syaw, -px * syaw + pz * cyaw
-        nx, nz = nx * cyaw + nz * syaw, -nx * syaw + nz * cyaw
-        positions.append((cx + px, cy + py, cz + pz))
-        normals.append((nx, ny, nz))
+    for (vx, vy, vz), n in zip(verts, norms):
+        positions.append((cx + vx * r, cy + vy * r, cz + vz * r))
+        normals.append(n)
         uvs.append((0.0, 0.0))
-    for t in SPHERE_TRIS:
-        indices.append(base + t)
+    for (a, b, c) in TOPOLOGY:
+        indices.extend((base + a, base + b, base + c))
 
 
-# ---- a mound of matte rocks --------------------------------------------------
-# Scatter overlapping rocks in a disc, taller toward the centre so the pile heaps
-# up: rocks interpenetrate and rest in each other's valleys, filling the frame
-# with rock-to-rock and rock-to-ground crevices -- the near-contacts the feature
-# draws. Overlap (not physical rest) is fine: a crevice where two rock surfaces
-# come close IS the small-delta contact.
-CLUSTER_R = 1.7
-MOUND_H = 0.9
-N_ROCKS = 70
+# ---- drop-and-settle pile ----------------------------------------------------
+# Drop each rock straight down at a random (x,z) biased toward the centre; it
+# rests where its bounding sphere first touches the ground or an already-placed
+# rock (never interpenetrating -- that is what kept the old fixture from looking
+# like balls shoved through each other). Rocks touch, so the pile is full of
+# genuine tangent crevices, and it heaps up because later rocks land on earlier.
+placed = []   # (x, y, z, r)
+N_ROCKS = 46
+SAMPLE_R = 1.95
 for _ in range(N_ROCKS):
-    # sample (x,z) biased toward the centre (sqrt for area-uniform, then squared
-    # to concentrate) so the mound is denser and taller in the middle
-    ang = random.uniform(0.0, 2.0 * math.pi)
-    rad = CLUSTER_R * (random.random() ** 0.7)
-    cx, cz = rad * math.cos(ang), rad * math.sin(ang)
-    r = random.uniform(0.16, 0.30)
-    sx, sy, sz = (random.uniform(0.8, 1.2) for _ in range(3))
-    # mound profile: centre rocks sit higher (on top of others), rim rocks on the
-    # ground; jitter so they nestle at varied heights.
-    heap = MOUND_H * max(0.0, 1.0 - (rad / CLUSTER_R) ** 2)
-    cy = r * sy + heap * random.uniform(0.0, 1.0)
-    add_rock(cx, cz, cy, r, sx, sy, sz, random.uniform(0.0, 2.0 * math.pi))
+    ang = rng.uniform(0.0, 2.0 * math.pi)
+    rad = SAMPLE_R * math.sqrt(rng.random())
+    x, z = rad * math.cos(ang), rad * math.sin(ang)
+    r = rng.uniform(0.20, 0.34)
+    y = r   # ground rest
+    for (px, py, pz, pr) in placed:
+        reach = (r + pr) ** 2 - ((x - px) ** 2 + (z - pz) ** 2)
+        if reach > 0.0:
+            y = max(y, py + math.sqrt(reach))   # rest on top of this rock
+    placed.append((x, y, z, r))
+    v, nrm = make_rock()
+    add_rock(x, y, z, r, v, nrm)
 
 rocks_vertex_count = len(positions)
 rocks_index_count = len(indices)
@@ -200,4 +231,4 @@ out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "contact_fixture.
 with open(out, "w") as f:
     json.dump(gltf, f, indent=1)
     f.write("\n")
-print("wrote %s (%d rocks over a matte plane)" % (out, N_ROCKS))
+print("wrote %s (%d settled rocks over a matte plane)" % (out, N_ROCKS))

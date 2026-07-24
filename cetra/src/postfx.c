@@ -237,7 +237,8 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     fx->spec_occlusion_enabled = true; // Keep GTAO off specular; on when AO is on
     fx->ao_edge_filter_enabled = true; // Depth-aware AO blur (no silhouette bleed)
     fx->contact_shadows_enabled = false; // Opt-in (spec 9.3); off leaves the frame untouched
-    fx->cs_strength = 0.6f;              // Modest, so stacking on CSM + AO stays subtle
+    fx->cs_strength = 0.23f;             // Subtle: it stacks on CSM + AO in the same crevices, so a
+                                         // higher weight crushes near-contacts to hard black
     fx->cs_distance = 0.3f;              // View-space reach; apps scene-scale this
     fx->ssgi_enabled = false;          // experimental; off by default
     fx->ssgi_intensity = 1.0f;
