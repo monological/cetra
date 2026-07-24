@@ -327,7 +327,9 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     glm_vec3_copy((vec3){0.05f, 0.05f, 0.05f}, fx->fog_ambient);
     fx->fog_steps = 24;
     fx->fog_ready = false;
-    fx->fog_volumetric = false; // Opt-in (spec 9.5) while the legacy march is still the default
+    // Froxel volume is the fog implementation (spec 9.5); the screen-space
+    // march stays reachable for one release via --fog-volumetric=0.
+    fx->fog_volumetric = true;
     fx->froxel_ready = false;
     fx->fog_spot_enabled = false; // published per frame by shadow_publish_to_postfx
 

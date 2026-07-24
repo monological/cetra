@@ -182,10 +182,17 @@ pass keeps a clean A/B against the old screen-space pass (changing the color sou
 would confound the parity gate).
 New: `volume_vert/geo.glsl`, `froxel_inject/integrate/composite_frag.glsl`,
 `include/froxel.glsl`. CLI: `--fog-volumetric[=0]`.
-**Owns foundations:** `create_texture_3d()` (first 3D texture in the codebase); layered-GS
-volume-draw machinery (`create_volume_program`, `draw_volume_slices`); `include/froxel.glsl`
-frustum mapping. **Depends on:** nothing hard; consumes A1's clustered light list for local-light
-scattering when present (degrades to today's sun+spot coverage without it — no blocker).
+**Owns foundations:** `create_texture_3d()` (first 3D texture in the codebase); volume-draw
+machinery (`create_volume_fbo`, `draw_volume_slices`); `include/froxel.glsl` frustum mapping.
+**Depends on:** nothing hard; consumes A1's clustered light list for local-light scattering when
+present (degrades to today's sun+spot coverage without it — no blocker).
+**As built (spec 9.5):** slices are drawn one layer at a time via `glFramebufferTextureLayer`
+rather than the layered-GS sketch above — that is the codebase's existing idiom (shadow cascades,
+mask-array layers, IBL cube faces), reuses `post_vert.glsl` unchanged, and avoids adding a
+geometry shader to a tree where every shader is `#version 330 core` and none uses `gl_InstanceID`.
+`gl_Layer` would in fact have needed no version bump; only `layout(invocations=N)` would. Temporal
+reprojection goes through a PostFX-owned copy of the previous camera, since `prev_view_proj`
+already holds the current frame's matrix by the time postfx runs.
 
 ### B2. Volumetric clouds (Schneider/Vos HZD 2015, Nubis) — Effort XL
 **Folded into SkyAtmosphere** (`sky->clouds` sub-struct), not a new scene subsystem — clouds share
@@ -290,7 +297,7 @@ New: `aerial_lut_frag.glsl`. CLI: `--aerial[=0]`.
 | 1 | A1 Clustered forward | L | **DONE** (spec 9.1). The disruptive light-pipeline rewrite goes first so every later item edits the final loop + UBO layout once. NB the CPU-cost claim went unvalidated — see 9.1's as-built notes. |
 | 2 | A2 LTC area lights | M | **DONE** (spec 9.2). Signature environment feature; contained M on the now-stable loop; must precede DDGI so probes capture area-lit rooms. |
 | 3 | A3 Contact shadows | S | **DONE** (spec 9.3). Post-only depth march along the key light; no shadow.c changes (postfx already had the light dir + view matrix). Default off. |
-| 4 | B1 Froxel volumetric fog | L | Owns the 3D-texture + layered-volume machinery all volumetrics need; consumes A1's light list on day one. |
+| 4 | B1 Froxel volumetric fog | L | **DONE** (spec 9.5). Owns the 3D-texture + volume-draw machinery all volumetrics need; consumes A1's light list on day one. Shipped with one-layer-per-draw slices, not the layered-GS sketch — that matches the cascade/mask-array/cube-face idiom and needs no geometry shader. |
 | 5 | B9 Aerial perspective | S | Cheap once B1's 3D machinery exists; completes the outdoor atmosphere and lands the sky-published fog colours B1 deferred. |
 | 6 | A4 DDGI probe volume | XL | The "why does UE5 look like that" answer; after A1+A2 so rasterized captures see clustered lights and LTC panels. |
 | 7 | B2 Volumetric clouds | XL | Biggest sky payoff; needs B1's 3D helpers; landing after A4 means probe captures include clouds automatically. |

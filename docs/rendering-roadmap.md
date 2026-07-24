@@ -346,12 +346,15 @@ Effort key: **S** ≈ days · **M** ≈ 1–2 weeks · **L** ≈ 3+ weeks.
   per-caster single-tap shadowing with hoisted HG phase, `scene·T + inscatter` composite
   pre-bloom, temporal accumulation under TAA. The froxel design below remains the upgrade
   path if local lights arrive (the composite, publish plumbing, and policy all carry over).
-- **GL 4.1 approach.** No compute, so emulate the froxel grid with a **3D texture** written
-  by rendering slices (layered rendering via geometry shader, or a loop of fullscreen passes
-  into `glFramebufferTexture3D` layers): per froxel, evaluate participating-media scattering
-  from each shadow-casting light (sample the shadow map), then a second pass ray-marches /
-  prefix-integrates front-to-back and composites into the scene by depth. Temporal jitter +
-  TAA hides the low froxel resolution.
+- **Froxel upgrade — ✅ shipped** (spec 9.5, `froxel-volumetric-fog` branch). A1's clustered
+  lighting removed the "wins never activate" objection: the screen-space march cannot afford
+  the light list (per light, per step, per pixel) but a volume evaluates lighting once per
+  cell. Three passes over a 160×90×64 RGBA16F pair — inject+light, an O(n²) front-to-back
+  integrate that reads one volume and writes the other (no read-write hazard without
+  `glTextureBarrier`, GL 4.5), and a full-res composite that is one trilinear tap on the same
+  `scene·T + inscatter` blend. Slices are drawn one layer at a time via
+  `glFramebufferTextureLayer` — the cascade/mask-array/cube-face idiom — so no geometry shader
+  was needed. Default on; `--fog-volumetric=0` keeps the screen-space march for one release.
 - **Dependencies.** Shadow map(s); much smoother with TAA and CSM.
 - **Refs.** Wronski, "Volumetric Fog" (SIGGRAPH 2014); Hillaire, "Physically Based &
   Unified Volumetric Rendering in Frostbite" (SIGGRAPH 2015).
