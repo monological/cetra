@@ -1,41 +1,42 @@
 # Contact-shadow goldens (spec 9.3)
 
-Screen-space contact shadows: an 8-step depth-buffer march toward the key light
-that fills the fine contact gaps a cascaded shadow map is too coarse to resolve.
-Off by default; `--contact-shadows` enables it.
+Screen-space contact shadows: a short depth-buffer march toward the key light
+that fills the near-contact darkening a cascaded shadow map is too coarse to
+draw -- what grounds an object instead of letting it float. Off by default;
+`--contact-shadows` enables it.
 
-All goldens are HDR-free: `--sky` bakes a procedural sun (a shadow-casting
-directional, which is what the pass marches along), so nothing here needs the
-gitignored studio HDRs and anyone can regenerate them (the 9.2 lesson).
+The demo asset is `assets/contact_fixture.gltf` (generator
+`assets/gen_contact_fixture.py`): a matte plane with four matte cubes hovering
+at increasing gaps above it (0.0, 0.06, 0.15, 0.30). It is self-lit -- the
+render app's fallback key light casts shadows, so no `-e`/`--sky` is needed and
+the fixture has no gitignored dependencies. Contact shadows darken the plane
+under the low-gap cubes and fade as the gap grows -- the textbook "touching vs
+floating" cue.
+
+Why a purpose-built asset: contact shadows only read on MATTE receivers close
+to an occluder. Chrome (raiden) has no diffuse term and its seams are already
+dark; the LTC sphere fixture is glossy and tangent to the ground. Neither shows
+anything. This fixture is built for the effect and is what exposed the original
+thickness bug (see spec 9.3 as-built notes -- the merged version produced ~0
+visible pixels on every scene).
 
 ## contact_debug.png
 
 The raw visibility term (`--cs-debug`, debug view 8): 1 = lit (white),
-0 = fully occluded (black).
+0 = occluded (black).
 
 ```
-./out/bin/render -m assets/area_light_fixture.gltf --no-scene-file \
-    --sky --sun-elevation 15 --sun-azimuth 55 -W 640 -H 360 \
-    --cam-eye 0,1.6,6 --cam-target 0,0.5,0 \
+./out/bin/render -m assets/contact_fixture.gltf --no-scene-file \
+    --cam-eye 0,2.2,5 --cam-target 0,0.3,0 -W 640 -H 400 \
     -x -f 120 --no-auto-exposure -E 1.0 --cs-debug
 ```
 
-What to look for: a sharp dark crescent on the anti-sun side of each sphere,
-growing left to right (a perspective effect -- the camera at x=0 views each
-sphere across the row at a different angle). No speckle, no full-hemisphere
-darkening. **Inspect at 1:1** -- the earlier 9.2 golden shipped an artifact that
-was invisible at thumbnail scale.
+What to look for: dark hugging the cube-ground contact of each cube, strongest
+under the resting (gap-0) left cube and fading rightward. **Inspect at 1:1** --
+the 9.2 golden shipped an artifact that was invisible at thumbnail scale.
 
-## The fixture under-sells this feature -- on purpose
-
-A smooth sphere resting on a plane is a poor contact-shadow demo: its only
-"contact" is the tangent line, and the visible term is mostly its own grazing
-terminator. Contact shadows earn their keep on FINE geometry -- armor plate
-seams, under a collar, between limbs -- exactly where a shadow map's texels are
-too big. On the raiden model the term lands at the collar, armpits, hips and
-knees and grounds the figure; that render is the real demonstration but needs
-the gitignored HDR, so it is not committed here. The sphere fixture is the
-reproducible regression check, not the showcase.
+Drop `--cs-debug` to see the composite (the cubes plant onto the plane);
+`--cs-strength` / `--cs-distance` tune it.
 
 ## Determinism
 
@@ -55,4 +56,4 @@ magick compare -metric AE run_a.ppm run_b.ppm null:   # must print 0
   exact off path (0 px), rather than trusting GPU `mix()` identity.
 - **`--no-shadows`**: no shadow-casting directional -> `fog_light_count` 0 ->
   the pass no-ops (0 px). The feature has no key-light language to extend
-  without one; this is by design, documented in `--help`.
+  without one; documented in `--help`.

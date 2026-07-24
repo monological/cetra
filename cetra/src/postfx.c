@@ -239,7 +239,6 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     fx->contact_shadows_enabled = false; // Opt-in (spec 9.3); off leaves the frame untouched
     fx->cs_strength = 0.6f;              // Modest, so stacking on CSM + AO stays subtle
     fx->cs_distance = 0.3f;              // View-space reach; apps scene-scale this
-    fx->cs_thickness = 0.15f;            // ~half the reach: occluder-slab depth
     fx->ssgi_enabled = false;          // experimental; off by default
     fx->ssgi_intensity = 1.0f;
     fx->normals_enabled = true;
@@ -1679,7 +1678,6 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             uniform_set_mat4(cu, "projection", (float*)projection);
             uniform_set_vec3(cu, "lightDirVS", cs_dir_vs);
             uniform_set_float(cu, "csDistance", fx->cs_distance);
-            uniform_set_float(cu, "csThickness", fx->cs_thickness);
             uniform_set_int(cu, "temporal", taa_resolving ? 1 : 0);
             uniform_set_int(cu, "frameIndex", fx->frame_index);
             draw_fullscreen_quad(fx->quad_vao);

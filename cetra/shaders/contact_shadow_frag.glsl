@@ -22,7 +22,6 @@ uniform int useNormalsTex;     // 1 = normals resolved this frame, safe to sampl
 uniform mat4 projection;       // full matrix: focal terms reconstruct P, near plane clamps the ray
 uniform vec3 lightDirVS;       // unit vector, view space, pointing TOWARD the key light
 uniform float csDistance;      // march reach in view-space units (C guarantees > 0 when we run)
-uniform float csThickness;     // max depth gap an occluder may sit behind the ray, view units
 uniform int temporal;          // 1 iff the accumulation pass is active (frozen otherwise)
 uniform int frameIndex;        // rotates the start jitter, only under temporal
 
@@ -128,11 +127,20 @@ void main() {
         if (sceneZ >= SKY_Z)
             continue; // sky/catcher sample is not an occluder
         float rayZ = startV.z + t * lightDirVS.z;
-        // Both negative; diff > 0 means the ray point sits behind the sampled
-        // surface (RH-verified, same accept test SSR uses). Within the slab it
-        // is a real occluder; deeper than csThickness it is unrelated geometry.
+        // Both negative; diff > 0 means the ray passed BEHIND the sampled
+        // surface -- something blocks the path to the light, so the receiver is
+        // occluded. There is deliberately no upper bound: the grounding case (a
+        // receiver marching behind a much-closer occluder, e.g. a plane behind
+        // a cube) and the haloing case (a distant surface behind a foreground
+        // object) share this signature, and the discriminator between them is
+        // the MARCH LENGTH, not a depth slab. csDistance is short, so a far
+        // receiver's march projects only a sub-pixel screen band past a
+        // foreground silhouette -- haloing stays thin -- while a near receiver
+        // reaches its occluder. A symmetric thickness window instead rejects
+        // the grounding case outright (the occluder is "too far in front"),
+        // which is why contact shadows were invisible before.
         float diff = sceneZ - rayZ;
-        if (diff > bias && diff < csThickness) {
+        if (diff > bias) {
             // Contact-hardening: an occluder at the shading point darkens fully,
             // one at the march limit not at all. Fading over the full csDistance
             // (not the clamped tMax) makes the strength decay continuously to 0

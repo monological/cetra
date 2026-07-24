@@ -1832,6 +1832,13 @@ int main(int argc, char** argv) {
         // own lighting design (embedded lights, emissive surfaces) keep it --
         // flooding them with a default rig erases the authored mood.
         create_three_point_lights(scene, 3.0f);
+        // Let the key light cast shadows so a grounded no-IBL scene (e.g. the
+        // contact-shadow fixture) has a shadow-casting directional even without
+        // --sky/-e -- screen-space contact shadows need one to march along, and
+        // a key light that grounds the subject is the right default anyway.
+        Light* key = find_light_by_name(scene, "key_light");
+        if (key)
+            set_light_cast_shadows(key, true);
     }
 
     // Environment light strength: authored (scene file world strength) or
@@ -2099,12 +2106,10 @@ int main(int argc, char** argv) {
 
             // Contact-shadow reach is a world-space distance like the AO radius:
             // a few percent of the scene, so the march covers the near-contact
-            // gap without streaking. Thickness follows at half the reach. A CLI
-            // --cs-distance (incl. 0 = off) always wins.
+            // gap without streaking. A CLI --cs-distance (incl. 0 = off) wins.
             engine->postfx->cs_distance = args.cs_distance >= 0.0f
                                               ? args.cs_distance
                                               : fmaxf(0.3f, scene_radius * 0.02f);
-            engine->postfx->cs_thickness = 0.5f * engine->postfx->cs_distance;
 
             // Fog parameters are world-space too: fixed meter-scale density
             // on a large-unit scene is invisible (or opaque soup on a tiny

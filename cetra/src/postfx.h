@@ -148,11 +148,10 @@ typedef struct PostFX {
     // shadow map. Off by default; enabled false leaves the frame untouched.
     // Targets are lazily allocated (cs_ready) and freed unconditionally.
     bool contact_shadows_enabled;
-    float cs_strength;  // Composite darkening weight [0,1]
-    float cs_distance;  // March reach in view-space units (0 = off, C-gated)
-    float cs_thickness; // Max view-space gap an occluder may sit behind the ray
-    bool cs_ready;      // Lazy-alloc guard for the targets below
-    GLuint cs_fbo[2];   // R8 at AO res: [0] raw march, [1] bilateral-blurred
+    float cs_strength; // Composite darkening weight [0,1]
+    float cs_distance; // March reach in view-space units (0 = off, C-gated)
+    bool cs_ready;     // Lazy-alloc guard for the targets below
+    GLuint cs_fbo[2];  // R8 at AO res: [0] raw march, [1] bilateral-blurred
     GLuint cs_texture[2];
     PingPong cs_history;  // R16F temporal accumulation (0.9 feedback bands in 8 bits)
     bool ssgi_enabled;    // Screen-space GI: one-bounce indirect diffuse (extends the GTAO sweep)
