@@ -2,13 +2,14 @@
 in vec2 TexCoords;
 out vec4 FragColor; // .r visibility toward the key light (1 = lit, 0 = occluded)
 
-// Screen-space contact shadows (Uncharted 4 / Bavoil): an 8-step ray march
-// through the depth buffer toward the key light, darkening the near-contact
-// gaps a cascaded shadow map's texels are too coarse to resolve (the seam
-// under a foot, a collar, a hand on a surface). Runs at AO resolution, is
-// bilaterally blurred and temporally accumulated like GTAO, and composites in
-// tonemap as a direct-light occlusion multiplier -- so a shadow map is not
-// required for the technique, only a key-light direction.
+// Screen-space contact shadows (Uncharted 4 / Bavoil): a short ray march through
+// the depth buffer toward the key light, darkening the near-contact seams a
+// cascaded shadow map's texels are too coarse to resolve (under a foot, a collar,
+// a hand on a surface). It is a SHORT-RANGE supplement to the shadow map, not a
+// replacement -- an object floating well clear of a surface is grounded by the
+// CSM, not by this. Runs bilaterally blurred and temporally accumulated like
+// GTAO, and composites in tonemap as a direct-light occlusion multiplier -- so a
+// shadow map is not required for the technique, only a key-light direction.
 //
 // Positions come from the aux G-buffer's LINEAR view-space Z (.z, negative in
 // front, 0 = sky), the same source GTAO uses: the non-linear DEPTH24 buffer
@@ -27,8 +28,14 @@ uniform int frameIndex;        // rotates the start jitter, only under temporal
 
 #include "depth.glsl" // viewPosFromLinZ; requires the projection uniform above
 
-const int STEPS = 8;
-const float BIAS_FRAC = 0.02;  // step-quantization slack, as a fraction of csDistance
+const int STEPS = 16;          // march samples over the (clamped) reach; a finer stride catches a
+                               // thin near-contact without over-marching
+const float BIAS_FRAC = 0.02;  // near-side slack (self-contact quantization), a fraction of csDistance
+const float THICK_FRAC = 1.0;  // occluder thickness, x csDistance. The canonical SSCS test: a
+                               // surface occludes only if the ray passes BEHIND it by less than this.
+                               // It is what stops a ray grazing its own silhouette from reading the
+                               // far side of the depth cliff as an occluder -- a near contact sits a
+                               // SMALL depth behind its receiver, a silhouette straddle a LARGE one.
 const float MAX_UV_LEN = 0.15; // clamp screen reach so near-camera pixels don't stride the frame
 const float SKY_Z = -1e-4;     // linZ at or above this is the sky/shadow-catcher sentinel
 
@@ -113,7 +120,15 @@ void main() {
     // absolute epsilon is wrong when scene scales span meters to hundreds.
     float bias = BIAS_FRAC * csDistance + 2.0 * zGrain;
 
-    float occ = 0.0;
+    // Occluder thickness: a surface blocks the ray only if the ray passes behind
+    // it by less than this. Larger reads leak through (the ray is past the object,
+    // in free space beyond it) -- and crucially reject a ray grazing its own
+    // silhouette, which reads the FAR side of the depth cliff, a jump far larger
+    // than any near-contact occluder.
+    float thick = THICK_FRAC * csDistance;
+    bool hit = false;
+    float hitT = 0.0;    // t at the occluder, for contact-hardening
+    vec2 hitUV = vec2(0.0);
     for (int i = 0; i < STEPS; i++) {
         float t = (float(i) + jitter) / float(STEPS) * tMax;
         vec4 clipS = clipP + t * clipL;
@@ -124,37 +139,32 @@ void main() {
             break; // marched off-screen: no depth information out there
 
         float sceneZ = texture(linDepthTex, uv).z;
-        if (sceneZ >= SKY_Z)
-            continue; // sky/catcher sample is not an occluder
         float rayZ = startV.z + t * lightDirVS.z;
-        // Both negative; diff > 0 means the ray passed BEHIND the sampled
-        // surface -- something blocks the path to the light, so the receiver is
-        // occluded. There is deliberately no upper bound: the grounding case (a
-        // receiver marching behind a much-closer occluder, e.g. a plane behind
-        // a cube) and the haloing case (a distant surface behind a foreground
-        // object) share this signature, and the discriminator between them is
-        // the MARCH LENGTH, not a depth slab. csDistance is short, so a far
-        // receiver's march projects only a sub-pixel screen band past a
-        // foreground silhouette -- haloing stays thin -- while a near receiver
-        // reaches its occluder. A symmetric thickness window instead rejects
-        // the grounding case outright (the occluder is "too far in front"),
-        // which is why contact shadows were invisible before.
-        float diff = sceneZ - rayZ;
-        if (diff > bias) {
-            // Contact-hardening: an occluder at the shading point darkens fully,
-            // one at the march limit not at all. Fading over the full csDistance
-            // (not the clamped tMax) makes the strength decay continuously to 0
-            // as csDistance -> 0. Screen-edge smoothstep hides the frame border.
-            float distFade = 1.0 - t / csDistance;
-            vec2 edge = min(uv, 1.0 - uv);
-            // Grazing-angle fade: near the terminator a lit-side ray skims its
-            // own surface and self-occludes (a dark rim on smooth geometry).
-            // Ramp the shadow in over N.L so those grazing pixels contribute
-            // little, while well-lit contact gaps keep the full term.
-            occ = distFade * smoothstep(0.0, 0.05, min(edge.x, edge.y)) *
-                  smoothstep(0.05, 0.25, ndl);
-            break;
+        // Both negative. delta > 0 means the scene surface is in front of the ray;
+        // (bias, thick) is the window where it genuinely blocks the light -- nearer
+        // than bias is self-contact quantization, deeper than thick is the far side
+        // of a silhouette, not an occluder on this ray's path.
+        float delta = sceneZ - rayZ;
+        if (sceneZ < SKY_Z && delta > bias && delta < thick) {
+            hit = true;
+            hitT = t;
+            hitUV = uv;
+            break; // first blocker wins; contact shadows are binary + short
         }
+    }
+
+    float occ = 0.0;
+    if (hit) {
+        // Contact-hardening: an occluder at the shading point darkens fully, one at
+        // the march limit not at all. Fading over the full csDistance (not the
+        // clamped tMax) decays to 0 as csDistance -> 0.
+        float distFade = 1.0 - hitT / csDistance;
+        vec2 edge = min(hitUV, 1.0 - hitUV);
+        // Screen-edge fade hides the frame border; the N.L ramp keeps the term
+        // on the lit hemisphere only (a direct-light-occlusion proxy) and fades
+        // the grazing terminator where a lit-side ray skims its own surface.
+        occ = distFade * smoothstep(0.0, 0.05, min(edge.x, edge.y)) *
+              smoothstep(0.05, 0.25, ndl);
     }
 
     FragColor = vec4(vec3(1.0 - occ), 1.0);

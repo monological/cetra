@@ -676,16 +676,16 @@ static bool postfx_ensure_fog_targets(PostFX* fx) {
 }
 
 // Allocate the contact-shadow targets on first enable (fog pattern): two R8
-// AO-res buffers (raw march, then bilateral-blurred) plus the R16F temporal
-// ping-pong. R16F history because the 0.9-feedback accumulation bands in 8 bits.
+// buffers (raw march, then bilateral-blurred) plus the R16F temporal ping-pong.
+// R16F history because the 0.9-feedback accumulation bands in 8 bits. FULL
+// internal res, not half: contact shadows are a sharpness feature, and half-res
+// output smears the per-texel silhouette response into a visible stipple.
 static bool postfx_ensure_contact_targets(PostFX* fx) {
     if (fx->cs_ready)
         return true;
-    if (!create_color_fbo(fx->ssao_width, fx->ssao_height, GL_R8, &fx->cs_fbo[0],
-                          &fx->cs_texture[0]) ||
-        !create_color_fbo(fx->ssao_width, fx->ssao_height, GL_R8, &fx->cs_fbo[1],
-                          &fx->cs_texture[1]) ||
-        !create_pingpong(fx->ssao_width, fx->ssao_height, GL_R16F, &fx->cs_history)) {
+    if (!create_color_fbo(fx->width, fx->height, GL_R8, &fx->cs_fbo[0], &fx->cs_texture[0]) ||
+        !create_color_fbo(fx->width, fx->height, GL_R8, &fx->cs_fbo[1], &fx->cs_texture[1]) ||
+        !create_pingpong(fx->width, fx->height, GL_R16F, &fx->cs_history)) {
         log_error("Failed to allocate contact-shadow targets");
         return false;
     }
@@ -1666,7 +1666,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             glm_vec3_normalize(cs_dir_vs);
 
             glBindFramebuffer(GL_FRAMEBUFFER, fx->cs_fbo[0]);
-            glViewport(0, 0, fx->ssao_width, fx->ssao_height);
+            glViewport(0, 0, fx->width, fx->height);
             glDrawBuffer(GL_COLOR_ATTACHMENT0);
             glUseProgram(fx->contact_shadow_program->id);
             UniformManager* cu = fx->contact_shadow_program->uniforms;
@@ -1682,23 +1682,25 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             uniform_set_int(cu, "frameIndex", fx->frame_index);
             draw_fullscreen_quad(fx->quad_vao);
 
-            // Reuse the AO bilateral blur (its static texelSize is already AO res).
-            // edgeAware is forced on: silhouette bleed drips a directional shadow
-            // worse than it does ambient AO.
+            // Reuse the AO bilateral blur. Its texelSize is per-draw now (the
+            // GTAO consumer runs at AO res, this one at full res), so set the
+            // full-res texel here. edgeAware is forced on: silhouette bleed drips
+            // a directional shadow worse than it does ambient AO.
             glBindFramebuffer(GL_FRAMEBUFFER, fx->cs_fbo[1]);
             glUseProgram(fx->ssao_blur_program->id);
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, fx->cs_texture[0]);
             glActiveTexture(GL_TEXTURE1);
             glBindTexture(GL_TEXTURE_2D, fx->aux_texture);
+            const float cs_texel[2] = {1.0f / (float)fx->width, 1.0f / (float)fx->height};
+            uniform_set_vec2(fx->ssao_blur_program->uniforms, "texelSize", cs_texel);
             uniform_set_int(fx->ssao_blur_program->uniforms, "edgeAware", 1);
             draw_fullscreen_quad(fx->quad_vao);
             cs_result_tex = fx->cs_texture[1];
 
             if (taa_resolving) {
-                cs_result_tex =
-                    run_temporal_accum(fx, fx->temporal_accum_program, &fx->cs_history,
-                                       fx->ssao_width, fx->ssao_height, fx->cs_texture[1]);
+                cs_result_tex = run_temporal_accum(fx, fx->temporal_accum_program, &fx->cs_history,
+                                                   fx->width, fx->height, fx->cs_texture[1]);
                 cs_accum_ran = true;
             }
             check_gl_error("postfx contact shadows");
@@ -1777,6 +1779,11 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
                 glBindTexture(GL_TEXTURE_2D, fx->ssao_texture[0]);
                 glActiveTexture(GL_TEXTURE1);
                 glBindTexture(GL_TEXTURE_2D, fx->aux_texture);
+                // texelSize is per-draw now (the contact-shadow blur runs the
+                // same program at full res); set the AO-res texel for this one.
+                const float ao_texel[2] = {1.0f / (float)fx->ssao_width,
+                                           1.0f / (float)fx->ssao_height};
+                uniform_set_vec2(fx->ssao_blur_program->uniforms, "texelSize", ao_texel);
                 uniform_set_int(fx->ssao_blur_program->uniforms, "edgeAware",
                                 fx->ao_edge_filter_enabled ? 1 : 0);
                 draw_fullscreen_quad(fx->quad_vao);
