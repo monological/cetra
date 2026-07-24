@@ -61,6 +61,7 @@ typedef struct {
     int contact_shadows;              // Enable screen-space contact shadows
     int contact_shadows_debug;        // Show the raw contact-shadow visibility term
     float cs_distance;                // March reach override (-1 = scene-scaled)
+    float cs_strength;                // Darkening weight override (-1 = engine default)
     int albedo_debug;                 // Show the resolved albedo G-buffer
     int no_normals_mrt;               // Disable the normals G-buffer
     int normals_debug;                // Show the resolved normals G-buffer

@@ -127,6 +127,8 @@ static void print_usage(const char* prog) {
     fprintf(stderr,
             "      --cs-distance <f>  Contact-shadow reach in world units, 0=off (implies "
             "enable)\n");
+    fprintf(stderr,
+            "      --cs-strength <f>  Contact-shadow darkening 0..1 (implies enable)\n");
     fprintf(stderr, "      --albedo-debug     Show the resolved albedo G-buffer\n");
     fprintf(stderr, "      --specular-aa <f>  Specular anti-aliasing strength (default: 1)\n");
     fprintf(stderr, "      --no-specular-aa   Disable specular anti-aliasing\n");
@@ -219,6 +221,7 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->fog_anisotropy = -999.0f; // -999 = keep default (-1..1 is valid)
     args->ibl_intensity = -1.0f;    // -1 = keep the engine default
     args->cs_distance = -1.0f;      // -1 = scene-scaled contact-shadow reach
+    args->cs_strength = -1.0f;      // -1 = keep the engine default
     // --area-light's trailing r,g,b are optional; parsing a 9-field form
     // leaves these untouched
     args->area_light_color[0] = 1.0f;
@@ -521,6 +524,13 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 return -1;
             }
             args->cs_distance = (float)atof(argv[i]);
+            args->contact_shadows = 1;
+        } else if (strcmp(argv[i], "--cs-strength") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->cs_strength = (float)atof(argv[i]);
             args->contact_shadows = 1;
         } else if (strcmp(argv[i], "--albedo-debug") == 0) {
             args->albedo_debug = 1;
@@ -1436,6 +1446,8 @@ int main(int argc, char** argv) {
     }
     if (args.contact_shadows && engine->postfx) {
         engine->postfx->contact_shadows_enabled = true;
+        if (args.cs_strength >= 0.0f)
+            engine->postfx->cs_strength = args.cs_strength;
         // The reach (args.cs_distance, incl. 0 = off) is applied in the
         // scene-scaling block below, which owns the world-space post params.
     }
