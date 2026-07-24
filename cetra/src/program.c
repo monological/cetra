@@ -845,6 +845,10 @@ ShaderProgram* create_sss_blur_program() {
     return create_post_program("sss_blur", sss_blur_frag_shader_str);
 }
 
+ShaderProgram* create_contact_shadow_program() {
+    return create_post_program("contact_shadow", contact_shadow_frag_shader_str);
+}
+
 ShaderProgram* create_oit_resolve_program() {
     return create_post_program("oit_resolve", oit_resolve_frag_shader_str);
 }

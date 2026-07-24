@@ -104,6 +104,7 @@ ShaderProgram* create_motion_blur_program();
 ShaderProgram* create_motion_blur_tilemax_program();
 ShaderProgram* create_motion_blur_neighbormax_program();
 ShaderProgram* create_sss_blur_program();
+ShaderProgram* create_contact_shadow_program();
 ShaderProgram* create_oit_resolve_program();
 
 #endif // _PROGRAM_H_

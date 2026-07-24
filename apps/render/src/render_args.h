@@ -58,6 +58,9 @@ typedef struct {
     float fog_density;                // Extinction override (0 = scene-scaled)
     float fog_height;                 // Height falloff override (0 = scene-scaled)
     float fog_anisotropy;             // Scatter anisotropy (-999 = keep engine default)
+    int contact_shadows;              // Enable screen-space contact shadows
+    int contact_shadows_debug;        // Show the raw contact-shadow visibility term
+    float cs_distance;                // March reach override (-1 = scene-scaled)
     int albedo_debug;                 // Show the resolved albedo G-buffer
     int no_normals_mrt;               // Disable the normals G-buffer
     int normals_debug;                // Show the resolved normals G-buffer

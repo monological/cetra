@@ -236,6 +236,10 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     fx->ssao_strength = 0.8f;
     fx->spec_occlusion_enabled = true; // Keep GTAO off specular; on when AO is on
     fx->ao_edge_filter_enabled = true; // Depth-aware AO blur (no silhouette bleed)
+    fx->contact_shadows_enabled = false; // Opt-in (spec 9.3); off leaves the frame untouched
+    fx->cs_strength = 0.6f;              // Modest, so stacking on CSM + AO stays subtle
+    fx->cs_distance = 0.3f;              // View-space reach; apps scene-scale this
+    fx->cs_thickness = 0.15f;            // ~half the reach: occluder-slab depth
     fx->ssgi_enabled = false;          // experimental; off by default
     fx->ssgi_intensity = 1.0f;
     fx->normals_enabled = true;
@@ -466,8 +470,10 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     fx->motion_blur_tilemax_program = create_motion_blur_tilemax_program();
     fx->motion_blur_neighbormax_program = create_motion_blur_neighbormax_program();
     fx->sss_blur_program = create_sss_blur_program();
+    fx->contact_shadow_program = create_contact_shadow_program();
     fx->oit_resolve_program = create_oit_resolve_program();
-    if (!fx->oit_resolve_program || !fx->sss_blur_program || !fx->motion_blur_program ||
+    if (!fx->contact_shadow_program || !fx->oit_resolve_program || !fx->sss_blur_program ||
+        !fx->motion_blur_program ||
         !fx->motion_blur_tilemax_program || !fx->motion_blur_neighbormax_program ||
         !fx->bloom_bright_program || !fx->bloom_down_program || !fx->bloom_up_program ||
         !fx->tonemap_program || !fx->gtao_program || !fx->ssao_blur_program ||
@@ -498,6 +504,7 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     uniform_set_int(fx->tonemap_program->uniforms, "lumTex", 7);
     uniform_set_int(fx->tonemap_program->uniforms, "fogTex", 8);
     uniform_set_int(fx->tonemap_program->uniforms, "auxTex", 9); // linZ + roughness for spec-occ
+    uniform_set_int(fx->tonemap_program->uniforms, "csTex", 10); // contact-shadow visibility
 
     glUseProgram(fx->lum_measure_program->id);
     uniform_set_int(fx->lum_measure_program->uniforms, "hdrTex", 0);
@@ -557,6 +564,10 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     uniform_set_int(fx->ssao_blur_program->uniforms, "auxTex", 1); // linZ for the bilateral weight
     const float ao_texel[2] = {1.0f / (float)fx->ssao_width, 1.0f / (float)fx->ssao_height};
     uniform_set_vec2(fx->ssao_blur_program->uniforms, "texelSize", ao_texel);
+
+    glUseProgram(fx->contact_shadow_program->id);
+    uniform_set_int(fx->contact_shadow_program->uniforms, "linDepthTex", 0);
+    uniform_set_int(fx->contact_shadow_program->uniforms, "normalsTex", 1);
 
     // The accumulator's half-res resolution is fixed at create, so it takes its
     // texel size once here. The shared tent composite is seeded with the same
@@ -662,6 +673,24 @@ static bool postfx_ensure_fog_targets(PostFX* fx) {
         return false;
     }
     fx->fog_ready = true;
+    return true;
+}
+
+// Allocate the contact-shadow targets on first enable (fog pattern): two R8
+// AO-res buffers (raw march, then bilateral-blurred) plus the R16F temporal
+// ping-pong. R16F history because the 0.9-feedback accumulation bands in 8 bits.
+static bool postfx_ensure_contact_targets(PostFX* fx) {
+    if (fx->cs_ready)
+        return true;
+    if (!create_color_fbo(fx->ssao_width, fx->ssao_height, GL_R8, &fx->cs_fbo[0],
+                          &fx->cs_texture[0]) ||
+        !create_color_fbo(fx->ssao_width, fx->ssao_height, GL_R8, &fx->cs_fbo[1],
+                          &fx->cs_texture[1]) ||
+        !create_pingpong(fx->ssao_width, fx->ssao_height, GL_R16F, &fx->cs_history)) {
+        log_error("Failed to allocate contact-shadow targets");
+        return false;
+    }
+    fx->cs_ready = true;
     return true;
 }
 
@@ -1007,6 +1036,9 @@ void free_postfx(PostFX* fx) {
     glDeleteFramebuffers(1, &fx->fog_fbo);
     glDeleteTextures(1, &fx->fog_texture);
     free_pingpong(&fx->fog_history);
+    glDeleteFramebuffers(2, fx->cs_fbo);
+    glDeleteTextures(2, fx->cs_texture);
+    free_pingpong(&fx->cs_history);
     glDeleteFramebuffers(1, &fx->motion_blur_fbo);
     glDeleteTextures(1, &fx->motion_blur_texture);
     glDeleteFramebuffers(1, &fx->motion_blur_tile_fbo);
@@ -1050,6 +1082,7 @@ void free_postfx(PostFX* fx) {
     free_program(fx->motion_blur_tilemax_program);
     free_program(fx->motion_blur_neighbormax_program);
     free_program(fx->sss_blur_program);
+    free_program(fx->contact_shadow_program);
     free_program(fx->oit_resolve_program);
 
     glDeleteVertexArrays(1, &fx->quad_vao);
@@ -1103,9 +1136,10 @@ bool postfx_wants_aux_gbuffer(const PostFX* fx) {
     // linear depth too even if AO display is off (--ssgi --no-ssao). The fog
     // march reconstructs its ray endpoints from the linear Z as well.
     // Motion blur consumes the .xy velocity, so it too forces the aux buffer
-    // (otherwise it would silently no-op under, e.g., --no-ssao).
+    // (otherwise it would silently no-op under, e.g., --no-ssao). Contact
+    // shadows reconstruct positions from the linear Z, same as GTAO.
     return fx && (fx->taa_enabled || fx->ssao_enabled || fx->ssgi_enabled || fx->fog_enabled ||
-                  fx->motion_blur_enabled);
+                  fx->motion_blur_enabled || fx->contact_shadows_enabled);
 }
 
 bool postfx_wants_albedo(const PostFX* fx) {
@@ -1612,6 +1646,68 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             check_gl_error("postfx normals resolve");
         }
 
+        // Contact shadows (spec 9.3): an AO-res depth march toward the key light,
+        // blurred and temporally accumulated like GTAO, consumed by tonemap.
+        // Gated on a shadow-casting directional being published (fog_light_dir[0])
+        // and on cs_distance > 0 -- the latter makes --cs-distance 0 take the
+        // exact off path (a zero-length march would still evaluate a 1.0 multiply
+        // whose bit-exactness is not guaranteed). Runs before GTAO so both AO-res
+        // occlusion terms are ready when tonemap composites.
+        GLuint cs_result_tex = 0;
+        bool cs_accum_ran = false;
+        const bool cs_active = fx->contact_shadows_enabled && aux_written &&
+                               fx->fog_light_count > 0 && fx->cs_distance > 0.0f &&
+                               postfx_ensure_contact_targets(fx);
+        if (cs_active) {
+            // World-space travel direction -> view-space TOWARD-light unit vector
+            // (pbr uses L = -light->direction; fog_light_dir[0] is that direction).
+            vec3 toward, cs_dir_vs;
+            glm_vec3_negate_to(fx->fog_light_dir[0], toward);
+            glm_mat4_mulv3(view, toward, 0.0f, cs_dir_vs);
+            glm_vec3_normalize(cs_dir_vs);
+
+            glBindFramebuffer(GL_FRAMEBUFFER, fx->cs_fbo[0]);
+            glViewport(0, 0, fx->ssao_width, fx->ssao_height);
+            glDrawBuffer(GL_COLOR_ATTACHMENT0);
+            glUseProgram(fx->contact_shadow_program->id);
+            UniformManager* cu = fx->contact_shadow_program->uniforms;
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, fx->aux_texture);
+            glActiveTexture(GL_TEXTURE1);
+            glBindTexture(GL_TEXTURE_2D, have_normals ? fx->normal_texture : 0);
+            uniform_set_int(cu, "useNormalsTex", have_normals ? 1 : 0);
+            uniform_set_mat4(cu, "projection", (float*)projection);
+            uniform_set_vec3(cu, "lightDirVS", cs_dir_vs);
+            uniform_set_float(cu, "csDistance", fx->cs_distance);
+            uniform_set_float(cu, "csThickness", fx->cs_thickness);
+            uniform_set_int(cu, "temporal", taa_resolving ? 1 : 0);
+            uniform_set_int(cu, "frameIndex", fx->frame_index);
+            draw_fullscreen_quad(fx->quad_vao);
+
+            // Reuse the AO bilateral blur (its static texelSize is already AO res).
+            // edgeAware is forced on: silhouette bleed drips a directional shadow
+            // worse than it does ambient AO.
+            glBindFramebuffer(GL_FRAMEBUFFER, fx->cs_fbo[1]);
+            glUseProgram(fx->ssao_blur_program->id);
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, fx->cs_texture[0]);
+            glActiveTexture(GL_TEXTURE1);
+            glBindTexture(GL_TEXTURE_2D, fx->aux_texture);
+            uniform_set_int(fx->ssao_blur_program->uniforms, "edgeAware", 1);
+            draw_fullscreen_quad(fx->quad_vao);
+            cs_result_tex = fx->cs_texture[1];
+
+            if (taa_resolving) {
+                cs_result_tex =
+                    run_temporal_accum(fx, fx->temporal_accum_program, &fx->cs_history,
+                                       fx->ssao_width, fx->ssao_height, fx->cs_texture[1]);
+                cs_accum_ran = true;
+            }
+            check_gl_error("postfx contact shadows");
+        }
+        if (!cs_accum_ran)
+            fx->cs_history.valid = false;
+
         // Depth (and its inverse) serve SSR and DoF's circle-of-confusion. GTAO
         // no longer needs it -- it reconstructs from the aux buffer's linear Z.
         bool ssr_active = postfx_ssr_active(fx, have_normals);
@@ -1840,6 +1936,8 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         glActiveTexture(GL_TEXTURE9);
         glBindTexture(GL_TEXTURE_2D,
                       aux_written ? fx->aux_texture : 0); // linZ + roughness (spec-occ)
+        glActiveTexture(GL_TEXTURE10);
+        glBindTexture(GL_TEXTURE_2D, cs_active ? cs_result_tex : 0); // contact-shadow visibility
         UniformManager* tm = fx->tonemap_program->uniforms;
         uniform_set_float(tm, "exposure", fx->exposure);
         uniform_set_int(tm, "autoExposure", fx->auto_exposure ? 1 : 0);
@@ -1856,6 +1954,11 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         uniform_set_int(tm, "specOccHasMetallic", albedo_written ? 1 : 0);
         const float inv_focal[2] = {1.0f / projection[0][0], 1.0f / projection[1][1]};
         uniform_set_vec2(tm, "invFocal", inv_focal);
+        // Contact shadows multiply the direct-light term beside AO. The exact
+        // form 1 - strength*(1 - cs) is identity at cs == 1, so a lit frame is
+        // byte-identical to the feature off.
+        uniform_set_int(tm, "csEnabled", cs_active ? 1 : 0);
+        uniform_set_float(tm, "csStrength", fx->cs_strength);
         // Suppress debug views whose source buffer was not produced, and
         // say so once per requested view rather than silently every frame
         PostFXDebugView debug_view = fx->debug_view;
@@ -1865,7 +1968,8 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             (debug_view == POSTFX_DEBUG_ALBEDO && !albedo_written) ||
             (debug_view == POSTFX_DEBUG_SSGI && !ssgi_active) ||
             (debug_view == POSTFX_DEBUG_FOG && fog_result_tex == 0) ||
-            (debug_view == POSTFX_DEBUG_SPEC_OCC && !spec_occ_active)) {
+            (debug_view == POSTFX_DEBUG_SPEC_OCC && !spec_occ_active) ||
+            (debug_view == POSTFX_DEBUG_CONTACT && !cs_active)) {
             static PostFXDebugView warned_view = POSTFX_DEBUG_NONE;
             if (warned_view != debug_view) {
                 log_warn("debug view %d suppressed: its source buffer is disabled",

@@ -30,10 +30,13 @@ uniform sampler2D auxTex;       // Aux G-buffer: linear view-Z (.z) + roughness 
 uniform vec2 invFocal;          // 1/projection focal terms, for view-pos reconstruction
 uniform int specOccEnabled;     // Apply specular occlusion to the AO factor
 uniform int specOccHasMetallic; // albedoTex.a carries metallic this frame (SSGI wrote it)
+uniform sampler2D csTex;        // Contact-shadow visibility (spec 9.3), AO res
+uniform int csEnabled;          // Multiply the direct-light term by contact shadows
+uniform float csStrength;       // Contact-shadow darkening weight
 uniform int autoExposure;
 uniform float autoKey; // Target middle gray (0.18)
 // Debug view dispatch (PostFXDebugView): 0=none, 1=AO, 2=normals, 3=SSR,
-// 4=albedo, 5=GI, 6=fog, 7=spec-occ AO
+// 4=albedo, 5=GI, 6=fog, 7=spec-occ AO, 8=contact shadows
 uniform int debugView;
 // 1 = ACES, 2 = PBR Neutral, 3 = AgX (passthrough frames are blitted by
 // postfx_run and never reach this pass)
@@ -237,12 +240,23 @@ void main()
         FragColor = vec4(vec3(aoVisibility()), 1.0);
         return;
     }
+    if (debugView == 8) {
+        // Contact-shadow visibility term before compositing (1 = lit)
+        FragColor = vec4(vec3(texture(csTex, TexCoords).r), 1.0);
+        return;
+    }
 
     // Occlude before adding bloom: bloom models lens scatter, which happens
     // after the light already left the scene
     float aoFactor = 1.0;
     if (aoEnabled == 1)
         aoFactor = mix(1.0, aoVisibility(), aoStrength);
+    // Contact shadows fold into the same factor (so the sharpen taps inherit
+    // them like AO) but stay independent of AO/spec-occ: they occlude direct
+    // light, not ambient. Exact identity at cs == 1, so a lit frame matches the
+    // feature off bit for bit.
+    if (csEnabled == 1)
+        aoFactor *= 1.0 - csStrength * (1.0 - texture(csTex, TexCoords).r);
     vec3 bloomAdd = vec3(0.0);
     if (bloomEnabled == 1)
         bloomAdd = bloomStrength * texture(bloomTex, TexCoords).rgb;

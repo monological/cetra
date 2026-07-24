@@ -50,6 +50,7 @@ typedef enum PostFXDebugView {
     POSTFX_DEBUG_SSGI = 5,     // Raw gathered GI radiance (half-res, SSGI)
     POSTFX_DEBUG_FOG = 6,      // Half-res fog in-scatter buffer
     POSTFX_DEBUG_SPEC_OCC = 7, // AO visibility after specular occlusion
+    POSTFX_DEBUG_CONTACT = 8,  // Contact-shadow visibility term (before compositing)
 } PostFXDebugView;
 
 // Mirrors MAX_SHADOW_LIGHTS (shadow.h) without postfx learning about the
@@ -110,6 +111,7 @@ typedef struct PostFX {
     ShaderProgram* tonemap_program;
     ShaderProgram* gtao_program;
     ShaderProgram* ssao_blur_program;
+    ShaderProgram* contact_shadow_program; // AO-res depth march toward the key light (spec 9.3)
     ShaderProgram* temporal_accum_program; // Shared plain-RGBA accumulator (AO .r, fog .rgba)
     ShaderProgram* ssgi_composite_program;
     ShaderProgram* ssgi_accum_program;
@@ -139,6 +141,20 @@ typedef struct PostFX {
     float ssao_strength;
     bool spec_occlusion_enabled; // Keep GTAO off specular/reflections (spec-occ at tonemap)
     bool ao_edge_filter_enabled; // Depth-bilateral AO blur (no silhouette bleed onto the floor)
+
+    // Screen-space contact shadows (spec 9.3): an AO-res depth march toward the
+    // key light, composited in tonemap as a direct-light occlusion multiplier
+    // beside AO. Needs a shadow-casting directional (fog_light_dir[0]) but no
+    // shadow map. Off by default; enabled false leaves the frame untouched.
+    // Targets are lazily allocated (cs_ready) and freed unconditionally.
+    bool contact_shadows_enabled;
+    float cs_strength;  // Composite darkening weight [0,1]
+    float cs_distance;  // March reach in view-space units (0 = off, C-gated)
+    float cs_thickness; // Max view-space gap an occluder may sit behind the ray
+    bool cs_ready;      // Lazy-alloc guard for the targets below
+    GLuint cs_fbo[2];   // R8 at AO res: [0] raw march, [1] bilateral-blurred
+    GLuint cs_texture[2];
+    PingPong cs_history;  // R16F temporal accumulation (0.9 feedback bands in 8 bits)
     bool ssgi_enabled;    // Screen-space GI: one-bounce indirect diffuse (extends the GTAO sweep)
     float ssgi_intensity; // Composite multiplier on the gathered indirect radiance
     bool normals_enabled; // Master switch for the normals G-buffer (MRT)

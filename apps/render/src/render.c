@@ -120,6 +120,13 @@ static void print_usage(const char* prog) {
             "      --fog-debug        Show the raw fog in-scatter buffer (implies --fog)\n");
     fprintf(stderr, "      --fog-density <f>  Fog extinction per world unit (implies --fog)\n");
     fprintf(stderr, "      --fog-height <f>   Fog height falloff in world units (implies --fog)\n");
+    fprintf(stderr,
+            "      --contact-shadows  Screen-space contact shadows along the key light\n");
+    fprintf(stderr,
+            "      --cs-debug         Show the raw contact-shadow term (implies enable)\n");
+    fprintf(stderr,
+            "      --cs-distance <f>  Contact-shadow reach in world units, 0=off (implies "
+            "enable)\n");
     fprintf(stderr, "      --albedo-debug     Show the resolved albedo G-buffer\n");
     fprintf(stderr, "      --specular-aa <f>  Specular anti-aliasing strength (default: 1)\n");
     fprintf(stderr, "      --no-specular-aa   Disable specular anti-aliasing\n");
@@ -211,6 +218,7 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->bloom_threshold = -1.0f;  // -1 = keep the engine default
     args->fog_anisotropy = -999.0f; // -999 = keep default (-1..1 is valid)
     args->ibl_intensity = -1.0f;    // -1 = keep the engine default
+    args->cs_distance = -1.0f;      // -1 = scene-scaled contact-shadow reach
     // --area-light's trailing r,g,b are optional; parsing a 9-field form
     // leaves these untouched
     args->area_light_color[0] = 1.0f;
@@ -502,6 +510,18 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             }
             args->fog_height = (float)atof(argv[i]);
             args->fog = 1;
+        } else if (strcmp(argv[i], "--contact-shadows") == 0) {
+            args->contact_shadows = 1;
+        } else if (strcmp(argv[i], "--cs-debug") == 0) {
+            args->contact_shadows = 1;
+            args->contact_shadows_debug = 1;
+        } else if (strcmp(argv[i], "--cs-distance") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->cs_distance = (float)atof(argv[i]);
+            args->contact_shadows = 1;
         } else if (strcmp(argv[i], "--albedo-debug") == 0) {
             args->albedo_debug = 1;
         } else if (strcmp(argv[i], "--no-normals-mrt") == 0) {
@@ -1414,6 +1434,14 @@ int main(int argc, char** argv) {
     if (args.fog_debug && engine->postfx) {
         engine->postfx->debug_view = POSTFX_DEBUG_FOG;
     }
+    if (args.contact_shadows && engine->postfx) {
+        engine->postfx->contact_shadows_enabled = true;
+        // The reach (args.cs_distance, incl. 0 = off) is applied in the
+        // scene-scaling block below, which owns the world-space post params.
+    }
+    if (args.contact_shadows_debug && engine->postfx) {
+        engine->postfx->debug_view = POSTFX_DEBUG_CONTACT;
+    }
     if (args.albedo_debug && engine->postfx) {
         engine->postfx->debug_view = POSTFX_DEBUG_ALBEDO;
     }
@@ -2056,6 +2084,15 @@ int main(int argc, char** argv) {
                 fmaxf(engine->postfx->ssr_max_distance, scene_radius * 2.0f);
             engine->postfx->ssr_thickness =
                 fmaxf(engine->postfx->ssr_thickness, scene_radius * 0.002f);
+
+            // Contact-shadow reach is a world-space distance like the AO radius:
+            // a few percent of the scene, so the march covers the near-contact
+            // gap without streaking. Thickness follows at half the reach. A CLI
+            // --cs-distance (incl. 0 = off) always wins.
+            engine->postfx->cs_distance = args.cs_distance >= 0.0f
+                                              ? args.cs_distance
+                                              : fmaxf(0.3f, scene_radius * 0.02f);
+            engine->postfx->cs_thickness = 0.5f * engine->postfx->cs_distance;
 
             // Fog parameters are world-space too: fixed meter-scale density
             // on a large-unit scene is invisible (or opaque soup on a tiny
