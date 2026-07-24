@@ -107,21 +107,29 @@ static void parse_lights(CetraSceneDesc* d, const cJSON* root) {
         memset(out, 0, sizeof(*out));
         copy_string(out->name, CSCENE_MAX_NAME, cJSON_GetObjectItemCaseSensitive(l, "name"));
 
-        // Point (the default) and area; anything else is refused rather than
-        // silently coerced into the wrong shape.
+        // point (default), area, directional, spot; anything else is refused
+        // rather than silently coerced into the wrong shape.
         const cJSON* type = cJSON_GetObjectItemCaseSensitive(l, "type");
         out->type = CSCENE_LIGHT_POINT;
         if (cJSON_IsString(type)) {
             if (strcasecmp(type->valuestring, "area") == 0) {
                 out->type = CSCENE_LIGHT_AREA;
+            } else if (strcasecmp(type->valuestring, "directional") == 0) {
+                out->type = CSCENE_LIGHT_DIRECTIONAL;
+            } else if (strcasecmp(type->valuestring, "spot") == 0) {
+                out->type = CSCENE_LIGHT_SPOT;
             } else if (strcasecmp(type->valuestring, "point") != 0) {
-                log_warn("cscene: light '%s' type '%s' unsupported (point/area); skipped",
+                log_warn("cscene: light '%s' type '%s' unsupported "
+                         "(point/area/directional/spot); skipped",
                          out->name, type->valuestring);
                 continue;
             }
         }
 
-        if (!get_vec3(l, "position", out->position)) {
+        // Position anchors point/spot/area; a directional is infinitely far, so
+        // it has no meaningful position (read one if given, but do not require).
+        bool have_pos = get_vec3(l, "position", out->position);
+        if (out->type != CSCENE_LIGHT_DIRECTIONAL && !have_pos) {
             log_warn("cscene: light '%s' missing position; skipped", out->name);
             continue;
         }
@@ -131,13 +139,20 @@ static void parse_lights(CetraSceneDesc* d, const cJSON* root) {
         if (!get_float(l, "intensity", &out->intensity))
             out->intensity = 1.0f;
 
+        // Direction (travel direction) defines directional/spot/area; point ignores it.
+        if (out->type != CSCENE_LIGHT_POINT && !get_vec3(l, "direction", out->direction)) {
+            log_warn("cscene: %s light '%s' missing direction; skipped", type->valuestring,
+                     out->name);
+            continue;
+        }
+
+        // Optional everywhere they apply: absent = keep the engine default.
+        get_bool(l, "cast_shadows", &out->cast_shadows);
+        out->has_attenuation = get_floats(l, "attenuation", out->attenuation, 3);
+        out->has_range = get_float(l, "range", &out->range);
+
         if (out->type == CSCENE_LIGHT_AREA) {
-            // A panel with no normal or no extent has no defined shape, so
-            // these are required rather than defaulted to something arbitrary
-            if (!get_vec3(l, "direction", out->direction)) {
-                log_warn("cscene: area light '%s' missing direction; skipped", out->name);
-                continue;
-            }
+            // A panel with no extent has no defined shape, so size is required.
             if (!get_floats(l, "size", out->size, 2)) {
                 log_warn("cscene: area light '%s' needs size [w, h]; skipped", out->name);
                 continue;
@@ -147,6 +162,18 @@ static void parse_lights(CetraSceneDesc* d, const cJSON* root) {
                 continue;
             }
             out->has_up = get_vec3(l, "up", out->up);
+        } else if (out->type == CSCENE_LIGHT_SPOT) {
+            // A cone with no angles has no shape; require [inner, outer] degrees.
+            if (!get_floats(l, "cone", out->cone, 2)) {
+                log_warn("cscene: spot light '%s' needs cone [inner, outer] degrees; skipped",
+                         out->name);
+                continue;
+            }
+            if (out->cone[0] <= 0.0f || out->cone[1] < out->cone[0] || out->cone[1] >= 90.0f) {
+                log_warn("cscene: spot light '%s' cone must be 0 < inner <= outer < 90; skipped",
+                         out->name);
+                continue;
+            }
         }
         d->light_count++;
     }

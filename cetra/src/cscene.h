@@ -33,25 +33,37 @@ typedef enum {
 
 typedef enum CSceneLightType {
     CSCENE_LIGHT_POINT = 0,
-    CSCENE_LIGHT_AREA, // rectangular LTC panel (spec 9.2)
+    CSCENE_LIGHT_AREA,        // rectangular LTC panel (spec 9.2)
+    CSCENE_LIGHT_DIRECTIONAL, // infinite sun; the only type + first spot that cast shadows
+    CSCENE_LIGHT_SPOT,        // cone light
 } CSceneLightType;
 
-// Point lights and rectangular area panels. Spot/directional land here once
-// the format carries their defining parameters (cutoffs). An area light needs
-// `direction` (the normal, and it lights only the side that points at) and
-// `size`; `up` is optional -- the renderer orthonormalizes whatever it gets
-// against the direction, so it only matters when you care which way the
-// rectangle's width runs.
+// All four engine light types (spec 6.1). Shared keys: name, type, position
+// (point/spot/area; ignored for directional), color, intensity. Per type:
+//   directional -- `direction` (travel direction); shadow-capable via cast_shadows.
+//   spot        -- `direction`, `cone` [inner, outer] half-angles in DEGREES,
+//                  optional attenuation/range; shadow-capable (the first spot only).
+//   area        -- `direction` (the normal; lights only the side it points at),
+//                  `size`, optional `up` (orthonormalized against direction).
+//   point       -- optional attenuation/range.
+// Attenuation and range are optional everywhere they apply: absent = keep the
+// engine default (so a 0-filled struct means "engine default", not "zero").
 typedef struct CSceneLight {
     char name[CSCENE_MAX_NAME];
     CSceneLightType type;
     float position[3];
     float color[3];
     float intensity;
-    float direction[3]; // area only
-    float size[2];      // area only: width x height
+    float direction[3]; // directional/spot/area (travel direction)
+    float size[2];      // area: width x height
     bool has_up;
-    float up[3]; // area only, optional
+    float up[3]; // area, optional
+    bool has_attenuation;
+    float attenuation[3]; // point/spot: constant, linear, quadratic
+    bool has_range;
+    float range;       // point/spot cull radius (else derived from attenuation)
+    float cone[2];     // spot: inner, outer half-angle in DEGREES
+    bool cast_shadows; // directional/spot (point/area cannot cast)
 } CSceneLight;
 
 typedef struct CSceneLightOverride {

@@ -143,8 +143,16 @@ void add_cscene_lights(Scene* scene, const CetraSceneDesc* cscn) {
         set_light_original_position(light, (float*)sl->position);
         set_light_color(light, (float*)sl->color);
         set_light_intensity(light, sl->intensity);
+        // Optional attenuation/range apply to the punctual falloff types; absent
+        // in the desc means keep create_light()'s engine defaults.
+        if (sl->has_attenuation)
+            set_light_attenuation(light, sl->attenuation[0], sl->attenuation[1],
+                                  sl->attenuation[2]);
+        if (sl->has_range)
+            set_light_range(light, sl->range);
 
-        if (sl->type == CSCENE_LIGHT_AREA) {
+        switch (sl->type) {
+        case CSCENE_LIGHT_AREA:
             set_light_type(light, LIGHT_AREA);
             set_light_direction(light, (float*)sl->direction);
             set_light_size(light, sl->size[0], sl->size[1]);
@@ -152,9 +160,30 @@ void add_cscene_lights(Scene* scene, const CetraSceneDesc* cscn) {
                 set_light_up(light, (float*)sl->up);
             printf("Scene file light '%s' (area %.2fx%.2f, radiance %.2f)\n", light->name,
                    sl->size[0], sl->size[1], sl->intensity);
-        } else {
+            break;
+        case CSCENE_LIGHT_DIRECTIONAL:
+            set_light_type(light, LIGHT_DIRECTIONAL);
+            set_light_direction(light, (float*)sl->direction);
+            if (sl->cast_shadows)
+                set_light_cast_shadows(light, true);
+            printf("Scene file light '%s' (directional, intensity %.2f%s)\n", light->name,
+                   sl->intensity, sl->cast_shadows ? ", shadows" : "");
+            break;
+        case CSCENE_LIGHT_SPOT:
+            set_light_type(light, LIGHT_SPOT);
+            set_light_direction(light, (float*)sl->direction);
+            // The engine stores cutoffs as cosines of the half-angles; authors
+            // write degrees (see spec 6.1).
+            set_light_cutoff(light, cosf(glm_rad(sl->cone[0])), cosf(glm_rad(sl->cone[1])));
+            if (sl->cast_shadows)
+                set_light_cast_shadows(light, true);
+            printf("Scene file light '%s' (spot, cone %.1f/%.1f deg%s)\n", light->name,
+                   sl->cone[0], sl->cone[1], sl->cast_shadows ? ", shadows" : "");
+            break;
+        default: // CSCENE_LIGHT_POINT
             set_light_type(light, LIGHT_POINT);
             printf("Scene file light '%s' (point, intensity %.2f)\n", light->name, sl->intensity);
+            break;
         }
         add_light_to_scene(scene, light);
 
