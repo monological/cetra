@@ -1000,7 +1000,16 @@ void main() {
     mat3 ltcMinv = mat3(1.0);
     vec2 ltcAmp = vec2(0.0);
     if (lightCounts.z > 0) {
-        vec2 ltcUV = ltcCoords(roughnessMap, NdotV);
+        // Roughness floor (LTC_MIN_ROUGHNESS). Below it the fitted Minv grows
+        // extreme enough to collapse the transformed quad corners toward each
+        // other, and the edge integral's cross(v1,v2) * theta/sin(theta) turns
+        // into a 0 * inf that fp32 cannot resolve -- it lands on the 1e-7 clamp
+        // in ltcIntegrateEdgeVec and produces a structured radial fan instead
+        // of a highlight. Empirical: measured against a 7:1 sliver panel, 0.08
+        // still speckles, 0.10 leaves a trace, 0.12 is clean. NOT a proof --
+        // a thinner panel degenerates the quad further and can still break
+        // this. Mirror-sharp reflection is SSR/probe work, not LTC's.
+        vec2 ltcUV = ltcCoords(max(roughnessMap, LTC_MIN_ROUGHNESS), NdotV);
         ltcMinv = ltcMatrix(ltcUV);
         // .zw are meaningless at THIS uv -- the sphere form factor in .w is
         // indexed separately inside ltcPanel (see ltc.glsl)

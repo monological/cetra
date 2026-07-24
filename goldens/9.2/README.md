@@ -25,11 +25,21 @@ the panel as the only light in the frame:
     --area-light 0,2.2,1.2,0,-0.6,-0.8,2.0,0.7,30
 ```
 
-What to look for: the leftmost (roughness 0.05) sphere shows a small, sharp
-reflection with recognisable rectangular structure and an otherwise dark body
-(there is no environment to reflect); the highlight broadens smoothly rightward
-into a near-uniform wash by 0.95. A rotated or smeared rectangle at low
-roughness means the inverse-M reconstruction is transposed.
+What to look for: a small, sharp reflection with recognisable rectangular
+structure on the left, broadening smoothly rightward into a near-uniform wash
+by 0.95, over otherwise dark bodies (there is no environment to reflect). A
+rotated or smeared rectangle at low roughness means the inverse-M
+reconstruction is transposed.
+
+Note the first two spheres look similar: the authored 0.05 is clamped up to
+`LTC_MIN_ROUGHNESS` (0.12), so it shades close to the 0.20 next to it. That is
+the cost of the floor -- see the shader comment in pbr_frag.glsl. It also means
+this fixture no longer probes the LUT's bottom row, which it was built to do;
+the sweep still covers the top end and the whole middle.
+
+**Zoom in when checking this.** The artifact this floor exists to suppress is
+invisible at thumbnail scale and obvious at 1:1 -- it shipped in an earlier
+version of this golden precisely because it was only ever reviewed small.
 
 ## backface_dark.png
 

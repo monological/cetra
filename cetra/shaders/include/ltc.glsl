@@ -20,6 +20,10 @@
 uniform sampler2D ltcMatTex; // inverse-M fit          (TEXUNIT_LTC_MAT)
 uniform sampler2D ltcAmpTex; // magnitude/Fresnel + .w (TEXUNIT_LTC_AMP)
 
+// Lowest roughness the quad integral stays numerically sound at; see the
+// caller in pbr_frag.glsl for the derivation and its limits.
+const float LTC_MIN_ROUGHNESS = 0.12;
+
 const float LTC_LUT_SIZE = 64.0;
 const float LTC_LUT_SCALE = (LTC_LUT_SIZE - 1.0) / LTC_LUT_SIZE;
 const float LTC_LUT_BIAS = 0.5 / LTC_LUT_SIZE;
