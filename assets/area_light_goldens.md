@@ -19,7 +19,7 @@ in the frame:
 - `--cam-eye/--cam-target` pin the camera (the orbit default frames the row too
   far back to read).
 
-## roughness_sweep.png
+## roughness_sweep_golden.png
 
 ```
 ./out/bin/render -m assets/area_light_fixture.gltf -W 640 -H 360 -x -f 2 \
@@ -43,13 +43,13 @@ by the guard golden instead.
 invisible at thumbnail scale and obvious at 1:1 -- it shipped in an earlier
 version of this golden precisely because it was only ever reviewed small.
 
-## backface_dark.png
+## backface_dark_golden.png
 
 Same command with the panel normal negated (`0,0.6,0.8`). Every sphere must be
 pure black: a panel lights only the half-space its direction points into. If
 anything is lit here, the single-sided plane test or the corner winding flipped.
 
-## guard_thin_panel.png
+## guard_thin_panel_golden.png
 
 The regression guard for the `LTC_MIN_ROUGHNESS` floor. One sphere at
 roughness 0.05 -- below the floor -- under a 7:1 sliver panel, viewed at a

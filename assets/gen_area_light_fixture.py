@@ -20,8 +20,9 @@ All materials are dielectric (metallic 0) -- a metallic subject has no diffuse
 response at all, which makes it useless for validating the diffuse half.
 
 This script also writes area_light_guard.gltf: a single sphere at roughness
-0.05, BELOW the shader's LTC_MIN_ROUGHNESS floor (ltc.glsl). goldens/9.2 uses
-it to pin the floor's artifact suppression -- see that README.
+0.05, BELOW the shader's LTC_MIN_ROUGHNESS floor (ltc.glsl). The area-light
+goldens use it to pin the floor's artifact suppression -- see
+assets/area_light_goldens.md.
 
 The sibling area_light_fixture.cscn already carries a panel, so plain
 `-m assets/area_light_fixture.gltf` renders the intended scene. To drive the
@@ -199,7 +200,7 @@ print("wrote %s (%d spheres + ground)" % (out, len(ROUGHNESS)))
 # fan of striations. The sweep above deliberately stays out of that regime, so
 # this sphere is the regression subject: lit by a sliver panel it must render
 # a clean (merely clamped) highlight. Lower or remove the floor and the fan
-# returns, tripping goldens/9.2/guard_thin_panel.png.
+# returns, tripping assets/guard_thin_panel_golden.png.
 guard = {
     "asset": {"version": "2.0", "generator": "gen_area_light_fixture.py"},
     "scene": 0,
