@@ -1310,16 +1310,58 @@ static GLuint run_atrous(PostFX* fx, ShaderProgram* prog, PingPong* pp, int w, i
 static GLuint postfx_run_froxel_fog(PostFX* fx, bool aux_written, bool taa_resolving,
                                     mat4 projection, mat4 view) {
     (void)taa_resolving;
-    (void)view;
     if (!fx->fog_enabled || !aux_written || !postfx_ensure_froxel_targets(fx))
         return 0;
 
     // 1. Inject: scattering + extinction per cell, one draw per slice.
     glUseProgram(fx->froxel_inject_program->id);
     UniformManager* iu = fx->froxel_inject_program->uniforms;
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, fx->fog_shadow_map_array);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, fx->fog_spot_shadow_map);
+    glActiveTexture(GL_TEXTURE0);
+    mat4 inv_view;
+    glm_mat4_inv(view, inv_view);
     uniform_set_mat4(iu, "projection", (float*)projection);
+    uniform_set_mat4(iu, "invView", (float*)inv_view);
     uniform_set_float(iu, "fogFar", fx->fog_far);
+    uniform_set_vec3(iu, "ambientColor", fx->fog_ambient);
     uniform_set_float(iu, "density", fx->fog_density);
+    uniform_set_float(iu, "heightFalloff", fx->fog_height_falloff);
+    uniform_set_float(iu, "floorY", fx->fog_floor_y);
+    uniform_set_float(iu, "anisotropy", fx->fog_anisotropy);
+    uniform_set_float(iu, "sunBoost", fx->fog_sun_boost);
+    uniform_set_float(iu, "shadowBias", fx->fog_shadow_bias);
+    // Count 0 (shadows off or absent) degrades the volume to ambient haze; the
+    // publish guarantees the map array is valid whenever the count is nonzero.
+    uniform_set_int(iu, "numLights", fx->fog_light_count);
+    uniform_set_int(iu, "cascadeCount", fx->fog_cascade_count);
+    if (fx->fog_light_count > 0) {
+        GLint lloc = uniform_location(iu, "lightSpaceMatrix[0]");
+        if (lloc >= 0)
+            glUniformMatrix4fv(lloc, fx->fog_light_count * fx->fog_cascade_count, GL_FALSE,
+                               (const GLfloat*)fx->fog_light_space);
+        lloc = uniform_location(iu, "lightColor[0]");
+        if (lloc >= 0)
+            glUniform3fv(lloc, fx->fog_light_count, (const GLfloat*)fx->fog_light_color);
+        lloc = uniform_location(iu, "lightDir[0]");
+        if (lloc >= 0)
+            glUniform3fv(lloc, fx->fog_light_count, (const GLfloat*)fx->fog_light_dir);
+    }
+    uniform_set_int(iu, "spotEnabled", fx->fog_spot_enabled ? 1 : 0);
+    int spot_shadowed = (fx->fog_spot_enabled && fx->fog_spot_shadowed) ? 1 : 0;
+    uniform_set_int(iu, "spotShadowed", spot_shadowed);
+    if (fx->fog_spot_enabled) {
+        uniform_set_vec3(iu, "spotPos", fx->fog_spot_pos);
+        uniform_set_vec3(iu, "spotDir", fx->fog_spot_dir);
+        uniform_set_vec3(iu, "spotColor", fx->fog_spot_color);
+        uniform_set_vec3(iu, "spotAtten", fx->fog_spot_atten);
+        uniform_set_float(iu, "spotCosInner", fx->fog_spot_cos_inner);
+        uniform_set_float(iu, "spotCosOuter", fx->fog_spot_cos_outer);
+        if (spot_shadowed)
+            uniform_set_mat4(iu, "spotLightSpaceMatrix", (float*)fx->fog_spot_light_space);
+    }
     draw_volume_slices(fx, fx->froxel_fbo, fx->froxel_scatter, POSTFX_FROXEL_X, POSTFX_FROXEL_Y,
                        POSTFX_FROXEL_Z, iu);
 

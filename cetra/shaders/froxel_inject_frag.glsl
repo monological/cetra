@@ -7,24 +7,133 @@ out vec4 FragColor; // rgb = in-scattered radiance, a = extinction sigma
 // lighting once per pixel per step, which made the clustered light list far too
 // expensive to consult; a froxel pays for it once per cell.
 //
-// One draw per slice writes one layer of the volume (sliceIndex says which),
-// so this is an ordinary fullscreen pass over a 160x90 grid, run 64 times.
+// One draw per slice writes one layer of the volume (sliceIndex says which), so
+// this is an ordinary fullscreen pass over a 160x90 grid, run 64 times.
+//
+// The scattering math is ported from fog_frag.glsl unchanged -- same height
+// sigma, same per-caster cascade tap, same spot cone/attenuation/shadow, same
+// Henyey-Greenstein phase -- so the two implementations agree where they
+// overlap. What changes is WHERE it is evaluated: a pixel has one view ray, so
+// the old march could hoist phase and the light-space projection out of its
+// loop; a froxel has no single ray, so both are evaluated per cell instead.
+
+// Same mirrored constants as fog_frag.glsl (MAX_SHADOW_LIGHTS / SHADOW_CASCADES
+// under private names); they must track shadow.h the same way.
+#define MAX_FOG_LIGHTS 3
+#define FOG_CASCADES 3
+
+uniform int sliceIndex;  // Which volume layer this draw is writing
+uniform mat4 projection; // Focal terms reconstruct the froxel's view position
+uniform mat4 invView;    // view -> world (camera pose)
+uniform float fogFar;    // Far end of the volume's exponential depth range
+
+uniform sampler2DArray shadowMaps;
+uniform mat4 lightSpaceMatrix[MAX_FOG_LIGHTS * FOG_CASCADES];
+uniform int cascadeCount;
+uniform vec3 lightColor[MAX_FOG_LIGHTS]; // color * intensity
+uniform vec3 lightDir[MAX_FOG_LIGHTS];   // normalized travel direction
+uniform int numLights;
+uniform vec3 ambientColor;
+uniform float density;       // Extinction at floor height (1/world units)
+uniform float heightFalloff; // World units for a 1/e density drop
+uniform float floorY;        // World height of max density
+uniform float anisotropy;    // Henyey-Greenstein g
+uniform float sunBoost;
+uniform float shadowBias;
+
+// One volumetric spot light (the flashlight), as in fog_frag.
+uniform int spotEnabled;
+uniform vec3 spotPos;
+uniform vec3 spotDir;
+uniform vec3 spotColor;
+uniform vec3 spotAtten;
+uniform float spotCosInner;
+uniform float spotCosOuter;
+uniform int spotShadowed;
+uniform sampler2D spotShadowMap;
+uniform mat4 spotLightSpaceMatrix;
+
+const float PI = 3.14159265359;
 
 #include "froxel.glsl"
 
-uniform int sliceIndex;   // Which volume layer this draw is writing
-uniform mat4 projection;  // Focal terms reconstruct the froxel's view position
-uniform float fogFar;     // Far end of the volume's exponential depth range
-uniform float density;    // Extinction at floor height (1/world units)
+// Normalized Henyey-Greenstein; c = cos(angle between light travel and the
+// direction toward the camera)
+float phaseHG(float c, float g) {
+    float g2 = g * g;
+    return (1.0 - g2) / (4.0 * PI * pow(1.0 + g2 - 2.0 * g * c, 1.5));
+}
+
+// Is the air at world position P lit by the caster whose cascade block starts
+// at layer0? Walks cascades in index order and taps the FIRST whose box
+// contains the point -- the tightest covering cascade. Outside every cascade
+// counts as lit. Same rule as fog_frag's fogVisibility, but evaluated from a
+// world position instead of a ray parameter (a froxel has no ray to be affine
+// along, so the projection cannot be hoisted).
+float fogVisibility(int layer0, vec3 P) {
+    for (int c = 0; c < cascadeCount; c++) {
+        int layer = layer0 + c;
+        vec3 proj = (lightSpaceMatrix[layer] * vec4(P, 1.0)).xyz * 0.5 + 0.5;
+        if (proj.z > 1.0 || proj.x < 0.0 || proj.x > 1.0 || proj.y < 0.0 || proj.y > 1.0) {
+            continue;
+        }
+        float d = texture(shadowMaps, vec3(proj.xy, float(layer))).r;
+        return proj.z - shadowBias > d ? 0.0 : 1.0;
+    }
+    return 1.0;
+}
 
 void main() {
     // Near plane recovered from the projection (the app's near clip varies) --
     // the same recovery contact_shadow_frag makes.
     float nearZ = projection[3][2] / (projection[2][2] - 1.0);
     vec2 invFocal = 1.0 / vec2(projection[0][0], projection[1][1]);
-    vec3 viewPos = froxelViewPos(TexCoords, float(sliceIndex), 0.5, nearZ, fogFar, invFocal);
 
-    // M0: uniform medium, no lighting yet -- this exists to prove the volume
-    // allocates, renders slice by slice, and composites on this driver.
-    FragColor = vec4(vec3(0.0), density);
+    vec3 viewPos = froxelViewPos(TexCoords, float(sliceIndex), 0.5, nearZ, fogFar, invFocal);
+    vec3 camPos = invView[3].xyz;
+    vec3 P = (invView * vec4(viewPos, 1.0)).xyz;
+    // Direction from the camera toward this cell: the phase function's second
+    // argument, and the froxel equivalent of the march's per-pixel rayDir.
+    vec3 rayDir = normalize(P - camPos);
+
+    // Exponential height falloff above the floor. Below it the medium does not
+    // exist at all: the screen-space march expressed that by clamping downward
+    // rays at the floor plane, which a volume cannot do, so the equivalent is a
+    // zero extinction there -- otherwise sub-floor cells would sit at the
+    // formula's maximum density and fog the ground from underneath.
+    float sigma = P.y < floorY ? 0.0 : density * exp(-(P.y - floorY) / heightFalloff);
+
+    vec3 S = ambientColor;
+    for (int j = 0; j < numLights; j++) {
+        float phase = phaseHG(dot(lightDir[j], -rayDir), anisotropy) * sunBoost;
+        S += lightColor[j] * (phase * fogVisibility(j * cascadeCount, P));
+    }
+
+    // Spot in-scatter at P: inside the cone, falling off with distance, cut by
+    // the spot's shadow. Cone alignment mirrors spotConeFactor
+    // (shaders/include/lights_ubo.glsl) so shaft and floor pool agree.
+    if (spotEnabled == 1) {
+        vec3 toL = spotPos - P;
+        float d = length(toL);
+        float cosT = dot(-toL / max(d, 1e-4), spotDir);
+        float cone = clamp((cosT - spotCosOuter) / max(spotCosInner - spotCosOuter, 1e-4), 0.0, 1.0);
+        if (cone > 0.0) {
+            float atten = 1.0 / max(spotAtten.x + spotAtten.y * d + spotAtten.z * d * d, 1e-4);
+            float vis = 1.0;
+            if (spotShadowed == 1) {
+                vec4 ls = spotLightSpaceMatrix * vec4(P, 1.0);
+                if (ls.w > 0.0) { // in front of the light plane
+                    vec3 pc = ls.xyz / ls.w * 0.5 + 0.5;
+                    if (pc.z <= 1.0 && pc.x >= 0.0 && pc.x <= 1.0 && pc.y >= 0.0 && pc.y <= 1.0)
+                        vis = (pc.z - shadowBias > texture(spotShadowMap, pc.xy).r) ? 0.0 : 1.0;
+                }
+            }
+            float spotPhase = phaseHG(dot(spotDir, -rayDir), anisotropy) * sunBoost;
+            S += spotColor * (cone * atten * spotPhase * vis);
+        }
+    }
+
+    // Keep shafts HDR (they must bloom) but bound hostile parameter combos away
+    // from fp16 overflow, as the screen-space march does.
+    FragColor = vec4(min(S, vec3(500.0)), sigma);
 }
