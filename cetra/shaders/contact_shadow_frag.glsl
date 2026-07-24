@@ -38,12 +38,16 @@ const float THICK_FRAC = 1.0;  // occluder thickness, x csDistance. The canonica
                                // SMALL depth behind its receiver, a silhouette straddle a LARGE one.
 const float MAX_UV_LEN = 0.15; // clamp screen reach so near-camera pixels don't stride the frame
 const float SKY_Z = -1e-4;     // linZ at or above this is the sky/shadow-catcher sentinel
+const float GRAZE_LIFT = 4.0;  // slope-scaled start-offset gain: a ray grazing its own surface
+                               // (low N.L) skims and self-shadows, so lift it up to (1+this)x the
+                               // base offset; a face-on ray (high N.L, the one that must catch a
+                               // real contact) keeps the base offset. Shadow-map slope bias, on
+                               // the march. Ramps in only below N.L ~0.5, so a well-lit up-facing
+                               // receiver's contact is untouched -- that is what keeps a ground
+                               // pool while erasing the terminator/silhouette self-shadow.
 
 void main() {
     float linZ = texture(linDepthTex, TexCoords).z;
-    // fwidth before any divergent branch: it needs the neighbouring fragments'
-    // linZ, which a return/continue in this quad would leave undefined
-    float zGrain = fwidth(linZ);
     if (linZ >= SKY_Z) {
         FragColor = vec4(1.0); // sky and the shadow-catcher floor: nothing to occlude
         return;
@@ -74,9 +78,12 @@ void main() {
     // Start the ray a step off the surface along its normal so a grazing ray
     // does not immediately test against its own surface -- the classic
     // self-shadow acne. Scale with view distance (a fixed offset is
-    // sub-quantization far from the camera; SSR biases the same way). Without a
-    // normal, a distance-only floor still lifts the ray off the depth buffer.
-    float startBias = max(0.02, 0.01 * (-P.z));
+    // sub-quantization far from the camera; SSR biases the same way), and
+    // slope-scale it: lift MORE where the light grazes (low N.L), since that is
+    // where a ray skims its own surface into a self-shadow. Without a normal, a
+    // distance-only floor still lifts the ray off the depth buffer.
+    float grazeLift = 1.0 + GRAZE_LIFT * smoothstep(0.5, 0.1, ndl);
+    float startBias = max(0.02, 0.01 * (-P.z)) * grazeLift;
     vec3 startV = P + (hasN ? n : vec3(0.0)) * startBias;
 
     // Clamp a camera-facing ray so its far end stays in front of the near
@@ -114,11 +121,13 @@ void main() {
         fc += vec2(float(frameIndex) * 5.588238);
     float jitter = fract(52.9829189 * fract(0.06711056 * fc.x + 0.00583715 * fc.y));
 
-    // Two-term bias: the slope term (per-texel depth gradient, which grows with
-    // |z| under perspective on its own) stops the ray hugging its own surface;
-    // the distance term absorbs sub-step quantization. Both are relative -- an
-    // absolute epsilon is wrong when scene scales span meters to hundreds.
-    float bias = BIAS_FRAC * csDistance + 2.0 * zGrain;
+    // Near-side bias: just enough to absorb sub-step quantization, relative to the
+    // reach (an absolute epsilon is wrong when scene scales span meters to
+    // hundreds). Self-intersection at grazing angles is handled by the
+    // slope-scaled START offset above, NOT here -- a depth-gradient (fwidth) term
+    // here spikes at the very ground-contact seam it is meant to protect and
+    // rejects the true near-contact, the thing the feature exists to draw.
+    float bias = BIAS_FRAC * csDistance;
 
     // Occluder thickness: a surface blocks the ray only if the ray passes behind
     // it by less than this. Larger reads leak through (the ray is past the object,
