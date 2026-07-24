@@ -121,6 +121,9 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --fog-density <f>  Fog extinction per world unit (implies --fog)\n");
     fprintf(stderr, "      --fog-height <f>   Fog height falloff in world units (implies --fog)\n");
     fprintf(stderr,
+            "      --fog-volumetric[=0]  Froxel fog volume; =0 keeps the legacy march (implies "
+            "--fog)\n");
+    fprintf(stderr,
             "      --contact-shadows  Screen-space contact shadows along the key light\n");
     fprintf(stderr,
             "      --cs-debug         Show the raw contact-shadow term (implies enable)\n");
@@ -219,6 +222,7 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->bloom_strength = -1.0f;   // -1 = keep the engine default
     args->bloom_threshold = -1.0f;  // -1 = keep the engine default
     args->fog_anisotropy = -999.0f; // -999 = keep default (-1..1 is valid)
+    args->fog_volumetric = -1;      // -1 = keep the engine's fog implementation default
     args->ibl_intensity = -1.0f;    // -1 = keep the engine default
     args->cs_distance = -1.0f;      // -1 = scene-scaled contact-shadow reach
     args->cs_strength = -1.0f;      // -1 = keep the engine default
@@ -661,6 +665,11 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 return -1;
             }
             args->fog_anisotropy = (float)atof(argv[i]);
+        } else if (strncmp(argv[i], "--fog-volumetric", 16) == 0) {
+            // --fog-volumetric or --fog-volumetric=0 (the escape hatch back to
+            // the legacy screen-space march while both paths ship)
+            args->fog_volumetric = (argv[i][16] == '=' && argv[i][17] == '0') ? 0 : 1;
+            args->fog = 1;
         } else if (strcmp(argv[i], "--ibl-intensity") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -1534,6 +1543,9 @@ int main(int argc, char** argv) {
         }
         if (args.bloom_threshold >= 0.0f) {
             fx->bloom_threshold = args.bloom_threshold;
+        }
+        if (args.fog_volumetric >= 0) {
+            fx->fog_volumetric = args.fog_volumetric != 0;
         }
         if (args.fog_anisotropy > -900.0f) {
             fx->fog_anisotropy = args.fog_anisotropy;

@@ -829,6 +829,21 @@ ShaderProgram* create_fog_program() {
     return create_post_program("fog", fog_frag_shader_str);
 }
 
+// The froxel fog trio (spec 9.5). All three are ordinary fullscreen passes --
+// the volume is written one slice per draw, so they need no geometry shader and
+// share the standard post vertex shader.
+ShaderProgram* create_froxel_inject_program() {
+    return create_post_program("froxel_inject", froxel_inject_frag_shader_str);
+}
+
+ShaderProgram* create_froxel_integrate_program() {
+    return create_post_program("froxel_integrate", froxel_integrate_frag_shader_str);
+}
+
+ShaderProgram* create_froxel_composite_program() {
+    return create_post_program("froxel_composite", froxel_composite_frag_shader_str);
+}
+
 ShaderProgram* create_motion_blur_program() {
     return create_post_program("motion_blur", motion_blur_frag_shader_str);
 }

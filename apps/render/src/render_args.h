@@ -58,53 +58,54 @@ typedef struct {
     float fog_density;                // Extinction override (0 = scene-scaled)
     float fog_height;                 // Height falloff override (0 = scene-scaled)
     float fog_anisotropy;             // Scatter anisotropy (-999 = keep engine default)
-    int contact_shadows;              // Enable screen-space contact shadows
-    int contact_shadows_debug;        // Show the raw contact-shadow visibility term
-    float cs_distance;                // March reach override (-1 = scene-scaled)
-    float cs_strength;                // Darkening weight override (-1 = engine default)
-    int albedo_debug;                 // Show the resolved albedo G-buffer
-    int no_normals_mrt;               // Disable the normals G-buffer
-    int normals_debug;                // Show the resolved normals G-buffer
-    int no_ssr;                       // Disable screen-space reflections
-    int no_ssr_full_res;              // Trace SSR at half res (the old, serrated path)
-    int no_ssr_temporal;              // Disable SSR temporal accumulation (raw single-frame march)
-    int no_ssr_denoise;               // Disable the SSR denoiser (deterministic march, no jitter)
-    float ssr_jitter;                 // SSR stochastic ray-jitter spread override (-1 = default)
-    int ssr_debug;                    // Show the reflection buffer
-    float ssr_strength;               // SSR strength override (-1 = default)
-    float specular_aa;                // Specular AA strength override (-1 = default)
-    int no_energy_comp;               // Disable multi-scatter energy compensation
-    int no_refraction;                // Disable screen-space refraction
-    int no_clearcoat;                 // Disable the clearcoat second specular lobe
-    int no_specular;                  // Disable KHR_materials_specular F0 tint + weight
-    int no_sheen;                     // Disable KHR_materials_sheen cloth lobe
-    int no_parallax;                  // Disable parallax occlusion mapping (POM)
-    float parallax_scale;             // POM depth override (< 0 = keep engine default)
-    int no_sss;                       // Disable separable subsurface scattering
-    int oit;                          // Enable weighted-blended OIT (default off)
-    int show_lights;                  // Draw light gizmos (position + cull radius)
-    int cluster_heatmap;              // Tint by cluster light count
-    int area_light;                   // --area-light given: spawn one LTC panel
-    float area_light_pos[3];          // Panel center (world)
-    float area_light_dir[3];          // Panel normal; it lights the side this points at
-    float area_light_size[2];         // Panel width x height (world units)
-    float area_light_intensity;       // Emitted radiance
-    float area_light_color[3];        // Panel tint (default white)
-    int point_light_grid;             // N: spawn an NxN point-light test grid (0 = off)
-    float plg_radius;                 // Grid spacing == per-light cull radius
-    float plg_intensity;              // Grid light intensity
-    float sss_radius;                 // SSS scatter radius override (< 0 = fixture default)
-    float sss_color[3];               // SSS scatter color override (< 0 in [0] = fixture default)
-    int no_bloom;                     // Disable bloom
-    int bloom_enable;                 // -1 = keep default; 0/1 force (scene file)
-    float bloom_strength;             // -1 = keep engine default
-    float bloom_threshold;            // -1 = keep engine default
-    float ibl_intensity;              // -1 = keep engine default
-    int no_scene_file;                // Ignore any .cscn (input still allowed, look skipped)
-    int tonemap_mode;                 // PostFXTonemapMode override (0 = keep default;
-                                      // coincides with PASSTHROUGH, which is a blit
-                                      // path and never user-set)
-    int ssaa;                         // Supersampling factor (0 = keep engine default)
+    int fog_volumetric;         // Froxel fog: -1 = engine default, 0 = legacy march, 1 = froxel
+    int contact_shadows;        // Enable screen-space contact shadows
+    int contact_shadows_debug;  // Show the raw contact-shadow visibility term
+    float cs_distance;          // March reach override (-1 = scene-scaled)
+    float cs_strength;          // Darkening weight override (-1 = engine default)
+    int albedo_debug;           // Show the resolved albedo G-buffer
+    int no_normals_mrt;         // Disable the normals G-buffer
+    int normals_debug;          // Show the resolved normals G-buffer
+    int no_ssr;                 // Disable screen-space reflections
+    int no_ssr_full_res;        // Trace SSR at half res (the old, serrated path)
+    int no_ssr_temporal;        // Disable SSR temporal accumulation (raw single-frame march)
+    int no_ssr_denoise;         // Disable the SSR denoiser (deterministic march, no jitter)
+    float ssr_jitter;           // SSR stochastic ray-jitter spread override (-1 = default)
+    int ssr_debug;              // Show the reflection buffer
+    float ssr_strength;         // SSR strength override (-1 = default)
+    float specular_aa;          // Specular AA strength override (-1 = default)
+    int no_energy_comp;         // Disable multi-scatter energy compensation
+    int no_refraction;          // Disable screen-space refraction
+    int no_clearcoat;           // Disable the clearcoat second specular lobe
+    int no_specular;            // Disable KHR_materials_specular F0 tint + weight
+    int no_sheen;               // Disable KHR_materials_sheen cloth lobe
+    int no_parallax;            // Disable parallax occlusion mapping (POM)
+    float parallax_scale;       // POM depth override (< 0 = keep engine default)
+    int no_sss;                 // Disable separable subsurface scattering
+    int oit;                    // Enable weighted-blended OIT (default off)
+    int show_lights;            // Draw light gizmos (position + cull radius)
+    int cluster_heatmap;        // Tint by cluster light count
+    int area_light;             // --area-light given: spawn one LTC panel
+    float area_light_pos[3];    // Panel center (world)
+    float area_light_dir[3];    // Panel normal; it lights the side this points at
+    float area_light_size[2];   // Panel width x height (world units)
+    float area_light_intensity; // Emitted radiance
+    float area_light_color[3];  // Panel tint (default white)
+    int point_light_grid;       // N: spawn an NxN point-light test grid (0 = off)
+    float plg_radius;           // Grid spacing == per-light cull radius
+    float plg_intensity;        // Grid light intensity
+    float sss_radius;           // SSS scatter radius override (< 0 = fixture default)
+    float sss_color[3];         // SSS scatter color override (< 0 in [0] = fixture default)
+    int no_bloom;               // Disable bloom
+    int bloom_enable;           // -1 = keep default; 0/1 force (scene file)
+    float bloom_strength;       // -1 = keep engine default
+    float bloom_threshold;      // -1 = keep engine default
+    float ibl_intensity;        // -1 = keep engine default
+    int no_scene_file;          // Ignore any .cscn (input still allowed, look skipped)
+    int tonemap_mode;           // PostFXTonemapMode override (0 = keep default;
+                                // coincides with PASSTHROUGH, which is a blit
+                                // path and never user-set)
+    int ssaa;                   // Supersampling factor (0 = keep engine default)
     // Finishing grade (-1 = keep engine default; >=0 enables + sets)
     int film_preset; // --film: enable the whole finishing stack at sane defaults
     float vignette;

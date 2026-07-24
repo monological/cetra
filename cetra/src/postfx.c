@@ -2,6 +2,7 @@
 #include <stdlib.h>
 
 #include "postfx.h"
+#include "texture.h"
 #include "uniform.h"
 #include "util.h"
 
@@ -48,6 +49,38 @@ static bool create_color_fbo(int width, int height, GLenum internal_format, GLui
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     return true;
+}
+
+// A 3D volume target plus the FBO that renders into it one slice at a time
+// (spec 9.5). The FBO carries no attachment here: draw_volume_slices attaches
+// the target layer per draw with glFramebufferTextureLayer, the same
+// one-layer-per-pass idiom the shadow cascades and the mask array use.
+// Completeness is therefore only checkable once a layer is attached, so this
+// only reports allocation failure.
+static bool create_volume_fbo(int width, int height, int depth, GLenum internal_format,
+                              GLuint* out_fbo, GLuint* out_texture) {
+    *out_texture = create_texture_3d(width, height, depth, internal_format, GL_RGBA, NULL);
+    if (!*out_texture) {
+        log_error("PostFX volume texture allocation failed (%dx%dx%d)", width, height, depth);
+        return false;
+    }
+    glGenFramebuffers(1, out_fbo);
+    return true;
+}
+
+// Render every slice of a volume: attach the layer, tell the shader which
+// slice it is, draw the shared fullscreen quad. One draw per layer -- the
+// codebase's established idiom (shadow.c cascades, mask_array.c layers,
+// ibl.c cube faces) -- so no geometry shader and no new shader stage.
+static void draw_volume_slices(PostFX* fx, GLuint fbo, GLuint volume, int width, int height,
+                               int depth, UniformManager* um) {
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glViewport(0, 0, width, height);
+    for (int slice = 0; slice < depth; slice++) {
+        glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, volume, 0, slice);
+        uniform_set_int(um, "sliceIndex", slice);
+        draw_fullscreen_quad(fx->quad_vao);
+    }
 }
 
 // A ping-pong pair: two color FBOs of the same size/format (see PingPong)
@@ -294,6 +327,8 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     glm_vec3_copy((vec3){0.05f, 0.05f, 0.05f}, fx->fog_ambient);
     fx->fog_steps = 24;
     fx->fog_ready = false;
+    fx->fog_volumetric = false; // Opt-in (spec 9.5) while the legacy march is still the default
+    fx->froxel_ready = false;
     fx->fog_spot_enabled = false; // published per frame by shadow_publish_to_postfx
 
     // Motion blur (off by default; target allocated lazily on first enable).
@@ -462,6 +497,9 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     fx->ssr_hiz_program = create_ssr_hiz_program();
     fx->upsample_tent_program = create_upsample_tent_program();
     fx->fog_program = create_fog_program();
+    fx->froxel_inject_program = create_froxel_inject_program();
+    fx->froxel_integrate_program = create_froxel_integrate_program();
+    fx->froxel_composite_program = create_froxel_composite_program();
     fx->taa_resolve_program = create_taa_resolve_program();
     fx->dof_coc_program = create_dof_coc_program();
     fx->dof_blur_program = create_dof_blur_program();
@@ -481,6 +519,8 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
         !fx->ssgi_atrous_program || !fx->ssr_atrous_program || !fx->lum_measure_program ||
         !fx->lum_adapt_program || !fx->ssr_program || !fx->upsample_tent_program ||
         !fx->fog_program || !fx->taa_resolve_program || !fx->dof_coc_program ||
+        !fx->froxel_inject_program || !fx->froxel_integrate_program ||
+        !fx->froxel_composite_program ||
         !fx->dof_blur_program || !fx->dof_composite_program) {
         free_postfx(fx);
         return NULL;
@@ -523,6 +563,15 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     glUseProgram(fx->fog_program->id);
     uniform_set_int(fx->fog_program->uniforms, "linDepthTex", 0);
     uniform_set_int(fx->fog_program->uniforms, "shadowMaps", 1);
+    glUseProgram(fx->froxel_inject_program->id);
+    uniform_set_int(fx->froxel_inject_program->uniforms, "shadowMaps", 1);
+    uniform_set_int(fx->froxel_inject_program->uniforms, "spotShadowMap", 2);
+    uniform_set_int(fx->froxel_inject_program->uniforms, "historyVolume", 3);
+    glUseProgram(fx->froxel_integrate_program->id);
+    uniform_set_int(fx->froxel_integrate_program->uniforms, "scatterVolume", 0);
+    glUseProgram(fx->froxel_composite_program->id);
+    uniform_set_int(fx->froxel_composite_program->uniforms, "linDepthTex", 0);
+    uniform_set_int(fx->froxel_composite_program->uniforms, "integratedVolume", 1);
 
     glUseProgram(fx->dof_coc_program->id);
     uniform_set_int(fx->dof_coc_program->uniforms, "sceneTex", 0);
@@ -673,6 +722,29 @@ static bool postfx_ensure_fog_targets(PostFX* fx) {
         return false;
     }
     fx->fog_ready = true;
+    return true;
+}
+
+// Allocate the froxel fog volumes on first enable (same lazy pattern): the
+// scatter volume, the integrated volume the composite samples, and the history
+// the inject pass reprojects against. Fixed dimensions -- the grid covers the
+// frustum out to fog_far, so render resolution does not size it.
+static bool postfx_ensure_froxel_targets(PostFX* fx) {
+    if (fx->froxel_ready)
+        return true;
+    if (!create_volume_fbo(POSTFX_FROXEL_X, POSTFX_FROXEL_Y, POSTFX_FROXEL_Z, GL_RGBA16F,
+                           &fx->froxel_fbo, &fx->froxel_scatter)) {
+        return false;
+    }
+    fx->froxel_integrated = create_texture_3d(POSTFX_FROXEL_X, POSTFX_FROXEL_Y, POSTFX_FROXEL_Z,
+                                              GL_RGBA16F, GL_RGBA, NULL);
+    fx->froxel_history = create_texture_3d(POSTFX_FROXEL_X, POSTFX_FROXEL_Y, POSTFX_FROXEL_Z,
+                                           GL_RGBA16F, GL_RGBA, NULL);
+    if (!fx->froxel_integrated || !fx->froxel_history) {
+        log_error("Failed to allocate froxel fog volumes");
+        return false;
+    }
+    fx->froxel_ready = true;
     return true;
 }
 
@@ -1036,6 +1108,10 @@ void free_postfx(PostFX* fx) {
     glDeleteFramebuffers(1, &fx->fog_fbo);
     glDeleteTextures(1, &fx->fog_texture);
     free_pingpong(&fx->fog_history);
+    glDeleteFramebuffers(1, &fx->froxel_fbo);
+    glDeleteTextures(1, &fx->froxel_scatter);
+    glDeleteTextures(1, &fx->froxel_integrated);
+    glDeleteTextures(1, &fx->froxel_history);
     glDeleteFramebuffers(2, fx->cs_fbo);
     glDeleteTextures(2, fx->cs_texture);
     free_pingpong(&fx->cs_history);
@@ -1074,6 +1150,9 @@ void free_postfx(PostFX* fx) {
     free_program(fx->ssr_hiz_program);
     free_program(fx->upsample_tent_program);
     free_program(fx->fog_program);
+    free_program(fx->froxel_inject_program);
+    free_program(fx->froxel_integrate_program);
+    free_program(fx->froxel_composite_program);
     free_program(fx->taa_resolve_program);
     free_program(fx->dof_coc_program);
     free_program(fx->dof_blur_program);
@@ -1223,6 +1302,60 @@ static GLuint run_atrous(PostFX* fx, ShaderProgram* prog, PingPong* pp, int w, i
     return input_tex;
 }
 
+// Froxel volumetric fog (spec 9.5): light the medium once per volume cell,
+// integrate front-to-back along each froxel column, then fold the result into
+// the HDR scene with one trilinear tap. Same seam and same blend as the
+// screen-space march it replaces, so shafts still defocus, bloom, and meter
+// like direct light. Returns 0 (nothing to show in the debug view yet).
+static GLuint postfx_run_froxel_fog(PostFX* fx, bool aux_written, bool taa_resolving,
+                                    mat4 projection, mat4 view) {
+    (void)taa_resolving;
+    (void)view;
+    if (!fx->fog_enabled || !aux_written || !postfx_ensure_froxel_targets(fx))
+        return 0;
+
+    // 1. Inject: scattering + extinction per cell, one draw per slice.
+    glUseProgram(fx->froxel_inject_program->id);
+    UniformManager* iu = fx->froxel_inject_program->uniforms;
+    uniform_set_mat4(iu, "projection", (float*)projection);
+    uniform_set_float(iu, "fogFar", fx->fog_far);
+    uniform_set_float(iu, "density", fx->fog_density);
+    draw_volume_slices(fx, fx->froxel_fbo, fx->froxel_scatter, POSTFX_FROXEL_X, POSTFX_FROXEL_Y,
+                       POSTFX_FROXEL_Z, iu);
+
+    // 2. Integrate: slice k gathers 0..k. Reads the scatter volume, writes the
+    // integrated one -- different textures, so no read-write hazard.
+    glUseProgram(fx->froxel_integrate_program->id);
+    UniformManager* gu = fx->froxel_integrate_program->uniforms;
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_3D, fx->froxel_scatter);
+    uniform_set_mat4(gu, "projection", (float*)projection);
+    uniform_set_float(gu, "fogFar", fx->fog_far);
+    draw_volume_slices(fx, fx->froxel_fbo, fx->froxel_integrated, POSTFX_FROXEL_X, POSTFX_FROXEL_Y,
+                       POSTFX_FROXEL_Z, gu);
+
+    // 3. Composite: out = inscatter + scene * transmittance, the same
+    // enable/draw/restore idiom the screen-space fog and SSR composites use.
+    glBindFramebuffer(GL_FRAMEBUFFER, fx->hdr_fbo);
+    glViewport(0, 0, fx->width, fx->height);
+    glUseProgram(fx->froxel_composite_program->id);
+    UniformManager* cu = fx->froxel_composite_program->uniforms;
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, fx->aux_texture);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_3D, fx->froxel_integrated);
+    glActiveTexture(GL_TEXTURE0);
+    uniform_set_mat4(cu, "projection", (float*)projection);
+    uniform_set_float(cu, "fogFar", fx->fog_far);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_ONE, GL_SRC_ALPHA);
+    draw_fullscreen_quad(fx->quad_vao);
+    glDisable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    check_gl_error("postfx froxel fog");
+    return 0;
+}
+
 // Volumetric fog: march the half-res buffer, then fold it into the HDR
 // scene before DoF/bloom/tonemap so shafts defocus, bloom, and meter like
 // direct light. Owns the fog history lifecycle -- the history is only
@@ -1230,6 +1363,13 @@ static GLuint run_atrous(PostFX* fx, ShaderProgram* prog, PingPong* pp, int w, i
 // Returns the half-res fog texture for the debug view, 0 when fog is off.
 static GLuint postfx_run_fog(PostFX* fx, bool aux_written, bool taa_resolving, mat4 projection,
                              mat4 view) {
+    // The froxel path owns fog entirely when selected; the legacy half-res
+    // march keeps its own history invalid so re-enabling it never reprojects
+    // against a stale frame.
+    if (fx->fog_volumetric) {
+        fx->fog_history.valid = false;
+        return postfx_run_froxel_fog(fx, aux_written, taa_resolving, projection, view);
+    }
     if (!fx->fog_enabled || !aux_written || !postfx_ensure_fog_targets(fx)) {
         fx->fog_history.valid = false;
         return 0;

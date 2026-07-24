@@ -60,6 +60,15 @@ typedef enum PostFXDebugView {
 // the RUNTIME published cascade count (layer = slot * count + cascade)
 #define POSTFX_FOG_CASCADES 3
 
+// Froxel fog volume dimensions (spec 9.5). Fixed, not derived from render
+// resolution: the volume covers the camera frustum out to fog_far, so its
+// useful density is set by that world-space reach, not by pixel count. Depth
+// slices are exponential, matching the cluster grid's Doom-2016 slicing.
+// 160*90*64 RGBA16F is ~7.4 MB per volume.
+#define POSTFX_FROXEL_X 160
+#define POSTFX_FROXEL_Y 90
+#define POSTFX_FROXEL_Z 64
+
 typedef struct PostFX {
     int width, height;             // Internal (supersampled) HDR size
     int out_width, out_height;     // Display size the final pass downsamples to
@@ -123,6 +132,9 @@ typedef struct PostFX {
     ShaderProgram* ssr_hiz_program;
     ShaderProgram* upsample_tent_program; // Shared half-res composite (SSR, fog)
     ShaderProgram* fog_program;
+    ShaderProgram* froxel_inject_program;    // Per-cell scattering into the volume (spec 9.5)
+    ShaderProgram* froxel_integrate_program; // Front-to-back gather along each slice column
+    ShaderProgram* froxel_composite_program; // One trilinear tap, folded into the HDR scene
     ShaderProgram* taa_resolve_program;
 
     GLuint quad_vao;
@@ -201,6 +213,17 @@ typedef struct PostFX {
     bool fog_ready;              // Lazy-alloc guard for the targets below
     GLuint fog_fbo, fog_texture; // Half-res RGBA16F: inscatter.rgb + transmittance.a
     PingPong fog_history;        // Half-res temporal accumulation
+
+    // Froxel volumetric fog (spec 9.5): the same fog parameters above, but
+    // lit once per volume cell in a camera-frustum 3D grid instead of once
+    // per pixel-step, which is what makes clustered local lights affordable
+    // to scatter. false selects the legacy screen-space march.
+    bool fog_volumetric;
+    bool froxel_ready;        // Lazy-alloc guard for the volumes below
+    GLuint froxel_fbo;        // Attachment-less; a layer is bound per slice draw
+    GLuint froxel_scatter;    // RGBA16F volume: in-scatter radiance + extinction
+    GLuint froxel_integrated; // RGBA16F volume: front-to-back inscatter + transmittance
+    GLuint froxel_history;    // Previous frame's scatter volume (temporal reprojection)
 
     // Published per frame by shadow_publish_to_postfx (mirrors the probe
     // block; postfx never learns about the shadow system): the casters'

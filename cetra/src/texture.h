@@ -71,6 +71,13 @@ void texture_gl_formats(int channels, bool is_srgb, GLenum* internal_format, GLe
 GLuint create_texture_2d_float(int width, int height, GLenum internal_format, GLenum data_format,
                                const float* pixels);
 
+// Volume allocation (LINEAR / CLAMP_TO_EDGE on S/T/R / no mips baked in).
+// pixels may be NULL for a render target. Returns the raw GL name; the caller
+// owns deletion. First user: the froxel fog volumes (spec 9.5), which need a
+// real 3D texture because their composite tap filters across slices.
+GLuint create_texture_3d(int width, int height, int depth, GLenum internal_format,
+                         GLenum data_format, const void* pixels);
+
 // Enable anisotropic filtering on the currently bound texture (no-op where
 // unsupported). Tiled textures at grazing angles alias into moire without it.
 void texture_set_max_anisotropy(void);

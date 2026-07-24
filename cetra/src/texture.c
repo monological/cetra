@@ -119,6 +119,30 @@ GLuint create_texture_2d_float(int width, int height, GLenum internal_format, GL
     return tex;
 }
 
+// Volume allocation (first user: the froxel fog volumes, spec 9.5). The
+// codebase's first GL_TEXTURE_3D: the froxel composite needs one trilinear tap
+// that filters ACROSS slices, which a GL_TEXTURE_2D_ARRAY cannot do -- that is
+// the whole reason this is not the established array idiom.
+// glTexImage3D (not glTexStorage3D, which is GL 4.2) allocates level 0 only,
+// matching mask_array.c / shadow.c. pixels may be NULL for a render target.
+GLuint create_texture_3d(int width, int height, int depth, GLenum internal_format,
+                         GLenum data_format, const void* pixels) {
+    GLuint tex = 0;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_3D, tex);
+    glTexImage3D(GL_TEXTURE_3D, 0, (GLint)internal_format, width, height, depth, 0, data_format,
+                 GL_FLOAT, pixels);
+    // CLAMP on R as well as S/T: a froxel lookup past the last slice must hold
+    // the final integrated value, not wrap to the camera-near slice.
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glBindTexture(GL_TEXTURE_3D, 0);
+    return tex;
+}
+
 void texture_gl_formats(int channels, bool is_srgb, GLenum* internal_format, GLenum* data_format) {
     if (channels == 1) {
         *internal_format = GL_RED;
