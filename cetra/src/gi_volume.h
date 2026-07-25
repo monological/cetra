@@ -90,6 +90,11 @@ typedef struct GIVolume {
     int dirty_count;
     bool first_pass;
 
+    // Every probe capture this volume has ever run. The converge-then-idle
+    // claim is only worth making if it is checkable, and this is the check: it
+    // must stop advancing the moment the volume converges.
+    int captures_total;
+
     bool debug_atlas; // draw the raw atlas over the composited frame
     bool failed;      // One-shot: allocation is not retried every frame
 } GIVolume;

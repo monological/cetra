@@ -1493,6 +1493,15 @@ static void _engine_gui_panel(Engine* engine) {
                 else
                     log_info("Sky: scene-captured probe not refreshed on sun move");
             }
+            // The probe volume caches the sun the same way, so it re-arms here
+            // for the same reason -- and on RELEASE, not per drag frame: a sweep
+            // is one scene render per probe face, which is the one cost the
+            // converge-then-idle cadence exists to keep off the steady state.
+            // Unlike the probe this does not stall, since the sweep is spread
+            // over the following frames at `rate` and the old atlas stays
+            // sampleable throughout.
+            if (sun_released)
+                gi_volume_mark_dirty(scene->gi_volume);
         }
 
         _begin_effect_group("Ground Projection", &scene->skybox_ground_projection);
@@ -1533,6 +1542,22 @@ static void _engine_gui_panel(Engine* engine) {
             igSliderFloat("Probe Intensity", &scene->probe->intensity, 0.0f, 4.0f, "%.2f", 0);
             igSliderFloat("Box Fade", &scene->probe->box_fade, 0.0f, 0.5f, "%.2f", 0);
             igCheckbox("Show Capture", &scene->probe->debug_background);
+            _end_effect_group();
+        }
+
+        if (scene->gi_volume) {
+            GIVolume* gi = scene->gi_volume;
+            _begin_effect_group("GI Probe Volume", &gi->enabled);
+            igText("%dx%dx%d probes, %dx%d atlas", gi->counts[0], gi->counts[1], gi->counts[2],
+                   gi->atlas_w, gi->atlas_h);
+            // The one number worth watching: a converged volume reads 0 and does
+            // no work at all. Anything else means captures are running.
+            igText(gi->dirty_count > 0 ? "converging: %d probes left" : "converged (%d)",
+                   gi->dirty_count);
+            igSliderInt("Probes / Frame", &gi->rate, 0, 32, "%d", 0);
+            igCheckbox("Show Atlas", &gi->debug_atlas);
+            if (igButton("Recapture", (ImVec2){0, 0}))
+                gi_volume_mark_dirty(gi);
             _end_effect_group();
         }
     }

@@ -324,8 +324,11 @@ void gi_volume_update(GIVolume* gi, struct Engine* engine, struct Scene* scene) 
         glEnable(GL_CULL_FACE);
     }
 
-    if (gi->dirty_count <= 0)
+    gi->captures_total += budget;
+    if (gi->dirty_count <= 0) {
         gi->first_pass = false;
+        log_info("GI volume converged: %d captures total", gi->captures_total);
+    }
 
     engine_set_render_time(engine, saved_time, saved_delta);
     if (scene->shadow_system)
