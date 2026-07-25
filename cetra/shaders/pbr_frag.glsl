@@ -1221,25 +1221,47 @@ void main() {
     }
 
     // Ambient lighting with IBL
+    // Ambient. The DIFFUSE source and the SPECULAR lobe are chosen
+    // independently: diffuse comes from the probe volume when one has converged
+    // and from the environment's irradiance map otherwise, while a specular lobe
+    // exists only when there is an environment to reflect. Writing that as one
+    // branch per combination is what previously produced a third arm that
+    // re-derived this same Lambert term and a second SSS tap kept in step by
+    // hand -- with a comment whose whole job was to warn about the drift.
     vec3 ambient;
-    if (iblEnabled > 0) {
-        vec3 F = fresnelSchlickRoughness(NdotV, F0, roughnessMap);
+    if (iblEnabled > 0 || giEnabled > 0) {
+        // kS is the share the ambient SPECULAR lobe takes. No environment means
+        // no such lobe, so nothing is taken and all the non-metal energy stays
+        // diffuse. That single substitution is the entire difference between an
+        // environment-lit surface and a probe-lit one.
+        vec3 F = iblEnabled > 0 ? fresnelSchlickRoughness(NdotV, F0, roughnessMap) : vec3(0.0);
 
         vec3 kS = F;
         vec3 kD = vec3(1.0) - kS;
         kD *= 1.0 - metallicMap;
         kD *= 1.0 - transmissionEff; // diffuse yields to the transmitted term
 
-        // Diffuse IBL: the probe volume when one has converged, else the single
-        // direction-only irradiance map. Both store the same quantity -- the
-        // cosine-weighted mean incident radiance, E/pi -- so this is a straight
-        // substitution and the albedo multiply below is unchanged.
+        // Both sources store the same quantity -- the cosine-weighted mean
+        // incident radiance, E/pi -- so this is a straight substitution and the
+        // albedo multiply below is unchanged.
         vec3 irradiance = giEnabled > 0 ? giSampleIrradiance(WorldPos, N, V)
                                         : texture(irradianceMap, N).rgb;
         vec3 diffuse = irradiance * albedoMap;
 
-        // Specular IBL: sample prefiltered env map with reflection vector
+        // The environment's strength knob, and 1.0 when there is no environment
+        // for it to describe. Note it currently scales probe irradiance too,
+        // which is arguably double-counting -- the captures the volume
+        // integrates were already lit by the environment. Left as-is here
+        // deliberately: correcting it moves pixels on the GI-plus-IBL path,
+        // which no golden covers, so it wants its own change and its own gate.
+        float envScale = iblEnabled > 0 ? iblIntensity : 1.0;
+
+        // Shared by the specular lobe below and by the sheen lobe further down,
+        // so it outlives the iblEnabled block both sit inside.
         vec3 R = reflect(-V, N);
+
+        vec3 specular = vec3(0.0);
+        if (iblEnabled > 0) {
         vec3 prefilteredColor;
         if (probeEnabled > 0) {
             // Parallax correction: intersect the world reflection ray with
@@ -1266,14 +1288,16 @@ void main() {
         // Reuses the brdf fetched before the light loop (same coordinates). The
         // KHR_materials_specular tint + weight reach IBL specular through F (F0 was
         // re-parameterized above), so no change to this line is needed.
-        vec3 specular = prefilteredColor * (F * brdf.x + brdf.y) * energyComp;
+        specular = prefilteredColor * (F * brdf.x + brdf.y) * energyComp;
+        }
 
-        ambient = (kD * diffuse + specular) * aoMap * iblIntensity;
+        ambient = (kD * diffuse + specular) * aoMap * envScale;
 
-        // SSS: tap the IBL Lambert diffuse into the skin-diffuse buffer too
-        // (reuses the exact sub-expression; does not touch the ambient line).
+        // SSS: tap the ambient Lambert diffuse into the skin-diffuse buffer too.
+        // ONE tap, reusing the exact sub-expression above -- there is no second
+        // path for it to drift from.
         if (sss) {
-            sssDiffuse += kD * diffuse * aoMap * iblIntensity;
+            sssDiffuse += kD * diffuse * aoMap * envScale;
         }
 
         // Clearcoat IBL: a second env reflection at the coat roughness (its own
@@ -1309,21 +1333,6 @@ void main() {
             // energy convention consistent across analytic and IBL.
             ambient = ambient * (1.0 - maxComp(sheenColor)) +
                       sheenColor * sheenPre * sheenE * aoMap * iblIntensity;
-        }
-    } else if (giEnabled > 0) {
-        // A probe volume with no environment behind it -- the interior case, and
-        // the one the Cornell fixture exercises. Same Lambert diffuse as the IBL
-        // branch, minus the specular half: with no environment there is no
-        // ambient specular lobe, so nothing takes a Fresnel share and all of the
-        // non-metal energy stays diffuse. A metal gets nothing, which is what a
-        // metal with nothing to reflect should get.
-        vec3 kD = vec3(1.0 - metallicMap) * (1.0 - transmissionEff);
-        vec3 diffuse = giSampleIrradiance(WorldPos, N, V) * albedoMap;
-        ambient = kD * diffuse * aoMap;
-        // Mirrors the IBL branch's SSS tap; the two must stay in step or skin
-        // diverges from every other material for no visible reason.
-        if (sss) {
-            sssDiffuse += kD * diffuse * aoMap;
         }
     } else {
         // Fallback to simple ambient when IBL is disabled (diffuse-only, so
