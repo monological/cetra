@@ -420,8 +420,15 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
 
             // Indirect diffuse from the probe grid, replacing the flat
             // irradiance map. Self-gates to giEnabled = 0 while the volume is
-            // absent or mid-sweep -- including during a capture, so a probe
-            // never bakes in the previous sweep's bounce.
+            // absent or has never converged, so the call site stays one line.
+            //
+            // It does NOT gate on capture, so every sweep after the first reads
+            // the atlas it is rewriting -- feedback, i.e. a bounce per sweep.
+            // That is standard DDGI and probably what you want, but it arrived
+            // as a side effect of first_pass doing double duty rather than as a
+            // decision, and it means a volume converged at load (one bounce) and
+            // one converged by moving the sun (many) do not match. Spec 9.7
+            // records it as open.
             gi_volume_bind(scene ? scene->gi_volume : NULL, program);
         }
 
@@ -900,9 +907,6 @@ void scene_capture_faces(Engine* engine, struct IBLResources* ibl, const vec3 po
     float saved_near = camera->near_clip;
     float saved_far = camera->far_clip;
 
-    bool saved_normals = engine->normals_this_frame;
-    bool saved_aux = engine->aux_this_frame;
-    bool saved_albedo = engine->albedo_this_frame;
     bool saved_taa = engine->postfx ? engine->postfx->taa_enabled : false;
     bool saved_refraction = engine->refraction_enabled;
     bool saved_capturing = engine->capturing;
@@ -912,19 +916,16 @@ void scene_capture_faces(Engine* engine, struct IBLResources* ibl, const vec3 po
     glGetIntegerv(GL_VIEWPORT, saved_viewport);
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &saved_fbo);
 
-    // Color-only target: keep the G-buffer draw-buffer list at attachment 0,
-    // and make sure the TAA branch can never jitter the capture projection.
-    // Refraction must sit out too: its mid-frame resolve reads and rebinds
-    // engine->framebuffer, which is NOT the capture target -- it would blit
-    // a stale main frame and hijack the rest of the capture pass.
+    // ONE flag says "a capture is running"; passes that must sit out ask it
+    // rather than having their configuration falsified here. The G-buffer used
+    // to be switched off by clearing three this_frame flags, which is a list
+    // that fell behind the moment a fourth attachment appeared --
+    // engine_set_scene_draw_buffers now consults `capturing` directly and covers
+    // every attachment by construction.
     //
-    // `capturing` covers the rest of that same family: the particle pass and the
-    // OIT bracket both re-bind engine->framebuffer the way refraction does, and
-    // alpha-to-coverage keys off the scene framebuffer's sample count rather than
-    // this single-sample target.
-    engine->normals_this_frame = false;
-    engine->aux_this_frame = false;
-    engine->albedo_this_frame = false;
+    // TAA and refraction still substitute because they are read through paths
+    // that predate the flag; folding them in is the obvious next step and is not
+    // done here only to keep this commit's blast radius honest.
     engine->refraction_enabled = false;
     engine->capturing = true;
     if (engine->postfx)
@@ -1019,9 +1020,6 @@ void scene_capture_faces(Engine* engine, struct IBLResources* ibl, const vec3 po
     glm_vec3_copy(saved_cam_pos, camera->position);
     camera->near_clip = saved_near;
     camera->far_clip = saved_far;
-    engine->normals_this_frame = saved_normals;
-    engine->aux_this_frame = saved_aux;
-    engine->albedo_this_frame = saved_albedo;
     engine->refraction_enabled = saved_refraction;
     engine->capturing = saved_capturing;
     if (engine->postfx)

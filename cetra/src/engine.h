@@ -109,12 +109,9 @@ typedef struct Engine {
     // a GI probe face) rather than into engine->framebuffer. Set for the duration
     // of the capture and restored after.
     //
-    // Every pass that reaches outside the currently bound target must consult
-    // this. Three do: the refraction resolve and the particle pass both re-bind
-    // engine->framebuffer mid-pass, which would hijack the capture; and
-    // alpha-to-coverage keys off the SCENE framebuffer's sample count, which is
-    // not the capture target's. All three were latent for as long as capture only
-    // ran once at load with nothing alive; a per-frame capture makes them real.
+    // A capture target carries colour and nothing else, and it is single-sample.
+    // Any pass that reaches outside the bound target, or that keys off the SCENE
+    // framebuffer's shape rather than the bound one, must consult this.
     bool capturing;
 
     Camera* camera;         // main camera

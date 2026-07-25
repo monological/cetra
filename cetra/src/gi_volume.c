@@ -71,8 +71,6 @@ void free_gi_volume(GIVolume* gi) {
         glDeleteTextures(1, &gi->capture_color);
     if (gi->capture_depth)
         glDeleteTextures(1, &gi->capture_depth);
-    if (gi->atlas_fbo)
-        glDeleteFramebuffers(1, &gi->atlas_fbo);
     if (gi->tile_fbo)
         glDeleteFramebuffers(1, &gi->tile_fbo);
     if (gi->quad_vao)
@@ -334,8 +332,13 @@ void gi_volume_update(GIVolume* gi, struct Engine* engine, struct Scene* scene) 
     if (scene->shadow_system)
         scene->shadow_system->cascade_count = saved_cascades;
 
-    glDisable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); // engine baseline
+    // Blend ENABLED is the engine's baseline (set once at init; the G-buffer
+    // relies on it and disables per attachment). The tile blend above turned it
+    // off, so restoring means putting it back on -- an earlier version of this
+    // line disabled it and called that the baseline, which handed every frame
+    // after a sweep a context the rest of the renderer does not expect.
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)saved_fbo);
     glViewport(saved_viewport[0], saved_viewport[1], saved_viewport[2], saved_viewport[3]);
     check_gl_error("gi volume update");

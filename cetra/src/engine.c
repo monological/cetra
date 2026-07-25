@@ -1869,12 +1869,21 @@ void engine_set_scene_draw_buffers(const Engine* engine, bool with_gbuffer) {
     // Read each attachment's per-frame write gate from the same descriptor table
     // that drives create/clear (const cast: this only reads the this_frame flags).
     // Attachment 0 (this_frame NULL) is always written and starts the list.
+    //
+    // A capture target has attachment 0 and nothing else, so the whole G-buffer
+    // is off for the duration -- asked HERE, once, rather than by clearing each
+    // this_frame flag at the capture site. That list was hand-maintained and had
+    // already fallen behind: attachment 4 (SSS) was added without one, so a
+    // re-convergence sweep in an --sss scene emitted a five-attachment draw list
+    // against a one-attachment FBO. Gating the loop instead is correct for
+    // attachment 4 and for every attachment added after it.
+    const bool gbuffer = with_gbuffer && !engine->capturing;
     GBufferAttachment gb[GBUFFER_ATTACHMENT_COUNT];
     _gbuffer_attachments((Engine*)engine, gb);
     GLenum bufs[GBUFFER_ATTACHMENT_COUNT] = {GL_COLOR_ATTACHMENT0}; // rest GL_NONE (0)
     int count = 1;
     for (int i = 1; i < GBUFFER_ATTACHMENT_COUNT; i++) {
-        if (with_gbuffer && *gb[i].this_frame) {
+        if (gbuffer && *gb[i].this_frame) {
             bufs[i] = GL_COLOR_ATTACHMENT0 + i;
             glDisablei(GL_BLEND, i);
             count = i + 1;

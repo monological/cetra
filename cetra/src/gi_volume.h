@@ -69,7 +69,6 @@ typedef struct GIVolume {
     // One RGBA16F atlas holding both tile types. Irradiance tiles occupy the top
     // rows and visibility the rest; both are addressed by probe index.
     GLuint atlas;
-    GLuint atlas_fbo;
     int atlas_w, atlas_h;
     int irradiance_rows; // atlas rows consumed by the irradiance block
 

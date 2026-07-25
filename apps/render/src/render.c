@@ -204,6 +204,9 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     memset(args, 0, sizeof(RenderArgs));
     args->width = DEFAULT_WIDTH;
     args->height = DEFAULT_HEIGHT;
+    // -1, not 0: the library gives 0 its own meaning (capture every dirty probe
+    // in one frame), so a 0 sentinel here would make --gi-rate 0 unreachable.
+    args->gi_rate = -1;
     args->specular_aa = -1.0f;    // -1 = keep the engine default
     args->ssr_strength = -1.0f;   // -1 = keep the engine default
     args->ssr_jitter = -1.0f;     // -1 = keep the engine default
@@ -2230,12 +2233,17 @@ int main(int argc, char** argv) {
     // as the SSR miss fallback. Runs after every scene-scaled policy and the
     // overlay flags above are final (debug overlays must not bake into the
     // capture), but before the render loop starts.
-    if (args.probe && scene->ibl && scene->ibl->precomputed) {
-        // The capture renders node globals directly, so bake in the recenter
-        // transform the per-frame callback applies before every draw (the
-        // callback re-applies the same transform; no residue)
-        apply_model_recenter(engine, scene->root_node);
+    // Both capture subsystems below render node globals directly, so the
+    // recenter transform the per-frame callback applies before every draw has to
+    // be baked in first (the callback re-applies the same transform; no
+    // residue). Hoisted out of the probe block: the GI volume fits its grid to
+    // compute_scene_bounds, which reads those same globals, so leaving the
+    // recenter inside --probe silently fitted the grid to pre-recenter bounds
+    // whenever --gi-volume ran without it -- which is exactly how the golden is
+    // generated.
+    apply_model_recenter(engine, scene->root_node);
 
+    if (args.probe && scene->ibl && scene->ibl->precomputed) {
         // A dome stage grounds the environment itself (no scene render); the
         // scene meshes join the capture only for interiors, where they ARE
         // the environment
@@ -2327,7 +2335,7 @@ int main(int argc, char** argv) {
         int nz = args.gi_probes[2] > 0 ? args.gi_probes[2] : 8;
         GIVolume* gi = create_gi_volume(nx, ny, nz);
         if (gi) {
-            if (args.gi_rate > 0)
+            if (args.gi_rate >= 0)
                 gi->rate = args.gi_rate;
             gi->debug_atlas = args.gi_debug != 0;
             // Bounds AFTER the recenter above, which the probe block may have

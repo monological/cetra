@@ -36,8 +36,11 @@ uniform int mode;
 #include "octahedral.glsl"
 
 // The cube is only 16^2 per face, so a fixed lat/long sweep over the hemisphere
-// costs far less than it looks and never misses a face. 8x24 = 192 samples per
-// output texel; an 8x8 tile is 64 texels, so ~12k cube taps per probe per mode.
+// never misses a face. 8x24 = 192 samples per output texel, over the whole
+// BORDERED tile: 10^2 = 100 fragments for irradiance and 18^2 = 324 for
+// visibility, so ~19k and ~62k cube taps per probe respectively. The visibility
+// pass is the expensive one by 3.2x, which is the opposite of what tile
+// resolution alone suggests.
 const int PHI_STEPS = 24;
 const int THETA_STEPS = 8;
 
@@ -78,6 +81,13 @@ void main() {
     // octahedral mapping and every consumer's UV are expressed in.
     vec3 N = octDirFromTexel(local - 1.0, tileRes);
 
+    // Tangent frame for N, built ONCE. It depends on nothing the loops vary, and
+    // living inside them cost 192 normalizes and 384 cross products per output
+    // texel -- about 20M redundant iterations across an opening sweep.
+    vec3 up = abs(N.y) < 0.999 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+    vec3 T = normalize(cross(up, N));
+    vec3 B = cross(N, T);
+
     vec3 sum = vec3(0.0);
     float sumDist = 0.0;
     float sumDist2 = 0.0;
@@ -92,10 +102,7 @@ void main() {
         for (int p = 0; p < PHI_STEPS; ++p) {
             float phi = (float(p) + 0.5) / float(PHI_STEPS) * 6.28318530718;
 
-            // Build the sample direction in N's tangent frame.
-            vec3 up = abs(N.y) < 0.999 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
-            vec3 T = normalize(cross(up, N));
-            vec3 B = cross(N, T);
+            // The sample direction in N's tangent frame, hoisted above.
             vec3 dir = normalize(T * (sinTheta * cos(phi)) + B * (sinTheta * sin(phi)) +
                                  N * cosTheta);
 
