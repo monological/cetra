@@ -257,7 +257,6 @@ void gi_volume_update(GIVolume* gi, struct Engine* engine, struct Scene* scene) 
     // here the dirty count is untouched, so skipping simply retries next frame.
     if (engine->async_loader && async_loader_is_busy(engine->async_loader))
         return;
-    mask_array_ensure_built(scene, engine);
 
     if (!gi_ensure_targets(gi, engine))
         return;
@@ -282,23 +281,11 @@ void gi_volume_update(GIVolume* gi, struct Engine* engine, struct Scene* scene) 
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &saved_fbo);
     glGetIntegerv(GL_VIEWPORT, saved_viewport);
 
-    // Burst policy, the same two clauses reflection_probe_capture reasons about
-    // and for the same reasons. Cascades fit the MAIN camera, so a cube face
-    // sampling them as layer 0 would drop its shadows -- force the
-    // camera-independent single cascade and bake once for the whole burst. And
-    // freeze the clock, so wind-displaced geometry is caught at rest and the six
-    // faces agree with the shadow map they sample.
-    //
-    // Nothing is baked back: the frame's own shadow pass runs after this and
+    // Shared burst policy (see render.h). Nothing it bakes needs undoing beyond
+    // the restore below: the frame's own shadow pass runs after this and
     // overwrites the maps with the camera-fit cascades it needs.
-    int saved_cascades = scene->shadow_system ? scene->shadow_system->cascade_count : 1;
-    double saved_time = engine->render_time;
-    double saved_delta = engine->render_delta;
-    engine_set_render_time(engine, 0.0, 0.0);
-    if (scene->shadow_system && scene->shadow_system->enabled) {
-        scene->shadow_system->cascade_count = 1;
-        render_shadow_depth_pass(engine, scene);
-    }
+    SceneCaptureState saved_capture;
+    scene_capture_begin(engine, scene, &saved_capture);
 
     for (int n = 0; n < budget; ++n) {
         int probe = gi->next_probe;
@@ -328,9 +315,7 @@ void gi_volume_update(GIVolume* gi, struct Engine* engine, struct Scene* scene) 
         log_info("GI volume converged: %d captures total", gi->captures_total);
     }
 
-    engine_set_render_time(engine, saved_time, saved_delta);
-    if (scene->shadow_system)
-        scene->shadow_system->cascade_count = saved_cascades;
+    scene_capture_end(engine, scene, &saved_capture);
 
     // Blend ENABLED is the engine's baseline (set once at init; the G-buffer
     // relies on it and disables per attachment). The tile blend above turned it

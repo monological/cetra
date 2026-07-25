@@ -96,36 +96,8 @@ int reflection_probe_capture(ReflectionProbe* probe, struct Engine* engine, Scen
         }
     }
 
-    // Pack the scalar-mask array now the loader has drained: the render loop's
-    // build runs after this pre-loop capture, so without this the probe would
-    // bake every material's scalar-fallback masks into the cubemap.
-    mask_array_ensure_built(scene, engine);
-
-    // Cascades fit the MAIN camera frustum; the capture's six cube-face
-    // cameras need the camera-independent scene-fit map, so force the
-    // classic single cascade BEFORE the depth bake (baking camera-fit
-    // cascades and sampling them as layer 0 would drop the capture's
-    // shadows). Restored with the other saved state after the faces.
-    int saved_cascades = scene->shadow_system ? scene->shadow_system->cascade_count : 1;
-    if (scene->shadow_system)
-        scene->shadow_system->cascade_count = 1;
-
-    // Freeze animation time for the whole bake, before the shadow pass runs.
-    // A probe is a static capture, so wind-displaced geometry should be caught
-    // at rest -- consistent with skinned meshes capturing at bind pose. It has
-    // to span BOTH the depth bake below and the six shading passes: they agree
-    // today only because a load-time capture happens before the clock starts,
-    // and a re-capture mid-run would otherwise bake a shadow from one instant
-    // and the surface from another.
-    // The delta goes with it: a frozen instant advanced by nothing, so the
-    // bake's motion vectors are zero rather than describing a step it never took.
-    double saved_render_time = engine->render_time;
-    double saved_render_delta = engine->render_delta;
-    engine_set_render_time(engine, 0.0, 0.0);
-
-    // Shadow maps have not been rendered at load time; bake them so the
-    // capture contains shadowed direct light and catcher darkening.
-    render_shadow_depth_pass(engine, scene);
+    SceneCaptureState saved_capture;
+    scene_capture_begin(engine, scene, &saved_capture);
 
     if (probe->cubemap)
         glDeleteTextures(1, &probe->cubemap);
@@ -143,11 +115,7 @@ int reflection_probe_capture(ReflectionProbe* probe, struct Engine* engine, Scen
     ibl_prefilter_cubemap(ibl, probe->cubemap, &probe->prefiltered, PROBE_PREFILTER_SIZE,
                           PROBE_PREFILTER_MIP_LEVELS);
 
-    // Restore the capture policy this function owns; scene_capture_faces has
-    // already restored the camera, the engine flags and the GL target.
-    engine_set_render_time(engine, saved_render_time, saved_render_delta);
-    if (scene->shadow_system)
-        scene->shadow_system->cascade_count = saved_cascades;
+    scene_capture_end(engine, scene, &saved_capture);
 
     glUseProgram(0);
     glActiveTexture(GL_TEXTURE0);

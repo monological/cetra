@@ -343,12 +343,26 @@ void shadow_upload_cascade_uniforms(const ShadowSystem* system, UniformManager* 
         glUniform4fv(loc, layers, (const GLfloat*)system->cascade_params);
 }
 
+// Bind whatever this frame's depth pass produced. Call UNCONDITIONALLY: every
+// per-light-type gate lives here, so a caller never has to know which types can
+// cast. That is deliberate. The gate used to sit at the call site as
+// `active_count > 0`, which counts DIRECTIONAL casters only -- so a spot-lit
+// scene with no directional light never reached this function and its shadow map
+// was rendered and never sampled, and turning shadows off left spotShadowActive
+// and a stale depth texture bound from the frame before. Both were one condition
+// at one call site trying to model four light types. Point and area shadows will
+// add their own clauses HERE and no caller will change.
 void bind_shadow_maps_to_program(ShadowSystem* system, ShaderProgram* program) {
     if (!system || !program || !program->uniforms)
         return;
 
     UniformManager* u = program->uniforms;
+    const bool on = system->enabled;
+    const bool directional_on = on && system->active_count > 0;
+    const bool spot_on = on && system->spot_active;
 
+    // The array texture binds even when nothing casts: a sampler2DArray must
+    // resolve to something for the program to be complete.
     glActiveTexture(GL_TEXTURE0 + SHADOW_MAP_TEXTURE_UNIT);
     glBindTexture(GL_TEXTURE_2D_ARRAY, system->shadow_map_array);
     uniform_set_int(u, "shadowMaps", SHADOW_MAP_TEXTURE_UNIT);
@@ -356,13 +370,15 @@ void bind_shadow_maps_to_program(ShadowSystem* system, ShaderProgram* program) {
     // Perspective spot shadow map (the flashlight) on its own unit above IBL, so
     // a shadow-casting spot occludes surfaces (e.g. the ball's shadow on the floor).
     glActiveTexture(GL_TEXTURE0 + SPOT_SHADOW_MAP_TEXTURE_UNIT);
-    glBindTexture(GL_TEXTURE_2D, system->spot_active ? system->spot_caster.depth_texture : 0);
+    glBindTexture(GL_TEXTURE_2D, spot_on ? system->spot_caster.depth_texture : 0);
     uniform_set_int(u, "spotShadowMap", SPOT_SHADOW_MAP_TEXTURE_UNIT);
-    uniform_set_int(u, "spotShadowActive", system->spot_active ? 1 : 0);
-    if (system->spot_active)
+    uniform_set_int(u, "spotShadowActive", spot_on ? 1 : 0);
+    if (spot_on)
         uniform_set_mat4(u, "spotShadowMatrix", (const float*)system->spot_light_space);
 
-    uniform_set_int(u, "numShadowLights", (int)system->active_count);
+    uniform_set_int(u, "numShadowLights", directional_on ? (int)system->active_count : 0);
+    if (!directional_on)
+        return; // nothing below is read at count 0
 
     float texel_size = 1.0f / (float)system->default_map_size;
     GLint loc = uniform_location(u, "shadowTexelSize");

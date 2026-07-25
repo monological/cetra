@@ -363,28 +363,12 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
             // Light data arrives via the clustered UBOs (uploaded once per
             // frame in render_current_scene) -- no per-node upload.
 
-            // Bind shadow maps (always bind texture to satisfy sampler2DArray)
-            if (scene && scene->shadow_system) {
-                // active_count counts DIRECTIONAL casters only, so gating the
-                // bind on it alone dropped the spot map in any scene without a
-                // directional light: the depth pass goes out of its way to
-                // render the spot regardless (shadow.c keeps itself alive on a
-                // spot with no directionals), and this then never uploaded
-                // spotShadowActive, so the map was written and never read.
-                if (scene->shadow_system->enabled &&
-                    (scene->shadow_system->active_count > 0 ||
-                     scene->shadow_system->spot_active)) {
-                    bind_shadow_maps_to_program(scene->shadow_system, program);
-                } else {
-                    // No active shadows, but still bind texture for sampler2DArray
-                    glActiveTexture(GL_TEXTURE0 + SHADOW_MAP_TEXTURE_UNIT);
-                    glBindTexture(GL_TEXTURE_2D_ARRAY, scene->shadow_system->shadow_map_array);
-                    uniform_set_int(u, "shadowMaps", SHADOW_MAP_TEXTURE_UNIT);
-                    uniform_set_int(u, "numShadowLights", 0);
-                }
-            } else {
+            // Unconditional: every per-light-type gate lives inside, so this
+            // file does not model which types can cast.
+            if (scene && scene->shadow_system)
+                bind_shadow_maps_to_program(scene->shadow_system, program);
+            else
                 uniform_set_int(u, "numShadowLights", 0);
-            }
 
             // Bind the material mask array (roughness/metallic/ao/opacity/
             // microsurface/anisotropy/subsurface packed into one layered
@@ -876,6 +860,36 @@ void render_current_scene(Engine* engine) {
     // Remember this frame's un-jittered view-projection for next frame's motion
     // vectors. Done here (not in the engine loop) so every render path keeps it.
     glm_mat4_copy(engine->view_proj, engine->prev_view_proj);
+}
+
+void scene_capture_begin(Engine* engine, Scene* scene, SceneCaptureState* saved) {
+    if (!engine || !scene || !saved)
+        return;
+
+    // The mask array must be packed before the first face: a capture taken with
+    // the scalar fallbacks still in place bakes them into the cubemap forever.
+    mask_array_ensure_built(scene, engine);
+
+    saved->cascade_count = scene->shadow_system ? scene->shadow_system->cascade_count : 1;
+    saved->render_time = engine->render_time;
+    saved->render_delta = engine->render_delta;
+    engine_set_render_time(engine, 0.0, 0.0);
+
+    // Guarded on `enabled`, which is the one place the two hand-written copies
+    // disagreed. Baking a map nothing will sample is pure cost: the bind path
+    // publishes numShadowLights 0 when shadows are off.
+    if (scene->shadow_system && scene->shadow_system->enabled) {
+        scene->shadow_system->cascade_count = 1;
+        render_shadow_depth_pass(engine, scene);
+    }
+}
+
+void scene_capture_end(Engine* engine, Scene* scene, const SceneCaptureState* saved) {
+    if (!engine || !scene || !saved)
+        return;
+    engine_set_render_time(engine, saved->render_time, saved->render_delta);
+    if (scene->shadow_system)
+        scene->shadow_system->cascade_count = saved->cascade_count;
 }
 
 void scene_capture_faces(Engine* engine, struct IBLResources* ibl, const vec3 position,

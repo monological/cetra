@@ -20,6 +20,32 @@
 void render_current_scene(Engine* engine);
 
 struct IBLResources;
+struct Scene;
+
+// Capture policy every caller of scene_capture_faces needs, in one place.
+// Previously each caller hand-wrote it; the two copies had already drifted
+// apart on whether a disabled shadow system still gets baked.
+//
+// Two clauses, both about making the six faces agree with each other:
+//   CASCADES fit the MAIN camera, so a cube face sampling them as layer 0 would
+//   drop its shadows -- forced to the camera-independent single map and baked
+//   once for the whole burst.
+//   THE CLOCK freezes, so wind-displaced geometry is caught at rest and the
+//   faces agree with the shadow map they sample rather than merely being close.
+//   The delta freezes with it: an instant advanced by nothing has zero motion
+//   vectors rather than describing a step it never took.
+//
+// What stays with the caller is what genuinely differs: how it handles the async
+// loader (block at load, or skip the frame and retry), and what it does with the
+// cubemap afterwards.
+typedef struct SceneCaptureState {
+    int cascade_count;
+    double render_time;
+    double render_delta;
+} SceneCaptureState;
+
+void scene_capture_begin(Engine* engine, struct Scene* scene, SceneCaptureState* saved);
+void scene_capture_end(Engine* engine, struct Scene* scene, const SceneCaptureState* saved);
 
 // Render the scene into the six faces of `dst_cubemap` from `position`, at
 // `face_size` per face.
