@@ -108,8 +108,20 @@ vec2 ltcPanel(vec3 N, vec3 V, vec3 P, mat3 Minv, vec3 center, vec3 dir, vec3 up,
     vec3 p2 = center + right + top;
     vec3 p3 = center - right + top;
 
-    // Orthonormal basis around N, aligned so V lies in the T1-N plane
-    vec3 T1 = normalize(V - N * dot(V, N));
+    // Orthonormal basis around N, aligned so V lies in the T1-N plane.
+    //
+    // V PARALLEL TO N leaves nothing to normalize. That is not a corner case --
+    // it is the centre of every flat surface facing the camera, the back wall of
+    // a room being the obvious one -- and normalize(0) is a NaN that propagates
+    // through all four corner vectors into the form-factor fetch, where it comes
+    // back as a surface lit by a panel that is behind it. Any tangent will do
+    // when it happens: the cosine lobe is rotationally symmetric about N, and at
+    // normal incidence so is the GGX lobe Minv maps onto it.
+    vec3 tangent = V - N * dot(V, N);
+    float tangentLen = length(tangent);
+    vec3 T1 = tangentLen > 1e-4
+                  ? tangent / tangentLen
+                  : normalize(cross(abs(N.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0), N));
     vec3 T2 = cross(N, T1);
     mat3 basis = transpose(mat3(T1, T2, N));
 
