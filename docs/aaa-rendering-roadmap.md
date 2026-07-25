@@ -111,8 +111,9 @@ uploaded via new `create_texture_2d_float()` helper in texture.c. In pbr_frag's 
 in-shader from `position ± right*size/2 ± up*size/2`; all other light types keep the exact existing
 expression stream (directional baselines stay byte-identical). New `Light.up`/`original_up` frame
 (rotated by node transform like `direction`; +3 uniform components/light, folds into PackedLight
-when clustered lands — one-line layout append). v1 limits: single-sided, no area shadows,
-clearcoat/sheen skip the area branch. Karis sphere-widening untouched (area lights bypass it).
+when clustered lands — one-line layout append). v1 limits: single-sided, ~~no area shadows~~
+(**A7 delivered them**, spec 9.8: one map down the panel normal, so the occlusion is hard where the
+source is soft), clearcoat/sheen skip the area branch. Karis sphere-widening untouched (area lights bypass it).
 New: `ltc_lut.h` (generated), `include/ltc.glsl`. CLI: `--area-light px,py,pz,dx,dy,dz,w,h,I[,rgb]`
 (the flag IS the test asset). **Owns foundations:** float-texture-from-C-array helper; `Light.up`
 orientation frame; embedded-table codegen pattern. **Depends on:** A1 preferred (edit final loop once).
@@ -171,6 +172,22 @@ keeps the 0-diff gate. Follow-up (not v1): bent normal as the DDGI/IBL diffuse s
 New files: none (edits only). CLI: `--bent-spec-occ`.
 **Owns foundations:** bent-normal availability in the AO chain (later: SSGI directionality, SSR
 occlusion). **Depends on:** nothing.
+
+### A7. Punctual shadow maps — shadows for all four light types — Effort M — **DONE (spec 9.8)**
+Directional lights had cascades; spot lights had exactly one map ("the flashlight", first spot in
+scene order); point and area had none, while `.cscn` accepted `cast_shadows` on them and silently
+dropped it. Unit 15's single `sampler2D` became one `sampler2DArray` carrying every perspective
+map — spot 1 layer, point 6 (cube faces as ordinary layers picked by dominant axis), area 1 down
+the panel normal, multiplied into the LTC term. The design was forced rather than chosen:
+`pbr_frag` samples all 16 texture units, and `samplerCubeArray` is GLSL 400 against a uniformly-330
+shader set, so a second sampler had nowhere to bind. The directional path is untouched, which is
+what kept `froxel_fog`, `contact_debug` and `aerial_fixture` at 0 px throughout.
+**The limiting factor is per-frame scene traversals, not VRAM** — every layer is re-rendered each
+frame, so a point light costs six. Pool of 8, demand-allocated, exhaustion logged by light name.
+**Residual:** a one-texel bright hairline where an object rests on a receiver, inherent to the
+depth pass front-face culling (the map stores the occluder's far surface, which coincides with the
+receiver at the contact). Back-face culling trades it for acne. Untried candidate: receiver-plane
+depth bias.
 
 ### A6. Moment shadow maps (Peters & Klein 2015) — Effort L — parked sketch
 Filterable 4-moment shadows: RGBA16F array beside the DEPTH24 CSM array, moment transform +
@@ -324,25 +341,26 @@ composite and `postfx_run_fog` became `postfx_run_atmosphere`.*
 | 4 | B1 Froxel volumetric fog | L | **DONE** (spec 9.5). Owns the 3D-texture + volume-draw machinery all volumetrics need; consumes A1's light list on day one. Shipped with one-layer-per-draw slices, not the layered-GS sketch — that matches the cascade/mask-array/cube-face idiom and needs no geometry shader. |
 | 5 | B9 Aerial perspective | ~~S~~ **M** | **DONE** (spec 9.6). The "S once B1's machinery exists" estimate answered the wrong question: machinery cost was never the blocker. 4.7 deferred this user-approved because it is invisible at prop scales, and B1 did not change that — so it shipped with a world-scale fixture and the units→km knob 4.7 named as the missing piece. Effort M. |
 | 6 | A4 DDGI probe volume | XL | **DONE** (spec 9.7). The sequencing paid off exactly as argued — captures run the full forward shader, so probes see the clustered lights and LTC panels for free. The cost model did not: a fixed per-frame budget would have meant 12 scene renders and 12 cluster-grid rebuilds every frame forever, so it converges and then idles at literally zero. Two shadow faults and one area-light defect surfaced en route, none of them A4's; the leak gate is the one item left open. |
-| 7 | B2 Volumetric clouds | XL | Biggest sky payoff; needs B1's 3D helpers; landing after A4 means probe captures include clouds automatically. |
+| 7 | A7 Punctual shadow maps | M | **DONE** (spec 9.8). Unbooked when it was written — the roadmap had no entry for point or area shadows, only A2's line deferring them. Scheduled here because 9.7 had just moved every per-light-type shadow gate into one binder and left the extension point empty, and because the two shadow faults 9.7 surfaced shared one root cause: a single condition trying to model four light types. |
+| 8 | B2 Volumetric clouds | XL | Biggest sky payoff; needs B1's 3D helpers; landing after A4 means probe captures include clouds automatically. |
 
-(6↔7 are swappable — no hard dependency either way.)
+(6↔8 are swappable — no hard dependency either way.)
 
 **Tier 2 — image quality & performance:**
 | # | Item | Effort | Why here |
 |---|------|--------|----------|
-| 8 | A5 Bent-normal spec-occ | M | Near-free on the existing GTAO; hands DDGI a better sampling direction as a follow-up toggle. |
-| 9 | B5 Bokeh DoF | M | Self-contained palate cleanser between the big lifts. |
-| 10 | B4 TAAU | L | After B1's composite settles so the post-res migration happens once; funds Tier 1 at 4K. |
-| 11 | B3 Pre-integrated skin | S | Character tier begins; S effort, zero infra. |
+| 9 | A5 Bent-normal spec-occ | M | Near-free on the existing GTAO; hands DDGI a better sampling direction as a follow-up toggle. |
+| 10 | B5 Bokeh DoF | M | Self-contained palate cleanser between the big lifts. |
+| 11 | B4 TAAU | L | After B1's composite settles so the post-res migration happens once; funds Tier 1 at 4K. |
+| 12 | B3 Pre-integrated skin | S | Character tier begins; S effort, zero infra. |
 
 **Tier 3 — polish & late-tier (parked until Tiers 1-2 land):**
 | # | Item | Effort |
 |---|------|--------|
-| 12 | B6 Moment-based OIT | L |
-| 13 | B7 Lens flare / finishing | S/M |
-| 14 | A6 Moment shadow maps | L |
-| 15 | B8 Hair | XL |
+| 13 | B6 Moment-based OIT | L |
+| 14 | B7 Lens flare / finishing | S/M |
+| 15 | A6 Moment shadow maps | L |
+| 16 | B8 Hair | XL |
 
 ## Foundations ownership (just-in-time)
 
