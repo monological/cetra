@@ -430,11 +430,13 @@ Effort key: **S** ≈ days · **M** ≈ 1–2 weeks · **L** ≈ 3+ weeks.
   disc is ~3 texels at 256², which aliases the prefilter importance sampler into fireflies,
   and its direct energy already ships as the key light (baking it in would double-count). Cost:
   IBL mirror reflections show no disc — the key light's specular highlight stands in for it.
-- **Deferred — aerial perspective (user-approved).** Invisible at studio/prop scene scales
-  (<0.1 % extinction over ~100 m), and `--fog` already provides sun-driven depth haze. The
-  follow-up shape when a world-scale scene needs it: a units→km app knob plus a
-  transmittance-LUT term in `fog_frag` (the LUTs and sun coupling already exist; only the
-  depth-to-km mapping and the fullscreen apply are missing).
+- **~~Deferred~~ — aerial perspective. SHIPPED in spec 9.6.** The deferral reasoning held for two
+  more specs and was the right call: invisible at studio/prop scene scales (<0.1 % extinction over
+  ~100 m), with `--fog` already providing sun-driven depth haze. What unblocked it was not B1's 3D
+  machinery — that was never the constraint — but building the world-scale scene this note was
+  waiting for (`assets/aerial_fixture.gltf`, ridges from 20 to 95 km). The predicted shape was
+  right: a units→km knob (`world_units_per_km`, `--world-scale`) plus a transmittance-LUT term,
+  now a 32³ volume folded into the fog composite rather than a term in the deleted `fog_frag`.
 - **Note.** The engine's frame output is not frame-invariant for a static scene even with
   `--no-auto-exposure` (a per-frame temporal term, present on the `-e` path too); byte gates
   therefore compare at a FIXED frame count (deterministic there), and the M4 re-bake
@@ -785,7 +787,7 @@ Three tiers, cheapest first:
 | 4.4 | Reflection probes | 2 | M | IBL capture | ✅ **done** — robust off-screen reflections |
 | 4.5 | Volumetric fog | 2 | M/L | shadows (+TAA) | ✅ **done** — atmosphere, god rays |
 | 4.6 | Cascaded shadow maps | 2 | M | — | ✅ **done** — large-scene shadow resolution |
-| 4.7 | PB sky/atmosphere | 2 | M | dir light | ✅ **done** — dynamic sun; aerial persp. deferred |
+| 4.7 | PB sky/atmosphere | 2 | M | dir light | ✅ **done** — dynamic sun; aerial persp. shipped in 9.6 |
 | 4.8 | Multi-scatter GGX energy comp | 3 | S | — | ✅ **done** — correct rough-metal brightness |
 | 4.9 | Screen-space refraction | 3 | M | opaque color tex | ✅ **done** — real glass/liquids |
 | 4.10 | Clearcoat | 3 | S/M | — | ✅ **done** — car paint / lacquer / carbon-fibre + sampler-array foundation |

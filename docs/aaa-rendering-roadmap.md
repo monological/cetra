@@ -52,7 +52,8 @@ Ground truth that shapes every design below (library at `cetra/src/`, shaders at
   `probe.c:50-263`, camera save/substitute + 6 faces via `ibl_capture_views`) — the DDGI-reusable
   machinery. No octahedral encoding exists yet.
 - **Sky**: Hillaire LUTs (transmittance 256×64 once, multiscatter 32×32 once, sky-view 192×108 on
-  sun move); `sky_bake()` drives env cube → IBL → key light together. No aerial perspective.
+  sun move); `sky_bake()` drives env cube → IBL → key light together. Aerial perspective added by
+  9.6 as a 32³ volume — the one sky target rebuilt per frame, since it is the camera's frustum.
 - **Fog**: screen-space half-res raymarch with CSM god rays + volumetric spot; HG phase; all logic
   portable to froxels. Light data arrives via `shadow_publish_to_postfx`.
 - **TAA**: 8-frame Halton on `draw_projection[2][0/1]`; YCoCg 3×3 clamp + Catmull-Rom history;
@@ -287,9 +288,16 @@ scene pixels only as one extra tap in B1's composite. Also switches fog sun/ambi
 the old screen-space fog pass. Split from B1 because it is a different subsystem (sky/atmosphere, not
 postfx lighting), carries none of the fog item's risk (purely additive, no legacy pass to retire, no
 temporal reprojection), and is S once the 3D machinery exists.
-New: `aerial_lut_frag.glsl`. CLI: `--aerial[=0]`.
-**Owns foundations:** none (reuses B1's `create_texture_3d` + layered volume draw).
-**Depends on:** B1's `create_texture_3d` + volume-draw machinery (hard).
+New: `aerial_lut_frag.glsl`. CLI: `--no-aerial`, `--world-scale <units-per-km>`.
+**Owns foundations:** `bake_lut_3d` (sky-side layered volume draw) and the units→km world scale.
+**Depends on:** B1's `create_texture_3d_float` and `include/froxel.glsl` (hard).
+
+*As built (9.6): B1's `draw_volume_slices` turned out NOT to be reusable — it hardcodes the fog
+FBO, the fog volume's dimensions and the `sliceIndex` uniform, and reports failure by clearing
+`fog_enabled`. `create_texture_3d_float` and the froxel depth mapping were reused verbatim. Nor was
+it "one extra tap": the composite's single blend carries one (inscatter, transmittance) pair and the
+fog pass early-returned with fog off, so the two media are combined analytically inside one
+composite and `postfx_run_fog` became `postfx_run_atmosphere`.*
 
 ## Sequencing — tiers & rationale
 
@@ -300,7 +308,7 @@ New: `aerial_lut_frag.glsl`. CLI: `--aerial[=0]`.
 | 2 | A2 LTC area lights | M | **DONE** (spec 9.2). Signature environment feature; contained M on the now-stable loop; must precede DDGI so probes capture area-lit rooms. |
 | 3 | A3 Contact shadows | S | **DONE** (spec 9.3). Post-only depth march along the key light; no shadow.c changes (postfx already had the light dir + view matrix). Default off. |
 | 4 | B1 Froxel volumetric fog | L | **DONE** (spec 9.5). Owns the 3D-texture + volume-draw machinery all volumetrics need; consumes A1's light list on day one. Shipped with one-layer-per-draw slices, not the layered-GS sketch — that matches the cascade/mask-array/cube-face idiom and needs no geometry shader. |
-| 5 | B9 Aerial perspective | S | Cheap once B1's 3D machinery exists; completes the outdoor atmosphere and lands the sky-published fog colours B1 deferred. |
+| 5 | B9 Aerial perspective | ~~S~~ **M** | **DONE** (spec 9.6). The "S once B1's machinery exists" estimate answered the wrong question: machinery cost was never the blocker. 4.7 deferred this user-approved because it is invisible at prop scales, and B1 did not change that — so it shipped with a world-scale fixture and the units→km knob 4.7 named as the missing piece. Effort M. |
 | 6 | A4 DDGI probe volume | XL | The "why does UE5 look like that" answer; after A1+A2 so rasterized captures see clustered lights and LTC panels. |
 | 7 | B2 Volumetric clouds | XL | Biggest sky payoff; needs B1's 3D helpers; landing after A4 means probe captures include clouds automatically. |
 
