@@ -134,7 +134,7 @@ int reflection_probe_capture(ReflectionProbe* probe, struct Engine* engine, Scen
     // Supersampled 2x: the capture has no MSAA, and single-sample grazing-angle
     // aliasing at its horizon bakes in as stripe moire that mirror reflections
     // then magnify into banded streaks.
-    scene_capture_faces(engine, ibl, probe->position, probe->cubemap, PROBE_CUBEMAP_SIZE, 2,
+    scene_capture_faces(engine, ibl, probe->position, probe->cubemap, 0, PROBE_CUBEMAP_SIZE, 2,
                         near_clip, far_clip);
 
     glBindTexture(GL_TEXTURE_CUBE_MAP, probe->cubemap);

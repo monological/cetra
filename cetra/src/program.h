@@ -99,6 +99,8 @@ ShaderProgram* create_ssr_atrous_program();
 ShaderProgram* create_froxel_inject_program();
 ShaderProgram* create_froxel_integrate_program();
 ShaderProgram* create_froxel_composite_program();
+ShaderProgram* create_gi_project_program();
+ShaderProgram* create_gi_border_program();
 ShaderProgram* create_lum_measure_program();
 ShaderProgram* create_lum_adapt_program();
 ShaderProgram* create_dof_coc_program();

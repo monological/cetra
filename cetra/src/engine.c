@@ -20,6 +20,7 @@
 #include "intersect.h"
 #include "shadow.h"
 #include "sky.h"
+#include "gi_volume.h"
 #include "mask_array.h"
 #include "texture.h"
 #include "import.h" // resolve_height_maps (POM height convention)
@@ -1139,6 +1140,19 @@ static int _create_default_shaders_for_engine(Engine* engine) {
         add_shader_program_to_engine(engine, mask_copy_program);
     }
 
+    // GI probe volume. These live on the engine rather than on PostFX -- despite
+    // being fullscreen passes -- because the volume is a Scene citizen and the
+    // atlas is consumed by the scene pass, not by post.
+    ShaderProgram* gi_project_program = create_gi_project_program();
+    if (gi_project_program) {
+        add_shader_program_to_engine(engine, gi_project_program);
+    }
+
+    ShaderProgram* gi_border_program = create_gi_border_program();
+    if (gi_border_program) {
+        add_shader_program_to_engine(engine, gi_border_program);
+    }
+
     return 0;
 }
 
@@ -1811,6 +1825,9 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode) {
     if (fx_scene && fx_scene->sky && fx_scene->sky->debug_luts) {
         sky_debug_blit_luts(fx_scene->sky, engine->fb_width, engine->fb_height);
     }
+    if (fx_scene && fx_scene->gi_volume && fx_scene->gi_volume->debug_atlas) {
+        gi_volume_debug_blit(fx_scene->gi_volume, engine, engine->fb_width, engine->fb_height);
+    }
 
     // GUI last, after tone mapping. render_engine_gui self-gates on
     // gui_frame_active, so it no-ops when no panel/overlay is enabled.
@@ -2155,8 +2172,17 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EngineRenderFunc render
         // ALBEDO), used by the present pass after the mode is restored
         RenderMode frame_mode = engine->current_render_mode;
 
-        // Shadow depth pass (before main render)
         Scene* shadow_scene = get_current_scene(engine);
+
+        // GI probe captures, while the volume is dirty. Deliberately BEFORE the
+        // shadow pass: a capture needs the camera-independent single-cascade map
+        // and bakes its own, and the pass below then restores the camera-fit
+        // cascades by simply overwriting them. No-op on a converged volume.
+        if (shadow_scene && shadow_scene->gi_volume) {
+            gi_volume_update(shadow_scene->gi_volume, engine, shadow_scene);
+        }
+
+        // Shadow depth pass (before main render)
         if (shadow_scene && shadow_scene->shadow_system && shadow_scene->shadow_system->enabled) {
             render_shadow_depth_pass(engine, shadow_scene);
         }

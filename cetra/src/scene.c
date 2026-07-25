@@ -11,6 +11,7 @@
 #include "particle_system.h"
 #include "sky.h"
 #include "wind.h"
+#include "gi_volume.h"
 #include "mask_array.h"
 #include "program.h"
 #include "shader.h"
@@ -70,6 +71,7 @@ Scene* create_scene() {
     scene->probe = NULL;
     scene->sky = NULL;
     scene->wind = NULL;
+    scene->gi_volume = NULL;
     scene->render_skybox = false;
     scene->skybox_brightness = 1.0f;
     scene->skybox_ground_projection = false;
@@ -181,6 +183,12 @@ void free_scene(Scene* scene) {
     if (scene->wind) {
         free_wind(scene->wind);
         scene->wind = NULL;
+    }
+
+    // Free the GI probe volume
+    if (scene->gi_volume) {
+        free_gi_volume(scene->gi_volume);
+        scene->gi_volume = NULL;
     }
 
     // Free the material mask texture array

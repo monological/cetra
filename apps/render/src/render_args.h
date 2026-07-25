@@ -48,6 +48,10 @@ typedef struct {
     float probe_pos[3];               // Probe capture position override
     int probe_scene;                  // Capture the scene meshes too (interiors)
     int probe_debug;                  // Show the raw capture as the background
+    int gi_volume;                    // Enable the DDGI irradiance probe volume
+    int gi_probes[3];                 // Probe grid counts (0,0,0 = default)
+    int gi_rate;                      // Probes captured per frame while dirty (0 = default)
+    int gi_debug;                     // Blit the probe atlas into the frame corner
     int sky;                          // Procedural physically-based sky instead of -e
     int sky_debug;                    // Blit the sky LUTs into the frame corner
     float sun_elevation;              // Sky sun elevation in degrees (-999 = default)

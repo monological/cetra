@@ -22,7 +22,15 @@ void render_current_scene(Engine* engine);
 struct IBLResources;
 
 // Render the scene into the six faces of `dst_cubemap` from `position`, at
-// `face_size` per face, supersampled `ss_factor`x and box-downsampled on the blit.
+// `face_size` per face.
+//
+// `dst_depth_cubemap` 0 (reflection probe): render supersampled `ss_factor`x into
+// scratch and box-downsample on the blit, because that capture has no MSAA and
+// grazing-angle aliasing bakes into mirror reflections as banded streaks.
+// Non-zero (GI probe): render straight into both cubemaps' faces at native size,
+// which is the only way to keep the depth, and where `ss_factor` is ignored --
+// a GI face is 16^2 and its consumers are a cosine convolution and a distance
+// moment, neither of which an extra sample would meaningfully improve.
 //
 // Renders the ENGINE'S CURRENT SCENE, deliberately with no scene parameter:
 // render_current_scene resolves the scene itself through get_current_scene, so a
@@ -31,14 +39,16 @@ struct IBLResources;
 // Saves and restores every piece of engine and camera state it substitutes, so a
 // capture leaves the next real frame bit-identical, and raises engine->capturing
 // for the duration so passes that reach outside the bound target sit out.
-// Borrows ibl->capture_fbo / capture_rbo as scratch and resizes the latter.
+// Borrows ibl->capture_fbo / capture_rbo as scratch and resizes the latter --
+// so `ibl` is required by the supersampled path and unused by the direct one,
+// which is what lets a GI capture run in a scene with no HDR environment.
 //
 // The CALLER owns capture policy that is not about substituting a camera: shadow
 // cascade fitting, freezing the animation clock, draining the async loader,
 // building the mask array, and whatever it does with the cubemap afterwards.
 void scene_capture_faces(Engine* engine, struct IBLResources* ibl, const vec3 position,
-                         GLuint dst_cubemap, int face_size, int ss_factor, float near_clip,
-                         float far_clip);
+                         GLuint dst_cubemap, GLuint dst_depth_cubemap, int face_size, int ss_factor,
+                         float near_clip, float far_clip);
 
 // Animation state for skinned mesh rendering
 // Set before rendering to enable bone matrix upload for skinned meshes

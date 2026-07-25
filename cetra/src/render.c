@@ -851,12 +851,20 @@ void render_current_scene(Engine* engine) {
 }
 
 void scene_capture_faces(Engine* engine, struct IBLResources* ibl, const vec3 position,
-                         GLuint dst_cubemap, int face_size, int ss_factor, float near_clip,
-                         float far_clip) {
-    if (!engine || !engine->camera || !ibl || !dst_cubemap || face_size <= 0)
+                         GLuint dst_cubemap, GLuint dst_depth_cubemap, int face_size,
+                         int ss_factor, float near_clip, float far_clip) {
+    if (!engine || !engine->camera || !dst_cubemap || face_size <= 0)
         return;
-    if (ss_factor < 1)
+    // Keeping the depth means rendering straight into the destination faces:
+    // a blit would have to carry depth between two differently-sized targets.
+    const bool keep_depth = dst_depth_cubemap != 0;
+    if (ss_factor < 1 || keep_depth)
         ss_factor = 1;
+    // `ibl` is only the scratch target the supersampled path renders into before
+    // downsampling. The direct path needs none, which is what lets a GI probe
+    // volume capture in a scene with no HDR environment at all.
+    if (!keep_depth && !ibl)
+        return;
 
     // Save everything the capture substitutes
     mat4 saved_view, saved_projection, saved_view_proj, saved_prev_view_proj;
@@ -919,17 +927,19 @@ void scene_capture_faces(Engine* engine, struct IBLResources* ibl, const vec3 po
     // then magnify into banded streaks.
     const int ss_size = ss_factor * face_size;
     GLuint ss_tex = 0, face_fbo = 0;
-    glGenTextures(1, &ss_tex);
-    glBindTexture(GL_TEXTURE_2D, ss_tex);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F, ss_size, ss_size, 0, GL_RGB, GL_FLOAT, NULL);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glGenFramebuffers(1, &face_fbo);
+    if (!keep_depth) {
+        glGenTextures(1, &ss_tex);
+        glBindTexture(GL_TEXTURE_2D, ss_tex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F, ss_size, ss_size, 0, GL_RGB, GL_FLOAT, NULL);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
-    glBindFramebuffer(GL_FRAMEBUFFER, ibl->capture_fbo);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, ss_tex, 0);
-    glBindRenderbuffer(GL_RENDERBUFFER, ibl->capture_rbo);
-    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, ss_size, ss_size);
+        glBindFramebuffer(GL_FRAMEBUFFER, ibl->capture_fbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, ss_tex, 0);
+        glBindRenderbuffer(GL_RENDERBUFFER, ibl->capture_rbo);
+        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, ss_size, ss_size);
+    }
 
     mat4 views[6];
     ibl_capture_views((float*)position, views);
@@ -941,12 +951,32 @@ void scene_capture_faces(Engine* engine, struct IBLResources* ibl, const vec3 po
     glm_perspective(glm_rad(90.0f), 1.0f, near_clip, far_clip, engine->projection_matrix);
 
     for (int i = 0; i < 6; ++i) {
-        glBindFramebuffer(GL_FRAMEBUFFER, ibl->capture_fbo);
-        glViewport(0, 0, ss_size, ss_size);
+        if (keep_depth) {
+            glBindFramebuffer(GL_FRAMEBUFFER, face_fbo);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                                   GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, dst_cubemap, 0);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                                   GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, dst_depth_cubemap, 0);
+            // Checked on the first face only, and here rather than at creation:
+            // the FBO carries no attachment until one is bound, so a driver that
+            // rejects a depth-textured cube face would otherwise fail silently
+            // and leave every probe's visibility moments reading the clear value.
+            if (i == 0 && glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+                log_error("Capture FBO incomplete with a depth cubemap; skipping capture");
+                break;
+            }
+            glViewport(0, 0, face_size, face_size);
+        } else {
+            glBindFramebuffer(GL_FRAMEBUFFER, ibl->capture_fbo);
+            glViewport(0, 0, ss_size, ss_size);
+        }
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         glm_mat4_copy(views[i], engine->view_matrix);
         render_current_scene(engine);
+
+        if (keep_depth)
+            continue; // already in the destination faces
 
         glBindFramebuffer(GL_READ_FRAMEBUFFER, ibl->capture_fbo);
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, face_fbo);
@@ -957,7 +987,8 @@ void scene_capture_faces(Engine* engine, struct IBLResources* ibl, const vec3 po
     }
 
     glDeleteFramebuffers(1, &face_fbo);
-    glDeleteTextures(1, &ss_tex);
+    if (ss_tex)
+        glDeleteTextures(1, &ss_tex);
 
     // Restore
     glm_mat4_copy(saved_view, engine->view_matrix);

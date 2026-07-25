@@ -23,6 +23,7 @@
 #include "cetra/springbone.h"
 #include "cetra/ibl.h"
 #include "cetra/sky.h"
+#include "cetra/gi_volume.h"
 #include "cetra/app.h"
 
 #include "cetra/shader_strings.h"
@@ -111,6 +112,14 @@ static void print_usage(const char* prog) {
             "      --probe-scene      Capture the scene meshes into the probe (interiors)\n");
     fprintf(stderr,
             "      --probe-debug      Show the raw capture as the background (implies --probe)\n");
+    fprintf(stderr, "      --gi-volume        DDGI irradiance probe volume (indirect diffuse "
+                    "bounce)\n");
+    fprintf(stderr,
+            "      --gi-probes x,y,z  Probe grid counts (implies --gi-volume; default 8,4,8)\n");
+    fprintf(stderr,
+            "      --gi-rate <n>      Probes captured per frame while dirty (default 2)\n");
+    fprintf(stderr,
+            "      --gi-debug         Blit the probe atlas into the frame corner\n");
     fprintf(stderr, "      --sky              Procedural physically-based sky (instead of -e)\n");
     fprintf(stderr, "      --sky-debug        Blit the sky LUTs into the frame corner\n");
     fprintf(stderr, "      --sun-elevation <d> Sky sun elevation in degrees (implies --sky)\n");
@@ -471,6 +480,29 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
         } else if (strcmp(argv[i], "--probe-debug") == 0) {
             args->probe = 1;
             args->probe_debug = 1;
+        } else if (strcmp(argv[i], "--gi-volume") == 0) {
+            args->gi_volume = 1;
+        } else if (strcmp(argv[i], "--gi-probes") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            if (sscanf(argv[i], "%d,%d,%d", &args->gi_probes[0], &args->gi_probes[1],
+                       &args->gi_probes[2]) != 3) {
+                fprintf(stderr, "Error: --gi-probes expects x,y,z\n");
+                return -1;
+            }
+            args->gi_volume = 1;
+        } else if (strcmp(argv[i], "--gi-rate") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->gi_rate = atoi(argv[i]);
+            args->gi_volume = 1;
+        } else if (strcmp(argv[i], "--gi-debug") == 0) {
+            args->gi_volume = 1;
+            args->gi_debug = 1;
         } else if (strcmp(argv[i], "--sky") == 0) {
             args->sky = 1;
         } else if (strcmp(argv[i], "--sky-debug") == 0) {
@@ -2284,6 +2316,27 @@ int main(int argc, char** argv) {
         }
     } else if (args.probe) {
         fprintf(stderr, "Warning: --probe requires an HDR environment (-e); skipping capture\n");
+    }
+
+    // The GI probe volume. Only allocated here -- the capture sweep runs inside
+    // the render loop, where the scene has its final transforms and the async
+    // texture loader has drained.
+    if (args.gi_volume) {
+        int nx = args.gi_probes[0] > 0 ? args.gi_probes[0] : 8;
+        int ny = args.gi_probes[1] > 0 ? args.gi_probes[1] : 4;
+        int nz = args.gi_probes[2] > 0 ? args.gi_probes[2] : 8;
+        GIVolume* gi = create_gi_volume(nx, ny, nz);
+        if (gi) {
+            if (args.gi_rate > 0)
+                gi->rate = args.gi_rate;
+            gi->debug_atlas = args.gi_debug != 0;
+            // Bounds AFTER the recenter above, which the probe block may have
+            // applied: the pre-recenter bounds no longer say where the scene is.
+            vec3 gi_min, gi_max;
+            compute_scene_bounds(scene, gi_min, gi_max);
+            gi_volume_fit(gi, gi_min, gi_max);
+            scene->gi_volume = gi;
+        }
     }
 
     // Interactive default: TAA-only (drop to 1x MSAA and let temporal AA carry

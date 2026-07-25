@@ -123,9 +123,10 @@ typedef struct Scene {
 
     // Image-Based Lighting
     IBLResources* ibl;
-    ReflectionProbe* probe;    // local reflection probe (optional)
-    struct SkyAtmosphere* sky; // procedural sky feeding ibl (optional)
-    struct Wind* wind;         // dominant directional wind (optional; owned)
+    ReflectionProbe* probe;     // local reflection probe (optional)
+    struct SkyAtmosphere* sky;  // procedural sky feeding ibl (optional)
+    struct Wind* wind;          // dominant directional wind (optional; owned)
+    struct GIVolume* gi_volume; // indirect-diffuse probe grid (optional; owned)
 
     // Scalar material masks packed into one GL_TEXTURE_2D_ARRAY (built lazily
     // once the source textures have loaded; see mask_array.h). dirty triggers a
