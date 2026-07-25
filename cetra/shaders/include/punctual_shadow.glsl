@@ -59,10 +59,17 @@ float punctualShadow(int layer, vec3 worldPos, float NdotL) {
     if (pc.z > 1.0 || pc.x < 0.0 || pc.x > 1.0 || pc.y < 0.0 || pc.y > 1.0)
         return 1.0;
 
+    // Slope-scaled by tan(angle of incidence), not by (1 - NdotL). The two agree
+    // while a surface faces the light and diverge exactly where it matters: a
+    // face seen edge-on spans many depth units across one texel, and (1 - NdotL)
+    // saturates at 1 there while the tangent goes where the geometry does. That
+    // shows up the moment a light sits directly above a room, which puts every
+    // wall near edge-on -- an area panel's usual position.
+    float slope = clamp(tan(acos(clamp(NdotL, 0.0, 1.0))), 0.0, 12.0);
+    float bias = clamp(0.0006 * slope, 0.0004, 0.008);
     // 3x3 PCF, which the directional cascades have always had and this never
     // did: a single tap quantizes the edge to the texel grid, and reads as a
     // staircase on any silhouette not aligned to it.
-    float bias = max(0.0015 * (1.0 - NdotL), 0.0004);
     vec2 texel = vec2(1.0 / float(textureSize(punctualShadowMaps, 0).x));
     float sum = 0.0;
     for (int y = -1; y <= 1; ++y) {

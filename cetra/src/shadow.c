@@ -483,53 +483,36 @@ static const Light* scene_first_spot_light(const Scene* scene) {
     return NULL;
 }
 
-// Perspective light-space matrix for a spot: eye at the spot looking along its
-// cone axis, FOV from the outer cutoff (+ margin so the cone edge isn't clipped).
-static void compute_spot_light_space_matrix(const Light* spot, float near_plane, float far_plane,
-                                            mat4 dest) {
+// One perspective light-space matrix: eye at `pos`, looking down `dir_in`. All
+// three punctual types reduce to this; only the fov and the axis differ.
+static void compute_perspective_light_space(const vec3 pos, const vec3 dir_in, float fov,
+                                            float near_plane, float far_plane, mat4 dest) {
     vec3 dir;
-    glm_vec3_normalize_to((float*)spot->direction, dir);
-    float fov = 2.0f * acosf(spot->outerCutOff) * 1.15f; // outerCutOff = cos(outer half-angle)
-    if (fov > glm_rad(175.0f))
-        fov = glm_rad(175.0f);
+    glm_vec3_normalize_to((float*)dir_in, dir);
     vec3 up = GLM_VEC3_ZERO_INIT;
     light_space_up(dir, up);
     vec3 target;
-    glm_vec3_add((float*)spot->global_position, dir, target);
+    glm_vec3_add((float*)pos, dir, target);
     mat4 view, proj;
-    glm_lookat((float*)spot->global_position, target, up, view);
+    glm_lookat((float*)pos, target, up, view);
     glm_perspective(fov, 1.0f, near_plane, far_plane, proj);
     glm_mat4_mul(proj, view, dest);
 }
 
-// Perspective light-space matrix for one face of a point light's cube, in the
-// +X -X +Y -Y +Z -Z order include/punctual_shadow.glsl selects by dominant
-// axis. That order is the whole contract between the two files.
-//
-// Exactly 90 degrees, which tiles the sphere with no overlap. A wider fov was
-// tried, on the theory that a PCF tap at a face boundary falls past the edge
-// and clamps to the white border -- reading "lit" because a 2D array has no
-// neighbouring face to sample -- and would draw a hairline along every
-// junction. Measured against it from straight above, where all four floor
-// junctions cross cast shadow: the two differ by 1737 of 2.56M pixels, all of
-// it silhouette quantization from the resolution change, and at 1:1 the
-// junctions are indistinguishable. The seam is real in principle and below the
-// noise floor at this map size, so the overlap is not carried.
-static void compute_point_face_light_space_matrix(const Light* light, int face, float near_plane,
-                                                  float far_plane, mat4 dest) {
-    static const vec3 face_dir[6] = {{1.0f, 0.0f, 0.0f},  {-1.0f, 0.0f, 0.0f},
-                                     {0.0f, 1.0f, 0.0f},  {0.0f, -1.0f, 0.0f},
-                                     {0.0f, 0.0f, 1.0f},  {0.0f, 0.0f, -1.0f}};
+// A point light's six faces, in the +X -X +Y -Y +Z -Z order that
+// include/punctual_shadow.glsl selects by dominant axis. That order is the whole
+// contract between the two files; everything else about a face is in its matrix.
+static const vec3 PUNCTUAL_CUBE_DIR[6] = {{1.0f, 0.0f, 0.0f},  {-1.0f, 0.0f, 0.0f},
+                                          {0.0f, 1.0f, 0.0f},  {0.0f, -1.0f, 0.0f},
+                                          {0.0f, 0.0f, 1.0f},  {0.0f, 0.0f, -1.0f}};
 
-    vec3 up = GLM_VEC3_ZERO_INIT;
-    light_space_up(face_dir[face], up);
-    vec3 target;
-    glm_vec3_add((float*)light->global_position, (float*)face_dir[face], target);
-    mat4 view, proj;
-    glm_lookat((float*)light->global_position, target, up, view);
-    glm_perspective(glm_rad(90.0f), 1.0f, near_plane, far_plane, proj);
-    glm_mat4_mul(proj, view, dest);
-}
+// A panel emits into a full hemisphere and one perspective map cannot cover
+// 180 degrees, so an area light's shadow is an approximation with a chosen
+// reach: wide enough that a receiver across a room is inside it, narrow enough
+// that the texels are not spread to uselessness. Outside the cone the white
+// border reads as lit, which is the safe direction to be wrong -- a missing
+// shadow rather than a spurious one.
+#define AREA_SHADOW_FOV glm_rad(120.0f)
 
 // Layers one light needs: a point light's cube is six 2D faces, everything
 // else is a single perspective map.
@@ -539,20 +522,47 @@ static int punctual_layers_for(const Light* light) {
 
 // Fill a light's layers with its light-space matrices, in the layer order its
 // consumer selects by.
+//
+// All three share the system's own scene-scaled near/far, not a fixed range. A
+// hardcoded near of 1.0 puts the whole of any room-sized scene INSIDE the near
+// plane -- nothing reaches the map and the light silently stops casting, which
+// is not a subtle degradation but a total one. Apps already scale
+// near_plane/far_plane off the scene radius for the cascades; a punctual light
+// in the same scene has no reason to disagree with them.
 static void compute_punctual_matrices(const Light* light, const ShadowSystem* ss, mat4* dest) {
-    if (light->type == LIGHT_POINT) {
+    const float near_p = ss->near_plane, far_p = ss->far_plane;
+
+    switch (light->type) {
+    case LIGHT_POINT:
         for (int f = 0; f < 6; f++) {
-            compute_point_face_light_space_matrix(light, f, ss->near_plane, ss->far_plane, dest[f]);
+            compute_perspective_light_space(light->global_position, PUNCTUAL_CUBE_DIR[f],
+                                            glm_rad(90.0f), near_p, far_p, dest[f]);
         }
-        return;
+        break;
+    case LIGHT_AREA: {
+        // Down the panel normal. A degenerate authored direction falls back to
+        // -Y, matching what light_cluster.c builds the panel's own frame from,
+        // so the shadow and the lit rectangle can never disagree about which
+        // way the panel faces.
+        vec3 dir;
+        glm_vec3_copy((float*)light->direction, dir);
+        if (glm_vec3_norm(dir) < 1e-6f)
+            glm_vec3_copy((vec3){0.0f, -1.0f, 0.0f}, dir);
+        compute_perspective_light_space(light->global_position, dir, AREA_SHADOW_FOV, near_p, far_p,
+                                        dest[0]);
+        break;
     }
-    // The system's own scene-scaled range, not a fixed one. A hardcoded near of
-    // 1.0 puts the whole of any room-sized scene INSIDE the near plane --
-    // nothing reaches the map and the light silently stops casting, which is
-    // not a subtle degradation but a total one. Apps already scale
-    // near_plane/far_plane off the scene radius for the cascades; a punctual
-    // light in the same scene has no reason to disagree with them.
-    compute_spot_light_space_matrix(light, ss->near_plane, ss->far_plane, dest[0]);
+    default: {
+        // A spot's fov is its own cone, plus a margin so the outer edge is not
+        // clipped by the frustum it is supposed to fill.
+        float fov = 2.0f * acosf(light->outerCutOff) * 1.15f; // outerCutOff = cos(half-angle)
+        if (fov > glm_rad(175.0f))
+            fov = glm_rad(175.0f);
+        compute_perspective_light_space(light->global_position, light->direction, fov, near_p, far_p,
+                                        dest[0]);
+        break;
+    }
+    }
 }
 
 void render_shadow_depth_pass(Engine* engine, Scene* scene) {
@@ -593,7 +603,8 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
         light->shadow_layer = -1;
         if (!light->cast_shadows)
             continue;
-        if (light->type != LIGHT_SPOT && light->type != LIGHT_POINT)
+        if (light->type != LIGHT_SPOT && light->type != LIGHT_POINT &&
+            light->type != LIGHT_AREA)
             continue;
         // A point light takes its six faces or none: five faces is a light with
         // holes in it, which is worse than one that does not cast.

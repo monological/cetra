@@ -1048,8 +1048,21 @@ void main() {
                 vec3 areaDiff =
                     (1.0 - metallicMap) * (1.0 - transmissionEff) * albedoMap * ff.x;
 
+                // One map down the panel normal, multiplied into the whole
+                // panel term. The integral it scales is over the rectangle, so
+                // this is a hard binary occlusion of a soft source: the panel is
+                // either visible from the fragment or it is not, with no partial
+                // occlusion of one edge. Aimed at the panel centre, which is the
+                // direction the single map was rendered along.
+                int aLayer = int(clusterLights[li].spotShadowSize.y);
+                float aShadow = 1.0;
+                if (aLayer >= 0 && alphaMasked == 0) {
+                    vec3 aL = normalize(lightPos - WorldPos);
+                    aShadow = punctualShadow(aLayer, WorldPos, max(dot(N, aL), 0.0));
+                }
+
                 Lo += min((areaDiff + areaSpec) * clusterLights[li].colorIntensity.xyz,
-                          vec3(10.0));
+                          vec3(10.0)) * aShadow;
                 continue;
             }
 

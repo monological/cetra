@@ -164,8 +164,10 @@ void add_cscene_lights(Scene* scene, const CetraSceneDesc* cscn) {
             set_light_size(light, sl->size[0], sl->size[1]);
             if (sl->has_up)
                 set_light_up(light, (float*)sl->up);
-            printf("Scene file light '%s' (area %.2fx%.2f, radiance %.2f)\n", light->name,
-                   sl->size[0], sl->size[1], sl->intensity);
+            if (sl->cast_shadows)
+                set_light_cast_shadows(light, true);
+            printf("Scene file light '%s' (area %.2fx%.2f, radiance %.2f%s)\n", light->name,
+                   sl->size[0], sl->size[1], sl->intensity, sl->cast_shadows ? ", shadows" : "");
             break;
         case CSCENE_LIGHT_DIRECTIONAL:
             set_light_type(light, LIGHT_DIRECTIONAL);
