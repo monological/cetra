@@ -136,6 +136,16 @@ void main() {
                                  float(froxelDepth), invFocal);
     vec3 camPos = invView[3].xyz;
     vec3 P = (invView * vec4(viewPos, 1.0)).xyz;
+    // The cell's UNJITTERED centre, kept for reprojection only. Reprojecting the
+    // jittered sample instead would land the history lookup at a different
+    // sub-cell offset every frame, so each frame reads a different trilinear mix
+    // of neighbours and the accumulation never settles -- it flickers rather
+    // than converging. Reprojecting the centre makes a static camera read
+    // exactly this cell's own history, which is what turns the blend into a
+    // running average of the jittered samples.
+    vec3 centreView = froxelViewPos(TexCoords, float(sliceIndex), 0.5, nearZ, fogFar,
+                                    float(froxelDepth), invFocal);
+    vec3 centreP = (invView * vec4(centreView, 1.0)).xyz;
     // Direction from the camera toward this cell: the phase function's second
     // argument, and the froxel equivalent of the march's per-pixel rayDir.
     vec3 rayDir = normalize(P - camPos);
@@ -212,7 +222,7 @@ void main() {
     // passes there is no velocity buffer to reproject by -- a froxel is a
     // volume of air, not a surface -- so the previous camera does the mapping.
     if (temporal == 1) {
-        vec4 prevViewPos = prevView * vec4(P, 1.0);
+        vec4 prevViewPos = prevView * vec4(centreP, 1.0);
         float prevZ = -prevViewPos.z;
         if (prevZ > nearZ) {
             vec2 prevFocal = vec2(prevProjection[0][0], prevProjection[1][1]);
