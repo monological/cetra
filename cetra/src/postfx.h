@@ -239,8 +239,11 @@ typedef struct PostFX {
     // failed. Independent of fog: this is atmosphere, not a local medium, so it
     // applies whether or not volumetric fog is on.
     bool aerial_enabled;
-    GLuint aerial_volume; // 32^3 (in-scatter.rgb, transmittance.a), sky-owned
+    GLuint aerial_volume; // (in-scatter.rgb, transmittance.a), sky-owned
     float aerial_far;     // the volume's far depth in WORLD units
+    int aerial_slices;    // published with the volume rather than mirrored, so
+                          // the sky owns its own dimension (the fog cascade
+                          // count crosses the same seam the same way)
 
     bool fog_layer_ready;
     bool fog_layer_failed; // Allocation is one-shot; see the ensure function

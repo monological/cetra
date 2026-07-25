@@ -39,8 +39,11 @@ void main() {
     vec2 invFocal = vec2(1.0 / projection[0][0], 1.0 / projection[1][1]);
 
     // Depth mapping is shared with the fog volume (include/froxel.glsl), in
-    // WORLD units, so the composite can index both volumes the same way.
-    vec3 viewPos = froxelViewPos(TexCoords, float(sliceIndex), 0.5, nearZ, aerialFar,
+    // WORLD units. The jitter of 1.0 is load-bearing: it integrates to the FAR
+    // FACE of the slice, which is the convention froxel_integrate uses, so the
+    // composite indexes both volumes with the same expression instead of
+    // carrying two off-by-half-a-slice rules.
+    vec3 viewPos = froxelViewPos(TexCoords, float(sliceIndex), 1.0, nearZ, aerialFar,
                                  float(aerialDepth), invFocal);
     vec3 camPos = invView[3].xyz;
     vec3 toCell = (invView * vec4(viewPos, 1.0)).xyz - camPos;

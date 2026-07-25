@@ -565,6 +565,7 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     uniform_set_int(fx->froxel_composite_program->uniforms, "linDepthTex", 0);
     uniform_set_int(fx->froxel_composite_program->uniforms, "integratedVolume", 1);
     uniform_set_int(fx->froxel_composite_program->uniforms, "layerTex", 2);
+    uniform_set_int(fx->froxel_composite_program->uniforms, "aerialVolume", 3);
 
     glUseProgram(fx->dof_coc_program->id);
     uniform_set_int(fx->dof_coc_program->uniforms, "sceneTex", 0);
@@ -1379,9 +1380,17 @@ static void upload_fog_uniforms(PostFX* fx, UniformManager* u, mat4 projection, 
 // integrate front-to-back along each froxel column, then fold the result into
 // the HDR scene with one trilinear tap, before DoF/bloom/tonemap so shafts
 // defocus, bloom, and meter like direct light.
-static void postfx_run_fog(PostFX* fx, bool aux_written, bool taa_resolving, mat4 projection,
-                           mat4 view) {
-    if (!fx->fog_enabled || !aux_written || !postfx_ensure_froxel_targets(fx))
+static void postfx_run_atmosphere(PostFX* fx, bool aux_written, bool taa_resolving, mat4 projection,
+                                  mat4 view) {
+    // Two independent media share the composite. Fog is a local ground medium
+    // with its own volume passes; aerial perspective is the global atmosphere,
+    // built and published by the sky. Either can run without the other, so the
+    // guard is on their disjunction rather than on fog alone -- but both need
+    // the aux buffer, which is the only source of the linear depth the
+    // composite indexes by.
+    const bool fog_on = fx->fog_enabled && postfx_ensure_froxel_targets(fx);
+    const bool aerial_on = fx->aerial_enabled && fx->aerial_volume != 0;
+    if (!aux_written || (!fog_on && !aerial_on))
         return;
 
     // Frame parity picks this frame's write target; the other volume still
@@ -1403,6 +1412,10 @@ static void postfx_run_fog(PostFX* fx, bool aux_written, bool taa_resolving, mat
     mat4 inv_view;
     glm_mat4_inv(view, inv_view);
 
+    // 1-2 build the fog volume, and are skipped entirely when only aerial
+    // perspective is on -- the composite reads a neutral (0,0,0,1) for a medium
+    // that is off.
+    if (fog_on) {
     // 1. Inject: scattering + extinction per cell, one draw per slice.
     glUseProgram(fx->froxel_inject_program->id);
     UniformManager* iu = fx->froxel_inject_program->uniforms;
@@ -1431,6 +1444,7 @@ static void postfx_run_fog(PostFX* fx, bool aux_written, bool taa_resolving, mat
     uniform_set_float(gu, "fogFar", fx->fog_far);
     uniform_set_int(gu, "froxelDepth", POSTFX_FROXEL_Z);
     draw_volume_slices(fx, fx->froxel_integrated, gu);
+    }
 
     // 3. Composite: out = inscatter + scene * transmittance, the same
     // enable/draw/restore idiom the screen-space fog and SSR composites use.
@@ -1455,10 +1469,16 @@ static void postfx_run_fog(PostFX* fx, bool aux_written, bool taa_resolving, mat
     glBindTexture(GL_TEXTURE_2D, fx->aux_texture);
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_3D, fx->froxel_integrated);
+    glActiveTexture(GL_TEXTURE3);
+    glBindTexture(GL_TEXTURE_3D, fx->aerial_volume);
     glActiveTexture(GL_TEXTURE0);
     uniform_set_mat4(cu, "projection", (float*)projection);
     uniform_set_float(cu, "fogFar", fx->fog_far);
+    uniform_set_float(cu, "aerialFar", fx->aerial_far);
     uniform_set_int(cu, "froxelDepth", POSTFX_FROXEL_Z);
+    uniform_set_int(cu, "aerialDepth", fx->aerial_slices);
+    uniform_set_int(cu, "fogOn", fog_on ? 1 : 0);
+    uniform_set_int(cu, "aerialOn", aerial_on ? 1 : 0);
     uniform_set_int(cu, "mode", 0);
 
     if (taa_resolving && postfx_ensure_fog_layer_targets(fx)) {
@@ -1494,13 +1514,18 @@ static void postfx_run_fog(PostFX* fx, bool aux_written, bool taa_resolving, mat
     glDisable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-    // Remember the camera and the frame this volume was built with; next frame
-    // reprojects its cells through them to find where they were.
-    glm_mat4_copy(view, fx->froxel_prev_view);
-    glm_mat4_copy(projection, fx->froxel_prev_proj);
-    fx->froxel_prev_frame = fx->frame_index;
+    // Remember the camera and the frame the FOG volume was built with; next
+    // frame reprojects its cells through them to find where they were. Only
+    // when fog actually ran: an aerial-only frame builds no scattering volume,
+    // and claiming adjacency for one that does not exist would reproject the
+    // next frame's history through an unrelated camera.
+    if (fog_on) {
+        glm_mat4_copy(view, fx->froxel_prev_view);
+        glm_mat4_copy(projection, fx->froxel_prev_proj);
+        fx->froxel_prev_frame = fx->frame_index;
+    }
 
-    check_gl_error("postfx froxel fog");
+    check_gl_error("postfx atmosphere");
 }
 
 // Screen-space reflections: rebuild the Hi-Z min-depth pyramid, march the
@@ -1508,7 +1533,7 @@ static void postfx_run_fog(PostFX* fx, bool aux_written, bool taa_resolving, mat
 // denoise, then premultiplied-composite onto the HDR scene before bloom so
 // reflected highlights bloom like direct ones. Owns the ssr_history/ssr_atrous
 // lifecycle. Traces at full or half res per fx->ssr_full_res. Same extracted-
-// stage shape as postfx_run_fog; inv_projection is passed in (shared with DoF).
+// stage shape as postfx_run_atmosphere; inv_projection is passed in (shared with DoF).
 static void postfx_run_ssr(PostFX* fx, bool have_normals, bool taa_resolving, mat4 projection,
                            mat4 inv_projection, mat4 view) {
     // SSR traces at full res (sharp) or half res, per ssr_full_res; the
@@ -2013,7 +2038,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             check_gl_error("postfx ssgi composite");
         }
 
-        postfx_run_fog(fx, aux_written, taa_resolving, projection, view);
+        postfx_run_atmosphere(fx, aux_written, taa_resolving, projection, view);
 
         // Separable SSS: blur the resolved skin-diffuse buffer and fold
         // blur - diffuse into the HDR scene, softening diffuse while specular

@@ -237,9 +237,11 @@ void sky_publish_to_postfx(const SkyAtmosphere* sky, struct PostFX* fx) {
     if (sky && sky->enabled && sky->aerial_lut) {
         fx->aerial_volume = sky->aerial_lut;
         fx->aerial_far = sky_aerial_far_units(sky);
+        fx->aerial_slices = SKY_AERIAL_Z;
     } else {
         fx->aerial_volume = 0;
         fx->aerial_far = 0.0f;
+        fx->aerial_slices = 0;
     }
 }
 
