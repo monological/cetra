@@ -795,7 +795,7 @@ void render_current_scene(Engine* engine) {
             engine->postfx && postfx_ssr_active(engine->postfx, engine->normals_this_frame);
         uniform_set_int(catcher->uniforms, "surfaceMode", ssr_floor ? 1 : 0);
         uniform_set_int(catcher->uniforms, "numShadowLights", (int)ss->directional_count);
-        uniform_set_float(catcher->uniforms, "shadowBias", ss->casters[0].bias);
+        uniform_set_float(catcher->uniforms, "shadowBias", ss->shadow_bias);
 
         // Weight each caster's shadow by its light's share of analytic light
         float weights[MAX_SHADOW_LIGHTS] = {0};

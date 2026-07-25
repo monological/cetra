@@ -108,14 +108,7 @@ ShadowSystem* create_shadow_system(int default_map_size) {
         glm_mat4_identity(system->punctual_matrices[i]);
     }
 
-    for (int i = 0; i < MAX_SHADOW_LIGHTS; i++) {
-        system->casters[i].initialized = false;
-        system->casters[i].fbo = 0;
-        system->casters[i].depth_texture = 0;
-        system->casters[i].map_size = default_map_size;
-        system->casters[i].bias = 0.005f;
-        system->casters[i].normal_bias = 0.02f;
-    }
+    system->shadow_bias = 0.005f;
 
     return system;
 }
@@ -140,7 +133,7 @@ int init_shadow_map_array(ShadowSystem* system) {
     // Layers are count-strided (slot * cascade_count + cascade), sized to the
     // ACTIVE cascade count so the classic single-map default never pays the
     // 3x VRAM of a full 9-layer array; a count change rebuilds the array
-    init_depth_array(&system->shadow_map_array, &system->casters[0].fbo,
+    init_depth_array(&system->shadow_map_array, &system->cascade_fbo,
                      system->default_map_size, MAX_SHADOW_LIGHTS * system->cascade_count);
 
     system->allocated_cascades = system->cascade_count;
@@ -152,7 +145,7 @@ void free_shadow_map_array(ShadowSystem* system) {
     if (!system)
         return;
 
-    free_depth_array(&system->shadow_map_array, &system->casters[0].fbo);
+    free_depth_array(&system->shadow_map_array, &system->cascade_fbo);
     system->initialized = false;
 }
 
@@ -195,7 +188,7 @@ void begin_shadow_pass(ShadowSystem* system, size_t caster_index) {
     if (caster_index >= (size_t)MAX_SHADOW_LIGHTS * (size_t)system->allocated_cascades)
         return;
 
-    begin_depth_layer(system->casters[0].fbo, system->shadow_map_array, (int)caster_index,
+    begin_depth_layer(system->cascade_fbo, system->shadow_map_array, (int)caster_index,
                       system->default_map_size);
 }
 
@@ -373,9 +366,8 @@ void bind_shadow_maps_to_program(ShadowSystem* system, ShaderProgram* program) {
     if (loc >= 0)
         glUniform2f(loc, texel_size, texel_size);
 
-    // Scalar shadow uniforms are shared across casters; set once (the bias
-    // was previously written inside the loop, where the last caster won)
-    uniform_set_float(u, "shadowBias", system->casters[0].bias);
+    // Scalar shadow uniforms are shared across casters; set once
+    uniform_set_float(u, "shadowBias", system->shadow_bias);
 
     // PCSS controls; the per-cascade ortho geometry rides in cascadeParams
     uniform_set_int(u, "pcssEnabled", system->pcss_enabled ? 1 : 0);
@@ -782,5 +774,5 @@ void shadow_publish_to_postfx(const Scene* scene, PostFX* fx) {
     fx->fog_light_count = (int)ss->directional_count;
     fx->fog_cascade_count = cc;
     fx->fog_shadow_map_array = ss->shadow_map_array;
-    fx->fog_shadow_bias = ss->casters[0].bias;
+    fx->fog_shadow_bias = ss->shadow_bias;
 }

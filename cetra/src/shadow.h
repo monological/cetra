@@ -37,17 +37,12 @@
 struct Scene;
 struct Engine;
 
-typedef struct ShadowCaster {
-    GLuint fbo;
-    GLuint depth_texture;
-    int map_size;
-    float bias;
-    float normal_bias;
-    bool initialized;
-} ShadowCaster;
-
 typedef struct ShadowSystem {
-    ShadowCaster casters[MAX_SHADOW_LIGHTS];
+    GLuint cascade_fbo; // Re-attached to each layer of shadow_map_array in turn
+    // Depth bias in 0..1 map depth, shared by every caster: it is tuned against
+    // the scene-fit map and cascadeParams.w renormalizes it per cascade. It was
+    // once per-caster, which only meant the last caster's value won.
+    float shadow_bias;
     // Shadow-casting DIRECTIONAL lights this frame, and nothing else -- it is
     // also the shader's numShadowLights and the loop bound over the cascade
     // array. It was called active_count, which reads as "casters of any kind"
