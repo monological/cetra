@@ -11,7 +11,11 @@
 #define MAX_SHADOW_LIGHTS       3
 #define SHADOW_CASCADES         3 // Compile-time cascade ceiling (runtime: cascade_count)
 #define DEFAULT_SHADOW_MAP_SIZE 2048
-#define SPOT_SHADOW_MAP_SIZE    1024 // the standalone perspective spot (flashlight) map
+// The standalone perspective spot map. Larger than the 1024 it started at
+// because a spot's fov comes from its cone -- a wide cone spreads the same
+// texel count over a far larger footprint than a cascade's fitted ortho box,
+// and every seam artifact scales with that footprint.
+#define SPOT_SHADOW_MAP_SIZE 2048
 // Engine-owned sampler units sit just above the material units (common.h).
 // Packing the scalar masks into one array freed the 10-12 range, letting the
 // shadow + IBL units drop below 16 so brdfLUT/skybox are no longer bound

@@ -468,6 +468,15 @@ float linearizeOrthoDepth(float d01, vec2 nf) {
     return nf.x + d01 * (nf.y - nf.x);
 }
 
+// No normal-offset bias here, and that is a tried-and-rejected choice rather
+// than an oversight. Offsetting the lookup along N is the textbook cure for a
+// texel-wide leak along a silhouette. Measured on these fixtures it lost twice:
+// on the directional path it lifted the rock pile's ground contacts off the
+// spheres casting them (14.6k pixels moved, no artifact removed), and at a
+// concave corner it made things worse, pushing the sample into the open space
+// the map reports as lit and widening one bright line into a band of steps.
+// Filtering and the slope-scaled depth bias carry it instead.
+
 // Fixed 3x3 PCF: the pre-PCSS path, kept bit-identical as the fallback.
 // layer is a shadow-array layer (slot * cascadeCount + cascade).
 float shadowPCF3x3(int layer, vec2 uv, float currentDepth, float bias) {
@@ -582,18 +591,31 @@ float calculateShadow(int shadowIndex, int cascade, vec3 worldPos, float NdotL, 
     return visibility;
 }
 
-// Perspective spot (flashlight) shadow: 1 = lit, 0 = occluded. A single tap with
-// a slope-scaled bias (grazing floor pool stays acne-free); out of the frustum
-// (behind the light or past its far plane / cone) stays lit via the white border.
+// Perspective spot (flashlight) shadow: 1 = lit, 0 = occluded. Out of the
+// frustum (behind the light or past its far plane / cone) stays lit via the
+// white border.
 float calculateSpotShadow(vec3 worldPos, float NdotL) {
     vec4 ls = spotShadowMatrix * vec4(worldPos, 1.0);
     if (ls.w <= 0.0)
         return 1.0;
+
     vec3 pc = ls.xyz / ls.w * 0.5 + 0.5;
     if (pc.z > 1.0 || pc.x < 0.0 || pc.x > 1.0 || pc.y < 0.0 || pc.y > 1.0)
         return 1.0;
+
+    // 3x3 PCF, which the directional cascades have always had and this never
+    // did: a single tap quantizes the edge to the texel grid, and reads as a
+    // staircase on any silhouette not aligned to it.
     float bias = max(0.0015 * (1.0 - NdotL), 0.0004);
-    return (pc.z - bias > texture(spotShadowMap, pc.xy).r) ? 0.0 : 1.0;
+    vec2 texel = vec2(1.0 / float(textureSize(spotShadowMap, 0).x));
+    float sum = 0.0;
+    for (int y = -1; y <= 1; ++y) {
+        for (int x = -1; x <= 1; ++x) {
+            float d = texture(spotShadowMap, pc.xy + vec2(x, y) * texel).r;
+            sum += (pc.z - bias > d) ? 0.0 : 1.0;
+        }
+    }
+    return sum / 9.0;
 }
 
 // Per-pixel screen-space motion vector in UV units: current vs previous
