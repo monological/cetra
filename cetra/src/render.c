@@ -862,6 +862,11 @@ void render_current_scene(Engine* engine) {
     glm_mat4_copy(engine->view_proj, engine->prev_view_proj);
 }
 
+// Supersample factor for the blit capture path. 2x because that capture has no
+// MSAA and single-sample grazing-angle aliasing at its horizon bakes in as
+// stripe moire that mirror reflections magnify into banded streaks.
+#define CAPTURE_SS_FACTOR 2
+
 void scene_capture_begin(Engine* engine, Scene* scene, SceneCaptureState* saved) {
     if (!engine || !scene || !saved)
         return;
@@ -894,14 +899,17 @@ void scene_capture_end(Engine* engine, Scene* scene, const SceneCaptureState* sa
 
 void scene_capture_faces(Engine* engine, struct IBLResources* ibl, const vec3 position,
                          GLuint dst_cubemap, GLuint dst_depth_cubemap, int face_size,
-                         int ss_factor, float near_clip, float far_clip) {
+                         float near_clip, float far_clip) {
     if (!engine || !engine->camera || !dst_cubemap || face_size <= 0)
         return;
     // Keeping the depth means rendering straight into the destination faces:
     // a blit would have to carry depth between two differently-sized targets.
     const bool keep_depth = dst_depth_cubemap != 0;
-    if (ss_factor < 1 || keep_depth)
-        ss_factor = 1;
+    // Supersample factor for the blit path. A parameter once, but only ever one
+    // live value from one caller, and meaningless on the other path -- so it was
+    // a signature argument whose meaning depended on another argument, plus a
+    // clamp no caller could reach.
+    const int ss_factor = keep_depth ? 1 : CAPTURE_SS_FACTOR;
     // `ibl` is only the scratch target the supersampled path renders into before
     // downsampling. The direct path needs none, which is what lets a GI probe
     // volume capture in a scene with no HDR environment at all.

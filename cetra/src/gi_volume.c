@@ -295,7 +295,7 @@ void gi_volume_update(GIVolume* gi, struct Engine* engine, struct Scene* scene) 
         vec3 pos = {0};
         gi_probe_position(gi, probe, pos);
         scene_capture_faces(engine, scene->ibl, pos, gi->capture_color, gi->capture_depth,
-                            GI_CAPTURE_FACE, 1, GI_NEAR_CLIP, gi->far_clip);
+                            GI_CAPTURE_FACE, GI_NEAR_CLIP, gi->far_clip);
 
         // Projection is a fullscreen-quad pass; depth and culling would only get
         // in its way, and the capture left both enabled.
