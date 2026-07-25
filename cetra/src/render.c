@@ -11,6 +11,7 @@
 #include "scene.h"
 #include "sky.h"
 #include "wind.h"
+#include "gi_volume.h"
 #include "program.h"
 #include "uniform.h"
 #include "shader.h"
@@ -51,6 +52,12 @@ _Static_assert(IBL_BRDF_LUT_TEXTURE_UNIT < IBL_SKYBOX_TEXTURE_UNIT,
                "IBL brdfLUT overlaps skybox unit");
 _Static_assert(IBL_SKYBOX_TEXTURE_UNIT < 16,
                "engine texture units exceed GL_MAX_TEXTURE_IMAGE_UNITS (16)");
+// The GI atlas deliberately shares the skybox's number: units are per PROGRAM,
+// and pbr_frag -- the only program that samples the atlas -- has never sampled
+// the skybox cube. Asserted as equality so a future move of either one has to
+// come here and decide whether the sharing still holds.
+_Static_assert(GI_ATLAS_TEXTURE_UNIT == IBL_SKYBOX_TEXTURE_UNIT,
+               "GI atlas unit is the skybox unit reused; pbr_frag samples neither cube");
 
 // Global animation state for skinned mesh rendering (set via set_render_animation_state)
 static AnimationState* g_current_animation_state = NULL;
@@ -402,6 +409,12 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
             } else {
                 uniform_set_int(u, "probeEnabled", 0);
             }
+
+            // Indirect diffuse from the probe grid, replacing the flat
+            // irradiance map. Self-gates to giEnabled = 0 while the volume is
+            // absent or mid-sweep -- including during a capture, so a probe
+            // never bakes in the previous sweep's bounce.
+            gi_volume_bind(scene ? scene->gi_volume : NULL, program);
         }
 
         // Per-mesh uniforms (model matrix is always per-mesh)

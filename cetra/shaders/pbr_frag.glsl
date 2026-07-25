@@ -149,6 +149,9 @@ uniform int spotShadowActive;
 // point/spot/area set via the per-fragment cluster index list.
 #include "lights_ubo.glsl"
 #include "ltc.glsl"
+// Indirect diffuse from a probe grid, when one is present (spec 9.7). Only the
+// diffuse IBL term changes; specular, clearcoat and sheen stay on the env map.
+#include "gi_volume.glsl"
 
 uniform int clusterDebug; // Tint fragments by cluster light count (heatmap)
 
@@ -1205,8 +1208,12 @@ void main() {
         kD *= 1.0 - metallicMap;
         kD *= 1.0 - transmissionEff; // diffuse yields to the transmitted term
 
-        // Diffuse IBL: sample irradiance map with surface normal
-        vec3 irradiance = texture(irradianceMap, N).rgb;
+        // Diffuse IBL: the probe volume when one has converged, else the single
+        // direction-only irradiance map. Both store the same quantity -- the
+        // cosine-weighted mean incident radiance, E/pi -- so this is a straight
+        // substitution and the albedo multiply below is unchanged.
+        vec3 irradiance = giEnabled > 0 ? giSampleIrradiance(WorldPos, N, V)
+                                        : texture(irradianceMap, N).rgb;
         vec3 diffuse = irradiance * albedoMap;
 
         // Specular IBL: sample prefiltered env map with reflection vector
@@ -1280,6 +1287,21 @@ void main() {
             // energy convention consistent across analytic and IBL.
             ambient = ambient * (1.0 - maxComp(sheenColor)) +
                       sheenColor * sheenPre * sheenE * aoMap * iblIntensity;
+        }
+    } else if (giEnabled > 0) {
+        // A probe volume with no environment behind it -- the interior case, and
+        // the one the Cornell fixture exercises. Same Lambert diffuse as the IBL
+        // branch, minus the specular half: with no environment there is no
+        // ambient specular lobe, so nothing takes a Fresnel share and all of the
+        // non-metal energy stays diffuse. A metal gets nothing, which is what a
+        // metal with nothing to reflect should get.
+        vec3 kD = vec3(1.0 - metallicMap) * (1.0 - transmissionEff);
+        vec3 diffuse = giSampleIrradiance(WorldPos, N, V) * albedoMap;
+        ambient = kD * diffuse * aoMap;
+        // Mirrors the IBL branch's SSS tap; the two must stay in step or skin
+        // diverges from every other material for no visible reason.
+        if (sss) {
+            sssDiffuse += kD * diffuse * aoMap;
         }
     } else {
         // Fallback to simple ambient when IBL is disabled (diffuse-only, so

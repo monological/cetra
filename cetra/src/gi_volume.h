@@ -80,7 +80,6 @@ typedef struct GIVolume {
     GLuint quad_vao, quad_vbo;
 
     ShaderProgram* project_program;
-    ShaderProgram* border_program;
 
     // Convergence. `dirty_count` probes remain to capture, taken from
     // `next_probe` round-robin. `rate` is probes per frame while dirty, 0 for

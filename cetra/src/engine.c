@@ -1140,17 +1140,12 @@ static int _create_default_shaders_for_engine(Engine* engine) {
         add_shader_program_to_engine(engine, mask_copy_program);
     }
 
-    // GI probe volume. These live on the engine rather than on PostFX -- despite
-    // being fullscreen passes -- because the volume is a Scene citizen and the
+    // GI probe volume. Lives on the engine rather than on PostFX -- despite
+    // being a fullscreen pass -- because the volume is a Scene citizen and the
     // atlas is consumed by the scene pass, not by post.
     ShaderProgram* gi_project_program = create_gi_project_program();
     if (gi_project_program) {
         add_shader_program_to_engine(engine, gi_project_program);
-    }
-
-    ShaderProgram* gi_border_program = create_gi_border_program();
-    if (gi_border_program) {
-        add_shader_program_to_engine(engine, gi_border_program);
     }
 
     return 0;

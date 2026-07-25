@@ -172,9 +172,8 @@ static bool gi_ensure_targets(GIVolume* gi, struct Engine* engine) {
     create_fullscreen_quad_vao(&gi->quad_vao, &gi->quad_vbo);
 
     gi->project_program = get_engine_shader_program_by_name(engine, "gi_project");
-    gi->border_program = get_engine_shader_program_by_name(engine, "gi_border");
-    if (!gi->project_program || !gi->border_program) {
-        log_error("GI volume shader programs missing; disabling irradiance probes");
+    if (!gi->project_program) {
+        log_error("GI volume projection program missing; disabling irradiance probes");
         gi->failed = true;
         return false;
     }
@@ -210,20 +209,20 @@ static void gi_probe_position(const GIVolume* gi, int index, vec3 out) {
 // as a distance, so the near plane's only job is to not clip the room it is in.
 #define GI_NEAR_CLIP 0.05f
 
-// Project the capture into one tile, then rewrite its gutter.
+// Project the capture into one tile, gutter included.
 static void gi_project_tile(GIVolume* gi, int probe, bool visibility, float hysteresis) {
     const int res = visibility ? GI_VISIBILITY_RES : GI_IRRADIANCE_RES;
     int ox, oy;
     gi_tile_origin(gi, probe, visibility, &ox, &oy);
 
-    // Interior first. Blended in place against the previous value with a constant
-    // alpha: legal because the atlas is never bound for reading while it is the
-    // render target -- the capture reads the cube, this reads the cube, and only
-    // the scene pass reads the atlas, in a different pass entirely. That is the
-    // shadow-map sequencing the codebase already relies on, and it avoids a
-    // ping-pong that would have to copy every untouched tile to update one.
+    // Blended in place against the previous value with a constant alpha: legal
+    // because the atlas is never bound for reading while it is the render target
+    // -- this pass reads only the capture cube, and the scene pass that reads the
+    // atlas runs separately. That is the shadow-map sequencing the codebase
+    // already relies on, and it avoids a ping-pong that would have to copy every
+    // untouched tile to update one.
     glBindFramebuffer(GL_FRAMEBUFFER, gi->tile_fbo);
-    glViewport(ox + GI_TILE_BORDER, oy + GI_TILE_BORDER, res, res);
+    glViewport(ox, oy, res + 2 * GI_TILE_BORDER, res + 2 * GI_TILE_BORDER);
     if (hysteresis > 0.0f) {
         glEnable(GL_BLEND);
         glBlendColor(0.0f, 0.0f, 0.0f, hysteresis);
@@ -241,25 +240,12 @@ static void gi_project_tile(GIVolume* gi, int probe, bool visibility, float hyst
     glActiveTexture(GL_TEXTURE0);
     uniform_set_int(u, "captureColor", 0);
     uniform_set_int(u, "captureDepth", 1);
-    uniform_set_vec2(u, "tileOrigin",
-                     (const float[]){(float)(ox + GI_TILE_BORDER), (float)(oy + GI_TILE_BORDER)});
+    uniform_set_vec2(u, "tileOrigin", (const float[]){(float)ox, (float)oy});
     uniform_set_float(u, "tileRes", (float)res);
     uniform_set_float(u, "nearZ", GI_NEAR_CLIP);
     uniform_set_float(u, "farZ", gi->far_clip);
     uniform_set_int(u, "mode", visibility ? 1 : 0);
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4); // VAO bound once by the caller
-
-    // Gutter, unblended: it is a copy of interior texels, not a new observation.
-    glDisable(GL_BLEND);
-    glViewport(ox, oy, res + 2 * GI_TILE_BORDER, res + 2 * GI_TILE_BORDER);
-    glUseProgram(gi->border_program->id);
-    UniformManager* bu = gi->border_program->uniforms;
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, gi->atlas);
-    uniform_set_int(bu, "atlas", 0);
-    uniform_set_vec2(bu, "tileOrigin", (const float[]){(float)ox, (float)oy});
-    uniform_set_float(bu, "tileRes", (float)res);
-    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 }
 
 void gi_volume_update(GIVolume* gi, struct Engine* engine, struct Scene* scene) {
@@ -357,6 +343,11 @@ void gi_volume_bind(const GIVolume* gi, ShaderProgram* program) {
         return;
     UniformManager* u = program->uniforms;
 
+    // Pointed at its own unit even when off, the way the IBL samplers are: a
+    // sampler left on its default unit 0 shares a slot with the material
+    // textures, and that is only ever safe by accident.
+    uniform_set_int(u, "giAtlasTex", GI_ATLAS_TEXTURE_UNIT);
+
     if (!gi_volume_active(gi)) {
         uniform_set_int(u, "giEnabled", 0);
         return;
@@ -366,7 +357,6 @@ void gi_volume_bind(const GIVolume* gi, ShaderProgram* program) {
     glBindTexture(GL_TEXTURE_2D, gi->atlas);
     glActiveTexture(GL_TEXTURE0);
 
-    uniform_set_int(u, "giAtlasTex", GI_ATLAS_TEXTURE_UNIT);
     uniform_set_int(u, "giEnabled", 1);
     uniform_set_vec3(u, "giGridMin", (const float*)gi->grid_min);
     uniform_set_vec3(u, "giSpacing", (const float*)gi->spacing);
@@ -375,6 +365,9 @@ void gi_volume_bind(const GIVolume* gi, ShaderProgram* program) {
     uniform_set_vec2(u, "giAtlasSize", (const float[]){(float)gi->atlas_w, (float)gi->atlas_h});
     uniform_set_float(u, "giIrradianceRows", (float)gi->irradiance_rows);
     uniform_set_float(u, "giFarClip", gi->far_clip);
+    uniform_set_float(u, "giTileBorder", (float)GI_TILE_BORDER);
+    uniform_set_vec2(u, "giTileRes",
+                     (const float[]){(float)GI_IRRADIANCE_RES, (float)GI_VISIBILITY_RES});
 }
 
 void gi_volume_debug_blit(const GIVolume* gi, struct Engine* engine, int screen_w, int screen_h) {

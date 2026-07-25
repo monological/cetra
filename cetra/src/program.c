@@ -844,15 +844,11 @@ ShaderProgram* create_froxel_composite_program() {
     return create_post_program("froxel_composite", froxel_composite_frag_shader_str);
 }
 
-// The GI probe pair (spec 9.7). Both write a sub-rectangle of the probe atlas
-// picked by glViewport rather than a whole target, which is why they are
-// ordinary fullscreen-quad passes despite drawing an 8x8 tile.
+// GI probe projection (spec 9.7). Writes a sub-rectangle of the probe atlas
+// picked by glViewport rather than a whole target, which is why it is an
+// ordinary fullscreen-quad pass despite drawing a 10x10 tile.
 ShaderProgram* create_gi_project_program() {
     return create_post_program("gi_project", gi_project_frag_shader_str);
-}
-
-ShaderProgram* create_gi_border_program() {
-    return create_post_program("gi_border", gi_border_frag_shader_str);
 }
 
 ShaderProgram* create_motion_blur_program() {

@@ -14,13 +14,21 @@ out vec4 FragColor;
 //             and a squared distance in metres overflows its 65504 ceiling from
 //             a scene barely 256 units across.
 //
+// The pass covers the whole BORDERED tile. The 1px gutter exists so a bilinear
+// tap at a tile edge reads the octahedral map's wrapped neighbour rather than
+// whatever tile is packed beside it -- and since a gutter texel's value is a
+// pure function of a direction, computing that direction is the same work as
+// copying the interior texel that holds it, minus a second pass that would have
+// had to read the atlas while the atlas was the render target (undefined in
+// GL 4.1, which has no texture barrier).
+//
 // The caller blends this into the atlas with a constant alpha (hysteresis), so
 // nothing here knows about history.
 
 uniform samplerCube captureColor;
 uniform samplerCube captureDepth;
-uniform vec2 tileOrigin; // atlas texel of this tile's interior, lower-left
-uniform float tileRes;   // interior edge length in texels
+uniform vec2 tileOrigin; // atlas texel of this tile's BORDER, lower-left
+uniform float tileRes;   // interior edge length in texels (border adds 1 each side)
 uniform float nearZ;
 uniform float farZ;
 uniform int mode;
@@ -47,10 +55,28 @@ float rayDistance(vec3 dir, float depth01) {
     return min(viewZ / (max(axis, 1e-4) * farZ), 1.0);
 }
 
+// Border texel -> the interior texel it mirrors. The octahedral square wraps in
+// a way no sampler understands: crossing an edge re-enters the SAME tile,
+// mirrored along that edge; corners wrap to the diagonally opposite corner.
+// Interior texels pass through untouched.
+vec2 wrapToInterior(vec2 local, float outer) {
+    bool cx = (local.x == 0.0 || local.x == outer);
+    bool cy = (local.y == 0.0 || local.y == outer);
+    if (cx && cy)
+        return vec2(local.x == 0.0 ? tileRes : 1.0, local.y == 0.0 ? tileRes : 1.0);
+    if (cx) // vertical edge: mirror in y, step one column in from the far side
+        return vec2(local.x == 0.0 ? 1.0 : tileRes, outer - local.y);
+    if (cy) // horizontal edge: mirror in x, step one row in from the far side
+        return vec2(outer - local.x, local.y == 0.0 ? 1.0 : tileRes);
+    return local;
+}
+
 void main() {
-    // Which interior texel of this tile are we, and which direction is it?
-    vec2 texel = floor(gl_FragCoord.xy - tileOrigin);
-    vec3 N = octDirFromTexel(texel, tileRes);
+    // Position within the bordered tile: 0 and tileRes+1 are the gutter ring.
+    vec2 local = wrapToInterior(floor(gl_FragCoord.xy - tileOrigin), tileRes + 1.0);
+    // ...then to the interior's own 0-based coordinates, which is what the
+    // octahedral mapping and every consumer's UV are expressed in.
+    vec3 N = octDirFromTexel(local - 1.0, tileRes);
 
     vec3 sum = vec3(0.0);
     float sumDist = 0.0;
