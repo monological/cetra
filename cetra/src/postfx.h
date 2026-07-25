@@ -50,9 +50,7 @@ typedef enum PostFXDebugView {
     POSTFX_DEBUG_SSGI = 5,    // Raw gathered GI radiance (half-res, SSGI)
     // 6 was the half-res fog in-scatter buffer, retired with the screen-space
     // march (spec 9.5). The gap is deliberate -- the values are the shader's
-    // debugView dispatch. fog_layer_texture would now be a valid target for it
-    // again (spec 9.5.1 gave the froxel path a composited 2D layer), but only
-    // on TAA frames, since that is the only time it is allocated.
+    // debugView dispatch.
     POSTFX_DEBUG_SPEC_OCC = 7, // AO visibility after specular occlusion
     POSTFX_DEBUG_CONTACT = 8,  // Contact-shadow visibility term (before compositing)
 } PostFXDebugView;
@@ -134,7 +132,7 @@ typedef struct PostFX {
     ShaderProgram* lum_adapt_program;
     ShaderProgram* ssr_program;
     ShaderProgram* ssr_hiz_program;
-    ShaderProgram* upsample_tent_program;    // Shared half-res composite (SSR, fog)
+    ShaderProgram* upsample_tent_program;    // Shared tent composite (bloom mips, SSR)
     ShaderProgram* froxel_inject_program;    // Per-cell scattering into the volume (spec 9.5)
     ShaderProgram* froxel_integrate_program; // Front-to-back gather along each slice column
     ShaderProgram* froxel_composite_program; // One trilinear tap, folded into the HDR scene
@@ -236,9 +234,11 @@ typedef struct PostFX {
     // this one cancels the jitter the composite inherits from the aux depth and
     // is therefore pointless without TAA.
     bool fog_layer_ready;
+    bool fog_layer_failed; // Allocation is one-shot; see the ensure function
     GLuint fog_layer_fbo;
     GLuint fog_layer_texture;
-    PingPong fog_history;
+    PingPong fog_layer_history;
+    int fog_layer_frame; // Same adjacency test as froxel_prev_frame, -1 = never
 
     // Published per frame by shadow_publish_to_postfx (mirrors the probe
     // block; postfx never learns about the shadow system): the casters'

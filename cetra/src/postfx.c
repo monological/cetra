@@ -322,6 +322,7 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     glm_vec3_copy((vec3){0.05f, 0.05f, 0.05f}, fx->fog_ambient);
     fx->froxel_ready = false;
     fx->froxel_prev_frame = -1;   // no froxel frame yet; 0 would match frame 0
+    fx->fog_layer_frame = -1;     // likewise for the composited layer's history
     fx->fog_spot_enabled = false; // published per frame by shadow_publish_to_postfx
 
     // Motion blur (off by default; target allocated lazily on first enable).
@@ -560,6 +561,7 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     glUseProgram(fx->froxel_composite_program->id);
     uniform_set_int(fx->froxel_composite_program->uniforms, "linDepthTex", 0);
     uniform_set_int(fx->froxel_composite_program->uniforms, "integratedVolume", 1);
+    uniform_set_int(fx->froxel_composite_program->uniforms, "layerTex", 2);
 
     glUseProgram(fx->dof_coc_program->id);
     uniform_set_int(fx->dof_coc_program->uniforms, "sceneTex", 0);
@@ -596,43 +598,30 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     const float noise_scale[2] = {(float)fx->ssao_width / 4.0f, (float)fx->ssao_height / 4.0f};
     uniform_set_vec2(fx->gtao_program->uniforms, "noiseScale", noise_scale);
 
+    // No texelSize for either of the next two: every consumer of ssao_blur and
+    // of the shared tent uploads it per draw from its own resolution, so a
+    // seed here would be dead, and a dead seed reads as a sanctioned fallback
+    // that a future third consumer could rely on by forgetting to upload.
     glUseProgram(fx->ssao_blur_program->id);
     uniform_set_int(fx->ssao_blur_program->uniforms, "aoTex", 0);
     uniform_set_int(fx->ssao_blur_program->uniforms, "auxTex", 1); // linZ for the bilateral weight
-    const float ao_texel[2] = {1.0f / (float)fx->ssao_width, 1.0f / (float)fx->ssao_height};
-    uniform_set_vec2(fx->ssao_blur_program->uniforms, "texelSize", ao_texel);
 
     glUseProgram(fx->contact_shadow_program->id);
     uniform_set_int(fx->contact_shadow_program->uniforms, "linDepthTex", 0);
     uniform_set_int(fx->contact_shadow_program->uniforms, "normalsTex", 1);
 
-    // The shared tent composite is seeded with a half-res default, but its
-    // consumers re-set texelSize before drawing (SSR at full or half res per
-    // ssr_full_res) since they no longer share one resolution.
     glUseProgram(fx->upsample_tent_program->id);
     uniform_set_int(fx->upsample_tent_program->uniforms, "srcTex", 0);
-    uniform_set_vec2(fx->upsample_tent_program->uniforms, "texelSize", ao_texel);
 
-    // No texelSize here: run_temporal_accum sets it per call from the
-    // resolution that call runs at, because this program is shared across
-    // half-res and full-res consumers.
-    glUseProgram(fx->temporal_accum_program->id);
-    uniform_set_int(fx->temporal_accum_program->uniforms, "currentTex", 0);
-    uniform_set_int(fx->temporal_accum_program->uniforms, "velocityTex", 1);
-    uniform_set_int(fx->temporal_accum_program->uniforms, "historyTex", 2);
+    // temporal_accum and ssgi_accum are seeded entirely by run_temporal_accum,
+    // which owns their unit layout and texelSize together.
 
     glUseProgram(fx->ssgi_composite_program->id);
     uniform_set_int(fx->ssgi_composite_program->uniforms, "giTex", 0);
     uniform_set_int(fx->ssgi_composite_program->uniforms, "albedoTex", 1);
 
-    // Also driven by run_temporal_accum, so likewise no texelSize here.
-    glUseProgram(fx->ssgi_accum_program->id);
-    uniform_set_int(fx->ssgi_accum_program->uniforms, "currentTex", 0);
-    uniform_set_int(fx->ssgi_accum_program->uniforms, "velocityTex", 1);
-    uniform_set_int(fx->ssgi_accum_program->uniforms, "historyTex", 2);
-
     // Both a-trous programs get texelSize per call from run_atrous (the SSR one
-    // tracks the full-res toggle; the SSGI one reproduces ao_texel bit-for-bit).
+    // tracks the full-res toggle; the SSGI one always resolves to the AO texel).
     glUseProgram(fx->ssgi_atrous_program->id);
     uniform_set_int(fx->ssgi_atrous_program->uniforms, "giTex", 0);
     uniform_set_int(fx->ssgi_atrous_program->uniforms, "linDepthTex", 1);
@@ -746,10 +735,19 @@ static bool postfx_ensure_froxel_targets(PostFX* fx) {
 static bool postfx_ensure_fog_layer_targets(PostFX* fx) {
     if (fx->fog_layer_ready)
         return true;
+    if (fx->fog_layer_failed)
+        return false;
     if (!create_color_fbo(fx->width, fx->height, GL_RGBA16F, &fx->fog_layer_fbo,
                           &fx->fog_layer_texture) ||
-        !create_pingpong(fx->width, fx->height, GL_RGBA16F, &fx->fog_history)) {
-        log_error("Failed to allocate fog layer targets");
+        !create_pingpong(fx->width, fx->height, GL_RGBA16F, &fx->fog_layer_history)) {
+        // One-shot, unlike the other ensure_ helpers, which are retried every
+        // frame. Fog is the only one whose caller has a complete path for "no
+        // targets" -- it composites straight into the scene, just without the
+        // temporal pass -- so retrying buys nothing and orphans another set of
+        // full-res targets every frame (~200 MB at ss_scale 2, plus 60 Hz of
+        // log spam).
+        log_error("Failed to allocate fog layer targets; fog will run untemporal");
+        fx->fog_layer_failed = true;
         return false;
     }
     fx->fog_layer_ready = true;
@@ -1118,7 +1116,7 @@ void free_postfx(PostFX* fx) {
     glDeleteTextures(1, &fx->froxel_integrated);
     glDeleteFramebuffers(1, &fx->fog_layer_fbo);
     glDeleteTextures(1, &fx->fog_layer_texture);
-    free_pingpong(&fx->fog_history);
+    free_pingpong(&fx->fog_layer_history);
     glDeleteFramebuffers(2, fx->cs_fbo);
     glDeleteTextures(2, fx->cs_texture);
     free_pingpong(&fx->cs_history);
@@ -1254,11 +1252,24 @@ static void resolve_color_attachment(GLuint msaa_fbo, GLenum attachment, GLuint 
     glReadBuffer(GL_COLOR_ATTACHMENT0);
 }
 
-// Reproject-and-blend temporal accumulation, shared by the AO and GI
-// accumulators (their shaders share the currentTex/velocityTex/historyTex
-// unit layout). Indexes the pair by frame parity, resets when the history is
-// not valid (first use, or the accumulator was skipped last frame), and
-// returns the freshly written texture.
+// Reproject-and-blend temporal accumulation, shared by seven consumers across
+// three programs: AO, SSGI, SSR, SSS, TAA, contact shadows, and the composited
+// fog layer. Indexes the pair by frame parity, resets when the history is not
+// valid (first use, or the accumulator was skipped last frame), and returns the
+// freshly written texture.
+//
+// Owns everything that depends on the resolution or the unit layout, so a new
+// consumer cannot get it wrong: the sampler units, and texelSize. Both were
+// previously split across create_postfx and the call sites, and the split is
+// what let a half-res texelSize reach the full-res consumers -- their
+// neighborhood clamp ran at +/-2 texels instead of +/-1 until this owned it.
+// A complete set of call-site uploads would be equally correct; the difference
+// is that this is a one-site invariant the next consumer cannot break, rather
+// than an N-site one they can.
+//
+// RESTORES NOTHING. On return the ping-pong FBO is still bound, the viewport is
+// at (w,h), prog is current, and texture unit 2 is active. Every caller that
+// draws afterwards has to re-bind its own target, viewport, program and unit.
 static GLuint run_temporal_accum(PostFX* fx, ShaderProgram* prog, PingPong* pp, int w, int h,
                                  GLuint current_tex) {
     int write = fx->frame_index & 1;
@@ -1266,15 +1277,11 @@ static GLuint run_temporal_accum(PostFX* fx, ShaderProgram* prog, PingPong* pp, 
     glBindFramebuffer(GL_FRAMEBUFFER, pp->fbo[write]);
     glViewport(0, 0, w, h);
     glUseProgram(prog->id);
-    // The neighborhood clamp is measured in texels, so texelSize has to track
-    // the resolution THIS call runs at. Seeding it once per program cannot:
-    // the accumulator is shared by consumers at half res (AO, SSGI) and at full
-    // res (TAA, full-res SSR, contact shadows, SSS), so a value left from
-    // another consumer silently widens or narrows the clamp. Setting it at a
-    // call site is worse -- it persists on the shared program object into the
-    // next frame's other consumers, with no error and no visible cause.
     const float texel[2] = {1.0f / (float)w, 1.0f / (float)h};
     uniform_set_vec2(prog->uniforms, "texelSize", texel);
+    uniform_set_int(prog->uniforms, "currentTex", 0);
+    uniform_set_int(prog->uniforms, "velocityTex", 1);
+    uniform_set_int(prog->uniforms, "historyTex", 2);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, current_tex);
     glActiveTexture(GL_TEXTURE1);
@@ -1439,8 +1446,6 @@ static void postfx_run_fog(PostFX* fx, bool aux_written, bool taa_resolving, mat
     //
     // Gated on TAA, unlike the volume's accumulator above: with no jitter there
     // is no wobble to cancel and this would only add lag.
-    const bool layer_accum = taa_resolving && postfx_ensure_fog_layer_targets(fx);
-
     glUseProgram(fx->froxel_composite_program->id);
     UniformManager* cu = fx->froxel_composite_program->uniforms;
     glActiveTexture(GL_TEXTURE0);
@@ -1451,35 +1456,35 @@ static void postfx_run_fog(PostFX* fx, bool aux_written, bool taa_resolving, mat
     uniform_set_mat4(cu, "projection", (float*)projection);
     uniform_set_float(cu, "fogFar", fx->fog_far);
     uniform_set_int(cu, "froxelDepth", POSTFX_FROXEL_Z);
+    uniform_set_int(cu, "mode", 0);
 
-    if (layer_accum) {
+    if (taa_resolving && postfx_ensure_fog_layer_targets(fx)) {
+        // Draw the layer to scratch instead of the scene, stabilize it, then
+        // fold that in place of the raw layer.
         glBindFramebuffer(GL_FRAMEBUFFER, fx->fog_layer_fbo);
         glViewport(0, 0, fx->width, fx->height);
         draw_fullscreen_quad(fx->quad_vao);
 
-        GLuint stable = run_temporal_accum(fx, fx->temporal_accum_program, &fx->fog_history,
+        // Same adjacency test the volume uses above, and for the same reason:
+        // a history is only reprojectable against the IMMEDIATELY preceding
+        // frame. A flag cleared on the else branch could not express this --
+        // the early return at the top of this function skips it whenever fog is
+        // off, so the history would survive an arbitrary gap and then be
+        // reprojected by an unrelated frame's velocity.
+        fx->fog_layer_history.valid = (fx->fog_layer_frame == fx->frame_index - 1);
+        GLuint stable = run_temporal_accum(fx, fx->temporal_accum_program, &fx->fog_layer_history,
                                            fx->width, fx->height, fx->fog_layer_texture);
+        fx->fog_layer_frame = fx->frame_index;
 
-        // run_temporal_accum restores nothing -- it leaves its own FBO bound,
-        // the viewport at its resolution, and texture unit 2 active.
-        glBindFramebuffer(GL_FRAMEBUFFER, fx->hdr_fbo);
-        glViewport(0, 0, fx->width, fx->height);
-        glUseProgram(fx->upsample_tent_program->id);
-        // A zero texel collapses the tent's nine taps onto one (its weights sum
-        // to 1), making this an exact copy. The shared tent is here for its
-        // blend contract, not to filter: the layer is already full res, and a
-        // real 1px tent on a non-premultiplied (inscatter, transmittance) pair
-        // would halo every silhouette, where transmittance jumps hardest.
-        uniform_set_vec2(fx->upsample_tent_program->uniforms, "texelSize",
-                         (const float[]){0.0f, 0.0f});
-        glActiveTexture(GL_TEXTURE0);
+        glUseProgram(fx->froxel_composite_program->id);
+        uniform_set_int(cu, "mode", 1);
+        glActiveTexture(GL_TEXTURE2);
         glBindTexture(GL_TEXTURE_2D, stable);
-    } else {
-        fx->fog_history.valid = false;
-        glBindFramebuffer(GL_FRAMEBUFFER, fx->hdr_fbo);
-        glViewport(0, 0, fx->width, fx->height);
+        glActiveTexture(GL_TEXTURE0);
     }
 
+    glBindFramebuffer(GL_FRAMEBUFFER, fx->hdr_fbo);
+    glViewport(0, 0, fx->width, fx->height);
     glEnable(GL_BLEND);
     glBlendFunc(GL_ONE, GL_SRC_ALPHA);
     draw_fullscreen_quad(fx->quad_vao);
@@ -1618,9 +1623,11 @@ static void postfx_run_ssr(PostFX* fx, bool have_normals, bool taa_resolving, ma
     // Temporal accumulation: reproject the previous reflection by the
     // motion vectors, neighborhood-clamp it, and blend, so the jittered
     // march averages across frames and its single-frame step banding
-    // washes out. Reuses the shared accumulator (the premultiplied
-    // (color*weight, weight) buffer is exactly its RGBA contract). Needs
-    // TAA (per-frame jitter + motion); off/no-TAA leaves the raw march.
+    // washes out. Reuses the shared accumulator, which treats its input as
+    // four independent channels -- so the premultiplied (color*weight,
+    // weight) buffer passes through it unharmed, as does fog's
+    // non-premultiplied pair. Needs TAA (per-frame jitter + motion);
+    // off/no-TAA leaves the raw march.
     GLuint ssr_result = fx->ssr_texture;
     if (ssr_temporal_on) {
         ssr_result = run_temporal_accum(fx, fx->temporal_accum_program, &fx->ssr_history, ssr_w,
@@ -1653,8 +1660,7 @@ static void postfx_run_ssr(PostFX* fx, bool have_normals, bool taa_resolving, ma
     glUseProgram(fx->upsample_tent_program->id);
     // Sample the tent at the reflection buffer's own texel: full-res is
     // a 1px tent (light AA on the sharp reflection); half-res is the
-    // upsample. Each tent consumer sets its own texelSize (fog resets
-    // it to the half-res value) so nothing leaks through the shared program.
+    // upsample.
     const float ssr_texel[2] = {1.0f / (float)ssr_w, 1.0f / (float)ssr_h};
     uniform_set_vec2(fx->upsample_tent_program->uniforms, "texelSize", ssr_texel);
     glActiveTexture(GL_TEXTURE0);
@@ -1776,13 +1782,6 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         // against the current frame, blend, and write the result back into
         // hdr_fbo so SSR/DoF/bloom/tonemap consume the anti-aliased color.
         if (taa_resolving) {
-            // Bind the program before setting its uniforms (glUniform* acts on
-            // the active program); run_temporal_accum re-binds it harmlessly.
-            glUseProgram(fx->taa_resolve_program->id);
-            UniformManager* tu = fx->taa_resolve_program->uniforms;
-            uniform_set_int(tu, "currentTex", 0);
-            uniform_set_int(tu, "velocityTex", 1);
-            uniform_set_int(tu, "historyTex", 2);
             run_temporal_accum(fx, fx->taa_resolve_program, &fx->taa_history, fx->width, fx->height,
                                fx->hdr_texture);
 

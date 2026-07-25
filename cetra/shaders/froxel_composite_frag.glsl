@@ -13,13 +13,26 @@ out vec4 FragColor; // rgb = in-scatter to add, a = transmittance to multiply by
 
 uniform sampler2D linDepthTex;      // Aux G-buffer; .z = linear view Z (<0), 0 = sky
 uniform sampler3D integratedVolume;
+uniform sampler2D layerTex; // mode 1 only: an already-composited layer to fold
 uniform mat4 projection;
 uniform float fogFar;
 uniform int froxelDepth; // Slice count; mirrors POSTFX_FROXEL_Z
+// 0 = composite from the volume, 1 = fold layerTex under the same blend.
+uniform int mode;
 
 #include "froxel.glsl"
 
 void main() {
+    // Fold pass: under TAA the layer produced by mode 0 is temporally
+    // accumulated before it reaches the scene, and this copies the stabilized
+    // result out under the blend the caller already has set. Keeping it in this
+    // shader rather than borrowing a filter program is the sss_blur_frag mode-2
+    // idiom, and it keeps the (inscatter, transmittance) contract in one file.
+    if (mode == 1) {
+        FragColor = texture(layerTex, TexCoords);
+        return;
+    }
+
     float nearZ = projection[3][2] / (projection[2][2] - 1.0);
     float linZ = texture(linDepthTex, TexCoords).z;
 
