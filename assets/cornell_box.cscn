@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "models": [
+    { "path": "cornell_box.gltf" }
+  ],
+  "lights": [
+    {
+      "name": "CornellPanel",
+      "type": "area",
+      "position": [0.0, 1.97, 0.0],
+      "direction": [0.0, -1.0, 0.0],
+      "size": [0.7, 0.7],
+      "color": [1.0, 0.95, 0.88],
+      "intensity": 18.0
+    }
+  ],
+  "camera": {
+    "eye": [0.0, 1.0, 3.4],
+    "target": [0.0, 0.95, 0.0],
+    "fov": 40
+  },
+  "post": {
+    "tonemap": "neutral",
+    "exposure": 1.0
+  }
+}
