@@ -738,6 +738,24 @@ static bool postfx_ensure_froxel_targets(PostFX* fx) {
     return true;
 }
 
+// Allocate the composited fog layer plus its temporal ping-pong, on the first
+// TAA frame with fog enabled. Deliberately NOT part of postfx_ensure_froxel_
+// targets: those are resolution-independent by design (the volume covers the
+// frustum, not the framebuffer), while these are full-res, and a headless or
+// TAA-off run never touches them -- at ss_scale 2 that is ~200 MB unallocated.
+static bool postfx_ensure_fog_layer_targets(PostFX* fx) {
+    if (fx->fog_layer_ready)
+        return true;
+    if (!create_color_fbo(fx->width, fx->height, GL_RGBA16F, &fx->fog_layer_fbo,
+                          &fx->fog_layer_texture) ||
+        !create_pingpong(fx->width, fx->height, GL_RGBA16F, &fx->fog_history)) {
+        log_error("Failed to allocate fog layer targets");
+        return false;
+    }
+    fx->fog_layer_ready = true;
+    return true;
+}
+
 // Allocate the contact-shadow targets on first enable (fog pattern): two R8
 // buffers (raw march, then bilateral-blurred) plus the R16F temporal ping-pong.
 // R16F history because the 0.9-feedback accumulation bands in 8 bits. FULL
@@ -1098,6 +1116,9 @@ void free_postfx(PostFX* fx) {
     glDeleteFramebuffers(1, &fx->froxel_fbo);
     glDeleteTextures(2, fx->froxel_scatter);
     glDeleteTextures(1, &fx->froxel_integrated);
+    glDeleteFramebuffers(1, &fx->fog_layer_fbo);
+    glDeleteTextures(1, &fx->fog_layer_texture);
+    free_pingpong(&fx->fog_history);
     glDeleteFramebuffers(2, fx->cs_fbo);
     glDeleteTextures(2, fx->cs_texture);
     free_pingpong(&fx->cs_history);
@@ -1403,8 +1424,23 @@ static void postfx_run_fog(PostFX* fx, bool aux_written, bool taa_resolving, mat
 
     // 3. Composite: out = inscatter + scene * transmittance, the same
     // enable/draw/restore idiom the screen-space fog and SSR composites use.
-    glBindFramebuffer(GL_FRAMEBUFFER, fx->hdr_fbo);
-    glViewport(0, 0, fx->width, fx->height);
+    //
+    // Under TAA the layer is routed through a temporal accumulator first. The
+    // composite picks its slice from the aux depth, which comes from the
+    // JITTERED raster, while the volume is jitter-blind (inject reads only
+    // projection[0][0]/[1][1]/[2][2]/[3][2], and the jitter lives in
+    // [2][0]/[2][1]). This pass runs after the TAA resolve, so that per-frame
+    // slice wobble lands on already-stabilized color with nothing downstream to
+    // average it -- measured as ~3x the frame-to-frame flicker of the
+    // screen-space march this replaced, concentrated entirely at silhouettes
+    // and sky edges. Resampling the depth to undo the jitter does not work: the
+    // buffer holds one sample per pixel taken at the jittered position, so
+    // across a discontinuity the unjittered depth was never sampled at all.
+    //
+    // Gated on TAA, unlike the volume's accumulator above: with no jitter there
+    // is no wobble to cancel and this would only add lag.
+    const bool layer_accum = taa_resolving && postfx_ensure_fog_layer_targets(fx);
+
     glUseProgram(fx->froxel_composite_program->id);
     UniformManager* cu = fx->froxel_composite_program->uniforms;
     glActiveTexture(GL_TEXTURE0);
@@ -1415,6 +1451,35 @@ static void postfx_run_fog(PostFX* fx, bool aux_written, bool taa_resolving, mat
     uniform_set_mat4(cu, "projection", (float*)projection);
     uniform_set_float(cu, "fogFar", fx->fog_far);
     uniform_set_int(cu, "froxelDepth", POSTFX_FROXEL_Z);
+
+    if (layer_accum) {
+        glBindFramebuffer(GL_FRAMEBUFFER, fx->fog_layer_fbo);
+        glViewport(0, 0, fx->width, fx->height);
+        draw_fullscreen_quad(fx->quad_vao);
+
+        GLuint stable = run_temporal_accum(fx, fx->temporal_accum_program, &fx->fog_history,
+                                           fx->width, fx->height, fx->fog_layer_texture);
+
+        // run_temporal_accum restores nothing -- it leaves its own FBO bound,
+        // the viewport at its resolution, and texture unit 2 active.
+        glBindFramebuffer(GL_FRAMEBUFFER, fx->hdr_fbo);
+        glViewport(0, 0, fx->width, fx->height);
+        glUseProgram(fx->upsample_tent_program->id);
+        // A zero texel collapses the tent's nine taps onto one (its weights sum
+        // to 1), making this an exact copy. The shared tent is here for its
+        // blend contract, not to filter: the layer is already full res, and a
+        // real 1px tent on a non-premultiplied (inscatter, transmittance) pair
+        // would halo every silhouette, where transmittance jumps hardest.
+        uniform_set_vec2(fx->upsample_tent_program->uniforms, "texelSize",
+                         (const float[]){0.0f, 0.0f});
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, stable);
+    } else {
+        fx->fog_history.valid = false;
+        glBindFramebuffer(GL_FRAMEBUFFER, fx->hdr_fbo);
+        glViewport(0, 0, fx->width, fx->height);
+    }
+
     glEnable(GL_BLEND);
     glBlendFunc(GL_ONE, GL_SRC_ALPHA);
     draw_fullscreen_quad(fx->quad_vao);

@@ -227,6 +227,16 @@ typedef struct PostFX {
     // path, a debug render mode bypassing the chain, fog switched off -- breaks
     // the adjacency without needing to remember to clear anything.
     int froxel_prev_frame;
+    // The composited 2D fog layer (inscatter.rgb, transmittance.a) and its
+    // temporal accumulation, allocated on the first TAA frame with fog on.
+    // Distinct from the volume's own accumulator above and gated the opposite
+    // way: that one smooths noise generated INSIDE the volume and runs always,
+    // this one cancels the jitter the composite inherits from the aux depth and
+    // is therefore pointless without TAA.
+    bool fog_layer_ready;
+    GLuint fog_layer_fbo;
+    GLuint fog_layer_texture;
+    PingPong fog_history;
 
     // Published per frame by shadow_publish_to_postfx (mirrors the probe
     // block; postfx never learns about the shadow system): the casters'
