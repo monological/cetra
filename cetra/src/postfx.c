@@ -51,36 +51,31 @@ static bool create_color_fbo(int width, int height, GLenum internal_format, GLui
     return true;
 }
 
-// A 3D volume target plus the FBO that renders into it one slice at a time
-// (spec 9.5). The FBO carries no attachment here: draw_volume_slices attaches
-// the target layer per draw with glFramebufferTextureLayer, the same
-// one-layer-per-pass idiom the shadow cascades and the mask array use.
-// Completeness is therefore only checkable once a layer is attached, so this
-// only reports allocation failure.
-static bool create_volume_fbo(int width, int height, int depth, GLenum internal_format,
-                              GLuint* out_fbo, GLuint* out_texture) {
-    *out_texture = create_texture_3d(width, height, depth, internal_format, GL_RGBA, NULL);
-    if (!*out_texture) {
-        log_error("PostFX volume texture allocation failed (%dx%dx%d)", width, height, depth);
-        return false;
-    }
-    glGenFramebuffers(1, out_fbo);
-    return true;
-}
-
-// Render every slice of a volume: attach the layer, tell the shader which
-// slice it is, draw the shared fullscreen quad. One draw per layer -- the
+// Render every slice of the froxel volume: attach the layer, tell the shader
+// which slice it is, draw the fullscreen quad. One draw per layer -- the
 // codebase's established idiom (shadow.c cascades, mask_array.c layers,
 // ibl.c cube faces) -- so no geometry shader and no new shader stage.
-static void draw_volume_slices(PostFX* fx, GLuint fbo, GLuint volume, int width, int height,
-                               int depth, UniformManager* um) {
-    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-    glViewport(0, 0, width, height);
-    for (int slice = 0; slice < depth; slice++) {
+// The VAO is bound once around the loop rather than per draw; the shared
+// draw_fullscreen_quad rebinds it every call, which is 63 redundant bind pairs
+// here. Completeness is checked on the first layer: it cannot be checked at
+// creation because the FBO carries no attachment until one is bound, and a
+// driver that rejects a layered 3D attachment would otherwise fail silently
+// across every slice.
+static void draw_volume_slices(PostFX* fx, GLuint volume, UniformManager* um) {
+    glBindFramebuffer(GL_FRAMEBUFFER, fx->froxel_fbo);
+    glViewport(0, 0, POSTFX_FROXEL_X, POSTFX_FROXEL_Y);
+    glBindVertexArray(fx->quad_vao);
+    for (int slice = 0; slice < POSTFX_FROXEL_Z; slice++) {
         glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, volume, 0, slice);
+        if (slice == 0 && glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+            log_error("Froxel volume FBO incomplete; disabling the volumetric fog path");
+            fx->fog_volumetric = false;
+            break;
+        }
         uniform_set_int(um, "sliceIndex", slice);
-        draw_fullscreen_quad(fx->quad_vao);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     }
+    glBindVertexArray(0);
 }
 
 // A ping-pong pair: two color FBOs of the same size/format (see PingPong)
@@ -331,6 +326,7 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     // march stays reachable for one release via --fog-volumetric=0.
     fx->fog_volumetric = true;
     fx->froxel_ready = false;
+    fx->froxel_prev_frame = -1;   // no froxel frame yet; 0 would match frame 0
     fx->fog_spot_enabled = false; // published per frame by shadow_publish_to_postfx
 
     // Motion blur (off by default; target allocated lazily on first enable).
@@ -734,19 +730,36 @@ static bool postfx_ensure_fog_targets(PostFX* fx) {
 static bool postfx_ensure_froxel_targets(PostFX* fx) {
     if (fx->froxel_ready)
         return true;
-    if (!create_volume_fbo(POSTFX_FROXEL_X, POSTFX_FROXEL_Y, POSTFX_FROXEL_Z, GL_RGBA16F,
-                           &fx->froxel_fbo, &fx->froxel_scatter[0])) {
-        return false;
+    // GL_TEXTURE_3D rather than the codebase's usual GL_TEXTURE_2D_ARRAY: the
+    // composite reads a single trilinear tap that filters ACROSS slices, which
+    // an array texture does not do, and CLAMP on R makes a lookup past the last
+    // slice hold the fully integrated column instead of wrapping to the near one.
+    // Attachment-less FBO: draw_volume_slices binds one layer per draw, so
+    // completeness is only meaningful once a layer is attached (checked there).
+    glGenFramebuffers(1, &fx->froxel_fbo);
+    for (int i = 0; i < 2; i++) {
+        fx->froxel_scatter[i] = create_texture_3d_float(
+            POSTFX_FROXEL_X, POSTFX_FROXEL_Y, POSTFX_FROXEL_Z, GL_RGBA16F, GL_RGBA, NULL);
     }
-    fx->froxel_scatter[1] = create_texture_3d(POSTFX_FROXEL_X, POSTFX_FROXEL_Y, POSTFX_FROXEL_Z,
-                                              GL_RGBA16F, GL_RGBA, NULL);
-    fx->froxel_integrated = create_texture_3d(POSTFX_FROXEL_X, POSTFX_FROXEL_Y, POSTFX_FROXEL_Z,
-                                              GL_RGBA16F, GL_RGBA, NULL);
-    if (!fx->froxel_scatter[1] || !fx->froxel_integrated) {
+    fx->froxel_integrated = create_texture_3d_float(POSTFX_FROXEL_X, POSTFX_FROXEL_Y,
+                                                    POSTFX_FROXEL_Z, GL_RGBA16F, GL_RGBA, NULL);
+    if (!fx->froxel_scatter[0] || !fx->froxel_scatter[1] || !fx->froxel_integrated) {
         log_error("Failed to allocate froxel fog volumes");
         return false;
     }
-    fx->froxel_history_valid = false;
+    // Zero both scatter volumes: an unwritten parity slot is otherwise
+    // undefined (glTexImage3D with NULL), and the temporal blend would weight
+    // that at 0.9 and write the result back as the next frame's history.
+    glBindFramebuffer(GL_FRAMEBUFFER, fx->froxel_fbo);
+    glViewport(0, 0, POSTFX_FROXEL_X, POSTFX_FROXEL_Y);
+    for (int i = 0; i < 2; i++) {
+        for (int slice = 0; slice < POSTFX_FROXEL_Z; slice++) {
+            glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, fx->froxel_scatter[i],
+                                      0, slice);
+            glClear(GL_COLOR_BUFFER_BIT);
+        }
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
     fx->froxel_ready = true;
     return true;
 }
@@ -1304,25 +1317,76 @@ static GLuint run_atrous(PostFX* fx, ShaderProgram* prog, PingPong* pp, int w, i
     return input_tex;
 }
 
+// The fog medium plus the caster/spot block shadow_publish_to_postfx flattened,
+// under uniform names both fog shaders declare identically. One edit site when a
+// fog parameter is added -- uniform_set_* no-ops on an absent name, so a rename
+// that reaches only one shader would otherwise render silently wrong.
+// The caller has the program current and has bound the CSM array (unit 1) and
+// the spot depth map (unit 2).
+static void upload_fog_uniforms(PostFX* fx, UniformManager* u, mat4 projection, mat4 inv_view) {
+    uniform_set_mat4(u, "projection", (float*)projection);
+    uniform_set_mat4(u, "invView", (float*)inv_view);
+    uniform_set_float(u, "fogFar", fx->fog_far);
+    uniform_set_vec3(u, "ambientColor", fx->fog_ambient);
+    uniform_set_float(u, "density", fx->fog_density);
+    uniform_set_float(u, "heightFalloff", fx->fog_height_falloff);
+    uniform_set_float(u, "floorY", fx->fog_floor_y);
+    uniform_set_float(u, "anisotropy", fx->fog_anisotropy);
+    uniform_set_float(u, "sunBoost", fx->fog_sun_boost);
+    uniform_set_float(u, "shadowBias", fx->fog_shadow_bias);
+    // Count 0 (shadows off or absent) degrades fog to ambient haze; the publish
+    // guarantees the map array is valid whenever the count is nonzero.
+    uniform_set_int(u, "numLights", fx->fog_light_count);
+    uniform_set_int(u, "cascadeCount", fx->fog_cascade_count);
+    if (fx->fog_light_count > 0) {
+        GLint lloc = uniform_location(u, "lightSpaceMatrix[0]");
+        if (lloc >= 0)
+            glUniformMatrix4fv(lloc, fx->fog_light_count * fx->fog_cascade_count, GL_FALSE,
+                               (const GLfloat*)fx->fog_light_space);
+        lloc = uniform_location(u, "lightColor[0]");
+        if (lloc >= 0)
+            glUniform3fv(lloc, fx->fog_light_count, (const GLfloat*)fx->fog_light_color);
+        lloc = uniform_location(u, "lightDir[0]");
+        if (lloc >= 0)
+            glUniform3fv(lloc, fx->fog_light_count, (const GLfloat*)fx->fog_light_dir);
+    }
+    uniform_set_int(u, "spotEnabled", fx->fog_spot_enabled ? 1 : 0);
+    int spot_shadowed = (fx->fog_spot_enabled && fx->fog_spot_shadowed) ? 1 : 0;
+    uniform_set_int(u, "spotShadowed", spot_shadowed);
+    if (fx->fog_spot_enabled) {
+        uniform_set_vec3(u, "spotPos", fx->fog_spot_pos);
+        uniform_set_vec3(u, "spotDir", fx->fog_spot_dir);
+        uniform_set_vec3(u, "spotColor", fx->fog_spot_color);
+        uniform_set_vec3(u, "spotAtten", fx->fog_spot_atten);
+        uniform_set_float(u, "spotCosInner", fx->fog_spot_cos_inner);
+        uniform_set_float(u, "spotCosOuter", fx->fog_spot_cos_outer);
+        if (spot_shadowed)
+            uniform_set_mat4(u, "spotLightSpaceMatrix", (float*)fx->fog_spot_light_space);
+    }
+}
+
 // Froxel volumetric fog (spec 9.5): light the medium once per volume cell,
 // integrate front-to-back along each froxel column, then fold the result into
 // the HDR scene with one trilinear tap. Same seam and same blend as the
 // screen-space march it replaces, so shafts still defocus, bloom, and meter
-// like direct light. Returns 0 (nothing to show in the debug view yet).
+// like direct light. Returns 0: the volume has no 2D buffer to show.
 static GLuint postfx_run_froxel_fog(PostFX* fx, bool aux_written, bool taa_resolving,
                                     mat4 projection, mat4 view) {
-    if (!fx->fog_enabled || !aux_written || !postfx_ensure_froxel_targets(fx)) {
-        fx->froxel_history_valid = false;
+    if (!fx->fog_enabled || !aux_written || !postfx_ensure_froxel_targets(fx))
         return 0;
-    }
 
     // Frame parity picks this frame's write target; the other volume still
     // holds the previous frame's scattering for reprojection.
     const int write = fx->frame_index & 1;
-    const int read = write ^ 1;
-    // Temporal only under TAA, matching every other accumulator here. Without
-    // it the jitter stays frozen and headless renders remain byte-identical.
-    const int temporal = (taa_resolving && fx->froxel_history_valid) ? 1 : 0;
+    const int prev = write ^ 1;
+    // Temporal only under TAA, matching every other accumulator here, and only
+    // against the immediately preceding frame. Without it the jitter stays
+    // frozen and headless renders remain byte-identical.
+    const int temporal =
+        (taa_resolving && fx->froxel_prev_frame == fx->frame_index - 1) ? 1 : 0;
+
+    mat4 inv_view;
+    glm_mat4_inv(view, inv_view);
 
     // 1. Inject: scattering + extinction per cell, one draw per slice.
     glUseProgram(fx->froxel_inject_program->id);
@@ -1332,55 +1396,15 @@ static GLuint postfx_run_froxel_fog(PostFX* fx, bool aux_written, bool taa_resol
     glActiveTexture(GL_TEXTURE2);
     glBindTexture(GL_TEXTURE_2D, fx->fog_spot_shadow_map);
     glActiveTexture(GL_TEXTURE3);
-    glBindTexture(GL_TEXTURE_3D, fx->froxel_scatter[read]);
+    glBindTexture(GL_TEXTURE_3D, fx->froxel_scatter[prev]);
     glActiveTexture(GL_TEXTURE0);
+    upload_fog_uniforms(fx, iu, projection, inv_view);
+    uniform_set_int(iu, "froxelDepth", POSTFX_FROXEL_Z);
     uniform_set_int(iu, "temporal", temporal);
     uniform_set_int(iu, "frameIndex", fx->frame_index);
     uniform_set_mat4(iu, "prevView", (float*)fx->froxel_prev_view);
     uniform_set_mat4(iu, "prevProjection", (float*)fx->froxel_prev_proj);
-    mat4 inv_view;
-    glm_mat4_inv(view, inv_view);
-    uniform_set_mat4(iu, "projection", (float*)projection);
-    uniform_set_mat4(iu, "invView", (float*)inv_view);
-    uniform_set_float(iu, "fogFar", fx->fog_far);
-    uniform_set_vec3(iu, "ambientColor", fx->fog_ambient);
-    uniform_set_float(iu, "density", fx->fog_density);
-    uniform_set_float(iu, "heightFalloff", fx->fog_height_falloff);
-    uniform_set_float(iu, "floorY", fx->fog_floor_y);
-    uniform_set_float(iu, "anisotropy", fx->fog_anisotropy);
-    uniform_set_float(iu, "sunBoost", fx->fog_sun_boost);
-    uniform_set_float(iu, "shadowBias", fx->fog_shadow_bias);
-    // Count 0 (shadows off or absent) degrades the volume to ambient haze; the
-    // publish guarantees the map array is valid whenever the count is nonzero.
-    uniform_set_int(iu, "numLights", fx->fog_light_count);
-    uniform_set_int(iu, "cascadeCount", fx->fog_cascade_count);
-    if (fx->fog_light_count > 0) {
-        GLint lloc = uniform_location(iu, "lightSpaceMatrix[0]");
-        if (lloc >= 0)
-            glUniformMatrix4fv(lloc, fx->fog_light_count * fx->fog_cascade_count, GL_FALSE,
-                               (const GLfloat*)fx->fog_light_space);
-        lloc = uniform_location(iu, "lightColor[0]");
-        if (lloc >= 0)
-            glUniform3fv(lloc, fx->fog_light_count, (const GLfloat*)fx->fog_light_color);
-        lloc = uniform_location(iu, "lightDir[0]");
-        if (lloc >= 0)
-            glUniform3fv(lloc, fx->fog_light_count, (const GLfloat*)fx->fog_light_dir);
-    }
-    uniform_set_int(iu, "spotEnabled", fx->fog_spot_enabled ? 1 : 0);
-    int spot_shadowed = (fx->fog_spot_enabled && fx->fog_spot_shadowed) ? 1 : 0;
-    uniform_set_int(iu, "spotShadowed", spot_shadowed);
-    if (fx->fog_spot_enabled) {
-        uniform_set_vec3(iu, "spotPos", fx->fog_spot_pos);
-        uniform_set_vec3(iu, "spotDir", fx->fog_spot_dir);
-        uniform_set_vec3(iu, "spotColor", fx->fog_spot_color);
-        uniform_set_vec3(iu, "spotAtten", fx->fog_spot_atten);
-        uniform_set_float(iu, "spotCosInner", fx->fog_spot_cos_inner);
-        uniform_set_float(iu, "spotCosOuter", fx->fog_spot_cos_outer);
-        if (spot_shadowed)
-            uniform_set_mat4(iu, "spotLightSpaceMatrix", (float*)fx->fog_spot_light_space);
-    }
-    draw_volume_slices(fx, fx->froxel_fbo, fx->froxel_scatter[write], POSTFX_FROXEL_X,
-                       POSTFX_FROXEL_Y, POSTFX_FROXEL_Z, iu);
+    draw_volume_slices(fx, fx->froxel_scatter[write], iu);
 
     // 2. Integrate: slice k gathers 0..k. Reads the scatter volume, writes the
     // integrated one -- different textures, so no read-write hazard.
@@ -1390,8 +1414,8 @@ static GLuint postfx_run_froxel_fog(PostFX* fx, bool aux_written, bool taa_resol
     glBindTexture(GL_TEXTURE_3D, fx->froxel_scatter[write]);
     uniform_set_mat4(gu, "projection", (float*)projection);
     uniform_set_float(gu, "fogFar", fx->fog_far);
-    draw_volume_slices(fx, fx->froxel_fbo, fx->froxel_integrated, POSTFX_FROXEL_X, POSTFX_FROXEL_Y,
-                       POSTFX_FROXEL_Z, gu);
+    uniform_set_int(gu, "froxelDepth", POSTFX_FROXEL_Z);
+    draw_volume_slices(fx, fx->froxel_integrated, gu);
 
     // 3. Composite: out = inscatter + scene * transmittance, the same
     // enable/draw/restore idiom the screen-space fog and SSR composites use.
@@ -1406,17 +1430,18 @@ static GLuint postfx_run_froxel_fog(PostFX* fx, bool aux_written, bool taa_resol
     glActiveTexture(GL_TEXTURE0);
     uniform_set_mat4(cu, "projection", (float*)projection);
     uniform_set_float(cu, "fogFar", fx->fog_far);
+    uniform_set_int(cu, "froxelDepth", POSTFX_FROXEL_Z);
     glEnable(GL_BLEND);
     glBlendFunc(GL_ONE, GL_SRC_ALPHA);
     draw_fullscreen_quad(fx->quad_vao);
     glDisable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-    // Remember the camera this volume was built with; next frame reprojects
-    // its cells through it to find where they were.
+    // Remember the camera and the frame this volume was built with; next frame
+    // reprojects its cells through them to find where they were.
     glm_mat4_copy(view, fx->froxel_prev_view);
     glm_mat4_copy(projection, fx->froxel_prev_proj);
-    fx->froxel_history_valid = true;
+    fx->froxel_prev_frame = fx->frame_index;
 
     check_gl_error("postfx froxel fog");
     return 0;
@@ -1427,15 +1452,8 @@ static GLuint postfx_run_froxel_fog(PostFX* fx, bool aux_written, bool taa_resol
 // direct light. Owns the fog history lifecycle -- the history is only
 // fresh when the accumulator ran, so every other path invalidates it.
 // Returns the half-res fog texture for the debug view, 0 when fog is off.
-static GLuint postfx_run_fog(PostFX* fx, bool aux_written, bool taa_resolving, mat4 projection,
-                             mat4 view) {
-    // The froxel path owns fog entirely when selected; the legacy half-res
-    // march keeps its own history invalid so re-enabling it never reprojects
-    // against a stale frame.
-    if (fx->fog_volumetric) {
-        fx->fog_history.valid = false;
-        return postfx_run_froxel_fog(fx, aux_written, taa_resolving, projection, view);
-    }
+static GLuint postfx_run_fog_march(PostFX* fx, bool aux_written, bool taa_resolving,
+                                   mat4 projection, mat4 view) {
     if (!fx->fog_enabled || !aux_written || !postfx_ensure_fog_targets(fx)) {
         fx->fog_history.valid = false;
         return 0;
@@ -1448,60 +1466,16 @@ static GLuint postfx_run_fog(PostFX* fx, bool aux_written, bool taa_resolving, m
     glBindTexture(GL_TEXTURE_2D, fx->aux_texture);
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D_ARRAY, fx->fog_shadow_map_array);
-    glActiveTexture(GL_TEXTURE0);
-    mat4 inv_view;
-    glm_mat4_inv(view, inv_view);
-    UniformManager* fu = fx->fog_program->uniforms;
-    uniform_set_mat4(fu, "invView", (float*)inv_view);
-    uniform_set_mat4(fu, "projection", (float*)projection);
-    uniform_set_vec3(fu, "ambientColor", fx->fog_ambient);
-    uniform_set_float(fu, "density", fx->fog_density);
-    uniform_set_float(fu, "heightFalloff", fx->fog_height_falloff);
-    uniform_set_float(fu, "floorY", fx->fog_floor_y);
-    uniform_set_float(fu, "fogFar", fx->fog_far);
-    uniform_set_float(fu, "anisotropy", fx->fog_anisotropy);
-    uniform_set_float(fu, "sunBoost", fx->fog_sun_boost);
-    uniform_set_float(fu, "shadowBias", fx->fog_shadow_bias);
-    uniform_set_int(fu, "steps", fx->fog_steps);
-    // Count 0 (shadows off or absent) degrades the march to plain ambient
-    // haze; the publish guarantees the map array is valid whenever the
-    // count is nonzero.
-    uniform_set_int(fu, "numLights", fx->fog_light_count);
-    uniform_set_int(fu, "cascadeCount", fx->fog_cascade_count);
-    if (fx->fog_light_count > 0) {
-        // Cascade layers stride by the published runtime count (slot
-        // indices at count 1) and are contiguous from element 0, as are
-        // the per-slot arrays -- ranged uploads cover them all
-        GLint lloc = uniform_location(fu, "lightSpaceMatrix[0]");
-        if (lloc >= 0)
-            glUniformMatrix4fv(lloc, fx->fog_light_count * fx->fog_cascade_count, GL_FALSE,
-                               (const GLfloat*)fx->fog_light_space);
-        lloc = uniform_location(fu, "lightColor[0]");
-        if (lloc >= 0)
-            glUniform3fv(lloc, fx->fog_light_count, (const GLfloat*)fx->fog_light_color);
-        lloc = uniform_location(fu, "lightDir[0]");
-        if (lloc >= 0)
-            glUniform3fv(lloc, fx->fog_light_count, (const GLfloat*)fx->fog_light_dir);
-    }
-    // Volumetric spot (the flashlight): scattered per march step when present.
-    uniform_set_int(fu, "spotEnabled", fx->fog_spot_enabled ? 1 : 0);
-    int spot_shadowed = (fx->fog_spot_enabled && fx->fog_spot_shadowed) ? 1 : 0;
-    uniform_set_int(fu, "spotShadowed", spot_shadowed);
     // The perspective spot depth map on its own unit (0 = linDepth, 1 = the
     // directional array). Bound each frame (0 when none) so the sampler is valid.
     glActiveTexture(GL_TEXTURE2);
     glBindTexture(GL_TEXTURE_2D, fx->fog_spot_shadow_map);
-    uniform_set_int(fu, "spotShadowMap", 2);
-    if (fx->fog_spot_enabled) {
-        uniform_set_vec3(fu, "spotPos", fx->fog_spot_pos);
-        uniform_set_vec3(fu, "spotDir", fx->fog_spot_dir);
-        uniform_set_vec3(fu, "spotColor", fx->fog_spot_color);
-        uniform_set_vec3(fu, "spotAtten", fx->fog_spot_atten);
-        uniform_set_float(fu, "spotCosInner", fx->fog_spot_cos_inner);
-        uniform_set_float(fu, "spotCosOuter", fx->fog_spot_cos_outer);
-        if (spot_shadowed)
-            uniform_set_mat4(fu, "spotLightSpaceMatrix", (float*)fx->fog_spot_light_space);
-    }
+    glActiveTexture(GL_TEXTURE0);
+    mat4 inv_view;
+    glm_mat4_inv(view, inv_view);
+    UniformManager* fu = fx->fog_program->uniforms;
+    upload_fog_uniforms(fx, fu, projection, inv_view);
+    uniform_set_int(fu, "steps", fx->fog_steps);
     // Under TAA the march's dither rotates per frame and the accumulator
     // integrates it; headless/no-TAA keeps the static dither so equal runs
     // stay byte-identical.
@@ -1535,6 +1509,18 @@ static GLuint postfx_run_fog(PostFX* fx, bool aux_written, bool taa_resolving, m
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     check_gl_error("postfx fog");
     return result;
+}
+
+// Fog has two implementations and exactly one runs per frame. Each owns its own
+// temporal history and invalidates it on its own bail-out, so switching between
+// them mid-run cannot reproject against a frame the other path wrote.
+static GLuint postfx_run_fog(PostFX* fx, bool aux_written, bool taa_resolving, mat4 projection,
+                             mat4 view) {
+    if (fx->fog_volumetric) {
+        fx->fog_history.valid = false;
+        return postfx_run_froxel_fog(fx, aux_written, taa_resolving, projection, view);
+    }
+    return postfx_run_fog_march(fx, aux_written, taa_resolving, projection, view);
 }
 
 // Screen-space reflections: rebuild the Hi-Z min-depth pyramid, march the

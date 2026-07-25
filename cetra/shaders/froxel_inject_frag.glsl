@@ -8,14 +8,13 @@ out vec4 FragColor; // rgb = in-scattered radiance, a = extinction sigma
 // expensive to consult; a froxel pays for it once per cell.
 //
 // One draw per slice writes one layer of the volume (sliceIndex says which), so
-// this is an ordinary fullscreen pass over a 160x90 grid, run 64 times.
+// this is an ordinary fullscreen pass over the volume's XY grid.
 //
-// The scattering math is ported from fog_frag.glsl unchanged -- same height
-// sigma, same per-caster cascade tap, same spot cone/attenuation/shadow, same
-// Henyey-Greenstein phase -- so the two implementations agree where they
-// overlap. What changes is WHERE it is evaluated: a pixel has one view ray, so
-// the old march could hoist phase and the light-space projection out of its
-// loop; a froxel has no single ray, so both are evaluated per cell instead.
+// The cascade tap, spot in-scatter and Henyey-Greenstein phase mirror
+// fog_frag.glsl; the height sigma deliberately does NOT (see below -- a volume
+// cannot express the march's floor-plane ray clamp). A pixel has one view ray,
+// so the march could hoist phase and the light-space projection out of its step
+// loop; a froxel has no single ray, so both are evaluated per cell.
 
 // Same mirrored constants as fog_frag.glsl (MAX_SHADOW_LIGHTS / SHADOW_CASCADES
 // under private names); they must track shadow.h the same way.
@@ -23,6 +22,7 @@ out vec4 FragColor; // rgb = in-scattered radiance, a = extinction sigma
 #define FOG_CASCADES 3
 
 uniform int sliceIndex;  // Which volume layer this draw is writing
+uniform int froxelDepth; // Slice count; mirrors POSTFX_FROXEL_Z
 uniform mat4 projection; // Focal terms reconstruct the froxel's view position
 uniform mat4 invView;    // view -> world (camera pose)
 uniform float fogFar;    // Far end of the volume's exponential depth range
@@ -64,10 +64,7 @@ uniform mat4 prevProjection; // Its focal terms map that to the previous volume
 
 const float PI = 3.14159265359;
 
-// The point of the whole feature: local lights scatter into the medium. The
-// screen-space march could not afford this -- it would pay per light per step
-// per pixel -- but a froxel consults its cluster once per cell. Including this
-// chunk also wires the three light UBOs automatically (setup_program_uniforms).
+// Clustered light data for the local-light scattering below.
 #include "lights_ubo.glsl"
 #include "froxel.glsl"
 
@@ -113,7 +110,9 @@ void main() {
                                           0.00583715 * gl_FragCoord.y) +
                        float(frameIndex) * 0.61803398875);
     }
-    vec3 viewPos = froxelViewPos(TexCoords, float(sliceIndex), jitter, nearZ, fogFar, invFocal);
+    vec3 viewPos =
+        froxelViewPos(TexCoords, float(sliceIndex), jitter, nearZ, fogFar, float(froxelDepth),
+                      invFocal);
     vec3 camPos = invView[3].xyz;
     vec3 P = (invView * vec4(viewPos, 1.0)).xyz;
     // Direction from the camera toward this cell: the phase function's second
@@ -134,13 +133,12 @@ void main() {
     }
 
     // Spot in-scatter at P: inside the cone, falling off with distance, cut by
-    // the spot's shadow. Cone alignment mirrors spotConeFactor
-    // (shaders/include/lights_ubo.glsl) so shaft and floor pool agree.
+    // the spot's shadow.
     if (spotEnabled == 1) {
         vec3 toL = spotPos - P;
         float d = length(toL);
-        float cosT = dot(-toL / max(d, 1e-4), spotDir);
-        float cone = clamp((cosT - spotCosOuter) / max(spotCosInner - spotCosOuter, 1e-4), 0.0, 1.0);
+        // spotConeFactor's own ramp, so shaft and floor pool share one formula.
+        float cone = spotConeFactor(2.0, spotDir, spotCosInner, spotCosOuter, toL / max(d, 1e-4));
         if (cone > 0.0) {
             float atten = 1.0 / max(spotAtten.x + spotAtten.y * d + spotAtten.z * d * d, 1e-4);
             float vis = 1.0;
@@ -157,34 +155,29 @@ void main() {
         }
     }
 
-    // Clustered point/spot lights (spec 9.1's list). Unshadowed: the engine has
-    // one global spot shadow map, handled above, and none at all for point
-    // lights -- so this is in-scatter from the local rig, not shadowed shafts.
-    // Attenuation and cone match pbr_frag so a light's glow in the air agrees
-    // with the pool it casts on the floor.
+    // Clustered point lights (spec 9.1's list), unshadowed -- the engine has no
+    // shadow map for point lights. Attenuation matches pbr_frag so a light's
+    // glow in the air agrees with the pool it casts on the floor.
     // No enable flag: the UBOs are zero-initialised and always bound, so a
     // scene without clustered lights reports count 0 and this costs nothing --
     // the degradation to sun+spot coverage is structural, not a toggle.
     uvec2 list = clusterLightListUv(TexCoords, -viewPos.z);
     for (uint k = 0u; k < list.y; k++) {
         uint li = lightIndexAt(list.x + k);
-        // Skip area panels (no scattering in v1) and ALL spots: the scene's
-        // first spot is already scattered above, with its shadow map, and it is
-        // also in this list -- adding it again would double its contribution.
-        // Further spots go unscattered, exactly as in the screen-space march.
+        // Point lights only. Area panels do not scatter in v1, and every spot
+        // is skipped because the scene's first spot is already scattered above
+        // WITH its shadow map and also appears in this list -- adding it again
+        // would double it. Further spots go unscattered, as in the march.
         if (clusterLights[li].dirType.w != 1.0)
             continue;
         vec3 toL = clusterLights[li].posRange.xyz - P;
         float d = length(toL);
-        // Same 1/(c + l*d + q*d^2) falloff pbr_frag uses, so a light's glow in
-        // the air agrees with the pool it casts on the floor.
         float atten =
             1.0 / max(clusterLights[li].attenCutoff.x + clusterLights[li].attenCutoff.y * d +
                           clusterLights[li].attenCutoff.z * d * d,
                       1e-4);
-        // Phase against the light's travel direction toward this cell (toL
-        // points at the light, so -toL/d is how the light travels), the
-        // punctual analogue of the directional case above.
+        // toL points at the light, so -toL/d is the direction it travels -- the
+        // punctual analogue of the directional phase above.
         float phase = phaseHG(dot(-toL / max(d, 1e-4), -rayDir), anisotropy) * sunBoost;
         S += clusterLights[li].colorIntensity.xyz * (atten * phase);
     }
@@ -203,8 +196,11 @@ void main() {
         if (prevZ > nearZ) {
             vec2 prevFocal = vec2(prevProjection[0][0], prevProjection[1][1]);
             vec2 prevUv = (prevViewPos.xy * prevFocal / prevZ) * 0.5 + 0.5;
-            float prevSlice = froxelViewZToSlice(prevZ, nearZ, fogFar);
-            vec3 prevUvw = vec3(prevUv, prevSlice / float(FROXEL_Z));
+            float prevSlice = froxelViewZToSlice(prevZ, nearZ, fogFar, float(froxelDepth));
+            // Scatter cells sit at their slice centre (slice s spans continuous
+            // s..s+1), so continuous coordinate c reads texel c-0.5, i.e. the
+            // normalized coordinate is just c/depth.
+            vec3 prevUvw = vec3(prevUv, prevSlice / float(froxelDepth));
             // Off-volume reprojection has no history to blend, so those cells
             // keep the current frame -- the standard disocclusion fallback.
             if (all(greaterThanEqual(prevUvw, vec3(0.0))) &&

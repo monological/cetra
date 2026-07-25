@@ -227,12 +227,15 @@ typedef struct PostFX {
     GLuint froxel_integrated; // RGBA16F volume: front-to-back inscatter + transmittance
     // The camera the previous froxel frame was built with. PostFX keeps its own
     // copy because engine->prev_view_proj already holds THIS frame's matrix by
-    // the time postfx runs (the scene pass stashes it at its end). valid=false
-    // whenever a frame skipped the volume, so re-enabling fog never reprojects
-    // against a stale or never-written frame.
+    // the time postfx runs (the scene pass stashes it at its end).
     mat4 froxel_prev_view;
     mat4 froxel_prev_proj;
-    bool froxel_history_valid;
+    // frame_index of the last froxel build, -1 = never. Reprojection is legal
+    // only against the IMMEDIATELY preceding frame, so this is compared rather
+    // than a validity flag: any frame that skipped the volume -- the legacy fog
+    // path, a debug render mode bypassing the chain, fog switched off -- breaks
+    // the adjacency without needing to remember to clear anything.
+    int froxel_prev_frame;
 
     // Published per frame by shadow_publish_to_postfx (mirrors the probe
     // block; postfx never learns about the shadow system): the casters'

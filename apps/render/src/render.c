@@ -120,9 +120,8 @@ static void print_usage(const char* prog) {
             "      --fog-debug        Show the raw fog in-scatter buffer (implies --fog)\n");
     fprintf(stderr, "      --fog-density <f>  Fog extinction per world unit (implies --fog)\n");
     fprintf(stderr, "      --fog-height <f>   Fog height falloff in world units (implies --fog)\n");
-    fprintf(stderr,
-            "      --fog-volumetric[=0]  Froxel fog volume; =0 keeps the legacy march (implies "
-            "--fog)\n");
+    fprintf(stderr, "      --no-fog-volumetric  Legacy screen-space fog march instead of the "
+                    "froxel volume\n");
     fprintf(stderr,
             "      --contact-shadows  Screen-space contact shadows along the key light\n");
     fprintf(stderr,
@@ -503,6 +502,9 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
         } else if (strcmp(argv[i], "--fog-debug") == 0) {
             args->fog = 1;
             args->fog_debug = 1;
+            // The in-scatter buffer this view shows only exists on the march;
+            // the volume has no 2D result to blit.
+            args->fog_volumetric = 0;
         } else if (strcmp(argv[i], "--fog-density") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -665,10 +667,14 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 return -1;
             }
             args->fog_anisotropy = (float)atof(argv[i]);
-        } else if (strncmp(argv[i], "--fog-volumetric", 16) == 0) {
-            // --fog-volumetric or --fog-volumetric=0 (the escape hatch back to
-            // the legacy screen-space march while both paths ship)
-            args->fog_volumetric = (argv[i][16] == '=' && argv[i][17] == '0') ? 0 : 1;
+        } else if (strcmp(argv[i], "--fog-volumetric") == 0) {
+            args->fog_volumetric = 1;
+            args->fog = 1;
+        } else if (strcmp(argv[i], "--no-fog-volumetric") == 0) {
+            // The escape hatch back to the legacy screen-space march while both
+            // paths ship. It is also the only path with an in-scatter buffer,
+            // so --fog-debug selects it.
+            args->fog_volumetric = 0;
             args->fog = 1;
         } else if (strcmp(argv[i], "--ibl-intensity") == 0) {
             if (++i >= argc) {

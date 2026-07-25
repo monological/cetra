@@ -15,8 +15,8 @@ uniform sampler2D linDepthTex;      // Aux G-buffer; .z = linear view Z (<0), 0 
 uniform sampler3D integratedVolume;
 uniform mat4 projection;
 uniform float fogFar;
+uniform int froxelDepth; // Slice count; mirrors POSTFX_FROXEL_Z
 
-#include "depth.glsl" // viewPosFromLinZ; requires the projection uniform above
 #include "froxel.glsl"
 
 void main() {
@@ -26,14 +26,18 @@ void main() {
     // Sky/background (aux sentinel 0) has no surface, so it takes the full
     // depth of the volume -- the far slice already holds the whole column.
     bool sky = (linZ >= -1e-4);
-    // Euclidean view distance, matching what the screen-space march used as its
-    // ray length, so the two agree about where a surface sits in the fog.
-    vec2 invFocal = 1.0 / vec2(projection[0][0], projection[1][1]);
-    float viewDist = sky ? fogFar : length(viewPosFromLinZ(TexCoords, linZ, invFocal));
+    // PLANAR depth, not the ray length the screen-space march used: the volume's
+    // slices are constant-depth planes (froxelViewPos puts every cell of a slice
+    // at the same view z), so feeding it a radial distance would index deeper
+    // the further a pixel sits off the optical axis.
+    float depth = sky ? fogFar : -linZ;
 
-    float slice = froxelViewZToSlice(min(viewDist, fogFar), nearZ, fogFar);
-    // Sample at the slice's centre in texture space; CLAMP_TO_EDGE on R holds
-    // the final integrated value for anything at or past the last slice.
-    vec3 uvw = vec3(TexCoords, (slice + 0.5) / float(FROXEL_Z));
+    float slice = froxelViewZToSlice(min(depth, fogFar), nearZ, fogFar, float(froxelDepth));
+    // Layer s holds the integral out to the FAR face of slice s (the integrate
+    // pass ends its accumulation at slice s+1), so a depth at continuous slice
+    // coordinate `slice` is carried by layer slice-1, whose texel centre sits at
+    // (slice-0.5)/depth. CLAMP_TO_EDGE on R holds the fully integrated column
+    // for anything at or past the last slice.
+    vec3 uvw = vec3(TexCoords, (slice - 0.5) / float(froxelDepth));
     FragColor = texture(integratedVolume, uvw);
 }
