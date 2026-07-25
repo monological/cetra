@@ -1606,11 +1606,6 @@ static void _engine_gui_panel(Engine* engine) {
         igSliderFloat("Anisotropy", &fx->fog_anisotropy, -0.9f, 0.9f, "%.2f", 0);
         igSliderFloat("Sun Boost", &fx->fog_sun_boost, 0.0f, 8.0f, "%.2f", 0);
         igColorEdit3("Fog Ambient", fx->fog_ambient, 0);
-        igCheckbox("Froxel Volume", &fx->fog_volumetric);
-        // Fog Steps drives the screen-space march only; the froxel volume's
-        // resolution is its slice count, fixed at build time.
-        if (!fx->fog_volumetric)
-            igSliderInt("Fog Steps", &fx->fog_steps, 8, 48, "%d", 0);
         _end_effect_group();
 
         igCheckbox("Normals G-buffer", &fx->normals_enabled);

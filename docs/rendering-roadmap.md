@@ -354,7 +354,8 @@ Effort key: **S** ≈ days · **M** ≈ 1–2 weeks · **L** ≈ 3+ weeks.
   `glTextureBarrier`, GL 4.5), and a full-res composite that is one trilinear tap on the same
   `scene·T + inscatter` blend. Slices are drawn one layer at a time via
   `glFramebufferTextureLayer` — the cascade/mask-array/cube-face idiom — so no geometry shader
-  was needed. Default on; `--fog-volumetric=0` keeps the screen-space march for one release.
+  was needed. The screen-space march was deleted once the froxel path was verified against it —
+  carrying both meant every fog parameter change had to land in two shaders.
 - **Dependencies.** Shadow map(s); much smoother with TAA and CSM.
 - **Refs.** Wronski, "Volumetric Fog" (SIGGRAPH 2014); Hillaire, "Physically Based &
   Unified Volumetric Rendering in Frostbite" (SIGGRAPH 2015).

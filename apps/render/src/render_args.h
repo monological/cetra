@@ -54,11 +54,9 @@ typedef struct {
     float sun_azimuth;                // Sky sun azimuth in degrees (-999 = default)
     int sky_rebake_stress;            // Diagnostic: N headless sun re-bakes then restore
     int fog;                          // Enable volumetric fog
-    int fog_debug;                    // Show the raw fog in-scatter buffer
     float fog_density;                // Extinction override (0 = scene-scaled)
     float fog_height;                 // Height falloff override (0 = scene-scaled)
     float fog_anisotropy;             // Scatter anisotropy (-999 = keep engine default)
-    int fog_volumetric;               // -1 = engine default, 0 = legacy march, 1 = froxel
     int contact_shadows;              // Enable screen-space contact shadows
     int contact_shadows_debug;        // Show the raw contact-shadow visibility term
     float cs_distance;                // March reach override (-1 = scene-scaled)

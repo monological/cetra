@@ -825,10 +825,6 @@ ShaderProgram* create_ssr_atrous_program() {
     return create_post_program("ssr_atrous", ssr_atrous_frag_shader_str);
 }
 
-ShaderProgram* create_fog_program() {
-    return create_post_program("fog", fog_frag_shader_str);
-}
-
 // The froxel fog trio (spec 9.5). All three are ordinary fullscreen passes --
 // the volume is written one slice per draw, so they need no geometry shader and
 // share the standard post vertex shader.

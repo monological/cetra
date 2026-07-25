@@ -116,12 +116,8 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --sun-elevation <d> Sky sun elevation in degrees (implies --sky)\n");
     fprintf(stderr, "      --sun-azimuth <d>  Sky sun azimuth in degrees (implies --sky)\n");
     fprintf(stderr, "      --fog              Volumetric fog: god rays + height haze\n");
-    fprintf(stderr,
-            "      --fog-debug        Show the raw fog in-scatter buffer (implies --fog)\n");
     fprintf(stderr, "      --fog-density <f>  Fog extinction per world unit (implies --fog)\n");
     fprintf(stderr, "      --fog-height <f>   Fog height falloff in world units (implies --fog)\n");
-    fprintf(stderr, "      --no-fog-volumetric  Legacy screen-space fog march instead of the "
-                    "froxel volume\n");
     fprintf(stderr,
             "      --contact-shadows  Screen-space contact shadows along the key light\n");
     fprintf(stderr,
@@ -221,7 +217,6 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->bloom_strength = -1.0f;   // -1 = keep the engine default
     args->bloom_threshold = -1.0f;  // -1 = keep the engine default
     args->fog_anisotropy = -999.0f; // -999 = keep default (-1..1 is valid)
-    args->fog_volumetric = -1;      // -1 = keep the engine's fog implementation default
     args->ibl_intensity = -1.0f;    // -1 = keep the engine default
     args->cs_distance = -1.0f;      // -1 = scene-scaled contact-shadow reach
     args->cs_strength = -1.0f;      // -1 = keep the engine default
@@ -499,12 +494,6 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->sky = 1;
         } else if (strcmp(argv[i], "--fog") == 0) {
             args->fog = 1;
-        } else if (strcmp(argv[i], "--fog-debug") == 0) {
-            args->fog = 1;
-            args->fog_debug = 1;
-            // The in-scatter buffer this view shows only exists on the march;
-            // the volume has no 2D result to blit.
-            args->fog_volumetric = 0;
         } else if (strcmp(argv[i], "--fog-density") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -667,15 +656,6 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 return -1;
             }
             args->fog_anisotropy = (float)atof(argv[i]);
-        } else if (strcmp(argv[i], "--fog-volumetric") == 0) {
-            args->fog_volumetric = 1;
-            args->fog = 1;
-        } else if (strcmp(argv[i], "--no-fog-volumetric") == 0) {
-            // The escape hatch back to the legacy screen-space march while both
-            // paths ship. It is also the only path with an in-scatter buffer,
-            // so --fog-debug selects it.
-            args->fog_volumetric = 0;
-            args->fog = 1;
         } else if (strcmp(argv[i], "--ibl-intensity") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -1456,9 +1436,6 @@ int main(int argc, char** argv) {
     if (args.fog && engine->postfx) {
         engine->postfx->fog_enabled = true;
     }
-    if (args.fog_debug && engine->postfx) {
-        engine->postfx->debug_view = POSTFX_DEBUG_FOG;
-    }
     if (args.contact_shadows && engine->postfx) {
         engine->postfx->contact_shadows_enabled = true;
         if (args.cs_strength >= 0.0f)
@@ -1549,9 +1526,6 @@ int main(int argc, char** argv) {
         }
         if (args.bloom_threshold >= 0.0f) {
             fx->bloom_threshold = args.bloom_threshold;
-        }
-        if (args.fog_volumetric >= 0) {
-            fx->fog_volumetric = args.fog_volumetric != 0;
         }
         if (args.fog_anisotropy > -900.0f) {
             fx->fog_anisotropy = args.fog_anisotropy;

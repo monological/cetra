@@ -43,12 +43,14 @@ typedef struct PingPong {
 // at a time by construction; values match the shader's debugView dispatch)
 typedef enum PostFXDebugView {
     POSTFX_DEBUG_NONE = 0,
-    POSTFX_DEBUG_AO = 1,       // Blurred SSAO buffer
-    POSTFX_DEBUG_NORMALS = 2,  // Resolved normals G-buffer
-    POSTFX_DEBUG_SSR = 3,      // Half-res reflection buffer
-    POSTFX_DEBUG_ALBEDO = 4,   // Resolved albedo G-buffer (SSGI)
-    POSTFX_DEBUG_SSGI = 5,     // Raw gathered GI radiance (half-res, SSGI)
-    POSTFX_DEBUG_FOG = 6,      // Half-res fog in-scatter buffer
+    POSTFX_DEBUG_AO = 1,      // Blurred SSAO buffer
+    POSTFX_DEBUG_NORMALS = 2, // Resolved normals G-buffer
+    POSTFX_DEBUG_SSR = 3,     // Half-res reflection buffer
+    POSTFX_DEBUG_ALBEDO = 4,  // Resolved albedo G-buffer (SSGI)
+    POSTFX_DEBUG_SSGI = 5,    // Raw gathered GI radiance (half-res, SSGI)
+    // 6 was the half-res fog in-scatter buffer, retired with the screen-space
+    // march (spec 9.5); the froxel volume has no 2D buffer to blit. The gap is
+    // deliberate -- the values are the shader's debugView dispatch.
     POSTFX_DEBUG_SPEC_OCC = 7, // AO visibility after specular occlusion
     POSTFX_DEBUG_CONTACT = 8,  // Contact-shadow visibility term (before compositing)
 } PostFXDebugView;
@@ -130,8 +132,7 @@ typedef struct PostFX {
     ShaderProgram* lum_adapt_program;
     ShaderProgram* ssr_program;
     ShaderProgram* ssr_hiz_program;
-    ShaderProgram* upsample_tent_program; // Shared half-res composite (SSR, fog)
-    ShaderProgram* fog_program;
+    ShaderProgram* upsample_tent_program;    // Shared half-res composite (SSR, fog)
     ShaderProgram* froxel_inject_program;    // Per-cell scattering into the volume (spec 9.5)
     ShaderProgram* froxel_integrate_program; // Front-to-back gather along each slice column
     ShaderProgram* froxel_composite_program; // One trilinear tap, folded into the HDR scene
@@ -195,30 +196,20 @@ typedef struct PostFX {
     float probe_max_lod;
     float probe_intensity;
 
-    // Volumetric fog: a half-res raymarch toward each pixel's depth gathers
-    // single-scattered light from the shadow casters plus an ambient term
-    // through an exponential height-fog density, composited into the HDR
-    // scene before DoF/bloom as scene*transmittance + inscatter. Off by
-    // default; fog_enabled false leaves the frame untouched. World-space
-    // parameters are scene-scaled by apps.
+    // Volumetric fog (spec 9.5): a camera-frustum froxel volume gathers
+    // single-scattered light from the shadow casters, the clustered local
+    // lights, and an ambient term through an exponential height-fog density,
+    // composited into the HDR scene before DoF/bloom as
+    // scene*transmittance + inscatter. Off by default; fog_enabled false leaves
+    // the frame untouched. World-space parameters are scene-scaled by apps.
     bool fog_enabled;
-    float fog_density;           // Extinction at floor height (1/world units)
-    float fog_height_falloff;    // World units for a 1/e density drop
-    float fog_floor_y;           // World height of max density
-    float fog_far;               // March length for sky rays / march cap
-    float fog_anisotropy;        // Henyey-Greenstein g (forward scattering)
-    float fog_sun_boost;         // Artistic multiplier on the shaft in-scatter
-    vec3 fog_ambient;            // Isotropic ambient in-scatter radiance
-    int fog_steps;               // March steps
-    bool fog_ready;              // Lazy-alloc guard for the targets below
-    GLuint fog_fbo, fog_texture; // Half-res RGBA16F: inscatter.rgb + transmittance.a
-    PingPong fog_history;        // Half-res temporal accumulation
-
-    // Froxel volumetric fog (spec 9.5): the same fog parameters above, but
-    // lit once per volume cell in a camera-frustum 3D grid instead of once
-    // per pixel-step, which is what makes clustered local lights affordable
-    // to scatter. false selects the legacy screen-space march.
-    bool fog_volumetric;
+    float fog_density;        // Extinction at floor height (1/world units)
+    float fog_height_falloff; // World units for a 1/e density drop
+    float fog_floor_y;        // World height of max density; no medium below it
+    float fog_far;            // Far end of the volume's depth range: where its slices are spent
+    float fog_anisotropy;     // Henyey-Greenstein g (forward scattering)
+    float fog_sun_boost;      // Artistic multiplier on the shaft in-scatter
+    vec3 fog_ambient;         // Isotropic ambient in-scatter radiance
     bool froxel_ready;        // Lazy-alloc guard for the volumes below
     GLuint froxel_fbo;        // Attachment-less; a layer is bound per slice draw
     GLuint froxel_scatter[2]; // RGBA16F volumes: in-scatter radiance + extinction, indexed by

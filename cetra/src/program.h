@@ -94,7 +94,6 @@ ShaderProgram* create_ssgi_composite_program();
 ShaderProgram* create_ssgi_accum_program();
 ShaderProgram* create_ssgi_atrous_program();
 ShaderProgram* create_ssr_atrous_program();
-ShaderProgram* create_fog_program();
 ShaderProgram* create_froxel_inject_program();
 ShaderProgram* create_froxel_integrate_program();
 ShaderProgram* create_froxel_composite_program();

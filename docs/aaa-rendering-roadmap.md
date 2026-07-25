@@ -175,9 +175,10 @@ vs reprojected previous volume; static jitter headless = deterministic); (2) **i
 deliberately O(n²) front-to-back gather per slice (~30M cheap taps at 64 slices — sidesteps the
 read-write hazard a sequential scan would hit without glTextureBarrier, which is 4.2);
 (3) **composite** — full-res, 1 trilinear tap, existing
-`glBlendFunc(GL_ONE, GL_SRC_ALPHA)` idiom (B9 adds its aerial tap here later). The fog half-res
-buffer/history/tent-upsample go unused on this path (never lazily allocated), not deleted — the
-old march stays reachable behind the toggle for one release, tracked as B1b below. Fog
+`glBlendFunc(GL_ONE, GL_SRC_ALPHA)` idiom (B9 adds its aerial tap here later). The screen-space
+march and its half-res buffer/history/tent-upsample are **deleted**, not toggleable: two fog
+implementations meant every parameter change had to land in two shaders, and the A/B that
+justified keeping one was already run and recorded. Fog
 sun/ambient stay **app-set** in this item — moving them to sky-published lands in B9, so the froxel
 pass keeps a clean A/B against the old screen-space pass (changing the color source at the same time
 would confound the parity gate).
@@ -299,7 +300,6 @@ New: `aerial_lut_frag.glsl`. CLI: `--aerial[=0]`.
 | 2 | A2 LTC area lights | M | **DONE** (spec 9.2). Signature environment feature; contained M on the now-stable loop; must precede DDGI so probes capture area-lit rooms. |
 | 3 | A3 Contact shadows | S | **DONE** (spec 9.3). Post-only depth march along the key light; no shadow.c changes (postfx already had the light dir + view matrix). Default off. |
 | 4 | B1 Froxel volumetric fog | L | **DONE** (spec 9.5). Owns the 3D-texture + volume-draw machinery all volumetrics need; consumes A1's light list on day one. Shipped with one-layer-per-draw slices, not the layered-GS sketch — that matches the cascade/mask-array/cube-face idiom and needs no geometry shader. |
-| 4b | B1b Delete the screen-space fog march | S | **Trigger: before v0.3.** B1 ships both fog implementations so the froxel path has an A/B oracle and a fallback for the 3D-texture driver risk. Removing `fog_frag.glsl`, `fog_program`, `fog_steps`, `fog_fbo/texture/history`, `postfx_ensure_fog_targets`, `postfx_run_fog_march`, `--no-fog-volumetric`, the GUI checkbox and `POSTFX_DEBUG_FOG` drops ~350 lines and ends the two-copy fog-math invariant. Until then every fog parameter change must land in both shaders. |
 | 5 | B9 Aerial perspective | S | Cheap once B1's 3D machinery exists; completes the outdoor atmosphere and lands the sky-published fog colours B1 deferred. |
 | 6 | A4 DDGI probe volume | XL | The "why does UE5 look like that" answer; after A1+A2 so rasterized captures see clustered lights and LTC panels. |
 | 7 | B2 Volumetric clouds | XL | Biggest sky payoff; needs B1's 3D helpers; landing after A4 means probe captures include clouds automatically. |

@@ -21,7 +21,6 @@ uniform sampler2D giTex;      // Half-res gathered GI radiance (SSGI)
 // scene's mean lands near photographic middle gray. The manual exposure
 // uniform then acts as an EV bias on top.
 uniform sampler2D lumTex; // 1x1 adapted log2 mean luminance
-uniform sampler2D fogTex; // Half-res fog in-scatter (debug view)
 // Specular occlusion: GTAO approximates DIFFUSE occlusion, so multiplying it
 // onto specular/reflections is wrong -- it darkens (and, at silhouettes,
 // shimmers) a bright grazing specular. These recover the reflection: aux .z/.w
@@ -228,12 +227,8 @@ void main()
         FragColor = vec4(displayEncode(gi), 1.0);
         return;
     }
-    if (debugView == 6) {
-        // Fog in-scatter (linear HDR); tone map so bright shafts read
-        vec3 fog = toneSelect(texture(fogTex, TexCoords).rgb);
-        FragColor = vec4(displayEncode(fog), 1.0);
-        return;
-    }
+    // 6 was fog in-scatter, retired with the screen-space march (spec 9.5):
+    // the froxel volume composites directly and has no 2D buffer to show.
     if (debugView == 7) {
         // Spec-occ AO visibility (what actually multiplies the scene) -- the
         // reflection relief vs the raw AO of debug view 1.
