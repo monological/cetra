@@ -105,6 +105,18 @@ typedef struct Engine {
     bool sss_this_frame;         // Attachment 4 (skin diffuse) written this frame (SSS active)
     bool oit_this_frame;         // OIT accumulate pass ran this frame (postfx composites oit_fbo)
 
+    // The scene is being rendered into an offscreen capture target (a probe face,
+    // a GI probe face) rather than into engine->framebuffer. Set for the duration
+    // of the capture and restored after.
+    //
+    // Every pass that reaches outside the currently bound target must consult
+    // this. Three do: the refraction resolve and the particle pass both re-bind
+    // engine->framebuffer mid-pass, which would hijack the capture; and
+    // alpha-to-coverage keys off the SCENE framebuffer's sample count, which is
+    // not the capture target's. All three were latent for as long as capture only
+    // ran once at load with nothing alive; a per-frame capture makes them real.
+    bool capturing;
+
     Camera* camera;         // main camera
     CameraMode camera_mode; // Current camera mode
 

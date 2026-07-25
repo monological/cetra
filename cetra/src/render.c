@@ -241,7 +241,12 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
     // buffer glEnable(GL_SAMPLE_ALPHA_TO_COVERAGE) is a no-op and the shader's
     // A2C path would keep every fragment down to alpha 0.02, so masked geometry
     // would render as solid quads. Fall back to the binary cutoff there.
-    bool a2c_capable = engine->msaa_samples > 1;
+    //
+    // msaa_samples describes the SCENE framebuffer, which is not what is bound
+    // during a capture -- capture targets are always single-sample, so reading
+    // it alone would take the A2C path with no coverage hardware behind it and
+    // bake solid quads into the capture.
+    bool a2c_capable = engine->msaa_samples > 1 && !engine->capturing;
 
     for (size_t i = 0; i < node->mesh_count; ++i) {
         Mesh* mesh = node->meshes[i];
@@ -709,8 +714,10 @@ void render_current_scene(Engine* engine) {
         // no blend meshes/targets fail, oit_this_frame stays false and that pass
         // draws all late meshes (the classic unsorted path). _render_node routes on
         // oit_this_frame, so the trailing call is correct either way.
-        if (engine->oit_enabled && render_mode == RENDER_MODE_PBR && scene->oit_mesh_count > 0 &&
-            engine_begin_oit_pass(engine)) {
+        // Not under capture: engine_end_oit_pass re-binds engine->framebuffer at
+        // the main render size, same hijack as the particle path above.
+        if (engine->oit_enabled && !engine->capturing && render_mode == RENDER_MODE_PBR &&
+            scene->oit_mesh_count > 0 && engine_begin_oit_pass(engine)) {
             engine->oit_this_frame = true;
             _render_scene_iterative(engine, scene, root_node, camera, *view, draw_projection,
                                     render_mode, &current_program, &current_material,
@@ -731,9 +738,15 @@ void render_current_scene(Engine* engine) {
     // and particles must draw even in an all-opaque scene. engine_resolve_scene_depth
     // re-binds the scene FBO before returning. Skip the whole thing (incl. the
     // full-res depth blit) on frames where nothing is alive.
+    // Skipped entirely under capture: engine_resolve_scene_depth blits at the
+    // MAIN render size and re-binds engine->framebuffer on the way out, which
+    // would redirect the rest of the capture into the scene FBO. View-facing
+    // billboards are also meaningless in a probe's omnidirectional capture.
     size_t live_particles = 0;
-    for (size_t i = 0; i < scene->particle_system_count && live_particles == 0; i++)
-        live_particles = particle_system_live_count(scene->particle_systems[i]);
+    if (!engine->capturing) {
+        for (size_t i = 0; i < scene->particle_system_count && live_particles == 0; i++)
+            live_particles = particle_system_live_count(scene->particle_systems[i]);
+    }
     if (live_particles > 0) {
         GLuint particle_depth = engine_resolve_scene_depth(engine);
         glDepthMask(GL_FALSE);

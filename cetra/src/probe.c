@@ -145,6 +145,7 @@ int reflection_probe_capture(ReflectionProbe* probe, struct Engine* engine, Scen
     bool saved_albedo = engine->albedo_this_frame;
     bool saved_taa = engine->postfx ? engine->postfx->taa_enabled : false;
     bool saved_refraction = engine->refraction_enabled;
+    bool saved_capturing = engine->capturing;
 
     GLint saved_viewport[4];
     GLint saved_fbo;
@@ -156,10 +157,18 @@ int reflection_probe_capture(ReflectionProbe* probe, struct Engine* engine, Scen
     // Refraction must sit out too: its mid-frame resolve reads and rebinds
     // engine->framebuffer, which is NOT the capture target -- it would blit
     // a stale main frame and hijack the rest of the capture pass.
+    //
+    // `capturing` covers the rest of that same family: the particle pass and the
+    // OIT bracket both re-bind engine->framebuffer the way refraction does, and
+    // alpha-to-coverage keys off the scene framebuffer's sample count rather than
+    // this single-sample target. Refraction keeps its own toggle because it is
+    // also an app-facing feature; the other three have no reason to exist as
+    // separate switches.
     engine->normals_this_frame = false;
     engine->aux_this_frame = false;
     engine->albedo_this_frame = false;
     engine->refraction_enabled = false;
+    engine->capturing = true;
     if (engine->postfx)
         engine->postfx->taa_enabled = false;
 
@@ -243,6 +252,7 @@ int reflection_probe_capture(ReflectionProbe* probe, struct Engine* engine, Scen
     engine->aux_this_frame = saved_aux;
     engine->albedo_this_frame = saved_albedo;
     engine->refraction_enabled = saved_refraction;
+    engine->capturing = saved_capturing;
     engine_set_render_time(engine, saved_render_time, saved_render_delta);
     if (scene->shadow_system)
         scene->shadow_system->cascade_count = saved_cascades;
