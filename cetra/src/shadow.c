@@ -684,7 +684,14 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     // spot shadows). Reuses the ShadowCaster fbo/depth_texture pair (init is a
     // no-op after the first frame), the bound depth program, and front-face cull.
     if (spot_light && init_shadow_caster(&ss->spot_caster, SPOT_SHADOW_MAP_SIZE) == 0) {
-        compute_spot_light_space_matrix(spot_light, 1.0f, 55.0f, ss->spot_light_space);
+        // The system's own scene-scaled range, not a fixed one. A hardcoded near
+        // of 1.0 puts the whole of any room-sized scene INSIDE the near plane --
+        // nothing reaches the map and the spot silently stops casting, which is
+        // not a subtle degradation but a total one. Apps already scale
+        // near_plane/far_plane off the scene radius for the cascades; a spot in
+        // the same scene has no reason to disagree with them.
+        compute_spot_light_space_matrix(spot_light, ss->near_plane, ss->far_plane,
+                                        ss->spot_light_space);
         glBindFramebuffer(GL_FRAMEBUFFER, ss->spot_caster.fbo);
         glViewport(0, 0, ss->spot_caster.map_size, ss->spot_caster.map_size);
         glClear(GL_DEPTH_BUFFER_BIT);

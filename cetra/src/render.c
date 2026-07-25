@@ -365,7 +365,15 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
 
             // Bind shadow maps (always bind texture to satisfy sampler2DArray)
             if (scene && scene->shadow_system) {
-                if (scene->shadow_system->active_count > 0 && scene->shadow_system->enabled) {
+                // active_count counts DIRECTIONAL casters only, so gating the
+                // bind on it alone dropped the spot map in any scene without a
+                // directional light: the depth pass goes out of its way to
+                // render the spot regardless (shadow.c keeps itself alive on a
+                // spot with no directionals), and this then never uploaded
+                // spotShadowActive, so the map was written and never read.
+                if (scene->shadow_system->enabled &&
+                    (scene->shadow_system->active_count > 0 ||
+                     scene->shadow_system->spot_active)) {
                     bind_shadow_maps_to_program(scene->shadow_system, program);
                 } else {
                     // No active shadows, but still bind texture for sampler2DArray
