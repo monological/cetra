@@ -606,30 +606,30 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     uniform_set_int(fx->contact_shadow_program->uniforms, "linDepthTex", 0);
     uniform_set_int(fx->contact_shadow_program->uniforms, "normalsTex", 1);
 
-    // The accumulator's half-res resolution is fixed at create, so it takes its
-    // texel size once here. The shared tent composite is seeded with the same
-    // default, but its consumers each re-set texelSize before drawing (fog at
-    // half-res, SSR at full or half res per ssr_full_res) since they no longer
-    // share one resolution.
+    // The shared tent composite is seeded with a half-res default, but its
+    // consumers re-set texelSize before drawing (SSR at full or half res per
+    // ssr_full_res) since they no longer share one resolution.
     glUseProgram(fx->upsample_tent_program->id);
     uniform_set_int(fx->upsample_tent_program->uniforms, "srcTex", 0);
     uniform_set_vec2(fx->upsample_tent_program->uniforms, "texelSize", ao_texel);
 
+    // No texelSize here: run_temporal_accum sets it per call from the
+    // resolution that call runs at, because this program is shared across
+    // half-res and full-res consumers.
     glUseProgram(fx->temporal_accum_program->id);
     uniform_set_int(fx->temporal_accum_program->uniforms, "currentTex", 0);
     uniform_set_int(fx->temporal_accum_program->uniforms, "velocityTex", 1);
     uniform_set_int(fx->temporal_accum_program->uniforms, "historyTex", 2);
-    uniform_set_vec2(fx->temporal_accum_program->uniforms, "texelSize", ao_texel);
 
     glUseProgram(fx->ssgi_composite_program->id);
     uniform_set_int(fx->ssgi_composite_program->uniforms, "giTex", 0);
     uniform_set_int(fx->ssgi_composite_program->uniforms, "albedoTex", 1);
 
+    // Also driven by run_temporal_accum, so likewise no texelSize here.
     glUseProgram(fx->ssgi_accum_program->id);
     uniform_set_int(fx->ssgi_accum_program->uniforms, "currentTex", 0);
     uniform_set_int(fx->ssgi_accum_program->uniforms, "velocityTex", 1);
     uniform_set_int(fx->ssgi_accum_program->uniforms, "historyTex", 2);
-    uniform_set_vec2(fx->ssgi_accum_program->uniforms, "texelSize", ao_texel);
 
     // Both a-trous programs get texelSize per call from run_atrous (the SSR one
     // tracks the full-res toggle; the SSGI one reproduces ao_texel bit-for-bit).
@@ -1245,6 +1245,15 @@ static GLuint run_temporal_accum(PostFX* fx, ShaderProgram* prog, PingPong* pp, 
     glBindFramebuffer(GL_FRAMEBUFFER, pp->fbo[write]);
     glViewport(0, 0, w, h);
     glUseProgram(prog->id);
+    // The neighborhood clamp is measured in texels, so texelSize has to track
+    // the resolution THIS call runs at. Seeding it once per program cannot:
+    // the accumulator is shared by consumers at half res (AO, SSGI) and at full
+    // res (TAA, full-res SSR, contact shadows, SSS), so a value left from
+    // another consumer silently widens or narrows the clamp. Setting it at a
+    // call site is worse -- it persists on the shared program object into the
+    // next frame's other consumers, with no error and no visible cause.
+    const float texel[2] = {1.0f / (float)w, 1.0f / (float)h};
+    uniform_set_vec2(prog->uniforms, "texelSize", texel);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, current_tex);
     glActiveTexture(GL_TEXTURE1);
@@ -1709,8 +1718,6 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             uniform_set_int(tu, "currentTex", 0);
             uniform_set_int(tu, "velocityTex", 1);
             uniform_set_int(tu, "historyTex", 2);
-            const float taa_texel[2] = {1.0f / (float)fx->width, 1.0f / (float)fx->height};
-            uniform_set_vec2(tu, "texelSize", taa_texel);
             run_temporal_accum(fx, fx->taa_resolve_program, &fx->taa_history, fx->width, fx->height,
                                fx->hdr_texture);
 
