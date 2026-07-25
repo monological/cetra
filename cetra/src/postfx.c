@@ -323,9 +323,6 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     fx->froxel_ready = false;
     fx->froxel_prev_frame = -1;   // no froxel frame yet; 0 would match frame 0
     fx->fog_layer_frame = -1;     // likewise for the composited layer's history
-    // On by default and free without a sky: with no atmosphere to march nothing
-    // publishes a volume, and a zero handle is already the off state.
-    fx->aerial_enabled = true;
     fx->fog_spot_enabled = false; // published per frame by shadow_publish_to_postfx
 
     // Motion blur (off by default; target allocated lazily on first enable).
@@ -1225,8 +1222,12 @@ bool postfx_wants_aux_gbuffer(const PostFX* fx) {
     // Motion blur consumes the .xy velocity, so it too forces the aux buffer
     // (otherwise it would silently no-op under, e.g., --no-ssao). Contact
     // shadows reconstruct positions from the linear Z, same as GTAO.
+    // Aerial perspective indexes its volume by the same linear Z, so it forces
+    // the buffer for the same reason fog does. Keyed on the published volume
+    // rather than a toggle: with no sky there is nothing to composite.
     return fx && (fx->taa_enabled || fx->ssao_enabled || fx->ssgi_enabled || fx->fog_enabled ||
-                  fx->motion_blur_enabled || fx->contact_shadows_enabled);
+                  fx->motion_blur_enabled || fx->contact_shadows_enabled ||
+                  fx->aerial_volume != 0);
 }
 
 bool postfx_wants_albedo(const PostFX* fx) {
@@ -1376,23 +1377,11 @@ static void upload_fog_uniforms(PostFX* fx, UniformManager* u, mat4 projection, 
     }
 }
 
-// Froxel volumetric fog (spec 9.5): light the medium once per volume cell,
-// integrate front-to-back along each froxel column, then fold the result into
-// the HDR scene with one trilinear tap, before DoF/bloom/tonemap so shafts
-// defocus, bloom, and meter like direct light.
-static void postfx_run_atmosphere(PostFX* fx, bool aux_written, bool taa_resolving, mat4 projection,
-                                  mat4 view) {
-    // Two independent media share the composite. Fog is a local ground medium
-    // with its own volume passes; aerial perspective is the global atmosphere,
-    // built and published by the sky. Either can run without the other, so the
-    // guard is on their disjunction rather than on fog alone -- but both need
-    // the aux buffer, which is the only source of the linear depth the
-    // composite indexes by.
-    const bool fog_on = fx->fog_enabled && postfx_ensure_froxel_targets(fx);
-    const bool aerial_on = fx->aerial_enabled && fx->aerial_volume != 0;
-    if (!aux_written || (!fog_on && !aerial_on))
-        return;
-
+// Build the fog scattering volume: light the medium once per cell, then
+// integrate front-to-back along each froxel column. Everything about froxel
+// parity, reprojection and the adjacency stamp lives here, so the composite
+// stage above it does not have to carry any of it.
+static void postfx_build_fog_volume(PostFX* fx, mat4 projection, mat4 view) {
     // Frame parity picks this frame's write target; the other volume still
     // holds the previous frame's scattering for reprojection.
     const int write = fx->frame_index & 1;
@@ -1412,10 +1401,6 @@ static void postfx_run_atmosphere(PostFX* fx, bool aux_written, bool taa_resolvi
     mat4 inv_view;
     glm_mat4_inv(view, inv_view);
 
-    // 1-2 build the fog volume, and are skipped entirely when only aerial
-    // perspective is on -- the composite reads a neutral (0,0,0,1) for a medium
-    // that is off.
-    if (fog_on) {
     // 1. Inject: scattering + extinction per cell, one draw per slice.
     glUseProgram(fx->froxel_inject_program->id);
     UniformManager* iu = fx->froxel_inject_program->uniforms;
@@ -1444,9 +1429,32 @@ static void postfx_run_atmosphere(PostFX* fx, bool aux_written, bool taa_resolvi
     uniform_set_float(gu, "fogFar", fx->fog_far);
     uniform_set_int(gu, "froxelDepth", POSTFX_FROXEL_Z);
     draw_volume_slices(fx, fx->froxel_integrated, gu);
-    }
 
-    // 3. Composite: out = inscatter + scene * transmittance, the same
+    // Remember the camera and the frame this volume was built with; next frame
+    // reprojects its cells through them to find where they were. Inside this
+    // function precisely because it is only true when a volume was built.
+    glm_mat4_copy(view, fx->froxel_prev_view);
+    glm_mat4_copy(projection, fx->froxel_prev_proj);
+    fx->froxel_prev_frame = fx->frame_index;
+}
+
+// Fold the atmospheric media -- volumetric fog (spec 9.5) and aerial
+// perspective (spec 9.6) -- into the HDR scene as one layer, before
+// DoF/bloom/tonemap so shafts defocus, bloom, and meter like direct light.
+// Either medium runs without the other.
+static void postfx_run_atmosphere(PostFX* fx, bool aux_written, bool taa_resolving, mat4 projection,
+                                  mat4 view) {
+    // Both need the aux buffer: it is the only source of the linear depth the
+    // composite indexes by.
+    const bool fog_on = fx->fog_enabled && postfx_ensure_froxel_targets(fx);
+    const bool aerial_on = fx->aerial_volume != 0;
+    if (!aux_written || (!fog_on && !aerial_on))
+        return;
+
+    if (fog_on)
+        postfx_build_fog_volume(fx, projection, view);
+
+    // Composite: out = inscatter + scene * transmittance, the same
     // enable/draw/restore idiom the screen-space fog and SSR composites use.
     //
     // Under TAA the layer is routed through a temporal accumulator first. The
@@ -1475,10 +1483,11 @@ static void postfx_run_atmosphere(PostFX* fx, bool aux_written, bool taa_resolvi
     uniform_set_mat4(cu, "projection", (float*)projection);
     uniform_set_float(cu, "fogFar", fx->fog_far);
     uniform_set_float(cu, "aerialFar", fx->aerial_far);
-    uniform_set_int(cu, "froxelDepth", POSTFX_FROXEL_Z);
-    uniform_set_int(cu, "aerialDepth", fx->aerial_slices);
-    uniform_set_int(cu, "fogOn", fog_on ? 1 : 0);
-    uniform_set_int(cu, "aerialOn", aerial_on ? 1 : 0);
+    // A slice count of zero IS the "medium absent" signal -- the shader reads a
+    // neutral (0,0,0,1) for it. One state per medium rather than a count plus a
+    // separate on/off flag that could disagree with it.
+    uniform_set_int(cu, "froxelDepth", fog_on ? POSTFX_FROXEL_Z : 0);
+    uniform_set_int(cu, "aerialDepth", aerial_on ? fx->aerial_slices : 0);
     uniform_set_int(cu, "mode", 0);
 
     if (taa_resolving && postfx_ensure_fog_layer_targets(fx)) {
@@ -1488,12 +1497,12 @@ static void postfx_run_atmosphere(PostFX* fx, bool aux_written, bool taa_resolvi
         glViewport(0, 0, fx->width, fx->height);
         draw_fullscreen_quad(fx->quad_vao);
 
-        // Same adjacency test the volume uses above, and for the same reason:
-        // a history is only reprojectable against the IMMEDIATELY preceding
-        // frame. A flag cleared on the else branch could not express this --
-        // the early return at the top of this function skips it whenever fog is
-        // off, so the history would survive an arbitrary gap and then be
-        // reprojected by an unrelated frame's velocity.
+        // Same adjacency test the fog volume uses, and for the same reason: a
+        // history is only reprojectable against the IMMEDIATELY preceding frame.
+        // A flag cleared on an else branch could not express that -- this pass
+        // is skipped entirely whenever both media are off, or TAA is, so the
+        // history would survive an arbitrary gap and then be reprojected by an
+        // unrelated frame's velocity.
         fx->fog_layer_history.valid = (fx->fog_layer_frame == fx->frame_index - 1);
         GLuint stable = run_temporal_accum(fx, fx->temporal_accum_program, &fx->fog_layer_history,
                                            fx->width, fx->height, fx->fog_layer_texture);
@@ -1513,17 +1522,6 @@ static void postfx_run_atmosphere(PostFX* fx, bool aux_written, bool taa_resolvi
     draw_fullscreen_quad(fx->quad_vao);
     glDisable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-
-    // Remember the camera and the frame the FOG volume was built with; next
-    // frame reprojects its cells through them to find where they were. Only
-    // when fog actually ran: an aerial-only frame builds no scattering volume,
-    // and claiming adjacency for one that does not exist would reproject the
-    // next frame's history through an unrelated camera.
-    if (fog_on) {
-        glm_mat4_copy(view, fx->froxel_prev_view);
-        glm_mat4_copy(projection, fx->froxel_prev_proj);
-        fx->froxel_prev_frame = fx->frame_index;
-    }
 
     check_gl_error("postfx atmosphere");
 }

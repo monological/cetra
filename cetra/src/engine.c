@@ -1610,7 +1610,10 @@ static void _engine_gui_panel(Engine* engine) {
                       ImGuiSliderFlags_Logarithmic);
         igSliderFloat("Anisotropy", &fx->fog_anisotropy, -0.9f, 0.9f, "%.2f", 0);
         igSliderFloat("Sun Boost", &fx->fog_sun_boost, 0.0f, 8.0f, "%.2f", 0);
-        igColorEdit3("Fog Ambient", fx->fog_ambient, 0);
+        // Editing takes ownership away from the sky, which otherwise republishes
+        // its own zenith radiance every frame and the picker would snap back.
+        if (igColorEdit3("Fog Ambient", fx->fog_ambient, 0) && scene && scene->sky)
+            scene->sky->publish_fog_ambient = false;
         _end_effect_group();
 
         igCheckbox("Normals G-buffer", &fx->normals_enabled);
@@ -1792,8 +1795,11 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode) {
     shadow_publish_to_postfx(fx_scene, engine->postfx);
     // Aerial perspective is a camera-frustum volume, so unlike the sky's other
     // LUTs it is rebuilt here every frame, immediately before it is published.
-    if (fx_scene && fx_scene->sky && engine->postfx && engine->postfx->aerial_enabled)
-        sky_update_aerial(fx_scene->sky, engine->view_matrix, engine->draw_projection);
+    // The unjittered projection: the bake reads only [0][0]/[1][1]/[2][2]/[3][2]
+    // so TAA's jitter in [2][0]/[2][1] cannot reach it, and handing it an input
+    // that churns every frame would defeat any future rebuild-elision.
+    if (fx_scene && fx_scene->sky)
+        sky_update_aerial(fx_scene->sky, engine->view_matrix, engine->projection_matrix);
     sky_publish_to_postfx(fx_scene ? fx_scene->sky : NULL, engine->postfx);
     postfx_run(engine->postfx, engine->framebuffer, 0, frame_mode == RENDER_MODE_PBR,
                engine->normals_this_frame, engine->aux_this_frame, engine->albedo_this_frame,

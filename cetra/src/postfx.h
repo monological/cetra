@@ -233,24 +233,24 @@ typedef struct PostFX {
     // way: that one smooths noise generated INSIDE the volume and runs always,
     // this one cancels the jitter the composite inherits from the aux depth and
     // is therefore pointless without TAA.
-    // Aerial perspective (spec 9.6). Published per frame by
-    // sky_publish_to_postfx; postfx never learns about Sky. A zero volume is
-    // the single "no aerial perspective" state -- no sky, or its allocation
-    // failed. Independent of fog: this is atmosphere, not a local medium, so it
-    // applies whether or not volumetric fog is on.
-    bool aerial_enabled;
-    GLuint aerial_volume; // (in-scatter.rgb, transmittance.a), sky-owned
-    float aerial_far;     // the volume's far depth in WORLD units
-    int aerial_slices;    // published with the volume rather than mirrored, so
-                          // the sky owns its own dimension (the fog cascade
-                          // count crosses the same seam the same way)
-
     bool fog_layer_ready;
     bool fog_layer_failed; // Allocation is one-shot; see the ensure function
     GLuint fog_layer_fbo;
     GLuint fog_layer_texture;
     PingPong fog_layer_history;
     int fog_layer_frame; // Same adjacency test as froxel_prev_frame, -1 = never
+
+    // Aerial perspective (spec 9.6). Published per frame by
+    // sky_publish_to_postfx; postfx never learns about Sky. A zero volume is
+    // the SINGLE "no aerial perspective" state -- no sky, toggled off, or its
+    // allocation failed -- so there is no separate enable flag here to disagree
+    // with it. Independent of fog: this is atmosphere, not a local medium, so
+    // it applies whether or not volumetric fog is on.
+    GLuint aerial_volume; // (in-scatter.rgb, transmittance.a), sky-owned
+    float aerial_far;     // the volume's far depth in WORLD units
+    int aerial_slices;    // published with the volume rather than mirrored, so
+                          // the sky owns its own dimension (the fog cascade
+                          // count crosses the same seam the same way)
 
     // Published per frame by shadow_publish_to_postfx (mirrors the probe
     // block; postfx never learns about the shadow system): the casters'

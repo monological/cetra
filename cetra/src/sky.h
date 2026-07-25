@@ -34,7 +34,8 @@
 
 // Aerial-perspective volume (spec 9.6). Small on purpose: the in-scatter it
 // carries is smooth in all three axes, so resolution buys nothing a trilinear
-// tap does not already give, and the volume is rebuilt every frame.
+// tap does not already give, and the volume is rebuilt every frame. RGBA16F at
+// 32^3 is 256 KB.
 #define SKY_AERIAL_X 32
 #define SKY_AERIAL_Y 32
 #define SKY_AERIAL_Z 32
@@ -75,8 +76,10 @@ typedef struct SkyAtmosphere {
     float world_units_per_km;
 
     // Drive the fog's ambient in-scatter from the sky instead of leaving it at
-    // the app-set default. Off for an app that authors fog_ambient itself.
+    // the app-set default. Cleared once anyone else takes ownership of the
+    // value (the GUI colour picker does, on edit).
     bool publish_fog_ambient;
+    vec3 zenith_radiance; // Cached sky ambient; recomputed on sun move only
 
     GLuint transmittance_lut; // 256x64  RGBA16F, baked once
     GLuint multiscatter_lut;  // 32x32   RGBA16F, baked once
@@ -86,6 +89,8 @@ typedef struct SkyAtmosphere {
     // (in-scatter, transmittance). Unlike every LUT above it depends on the
     // CAMERA, so it is the one sky target rebuilt every frame; at 32^3 that is
     // 0.5 MB and 32 tiny draws.
+    bool aerial_enabled; // App toggle; the volume is simply not built when off
+    bool aerial_failed;  // One-shot: allocation is not retried every frame
     GLuint aerial_lut;
     GLuint aerial_fbo; // attachment-less; one layer bound per slice draw
     ShaderProgram* aerial_program;

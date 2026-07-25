@@ -6,10 +6,13 @@
 // All distances are in KILOMETERS: the planetary magnitudes (Rt ~ 6460) stay
 // float-safe and the scattering coefficients below are per-km.
 //
-// NOTE: sky.c:62-75 keeps an independent C mirror of Rg/Rt and the Rayleigh/
-// Mie/Ozone coefficients for the CPU-side sun transmittance (there is no GPU
-// readback). Changing a value here without changing that one silently desyncs
-// the analytic key light's colour and intensity from the sky it stands under.
+// NOTE: sky.c keeps an independent C mirror of this whole constant set (the
+// SKY_* defines and sky_medium_at, the C analogue of atmosphereAt below) for
+// the CPU-side sun transmittance and sky ambient, since there is no GPU
+// readback. Changing a value here without changing that one silently desyncs
+// the analytic key light's colour and intensity, and the fog's ambient
+// in-scatter, from the sky they stand under. Named rather than cited by line
+// so the reference cannot rot.
 
 const float PI = 3.14159265359;
 

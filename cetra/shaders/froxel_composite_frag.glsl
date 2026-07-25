@@ -21,10 +21,9 @@ uniform sampler2D layerTex; // mode 1 only: an already-composited layer to fold
 uniform mat4 projection;
 uniform float fogFar;
 uniform float aerialFar;
-uniform int froxelDepth;  // Fog slice count; mirrors POSTFX_FROXEL_Z
-uniform int aerialDepth;  // Aerial slice count; mirrors SKY_AERIAL_Z
-uniform int fogOn;
-uniform int aerialOn;
+// Slice counts, and the medium's on/off state: zero means absent.
+uniform int froxelDepth;
+uniform int aerialDepth;
 // 0 = composite from the volumes, 1 = fold layerTex under the same blend.
 uniform int mode;
 
@@ -51,27 +50,16 @@ void main() {
     // at the same view z), so feeding it a radial distance would index deeper
     // the further a pixel sits off the optical axis.
     //
-    // Both volumes integrate to the FAR FACE of a slice, so layer s carries
-    // continuous slice coordinate s+1 and a depth at coordinate `slice` is read
-    // from texel centre (slice-0.5)/depth. CLAMP_TO_EDGE on R holds the fully
-    // integrated column past the last slice.
-    vec4 fogLayer = vec4(0.0, 0.0, 0.0, 1.0);
-    if (fogOn != 0) {
-        // Sky takes the full column: the far slice already holds it.
-        float depth = sky ? fogFar : min(-linZ, fogFar);
-        float slice = froxelViewZToSlice(depth, nearZ, fogFar, float(froxelDepth));
-        fogLayer = texture(integratedVolume, vec3(TexCoords, (slice - 0.5) / float(froxelDepth)));
-    }
-
-    vec4 aerialLayer = vec4(0.0, 0.0, 0.0, 1.0);
-    // Scene pixels only. The sky background is drawn from the sky-view LUT,
-    // which is the same integral this volume holds -- applying it there too
-    // would count the same air twice and wash the sky out.
-    if (aerialOn != 0 && !sky) {
-        float depth = min(-linZ, aerialFar);
-        float slice = froxelViewZToSlice(depth, nearZ, aerialFar, float(aerialDepth));
-        aerialLayer = texture(aerialVolume, vec3(TexCoords, (slice - 0.5) / float(aerialDepth)));
-    }
+    // Sky takes fog's full column -- the far slice already holds it. It takes
+    // NO aerial perspective, though: the sky background is drawn from the
+    // sky-view LUT, which is the same integral the aerial volume holds, so
+    // applying it there too would count the same air twice and wash the sky out.
+    vec4 fogLayer =
+        froxelSampleMedium(integratedVolume, TexCoords, sky ? fogFar : -linZ, nearZ, fogFar,
+                           froxelDepth);
+    vec4 aerialLayer =
+        froxelSampleMedium(aerialVolume, TexCoords, -linZ, nearZ, aerialFar,
+                           sky ? 0 : aerialDepth);
 
     // Two media in series. Fog is the nearer one -- a local ground layer, where
     // the atmosphere spans the whole ray -- so the far medium's in-scatter is

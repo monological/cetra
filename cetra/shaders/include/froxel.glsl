@@ -43,6 +43,23 @@ float froxelViewZToSlice(float viewZ, float nearZ, float farZ, float slices) {
     return log(max(viewZ, nearZ) / nearZ) / log(far1 / nearZ) * slices;
 }
 
+// Sample a front-to-back integrated medium volume at a planar view depth.
+//
+// Layer s holds the column integrated to the FAR FACE of slice s, so a depth at
+// continuous slice coordinate `slice` is carried by layer slice-1, whose texel
+// centre sits at (slice-0.5)/slices. CLAMP_TO_EDGE on R holds the fully
+// integrated column for anything at or past the last slice.
+//
+// slices == 0 means the medium is absent, and returns its identity for the
+// (inscatter, transmittance) composite: add nothing, attenuate by nothing. That
+// keeps "is this medium on" in the data, so a consumer cannot forget to branch.
+vec4 froxelSampleMedium(sampler3D vol, vec2 uv, float viewZ, float nearZ, float farZ, int slices) {
+    if (slices == 0)
+        return vec4(0.0, 0.0, 0.0, 1.0);
+    float slice = froxelViewZToSlice(min(viewZ, farZ), nearZ, farZ, float(slices));
+    return texture(vol, vec3(uv, (slice - 0.5) / float(slices)));
+}
+
 // The view-space position at the CENTRE of the froxel addressed by (uv, slice),
 // where uv is the froxel's screen-space [0,1] coordinate and jitter offsets the
 // sample within the slice (0.5 = centre). invFocal is 1/(P[0][0], P[1][1]).

@@ -1476,9 +1476,6 @@ int main(int argc, char** argv) {
     if (args.no_ssr && engine->postfx) {
         engine->postfx->ssr_enabled = false;
     }
-    if (args.no_aerial && engine->postfx) {
-        engine->postfx->aerial_enabled = false;
-    }
     if (args.no_ssr_full_res && engine->postfx) {
         postfx_set_ssr_full_res(engine->postfx, false);
     }
@@ -1701,6 +1698,7 @@ int main(int argc, char** argv) {
                 sky->sun_azimuth_deg = args.sun_azimuth;
             if (args.world_scale > 0.0f)
                 sky->world_units_per_km = args.world_scale;
+            sky->aerial_enabled = !args.no_aerial;
             sky_update_sun_dir(sky);
         }
         if (sky && ibl && sky_bake_static_luts(sky, engine) == 0 &&

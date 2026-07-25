@@ -68,17 +68,25 @@ void main() {
         float mu_s = dot(p / r, sunDir);
 
         vec3 sunT = transmittanceToSky(transmittanceLut, r, mu_s);
-        vec3 single = (atm.rayleigh * phaseR + vec3(atm.mie * phaseM)) * sunT * SUN_ILLUMINANCE;
+        vec3 single = sunT * (atm.rayleigh * phaseR + vec3(atm.mie * phaseM));
+        // Psi is stored per unit sun illuminance (see sky_multiscatter_frag), so
+        // it is scaled by the same SUN_ILLUMINANCE as the single-scatter term --
+        // applied once to the sum below, exactly as sky_view_frag does it.
+        // Scaling only one of the two silently dims multiple scattering, which
+        // makes distant surfaces diverge from the sky drawn behind them.
         vec3 multi = multiscatterAt(multiscatterLut, r, mu_s) * (atm.rayleigh + vec3(atm.mie));
 
         // Energy-conserving step, the same form froxel_integrate uses: the
         // analytic integral of in-scatter over a segment of constant medium,
-        // rather than a midpoint sample scaled by dt.
+        // rather than a midpoint sample scaled by dt. Epsilon matches
+        // sky_view_frag so the two marches cannot diverge at zero extinction.
         vec3 stepT = exp(-atm.extinction * dt);
-        vec3 safeExt = max(atm.extinction, vec3(1e-7));
-        L += T * ((single + multi) / safeExt) * (vec3(1.0) - stepT);
+        L += T * (single + multi) / max(atm.extinction, vec3(1e-6)) * (vec3(1.0) - stepT);
         T *= stepT;
     }
+    // Scaled once at the end, and bounded against fp16 overflow on the way into
+    // an RGBA16F volume -- both exactly as sky_view_frag does it.
+    L = min(L * SUN_ILLUMINANCE, vec3(100.0));
 
     // Transmittance collapses to a scalar because the composite folds this in
     // with glBlendFunc(GL_ONE, GL_SRC_ALPHA) -- one factor for the whole scene

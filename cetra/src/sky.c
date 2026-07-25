@@ -31,6 +31,7 @@ SkyAtmosphere* create_sky_atmosphere(void) {
     sky->sun_disc_deg = 0.53f;
     sky->world_units_per_km = 1000.0f; // 1 unit = 1 metre (the glTF convention)
     sky->publish_fog_ambient = true;
+    sky->aerial_enabled = true;
     sky_update_sun_dir(sky);
 
     return sky;
@@ -58,6 +59,46 @@ void free_sky_atmosphere(SkyAtmosphere* sky) {
     free(sky);
 }
 
+// Earth atmosphere constants, mirroring include/atmosphere.glsl (kilometers).
+// SOURCE OF TRUTH is that include -- these C copies exist only for the
+// no-readback CPU evaluations below and MUST be kept in sync with it if the
+// atmosphere is ever retuned. Kept as ONE named set: two hand-copied tables
+// drifting apart inside this file is the failure this block exists to prevent,
+// so nothing below re-declares a coefficient.
+#define SKY_RG              6360.0f
+#define SKY_RT              6460.0f
+#define SKY_VIEW_ALTITUDE   0.5f
+#define SKY_RAYLEIGH_H      8.0f
+#define SKY_MIE_H           1.2f
+#define SKY_MIE_SCATTER     3.996e-3f
+#define SKY_MIE_ALBEDO      0.9f
+#define SKY_OZONE_CENTER    25.0f
+#define SKY_OZONE_WIDTH     15.0f
+#define SKY_SUN_ILLUMINANCE 3.0f
+#define SKY_CPU_MARCH_STEPS 40
+static const float SKY_RAYLEIGH_SCATTER[3] = {5.802e-3f, 13.558e-3f, 33.1e-3f};
+static const float SKY_OZONE_ABSORB[3] = {0.650e-3f, 1.881e-3f, 0.085e-3f};
+
+// The medium at altitude h (km): the C analogue of atmosphereAt() in
+// include/atmosphere.glsl. Either output may be NULL when a caller wants only
+// the other -- the two density exponentials are the expensive part and are
+// shared rather than recomputed per consumer.
+static void sky_medium_at(float h, float scatter[3], float extinction[3]) {
+    const float rayleigh_d = expf(-h / SKY_RAYLEIGH_H);
+    const float mie_d = expf(-h / SKY_MIE_H);
+    const float ozone_d = fmaxf(0.0f, 1.0f - fabsf(h - SKY_OZONE_CENTER) / SKY_OZONE_WIDTH);
+    for (int c = 0; c < 3; c++) {
+        if (scatter)
+            scatter[c] = SKY_RAYLEIGH_SCATTER[c] * rayleigh_d + SKY_MIE_SCATTER * mie_d;
+        if (extinction)
+            extinction[c] = SKY_RAYLEIGH_SCATTER[c] * rayleigh_d +
+                            (SKY_MIE_SCATTER / SKY_MIE_ALBEDO) * mie_d +
+                            SKY_OZONE_ABSORB[c] * ozone_d;
+    }
+}
+
+static void sky_zenith_radiance(const SkyAtmosphere* sky, vec3 out);
+
 void sky_update_sun_dir(SkyAtmosphere* sky) {
     if (!sky)
         return;
@@ -67,25 +108,11 @@ void sky_update_sun_dir(SkyAtmosphere* sky) {
     sky->sun_dir[0] = cosf(el) * sinf(az);
     sky->sun_dir[1] = sinf(el);
     sky->sun_dir[2] = cosf(el) * cosf(az);
-}
 
-// Earth atmosphere constants, mirroring the sky_* shaders (kilometers).
-// SOURCE OF TRUTH is sky_transmittance_frag.glsl / sky_view_frag.glsl — these
-// C copies exist only for the no-readback CPU transmittance eval and MUST be
-// kept in sync with the shader profiles if the atmosphere is ever retuned.
-#define SKY_RG 6360.0f
-#define SKY_RT 6460.0f
-
-// Optical-depth extinction at altitude h (km), matching the shader profiles
-static void sky_extinction_at(float h, float out[3]) {
-    float rayleighD = expf(-h / 8.0f);
-    float mieD = expf(-h / 1.2f);
-    float ozoneD = fmaxf(0.0f, 1.0f - fabsf(h - 25.0f) / 15.0f);
-    const float ray[3] = {5.802e-3f, 13.558e-3f, 33.1e-3f};
-    const float mie_ext = 3.996e-3f / 0.9f;
-    const float ozone[3] = {0.650e-3f, 1.881e-3f, 0.085e-3f};
-    for (int c = 0; c < 3; c++)
-        out[c] = ray[c] * rayleighD + mie_ext * mieD + ozone[c] * ozoneD;
+    // Both CPU marches below depend on nothing but sun_dir, and this is its
+    // single mutation point -- so they run here, once per sun move, rather than
+    // from the per-frame publish.
+    sky_zenith_radiance(sky, sky->zenith_radiance);
 }
 
 void sky_sun_transmittance(const SkyAtmosphere* sky, vec3 out_color) {
@@ -102,17 +129,16 @@ void sky_sun_transmittance(const SkyAtmosphere* sky, vec3 out_color) {
     // March from the ground observer to the top of the atmosphere along the
     // sun direction, accumulating optical depth (the same integral the
     // transmittance LUT bakes, done on the CPU so no GPU readback is needed)
-    const float r = SKY_RG + 0.5f;
+    const float r = SKY_RG + SKY_VIEW_ALTITUDE;
     float disc = r * r * (mu * mu - 1.0f) + SKY_RT * SKY_RT;
     float dist = -r * mu + sqrtf(fmaxf(disc, 0.0f));
-    const int steps = 40;
-    float dt = dist / (float)steps;
+    float dt = dist / (float)SKY_CPU_MARCH_STEPS;
     float depth[3] = {0.0f, 0.0f, 0.0f};
-    for (int i = 0; i < steps; i++) {
+    for (int i = 0; i < SKY_CPU_MARCH_STEPS; i++) {
         float t = ((float)i + 0.5f) * dt;
         float rt = sqrtf(r * r + t * t + 2.0f * r * t * mu);
         float e[3];
-        sky_extinction_at(rt - SKY_RG, e);
+        sky_medium_at(rt - SKY_RG, NULL, e);
         for (int c = 0; c < 3; c++)
             depth[c] += e[c] * dt;
     }
@@ -121,10 +147,10 @@ void sky_sun_transmittance(const SkyAtmosphere* sky, vec3 out_color) {
 }
 
 // Zenith sky radiance: the single-scattering integral straight up, which is
-// what an isotropic medium at ground level actually receives from the sky. Same
-// constants and the same no-readback CPU march as sky_sun_transmittance, with
-// the sun's transmittance taken at ground level for every sample -- it varies
+// what an isotropic medium at ground level actually receives from the sky. The
+// sun's transmittance is taken at ground level for every sample -- it varies
 // with altitude, but this feeds a flat ambient term, not a shading model.
+// Cached on sun move by sky_update_sun_dir; never call this per frame.
 static void sky_zenith_radiance(const SkyAtmosphere* sky, vec3 out) {
     glm_vec3_zero(out);
     if (sky->sun_dir[1] <= 0.0f)
@@ -133,25 +159,19 @@ static void sky_zenith_radiance(const SkyAtmosphere* sky, vec3 out) {
     vec3 sun_t = {0};
     sky_sun_transmittance(sky, sun_t);
 
-    const float SUN_ILLUMINANCE = 3.0f; // mirrors atmosphere.glsl
-    const float ISOTROPIC_PHASE = 1.0f / (4.0f * 3.14159265359f);
-    const float ray[3] = {5.802e-3f, 13.558e-3f, 33.1e-3f};
-    const float mie_scatter = 3.996e-3f;
-
-    const int steps = 40;
-    const float dt = (SKY_RT - (SKY_RG + 0.5f)) / (float)steps;
+    const float isotropic_phase = 1.0f / (4.0f * GLM_PIf);
+    const float dt = (SKY_RT - (SKY_RG + SKY_VIEW_ALTITUDE)) / (float)SKY_CPU_MARCH_STEPS;
     float trans[3] = {1.0f, 1.0f, 1.0f};
-    for (int i = 0; i < steps; i++) {
-        float h = 0.5f + ((float)i + 0.5f) * dt;
-        float rayleigh_d = expf(-h / 8.0f);
-        float mie_d = expf(-h / 1.2f);
-        float e[3];
-        sky_extinction_at(h, e);
+    for (int i = 0; i < SKY_CPU_MARCH_STEPS; i++) {
+        float h = SKY_VIEW_ALTITUDE + ((float)i + 0.5f) * dt;
+        float s[3], e[3];
+        sky_medium_at(h, s, e);
         for (int c = 0; c < 3; c++) {
-            float scatter = ray[c] * rayleigh_d + mie_scatter * mie_d;
             float step_t = expf(-e[c] * dt);
+            // Binds only in the topmost slices, where extinction falls to ~1e-7.
             float ext = fmaxf(e[c], 1e-7f);
-            out[c] += trans[c] * (scatter * sun_t[c] * SUN_ILLUMINANCE * ISOTROPIC_PHASE / ext) *
+            out[c] += trans[c] *
+                      (s[c] * sun_t[c] * SKY_SUN_ILLUMINANCE * isotropic_phase / ext) *
                       (1.0f - step_t);
             trans[c] *= step_t;
         }
@@ -195,18 +215,22 @@ static void bake_lut_2d(SkyAtmosphere* sky, ShaderProgram* program, GLuint* text
 // The 3D sibling of bake_lut_2d: one draw per layer into an attachment-less
 // FBO. postfx's draw_volume_slices is the same idiom but is not reusable here
 // -- it hardcodes the fog FBO, the fog volume's dimensions, and reports failure
-// by clearing fog_enabled. Every layered pass in this codebase (shadow
-// cascades, mask-array layers, cube faces, froxel slices) owns its own loop for
-// the same reason; this is the fifth.
+// by clearing fog_enabled.
+//
+// That is a shallow reason and the two loops are near-identical; the honest fix
+// is a shared draw_fullscreen_quad_slices(fbo, volume, vao, w, h, depth, um)
+// returning false on an incomplete FBO so each caller keeps its own failure
+// policy. Not done here only to keep this branch's golden gates narrow.
 //
 // Allocates on first use and keeps the texture: unlike the 2D bakes this runs
 // every frame, so delete-before-gen would churn a texture per frame.
-static void bake_lut_3d(SkyAtmosphere* sky, UniformManager* um) {
+static void bake_aerial_volume(SkyAtmosphere* sky, UniformManager* um) {
     if (!sky->aerial_lut) {
         sky->aerial_lut = create_texture_3d_float(SKY_AERIAL_X, SKY_AERIAL_Y, SKY_AERIAL_Z,
                                                   GL_RGBA16F, GL_RGBA, NULL);
         if (!sky->aerial_lut) {
             log_error("Failed to allocate the aerial perspective volume");
+            sky->aerial_failed = true;
             return;
         }
     }
@@ -215,22 +239,29 @@ static void bake_lut_3d(SkyAtmosphere* sky, UniformManager* um) {
 
     glBindFramebuffer(GL_FRAMEBUFFER, sky->aerial_fbo);
     glViewport(0, 0, SKY_AERIAL_X, SKY_AERIAL_Y);
+    // Bound once around the loop, not per draw: the shared draw_fullscreen_quad
+    // rebinds it every call, which would be 31 redundant bind pairs here, every
+    // frame. Same reason draw_volume_slices hoists it.
+    glBindVertexArray(sky->quad_vao);
     for (int slice = 0; slice < SKY_AERIAL_Z; slice++) {
         glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, sky->aerial_lut, 0, slice);
         if (slice == 0 && glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
             log_error("Aerial volume FBO incomplete; dropping aerial perspective");
             glDeleteTextures(1, &sky->aerial_lut);
             sky->aerial_lut = 0;
+            sky->aerial_failed = true;
             break;
         }
         uniform_set_int(um, "sliceIndex", slice);
-        draw_fullscreen_quad(sky->quad_vao);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     }
+    glBindVertexArray(0);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
 void sky_update_aerial(SkyAtmosphere* sky, mat4 view, mat4 projection) {
-    if (!sky || !sky->enabled || !sky->luts_baked || !sky->aerial_program)
+    if (!sky || !sky->enabled || !sky->aerial_enabled || !sky->luts_baked || !sky->aerial_program ||
+        sky->aerial_failed)
         return;
 
     mat4 inv_view;
@@ -261,7 +292,7 @@ void sky_update_aerial(SkyAtmosphere* sky, mat4 view, mat4 projection) {
     uniform_set_float(u, "unitsPerKm", sky->world_units_per_km);
     uniform_set_int(u, "aerialDepth", SKY_AERIAL_Z);
 
-    bake_lut_3d(sky, u);
+    bake_aerial_volume(sky, u);
 
     if (blend_was_on)
         glEnable(GL_BLEND);
@@ -275,10 +306,14 @@ void sky_publish_to_postfx(const SkyAtmosphere* sky, struct PostFX* fx) {
         return;
     // The fog's isotropic ambient is otherwise a flat app-set grey that does not
     // respond to the sun at all -- the only part of the fog's lighting with no
-    // sky path, since its sun term already arrives via the light publish.
-    // Skipped when the app owns the value (spores sets a deliberate near-black).
+    // sky path, since its sun term already arrives via the light publish. A copy,
+    // not a computation: the march behind it runs once per sun move.
+    //
+    // publish_fog_ambient is what stops this from silently overwriting a value
+    // someone else owns. The GUI colour picker clears it on edit, because a
+    // control that snaps back every frame is worse than no control.
     if (sky && sky->enabled && sky->publish_fog_ambient)
-        sky_zenith_radiance(sky, fx->fog_ambient);
+        glm_vec3_copy((float*)sky->zenith_radiance, fx->fog_ambient);
 
     if (sky && sky->enabled && sky->aerial_lut) {
         fx->aerial_volume = sky->aerial_lut;
@@ -305,6 +340,11 @@ int sky_bake_static_luts(SkyAtmosphere* sky, struct Engine* engine) {
         log_error("Failed to get sky LUT shader programs");
         return -1;
     }
+    // Not fatal, unlike the three above: without it the sky still bakes and
+    // draws, only aerial perspective is unavailable. Logged so that "aerial
+    // perspective does nothing" has a diagnostic rather than being silent.
+    if (!sky->aerial_program)
+        log_error("No sky_aerial program; aerial perspective disabled");
 
     if (sky->quad_vao == 0)
         create_fullscreen_quad_vao(&sky->quad_vao, &sky->quad_vbo);
