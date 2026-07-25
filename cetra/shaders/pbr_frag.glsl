@@ -137,15 +137,10 @@ uniform int csmDebug; // Tint fragments by selected cascade
 uniform int pcssEnabled;
 uniform float pcssSoftness; // Multiplier on the light's angular size
 
-// Perspective shadow maps for the punctual light types, one 2D layer each.
-// Separate from the directional cascade array; perspective, so a tap needs a
-// per-fragment w-divide. Layer 0 is the spot (the flashlight) whose shadow
-// occludes surfaces, e.g. the glass ball's shadow on the floor -- an agreement
-// with shadow.c, which renders it there.
-uniform sampler2DArray punctualShadowMaps;
-const float SPOT_LAYER = 0.0;
-uniform mat4 spotShadowMatrix;
-uniform int spotShadowActive;
+// Perspective shadow maps for the punctual light types, one 2D layer each,
+// separate from the directional cascade array. Each light carries its own base
+// layer in its cluster entry (spotShadowSize.y), so nothing here is per-type.
+#include "punctual_shadow.glsl"
 
 // Clustered-forward light blocks (spec 9.1): all analytic lights arrive
 // through these UBOs -- directionals in a small unconditional array, the
@@ -594,33 +589,6 @@ float calculateShadow(int shadowIndex, int cascade, vec3 worldPos, float NdotL, 
     return visibility;
 }
 
-// Perspective spot (flashlight) shadow: 1 = lit, 0 = occluded. Out of the
-// frustum (behind the light or past its far plane / cone) stays lit via the
-// white border.
-float calculateSpotShadow(vec3 worldPos, float NdotL) {
-    vec4 ls = spotShadowMatrix * vec4(worldPos, 1.0);
-    if (ls.w <= 0.0)
-        return 1.0;
-
-    vec3 pc = ls.xyz / ls.w * 0.5 + 0.5;
-    if (pc.z > 1.0 || pc.x < 0.0 || pc.x > 1.0 || pc.y < 0.0 || pc.y > 1.0)
-        return 1.0;
-
-    // 3x3 PCF, which the directional cascades have always had and this never
-    // did: a single tap quantizes the edge to the texel grid, and reads as a
-    // staircase on any silhouette not aligned to it.
-    float bias = max(0.0015 * (1.0 - NdotL), 0.0004);
-    vec2 texel = vec2(1.0 / float(textureSize(punctualShadowMaps, 0).x));
-    float sum = 0.0;
-    for (int y = -1; y <= 1; ++y) {
-        for (int x = -1; x <= 1; ++x) {
-            float d = texture(punctualShadowMaps, vec3(pc.xy + vec2(x, y) * texel, SPOT_LAYER)).r;
-            sum += (pc.z - bias > d) ? 0.0 : 1.0;
-        }
-    }
-    return sum / 9.0;
-}
-
 // Per-pixel screen-space motion vector in UV units: current vs previous
 // un-jittered clip position. Shared by the velocity G-buffer and the debug view.
 vec2 screenVelocity() {
@@ -1050,7 +1018,7 @@ void main() {
         vec3 lightCI;   // color * intensity (premultiplied on CPU)
         vec2 lightSize; // PCSS emitter size (directional/spot) or panel extent (area)
         int dirShadowSlot = -1;
-        bool isSpot = false;
+        int punctualLayer = -1; // Base layer in the punctual array, -1 = no map
 
         if (k < numDir) {
             L = normalize(-dirLights[k].dirShadow.xyz);
@@ -1096,7 +1064,7 @@ void main() {
                                 clusterLights[li].spotShadowSize.x, L);
             lightCI = clusterLights[li].colorIntensity.xyz;
             lightSize = clusterLights[li].spotShadowSize.zw;
-            isSpot = clusterLights[li].dirType.w == 2.0;
+            punctualLayer = int(clusterLights[li].spotShadowSize.y);
         }
 
         // Half vector, guarded: where the light is directly behind the
@@ -1156,9 +1124,11 @@ void main() {
             shadow = calculateShadow(dirShadowSlot, fragCascade, WorldPos, NdotL,
                                      max(lightSize.x, lightSize.y));
         }
-        // Spot (flashlight) shadow: its own perspective map
-        if (isSpot && spotShadowActive == 1 && alphaMasked == 0) {
-            shadow = calculateSpotShadow(WorldPos, NdotL);
+        // Punctual shadow: this light's own perspective map. Overwrites rather
+        // than multiplies because the two are exclusive -- dirShadowSlot is set
+        // only on the directional path, punctualLayer only on the cluster one.
+        if (punctualLayer >= 0 && alphaMasked == 0) {
+            shadow = punctualShadow(punctualLayer, WorldPos, NdotL);
         }
 
         // POM self-shadow

@@ -23,7 +23,8 @@ void free_uniform_manager(UniformManager* manager);
 
 // Cache uniforms at setup time
 void uniform_cache_standard(UniformManager* mgr);
-void uniform_cache_shadows(UniformManager* mgr, size_t max_shadow_lights, size_t max_cascades);
+void uniform_cache_shadows(UniformManager* mgr, size_t max_shadow_lights, size_t max_cascades,
+                           size_t max_punctual_layers);
 
 // Get cached location (caches on first call if not found)
 GLint uniform_location(UniformManager* mgr, const char* name);

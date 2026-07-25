@@ -118,7 +118,8 @@ void uniform_cache_standard(UniformManager* mgr) {
 // max_shadow_lights is the caster slot count; the per-layer arrays
 // (lightSpaceMatrix, cascadeParams) span slots x cascades but upload as
 // ranged calls from element 0, so only that location is cached.
-void uniform_cache_shadows(UniformManager* mgr, size_t max_shadow_lights, size_t max_cascades) {
+void uniform_cache_shadows(UniformManager* mgr, size_t max_shadow_lights, size_t max_cascades,
+                           size_t max_punctual_layers) {
     if (!mgr)
         return;
 
@@ -131,6 +132,9 @@ void uniform_cache_shadows(UniformManager* mgr, size_t max_shadow_lights, size_t
     uniform_location(mgr, "csmDebug");
     uniform_location(mgr, "lightSpaceMatrix[0]");
     uniform_location(mgr, "cascadeParams[0]");
+    uniform_location(mgr, "punctualShadowMaps");
+    uniform_location(mgr, "punctualShadowCount");
+    uniform_location(mgr, "punctualShadowMatrix[0]");
 
     // Drift check: the GLSL array sizes are hardcoded literals the C
     // constants only mirror. A dynamically-indexed array is active over its
@@ -143,6 +147,13 @@ void uniform_cache_shadows(UniformManager* mgr, size_t max_shadow_lights, size_t
         log_warn("Shader lightSpaceMatrix[] smaller than %zu layers -- "
                  "GLSL cascade constants drifted from the C mirrors",
                  max_shadow_lights * max_cascades);
+    }
+    snprintf(name, sizeof(name), "punctualShadowMatrix[%zu]", max_punctual_layers - 1);
+    if (uniform_location(mgr, "punctualShadowMatrix[0]") >= 0 &&
+        uniform_location(mgr, name) < 0) {
+        log_warn("Shader punctualShadowMatrix[] smaller than %zu layers -- "
+                 "GLSL punctual constant drifted from the C mirror",
+                 max_punctual_layers);
     }
 }
 

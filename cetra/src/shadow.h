@@ -84,7 +84,12 @@ typedef struct ShadowSystem {
     GLuint punctual_fbo;
     int punctual_allocated_layers; // Layer capacity built; a larger need rebuilds
     mat4 punctual_matrices[MAX_PUNCTUAL_SHADOW_LAYERS]; // perspective proj * lookAt per layer
-    bool spot_active;                                   // layer 0 holds this frame's spot map
+    // Layers actually rendered this frame, not merely requested: it is the
+    // shader's punctualShadowCount, which bounds every Light.shadow_layer the
+    // UBO carries, so a pass that allocated but never drew must leave it 0
+    // rather than point the lookup at an undrawn layer.
+    int punctual_layer_count;
+    bool punctual_pool_warned; // Latch so pool exhaustion logs once, not per frame
 } ShadowSystem;
 
 // Creation and destruction

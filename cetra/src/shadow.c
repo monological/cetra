@@ -338,7 +338,7 @@ void bind_shadow_maps_to_program(ShadowSystem* system, ShaderProgram* program) {
     UniformManager* u = program->uniforms;
     const bool on = system->enabled;
     const bool directional_on = on && system->directional_count > 0;
-    const bool spot_on = on && system->spot_active;
+    const int punctual_on = on ? system->punctual_layer_count : 0;
 
     // The array texture binds even when nothing casts: a sampler2DArray must
     // resolve to something for the program to be complete.
@@ -348,14 +348,19 @@ void bind_shadow_maps_to_program(ShadowSystem* system, ShaderProgram* program) {
 
     // Punctual (perspective) shadow maps on the last unit, so a shadow-casting
     // spot occludes surfaces (e.g. the ball's shadow on the floor). Bound
-    // unconditionally for the same reason as the cascade array; the per-type
-    // flags below are what decide whether any layer is read.
+    // unconditionally for the same reason as the cascade array; the layer count
+    // is what decides whether any layer is read, and each light's own base layer
+    // rides in its cluster UBO entry.
     glActiveTexture(GL_TEXTURE0 + PUNCTUAL_SHADOW_MAP_TEXTURE_UNIT);
     glBindTexture(GL_TEXTURE_2D_ARRAY, system->punctual_map_array);
     uniform_set_int(u, "punctualShadowMaps", PUNCTUAL_SHADOW_MAP_TEXTURE_UNIT);
-    uniform_set_int(u, "spotShadowActive", spot_on ? 1 : 0);
-    if (spot_on)
-        uniform_set_mat4(u, "spotShadowMatrix", (const float*)system->punctual_matrices[0]);
+    uniform_set_int(u, "punctualShadowCount", punctual_on);
+    if (punctual_on > 0) {
+        GLint ploc = uniform_location(u, "punctualShadowMatrix[0]");
+        if (ploc >= 0)
+            glUniformMatrix4fv(ploc, punctual_on, GL_FALSE,
+                               (const GLfloat*)system->punctual_matrices);
+    }
 
     uniform_set_int(u, "numShadowLights", directional_on ? (int)system->directional_count : 0);
     if (!directional_on)
@@ -458,9 +463,10 @@ static void _render_shadow_node(SceneNode* node, ShaderProgram* program, GLuint*
     }
 }
 
-// v1: "the flashlight" is the first spot light in the scene. Shared by the depth
-// pass (renders its map iff it casts) and the fog publish (scatters its cone), so
-// the in-scatter and the shadow can never refer to different lights.
+// The fog's volumetric spot: v1 scatters exactly one cone into a beam, and it
+// is the first spot in the scene. Only the fog publish selects a light this
+// way -- the depth pass gives every shadow-casting spot its own layer -- so
+// what this picks is which beam is volumetric, not which spot casts.
 static const Light* scene_first_spot_light(const Scene* scene) {
     if (!scene || !scene->lights)
         return NULL;
@@ -499,7 +505,7 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
 
     // First count shadow-casting lights before doing any GL operations
     ss->directional_count = 0;
-    ss->spot_active = false;
+    ss->punctual_layer_count = 0;
     vec3 scene_center = {0.0f, 0.0f, 0.0f};
 
     for (size_t i = 0; i < scene->light_count && ss->directional_count < MAX_SHADOW_LIGHTS; ++i) {
@@ -514,10 +520,38 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
         }
     }
 
-    // The flashlight (v1: the first spot) drives the standalone perspective spot
-    // map when it casts, independent of the directional caster count / early-out.
-    const Light* flashlight = scene_first_spot_light(scene);
-    const Light* spot_light = (flashlight && flashlight->cast_shadows) ? flashlight : NULL;
+    // Punctual layers, handed out in scene order so the assignment is
+    // deterministic. Every light's index is rewritten each frame, including the
+    // -1: a light that stops casting must not keep pointing at a layer another
+    // light now owns. This is the demand, not the supply -- punctual_layer_count
+    // only rises to cover layers the pass actually renders below, so a failure
+    // anywhere between here and there leaves the shader's bound at 0.
+    int punctual_needed = 0;
+    const Light* pool_overflow = NULL;
+    for (size_t i = 0; i < scene->light_count; ++i) {
+        Light* light = scene->lights[i];
+        if (!light)
+            continue;
+        light->shadow_layer = -1;
+        if (light->type != LIGHT_SPOT || !light->cast_shadows)
+            continue;
+        if (punctual_needed >= MAX_PUNCTUAL_SHADOW_LAYERS) {
+            if (!pool_overflow)
+                pool_overflow = light;
+            continue;
+        }
+        light->shadow_layer = punctual_needed++;
+    }
+
+    // Latched so a misconfigured scene reports once rather than every frame,
+    // and re-arms if the overflow clears. Named, because the alternative is a
+    // light that silently stops casting and reads as a shading bug.
+    if (pool_overflow && !ss->punctual_pool_warned) {
+        log_warn("Punctual shadow pool full (%d layers): '%s' and any further caster will not cast",
+                 MAX_PUNCTUAL_SHADOW_LAYERS,
+                 pool_overflow->name ? pool_overflow->name : "unnamed light");
+    }
+    ss->punctual_pool_warned = pool_overflow != NULL;
 
     // Clamp the runtime count into the compile-time ceiling: the splits and
     // matrix arrays are sized by SHADOW_CASCADES and the count is writable
@@ -545,8 +579,8 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     }
 
     // Early exit if nothing casts - but the array texture is already initialized.
-    // A shadow-casting spot keeps the pass alive even with no directional casters.
-    if (ss->directional_count == 0 && !spot_light)
+    // A punctual caster keeps the pass alive even with no directional casters.
+    if (ss->directional_count == 0 && punctual_needed == 0)
         return;
 
     // Now get the depth program for shadow rendering
@@ -676,24 +710,32 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
         }
     }
 
-    // The spot's perspective map (for the volumetric beam + surface spot
-    // shadows) goes into punctual layer 0. Reuses the allocation (a no-op after
-    // the first frame), the bound depth program, and front-face cull.
-    if (spot_light && init_punctual_shadow_array(ss, 1) == 0) {
-        // The system's own scene-scaled range, not a fixed one. A hardcoded near
-        // of 1.0 puts the whole of any room-sized scene INSIDE the near plane --
-        // nothing reaches the map and the spot silently stops casting, which is
-        // not a subtle degradation but a total one. Apps already scale
-        // near_plane/far_plane off the scene radius for the cascades; a spot in
-        // the same scene has no reason to disagree with them.
-        compute_spot_light_space_matrix(spot_light, ss->near_plane, ss->far_plane,
-                                        ss->punctual_matrices[0]);
-        if (begin_punctual_shadow_pass(ss, 0)) {
+    // Punctual maps (for surface shadows + the volumetric beam), one layer per
+    // caster. Reuses the allocation (a no-op once it is large enough), the
+    // bound depth program, and front-face cull.
+    if (punctual_needed > 0 && init_punctual_shadow_array(ss, punctual_needed) == 0) {
+        for (size_t i = 0; i < scene->light_count; ++i) {
+            Light* light = scene->lights[i];
+            if (!light || light->shadow_layer < 0)
+                continue;
+
+            // The system's own scene-scaled range, not a fixed one. A hardcoded
+            // near of 1.0 puts the whole of any room-sized scene INSIDE the near
+            // plane -- nothing reaches the map and the spot silently stops
+            // casting, which is not a subtle degradation but a total one. Apps
+            // already scale near_plane/far_plane off the scene radius for the
+            // cascades; a spot in the same scene has no reason to disagree.
+            compute_spot_light_space_matrix(light, ss->near_plane, ss->far_plane,
+                                            ss->punctual_matrices[light->shadow_layer]);
+            if (!begin_punctual_shadow_pass(ss, light->shadow_layer))
+                continue;
             uniform_set_mat4(ss->depth_program->uniforms, "lightSpaceMatrix",
-                             (const float*)ss->punctual_matrices[0]);
+                             (const float*)ss->punctual_matrices[light->shadow_layer]);
             _render_shadow_node(scene->root_node, ss->depth_program, &current_program);
             end_shadow_pass(ss);
-            ss->spot_active = true;
+            // Layers are handed out in increasing order, so the last one drawn
+            // is the bound the shader needs
+            ss->punctual_layer_count = light->shadow_layer + 1;
         }
     }
 
@@ -734,13 +776,17 @@ void shadow_publish_to_postfx(const Scene* scene, PostFX* fx) {
 
     // Spot shadow (Phase 2): occludes the beam by geometry. Published
     // independently of the directional early-out below (works even with no
-    // directional casters).
+    // directional casters). Gated on `enabled` as well as on the light having a
+    // layer: the depth pass does not run at all when the master switch is off,
+    // so every index it maintains keeps the value it had when it last ran.
     fx->fog_spot_shadowed = false;
     fx->fog_punctual_shadow_maps = 0;
     const ShadowSystem* sss = scene ? scene->shadow_system : NULL;
-    if (sss && sss->spot_active && sss->punctual_map_array) {
-        glm_mat4_copy((vec4*)sss->punctual_matrices[0], fx->fog_spot_light_space);
+    if (sss && sss->enabled && sp && sp->shadow_layer >= 0 &&
+        sp->shadow_layer < sss->punctual_layer_count && sss->punctual_map_array) {
+        glm_mat4_copy((vec4*)sss->punctual_matrices[sp->shadow_layer], fx->fog_spot_light_space);
         fx->fog_punctual_shadow_maps = sss->punctual_map_array;
+        fx->fog_spot_shadow_layer = sp->shadow_layer;
         fx->fog_spot_shadowed = true;
     }
 

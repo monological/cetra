@@ -50,9 +50,16 @@ typedef struct Light {
     // Area
     vec2 size;
 
-    // Shadow mapping
+    // Shadow mapping. Two indices because the two map sets are addressed
+    // differently and a light can only be in one of them: shadow_map_index is
+    // a DIRECTIONAL caster slot in the cascade array (layers stride by the
+    // runtime cascade count), shadow_layer is a base layer in the punctual
+    // array. One int meaning either would have to be read against the light's
+    // type at every use. Both are -1 for "no map", reassigned every frame by
+    // the depth pass.
     bool cast_shadows;
     int shadow_map_index;
+    int shadow_layer;
 } Light;
 
 Light* create_light();

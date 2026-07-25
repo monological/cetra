@@ -410,7 +410,8 @@ void setup_program_uniforms(ShaderProgram* program) {
     }
 
     uniform_cache_standard(program->uniforms);
-    uniform_cache_shadows(program->uniforms, MAX_SHADOW_LIGHTS, SHADOW_CASCADES);
+    uniform_cache_shadows(program->uniforms, MAX_SHADOW_LIGHTS, SHADOW_CASCADES,
+                          MAX_PUNCTUAL_SHADOW_LAYERS);
 
     // Clustered-forward blocks (spec 9.1): bind to the global binding points
     // and guard against C/GLSL layout drift. No-ops for programs that don't

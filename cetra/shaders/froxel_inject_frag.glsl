@@ -50,9 +50,11 @@ uniform vec3 spotAtten;
 uniform float spotCosInner;
 uniform float spotCosOuter;
 uniform int spotShadowed;
-// The punctual shadow array; layer 0 is the spot's map, as pbr_frag reads it.
+// The punctual shadow array and this spot's layer in it. Fed from postfx's own
+// fog block rather than by the punctual_shadow.glsl binder, the same separation
+// the cascade uniforms above keep.
 uniform sampler2DArray punctualShadowMaps;
-const float SPOT_LAYER = 0.0;
+uniform int spotShadowLayer;
 uniform mat4 spotLightSpaceMatrix;
 
 // Temporal reprojection against the previous frame's volume. 0 freezes the
@@ -181,7 +183,7 @@ void main() {
                     vec3 pc = ls.xyz / ls.w * 0.5 + 0.5;
                     if (pc.z <= 1.0 && pc.x >= 0.0 && pc.x <= 1.0 && pc.y >= 0.0 && pc.y <= 1.0)
                         vis = (pc.z - shadowBias >
-                               texture(punctualShadowMaps, vec3(pc.xy, SPOT_LAYER)).r)
+                               texture(punctualShadowMaps, vec3(pc.xy, float(spotShadowLayer))).r)
                                   ? 0.0
                                   : 1.0;
                 }

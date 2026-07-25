@@ -228,7 +228,9 @@ static void _pack_cluster_light(GpuPackedLight* dst, const struct Light* light, 
     dst->atten_cutoff[2] = light->quadratic;
     dst->atten_cutoff[3] = light->cutOff;
     dst->spot_shadow_size[0] = light->outerCutOff;
-    dst->spot_shadow_size[1] = (float)light->shadow_map_index;
+    // The punctual base layer, not the CSM slot: only directionals reach the
+    // cascade array and they never arrive through this list.
+    dst->spot_shadow_size[1] = (float)light->shadow_layer;
     glm_vec2_copy((float*)light->size, &dst->spot_shadow_size[2]);
 
     // Area panels also ship a height axis; other light types leave it zeroed.

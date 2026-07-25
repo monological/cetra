@@ -1372,8 +1372,10 @@ static void upload_fog_uniforms(PostFX* fx, UniformManager* u, mat4 projection, 
         uniform_set_vec3(u, "spotAtten", fx->fog_spot_atten);
         uniform_set_float(u, "spotCosInner", fx->fog_spot_cos_inner);
         uniform_set_float(u, "spotCosOuter", fx->fog_spot_cos_outer);
-        if (spot_shadowed)
+        if (spot_shadowed) {
             uniform_set_mat4(u, "spotLightSpaceMatrix", (float*)fx->fog_spot_light_space);
+            uniform_set_int(u, "spotShadowLayer", fx->fog_spot_shadow_layer);
+        }
     }
 }
 

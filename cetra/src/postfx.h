@@ -276,8 +276,9 @@ typedef struct PostFX {
     // Perspective spot shadow (Phase 2): occludes the beam by geometry.
     bool fog_spot_shadowed;    // a spot shadow map was rendered this frame
     mat4 fog_spot_light_space; // perspective proj * lookAt from the spot
-    // GL_TEXTURE_2D_ARRAY of perspective depth maps, spot in layer 0 (0 = none)
+    // GL_TEXTURE_2D_ARRAY of perspective depth maps (0 = none)
     GLuint fog_punctual_shadow_maps;
+    int fog_spot_shadow_layer; // Which layer of it holds this spot
 
     PostFXDebugView debug_view;
     PostFXTonemapMode tonemap_mode;

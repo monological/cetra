@@ -48,7 +48,7 @@ typedef struct GpuPackedLight {
     float dir_type[4];         // xyz = direction, w = 1 point / 2 spot / 3 area
     float color_intensity[4];  // xyz = color * intensity (premultiplied)
     float atten_cutoff[4];     // constant, linear, quadratic, cos inner cone
-    float spot_shadow_size[4]; // cos outer cone, shadow slot (spare), size.xy
+    float spot_shadow_size[4]; // cos outer cone, punctual shadow layer, size.xy
     float up_area[4];          // AREA only: panel height axis, orthonormal to dir (spec 9.2)
 } GpuPackedLight;
 
