@@ -30,6 +30,7 @@ SkyAtmosphere* create_sky_atmosphere(void) {
     sky->sun_azimuth_deg = 135.0f;
     sky->sun_disc_deg = 0.53f;
     sky->world_units_per_km = 1000.0f; // 1 unit = 1 metre (the glTF convention)
+    sky->publish_fog_ambient = true;
     sky_update_sun_dir(sky);
 
     return sky;
@@ -117,6 +118,44 @@ void sky_sun_transmittance(const SkyAtmosphere* sky, vec3 out_color) {
     }
     for (int c = 0; c < 3; c++)
         out_color[c] = expf(-depth[c]);
+}
+
+// Zenith sky radiance: the single-scattering integral straight up, which is
+// what an isotropic medium at ground level actually receives from the sky. Same
+// constants and the same no-readback CPU march as sky_sun_transmittance, with
+// the sun's transmittance taken at ground level for every sample -- it varies
+// with altitude, but this feeds a flat ambient term, not a shading model.
+static void sky_zenith_radiance(const SkyAtmosphere* sky, vec3 out) {
+    glm_vec3_zero(out);
+    if (sky->sun_dir[1] <= 0.0f)
+        return; // sun below the horizon: no skylight to scatter
+
+    vec3 sun_t = {0};
+    sky_sun_transmittance(sky, sun_t);
+
+    const float SUN_ILLUMINANCE = 3.0f; // mirrors atmosphere.glsl
+    const float ISOTROPIC_PHASE = 1.0f / (4.0f * 3.14159265359f);
+    const float ray[3] = {5.802e-3f, 13.558e-3f, 33.1e-3f};
+    const float mie_scatter = 3.996e-3f;
+
+    const int steps = 40;
+    const float dt = (SKY_RT - (SKY_RG + 0.5f)) / (float)steps;
+    float trans[3] = {1.0f, 1.0f, 1.0f};
+    for (int i = 0; i < steps; i++) {
+        float h = 0.5f + ((float)i + 0.5f) * dt;
+        float rayleigh_d = expf(-h / 8.0f);
+        float mie_d = expf(-h / 1.2f);
+        float e[3];
+        sky_extinction_at(h, e);
+        for (int c = 0; c < 3; c++) {
+            float scatter = ray[c] * rayleigh_d + mie_scatter * mie_d;
+            float step_t = expf(-e[c] * dt);
+            float ext = fmaxf(e[c], 1e-7f);
+            out[c] += trans[c] * (scatter * sun_t[c] * SUN_ILLUMINANCE * ISOTROPIC_PHASE / ext) *
+                      (1.0f - step_t);
+            trans[c] *= step_t;
+        }
+    }
 }
 
 // Bake one 2D LUT with a fullscreen pass into a fresh RGBA16F texture
@@ -234,6 +273,13 @@ void sky_update_aerial(SkyAtmosphere* sky, mat4 view, mat4 projection) {
 void sky_publish_to_postfx(const SkyAtmosphere* sky, struct PostFX* fx) {
     if (!fx)
         return;
+    // The fog's isotropic ambient is otherwise a flat app-set grey that does not
+    // respond to the sun at all -- the only part of the fog's lighting with no
+    // sky path, since its sun term already arrives via the light publish.
+    // Skipped when the app owns the value (spores sets a deliberate near-black).
+    if (sky && sky->enabled && sky->publish_fog_ambient)
+        sky_zenith_radiance(sky, fx->fog_ambient);
+
     if (sky && sky->enabled && sky->aerial_lut) {
         fx->aerial_volume = sky->aerial_lut;
         fx->aerial_far = sky_aerial_far_units(sky);
