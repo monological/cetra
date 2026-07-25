@@ -40,7 +40,13 @@ typedef struct ShadowCaster {
 
 typedef struct ShadowSystem {
     ShadowCaster casters[MAX_SHADOW_LIGHTS];
-    size_t active_count;
+    // Shadow-casting DIRECTIONAL lights this frame, and nothing else -- it is
+    // also the shader's numShadowLights and the loop bound over the cascade
+    // array. It was called active_count, which reads as "casters of any kind"
+    // and was twice mistaken for one: a caller gated the whole shadow bind on
+    // it, silently dropping the spot map in scenes with no directional light.
+    // Other light types keep their own counts.
+    size_t directional_count;
     int default_map_size;
     ShaderProgram* depth_program;
     float ortho_size;

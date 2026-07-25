@@ -777,7 +777,7 @@ void render_current_scene(Engine* engine) {
     // Shadow catcher: darken the environment floor where the model blocks
     // the shadow-casting lights (drawn over the skybox, blended)
     if (scene->shadow_catcher && scene->shadow_system && scene->shadow_system->enabled &&
-        scene->shadow_system->active_count > 0 && engine->shadow_catcher_program &&
+        scene->shadow_system->directional_count > 0 && engine->shadow_catcher_program &&
         engine->catcher_vao) {
         ShaderProgram* catcher = engine->shadow_catcher_program;
         ShadowSystem* ss = scene->shadow_system;
@@ -794,7 +794,7 @@ void render_current_scene(Engine* engine) {
         bool ssr_floor =
             engine->postfx && postfx_ssr_active(engine->postfx, engine->normals_this_frame);
         uniform_set_int(catcher->uniforms, "surfaceMode", ssr_floor ? 1 : 0);
-        uniform_set_int(catcher->uniforms, "numShadowLights", (int)ss->active_count);
+        uniform_set_int(catcher->uniforms, "numShadowLights", (int)ss->directional_count);
         uniform_set_float(catcher->uniforms, "shadowBias", ss->casters[0].bias);
 
         // Weight each caster's shadow by its light's share of analytic light
@@ -810,7 +810,7 @@ void render_current_scene(Engine* engine) {
         }
         shadow_upload_cascade_uniforms(ss, catcher->uniforms);
 
-        for (size_t i = 0; i < ss->active_count && i < MAX_SHADOW_LIGHTS; i++) {
+        for (size_t i = 0; i < ss->directional_count && i < MAX_SHADOW_LIGHTS; i++) {
             char name[64];
             snprintf(name, sizeof(name), "shadowLightWeight[%zu]", i);
             uniform_set_float(catcher->uniforms, name,

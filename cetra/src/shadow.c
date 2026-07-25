@@ -27,7 +27,7 @@ ShadowSystem* create_shadow_system(int default_map_size) {
     memset(system, 0, sizeof(ShadowSystem));
 
     system->default_map_size = default_map_size;
-    system->active_count = 0;
+    system->directional_count = 0;
     system->ortho_size = 2000.0f;
     system->near_plane = 1.0f;
     system->far_plane = 7500.0f;
@@ -332,7 +332,7 @@ void shadow_upload_cascade_uniforms(const ShadowSystem* system, UniformManager* 
 
     // Used layers are contiguous from element 0 (layer = slot * cc + c,
     // slots compact), so the per-layer arrays upload as one ranged call
-    GLsizei layers = (GLsizei)(system->active_count * (size_t)cc);
+    GLsizei layers = (GLsizei)(system->directional_count * (size_t)cc);
     if (layers <= 0)
         return;
     GLint loc = uniform_location(u, "lightSpaceMatrix[0]");
@@ -345,20 +345,21 @@ void shadow_upload_cascade_uniforms(const ShadowSystem* system, UniformManager* 
 
 // Bind whatever this frame's depth pass produced. Call UNCONDITIONALLY: every
 // per-light-type gate lives here, so a caller never has to know which types can
-// cast. That is deliberate. The gate used to sit at the call site as
-// `active_count > 0`, which counts DIRECTIONAL casters only -- so a spot-lit
-// scene with no directional light never reached this function and its shadow map
-// was rendered and never sampled, and turning shadows off left spotShadowActive
-// and a stale depth texture bound from the frame before. Both were one condition
-// at one call site trying to model four light types. Point and area shadows will
-// add their own clauses HERE and no caller will change.
+// cast. That is deliberate. The gate used to sit at the call site, testing a
+// field then named `active_count` -- which counts DIRECTIONAL casters only, a
+// fact the name hid. A spot-lit scene with no directional light never reached
+// this function, so its map was rendered and never sampled; and turning shadows
+// off left spotShadowActive and a stale depth texture bound from the frame
+// before. Both were one condition at one call site trying to model four light
+// types. Point and area shadows add their own clauses HERE and no caller
+// changes.
 void bind_shadow_maps_to_program(ShadowSystem* system, ShaderProgram* program) {
     if (!system || !program || !program->uniforms)
         return;
 
     UniformManager* u = program->uniforms;
     const bool on = system->enabled;
-    const bool directional_on = on && system->active_count > 0;
+    const bool directional_on = on && system->directional_count > 0;
     const bool spot_on = on && system->spot_active;
 
     // The array texture binds even when nothing casts: a sampler2DArray must
@@ -376,7 +377,7 @@ void bind_shadow_maps_to_program(ShadowSystem* system, ShaderProgram* program) {
     if (spot_on)
         uniform_set_mat4(u, "spotShadowMatrix", (const float*)system->spot_light_space);
 
-    uniform_set_int(u, "numShadowLights", directional_on ? (int)system->active_count : 0);
+    uniform_set_int(u, "numShadowLights", directional_on ? (int)system->directional_count : 0);
     if (!directional_on)
         return; // nothing below is read at count 0
 
@@ -518,17 +519,17 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     ShadowSystem* ss = scene->shadow_system;
 
     // First count shadow-casting lights before doing any GL operations
-    ss->active_count = 0;
+    ss->directional_count = 0;
     ss->spot_active = false;
     vec3 scene_center = {0.0f, 0.0f, 0.0f};
 
-    for (size_t i = 0; i < scene->light_count && ss->active_count < MAX_SHADOW_LIGHTS; ++i) {
+    for (size_t i = 0; i < scene->light_count && ss->directional_count < MAX_SHADOW_LIGHTS; ++i) {
         Light* light = scene->lights[i];
         if (!light)
             continue;
 
         if (light->type == LIGHT_DIRECTIONAL && light->cast_shadows) {
-            ss->active_count++;
+            ss->directional_count++;
         } else {
             light->shadow_map_index = -1;
         }
@@ -566,7 +567,7 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
 
     // Early exit if nothing casts - but the array texture is already initialized.
     // A shadow-casting spot keeps the pass alive even with no directional casters.
-    if (ss->active_count == 0 && !spot_light)
+    if (ss->directional_count == 0 && !spot_light)
         return;
 
     // Now get the depth program for shadow rendering
@@ -682,7 +683,7 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     wind_upload_to_program(scene->wind, ss->depth_program->uniforms);
     uniform_set_float(ss->depth_program->uniforms, "time", (float)engine->render_time);
 
-    for (size_t i = 0; i < ss->active_count; ++i) {
+    for (size_t i = 0; i < ss->directional_count; ++i) {
         for (int c = 0; c < cc; ++c) {
             size_t layer = i * (size_t)cc + (size_t)c;
             begin_shadow_pass(ss, layer);
@@ -768,7 +769,7 @@ void shadow_publish_to_postfx(const Scene* scene, PostFX* fx) {
     // shadowed in-scatter" state consumers rely on: a nonzero count
     // guarantees the map array and every slot below it are valid.
     ShadowSystem* ss = scene ? scene->shadow_system : NULL;
-    if (!ss || !ss->enabled || ss->active_count == 0 || !ss->shadow_map_array || !scene->lights) {
+    if (!ss || !ss->enabled || ss->directional_count == 0 || !ss->shadow_map_array || !scene->lights) {
         fx->fog_light_count = 0;
         fx->fog_cascade_count = 1;
         fx->fog_shadow_map_array = 0;
@@ -791,7 +792,7 @@ void shadow_publish_to_postfx(const Scene* scene, PostFX* fx) {
         glm_vec3_normalize_to(light->direction, fx->fog_light_dir[slot]);
         glm_vec3_scale(light->color, light->intensity, fx->fog_light_color[slot]);
     }
-    fx->fog_light_count = (int)ss->active_count;
+    fx->fog_light_count = (int)ss->directional_count;
     fx->fog_cascade_count = cc;
     fx->fog_shadow_map_array = ss->shadow_map_array;
     fx->fog_shadow_bias = ss->casters[0].bias;
