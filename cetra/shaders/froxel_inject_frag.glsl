@@ -68,6 +68,23 @@ const float PI = 3.14159265359;
 #include "lights_ubo.glsl"
 #include "froxel.glsl"
 
+// Van der Corput radical inverse in the given base: successive frames land at
+// low-discrepancy positions, so a fixed number of them average to an evenly
+// distributed sample of the cell rather than clumping the way a hash would.
+float halton(int index, int base) {
+    float f = 1.0;
+    float r = 0.0;
+    int i = index;
+    for (int k = 0; k < 8; k++) {
+        if (i <= 0)
+            break;
+        f /= float(base);
+        r += f * float(i - (i / base) * base);
+        i /= base;
+    }
+    return r;
+}
+
 // Normalized Henyey-Greenstein; c = cos(angle between light travel and the
 // direction toward the camera)
 float phaseHG(float c, float g) {
@@ -100,19 +117,23 @@ void main() {
     float nearZ = projection[3][2] / (projection[2][2] - 1.0);
     vec2 invFocal = 1.0 / vec2(projection[0][0], projection[1][1]);
 
-    // Sample position within the cell. Frozen at the centre without temporal so
-    // headless is deterministic; under TAA it walks the cell over frames and
-    // the reprojected blend below averages the results, which is what hides the
-    // volume's low resolution.
-    float jitter = 0.5;
+    // Sub-cell sample offset. The offset is the SAME for every cell -- a
+    // low-discrepancy shift of the whole grid -- so averaging successive frames
+    // supersamples the volume rather than adding per-cell noise. It has to move
+    // laterally, not just in depth: the cascade tap is binary, so a shadow
+    // boundary lands on a cell edge and stair-steps at the grid's 160x90, and
+    // only an X/Y shift walks that edge across the cell. This is what replaces
+    // the 24 taps per ray the screen-space march averaged.
+    // Centred (no offset) when there is no history to average into, which keeps
+    // the first frame from sampling off-centre with nothing to blend against.
+    vec3 jitter = vec3(0.5);
     if (temporal == 1) {
-        jitter = fract(52.9829189 * fract(0.06711056 * gl_FragCoord.x +
-                                          0.00583715 * gl_FragCoord.y) +
-                       float(frameIndex) * 0.61803398875);
+        jitter = vec3(halton(frameIndex + 1, 2), halton(frameIndex + 1, 3),
+                      halton(frameIndex + 1, 5));
     }
-    vec3 viewPos =
-        froxelViewPos(TexCoords, float(sliceIndex), jitter, nearZ, fogFar, float(froxelDepth),
-                      invFocal);
+    vec2 cellUv = TexCoords + (jitter.xy - 0.5) / vec2(textureSize(historyVolume, 0).xy);
+    vec3 viewPos = froxelViewPos(cellUv, float(sliceIndex), jitter.z, nearZ, fogFar,
+                                 float(froxelDepth), invFocal);
     vec3 camPos = invView[3].xyz;
     vec3 P = (invView * vec4(viewPos, 1.0)).xyz;
     // Direction from the camera toward this cell: the phase function's second

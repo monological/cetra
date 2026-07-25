@@ -1348,11 +1348,17 @@ static void postfx_run_fog(PostFX* fx, bool aux_written, bool taa_resolving, mat
     // holds the previous frame's scattering for reprojection.
     const int write = fx->frame_index & 1;
     const int prev = write ^ 1;
-    // Temporal only under TAA, matching every other accumulator here, and only
-    // against the immediately preceding frame. Without it the jitter stays
-    // frozen and headless renders remain byte-identical.
-    const int temporal =
-        (taa_resolving && fx->froxel_prev_frame == fx->frame_index - 1) ? 1 : 0;
+    // Unlike the other accumulators here this one is NOT gated on TAA: it owns
+    // a history volume and reprojects through its own stored camera, so it
+    // needs nothing from the TAA resolve. It is also not optional. The cascade
+    // tap is binary per cell, and one tap per 160x90 cell makes a shadow
+    // boundary in the fog visibly blocky -- the screen-space march hid the same
+    // hard taps by averaging 24 of them along every ray. Jittering the sample
+    // and averaging across frames is what replaces that averaging, so gating it
+    // on TAA left the default configuration showing raw stair-stepped shadows.
+    // Determinism survives because the jitter is a function of the frame index:
+    // frame N is the same on every run.
+    const int temporal = (fx->froxel_prev_frame == fx->frame_index - 1) ? 1 : 0;
 
     mat4 inv_view;
     glm_mat4_inv(view, inv_view);
