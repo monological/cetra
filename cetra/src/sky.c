@@ -6,8 +6,16 @@
 #include "engine.h"
 #include "ibl.h"
 #include "light.h"
+#include "postfx.h"
+#include "texture.h"
 #include "util.h"
 #include "ext/log.h"
+
+// How far the aerial volume reaches in WORLD units. The atmosphere model is in
+// kilometres and the scene is not, so this is the one place the two meet.
+static float sky_aerial_far_units(const SkyAtmosphere* sky) {
+    return SKY_AERIAL_FAR_KM * sky->world_units_per_km;
+}
 
 SkyAtmosphere* create_sky_atmosphere(void) {
     SkyAtmosphere* sky = malloc(sizeof(SkyAtmosphere));
@@ -37,6 +45,10 @@ void free_sky_atmosphere(SkyAtmosphere* sky) {
         glDeleteTextures(1, &sky->multiscatter_lut);
     if (sky->sky_view_lut)
         glDeleteTextures(1, &sky->sky_view_lut);
+    if (sky->aerial_lut)
+        glDeleteTextures(1, &sky->aerial_lut);
+    if (sky->aerial_fbo)
+        glDeleteFramebuffers(1, &sky->aerial_fbo);
     if (sky->quad_vao)
         glDeleteVertexArrays(1, &sky->quad_vao);
     if (sky->quad_vbo)
@@ -141,6 +153,96 @@ static void bake_lut_2d(SkyAtmosphere* sky, ShaderProgram* program, GLuint* text
     glDeleteFramebuffers(1, &fbo);
 }
 
+// The 3D sibling of bake_lut_2d: one draw per layer into an attachment-less
+// FBO. postfx's draw_volume_slices is the same idiom but is not reusable here
+// -- it hardcodes the fog FBO, the fog volume's dimensions, and reports failure
+// by clearing fog_enabled. Every layered pass in this codebase (shadow
+// cascades, mask-array layers, cube faces, froxel slices) owns its own loop for
+// the same reason; this is the fifth.
+//
+// Allocates on first use and keeps the texture: unlike the 2D bakes this runs
+// every frame, so delete-before-gen would churn a texture per frame.
+static void bake_lut_3d(SkyAtmosphere* sky, UniformManager* um) {
+    if (!sky->aerial_lut) {
+        sky->aerial_lut = create_texture_3d_float(SKY_AERIAL_X, SKY_AERIAL_Y, SKY_AERIAL_Z,
+                                                  GL_RGBA16F, GL_RGBA, NULL);
+        if (!sky->aerial_lut) {
+            log_error("Failed to allocate the aerial perspective volume");
+            return;
+        }
+    }
+    if (!sky->aerial_fbo)
+        glGenFramebuffers(1, &sky->aerial_fbo);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, sky->aerial_fbo);
+    glViewport(0, 0, SKY_AERIAL_X, SKY_AERIAL_Y);
+    for (int slice = 0; slice < SKY_AERIAL_Z; slice++) {
+        glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, sky->aerial_lut, 0, slice);
+        if (slice == 0 && glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+            log_error("Aerial volume FBO incomplete; dropping aerial perspective");
+            glDeleteTextures(1, &sky->aerial_lut);
+            sky->aerial_lut = 0;
+            break;
+        }
+        uniform_set_int(um, "sliceIndex", slice);
+        draw_fullscreen_quad(sky->quad_vao);
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+void sky_update_aerial(SkyAtmosphere* sky, mat4 view, mat4 projection) {
+    if (!sky || !sky->enabled || !sky->luts_baked || !sky->aerial_program)
+        return;
+
+    mat4 inv_view;
+    glm_mat4_inv(view, inv_view);
+
+    GLint prev_fbo = 0;
+    GLint prev_viewport[4];
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_fbo);
+    glGetIntegerv(GL_VIEWPORT, prev_viewport);
+    // Same discipline as the static bakes: a partial-channel bake output must
+    // not feed the blend equation (the BRDF LUT lesson).
+    GLboolean blend_was_on = glIsEnabled(GL_BLEND);
+    glDisable(GL_BLEND);
+
+    glUseProgram(sky->aerial_program->id);
+    UniformManager* u = sky->aerial_program->uniforms;
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, sky->transmittance_lut);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, sky->multiscatter_lut);
+    glActiveTexture(GL_TEXTURE0);
+    uniform_set_int(u, "transmittanceLut", 0);
+    uniform_set_int(u, "multiscatterLut", 1);
+    uniform_set_vec3(u, "sunDir", sky->sun_dir);
+    uniform_set_mat4(u, "invView", (float*)inv_view);
+    uniform_set_mat4(u, "projection", (float*)projection);
+    uniform_set_float(u, "aerialFar", sky_aerial_far_units(sky));
+    uniform_set_float(u, "unitsPerKm", sky->world_units_per_km);
+    uniform_set_int(u, "aerialDepth", SKY_AERIAL_Z);
+
+    bake_lut_3d(sky, u);
+
+    if (blend_was_on)
+        glEnable(GL_BLEND);
+    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prev_fbo);
+    glViewport(prev_viewport[0], prev_viewport[1], prev_viewport[2], prev_viewport[3]);
+    check_gl_error("sky aerial volume");
+}
+
+void sky_publish_to_postfx(const SkyAtmosphere* sky, struct PostFX* fx) {
+    if (!fx)
+        return;
+    if (sky && sky->enabled && sky->aerial_lut) {
+        fx->aerial_volume = sky->aerial_lut;
+        fx->aerial_far = sky_aerial_far_units(sky);
+    } else {
+        fx->aerial_volume = 0;
+        fx->aerial_far = 0.0f;
+    }
+}
+
 int sky_bake_static_luts(SkyAtmosphere* sky, struct Engine* engine) {
     if (!sky || !engine) {
         log_error("Invalid state for sky LUT bake");
@@ -149,6 +251,7 @@ int sky_bake_static_luts(SkyAtmosphere* sky, struct Engine* engine) {
 
     sky->transmittance_program = get_engine_shader_program_by_name(engine, "sky_transmittance");
     sky->multiscatter_program = get_engine_shader_program_by_name(engine, "sky_multiscatter");
+    sky->aerial_program = get_engine_shader_program_by_name(engine, "sky_aerial");
     sky->debug_program = get_engine_shader_program_by_name(engine, "sky_debug");
     if (!sky->transmittance_program || !sky->multiscatter_program || !sky->debug_program) {
         log_error("Failed to get sky LUT shader programs");

@@ -323,6 +323,9 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     fx->froxel_ready = false;
     fx->froxel_prev_frame = -1;   // no froxel frame yet; 0 would match frame 0
     fx->fog_layer_frame = -1;     // likewise for the composited layer's history
+    // On by default and free without a sky: with no atmosphere to march nothing
+    // publishes a volume, and a zero handle is already the off state.
+    fx->aerial_enabled = true;
     fx->fog_spot_enabled = false; // published per frame by shadow_publish_to_postfx
 
     // Motion blur (off by default; target allocated lazily on first enable).

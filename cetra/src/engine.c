@@ -1129,6 +1129,11 @@ static int _create_default_shaders_for_engine(Engine* engine) {
         add_shader_program_to_engine(engine, sky_background_program);
     }
 
+    ShaderProgram* sky_aerial_program = create_sky_aerial_program();
+    if (sky_aerial_program) {
+        add_shader_program_to_engine(engine, sky_aerial_program);
+    }
+
     ShaderProgram* mask_copy_program = create_mask_copy_program();
     if (mask_copy_program) {
         add_shader_program_to_engine(engine, mask_copy_program);
@@ -1785,6 +1790,11 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode) {
     const Scene* fx_scene = get_current_scene(engine);
     reflection_probe_publish_to_postfx(fx_scene ? fx_scene->probe : NULL, engine->postfx);
     shadow_publish_to_postfx(fx_scene, engine->postfx);
+    // Aerial perspective is a camera-frustum volume, so unlike the sky's other
+    // LUTs it is rebuilt here every frame, immediately before it is published.
+    if (fx_scene && fx_scene->sky && engine->postfx && engine->postfx->aerial_enabled)
+        sky_update_aerial(fx_scene->sky, engine->view_matrix, engine->draw_projection);
+    sky_publish_to_postfx(fx_scene ? fx_scene->sky : NULL, engine->postfx);
     postfx_run(engine->postfx, engine->framebuffer, 0, frame_mode == RENDER_MODE_PBR,
                engine->normals_this_frame, engine->aux_this_frame, engine->albedo_this_frame,
                engine->sss_this_frame, engine->oit_this_frame ? engine->oit_fbo : 0,

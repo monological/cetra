@@ -118,6 +118,7 @@ static void print_usage(const char* prog) {
     fprintf(stderr,
             "      --world-scale <f>  World units per km for the atmosphere "
             "(default 1000, implies --sky)\n");
+    fprintf(stderr, "      --no-aerial        Disable aerial perspective (on by default)\n");
     fprintf(stderr, "      --fog              Volumetric fog: god rays + height haze\n");
     fprintf(stderr, "      --fog-density <f>  Fog extinction per world unit (implies --fog)\n");
     fprintf(stderr, "      --fog-height <f>   Fog height falloff in world units (implies --fog)\n");
@@ -500,6 +501,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 return -1;
             }
             args->sky = 1;
+        } else if (strcmp(argv[i], "--no-aerial") == 0) {
+            args->no_aerial = 1;
         } else if (strcmp(argv[i], "--sky-rebake-stress") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -1472,6 +1475,9 @@ int main(int argc, char** argv) {
     }
     if (args.no_ssr && engine->postfx) {
         engine->postfx->ssr_enabled = false;
+    }
+    if (args.no_aerial && engine->postfx) {
+        engine->postfx->aerial_enabled = false;
     }
     if (args.no_ssr_full_res && engine->postfx) {
         postfx_set_ssr_full_res(engine->postfx, false);

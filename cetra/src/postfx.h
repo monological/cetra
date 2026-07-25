@@ -233,6 +233,15 @@ typedef struct PostFX {
     // way: that one smooths noise generated INSIDE the volume and runs always,
     // this one cancels the jitter the composite inherits from the aux depth and
     // is therefore pointless without TAA.
+    // Aerial perspective (spec 9.6). Published per frame by
+    // sky_publish_to_postfx; postfx never learns about Sky. A zero volume is
+    // the single "no aerial perspective" state -- no sky, or its allocation
+    // failed. Independent of fog: this is atmosphere, not a local medium, so it
+    // applies whether or not volumetric fog is on.
+    bool aerial_enabled;
+    GLuint aerial_volume; // 32^3 (in-scatter.rgb, transmittance.a), sky-owned
+    float aerial_far;     // the volume's far depth in WORLD units
+
     bool fog_layer_ready;
     bool fog_layer_failed; // Allocation is one-shot; see the ensure function
     GLuint fog_layer_fbo;

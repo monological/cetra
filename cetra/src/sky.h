@@ -32,9 +32,21 @@
 #define SKY_PREFILTER_SIZE 256
 #define SKY_PREFILTER_MIPS 7
 
+// Aerial-perspective volume (spec 9.6). Small on purpose: the in-scatter it
+// carries is smooth in all three axes, so resolution buys nothing a trilinear
+// tap does not already give, and the volume is rebuilt every frame.
+#define SKY_AERIAL_X 32
+#define SKY_AERIAL_Y 32
+#define SKY_AERIAL_Z 32
+// How far the volume reaches, in KILOMETRES. Past this the composite's
+// CLAMP_TO_EDGE on R holds the fully integrated column, which is the right
+// answer anyway -- by 128 km a surface has converged on the sky behind it.
+#define SKY_AERIAL_FAR_KM 128.0f
+
 struct Engine;
 struct IBLResources;
 struct Light;
+struct PostFX;
 
 typedef struct SkyAtmosphere {
     bool enabled;
@@ -65,6 +77,14 @@ typedef struct SkyAtmosphere {
     GLuint transmittance_lut; // 256x64  RGBA16F, baked once
     GLuint multiscatter_lut;  // 32x32   RGBA16F, baked once
     GLuint sky_view_lut;      // 192x108 RGBA16F, re-baked per sun move (M2)
+
+    // Aerial perspective (spec 9.6): a camera-frustum volume of
+    // (in-scatter, transmittance). Unlike every LUT above it depends on the
+    // CAMERA, so it is the one sky target rebuilt every frame; at 32^3 that is
+    // 0.5 MB and 32 tiny draws.
+    GLuint aerial_lut;
+    GLuint aerial_fbo; // attachment-less; one layer bound per slice draw
+    ShaderProgram* aerial_program;
 
     GLuint quad_vao, quad_vbo;
 
@@ -117,6 +137,16 @@ void sky_apply_sun_to_light(SkyAtmosphere* sky);
 // sun drives (sky_bake) and retint the coupled key light. Used by the GUI's
 // dynamic sun; cheap enough (small env) to run live per slider change.
 int sky_update_sun(SkyAtmosphere* sky, struct IBLResources* ibl, struct Engine* engine);
+
+// Rebuild the aerial-perspective volume for this frame's camera. Unlike the
+// other bakes this is per-frame, because the volume is the camera's frustum.
+// Requires the static LUTs; a no-op without them.
+void sky_update_aerial(SkyAtmosphere* sky, mat4 view, mat4 projection);
+
+// Flatten the aerial volume (or its absence) into postfx's per-frame state,
+// the shadow/probe publish shape; postfx never learns about Sky. A zero handle
+// is the single "no aerial perspective" state consumers rely on.
+void sky_publish_to_postfx(const SkyAtmosphere* sky, struct PostFX* fx);
 
 // Draw the procedural sky as the frame background (sky-view LUT + analytic
 // sun disc), replacing render_skybox in sky mode. Strips translation from

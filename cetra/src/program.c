@@ -657,6 +657,10 @@ ShaderProgram* create_sky_env_program() {
     return program;
 }
 
+ShaderProgram* create_sky_aerial_program() {
+    return create_post_program("sky_aerial", aerial_lut_frag_shader_str);
+}
+
 ShaderProgram* create_sky_background_program() {
     ShaderProgram* program = NULL;
 
