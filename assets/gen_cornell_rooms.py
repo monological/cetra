@@ -1,6 +1,17 @@
 #!/usr/bin/env python3
-"""Generate the indirect-diffuse test assets (spec 9.7): cornell_box.gltf and
-cornell_leak.gltf.
+"""Generate the Cornell test assets: cornell_box.gltf and cornell_leak.gltf for
+indirect diffuse (spec 9.7), cornell_point.gltf for punctual shadows (spec 9.8).
+
+One room, three variants, one generator -- and each ships as a `.gltf` with a
+sibling `.cscn` of the same stem, which is what lets every one of them run as
+`render -m assets/<name>.gltf` with no second path to remember. Between them
+they cover a different light type each: area panel, spot, point.
+
+There is deliberately no directional variant. Directional shadows are the one
+kind already pinned by committed goldens -- contact_debug, froxel_fog and
+aerial_fixture all run on a cascaded sun -- so a fourth room would repeat that
+coverage rather than add any, and a sun inside a closed box is a poor test of a
+cascade fit that is sized from the whole scene.
 
 **cornell_box** is the canonical Cornell box: a white room open at the front, with
 one red wall and one green wall, two boxes, and an emissive ceiling panel. It
@@ -28,6 +39,12 @@ surfaces whose normal points away from it (an A2 defect, reproducible with
 than the lit one). That also makes this the only fixture in the repo exercising a
 punctual shadow map, so it doubles as the spot-occlusion test.
 
+**cornell_point** is the same room with the emissive quad removed, lit by a point
+light standing in the open. A point light's shadow is six 2D faces picked by
+dominant axis, so its failure mode is a seam along a 45-degree face boundary; the
+light sits low enough that those boundaries cross open floor, where a seam would
+be visible, rather than hiding in the wall/floor corners.
+
 Lighting for the Cornell box is an area panel authored in its sibling .cscn (glTF
 punctual lights carry no rectangle), matching the emissive quad here so the visible
 source and the analytic light agree. Emissive comes from the glTF because .cscn materials express
@@ -37,7 +54,7 @@ the light under and behind the boxes.
 
 Geometry is flat-shaded quads: each face owns its four vertices and one normal, so
 the interior corners stay hard and no normal is shared across a colour boundary.
-Deterministic by construction. Regenerate with: python3 assets/gen_cornell_box.py
+Deterministic by construction. Regenerate with: python3 assets/gen_cornell_rooms.py
 """
 
 import base64
@@ -129,7 +146,7 @@ class Room:
         self.end()
 
 
-def build_box_room():
+def build_box_room(with_panel=True):
     r = Room()
     r.shell()
 
@@ -151,10 +168,20 @@ def build_box_room():
     r.box(0.38, 0.34, 0.6, 0.6, 0.6, -18.0)
     r.end()
 
-    r.panel(0.0)
+    if with_panel:
+        r.panel(0.0)
     return r, {"cornell_shell": WHITE, "cornell_left_red": RED,
                "cornell_right_green": GREEN, "cornell_tall_box": WHITE,
                "cornell_short_box": WHITE, "cornell_light": WHITE}
+
+
+def build_point_room():
+    """The box room with no emissive quad. Its .cscn lights it with a POINT
+    light standing in the open, low enough that the 45-degree planes dividing
+    the six shadow faces fall across open floor rather than hiding in the
+    wall/floor corners -- those junctions are what a dominant-axis face
+    selection gets wrong, so the fixture has to show them."""
+    return build_box_room(with_panel=False)
 
 
 # Thinner than one cell of the default 8x4x8 grid (0.25 m), so probes straddle it
@@ -248,7 +275,7 @@ def emit(filename, room, mat_by_group):
                           "count": count, "type": "SCALAR"})
 
     gltf = {
-        "asset": {"version": "2.0", "generator": "gen_cornell_box.py"},
+        "asset": {"version": "2.0", "generator": "gen_cornell_rooms.py"},
         "scene": 0,
         "scenes": [{"nodes": list(range(len(room.groups)))}],
         "nodes": [{"name": n, "mesh": i} for i, (n, _, _) in enumerate(room.groups)],
@@ -283,3 +310,4 @@ def emit(filename, room, mat_by_group):
 
 emit("cornell_box.gltf", *build_box_room())
 emit("cornell_leak.gltf", *build_leak_room())
+emit("cornell_point.gltf", *build_point_room())

@@ -188,7 +188,10 @@ void add_cscene_lights(Scene* scene, const CetraSceneDesc* cscn) {
             break;
         default: // CSCENE_LIGHT_POINT
             set_light_type(light, LIGHT_POINT);
-            printf("Scene file light '%s' (point, intensity %.2f)\n", light->name, sl->intensity);
+            if (sl->cast_shadows)
+                set_light_cast_shadows(light, true);
+            printf("Scene file light '%s' (point, intensity %.2f%s)\n", light->name, sl->intensity,
+                   sl->cast_shadows ? ", shadows" : "");
             break;
         }
         add_light_to_scene(scene, light);

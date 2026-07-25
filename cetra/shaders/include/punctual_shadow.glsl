@@ -25,6 +25,25 @@ uniform mat4 punctualShadowMatrix[MAX_PUNCTUAL_SHADOW_LAYERS];
 // the only global the lookup needs.
 uniform int punctualShadowCount;
 
+// Which of a point light's six layers covers a direction, by dominant axis.
+// The order is +X -X +Y -Y +Z -Z, the GL cubemap face order, and it is the ONE
+// thing this file and shadow.c must agree on -- everything else about a face
+// travels in its matrix. shadow.c renders the faces in this order.
+//
+// A boundary is exactly a 45-degree plane, so a PCF tap taken near one lands
+// past the face's edge and reads the array's border -- "lit", since a 2D array
+// has no neighbouring face to sample. That is a real mechanism and it measures
+// below the noise floor at this map size; shadow.c records the measurement
+// beside the 90-degree fov it decided on.
+int punctualCubeFace(vec3 toFrag) {
+    vec3 a = abs(toFrag);
+    if (a.x >= a.y && a.x >= a.z)
+        return toFrag.x > 0.0 ? 0 : 1;
+    if (a.y >= a.z)
+        return toFrag.y > 0.0 ? 2 : 3;
+    return toFrag.z > 0.0 ? 4 : 5;
+}
+
 // Occlusion for one perspective map: 1 = lit, 0 = fully occluded. A layer
 // outside the live range, a fragment behind the light, and a fragment off the
 // map all read as lit -- the last via the array's white border.

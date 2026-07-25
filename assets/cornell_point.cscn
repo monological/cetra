@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "models": [
+    { "path": "cornell_point.gltf" }
+  ],
+  "lights": [
+    {
+      "name": "PointLamp",
+      "type": "point",
+      "position": [0.0, 0.8, 0.0],
+      "color": [1.0, 0.95, 0.88],
+      "intensity": 3.0,
+      "attenuation": [1.0, 0.0, 0.6],
+      "cast_shadows": true
+    }
+  ],
+  "camera": {
+    "eye": [0.0, 1.6, 3.2],
+    "target": [0.0, 0.3, 0.0],
+    "fov": 40
+  },
+  "post": {
+    "tonemap": "neutral",
+    "exposure": 1.0
+  }
+}

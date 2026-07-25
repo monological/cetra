@@ -1065,6 +1065,10 @@ void main() {
             lightCI = clusterLights[li].colorIntensity.xyz;
             lightSize = clusterLights[li].spotShadowSize.zw;
             punctualLayer = int(clusterLights[li].spotShadowSize.y);
+            // A point light owns six layers rather than one; resolve the face
+            // here, where its position is still in scope.
+            if (punctualLayer >= 0 && clusterLights[li].dirType.w == 1.0)
+                punctualLayer += punctualCubeFace(WorldPos - lightPos);
         }
 
         // Half vector, guarded: where the light is directly behind the

@@ -163,6 +163,11 @@ static int init_punctual_shadow_array(ShadowSystem* system, int layers) {
     init_depth_array(&system->punctual_map_array, &system->punctual_fbo,
                      PUNCTUAL_SHADOW_MAP_SIZE, layers);
     system->punctual_allocated_layers = layers;
+    // The frame cost, stated rather than assumed: every layer is re-rendered
+    // each frame, so this many extra scene-graph walks. Logged on growth, which
+    // is exactly when that cost rises.
+    log_info("Punctual shadow array: %d layer(s) at %d^2 -- %d scene traversal(s)/frame", layers,
+             PUNCTUAL_SHADOW_MAP_SIZE, layers);
     return 0;
 }
 
@@ -497,6 +502,59 @@ static void compute_spot_light_space_matrix(const Light* spot, float near_plane,
     glm_mat4_mul(proj, view, dest);
 }
 
+// Perspective light-space matrix for one face of a point light's cube, in the
+// +X -X +Y -Y +Z -Z order include/punctual_shadow.glsl selects by dominant
+// axis. That order is the whole contract between the two files.
+//
+// Exactly 90 degrees, which tiles the sphere with no overlap. A wider fov was
+// tried, on the theory that a PCF tap at a face boundary falls past the edge
+// and clamps to the white border -- reading "lit" because a 2D array has no
+// neighbouring face to sample -- and would draw a hairline along every
+// junction. Measured against it from straight above, where all four floor
+// junctions cross cast shadow: the two differ by 1737 of 2.56M pixels, all of
+// it silhouette quantization from the resolution change, and at 1:1 the
+// junctions are indistinguishable. The seam is real in principle and below the
+// noise floor at this map size, so the overlap is not carried.
+static void compute_point_face_light_space_matrix(const Light* light, int face, float near_plane,
+                                                  float far_plane, mat4 dest) {
+    static const vec3 face_dir[6] = {{1.0f, 0.0f, 0.0f},  {-1.0f, 0.0f, 0.0f},
+                                     {0.0f, 1.0f, 0.0f},  {0.0f, -1.0f, 0.0f},
+                                     {0.0f, 0.0f, 1.0f},  {0.0f, 0.0f, -1.0f}};
+
+    vec3 up = GLM_VEC3_ZERO_INIT;
+    light_space_up(face_dir[face], up);
+    vec3 target;
+    glm_vec3_add((float*)light->global_position, (float*)face_dir[face], target);
+    mat4 view, proj;
+    glm_lookat((float*)light->global_position, target, up, view);
+    glm_perspective(glm_rad(90.0f), 1.0f, near_plane, far_plane, proj);
+    glm_mat4_mul(proj, view, dest);
+}
+
+// Layers one light needs: a point light's cube is six 2D faces, everything
+// else is a single perspective map.
+static int punctual_layers_for(const Light* light) {
+    return light->type == LIGHT_POINT ? 6 : 1;
+}
+
+// Fill a light's layers with its light-space matrices, in the layer order its
+// consumer selects by.
+static void compute_punctual_matrices(const Light* light, const ShadowSystem* ss, mat4* dest) {
+    if (light->type == LIGHT_POINT) {
+        for (int f = 0; f < 6; f++) {
+            compute_point_face_light_space_matrix(light, f, ss->near_plane, ss->far_plane, dest[f]);
+        }
+        return;
+    }
+    // The system's own scene-scaled range, not a fixed one. A hardcoded near of
+    // 1.0 puts the whole of any room-sized scene INSIDE the near plane --
+    // nothing reaches the map and the light silently stops casting, which is
+    // not a subtle degradation but a total one. Apps already scale
+    // near_plane/far_plane off the scene radius for the cascades; a punctual
+    // light in the same scene has no reason to disagree with them.
+    compute_spot_light_space_matrix(light, ss->near_plane, ss->far_plane, dest[0]);
+}
+
 void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     if (!engine || !scene || !scene->shadow_system)
         return;
@@ -533,14 +591,20 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
         if (!light)
             continue;
         light->shadow_layer = -1;
-        if (light->type != LIGHT_SPOT || !light->cast_shadows)
+        if (!light->cast_shadows)
             continue;
-        if (punctual_needed >= MAX_PUNCTUAL_SHADOW_LAYERS) {
+        if (light->type != LIGHT_SPOT && light->type != LIGHT_POINT)
+            continue;
+        // A point light takes its six faces or none: five faces is a light with
+        // holes in it, which is worse than one that does not cast.
+        int want = punctual_layers_for(light);
+        if (punctual_needed + want > MAX_PUNCTUAL_SHADOW_LAYERS) {
             if (!pool_overflow)
                 pool_overflow = light;
             continue;
         }
-        light->shadow_layer = punctual_needed++;
+        light->shadow_layer = punctual_needed;
+        punctual_needed += want;
     }
 
     // Latched so a misconfigured scene reports once rather than every frame,
@@ -719,23 +783,22 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
             if (!light || light->shadow_layer < 0)
                 continue;
 
-            // The system's own scene-scaled range, not a fixed one. A hardcoded
-            // near of 1.0 puts the whole of any room-sized scene INSIDE the near
-            // plane -- nothing reaches the map and the spot silently stops
-            // casting, which is not a subtle degradation but a total one. Apps
-            // already scale near_plane/far_plane off the scene radius for the
-            // cascades; a spot in the same scene has no reason to disagree.
-            compute_spot_light_space_matrix(light, ss->near_plane, ss->far_plane,
-                                            ss->punctual_matrices[light->shadow_layer]);
-            if (!begin_punctual_shadow_pass(ss, light->shadow_layer))
-                continue;
-            uniform_set_mat4(ss->depth_program->uniforms, "lightSpaceMatrix",
-                             (const float*)ss->punctual_matrices[light->shadow_layer]);
-            _render_shadow_node(scene->root_node, ss->depth_program, &current_program);
-            end_shadow_pass(ss);
-            // Layers are handed out in increasing order, so the last one drawn
-            // is the bound the shader needs
-            ss->punctual_layer_count = light->shadow_layer + 1;
+            compute_punctual_matrices(light, ss, &ss->punctual_matrices[light->shadow_layer]);
+
+            // One scene traversal per layer -- this loop is the frame cost the
+            // pool ceiling caps, and a point light pays six times a spot's.
+            for (int f = 0; f < punctual_layers_for(light); f++) {
+                int layer = light->shadow_layer + f;
+                if (!begin_punctual_shadow_pass(ss, layer))
+                    continue;
+                uniform_set_mat4(ss->depth_program->uniforms, "lightSpaceMatrix",
+                                 (const float*)ss->punctual_matrices[layer]);
+                _render_shadow_node(scene->root_node, ss->depth_program, &current_program);
+                end_shadow_pass(ss);
+                // Layers are handed out in increasing order, so the last one
+                // drawn is the bound the shader needs
+                ss->punctual_layer_count = layer + 1;
+            }
         }
     }
 
