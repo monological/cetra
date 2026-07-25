@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "models": [
+    { "path": "aerial_fixture.gltf" }
+  ],
+  "environment": {
+    "mode": "sky",
+    "sun": { "elevation": 20, "azimuth": 40 }
+  },
+  "camera": {
+    "eye": [0.0, 400.0, 500.0],
+    "target": [0.0, 3211.0, -19500.0],
+    "fov": 40
+  },
+  "post": {
+    "tonemap": "neutral",
+    "exposure": 1.0
+  }
+}

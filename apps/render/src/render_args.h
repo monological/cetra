@@ -52,6 +52,7 @@ typedef struct {
     int sky_debug;                    // Blit the sky LUTs into the frame corner
     float sun_elevation;              // Sky sun elevation in degrees (-999 = default)
     float sun_azimuth;                // Sky sun azimuth in degrees (-999 = default)
+    float world_scale;                // World units per km for the atmosphere (-1 = default)
     int sky_rebake_stress;            // Diagnostic: N headless sun re-bakes then restore
     int fog;                          // Enable volumetric fog
     float fog_density;                // Extinction override (0 = scene-scaled)

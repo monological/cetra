@@ -115,6 +115,9 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --sky-debug        Blit the sky LUTs into the frame corner\n");
     fprintf(stderr, "      --sun-elevation <d> Sky sun elevation in degrees (implies --sky)\n");
     fprintf(stderr, "      --sun-azimuth <d>  Sky sun azimuth in degrees (implies --sky)\n");
+    fprintf(stderr,
+            "      --world-scale <f>  World units per km for the atmosphere "
+            "(default 1000, implies --sky)\n");
     fprintf(stderr, "      --fog              Volumetric fog: god rays + height haze\n");
     fprintf(stderr, "      --fog-density <f>  Fog extinction per world unit (implies --fog)\n");
     fprintf(stderr, "      --fog-height <f>   Fog height falloff in world units (implies --fog)\n");
@@ -213,6 +216,7 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->shadow_softness = -1.0f; // -1 = keep the engine default
     args->sun_elevation = -999.0f; // -999 = keep the sky default
     args->sun_azimuth = -999.0f;
+    args->world_scale = -1.0f; // -1 = keep the sky's default (1 unit = 1 metre)
     args->bloom_enable = -1;        // -1 = keep the engine default
     args->bloom_strength = -1.0f;   // -1 = keep the engine default
     args->bloom_threshold = -1.0f;  // -1 = keep the engine default
@@ -484,6 +488,17 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 return -1;
             }
             args->sun_azimuth = (float)atof(argv[i]);
+            args->sky = 1;
+        } else if (strcmp(argv[i], "--world-scale") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->world_scale = (float)atof(argv[i]);
+            if (args->world_scale <= 0.0f) {
+                fprintf(stderr, "Error: --world-scale must be positive\n");
+                return -1;
+            }
             args->sky = 1;
         } else if (strcmp(argv[i], "--sky-rebake-stress") == 0) {
             if (++i >= argc) {
@@ -1678,6 +1693,8 @@ int main(int argc, char** argv) {
                 sky->sun_elevation_deg = args.sun_elevation;
             if (args.sun_azimuth > -900.0f)
                 sky->sun_azimuth_deg = args.sun_azimuth;
+            if (args.world_scale > 0.0f)
+                sky->world_units_per_km = args.world_scale;
             sky_update_sun_dir(sky);
         }
         if (sky && ibl && sky_bake_static_luts(sky, engine) == 0 &&

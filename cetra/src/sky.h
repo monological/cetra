@@ -53,6 +53,15 @@ typedef struct SkyAtmosphere {
     struct Light* sun_light;
     float sun_base_intensity; // key-light intensity at full elevation
 
+    // World units per kilometre. The atmosphere model is in km (Rg/Rt in
+    // include/atmosphere.glsl) while a scene is in whatever units it was
+    // authored in, so nothing can march a real distance without this mapping.
+    // 1000 = one unit is one metre, the glTF convention. Deliberately not
+    // scene-scaled: how big a scene IS in the world is an authoring fact, not
+    // something to infer from its bounding radius -- a prop shot really does
+    // sit under 0.1% extinction, and should look like it.
+    float world_units_per_km;
+
     GLuint transmittance_lut; // 256x64  RGBA16F, baked once
     GLuint multiscatter_lut;  // 32x32   RGBA16F, baked once
     GLuint sky_view_lut;      // 192x108 RGBA16F, re-baked per sun move (M2)

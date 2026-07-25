@@ -21,6 +21,7 @@ SkyAtmosphere* create_sky_atmosphere(void) {
     sky->sun_elevation_deg = 35.0f;
     sky->sun_azimuth_deg = 135.0f;
     sky->sun_disc_deg = 0.53f;
+    sky->world_units_per_km = 1000.0f; // 1 unit = 1 metre (the glTF convention)
     sky_update_sun_dir(sky);
 
     return sky;
