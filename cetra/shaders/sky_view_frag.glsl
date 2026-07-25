@@ -17,30 +17,11 @@ uniform float sunCosZenith; // dot(sunDir, up) -- the sun's elevation
 
 #include "sky_lut.glsl"
 
-// Mie asymmetry: only this shader evaluates a phase function (the LUT bakes
-// the phase in), so it stays local rather than joining the shared model.
-const float MIE_G = 0.8;
+// MIE_G, rayleighPhase, miePhase and multiscatterAt live in atmosphere.glsl:
+// the aerial-perspective volume marches the same medium and must not evaluate
+// a second, drifting copy of it.
 
 const int SKY_STEPS = 32;
-
-vec3 multiscatterAt(float r, float mu_s)
-{
-    vec2 uv = vec2(mu_s * 0.5 + 0.5, (r - Rg) / (Rt - Rg));
-    return texture(multiscatterLut, uv).rgb;
-}
-
-float rayleighPhase(float c)
-{
-    return 3.0 / (16.0 * PI) * (1.0 + c * c);
-}
-
-float miePhase(float c)
-{
-    float g = MIE_G;
-    float g2 = g * g;
-    return 3.0 / (8.0 * PI) * ((1.0 - g2) * (1.0 + c * c))
-           / ((2.0 + g2) * pow(1.0 + g2 - 2.0 * g * c, 1.5));
-}
 
 // Decode (u,v) -> view direction in the sun-relative frame: x toward the
 // sun's azimuth, y up, z the horizontal perpendicular. u is azimuth about
@@ -105,7 +86,7 @@ void main()
         // Single scattering: sun light * phase-weighted scattering
         vec3 single = sunT * (atm.rayleigh * phaseR + vec3(atm.mie * phaseM));
         // Multiple scattering: isotropic Psi * total scattering
-        vec3 multi = multiscatterAt(rt, mu_s) * (atm.rayleigh + vec3(atm.mie));
+        vec3 multi = multiscatterAt(multiscatterLut, rt, mu_s) * (atm.rayleigh + vec3(atm.mie));
 
         vec3 scatterIntegral =
             (single + multi) * (vec3(1.0) - stepTrans) / max(atm.extinction, vec3(1e-6));

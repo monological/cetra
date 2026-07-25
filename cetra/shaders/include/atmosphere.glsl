@@ -136,3 +136,30 @@ vec3 transmittanceToSky(sampler2D lut, float r, float mu)
         return vec3(0.0);
     return transmittanceLookup(lut, r, mu);
 }
+
+// Mie asymmetry. Part of the medium, so it belongs with the coefficients above
+// rather than with any one consumer.
+const float MIE_G = 0.8;
+
+float rayleighPhase(float c)
+{
+    return 3.0 / (16.0 * PI) * (1.0 + c * c);
+}
+
+float miePhase(float c)
+{
+    float g = MIE_G;
+    float g2 = g * g;
+    return 3.0 / (8.0 * PI) * ((1.0 - g2) * (1.0 + c * c))
+           / ((2.0 + g2) * pow(1.0 + g2 - 2.0 * g * c, 1.5));
+}
+
+// Psi LUT fetch: the multiple-scattering contribution at altitude r for a sun
+// at cos-zenith mu_s. Takes the sampler as a parameter, matching the
+// transmittance helpers above -- a shader binds its own uniform and passes it,
+// so nothing depends on a particular uniform name.
+vec3 multiscatterAt(sampler2D lut, float r, float mu_s)
+{
+    vec2 uv = vec2(mu_s * 0.5 + 0.5, (r - Rg) / (Rt - Rg));
+    return texture(lut, uv).rgb;
+}
