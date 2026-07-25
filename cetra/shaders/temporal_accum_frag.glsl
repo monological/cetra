@@ -5,8 +5,8 @@ out vec4 FragColor;
 // Shared plain-RGBA temporal accumulator, driven by run_temporal_accum for
 // every effect whose per-frame jitter should integrate over time without
 // signal-specific tricks: AO accumulates its occlusion in .r (the R16F
-// history target discards the rest), volumetric fog its (inscatter.rgb,
-// transmittance.a). Reprojects last frame's accumulation by the motion
+// history target discards the rest), the composited volumetric-fog layer its
+// (inscatter.rgb, transmittance.a). Reprojects last frame's accumulation by the motion
 // vectors, bounds it per channel to the current 3x3 neighborhood so a
 // surface that just disoccluded can't bleed stale history through, and
 // blends at fixed feedback. SSGI keeps its own accumulator: its YCoCg

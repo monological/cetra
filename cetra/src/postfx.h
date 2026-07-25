@@ -49,8 +49,10 @@ typedef enum PostFXDebugView {
     POSTFX_DEBUG_ALBEDO = 4,  // Resolved albedo G-buffer (SSGI)
     POSTFX_DEBUG_SSGI = 5,    // Raw gathered GI radiance (half-res, SSGI)
     // 6 was the half-res fog in-scatter buffer, retired with the screen-space
-    // march (spec 9.5); the froxel volume has no 2D buffer to blit. The gap is
-    // deliberate -- the values are the shader's debugView dispatch.
+    // march (spec 9.5). The gap is deliberate -- the values are the shader's
+    // debugView dispatch. fog_layer_texture would now be a valid target for it
+    // again (spec 9.5.1 gave the froxel path a composited 2D layer), but only
+    // on TAA frames, since that is the only time it is allocated.
     POSTFX_DEBUG_SPEC_OCC = 7, // AO visibility after specular occlusion
     POSTFX_DEBUG_CONTACT = 8,  // Contact-shadow visibility term (before compositing)
 } PostFXDebugView;

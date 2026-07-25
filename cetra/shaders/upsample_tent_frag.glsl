@@ -9,12 +9,16 @@ out vec4 FragColor;
 // (inscatter, transmittance) with (GL_ONE, GL_SRC_ALPHA) so the output is
 // inscatter + scene * transmittance; the bloom pyramid walks its mip
 // chain with (GL_ONE, GL_ONE) so each coarser level accumulates onto the
-// finer one (via a separate program object -- bloom re-uploads texelSize
-// per level, while SSR/fog's shared program sets it once at init). The
-// tent matters where a jittered march's per-pixel outcome is marginal
+// finer one (via a separate program object). Every consumer uploads
+// texelSize before drawing, since they no longer share one resolution.
+// The tent matters where a jittered march's per-pixel outcome is marginal
 // (hit-or-miss grazing reflections, dithered step positions): averaging
 // the neighborhood turns that per-pixel coin-flip into a smooth local
-// fraction instead of structured noise.
+// fraction instead of structured noise. Fog passes a ZERO texel, which
+// collapses the nine taps onto one (the weights sum to 1) and makes this
+// an exact copy: its layer is already full res, and a real 1px tent on a
+// non-premultiplied pair would halo every silhouette, where transmittance
+// jumps hardest.
 uniform sampler2D srcTex;
 uniform vec2 texelSize; // One coarser-level source texel
 
