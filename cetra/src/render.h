@@ -19,6 +19,27 @@
 // shadow depth pass cannot disagree about where wind-displaced geometry is.
 void render_current_scene(Engine* engine);
 
+struct IBLResources;
+
+// Render the scene into the six faces of `dst_cubemap` from `position`, at
+// `face_size` per face, supersampled `ss_factor`x and box-downsampled on the blit.
+//
+// Renders the ENGINE'S CURRENT SCENE, deliberately with no scene parameter:
+// render_current_scene resolves the scene itself through get_current_scene, so a
+// scene argument here could not be honoured and would only read as if it were.
+//
+// Saves and restores every piece of engine and camera state it substitutes, so a
+// capture leaves the next real frame bit-identical, and raises engine->capturing
+// for the duration so passes that reach outside the bound target sit out.
+// Borrows ibl->capture_fbo / capture_rbo as scratch and resizes the latter.
+//
+// The CALLER owns capture policy that is not about substituting a camera: shadow
+// cascade fitting, freezing the animation clock, draining the async loader,
+// building the mask array, and whatever it does with the cubemap afterwards.
+void scene_capture_faces(Engine* engine, struct IBLResources* ibl, const vec3 position,
+                         GLuint dst_cubemap, int face_size, int ss_factor, float near_clip,
+                         float far_clip);
+
 // Animation state for skinned mesh rendering
 // Set before rendering to enable bone matrix upload for skinned meshes
 void set_render_animation_state(AnimationState* state);

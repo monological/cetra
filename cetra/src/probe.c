@@ -127,112 +127,15 @@ int reflection_probe_capture(ReflectionProbe* probe, struct Engine* engine, Scen
     // capture contains shadowed direct light and catcher darkening.
     render_shadow_depth_pass(engine, scene);
 
-    // Save everything the capture substitutes
-    mat4 saved_view, saved_projection, saved_view_proj, saved_prev_view_proj;
-    glm_mat4_copy(engine->view_matrix, saved_view);
-    glm_mat4_copy(engine->projection_matrix, saved_projection);
-    glm_mat4_copy(engine->view_proj, saved_view_proj);
-    glm_mat4_copy(engine->prev_view_proj, saved_prev_view_proj);
-
-    Camera* camera = engine->camera;
-    vec3 saved_cam_pos;
-    glm_vec3_copy(camera->position, saved_cam_pos);
-    float saved_near = camera->near_clip;
-    float saved_far = camera->far_clip;
-
-    bool saved_normals = engine->normals_this_frame;
-    bool saved_aux = engine->aux_this_frame;
-    bool saved_albedo = engine->albedo_this_frame;
-    bool saved_taa = engine->postfx ? engine->postfx->taa_enabled : false;
-    bool saved_refraction = engine->refraction_enabled;
-    bool saved_capturing = engine->capturing;
-
-    GLint saved_viewport[4];
-    GLint saved_fbo;
-    glGetIntegerv(GL_VIEWPORT, saved_viewport);
-    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &saved_fbo);
-
-    // Color-only target: keep the G-buffer draw-buffer list at attachment 0,
-    // and make sure the TAA branch can never jitter the capture projection.
-    // Refraction must sit out too: its mid-frame resolve reads and rebinds
-    // engine->framebuffer, which is NOT the capture target -- it would blit
-    // a stale main frame and hijack the rest of the capture pass.
-    //
-    // `capturing` covers the rest of that same family: the particle pass and the
-    // OIT bracket both re-bind engine->framebuffer the way refraction does, and
-    // alpha-to-coverage keys off the scene framebuffer's sample count rather than
-    // this single-sample target. Refraction keeps its own toggle because it is
-    // also an app-facing feature; the other three have no reason to exist as
-    // separate switches.
-    engine->normals_this_frame = false;
-    engine->aux_this_frame = false;
-    engine->albedo_this_frame = false;
-    engine->refraction_enabled = false;
-    engine->capturing = true;
-    if (engine->postfx)
-        engine->postfx->taa_enabled = false;
-
-    // Scene GL state: capture may run before the render loop's per-frame
-    // preamble has ever executed, so establish it explicitly
-    glEnable(GL_DEPTH_TEST);
-    glDepthFunc(GL_LESS);
-    glDepthMask(GL_TRUE);
-    glEnable(GL_CULL_FACE);
-    glCullFace(GL_BACK);
-    glFrontFace(GL_CCW);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-
     if (probe->cubemap)
         glDeleteTextures(1, &probe->cubemap);
     ibl_create_cubemap_texture(&probe->cubemap, PROBE_CUBEMAP_SIZE, true);
 
-    // Supersampled capture: render each face at 2x into a temporary target
-    // and box-downsample into the cube face (an exact 4-tap average at a 2:1
-    // blit). The capture has no MSAA, and single-sample grazing-angle
-    // aliasing at its horizon bakes in as stripe moire that mirror
-    // reflections then magnify into banded streaks.
-    const int ss_size = 2 * PROBE_CUBEMAP_SIZE;
-    GLuint ss_tex = 0, face_fbo = 0;
-    glGenTextures(1, &ss_tex);
-    glBindTexture(GL_TEXTURE_2D, ss_tex);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F, ss_size, ss_size, 0, GL_RGB, GL_FLOAT, NULL);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glGenFramebuffers(1, &face_fbo);
-
-    glBindFramebuffer(GL_FRAMEBUFFER, ibl->capture_fbo);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, ss_tex, 0);
-    glBindRenderbuffer(GL_RENDERBUFFER, ibl->capture_rbo);
-    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, ss_size, ss_size);
-
-    mat4 views[6];
-    ibl_capture_views(probe->position, views);
-
-    // Per-face shading is evaluated from the probe point
-    glm_vec3_copy(probe->position, camera->position);
-    camera->near_clip = near_clip;
-    camera->far_clip = far_clip;
-    glm_perspective(glm_rad(90.0f), 1.0f, near_clip, far_clip, engine->projection_matrix);
-
-    for (int i = 0; i < 6; ++i) {
-        glBindFramebuffer(GL_FRAMEBUFFER, ibl->capture_fbo);
-        glViewport(0, 0, ss_size, ss_size);
-        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-        glm_mat4_copy(views[i], engine->view_matrix);
-        render_current_scene(engine);
-
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, ibl->capture_fbo);
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, face_fbo);
-        glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                               GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, probe->cubemap, 0);
-        glBlitFramebuffer(0, 0, ss_size, ss_size, 0, 0, PROBE_CUBEMAP_SIZE, PROBE_CUBEMAP_SIZE,
-                          GL_COLOR_BUFFER_BIT, GL_LINEAR);
-    }
-
-    glDeleteFramebuffers(1, &face_fbo);
-    glDeleteTextures(1, &ss_tex);
+    // Supersampled 2x: the capture has no MSAA, and single-sample grazing-angle
+    // aliasing at its horizon bakes in as stripe moire that mirror reflections
+    // then magnify into banded streaks.
+    scene_capture_faces(engine, ibl, probe->position, probe->cubemap, PROBE_CUBEMAP_SIZE, 2,
+                        near_clip, far_clip);
 
     glBindTexture(GL_TEXTURE_CUBE_MAP, probe->cubemap);
     glGenerateMipmap(GL_TEXTURE_CUBE_MAP);
@@ -240,27 +143,12 @@ int reflection_probe_capture(ReflectionProbe* probe, struct Engine* engine, Scen
     ibl_prefilter_cubemap(ibl, probe->cubemap, &probe->prefiltered, PROBE_PREFILTER_SIZE,
                           PROBE_PREFILTER_MIP_LEVELS);
 
-    // Restore
-    glm_mat4_copy(saved_view, engine->view_matrix);
-    glm_mat4_copy(saved_projection, engine->projection_matrix);
-    glm_mat4_copy(saved_view_proj, engine->view_proj);
-    glm_mat4_copy(saved_prev_view_proj, engine->prev_view_proj);
-    glm_vec3_copy(saved_cam_pos, camera->position);
-    camera->near_clip = saved_near;
-    camera->far_clip = saved_far;
-    engine->normals_this_frame = saved_normals;
-    engine->aux_this_frame = saved_aux;
-    engine->albedo_this_frame = saved_albedo;
-    engine->refraction_enabled = saved_refraction;
-    engine->capturing = saved_capturing;
+    // Restore the capture policy this function owns; scene_capture_faces has
+    // already restored the camera, the engine flags and the GL target.
     engine_set_render_time(engine, saved_render_time, saved_render_delta);
     if (scene->shadow_system)
         scene->shadow_system->cascade_count = saved_cascades;
-    if (engine->postfx)
-        engine->postfx->taa_enabled = saved_taa;
 
-    glBindFramebuffer(GL_FRAMEBUFFER, saved_fbo);
-    glViewport(saved_viewport[0], saved_viewport[1], saved_viewport[2], saved_viewport[3]);
     glUseProgram(0);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, 0);
