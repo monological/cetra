@@ -554,7 +554,7 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     uniform_set_int(fx->ssr_hiz_program->uniforms, "srcTex", 0);
     glUseProgram(fx->froxel_inject_program->id);
     uniform_set_int(fx->froxel_inject_program->uniforms, "shadowMaps", 1);
-    uniform_set_int(fx->froxel_inject_program->uniforms, "spotShadowMap", 2);
+    uniform_set_int(fx->froxel_inject_program->uniforms, "punctualShadowMaps", 2);
     uniform_set_int(fx->froxel_inject_program->uniforms, "historyVolume", 3);
     glUseProgram(fx->froxel_integrate_program->id);
     uniform_set_int(fx->froxel_integrate_program->uniforms, "scatterVolume", 0);
@@ -1407,7 +1407,7 @@ static void postfx_build_fog_volume(PostFX* fx, mat4 projection, mat4 view) {
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D_ARRAY, fx->fog_shadow_map_array);
     glActiveTexture(GL_TEXTURE2);
-    glBindTexture(GL_TEXTURE_2D, fx->fog_spot_shadow_map);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, fx->fog_punctual_shadow_maps);
     glActiveTexture(GL_TEXTURE3);
     glBindTexture(GL_TEXTURE_3D, fx->froxel_scatter[prev]);
     glActiveTexture(GL_TEXTURE0);

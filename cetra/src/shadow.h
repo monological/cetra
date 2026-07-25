@@ -11,19 +11,27 @@
 #define MAX_SHADOW_LIGHTS       3
 #define SHADOW_CASCADES         3 // Compile-time cascade ceiling (runtime: cascade_count)
 #define DEFAULT_SHADOW_MAP_SIZE 2048
-// The standalone perspective spot map. Larger than the 1024 it started at
-// because a spot's fov comes from its cone -- a wide cone spreads the same
-// texel count over a far larger footprint than a cascade's fitted ortho box,
-// and every seam artifact scales with that footprint.
-#define SPOT_SHADOW_MAP_SIZE 2048
+// Worst-case punctual layers per frame, NOT a VRAM budget: every layer is
+// re-rendered each frame, so this caps scene traversals. Quantized by the 6 a
+// point light needs, hence a value that buys one point light plus two of
+// anything else. Erring small is deliberate -- exhausting the pool is a
+// failure a log line can name, where an over-large pool costs frame time with
+// no signal at all. Allocation is demand-driven, so a spot-only scene builds
+// one layer.
+#define MAX_PUNCTUAL_SHADOW_LAYERS 8
+// Every punctual map. Larger than the 1024 it started at because a spot's fov
+// comes from its cone -- a wide cone spreads the same texel count over a far
+// larger footprint than a cascade's fitted ortho box, and every seam artifact
+// scales with that footprint. One array means one size for all three types.
+#define PUNCTUAL_SHADOW_MAP_SIZE 2048
 // Engine-owned sampler units sit just above the material units (common.h).
 // Packing the scalar masks into one array freed the 10-12 range, letting the
 // shadow + IBL units drop below 16 so brdfLUT/skybox are no longer bound
 // out of spec (GL_MAX_TEXTURE_IMAGE_UNITS = 16, valid 0-15).
 #define SHADOW_MAP_TEXTURE_UNIT 10
-// The perspective spot shadow map sits above the shadow array + IBL units
-// (11-14); 15 is the last valid unit (GL_MAX_TEXTURE_IMAGE_UNITS = 16).
-#define SPOT_SHADOW_MAP_TEXTURE_UNIT 15
+// The punctual shadow array sits above the cascade array + IBL units (11-14);
+// 15 is the last valid unit (GL_MAX_TEXTURE_IMAGE_UNITS = 16).
+#define PUNCTUAL_SHADOW_MAP_TEXTURE_UNIT 15
 
 // Forward declarations
 struct Scene;
@@ -69,22 +77,24 @@ typedef struct ShadowSystem {
     vec4 cascade_params[MAX_SHADOW_LIGHTS * SHADOW_CASCADES]; // width, near, far, biasScale
     float cascade_splits[SHADOW_CASCADES];                    // View-depth far bound per cascade
 
-    // One perspective spot shadow map (v1: the flashlight), a standalone 2D
-    // depth map kept apart from the directional cascade array so its perspective
-    // projection doesn't disturb the ortho affine-shadow path. Reuses the
-    // ShadowCaster fbo/depth_texture pair (the array path never used it).
-    ShadowCaster spot_caster;
-    mat4 spot_light_space; // perspective proj * lookAt from the spot
-    bool spot_active;      // a shadow-casting spot was rendered this frame
+    // Perspective shadow maps for the punctual light types, one ordinary 2D
+    // layer per map, kept apart from the directional cascade array so a
+    // perspective projection never disturbs the ortho affine-shadow path.
+    // 2D layers rather than a depth cube: a point light's six 90-degree frusta
+    // are six layers the shader picks between by dominant axis, which lets ONE
+    // sampler serve spot, point and area. That matters because samplerCubeArray
+    // is GLSL 400 against a uniformly-330 shader set, and unit 15 is the last
+    // one there is -- a second sampler has nowhere to bind.
+    GLuint punctual_map_array;
+    GLuint punctual_fbo;
+    int punctual_allocated_layers; // Layer capacity built; a larger need rebuilds
+    mat4 punctual_matrices[MAX_PUNCTUAL_SHADOW_LAYERS]; // perspective proj * lookAt per layer
+    bool spot_active;                                   // layer 0 holds this frame's spot map
 } ShadowSystem;
 
 // Creation and destruction
 ShadowSystem* create_shadow_system(int default_map_size);
 void free_shadow_system(ShadowSystem* system);
-
-// Shadow caster management
-int init_shadow_caster(ShadowCaster* caster, int map_size);
-void free_shadow_caster(ShadowCaster* caster);
 
 // Shadow map array management
 int init_shadow_map_array(ShadowSystem* system);

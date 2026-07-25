@@ -50,7 +50,9 @@ uniform vec3 spotAtten;
 uniform float spotCosInner;
 uniform float spotCosOuter;
 uniform int spotShadowed;
-uniform sampler2D spotShadowMap;
+// The punctual shadow array; layer 0 is the spot's map, as pbr_frag reads it.
+uniform sampler2DArray punctualShadowMaps;
+const float SPOT_LAYER = 0.0;
 uniform mat4 spotLightSpaceMatrix;
 
 // Temporal reprojection against the previous frame's volume. 0 freezes the
@@ -178,7 +180,10 @@ void main() {
                 if (ls.w > 0.0) { // in front of the light plane
                     vec3 pc = ls.xyz / ls.w * 0.5 + 0.5;
                     if (pc.z <= 1.0 && pc.x >= 0.0 && pc.x <= 1.0 && pc.y >= 0.0 && pc.y <= 1.0)
-                        vis = (pc.z - shadowBias > texture(spotShadowMap, pc.xy).r) ? 0.0 : 1.0;
+                        vis = (pc.z - shadowBias >
+                               texture(punctualShadowMaps, vec3(pc.xy, SPOT_LAYER)).r)
+                                  ? 0.0
+                                  : 1.0;
                 }
             }
             float spotPhase = phaseHG(dot(spotDir, -rayDir), anisotropy) * sunBoost;

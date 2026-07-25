@@ -137,10 +137,13 @@ uniform int csmDebug; // Tint fragments by selected cascade
 uniform int pcssEnabled;
 uniform float pcssSoftness; // Multiplier on the light's angular size
 
-// Perspective spot shadow map (the flashlight): occludes surfaces (e.g. the
-// glass ball's shadow on the floor). Separate from the directional cascade
-// array; perspective, so its tap needs a per-fragment w-divide.
-uniform sampler2D spotShadowMap;
+// Perspective shadow maps for the punctual light types, one 2D layer each.
+// Separate from the directional cascade array; perspective, so a tap needs a
+// per-fragment w-divide. Layer 0 is the spot (the flashlight) whose shadow
+// occludes surfaces, e.g. the glass ball's shadow on the floor -- an agreement
+// with shadow.c, which renders it there.
+uniform sampler2DArray punctualShadowMaps;
+const float SPOT_LAYER = 0.0;
 uniform mat4 spotShadowMatrix;
 uniform int spotShadowActive;
 
@@ -607,11 +610,11 @@ float calculateSpotShadow(vec3 worldPos, float NdotL) {
     // did: a single tap quantizes the edge to the texel grid, and reads as a
     // staircase on any silhouette not aligned to it.
     float bias = max(0.0015 * (1.0 - NdotL), 0.0004);
-    vec2 texel = vec2(1.0 / float(textureSize(spotShadowMap, 0).x));
+    vec2 texel = vec2(1.0 / float(textureSize(punctualShadowMaps, 0).x));
     float sum = 0.0;
     for (int y = -1; y <= 1; ++y) {
         for (int x = -1; x <= 1; ++x) {
-            float d = texture(spotShadowMap, pc.xy + vec2(x, y) * texel).r;
+            float d = texture(punctualShadowMaps, vec3(pc.xy + vec2(x, y) * texel, SPOT_LAYER)).r;
             sum += (pc.z - bias > d) ? 0.0 : 1.0;
         }
     }

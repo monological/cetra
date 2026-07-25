@@ -21,10 +21,12 @@ blend a probe from the lit half into a surface in the dark half, and the partiti
 is deliberately thinner than a grid cell so probes straddle it. Only the visibility
 moments (the Chebyshev test) can reject that, so this fixture is the one that fails
 loudly if they are wrong, missing, or mis-encoded. Its sibling .cscn lights it with a
-POINT light, not the area panel the Cornell box uses: a leak test has to start from
-direct lighting that is beyond question, and the LTC panel currently lights surfaces
-whose normal points away from it (an A2 defect, reproducible with --area-light and
-nothing else, and enough on its own to make the dark half brighter than the lit one).
+shadow-casting SPOT, not the area panel the Cornell box uses: a leak test has to start
+from direct lighting that is beyond question, and the LTC panel currently lights
+surfaces whose normal points away from it (an A2 defect, reproducible with
+--area-light and nothing else, and enough on its own to make the dark half brighter
+than the lit one). That also makes this the only fixture in the repo exercising a
+punctual shadow map, so it doubles as the spot-occlusion test.
 
 Lighting for the Cornell box is an area panel authored in its sibling .cscn (glTF
 punctual lights carry no rectangle), matching the emissive quad here so the visible

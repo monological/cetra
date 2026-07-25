@@ -274,9 +274,10 @@ typedef struct PostFX {
     float fog_spot_cos_inner; // cutOff (cos inner half-angle)
     float fog_spot_cos_outer; // outerCutOff (cos outer half-angle)
     // Perspective spot shadow (Phase 2): occludes the beam by geometry.
-    bool fog_spot_shadowed;     // a spot shadow map was rendered this frame
-    mat4 fog_spot_light_space;  // perspective proj * lookAt from the spot
-    GLuint fog_spot_shadow_map; // GL_TEXTURE_2D depth (0 = none)
+    bool fog_spot_shadowed;    // a spot shadow map was rendered this frame
+    mat4 fog_spot_light_space; // perspective proj * lookAt from the spot
+    // GL_TEXTURE_2D_ARRAY of perspective depth maps, spot in layer 0 (0 = none)
+    GLuint fog_punctual_shadow_maps;
 
     PostFXDebugView debug_view;
     PostFXTonemapMode tonemap_mode;

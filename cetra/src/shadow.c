@@ -18,6 +18,62 @@
 #include "wind.h"
 #include "ext/log.h"
 
+// A depth array texture plus the one FBO that renders into its layers. Both
+// shadow arrays are built from here: they differ only in size and layer count.
+// glTexImage3D, never glTexStorage3D -- that is GL 4.2 and this targets 4.1,
+// the constraint mask_array.c writes down at its own allocation.
+static void init_depth_array(GLuint* tex, GLuint* fbo, int size, int layers) {
+    glGenTextures(1, tex);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, *tex);
+    glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_DEPTH_COMPONENT24, size, size, layers, 0,
+                 GL_DEPTH_COMPONENT, GL_FLOAT, NULL);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+    // A white border reads as "nothing occludes here", so a receiver outside
+    // the map's footprint stays lit instead of being shadowed by the edge.
+    float border_color[] = {1.0f, 1.0f, 1.0f, 1.0f};
+    glTexParameterfv(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_BORDER_COLOR, border_color);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
+
+    glGenFramebuffers(1, fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, *fbo);
+    glDrawBuffer(GL_NONE);
+    glReadBuffer(GL_NONE);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+static void free_depth_array(GLuint* tex, GLuint* fbo) {
+    if (*tex) {
+        glDeleteTextures(1, tex);
+        *tex = 0;
+    }
+    if (*fbo) {
+        glDeleteFramebuffers(1, fbo);
+        *fbo = 0;
+    }
+}
+
+// Point the FBO at one layer and clear it for a depth-only pass. False means
+// nothing was bound, so the caller must not draw -- the FBO is back to 0 and
+// drawing would land in the default framebuffer.
+static bool begin_depth_layer(GLuint fbo, GLuint tex, int layer, int size) {
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, tex, 0, layer);
+
+    GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    if (status != GL_FRAMEBUFFER_COMPLETE) {
+        log_error("Shadow framebuffer incomplete: 0x%x", status);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        return false;
+    }
+
+    glViewport(0, 0, size, size);
+    glClear(GL_DEPTH_BUFFER_BIT);
+    return true;
+}
+
 ShadowSystem* create_shadow_system(int default_map_size) {
     ShadowSystem* system = malloc(sizeof(ShadowSystem));
     if (!system) {
@@ -48,6 +104,10 @@ ShadowSystem* create_shadow_system(int default_map_size) {
         system->cascade_splits[i] = 0.0f;
     }
 
+    for (int i = 0; i < MAX_PUNCTUAL_SHADOW_LAYERS; i++) {
+        glm_mat4_identity(system->punctual_matrices[i]);
+    }
+
     for (int i = 0; i < MAX_SHADOW_LIGHTS; i++) {
         system->casters[i].initialized = false;
         system->casters[i].fbo = 0;
@@ -65,68 +125,9 @@ void free_shadow_system(ShadowSystem* system) {
         return;
 
     free_shadow_map_array(system);
-
-    for (int i = 0; i < MAX_SHADOW_LIGHTS; i++) {
-        free_shadow_caster(&system->casters[i]);
-    }
-    free_shadow_caster(&system->spot_caster);
+    free_depth_array(&system->punctual_map_array, &system->punctual_fbo);
 
     free(system);
-}
-
-int init_shadow_caster(ShadowCaster* caster, int map_size) {
-    if (!caster)
-        return -1;
-
-    if (caster->initialized)
-        return 0;
-
-    caster->map_size = map_size;
-
-    glGenFramebuffers(1, &caster->fbo);
-    glBindFramebuffer(GL_FRAMEBUFFER, caster->fbo);
-
-    glGenTextures(1, &caster->depth_texture);
-    glBindTexture(GL_TEXTURE_2D, caster->depth_texture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, map_size, map_size, 0, GL_DEPTH_COMPONENT,
-                 GL_FLOAT, NULL);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
-    float border_color[] = {1.0f, 1.0f, 1.0f, 1.0f};
-    glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, border_color);
-
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D,
-                           caster->depth_texture, 0);
-    glDrawBuffer(GL_NONE);
-    glReadBuffer(GL_NONE);
-
-    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-        log_error("Shadow framebuffer incomplete");
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        return -1;
-    }
-
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    caster->initialized = true;
-
-    return 0;
-}
-
-void free_shadow_caster(ShadowCaster* caster) {
-    if (!caster || !caster->initialized)
-        return;
-
-    if (caster->fbo) {
-        glDeleteFramebuffers(1, &caster->fbo);
-        caster->fbo = 0;
-    }
-    if (caster->depth_texture) {
-        glDeleteTextures(1, &caster->depth_texture);
-        caster->depth_texture = 0;
-    }
-    caster->initialized = false;
 }
 
 int init_shadow_map_array(ShadowSystem* system) {
@@ -136,29 +137,11 @@ int init_shadow_map_array(ShadowSystem* system) {
     if (system->shadow_map_array != 0)
         return 0;
 
-    int size = system->default_map_size;
-
     // Layers are count-strided (slot * cascade_count + cascade), sized to the
     // ACTIVE cascade count so the classic single-map default never pays the
     // 3x VRAM of a full 9-layer array; a count change rebuilds the array
-    int layers = MAX_SHADOW_LIGHTS * system->cascade_count;
-    glGenTextures(1, &system->shadow_map_array);
-    glBindTexture(GL_TEXTURE_2D_ARRAY, system->shadow_map_array);
-    glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_DEPTH_COMPONENT24, size, size, layers, 0,
-                 GL_DEPTH_COMPONENT, GL_FLOAT, NULL);
-    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
-    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
-    float border_color[] = {1.0f, 1.0f, 1.0f, 1.0f};
-    glTexParameterfv(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_BORDER_COLOR, border_color);
-    glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
-
-    glGenFramebuffers(1, &system->casters[0].fbo);
-    glBindFramebuffer(GL_FRAMEBUFFER, system->casters[0].fbo);
-    glDrawBuffer(GL_NONE);
-    glReadBuffer(GL_NONE);
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    init_depth_array(&system->shadow_map_array, &system->casters[0].fbo,
+                     system->default_map_size, MAX_SHADOW_LIGHTS * system->cascade_count);
 
     system->allocated_cascades = system->cascade_count;
     system->initialized = true;
@@ -169,17 +152,32 @@ void free_shadow_map_array(ShadowSystem* system) {
     if (!system)
         return;
 
-    if (system->shadow_map_array) {
-        glDeleteTextures(1, &system->shadow_map_array);
-        system->shadow_map_array = 0;
-    }
-
-    if (system->casters[0].fbo) {
-        glDeleteFramebuffers(1, &system->casters[0].fbo);
-        system->casters[0].fbo = 0;
-    }
-
+    free_depth_array(&system->shadow_map_array, &system->casters[0].fbo);
     system->initialized = false;
+}
+
+// Grow the punctual array to hold `layers` maps. Demand-driven, like the
+// cascade array: a spot-only scene builds one layer rather than the pool
+// ceiling, since every allocated layer is a scene traversal per frame.
+static int init_punctual_shadow_array(ShadowSystem* system, int layers) {
+    if (layers < 1 || layers > MAX_PUNCTUAL_SHADOW_LAYERS)
+        return -1;
+
+    if (system->punctual_map_array && system->punctual_allocated_layers >= layers)
+        return 0;
+
+    free_depth_array(&system->punctual_map_array, &system->punctual_fbo);
+    init_depth_array(&system->punctual_map_array, &system->punctual_fbo,
+                     PUNCTUAL_SHADOW_MAP_SIZE, layers);
+    system->punctual_allocated_layers = layers;
+    return 0;
+}
+
+static bool begin_punctual_shadow_pass(ShadowSystem* system, int layer) {
+    if (layer < 0 || layer >= system->punctual_allocated_layers)
+        return false;
+    return begin_depth_layer(system->punctual_fbo, system->punctual_map_array, layer,
+                             PUNCTUAL_SHADOW_MAP_SIZE);
 }
 
 // caster_index is a LAYER index (slot * cascade_count + cascade)
@@ -197,21 +195,8 @@ void begin_shadow_pass(ShadowSystem* system, size_t caster_index) {
     if (caster_index >= (size_t)MAX_SHADOW_LIGHTS * (size_t)system->allocated_cascades)
         return;
 
-    int size = system->default_map_size;
-
-    glBindFramebuffer(GL_FRAMEBUFFER, system->casters[0].fbo);
-    glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, system->shadow_map_array, 0,
-                              (GLint)caster_index);
-
-    GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-    if (status != GL_FRAMEBUFFER_COMPLETE) {
-        log_error("Shadow framebuffer incomplete: 0x%x", status);
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        return;
-    }
-
-    glViewport(0, 0, size, size);
-    glClear(GL_DEPTH_BUFFER_BIT);
+    begin_depth_layer(system->casters[0].fbo, system->shadow_map_array, (int)caster_index,
+                      system->default_map_size);
 }
 
 void end_shadow_pass(ShadowSystem* system) {
@@ -368,14 +353,16 @@ void bind_shadow_maps_to_program(ShadowSystem* system, ShaderProgram* program) {
     glBindTexture(GL_TEXTURE_2D_ARRAY, system->shadow_map_array);
     uniform_set_int(u, "shadowMaps", SHADOW_MAP_TEXTURE_UNIT);
 
-    // Perspective spot shadow map (the flashlight) on its own unit above IBL, so
-    // a shadow-casting spot occludes surfaces (e.g. the ball's shadow on the floor).
-    glActiveTexture(GL_TEXTURE0 + SPOT_SHADOW_MAP_TEXTURE_UNIT);
-    glBindTexture(GL_TEXTURE_2D, spot_on ? system->spot_caster.depth_texture : 0);
-    uniform_set_int(u, "spotShadowMap", SPOT_SHADOW_MAP_TEXTURE_UNIT);
+    // Punctual (perspective) shadow maps on the last unit, so a shadow-casting
+    // spot occludes surfaces (e.g. the ball's shadow on the floor). Bound
+    // unconditionally for the same reason as the cascade array; the per-type
+    // flags below are what decide whether any layer is read.
+    glActiveTexture(GL_TEXTURE0 + PUNCTUAL_SHADOW_MAP_TEXTURE_UNIT);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, system->punctual_map_array);
+    uniform_set_int(u, "punctualShadowMaps", PUNCTUAL_SHADOW_MAP_TEXTURE_UNIT);
     uniform_set_int(u, "spotShadowActive", spot_on ? 1 : 0);
     if (spot_on)
-        uniform_set_mat4(u, "spotShadowMatrix", (const float*)system->spot_light_space);
+        uniform_set_mat4(u, "spotShadowMatrix", (const float*)system->punctual_matrices[0]);
 
     uniform_set_int(u, "numShadowLights", directional_on ? (int)system->directional_count : 0);
     if (!directional_on)
@@ -697,10 +684,10 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
         }
     }
 
-    // Standalone perspective spot shadow map (for the volumetric beam + surface
-    // spot shadows). Reuses the ShadowCaster fbo/depth_texture pair (init is a
-    // no-op after the first frame), the bound depth program, and front-face cull.
-    if (spot_light && init_shadow_caster(&ss->spot_caster, SPOT_SHADOW_MAP_SIZE) == 0) {
+    // The spot's perspective map (for the volumetric beam + surface spot
+    // shadows) goes into punctual layer 0. Reuses the allocation (a no-op after
+    // the first frame), the bound depth program, and front-face cull.
+    if (spot_light && init_punctual_shadow_array(ss, 1) == 0) {
         // The system's own scene-scaled range, not a fixed one. A hardcoded near
         // of 1.0 puts the whole of any room-sized scene INSIDE the near plane --
         // nothing reaches the map and the spot silently stops casting, which is
@@ -708,15 +695,14 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
         // near_plane/far_plane off the scene radius for the cascades; a spot in
         // the same scene has no reason to disagree with them.
         compute_spot_light_space_matrix(spot_light, ss->near_plane, ss->far_plane,
-                                        ss->spot_light_space);
-        glBindFramebuffer(GL_FRAMEBUFFER, ss->spot_caster.fbo);
-        glViewport(0, 0, ss->spot_caster.map_size, ss->spot_caster.map_size);
-        glClear(GL_DEPTH_BUFFER_BIT);
-        uniform_set_mat4(ss->depth_program->uniforms, "lightSpaceMatrix",
-                         (const float*)ss->spot_light_space);
-        _render_shadow_node(scene->root_node, ss->depth_program, &current_program);
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        ss->spot_active = true;
+                                        ss->punctual_matrices[0]);
+        if (begin_punctual_shadow_pass(ss, 0)) {
+            uniform_set_mat4(ss->depth_program->uniforms, "lightSpaceMatrix",
+                             (const float*)ss->punctual_matrices[0]);
+            _render_shadow_node(scene->root_node, ss->depth_program, &current_program);
+            end_shadow_pass(ss);
+            ss->spot_active = true;
+        }
     }
 
     glCullFace(GL_BACK);
@@ -758,10 +744,11 @@ void shadow_publish_to_postfx(const Scene* scene, PostFX* fx) {
     // independently of the directional early-out below (works even with no
     // directional casters).
     fx->fog_spot_shadowed = false;
+    fx->fog_punctual_shadow_maps = 0;
     const ShadowSystem* sss = scene ? scene->shadow_system : NULL;
-    if (sss && sss->spot_active && sss->spot_caster.depth_texture) {
-        glm_mat4_copy((vec4*)sss->spot_light_space, fx->fog_spot_light_space);
-        fx->fog_spot_shadow_map = sss->spot_caster.depth_texture;
+    if (sss && sss->spot_active && sss->punctual_map_array) {
+        glm_mat4_copy((vec4*)sss->punctual_matrices[0], fx->fog_spot_light_space);
+        fx->fog_punctual_shadow_maps = sss->punctual_map_array;
         fx->fog_spot_shadowed = true;
     }
 
