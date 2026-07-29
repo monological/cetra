@@ -521,7 +521,8 @@ static int punctual_layers_for(const Light* light) {
 }
 
 // Fill a light's layers with its light-space matrices, in the layer order its
-// consumer selects by.
+// consumer selects by, and return how many it wrote (so the render loop bounds
+// itself off this rather than re-deriving the point/else split).
 //
 // All three share the system's own scene-scaled near/far, not a fixed range. A
 // hardcoded near of 1.0 puts the whole of any room-sized scene INSIDE the near
@@ -529,7 +530,7 @@ static int punctual_layers_for(const Light* light) {
 // is not a subtle degradation but a total one. Apps already scale
 // near_plane/far_plane off the scene radius for the cascades; a punctual light
 // in the same scene has no reason to disagree with them.
-static void compute_punctual_matrices(const Light* light, const ShadowSystem* ss, mat4* dest) {
+static int compute_punctual_matrices(const Light* light, const ShadowSystem* ss, mat4* dest) {
     const float near_p = ss->near_plane, far_p = ss->far_plane;
 
     switch (light->type) {
@@ -563,6 +564,16 @@ static void compute_punctual_matrices(const Light* light, const ShadowSystem* ss
         break;
     }
     }
+    return punctual_layers_for(light);
+}
+
+// The body both depth-pass loops share, once a layer is bound: aim the depth
+// program at one light-space matrix and walk the scene into it.
+static void draw_shadow_layer(ShadowSystem* ss, SceneNode* root, const float* matrix,
+                              GLuint* current_program) {
+    uniform_set_mat4(ss->depth_program->uniforms, "lightSpaceMatrix", matrix);
+    _render_shadow_node(root, ss->depth_program, current_program);
+    end_shadow_pass(ss);
 }
 
 void render_shadow_depth_pass(Engine* engine, Scene* scene) {
@@ -571,41 +582,38 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
 
     ShadowSystem* ss = scene->shadow_system;
 
-    // First count shadow-casting lights before doing any GL operations
-    ss->directional_count = 0;
-    ss->punctual_layer_count = 0;
-    vec3 scene_center = {0.0f, 0.0f, 0.0f};
-
-    for (size_t i = 0; i < scene->light_count && ss->directional_count < MAX_SHADOW_LIGHTS; ++i) {
-        Light* light = scene->lights[i];
-        if (!light)
-            continue;
-
-        if (light->type == LIGHT_DIRECTIONAL && light->cast_shadows) {
-            ss->directional_count++;
-        } else {
-            light->shadow_map_index = -1;
-        }
-    }
-
-    // Punctual layers, handed out in scene order so the assignment is
-    // deterministic. Every light's index is rewritten each frame, including the
-    // -1: a light that stops casting must not keep pointing at a layer another
-    // light now owns. This is the demand, not the supply -- punctual_layer_count
+    // Classify every light in one pass before any GL. Both shadow indices are
+    // reset for EVERY light, including -1: a light that stops casting must not
+    // keep pointing at a slot another light now owns. Directionals are counted
+    // (capped, since the cascade arrays are sized by MAX_SHADOW_LIGHTS) and get
+    // their slot assigned later by the cascade fit; the punctual types get a
+    // layer here. This is punctual DEMAND, not supply -- punctual_layer_count
     // only rises to cover layers the pass actually renders below, so a failure
     // anywhere between here and there leaves the shader's bound at 0.
+    ss->directional_count = 0;
+    ss->punctual_layer_count = 0;
     int punctual_needed = 0;
     const Light* pool_overflow = NULL;
+    vec3 scene_center = {0.0f, 0.0f, 0.0f};
+
     for (size_t i = 0; i < scene->light_count; ++i) {
         Light* light = scene->lights[i];
         if (!light)
             continue;
+        light->shadow_map_index = -1;
         light->shadow_layer = -1;
         if (!light->cast_shadows)
             continue;
+
+        if (light->type == LIGHT_DIRECTIONAL) {
+            if (ss->directional_count < MAX_SHADOW_LIGHTS)
+                ss->directional_count++;
+            continue;
+        }
         if (light->type != LIGHT_SPOT && light->type != LIGHT_POINT &&
             light->type != LIGHT_AREA)
             continue;
+
         // A point light takes its six faces or none: five faces is a light with
         // holes in it, which is worse than one that does not cast.
         int want = punctual_layers_for(light);
@@ -775,13 +783,8 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
         for (int c = 0; c < cc; ++c) {
             size_t layer = i * (size_t)cc + (size_t)c;
             begin_shadow_pass(ss, layer);
-
-            uniform_set_mat4(ss->depth_program->uniforms, "lightSpaceMatrix",
-                             (const float*)ss->cascade_matrices[layer]);
-
-            _render_shadow_node(scene->root_node, ss->depth_program, &current_program);
-
-            end_shadow_pass(ss);
+            draw_shadow_layer(ss, scene->root_node, (const float*)ss->cascade_matrices[layer],
+                              &current_program);
         }
     }
 
@@ -794,18 +797,17 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
             if (!light || light->shadow_layer < 0)
                 continue;
 
-            compute_punctual_matrices(light, ss, &ss->punctual_matrices[light->shadow_layer]);
+            int layers =
+                compute_punctual_matrices(light, ss, &ss->punctual_matrices[light->shadow_layer]);
 
             // One scene traversal per layer -- this loop is the frame cost the
             // pool ceiling caps, and a point light pays six times a spot's.
-            for (int f = 0; f < punctual_layers_for(light); f++) {
+            for (int f = 0; f < layers; f++) {
                 int layer = light->shadow_layer + f;
                 if (!begin_punctual_shadow_pass(ss, layer))
                     continue;
-                uniform_set_mat4(ss->depth_program->uniforms, "lightSpaceMatrix",
-                                 (const float*)ss->punctual_matrices[layer]);
-                _render_shadow_node(scene->root_node, ss->depth_program, &current_program);
-                end_shadow_pass(ss);
+                draw_shadow_layer(ss, scene->root_node, (const float*)ss->punctual_matrices[layer],
+                                  &current_program);
                 // Layers are handed out in increasing order, so the last one
                 // drawn is the bound the shader needs
                 ss->punctual_layer_count = layer + 1;
@@ -855,11 +857,11 @@ void shadow_publish_to_postfx(const Scene* scene, PostFX* fx) {
     // so every index it maintains keeps the value it had when it last ran.
     fx->fog_spot_shadowed = false;
     fx->fog_punctual_shadow_maps = 0;
-    const ShadowSystem* sss = scene ? scene->shadow_system : NULL;
-    if (sss && sss->enabled && sp && sp->shadow_layer >= 0 &&
-        sp->shadow_layer < sss->punctual_layer_count && sss->punctual_map_array) {
-        glm_mat4_copy((vec4*)sss->punctual_matrices[sp->shadow_layer], fx->fog_spot_light_space);
-        fx->fog_punctual_shadow_maps = sss->punctual_map_array;
+    ShadowSystem* ss = scene ? scene->shadow_system : NULL;
+    if (ss && ss->enabled && sp && sp->shadow_layer >= 0 &&
+        sp->shadow_layer < ss->punctual_layer_count && ss->punctual_map_array) {
+        glm_mat4_copy((vec4*)ss->punctual_matrices[sp->shadow_layer], fx->fog_spot_light_space);
+        fx->fog_punctual_shadow_maps = ss->punctual_map_array;
         fx->fog_spot_shadow_layer = sp->shadow_layer;
         fx->fog_spot_shadowed = true;
     }
@@ -867,7 +869,6 @@ void shadow_publish_to_postfx(const Scene* scene, PostFX* fx) {
     // Publishing count 0 with a zero array handle is the single "no
     // shadowed in-scatter" state consumers rely on: a nonzero count
     // guarantees the map array and every slot below it are valid.
-    ShadowSystem* ss = scene ? scene->shadow_system : NULL;
     if (!ss || !ss->enabled || ss->directional_count == 0 || !ss->shadow_map_array || !scene->lights) {
         fx->fog_light_count = 0;
         fx->fog_cascade_count = 1;

@@ -28,8 +28,8 @@ struct PackedLight {
     vec4 dirType;        // xyz = direction (world), w = 1 point / 2 spot / 3 area
     vec4 colorIntensity; // xyz = color * intensity (premultiplied on CPU)
     vec4 attenCutoff;    // x = constant, y = linear, z = quadratic, w = cos inner cone
-    vec4 spotShadowSize; // x = cos outer cone, y = float(punctual shadow base
-                         //     layer), -1 = casts no shadow, zw = emitter size
+    vec4 shadowMisc;     // x = cos outer cone, y = float(punctual shadow base layer),
+                         //     -1 = casts no shadow, zw = emitter/panel size
     vec4 upArea;     // AREA only: panel height axis, orthonormal to dir (spec 9.2)
 };
 

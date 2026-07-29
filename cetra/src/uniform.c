@@ -115,6 +115,22 @@ void uniform_cache_standard(UniformManager* mgr) {
     uniform_location(mgr, "lineWidth");
 }
 
+// Drift check for one dynamically-indexed shader array: the GLSL sizes are
+// hardcoded literals the C constants only mirror. Such an array is active over
+// its full declared size, so if element [count-1] fails to resolve while [0]
+// exists, the shader array is SMALLER than the C side claims and ranged uploads
+// would silently truncate. `array` is the base name, e.g. "lightSpaceMatrix".
+static void warn_if_array_shorter(UniformManager* mgr, const char* array, size_t count) {
+    char name[80];
+    snprintf(name, sizeof(name), "%s[0]", array);
+    if (uniform_location(mgr, name) < 0)
+        return; // absent entirely -> not this shader's contract
+    snprintf(name, sizeof(name), "%s[%zu]", array, count - 1);
+    if (uniform_location(mgr, name) < 0)
+        log_warn("Shader %s[] smaller than %zu elements -- GLSL constants drifted from the C mirror",
+                 array, count);
+}
+
 // max_shadow_lights is the caster slot count; the per-layer arrays
 // (lightSpaceMatrix, cascadeParams) span slots x cascades but upload as
 // ranged calls from element 0, so only that location is cached.
@@ -136,25 +152,8 @@ void uniform_cache_shadows(UniformManager* mgr, size_t max_shadow_lights, size_t
     uniform_location(mgr, "punctualShadowCount");
     uniform_location(mgr, "punctualShadowMatrix[0]");
 
-    // Drift check: the GLSL array sizes are hardcoded literals the C
-    // constants only mirror. A dynamically-indexed array is active over its
-    // full declared size, so if the last layer's name fails to resolve
-    // while element 0 exists, the shader arrays are SMALLER than the C
-    // side claims and ranged uploads would silently truncate.
-    char name[64];
-    snprintf(name, sizeof(name), "lightSpaceMatrix[%zu]", max_shadow_lights * max_cascades - 1);
-    if (uniform_location(mgr, "lightSpaceMatrix[0]") >= 0 && uniform_location(mgr, name) < 0) {
-        log_warn("Shader lightSpaceMatrix[] smaller than %zu layers -- "
-                 "GLSL cascade constants drifted from the C mirrors",
-                 max_shadow_lights * max_cascades);
-    }
-    snprintf(name, sizeof(name), "punctualShadowMatrix[%zu]", max_punctual_layers - 1);
-    if (uniform_location(mgr, "punctualShadowMatrix[0]") >= 0 &&
-        uniform_location(mgr, name) < 0) {
-        log_warn("Shader punctualShadowMatrix[] smaller than %zu layers -- "
-                 "GLSL punctual constant drifted from the C mirror",
-                 max_punctual_layers);
-    }
+    warn_if_array_shorter(mgr, "lightSpaceMatrix", max_shadow_lights * max_cascades);
+    warn_if_array_shorter(mgr, "punctualShadowMatrix", max_punctual_layers);
 }
 
 void uniform_set_int(UniformManager* mgr, const char* name, int value) {

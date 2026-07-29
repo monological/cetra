@@ -139,7 +139,7 @@ uniform float pcssSoftness; // Multiplier on the light's angular size
 
 // Perspective shadow maps for the punctual light types, one 2D layer each,
 // separate from the directional cascade array. Each light carries its own base
-// layer in its cluster entry (spotShadowSize.y), so nothing here is per-type.
+// layer in its cluster entry (shadowMisc.y), so nothing here is per-type.
 #include "punctual_shadow.glsl"
 
 // Clustered-forward light blocks (spec 9.1): all analytic lights arrive
@@ -875,7 +875,7 @@ void main() {
                 attenuation *=
                     spotConeFactor(clusterLights[li].dirType.w, clusterLights[li].dirType.xyz,
                                     clusterLights[li].attenCutoff.w,
-                                    clusterLights[li].spotShadowSize.x, L);
+                                    clusterLights[li].shadowMisc.x, L);
                 lightCI = clusterLights[li].colorIntensity.xyz;
             }
             float NdotL = max(dot(N, L), 0.0);
@@ -1041,7 +1041,7 @@ void main() {
                 vec2 ff = ltcPanel(N, V, WorldPos, ltcMinv, lightPos,
                                    clusterLights[li].dirType.xyz,
                                    clusterLights[li].upArea.xyz,
-                                   clusterLights[li].spotShadowSize.zw * 0.5);
+                                   clusterLights[li].shadowMisc.zw * 0.5);
 
                 // See the normalization contract in ltc.glsl: no 2*pi, no 1/pi
                 vec3 areaSpec = (F0 * ltcAmp.x + (1.0 - F0) * ltcAmp.y) * ff.y;
@@ -1054,7 +1054,7 @@ void main() {
                 // either visible from the fragment or it is not, with no partial
                 // occlusion of one edge. Aimed at the panel centre, which is the
                 // direction the single map was rendered along.
-                int aLayer = int(clusterLights[li].spotShadowSize.y);
+                int aLayer = int(clusterLights[li].shadowMisc.y);
                 float aShadow = 1.0;
                 if (aLayer >= 0 && alphaMasked == 0) {
                     vec3 aL = normalize(lightPos - WorldPos);
@@ -1074,14 +1074,16 @@ void main() {
             attenuation *=
                 spotConeFactor(clusterLights[li].dirType.w, clusterLights[li].dirType.xyz,
                                 clusterLights[li].attenCutoff.w,
-                                clusterLights[li].spotShadowSize.x, L);
+                                clusterLights[li].shadowMisc.x, L);
             lightCI = clusterLights[li].colorIntensity.xyz;
-            lightSize = clusterLights[li].spotShadowSize.zw;
-            punctualLayer = int(clusterLights[li].spotShadowSize.y);
+            lightSize = clusterLights[li].shadowMisc.zw;
+            punctualLayer = int(clusterLights[li].shadowMisc.y);
             // A point light owns six layers rather than one; resolve the face
-            // here, where its position is still in scope.
+            // here, where its direction is still in scope. -L is the
+            // fragment-to-light direction reversed, i.e. light-to-fragment;
+            // dominant axis is scale-invariant so the normalize does not matter.
             if (punctualLayer >= 0 && clusterLights[li].dirType.w == 1.0)
-                punctualLayer += punctualCubeFace(WorldPos - lightPos);
+                punctualLayer += punctualCubeFace(-L);
         }
 
         // Half vector, guarded: where the light is directly behind the
