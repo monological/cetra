@@ -1289,6 +1289,10 @@ void process_ai_cameras(const struct aiScene* scene, Camera*** cameras, size_t* 
         camera->far_clip = ai_camera->mClipPlaneFar;
         camera->horizontal_fov = ai_camera->mHorizontalFOV;
 
+        // An imported camera is a perspective one; projection and picking both branch on this
+        camera->is_orthographic = false;
+        camera->ortho_height = 0.0f;
+
         (*cameras)[i] = camera;
     }
 }

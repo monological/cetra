@@ -3,6 +3,7 @@
 #define _CAMERA_H_
 
 #include <cglm/cglm.h>
+#include <stdbool.h>
 #include <stdlib.h>
 
 typedef struct Camera {
@@ -17,6 +18,10 @@ typedef struct Camera {
     float near_clip;      // Near clipping plane
     float far_clip;       // Far clipping plane
     float horizontal_fov; // Horizontal field of view (in radians)
+
+    bool is_orthographic; // true = parallel projection; fov_radians is then unused
+    float ortho_height;   // World-space height of the ortho view volume; width is
+                          // ortho_height * aspect_ratio
 
     // for animation
     float theta;
@@ -38,6 +43,16 @@ void set_camera_look_at(Camera* camera, vec3 look_at);
 void set_camera_direction(Camera* camera, vec3 direction);
 void set_camera_up_vector(Camera* camera, vec3 up_vector);
 void set_camera_perspective(Camera* camera, float fov_radians, float near_clip, float far_clip);
+
+// Project orthographically over a view volume ortho_height tall (width follows aspect_ratio).
+// A 2D view needs this: under perspective, any camera rotation shears flat geometry.
+//
+// Scope: the projection matrix and ray picking honour this. The post-processing stack
+// (GTAO, SSR, DoF, fog), clustered light culling, cascaded shadows and the PBR view vector
+// all still derive from a perspective frustum -- they reconstruct view space from a
+// hyperbolic depth and assume the eye is a single point -- so a scene that needs them wants
+// a perspective camera. See specs/dnd-fix.md.
+void set_camera_orthographic(Camera* camera, float ortho_height, float near_clip, float far_clip);
 
 // Camera movement helpers
 void orbit_camera(Camera* camera, float delta_theta, float delta_phi);

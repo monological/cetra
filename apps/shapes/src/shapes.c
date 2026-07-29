@@ -1,4 +1,5 @@
 #include <math.h>
+#include <stdbool.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -20,7 +21,6 @@
 #include "cetra/geometry.h"
 #include "cetra/transform.h"
 #include "cetra/light.h"
-#include "cetra/app.h"
 
 #define FBX_MODEL_PATH  "./models/room.fbx"
 #define FBX_TEXTURE_DIR "./textures/room.fbm"
@@ -30,13 +30,15 @@
  */
 const unsigned int HEIGHT = 812;
 const unsigned int WIDTH = 375;
-const float ROTATE_SPEED = 0.4f; // Speed of rotation
-const float ROTATION_SENSITIVITY = 0.005f;
-const float MIN_DIST = 2000.0f;
-const float MAX_DIST = 3000.0f;
-const float CAM_ANGULAR_SPEED = 0.5f; // Adjust this value as needed
 
-static MouseDragController* drag_controller = NULL;
+// World-space height of the 2D view volume. Matches the framing the old perspective camera
+// gave at its 300-unit distance (2 * 300 * tan(0.37 / 2)).
+#define ORTHO_HEIGHT 112.3f
+
+// Canvas panning, driven by a drag that starts on empty space rather than on a shape.
+static bool is_panning = false;
+static vec3 pan_start_look_at;
+static vec3 pan_start_cam_pos;
 
 /*
  * Callbacks
@@ -45,8 +47,33 @@ void error_callback(int error, const char* description) {
     fprintf(stderr, "Error: %s\n", description);
 }
 
+// Slide the whole view with the cursor. Both camera and look_at move by the same vector, so
+// the view direction never changes -- a rotation here would shear the flat shapes.
+static void pan_canvas(Engine* engine) {
+    Camera* camera = engine->camera;
+    if (!camera || engine->fb_height <= 0) {
+        return;
+    }
+
+    // The ortho volume maps to the framebuffer uniformly on both axes
+    float units_per_pixel = camera->ortho_height / (float)engine->fb_height;
+    vec3 offset = {-engine->input.drag_fb_x * units_per_pixel,
+                   -engine->input.drag_fb_y * units_per_pixel, 0.0f};
+
+    vec3 new_look_at, new_position;
+    glm_vec3_add(pan_start_look_at, offset, new_look_at);
+    glm_vec3_add(pan_start_cam_pos, offset, new_position);
+
+    set_camera_look_at(camera, new_look_at);
+    set_camera_position(camera, new_position);
+}
+
 void cursor_position_callback(Engine* engine, double xpos, double ypos) {
-    if (engine->input.is_dragging && engine->input.selected_node) {
+    if (!engine->input.is_dragging) {
+        return;
+    }
+
+    if (engine->input.selected_node) {
         // Get current mouse position in world space on the drag plane
         vec3 current_world_pos;
         get_mouse_world_position_on_drag_plane(engine, xpos, ypos, current_world_pos);
@@ -64,24 +91,33 @@ void cursor_position_callback(Engine* engine, double xpos, double ypos) {
         node->original_transform[3][0] = new_pos[0];
         node->original_transform[3][1] = new_pos[1];
         // Keep Z unchanged: node->original_transform[3][2] = new_pos[2];
+    } else if (is_panning) {
+        pan_canvas(engine);
     }
 }
 
 void mouse_button_callback(Engine* engine, int button, int action, int mods) {
-    if (drag_controller) {
-        double x, y;
-        glfwGetCursorPos(engine->window, &x, &y);
-        mouse_drag_on_button(drag_controller, button, action, mods, x, y);
+    (void)mods;
+
+    if (button != GLFW_MOUSE_BUTTON_LEFT) {
+        return;
+    }
+
+    if (action == GLFW_PRESS) {
+        // A press that missed every shape grabs the canvas instead
+        is_panning = (engine->input.selected_node == NULL);
+        if (is_panning && engine->camera) {
+            glm_vec3_copy(engine->camera->look_at, pan_start_look_at);
+            glm_vec3_copy(engine->camera->position, pan_start_cam_pos);
+        }
+    } else if (action == GLFW_RELEASE) {
+        is_panning = false;
     }
 }
 
 void key_callback(Engine* engine, int key, int scancode, int action, int mods) {
     (void)scancode;
-
-    // Camera movement
-    if (drag_controller && camera_controller_on_key(drag_controller, key, action, mods)) {
-        return;
-    }
+    (void)mods;
 
     if (action != GLFW_PRESS) {
         return;
@@ -136,13 +172,6 @@ void render_scene_callback(Engine* engine, Scene* current_scene) {
 
     if (!camera)
         return;
-
-    float time_value = glfwGetTime();
-
-    // Update camera via drag controller
-    if (drag_controller && app_can_process_3d_input(engine)) {
-        mouse_drag_update(drag_controller, time_value);
-    }
 
     Transform transform = {.position = {0.0f, 0.0f, 0.0f},
                            .rotation = {0.0f, 0.0f, 0.0f},
@@ -217,10 +246,10 @@ int main() {
     /*
      * Set up camera.
      */
-    vec3 camera_position = {0.0f, 2.0f, 300.0f};
+    // Square-on to the z=0 shape plane, so panning along world XY stays in that plane
+    vec3 camera_position = {0.0f, 0.0f, 300.0f};
     vec3 look_at_point = {0.0f, 0.0f, 0.0f};
     vec3 up_vector = {0.0f, 1.0f, 0.0f};
-    float fov_radians = 0.37;
     float near_clip = 7.0f;
     float far_clip = 10000.0f;
 
@@ -229,19 +258,12 @@ int main() {
     set_camera_position(camera, camera_position);
     set_camera_look_at(camera, look_at_point);
     set_camera_up_vector(camera, up_vector);
-    set_camera_perspective(camera, fov_radians, near_clip, far_clip);
+    set_camera_orthographic(camera, ORTHO_HEIGHT, near_clip, far_clip);
+
+    set_engine_camera(engine, camera);
 
     update_engine_camera_lookat(engine);
     update_engine_camera_perspective(engine);
-
-    camera->theta = 0.60f;
-    camera->height = 1000.0f;
-
-    set_engine_camera(engine, camera);
-    set_engine_camera_mode(engine, CAMERA_MODE_FREE);
-
-    // Create drag controller
-    drag_controller = create_mouse_drag_controller(engine);
 
     /*
      * Import fbx model.
@@ -475,7 +497,6 @@ int main() {
     engine_run(engine, NULL, render_scene_callback);
 
     printf("Cleaning up...\n");
-    free_mouse_drag_controller(drag_controller);
     free_engine(engine);
 
     printf("Goodbye Friend...\n");

@@ -22,6 +22,9 @@ Camera* create_camera() {
     camera->near_clip = 0.1f;             // Typical near clip plane
     camera->far_clip = 1000.0f;           // Typical far clip plane
 
+    camera->is_orthographic = false;
+    camera->ortho_height = 0.0f;
+
     // orbit animation variables
     camera->theta = 0.0f;
     camera->phi = 0.0f;
@@ -80,7 +83,17 @@ void set_camera_up_vector(Camera* camera, vec3 up_vector) {
 void set_camera_perspective(Camera* camera, float fov_radians, float near_clip, float far_clip) {
     if (!camera)
         return;
+    camera->is_orthographic = false;
     camera->fov_radians = fov_radians;
+    camera->near_clip = near_clip;
+    camera->far_clip = far_clip;
+}
+
+void set_camera_orthographic(Camera* camera, float ortho_height, float near_clip, float far_clip) {
+    if (!camera)
+        return;
+    camera->is_orthographic = true;
+    camera->ortho_height = ortho_height;
     camera->near_clip = near_clip;
     camera->far_clip = far_clip;
 }
@@ -259,6 +272,15 @@ void compute_view_matrix(Camera* camera, mat4 view) {
 void compute_projection_matrix(const Camera* camera, mat4 projection) {
     if (!camera)
         return;
+
+    if (camera->is_orthographic) {
+        float half_h = camera->ortho_height * 0.5f;
+        float half_w = half_h * camera->aspect_ratio;
+        glm_ortho(-half_w, half_w, -half_h, half_h, camera->near_clip, camera->far_clip,
+                  projection);
+        return;
+    }
+
     glm_perspective(camera->fov_radians, camera->aspect_ratio, camera->near_clip, camera->far_clip,
                     projection);
 }

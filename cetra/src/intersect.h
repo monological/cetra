@@ -32,6 +32,13 @@ typedef struct {
 void compute_ray_from_screen(float screen_x, float screen_y, int fb_width, int fb_height,
                              mat4 projection, mat4 view, vec3 ray_origin, vec3 out_ray_dir);
 
+// Compute a picking ray under an orthographic projection. Unlike the perspective case there is
+// no single eye point: every ray shares the view direction and the origin varies per pixel, so
+// this returns the origin as well.
+void compute_ortho_ray_from_screen(float screen_x, float screen_y, int fb_width, int fb_height,
+                                   mat4 projection, mat4 view, vec3 out_ray_origin,
+                                   vec3 out_ray_dir);
+
 // Ray-AABB intersection test
 bool ray_aabb_intersection(vec3 ray_origin, vec3 ray_dir, vec3 bbox_min, vec3 bbox_max,
                            float* t_near, float* t_far);

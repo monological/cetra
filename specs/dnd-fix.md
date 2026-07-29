@@ -32,9 +32,10 @@ plus a new, opt-in orthographic camera in the engine.
 
 **`cetra/src/camera.h` / `camera.c`**
 - Add to `struct Camera`: `bool is_orthographic;` and `float ortho_height;` (world-space
-  height of the view volume; width = `ortho_height * aspect_ratio`). `calloc` in
-  `create_camera` leaves `is_orthographic = false`, so every existing perspective app is
-  unaffected.
+  height of the view volume; width = `ortho_height * aspect_ratio`). Both construction paths
+  must initialise them explicitly -- `create_camera` uses `malloc`, not `calloc`, and
+  `import.c` hand-builds a second `Camera` -- or the byte that now selects the projection is
+  indeterminate.
 - New setter `set_camera_orthographic(Camera*, float ortho_height, float near_clip, float far_clip)`
   that sets `is_orthographic = true` and stores the params. Have `set_camera_perspective`
   set `is_orthographic = false` for symmetry.
@@ -127,3 +128,34 @@ plus a new, opt-in orthographic camera in the engine.
    magick compare -metric AE before.ppm after.ppm null:   # expect 0 (0)
    ```
    Also smoke-build/run `gametest` and `tree` to confirm no build breakage.
+
+## As built
+
+Landed as planned, with three additions the review forced.
+
+**A latent out-of-bounds read had to be fixed first.** `traverse_and_pick` walked a mesh's
+index buffer in threes on the assumption that every mesh is triangles. Line topology breaks
+that: a bezier carries 38 indices, an unfilled circle 65, an unfilled sharp rect 5 -- none a
+whole number of triangles, so the last iteration read one element past the array, and the
+value read is used as a *vertex index*, turning a 4-byte overread into an unbounded one.
+Giving pcb's shapes real AABBs is what made the loop reachable, so this shipped as part of
+the same change: non-triangle meshes are now picked on their bounding box, which is also the
+only meaningful answer for line geometry, and the triangle loop bound is `j + 2 <
+index_count`. Confirmed with AddressSanitizer -- `heap-buffer-overflow` before, clean after.
+
+**Both camera construction paths needed explicit initialisation** (`create_camera` and the
+hand-built one in `import.c`), since a projection now branches on `is_orthographic`.
+
+**The 2D cameras sit square-on to their content plane.** The old `y = 2` was leftover
+perspective framing; with it, panning along world XY was not quite perpendicular to the view.
+
+### Known limitation: ortho is honoured by projection and picking only
+
+The rest of the engine still assumes a perspective frustum -- it reconstructs view space from
+a hyperbolic depth (`shaders/include/depth.glsl`) and treats the eye as a single point. So
+GTAO, SSR, clustered light culling, the PBR view vector, and (when enabled) DoF, froxel fog,
+aerial perspective, TAA jitter, the skybox `.xyww` trick and CSM all mis-compute under an
+orthographic camera. It does not show in these two flat apps, but an ortho camera is not yet
+general engine support. `set_camera_orthographic` carries this caveat. Making it general
+starts at `depth.glsl` -- the deliberate single choke point for that math -- plus the
+depth-scaled wedge in `light_cluster.c`.

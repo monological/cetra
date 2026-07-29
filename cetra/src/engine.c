@@ -949,8 +949,7 @@ void update_engine_camera_perspective(Engine* engine) {
         return;
 
     camera->aspect_ratio = (float)engine->fb_width / (float)engine->fb_height;
-    glm_perspective(camera->fov_radians, camera->aspect_ratio, camera->near_clip, camera->far_clip,
-                    engine->projection_matrix);
+    compute_projection_matrix(camera, engine->projection_matrix);
 }
 
 /*
@@ -2309,19 +2308,24 @@ void get_mouse_world_position_on_drag_plane(Engine* engine, double mouse_fb_x, d
         return;
 
     // Build projection and view matrices
-    mat4 projection, view;
-    glm_perspective(engine->camera->fov_radians, engine->camera->aspect_ratio,
-                    engine->camera->near_clip, engine->camera->far_clip, projection);
+    mat4 projection = {0}, view;
+    compute_projection_matrix(engine->camera, projection);
     glm_lookat(engine->camera->position, engine->camera->look_at, engine->camera->up_vector, view);
 
-    // Compute ray from screen coordinates
-    vec3 ray_dir = {0};
-    compute_ray_from_screen((float)mouse_fb_x, (float)mouse_fb_y, engine->fb_width,
-                            engine->fb_height, projection, view, engine->camera->position, ray_dir);
+    // Compute ray from screen coordinates. Under ortho the ray starts at the pixel rather
+    // than at the camera, so the origin has to travel with the direction.
+    vec3 ray_origin = {0}, ray_dir = {0};
+    if (engine->camera->is_orthographic) {
+        compute_ortho_ray_from_screen((float)mouse_fb_x, (float)mouse_fb_y, engine->fb_width,
+                                      engine->fb_height, projection, view, ray_origin, ray_dir);
+    } else {
+        glm_vec3_copy(engine->camera->position, ray_origin);
+        compute_ray_from_screen((float)mouse_fb_x, (float)mouse_fb_y, engine->fb_width,
+                                engine->fb_height, projection, view, ray_origin, ray_dir);
+    }
 
     // Project ray to the stored drag plane distance
-    ray_point_at_distance(engine->camera->position, ray_dir, engine->input.drag_plane_distance,
-                          out_world_pos);
+    ray_point_at_distance(ray_origin, ray_dir, engine->input.drag_plane_distance, out_world_pos);
 }
 
 static SceneNode* _perform_engine_ray_picking(Engine* engine, double mouse_fb_x,
@@ -2331,16 +2335,20 @@ static SceneNode* _perform_engine_ray_picking(Engine* engine, double mouse_fb_x,
         return NULL;
 
     // Build projection and view matrices
-    mat4 projection, view;
-    glm_perspective(engine->camera->fov_radians, engine->camera->aspect_ratio,
-                    engine->camera->near_clip, engine->camera->far_clip, projection);
+    mat4 projection = {0}, view;
+    compute_projection_matrix(engine->camera, projection);
     glm_lookat(engine->camera->position, engine->camera->look_at, engine->camera->up_vector, view);
 
     // Compute ray from screen coordinates
-    vec3 ray_origin, ray_dir = {0};
-    glm_vec3_copy(engine->camera->position, ray_origin);
-    compute_ray_from_screen((float)mouse_fb_x, (float)mouse_fb_y, engine->fb_width,
-                            engine->fb_height, projection, view, ray_origin, ray_dir);
+    vec3 ray_origin = {0}, ray_dir = {0};
+    if (engine->camera->is_orthographic) {
+        compute_ortho_ray_from_screen((float)mouse_fb_x, (float)mouse_fb_y, engine->fb_width,
+                                      engine->fb_height, projection, view, ray_origin, ray_dir);
+    } else {
+        glm_vec3_copy(engine->camera->position, ray_origin);
+        compute_ray_from_screen((float)mouse_fb_x, (float)mouse_fb_y, engine->fb_width,
+                                engine->fb_height, projection, view, ray_origin, ray_dir);
+    }
 
     // Perform scene graph picking
     Scene* current_scene = get_current_scene(engine);

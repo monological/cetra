@@ -30,6 +30,38 @@ void compute_ray_from_screen(float screen_x, float screen_y, int fb_width, int f
     glm_vec3_normalize(out_ray_dir);
 }
 
+void compute_ortho_ray_from_screen(float screen_x, float screen_y, int fb_width, int fb_height,
+                                   mat4 projection, mat4 view, vec3 out_ray_origin,
+                                   vec3 out_ray_dir) {
+    // Convert to NDC
+    float x_ndc = (2.0f * screen_x) / fb_width - 1.0f;
+    float y_ndc = (2.0f * screen_y) / fb_height - 1.0f;
+
+    // Orthographic rays are parallel, so the pixel picks where the ray STARTS on the near
+    // plane; it carries no direction information. Unproject the near-plane point for the
+    // origin and take the shared view direction below.
+    mat4 view_proj, inv_view_proj;
+    glm_mat4_mul(projection, view, view_proj);
+    glm_mat4_inv(view_proj, inv_view_proj);
+
+    vec4 near_ndc = {x_ndc, y_ndc, -1.0f, 1.0f};
+    vec4 near_world;
+    glm_mat4_mulv(inv_view_proj, near_ndc, near_world);
+    if (fabsf(near_world[3]) > 1e-6f) {
+        glm_vec4_scale(near_world, 1.0f / near_world[3], near_world);
+    }
+    out_ray_origin[0] = near_world[0];
+    out_ray_origin[1] = near_world[1];
+    out_ray_origin[2] = near_world[2];
+
+    // Every ray shares the camera's forward axis
+    mat4 inv_view;
+    glm_mat4_inv(view, inv_view);
+    vec3 eye_forward = {0.0f, 0.0f, -1.0f};
+    glm_mat4_mulv3(inv_view, eye_forward, 0.0f, out_ray_dir);
+    glm_vec3_normalize(out_ray_dir);
+}
+
 bool ray_aabb_intersection(vec3 ray_origin, vec3 ray_dir, vec3 bbox_min, vec3 bbox_max,
                            float* t_near, float* t_far) {
     vec3 inv_dir = {1.0f / ray_dir[0], 1.0f / ray_dir[1], 1.0f / ray_dir[2]};
@@ -66,11 +98,23 @@ static void traverse_and_pick(SceneNode* node, vec3 ray_origin, vec3 ray_dir, fl
         Mesh* mesh = node->meshes[i];
         float t_near, t_far;
 
+        // Line and point topology has no facets to refine a hit against, and reading its
+        // indices in threes would walk off the end of a run that is not a whole number of
+        // triangles. Such a mesh is picked on its bounding box alone.
+        bool has_triangles = mesh->draw_mode == MESH_TRIANGLES;
+
         if (ray_aabb_intersection(local_ray_origin, local_ray_dir, mesh->aabb.min, mesh->aabb.max,
                                   &t_near, &t_far)) {
             if (t_near < *min_distance && t_near > 0) {
-                // Test individual triangles for precise hit
-                for (size_t j = 0; j < mesh->index_count; j += 3) {
+                if (!has_triangles) {
+                    *min_distance = t_near;
+                    *picked_node = node;
+                    continue;
+                }
+
+                // Test individual triangles for precise hit. The j + 2 bound keeps the read
+                // in range even if an importer hands us a partial trailing triangle.
+                for (size_t j = 0; j + 2 < mesh->index_count; j += 3) {
                     vec3 v0, v1, v2;
                     glm_vec3_copy(mesh->vertices + mesh->indices[j] * 3, v0);
                     glm_vec3_copy(mesh->vertices + mesh->indices[j + 1] * 3, v1);
