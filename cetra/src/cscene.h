@@ -131,8 +131,13 @@ typedef struct CetraSceneDesc {
     // CLI > scene file > default precedence per field
     CSceneTonemap tonemap;
     bool has_exposure;
-    float exposure; // linear multiplier (exporter converts Blender stops);
-                    // an authored exposure pins the frame: auto-exposure off
+    float exposure; // linear multiplier (exporter converts Blender stops)
+    // Adaptation, decoupled from the exposure value above. Absent, an authored
+    // exposure still pins the frame, which is what every existing scene relies
+    // on -- but a scene can now author a starting exposure AND keep adapting,
+    // which the implicit coupling made unexpressible.
+    bool has_auto_exposure;
+    bool auto_exposure;
     bool has_bloom_enabled;
     bool bloom_enabled;
     bool has_bloom_strength;

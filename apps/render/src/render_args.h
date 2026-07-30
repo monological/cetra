@@ -25,6 +25,7 @@ typedef struct {
     float camera_distance;            // Camera distance override in meters (0 = auto)
     int no_recenter;                  // Keep the model's authored world position
     int no_auto_exposure;             // Fixed exposure instead of eye adaptation
+    int force_auto_exposure;          // Keep adapting even from an authored exposure
     int no_flip_uv;                   // For assets baked with the opposite V convention
     float ao_radius;                  // AO/GI reach override in world units (0 = auto)
     int force_taa;                    // TAA even in headless (temporal passes active)

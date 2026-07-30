@@ -1461,9 +1461,10 @@ int main(int argc, char** argv) {
     }
 
     if (args.exposure > 0.0f && engine->postfx) {
-        // A manual exposure pins the frame: auto-adaptation off
+        // A manual exposure pins the frame: auto-adaptation off, unless the
+        // scene asked to keep adapting from that starting value.
         engine->postfx->exposure = args.exposure;
-        engine->postfx->auto_exposure = false;
+        engine->postfx->auto_exposure = args.force_auto_exposure ? true : false;
     }
     if (args.no_auto_exposure && engine->postfx) {
         engine->postfx->auto_exposure = false;

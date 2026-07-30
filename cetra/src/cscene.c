@@ -222,6 +222,7 @@ static void parse_post(CetraSceneDesc* d, const cJSON* root) {
             log_warn("cscene: unknown tonemap '%s' (agx|aces|neutral)", tonemap->valuestring);
     }
     d->has_exposure = get_float(post, "exposure", &d->exposure);
+    d->has_auto_exposure = get_bool(post, "auto_exposure", &d->auto_exposure);
 
     const cJSON* bloom = cJSON_GetObjectItemCaseSensitive(post, "bloom");
     if (cJSON_IsObject(bloom)) {

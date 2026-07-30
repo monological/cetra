@@ -7,6 +7,7 @@
 #include "cetra/cscene.h"
 #include "cetra/engine.h"
 #include "cetra/ext/cwalk.h"
+#include "cetra/ext/log.h"
 #include "cetra/light.h"
 #include "cetra/noise.h"
 #include "cetra/particle_emitter.h"
@@ -100,6 +101,21 @@ int cscene_setup(RenderArgs* args, CetraSceneDesc** out_cscn) {
     }
     if (args->exposure <= 0.0f && cscn->has_exposure) {
         args->exposure = cscn->exposure;
+        // Say so. Setting an exposure also switches adaptation off downstream,
+        // which surprises anyone who then finds the GUI's auto-exposure box
+        // unticked in a scene whose file never mentions auto-exposure.
+        if (!cscn->has_auto_exposure)
+            log_info("cscene: exposure %.3f authored -- frame pinned, "
+                     "auto-exposure off (set \"auto_exposure\": true to keep adapting)",
+                     cscn->exposure);
+    }
+    // An explicit key wins over that coupling in both directions: a scene can
+    // keep adapting from an authored starting exposure, or pin the frame at the
+    // engine default without naming a value.
+    if (cscn->has_auto_exposure) {
+        args->no_auto_exposure = cscn->auto_exposure ? 0 : 1;
+        args->force_auto_exposure = cscn->auto_exposure ? 1 : 0;
+        log_info("cscene: auto-exposure %s (authored)", cscn->auto_exposure ? "on" : "off");
     }
     if (args->bloom_enable < 0 && cscn->has_bloom_enabled) {
         args->bloom_enable = cscn->bloom_enabled ? 1 : 0;
