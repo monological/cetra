@@ -431,27 +431,8 @@ float geometrySmith(vec3 N, vec3 V, vec3 L, float roughness) {
     return ggx1 * ggx2;
 }
 
-// Photometric distance attenuation for point/spot lights: inverse-square, which
-// is the falloff a real emitter has, windowed so influence reaches zero AT the
-// light's range rather than being truncated mid-falloff by the culler.
-//
-// This replaced a constant/linear/quadratic triple. That form is the old
-// fixed-function one, and its coefficients are not a physical quantity -- which
-// made `intensity` a bare multiplier whose correct value depended on scene
-// scale, so the same lamp had to be re-tuned when it moved into a bigger room.
-// Inverse-square is what makes intensity mean candela and stay meaningful
-// anywhere.
-//
-// The near floor is a 1 cm sphere: 1/d^2 is singular at the light's own
-// position, and one INF pixel survives every clamp downstream.
-float getDistanceAtt(float sqrDist, float invSqrAttRadius) {
-    float atten = 1.0 / max(sqrDist, 1e-4);
-    // Window: (1 - (d^2/r^2)^2)^2, squared for a C1 landing at the range so the
-    // cutoff has no visible edge.
-    float factor = sqrDist * invSqrAttRadius;
-    float smoothFactor = clamp(1.0 - factor * factor, 0.0, 1.0);
-    return atten * smoothFactor * smoothFactor;
-}
+// getDistanceAtt lives in include/lights_ubo.glsl, beside spotConeFactor and the
+// packed field it decodes.
 
 // 16-tap Poisson disk (unit radius) for the PCSS blocker search and filter.
 // Sampled UNROTATED: a per-pixel rotation decorrelates the pattern between
@@ -1082,12 +1063,21 @@ void main() {
 
             vec3 toLight = lightPos - WorldPos;
             L = normalize(toLight);
-            float distance = length(toLight);
             attenuation = getDistanceAtt(dot(toLight, toLight), clusterLights[li].attenCutoff.x);
             attenuation *=
                 spotConeFactor(clusterLights[li].dirType.w, clusterLights[li].dirType.xyz,
                                 clusterLights[li].attenCutoff.w,
                                 clusterLights[li].shadowMisc.x, L);
+            // Both terms reach EXACTLY zero over a real area -- the window at the
+            // light's range, the cone outside its outer angle -- and cluster
+            // assignment is a conservative sphere-vs-AABB, so a boundary cluster
+            // hands this loop a band of fragments the light cannot reach. Every
+            // term below scales by attenuation, so skipping them costs nothing
+            // and saves 9 shadow taps plus the GGX/clearcoat/sheen/POM chain.
+            // The old asymptotic falloff was never exactly zero; this is only
+            // safe because the photometric one is.
+            if (attenuation <= 0.0)
+                continue;
             lightCI = clusterLights[li].colorIntensity.xyz;
             lightSize = clusterLights[li].shadowMisc.zw;
             punctualLayer = int(clusterLights[li].shadowMisc.y);

@@ -270,7 +270,7 @@ typedef struct PostFX {
     vec3 fog_spot_pos;        // world position
     vec3 fog_spot_dir;        // normalized cone axis (travel direction)
     vec3 fog_spot_color;      // color * intensity
-    vec3 fog_spot_atten;      // constant, linear, quadratic
+    vec3 fog_spot_atten;      // x = 1/range^2 (0 = unbounded), yz unused
     float fog_spot_cos_inner; // cutOff (cos inner half-angle)
     float fog_spot_cos_outer; // outerCutOff (cos outer half-angle)
     // Perspective spot shadow (Phase 2): occludes the beam by geometry.

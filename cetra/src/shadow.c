@@ -890,9 +890,12 @@ void shadow_publish_to_postfx(const Scene* scene, PostFX* fx) {
         glm_vec3_copy((float*)sp->global_position, fx->fog_spot_pos);
         glm_vec3_normalize_to((float*)sp->direction, fx->fog_spot_dir);
         glm_vec3_scale((float*)sp->color, sp->intensity, fx->fog_spot_color);
-        fx->fog_spot_atten[0] = sp->constant;
-        fx->fog_spot_atten[1] = sp->linear;
-        fx->fog_spot_atten[2] = sp->quadratic;
+        // Same packing the clustered path uses (light_cluster.c): x = 1/range^2
+        // for getDistanceAtt's window, yz unused. The beam and the pool it casts
+        // read one falloff.
+        fx->fog_spot_atten[0] = sp->range > 0.0f ? 1.0f / (sp->range * sp->range) : 0.0f;
+        fx->fog_spot_atten[1] = 0.0f;
+        fx->fog_spot_atten[2] = 0.0f;
         fx->fog_spot_cos_inner = sp->cutOff;
         fx->fog_spot_cos_outer = sp->outerCutOff;
     }

@@ -175,7 +175,7 @@ void main() {
         // spotConeFactor's own ramp, so shaft and floor pool share one formula.
         float cone = spotConeFactor(2.0, spotDir, spotCosInner, spotCosOuter, toL / max(d, 1e-4));
         if (cone > 0.0) {
-            float atten = 1.0 / max(spotAtten.x + spotAtten.y * d + spotAtten.z * d * d, 1e-4);
+            float atten = getDistanceAtt(d * d, spotAtten.x);
             float vis = 1.0;
             if (spotShadowed == 1) {
                 vec4 ls = spotLightSpaceMatrix * vec4(P, 1.0);
@@ -210,14 +210,8 @@ void main() {
             continue;
         vec3 toL = clusterLights[li].posRange.xyz - P;
         float d = length(toL);
-        // Same photometric falloff the surface path uses (pbr_frag's
-        // getDistanceAtt); the fog and the surfaces must agree about how a lamp
-        // dies off or the beam separates from what it lights.
         float sqrDist = dot(toL, toL);
-        float atten = 1.0 / max(sqrDist, 1e-4);
-        float factor = sqrDist * clusterLights[li].attenCutoff.x;
-        float smoothFactor = clamp(1.0 - factor * factor, 0.0, 1.0);
-        atten *= smoothFactor * smoothFactor;
+        float atten = getDistanceAtt(sqrDist, clusterLights[li].attenCutoff.x);
         // toL points at the light, so -toL/d is the direction it travels -- the
         // punctual analogue of the directional phase above.
         float phase = phaseHG(dot(-toL / max(d, 1e-4), -rayDir), anisotropy) * sunBoost;

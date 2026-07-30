@@ -226,7 +226,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->point_light_grid = 0;    // off
     args->plg_radius = 10.0f;
     args->plg_intensity = 5.0f;
-    args->shadow_softness = -1.0f; // -1 = keep the engine default
+    args->shadow_softness = -1.0f;      // -1 = keep the engine default
+    args->auto_exposure_override = -1;  // -1 = unset; an authored exposure then pins
     args->sun_elevation = -999.0f; // -999 = keep the sky default
     args->sun_azimuth = -999.0f;
     args->world_scale = -1.0f; // -1 = keep the sky's default (1 unit = 1 metre)
@@ -385,7 +386,7 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
         } else if (strcmp(argv[i], "--no-recenter") == 0) {
             args->no_recenter = 1;
         } else if (strcmp(argv[i], "--no-auto-exposure") == 0) {
-            args->no_auto_exposure = 1;
+            args->auto_exposure_override = 0;
         } else if (strcmp(argv[i], "--no-flip-uv") == 0) {
             args->no_flip_uv = 1;
         } else if (strcmp(argv[i], "--ao-radius") == 0) {
@@ -1283,8 +1284,6 @@ static void spawn_point_light_grid(Scene* scene, const RenderArgs* args) {
     }
     float radius = args->plg_radius;
     float intensity = args->plg_intensity;
-    // Die exactly at the cull radius: 1 + q*r^2 = intensity * 256
-    float grid_q = (intensity * 256.0f - 1.0f) / (radius * radius);
 
     for (int gi = 0; gi < n; gi++) {
         for (int gj = 0; gj < n; gj++) {
@@ -1317,7 +1316,6 @@ static void spawn_point_light_grid(Scene* scene, const RenderArgs* args) {
             }
             set_light_color(pl, c);
             set_light_intensity(pl, intensity);
-            set_light_attenuation(pl, 1.0f, 0.0f, grid_q);
             set_light_range(pl, radius);
             add_light_to_scene(scene, pl);
 
@@ -1460,14 +1458,15 @@ int main(int argc, char** argv) {
         return -1;
     }
 
-    if (args.exposure > 0.0f && engine->postfx) {
-        // A manual exposure pins the frame: auto-adaptation off, unless the
-        // scene asked to keep adapting from that starting value.
-        engine->postfx->exposure = args.exposure;
-        engine->postfx->auto_exposure = args.force_auto_exposure ? true : false;
-    }
-    if (args.no_auto_exposure && engine->postfx) {
-        engine->postfx->auto_exposure = false;
+    if (engine->postfx) {
+        if (args.exposure > 0.0f)
+            engine->postfx->exposure = args.exposure;
+        // An explicit override wins; failing that, naming an exposure pins the
+        // frame, which is what every scene authored before the key existed.
+        if (args.auto_exposure_override >= 0)
+            engine->postfx->auto_exposure = args.auto_exposure_override != 0;
+        else if (args.exposure > 0.0f)
+            engine->postfx->auto_exposure = false;
     }
     if (args.no_ssao && engine->postfx) {
         engine->postfx->ssao_enabled = false;

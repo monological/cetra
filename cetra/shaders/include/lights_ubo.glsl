@@ -27,7 +27,7 @@ struct PackedLight {
     vec4 posRange;       // xyz = world position, w = cull radius
     vec4 dirType;        // xyz = direction (world), w = 1 point / 2 spot / 3 area
     vec4 colorIntensity; // xyz = color * intensity (premultiplied on CPU)
-    vec4 attenCutoff;    // x = constant, y = linear, z = quadratic, w = cos inner cone
+    vec4 attenCutoff;    // x = 1/range^2 (0 = unbounded), yz = reserved, w = cos inner cone
     vec4 shadowMisc;     // x = cos outer cone, y = float(punctual shadow base layer),
                          //     -1 = casts no shadow, zw = emitter/panel size
     vec4 upArea;     // AREA only: panel height axis, orthonormal to dir (spec 9.2)
@@ -100,4 +100,23 @@ float spotConeFactor(float typeF, vec3 lightDir, float cutOff, float outerCutOff
     float theta = dot(L, normalize(-lightDir));
     float epsilon = max(cutOff - outerCutOff, 1e-4);
     return clamp((theta - outerCutOff) / epsilon, 0.0, 1.0);
+}
+
+// The other half of punctual attenuation, beside the cone for the same reason:
+// a surface and the fog in front of it have to agree about how a lamp dies off,
+// or the beam separates from the pool it casts.
+//
+// Inverse-square is the falloff a real emitter has, which is what lets intensity
+// be candela rather than a multiplier that needs retuning per scene scale. The
+// window takes it to exactly zero AT the range so the culler is not truncating a
+// live curve -- squared, so it lands C1 and the cutoff has no visible edge.
+//
+// invSqrAttRadius is 1/range^2, precomputed on the CPU into attenCutoff.x; 0
+// means unbounded. The near floor is a 1 cm sphere, since 1/d^2 is singular at
+// the light's own position and one INF pixel survives every clamp downstream.
+float getDistanceAtt(float sqrDist, float invSqrAttRadius) {
+    float atten = 1.0 / max(sqrDist, 1e-4);
+    float factor = sqrDist * invSqrAttRadius;
+    float smoothFactor = clamp(1.0 - factor * factor, 0.0, 1.0);
+    return atten * smoothFactor * smoothFactor;
 }

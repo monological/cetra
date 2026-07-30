@@ -1418,50 +1418,46 @@ static void _engine_gui_panel(Engine* engine) {
     Scene* scene = get_current_scene(engine);
     if (scene && scene->light_count > 0 &&
         igCollapsingHeader_TreeNodeFlags("Lighting", ImGuiTreeNodeFlags_DefaultOpen)) {
-        // Seeded from the scene every frame, not from a static. A static held
-        // whatever it was initialised to, so the slider read the same number for
-        // every scene while the authored value sat unshown beside it -- and the
-        // first drag wrote that stale number over every light at once, silently
-        // re-lighting a scene whose intensities came from its .cscn.
-        //
-        // Still a single control over all lights, so a drag flattens any
-        // key/fill ratio. It reads the first light because that is the one value
-        // it can honestly display; per-light editing is the actual fix and is
-        // not this.
-        float light_intensity = scene->lights[0] ? scene->lights[0]->intensity : 0.0f;
-        // Intensity is a photometric quantity now, and which one depends on the
-        // light type, so the control has to say so -- an unlabelled number is
-        // what made the old slider unreadable.
-        const int lt = scene->lights[0] ? (int)scene->lights[0]->type : 0;
-        const char* unit_fmt = "%.1f cd";
-        float unit_max = 400.0f; // ~5000 lm isotropic, a bright domestic fitting
-        if (lt == LIGHT_DIRECTIONAL) {
-            unit_fmt = "%.0f lx";
-            unit_max = 120000.0f; // noon sun ~100k lx
-        } else if (lt == LIGHT_AREA) {
-            unit_fmt = "%.1f nits";
-            unit_max = 2000.0f;
-        }
-        if (igSliderFloat("Intensity", &light_intensity, 0.0f, unit_max, unit_fmt,
-                          ImGuiSliderFlags_Logarithmic)) {
-            for (size_t i = 0; i < scene->light_count; i++)
-                if (scene->lights[i])
-                    scene->lights[i]->intensity = light_intensity;
-        }
-        if (igIsItemHovered(0))
-            igSetTooltip("Photometric. Point/spot in candela (lumens / 4pi), sun in lux, "
-                         "panel in nits. Falloff is inverse-square, bounded by Range.");
-
-        if (lt == LIGHT_POINT || lt == LIGHT_SPOT) {
-            float light_range = scene->lights[0]->range;
-            if (igSliderFloat("Range", &light_range, 0.0f, 100.0f, "%.1f m", 0)) {
+        // Both controls read light 0 and write every light: one value is all a
+        // single slider can honestly show, and a drag therefore flattens any
+        // key/fill ratio. Per-light selection is the fix and is not this.
+        Light* l0 = scene->lights[0];
+        if (l0) {
+            // Intensity is photometric, and WHICH quantity depends on the type,
+            // so the widget has to name its unit -- a bare number is unreadable.
+            // Log scale because the useful span is four decades: a domestic lamp
+            // and midday sun are both on here.
+            static const struct {
+                const char* fmt;
+                float max;
+            } UNITS[] = {
+                [LIGHT_DIRECTIONAL] = {"%.0f lx", 120000.0f}, // noon sun ~100k lx
+                [LIGHT_POINT] = {"%.1f cd", 400.0f},          // ~5000 lm isotropic
+                [LIGHT_SPOT] = {"%.1f cd", 400.0f},
+                [LIGHT_AREA] = {"%.1f nits", 2000.0f},
+            };
+            float intensity = l0->intensity;
+            if (igSliderFloat("Intensity", &intensity, 0.0f, UNITS[l0->type].max,
+                              UNITS[l0->type].fmt, ImGuiSliderFlags_Logarithmic)) {
                 for (size_t i = 0; i < scene->light_count; i++)
                     if (scene->lights[i])
-                        scene->lights[i]->range = light_range;
+                        scene->lights[i]->intensity = intensity;
             }
             if (igIsItemHovered(0))
-                igSetTooltip("Where the inverse-square falloff is windowed to zero. Also the "
-                             "cull radius. 0 = unbounded.");
+                igSetTooltip("Photometric. Point/spot in candela (lumens / 4pi), sun in lux, "
+                             "panel in nits. Falloff is inverse-square, bounded by Range.");
+
+            if (l0->type == LIGHT_POINT || l0->type == LIGHT_SPOT) {
+                float range = l0->range;
+                if (igSliderFloat("Range", &range, 0.0f, 100.0f, "%.1f m", 0)) {
+                    for (size_t i = 0; i < scene->light_count; i++)
+                        if (scene->lights[i])
+                            scene->lights[i]->range = range;
+                }
+                if (igIsItemHovered(0))
+                    igSetTooltip("Where the inverse-square falloff is windowed to zero. Also "
+                                 "the cull radius. 0 = unbounded.");
+            }
         }
         // Clustered-forward occupancy: tint each fragment by how many lights
         // its cluster carries (blue 1 .. red >= 16). Directional lights are

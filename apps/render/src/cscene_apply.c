@@ -109,12 +109,12 @@ int cscene_setup(RenderArgs* args, CetraSceneDesc** out_cscn) {
                      "auto-exposure off (set \"auto_exposure\": true to keep adapting)",
                      cscn->exposure);
     }
-    // An explicit key wins over that coupling in both directions: a scene can
-    // keep adapting from an authored starting exposure, or pin the frame at the
-    // engine default without naming a value.
-    if (cscn->has_auto_exposure) {
-        args->no_auto_exposure = cscn->auto_exposure ? 0 : 1;
-        args->force_auto_exposure = cscn->auto_exposure ? 1 : 0;
+    // An explicit key breaks that coupling in both directions: a scene can keep
+    // adapting from an authored starting exposure, or pin the frame without
+    // naming a value. Guarded like every other field here, so the CLI still wins
+    // -- the precedence this whole function implements is CLI > scene > default.
+    if (cscn->has_auto_exposure && args->auto_exposure_override < 0) {
+        args->auto_exposure_override = cscn->auto_exposure ? 1 : 0;
         log_info("cscene: auto-exposure %s (authored)", cscn->auto_exposure ? "on" : "off");
     }
     if (args->bloom_enable < 0 && cscn->has_bloom_enabled) {
@@ -165,11 +165,10 @@ void add_cscene_lights(Scene* scene, const CetraSceneDesc* cscn) {
         set_light_original_position(light, (float*)sl->position);
         set_light_color(light, (float*)sl->color);
         set_light_intensity(light, sl->intensity);
-        // Optional attenuation/range apply to the punctual falloff types; absent
-        // in the desc means keep create_light()'s engine defaults.
-        if (sl->has_attenuation)
-            set_light_attenuation(light, sl->attenuation[0], sl->attenuation[1],
-                                  sl->attenuation[2]);
+        // Range bounds the punctual falloff; absent means keep create_light()'s
+        // default. The old attenuation triple is parsed and warned about in
+        // cscene.c but deliberately not applied here -- storing a value the
+        // shaders no longer read is how a dead knob keeps looking live.
         if (sl->has_range)
             set_light_range(light, sl->range);
         // Type-independent: every light type now honours cast_shadows (spec 9.8
