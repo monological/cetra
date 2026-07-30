@@ -66,24 +66,41 @@ float punctualShadow(int layer, vec3 worldPos, float NdotL) {
     // Slope-scaled by tan(angle of incidence), not by (1 - NdotL). The two agree
     // while a surface faces the light and diverge exactly where it matters: a
     // face seen edge-on spans many depth units across one texel, and (1 - NdotL)
-    // saturates at 1 there while the tangent goes where the geometry does. That
-    // shows up the moment a light sits directly above a room, which puts every
-    // wall near edge-on -- an area panel's usual position.
+    // saturates at 1 there while the tangent goes where the geometry does.
     // tan(acos(x)) == sqrt(1-x^2)/x for x in (0,1] -- one sqrt+divide instead
     // of two transcendentals, per shadowed light per fragment. max() floors the
     // divide so grazing (x->0) lands on the same clamp ceiling.
+    //
+    // This is an epsilon in the projection's NDC z, which is the wrong space --
+    // under perspective it is worth ~d^2/near world units, so it is only ever
+    // right at one distance and one scene scale. It survives because the AREA
+    // path still depends on it: an area panel is front-face culled and gets no
+    // polygon offset, and removing this took cornell_box to near-black over 77%
+    // of frame. Point and spot additionally carry the depth-pass offset, which
+    // is what actually makes their contacts correct; this term is redundant
+    // there, not load-bearing.
     float ndl = clamp(NdotL, 0.0, 1.0);
     float slope = clamp(sqrt(1.0 - ndl * ndl) / max(ndl, 1e-3), 0.0, 12.0);
     float bias = clamp(0.0006 * slope, 0.0004, 0.008);
     // 3x3 PCF, which the directional cascades have always had and this never
     // did: a single tap quantizes the edge to the texel grid, and reads as a
     // staircase on any silhouette not aligned to it.
+    //
+    // Taps are clamped to the face. A point light's six faces meet on 45-degree
+    // planes, and a fragment sitting near one has taps that fall OFF this face
+    // -- where a 2D array has no neighbouring face to sample, only its border,
+    // which reads lit. Unclamped that draws a straight lit seam across whatever
+    // the boundary crosses, and it is immune to every depth remedy because no
+    // depth comparison is involved: the tap simply misses the data. Clamping
+    // re-reads this face's edge texel, which is the nearest depth that actually
+    // exists; the true neighbour is a face away and unreachable without a
+    // samplerCubeArray (GLSL 400, above this shader set's 330).
     vec2 texel = vec2(1.0 / PUNCTUAL_SHADOW_MAP_SIZE);
     float sum = 0.0;
     for (int y = -1; y <= 1; ++y) {
         for (int x = -1; x <= 1; ++x) {
-            float d =
-                texture(punctualShadowMaps, vec3(pc.xy + vec2(x, y) * texel, float(layer))).r;
+            vec2 uv = clamp(pc.xy + vec2(x, y) * texel, texel * 0.5, 1.0 - texel * 0.5);
+            float d = texture(punctualShadowMaps, vec3(uv, float(layer))).r;
             sum += (pc.z - bias > d) ? 0.0 : 1.0;
         }
     }

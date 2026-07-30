@@ -448,8 +448,8 @@ static void _render_shadow_node(SceneNode* node, ShaderProgram* program, GLuint*
             // Skin animated meshes so they cast animated shadows
             render_update_skinning_uniforms(program, mesh);
 
-            // The pass front-face culls to push acne behind the surface; a
-            // two-sided card has no back face to keep, so it would vanish.
+            // A two-sided card has no back face, so culling either way would
+            // drop it from the map entirely.
             bool two_sided = mat && mat->doubleSided;
             if (two_sided)
                 glDisable(GL_CULL_FACE);
@@ -766,6 +766,10 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     GLint prev_viewport[4];
     glGetIntegerv(GL_VIEWPORT, prev_viewport);
 
+    // Cascades front-face cull: a lit surface is then absent from its own map
+    // and cannot self-shadow, which is the entire acne remedy on this path.
+    // The punctual section below uses the opposite policy, for reasons recorded
+    // there; the split is deliberate, not historical drift.
     glCullFace(GL_FRONT);
 
     GLuint current_program = 0;
@@ -789,8 +793,29 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     }
 
     // Punctual maps (for surface shadows + the volumetric beam), one layer per
-    // caster. Reuses the allocation (a no-op once it is large enough), the
-    // bound depth program, and front-face cull.
+    // caster. Reuses the allocation (a no-op once it is large enough) and the
+    // bound depth program, but NOT the cascades' depth policy.
+    //
+    // These store the surface nearest the light and pay for acne with a
+    // slope-scaled polygon offset. Front-face culling cannot be used here
+    // because it stores the caster's FAR side, whose bottom edge is coplanar
+    // with whatever the caster rests on: at the contact the occluder and
+    // receiver depths are then exactly equal, and the comparison reads "lit"
+    // along every contact line. That is not a bias-tuning problem -- equal is
+    // equal, and a bias of zero leaves it untouched.
+    //
+    // Polygon offset is expressed in the depth buffer's own units
+    // (slope * factor + r * units), so unlike the shader-side epsilon in
+    // punctual_shadow.glsl it does not have to be re-tuned per scene scale.
+    // That epsilon still runs -- the area path depends on it -- but for these
+    // two types it is redundant rather than load-bearing.
+    //
+    // The cascades keep front-face culling. Switching them too was tried and
+    // reverted: an ortho map over a whole scene puts every receiver into its
+    // own map, and at low sun elevation the froxel_fog fixture answered with
+    // banded ground acne and hard terminator crescents on convex casters that
+    // a larger offset made worse, not better. Their contact-line cost is
+    // therefore still outstanding.
     if (punctual_needed > 0 && init_punctual_shadow_array(ss, punctual_needed) == 0) {
         for (size_t i = 0; i < scene->light_count; ++i) {
             Light* light = scene->lights[i];
@@ -799,6 +824,26 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
 
             int layers =
                 compute_punctual_matrices(light, ss, &ss->punctual_matrices[light->shadow_layer]);
+
+            // Near-side depth + polygon offset for the two types it was measured
+            // on; an area panel stays on the cascades' far-side policy.
+            //
+            // The panel is the case where near-side storage costs more than it
+            // buys. Its map looks down a 120-degree cone from just under the
+            // ceiling, so the room's own walls and floor land in it almost
+            // edge-on -- the worst geometry for a depth-slope offset -- and they
+            // are receivers, so they self-shadow. cornell_box answered by going
+            // near-black over 79% of frame. A cone that wide has no equivalent
+            // of a cascade's fitted ortho box to keep texel footprints sane,
+            // which is why the same policy that fixes a spot breaks a panel.
+            bool near_side_depth = light->type == LIGHT_POINT || light->type == LIGHT_SPOT;
+            glCullFace(near_side_depth ? GL_BACK : GL_FRONT);
+            if (near_side_depth) {
+                glEnable(GL_POLYGON_OFFSET_FILL);
+                glPolygonOffset(SHADOW_DEPTH_SLOPE_BIAS, SHADOW_DEPTH_CONSTANT_BIAS);
+            } else {
+                glDisable(GL_POLYGON_OFFSET_FILL);
+            }
 
             // One scene traversal per layer -- this loop is the frame cost the
             // pool ceiling caps, and a point light pays six times a spot's.
@@ -815,6 +860,8 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
         }
     }
 
+    glDisable(GL_POLYGON_OFFSET_FILL);
+    glPolygonOffset(0.0f, 0.0f);
     glCullFace(GL_BACK);
     glUseProgram(0);
 

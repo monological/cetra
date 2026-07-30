@@ -24,6 +24,21 @@
 // larger footprint than a cascade's fitted ortho box, and every seam artifact
 // scales with that footprint. One array means one size for all three types.
 #define PUNCTUAL_SHADOW_MAP_SIZE 2048
+// Depth-pass polygon offset. Applied to point and spot maps only -- cascades
+// and area panels suppress acne by front-face culling instead (shadow.c).
+// glPolygonOffset(factor, units) pushes a fragment by
+// factor * <max depth slope of the polygon> + units * <smallest resolvable
+// depth difference>. Both terms are expressed in the depth buffer's own units,
+// so this is one setting for every scene scale and every light range -- unlike
+// an epsilon in NDC z, which is worth ~d^2/near world units and is therefore
+// only ever right at one distance.
+//
+// The slope term does the work: acne is a texel-footprint problem, so it scales
+// with how fast depth changes across a texel, which is exactly what the
+// rasterizer measures here. The constant term only covers the flat case the
+// slope term cannot see (a receiver exactly perpendicular to the light).
+#define SHADOW_DEPTH_SLOPE_BIAS    2.0f
+#define SHADOW_DEPTH_CONSTANT_BIAS 2.0f
 // Engine-owned sampler units sit just above the material units (common.h).
 // Packing the scalar masks into one array freed the 10-12 range, letting the
 // shadow + IBL units drop below 16 so brdfLUT/skybox are no longer bound
