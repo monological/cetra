@@ -431,11 +431,26 @@ float geometrySmith(vec3 N, vec3 V, vec3 L, float roughness) {
     return ggx1 * ggx2;
 }
 
-// Attenuation for point/spot lights. The denominator floor guards degenerate
-// all-zero coefficients (import sanitizes them, but bad data must not turn
-// into +INF radiance -- one INF pixel survives every clamp downstream).
-float calculateAttenuation(float distance, float constant, float linear, float quadratic) {
-    return 1.0 / max(constant + linear * distance + quadratic * (distance * distance), 1e-4);
+// Photometric distance attenuation for point/spot lights: inverse-square, which
+// is the falloff a real emitter has, windowed so influence reaches zero AT the
+// light's range rather than being truncated mid-falloff by the culler.
+//
+// This replaced a constant/linear/quadratic triple. That form is the old
+// fixed-function one, and its coefficients are not a physical quantity -- which
+// made `intensity` a bare multiplier whose correct value depended on scene
+// scale, so the same lamp had to be re-tuned when it moved into a bigger room.
+// Inverse-square is what makes intensity mean candela and stay meaningful
+// anywhere.
+//
+// The near floor is a 1 cm sphere: 1/d^2 is singular at the light's own
+// position, and one INF pixel survives every clamp downstream.
+float getDistanceAtt(float sqrDist, float invSqrAttRadius) {
+    float atten = 1.0 / max(sqrDist, 1e-4);
+    // Window: (1 - (d^2/r^2)^2)^2, squared for a C1 landing at the range so the
+    // cutoff has no visible edge.
+    float factor = sqrDist * invSqrAttRadius;
+    float smoothFactor = clamp(1.0 - factor * factor, 0.0, 1.0);
+    return atten * smoothFactor * smoothFactor;
 }
 
 // 16-tap Poisson disk (unit radius) for the PCSS blocker search and filter.
@@ -867,11 +882,10 @@ void main() {
             } else {
                 uint li = lightIndexAt(sOffset + uint(k - sNumDir));
                 vec3 lightPos = clusterLights[li].posRange.xyz;
-                L = normalize(lightPos - WorldPos);
-                float distance = length(lightPos - WorldPos);
-                attenuation = calculateAttenuation(distance, clusterLights[li].attenCutoff.x,
-                                                   clusterLights[li].attenCutoff.y,
-                                                   clusterLights[li].attenCutoff.z);
+                vec3 toLight = lightPos - WorldPos;
+                L = normalize(toLight);
+                attenuation = getDistanceAtt(dot(toLight, toLight),
+                                             clusterLights[li].attenCutoff.x);
                 attenuation *=
                     spotConeFactor(clusterLights[li].dirType.w, clusterLights[li].dirType.xyz,
                                     clusterLights[li].attenCutoff.w,
@@ -1066,11 +1080,10 @@ void main() {
                 continue;
             }
 
-            L = normalize(lightPos - WorldPos);
-            float distance = length(lightPos - WorldPos);
-            attenuation = calculateAttenuation(distance, clusterLights[li].attenCutoff.x,
-                                               clusterLights[li].attenCutoff.y,
-                                               clusterLights[li].attenCutoff.z);
+            vec3 toLight = lightPos - WorldPos;
+            L = normalize(toLight);
+            float distance = length(toLight);
+            attenuation = getDistanceAtt(dot(toLight, toLight), clusterLights[li].attenCutoff.x);
             attenuation *=
                 spotConeFactor(clusterLights[li].dirType.w, clusterLights[li].dirType.xyz,
                                 clusterLights[li].attenCutoff.w,

@@ -1429,10 +1429,39 @@ static void _engine_gui_panel(Engine* engine) {
         // it can honestly display; per-light editing is the actual fix and is
         // not this.
         float light_intensity = scene->lights[0] ? scene->lights[0]->intensity : 0.0f;
-        if (igSliderFloat("Intensity", &light_intensity, 0.0f, 20.0f, "%.2f", 0)) {
+        // Intensity is a photometric quantity now, and which one depends on the
+        // light type, so the control has to say so -- an unlabelled number is
+        // what made the old slider unreadable.
+        const int lt = scene->lights[0] ? (int)scene->lights[0]->type : 0;
+        const char* unit_fmt = "%.1f cd";
+        float unit_max = 400.0f; // ~5000 lm isotropic, a bright domestic fitting
+        if (lt == LIGHT_DIRECTIONAL) {
+            unit_fmt = "%.0f lx";
+            unit_max = 120000.0f; // noon sun ~100k lx
+        } else if (lt == LIGHT_AREA) {
+            unit_fmt = "%.1f nits";
+            unit_max = 2000.0f;
+        }
+        if (igSliderFloat("Intensity", &light_intensity, 0.0f, unit_max, unit_fmt,
+                          ImGuiSliderFlags_Logarithmic)) {
             for (size_t i = 0; i < scene->light_count; i++)
                 if (scene->lights[i])
                     scene->lights[i]->intensity = light_intensity;
+        }
+        if (igIsItemHovered(0))
+            igSetTooltip("Photometric. Point/spot in candela (lumens / 4pi), sun in lux, "
+                         "panel in nits. Falloff is inverse-square, bounded by Range.");
+
+        if (lt == LIGHT_POINT || lt == LIGHT_SPOT) {
+            float light_range = scene->lights[0]->range;
+            if (igSliderFloat("Range", &light_range, 0.0f, 100.0f, "%.1f m", 0)) {
+                for (size_t i = 0; i < scene->light_count; i++)
+                    if (scene->lights[i])
+                        scene->lights[i]->range = light_range;
+            }
+            if (igIsItemHovered(0))
+                igSetTooltip("Where the inverse-square falloff is windowed to zero. Also the "
+                             "cull radius. 0 = unbounded.");
         }
         // Clustered-forward occupancy: tint each fragment by how many lights
         // its cluster carries (blue 1 .. red >= 16). Directional lights are

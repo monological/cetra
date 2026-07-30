@@ -74,24 +74,15 @@ float light_cull_radius(const struct Light* light) {
         return sqrtf(i_eff * area / (LC_CULL_EPSILON * (float)M_PI)) + half_diagonal;
     }
 
-    // Solve constant + linear*d + quadratic*d^2 = i_eff / epsilon for d
-    float target = i_eff / LC_CULL_EPSILON;
-    float c = light->constant, l = light->linear, q = light->quadratic;
-    float r;
-    if (q > 1e-8f) {
-        float disc = l * l + 4.0f * q * (target - c);
-        if (disc <= 0.0f)
-            return 0.0f; // never brighter than epsilon
-        r = (-l + sqrtf(disc)) / (2.0f * q);
-    } else if (l > 1e-8f) {
-        r = (target - c) / l;
-    } else {
-        return -1.0f; // constant-only attenuation: uncullable
-    }
-    if (r <= 0.0f)
-        return 0.0f;
-
-    return r;
+    // Photometric falloff is windowed, so a light is exactly zero beyond its
+    // range and the range IS the cull radius -- no solving required, and no
+    // "uncullable" case, which the constant term used to produce.
+    //
+    // Without an authored range, fall back to where pure inverse-square drops
+    // under the visibility floor: i_eff/d^2 = epsilon.
+    if (light->range > 0.0f)
+        return light->range;
+    return sqrtf(i_eff / LC_CULL_EPSILON);
 }
 
 // slice(z) for view depth z, matching clusterLightList in lights_ubo.glsl
@@ -223,9 +214,13 @@ static void _pack_cluster_light(GpuPackedLight* dst, const struct Light* light, 
     dst->pos_range[3] = radius > 0.0f ? radius : 0.0f; // 0 = unbounded
     dst->dir_type[3] = (float)light->type; // 1 point / 2 spot / 3 area
     glm_vec3_scale((float*)light->color, light->intensity, dst->color_intensity);
-    dst->atten_cutoff[0] = light->constant;
-    dst->atten_cutoff[1] = light->linear;
-    dst->atten_cutoff[2] = light->quadratic;
+    // x is the window term the photometric falloff needs: 1/range^2, so the
+    // shader can fade a lamp to exactly zero at its range with two multiplies
+    // and no divide. 0 means no window -- pure inverse-square, unbounded.
+    // y and z carried the old linear/quadratic coefficients and are now free.
+    dst->atten_cutoff[0] = light->range > 0.0f ? 1.0f / (light->range * light->range) : 0.0f;
+    dst->atten_cutoff[1] = 0.0f;
+    dst->atten_cutoff[2] = 0.0f;
     dst->atten_cutoff[3] = light->cutOff;
     dst->shadow_misc[0] = light->outerCutOff;
     // The punctual base layer, not the CSM slot: only directionals reach the

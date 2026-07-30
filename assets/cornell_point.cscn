@@ -9,8 +9,9 @@
       "type": "point",
       "position": [0.0, 0.8, 0.0],
       "color": [1.0, 0.95, 0.88],
-      "intensity": 3.0,
-      "attenuation": [1.0, 0.0, 0.6],
+      "intensity": 30.0,
+      "intensity_unit": "lumens",
+      "range": 10.0,
       "cast_shadows": true
     }
   ],

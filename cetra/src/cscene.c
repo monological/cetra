@@ -145,6 +145,23 @@ static void parse_lights(CetraSceneDesc* d, const cJSON* root) {
         }
         if (!get_float(l, "intensity", &out->intensity))
             out->intensity = 1.0f;
+        // Intensity is candela, the unit inverse-square falloff makes meaningful.
+        // Authoring in lumens is the friendlier end though -- it is what a bulb's
+        // box prints -- so accept it and convert here, once, rather than leaving
+        // every consumer to wonder which unit it holds.
+        //
+        // Phi/(4*pi) is the isotropic conversion. Applied to spots too, on
+        // purpose: dividing by the cone's solid angle instead would make
+        // narrowing a beam brighten it, which is right for a bare emitter and
+        // wrong for how anyone expects a spot control to behave.
+        const cJSON* unit = cJSON_GetObjectItemCaseSensitive(l, "intensity_unit");
+        if (cJSON_IsString(unit) && unit->valuestring) {
+            if (strcasecmp(unit->valuestring, "lumens") == 0)
+                out->intensity /= 4.0f * (float)M_PI;
+            else if (strcasecmp(unit->valuestring, "candela") != 0)
+                log_warn("cscene: light '%s' unknown intensity_unit '%s' (candela|lumens)",
+                         out->name, unit->valuestring);
+        }
 
         // Direction (travel direction) defines directional/spot/area; point ignores it.
         if (out->type != CSCENE_LIGHT_POINT && !get_vec3(l, "direction", out->direction)) {
@@ -156,6 +173,14 @@ static void parse_lights(CetraSceneDesc* d, const cJSON* root) {
         // Optional everywhere they apply: absent = keep the engine default.
         get_bool(l, "cast_shadows", &out->cast_shadows);
         out->has_attenuation = get_floats(l, "attenuation", out->attenuation, 3);
+        // The constant/linear/quadratic triple is the fixed-function falloff and
+        // no longer reaches the shader: punctual lights are inverse-square,
+        // windowed by `range`. Left parsed so old scenes still load, but say so
+        // rather than letting an authored value look like it still does anything.
+        if (out->has_attenuation)
+            log_warn("cscene: light '%s' authors 'attenuation' -- ignored; falloff is "
+                     "inverse-square, use 'range' to bound it",
+                     out->name);
         out->has_range = get_float(l, "range", &out->range);
 
         if (out->type == CSCENE_LIGHT_AREA) {

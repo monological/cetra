@@ -210,10 +210,14 @@ void main() {
             continue;
         vec3 toL = clusterLights[li].posRange.xyz - P;
         float d = length(toL);
-        float atten =
-            1.0 / max(clusterLights[li].attenCutoff.x + clusterLights[li].attenCutoff.y * d +
-                          clusterLights[li].attenCutoff.z * d * d,
-                      1e-4);
+        // Same photometric falloff the surface path uses (pbr_frag's
+        // getDistanceAtt); the fog and the surfaces must agree about how a lamp
+        // dies off or the beam separates from what it lights.
+        float sqrDist = dot(toL, toL);
+        float atten = 1.0 / max(sqrDist, 1e-4);
+        float factor = sqrDist * clusterLights[li].attenCutoff.x;
+        float smoothFactor = clamp(1.0 - factor * factor, 0.0, 1.0);
+        atten *= smoothFactor * smoothFactor;
         // toL points at the light, so -toL/d is the direction it travels -- the
         // punctual analogue of the directional phase above.
         float phase = phaseHG(dot(-toL / max(d, 1e-4), -rayDir), anisotropy) * sunBoost;
