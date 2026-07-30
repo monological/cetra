@@ -1418,7 +1418,17 @@ static void _engine_gui_panel(Engine* engine) {
     Scene* scene = get_current_scene(engine);
     if (scene && scene->light_count > 0 &&
         igCollapsingHeader_TreeNodeFlags("Lighting", ImGuiTreeNodeFlags_DefaultOpen)) {
-        static float light_intensity = 3.0f;
+        // Seeded from the scene every frame, not from a static. A static held
+        // whatever it was initialised to, so the slider read the same number for
+        // every scene while the authored value sat unshown beside it -- and the
+        // first drag wrote that stale number over every light at once, silently
+        // re-lighting a scene whose intensities came from its .cscn.
+        //
+        // Still a single control over all lights, so a drag flattens any
+        // key/fill ratio. It reads the first light because that is the one value
+        // it can honestly display; per-light editing is the actual fix and is
+        // not this.
+        float light_intensity = scene->lights[0] ? scene->lights[0]->intensity : 0.0f;
         if (igSliderFloat("Intensity", &light_intensity, 0.0f, 20.0f, "%.2f", 0)) {
             for (size_t i = 0; i < scene->light_count; i++)
                 if (scene->lights[i])
