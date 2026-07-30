@@ -16,8 +16,14 @@ uniform sampler2D velocityTex; // Screen-space motion .xy (UV units)
 uniform sampler2D historyTex;  // Last frame's accumulation
 uniform vec2 texelSize;        // 1 / effect resolution
 uniform int reset;             // 1 on the first frame -> no history yet
-
-const float FEEDBACK = 0.9; // History weight; ~10-frame effective window
+// History weight, per consumer. The window this buys has to cover the spread of
+// whatever the consumer feeds in: an estimator that re-randomises every frame
+// (GTAO rotates its slice set) never settles, because the blend keeps a share
+// (1 - feedback) of each new sample forever. Measured on cornell_box with a
+// static camera: at 0.9 the frame-to-frame delta sits at 6706 px and simply
+// stays there; the residual scales with (1 - feedback) as the geometric series
+// says it must.
+uniform float feedback;
 
 void main()
 {
@@ -52,5 +58,5 @@ void main()
     }
     vec4 history = clamp(texture(historyTex, histUv), nmin, nmax);
 
-    FragColor = mix(current, history, FEEDBACK);
+    FragColor = mix(current, history, feedback);
 }

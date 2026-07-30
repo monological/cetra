@@ -882,7 +882,20 @@ int postfx_add_sss_profile(PostFX* fx, const float* color, float radius) {
 
 // Defined below (with fog/SSR, its other callers); SSS is the first user in file order.
 static GLuint run_temporal_accum(PostFX* fx, ShaderProgram* prog, PingPong* pp, int w, int h,
-                                 GLuint current_tex);
+                                 GLuint current_tex, float feedback);
+
+// Whatever a consumer feeds the accumulator settles only if the input settles.
+// Most of them converge on their own -- their per-frame change is the camera
+// moving, which stops when the camera does -- so a ~10-frame window is all they
+// need and this is the value every one of them has always run at.
+#define TEMPORAL_FEEDBACK_DEFAULT 0.9f
+// GTAO is the exception: it re-randomises its slice set every frame on purpose,
+// so its input never settles and the blend keeps a (1 - feedback) share of each
+// new estimate indefinitely. That share IS the flicker, and the only way to
+// shrink it is a longer window. ~33 frames, chosen as the point where the
+// residual stops being visible without the response becoming sluggish enough to
+// smear AO behind a moving camera.
+#define TEMPORAL_FEEDBACK_AO 0.97f
 
 // Additive-fold the currently-bound fullscreen setup (sss_blur_program + its
 // textures/uniforms) into the HDR scene (GL_ONE,GL_ONE), restoring blend state.
@@ -954,7 +967,8 @@ static void postfx_run_sss(PostFX* fx, mat4 projection, bool taa_resolving) {
     draw_fullscreen_quad(fx->quad_vao);
 
     GLuint stable = run_temporal_accum(fx, fx->temporal_accum_program, &fx->sss_history, fx->width,
-                                       fx->height, fx->sss_delta_texture);
+                                       fx->height, fx->sss_delta_texture,
+                                       TEMPORAL_FEEDBACK_DEFAULT);
 
     glUseProgram(fx->sss_blur_program->id);
     glActiveTexture(GL_TEXTURE0);
@@ -1276,7 +1290,7 @@ static void resolve_color_attachment(GLuint msaa_fbo, GLenum attachment, GLuint 
 // at (w,h), prog is current, and texture unit 2 is active. Every caller that
 // draws afterwards has to re-bind its own target, viewport, program and unit.
 static GLuint run_temporal_accum(PostFX* fx, ShaderProgram* prog, PingPong* pp, int w, int h,
-                                 GLuint current_tex) {
+                                 GLuint current_tex, float feedback) {
     int write = fx->frame_index & 1;
     int read = write ^ 1;
     glBindFramebuffer(GL_FRAMEBUFFER, pp->fbo[write]);
@@ -1284,6 +1298,9 @@ static GLuint run_temporal_accum(PostFX* fx, ShaderProgram* prog, PingPong* pp, 
     glUseProgram(prog->id);
     const float texel[2] = {1.0f / (float)w, 1.0f / (float)h};
     uniform_set_vec2(prog->uniforms, "texelSize", texel);
+    // A no-op against ssgi_accum_program, which keeps its own inverse-luma
+    // blend; the uniform belongs to temporal_accum_frag alone.
+    uniform_set_float(prog->uniforms, "feedback", feedback);
     uniform_set_int(prog->uniforms, "currentTex", 0);
     uniform_set_int(prog->uniforms, "velocityTex", 1);
     uniform_set_int(prog->uniforms, "historyTex", 2);
@@ -1507,7 +1524,8 @@ static void postfx_run_atmosphere(PostFX* fx, bool aux_written, bool taa_resolvi
         // unrelated frame's velocity.
         fx->fog_layer_history.valid = (fx->fog_layer_frame == fx->frame_index - 1);
         GLuint stable = run_temporal_accum(fx, fx->temporal_accum_program, &fx->fog_layer_history,
-                                           fx->width, fx->height, fx->fog_layer_texture);
+                                           fx->width, fx->height, fx->fog_layer_texture,
+                                           TEMPORAL_FEEDBACK_DEFAULT);
         fx->fog_layer_frame = fx->frame_index;
 
         glUseProgram(fx->froxel_composite_program->id);
@@ -1659,7 +1677,7 @@ static void postfx_run_ssr(PostFX* fx, bool have_normals, bool taa_resolving, ma
     GLuint ssr_result = fx->ssr_texture;
     if (ssr_temporal_on) {
         ssr_result = run_temporal_accum(fx, fx->temporal_accum_program, &fx->ssr_history, ssr_w,
-                                        ssr_h, fx->ssr_texture);
+                                        ssr_h, fx->ssr_texture, TEMPORAL_FEEDBACK_DEFAULT);
     } else {
         fx->ssr_history.valid = false;
     }
@@ -1811,7 +1829,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         // hdr_fbo so SSR/DoF/bloom/tonemap consume the anti-aliased color.
         if (taa_resolving) {
             run_temporal_accum(fx, fx->taa_resolve_program, &fx->taa_history, fx->width, fx->height,
-                               fx->hdr_texture);
+                               fx->hdr_texture, TEMPORAL_FEEDBACK_DEFAULT);
 
             // Push the resolved frame back into hdr_fbo (the history side is
             // kept as next frame's accumulation buffer).
@@ -1890,7 +1908,8 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
 
             if (taa_resolving) {
                 cs_result_tex = run_temporal_accum(fx, fx->temporal_accum_program, &fx->cs_history,
-                                                   fx->width, fx->height, fx->cs_texture[1]);
+                                                   fx->width, fx->height, fx->cs_texture[1],
+                                                   TEMPORAL_FEEDBACK_DEFAULT);
                 cs_accum_ran = true;
             }
             check_gl_error("postfx contact shadows");
@@ -1961,12 +1980,37 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             draw_fullscreen_quad(fx->quad_vao);
 
             if (fx->ssao_enabled) {
+                // Accumulate the RAW sweep, then blur the accumulation -- the
+                // SVGF order the SSGI chain below already uses, and not merely a
+                // stylistic match to it.
+                //
+                // The accumulator bounds history to the current frame's 3x3
+                // neighbourhood, which is a spatial stand-in for "has this pixel
+                // disoccluded". That reads correctly only while the neighbourhood
+                // still carries the estimator's spread. Blurring first is exactly
+                // what removes that spread: the 4x4 box exists to cancel the
+                // rotation tile, so by the time the clamp looked at it, the
+                // window had collapsed to narrower than the frame-to-frame
+                // variation it was supposed to admit, and every frame it snapped
+                // history back onto the current noisy estimate. Ordered this way
+                // the clamp sees the unfiltered spread and passes the history it
+                // was meant to keep, while still rejecting a genuine disocclusion.
+                GLuint ao_denoise_src = fx->ssao_texture[0];
+                if (taa_resolving) {
+                    ao_denoise_src =
+                        run_temporal_accum(fx, fx->temporal_accum_program, &fx->ao_history,
+                                           fx->ssao_width, fx->ssao_height, fx->ssao_texture[0],
+                                           TEMPORAL_FEEDBACK_AO);
+                    ao_accum_ran = true;
+                }
+
                 // 4x4 box blur cancels the rotation-noise tile; depth-bilateral
                 // when the edge filter is on so it does not bleed across silhouettes.
                 glBindFramebuffer(GL_FRAMEBUFFER, fx->ssao_fbo[1]);
+                glViewport(0, 0, fx->ssao_width, fx->ssao_height);
                 glUseProgram(fx->ssao_blur_program->id);
                 glActiveTexture(GL_TEXTURE0);
-                glBindTexture(GL_TEXTURE_2D, fx->ssao_texture[0]);
+                glBindTexture(GL_TEXTURE_2D, ao_denoise_src);
                 glActiveTexture(GL_TEXTURE1);
                 glBindTexture(GL_TEXTURE_2D, fx->aux_texture);
                 // texelSize is per-draw now (the contact-shadow blur runs the
@@ -1977,16 +2021,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
                 uniform_set_int(fx->ssao_blur_program->uniforms, "edgeAware",
                                 fx->ao_edge_filter_enabled ? 1 : 0);
                 draw_fullscreen_quad(fx->quad_vao);
-
-                // Temporal accumulation: reproject the history by velocity and
-                // blend so the per-frame jittered occlusion integrates into a
-                // stable result.
-                if (taa_resolving) {
-                    ao_result_tex =
-                        run_temporal_accum(fx, fx->temporal_accum_program, &fx->ao_history,
-                                           fx->ssao_width, fx->ssao_height, fx->ssao_texture[1]);
-                    ao_accum_ran = true;
-                }
+                ao_result_tex = fx->ssao_texture[1];
             }
         }
         if (!ao_accum_ran)
@@ -2001,7 +2036,8 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             if (taa_resolving) {
                 gi_result_tex =
                     run_temporal_accum(fx, fx->ssgi_accum_program, &fx->ssgi_history,
-                                       fx->ssao_width, fx->ssao_height, fx->ssgi_gi_texture);
+                                       fx->ssao_width, fx->ssao_height, fx->ssgi_gi_texture,
+                                       TEMPORAL_FEEDBACK_DEFAULT);
                 gi_accum_ran = true;
             }
 
