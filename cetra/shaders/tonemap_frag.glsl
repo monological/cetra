@@ -86,7 +86,13 @@ vec3 pbrNeutralTonemap(vec3 color)
     float newPeak = 1.0 - d * d / (peak + d - startCompression);
     color *= newPeak / peak;
 
-    float g = 1.0 / (desaturation * (peak - newPeak) + 1.0);
+    // Weight toward white, and the leading 1.0 - is load-bearing. Without it the
+    // blend inverts: slight compression (peak just over startCompression, so
+    // peak - newPeak near 0) would desaturate ~fully instead of not at all, and
+    // the curve stops being a roll-off and becomes a hard clip at 0.76 -- every
+    // highlight snapping to a flat white plateau while still looking, in code,
+    // like tonemapping.
+    float g = 1.0 - 1.0 / (desaturation * (peak - newPeak) + 1.0);
     return mix(color, newPeak * vec3(1.0), g);
 }
 
