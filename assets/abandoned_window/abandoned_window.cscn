@@ -25,7 +25,9 @@
         0.82,
         0.42
       ],
-      "intensity": 2.97
+      "intensity": 115.0,
+      "intensity_unit": "lumens",
+      "range": 12.0
     }
   ],
   "light_overrides": [
