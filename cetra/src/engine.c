@@ -1654,8 +1654,20 @@ static void _engine_gui_panel(Engine* engine) {
                             (int)(sizeof(tonemap_names) / sizeof(tonemap_names[0])), -1))
             fx->tonemap_mode = (PostFXTonemapMode)(tm + 1);
         igCheckbox("Auto Exposure", &engine->exposure->automatic);
-        // With auto on, the manual slider becomes an EV bias on the adapted value
-        igSliderFloat("Exposure", &engine->exposure->bias, 0.05f, 8.0f, "%.2f", 0);
+        // Two controls because they are two quantities, shown one at a time.
+        // One slider over one range could not serve both: under a physical
+        // camera the value is stops, where the linear range 0.05..8 cannot
+        // reach 0 (neutral) and cannot stop down at all.
+        if (engine->exposure->physical) {
+            igSliderFloat("EV Bias", &engine->exposure->bias_stops, -6.0f, 6.0f, "%+.2f EV", 0);
+            if (igIsItemHovered(0))
+                igSetTooltip("Exposure compensation on the physical camera. Positive opens up.");
+        } else {
+            igSliderFloat("Exposure", &engine->exposure->multiplier, 0.05f, 8.0f, "%.2f", 0);
+            if (igIsItemHovered(0))
+                igSetTooltip("Linear multiplier. Authoring a post.camera in a .cscn switches "
+                             "this to an EV bias instead.");
+        }
 
         _begin_effect_group("Bloom", &fx->bloom_enabled);
         igSliderFloat("Bloom Strength", &fx->bloom_strength, 0.0f, 0.1f, "%.3f", 0);

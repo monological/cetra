@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "_comment": [
+    "Auto-exposure convergence gate with the SCREEN-SPACE passes live",
+    "(spec 10.2 phase 4). Run with --ssgi --fog.",
+    "",
+    "10.1 demonstrated convergence on a bare punctual-lit room, where SSR",
+    "contributed nothing (no catcher-marked surface), and SSGI and fog were off.",
+    "So it proved the loop stable on the one configuration in which none of the",
+    "clamps that meter through it were live -- WS_REFLECT_MAX, WS_BOUNCE_MAX and",
+    "WS_MEDIA_MAX all sit upstream of the metering pass.",
+    "",
+    "Sky mode rather than an HDR file so the fixture needs nothing outside the",
+    "repo; the catcher (and therefore SSR) requires an IBL to exist at all.",
+    "Auto-exposure is left ON -- that is the whole point, so no exposure key."
+  ],
+  "models": [
+    { "path": "sss_fixture.gltf" }
+  ],
+  "environment": {
+    "mode": "sky",
+    "sun": { "elevation": 22.0, "azimuth": 130.0 }
+  },
+  "camera": {
+    "eye": [0.0, 0.35, 1.6],
+    "target": [0.0, 0.0, 0.0],
+    "fov": 40
+  },
+  "post": {
+    "tonemap": "neutral",
+    "auto_exposure": true,
+    "fog": {
+      "enabled": true,
+      "density": 0.08
+    }
+  }
+}

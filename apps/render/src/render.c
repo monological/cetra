@@ -1465,10 +1465,9 @@ int main(int argc, char** argv) {
             ex->aperture = args.aperture;
             ex->shutter_speed = args.shutter_speed;
             ex->iso = args.iso;
-            // `bias` is a stops offset under the camera, so the linear default of
-            // 1.0 would silently open up a stop. Only an explicit value means a
-            // bias here.
-            ex->bias = args.exposure > 0.0f ? args.exposure : 0.0f;
+            // -E means stops under a camera, so it lands on bias_stops rather
+            // than the multiplier. Absent, 0 = neutral compensation.
+            ex->bias_stops = args.exposure > 0.0f ? args.exposure : 0.0f;
             // A physical camera IS the exposure decision, so adaptation does not
             // also get a say -- they are alternative methods, not stacking ones.
             // Left on, metering compares absolute scene radiance against an
@@ -1480,7 +1479,7 @@ int main(int argc, char** argv) {
             printf("Physical exposure: f/%.1f %.4gs ISO%.0f -> EV100 %.2f\n", ex->aperture,
                    ex->shutter_speed, ex->iso, exposure_ev100(ex));
         } else if (args.exposure > 0.0f) {
-            ex->bias = args.exposure;
+            ex->multiplier = args.exposure;
         }
         // An explicit override wins; failing that, naming an exposure pins the
         // frame, which is what every scene authored before the key existed.

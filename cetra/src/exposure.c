@@ -6,10 +6,18 @@
 #include "exposure.h"
 #include "ext/log.h"
 
-// Floor on the adaptation gain: 6 stops of darkening. Without it a scene
-// containing one very dark frame (a cut to black, the camera inside geometry)
-// drives the gain toward zero and takes seconds to climb back.
-#define EXPOSURE_MIN_GAIN (1.0f / 64.0f)
+// How far the adaptation may stop DOWN, in stops. It bounds darkening, not
+// brightening: gain = key / metered, so a dark frame yields a LARGE gain, which
+// the 1.0 ceiling catches. This end only engages on bright scenes.
+//
+// It has to span the photometric range now that the meter reads absolute nits.
+// Metered means run from ~1e-3 (starlight) to ~1e5 (direct sun); against a
+// 0.18 key that is roughly 20 stops of stopping down. The old value was 6
+// stops, from when the buffer was normalised so that ~1.0 was white -- at which
+// point anything over 11.5 nits pinned here and rendered blown out. Measured on
+// a sunlit-ish fixture metering 700 nits: the gain sat exactly on the old floor
+// and could not move.
+#define EXPOSURE_MAX_STOPS_DOWN 20.0f
 
 Exposure* create_exposure(void) {
     Exposure* ex = malloc(sizeof(Exposure));
@@ -19,14 +27,15 @@ Exposure* create_exposure(void) {
     }
     memset(ex, 0, sizeof(Exposure));
 
-    ex->bias = 1.0f;
+    ex->multiplier = 1.0f;
+    ex->bias_stops = 0.0f;
     ex->automatic = true;
     ex->key = 0.18f;
 
     // Off by default: every scene authored before the physical camera existed
-    // expects `bias` to be a linear multiplier, and switching silently would
-    // rescale all of them. The settings are a lit interior (EV100 ~6.9), which
-    // is what the fixtures are, so a scene opting in starts somewhere sane.
+    // expects the linear multiplier, and switching silently would rescale all
+    // of them. The settings are a lit interior (EV100 ~6.9), which is what the
+    // fixtures are, so a scene opting in starts somewhere sane.
     ex->physical = false;
     ex->aperture = 2.8f;
     ex->shutter_speed = 1.0f / 60.0f;
@@ -55,11 +64,11 @@ float exposure_camera_multiplier(const Exposure* ex) {
     if (!ex)
         return 1.0f;
     if (!ex->physical)
-        return ex->bias; // linear mode: the multiplier it always was
+        return ex->multiplier; // the linear value it always was
     // Saturation-based speed (Frostbite / ISO 12232): the luminance that maps to
-    // white is 1.2 * 2^EV100, so exposure is its reciprocal. `bias` is a stops
-    // offset here, not a multiplier -- positive opens up.
-    float ev = exposure_ev100(ex) - ex->bias;
+    // white is 1.2 * 2^EV100, so exposure is its reciprocal. Positive stops open
+    // up, matching exposure compensation on a real camera.
+    float ev = exposure_ev100(ex) - ex->bias_stops;
     return 1.0f / (1.2f * exp2f(ev));
 }
 
@@ -75,7 +84,7 @@ float exposure_auto_gain(const Exposure* ex) {
     // must not do: a subject framed against a black void meters low and would
     // blow out.
     float gain = ex->key / ex->adapted_luminance;
-    return fminf(fmaxf(gain, EXPOSURE_MIN_GAIN), 1.0f);
+    return fminf(fmaxf(gain, exp2f(-EXPOSURE_MAX_STOPS_DOWN)), 1.0f);
 }
 
 float exposure_multiplier(const Exposure* ex) {

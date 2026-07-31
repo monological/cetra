@@ -25,14 +25,21 @@ void main()
     // sun legitimately exceeds -- the meter would read it as overcast.
     vec3 hdr = min(texture(hdrTex, TexCoords).rgb, vec3(WS_SCENE_MAX)) * oneOverPreExposure;
     float lum = dot(hdr, vec3(0.2126, 0.7152, 0.0722));
-    // Clamp the metered range so extremes can't hijack the average. The floor
-    // is the key itself: texels darker than the key meter AS the key, so the
-    // mean can never fall below it and the auto gain (key / mean) tops out at
-    // 1x -- auto-exposure only ever DARKENS an over-bright scene. Boosting
-    // dark scenes is what it must not do: a subject framed against black void
-    // (no environment) would otherwise meter low and blow out. Sharing the
-    // autoKey uniform with the tonemap makes that invariant structural. The
-    // ceiling stops one sun pixel from crushing everything else.
-    lum = clamp(lum, autoKey, 10000.0);
+    // Clamp the metered range so extremes can't hijack the average. Both bounds
+    // are ABSOLUTE cd/m^2, because the conversion above already happened.
+    //
+    // The floor is the key itself: texels darker than the key meter AS the key,
+    // so the mean can never fall below it and the auto gain (key / mean) tops
+    // out at 1x -- auto-exposure only ever DARKENS an over-bright scene.
+    // Boosting dark scenes is what it must not do: a subject framed against a
+    // black void (no environment) would otherwise meter low and blow out.
+    //
+    // The ceiling stops one sun pixel from crushing everything else. It has to
+    // sit well above any plausible scene MEAN, which in nits is a much bigger
+    // number than it looks: an overcast sky is ~8000 and a sunlit white surface
+    // ~1e4, so the old 10000 was ordinary daylight rather than the unreachable
+    // guard it was when 1.0 meant white. At that value an exterior metered as
+    // overcast no matter how bright it actually was.
+    lum = clamp(lum, autoKey, 1.0e6);
     FragColor = vec4(log2(lum), 0.0, 0.0, 1.0);
 }

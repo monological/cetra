@@ -27,20 +27,27 @@
 // the exposure ratcheted instead of settling. Anything added upstream of the
 // metering pass has to be a fixed multiple of RADIANCE, or that returns.
 typedef struct Exposure {
-    // false = `bias` is the linear multiplier it always was, which is what every
-    // scene authored before the physical camera existed still gets.
-    //
-    // true = aperture/shutter/iso produce the multiplier and `bias` becomes a
-    // stops offset instead -- the meaning it already carries under `automatic`,
-    // so the field never has two. Photometric lights are the wrong magnitude for
-    // a hand-picked multiplier: a 127 cd bulb at 2 m is ~32 lux, and nothing
-    // about "0.7846" tells you whether that lands mid-grey. Aperture, shutter
-    // and ISO do, being the numbers a camera in that room would use.
+    // Selects which of the two fields below is the camera. Photometric lights
+    // are the wrong magnitude for a hand-picked multiplier -- a 127 cd bulb at
+    // 2 m is ~32 lux, and nothing about "0.7846" tells you whether that lands
+    // mid-grey. Aperture, shutter and ISO do, being the numbers a camera in
+    // that room would use. Off by default so scenes authored before the
+    // physical camera existed keep their multiplier.
     bool physical;
-    float aperture;      // f-number (f/2.8 -> 2.8)
-    float shutter_speed; // seconds (1/60 s -> 0.01667)
-    float iso;           // ISO sensitivity (100, 400, ...)
-    float bias;          // linear multiplier, or stops when physical/automatic
+    float aperture;      // f-number (f/2.8 -> 2.8), physical only
+    float shutter_speed; // seconds (1/60 s -> 0.01667), physical only
+    float iso;           // ISO sensitivity (100, 400, ...), physical only
+
+    // Two genuinely different quantities, because they are read on the two
+    // sides of `physical` and nothing sensible converts between them. They were
+    // one field, `bias`, whose comment claimed the meaning switched on
+    // `physical || automatic`; it switched on `physical` alone, and the GUI
+    // slider drove it through one hardcoded linear range either way -- so under
+    // an authored camera it was stops, could not reach 0, and could not stop
+    // down. spores is the case that proves the old claim wrong: automatic on,
+    // physical off, and it relies on a linear 0.15.
+    float multiplier; // linear, when !physical
+    float bias_stops; // EV offset, when physical (positive opens up)
 
     bool automatic; // adapt to the scene's metered luminance
     float key;      // middle grey the metered mean is mapped to (0.18)
