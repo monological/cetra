@@ -138,6 +138,13 @@ typedef struct CetraSceneDesc {
     // which the implicit coupling made unexpressible.
     bool has_auto_exposure;
     bool auto_exposure;
+    // post.camera: aperture/shutter/iso. Present switches exposure from a linear
+    // multiplier to EV100, and `exposure` above becomes a bias in stops. Absent
+    // leaves both alone, which is what every scene written before this expects.
+    bool has_camera_exposure;
+    float aperture;      // f-number
+    float shutter_speed; // seconds
+    float iso;
     bool has_bloom_enabled;
     bool bloom_enabled;
     bool has_bloom_strength;

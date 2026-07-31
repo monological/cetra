@@ -113,6 +113,11 @@ int cscene_setup(RenderArgs* args, CetraSceneDesc** out_cscn) {
     // adapting from an authored starting exposure, or pin the frame without
     // naming a value. Guarded like every other field here, so the CLI still wins
     // -- the precedence this whole function implements is CLI > scene > default.
+    if (cscn->has_camera_exposure && args->aperture <= 0.0f) {
+        args->aperture = cscn->aperture;
+        args->shutter_speed = cscn->shutter_speed;
+        args->iso = cscn->iso;
+    }
     if (cscn->has_auto_exposure && args->auto_exposure_override < 0) {
         args->auto_exposure_override = cscn->auto_exposure ? 1 : 0;
         log_info("cscene: auto-exposure %s (authored)", cscn->auto_exposure ? "on" : "off");

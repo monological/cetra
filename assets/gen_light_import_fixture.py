@@ -3,13 +3,24 @@
 
 A single flat red cube (baseColorFactor, no textures) lit by an embedded
 KHR_lights_punctual directional light with intensity 2049 -- the lux value
-Blender's exporter writes for its default 3 W/m^2 sun (watts x683). Regression
-for photometric light import (import.c process_ai_lights):
-  - without the lux->renderer-scale conversion the raw ~11.6k radiance clips
-    every channel to 1.0 and the cube renders white instead of red;
-  - the render app must also report "skipping auto key light" since the asset
-    ships its own light.
-Renders red iff the conversion works. Flat color, no texture deps.
+Blender's exporter writes for its default 3 W/m^2 sun (watts x683).
+
+What this fixture guards INVERTED at spec 10.0. It used to prove that import.c
+divided that 2049 down to renderer scale (3.0); a raw 2049 clipped the cube to
+white, so "renders red" meant the conversion ran. Since 9.9 made intensity
+candela/lux outright, that divide made every imported light 683x too dim and was
+deleted -- so the same asset now guards the opposite property:
+
+  - 2049 lux must arrive on Light.intensity as 2049, unmodified. Check the import
+    log line, not the pixels: the value is the assertion.
+  - exposure is what makes it viewable now, not a rescale at import. The sibling
+    .cscn authors a post.camera bright enough for a 2049 lux sun, so a red cube
+    still means "correct", but for a different reason -- if it clips white, the
+    camera is wrong, not the importer.
+  - the render app must still report "skipping auto key light", since the asset
+    ships its own.
+
+Flat color, no texture deps.
 Regenerate with: python3 assets/gen_light_import_fixture.py
 """
 

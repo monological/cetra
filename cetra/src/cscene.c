@@ -249,6 +249,21 @@ static void parse_post(CetraSceneDesc* d, const cJSON* root) {
     d->has_exposure = get_float(post, "exposure", &d->exposure);
     d->has_auto_exposure = get_bool(post, "auto_exposure", &d->auto_exposure);
 
+    const cJSON* cam = cJSON_GetObjectItemCaseSensitive(post, "camera");
+    if (cJSON_IsObject(cam)) {
+        // All three or none: a partial camera would silently mix authored
+        // settings with defaults, and the result reads as a wrong exposure with
+        // nothing pointing at the missing key.
+        bool a = get_float(cam, "aperture", &d->aperture);
+        bool s = get_float(cam, "shutter", &d->shutter_speed);
+        bool i = get_float(cam, "iso", &d->iso);
+        if (a && s && i) {
+            d->has_camera_exposure = true;
+        } else {
+            log_warn("cscene: post.camera needs aperture, shutter and iso together; ignored");
+        }
+    }
+
     const cJSON* bloom = cJSON_GetObjectItemCaseSensitive(post, "bloom");
     if (cJSON_IsObject(bloom)) {
         d->has_bloom_enabled = get_bool(bloom, "enabled", &d->bloom_enabled);

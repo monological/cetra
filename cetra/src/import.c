@@ -92,10 +92,14 @@ static bool is_gltf_path(const char* path) {
     return dot && (strcasecmp(dot, ".gltf") == 0 || strcasecmp(dot, ".glb") == 0);
 }
 
-// Ceiling for imported light intensity. Formats without spec-defined units
-// (FBX "percent" scales, watt-baked Blender FBX exports) can arrive orders of
-// magnitude above renderer scale (~1-10); anything past this bound would blow
-// out every lit pixel regardless of exposure.
+// Ceiling for imported light intensity, and ONLY for formats without
+// spec-defined units (FBX "percent" scales, watt-baked Blender exports). glTF is
+// exempt: its values are candela/lux by specification, and real fixtures live
+// well above this -- a 1600 lm bulb is ~127 cd, a car headlight tens of
+// thousands. Clamping those would be corrupting correct data.
+//
+// The bound is deliberately loose. It exists to stop a unitless number arriving
+// orders of magnitude hot, not to express what a plausible light is.
 static const float IMPORTED_LIGHT_INTENSITY_MAX = 100.0f;
 
 /*
@@ -1217,10 +1221,19 @@ void process_ai_lights(const struct aiScene* scene, Light*** lights, size_t* num
                          light->name ? light->name : "unnamed", (int)ai_light->mType);
                 break;
         }
-        if (light->type != LIGHT_DIRECTIONAL && has_attenuation) {
-            light->constant = ai_light->mAttenuationConstant;
-            light->linear = ai_light->mAttenuationLinear;
-            light->quadratic = ai_light->mAttenuationQuadratic;
+        // KHR_lights_punctual's optional `range` is the distance past which the
+        // light contributes nothing -- exactly what the falloff window wants, so
+        // it maps straight onto Light.range. Assimp has no field for it and drops
+        // the extension property, so what arrives instead is the attenuation
+        // triple it synthesises. Recover the range from that: the quadratic term
+        // is fitted so the old falloff crossed the visibility floor at the range,
+        // which inverts to r = sqrt(1/q).
+        //
+        // Absent (or directional), range stays 0 = unbounded inverse-square,
+        // which is KHR's own default.
+        if (light->type != LIGHT_DIRECTIONAL && has_attenuation &&
+            ai_light->mAttenuationQuadratic > 1e-6f) {
+            light->range = sqrtf(1.0f / ai_light->mAttenuationQuadratic);
         }
 
         // Blender also bakes the light's power into the color (e.g. an 800W
@@ -1234,21 +1247,26 @@ void process_ai_lights(const struct aiScene* scene, Light*** lights, size_t* num
             light->intensity *= peak;
         }
 
-        // glTF punctual lights are photometric (KHR_lights_punctual:
-        // directional in lux, point/spot in candela). Blender exports a sun's
-        // W/m^2 as lux (x683); undo that so authored intensities land at
-        // renderer scale (a 17 W sun imports as 17, not 11611).
-        if (photometric_units && light->intensity > 1.0f) {
-            float photometric = light->intensity;
-            light->intensity /= 683.0f;
-            log_info("Light '%s': photometric intensity %.0f -> %.2f (lux/candela to renderer scale)",
-                     ai_light->mName.data, photometric, light->intensity);
-        }
-
-        // Units without a spec (see IMPORTED_LIGHT_INTENSITY_MAX) can still
-        // arrive absurdly hot; clamp rather than blow out every lit pixel.
-        if (light->intensity > IMPORTED_LIGHT_INTENSITY_MAX) {
-            log_warn("Light '%s': intensity %.0f exceeds sane ceiling, clamped to %.0f",
+        // glTF punctual lights are ALREADY the unit the renderer wants --
+        // candela for point/spot, lux for directional, per KHR_lights_punctual --
+        // so they pass through untouched.
+        //
+        // This used to divide by 683 to reach an arbitrary "renderer scale" of
+        // roughly 1-10. That scale stopped existing when punctual falloff became
+        // inverse-square and intensity became candela (spec 9.9): dividing here
+        // now makes every imported light 683x too dim. Deleting the divide is the
+        // point of this change, not a side effect of it.
+        //
+        // Only the unspecified-unit formats still need a guard. FBX carries
+        // "percent" scales and watt-baked Blender exports, which have no defined
+        // relationship to candela and can arrive arbitrarily hot.
+        if (photometric_units) {
+            log_info("Light '%s': %.1f %s (glTF photometric, imported as authored)",
+                     ai_light->mName.data, light->intensity,
+                     light->type == LIGHT_DIRECTIONAL ? "lux" : "cd");
+        } else if (light->intensity > IMPORTED_LIGHT_INTENSITY_MAX) {
+            log_warn("Light '%s': intensity %.0f has no defined unit and exceeds the sane "
+                     "ceiling, clamped to %.0f",
                      ai_light->mName.data, light->intensity, IMPORTED_LIGHT_INTENSITY_MAX);
             light->intensity = IMPORTED_LIGHT_INTENSITY_MAX;
         }

@@ -28,6 +28,11 @@ typedef struct {
     // frame, 1 keep adapting. Two booleans could not say "unset", which is what
     // lets an authored exposure imply a pin only when nothing asked otherwise.
     int auto_exposure_override;
+    // Physical camera from post.camera; aperture <= 0 means unset, so exposure
+    // stays the linear multiplier it has always been.
+    float aperture;
+    float shutter_speed;
+    float iso;
     int no_flip_uv;             // For assets baked with the opposite V convention
     float ao_radius;            // AO/GI reach override in world units (0 = auto)
     int force_taa;              // TAA even in headless (temporal passes active)

@@ -1459,8 +1459,21 @@ int main(int argc, char** argv) {
     }
 
     if (engine->postfx) {
-        if (args.exposure > 0.0f)
+        if (args.aperture > 0.0f) {
+            engine->postfx->physical_exposure = true;
+            engine->postfx->aperture = args.aperture;
+            engine->postfx->shutter_speed = args.shutter_speed;
+            engine->postfx->iso = args.iso;
+            // `exposure` is a stops bias under the camera, so the linear default
+            // of 1.0 would silently open up a stop. Only an explicit value means
+            // a bias here.
+            engine->postfx->exposure = args.exposure > 0.0f ? args.exposure : 0.0f;
+            printf("Physical exposure: f/%.1f %.4gs ISO%.0f -> EV100 %.2f\n",
+                   engine->postfx->aperture, engine->postfx->shutter_speed, engine->postfx->iso,
+                   postfx_ev100(engine->postfx));
+        } else if (args.exposure > 0.0f) {
             engine->postfx->exposure = args.exposure;
+        }
         // An explicit override wins; failing that, naming an exposure pins the
         // frame, which is what every scene authored before the key existed.
         if (args.auto_exposure_override >= 0)
