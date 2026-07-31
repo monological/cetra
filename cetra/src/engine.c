@@ -1456,26 +1456,26 @@ static void _engine_gui_panel(Engine* engine) {
         }
         Light* light = scene->lights[sel];
         if (light) {
-            // Intensity is photometric, and WHICH quantity depends on the type,
-            // so the widget has to name its unit -- a bare number is unreadable.
-            // Log scale because the useful span is four decades: a domestic lamp
-            // and midday sun are both on here.
-            static const struct {
-                const char* fmt;
-                float max;
-            } UNITS[] = {
-                [LIGHT_DIRECTIONAL] = {"%.0f lx", 120000.0f}, // noon sun ~100k lx
-                [LIGHT_POINT] = {"%.1f cd", 400.0f},          // ~5000 lm isotropic
-                [LIGHT_SPOT] = {"%.1f cd", 400.0f},
-                [LIGHT_AREA] = {"%.1f nits", 2000.0f},
+            // Shown in the unit the light was AUTHORED in, so a lamp written as
+            // 30 lm in a .cscn reads 30 lm here rather than the 2.4 cd it shades
+            // as. Log scale because the useful span is four decades: a domestic
+            // lamp and midday sun are both on this one slider.
+            static const float UNIT_MAX[] = {
+                [LIGHT_UNITS_CANDELA] = 400.0f,   // ~5000 lm isotropic
+                [LIGHT_UNITS_LUMENS] = 5000.0f,   // a bright domestic fixture
+                [LIGHT_UNITS_LUX] = 120000.0f,    // noon sun ~100k lx
+                [LIGHT_UNITS_NITS] = 2000.0f,
             };
-            float intensity = light->intensity;
-            if (igSliderFloat("Intensity", &intensity, 0.0f, UNITS[light->type].max,
-                              UNITS[light->type].fmt, ImGuiSliderFlags_Logarithmic))
-                light->intensity = intensity;
+            char fmt[16];
+            snprintf(fmt, sizeof(fmt), "%%.1f %s", light_units_name(light->units));
+            float intensity = light_intensity_in_units(light);
+            if (igSliderFloat("Intensity", &intensity, 0.0f, UNIT_MAX[light->units], fmt,
+                              ImGuiSliderFlags_Logarithmic))
+                set_light_intensity_units(light, intensity, light->units);
             if (igIsItemHovered(0))
-                igSetTooltip("Photometric. Point/spot in candela (lumens / 4pi), sun in lux, "
-                             "panel in nits. Falloff is inverse-square, bounded by Range.");
+                igSetTooltip("Photometric, in the unit the light was authored in. Point/spot "
+                             "shade in candela (lumens / 4pi), sun in lux, panel in nits. "
+                             "Falloff is inverse-square, bounded by Range.");
 
             if (light->type == LIGHT_POINT || light->type == LIGHT_SPOT) {
                 float range = light->range;

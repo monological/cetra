@@ -4,6 +4,8 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+#include "light.h" // LightUnits: authored intensity units carry through to Light
+
 /*
  * Cetra scene format (.cscn): a JSON scene description that owns the look
  * and references model assets -- the engine-native data glTF cannot carry
@@ -53,7 +55,11 @@ typedef struct CSceneLight {
     CSceneLightType type;
     float position[3];
     float color[3];
+    // As authored, in `units` -- NOT converted here. The conversion lives on
+    // Light (set_light_intensity_units), so a .cscn and a glTF import cannot
+    // disagree about what a lumen is.
     float intensity;
+    LightUnits units;
     float direction[3]; // directional/spot/area (travel direction)
     float size[2];      // area: width x height
     bool has_up;

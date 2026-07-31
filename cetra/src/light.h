@@ -7,6 +7,23 @@
 
 typedef enum { LIGHT_DIRECTIONAL, LIGHT_POINT, LIGHT_SPOT, LIGHT_AREA, LIGHT_UNKNOWN } LightType;
 
+// The unit an intensity was AUTHORED in. Every light type has exactly one unit
+// the shading path can use -- candela for point and spot, lux for directional,
+// nits for an area panel -- and `Light.intensity` always holds that one, so no
+// conversion ever reaches a shader.
+//
+// This enum exists for the one unit that is neither: lumens. It is what a bulb's
+// box prints and what an artist reaches for, and it is NOT what inverse-square
+// falloff integrates. Storing which one was written lets the value be handed
+// back in the same unit it arrived in -- a lamp authored as 30 lm reads 30 lm,
+// not the 2.39 cd it is shaded as.
+typedef enum {
+    LIGHT_UNITS_CANDELA, // cd; point + spot, and what they are shaded in
+    LIGHT_UNITS_LUMENS,  // lm; point + spot, authored only -- Phi/4pi to candela
+    LIGHT_UNITS_LUX,     // lx; directional
+    LIGHT_UNITS_NITS,    // cd/m^2; area panels
+} LightUnits;
+
 typedef struct Light {
     char* name;
 
@@ -31,7 +48,11 @@ typedef struct Light {
     vec3 color;
     vec3 specular;
     vec3 ambient;
+
+    // Always in the canonical unit for `type` (candela / lux / nits), whatever
+    // `units` says was authored -- shading reads this directly.
     float intensity;
+    LightUnits units;
 
     // Where the inverse-square falloff is windowed to zero, and the cull radius
     // (spec 9.9). 0 = unbounded, which is also KHR_lights_punctual's default;
@@ -76,7 +97,20 @@ void set_light_size(Light* light, float width, float height);
 void free_light(Light* light);
 void print_light(const Light* light);
 
-// Display name for a light type, for logs and GUI labels. Never NULL.
+// Set an intensity authored in `units`, converting to the type's canonical unit.
+// Requires the type to already be set. A unit the type cannot express warns and
+// is treated as canonical.
+void set_light_intensity_units(Light* light, float intensity, LightUnits units);
+
+// `light->intensity` expressed back in `light->units` -- the inverse of the
+// conversion above, for showing an author the number they wrote.
+float light_intensity_in_units(const Light* light);
+
+// The only unit a type can be shaded in; also what set_light_type resets to.
+LightUnits light_canonical_units(LightType type);
+
+// Display names, for logs and GUI labels. Never NULL.
 const char* light_type_name(LightType type);
+const char* light_units_name(LightUnits units);
 
 #endif // _LIGHT_H_

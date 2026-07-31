@@ -145,21 +145,33 @@ static void parse_lights(CetraSceneDesc* d, const cJSON* root) {
         }
         if (!get_float(l, "intensity", &out->intensity))
             out->intensity = 1.0f;
-        // Intensity is candela, the unit inverse-square falloff makes meaningful.
-        // Authoring in lumens is the friendlier end though -- it is what a bulb's
-        // box prints -- so accept it and convert here, once, rather than leaving
-        // every consumer to wonder which unit it holds.
-        //
-        // Phi/(4*pi) is the isotropic conversion. Applied to spots too, on
-        // purpose: dividing by the cone's solid angle instead would make
-        // narrowing a beam brighten it, which is right for a bare emitter and
-        // wrong for how anyone expects a spot control to behave.
+        // Authored unit only. The conversion to the type's canonical unit is
+        // Light's job, so this parser and the glTF importer cannot drift apart
+        // on what a lumen is. Absent = the canonical unit for the type.
+        out->units = LIGHT_UNITS_CANDELA;
+        switch (out->type) {
+        case CSCENE_LIGHT_DIRECTIONAL:
+            out->units = LIGHT_UNITS_LUX;
+            break;
+        case CSCENE_LIGHT_AREA:
+            out->units = LIGHT_UNITS_NITS;
+            break;
+        default:
+            break;
+        }
         const cJSON* unit = cJSON_GetObjectItemCaseSensitive(l, "intensity_unit");
         if (cJSON_IsString(unit) && unit->valuestring) {
             if (strcasecmp(unit->valuestring, "lumens") == 0)
-                out->intensity /= 4.0f * (float)M_PI;
-            else if (strcasecmp(unit->valuestring, "candela") != 0)
-                log_warn("cscene: light '%s' unknown intensity_unit '%s' (candela|lumens)",
+                out->units = LIGHT_UNITS_LUMENS;
+            else if (strcasecmp(unit->valuestring, "candela") == 0)
+                out->units = LIGHT_UNITS_CANDELA;
+            else if (strcasecmp(unit->valuestring, "lux") == 0)
+                out->units = LIGHT_UNITS_LUX;
+            else if (strcasecmp(unit->valuestring, "nits") == 0)
+                out->units = LIGHT_UNITS_NITS;
+            else
+                log_warn("cscene: light '%s' unknown intensity_unit '%s' "
+                         "(candela|lumens|lux|nits)",
                          out->name, unit->valuestring);
         }
 

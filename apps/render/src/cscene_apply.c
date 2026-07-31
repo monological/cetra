@@ -169,19 +169,10 @@ void add_cscene_lights(Scene* scene, const CetraSceneDesc* cscn) {
         set_light_name(light, sl->name[0] ? sl->name : "cscn_light");
         set_light_original_position(light, (float*)sl->position);
         set_light_color(light, (float*)sl->color);
-        set_light_intensity(light, sl->intensity);
-        // Range bounds the punctual falloff; absent means keep create_light()'s
-        // default. The old attenuation triple is parsed and warned about in
-        // cscene.c but deliberately not applied here -- storing a value the
-        // shaders no longer read is how a dead knob keeps looking live.
-        if (sl->has_range)
-            set_light_range(light, sl->range);
-        // Type-independent: every light type now honours cast_shadows (spec 9.8
-        // gave point and area lights maps), so it is set once rather than per
-        // branch. The switch below only carries what genuinely varies by type.
-        if (sl->cast_shadows)
-            set_light_cast_shadows(light, true);
-
+        // The type switch runs BEFORE the intensity: the type decides which unit
+        // the authored value converts into, and set_light_type resets the unit
+        // to that type's own. Setting intensity first would have the conversion
+        // read a still-unknown type and then be wiped.
         switch (sl->type) {
         case CSCENE_LIGHT_AREA:
             set_light_type(light, LIGHT_AREA);
@@ -213,6 +204,19 @@ void add_cscene_lights(Scene* scene, const CetraSceneDesc* cscn) {
                    sl->cast_shadows ? ", shadows" : "");
             break;
         }
+        set_light_intensity_units(light, sl->intensity, sl->units);
+        // Range bounds the punctual falloff; absent means keep create_light()'s
+        // default. The old attenuation triple is parsed and warned about in
+        // cscene.c but deliberately not applied here -- storing a value the
+        // shaders no longer read is how a dead knob keeps looking live.
+        if (sl->has_range)
+            set_light_range(light, sl->range);
+        // Type-independent: every light type now honours cast_shadows (spec 9.8
+        // gave point and area lights maps), so it is set once rather than per
+        // branch. The switch above only carries what genuinely varies by type.
+        if (sl->cast_shadows)
+            set_light_cast_shadows(light, true);
+
         add_light_to_scene(scene, light);
 
         SceneNode* light_node = create_node();
@@ -240,7 +244,11 @@ void apply_cscene_light_overrides(Scene* scene, const CetraSceneDesc* cscn, floa
                    ov->size_from_angle);
         }
         if (ov->has_intensity) {
-            set_light_intensity(light, ov->intensity);
+            // In whatever unit the light it overrides was authored in, so an
+            // override on a lumens lamp reads as lumens too. An override block
+            // carries no intensity_unit of its own; inheriting is the only
+            // reading that does not silently change what the number means.
+            set_light_intensity_units(light, ov->intensity, light->units);
         }
     }
 }

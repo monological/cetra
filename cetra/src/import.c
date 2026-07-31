@@ -1221,6 +1221,12 @@ void process_ai_lights(const struct aiScene* scene, Light*** lights, size_t* num
                          light->name ? light->name : "unnamed", (int)ai_light->mType);
                 break;
         }
+        // The switch assigns light->type directly rather than through
+        // set_light_type, so the unit it implies has to be applied here. An
+        // imported light is never in lumens: glTF authors candela and lux, and
+        // the unspecified-unit formats are clamped as candela below.
+        light->units = light_canonical_units(light->type);
+
         // KHR_lights_punctual's optional `range` is the distance past which the
         // light contributes nothing -- exactly what the falloff window wants, so
         // it maps straight onto Light.range. Assimp has no field for it and drops
@@ -1262,8 +1268,7 @@ void process_ai_lights(const struct aiScene* scene, Light*** lights, size_t* num
         // relationship to candela and can arrive arbitrarily hot.
         if (photometric_units) {
             log_info("Light '%s': %.1f %s (glTF photometric, imported as authored)",
-                     ai_light->mName.data, light->intensity,
-                     light->type == LIGHT_DIRECTIONAL ? "lux" : "cd");
+                     ai_light->mName.data, light->intensity, light_units_name(light->units));
         } else if (light->intensity > IMPORTED_LIGHT_INTENSITY_MAX) {
             log_warn("Light '%s': intensity %.0f has no defined unit and exceeds the sane "
                      "ceiling, clamped to %.0f",

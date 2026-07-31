@@ -59,6 +59,64 @@ void set_light_type(Light* light, LightType type) {
     if (!light)
         return;
     light->type = type;
+    // The authored unit is only meaningful against a type, so retyping a light
+    // drops back to that type's own unit rather than carrying a lumens flag onto
+    // something that cannot be authored in lumens.
+    light->units = light_canonical_units(type);
+}
+
+LightUnits light_canonical_units(LightType type) {
+    switch (type) {
+        case LIGHT_DIRECTIONAL:
+            return LIGHT_UNITS_LUX;
+        case LIGHT_AREA:
+            return LIGHT_UNITS_NITS;
+        default: // point, spot, and not-yet-typed
+            return LIGHT_UNITS_CANDELA;
+    }
+}
+
+const char* light_units_name(LightUnits units) {
+    switch (units) {
+        case LIGHT_UNITS_LUMENS:
+            return "lm";
+        case LIGHT_UNITS_LUX:
+            return "lx";
+        case LIGHT_UNITS_NITS:
+            return "nits";
+        default:
+            return "cd";
+    }
+}
+
+// Phi/(4*pi), the isotropic conversion. Applied to spots too, on purpose:
+// dividing by the cone's solid angle instead would make narrowing a beam
+// brighten it, which is right for a bare emitter and wrong for how anyone
+// expects a spot control to behave.
+#define LUMENS_PER_CANDELA (4.0f * (float)M_PI)
+
+void set_light_intensity_units(Light* light, float intensity, LightUnits units) {
+    if (!light)
+        return;
+    LightUnits canonical = light_canonical_units(light->type);
+    // Lumens is the one authored unit that converts, and only into candela.
+    bool convertible =
+        units == canonical || (units == LIGHT_UNITS_LUMENS && canonical == LIGHT_UNITS_CANDELA);
+    if (!convertible) {
+        log_warn("light '%s': %s does not convert for a %s light; reading it as %s",
+                 light->name ? light->name : "(unnamed)", light_units_name(units),
+                 light_type_name(light->type), light_units_name(canonical));
+        units = canonical;
+    }
+    light->units = units;
+    light->intensity = units == LIGHT_UNITS_LUMENS ? intensity / LUMENS_PER_CANDELA : intensity;
+}
+
+float light_intensity_in_units(const Light* light) {
+    if (!light)
+        return 0.0f;
+    return light->units == LIGHT_UNITS_LUMENS ? light->intensity * LUMENS_PER_CANDELA
+                                              : light->intensity;
 }
 
 void set_light_specular(Light* light, vec3 specular) {
@@ -111,19 +169,14 @@ void set_light_color(Light* light, vec3 color) {
     glm_vec3_copy(color, light->color);
 }
 
-/**
- * Sets the intensity of the light.
- *
- * @param light A pointer to the Light structure.
- * @param intensity The intensity value to be set. This is a scalar value
- *                  that affects the overall brightness of the light.
- *                  Typical values range from 0 (no light) upwards, where
- *                  1 represents the light's natural intensity.
- */
+// Set intensity in the light type's own unit: candela for point and spot, lux
+// for a directional, nits for an area panel. To author in lumens, which is the
+// only other unit that converts, call set_light_intensity_units.
 void set_light_intensity(Light* light, float intensity) {
     if (!light)
         return;
     light->intensity = intensity;
+    light->units = light_canonical_units(light->type);
 }
 
 void set_light_range(Light* light, float range) {
@@ -195,12 +248,13 @@ void print_light(const Light* light) {
     printf("<Light name='%s', type='%s', original_position=(%f, %f, %f) global_position=(%f, %f, "
            "%f), direction=(%f, %f, %f), "
            "color=(%f, %f, %f), specular=(%f, %f, %f), ambient=(%f, %f, %f), "
-           "intensity=%f, range=%f, cutOff=%f, outerCutOff=%f>\n",
+           "intensity=%f %s, range=%f, cutOff=%f, outerCutOff=%f>\n",
            light->name, light_type_name(light->type), light->original_position[0],
            light->original_position[1],
            light->original_position[2], light->global_position[0], light->global_position[1],
            light->global_position[2], light->direction[0], light->direction[1], light->direction[2],
            light->color[0], light->color[1], light->color[2], light->specular[0],
            light->specular[1], light->specular[2], light->ambient[0], light->ambient[1],
-           light->ambient[2], light->intensity, light->range, light->cutOff, light->outerCutOff);
+           light->ambient[2], light_intensity_in_units(light), light_units_name(light->units),
+           light->range, light->cutOff, light->outerCutOff);
 }
