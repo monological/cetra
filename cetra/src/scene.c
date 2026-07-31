@@ -72,6 +72,7 @@ Scene* create_scene() {
     scene->sky = NULL;
     scene->wind = NULL;
     scene->gi_volume = NULL;
+    glm_vec3_zero(scene->ambient_radiance); // no IBL and no authored ambient = black
     scene->render_skybox = false;
     scene->skybox_brightness = 1.0f;
     scene->skybox_ground_projection = false;

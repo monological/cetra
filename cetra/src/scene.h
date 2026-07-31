@@ -138,6 +138,13 @@ typedef struct Scene {
     // the one-time resolve so the render loop does not re-scan every frame.
     bool heights_resolved;
 
+    // Uniform ambient radiance in cd/m^2, used only when no IBL is loaded. A
+    // real emitter with a real unit, so it scales with nothing and tracks
+    // nothing; zero (the default) means an unlit surface is black. Replaced a
+    // hardcoded 3%-of-white floor that could not be expressed correctly in
+    // either space -- see spec 10.1 phase 5.
+    vec3 ambient_radiance;
+
     bool render_skybox;
     float skybox_brightness;       // Linear env multiplier (tone mapping is the post pass's job)
     bool skybox_ground_projection; // Project env onto finite dome + ground

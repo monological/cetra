@@ -1733,6 +1733,7 @@ int main(int argc, char** argv) {
     // logic so they count as "model ships lights" for the auto-key-light skip
     // and the no-IBL three-point fallback. Spawning them after that decision
     // silently stacks a default rig on top of the light you asked for.
+    apply_cscene_ambient(scene, cscn);
     add_cscene_lights(scene, cscn);
     spawn_point_light_grid(scene, &args);
     spawn_area_light(scene, &args);

@@ -158,6 +158,14 @@ int cscene_setup(RenderArgs* args, CetraSceneDesc** out_cscn) {
     return 0;
 }
 
+void apply_cscene_ambient(Scene* scene, const CetraSceneDesc* cscn) {
+    if (!scene || !cscn || !cscn->has_ambient)
+        return;
+    glm_vec3_copy((float*)cscn->ambient, scene->ambient_radiance);
+    printf("Scene file: ambient %.3f %.3f %.3f cd/m2 (no-IBL fill)\n", cscn->ambient[0],
+           cscn->ambient[1], cscn->ambient[2]);
+}
+
 void add_cscene_lights(Scene* scene, const CetraSceneDesc* cscn) {
     if (!scene || !cscn)
         return;

@@ -47,7 +47,12 @@ layout(std140) uniform ViewParams {
 // Values carried over unchanged from when they were scattered literals, so
 // naming them was inert. Stops are the unit to retune in: raising one keeps
 // more range and more fireflies, lowering it the reverse.
-const float WS_LIGHT_MAX = 10.0;    // +3.3 stops: one light's contribution, pre-accumulation
+//
+// A ceiling belongs here ONLY if the thing it bounds is genuinely measured in
+// multiples of white. pbr_frag's per-light clamp was not -- it bounded a number
+// of nits -- and moved out to become a dimensionless BRDF_MAX. Anything that
+// ends up scaling with 1/preExposure does not belong on this list, because
+// auto-exposure meters through it and will chase it (spec 10.1 phase 5).
 const float WS_SCENE_MAX = 60000.0; // +15.9 stops: fp16 guard on the finished pixel
 const float WS_REFLECT_MAX = 2.0;   // +1 stop: SSR firefly clamp
 const float WS_BOUNCE_MAX = 4.0;    // +2 stops: SSGI gather firefly clamp

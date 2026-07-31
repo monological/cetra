@@ -172,6 +172,9 @@ uniform samplerCube prefilteredMap;
 uniform sampler2D brdfLUT;
 uniform int iblEnabled;
 uniform float iblIntensity;
+// Uniform ambient radiance (cd/m^2) for scenes with no IBL. A real emitter, so
+// it does NOT track exposure or light magnitude; zero means unlit is black.
+uniform vec3 ambientRadiance;
 uniform float maxReflectionLOD;
 // Multi-scatter energy compensation toggle (inert unless iblEnabled)
 uniform int energyCompEnabled;
@@ -201,6 +204,17 @@ uniform float probeMaxLOD;
 uniform float probeBoxFade;
 
 const float PI = 3.14159265359;
+
+// Firefly ceiling on the BRDF -- dimensionless, so it is independent of both
+// light magnitude and exposure. That independence is the whole point; a ceiling
+// on the shaded PRODUCT is a number of nits, and no fixed number of nits is
+// correct at two light magnitudes or two exposures (spec 10.1 phase 5).
+//
+// Diffuse peaks at albedo/PI <= 1/PI, so this only ever touches specular. The
+// value is the GGX peak D/4 at roughness ~0.09: everything rougher passes
+// untouched, and the sub-pixel spikes sharper than that -- which is what aliases
+// into white sparkle on normal-mapped metal -- get cut.
+const float BRDF_MAX = 1000.0;
 
 // With alpha-to-coverage active only fully invisible fragments are discarded
 // (fractional alpha becomes MSAA coverage); otherwise the binary cutoff
@@ -1057,8 +1071,10 @@ void main() {
                     aShadow = punctualShadow(aLayer, WorldPos, max(dot(N, aL), 0.0));
                 }
 
-                Lo += min((areaDiff + areaSpec) * clusterLights[li].colorIntensity.xyz,
-                          vec3(WS_LIGHT_MAX)) * aShadow;
+                // Same split as the punctual clamp below: the LTC response is
+                // the dimensionless factor, colorIntensity carries the nits.
+                Lo += min(areaDiff + areaSpec, vec3(BRDF_MAX)) *
+                      clusterLights[li].colorIntensity.xyz * aShadow;
                 continue;
             }
 
@@ -1196,16 +1212,20 @@ void main() {
             sheenScale = 1.0 - maxComp(sheenColor);
         }
 
-        // Add this light's contribution with shadow. Firefly clamp: a
-        // sub-pixel GGX spike carries far more energy than the pixel
-        // legitimately integrates, aliasing into white sparkle across
-        // low-roughness normal-mapped surfaces (and before the fp16 clamp,
-        // overflowing to NaN). Highlights saturate the tonemap well below
-        // this cap, so only the aliasing energy is lost.
-        Lo += min((((kD * albedoMap / PI + specular) * sheenScale + sheenSpec) * (1.0 - coatAtten) +
-                   coatSpec) *
-                      radiance * NdotL * shadow,
-                  vec3(WS_LIGHT_MAX));
+        // Add this light's contribution with shadow. Firefly clamp: a sub-pixel
+        // GGX spike carries far more energy than the pixel legitimately
+        // integrates, aliasing into white sparkle across low-roughness
+        // normal-mapped surfaces.
+        //
+        // Clamped on the BRDF, which is where the spike is and which is
+        // dimensionless -- NOT on the product, which carries radiance. Bounding
+        // the product means bounding a number of NITS, and no fixed number of
+        // nits is right at two different light magnitudes or two different
+        // exposures. That is what made auto-exposure ratchet (spec 10.1 phase 5).
+        vec3 brdf = ((kD * albedoMap / PI + specular) * sheenScale + sheenSpec) *
+                        (1.0 - coatAtten) +
+                    coatSpec;
+        Lo += min(brdf, vec3(BRDF_MAX)) * radiance * NdotL * shadow;
 
         // SSS: tap this light's Lambert diffuse into the separated skin-diffuse
         // buffer (blurred later; specular stays in FragColor). Separate accumulate
@@ -1342,22 +1362,19 @@ void main() {
                       sheenColor * sheenPre * sheenE * aoMap * iblIntensity;
         }
     } else {
-        // Fallback to simple ambient when IBL is disabled (diffuse-only, so
-        // it yields to transmission like the other diffuse terms)
-        // 0.03 is "3% of white", not a radiance -- a display-relative floor so an
-        // unlit surface is not pure black. It is therefore already in WORKING
-        // space, and the oneOverPreExposure cancels the conversion the composite
-        // applies to the rest of this term, leaving it 3% of white at any light
-        // magnitude.
+        // No IBL: a uniform ambient the scene authors, in cd/m^2 like every other
+        // emitter. Diffuse-only, so it yields to transmission like the other
+        // diffuse terms. Zero by default -- an unlit surface is black, because
+        // that is what an unlit surface is.
         //
-        // Without that it was a fixed quantity of scene radiance tied to no light
-        // in the scene, so scaling every light 1000x and closing the camera 1000x
-        // left everything else in proportion and dropped this by 1000x -- the
-        // failure the scale-invariance test caught, visible as coloured walls
-        // going saturated because the term that washes them toward white had
-        // collapsed. Re-tuning the number cannot fix that; a constant in scene
-        // radiance is non-scale-invariant at ANY value.
-        ambient = vec3(0.03) * albedoMap * aoMap * (1.0 - transmissionEff) * oneOverPreExposure;
+        // This replaced a hardcoded "3% of white", which had no correct form. As
+        // scene radiance it was a fixed quantity tied to no light, so scaling
+        // every light broke it (the scale-invariance failure). Made
+        // display-relative to fix that, it became a term whose ABSOLUTE value
+        // grew as exposure closed, and auto-exposure -- which meters absolute
+        // radiance -- chased it (spec 10.1 phase 5). No constant satisfies both,
+        // because the term was never physical. A real emitter is.
+        ambient = ambientRadiance * albedoMap * aoMap * (1.0 - transmissionEff);
     }
 
     // Screen-space transmission (KHR_materials_transmission): the diffuse

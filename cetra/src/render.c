@@ -391,6 +391,11 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
                 uniform_set_int(u, "brdfLUT", IBL_BRDF_LUT_TEXTURE_UNIT);
                 uniform_set_int(u, "iblEnabled", 0);
             }
+            // Only the no-IBL branch reads it, but set it unconditionally: a
+            // stale value on a program that later loses its IBL would be a
+            // silent one.
+            uniform_set_vec3(u, "ambientRadiance",
+                             scene ? scene->ambient_radiance : (vec3){0.0f, 0.0f, 0.0f});
 
             // Local reflection probe (parallax-corrected specular), rebinding
             // the IBL prefilter unit to the probe capture. The probe joins

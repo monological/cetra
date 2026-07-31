@@ -123,7 +123,9 @@ typedef struct CetraSceneDesc {
     bool env_probe_scene;
     bool has_env_intensity;
     float env_intensity; // IBL/world ambient strength
-    bool has_env_sun;    // sky-mode sun angles authored (else the sky default)
+    bool has_ambient;
+    float ambient[3]; // env.ambient: uniform fill radiance (cd/m^2), no-IBL only
+    bool has_env_sun; // sky-mode sun angles authored (else the sky default)
     float env_sun_elevation_deg;
     float env_sun_azimuth_deg;
 

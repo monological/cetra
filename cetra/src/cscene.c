@@ -91,6 +91,10 @@ static void parse_environment(CetraSceneDesc* d, const cJSON* root) {
     copy_string(d->env_hdr, CSCENE_MAX_PATH, cJSON_GetObjectItemCaseSensitive(env, "hdr"));
     get_bool(env, "probe_scene", &d->env_probe_scene);
     d->has_env_intensity = get_float(env, "intensity", &d->env_intensity);
+    // Uniform fill in cd/m^2, for scenes with no IBL. A real emitter, so a scale
+    // test has to scale it alongside the lights or leave it at zero -- the same
+    // rule the fog `ambient` follows.
+    d->has_ambient = get_vec3(env, "ambient", d->ambient);
     // sky-mode sun angles (degrees): both required, else the sky's own default.
     const cJSON* sun = cJSON_GetObjectItemCaseSensitive(env, "sun");
     if (cJSON_IsObject(sun)) {

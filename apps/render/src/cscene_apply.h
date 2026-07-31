@@ -24,6 +24,7 @@ int cscene_setup(RenderArgs* args, CetraSceneDesc** out_cscn);
 // Create the scene file's point lights (area-fill conversions) and attach
 // them to the graph. Must run before the auto-key-light decision so they
 // count as "model ships lights".
+void apply_cscene_ambient(Scene* scene, const CetraSceneDesc* cscn);
 void add_cscene_lights(Scene* scene, const CetraSceneDesc* cscn);
 
 // Apply per-light overrides (penumbra from authored sun angle, intensity).
