@@ -1114,13 +1114,9 @@ void main() {
         vec3 Hraw = V + L;
         float hLen2 = dot(Hraw, Hraw);
         vec3 H = hLen2 > 1e-8 ? Hraw * inversesqrt(hLen2) : N;
-        // Pre-exposed HERE, not at the final write, because the per-light clamp
-        // below (WS_LIGHT_MAX) sits between the two. Clamping scene radiance
-        // against a working-space constant is what destroyed hue on bright
-        // surfaces: a 522-nit red channel and a 33-nit green one both landed on
-        // 10 and came out grey. In working space that constant means what it
-        // always claimed -- ten times white.
-        vec3 radiance = lightCI * attenuation * preExposure;
+        // Scene radiance, NOT pre-exposed -- Lo is accumulated in scene radiance
+        // throughout and converted once at the composite. See the note there.
+        vec3 radiance = lightCI * attenuation;
 
         // Cook-Torrance BRDF with optional anisotropy
         float NDF;
@@ -1409,11 +1405,27 @@ void main() {
     // the 0.04 roughness floor, times grazing Fresnel) overflows the store
     // to +INF, which the tonemap turns into NaN and displays as black
     // flecks tracing the specular highlights.
-    // Lo is already in working space (its radiance was pre-exposed above, so the
-    // per-light clamp could be meaningful); these three still carry scene
-    // radiance and are converted here. The fp16 ceiling then guards a working-
-    // space value, which is the only scale at which a fixed ceiling makes sense.
-    vec3 color = min(Lo + (ambient + transmitted + emissiveMap) * preExposure, vec3(WS_SCENE_MAX));
+    // THE conversion to working space, for every term, exactly once.
+    //
+    // It used to sit on the per-light `radiance` instead, because a clamp
+    // measured in nits sat between there and here and had to see converted
+    // values. Spec 10.2 phase 5 made that clamp dimensionless (BRDF_MAX), so
+    // nothing in between is scale-sensitive any more and preExposure factors
+    // straight out of the whole sum.
+    //
+    // Which matters because Lo is accumulated from four places -- the punctual
+    // loop, the area-light branch, the SSS back-transmission, and emissive --
+    // and when each needed its own multiply, three of them did not get one.
+    // Area lights were off by 1/preExposure at every exposure but 1.0, which no
+    // golden could see. One conversion site cannot have that bug.
+    //
+    // The fp16 ceiling then guards a working-space value, which is the only
+    // scale at which a fixed ceiling means anything. RGBA16F maxes at 65504 and
+    // a tight GGX spike (peak ~1.2e5 at the 0.04 roughness floor, times grazing
+    // Fresnel) would otherwise store +INF, which the tonemap turns to NaN and
+    // shows as black flecks tracing the highlights.
+    vec3 color =
+        min((Lo + ambient + transmitted + emissiveMap) * preExposure, vec3(WS_SCENE_MAX));
 
     // Cascade acceptance view: tint by the fragment's selected cascade so
     // split geometry and snap stability are visible (dead when csmDebug 0)
@@ -1479,11 +1491,20 @@ void main() {
     // post pass blurs .rgb and composites hdr + blur - this (diffuse softens,
     // FragColor's specular stays sharp), reading .a per pixel to select the
     // profile. Discarded unless the engine enables attachment 4 (sssEnabled).
-    // Working space already: sssDiffuse accumulates the same pre-exposed
-    // `radiance` the main loop does. postfx folds this attachment back into the
-    // HDR buffer after the SSS blur, so a second multiply here would put skin on
-    // a different scale from every other surface.
-    DiffuseOut = vec4(subsurface * sssDiffuse, float(max(sssProfileIndex + 1, 0)));
+    // Converted here for the same reason FragColor is, and it has to be the same
+    // conversion: postfx folds this back as hdr + blur(D) - D, so if D is on a
+    // different scale the subtract does not cancel the sharp diffuse already in
+    // hdr and skin goes negative.
+    //
+    // sssDiffuse is filled from two taps -- the direct one in the light loop and
+    // the IBL one below it. Both are scene radiance now; while the loop
+    // pre-exposed and the IBL tap did not, this attachment held a mix of two
+    // scales and the comment here asserted it did not.
+    //
+    // Clamped like FragColor: this is an RGBA16F attachment too, and it was the
+    // one G-buffer write with no ceiling at all.
+    DiffuseOut = vec4(min(subsurface * sssDiffuse * preExposure, vec3(WS_SCENE_MAX)),
+                      float(max(sssProfileIndex + 1, 0)));
 
     // Weighted-blended OIT accumulate (guarded so oitPass 0 leaves FragColor and
     // the opaque/alpha-blend paths byte-identical): premultiplied color * depth
