@@ -71,6 +71,7 @@ const float PI = 3.14159265359;
 // Clustered light data for the local-light scattering below.
 #include "lights_ubo.glsl"
 #include "froxel.glsl"
+#include "view.glsl"
 
 // Van der Corput radical inverse in the given base: successive frames land at
 // low-discrepancy positions, so a fixed number of them average to an evenly
@@ -218,9 +219,16 @@ void main() {
         S += clusterLights[li].colorIntensity.xyz * (atten * phase);
     }
 
+    // Scene radiance -> working space HERE, upstream of the clamp, for the same
+    // reason pbr_frag pre-exposes its per-light radiance rather than its final
+    // write: the clamp sits between, and a working-space constant applied to
+    // scene radiance flattens whatever it bites. The volume is therefore stored
+    // pre-exposed, and froxel_composite must NOT convert again.
+    //
     // Keep shafts HDR (they must bloom) but bound hostile parameter combos away
-    // from fp16 overflow, as the screen-space march does.
-    vec4 result = vec4(min(S, vec3(500.0)), sigma);
+    // from fp16 overflow, as the screen-space march does. 500 now means 500x
+    // white rather than 500 nits.
+    vec4 result = vec4(min(S * preExposure, vec3(500.0)), sigma);
 
     // Temporal reprojection: find where this cell's world position sat in the
     // previous frame's volume and blend against it. Unlike the screen-space

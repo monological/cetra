@@ -69,10 +69,15 @@ void main() {
     //     S = S_fog + T_fog * S_aerial,   T = T_fog * T_aerial
     // Exact for two media in series given that ordering; the fully physical
     // answer is one medium in one volume, which is a later consolidation.
-    // In-scatter is independently computed radiance -- froxel_inject/integrate
-    // never read the HDR buffer -- so unlike SSGI/SSR/OIT it does not inherit
-    // pre-exposure and must apply it. Transmittance (.a) is a ratio and must
-    // NOT be scaled.
-    FragColor = vec4((fogLayer.rgb + aerialLayer.rgb * fogLayer.a) * preExposure,
+    // The two media arrive in DIFFERENT spaces, which is the whole subtlety here.
+    // Fog is already working space -- froxel_inject pre-exposes before its own
+    // clamp, so converting it again would double-apply. Aerial comes from a LUT
+    // baked upstream of the HDR buffer (aerial_lut_frag) and is still absolute
+    // radiance, so it converts here. Getting this backwards puts the two media on
+    // different scales and reads as fog or haze at the wrong strength rather than
+    // as an error.
+    //
+    // Transmittance (.a) is a ratio in both and is never scaled.
+    FragColor = vec4(fogLayer.rgb + aerialLayer.rgb * preExposure * fogLayer.a,
                      fogLayer.a * aerialLayer.a);
 }
