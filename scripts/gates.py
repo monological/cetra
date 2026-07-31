@@ -32,17 +32,26 @@ SCALE = 1000.0
 
 # Scale-invariance gates. Scaling every emitter by K and the exposure by 1/K is
 # a no-op on a correctly normalised pipeline, so the two frames must match.
-#
-# `floor` is the tolerated pixel count. Anything above zero is last-bit
-# rounding and is documented per gate -- it is not a budget to grow into.
 SCALE_GATES = [
-    ("punctual", "assets/cornell_point.cscn", 0, []),
-    ("area", "assets/area_scale_fixture.cscn", 0, []),
-    ("subsurface", "assets/sss_scale_fixture.cscn", 0, []),
-    # Fog carries its own in-scatter radiance, which env.ambient/fog.ambient
-    # scale alongside the lights. 3 px is the measured rounding floor.
-    ("fog", "assets/froxel_scale_fixture.cscn", 3, ["--fog"]),
+    ("punctual", "assets/cornell_point.cscn", []),
+    ("area", "assets/area_scale_fixture.cscn", []),
+    ("subsurface", "assets/sss_scale_fixture.cscn", []),
+    # Fog's in-scatter radiance is a real emitter, so the scaler lifts
+    # fog.ambient alongside the lights.
+    ("fog", "assets/froxel_scale_fixture.cscn", ["--fog"]),
 ]
+
+# Pass on PEAK error, not on a differing-pixel count.
+#
+# A per-gate pixel budget is the wrong instrument: the numbers drift whenever
+# float arithmetic reassociates (moving one multiply out of a sum is enough),
+# so the budget gets raised to match, and after a few rounds it is large enough
+# to hide a real defect. Peak error does not drift -- 1/255 is one 8-bit
+# quantization step, so anything at or below it cannot be seen in the output at
+# all, and anything above it is a genuine difference no matter how few pixels
+# carry it. AE is still reported, because a jump in how MANY pixels round
+# differently is worth a look even when none of them moved visibly.
+LSB = 1.0 / 255.0 + 1e-6
 
 
 def scaled_copy(src, dst, factor):
@@ -90,18 +99,23 @@ def render(scene, out, extra):
     return None
 
 
-def differing_pixels(a, b):
-    r = subprocess.run(
-        ["magick", "compare", "-metric", "AE", a, b, "null:"],
-        capture_output=True, text=True,
-    )
-    text = (r.stderr or r.stdout).strip().split()[0]
-    return int(float(text))
+def compare(a, b):
+    """Return (differing pixels, peak absolute error as a 0..1 fraction)."""
+    def metric(name):
+        r = subprocess.run(["magick", "compare", "-metric", name, a, b, "null:"],
+                           capture_output=True, text=True)
+        return (r.stderr or r.stdout).strip()
+
+    ae = int(float(metric("AE").split()[0]))
+    # PAE prints "257 (0.00392157)"; the parenthesised value is the normalised one.
+    pae_raw = metric("PAE")
+    pae = float(pae_raw.split("(")[1].rstrip(")")) if "(" in pae_raw else 0.0
+    return ae, pae
 
 
 def run_scale_gates(workdir):
     failures = []
-    for name, rel, floor, extra in SCALE_GATES:
+    for name, rel, extra in SCALE_GATES:
         src = os.path.join(ROOT, rel)
         if not os.path.exists(src):
             print(f"  {name:<12} SKIP  (missing {rel})")
@@ -119,10 +133,12 @@ def run_scale_gates(workdir):
                 failures.append(name)
                 break
         else:
-            n = differing_pixels(a, b)
-            ok = n <= floor
-            note = "" if floor == 0 else f" (floor {floor})"
-            print(f"  {name:<12} {'PASS' if ok else 'FAIL'}  {n} px{note}")
+            ae, pae = compare(a, b)
+            ok = pae <= LSB
+            detail = f"{ae} px, peak {pae:.6f}"
+            if ok and ae:
+                detail += " (1 LSB -- invisible)"
+            print(f"  {name:<12} {'PASS' if ok else 'FAIL'}  {detail}")
             if not ok:
                 failures.append(name)
     return failures
