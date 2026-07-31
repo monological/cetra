@@ -1352,6 +1352,19 @@ static void _end_effect_group(void) {
     igEndDisabled();
 }
 
+// Combo entry for one light: "1: KeyLamp (Spot)", or the type alone when the
+// asset gave the light no name. The index leads because it is the only part
+// guaranteed unique -- ImGui keys widgets by label, so two identically named
+// lights would otherwise share one selectable.
+static void _light_gui_label(char* out, size_t out_size, const Light* light, int index) {
+    if (!light)
+        snprintf(out, out_size, "%d: <empty>", index);
+    else if (light->name && light->name[0])
+        snprintf(out, out_size, "%d: %s (%s)", index, light->name, light_type_name(light->type));
+    else
+        snprintf(out, out_size, "%d: %s", index, light_type_name(light->type));
+}
+
 // The main settings panel, in Dear ImGui. Sections are collapsing headers;
 // effect on/off states are checkboxes and their parameters appear indented
 // beneath them. Bound directly to the same engine/scene/postfx fields.
@@ -1420,11 +1433,29 @@ static void _engine_gui_panel(Engine* engine) {
     Scene* scene = get_current_scene(engine);
     if (scene && scene->light_count > 0 &&
         igCollapsingHeader_TreeNodeFlags("Lighting", ImGuiTreeNodeFlags_DefaultOpen)) {
-        // Both controls read light 0 and write every light: one value is all a
-        // single slider can honestly show, and a drag therefore flattens any
-        // key/fill ratio. Per-light selection is the fix and is not this.
-        Light* l0 = scene->lights[0];
-        if (l0) {
+        // The controls below address ONE light. A single slider cannot honestly
+        // show two different intensities, and writing every light on a drag
+        // flattens whatever key/fill ratio the scene was authored with.
+        static int sel = 0;
+        if (sel < 0 || sel >= (int)scene->light_count)
+            sel = 0; // a scene swap can leave the index past the new count
+        if (scene->light_count > 1) {
+            char label[128];
+            _light_gui_label(label, sizeof(label), scene->lights[sel], sel);
+            if (igBeginCombo("Light", label, 0)) {
+                for (size_t i = 0; i < scene->light_count; i++) {
+                    char item[128];
+                    _light_gui_label(item, sizeof(item), scene->lights[i], (int)i);
+                    if (igSelectable_Bool(item, (int)i == sel, 0, (ImVec2){0, 0}))
+                        sel = (int)i;
+                    if ((int)i == sel)
+                        igSetItemDefaultFocus();
+                }
+                igEndCombo();
+            }
+        }
+        Light* light = scene->lights[sel];
+        if (light) {
             // Intensity is photometric, and WHICH quantity depends on the type,
             // so the widget has to name its unit -- a bare number is unreadable.
             // Log scale because the useful span is four decades: a domestic lamp
@@ -1438,24 +1469,18 @@ static void _engine_gui_panel(Engine* engine) {
                 [LIGHT_SPOT] = {"%.1f cd", 400.0f},
                 [LIGHT_AREA] = {"%.1f nits", 2000.0f},
             };
-            float intensity = l0->intensity;
-            if (igSliderFloat("Intensity", &intensity, 0.0f, UNITS[l0->type].max,
-                              UNITS[l0->type].fmt, ImGuiSliderFlags_Logarithmic)) {
-                for (size_t i = 0; i < scene->light_count; i++)
-                    if (scene->lights[i])
-                        scene->lights[i]->intensity = intensity;
-            }
+            float intensity = light->intensity;
+            if (igSliderFloat("Intensity", &intensity, 0.0f, UNITS[light->type].max,
+                              UNITS[light->type].fmt, ImGuiSliderFlags_Logarithmic))
+                light->intensity = intensity;
             if (igIsItemHovered(0))
                 igSetTooltip("Photometric. Point/spot in candela (lumens / 4pi), sun in lux, "
                              "panel in nits. Falloff is inverse-square, bounded by Range.");
 
-            if (l0->type == LIGHT_POINT || l0->type == LIGHT_SPOT) {
-                float range = l0->range;
-                if (igSliderFloat("Range", &range, 0.0f, 100.0f, "%.1f m", 0)) {
-                    for (size_t i = 0; i < scene->light_count; i++)
-                        if (scene->lights[i])
-                            scene->lights[i]->range = range;
-                }
+            if (light->type == LIGHT_POINT || light->type == LIGHT_SPOT) {
+                float range = light->range;
+                if (igSliderFloat("Range", &range, 0.0f, 100.0f, "%.1f m", 0))
+                    light->range = range;
                 if (igIsItemHovered(0))
                     igSetTooltip("Where the inverse-square falloff is windowed to zero. Also "
                                  "the cull radius. 0 = unbounded.");

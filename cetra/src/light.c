@@ -171,36 +171,33 @@ void free_light(Light* light) {
     free(light);
 }
 
+const char* light_type_name(LightType type) {
+    switch (type) {
+        case LIGHT_DIRECTIONAL:
+            return "Directional";
+        case LIGHT_POINT:
+            return "Point";
+        case LIGHT_SPOT:
+            return "Spot";
+        case LIGHT_AREA:
+            return "Area";
+        default:
+            return "Unknown";
+    }
+}
+
 void print_light(const Light* light) {
     if (!light) {
         printf("<Invalid light pointer>\n");
         return;
     }
 
-    const char* typeString;
-    switch (light->type) {
-        case LIGHT_DIRECTIONAL:
-            typeString = "Directional";
-            break;
-        case LIGHT_POINT:
-            typeString = "Point";
-            break;
-        case LIGHT_SPOT:
-            typeString = "Spot";
-            break;
-        case LIGHT_AREA:
-            typeString = "AREA";
-            break;
-        default:
-            typeString = "Unknown";
-            break;
-    }
-
     printf("<Light name='%s', type='%s', original_position=(%f, %f, %f) global_position=(%f, %f, "
            "%f), direction=(%f, %f, %f), "
            "color=(%f, %f, %f), specular=(%f, %f, %f), ambient=(%f, %f, %f), "
            "intensity=%f, range=%f, cutOff=%f, outerCutOff=%f>\n",
-           light->name, typeString, light->original_position[0], light->original_position[1],
+           light->name, light_type_name(light->type), light->original_position[0],
+           light->original_position[1],
            light->original_position[2], light->global_position[0], light->global_position[1],
            light->global_position[2], light->direction[0], light->direction[1], light->direction[2],
            light->color[0], light->color[1], light->color[2], light->specular[0],

@@ -76,4 +76,7 @@ void set_light_size(Light* light, float width, float height);
 void free_light(Light* light);
 void print_light(const Light* light);
 
+// Display name for a light type, for logs and GUI labels. Never NULL.
+const char* light_type_name(LightType type);
+
 #endif // _LIGHT_H_
