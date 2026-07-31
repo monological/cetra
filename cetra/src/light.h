@@ -17,7 +17,13 @@ typedef enum { LIGHT_DIRECTIONAL, LIGHT_POINT, LIGHT_SPOT, LIGHT_AREA, LIGHT_UNK
 // falloff integrates. Storing which one was written lets the value be handed
 // back in the same unit it arrived in -- a lamp authored as 30 lm reads 30 lm,
 // not the 2.39 cd it is shaded as.
+//
+// DEFAULT is zero so a calloc'd Light starts there, and it resolves against the
+// type at READ time rather than being baked in by a setter. That is what keeps
+// the setters order-free: nothing here depends on type being assigned first, so
+// no call sequence can silently produce the wrong intensity.
 typedef enum {
+    LIGHT_UNITS_DEFAULT, // whatever the light's type is shaded in; resolved lazily
     LIGHT_UNITS_CANDELA, // cd; point + spot, and what they are shaded in
     LIGHT_UNITS_LUMENS,  // lm; point + spot, authored only -- Phi/4pi to candela
     LIGHT_UNITS_LUX,     // lx; directional
@@ -97,16 +103,22 @@ void set_light_size(Light* light, float width, float height);
 void free_light(Light* light);
 void print_light(const Light* light);
 
-// Set an intensity authored in `units`, converting to the type's canonical unit.
-// Requires the type to already be set. A unit the type cannot express warns and
-// is treated as canonical.
+// Set an intensity authored in `units`, converting to the canonical unit. The
+// conversion reads ONLY the unit -- lumens is Phi/4pi whatever the light is --
+// so this may be called before or after set_light_type with the same result.
 void set_light_intensity_units(Light* light, float intensity, LightUnits units);
 
-// `light->intensity` expressed back in `light->units` -- the inverse of the
-// conversion above, for showing an author the number they wrote.
+// `light->intensity` expressed back in the light's display unit -- the inverse
+// of the conversion above, for showing an author the number they wrote.
 float light_intensity_in_units(const Light* light);
 
-// The only unit a type can be shaded in; also what set_light_type resets to.
+// `light->units` with DEFAULT resolved against the current type. Everything that
+// displays or formats an intensity goes through this rather than reading the
+// field, so a light that was never given an explicit unit still reports the one
+// it is actually shaded in.
+LightUnits light_display_units(const Light* light);
+
+// The only unit a type can be shaded in.
 LightUnits light_canonical_units(LightType type);
 
 // Display names, for logs and GUI labels. Never NULL.

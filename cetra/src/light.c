@@ -59,10 +59,6 @@ void set_light_type(Light* light, LightType type) {
     if (!light)
         return;
     light->type = type;
-    // The authored unit is only meaningful against a type, so retyping a light
-    // drops back to that type's own unit rather than carrying a lumens flag onto
-    // something that cannot be authored in lumens.
-    light->units = light_canonical_units(type);
 }
 
 LightUnits light_canonical_units(LightType type) {
@@ -95,28 +91,32 @@ const char* light_units_name(LightUnits units) {
 // expects a spot control to behave.
 #define LUMENS_PER_CANDELA (4.0f * (float)M_PI)
 
+// Deliberately does NOT consult light->type. Lumens converts by Phi/4pi and
+// every other unit is already canonical, so the arithmetic is a function of the
+// unit alone -- which is what lets this be called in any order relative to
+// set_light_type. Whether lumens makes SENSE for the light is an authoring
+// question, checked where a type and a unit are read together (cscene.c), not a
+// correctness one that a call order could silently get wrong.
 void set_light_intensity_units(Light* light, float intensity, LightUnits units) {
     if (!light)
         return;
-    LightUnits canonical = light_canonical_units(light->type);
-    // Lumens is the one authored unit that converts, and only into candela.
-    bool convertible =
-        units == canonical || (units == LIGHT_UNITS_LUMENS && canonical == LIGHT_UNITS_CANDELA);
-    if (!convertible) {
-        log_warn("light '%s': %s does not convert for a %s light; reading it as %s",
-                 light->name ? light->name : "(unnamed)", light_units_name(units),
-                 light_type_name(light->type), light_units_name(canonical));
-        units = canonical;
-    }
     light->units = units;
     light->intensity = units == LIGHT_UNITS_LUMENS ? intensity / LUMENS_PER_CANDELA : intensity;
+}
+
+LightUnits light_display_units(const Light* light) {
+    if (!light)
+        return LIGHT_UNITS_CANDELA;
+    return light->units == LIGHT_UNITS_DEFAULT ? light_canonical_units(light->type) : light->units;
 }
 
 float light_intensity_in_units(const Light* light) {
     if (!light)
         return 0.0f;
-    return light->units == LIGHT_UNITS_LUMENS ? light->intensity * LUMENS_PER_CANDELA
-                                              : light->intensity;
+    // A pure unit conversion of the stored canonical value, so it stays true no
+    // matter which setter last touched the light.
+    return light_display_units(light) == LIGHT_UNITS_LUMENS ? light->intensity * LUMENS_PER_CANDELA
+                                                            : light->intensity;
 }
 
 void set_light_specular(Light* light, vec3 specular) {
@@ -172,11 +172,14 @@ void set_light_color(Light* light, vec3 color) {
 // Set intensity in the light type's own unit: candela for point and spot, lux
 // for a directional, nits for an area panel. To author in lumens, which is the
 // only other unit that converts, call set_light_intensity_units.
+//
+// Leaves `units` alone on purpose. It is a DISPLAY unit over a canonical value,
+// so it stays correct across a canonical write -- 2.39 cd and 30 lm are the same
+// light, and a lamp being shown in lumens should keep being shown in lumens.
 void set_light_intensity(Light* light, float intensity) {
     if (!light)
         return;
     light->intensity = intensity;
-    light->units = light_canonical_units(light->type);
 }
 
 void set_light_range(Light* light, float range) {
@@ -255,6 +258,7 @@ void print_light(const Light* light) {
            light->global_position[2], light->direction[0], light->direction[1], light->direction[2],
            light->color[0], light->color[1], light->color[2], light->specular[0],
            light->specular[1], light->specular[2], light->ambient[0], light->ambient[1],
-           light->ambient[2], light_intensity_in_units(light), light_units_name(light->units),
-           light->range, light->cutOff, light->outerCutOff);
+           light->ambient[2], light_intensity_in_units(light),
+           light_units_name(light_display_units(light)), light->range, light->cutOff,
+           light->outerCutOff);
 }

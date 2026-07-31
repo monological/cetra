@@ -1461,17 +1461,19 @@ static void _engine_gui_panel(Engine* engine) {
             // as. Log scale because the useful span is four decades: a domestic
             // lamp and midday sun are both on this one slider.
             static const float UNIT_MAX[] = {
-                [LIGHT_UNITS_CANDELA] = 400.0f,   // ~5000 lm isotropic
-                [LIGHT_UNITS_LUMENS] = 5000.0f,   // a bright domestic fixture
-                [LIGHT_UNITS_LUX] = 120000.0f,    // noon sun ~100k lx
+                [LIGHT_UNITS_DEFAULT] = 400.0f, // unreachable; light_display_units resolves it
+                [LIGHT_UNITS_CANDELA] = 400.0f, // ~5000 lm isotropic
+                [LIGHT_UNITS_LUMENS] = 5000.0f, // a bright domestic fixture
+                [LIGHT_UNITS_LUX] = 120000.0f,  // noon sun ~100k lx
                 [LIGHT_UNITS_NITS] = 2000.0f,
             };
+            LightUnits units = light_display_units(light);
             char fmt[16];
-            snprintf(fmt, sizeof(fmt), "%%.1f %s", light_units_name(light->units));
+            snprintf(fmt, sizeof(fmt), "%%.1f %s", light_units_name(units));
             float intensity = light_intensity_in_units(light);
-            if (igSliderFloat("Intensity", &intensity, 0.0f, UNIT_MAX[light->units], fmt,
+            if (igSliderFloat("Intensity", &intensity, 0.0f, UNIT_MAX[units], fmt,
                               ImGuiSliderFlags_Logarithmic))
-                set_light_intensity_units(light, intensity, light->units);
+                set_light_intensity_units(light, intensity, units);
             if (igIsItemHovered(0))
                 igSetTooltip("Photometric, in the unit the light was authored in. Point/spot "
                              "shade in candela (lumens / 4pi), sun in lux, panel in nits. "

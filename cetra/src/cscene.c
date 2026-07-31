@@ -145,20 +145,14 @@ static void parse_lights(CetraSceneDesc* d, const cJSON* root) {
         }
         if (!get_float(l, "intensity", &out->intensity))
             out->intensity = 1.0f;
-        // Authored unit only. The conversion to the type's canonical unit is
-        // Light's job, so this parser and the glTF importer cannot drift apart
-        // on what a lumen is. Absent = the canonical unit for the type.
-        out->units = LIGHT_UNITS_CANDELA;
-        switch (out->type) {
-        case CSCENE_LIGHT_DIRECTIONAL:
-            out->units = LIGHT_UNITS_LUX;
-            break;
-        case CSCENE_LIGHT_AREA:
-            out->units = LIGHT_UNITS_NITS;
-            break;
-        default:
-            break;
-        }
+        // Authored unit only -- the conversion is Light's job, so this parser and
+        // the glTF importer cannot drift apart on what a lumen is. Absent leaves
+        // DEFAULT, which resolves against the type when something displays it.
+        //
+        // This is also the one place a type and a unit are read from the same
+        // object, so it is where "lumens on a sun" gets caught. The setter
+        // cannot check it without depending on assignment order.
+        out->units = LIGHT_UNITS_DEFAULT;
         const cJSON* unit = cJSON_GetObjectItemCaseSensitive(l, "intensity_unit");
         if (cJSON_IsString(unit) && unit->valuestring) {
             if (strcasecmp(unit->valuestring, "lumens") == 0)
@@ -173,6 +167,22 @@ static void parse_lights(CetraSceneDesc* d, const cJSON* root) {
                 log_warn("cscene: light '%s' unknown intensity_unit '%s' "
                          "(candela|lumens|lux|nits)",
                          out->name, unit->valuestring);
+
+            bool punctual =
+                out->type == CSCENE_LIGHT_POINT || out->type == CSCENE_LIGHT_SPOT;
+            LightUnits canonical = out->type == CSCENE_LIGHT_DIRECTIONAL ? LIGHT_UNITS_LUX
+                                   : out->type == CSCENE_LIGHT_AREA      ? LIGHT_UNITS_NITS
+                                                                         : LIGHT_UNITS_CANDELA;
+            bool ok = out->units == LIGHT_UNITS_DEFAULT || out->units == canonical ||
+                      (out->units == LIGHT_UNITS_LUMENS && punctual);
+            if (!ok) {
+                log_warn("cscene: light '%s' is authored in %s, which a %s light is not "
+                         "measured in; using its own unit instead",
+                         out->name, unit->valuestring, type && cJSON_IsString(type)
+                                                           ? type->valuestring
+                                                           : "point");
+                out->units = LIGHT_UNITS_DEFAULT;
+            }
         }
 
         // Direction (travel direction) defines directional/spot/area; point ignores it.
