@@ -6,6 +6,11 @@
 #include "exposure.h"
 #include "ext/log.h"
 
+// Floor on the adaptation gain: 6 stops of darkening. Without it a scene
+// containing one very dark frame (a cut to black, the camera inside geometry)
+// drives the gain toward zero and takes seconds to climb back.
+#define EXPOSURE_MIN_GAIN (1.0f / 64.0f)
+
 Exposure* create_exposure(void) {
     Exposure* ex = malloc(sizeof(Exposure));
     if (!ex) {
@@ -56,4 +61,42 @@ float exposure_camera_multiplier(const Exposure* ex) {
     // offset here, not a multiplier -- positive opens up.
     float ev = exposure_ev100(ex) - ex->bias;
     return 1.0f / (1.2f * exp2f(ev));
+}
+
+float exposure_auto_gain(const Exposure* ex) {
+    if (!ex || !ex->automatic || !ex->adapted_valid)
+        return 1.0f;
+    if (!(ex->adapted_luminance > 0.0f))
+        return 1.0f;
+    // Capped at 1: auto-exposure only ever DARKENS an over-bright scene. The
+    // metering floor equals the key, so the measured mean cannot fall below it
+    // and this cannot exceed 1 -- but clamp anyway, because that invariant lives
+    // in a shader and this is the code depending on it. Brightening is what it
+    // must not do: a subject framed against a black void meters low and would
+    // blow out.
+    float gain = ex->key / ex->adapted_luminance;
+    return fminf(fmaxf(gain, EXPOSURE_MIN_GAIN), 1.0f);
+}
+
+float exposure_multiplier(const Exposure* ex) {
+    return exposure_camera_multiplier(ex) * exposure_auto_gain(ex);
+}
+
+void exposure_set_adapted_luminance(Exposure* ex, float luminance) {
+    if (!ex)
+        return;
+    // isfinite rejects the NaN a degenerate frame can produce and the INF an
+    // overflowed measure target can. Latching either would multiply into
+    // preExposure and blank every frame after it, with nothing to recover from.
+    if (!isfinite(luminance) || luminance <= 0.0f)
+        return;
+    ex->adapted_luminance = luminance;
+    ex->adapted_valid = true;
+}
+
+void exposure_reset_adaptation(Exposure* ex) {
+    if (!ex)
+        return;
+    ex->adapted_luminance = 0.0f;
+    ex->adapted_valid = false;
 }

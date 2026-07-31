@@ -13,7 +13,6 @@ out vec4 FragColor;
 uniform sampler2D hdrTex;
 uniform sampler2D bloomTex;
 uniform sampler2D aoTex; // Blurred SSAO, upsampled by its linear filter
-uniform float exposure;
 uniform float bloomStrength;
 uniform int bloomEnabled;
 uniform int aoEnabled;
@@ -22,10 +21,6 @@ uniform sampler2D normalsTex; // Resolved view-space normal .xyz + SSR marker .a
 uniform sampler2D ssrTex;     // Half-res reflection buffer
 uniform sampler2D albedoTex;  // Resolved albedo G-buffer (SSGI)
 uniform sampler2D giTex;      // Half-res gathered GI radiance (SSGI)
-// Auto-exposure: scale exposure by key / adapted average luminance, so the
-// scene's mean lands near photographic middle gray. The manual exposure
-// uniform then acts as an EV bias on top.
-uniform sampler2D lumTex; // 1x1 adapted log2 mean luminance
 // Specular occlusion: GTAO approximates DIFFUSE occlusion, so multiplying it
 // onto specular/reflections is wrong -- it darkens (and, at silhouettes,
 // shimmers) a bright grazing specular. These recover the reflection: aux .z/.w
@@ -37,8 +32,6 @@ uniform int specOccHasMetallic; // albedoTex.a carries metallic this frame (SSGI
 uniform sampler2D csTex;        // Contact-shadow visibility (spec 9.3), AO res
 uniform int csEnabled;          // Multiply the direct-light term by contact shadows
 uniform float csStrength;       // Contact-shadow darkening weight
-uniform int autoExposure;
-uniform float autoKey; // Target middle gray (0.18)
 // Debug view dispatch (PostFXDebugView): 0=none, 1=AO, 2=normals, 3=SSR,
 // 4=albedo, 5=GI, 6=fog, 7=spec-occ AO, 8=contact shadows
 uniform int debugView;
@@ -190,31 +183,21 @@ float aoVisibility()
 // Scene HDR sample -> tonemapped LDR-linear [0,1], applying the shared AO
 // factor and bloom addition (the same order the composite uses). Sharpen
 // neighbour taps reuse the centre's aoFactor/bloomAdd so the mask measures
-// scene edges, not AO/bloom gradients. effExposure is the frame's effective
-// exposure (manual, or auto x manual bias), computed once in main().
-vec3 sceneToToned(vec3 hdr, float aoFactor, vec3 bloomAdd, float effExposure)
+// scene edges, not AO/bloom gradients.
+//
+// No exposure here. The buffer arrives fully exposed -- camera AND adaptation
+// both, applied at the scene passes (view.glsl) -- so this pass only maps
+// working space to display.
+vec3 sceneToToned(vec3 hdr, float aoFactor, vec3 bloomAdd)
 {
     // Sanitize a +INF texel (half-float overflow upstream) — both tonemap
     // curves turn INF into NaN, which displays as a black pixel
     vec3 c = min(hdr, vec3(WS_SCENE_MAX)) * aoFactor + bloomAdd;
-    c *= effExposure;
     return toneSelect(c);
 }
 
 void main()
 {
-    // The buffer arrives pre-exposed (view.glsl), so the deterministic part of
-    // exposure is already in it. What is left here is auto-exposure's adaptation
-    // gain, which is metered from this very frame and so cannot be applied
-    // upstream of it.
-    float effExposure = 1.0;
-    if (autoExposure == 1) {
-        // The metering floor equals the key (enforced structurally: the
-        // measure pass clamps with the same autoKey uniform), so avgLum >=
-        // autoKey and the gain tops out at 1 -- auto-exposure only darkens.
-        float avgLum = exp2(texture(lumTex, vec2(0.5)).r);
-        effExposure = clamp(autoKey / avgLum, 1.0 / 64.0, 1.0);
-    }
     if (debugView == 1) {
         FragColor = vec4(vec3(texture(aoTex, TexCoords).r), 1.0);
         return;
@@ -271,18 +254,18 @@ void main()
     if (bloomEnabled == 1)
         bloomAdd = bloomStrength * texture(bloomTex, TexCoords).rgb;
 
-    vec3 color = sceneToToned(texture(hdrTex, TexCoords).rgb, aoFactor, bloomAdd, effExposure);
+    vec3 color = sceneToToned(texture(hdrTex, TexCoords).rgb, aoFactor, bloomAdd);
 
     // Sharpen: unsharp mask on the tonemapped result (4-tap cross)
     if (sharpenEnabled == 1) {
         vec3 blur = sceneToToned(texture(hdrTex, TexCoords + vec2(texelSize.x, 0.0)).rgb, aoFactor,
-                                 bloomAdd, effExposure) +
+                                 bloomAdd) +
                     sceneToToned(texture(hdrTex, TexCoords - vec2(texelSize.x, 0.0)).rgb, aoFactor,
-                                 bloomAdd, effExposure) +
+                                 bloomAdd) +
                     sceneToToned(texture(hdrTex, TexCoords + vec2(0.0, texelSize.y)).rgb, aoFactor,
-                                 bloomAdd, effExposure) +
+                                 bloomAdd) +
                     sceneToToned(texture(hdrTex, TexCoords - vec2(0.0, texelSize.y)).rgb, aoFactor,
-                                 bloomAdd, effExposure);
+                                 bloomAdd);
         color = clamp(color + sharpenStrength * (color - blur * 0.25), 0.0, 1.0);
     }
 

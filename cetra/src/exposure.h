@@ -13,19 +13,19 @@
 // the exposure this frame", which is precisely the question the working-space
 // contract (shaders/include/view.glsl) is stated in terms of.
 //
-// Only the CAMERA half pre-exposes the scene. Auto-exposure's adaptation gain is
-// still applied at the tonemap, which means the HDR buffer is up to 6 stops off
-// "1.0 is white" whenever adaptation is doing work -- so bloom's threshold and
-// the WS_* ceilings are mis-scaled by exactly that much.
+// The whole exposure is exposure_multiplier(): camera x adaptation. That is what
+// pre-exposes the scene, so 1.0 in the HDR buffer is diffuse white no matter
+// which mechanism produced it -- and every WS_* threshold, and bloom's, then
+// means what it says. Applying the adaptation gain later, at the tonemap, would
+// leave the buffer up to 6 stops off the scale its own thresholds assume, since
+// the gain only ever darkens.
 //
-// That is a known defect, not an oversight, and the obvious fix does not work:
-// pre-exposing by the gain puts the adaptation loop downstream of the
-// working-space clamps that shading applies (pbr_frag's WS_LIGHT_MAX, the 0.03
-// ambient floor). Those are constant in working space, so the meter -- which
-// divides pre-exposure back out to read absolute radiance -- sees them GROW as
-// the gain closes, and the exposure ratchets down instead of settling. Measured:
-// lum rises exactly as 1/gain, ~1%/frame with the ambient floor live and
-// ~0.07%/frame without. See specs/10.1 for the shape of a real fix.
+// Pre-exposing by the gain only became possible once nothing upstream of the
+// meter was a fixed multiple of WHITE (spec 10.1 phase 5). While pbr_frag still
+// clamped nits and carried a 3%-of-white ambient floor, those terms measured
+// brighter as the gain closed -- the meter divides pre-exposure back out -- and
+// the exposure ratcheted instead of settling. Anything added upstream of the
+// metering pass has to be a fixed multiple of RADIANCE, or that returns.
 typedef struct Exposure {
     // false = `bias` is the linear multiplier it always was, which is what every
     // scene authored before the physical camera existed still gets.
@@ -44,9 +44,17 @@ typedef struct Exposure {
 
     bool automatic; // adapt to the scene's metered luminance
     float key;      // middle grey the metered mean is mapped to (0.18)
-    // The adapted value itself lives on the GPU (postfx's 1x1 lum_adapt target)
-    // because that is where it is both produced and consumed. Nothing on the CPU
-    // reads it, which is exactly the limitation described above.
+
+    // Last frame's metered geometric-mean luminance, in ABSOLUTE scene radiance
+    // (the meter divides the pre-exposure back out). One frame stale by
+    // construction: this frame's value cannot exist before this frame is shaded,
+    // and shading needs the exposure. The lag is far below the adaptation time
+    // constant, so it is invisible; the alternative is a circular dependency.
+    //
+    // `adapted_valid` is false until a frame has actually been metered, which is
+    // what keeps the first frame from adapting to uninitialised memory.
+    float adapted_luminance;
+    bool adapted_valid;
 } Exposure;
 
 Exposure* create_exposure(void);
@@ -57,7 +65,23 @@ float exposure_ev100(const Exposure* ex);
 
 // The camera's multiplier: the manual value, or the physical camera. Free of
 // scene content, so it is identical across runs, which is what pinned-exposure
-// goldens ride on. Currently the whole of what pre-exposes a frame.
+// goldens ride on.
 float exposure_camera_multiplier(const Exposure* ex);
+
+// The adaptation half, in [1/64, 1]. Exactly 1.0 when auto-exposure is off or has
+// not metered yet, so the two halves multiply unconditionally.
+float exposure_auto_gain(const Exposure* ex);
+
+// camera x adaptation -- the whole exposure, and what pre-exposes the frame.
+float exposure_multiplier(const Exposure* ex);
+
+// Hand back a frame's metered mean (absolute radiance). Values that cannot be a
+// luminance are refused rather than latched, since a NaN here would propagate
+// into the pre-exposure and blank every subsequent frame.
+void exposure_set_adapted_luminance(Exposure* ex, float luminance);
+
+// Drop the adaptation history, so the next metered frame snaps instead of
+// blending from a value measured under different conditions.
+void exposure_reset_adaptation(Exposure* ex);
 
 #endif // _EXPOSURE_H_

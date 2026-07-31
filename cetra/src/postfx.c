@@ -538,7 +538,8 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     uniform_set_int(fx->tonemap_program->uniforms, "ssrTex", 4);
     uniform_set_int(fx->tonemap_program->uniforms, "albedoTex", 5);
     uniform_set_int(fx->tonemap_program->uniforms, "giTex", 6);
-    uniform_set_int(fx->tonemap_program->uniforms, "lumTex", 7);
+    // Unit 7 was the adapted-luminance texture the tonemap divided by. Exposure
+    // is applied whole at the scene passes now, so nothing samples it here.
     uniform_set_int(fx->tonemap_program->uniforms, "auxTex", 9); // linZ + roughness for spec-occ
     uniform_set_int(fx->tonemap_program->uniforms, "csTex", 10); // contact-shadow visibility
 
@@ -2125,6 +2126,19 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             glBindTexture(GL_TEXTURE_2D, fx->lum_texture);
             glGenerateMipmap(GL_TEXTURE_2D);
 
+            // Hand the PREVIOUS frame's adapted value to the CPU, so the next
+            // frame can pre-expose by it (exposure.h explains why it has to be a
+            // frame behind). Deliberately the slot NOT being written this frame:
+            // the GPU finished it long ago, so glReadPixels finds it resident and
+            // does not stall, where reading a just-written texel would sync the
+            // pipeline every frame. Costs one texel of transfer.
+            if (fx->lum_adapt.valid) {
+                glBindFramebuffer(GL_FRAMEBUFFER, fx->lum_adapt.fbo[lum_write ^ 1]);
+                float log_lum = 0.0f;
+                glReadPixels(0, 0, 1, 1, GL_RED, GL_FLOAT, &log_lum);
+                exposure_set_adapted_luminance(fx->exposure, exp2f(log_lum));
+            }
+
             glBindFramebuffer(GL_FRAMEBUFFER, fx->lum_adapt.fbo[lum_write]);
             glViewport(0, 0, 1, 1);
             glUseProgram(fx->lum_adapt_program->id);
@@ -2142,6 +2156,9 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             check_gl_error("postfx auto exposure");
         } else {
             fx->lum_adapt.valid = false;
+            // Drop the CPU-side history too, or re-enabling auto-exposure would
+            // pre-expose by a value metered under whatever was on screen before.
+            exposure_reset_adaptation(fx->exposure);
         }
 
         if (fx->bloom_enabled)
@@ -2171,7 +2188,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         // Debug view shows the GI as composited (accumulated + denoised)
         glBindTexture(GL_TEXTURE_2D, ssgi_active ? gi_result_tex : 0);
         glActiveTexture(GL_TEXTURE7);
-        glBindTexture(GL_TEXTURE_2D, metering ? fx->lum_adapt.tex[lum_write] : 0);
+        glBindTexture(GL_TEXTURE_2D, 0); // was adapted luminance; applied upstream now
         glActiveTexture(GL_TEXTURE8); // unit 8 was the fog debug buffer (spec 9.5 retired it)
         glBindTexture(GL_TEXTURE_2D, 0);
         glActiveTexture(GL_TEXTURE9);
@@ -2180,9 +2197,6 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         glActiveTexture(GL_TEXTURE10);
         glBindTexture(GL_TEXTURE_2D, cs_active ? cs_result_tex : 0); // contact-shadow visibility
         UniformManager* tm = fx->tonemap_program->uniforms;
-        uniform_set_float(tm, "exposure", exposure_camera_multiplier(fx->exposure));
-        uniform_set_int(tm, "autoExposure", metering ? 1 : 0);
-        uniform_set_float(tm, "autoKey", fx->exposure ? fx->exposure->key : 0.18f);
         uniform_set_float(tm, "bloomStrength", fx->bloom_strength);
         uniform_set_int(tm, "bloomEnabled", fx->bloom_enabled ? 1 : 0);
         uniform_set_int(tm, "aoEnabled", fx->ssao_enabled ? 1 : 0);

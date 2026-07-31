@@ -649,13 +649,14 @@ void render_current_scene(Engine* engine) {
     // ViewParams (spec 10.1): republished per invocation for the same reason the
     // cluster grid is -- a probe-capture face re-enters here with its own view.
     //
-    // Carries the DETERMINISTIC part of exposure only -- the manual multiplier
-    // or the physical camera. Auto-exposure's adaptation gain stays at tonemap:
-    // it is metered from the frame being shaded, so pre-exposing by it needs the
-    // previous frame's value and a feedback path, which is not what this change
-    // is for. Total exposure is unchanged either way, so goldens hold.
+    // Carries the WHOLE exposure -- camera and adaptation both. Adaptation runs
+    // a frame behind (exposure.h), which is what breaks the circularity: the
+    // meter reads a pre-exposed buffer and divides the pre-exposure back out, so
+    // it measures absolute radiance either way and cannot chase its own tail.
+    // That only holds because nothing upstream of it is a fixed multiple of
+    // white any more -- see spec 10.1 phase 5.
     if (engine->view_ubo && engine->exposure) {
-        float pre = exposure_camera_multiplier(engine->exposure);
+        float pre = exposure_multiplier(engine->exposure);
         if (!(pre > 0.0f))
             pre = 1.0f; // a zero or NaN here would blank the frame
         // A capture bakes ABSOLUTE radiance, so it renders at unity. The cubemap
