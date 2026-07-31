@@ -880,10 +880,6 @@ ShaderProgram* create_lum_measure_program() {
     return create_post_program("lum_measure", lum_measure_frag_shader_str);
 }
 
-ShaderProgram* create_lum_adapt_program() {
-    return create_post_program("lum_adapt", lum_adapt_frag_shader_str);
-}
-
 ShaderProgram* create_dof_coc_program() {
     ShaderProgram* program = NULL;
 

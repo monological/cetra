@@ -84,10 +84,14 @@ float exposure_auto_gain(const Exposure* ex);
 // camera x adaptation -- the whole exposure, and what pre-exposes the frame.
 float exposure_multiplier(const Exposure* ex);
 
-// Hand back a frame's metered mean (absolute radiance). Values that cannot be a
-// luminance are refused rather than latched, since a NaN here would propagate
-// into the pre-exposure and blank every subsequent frame.
-void exposure_set_adapted_luminance(Exposure* ex, float luminance);
+// Hand in a frame's raw metered mean as log2 luminance, and blend the adapted
+// value toward it -- eye adaptation. Rate is per FRAME, not per second, so a
+// headless run of N frames adapts identically every time; that determinism is
+// why this is not driven off the frame clock.
+//
+// Values that cannot be a luminance are refused rather than latched, since a
+// NaN here would propagate into the pre-exposure and blank every later frame.
+void exposure_submit_measurement(Exposure* ex, float log2_luminance);
 
 // Drop the adaptation history, so the next metered frame snaps instead of
 // blending from a value measured under different conditions.

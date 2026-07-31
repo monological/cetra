@@ -91,15 +91,37 @@ float exposure_multiplier(const Exposure* ex) {
     return exposure_camera_multiplier(ex) * exposure_auto_gain(ex);
 }
 
-void exposure_set_adapted_luminance(Exposure* ex, float luminance) {
+// Per-FRAME blend toward the measurement, and the deadband that follows it.
+// Both used to live in lum_adapt_frag.glsl; they are policy, so they belong
+// with the rest of it now that the value is read back to the CPU anyway.
+#define EXPOSURE_ADAPT_RATE 0.04f
+// An exponential blend never quite arrives, so without a snap the resting value
+// depends on the approach path -- which async texture-load timing perturbs, and
+// which would make two equal-length headless runs differ. Snapping inside ~1%
+// makes steady state a pure function of the scene.
+#define EXPOSURE_ADAPT_SNAP 0.01f
+
+void exposure_submit_measurement(Exposure* ex, float log2_luminance) {
     if (!ex)
         return;
     // isfinite rejects the NaN a degenerate frame can produce and the INF an
     // overflowed measure target can. Latching either would multiply into
     // preExposure and blank every frame after it, with nothing to recover from.
-    if (!isfinite(luminance) || luminance <= 0.0f)
+    if (!isfinite(log2_luminance))
         return;
-    ex->adapted_luminance = luminance;
+
+    float adapted = log2_luminance;
+    if (ex->adapted_valid) {
+        float prev = log2f(ex->adapted_luminance);
+        adapted = prev + (log2_luminance - prev) * EXPOSURE_ADAPT_RATE;
+        if (fabsf(adapted - log2_luminance) < EXPOSURE_ADAPT_SNAP)
+            adapted = log2_luminance;
+    }
+
+    float lum = exp2f(adapted);
+    if (!isfinite(lum) || lum <= 0.0f)
+        return;
+    ex->adapted_luminance = lum;
     ex->adapted_valid = true;
 }
 

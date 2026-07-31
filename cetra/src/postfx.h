@@ -114,7 +114,6 @@ typedef struct PostFX {
     GLuint albedo_texture;
     GLuint lum_fbo; // 64x64 log2-luminance measure target, mipmapped each frame (auto-exposure)
     GLuint lum_texture;
-    PingPong lum_adapt;   // 1x1 adapted log2-luminance (eye adaptation)
     PingPong taa_history; // Full-res history (previous resolved frames)
 
     ShaderProgram* bloom_bright_program;
@@ -130,7 +129,6 @@ typedef struct PostFX {
     ShaderProgram* ssgi_atrous_program;
     ShaderProgram* ssr_atrous_program; // Edge-aware a-trous denoise for the SSR reflection buffer
     ShaderProgram* lum_measure_program;
-    ShaderProgram* lum_adapt_program;
     ShaderProgram* ssr_program;
     ShaderProgram* ssr_hiz_program;
     ShaderProgram* upsample_tent_program;    // Shared tent composite (bloom mips, SSR)

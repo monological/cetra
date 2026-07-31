@@ -8,9 +8,12 @@
 
 #include "ext/log.h"
 
-// Auto-exposure measure-target side; its full mip chain averages down to 1x1
-// at level log2(size). Must match MEASURE_TOP_MIP in lum_adapt_frag.glsl.
-#define LUM_MEASURE_SIZE 64
+// Auto-exposure measure target. Its full mip chain averages down to 1x1 at
+// level log2(size), and that top mip is the geometric-mean luminance the
+// adaptation reads. Both constants are used here only -- the shader that used
+// to need to agree about the top level is gone.
+#define LUM_MEASURE_SIZE    64
+#define LUM_MEASURE_TOP_MIP 6
 // Motion-blur tile size (px): tile-max reduces velocity to one dominant vector
 // per MOTION_BLUR_TILE^2 tile, which also bounds the max blur radius. Must match
 // TILE_SIZE reasoning in motion_blur_frag.glsl (MAX_PIXELS clamp).
@@ -470,10 +473,6 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     glBindTexture(GL_TEXTURE_2D, fx->lum_texture);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
     glGenerateMipmap(GL_TEXTURE_2D); // Allocate the chain up front
-    if (!create_pingpong(1, 1, GL_R16F, &fx->lum_adapt)) {
-        free_postfx(fx);
-        return NULL;
-    }
 
     unsigned int rng = 0x9E3779B9u;
     fx->noise_texture = create_ssao_noise_texture(&rng);
@@ -490,7 +489,6 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     fx->ssgi_atrous_program = create_ssgi_atrous_program();
     fx->ssr_atrous_program = create_ssr_atrous_program();
     fx->lum_measure_program = create_lum_measure_program();
-    fx->lum_adapt_program = create_lum_adapt_program();
     fx->ssr_program = create_ssr_program();
     fx->ssr_hiz_program = create_ssr_hiz_program();
     fx->upsample_tent_program = create_upsample_tent_program();
@@ -514,7 +512,7 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
         !fx->tonemap_program || !fx->gtao_program || !fx->ssao_blur_program ||
         !fx->temporal_accum_program || !fx->ssgi_composite_program || !fx->ssgi_accum_program ||
         !fx->ssgi_atrous_program || !fx->ssr_atrous_program || !fx->lum_measure_program ||
-        !fx->lum_adapt_program || !fx->ssr_program || !fx->upsample_tent_program ||
+        !fx->ssr_program || !fx->upsample_tent_program ||
         !fx->taa_resolve_program || !fx->dof_coc_program ||
         !fx->froxel_inject_program || !fx->froxel_integrate_program ||
         !fx->froxel_composite_program ||
@@ -545,9 +543,6 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
 
     glUseProgram(fx->lum_measure_program->id);
     uniform_set_int(fx->lum_measure_program->uniforms, "hdrTex", 0);
-    glUseProgram(fx->lum_adapt_program->id);
-    uniform_set_int(fx->lum_adapt_program->uniforms, "measureTex", 0);
-    uniform_set_int(fx->lum_adapt_program->uniforms, "historyTex", 1);
 
     glUseProgram(fx->ssr_program->id);
     uniform_set_int(fx->ssr_program->uniforms, "depthTex", 0);
@@ -1128,7 +1123,6 @@ void free_postfx(PostFX* fx) {
     free_pingpong(&fx->taa_history);
     glDeleteFramebuffers(1, &fx->lum_fbo);
     glDeleteTextures(1, &fx->lum_texture);
-    free_pingpong(&fx->lum_adapt);
     // DoF/fog targets are 0 (no-op delete) if never lazily allocated
     glDeleteFramebuffers(1, &fx->dof_coc_fbo);
     glDeleteTextures(1, &fx->dof_coc_texture);
@@ -1175,7 +1169,6 @@ void free_postfx(PostFX* fx) {
     free_program(fx->ssgi_atrous_program);
     free_program(fx->ssr_atrous_program);
     free_program(fx->lum_measure_program);
-    free_program(fx->lum_adapt_program);
     free_program(fx->ssr_program);
     free_program(fx->ssr_hiz_program);
     free_program(fx->upsample_tent_program);
@@ -2108,10 +2101,22 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             scene_tex = fx->dof_texture;
         }
 
-        // Auto-exposure: measure the scene's log2 luminance at 64x64, mip down
-        // to its geometric mean, and blend the 1x1 adapted value toward it
-        // (frame-count-based eye adaptation; the tonemap divides the key by it).
-        int lum_write = fx->frame_index & 1;
+        // Auto-exposure, measurement half: draw log2 luminance at 64x64 and mip
+        // it down, so the top mip is the geometric mean. The adaptation half --
+        // the blend toward it, and the deadband -- is exposure.c's, because the
+        // value has to reach the CPU anyway: nothing on the GPU consumes it now
+        // that the tonemap applies no exposure.
+        //
+        // This replaced a second fullscreen pass that blended into a 1x1
+        // ping-pong pair, purely so the tonemap could sample the result. Reading
+        // the mip directly deletes that pass, its shader, the ping-pong, its
+        // validity flag, and the C-to-GLSL agreement about which mip is the top.
+        //
+        // The read blocks. A PBO plus a fence would not (measured 0.033 ms
+        // against 5.253), but it lands each measurement whenever the GPU happens
+        // to finish, which makes adaptation depend on frame timing -- and equal
+        // headless runs then stop matching. This engine trades that the other
+        // way round everywhere else, so it does here too.
         const bool metering = fx->exposure && fx->exposure->automatic;
         if (metering) {
             glBindFramebuffer(GL_FRAMEBUFFER, fx->lum_fbo);
@@ -2119,45 +2124,20 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             glUseProgram(fx->lum_measure_program->id);
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, scene_tex);
-            // Metering floor == key (the "auto only darkens" invariant); the
-            // tonemap divides by the mean with the same uniform.
+            // Metering floor == key, which is what makes "auto only darkens"
+            // structural rather than a rule the C side has to remember.
             uniform_set_float(fx->lum_measure_program->uniforms, "autoKey", fx->exposure->key);
             draw_fullscreen_quad(fx->quad_vao);
             glBindTexture(GL_TEXTURE_2D, fx->lum_texture);
             glGenerateMipmap(GL_TEXTURE_2D);
 
-            // Hand the PREVIOUS frame's adapted value to the CPU, so the next
-            // frame can pre-expose by it (exposure.h explains why it has to be a
-            // frame behind). Deliberately the slot NOT being written this frame:
-            // the GPU finished it long ago, so glReadPixels finds it resident and
-            // does not stall, where reading a just-written texel would sync the
-            // pipeline every frame. Costs one texel of transfer.
-            if (fx->lum_adapt.valid) {
-                glBindFramebuffer(GL_FRAMEBUFFER, fx->lum_adapt.fbo[lum_write ^ 1]);
-                float log_lum = 0.0f;
-                glReadPixels(0, 0, 1, 1, GL_RED, GL_FLOAT, &log_lum);
-                exposure_set_adapted_luminance(fx->exposure, exp2f(log_lum));
-            }
-
-            glBindFramebuffer(GL_FRAMEBUFFER, fx->lum_adapt.fbo[lum_write]);
-            glViewport(0, 0, 1, 1);
-            glUseProgram(fx->lum_adapt_program->id);
-            glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, fx->lum_texture);
-            glActiveTexture(GL_TEXTURE1);
-            glBindTexture(GL_TEXTURE_2D, fx->lum_adapt.tex[lum_write ^ 1]);
-            // Snap (reset) when the history is invalid: this accumulator has no
-            // neighborhood clamp, so unlike AO/GI/TAA it cannot self-heal from
-            // stale or never-written history (a mid-run enable would otherwise
-            // blend from undefined texels).
-            uniform_set_int(fx->lum_adapt_program->uniforms, "reset", fx->lum_adapt.valid ? 0 : 1);
-            draw_fullscreen_quad(fx->quad_vao);
-            fx->lum_adapt.valid = true;
+            float measured = 0.0f;
+            glGetTexImage(GL_TEXTURE_2D, LUM_MEASURE_TOP_MIP, GL_RED, GL_FLOAT, &measured);
+            exposure_submit_measurement(fx->exposure, measured);
             check_gl_error("postfx auto exposure");
         } else {
-            fx->lum_adapt.valid = false;
-            // Drop the CPU-side history too, or re-enabling auto-exposure would
-            // pre-expose by a value metered under whatever was on screen before.
+            // Drop the history, or re-enabling auto-exposure would pre-expose by
+            // a value metered under whatever was on screen before.
             exposure_reset_adaptation(fx->exposure);
         }
 
