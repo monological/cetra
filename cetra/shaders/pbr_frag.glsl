@@ -1339,7 +1339,20 @@ void main() {
     } else {
         // Fallback to simple ambient when IBL is disabled (diffuse-only, so
         // it yields to transmission like the other diffuse terms)
-        ambient = vec3(0.03) * albedoMap * aoMap * (1.0 - transmissionEff);
+        // 0.03 is "3% of white", not a radiance -- a display-relative floor so an
+        // unlit surface is not pure black. It is therefore already in WORKING
+        // space, and the oneOverPreExposure cancels the conversion the composite
+        // applies to the rest of this term, leaving it 3% of white at any light
+        // magnitude.
+        //
+        // Without that it was a fixed quantity of scene radiance tied to no light
+        // in the scene, so scaling every light 1000x and closing the camera 1000x
+        // left everything else in proportion and dropped this by 1000x -- the
+        // failure the scale-invariance test caught, visible as coloured walls
+        // going saturated because the term that washes them toward white had
+        // collapsed. Re-tuning the number cannot fix that; a constant in scene
+        // radiance is non-scale-invariant at ANY value.
+        ambient = vec3(0.03) * albedoMap * aoMap * (1.0 - transmissionEff) * oneOverPreExposure;
     }
 
     // Screen-space transmission (KHR_materials_transmission): the diffuse
