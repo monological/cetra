@@ -5,6 +5,7 @@
 #include <stdbool.h>
 #include <cglm/cglm.h>
 
+#include "exposure.h"
 #include "program.h"
 
 // Max distinct per-material SSS scatter profiles per scene. Mirrored as the
@@ -141,24 +142,12 @@ typedef struct PostFX {
     GLuint quad_vao;
     GLuint quad_vbo;
 
-    float exposure;     // Manual exposure; an EV bias when auto_exposure is on
-    bool auto_exposure; // Adapt exposure to the scene's mean luminance
-    // Physical camera. Off = `exposure` is the linear multiplier it always was,
-    // which is what every scene authored before this existed still gets.
-    //
-    // On, the three below produce the multiplier and `exposure` becomes an EV
-    // bias in stops instead -- the meaning it already carries under
-    // auto_exposure, so the field does not gain a second one. This exists
-    // because photometric lights are the wrong magnitude for a hand-picked
-    // multiplier: a 127 cd bulb (1600 lm) at 2 m is ~32 lux, and nothing about
-    // "0.7846" tells you whether that will land mid-grey. Aperture, shutter and
-    // ISO do, because they are the same numbers a camera would use in the room
-    // being simulated.
-    bool physical_exposure;
-    float aperture;             // f-number (f/2.8 -> 2.8)
-    float shutter_speed;        // seconds (1/60 s -> 0.01667)
-    float iso;                  // ISO sensitivity (100, 400, ...)
-    float auto_exposure_key;    // Target middle gray the mean is mapped to (0.18)
+    // Borrowed, never owned -- the Engine holds it. The post chain runs the
+    // metering passes that FEED exposure but does not decide what it is; see
+    // exposure.h for why that split exists. Non-const because the metering pass
+    // hands each frame's measured luminance back.
+    Exposure* exposure;
+
     float bloom_threshold;      // Linear luminance where bloom starts
     float bloom_knee;           // Soft-knee width around the threshold
     float bloom_max_brightness; // Firefly clamp on the bloom input
@@ -388,12 +377,10 @@ typedef struct PostFX {
 PostFX* create_postfx(int width, int height, int ss_scale);
 void free_postfx(PostFX* fx);
 
-// EV100 for the current camera settings, and the linear multiplier the tonemap
-// actually receives -- which is fx->exposure verbatim while physical_exposure is
-// off. Exposed so the GUI and any check of the arithmetic read the same code
-// rather than a second copy of the formula.
-float postfx_ev100(const PostFX* fx);
-float postfx_exposure_multiplier(const PostFX* fx);
+// Borrow the Engine's exposure. Must be called before the first postfx_run; the
+// chain reads camera settings and the adaptation key from it, and writes each
+// frame's metered luminance back through exposure_set_adapted_luminance.
+void postfx_set_exposure(PostFX* fx, Exposure* exposure);
 
 // Per-material SSS scatter profiles. The app resets the table when it configures
 // a scene's skin materials, then adds one profile per distinct skin material

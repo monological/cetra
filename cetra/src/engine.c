@@ -283,6 +283,7 @@ void free_engine(Engine* engine) {
     if (engine->postfx) {
         free_postfx(engine->postfx);
     }
+    free_exposure(engine->exposure); // after postfx, which borrows it
 
     free_light_cluster_context(engine->light_cluster);
     free_ubo(engine->view_ubo);
@@ -745,6 +746,13 @@ int init_engine(Engine* engine) {
         log_error("Failed to initialize engine post-processing");
         return -1;
     }
+
+    engine->exposure = create_exposure();
+    if (!engine->exposure) {
+        log_error("Failed to initialize engine exposure");
+        return -1;
+    }
+    postfx_set_exposure(engine->postfx, engine->exposure);
 
     return 0;
 }
@@ -1645,9 +1653,9 @@ static void _engine_gui_panel(Engine* engine) {
         if (igCombo_Str_arr("Tonemap", &tm, tonemap_names,
                             (int)(sizeof(tonemap_names) / sizeof(tonemap_names[0])), -1))
             fx->tonemap_mode = (PostFXTonemapMode)(tm + 1);
-        igCheckbox("Auto Exposure", &fx->auto_exposure);
+        igCheckbox("Auto Exposure", &engine->exposure->automatic);
         // With auto on, the manual slider becomes an EV bias on the adapted value
-        igSliderFloat("Exposure", &fx->exposure, 0.05f, 8.0f, "%.2f", 0);
+        igSliderFloat("Exposure", &engine->exposure->bias, 0.05f, 8.0f, "%.2f", 0);
 
         _begin_effect_group("Bloom", &fx->bloom_enabled);
         igSliderFloat("Bloom Strength", &fx->bloom_strength, 0.0f, 0.1f, "%.3f", 0);

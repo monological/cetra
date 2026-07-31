@@ -1458,16 +1458,17 @@ int main(int argc, char** argv) {
         return -1;
     }
 
-    if (engine->postfx) {
+    if (engine->exposure) {
+        Exposure* ex = engine->exposure;
         if (args.aperture > 0.0f) {
-            engine->postfx->physical_exposure = true;
-            engine->postfx->aperture = args.aperture;
-            engine->postfx->shutter_speed = args.shutter_speed;
-            engine->postfx->iso = args.iso;
-            // `exposure` is a stops bias under the camera, so the linear default
-            // of 1.0 would silently open up a stop. Only an explicit value means
-            // a bias here.
-            engine->postfx->exposure = args.exposure > 0.0f ? args.exposure : 0.0f;
+            ex->physical = true;
+            ex->aperture = args.aperture;
+            ex->shutter_speed = args.shutter_speed;
+            ex->iso = args.iso;
+            // `bias` is a stops offset under the camera, so the linear default of
+            // 1.0 would silently open up a stop. Only an explicit value means a
+            // bias here.
+            ex->bias = args.exposure > 0.0f ? args.exposure : 0.0f;
             // A physical camera IS the exposure decision, so adaptation does not
             // also get a say -- they are alternative methods, not stacking ones.
             // Left on, metering compares absolute scene radiance against an
@@ -1475,19 +1476,18 @@ int main(int argc, char** argv) {
             // the 1/64 clamp. An explicit --taa-style override can still turn it
             // back on; this is only the default when a camera is authored.
             if (args.auto_exposure_override < 0)
-                engine->postfx->auto_exposure = false;
-            printf("Physical exposure: f/%.1f %.4gs ISO%.0f -> EV100 %.2f\n",
-                   engine->postfx->aperture, engine->postfx->shutter_speed, engine->postfx->iso,
-                   postfx_ev100(engine->postfx));
+                ex->automatic = false;
+            printf("Physical exposure: f/%.1f %.4gs ISO%.0f -> EV100 %.2f\n", ex->aperture,
+                   ex->shutter_speed, ex->iso, exposure_ev100(ex));
         } else if (args.exposure > 0.0f) {
-            engine->postfx->exposure = args.exposure;
+            ex->bias = args.exposure;
         }
         // An explicit override wins; failing that, naming an exposure pins the
         // frame, which is what every scene authored before the key existed.
         if (args.auto_exposure_override >= 0)
-            engine->postfx->auto_exposure = args.auto_exposure_override != 0;
+            ex->automatic = args.auto_exposure_override != 0;
         else if (args.exposure > 0.0f)
-            engine->postfx->auto_exposure = false;
+            ex->automatic = false;
     }
     if (args.no_ssao && engine->postfx) {
         engine->postfx->ssao_enabled = false;
