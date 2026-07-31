@@ -78,7 +78,12 @@ vec4 probeSample(vec3 fragPosV, vec3 n, vec3 RV, vec3 viewDir)
     // The floor lies ON the box's bottom face, so no inside-the-box fade;
     // a ray starting outside the box keeps the uncorrected direction
     vec3 dir = (t > 0.0) ? normalize((worldPos + worldR * t) - probePos) : worldR;
-    vec3 col = textureLod(probeTex, dir, floorRoughness * probeMaxLOD).rgb * probeIntensity;
+    // The probe bakes absolute radiance (render.c renders captures at unity), so
+    // unlike the hdrTex hit path this one converts. Without it the fallback
+    // would sit at scene scale while the hit it substitutes for sits at working
+    // scale, and a ray crossing the screen edge would step in brightness.
+    vec3 col =
+        textureLod(probeTex, dir, floorRoughness * probeMaxLOD).rgb * probeIntensity * preExposure;
     float NdotV = max(dot(n, -viewDir), 0.0);
     float fresnel = 0.1 + 0.9 * pow(clamp(1.0 - NdotV, 0.0, 1.0), 5.0);
     float roughnessFade = 1.0 - smoothstep(0.5 * maxRoughness, maxRoughness, floorRoughness);

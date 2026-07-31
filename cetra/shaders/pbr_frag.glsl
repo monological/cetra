@@ -1266,6 +1266,11 @@ void main() {
         if (iblEnabled > 0) {
         vec3 prefilteredColor;
         if (probeEnabled > 0) {
+            // prefilteredMap holds the PROBE's prefilter here, bound over the
+            // global environment's unit. Both carry absolute radiance, which is
+            // what lets them share this path and the composite's single
+            // conversion of `ambient` -- see render.c's capture-at-unity note.
+            //
             // Parallax correction: intersect the world reflection ray with
             // the probe's proxy AABB and sample toward the intersection. The
             // correction degenerates at the proxy walls (it collapses toward

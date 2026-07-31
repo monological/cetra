@@ -642,9 +642,7 @@ void render_current_scene(Engine* engine) {
     }
 
     // ViewParams (spec 10.1): republished per invocation for the same reason the
-    // cluster grid is -- a probe-capture face re-enters here and must read the
-    // same working space as the main view, or its capture bakes at a different
-    // scale than the frame that samples it.
+    // cluster grid is -- a probe-capture face re-enters here with its own view.
     //
     // Carries the DETERMINISTIC part of exposure only -- the manual multiplier
     // or the physical camera. Auto-exposure's adaptation gain stays at tonemap:
@@ -655,6 +653,17 @@ void render_current_scene(Engine* engine) {
         float pre = postfx_exposure_multiplier(engine->postfx);
         if (!(pre > 0.0f))
             pre = 1.0f; // a zero or NaN here would blank the frame
+        // A capture bakes ABSOLUTE radiance, so it renders at unity. The cubemap
+        // it produces substitutes for the IBL environment prefilter -- same
+        // sampler unit, same shader path -- and that prefilter comes from an HDR
+        // file or a sky bake, neither pre-exposed. Baking the capture in working
+        // space instead would make every consumer convert a value that was
+        // already converted: pbr_frag folds it into `ambient`, which the
+        // composite multiplies, and the debug background goes through
+        // skybox_frag, which multiplies too. Squared exposure, invisible at
+        // unity and wrong everywhere else.
+        if (engine->capturing)
+            pre = 1.0f;
         const float view_params[4] = {pre, 1.0f / pre, postfx_ev100(engine->postfx), 0.0f};
         ubo_upload(engine->view_ubo, view_params, sizeof(view_params));
     }
