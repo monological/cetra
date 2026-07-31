@@ -18,10 +18,12 @@ void main()
     // own contribution to the exposure that produced it -- a feedback loop that
     // ratchets toward the clamp instead of settling. autoKey below is an
     // absolute middle grey and only means anything against absolute input.
-    vec3 hdr = texture(hdrTex, TexCoords).rgb * oneOverPreExposure;
-    // Sanitize like the tonemap does: a +INF texel would poison the whole
-    // average through the mip chain.
-    hdr = min(hdr, vec3(60000.0));
+    // Sanitize BEFORE converting: a +INF texel would poison the whole average
+    // through the mip chain, and the ceiling is the one pbr_frag already wrote
+    // under, so it clips nothing a shading pass let through. Applying it after
+    // the conversion would instead cap absolute radiance at 60000, which a noon
+    // sun legitimately exceeds -- the meter would read it as overcast.
+    vec3 hdr = min(texture(hdrTex, TexCoords).rgb, vec3(WS_SCENE_MAX)) * oneOverPreExposure;
     float lum = dot(hdr, vec3(0.2126, 0.7152, 0.0722));
     // Clamp the metered range so extremes can't hijack the average. The floor
     // is the key itself: texels darker than the key meter AS the key, so the

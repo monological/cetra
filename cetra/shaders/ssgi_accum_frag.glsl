@@ -59,7 +59,8 @@ void main()
     vec3 history = yCoCgToRgb(historyYCoCg);
 
     // Inverse-luma weighted blend (Y = YCoCg.x): resolves gathered fireflies
-    // instead of hoarding them.
+    // instead of hoarding them. The 1.0 pivot is diffuse white in working
+    // space, deliberately absolute -- same reasoning as taa_resolve_frag.
     float wCurrent = (1.0 - FEEDBACK) / (1.0 + max(centerYCoCg.x, 0.0));
     float wHistory = FEEDBACK / (1.0 + max(historyYCoCg.x, 0.0));
     FragColor = vec4((current * wCurrent + history * wHistory) / (wCurrent + wHistory), 1.0);

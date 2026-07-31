@@ -228,7 +228,7 @@ void main() {
     // Keep shafts HDR (they must bloom) but bound hostile parameter combos away
     // from fp16 overflow, as the screen-space march does. 500 now means 500x
     // white rather than 500 nits.
-    vec4 result = vec4(min(S * preExposure, vec3(500.0)), sigma);
+    vec4 result = vec4(min(S * preExposure, vec3(WS_MEDIA_MAX)), sigma);
 
     // Temporal reprojection: find where this cell's world position sat in the
     // previous frame's volume and blend against it. Unlike the screen-space

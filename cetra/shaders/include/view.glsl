@@ -24,11 +24,11 @@
 // rather than an error.
 //
 // Why it matters at all: before this existed, every stage carried its own
-// absolute constant assuming ~1.0 was white -- pbr_frag's vec3(10.0), ssr's
-// min(2.0), gtao's GI_MAX_RADIANCE, the froxel min(500.0) pair, bloom's
-// threshold. Photometric lights (spec 9.9/10.0) invalidated all of them at once
-// and nothing errored; a red cube just quietly rendered grey, because a 522-nit
-// red channel and a 33-nit green one both clamped to 10. Thresholds expressed
+// absolute constant assuming ~1.0 was white, each a bare literal in the pass
+// that applied it -- the WS_* ceilings below are those same numbers, gathered.
+// Photometric lights (spec 9.9/10.0) invalidated all of them at once and
+// nothing errored; a red cube just quietly rendered grey, because a 522-nit red
+// channel and a 33-nit green one both clamped to 10. Thresholds expressed
 // against THIS contract stay correct at any light magnitude.
 
 layout(std140) uniform ViewParams {
@@ -37,3 +37,18 @@ layout(std140) uniform ViewParams {
     float exposureEV100;      // the camera's EV100; debug and GUI readout
     float _viewPad;
 };
+
+// Working-space ceilings. Each is a headroom budget: how many stops over
+// diffuse white a pass keeps before it stops tracking brightness. They belong
+// here rather than in the passes that apply them because the number is only
+// meaningful against the contract above -- as a bare literal in a pass, it is
+// the same trap this file documents, and the same one that spec 10.0 sprang.
+//
+// Values carried over unchanged from when they were scattered literals, so
+// naming them was inert. Stops are the unit to retune in: raising one keeps
+// more range and more fireflies, lowering it the reverse.
+const float WS_LIGHT_MAX = 10.0;    // +3.3 stops: one light's contribution, pre-accumulation
+const float WS_SCENE_MAX = 60000.0; // +15.9 stops: fp16 guard on the finished pixel
+const float WS_REFLECT_MAX = 2.0;   // +1 stop: SSR firefly clamp
+const float WS_BOUNCE_MAX = 4.0;    // +2 stops: SSGI gather firefly clamp
+const float WS_MEDIA_MAX = 500.0;   // +9 stops: fog in-scatter, per froxel and integrated

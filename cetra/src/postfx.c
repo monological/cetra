@@ -259,6 +259,12 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     fx->aperture = 2.8f;
     fx->shutter_speed = 1.0f / 60.0f;
     fx->iso = 400.0f;
+    // Working space (shaders/include/view.glsl), so these read as stops over
+    // diffuse white rather than as absolute radiance: bloom starts exactly at
+    // white, fades in over the half stop below it, and ignores anything past
+    // +3. That is why they survived the photometric switch unchanged -- the
+    // buffer they threshold is pre-exposed, so the numbers still mean what they
+    // meant when a "1.0 is white" scene was the only kind the engine had.
     fx->bloom_threshold = 1.0f;
     fx->bloom_knee = 0.5f;
     fx->bloom_max_brightness = 8.0f;

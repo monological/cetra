@@ -86,12 +86,20 @@ void main() {
     vec3 historyYCoCg = clamp(rgbToYCoCg(history), nmin, nmax);
     history = yCoCgToRgb(historyYCoCg);
 
-    // Blend, weighted by inverse luminance (tonemapped space). A plain lerp lets
-    // a bright specular spark in either the current frame or the reprojected
-    // history survive the neighborhood clamp and accumulate into a field of
-    // sparkle on high-frequency surfaces (scratched metal). Down-weighting the
-    // brighter sample lets the temporal average actually resolve those fireflies
-    // — the standard fix for TAA on aliasing-prone specular. Y (YCoCg.x) is luma.
+    // Blend, weighted by inverse luminance. A plain lerp lets a bright specular
+    // spark in either the current frame or the reprojected history survive the
+    // neighborhood clamp and accumulate into a field of sparkle on
+    // high-frequency surfaces (scratched metal). Down-weighting the brighter
+    // sample lets the temporal average actually resolve those fireflies — the
+    // standard fix for TAA on aliasing-prone specular. Y (YCoCg.x) is luma.
+    //
+    // The 1.0 in the denominator is a pivot, not a clamp: it is the luma at
+    // which down-weighting reaches half, and it is deliberately left absolute
+    // because in working space 1.0 IS diffuse white (view.glsl). So the filter
+    // pushes back on anything brighter than white and leaves the rest alone,
+    // which is the intent. Left as a bare 1.0 rather than a named constant for
+    // the same reason — it is the contract's own unit, and naming it would
+    // suggest it is tunable independently of what white means.
     const float feedback = 0.9;
     float wCurrent = (1.0 - feedback) / (1.0 + max(centerYCoCg.x, 0.0));
     float wHistory = feedback / (1.0 + max(historyYCoCg.x, 0.0));

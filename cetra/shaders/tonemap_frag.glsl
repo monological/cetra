@@ -5,6 +5,11 @@ out vec4 FragColor;
 // Final post pass: composite bloom onto the linear HDR scene, then apply
 // exposure, ACES tone mapping, and gamma. Mode 0 is a raw copy for frames
 // that are already display-ready (debug render modes, LDR-authored apps).
+// hdrTex arrives pre-exposed; this pass reads it in working space and only
+// applies the residual EV bias, so WS_SCENE_MAX below is the same ceiling the
+// shading passes wrote under.
+#include "view.glsl"
+
 uniform sampler2D hdrTex;
 uniform sampler2D bloomTex;
 uniform sampler2D aoTex; // Blurred SSAO, upsampled by its linear filter
@@ -191,7 +196,7 @@ vec3 sceneToToned(vec3 hdr, float aoFactor, vec3 bloomAdd, float effExposure)
 {
     // Sanitize a +INF texel (half-float overflow upstream) — both tonemap
     // curves turn INF into NaN, which displays as a black pixel
-    vec3 c = min(hdr, vec3(60000.0)) * aoFactor + bloomAdd;
+    vec3 c = min(hdr, vec3(WS_SCENE_MAX)) * aoFactor + bloomAdd;
     c *= effExposure;
     return toneSelect(c);
 }

@@ -46,6 +46,10 @@ uniform vec3 probeBoxMax;
 uniform float probeMaxLOD;
 uniform float probeIntensity;
 
+// hdrTex is already pre-exposed, so a reflection inherits the conversion and
+// WS_REFLECT_MAX below is read in the same space it was written in.
+#include "view.glsl"
+
 vec3 viewPosFromDepth(vec2 uv, float depth)
 {
     vec4 ndc = vec4(vec3(uv, depth) * 2.0 - 1.0, 1.0);
@@ -79,7 +83,7 @@ vec4 probeSample(vec3 fragPosV, vec3 n, vec3 RV, vec3 viewDir)
     float fresnel = 0.1 + 0.9 * pow(clamp(1.0 - NdotV, 0.0, 1.0), 5.0);
     float roughnessFade = 1.0 - smoothstep(0.5 * maxRoughness, maxRoughness, floorRoughness);
     float w = clamp(fresnel * roughnessFade * strength, 0.0, 1.0);
-    return vec4(min(col, vec3(2.0)) * w, w);
+    return vec4(min(col, vec3(WS_REFLECT_MAX)) * w, w);
 }
 
 void main()
@@ -348,7 +352,7 @@ void main()
     // full mirror instead of decoupling color from coverage). The sampled
     // color is clamped — HDR spikes read as white discs after upsampling.
     float weight = clamp(edgeFade * fresnel * roughnessFade * distFade * strength, 0.0, 1.0);
-    vec3 reflection = min(texture(hdrTex, hitUV).rgb, vec3(2.0));
+    vec3 reflection = min(texture(hdrTex, hitUV).rgb, vec3(WS_REFLECT_MAX));
     // Partial fades (screen edge, march distance) blend toward the probe
     // instead of toward nothing — premultiplied "SSR over probe"
     FragColor = vec4(reflection * weight, weight) + probe * (1.0 - weight);

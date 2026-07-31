@@ -1058,7 +1058,7 @@ void main() {
                 }
 
                 Lo += min((areaDiff + areaSpec) * clusterLights[li].colorIntensity.xyz,
-                          vec3(10.0)) * aShadow;
+                          vec3(WS_LIGHT_MAX)) * aShadow;
                 continue;
             }
 
@@ -1099,7 +1099,7 @@ void main() {
         float hLen2 = dot(Hraw, Hraw);
         vec3 H = hLen2 > 1e-8 ? Hraw * inversesqrt(hLen2) : N;
         // Pre-exposed HERE, not at the final write, because the per-light clamp
-        // below (vec3(10.0)) sits between the two. Clamping scene radiance
+        // below (WS_LIGHT_MAX) sits between the two. Clamping scene radiance
         // against a working-space constant is what destroyed hue on bright
         // surfaces: a 522-nit red channel and a 33-nit green one both landed on
         // 10 and came out grey. In working space that constant means what it
@@ -1205,7 +1205,7 @@ void main() {
         Lo += min((((kD * albedoMap / PI + specular) * sheenScale + sheenSpec) * (1.0 - coatAtten) +
                    coatSpec) *
                       radiance * NdotL * shadow,
-                  vec3(10.0));
+                  vec3(WS_LIGHT_MAX));
 
         // SSS: tap this light's Lambert diffuse into the separated skin-diffuse
         // buffer (blurred later; specular stays in FragColor). Separate accumulate
@@ -1391,7 +1391,7 @@ void main() {
     // per-light clamp could be meaningful); these three still carry scene
     // radiance and are converted here. The fp16 ceiling then guards a working-
     // space value, which is the only scale at which a fixed ceiling makes sense.
-    vec3 color = min(Lo + (ambient + transmitted + emissiveMap) * preExposure, vec3(60000.0));
+    vec3 color = min(Lo + (ambient + transmitted + emissiveMap) * preExposure, vec3(WS_SCENE_MAX));
 
     // Cascade acceptance view: tint by the fragment's selected cascade so
     // split geometry and snap stability are visible (dead when csmDebug 0)

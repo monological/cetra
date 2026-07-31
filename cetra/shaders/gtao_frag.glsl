@@ -32,9 +32,12 @@ uniform int frameIndex;  // Drives the per-frame slice rotation when temporal
 uniform sampler2D hdrTex; // Resolved lit scene color -- the radiance SSGI gathers from occluders
 uniform int gatherGI;     // 1 = also gather one-bounce irradiance into GiOut (SSGI)
 
+// hdrTex is already pre-exposed, so the gather inherits the conversion and
+// WS_BOUNCE_MAX below is read in the same space it was written in.
+#include "view.glsl"
+
 const float PI = 3.14159265359;
 const float HALF_PI = 1.57079632679;
-const float GI_MAX_RADIANCE = 4.0; // Firefly clamp on gathered bounce light
 const int SLICES = 2;                 // Screen-space sweep directions
 const int STEPS = 8;                  // Horizon-march samples per side
 const uint SECTOR_COUNT = 32u;        // Bits in the visibility mask
@@ -212,7 +215,7 @@ void main()
                         // Clamp the source radiance: one specular-hot texel
                         // gathered here becomes a firefly that the a-trous
                         // blur smears into a bright splat downstream.
-                        vec3 rad = min(texture(hdrTex, sUV).rgb, vec3(GI_MAX_RADIANCE));
+                        vec3 rad = min(texture(hdrTex, sUV).rgb, vec3(WS_BOUNCE_MAX));
                         gi += rad * (float(popCount(newBits)) / float(SECTOR_COUNT));
                     }
                 }

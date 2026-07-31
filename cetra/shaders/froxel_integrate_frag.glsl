@@ -22,6 +22,9 @@ out vec4 FragColor; // rgb = accumulated in-scatter, a = transmittance to this s
 // the cheapest; no frame timing has been measured either way.
 
 #include "froxel.glsl"
+// scatterVolume was pre-exposed at inject, so the accumulated L below is
+// already working space and WS_MEDIA_MAX means what it says here.
+#include "view.glsl"
 
 uniform sampler3D scatterVolume;
 uniform int sliceIndex;
@@ -65,5 +68,5 @@ void main() {
         }
     }
 
-    FragColor = vec4(min(L, vec3(500.0)), T);
+    FragColor = vec4(min(L, vec3(WS_MEDIA_MAX)), T);
 }
