@@ -17,8 +17,8 @@
 // pre-exposes the scene, so 1.0 in the HDR buffer is diffuse white no matter
 // which mechanism produced it -- and every WS_* threshold, and bloom's, then
 // means what it says. Applying the adaptation gain later, at the tonemap, would
-// leave the buffer up to 6 stops off the scale its own thresholds assume, since
-// the gain only ever darkens.
+// leave the buffer off the scale its own thresholds assume by however far the
+// adaptation had travelled -- up to 20 stops on a sunlit scene.
 //
 // Pre-exposing by the gain only became possible once nothing upstream of the
 // meter was a fixed multiple of WHITE (spec 10.1 phase 5). While pbr_frag still
@@ -75,8 +75,10 @@ float exposure_ev100(const Exposure* ex);
 // goldens ride on.
 float exposure_camera_multiplier(const Exposure* ex);
 
-// The adaptation half, in [1/64, 1]. Exactly 1.0 when auto-exposure is off or has
-// not metered yet, so the two halves multiply unconditionally.
+// The adaptation half: key / metered luminance, capped at 1 (it only ever
+// darkens) and floored 20 stops down, which is the range absolute nits need.
+// Exactly 1.0 when auto-exposure is off or has not metered yet, so the two
+// halves multiply unconditionally.
 float exposure_auto_gain(const Exposure* ex);
 
 // camera x adaptation -- the whole exposure, and what pre-exposes the frame.
