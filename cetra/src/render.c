@@ -641,6 +641,19 @@ void render_current_scene(Engine* engine) {
                                        camera->far_clip);
     }
 
+    // ViewParams (spec 10.1): republished per invocation for the same reason the
+    // cluster grid is -- a probe-capture face re-enters here and must read the
+    // same working space as the main view, or its capture bakes at a different
+    // scale than the frame that samples it.
+    //
+    // Phase 0 publishes identity. The block and its wiring land first so the
+    // contract exists and every program is bound to it before anything depends
+    // on the value; goldens prove that step changed nothing.
+    if (engine->view_ubo) {
+        const float view_params[4] = {1.0f, 1.0f, 0.0f, 0.0f};
+        ubo_upload(engine->view_ubo, view_params, sizeof(view_params));
+    }
+
     // Draw projection: the un-jittered projection, sub-pixel-jittered when TAA
     // runs so the temporal resolve accumulates coverage. Recomputed here every
     // call so every render loop — including apps that call

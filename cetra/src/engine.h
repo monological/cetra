@@ -25,6 +25,7 @@ typedef enum CameraMode {
 
 struct Engine;
 struct LightClusterContext;
+struct Ubo;
 
 typedef void (*CursorPositionCallback)(struct Engine* engine, double xpos, double ypos);
 typedef void (*MouseButtonCallback)(struct Engine* engine, int button, int action, int mods);
@@ -96,6 +97,10 @@ typedef struct Engine {
     // Clustered-forward lighting (spec 9.1). The module owns its own GPU
     // buffers and scratch; rebuilt per render_current_scene invocation.
     struct LightClusterContext* light_cluster;
+    // ViewParams (spec 10.1): the working-space contract every pass writing
+    // scene radiance reads. Engine-owned rather than PostFX-owned because it
+    // must be live during the SCENE passes, which run before postfx does.
+    struct Ubo* view_ubo;
     bool cluster_debug;          // Tint fragments by cluster light count (heatmap)
     bool scene_color_this_frame; // Resolve ran this frame; transmissive draws may sample
     bool normals_this_frame;     // Attachment 1 written this frame (PBR + consumer active)

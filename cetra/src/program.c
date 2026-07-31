@@ -303,7 +303,7 @@ GLboolean reload_program_from_paths(ShaderProgram* program, const char* vert_pat
     }
 
     // Block bindings are program state reset by re-linking; re-wire them
-    ubo_wire_light_blocks(program->id);
+    ubo_wire_blocks(program->id);
 
     log_info("Reloaded shader program: %s", program->name);
     return GL_TRUE;
@@ -416,7 +416,7 @@ void setup_program_uniforms(ShaderProgram* program) {
     // Clustered-forward blocks (spec 9.1): bind to the global binding points
     // and guard against C/GLSL layout drift. No-ops for programs that don't
     // declare (or strip) them.
-    ubo_wire_light_blocks(program->id);
+    ubo_wire_blocks(program->id);
 }
 
 ShaderProgram* create_pbr_program() {

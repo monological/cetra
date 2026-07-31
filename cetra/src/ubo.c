@@ -62,10 +62,11 @@ void ubo_wire_program_block(GLuint program_id, const char* block_name, GLuint bi
                   block_name, data_size, (long)expected_size);
 }
 
-void ubo_wire_light_blocks(GLuint program_id) {
+void ubo_wire_blocks(GLuint program_id) {
     ubo_wire_program_block(program_id, "LightsBlock", UBO_BINDING_LIGHTS, UBO_LIGHTS_BLOCK_SIZE);
     ubo_wire_program_block(program_id, "ClusterBlock", UBO_BINDING_CLUSTERS,
                            UBO_CLUSTERS_BLOCK_SIZE);
     ubo_wire_program_block(program_id, "ClusterIndexBlock", UBO_BINDING_CLUSTER_INDICES,
                            UBO_CLUSTER_INDICES_BLOCK_SIZE);
+    ubo_wire_program_block(program_id, "ViewParams", UBO_BINDING_VIEW, UBO_VIEW_BLOCK_SIZE);
 }

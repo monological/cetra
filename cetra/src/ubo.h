@@ -17,6 +17,7 @@
 #define UBO_BINDING_LIGHTS          0
 #define UBO_BINDING_CLUSTERS        1
 #define UBO_BINDING_CLUSTER_INDICES 2
+#define UBO_BINDING_VIEW            3
 
 // std140 byte sizes of the engine's blocks, asserted against the C mirror
 // structs (light_cluster.h) and validated against the driver's
@@ -25,6 +26,8 @@
 #define UBO_LIGHTS_BLOCK_SIZE          12512
 #define UBO_CLUSTERS_BLOCK_SIZE        12288
 #define UBO_CLUSTER_INDICES_BLOCK_SIZE 12288
+// Four floats, rounded up to std140's 16-byte block granularity.
+#define UBO_VIEW_BLOCK_SIZE 16
 
 typedef struct Ubo {
     GLuint id;
@@ -52,8 +55,16 @@ void ubo_upload(Ubo* ubo, const void* data, GLsizeiptr size);
 void ubo_wire_program_block(GLuint program_id, const char* block_name, GLuint binding,
                             GLsizeiptr expected_size);
 
-// Wire all three clustered-forward light blocks (spec 9.1). Programs that
-// don't sample them are unaffected.
-void ubo_wire_light_blocks(GLuint program_id);
+// Wire every engine-owned block a program might declare: the three
+// clustered-forward light blocks (spec 9.1) and ViewParams (spec 10.1).
+// Programs that don't sample a block are unaffected.
+//
+// ViewParams goes through here rather than a per-program upload on purpose. It
+// carries the working-space contract, which EVERY pass writing scene radiance
+// must honour -- skybox, sky background, particles and the fog composite each
+// do their own glUseProgram and are missed by render.c's scene-traversal
+// uniform block. Eight hand-maintained upload sites is how a ninth pass gets
+// added silently wrong.
+void ubo_wire_blocks(GLuint program_id);
 
 #endif // _UBO_H_

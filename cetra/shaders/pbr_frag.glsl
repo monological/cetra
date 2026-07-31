@@ -146,6 +146,7 @@ uniform float pcssSoftness; // Multiplier on the light's angular size
 // through these UBOs -- directionals in a small unconditional array, the
 // point/spot/area set via the per-fragment cluster index list.
 #include "lights_ubo.glsl"
+#include "view.glsl"
 #include "ltc.glsl"
 // Indirect diffuse from a probe grid, when one is present (spec 9.7). Only the
 // diffuse IBL term changes; specular, clearcoat and sheen stay on the env map.
@@ -1402,7 +1403,10 @@ void main() {
         finalOpacity = mix(opacity, 1.0, fresnelOpacity);
     }
 
-    FragColor = vec4(color, finalOpacity);
+    // Scene radiance -> working space (view.glsl). The debug render modes above
+    // return before this on purpose: they emit display-ready colour, not
+    // radiance, and postfx blits rather than tonemaps them.
+    FragColor = vec4(color * preExposure, finalOpacity);
 
     // G-buffer: view-space normal (xyz) for SSAO; alpha is a non-negative
     // reflective marker — only the shadow catcher's negative alpha traces in
