@@ -301,6 +301,10 @@ static void parse_post(CetraSceneDesc* d, const cJSON* root) {
         get_bool(fog, "enabled", &d->fog_enabled);
         d->has_fog_density = get_float(fog, "density", &d->fog_density);
         d->has_fog_anisotropy = get_float(fog, "anisotropy", &d->fog_anisotropy);
+        // Isotropic in-scatter radiance (cd/m^2) -- skylight reaching the medium
+        // from every direction. A real emitter, so it does not track the lamps;
+        // a scale test has to scale it too, or leave it at zero.
+        d->has_fog_ambient = get_vec3(fog, "ambient", d->fog_ambient);
     }
 }
 

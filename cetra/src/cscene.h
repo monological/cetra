@@ -164,6 +164,8 @@ typedef struct CetraSceneDesc {
     float fog_density;
     bool has_fog_anisotropy;
     float fog_anisotropy;
+    bool has_fog_ambient;
+    float fog_ambient[3]; // fog.ambient: isotropic in-scatter radiance (cd/m^2)
 
     // wind -- a first-class directional scene wind (wind.h). Each value carries
     // its own presence flag; absent fields keep the Wind's built-in defaults.

@@ -2187,6 +2187,17 @@ int main(int argc, char** argv) {
             engine->postfx->fog_far = scene_radius * 5.0f;
             engine->postfx->fog_floor_y = scene_floor_y;
         }
+        // Authored fog in-scatter, after the density block so it survives it.
+        // Clearing publish_fog_ambient is the load-bearing half: the sky
+        // otherwise stamps its zenith radiance over this every time the sun
+        // moves, the same way it would over a GUI edit.
+        if (cscn && cscn->has_fog_ambient) {
+            glm_vec3_copy((float*)cscn->fog_ambient, engine->postfx->fog_ambient);
+            if (scene->sky)
+                scene->sky->publish_fog_ambient = false;
+            printf("Scene file: fog ambient %.3f %.3f %.3f cd/m2\n", cscn->fog_ambient[0],
+                   cscn->fog_ambient[1], cscn->fog_ambient[2]);
+        }
     }
 
     // Update orbit controller with appropriate distance
