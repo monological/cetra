@@ -3,7 +3,7 @@
   "models": [ { "path": "light_import_fixture.gltf" } ],
   "post": {
     "tonemap": "agx",
-    "camera": { "aperture": 2.8, "shutter": 0.0167, "iso": 400 },
+    "camera": { "aperture": 2.8, "shutter": 0.008, "iso": 100 },
     "bloom": { "enabled": true, "strength": 0.3, "threshold": 1.0 }
   },
   "materials": {
