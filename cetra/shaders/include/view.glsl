@@ -50,10 +50,27 @@ layout(std140) uniform ViewParams {
 //
 // A ceiling belongs here ONLY if the thing it bounds is genuinely measured in
 // multiples of white. pbr_frag's per-light clamp was not -- it bounded a number
-// of nits -- and moved out to become a dimensionless BRDF_MAX. Anything that
-// ends up scaling with 1/preExposure does not belong on this list, because
-// auto-exposure meters through it and will chase it (spec 10.1 phase 5).
+// of nits -- and moved out to become a dimensionless BRDF_MAX.
+//
+// The ones that remain all sit upstream of the auto-exposure meter, which reads
+// through them: the metered value contains min(radiance, C / preExposure), so
+// where a ceiling BINDS it moves the equilibrium the loop settles on. That is
+// survivable in a way the terms spec 10.2 phase 1 removed were not -- a clamp
+// releases as the gain closes, so the loop still converges, where an
+// un-pre-exposed light is an unconditional 1/preExposure factor with no
+// positive solution at all.
+//
+// So the rule is: these must be OVERFLOW AND FIREFLY GUARDS, sitting far enough
+// above anything a scene legitimately produces that they engage on outliers
+// only. They are not brightness controls. Measured on a sky-lit fixture with a
+// 40000 cd key and SSR/SSGI/fog live, disabling all three entirely moves peak
+// output by 2/255 -- so what they buy is small, and a ceiling tight enough to
+// shape the image would be buying that at the cost of the loop's fixed point.
+//
+// WS_REFLECT_MAX was +1 stop and WS_BOUNCE_MAX +2, which are look controls by
+// that standard: a mirror reflecting a lamp is legitimately hundreds of times
+// white, and clipping it there both dims the reflection and drags the exposure.
 const float WS_SCENE_MAX = 60000.0; // +15.9 stops: fp16 guard on the finished pixel
-const float WS_REFLECT_MAX = 2.0;   // +1 stop: SSR firefly clamp
-const float WS_BOUNCE_MAX = 4.0;    // +2 stops: SSGI gather firefly clamp
+const float WS_REFLECT_MAX = 64.0;  // +6 stops: SSR firefly guard
+const float WS_BOUNCE_MAX = 64.0;   // +6 stops: SSGI gather firefly guard
 const float WS_MEDIA_MAX = 500.0;   // +9 stops: fog in-scatter, per froxel and integrated
