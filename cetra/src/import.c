@@ -1136,6 +1136,33 @@ int load_animations_from_file(Scene* scene, Skeleton* skeleton, const char* file
     return (int)loaded;
 }
 
+// KHR_lights_punctual's `range` on the node that owns the light, keyed
+// "PBR_LightRange". Assimp's glTF2 loader parks it there because aiLight has no
+// field for it, and it copies the node's name onto the light -- which is the
+// only handle back, so match on that.
+//
+// Returns false when the light has no range, which is a real answer: KHR's
+// default is unbounded, not some fallback distance.
+static bool find_gltf_light_range(const struct aiNode* node, const char* light_name, float* out) {
+    if (!node || !light_name)
+        return false;
+    if (node->mMetaData && node->mName.length &&
+        strcmp(node->mName.data, light_name) == 0) {
+        for (unsigned int i = 0; i < node->mMetaData->mNumProperties; i++) {
+            if (strcmp(node->mMetaData->mKeys[i].data, "PBR_LightRange") == 0 &&
+                node->mMetaData->mValues[i].mType == AI_FLOAT) {
+                *out = *(float*)node->mMetaData->mValues[i].mData;
+                return true;
+            }
+        }
+    }
+    for (unsigned int i = 0; i < node->mNumChildren; i++) {
+        if (find_gltf_light_range(node->mChildren[i], light_name, out))
+            return true;
+    }
+    return false;
+}
+
 void process_ai_lights(const struct aiScene* scene, Light*** lights, size_t* num_lights,
                        bool photometric_units) {
     *num_lights = scene->mNumLights;
@@ -1164,18 +1191,12 @@ void process_ai_lights(const struct aiScene* scene, Light*** lights, size_t* num
                              ai_light->mColorSpecular.b},
                       light->specular);
 
-        // Attenuation: only adopt the file's profile when it is usable. Blender
-        // FBX exports physical watts, not OpenGL attenuation coefficients -- its
-        // lights arrive with the coefficients zero (or denormal-tiny, which a
-        // plain > 0 test accepts but still explodes 1/(c + l*d + q*d^2) into
-        // absurd radiance: every lit pixel blows out no matter the exposure).
-        // Require magnitudes that keep the denominator sane; otherwise keep
-        // create_light()'s defaults.
-        bool has_attenuation = ai_light->mAttenuationConstant > 1e-3f ||
-                               ai_light->mAttenuationLinear > 1e-4f ||
-                               ai_light->mAttenuationQuadratic > 1e-6f;
+        // aiLight's attenuation triple is read by nothing here. It described the
+        // fixed-function 1/(c + l*d + q*d^2) falloff, which spec 9.9 replaced
+        // with inverse-square windowed by range, and the last reader of it was
+        // the range heuristic below.
 
-        // Set intensity, attenuation, and cutoff based on light type
+        // Set intensity and cutoff based on light type
         switch (ai_light->mType) {
             case aiLightSource_DIRECTIONAL:
                 light->type = LIGHT_DIRECTIONAL;
@@ -1227,17 +1248,22 @@ void process_ai_lights(const struct aiScene* scene, Light*** lights, size_t* num
 
         // KHR_lights_punctual's optional `range` is the distance past which the
         // light contributes nothing -- exactly what the falloff window wants, so
-        // it maps straight onto Light.range. Assimp has no field for it and drops
-        // the extension property, so what arrives instead is the attenuation
-        // triple it synthesises. Recover the range from that: the quadratic term
-        // is fitted so the old falloff crossed the visibility floor at the range,
-        // which inverts to r = sqrt(1/q).
+        // it maps straight onto Light.range. Absent, it stays 0 = unbounded
+        // inverse-square, which is KHR's own default.
         //
-        // Absent (or directional), range stays 0 = unbounded inverse-square,
-        // which is KHR's own default.
-        if (light->type != LIGHT_DIRECTIONAL && has_attenuation &&
-            ai_light->mAttenuationQuadratic > 1e-6f) {
-            light->range = sqrtf(1.0f / ai_light->mAttenuationQuadratic);
+        // It does NOT arrive on aiLight. Assimp has no field for it and puts it
+        // on the owning NODE's metadata instead; see find_gltf_light_range.
+        //
+        // This used to be recovered as sqrt(1/quadratic), which is a Blender
+        // convention (that loader fits q = 1/range^2). Assimp's glTF2 loader
+        // sets quadratic to a flat 1.0 for every point and spot light as a
+        // sentinel meaning "pure inverse square, no range" -- so the inversion
+        // returned exactly 1.0 metre for every glTF punctual light ever
+        // imported, and light_cull_radius then culled it past a metre.
+        float khr_range = 0.0f;
+        if (light->type != LIGHT_DIRECTIONAL && scene->mRootNode &&
+            find_gltf_light_range(scene->mRootNode, ai_light->mName.data, &khr_range)) {
+            set_light_range(light, khr_range);
         }
 
         // Blender also bakes the light's power into the color (e.g. an 800W
