@@ -2,6 +2,8 @@
 in vec3 TexCoords;
 out vec4 FragColor;
 
+#include "view.glsl"
+
 // On-screen sky background: sample the sky-view LUT for the pixel's world
 // view direction (encoded into the sun-relative frame), and add the
 // analytic limb-darkened sun disc. Below the horizon, sample the LUT's
@@ -35,5 +37,5 @@ void main()
         sky += sunT * sunIntensity * limb;
     }
 
-    FragColor = vec4(min(sky, vec3(30000.0)), 1.0);
+    FragColor = vec4(min(sky, vec3(30000.0)) * preExposure, 1.0);
 }

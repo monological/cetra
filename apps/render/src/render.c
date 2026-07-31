@@ -1468,6 +1468,14 @@ int main(int argc, char** argv) {
             // of 1.0 would silently open up a stop. Only an explicit value means
             // a bias here.
             engine->postfx->exposure = args.exposure > 0.0f ? args.exposure : 0.0f;
+            // A physical camera IS the exposure decision, so adaptation does not
+            // also get a say -- they are alternative methods, not stacking ones.
+            // Left on, metering compares absolute scene radiance against an
+            // absolute 0.18 key and darkens a correctly-exposed frame by up to
+            // the 1/64 clamp. An explicit --taa-style override can still turn it
+            // back on; this is only the default when a camera is authored.
+            if (args.auto_exposure_override < 0)
+                engine->postfx->auto_exposure = false;
             printf("Physical exposure: f/%.1f %.4gs ISO%.0f -> EV100 %.2f\n",
                    engine->postfx->aperture, engine->postfx->shutter_speed, engine->postfx->iso,
                    postfx_ev100(engine->postfx));

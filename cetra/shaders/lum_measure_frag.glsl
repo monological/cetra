@@ -6,12 +6,19 @@ out vec4 FragColor;
 // storing log2 luminance. Mipmapping this target afterwards averages the logs,
 // so the top mip holds the scene's geometric-mean (photographic) luminance --
 // robust to a few very bright pixels, unlike an arithmetic mean.
+#include "view.glsl"
+
 uniform sampler2D hdrTex; // Resolved linear HDR scene
 uniform float autoKey;    // Middle-gray target; ALSO the metering floor (see below)
 
 void main()
 {
-    vec3 hdr = texture(hdrTex, TexCoords).rgb;
+    // Back to absolute scene radiance first. The buffer is pre-exposed
+    // (view.glsl), and metering it in working space would measure this pass's
+    // own contribution to the exposure that produced it -- a feedback loop that
+    // ratchets toward the clamp instead of settling. autoKey below is an
+    // absolute middle grey and only means anything against absolute input.
+    vec3 hdr = texture(hdrTex, TexCoords).rgb * oneOverPreExposure;
     // Sanitize like the tonemap does: a +INF texel would poison the whole
     // average through the mip chain.
     hdr = min(hdr, vec3(60000.0));

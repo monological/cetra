@@ -198,13 +198,17 @@ vec3 sceneToToned(vec3 hdr, float aoFactor, vec3 bloomAdd, float effExposure)
 
 void main()
 {
-    float effExposure = exposure;
+    // The buffer arrives pre-exposed (view.glsl), so the deterministic part of
+    // exposure is already in it. What is left here is auto-exposure's adaptation
+    // gain, which is metered from this very frame and so cannot be applied
+    // upstream of it.
+    float effExposure = 1.0;
     if (autoExposure == 1) {
         // The metering floor equals the key (enforced structurally: the
         // measure pass clamps with the same autoKey uniform), so avgLum >=
         // autoKey and the gain tops out at 1 -- auto-exposure only darkens.
         float avgLum = exp2(texture(lumTex, vec2(0.5)).r);
-        effExposure = exposure * clamp(autoKey / avgLum, 1.0 / 64.0, 1.0);
+        effExposure = clamp(autoKey / avgLum, 1.0 / 64.0, 1.0);
     }
     if (debugView == 1) {
         FragColor = vec4(vec3(texture(aoTex, TexCoords).r), 1.0);

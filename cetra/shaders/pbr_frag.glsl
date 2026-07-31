@@ -1098,7 +1098,13 @@ void main() {
         vec3 Hraw = V + L;
         float hLen2 = dot(Hraw, Hraw);
         vec3 H = hLen2 > 1e-8 ? Hraw * inversesqrt(hLen2) : N;
-        vec3 radiance = lightCI * attenuation;
+        // Pre-exposed HERE, not at the final write, because the per-light clamp
+        // below (vec3(10.0)) sits between the two. Clamping scene radiance
+        // against a working-space constant is what destroyed hue on bright
+        // surfaces: a 522-nit red channel and a 33-nit green one both landed on
+        // 10 and came out grey. In working space that constant means what it
+        // always claimed -- ten times white.
+        vec3 radiance = lightCI * attenuation * preExposure;
 
         // Cook-Torrance BRDF with optional anisotropy
         float NDF;
@@ -1368,7 +1374,11 @@ void main() {
     // the 0.04 roughness floor, times grazing Fresnel) overflows the store
     // to +INF, which the tonemap turns into NaN and displays as black
     // flecks tracing the specular highlights.
-    vec3 color = min(ambient + Lo + transmitted + emissiveMap, vec3(60000.0));
+    // Lo is already in working space (its radiance was pre-exposed above, so the
+    // per-light clamp could be meaningful); these three still carry scene
+    // radiance and are converted here. The fp16 ceiling then guards a working-
+    // space value, which is the only scale at which a fixed ceiling makes sense.
+    vec3 color = min(Lo + (ambient + transmitted + emissiveMap) * preExposure, vec3(60000.0));
 
     // Cascade acceptance view: tint by the fragment's selected cascade so
     // split geometry and snap stability are visible (dead when csmDebug 0)
@@ -1403,10 +1413,9 @@ void main() {
         finalOpacity = mix(opacity, 1.0, fresnelOpacity);
     }
 
-    // Scene radiance -> working space (view.glsl). The debug render modes above
-    // return before this on purpose: they emit display-ready colour, not
-    // radiance, and postfx blits rather than tonemaps them.
-    FragColor = vec4(color * preExposure, finalOpacity);
+    // `color` is already working space -- converted upstream so the clamps in
+    // between operate on the scale they were written for.
+    FragColor = vec4(color, finalOpacity);
 
     // G-buffer: view-space normal (xyz) for SSAO; alpha is a non-negative
     // reflective marker — only the shadow catcher's negative alpha traces in
@@ -1435,6 +1444,10 @@ void main() {
     // post pass blurs .rgb and composites hdr + blur - this (diffuse softens,
     // FragColor's specular stays sharp), reading .a per pixel to select the
     // profile. Discarded unless the engine enables attachment 4 (sssEnabled).
+    // Working space already: sssDiffuse accumulates the same pre-exposed
+    // `radiance` the main loop does. postfx folds this attachment back into the
+    // HDR buffer after the SSS blur, so a second multiply here would put skin on
+    // a different scale from every other surface.
     DiffuseOut = vec4(subsurface * sssDiffuse, float(max(sssProfileIndex + 1, 0)));
 
     // Weighted-blended OIT accumulate (guarded so oitPass 0 leaves FragColor and

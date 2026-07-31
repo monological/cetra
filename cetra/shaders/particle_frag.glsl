@@ -13,6 +13,8 @@ in float vViewZ;
 
 layout(location = 0) out vec4 FragColor;
 
+#include "view.glsl"
+
 uniform float hdrGain;    // push color above 1.0 so bloom catches the motes
 uniform vec3 uSunColor;   // key light color (subtle warm tint where it hits)
 uniform float uAmbient;   // brightness floor for shadowed motes
@@ -85,5 +87,5 @@ void main() {
 
     vec3 rgb = baseRgb * hdrGain * bright * tint;
 
-    FragColor = vec4(rgb * a, a);
+    FragColor = vec4(rgb * a * preExposure, a);
 }

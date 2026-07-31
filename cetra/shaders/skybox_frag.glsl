@@ -2,6 +2,8 @@
 in vec3 TexCoords;
 out vec4 FragColor;
 
+#include "view.glsl"
+
 uniform samplerCube skyboxTex;
 uniform float brightness; // Linear env multiplier; tone mapping happens in post
 
@@ -53,5 +55,5 @@ void main()
     vec3 dir = sample_direction(normalize(TexCoords));
     vec3 envColor = texture(skyboxTex, dir).rgb;
 
-    FragColor = vec4(envColor * brightness, 1.0);
+    FragColor = vec4(envColor * brightness * preExposure, 1.0);
 }

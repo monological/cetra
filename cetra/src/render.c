@@ -646,11 +646,16 @@ void render_current_scene(Engine* engine) {
     // same working space as the main view, or its capture bakes at a different
     // scale than the frame that samples it.
     //
-    // Phase 0 publishes identity. The block and its wiring land first so the
-    // contract exists and every program is bound to it before anything depends
-    // on the value; goldens prove that step changed nothing.
-    if (engine->view_ubo) {
-        const float view_params[4] = {1.0f, 1.0f, 0.0f, 0.0f};
+    // Carries the DETERMINISTIC part of exposure only -- the manual multiplier
+    // or the physical camera. Auto-exposure's adaptation gain stays at tonemap:
+    // it is metered from the frame being shaded, so pre-exposing by it needs the
+    // previous frame's value and a feedback path, which is not what this change
+    // is for. Total exposure is unchanged either way, so goldens hold.
+    if (engine->view_ubo && engine->postfx) {
+        float pre = postfx_exposure_multiplier(engine->postfx);
+        if (!(pre > 0.0f))
+            pre = 1.0f; // a zero or NaN here would blank the frame
+        const float view_params[4] = {pre, 1.0f / pre, postfx_ev100(engine->postfx), 0.0f};
         ubo_upload(engine->view_ubo, view_params, sizeof(view_params));
     }
 

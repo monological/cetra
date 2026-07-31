@@ -14,6 +14,8 @@ out vec4 FragColor; // rgb = in-scatter to add, a = transmittance to multiply by
 // rather than drawn as two passes -- and combining them also lets the single
 // temporal accumulator downstream stabilise both.
 
+#include "view.glsl"
+
 uniform sampler2D linDepthTex;      // Aux G-buffer; .z = linear view Z (<0), 0 = sky
 uniform sampler3D integratedVolume; // Fog: front-to-back (inscatter, transmittance)
 uniform sampler3D aerialVolume;     // Atmosphere: same encoding, camera to cell
@@ -67,5 +69,10 @@ void main() {
     //     S = S_fog + T_fog * S_aerial,   T = T_fog * T_aerial
     // Exact for two media in series given that ordering; the fully physical
     // answer is one medium in one volume, which is a later consolidation.
-    FragColor = vec4(fogLayer.rgb + aerialLayer.rgb * fogLayer.a, fogLayer.a * aerialLayer.a);
+    // In-scatter is independently computed radiance -- froxel_inject/integrate
+    // never read the HDR buffer -- so unlike SSGI/SSR/OIT it does not inherit
+    // pre-exposure and must apply it. Transmittance (.a) is a ratio and must
+    // NOT be scaled.
+    FragColor = vec4((fogLayer.rgb + aerialLayer.rgb * fogLayer.a) * preExposure,
+                     fogLayer.a * aerialLayer.a);
 }
