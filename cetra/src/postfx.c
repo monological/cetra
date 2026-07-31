@@ -251,6 +251,14 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     fx->exposure = 1.0f;
     fx->auto_exposure = true; // Adapt to scene luminance; apps setting a manual exposure clear this
     fx->auto_exposure_key = 0.18f;
+    // Off by default: every scene authored before this expects `exposure` to be
+    // a linear multiplier, and turning the camera on silently would rescale all
+    // of them. The settings below are a lit interior (EV100 ~6.9), which is what
+    // the fixtures are, so a scene opting in starts somewhere sane.
+    fx->physical_exposure = false;
+    fx->aperture = 2.8f;
+    fx->shutter_speed = 1.0f / 60.0f;
+    fx->iso = 400.0f;
     fx->bloom_threshold = 1.0f;
     fx->bloom_knee = 0.5f;
     fx->bloom_max_brightness = 8.0f;
@@ -881,6 +889,26 @@ int postfx_add_sss_profile(PostFX* fx, const float* color, float radius) {
 }
 
 // Defined below (with fog/SSR, its other callers); SSS is the first user in file order.
+float postfx_ev100(const PostFX* fx) {
+    // The photographic definition: EV100 = log2(N^2 / t * 100 / ISO). Guarded
+    // because a zero shutter or ISO is a divide by zero that reaches the shader
+    // as an INF exposure and blanks the frame -- a scene file can author both.
+    float n = fmaxf(fx->aperture, 1e-3f);
+    float t = fmaxf(fx->shutter_speed, 1e-6f);
+    float iso = fmaxf(fx->iso, 1.0f);
+    return log2f((n * n) / t * 100.0f / iso);
+}
+
+float postfx_exposure_multiplier(const PostFX* fx) {
+    if (!fx->physical_exposure)
+        return fx->exposure; // linear mode: the multiplier it always was
+    // Saturation-based speed (Frostbite / ISO 12232): the luminance that maps to
+    // white is 1.2 * 2^EV100, so exposure is its reciprocal. `exposure` is a
+    // stops bias here, not a multiplier -- positive opens up.
+    float ev = postfx_ev100(fx) - fx->exposure;
+    return 1.0f / (1.2f * exp2f(ev));
+}
+
 static GLuint run_temporal_accum(PostFX* fx, ShaderProgram* prog, PingPong* pp, int w, int h,
                                  GLuint current_tex, float feedback);
 
@@ -2170,7 +2198,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         glActiveTexture(GL_TEXTURE10);
         glBindTexture(GL_TEXTURE_2D, cs_active ? cs_result_tex : 0); // contact-shadow visibility
         UniformManager* tm = fx->tonemap_program->uniforms;
-        uniform_set_float(tm, "exposure", fx->exposure);
+        uniform_set_float(tm, "exposure", postfx_exposure_multiplier(fx));
         uniform_set_int(tm, "autoExposure", fx->auto_exposure ? 1 : 0);
         uniform_set_float(tm, "autoKey", fx->auto_exposure_key);
         uniform_set_float(tm, "bloomStrength", fx->bloom_strength);
