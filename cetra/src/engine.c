@@ -106,6 +106,10 @@ Engine* create_engine(const char* window_title, int width, int height) {
     }
 
     engine->window = NULL;
+    // Before anything can read it: apps set exposure fields between
+    // create_engine and init_engine, so the defaults have to be in place here
+    // rather than alongside the GL resources.
+    exposure_init(&engine->exposure);
 
     if (window_title != NULL) {
         engine->window_title = safe_strdup(window_title);
@@ -283,7 +287,6 @@ void free_engine(Engine* engine) {
     if (engine->postfx) {
         free_postfx(engine->postfx);
     }
-    free_exposure(engine->exposure); // after postfx, which borrows it
 
     free_light_cluster_context(engine->light_cluster);
     free_ubo(engine->view_ubo);
@@ -747,12 +750,7 @@ int init_engine(Engine* engine) {
         return -1;
     }
 
-    engine->exposure = create_exposure();
-    if (!engine->exposure) {
-        log_error("Failed to initialize engine exposure");
-        return -1;
-    }
-    postfx_set_exposure(engine->postfx, engine->exposure);
+    postfx_set_exposure(engine->postfx, &engine->exposure);
 
     return 0;
 }
@@ -1653,17 +1651,17 @@ static void _engine_gui_panel(Engine* engine) {
         if (igCombo_Str_arr("Tonemap", &tm, tonemap_names,
                             (int)(sizeof(tonemap_names) / sizeof(tonemap_names[0])), -1))
             fx->tonemap_mode = (PostFXTonemapMode)(tm + 1);
-        igCheckbox("Auto Exposure", &engine->exposure->automatic);
+        igCheckbox("Auto Exposure", &engine->exposure.automatic);
         // Two controls because they are two quantities, shown one at a time.
         // One slider over one range could not serve both: under a physical
         // camera the value is stops, where the linear range 0.05..8 cannot
         // reach 0 (neutral) and cannot stop down at all.
-        if (engine->exposure->physical) {
-            igSliderFloat("EV Bias", &engine->exposure->bias_stops, -6.0f, 6.0f, "%+.2f EV", 0);
+        if (engine->exposure.physical) {
+            igSliderFloat("EV Bias", &engine->exposure.bias_stops, -6.0f, 6.0f, "%+.2f EV", 0);
             if (igIsItemHovered(0))
                 igSetTooltip("Exposure compensation on the physical camera. Positive opens up.");
         } else {
-            igSliderFloat("Exposure", &engine->exposure->multiplier, 0.05f, 8.0f, "%.2f", 0);
+            igSliderFloat("Exposure", &engine->exposure.multiplier, 0.05f, 8.0f, "%.2f", 0);
             if (igIsItemHovered(0))
                 igSetTooltip("Linear multiplier. Authoring a post.camera in a .cscn switches "
                              "this to an EV bias instead.");

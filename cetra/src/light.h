@@ -121,6 +121,13 @@ LightUnits light_display_units(const Light* light);
 // The only unit a type can be shaded in.
 LightUnits light_canonical_units(LightType type);
 
+// Whether an authored unit means anything for this type: its own, or lumens on
+// something measured in candela. A pure predicate with no ordering dependence,
+// so any asset path can call it -- which is the point. It lives here rather
+// than in a parser because the second parser to want it would otherwise
+// re-derive the type-to-unit table, and the two would drift.
+bool light_units_valid_for_type(LightType type, LightUnits units);
+
 // Display names, for logs and GUI labels. Never NULL.
 const char* light_type_name(LightType type);
 const char* light_units_name(LightUnits units);

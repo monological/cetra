@@ -891,6 +891,11 @@ void main() {
             float NdotL = max(dot(N, L), 0.0);
             Lo += albedoMap * lightCI * attenuation * NdotL;
         }
+        // Display-relative ambient, and legitimately so: this debug mode does
+        // its own Reinhard and sRGB two lines down, and debug frames take the
+        // passthrough blit rather than the post chain, so nothing here reaches
+        // the HDR buffer or the auto-exposure meter. Not the same constant as
+        // the shading path's old 3%-of-white floor, which did (spec 10.1).
         vec3 color = Lo + vec3(0.03) * albedoMap;
         color = color / (color + vec3(1.0));
         color = linearToSRGB(color);
@@ -1221,7 +1226,11 @@ void main() {
         vec3 brdf = ((kD * albedoMap / PI + specular) * sheenScale + sheenSpec) *
                         (1.0 - coatAtten) +
                     coatSpec;
-        Lo += min(brdf, vec3(BRDF_MAX)) * radiance * NdotL * shadow;
+        // Scaled by the largest channel's overshoot rather than clamped per
+        // channel, so the ratio between channels survives. A per-channel min
+        // desaturates a coloured spike toward white -- the same hue-flattening
+        // that made the grey cube, one level in and far rarer.
+        Lo += brdf * min(1.0, BRDF_MAX / max(maxComp(brdf), 1e-6)) * radiance * NdotL * shadow;
 
         // SSS: tap this light's Lambert diffuse into the separated skin-diffuse
         // buffer (blurred later; specular stays in FragColor). Separate accumulate

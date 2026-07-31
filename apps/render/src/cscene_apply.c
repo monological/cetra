@@ -178,9 +178,9 @@ void add_cscene_lights(Scene* scene, const CetraSceneDesc* cscn) {
         set_light_original_position(light, (float*)sl->position);
         set_light_color(light, (float*)sl->color);
         set_light_intensity_units(light, sl->intensity, sl->units);
+        set_light_type(light, cscene_light_type(sl->type));
         switch (sl->type) {
         case CSCENE_LIGHT_AREA:
-            set_light_type(light, LIGHT_AREA);
             set_light_direction(light, (float*)sl->direction);
             set_light_size(light, sl->size[0], sl->size[1]);
             if (sl->has_up)
@@ -189,13 +189,11 @@ void add_cscene_lights(Scene* scene, const CetraSceneDesc* cscn) {
                    sl->size[0], sl->size[1], sl->intensity, sl->cast_shadows ? ", shadows" : "");
             break;
         case CSCENE_LIGHT_DIRECTIONAL:
-            set_light_type(light, LIGHT_DIRECTIONAL);
             set_light_direction(light, (float*)sl->direction);
             printf("Scene file light '%s' (directional, intensity %.2f%s)\n", light->name,
                    sl->intensity, sl->cast_shadows ? ", shadows" : "");
             break;
         case CSCENE_LIGHT_SPOT:
-            set_light_type(light, LIGHT_SPOT);
             set_light_direction(light, (float*)sl->direction);
             // The engine stores cutoffs as cosines of the half-angles; authors
             // write degrees (see spec 6.2).
@@ -204,7 +202,6 @@ void add_cscene_lights(Scene* scene, const CetraSceneDesc* cscn) {
                    sl->cone[0], sl->cone[1], sl->cast_shadows ? ", shadows" : "");
             break;
         default: // CSCENE_LIGHT_POINT
-            set_light_type(light, LIGHT_POINT);
             printf("Scene file light '%s' (point, intensity %.2f%s)\n", light->name, sl->intensity,
                    sl->cast_shadows ? ", shadows" : "");
             break;

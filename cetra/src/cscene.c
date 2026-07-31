@@ -104,6 +104,19 @@ static void parse_environment(CetraSceneDesc* d, const cJSON* root) {
     }
 }
 
+LightType cscene_light_type(CSceneLightType type) {
+    switch (type) {
+        case CSCENE_LIGHT_AREA:
+            return LIGHT_AREA;
+        case CSCENE_LIGHT_DIRECTIONAL:
+            return LIGHT_DIRECTIONAL;
+        case CSCENE_LIGHT_SPOT:
+            return LIGHT_SPOT;
+        default:
+            return LIGHT_POINT;
+    }
+}
+
 static void parse_lights(CetraSceneDesc* d, const cJSON* root) {
     const cJSON* lights = cJSON_GetObjectItemCaseSensitive(root, "lights");
     if (!cJSON_IsArray(lights))
@@ -172,19 +185,12 @@ static void parse_lights(CetraSceneDesc* d, const cJSON* root) {
                          "(candela|lumens|lux|nits)",
                          out->name, unit->valuestring);
 
-            bool punctual =
-                out->type == CSCENE_LIGHT_POINT || out->type == CSCENE_LIGHT_SPOT;
-            LightUnits canonical = out->type == CSCENE_LIGHT_DIRECTIONAL ? LIGHT_UNITS_LUX
-                                   : out->type == CSCENE_LIGHT_AREA      ? LIGHT_UNITS_NITS
-                                                                         : LIGHT_UNITS_CANDELA;
-            bool ok = out->units == LIGHT_UNITS_DEFAULT || out->units == canonical ||
-                      (out->units == LIGHT_UNITS_LUMENS && punctual);
-            if (!ok) {
+            LightType lt = cscene_light_type(out->type);
+            if (!light_units_valid_for_type(lt, out->units)) {
                 log_warn("cscene: light '%s' is authored in %s, which a %s light is not "
-                         "measured in; using its own unit instead",
-                         out->name, unit->valuestring, type && cJSON_IsString(type)
-                                                           ? type->valuestring
-                                                           : "point");
+                         "measured in; using %s instead",
+                         out->name, light_units_name(out->units), light_type_name(lt),
+                         light_units_name(light_canonical_units(lt)));
                 out->units = LIGHT_UNITS_DEFAULT;
             }
         }

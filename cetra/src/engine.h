@@ -230,11 +230,17 @@ typedef struct Engine {
     // HDR post-processing (bloom + tone mapping)
     PostFX* postfx;
 
-    // The camera's exposure -- owned here, borrowed by PostFX (which runs the
-    // metering that feeds it) and read by render.c when it publishes ViewParams.
-    // On the Engine rather than inside PostFX because it defines the working
-    // space the SCENE passes write into, which happens before any post runs.
-    Exposure* exposure;
+    // The camera's exposure -- read by render.c when it publishes ViewParams,
+    // and by PostFX, which runs the metering that feeds it. On the Engine rather
+    // than inside PostFX because it defines the working space the SCENE passes
+    // write into, which happens before any post runs.
+    //
+    // By value: it is not optional, and a pointer made it look like it was.
+    // Every reader then guarded, differently -- one skipped the ViewParams
+    // upload entirely, which would have left preExposure at the UBO's calloc'd
+    // zero and rendered a black frame as the fallback for an invariant that
+    // cannot fail.
+    Exposure exposure;
 
     InputState input;
 

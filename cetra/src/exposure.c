@@ -19,12 +19,9 @@
 // and could not move.
 #define EXPOSURE_MAX_STOPS_DOWN 20.0f
 
-Exposure* create_exposure(void) {
-    Exposure* ex = malloc(sizeof(Exposure));
-    if (!ex) {
-        log_error("Failed to allocate memory for exposure");
-        return NULL;
-    }
+void exposure_init(Exposure* ex) {
+    if (!ex)
+        return;
     memset(ex, 0, sizeof(Exposure));
 
     ex->multiplier = 1.0f;
@@ -40,12 +37,6 @@ Exposure* create_exposure(void) {
     ex->aperture = 2.8f;
     ex->shutter_speed = 1.0f / 60.0f;
     ex->iso = 400.0f;
-
-    return ex;
-}
-
-void free_exposure(Exposure* ex) {
-    free(ex);
 }
 
 float exposure_ev100(const Exposure* ex) {

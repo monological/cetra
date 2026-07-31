@@ -64,8 +64,9 @@ typedef struct Exposure {
     bool adapted_valid;
 } Exposure;
 
-Exposure* create_exposure(void);
-void free_exposure(Exposure* ex);
+// Initialise in place. No allocation: an Engine always has exactly one, so a
+// pointer would only invite the NULL checks that had four different answers.
+void exposure_init(Exposure* ex);
 
 // EV100 = log2(N^2 / t * 100 / ISO), the photographic definition.
 float exposure_ev100(const Exposure* ex);

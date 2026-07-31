@@ -72,6 +72,12 @@ LightUnits light_canonical_units(LightType type) {
     }
 }
 
+bool light_units_valid_for_type(LightType type, LightUnits units) {
+    LightUnits canonical = light_canonical_units(type);
+    return units == LIGHT_UNITS_DEFAULT || units == canonical ||
+           (units == LIGHT_UNITS_LUMENS && canonical == LIGHT_UNITS_CANDELA);
+}
+
 const char* light_units_name(LightUnits units) {
     switch (units) {
         case LIGHT_UNITS_LUMENS:

@@ -1458,8 +1458,8 @@ int main(int argc, char** argv) {
         return -1;
     }
 
-    if (engine->exposure) {
-        Exposure* ex = engine->exposure;
+    {
+        Exposure* ex = &engine->exposure;
         if (args.aperture > 0.0f) {
             ex->physical = true;
             ex->aperture = args.aperture;

@@ -655,8 +655,8 @@ void render_current_scene(Engine* engine) {
     // it measures absolute radiance either way and cannot chase its own tail.
     // That only holds because nothing upstream of it is a fixed multiple of
     // white any more -- see spec 10.1 phase 5.
-    if (engine->view_ubo && engine->exposure) {
-        float pre = exposure_multiplier(engine->exposure);
+    if (engine->view_ubo) {
+        float pre = exposure_multiplier(&engine->exposure);
         if (!(pre > 0.0f))
             pre = 1.0f; // a zero or NaN here would blank the frame
         // A capture bakes ABSOLUTE radiance, so it renders at unity. The cubemap
@@ -670,7 +670,7 @@ void render_current_scene(Engine* engine) {
         // unity and wrong everywhere else.
         if (engine->capturing)
             pre = 1.0f;
-        const float view_params[4] = {pre, 1.0f / pre, exposure_ev100(engine->exposure), 0.0f};
+        const float view_params[4] = {pre, 1.0f / pre, exposure_ev100(&engine->exposure), 0.0f};
         ubo_upload(engine->view_ubo, view_params, sizeof(view_params));
     }
 

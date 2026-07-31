@@ -195,6 +195,12 @@ typedef struct CetraSceneDesc {
     float cam_fov; // vertical, degrees
 } CetraSceneDesc;
 
+// The engine LightType a parsed CSceneLightType denotes. Exported because the
+// mapping was previously written out at each site that needed it -- the parser,
+// the applier, and the unit validation -- and adding a light type left whichever
+// one you forgot silently stale.
+LightType cscene_light_type(CSceneLightType type);
+
 // True when path ends in .cscn (case-insensitive).
 bool cscene_path_is_scene(const char* path);
 

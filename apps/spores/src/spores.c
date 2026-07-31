@@ -127,8 +127,7 @@ static void on_init(Game* game) {
     // normalizes the metered mean toward middle gray, which for this lit room
     // is too bright for the intended dim interior -- the bias underexposes it
     // back down (photographic exposure compensation; auto-adaptation stays on).
-    if (engine->exposure)
-        engine->exposure->multiplier = 0.15f;
+    engine->exposure.multiplier = 0.15f;
     if (engine->postfx) {
         // Thin volumetric haze so the flashlight throws a visible beam shaft.
         // Kept low-density with near-zero ambient so the room stays moody and
