@@ -33,9 +33,6 @@ Light* create_light() {
     glm_vec3_copy((vec3){1.0f, 1.0f, 1.0f}, light->specular);
     glm_vec3_copy((vec3){1.0f, 1.0f, 1.0f}, light->ambient);
     light->intensity = 1.0f;
-    light->constant = 1.0f;
-    light->linear = 0.09f;
-    light->quadratic = 0.032f;
     light->range = 0.0f; // 0 = derive from attenuation (light_cull_radius)
     light->cutOff = cosf(glm_rad(12.5f));
     light->outerCutOff = cosf(glm_rad(15.0f));
@@ -129,26 +126,6 @@ void set_light_intensity(Light* light, float intensity) {
     light->intensity = intensity;
 }
 
-/**
- * Sets the attenuation factors for the light.
- *
- * @param light A pointer to the Light structure.
- * @param constant The constant attenuation factor. This is part of the
- *                 attenuation formula and represents the constant term.
- * @param linear The linear attenuation factor, representing the linear term
- *               in the attenuation formula.
- * @param quadratic The quadratic attenuation factor, representing the quadratic
- *                  term in the attenuation formula. This has a more significant
- *                  effect at longer distances.
- */
-void set_light_attenuation(Light* light, float constant, float linear, float quadratic) {
-    if (!light)
-        return;
-    light->constant = constant;
-    light->linear = linear;
-    light->quadratic = quadratic;
-}
-
 void set_light_range(Light* light, float range) {
     if (!light)
         return;
@@ -222,12 +199,11 @@ void print_light(const Light* light) {
     printf("<Light name='%s', type='%s', original_position=(%f, %f, %f) global_position=(%f, %f, "
            "%f), direction=(%f, %f, %f), "
            "color=(%f, %f, %f), specular=(%f, %f, %f), ambient=(%f, %f, %f), "
-           "intensity=%f, constant=%f, linear=%f, quadratic=%f, cutOff=%f, outerCutOff=%f>\n",
+           "intensity=%f, range=%f, cutOff=%f, outerCutOff=%f>\n",
            light->name, typeString, light->original_position[0], light->original_position[1],
            light->original_position[2], light->global_position[0], light->global_position[1],
            light->global_position[2], light->direction[0], light->direction[1], light->direction[2],
            light->color[0], light->color[1], light->color[2], light->specular[0],
            light->specular[1], light->specular[2], light->ambient[0], light->ambient[1],
-           light->ambient[2], light->intensity, light->constant, light->linear, light->quadratic,
-           light->cutOff, light->outerCutOff);
+           light->ambient[2], light->intensity, light->range, light->cutOff, light->outerCutOff);
 }

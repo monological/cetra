@@ -33,14 +33,10 @@ typedef struct Light {
     vec3 ambient;
     float intensity;
 
-    // Attenuation factors (for point and spot lights)
-    float constant;
-    float linear;
-    float quadratic;
-
-    // Authored cull radius for clustered lighting (spec 9.1). 0 = derive from
-    // the attenuation coefficients (light_cull_radius); an explicit range is
-    // the escape hatch when the epsilon heuristic clips a light too early.
+    // Where the inverse-square falloff is windowed to zero, and the cull radius
+    // (spec 9.9). 0 = unbounded, which is also KHR_lights_punctual's default;
+    // light_cull_radius then falls back to where the falloff drops under the
+    // visibility floor.
     float range;
 
     // Spot light specific properties
@@ -73,7 +69,6 @@ void set_light_direction(Light* light, vec3 direction);
 void set_light_up(Light* light, vec3 up);
 void set_light_color(Light* light, vec3 color);
 void set_light_intensity(Light* light, float intensity);
-void set_light_attenuation(Light* light, float constant, float linear, float quadratic);
 void set_light_range(Light* light, float range);
 void set_light_cutoff(Light* light, float cutOff, float outerCutOff);
 void set_light_cast_shadows(Light* light, bool cast_shadows);
