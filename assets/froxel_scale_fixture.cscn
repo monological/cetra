@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "_comment": [
+    "Scale-invariance gate for the FROXEL FOG path (spec 10.2 phase 3).",
+    "Run by scripts/gates.py, which generates the x1000 half.",
+    "",
+    "fog.ambient is isotropic in-scatter RADIANCE, so it is a real emitter and",
+    "the gate scales it alongside the lights -- the precondition spec 10.1",
+    "established for the fog case, and the reason this file could not exist",
+    "until the fog block accepted an authored ambient.",
+    "",
+    "Measured floor is 3 px of last-bit rounding, not a budget."
+  ],
+  "models": [
+    { "path": "cornell_point.gltf" }
+  ],
+  "lights": [
+    {
+      "name": "FogLamp",
+      "type": "point",
+      "position": [0.0, 0.8, 0.0],
+      "color": [1.0, 0.95, 0.88],
+      "intensity": 30.0,
+      "intensity_unit": "lumens",
+      "range": 10.0,
+      "cast_shadows": true
+    }
+  ],
+  "camera": {
+    "eye": [0.0, 1.6, 3.2],
+    "target": [0.0, 0.3, 0.0],
+    "fov": 40
+  },
+  "post": {
+    "tonemap": "neutral",
+    "exposure": 1.0,
+    "fog": {
+      "enabled": true,
+      "density": 0.15,
+      "ambient": [0.02, 0.02, 0.025]
+    }
+  }
+}

@@ -161,3 +161,38 @@ with open(out, "w") as f:
     json.dump(gltf, f, indent=1)
     f.write("\n")
 print("wrote", out, "(", len(positions), "verts,", len(indices) // 3, "tris )")
+
+# Second fixture, same geometry, POINT light with an explicit KHR range.
+#
+# The directional above cannot test range at all -- import.c's range recovery
+# skips directional lights, which is exactly why the 1 m regression (spec 10.2
+# phase 2) went unnoticed: this was the only glTF in the tree with a punctual
+# light, and it was the one type the code path ignores.
+#
+# The value 25.0 is arbitrary but must survive import unchanged. Assimp's glTF2
+# loader does NOT forward it as attenuation -- it sets mAttenuationQuadratic to
+# a flat 1.0 meaning "inverse-square, no range" and puts the real number on the
+# node's metadata as PBR_LightRange. Inverting the quadratic therefore yields
+# sqrt(1/1) = 1 m for every glTF point and spot light ever imported.
+point = json.loads(json.dumps(gltf))  # deep copy; geometry and buffers are shared
+point["asset"]["generator"] = "gen_light_import_fixture.py (point variant)"
+point["extensions"]["KHR_lights_punctual"]["lights"] = [
+    {
+        "name": "ranged_lamp",
+        "type": "point",
+        "color": [1.0, 1.0, 1.0],
+        "intensity": 500.0,
+        "range": 25.0,
+    }
+]
+point["nodes"][1] = {
+    "name": "ranged_lamp",
+    "translation": [0.0, 2.0, 0.0],
+    "extensions": {"KHR_lights_punctual": {"light": 0}},
+}
+
+out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "point_import_fixture.gltf")
+with open(out, "w") as f:
+    json.dump(point, f, indent=1)
+    f.write("\n")
+print("wrote", out, "( point light, intensity 500 cd, range 25 m )")

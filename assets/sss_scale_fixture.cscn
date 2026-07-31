@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "_comment": [
+    "Scale-invariance gate for the SUBSURFACE path (spec 10.2 phase 3).",
+    "Run against sss_scale_fixture_1000x.cscn.",
+    "",
+    "The key sits BEHIND the spheres on purpose: the back-light transmission",
+    "term is the accumulator this gate exists to reach, and it contributes",
+    "nothing to a front-lit surface. With the key in front this file renders",
+    "0 px across the scale and proves nothing.",
+    "",
+    "NOT covered here: DiffuseOut's other tap. That one is inside the IBL",
+    "branch, so exposing it needs an environment -- and an environment is a",
+    "second emitter, so the scale test would then also have to scale",
+    "env.intensity or the premise breaks. No HDR ships in assets/, so that gate",
+    "is still missing; the Phase 1 fix covers it structurally, not by test.",
+    "",
+    "The materials block configures SSS in-file so the gate needs no CLI flags."
+  ],
+  "models": [
+    { "path": "sss_fixture.gltf" }
+  ],
+  "materials": {
+    "sss_skin_a": { "sss": { "color": [0.90, 0.35, 0.25], "radius": 0.6 } },
+    "sss_skin_b": { "sss": { "color": [0.40, 0.75, 0.55], "radius": 0.6 } }
+  },
+  "lights": [
+    {
+      "name": "SkinKey",
+      "type": "point",
+      "position": [0.0, 0.15, -0.75],
+      "color": [1.0, 0.95, 0.88],
+      "intensity": 60.0,
+      "range": 20.0
+    }
+  ],
+  "camera": {
+    "eye": [0.0, 0.25, 1.5],
+    "target": [0.0, 0.0, 0.0],
+    "fov": 40
+  },
+  "post": {
+    "tonemap": "neutral",
+    "exposure": 1.0
+  }
+}
