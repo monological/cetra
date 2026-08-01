@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "models": [ { "path": "dir_shadow_fixture.gltf" } ],
+  "lights": [
+    {
+      "name": "GateSun",
+      "type": "directional",
+      "direction": [0.0, -0.642788, -0.766044],
+      "color": [1.0, 1.0, 1.0],
+      "intensity": 3.0,
+      "cast_shadows": true
+    }
+  ],
+  "camera": { "eye": [0.0, 3.0, 4.0], "target": [0.0, 0.0, -1.0], "fov": 50 },
+  "post": { "tonemap": "neutral", "exposure": 1.0 }
+}
