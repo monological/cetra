@@ -60,10 +60,21 @@ int punctualCubeFace(vec3 toFrag) {
 // what is left for a constant to cover is what a plane cannot describe:
 // quantization in the 24-bit depth buffer, and curvature within one texel.
 #define PUNCTUAL_BIAS_FLOOR 4.0
-// How far the plane may be extrapolated, as a fraction of the depth range per
-// texel. A silhouette is where the receiver plane stops being the surface the
-// kernel is sampling, and an unbounded extrapolation there turns the bias into a
-// light leak that widens with the slope.
+// How far the plane may be extrapolated toward the light, as a fraction of the
+// depth range per texel. A silhouette is where the receiver plane stops being
+// the surface the kernel is sampling, and an unbounded extrapolation there
+// turns the bias into a light leak that widens with the slope.
+//
+// The clamp is ONE-SIDED: the plane term is never allowed to predict the
+// surface DEEPER than the fragment. Its whole job is the nearer direction --
+// matching the receiver's own surface up-slope so grazing acne dies. A deeper
+// prediction only ever makes the test stricter than a flat compare, and at a
+// concave junction that manufactures occlusion: the plane extrapolates INTO
+// the adjacent surface, which truncates it and stands epsilon NEARER, so taps
+// crossing the junction read "occluded" at coplanar scale. Measured on
+// cornell_leak's wall base: every failing tap failed with a sub-1e-4 depth
+// gap and none held a genuinely different surface -- the dark wedge was
+// entirely this extrapolation, not the geometry.
 #define PUNCTUAL_MAX_PLANE_BIAS 0.01
 // Below this NdotL the map is not answering the question asked of it. One
 // perspective map tests whether the light's CENTRE is visible, and for a
@@ -149,9 +160,8 @@ float punctualShadow(int layer, vec3 worldPos, vec3 N, vec3 L, vec3 ddxWorld, ve
             vec2 off = vec2(x, y) * texel;
             vec2 uv = clamp(pc.xy + off, texel * 0.5, 1.0 - texel * 0.5);
             // Where the receiver's own plane sits at this tap, rather than at
-            // the fragment. Clamped because past a silhouette the plane is an
-            // extrapolation into a surface that is not there.
-            float plane = clamp(dot(duv_dz, off), -PUNCTUAL_MAX_PLANE_BIAS, PUNCTUAL_MAX_PLANE_BIAS);
+            // the fragment -- clamped one-sided; see PUNCTUAL_MAX_PLANE_BIAS.
+            float plane = clamp(dot(duv_dz, off), -PUNCTUAL_MAX_PLANE_BIAS, 0.0);
             float d = texture(punctualShadowMaps, vec3(uv, float(layer))).r;
             sum += (pc.z + plane - floorBias > d) ? 0.0 : 1.0;
         }
