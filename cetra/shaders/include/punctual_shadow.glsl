@@ -23,6 +23,10 @@
 
 uniform sampler2DArray punctualShadowMaps;
 uniform mat4 punctualShadowMatrix[MAX_PUNCTUAL_SHADOW_LAYERS];
+// One texel's world width per unit of axial distance (shadow.c writes
+// 2*tan(fov/2)/size). Per layer, because a point light's 90-degree face and a
+// panel's 120-degree cone do not cover the same ground at the same distance.
+uniform float punctualTexelScale[MAX_PUNCTUAL_SHADOW_LAYERS];
 // Layers rendered this frame. 0 disables every punctual shadow at once, which
 // is what the shadow system's master switch and an absent depth pass both
 // reduce to; a light carries its own base layer in its UBO entry, so this is
@@ -48,14 +52,67 @@ int punctualCubeFace(vec3 toFrag) {
     return toFrag.z > 0.0 ? 4 : 5;
 }
 
+// Receiver bias: how far toward the light the sample point moves before it is
+// projected, in shadow texels at the receiver's own distance. A world-space
+// displacement rather than an epsilon in the projection's NDC z, which is worth
+// ~d^2/near world units and so is only ever right at one distance and one scene
+// scale.
+//
+// The slope term carries it. One texel of a surface tilted away from the light
+// spans tan(theta) texel-widths of depth, and it is the 3x3 kernel's reach
+// across THAT which the bias has to clear. The cap is where the tangent stops
+// describing anything: past it the surface is edge-on and GRAZING_FADE has
+// already taken over.
+#define PUNCTUAL_BIAS_TEXELS 3.0
+#define PUNCTUAL_BIAS_FLOOR  0.5
+#define PUNCTUAL_MAX_SLOPE   8.0
+// Below this NdotL the map is not answering the question asked of it. One
+// perspective map tests whether the light's CENTRE is visible, and for a
+// receiver nearly edge-on to that centre the test is undefined in both
+// directions at once: the receiver compresses into a sliver of the map where its
+// own silhouette is inside the PCF kernel (spurious occlusion no bias reaches),
+// while the real answer for an AREA source is "half the panel", which a binary
+// test cannot express. So the term is faded out rather than trusted.
+//
+// It is a no-op on the point/spot path, whose radiance is already multiplied by
+// the same NdotL and is therefore zero wherever the fade is not one. Only the
+// LTC path, which has no NdotL because the form factor carries orientation, has
+// anything here to lose -- and there the fade is what stops a hard binary edge
+// being drawn across a face that genuinely sees part of the panel.
+#define PUNCTUAL_GRAZING_FADE 0.2
+
 // Occlusion for one perspective map: 1 = lit, 0 = fully occluded. A layer
-// outside the live range, a fragment behind the light, and a fragment off the
-// map all read as lit -- the last via the array's white border.
-float punctualShadow(int layer, vec3 worldPos, float NdotL) {
+// outside the live range, a fragment behind the light, a fragment off the map,
+// and a fragment edge-on to the light all read as lit -- the third via the
+// array's white border, the last via the fade above.
+//
+// L points at the light, so the fragment's own incidence angle sizes the bias:
+// it vanishes head-on, where a texel spans almost no depth and any displacement
+// is pure loss, and grows as the surface turns edge-on.
+float punctualShadow(int layer, vec3 worldPos, vec3 N, vec3 L) {
     if (layer < 0 || layer >= punctualShadowCount)
         return 1.0;
 
+    float ndl = clamp(dot(N, L), 0.0, 1.0);
+    float trust = smoothstep(0.0, PUNCTUAL_GRAZING_FADE, ndl);
+    if (trust <= 0.0)
+        return 1.0;
+
+    // The first projection is for ls.w alone -- the axial distance to the light,
+    // which is what the per-layer texel scale is expressed per unit of. The
+    // bias is sized in texels, so it cannot be built without it.
     vec4 ls = punctualShadowMatrix[layer] * vec4(worldPos, 1.0);
+    if (ls.w <= 0.0)
+        return 1.0;
+
+    // tan(acos(x)) == sqrt(1-x^2)/x for x in (0,1] -- one sqrt+divide instead
+    // of two transcendentals, per shadowed light per fragment. max() floors the
+    // divide so grazing (x->0) lands on the cap rather than on infinity.
+    float slope = min(sqrt(1.0 - ndl * ndl) / max(ndl, 1e-3), PUNCTUAL_MAX_SLOPE);
+    float texelWorld = punctualTexelScale[layer] * ls.w;
+    ls = punctualShadowMatrix[layer] *
+         vec4(worldPos + L * (texelWorld * (PUNCTUAL_BIAS_TEXELS * slope + PUNCTUAL_BIAS_FLOOR)),
+              1.0);
     if (ls.w <= 0.0)
         return 1.0;
 
@@ -63,25 +120,6 @@ float punctualShadow(int layer, vec3 worldPos, float NdotL) {
     if (pc.z > 1.0 || pc.x < 0.0 || pc.x > 1.0 || pc.y < 0.0 || pc.y > 1.0)
         return 1.0;
 
-    // Slope-scaled by tan(angle of incidence), not by (1 - NdotL). The two agree
-    // while a surface faces the light and diverge exactly where it matters: a
-    // face seen edge-on spans many depth units across one texel, and (1 - NdotL)
-    // saturates at 1 there while the tangent goes where the geometry does.
-    // tan(acos(x)) == sqrt(1-x^2)/x for x in (0,1] -- one sqrt+divide instead
-    // of two transcendentals, per shadowed light per fragment. max() floors the
-    // divide so grazing (x->0) lands on the same clamp ceiling.
-    //
-    // This is an epsilon in the projection's NDC z, which is the wrong space --
-    // under perspective it is worth ~d^2/near world units, so it is only ever
-    // right at one distance and one scene scale. It survives because the AREA
-    // path still depends on it: an area panel is front-face culled and gets no
-    // polygon offset, and removing this took cornell_box to near-black over 77%
-    // of frame. Point and spot additionally carry the depth-pass offset, which
-    // is what actually makes their contacts correct; this term is redundant
-    // there, not load-bearing.
-    float ndl = clamp(NdotL, 0.0, 1.0);
-    float slope = clamp(sqrt(1.0 - ndl * ndl) / max(ndl, 1e-3), 0.0, 12.0);
-    float bias = clamp(0.0006 * slope, 0.0004, 0.008);
     // 3x3 PCF, which the directional cascades have always had and this never
     // did: a single tap quantizes the edge to the texel grid, and reads as a
     // staircase on any silhouette not aligned to it.
@@ -101,8 +139,8 @@ float punctualShadow(int layer, vec3 worldPos, float NdotL) {
         for (int x = -1; x <= 1; ++x) {
             vec2 uv = clamp(pc.xy + vec2(x, y) * texel, texel * 0.5, 1.0 - texel * 0.5);
             float d = texture(punctualShadowMaps, vec3(uv, float(layer))).r;
-            sum += (pc.z - bias > d) ? 0.0 : 1.0;
+            sum += (pc.z > d) ? 0.0 : 1.0;
         }
     }
-    return sum / 9.0;
+    return mix(1.0, sum / 9.0, trust);
 }

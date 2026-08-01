@@ -99,6 +99,12 @@ typedef struct ShadowSystem {
     GLuint punctual_fbo;
     int punctual_allocated_layers; // Layer capacity built; a larger need rebuilds
     mat4 punctual_matrices[MAX_PUNCTUAL_SHADOW_LAYERS]; // perspective proj * lookAt per layer
+    // One texel's world width per unit of axial distance, per layer:
+    // 2 * tan(fov/2) / map size. The receiver bias in punctual_shadow.glsl is
+    // measured in texels and this is what turns it into a world length, so it
+    // has to be per-layer -- a point light's 90-degree face and a panel's
+    // 120-degree cone do not cover the same ground at the same distance.
+    float punctual_texel_scale[MAX_PUNCTUAL_SHADOW_LAYERS];
     // Layers actually rendered this frame, not merely requested: it is the
     // shader's punctualShadowCount, which bounds every Light.shadow_layer the
     // UBO carries, so a pass that allocated but never drew must leave it 0

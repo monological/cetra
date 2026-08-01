@@ -365,6 +365,9 @@ void bind_shadow_maps_to_program(ShadowSystem* system, ShaderProgram* program) {
         if (ploc >= 0)
             glUniformMatrix4fv(ploc, punctual_on, GL_FALSE,
                                (const GLfloat*)system->punctual_matrices);
+        GLint tloc = uniform_location(u, "punctualTexelScale[0]");
+        if (tloc >= 0)
+            glUniform1fv(tloc, punctual_on, system->punctual_texel_scale);
     }
 
     uniform_set_int(u, "numShadowLights", directional_on ? (int)system->directional_count : 0);
@@ -530,14 +533,17 @@ static int punctual_layers_for(const Light* light) {
 // is not a subtle degradation but a total one. Apps already scale
 // near_plane/far_plane off the scene radius for the cascades; a punctual light
 // in the same scene has no reason to disagree with them.
-static int compute_punctual_matrices(const Light* light, const ShadowSystem* ss, mat4* dest) {
+static int compute_punctual_matrices(const Light* light, const ShadowSystem* ss, mat4* dest,
+                                     float* texel_scale) {
     const float near_p = ss->near_plane, far_p = ss->far_plane;
+    float fov;
 
     switch (light->type) {
     case LIGHT_POINT:
+        fov = glm_rad(90.0f);
         for (int f = 0; f < 6; f++) {
-            compute_perspective_light_space(light->global_position, PUNCTUAL_CUBE_DIR[f],
-                                            glm_rad(90.0f), near_p, far_p, dest[f]);
+            compute_perspective_light_space(light->global_position, PUNCTUAL_CUBE_DIR[f], fov,
+                                            near_p, far_p, dest[f]);
         }
         break;
     case LIGHT_AREA: {
@@ -549,14 +555,14 @@ static int compute_punctual_matrices(const Light* light, const ShadowSystem* ss,
         glm_vec3_copy((float*)light->direction, dir);
         if (glm_vec3_norm(dir) < 1e-6f)
             glm_vec3_copy((vec3){0.0f, -1.0f, 0.0f}, dir);
-        compute_perspective_light_space(light->global_position, dir, AREA_SHADOW_FOV, near_p, far_p,
-                                        dest[0]);
+        fov = AREA_SHADOW_FOV;
+        compute_perspective_light_space(light->global_position, dir, fov, near_p, far_p, dest[0]);
         break;
     }
     default: {
         // A spot's fov is its own cone, plus a margin so the outer edge is not
         // clipped by the frustum it is supposed to fill.
-        float fov = 2.0f * acosf(light->outerCutOff) * 1.15f; // outerCutOff = cos(half-angle)
+        fov = 2.0f * acosf(light->outerCutOff) * 1.15f; // outerCutOff = cos(half-angle)
         if (fov > glm_rad(175.0f))
             fov = glm_rad(175.0f);
         compute_perspective_light_space(light->global_position, light->direction, fov, near_p, far_p,
@@ -564,7 +570,15 @@ static int compute_punctual_matrices(const Light* light, const ShadowSystem* ss,
         break;
     }
     }
-    return punctual_layers_for(light);
+
+    // A texel's world width at unit axial distance. The map is square and the
+    // projection symmetric, so one number covers both axes and all of this
+    // light's layers -- a point light's six faces share a fov.
+    int layers = punctual_layers_for(light);
+    float scale = 2.0f * tanf(fov * 0.5f) / (float)PUNCTUAL_SHADOW_MAP_SIZE;
+    for (int f = 0; f < layers; f++)
+        texel_scale[f] = scale;
+    return layers;
 }
 
 // The body both depth-pass loops share, once a layer is bound: aim the depth
@@ -823,27 +837,24 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
                 continue;
 
             int layers =
-                compute_punctual_matrices(light, ss, &ss->punctual_matrices[light->shadow_layer]);
+                compute_punctual_matrices(light, ss, &ss->punctual_matrices[light->shadow_layer],
+                                          &ss->punctual_texel_scale[light->shadow_layer]);
 
-            // Near-side depth + polygon offset for the two types it was measured
-            // on; an area panel stays on the cascades' far-side policy.
-            //
-            // The panel is the case where near-side storage costs more than it
-            // buys. Its map looks down a 120-degree cone from just under the
-            // ceiling, so the room's own walls and floor land in it almost
-            // edge-on -- the worst geometry for a depth-slope offset -- and they
-            // are receivers, so they self-shadow. cornell_box answered by going
-            // near-black over 79% of frame. A cone that wide has no equivalent
-            // of a cascade's fitted ortho box to keep texel footprints sane,
-            // which is why the same policy that fixes a spot breaks a panel.
-            bool near_side_depth = light->type == LIGHT_POINT || light->type == LIGHT_SPOT;
-            glCullFace(near_side_depth ? GL_BACK : GL_FRONT);
-            if (near_side_depth) {
-                glEnable(GL_POLYGON_OFFSET_FILL);
-                glPolygonOffset(SHADOW_DEPTH_SLOPE_BIAS, SHADOW_DEPTH_CONSTANT_BIAS);
-            } else {
-                glDisable(GL_POLYGON_OFFSET_FILL);
-            }
+            // Every punctual map stores the surface NEAREST the light and pays
+            // for acne with the slope-scaled offset below plus the receiver bias
+            // in punctual_shadow.glsl. The area panel was the last holdout on
+            // the cascades' far-side policy and it cost a lit line along every
+            // contact -- not the coplanar-depth tie it was first read as, but
+            // something no bias of either sign can reach: a caster's far side is
+            // its silhouette-adjacent faces, which a downward map sees near
+            // edge-on and rasterizes as a sub-texel sliver. A sliver misses
+            // texel centres, those texels keep the clear value, and a depth
+            // comparison against "nothing here" reads lit. Near side stores the
+            // caster's TOP instead, a full-coverage quad over the same
+            // silhouette, so the texels exist and the comparison is real.
+            glCullFace(GL_BACK);
+            glEnable(GL_POLYGON_OFFSET_FILL);
+            glPolygonOffset(SHADOW_DEPTH_SLOPE_BIAS, SHADOW_DEPTH_CONSTANT_BIAS);
 
             // One scene traversal per layer -- this loop is the frame cost the
             // pool ceiling caps, and a point light pays six times a spot's.

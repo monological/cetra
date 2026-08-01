@@ -1072,8 +1072,7 @@ void main() {
                 int aLayer = int(clusterLights[li].shadowMisc.y);
                 float aShadow = 1.0;
                 if (aLayer >= 0 && alphaMasked == 0) {
-                    vec3 aL = normalize(lightPos - WorldPos);
-                    aShadow = punctualShadow(aLayer, WorldPos, max(dot(N, aL), 0.0));
+                    aShadow = punctualShadow(aLayer, WorldPos, N, normalize(lightPos - WorldPos));
                 }
 
                 // Same split as the punctual clamp below: the LTC response is
@@ -1174,7 +1173,7 @@ void main() {
         // than multiplies because the two are exclusive -- dirShadowSlot is set
         // only on the directional path, punctualLayer only on the cluster one.
         if (punctualLayer >= 0 && alphaMasked == 0) {
-            shadow = punctualShadow(punctualLayer, WorldPos, NdotL);
+            shadow = punctualShadow(punctualLayer, WorldPos, N, L);
         }
 
         // POM self-shadow
