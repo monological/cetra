@@ -245,23 +245,38 @@ def run_penumbra_gate(workdir):
         print("  penumbra     SKIP  (missing area_shadow_fixture.gltf)")
         return []
 
-    out = os.path.join(workdir, "penumbra.ppm")
-    cmd = [RENDER, "-m", fixture, "-x", "-f", "30", "--no-auto-exposure", "-E", "1.0",
-           "-W", "800", "-H", "600", "-S", out]
-    r = subprocess.run(cmd, capture_output=True, text=True)
-    if r.returncode != 0 or not os.path.exists(out):
-        print("  penumbra     ERROR while rendering the fixture")
-        return ["penumbra"]
+    # Rendered twice, and the shadowed frame is DIVIDED by the unshadowed one.
+    # Measuring the shadowed frame alone takes its "lit" reference from the
+    # brightest sample on the scan, but the panel's own falloff varies across
+    # that scan, so the reference is wrong everywhere except at one point. On a
+    # narrow transition that hardly matters; on a 0.3-wide band it moved the
+    # apparent centre by 0.06 -- an artifact of the measurement, read as a bias
+    # in the shadow. The ratio is the shadow term on its own, flat 0..1.
+    frames = {}
+    for tag, extra in (("shadow", []), ("nolight", ["--no-shadows"])):
+        out = os.path.join(workdir, f"penumbra_{tag}.ppm")
+        cmd = [RENDER, "-m", fixture, "-x", "-f", "30", "--no-auto-exposure", "-E", "1.0",
+               "-W", "800", "-H", "600", "-S", out] + extra
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        if r.returncode != 0 or not os.path.exists(out):
+            print(f"  penumbra     ERROR while rendering the fixture ({tag})")
+            return ["penumbra"]
+        frames[tag] = _read_ppm(out)
 
-    w, h, pix = _read_ppm(out)
+    w, h, pix = frames["shadow"]
+    _, _, ref = frames["nolight"]
     project = _projector(w, h)
     inner, outer = _penumbra_edges()
 
     # Scan world x along +X at z=0 on the ground, well outside the band both ways.
-    xs = [inner - 0.2 + i * 0.002 for i in range(int((outer - inner + 0.4) / 0.002))]
-    vals = [_linear_luma(pix, w, h, *project((x, 0.0, 0.0))) for x in xs]
+    xs = [inner - 0.3 + i * 0.002 for i in range(int((outer - inner + 0.6) / 0.002))]
+    vals = []
+    for x in xs:
+        px, py = project((x, 0.0, 0.0))
+        lit_here = _linear_luma(ref, w, h, px, py)
+        vals.append(_linear_luma(pix, w, h, px, py) / lit_here if lit_here > 1e-4 else 1.0)
     umbra, lit = min(vals), max(vals)
-    if lit - umbra < 0.05:
+    if lit - umbra < 0.5:
         print(f"  penumbra     ERROR no shadow edge found (umbra {umbra:.3f}, lit {lit:.3f})")
         return ["penumbra"]
 
