@@ -20,6 +20,7 @@ The rule: a gate that pins exposure cannot see a space-mixing bug.
 
 import argparse
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -144,6 +145,143 @@ def run_scale_gates(workdir):
     return failures
 
 
+# Area-shadow penumbra gate (spec 10.4). The fixture's geometry is chosen so the
+# answer is known before rendering: a panel of half-width r at height H over an
+# occluder of half-width a at height h puts the umbra edge at
+# r + (a - r)*H/(H - h) and the fully-lit edge at -r + (a + r)*H/(H - h), so the
+# penumbra is a band of width 2*r*h/(H - h) centred between them.
+#
+# This is the only image gate in the repo with an analytic answer rather than a
+# stored reference, which is the whole reason it exists: every area-lit golden is
+# currently a reference for a bug (spec 10.3), so none of them can arbitrate a
+# change to the shadow projection.
+#
+# Mirrors assets/area_shadow_fixture.cscn and gen_area_shadow_fixture.py -- these
+# five numbers and the camera below have to match the fixture or the gate is
+# measuring a different scene than it is predicting.
+PENUMBRA = {
+    "panel_half": 0.3, "panel_h": 3.0, "occluder_half": 0.5, "occluder_h": 1.0,
+    "eye": (0.0, 2.2, 3.2), "target": (0.0, 0.0, 0.0), "fovy_deg": 40.0,
+}
+# What the CENTRE of the transition is allowed to drift, in world units. It is a
+# geometric fact, so every phase must hold it; only the WIDTH is expected to move
+# (it is ~0.01 with a hard 3x3 filter and should approach the analytic band once
+# a source-sized penumbra lands).
+PENUMBRA_CENTRE_TOL = 0.01
+
+
+def _penumbra_edges():
+    p = PENUMBRA
+    k = p["panel_h"] / (p["panel_h"] - p["occluder_h"])
+    inner = p["panel_half"] + k * (p["occluder_half"] - p["panel_half"])
+    outer = -p["panel_half"] + k * (p["occluder_half"] + p["panel_half"])
+    return inner, outer
+
+
+def _projector(w, h):
+    """World -> pixel for the fixture's camera. cglm's perspective fov is VERTICAL."""
+    def sub(a, b):
+        return tuple(x - y for x, y in zip(a, b))
+
+    def norm(v):
+        m = math.sqrt(sum(c * c for c in v))
+        return tuple(c / m for c in v)
+
+    def cross(a, b):
+        return (a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0])
+
+    def dot(a, b):
+        return sum(x * y for x, y in zip(a, b))
+
+    eye, target = PENUMBRA["eye"], PENUMBRA["target"]
+    fwd = norm(sub(target, eye))
+    right = norm(cross(fwd, (0.0, 1.0, 0.0)))
+    up = cross(right, fwd)
+    ty = 1.0 / math.tan(math.radians(PENUMBRA["fovy_deg"]) * 0.5)
+    tx = ty / (w / h)
+
+    def project(p):
+        d = sub(p, eye)
+        vx, vy, vz = dot(d, right), dot(d, up), -dot(d, fwd)
+        return (((vx * tx) / -vz * 0.5 + 0.5) * w, (0.5 - (vy * ty) / -vz * 0.5) * h)
+
+    return project
+
+
+def _read_ppm(path):
+    with open(path, "rb") as fh:
+        data = fh.read()
+    fields, i = [], 0
+    while len(fields) < 4:
+        while data[i:i + 1].isspace():
+            i += 1
+        if data[i:i + 1] == b"#":
+            while data[i:i + 1] != b"\n":
+                i += 1
+            continue
+        j = i
+        while not data[j:j + 1].isspace():
+            j += 1
+        fields.append(data[i:j])
+        i = j
+    return int(fields[1]), int(fields[2]), data[i + 1:]
+
+
+def _linear_luma(pix, w, h, px, py):
+    """Undo the sRGB encode -- the transition is measured on a linear signal."""
+    x = max(0, min(w - 1, int(round(px))))
+    y = max(0, min(h - 1, int(round(py))))
+    o = (y * w + x) * 3
+    total = 0.0
+    for k in range(3):
+        c = pix[o + k] / 255.0
+        total += c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+    return total / 3.0
+
+
+def run_penumbra_gate(workdir):
+    fixture = os.path.join(ROOT, "assets", "area_shadow_fixture.gltf")
+    if not os.path.exists(fixture):
+        print("  penumbra     SKIP  (missing area_shadow_fixture.gltf)")
+        return []
+
+    out = os.path.join(workdir, "penumbra.ppm")
+    cmd = [RENDER, "-m", fixture, "-x", "-f", "30", "--no-auto-exposure", "-E", "1.0",
+           "-W", "800", "-H", "600", "-S", out]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0 or not os.path.exists(out):
+        print("  penumbra     ERROR while rendering the fixture")
+        return ["penumbra"]
+
+    w, h, pix = _read_ppm(out)
+    project = _projector(w, h)
+    inner, outer = _penumbra_edges()
+
+    # Scan world x along +X at z=0 on the ground, well outside the band both ways.
+    xs = [inner - 0.2 + i * 0.002 for i in range(int((outer - inner + 0.4) / 0.002))]
+    vals = [_linear_luma(pix, w, h, *project((x, 0.0, 0.0))) for x in xs]
+    umbra, lit = min(vals), max(vals)
+    if lit - umbra < 0.05:
+        print(f"  penumbra     ERROR no shadow edge found (umbra {umbra:.3f}, lit {lit:.3f})")
+        return ["penumbra"]
+
+    def crossing(frac):
+        t = umbra + frac * (lit - umbra)
+        for i in range(1, len(vals)):
+            if vals[i - 1] < t <= vals[i]:
+                a = (t - vals[i - 1]) / (vals[i] - vals[i - 1])
+                return xs[i - 1] + a * (xs[i] - xs[i - 1])
+        return float("nan")
+
+    lo, mid, hi = crossing(0.10), crossing(0.50), crossing(0.90)
+    want_centre = 0.5 * (inner + outer)
+    ok = abs(mid - want_centre) <= PENUMBRA_CENTRE_TOL
+    print(f"  penumbra     {'PASS' if ok else 'FAIL'}  centre {mid:.4f} "
+          f"(want {want_centre:.4f} +/-{PENUMBRA_CENTRE_TOL}), "
+          f"10-90 width {hi - lo:.4f} (analytic {outer - inner:.4f})")
+    return [] if ok else ["penumbra"]
+
+
 def run_range_gate():
     """glTF KHR_lights_punctual `range` must survive import unchanged."""
     fixture = os.path.join(ROOT, "assets", "point_import_fixture.gltf")
@@ -176,6 +314,8 @@ def main():
     try:
         print("scale invariance (lights x1000, exposure /1000):")
         failures = run_scale_gates(workdir)
+        print("area shadow (analytic penumbra):")
+        failures += run_penumbra_gate(workdir)
         print("import:")
         failures += run_range_gate()
     finally:

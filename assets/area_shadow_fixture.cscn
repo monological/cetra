@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "models": [
+    { "path": "area_shadow_fixture.gltf" }
+  ],
+  "lights": [
+    {
+      "name": "PenumbraPanel",
+      "type": "area",
+      "position": [0.0, 3.0, 0.0],
+      "direction": [0.0, -1.0, 0.0],
+      "size": [0.6, 0.6],
+      "color": [1.0, 1.0, 1.0],
+      "intensity": 80.0,
+      "cast_shadows": true
+    }
+  ],
+  "camera": {
+    "eye": [0.0, 2.2, 3.2],
+    "target": [0.0, 0.0, 0.0],
+    "fov": 40
+  },
+  "post": {
+    "tonemap": "neutral",
+    "exposure": 1.0
+  }
+}
