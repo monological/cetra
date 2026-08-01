@@ -64,16 +64,20 @@ vec3 ltcIntegrateEdgeVec(vec3 v1, vec3 v2) {
 // into the basis once beats transforming four corners twice.
 float _ltcIntegrate(mat3 M, vec3 P, vec3 p0, vec3 p1, vec3 p2, vec3 p3) {
     // Which face of the quad this fragment sees. The edge-vector sum is a
-    // SIGNED area, so its tilt comes out negated for a fragment on the back
-    // side of the winding -- and the corners are wound along +dir, which is the
-    // side the panel lights, so that is every lit fragment. Without this the
-    // horizon clip floors the form factor at zero for anything facing the panel
-    // squarely (a floor under a ceiling panel reads exactly 0) while grazing
-    // surfaces, whose sum happens to land the other way, still light up.
+    // SIGNED area: its tilt comes out negated for a fragment looking at the
+    // back of the winding, and the corners are wound along +dir -- the side the
+    // panel lights -- so that is every fragment the plane test admits.
     //
-    // Negating the WINDING instead is not the same fix and does not work: the
-    // sign that needs flipping is per-fragment, so a global flip just moves the
-    // dead half from the facing surfaces to the grazing ones.
+    // Without this the horizon clip floors the form factor at zero for a
+    // surface facing the panel and passes the grazing and back-facing ones
+    // instead, i.e. the whole response is inverted. It reads as a falloff
+    // problem rather than a sign one, which is how it survived: a panel
+    // overhead lights the BOTTOM of a sphere, which still looks like lighting.
+    //
+    // Kept as the reference's per-fragment test rather than folded into the
+    // winding. The two are equivalent only while the plane test above admits
+    // exactly the +dir side; the test is what makes that a property of this
+    // function instead of an invariant split across two of them.
     bool behind = dot(p0 - P, cross(p1 - p0, p3 - p0)) < 0.0;
 
     vec3 L0 = normalize(M * (p0 - P));
