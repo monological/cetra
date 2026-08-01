@@ -59,7 +59,12 @@ for i in range(STACKS):
     for j in range(SECTORS):
         a = i * (SECTORS + 1) + j
         b = a + SECTORS + 1
-        indices += [a, b, a + 1, a + 1, b, b + 1]
+        # Counter-clockwise seen from OUTSIDE. phi runs +Y pole to -Y and theta
+        # anticlockwise about +Y, so the natural-looking (a, b, a+1) order winds
+        # the other way and every triangle faces into the sphere: back-face
+        # culling then hides the near hemisphere and draws the inside of the far
+        # one, which still renders as a plausible disc.
+        indices += [a, a + 1, b, a + 1, b + 1, b]
 
 sphere_vertex_count = len(positions)
 sphere_index_count = len(indices)
@@ -70,7 +75,7 @@ QUAD = 8.0
 quad_positions = [(-QUAD, 0.0, -QUAD), (QUAD, 0.0, -QUAD), (QUAD, 0.0, QUAD), (-QUAD, 0.0, QUAD)]
 quad_normals = [(0.0, 1.0, 0.0)] * 4
 quad_uvs = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
-quad_indices = [0, 1, 2, 0, 2, 3]
+quad_indices = [0, 2, 1, 0, 3, 2]
 
 positions += quad_positions
 normals += quad_normals

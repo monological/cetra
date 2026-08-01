@@ -42,7 +42,10 @@ for r in range(RINGS):
         a = r * (SECTORS + 1) + s
         b = a + SECTORS + 1
         # Two triangles per quad, CCW when viewed from outside.
-        indices.extend([a, b, a + 1, a + 1, b, b + 1])
+        # CCW seen from OUTSIDE. The natural-looking (a, b, a+1) order faces
+        # every triangle inward under this phi/theta sweep, and a sphere drawn
+        # inside-out still reads as a plausible shaded disc.
+        indices.extend([a, a + 1, b, a + 1, b + 1, b])
 
 pos_bytes = b"".join(struct.pack("<3f", *p) for p in positions)
 nrm_bytes = b"".join(struct.pack("<3f", *n) for n in normals)

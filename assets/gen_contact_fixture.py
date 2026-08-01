@@ -57,7 +57,7 @@ def _sphere_topology(rings, segs):
         for j in range(segs):
             a = i * (segs + 1) + j
             b, c, d = a + 1, a + (segs + 1), a + (segs + 2)
-            tris += [(a, c, b), (b, c, d)]   # CCW seen from outside
+            tris += [(a, b, c), (b, d, c)]   # CCW seen from outside
     return tris
 
 
@@ -98,10 +98,8 @@ def make_rock():
         va, vb, vc = verts[a], verts[b], verts[c]
         e1 = (vb[0] - va[0], vb[1] - va[1], vb[2] - va[2])
         e2 = (vc[0] - va[0], vc[1] - va[1], vc[2] - va[2])
-        # cross(e2, e1): the TOPOLOGY winding (a, c, b) makes cross(e1, e2) point
-        # INWARD, so swap the operands for the outward face normal.
-        fn = (e2[1] * e1[2] - e2[2] * e1[1], e2[2] * e1[0] - e2[0] * e1[2],
-              e2[0] * e1[1] - e2[1] * e1[0])
+        fn = (e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2],
+              e1[0] * e2[1] - e1[1] * e2[0])
         for k in (a, b, c):
             acc[k] = (acc[k][0] + fn[0], acc[k][1] + fn[1], acc[k][2] + fn[2])
     return verts, [_normalize(v) for v in acc]
@@ -148,7 +146,7 @@ QUAD = 6.0
 quad_positions = [(-QUAD, 0.0, -QUAD), (QUAD, 0.0, -QUAD), (QUAD, 0.0, QUAD), (-QUAD, 0.0, QUAD)]
 quad_normals = [(0.0, 1.0, 0.0)] * 4
 quad_uvs = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
-quad_indices = [0, 1, 2, 0, 2, 3]
+quad_indices = [0, 2, 1, 0, 3, 2]
 
 positions += quad_positions
 normals += quad_normals

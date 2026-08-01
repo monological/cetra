@@ -42,7 +42,10 @@ for i in range(STACKS):
     for j in range(SECTORS):
         a = i * (SECTORS + 1) + j
         b = a + SECTORS + 1
-        indices += [a, b, a + 1, a + 1, b, b + 1]
+        # CCW seen from OUTSIDE. The natural-looking (a, b, a+1) order faces
+        # every triangle inward under this phi/theta sweep, and a sphere drawn
+        # inside-out still reads as a plausible shaded disc.
+        indices += [a, a + 1, b, a + 1, b + 1, b]
 
 pos_bytes = b"".join(struct.pack("<3f", *p) for p in positions)
 nrm_bytes = b"".join(struct.pack("<3f", *n) for n in normals)
