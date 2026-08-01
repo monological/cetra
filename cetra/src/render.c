@@ -867,6 +867,15 @@ void render_current_scene(Engine* engine) {
         glDisable(GL_CULL_FACE);
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        // The quad sits at y=0, and a scene may ship its own ground plane at
+        // exactly that height. Pushed a few depth ULPs behind everything so
+        // real geometry always wins the depth test at equal depth -- without
+        // this, interpolation rounding lets the quad win in jitter-dependent
+        // patches and it stamps its own shadow term over the already-shaded
+        // floor as flickering rectangles. The backdrop dome floor writes no
+        // depth, so shadows land there exactly as before.
+        glEnable(GL_POLYGON_OFFSET_FILL);
+        glPolygonOffset(1.0f, 8.0f);
         // The floor writes the reflective marker only when SSR consumes it;
         // otherwise it draws color-only and leaves the normals buffer (and
         // SSAO's read of it) untouched. Must come after the blanket blend
@@ -879,6 +888,8 @@ void render_current_scene(Engine* engine) {
         glBindVertexArray(0);
 
         engine_set_scene_draw_buffers(engine, false);
+        glDisable(GL_POLYGON_OFFSET_FILL);
+        glPolygonOffset(0.0f, 0.0f);
         if (cull_was_enabled)
             glEnable(GL_CULL_FACE);
     }

@@ -455,6 +455,45 @@ def run_grazing_gate(workdir):
     return [] if ok else ["grazing"]
 
 
+def _taa_churn(workdir, fixture, tag, extra):
+    """AE between frames 90 and 120 of one static-camera TAA run (None on error)."""
+    base = os.path.join(workdir, f"churn_{tag}.ppm")
+    cmd = [RENDER, "-m", fixture, "-x", "-f", "120", "--no-auto-exposure", "-E", "1.0",
+           "--taa", "--headless-jitter", "--screenshot-every", "30",
+           "-W", "800", "-H", "600", "-S", base] + extra
+    subprocess.run(cmd, capture_output=True, text=True)
+    f90 = base[:-4] + "_000090.ppm"
+    f120 = base[:-4] + "_000120.ppm"
+    if not (os.path.exists(f90) and os.path.exists(f120)):
+        return None
+    return compare(f90, f120)[0]
+
+
+# The shadow catcher's virtual floor is auto-enabled by every sky-lit scene and
+# sits at y=0 -- exactly where a scene that ships its own ground puts it. The
+# catcher must never win the depth race against that real ground: when it does,
+# it re-stamps its own flat-bias shadow term over already-shaded pixels in
+# jitter-dependent patches (long rectangular streaks that flicker under TAA).
+# contact_fixture is the suite's only sky+catcher+real-ground scene, so the
+# check lives here; the authored-light fixtures have no catcher and cannot
+# measure it. Default settings deliberately (PCSS on, full post): the defect
+# was invisible to every gate that pins the pipeline down.
+def run_catcher_gate(workdir):
+    fixture = os.path.join(ROOT, "assets", "contact_fixture.cscn")
+    if not os.path.exists(fixture):
+        print("  catcher      SKIP  (missing contact_fixture.cscn)")
+        return []
+    shadowed = _taa_churn(workdir, fixture, "catch", [])
+    floor = _taa_churn(workdir, fixture, "catch_ns", ["--no-shadows"])
+    if shadowed is None or floor is None:
+        print("  catcher      ERROR while rendering the TAA sequences")
+        return ["catcher-churn"]
+    ok = shadowed <= floor * DIR_CHURN_FACTOR + DIR_CHURN_SLACK_PX
+    print(f"  catcher      {'PASS' if ok else 'FAIL'}  {shadowed} px frame-to-frame "
+          f"(no-shadow floor {floor} px)")
+    return [] if ok else ["catcher-churn"]
+
+
 def run_dir_shadow_gate(workdir):
     fixture = os.path.join(ROOT, "assets", "dir_shadow_fixture.cscn")
     if not os.path.exists(fixture):
@@ -559,17 +598,8 @@ def run_dir_shadow_gate(workdir):
     # Static camera, jitter on (windowed parity). Frames 90 and 120 of the same
     # run are compared; the --no-shadows pair is the noise floor everything else
     # in the pipeline contributes, and the shadowed pair must stay at it.
-    churn = {}
-    for tag, extra in (("taa", []), ("taa_ns", ["--no-shadows"])):
-        base = os.path.join(workdir, f"dir_{tag}.ppm")
-        cmd = [RENDER, "-m", fixture, "-x", "-f", "120", "--no-auto-exposure", "-E", "1.0",
-               "--taa", "--headless-jitter", "--screenshot-every", "30",
-               "-W", "800", "-H", "600", "-S", base] + hard + extra
-        subprocess.run(cmd, capture_output=True, text=True)
-        f90 = base[:-4] + "_000090.ppm"
-        f120 = base[:-4] + "_000120.ppm"
-        churn[tag] = compare(f90, f120)[0] if (os.path.exists(f90) and os.path.exists(f120)) \
-            else None
+    churn = {"taa": _taa_churn(workdir, fixture, "dir", hard),
+             "taa_ns": _taa_churn(workdir, fixture, "dir_ns", hard + ["--no-shadows"])}
     if churn["taa"] is None or churn["taa_ns"] is None:
         print("  churn        ERROR while rendering the TAA sequences")
         failures.append("dir-churn")
@@ -622,6 +652,8 @@ def main():
         failures += run_grazing_gate(workdir)
         print("cascade shadow (analytic ellipse):")
         failures += run_dir_shadow_gate(workdir)
+        print("catcher over a real ground (contact fixture):")
+        failures += run_catcher_gate(workdir)
         print("import:")
         failures += run_range_gate()
     finally:
