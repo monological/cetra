@@ -94,9 +94,17 @@ typedef struct ShadowSystem {
     float far_plane;
     GLuint shadow_map_array;
     bool initialized;
-    bool enabled;           // Master switch: off skips the depth pass and all receives
-    bool pcss_enabled;      // Contact-hardening penumbra (off = fixed 3x3 PCF)
-    float pcss_softness;    // Multiplier on each light's emitter size
+    bool enabled;        // Master switch: off skips the depth pass and all receives
+    bool pcss_enabled;   // Contact-hardening penumbra (off = fixed 3x3 PCF)
+    float pcss_softness; // Multiplier on each light's emitter size
+    // Stochastic PCSS, set per frame by the render pass: 1 = rotate the
+    // Poisson kernel per pixel and per frame. Must be 1 ONLY while TAA is
+    // accumulating -- the rotation trades tap banding for noise, and TAA is
+    // the only resolver the forward-shaded shadow term has. (SSR gates its
+    // spatial jitter on its a-trous denoiser instead; shadows have no
+    // spatial denoiser, so both knobs collapse into this one flag.)
+    int pcss_stochastic;
+    int pcss_frame_index;   // Per-frame rotation seed; frozen when stochastic is 0
     int cascade_count;      // Cascades per caster (1..SHADOW_CASCADES). 1 = the classic
                             // scene-fit single map, byte-identical to the pre-CSM path;
                             // layers stride by THIS value (layer = slot*cascade_count+c)

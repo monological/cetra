@@ -19,10 +19,7 @@ uniform float maxBlurPx;          // Blur-radius clamp = MOTION_BLUR_TILE (neigh
 const int SAMPLES = 16;
 const float SOFT_Z = 1.0; // soft depth-compare extent (view-space units)
 
-// Interleaved-gradient noise in [0,1) (Jimenez) -- cheap per-pixel dither.
-float ign(vec2 p) {
-    return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715))));
-}
+#include "noise.glsl"
 
 // aux .z is view-space Z (negative in front); sky/uncovered texels are cleared
 // to 0 (no geometry). Map those to "infinitely far" so a moving foreground

@@ -681,13 +681,24 @@ void render_current_scene(Engine* engine) {
     // Off in headless (jitter would break deterministic screenshots).
     mat4 draw_projection;
     glm_mat4_copy(*projection, draw_projection);
-    if (render_mode == RENDER_MODE_PBR && postfx_taa_active(engine->postfx) &&
-        (!engine->headless || engine->headless_jitter)) {
+    bool taa_jitter_live = render_mode == RENDER_MODE_PBR && postfx_taa_active(engine->postfx) &&
+                           (!engine->headless || engine->headless_jitter);
+    if (taa_jitter_live) {
         int j = (int)(engine->total_frames % 8) + 1;
         int rw, rh;
         engine_render_size(engine, &rw, &rh);
         draw_projection[2][0] += (_halton(j, 2) - 0.5f) * 2.0f / (float)rw;
         draw_projection[2][1] += (_halton(j, 3) - 0.5f) * 2.0f / (float)rh;
+    }
+    // Stochastic PCSS rides the same predicate: the kernel may only rotate
+    // while the TAA accumulator is live to average the noise it trades the
+    // tap banding for. The seed freezes with it (SSR's convention), so a
+    // still frame is a still frame. Modulo keeps the shader's float hash
+    // well-conditioned over long sessions.
+    if (scene->shadow_system) {
+        scene->shadow_system->pcss_stochastic = taa_jitter_live ? 1 : 0;
+        scene->shadow_system->pcss_frame_index =
+            taa_jitter_live ? (int)(engine->total_frames % 4096) : 0;
     }
     // Published for postfx: depth-buffer reconstruction must invert the
     // projection the depth was actually rasterized with

@@ -126,6 +126,8 @@ uniform int clearcoatNormalExists;
 #include "csm.glsl"
 // The receiver-plane bias policy both shadow lookups share.
 #include "receiver_plane.glsl"
+// ign() for the stochastic PCSS kernel rotation.
+#include "noise.glsl"
 
 uniform vec4 cascadeSplits; // View-depth far bound per cascade (.xyz)
 uniform int csmDebug; // Tint fragments by selected cascade
@@ -138,6 +140,12 @@ uniform int csmDebug; // Tint fragments by selected cascade
 // per-cascade ortho geometry comes from cascadeParams.
 uniform int pcssEnabled;
 uniform float pcssSoftness; // Multiplier on the light's angular size
+// Stochastic PCSS: 1 = rotate the Poisson kernel per pixel and per frame.
+// Set ONLY while TAA is accumulating -- the rotation trades the 16-tap
+// banding for noise, and TAA is the only thing that averages that noise
+// away (the shadow term is forward-shaded; it has no denoiser of its own).
+uniform int pcssStochastic;
+uniform int pcssFrameIndex; // Advances the per-frame rotation; frozen when off
 
 // Perspective shadow maps for the punctual light types, one 2D layer each,
 // separate from the directional cascade array. Each light carries its own base
@@ -452,11 +460,21 @@ float geometrySmith(vec3 N, vec3 V, vec3 L, float roughness) {
 // packed field it decodes.
 
 // 16-tap Poisson disk (unit radius) for the PCSS blocker search and filter.
-// Sampled UNROTATED: a per-pixel rotation decorrelates the pattern between
-// neighbours, which turns the 16-tap quantization into per-pixel shadow noise
-// — invisible on diffuse but riding the sharp specular lobe into a field of
-// bright speckle on the metal. An unrotated disk gives a spatially coherent,
-// smooth penumbra instead; the modest radius cap keeps 16 taps free of banding.
+// Two sampling regimes, chosen by pcssStochastic:
+//
+// UNROTATED (the deterministic default): a per-pixel rotation decorrelates
+// the pattern between neighbours, which turns the 16-tap quantization into
+// per-pixel shadow noise — invisible on diffuse but riding the sharp
+// specular lobe into a field of bright speckle on the metal. A coherent disk
+// gives a smooth penumbra instead, at the price of the tap pattern itself
+// becoming visible as stepped silhouette ghosts when a wide penumbra is
+// viewed at macro distance.
+//
+// ROTATED (pcssStochastic): per-pixel AND per-frame rotation, admissible
+// exactly when a temporal accumulator is running to average the noise it
+// trades the banding for — the C side sets the flag only while TAA
+// accumulates. The speckle that killed static rotation is the time-average's
+// variance, and TAA converges it away.
 const vec2 POISSON16[16] = vec2[](
     vec2(-0.9420, -0.3991), vec2(0.9456, -0.7689), vec2(-0.0942, -0.9294),
     vec2(0.3450, 0.2939), vec2(-0.9159, 0.4577), vec2(-0.8154, -0.8791),
@@ -559,6 +577,18 @@ float cascadeShadowTap(int layer, vec3 projCoords, vec2 duv_dz, float lightSize)
 
     float ref = currentDepth - SHADOW_PLANE_BIAS_FLOOR;
 
+    // Stochastic kernel rotation (see the POISSON16 comment). One rotation
+    // for both loops: the blocker estimate and the filter must agree on
+    // which taps they read or the penumbra radius decorrelates from the
+    // occlusion it filters. Identity when off -- the deterministic path
+    // reads the untouched constants and pays no trig.
+    vec2 rotCS = vec2(1.0, 0.0);
+    if (pcssStochastic == 1) {
+        vec2 fc = gl_FragCoord.xy + vec2(float(pcssFrameIndex) * 5.588238);
+        float ang = 6.2831853 * ign(fc);
+        rotCS = vec2(cos(ang), sin(ang));
+    }
+
     // 1. Blocker search: average depth of texels genuinely nearer the light
     //    than the receiver's PLANE at each tap, over a disk the size of the
     //    emitter's shadow footprint. Plane-relative AND separation-gated,
@@ -570,7 +600,9 @@ float cascadeShadowTap(int layer, vec3 projCoords, vec2 duv_dz, float lightSize)
     float blockerSum = 0.0;
     float blockerCount = 0.0;
     for (int i = 0; i < 16; i++) {
-        vec2 off = POISSON16[i] * lightSizeUV;
+        vec2 tap = vec2(dot(POISSON16[i], vec2(rotCS.x, -rotCS.y)),
+                        dot(POISSON16[i], rotCS.yx));
+        vec2 off = tap * lightSizeUV;
         float d = texture(shadowMaps, vec3(projCoords.xy + off, float(layer))).r;
         float zTap = linearizeOrthoDepth(d, nearFar);
         float zPlane =
@@ -595,7 +627,9 @@ float cascadeShadowTap(int layer, vec3 projCoords, vec2 duv_dz, float lightSize)
     // 3. Variable-width PCF over the same disk, plane-biased per tap
     float shadow = 0.0;
     for (int i = 0; i < 16; i++) {
-        vec2 off = POISSON16[i] * filterRadiusUV;
+        vec2 tap = vec2(dot(POISSON16[i], vec2(rotCS.x, -rotCS.y)),
+                        dot(POISSON16[i], rotCS.yx));
+        vec2 off = tap * filterRadiusUV;
         float d = texture(shadowMaps, vec3(projCoords.xy + off, float(layer))).r;
         shadow += ref + receiverPlaneBias(duv_dz, off) > d ? 1.0 : 0.0;
     }

@@ -398,6 +398,8 @@ void bind_shadow_maps_to_program(ShadowSystem* system, ShaderProgram* program) {
     // PCSS controls; the per-cascade ortho geometry rides in cascadeParams
     uniform_set_int(u, "pcssEnabled", system->pcss_enabled ? 1 : 0);
     uniform_set_float(u, "pcssSoftness", system->pcss_softness);
+    uniform_set_int(u, "pcssStochastic", system->pcss_stochastic);
+    uniform_set_int(u, "pcssFrameIndex", system->pcss_frame_index);
 
     uniform_set_int(u, "csmDebug", system->csm_debug ? 1 : 0);
     shadow_upload_cascade_uniforms(system, u);
