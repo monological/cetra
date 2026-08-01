@@ -149,25 +149,44 @@ void free_shadow_map_array(ShadowSystem* system) {
     system->initialized = false;
 }
 
+// Largest power-of-two edge the VRAM budget affords for `layers` depth layers.
+// Halving the size quarters the cost, so this walks down from the ceiling and
+// stops at the first size that fits -- and never below the floor, since a map
+// too coarse to resolve a silhouette is not worth rendering at all.
+static int punctual_size_for(int layers) {
+    for (int size = PUNCTUAL_SHADOW_MAX_SIZE; size > PUNCTUAL_SHADOW_MIN_SIZE; size >>= 1) {
+        if ((unsigned)layers * (unsigned)size * (unsigned)size * 4u <=
+            PUNCTUAL_SHADOW_VRAM_BUDGET)
+            return size;
+    }
+    return PUNCTUAL_SHADOW_MIN_SIZE;
+}
+
 // Grow the punctual array to hold `layers` maps. Demand-driven, like the
 // cascade array: a spot-only scene builds one layer rather than the pool
 // ceiling, since every allocated layer is a scene traversal per frame.
+//
+// The size is part of what "grow" means here. A scene that gains a point light
+// goes from one layer to seven, and seven layers do not fit at the edge one
+// affords -- so the rebuild is triggered by EITHER a larger layer count or a
+// size the budget no longer allows, not by the count alone.
 static int init_punctual_shadow_array(ShadowSystem* system, int layers) {
     if (layers < 1 || layers > MAX_PUNCTUAL_SHADOW_LAYERS)
         return -1;
 
-    if (system->punctual_map_array && system->punctual_allocated_layers >= layers)
+    int size = punctual_size_for(layers);
+    if (system->punctual_map_array && system->punctual_allocated_layers >= layers &&
+        system->punctual_map_size == size)
         return 0;
 
     free_depth_array(&system->punctual_map_array, &system->punctual_fbo);
-    init_depth_array(&system->punctual_map_array, &system->punctual_fbo,
-                     PUNCTUAL_SHADOW_MAP_SIZE, layers);
+    init_depth_array(&system->punctual_map_array, &system->punctual_fbo, size, layers);
     system->punctual_allocated_layers = layers;
-    // The frame cost, stated rather than assumed: every layer is re-rendered
-    // each frame, so this many extra scene-graph walks. Logged on growth, which
-    // is exactly when that cost rises.
-    log_info("Punctual shadow array: %d layer(s) at %d^2 -- %d scene traversal(s)/frame", layers,
-             PUNCTUAL_SHADOW_MAP_SIZE, layers);
+    system->punctual_map_size = size;
+    // Both costs, stated rather than assumed: the traversals (every layer is
+    // re-rendered each frame) and the VRAM the budget just spent.
+    log_info("Punctual shadow array: %d layer(s) at %d^2 (%.0f MB) -- %d scene traversal(s)/frame",
+             layers, size, (double)layers * size * size * 4.0 / (1024.0 * 1024.0), layers);
     return 0;
 }
 
@@ -175,7 +194,7 @@ static bool begin_punctual_shadow_pass(ShadowSystem* system, int layer) {
     if (layer < 0 || layer >= system->punctual_allocated_layers)
         return false;
     return begin_depth_layer(system->punctual_fbo, system->punctual_map_array, layer,
-                             PUNCTUAL_SHADOW_MAP_SIZE);
+                             system->punctual_map_size);
 }
 
 // caster_index is a LAYER index (slot * cascade_count + cascade)
@@ -368,6 +387,7 @@ void bind_shadow_maps_to_program(ShadowSystem* system, ShaderProgram* program) {
         GLint tloc = uniform_location(u, "punctualTexelScale[0]");
         if (tloc >= 0)
             glUniform1fv(tloc, punctual_on, system->punctual_texel_scale);
+        uniform_set_float(u, "punctualShadowMapSize", (float)system->punctual_map_size);
     }
 
     uniform_set_int(u, "numShadowLights", directional_on ? (int)system->directional_count : 0);
@@ -573,9 +593,12 @@ static int compute_punctual_matrices(const Light* light, const ShadowSystem* ss,
 
     // A texel's world width at unit axial distance. The map is square and the
     // projection symmetric, so one number covers both axes and all of this
-    // light's layers -- a point light's six faces share a fov.
+    // light's layers -- a point light's six faces share a fov. It divides by the
+    // size the array was actually built at, which the VRAM budget chose, so a
+    // scene that drops to a smaller map gets a correspondingly larger bias
+    // rather than one tuned for a resolution it is not running.
     int layers = punctual_layers_for(light);
-    float scale = 2.0f * tanf(fov * 0.5f) / (float)PUNCTUAL_SHADOW_MAP_SIZE;
+    float scale = 2.0f * tanf(fov * 0.5f) / (float)ss->punctual_map_size;
     for (int f = 0; f < layers; f++)
         texel_scale[f] = scale;
     return layers;

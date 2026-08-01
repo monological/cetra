@@ -16,12 +16,15 @@
 // same drift check on this array as on the cascade ones.
 
 #define MAX_PUNCTUAL_SHADOW_LAYERS 8
-// Mirrors PUNCTUAL_SHADOW_MAP_SIZE (shadow.h). A compile-time constant, unlike
-// the cascade array's runtime `default_map_size` -- so the PCF texel step is a
-// literal here rather than a per-fragment textureSize() query.
-#define PUNCTUAL_SHADOW_MAP_SIZE 2048.0
 
 uniform sampler2DArray punctualShadowMaps;
+// Edge length the array was built at. This used to be a GLSL literal mirroring a
+// C one, on the reasoning that the size was fixed where the cascades' was not.
+// It is not fixed any more: shadow.c picks it from a VRAM budget against the
+// layer count, so one area light gets a finer map than six point-light faces
+// would (shadow.h). A literal here would have silently mis-sized the PCF step by
+// the same factor.
+uniform float punctualShadowMapSize;
 uniform mat4 punctualShadowMatrix[MAX_PUNCTUAL_SHADOW_LAYERS];
 // One texel's world width per unit of axial distance (shadow.c writes
 // 2*tan(fov/2)/size). Per layer, because a point light's 90-degree face and a
@@ -133,7 +136,7 @@ float punctualShadow(int layer, vec3 worldPos, vec3 N, vec3 L) {
     // re-reads this face's edge texel, which is the nearest depth that actually
     // exists; the true neighbour is a face away and unreachable without a
     // samplerCubeArray (GLSL 400, above this shader set's 330).
-    vec2 texel = vec2(1.0 / PUNCTUAL_SHADOW_MAP_SIZE);
+    vec2 texel = vec2(1.0 / punctualShadowMapSize);
     float sum = 0.0;
     for (int y = -1; y <= 1; ++y) {
         for (int x = -1; x <= 1; ++x) {

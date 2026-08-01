@@ -19,11 +19,28 @@
 // no signal at all. Allocation is demand-driven, so a spot-only scene builds
 // one layer.
 #define MAX_PUNCTUAL_SHADOW_LAYERS 8
-// Every punctual map. Larger than the 1024 it started at because a spot's fov
-// comes from its cone -- a wide cone spreads the same texel count over a far
-// larger footprint than a cascade's fitted ortho box, and every seam artifact
-// scales with that footprint. One array means one size for all three types.
-#define PUNCTUAL_SHADOW_MAP_SIZE 2048
+// Punctual map size bounds and the VRAM the array is allowed to spend.
+//
+// One GL_TEXTURE_2D_ARRAY carries one size for every layer, and a second array
+// is not available -- the punctual array sits on texture unit 15, the last one,
+// and pbr_frag already samples all 16. So the size cannot be chosen per light;
+// it is chosen once per allocation, as the largest that fits the budget for the
+// layers actually needed.
+//
+// That is the only lever left on texel density. A panel's frustum cannot be
+// fitted to its scene: the caster bounds contain the light, so the cone the
+// casters demand runs to 180 degrees (spec 10.4, Phase 1). Resolution works
+// wherever the light sits.
+//
+// The asymmetry the budget produces is the useful part. A lone area panel needs
+// one layer and gets the maximum; a point light needs six faces and drops to a
+// size that keeps six of them affordable. Erring toward the smaller size is
+// deliberate: a shadow that is coarser than it could be is a look problem, and
+// half a gigabyte of depth array is a crash.
+#define PUNCTUAL_SHADOW_MIN_SIZE 1024
+#define PUNCTUAL_SHADOW_MAX_SIZE 4096
+// DEPTH_COMPONENT24 is one 4-byte texel, so this is layers * size^2 * 4.
+#define PUNCTUAL_SHADOW_VRAM_BUDGET (96u * 1024u * 1024u)
 // Depth-pass polygon offset. Applied to point and spot maps only -- cascades
 // and area panels suppress acne by front-face culling instead (shadow.c).
 // glPolygonOffset(factor, units) pushes a fragment by
@@ -98,6 +115,11 @@ typedef struct ShadowSystem {
     GLuint punctual_map_array;
     GLuint punctual_fbo;
     int punctual_allocated_layers; // Layer capacity built; a larger need rebuilds
+    // Edge length the array was actually built at, which the VRAM budget picks
+    // from the layer count rather than a constant. The shader needs it too --
+    // its PCF step is one texel wide -- so it is uploaded, not mirrored as a
+    // GLSL literal the way it used to be.
+    int punctual_map_size;
     mat4 punctual_matrices[MAX_PUNCTUAL_SHADOW_LAYERS]; // perspective proj * lookAt per layer
     // One texel's world width per unit of axial distance, per layer:
     // 2 * tan(fov/2) / map size. The receiver bias in punctual_shadow.glsl is
