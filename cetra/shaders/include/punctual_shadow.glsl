@@ -27,10 +27,6 @@ uniform mat4 punctualShadowMatrix[MAX_PUNCTUAL_SHADOW_LAYERS];
 // 2*tan(fov/2)/size). Per layer, because a point light's 90-degree face and a
 // panel's 120-degree cone do not cover the same ground at the same distance.
 uniform float punctualTexelScale[MAX_PUNCTUAL_SHADOW_LAYERS];
-// The near/far pair every punctual projection is built with. One vec2 rather
-// than a per-layer array because compute_punctual_matrices takes both from the
-// shadow system, so every layer shares them.
-uniform vec2 punctualNearFar;
 // Layers rendered this frame. 0 disables every punctual shadow at once, which
 // is what the shadow system's master switch and an absent depth pass both
 // reduce to; a light carries its own base layer in its UBO entry, so this is
@@ -85,22 +81,6 @@ int punctualCubeFace(vec3 toFrag) {
 // being drawn across a face that genuinely sees part of the panel.
 #define PUNCTUAL_GRAZING_FADE 0.2
 
-// Penumbra cap in shadow-UV, and the tap budget's limit. Past roughly ten
-// texels of a 2048 map the 16-tap disk stops being dense enough and the
-// gradient breaks into rings, so this is a cleanliness bound rather than a
-// look control -- same reasoning and same value as the cascade path's.
-#define PUNCTUAL_MAX_PENUMBRA_UV 0.005
-
-// View distance from a stored depth. The punctual maps are perspective, so
-// depth is not linear in distance and a penumbra built from raw depth
-// differences would be wrong everywhere except one plane. Inverting the
-// projection is two multiplies and makes blocker-receiver separation a real
-// length, which is what the similar-triangles penumbra below needs.
-float linearizePunctualDepth(float d01, vec2 nf) {
-    float zn = 2.0 * d01 - 1.0;
-    return 2.0 * nf.x * nf.y / ((nf.y + nf.x) - zn * (nf.y - nf.x));
-}
-
 // Occlusion for one perspective map: 1 = lit, 0 = fully occluded. A layer
 // outside the live range, a fragment behind the light, a fragment off the map,
 // and a fragment edge-on to the light all read as lit -- the third via the
@@ -109,13 +89,7 @@ float linearizePunctualDepth(float d01, vec2 nf) {
 // L points at the light, so the fragment's own incidence angle sizes the bias:
 // it vanishes head-on, where a texel spans almost no depth and any displacement
 // is pure loss, and grows as the surface turns edge-on.
-//
-// `sourceRadius` is the emitter's world half-extent, and 0 asks for the hard
-// 3x3 result. A point or spot passes 0 because it has no extent to resolve; a
-// panel passes its own, which is the whole difference between a shadow that
-// staircases along the shadow-map grid and one that softens with distance from
-// its caster the way an extended source actually does.
-float punctualShadow(int layer, vec3 worldPos, vec3 N, vec3 L, float sourceRadius) {
+float punctualShadow(int layer, vec3 worldPos, vec3 N, vec3 L) {
     if (layer < 0 || layer >= punctualShadowCount)
         return 1.0;
 
@@ -160,49 +134,6 @@ float punctualShadow(int layer, vec3 worldPos, vec3 N, vec3 L, float sourceRadiu
     // exists; the true neighbour is a face away and unreachable without a
     // samplerCubeArray (GLSL 400, above this shader set's 330).
     vec2 texel = vec2(1.0 / PUNCTUAL_SHADOW_MAP_SIZE);
-
-    // The map's full world width at the receiver, which turns any world length
-    // into shadow-UV: one texel is texelWorld across and 1/size in UV.
-    float frustumWorld = texelWorld * PUNCTUAL_SHADOW_MAP_SIZE;
-    float sourceUV = sourceRadius / frustumWorld;
-
-    if (sourceUV > texel.x) {
-        // An emitter wider than a texel has a resolvable penumbra, so run the
-        // PCSS pair: find what is blocking, then filter over the width that
-        // blocker's distance implies.
-        float zReceiver = ls.w;
-        float blockerSum = 0.0;
-        float blockerCount = 0.0;
-        float searchUV = min(sourceUV, PUNCTUAL_MAX_PENUMBRA_UV);
-        for (int i = 0; i < 16; ++i) {
-            vec2 uv = clamp(pc.xy + POISSON16[i] * searchUV, texel * 0.5, 1.0 - texel * 0.5);
-            float d = texture(punctualShadowMaps, vec3(uv, float(layer))).r;
-            if (d < pc.z) {
-                blockerSum += linearizePunctualDepth(d, punctualNearFar);
-                blockerCount += 1.0;
-            }
-        }
-        if (blockerCount < 0.5)
-            return 1.0; // nothing between the fragment and the panel
-
-        // Similar triangles: a source of half-width r at distance zR, blocked
-        // at zB, throws a penumbra r * (zR - zB) / zB wide. This is the term
-        // that makes contacts stay tight while a caster far from its receiver
-        // goes soft, and it is what the 3x3 kernel cannot express at any size.
-        float zBlocker = blockerSum / blockerCount;
-        float penumbraWorld = sourceRadius * max(zReceiver - zBlocker, 0.0) / max(zBlocker, 1e-4);
-        float filterUV =
-            clamp(penumbraWorld / frustumWorld, texel.x, PUNCTUAL_MAX_PENUMBRA_UV);
-
-        float soft = 0.0;
-        for (int i = 0; i < 16; ++i) {
-            vec2 uv = clamp(pc.xy + POISSON16[i] * filterUV, texel * 0.5, 1.0 - texel * 0.5);
-            float d = texture(punctualShadowMaps, vec3(uv, float(layer))).r;
-            soft += (pc.z > d) ? 0.0 : 1.0;
-        }
-        return mix(1.0, soft / 16.0, trust);
-    }
-
     float sum = 0.0;
     for (int y = -1; y <= 1; ++y) {
         for (int x = -1; x <= 1; ++x) {
