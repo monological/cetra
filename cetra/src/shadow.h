@@ -41,8 +41,8 @@
 #define PUNCTUAL_SHADOW_MAX_SIZE 4096
 // DEPTH_COMPONENT24 is one 4-byte texel, so this is layers * size^2 * 4.
 #define PUNCTUAL_SHADOW_VRAM_BUDGET (96u * 1024u * 1024u)
-// Depth-pass polygon offset. Applied to point and spot maps only -- cascades
-// and area panels suppress acne by front-face culling instead (shadow.c).
+// Depth-pass polygon offset, applied to every shadow map (cascade and
+// punctual share one near-side storage policy, shadow.c).
 // glPolygonOffset(factor, units) pushes a fragment by
 // factor * <max depth slope of the polygon> + units * <smallest resolvable
 // depth difference>. Both terms are expressed in the depth buffer's own units,

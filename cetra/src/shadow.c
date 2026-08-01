@@ -803,11 +803,33 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     GLint prev_viewport[4];
     glGetIntegerv(GL_VIEWPORT, prev_viewport);
 
-    // Cascades front-face cull: a lit surface is then absent from its own map
-    // and cannot self-shadow, which is the entire acne remedy on this path.
-    // The punctual section below uses the opposite policy, for reasons recorded
-    // there; the split is deliberate, not historical drift.
-    glCullFace(GL_FRONT);
+    // One depth policy for every shadow map, cascade and punctual alike: store
+    // the surface NEAREST the light (back-face cull) and pay for acne with a
+    // slope-scaled polygon offset plus the receiver-side bias in the lookups.
+    //
+    // Far-side storage cannot be biased into correctness, for the reason spec
+    // 10.3 measured on the punctual path: a caster's far side near its
+    // silhouette -- and everywhere near a ground contact -- rasterizes as
+    // slivers seen almost edge-on. A sliver misses texel centres, those texels
+    // keep the clear value, and a comparison against "nothing here" reads lit.
+    // No bias of either sign reaches a texel with no data in it. On the
+    // cascade path the cost was a resting sphere losing its shadow almost
+    // entirely (the dir_shadow_fixture hole gate).
+    //
+    // The cascades held out on far-side the longest because an earlier flip
+    // was tried with the polygon offset ALONE and correctly reverted: an
+    // ortho map over a whole scene puts every receiver into its own map, and
+    // at low sun the ground answered with banded acne no offset could cover.
+    // The receiver-plane bias in the cascade lookup is the other half of the
+    // remedy; the two land as a pair, and the fixture's acne gate at 10
+    // degrees is the regression guard for exactly that history.
+    //
+    // Polygon offset is expressed in the depth buffer's own units
+    // (slope * factor + r * units), so it does not have to be re-tuned per
+    // scene scale.
+    glCullFace(GL_BACK);
+    glEnable(GL_POLYGON_OFFSET_FILL);
+    glPolygonOffset(SHADOW_DEPTH_SLOPE_BIAS, SHADOW_DEPTH_CONSTANT_BIAS);
 
     GLuint current_program = 0;
     glUseProgram(ss->depth_program->id);
@@ -830,29 +852,8 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     }
 
     // Punctual maps (for surface shadows + the volumetric beam), one layer per
-    // caster. Reuses the allocation (a no-op once it is large enough) and the
-    // bound depth program, but NOT the cascades' depth policy.
-    //
-    // These store the surface nearest the light and pay for acne with a
-    // slope-scaled polygon offset. Front-face culling cannot be used here
-    // because it stores the caster's FAR side, whose bottom edge is coplanar
-    // with whatever the caster rests on: at the contact the occluder and
-    // receiver depths are then exactly equal, and the comparison reads "lit"
-    // along every contact line. That is not a bias-tuning problem -- equal is
-    // equal, and a bias of zero leaves it untouched.
-    //
-    // Polygon offset is expressed in the depth buffer's own units
-    // (slope * factor + r * units), so unlike the shader-side epsilon in
-    // punctual_shadow.glsl it does not have to be re-tuned per scene scale.
-    // That epsilon still runs -- the area path depends on it -- but for these
-    // two types it is redundant rather than load-bearing.
-    //
-    // The cascades keep front-face culling. Switching them too was tried and
-    // reverted: an ortho map over a whole scene puts every receiver into its
-    // own map, and at low sun elevation the froxel_fog fixture answered with
-    // banded ground acne and hard terminator crescents on convex casters that
-    // a larger offset made worse, not better. Their contact-line cost is
-    // therefore still outstanding.
+    // caster. Reuses the allocation (a no-op once it is large enough), the
+    // bound depth program, and the depth policy set above.
     if (punctual_needed > 0 && init_punctual_shadow_array(ss, punctual_needed) == 0) {
         for (size_t i = 0; i < scene->light_count; ++i) {
             Light* light = scene->lights[i];
@@ -862,22 +863,6 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
             int layers =
                 compute_punctual_matrices(light, ss, &ss->punctual_matrices[light->shadow_layer],
                                           &ss->punctual_texel_scale[light->shadow_layer]);
-
-            // Every punctual map stores the surface NEAREST the light and pays
-            // for acne with the slope-scaled offset below plus the receiver bias
-            // in punctual_shadow.glsl. The area panel was the last holdout on
-            // the cascades' far-side policy and it cost a lit line along every
-            // contact -- not the coplanar-depth tie it was first read as, but
-            // something no bias of either sign can reach: a caster's far side is
-            // its silhouette-adjacent faces, which a downward map sees near
-            // edge-on and rasterizes as a sub-texel sliver. A sliver misses
-            // texel centres, those texels keep the clear value, and a depth
-            // comparison against "nothing here" reads lit. Near side stores the
-            // caster's TOP instead, a full-coverage quad over the same
-            // silhouette, so the texels exist and the comparison is real.
-            glCullFace(GL_BACK);
-            glEnable(GL_POLYGON_OFFSET_FILL);
-            glPolygonOffset(SHADOW_DEPTH_SLOPE_BIAS, SHADOW_DEPTH_CONSTANT_BIAS);
 
             // One scene traversal per layer -- this loop is the frame cost the
             // pool ceiling caps, and a point light pays six times a spot's.
