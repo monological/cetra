@@ -137,6 +137,10 @@ uniform int csmDebug; // Tint fragments by selected cascade
 uniform int pcssEnabled;
 uniform float pcssSoftness; // Multiplier on the light's angular size
 
+// Shared soft-shadow tap pattern; both the punctual penumbra below and the
+// cascade PCSS further down sample it, so it has to precede them.
+#include "poisson.glsl"
+
 // Perspective shadow maps for the punctual light types, one 2D layer each,
 // separate from the directional cascade array. Each light carries its own base
 // layer in its cluster entry (shadowMisc.y), so nothing here is per-type.
@@ -449,19 +453,7 @@ float geometrySmith(vec3 N, vec3 V, vec3 L, float roughness) {
 // getDistanceAtt lives in include/lights_ubo.glsl, beside spotConeFactor and the
 // packed field it decodes.
 
-// 16-tap Poisson disk (unit radius) for the PCSS blocker search and filter.
-// Sampled UNROTATED: a per-pixel rotation decorrelates the pattern between
-// neighbours, which turns the 16-tap quantization into per-pixel shadow noise
-// — invisible on diffuse but riding the sharp specular lobe into a field of
-// bright speckle on the metal. An unrotated disk gives a spatially coherent,
-// smooth penumbra instead; the modest radius cap keeps 16 taps free of banding.
-const vec2 POISSON16[16] = vec2[](
-    vec2(-0.9420, -0.3991), vec2(0.9456, -0.7689), vec2(-0.0942, -0.9294),
-    vec2(0.3450, 0.2939), vec2(-0.9159, 0.4577), vec2(-0.8154, -0.8791),
-    vec2(-0.3828, 0.2768), vec2(0.9748, 0.7565), vec2(0.4432, -0.9751),
-    vec2(0.5374, -0.4737), vec2(-0.2650, -0.4189), vec2(0.7920, 0.1909),
-    vec2(-0.2419, 0.9971), vec2(-0.8141, 0.9144), vec2(0.1998, 0.7864),
-    vec2(0.1438, -0.1410));
+// POISSON16 lives in include/poisson.glsl, shared with the area-panel penumbra.
 
 // Max PCSS filter/search radius in shadow-UV. Raising this past ~10 texels
 // (2048 map) reintroduces shadow noise that rides the specular into speckle
@@ -1072,7 +1064,13 @@ void main() {
                 int aLayer = int(clusterLights[li].shadowMisc.y);
                 float aShadow = 1.0;
                 if (aLayer >= 0 && alphaMasked == 0) {
-                    aShadow = punctualShadow(aLayer, WorldPos, N, normalize(lightPos - WorldPos));
+                    // Half the panel's shorter side: the penumbra model is
+                    // isotropic, so a rectangle collapses to one number, and
+                    // the shorter side is the conservative choice.
+                    float panelRadius = 0.5 * min(clusterLights[li].shadowMisc.z,
+                                                  clusterLights[li].shadowMisc.w);
+                    aShadow = punctualShadow(aLayer, WorldPos, N,
+                                             normalize(lightPos - WorldPos), panelRadius);
                 }
 
                 // Same split as the punctual clamp below: the LTC response is
@@ -1173,7 +1171,7 @@ void main() {
         // than multiplies because the two are exclusive -- dirShadowSlot is set
         // only on the directional path, punctualLayer only on the cluster one.
         if (punctualLayer >= 0 && alphaMasked == 0) {
-            shadow = punctualShadow(punctualLayer, WorldPos, N, L);
+            shadow = punctualShadow(punctualLayer, WorldPos, N, L, 0.0);
         }
 
         // POM self-shadow

@@ -368,6 +368,9 @@ void bind_shadow_maps_to_program(ShadowSystem* system, ShaderProgram* program) {
         GLint tloc = uniform_location(u, "punctualTexelScale[0]");
         if (tloc >= 0)
             glUniform1fv(tloc, punctual_on, system->punctual_texel_scale);
+        GLint nfloc = uniform_location(u, "punctualNearFar");
+        if (nfloc >= 0)
+            glUniform2f(nfloc, system->near_plane, system->far_plane);
     }
 
     uniform_set_int(u, "numShadowLights", directional_on ? (int)system->directional_count : 0);
