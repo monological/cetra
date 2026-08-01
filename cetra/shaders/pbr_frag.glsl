@@ -577,16 +577,19 @@ float cascadeShadowTap(int layer, vec3 projCoords, vec2 duv_dz, float lightSize)
 
     float ref = currentDepth - SHADOW_PLANE_BIAS_FLOOR;
 
-    // Stochastic kernel rotation (see the POISSON16 comment). One rotation
-    // for both loops: the blocker estimate and the filter must agree on
-    // which taps they read or the penumbra radius decorrelates from the
-    // occlusion it filters. Identity when off -- the deterministic path
-    // reads the untouched constants and pays no trig.
-    vec2 rotCS = vec2(1.0, 0.0);
+    // Stochastic kernel rotation (see the POISSON16 comment), built ONCE so
+    // the blocker estimate and the filter read the same rotated taps -- if
+    // they disagreed, the penumbra radius would decorrelate from the
+    // occlusion it filters. Identity when off: no trig runs, and the
+    // identity multiply is IEEE-exact, so the deterministic image is
+    // bit-identical to the unrotated constants.
+    mat2 rot = mat2(1.0);
     if (pcssStochastic == 1) {
         vec2 fc = gl_FragCoord.xy + vec2(float(pcssFrameIndex) * 5.588238);
         float ang = 6.2831853 * ign(fc);
-        rotCS = vec2(cos(ang), sin(ang));
+        float c = cos(ang);
+        float s = sin(ang);
+        rot = mat2(c, s, -s, c);
     }
 
     // 1. Blocker search: average depth of texels genuinely nearer the light
@@ -600,9 +603,7 @@ float cascadeShadowTap(int layer, vec3 projCoords, vec2 duv_dz, float lightSize)
     float blockerSum = 0.0;
     float blockerCount = 0.0;
     for (int i = 0; i < 16; i++) {
-        vec2 tap = vec2(dot(POISSON16[i], vec2(rotCS.x, -rotCS.y)),
-                        dot(POISSON16[i], rotCS.yx));
-        vec2 off = tap * lightSizeUV;
+        vec2 off = rot * POISSON16[i] * lightSizeUV;
         float d = texture(shadowMaps, vec3(projCoords.xy + off, float(layer))).r;
         float zTap = linearizeOrthoDepth(d, nearFar);
         float zPlane =
@@ -627,9 +628,7 @@ float cascadeShadowTap(int layer, vec3 projCoords, vec2 duv_dz, float lightSize)
     // 3. Variable-width PCF over the same disk, plane-biased per tap
     float shadow = 0.0;
     for (int i = 0; i < 16; i++) {
-        vec2 tap = vec2(dot(POISSON16[i], vec2(rotCS.x, -rotCS.y)),
-                        dot(POISSON16[i], rotCS.yx));
-        vec2 off = tap * filterRadiusUV;
+        vec2 off = rot * POISSON16[i] * filterRadiusUV;
         float d = texture(shadowMaps, vec3(projCoords.xy + off, float(layer))).r;
         shadow += ref + receiverPlaneBias(duv_dz, off) > d ? 1.0 : 0.0;
     }

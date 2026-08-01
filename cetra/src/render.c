@@ -692,11 +692,12 @@ void render_current_scene(Engine* engine) {
     }
     // Stochastic PCSS rides the same predicate: the kernel may only rotate
     // while the TAA accumulator is live to average the noise it trades the
-    // tap banding for. The seed freezes with it (SSR's convention), so a
-    // still frame is a still frame. Modulo keeps the shader's float hash
-    // well-conditioned over long sessions.
+    // tap banding for. The seed freezes when no accumulator will average it
+    // -- stricter than SSR's gate, deliberately (shadow.h has the why) --
+    // so a still frame is a still frame. Modulo keeps the shader's float
+    // hash well-conditioned over long sessions.
     if (scene->shadow_system) {
-        scene->shadow_system->pcss_stochastic = taa_jitter_live ? 1 : 0;
+        scene->shadow_system->pcss_stochastic = taa_jitter_live;
         scene->shadow_system->pcss_frame_index =
             taa_jitter_live ? (int)(engine->total_frames % 4096) : 0;
     }
