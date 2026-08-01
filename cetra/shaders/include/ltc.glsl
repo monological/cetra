@@ -63,6 +63,19 @@ vec3 ltcIntegrateEdgeVec(vec3 v1, vec3 v2) {
 // specular, which is what warps the cosine into the GGX lobe. Folding Minv
 // into the basis once beats transforming four corners twice.
 float _ltcIntegrate(mat3 M, vec3 P, vec3 p0, vec3 p1, vec3 p2, vec3 p3) {
+    // Which face of the quad this fragment sees. The edge-vector sum is a
+    // SIGNED area, so its tilt comes out negated for a fragment on the back
+    // side of the winding -- and the corners are wound along +dir, which is the
+    // side the panel lights, so that is every lit fragment. Without this the
+    // horizon clip floors the form factor at zero for anything facing the panel
+    // squarely (a floor under a ceiling panel reads exactly 0) while grazing
+    // surfaces, whose sum happens to land the other way, still light up.
+    //
+    // Negating the WINDING instead is not the same fix and does not work: the
+    // sign that needs flipping is per-fragment, so a global flip just moves the
+    // dead half from the facing surfaces to the grazing ones.
+    bool behind = dot(p0 - P, cross(p1 - p0, p3 - p0)) < 0.0;
+
     vec3 L0 = normalize(M * (p0 - P));
     vec3 L1 = normalize(M * (p1 - P));
     vec3 L2 = normalize(M * (p2 - P));
@@ -81,6 +94,8 @@ float _ltcIntegrate(mat3 M, vec3 P, vec3 p0, vec3 p1, vec3 p2, vec3 p3) {
     // Horizon-clipped sphere: indexed by the sum's tilt and magnitude at its
     // own uv, NOT the roughness/NdotV coordinate the tables were fetched with
     float z = vsum.z / len;
+    if (behind)
+        z = -z;
     vec2 uv = vec2(z * 0.5 + 0.5, len) * LTC_LUT_SCALE + LTC_LUT_BIAS;
     return len * textureLod(ltcAmpTex, uv, 0.0).w;
 }
