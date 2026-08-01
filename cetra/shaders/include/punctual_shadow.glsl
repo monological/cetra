@@ -55,44 +55,41 @@ int punctualCubeFace(vec3 toFrag) {
     return toFrag.z > 0.0 ? 4 : 5;
 }
 
-// Receiver bias: how far toward the light the sample point moves before it is
-// projected, in shadow texels at the receiver's own distance. A world-space
-// displacement rather than an epsilon in the projection's NDC z, which is worth
-// ~d^2/near world units and so is only ever right at one distance and one scene
-// scale.
-//
-// The slope term carries it. One texel of a surface tilted away from the light
-// spans tan(theta) texel-widths of depth, and it is the 3x3 kernel's reach
-// across THAT which the bias has to clear. The cap is where the tangent stops
-// describing anything: past it the surface is edge-on and GRAZING_FADE has
-// already taken over.
-#define PUNCTUAL_BIAS_TEXELS 3.0
-#define PUNCTUAL_BIAS_FLOOR  0.5
-#define PUNCTUAL_MAX_SLOPE   8.0
+// Constant floor under the receiver-plane bias below, in units of the depth
+// buffer's own resolution. The plane bias is exact for a planar receiver, so
+// what is left for a constant to cover is what a plane cannot describe:
+// quantization in the 24-bit depth buffer, and curvature within one texel.
+#define PUNCTUAL_BIAS_FLOOR 4.0
+// How far the plane may be extrapolated, as a fraction of the depth range per
+// texel. A silhouette is where the receiver plane stops being the surface the
+// kernel is sampling, and an unbounded extrapolation there turns the bias into a
+// light leak that widens with the slope.
+#define PUNCTUAL_MAX_PLANE_BIAS 0.01
 // Below this NdotL the map is not answering the question asked of it. One
 // perspective map tests whether the light's CENTRE is visible, and for a
-// receiver nearly edge-on to that centre the test is undefined in both
-// directions at once: the receiver compresses into a sliver of the map where its
-// own silhouette is inside the PCF kernel (spurious occlusion no bias reaches),
-// while the real answer for an AREA source is "half the panel", which a binary
-// test cannot express. So the term is faded out rather than trusted.
+// receiver nearly edge-on to that centre the real answer for an AREA source is
+// "half the panel", which a binary test cannot express.
 //
-// It is a no-op on the point/spot path, whose radiance is already multiplied by
-// the same NdotL and is therefore zero wherever the fade is not one. Only the
-// LTC path, which has no NdotL because the form factor carries orientation, has
-// anything here to lose -- and there the fade is what stops a hard binary edge
-// being drawn across a face that genuinely sees part of the panel.
-#define PUNCTUAL_GRAZING_FADE 0.2
+// It used to also cover spurious self-occlusion at grazing, which the plane bias
+// now handles properly, so the threshold is a third of what it was -- it is back
+// to describing the single-sample approximation rather than papering over acne.
+//
+// A no-op on the point/spot path, whose radiance already carries the same NdotL
+// and is zero wherever the fade is not one. Only the LTC path has anything to
+// lose here, because its form factor carries orientation instead.
+#define PUNCTUAL_GRAZING_FADE 0.07
 
 // Occlusion for one perspective map: 1 = lit, 0 = fully occluded. A layer
 // outside the live range, a fragment behind the light, a fragment off the map,
 // and a fragment edge-on to the light all read as lit -- the third via the
 // array's white border, the last via the fade above.
 //
-// L points at the light, so the fragment's own incidence angle sizes the bias:
-// it vanishes head-on, where a texel spans almost no depth and any displacement
-// is pure loss, and grows as the surface turns edge-on.
-float punctualShadow(int layer, vec3 worldPos, vec3 N, vec3 L) {
+// `ddxWorld`/`ddyWorld` are the screen-space derivatives of the world position,
+// taken by the CALLER. They cannot be taken here: this runs inside the clustered
+// light loop, which is non-uniform control flow, where derivatives are
+// undefined. Passing them in is what lets the receiver's own plane be
+// reconstructed per light without leaving that constraint.
+float punctualShadow(int layer, vec3 worldPos, vec3 N, vec3 L, vec3 ddxWorld, vec3 ddyWorld) {
     if (layer < 0 || layer >= punctualShadowCount)
         return 1.0;
 
@@ -101,27 +98,34 @@ float punctualShadow(int layer, vec3 worldPos, vec3 N, vec3 L) {
     if (trust <= 0.0)
         return 1.0;
 
-    // The first projection is for ls.w alone -- the axial distance to the light,
-    // which is what the per-layer texel scale is expressed per unit of. The
-    // bias is sized in texels, so it cannot be built without it.
     vec4 ls = punctualShadowMatrix[layer] * vec4(worldPos, 1.0);
-    if (ls.w <= 0.0)
-        return 1.0;
-
-    // tan(acos(x)) == sqrt(1-x^2)/x for x in (0,1] -- one sqrt+divide instead
-    // of two transcendentals, per shadowed light per fragment. max() floors the
-    // divide so grazing (x->0) lands on the cap rather than on infinity.
-    float slope = min(sqrt(1.0 - ndl * ndl) / max(ndl, 1e-3), PUNCTUAL_MAX_SLOPE);
-    float texelWorld = punctualTexelScale[layer] * ls.w;
-    ls = punctualShadowMatrix[layer] *
-         vec4(worldPos + L * (texelWorld * (PUNCTUAL_BIAS_TEXELS * slope + PUNCTUAL_BIAS_FLOOR)),
-              1.0);
     if (ls.w <= 0.0)
         return 1.0;
 
     vec3 pc = ls.xyz / ls.w * 0.5 + 0.5;
     if (pc.z > 1.0 || pc.x < 0.0 || pc.x > 1.0 || pc.y < 0.0 || pc.y > 1.0)
         return 1.0;
+
+    // Receiver-plane depth bias (Isidoro, GDC 2006). The old bias displaced the
+    // sample toward the light by a slope-scaled world distance, which is a guess
+    // at how much depth a tilted surface covers across the kernel. This computes
+    // it instead: differentiate the receiver's own shadow-space position along
+    // both screen axes, then solve the 2x2 for how its depth changes per unit of
+    // shadow UV. Each tap is then compared against where the receiver's PLANE
+    // would be at that tap, which is exact at any slope -- so a surface edge-on
+    // to the light no longer needs a bias large enough to detach its own contact.
+    vec4 lx = punctualShadowMatrix[layer] * vec4(worldPos + ddxWorld, 1.0);
+    vec4 ly = punctualShadowMatrix[layer] * vec4(worldPos + ddyWorld, 1.0);
+    vec2 duv_dz = vec2(0.0);
+    if (lx.w > 0.0 && ly.w > 0.0) {
+        vec3 px = lx.xyz / lx.w * 0.5 + 0.5 - pc;
+        vec3 py = ly.xyz / ly.w * 0.5 + 0.5 - pc;
+        float det = px.x * py.y - px.y * py.x;
+        // A degenerate 2x2 means the receiver projects to a line in the map --
+        // exactly edge-on -- where there is no plane to extrapolate along.
+        if (abs(det) > 1e-12)
+            duv_dz = vec2(py.y * px.z - px.y * py.z, px.x * py.z - py.x * px.z) / det;
+    }
 
     // 3x3 PCF, which the directional cascades have always had and this never
     // did: a single tap quantizes the edge to the texel grid, and reads as a
@@ -137,12 +141,19 @@ float punctualShadow(int layer, vec3 worldPos, vec3 N, vec3 L) {
     // exists; the true neighbour is a face away and unreachable without a
     // samplerCubeArray (GLSL 400, above this shader set's 330).
     vec2 texel = vec2(1.0 / punctualShadowMapSize);
+    // The constant floor, in depth-buffer units at this map's precision.
+    float floorBias = PUNCTUAL_BIAS_FLOOR / 16777216.0; // DEPTH_COMPONENT24
     float sum = 0.0;
     for (int y = -1; y <= 1; ++y) {
         for (int x = -1; x <= 1; ++x) {
-            vec2 uv = clamp(pc.xy + vec2(x, y) * texel, texel * 0.5, 1.0 - texel * 0.5);
+            vec2 off = vec2(x, y) * texel;
+            vec2 uv = clamp(pc.xy + off, texel * 0.5, 1.0 - texel * 0.5);
+            // Where the receiver's own plane sits at this tap, rather than at
+            // the fragment. Clamped because past a silhouette the plane is an
+            // extrapolation into a surface that is not there.
+            float plane = clamp(dot(duv_dz, off), -PUNCTUAL_MAX_PLANE_BIAS, PUNCTUAL_MAX_PLANE_BIAS);
             float d = texture(punctualShadowMaps, vec3(uv, float(layer))).r;
-            sum += (pc.z > d) ? 0.0 : 1.0;
+            sum += (pc.z + plane - floorBias > d) ? 0.0 : 1.0;
         }
     }
     return mix(1.0, sum / 9.0, trust);

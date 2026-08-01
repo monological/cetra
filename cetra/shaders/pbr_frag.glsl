@@ -856,6 +856,13 @@ void main() {
         roughnessMap = clamp(sqrt(a2 + kernelRoughness2), roughnessMap, 1.0);
     }
 
+    // Screen-space derivatives of the world position, taken HERE because the
+    // punctual shadow lookup that needs them runs inside the clustered light
+    // loop, and derivatives are undefined in non-uniform control flow. They
+    // reconstruct the receiver's own plane per light (punctual_shadow.glsl).
+    vec3 ddxWorld = dFdx(WorldPos);
+    vec3 ddyWorld = dFdy(WorldPos);
+
     // Calculate view direction (WorldPos -- world space, as the maths needs)
     vec3 V = normalize(camPos - WorldPos);
 
@@ -1072,7 +1079,8 @@ void main() {
                 int aLayer = int(clusterLights[li].shadowMisc.y);
                 float aShadow = 1.0;
                 if (aLayer >= 0 && alphaMasked == 0) {
-                    aShadow = punctualShadow(aLayer, WorldPos, N, normalize(lightPos - WorldPos));
+                    aShadow = punctualShadow(aLayer, WorldPos, N, normalize(lightPos - WorldPos),
+                                             ddxWorld, ddyWorld);
                 }
 
                 // Same split as the punctual clamp below: the LTC response is
@@ -1173,7 +1181,7 @@ void main() {
         // than multiplies because the two are exclusive -- dirShadowSlot is set
         // only on the directional path, punctualLayer only on the cluster one.
         if (punctualLayer >= 0 && alphaMasked == 0) {
-            shadow = punctualShadow(punctualLayer, WorldPos, N, L);
+            shadow = punctualShadow(punctualLayer, WorldPos, N, L, ddxWorld, ddyWorld);
         }
 
         // POM self-shadow
