@@ -211,6 +211,16 @@ def _projector(cam, w, h):
     return project
 
 
+def _crossing(xs, vals, umbra, lit, frac):
+    """First up-crossing of umbra + frac*(lit-umbra), lerped between samples."""
+    t = umbra + frac * (lit - umbra)
+    for i in range(1, len(vals)):
+        if vals[i - 1] < t <= vals[i]:
+            a = (t - vals[i - 1]) / (vals[i] - vals[i - 1])
+            return xs[i - 1] + a * (xs[i] - xs[i - 1])
+    return float("nan")
+
+
 def _read_ppm(path):
     with open(path, "rb") as fh:
         data = fh.read()
@@ -283,15 +293,9 @@ def run_penumbra_gate(workdir):
         print(f"  penumbra     ERROR no shadow edge found (umbra {umbra:.3f}, lit {lit:.3f})")
         return ["penumbra"]
 
-    def crossing(frac):
-        t = umbra + frac * (lit - umbra)
-        for i in range(1, len(vals)):
-            if vals[i - 1] < t <= vals[i]:
-                a = (t - vals[i - 1]) / (vals[i] - vals[i - 1])
-                return xs[i - 1] + a * (xs[i] - xs[i - 1])
-        return float("nan")
-
-    lo, mid, hi = crossing(0.10), crossing(0.50), crossing(0.90)
+    lo = _crossing(xs, vals, umbra, lit, 0.10)
+    mid = _crossing(xs, vals, umbra, lit, 0.50)
+    hi = _crossing(xs, vals, umbra, lit, 0.90)
     want_centre = 0.5 * (inner + outer)
     ok = abs(mid - want_centre) <= PENUMBRA_CENTRE_TOL
     print(f"  penumbra     {'PASS' if ok else 'FAIL'}  centre {mid:.4f} "
@@ -313,8 +317,9 @@ DIR_SHADOW = {
     "r": 0.5,
     "float_c": (0.0, 1.5, 0.0),   # clean-geometry control: edge position
     "rest_c": (1.6, 0.5, 0.0),    # ground-tangent defect subject: holes
-    "elev_deg": 40.0,
-    "elev_low_deg": 10.0,
+    "elev_deg": 40.0,  # the lowsun variant's 10 degrees lives only in its .cscn:
+                       # the acne strip is the sole low-sun measurement and it
+                       # makes no positional prediction
     # Elevated and OFF-AXIS, and that is load-bearing: from a shallow +Z
     # camera the floating sphere occludes the far half of its own umbra, and
     # every sample there silently reads the sphere's lit front face instead
@@ -337,6 +342,12 @@ DIR_ERODE = 0.75
 DIR_HOLE_MAX = 0.02   # umbra term; a single authored light means true umbra ~ 0
 DIR_ACNE_TOL = 0.05   # |term - 1| on bare ground; acne and false-dark are 10x+
 DIR_EDGE_TOL = 0.05   # world units; ~3 outermost texels
+# Churn bound: TAA-jittered frames never repeat byte-for-byte, so the shadowed
+# sequence is judged against the --no-shadows run of the same scene. 2x
+# absorbs the shadow term legitimately participating in the jittered edges it
+# darkens; the +100 px absorbs count noise on a near-zero floor.
+DIR_CHURN_FACTOR = 2
+DIR_CHURN_SLACK_PX = 100
 # The wall-base line in cornell_leak at the framing below, as frame fractions.
 # Nothing occludes this stretch of the left wall's base; the punctual near-side
 # work darkens it to ~0.52 (the wedge spec 10.5 records).
@@ -410,48 +421,46 @@ def _term_reader(shadow_frame, ref_frame):
     return term
 
 
+# The punctual grazing gate: cornell_leak's wall base, which nothing occludes,
+# must read fully lit. Its own gate rather than a dir-shadow sub-gate: it
+# measures the PUNCTUAL path (the wedge was near-side fallout fixed in the
+# reference implementation before the cascade port could copy it, spec 10.5
+# phase 2a), so it must not vanish behind a missing cascade fixture.
+def run_grazing_gate(workdir):
+    leak = os.path.join(ROOT, "assets", "cornell_leak.gltf")
+    if not os.path.exists(leak):
+        print("  grazing      SKIP  (missing cornell_leak.gltf)")
+        return []
+
+    shadow = _dir_render(workdir, "cornell_leak.gltf", "leak", LEAK_CAM)
+    ref = _dir_render(workdir, "cornell_leak.gltf", "leak_ns", LEAK_CAM + ["--no-shadows"])
+    if not (shadow and ref):
+        print("  grazing      ERROR while rendering cornell_leak")
+        return ["grazing"]
+
+    w, h, pix = shadow
+    _, _, refpix = ref
+    worst = 1.0
+    (x0, y0), (x1, y1) = LEAK_LINE
+    for i in range(41):
+        t = i / 40.0
+        px = (x0 + (x1 - x0) * t) * w
+        py = (y0 + (y1 - y0) * t) * h
+        lit = _linear_luma(refpix, w, h, px, py)
+        if lit > 1e-4:
+            worst = min(worst, _linear_luma(pix, w, h, px, py) / lit)
+    ok = worst >= 1.0 - LEAK_TOL
+    print(f"  grazing      {'PASS' if ok else 'FAIL'}  wall-base term {worst:.4f} "
+          f"(want >= {1.0 - LEAK_TOL})")
+    return [] if ok else ["grazing"]
+
+
 def run_dir_shadow_gate(workdir):
     fixture = os.path.join(ROOT, "assets", "dir_shadow_fixture.cscn")
     if not os.path.exists(fixture):
         print("  dir-shadow   SKIP  (missing dir_shadow_fixture.cscn)")
         return []
     failures = []
-
-    # --- punctual grazing (cornell_leak wall base) --------------------------
-    # Rendered from the leak room, not the fixture: the wedge is punctual-path
-    # fallout and must be fixed in the reference implementation before the
-    # cascade port copies it (spec 10.5 phase 2a).
-    shadow = ref = None
-    leak = os.path.join(ROOT, "assets", "cornell_leak.gltf")
-    if os.path.exists(leak):
-        outs = {}
-        for tag, extra in (("leak", []), ("leak_ns", ["--no-shadows"])):
-            out = os.path.join(workdir, f"dir_{tag}.ppm")
-            cmd = [RENDER, "-m", leak, "-x", "-f", "30", "--no-auto-exposure", "-E", "1.0",
-                   "-W", "800", "-H", "600", "-S", out] + LEAK_CAM + extra
-            r = subprocess.run(cmd, capture_output=True, text=True)
-            outs[tag] = _read_ppm(out) if r.returncode == 0 and os.path.exists(out) else None
-        shadow, ref = outs["leak"], outs["leak_ns"]
-    if shadow and ref:
-        w, h, pix = shadow
-        _, _, refpix = ref
-        worst = 1.0
-        (x0, y0), (x1, y1) = LEAK_LINE
-        for i in range(41):
-            t = i / 40.0
-            px = (x0 + (x1 - x0) * t) * w
-            py = (y0 + (y1 - y0) * t) * h
-            lit = _linear_luma(refpix, w, h, px, py)
-            if lit > 1e-4:
-                worst = min(worst, _linear_luma(pix, w, h, px, py) / lit)
-        ok = worst >= 1.0 - LEAK_TOL
-        print(f"  grazing      {'PASS' if ok else 'FAIL'}  wall-base term {worst:.4f} "
-              f"(want >= {1.0 - LEAK_TOL})")
-        if not ok:
-            failures.append("dir-grazing")
-    else:
-        print("  grazing      ERROR while rendering cornell_leak")
-        failures.append("dir-grazing")
 
     # --- fixture renders ----------------------------------------------------
     # --no-pcss for every positional measure: PCSS is on by default with an
@@ -489,14 +498,17 @@ def run_dir_shadow_gate(workdir):
                         continue
                     worst_hole = max(worst_hole, term40(p))
                     measured += 1
-        # No silent caps: enough of the umbra must actually be measured.
         if measured < 30:
-            raise ValueError(f"only {measured} umbra samples visible ({skipped} occluded)")
-        ok = worst_hole <= DIR_HOLE_MAX
-        print(f"  hole         {'PASS' if ok else 'FAIL'}  worst umbra term {worst_hole:.4f} "
-              f"over {measured} samples, {skipped} caster-occluded (want <= {DIR_HOLE_MAX})")
-        if not ok:
+            # No silent caps: enough of the umbra must actually be measured.
+            print(f"  hole         ERROR only {measured} umbra samples visible "
+                  f"({skipped} occluded)")
             failures.append("dir-hole")
+        else:
+            ok = worst_hole <= DIR_HOLE_MAX
+            print(f"  hole         {'PASS' if ok else 'FAIL'}  worst umbra term {worst_hole:.4f} "
+                  f"over {measured} samples, {skipped} caster-occluded (want <= {DIR_HOLE_MAX})")
+            if not ok:
+                failures.append("dir-hole")
     except ValueError as e:
         print(f"  hole         ERROR {e}")
         failures.append("dir-hole")
@@ -536,13 +548,7 @@ def run_dir_shadow_gate(workdir):
             print(f"  edge-{label:<7} ERROR no shadow edge on the scan")
             failures.append(f"dir-edge-{label}")
             continue
-        mid = float("nan")
-        thresh = umbra + 0.5 * (lit - umbra)
-        for i in range(1, len(vals)):
-            if vals[i - 1] < thresh <= vals[i]:
-                a = (thresh - vals[i - 1]) / (vals[i] - vals[i - 1])
-                mid = zs[i - 1] + a * (zs[i] - zs[i - 1])
-                break
+        mid = _crossing(zs, vals, umbra, lit, 0.50)
         ok = abs(mid - want_edge) <= DIR_EDGE_TOL
         print(f"  edge-{label:<7} {'PASS' if ok else 'FAIL'}  crossing {mid:.4f} "
               f"(want {want_edge:.4f} +/-{DIR_EDGE_TOL})")
@@ -569,7 +575,7 @@ def run_dir_shadow_gate(workdir):
         failures.append("dir-churn")
     else:
         floor = churn["taa_ns"]
-        ok = churn["taa"] <= floor * 2 + 100
+        ok = churn["taa"] <= floor * DIR_CHURN_FACTOR + DIR_CHURN_SLACK_PX
         print(f"  churn        {'PASS' if ok else 'FAIL'}  {churn['taa']} px frame-to-frame "
               f"(no-shadow floor {floor} px)")
         if not ok:
@@ -612,6 +618,8 @@ def main():
         failures = run_scale_gates(workdir)
         print("area shadow (analytic penumbra):")
         failures += run_penumbra_gate(workdir)
+        print("punctual grazing (leak wall base):")
+        failures += run_grazing_gate(workdir)
         print("cascade shadow (analytic ellipse):")
         failures += run_dir_shadow_gate(workdir)
         print("import:")

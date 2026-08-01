@@ -51,27 +51,9 @@ int punctualCubeFace(vec3 toFrag) {
     return toFrag.z > 0.0 ? 4 : 5;
 }
 
-// Constant floor under the receiver-plane bias below, in units of the depth
-// buffer's own resolution. The plane bias is exact for a planar receiver, so
-// what is left for a constant to cover is what a plane cannot describe:
-// quantization in the 24-bit depth buffer, and curvature within one texel.
-#define PUNCTUAL_BIAS_FLOOR 4.0
-// How far the plane may be extrapolated toward the light, as a fraction of the
-// depth range per texel. A silhouette is where the receiver plane stops being
-// the surface the kernel is sampling, and an unbounded extrapolation there
-// turns the bias into a light leak that widens with the slope.
-//
-// The clamp is ONE-SIDED: the plane term is never allowed to predict the
-// surface DEEPER than the fragment. Its whole job is the nearer direction --
-// matching the receiver's own surface up-slope so grazing acne dies. A deeper
-// prediction only ever makes the test stricter than a flat compare, and at a
-// concave junction that manufactures occlusion: the plane extrapolates INTO
-// the adjacent surface, which truncates it and stands epsilon NEARER, so taps
-// crossing the junction read "occluded" at coplanar scale. Measured on
-// cornell_leak's wall base: every failing tap failed with a sub-1e-4 depth
-// gap and none held a genuinely different surface -- the dark wedge was
-// entirely this extrapolation, not the geometry.
-#define PUNCTUAL_MAX_PLANE_BIAS 0.01
+// The plane-bias policy (constants, 2x2 solve, one-sided clamp) is shared
+// with the cascade lookup; see receiver_plane.glsl for the rationale.
+#include "receiver_plane.glsl"
 // Below this NdotL the map is not answering the question asked of it. One
 // perspective map tests whether the light's CENTRE is visible, and for a
 // receiver nearly edge-on to that centre the real answer for an AREA source is
@@ -127,11 +109,7 @@ float punctualShadow(int layer, vec3 worldPos, vec3 N, vec3 L, vec3 ddxWorld, ve
     if (lx.w > 0.0 && ly.w > 0.0) {
         vec3 px = lx.xyz / lx.w * 0.5 + 0.5 - pc;
         vec3 py = ly.xyz / ly.w * 0.5 + 0.5 - pc;
-        float det = px.x * py.y - px.y * py.x;
-        // A degenerate 2x2 means the receiver projects to a line in the map --
-        // exactly edge-on -- where there is no plane to extrapolate along.
-        if (abs(det) > 1e-12)
-            duv_dz = vec2(py.y * px.z - px.y * py.z, px.x * py.z - py.x * px.z) / det;
+        duv_dz = receiverPlaneGradient(px, py);
     }
 
     // 3x3 PCF, which the directional cascades have always had and this never
@@ -148,18 +126,14 @@ float punctualShadow(int layer, vec3 worldPos, vec3 N, vec3 L, vec3 ddxWorld, ve
     // exists; the true neighbour is a face away and unreachable without a
     // samplerCubeArray (GLSL 400, above this shader set's 330).
     vec2 texel = vec2(1.0 / punctualShadowMapSize);
-    // The constant floor, in depth-buffer units at this map's precision.
-    float floorBias = PUNCTUAL_BIAS_FLOOR / 16777216.0; // DEPTH_COMPONENT24
+    float ref = pc.z - SHADOW_PLANE_BIAS_FLOOR;
     float sum = 0.0;
     for (int y = -1; y <= 1; ++y) {
         for (int x = -1; x <= 1; ++x) {
             vec2 off = vec2(x, y) * texel;
             vec2 uv = clamp(pc.xy + off, texel * 0.5, 1.0 - texel * 0.5);
-            // Where the receiver's own plane sits at this tap, rather than at
-            // the fragment -- clamped one-sided; see PUNCTUAL_MAX_PLANE_BIAS.
-            float plane = clamp(dot(duv_dz, off), -PUNCTUAL_MAX_PLANE_BIAS, 0.0);
             float d = texture(punctualShadowMaps, vec3(uv, float(layer))).r;
-            sum += (pc.z + plane - floorBias > d) ? 0.0 : 1.0;
+            sum += (ref + receiverPlaneBias(duv_dz, off) > d) ? 0.0 : 1.0;
         }
     }
     return mix(1.0, sum / 9.0, trust);

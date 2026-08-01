@@ -129,7 +129,6 @@ def add_box(cx, half, height, index_list):
     the corner lists read naturally but walk clockwise from outside, and the
     winding audit (not the eye) is what verifies the result.
     """
-    base = len(positions)
     x0, x1 = cx - half, cx + half
     z0, z1 = -half, half
     y0, y1 = 0.0, height
@@ -149,7 +148,6 @@ def add_box(cx, half, height, index_list):
             normals.append(n)
         uvs.extend(((0.0, 0.0), (0.0, 1.0), (1.0, 1.0), (1.0, 0.0)))
         index_list.extend((fb + 0, fb + 2, fb + 1, fb + 0, fb + 3, fb + 2))
-    return base
 
 
 ground_indices = []

@@ -74,9 +74,11 @@ struct Engine;
 
 typedef struct ShadowSystem {
     GLuint cascade_fbo; // Re-attached to each layer of shadow_map_array in turn
-    // Depth bias in 0..1 map depth, shared by every caster: it is tuned against
-    // the scene-fit map and cascadeParams.w renormalizes it per cascade. It was
-    // once per-caster, which only meant the last caster's value won.
+    // Flat depth bias in 0..1 map depth for the consumers whose receivers are
+    // never in the map (the catcher's virtual plane, the particle motes, the
+    // froxel fog's air samples). The per-fragment surface lookups use the
+    // receiver-plane bias instead and do not read this. It was once
+    // per-caster, which only meant the last caster's value won.
     float shadow_bias;
     // Shadow-casting DIRECTIONAL lights this frame, and nothing else -- it is
     // also the shader's numShadowLights and the loop bound over the cascade
@@ -161,18 +163,16 @@ typedef struct CascadeCamera {
 // slice's bounding sphere (rotation-invariant -> stable under orbit), center
 // snapped to shadow-texel increments in light view space, eye pushed back by
 // scene_pad so out-of-slice geometry toward the light still casts. Writes
-// the matrix and (width, orthoNear, orthoFar, 1.0) into out_params; .w is a
-// bias factor defaulting to no scaling (the depth pass overrides it with
-// the legacy-normalized value).
+// the matrix and (width, orthoNear, orthoFar) into out_params; .w is unused.
 void compute_cascade_light_space_matrix(vec3 direction, const CascadeCamera* cam, float slice_near,
                                         float slice_far, float scene_pad, int map_size, mat4 dest,
                                         vec4 out_params);
 
-// Upload the cascade uniform contract (cascadeCount, cascadeSplits,
-// sceneOrthoWidth, and the count-strided lightSpaceMatrix/cascadeParams
-// layers as ranged array uploads) to any program that samples the shadow
-// maps. Location-guarded: programs lacking a uniform skip it. The layer
-// layout law lives HERE and nowhere else.
+// Upload the cascade uniform contract (cascadeCount, cascadeSplits, and the
+// count-strided lightSpaceMatrix/cascadeParams layers as ranged array
+// uploads) to any program that samples the shadow maps. Location-guarded:
+// programs lacking a uniform skip it. The layer layout law lives HERE and
+// nowhere else.
 void shadow_upload_cascade_uniforms(const ShadowSystem* system, UniformManager* u);
 
 // Shadow map binding for main render pass

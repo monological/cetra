@@ -327,9 +327,6 @@ void shadow_upload_cascade_uniforms(const ShadowSystem* system, UniformManager* 
     vec4 splits = {system->cascade_splits[0], system->cascade_splits[1], system->cascade_splits[2],
                    0.0f};
     uniform_set_vec4(u, "cascadeSplits", splits);
-    // The scene-fit map's world width: the reference receiver-side filter
-    // kernels were tuned against (consumed by the catcher)
-    uniform_set_float(u, "sceneOrthoWidth", 2.0f * system->ortho_size);
 
     // Used layers are contiguous from element 0 (layer = slot * cc + c,
     // slots compact), so the per-layer arrays upload as one ranged call
@@ -551,14 +548,12 @@ static int punctual_layers_for(const Light* light) {
 // in the same scene has no reason to disagree with them.
 static int compute_punctual_matrices(const Light* light, const ShadowSystem* ss, mat4* dest) {
     const float near_p = ss->near_plane, far_p = ss->far_plane;
-    float fov;
 
     switch (light->type) {
     case LIGHT_POINT:
-        fov = glm_rad(90.0f);
         for (int f = 0; f < 6; f++) {
-            compute_perspective_light_space(light->global_position, PUNCTUAL_CUBE_DIR[f], fov,
-                                            near_p, far_p, dest[f]);
+            compute_perspective_light_space(light->global_position, PUNCTUAL_CUBE_DIR[f],
+                                            glm_rad(90.0f), near_p, far_p, dest[f]);
         }
         break;
     case LIGHT_AREA: {
@@ -570,14 +565,14 @@ static int compute_punctual_matrices(const Light* light, const ShadowSystem* ss,
         glm_vec3_copy((float*)light->direction, dir);
         if (glm_vec3_norm(dir) < 1e-6f)
             glm_vec3_copy((vec3){0.0f, -1.0f, 0.0f}, dir);
-        fov = AREA_SHADOW_FOV;
-        compute_perspective_light_space(light->global_position, dir, fov, near_p, far_p, dest[0]);
+        compute_perspective_light_space(light->global_position, dir, AREA_SHADOW_FOV, near_p, far_p,
+                                        dest[0]);
         break;
     }
     default: {
         // A spot's fov is its own cone, plus a margin so the outer edge is not
         // clipped by the frustum it is supposed to fill.
-        fov = 2.0f * acosf(light->outerCutOff) * 1.15f; // outerCutOff = cos(half-angle)
+        float fov = 2.0f * acosf(light->outerCutOff) * 1.15f; // outerCutOff = cos(half-angle)
         if (fov > glm_rad(175.0f))
             fov = glm_rad(175.0f);
         compute_perspective_light_space(light->global_position, light->direction, fov, near_p, far_p,
@@ -796,10 +791,6 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     // The receiver-plane bias in the cascade lookup is the other half of the
     // remedy; the two land as a pair, and the fixture's acne gate at 10
     // degrees is the regression guard for exactly that history.
-    //
-    // Polygon offset is expressed in the depth buffer's own units
-    // (slope * factor + r * units), so it does not have to be re-tuned per
-    // scene scale.
     glCullFace(GL_BACK);
     glEnable(GL_POLYGON_OFFSET_FILL);
     glPolygonOffset(SHADOW_DEPTH_SLOPE_BIAS, SHADOW_DEPTH_CONSTANT_BIAS);
@@ -853,7 +844,6 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
 
     glDisable(GL_POLYGON_OFFSET_FILL);
     glPolygonOffset(0.0f, 0.0f);
-    glCullFace(GL_BACK);
     glUseProgram(0);
 
     glViewport(prev_viewport[0], prev_viewport[1], prev_viewport[2], prev_viewport[3]);

@@ -118,12 +118,14 @@ uniform int heightTexExists;
 uniform int sheenTexExists;
 uniform int clearcoatNormalExists;
 
-// Shadow mapping. The shared block (maps, matrices, cascade params, bias,
-// texel size) comes from the chunk; everything below is specific to this
-// shader's per-fragment cascade selection and PCSS, which the catcher and
-// particle consumers do not do. No CSM_OUTERMOST_PCF: they sample one
-// scene-fit cascade, this one selects per fragment.
+// Shadow mapping. The shared block (maps, matrices, cascade params, texel
+// size) comes from the chunk; everything below is specific to this shader's
+// per-fragment cascade selection and PCSS, which the catcher and particle
+// consumers do not do. No CSM_OUTERMOST_PCF: they sample one scene-fit
+// cascade, this one selects per fragment.
 #include "csm.glsl"
+// The receiver-plane bias policy both shadow lookups share.
+#include "receiver_plane.glsl"
 
 uniform vec4 cascadeSplits; // View-depth far bound per cascade (.xyz)
 uniform int csmDebug; // Tint fragments by selected cascade
@@ -486,47 +488,40 @@ float linearizeOrthoDepth(float d01, vec2 nf) {
 // the map reports as lit and widening one bright line into a band of steps.
 // The receiver-plane bias below carries it instead.
 
-// Receiver-plane bias for the cascades (spec 10.5, ported from
-// punctual_shadow.glsl where 10.4 shipped it). The cascade projection is
+// Receiver-plane bias for the cascades (spec 10.5; policy shared with the
+// punctual lookup via receiver_plane.glsl). The cascade projection is
 // orthographic, so the perspective machinery collapses: the shadow-space
 // derivative of the receiver per screen axis is one linear transform of the
 // world-space derivatives -- no divide, no w guards, constant across a planar
-// receiver. Solving the 2x2 gives how the receiver's depth changes per unit
-// of shadow UV, and each tap is compared against where the receiver's PLANE
-// sits at that tap. Same one-sided clamp, same reason: the plane may only
-// ever make a tap MORE lenient. Constants in DEPTH_COMPONENT24 units and
-// NDC, mirroring the punctual pair.
-#define CSM_BIAS_FLOOR 4.0
-#define CSM_MAX_PLANE_BIAS 0.01
+// receiver. The clip->[0,1] remap's 0.5 is omitted: a uniform power-of-two
+// scale of px/py cancels bit-exactly through the gradient's ratio, so only
+// the whole-vector scale matters, and none is cheapest.
+//
 // Blocker classification separation, relative on linearized ortho depth: a
 // blocker must be genuinely NEARER the light than the receiver's plane, not
 // merely within filter-bias distance of it -- a receiver sits within filter
 // bias of itself, which 10.4 measured dragging the average blocker depth and
-// collapsing the penumbra to a third of its width.
+// collapsing the penumbra to a third of its width. Relative means the
+// required separation scales with the cascade's full depth range (eye
+// pushback included) -- deliberate, so one constant serves every fit; do not
+// "fix" it into an absolute epsilon without re-running the gates.
 #define CSM_BLOCKER_SEPARATION 0.99
 
 vec2 csmPlaneGradient(int layer, vec3 ddxWorld, vec3 ddyWorld) {
-    vec3 px = 0.5 * (mat3(lightSpaceMatrix[layer]) * ddxWorld);
-    vec3 py = 0.5 * (mat3(lightSpaceMatrix[layer]) * ddyWorld);
-    float det = px.x * py.y - px.y * py.x;
-    // Degenerate = the receiver projects to a line in the map (edge-on);
-    // nothing to extrapolate along.
-    if (abs(det) < 1e-12)
-        return vec2(0.0);
-    return vec2(py.y * px.z - px.y * py.z, px.x * py.z - py.x * px.z) / det;
+    return receiverPlaneGradient(mat3(lightSpaceMatrix[layer]) * ddxWorld,
+                                 mat3(lightSpaceMatrix[layer]) * ddyWorld);
 }
 
 // Fixed 3x3 PCF, plane-biased per tap.
 // layer is a shadow-array layer (slot * cascadeCount + cascade).
 float shadowPCF3x3(int layer, vec2 uv, float currentDepth, vec2 duv_dz) {
-    float ref = currentDepth - CSM_BIAS_FLOOR / 16777216.0;
+    float ref = currentDepth - SHADOW_PLANE_BIAS_FLOOR;
     float shadow = 0.0;
     for (int x = -1; x <= 1; ++x) {
         for (int y = -1; y <= 1; ++y) {
             vec2 offset = vec2(float(x), float(y)) * shadowTexelSize;
-            float plane = clamp(dot(duv_dz, offset), -CSM_MAX_PLANE_BIAS, 0.0);
             float pcfDepth = texture(shadowMaps, vec3(uv + offset, float(layer))).r;
-            shadow += ref + plane > pcfDepth ? 1.0 : 0.0;
+            shadow += ref + receiverPlaneBias(duv_dz, offset) > pcfDepth ? 1.0 : 0.0;
         }
     }
     return 1.0 - (shadow / 9.0);
@@ -535,10 +530,9 @@ float shadowPCF3x3(int layer, vec2 uv, float currentDepth, vec2 duv_dz) {
 // Contact-hardening soft shadow (PCSS). lightSize is the scalar emitter size
 // (world units of the emitter disk); larger = softer, faster-growing penumbra
 // with blocker distance. The algorithm is isotropic, so callers collapse a
-// rectangular emitter to a single dimension. cascade is the fragment's
-// cascade, hoisted by the caller (caster-independent).
-// One cascade's shadow estimate for a projected position already known to be
-// in bounds: PCSS when enabled and the emitter resolves, else 3x3 PCF.
+// rectangular emitter to a single dimension.
+// One cascade layer's shadow estimate for a projected position already known
+// to be in bounds: PCSS when enabled and the emitter resolves, else 3x3 PCF.
 float cascadeShadowTap(int layer, vec3 projCoords, vec2 duv_dz, float lightSize) {
     float currentDepth = projCoords.z;
 
@@ -563,7 +557,7 @@ float cascadeShadowTap(int layer, vec3 projCoords, vec2 duv_dz, float lightSize)
         return shadowPCF3x3(layer, projCoords.xy, currentDepth, duv_dz);
     }
 
-    float ref = currentDepth - CSM_BIAS_FLOOR / 16777216.0;
+    float ref = currentDepth - SHADOW_PLANE_BIAS_FLOOR;
 
     // 1. Blocker search: average depth of texels genuinely nearer the light
     //    than the receiver's PLANE at each tap, over a disk the size of the
@@ -577,11 +571,12 @@ float cascadeShadowTap(int layer, vec3 projCoords, vec2 duv_dz, float lightSize)
     float blockerCount = 0.0;
     for (int i = 0; i < 16; i++) {
         vec2 off = POISSON16[i] * lightSizeUV;
-        float plane = clamp(dot(duv_dz, off), -CSM_MAX_PLANE_BIAS, 0.0);
         float d = texture(shadowMaps, vec3(projCoords.xy + off, float(layer))).r;
-        if (linearizeOrthoDepth(d, nearFar) <
-            linearizeOrthoDepth(currentDepth + plane, nearFar) * CSM_BLOCKER_SEPARATION) {
-            blockerSum += linearizeOrthoDepth(d, nearFar);
+        float zTap = linearizeOrthoDepth(d, nearFar);
+        float zPlane =
+            linearizeOrthoDepth(currentDepth + receiverPlaneBias(duv_dz, off), nearFar);
+        if (zTap < zPlane * CSM_BLOCKER_SEPARATION) {
+            blockerSum += zTap;
             blockerCount += 1.0;
         }
     }
@@ -601,9 +596,8 @@ float cascadeShadowTap(int layer, vec3 projCoords, vec2 duv_dz, float lightSize)
     float shadow = 0.0;
     for (int i = 0; i < 16; i++) {
         vec2 off = POISSON16[i] * filterRadiusUV;
-        float plane = clamp(dot(duv_dz, off), -CSM_MAX_PLANE_BIAS, 0.0);
         float d = texture(shadowMaps, vec3(projCoords.xy + off, float(layer))).r;
-        shadow += ref + plane > d ? 1.0 : 0.0;
+        shadow += ref + receiverPlaneBias(duv_dz, off) > d ? 1.0 : 0.0;
     }
     return 1.0 - (shadow / 16.0);
 }
