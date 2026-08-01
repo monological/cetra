@@ -11,6 +11,6 @@
       "cast_shadows": true
     }
   ],
-  "camera": { "eye": [0.0, 3.0, 4.0], "target": [0.0, 0.0, -1.0], "fov": 50 },
+  "camera": { "eye": [6.5, 8.0, 2.5], "target": [0.8, 0.0, -1.0], "fov": 55 },
   "post": { "tonemap": "neutral", "exposure": 1.0 }
 }

@@ -314,7 +314,6 @@ void compute_cascade_light_space_matrix(vec3 direction, const CascadeCamera* cam
     out_params[0] = 2.0f * radius;
     out_params[1] = ortho_near;
     out_params[2] = ortho_far;
-    out_params[3] = 1.0f; // bias factor default (no scaling)
 }
 
 void shadow_upload_cascade_uniforms(const ShadowSystem* system, UniformManager* u) {
@@ -384,9 +383,6 @@ void bind_shadow_maps_to_program(ShadowSystem* system, ShaderProgram* program) {
         if (ploc >= 0)
             glUniformMatrix4fv(ploc, punctual_on, GL_FALSE,
                                (const GLfloat*)system->punctual_matrices);
-        GLint tloc = uniform_location(u, "punctualTexelScale[0]");
-        if (tloc >= 0)
-            glUniform1fv(tloc, punctual_on, system->punctual_texel_scale);
         uniform_set_float(u, "punctualShadowMapSize", (float)system->punctual_map_size);
     }
 
@@ -553,8 +549,7 @@ static int punctual_layers_for(const Light* light) {
 // is not a subtle degradation but a total one. Apps already scale
 // near_plane/far_plane off the scene radius for the cascades; a punctual light
 // in the same scene has no reason to disagree with them.
-static int compute_punctual_matrices(const Light* light, const ShadowSystem* ss, mat4* dest,
-                                     float* texel_scale) {
+static int compute_punctual_matrices(const Light* light, const ShadowSystem* ss, mat4* dest) {
     const float near_p = ss->near_plane, far_p = ss->far_plane;
     float fov;
 
@@ -591,17 +586,7 @@ static int compute_punctual_matrices(const Light* light, const ShadowSystem* ss,
     }
     }
 
-    // A texel's world width at unit axial distance. The map is square and the
-    // projection symmetric, so one number covers both axes and all of this
-    // light's layers -- a point light's six faces share a fov. It divides by the
-    // size the array was actually built at, which the VRAM budget chose, so a
-    // scene that drops to a smaller map gets a correspondingly larger bias
-    // rather than one tuned for a resolution it is not running.
-    int layers = punctual_layers_for(light);
-    float scale = 2.0f * tanf(fov * 0.5f) / (float)ss->punctual_map_size;
-    for (int f = 0; f < layers; f++)
-        texel_scale[f] = scale;
-    return layers;
+    return punctual_layers_for(light);
 }
 
 // The body both depth-pass loops share, once a layer is bound: aim the depth
@@ -755,20 +740,11 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
                 ss->cascade_params[slot][0] = 2.0f * ss->ortho_size;
                 ss->cascade_params[slot][1] = ss->near_plane;
                 ss->cascade_params[slot][2] = ss->far_plane;
-                ss->cascade_params[slot][3] = 1.0f;
             } else {
                 float slice_near = engine->camera->near_clip;
                 // The scene pad covers casters toward the light outside the
                 // slice; the legacy fit's eye sat at far/2, reuse that scale
                 float scene_pad = ss->far_plane * 0.5f;
-                // Bias references: shadowBias is a 0..1-depth value tuned by
-                // apps against the scene-fit map. Each cascade reinterprets
-                // 0..1 over its own [near, far] and width, so params.w
-                // normalizes: undo the depth-range stretch (a long-range
-                // cascade turns the same 0..1 bias into more world units)
-                // and grow with the real texel size ratio vs the scene-fit
-                // reference (the acne guard).
-                float legacy_range = ss->far_plane - ss->near_plane;
                 float legacy_width = 2.0f * ss->ortho_size;
                 // Camera-fit cascades sharpen the near slices; the OUTERMOST
                 // cascade is the classic scene-fit map, camera-independent
@@ -782,8 +758,6 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
                     compute_cascade_light_space_matrix(
                         light->direction, &cam, slice_near, ss->cascade_splits[c], scene_pad,
                         ss->default_map_size, ss->cascade_matrices[layer], *params);
-                    float range = (*params)[2] - (*params)[1];
-                    (*params)[3] = (legacy_range / range) * ((*params)[0] / legacy_width);
                     slice_near = ss->cascade_splits[c];
                 }
                 int last = (int)slot * cc + (cc - 1);
@@ -793,7 +767,6 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
                 ss->cascade_params[last][0] = legacy_width;
                 ss->cascade_params[last][1] = ss->near_plane;
                 ss->cascade_params[last][2] = ss->far_plane;
-                ss->cascade_params[last][3] = 1.0f;
             }
             light->shadow_map_index = (int)slot;
             slot++;
@@ -861,8 +834,7 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
                 continue;
 
             int layers =
-                compute_punctual_matrices(light, ss, &ss->punctual_matrices[light->shadow_layer],
-                                          &ss->punctual_texel_scale[light->shadow_layer]);
+                compute_punctual_matrices(light, ss, &ss->punctual_matrices[light->shadow_layer]);
 
             // One scene traversal per layer -- this loop is the frame cost the
             // pool ceiling caps, and a point light pays six times a spot's.

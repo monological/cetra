@@ -315,10 +315,20 @@ DIR_SHADOW = {
     "rest_c": (1.6, 0.5, 0.0),    # ground-tangent defect subject: holes
     "elev_deg": 40.0,
     "elev_low_deg": 10.0,
-    "eye": (0.0, 3.0, 4.0), "target": (0.0, 0.0, -1.0), "fovy_deg": 50.0,
+    # Elevated and OFF-AXIS, and that is load-bearing: from a shallow +Z
+    # camera the floating sphere occludes the far half of its own umbra, and
+    # every sample there silently reads the sphere's lit front face instead
+    # of ground -- an entire debugging session was spent on that phantom
+    # before the guards below existed. Two guards keep it honest now: samples
+    # whose sight line passes within CLEARANCE of a sphere are skipped
+    # geometrically, and _term_reader raises on any sample whose reference
+    # luma is not ground.
+    "eye": (6.5, 8.0, 2.5), "target": (0.8, 0.0, -1.0), "fovy_deg": 55.0,
+    "clearance": 0.55,  # sight-line miss distance vs a sphere centre
     # Ground clear of every shadow at BOTH suns (pillar band lives at x=-3.5,
-    # both ellipses at x >= -0.5).
-    "strip_x": (-2.5, -1.0), "strip_z": (-2.5, 0.0),
+    # the ellipses end at x=2.1) and comfortably in-frame from the off-axis
+    # camera below.
+    "strip_x": (2.6, 4.5), "strip_z": (-2.5, 0.0),
 }
 # Umbra samples stay at 75% of the semi-axes: the margin covers the coarse
 # sphere's silhouette chord error (~4mm) plus a PCF footprint at map texel
@@ -341,6 +351,23 @@ def _dir_ellipse(centre, elev_deg):
     return cx, cz, DIR_SHADOW["r"], DIR_SHADOW["r"] / math.sin(e)
 
 
+def _dir_visible(p):
+    """Can the gate camera actually see ground point p, or does a sphere sit on
+    the sight line? Umbra points hugging a ground-tangent caster are optically
+    inaccessible from ANY camera; they are skipped, not mismeasured."""
+    eye = DIR_SHADOW["eye"]
+    d = tuple(b - a for a, b in zip(eye, p))
+    dlen2 = sum(c * c for c in d)
+    for centre in (DIR_SHADOW["float_c"], DIR_SHADOW["rest_c"]):
+        w = tuple(c - e for c, e in zip(centre, eye))
+        t = max(0.0, min(1.0, sum(a * b for a, b in zip(w, d)) / dlen2))
+        closest = tuple(e + t * c for e, c in zip(eye, d))
+        dist2 = sum((a - b) ** 2 for a, b in zip(closest, centre))
+        if dist2 < DIR_SHADOW["clearance"] ** 2:
+            return False
+    return True
+
+
 def _dir_render(workdir, scene, tag, extra):
     out = os.path.join(workdir, f"dir_{tag}.ppm")
     cmd = [RENDER, "-m", os.path.join(ROOT, "assets", scene), "-x", "-f", "30",
@@ -352,15 +379,33 @@ def _dir_render(workdir, scene, tag, extra):
 
 
 def _term_reader(shadow_frame, ref_frame):
-    """Shadow term at a world point: shadowed luma / unshadowed luma."""
+    """Shadow term at a world GROUND point: shadowed luma / unshadowed luma.
+
+    Occlusion guard: the reference luma at every sampled pixel must sit in one
+    band -- the ground is a single flat Lambertian material, so its unshadowed
+    luma is nearly constant across the frame. A pixel whose reference luma
+    falls outside the band is NOT ground (a caster stands between the camera
+    and the sample point; the spheres' albedo is half the ground's), and
+    trusting it produces phantom measurements. Such samples raise instead.
+    """
     w, h, pix = shadow_frame
     _, _, ref = ref_frame
     project = _projector(DIR_SHADOW, w, h)
+    # Calibrate the ground band from a point that is bare ground by
+    # construction (inside the acne strip).
+    gx = 0.5 * (DIR_SHADOW["strip_x"][0] + DIR_SHADOW["strip_x"][1])
+    gz = 0.5 * (DIR_SHADOW["strip_z"][0] + DIR_SHADOW["strip_z"][1])
+    px, py = project((gx, 0.0, gz))
+    ground_lit = _linear_luma(ref, w, h, px, py)
 
     def term(p):
         px, py = project(p)
         lit = _linear_luma(ref, w, h, px, py)
-        return _linear_luma(pix, w, h, px, py) / lit if lit > 1e-4 else 1.0
+        if not (0.6 * ground_lit <= lit <= 1.6 * ground_lit):
+            raise ValueError(
+                "sample %r reads reference luma %.4f vs ground %.4f -- occluded "
+                "from this camera, fixture/gate geometry disagree" % (p, lit, ground_lit))
+        return _linear_luma(pix, w, h, px, py) / lit
 
     return term
 
@@ -428,35 +473,51 @@ def run_dir_shadow_gate(workdir):
     term10 = _term_reader(r10, r10_ns)
 
     # --- holes: eroded umbra of both ellipses must be dark ------------------
-    worst_hole = 0.0
-    for centre in (DIR_SHADOW["float_c"], DIR_SHADOW["rest_c"]):
-        cx, cz, sx, sz = _dir_ellipse(centre, DIR_SHADOW["elev_deg"])
-        for iu in range(-4, 5):
-            for iv in range(-4, 5):
-                u, v = iu / 4.0, iv / 4.0
-                if u * u + v * v > 1.0:
-                    continue
-                p = (cx + DIR_ERODE * sx * u, 0.0, cz + DIR_ERODE * sz * v)
-                worst_hole = max(worst_hole, term40(p))
-    ok = worst_hole <= DIR_HOLE_MAX
-    print(f"  hole         {'PASS' if ok else 'FAIL'}  worst umbra term {worst_hole:.4f} "
-          f"(want <= {DIR_HOLE_MAX})")
-    if not ok:
+    try:
+        worst_hole = 0.0
+        measured = skipped = 0
+        for centre in (DIR_SHADOW["float_c"], DIR_SHADOW["rest_c"]):
+            cx, cz, sx, sz = _dir_ellipse(centre, DIR_SHADOW["elev_deg"])
+            for iu in range(-4, 5):
+                for iv in range(-4, 5):
+                    u, v = iu / 4.0, iv / 4.0
+                    if u * u + v * v > 1.0:
+                        continue
+                    p = (cx + DIR_ERODE * sx * u, 0.0, cz + DIR_ERODE * sz * v)
+                    if not _dir_visible(p):
+                        skipped += 1
+                        continue
+                    worst_hole = max(worst_hole, term40(p))
+                    measured += 1
+        # No silent caps: enough of the umbra must actually be measured.
+        if measured < 30:
+            raise ValueError(f"only {measured} umbra samples visible ({skipped} occluded)")
+        ok = worst_hole <= DIR_HOLE_MAX
+        print(f"  hole         {'PASS' if ok else 'FAIL'}  worst umbra term {worst_hole:.4f} "
+              f"over {measured} samples, {skipped} caster-occluded (want <= {DIR_HOLE_MAX})")
+        if not ok:
+            failures.append("dir-hole")
+    except ValueError as e:
+        print(f"  hole         ERROR {e}")
         failures.append("dir-hole")
 
     # --- acne: bare ground must divide to 1, at both elevations -------------
     for label, term in (("40deg", term40), ("10deg", term10)):
-        worst = 0.0
-        (xa, xb), (za, zb) = DIR_SHADOW["strip_x"], DIR_SHADOW["strip_z"]
-        steps = 10
-        for ix in range(steps + 1):
-            for iz in range(steps + 1):
-                p = (xa + (xb - xa) * ix / steps, 0.0, za + (zb - za) * iz / steps)
-                worst = max(worst, abs(term(p) - 1.0))
-        ok = worst <= DIR_ACNE_TOL
-        print(f"  acne-{label:<7} {'PASS' if ok else 'FAIL'}  worst |term-1| {worst:.4f} "
-              f"(want <= {DIR_ACNE_TOL})")
-        if not ok:
+        try:
+            worst = 0.0
+            (xa, xb), (za, zb) = DIR_SHADOW["strip_x"], DIR_SHADOW["strip_z"]
+            steps = 10
+            for ix in range(steps + 1):
+                for iz in range(steps + 1):
+                    p = (xa + (xb - xa) * ix / steps, 0.0, za + (zb - za) * iz / steps)
+                    worst = max(worst, abs(term(p) - 1.0))
+            ok = worst <= DIR_ACNE_TOL
+            print(f"  acne-{label:<7} {'PASS' if ok else 'FAIL'}  worst |term-1| {worst:.4f} "
+                  f"(want <= {DIR_ACNE_TOL})")
+            if not ok:
+                failures.append(f"dir-acne-{label}")
+        except ValueError as e:
+            print(f"  acne-{label:<7} ERROR {e}")
             failures.append(f"dir-acne-{label}")
 
     # --- edge position: 50% crossing of the floating sphere's near edge -----
@@ -464,7 +525,12 @@ def run_dir_shadow_gate(workdir):
     want_edge = cz + sz
     for label, term in (("cc3", term40), ("cc1", term40_cc1)):
         zs = [want_edge - 0.5 + i * 0.002 for i in range(int(1.0 / 0.002))]
-        vals = [term((cx, 0.0, z)) for z in zs]  # umbra -> lit as z rises
+        try:
+            vals = [term((cx, 0.0, z)) for z in zs]  # umbra -> lit as z rises
+        except ValueError as e:
+            print(f"  edge-{label:<7} ERROR {e}")
+            failures.append(f"dir-edge-{label}")
+            continue
         umbra, lit = min(vals), max(vals)
         if lit - umbra < 0.5:
             print(f"  edge-{label:<7} ERROR no shadow edge on the scan")

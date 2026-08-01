@@ -26,10 +26,6 @@ uniform sampler2DArray punctualShadowMaps;
 // the same factor.
 uniform float punctualShadowMapSize;
 uniform mat4 punctualShadowMatrix[MAX_PUNCTUAL_SHADOW_LAYERS];
-// One texel's world width per unit of axial distance (shadow.c writes
-// 2*tan(fov/2)/size). Per layer, because a point light's 90-degree face and a
-// panel's 120-degree cone do not cover the same ground at the same distance.
-uniform float punctualTexelScale[MAX_PUNCTUAL_SHADOW_LAYERS];
 // Layers rendered this frame. 0 disables every punctual shadow at once, which
 // is what the shadow system's master switch and an absent depth pass both
 // reduce to; a light carries its own base layer in its UBO entry, so this is

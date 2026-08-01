@@ -10,14 +10,15 @@ out vec4 FragColor; // rgb = in-scattered radiance, a = extinction sigma
 // One draw per slice writes one layer of the volume (sliceIndex says which), so
 // this is an ordinary fullscreen pass over the volume's XY grid.
 //
-// The cascade tap, spot in-scatter and Henyey-Greenstein phase mirror
-// fog_frag.glsl; the height sigma deliberately does NOT (see below -- a volume
-// cannot express the march's floor-plane ray clamp). A pixel has one view ray,
-// so the march could hoist phase and the light-space projection out of its step
-// loop; a froxel has no single ray, so both are evaluated per cell.
+// The cascade tap, spot in-scatter and Henyey-Greenstein phase were inherited
+// from the retired screen-space fog march (fog_frag, deleted in spec 9.5); the
+// height sigma deliberately was NOT (a volume cannot express the march's
+// floor-plane ray clamp). A pixel has one view ray, so the march could hoist
+// phase and the light-space projection out of its step loop; a froxel has no
+// single ray, so both are evaluated per cell.
 
-// Same mirrored constants as fog_frag.glsl (MAX_SHADOW_LIGHTS / SHADOW_CASCADES
-// under private names); they must track shadow.h the same way.
+// Mirrors shadow.h's MAX_SHADOW_LIGHTS / SHADOW_CASCADES under private names;
+// they must track it the same way csm.glsl's copies do.
 #define MAX_FOG_LIGHTS 3
 #define FOG_CASCADES 3
 
@@ -41,7 +42,7 @@ uniform float anisotropy;    // Henyey-Greenstein g
 uniform float sunBoost;
 uniform float shadowBias;
 
-// One volumetric spot light (the flashlight), as in fog_frag.
+// One volumetric spot light (the flashlight).
 uniform int spotEnabled;
 uniform vec3 spotPos;
 uniform vec3 spotDir;
@@ -100,9 +101,7 @@ float phaseHG(float c, float g) {
 // Is the air at world position P lit by the caster whose cascade block starts
 // at layer0? Walks cascades in index order and taps the FIRST whose box
 // contains the point -- the tightest covering cascade. Outside every cascade
-// counts as lit. Same rule as fog_frag's fogVisibility, but evaluated from a
-// world position instead of a ray parameter (a froxel has no ray to be affine
-// along, so the projection cannot be hoisted).
+// counts as lit.
 float fogVisibility(int layer0, vec3 P) {
     for (int c = 0; c < cascadeCount; c++) {
         int layer = layer0 + c;

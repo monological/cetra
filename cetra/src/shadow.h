@@ -45,15 +45,18 @@
 // punctual share one near-side storage policy, shadow.c).
 // glPolygonOffset(factor, units) pushes a fragment by
 // factor * <max depth slope of the polygon> + units * <smallest resolvable
-// depth difference>. Both terms are expressed in the depth buffer's own units,
-// so this is one setting for every scene scale and every light range -- unlike
-// an epsilon in NDC z, which is worth ~d^2/near world units and is therefore
-// only ever right at one distance.
+// depth difference>.
 //
-// The slope term does the work: acne is a texel-footprint problem, so it scales
-// with how fast depth changes across a texel, which is exactly what the
-// rasterizer measures here. The constant term only covers the flat case the
-// slope term cannot see (a receiver exactly perpendicular to the light).
+// The slope term is load-bearing for grazing receivers: it covers the depth
+// difference between a fragment's shading point and its texel's own sample
+// point, which grows with the surface's slope in the map. Dropping it to 0
+// (with the receiver-plane bias carrying the offset taps) was measured and
+// rejected: cornell_leak's near-edge-on wall answered with a 0.39 shadow term
+// on unoccluded ground -- the screen-space plane gradient degrades exactly
+// where the receiver is screen-grazing, and the raster's own slope measure
+// does not. The displacement the term applies to a curved CASTER's silhouette
+// facets was also measured on dir_shadow_fixture: no visible-umbra artifact
+// at factor 2. Both terms in the map's own units, so no per-scene retune.
 #define SHADOW_DEPTH_SLOPE_BIAS    2.0f
 #define SHADOW_DEPTH_CONSTANT_BIAS 2.0f
 // Engine-owned sampler units sit just above the material units (common.h).
@@ -101,7 +104,7 @@ typedef struct ShadowSystem {
     bool csm_debug;         // Tint fragments by cascade (the split/snap acceptance tool)
     // Per-layer state, count-strided (layer = slot * cascade_count + cascade)
     mat4 cascade_matrices[MAX_SHADOW_LIGHTS * SHADOW_CASCADES];
-    vec4 cascade_params[MAX_SHADOW_LIGHTS * SHADOW_CASCADES]; // width, near, far, biasScale
+    vec4 cascade_params[MAX_SHADOW_LIGHTS * SHADOW_CASCADES]; // width, near, far; w unused
     float cascade_splits[SHADOW_CASCADES];                    // View-depth far bound per cascade
 
     // Perspective shadow maps for the punctual light types, one ordinary 2D
@@ -121,12 +124,6 @@ typedef struct ShadowSystem {
     // GLSL literal the way it used to be.
     int punctual_map_size;
     mat4 punctual_matrices[MAX_PUNCTUAL_SHADOW_LAYERS]; // perspective proj * lookAt per layer
-    // One texel's world width per unit of axial distance, per layer:
-    // 2 * tan(fov/2) / map size. The receiver bias in punctual_shadow.glsl is
-    // measured in texels and this is what turns it into a world length, so it
-    // has to be per-layer -- a point light's 90-degree face and a panel's
-    // 120-degree cone do not cover the same ground at the same distance.
-    float punctual_texel_scale[MAX_PUNCTUAL_SHADOW_LAYERS];
     // Layers actually rendered this frame, not merely requested: it is the
     // shader's punctualShadowCount, which bounds every Light.shadow_layer the
     // UBO carries, so a pass that allocated but never drew must leave it 0
