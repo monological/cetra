@@ -5,7 +5,6 @@
 #include "common.h"
 #include "ext/log.h"
 #include "ltc_lut.h" // generated LTC tables (spec 9.2); see tools/gen_ltc_lut.py
-#include "texture.h"
 #include "uniform.h"
 
 LTCTables* create_ltc_tables(void) {
@@ -34,11 +33,6 @@ LTCTables* create_ltc_tables(void) {
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
-    if (!ltc->tex) {
-        log_error("Failed to create LTC area-light lookup tables");
-        free_ltc_tables(ltc);
-        return NULL;
-    }
     return ltc;
 }
 

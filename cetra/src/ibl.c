@@ -412,11 +412,13 @@ static void render_irradiance_convolution(IBLResources* ibl, mat4 projection, co
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
-// GGX-prefilter an arbitrary cubemap into a manually-mipped destination it
-// (re)allocates (roughness = mip / (mip_levels - 1)). Direction-only
-// unit-cube render, so the source origin is irrelevant; the source face size
-// drives the importance sampler's solid-angle mip selection. Uses the shared
-// capture FBO/RBO and leaves FBO 0 bound; caller restores its own viewport.
+// Prefilter an arbitrary cubemap with the given filter program (GGX or
+// Charlie kernel -- one environmentMap/roughness/resolution contract) into a
+// manually-mipped destination it (re)allocates (roughness =
+// mip / (mip_levels - 1)). Direction-only unit-cube render, so the source
+// origin is irrelevant; the source face size drives the importance sampler's
+// solid-angle mip selection. Uses the shared capture FBO/RBO and leaves FBO 0
+// bound; caller restores its own viewport.
 void ibl_prefilter_cubemap(IBLResources* ibl, ShaderProgram* program, GLuint src_cube, GLuint* dst,
                            int dst_base_size, int mip_levels) {
     if (!program)
@@ -589,7 +591,6 @@ int ibl_bake_from_cubemap(IBLResources* ibl, Engine* engine, int env_size, int p
     ibl_prefilter_cubemap(ibl, ibl->charlie_prefilter_program, ibl->environment_cubemap,
                           &ibl->charlie_prefilter_map, IBL_CHARLIE_PREFILTER_SIZE,
                           IBL_CHARLIE_PREFILTER_MIPS);
-    ibl->max_charlie_lod = (float)(IBL_CHARLIE_PREFILTER_MIPS - 1);
 
     // Re-enable face culling and the engine's default blending
     glEnable(GL_CULL_FACE);
@@ -739,11 +740,13 @@ void bind_ibl_textures(IBLResources* ibl, ShaderProgram* program) {
     glBindTexture(GL_TEXTURE_CUBE_MAP, ibl->prefilter_map);
     uniform_set_int(u, "prefilteredMap", IBL_PREFILTER_TEXTURE_UNIT);
 
-    // Bind the Charlie sheen environment chain (never probe-overridden)
+    // Bind the Charlie sheen environment chain (never probe-overridden).
+    // Its mip count is a compile-time constant, unlike the GGX chain's
+    // caller-chosen depth, so the LOD ceiling needs no runtime field.
     glActiveTexture(GL_TEXTURE0 + IBL_CHARLIE_TEXTURE_UNIT);
     glBindTexture(GL_TEXTURE_CUBE_MAP, ibl->charlie_prefilter_map);
     uniform_set_int(u, "charliePrefilteredMap", IBL_CHARLIE_TEXTURE_UNIT);
-    uniform_set_float(u, "maxCharlieLOD", ibl->max_charlie_lod);
+    uniform_set_float(u, "maxCharlieLOD", (float)(IBL_CHARLIE_PREFILTER_MIPS - 1));
 
     // (The BRDF LUT is engine-owned and bound elsewhere, not here)
 

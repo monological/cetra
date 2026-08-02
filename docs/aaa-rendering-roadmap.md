@@ -74,8 +74,8 @@ Ground truth that shapes every design below (library at `cetra/src/`, shaders at
 ## Global decision: pbr_frag texture-unit ledger
 
 Binding for all features (three new links in the `_Static_assert` chain, `render.c:34-47`):
-- **unit 7** → `ltcMatTex` (LTC M-inverse LUT)
-- **unit 9** → `ltcAmpTex` (LTC magnitude/Fresnel LUT — repurposes the reserved-unsampled reflectance unit)
+- **unit 7** → `ltcTex` (LTC 2-layer array: M-inverse + magnitude/Fresnel — packed in 10.7.1)
+- **unit 9** → `charliePrefilteredMap` (Charlie sheen env cubemap — took the unit the LTC pack freed in 10.7.1)
 - **unit 14** → `giAtlasTex` (DDGI octahedral atlas, sampler2D — legal since sampler units are
   per-program and pbr_frag never sampled the skybox cube)
 - Contact shadows + bent-normal spec-occ consume **zero** pbr_frag units (postfx-only).

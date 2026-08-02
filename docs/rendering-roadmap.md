@@ -532,9 +532,11 @@ Effort key: **S** ≈ days · **M** ≈ 1–2 weeks · **L** ≈ 3+ weeks.
 - **What.** Activated the two long-reserved-but-dead material slots. **KHR_materials_specular**
   re-parameterizes the dielectric F0 (`specularColorFactor` tints it, `specularFactor` weights it) —
   not a new lobe, a modulation at the single F0 site. **KHR_materials_sheen** adds a retroreflective
-  Charlie cloth lobe (velvet / satin): a new `distributionCharlie` (Estevez-Kulla) + `visibilityAshikhmin`,
+  Charlie cloth lobe (velvet / satin): a new `distributionCharlie` (Estevez-Kulla) + ~~`visibilityAshikhmin`~~
+  (replaced by the reference Charlie-lambda `visibilitySheen` in 10.7.1),
   layered over the base like clearcoat (analytic + IBL), `sheenColorFactor` + `sheenRoughnessFactor`.
-- **Zero new samplers.** sheen-color / specular-color textures ride the already-reserved units 8/9;
+- **Zero new samplers.** the sheen-color texture rides the already-reserved unit 8 (unit 9 later
+  went to LTC in 9.2, then to the Charlie sheen env in 10.7.1; the specular-color texture is deferred);
   scalar factors are uniforms. Import verified on real assets (Assimp 6.0.5 populates
   `AI_MATKEY_SPECULAR_FACTOR` / `$clr.specular` and `$clr.sheen.factor` / sheen roughness); the
   specular-color key is glTF-gated via the KHR-specific `specularFactor` presence.

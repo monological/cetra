@@ -8,12 +8,18 @@
 // the E integration to trust.
 const float SHEEN_MIN_ROUGHNESS = 0.07;
 
+// alpha = sheenRoughness^2, the KHR spec's perceptually-linear mapping, with
+// one shared floor so D, V, and the env prefilter's importance sampler all
+// see exactly one lobe width.
+float sheenAlpha(float sheenRoughness) {
+    return max(sheenRoughness * sheenRoughness, 1e-4);
+}
+
 // Charlie sheen distribution (Estevez-Kulla, "Production Friendly Microfacet
 // Sheen"): an inverted-Gaussian NDF giving cloth its retroreflective grazing
-// rim. alpha = sheenRoughness^2, the KHR spec's perceptually-linear mapping.
+// rim.
 float distributionCharlie(vec3 N, vec3 H, float sheenRoughness) {
-    float alphaG = max(sheenRoughness * sheenRoughness, 1e-4);
-    float invAlpha = 1.0 / alphaG;
+    float invAlpha = 1.0 / sheenAlpha(sheenRoughness);
     float NdotH = max(dot(N, H), 0.0);
     float sin2h = max(1.0 - NdotH * NdotH, 0.0078125); // fp16-safe floor
     return (2.0 + invAlpha) * pow(sin2h, invAlpha * 0.5) / (2.0 * 3.14159265359);
@@ -41,10 +47,16 @@ float lambdaSheen(float cosTheta, float alphaG) {
 // Charlie-lambda visibility, the KHR spec's energy-conserving primary form
 // (it replaced the sanctioned-but-lossy Ashikhmin fallback in 10.7.1). The
 // E channel in the BRDF LUT integrates THIS pair with distributionCharlie;
-// switching either half means re-deriving the other. alpha matches D's
-// squared mapping so both halves see one lobe width.
+// switching either half means re-deriving the other.
+//
+// The min() caps matter: callers floor their dots at 0 but do not cap at 1,
+// and a dot rounding above 1 sends lambdaSheen's (1 - cosTheta) negative --
+// pow(negative, 0.198) is NaN on this driver (the same rounding failure the
+// iridescence path documents and clamps for).
 float visibilitySheen(float NdotL, float NdotV, float sheenRoughness) {
-    float alphaG = max(sheenRoughness * sheenRoughness, 1e-4);
+    float alphaG = sheenAlpha(sheenRoughness);
+    NdotL = min(NdotL, 1.0);
+    NdotV = min(NdotV, 1.0);
     return clamp(1.0 / ((1.0 + lambdaSheen(NdotV, alphaG) + lambdaSheen(NdotL, alphaG)) *
                         (4.0 * NdotV * NdotL)),
                  0.0, 1.0);

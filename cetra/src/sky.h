@@ -130,9 +130,10 @@ void sky_sun_transmittance(const SkyAtmosphere* sky, vec3 out_color);
 int sky_bake_static_luts(SkyAtmosphere* sky, struct Engine* engine);
 
 // Re-bake everything the sun drives: sky-view LUT -> environment cubemap
-// (+ mips) -> ibl_bake_from_cubemap (irradiance + prefilter). Populates the
-// passed IBLResources so the whole downstream (skybox/IBL/probe/fog) follows
-// the sun. Call after sky_bake_static_luts and after setting sun_dir.
+// (+ mips) -> ibl_bake_from_cubemap (irradiance + GGX and Charlie
+// prefilters). Populates the passed IBLResources so the whole downstream
+// (skybox/IBL/probe/fog) follows the sun. Call after sky_bake_static_luts
+// and after setting sun_dir.
 int sky_bake(SkyAtmosphere* sky, struct IBLResources* ibl, struct Engine* engine);
 
 // Apply the current sun to the coupled key light (sky->sun_light): direction

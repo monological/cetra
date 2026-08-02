@@ -21,7 +21,7 @@ uniform float resolution; // Face size of environmentMap mip 0
 // construction mirrors ImportanceSampleGGX.
 vec3 ImportanceSampleCharlie(vec2 Xi, vec3 N, float r)
 {
-    float alpha = max(r * r, 1e-4);
+    float alpha = sheenAlpha(r);
     float phi = 2.0 * PI * Xi.x;
     float sinTheta = pow(Xi.y, alpha / (2.0 * alpha + 1.0));
     float cosTheta = sqrt(max(1.0 - sinTheta * sinTheta, 0.0));

@@ -75,7 +75,6 @@ typedef struct IBLResources {
     // Parameters
     float intensity;
     float max_reflection_lod;
-    float max_charlie_lod;
 
     // Bright light lobes extracted from the environment during HDR load
     // (for aiming analytic shadow-casting lights). Ordered by energy,
@@ -99,11 +98,11 @@ int load_hdr_environment(IBLResources* ibl, const char* hdr_path);
 // Precomputation (run once after HDR load)
 int precompute_ibl(IBLResources* ibl, struct Engine* engine);
 
-// The environment-independent half of the bake: irradiance + GGX prefilter
-// from an already-populated, MIPPED environment_cubemap of face size
-// env_size. Sets max_reflection_lod from prefilter_mips. Safe to call
-// repeatedly (delete-before-gen) — the re-bake entry point for procedural
-// environments whose content changes.
+// The environment-independent half of the bake: irradiance, GGX prefilter,
+// and the Charlie sheen chain, all from an already-populated, MIPPED
+// environment_cubemap of face size env_size. Sets max_reflection_lod from
+// prefilter_mips. Safe to call repeatedly (delete-before-gen) — the re-bake
+// entry point for procedural environments whose content changes.
 int ibl_bake_from_cubemap(IBLResources* ibl, struct Engine* engine, int env_size,
                           int prefilter_size, int prefilter_mips);
 

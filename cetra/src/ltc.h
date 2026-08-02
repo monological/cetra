@@ -18,7 +18,7 @@ typedef struct LTCTables {
     GLuint tex; // 2-layer array: 0 inverse-M fit, 1 magnitude/Fresnel + .w (TEXUNIT_LTC)
 } LTCTables;
 
-// Uploads both tables. Returns NULL if the texture could not be created.
+// Uploads both tables. Returns NULL on allocation failure.
 LTCTables* create_ltc_tables(void);
 void free_ltc_tables(LTCTables* ltc);
 

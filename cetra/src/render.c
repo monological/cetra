@@ -41,8 +41,6 @@ _Static_assert(TEXUNIT_SCENE_COLOR < TEXUNIT_LTC && TEXUNIT_LTC < TEXUNIT_SHEEN,
 _Static_assert(TEXUNIT_MATERIAL_MAX < IBL_CHARLIE_TEXTURE_UNIT &&
                    IBL_CHARLIE_TEXTURE_UNIT < SHADOW_MAP_TEXTURE_UNIT,
                "Charlie sheen env unit must sit between the material units and the shadow array");
-_Static_assert(TEXUNIT_MATERIAL_MAX < SHADOW_MAP_TEXTURE_UNIT,
-               "material texture units overlap the shadow map array unit");
 _Static_assert(SHADOW_MAP_TEXTURE_UNIT < IBL_IRRADIANCE_TEXTURE_UNIT,
                "shadow unit overlaps the IBL irradiance unit");
 _Static_assert(IBL_IRRADIANCE_TEXTURE_UNIT < IBL_PREFILTER_TEXTURE_UNIT,

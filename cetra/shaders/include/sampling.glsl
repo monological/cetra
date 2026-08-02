@@ -1,6 +1,6 @@
-// Quasi-random GGX importance sampling, shared by the two halves of the
-// split-sum IBL approximation: ibl_prefilter_frag (the prefiltered radiance
-// mips) and ibl_brdf_frag (the BRDF LUT).
+// Quasi-random GGX importance sampling, shared by the halves of the
+// split-sum IBL approximation (the prefiltered radiance mips and the BRDF
+// LUT).
 //
 // These MUST sample the same distribution. Split-sum is only valid because the
 // LUT's integral and the prefilter's integral assume the same GGX lobe -- if

@@ -64,7 +64,7 @@ vec2 IntegrateBRDF(float NdotV, float roughness)
 }
 
 // Directional albedo of the sheen lobe: E(NdotV, sheenRoughness) =
-// integral of Dcharlie * Vashikhmin * NdotL over the hemisphere -- the
+// integral of Dcharlie * Vsheen (Charlie lambda) * NdotL over the hemisphere -- the
 // sheen albedo-scaling factor and the integrated-BRDF half of the sheen
 // split-sum. Uniform-hemisphere sampling rather than importance sampling:
 // the Charlie lobe is a wide grazing ring, so uniform L converges fine and

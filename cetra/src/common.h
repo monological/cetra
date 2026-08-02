@@ -34,11 +34,11 @@
 // The seven scalar masks (roughness/metallic/ao/opacity/microsurface/anisotropy/
 // subsurface) collapsed into ONE sampler2DArray (TEXUNIT_MASKS, mask_array.h),
 // freeing the mid material units. The relocated shadow and IBL engine units took
-// 10-14 (shadow.h / ibl.h), and spec 9.2 claimed 7 + 9 for the two LTC
-// area-light tables (unit 9 was TEXUNIT_REFLECTANCE, reserved for
-// KHR_materials_specular but never bound -- that extension shipped sampling
-// nothing). Unit 15 is the spot shadow map. The full ordered budget is pinned
-// by the _Static_assert chain in render.c.
+// 10-14 (shadow.h / ibl.h). Spec 9.2 claimed 7 + 9 for the two LTC area-light
+// tables; 10.7.1 packed them into one array on 7 and gave 9 to the Charlie
+// sheen environment (IBL_CHARLIE_TEXTURE_UNIT, ibl.h). Unit 15 is the spot
+// shadow map. The full ordered budget is pinned by the _Static_assert chain
+// in render.c.
 #define TEXUNIT_ALBEDO           0
 #define TEXUNIT_NORMAL           1
 #define TEXUNIT_MASKS            2 // sampler2DArray: packed scalar masks
