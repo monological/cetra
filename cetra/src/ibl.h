@@ -12,6 +12,11 @@
 #define IBL_PREFILTER_SIZE       1024
 #define IBL_PREFILTER_MIP_LEVELS 9
 #define IBL_BRDF_LUT_SIZE        512
+// The sheen (Charlie) chain is blur-dominated at every roughness -- the
+// kernel is a wide grazing ring -- so a small chain loses nothing even
+// against the 1024 GGX chain.
+#define IBL_CHARLIE_PREFILTER_SIZE 256
+#define IBL_CHARLIE_PREFILTER_MIPS 6
 
 // Relocated below 16 after the scalar-mask array freed the mid material units
 // (see shadow.h). All engine sampler units now bind within
@@ -20,6 +25,10 @@
 #define IBL_PREFILTER_TEXTURE_UNIT  12
 #define IBL_BRDF_LUT_TEXTURE_UNIT   13
 #define IBL_SKYBOX_TEXTURE_UNIT     14
+// Charlie sheen environment chain, on the unit the LTC pack freed (10.7.1).
+// Deliberately NOT probe-overridden: probes carry no Charlie chain, so sheen
+// always reads the global environment's.
+#define IBL_CHARLIE_TEXTURE_UNIT 9
 _Static_assert(IBL_SKYBOX_TEXTURE_UNIT < 16,
                "engine sampler units must stay within GL_MAX_TEXTURE_IMAGE_UNITS");
 
@@ -43,9 +52,10 @@ typedef struct IBLResources {
 
     // Precomputed IBL textures (the BRDF LUT is engine-owned, not
     // per-environment)
-    GLuint environment_cubemap; // GL_TEXTURE_CUBE_MAP (HDR converted)
-    GLuint irradiance_map;      // GL_TEXTURE_CUBE_MAP (diffuse convolution)
-    GLuint prefilter_map;       // GL_TEXTURE_CUBE_MAP with mipmaps (specular)
+    GLuint environment_cubemap;   // GL_TEXTURE_CUBE_MAP (HDR converted)
+    GLuint irradiance_map;        // GL_TEXTURE_CUBE_MAP (diffuse convolution)
+    GLuint prefilter_map;         // GL_TEXTURE_CUBE_MAP with mipmaps (GGX specular)
+    GLuint charlie_prefilter_map; // GL_TEXTURE_CUBE_MAP with mipmaps (sheen env)
 
     // FBO for rendering to cubemap faces
     GLuint capture_fbo;
@@ -59,11 +69,13 @@ typedef struct IBLResources {
     ShaderProgram* equirect_to_cubemap_program;
     ShaderProgram* irradiance_program;
     ShaderProgram* prefilter_program;
+    ShaderProgram* charlie_prefilter_program;
     ShaderProgram* skybox_program;
 
     // Parameters
     float intensity;
     float max_reflection_lod;
+    float max_charlie_lod;
 
     // Bright light lobes extracted from the environment during HDR load
     // (for aiming analytic shadow-casting lights). Ordered by energy,
@@ -124,11 +136,13 @@ void ibl_render_unit_cube(IBLResources* ibl);
 // Allocate an RGB16F cubemap (optionally mip-filtered; mips are not generated)
 void ibl_create_cubemap_texture(GLuint* texture, int size, bool mipmap);
 
-// GGX-prefilter src_cube (which must carry a full mip chain) into *dst:
-// (re)allocates *dst with mip_levels manually-sized levels from
-// dst_base_size down, roughness = mip / (mip_levels - 1). Requires
-// precompute_ibl to have run (shares its program and capture FBO).
-void ibl_prefilter_cubemap(IBLResources* ibl, GLuint src_cube, GLuint* dst, int dst_base_size,
-                           int mip_levels);
+// Prefilter src_cube (which must carry a full mip chain) into *dst with the
+// given filter program (the GGX "ibl_prefilter" or the Charlie
+// "ibl_charlie_prefilter" -- both share the environmentMap/roughness/
+// resolution contract): (re)allocates *dst with mip_levels manually-sized
+// levels from dst_base_size down, roughness = mip / (mip_levels - 1).
+// Requires precompute_ibl to have run (shares its capture FBO).
+void ibl_prefilter_cubemap(IBLResources* ibl, ShaderProgram* program, GLuint src_cube, GLuint* dst,
+                           int dst_base_size, int mip_levels);
 
 #endif // _IBL_H_

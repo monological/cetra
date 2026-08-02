@@ -56,6 +56,7 @@ ShaderProgram* create_skybox_program();
 ShaderProgram* create_ibl_equirect_to_cube_program();
 ShaderProgram* create_ibl_irradiance_program();
 ShaderProgram* create_ibl_prefilter_program();
+ShaderProgram* create_ibl_charlie_prefilter_program();
 ShaderProgram* create_ibl_brdf_program();
 
 // Sky atmosphere LUT programs

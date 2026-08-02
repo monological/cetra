@@ -1111,6 +1111,11 @@ static int _create_default_shaders_for_engine(Engine* engine) {
         add_shader_program_to_engine(engine, ibl_prefilter_program);
     }
 
+    ShaderProgram* ibl_charlie_prefilter_program = create_ibl_charlie_prefilter_program();
+    if (ibl_charlie_prefilter_program) {
+        add_shader_program_to_engine(engine, ibl_charlie_prefilter_program);
+    }
+
     ShaderProgram* ibl_brdf_program = create_ibl_brdf_program();
     if (ibl_brdf_program) {
         add_shader_program_to_engine(engine, ibl_brdf_program);

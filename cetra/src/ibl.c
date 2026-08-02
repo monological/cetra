@@ -108,6 +108,8 @@ void free_ibl_resources(IBLResources* ibl) {
         glDeleteTextures(1, &ibl->irradiance_map);
     if (ibl->prefilter_map)
         glDeleteTextures(1, &ibl->prefilter_map);
+    if (ibl->charlie_prefilter_map)
+        glDeleteTextures(1, &ibl->charlie_prefilter_map);
 
     if (ibl->capture_fbo)
         glDeleteFramebuffers(1, &ibl->capture_fbo);
@@ -415,9 +417,8 @@ static void render_irradiance_convolution(IBLResources* ibl, mat4 projection, co
 // unit-cube render, so the source origin is irrelevant; the source face size
 // drives the importance sampler's solid-angle mip selection. Uses the shared
 // capture FBO/RBO and leaves FBO 0 bound; caller restores its own viewport.
-void ibl_prefilter_cubemap(IBLResources* ibl, GLuint src_cube, GLuint* dst, int dst_base_size,
-                           int mip_levels) {
-    ShaderProgram* program = ibl->prefilter_program;
+void ibl_prefilter_cubemap(IBLResources* ibl, ShaderProgram* program, GLuint src_cube, GLuint* dst,
+                           int dst_base_size, int mip_levels) {
     if (!program)
         return;
 
@@ -540,8 +541,10 @@ int ibl_bake_from_cubemap(IBLResources* ibl, Engine* engine, int env_size, int p
 
     ibl->irradiance_program = get_engine_shader_program_by_name(engine, "ibl_irradiance");
     ibl->prefilter_program = get_engine_shader_program_by_name(engine, "ibl_prefilter");
+    ibl->charlie_prefilter_program = get_engine_shader_program_by_name(engine, "ibl_charlie_prefilter");
     ibl->skybox_program = get_engine_shader_program_by_name(engine, "skybox");
-    if (!ibl->irradiance_program || !ibl->prefilter_program || !ibl->skybox_program) {
+    if (!ibl->irradiance_program || !ibl->prefilter_program || !ibl->charlie_prefilter_program ||
+        !ibl->skybox_program) {
         log_error("Failed to get IBL shader programs");
         return -1;
     }
@@ -577,9 +580,16 @@ int ibl_bake_from_cubemap(IBLResources* ibl, Engine* engine, int env_size, int p
     render_irradiance_convolution(ibl, capture_projection, capture_views, env_size);
 
     log_info("  Generating prefiltered environment map...");
-    ibl_prefilter_cubemap(ibl, ibl->environment_cubemap, &ibl->prefilter_map, prefilter_size,
-                          prefilter_mips);
+    ibl_prefilter_cubemap(ibl, ibl->prefilter_program, ibl->environment_cubemap,
+                          &ibl->prefilter_map, prefilter_size, prefilter_mips);
     ibl->max_reflection_lod = (float)(prefilter_mips - 1);
+
+    // The sheen environment: the same convolution through the Charlie kernel
+    // (spec 10.7.1). Probes never get one -- sheen reads this global chain.
+    ibl_prefilter_cubemap(ibl, ibl->charlie_prefilter_program, ibl->environment_cubemap,
+                          &ibl->charlie_prefilter_map, IBL_CHARLIE_PREFILTER_SIZE,
+                          IBL_CHARLIE_PREFILTER_MIPS);
+    ibl->max_charlie_lod = (float)(IBL_CHARLIE_PREFILTER_MIPS - 1);
 
     // Re-enable face culling and the engine's default blending
     glEnable(GL_CULL_FACE);
@@ -728,6 +738,12 @@ void bind_ibl_textures(IBLResources* ibl, ShaderProgram* program) {
     glActiveTexture(GL_TEXTURE0 + IBL_PREFILTER_TEXTURE_UNIT);
     glBindTexture(GL_TEXTURE_CUBE_MAP, ibl->prefilter_map);
     uniform_set_int(u, "prefilteredMap", IBL_PREFILTER_TEXTURE_UNIT);
+
+    // Bind the Charlie sheen environment chain (never probe-overridden)
+    glActiveTexture(GL_TEXTURE0 + IBL_CHARLIE_TEXTURE_UNIT);
+    glBindTexture(GL_TEXTURE_CUBE_MAP, ibl->charlie_prefilter_map);
+    uniform_set_int(u, "charliePrefilteredMap", IBL_CHARLIE_TEXTURE_UNIT);
+    uniform_set_float(u, "maxCharlieLOD", ibl->max_charlie_lod);
 
     // (The BRDF LUT is engine-owned and bound elsewhere, not here)
 

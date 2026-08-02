@@ -95,7 +95,7 @@ float IntegrateCharlieE(float NdotV, float sheenRoughness)
         vec3 H = normalize(V + L);
 
         float D = distributionCharlie(N, H, sheenRoughness);
-        float Vis = visibilityAshikhmin(cosT, NdotV);
+        float Vis = visibilitySheen(cosT, NdotV, sheenRoughness);
         E += D * Vis * cosT;
     }
     // f/pdf mean: multiply by 2*PI, divide by the sample count.

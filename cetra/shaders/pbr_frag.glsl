@@ -179,6 +179,11 @@ int selectCascade(float viewDepth)
 // IBL (Image-Based Lighting) uniforms
 uniform samplerCube irradianceMap;
 uniform samplerCube prefilteredMap;
+// The sheen environment: the same env convolved through the Charlie kernel
+// (spec 10.7.1). Its unit is never probe-overridden, so sheen always reads
+// the global environment.
+uniform samplerCube charliePrefilteredMap;
+uniform float maxCharlieLOD;
 uniform sampler2D brdfLUT;
 uniform int iblEnabled;
 uniform float iblIntensity;
@@ -1291,7 +1296,7 @@ void main() {
         vec3 sheenSpec = vec3(0.0);
         if (sheenActive) {
             float Dsh = distributionCharlie(N, H, sheenRough);
-            float Vsh = visibilityAshikhmin(NdotL, NdotV);
+            float Vsh = visibilitySheen(NdotL, NdotV, sheenRough);
             sheenSpec = sheenColorPx * Dsh * Vsh;
         }
 
@@ -1430,15 +1435,13 @@ void main() {
             ambient = ambient * (1.0 - ccF) + coatIBL * aoMap * iblIntensity;
         }
 
-        // Sheen IBL as a split-sum: prefiltered env at the sheen roughness
-        // (no new sampler -- reusing the GGX chain understates Charlie's
-        // blur, the recorded approximation) times the LUT's directional
-        // albedo E. The base ambient is dimmed by the same hoisted
-        // sheenScale as the analytic path -- one layer-over-base energy
-        // convention. Guarded so the base ambient lines above stay
-        // byte-identical when sheen is off.
+        // Sheen IBL as a split-sum: the Charlie-prefiltered env at the sheen
+        // roughness times the LUT's directional albedo E. The base ambient is
+        // dimmed by the same hoisted sheenScale as the analytic path -- one
+        // layer-over-base energy convention. Guarded so the base ambient
+        // lines above stay byte-identical when sheen is off.
         if (sheenActive) {
-            vec3 sheenPre = textureLod(prefilteredMap, R, sheenRough * maxReflectionLOD).rgb;
+            vec3 sheenPre = textureLod(charliePrefilteredMap, R, sheenRough * maxCharlieLOD).rgb;
             ambient = ambient * sheenScale +
                       sheenColorPx * sheenPre * sheenE * aoMap * iblIntensity;
         }

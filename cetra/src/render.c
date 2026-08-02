@@ -38,6 +38,9 @@ _Static_assert(TEXUNIT_CLEARCOAT_NORMAL < TEXUNIT_HEIGHT && TEXUNIT_HEIGHT < TEX
                "POM height unit must sit between clearcoat-normal and emissive");
 _Static_assert(TEXUNIT_SCENE_COLOR < TEXUNIT_LTC && TEXUNIT_LTC < TEXUNIT_SHEEN,
                "LTC table-array unit must sit between scene-color and sheen");
+_Static_assert(TEXUNIT_MATERIAL_MAX < IBL_CHARLIE_TEXTURE_UNIT &&
+                   IBL_CHARLIE_TEXTURE_UNIT < SHADOW_MAP_TEXTURE_UNIT,
+               "Charlie sheen env unit must sit between the material units and the shadow array");
 _Static_assert(TEXUNIT_MATERIAL_MAX < SHADOW_MAP_TEXTURE_UNIT,
                "material texture units overlap the shadow map array unit");
 _Static_assert(SHADOW_MAP_TEXTURE_UNIT < IBL_IRRADIANCE_TEXTURE_UNIT,
@@ -393,6 +396,7 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
                 // textures)
                 uniform_set_int(u, "irradianceMap", IBL_IRRADIANCE_TEXTURE_UNIT);
                 uniform_set_int(u, "prefilteredMap", IBL_PREFILTER_TEXTURE_UNIT);
+                uniform_set_int(u, "charliePrefilteredMap", IBL_CHARLIE_TEXTURE_UNIT);
                 uniform_set_int(u, "iblEnabled", 0);
             }
             // Only the no-IBL branch reads it, but set it unconditionally: a

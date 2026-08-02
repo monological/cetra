@@ -574,6 +574,19 @@ ShaderProgram* create_ibl_prefilter_program() {
     return program;
 }
 
+ShaderProgram* create_ibl_charlie_prefilter_program() {
+    ShaderProgram* program = NULL;
+
+    if ((program = create_program_from_source("ibl_charlie_prefilter", ibl_cubemap_vert_shader_str,
+                                              ibl_charlie_prefilter_frag_shader_str, NULL)) ==
+        NULL) {
+        log_error("Failed to initialize IBL Charlie prefilter shader program");
+        return NULL;
+    }
+
+    return program;
+}
+
 ShaderProgram* create_ibl_brdf_program() {
     ShaderProgram* program = NULL;
 
