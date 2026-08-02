@@ -311,12 +311,17 @@ static void extract_material_properties(struct aiMaterial* ai_mat, Material* mat
     // stays -1 (extension absent) for non-glTF, leaving the base BRDF unchanged.
     ai_real specular;
     if (AI_SUCCESS == aiGetMaterialFloat(ai_mat, AI_MATKEY_SPECULAR_FACTOR, &specular)) {
-        material->specular_factor = specular;
+        // Clamp to the glTF schema's [0,1] here rather than in the shader:
+        // the spec-exact fresnel (f90 = factor, no downstream ceiling) turns
+        // an out-of-range factor into F > 1 and a NEGATIVE diffuse share.
+        // The COLOR may exceed 1 by design (it scales F0 toward 1, clamped
+        // in the shader); only negatives are nonsense.
+        material->specular_factor = glm_clamp(specular, 0.0f, 1.0f);
         struct aiColor4D spec_color;
         if (AI_SUCCESS == aiGetMaterialColor(ai_mat, AI_MATKEY_COLOR_SPECULAR, &spec_color)) {
-            material->specular_color_factor[0] = spec_color.r;
-            material->specular_color_factor[1] = spec_color.g;
-            material->specular_color_factor[2] = spec_color.b;
+            material->specular_color_factor[0] = glm_max(spec_color.r, 0.0f);
+            material->specular_color_factor[1] = glm_max(spec_color.g, 0.0f);
+            material->specular_color_factor[2] = glm_max(spec_color.b, 0.0f);
         }
         log_info("Material has KHR specular: factor=%.2f color=(%.2f %.2f %.2f)",
                  material->specular_factor, material->specular_color_factor[0],

@@ -330,6 +330,13 @@ vec3 fresnelSchlickRoughness(float cosTheta, vec3 F0, float roughness) {
     return F0 + (max(vec3(1.0 - roughness), F0) - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
 }
 
+// KHR_materials_specular's dielectric fresnel: mix(f0, f90, (1-cos)^5).
+// Called ONLY inside specExt guards -- the default path never routes
+// through it, which is what keeps non-carrying materials byte-identical.
+vec3 fresnelSchlickF90(float cosTheta, vec3 f0, vec3 f90) {
+    return mix(f0, f90, pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0));
+}
+
 // Thin-film interference for iridescent coatings (pilot visor effect)
 // thickness: film thickness in nanometers (200-600nm typical)
 // cosTheta: dot(N, V) - viewing angle
@@ -1001,8 +1008,8 @@ void main() {
     bool specExt = specularEnabled > 0 && specularFactor >= 0.0;
     vec3 specDielectricF0 = F0;
     if (specExt) {
-        F0 = min(F0 * specularColorFactor, vec3(1.0)) * specularFactor;
-        specDielectricF0 = F0;
+        specDielectricF0 = min(F0 * specularColorFactor, vec3(1.0)) * specularFactor;
+        F0 = specDielectricF0;
     }
     F0 = mix(F0, albedoMap, metallicMap);
 
@@ -1158,16 +1165,19 @@ void main() {
 
                 // See the normalization contract in ltc.glsl: no 2*pi, no 1/pi
                 vec3 areaSpec = (F0 * ltcAmp.x + (1.0 - F0) * ltcAmp.y) * ff.y;
-                // KHR_materials_specular: ltcAmp.y is the grazing (f90 = 1)
-                // half of the amplitude pair; the factor scales it like the
-                // split-sum's brdf.y. max() because a boosted color can push
-                // f90 below F0. Dielectric-only via the metallic blend.
+                // KHR_materials_specular: ltcAmp packs (integral DV,
+                // integral pow5*DV), so the generic Schlick form is
+                // f0*ampx + (f90 - f0)*ampy. The clamp-before-factor order
+                // guarantees f0 <= factor componentwise, so the grazing
+                // coefficient is non-negative by construction. Pure
+                // dielectric vs pure metal, per the analytic site.
                 if (specExt) {
-                    vec3 areaExt =
-                        (F0 * ltcAmp.x +
-                         max(vec3(specularFactor) - specDielectricF0, vec3(0.0)) * ltcAmp.y) *
-                        ff.y;
-                    areaSpec = mix(areaExt, areaSpec, metallicMap);
+                    vec3 areaExt = (specDielectricF0 * ltcAmp.x +
+                                    (vec3(specularFactor) - specDielectricF0) * ltcAmp.y) *
+                                   ff.y;
+                    vec3 areaMetal =
+                        (albedoMap * ltcAmp.x + (1.0 - albedoMap) * ltcAmp.y) * ff.y;
+                    areaSpec = mix(areaExt, areaMetal, metallicMap);
                 }
                 vec3 areaDiff =
                     (1.0 - metallicMap) * (1.0 - transmissionEff) * albedoMap * ff.x;
@@ -1244,13 +1254,17 @@ void main() {
         // KHR_materials_specular: the spec's dielectric fresnel is
         // mix(f0, f90, (1-|VdotH|)^5) with f90 = specularFactor -- the
         // factor dims GRAZING response too, which folding it into F0 alone
-        // cannot. Dielectric-only: blended back to the standard F by
-        // metallic. Sits before the thin-film branch so iridescence keeps
-        // its wholesale replacement.
+        // cannot. The metallic blend mixes PURE dielectric against PURE
+        // metal: Schlick is affine in F0, so blending the results is exact
+        // at every metallic, where blending against the pre-mixed standard
+        // F would double-count the metal share at partial metalness. Sits
+        // before the thin-film branch so iridescence keeps its wholesale
+        // replacement.
+        vec3 specFdLight = vec3(0.0);
         if (specExt) {
-            vec3 Fd = mix(specDielectricF0, vec3(specularFactor),
-                          pow(clamp(1.0 - max(dot(H, V), 0.0), 0.0, 1.0), 5.0));
-            F = mix(Fd, F, metallicMap);
+            specFdLight = fresnelSchlickF90(max(dot(H, V), 0.0), specDielectricF0,
+                                            vec3(specularFactor));
+            F = mix(specFdLight, fresnelSchlick(max(dot(H, V), 0.0), albedoMap), metallicMap);
         }
 
         // Apply thin-film interference for iridescent coatings (pilot visor style)
@@ -1277,9 +1291,10 @@ void main() {
         // KHR_materials_specular: the spec's diffuse trade is the ACHROMATIC
         // 1 - max_value(fresnel), so a colored specular cannot hue-shift the
         // base (per-channel subtraction leaves the tint's complement in the
-        // diffuse -- teal under gold).
+        // diffuse -- teal under gold). Complemented from the DIELECTRIC
+        // fresnel alone; the kD *= 1-metallic below removes the metal share.
         if (specExt) {
-            kD = vec3(1.0 - maxComp(F));
+            kD = vec3(1.0 - maxComp(specFdLight));
         }
         // Metals have no diffuse reflection; transmission replaces diffuse
         // with the transmitted scene term added after the loop (KHR:
@@ -1384,21 +1399,26 @@ void main() {
         // diffuse. That single substitution is the entire difference between an
         // environment-lit surface and a probe-lit one.
         vec3 F = iblEnabled > 0 ? fresnelSchlickRoughness(NdotV, F0, roughnessMap) : vec3(0.0);
-        // KHR_materials_specular, ambient side: the spec has no
-        // roughness-attenuated Fresnel variant, so the extension path uses
-        // the spec's own mix(f0, f90, pow5) form (dropping the engine's
-        // roughness-grazing convention for carrying materials only) and the
-        // achromatic diffuse trade. Dielectric-only via the metallic blend.
+        // KHR_materials_specular, ambient side: the factor COMPOSES with the
+        // engine's roughness-grazing f90 convention (max(1-r, f0) * factor)
+        // rather than replacing it -- at factor 1 and white color this
+        // reduces exactly to the default path, the extension's no-op
+        // invariant. Pure dielectric vs pure metal, per the analytic site.
+        vec3 specFdAmbient = vec3(0.0);
         if (specExt && iblEnabled > 0) {
-            vec3 Fd = mix(specDielectricF0, vec3(specularFactor),
-                          pow(clamp(1.0 - NdotV, 0.0, 1.0), 5.0));
-            F = mix(Fd, F, metallicMap);
+            vec3 f90a =
+                max(vec3(1.0 - roughnessMap), specDielectricF0) * specularFactor;
+            specFdAmbient = fresnelSchlickF90(NdotV, specDielectricF0, f90a);
+            F = mix(specFdAmbient, fresnelSchlickRoughness(NdotV, albedoMap, roughnessMap),
+                    metallicMap);
         }
 
         vec3 kS = F;
         vec3 kD = vec3(1.0) - kS;
+        // Bare specExt: with no IBL, F is vec3(0) and both forms agree, so
+        // the narrower gate above needs no mirror here.
         if (specExt) {
-            kD = vec3(1.0 - maxComp(F));
+            kD = vec3(1.0 - maxComp(specFdAmbient));
         }
         kD *= 1.0 - metallicMap;
         kD *= 1.0 - transmissionEff; // diffuse yields to the transmitted term
@@ -1456,7 +1476,12 @@ void main() {
         // brdf.y is the split-sum's f90 = 1 lobe; KHR_materials_specular
         // scales f90 by the factor, so the extension path dims that term --
         // the "IBL specular weight-dimming" 4.10.1 deferred. Metals keep
-        // the full term (dielectric-only extension).
+        // the full term (dielectric-only extension). The if/else DUPLICATION
+        // is load-bearing: a shared `* iblF90` on the default line is the
+        // direct-weight formulation 4.10.1 tried and reverted (compiler
+        // reassociation broke the cmp gate). energyComp needs no change:
+        // Ess is the f90 = 1 single-scatter albedo and the factor-scaled
+        // lobe passes through it linearly.
         if (specExt) {
             float iblF90 = mix(specularFactor, 1.0, metallicMap);
             specular = prefilteredColor * (F * brdf.x + iblF90 * brdf.y) * energyComp;
@@ -1538,12 +1563,14 @@ void main() {
             textureLod(sceneColorTex, refrUV, roughnessMap * TRANSMISSION_MAX_LOD).rgb;
         vec3 Ft = fresnelSchlickRoughness(NdotV, F0, roughnessMap);
         // KHR_materials_specular: the transmitted share is an energy trade
-        // against the specular layer, so the extension path uses the spec's
-        // fresnel form and the achromatic complement (matching kD).
+        // against the specular layer, so the extension path uses the same
+        // composed f90 and achromatic complement as kD. Dielectric fresnel
+        // alone -- the (1 - metallicMap) factor below removes the metal
+        // share, mirroring kD's structure.
         if (specExt) {
-            vec3 Fd = mix(specDielectricF0, vec3(specularFactor),
-                          pow(clamp(1.0 - NdotV, 0.0, 1.0), 5.0));
-            Ft = vec3(maxComp(mix(Fd, Ft, metallicMap)));
+            vec3 f90t =
+                max(vec3(1.0 - roughnessMap), specDielectricF0) * specularFactor;
+            Ft = vec3(maxComp(fresnelSchlickF90(NdotV, specDielectricF0, f90t)));
         }
         transmitted =
             sceneSample * albedoMap * (1.0 - Ft) * transmissionEff * (1.0 - metallicMap);
