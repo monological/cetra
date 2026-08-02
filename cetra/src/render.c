@@ -379,9 +379,8 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
 
             bind_ltc_tables(engine->ltc, program);
 
-            // Split-sum BRDF tables (GGX A/B + sheen E): engine-owned and
-            // environment-independent, so bound for EVERY scene -- the sheen
-            // albedo scaling reads E whether or not an environment loaded
+            // Engine-owned BRDF tables: bound for every scene, environment
+            // or not, so the shader's sheen E read is always valid
             glActiveTexture(GL_TEXTURE0 + IBL_BRDF_LUT_TEXTURE_UNIT);
             glBindTexture(GL_TEXTURE_2D, engine->brdf_lut);
             glActiveTexture(GL_TEXTURE0);

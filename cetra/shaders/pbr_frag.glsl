@@ -1012,10 +1012,13 @@ void main() {
     vec2 brdf = vec2(0.0);
     vec3 energyComp = vec3(1.0);
     if (iblEnabled > 0) {
-        // The gate is about MEANING, not validity (the engine-owned LUT is
-        // always bound): energy compensation and the ambient specular lobe
-        // are environment concepts, dead without one. The ambient block
-        // below reuses this fetch (same coordinates).
+        // The LUT is always bound now, so this gate is a SCOPE bound, not a
+        // validity one: it keeps no-environment renders byte-identical to
+        // the pre-E-LUT path. Energy compensation applies to ANALYTIC
+        // specular too, so hoisting this fetch and the comp out of the gate
+        // is a real follow-up -- one that moves no-env pixels and wants its
+        // own measurement. The ambient block below reuses this fetch (same
+        // coordinates).
         brdf = texture(brdfLUT, vec2(NdotV, roughnessMap)).rg;
         float Ess = brdf.x + brdf.y;
         if (energyCompEnabled > 0 && Ess > 1e-4) {
@@ -1031,13 +1034,13 @@ void main() {
     // deliberately skipped. E sits in the engine-owned LUT's blue channel,
     // bound for every scene, so this reads correctly with no environment.
     bool sheenActive = sheenEnabled > 0 && maxComp(sheenColorFactor) > 0.0;
-    vec3 sheenColorPx = vec3(0.0);
-    float sheenRough = 0.07;
-    float sheenE = 0.0;
-    float sheenScale = 1.0;
+    vec3 sheenColorPx;
+    float sheenRough;
+    float sheenE;
+    float sheenScale = 1.0; // read unconditionally in the per-light accumulate
     if (sheenActive) {
         sheenColorPx = sheenColorAt(uv);
-        sheenRough = clamp(sheenRoughnessFactor, 0.07, 1.0);
+        sheenRough = clamp(sheenRoughnessFactor, SHEEN_MIN_ROUGHNESS, 1.0);
         sheenE = texture(brdfLUT, vec2(NdotV, sheenRough)).b;
         sheenScale = 1.0 - maxComp(sheenColorPx) * sheenE;
     }

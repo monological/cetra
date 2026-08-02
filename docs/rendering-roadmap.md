@@ -545,11 +545,12 @@ Effort key: **S** ≈ days · **M** ≈ 1–2 weeks · **L** ≈ 3+ weeks.
   compiler-reassociation lesson, hit again and re-confirmed).
 - **Trade-offs (documented v1 simplifications, all follow-ups):** the specular weight folded into F0
   under-dims grazing (Fresnel → 1) and the IBL specular weight-dimming is omitted, both for
-  byte-identity; the sheen directional-albedo is analytic (`1-max(sheenColor)` base + `pow(1-NdotV,2)`
-  IBL rim) with **no baked Charlie E-LUT**; the specular weight is folded into F0 (under-dims
-  grazing — the deeper fix threads `f90 = specularFactor` through Fresnel); the **specular** color
-  texture and the sheen **roughness mask-array layer** are deferred (the sheen color texture rides
-  the reserved unit 8 and is wired end-to-end, exercised factor-only in the fixtures). Fixtures:
+  byte-identity; ~~the sheen directional-albedo is analytic with no baked Charlie E-LUT~~ ✅ shipped
+  in 10.7 (E baked into the BRDF LUT's blue channel, Charlie alpha squared per spec); the specular
+  weight is folded into F0 (under-dims grazing — the deeper fix threads `f90 = specularFactor`
+  through Fresnel); the **specular** color texture and the sheen **roughness mask-array layer** are
+  deferred (the sheen color texture rides the reserved unit 8 and is wired end-to-end, exercised
+  factor-only in the fixtures). Fixtures:
   `gen_specular_fixture.py` (gold/blue/dim spheres), `gen_sheen_fixture.py` (red/blue velvet + gold
   satin, best under a moody env like moon_lab).
 - **~~Discovered follow-up — specular occlusion~~ ✅ shipped in 4.2.1.** GTAO's screen-space

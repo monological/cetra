@@ -2,6 +2,12 @@
 // and the BRDF-LUT bake so the directional albedo the LUT integrates is the
 // exact lobe the shading pass evaluates.
 
+// Floor on the PERCEPTUAL sheen roughness, shared by the shading clamp and
+// the bake's trusted domain: below it the squared-alpha lobe is a near-delta
+// ring that both aliases in the forward pass and is sampled too sparsely by
+// the E integration to trust.
+const float SHEEN_MIN_ROUGHNESS = 0.07;
+
 // Charlie sheen distribution (Estevez-Kulla, "Production Friendly Microfacet
 // Sheen"): an inverted-Gaussian NDF giving cloth its retroreflective grazing
 // rim. alpha = sheenRoughness^2, the KHR spec's perceptually-linear mapping.

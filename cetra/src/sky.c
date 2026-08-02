@@ -179,10 +179,10 @@ static void sky_zenith_radiance(const SkyAtmosphere* sky, vec3 out) {
 }
 
 // Bake one 2D LUT with a fullscreen pass into a fresh RGBA16F texture
-// (delete-before-gen; the render_brdf_lut local-FBO shape). The destination
-// texture is created on a SCRATCH unit so it never clobbers a source LUT the
-// caller bound on unit 0 (the multiscatter pass samples the transmittance
-// LUT there).
+// (delete-before-gen, transient local FBO). The destination texture is
+// created on a SCRATCH unit so it never clobbers a source LUT the caller
+// bound on unit 0 (the multiscatter pass samples the transmittance LUT
+// there).
 #define SKY_BAKE_SCRATCH_UNIT 6
 static void bake_lut_2d(SkyAtmosphere* sky, ShaderProgram* program, GLuint* texture, int width,
                         int height) {

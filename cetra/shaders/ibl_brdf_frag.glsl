@@ -64,14 +64,15 @@ vec2 IntegrateBRDF(float NdotV, float roughness)
 }
 
 // Directional albedo of the sheen lobe: E(NdotV, sheenRoughness) =
-// integral of Dcharlie * Vashikhmin * NdotL over the hemisphere. Consumed by
-// pbr_frag's sheen_albedo_scaling (1 - max3(sheenColor) * E) and as the
-// integrated-BRDF half of the sheen split-sum. Uniform-hemisphere sampling
-// rather than importance sampling: the Charlie lobe is a wide grazing ring,
-// so uniform L converges fine and there is no half-vector Jacobian to get
-// wrong. y is the PERCEPTUAL roughness -- squaring happens inside
-// distributionCharlie, so the runtime fetch uses the same coordinate it
-// clamps and shades with.
+// integral of Dcharlie * Vashikhmin * NdotL over the hemisphere -- the
+// sheen albedo-scaling factor and the integrated-BRDF half of the sheen
+// split-sum. Uniform-hemisphere sampling rather than importance sampling:
+// the Charlie lobe is a wide grazing ring, so uniform L converges fine and
+// there is no half-vector Jacobian to get wrong. y is the PERCEPTUAL
+// roughness -- squaring happens inside distributionCharlie, so the bake and
+// the runtime fetch share one coordinate. Rows below SHEEN_MIN_ROUGHNESS
+// integrate a near-delta ring too sparsely to trust; shading clamps to that
+// floor, so they are never fetched.
 float IntegrateCharlieE(float NdotV, float sheenRoughness)
 {
     vec3 V;
@@ -89,7 +90,7 @@ float IntegrateCharlieE(float NdotV, float sheenRoughness)
         // Uniform hemisphere: cos(theta) = Xi.x gives constant pdf 1/(2*PI)
         float cosT = Xi.x;
         float sinT = sqrt(max(1.0 - cosT * cosT, 0.0));
-        float phi = 2.0 * 3.14159265359 * Xi.y;
+        float phi = 2.0 * PI * Xi.y;
         vec3 L = vec3(sinT * cos(phi), sinT * sin(phi), cosT);
         vec3 H = normalize(V + L);
 
@@ -98,7 +99,7 @@ float IntegrateCharlieE(float NdotV, float sheenRoughness)
         E += D * Vis * cosT;
     }
     // f/pdf mean: multiply by 2*PI, divide by the sample count.
-    return E * 2.0 * 3.14159265359 / float(SAMPLE_COUNT);
+    return E * 2.0 * PI / float(SAMPLE_COUNT);
 }
 
 void main()

@@ -709,8 +709,6 @@ int init_engine(Engine* engine) {
     if (!engine->ltc)
         return -1;
 
-    // Split-sum BRDF tables (GGX A/B + Charlie sheen E): like the LTC
-    // tables, environment-independent BRDF data baked once at init
     engine->brdf_lut = ibl_bake_brdf_lut(engine);
     if (!engine->brdf_lut)
         return -1;

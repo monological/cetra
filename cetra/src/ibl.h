@@ -41,8 +41,8 @@ typedef struct IBLResources {
     int hdr_height;
     char* hdr_filepath;
 
-    // Precomputed IBL textures (the split-sum BRDF LUT is engine-owned --
-    // ibl_bake_brdf_lut -- not part of any environment's resources)
+    // Precomputed IBL textures (the BRDF LUT is engine-owned, not
+    // per-environment)
     GLuint environment_cubemap; // GL_TEXTURE_CUBE_MAP (HDR converted)
     GLuint irradiance_map;      // GL_TEXTURE_CUBE_MAP (diffuse convolution)
     GLuint prefilter_map;       // GL_TEXTURE_CUBE_MAP with mipmaps (specular)
@@ -95,10 +95,8 @@ int precompute_ibl(IBLResources* ibl, struct Engine* engine);
 int ibl_bake_from_cubemap(IBLResources* ibl, struct Engine* engine, int env_size,
                           int prefilter_size, int prefilter_mips);
 
-// Bake the split-sum BRDF tables (GGX A/B in RG, Charlie sheen directional
-// albedo E in B) once and return the texture. Engine-owned: pure BRDF
-// integration with no environment dependence, and the sheen albedo scaling
-// reads E in scenes that never load one.
+// Bake the split-sum BRDF tables (GGX A/B in RG, Charlie sheen E in blue)
+// once; the caller owns the returned texture.
 GLuint ibl_bake_brdf_lut(struct Engine* engine);
 
 // Skybox rendering

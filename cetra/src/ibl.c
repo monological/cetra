@@ -9,6 +9,7 @@
 #include "uniform.h"
 #include "util.h"
 #include "engine.h"
+#include "texture.h"
 #include "ext/log.h"
 
 #define STB_IMAGE_IMPLEMENTATION_ALREADY_DONE
@@ -475,13 +476,17 @@ void ibl_prefilter_cubemap(IBLResources* ibl, GLuint src_cube, GLuint* dst, int 
 }
 
 // Bake the split-sum BRDF tables: GGX A/B in RG, the Charlie sheen
-// directional albedo E in B (RGBA16F because RGB16F is not reliably
-// color-renderable). Pure BRDF integration, environment-independent, so it
-// is baked once at engine init and owned by the Engine -- the LTC tables'
-// pattern, not IBLResources': the sheen albedo scaling needs E in scenes
-// that never load an environment. Blending must be off for the draw (the
-// shader writes no alpha, and an undefined source alpha feeding the blend
-// equation makes the LUT differ run to run); cull is disabled to match.
+// directional albedo E in the blue channel (RGBA16F because RGB16F is not
+// reliably color-renderable). Pure BRDF integration, environment-independent,
+// so it is baked once at engine init and owned by the Engine -- the LTC
+// tables' pattern, not IBLResources': the sheen albedo scaling needs E in
+// scenes that never load an environment.
+//
+// Init-time only: binds and resets GL state freely rather than saving it
+// (the frame loop re-establishes viewport, framebuffer, and program every
+// frame). Blending must be off for the draw -- the shader writes no alpha,
+// and an undefined source alpha feeding the blend equation makes the LUT
+// differ run to run -- and is re-enabled to the engine default after.
 GLuint ibl_bake_brdf_lut(Engine* engine) {
     ShaderProgram* program = get_engine_shader_program_by_name(engine, "ibl_brdf");
     if (!program) {
@@ -489,24 +494,10 @@ GLuint ibl_bake_brdf_lut(Engine* engine) {
         return 0;
     }
 
-    GLint prev_viewport[4];
-    GLint prev_framebuffer;
-    glGetIntegerv(GL_VIEWPORT, prev_viewport);
-    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_framebuffer);
-    GLboolean blend_was_enabled = glIsEnabled(GL_BLEND);
-    GLboolean cull_was_enabled = glIsEnabled(GL_CULL_FACE);
     glDisable(GL_BLEND);
-    glDisable(GL_CULL_FACE);
 
-    GLuint lut;
-    glGenTextures(1, &lut);
-    glBindTexture(GL_TEXTURE_2D, lut);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, IBL_BRDF_LUT_SIZE, IBL_BRDF_LUT_SIZE, 0, GL_RGBA,
-                 GL_FLOAT, NULL);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    GLuint lut = create_texture_2d_float(IBL_BRDF_LUT_SIZE, IBL_BRDF_LUT_SIZE, GL_RGBA16F, GL_RGBA,
+                                         NULL);
 
     GLuint quad_vao = 0;
     GLuint quad_vbo = 0;
@@ -519,33 +510,27 @@ GLuint ibl_bake_brdf_lut(Engine* engine) {
 
     glViewport(0, 0, IBL_BRDF_LUT_SIZE, IBL_BRDF_LUT_SIZE);
     glUseProgram(program->id);
-    glClear(GL_COLOR_BUFFER_BIT);
 
     draw_fullscreen_quad(quad_vao);
 
-    glBindFramebuffer(GL_FRAMEBUFFER, prev_framebuffer);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glDeleteFramebuffers(1, &brdf_fbo);
     glDeleteVertexArrays(1, &quad_vao);
     glDeleteBuffers(1, &quad_vbo);
-    glViewport(prev_viewport[0], prev_viewport[1], prev_viewport[2], prev_viewport[3]);
-    if (blend_was_enabled)
-        glEnable(GL_BLEND);
-    if (cull_was_enabled)
-        glEnable(GL_CULL_FACE);
+    glEnable(GL_BLEND);
     glUseProgram(0);
-    glBindTexture(GL_TEXTURE_2D, 0);
 
     return lut;
 }
 
 // Run the environment-independent half of the IBL bake: irradiance
-// convolution, GGX prefilter, and (once) the BRDF LUT, all derived from an
-// already-populated, mipped ibl->environment_cubemap. env_size is that
-// cubemap's face size (it drives the irradiance convolution's mip
-// selection); prefilter_size/mips size the specular chain and set
-// max_reflection_lod. Safe to call repeatedly (delete-before-gen
-// throughout) -- this is the re-bake entry point for procedural
-// environments whose content changes (a sky following its sun).
+// convolution and GGX prefilter, both derived from an already-populated,
+// mipped ibl->environment_cubemap. env_size is that cubemap's face size (it
+// drives the irradiance convolution's mip selection); prefilter_size/mips
+// size the specular chain and set max_reflection_lod. Safe to call
+// repeatedly (delete-before-gen throughout) -- this is the re-bake entry
+// point for procedural environments whose content changes (a sky following
+// its sun).
 int ibl_bake_from_cubemap(IBLResources* ibl, Engine* engine, int env_size, int prefilter_size,
                           int prefilter_mips) {
     if (!ibl || !engine || ibl->environment_cubemap == 0) {
@@ -744,8 +729,7 @@ void bind_ibl_textures(IBLResources* ibl, ShaderProgram* program) {
     glBindTexture(GL_TEXTURE_CUBE_MAP, ibl->prefilter_map);
     uniform_set_int(u, "prefilteredMap", IBL_PREFILTER_TEXTURE_UNIT);
 
-    // (The BRDF LUT is engine-owned and bound by the render pass for every
-    // scene, environment or not -- not here.)
+    // (The BRDF LUT is engine-owned and bound elsewhere, not here)
 
     // Set IBL parameters
     uniform_set_int(u, "iblEnabled", 1);
