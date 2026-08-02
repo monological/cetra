@@ -56,12 +56,8 @@ uniform float probeIntensity;
 // deep slab its geometry needs, a steep ray a shallow one where a fixed
 // constant painted silhouette ghosts.
 const float THICK_SCALE = 1.5;
-// A rejected column leaves the ray behind known geometry. It may still
-// re-emerge past a THIN occluder, but a gap many slabs deep or a long
-// behind-run means the reflected surface is not in the depth buffer at all:
-// stop and let the probe answer. (Crawling the occluder's whole footprint is
-// what used to burn the iteration budget into a camera-dependent miss
-// patchwork.)
+// Bounds on marching behind known geometry (the occlusion exit in the loop):
+// a single gap this many slabs deep, or this many consecutive behind-columns.
 const float K_OCCLUDE = 8.0;
 const int M_BEHIND = 12;
 const int MAX_ITERS = 128;
@@ -77,7 +73,7 @@ vec3 viewPosFromDepth(vec2 uv, float depth)
 #include "depth.glsl"
 
 // Probe fallback where the SSR ray misses (off-screen, grazing, occluded,
-// max steps): parallax-correct the world reflection ray against the probe's
+// iteration cap): parallax-correct the world reflection ray against the probe's
 // proxy box and return the hit path's premultiplied (color*weight, weight)
 // contract. The screen-space fades don't apply — the probe has data in
 // every direction. Exact vec4(0) when the probe is off, so the miss sites
@@ -105,6 +101,31 @@ vec4 probeSample(vec3 fragPosV, vec3 n, vec3 RV, vec3 viewDir)
     float roughnessFade = 1.0 - smoothstep(0.5 * maxRoughness, maxRoughness, floorRoughness);
     float w = clamp(fresnel * roughnessFade * strength, 0.0, 1.0);
     return vec4(min(col, vec3(WS_REFLECT_MAX)) * w, w);
+}
+
+// Ray-vs-cell boundary planes: the segment params at which the ray enters
+// (tIn) and leaves (tOut) `cell` at `levelSize`, and which axis the entry
+// crossed (0 = x, 1 = y; defaults to y when the entry is the segment start).
+// A degenerate axis (no screen motion) bounds nothing: tIn stays 0, tOut
+// stays 1.
+void cellSpan(vec3 seg0, vec3 dseg, ivec2 cell, ivec2 levelSize, out float tIn, out float tOut,
+              out int enteredAxis)
+{
+    vec2 cellUV0 = vec2(cell) / vec2(levelSize);
+    vec2 cellUV1 = vec2(cell + 1) / vec2(levelSize);
+    tIn = 0.0;
+    tOut = 1.0;
+    enteredAxis = 1;
+    for (int a = 0; a < 2; a++) {
+        if (abs(dseg[a]) > 1e-8) {
+            float e = ((dseg[a] >= 0.0 ? cellUV0[a] : cellUV1[a]) - seg0[a]) / dseg[a];
+            if (e > tIn) {
+                tIn = e;
+                enteredAxis = a;
+            }
+            tOut = min(tOut, ((dseg[a] >= 0.0 ? cellUV1[a] : cellUV0[a]) - seg0[a]) / dseg[a]);
+        }
+    }
 }
 
 void main()
@@ -227,13 +248,10 @@ void main()
     // the probe — the screen cannot answer it anyway.
     ivec2 sizeFine = ivec2(hizWidth, hizHeight);
     ivec2 cell0 = ivec2(clamp(seg0.xy, vec2(0.0), vec2(0.99999)) * vec2(sizeFine));
-    float tSkip = 1.0;
-    if (abs(dseg.x) > 1e-8)
-        tSkip = min(tSkip, ((dseg.x >= 0.0 ? float(cell0.x + 1) : float(cell0.x)) /
-                                float(sizeFine.x) - seg0.x) / dseg.x);
-    if (abs(dseg.y) > 1e-8)
-        tSkip = min(tSkip, ((dseg.y >= 0.0 ? float(cell0.y + 1) : float(cell0.y)) /
-                                float(sizeFine.y) - seg0.y) / dseg.y);
+    float skipIn; // only the exit is needed here
+    float tSkip;
+    int skipAxis;
+    cellSpan(seg0, dseg, cell0, sizeFine, skipIn, tSkip, skipAxis);
     float t = max(tSkip, 0.0) + tEps;
 
     for (int i = 0; i < MAX_ITERS; i++) {
@@ -243,7 +261,7 @@ void main()
             break; // left the screen or the depth range: no information
         }
 
-        ivec2 levelSize = max(ivec2(hizWidth, hizHeight) >> level, ivec2(1));
+        ivec2 levelSize = max(sizeFine >> level, ivec2(1));
         ivec2 cell = ivec2(clamp(p.xy, vec2(0.0), vec2(0.99999)) * vec2(levelSize));
         float cellMin = texelFetch(hizTex, cell, level).r;
 
@@ -252,32 +270,15 @@ void main()
         // the quarter-texel nudge would otherwise leave a z-coverage gap at
         // every column, a meaningful slab fraction at grazing incidence
         // (faint residual striping).
-        vec2 cellUV0 = vec2(cell) / vec2(levelSize);
-        vec2 cellUV1 = vec2(cell + 1) / vec2(levelSize);
-        float tIn = 0.0;
-        float tOut = 1.0;
-        bool enteredOnX = false;
-        if (abs(dseg.x) > 1e-8) {
-            float e = ((dseg.x >= 0.0 ? cellUV0.x : cellUV1.x) - seg0.x) / dseg.x;
-            if (e > tIn) {
-                tIn = e;
-                enteredOnX = true;
-            }
-            tOut = min(tOut, ((dseg.x >= 0.0 ? cellUV1.x : cellUV0.x) - seg0.x) / dseg.x);
-        }
-        if (abs(dseg.y) > 1e-8) {
-            float e = ((dseg.y >= 0.0 ? cellUV0.y : cellUV1.y) - seg0.y) / dseg.y;
-            if (e > tIn) {
-                tIn = e;
-                enteredOnX = false;
-            }
-            tOut = min(tOut, ((dseg.y >= 0.0 ? cellUV1.y : cellUV0.y) - seg0.y) / dseg.y);
-        }
+        float tIn;
+        float tOut;
+        int enteredAxis;
+        cellSpan(seg0, dseg, cell, levelSize, tIn, tOut, enteredAxis);
         tOut = max(tOut, t); // degenerate-direction guard: always progress
         tIn = clamp(tIn, 0.0, tOut);
 
         float zInNdc = seg0.z + dseg.z * tIn;
-        float zOutNdc = seg0.z + dseg.z * min(tOut, 1.0);
+        float zOutNdc = seg0.z + dseg.z * tOut;
 
         // Does the span reach at-or-behind the nearest surface in the cell?
         // (NDC depth grows away from the camera, so max is the far end.)
@@ -313,10 +314,10 @@ void main()
                 // paints the occluder's edge color onto the receiver (the
                 // ghost blob). Compare against the column the ray entered
                 // through.
-                ivec2 fromCell = cell - (enteredOnX ? ivec2(dseg.x >= 0.0 ? 1 : -1, 0)
-                                                    : ivec2(0, dseg.y >= 0.0 ? 1 : -1));
-                fromCell = clamp(fromCell, ivec2(0), levelSize - ivec2(1));
-                float fromZ = viewZFromNdcZ(texelFetch(hizTex, fromCell, 0).r * 2.0 - 1.0);
+                ivec2 stepDir = ivec2(0);
+                stepDir[enteredAxis] = dseg[enteredAxis] >= 0.0 ? 1 : -1;
+                ivec2 fromCell = clamp(cell - stepDir, ivec2(0), levelSize - ivec2(1));
+                float fromZ = viewZFromNdcZ(texelFetch(hizTex, fromCell, level).r * 2.0 - 1.0);
                 if (abs(fromZ - sceneZ) <= thickV)
                     hit = true;
             }
@@ -326,7 +327,8 @@ void main()
                 // projective interpolation — no bisection needed); a
                 // step-accept clamps to the column entry. hitUV at the
                 // texel center so the color/normal fetches read this
-                // column, not a filtered neighbor.
+                // column, not a filtered neighbor (exact at full res; a
+                // 2x2 blend at half res).
                 sHit = (abs(dseg.z) > 1e-9) ? clamp((cellMin - seg0.z) / dseg.z, tIn, tOut)
                                             : tIn;
                 hitUV = (vec2(cell) + 0.5) / vec2(levelSize);

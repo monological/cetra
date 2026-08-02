@@ -281,7 +281,7 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     fx->ssr_enabled = true;
     fx->ssr_strength = 1.0f;
     fx->ssr_max_distance = 8.0f;
-    fx->ssr_thickness_min = 0.05f;
+    fx->ssr_thickness_min = 0.05f; // View units; apps scene-scale it (never down)
     // Glossy surfaces only (the floor and polished trim): rougher curved
     // surfaces self-graze their own silhouette in screen space and dash
     fx->ssr_max_roughness = 0.25f;
