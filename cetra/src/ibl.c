@@ -274,8 +274,14 @@ int load_hdr_environment(IBLResources* ibl, const char* hdr_path) {
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F, width, height, 0, GL_RGB, GL_FLOAT, data);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    // Mipped: the equirect-to-cubemap conversion minifies (an 8k source
+    // against 2048 faces is ~4:1), and sampling it unmipped bakes the
+    // source's high-frequency aliasing into the environment cube's base
+    // level -- which TAA jitter then animates into backdrop shimmer no
+    // amount of downstream filtering can undo (spec 10.8.1).
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glGenerateMipmap(GL_TEXTURE_2D);
 
     extract_light_lobes(ibl, data, width, height);
 

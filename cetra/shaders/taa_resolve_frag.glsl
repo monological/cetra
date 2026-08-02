@@ -100,7 +100,15 @@ void main() {
     // which is the intent. Left as a bare 1.0 rather than a named constant for
     // the same reason — it is the contract's own unit, and naming it would
     // suggest it is tunable independently of what white means.
-    const float feedback = 0.9;
+    // Motion-adaptive window (the 10.7.2 SSR accumulator's split, applied
+    // to the resolve): a static pixel's only per-frame variation is the
+    // jitter itself -- exactly the signal to integrate -- and the residual
+    // oscillation in the OUTPUT scales with (1 - feedback), which at 0.9
+    // leaves detailed content (a sharp env backdrop) sizzling above the
+    // 8-bit threshold. At rest the window stretches; in motion it returns
+    // to the responsive 0.9 so reprojection error cannot smear.
+    float velPx = length(texture(velocityTex, uv).xy / texelSize);
+    float feedback = mix(0.97, 0.9, smoothstep(0.1, 1.0, velPx));
     float wCurrent = (1.0 - feedback) / (1.0 + max(centerYCoCg.x, 0.0));
     float wHistory = feedback / (1.0 + max(historyYCoCg.x, 0.0));
     FragColor = vec4((current * wCurrent + history * wHistory) / (wCurrent + wHistory), 1.0);
