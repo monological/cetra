@@ -15,13 +15,26 @@ LTCTables* create_ltc_tables(void) {
         return NULL;
     }
 
-    // RGBA32F because the inverse-M entries leave [0,1] and the published fit
-    // is float32; 128 KB for both.
-    ltc->mat_tex =
-        create_texture_2d_float(LTC_LUT_DIM, LTC_LUT_DIM, GL_RGBA32F, GL_RGBA, LTC_MAT_TABLE);
-    ltc->amp_tex =
-        create_texture_2d_float(LTC_LUT_DIM, LTC_LUT_DIM, GL_RGBA32F, GL_RGBA, LTC_AMP_TABLE);
-    if (!ltc->mat_tex || !ltc->amp_tex) {
+    // One 2-layer array rather than two 2D textures: the tables always bind
+    // together, and packing them frees a fragment sampler unit in a program
+    // where all 16 are spoken for. RGBA32F because the inverse-M entries
+    // leave [0,1] and the published fit is float32; 128 KB for both. Same
+    // data-LUT policy as create_texture_2d_float: LINEAR, CLAMP_TO_EDGE,
+    // no mips.
+    glGenTextures(1, &ltc->tex);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, ltc->tex);
+    glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGBA32F, LTC_LUT_DIM, LTC_LUT_DIM, 2, 0, GL_RGBA,
+                 GL_FLOAT, NULL);
+    glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, 0, LTC_LUT_DIM, LTC_LUT_DIM, 1, GL_RGBA,
+                    GL_FLOAT, LTC_MAT_TABLE);
+    glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, 1, LTC_LUT_DIM, LTC_LUT_DIM, 1, GL_RGBA,
+                    GL_FLOAT, LTC_AMP_TABLE);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
+    if (!ltc->tex) {
         log_error("Failed to create LTC area-light lookup tables");
         free_ltc_tables(ltc);
         return NULL;
@@ -32,10 +45,8 @@ LTCTables* create_ltc_tables(void) {
 void free_ltc_tables(LTCTables* ltc) {
     if (!ltc)
         return;
-    if (ltc->mat_tex)
-        glDeleteTextures(1, &ltc->mat_tex);
-    if (ltc->amp_tex)
-        glDeleteTextures(1, &ltc->amp_tex);
+    if (ltc->tex)
+        glDeleteTextures(1, &ltc->tex);
     free(ltc);
 }
 
@@ -45,13 +56,9 @@ void bind_ltc_tables(const LTCTables* ltc, ShaderProgram* program) {
 
     UniformManager* u = program->uniforms;
 
-    glActiveTexture(GL_TEXTURE0 + TEXUNIT_LTC_MAT);
-    glBindTexture(GL_TEXTURE_2D, ltc->mat_tex);
-    uniform_set_int(u, "ltcMatTex", TEXUNIT_LTC_MAT);
-
-    glActiveTexture(GL_TEXTURE0 + TEXUNIT_LTC_AMP);
-    glBindTexture(GL_TEXTURE_2D, ltc->amp_tex);
-    uniform_set_int(u, "ltcAmpTex", TEXUNIT_LTC_AMP);
+    glActiveTexture(GL_TEXTURE0 + TEXUNIT_LTC);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, ltc->tex);
+    uniform_set_int(u, "ltcTex", TEXUNIT_LTC);
 
     glActiveTexture(GL_TEXTURE0);
 }

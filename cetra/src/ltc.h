@@ -15,17 +15,16 @@
 // deliberately included only by ltc.c -- it is half a megabyte of static
 // arrays that nothing else needs in its translation unit.
 typedef struct LTCTables {
-    GLuint mat_tex; // inverse-M fit          (TEXUNIT_LTC_MAT)
-    GLuint amp_tex; // magnitude/Fresnel + .w (TEXUNIT_LTC_AMP)
+    GLuint tex; // 2-layer array: 0 inverse-M fit, 1 magnitude/Fresnel + .w (TEXUNIT_LTC)
 } LTCTables;
 
-// Uploads both tables. Returns NULL if either texture could not be created.
+// Uploads both tables. Returns NULL if the texture could not be created.
 LTCTables* create_ltc_tables(void);
 void free_ltc_tables(LTCTables* ltc);
 
-// Bind both tables and point their samplers at the reserved units. Safe to
-// call for any program: one without the samplers no-ops on the uniform lookup,
-// and the shader only reads them when the scene actually has panels.
+// Bind the table array and point its sampler at the reserved unit. Safe to
+// call for any program: one without the sampler no-ops on the uniform lookup,
+// and the shader only reads it when the scene actually has panels.
 void bind_ltc_tables(const LTCTables* ltc, ShaderProgram* program);
 
 #endif // LTC_H

@@ -36,10 +36,8 @@
 // top unit must stay < 16 -- A3 relocated brdfLUT/skybox off units 16/17).
 _Static_assert(TEXUNIT_CLEARCOAT_NORMAL < TEXUNIT_HEIGHT && TEXUNIT_HEIGHT < TEXUNIT_EMISSIVE,
                "POM height unit must sit between clearcoat-normal and emissive");
-_Static_assert(TEXUNIT_SCENE_COLOR < TEXUNIT_LTC_MAT && TEXUNIT_LTC_MAT < TEXUNIT_SHEEN,
-               "LTC matrix unit must sit between scene-color and sheen");
-_Static_assert(TEXUNIT_SHEEN < TEXUNIT_LTC_AMP,
-               "LTC amplitude unit overlaps the sheen unit");
+_Static_assert(TEXUNIT_SCENE_COLOR < TEXUNIT_LTC && TEXUNIT_LTC < TEXUNIT_SHEEN,
+               "LTC table-array unit must sit between scene-color and sheen");
 _Static_assert(TEXUNIT_MATERIAL_MAX < SHADOW_MAP_TEXTURE_UNIT,
                "material texture units overlap the shadow map array unit");
 _Static_assert(SHADOW_MAP_TEXTURE_UNIT < IBL_IRRADIANCE_TEXTURE_UNIT,
@@ -205,9 +203,9 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
 
     // material->reflectance_tex is loaded and owned but deliberately not bound:
     // no shader samples it (KHR specular color is deferred), and it has no
-    // reserved unit any more -- unit 9 became TEXUNIT_LTC_AMP in spec 9.2.
-    // Binding it would cost a glActiveTexture + glBindTexture per material
-    // switch feeding a unit nothing reads.
+    // reserved unit -- unit 9 went to LTC in spec 9.2 and to the Charlie
+    // sheen environment in 10.7.1. Binding it would cost a glActiveTexture +
+    // glBindTexture per material switch feeding a unit nothing reads.
 
     if (material->clearcoat_normal_tex) {
         glActiveTexture(GL_TEXTURE0 + TEXUNIT_CLEARCOAT_NORMAL);

@@ -1111,7 +1111,7 @@ void main() {
         ltcMinv = ltcMatrix(ltcUV);
         // .zw are meaningless at THIS uv -- the sphere form factor in .w is
         // indexed separately inside ltcPanel (see ltc.glsl)
-        ltcAmp = textureLod(ltcAmpTex, ltcUV, 0.0).xy;
+        ltcAmp = textureLod(ltcTex, vec3(ltcUV, LTC_LAYER_AMP), 0.0).xy;
     }
 
     for (int k = 0; k < numDir + clusterCount; k++) {

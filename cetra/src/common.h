@@ -46,10 +46,9 @@
 #define TEXUNIT_HEIGHT           4 // POM height map (a freed mask unit, §4.11)
 #define TEXUNIT_EMISSIVE         5
 #define TEXUNIT_SCENE_COLOR      6 // refraction opaque-scene resolve (engine-bound)
-#define TEXUNIT_LTC_MAT          7 // LTC inverse-M table (engine-bound, §9.2)
-#define TEXUNIT_SHEEN            8 // reserved (KHR_materials_sheen; unsampled today)
-#define TEXUNIT_LTC_AMP          9 // LTC magnitude/Fresnel table (engine-bound, §9.2)
-#define TEXUNIT_MATERIAL_MAX     TEXUNIT_LTC_AMP
+#define TEXUNIT_LTC              7 // LTC tables, 2-layer array (engine-bound, §9.2)
+#define TEXUNIT_SHEEN            8 // KHR_materials_sheen color texture (§4.10.1)
+#define TEXUNIT_MATERIAL_MAX     TEXUNIT_SHEEN
 
 // (Light data moved off the default uniform block entirely: analytic lights
 // live in the clustered-forward std140 UBOs -- see light_cluster.h / ubo.h --

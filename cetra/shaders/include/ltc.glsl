@@ -2,9 +2,10 @@
 // Neubelt, SIGGRAPH 2016). Spec 9.2.
 //
 // The two lookup tables are fitted offline and vendored (tools/ltc_data.js ->
-// cetra/src/ltc_lut.h). ltcMatTex holds the inverse-M transform that maps the
-// GGX lobe onto a clamped cosine; ltcAmpTex holds the magnitude/Fresnel terms
-// in .xy and, at its OWN uv, the horizon-clipped-sphere form factor in .w.
+// cetra/src/ltc_lut.h), packed as two layers of one array texture. Layer 0
+// holds the inverse-M transform that maps the GGX lobe onto a clamped
+// cosine; layer 1 holds the magnitude/Fresnel terms in .xy and, at its OWN
+// uv, the horizon-clipped-sphere form factor in .w.
 //
 // NORMALIZATION CONTRACT: the .w table already folds in 1/(2*pi) along with
 // the horizon clip, and the form factor it returns is the cosine-weighted
@@ -17,8 +18,10 @@
 // loop, which is non-uniform control flow where implicit-derivative sampling
 // is undefined. The tables are mip-less anyway.
 
-uniform sampler2D ltcMatTex; // inverse-M fit          (TEXUNIT_LTC_MAT)
-uniform sampler2D ltcAmpTex; // magnitude/Fresnel + .w (TEXUNIT_LTC_AMP)
+uniform sampler2DArray ltcTex; // layer 0 inverse-M, layer 1 magnitude/Fresnel + .w (TEXUNIT_LTC)
+
+const float LTC_LAYER_MAT = 0.0;
+const float LTC_LAYER_AMP = 1.0;
 
 // Lowest roughness the quad integral stays numerically sound at; see the
 // caller in pbr_frag.glsl for the derivation and its limits.
@@ -38,7 +41,7 @@ vec2 ltcCoords(float roughness, float NdotV) {
 // Rebuild the inverse-M matrix from the packed fit. The fit normalizes
 // m[1][1] to 1, so only the x/z block is stored (as a, b, c, d). Columns.
 mat3 ltcMatrix(vec2 coords) {
-    vec4 t = textureLod(ltcMatTex, coords, 0.0);
+    vec4 t = textureLod(ltcTex, vec3(coords, LTC_LAYER_MAT), 0.0);
     return mat3(vec3(t.x, 0.0, t.y), vec3(0.0, 1.0, 0.0), vec3(t.z, 0.0, t.w));
 }
 
@@ -101,7 +104,7 @@ float _ltcIntegrate(mat3 M, vec3 P, vec3 p0, vec3 p1, vec3 p2, vec3 p3) {
     if (behind)
         z = -z;
     vec2 uv = vec2(z * 0.5 + 0.5, len) * LTC_LUT_SCALE + LTC_LUT_BIAS;
-    return len * textureLod(ltcAmpTex, uv, 0.0).w;
+    return len * textureLod(ltcTex, vec3(uv, LTC_LAYER_AMP), 0.0).w;
 }
 
 // Both form factors for one rectangular panel: .x diffuse (Lambert), .y
