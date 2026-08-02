@@ -76,7 +76,10 @@ into tasks as you go.
   retroreflective cloth lobe (velvet/satin, analytic + IBL). Zero new samplers. Off by default
   (`--no-specular` / `--no-sheen`; non-carrying materials byte-identical). See §4.10.1.
 
-Next up: 4.18 Forward+ (clustered shading), the last Tier-4 item. (4.11 POM, 4.15 motion blur, 4.12 SSS, 4.17 OIT shipped.)
+**v1 roadmap complete.** The last item, 4.18 Forward+, shipped as clustered forward light
+culling (A1, `specs/9.1-clustered-forward-light-culling.md`) under the successor plan.
+Active planning lives in **`docs/aaa-rendering-roadmap.md`** (Tracks A/B → the 9.x specs,
+plus the measurement-driven 10.x quality series).
 
 ---
 
@@ -587,7 +590,11 @@ Effort key: **S** ≈ days · **M** ≈ 1–2 weeks · **L** ≈ 3+ weeks.
   --no-ssr-temporal / --no-ssr-denoise`, each OFF `cmp`-exact to the prior state. Accepted tradeoff:
   the denoiser leaves the roughness-0.1 near-mirror clean-but-slightly-soft (planar's domain,
   explicitly declined). (Also latent, untouched: concentric AO banding on large flat grounds — a
-  `gtao_frag` 32-sector × SLICES=2 sweep quantization issue.)
+  `gtao_frag` 32-sector × SLICES=2 sweep quantization issue.) **Superseded at the source by 10.9**
+  (`specs/10.9-ssr-trace-rewrite.md`): the deterministic Hi-Z march itself was rewritten (exact
+  per-column interval acceptance, honest occlusion → probe), removing the grid stripes and the
+  behind-silhouette ghost this stack existed to launder — the denoiser now dresses only
+  silhouette-tangent edge quantization.
 - **Follow-up — unify spec-occ at the forward material-AO site.** The material `aoMap`
   (`pbr_frag.glsl:1027`) still dims diffuse+specular ambient equally. The forward pass holds the
   separated `specular` term + exact NdotV/F0/roughness (all of which the composite path rebuilds and
@@ -742,12 +749,15 @@ Effort key: **S** ≈ days · **M** ≈ 1–2 weeks · **L** ≈ 3+ weeks.
 
 ### Architectural (bigger; do only if needed)
 
-#### 4.18 Clustered / tiled forward (Forward+)  — **L**
+#### 4.18 Clustered / tiled forward (Forward+)  — **L** — ✅ **shipped** (as A1, spec 9.1)
 - **What.** Cull lights into a 3D froxel grid so shading touches only the lights that
   overlap each cluster — lifts the N-nearest / ~75-light cap.
 - **Why.** The current per-object nearest-light selection breaks down with many dynamic
   lights. Forward+ is the scalable answer.
-- **Current state.** Forward, N-nearest per object (`render.c`, ~75 cap).
+- **Shipped shape** (`specs/9.1-clustered-forward-light-culling.md`, first item of the AAA
+  roadmap): UBOs rather than data textures — three std140 blocks (lights / cluster grid /
+  indices), CPU cluster assignment in `light_cluster.c` over a 16×8×24 exponential-Z frustum
+  grid, the per-node 13-glUniform-per-light upload and `get_closest_lights` deleted.
 - **GL 4.1 approach.** The compute-friendly version isn't available; do light culling on the
   **CPU** per cluster, or build the cluster→light-index lists into a **texture buffer**
   (`samplerBuffer`) each frame, then index it in `pbr_frag`. Fiddlier without compute; treat
@@ -802,6 +812,7 @@ Three tiers, cheapest first:
 | 4.15 | Motion blur | 4 | M | velocity buffer | ✅ **done** — motion cohesion |
 | 4.16 | AgX tonemap | 4 | S | — | ✅ **done** — modern highlight rolloff |
 | 4.17 | Weighted-blended OIT | 4 | M | — | ✅ **shipped** — order-independent alpha-blend, `--oit` |
-| 4.18 | Forward+ (clustered) | arch | L | — | many dynamic lights |
+| 4.18 | Forward+ (clustered) | arch | L | — | ✅ **done** — shipped as A1 (spec 9.1): CPU-clustered std140 UBO light path |
 
-**Start here:** ~~4.1 (TAA)~~ ✅ → ~~4.2 (GTAO)~~ ✅ → ~~4.3 (SSGI)~~ ✅ → ~~4.4 (probes)~~ ✅ → ~~4.5 (fog)~~ ✅ → ~~4.8 (energy comp)~~ ✅ → ~~4.13 (bloom pyramid)~~ ✅ → ~~4.16 (AgX)~~ ✅ → ~~4.9 (refraction)~~ ✅ → ~~4.6 (CSM)~~ ✅ → ~~4.7 (sky)~~ ✅ → ~~4.10 (clearcoat)~~ ✅ → ~~4.10.1 (specular+sheen)~~ ✅ → ~~4.2.1 (spec-occ + AO edge)~~ ✅ → ~~4.11 (POM)~~ ✅ → ~~4.15 (motion blur)~~ ✅ → ~~4.12 (SSS)~~ ✅ → ~~4.17 (OIT)~~ ✅ → **4.18 (Forward+ clustered) — the last Tier-4 item**.
+**Start here:** ~~4.1 (TAA)~~ ✅ → ~~4.2 (GTAO)~~ ✅ → ~~4.3 (SSGI)~~ ✅ → ~~4.4 (probes)~~ ✅ → ~~4.5 (fog)~~ ✅ → ~~4.8 (energy comp)~~ ✅ → ~~4.13 (bloom pyramid)~~ ✅ → ~~4.16 (AgX)~~ ✅ → ~~4.9 (refraction)~~ ✅ → ~~4.6 (CSM)~~ ✅ → ~~4.7 (sky)~~ ✅ → ~~4.10 (clearcoat)~~ ✅ → ~~4.10.1 (specular+sheen)~~ ✅ → ~~4.2.1 (spec-occ + AO edge)~~ ✅ → ~~4.11 (POM)~~ ✅ → ~~4.15 (motion blur)~~ ✅ → ~~4.12 (SSS)~~ ✅ → ~~4.17 (OIT)~~ ✅ → ~~4.18 (Forward+ clustered)~~ ✅ (as A1, spec 9.1).
+**v1 complete — the roadmap continues in `docs/aaa-rendering-roadmap.md`.**

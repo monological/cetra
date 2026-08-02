@@ -346,6 +346,41 @@ composite and `postfx_run_fog` became `postfx_run_atmosphere`.*
 
 (6↔8 are swappable — no hard dependency either way.)
 
+### Interlude — correctness & conformance series (9.9 → 10.x), shipped between Tier-1 items 7 and 8
+
+Not on the tracks above: a measurement-driven quality series that landed after A7, each item with
+its own spec, branch, reviews and gates. It exists because using the engine surfaced defects the
+roadmap's feature items could not — a wrong tonemap constant, non-photometric light scales, shadow
+banding at real viewing distances, off-spec KHR materials against reference renderers, and temporal
+flicker whose root cause was an estimator, not a filter. **B2 clouds remains the next unstarted
+Tier-1 item.**
+
+- **9.9–10.0 photometry:** PBR Neutral desaturation blend was inverted vs the Khronos reference;
+  then punctual lights went genuinely photometric (candela/lux imported as authored, EV100 camera)
+  instead of rescaled to renderer units.
+- **10.1–10.2 the working-space contract:** view exposure as a first-class engine contract (1.0 =
+  diffuse white in working space), then six reviews' worth of stragglers moved into it. The
+  scale-invariance gates in `scripts/gates.py` (lights ×1000 / exposure ÷1000 → 1 LSB) date from
+  here.
+- **10.3–10.6 shadow quality:** area-light shadows + the horizon term the LTC integrator never had;
+  area-map projection fit before density; the cascade policy finished to match the punctual path
+  (contact_fixture's large sun-lit ground was the first real receiver); stochastic PCSS (per
+  pixel/frame kernel rotation, averaged by TAA). The analytic shadow gates (penumbra width, leak,
+  umbra ellipse, acne, churn) grew alongside.
+- **10.7/10.7.1 KHR sheen conformance:** Charlie alpha = sheenRoughness² per spec, the sheen E-LUT
+  baked into the BRDF LUT's blue channel, a Charlie-prefiltered sheen environment (unit 9 — LTC
+  packed into a 2-layer array on unit 7 to free it), reference Charlie-lambda visibility.
+- **10.7.2/10.8.1 temporal stability:** SSR's own accumulator (inverse-luma blend, motion-adaptive
+  clamp slack), equirect mips before cubemap conversion, a motion-adaptive TAA window, env-cube
+  aniso — driven by live flicker reports against an 8k HDR.
+- **10.8 KHR specular conformance:** f90 = specularFactor threaded to every F0 consumer, the spec's
+  achromatic diffuse trade, clamp-before-factor — checked against the Khronos sample renderer.
+- **10.9 SSR trace rewrite:** the estimator itself — one unified hi-z loop with exact per-column
+  interval acceptance, receiver-continuity step rejection, and a bounded behind-for-good exit to
+  the probe. Raw-trace comb metric −90%, the behind-silhouette ghost gone, fully-dressed churn −69%
+  at the acceptance camera. Open item recorded there: `froxel_fog_golden` carries a 1,036-px drift
+  that predates 10.9 (10.7–10.8.1 era) and needs an owner.
+
 **Tier 2 — image quality & performance:**
 | # | Item | Effort | Why here |
 |---|------|--------|----------|
