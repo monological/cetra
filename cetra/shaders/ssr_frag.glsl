@@ -131,6 +131,10 @@ void main()
         // index rotates the interleaved-gradient noise so each frame draws a
         // different sample; the temporal accumulator averages them.
         vec2 fc = gl_FragCoord.xy + vec2(float(ssrFrameIndex) * 5.588238);
+        // Inline IGN, deliberately NOT include/noise.glsl's ign(): the
+        // include's dot() form compiles to different float ordering than
+        // this explicit multiply-add, and the hash's low bits steer the
+        // ray -- migrating was measured at 31,800 px on a no-TAA render.
         float r0 = fract(52.9829189 * fract(0.06711056 * fc.x + 0.00583715 * fc.y));
         float r1 = fract(52.9829189 * fract(0.06711056 * (fc.y + 41.0) + 0.00583715 * fc.x));
         float spread = max(floorRoughness, ssrJitter);

@@ -128,6 +128,7 @@ typedef struct PostFX {
     ShaderProgram* ssgi_accum_program;
     ShaderProgram* ssgi_atrous_program;
     ShaderProgram* ssr_atrous_program; // Edge-aware a-trous denoise for the SSR reflection buffer
+    ShaderProgram* ssr_accum_program;  // SSR's own accumulator: inverse-luma blend (10.7.2)
     ShaderProgram* lum_measure_program;
     ShaderProgram* ssr_program;
     ShaderProgram* ssr_hiz_program;

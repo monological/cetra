@@ -488,6 +488,7 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     fx->ssgi_accum_program = create_ssgi_accum_program();
     fx->ssgi_atrous_program = create_ssgi_atrous_program();
     fx->ssr_atrous_program = create_ssr_atrous_program();
+    fx->ssr_accum_program = create_ssr_accum_program();
     fx->lum_measure_program = create_lum_measure_program();
     fx->ssr_program = create_ssr_program();
     fx->ssr_hiz_program = create_ssr_hiz_program();
@@ -511,7 +512,8 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
         !fx->bloom_bright_program || !fx->bloom_down_program || !fx->bloom_up_program ||
         !fx->tonemap_program || !fx->gtao_program || !fx->ssao_blur_program ||
         !fx->temporal_accum_program || !fx->ssgi_composite_program || !fx->ssgi_accum_program ||
-        !fx->ssgi_atrous_program || !fx->ssr_atrous_program || !fx->lum_measure_program ||
+        !fx->ssgi_atrous_program || !fx->ssr_atrous_program || !fx->ssr_accum_program ||
+        !fx->lum_measure_program ||
         !fx->ssr_program || !fx->upsample_tent_program ||
         !fx->taa_resolve_program || !fx->dof_coc_program ||
         !fx->froxel_inject_program || !fx->froxel_integrate_program ||
@@ -901,6 +903,12 @@ static GLuint run_temporal_accum(PostFX* fx, ShaderProgram* prog, PingPong* pp, 
 // residual stops being visible without the response becoming sluggish enough to
 // smear AO behind a moving camera.
 #define TEMPORAL_FEEDBACK_AO 0.97f
+// SSR joined the same class in 10.7.2: its ray jitter reseeds every frame
+// while TAA resolves, so like GTAO its input never settles and the residual
+// scales with (1 - feedback). Measured at a close-up over the catcher floor
+// reflecting a bright sheen rim: 0.9 left the reflection band visibly
+// boiling; the AO-length window shrinks the per-frame share 3.3x.
+#define TEMPORAL_FEEDBACK_SSR 0.97f
 
 // Additive-fold the currently-bound fullscreen setup (sss_blur_program + its
 // textures/uniforms) into the HDR scene (GL_ONE,GL_ONE), restoring blend state.
@@ -1166,6 +1174,7 @@ void free_postfx(PostFX* fx) {
     free_program(fx->temporal_accum_program);
     free_program(fx->ssgi_composite_program);
     free_program(fx->ssgi_accum_program);
+    free_program(fx->ssr_accum_program);
     free_program(fx->ssgi_atrous_program);
     free_program(fx->ssr_atrous_program);
     free_program(fx->lum_measure_program);
@@ -1647,7 +1656,9 @@ static void postfx_run_ssr(PostFX* fx, bool have_normals, bool taa_resolving, ma
     // (independent of the projection jitter, so it converges even in
     // headless with TAA on). Without temporal, freeze the seed: the
     // a-trous denoises a stable per-frame pattern, not a boiling one.
-    int ssr_seed = ssr_temporal_on ? fx->frame_index : 0;
+    // Modulo keeps the shader's float hash well-conditioned over long
+    // sessions (the PCSS seed's bound, render.c).
+    int ssr_seed = ssr_temporal_on ? fx->frame_index % 4096 : 0;
     uniform_set_int(fx->ssr_program->uniforms, "ssrFrameIndex", ssr_seed);
     uniform_set_float(fx->ssr_program->uniforms, "ssrJitter", fx->ssr_jitter);
     // Local-probe fallback for rays the march cannot answer. The
@@ -1679,8 +1690,8 @@ static void postfx_run_ssr(PostFX* fx, bool have_normals, bool taa_resolving, ma
     // off/no-TAA leaves the raw march.
     GLuint ssr_result = fx->ssr_texture;
     if (ssr_temporal_on) {
-        ssr_result = run_temporal_accum(fx, fx->temporal_accum_program, &fx->ssr_history, ssr_w,
-                                        ssr_h, fx->ssr_texture, TEMPORAL_FEEDBACK_DEFAULT);
+        ssr_result = run_temporal_accum(fx, fx->ssr_accum_program, &fx->ssr_history, ssr_w,
+                                        ssr_h, fx->ssr_texture, TEMPORAL_FEEDBACK_SSR);
     } else {
         fx->ssr_history.valid = false;
     }
