@@ -281,8 +281,7 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     fx->ssr_enabled = true;
     fx->ssr_strength = 1.0f;
     fx->ssr_max_distance = 8.0f;
-    fx->ssr_thickness = 0.3f;
-    fx->ssr_steps = 64;
+    fx->ssr_thickness_min = 0.05f;
     // Glossy surfaces only (the floor and polished trim): rougher curved
     // surfaces self-graze their own silhouette in screen space and dash
     fx->ssr_max_roughness = 0.25f;
@@ -1634,8 +1633,7 @@ static void postfx_run_ssr(PostFX* fx, bool have_normals, bool taa_resolving, ma
     uniform_set_mat4(fx->ssr_program->uniforms, "projection", (float*)projection);
     uniform_set_mat4(fx->ssr_program->uniforms, "invProjection", (float*)inv_projection);
     uniform_set_float(fx->ssr_program->uniforms, "maxDistance", fx->ssr_max_distance);
-    uniform_set_float(fx->ssr_program->uniforms, "thickness", fx->ssr_thickness);
-    uniform_set_int(fx->ssr_program->uniforms, "steps", fx->ssr_steps);
+    uniform_set_float(fx->ssr_program->uniforms, "thicknessMin", fx->ssr_thickness_min);
     uniform_set_float(fx->ssr_program->uniforms, "floorRoughness", fx->ssr_floor_roughness);
     uniform_set_float(fx->ssr_program->uniforms, "maxRoughness", fx->ssr_max_roughness);
     // Strength folds into the march's premultiplied weight (clamped

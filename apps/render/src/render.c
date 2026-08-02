@@ -2155,16 +2155,16 @@ int main(int argc, char** argv) {
             engine->postfx->ssao_radius = fmaxf(engine->postfx->ssao_radius, scene_radius * 0.01f);
         }
 
-        // The SSR march reach and thickness are world-space distances like
-        // the AO radius: the meter-scale defaults leave a large-unit scene
-        // with a march that spans a fraction of the model and a thickness
+        // The SSR march reach and thickness floor are world-space distances
+        // like the AO radius: the meter-scale defaults leave a large-unit
+        // scene with a march that spans a fraction of the model and a floor
         // below the depth quantization at its distances. Scale both up with
         // the scene (never down: small scenes keep the tuned defaults).
         if (scene_radius > 0.0f) {
             engine->postfx->ssr_max_distance =
                 fmaxf(engine->postfx->ssr_max_distance, scene_radius * 2.0f);
-            engine->postfx->ssr_thickness =
-                fmaxf(engine->postfx->ssr_thickness, scene_radius * 0.002f);
+            engine->postfx->ssr_thickness_min =
+                fmaxf(engine->postfx->ssr_thickness_min, scene_radius * 0.002f);
 
             // Contact-shadow reach is a world-space distance like the AO radius:
             // a few percent of the scene, so the march covers the near-contact

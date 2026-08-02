@@ -3,7 +3,7 @@ in vec2 TexCoords;
 out vec4 FragColor;
 
 // Screen-space reflections: march the reflected ray in screen space
-// against the resolved depth buffer and sample the scene color at the
+// against the min-depth Hi-Z pyramid and sample the scene color at the
 // hit. Projective transforms map lines to lines, so interpolating the
 // NDC endpoints linearly walks the exact projected ray — unlike a
 // view-space march, whose fixed world steps alias into dotted hits on
@@ -20,9 +20,8 @@ uniform int hizHeight;
 uniform int hizMips;
 uniform mat4 projection;
 uniform mat4 invProjection;
-uniform float maxDistance;  // March length in view-space units
-uniform float thickness;    // Accepted depth gap behind a surface
-uniform int steps;          // March samples along the screen segment
+uniform float maxDistance;   // March length in view-space units
+uniform float thicknessMin;  // Acceptance-slab floor behind a surface (view units)
 uniform float floorRoughness; // Roughness of the reflective floor
 uniform float maxRoughness;   // Reflections fade out toward this roughness
 uniform float strength;       // Reflection strength (folded into the weight)
@@ -49,6 +48,23 @@ uniform float probeIntensity;
 // hdrTex is already pre-exposed, so a reflection inherits the conversion and
 // WS_REFLECT_MAX below is read in the same space it was written in.
 #include "view.glsl"
+
+// Acceptance slab behind a surface: floor thicknessMin (absolute view units,
+// covering depth quantization and the start bias) plus the ray's own view-z
+// travel across the column under test, scaled by THICK_SCALE. Scaling by the
+// ray's travel keeps acceptance incidence-invariant -- a grazing ray gets the
+// deep slab its geometry needs, a steep ray a shallow one where a fixed
+// constant painted silhouette ghosts.
+const float THICK_SCALE = 1.5;
+// A rejected column leaves the ray behind known geometry. It may still
+// re-emerge past a THIN occluder, but a gap many slabs deep or a long
+// behind-run means the reflected surface is not in the depth buffer at all:
+// stop and let the probe answer. (Crawling the occluder's whole footprint is
+// what used to burn the iteration budget into a camera-dependent miss
+// patchwork.)
+const float K_OCCLUDE = 8.0;
+const int M_BEHIND = 12;
+const int MAX_ITERS = 128;
 
 vec3 viewPosFromDepth(vec2 uv, float depth)
 {
@@ -185,151 +201,155 @@ void main()
     float sHit = 0.0;
     vec2 hitUV = vec2(0.0);
 
-    if (dseg.z >= 0.0) {
-        // Hi-Z traversal (rays marching away from the camera — the common
-        // case, and the one a fixed-step march breaks on): walk the
-        // min-depth pyramid, skipping whole cells at coarse levels and
-        // descending wherever the ray dips behind the nearest surface in a
-        // cell. It cannot step over sub-pixel geometry (a one-texel cable
-        // survives every min level), needs no jitter, and its cost grows
-        // with the log of the march length instead of eating sample density.
-        int level = 0;
-        float t = 1e-4;
-        for (int i = 0; i < 256; i++) {
-            vec3 p = seg0 + dseg * t;
-            if (t >= 1.0 || p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0 || p.z >= 1.0) {
-                break; // left the screen or the depth range: no information
-            }
+    // Hi-Z traversal: walk the min-depth pyramid, skipping whole cells at
+    // coarse levels and descending wherever the ray's z-span reaches behind
+    // the nearest surface in a cell. It cannot step over sub-pixel geometry
+    // (a one-texel cable survives every min level) and its cost grows with
+    // the log of the march length. One loop serves both z directions: cell
+    // stepping is x/y boundary math (z never picks the step) and the span
+    // test compares the span's FAR end against the cell min, which is
+    // direction-agnostic; the near-plane clamp above keeps toward-camera
+    // segments short.
+    int level = 0;
+    int behindRun = 0;
 
-            ivec2 levelSize = max(ivec2(hizWidth, hizHeight) >> level, ivec2(1));
-            ivec2 cell = ivec2(clamp(p.xy, vec2(0.0), vec2(0.99999)) * vec2(levelSize));
-            float cellMin = texelFetch(hizTex, cell, level).r;
+    // Quarter-texel nudge past a cell boundary so the next iteration lands
+    // in the next cell — at the FINEST level's texel size regardless of the
+    // current level: a coarse-level nudge overshoots whole fine cells after
+    // every big skip, snapping hit boundaries to the coarse grid
+    // (stair-stepped reflections)
+    float tEps = 0.25 / (float(max(hizWidth, hizHeight)) * max(length(dseg.xy), 1e-6));
 
-            // Ray parameter at which we leave this cell laterally
-            vec2 cellUV0 = vec2(cell) / vec2(levelSize);
-            vec2 cellUV1 = vec2(cell + 1) / vec2(levelSize);
-            float tExit = 1.0;
-            if (abs(dseg.x) > 1e-8)
-                tExit = min(tExit, ((dseg.x >= 0.0 ? cellUV1.x : cellUV0.x) - seg0.x) / dseg.x);
-            if (abs(dseg.y) > 1e-8)
-                tExit = min(tExit, ((dseg.y >= 0.0 ? cellUV1.y : cellUV0.y) - seg0.y) / dseg.y);
-            tExit = max(tExit, t);
-            // Quarter-texel nudge past the boundary so the next iteration
-            // lands in the next cell — at the FINEST level's texel size
-            // regardless of the current level: a coarse-level nudge
-            // overshoots whole fine cells after every big skip, snapping
-            // hit boundaries to the coarse grid (stair-stepped reflections)
-            float tEps = 0.25 / (float(max(hizWidth, hizHeight)) * max(length(dseg.xy), 1e-6));
+    // Start past the fragment's own texel column so the ray never tests the
+    // column it reflected off (the normal bias handles depth separation;
+    // this handles the column). A ray that never leaves its own column
+    // (near-vertical: reflection of the camera region) exits immediately to
+    // the probe — the screen cannot answer it anyway.
+    ivec2 sizeFine = ivec2(hizWidth, hizHeight);
+    ivec2 cell0 = ivec2(clamp(seg0.xy, vec2(0.0), vec2(0.99999)) * vec2(sizeFine));
+    float tSkip = 1.0;
+    if (abs(dseg.x) > 1e-8)
+        tSkip = min(tSkip, ((dseg.x >= 0.0 ? float(cell0.x + 1) : float(cell0.x)) /
+                                float(sizeFine.x) - seg0.x) / dseg.x);
+    if (abs(dseg.y) > 1e-8)
+        tSkip = min(tSkip, ((dseg.y >= 0.0 ? float(cell0.y + 1) : float(cell0.y)) /
+                                float(sizeFine.y) - seg0.y) / dseg.y);
+    float t = max(tSkip, 0.0) + tEps;
 
-            float zExit = seg0.z + dseg.z * min(tExit, 1.0);
-            if (zExit >= cellMin && cellMin < 1.0) {
-                // The ray dips behind the nearest surface within this cell
-                if (level > 0) {
-                    level--; // look closer without advancing
-                    continue;
-                }
-                // Finest level: verify against the FULL-RES depth. The
-                // cell's min is conservative (nearest of its 2x2) and
-                // piecewise constant — accepting it directly quantizes hit
-                // positions to cells (regular content moires into scallops)
-                // and inflates silhouettes where the min came from a
-                // different sub-texel. The bracket [t, tExit] spans only a
-                // couple of full-res texels here, so a short dense scan
-                // resolves the true crossing per pixel.
-                float sFront = t;
-                for (int r = 0; r < 8; r++) {
-                    float s = mix(t, tExit, (float(r) + 0.5) / 8.0);
-                    vec3 q = seg0 + dseg * s;
-                    float dq = texture(depthTex, q.xy).r;
-                    if (dq < 1.0 && q.z > dq) {
-                        // Behind a surface: bisect between the last in-front
-                        // sample and this one so the hit position resolves
-                        // below tap granularity, then accept within thickness
-                        float lo = sFront;
-                        float hi = s;
-                        float dHit = dq;
-                        vec2 uvHit = q.xy;
-                        for (int b = 0; b < 3; b++) {
-                            float mid = 0.5 * (lo + hi);
-                            vec3 m = seg0 + dseg * mid;
-                            float dm = texture(depthTex, m.xy).r;
-                            if (dm < 1.0 && m.z > dm) {
-                                hi = mid;
-                                dHit = dm;
-                                uvHit = m.xy;
-                            } else {
-                                lo = mid;
-                            }
-                        }
-                        float sceneZ = viewZFromNdcZ(dHit * 2.0 - 1.0);
-                        float rayZ = viewZFromNdcZ((seg0.z + dseg.z * hi) * 2.0 - 1.0);
-                        if (sceneZ - rayZ < thickness) {
-                            hit = true;
-                            sHit = hi;
-                            hitUV = uvHit;
-                        }
-                        break; // too far behind: tunneling, not a hit
-                    }
-                    sFront = s;
-                }
-                if (hit)
-                    break;
-                t = tExit + tEps; // nothing real here: march on
-            } else {
-                t = tExit + tEps;
-                level = min(level + 1, hizMips - 1);
-            }
+    for (int i = 0; i < MAX_ITERS; i++) {
+        vec3 p = seg0 + dseg * t;
+        if (t >= 1.0 || p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0 || p.z <= 0.0 ||
+            p.z >= 1.0) {
+            break; // left the screen or the depth range: no information
         }
-    } else {
-        // Rays marching toward the camera are clamped short by the
-        // near-plane bound above; the fixed-step march is dense enough
-        // there. Deterministic per-pixel jitter (interleaved gradient
-        // noise) turns its stepping banding into noise the half-res
-        // upsample averages away.
-        // Same inline hash as the stochastic block above, kept inline for
-        // the same measured reason (the include's dot() form is not
-        // bit-equal and the low bits steer sampling).
-        float jitter = fract(52.9829189 *
-                             fract(0.06711056 * gl_FragCoord.x + 0.00583715 * gl_FragCoord.y));
-        float sPrev = 0.0;
-        for (int i = 0; i < steps; i++) {
-            float s = (float(i) + jitter) / float(steps);
-            vec3 p = mix(seg0, seg1, s);
-            if (p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0 || p.z <= 0.0 || p.z >= 1.0) {
-                break; // left the screen or the depth range: no information
+
+        ivec2 levelSize = max(ivec2(hizWidth, hizHeight) >> level, ivec2(1));
+        ivec2 cell = ivec2(clamp(p.xy, vec2(0.0), vec2(0.99999)) * vec2(levelSize));
+        float cellMin = texelFetch(hizTex, cell, level).r;
+
+        // Exact entry/exit params of this cell from its boundary planes.
+        // The entry is recomputed rather than read from the nudged cursor:
+        // the quarter-texel nudge would otherwise leave a z-coverage gap at
+        // every column, a meaningful slab fraction at grazing incidence
+        // (faint residual striping).
+        vec2 cellUV0 = vec2(cell) / vec2(levelSize);
+        vec2 cellUV1 = vec2(cell + 1) / vec2(levelSize);
+        float tIn = 0.0;
+        float tOut = 1.0;
+        bool enteredOnX = false;
+        if (abs(dseg.x) > 1e-8) {
+            float e = ((dseg.x >= 0.0 ? cellUV0.x : cellUV1.x) - seg0.x) / dseg.x;
+            if (e > tIn) {
+                tIn = e;
+                enteredOnX = true;
+            }
+            tOut = min(tOut, ((dseg.x >= 0.0 ? cellUV1.x : cellUV0.x) - seg0.x) / dseg.x);
+        }
+        if (abs(dseg.y) > 1e-8) {
+            float e = ((dseg.y >= 0.0 ? cellUV0.y : cellUV1.y) - seg0.y) / dseg.y;
+            if (e > tIn) {
+                tIn = e;
+                enteredOnX = false;
+            }
+            tOut = min(tOut, ((dseg.y >= 0.0 ? cellUV1.y : cellUV0.y) - seg0.y) / dseg.y);
+        }
+        tOut = max(tOut, t); // degenerate-direction guard: always progress
+        tIn = clamp(tIn, 0.0, tOut);
+
+        float zInNdc = seg0.z + dseg.z * tIn;
+        float zOutNdc = seg0.z + dseg.z * min(tOut, 1.0);
+
+        // Does the span reach at-or-behind the nearest surface in the cell?
+        // (NDC depth grows away from the camera, so max is the far end.)
+        if (cellMin < 1.0 && max(zInNdc, zOutNdc) >= cellMin) {
+            if (level > 0) {
+                level--; // look closer without advancing
+                continue;
             }
 
-            float d = texture(depthTex, p.xy).r;
-            if (d < 1.0 && p.z > d) {
-                // Behind a surface; accept if within its assumed thickness
-                float sceneZ = viewZFromNdcZ(d * 2.0 - 1.0);
-                float rayZ = viewZFromNdcZ(p.z * 2.0 - 1.0);
-                if (sceneZ - rayZ < thickness) {
+            // Finest level. Full-res traces make level 0 a 1:1 copy of the
+            // depth buffer (ssr_hiz_frag.glsl copySrc), so cellMin IS the
+            // scene depth of this one screen column and the interval test
+            // is exact; half-res level 0 is a 2x2 min, conservative by at
+            // most one full-res texel.
+            float sceneZ = viewZFromNdcZ(cellMin * 2.0 - 1.0);
+            float zEnterV = viewZFromNdcZ(zInNdc * 2.0 - 1.0);
+            float zExitV = viewZFromNdcZ(zOutNdc * 2.0 - 1.0);
+            float zNearV = max(zEnterV, zExitV); // view z: larger = nearer
+            float zFarV = min(zEnterV, zExitV);
+
+            float thickV = thicknessMin + THICK_SCALE * (zNearV - zFarV);
+
+            if (zNearV >= sceneZ) {
+                // The span enters in front and leaves behind: the ray
+                // provably crosses the surface inside this column. Accept
+                // unconditionally — no thickness term, no sampling phase.
+                hit = true;
+            } else if (sceneZ - zNearV <= thickV) {
+                // The whole span is behind: the ray stepped over a depth
+                // step BETWEEN columns. A continuous receiver (the floor
+                // itself, a ramp) has a neighbor at slab-comparable depth;
+                // a silhouette (floor -> sphere) does not, and accepting it
+                // paints the occluder's edge color onto the receiver (the
+                // ghost blob). Compare against the column the ray entered
+                // through.
+                ivec2 fromCell = cell - (enteredOnX ? ivec2(dseg.x >= 0.0 ? 1 : -1, 0)
+                                                    : ivec2(0, dseg.y >= 0.0 ? 1 : -1));
+                fromCell = clamp(fromCell, ivec2(0), levelSize - ivec2(1));
+                float fromZ = viewZFromNdcZ(texelFetch(hizTex, fromCell, 0).r * 2.0 - 1.0);
+                if (abs(fromZ - sceneZ) <= thickV)
                     hit = true;
-                    sHit = s;
-                    hitUV = p.xy;
-                }
-                // Either way stop: everything farther along is occluded
+            }
+
+            if (hit) {
+                // Crossing param solved on the segment (exact under the
+                // projective interpolation — no bisection needed); a
+                // step-accept clamps to the column entry. hitUV at the
+                // texel center so the color/normal fetches read this
+                // column, not a filtered neighbor.
+                sHit = (abs(dseg.z) > 1e-9) ? clamp((cellMin - seg0.z) / dseg.z, tIn, tOut)
+                                            : tIn;
+                hitUV = (vec2(cell) + 0.5) / vec2(levelSize);
                 break;
             }
-            sPrev = s;
-        }
 
-        if (hit) {
-            // Binary refinement between the last miss and the hit
-            float lo = sPrev;
-            float hi = sHit;
-            for (int i = 0; i < 4; i++) {
-                float mid = 0.5 * (lo + hi);
-                vec3 p = mix(seg0, seg1, mid);
-                float d = texture(depthTex, p.xy).r;
-                if (d < 1.0 && p.z > d) {
-                    hi = mid;
-                    hitUV = p.xy;
-                } else {
-                    lo = mid;
-                }
+            // Behind by more than the slab: known-occluded territory. Keep
+            // crawling only far enough to cross THIN occluders; a gap many
+            // slabs deep or a long behind-run means the reflected surface
+            // is simply not in the depth buffer — stop and let the probe
+            // answer.
+            behindRun++;
+            if (sceneZ - zNearV > K_OCCLUDE * thickV || behindRun >= M_BEHIND) {
+                break; // behind for good (hit stays false: probe)
             }
+            t = tOut + tEps;
+            // Deliberately stay at level 0: a min pyramid can never clear
+            // a cell while the ray is behind its surface, so ascending
+            // here descends straight back (two wasted iterations).
+        } else {
+            behindRun = 0;
+            t = tOut + tEps;
+            level = min(level + 1, hizMips - 1); // clear: climb and skip more
         }
     }
 

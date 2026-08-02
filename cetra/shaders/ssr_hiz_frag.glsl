@@ -13,7 +13,9 @@ uniform int srcHeight;
 // Full-res tracing builds level 0 at the same size as the depth buffer, so it
 // is a straight 1:1 copy (min over one texel = the depth itself), not the 2:1
 // reduction every other level does. Half-res level 0 and all deeper levels
-// leave this 0 and reduce 2x2.
+// leave this 0 and reduce 2x2. The 1:1 identity is load-bearing: the trace's
+// finest-level interval test (ssr_frag.glsl) treats a level-0 cell as the
+// exact scene depth of one screen column, not a conservative bound.
 uniform int copySrc;
 
 float srcAt(ivec2 p)

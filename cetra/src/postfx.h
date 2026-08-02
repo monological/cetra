@@ -176,8 +176,7 @@ typedef struct PostFX {
     bool ssr_enabled;
     float ssr_strength;        // Composite multiplier on the reflections
     float ssr_max_distance;    // March length in view-space units
-    float ssr_thickness;       // Accepted depth gap behind a surface
-    int ssr_steps;             // Linear march steps
+    float ssr_thickness_min;   // Acceptance-slab floor behind a surface (view units)
     float ssr_max_roughness;   // Reflections fade out toward this roughness
     float ssr_floor_roughness; // Roughness the shadow catcher publishes
     bool ssr_temporal;         // Temporally accumulate the reflection (needs TAA; averages march
