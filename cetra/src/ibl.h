@@ -41,11 +41,11 @@ typedef struct IBLResources {
     int hdr_height;
     char* hdr_filepath;
 
-    // Precomputed IBL textures
+    // Precomputed IBL textures (the split-sum BRDF LUT is engine-owned --
+    // ibl_bake_brdf_lut -- not part of any environment's resources)
     GLuint environment_cubemap; // GL_TEXTURE_CUBE_MAP (HDR converted)
     GLuint irradiance_map;      // GL_TEXTURE_CUBE_MAP (diffuse convolution)
     GLuint prefilter_map;       // GL_TEXTURE_CUBE_MAP with mipmaps (specular)
-    GLuint brdf_lut;            // GL_TEXTURE_2D (BRDF integration LUT)
 
     // FBO for rendering to cubemap faces
     GLuint capture_fbo;
@@ -55,15 +55,10 @@ typedef struct IBLResources {
     GLuint cube_vao;
     GLuint cube_vbo;
 
-    // Quad VAO for BRDF LUT
-    GLuint quad_vao;
-    GLuint quad_vbo;
-
     // Precomputation shader programs
     ShaderProgram* equirect_to_cubemap_program;
     ShaderProgram* irradiance_program;
     ShaderProgram* prefilter_program;
-    ShaderProgram* brdf_program;
     ShaderProgram* skybox_program;
 
     // Parameters
@@ -93,12 +88,18 @@ int load_hdr_environment(IBLResources* ibl, const char* hdr_path);
 int precompute_ibl(IBLResources* ibl, struct Engine* engine);
 
 // The environment-independent half of the bake: irradiance + GGX prefilter
-// (+ BRDF LUT once) from an already-populated, MIPPED environment_cubemap of
-// face size env_size. Sets max_reflection_lod from prefilter_mips. Safe to
-// call repeatedly (delete-before-gen) — the re-bake entry point for
-// procedural environments whose content changes.
+// from an already-populated, MIPPED environment_cubemap of face size
+// env_size. Sets max_reflection_lod from prefilter_mips. Safe to call
+// repeatedly (delete-before-gen) — the re-bake entry point for procedural
+// environments whose content changes.
 int ibl_bake_from_cubemap(IBLResources* ibl, struct Engine* engine, int env_size,
                           int prefilter_size, int prefilter_mips);
+
+// Bake the split-sum BRDF tables (GGX A/B in RG, Charlie sheen directional
+// albedo E in B) once and return the texture. Engine-owned: pure BRDF
+// integration with no environment dependence, and the sheen albedo scaling
+// reads E in scenes that never load one.
+GLuint ibl_bake_brdf_lut(struct Engine* engine);
 
 // Skybox rendering
 void render_skybox(IBLResources* ibl, mat4 view, mat4 projection, float brightness,

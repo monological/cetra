@@ -379,6 +379,14 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
 
             bind_ltc_tables(engine->ltc, program);
 
+            // Split-sum BRDF tables (GGX A/B + sheen E): engine-owned and
+            // environment-independent, so bound for EVERY scene -- the sheen
+            // albedo scaling reads E whether or not an environment loaded
+            glActiveTexture(GL_TEXTURE0 + IBL_BRDF_LUT_TEXTURE_UNIT);
+            glBindTexture(GL_TEXTURE_2D, engine->brdf_lut);
+            glActiveTexture(GL_TEXTURE0);
+            uniform_set_int(u, "brdfLUT", IBL_BRDF_LUT_TEXTURE_UNIT);
+
             // Bind IBL textures if available
             if (scene && scene->ibl && scene->ibl->precomputed) {
                 bind_ibl_textures(scene->ibl, program);
@@ -388,7 +396,6 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
                 // textures)
                 uniform_set_int(u, "irradianceMap", IBL_IRRADIANCE_TEXTURE_UNIT);
                 uniform_set_int(u, "prefilteredMap", IBL_PREFILTER_TEXTURE_UNIT);
-                uniform_set_int(u, "brdfLUT", IBL_BRDF_LUT_TEXTURE_UNIT);
                 uniform_set_int(u, "iblEnabled", 0);
             }
             // Only the no-IBL branch reads it, but set it unconditionally: a

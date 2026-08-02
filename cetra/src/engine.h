@@ -218,9 +218,14 @@ typedef struct Engine {
     GLuint bone_line_vbo;
 
     // LTC area-light lookup tables (spec 9.2). Static fitted data, independent
-    // of scene or environment -- unlike the IBL BRDF LUT, which is baked per
-    // environment and lives on Scene.ibl.
+    // of scene or environment.
     LTCTables* ltc;
+
+    // Split-sum BRDF tables: GGX A/B in RG, Charlie sheen directional albedo
+    // E in B. Like the LTC tables, pure BRDF data with no scene or
+    // environment dependence -- baked once at init, bound for every scene
+    // (sheen's albedo scaling reads E with no environment loaded).
+    GLuint brdf_lut;
 
     // Shadow catcher (ground plane that receives shadows over the skybox)
     ShaderProgram* shadow_catcher_program;

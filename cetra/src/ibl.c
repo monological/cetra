@@ -72,22 +72,10 @@ int ibl_init_cube_vao(IBLResources* ibl) {
     return 0;
 }
 
-static int init_quad_vao(IBLResources* ibl) {
-    if (ibl->quad_vao != 0)
-        return 0;
-
-    create_fullscreen_quad_vao(&ibl->quad_vao, &ibl->quad_vbo);
-    return 0;
-}
-
 void ibl_render_unit_cube(IBLResources* ibl) {
     glBindVertexArray(ibl->cube_vao);
     glDrawArrays(GL_TRIANGLES, 0, 36);
     glBindVertexArray(0);
-}
-
-static void render_quad(IBLResources* ibl) {
-    draw_fullscreen_quad(ibl->quad_vao);
 }
 
 IBLResources* create_ibl_resources(void) {
@@ -119,8 +107,6 @@ void free_ibl_resources(IBLResources* ibl) {
         glDeleteTextures(1, &ibl->irradiance_map);
     if (ibl->prefilter_map)
         glDeleteTextures(1, &ibl->prefilter_map);
-    if (ibl->brdf_lut)
-        glDeleteTextures(1, &ibl->brdf_lut);
 
     if (ibl->capture_fbo)
         glDeleteFramebuffers(1, &ibl->capture_fbo);
@@ -131,11 +117,6 @@ void free_ibl_resources(IBLResources* ibl) {
         glDeleteVertexArrays(1, &ibl->cube_vao);
     if (ibl->cube_vbo)
         glDeleteBuffers(1, &ibl->cube_vbo);
-    if (ibl->quad_vao)
-        glDeleteVertexArrays(1, &ibl->quad_vao);
-    if (ibl->quad_vbo)
-        glDeleteBuffers(1, &ibl->quad_vbo);
-
     if (ibl->hdr_filepath)
         free(ibl->hdr_filepath);
 
@@ -493,37 +474,68 @@ void ibl_prefilter_cubemap(IBLResources* ibl, GLuint src_cube, GLuint* dst, int 
         glEnable(GL_BLEND);
 }
 
-static void render_brdf_lut(IBLResources* ibl) {
-    ShaderProgram* program = ibl->brdf_program;
-    if (!program)
-        return;
+// Bake the split-sum BRDF tables: GGX A/B in RG, the Charlie sheen
+// directional albedo E in B (RGBA16F because RGB16F is not reliably
+// color-renderable). Pure BRDF integration, environment-independent, so it
+// is baked once at engine init and owned by the Engine -- the LTC tables'
+// pattern, not IBLResources': the sheen albedo scaling needs E in scenes
+// that never load an environment. Blending must be off for the draw (the
+// shader writes no alpha, and an undefined source alpha feeding the blend
+// equation makes the LUT differ run to run); cull is disabled to match.
+GLuint ibl_bake_brdf_lut(Engine* engine) {
+    ShaderProgram* program = get_engine_shader_program_by_name(engine, "ibl_brdf");
+    if (!program) {
+        log_error("BRDF LUT bake: ibl_brdf program missing");
+        return 0;
+    }
 
-    // Create BRDF LUT texture (delete-before-gen keeps re-bakes leak-free)
-    if (ibl->brdf_lut)
-        glDeleteTextures(1, &ibl->brdf_lut);
-    glGenTextures(1, &ibl->brdf_lut);
-    glBindTexture(GL_TEXTURE_2D, ibl->brdf_lut);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RG16F, IBL_BRDF_LUT_SIZE, IBL_BRDF_LUT_SIZE, 0, GL_RG,
+    GLint prev_viewport[4];
+    GLint prev_framebuffer;
+    glGetIntegerv(GL_VIEWPORT, prev_viewport);
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_framebuffer);
+    GLboolean blend_was_enabled = glIsEnabled(GL_BLEND);
+    GLboolean cull_was_enabled = glIsEnabled(GL_CULL_FACE);
+    glDisable(GL_BLEND);
+    glDisable(GL_CULL_FACE);
+
+    GLuint lut;
+    glGenTextures(1, &lut);
+    glBindTexture(GL_TEXTURE_2D, lut);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, IBL_BRDF_LUT_SIZE, IBL_BRDF_LUT_SIZE, 0, GL_RGBA,
                  GL_FLOAT, NULL);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
-    // Setup FBO for BRDF rendering
+    GLuint quad_vao = 0;
+    GLuint quad_vbo = 0;
+    create_fullscreen_quad_vao(&quad_vao, &quad_vbo);
+
     GLuint brdf_fbo;
     glGenFramebuffers(1, &brdf_fbo);
     glBindFramebuffer(GL_FRAMEBUFFER, brdf_fbo);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, ibl->brdf_lut, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, lut, 0);
 
     glViewport(0, 0, IBL_BRDF_LUT_SIZE, IBL_BRDF_LUT_SIZE);
     glUseProgram(program->id);
     glClear(GL_COLOR_BUFFER_BIT);
 
-    render_quad(ibl);
+    draw_fullscreen_quad(quad_vao);
 
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER, prev_framebuffer);
     glDeleteFramebuffers(1, &brdf_fbo);
+    glDeleteVertexArrays(1, &quad_vao);
+    glDeleteBuffers(1, &quad_vbo);
+    glViewport(prev_viewport[0], prev_viewport[1], prev_viewport[2], prev_viewport[3]);
+    if (blend_was_enabled)
+        glEnable(GL_BLEND);
+    if (cull_was_enabled)
+        glEnable(GL_CULL_FACE);
+    glUseProgram(0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    return lut;
 }
 
 // Run the environment-independent half of the IBL bake: irradiance
@@ -543,10 +555,8 @@ int ibl_bake_from_cubemap(IBLResources* ibl, Engine* engine, int env_size, int p
 
     ibl->irradiance_program = get_engine_shader_program_by_name(engine, "ibl_irradiance");
     ibl->prefilter_program = get_engine_shader_program_by_name(engine, "ibl_prefilter");
-    ibl->brdf_program = get_engine_shader_program_by_name(engine, "ibl_brdf");
     ibl->skybox_program = get_engine_shader_program_by_name(engine, "skybox");
-    if (!ibl->irradiance_program || !ibl->prefilter_program || !ibl->brdf_program ||
-        !ibl->skybox_program) {
+    if (!ibl->irradiance_program || !ibl->prefilter_program || !ibl->skybox_program) {
         log_error("Failed to get IBL shader programs");
         return -1;
     }
@@ -556,7 +566,6 @@ int ibl_bake_from_cubemap(IBLResources* ibl, Engine* engine, int env_size, int p
 
     setup_capture_fbo(ibl, env_size);
     ibl_init_cube_vao(ibl);
-    init_quad_vao(ibl);
 
     mat4 capture_views[6];
     mat4 capture_projection = {{0}};
@@ -570,9 +579,9 @@ int ibl_bake_from_cubemap(IBLResources* ibl, Engine* engine, int env_size, int p
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_framebuffer);
 
     // Disable face culling for inside-cube rendering, and blending for every
-    // capture pass: the BRDF LUT shader writes only RG, so with blending on
-    // its undefined source alpha feeds the blend equation and the LUT comes
-    // out different on every run
+    // capture pass: convolutions overwrite their target, they do not
+    // composite -- with blending on, whatever alpha the capture shaders emit
+    // feeds the blend equation against stale attachment content
     glDisable(GL_CULL_FACE);
     glDisable(GL_BLEND);
 
@@ -586,12 +595,6 @@ int ibl_bake_from_cubemap(IBLResources* ibl, Engine* engine, int env_size, int p
     ibl_prefilter_cubemap(ibl, ibl->environment_cubemap, &ibl->prefilter_map, prefilter_size,
                           prefilter_mips);
     ibl->max_reflection_lod = (float)(prefilter_mips - 1);
-
-    // The BRDF LUT is environment-independent; bake it once and keep it
-    if (ibl->brdf_lut == 0) {
-        log_info("  Generating BRDF LUT...");
-        render_brdf_lut(ibl);
-    }
 
     // Re-enable face culling and the engine's default blending
     glEnable(GL_CULL_FACE);
@@ -741,10 +744,8 @@ void bind_ibl_textures(IBLResources* ibl, ShaderProgram* program) {
     glBindTexture(GL_TEXTURE_CUBE_MAP, ibl->prefilter_map);
     uniform_set_int(u, "prefilteredMap", IBL_PREFILTER_TEXTURE_UNIT);
 
-    // Bind BRDF LUT
-    glActiveTexture(GL_TEXTURE0 + IBL_BRDF_LUT_TEXTURE_UNIT);
-    glBindTexture(GL_TEXTURE_2D, ibl->brdf_lut);
-    uniform_set_int(u, "brdfLUT", IBL_BRDF_LUT_TEXTURE_UNIT);
+    // (The BRDF LUT is engine-owned and bound by the render pass for every
+    // scene, environment or not -- not here.)
 
     // Set IBL parameters
     uniform_set_int(u, "iblEnabled", 1);

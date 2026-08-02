@@ -212,6 +212,7 @@ Engine* create_engine(const char* window_title, int width, int height) {
     engine->user_data = NULL;
 
     engine->ltc = NULL;
+    engine->brdf_lut = 0;
     engine->bone_program = NULL;
     engine->bone_line_vao = 0;
     engine->bone_line_vbo = 0;
@@ -305,6 +306,11 @@ void free_engine(Engine* engine) {
 
     free_ltc_tables(engine->ltc);
     engine->ltc = NULL;
+
+    if (engine->brdf_lut) {
+        glDeleteTextures(1, &engine->brdf_lut);
+        engine->brdf_lut = 0;
+    }
 
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
@@ -701,6 +707,12 @@ int init_engine(Engine* engine) {
     // LTC area-light tables (spec 9.2): static fitted data, uploaded once
     engine->ltc = create_ltc_tables();
     if (!engine->ltc)
+        return -1;
+
+    // Split-sum BRDF tables (GGX A/B + Charlie sheen E): like the LTC
+    // tables, environment-independent BRDF data baked once at init
+    engine->brdf_lut = ibl_bake_brdf_lut(engine);
+    if (!engine->brdf_lut)
         return -1;
 
     // Initialize bone visualization

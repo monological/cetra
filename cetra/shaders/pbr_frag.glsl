@@ -374,20 +374,7 @@ float distributionGGX(vec3 N, vec3 H, float roughness) {
     return num / denom;
 }
 
-// Charlie sheen distribution (Estevez-Kulla, "Production Friendly Microfacet
-// Sheen"): an inverted-Gaussian NDF giving cloth its retroreflective grazing
-// rim. sheenRoughness is used directly as alpha, per the glTF/KHR reference.
-float distributionCharlie(vec3 N, vec3 H, float sheenRoughness) {
-    float invAlpha = 1.0 / max(sheenRoughness, 0.0001);
-    float NdotH = max(dot(N, H), 0.0);
-    float sin2h = max(1.0 - NdotH * NdotH, 0.0078125); // fp16-safe floor
-    return (2.0 + invAlpha) * pow(sin2h, invAlpha * 0.5) / (2.0 * PI);
-}
-
-// Ashikhmin visibility term, paired with the Charlie NDF for sheen (glTF ref).
-float visibilityAshikhmin(float NdotL, float NdotV) {
-    return clamp(1.0 / (4.0 * (NdotL + NdotV - NdotL * NdotV)), 0.0, 1.0);
-}
+#include "sheen.glsl"
 
 // Peak RGB channel (the engine's inline max(r, max(g, b)) idiom).
 float maxComp(vec3 v) {
@@ -1025,14 +1012,34 @@ void main() {
     vec2 brdf = vec2(0.0);
     vec3 energyComp = vec3(1.0);
     if (iblEnabled > 0) {
-        // Fetched inside the gate: with no environment the LUT is unbound
-        // and must not be sampled. The ambient block below reuses this
-        // fetch (same coordinates).
+        // The gate is about MEANING, not validity (the engine-owned LUT is
+        // always bound): energy compensation and the ambient specular lobe
+        // are environment concepts, dead without one. The ambient block
+        // below reuses this fetch (same coordinates).
         brdf = texture(brdfLUT, vec2(NdotV, roughnessMap)).rg;
         float Ess = brdf.x + brdf.y;
         if (energyCompEnabled > 0 && Ess > 1e-4) {
             energyComp = 1.0 + F0 * (1.0 / Ess - 1.0);
         }
+    }
+
+    // Sheen constants are per-fragment (only D*V varies per light): resolve
+    // color, roughness, and the LUT's Charlie directional albedo E once,
+    // ahead of both the light loop and the ambient block. The albedo scaling
+    // is the spec's simplified VdotN-only form,
+    // 1 - max3(sheenColor) * E(NdotV); the per-light min with E(LdotN) is
+    // deliberately skipped. E sits in the engine-owned LUT's blue channel,
+    // bound for every scene, so this reads correctly with no environment.
+    bool sheenActive = sheenEnabled > 0 && maxComp(sheenColorFactor) > 0.0;
+    vec3 sheenColorPx = vec3(0.0);
+    float sheenRough = 0.07;
+    float sheenE = 0.0;
+    float sheenScale = 1.0;
+    if (sheenActive) {
+        sheenColorPx = sheenColorAt(uv);
+        sheenRough = clamp(sheenRoughnessFactor, 0.07, 1.0);
+        sheenE = texture(brdfLUT, vec2(NdotV, sheenRough)).b;
+        sheenScale = 1.0 - maxComp(sheenColorPx) * sheenE;
     }
 
     // Analytic keys act as small area lights (sphere-light approximation,
@@ -1276,18 +1283,13 @@ void main() {
         }
 
         // Sheen (KHR_materials_sheen): a retroreflective Charlie lobe for cloth
-        // (velvet / satin) -- no Fresnel, per glTF. Added over the base, which is
-        // scaled by (1 - max(sheenColor)) as a cheap directional-albedo
-        // approximation (a baked Charlie E-LUT is the follow-up).
+        // (velvet / satin) -- no Fresnel, per glTF. Added over the base, which
+        // the hoisted sheenScale dims by the lobe's directional albedo.
         vec3 sheenSpec = vec3(0.0);
-        float sheenScale = 1.0;
-        if (sheenEnabled > 0 && maxComp(sheenColorFactor) > 0.0) {
-            vec3 sheenColor = sheenColorAt(uv);
-            float shR = clamp(sheenRoughnessFactor, 0.07, 1.0);
-            float Dsh = distributionCharlie(N, H, shR);
+        if (sheenActive) {
+            float Dsh = distributionCharlie(N, H, sheenRough);
             float Vsh = visibilityAshikhmin(NdotL, NdotV);
-            sheenSpec = sheenColor * Dsh * Vsh;
-            sheenScale = 1.0 - maxComp(sheenColor);
+            sheenSpec = sheenColorPx * Dsh * Vsh;
         }
 
         // Add this light's contribution with shadow. Firefly clamp: a sub-pixel
@@ -1425,23 +1427,17 @@ void main() {
             ambient = ambient * (1.0 - ccF) + coatIBL * aoMap * iblIntensity;
         }
 
-        // Sheen IBL: the Charlie cloth lobe lit by the environment. Reuses the
-        // prefiltered env at the sheen roughness (no new sampler). With no baked
-        // Charlie directional-albedo (E) LUT, the env sheen is concentrated toward
-        // grazing by pow(1 - NdotV, 2) -- an approximation of the retroreflective
-        // rim that avoids flooding the whole surface white (the E-LUT is the
-        // follow-up). Guarded so the base ambient lines above stay byte-identical
-        // when sheen is off.
-        if (sheenEnabled > 0 && maxComp(sheenColorFactor) > 0.0) {
-            vec3 sheenColor = sheenColorAt(uv);
-            float shR = clamp(sheenRoughnessFactor, 0.07, 1.0);
-            vec3 sheenPre = textureLod(prefilteredMap, R, shR * maxReflectionLOD).rgb;
-            float sheenE = pow(1.0 - NdotV, 2.0);
-            // Dim the base ambient like the analytic path (and the coat IBL above),
-            // then add the grazing-concentrated sheen -- keeps the layer-over-base
-            // energy convention consistent across analytic and IBL.
-            ambient = ambient * (1.0 - maxComp(sheenColor)) +
-                      sheenColor * sheenPre * sheenE * aoMap * iblIntensity;
+        // Sheen IBL as a split-sum: prefiltered env at the sheen roughness
+        // (no new sampler -- reusing the GGX chain understates Charlie's
+        // blur, the recorded approximation) times the LUT's directional
+        // albedo E. The base ambient is dimmed by the same hoisted
+        // sheenScale as the analytic path -- one layer-over-base energy
+        // convention. Guarded so the base ambient lines above stay
+        // byte-identical when sheen is off.
+        if (sheenActive) {
+            vec3 sheenPre = textureLod(prefilteredMap, R, sheenRough * maxReflectionLOD).rgb;
+            ambient = ambient * sheenScale +
+                      sheenColorPx * sheenPre * sheenE * aoMap * iblIntensity;
         }
     } else {
         // No IBL: a uniform ambient the scene authors, in cd/m^2 like every other

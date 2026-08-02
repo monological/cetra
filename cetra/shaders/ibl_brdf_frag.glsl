@@ -1,8 +1,9 @@
 #version 330 core
 in vec2 TexCoords;
-out vec2 FragColor;
+out vec3 FragColor;
 
 #include "sampling.glsl"
+#include "sheen.glsl"
 
 // NOTE the k below is the IBL form, k = a^2/2. The prefilter shader uses the
 // direct-lighting form for the same-named function; that divergence is
@@ -62,8 +63,47 @@ vec2 IntegrateBRDF(float NdotV, float roughness)
     return vec2(A, B);
 }
 
+// Directional albedo of the sheen lobe: E(NdotV, sheenRoughness) =
+// integral of Dcharlie * Vashikhmin * NdotL over the hemisphere. Consumed by
+// pbr_frag's sheen_albedo_scaling (1 - max3(sheenColor) * E) and as the
+// integrated-BRDF half of the sheen split-sum. Uniform-hemisphere sampling
+// rather than importance sampling: the Charlie lobe is a wide grazing ring,
+// so uniform L converges fine and there is no half-vector Jacobian to get
+// wrong. y is the PERCEPTUAL roughness -- squaring happens inside
+// distributionCharlie, so the runtime fetch uses the same coordinate it
+// clamps and shades with.
+float IntegrateCharlieE(float NdotV, float sheenRoughness)
+{
+    vec3 V;
+    V.x = sqrt(1.0 - NdotV * NdotV);
+    V.y = 0.0;
+    V.z = NdotV;
+
+    vec3 N = vec3(0.0, 0.0, 1.0);
+
+    float E = 0.0;
+    const uint SAMPLE_COUNT = 2048u;
+    for (uint i = 0u; i < SAMPLE_COUNT; ++i)
+    {
+        vec2 Xi = Hammersley(i, SAMPLE_COUNT);
+        // Uniform hemisphere: cos(theta) = Xi.x gives constant pdf 1/(2*PI)
+        float cosT = Xi.x;
+        float sinT = sqrt(max(1.0 - cosT * cosT, 0.0));
+        float phi = 2.0 * 3.14159265359 * Xi.y;
+        vec3 L = vec3(sinT * cos(phi), sinT * sin(phi), cosT);
+        vec3 H = normalize(V + L);
+
+        float D = distributionCharlie(N, H, sheenRoughness);
+        float Vis = visibilityAshikhmin(cosT, NdotV);
+        E += D * Vis * cosT;
+    }
+    // f/pdf mean: multiply by 2*PI, divide by the sample count.
+    return E * 2.0 * 3.14159265359 / float(SAMPLE_COUNT);
+}
+
 void main()
 {
     vec2 integratedBRDF = IntegrateBRDF(TexCoords.x, TexCoords.y);
-    FragColor = integratedBRDF;
+    float charlieE = IntegrateCharlieE(TexCoords.x, TexCoords.y);
+    FragColor = vec3(integratedBRDF, charlieE);
 }
