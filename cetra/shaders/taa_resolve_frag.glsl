@@ -6,7 +6,21 @@ uniform sampler2D currentTex;  // This frame's freshly resolved color (jittered)
 uniform sampler2D velocityTex; // Screen-space motion vectors (.xy, UV units)
 uniform sampler2D historyTex;  // Accumulated previous frame
 uniform vec2 texelSize;        // 1/width, 1/height of the internal resolution
+
 uniform int reset;             // 1 on the very first frame: no valid history yet
+
+// History weight at REST vs IN MOTION. A static pixel's dominant per-frame
+// variation is the TAA jitter itself -- exactly the signal to integrate --
+// and the residual oscillation in the OUTPUT scales with (1 - feedback):
+// at 0.9 (a ~10-frame window) detailed content like a sharp environment
+// backdrop sizzles above the 8-bit threshold; 0.97 (~33 frames) pushes it
+// under. The honest cost: LIGHTING changes on static geometry (a moved
+// sun, a slider) converge ~3x slower too -- large steps are still snapped
+// by the neighborhood clamp, but slow gradients inside the clamp box lag.
+// In motion the window returns to the responsive value so parallax-wrong
+// reprojection cannot smear (the 10.7.2 SSR accumulator's split).
+const float TAA_FEEDBACK_REST = 0.97;
+const float TAA_FEEDBACK_MOVING = 0.9;
 
 // YCoCg separates luma from chroma, so the neighborhood clamp below bounds
 // ghosting far better than clamping in RGB (a small luma change no longer drags
@@ -58,6 +72,15 @@ void main() {
     vec2 velocity = texture(velocityTex, uv).xy;
     vec2 histUv = uv - velocity;
 
+    // Motion measure for the adaptive window, from the SAME vector that
+    // reprojects the history -- that identity is what makes "in motion,
+    // distrust history" sound. velPx is pixels-per-frame at the INTERNAL
+    // resolution (not effect resolution like ssr_accum's): below 0.1 px is
+    // the dead-band for subpixel reprojection noise, 1 px and up is full
+    // motion.
+    float velPx = length(velocity / texelSize);
+    float feedback = mix(TAA_FEEDBACK_REST, TAA_FEEDBACK_MOVING, smoothstep(0.1, 1.0, velPx));
+
     // Reprojected off-screen (disocclusion / camera turned onto new content):
     // there is no valid history, so fall back to the current frame.
     if (histUv.x < 0.0 || histUv.x > 1.0 || histUv.y < 0.0 || histUv.y > 1.0) {
@@ -100,15 +123,6 @@ void main() {
     // which is the intent. Left as a bare 1.0 rather than a named constant for
     // the same reason — it is the contract's own unit, and naming it would
     // suggest it is tunable independently of what white means.
-    // Motion-adaptive window (the 10.7.2 SSR accumulator's split, applied
-    // to the resolve): a static pixel's only per-frame variation is the
-    // jitter itself -- exactly the signal to integrate -- and the residual
-    // oscillation in the OUTPUT scales with (1 - feedback), which at 0.9
-    // leaves detailed content (a sharp env backdrop) sizzling above the
-    // 8-bit threshold. At rest the window stretches; in motion it returns
-    // to the responsive 0.9 so reprojection error cannot smear.
-    float velPx = length(texture(velocityTex, uv).xy / texelSize);
-    float feedback = mix(0.97, 0.9, smoothstep(0.1, 1.0, velPx));
     float wCurrent = (1.0 - feedback) / (1.0 + max(centerYCoCg.x, 0.0));
     float wHistory = feedback / (1.0 + max(historyYCoCg.x, 0.0));
     FragColor = vec4((current * wCurrent + history * wHistory) / (wCurrent + wHistory), 1.0);

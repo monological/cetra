@@ -274,11 +274,12 @@ int load_hdr_environment(IBLResources* ibl, const char* hdr_path) {
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F, width, height, 0, GL_RGB, GL_FLOAT, data);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    // Mipped: the equirect-to-cubemap conversion minifies (an 8k source
-    // against 2048 faces is ~4:1), and sampling it unmipped bakes the
-    // source's high-frequency aliasing into the environment cube's base
-    // level -- which TAA jitter then animates into backdrop shimmer no
-    // amount of downstream filtering can undo (spec 10.8.1).
+    // Mipped: the equirect-to-cubemap conversion minifies -- mildly at an
+    // equator face centre (~1.3:1 for an 8k source against 2048 faces),
+    // severely toward the poles where the equirect oversamples -- and
+    // sampling it unmipped bakes the source's high-frequency aliasing into
+    // the environment cube's base level, which TAA jitter then animates
+    // into backdrop shimmer no downstream filtering can undo (spec 10.8.1).
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glGenerateMipmap(GL_TEXTURE_2D);
@@ -329,6 +330,15 @@ void ibl_create_cubemap_texture(GLuint* texture, int size, bool mipmap) {
     if (mipmap) {
         glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
         // Don't call glGenerateMipmap here - we'll render to each mip level manually
+        // Anisotropic: the skybox's ground projection views this cube at
+        // grazing angles, where isotropic trilinear must pick between blur
+        // and moire on periodic content (a grate, planks) -- and under the
+        // interactive auto-orbit the moire CRAWLS. The aniso helper in
+        // texture.c targets GL_TEXTURE_2D, so the cube sets its own.
+        float max_aniso = 1.0f;
+        glGetFloatv(GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT, &max_aniso);
+        glTexParameterf(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAX_ANISOTROPY_EXT,
+                        fminf(8.0f, max_aniso));
     } else {
         glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     }
