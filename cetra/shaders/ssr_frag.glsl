@@ -286,6 +286,9 @@ void main()
         // there. Deterministic per-pixel jitter (interleaved gradient
         // noise) turns its stepping banding into noise the half-res
         // upsample averages away.
+        // Same inline hash as the stochastic block above, kept inline for
+        // the same measured reason (the include's dot() form is not
+        // bit-equal and the low bits steer sampling).
         float jitter = fract(52.9829189 *
                              fract(0.06711056 * gl_FragCoord.x + 0.00583715 * gl_FragCoord.y));
         float sPrev = 0.0;

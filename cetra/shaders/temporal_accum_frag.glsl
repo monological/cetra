@@ -9,8 +9,9 @@ out vec4 FragColor;
 // (inscatter.rgb, transmittance.a). Reprojects last frame's accumulation by the motion
 // vectors, bounds it per channel to the current 3x3 neighborhood so a
 // surface that just disoccluded can't bleed stale history through, and
-// blends at fixed feedback. SSGI keeps its own accumulator: its YCoCg
-// clamp and inverse-luma firefly blend are real signal differences.
+// blends at fixed feedback. SSGI and SSR keep their own accumulators
+// (YCoCg clamp / motion-adaptive slack; both inverse-luma blends) -- real
+// signal differences, not drift.
 uniform sampler2D currentTex;  // This frame's raw effect output
 uniform sampler2D velocityTex; // Screen-space motion .xy (UV units)
 uniform sampler2D historyTex;  // Last frame's accumulation

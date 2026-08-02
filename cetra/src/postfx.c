@@ -616,8 +616,8 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     glUseProgram(fx->upsample_tent_program->id);
     uniform_set_int(fx->upsample_tent_program->uniforms, "srcTex", 0);
 
-    // temporal_accum and ssgi_accum are seeded entirely by run_temporal_accum,
-    // which owns their unit layout and texelSize together.
+    // temporal_accum, ssr_accum, and ssgi_accum are seeded entirely by
+    // run_temporal_accum, which owns their unit layout and texelSize together.
 
     glUseProgram(fx->ssgi_composite_program->id);
     uniform_set_int(fx->ssgi_composite_program->uniforms, "giTex", 0);
@@ -1310,8 +1310,9 @@ static GLuint run_temporal_accum(PostFX* fx, ShaderProgram* prog, PingPong* pp, 
     glUseProgram(prog->id);
     const float texel[2] = {1.0f / (float)w, 1.0f / (float)h};
     uniform_set_vec2(prog->uniforms, "texelSize", texel);
-    // A no-op against ssgi_accum_program, which keeps its own inverse-luma
-    // blend; the uniform belongs to temporal_accum_frag alone.
+    // Consumed by temporal_accum_frag and ssr_accum_frag (its at-rest
+    // weight); a no-op against the programs that hard-code their feedback
+    // (taa_resolve, ssgi_accum).
     uniform_set_float(prog->uniforms, "feedback", feedback);
     uniform_set_int(prog->uniforms, "currentTex", 0);
     uniform_set_int(prog->uniforms, "velocityTex", 1);
@@ -1681,13 +1682,10 @@ static void postfx_run_ssr(PostFX* fx, bool have_normals, bool taa_resolving, ma
     draw_fullscreen_quad(fx->quad_vao);
 
     // Temporal accumulation: reproject the previous reflection by the
-    // motion vectors, neighborhood-clamp it, and blend, so the jittered
-    // march averages across frames and its single-frame step banding
-    // washes out. Reuses the shared accumulator, which treats its input as
-    // four independent channels -- so the premultiplied (color*weight,
-    // weight) buffer passes through it unharmed, as does fog's
-    // non-premultiplied pair. Needs TAA (per-frame jitter + motion);
-    // off/no-TAA leaves the raw march.
+    // motion vectors and blend with SSR's OWN accumulator program --
+    // ssr_accum_frag carries the signal policies (inverse-luma blend,
+    // motion-adaptive slack and window) and the why. Needs TAA (per-frame
+    // jitter + motion); off/no-TAA leaves the raw march.
     GLuint ssr_result = fx->ssr_texture;
     if (ssr_temporal_on) {
         ssr_result = run_temporal_accum(fx, fx->ssr_accum_program, &fx->ssr_history, ssr_w,
@@ -1901,7 +1899,9 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             uniform_set_vec3(cu, "lightDirVS", cs_dir_vs);
             uniform_set_float(cu, "csDistance", fx->cs_distance);
             uniform_set_int(cu, "temporal", taa_resolving ? 1 : 0);
-            uniform_set_int(cu, "frameIndex", fx->frame_index);
+            // % 4096 keeps the shader's float hash well-conditioned over
+            // long sessions (the PCSS/SSR seed bound)
+            uniform_set_int(cu, "frameIndex", fx->frame_index % 4096);
             draw_fullscreen_quad(fx->quad_vao);
 
             // Reuse the AO bilateral blur. Its texelSize is per-draw now (the
@@ -1989,7 +1989,8 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             uniform_set_mat4(fx->gtao_program->uniforms, "projection", (float*)projection);
             uniform_set_float(fx->gtao_program->uniforms, "radius", fx->ssao_radius);
             uniform_set_int(fx->gtao_program->uniforms, "temporal", taa_resolving ? 1 : 0);
-            uniform_set_int(fx->gtao_program->uniforms, "frameIndex", fx->frame_index);
+            // % 4096: same float-hash conditioning bound as PCSS/SSR
+            uniform_set_int(fx->gtao_program->uniforms, "frameIndex", fx->frame_index % 4096);
             uniform_set_int(fx->gtao_program->uniforms, "gatherGI", ssgi_active ? 1 : 0);
             draw_fullscreen_quad(fx->quad_vao);
 
@@ -2240,7 +2241,8 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         uniform_set_float(tm, "vignetteRadius", fx->vignette_radius);
         uniform_set_int(tm, "grainEnabled", fx->grain_enabled ? 1 : 0);
         uniform_set_float(tm, "grainStrength", fx->grain_strength);
-        uniform_set_float(tm, "grainSeed", (float)fx->frame_index);
+        // % 4096: same float-hash conditioning bound as PCSS/SSR
+        uniform_set_float(tm, "grainSeed", (float)(fx->frame_index % 4096));
         draw_fullscreen_quad(fx->quad_vao);
 
         glUseProgram(0);

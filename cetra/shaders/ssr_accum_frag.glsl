@@ -3,7 +3,9 @@ in vec2 TexCoords;
 out vec4 FragColor;
 
 // SSR's temporal accumulator (spec 10.7.2): the shared plain-RGBA shape
-// (temporal_accum_frag) with the house inverse-luma blend on the radiance.
+// (temporal_accum_frag) with three signal-specific policies -- the house
+// inverse-luma blend on the radiance, a motion-adaptive slack on the
+// neighborhood clamp, and a motion-adaptive history window.
 // SSR's input is premultiplied (radiance * coverage, coverage), re-jittered
 // every frame -- a bright reflected rim is hit by some rays and missed by
 // others, and a plain mix passes each swing straight through (the 3x3
@@ -69,6 +71,9 @@ void main()
             nmax = max(nmax, n);
         }
     }
+    // velPx is pixels-per-frame at effect resolution: below 0.1 px is the
+    // dead-band for subpixel reprojection noise (still "at rest"), 1 px and
+    // up is full motion.
     float velPx = length(velocity / texelSize);
     float motion = smoothstep(0.1, 1.0, velPx);
     vec4 slack = (nmax - nmin) * (1.0 - motion);
@@ -79,12 +84,14 @@ void main()
     // 1 - feedback). In motion the history was reprojected by SURFACE
     // velocity, which is wrong for a reflection -- it moves with parallax,
     // not with its floor pixel -- so trusting it long smears ghosts across
-    // the floor. The same motion measure that enables the clamp shortens
-    // the window; motion itself masks the extra noise, and the a-trous
-    // cleans the rest.
+    // the floor. The same motion measure that zeroes the clamp's slack
+    // shortens the window; motion itself masks the extra noise, and the
+    // a-trous cleans the rest.
     float fb = mix(feedback, SSR_FEEDBACK_MOVING, motion);
-    float wCurrent = (1.0 - fb) / (1.0 + lumaOf(current.rgb));
-    float wHistory = fb / (1.0 + lumaOf(history.rgb));
+    // max(): TAA's YCoCg clamp can emit mildly negative RGB, and a negative
+    // luma would INFLATE a blend weight (same guard as the sibling blends).
+    float wCurrent = (1.0 - fb) / (1.0 + max(lumaOf(current.rgb), 0.0));
+    float wHistory = fb / (1.0 + max(lumaOf(history.rgb), 0.0));
     FragColor = vec4((current.rgb * wCurrent + history.rgb * wHistory) / (wCurrent + wHistory),
                      mix(current.a, history.a, fb));
 }
