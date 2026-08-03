@@ -261,7 +261,7 @@ void sky_clouds_march(SkyAtmosphere* sky, struct Engine* engine, mat4 view, mat4
     mat4 inv_view;
     glm_mat4_inv(view, inv_view);
     float units = sky->world_units_per_km > 0.0f ? sky->world_units_per_km : 1000.0f;
-    vec3 cam_km = {inv_view[3][0] / units, inv_view[3][1] / units, inv_view[3][2] / units};
+    float cam_alt_km = inv_view[3][1] / units;
 
     glBindFramebuffer(GL_FRAMEBUFFER, c->march_fbo[write]);
     glViewport(0, 0, c->march_w, c->march_h);
@@ -288,7 +288,7 @@ void sky_clouds_march(SkyAtmosphere* sky, struct Engine* engine, mat4 view, mat4
     uniform_set_mat4(um, "invView", (float*)inv_view);
     const float inv_focal[2] = {1.0f / projection[0][0], 1.0f / projection[1][1]};
     uniform_set_vec2(um, "invFocal", (float*)inv_focal);
-    uniform_set_vec3(um, "camPosKm", cam_km);
+    uniform_set_float(um, "camAltKm", cam_alt_km);
     uniform_set_vec3(um, "sunDir", sky->sun_dir);
     uniform_set_float(um, "coverage", c->coverage);
     uniform_set_float(um, "cloudType", c->cloud_type);

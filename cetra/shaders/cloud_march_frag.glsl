@@ -13,7 +13,7 @@ uniform sampler2D transmittanceLut;
 uniform sampler2D skyViewLut;
 uniform mat4 invView;  // view -> world
 uniform vec2 invFocal; // (1/proj[0][0], 1/proj[1][1])
-uniform vec3 camPosKm; // world camera position / unitsPerKm
+uniform float camAltKm; // camera altitude / unitsPerKm (xz is anchored)
 uniform vec3 sunDir;
 uniform float coverage;
 uniform float cloudType;
@@ -55,9 +55,9 @@ void main()
     float dither = ign(gl_FragCoord.xy +
                        (temporal == 1 ? vec2(float(frameIndex) * 5.588238) : vec2(0.0)));
 
-    vec4 result = cloud_march(camPosKm, rd, sunDir, shapeTex, detailTex, transmittanceLut,
-                              skyViewLut, MARCH_STEPS, MARCH_LIGHT_STEPS, true, coverage,
-                              cloudType, densityScale, windOffsetKm, dither);
+    vec4 result = cloud_march(vec3(0.0, camAltKm, 0.0), rd, sunDir, shapeTex, detailTex,
+                              transmittanceLut, skyViewLut, MARCH_STEPS, MARCH_LIGHT_STEPS, true,
+                              coverage, cloudType, densityScale, windOffsetKm, dither);
 
     if (temporal == 1) {
         // Fetch history where this ray direction fell last frame. In front

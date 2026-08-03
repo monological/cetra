@@ -9,6 +9,16 @@
 // differences is what keeps fp32 alive at horizon distances (Rg is 6360 --
 // absolute positions near the shell would eat the whole mantissa).
 //
+// The deck is anchored to the camera HORIZONTALLY: callers pass an origin
+// with zero xz, so camera translation produces no cloud parallax and only
+// the wind offset moves the field. The physical alternative was built and
+// rejected on sight: a shell 1.5-4 km up sweeps across a third of the sky
+// when the camera orbits a kilometre sideways, while the terrain 20-95 km
+// out barely moves -- physically right, visually wrong against a distant
+// vista. Anchoring also makes the ray-direction temporal reprojection
+// exact under ALL camera motion, not just rotation. Altitude still
+// matters: climbing toward the shell behaves normally.
+//
 // Returns (in-scattered radiance, transmittance), radiance ABSOLUTE (the
 // env cube's convention -- the screen composite applies preExposure, the
 // env bake does not). Samplers are parameters so every caller binds its own
