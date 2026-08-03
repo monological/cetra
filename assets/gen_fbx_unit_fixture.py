@@ -30,9 +30,10 @@ Regenerate with: python3 assets/gen_fbx_unit_fixture.py
 
 import os
 
-# The assimp test cube: 24 per-face vertices at +/-0.5, quads with the FBX
-# negative-terminated last index, 72 per-polygon-vertex normals. Scaled x100
-# here so the cube is 100 cm in a file that declares centimetres.
+# The assimp test cube: 8 shared corner vertices (24 floats) at +/-0.5, quads
+# with the FBX negative-terminated last index, 72 per-polygon-vertex normal
+# floats (assimp splits to 24 vertices at import via ByPolygonVertex/Direct).
+# Scaled x100 here so the cube is 100 cm in a file that declares centimetres.
 CUBE_VERTS = [
     -0.5, -0.5, 0.5, 0.5, -0.5, 0.5, -0.5, 0.5, 0.5, 0.5, 0.5, 0.5,
     -0.5, 0.5, -0.5, 0.5, 0.5, -0.5, -0.5, -0.5, -0.5, 0.5, -0.5, -0.5,

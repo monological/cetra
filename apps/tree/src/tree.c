@@ -1179,17 +1179,6 @@ void key_callback(Engine* engine, int key, int scancode, int action, int mods) {
     }
 }
 
-// Ticks the falling-leaf emitter. The engine drives the render pass; particles
-// need a simulation step of their own, off the frame clock so headless runs
-// are frame-index-pure.
-void tree_update_callback(Engine* engine, float delta_time) {
-    (void)delta_time;
-    Scene* scene = get_current_scene(engine);
-    if (scene)
-        scene_update_particle_systems(scene, (float)engine->render_delta,
-                                      (float)engine->render_time);
-}
-
 void render_scene_callback(Engine* engine, Scene* scene) {
     if (!engine || !scene || !scene->root_node) {
         return;
@@ -1214,7 +1203,8 @@ void render_scene_callback(Engine* engine, Scene* scene) {
         memcpy(&prev_grass_params, &grass_params, sizeof(GrassParams));
     }
 
-    // Update camera - only if not hovering over GUI
+    // Update camera - only if not hovering over GUI. Deliberately the wall
+    // clock, not the frame clock: drag damping is input response.
     if (drag_controller && app_can_process_3d_input(engine)) {
         mouse_drag_update(drag_controller, glfwGetTime());
     }
@@ -1688,7 +1678,7 @@ int main(int argc, char** argv) {
     set_engine_show_wireframe(engine, false);
     set_engine_show_xyz(engine, false);
 
-    engine_run(engine, tree_update_callback, render_scene_callback);
+    engine_run(engine, NULL, render_scene_callback);
 
     printf("Cleaning up...\n");
     free_mouse_drag_controller(drag_controller);

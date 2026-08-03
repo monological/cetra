@@ -272,11 +272,15 @@ typedef struct Engine {
     TextRenderer* text_renderer;
 } Engine;
 
-// Unified main-loop callbacks (engine_run). `update` runs once per frame before
-// the render, with the real (unclamped) frame dt; pass NULL for a pure render
-// loop. `render` draws the scene -- its output is scene-referred linear HDR
-// (bloom/exposure/tone mapping run in the present pass; only the GUI draws after
-// tone mapping).
+// Unified main-loop callbacks (engine_run). `update` runs once per frame
+// before the render, with the produced frame dt (wall clock live,
+// ENGINE_FIXED_FRAME_DT headless) -- the sim input a fixed-step accumulator
+// consumes; a hook that animates scene content reads
+// engine->render_time/render_delta instead. Pass NULL for a pure render loop
+// -- the engine already ticks the scene's particle systems when no render
+// clock is installed. `render` draws the scene -- its output is
+// scene-referred linear HDR (bloom/exposure/tone mapping run in the present
+// pass; only the GUI draws after tone mapping).
 typedef void (*EngineUpdateFunc)(Engine* engine, float dt);
 typedef void (*EngineRenderFunc)(Engine* engine, Scene* scene);
 

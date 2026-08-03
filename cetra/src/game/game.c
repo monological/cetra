@@ -11,7 +11,7 @@ GameConfig game_default_config(void) {
     GameConfig config = {.title = "Game",
                          .width = 1280,
                          .height = 720,
-                         .fixed_timestep = 1.0 / 60.0,
+                         .fixed_timestep = ENGINE_FIXED_FRAME_DT,
                          .max_frame_time = 0.25,
                          .vsync = true};
     return config;
@@ -162,7 +162,7 @@ Scene* game_get_scene(const Game* game) {
 }
 
 double game_get_fixed_timestep(const Game* game) {
-    return game ? game->fixed_timestep : 1.0 / 60.0;
+    return game ? game->fixed_timestep : ENGINE_FIXED_FRAME_DT;
 }
 
 double game_get_time(const Game* game) {

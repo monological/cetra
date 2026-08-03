@@ -1156,19 +1156,6 @@ void key_callback(Engine* engine, int key, int scancode, int action, int mods) {
     }
 }
 
-// engine_run's per-frame update hook (the render app used NULL): tick any
-// particle systems on the current scene so they animate. A no-op when the
-// scene has no particle systems, so it is harmless for every model. The
-// engine's frame clock is both the dt and the curl-noise clock -- fixed-step
-// headless, so particle state is a pure function of the frame index.
-static void render_frame_update(Engine* engine, float dt) {
-    (void)dt;
-    Scene* s = get_current_scene(engine);
-    if (s)
-        scene_update_particle_systems(s, (float)engine->render_delta,
-                                      (float)engine->render_time);
-}
-
 void render_scene_callback(Engine* engine, Scene* current_scene) {
     SceneNode* root_node = current_scene->root_node;
 
@@ -1178,7 +1165,7 @@ void render_scene_callback(Engine* engine, Scene* current_scene) {
     frames_rendered++; // drives the --check-stretch gate below
 
     // The engine's frame clock: the wall clock live, a fixed 1/60 headless so
-    // frame N is always pose N (the engine owns that policy now)
+    // frame N is always pose N
     float delta_time = (float)engine->render_delta;
 
     // Snapshot last frame's pose for skinned motion vectors (TAA) before this
@@ -2474,7 +2461,7 @@ int main(int argc, char** argv) {
         set_engine_taa_enabled(engine, true);
     }
 
-    engine_run(engine, render_frame_update, render_scene_callback);
+    engine_run(engine, NULL, render_scene_callback);
 
     printf("Cleaning up...\n");
     if (anim_state) {

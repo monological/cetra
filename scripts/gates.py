@@ -654,13 +654,21 @@ def run_range_gate():
     got = None
     for line in (r.stdout + r.stderr).splitlines():
         if "<Light name=" in line and "range=" in line:
-            got = float(line.split("range=")[1].split(",")[0])
+            field = _light_field(line, "range")
+            got = float(field) if field is not None else None
     if got is None:
         print("  gltf-range   ERROR (no light imported)")
         return ["gltf-range"]
     ok = abs(got - 25.0) < 1e-3
     print(f"  gltf-range   {'PASS' if ok else 'FAIL'}  authored 25.0, imported {got}")
     return [] if ok else ["gltf-range"]
+
+
+def _import_log(fixture, extra=()):
+    """Two-frame headless render, combined stdout+stderr (log_* goes to stderr)."""
+    r = subprocess.run([RENDER, "-m", fixture, *extra, "-x", "-f", "2"],
+                       capture_output=True, text=True)
+    return r.stdout + r.stderr
 
 
 def _fbx_light_line(output):
@@ -671,9 +679,22 @@ def _fbx_light_line(output):
     return None
 
 
+# The print_light format is the assertion surface, so a shifted format must
+# report as a named FAIL, not a parser traceback: both extractors return None
+# on any mismatch.
 def _light_field_vec3(line, key):
-    inner = line.split(key + "=(")[1].split(")")[0]
-    return [float(v) for v in inner.split(",")]
+    try:
+        inner = line.split(key + "=(")[1].split(")")[0]
+        return [float(v) for v in inner.split(",")]
+    except (IndexError, ValueError):
+        return None
+
+
+def _light_field(line, key):
+    try:
+        return line.split(key + "=")[1].split(",")[0]
+    except IndexError:
+        return None
 
 
 def run_fbx_unit_gate():
@@ -693,9 +714,7 @@ def run_fbx_unit_gate():
         print("  fbx-unit     SKIP  (missing fbx_unit_fixture.fbx)")
         return []
 
-    r = subprocess.run([RENDER, "-m", fixture, "-x", "-f", "2"],
-                       capture_output=True, text=True)
-    out = r.stdout + r.stderr
+    out = _import_log(fixture)
     light = _fbx_light_line(out)
     if light is None:
         print("  fbx-unit     ERROR (no FBX light imported)")
@@ -705,28 +724,30 @@ def run_fbx_unit_gate():
     if "file declares 0.01x, applied 0.01x" not in out:
         problems.append("unit-scale log line missing or wrong")
     pos = _light_field_vec3(light, "global_position")
-    if abs(pos[0]) > 1e-3 or abs(pos[1] - 2.0) > 1e-3 or abs(pos[2]) > 1e-3:
+    if pos is None:
+        problems.append("light print carries no parseable position")
+    elif abs(pos[0]) > 1e-3 or abs(pos[1] - 2.0) > 1e-3 or abs(pos[2]) > 1e-3:
         problems.append(f"position {pos} != (0, 2, 0) m")
-    intensity = float(light.split("intensity=")[1].split(" ")[0])
-    if abs(intensity - 50.0) > 1e-3:
+    intensity = _light_field(light, "intensity")
+    if intensity is None or not intensity.endswith(" cd"):
+        problems.append("light print carries no candela intensity")
+    elif abs(float(intensity[:-3]) - 50.0) > 1e-3:
         problems.append(f"intensity {intensity} != 50 cd")
-    clustered = False
+    clusterable = None
     for line in out.splitlines():
-        if "clustered:" in line and "clusterable" in line:
+        if "clustered:" in line and "directional +" in line:
             clusterable = int(line.split("directional +")[1].split("clusterable")[0])
-            clustered = clusterable >= 1
-    if not clustered:
-        problems.append("light did not cluster (the silently-black symptom)")
+            break  # logged once per build; the first match is the record
+    if clusterable != 1:
+        problems.append(f"clusterable count {clusterable} != 1 "
+                        "(0 is the silently-black symptom, 2+ a double import)")
 
-    r2 = subprocess.run([RENDER, "-m", fixture, "--no-unit-scale", "-x", "-f", "2"],
-                        capture_output=True, text=True)
-    raw_light = _fbx_light_line(r2.stdout + r2.stderr)
-    if raw_light is None:
-        problems.append("--no-unit-scale render imported no light")
-    else:
-        raw_pos = _light_field_vec3(raw_light, "global_position")
-        if abs(raw_pos[1] - 200.0) > 1e-3:
-            problems.append(f"--no-unit-scale position y {raw_pos[1]} != 200 cm")
+    raw_light = _fbx_light_line(_import_log(fixture, ["--no-unit-scale"]))
+    raw_pos = _light_field_vec3(raw_light, "global_position") if raw_light else None
+    if raw_pos is None:
+        problems.append("--no-unit-scale render imported no parseable light")
+    elif abs(raw_pos[1] - 200.0) > 1e-3:
+        problems.append(f"--no-unit-scale position y {raw_pos[1]} != 200 cm")
 
     ok = not problems
     detail = "cm baked to (0, 2, 0) m at 50 cd, clustered" if ok else "; ".join(problems)

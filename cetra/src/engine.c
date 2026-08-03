@@ -2323,14 +2323,25 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EngineRenderFunc render
         // accumulated, so frame N is instant N/60 exactly, every run.
         double frame_dt = engine->headless ? ENGINE_FIXED_FRAME_DT : engine->delta_time;
 
+        // Snapshot the clock pointer so the two latch sites see one decision:
+        // an install/uninstall from inside `update` takes effect at the next
+        // frame boundary instead of double-latching or skipping both sites.
+        const EngineFrameClock* frame_clock = engine->render_clock;
+
         // With no substituted clock, latch the frame's animation clock BEFORE
-        // the update callback so app hooks (particle ticks, animation
-        // stepping) read this frame's clock, not last frame's.
-        if (!engine->render_clock) {
+        // the update callback so everything ticked this frame (particles
+        // below, an app's animation stepping) reads this frame's clock, and
+        // tick the scene's particle systems -- no framework owns the sim, so
+        // the engine is the tick's natural home (the scene-citizen contract).
+        if (!frame_clock) {
             double frame_time = engine->headless
                                     ? (double)engine->total_frames * ENGINE_FIXED_FRAME_DT
                                     : current_time;
             engine_set_render_time(engine, frame_time, frame_dt);
+            Scene* tick_scene = get_current_scene(engine);
+            if (tick_scene)
+                scene_update_particle_systems(tick_scene, (float)engine->render_delta,
+                                              (float)engine->render_time);
         }
 
         // Per-frame update (input, physics, fixed-timestep sim for game apps),
@@ -2349,9 +2360,8 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EngineRenderFunc render
         // `update` leaves a substituted clock simply not advanced, which is
         // the truth, instead of silently reverting this frame to the wall
         // clock.
-        if (engine->render_clock) {
-            engine_set_render_time(engine, engine->render_clock->time,
-                                   engine->render_clock->delta);
+        if (frame_clock) {
+            engine_set_render_time(engine, frame_clock->time, frame_clock->delta);
         }
 
         // Wireframe mode: use albedo-only rendering for performance
