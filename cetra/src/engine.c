@@ -1162,6 +1162,16 @@ static int _create_default_shaders_for_engine(Engine* engine) {
         add_shader_program_to_engine(engine, cloud_noise_debug_program);
     }
 
+    ShaderProgram* cloud_march_program = create_cloud_march_program();
+    if (cloud_march_program) {
+        add_shader_program_to_engine(engine, cloud_march_program);
+    }
+
+    ShaderProgram* sky_background_clouds_program = create_sky_background_clouds_program();
+    if (sky_background_clouds_program) {
+        add_shader_program_to_engine(engine, sky_background_clouds_program);
+    }
+
     ShaderProgram* mask_copy_program = create_mask_copy_program();
     if (mask_copy_program) {
         add_shader_program_to_engine(engine, mask_copy_program);
@@ -2315,6 +2325,14 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EngineRenderFunc render
         // Shadow depth pass (before main render)
         if (shadow_scene && shadow_scene->shadow_system && shadow_scene->shadow_system->enabled) {
             render_shadow_depth_pass(engine, shadow_scene);
+        }
+
+        // Cloud shell march for this frame's camera (spec 11.0): must land
+        // before the main FBO binds, because the sky background pass samples
+        // the result mid-scene. Self-gated on clouds being enabled + baked.
+        if (shadow_scene && shadow_scene->sky) {
+            sky_clouds_march(shadow_scene->sky, engine, engine->view_matrix,
+                             engine->projection_matrix);
         }
 
         glBindFramebuffer(GL_FRAMEBUFFER, engine->framebuffer);

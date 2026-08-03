@@ -32,6 +32,9 @@ SkyAtmosphere* create_sky_atmosphere(void) {
     sky->world_units_per_km = 1000.0f; // 1 unit = 1 metre (the glTF convention)
     sky->publish_fog_ambient = true;
     sky->aerial_enabled = true;
+    sky->clouds.coverage = 0.45f;
+    sky->clouds.cloud_type = 0.6f;
+    sky->clouds.density = 1.0f;
     sky_update_sun_dir(sky);
 
     return sky;
@@ -55,6 +58,10 @@ void free_sky_atmosphere(SkyAtmosphere* sky) {
         glDeleteTextures(1, &sky->clouds.shape_tex);
     if (sky->clouds.detail_tex)
         glDeleteTextures(1, &sky->clouds.detail_tex);
+    if (sky->clouds.march_tex)
+        glDeleteTextures(1, &sky->clouds.march_tex);
+    if (sky->clouds.march_fbo)
+        glDeleteFramebuffers(1, &sky->clouds.march_fbo);
     if (sky->quad_vao)
         glDeleteVertexArrays(1, &sky->quad_vao);
     if (sky->quad_vbo)
@@ -446,10 +453,16 @@ int sky_bake(SkyAtmosphere* sky, struct IBLResources* ibl, struct Engine* engine
     sky->view_program = get_engine_shader_program_by_name(engine, "sky_view");
     sky->env_program = get_engine_shader_program_by_name(engine, "sky_env");
     sky->background_program = get_engine_shader_program_by_name(engine, "sky_background");
+    sky->background_clouds_program =
+        get_engine_shader_program_by_name(engine, "sky_background_clouds");
     if (!sky->view_program || !sky->env_program || !sky->background_program) {
         log_error("Failed to get sky render programs");
         return -1;
     }
+    // Non-fatal like the aerial program: without it the sky renders, only
+    // the cloud composite is unavailable.
+    if (sky->clouds.enabled && !sky->background_clouds_program)
+        log_error("No sky_background_clouds program; cloud composite disabled");
     if (sky->quad_vao == 0)
         create_fullscreen_quad_vao(&sky->quad_vao, &sky->quad_vbo);
     // Reuse the IBL toolkit's unit cube for the six env-face draws (the probe
@@ -565,7 +578,7 @@ int sky_update_sun(SkyAtmosphere* sky, struct IBLResources* ibl, struct Engine* 
 }
 
 void sky_render_background(SkyAtmosphere* sky, struct IBLResources* ibl, mat4 view,
-                           mat4 projection) {
+                           mat4 projection, bool with_clouds) {
     if (!sky || !ibl || !sky->background_program || !sky->sky_view_lut)
         return;
 
@@ -576,8 +589,15 @@ void sky_render_background(SkyAtmosphere* sky, struct IBLResources* ibl, mat4 vi
     rot_view[3][1] = 0.0f;
     rot_view[3][2] = 0.0f;
 
-    glUseProgram(sky->background_program->id);
-    UniformManager* u = sky->background_program->uniforms;
+    // Clouds bind a SEPARATE program so the plain path's shader stays
+    // byte-untouched (the off-gate); the caller also gates captures off,
+    // since the march texture belongs to the main camera only.
+    bool clouds = with_clouds && sky->background_clouds_program && sky->clouds.march_valid &&
+                  sky->clouds.march_tex != 0;
+    ShaderProgram* prog = clouds ? sky->background_clouds_program : sky->background_program;
+
+    glUseProgram(prog->id);
+    UniformManager* u = prog->uniforms;
     uniform_set_mat4(u, "view", (float*)rot_view);
     uniform_set_mat4(u, "projection", (float*)projection);
     glActiveTexture(GL_TEXTURE0);
@@ -590,6 +610,15 @@ void sky_render_background(SkyAtmosphere* sky, struct IBLResources* ibl, mat4 vi
     float cos_radius = cosf(glm_rad(sky->sun_disc_deg * 0.5f));
     uniform_set_float(u, "sunCosRadius", cos_radius);
     uniform_set_float(u, "sunIntensity", 20.0f);
+    if (clouds) {
+        glActiveTexture(GL_TEXTURE2);
+        glBindTexture(GL_TEXTURE_2D, sky->clouds.march_tex);
+        uniform_set_int(u, "cloudTex", 2);
+        GLint vp[4];
+        glGetIntegerv(GL_VIEWPORT, vp);
+        const float screen_size[2] = {(float)vp[2], (float)vp[3]};
+        uniform_set_vec2(u, "screenSize", (float*)screen_size);
+    }
 
     GLboolean cull_was = glIsEnabled(GL_CULL_FACE);
     glDisable(GL_CULL_FACE);

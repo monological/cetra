@@ -123,6 +123,7 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --sky              Procedural physically-based sky (instead of -e)\n");
     fprintf(stderr, "      --sky-debug        Blit the sky LUTs into the frame corner\n");
     fprintf(stderr, "      --clouds           Volumetric cloud layer (implies --sky)\n");
+    fprintf(stderr, "      --cloud-coverage <f> Cloud sky fraction 0..1 (implies --clouds)\n");
     fprintf(stderr, "      --sun-elevation <d> Sky sun elevation in degrees (implies --sky)\n");
     fprintf(stderr, "      --sun-azimuth <d>  Sky sun azimuth in degrees (implies --sky)\n");
     fprintf(stderr,
@@ -230,6 +231,7 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->shadow_softness = -1.0f;      // -1 = keep the engine default
     args->auto_exposure_override = -1;  // -1 = unset; an authored exposure then pins
     args->sun_elevation = -999.0f; // -999 = keep the sky default
+    args->cloud_coverage = -1.0f;  // -1 = keep the engine default
     args->sun_azimuth = -999.0f;
     args->world_scale = -1.0f; // -1 = keep the sky's default (1 unit = 1 metre)
     args->bloom_enable = -1;        // -1 = keep the engine default
@@ -511,6 +513,14 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
         } else if (strcmp(argv[i], "--sky") == 0) {
             args->sky = 1;
         } else if (strcmp(argv[i], "--clouds") == 0) {
+            args->clouds = 1;
+            args->sky = 1;
+        } else if (strcmp(argv[i], "--cloud-coverage") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: --cloud-coverage requires a value\n");
+                return -1;
+            }
+            args->cloud_coverage = (float)atof(argv[i]);
             args->clouds = 1;
             args->sky = 1;
         } else if (strcmp(argv[i], "--sky-debug") == 0) {
@@ -1760,6 +1770,8 @@ int main(int argc, char** argv) {
                 sky->world_units_per_km = args.world_scale;
             sky->aerial_enabled = !args.no_aerial;
             sky->clouds.enabled = args.clouds != 0;
+            if (args.cloud_coverage >= 0.0f)
+                sky->clouds.coverage = args.cloud_coverage;
             sky_update_sun_dir(sky);
         }
         if (sky && ibl && sky_bake_static_luts(sky, engine) == 0 &&

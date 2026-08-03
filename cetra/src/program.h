@@ -70,6 +70,10 @@ ShaderProgram* create_sky_background_program();
 ShaderProgram* create_sky_aerial_program();
 // Cloud-noise volume slice inspector (spec 11.0)
 ShaderProgram* create_cloud_noise_debug_program();
+// Half-res cloud shell march (spec 11.0)
+ShaderProgram* create_cloud_march_program();
+// Sky background with the cloud composite (bound only when clouds are on)
+ShaderProgram* create_sky_background_clouds_program();
 
 // Copies/resamples a 2D mask texture into a material-mask-array layer
 ShaderProgram* create_mask_copy_program();

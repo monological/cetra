@@ -4,6 +4,7 @@
 
 #include <GLFW/glfw3.h>
 
+#include "engine.h"
 #include "noise.h"
 #include "texture.h"
 #include "thread.h"
@@ -176,4 +177,117 @@ int sky_bake_cloud_noise(SkyAtmosphere* sky) {
     log_info("Cloud noise baked: fields %.1f ms (%d threads), upload+mips %.1f ms",
              (t1 - t0) * 1000.0, get_cpu_cores() > 8 ? 8 : get_cpu_cores(), (t2 - t1) * 1000.0);
     return 0;
+}
+
+// Lazy half-internal-res march target. One-shot like the aerial volume: a
+// failed allocation logs and disables rather than retrying every frame.
+static bool ensure_march_target(CloudLayer* c, int w, int h) {
+    if (c->march_tex && c->march_w == w && c->march_h == h)
+        return true;
+    if (c->march_tex) {
+        glDeleteTextures(1, &c->march_tex);
+        glDeleteFramebuffers(1, &c->march_fbo);
+        c->march_tex = 0;
+        c->march_fbo = 0;
+    }
+    glGenFramebuffers(1, &c->march_fbo);
+    glGenTextures(1, &c->march_tex);
+    glBindTexture(GL_TEXTURE_2D, c->march_tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, w, h, 0, GL_RGBA, GL_HALF_FLOAT, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glBindFramebuffer(GL_FRAMEBUFFER, c->march_fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, c->march_tex, 0);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        log_error("Cloud march FBO incomplete; clouds disabled");
+        glDeleteTextures(1, &c->march_tex);
+        glDeleteFramebuffers(1, &c->march_fbo);
+        c->march_tex = 0;
+        c->march_fbo = 0;
+        c->enabled = false;
+        return false;
+    }
+    c->march_w = w;
+    c->march_h = h;
+    return true;
+}
+
+void sky_clouds_march(SkyAtmosphere* sky, struct Engine* engine, mat4 view, mat4 projection) {
+    if (!sky || !engine || !sky->enabled || !sky->clouds.enabled || !sky->clouds.noise_baked ||
+        !sky->luts_baked || !sky->sky_view_lut)
+        return;
+    CloudLayer* c = &sky->clouds;
+
+    if (!c->march_program) {
+        c->march_program = get_engine_shader_program_by_name(engine, "cloud_march");
+        if (!c->march_program) {
+            log_error("No cloud_march program; clouds disabled");
+            c->enabled = false;
+            return;
+        }
+    }
+
+    int rw = 0, rh = 0;
+    engine_render_size(engine, &rw, &rh);
+    if (!ensure_march_target(c, rw > 1 ? rw / 2 : 1, rh > 1 ? rh / 2 : 1))
+        return;
+
+    GLint prev_viewport[4];
+    GLint prev_framebuffer;
+    glGetIntegerv(GL_VIEWPORT, prev_viewport);
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_framebuffer);
+    GLboolean depth_was = glIsEnabled(GL_DEPTH_TEST);
+    GLboolean blend_was = glIsEnabled(GL_BLEND);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_BLEND);
+
+    mat4 inv_view;
+    glm_mat4_inv(view, inv_view);
+    float units = sky->world_units_per_km > 0.0f ? sky->world_units_per_km : 1000.0f;
+    vec3 cam_km = {inv_view[3][0] / units, inv_view[3][1] / units, inv_view[3][2] / units};
+
+    glBindFramebuffer(GL_FRAMEBUFFER, c->march_fbo);
+    glViewport(0, 0, c->march_w, c->march_h);
+    glUseProgram(c->march_program->id);
+    UniformManager* um = c->march_program->uniforms;
+
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_3D, c->shape_tex);
+    uniform_set_int(um, "shapeTex", 0);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_3D, c->detail_tex);
+    uniform_set_int(um, "detailTex", 1);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, sky->transmittance_lut);
+    uniform_set_int(um, "transmittanceLut", 2);
+    glActiveTexture(GL_TEXTURE3);
+    glBindTexture(GL_TEXTURE_2D, sky->sky_view_lut);
+    uniform_set_int(um, "skyViewLut", 3);
+    glActiveTexture(GL_TEXTURE0);
+
+    uniform_set_mat4(um, "invView", (float*)inv_view);
+    const float inv_focal[2] = {1.0f / projection[0][0], 1.0f / projection[1][1]};
+    uniform_set_vec2(um, "invFocal", (float*)inv_focal);
+    uniform_set_vec3(um, "camPosKm", cam_km);
+    uniform_set_vec3(um, "sunDir", sky->sun_dir);
+    uniform_set_float(um, "coverage", c->coverage);
+    uniform_set_float(um, "cloudType", c->cloud_type);
+    uniform_set_float(um, "densityScale", c->density);
+    uniform_set_int(um, "steps", 64);
+    uniform_set_int(um, "lightSteps", 6);
+    uniform_set_int(um, "debugShell", c->debug_shell);
+
+    draw_fullscreen_quad(sky->quad_vao);
+    c->march_valid = true;
+
+    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prev_framebuffer);
+    glViewport(prev_viewport[0], prev_viewport[1], prev_viewport[2], prev_viewport[3]);
+    if (depth_was)
+        glEnable(GL_DEPTH_TEST);
+    if (blend_was)
+        glEnable(GL_BLEND);
+    glUseProgram(0);
+    glBindTexture(GL_TEXTURE_3D, 0);
 }

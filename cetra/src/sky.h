@@ -59,10 +59,19 @@ typedef struct CloudLayer {
     float coverage;   // 0..1 sky fraction the remap admits
     float cloud_type; // 0 = low flat stratus .. 1 = tall cumulus
     float density;    // extinction scale on the march
+    int debug_shell;  // 1 = march pass renders shell distances (R5 probe)
 
     GLuint shape_tex;  // 128^3 RGBA8 tiling volume
     GLuint detail_tex; // 32^3  RGBA8 tiling volume
     bool noise_baked;
+
+    // Half-internal-res march target, written pre-scene each frame and
+    // sampled by the clouds background variant. Lazily allocated.
+    GLuint march_fbo;
+    GLuint march_tex;
+    int march_w, march_h;
+    bool march_valid; // a march ran this session (gates the composite)
+    ShaderProgram* march_program;
 } CloudLayer;
 
 struct Engine;
@@ -124,6 +133,7 @@ typedef struct SkyAtmosphere {
     ShaderProgram* view_program;
     ShaderProgram* env_program;
     ShaderProgram* background_program;
+    ShaderProgram* background_clouds_program;
     ShaderProgram* cloud_noise_debug_program;
 
     // Env-face capture (FBO/RBO) and the unit cube are borrowed from the
@@ -158,6 +168,12 @@ int sky_bake_static_luts(SkyAtmosphere* sky, struct Engine* engine);
 // Sun- and coverage-independent: never re-baked after this.
 int sky_bake_cloud_noise(SkyAtmosphere* sky);
 
+// March the cloud shell for this frame's camera into the half-res target
+// (sky_clouds.c). Runs in the pre-scene window -- before the main FBO
+// binds -- because the background pass samples the result mid-scene.
+// No-op unless clouds are enabled and the noise is baked.
+void sky_clouds_march(SkyAtmosphere* sky, struct Engine* engine, mat4 view, mat4 projection);
+
 // Re-bake everything the sun drives: sky-view LUT -> environment cubemap
 // (+ mips) -> ibl_bake_from_cubemap (irradiance + GGX and Charlie
 // prefilters). Populates the passed IBLResources so the whole downstream
@@ -190,9 +206,11 @@ void sky_publish_to_postfx(const SkyAtmosphere* sky, struct PostFX* fx);
 // Draw the procedural sky as the frame background (sky-view LUT + analytic
 // sun disc), replacing render_skybox in sky mode. Strips translation from
 // view like the skybox path. Borrows the unit cube from ibl (populated during
-// sky_bake).
-void sky_render_background(SkyAtmosphere* sky, struct IBLResources* ibl, mat4 view,
-                           mat4 projection);
+// sky_bake). with_clouds composites the half-res cloud march over the sky
+// via a separate program (the plain path's shader stays untouched); pass
+// false during probe/GI captures -- the march texture is the main camera's.
+void sky_render_background(SkyAtmosphere* sky, struct IBLResources* ibl, mat4 view, mat4 projection,
+                           bool with_clouds);
 
 // Debug: blit the LUTs into the bottom-left corner of the default
 // framebuffer (transmittance above multiscatter), scaled up for

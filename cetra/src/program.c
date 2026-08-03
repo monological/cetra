@@ -679,6 +679,23 @@ ShaderProgram* create_cloud_noise_debug_program() {
     return create_post_program("cloud_noise_debug", cloud_noise_debug_frag_shader_str);
 }
 
+ShaderProgram* create_cloud_march_program() {
+    return create_post_program("cloud_march", cloud_march_frag_shader_str);
+}
+
+ShaderProgram* create_sky_background_clouds_program() {
+    ShaderProgram* program = NULL;
+
+    if ((program = create_program_from_source("sky_background_clouds", skybox_vert_shader_str,
+                                              sky_background_clouds_frag_shader_str, NULL)) ==
+        NULL) {
+        log_error("Failed to initialize sky background clouds shader program");
+        return NULL;
+    }
+
+    return program;
+}
+
 ShaderProgram* create_sky_background_program() {
     ShaderProgram* program = NULL;
 
