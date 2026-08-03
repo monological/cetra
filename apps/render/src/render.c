@@ -2154,9 +2154,11 @@ int main(int argc, char** argv) {
         apply_cscene_light_overrides(scene, cscn, scene_radius);
     }
 
-    // Position camera to view the entire scene
+    // Position camera to view the entire scene. The fallback triggers only on
+    // a degenerate radius: a real sub-metre asset gets its proportional
+    // distance, not a teleport to 100 units away.
     float camera_distance = scene_radius * 2.5f;
-    if (camera_distance < 1.0f)
+    if (scene_radius <= 0.0f)
         camera_distance = 100.0f; // Fallback for empty scenes
     if (args.camera_distance > 0.0f)
         camera_distance = args.camera_distance;
