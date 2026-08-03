@@ -1172,6 +1172,11 @@ static int _create_default_shaders_for_engine(Engine* engine) {
         add_shader_program_to_engine(engine, sky_background_clouds_program);
     }
 
+    ShaderProgram* sky_env_clouds_program = create_sky_env_clouds_program();
+    if (sky_env_clouds_program) {
+        add_shader_program_to_engine(engine, sky_env_clouds_program);
+    }
+
     ShaderProgram* mask_copy_program = create_mask_copy_program();
     if (mask_copy_program) {
         add_shader_program_to_engine(engine, mask_copy_program);
@@ -1582,6 +1587,11 @@ static void _engine_gui_panel(Engine* engine) {
             igSliderFloat("Sun Disc", &sky->sun_disc_deg, 0.1f, 3.0f, "%.2f", 0);
             if (sun_moved)
                 sky_update_sun(sky, scene->ibl, engine);
+            // Release re-bakes the env WITH clouds (the drag path above
+            // deliberately never pays the per-texel cloud march), so the
+            // probe/GI refreshes below capture the clouded sky.
+            if (sun_released && sky->clouds.enabled && sky->clouds.noise_baked)
+                sky_bake_ex(sky, scene->ibl, engine, true);
             // On release, refresh a probe that only mirrors the sky
             // (environment-only: probe->cubemap == 0). A scene-captured probe
             // (--probe-scene) is left stale -- re-rendering the scene per sun

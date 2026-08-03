@@ -74,6 +74,8 @@ ShaderProgram* create_cloud_noise_debug_program();
 ShaderProgram* create_cloud_march_program();
 // Sky background with the cloud composite (bound only when clouds are on)
 ShaderProgram* create_sky_background_clouds_program();
+// Env-cubemap face render with the low-quality cloud march (release bakes)
+ShaderProgram* create_sky_env_clouds_program();
 
 // Copies/resamples a 2D mask texture into a material-mask-array layer
 ShaderProgram* create_mask_copy_program();

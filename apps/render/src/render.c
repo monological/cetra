@@ -1775,9 +1775,9 @@ int main(int argc, char** argv) {
             sky_update_sun_dir(sky);
         }
         if (sky && ibl && sky_bake_static_luts(sky, engine) == 0 &&
-            sky_bake(sky, ibl, engine) == 0) {
+            sky_bake_cloud_noise(sky) == 0 && // self-gated; before the env bake
+            sky_bake_ex(sky, ibl, engine, sky->clouds.enabled) == 0) {
             sky->debug_luts = args.sky_debug != 0;
-            sky_bake_cloud_noise(sky); // self-gated on clouds.enabled
             scene->sky = sky;
             scene->ibl = ibl;
             scene->render_skybox = true;

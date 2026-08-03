@@ -448,13 +448,15 @@ static void sky_bake_view_lut(SkyAtmosphere* sky) {
     bake_lut_2d(sky, sky->view_program, &sky->sky_view_lut, SKY_VIEW_W, SKY_VIEW_H);
 }
 
-int sky_bake(SkyAtmosphere* sky, struct IBLResources* ibl, struct Engine* engine) {
+int sky_bake_ex(SkyAtmosphere* sky, struct IBLResources* ibl, struct Engine* engine,
+                bool with_clouds) {
     if (!sky || !ibl || !engine) {
         log_error("Invalid state for sky bake");
         return -1;
     }
     sky->view_program = get_engine_shader_program_by_name(engine, "sky_view");
     sky->env_program = get_engine_shader_program_by_name(engine, "sky_env");
+    sky->env_clouds_program = get_engine_shader_program_by_name(engine, "sky_env_clouds");
     sky->background_program = get_engine_shader_program_by_name(engine, "sky_background");
     sky->background_clouds_program =
         get_engine_shader_program_by_name(engine, "sky_background_clouds");
@@ -466,6 +468,12 @@ int sky_bake(SkyAtmosphere* sky, struct IBLResources* ibl, struct Engine* engine
     // the cloud composite is unavailable.
     if (sky->clouds.enabled && !sky->background_clouds_program)
         log_error("No sky_background_clouds program; cloud composite disabled");
+
+    // The cadence split: a with-clouds bake marches 24 steps per env texel,
+    // which belongs on slider RELEASE and startup, never on the per-drag
+    // re-bake this function also serves.
+    bool clouds_bake = with_clouds && sky->clouds.enabled && sky->clouds.noise_baked &&
+                       sky->env_clouds_program != NULL;
     if (sky->quad_vao == 0)
         create_fullscreen_quad_vao(&sky->quad_vao, &sky->quad_vbo);
     // Reuse the IBL toolkit's unit cube for the six env-face draws (the probe
@@ -510,22 +518,36 @@ int sky_bake(SkyAtmosphere* sky, struct IBLResources* ibl, struct Engine* engine
     ibl_capture_views(origin, views);
     glm_perspective(glm_rad(90.0f), 1.0f, 0.1f, 10.0f, projection);
 
-    glUseProgram(sky->env_program->id);
+    ShaderProgram* env = clouds_bake ? sky->env_clouds_program : sky->env_program;
+    glUseProgram(env->id);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, sky->sky_view_lut);
-    uniform_set_int(sky->env_program->uniforms, "skyViewLut", 0);
+    uniform_set_int(env->uniforms, "skyViewLut", 0);
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, sky->transmittance_lut);
-    uniform_set_int(sky->env_program->uniforms, "transmittanceLut", 1);
-    uniform_set_vec3(sky->env_program->uniforms, "sunDir", sky->sun_dir);
-    uniform_set_mat4(sky->env_program->uniforms, "projection", (float*)projection);
+    uniform_set_int(env->uniforms, "transmittanceLut", 1);
+    if (clouds_bake) {
+        glActiveTexture(GL_TEXTURE2);
+        glBindTexture(GL_TEXTURE_3D, sky->clouds.shape_tex);
+        uniform_set_int(env->uniforms, "shapeTex", 2);
+        glActiveTexture(GL_TEXTURE3);
+        glBindTexture(GL_TEXTURE_3D, sky->clouds.detail_tex);
+        uniform_set_int(env->uniforms, "detailTex", 3);
+        uniform_set_float(env->uniforms, "coverage", sky->clouds.coverage);
+        uniform_set_float(env->uniforms, "cloudType", sky->clouds.cloud_type);
+        uniform_set_float(env->uniforms, "densityScale", sky->clouds.density);
+    }
+    uniform_set_vec3(env->uniforms, "sunDir", sky->sun_dir);
+    uniform_set_mat4(env->uniforms, "projection", (float*)projection);
     for (int i = 0; i < 6; i++) {
-        uniform_set_mat4(sky->env_program->uniforms, "view", (float*)views[i]);
+        uniform_set_mat4(env->uniforms, "view", (float*)views[i]);
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
                                GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, ibl->environment_cubemap, 0);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         ibl_render_unit_cube(ibl);
     }
+    if (clouds_bake)
+        glBindTexture(GL_TEXTURE_3D, 0);
     glBindTexture(GL_TEXTURE_CUBE_MAP, ibl->environment_cubemap);
     glGenerateMipmap(GL_TEXTURE_CUBE_MAP);
     double t1 = glfwGetTime();
@@ -545,8 +567,13 @@ int sky_bake(SkyAtmosphere* sky, struct IBLResources* ibl, struct Engine* engine
         return -1;
     double t2 = glfwGetTime();
 
-    log_info("Sky bake: view+env %.1f ms, IBL %.1f ms", (t1 - t0) * 1000.0, (t2 - t1) * 1000.0);
+    log_info("Sky bake%s: view+env %.1f ms, IBL %.1f ms", clouds_bake ? " (clouds)" : "",
+             (t1 - t0) * 1000.0, (t2 - t1) * 1000.0);
     return 0;
+}
+
+int sky_bake(SkyAtmosphere* sky, struct IBLResources* ibl, struct Engine* engine) {
+    return sky_bake_ex(sky, ibl, engine, false);
 }
 
 void sky_apply_sun_to_light(SkyAtmosphere* sky) {

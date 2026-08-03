@@ -146,6 +146,7 @@ typedef struct SkyAtmosphere {
     ShaderProgram* debug_program;
     ShaderProgram* view_program;
     ShaderProgram* env_program;
+    ShaderProgram* env_clouds_program;
     ShaderProgram* background_program;
     ShaderProgram* background_clouds_program;
     ShaderProgram* cloud_noise_debug_program;
@@ -192,7 +193,12 @@ void sky_clouds_march(SkyAtmosphere* sky, struct Engine* engine, mat4 view, mat4
 // (+ mips) -> ibl_bake_from_cubemap (irradiance + GGX and Charlie
 // prefilters). Populates the passed IBLResources so the whole downstream
 // (skybox/IBL/probe/fog) follows the sun. Call after sky_bake_static_luts
-// and after setting sun_dir.
+// and after setting sun_dir. with_clouds marches the cloud layer into the
+// env faces (24 steps/texel) so IBL and probes see the deck -- the
+// release/startup cadence; the plain sky_bake below is the per-drag path
+// and never pays it.
+int sky_bake_ex(SkyAtmosphere* sky, struct IBLResources* ibl, struct Engine* engine,
+                bool with_clouds);
 int sky_bake(SkyAtmosphere* sky, struct IBLResources* ibl, struct Engine* engine);
 
 // Apply the current sun to the coupled key light (sky->sun_light): direction

@@ -683,6 +683,18 @@ ShaderProgram* create_cloud_march_program() {
     return create_post_program("cloud_march", cloud_march_frag_shader_str);
 }
 
+ShaderProgram* create_sky_env_clouds_program() {
+    ShaderProgram* program = NULL;
+
+    if ((program = create_program_from_source("sky_env_clouds", ibl_cubemap_vert_shader_str,
+                                              sky_env_clouds_frag_shader_str, NULL)) == NULL) {
+        log_error("Failed to initialize sky env clouds shader program");
+        return NULL;
+    }
+
+    return program;
+}
+
 ShaderProgram* create_sky_background_clouds_program() {
     ShaderProgram* program = NULL;
 
