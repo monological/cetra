@@ -40,6 +40,11 @@ typedef struct EngineFrameClock {
     double delta; // advance since the previous frame; 0 if it did not advance
 } EngineFrameClock;
 
+// The fixed per-frame step every headless clock advances by: frame N of a
+// headless run is instant N * this, every run, so renders compare
+// frame-for-frame. Also the game framework's default sim timestep.
+#define ENGINE_FIXED_FRAME_DT (1.0 / 60.0)
+
 typedef struct Engine {
     GLFWwindow* window;
     char* window_title; // Title of the GLFW window
@@ -190,10 +195,16 @@ typedef struct Engine {
     // previous-frame position used for motion vectors is exactly
     // render_time - render_delta.
     //
-    // Both are latched by engine_run alone, after the update callback and before
-    // the shadow pass. They are deliberately not last_frame_time/delta_time --
-    // those are FPS bookkeeping on the wall clock, and an embedder's render
-    // clock need not be the wall clock.
+    // Both are latched by engine_run alone, once per frame, always before the
+    // shadow pass. With no substituted clock the latch runs BEFORE the update
+    // callback (so app hooks tick particles and animation from this frame's
+    // clock), producing the wall clock live and a fixed
+    // total_frames * ENGINE_FIXED_FRAME_DT headless -- which is what makes
+    // headless wind/particle/animation output a pure function of the frame
+    // index. A substituted clock latches AFTER the update callback instead,
+    // so the embedder's sim has advanced. They are deliberately not
+    // last_frame_time/delta_time -- those are FPS bookkeeping on the wall
+    // clock, always, even headless.
     double render_time;
     double render_delta;
 

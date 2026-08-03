@@ -2318,23 +2318,40 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EngineRenderFunc render
             igNewFrame();
         }
 
+        // The frame's produced dt: the wall clock live, a fixed step headless.
+        // Headless time is computed from the integer frame index rather than
+        // accumulated, so frame N is instant N/60 exactly, every run.
+        double frame_dt = engine->headless ? ENGINE_FIXED_FRAME_DT : engine->delta_time;
+
+        // With no substituted clock, latch the frame's animation clock BEFORE
+        // the update callback so app hooks (particle ticks, animation
+        // stepping) read this frame's clock, not last frame's.
+        if (!engine->render_clock) {
+            double frame_time = engine->headless
+                                    ? (double)engine->total_frames * ENGINE_FIXED_FRAME_DT
+                                    : current_time;
+            engine_set_render_time(engine, frame_time, frame_dt);
+        }
+
         // Per-frame update (input, physics, fixed-timestep sim for game apps),
         // before the shadow pass so transform/particle updates land first.
+        // Receives the produced dt, so a game's fixed-step accumulator takes
+        // exactly one step per headless frame and its step count stops being
+        // a function of wall time.
         if (update)
-            update(engine, (float)engine->delta_time);
+            update(engine, (float)frame_dt);
 
-        // Latch the frame's animation clock: after the update callback, so an
-        // embedder's sim has advanced, and before the shadow pass, so the depth
-        // and shading passes displace wind from the same instant. Sampled here
-        // rather than written by the embedder because the sample cannot be
-        // skipped by a control path -- an early return inside `update` leaves a
-        // substituted clock simply not advanced, which is the truth, instead of
-        // silently reverting this frame to the wall clock.
+        // A substituted clock latches AFTER the update callback, so an
+        // embedder's sim has advanced, and before the shadow pass, so the
+        // depth and shading passes displace wind from the same instant.
+        // Sampled here rather than written by the embedder because the sample
+        // cannot be skipped by a control path -- an early return inside
+        // `update` leaves a substituted clock simply not advanced, which is
+        // the truth, instead of silently reverting this frame to the wall
+        // clock.
         if (engine->render_clock) {
             engine_set_render_time(engine, engine->render_clock->time,
                                    engine->render_clock->delta);
-        } else {
-            engine_set_render_time(engine, current_time, engine->delta_time);
         }
 
         // Wireframe mode: use albedo-only rendering for performance

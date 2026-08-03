@@ -60,10 +60,10 @@ typedef struct CloudLayer {
     float cloud_type; // 0 = low flat stratus .. 1 = tall cumulus
     float density;    // extinction scale on the march
 
-    // Drift. The scroll accumulator advances once per march: a fixed 1/60
-    // when headless (goldens stay byte-deterministic -- the skeletal-
-    // animation clock model, never the wall clock that makes wind scenes
-    // unmeasurable), render_delta otherwise. Default speed 0 = still air.
+    // Drift. The scroll accumulator advances by render_delta once per march;
+    // the engine's frame clock makes that a fixed step headless (goldens stay
+    // byte-deterministic) and honestly frozen under a paused embedder clock.
+    // Default speed 0 = still air.
     float wind_speed_kmh;
     float wind_dir_deg; // 0 = +Z, matching the sun azimuth convention
     double scroll;      // accumulated drift time, seconds
