@@ -663,6 +663,77 @@ def run_range_gate():
     return [] if ok else ["gltf-range"]
 
 
+def _fbx_light_line(output):
+    """The unit_lamp <Light ...> print, or None."""
+    for line in output.splitlines():
+        if "<Light name='unit_lamp'" in line:
+            return line
+    return None
+
+
+def _light_field_vec3(line, key):
+    inner = line.split(key + "=(")[1].split(")")[0]
+    return [float(v) for v in inner.split(",")]
+
+
+def run_fbx_unit_gate():
+    """FBX unit scale must bake cm to metres, and the light must survive.
+
+    Pins two things at once (spec 11.2, paying 11.1's recorded debt): the
+    engine's mirror of assimp's UnitScaleFactor * 0.01 conversion (a
+    vendored-assimp change that moved it would land here first), and the FBX
+    light-import path itself -- the fixture's light must arrive at its exact
+    metre position, at the intensity the conversion chain produces, and
+    actually reach the clusterer (a culled light is the exact silently-black
+    symptom of spec 11.1's c64). A second render with --no-unit-scale is the
+    mechanical twin: the same file read raw must place the light at 200 cm.
+    """
+    fixture = os.path.join(ROOT, "assets", "fbx_unit_fixture.fbx")
+    if not os.path.exists(fixture):
+        print("  fbx-unit     SKIP  (missing fbx_unit_fixture.fbx)")
+        return []
+
+    r = subprocess.run([RENDER, "-m", fixture, "-x", "-f", "2"],
+                       capture_output=True, text=True)
+    out = r.stdout + r.stderr
+    light = _fbx_light_line(out)
+    if light is None:
+        print("  fbx-unit     ERROR (no FBX light imported)")
+        return ["fbx-unit"]
+
+    problems = []
+    if "file declares 0.01x, applied 0.01x" not in out:
+        problems.append("unit-scale log line missing or wrong")
+    pos = _light_field_vec3(light, "global_position")
+    if abs(pos[0]) > 1e-3 or abs(pos[1] - 2.0) > 1e-3 or abs(pos[2]) > 1e-3:
+        problems.append(f"position {pos} != (0, 2, 0) m")
+    intensity = float(light.split("intensity=")[1].split(" ")[0])
+    if abs(intensity - 50.0) > 1e-3:
+        problems.append(f"intensity {intensity} != 50 cd")
+    clustered = False
+    for line in out.splitlines():
+        if "clustered:" in line and "clusterable" in line:
+            clusterable = int(line.split("directional +")[1].split("clusterable")[0])
+            clustered = clusterable >= 1
+    if not clustered:
+        problems.append("light did not cluster (the silently-black symptom)")
+
+    r2 = subprocess.run([RENDER, "-m", fixture, "--no-unit-scale", "-x", "-f", "2"],
+                        capture_output=True, text=True)
+    raw_light = _fbx_light_line(r2.stdout + r2.stderr)
+    if raw_light is None:
+        problems.append("--no-unit-scale render imported no light")
+    else:
+        raw_pos = _light_field_vec3(raw_light, "global_position")
+        if abs(raw_pos[1] - 200.0) > 1e-3:
+            problems.append(f"--no-unit-scale position y {raw_pos[1]} != 200 cm")
+
+    ok = not problems
+    detail = "cm baked to (0, 2, 0) m at 50 cd, clustered" if ok else "; ".join(problems)
+    print(f"  fbx-unit     {'PASS' if ok else 'FAIL'}  {detail}")
+    return [] if ok else ["fbx-unit"]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--keep", action="store_true", help="keep the generated scenes and frames")
@@ -687,6 +758,7 @@ def main():
         failures += run_cloud_churn_gate(workdir)
         print("import:")
         failures += run_range_gate()
+        failures += run_fbx_unit_gate()
     finally:
         if args.keep:
             print(f"\nartifacts in {workdir}")
