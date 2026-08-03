@@ -66,6 +66,8 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --no-recenter      Keep the model's authored world position\n");
     fprintf(stderr,
             "      --no-flip-uv       For assets baked with the opposite UV V convention\n");
+    fprintf(stderr,
+            "      --flip-uv          Force the UV V-flip on (same mismatch, other direction)\n");
     fprintf(stderr, "                         (symptom: scrambled/mirrored textures)\n");
     fprintf(stderr, "      --taa              Enable TAA in headless (temporal passes active;\n");
     fprintf(stderr, "                         output not byte-deterministic)\n");
@@ -401,6 +403,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->auto_exposure_override = 0;
         } else if (strcmp(argv[i], "--no-flip-uv") == 0) {
             args->no_flip_uv = 1;
+        } else if (strcmp(argv[i], "--flip-uv") == 0) {
+            args->flip_uv = 1;
         } else if (strcmp(argv[i], "--ao-radius") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -1754,8 +1758,14 @@ int main(int argc, char** argv) {
      * Import model with async texture loading.
      */
 
+    if (args.no_flip_uv && args.flip_uv) {
+        fprintf(stderr, "Error: --flip-uv and --no-flip-uv are mutually exclusive\n");
+        return -1;
+    }
     if (args.no_flip_uv)
         set_import_flip_uvs(false);
+    if (args.flip_uv)
+        set_import_flip_uvs(true);
     if (args.no_unit_scale) {
         set_import_unit_scale(false);
         if (args.import_scale != 1.0f)
