@@ -19,6 +19,7 @@
 #include "ext/stb_image.h"
 #include "ext/log.h"
 
+#include "import.h"
 #include "animation.h"
 #include "rigging.h"
 #include "scene.h"
@@ -84,6 +85,56 @@ static unsigned int uv_flip_flag(const char* path) {
     return aiProcess_FlipUVs;
 }
 
+/*
+ * Unit normalization. The photometric lighting model reads world units as
+ * metres, but FBX files declare their own length unit (UnitScaleFactor,
+ * relative to centimetres) and ship centimetre-scale by default -- read
+ * literally, their lights sit at kilometre distances and inverse-square
+ * culls them to nothing. aiProcess_GlobalScale bakes the declared unit into
+ * vertices, node translations, bone offsets, and animation position keys,
+ * so every format lands in metres; formats that declare no unit (glTF/GLB,
+ * metres by spec) bake nothing. The multiplier stacks on top for assets
+ * whose declared unit is wrong.
+ */
+static bool import_unit_scale = true;
+static float import_scale_multiplier = 1.0f;
+
+void set_import_unit_scale(bool enabled) {
+    import_unit_scale = enabled;
+}
+
+void set_import_scale_multiplier(float multiplier) {
+    import_scale_multiplier = multiplier;
+}
+
+// The unit factor the file declares, as the metres conversion ScaleProcess
+// bakes: FBX's UnitScaleFactor is relative to centimetres, so the baked
+// factor is raw * 0.01 (the assimp FBX importer's own conversion). Formats
+// that write no UnitScaleFactor metadata return 1.
+static float declared_unit_scale(const struct aiScene* scene) {
+    if (!scene || !scene->mMetaData)
+        return 1.0f;
+    for (unsigned int i = 0; i < scene->mMetaData->mNumProperties; i++) {
+        if (strcmp(scene->mMetaData->mKeys[i].data, "UnitScaleFactor") != 0)
+            continue;
+        if (scene->mMetaData->mValues[i].mType == AI_FLOAT)
+            return *(float*)scene->mMetaData->mValues[i].mData * 0.01f;
+        if (scene->mMetaData->mValues[i].mType == AI_DOUBLE)
+            return (float)(*(double*)scene->mMetaData->mValues[i].mData * 0.01);
+    }
+    return 1.0f;
+}
+
+// The uniform scale this import actually applied (or would apply) to the
+// scene's geometry -- what Light.size/range must be multiplied by, since the
+// per-frame light update carries positions and directions through node
+// transforms but never lengths.
+static float applied_unit_scale(const struct aiScene* scene) {
+    if (!import_unit_scale)
+        return 1.0f;
+    return declared_unit_scale(scene) * import_scale_multiplier;
+}
+
 // glTF punctual lights use photometric units (directional in lux, point/spot
 // in candela) per KHR_lights_punctual; every other format we import carries
 // renderer-scale radiometric-ish intensities.
@@ -110,13 +161,28 @@ static const float IMPORTED_LIGHT_INTENSITY_MAX = 100.0f;
  * curve (missing each joint's pre-rotation), which breaks retargeting.
  */
 static const struct aiScene* import_ai_scene(const char* path, unsigned int flags) {
+    if (import_unit_scale)
+        flags |= aiProcess_GlobalScale;
     struct aiPropertyStore* props = aiCreatePropertyStore();
     if (!props) {
         return aiImportFile(path, flags);
     }
     aiSetImportPropertyInteger(props, AI_CONFIG_IMPORT_FBX_PRESERVE_PIVOTS, 0);
+    if (import_scale_multiplier != 1.0f)
+        aiSetImportPropertyFloat(props, AI_CONFIG_GLOBAL_SCALE_FACTOR_KEY,
+                                 import_scale_multiplier);
     const struct aiScene* ai_scene = aiImportFileExWithProperties(path, flags, NULL, props);
     aiReleasePropertyStore(props);
+    if (ai_scene) {
+        float applied = applied_unit_scale(ai_scene);
+        if (applied != 1.0f) {
+            log_info("Unit scale %.4gx applied to '%s' (file unit %.4gx, multiplier %.4gx)",
+                     applied, path, declared_unit_scale(ai_scene), import_scale_multiplier);
+        } else if (!import_unit_scale && declared_unit_scale(ai_scene) != 1.0f) {
+            log_info("Unit scale %.4gx declared by '%s' left unapplied (unit scaling disabled)",
+                     declared_unit_scale(ai_scene), path);
+        }
+    }
     return ai_scene;
 }
 
@@ -1173,6 +1239,12 @@ void process_ai_lights(const struct aiScene* scene, Light*** lights, size_t* num
     *num_lights = scene->mNumLights;
     *lights = malloc(sizeof(Light*) * (*num_lights));
 
+    // Light positions and directions ride node transforms, which ScaleProcess
+    // already rescaled; size and range are bare lengths on the Light and must
+    // be converted here or an FBX panel authored 200x100 cm shades as a
+    // 200x100 METRE wall of light.
+    float unit_scale = applied_unit_scale(scene);
+
     for (unsigned int i = 0; i < scene->mNumLights; i++) {
         const struct aiLight* ai_light = scene->mLights[i];
         Light* light = create_light();
@@ -1221,7 +1293,8 @@ void process_ai_lights(const struct aiScene* scene, Light*** lights, size_t* num
                 // 50x50 create_light() default, which LTC turns into a wall of
                 // light (spec 9.2)
                 if (ai_light->mSize.x > 0.0f && ai_light->mSize.y > 0.0f) {
-                    set_light_size(light, ai_light->mSize.x, ai_light->mSize.y);
+                    set_light_size(light, ai_light->mSize.x * unit_scale,
+                                   ai_light->mSize.y * unit_scale);
                 } else {
                     set_light_size(light, 1.0f, 1.0f);
                     log_info("Area light '%s' imported without a size; defaulting to 1x1 m",
@@ -1268,7 +1341,7 @@ void process_ai_lights(const struct aiScene* scene, Light*** lights, size_t* num
         float khr_range = 0.0f;
         if (light->type != LIGHT_DIRECTIONAL && scene->mRootNode &&
             find_gltf_light_range(scene->mRootNode, ai_light->mName.data, &khr_range)) {
-            set_light_range(light, khr_range);
+            set_light_range(light, khr_range * unit_scale);
         }
 
         // Blender also bakes the light's power into the color (e.g. an 800W
