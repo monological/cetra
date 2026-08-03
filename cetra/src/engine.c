@@ -1973,8 +1973,7 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode) {
     // Hand the current scene's reflection probe and shadow casters to postfx
     // (SSR miss fallback / fog march) without postfx learning about Scene
     const Scene* fx_scene = get_current_scene(engine);
-    reflection_probe_publish_to_postfx(fx_scene ? fx_scene->probe : NULL,
-                                       fx_scene ? fx_scene->ibl : NULL, engine->postfx);
+    reflection_probe_publish_to_postfx(fx_scene ? fx_scene->probe : NULL, engine->postfx);
     shadow_publish_to_postfx(fx_scene, engine->postfx);
     // Aerial perspective is a camera-frustum volume, so unlike the sky's other
     // LUTs it is rebuilt here every frame, immediately before it is published.

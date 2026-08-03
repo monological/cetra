@@ -78,10 +78,8 @@ int reflection_probe_capture(ReflectionProbe* probe, struct Engine* engine, stru
 // switches the lookup with probeEnabled.
 void bind_reflection_probe(const ReflectionProbe* probe, ShaderProgram* program);
 
-// Flatten the reflection fallback into postfx's per-frame uniform block for
-// the SSR miss path: an explicit probe wins, else the prefiltered
-// environment, else none. Postfx never learns about Scene.
-void reflection_probe_publish_to_postfx(const ReflectionProbe* probe, const IBLResources* ibl,
-                                        struct PostFX* fx);
+// Flatten the probe (or its absence) into postfx's per-frame uniform block
+// for the SSR fallback; postfx never learns about Scene.
+void reflection_probe_publish_to_postfx(const ReflectionProbe* probe, struct PostFX* fx);
 
 #endif // _PROBE_H_

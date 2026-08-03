@@ -154,16 +154,15 @@ void bind_reflection_probe(const ReflectionProbe* probe, ShaderProgram* program)
     glActiveTexture(GL_TEXTURE0);
 }
 
-// Flatten the reflection fallback (or its absence) into postfx's per-frame
-// uniform block. The hierarchy: an explicit probe wins; otherwise any
-// prefiltered environment serves as SSR's miss fallback. The second tier is
-// not optional polish -- a missed ray that composites to NOTHING prints
-// every reach limit (march distance, iteration budget, screen edge) onto a
-// glossy floor as a hard boundary between reflection and void, where a
-// fallback turns the same boundary into a soft content transition the eye
-// reads as roughness.
-void reflection_probe_publish_to_postfx(const ReflectionProbe* probe, const IBLResources* ibl,
-                                        PostFX* fx) {
+// Flatten the probe (or its absence) into postfx's per-frame uniform block.
+// Deliberately NO environment tier on probe-less scenes: publishing the IBL
+// prefilter as the miss fallback was built and rejected -- SSR only shades
+// the shadow catcher, and an invisible catcher that mirrors the sky over a
+// darker background prints as a glowing pool the size of its quad. The
+// environment answer is only right when a probe's parallax box re-grounds
+// it; a probe-less miss stays empty and the march's own fades hide the
+// reach limits.
+void reflection_probe_publish_to_postfx(const ReflectionProbe* probe, PostFX* fx) {
     if (!fx)
         return;
 
@@ -175,21 +174,8 @@ void reflection_probe_publish_to_postfx(const ReflectionProbe* probe, const IBLR
         memcpy(fx->probe_box_max, probe->box_max, sizeof(vec3));
         fx->probe_max_lod = probe->max_lod;
         fx->probe_intensity = probe->intensity;
-        return;
+    } else {
+        fx->probe_enabled = false;
+        fx->probe_cubemap = 0;
     }
-    if (ibl && ibl->precomputed && ibl->prefilter_map) {
-        fx->probe_enabled = true;
-        fx->probe_cubemap = ibl->prefilter_map;
-        glm_vec3_zero(fx->probe_pos);
-        // A huge (finite -- an infinite t would NaN the zero components of
-        // the ray) proxy box collapses the parallax correction to the raw
-        // direction: the right answer for an environment at infinity.
-        glm_vec3_fill(fx->probe_box_min, -1e6f);
-        glm_vec3_fill(fx->probe_box_max, 1e6f);
-        fx->probe_max_lod = ibl->max_reflection_lod;
-        fx->probe_intensity = ibl->intensity;
-        return;
-    }
-    fx->probe_enabled = false;
-    fx->probe_cubemap = 0;
 }

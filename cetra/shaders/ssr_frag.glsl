@@ -235,6 +235,7 @@ void main()
     bool hit = false;
     float sHit = 0.0;
     vec2 hitUV = vec2(0.0);
+    int itersUsed = 0;
 
     // Hi-Z traversal: walk the min-depth pyramid, skipping whole cells at
     // coarse levels and descending wherever the ray's z-span reaches behind
@@ -269,6 +270,7 @@ void main()
     float t = max(tSkip, 0.0) + tEps;
 
     for (int i = 0; i < marchBudget; i++) {
+        itersUsed = i;
         vec3 p = seg0 + dseg * t;
         if (t >= 1.0 || p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0 || p.z <= 0.0 ||
             p.z >= 1.0) {
@@ -385,13 +387,20 @@ void main()
     }
 
     // Fades: screen-edge (information runs out), Fresnel (glossy coating,
-    // F0 = 0.1), roughness tail, and march distance.
+    // F0 = 0.1), roughness tail, march distance, and iteration budget. The
+    // budget fade is what keeps exhaustion invisible: a column whose ray
+    // dies unhit composites nothing, so without it the neighbouring column
+    // that hit on its LAST iterations keeps mid-strength weight and the
+    // frontier between them prints as a hard cut across the reflection.
+    // Fading hits by budget consumed makes both sides of that frontier
+    // meet at zero.
     vec2 edge = min(hitUV, 1.0 - hitUV);
     float edgeFade = smoothstep(0.0, 0.1, min(edge.x, edge.y));
     float NdotV = max(dot(n, -viewDir), 0.0);
     float fresnel = 0.1 + 0.9 * pow(clamp(1.0 - NdotV, 0.0, 1.0), 5.0);
     float roughnessFade = 1.0 - smoothstep(0.5 * maxRoughness, maxRoughness, floorRoughness);
     float distFade = 1.0 - clamp(sHit, 0.0, 1.0);
+    float budgetFade = 1.0 - smoothstep(0.75, 1.0, float(itersUsed) / float(marchBudget));
 
     // Premultiplied (color * weight, weight) for a lerp composite: a dark
     // reflection must DARKEN the bright floor, which additive blending
@@ -399,7 +408,8 @@ void main()
     // premultiplied pair stays consistent (strength > 1 saturates toward a
     // full mirror instead of decoupling color from coverage). The sampled
     // color is clamped — HDR spikes read as white discs after upsampling.
-    float weight = clamp(edgeFade * fresnel * roughnessFade * distFade * strength, 0.0, 1.0);
+    float weight =
+        clamp(edgeFade * fresnel * roughnessFade * distFade * budgetFade * strength, 0.0, 1.0);
     vec3 reflection = min(texture(hdrTex, hitUV).rgb, vec3(WS_REFLECT_MAX));
     // Partial fades (screen edge, march distance) blend toward the probe
     // instead of toward nothing — premultiplied "SSR over probe". The probe
