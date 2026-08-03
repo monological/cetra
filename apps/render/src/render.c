@@ -124,6 +124,8 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --sky-debug        Blit the sky LUTs into the frame corner\n");
     fprintf(stderr, "      --clouds           Volumetric cloud layer (implies --sky)\n");
     fprintf(stderr, "      --cloud-coverage <f> Cloud sky fraction 0..1 (implies --clouds)\n");
+    fprintf(stderr, "      --cloud-density <f>  Cloud extinction scale (implies --clouds)\n");
+    fprintf(stderr, "      --cloud-wind <kmh[,deg]> Cloud drift (implies --clouds)\n");
     fprintf(stderr, "      --sun-elevation <d> Sky sun elevation in degrees (implies --sky)\n");
     fprintf(stderr, "      --sun-azimuth <d>  Sky sun azimuth in degrees (implies --sky)\n");
     fprintf(stderr,
@@ -231,7 +233,10 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->shadow_softness = -1.0f;      // -1 = keep the engine default
     args->auto_exposure_override = -1;  // -1 = unset; an authored exposure then pins
     args->sun_elevation = -999.0f; // -999 = keep the sky default
-    args->cloud_coverage = -1.0f;  // -1 = keep the engine default
+    args->cloud_coverage = -1.0f; // -1 = keep the engine default
+    args->cloud_density = -1.0f;
+    args->cloud_wind_kmh = -1.0f;
+    args->cloud_wind_deg = -1.0f;
     args->sun_azimuth = -999.0f;
     args->world_scale = -1.0f; // -1 = keep the sky's default (1 unit = 1 metre)
     args->bloom_enable = -1;        // -1 = keep the engine default
@@ -521,6 +526,25 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 return -1;
             }
             args->cloud_coverage = (float)atof(argv[i]);
+            args->clouds = 1;
+            args->sky = 1;
+        } else if (strcmp(argv[i], "--cloud-density") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: --cloud-density requires a value\n");
+                return -1;
+            }
+            args->cloud_density = (float)atof(argv[i]);
+            args->clouds = 1;
+            args->sky = 1;
+        } else if (strcmp(argv[i], "--cloud-wind") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: --cloud-wind requires kmh[,deg]\n");
+                return -1;
+            }
+            args->cloud_wind_kmh = (float)atof(argv[i]);
+            const char* comma = strchr(argv[i], ',');
+            if (comma)
+                args->cloud_wind_deg = (float)atof(comma + 1);
             args->clouds = 1;
             args->sky = 1;
         } else if (strcmp(argv[i], "--sky-debug") == 0) {
@@ -1772,6 +1796,12 @@ int main(int argc, char** argv) {
             sky->clouds.enabled = args.clouds != 0;
             if (args.cloud_coverage >= 0.0f)
                 sky->clouds.coverage = args.cloud_coverage;
+            if (args.cloud_density >= 0.0f)
+                sky->clouds.density = args.cloud_density;
+            if (args.cloud_wind_kmh >= 0.0f)
+                sky->clouds.wind_speed_kmh = args.cloud_wind_kmh;
+            if (args.cloud_wind_deg >= 0.0f)
+                sky->clouds.wind_dir_deg = args.cloud_wind_deg;
             sky_update_sun_dir(sky);
         }
         if (sky && ibl && sky_bake_static_luts(sky, engine) == 0 &&

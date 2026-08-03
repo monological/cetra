@@ -18,6 +18,7 @@ uniform vec3 sunDir;
 uniform float coverage;
 uniform float cloudType;
 uniform float densityScale;
+uniform vec3 windOffsetKm; // accumulated drift (sky_clouds.c owns the clock)
 uniform int steps;
 uniform int lightSteps;
 uniform int debugShell; // 1 = shell entry/exit distances as color (R5 probe)
@@ -63,7 +64,7 @@ void main()
 
     vec4 result = cloud_march(camPosKm, rd, sunDir, shapeTex, detailTex, transmittanceLut,
                               skyViewLut, steps, lightSteps, true, coverage, cloudType,
-                              densityScale, vec3(0.0), dither);
+                              densityScale, windOffsetKm, dither);
 
     if (temporal == 1) {
         // Fetch history where this ray direction fell last frame. In front

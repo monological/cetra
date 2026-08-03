@@ -1,3 +1,4 @@
+#include <math.h>
 #include <stdlib.h>
 
 #include "sky.h" // pulls GL/glew.h, which must precede GLFW's GL header
@@ -300,6 +301,14 @@ void sky_clouds_march(SkyAtmosphere* sky, struct Engine* engine, mat4 view, mat4
     uniform_set_int(um, "frameIndex", frame % 4096);
     uniform_set_mat4(um, "prevView", (float*)c->prev_view);
     uniform_set_vec2(um, "prevFocal", c->prev_focal);
+
+    // Drift: fixed-step headless (deterministic goldens), real delta live
+    c->scroll += engine->headless ? (1.0 / 60.0) : engine->render_delta;
+    float wind_kms = c->wind_speed_kmh / 3600.0f;
+    float wind_rad = c->wind_dir_deg * 0.01745329f;
+    vec3 wind_off = {sinf(wind_rad) * wind_kms * (float)c->scroll, 0.0f,
+                     cosf(wind_rad) * wind_kms * (float)c->scroll};
+    uniform_set_vec3(um, "windOffsetKm", wind_off);
 
     draw_fullscreen_quad(sky->quad_vao);
     c->march_valid = true;

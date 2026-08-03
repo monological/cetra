@@ -1611,6 +1611,29 @@ static void _engine_gui_panel(Engine* engine) {
             // sampleable throughout.
             if (sun_released)
                 gi_volume_mark_dirty(scene->gi_volume);
+
+            // Cloud layer (only offered once the noise fields exist). The
+            // screen march follows every slider live; the env/IBL copy
+            // updates on RELEASE like the sun (the with-clouds bake is the
+            // cost the drag path never pays). Wind re-bakes nothing -- the
+            // env cube holds a still of the deck by design.
+            if (sky->clouds.noise_baked) {
+                bool clouds_were_on = sky->clouds.enabled;
+                bool cloud_edit = false;
+                _begin_effect_group("Clouds", &sky->clouds.enabled);
+                igSliderFloat("Coverage", &sky->clouds.coverage, 0.0f, 1.0f, "%.2f", 0);
+                cloud_edit |= igIsItemDeactivatedAfterEdit();
+                igSliderFloat("Cloud Type", &sky->clouds.cloud_type, 0.0f, 1.0f, "%.2f", 0);
+                cloud_edit |= igIsItemDeactivatedAfterEdit();
+                igSliderFloat("Cloud Density", &sky->clouds.density, 0.1f, 3.0f, "%.2f", 0);
+                cloud_edit |= igIsItemDeactivatedAfterEdit();
+                igSliderFloat("Wind km/h", &sky->clouds.wind_speed_kmh, 0.0f, 300.0f, "%.0f", 0);
+                igSliderFloat("Wind Dir", &sky->clouds.wind_dir_deg, 0.0f, 360.0f, "%.0f", 0);
+                _end_effect_group();
+                bool toggled = clouds_were_on != sky->clouds.enabled;
+                if (toggled || (cloud_edit && sky->clouds.enabled))
+                    sky_bake_ex(sky, scene->ibl, engine, sky->clouds.enabled);
+            }
         }
 
         _begin_effect_group("Ground Projection", &scene->skybox_ground_projection);

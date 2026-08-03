@@ -61,6 +61,14 @@ typedef struct CloudLayer {
     float density;    // extinction scale on the march
     int debug_shell;  // 1 = march pass renders shell distances (R5 probe)
 
+    // Drift. The scroll accumulator advances once per march: a fixed 1/60
+    // when headless (goldens stay byte-deterministic -- the skeletal-
+    // animation clock model, never the wall clock that makes wind scenes
+    // unmeasurable), render_delta otherwise. Default speed 0 = still air.
+    float wind_speed_kmh;
+    float wind_dir_deg; // 0 = +Z, matching the sun azimuth convention
+    double scroll;      // accumulated drift time, seconds
+
     GLuint shape_tex;  // 128^3 RGBA8 tiling volume
     GLuint detail_tex; // 32^3  RGBA8 tiling volume
     bool noise_baked;

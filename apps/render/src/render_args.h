@@ -64,6 +64,9 @@ typedef struct {
     int sky_debug;              // Blit the sky LUTs into the frame corner
     int clouds;                 // Volumetric cloud layer (implies --sky)
     float cloud_coverage;       // 0..1; negative = keep the engine default
+    float cloud_density;        // extinction scale; negative = default
+    float cloud_wind_kmh;       // drift speed; negative = default (still)
+    float cloud_wind_deg;       // drift direction; negative = default
     float sun_elevation;        // Sky sun elevation in degrees (-999 = default)
     float sun_azimuth;          // Sky sun azimuth in degrees (-999 = default)
     float world_scale;          // World units per km for the atmosphere (-1 = default)
