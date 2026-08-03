@@ -89,7 +89,8 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --ssao-debug       Show the raw SSAO buffer\n");
     fprintf(stderr,
             "      --no-spec-occlusion Let GTAO darken specular (disable spec-occlusion)\n");
-    fprintf(stderr, "      --bent-spec-occ    Directional spec-occlusion from the bent normal\n");
+    fprintf(stderr,
+            "      --spec-occ <m>     Specular occlusion: off, legacy, bent (default: bent)\n");
     fprintf(stderr, "      --spec-occ-debug   Show the AO visibility the scene multiplies by\n");
     fprintf(stderr, "      --bent-debug       Show the bent normal from the AO chain\n");
     fprintf(stderr, "      --no-ao-edge-filter Disable the depth-aware AO blur\n");
@@ -246,6 +247,7 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->cloud_wind_deg = -1.0f;
     args->sun_azimuth = -999.0f;
     args->world_scale = -1.0f; // -1 = keep the sky's default (1 unit = 1 metre)
+    args->spec_occ_mode = -1;  // -1 = keep the engine default
     args->import_scale = 1.0f; // 1 = none
     args->bloom_enable = -1;        // -1 = keep the engine default
     args->bloom_strength = -1.0f;   // -1 = keep the engine default
@@ -475,8 +477,21 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->ssao_debug = 1;
         } else if (strcmp(argv[i], "--no-spec-occlusion") == 0) {
             args->no_spec_occlusion = 1;
-        } else if (strcmp(argv[i], "--bent-spec-occ") == 0) {
-            args->bent_spec_occ = 1;
+        } else if (strcmp(argv[i], "--spec-occ") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            if (strcmp(argv[i], "off") == 0) {
+                args->spec_occ_mode = POSTFX_SPEC_OCC_OFF;
+            } else if (strcmp(argv[i], "legacy") == 0) {
+                args->spec_occ_mode = POSTFX_SPEC_OCC_LEGACY;
+            } else if (strcmp(argv[i], "bent") == 0) {
+                args->spec_occ_mode = POSTFX_SPEC_OCC_BENT;
+            } else {
+                fprintf(stderr, "Error: --spec-occ expects off, legacy, or bent\n");
+                return -1;
+            }
         } else if (strcmp(argv[i], "--spec-occ-debug") == 0) {
             args->spec_occ_debug = 1;
         } else if (strcmp(argv[i], "--bent-debug") == 0) {
@@ -1558,8 +1573,8 @@ int main(int argc, char** argv) {
     if (args.no_spec_occlusion && engine->postfx) {
         engine->postfx->spec_occlusion_mode = POSTFX_SPEC_OCC_OFF;
     }
-    if (args.bent_spec_occ && engine->postfx) {
-        engine->postfx->spec_occlusion_mode = POSTFX_SPEC_OCC_BENT;
+    if (args.spec_occ_mode >= 0 && engine->postfx) {
+        engine->postfx->spec_occlusion_mode = args.spec_occ_mode;
     }
     if (args.no_ao_edge_filter && engine->postfx) {
         engine->postfx->ao_edge_filter_enabled = false;

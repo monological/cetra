@@ -171,29 +171,38 @@ vec3 toneSelect(vec3 c)
 //
 // Mode 0 returns raw ao -> byte-identical to the pre-feature path.
 //
+// The AO chain's bent normal is a low-order estimate -- two slices, half
+// res, one blur -- so its direction is good to some degrees, not to a
+// degree. This is the angular width the visibility edge is softened over,
+// and it is what keeps the term from resolving that estimate more finely
+// than it was ever measured.
+const float VIS_EDGE_SOFTNESS = 0.25;
+
 // How much of cone B is inside cone A, as a fraction of B's solid angle:
-// the spherical-cap lens (Oat & Sander 2007), exact at both ends and
-// smoothstep-fitted between them. Solid angle of a half-angle-t cone is
-// 2*PI*(1 - cos t), which is where the containment ratio comes from.
+// the spherical-cap lens (Oat & Sander 2007). Solid angle of a half-angle-t
+// cone is 2*PI*(1 - cos t), which is where the containment ratio comes from.
+//
+// Written branchlessly, which is not a micro-optimisation -- it is the
+// correctness requirement. The geometric transition band |a-b| < d < a+b has
+// half-width min(a, b), and a mirror lobe drives b to zero: the band closes
+// completely and the exact function becomes a STEP at d == a. Fed a bent
+// normal quantised to 8 bits, a step prints its own contour lines onto every
+// smooth surface, and no amount of input precision removes them -- it only
+// makes the contour thinner. So the band takes a floor, and both endpoints
+// are expressed as one clamped interpolation.
 float coneOverlap(float cosA, float cosB, float cosBetween)
 {
     float a = acos(clamp(cosA, -1.0, 1.0));
     float b = acos(clamp(cosB, -1.0, 1.0));
     float d = acos(clamp(cosBetween, -1.0, 1.0));
-    // Value once one cone is fully inside the other: all of B when A is the
-    // wider, else only A's share of it.
-    float contained = a >= b ? 1.0 : (1.0 - cosA) / max(1.0 - cosB, 1e-4);
-    if (d <= abs(a - b))
-        return contained;
-    if (d >= a + b)
-        return 0.0; // disjoint
-    // Between: 0 as the caps separate, `contained` as one swallows the other.
-    // The clamp is load-bearing, not defensive. The band between the two
-    // cases has width a + b - |a - b| = 2*min(a, b), which goes to zero for a
-    // mirror lobe -- and a projected environment dome reports exactly that.
-    // Unclamped, x then leaves [0,1] by orders of magnitude and the cubic
-    // returns a multiplier that paints steps across the background.
-    float x = clamp((a + b - d) / max(2.0 * min(a, b), 1e-4), 0.0, 1.0);
+    // Value once one cap swallows the other: all of B when A is the wider,
+    // else only A's share of it. Continuous at a == b, so min() is the whole
+    // case split.
+    float contained = min(1.0, (1.0 - cosA) / max(1.0 - cosB, 1e-4));
+    // The band is centred on max(a, b) with half-width min(a, b) -- exact
+    // where the geometry has width to spare, floored where it does not.
+    float half_band = max(min(a, b), VIS_EDGE_SOFTNESS);
+    float x = clamp((max(a, b) + half_band - d) / (2.0 * half_band), 0.0, 1.0);
     return contained * x * x * (3.0 - 2.0 * x);
 }
 
@@ -238,10 +247,19 @@ float aoVisibility()
         float cosAs = exp2(-3.321928 * aux.w * aux.w);
         vec3 bentN = normalize(texture(aoTex, TexCoords).gba * 2.0 - 1.0);
         vec3 R = reflect(-V, N);
+        float visible = coneOverlap(cosAv, cosAs, dot(bentN, R));
+        // Measured against the SAME lobe under an open hemisphere, because a
+        // reflection cone always hangs partly below its own horizon and the
+        // BRDF has already zeroed that half. Without the reference the term
+        // charges the lobe for geometry that was never there, and even a
+        // fully unoccluded surface -- open ground, a distant landscape --
+        // comes back darkened.
+        float open = coneOverlap(0.0, cosAs, dot(bentN, R));
+        float so = open > 1e-4 ? clamp(visible / open, 0.0, 1.0) : 1.0;
         // Same weight as legacy, different destination: legacy hands the
         // specular share a blanket 1.0 (unoccluded in every direction), this
         // hands it the share of its own lobe that points somewhere visible.
-        return mix(ao, coneOverlap(cosAv, cosAs, dot(bentN, R)), specWeight);
+        return mix(ao, so, specWeight);
     }
 
     return mix(ao, 1.0, specWeight);
