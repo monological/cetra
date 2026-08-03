@@ -70,6 +70,8 @@ typedef struct {
     float sun_elevation;        // Sky sun elevation in degrees (-999 = default)
     float sun_azimuth;          // Sky sun azimuth in degrees (-999 = default)
     float world_scale;          // World units per km for the atmosphere (-1 = default)
+    int no_unit_scale;          // Skip import unit normalization (raw file units)
+    float import_scale;         // Extra uniform scale on top of unit normalization (1 = none)
     int no_aerial;              // Disable aerial perspective (on by default with --sky)
     int sky_rebake_stress;      // Diagnostic: N headless sun re-bakes then restore
     int fog;                    // Enable volumetric fog

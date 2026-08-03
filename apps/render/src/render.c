@@ -164,6 +164,9 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --fog-anisotropy <f> Fog scatter anisotropy -1..1 (implies --fog)\n");
     fprintf(stderr, "      --ibl-intensity <f>  Environment light strength (default: engine)\n");
     fprintf(stderr, "      --no-scene-file    Ignore any .cscn scene file (model loads bare)\n");
+    fprintf(stderr, "      --import-scale <f> Extra uniform scale on the imported model\n");
+    fprintf(stderr,
+            "      --no-unit-scale    Skip unit normalization (raw file units; FBX is cm)\n");
     fprintf(stderr,
             "      --tonemap <m>      Tonemap mode: aces, neutral, agx (default: neutral)\n");
     fprintf(stderr,
@@ -239,6 +242,7 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->cloud_wind_deg = -1.0f;
     args->sun_azimuth = -999.0f;
     args->world_scale = -1.0f; // -1 = keep the sky's default (1 unit = 1 metre)
+    args->import_scale = 1.0f; // extra multiplier on the import unit scale
     args->bloom_enable = -1;        // -1 = keep the engine default
     args->bloom_strength = -1.0f;   // -1 = keep the engine default
     args->bloom_threshold = -1.0f;  // -1 = keep the engine default
@@ -575,6 +579,18 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 return -1;
             }
             args->sky = 1;
+        } else if (strcmp(argv[i], "--import-scale") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->import_scale = (float)atof(argv[i]);
+            if (args->import_scale <= 0.0f) {
+                fprintf(stderr, "Error: --import-scale must be positive\n");
+                return -1;
+            }
+        } else if (strcmp(argv[i], "--no-unit-scale") == 0) {
+            args->no_unit_scale = 1;
         } else if (strcmp(argv[i], "--no-aerial") == 0) {
             args->no_aerial = 1;
         } else if (strcmp(argv[i], "--sky-rebake-stress") == 0) {
@@ -1740,6 +1756,13 @@ int main(int argc, char** argv) {
 
     if (args.no_flip_uv)
         set_import_flip_uvs(false);
+    if (args.no_unit_scale) {
+        set_import_unit_scale(false);
+        if (args.import_scale != 1.0f)
+            fprintf(stderr, "Warning: --import-scale has no effect with --no-unit-scale\n");
+    } else if (args.import_scale != 1.0f) {
+        set_import_scale_multiplier(args.import_scale);
+    }
     // The importer defaults the texture dir to the model's own directory when
     // none is given (so an external-texture glTF like the POM fixture loads
     // without -t), so just pass args.texture_dir through.
