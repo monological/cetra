@@ -55,9 +55,9 @@ void main()
     float dither = ign(gl_FragCoord.xy +
                        (temporal == 1 ? vec2(float(frameIndex) * 5.588238) : vec2(0.0)));
 
-    vec4 result = cloud_march(vec3(0.0, camAltKm, 0.0), rd, sunDir, shapeTex, detailTex,
-                              transmittanceLut, skyViewLut, MARCH_STEPS, MARCH_LIGHT_STEPS, true,
-                              coverage, cloudType, densityScale, windOffsetKm, dither);
+    vec4 result = cloud_march(camAltKm, rd, sunDir, shapeTex, detailTex, transmittanceLut,
+                              skyViewLut, MARCH_STEPS, MARCH_LIGHT_STEPS, true, coverage,
+                              cloudType, densityScale, windOffsetKm, dither);
 
     if (temporal == 1) {
         // Fetch history where this ray direction fell last frame. In front

@@ -31,9 +31,9 @@ void main()
         // Env tier: 24 steps, 4 light taps, no detail erosion -- the cube
         // is 256^2 and feeds convolutions, so shape matters and texture
         // detail does not. Fixed mid-face dither (no screen pixels here).
-        vec4 cloud = cloud_march(vec3(0.0, VIEW_ALTITUDE, 0.0), dir, sunDir, shapeTex, detailTex,
-                                 transmittanceLut, skyViewLut, 24, 4, false, coverage, cloudType,
-                                 densityScale, vec3(0.0), 0.5);
+        vec4 cloud = cloud_march(VIEW_ALTITUDE, dir, sunDir, shapeTex, detailTex, transmittanceLut,
+                                 skyViewLut, 24, 4, false, coverage, cloudType, densityScale,
+                                 vec3(0.0), 0.5);
         FragColor = vec4(sky * cloud.a + cloud.rgb, 1.0);
         return;
     }

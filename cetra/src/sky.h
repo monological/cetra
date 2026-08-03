@@ -191,10 +191,12 @@ int sky_bake_static_luts(SkyAtmosphere* sky, struct Engine* engine);
 // Sun- and coverage-independent: never re-baked after this.
 int sky_bake_cloud_noise(SkyAtmosphere* sky);
 
-// March the cloud shell for this frame's camera into the half-res target
-// (sky_clouds.c). Runs in the pre-scene window -- before the main FBO
-// binds -- because the background pass samples the result mid-scene.
-// No-op unless clouds are enabled and the noise is baked.
+// March the cloud shell into the half-res target (sky_clouds.c). Call once
+// per frame with the SAME view/projection the sky background will
+// composite with -- a camera latched anywhere earlier in the frame is one
+// app-update stale, which turns the temporal reprojection into an identity
+// map. Binds its own FBO and restores the caller's GL state; no-op unless
+// clouds are enabled and the noise is baked.
 void sky_clouds_march(SkyAtmosphere* sky, struct Engine* engine, mat4 view, mat4 projection);
 
 // Re-bake everything the sun drives: sky-view LUT -> environment cubemap

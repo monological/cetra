@@ -1804,8 +1804,13 @@ int main(int argc, char** argv) {
                 sky->clouds.wind_dir_deg = args.cloud_wind_deg;
             sky_update_sun_dir(sky);
         }
+        // A cloud-noise failure costs the clouds, never the sky (the march
+        // FBO failure path inside the subsystem makes the same trade)
+        if (sky && sky_bake_cloud_noise(sky) != 0) {
+            fprintf(stderr, "Cloud noise bake failed; continuing without clouds\n");
+            sky->clouds.enabled = false;
+        }
         if (sky && ibl && sky_bake_static_luts(sky, engine) == 0 &&
-            sky_bake_cloud_noise(sky) == 0 && // self-gated; before the env bake
             sky_bake_ex(sky, ibl, engine, sky->clouds.enabled) == 0) {
             sky->debug_luts = args.sky_debug != 0;
             scene->sky = sky;

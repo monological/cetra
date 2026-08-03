@@ -711,16 +711,13 @@ void render_current_scene(Engine* engine) {
     // projection the depth was actually rasterized with
     glm_mat4_copy(draw_projection, engine->draw_projection);
 
-    // Cloud shell march for THIS frame's camera (spec 11.0). It runs inside
-    // the scene render, not the engine's pre-scene window, because it must
-    // see the exact view the sky background below composites with -- a
-    // camera latched anywhere earlier in the frame is one app-update stale,
-    // which turns the march's temporal reprojection into an identity map
-    // and echoes the deck across the screen during pans. Marches into its
-    // own FBO and restores the scene bindings; never during captures (the
-    // march texture belongs to the main camera). Unjittered projection, the
-    // aerial/froxel discipline.
-    if (scene->sky && !engine->capturing) {
+    // Cloud shell march (spec 11.0), inside the scene render so it sees
+    // this frame's actual camera (the sky_clouds_march contract). Never
+    // during captures (the march texture belongs to the main camera) and
+    // only when the PBR skybox slot below will consume it -- debug render
+    // modes would march, advance the wind clock, and discard the result.
+    // Unjittered projection, the aerial/froxel discipline.
+    if (scene->sky && !engine->capturing && render_mode == RENDER_MODE_PBR) {
         sky_clouds_march(scene->sky, engine, *view, *projection);
     }
 

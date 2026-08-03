@@ -1406,9 +1406,6 @@ static void _light_gui_label(char* out, size_t out_size, const Light* light, int
         snprintf(out, out_size, "%d: %s", index, light_type_name(light->type));
 }
 
-// The main settings panel, in Dear ImGui. Sections are collapsing headers;
-// effect on/off states are checkboxes and their parameters appear indented
-// beneath them. Bound directly to the same engine/scene/postfx fields.
 // The one "environment changed on release" chain, shared by the sun sliders
 // and the cloud controls so the downstream consumers cannot drift apart:
 // re-bake the env WITH clouds when the layer is on (the per-drag path never
@@ -1421,7 +1418,9 @@ static void _light_gui_label(char* out, size_t out_size, const Light* light, int
 // the probe it does not stall (spread over following frames at `rate`, old
 // atlas sampleable throughout).
 static void _sky_release_rebake(Engine* engine, Scene* scene, SkyAtmosphere* sky) {
-    if (sky->clouds.enabled || sky->clouds.noise_baked)
+    // Clouds existed this session -> the env may need the deck added or
+    // purged (enabled implies noise_baked on every reachable path).
+    if (sky->clouds.noise_baked)
         sky_bake_ex(sky, scene->ibl, engine, sky->clouds.enabled);
     if (scene->probe) {
         if (scene->probe->cubemap == 0)
@@ -1432,6 +1431,9 @@ static void _sky_release_rebake(Engine* engine, Scene* scene, SkyAtmosphere* sky
     gi_volume_mark_dirty(scene->gi_volume);
 }
 
+// The main settings panel, in Dear ImGui. Sections are collapsing headers;
+// effect on/off states are checkboxes and their parameters appear indented
+// beneath them. Bound directly to the same engine/scene/postfx fields.
 static void _engine_gui_panel(Engine* engine) {
     Camera* camera = engine->camera;
     igSetNextWindowPos((ImVec2){15, 15}, ImGuiCond_FirstUseEver, (ImVec2){0, 0});

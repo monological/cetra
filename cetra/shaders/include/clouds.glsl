@@ -3,21 +3,23 @@
 // shaped by the CPU-baked tiling noise fields (sky_clouds.c) and lit by the
 // transmittance LUT sun with a dual-lobe HG phase and a powder term.
 //
-// Everything is in KILOMETERS in a camera-relative planet frame: the ray
-// origin sits at altitude obsAltKm on the +Y axis, the planet centre at
-// (0, -(Rg + obsAltKm), 0). Keeping the origin at the camera and radii as
-// differences is what keeps fp32 alive at horizon distances (Rg is 6360 --
-// absolute positions near the shell would eat the whole mantissa).
+// Everything is in KILOMETERS in a deck-anchored frame: the ray origin at
+// (0, obsAltKm, 0), the planet centre Rg + obsAltKm straight below it.
+// Working in radii-as-differences keeps fp32 alive at horizon distances
+// (Rg is 6360 -- absolute positions near the shell would eat the whole
+// mantissa), and the on-axis origin makes every shell intersection a
+// scalar (r0, mu, R) problem.
 //
-// The deck is anchored to the camera HORIZONTALLY: callers pass an origin
-// with zero xz, so camera translation produces no cloud parallax and only
-// the wind offset moves the field. The physical alternative was built and
-// rejected on sight: a shell 1.5-4 km up sweeps across a third of the sky
-// when the camera orbits a kilometre sideways, while the terrain 20-95 km
-// out barely moves -- physically right, visually wrong against a distant
-// vista. Anchoring also makes the ray-direction temporal reprojection
-// exact under ALL camera motion, not just rotation. Altitude still
-// matters: climbing toward the shell behaves normally.
+// The deck is anchored to the camera HORIZONTALLY by construction: the
+// march takes only an altitude, so camera translation cannot produce
+// cloud parallax and only the wind offset moves the field. The physical
+// alternative was built and rejected on sight: a shell 1.5-4 km up sweeps
+// across a third of the sky when the camera orbits a kilometre sideways,
+// while the terrain 20-95 km out barely moves -- physically right,
+// visually wrong against a distant vista. Anchoring also makes the
+// ray-direction temporal reprojection exact under ALL camera motion, not
+// just rotation. Altitude still matters: climbing toward the shell
+// behaves normally.
 //
 // Returns (in-scattered radiance, transmittance), radiance ABSOLUTE (the
 // env cube's convention -- the screen composite applies preExposure, the
@@ -89,14 +91,16 @@ float cloudDensity(vec3 posKm, float heightFrac, sampler3D shapeTex, sampler3D d
     return d;
 }
 
-// Nearest positive distance along the ray to the sphere of radius R around
-// `centre`, or -1. Stable quadratic (the q form): at grazing incidence the
-// textbook -b +/- sqrt(disc) cancels catastrophically at Rg scale.
-float cloudSphereNear(vec3 ro, vec3 rd, vec3 centre, float R)
+// Nearest positive distance to the sphere of radius R around the planet
+// centre, from an on-axis origin at radius r0 with radial direction cosine
+// mu, or -1. Stable quadratic (the q form): at grazing incidence the
+// textbook -b +/- sqrt(disc) cancels catastrophically at Rg scale (the
+// atmosphere helpers keep the textbook form; they never run the shell's
+// grazing geometry).
+float cloudSphereNear(float r0, float mu, float R)
 {
-    vec3 oc = ro - centre;
-    float b = dot(oc, rd);
-    float c = dot(oc, oc) - R * R;
+    float b = r0 * mu;
+    float c = r0 * r0 - R * R;
     float disc = b * b - c;
     if (disc < 0.0)
         return -1.0;
@@ -108,25 +112,23 @@ float cloudSphereNear(vec3 ro, vec3 rd, vec3 centre, float R)
     return tn > 0.0 ? tn : (tf > 0.0 ? tf : -1.0);
 }
 
-vec4 cloud_march(vec3 roKm, vec3 rd, vec3 sunDir, sampler3D shapeTex, sampler3D detailTex,
+vec4 cloud_march(float obsAltKm, vec3 rd, vec3 sunDir, sampler3D shapeTex, sampler3D detailTex,
                  sampler2D transmittanceLut, sampler2D skyViewLut, int steps, int lightSteps,
                  bool detailOn, float coverage, float cloudType, float densityScale,
                  vec3 windOffsetKm, float dither)
 {
-    float obsAlt = max(roKm.y, VIEW_ALTITUDE);
-    // Planet centre Rg+alt straight below the camera: the local flat-earth
-    // radial axis, so ro - centre is exactly (0, Rg+obsAlt, 0) and the
-    // radial cosine is just rd.y.
-    vec3 centre = vec3(roKm.x, roKm.y - (Rg + obsAlt), roKm.z);
+    float obsAlt = max(obsAltKm, VIEW_ALTITUDE);
     float r0 = Rg + obsAlt;
+    vec3 ro = vec3(0.0, obsAlt, 0.0);
+    vec3 centre = vec3(0.0, -Rg, 0.0);
 
     // Below-horizon rays belong to the ground (real terrain via the depth
     // test, the virtual floor otherwise) -- never to the shell's far side.
     if (hitsGround(r0, rd.y))
         return vec4(0.0, 0.0, 0.0, 1.0);
 
-    float tIn = cloudSphereNear(roKm, rd, centre, Rg + CLOUD_BOTTOM_KM);
-    float tOut = cloudSphereNear(roKm, rd, centre, Rg + CLOUD_TOP_KM);
+    float tIn = cloudSphereNear(r0, rd.y, Rg + CLOUD_BOTTOM_KM);
+    float tOut = cloudSphereNear(r0, rd.y, Rg + CLOUD_TOP_KM);
     if (tOut < 0.0)
         return vec4(0.0, 0.0, 0.0, 1.0);
     if (tIn < 0.0)
@@ -166,7 +168,7 @@ vec4 cloud_march(vec3 roKm, vec3 rd, vec3 sunDir, sampler3D shapeTex, sampler3D 
 
     for (int i = 0; i < steps; i++) {
         float t = tIn + (float(i) + dither) * dt;
-        vec3 pos = roKm + rd * t;
+        vec3 pos = ro + rd * t;
         float alt = length(pos - centre) - Rg;
         float hf = cloudHeightFrac(alt);
 
