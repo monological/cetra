@@ -2360,14 +2360,6 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EngineRenderFunc render
             render_shadow_depth_pass(engine, shadow_scene);
         }
 
-        // Cloud shell march for this frame's camera (spec 11.0): must land
-        // before the main FBO binds, because the sky background pass samples
-        // the result mid-scene. Self-gated on clouds being enabled + baked.
-        if (shadow_scene && shadow_scene->sky) {
-            sky_clouds_march(shadow_scene->sky, engine, engine->view_matrix,
-                             engine->projection_matrix);
-        }
-
         glBindFramebuffer(GL_FRAMEBUFFER, engine->framebuffer);
         // The scene target is supersampled; the present pass left the viewport
         // at display size, so set it to the full render size here.
