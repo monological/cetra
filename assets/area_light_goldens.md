@@ -5,7 +5,16 @@ Reference renders for `--area-light`. The sweep and backface goldens use
 a diffuse ground quad); the guard golden uses `assets/area_light_guard.gltf`
 (one sphere below the roughness floor). Both are written by
 `assets/gen_area_light_fixture.py`. In every image the panel is the only light
-in the frame:
+in the frame.
+
+All three were re-baked after a three-commit drift found by bisect (each
+deliberate, none re-baked at the time): e7aa468 removed the 3%-of-white
+ambient floor and moved the firefly clamp into the BRDF, abc9d0b added the
+per-fragment behind-the-winding test the LTC integrator always needed, and
+7ae16d0 fixed the fixture generators' inverted triangle winding -- the
+originals were baked from spheres showing their inside surface, over a
+ground quad that faced away from the camera and never rendered at all. The
+current goldens are the first with correct geometry.
 
 - No `-e <hdr>`: the fixture ships no lights of its own, and `--area-light` is
   spawned before the app decides whether to install a default rig, so the panel
@@ -30,9 +39,11 @@ in the frame:
 
 What to look for: a small, sharp reflection with recognisable rectangular
 structure on the left, broadening smoothly rightward into a near-uniform wash
-by 0.95, over otherwise dark bodies (there is no environment to reflect). A
-rotated or smeared rectangle at low roughness means the inverse-M
-reconstruction is transposed.
+by 0.95, on spheres diffusely lit by the panel, over a ground quad with a
+bright pool under the panel and contact shadows under the spheres. A rotated
+or smeared rectangle at low roughness means the inverse-M reconstruction is
+transposed; dark sphere faces toward the panel mean the behind-winding test
+or the fixture winding regressed.
 
 The sweep starts at 0.15, just above `LTC_MIN_ROUGHNESS` (0.12): below the
 floor every authored value shades identically, so a sweep entry there would be
@@ -45,9 +56,10 @@ version of this golden precisely because it was only ever reviewed small.
 
 ## backface_dark_golden.png
 
-Same command with the panel normal negated (`0,0.6,0.8`). Every sphere must be
-pure black: a panel lights only the half-space its direction points into. If
-anything is lit here, the single-sided plane test or the corner winding flipped.
+Same command with the panel normal negated (`0,0.6,0.8`). Every sphere and
+the ground must be pure black: a panel lights only the half-space its
+direction points into. If anything is lit here, the single-sided plane test
+or the corner winding flipped.
 
 ## guard_thin_panel_golden.png
 
