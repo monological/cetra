@@ -9,6 +9,13 @@ out vec4 FragColor;
 // -- the "dripping" streaks below contact shadows. Within a surface all 16 taps
 // share depth, the weights are ~uniform, and it degrades to the plain box so the
 // noise tile still cancels.
+//
+// Carries the AO chain's bent normal (.gba) through the same weights. It stays
+// ENCODED here: the encode is affine, so averaging encoded directions is the
+// encoding of the averaged direction, and one normalize at the consumer
+// recovers a unit vector from both this blur and the temporal blend. Shared
+// with the full-res contact-shadow denoise, whose R16F target keeps only .r --
+// which is why the .r sum below stays exactly the expression it was.
 uniform sampler2D aoTex;
 uniform sampler2D auxTex; // Aux G-buffer; .z = linear view-Z (< 0), 0 = sky
 uniform vec2 texelSize;
@@ -26,6 +33,7 @@ void main()
     float zc = texture(auxTex, TexCoords).z;
     float tol = max(0.05 * abs(zc), 0.02);
     float result = 0.0;
+    vec3 bentSum = vec3(0.0);
     float wsum = 0.0;
     for (int x = -2; x < 2; x++) {
         for (int y = -2; y < 2; y++) {
@@ -35,9 +43,11 @@ void main()
                 float dz = (texture(auxTex, TexCoords + offset).z - zc) / tol;
                 w = exp(-dz * dz);
             }
-            result += texture(aoTex, TexCoords + offset).r * w;
+            vec4 tap = texture(aoTex, TexCoords + offset);
+            result += tap.r * w;
+            bentSum += tap.gba * w;
             wsum += w;
         }
     }
-    FragColor = vec4(vec3(result / wsum), 1.0);
+    FragColor = vec4(result / wsum, bentSum / wsum);
 }

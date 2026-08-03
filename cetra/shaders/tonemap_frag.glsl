@@ -33,7 +33,7 @@ uniform sampler2D csTex;        // Contact-shadow visibility (spec 9.3), AO res
 uniform int csEnabled;          // Multiply the direct-light term by contact shadows
 uniform float csStrength;       // Contact-shadow darkening weight
 // Debug view dispatch (PostFXDebugView): 0=none, 1=AO, 2=normals, 3=SSR,
-// 4=albedo, 5=GI, 6=fog, 7=spec-occ AO, 8=contact shadows
+// 4=albedo, 5=GI, 6=fog, 7=spec-occ AO, 8=contact shadows, 9=bent normal
 uniform int debugView;
 // 1 = ACES, 2 = PBR Neutral, 3 = AgX (passthrough frames are blitted by
 // postfx_run and never reach this pass)
@@ -241,6 +241,15 @@ void main()
     if (debugView == 8) {
         // Contact-shadow visibility term before compositing (1 = lit)
         FragColor = vec4(vec3(texture(csTex, TexCoords).r), 1.0);
+        return;
+    }
+    if (debugView == 9) {
+        // Bent normal from the AO chain, re-encoded for display. Flat lit
+        // surfaces read as their own normal; a crevice tilts away from the
+        // occluder. Sky/hair (zero G-buffer normal) stay black.
+        vec3 nrm = texture(normalsTex, TexCoords).xyz;
+        vec3 bent = normalize(texture(aoTex, TexCoords).gba * 2.0 - 1.0);
+        FragColor = vec4(dot(nrm, nrm) > 0.001 ? bent * 0.5 + 0.5 : vec3(0.0), 1.0);
         return;
     }
 

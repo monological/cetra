@@ -98,9 +98,9 @@ typedef struct PostFX {
     GLuint depth_texture;
     GLuint normal_fbo; // Full-res resolved view-space normal .xyz + SSR marker .a
     GLuint normal_texture;
-    GLuint ssao_fbo[2]; // Half-res: [0] raw AO, [1] blurred AO
+    GLuint ssao_fbo[2]; // Half-res: [0] raw AO + bent normal, [1] blurred
     GLuint ssao_texture[2];
-    PingPong ao_history;    // Half-res temporal-AO accumulation (R16F)
+    PingPong ao_history;    // Half-res temporal-AO accumulation (RGBA16F)
     GLuint ssgi_gi_texture; // Half-res RGBA16F GI radiance, MRT attachment 1 on the GTAO FBO (SSGI)
     PingPong ssgi_history;  // Half-res temporal-GI accumulation (RGBA16F)
     PingPong ssgi_atrous;   // Half-res a-trous denoise ping-pong (RGBA16F)

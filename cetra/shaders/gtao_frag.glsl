@@ -84,8 +84,11 @@ void main()
     float zGrain = fwidth(linZ);
     if (linZ >= -1e-4) {
         // Sky / background: the aux buffer clears to 0 there (opaque geometry
-        // always has linear Z <= -near < 0). Fully unoccluded, no bounce.
-        AoOut = vec4(1.0);
+        // always has linear Z <= -near < 0). Fully unoccluded, no bounce. The
+        // bent normal is view-facing: the consumer's zero-normal guard returns
+        // before reading it, but the blur averages these texels at silhouettes
+        // and an unwritten channel there would be undefined.
+        AoOut = vec4(1.0, 0.5, 0.5, 1.0);
         GiOut = vec4(0.0);
         return;
     }
@@ -104,7 +107,7 @@ void main()
         // after TAA it never gets stabilised -- the jitter reshuffles the strands
         // each frame and the AO flickers. Skip these pixels; hair still receives
         // its baked material AO in the lighting pass.
-        AoOut = vec4(1.0);
+        AoOut = vec4(1.0, 0.5, 0.5, 1.0);
         GiOut = vec4(0.0);
         return;
     }
@@ -138,13 +141,16 @@ void main()
     // (the texel-snap phase cycles with perspective). Declare such pixels
     // unoccluded instead. noiseScale is ao-resolution / 4.
     if (screenRadius * 4.0 * max(noiseScale.x, noiseScale.y) < 1.0) {
-        AoOut = vec4(1.0);
+        // Declared unoccluded, and an unoccluded surface's average visible
+        // direction is its own normal.
+        AoOut = vec4(1.0, N * 0.5 + 0.5);
         GiOut = vec4(0.0);
         return;
     }
 
     float occlusion = 0.0;
-    vec3 gi = vec3(0.0); // one-bounce irradiance gathered from occluders (SSGI)
+    vec3 gi = vec3(0.0);   // one-bounce irradiance gathered from occluders (SSGI)
+    vec3 bent = vec3(0.0); // sum of the still-visible directions (bent normal)
     for (int s = 0; s < SLICES; s++) {
         float phi = (float(s) + sliceRot) * (PI / float(SLICES));
         vec2 dir = vec2(cos(phi), sin(phi));
@@ -223,10 +229,42 @@ void main()
             }
         }
         occlusion += float(popCount(bitfield)) / float(SECTOR_COUNT);
+
+        // Bent normal: the average of the directions still VISIBLE, i.e. the
+        // sectors this slice left unset. Sector k spans the hemisphere angles
+        // [hemiStart + k*dAng, +(k+1)*dAng], so its mid-direction is
+        // cos(t)*V + sin(t)*tangent -- and since V and tangent are constant
+        // across the slice, the whole sum collapses to two scalar sums.
+        //
+        // The (cos, sin) pair is stepped by a rotation recurrence rather than
+        // called per sector: a sincos in a 32-iteration loop, twice per pixel,
+        // is the one place this shader would pay real ALU for the bent normal,
+        // and fp32 drift over 32 steps of a fixed angle is ~1e-6.
+        float dAng = PI / float(SECTOR_COUNT);
+        float cd = cos(dAng);
+        float sd = sin(dAng);
+        float ca = cos(hemiStart + 0.5 * dAng);
+        float sa = sin(hemiStart + 0.5 * dAng);
+        float sumC = 0.0;
+        float sumS = 0.0;
+        for (uint k = 0u; k < SECTOR_COUNT; k++) {
+            if ((bitfield & (1u << k)) == 0u) {
+                sumC += ca;
+                sumS += sa;
+            }
+            float rc = ca * cd - sa * sd;
+            sa = sa * cd + ca * sd;
+            ca = rc;
+        }
+        bent += sumC * V + sumS * tangent;
     }
     occlusion /= float(SLICES);
     gi /= float(SLICES);
 
-    AoOut = vec4(vec3(1.0 - occlusion), 1.0); // visibility (1 = unoccluded)
-    GiOut = vec4(gi, 1.0);                    // gathered one-bounce radiance
+    // Fully occluded (or every slice degenerate) leaves no visible direction
+    // to average; the surface normal is the honest answer there.
+    vec3 bentN = dot(bent, bent) > 1e-8 ? normalize(bent) : N;
+
+    AoOut = vec4(1.0 - occlusion, bentN * 0.5 + 0.5); // visibility (1 = unoccluded) + bent normal
+    GiOut = vec4(gi, 1.0);                            // gathered one-bounce radiance
 }

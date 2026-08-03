@@ -406,16 +406,20 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
         free_postfx(fx);
         return NULL;
     }
+    // RGBA8, not R8: .r is the AO the whole chain has always read, .gba carry
+    // the bent normal encoded to [0,1]. 8 bits of a unit direction is ~0.5
+    // degrees after normalize, far finer than a 2-slice estimator resolves.
     for (int i = 0; i < 2; i++) {
-        if (!create_color_fbo(fx->ssao_width, fx->ssao_height, GL_R8, &fx->ssao_fbo[i],
+        if (!create_color_fbo(fx->ssao_width, fx->ssao_height, GL_RGBA8, &fx->ssao_fbo[i],
                               &fx->ssao_texture[i])) {
             free_postfx(fx);
             return NULL;
         }
     }
-    // Half-res temporal-AO accumulation ping-pong. R16F, not R8: an exponential
-    // feedback blend needs more than 256 levels to avoid banding as it converges.
-    if (!create_pingpong(fx->ssao_width, fx->ssao_height, GL_R16F, &fx->ao_history)) {
+    // Half-res temporal-AO accumulation ping-pong. Float, not 8-bit: an
+    // exponential feedback blend needs more than 256 levels to avoid banding as
+    // it converges.
+    if (!create_pingpong(fx->ssao_width, fx->ssao_height, GL_RGBA16F, &fx->ao_history)) {
         free_postfx(fx);
         return NULL;
     }
@@ -2225,6 +2229,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             (debug_view == POSTFX_DEBUG_ALBEDO && !albedo_written) ||
             (debug_view == POSTFX_DEBUG_SSGI && !ssgi_active) ||
             (debug_view == POSTFX_DEBUG_SPEC_OCC && !spec_occ_active) ||
+            (debug_view == POSTFX_DEBUG_BENT && !fx->ssao_enabled) ||
             (debug_view == POSTFX_DEBUG_CONTACT && !cs_active)) {
             static PostFXDebugView warned_view = POSTFX_DEBUG_NONE;
             if (warned_view != debug_view) {
