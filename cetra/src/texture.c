@@ -142,6 +142,27 @@ GLuint create_texture_3d_float(int width, int height, int depth, GLenum internal
     return tex;
 }
 
+// The tiling-volume entry point the note above reserves: RGBA8 pixels, REPEAT
+// on all three axes, trilinear mips (glGenerateMipmap after the level-0
+// upload -- still no glTexStorage3D on 4.1). For CPU-baked noise fields whose
+// coarser mips a marcher samples explicitly via textureLod.
+GLuint create_texture_3d_rgba8_tiling(int width, int height, int depth,
+                                      const unsigned char* pixels) {
+    GLuint tex = 0;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_3D, tex);
+    glTexImage3D(GL_TEXTURE_3D, 0, GL_RGBA8, width, height, depth, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                 pixels);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glGenerateMipmap(GL_TEXTURE_3D);
+    glBindTexture(GL_TEXTURE_3D, 0);
+    return tex;
+}
+
 void texture_gl_formats(int channels, bool is_srgb, GLenum* internal_format, GLenum* data_format) {
     if (channels == 1) {
         *internal_format = GL_RED;

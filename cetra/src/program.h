@@ -68,6 +68,8 @@ ShaderProgram* create_sky_env_program();
 ShaderProgram* create_sky_background_program();
 // Aerial-perspective volume, one draw per slice (spec 9.6)
 ShaderProgram* create_sky_aerial_program();
+// Cloud-noise volume slice inspector (spec 11.0)
+ShaderProgram* create_cloud_noise_debug_program();
 
 // Copies/resamples a 2D mask texture into a material-mask-array layer
 ShaderProgram* create_mask_copy_program();

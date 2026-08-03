@@ -51,6 +51,10 @@ void free_sky_atmosphere(SkyAtmosphere* sky) {
         glDeleteTextures(1, &sky->aerial_lut);
     if (sky->aerial_fbo)
         glDeleteFramebuffers(1, &sky->aerial_fbo);
+    if (sky->clouds.shape_tex)
+        glDeleteTextures(1, &sky->clouds.shape_tex);
+    if (sky->clouds.detail_tex)
+        glDeleteTextures(1, &sky->clouds.detail_tex);
     if (sky->quad_vao)
         glDeleteVertexArrays(1, &sky->quad_vao);
     if (sky->quad_vbo)
@@ -336,6 +340,7 @@ int sky_bake_static_luts(SkyAtmosphere* sky, struct Engine* engine) {
     sky->multiscatter_program = get_engine_shader_program_by_name(engine, "sky_multiscatter");
     sky->aerial_program = get_engine_shader_program_by_name(engine, "sky_aerial");
     sky->debug_program = get_engine_shader_program_by_name(engine, "sky_debug");
+    sky->cloud_noise_debug_program = get_engine_shader_program_by_name(engine, "cloud_noise_debug");
     if (!sky->transmittance_program || !sky->multiscatter_program || !sky->debug_program) {
         log_error("Failed to get sky LUT shader programs");
         return -1;
@@ -398,6 +403,20 @@ static void sky_debug_draw(SkyAtmosphere* sky, GLuint lut, int x, int y, int w, 
     glBindTexture(GL_TEXTURE_2D, lut);
     uniform_set_int(sky->debug_program->uniforms, "lut", 0);
     uniform_set_float(sky->debug_program->uniforms, "scale", scale);
+    draw_fullscreen_quad(sky->quad_vao);
+}
+
+// One mid-volume Z slice of a cloud-noise field, drawn as a corner tile the
+// same way sky_debug_draw shows the 2D LUTs.
+static void sky_debug_draw_noise(SkyAtmosphere* sky, GLuint volume, int channel, int x, int y,
+                                 int w, int h) {
+    glViewport(x, y, w, h);
+    glUseProgram(sky->cloud_noise_debug_program->id);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_3D, volume);
+    uniform_set_int(sky->cloud_noise_debug_program->uniforms, "noiseTex", 0);
+    uniform_set_float(sky->cloud_noise_debug_program->uniforms, "slice", 0.5f);
+    uniform_set_int(sky->cloud_noise_debug_program->uniforms, "channel", channel);
     draw_fullscreen_quad(sky->quad_vao);
 }
 
@@ -607,6 +626,17 @@ void sky_debug_blit_luts(SkyAtmosphere* sky, int screen_w, int screen_h) {
     if (sky->sky_view_lut) {
         int sw = SKY_VIEW_W * 2, sh = SKY_VIEW_H * 2;
         sky_debug_draw(sky, sky->sky_view_lut, 10, screen_h - 30 - th - mw - sh, sw, sh, 0.3f);
+    }
+
+    // Cloud-noise fields, mid-volume slices: the shape's Perlin-Worley above
+    // the detail field's first octave, in the column right of the LUTs.
+    if (sky->clouds.noise_baked && sky->cloud_noise_debug_program) {
+        int cx = 20 + tw;
+        int cw = SKY_CLOUD_SHAPE_SIZE * 2;
+        int dw = SKY_CLOUD_DETAIL_SIZE * 4;
+        sky_debug_draw_noise(sky, sky->clouds.shape_tex, 0, cx, screen_h - 10 - cw, cw, cw);
+        sky_debug_draw_noise(sky, sky->clouds.detail_tex, 0, cx, screen_h - 20 - cw - dw, dw, dw);
+        glBindTexture(GL_TEXTURE_3D, 0);
     }
 
     glViewport(prev_viewport[0], prev_viewport[1], prev_viewport[2], prev_viewport[3]);

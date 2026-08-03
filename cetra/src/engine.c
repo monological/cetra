@@ -1157,6 +1157,11 @@ static int _create_default_shaders_for_engine(Engine* engine) {
         add_shader_program_to_engine(engine, sky_aerial_program);
     }
 
+    ShaderProgram* cloud_noise_debug_program = create_cloud_noise_debug_program();
+    if (cloud_noise_debug_program) {
+        add_shader_program_to_engine(engine, cloud_noise_debug_program);
+    }
+
     ShaderProgram* mask_copy_program = create_mask_copy_program();
     if (mask_copy_program) {
         add_shader_program_to_engine(engine, mask_copy_program);

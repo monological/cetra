@@ -44,6 +44,27 @@
 // answer anyway -- by 128 km a surface has converged on the sky behind it.
 #define SKY_AERIAL_FAR_KM 128.0f
 
+// Cloud noise fields (spec 11.0). Tiling RGBA8 volumes, CPU-baked once at
+// startup (sun-independent): shape carries Perlin-Worley coverage in R and
+// three inverted-Worley octaves in GBA; detail carries three finer Worley
+// octaves that erode cloud edges. 128^3 + 32^3 is ~8.4 MB -- far too big to
+// check in, cheap to re-derive (every voxel is a pure function of its
+// coordinate and a fixed seed, so the bake threads over Z-slabs and the
+// bytes are identical at any thread count).
+#define SKY_CLOUD_SHAPE_SIZE  128
+#define SKY_CLOUD_DETAIL_SIZE 32
+
+typedef struct CloudLayer {
+    bool enabled;     // master switch; off = no bake, no GL objects, no cost
+    float coverage;   // 0..1 sky fraction the remap admits
+    float cloud_type; // 0 = low flat stratus .. 1 = tall cumulus
+    float density;    // extinction scale on the march
+
+    GLuint shape_tex;  // 128^3 RGBA8 tiling volume
+    GLuint detail_tex; // 32^3  RGBA8 tiling volume
+    bool noise_baked;
+} CloudLayer;
+
 struct Engine;
 struct IBLResources;
 struct Light;
@@ -103,10 +124,13 @@ typedef struct SkyAtmosphere {
     ShaderProgram* view_program;
     ShaderProgram* env_program;
     ShaderProgram* background_program;
+    ShaderProgram* cloud_noise_debug_program;
 
     // Env-face capture (FBO/RBO) and the unit cube are borrowed from the
     // passed IBLResources at bake time (the probe sibling's reuse pattern),
     // so the sky owns none of that scaffolding itself.
+
+    CloudLayer clouds;
 
     bool luts_baked; // the static (sun-independent) LUT pair is valid
 } SkyAtmosphere;
@@ -128,6 +152,11 @@ void sky_sun_transmittance(const SkyAtmosphere* sky, vec3 out_color);
 // which samples it). One-time; logs timings. Requires the sky_* programs
 // to be registered with the engine.
 int sky_bake_static_luts(SkyAtmosphere* sky, struct Engine* engine);
+
+// CPU-bake the cloud noise fields and upload them (sky_clouds.c). One-time,
+// threaded, gated on clouds.enabled; logs timing like the static LUT bake.
+// Sun- and coverage-independent: never re-baked after this.
+int sky_bake_cloud_noise(SkyAtmosphere* sky);
 
 // Re-bake everything the sun drives: sky-view LUT -> environment cubemap
 // (+ mips) -> ibl_bake_from_cubemap (irradiance + GGX and Charlie

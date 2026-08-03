@@ -675,6 +675,10 @@ ShaderProgram* create_sky_aerial_program() {
     return create_post_program("sky_aerial", aerial_lut_frag_shader_str);
 }
 
+ShaderProgram* create_cloud_noise_debug_program() {
+    return create_post_program("cloud_noise_debug", cloud_noise_debug_frag_shader_str);
+}
+
 ShaderProgram* create_sky_background_program() {
     ShaderProgram* program = NULL;
 

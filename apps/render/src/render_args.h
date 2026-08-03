@@ -62,6 +62,7 @@ typedef struct {
     int gi_debug;               // Blit the probe atlas into the frame corner
     int sky;                    // Procedural physically-based sky instead of -e
     int sky_debug;              // Blit the sky LUTs into the frame corner
+    int clouds;                 // Volumetric cloud layer (implies --sky)
     float sun_elevation;        // Sky sun elevation in degrees (-999 = default)
     float sun_azimuth;          // Sky sun azimuth in degrees (-999 = default)
     float world_scale;          // World units per km for the atmosphere (-1 = default)

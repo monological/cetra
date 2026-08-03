@@ -122,6 +122,7 @@ static void print_usage(const char* prog) {
             "      --gi-debug         Blit the probe atlas into the frame corner\n");
     fprintf(stderr, "      --sky              Procedural physically-based sky (instead of -e)\n");
     fprintf(stderr, "      --sky-debug        Blit the sky LUTs into the frame corner\n");
+    fprintf(stderr, "      --clouds           Volumetric cloud layer (implies --sky)\n");
     fprintf(stderr, "      --sun-elevation <d> Sky sun elevation in degrees (implies --sky)\n");
     fprintf(stderr, "      --sun-azimuth <d>  Sky sun azimuth in degrees (implies --sky)\n");
     fprintf(stderr,
@@ -508,6 +509,9 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->gi_volume = 1;
             args->gi_debug = 1;
         } else if (strcmp(argv[i], "--sky") == 0) {
+            args->sky = 1;
+        } else if (strcmp(argv[i], "--clouds") == 0) {
+            args->clouds = 1;
             args->sky = 1;
         } else if (strcmp(argv[i], "--sky-debug") == 0) {
             args->sky = 1;
@@ -1755,11 +1759,13 @@ int main(int argc, char** argv) {
             if (args.world_scale > 0.0f)
                 sky->world_units_per_km = args.world_scale;
             sky->aerial_enabled = !args.no_aerial;
+            sky->clouds.enabled = args.clouds != 0;
             sky_update_sun_dir(sky);
         }
         if (sky && ibl && sky_bake_static_luts(sky, engine) == 0 &&
             sky_bake(sky, ibl, engine) == 0) {
             sky->debug_luts = args.sky_debug != 0;
+            sky_bake_cloud_noise(sky); // self-gated on clouds.enabled
             scene->sky = sky;
             scene->ibl = ibl;
             scene->render_skybox = true;
