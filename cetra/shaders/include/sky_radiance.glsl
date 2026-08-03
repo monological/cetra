@@ -1,7 +1,6 @@
 // Shared sky radiance: the sky-view LUT sample plus the analytic
 // limb-darkened sun disc, in ABSOLUTE radiance. No exposure conversion here
-// -- each caller applies its own (the background pass multiplies by
-// preExposure; the env bake writes absolute). Samplers are parameters, the
+// -- each caller applies its own. Samplers are parameters, the
 // atmosphere.glsl convention, so every caller binds its own units.
 #include "sky_lut.glsl"
 

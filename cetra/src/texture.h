@@ -79,9 +79,9 @@ GLuint create_texture_3d_float(int width, int height, int depth, GLenum internal
                                GLenum data_format, const float* pixels);
 
 // Tiling RGBA8 volume upload (REPEAT on S/T/R, trilinear mips generated from
-// the level-0 pixels). For CPU-baked repeating fields -- cloud noise -- whose
-// coarser mips a marcher samples via textureLod. Returns the raw GL name; the
-// caller owns deletion. First user: the cloud noise fields (spec 11.0).
+// the level-0 pixels). For CPU-baked repeating fields whose coarser mips a
+// marcher samples via textureLod. Returns the raw GL name; the caller owns
+// deletion.
 GLuint create_texture_3d_rgba8_tiling(int width, int height, int depth,
                                       const unsigned char* pixels);
 

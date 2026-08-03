@@ -1409,6 +1409,29 @@ static void _light_gui_label(char* out, size_t out_size, const Light* light, int
 // The main settings panel, in Dear ImGui. Sections are collapsing headers;
 // effect on/off states are checkboxes and their parameters appear indented
 // beneath them. Bound directly to the same engine/scene/postfx fields.
+// The one "environment changed on release" chain, shared by the sun sliders
+// and the cloud controls so the downstream consumers cannot drift apart:
+// re-bake the env WITH clouds when the layer is on (the per-drag path never
+// pays that march), refresh a probe that only mirrors the sky, and re-arm
+// the GI volume. A scene-captured probe (--probe-scene) is left stale --
+// re-rendering the scene per release is too costly; its baked reflections
+// stay as shot. The GI sweep re-arms on RELEASE, not per drag frame,
+// because a sweep is one scene render per probe face -- the one cost the
+// converge-then-idle cadence exists to keep off the steady state; unlike
+// the probe it does not stall (spread over following frames at `rate`, old
+// atlas sampleable throughout).
+static void _sky_release_rebake(Engine* engine, Scene* scene, SkyAtmosphere* sky) {
+    if (sky->clouds.enabled || sky->clouds.noise_baked)
+        sky_bake_ex(sky, scene->ibl, engine, sky->clouds.enabled);
+    if (scene->probe) {
+        if (scene->probe->cubemap == 0)
+            reflection_probe_capture(scene->probe, engine, scene, 0.1f, 100.0f, true);
+        else
+            log_info("Sky: scene-captured probe not refreshed on release");
+    }
+    gi_volume_mark_dirty(scene->gi_volume);
+}
+
 static void _engine_gui_panel(Engine* engine) {
     Camera* camera = engine->camera;
     igSetNextWindowPos((ImVec2){15, 15}, ImGuiCond_FirstUseEver, (ImVec2){0, 0});
@@ -1587,36 +1610,15 @@ static void _engine_gui_panel(Engine* engine) {
             igSliderFloat("Sun Disc", &sky->sun_disc_deg, 0.1f, 3.0f, "%.2f", 0);
             if (sun_moved)
                 sky_update_sun(sky, scene->ibl, engine);
-            // Release re-bakes the env WITH clouds (the drag path above
-            // deliberately never pays the per-texel cloud march), so the
-            // probe/GI refreshes below capture the clouded sky.
-            if (sun_released && sky->clouds.enabled && sky->clouds.noise_baked)
-                sky_bake_ex(sky, scene->ibl, engine, true);
-            // On release, refresh a probe that only mirrors the sky
-            // (environment-only: probe->cubemap == 0). A scene-captured probe
-            // (--probe-scene) is left stale -- re-rendering the scene per sun
-            // move is too costly; its baked reflections stay as shot.
-            if (sun_released && scene->probe) {
-                if (scene->probe->cubemap == 0)
-                    reflection_probe_capture(scene->probe, engine, scene, 0.1f, 100.0f, true);
-                else
-                    log_info("Sky: scene-captured probe not refreshed on sun move");
-            }
-            // The probe volume caches the sun the same way, so it re-arms here
-            // for the same reason -- and on RELEASE, not per drag frame: a sweep
-            // is one scene render per probe face, which is the one cost the
-            // converge-then-idle cadence exists to keep off the steady state.
-            // Unlike the probe this does not stall, since the sweep is spread
-            // over the following frames at `rate` and the old atlas stays
-            // sampleable throughout.
             if (sun_released)
-                gi_volume_mark_dirty(scene->gi_volume);
+                _sky_release_rebake(engine, scene, sky);
 
             // Cloud layer (only offered once the noise fields exist). The
-            // screen march follows every slider live; the env/IBL copy
-            // updates on RELEASE like the sun (the with-clouds bake is the
-            // cost the drag path never pays). Wind re-bakes nothing -- the
-            // env cube holds a still of the deck by design.
+            // screen march follows every slider live; the env/IBL copy and
+            // its downstream consumers update on RELEASE like the sun (the
+            // with-clouds bake is the cost the drag path never pays). Wind
+            // re-bakes nothing -- the env cube holds a still of the deck by
+            // design.
             if (sky->clouds.noise_baked) {
                 bool clouds_were_on = sky->clouds.enabled;
                 bool cloud_edit = false;
@@ -1632,7 +1634,7 @@ static void _engine_gui_panel(Engine* engine) {
                 _end_effect_group();
                 bool toggled = clouds_were_on != sky->clouds.enabled;
                 if (toggled || (cloud_edit && sky->clouds.enabled))
-                    sky_bake_ex(sky, scene->ibl, engine, sky->clouds.enabled);
+                    _sky_release_rebake(engine, scene, sky);
             }
         }
 

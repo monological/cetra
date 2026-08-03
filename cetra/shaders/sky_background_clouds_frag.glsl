@@ -6,11 +6,11 @@ out vec4 FragColor;
 
 // The cloud variant of the sky background (spec 11.0): the shared sky
 // radiance body over-composited by the half-res cloud march,
-// sky * cloud.a + cloud.rgb. Bound only when clouds are on -- the plain
-// sky_background program stays byte-untouched for the off path. A plain
-// bilinear tap upsamples the cloud texture: cloud content is smooth and
-// sky-only, and geometry silhouettes are resolved by this draw's own
-// depth test, not by the texture.
+// sky * cloud.a + cloud.rgb. A separate program from the plain background
+// so the off path never carries a cloud sampler. A plain bilinear tap
+// upsamples the cloud texture: cloud content is smooth and sky-only, and
+// geometry silhouettes are resolved by this draw's own depth test, not by
+// the texture.
 
 uniform sampler2D skyViewLut;
 uniform sampler2D transmittanceLut;

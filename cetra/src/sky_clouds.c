@@ -109,10 +109,11 @@ static void* cloud_bake_worker(void* arg) {
     return NULL;
 }
 
-// Bake one field across worker threads. The perm table is read-only by the
+// Bake one field across worker threads; returns the worker count so the log
+// reports the policy actually applied. The perm table is read-only by the
 // time threads start (initialized on this thread), so no synchronization is
 // needed beyond the joins.
-static void bake_field(unsigned char* out, const NoisePerm* perm, int size, int detail) {
+static int bake_field(unsigned char* out, const NoisePerm* perm, int size, int detail) {
     int workers = get_cpu_cores();
     if (workers > 8)
         workers = 8;
@@ -124,12 +125,10 @@ static void bake_field(unsigned char* out, const NoisePerm* perm, int size, int 
     CloudBakeSlab slabs[8];
     cetra_thread_t threads[8];
     bool running[8] = {false};
-    int per = (size + workers - 1) / workers;
     for (int i = 0; i < workers; i++) {
-        int z0 = i * per;
-        int z1 = z0 + per > size ? size : z0 + per;
-        if (z0 >= z1)
-            break;
+        // Remainder-free split: never overshoots, every worker gets a slab
+        int z0 = size * i / workers;
+        int z1 = size * (i + 1) / workers;
         slabs[i] = (CloudBakeSlab){out, perm, size, z0, z1, detail};
         running[i] = cetra_thread_create(&threads[i], cloud_bake_worker, &slabs[i]);
         if (!running[i])
@@ -139,6 +138,7 @@ static void bake_field(unsigned char* out, const NoisePerm* perm, int size, int 
         if (running[i])
             cetra_thread_join(threads[i]);
     }
+    return workers;
 }
 
 int sky_bake_cloud_noise(SkyAtmosphere* sky) {
@@ -163,7 +163,7 @@ int sky_bake_cloud_noise(SkyAtmosphere* sky) {
         return -1;
     }
 
-    bake_field(shape, &perm, ss, 0);
+    int workers = bake_field(shape, &perm, ss, 0);
     bake_field(detail, &perm, ds, 1);
 
     double t1 = glfwGetTime();
@@ -176,7 +176,7 @@ int sky_bake_cloud_noise(SkyAtmosphere* sky) {
     double t2 = glfwGetTime();
     sky->clouds.noise_baked = true;
     log_info("Cloud noise baked: fields %.1f ms (%d threads), upload+mips %.1f ms",
-             (t1 - t0) * 1000.0, get_cpu_cores() > 8 ? 8 : get_cpu_cores(), (t2 - t1) * 1000.0);
+             (t1 - t0) * 1000.0, workers, (t2 - t1) * 1000.0);
     return 0;
 }
 
@@ -193,15 +193,14 @@ static bool ensure_march_targets(CloudLayer* c, int w, int h) {
             c->march_fbo[i] = 0;
         }
     }
+    // The FBO wrapping duplicates postfx.c's create_color_fbo, which is
+    // static there and postfx-owned; hoisting it to a shared home was
+    // deliberately not done here to keep this branch's gates narrow (the
+    // bake_aerial_volume precedent, sky.c). The texture half reuses the
+    // shared LUT helper so the sampler state cannot drift.
     for (int i = 0; i < 2; i++) {
         glGenFramebuffers(1, &c->march_fbo[i]);
-        glGenTextures(1, &c->march_tex[i]);
-        glBindTexture(GL_TEXTURE_2D, c->march_tex[i]);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, w, h, 0, GL_RGBA, GL_HALF_FLOAT, NULL);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        c->march_tex[i] = create_texture_2d_float(w, h, GL_RGBA16F, GL_RGBA, NULL);
         glBindFramebuffer(GL_FRAMEBUFFER, c->march_fbo[i]);
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
                                c->march_tex[i], 0);
@@ -294,9 +293,6 @@ void sky_clouds_march(SkyAtmosphere* sky, struct Engine* engine, mat4 view, mat4
     uniform_set_float(um, "coverage", c->coverage);
     uniform_set_float(um, "cloudType", c->cloud_type);
     uniform_set_float(um, "densityScale", c->density);
-    uniform_set_int(um, "steps", 64);
-    uniform_set_int(um, "lightSteps", 6);
-    uniform_set_int(um, "debugShell", c->debug_shell);
     uniform_set_int(um, "temporal", temporal);
     uniform_set_int(um, "frameIndex", frame % 4096);
     uniform_set_mat4(um, "prevView", (float*)c->prev_view);
@@ -311,8 +307,6 @@ void sky_clouds_march(SkyAtmosphere* sky, struct Engine* engine, mat4 view, mat4
     uniform_set_vec3(um, "windOffsetKm", wind_off);
 
     draw_fullscreen_quad(sky->quad_vao);
-    c->march_valid = true;
-    c->march_read = write;
 
     // Store this frame's camera for the next march's reprojection:
     // rotation-only view (ray-direction reprojection) + the projection

@@ -28,6 +28,17 @@ const float CLOUD_EXTINCTION = 25.0;
 // ~40 km aerial extinction has faded clouds into the sky anyway; the cap
 // bounds the step size so the horizon does not starve the near field.
 const float CLOUD_PATH_CAP_KM = 48.0;
+// Stands in for the multiple scattering a single-scatter march cannot
+// produce: real cloud tops reflect most of the sun's irradiance while this
+// integral captures one bounce of it. Calibrated against the sky's own
+// (arbitrary) radiance scale so sunlit faces read brighter than the blue
+// sky behind them.
+const float CLOUD_MS_GAIN = 8.0;
+
+float cloudHeightFrac(float altKm)
+{
+    return clamp((altKm - CLOUD_BOTTOM_KM) / (CLOUD_TOP_KM - CLOUD_BOTTOM_KM), 0.0, 1.0);
+}
 
 float cloudRemap(float v, float lo, float hi)
 {
@@ -94,14 +105,14 @@ vec4 cloud_march(vec3 roKm, vec3 rd, vec3 sunDir, sampler3D shapeTex, sampler3D 
 {
     float obsAlt = max(roKm.y, VIEW_ALTITUDE);
     // Planet centre Rg+alt straight below the camera: the local flat-earth
-    // radial axis, so ro - centre is exactly (0, Rg+obsAlt, 0).
+    // radial axis, so ro - centre is exactly (0, Rg+obsAlt, 0) and the
+    // radial cosine is just rd.y.
     vec3 centre = vec3(roKm.x, roKm.y - (Rg + obsAlt), roKm.z);
     float r0 = Rg + obsAlt;
 
     // Below-horizon rays belong to the ground (real terrain via the depth
     // test, the virtual floor otherwise) -- never to the shell's far side.
-    float mu = roKm.y >= 0.0 ? rd.y : dot(normalize(roKm - centre), rd);
-    if (hitsGround(r0, mu))
+    if (hitsGround(r0, rd.y))
         return vec4(0.0, 0.0, 0.0, 1.0);
 
     float tIn = cloudSphereNear(roKm, rd, centre, Rg + CLOUD_BOTTOM_KM);
@@ -126,17 +137,14 @@ vec4 cloud_march(vec3 roKm, vec3 rd, vec3 sunDir, sampler3D shapeTex, sampler3D 
     float cosVS = dot(rd, sunDir);
     // Dual-lobe Henyey-Greenstein: strong forward silver lining plus a weak
     // backscatter lobe so the anti-solar side is not dead flat.
-    float g1 = 0.85, g2 = -0.3;
-    float ph1 = (1.0 - g1 * g1) / (12.5663706 * pow(1.0 + g1 * g1 - 2.0 * g1 * cosVS, 1.5));
-    float ph2 = (1.0 - g2 * g2) / (12.5663706 * pow(1.0 + g2 * g2 - 2.0 * g2 * cosVS, 1.5));
-    float phase = mix(ph1, ph2, 0.5);
+    float phase = mix(phaseHG(cosVS, 0.85), phaseHG(cosVS, -0.3), 0.5);
 
     // Ambient: one zenith sky tap, hoisted -- the shell is lit by the whole
     // sky dome and per-sample directional detail is below this term's noise.
     // The pi converts the radiance tap into an irradiance-ish fill; without
     // it shadow sides render charcoal, not cloud-grey.
     vec3 ambient =
-        textureLod(skyViewLut, skyViewUv(vec3(0.0, 1.0, 0.0), sunDir, r0), 0.0).rgb * 3.14159;
+        textureLod(skyViewLut, skyViewUv(vec3(0.0, 1.0, 0.0), sunDir, r0), 0.0).rgb * PI;
 
     // Short exponential cone toward the sun (total ~1.2 km): resolves the
     // self-shadowed base without letting one far tap through a neighbouring
@@ -150,7 +158,7 @@ vec4 cloud_march(vec3 roKm, vec3 rd, vec3 sunDir, sampler3D shapeTex, sampler3D 
         float t = tIn + (float(i) + dither) * dt;
         vec3 pos = roKm + rd * t;
         float alt = length(pos - centre) - Rg;
-        float hf = clamp((alt - CLOUD_BOTTOM_KM) / (CLOUD_TOP_KM - CLOUD_BOTTOM_KM), 0.0, 1.0);
+        float hf = cloudHeightFrac(alt);
 
         float d = cloudDensity(pos, hf, shapeTex, detailTex, coverage, cloudType, detailOn,
                                windOffsetKm, 0.0);
@@ -165,9 +173,7 @@ vec4 cloud_march(vec3 roKm, vec3 rd, vec3 sunDir, sampler3D shapeTex, sampler3D 
         for (int l = 0; l < lightSteps; l++) {
             float off = lightOff[l];
             vec3 lp = pos + sunDir * off;
-            float lalt = length(lp - centre) - Rg;
-            float lhf = clamp((lalt - CLOUD_BOTTOM_KM) / (CLOUD_TOP_KM - CLOUD_BOTTOM_KM), 0.0,
-                              1.0);
+            float lhf = cloudHeightFrac(length(lp - centre) - Rg);
             float ld = cloudDensity(lp, lhf, shapeTex, detailTex, coverage, cloudType, false,
                                     windOffsetKm, 1.0);
             tauL += ld * CLOUD_EXTINCTION * densityScale * (off - prevOff);
@@ -184,12 +190,6 @@ vec4 cloud_march(vec3 roKm, vec3 rd, vec3 sunDir, sampler3D shapeTex, sampler3D 
         vec3 sunT = transmittanceToSky(transmittanceLut, rS, sunDir.y);
         float beer = max(exp(-tauL), exp(-tauL * 0.25) * 0.7);
         float powder = 1.0 - 0.6 * exp(-2.0 * tauL);
-        // The gain stands in for the multiple scattering a single-scatter
-        // march cannot produce: real cloud tops reflect most of the sun's
-        // irradiance while this integral captures one bounce of it.
-        // Calibrated against the sky's own (arbitrary) radiance scale so
-        // sunlit faces read brighter than the blue sky behind them.
-        const float CLOUD_MS_GAIN = 8.0;
         vec3 Lsun = SUN_ILLUMINANCE * sunT * beer * phase * powder * CLOUD_MS_GAIN;
         vec3 Ls = Lsun + ambient * 1.5 * mix(0.4, 1.0, hf);
 

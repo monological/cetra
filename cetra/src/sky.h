@@ -59,7 +59,6 @@ typedef struct CloudLayer {
     float coverage;   // 0..1 sky fraction the remap admits
     float cloud_type; // 0 = low flat stratus .. 1 = tall cumulus
     float density;    // extinction scale on the march
-    int debug_shell;  // 1 = march pass renders shell distances (R5 probe)
 
     // Drift. The scroll accumulator advances once per march: a fixed 1/60
     // when headless (goldens stay byte-deterministic -- the skeletal-
@@ -73,16 +72,14 @@ typedef struct CloudLayer {
     GLuint detail_tex; // 32^3  RGBA8 tiling volume
     bool noise_baked;
 
-    // Half-internal-res march targets, written pre-scene each frame and
-    // sampled by the clouds background variant. A parity ping-pong (frame &
-    // 1): the march blends last frame's result in-place via ray-direction
+    // Half-internal-res march targets, written each frame and sampled by
+    // the clouds background variant. A parity ping-pong (frame & 1): the
+    // march blends last frame's result in-place via ray-direction
     // reprojection, so there is no separate accumulation pass. Lazily
     // allocated.
     GLuint march_fbo[2];
     GLuint march_tex[2];
     int march_w, march_h;
-    int march_read;   // index the composite samples (written this frame)
-    bool march_valid; // a march ran this session (gates the composite)
     ShaderProgram* march_program;
 
     // The march's OWN previous camera + adjacency stamp (the froxel-fog
@@ -90,10 +87,13 @@ typedef struct CloudLayer {
     // velocity-reprojecting accumulators cannot serve, and by the time any
     // postfx state is written engine->prev_view_proj already holds THIS
     // frame. Rotation-only view (clouds reproject by ray direction --
-    // translation parallax is accepted, bounded by the blend).
+    // translation parallax is accepted, bounded by the blend). prev_frame
+    // is the SINGLE march-history record: -1 = no march yet (gates the
+    // composite), otherwise the frame of the last march, whose parity is
+    // the texture index it wrote.
     mat4 prev_view; // rotation-only world->view of the previous march
     float prev_focal[2];
-    int prev_frame; // total_frames of the previous march; -1 = none
+    int prev_frame;
 } CloudLayer;
 
 struct Engine;
@@ -234,11 +234,12 @@ void sky_publish_to_postfx(const SkyAtmosphere* sky, struct PostFX* fx);
 // Draw the procedural sky as the frame background (sky-view LUT + analytic
 // sun disc), replacing render_skybox in sky mode. Strips translation from
 // view like the skybox path. Borrows the unit cube from ibl (populated during
-// sky_bake). with_clouds composites the half-res cloud march over the sky
-// via a separate program (the plain path's shader stays untouched); pass
-// false during probe/GI captures -- the march texture is the main camera's.
+// sky_bake). main_camera = this draw is not a capture: the cloud composite
+// (when the layer is enabled and has marched) samples a screen-space
+// texture that only the main camera's rays match, so capture passes pass
+// false and get the plain sky.
 void sky_render_background(SkyAtmosphere* sky, struct IBLResources* ibl, mat4 view, mat4 projection,
-                           bool with_clouds);
+                           bool main_camera);
 
 // Debug: blit the LUTs into the bottom-left corner of the default
 // framebuffer (transmittance above multiscatter), scaled up for

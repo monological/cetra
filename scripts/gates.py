@@ -502,7 +502,11 @@ def run_catcher_gate(workdir):
 # shows it stable. NB _taa_churn compares frames THIRTY apart, where the
 # non-repeating dither sequence touches ~6x more pixels than adjacent-frame
 # churn does -- at RMSE ~3e-4 amplitude (phase 3's adjacent-frame number).
+# The ERROR path blocks even while the threshold only reports: broken render
+# infrastructure and a drifting churn number are different failures.
 CLOUD_CHURN_FACTOR = 9.7  # 153015/23656 measured at phase 5, x1.5 headroom
+
+
 def run_cloud_churn_gate(workdir):
     fixture = os.path.join(ROOT, "assets", "aerial_fixture.gltf")
     if not os.path.exists(fixture):

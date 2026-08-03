@@ -92,7 +92,9 @@ float halton(int index, int base) {
 }
 
 // Normalized Henyey-Greenstein; c = cos(angle between light travel and the
-// direction toward the camera)
+// direction toward the camera). Duplicates include/atmosphere.glsl's phaseHG
+// (keep in step) -- this shader deliberately does not ingest the atmosphere
+// toolkit for one four-line function.
 float phaseHG(float c, float g) {
     float g2 = g * g;
     return (1.0 - g2) / (4.0 * PI * pow(1.0 + g2 - 2.0 * g * c, 1.5));

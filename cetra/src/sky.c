@@ -608,7 +608,7 @@ int sky_update_sun(SkyAtmosphere* sky, struct IBLResources* ibl, struct Engine* 
 }
 
 void sky_render_background(SkyAtmosphere* sky, struct IBLResources* ibl, mat4 view,
-                           mat4 projection, bool with_clouds) {
+                           mat4 projection, bool main_camera) {
     if (!sky || !ibl || !sky->background_program || !sky->sky_view_lut)
         return;
 
@@ -619,11 +619,14 @@ void sky_render_background(SkyAtmosphere* sky, struct IBLResources* ibl, mat4 vi
     rot_view[3][1] = 0.0f;
     rot_view[3][2] = 0.0f;
 
-    // Clouds bind a SEPARATE program so the plain path's shader stays
-    // byte-untouched (the off-gate); the caller also gates captures off,
-    // since the march texture belongs to the main camera only.
-    bool clouds = with_clouds && sky->background_clouds_program && sky->clouds.march_valid &&
-                  sky->clouds.march_tex[sky->clouds.march_read] != 0;
+    // Clouds bind a SEPARATE program rather than a uniform branch in the
+    // plain shader, so the off path never carries a cloud sampler. The
+    // subsystem gates itself (enabled + a march recorded); the caller's
+    // main_camera says only what it alone knows -- that this draw is not a
+    // capture, whose cube-face cameras the screen-space march texture would
+    // be wrong for.
+    bool clouds = main_camera && sky->clouds.enabled && sky->background_clouds_program &&
+                  sky->clouds.prev_frame >= 0;
     ShaderProgram* prog = clouds ? sky->background_clouds_program : sky->background_program;
 
     glUseProgram(prog->id);
@@ -642,7 +645,7 @@ void sky_render_background(SkyAtmosphere* sky, struct IBLResources* ibl, mat4 vi
     uniform_set_float(u, "sunIntensity", 20.0f);
     if (clouds) {
         glActiveTexture(GL_TEXTURE2);
-        glBindTexture(GL_TEXTURE_2D, sky->clouds.march_tex[sky->clouds.march_read]);
+        glBindTexture(GL_TEXTURE_2D, sky->clouds.march_tex[sky->clouds.prev_frame & 1]);
         uniform_set_int(u, "cloudTex", 2);
         GLint vp[4];
         glGetIntegerv(GL_VIEWPORT, vp);

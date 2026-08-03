@@ -522,7 +522,7 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->sky = 1;
         } else if (strcmp(argv[i], "--cloud-coverage") == 0) {
             if (++i >= argc) {
-                fprintf(stderr, "Error: --cloud-coverage requires a value\n");
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
                 return -1;
             }
             args->cloud_coverage = (float)atof(argv[i]);
@@ -530,7 +530,7 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->sky = 1;
         } else if (strcmp(argv[i], "--cloud-density") == 0) {
             if (++i >= argc) {
-                fprintf(stderr, "Error: --cloud-density requires a value\n");
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
                 return -1;
             }
             args->cloud_density = (float)atof(argv[i]);

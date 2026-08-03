@@ -157,6 +157,16 @@ float miePhase(float c)
            / ((2.0 + g2) * pow(1.0 + g2 - 2.0 * g * c, 1.5));
 }
 
+// Normalized Henyey-Greenstein for a caller-chosen asymmetry; c = cos(angle
+// between light travel and the direction toward the camera). Unlike miePhase
+// (Cornette-Shanks, the atmosphere's own aerosols) this is the plain HG that
+// fog and cloud media mix per-lobe.
+float phaseHG(float c, float g)
+{
+    float g2 = g * g;
+    return (1.0 - g2) / (4.0 * PI * pow(1.0 + g2 - 2.0 * g * c, 1.5));
+}
+
 // Psi LUT fetch: the multiple-scattering contribution at altitude r for a sun
 // at cos-zenith mu_s. Takes the sampler as a parameter, matching the
 // transmittance helpers above -- a shader binds its own uniform and passes it,

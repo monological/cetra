@@ -14,7 +14,7 @@ uniform sampler2D skyViewLut;
 uniform sampler2D transmittanceLut;
 uniform vec3 sunDir; // world-space unit vector TOWARD the sun
 
-#include "sky_lut.glsl"
+#include "sky_ground.glsl"
 
 void main()
 {
@@ -26,12 +26,5 @@ void main()
         return;
     }
 
-    // Below the horizon: a Lambertian virtual ground lit by the sun
-    // (transmittance at the eye) plus the sky-view ground region as ambient
-    // groundSky already carries SUN_ILLUMINANCE (baked into the sky-view
-    // LUT); the direct bounce must match it
-    vec3 groundSky = texture(skyViewLut, skyViewUv(dir, sunDir, r)).rgb;
-    vec3 sunT = transmittanceToSky(transmittanceLut, r, sunDir.y);
-    vec3 direct = sunT * max(sunDir.y, 0.0) * (GROUND_ALBEDO / PI) * SUN_ILLUMINANCE;
-    FragColor = vec4(direct + groundSky * GROUND_ALBEDO, 1.0);
+    FragColor = vec4(skyVirtualGround(dir, sunDir, r, skyViewLut, transmittanceLut), 1.0);
 }
