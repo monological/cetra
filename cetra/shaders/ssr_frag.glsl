@@ -65,9 +65,12 @@ const int M_BEHIND = 12;
 // small for coarse hi-z skips, so it crawls fine cells for hundreds of
 // screen columns, and exhausting the loop there cuts a near-mirror
 // reflection off along a hard mid-weight frontier (no distFade rescue --
-// the ray dies mid-segment). 128 was tried and produced exactly that
-// truncation on a close-up mirror floor.
-const int MAX_ITERS = 256;
+// the ray dies mid-segment). The budget is therefore spent in screen
+// COLUMNS, so a fixed count reaches half as far every time the resolution
+// doubles -- 128 truncated a close-up mirror floor at 1600 wide, 256 the
+// same shot at 3456. The C side scales it with the trace width instead
+// (floor 256, so low-res output is bit-identical to the fixed era).
+uniform int marchBudget;
 
 vec3 viewPosFromDepth(vec2 uv, float depth)
 {
@@ -147,11 +150,14 @@ void main()
     vec4 nr = texture(normalsTex, TexCoords);
     vec3 n = nr.xyz;
     // Only surfaces the catcher marked reflective trace: the marker is the
-    // SIGN of the G-buffer alpha (negative = reflective floor). Model
+    // SIGN of the G-buffer alpha (negative = reflective floor), and its
+    // magnitude is the catcher's edge falloff — the reflectivity fades to
+    // zero at the quad boundary exactly like the shadow does. Model
     // surfaces write non-negative alpha and rely on IBL — screen-space rays
     // off curved geometry graze their own silhouettes and sparkle. The
     // floor's roughness is a scalar uniform, not carried per-texel.
-    if (nr.a > -0.5 || dot(n, n) < 0.01) {
+    float floorFade = clamp(-nr.a, 0.0, 1.0);
+    if (floorFade < 0.004 || dot(n, n) < 0.01) {
         FragColor = vec4(0.0);
         return;
     }
@@ -193,7 +199,8 @@ void main()
     // The probe answer for this ray, computed once for every exit below:
     // full fallback on a miss, the faded tail's filler on a partial hit.
     // Exact vec4(0) with the probe off, keeping every path bit-identical.
-    vec4 probe = probeSample(fragPos, n, R, viewDir);
+    // The catcher's edge falloff rides along here so every exit fades.
+    vec4 probe = probeSample(fragPos, n, R, viewDir) * floorFade;
 
     // Start biased along the normal so the ray does not immediately test
     // against its own surface. The bias must grow with view distance: a
@@ -261,7 +268,7 @@ void main()
     cellSpan(seg0, dseg, cell0, sizeFine, skipIn, tSkip, skipAxis);
     float t = max(tSkip, 0.0) + tEps;
 
-    for (int i = 0; i < MAX_ITERS; i++) {
+    for (int i = 0; i < marchBudget; i++) {
         vec3 p = seg0 + dseg * t;
         if (t >= 1.0 || p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0 || p.z <= 0.0 ||
             p.z >= 1.0) {
@@ -395,6 +402,8 @@ void main()
     float weight = clamp(edgeFade * fresnel * roughnessFade * distFade * strength, 0.0, 1.0);
     vec3 reflection = min(texture(hdrTex, hitUV).rgb, vec3(WS_REFLECT_MAX));
     // Partial fades (screen edge, march distance) blend toward the probe
-    // instead of toward nothing — premultiplied "SSR over probe"
-    FragColor = vec4(reflection * weight, weight) + probe * (1.0 - weight);
+    // instead of toward nothing — premultiplied "SSR over probe". The probe
+    // term already carries floorFade, so scaling the SSR term by it makes
+    // the whole composite exactly floorFade * (unfaded composite).
+    FragColor = vec4(reflection * weight, weight) * floorFade + probe * (1.0 - weight);
 }

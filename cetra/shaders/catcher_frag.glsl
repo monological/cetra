@@ -59,11 +59,15 @@ void main()
 
     FragColor = vec4(0.0, 0.0, 0.0, alpha);
     // Negative alpha is the "reflective floor" marker the SSR march traces;
-    // its magnitude is unused (floor roughness is a scalar uniform on the
-    // SSR pass). Only stamped when SSR is active — otherwise a non-negative
-    // marker keeps the floor out of the reflection set, and SSAO on this
-    // texel keeps using its derivative normal rather than this up-normal.
-    NormalOut = vec4(normalize(mat3(view) * vec3(0.0, 1.0, 0.0)), surfaceMode == 1 ? -1.0 : 0.0);
+    // its magnitude is the reflectivity weight, carrying the same edge
+    // falloff as the shadow so reflections dissolve at the quad boundary the
+    // way the shadow does (the env-fallback reflection would otherwise print
+    // the catcher's finite rectangle into the scene). Only stamped when SSR
+    // is active — otherwise a non-negative marker keeps the floor out of the
+    // reflection set, and SSAO on this texel keeps using its derivative
+    // normal rather than this up-normal.
+    NormalOut =
+        vec4(normalize(mat3(view) * vec3(0.0, 1.0, 0.0)), surfaceMode == 1 ? -falloff : 0.0);
     AuxOut = vec4(0.0);
     AlbedoOut = vec4(0.0);
     DiffuseOut = vec4(0.0);

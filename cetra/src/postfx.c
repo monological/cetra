@@ -1634,6 +1634,17 @@ static void postfx_run_ssr(PostFX* fx, bool have_normals, bool taa_resolving, ma
     uniform_set_mat4(fx->ssr_program->uniforms, "invProjection", (float*)inv_projection);
     uniform_set_float(fx->ssr_program->uniforms, "maxDistance", fx->ssr_max_distance);
     uniform_set_float(fx->ssr_program->uniforms, "thicknessMin", fx->ssr_thickness_min);
+    // The march budget is spent in screen columns, so it scales with the
+    // trace width or the reach halves every time the resolution doubles
+    // (a floor-hugging grazing ray crawls ~one column per iteration). The
+    // 256 floor keeps every trace at or below 2048 wide bit-identical to
+    // the fixed-budget era; the 1024 cap bounds the worst-case cost.
+    int march_budget = ssr_w / 8;
+    if (march_budget < 256)
+        march_budget = 256;
+    if (march_budget > 1024)
+        march_budget = 1024;
+    uniform_set_int(fx->ssr_program->uniforms, "marchBudget", march_budget);
     uniform_set_float(fx->ssr_program->uniforms, "floorRoughness", fx->ssr_floor_roughness);
     uniform_set_float(fx->ssr_program->uniforms, "maxRoughness", fx->ssr_max_roughness);
     // Strength folds into the march's premultiplied weight (clamped
