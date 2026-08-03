@@ -161,7 +161,37 @@ vec3 toneSelect(vec3 c)
 // directionless -- a reflection aimed into a wall is unoccluded as readily as
 // one aimed at open sky.
 //
+// Mode 2 (bent) instead asks the directional question: how much of the
+// reflection lobe actually points somewhere visible? The AO chain carries a
+// bent normal (average unoccluded direction) whose cone half-angle follows
+// from the AO itself, and the reflection is a cone about R widening with
+// roughness. Their overlap is the visibility a mirror-ish lobe really has --
+// so a reflection aimed into an occluder stays dark while one aimed at open
+// sky is untouched, which the smoothness blend cannot distinguish.
+//
 // Mode 0 returns raw ao -> byte-identical to the pre-feature path.
+//
+// How much of cone B is inside cone A, as a fraction of B's solid angle:
+// the spherical-cap lens (Oat & Sander 2007), exact at both ends and
+// smoothstep-fitted between them. Solid angle of a half-angle-t cone is
+// 2*PI*(1 - cos t), which is where the containment ratio comes from.
+float coneOverlap(float cosA, float cosB, float cosBetween)
+{
+    float a = acos(clamp(cosA, -1.0, 1.0));
+    float b = acos(clamp(cosB, -1.0, 1.0));
+    float d = acos(clamp(cosBetween, -1.0, 1.0));
+    // Value once one cone is fully inside the other: all of B when A is the
+    // wider, else only A's share of it.
+    float contained = a >= b ? 1.0 : (1.0 - cosA) / max(1.0 - cosB, 1e-4);
+    if (d <= abs(a - b))
+        return contained;
+    if (d >= a + b)
+        return 0.0; // disjoint
+    // Between: 0 as the caps separate, `contained` as one swallows the other.
+    float x = (a + b - d) / max(a + b - abs(a - b), 1e-4);
+    return contained * x * x * (3.0 - 2.0 * x);
+}
+
 float aoVisibility()
 {
     float ao = texture(aoTex, TexCoords).r;
@@ -178,10 +208,33 @@ float aoVisibility()
     // to reconstruct the view position, just the ray direction from NDC + focal.
     vec2 ndc = TexCoords * 2.0 - 1.0;
     vec3 V = normalize(vec3(-ndc * invFocal, 1.0));
-    float NdotV = clamp(dot(normalize(nrm.xyz), V), 0.0, 1.0);
+    vec3 N = normalize(nrm.xyz);
+    float NdotV = clamp(dot(N, V), 0.0, 1.0);
     float metallic = specOccHasMetallic == 1 ? texture(albedoTex, TexCoords).a : 0.0;
     float fresnel = 0.04 + 0.96 * pow(1.0 - NdotV, 5.0); // dielectric specular fraction
-    float specWeight = mix(fresnel, 1.0, metallic) * (1.0 - aux.w); // x mirror-ness
+    // How much of this pixel's energy is the specular lobe. The buffer being
+    // multiplied holds diffuse and specular summed under one factor, so this
+    // is what decides how far from the plain (diffuse) AO the result may move.
+    // The smoothness factor is not decoration: Fresnel alone climbs to ~1 at
+    // grazing, where a ROUGH dielectric's actual specular share is small, and
+    // without it every grazing pixel hands its whole -- mostly diffuse --
+    // energy to the specular answer.
+    float specWeight = mix(fresnel, 1.0, metallic) * (1.0 - aux.w);
+
+    if (specOccMode == 2) {
+        // Visibility cone: the cosine-weighted cap whose energy is the stored
+        // AO, so ao = 1 opens to the full hemisphere and ao = 0 closes it.
+        float cosAv = sqrt(clamp(1.0 - ao, 0.0, 1.0));
+        // Reflection cone: mirror at roughness 0, near-hemispheric at 1.
+        float cosAs = exp2(-3.321928 * aux.w * aux.w);
+        vec3 bentN = normalize(texture(aoTex, TexCoords).gba * 2.0 - 1.0);
+        vec3 R = reflect(-V, N);
+        // Same weight as legacy, different destination: legacy hands the
+        // specular share a blanket 1.0 (unoccluded in every direction), this
+        // hands it the share of its own lobe that points somewhere visible.
+        return mix(ao, coneOverlap(cosAv, cosAs, dot(bentN, R)), specWeight);
+    }
+
     return mix(ao, 1.0, specWeight);
 }
 
