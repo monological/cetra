@@ -61,13 +61,17 @@ static const char* effective_texture_dir(const char* path, const char* texture_d
 }
 
 /*
- * UV V-flip policy. glTF specifies a top-left UV origin while FBX data
- * arrives bottom-left (verified against Blender: assimp's FBX UVs match
- * Blender's raw values exactly), so relative to this engine's texture upload
- * the V flip is needed for glTF and wrong for FBX. Default: decide per
- * format. Bakes authored against the opposite convention exist in the wild
- * (symptom: surfaces sample wrong atlas regions, labels mirror), so the
- * application can override per asset.
+ * UV V-flip policy. Relative to this engine's texture upload, the V flip is
+ * right for a top-left-origin bake and wrong for a bottom-left one -- and
+ * NO format metadata records which convention a bake used: glTF mandates
+ * top-left, FBX leaves it undefined, so the two populations in the wild are
+ * indistinguishable by inspection. Raw Blender FBX exports arrive
+ * bottom-left (assimp's FBX UVs match Blender's raw values exactly), but
+ * every baked FBX asset measured against this engine (c64, japanese-house
+ * -- game-pipeline exports) is authored top-left, so the default flips for
+ * every format and the override covers the raw-export population. The
+ * symptom of a wrong choice, either direction: surfaces sample wrong atlas
+ * regions, labels mirror.
  */
 typedef enum UVFlipMode { UV_FLIP_AUTO = -1, UV_FLIP_OFF = 0, UV_FLIP_ON = 1 } UVFlipMode;
 static int import_flip_uvs = UV_FLIP_AUTO;
@@ -76,11 +80,8 @@ void set_import_flip_uvs(bool flip) {
     import_flip_uvs = flip ? UV_FLIP_ON : UV_FLIP_OFF;
 }
 
-static unsigned int uv_flip_flag(const char* path) {
-    if (import_flip_uvs != UV_FLIP_AUTO)
-        return import_flip_uvs == UV_FLIP_ON ? aiProcess_FlipUVs : 0u;
-    const char* dot = strrchr(path, '.');
-    if (dot && strcasecmp(dot, ".fbx") == 0)
+static unsigned int uv_flip_flag(void) {
+    if (import_flip_uvs == UV_FLIP_OFF)
         return 0u;
     return aiProcess_FlipUVs;
 }
@@ -107,26 +108,41 @@ void set_import_scale_multiplier(float multiplier) {
     import_scale_multiplier = multiplier;
 }
 
-// The unit factor the file declares, as the metres conversion ScaleProcess
-// bakes: FBX's UnitScaleFactor is relative to centimetres, so the baked
-// factor is raw * 0.01 (the assimp FBX importer's own conversion). Formats
-// that write no UnitScaleFactor metadata return 1.
-static float declared_unit_scale(const struct aiScene* scene) {
-    if (!scene || !scene->mMetaData)
-        return 1.0f;
-    for (unsigned int i = 0; i < scene->mMetaData->mNumProperties; i++) {
-        if (strcmp(scene->mMetaData->mKeys[i].data, "UnitScaleFactor") != 0)
+// One float-typed metadata value by key. Assimp stores these as float or
+// double depending on importer and version (FBX writes UnitScaleFactor as
+// double, glTF writes PBR_LightRange as float), so both arrive here.
+static bool ai_metadata_get_float(const struct aiMetadata* meta, const char* key, float* out) {
+    if (!meta)
+        return false;
+    for (unsigned int i = 0; i < meta->mNumProperties; i++) {
+        if (strcmp(meta->mKeys[i].data, key) != 0)
             continue;
-        if (scene->mMetaData->mValues[i].mType == AI_FLOAT)
-            return *(float*)scene->mMetaData->mValues[i].mData * 0.01f;
-        if (scene->mMetaData->mValues[i].mType == AI_DOUBLE)
-            return (float)(*(double*)scene->mMetaData->mValues[i].mData * 0.01);
+        if (meta->mValues[i].mType == AI_FLOAT) {
+            *out = *(float*)meta->mValues[i].mData;
+            return true;
+        }
+        if (meta->mValues[i].mType == AI_DOUBLE) {
+            *out = (float)*(double*)meta->mValues[i].mData;
+            return true;
+        }
     }
-    return 1.0f;
+    return false;
 }
 
-// The uniform scale this import actually applied (or would apply) to the
-// scene's geometry -- what Light.size/range must be multiplied by, since the
+// The unit factor the file declares, as the metres conversion ScaleProcess
+// bakes: FBX's UnitScaleFactor is relative to centimetres, so the baked
+// factor is raw * 0.01 (the assimp FBX importer's own conversion, mirrored
+// here in double so a metre-declared file lands on exactly 1). Formats that
+// write no UnitScaleFactor metadata return 1.
+static float declared_unit_scale(const struct aiScene* scene) {
+    float raw;
+    if (!scene || !ai_metadata_get_float(scene->mMetaData, "UnitScaleFactor", &raw))
+        return 1.0f;
+    return (float)((double)raw * 0.01);
+}
+
+// The uniform scale this import applied to the scene's geometry -- what the
+// bare lengths on lights and cameras must be multiplied by, since the
 // per-frame light update carries positions and directions through node
 // transforms but never lengths.
 static float applied_unit_scale(const struct aiScene* scene) {
@@ -150,9 +166,8 @@ static bool is_gltf_path(const char* path) {
 // thousands. Clamping those would be corrupting correct data.
 //
 // The bound is deliberately loose. It exists to stop a unitless number arriving
-// orders of magnitude hot, not to express what a plausible light is. 10,000 cd
-// spans everything up to stadium fixtures; the old 100 sat below a domestic
-// bulb and was a leftover from the pre-photometric 1-10 renderer scale.
+// orders of magnitude hot, not to express what a plausible light is; 10,000 cd
+// spans everything up to stadium fixtures.
 static const float IMPORTED_LIGHT_INTENSITY_MAX = 10000.0f;
 
 /*
@@ -166,24 +181,20 @@ static const struct aiScene* import_ai_scene(const char* path, unsigned int flag
     if (import_unit_scale)
         flags |= aiProcess_GlobalScale;
     struct aiPropertyStore* props = aiCreatePropertyStore();
-    if (!props) {
-        return aiImportFile(path, flags);
-    }
+    // No fallback import: a scene loaded without the property set would carry
+    // different pivot and scale semantics than the loader then assumes.
+    if (!props)
+        return NULL;
     aiSetImportPropertyInteger(props, AI_CONFIG_IMPORT_FBX_PRESERVE_PIVOTS, 0);
-    if (import_scale_multiplier != 1.0f)
-        aiSetImportPropertyFloat(props, AI_CONFIG_GLOBAL_SCALE_FACTOR_KEY,
-                                 import_scale_multiplier);
+    aiSetImportPropertyFloat(props, AI_CONFIG_GLOBAL_SCALE_FACTOR_KEY, import_scale_multiplier);
     const struct aiScene* ai_scene = aiImportFileExWithProperties(path, flags, NULL, props);
     aiReleasePropertyStore(props);
     if (ai_scene) {
-        float applied = applied_unit_scale(ai_scene);
-        if (applied != 1.0f) {
-            log_info("Unit scale %.4gx applied to '%s' (file unit %.4gx, multiplier %.4gx)",
-                     applied, path, declared_unit_scale(ai_scene), import_scale_multiplier);
-        } else if (!import_unit_scale && declared_unit_scale(ai_scene) != 1.0f) {
-            log_info("Unit scale %.4gx declared by '%s' left unapplied (unit scaling disabled)",
-                     declared_unit_scale(ai_scene), path);
-        }
+        float declared = declared_unit_scale(ai_scene);
+        float applied = import_unit_scale ? declared * import_scale_multiplier : 1.0f;
+        if (declared != 1.0f || applied != 1.0f)
+            log_info("Unit scale for '%s': file declares %.4gx, applied %.4gx (multiplier %.4gx)",
+                     path, declared, applied, import_scale_multiplier);
     }
     return ai_scene;
 }
@@ -1219,15 +1230,9 @@ int load_animations_from_file(Scene* scene, Skeleton* skeleton, const char* file
 static bool find_gltf_light_range(const struct aiNode* node, const char* light_name, float* out) {
     if (!node || !light_name)
         return false;
-    if (node->mMetaData && node->mName.length &&
-        strcmp(node->mName.data, light_name) == 0) {
-        for (unsigned int i = 0; i < node->mMetaData->mNumProperties; i++) {
-            if (strcmp(node->mMetaData->mKeys[i].data, "PBR_LightRange") == 0 &&
-                node->mMetaData->mValues[i].mType == AI_FLOAT) {
-                *out = *(float*)node->mMetaData->mValues[i].mData;
-                return true;
-            }
-        }
+    if (node->mName.length && strcmp(node->mName.data, light_name) == 0 &&
+        ai_metadata_get_float(node->mMetaData, "PBR_LightRange", out)) {
+        return true;
     }
     for (unsigned int i = 0; i < node->mNumChildren; i++) {
         if (find_gltf_light_range(node->mChildren[i], light_name, out))
@@ -1252,10 +1257,13 @@ void process_ai_lights(const struct aiScene* scene, Light*** lights, size_t* num
         Light* light = create_light();
         light->name = safe_strdup(ai_light->mName.data);
 
-        glm_vec3_copy((vec3){ai_light->mPosition.x, ai_light->mPosition.y, ai_light->mPosition.z},
-                      light->original_position);
-        glm_vec3_copy((vec3){ai_light->mPosition.x, ai_light->mPosition.y, ai_light->mPosition.z},
-                      light->global_position);
+        // ScaleProcess never touches aiLight fields; this node-space offset is
+        // zero from every current importer, but scale it so the invariant is
+        // closed rather than assumed.
+        vec3 light_pos = {ai_light->mPosition.x * unit_scale, ai_light->mPosition.y * unit_scale,
+                          ai_light->mPosition.z * unit_scale};
+        glm_vec3_copy(light_pos, light->original_position);
+        glm_vec3_copy(light_pos, light->global_position);
         glm_vec3_copy(
             (vec3){ai_light->mDirection.x, ai_light->mDirection.y, ai_light->mDirection.z},
             light->original_direction);
@@ -1394,6 +1402,11 @@ void process_ai_cameras(const struct aiScene* scene, Camera*** cameras, size_t* 
         return;
     }
 
+    // Same bare-length rule as the lights: ScaleProcess never touches
+    // aiCamera, so its node-space position and clip planes are still in file
+    // units here.
+    float unit_scale = applied_unit_scale(scene);
+
     for (unsigned int i = 0; i < *num_cameras; i++) {
         const struct aiCamera* ai_camera = scene->mCameras[i];
         Camera* camera = malloc(sizeof(Camera));
@@ -1403,9 +1416,10 @@ void process_ai_cameras(const struct aiScene* scene, Camera*** cameras, size_t* 
         }
         camera->name = safe_strdup(ai_camera->mName.data);
 
-        glm_vec3_copy(
-            (vec3){ai_camera->mPosition.x, ai_camera->mPosition.y, ai_camera->mPosition.z},
-            camera->position);
+        glm_vec3_copy((vec3){ai_camera->mPosition.x * unit_scale,
+                             ai_camera->mPosition.y * unit_scale,
+                             ai_camera->mPosition.z * unit_scale},
+                      camera->position);
         glm_vec3_copy((vec3){ai_camera->mUp.x, ai_camera->mUp.y, ai_camera->mUp.z},
                       camera->up_vector);
         glm_vec3_copy((vec3){ai_camera->mLookAt.x, ai_camera->mLookAt.y, ai_camera->mLookAt.z},
@@ -1413,8 +1427,8 @@ void process_ai_cameras(const struct aiScene* scene, Camera*** cameras, size_t* 
 
         camera->fov_radians = ai_camera->mHorizontalFOV;
         camera->aspect_ratio = ai_camera->mAspect; // You might need to calculate this differently
-        camera->near_clip = ai_camera->mClipPlaneNear;
-        camera->far_clip = ai_camera->mClipPlaneFar;
+        camera->near_clip = ai_camera->mClipPlaneNear * unit_scale;
+        camera->far_clip = ai_camera->mClipPlaneFar * unit_scale;
         camera->horizontal_fov = ai_camera->mHorizontalFOV;
 
         // An imported camera is a perspective one; projection and picking both branch on this
@@ -1620,7 +1634,7 @@ Scene* create_scene_from_model_path(const char* path, const char* texture_direct
     }
 
     const struct aiScene* ai_scene = import_ai_scene(
-        path, aiProcess_Triangulate | aiProcess_CalcTangentSpace | uv_flip_flag(path));
+        path, aiProcess_Triangulate | aiProcess_CalcTangentSpace | uv_flip_flag());
     if (!ai_scene || ai_scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !ai_scene->mRootNode) {
         log_error("Error importing FBX file: %s\n", path);
         return NULL;

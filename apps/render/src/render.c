@@ -65,10 +65,9 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --ground <radius>  Ground projection dome radius (default: 5x scene)\n");
     fprintf(stderr, "      --no-recenter      Keep the model's authored world position\n");
     fprintf(stderr,
-            "      --no-flip-uv       For assets baked with the opposite UV V convention\n");
-    fprintf(stderr,
-            "      --flip-uv          Force the UV V-flip on (same mismatch, other direction)\n");
-    fprintf(stderr, "                         (symptom: scrambled/mirrored textures)\n");
+            "      --no-flip-uv       Asset baked bottom-left origin (raw DCC exports;\n");
+    fprintf(stderr, "                         symptom of a wrong choice: mirrored labels)\n");
+    fprintf(stderr, "      --flip-uv          Pin the default top-left interpretation\n");
     fprintf(stderr, "      --taa              Enable TAA in headless (temporal passes active;\n");
     fprintf(stderr, "                         output not byte-deterministic)\n");
     fprintf(stderr, "      --ground-height <m> HDR capture height above ground (default: 1.2)\n");
@@ -244,7 +243,7 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->cloud_wind_deg = -1.0f;
     args->sun_azimuth = -999.0f;
     args->world_scale = -1.0f; // -1 = keep the sky's default (1 unit = 1 metre)
-    args->import_scale = 1.0f; // extra multiplier on the import unit scale
+    args->import_scale = 1.0f; // 1 = none
     args->bloom_enable = -1;        // -1 = keep the engine default
     args->bloom_strength = -1.0f;   // -1 = keep the engine default
     args->bloom_threshold = -1.0f;  // -1 = keep the engine default
@@ -928,6 +927,14 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
         fprintf(stderr, "Error: model path is required\n\n");
         return -1;
     }
+    if (args->flip_uv && args->no_flip_uv) {
+        fprintf(stderr, "Error: --flip-uv and --no-flip-uv are mutually exclusive\n");
+        return -1;
+    }
+    if (args->no_unit_scale && args->import_scale != 1.0f) {
+        fprintf(stderr, "Error: --import-scale has no effect with --no-unit-scale\n");
+        return -1;
+    }
 
     return 0;
 }
@@ -1492,6 +1499,14 @@ int main(int argc, char** argv) {
         return -1;
     }
 
+    // Import knobs are process-wide state; set them before anything loads
+    if (args.no_flip_uv)
+        set_import_flip_uvs(false);
+    if (args.flip_uv)
+        set_import_flip_uvs(true);
+    set_import_unit_scale(!args.no_unit_scale);
+    set_import_scale_multiplier(args.import_scale);
+
     // Cetra scene file (.cscn): resolve the input (the .cscn itself or one
     // sitting next to a bare model) and merge its look into args, leaving
     // CLI-given values untouched. See cscene_setup above main.
@@ -1758,21 +1773,6 @@ int main(int argc, char** argv) {
      * Import model with async texture loading.
      */
 
-    if (args.no_flip_uv && args.flip_uv) {
-        fprintf(stderr, "Error: --flip-uv and --no-flip-uv are mutually exclusive\n");
-        return -1;
-    }
-    if (args.no_flip_uv)
-        set_import_flip_uvs(false);
-    if (args.flip_uv)
-        set_import_flip_uvs(true);
-    if (args.no_unit_scale) {
-        set_import_unit_scale(false);
-        if (args.import_scale != 1.0f)
-            fprintf(stderr, "Warning: --import-scale has no effect with --no-unit-scale\n");
-    } else if (args.import_scale != 1.0f) {
-        set_import_scale_multiplier(args.import_scale);
-    }
     // The importer defaults the texture dir to the model's own directory when
     // none is given (so an external-texture glTF like the POM fixture loads
     // without -t), so just pass args.texture_dir through.
@@ -2164,12 +2164,11 @@ int main(int argc, char** argv) {
         apply_cscene_light_overrides(scene, cscn, scene_radius);
     }
 
-    // Position camera to view the entire scene. The fallback triggers only on
-    // a degenerate radius: a real sub-metre asset gets its proportional
-    // distance, not a teleport to 100 units away.
+    // Position camera to view the entire scene; fallback only on a degenerate
+    // radius, so a sub-metre asset keeps its proportional distance
     float camera_distance = scene_radius * 2.5f;
     if (scene_radius <= 0.0f)
-        camera_distance = 100.0f; // Fallback for empty scenes
+        camera_distance = 100.0f;
     if (args.camera_distance > 0.0f)
         camera_distance = args.camera_distance;
 

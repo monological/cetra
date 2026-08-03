@@ -34,17 +34,15 @@ void process_ai_cameras(const struct aiScene* scene, Camera*** cameras, size_t* 
 // run, not per asset.
 void set_import_flip_uvs(bool flip);
 
-// Import setting: normalize the file's declared length unit to metres at
-// import (default on). The photometric lighting model reads world units as
-// metres; FBX declares its unit and ships centimetre-scale by default, so
-// without this its lights sit at kilometre distances and inverse-square
-// eats them. glTF/GLB declare no file scale (metres by spec) and are
-// untouched. Off restores the raw file units exactly.
+// Import setting: normalize the file's declared length unit to metres
+// (default on; off = raw file units). Formats that declare no unit
+// (glTF/GLB, metres by spec) are untouched either way. Process-wide, like
+// every import setting: the policy must hold across model, animation-clip,
+// and source-skeleton imports or retargeting would mix units.
 void set_import_unit_scale(bool enabled);
 
-// Import setting: extra uniform scale multiplied on top of the unit
-// normalization (default 1). For assets whose declared unit is wrong or
-// absent. Inert when unit scaling is disabled.
+// Import setting: extra uniform scale on top of the unit normalization
+// (default 1; inert when unit scaling is off). Process-wide.
 void set_import_scale_multiplier(float multiplier);
 
 // Load a model file into a Scene. Textures stream on the loader's worker pool
