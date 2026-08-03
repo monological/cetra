@@ -150,8 +150,10 @@ static bool is_gltf_path(const char* path) {
 // thousands. Clamping those would be corrupting correct data.
 //
 // The bound is deliberately loose. It exists to stop a unitless number arriving
-// orders of magnitude hot, not to express what a plausible light is.
-static const float IMPORTED_LIGHT_INTENSITY_MAX = 100.0f;
+// orders of magnitude hot, not to express what a plausible light is. 10,000 cd
+// spans everything up to stadium fixtures; the old 100 sat below a domestic
+// bulb and was a leftover from the pre-photometric 1-10 renderer scale.
+static const float IMPORTED_LIGHT_INTENSITY_MAX = 10000.0f;
 
 /*
  * Import a scene with FBX pivot preservation disabled. Assimp then collapses
