@@ -60,7 +60,14 @@ const float THICK_SCALE = 1.5;
 // a single gap this many slabs deep, or this many consecutive behind-columns.
 const float K_OCCLUDE = 8.0;
 const int M_BEHIND = 12;
-const int MAX_ITERS = 128;
+// The budget's worst customer is a floor-hugging ray reflecting distant
+// content at grazing incidence: its clearance above the receiver is too
+// small for coarse hi-z skips, so it crawls fine cells for hundreds of
+// screen columns, and exhausting the loop there cuts a near-mirror
+// reflection off along a hard mid-weight frontier (no distFade rescue --
+// the ray dies mid-segment). 128 was tried and produced exactly that
+// truncation on a close-up mirror floor.
+const int MAX_ITERS = 256;
 
 vec3 viewPosFromDepth(vec2 uv, float depth)
 {
