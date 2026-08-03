@@ -188,7 +188,12 @@ float coneOverlap(float cosA, float cosB, float cosBetween)
     if (d >= a + b)
         return 0.0; // disjoint
     // Between: 0 as the caps separate, `contained` as one swallows the other.
-    float x = (a + b - d) / max(a + b - abs(a - b), 1e-4);
+    // The clamp is load-bearing, not defensive. The band between the two
+    // cases has width a + b - |a - b| = 2*min(a, b), which goes to zero for a
+    // mirror lobe -- and a projected environment dome reports exactly that.
+    // Unclamped, x then leaves [0,1] by orders of magnitude and the cubic
+    // returns a multiplier that paints steps across the background.
+    float x = clamp((a + b - d) / max(2.0 * min(a, b), 1e-4), 0.0, 1.0);
     return contained * x * x * (3.0 - 2.0 * x);
 }
 
@@ -198,9 +203,13 @@ float aoVisibility()
     if (specOccMode == 0)
         return ao;
     vec4 nrm = texture(normalsTex, TexCoords);
-    // Real model surfaces only: a non-zero normal excludes sky/hair (zero
-    // marker), and a > -0.5 excludes the shadow-catcher floor (a = -1).
-    if (dot(nrm.xyz, nrm.xyz) < 0.01 || nrm.a <= -0.5)
+    // Real model surfaces only: a zero normal excludes sky/hair, and a
+    // NEGATIVE marker excludes the shadow-catcher floor. The test is the
+    // marker's sign, matching what the catcher writes and the SSR march
+    // reads -- its magnitude is the catcher's edge falloff, so a threshold
+    // at -0.5 would hand the plane's whole outer ring to the paths below,
+    // which is where a mirror-roughness catcher meets the cone term.
+    if (dot(nrm.xyz, nrm.xyz) < 0.01 || nrm.a < 0.0)
         return ao;
     vec4 aux = texture(auxTex, TexCoords); // .w = effective roughness
     // View direction from screen UV. normalize(-viewPos) is independent of depth

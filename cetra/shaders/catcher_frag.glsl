@@ -66,8 +66,17 @@ void main()
     // is active — otherwise a non-negative marker keeps the floor out of the
     // reflection set, and SSAO on this texel keeps using its derivative
     // normal rather than this up-normal.
-    NormalOut =
-        vec4(normalize(mat3(view) * vec3(0.0, 1.0, 0.0)), surfaceMode == 1 ? -falloff : 0.0);
+    //
+    // The floor under the falloff keeps the SIGN meaningful across the whole
+    // quad. Past the fade radius the weight reaches exactly zero, and this
+    // plane goes on writing an up-normal over pixels that show the sky
+    // through it -- with a 0 marker nothing downstream can tell that surface
+    // from a real one, and a screen-space pass reading a mirror-smooth floor
+    // there paints its own shape onto the background. Below SSR's own
+    // reflectivity cutoff, so the reflection set is unchanged.
+    float marker = -max(falloff, 0.002);
+    NormalOut = vec4(normalize(mat3(view) * vec3(0.0, 1.0, 0.0)),
+                     surfaceMode == 1 ? marker : 0.0);
     AuxOut = vec4(0.0);
     AlbedoOut = vec4(0.0);
     DiffuseOut = vec4(0.0);
