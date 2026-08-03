@@ -352,8 +352,9 @@ Not on the tracks above: a measurement-driven quality series that landed after A
 its own spec, branch, reviews and gates. It exists because using the engine surfaced defects the
 roadmap's feature items could not — a wrong tonemap constant, non-photometric light scales, shadow
 banding at real viewing distances, off-spec KHR materials against reference renderers, and temporal
-flicker whose root cause was an estimator, not a filter. **B2 clouds remains the next unstarted
-Tier-1 item.**
+flicker whose root cause was an estimator, not a filter. The series continued past B2 with 11.1
+and 11.2 (below). **Tier 1 is complete; Tier 2 — A5 bent-normal specular occlusion — is the next
+unstarted item.**
 
 - **9.9–10.0 photometry:** PBR Neutral desaturation blend was inverted vs the Khronos reference;
   then punctual lights went genuinely photometric (candela/lux imported as authored, EV100 camera)
@@ -378,8 +379,22 @@ Tier-1 item.**
 - **10.9 SSR trace rewrite:** the estimator itself — one unified hi-z loop with exact per-column
   interval acceptance, receiver-continuity step rejection, and a bounded behind-for-good exit to
   the probe. Raw-trace comb metric −90%, the behind-silhouette ghost gone, fully-dressed churn −69%
-  at the acceptance camera. Open item recorded there: `froxel_fog_golden` carries a 1,036-px drift
-  that predates 10.9 (10.7–10.8.1 era) and needs an owner.
+  at the acceptance camera. The `froxel_fog_golden` drift it flagged got its owner in 11.0's
+  phase-0 bisect: a legitimate catcher z-fight fix (e86fce9), golden re-baked. Post-merge on
+  master: reach limits dissolve via a budget-consumed fade instead of an env fallback (built and
+  rejected — an invisible catcher mirroring the sky prints as a glowing pool).
+- **11.1 import unit scale:** FBX's declared unit (cm) bakes to metres at import via assimp's
+  GlobalScale — the photometric model's implicit metre finally holds for imported assets (c64's
+  lights sat 1,200 "metres" out and culled to black). The UV V-flip default flipped to the baked
+  convention every textured FBX in the tree actually uses. Also bisected and re-baked the
+  three area-light goldens, stale since three deliberate un-re-baked changes (e7aa468, abc9d0b,
+  7ae16d0).
+- **11.2 fixed-step render clock:** the engine's frame clock produces a fixed 1/60 headless
+  (frame-index-pure), and particles/animation/game-step-count ride it instead of the wall clock —
+  tree went from 308k px run-to-run to 0, spores' step count became exact, and
+  abandoned_window's recorded "bistability" turned out to be wall-clock wind phase. Plus the
+  first gate to exercise the FBX light-import path (an ASCII FBX fixture pinning the 0.01×
+  unit-scale mirror).
 
 **Tier 2 — image quality & performance:**
 | # | Item | Effort | Why here |
