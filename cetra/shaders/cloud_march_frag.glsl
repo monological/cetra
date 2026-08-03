@@ -22,6 +22,19 @@ uniform int steps;
 uniform int lightSteps;
 uniform int debugShell; // 1 = shell entry/exit distances as color (R5 probe)
 
+// Ray-direction temporal reprojection (spec 11.0 phase 3): blend last
+// frame's result fetched through the march's OWN previous camera -- sky
+// pixels carry zero scene velocity, so the shared accumulators cannot
+// reproject them. Rotation-only: clouds are treated as at-infinity, and
+// translation parallax is bounded by the blend. NOT TAA-gated: the frame
+// stride below is a pure function of frameIndex, so headless goldens stay
+// byte-deterministic at a fixed frame count.
+uniform sampler2D historyTex;
+uniform int temporal;   // 1 = previous march was exactly last frame
+uniform int frameIndex; // total_frames % 4096
+uniform mat4 prevView;  // rotation-only world->view of the previous march
+uniform vec2 prevFocal; // previous (proj[0][0], proj[1][1])
+
 #include "noise.glsl"
 #include "clouds.glsl"
 
@@ -43,9 +56,29 @@ void main()
         return;
     }
 
-    float dither = ign(gl_FragCoord.xy);
+    // Frame-strided dither only when history is live: static headless
+    // pattern, per-frame rotation the blend averages when temporal.
+    float dither = ign(gl_FragCoord.xy +
+                       (temporal == 1 ? vec2(float(frameIndex) * 5.588238) : vec2(0.0)));
 
-    FragColor = cloud_march(camPosKm, rd, sunDir, shapeTex, detailTex, transmittanceLut,
-                            skyViewLut, steps, lightSteps, true, coverage, cloudType,
-                            densityScale, vec3(0.0), dither);
+    vec4 result = cloud_march(camPosKm, rd, sunDir, shapeTex, detailTex, transmittanceLut,
+                              skyViewLut, steps, lightSteps, true, coverage, cloudType,
+                              densityScale, vec3(0.0), dither);
+
+    if (temporal == 1) {
+        // Fetch history where this ray direction fell last frame. In front
+        // of the previous camera and on-screen -> 90/10 blend; otherwise
+        // keep the fresh sample.
+        vec3 pv = mat3(prevView) * rd;
+        if (pv.z < -1e-4) {
+            vec2 prevNdc = vec2(prevFocal.x * pv.x, prevFocal.y * pv.y) / -pv.z;
+            vec2 prevUv = prevNdc * 0.5 + 0.5;
+            if (prevUv.x >= 0.0 && prevUv.x <= 1.0 && prevUv.y >= 0.0 && prevUv.y <= 1.0) {
+                vec4 history = texture(historyTex, prevUv);
+                result = mix(result, history, 0.9);
+            }
+        }
+    }
+
+    FragColor = result;
 }

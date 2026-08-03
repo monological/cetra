@@ -35,6 +35,7 @@ SkyAtmosphere* create_sky_atmosphere(void) {
     sky->clouds.coverage = 0.45f;
     sky->clouds.cloud_type = 0.6f;
     sky->clouds.density = 1.0f;
+    sky->clouds.prev_frame = -1;
     sky_update_sun_dir(sky);
 
     return sky;
@@ -58,10 +59,12 @@ void free_sky_atmosphere(SkyAtmosphere* sky) {
         glDeleteTextures(1, &sky->clouds.shape_tex);
     if (sky->clouds.detail_tex)
         glDeleteTextures(1, &sky->clouds.detail_tex);
-    if (sky->clouds.march_tex)
-        glDeleteTextures(1, &sky->clouds.march_tex);
-    if (sky->clouds.march_fbo)
-        glDeleteFramebuffers(1, &sky->clouds.march_fbo);
+    for (int i = 0; i < 2; i++) {
+        if (sky->clouds.march_tex[i])
+            glDeleteTextures(1, &sky->clouds.march_tex[i]);
+        if (sky->clouds.march_fbo[i])
+            glDeleteFramebuffers(1, &sky->clouds.march_fbo[i]);
+    }
     if (sky->quad_vao)
         glDeleteVertexArrays(1, &sky->quad_vao);
     if (sky->quad_vbo)
@@ -593,7 +596,7 @@ void sky_render_background(SkyAtmosphere* sky, struct IBLResources* ibl, mat4 vi
     // byte-untouched (the off-gate); the caller also gates captures off,
     // since the march texture belongs to the main camera only.
     bool clouds = with_clouds && sky->background_clouds_program && sky->clouds.march_valid &&
-                  sky->clouds.march_tex != 0;
+                  sky->clouds.march_tex[sky->clouds.march_read] != 0;
     ShaderProgram* prog = clouds ? sky->background_clouds_program : sky->background_program;
 
     glUseProgram(prog->id);
@@ -612,7 +615,7 @@ void sky_render_background(SkyAtmosphere* sky, struct IBLResources* ibl, mat4 vi
     uniform_set_float(u, "sunIntensity", 20.0f);
     if (clouds) {
         glActiveTexture(GL_TEXTURE2);
-        glBindTexture(GL_TEXTURE_2D, sky->clouds.march_tex);
+        glBindTexture(GL_TEXTURE_2D, sky->clouds.march_tex[sky->clouds.march_read]);
         uniform_set_int(u, "cloudTex", 2);
         GLint vp[4];
         glGetIntegerv(GL_VIEWPORT, vp);

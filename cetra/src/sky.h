@@ -65,13 +65,27 @@ typedef struct CloudLayer {
     GLuint detail_tex; // 32^3  RGBA8 tiling volume
     bool noise_baked;
 
-    // Half-internal-res march target, written pre-scene each frame and
-    // sampled by the clouds background variant. Lazily allocated.
-    GLuint march_fbo;
-    GLuint march_tex;
+    // Half-internal-res march targets, written pre-scene each frame and
+    // sampled by the clouds background variant. A parity ping-pong (frame &
+    // 1): the march blends last frame's result in-place via ray-direction
+    // reprojection, so there is no separate accumulation pass. Lazily
+    // allocated.
+    GLuint march_fbo[2];
+    GLuint march_tex[2];
     int march_w, march_h;
+    int march_read;   // index the composite samples (written this frame)
     bool march_valid; // a march ran this session (gates the composite)
     ShaderProgram* march_program;
+
+    // The march's OWN previous camera + adjacency stamp (the froxel-fog
+    // 9.5.1 shape): sky pixels carry zero velocity, so the shared
+    // velocity-reprojecting accumulators cannot serve, and by the time any
+    // postfx state is written engine->prev_view_proj already holds THIS
+    // frame. Rotation-only view (clouds reproject by ray direction --
+    // translation parallax is accepted, bounded by the blend).
+    mat4 prev_view; // rotation-only world->view of the previous march
+    float prev_focal[2];
+    int prev_frame; // total_frames of the previous march; -1 = none
 } CloudLayer;
 
 struct Engine;

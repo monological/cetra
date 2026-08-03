@@ -179,38 +179,46 @@ int sky_bake_cloud_noise(SkyAtmosphere* sky) {
     return 0;
 }
 
-// Lazy half-internal-res march target. One-shot like the aerial volume: a
-// failed allocation logs and disables rather than retrying every frame.
-static bool ensure_march_target(CloudLayer* c, int w, int h) {
-    if (c->march_tex && c->march_w == w && c->march_h == h)
+// Lazy half-internal-res march ping-pong. One-shot like the aerial volume:
+// a failed allocation logs and disables rather than retrying every frame.
+static bool ensure_march_targets(CloudLayer* c, int w, int h) {
+    if (c->march_tex[0] && c->march_w == w && c->march_h == h)
         return true;
-    if (c->march_tex) {
-        glDeleteTextures(1, &c->march_tex);
-        glDeleteFramebuffers(1, &c->march_fbo);
-        c->march_tex = 0;
-        c->march_fbo = 0;
+    for (int i = 0; i < 2; i++) {
+        if (c->march_tex[i]) {
+            glDeleteTextures(1, &c->march_tex[i]);
+            glDeleteFramebuffers(1, &c->march_fbo[i]);
+            c->march_tex[i] = 0;
+            c->march_fbo[i] = 0;
+        }
     }
-    glGenFramebuffers(1, &c->march_fbo);
-    glGenTextures(1, &c->march_tex);
-    glBindTexture(GL_TEXTURE_2D, c->march_tex);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, w, h, 0, GL_RGBA, GL_HALF_FLOAT, NULL);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glBindFramebuffer(GL_FRAMEBUFFER, c->march_fbo);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, c->march_tex, 0);
-    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-        log_error("Cloud march FBO incomplete; clouds disabled");
-        glDeleteTextures(1, &c->march_tex);
-        glDeleteFramebuffers(1, &c->march_fbo);
-        c->march_tex = 0;
-        c->march_fbo = 0;
-        c->enabled = false;
-        return false;
+    for (int i = 0; i < 2; i++) {
+        glGenFramebuffers(1, &c->march_fbo[i]);
+        glGenTextures(1, &c->march_tex[i]);
+        glBindTexture(GL_TEXTURE_2D, c->march_tex[i]);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, w, h, 0, GL_RGBA, GL_HALF_FLOAT, NULL);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glBindFramebuffer(GL_FRAMEBUFFER, c->march_fbo[i]);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                               c->march_tex[i], 0);
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+            log_error("Cloud march FBO incomplete; clouds disabled");
+            for (int j = 0; j <= i; j++) {
+                glDeleteTextures(1, &c->march_tex[j]);
+                glDeleteFramebuffers(1, &c->march_fbo[j]);
+                c->march_tex[j] = 0;
+                c->march_fbo[j] = 0;
+            }
+            c->enabled = false;
+            return false;
+        }
     }
     c->march_w = w;
     c->march_h = h;
+    c->prev_frame = -1; // fresh targets carry no history
     return true;
 }
 
@@ -231,8 +239,15 @@ void sky_clouds_march(SkyAtmosphere* sky, struct Engine* engine, mat4 view, mat4
 
     int rw = 0, rh = 0;
     engine_render_size(engine, &rw, &rh);
-    if (!ensure_march_target(c, rw > 1 ? rw / 2 : 1, rh > 1 ? rh / 2 : 1))
+    if (!ensure_march_targets(c, rw > 1 ? rw / 2 : 1, rh > 1 ? rh / 2 : 1))
         return;
+
+    // Parity ping-pong + adjacency stamp: history is only trusted when the
+    // previous march was exactly last frame (a skipped frame resets rather
+    // than blending stale sky).
+    int frame = (int)(engine->total_frames);
+    int write = frame & 1;
+    int temporal = (c->prev_frame >= 0 && c->prev_frame == frame - 1) ? 1 : 0;
 
     GLint prev_viewport[4];
     GLint prev_framebuffer;
@@ -248,7 +263,7 @@ void sky_clouds_march(SkyAtmosphere* sky, struct Engine* engine, mat4 view, mat4
     float units = sky->world_units_per_km > 0.0f ? sky->world_units_per_km : 1000.0f;
     vec3 cam_km = {inv_view[3][0] / units, inv_view[3][1] / units, inv_view[3][2] / units};
 
-    glBindFramebuffer(GL_FRAMEBUFFER, c->march_fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, c->march_fbo[write]);
     glViewport(0, 0, c->march_w, c->march_h);
     glUseProgram(c->march_program->id);
     UniformManager* um = c->march_program->uniforms;
@@ -265,6 +280,9 @@ void sky_clouds_march(SkyAtmosphere* sky, struct Engine* engine, mat4 view, mat4
     glActiveTexture(GL_TEXTURE3);
     glBindTexture(GL_TEXTURE_2D, sky->sky_view_lut);
     uniform_set_int(um, "skyViewLut", 3);
+    glActiveTexture(GL_TEXTURE4);
+    glBindTexture(GL_TEXTURE_2D, c->march_tex[write ^ 1]);
+    uniform_set_int(um, "historyTex", 4);
     glActiveTexture(GL_TEXTURE0);
 
     uniform_set_mat4(um, "invView", (float*)inv_view);
@@ -278,9 +296,25 @@ void sky_clouds_march(SkyAtmosphere* sky, struct Engine* engine, mat4 view, mat4
     uniform_set_int(um, "steps", 64);
     uniform_set_int(um, "lightSteps", 6);
     uniform_set_int(um, "debugShell", c->debug_shell);
+    uniform_set_int(um, "temporal", temporal);
+    uniform_set_int(um, "frameIndex", frame % 4096);
+    uniform_set_mat4(um, "prevView", (float*)c->prev_view);
+    uniform_set_vec2(um, "prevFocal", c->prev_focal);
 
     draw_fullscreen_quad(sky->quad_vao);
     c->march_valid = true;
+    c->march_read = write;
+
+    // Store this frame's camera for the next march's reprojection:
+    // rotation-only view (ray-direction reprojection) + the projection
+    // focals, and the adjacency stamp.
+    glm_mat4_copy(view, c->prev_view);
+    c->prev_view[3][0] = 0.0f;
+    c->prev_view[3][1] = 0.0f;
+    c->prev_view[3][2] = 0.0f;
+    c->prev_focal[0] = projection[0][0];
+    c->prev_focal[1] = projection[1][1];
+    c->prev_frame = frame;
 
     glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prev_framebuffer);
     glViewport(prev_viewport[0], prev_viewport[1], prev_viewport[2], prev_viewport[3]);
