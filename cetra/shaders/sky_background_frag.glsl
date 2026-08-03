@@ -17,25 +17,15 @@ uniform vec3 sunDir;       // world-space unit vector TOWARD the sun
 uniform float sunCosRadius; // cos of the sun's angular RADIUS
 uniform float sunIntensity; // scalar disc radiance scale
 
-#include "sky_lut.glsl"
+#include "sky_radiance.glsl"
 
 void main()
 {
     vec3 dir = normalize(TexCoords);
     float r = Rg + VIEW_ALTITUDE;
 
-    vec3 sky = texture(skyViewLut, skyViewUv(dir, sunDir, r)).rgb;
-
-    // Sun disc: within the angular radius, add the disc radiance attenuated
-    // by transmittance toward the sun at the eye, with simple limb
-    // darkening. Only above the horizon.
-    float cosVS = dot(dir, sunDir);
-    if (cosVS > sunCosRadius && dir.y > 0.0) {
-        float edge = (cosVS - sunCosRadius) / (1.0 - sunCosRadius);
-        float limb = 0.4 + 0.6 * sqrt(max(edge, 0.0)); // darker toward the rim
-        vec3 sunT = transmittanceToSky(transmittanceLut, r, sunDir.y);
-        sky += sunT * sunIntensity * limb;
-    }
+    vec3 sky =
+        skyRadiance(dir, sunDir, r, skyViewLut, transmittanceLut, sunCosRadius, sunIntensity);
 
     FragColor = vec4(min(sky, vec3(30000.0)) * preExposure, 1.0);
 }
