@@ -1180,11 +1180,14 @@ void key_callback(Engine* engine, int key, int scancode, int action, int mods) {
 }
 
 // Ticks the falling-leaf emitter. The engine drives the render pass; particles
-// need a simulation step of their own.
+// need a simulation step of their own, off the frame clock so headless runs
+// are frame-index-pure.
 void tree_update_callback(Engine* engine, float delta_time) {
+    (void)delta_time;
     Scene* scene = get_current_scene(engine);
     if (scene)
-        scene_update_particle_systems(scene, delta_time, (float)engine->last_frame_time);
+        scene_update_particle_systems(scene, (float)engine->render_delta,
+                                      (float)engine->render_time);
 }
 
 void render_scene_callback(Engine* engine, Scene* scene) {
