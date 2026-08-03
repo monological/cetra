@@ -1746,7 +1746,9 @@ static void _engine_gui_panel(Engine* engine) {
         igSliderFloat("AO Radius", &fx->ssao_radius, 0.05f, 1000.0f, "%.2f",
                       ImGuiSliderFlags_Logarithmic);
         igSliderFloat("AO Strength", &fx->ssao_strength, 0.0f, 1.0f, "%.2f", 0);
-        igCheckbox("Specular Occlusion", &fx->spec_occlusion_enabled);
+        static const char* const spec_occ_names[] = {"Off", "Legacy", "Bent normal"};
+        igCombo_Str_arr("Specular Occlusion", &fx->spec_occlusion_mode, spec_occ_names,
+                        (int)(sizeof(spec_occ_names) / sizeof(spec_occ_names[0])), -1);
         igCheckbox("AO Edge Filter", &fx->ao_edge_filter_enabled);
         _end_effect_group();
 

@@ -27,7 +27,7 @@ uniform sampler2D giTex;      // Half-res gathered GI radiance (SSGI)
 // give view-Z + roughness, normalsTex the view normal, for a Lagarde term.
 uniform sampler2D auxTex;       // Aux G-buffer: linear view-Z (.z) + roughness (.w)
 uniform vec2 invFocal;          // 1/projection focal terms, for view-pos reconstruction
-uniform int specOccEnabled;     // Apply specular occlusion to the AO factor
+uniform int specOccMode;        // 0 off, 1 legacy smoothness blend, 2 bent-normal cone
 uniform int specOccHasMetallic; // albedoTex.a carries metallic this frame (SSGI wrote it)
 uniform sampler2D csTex;        // Contact-shadow visibility (spec 9.3), AO res
 uniform int csEnabled;          // Multiply the direct-light term by contact shadows
@@ -152,15 +152,20 @@ vec3 toneSelect(vec3 c)
 // Screen-space AO visibility with specular occlusion. GTAO measures DIFFUSE
 // hemispherical occlusion; a smooth reflection instead sees the environment in
 // its mirror direction, past the local occluders GTAO sampled -- so it must not
-// be dimmed (nor jittered) by that AO. We blend the AO toward unoccluded (1.0)
-// by the pixel's specular fraction x smoothness: a smooth grazing specular (high
-// dielectric Fresnel or a metal, low roughness) goes fully unoccluded, killing
-// the AO's silhouette shimmer off it; diffuse/rough pixels keep the plain AO.
-// Off (specOccEnabled 0) returns raw ao -> byte-identical to the pre-feature path.
+// be dimmed (nor jittered) by that AO.
+//
+// Mode 1 (legacy) blends the AO toward unoccluded (1.0) by the pixel's
+// specular fraction x smoothness: a smooth grazing specular (high dielectric
+// Fresnel or a metal, low roughness) goes fully unoccluded, killing the AO's
+// silhouette shimmer off it; diffuse/rough pixels keep the plain AO. It is
+// directionless -- a reflection aimed into a wall is unoccluded as readily as
+// one aimed at open sky.
+//
+// Mode 0 returns raw ao -> byte-identical to the pre-feature path.
 float aoVisibility()
 {
     float ao = texture(aoTex, TexCoords).r;
-    if (specOccEnabled == 0)
+    if (specOccMode == 0)
         return ao;
     vec4 nrm = texture(normalsTex, TexCoords);
     // Real model surfaces only: a non-zero normal excludes sky/hair (zero

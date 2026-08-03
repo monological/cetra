@@ -54,7 +54,17 @@ typedef enum PostFXDebugView {
     // debugView dispatch.
     POSTFX_DEBUG_SPEC_OCC = 7, // AO visibility after specular occlusion
     POSTFX_DEBUG_CONTACT = 8,  // Contact-shadow visibility term (before compositing)
+    POSTFX_DEBUG_BENT = 9,     // Bent normal from the AO chain, remapped for display
 } PostFXDebugView;
+
+// How the AO factor treats specular. Legacy blends AO toward unoccluded by
+// smoothness alone; bent intersects the AO chain's visibility cone with the
+// reflection lobe, so a reflection aimed into an occluder stays occluded.
+typedef enum PostFXSpecOccMode {
+    POSTFX_SPEC_OCC_OFF = 0,
+    POSTFX_SPEC_OCC_LEGACY = 1,
+    POSTFX_SPEC_OCC_BENT = 2,
+} PostFXSpecOccMode;
 
 // Mirrors MAX_SHADOW_LIGHTS (shadow.h) without postfx learning about the
 // shadow system; the publish step fills at most this many caster slots
@@ -155,7 +165,7 @@ typedef struct PostFX {
     bool ssao_enabled;
     float ssao_radius; // Occlusion reach in view-space units
     float ssao_strength;
-    bool spec_occlusion_enabled; // Keep GTAO off specular/reflections (spec-occ at tonemap)
+    int spec_occlusion_mode;     // PostFXSpecOccMode: keep GTAO off specular (spec-occ at tonemap)
     bool ao_edge_filter_enabled; // Depth-bilateral AO blur (no silhouette bleed onto the floor)
 
     // Screen-space contact shadows (spec 9.3): an AO-res depth march toward the

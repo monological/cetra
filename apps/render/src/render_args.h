@@ -48,6 +48,9 @@ typedef struct {
     int no_ssao;                // Disable screen-space ambient occlusion
     int ssao_debug;             // Show the raw SSAO buffer
     int no_spec_occlusion;      // Let GTAO darken specular (disable spec-occ)
+    int bent_spec_occ;          // Bent-normal cone spec-occ instead of the legacy blend
+    int spec_occ_debug;         // Show the AO visibility the scene is multiplied by
+    int bent_debug;             // Show the bent normal from the AO chain
     int no_ao_edge_filter;      // Disable the depth-aware AO blur (allow silhouette bleed)
     int ssgi;                   // Enable screen-space GI (indirect diffuse)
     int ssgi_debug;             // Show the raw gathered GI radiance

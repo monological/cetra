@@ -89,6 +89,9 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --ssao-debug       Show the raw SSAO buffer\n");
     fprintf(stderr,
             "      --no-spec-occlusion Let GTAO darken specular (disable spec-occlusion)\n");
+    fprintf(stderr, "      --bent-spec-occ    Directional spec-occlusion from the bent normal\n");
+    fprintf(stderr, "      --spec-occ-debug   Show the AO visibility the scene multiplies by\n");
+    fprintf(stderr, "      --bent-debug       Show the bent normal from the AO chain\n");
     fprintf(stderr, "      --no-ao-edge-filter Disable the depth-aware AO blur\n");
     fprintf(stderr,
             "      --ao-radius <f>    AO/GI reach in world units (default: scene-scaled)\n");
@@ -472,6 +475,12 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->ssao_debug = 1;
         } else if (strcmp(argv[i], "--no-spec-occlusion") == 0) {
             args->no_spec_occlusion = 1;
+        } else if (strcmp(argv[i], "--bent-spec-occ") == 0) {
+            args->bent_spec_occ = 1;
+        } else if (strcmp(argv[i], "--spec-occ-debug") == 0) {
+            args->spec_occ_debug = 1;
+        } else if (strcmp(argv[i], "--bent-debug") == 0) {
+            args->bent_debug = 1;
         } else if (strcmp(argv[i], "--no-ao-edge-filter") == 0) {
             args->no_ao_edge_filter = 1;
         } else if (strcmp(argv[i], "--ssgi") == 0) {
@@ -1547,13 +1556,22 @@ int main(int argc, char** argv) {
         engine->postfx->ssao_enabled = false;
     }
     if (args.no_spec_occlusion && engine->postfx) {
-        engine->postfx->spec_occlusion_enabled = false;
+        engine->postfx->spec_occlusion_mode = POSTFX_SPEC_OCC_OFF;
+    }
+    if (args.bent_spec_occ && engine->postfx) {
+        engine->postfx->spec_occlusion_mode = POSTFX_SPEC_OCC_BENT;
     }
     if (args.no_ao_edge_filter && engine->postfx) {
         engine->postfx->ao_edge_filter_enabled = false;
     }
     if (args.ssao_debug && engine->postfx) {
         engine->postfx->debug_view = POSTFX_DEBUG_AO;
+    }
+    if (args.spec_occ_debug && engine->postfx) {
+        engine->postfx->debug_view = POSTFX_DEBUG_SPEC_OCC;
+    }
+    if (args.bent_debug && engine->postfx) {
+        engine->postfx->debug_view = POSTFX_DEBUG_BENT;
     }
     if (args.ssgi && engine->postfx) {
         engine->postfx->ssgi_enabled = true;
