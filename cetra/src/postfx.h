@@ -330,7 +330,9 @@ typedef struct PostFX {
     float dof_rotation;                        // Aperture rotation, degrees
     bool dof_ready;                            // Lazy-alloc guard for the targets below
     GLuint dof_coc_fbo, dof_coc_texture;       // Half-res: scene + signed CoC in .a
-    GLuint dof_blur_fbo, dof_blur_texture;     // Half-res: gathered blur
+    GLuint dof_gather_fbo;                     // Half-res MRT: far (att0) + near (att1)
+    GLuint dof_far_texture;                    // RGBA16F far field + weight
+    GLuint dof_near_texture;                   // RGBA16F premultiplied near + coverage
     GLuint dof_fbo, dof_texture;               // Full-res: composited scene
     int dof_tile_w, dof_tile_h;                // Tile-pass resolution (half-res / DOF_TILE, ceil)
     GLuint dof_tile_fbo, dof_tile_texture;     // RG16F per-tile (maxFarCoC, maxNearCoC)

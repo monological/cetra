@@ -596,8 +596,9 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     uniform_set_int(fx->dof_gather_program->uniforms, "tileSize", DOF_TILE);
     glUseProgram(fx->dof_composite_program->id);
     uniform_set_int(fx->dof_composite_program->uniforms, "sceneTex", 0);
-    uniform_set_int(fx->dof_composite_program->uniforms, "blurTex", 1);
-    uniform_set_int(fx->dof_composite_program->uniforms, "depthTex", 2);
+    uniform_set_int(fx->dof_composite_program->uniforms, "nearTex", 1);
+    uniform_set_int(fx->dof_composite_program->uniforms, "farTex", 2);
+    uniform_set_int(fx->dof_composite_program->uniforms, "depthTex", 3);
 
     glUseProgram(fx->motion_blur_tilemax_program->id);
     uniform_set_int(fx->motion_blur_tilemax_program->uniforms, "auxTex", 0);
@@ -673,9 +674,9 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
 }
 
 // Allocate the depth-of-field targets on first use so the feature is free when
-// off: two half-res buffers (CoC+colour, gathered blur), the tile-pass pair
-// (per-tile CoC maxima + their dilation), and a full-res composite. Returns
-// false and leaves DoF disabled if allocation fails.
+// off: the half-res CoC+colour buffer, the near/far gather MRT, the tile-pass
+// pair (per-tile CoC maxima + their dilation), and a full-res composite.
+// Returns false and leaves DoF disabled if allocation fails.
 static bool postfx_ensure_dof_targets(PostFX* fx) {
     if (fx->dof_ready)
         return true;
@@ -683,8 +684,8 @@ static bool postfx_ensure_dof_targets(PostFX* fx) {
     fx->dof_tile_h = (fx->bloom_height + DOF_TILE - 1) / DOF_TILE;
     if (!create_color_fbo(fx->bloom_width, fx->bloom_height, GL_RGBA16F, &fx->dof_coc_fbo,
                           &fx->dof_coc_texture) ||
-        !create_color_fbo(fx->bloom_width, fx->bloom_height, GL_RGBA16F, &fx->dof_blur_fbo,
-                          &fx->dof_blur_texture) ||
+        !create_color_fbo(fx->bloom_width, fx->bloom_height, GL_RGBA16F, &fx->dof_gather_fbo,
+                          &fx->dof_far_texture) ||
         !create_color_fbo(fx->dof_tile_w, fx->dof_tile_h, GL_RG16F, &fx->dof_tile_fbo,
                           &fx->dof_tile_texture) ||
         !create_color_fbo(fx->dof_tile_w, fx->dof_tile_h, GL_RG16F, &fx->dof_dilate_fbo,
@@ -693,6 +694,27 @@ static bool postfx_ensure_dof_targets(PostFX* fx) {
         log_error("Failed to allocate depth-of-field targets");
         return false;
     }
+    // Near field joins the gather FBO as attachment 1 (the SSGI-on-GTAO
+    // idiom); the draw-buffer pair is FBO state, set once here.
+    glGenTextures(1, &fx->dof_near_texture);
+    glBindTexture(GL_TEXTURE_2D, fx->dof_near_texture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, fx->bloom_width, fx->bloom_height, 0, GL_RGBA,
+                 GL_FLOAT, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glBindFramebuffer(GL_FRAMEBUFFER, fx->dof_gather_fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D,
+                           fx->dof_near_texture, 0);
+    const GLenum bufs[2] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1};
+    glDrawBuffers(2, bufs);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        log_error("DoF gather MRT framebuffer is not complete");
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        return false;
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
     fx->dof_ready = true;
     return true;
 }
@@ -1217,10 +1239,10 @@ static void postfx_run_dof(PostFX* fx, mat4 projection) {
     uniform_set_int(fx->dof_dilate_program->uniforms, "dilateRadius", dilate);
     draw_fullscreen_quad(fx->quad_vao);
 
-    // Pass 4: aperture gather (half res). The kernel is rebuilt per frame --
-    // 64 sincos is nothing, and it keeps the GUI blade/rotation sliders live
-    // with no dirty tracking.
-    glBindFramebuffer(GL_FRAMEBUFFER, fx->dof_blur_fbo);
+    // Pass 4: aperture gather (half res), MRT to the near+far fields. The
+    // kernel is rebuilt per frame -- 64 sincos is nothing, and it keeps the
+    // GUI blade/rotation sliders live with no dirty tracking.
+    glBindFramebuffer(GL_FRAMEBUFFER, fx->dof_gather_fbo);
     glViewport(0, 0, fx->bloom_width, fx->bloom_height);
     glUseProgram(fx->dof_gather_program->id);
     glActiveTexture(GL_TEXTURE0);
@@ -1236,15 +1258,17 @@ static void postfx_run_dof(PostFX* fx, mat4 projection) {
         glUniform2fv(kloc, DOF_TAPS, (const GLfloat*)kernel);
     draw_fullscreen_quad(fx->quad_vao);
 
-    // Pass 5: composite sharp + blur (full res)
+    // Pass 5: composite (full res) -- far under sharp, near alpha-over both
     glBindFramebuffer(GL_FRAMEBUFFER, fx->dof_fbo);
     glViewport(0, 0, fx->width, fx->height);
     glUseProgram(fx->dof_composite_program->id);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, fx->hdr_texture);
     glActiveTexture(GL_TEXTURE1);
-    glBindTexture(GL_TEXTURE_2D, fx->dof_blur_texture);
+    glBindTexture(GL_TEXTURE_2D, fx->dof_near_texture);
     glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, fx->dof_far_texture);
+    glActiveTexture(GL_TEXTURE3);
     glBindTexture(GL_TEXTURE_2D, fx->depth_texture);
     uniform_set_mat4(fx->dof_composite_program->uniforms, "projection", (float*)projection);
     uniform_set_float(fx->dof_composite_program->uniforms, "focusDistance", fx->dof_focus_distance);
@@ -1285,8 +1309,9 @@ void free_postfx(PostFX* fx) {
     // DoF/fog targets are 0 (no-op delete) if never lazily allocated
     glDeleteFramebuffers(1, &fx->dof_coc_fbo);
     glDeleteTextures(1, &fx->dof_coc_texture);
-    glDeleteFramebuffers(1, &fx->dof_blur_fbo);
-    glDeleteTextures(1, &fx->dof_blur_texture);
+    glDeleteFramebuffers(1, &fx->dof_gather_fbo);
+    glDeleteTextures(1, &fx->dof_far_texture);
+    glDeleteTextures(1, &fx->dof_near_texture);
     glDeleteFramebuffers(1, &fx->dof_tile_fbo);
     glDeleteTextures(1, &fx->dof_tile_texture);
     glDeleteFramebuffers(1, &fx->dof_dilate_fbo);
