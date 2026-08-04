@@ -1917,8 +1917,26 @@ static void _engine_gui_panel(Engine* engine) {
         bool taa = fx->taa_enabled;
         if (igCheckbox("TAA", &taa))
             set_engine_taa_enabled(engine, taa);
-        if (fx->render_scale < 1.0f)
-            igText("TAAU render scale: %.2f (set at launch)", fx->render_scale);
+        // TAAU render scale. Applied on release, not per drag tick: each change
+        // rebuilds every render target and resets the temporal histories (the
+        // sun/cloud sliders defer their re-bake the same way). AlwaysClamp
+        // because Ctrl+click types a value straight into an allocation size.
+        static float pending_scale = 1.0f;
+        static bool scale_dragging = false;
+        // Track the live value except while dragging, so a scale the setter
+        // clamped (or one the CLI set) shows here instead of the stale request.
+        if (!scale_dragging)
+            pending_scale = engine->render_scale;
+        igSliderFloat("Render Scale", &pending_scale, 0.5f, 1.0f, "%.2f",
+                      ImGuiSliderFlags_AlwaysClamp);
+        scale_dragging = igIsItemActive();
+        if (igIsItemDeactivatedAfterEdit())
+            set_engine_render_scale(engine, pending_scale);
+        if (!fx->taa_enabled && engine->render_scale < 1.0f) {
+            // Without the resolve there is nothing to reconstruct with, so the
+            // frame is magnified rather than upscaled: softer, not faster.
+            igTextDisabled("(needs TAA to reconstruct; magnifying)");
+        }
 
         // Index maps to the enum minus PASSTHROUGH, which is not a look and
         // stays out of the picker
