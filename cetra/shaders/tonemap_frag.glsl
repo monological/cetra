@@ -188,8 +188,8 @@ const float VIS_EDGE_SOFTNESS = 0.25;
 // completely and the exact function becomes a STEP at d == a. Fed a bent
 // normal quantised to 8 bits, a step prints its own contour lines onto every
 // smooth surface, and no amount of input precision removes them -- it only
-// makes the contour thinner. So the band takes a floor, and both endpoints
-// are expressed as one clamped interpolation.
+// makes the contour thinner. So the band takes a floor, and the edge is one
+// smoothstep across it.
 float coneOverlap(float cosA, float cosB, float cosBetween)
 {
     float a = acos(clamp(cosA, -1.0, 1.0));
@@ -202,13 +202,14 @@ float coneOverlap(float cosA, float cosB, float cosBetween)
     // The band is centred on max(a, b) with half-width min(a, b) -- exact
     // where the geometry has width to spare, floored where it does not.
     float half_band = max(min(a, b), VIS_EDGE_SOFTNESS);
-    float x = clamp((max(a, b) + half_band - d) / (2.0 * half_band), 0.0, 1.0);
-    return contained * x * x * (3.0 - 2.0 * x);
+    float mid = max(a, b);
+    return contained * (1.0 - smoothstep(mid - half_band, mid + half_band, d));
 }
 
 float aoVisibility()
 {
-    float ao = texture(aoTex, TexCoords).r;
+    vec4 aoSample = texture(aoTex, TexCoords); // .r visibility, .gba encoded bent normal
+    float ao = aoSample.r;
     if (specOccMode == 0)
         return ao;
     vec4 nrm = texture(normalsTex, TexCoords);
@@ -245,16 +246,17 @@ float aoVisibility()
         float cosAv = sqrt(clamp(1.0 - ao, 0.0, 1.0));
         // Reflection cone: mirror at roughness 0, near-hemispheric at 1.
         float cosAs = exp2(-3.321928 * aux.w * aux.w);
-        vec3 bentN = normalize(texture(aoTex, TexCoords).gba * 2.0 - 1.0);
+        vec3 bentN = normalize(aoSample.gba * 2.0 - 1.0);
         vec3 R = reflect(-V, N);
-        float visible = coneOverlap(cosAv, cosAs, dot(bentN, R));
+        float bDotR = dot(bentN, R);
+        float visible = coneOverlap(cosAv, cosAs, bDotR);
         // Measured against the SAME lobe under an open hemisphere, because a
         // reflection cone always hangs partly below its own horizon and the
         // BRDF has already zeroed that half. Without the reference the term
         // charges the lobe for geometry that was never there, and even a
         // fully unoccluded surface -- open ground, a distant landscape --
         // comes back darkened.
-        float open = coneOverlap(0.0, cosAs, dot(bentN, R));
+        float open = coneOverlap(0.0, cosAs, bDotR);
         float so = open > 1e-4 ? clamp(visible / open, 0.0, 1.0) : 1.0;
         // Same weight as legacy, different destination: legacy hands the
         // specular share a blanket 1.0 (unoccluded in every direction), this

@@ -14,8 +14,7 @@ out vec4 FragColor;
 // ENCODED here: the encode is affine, so averaging encoded directions is the
 // encoding of the averaged direction, and one normalize at the consumer
 // recovers a unit vector from both this blur and the temporal blend. Shared
-// with the full-res contact-shadow denoise, whose R16F target keeps only .r --
-// which is why the .r sum below stays exactly the expression it was.
+// with the full-res contact-shadow denoise, whose R16F target keeps only .r.
 uniform sampler2D aoTex;
 uniform sampler2D auxTex; // Aux G-buffer; .z = linear view-Z (< 0), 0 = sky
 uniform vec2 texelSize;

@@ -47,7 +47,6 @@ typedef struct {
     int no_springs;             // Disable spring-bone secondary motion
     int no_ssao;                // Disable screen-space ambient occlusion
     int ssao_debug;             // Show the raw SSAO buffer
-    int no_spec_occlusion;      // Let GTAO darken specular (alias for --spec-occ off)
     int spec_occ_mode;          // PostFXSpecOccMode override (-1 = keep engine default)
     int spec_occ_debug;         // Show the AO visibility the scene is multiplied by
     int bent_debug;             // Show the bent normal from the AO chain

@@ -1747,8 +1747,10 @@ static void _engine_gui_panel(Engine* engine) {
                       ImGuiSliderFlags_Logarithmic);
         igSliderFloat("AO Strength", &fx->ssao_strength, 0.0f, 1.0f, "%.2f", 0);
         static const char* const spec_occ_names[] = {"Off", "Legacy", "Bent normal"};
-        igCombo_Str_arr("Specular Occlusion", &fx->spec_occlusion_mode, spec_occ_names,
-                        (int)(sizeof(spec_occ_names) / sizeof(spec_occ_names[0])), -1);
+        int so = (int)fx->spec_occlusion_mode;
+        if (igCombo_Str_arr("Specular Occlusion", &so, spec_occ_names,
+                            (int)(sizeof(spec_occ_names) / sizeof(spec_occ_names[0])), -1))
+            fx->spec_occlusion_mode = (PostFXSpecOccMode)so;
         igCheckbox("AO Edge Filter", &fx->ao_edge_filter_enabled);
         _end_effect_group();
 

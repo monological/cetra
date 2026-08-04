@@ -157,6 +157,9 @@ void main()
     // off curved geometry graze their own silhouettes and sparkle. The
     // floor's roughness is a scalar uniform, not carried per-texel.
     float floorFade = clamp(-nr.a, 0.0, 1.0);
+    // This cutoff must stay above catcher_frag's 0.002 marker floor: the
+    // catcher stamps that floor on its dead outer ring precisely so it
+    // lands below here and never traces.
     if (floorFade < 0.004 || dot(n, n) < 0.01) {
         FragColor = vec4(0.0);
         return;

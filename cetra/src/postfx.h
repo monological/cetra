@@ -165,7 +165,7 @@ typedef struct PostFX {
     bool ssao_enabled;
     float ssao_radius; // Occlusion reach in view-space units
     float ssao_strength;
-    int spec_occlusion_mode;     // PostFXSpecOccMode: keep GTAO off specular (spec-occ at tonemap)
+    PostFXSpecOccMode spec_occlusion_mode; // Keep GTAO off specular (spec-occ at tonemap)
     bool ao_edge_filter_enabled; // Depth-bilateral AO blur (no silhouette bleed onto the floor)
 
     // Screen-space contact shadows (spec 9.3): an AO-res depth march toward the

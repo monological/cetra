@@ -151,6 +151,11 @@ void main()
     float occlusion = 0.0;
     vec3 gi = vec3(0.0);   // one-bounce irradiance gathered from occluders (SSGI)
     vec3 bent = vec3(0.0); // sum of the still-visible directions (bent normal)
+    // Per-sector rotation step for the bent-normal recurrence below; constant
+    // across slices.
+    float dAng = PI / float(SECTOR_COUNT);
+    float cd = cos(dAng);
+    float sd = sin(dAng);
     for (int s = 0; s < SLICES; s++) {
         float phi = (float(s) + sliceRot) * (PI / float(SLICES));
         vec2 dir = vec2(cos(phi), sin(phi));
@@ -240,9 +245,6 @@ void main()
         // called per sector: a sincos in a 32-iteration loop, twice per pixel,
         // is the one place this shader would pay real ALU for the bent normal,
         // and fp32 drift over 32 steps of a fixed angle is ~1e-6.
-        float dAng = PI / float(SECTOR_COUNT);
-        float cd = cos(dAng);
-        float sd = sin(dAng);
         float ca = cos(hemiStart + 0.5 * dAng);
         float sa = sin(hemiStart + 0.5 * dAng);
         float sumC = 0.0;

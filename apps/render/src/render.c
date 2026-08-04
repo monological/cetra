@@ -88,7 +88,7 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --no-ssao          Disable screen-space ambient occlusion\n");
     fprintf(stderr, "      --ssao-debug       Show the raw SSAO buffer\n");
     fprintf(stderr,
-            "      --no-spec-occlusion Let GTAO darken specular (disable spec-occlusion)\n");
+            "      --no-spec-occlusion Let GTAO darken specular (alias for --spec-occ off)\n");
     fprintf(stderr,
             "      --spec-occ <m>     Specular occlusion: off, legacy, bent (default: legacy)\n");
     fprintf(stderr, "      --spec-occ-debug   Show the AO visibility the scene multiplies by\n");
@@ -476,7 +476,7 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
         } else if (strcmp(argv[i], "--ssao-debug") == 0) {
             args->ssao_debug = 1;
         } else if (strcmp(argv[i], "--no-spec-occlusion") == 0) {
-            args->no_spec_occlusion = 1;
+            args->spec_occ_mode = POSTFX_SPEC_OCC_OFF;
         } else if (strcmp(argv[i], "--spec-occ") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -1570,11 +1570,8 @@ int main(int argc, char** argv) {
     if (args.no_ssao && engine->postfx) {
         engine->postfx->ssao_enabled = false;
     }
-    if (args.no_spec_occlusion && engine->postfx) {
-        engine->postfx->spec_occlusion_mode = POSTFX_SPEC_OCC_OFF;
-    }
     if (args.spec_occ_mode >= 0 && engine->postfx) {
-        engine->postfx->spec_occlusion_mode = args.spec_occ_mode;
+        engine->postfx->spec_occlusion_mode = (PostFXSpecOccMode)args.spec_occ_mode;
     }
     if (args.no_ao_edge_filter && engine->postfx) {
         engine->postfx->ao_edge_filter_enabled = false;

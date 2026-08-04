@@ -72,8 +72,9 @@ void main()
     // plane goes on writing an up-normal over pixels that show the sky
     // through it -- with a 0 marker nothing downstream can tell that surface
     // from a real one, and a screen-space pass reading a mirror-smooth floor
-    // there paints its own shape onto the background. Below SSR's own
-    // reflectivity cutoff, so the reflection set is unchanged.
+    // there paints its own shape onto the background. The 0.002 floor must
+    // stay below ssr_frag's 0.004 reflectivity cutoff, or the dead ring
+    // joins the reflection set.
     float marker = -max(falloff, 0.002);
     NormalOut = vec4(normalize(mat3(view) * vec3(0.0, 1.0, 0.0)),
                      surfaceMode == 1 ? marker : 0.0);
