@@ -144,13 +144,14 @@ gltf_prims = []
 
 
 def push_view(data, target):
+    global blob
     buffer_views.append({"buffer": 0, "byteOffset": len(blob), "byteLength": len(data),
                          "target": target})
+    blob += data
     return len(buffer_views) - 1
 
 
 def emit_prim(p, material):
-    global blob
     pos = b"".join(struct.pack("<3f", *q) for q in p["positions"])
     nrm = b"".join(struct.pack("<3f", *q) for q in p["normals"])
     uv = b"".join(struct.pack("<2f", *q) for q in p["uvs"])
@@ -164,14 +165,12 @@ def emit_prim(p, material):
         ("TEXCOORD_0", uv, 34962, 5126, "VEC2", len(p["uvs"]), None),
     ]:
         view = push_view(data, target)
-        blob += data
         acc = {"bufferView": view, "componentType": ctype, "count": count, "type": atype}
         if mm:
             acc["min"], acc["max"] = mm
         accessors.append(acc)
         attrs[name] = len(accessors) - 1
     view = push_view(idx, 34963)
-    blob += idx
     accessors.append({"bufferView": view, "componentType": 5123,
                       "count": len(p["indices"]), "type": "SCALAR"})
     gltf_prims.append({"attributes": attrs, "indices": len(accessors) - 1,

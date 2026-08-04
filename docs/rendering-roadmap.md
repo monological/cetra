@@ -136,7 +136,8 @@ it faster, not possible-only-then.
   → bloom (bright pass + **2-iteration separable Gaussian at half-res**, `R11F_G11F_B10F`;
   *not* a pyramid) → tonemap (`tonemap_frag`: Passthrough / ACES / Khronos PBR Neutral,
   **manual** exposure) → finishing (vignette, grain, sharpen, color grade) → DoF
-  (`dof_coc` / `dof_blur` / `dof_composite`, with autofocus).
+  (`dof_coc` / `dof_tile` / `dof_dilate` / `dof_gather` / `dof_composite`, with autofocus;
+  bokeh gather since spec 11.6).
 - **Shading model** (`pbr_frag.glsl`): Cook-Torrance GGX + **anisotropic GGX** +
   **wrap-lighting subsurface** + back-transmission + **sheen** + **thin-film iridescence**
   + IOR, with **PCSS** soft shadows sampled inline.

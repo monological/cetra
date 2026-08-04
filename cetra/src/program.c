@@ -935,15 +935,7 @@ ShaderProgram* create_lum_measure_program() {
 }
 
 ShaderProgram* create_dof_coc_program() {
-    ShaderProgram* program = NULL;
-
-    if ((program = create_program_from_source("dof_coc", post_vert_shader_str,
-                                              dof_coc_frag_shader_str, NULL)) == NULL) {
-        log_error("Failed to initialize DoF CoC shader program");
-        return NULL;
-    }
-
-    return program;
+    return create_post_program("dof_coc", dof_coc_frag_shader_str);
 }
 
 ShaderProgram* create_dof_tile_program() {
@@ -955,25 +947,9 @@ ShaderProgram* create_dof_dilate_program() {
 }
 
 ShaderProgram* create_dof_gather_program() {
-    ShaderProgram* program = NULL;
-
-    if ((program = create_program_from_source("dof_gather", post_vert_shader_str,
-                                              dof_gather_frag_shader_str, NULL)) == NULL) {
-        log_error("Failed to initialize DoF gather shader program");
-        return NULL;
-    }
-
-    return program;
+    return create_post_program("dof_gather", dof_gather_frag_shader_str);
 }
 
 ShaderProgram* create_dof_composite_program() {
-    ShaderProgram* program = NULL;
-
-    if ((program = create_program_from_source("dof_composite", post_vert_shader_str,
-                                              dof_composite_frag_shader_str, NULL)) == NULL) {
-        log_error("Failed to initialize DoF composite shader program");
-        return NULL;
-    }
-
-    return program;
+    return create_post_program("dof_composite", dof_composite_frag_shader_str);
 }

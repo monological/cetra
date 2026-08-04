@@ -2,7 +2,7 @@
 in vec2 TexCoords;
 out vec4 FragColor;
 
-// Depth-of-field, pass 1 of 3: downsample the sharp scene to half resolution
+// Depth-of-field, first pass: downsample the sharp scene to half resolution
 // and pack a signed circle-of-confusion (CoC) into alpha. CoC < 0 is nearer
 // than the focus plane (foreground), CoC > 0 is farther (background); its
 // magnitude is the blur radius in half-res texels. Runs at half res.

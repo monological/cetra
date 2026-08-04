@@ -25,12 +25,12 @@ layout(location = 1) out vec4 NearOut;
 // deliberately NOT rotated per pixel, which would grind the polygon shape
 // into grainy noise.
 uniform sampler2D cocColorTex; // Half-res scene colour (rgb) + signed CoC (a)
-uniform sampler2D tileTex;     // Dilated per-tile (maxFarCoC, maxNearCoC)
-uniform vec2 texelSize;        // Half-res texel size
-uniform vec2 kernel[64];       // Unit-radius aperture points (disk or N-gon)
-uniform int tileSize;          // DOF_TILE (must match postfx.c)
+uniform sampler2D tileTex; // Dilated per-tile (maxFarCoC, maxNearCoC)
+uniform vec2 texelSize;    // Half-res texel size
+uniform int tileSize;      // DOF_TILE (must match postfx.c)
 
-const int TAPS = 64;
+const int TAPS = 64;         // mirror of postfx.c DOF_TAPS
+uniform vec2 kernel[TAPS];   // Unit-radius aperture points (disk or N-gon)
 // |CoC| below this is in-focus: excluded from both fields, so neither ever
 // carries sharp-scene colour. Safely under the composite's 0.5 farBlend
 // start, so every pixel the composite blends is classified by its own tap.
@@ -62,22 +62,11 @@ void main()
     float farW = 0.0;
     vec3 nearAcc = vec3(0.0);
     float nearW = 0.0;
-    float cov = 0.0;
 
-    // Explicit centre tap (d = 0), then the kernel.
-    float centerAc = abs(center.a);
-    float centerW = min(1.0, spread / max(centerAc * centerAc, 0.25));
-    if (center.a > CLASS_EPS) {
-        farAcc += centerW * center.rgb;
-        farW += centerW;
-    } else if (center.a < -CLASS_EPS) {
-        nearAcc += centerW * center.rgb;
-        nearW += centerW;
-        cov += centerW;
-    }
-
-    for (int i = 0; i < TAPS; i++) {
-        vec2 v = kernel[i];
+    // i == -1 is the centre tap: v = 0 makes d = 0 and reach exactly 1, so
+    // one loop body carries the whole weight formula and classification.
+    for (int i = -1; i < TAPS; i++) {
+        vec2 v = i < 0 ? vec2(0.0) : kernel[i];
         vec4 tap = texture(cocColorTex, TexCoords + v * radius * texelSize);
         float d = length(v) * radius; // half-res texels from centre
         float ac = abs(tap.a);
@@ -90,12 +79,13 @@ void main()
         } else if (tap.a < -CLASS_EPS) {
             nearAcc += w * tap.rgb;
             nearW += w;
-            cov += w;
         }
     }
 
     vec3 farC = farW > 1e-4 ? farAcc / farW : center.rgb;
     FarOut = vec4(farC, clamp(farW, 0.0, 1.0));
-    float coverage = clamp(cov, 0.0, 1.0);
+    // The near weight sum IS the geometric coverage (the 1/area weights make
+    // each contribution the fraction of this pixel the tap's disc owns).
+    float coverage = clamp(nearW, 0.0, 1.0);
     NearOut = vec4((nearAcc / max(nearW, 1e-4)) * coverage, coverage);
 }

@@ -22,6 +22,8 @@
 // signed CoC to per-tile far/near maxima that set the gather's kernel radius.
 // Uploaded as the tileSize uniform to dof_tile and dof_gather.
 #define DOF_TILE 4
+// Aperture kernel taps; mirror of dof_gather_frag's TAPS.
+#define DOF_TAPS 64
 
 // Creates a single-sample color-only FBO; returns false on failure
 static bool create_color_fbo(int width, int height, GLenum internal_format, GLuint* out_fbo,
@@ -692,18 +694,13 @@ static bool postfx_ensure_dof_targets(PostFX* fx) {
                           &fx->dof_dilate_texture) ||
         !create_color_fbo(fx->width, fx->height, GL_RGBA16F, &fx->dof_fbo, &fx->dof_texture)) {
         log_error("Failed to allocate depth-of-field targets");
+        fx->dof_enabled = false;
         return false;
     }
     // Near field joins the gather FBO as attachment 1 (the SSGI-on-GTAO
     // idiom); the draw-buffer pair is FBO state, set once here.
-    glGenTextures(1, &fx->dof_near_texture);
-    glBindTexture(GL_TEXTURE_2D, fx->dof_near_texture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, fx->bloom_width, fx->bloom_height, 0, GL_RGBA,
-                 GL_FLOAT, NULL);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    fx->dof_near_texture =
+        create_texture_2d_float(fx->bloom_width, fx->bloom_height, GL_RGBA16F, GL_RGBA, NULL);
     glBindFramebuffer(GL_FRAMEBUFFER, fx->dof_gather_fbo);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D,
                            fx->dof_near_texture, 0);
@@ -712,6 +709,7 @@ static bool postfx_ensure_dof_targets(PostFX* fx) {
     if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
         log_error("DoF gather MRT framebuffer is not complete");
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        fx->dof_enabled = false;
         return false;
     }
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -1169,19 +1167,15 @@ static void postfx_run_bloom(PostFX* fx, GLuint scene_tex) {
     check_gl_error("postfx bloom pyramid");
 }
 
-// Depth of field: signed CoC + gather at half res, composite at full res into
-// fx->dof_texture. Callers must have ensured the targets exist and read
-// fx->dof_texture as the scene afterward.
-// Aperture kernel taps; must match dof_gather_frag's kernel[] length.
-#define DOF_TAPS 64
-
 // Unit-radius aperture points: a Vogel spiral (uniform disk coverage),
 // optionally warped so each angular wedge maps onto a regular N-gon's wedge
-// (per-wedge radial scale cos(seg/2)/cos(a) -- linear in area, so density
-// stays uniform). Pure libm on fixed inputs: no RNG, identical across runs
-// and builds, which is what keeps DoF goldens deterministic. The rotation is
-// applied here, once, CPU-side -- never per pixel, which would grind the
-// polygon shape into grainy noise.
+// (radial scale cos(seg/2)/cos(a): radially linear, so each direction keeps
+// its area-uniform radial distribution; the residual ANGULAR density
+// variation is bounded by 1/cos^2(pi/N) and invisible at 64 taps). Pure
+// libm on fixed inputs: no RNG, identical across runs and builds, which is
+// what keeps DoF goldens deterministic. The rotation is applied here, once,
+// CPU-side -- never per pixel, which would grind the polygon shape into
+// grainy noise.
 static void dof_build_kernel(int blades, float rotation_deg, float k[DOF_TAPS][2]) {
     const float ga = 2.399963229728653f; // golden angle
     float rot = rotation_deg * GLM_PIf / 180.0f;
@@ -1199,6 +1193,9 @@ static void dof_build_kernel(int blades, float rotation_deg, float k[DOF_TAPS][2
     }
 }
 
+// Depth of field: signed CoC + gather at half res, composite at full res into
+// fx->dof_texture. Callers must have ensured the targets exist and read
+// fx->dof_texture as the scene afterward.
 static void postfx_run_dof(PostFX* fx, mat4 projection) {
     const float dof_texel[2] = {1.0f / (float)fx->bloom_width, 1.0f / (float)fx->bloom_height};
 

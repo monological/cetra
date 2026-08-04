@@ -30,7 +30,11 @@ void main()
     float depth = texture(depthTex, TexCoords).r;
     float coc = cocAtNdcZ(depth * 2.0 - 1.0, depth >= 1.0);
 
-    float farBlend = smoothstep(0.5, 1.5, coc); // half-res texels
+    // Band in half-res texels. The 0.5 start must stay ABOVE the gather's
+    // CLASS_EPS (0.25): every pixel this blends must have been classified
+    // into the far field by its own centre tap, or the field it reads here
+    // never saw its colour.
+    float farBlend = smoothstep(0.5, 1.5, coc);
     vec4 nearF = texture(nearTex, TexCoords);
     if (farBlend <= 0.0 && nearF.a <= 0.0) {
         FragColor = vec4(sharp, 1.0); // in focus, no spill: untouched
