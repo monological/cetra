@@ -283,7 +283,12 @@ New: `taau_resolve_frag.glsl`. CLI: `--render-scale 0.67`.
 **Depends on:** sequence after B1 so the froxel composite is written against the post-res
 convention once.
 
-### B5. Bokeh depth of field (Guerrilla-style gather) — Effort M
+### B5. Bokeh depth of field (Guerrilla-style gather) — Effort M — **DONE (spec 11.6)**
+Shipped as planned below, with the tile pass split into tile + dilate (the
+motion-blur two-shader idiom) and the near field's "dilated coverage" folded
+into the gather's area-normalized weights rather than a separate pass. The
+bokeh-chart fixture and the engine's first DoF golden landed with it
+(`assets/dof_fixture*`, recipe in the spec).
 **Scatter-as-gather N-gon kernel, not circular-separable-complex** — the user wants aperture
 *shapes*, which only a sampled kernel gives, and the existing 3-pass scaffold absorbs it with one
 pass swapped. (1) keep dof_coc; add 1/8-res max-CoC/min-depth **tile dilate pass** (motion-blur
@@ -408,7 +413,7 @@ and 11.2 (below). **Tier 1 is complete; Tier 2's A5 bent-normal specular occlusi
 | # | Item | Effort | Why here |
 |---|------|--------|----------|
 | 9 | A5 Bent-normal spec-occ | M | **DONE (11.3 + 11.4):** split ambient specular, default `split`, exact occlusion by construction. |
-| 10 | B5 Bokeh DoF | M | Self-contained palate cleanser between the big lifts. |
+| 10 | B5 Bokeh DoF | M | **DONE (11.6):** near/far gather, N-gon kernel, first DoF golden. |
 | 11 | B4 TAAU | L | After B1's composite settles so the post-res migration happens once; funds Tier 1 at 4K. |
 | 12 | B3 Pre-integrated skin | S | Character tier begins; S effort, zero infra. |
 
