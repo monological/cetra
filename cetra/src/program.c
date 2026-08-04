@@ -851,6 +851,10 @@ ShaderProgram* create_taa_resolve_program() {
     return program;
 }
 
+ShaderProgram* create_taau_resolve_program() {
+    return create_post_program("taau_resolve", taau_resolve_frag_shader_str);
+}
+
 ShaderProgram* create_temporal_accum_program() {
     return create_post_program("temporal_accum", temporal_accum_frag_shader_str);
 }

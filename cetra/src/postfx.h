@@ -164,6 +164,7 @@ typedef struct PostFX {
     ShaderProgram* froxel_integrate_program; // Front-to-back gather along each slice column
     ShaderProgram* froxel_composite_program; // One trilinear tap, folded into the HDR scene
     ShaderProgram* taa_resolve_program;
+    ShaderProgram* taau_resolve_program; // Compiled only when render_scale < 1
 
     GLuint quad_vao;
     GLuint quad_vbo;

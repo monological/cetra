@@ -536,6 +536,16 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     fx->froxel_integrate_program = create_froxel_integrate_program();
     fx->froxel_composite_program = create_froxel_composite_program();
     fx->taa_resolve_program = create_taa_resolve_program();
+    // The TAAU resolve exists only when the scale splits the sizes: the
+    // default path never compiles it, and its uniforms are seeded by
+    // run_taau_resolve, which owns the pass.
+    if (fx->render_scale < 1.0f) {
+        fx->taau_resolve_program = create_taau_resolve_program();
+        if (!fx->taau_resolve_program) {
+            free_postfx(fx);
+            return NULL;
+        }
+    }
     fx->dof_coc_program = create_dof_coc_program();
     fx->dof_tile_program = create_dof_tile_program();
     fx->dof_dilate_program = create_dof_dilate_program();
@@ -1394,6 +1404,7 @@ void free_postfx(PostFX* fx) {
     free_program(fx->froxel_integrate_program);
     free_program(fx->froxel_composite_program);
     free_program(fx->taa_resolve_program);
+    free_program(fx->taau_resolve_program);
     free_program(fx->dof_coc_program);
     free_program(fx->dof_tile_program);
     free_program(fx->dof_dilate_program);
@@ -1545,6 +1556,40 @@ static GLuint run_temporal_accum(PostFX* fx, ShaderProgram* prog, PingPong* pp, 
     glActiveTexture(GL_TEXTURE2);
     glBindTexture(GL_TEXTURE_2D, pp->tex[read]);
     uniform_set_int(prog->uniforms, "reset", pp->valid ? 0 : 1);
+    draw_fullscreen_quad(fx->quad_vao);
+    pp->valid = true;
+    return pp->tex[write];
+}
+
+// TAAU resolve: reconstruct the jittered render-res frame at post res and
+// blend it with the post-res history (taau_resolve_frag has the math). A
+// dedicated driver rather than a consumer of run_temporal_accum: that
+// helper's one-site invariant is same-res in and out -- it seeds texelSize
+// from a single resolution -- while this pass straddles two and adds the
+// jitter uniform. Unit layout follows the shared convention (0 current,
+// 1 velocity, 2 history). Same restore contract as run_temporal_accum:
+// RESTORES NOTHING. Returns the freshly written history texture.
+static GLuint run_taau_resolve(PostFX* fx) {
+    PingPong* pp = &fx->taa_history;
+    int write = fx->frame_index & 1;
+    int read = write ^ 1;
+    glBindFramebuffer(GL_FRAMEBUFFER, pp->fbo[write]);
+    glViewport(0, 0, fx->post_width, fx->post_height);
+    glUseProgram(fx->taau_resolve_program->id);
+    UniformManager* u = fx->taau_resolve_program->uniforms;
+    uniform_set_vec2(u, "renderSize", (vec2){(float)fx->width, (float)fx->height});
+    uniform_set_vec2(u, "postSize", (vec2){(float)fx->post_width, (float)fx->post_height});
+    uniform_set_vec2(u, "jitterPx", fx->taau_jitter_px);
+    uniform_set_int(u, "currentTex", 0);
+    uniform_set_int(u, "velocityTex", 1);
+    uniform_set_int(u, "historyTex", 2);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, fx->hdr_texture);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, fx->aux_texture);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, pp->tex[read]);
+    uniform_set_int(u, "reset", pp->valid ? 0 : 1);
     draw_fullscreen_quad(fx->quad_vao);
     pp->valid = true;
     return pp->tex[write];
@@ -2308,11 +2353,24 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         // then stabilized as one image, which is what keeps smooth metal from
         // shimmering against its own occlusion. The one input this moves:
         // SSGI's gather now samples pre-TAA color (it rides the GTAO sweep).
-        if (post_canvas) {
+        if (post_canvas && taa_resolving) {
+            run_taau_resolve(fx);
+
+            // Materialize the resolved frame on the canvas (the history side
+            // is kept as next frame's accumulation buffer) -- the TAA
+            // blit-back idiom, post-to-post. The copy is what keeps the
+            // history clean: post-seam passes composite onto the canvas, and
+            // folding fog/SSR into the history would feed them back through
+            // every later frame's blend.
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, fx->taa_history.fbo[fx->frame_index & 1]);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fx->post_fbo);
+            glBlitFramebuffer(0, 0, fx->post_width, fx->post_height, 0, 0, fx->post_width,
+                              fx->post_height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+            check_gl_error("postfx taau");
+        } else if (post_canvas) {
             // Bilinear magnify of the render-res frame onto the post canvas:
-            // the fallback when TAA is off at a reduced scale (nothing would
-            // otherwise bring the frame to display size), and the scaffold the
-            // temporal TAAU resolve replaces when taa_resolving.
+            // the fallback when TAA is toggled off at a reduced scale --
+            // nothing else would bring the frame to display size.
             glBindFramebuffer(GL_READ_FRAMEBUFFER, fx->hdr_fbo);
             glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fx->post_fbo);
             glBlitFramebuffer(0, 0, fx->width, fx->height, 0, 0, fx->post_width, fx->post_height,
