@@ -404,6 +404,11 @@ void light_cluster_build_and_upload(LightClusterContext* ctx, struct Scene* scen
                                     float far_clip) {
     if (!ctx || !scene)
         return;
+    // The viewport is read live, so a minimized window hands us 0 here and the
+    // cluster params below would upload +inf. Keep last frame's grid; nothing
+    // is drawn at zero area anyway.
+    if (fb_width <= 0 || fb_height <= 0)
+        return;
 
     ClusterFrame cf;
     _cluster_frame_init(&cf, projection, near_clip, far_clip);

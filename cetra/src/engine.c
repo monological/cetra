@@ -47,6 +47,7 @@ static void _engine_cursor_position_callback(GLFWwindow* window, double xpos, do
 static void _engine_mouse_button_callback(GLFWwindow* window, int button, int action, int mods);
 static void _engine_key_callback(GLFWwindow* window, int key, int scancode, int action, int mods);
 static void _engine_scroll_callback(GLFWwindow* window, double xoffset, double yoffset);
+static void _engine_framebuffer_size_callback(GLFWwindow* window, int fb_width, int fb_height);
 static SceneNode* _perform_engine_ray_picking(Engine* engine, double mouse_fb_x, double mouse_fb_y);
 static void _destroy_msaa_attachments(Engine* engine);
 
@@ -420,6 +421,10 @@ static int _setup_engine_glfw(Engine* engine) {
         log_error("GL reports only %d fragment texture units; the renderer needs %d",
                   engine->max_texture_image_units, IBL_SKYBOX_TEXTURE_UNIT + 1);
 
+    // Both sizes from the window we actually got, not the one we asked for --
+    // a window manager may grant something else, and these two writers (here
+    // and the framebuffer-size callback) are the only ones.
+    glfwGetWindowSize(engine->window, &(engine->win_width), &(engine->win_height));
     glfwGetFramebufferSize(engine->window, &(engine->fb_width), &(engine->fb_height));
     glViewport(0, 0, engine->fb_width, engine->fb_height);
 
@@ -729,6 +734,7 @@ static int _setup_engine_gui(Engine* engine) {
 
     glfwSetMouseButtonCallback(engine->window, _engine_mouse_button_callback);
     glfwSetCursorPosCallback(engine->window, _engine_cursor_position_callback);
+    glfwSetFramebufferSizeCallback(engine->window, _engine_framebuffer_size_callback);
     glfwSetKeyCallback(engine->window, _engine_key_callback);
     // Text input has no engine-side logic, so hand it straight to the backend.
     glfwSetCharCallback(engine->window, ImGui_ImplGlfw_CharCallback);
@@ -923,6 +929,38 @@ static bool engine_gui_wants_keyboard(void) {
     return igGetIO_Nil()->WantCaptureKeyboard;
 }
 
+// The window (or its display) changed size. Records the new sizes and the
+// things derived directly from them; the render targets follow at the next
+// frame top, because this fires repeatedly during a live drag and GL work
+// here would be both wasted and mid-frame.
+//
+// This is the ONLY writer of fb_width/fb_height/win_width/win_height after
+// init. That single-writer rule is what keeps "the size fields changed" and
+// "the targets were rebuilt" the same event: the input callbacks used to
+// refresh them too, which left the engine rendering at a size none of its
+// targets had been built at.
+static void _engine_framebuffer_size_callback(GLFWwindow* window, int fb_width, int fb_height) {
+    if (!window)
+        return;
+    Engine* engine = glfwGetWindowUserPointer(window);
+    if (!engine)
+        return;
+
+    engine->fb_width = fb_width;
+    engine->fb_height = fb_height;
+    glfwGetWindowSize(window, &engine->win_width, &engine->win_height);
+
+    // A minimized window reports 0x0; leave the derived state alone rather
+    // than computing a NaN aspect from it. _engine_sync_render_targets holds
+    // the targets and engine_frame_renderable skips the frame meanwhile.
+    if (fb_width <= 0 || fb_height <= 0)
+        return;
+
+    update_engine_camera_perspective(engine);
+    if (engine->text_renderer)
+        text_renderer_update_screen_size(engine->text_renderer, fb_width, fb_height);
+}
+
 static void _engine_cursor_position_callback(GLFWwindow* window, double xpos, double ypos) {
     if (!window)
         return;
@@ -937,9 +975,13 @@ static void _engine_cursor_position_callback(GLFWwindow* window, double xpos, do
         return;
     }
 
-    glfwGetWindowSize(window, &engine->win_width, &engine->win_height);
-    glfwGetFramebufferSize(window, &engine->fb_width, &engine->fb_height);
-
+    // Map cursor to framebuffer pixels from the STORED sizes. Re-querying GLFW
+    // here would make these fields change mid-frame, between the frame-top
+    // resize check and the scene pass -- and a scene target that disagrees
+    // with the post chain by even a frame is an invalid multisample blit. The
+    // framebuffer-size callback owns them now.
+    if (engine->win_width <= 0 || engine->win_height <= 0)
+        return;
     xpos = ((xpos / engine->win_width) * engine->fb_width);
     ypos = (1.0 - (ypos / engine->win_height)) * engine->fb_height;
 
@@ -968,12 +1010,13 @@ static void _engine_mouse_button_callback(GLFWwindow* window, int button, int ac
 
     ImGui_ImplGlfw_MouseButtonCallback(window, button, action, mods);
 
-    glfwGetWindowSize(window, &engine->win_width, &engine->win_height);
-    glfwGetFramebufferSize(window, &engine->fb_width, &engine->fb_height);
+    if (engine->win_width <= 0 || engine->win_height <= 0)
+        return;
 
     double mouse_fb_x, mouse_fb_y;
     glfwGetCursorPos(window, &mouse_fb_x, &mouse_fb_y);
 
+    // Stored sizes, not a fresh query -- see the cursor callback.
     mouse_fb_x = ((mouse_fb_x / engine->win_width) * engine->fb_width);
     mouse_fb_y = ((1.0 - (mouse_fb_y / engine->win_height)) * engine->fb_height);
 
@@ -1071,6 +1114,11 @@ void update_engine_camera_perspective(Engine* engine) {
 
     Camera* camera = engine->camera;
     if (!camera)
+        return;
+    // A minimized window is 0x0, and 0/0 is a NaN that would propagate through
+    // the projection into the view-proj, the frustum, and next frame's
+    // reprojection. Keep the last good aspect until the window returns.
+    if (engine->fb_width <= 0 || engine->fb_height <= 0)
         return;
 
     camera->aspect_ratio = (float)engine->fb_width / (float)engine->fb_height;
@@ -2273,6 +2321,8 @@ static bool _ensure_opaque_color_target(Engine* engine, int rw, int rh) {
 bool engine_resolve_opaque_color(Engine* engine) {
     int rw, rh;
     engine_render_size(engine, &rw, &rh);
+    if (rw <= 0 || rh <= 0)
+        return false;
     if (!_ensure_opaque_color_target(engine, rw, rh)) {
         glBindFramebuffer(GL_FRAMEBUFFER, engine->framebuffer);
         return false;
