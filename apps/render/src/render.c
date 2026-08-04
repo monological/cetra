@@ -90,7 +90,8 @@ static void print_usage(const char* prog) {
     fprintf(stderr,
             "      --no-spec-occlusion Let GTAO darken specular (alias for --spec-occ off)\n");
     fprintf(stderr,
-            "      --spec-occ <m>     Specular occlusion: off, legacy, bent (default: legacy)\n");
+            "      --spec-occ <m>     Specular occlusion: off, legacy, bent, split "
+            "(default: legacy)\n");
     fprintf(stderr, "      --spec-occ-debug   Show the AO visibility the scene multiplies by\n");
     fprintf(stderr, "      --bent-debug       Show the bent normal from the AO chain\n");
     fprintf(stderr, "      --no-ao-edge-filter Disable the depth-aware AO blur\n");

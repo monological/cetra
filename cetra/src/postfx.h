@@ -387,6 +387,7 @@ typedef struct PostFX {
     // float as the MSAA source (multisample blits require identical formats).
     bool spec_ready;
     GLuint spec_fbo, spec_texture;
+    ShaderProgram* spec_occ_composite_program;
 } PostFX;
 
 // width/height are the display (downsample-target) size; ss_scale supersamples

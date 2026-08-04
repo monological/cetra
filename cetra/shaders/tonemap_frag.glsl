@@ -169,42 +169,12 @@ vec3 toneSelect(vec3 c)
 // so a reflection aimed into an occluder stays dark while one aimed at open
 // sky is untouched, which the smoothness blend cannot distinguish.
 //
+// Mode 3 (split) does not reach this function at all: the composite pass
+// already multiplied the specular share by the cone term and the rest by
+// plain AO, so the tonemap's ambient factor stays 1.
+//
 // Mode 0 returns raw ao -> byte-identical to the pre-feature path.
-//
-// The AO chain's bent normal is a low-order estimate -- two slices, half
-// res, one blur -- so its direction is good to some degrees, not to a
-// degree. This is the angular width the visibility edge is softened over,
-// and it is what keeps the term from resolving that estimate more finely
-// than it was ever measured.
-const float VIS_EDGE_SOFTNESS = 0.25;
-
-// How much of cone B is inside cone A, as a fraction of B's solid angle:
-// the spherical-cap lens (Oat & Sander 2007). Solid angle of a half-angle-t
-// cone is 2*PI*(1 - cos t), which is where the containment ratio comes from.
-//
-// Written branchlessly, which is not a micro-optimisation -- it is the
-// correctness requirement. The geometric transition band |a-b| < d < a+b has
-// half-width min(a, b), and a mirror lobe drives b to zero: the band closes
-// completely and the exact function becomes a STEP at d == a. Fed a bent
-// normal quantised to 8 bits, a step prints its own contour lines onto every
-// smooth surface, and no amount of input precision removes them -- it only
-// makes the contour thinner. So the band takes a floor, and the edge is one
-// smoothstep across it.
-float coneOverlap(float cosA, float cosB, float cosBetween)
-{
-    float a = acos(clamp(cosA, -1.0, 1.0));
-    float b = acos(clamp(cosB, -1.0, 1.0));
-    float d = acos(clamp(cosBetween, -1.0, 1.0));
-    // Value once one cap swallows the other: all of B when A is the wider,
-    // else only A's share of it. Continuous at a == b, so min() is the whole
-    // case split.
-    float contained = min(1.0, (1.0 - cosA) / max(1.0 - cosB, 1e-4));
-    // The band is centred on max(a, b) with half-width min(a, b) -- exact
-    // where the geometry has width to spare, floored where it does not.
-    float half_band = max(min(a, b), VIS_EDGE_SOFTNESS);
-    float mid = max(a, b);
-    return contained * (1.0 - smoothstep(mid - half_band, mid + half_band, d));
-}
+#include "spec_occ.glsl"
 
 float aoVisibility()
 {
@@ -241,23 +211,8 @@ float aoVisibility()
     float specWeight = mix(fresnel, 1.0, metallic) * (1.0 - aux.w);
 
     if (specOccMode == 2) {
-        // Visibility cone: the cosine-weighted cap whose energy is the stored
-        // AO, so ao = 1 opens to the full hemisphere and ao = 0 closes it.
-        float cosAv = sqrt(clamp(1.0 - ao, 0.0, 1.0));
-        // Reflection cone: mirror at roughness 0, near-hemispheric at 1.
-        float cosAs = exp2(-3.321928 * aux.w * aux.w);
         vec3 bentN = normalize(aoSample.gba * 2.0 - 1.0);
-        vec3 R = reflect(-V, N);
-        float bDotR = dot(bentN, R);
-        float visible = coneOverlap(cosAv, cosAs, bDotR);
-        // Measured against the SAME lobe under an open hemisphere, because a
-        // reflection cone always hangs partly below its own horizon and the
-        // BRDF has already zeroed that half. Without the reference the term
-        // charges the lobe for geometry that was never there, and even a
-        // fully unoccluded surface -- open ground, a distant landscape --
-        // comes back darkened.
-        float open = coneOverlap(0.0, cosAs, bDotR);
-        float so = open > 1e-4 ? clamp(visible / open, 0.0, 1.0) : 1.0;
+        float so = specOcclusionCone(ao, aux.w, bentN, reflect(-V, N));
         // Same weight as legacy, different destination: legacy hands the
         // specular share a blanket 1.0 (unoccluded in every direction), this
         // hands it the share of its own lobe that points somewhere visible.
@@ -316,7 +271,25 @@ void main()
     // the froxel volume composites directly and has no 2D buffer to show.
     if (debugView == 7) {
         // Spec-occ AO visibility (what actually multiplies the scene) -- the
-        // reflection relief vs the raw AO of debug view 1.
+        // reflection relief vs the raw AO of debug view 1. Split mode shows
+        // the cone term the composite applied to the specular share,
+        // recomputed from the same include so this view cannot drift from it.
+        if (specOccMode == 3) {
+            vec4 aoS = texture(aoTex, TexCoords);
+            vec4 nrm = texture(normalsTex, TexCoords);
+            float so;
+            if (dot(nrm.xyz, nrm.xyz) < 0.01 || nrm.a < 0.0) {
+                so = aoS.r;
+            } else {
+                vec2 ndc = TexCoords * 2.0 - 1.0;
+                vec3 V = normalize(vec3(-ndc * invFocal, 1.0));
+                vec3 bentN = normalize(aoS.gba * 2.0 - 1.0);
+                so = specOcclusionCone(aoS.r, texture(auxTex, TexCoords).w, bentN,
+                                       reflect(-V, normalize(nrm.xyz)));
+            }
+            FragColor = vec4(vec3(so), 1.0);
+            return;
+        }
         FragColor = vec4(vec3(aoVisibility()), 1.0);
         return;
     }
@@ -338,7 +311,9 @@ void main()
     // Occlude before adding bloom: bloom models lens scatter, which happens
     // after the light already left the scene
     float aoFactor = 1.0;
-    if (aoEnabled == 1)
+    // Split mode's factor stays exactly 1.0: the composite pass already
+    // applied AO to the scene and the cone term to the specular share.
+    if (aoEnabled == 1 && specOccMode != 3)
         aoFactor = mix(1.0, aoVisibility(), aoStrength);
     // Contact shadows fold into the same factor (so the sharpen taps inherit
     // them like AO) but stay independent of AO/spec-occ: they occlude direct

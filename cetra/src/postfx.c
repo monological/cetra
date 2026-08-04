@@ -485,6 +485,7 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     fx->bloom_down_program = create_bloom_down_program();
     fx->bloom_up_program = create_bloom_up_program();
     fx->tonemap_program = create_tonemap_program();
+    fx->spec_occ_composite_program = create_spec_occ_composite_program();
     fx->gtao_program = create_gtao_program();
     fx->ssao_blur_program = create_ssao_blur_program();
     fx->temporal_accum_program = create_temporal_accum_program();
@@ -1190,6 +1191,7 @@ void free_postfx(PostFX* fx) {
     free_program(fx->bloom_down_program);
     free_program(fx->bloom_up_program);
     free_program(fx->tonemap_program);
+    free_program(fx->spec_occ_composite_program);
     free_program(fx->gtao_program);
     free_program(fx->ssao_blur_program);
     free_program(fx->temporal_accum_program);
@@ -2065,6 +2067,50 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         }
         if (!ao_accum_ran)
             fx->ao_history.valid = false;
+
+        // Split spec-occ composite: fold the ambient specular the scene pass
+        // routed to its own buffer back over the scene, in one blended pass --
+        // (spec * SO, aoFactor) under (GL_ONE, GL_SRC_ALPHA) forms
+        // spec * SO + scene * aoFactor in place. This is where AO lands on the
+        // whole frame in split mode; the tonemap's ambient factor stays 1.
+        // Before TAA so the reunited frame is stabilized as one image, and
+        // before the SSR march / fog / bloom so every later pass sees the
+        // corrected color. aoActive mirrors the tonemap's own gate: the AO
+        // factor exists only when AO is enabled AND its denoised result was
+        // produced this frame.
+        if (spec_written && fx->spec_ready && fx->spec_occ_composite_program) {
+            const bool composite_ao = fx->ssao_enabled && gtao_active;
+            glBindFramebuffer(GL_FRAMEBUFFER, fx->hdr_fbo);
+            glViewport(0, 0, fx->width, fx->height);
+            glUseProgram(fx->spec_occ_composite_program->id);
+            UniformManager* sc = fx->spec_occ_composite_program->uniforms;
+            uniform_set_int(sc, "specTex", 0);
+            uniform_set_int(sc, "aoTex", 1);
+            uniform_set_int(sc, "normalsTex", 2);
+            uniform_set_int(sc, "auxTex", 3);
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, fx->spec_texture);
+            glActiveTexture(GL_TEXTURE1);
+            glBindTexture(GL_TEXTURE_2D, composite_ao ? ao_result_tex : 0);
+            glActiveTexture(GL_TEXTURE2);
+            glBindTexture(GL_TEXTURE_2D, have_normals ? fx->normal_texture : 0);
+            glActiveTexture(GL_TEXTURE3);
+            glBindTexture(GL_TEXTURE_2D, aux_written ? fx->aux_texture : 0);
+            const float sc_inv_focal[2] = {1.0f / projection[0][0], 1.0f / projection[1][1]};
+            uniform_set_vec2(sc, "invFocal", sc_inv_focal);
+            // The cone term needs the same inputs the tonemap's spec-occ did:
+            // AO, normals, and the aux roughness. Missing any of them, fold
+            // the specular back unoccluded rather than read an unbound unit.
+            uniform_set_int(sc, "aoActive",
+                            composite_ao && have_normals && aux_written ? 1 : 0);
+            uniform_set_float(sc, "aoStrength", fx->ssao_strength);
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_ONE, GL_SRC_ALPHA);
+            draw_fullscreen_quad(fx->quad_vao);
+            glDisable(GL_BLEND);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            check_gl_error("postfx spec-occ composite");
+        }
 
         // Temporal AA resolve, after the AO chain and before every HDR
         // consumer (SSR/DoF/bloom/tonemap read anti-aliased color). The AO

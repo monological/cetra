@@ -783,6 +783,10 @@ ShaderProgram* create_tonemap_program() {
     return program;
 }
 
+ShaderProgram* create_spec_occ_composite_program() {
+    return create_post_program("spec_occ_composite", spec_occ_composite_frag_shader_str);
+}
+
 ShaderProgram* create_gtao_program() {
     ShaderProgram* program = NULL;
 
