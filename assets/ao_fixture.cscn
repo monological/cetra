@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "models": [
+    { "path": "ao_fixture.gltf" }
+  ],
+  "environment": {
+    "ambient": [0.7, 0.7, 0.7]
+  },
+  "lights": [
+    {
+      "name": "KeyPoint",
+      "type": "point",
+      "position": [1.5, 2.5, 1.5],
+      "color": [1.0, 0.97, 0.92],
+      "intensity": 60.0,
+      "intensity_unit": "lumens",
+      "range": 12.0,
+      "cast_shadows": true
+    }
+  ],
+  "camera": {
+    "eye": [0.0, 2.2, 3.4],
+    "target": [0.0, 0.4, 0.0],
+    "fov": 45
+  },
+  "post": {
+    "tonemap": "neutral",
+    "exposure": 1.0
+  }
+}

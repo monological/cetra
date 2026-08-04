@@ -591,6 +591,18 @@ static Material* process_ai_material(struct aiMaterial* ai_mat, TexturePool* tex
         }
     }
 
+    // glTF occlusion arrives as LIGHTMAP (assimp's glTF2 importer maps
+    // occlusionTexture there, not to AMBIENT_OCCLUSION) -- without this
+    // fallback a glTF AO texture is silently dropped while its strength
+    // (read in extract_material_properties) still applies. Guarded so a
+    // format that maps the explicit AO row keeps it.
+    if (!material->ambient_occlusion_tex &&
+        AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_LIGHTMAP, 0, &str, NULL, NULL,
+                                           NULL, NULL, NULL, NULL)) {
+        load_material_texture(material, tex_pool, ai_scene, loader, str.data, false,
+                              set_material_ambient_occlusion_tex, "Occlusion(lightmap)");
+    }
+
     // Handle glTF combined metallic-roughness texture (uses same texture for both)
     if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_UNKNOWN, 0, &str, NULL, NULL, NULL,
                                            NULL, NULL, NULL)) {
