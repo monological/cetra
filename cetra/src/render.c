@@ -696,11 +696,26 @@ void render_current_scene(Engine* engine) {
     bool taa_jitter_live = render_mode == RENDER_MODE_PBR && postfx_taa_active(engine->postfx) &&
                            (!engine->headless || engine->headless_jitter);
     if (taa_jitter_live) {
-        int j = (int)(engine->total_frames % 8) + 1;
+        // 16 Halton phases when TAAU upscales: each display pixel is visited by
+        // fewer render samples per cycle, so the sequence needs more phases to
+        // cover the same subpixel area. 8 at full scale -- bit-for-bit the
+        // sequence TAA has always run.
+        int phases = engine->render_scale < 1.0f ? 16 : 8;
+        int j = (int)(engine->total_frames % phases) + 1;
         int rw, rh;
         engine_render_size(engine, &rw, &rh);
-        draw_projection[2][0] += (_halton(j, 2) - 0.5f) * 2.0f / (float)rw;
-        draw_projection[2][1] += (_halton(j, 3) - 0.5f) * 2.0f / (float)rh;
+        float jx = _halton(j, 2) - 0.5f;
+        float jy = _halton(j, 3) - 0.5f;
+        draw_projection[2][0] += jx * 2.0f / (float)rw;
+        draw_projection[2][1] += jy * 2.0f / (float)rh;
+        // Published in render pixels: a [2][0] offset of 2j/rw shifts the
+        // raster exactly j pixels, and the TAAU resolve un-applies that to
+        // place this frame's samples on the display grid.
+        engine->postfx->taau_jitter_px[0] = jx;
+        engine->postfx->taau_jitter_px[1] = jy;
+    } else if (engine->postfx) {
+        engine->postfx->taau_jitter_px[0] = 0.0f;
+        engine->postfx->taau_jitter_px[1] = 0.0f;
     }
     // Stochastic PCSS rides the same predicate: the kernel may only rotate
     // while the TAA accumulator is live to average the noise it trades the

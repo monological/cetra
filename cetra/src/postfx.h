@@ -133,6 +133,15 @@ typedef struct PostFX {
     GLuint lum_fbo; // 64x64 log2-luminance measure target, mipmapped each frame (auto-exposure)
     GLuint lum_texture;
     PingPong taa_history; // Post-res history (previous resolved frames)
+    // TAAU canvas (render_scale < 1 only, 0 otherwise): the post-res buffer
+    // the seam brings the render-res frame up to. At full scale the hdr
+    // buffer is post-sized already and serves as the canvas itself.
+    GLuint post_fbo, post_texture;
+    // This frame's TAA jitter offset in RENDER pixels (Halton - 0.5 per
+    // axis), published by the scene pass; the TAAU resolve un-applies it to
+    // place the frame's samples on the display grid. Zero when no jitter is
+    // live.
+    float taau_jitter_px[2];
 
     ShaderProgram* bloom_bright_program;
     ShaderProgram* bloom_down_program; // Pyramid 13-tap downsample

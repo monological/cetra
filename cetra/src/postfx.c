@@ -489,6 +489,15 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
         free_postfx(fx);
         return NULL;
     }
+    // TAAU canvas, only when the render scale actually splits the sizes; at
+    // full scale the hdr buffer is post-sized and serves as the canvas.
+    if (fx->render_scale < 1.0f) {
+        if (!create_color_fbo(fx->post_width, fx->post_height, GL_RGBA16F, &fx->post_fbo,
+                              &fx->post_texture)) {
+            free_postfx(fx);
+            return NULL;
+        }
+    }
 
     // Auto-exposure: a 64x64 log2-luminance measure target whose mip chain is
     // regenerated each frame (top mip = geometric-mean scene luminance), and a
@@ -1319,6 +1328,8 @@ void free_postfx(PostFX* fx) {
     glDeleteFramebuffers(1, &fx->albedo_fbo);
     glDeleteTextures(1, &fx->albedo_texture);
     free_pingpong(&fx->taa_history);
+    glDeleteFramebuffers(1, &fx->post_fbo);
+    glDeleteTextures(1, &fx->post_texture);
     glDeleteFramebuffers(1, &fx->lum_fbo);
     glDeleteTextures(1, &fx->lum_texture);
     // DoF/fog targets are 0 (no-op delete) if never lazily allocated
@@ -2284,9 +2295,11 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         // The seam. Everything above ran at render res into hdr_fbo; everything
         // below composites onto the canvas at post res. At render scale 1 the
         // canvas IS the hdr buffer, so the values below equal their old ones
-        // and the re-key is a no-op; TAAU repoints them at its post buffer.
-        GLuint canvas_fbo = fx->hdr_fbo;
-        GLuint canvas_tex = fx->hdr_texture;
+        // and the seam is a no-op; below 1 the post buffer takes over and the
+        // render-res frame is brought up to it here.
+        const bool post_canvas = fx->post_fbo != 0;
+        GLuint canvas_fbo = post_canvas ? fx->post_fbo : fx->hdr_fbo;
+        GLuint canvas_tex = post_canvas ? fx->post_texture : fx->hdr_texture;
 
         // Temporal AA resolve, after the AO chain and before every HDR
         // consumer (SSR/DoF/bloom/tonemap read anti-aliased color). The AO
@@ -2295,7 +2308,18 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         // then stabilized as one image, which is what keeps smooth metal from
         // shimmering against its own occlusion. The one input this moves:
         // SSGI's gather now samples pre-TAA color (it rides the GTAO sweep).
-        if (taa_resolving) {
+        if (post_canvas) {
+            // Bilinear magnify of the render-res frame onto the post canvas:
+            // the fallback when TAA is off at a reduced scale (nothing would
+            // otherwise bring the frame to display size), and the scaffold the
+            // temporal TAAU resolve replaces when taa_resolving.
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, fx->hdr_fbo);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fx->post_fbo);
+            glBlitFramebuffer(0, 0, fx->width, fx->height, 0, 0, fx->post_width, fx->post_height,
+                              GL_COLOR_BUFFER_BIT, GL_LINEAR);
+            fx->taa_history.valid = false;
+            check_gl_error("postfx taau seam");
+        } else if (taa_resolving) {
             run_temporal_accum(fx, fx->taa_resolve_program, &fx->taa_history, fx->width, fx->height,
                                fx->hdr_texture, TEMPORAL_FEEDBACK_DEFAULT);
 

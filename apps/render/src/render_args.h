@@ -128,6 +128,7 @@ typedef struct {
                                 // coincides with PASSTHROUGH, which is a blit
                                 // path and never user-set)
     int ssaa;                   // Supersampling factor (0 = keep engine default)
+    float render_scale;         // TAAU render-res scale [0.5, 1) (0 = full res)
     // Finishing grade (-1 = keep engine default; >=0 enables + sets)
     int film_preset; // --film: enable the whole finishing stack at sane defaults
     float vignette;

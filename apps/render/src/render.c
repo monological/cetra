@@ -178,6 +178,9 @@ static void print_usage(const char* prog) {
     fprintf(stderr,
             "      --ssaa <int>       Supersampling factor (default: 1 = off; 2 = 2x SSAA)\n");
     fprintf(stderr, "      --no-ssaa          Disable supersampling (render at 1x)\n");
+    fprintf(stderr, "      --render-scale <f> TAAU: render the scene at this fraction of the\n"
+                    "                         display size [0.5, 1) and upscale temporally\n"
+                    "                         (headless needs --taa --headless-jitter)\n");
     fprintf(stderr,
             "      --film             Cinematic finish preset (vignette+grain+sharpen+grade)\n");
     fprintf(stderr, "      --vignette <s>     Vignette strength (enables it; default on ~0.25)\n");
@@ -832,6 +835,12 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 args->ssaa = 1;
         } else if (strcmp(argv[i], "--no-ssaa") == 0) {
             args->ssaa = 1;
+        } else if (strcmp(argv[i], "--render-scale") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->render_scale = (float)atof(argv[i]);
         } else if (strcmp(argv[i], "--film") == 0) {
             args->film_preset = 1;
         } else if (strcmp(argv[i], "--vignette") == 0) {
@@ -1549,6 +1558,17 @@ int main(int argc, char** argv) {
     set_engine_screenshot_every(engine, args.screenshot_every);
     if (args.ssaa > 0)
         set_engine_ss_scale(engine, args.ssaa);
+    if (args.render_scale > 0.0f && args.render_scale < 1.0f) {
+        // TAAU is a temporal reconstruction: it needs the resolve running and
+        // the jitter live. Windowed runs force TAA on below; headless must opt
+        // into both, else the scaled frame would never be rebuilt to full res.
+        if (args.headless && (!args.force_taa || !args.headless_jitter)) {
+            fprintf(stderr, "--render-scale needs --taa --headless-jitter under --headless; "
+                            "rendering at full resolution\n");
+        } else {
+            set_engine_render_scale(engine, args.render_scale);
+        }
+    }
     set_engine_exit_after_frames(engine, args.max_frames);
     check_stretch = args.check_stretch;
 
