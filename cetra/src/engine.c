@@ -122,7 +122,11 @@ static void _gbuffer_attachments(Engine* engine, GBufferAttachment out[GBUFFER_A
  * Engine
  */
 Engine* create_engine(const char* window_title, int width, int height) {
-    Engine* engine = malloc(sizeof(Engine));
+    // Zeroed, not malloc'd: every field below is still set explicitly, but a
+    // struct this wide cannot rely on each new field being remembered here --
+    // and a field that is only ever written conditionally (a failure latch, an
+    // opt-in schedule) has no other initializer at all.
+    Engine* engine = calloc(1, sizeof(Engine));
     if (!engine) {
         log_error("Failed to allocate memory for engine");
         return NULL;
@@ -562,6 +566,21 @@ static int _setup_engine_msaa(Engine* engine) {
     return 0;
 }
 
+// Rebuild the multisample scene attachments at the current render size and
+// sample count, on the same FBO name. The one place that pairing lives, so a
+// caller cannot destroy without recreating, or ignore the result -- an
+// incomplete scene FBO is invisible until something draws into it.
+static bool _engine_rebuild_msaa_target(Engine* engine) {
+    int rw, rh;
+    engine_render_size(engine, &rw, &rh);
+    _destroy_msaa_attachments(engine);
+    if (_create_msaa_attachments(engine, rw, rh, engine->msaa_samples) != 0) {
+        log_error("Scene target rebuild failed at %dx%d (%dx MSAA)", rw, rh, engine->msaa_samples);
+        return false;
+    }
+    return true;
+}
+
 // Bring the scene target and the whole post chain to the current
 // fb_width/fb_height/ss_scale/render_scale. The MSAA scene target goes first
 // and its failure is checked before postfx is touched: every G-buffer resolve
@@ -572,15 +591,24 @@ static int _setup_engine_msaa(Engine* engine) {
 static void _engine_rebuild_render_targets(Engine* engine) {
     int rw, rh;
     engine_render_size(engine, &rw, &rh);
+    // Record what this attempt is FOR before making it. The sync compares
+    // against these, so a failure latches on its own size and is retried only
+    // when a genuinely different one is asked for. Deriving the same answer
+    // from whatever the failure happened to leave behind does not work: the
+    // two failure paths leave opposite states -- the MSAA one leaves postfx at
+    // the old size (retry forever), the postfx one leaves it at the new size
+    // (never retry).
+    engine->target_render_w = rw;
+    engine->target_render_h = rh;
+    engine_post_size(engine, &engine->target_post_w, &engine->target_post_h);
 
-    _destroy_msaa_attachments(engine);
-    if (_create_msaa_attachments(engine, rw, rh, engine->msaa_samples) != 0) {
-        log_error("Render target rebuild failed at %dx%d; rendering suspended", rw, rh);
+    if (!_engine_rebuild_msaa_target(engine)) {
         engine->render_suspended = true;
         return;
     }
     if (!postfx_resize(engine->postfx, engine->fb_width, engine->fb_height, engine->ss_scale,
                        engine->render_scale)) {
+        log_error("Post chain rebuild failed at %dx%d; rendering suspended", rw, rh);
         engine->render_suspended = true;
         return;
     }
@@ -592,8 +620,20 @@ static void _engine_rebuild_render_targets(Engine* engine) {
 
 // False when the frame cannot be drawn: a zero-area (minimized) window, or a
 // rebuild that failed and left the chain without usable targets.
-static bool engine_frame_renderable(const Engine* engine) {
+static bool _engine_frame_renderable(const Engine* engine) {
     return !engine->render_suspended && engine->fb_width > 0 && engine->fb_height > 0;
+}
+
+// Close out a loop iteration: advance the frame clock and honour the engine's
+// own frame limit. Runs on undrawn frames too, so a headless run still exits
+// at --frames N if the window is zero-area or a rebuild failed -- otherwise
+// the very condition worth reporting would hang the run reporting it.
+static void _engine_advance_frame(Engine* engine) {
+    engine->total_frames++;
+    if (engine->exit_after_frames > 0 &&
+        engine->total_frames >= (size_t)engine->exit_after_frames) {
+        glfwSetWindowShouldClose(engine->window, GLFW_TRUE);
+    }
 }
 
 // Frame-top self-heal: if the sizes the engine now derives disagree with what
@@ -611,15 +651,15 @@ static void _engine_sync_render_targets(Engine* engine) {
     engine_post_size(engine, &pw, &ph);
     // A minimized window reports 0x0, where every downstream size formula
     // degenerates (NaN aspect, +inf cluster params, incomplete framebuffers).
-    // Hold the existing targets untouched; engine_frame_renderable is what
+    // Hold the existing targets untouched; _engine_frame_renderable is what
     // skips the frame, so no flag has to be un-set when the window returns.
     if (rw < 1 || rh < 1 || pw < 1 || ph < 1)
         return;
-    // Sizes agree: nothing to do. This is also what stops a failed rebuild
-    // retrying every frame -- the failure left these sizes in place, so the
-    // next attempt waits for a size that actually differs.
-    if (rw == engine->postfx->width && rh == engine->postfx->height &&
-        pw == engine->postfx->post_width && ph == engine->postfx->post_height)
+    // Already built (or already attempted) at this size: nothing to do. Also
+    // the retry policy -- a failed attempt is not repeated until something
+    // actually asks for a different size.
+    if (rw == engine->target_render_w && rh == engine->target_render_h &&
+        pw == engine->target_post_w && ph == engine->target_post_h)
         return;
     _engine_rebuild_render_targets(engine);
 }
@@ -643,10 +683,10 @@ void set_engine_msaa_samples(Engine* engine, int samples) {
         return;
     engine->msaa_samples = samples;
 
-    int rw, rh;
-    engine_render_size(engine, &rw, &rh);
-    _destroy_msaa_attachments(engine);
-    _create_msaa_attachments(engine, rw, rh, samples);
+    // Same latch as a resolution change: a scene target that failed to rebuild
+    // is not something to keep drawing into.
+    if (!_engine_rebuild_msaa_target(engine))
+        engine->render_suspended = true;
 }
 
 /*
@@ -875,6 +915,12 @@ int init_engine(Engine* engine) {
 
     postfx_set_exposure(engine->postfx, &engine->exposure);
 
+    // Record what init just built at, or the first frame-top sync would see
+    // zeroes, decide the sizes had changed, and rebuild everything once for
+    // nothing -- resetting the temporal histories on frame 0 as it went.
+    engine_render_size(engine, &engine->target_render_w, &engine->target_render_h);
+    engine_post_size(engine, &engine->target_post_w, &engine->target_post_h);
+
     return 0;
 }
 
@@ -957,8 +1003,13 @@ static void _engine_framebuffer_size_callback(GLFWwindow* window, int fb_width, 
         return;
 
     update_engine_camera_perspective(engine);
+    // Window points, matching init_text_renderer -- text is authored in points
+    // and the ortho must stay in the space it was set up in. Handing it
+    // framebuffer pixels here would halve every string on a Retina display the
+    // first time the window moved.
     if (engine->text_renderer)
-        text_renderer_update_screen_size(engine->text_renderer, fb_width, fb_height);
+        text_renderer_update_screen_size(engine->text_renderer, engine->win_width,
+                                         engine->win_height);
 }
 
 static void _engine_cursor_position_callback(GLFWwindow* window, double xpos, double ypos) {
@@ -1010,15 +1061,16 @@ static void _engine_mouse_button_callback(GLFWwindow* window, int button, int ac
 
     ImGui_ImplGlfw_MouseButtonCallback(window, button, action, mods);
 
-    if (engine->win_width <= 0 || engine->win_height <= 0)
-        return;
-
-    double mouse_fb_x, mouse_fb_y;
+    double mouse_fb_x = 0.0, mouse_fb_y = 0.0;
     glfwGetCursorPos(window, &mouse_fb_x, &mouse_fb_y);
 
-    // Stored sizes, not a fresh query -- see the cursor callback.
-    mouse_fb_x = ((mouse_fb_x / engine->win_width) * engine->fb_width);
-    mouse_fb_y = ((1.0 - (mouse_fb_y / engine->win_height)) * engine->fb_height);
+    // Stored sizes, not a fresh query -- see the cursor callback. Guarded
+    // rather than returning early: a zero-area window must still be able to
+    // end a drag and reach the app's own callback below.
+    if (engine->win_width > 0 && engine->win_height > 0) {
+        mouse_fb_x = ((mouse_fb_x / engine->win_width) * engine->fb_width);
+        mouse_fb_y = ((1.0 - (mouse_fb_y / engine->win_height)) * engine->fb_height);
+    }
 
     // A LEFT release always ends the drag and is forwarded, even over the GUI —
     // otherwise a button-up that lands on a panel leaves the camera stuck
@@ -1441,8 +1493,8 @@ void set_engine_ss_scale(Engine* engine, int ss_scale) {
 void set_engine_render_scale(Engine* engine, float render_scale) {
     if (!engine)
         return;
-    if (render_scale < 0.5f || render_scale > 1.0f) {
-        float clamped = render_scale < 0.5f ? 0.5f : 1.0f;
+    float clamped = postfx_clamp_render_scale(render_scale);
+    if (clamped != render_scale) {
         log_warn("render scale %.2f outside [0.5, 1]; using %.2f", render_scale, clamped);
         render_scale = clamped;
     }
@@ -1483,9 +1535,12 @@ bool engine_schedule_render_scale(Engine* engine, int frame, float scale) {
 static void _engine_apply_render_scale_schedule(Engine* engine) {
     for (int i = 0; i < engine->render_scale_schedule_count; i++) {
         if (engine->render_scale_schedule_frame[i] == (int)engine->total_frames) {
-            log_info("frame %d: render scale -> %.2f", engine->render_scale_schedule_frame[i],
-                     engine->render_scale_schedule_value[i]);
             set_engine_render_scale(engine, engine->render_scale_schedule_value[i]);
+            // Log what the setter settled on, not what was asked: it clamps,
+            // and refuses outright in headless without jitter, so logging the
+            // request would report switches that never happened.
+            log_info("frame %d: render scale -> %.2f",
+                     engine->render_scale_schedule_frame[i], engine->render_scale);
         }
     }
 }
@@ -1922,16 +1977,14 @@ static void _engine_gui_panel(Engine* engine) {
         // sun/cloud sliders defer their re-bake the same way). AlwaysClamp
         // because Ctrl+click types a value straight into an allocation size.
         static float pending_scale = 1.0f;
-        static bool scale_dragging = false;
-        // Track the live value except while dragging, so a scale the setter
-        // clamped (or one the CLI set) shows here instead of the stale request.
-        if (!scale_dragging)
-            pending_scale = engine->render_scale;
         igSliderFloat("Render Scale", &pending_scale, 0.5f, 1.0f, "%.2f",
                       ImGuiSliderFlags_AlwaysClamp);
-        scale_dragging = igIsItemActive();
         if (igIsItemDeactivatedAfterEdit())
             set_engine_render_scale(engine, pending_scale);
+        else if (!igIsItemActive())
+            // Not being dragged: track the live value, so a scale the setter
+            // clamped or refused shows here rather than the stale request.
+            pending_scale = engine->render_scale;
         if (!fx->taa_enabled && engine->render_scale < 1.0f) {
             // Without the resolve there is nothing to reconstruct with, so the
             // frame is magnified rather than upscaled: softer, not faster.
@@ -2557,8 +2610,17 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EngineRenderFunc render
         // target and the post chain agree on a size.
         _engine_apply_render_scale_schedule(engine);
         _engine_sync_render_targets(engine);
-        if (!engine_frame_renderable(engine)) {
-            glfwPollEvents();
+        if (!_engine_frame_renderable(engine)) {
+            // Nothing to draw. There is no swap on this path, so nothing
+            // throttles it either -- block on events rather than spinning a
+            // core while a window sits minimized (GLFW's iconify pattern).
+            // Headless has no events to wake on, so it polls and relies on the
+            // frame limit to end the run.
+            _engine_advance_frame(engine);
+            if (engine->headless)
+                glfwPollEvents();
+            else
+                glfwWaitEventsTimeout(0.1);
             continue;
         }
 
@@ -2712,14 +2774,9 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EngineRenderFunc render
 
         engine_present_frame(engine, frame_mode);
 
-        engine->total_frames++;
-
-        // Engine-owned frame limit (CI/headless): request close so the
+        // Engine-owned frame limit (CI/headless): requests close so the
         // final-frame screenshot below fires this same iteration.
-        if (engine->exit_after_frames > 0 &&
-            engine->total_frames >= (size_t)engine->exit_after_frames) {
-            glfwSetWindowShouldClose(engine->window, GLFW_TRUE);
-        }
+        _engine_advance_frame(engine);
 
         // Periodic capture: numbered frames every N frames
         if (engine->screenshot_path && engine->screenshot_every > 0 &&

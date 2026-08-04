@@ -127,8 +127,8 @@ static void free_pingpong(PingPong* pp) {
 // current SSR resolution: full-res when fx->ssr_full_res (sharp reflections;
 // the half-res march's hard hit/miss coverage edge was the striping source),
 // else half-res. Depth/HDR sources the march samples are already full-res.
-// The caller must delete any existing ssr_fbo/ssr_texture/hiz_fbo/hiz_texture
-// first (postfx_set_ssr_full_res); create_postfx calls this on a fresh PostFX.
+// Any existing reflection buffer and pyramid must be destroyed first: this
+// overwrites the handles rather than reusing them.
 static bool create_ssr_buffers(PostFX* fx) {
     int w = fx->ssr_full_res ? fx->width : fx->half_width;
     int h = fx->ssr_full_res ? fx->height : fx->half_height;
@@ -252,6 +252,14 @@ static GLuint create_ssao_noise_texture(unsigned int* rng) {
     return texture;
 }
 
+float postfx_clamp_render_scale(float render_scale) {
+    if (render_scale < 0.5f)
+        return 0.5f;
+    if (render_scale > 1.0f)
+        return 1.0f;
+    return render_scale;
+}
+
 int postfx_scaled_dim(int post_dim, float render_scale) {
     if (render_scale >= 1.0f)
         return post_dim;
@@ -274,6 +282,38 @@ static void postfx_derive_sizes(PostFX* fx, int width, int height, int ss_scale,
     fx->bloom_height = fx->post_height / 2 > 0 ? fx->post_height / 2 : 1;
     fx->half_width = fx->width / 2 > 0 ? fx->width / 2 : 1;
     fx->half_height = fx->height / 2 > 0 ? fx->height / 2 : 1;
+}
+
+// Compile the TAAU resolve and seed its sampler units, once. Absent by
+// default: it exists only for a reduced render scale, which create_postfx may
+// never see and a later resize may introduce. Kept if the scale returns to 1
+// -- the seam dispatches on the canvas, not on the program. Mirrors the
+// postfx_ensure_* family; true when the program is present or not wanted.
+static bool postfx_ensure_taau_program(PostFX* fx) {
+    if (fx->render_scale >= 1.0f || fx->taau_resolve_program)
+        return true;
+    fx->taau_resolve_program = create_taau_resolve_program();
+    if (!fx->taau_resolve_program) {
+        log_error("Failed to compile the TAAU resolve");
+        return false;
+    }
+    glUseProgram(fx->taau_resolve_program->id);
+    uniform_set_int(fx->taau_resolve_program->uniforms, "currentTex", 0);
+    uniform_set_int(fx->taau_resolve_program->uniforms, "velocityTex", 1);
+    uniform_set_int(fx->taau_resolve_program->uniforms, "historyTex", 2);
+    return true;
+}
+
+// The uniforms that depend on a size and are NOT uploaded per draw. Exactly
+// one qualifies -- GTAO's noiseScale, which maps the 4x4 rotation tile onto
+// the AO buffer -- and it is the single reason a resize needs a fixup step at
+// all, so it lives in one place both create and resize call.
+static void postfx_seed_size_uniforms(PostFX* fx) {
+    if (!fx->gtao_program)
+        return;
+    glUseProgram(fx->gtao_program->id);
+    const float noise_scale[2] = {(float)fx->half_width / 4.0f, (float)fx->half_height / 4.0f};
+    uniform_set_vec2(fx->gtao_program->uniforms, "noiseScale", noise_scale);
 }
 
 // Every resolution-dependent target, allocated from the sizes already on fx.
@@ -347,9 +387,11 @@ static bool postfx_alloc_targets(PostFX* fx) {
     // Clear the blurred slot: tonemap binds it as aoTex unconditionally, so on
     // any frame the GTAO chain does not run (--no-ssao with spec-occ on) it
     // would otherwise sample whatever the fresh allocation happens to contain.
+    // glClearBufferfv rather than glClearColor + glClear: this now runs on
+    // every resize, and the global clear colour belongs to the frame loop.
     glBindFramebuffer(GL_FRAMEBUFFER, fx->ssao_fbo[1]);
-    glClearColor(1.0f, 0.5f, 0.5f, 0.5f); // unoccluded, with a zero bent normal
-    glClear(GL_COLOR_BUFFER_BIT);
+    const GLfloat unoccluded[4] = {1.0f, 0.5f, 0.5f, 0.5f}; // AO 1, zero bent normal
+    glClearBufferfv(GL_COLOR, 0, unoccluded);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     // Half-res temporal-AO accumulation ping-pong. Float, not 8-bit: an
     // exponential feedback blend needs more than 256 levels to avoid banding as
@@ -422,8 +464,14 @@ static void postfx_free_targets(PostFX* fx) {
     del_tex(&fx->post_texture);
 
     // Lazily-allocated groups: free and un-ready them together, so the next
-    // frame that needs one rebuilds it at the new size. froxel_ready is
-    // deliberately absent -- those volumes are fixed-dimension and survive.
+    // frame that needs one rebuilds it at the new size.
+    //
+    // froxel_ready and froxel_prev_frame are deliberately absent. The volumes
+    // are frustum-sized, not framebuffer-sized, so a resolution change does
+    // not invalidate them -- and their reprojection runs volume-to-volume
+    // through a stored camera rather than through any render-res buffer.
+    // Dropping the stamp would cost a frame of un-averaged cascade taps
+    // (visibly stair-stepped fog) to re-derive what already holds.
     del_tex(&fx->ssgi_gi_texture);
     free_pingpong(&fx->ssgi_history);
     free_pingpong(&fx->ssgi_atrous);
@@ -487,10 +535,8 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     if (ss_scale < 1) {
         ss_scale = 1;
     }
-    // Same rule as set_engine_render_scale: clamp to the nearest bound, so the
-    // two doors into this cannot answer the same input differently.
-    if (render_scale < 0.5f || render_scale > 1.0f) {
-        float clamped = render_scale < 0.5f ? 0.5f : 1.0f;
+    float clamped = postfx_clamp_render_scale(render_scale);
+    if (clamped != render_scale) {
         log_warn("create_postfx: render scale %.2f outside [0.5, 1]; using %.2f", render_scale,
                  clamped);
         render_scale = clamped;
@@ -656,14 +702,11 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     fx->froxel_integrate_program = create_froxel_integrate_program();
     fx->froxel_composite_program = create_froxel_composite_program();
     fx->taa_resolve_program = create_taa_resolve_program();
-    // The TAAU resolve exists only when the scale splits the sizes; the
-    // default path never compiles it.
-    if (fx->render_scale < 1.0f) {
-        fx->taau_resolve_program = create_taau_resolve_program();
-        if (!fx->taau_resolve_program) {
-            free_postfx(fx);
-            return NULL;
-        }
+    // The TAAU resolve is compiled on demand -- here when the launch scale is
+    // already reduced, otherwise at the resize that first reduces it.
+    if (!postfx_ensure_taau_program(fx)) {
+        free_postfx(fx);
+        return NULL;
     }
     fx->dof_coc_program = create_dof_coc_program();
     fx->dof_tile_program = create_dof_tile_program();
@@ -784,8 +827,8 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     uniform_set_int(fx->gtao_program->uniforms, "normalsTex", 2);
     uniform_set_int(fx->gtao_program->uniforms, "hdrTex", 3);  // SSGI radiance source
     uniform_set_int(fx->gtao_program->uniforms, "specTex", 4); // split spec share of that radiance
-    const float noise_scale[2] = {(float)fx->half_width / 4.0f, (float)fx->half_height / 4.0f};
-    uniform_set_vec2(fx->gtao_program->uniforms, "noiseScale", noise_scale);
+    // noiseScale is size-dependent and seeded by postfx_seed_size_uniforms
+    // below, which the resize path calls too.
 
     // No texelSize for either of the next two: every consumer of ssao_blur and
     // of the shared tent uploads it per draw from its own resolution, so a
@@ -821,14 +864,10 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     uniform_set_int(fx->ssr_atrous_program->uniforms, "linDepthTex", 1);
     uniform_set_int(fx->ssr_atrous_program->uniforms, "normalsTex", 2);
 
-    // Absent unless the render scale split the sizes; run_taau_resolve keeps
-    // the sizes and the jitter, which are the only things that vary.
-    if (fx->taau_resolve_program) {
-        glUseProgram(fx->taau_resolve_program->id);
-        uniform_set_int(fx->taau_resolve_program->uniforms, "currentTex", 0);
-        uniform_set_int(fx->taau_resolve_program->uniforms, "velocityTex", 1);
-        uniform_set_int(fx->taau_resolve_program->uniforms, "historyTex", 2);
-    }
+    // The TAAU resolve's own units are seeded by postfx_ensure_taau_program,
+    // wherever it first compiles; run_taau_resolve uploads the sizes and the
+    // jitter, which are the only things that vary.
+    postfx_seed_size_uniforms(fx);
     glUseProgram(0);
 
     create_fullscreen_quad_vao(&fx->quad_vao, &fx->quad_vbo);
@@ -1161,51 +1200,30 @@ bool postfx_resize(PostFX* fx, int width, int height, int ss_scale, float render
     }
     if (ss_scale < 1)
         ss_scale = 1;
-    // The third door onto the same clamp create_postfx and
-    // set_engine_render_scale use; all three must answer alike.
-    if (render_scale < 0.5f || render_scale > 1.0f)
-        render_scale = render_scale < 0.5f ? 0.5f : 1.0f;
+    render_scale = postfx_clamp_render_scale(render_scale);
 
     postfx_free_targets(fx);
     postfx_derive_sizes(fx, width, height, ss_scale, render_scale);
-    if (!postfx_alloc_targets(fx)) {
-        log_error("postfx_resize: failed to allocate targets at %dx%d", fx->width, fx->height);
+
+    // Compile BEFORE allocating: a failure here must not be able to leave a
+    // live canvas (which postfx_taau_active keys on) beside a NULL resolve
+    // program, which the seam would then dereference.
+    bool ok = postfx_ensure_taau_program(fx);
+    if (ok)
+        ok = postfx_alloc_targets(fx);
+    if (!ok) {
+        // Leave nothing half-built. "Unusable until a later size succeeds" is
+        // then true of the data, not merely of the one caller that happens to
+        // latch a flag on the way out.
+        log_error("postfx_resize: rebuild failed at %dx%d", fx->width, fx->height);
+        postfx_free_targets(fx);
+        glUseProgram(0);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
         return false;
     }
-
-    // The one size-dependent uniform seeded once at create rather than per
-    // draw. Stale, GTAO tiles its rotation noise wrong and mis-scales the
-    // screen-space radius it early-outs on.
-    if (fx->gtao_program) {
-        glUseProgram(fx->gtao_program->id);
-        const float noise_scale[2] = {(float)fx->half_width / 4.0f,
-                                      (float)fx->half_height / 4.0f};
-        uniform_set_vec2(fx->gtao_program->uniforms, "noiseScale", noise_scale);
-    }
-    // The TAAU resolve is compiled only for a reduced scale, so a chain that
-    // started at 1.0 has none. Compile and seed it the first time one is
-    // needed; going back to 1.0 leaves it compiled but unused, since the seam
-    // dispatches on the canvas, not on the program.
-    if (fx->render_scale < 1.0f && !fx->taau_resolve_program) {
-        fx->taau_resolve_program = create_taau_resolve_program();
-        if (!fx->taau_resolve_program) {
-            log_error("postfx_resize: failed to compile the TAAU resolve");
-            return false;
-        }
-        glUseProgram(fx->taau_resolve_program->id);
-        uniform_set_int(fx->taau_resolve_program->uniforms, "currentTex", 0);
-        uniform_set_int(fx->taau_resolve_program->uniforms, "velocityTex", 1);
-        uniform_set_int(fx->taau_resolve_program->uniforms, "historyTex", 2);
-    }
+    postfx_seed_size_uniforms(fx);
     glUseProgram(0);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
-
-    // The froxel volumes survive (fixed dimensions), and so does their
-    // adjacency stamp: they reproject volume-to-volume through their own
-    // stored camera, which carries no resolution. Resetting it would force a
-    // frame of un-averaged cascade taps -- visibly stair-stepped fog -- for
-    // nothing. postfx_free_targets already reset the render-res fog layer's
-    // stamp and every ping-pong's validity.
     check_gl_error("postfx_resize");
     return true;
 }
@@ -1723,9 +1741,8 @@ static GLuint run_temporal_accum(PostFX* fx, ShaderProgram* prog, PingPong* pp, 
 // RESTORES NOTHING. The caller reads the written side out of taa_history.
 //
 // The two resolutions stay per-draw rather than joining the create-time
-// seed: they are the one thing a future postfx_resize would have to change,
-// and a stale size here mis-registers every sample rather than failing
-// loudly.
+// seed, which is what makes them free under postfx_resize: a stale size here
+// would mis-register every sample rather than fail loudly.
 static void run_taau_resolve(PostFX* fx) {
     PingPong* pp = &fx->taa_history;
     int write = fx->frame_index & 1;

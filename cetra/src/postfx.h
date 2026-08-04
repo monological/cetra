@@ -94,9 +94,9 @@ typedef struct PostFX {
     int half_width, half_height;   // Half-RENDER working size (AO chain, SSGI,
                                    // half-res SSR, DoF gather)
     int bloom_width, bloom_height; // Half-POST bloom chain size
-    float render_scale;            // The scale the chain was BUILT with (fixed at
-                                   // create). For display; ask postfx_taau_active
-                                   // whether the upscaling resolve is live.
+    float render_scale;            // The scale the current targets were built with (at
+                                   // create, or at the last postfx_resize). For display;
+                                   // ask postfx_taau_active whether the resolve is live.
 
     GLuint hdr_fbo; // Single-sample resolve target, no depth
     GLuint hdr_texture;
@@ -166,7 +166,8 @@ typedef struct PostFX {
     ShaderProgram* froxel_integrate_program; // Front-to-back gather along each slice column
     ShaderProgram* froxel_composite_program; // One trilinear tap, folded into the HDR scene
     ShaderProgram* taa_resolve_program;
-    ShaderProgram* taau_resolve_program; // Compiled only when render_scale < 1
+    ShaderProgram* taau_resolve_program; // Compiled the first time render_scale < 1 (at
+                                         // create or at a resize), and kept afterward
 
     GLuint quad_vao;
     GLuint quad_vbo;
@@ -422,6 +423,11 @@ typedef struct PostFX {
 // scene + every pass before the TAA seam); 1 leaves every size as it was.
 PostFX* create_postfx(int width, int height, int ss_scale, float render_scale);
 
+// The one render-scale clamp. Three doors reach it -- the engine setter, the
+// create, and the resize -- and a scale that differed between them would size
+// the scene target and the resolve targets differently.
+float postfx_clamp_render_scale(float render_scale);
+
 // The render dimension for a post dimension: verbatim at scale 1 (so odd sizes
 // cannot perturb the identity path), else rounded to the nearest even size so
 // the half-res chains halve exactly. The one formula both the engine's MSAA
@@ -430,11 +436,14 @@ int postfx_scaled_dim(int post_dim, float render_scale);
 
 // Rebuild every resolution-dependent target at a new display size / ss_scale /
 // render scale. Settings, per-frame published state, the SSS profile table and
-// the borrowed exposure pointer all survive; temporal histories are reset.
+// the borrowed exposure pointer all survive. The 2D temporal histories are
+// reset; the froxel volumes and their adjacency stamp deliberately do not
+// (fixed dimensions, and they reproject through their own stored camera).
 // The caller must rebuild the engine's MSAA scene target to the matching
 // render size FIRST -- the G-buffer resolves are multisample blits, which
-// require identical rects. Returns false if allocation failed, in which case
-// the chain is unusable until a later size succeeds.
+// require identical rects. Returns false on an invalid size, a failed
+// allocation, or a failed lazy compile of the TAAU resolve, and in every case
+// leaves no targets behind: the chain is unusable until a later size succeeds.
 bool postfx_resize(PostFX* fx, int width, int height, int ss_scale, float render_scale);
 void free_postfx(PostFX* fx);
 

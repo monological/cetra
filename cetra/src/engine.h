@@ -59,14 +59,20 @@ typedef struct Engine {
     GLint max_texture_image_units;  // GL_MAX_TEXTURE_IMAGE_UNITS (queried at init)
     GLint max_array_texture_layers; // GL_MAX_ARRAY_TEXTURE_LAYERS (mask array budget)
     int ss_scale;                   // Supersampling factor: scene + post render at ss_scale x
-                                    // display resolution, box-downsampled at tone map (set
-                                    // before init_engine). 1 = off, 2 = 2x SSAA.
+                                    // display resolution, box-downsampled at tone map.
+                                    // 1 = off, 2 = 2x SSAA. Changing it at runtime rebuilds
+                                    // the render targets at the next frame top.
     float render_scale;             // Render-resolution scale in [0.5, 1]: the scene + the
                                     // pre-TAA post chain rasterize at this fraction of the
                                     // post size. 1 = off. Changing it at runtime rebuilds
                                     // the render targets at the next frame top.
     bool render_suspended;          // A render-target rebuild failed; frames are skipped
                                     // until a size that allocates successfully is set
+    // The size the render targets were last built AT, or last attempted at.
+    // The frame-top sync compares against these, so it both detects a change
+    // and declines to retry a size that already failed.
+    int target_render_w, target_render_h;
+    int target_post_w, target_post_h;
     // Diagnostic: scheduled render-scale switches, applied at the listed frame
     // numbers. The only way to exercise the runtime rebuild headless, where a
     // GUI slider cannot reach. Empty (count 0) on every normal run.
@@ -307,7 +313,8 @@ void free_engine(Engine* engine);
 
 int init_engine(Engine* engine);
 void set_engine_headless(Engine* engine, bool headless);
-// Supersampling factor (clamped to >= 1). Call before init_engine.
+// Supersampling factor (clamped to [1, 2]). Safe before init_engine (stored)
+// or at runtime, where the render targets are rebuilt at the next frame top.
 void set_engine_ss_scale(Engine* engine, int ss_scale);
 // Render-resolution scale (clamped to [0.5, 1]). Safe before init_engine
 // (stored) or at runtime, where the render targets are rebuilt at the next

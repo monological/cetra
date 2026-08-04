@@ -181,8 +181,10 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --render-scale <f> TAAU: render the scene at this fraction of the\n"
                     "                         display size [0.5, 1) and upscale temporally\n"
                     "                         (headless needs --taa --headless-jitter)\n");
-    fprintf(stderr, "      --render-scale-at <f:s[,f:s...]>  Diagnostic: switch render scale to\n"
-                    "                         s at frame f, exercising the runtime rebuild\n");
+    fprintf(stderr,
+            "      --render-scale-at <frame:scale[,frame:scale...]>  Diagnostic: switch the\n"
+            "                         render scale mid-run, exercising the runtime rebuild\n"
+            "                         (same headless preconditions as --render-scale)\n");
     fprintf(stderr,
             "      --film             Cinematic finish preset (vignette+grain+sharpen+grade)\n");
     fprintf(stderr, "      --vignette <s>     Vignette strength (enables it; default on ~0.25)\n");
@@ -1585,6 +1587,14 @@ int main(int argc, char** argv) {
     // Diagnostic schedule: "frame:scale" pairs, comma separated. Parsed here
     // rather than in the engine so the engine keeps no string handling.
     if (args.render_scale_at) {
+        // The same precondition --render-scale carries: a headless run without
+        // jitter has nothing for the resolve to reconstruct from, so every
+        // scheduled switch would be refused one at a time.
+        if (args.headless && (!args.force_taa || !args.headless_jitter)) {
+            fprintf(stderr, "--render-scale-at needs --taa --headless-jitter under --headless; "
+                            "the schedule would be refused\n");
+            return -1;
+        }
         const char* p = args.render_scale_at;
         while (*p) {
             int frame = 0;

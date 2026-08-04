@@ -274,9 +274,10 @@ sized off it — one name, three meanings, and the likeliest wrong-size bug
 in the migration. The froxel fog layer and its history stay at RENDER res
 (only the stabilized layer magnifies at the fold), keeping spec 9.5.1's
 jitter-cancelling accumulator reading the aux depth 1:1. And `postfx_resize`
-is DEFERRED: no resize path exists anywhere in the engine today, so v1 is
-CLI-only and fixed at launch. Measured 42.3 dB at 0.67 against native (bar
-32) and 44 -> 22 ms/frame at the native Retina framebuffer.
+was deferred out of 11.7 and landed in spec 11.8, together with a GUI slider
+and a real window-resize path, so the scale is runtime-changeable. Measured
+42.3 dB at 0.67 against native (bar 32) and 44 -> 22 ms/frame at the native
+Retina framebuffer.
 Render below display res, reconstruct at display res in the temporal resolve — the perf lever that
 funds volumetrics at 4K. New `render_scale` ∈ [0.5, 1.0]; existing integer `ss_scale` remains the
 ≥1 path. **Separate program (`taau_resolve_frag.glsl`), not a branch** — taa_resolve untouched,
@@ -287,8 +288,9 @@ phases 8→16 when scale < 1. **Buffer split**: render res = G-buffer/MSAA, aux,
 GTAO/SSGI/SSR, froxel volumes, DoF gather; display ("post") res = TAAU output and everything
 downstream (composites, motion blur, bloom pyramid, tonemap — which stops downsampling). Mechanism:
 `fx->post_width/post_height` (== width/height when TAAU off, so nothing changes). Scale changes
-route through `postfx_resize` + full history invalidation; no per-frame dynamic resolution v1.
-New: `taau_resolve_frag.glsl`. CLI: `--render-scale 0.67`.
+route through `postfx_resize` + history invalidation (shipped in 11.8); still no per-frame
+dynamic resolution.
+New: `taau_resolve_frag.glsl`. CLI: `--render-scale 0.67`, `--render-scale-at <frame:scale>`.
 **Owns foundations:** the render-res/post-res split — bokeh, lens flare, tonemap inherit it.
 **Depends on:** sequence after B1 so the froxel composite is written against the post-res
 convention once.
