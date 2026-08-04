@@ -344,6 +344,7 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     fx->sss_profile_count = 1;
     fx->sss_ready = false;
     fx->oit_ready = false;
+    fx->spec_ready = false;
 
     // The HDR resolve target must be RGBA16F to match the MSAA source
     // (multisample blits require identical formats); the bloom chain never
@@ -853,6 +854,21 @@ static void postfx_run_motion_blur(PostFX* fx) {
     check_gl_error("postfx motion blur");
 }
 
+// Allocate the ambient-specular resolve target on the first split frame.
+// R11G11B10F to match the MSAA attachment exactly (a multisample blit with
+// mismatched formats is an INVALID_OPERATION and resolves nothing).
+static bool postfx_ensure_spec_target(PostFX* fx) {
+    if (fx->spec_ready)
+        return true;
+    if (!create_color_fbo(fx->width, fx->height, GL_R11F_G11F_B10F, &fx->spec_fbo,
+                          &fx->spec_texture)) {
+        log_error("Failed to allocate the ambient-specular resolve target");
+        return false;
+    }
+    fx->spec_ready = true;
+    return true;
+}
+
 // Allocate the SSS targets on first skin frame (DoF pattern): the full-res
 // resolve of the skin-diffuse attachment plus the H/V separable-blur ping-pong.
 static bool postfx_ensure_sss_targets(PostFX* fx) {
@@ -1167,6 +1183,8 @@ void free_postfx(PostFX* fx) {
     glDeleteTextures(1, &fx->oit_accum_texture);
     glDeleteFramebuffers(1, &fx->oit_revealage_fbo);
     glDeleteTextures(1, &fx->oit_revealage_texture);
+    glDeleteFramebuffers(1, &fx->spec_fbo);
+    glDeleteTextures(1, &fx->spec_texture);
 
     free_program(fx->bloom_bright_program);
     free_program(fx->bloom_down_program);
@@ -1264,6 +1282,12 @@ bool postfx_wants_albedo(const PostFX* fx) {
     // and by the albedo debug view -- without the latter, --albedo-debug alone
     // was silently suppressed and showed the normal render instead.
     return fx && (fx->ssgi_enabled || fx->debug_view == POSTFX_DEBUG_ALBEDO);
+}
+
+bool postfx_wants_spec_split(const PostFX* fx) {
+    // Not gated on ssao_enabled: with AO off the composite still owes the
+    // scene its ambient specular (it folds back with occlusion 1).
+    return fx && fx->spec_occlusion_mode == POSTFX_SPEC_OCC_SPLIT;
 }
 
 bool postfx_ssr_active(const PostFX* fx, bool normals_written) {
@@ -1787,7 +1811,7 @@ static void postfx_run_oit(PostFX* fx, GLuint oit_fbo) {
 
 void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hdr,
                 bool normals_written, bool aux_written, bool albedo_written, bool sss_written,
-                GLuint oit_fbo, mat4 projection, mat4 view) {
+                bool spec_written, GLuint oit_fbo, mat4 projection, mat4 view) {
     if (!fx)
         return;
 
@@ -1845,6 +1869,12 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         // the scene pass wrote it (engine's frame-start decision, like albedo).
         if (sss_written && postfx_ensure_sss_targets(fx)) {
             resolve_color_attachment(msaa_fbo, GL_COLOR_ATTACHMENT4, fx->sss_diffuse_fbo, fx->width,
+                                     fx->height);
+        }
+        // Resolve the ambient-specular attachment (7) for the split spec-occ
+        // composite, iff the scene pass wrote it (same threading as the others).
+        if (spec_written && postfx_ensure_spec_target(fx)) {
+            resolve_color_attachment(msaa_fbo, GL_COLOR_ATTACHMENT7, fx->spec_fbo, fx->width,
                                      fx->height);
         }
 

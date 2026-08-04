@@ -348,6 +348,12 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
             uniform_set_int(u, "sssEnabled", engine->sss_enabled ? 1 : 0);
             uniform_set_int(u, "clusterDebug", engine->cluster_debug ? 1 : 0);
             uniform_set_int(u, "oitPass", oit_accumulate ? 1 : 0);
+            // Split ambient specular only where attachment 7 is live: the
+            // opaque pass of a split-mode PBR frame. The late/OIT passes and
+            // captures draw into targets with no attachment 7, so their
+            // specular must stay inline or it is silently discarded.
+            uniform_set_int(u, "splitAmbientSpec",
+                            engine->spec_this_frame && !alpha_pass && !engine->capturing ? 1 : 0);
             // Refraction source: valid only in the late pass, after the
             // mid-frame resolve ran (pass 2 forces a program re-switch by
             // resetting current_program, so this always re-uploads there)

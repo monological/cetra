@@ -488,8 +488,10 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 args->spec_occ_mode = POSTFX_SPEC_OCC_LEGACY;
             } else if (strcmp(argv[i], "bent") == 0) {
                 args->spec_occ_mode = POSTFX_SPEC_OCC_BENT;
+            } else if (strcmp(argv[i], "split") == 0) {
+                args->spec_occ_mode = POSTFX_SPEC_OCC_SPLIT;
             } else {
-                fprintf(stderr, "Error: --spec-occ expects off, legacy, or bent\n");
+                fprintf(stderr, "Error: --spec-occ expects off, legacy, bent, or split\n");
                 return -1;
             }
         } else if (strcmp(argv[i], "--spec-occ-debug") == 0) {

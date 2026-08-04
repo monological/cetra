@@ -31,6 +31,11 @@ layout(location = 4) out vec4 DiffuseOut;
 // AccumOut = premultiplied color * depth weight, RevealageOut = alpha (.r).
 layout(location = 5) out vec4 AccumOut;
 layout(location = 6) out vec4 RevealageOut;
+// Ambient specular, split out for the post-chain occlusion composite (spec
+// 11.4). Only lands when attachment 7 is enabled (split spec-occ); otherwise
+// discarded. Alpha mirrors FragColor's for the same A2C reason NormalOut's
+// does: coverage derives from the LAST active color output's alpha.
+layout(location = 7) out vec4 SpecOut;
 
 uniform mat4 view;
 uniform mat4 projection;
@@ -198,6 +203,11 @@ uniform int specularEnabled;  // Global KHR_materials_specular toggle (--no-spec
 uniform int sheenEnabled;     // Global KHR_materials_sheen toggle (--no-sheen)
 uniform int parallaxEnabled;  // Global POM toggle (--no-parallax, §4.11)
 uniform int oitPass;          // 1 during the weighted-blended OIT accumulate pass (else 0)
+// 1 = route ambient specular to SpecOut instead of FragColor. 0 (the GLSL
+// uniform default) is the inline path, so a draw that never sets it -- a
+// capture, the late/OIT passes, every non-split mode -- keeps its specular
+// energy in color even where attachment 7 is not bound.
+uniform int splitAmbientSpec;
 uniform int sssEnabled;       // Global separable-SSS toggle (--no-sss)
 uniform float subsurface;     // Per-material SSS strength (0 = off; also the skin flag)
 uniform int sssProfileIndex;  // This material's scatter-profile slot; written into DiffuseOut.a so
@@ -1392,7 +1402,15 @@ void main() {
     // branch per combination is what previously produced a third arm that
     // re-derived this same Lambert term and a second SSS tap kept in step by
     // hand -- with a comment whose whole job was to warn about the drift.
+    //
+    // Two accumulators: `ambient` and `ambSpec`. Under splitAmbientSpec the
+    // env-specular share -- the base lobe plus the clearcoat and sheen lobes,
+    // each through the same layer dims as the inline sum -- collects in
+    // ambSpec and routes to SpecOut, where the post chain occludes exactly it.
+    // The inline branches keep the original expressions verbatim: they are the
+    // byte-identity gate for every non-split mode.
     vec3 ambient;
+    vec3 ambSpec = vec3(0.0);
     if (iblEnabled > 0 || giEnabled > 0) {
         // kS is the share the ambient SPECULAR lobe takes. No environment means
         // no such lobe, so nothing is taken and all the non-metal energy stays
@@ -1490,7 +1508,12 @@ void main() {
         }
         }
 
-        ambient = (kD * diffuse + specular) * aoMap * envScale;
+        if (splitAmbientSpec > 0) {
+            ambient = kD * diffuse * aoMap * envScale;
+            ambSpec = specular * aoMap * envScale;
+        } else {
+            ambient = (kD * diffuse + specular) * aoMap * envScale;
+        }
 
         // SSS: tap the ambient Lambert diffuse into the skin-diffuse buffer too.
         // ONE tap, reusing the exact sub-expression above -- there is no second
@@ -1512,7 +1535,14 @@ void main() {
             vec2 ccBrdf = texture(brdfLUT, vec2(NcdotVi, ccR)).rg;
             vec3 ccPre = textureLod(prefilteredMap, Rc, ccR * maxReflectionLOD).rgb;
             vec3 coatIBL = clearcoat * ccPre * (0.04 * ccBrdf.x + ccBrdf.y);
-            ambient = ambient * (1.0 - ccF) + coatIBL * aoMap * iblIntensity;
+            // The coat dims BOTH shares (it sits over the whole surface); its
+            // own lobe is specular, so it joins ambSpec when splitting.
+            if (splitAmbientSpec > 0) {
+                ambient = ambient * (1.0 - ccF);
+                ambSpec = ambSpec * (1.0 - ccF) + coatIBL * aoMap * iblIntensity;
+            } else {
+                ambient = ambient * (1.0 - ccF) + coatIBL * aoMap * iblIntensity;
+            }
         }
 
         // Sheen IBL as a split-sum: the Charlie-prefiltered env at the sheen
@@ -1522,8 +1552,16 @@ void main() {
         // lines above stay byte-identical when sheen is off.
         if (sheenActive) {
             vec3 sheenPre = textureLod(charliePrefilteredMap, R, sheenRough * maxCharlieLOD).rgb;
-            ambient = ambient * sheenScale +
-                      sheenColorPx * sheenPre * sheenE * aoMap * iblIntensity;
+            // Sheen dims BOTH shares (same layer-over-base convention as the
+            // coat); the sheen lobe itself is specular.
+            if (splitAmbientSpec > 0) {
+                ambient = ambient * sheenScale;
+                ambSpec = ambSpec * sheenScale +
+                          sheenColorPx * sheenPre * sheenE * aoMap * iblIntensity;
+            } else {
+                ambient = ambient * sheenScale +
+                          sheenColorPx * sheenPre * sheenE * aoMap * iblIntensity;
+            }
         }
     } else {
         // No IBL: a uniform ambient the scene authors, in cd/m^2 like every other
@@ -1683,6 +1721,12 @@ void main() {
     // one G-buffer write with no ceiling at all.
     DiffuseOut = vec4(min(subsurface * sssDiffuse * preExposure, vec3(WS_SCENE_MAX)),
                       float(max(sssProfileIndex + 1, 0)));
+
+    // Ambient specular, same working-space conversion and fp ceiling as
+    // FragColor (the composite adds this back into the same buffer, so it must
+    // be on the same scale). Zero on the inline path -- the attachment is only
+    // bound when splitting, but every bound attachment must be written.
+    SpecOut = vec4(min(ambSpec * preExposure, vec3(WS_SCENE_MAX)), finalOpacity);
 
     // Weighted-blended OIT accumulate (guarded so oitPass 0 leaves FragColor and
     // the opaque/alpha-blend paths byte-identical): premultiplied color * depth

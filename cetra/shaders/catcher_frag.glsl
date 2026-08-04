@@ -13,6 +13,7 @@ layout(location = 1) out vec4 NormalOut;
 layout(location = 2) out vec4 AuxOut;
 layout(location = 3) out vec4 AlbedoOut;
 layout(location = 4) out vec4 DiffuseOut; // SSS skin-diffuse; the floor is never skin
+layout(location = 7) out vec4 SpecOut;    // Ambient specular; the catcher emits none
 
 // Shadow catcher: an invisible ground plane that only darkens where the
 // shadow maps say the shadow-casting lights are occluded. Drawn after the
@@ -81,4 +82,5 @@ void main()
     AuxOut = vec4(0.0);
     AlbedoOut = vec4(0.0);
     DiffuseOut = vec4(0.0);
+    SpecOut = vec4(0.0);
 }

@@ -60,10 +60,13 @@ typedef enum PostFXDebugView {
 // How the AO factor treats specular. Legacy blends AO toward unoccluded by
 // smoothness alone; bent intersects the AO chain's visibility cone with the
 // reflection lobe, so a reflection aimed into an occluder stays occluded.
+// Split routes ambient specular to its own scene attachment and occludes
+// exactly that share in post -- no per-pixel guess at the specular fraction.
 typedef enum PostFXSpecOccMode {
     POSTFX_SPEC_OCC_OFF = 0,
     POSTFX_SPEC_OCC_LEGACY = 1,
     POSTFX_SPEC_OCC_BENT = 2,
+    POSTFX_SPEC_OCC_SPLIT = 3,
 } PostFXSpecOccMode;
 
 // Mirrors MAX_SHADOW_LIGHTS (shadow.h) without postfx learning about the
@@ -378,6 +381,12 @@ typedef struct PostFX {
     GLuint oit_revealage_fbo, oit_revealage_texture; // R16F: product(1 - a)
     bool oit_ready;
     ShaderProgram* oit_resolve_program;
+
+    // Split spec-occ: single-sample resolve of the scene pass's ambient-specular
+    // attachment (7). Lazily allocated on the first split frame. Same packed
+    // float as the MSAA source (multisample blits require identical formats).
+    bool spec_ready;
+    GLuint spec_fbo, spec_texture;
 } PostFX;
 
 // width/height are the display (downsample-target) size; ss_scale supersamples
@@ -413,7 +422,7 @@ void postfx_apply_film_look(PostFX* fx);
 // that may have changed mid-frame.
 void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hdr,
                 bool normals_written, bool aux_written, bool albedo_written, bool sss_written,
-                GLuint oit_fbo, mat4 projection, mat4 view);
+                bool spec_written, GLuint oit_fbo, mat4 projection, mat4 view);
 
 // Producer-side predicate: true when some active effect will consume the
 // normals G-buffer, so the scene pass should write color attachment 1. The
@@ -433,6 +442,10 @@ bool postfx_wants_aux_gbuffer(const PostFX* fx);
 // G-buffer (attachment 3), i.e. when SSGI is active and needs it for the
 // indirect-diffuse composite.
 bool postfx_wants_albedo(const PostFX* fx);
+
+// Producer-side predicate: true when the scene pass should split ambient
+// specular out to attachment 7 (spec-occ mode SPLIT).
+bool postfx_wants_spec_split(const PostFX* fx);
 
 // The single "SSR runs this frame" predicate (enabled + normals produced).
 // The postfx pass and the shadow catcher's floor marker both derive from

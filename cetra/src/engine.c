@@ -56,42 +56,59 @@ static void _destroy_msaa_attachments(Engine* engine);
 // of truth, so a new attachment is one row rather than an edit scattered across
 // half a dozen sites (each a place to forget one).
 //
-// Index i maps to GL_COLOR_ATTACHMENT0 + i. Attachment 0 is HDR scene color:
-// always written, and cleared with the scene background by the shared glClear
-// (which also clears depth/stencil), so its write gate is NULL and the 1..N
-// clear loop skips it.
+// Attachment 0 is HDR scene color: always written, and cleared with the scene
+// background by the shared glClear (which also clears depth/stencil), so its
+// write gate is NULL and the 1..N clear loop skips it.
+//
+// Each row names its color attachment explicitly rather than deriving it from
+// the row index: fragment-output locations 5 and 6 belong to the OIT
+// accumulate targets, which live on the OIT FBO -- so the ambient-specular row
+// binds attachment 7 and the scene FBO simply has no attachments 5/6.
 typedef struct GBufferAttachment {
     GLuint* tex;            // storage on the Engine
     bool* this_frame;       // per-frame write gate (NULL = always written)
     GLenum internal_format; // multisample texture format
+    GLenum attachment;      // GL_COLOR_ATTACHMENTn == fragment output location n
     GLfloat clear[4];       // per-frame clear color
 } GBufferAttachment;
 
-#define GBUFFER_ATTACHMENT_COUNT 5
+#define GBUFFER_ATTACHMENT_COUNT 6
 
-// Describe this engine's scene-MRT attachments in draw-buffer order. Pure (no
-// GL): the tex/this_frame pointers alias Engine fields so create/destroy/clear
-// share one description of what each attachment is. The aux buffer is full float
+// Describe this engine's scene-MRT attachments. Pure (no GL): the
+// tex/this_frame pointers alias Engine fields so create/destroy/clear share one
+// description of what each attachment is. The aux buffer is full float
 // (RGBA32F): fp16 quantizes linear Z into scene-scale steps on large scenes and
-// GTAO reads the staircase as banded occlusion.
+// GTAO reads the staircase as banded occlusion. Ambient specular is R11G11B10F:
+// positive HDR only (WS_SCENE_MAX sits under the format's ~65024 ceiling), no
+// alpha needed, half the bandwidth of RGBA16F.
 static void _gbuffer_attachments(Engine* engine, GBufferAttachment out[GBUFFER_ATTACHMENT_COUNT]) {
     out[0] = (GBufferAttachment){
-        &engine->multisample_texture, NULL, GL_RGBA16F, {0.1f, 0.1f, 0.1f, 1.0f}};
+        &engine->multisample_texture, NULL, GL_RGBA16F, GL_COLOR_ATTACHMENT0,
+        {0.1f, 0.1f, 0.1f, 1.0f}};
     out[1] = (GBufferAttachment){&engine->normal_multisample_texture,
                                  &engine->normals_this_frame,
                                  GL_RGBA16F,
+                                 GL_COLOR_ATTACHMENT1,
                                  {0.0f, 0.0f, 0.0f, 0.0f}};
     out[2] = (GBufferAttachment){&engine->aux_multisample_texture,
                                  &engine->aux_this_frame,
                                  GL_RGBA32F,
+                                 GL_COLOR_ATTACHMENT2,
                                  {0.0f, 0.0f, 0.0f, 0.0f}};
     out[3] = (GBufferAttachment){&engine->albedo_multisample_texture,
                                  &engine->albedo_this_frame,
                                  GL_RGBA8,
+                                 GL_COLOR_ATTACHMENT3,
                                  {0.0f, 0.0f, 0.0f, 0.0f}};
     out[4] = (GBufferAttachment){&engine->sss_diffuse_multisample_texture,
                                  &engine->sss_this_frame,
                                  GL_RGBA16F,
+                                 GL_COLOR_ATTACHMENT4,
+                                 {0.0f, 0.0f, 0.0f, 0.0f}};
+    out[5] = (GBufferAttachment){&engine->spec_multisample_texture,
+                                 &engine->spec_this_frame,
+                                 GL_R11F_G11F_B10F,
+                                 GL_COLOR_ATTACHMENT7,
                                  {0.0f, 0.0f, 0.0f, 0.0f}};
 }
 
@@ -163,6 +180,7 @@ Engine* create_engine(const char* window_title, int width, int height) {
     engine->aux_this_frame = false;
     engine->albedo_this_frame = false;
     engine->sss_this_frame = false;
+    engine->spec_this_frame = false;
     engine->oit_this_frame = false;
 
     engine->camera = NULL;
@@ -469,23 +487,32 @@ static void _add_msaa_color_attachment(GLuint* out_tex, GLenum internal_format, 
 static int _create_msaa_attachments(Engine* engine, int rw, int rh, int samples) {
     glBindFramebuffer(GL_FRAMEBUFFER, engine->framebuffer);
 
-    // We drive one draw buffer per scene-MRT attachment. GL 4.1 guarantees >= 8,
-    // but query once so a hypothetical thin driver fails loudly here instead of
-    // silently dropping the last attachment.
-    GLint max_draw_buffers = 0;
-    glGetIntegerv(GL_MAX_DRAW_BUFFERS, &max_draw_buffers);
-    if (max_draw_buffers < GBUFFER_ATTACHMENT_COUNT)
-        log_error("GL_MAX_DRAW_BUFFERS is %d (< %d): the last scene-MRT attachment will not bind",
-                  max_draw_buffers, GBUFFER_ATTACHMENT_COUNT);
-
-    // Draw-buffer layout: 0 HDR color, 1 view normals (SSAO/SSR), 2 aux (TAA
-    // motion + GTAO linear-Z), 3 albedo (SSGI), 4 skin diffuse (SSS). Every
-    // target is allocated each (re)build for a stable FBO layout, but written
-    // only when its consumer is active (see engine_set_scene_draw_buffers).
+    // The draw-buffer list is sized by the highest attachment slot in the
+    // table, not the row count (attachment 7 needs an 8-entry list with
+    // GL_NONE holes at the OIT slots). GL 4.1 guarantees >= 8, but query once
+    // so a hypothetical thin driver fails loudly here instead of silently
+    // dropping the last attachment.
     GBufferAttachment gb[GBUFFER_ATTACHMENT_COUNT];
     _gbuffer_attachments(engine, gb);
+    GLint needed_draw_buffers = 0;
     for (int i = 0; i < GBUFFER_ATTACHMENT_COUNT; i++) {
-        _add_msaa_color_attachment(gb[i].tex, gb[i].internal_format, GL_COLOR_ATTACHMENT0 + i, rw,
+        GLint slot = (GLint)(gb[i].attachment - GL_COLOR_ATTACHMENT0) + 1;
+        if (slot > needed_draw_buffers)
+            needed_draw_buffers = slot;
+    }
+    GLint max_draw_buffers = 0;
+    glGetIntegerv(GL_MAX_DRAW_BUFFERS, &max_draw_buffers);
+    if (max_draw_buffers < needed_draw_buffers)
+        log_error("GL_MAX_DRAW_BUFFERS is %d (< %d): the last scene-MRT attachment will not bind",
+                  max_draw_buffers, needed_draw_buffers);
+
+    // Draw-buffer layout: 0 HDR color, 1 view normals (SSAO/SSR), 2 aux (TAA
+    // motion + GTAO linear-Z), 3 albedo (SSGI), 4 skin diffuse (SSS), 7
+    // ambient specular (split spec-occ). Every target is allocated each
+    // (re)build for a stable FBO layout, but written only when its consumer is
+    // active (see engine_set_scene_draw_buffers).
+    for (int i = 0; i < GBUFFER_ATTACHMENT_COUNT; i++) {
+        _add_msaa_color_attachment(gb[i].tex, gb[i].internal_format, gb[i].attachment, rw,
                                    rh, samples);
     }
 
@@ -1989,8 +2016,9 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode) {
     sky_publish_to_postfx(fx_scene ? fx_scene->sky : NULL, engine->postfx);
     postfx_run(engine->postfx, engine->framebuffer, 0, frame_mode == RENDER_MODE_PBR,
                engine->normals_this_frame, engine->aux_this_frame, engine->albedo_this_frame,
-               engine->sss_this_frame, engine->oit_this_frame ? engine->oit_fbo : 0,
-               engine->draw_projection, engine->view_matrix);
+               engine->sss_this_frame, engine->spec_this_frame,
+               engine->oit_this_frame ? engine->oit_fbo : 0, engine->draw_projection,
+               engine->view_matrix);
 
     // Sky LUT debug overlay onto the composited frame (an acceptance tool,
     // the csm_debug shape: a library-side flag the app/GUI toggles)
@@ -2032,13 +2060,19 @@ void engine_set_scene_draw_buffers(const Engine* engine, bool with_gbuffer) {
     const bool gbuffer = with_gbuffer && !engine->capturing;
     GBufferAttachment gb[GBUFFER_ATTACHMENT_COUNT];
     _gbuffer_attachments((Engine*)engine, gb);
-    GLenum bufs[GBUFFER_ATTACHMENT_COUNT] = {GL_COLOR_ATTACHMENT0}; // rest GL_NONE (0)
+    // 8 slots: bufs[slot] carries GL_COLOR_ATTACHMENT0+slot or GL_NONE (0), so
+    // fragment output location N always lands on attachment N. Slots 5/6 stay
+    // GL_NONE here -- those locations are the OIT accumulate targets, bound on
+    // the OIT FBO.
+    GLenum bufs[8] = {GL_COLOR_ATTACHMENT0}; // rest GL_NONE (0)
     int count = 1;
     for (int i = 1; i < GBUFFER_ATTACHMENT_COUNT; i++) {
         if (gbuffer && *gb[i].this_frame) {
-            bufs[i] = GL_COLOR_ATTACHMENT0 + i;
-            glDisablei(GL_BLEND, i);
-            count = i + 1;
+            int slot = (int)(gb[i].attachment - GL_COLOR_ATTACHMENT0);
+            bufs[slot] = gb[i].attachment;
+            glDisablei(GL_BLEND, slot);
+            if (slot + 1 > count)
+                count = slot + 1;
         }
     }
     glDrawBuffers(count, bufs);
@@ -2416,6 +2450,11 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EngineRenderFunc render
             (postfx_wants_aux_gbuffer(engine->postfx) || engine->sss_this_frame);
         engine->albedo_this_frame =
             frame_mode == RENDER_MODE_PBR && postfx_wants_albedo(engine->postfx);
+        // Split spec-occ: ambient specular routes to attachment 7 so the post
+        // chain can occlude exactly that share and fold it back. Not gated on
+        // AO -- with AO off the composite still owes the scene its specular.
+        engine->spec_this_frame =
+            frame_mode == RENDER_MODE_PBR && postfx_wants_spec_split(engine->postfx);
         engine_set_scene_draw_buffers(engine, true);
         GBufferAttachment gb[GBUFFER_ATTACHMENT_COUNT];
         _gbuffer_attachments(engine, gb);
@@ -2428,7 +2467,8 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EngineRenderFunc render
         // shadow catcher draw color-only and leave them cleared.
         for (int i = 1; i < GBUFFER_ATTACHMENT_COUNT; i++) {
             if (*gb[i].this_frame)
-                glClearBufferfv(GL_COLOR, i, gb[i].clear);
+                glClearBufferfv(GL_COLOR, (GLint)(gb[i].attachment - GL_COLOR_ATTACHMENT0),
+                                gb[i].clear);
         }
 
         Scene* current_scene = get_current_scene(engine);

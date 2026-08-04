@@ -78,6 +78,8 @@ typedef struct Engine {
     GLuint
         sss_diffuse_multisample_texture; // Multisample skin diffuse irradiance for SSS (attachment
                                          // 4); 0 off-skin, so it doubles as the SSS mask
+    GLuint spec_multisample_texture;     // Multisample ambient specular (attachment 7; slots 5/6
+                                         // belong to the OIT FBO's attachments)
     GLuint depth_renderbuffer;           // Depth renderbuffer
     // Refraction source: mid-frame resolve of the opaque scene into a mipped
     // RGBA16F texture, created lazily on the first transmissive frame
@@ -113,6 +115,7 @@ typedef struct Engine {
                                  // linear-Z)
     bool albedo_this_frame;      // Attachment 3 (albedo) written this frame (SSGI active)
     bool sss_this_frame;         // Attachment 4 (skin diffuse) written this frame (SSS active)
+    bool spec_this_frame;        // Attachment 7 (ambient specular) written this frame (split mode)
     bool oit_this_frame;         // OIT accumulate pass ran this frame (postfx composites oit_fbo)
 
     // The scene is being rendered into an offscreen capture target (a probe face,
