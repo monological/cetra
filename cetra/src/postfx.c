@@ -608,7 +608,8 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     uniform_set_int(fx->gtao_program->uniforms, "linDepthTex", 0);
     uniform_set_int(fx->gtao_program->uniforms, "noiseTex", 1);
     uniform_set_int(fx->gtao_program->uniforms, "normalsTex", 2);
-    uniform_set_int(fx->gtao_program->uniforms, "hdrTex", 3); // SSGI radiance source
+    uniform_set_int(fx->gtao_program->uniforms, "hdrTex", 3);  // SSGI radiance source
+    uniform_set_int(fx->gtao_program->uniforms, "specTex", 4); // split spec share of that radiance
     const float noise_scale[2] = {(float)fx->ssao_width / 4.0f, (float)fx->ssao_height / 4.0f};
     uniform_set_vec2(fx->gtao_program->uniforms, "noiseScale", noise_scale);
 
@@ -2076,6 +2077,13 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             glBindTexture(GL_TEXTURE_2D, have_normals ? fx->normal_texture : 0);
             glActiveTexture(GL_TEXTURE3);
             glBindTexture(GL_TEXTURE_2D, ssgi_active ? fx->hdr_texture : 0);
+            // Under split, hdr is missing its ambient specular until the
+            // composite folds it back -- which runs after this pass, so the
+            // gather sums the split buffer to see the occluder's full
+            // outgoing radiance.
+            const bool gather_spec = ssgi_active && split_live;
+            glActiveTexture(GL_TEXTURE4);
+            glBindTexture(GL_TEXTURE_2D, gather_spec ? fx->spec_texture : 0);
             uniform_set_int(fx->gtao_program->uniforms, "useNormalsTex", have_normals ? 1 : 0);
             uniform_set_mat4(fx->gtao_program->uniforms, "projection", (float*)projection);
             uniform_set_float(fx->gtao_program->uniforms, "radius", fx->ssao_radius);
@@ -2083,6 +2091,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             // % 4096: same float-hash conditioning bound as PCSS/SSR
             uniform_set_int(fx->gtao_program->uniforms, "frameIndex", fx->frame_index % 4096);
             uniform_set_int(fx->gtao_program->uniforms, "gatherGI", ssgi_active ? 1 : 0);
+            uniform_set_int(fx->gtao_program->uniforms, "gatherSpec", gather_spec ? 1 : 0);
             draw_fullscreen_quad(fx->quad_vao);
 
             if (fx->ssao_enabled) {

@@ -31,6 +31,13 @@ uniform int temporal;    // 1 when the AO accumulation pass is active
 uniform int frameIndex;  // Drives the per-frame slice rotation when temporal
 uniform sampler2D hdrTex; // Resolved lit scene color -- the radiance SSGI gathers from occluders
 uniform int gatherGI;     // 1 = also gather one-bounce irradiance into GiOut (SSGI)
+// Split spec-occ routes ambient specular out of the scene color until the
+// composite folds it back -- which runs after this pass, so an occluder's
+// outgoing radiance is missing that share here. Summing the split buffer
+// back in restores it (pre-occlusion: the cone term has not applied yet, a
+// slight bounce overestimate in crevices, accepted against the loss).
+uniform sampler2D specTex; // Resolved split ambient specular
+uniform int gatherSpec;    // 1 = add specTex to the gather's source radiance
 
 // hdrTex is already pre-exposed, so the gather inherits the conversion and
 // WS_BOUNCE_MAX below is read in the same space it was written in.
@@ -223,10 +230,15 @@ void main()
                 if (gatherGI == 1) {
                     uint newBits = sampleBits & ~bitfield;
                     if (newBits != 0u) {
-                        // Clamp the source radiance: one specular-hot texel
+                        vec3 rad = texture(hdrTex, sUV).rgb;
+                        if (gatherSpec == 1)
+                            rad += texture(specTex, sUV).rgb;
+                        // Clamp the source radiance -- the SUM, once, so the
+                        // bound the exposure meter sees does not double when
+                        // the split share joins: one specular-hot texel
                         // gathered here becomes a firefly that the a-trous
                         // blur smears into a bright splat downstream.
-                        vec3 rad = min(texture(hdrTex, sUV).rgb, vec3(WS_BOUNCE_MAX));
+                        rad = min(rad, vec3(WS_BOUNCE_MAX));
                         gi += rad * (float(popCount(newBits)) / float(SECTOR_COUNT));
                     }
                 }
