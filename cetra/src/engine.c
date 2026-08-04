@@ -337,10 +337,7 @@ void free_engine(Engine* engine) {
     free_ltc_tables(engine->ltc);
     engine->ltc = NULL;
 
-    if (engine->brdf_lut) {
-        glDeleteTextures(1, &engine->brdf_lut);
-        engine->brdf_lut = 0;
-    }
+    gl_delete_texture(&engine->brdf_lut);
 
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
@@ -476,19 +473,15 @@ static void _destroy_msaa_attachments(Engine* engine) {
     GBufferAttachment gb[GBUFFER_ATTACHMENT_COUNT];
     _gbuffer_attachments(engine, gb);
     for (int i = 0; i < GBUFFER_ATTACHMENT_COUNT; i++) {
-        glDeleteTextures(1, gb[i].tex);
-        *gb[i].tex = 0;
+        gl_delete_texture(gb[i].tex);
     }
     glDeleteRenderbuffers(1, &engine->depth_renderbuffer);
     engine->depth_renderbuffer = 0;
     // The OIT FBO shares depth_renderbuffer; tear it down too so it is rebuilt
     // against the fresh depth on the next OIT frame (0 handles when never created).
-    glDeleteFramebuffers(1, &engine->oit_fbo);
-    glDeleteTextures(1, &engine->oit_accum_multisample_texture);
-    glDeleteTextures(1, &engine->oit_revealage_multisample_texture);
-    engine->oit_fbo = 0;
-    engine->oit_accum_multisample_texture = 0;
-    engine->oit_revealage_multisample_texture = 0;
+    gl_delete_fbo(&engine->oit_fbo);
+    gl_delete_texture(&engine->oit_accum_multisample_texture);
+    gl_delete_texture(&engine->oit_revealage_multisample_texture);
     engine->oit_w = 0;
     engine->oit_h = 0;
 }
@@ -559,8 +552,7 @@ static int _setup_engine_msaa(Engine* engine) {
     glGenFramebuffers(1, &engine->framebuffer);
     if (_create_msaa_attachments(engine, rw, rh, engine->msaa_samples) != 0) {
         _destroy_msaa_attachments(engine);
-        glDeleteFramebuffers(1, &engine->framebuffer);
-        engine->framebuffer = 0;
+        gl_delete_fbo(&engine->framebuffer);
         return -1;
     }
     return 0;
@@ -2369,10 +2361,8 @@ static bool _ensure_opaque_color_target(Engine* engine, int rw, int rh) {
                            engine->opaque_color_texture, 0);
     if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
         log_error("Opaque-color resolve framebuffer incomplete");
-        glDeleteTextures(1, &engine->opaque_color_texture);
-        glDeleteFramebuffers(1, &engine->opaque_color_fbo);
-        engine->opaque_color_texture = 0;
-        engine->opaque_color_fbo = 0;
+        gl_delete_texture(&engine->opaque_color_texture);
+        gl_delete_fbo(&engine->opaque_color_fbo);
         return false;
     }
     engine->opaque_color_w = rw;
@@ -2438,10 +2428,8 @@ static bool _ensure_scene_depth_target(Engine* engine, int rw, int rh) {
     glReadBuffer(GL_NONE);
     if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
         log_error("Scene-depth resolve framebuffer incomplete");
-        glDeleteTextures(1, &engine->scene_depth_texture);
-        glDeleteFramebuffers(1, &engine->scene_depth_fbo);
-        engine->scene_depth_texture = 0;
-        engine->scene_depth_fbo = 0;
+        gl_delete_texture(&engine->scene_depth_texture);
+        gl_delete_fbo(&engine->scene_depth_fbo);
         return false;
     }
     engine->scene_depth_w = rw;
@@ -2492,12 +2480,9 @@ static bool _ensure_oit_targets(Engine* engine, int rw, int rh) {
                               engine->depth_renderbuffer);
     if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
         log_error("OIT framebuffer incomplete");
-        glDeleteTextures(1, &engine->oit_accum_multisample_texture);
-        glDeleteTextures(1, &engine->oit_revealage_multisample_texture);
-        glDeleteFramebuffers(1, &engine->oit_fbo);
-        engine->oit_fbo = 0;
-        engine->oit_accum_multisample_texture = 0;
-        engine->oit_revealage_multisample_texture = 0;
+        gl_delete_texture(&engine->oit_accum_multisample_texture);
+        gl_delete_texture(&engine->oit_revealage_multisample_texture);
+        gl_delete_fbo(&engine->oit_fbo);
         return false;
     }
     engine->oit_w = rw;

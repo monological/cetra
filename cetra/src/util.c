@@ -81,6 +81,16 @@ void draw_fullscreen_quad(GLuint vao) {
     glBindVertexArray(0);
 }
 
+void gl_delete_fbo(GLuint* fbo) {
+    glDeleteFramebuffers(1, fbo);
+    *fbo = 0;
+}
+
+void gl_delete_texture(GLuint* tex) {
+    glDeleteTextures(1, tex);
+    *tex = 0;
+}
+
 void print_indentation(int depth) {
     for (int i = 0; i < depth; i++) {
         printf("    ");

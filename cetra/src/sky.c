@@ -261,8 +261,7 @@ static void bake_aerial_volume(SkyAtmosphere* sky, UniformManager* um) {
         glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, sky->aerial_lut, 0, slice);
         if (slice == 0 && glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
             log_error("Aerial volume FBO incomplete; dropping aerial perspective");
-            glDeleteTextures(1, &sky->aerial_lut);
-            sky->aerial_lut = 0;
+            gl_delete_texture(&sky->aerial_lut);
             sky->aerial_failed = true;
             break;
         }

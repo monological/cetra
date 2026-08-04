@@ -22,6 +22,17 @@ GLint get_gl_max_array_texture_layers(void);
 void create_fullscreen_quad_vao(GLuint* vao, GLuint* vbo);
 void draw_fullscreen_quad(GLuint vao);
 
+// Delete a GL object and zero the handle. The zeroing is what makes these
+// worth a helper: a handle holding a deleted name is a double-delete once the
+// driver recycles it, and any "is this allocated?" test on the handle reads
+// true for a buffer that is gone. Use them wherever a handle OUTLIVES the
+// delete (a target rebuilt at a new size, a lazily-recreated resource) --
+// not in a free_* path that is about to release the struct, where the store
+// would be dead. glDelete* on 0 is a no-op, so these are safe over a
+// partially-constructed object.
+void gl_delete_fbo(GLuint* fbo);
+void gl_delete_texture(GLuint* tex);
+
 /*
  * String
  */

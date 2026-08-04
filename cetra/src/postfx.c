@@ -89,22 +89,6 @@ static void draw_volume_slices(PostFX* fx, GLuint volume, UniformManager* um) {
     glBindVertexArray(0);
 }
 
-// Delete-and-zero. Zeroing is not tidiness: the targets are torn down and
-// rebuilt at runtime now, and a handle left holding a deleted name is either
-// a double-delete once GL recycles it or -- for post_fbo, which
-// postfx_taau_active keys on -- a live-looking buffer that no longer exists.
-// glDelete* on 0 is a no-op, so this is also what keeps the teardown safe to
-// run over a partially-constructed PostFX.
-static void del_fbo(GLuint* fbo) {
-    glDeleteFramebuffers(1, fbo);
-    *fbo = 0;
-}
-
-static void del_tex(GLuint* tex) {
-    glDeleteTextures(1, tex);
-    *tex = 0;
-}
-
 // A ping-pong pair: two color FBOs of the same size/format (see PingPong)
 static bool create_pingpong(int width, int height, GLenum internal_format, PingPong* pp) {
     pp->valid = false;
@@ -117,8 +101,8 @@ static bool create_pingpong(int width, int height, GLenum internal_format, PingP
 
 static void free_pingpong(PingPong* pp) {
     for (int i = 0; i < 2; i++) {
-        del_fbo(&pp->fbo[i]);
-        del_tex(&pp->tex[i]);
+        gl_delete_fbo(&pp->fbo[i]);
+        gl_delete_texture(&pp->tex[i]);
     }
     pp->valid = false;
 }
@@ -172,10 +156,10 @@ static bool create_ssr_buffers(PostFX* fx) {
 // pyramid + the history/denoise ping-pongs). Paired with it so the runtime
 // resolution switch and free_postfx share one teardown list.
 static void destroy_ssr_buffers(PostFX* fx) {
-    del_fbo(&fx->ssr_fbo);
-    del_tex(&fx->ssr_texture);
-    del_fbo(&fx->hiz_fbo);
-    del_tex(&fx->hiz_texture);
+    gl_delete_fbo(&fx->ssr_fbo);
+    gl_delete_texture(&fx->ssr_texture);
+    gl_delete_fbo(&fx->hiz_fbo);
+    gl_delete_texture(&fx->hiz_texture);
     free_pingpong(&fx->ssr_history);
     free_pingpong(&fx->ssr_atrous);
 }
@@ -284,6 +268,51 @@ static void postfx_derive_sizes(PostFX* fx, int width, int height, int ss_scale,
     fx->half_height = fx->height / 2 > 0 ? fx->height / 2 : 1;
 }
 
+// Bloom pyramid: one packed-float texture whose mip chain the pyramid passes
+// walk, level 0 at half post res down to a ~8-16 px coarsest level. The
+// 8-level cap bounds the pass count and the widest glow radius at large
+// internal resolutions (it engages at 4K/SSAA sizes). Hand-built chain, so
+// MAX_LEVEL is mandatory (an incomplete chain samples as black); one FBO gets
+// re-attached per level like the hi-z build. MIN filter samples bilinearly
+// WITHIN the level the passes pin. Shaped after create_ssr_buffers, with the
+// FBO attached and validated here because unlike the hi-z pyramid this one is
+// drawn into immediately.
+static bool create_bloom_pyramid(PostFX* fx) {
+    int bw = fx->bloom_width;
+    int bh = fx->bloom_height;
+    fx->bloom_mips = 1;
+    while (bw > 15 && bh > 15 && fx->bloom_mips < 8) {
+        bw /= 2;
+        bh /= 2;
+        fx->bloom_mips++;
+    }
+    glGenTextures(1, &fx->bloom_texture);
+    glBindTexture(GL_TEXTURE_2D, fx->bloom_texture);
+    int mw = fx->bloom_width;
+    int mh = fx->bloom_height;
+    for (int mip = 0; mip < fx->bloom_mips; mip++) {
+        glTexImage2D(GL_TEXTURE_2D, mip, GL_R11F_G11F_B10F, mw, mh, 0, GL_RGB, GL_FLOAT, NULL);
+        mw = mw > 1 ? mw / 2 : 1;
+        mh = mh > 1 ? mh / 2 : 1;
+    }
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, fx->bloom_mips - 1);
+    glGenFramebuffers(1, &fx->bloom_fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, fx->bloom_fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, fx->bloom_texture,
+                           0);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        log_error("Bloom pyramid framebuffer incomplete");
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        return false;
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    return true;
+}
+
 // Compile the TAAU resolve and seed its sampler units, once. Absent by
 // default: it exists only for a reduced render scale, which create_postfx may
 // never see and a later resize may introduce. Kept if the scale returns to 1
@@ -328,48 +357,8 @@ static bool postfx_alloc_targets(PostFX* fx) {
     // reads alpha, so the cheaper packed-float format halves its bandwidth
     if (!create_color_fbo(fx->width, fx->height, GL_RGBA16F, &fx->hdr_fbo, &fx->hdr_texture))
         return false;
-    // Bloom pyramid: one packed-float texture whose mip chain the pyramid
-    // passes walk, level 0 at half res down to a ~8-16 px coarsest level.
-    // The 8-level cap bounds the pass count and the widest glow radius at
-    // large internal resolutions (it engages at 4K/SSAA sizes). Hand-built
-    // chain, so MAX_LEVEL is mandatory (an incomplete chain samples as
-    // black); one FBO gets re-attached per level like the hi-z build. MIN
-    // filter samples bilinearly WITHIN the level the passes pin.
-    {
-        int bw = fx->bloom_width;
-        int bh = fx->bloom_height;
-        fx->bloom_mips = 1;
-        while (bw > 15 && bh > 15 && fx->bloom_mips < 8) {
-            bw /= 2;
-            bh /= 2;
-            fx->bloom_mips++;
-        }
-        glGenTextures(1, &fx->bloom_texture);
-        glBindTexture(GL_TEXTURE_2D, fx->bloom_texture);
-        int mw = fx->bloom_width;
-        int mh = fx->bloom_height;
-        for (int mip = 0; mip < fx->bloom_mips; mip++) {
-            glTexImage2D(GL_TEXTURE_2D, mip, GL_R11F_G11F_B10F, mw, mh, 0, GL_RGB, GL_FLOAT, NULL);
-            mw = mw > 1 ? mw / 2 : 1;
-            mh = mh > 1 ? mh / 2 : 1;
-        }
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, fx->bloom_mips - 1);
-        glGenFramebuffers(1, &fx->bloom_fbo);
-        glBindFramebuffer(GL_FRAMEBUFFER, fx->bloom_fbo);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
-                               fx->bloom_texture, 0);
-        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-            log_error("Bloom pyramid framebuffer incomplete");
-            glBindFramebuffer(GL_FRAMEBUFFER, 0);
-            return false;
-        }
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    }
-
+    if (!create_bloom_pyramid(fx))
+        return false;
     if (!create_depth_fbo(fx->width, fx->height, &fx->depth_fbo, &fx->depth_texture))
         return false;
     // Resolve target for the scene pass's second color attachment
@@ -435,95 +424,105 @@ static bool postfx_alloc_targets(PostFX* fx) {
     return true;
 }
 
-// Tear down everything postfx_alloc_targets built, plus every lazily-allocated
-// group, and reset the flags that say they exist. Excludes the three
-// resolution-INDEPENDENT resources -- the luminance measure target, the noise
-// texture, and the froxel volumes (frustum-sized by design) -- so a resize
-// keeps them.
+// Delete every resolution-dependent target: what postfx_alloc_targets built,
+// plus every lazily-allocated group. Excludes the three resolution-INDEPENDENT
+// resources -- the luminance measure target, the noise texture, and the froxel
+// volumes (frustum-sized by design) -- so a resize keeps them.
+//
+// Deletes ONLY. The bookkeeping that says those groups no longer exist is
+// postfx_invalidate_targets' job, because a resize needs both and free_postfx
+// needs only this one: writing flags into a struct that is about to be freed
+// is a dead store, and one that reads like it matters.
 static void postfx_free_targets(PostFX* fx) {
-    del_fbo(&fx->hdr_fbo);
-    del_tex(&fx->hdr_texture);
-    del_fbo(&fx->bloom_fbo);
-    del_tex(&fx->bloom_texture);
-    del_fbo(&fx->depth_fbo);
-    del_tex(&fx->depth_texture);
-    del_fbo(&fx->normal_fbo);
-    del_tex(&fx->normal_texture);
+    gl_delete_fbo(&fx->hdr_fbo);
+    gl_delete_texture(&fx->hdr_texture);
+    gl_delete_fbo(&fx->bloom_fbo);
+    gl_delete_texture(&fx->bloom_texture);
+    gl_delete_fbo(&fx->depth_fbo);
+    gl_delete_texture(&fx->depth_texture);
+    gl_delete_fbo(&fx->normal_fbo);
+    gl_delete_texture(&fx->normal_texture);
     for (int i = 0; i < 2; i++) {
-        del_fbo(&fx->ssao_fbo[i]);
-        del_tex(&fx->ssao_texture[i]);
+        gl_delete_fbo(&fx->ssao_fbo[i]);
+        gl_delete_texture(&fx->ssao_texture[i]);
     }
     free_pingpong(&fx->ao_history);
     destroy_ssr_buffers(fx);
-    del_fbo(&fx->aux_fbo);
-    del_tex(&fx->aux_texture);
-    del_fbo(&fx->albedo_fbo);
-    del_tex(&fx->albedo_texture);
+    gl_delete_fbo(&fx->aux_fbo);
+    gl_delete_texture(&fx->aux_texture);
+    gl_delete_fbo(&fx->albedo_fbo);
+    gl_delete_texture(&fx->albedo_texture);
     free_pingpong(&fx->taa_history);
-    del_fbo(&fx->post_fbo);
-    del_tex(&fx->post_texture);
+    gl_delete_fbo(&fx->post_fbo);
+    gl_delete_texture(&fx->post_texture);
 
-    // Lazily-allocated groups: free and un-ready them together, so the next
-    // frame that needs one rebuilds it at the new size.
-    //
-    // froxel_ready and froxel_prev_frame are deliberately absent. The volumes
-    // are frustum-sized, not framebuffer-sized, so a resolution change does
-    // not invalidate them -- and their reprojection runs volume-to-volume
-    // through a stored camera rather than through any render-res buffer.
-    // Dropping the stamp would cost a frame of un-averaged cascade taps
-    // (visibly stair-stepped fog) to re-derive what already holds.
-    del_tex(&fx->ssgi_gi_texture);
+    // The lazily-allocated groups.
+    gl_delete_texture(&fx->ssgi_gi_texture);
     free_pingpong(&fx->ssgi_history);
     free_pingpong(&fx->ssgi_atrous);
-    fx->ssgi_ready = false;
-    del_fbo(&fx->dof_coc_fbo);
-    del_tex(&fx->dof_coc_texture);
-    del_fbo(&fx->dof_gather_fbo);
-    del_tex(&fx->dof_far_texture);
-    del_tex(&fx->dof_near_texture);
-    del_fbo(&fx->dof_tile_fbo);
-    del_tex(&fx->dof_tile_texture);
-    del_fbo(&fx->dof_dilate_fbo);
-    del_tex(&fx->dof_dilate_texture);
-    del_fbo(&fx->dof_fbo);
-    del_tex(&fx->dof_texture);
-    fx->dof_ready = false;
-    del_fbo(&fx->fog_layer_fbo);
-    del_tex(&fx->fog_layer_texture);
+    gl_delete_fbo(&fx->dof_coc_fbo);
+    gl_delete_texture(&fx->dof_coc_texture);
+    gl_delete_fbo(&fx->dof_gather_fbo);
+    gl_delete_texture(&fx->dof_far_texture);
+    gl_delete_texture(&fx->dof_near_texture);
+    gl_delete_fbo(&fx->dof_tile_fbo);
+    gl_delete_texture(&fx->dof_tile_texture);
+    gl_delete_fbo(&fx->dof_dilate_fbo);
+    gl_delete_texture(&fx->dof_dilate_texture);
+    gl_delete_fbo(&fx->dof_fbo);
+    gl_delete_texture(&fx->dof_texture);
+    gl_delete_fbo(&fx->fog_layer_fbo);
+    gl_delete_texture(&fx->fog_layer_texture);
     free_pingpong(&fx->fog_layer_history);
+    for (int i = 0; i < 2; i++) {
+        gl_delete_fbo(&fx->cs_fbo[i]);
+        gl_delete_texture(&fx->cs_texture[i]);
+    }
+    free_pingpong(&fx->cs_history);
+    gl_delete_fbo(&fx->motion_blur_fbo);
+    gl_delete_texture(&fx->motion_blur_texture);
+    gl_delete_fbo(&fx->motion_blur_tile_fbo);
+    gl_delete_texture(&fx->motion_blur_tile_texture);
+    gl_delete_fbo(&fx->motion_blur_neighbor_fbo);
+    gl_delete_texture(&fx->motion_blur_neighbor_texture);
+    gl_delete_fbo(&fx->sss_diffuse_fbo);
+    gl_delete_texture(&fx->sss_diffuse_texture);
+    gl_delete_fbo(&fx->sss_blur_fbo);
+    gl_delete_texture(&fx->sss_blur_texture);
+    gl_delete_fbo(&fx->sss_delta_fbo);
+    gl_delete_texture(&fx->sss_delta_texture);
+    free_pingpong(&fx->sss_history);
+    gl_delete_fbo(&fx->oit_accum_fbo);
+    gl_delete_texture(&fx->oit_accum_texture);
+    gl_delete_fbo(&fx->oit_revealage_fbo);
+    gl_delete_texture(&fx->oit_revealage_texture);
+    gl_delete_fbo(&fx->spec_fbo);
+    gl_delete_texture(&fx->spec_texture);
+}
+
+// Forget that the lazily-allocated groups exist, so the next frame that needs
+// one rebuilds it at the current size. The companion to postfx_free_targets,
+// separate from it because only a resize wants both: after a free the struct
+// is gone, and these writes would be dead.
+//
+// froxel_ready and froxel_prev_frame are deliberately absent. Those volumes
+// are frustum-sized, not framebuffer-sized, so a resolution change does not
+// invalidate them -- and their reprojection runs volume-to-volume through a
+// stored camera rather than through any render-res buffer. Dropping the stamp
+// would cost a frame of un-averaged cascade taps (visibly stair-stepped fog)
+// to re-derive what already holds.
+static void postfx_invalidate_targets(PostFX* fx) {
+    fx->ssgi_ready = false;
+    fx->dof_ready = false;
     fx->fog_layer_ready = false;
     // One-shot latch: without clearing it, a transient failure at the old size
     // would permanently disable temporal fog at every later one.
     fx->fog_layer_failed = false;
     fx->fog_layer_frame = -1;
-    for (int i = 0; i < 2; i++) {
-        del_fbo(&fx->cs_fbo[i]);
-        del_tex(&fx->cs_texture[i]);
-    }
-    free_pingpong(&fx->cs_history);
     fx->cs_ready = false;
-    del_fbo(&fx->motion_blur_fbo);
-    del_tex(&fx->motion_blur_texture);
-    del_fbo(&fx->motion_blur_tile_fbo);
-    del_tex(&fx->motion_blur_tile_texture);
-    del_fbo(&fx->motion_blur_neighbor_fbo);
-    del_tex(&fx->motion_blur_neighbor_texture);
     fx->motion_blur_ready = false;
-    del_fbo(&fx->sss_diffuse_fbo);
-    del_tex(&fx->sss_diffuse_texture);
-    del_fbo(&fx->sss_blur_fbo);
-    del_tex(&fx->sss_blur_texture);
-    del_fbo(&fx->sss_delta_fbo);
-    del_tex(&fx->sss_delta_texture);
-    free_pingpong(&fx->sss_history);
     fx->sss_ready = false;
-    del_fbo(&fx->oit_accum_fbo);
-    del_tex(&fx->oit_accum_texture);
-    del_fbo(&fx->oit_revealage_fbo);
-    del_tex(&fx->oit_revealage_texture);
     fx->oit_ready = false;
-    del_fbo(&fx->spec_fbo);
-    del_tex(&fx->spec_texture);
     fx->spec_ready = false;
 }
 
@@ -1203,6 +1202,7 @@ bool postfx_resize(PostFX* fx, int width, int height, int ss_scale, float render
     render_scale = postfx_clamp_render_scale(render_scale);
 
     postfx_free_targets(fx);
+    postfx_invalidate_targets(fx);
     postfx_derive_sizes(fx, width, height, ss_scale, render_scale);
 
     // Compile BEFORE allocating: a failure here must not be able to leave a
@@ -1217,6 +1217,7 @@ bool postfx_resize(PostFX* fx, int width, int height, int ss_scale, float render
         // latch a flag on the way out.
         log_error("postfx_resize: rebuild failed at %dx%d", fx->width, fx->height);
         postfx_free_targets(fx);
+        postfx_invalidate_targets(fx);
         glUseProgram(0);
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         return false;
@@ -1536,14 +1537,14 @@ void free_postfx(PostFX* fx) {
     // error-unwind over a half-built PostFX).
     postfx_free_targets(fx);
     // The three the resize deliberately keeps, and so are only freed here.
-    del_tex(&fx->noise_texture);
-    del_fbo(&fx->lum_fbo);
-    del_tex(&fx->lum_texture);
-    del_fbo(&fx->froxel_fbo);
+    gl_delete_texture(&fx->noise_texture);
+    gl_delete_fbo(&fx->lum_fbo);
+    gl_delete_texture(&fx->lum_texture);
+    gl_delete_fbo(&fx->froxel_fbo);
     glDeleteTextures(2, fx->froxel_scatter);
     fx->froxel_scatter[0] = 0;
     fx->froxel_scatter[1] = 0;
-    del_tex(&fx->froxel_integrated);
+    gl_delete_texture(&fx->froxel_integrated);
 
     free_program(fx->bloom_bright_program);
     free_program(fx->bloom_down_program);

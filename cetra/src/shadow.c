@@ -16,6 +16,7 @@
 #include "render.h"
 #include "animation.h"
 #include "wind.h"
+#include "util.h"
 #include "ext/log.h"
 
 // A depth array texture plus the one FBO that renders into its layers. Both
@@ -45,14 +46,8 @@ static void init_depth_array(GLuint* tex, GLuint* fbo, int size, int layers) {
 }
 
 static void free_depth_array(GLuint* tex, GLuint* fbo) {
-    if (*tex) {
-        glDeleteTextures(1, tex);
-        *tex = 0;
-    }
-    if (*fbo) {
-        glDeleteFramebuffers(1, fbo);
-        *fbo = 0;
-    }
+    gl_delete_texture(tex);
+    gl_delete_fbo(fbo);
 }
 
 // Point the FBO at one layer and clear it for a depth-only pass. False means

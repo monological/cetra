@@ -186,12 +186,8 @@ static bool ensure_march_targets(CloudLayer* c, int w, int h) {
     if (c->march_tex[0] && c->march_w == w && c->march_h == h)
         return true;
     for (int i = 0; i < 2; i++) {
-        if (c->march_tex[i]) {
-            glDeleteTextures(1, &c->march_tex[i]);
-            glDeleteFramebuffers(1, &c->march_fbo[i]);
-            c->march_tex[i] = 0;
-            c->march_fbo[i] = 0;
-        }
+        gl_delete_texture(&c->march_tex[i]);
+        gl_delete_fbo(&c->march_fbo[i]);
     }
     // The FBO wrapping duplicates postfx.c's create_color_fbo, which is
     // static there and postfx-owned; hoisting it to a shared home was
@@ -207,10 +203,8 @@ static bool ensure_march_targets(CloudLayer* c, int w, int h) {
         if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
             log_error("Cloud march FBO incomplete; clouds disabled");
             for (int j = 0; j <= i; j++) {
-                glDeleteTextures(1, &c->march_tex[j]);
-                glDeleteFramebuffers(1, &c->march_fbo[j]);
-                c->march_tex[j] = 0;
-                c->march_fbo[j] = 0;
+                gl_delete_texture(&c->march_tex[j]);
+                gl_delete_fbo(&c->march_fbo[j]);
             }
             c->enabled = false;
             return false;
