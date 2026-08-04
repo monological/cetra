@@ -123,6 +123,11 @@ static void on_init(Game* game) {
     // digits change per run and would break screenshot determinism.
     set_engine_show_fps(engine, !engine->headless);
 
+    // The engine's own tuning panel: light intensity/range, the fog block below,
+    // the post chain, and a live camera pose. Off in headless -- it draws after
+    // tone mapping and would land in the screenshot.
+    set_engine_show_gui(engine, !engine->headless);
+
     // Low-key mood: a deliberate EV bias under auto-exposure. Auto-exposure
     // normalizes the metered mean toward middle gray, which for this lit room
     // is too bright for the intended dim interior -- the bias underexposes it
@@ -323,6 +328,31 @@ static void mouse_button_callback(Engine* engine, int button, int action, int mo
     }
 }
 
+// Panel and overlay toggles, on the same keys the render app binds them to.
+static void key_callback(Engine* engine, int key, int scancode, int action, int mods) {
+    (void)scancode;
+    (void)mods;
+    if (action != GLFW_PRESS) {
+        return;
+    }
+    switch (key) {
+    case GLFW_KEY_ESCAPE:
+        glfwSetWindowShouldClose(engine->window, GLFW_TRUE);
+        break;
+    case GLFW_KEY_G:
+        set_engine_show_gui(engine, !engine->show_gui);
+        break;
+    case GLFW_KEY_C:
+        engine->show_camera_hud = !engine->show_camera_hud;
+        break;
+    case GLFW_KEY_L:
+        engine->show_lights = !engine->show_lights;
+        break;
+    default:
+        break;
+    }
+}
+
 int main(int argc, char** argv) {
     GameConfig config = game_default_config();
     config.title = "Cetra Spores";
@@ -350,6 +380,7 @@ int main(int argc, char** argv) {
     }
 
     set_engine_mouse_button_callback(game->engine, mouse_button_callback);
+    set_engine_key_callback(game->engine, key_callback);
     game_set_init(game, on_init);
     game_set_update(game, on_update);
     game_set_render(game, on_render);
