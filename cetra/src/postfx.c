@@ -1878,25 +1878,6 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
                                      fx->height);
         }
 
-        // Temporal AA resolve, before every other HDR pass: reproject the
-        // accumulated history by the velocity buffer, neighborhood-clamp it
-        // against the current frame, blend, and write the result back into
-        // hdr_fbo so SSR/DoF/bloom/tonemap consume the anti-aliased color.
-        if (taa_resolving) {
-            run_temporal_accum(fx, fx->taa_resolve_program, &fx->taa_history, fx->width, fx->height,
-                               fx->hdr_texture, TEMPORAL_FEEDBACK_DEFAULT);
-
-            // Push the resolved frame back into hdr_fbo (the history side is
-            // kept as next frame's accumulation buffer).
-            glBindFramebuffer(GL_READ_FRAMEBUFFER, fx->taa_history.fbo[fx->frame_index & 1]);
-            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fx->hdr_fbo);
-            glBlitFramebuffer(0, 0, fx->width, fx->height, 0, 0, fx->width, fx->height,
-                              GL_COLOR_BUFFER_BIT, GL_NEAREST);
-            check_gl_error("postfx taa");
-        } else {
-            fx->taa_history.valid = false;
-        }
-
         // Resolve the scene pass's second attachment (normal .xyz + SSR marker .a)
         // ahead of its consumers (SSAO now, SSR later). The caller reports
         // whether the attachment was written this frame; re-deriving it from
@@ -2084,6 +2065,28 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         }
         if (!ao_accum_ran)
             fx->ao_history.valid = false;
+
+        // Temporal AA resolve, after the AO chain and before every HDR
+        // consumer (SSR/DoF/bloom/tonemap read anti-aliased color). The AO
+        // chain runs first so the split spec-occ composite can rejoin ambient
+        // specular to the scene BEFORE this resolve -- the reunited frame is
+        // then stabilized as one image, which is what keeps smooth metal from
+        // shimmering against its own occlusion. The one input this moves:
+        // SSGI's gather now samples pre-TAA color (it rides the GTAO sweep).
+        if (taa_resolving) {
+            run_temporal_accum(fx, fx->taa_resolve_program, &fx->taa_history, fx->width, fx->height,
+                               fx->hdr_texture, TEMPORAL_FEEDBACK_DEFAULT);
+
+            // Push the resolved frame back into hdr_fbo (the history side is
+            // kept as next frame's accumulation buffer).
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, fx->taa_history.fbo[fx->frame_index & 1]);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fx->hdr_fbo);
+            glBlitFramebuffer(0, 0, fx->width, fx->height, 0, 0, fx->width, fx->height,
+                              GL_COLOR_BUFFER_BIT, GL_NEAREST);
+            check_gl_error("postfx taa");
+        } else {
+            fx->taa_history.valid = false;
+        }
 
         // SSGI denoise chain: temporal accumulation of the raw gather (TAA
         // frames only -- it needs velocity and the per-frame slice jitter),
