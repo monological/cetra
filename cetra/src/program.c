@@ -946,6 +946,14 @@ ShaderProgram* create_dof_coc_program() {
     return program;
 }
 
+ShaderProgram* create_dof_tile_program() {
+    return create_post_program("dof_tile", dof_tile_frag_shader_str);
+}
+
+ShaderProgram* create_dof_dilate_program() {
+    return create_post_program("dof_dilate", dof_dilate_frag_shader_str);
+}
+
 ShaderProgram* create_dof_gather_program() {
     ShaderProgram* program = NULL;
 

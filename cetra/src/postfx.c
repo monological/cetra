@@ -18,6 +18,10 @@
 // per MOTION_BLUR_TILE^2 tile, which also bounds the max blur radius. Must match
 // TILE_SIZE reasoning in motion_blur_frag.glsl (MAX_PIXELS clamp).
 #define MOTION_BLUR_TILE 20
+// DoF tile size (half-res texels per tile texel): the tile pass reduces the
+// signed CoC to per-tile far/near maxima that set the gather's kernel radius.
+// Uploaded as the tileSize uniform to dof_tile and dof_gather.
+#define DOF_TILE 4
 
 // Creates a single-sample color-only FBO; returns false on failure
 static bool create_color_fbo(int width, int height, GLenum internal_format, GLuint* out_fbo,
@@ -27,6 +31,8 @@ static bool create_color_fbo(int width, int height, GLenum internal_format, GLui
     GLenum format = GL_RGBA;
     if (internal_format == GL_R8 || internal_format == GL_R16F)
         format = GL_RED;
+    else if (internal_format == GL_RG16F)
+        format = GL_RG;
     else if (internal_format == GL_R11F_G11F_B10F)
         format = GL_RGB;
 
@@ -505,6 +511,8 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     fx->froxel_composite_program = create_froxel_composite_program();
     fx->taa_resolve_program = create_taa_resolve_program();
     fx->dof_coc_program = create_dof_coc_program();
+    fx->dof_tile_program = create_dof_tile_program();
+    fx->dof_dilate_program = create_dof_dilate_program();
     fx->dof_gather_program = create_dof_gather_program();
     fx->dof_composite_program = create_dof_composite_program();
     fx->motion_blur_program = create_motion_blur_program();
@@ -525,6 +533,7 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
         !fx->taa_resolve_program || !fx->dof_coc_program ||
         !fx->froxel_inject_program || !fx->froxel_integrate_program ||
         !fx->froxel_composite_program ||
+        !fx->dof_tile_program || !fx->dof_dilate_program ||
         !fx->dof_gather_program || !fx->dof_composite_program) {
         free_postfx(fx);
         return NULL;
@@ -576,8 +585,15 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     glUseProgram(fx->dof_coc_program->id);
     uniform_set_int(fx->dof_coc_program->uniforms, "sceneTex", 0);
     uniform_set_int(fx->dof_coc_program->uniforms, "depthTex", 1);
+    glUseProgram(fx->dof_tile_program->id);
+    uniform_set_int(fx->dof_tile_program->uniforms, "cocColorTex", 0);
+    uniform_set_int(fx->dof_tile_program->uniforms, "tileSize", DOF_TILE);
+    glUseProgram(fx->dof_dilate_program->id);
+    uniform_set_int(fx->dof_dilate_program->uniforms, "tileTex", 0);
     glUseProgram(fx->dof_gather_program->id);
     uniform_set_int(fx->dof_gather_program->uniforms, "cocColorTex", 0);
+    uniform_set_int(fx->dof_gather_program->uniforms, "tileTex", 1);
+    uniform_set_int(fx->dof_gather_program->uniforms, "tileSize", DOF_TILE);
     glUseProgram(fx->dof_composite_program->id);
     uniform_set_int(fx->dof_composite_program->uniforms, "sceneTex", 0);
     uniform_set_int(fx->dof_composite_program->uniforms, "blurTex", 1);
@@ -657,15 +673,22 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
 }
 
 // Allocate the depth-of-field targets on first use so the feature is free when
-// off: two half-res buffers (CoC+colour, gathered blur) and a full-res
-// composite. Returns false and leaves DoF disabled if allocation fails.
+// off: two half-res buffers (CoC+colour, gathered blur), the tile-pass pair
+// (per-tile CoC maxima + their dilation), and a full-res composite. Returns
+// false and leaves DoF disabled if allocation fails.
 static bool postfx_ensure_dof_targets(PostFX* fx) {
     if (fx->dof_ready)
         return true;
+    fx->dof_tile_w = (fx->bloom_width + DOF_TILE - 1) / DOF_TILE;
+    fx->dof_tile_h = (fx->bloom_height + DOF_TILE - 1) / DOF_TILE;
     if (!create_color_fbo(fx->bloom_width, fx->bloom_height, GL_RGBA16F, &fx->dof_coc_fbo,
                           &fx->dof_coc_texture) ||
         !create_color_fbo(fx->bloom_width, fx->bloom_height, GL_RGBA16F, &fx->dof_blur_fbo,
                           &fx->dof_blur_texture) ||
+        !create_color_fbo(fx->dof_tile_w, fx->dof_tile_h, GL_RG16F, &fx->dof_tile_fbo,
+                          &fx->dof_tile_texture) ||
+        !create_color_fbo(fx->dof_tile_w, fx->dof_tile_h, GL_RG16F, &fx->dof_dilate_fbo,
+                          &fx->dof_dilate_texture) ||
         !create_color_fbo(fx->width, fx->height, GL_RGBA16F, &fx->dof_fbo, &fx->dof_texture)) {
         log_error("Failed to allocate depth-of-field targets");
         return false;
@@ -1171,13 +1194,39 @@ static void postfx_run_dof(PostFX* fx, mat4 projection) {
     uniform_set_float(fx->dof_coc_program->uniforms, "maxCoC", fx->dof_max_coc);
     draw_fullscreen_quad(fx->quad_vao);
 
-    // Pass 2: aperture gather (half res). The kernel is rebuilt per frame --
+    // Pass 2: per-tile CoC maxima (far in .r, near in .g).
+    glBindFramebuffer(GL_FRAMEBUFFER, fx->dof_tile_fbo);
+    glViewport(0, 0, fx->dof_tile_w, fx->dof_tile_h);
+    glUseProgram(fx->dof_tile_program->id);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, fx->dof_coc_texture);
+    uniform_set_vec2(fx->dof_tile_program->uniforms, "texelSize", dof_texel);
+    draw_fullscreen_quad(fx->quad_vao);
+
+    // Pass 3: dilate the maxima so a defocused tile's reach covers every tile
+    // its blur can spill into. K from maxCoC: a blur of C half-res texels
+    // spills at most ceil(C / DOF_TILE) tiles.
+    int dilate = (int)ceilf(fx->dof_max_coc / (float)DOF_TILE);
+    dilate = dilate < 1 ? 1 : (dilate > 8 ? 8 : dilate);
+    glBindFramebuffer(GL_FRAMEBUFFER, fx->dof_dilate_fbo);
+    glUseProgram(fx->dof_dilate_program->id);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, fx->dof_tile_texture);
+    const float tile_texel[2] = {1.0f / (float)fx->dof_tile_w, 1.0f / (float)fx->dof_tile_h};
+    uniform_set_vec2(fx->dof_dilate_program->uniforms, "tileTexel", tile_texel);
+    uniform_set_int(fx->dof_dilate_program->uniforms, "dilateRadius", dilate);
+    draw_fullscreen_quad(fx->quad_vao);
+
+    // Pass 4: aperture gather (half res). The kernel is rebuilt per frame --
     // 64 sincos is nothing, and it keeps the GUI blade/rotation sliders live
     // with no dirty tracking.
     glBindFramebuffer(GL_FRAMEBUFFER, fx->dof_blur_fbo);
+    glViewport(0, 0, fx->bloom_width, fx->bloom_height);
     glUseProgram(fx->dof_gather_program->id);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, fx->dof_coc_texture);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, fx->dof_dilate_texture);
     uniform_set_vec2(fx->dof_gather_program->uniforms, "texelSize", dof_texel);
     float kernel[DOF_TAPS][2];
     dof_build_kernel(fx->dof_blades, fx->dof_rotation, kernel);
@@ -1187,7 +1236,7 @@ static void postfx_run_dof(PostFX* fx, mat4 projection) {
         glUniform2fv(kloc, DOF_TAPS, (const GLfloat*)kernel);
     draw_fullscreen_quad(fx->quad_vao);
 
-    // Pass 3: composite sharp + blur (full res)
+    // Pass 5: composite sharp + blur (full res)
     glBindFramebuffer(GL_FRAMEBUFFER, fx->dof_fbo);
     glViewport(0, 0, fx->width, fx->height);
     glUseProgram(fx->dof_composite_program->id);
@@ -1238,6 +1287,10 @@ void free_postfx(PostFX* fx) {
     glDeleteTextures(1, &fx->dof_coc_texture);
     glDeleteFramebuffers(1, &fx->dof_blur_fbo);
     glDeleteTextures(1, &fx->dof_blur_texture);
+    glDeleteFramebuffers(1, &fx->dof_tile_fbo);
+    glDeleteTextures(1, &fx->dof_tile_texture);
+    glDeleteFramebuffers(1, &fx->dof_dilate_fbo);
+    glDeleteTextures(1, &fx->dof_dilate_texture);
     glDeleteFramebuffers(1, &fx->dof_fbo);
     glDeleteTextures(1, &fx->dof_texture);
     glDeleteFramebuffers(1, &fx->froxel_fbo);
@@ -1291,6 +1344,8 @@ void free_postfx(PostFX* fx) {
     free_program(fx->froxel_composite_program);
     free_program(fx->taa_resolve_program);
     free_program(fx->dof_coc_program);
+    free_program(fx->dof_tile_program);
+    free_program(fx->dof_dilate_program);
     free_program(fx->dof_gather_program);
     free_program(fx->dof_composite_program);
     free_program(fx->motion_blur_program);
