@@ -788,6 +788,16 @@ int init_engine(Engine* engine) {
     // HDR post-processing (resolve + bloom + tone map). Sized at the display
     // resolution; the supersample factor enlarges the internal chain to match
     // the enlarged MSAA scene target.
+    // TAAU reconstructs from the jitter, and headless suppresses the jitter
+    // unless headless_jitter is set -- without it the resolve would integrate
+    // one repeated sample position forever and just look permanently soft.
+    // Enforced here rather than in an app because this is where all three
+    // facts are known, and every headless app would otherwise have to
+    // rediscover the rule.
+    if (engine->headless && !engine->headless_jitter && engine->render_scale < 1.0f) {
+        log_warn("render scale needs jitter under headless; rendering at full resolution");
+        engine->render_scale = 1.0f;
+    }
     engine->postfx = create_postfx(engine->fb_width, engine->fb_height, engine->ss_scale,
                                    engine->render_scale);
     if (!engine->postfx) {

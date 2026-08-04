@@ -699,8 +699,9 @@ void render_current_scene(Engine* engine) {
         // 16 Halton phases when TAAU upscales: each display pixel is visited by
         // fewer render samples per cycle, so the sequence needs more phases to
         // cover the same subpixel area. 8 at full scale -- bit-for-bit the
-        // sequence TAA has always run.
-        int phases = engine->render_scale < 1.0f ? 16 : 8;
+        // sequence TAA has always run. Asking the same predicate the resolve
+        // dispatches on is what stops the sequence and its consumer diverging.
+        int phases = postfx_taau_active(engine->postfx) ? 16 : 8;
         int j = (int)(engine->total_frames % phases) + 1;
         int rw, rh;
         engine_render_size(engine, &rw, &rh);
@@ -708,8 +709,8 @@ void render_current_scene(Engine* engine) {
         float jy = _halton(j, 3) - 0.5f;
         draw_projection[2][0] += jx * 2.0f / (float)rw;
         draw_projection[2][1] += jy * 2.0f / (float)rh;
-        // Published in render pixels: a [2][0] offset of 2j/rw shifts the
-        // raster exactly j pixels, and the TAAU resolve un-applies that to
+        // Published in render pixels: a [2][0] offset of 2*jx/rw shifts the
+        // raster exactly jx pixels, and the TAAU resolve un-applies that to
         // place this frame's samples on the display grid.
         engine->postfx->taau_jitter_px[0] = jx;
         engine->postfx->taau_jitter_px[1] = jy;
@@ -1024,6 +1025,15 @@ void scene_capture_faces(Engine* engine, struct IBLResources* ibl, const vec3 po
     float saved_far = camera->far_clip;
 
     bool saved_taa = engine->postfx ? engine->postfx->taa_enabled : false;
+    // Each capture face re-enters render_current_scene with TAA off, which
+    // republishes a zero jitter. Restoring it keeps a capture taken AFTER the
+    // main raster (this API is public) from handing the TAAU resolve a zero
+    // offset to un-apply against a raster that was jittered.
+    float saved_jitter[2] = {0.0f, 0.0f};
+    if (engine->postfx) {
+        saved_jitter[0] = engine->postfx->taau_jitter_px[0];
+        saved_jitter[1] = engine->postfx->taau_jitter_px[1];
+    }
     bool saved_refraction = engine->refraction_enabled;
     bool saved_capturing = engine->capturing;
 
@@ -1138,8 +1148,11 @@ void scene_capture_faces(Engine* engine, struct IBLResources* ibl, const vec3 po
     camera->far_clip = saved_far;
     engine->refraction_enabled = saved_refraction;
     engine->capturing = saved_capturing;
-    if (engine->postfx)
+    if (engine->postfx) {
         engine->postfx->taa_enabled = saved_taa;
+        engine->postfx->taau_jitter_px[0] = saved_jitter[0];
+        engine->postfx->taau_jitter_px[1] = saved_jitter[1];
+    }
 
     glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)saved_fbo);
     glViewport(saved_viewport[0], saved_viewport[1], saved_viewport[2], saved_viewport[3]);

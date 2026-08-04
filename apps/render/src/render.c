@@ -1558,11 +1558,16 @@ int main(int argc, char** argv) {
     set_engine_screenshot_every(engine, args.screenshot_every);
     if (args.ssaa > 0)
         set_engine_ss_scale(engine, args.ssaa);
-    if (args.render_scale > 0.0f && args.render_scale < 1.0f) {
+    if (args.render_scale != 0.0f) {
         // TAAU is a temporal reconstruction: it needs the resolve running and
         // the jitter live. Windowed runs force TAA on below; headless must opt
         // into both, else the scaled frame would never be rebuilt to full res.
-        if (args.headless && (!args.force_taa || !args.headless_jitter)) {
+        if (args.render_scale >= 1.0f) {
+            // Not silently: a typo'd 1.5 would otherwise render full res and
+            // look like the flag did nothing.
+            fprintf(stderr, "--render-scale %.2f is not below 1; rendering at full resolution\n",
+                    args.render_scale);
+        } else if (args.headless && (!args.force_taa || !args.headless_jitter)) {
             fprintf(stderr, "--render-scale needs --taa --headless-jitter under --headless; "
                             "rendering at full resolution\n");
         } else {

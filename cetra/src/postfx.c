@@ -248,9 +248,13 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     if (ss_scale < 1) {
         ss_scale = 1;
     }
+    // Same rule as set_engine_render_scale: clamp to the nearest bound, so the
+    // two doors into this cannot answer the same input differently.
     if (render_scale < 0.5f || render_scale > 1.0f) {
-        log_warn("create_postfx: render scale %.2f outside [0.5, 1]; using 1", render_scale);
-        render_scale = 1.0f;
+        float clamped = render_scale < 0.5f ? 0.5f : 1.0f;
+        log_warn("create_postfx: render scale %.2f outside [0.5, 1]; using %.2f", render_scale,
+                 clamped);
+        render_scale = clamped;
     }
 
     PostFX* fx = calloc(1, sizeof(PostFX));
@@ -536,9 +540,8 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     fx->froxel_integrate_program = create_froxel_integrate_program();
     fx->froxel_composite_program = create_froxel_composite_program();
     fx->taa_resolve_program = create_taa_resolve_program();
-    // The TAAU resolve exists only when the scale splits the sizes: the
-    // default path never compiles it, and its uniforms are seeded by
-    // run_taau_resolve, which owns the pass.
+    // The TAAU resolve exists only when the scale splits the sizes; the
+    // default path never compiles it.
     if (fx->render_scale < 1.0f) {
         fx->taau_resolve_program = create_taau_resolve_program();
         if (!fx->taau_resolve_program) {
@@ -701,6 +704,15 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     uniform_set_int(fx->ssr_atrous_program->uniforms, "reflTex", 0);
     uniform_set_int(fx->ssr_atrous_program->uniforms, "linDepthTex", 1);
     uniform_set_int(fx->ssr_atrous_program->uniforms, "normalsTex", 2);
+
+    // Absent unless the render scale split the sizes; run_taau_resolve keeps
+    // the sizes and the jitter, which are the only things that vary.
+    if (fx->taau_resolve_program) {
+        glUseProgram(fx->taau_resolve_program->id);
+        uniform_set_int(fx->taau_resolve_program->uniforms, "currentTex", 0);
+        uniform_set_int(fx->taau_resolve_program->uniforms, "velocityTex", 1);
+        uniform_set_int(fx->taau_resolve_program->uniforms, "historyTex", 2);
+    }
     glUseProgram(0);
 
     create_fullscreen_quad_vao(&fx->quad_vao, &fx->quad_vbo);
@@ -1460,6 +1472,13 @@ bool postfx_taa_active(const PostFX* fx) {
     return fx && fx->taa_enabled;
 }
 
+bool postfx_taau_active(const PostFX* fx) {
+    // Keyed on the canvas rather than on render_scale: the canvas is what the
+    // seam actually dispatches on, and it exists only when create_postfx both
+    // wanted AND managed to build the reduced-scale chain.
+    return fx && fx->post_fbo != 0;
+}
+
 bool postfx_wants_aux_gbuffer(const PostFX* fx) {
     // Attachment 2 carries motion vectors (.xy, for TAA reprojection) and linear
     // view-Z (.z, for GTAO position reconstruction). Produce it whenever either
@@ -1567,9 +1586,15 @@ static GLuint run_temporal_accum(PostFX* fx, ShaderProgram* prog, PingPong* pp, 
 // helper's one-site invariant is same-res in and out -- it seeds texelSize
 // from a single resolution -- while this pass straddles two and adds the
 // jitter uniform. Unit layout follows the shared convention (0 current,
-// 1 velocity, 2 history). Same restore contract as run_temporal_accum:
-// RESTORES NOTHING. Returns the freshly written history texture.
-static GLuint run_taau_resolve(PostFX* fx) {
+// 1 velocity, 2 history), seeded once at create like every other
+// single-consumer program. Same restore contract as run_temporal_accum:
+// RESTORES NOTHING. The caller reads the written side out of taa_history.
+//
+// The two resolutions stay per-draw rather than joining the create-time
+// seed: they are the one thing a future postfx_resize would have to change,
+// and a stale size here mis-registers every sample rather than failing
+// loudly.
+static void run_taau_resolve(PostFX* fx) {
     PingPong* pp = &fx->taa_history;
     int write = fx->frame_index & 1;
     int read = write ^ 1;
@@ -1580,9 +1605,6 @@ static GLuint run_taau_resolve(PostFX* fx) {
     uniform_set_vec2(u, "renderSize", (vec2){(float)fx->width, (float)fx->height});
     uniform_set_vec2(u, "postSize", (vec2){(float)fx->post_width, (float)fx->post_height});
     uniform_set_vec2(u, "jitterPx", fx->taau_jitter_px);
-    uniform_set_int(u, "currentTex", 0);
-    uniform_set_int(u, "velocityTex", 1);
-    uniform_set_int(u, "historyTex", 2);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, fx->hdr_texture);
     glActiveTexture(GL_TEXTURE1);
@@ -1592,7 +1614,6 @@ static GLuint run_taau_resolve(PostFX* fx) {
     uniform_set_int(u, "reset", pp->valid ? 0 : 1);
     draw_fullscreen_quad(fx->quad_vao);
     pp->valid = true;
-    return pp->tex[write];
 }
 
 // Edge-aware a-trous denoise, shared by the SSGI and SSR denoisers (their
@@ -2086,8 +2107,10 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
 
     if (mode == POSTFX_TONEMAP_PASSTHROUGH) {
         // Display-ready frame: copy to the target, skipping bloom and tone
-        // mapping. Linear filtering box-downsamples the supersampled buffer to
-        // the display size (a 1:1 identity blit when supersampling is off).
+        // mapping -- and with it the seam, so at a reduced render scale this
+        // magnifies rather than reconstructs. Linear filtering box-downsamples
+        // the supersampled buffer to the display size (a 1:1 identity blit at
+        // supersampling 1 and render scale 1).
         glBindFramebuffer(GL_READ_FRAMEBUFFER, fx->hdr_fbo);
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, target_fbo);
         glBlitFramebuffer(0, 0, fx->width, fx->height, 0, 0, fx->out_width, fx->out_height,
@@ -2342,7 +2365,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         // canvas IS the hdr buffer, so the values below equal their old ones
         // and the seam is a no-op; below 1 the post buffer takes over and the
         // render-res frame is brought up to it here.
-        const bool post_canvas = fx->post_fbo != 0;
+        const bool post_canvas = postfx_taau_active(fx);
         GLuint canvas_fbo = post_canvas ? fx->post_fbo : fx->hdr_fbo;
         GLuint canvas_tex = post_canvas ? fx->post_texture : fx->hdr_texture;
 
@@ -2353,42 +2376,38 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         // then stabilized as one image, which is what keeps smooth metal from
         // shimmering against its own occlusion. The one input this moves:
         // SSGI's gather now samples pre-TAA color (it rides the GTAO sweep).
-        if (post_canvas && taa_resolving) {
-            run_taau_resolve(fx);
+        if (taa_resolving) {
+            // The history is post-res either way; only how this frame reaches
+            // it differs -- TAAU reconstructs the smaller raster onto it, plain
+            // TAA accumulates a same-size frame.
+            if (post_canvas)
+                run_taau_resolve(fx);
+            else
+                run_temporal_accum(fx, fx->taa_resolve_program, &fx->taa_history, fx->width,
+                                   fx->height, fx->hdr_texture, TEMPORAL_FEEDBACK_DEFAULT);
 
-            // Materialize the resolved frame on the canvas (the history side
-            // is kept as next frame's accumulation buffer) -- the TAA
-            // blit-back idiom, post-to-post. The copy is what keeps the
-            // history clean: post-seam passes composite onto the canvas, and
-            // folding fog/SSR into the history would feed them back through
-            // every later frame's blend.
+            // Push the resolved frame onto the canvas (the history side is
+            // kept as next frame's accumulation buffer). The copy is what
+            // keeps the history clean: post-seam passes composite onto the
+            // canvas, and folding fog/SSR into the history would feed them
+            // back through every later frame's blend.
             glBindFramebuffer(GL_READ_FRAMEBUFFER, fx->taa_history.fbo[fx->frame_index & 1]);
-            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fx->post_fbo);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, canvas_fbo);
             glBlitFramebuffer(0, 0, fx->post_width, fx->post_height, 0, 0, fx->post_width,
                               fx->post_height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
-            check_gl_error("postfx taau");
-        } else if (post_canvas) {
-            // Bilinear magnify of the render-res frame onto the post canvas:
-            // the fallback when TAA is toggled off at a reduced scale --
-            // nothing else would bring the frame to display size.
-            glBindFramebuffer(GL_READ_FRAMEBUFFER, fx->hdr_fbo);
-            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fx->post_fbo);
-            glBlitFramebuffer(0, 0, fx->width, fx->height, 0, 0, fx->post_width, fx->post_height,
-                              GL_COLOR_BUFFER_BIT, GL_LINEAR);
-            fx->taa_history.valid = false;
-            check_gl_error("postfx taau seam");
-        } else if (taa_resolving) {
-            run_temporal_accum(fx, fx->taa_resolve_program, &fx->taa_history, fx->width, fx->height,
-                               fx->hdr_texture, TEMPORAL_FEEDBACK_DEFAULT);
-
-            // Push the resolved frame back into hdr_fbo (the history side is
-            // kept as next frame's accumulation buffer).
-            glBindFramebuffer(GL_READ_FRAMEBUFFER, fx->taa_history.fbo[fx->frame_index & 1]);
-            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fx->hdr_fbo);
-            glBlitFramebuffer(0, 0, fx->width, fx->height, 0, 0, fx->width, fx->height,
-                              GL_COLOR_BUFFER_BIT, GL_NEAREST);
             check_gl_error("postfx taa");
         } else {
+            // Bilinear magnify onto the post canvas: the fallback when TAA is
+            // toggled off at a reduced scale -- nothing else would bring the
+            // frame to display size. At full scale the canvas IS hdr_fbo and
+            // there is nothing to bring anywhere.
+            if (post_canvas) {
+                glBindFramebuffer(GL_READ_FRAMEBUFFER, fx->hdr_fbo);
+                glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fx->post_fbo);
+                glBlitFramebuffer(0, 0, fx->width, fx->height, 0, 0, fx->post_width,
+                                  fx->post_height, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+                check_gl_error("postfx taau seam");
+            }
             fx->taa_history.valid = false;
         }
 

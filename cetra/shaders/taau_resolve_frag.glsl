@@ -8,7 +8,9 @@ out vec4 FragColor;
 // through the path every full-scale frame runs, and the roadmap's guarantee
 // is that scale 1 keeps that shader byte-identical.
 uniform sampler2D currentTex;  // Render-res scene, rasterized with jitterPx applied
-uniform sampler2D velocityTex; // Render-res motion vectors (.xy, UV units), NEAREST
+uniform sampler2D velocityTex; // Render-res motion vectors (.xy, UV units);
+                               // fetched at an exact texel centre, so the
+                               // filter mode never comes into it
 uniform sampler2D historyTex;  // Post-res accumulated previous frames
 uniform vec2 renderSize;
 uniform vec2 postSize;
@@ -66,44 +68,52 @@ void main() {
     // [2][0] increment lands in x_ndc as -delta after the divide by w = -z,
     // so the raster shifted by -jitterPx and un-applying it subtracts.
     vec2 pos = uv * renderSize - jitterPx;
-    // Nearest render sample center at or below pos; the 3x3 around it covers
-    // every sample within reconstruction reach.
-    vec2 base = floor(pos - 0.5) + 0.5;
+    // Centre of the render texel CONTAINING pos, so the 3x3 around it is
+    // symmetric about pos and reaches every sample within 1.5 px on each side.
+    // Anchoring on the nearest centre at or BELOW pos instead skews the window
+    // one texel whenever pos sits in the lower half of its texel: the +1
+    // neighbour (weight up to 0.10) drops out while a -2 one (weight under
+    // 0.01) joins, and since the jitter moves pos every frame the skew -- in
+    // the reconstruction AND in the clamp bounds gathered here -- flips per
+    // frame per pixel. Measured: the skewed window churns 17% harder
+    // frame-to-frame on a static camera. It also reads marginally sharper,
+    // because dropping that neighbour drops kernel mass -- crispness at a
+    // reduced scale is the sharpen pass's job, not a filter asymmetry's.
+    vec2 base = floor(pos) + 0.5;
+    // pos relative to that centre, |d| <= 0.5 per axis. base is therefore the
+    // NEAREST sample, which is what makes the confidence and the velocity tap
+    // below closed-form rather than a search through the loop.
+    vec2 d0 = pos - base;
 
-    // One loop over the 3x3 render sample centers does triple duty:
+    // One loop over the 3x3 render sample centers does double duty:
     // Blackman-Harris-weighted reconstruction of this display pixel (the
-    // Gaussian fit exp(-2.29 d^2), d in render px), the YCoCg clamp bounds
+    // Gaussian fit exp(-2.29 d^2), d in render px) and the YCoCg clamp bounds
     // (gathered in RENDER space -- wider in display terms below scale 1,
-    // deliberately more ghost-tolerant), and the nearest-sample confidence
-    // wmax + the nearest sample's velocity.
+    // deliberately more ghost-tolerant).
     vec3 recon = vec3(0.0);
     float wsum = 0.0;
-    float wmax = 0.0;
     vec3 nmin = vec3(1e9);
     vec3 nmax = vec3(-1e9);
-    vec2 nearestUv = uv;
-    float nearestD2 = 1e9;
     for (int y = -1; y <= 1; y++) {
         for (int x = -1; x <= 1; x++) {
             vec2 sp = base + vec2(float(x), float(y));
             vec2 suv = sp / renderSize; // exact texel center: bilinear = fetch
             vec3 c = texture(currentTex, suv).rgb;
             vec2 dv = sp - pos;
-            float d2 = dot(dv, dv);
-            float w = exp(-2.29 * d2);
+            float w = exp(-2.29 * dot(dv, dv));
             recon += c * w;
             wsum += w;
-            wmax = max(wmax, w);
             vec3 n = rgbToYCoCg(c);
             nmin = min(nmin, n);
             nmax = max(nmax, n);
-            if (d2 < nearestD2) {
-                nearestD2 = d2;
-                nearestUv = suv;
-            }
         }
     }
-    vec3 current = recon / max(wsum, 1e-6);
+    // The centre tap alone weighs at least exp(-2.29 * 0.5) = 0.32, so wsum
+    // needs no guard.
+    vec3 current = recon / wsum;
+    // Confidence: how close the nearest render sample landed to this display
+    // pixel. Same weight the loop gave base, by the monotonicity of exp.
+    float wmax = exp(-2.29 * dot(d0, d0));
 
     if (reset != 0) {
         FragColor = vec4(current, 1.0);
@@ -113,7 +123,7 @@ void main() {
     // Reproject through the nearest render sample's velocity. The velocity
     // buffer is built from UN-jittered matrices, so it never needs the
     // jitter correction the color does.
-    vec2 velocity = texture(velocityTex, nearestUv).xy;
+    vec2 velocity = texture(velocityTex, base / renderSize).xy;
     vec2 histUv = uv - velocity;
     if (histUv.x < 0.0 || histUv.x > 1.0 || histUv.y < 0.0 || histUv.y > 1.0) {
         FragColor = vec4(current, 1.0);

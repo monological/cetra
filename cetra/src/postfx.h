@@ -94,7 +94,9 @@ typedef struct PostFX {
     int half_width, half_height;   // Half-RENDER working size (AO chain, SSGI,
                                    // half-res SSR, DoF gather)
     int bloom_width, bloom_height; // Half-POST bloom chain size
-    float render_scale;            // Fixed at create; 1 = the scales are equal
+    float render_scale;            // The scale the chain was BUILT with (fixed at
+                                   // create). For display; ask postfx_taau_active
+                                   // whether the upscaling resolve is live.
 
     GLuint hdr_fbo; // Single-sample resolve target, no depth
     GLuint hdr_texture;
@@ -472,6 +474,12 @@ bool postfx_wants_normals(const PostFX* fx);
 // Producer-side predicate: true when TAA runs this frame (jitter + velocity
 // buffer + resolve all gate on it). Mirrors postfx_wants_normals.
 bool postfx_taa_active(const PostFX* fx);
+
+// Producer-side predicate: true when the TAAU upscaling resolve owns the seam
+// (the chain was built at a reduced render scale). The jitter site widens its
+// Halton sequence on this and the seam dispatches on it, so the sequence and
+// the resolve consuming it cannot disagree.
+bool postfx_taau_active(const PostFX* fx);
 
 // Producer-side predicate: true when the scene pass should write the aux
 // G-buffer (attachment 2: motion .xy for TAA + linear view-Z .z for GTAO).
