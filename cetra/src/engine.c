@@ -1763,6 +1763,8 @@ static void _engine_gui_panel(Engine* engine) {
         bool taa = fx->taa_enabled;
         if (igCheckbox("TAA", &taa))
             set_engine_taa_enabled(engine, taa);
+        if (fx->render_scale < 1.0f)
+            igText("TAAU render scale: %.2f (set at launch)", fx->render_scale);
 
         // Index maps to the enum minus PASSTHROUGH, which is not a look and
         // stays out of the picker
