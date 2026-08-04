@@ -266,7 +266,17 @@ specular and `subsurfaceTransmission` back-light untouched. Material gains `curv
 New: extend `include/skin.glsl`. CLI: `--no-skin-preint`. Test asset: curvature-sweep sphere-row GLB.
 **Owns foundations:** none (deliberately). **Depends on:** nothing.
 
-### B4. TAAU temporal upscaling (Karis-style) — Effort L
+### B4. TAAU temporal upscaling (Karis-style) — Effort L — **DONE (spec 11.7)**
+Shipped as planned below, with three deviations. The buffer split landed as
+FOUR sizes, not two: `half_*` (render/2) was separated from `bloom_*`
+(post/2), because the old `ssao_*` was a pure alias of `bloom_*` and DoF
+sized off it — one name, three meanings, and the likeliest wrong-size bug
+in the migration. The froxel fog layer and its history stay at RENDER res
+(only the stabilized layer magnifies at the fold), keeping spec 9.5.1's
+jitter-cancelling accumulator reading the aux depth 1:1. And `postfx_resize`
+is DEFERRED: no resize path exists anywhere in the engine today, so v1 is
+CLI-only and fixed at launch. Measured 42.3 dB at 0.67 against native (bar
+32) and 44 -> 22 ms/frame at the native Retina framebuffer.
 Render below display res, reconstruct at display res in the temporal resolve — the perf lever that
 funds volumetrics at 4K. New `render_scale` ∈ [0.5, 1.0]; existing integer `ss_scale` remains the
 ≥1 path. **Separate program (`taau_resolve_frag.glsl`), not a branch** — taa_resolve untouched,
@@ -414,7 +424,7 @@ and 11.2 (below). **Tier 1 is complete; Tier 2's A5 bent-normal specular occlusi
 |---|------|--------|----------|
 | 9 | A5 Bent-normal spec-occ | M | **DONE (11.3 + 11.4):** split ambient specular, default `split`, exact occlusion by construction. |
 | 10 | B5 Bokeh DoF | M | **DONE (11.6):** near/far gather, N-gon kernel, first DoF golden. |
-| 11 | B4 TAAU | L | After B1's composite settles so the post-res migration happens once; funds Tier 1 at 4K. |
+| 11 | B4 TAAU | L | **DONE (11.7):** render/post/half split, separate upscaling resolve, `--render-scale`; ~2x at 0.67. |
 | 12 | B3 Pre-integrated skin | S | Character tier begins; S effort, zero infra. |
 
 **Tier 3 — polish & late-tier (parked until Tiers 1-2 land):**
@@ -439,7 +449,7 @@ and 11.2 (below). **Tier 1 is complete; Tier 2's A5 bent-normal specular occlusi
 | Bent normal in the AO chain | A5 | SSGI directionality, SSR occlusion, DDGI sampling |
 | `create_texture_3d_float` + `include/froxel.glsl` (slice count parameterized, so a differently-sized volume reuses it) | B1 | B9 aerial perspective, B2 clouds, future volumetrics |
 | CPU 3D noise (`noise_worley3`, Perlin-Worley packing, threaded bake) | B2 | ground fog detail, media |
-| Render-res/post-res split (`post_width/post_height`) | B4 | B5, B7, tonemap |
+| Render-res/post-res split — **delivered** as four sizes (`width/height` render, `post_*`, `out_*`, `half_*` = render/2), plus the canvas locals every post-seam pass composites onto | B4 | B5, B7, tonemap |
 
 ## Cross-track integration contracts
 
