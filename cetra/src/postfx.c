@@ -269,7 +269,7 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     fx->ssao_enabled = true;
     fx->ssao_radius = 0.4f;
     fx->ssao_strength = 0.8f;
-    fx->spec_occlusion_mode = POSTFX_SPEC_OCC_LEGACY; // Keep GTAO off specular; on when AO is on
+    fx->spec_occlusion_mode = POSTFX_SPEC_OCC_SPLIT; // Keep GTAO off specular; on when AO is on
     fx->ao_edge_filter_enabled = true; // Depth-aware AO blur (no silhouette bleed)
     fx->contact_shadows_enabled = false; // Opt-in (spec 9.3); off leaves the frame untouched
     fx->cs_strength = 0.23f;             // Subtle: it stacks on CSM + AO in the same crevices, so a
