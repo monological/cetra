@@ -181,7 +181,7 @@ static void on_init(Game* game) {
     set_light_original_position(flash, (vec3){-14.0f, 7.0f, 19.0f}); // left of the camera
     set_light_direction(flash, (vec3){14.0f, -7.0f, -21.0f});        // toward the scene center (floor)
     set_light_color(flash, (vec3){1.0f, 0.97f, 0.90f});
-    set_light_intensity(flash, 45.0f); // candela
+    set_light_intensity(flash, 20000.0f); // candela, a torch-scale hot spot
     set_light_range(flash, 40.0f);     // carries across the ~24u room and dies past it
     set_light_cutoff(flash, cosf(glm_rad(18.0f)), cosf(glm_rad(20.0f))); // sharp 18->20 deg edge
     set_light_cast_shadows(flash, true); // renders the perspective spot shadow map (occludes the beam)
