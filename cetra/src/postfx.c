@@ -111,8 +111,8 @@ static void free_pingpong(PingPong* pp) {
 // The caller must delete any existing ssr_fbo/ssr_texture/hiz_fbo/hiz_texture
 // first (postfx_set_ssr_full_res); create_postfx calls this on a fresh PostFX.
 static bool create_ssr_buffers(PostFX* fx) {
-    int w = fx->ssr_full_res ? fx->width : fx->ssao_width;
-    int h = fx->ssr_full_res ? fx->height : fx->ssao_height;
+    int w = fx->ssr_full_res ? fx->width : fx->half_width;
+    int h = fx->ssr_full_res ? fx->height : fx->half_height;
     // HDR reflection buffer; carries premultiplied scene color * weight.
     if (!create_color_fbo(w, h, GL_RGBA16F, &fx->ssr_fbo, &fx->ssr_texture))
         return false;
@@ -233,13 +233,24 @@ static GLuint create_ssao_noise_texture(unsigned int* rng) {
     return texture;
 }
 
-PostFX* create_postfx(int width, int height, int ss_scale) {
+int postfx_scaled_dim(int post_dim, float render_scale) {
+    if (render_scale >= 1.0f)
+        return post_dim;
+    int dim = ((int)roundf((float)post_dim * render_scale)) & ~1;
+    return dim < 2 ? 2 : dim;
+}
+
+PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     if (width <= 0 || height <= 0) {
         log_error("create_postfx: invalid size %dx%d", width, height);
         return NULL;
     }
     if (ss_scale < 1) {
         ss_scale = 1;
+    }
+    if (render_scale < 0.5f || render_scale > 1.0f) {
+        log_warn("create_postfx: render scale %.2f outside [0.5, 1]; using 1", render_scale);
+        render_scale = 1.0f;
     }
 
     PostFX* fx = calloc(1, sizeof(PostFX));
@@ -248,16 +259,20 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
         return NULL;
     }
 
-    // The scene and the entire post chain render at the supersampled
-    // resolution; the final tonemap pass box-downsamples to the display size.
+    // The scene and the pre-TAA chain render at the render resolution (post
+    // size x render_scale); the TAA seam brings the frame to post size, and
+    // the final tonemap pass box-downsamples that to the display size.
     fx->out_width = width;
     fx->out_height = height;
-    fx->width = width * ss_scale;
-    fx->height = height * ss_scale;
-    fx->bloom_width = fx->width / 2 > 0 ? fx->width / 2 : 1;
-    fx->bloom_height = fx->height / 2 > 0 ? fx->height / 2 : 1;
-    fx->ssao_width = fx->bloom_width;
-    fx->ssao_height = fx->bloom_height;
+    fx->post_width = width * ss_scale;
+    fx->post_height = height * ss_scale;
+    fx->render_scale = render_scale;
+    fx->width = postfx_scaled_dim(fx->post_width, render_scale);
+    fx->height = postfx_scaled_dim(fx->post_height, render_scale);
+    fx->bloom_width = fx->post_width / 2 > 0 ? fx->post_width / 2 : 1;
+    fx->bloom_height = fx->post_height / 2 > 0 ? fx->post_height / 2 : 1;
+    fx->half_width = fx->width / 2 > 0 ? fx->width / 2 : 1;
+    fx->half_height = fx->height / 2 > 0 ? fx->height / 2 : 1;
 
     fx->exposure = NULL; // borrowed at postfx_set_exposure; see exposure.h
     // Working space (shaders/include/view.glsl), so these read as stops over
@@ -421,7 +436,7 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     // the bent normal encoded to [0,1]. 8 bits of a unit direction is ~0.5
     // degrees after normalize, far finer than a 2-slice estimator resolves.
     for (int i = 0; i < 2; i++) {
-        if (!create_color_fbo(fx->ssao_width, fx->ssao_height, GL_RGBA8, &fx->ssao_fbo[i],
+        if (!create_color_fbo(fx->half_width, fx->half_height, GL_RGBA8, &fx->ssao_fbo[i],
                               &fx->ssao_texture[i])) {
             free_postfx(fx);
             return NULL;
@@ -430,7 +445,7 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     // Half-res temporal-AO accumulation ping-pong. Float, not 8-bit: an
     // exponential feedback blend needs more than 256 levels to avoid banding as
     // it converges.
-    if (!create_pingpong(fx->ssao_width, fx->ssao_height, GL_RGBA16F, &fx->ao_history)) {
+    if (!create_pingpong(fx->half_width, fx->half_height, GL_RGBA16F, &fx->ao_history)) {
         free_postfx(fx);
         return NULL;
     }
@@ -447,8 +462,8 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
         free_postfx(fx);
         return NULL;
     }
-    // Full-res resolve target for the scene pass's aux G-buffer (.xy motion +
-    // .z linear view-Z), and the two full-res history buffers the TAA resolve
+    // Render-res resolve target for the scene pass's aux G-buffer (.xy motion +
+    // .z linear view-Z), and the two post-res history buffers the TAA resolve
     // ping-pongs across frames.
     // Full float, matching the scene pass's aux attachment: the MSAA resolve
     // blit requires identical formats, and fp16 view-Z staircases at scene
@@ -470,7 +485,7 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
         free_postfx(fx);
         return NULL;
     }
-    if (!create_pingpong(fx->width, fx->height, GL_RGBA16F, &fx->taa_history)) {
+    if (!create_pingpong(fx->post_width, fx->post_height, GL_RGBA16F, &fx->taa_history)) {
         free_postfx(fx);
         return NULL;
     }
@@ -631,7 +646,7 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     uniform_set_int(fx->gtao_program->uniforms, "normalsTex", 2);
     uniform_set_int(fx->gtao_program->uniforms, "hdrTex", 3);  // SSGI radiance source
     uniform_set_int(fx->gtao_program->uniforms, "specTex", 4); // split spec share of that radiance
-    const float noise_scale[2] = {(float)fx->ssao_width / 4.0f, (float)fx->ssao_height / 4.0f};
+    const float noise_scale[2] = {(float)fx->half_width / 4.0f, (float)fx->half_height / 4.0f};
     uniform_set_vec2(fx->gtao_program->uniforms, "noiseScale", noise_scale);
 
     // No texelSize for either of the next two: every consumer of ssao_blur and
@@ -676,23 +691,24 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
 }
 
 // Allocate the depth-of-field targets on first use so the feature is free when
-// off: the half-res CoC+colour buffer, the near/far gather MRT, the tile-pass
-// pair (per-tile CoC maxima + their dilation), and a full-res composite.
-// Returns false and leaves DoF disabled if allocation fails.
+// off: the half-render-res CoC+colour buffer, the near/far gather MRT, the
+// tile-pass pair (per-tile CoC maxima + their dilation), and a post-res
+// composite. Returns false and leaves DoF disabled if allocation fails.
 static bool postfx_ensure_dof_targets(PostFX* fx) {
     if (fx->dof_ready)
         return true;
-    fx->dof_tile_w = (fx->bloom_width + DOF_TILE - 1) / DOF_TILE;
-    fx->dof_tile_h = (fx->bloom_height + DOF_TILE - 1) / DOF_TILE;
-    if (!create_color_fbo(fx->bloom_width, fx->bloom_height, GL_RGBA16F, &fx->dof_coc_fbo,
+    fx->dof_tile_w = (fx->half_width + DOF_TILE - 1) / DOF_TILE;
+    fx->dof_tile_h = (fx->half_height + DOF_TILE - 1) / DOF_TILE;
+    if (!create_color_fbo(fx->half_width, fx->half_height, GL_RGBA16F, &fx->dof_coc_fbo,
                           &fx->dof_coc_texture) ||
-        !create_color_fbo(fx->bloom_width, fx->bloom_height, GL_RGBA16F, &fx->dof_gather_fbo,
+        !create_color_fbo(fx->half_width, fx->half_height, GL_RGBA16F, &fx->dof_gather_fbo,
                           &fx->dof_far_texture) ||
         !create_color_fbo(fx->dof_tile_w, fx->dof_tile_h, GL_RG16F, &fx->dof_tile_fbo,
                           &fx->dof_tile_texture) ||
         !create_color_fbo(fx->dof_tile_w, fx->dof_tile_h, GL_RG16F, &fx->dof_dilate_fbo,
                           &fx->dof_dilate_texture) ||
-        !create_color_fbo(fx->width, fx->height, GL_RGBA16F, &fx->dof_fbo, &fx->dof_texture)) {
+        !create_color_fbo(fx->post_width, fx->post_height, GL_RGBA16F, &fx->dof_fbo,
+                          &fx->dof_texture)) {
         log_error("Failed to allocate depth-of-field targets");
         fx->dof_enabled = false;
         return false;
@@ -700,7 +716,7 @@ static bool postfx_ensure_dof_targets(PostFX* fx) {
     // Near field joins the gather FBO as attachment 1 (the SSGI-on-GTAO
     // idiom); the draw-buffer pair is FBO state, set once here.
     fx->dof_near_texture =
-        create_texture_2d_float(fx->bloom_width, fx->bloom_height, GL_RGBA16F, GL_RGBA, NULL);
+        create_texture_2d_float(fx->half_width, fx->half_height, GL_RGBA16F, GL_RGBA, NULL);
     glBindFramebuffer(GL_FRAMEBUFFER, fx->dof_gather_fbo);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D,
                            fx->dof_near_texture, 0);
@@ -727,7 +743,7 @@ static bool postfx_ensure_ssgi_targets(PostFX* fx) {
         return true;
     glGenTextures(1, &fx->ssgi_gi_texture);
     glBindTexture(GL_TEXTURE_2D, fx->ssgi_gi_texture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, fx->ssao_width, fx->ssao_height, 0, GL_RGBA,
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, fx->half_width, fx->half_height, 0, GL_RGBA,
                  GL_FLOAT, NULL);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -737,8 +753,8 @@ static bool postfx_ensure_ssgi_targets(PostFX* fx) {
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, fx->ssgi_gi_texture,
                            0);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    if (!create_pingpong(fx->ssao_width, fx->ssao_height, GL_RGBA16F, &fx->ssgi_history) ||
-        !create_pingpong(fx->ssao_width, fx->ssao_height, GL_RGBA16F, &fx->ssgi_atrous)) {
+    if (!create_pingpong(fx->half_width, fx->half_height, GL_RGBA16F, &fx->ssgi_history) ||
+        !create_pingpong(fx->half_width, fx->half_height, GL_RGBA16F, &fx->ssgi_atrous)) {
         log_error("Failed to allocate SSGI targets");
         return false;
     }
@@ -833,14 +849,14 @@ static bool postfx_ensure_contact_targets(PostFX* fx) {
 }
 
 // Allocate the motion-blur targets on first enable so the feature is free while
-// off (DoF pattern): a full-res RGBA16F reconstruction scratch plus the two
+// off (DoF pattern): a post-res RGBA16F reconstruction scratch plus the two
 // RG16F tile buffers (tile-max + neighbor-max velocity) at tile resolution.
 static bool postfx_ensure_motion_blur_targets(PostFX* fx) {
     if (fx->motion_blur_ready)
         return true;
-    fx->motion_blur_tile_w = (fx->width + MOTION_BLUR_TILE - 1) / MOTION_BLUR_TILE;
-    fx->motion_blur_tile_h = (fx->height + MOTION_BLUR_TILE - 1) / MOTION_BLUR_TILE;
-    if (!create_color_fbo(fx->width, fx->height, GL_RGBA16F, &fx->motion_blur_fbo,
+    fx->motion_blur_tile_w = (fx->post_width + MOTION_BLUR_TILE - 1) / MOTION_BLUR_TILE;
+    fx->motion_blur_tile_h = (fx->post_height + MOTION_BLUR_TILE - 1) / MOTION_BLUR_TILE;
+    if (!create_color_fbo(fx->post_width, fx->post_height, GL_RGBA16F, &fx->motion_blur_fbo,
                           &fx->motion_blur_texture) ||
         !create_color_fbo(fx->motion_blur_tile_w, fx->motion_blur_tile_h, GL_RG16F,
                           &fx->motion_blur_tile_fbo, &fx->motion_blur_tile_texture) ||
@@ -854,15 +870,15 @@ static bool postfx_ensure_motion_blur_targets(PostFX* fx) {
 }
 
 // Motion blur (4.15): reconstruct plausible blur from the aux velocity buffer.
-// (1) tile-max reduces the full-res velocity to one dominant vector per tile,
-// (2) neighbor-max spreads it across the 3x3 tile neighborhood so a fast object
-// blurs past its silhouette, (3) the reconstruction gathers the HDR scene along
-// that dominant velocity. The result is blitted back over the HDR scene so
-// DoF/bloom/tonemap read the blurred image (GL 4.1 has no texture barrier, so
-// the pass cannot read+write hdr_texture in place).
-static void postfx_run_motion_blur(PostFX* fx) {
-    // Pass 1: tile-max -- full-res velocity -> per-tile dominant velocity.
-    const float aux_texel[2] = {1.0f / (float)fx->width, 1.0f / (float)fx->height};
+// (1) tile-max reduces the velocity to one dominant vector per tile, (2)
+// neighbor-max spreads it across the 3x3 tile neighborhood so a fast object
+// blurs past its silhouette, (3) the reconstruction gathers the scene along
+// that dominant velocity. Runs post-seam at post res on the canvas; the result
+// is blitted back over it so DoF/bloom/tonemap read the blurred image (GL 4.1
+// has no texture barrier, so the pass cannot read+write the canvas in place).
+static void postfx_run_motion_blur(PostFX* fx, GLuint canvas_fbo, GLuint canvas_tex) {
+    // Pass 1: tile-max -- velocity -> per-tile dominant velocity.
+    const float aux_texel[2] = {1.0f / (float)fx->post_width, 1.0f / (float)fx->post_height};
     glBindFramebuffer(GL_FRAMEBUFFER, fx->motion_blur_tile_fbo);
     glViewport(0, 0, fx->motion_blur_tile_w, fx->motion_blur_tile_h);
     glUseProgram(fx->motion_blur_tilemax_program->id);
@@ -882,12 +898,12 @@ static void postfx_run_motion_blur(PostFX* fx) {
     uniform_set_vec2(fx->motion_blur_neighbormax_program->uniforms, "tileTexel", tile_texel);
     draw_fullscreen_quad(fx->quad_vao);
 
-    // Pass 3: reconstruction -- gather the HDR scene along the dominant velocity.
+    // Pass 3: reconstruction -- gather the scene along the dominant velocity.
     glBindFramebuffer(GL_FRAMEBUFFER, fx->motion_blur_fbo);
-    glViewport(0, 0, fx->width, fx->height);
+    glViewport(0, 0, fx->post_width, fx->post_height);
     glUseProgram(fx->motion_blur_program->id);
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, fx->hdr_texture);
+    glBindTexture(GL_TEXTURE_2D, canvas_tex);
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, fx->motion_blur_neighbor_texture);
     glActiveTexture(GL_TEXTURE2);
@@ -897,12 +913,12 @@ static void postfx_run_motion_blur(PostFX* fx) {
     uniform_set_float(fx->motion_blur_program->uniforms, "maxBlurPx", (float)MOTION_BLUR_TILE);
     draw_fullscreen_quad(fx->quad_vao);
 
-    // Copy the reconstructed scene back over the HDR buffer (same size/format,
+    // Copy the reconstructed scene back over the canvas (same size/format,
     // NEAREST -> exact copy) so the rest of the chain reads the blurred result.
     glBindFramebuffer(GL_READ_FRAMEBUFFER, fx->motion_blur_fbo);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fx->hdr_fbo);
-    glBlitFramebuffer(0, 0, fx->width, fx->height, 0, 0, fx->width, fx->height, GL_COLOR_BUFFER_BIT,
-                      GL_NEAREST);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, canvas_fbo);
+    glBlitFramebuffer(0, 0, fx->post_width, fx->post_height, 0, 0, fx->post_width, fx->post_height,
+                      GL_COLOR_BUFFER_BIT, GL_NEAREST);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     check_gl_error("postfx motion blur");
 }
@@ -1021,10 +1037,10 @@ static GLuint run_temporal_accum(PostFX* fx, ShaderProgram* prog, PingPong* pp, 
 #define TEMPORAL_FEEDBACK_SSR 0.97f
 
 // Additive-fold the currently-bound fullscreen setup (sss_blur_program + its
-// textures/uniforms) into the HDR scene (GL_ONE,GL_ONE), restoring blend state.
-static void _sss_fold_into_hdr(PostFX* fx) {
-    glBindFramebuffer(GL_FRAMEBUFFER, fx->hdr_fbo);
-    glViewport(0, 0, fx->width, fx->height);
+// textures/uniforms) into the canvas (GL_ONE,GL_ONE), restoring blend state.
+static void _sss_fold_into_canvas(PostFX* fx, GLuint canvas_fbo) {
+    glBindFramebuffer(GL_FRAMEBUFFER, canvas_fbo);
+    glViewport(0, 0, fx->post_width, fx->post_height);
     glEnable(GL_BLEND);
     glBlendFunc(GL_ONE, GL_ONE);
     draw_fullscreen_quad(fx->quad_vao);
@@ -1036,11 +1052,12 @@ static void _sss_fold_into_hdr(PostFX* fx) {
 // Separable screen-space SSS: the skin-diffuse buffer (D, attachment 4, already
 // resolved to sss_diffuse_texture) is blurred H then V with a depth-aware
 // per-channel profile; the V pass forms the recomposite delta blur - D, additive-
-// blended into hdr_fbo (hdr + blur - D). Diffuse softens; FragColor's specular is
-// untouched. projection scales the world scatter radius to screen pixels per
-// depth. Under TAA the delta is temporally accumulated first (its own history,
-// like fog/SSR) so the screen-space scatter doesn't shimmer under motion.
-static void postfx_run_sss(PostFX* fx, mat4 projection, bool taa_resolving) {
+// blended into the canvas (scene + blur - D). Diffuse softens; FragColor's
+// specular is untouched. projection scales the world scatter radius to screen
+// pixels per depth. Under TAA the delta is temporally accumulated first (its
+// own history, like fog/SSR) so the screen-space scatter doesn't shimmer under
+// motion. Blur, delta, and history stay at render res; only the fold magnifies.
+static void postfx_run_sss(PostFX* fx, GLuint canvas_fbo, mat4 projection, bool taa_resolving) {
     const float texel[2] = {1.0f / (float)fx->width, 1.0f / (float)fx->height};
     // World radius -> screen pixels: a world unit at view depth d spans
     // 0.5 * proj[1][1] * height / d pixels.
@@ -1076,15 +1093,15 @@ static void postfx_run_sss(PostFX* fx, mat4 projection, bool taa_resolving) {
     uniform_set_int(fx->sss_blur_program->uniforms, "mode", 1);
 
     if (!taa_resolving) {
-        // No TAA: additive-fold the composite delta straight into the HDR scene.
+        // No TAA: additive-fold the composite delta straight into the canvas.
         fx->sss_history.valid = false;
-        _sss_fold_into_hdr(fx);
+        _sss_fold_into_canvas(fx, canvas_fbo);
         return;
     }
 
     // TAA: render the delta to a scratch, temporally accumulate it (reproject by
     // velocity + neighbour clamp, like fog/SSR), then additive-fold the stabilized
-    // delta into hdr with a passthrough copy (mode 2).
+    // delta into the canvas with a passthrough copy (mode 2).
     glBindFramebuffer(GL_FRAMEBUFFER, fx->sss_delta_fbo);
     glViewport(0, 0, fx->width, fx->height);
     draw_fullscreen_quad(fx->quad_vao);
@@ -1097,7 +1114,7 @@ static void postfx_run_sss(PostFX* fx, mat4 projection, bool taa_resolving) {
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, stable);
     uniform_set_int(fx->sss_blur_program->uniforms, "mode", 2);
-    _sss_fold_into_hdr(fx);
+    _sss_fold_into_canvas(fx, canvas_fbo);
 }
 
 // Bloom pyramid (Jimenez dual-filter): bright pass into mip 0, 13-tap
@@ -1193,18 +1210,19 @@ static void dof_build_kernel(int blades, float rotation_deg, float k[DOF_TAPS][2
     }
 }
 
-// Depth of field: signed CoC + gather at half res, composite at full res into
-// fx->dof_texture. Callers must have ensured the targets exist and read
-// fx->dof_texture as the scene afterward.
-static void postfx_run_dof(PostFX* fx, mat4 projection) {
-    const float dof_texel[2] = {1.0f / (float)fx->bloom_width, 1.0f / (float)fx->bloom_height};
+// Depth of field: signed CoC + gather at half render res, composite at post
+// res into fx->dof_texture. Callers must have ensured the targets exist and
+// read fx->dof_texture as the scene afterward. canvas_tex is the post-seam
+// scene color the CoC pass and the composite read.
+static void postfx_run_dof(PostFX* fx, GLuint canvas_tex, mat4 projection) {
+    const float dof_texel[2] = {1.0f / (float)fx->half_width, 1.0f / (float)fx->half_height};
 
     // Pass 1: signed CoC + half-res scene colour
     glBindFramebuffer(GL_FRAMEBUFFER, fx->dof_coc_fbo);
-    glViewport(0, 0, fx->bloom_width, fx->bloom_height);
+    glViewport(0, 0, fx->half_width, fx->half_height);
     glUseProgram(fx->dof_coc_program->id);
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, fx->hdr_texture);
+    glBindTexture(GL_TEXTURE_2D, canvas_tex);
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, fx->depth_texture);
     uniform_set_mat4(fx->dof_coc_program->uniforms, "projection", (float*)projection);
@@ -1240,7 +1258,7 @@ static void postfx_run_dof(PostFX* fx, mat4 projection) {
     // kernel is rebuilt per frame -- 64 sincos is nothing, and it keeps the
     // GUI blade/rotation sliders live with no dirty tracking.
     glBindFramebuffer(GL_FRAMEBUFFER, fx->dof_gather_fbo);
-    glViewport(0, 0, fx->bloom_width, fx->bloom_height);
+    glViewport(0, 0, fx->half_width, fx->half_height);
     glUseProgram(fx->dof_gather_program->id);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, fx->dof_coc_texture);
@@ -1255,12 +1273,12 @@ static void postfx_run_dof(PostFX* fx, mat4 projection) {
         glUniform2fv(kloc, DOF_TAPS, (const GLfloat*)kernel);
     draw_fullscreen_quad(fx->quad_vao);
 
-    // Pass 5: composite (full res) -- far under sharp, near alpha-over both
+    // Pass 5: composite (post res) -- far under sharp, near alpha-over both
     glBindFramebuffer(GL_FRAMEBUFFER, fx->dof_fbo);
-    glViewport(0, 0, fx->width, fx->height);
+    glViewport(0, 0, fx->post_width, fx->post_height);
     glUseProgram(fx->dof_composite_program->id);
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, fx->hdr_texture);
+    glBindTexture(GL_TEXTURE_2D, canvas_tex);
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, fx->dof_near_texture);
     glActiveTexture(GL_TEXTURE2);
@@ -1663,11 +1681,13 @@ static void postfx_build_fog_volume(PostFX* fx, mat4 projection, mat4 view) {
 }
 
 // Fold the atmospheric media -- volumetric fog (spec 9.5) and aerial
-// perspective (spec 9.6) -- into the HDR scene as one layer, before
+// perspective (spec 9.6) -- into the canvas as one layer, before
 // DoF/bloom/tonemap so shafts defocus, bloom, and meter like direct light.
-// Either medium runs without the other.
-static void postfx_run_atmosphere(PostFX* fx, bool aux_written, bool taa_resolving, mat4 projection,
-                                  mat4 view) {
+// Either medium runs without the other. The fog layer and its history stay at
+// RENDER res so the jitter-cancelling accumulator reads the aux depth 1:1
+// (spec 9.5.1); only the stabilized layer magnifies at the fold.
+static void postfx_run_atmosphere(PostFX* fx, GLuint canvas_fbo, bool aux_written,
+                                  bool taa_resolving, mat4 projection, mat4 view) {
     // Both need the aux buffer: it is the only source of the linear depth the
     // composite indexes by.
     const bool fog_on = fx->fog_enabled && postfx_ensure_froxel_targets(fx);
@@ -1740,8 +1760,8 @@ static void postfx_run_atmosphere(PostFX* fx, bool aux_written, bool taa_resolvi
         glActiveTexture(GL_TEXTURE0);
     }
 
-    glBindFramebuffer(GL_FRAMEBUFFER, fx->hdr_fbo);
-    glViewport(0, 0, fx->width, fx->height);
+    glBindFramebuffer(GL_FRAMEBUFFER, canvas_fbo);
+    glViewport(0, 0, fx->post_width, fx->post_height);
     glEnable(GL_BLEND);
     glBlendFunc(GL_ONE, GL_SRC_ALPHA);
     draw_fullscreen_quad(fx->quad_vao);
@@ -1753,16 +1773,19 @@ static void postfx_run_atmosphere(PostFX* fx, bool aux_written, bool taa_resolvi
 
 // Screen-space reflections: rebuild the Hi-Z min-depth pyramid, march the
 // reflection buffer (stochastic when denoising), temporally accumulate + a-trous
-// denoise, then premultiplied-composite onto the HDR scene before bloom so
+// denoise, then premultiplied-composite onto the canvas before bloom so
 // reflected highlights bloom like direct ones. Owns the ssr_history/ssr_atrous
-// lifecycle. Traces at full or half res per fx->ssr_full_res. Same extracted-
-// stage shape as postfx_run_atmosphere; inv_projection is passed in (shared with DoF).
-static void postfx_run_ssr(PostFX* fx, bool have_normals, bool taa_resolving, mat4 projection,
-                           mat4 inv_projection, mat4 view) {
+// lifecycle. Traces at full or half RENDER res per fx->ssr_full_res, marching
+// the render-res depth/normals and reading the canvas as its radiance source
+// (post-TAA consumers read stabilized color); only the fold magnifies. Same
+// extracted-stage shape as postfx_run_atmosphere; inv_projection is passed in
+// (shared with DoF).
+static void postfx_run_ssr(PostFX* fx, GLuint canvas_fbo, GLuint canvas_tex, bool have_normals,
+                           bool taa_resolving, mat4 projection, mat4 inv_projection, mat4 view) {
     // SSR traces at full res (sharp) or half res, per ssr_full_res; the
     // buffer + Hi-Z pyramid were sized to match in create_ssr_buffers.
-    int ssr_w = fx->ssr_full_res ? fx->width : fx->ssao_width;
-    int ssr_h = fx->ssr_full_res ? fx->height : fx->ssao_height;
+    int ssr_w = fx->ssr_full_res ? fx->width : fx->half_width;
+    int ssr_h = fx->ssr_full_res ? fx->height : fx->half_height;
     // Rebuild the min-depth pyramid the traversal walks: level 0
     // takes the conservative min over the full-res depth, every
     // further level the min of the 2x2 below. The source level is
@@ -1816,7 +1839,7 @@ static void postfx_run_ssr(PostFX* fx, bool have_normals, bool taa_resolving, ma
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, fx->normal_texture);
     glActiveTexture(GL_TEXTURE2);
-    glBindTexture(GL_TEXTURE_2D, fx->hdr_texture);
+    glBindTexture(GL_TEXTURE_2D, canvas_tex);
     glActiveTexture(GL_TEXTURE4);
     glBindTexture(GL_TEXTURE_2D, fx->hiz_texture);
     glActiveTexture(GL_TEXTURE0);
@@ -1910,13 +1933,13 @@ static void postfx_run_ssr(PostFX* fx, bool have_normals, bool taa_resolving, ma
         check_gl_error("postfx ssr denoise");
     }
 
-    // Lerp the reflections onto the HDR scene before bloom so
+    // Lerp the reflections onto the canvas before bloom so
     // reflected highlights bloom like direct ones. The buffer is
     // premultiplied, hence (ONE, ONE_MINUS_SRC_ALPHA). Restore the
     // engine's blend function afterward: it is set once at init
     // and everything else assumes it.
-    glBindFramebuffer(GL_FRAMEBUFFER, fx->hdr_fbo);
-    glViewport(0, 0, fx->width, fx->height);
+    glBindFramebuffer(GL_FRAMEBUFFER, canvas_fbo);
+    glViewport(0, 0, fx->post_width, fx->post_height);
     glUseProgram(fx->upsample_tent_program->id);
     // Sample the tent at the reflection buffer's own texel: full-res is
     // a 1px tent (light AA on the sharp reflection); half-res is the
@@ -2172,7 +2195,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             // buffer's .z (unit 0) and reconstructs positions from it -- the
             // non-linear depth buffer staircased flat surfaces into AO banding.
             glBindFramebuffer(GL_FRAMEBUFFER, fx->ssao_fbo[0]);
-            glViewport(0, 0, fx->ssao_width, fx->ssao_height);
+            glViewport(0, 0, fx->half_width, fx->half_height);
             // SSGI rides the same sweep: when on, also draw the GI radiance into
             // attachment 1 (ssgi_gi_texture); when off, only AO is written so the
             // path is byte-identical to plain GTAO.
@@ -2226,7 +2249,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
                 if (taa_resolving) {
                     ao_denoise_src =
                         run_temporal_accum(fx, fx->temporal_accum_program, &fx->ao_history,
-                                           fx->ssao_width, fx->ssao_height, fx->ssao_texture[0],
+                                           fx->half_width, fx->half_height, fx->ssao_texture[0],
                                            TEMPORAL_FEEDBACK_AO);
                     ao_accum_ran = true;
                 }
@@ -2234,7 +2257,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
                 // 4x4 box blur cancels the rotation-noise tile; depth-bilateral
                 // when the edge filter is on so it does not bleed across silhouettes.
                 glBindFramebuffer(GL_FRAMEBUFFER, fx->ssao_fbo[1]);
-                glViewport(0, 0, fx->ssao_width, fx->ssao_height);
+                glViewport(0, 0, fx->half_width, fx->half_height);
                 glUseProgram(fx->ssao_blur_program->id);
                 glActiveTexture(GL_TEXTURE0);
                 glBindTexture(GL_TEXTURE_2D, ao_denoise_src);
@@ -2242,8 +2265,8 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
                 glBindTexture(GL_TEXTURE_2D, fx->aux_texture);
                 // texelSize is per-draw now (the contact-shadow blur runs the
                 // same program at full res); set the AO-res texel for this one.
-                const float ao_texel[2] = {1.0f / (float)fx->ssao_width,
-                                           1.0f / (float)fx->ssao_height};
+                const float ao_texel[2] = {1.0f / (float)fx->half_width,
+                                           1.0f / (float)fx->half_height};
                 uniform_set_vec2(fx->ssao_blur_program->uniforms, "texelSize", ao_texel);
                 uniform_set_int(fx->ssao_blur_program->uniforms, "edgeAware",
                                 fx->ao_edge_filter_enabled ? 1 : 0);
@@ -2257,6 +2280,13 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         if (split_live)
             postfx_run_spec_occ_composite(fx, ao_result_tex, have_normals, aux_written,
                                           projection);
+
+        // The seam. Everything above ran at render res into hdr_fbo; everything
+        // below composites onto the canvas at post res. At render scale 1 the
+        // canvas IS the hdr buffer, so the values below equal their old ones
+        // and the re-key is a no-op; TAAU repoints them at its post buffer.
+        GLuint canvas_fbo = fx->hdr_fbo;
+        GLuint canvas_tex = fx->hdr_texture;
 
         // Temporal AA resolve, after the AO chain and before every HDR
         // consumer (SSR/DoF/bloom/tonemap read anti-aliased color). The AO
@@ -2289,29 +2319,30 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             if (taa_resolving) {
                 gi_result_tex =
                     run_temporal_accum(fx, fx->ssgi_accum_program, &fx->ssgi_history,
-                                       fx->ssao_width, fx->ssao_height, fx->ssgi_gi_texture,
+                                       fx->half_width, fx->half_height, fx->ssgi_gi_texture,
                                        TEMPORAL_FEEDBACK_DEFAULT);
                 gi_accum_ran = true;
             }
 
             // Three a-trous iterations with doubling tap spacing (1, 2, 4).
             gi_result_tex =
-                run_atrous(fx, fx->ssgi_atrous_program, &fx->ssgi_atrous, fx->ssao_width,
-                           fx->ssao_height, gi_result_tex, have_normals);
+                run_atrous(fx, fx->ssgi_atrous_program, &fx->ssgi_atrous, fx->half_width,
+                           fx->half_height, gi_result_tex, have_normals);
             check_gl_error("postfx ssgi denoise");
         }
         if (!gi_accum_ran)
             fx->ssgi_history.valid = false;
 
         if (ssr_active)
-            postfx_run_ssr(fx, have_normals, taa_resolving, projection, inv_projection, view);
+            postfx_run_ssr(fx, canvas_fbo, canvas_tex, have_normals, taa_resolving, projection,
+                           inv_projection, view);
 
         if (ssgi_active && albedo_written) {
             // Add one bounce of indirect diffuse (albedo x gathered GI x intensity)
-            // into the HDR scene before bloom, so bounce light blooms like direct
-            // light. Half-res GI is bilinear-upsampled; albedo is full-res.
-            glBindFramebuffer(GL_FRAMEBUFFER, fx->hdr_fbo);
-            glViewport(0, 0, fx->width, fx->height);
+            // into the canvas before bloom, so bounce light blooms like direct
+            // light. Half-res GI is bilinear-upsampled; albedo is render-res.
+            glBindFramebuffer(GL_FRAMEBUFFER, canvas_fbo);
+            glViewport(0, 0, fx->post_width, fx->post_height);
             glUseProgram(fx->ssgi_composite_program->id);
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, gi_result_tex); // accumulated + denoised
@@ -2327,27 +2358,27 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             check_gl_error("postfx ssgi composite");
         }
 
-        postfx_run_atmosphere(fx, aux_written, taa_resolving, projection, view);
+        postfx_run_atmosphere(fx, canvas_fbo, aux_written, taa_resolving, projection, view);
 
         // Separable SSS: blur the resolved skin-diffuse buffer and fold
-        // blur - diffuse into the HDR scene, softening diffuse while specular
-        // stays sharp. Runs on the composited HDR, before motion blur / DoF.
+        // blur - diffuse into the canvas, softening diffuse while specular
+        // stays sharp. Runs on the composited scene, before motion blur / DoF.
         // Skipped when SSS is off (attachment 4 unwritten); a no-op (adds 0) on
         // scenes with no skin material.
         if (sss_written && fx->sss_ready)
-            postfx_run_sss(fx, projection, taa_resolving);
+            postfx_run_sss(fx, canvas_fbo, projection, taa_resolving);
 
         // Motion blur (4.15): velocity-driven blur on the linear HDR scene,
-        // blitted back into hdr_fbo so DoF/bloom/tonemap see it. Needs the aux
-        // velocity buffer; skipped (frame untouched) when off or unavailable.
+        // blitted back into the canvas so DoF/bloom/tonemap see it. Needs the
+        // aux velocity buffer; skipped (frame untouched) when off or unavailable.
         if (fx->motion_blur_enabled && aux_written && postfx_ensure_motion_blur_targets(fx))
-            postfx_run_motion_blur(fx);
+            postfx_run_motion_blur(fx, canvas_fbo, canvas_tex);
 
         // Depth of field replaces the scene that bloom and tone mapping read.
-        // scene_tex is the sharp HDR unless DoF ran into fx->dof_texture.
-        GLuint scene_tex = fx->hdr_texture;
+        // scene_tex is the sharp canvas unless DoF ran into fx->dof_texture.
+        GLuint scene_tex = canvas_tex;
         if (dof_active && postfx_ensure_dof_targets(fx)) {
-            postfx_run_dof(fx, projection);
+            postfx_run_dof(fx, canvas_tex, projection);
             scene_tex = fx->dof_texture;
         }
 

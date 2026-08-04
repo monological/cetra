@@ -86,10 +86,15 @@ typedef enum PostFXSpecOccMode {
 #define POSTFX_FROXEL_Z 64
 
 typedef struct PostFX {
-    int width, height;             // Internal (supersampled) HDR size
+    int width, height;             // Render size: what the scene and the pre-TAA
+                                   // chain rasterize at (post size x render_scale)
+    int post_width, post_height;   // Post size (display x ss_scale): the TAAU
+                                   // output and everything downstream of it
     int out_width, out_height;     // Display size the final pass downsamples to
-    int bloom_width, bloom_height; // Half-res bloom chain size
-    int ssao_width, ssao_height;   // Half-res SSAO size
+    int half_width, half_height;   // Half-RENDER working size (AO chain, SSGI,
+                                   // half-res SSR, DoF gather)
+    int bloom_width, bloom_height; // Half-POST bloom chain size
+    float render_scale;            // Fixed at create; 1 = the scales are equal
 
     GLuint hdr_fbo; // Single-sample resolve target, no depth
     GLuint hdr_texture;
@@ -127,7 +132,7 @@ typedef struct PostFX {
     GLuint albedo_texture;
     GLuint lum_fbo; // 64x64 log2-luminance measure target, mipmapped each frame (auto-exposure)
     GLuint lum_texture;
-    PingPong taa_history; // Full-res history (previous resolved frames)
+    PingPong taa_history; // Post-res history (previous resolved frames)
 
     ShaderProgram* bloom_bright_program;
     ShaderProgram* bloom_down_program; // Pyramid 13-tap downsample
@@ -320,7 +325,7 @@ typedef struct PostFX {
 
     // Depth of field. Targets are lazily allocated on first enable (dof_ready)
     // so the feature costs no memory while off. CoC + gather run at half the
-    // internal resolution; the composite is full-res.
+    // render resolution; the composite is post-res.
     bool dof_enabled;
     bool dof_autofocus;                        // Recompute focus each frame from camera->subject
     float dof_focus_distance;                  // View-space distance kept sharp
@@ -401,7 +406,15 @@ typedef struct PostFX {
 
 // width/height are the display (downsample-target) size; ss_scale supersamples
 // the internal render + post chain by that integer factor (1 = off).
-PostFX* create_postfx(int width, int height, int ss_scale);
+// render_scale in [0.5, 1] shrinks only the render-res half of the chain (the
+// scene + every pass before the TAA seam); 1 leaves every size as it was.
+PostFX* create_postfx(int width, int height, int ss_scale, float render_scale);
+
+// The render dimension for a post dimension: verbatim at scale 1 (so odd sizes
+// cannot perturb the identity path), else rounded to the nearest even size so
+// the half-res chains halve exactly. The one formula both the engine's MSAA
+// target and the postfx resolve targets derive from -- they must agree.
+int postfx_scaled_dim(int post_dim, float render_scale);
 void free_postfx(PostFX* fx);
 
 // Borrow the Engine's exposure. Must be called before the first postfx_run; the

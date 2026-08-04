@@ -151,6 +151,8 @@ Engine* create_engine(const char* window_title, int width, int height) {
     engine->fb_height = 0;
     engine->ss_scale = 1;     // Supersampling off by default (4x fragment cost);
                               // opt in with --ssaa 2 for beauty shots
+    engine->render_scale = 1.0f; // Full render resolution by default; opt in
+                                 // with --render-scale for the TAAU upscale
     engine->msaa_samples = 4; // 4x MSAA by default (runtime-toggleable)
 
     engine->error_callback = NULL;
@@ -428,10 +430,18 @@ static int _setup_engine_glfw(Engine* engine) {
  * MSAA anti-aliasing
  *
  */
-// The scene renders into a target supersampled by ss_scale; the post chain
-// box-downsamples to display size at tone map. This render (not display)
-// resolution is shared by the MSAA allocation and the scene-pass viewport.
+// The scene renders into a target supersampled by ss_scale and scaled by
+// render_scale; the post chain brings it back to display size. This render
+// (not display) resolution is shared by the MSAA allocation and the
+// scene-pass viewport. The render_scale rounding lives in postfx_scaled_dim
+// so this target and the postfx resolve targets cannot disagree.
 void engine_render_size(const Engine* engine, int* w, int* h) {
+    engine_post_size(engine, w, h);
+    *w = postfx_scaled_dim(*w, engine->render_scale);
+    *h = postfx_scaled_dim(*h, engine->render_scale);
+}
+
+void engine_post_size(const Engine* engine, int* w, int* h) {
     *w = engine->fb_width * engine->ss_scale;
     *h = engine->fb_height * engine->ss_scale;
 }
@@ -778,7 +788,8 @@ int init_engine(Engine* engine) {
     // HDR post-processing (resolve + bloom + tone map). Sized at the display
     // resolution; the supersample factor enlarges the internal chain to match
     // the enlarged MSAA scene target.
-    engine->postfx = create_postfx(engine->fb_width, engine->fb_height, engine->ss_scale);
+    engine->postfx = create_postfx(engine->fb_width, engine->fb_height, engine->ss_scale,
+                                   engine->render_scale);
     if (!engine->postfx) {
         log_error("Failed to initialize engine post-processing");
         return -1;
@@ -1305,6 +1316,24 @@ void set_engine_ss_scale(Engine* engine, int ss_scale) {
         ss_scale = 2;
     }
     engine->ss_scale = ss_scale;
+}
+
+void set_engine_render_scale(Engine* engine, float render_scale) {
+    if (!engine)
+        return;
+    // Fixed at startup: every postfx target is sized once at create_postfx and
+    // there is no resize path, so a post-init change would desync the MSAA
+    // scene target from the resolve targets.
+    if (engine->postfx) {
+        log_warn("render scale is fixed at startup; ignoring %.2f", render_scale);
+        return;
+    }
+    if (render_scale < 0.5f || render_scale > 1.0f) {
+        float clamped = render_scale < 0.5f ? 0.5f : 1.0f;
+        log_warn("render scale %.2f outside [0.5, 1]; using %.2f", render_scale, clamped);
+        render_scale = clamped;
+    }
+    engine->render_scale = render_scale;
 }
 
 void set_engine_screenshot_path(Engine* engine, const char* path) {

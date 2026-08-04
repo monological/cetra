@@ -58,6 +58,9 @@ typedef struct Engine {
     int ss_scale;                   // Supersampling factor: scene + post render at ss_scale x
                                     // display resolution, box-downsampled at tone map (set
                                     // before init_engine). 1 = off, 2 = 2x SSAA.
+    float render_scale;             // Render-resolution scale in [0.5, 1]: the scene + the
+                                    // pre-TAA post chain rasterize at this fraction of the
+                                    // post size (set before init_engine). 1 = off.
     int msaa_samples;               // MSAA sample count for the scene framebuffer (1 = off,
                                     // 4 = 4x). Runtime-changeable via set_engine_msaa_samples.
 
@@ -294,6 +297,9 @@ int init_engine(Engine* engine);
 void set_engine_headless(Engine* engine, bool headless);
 // Supersampling factor (clamped to >= 1). Call before init_engine.
 void set_engine_ss_scale(Engine* engine, int ss_scale);
+// Render-resolution scale (clamped to [0.5, 1]). Call before init_engine;
+// ignored with a warning afterward -- there is no runtime resize path.
+void set_engine_render_scale(Engine* engine, float render_scale);
 // MSAA sample count for the scene framebuffer (clamped to [1, driver max]).
 // 1 disables MSAA. Safe to call before init_engine (stored) or at runtime
 // (rebuilds the multisample attachments).
@@ -389,11 +395,16 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EngineRenderFunc render
 void engine_set_render_clock(Engine* engine, const EngineFrameClock* clock);
 
 // The render (not display) resolution: the scene target is supersampled by
-// ss_scale and box-downsampled at tone map, so this is the size the scene pass
-// and every full-res post buffer actually rasterize into. Exported because
-// callers outside engine.c kept re-deriving fb_size * ss_scale by hand, and a
-// change to how render size is computed would silently miss them.
+// ss_scale, scaled by render_scale, and brought back to display size at the
+// post chain's end, so this is the size the scene pass and every render-res
+// post buffer actually rasterize into. Exported because callers outside
+// engine.c kept re-deriving fb_size * ss_scale by hand, and a change to how
+// render size is computed would silently miss them.
 void engine_render_size(const Engine* engine, int* w, int* h);
+
+// The post (pre-display) resolution: fb size x ss_scale, independent of
+// render_scale -- what the chain downstream of the TAA seam runs at.
+void engine_post_size(const Engine* engine, int* w, int* h);
 
 // Set the frame's animation clock directly, for callers that do not go through
 // engine_run: an app driving render_current_scene from its own loop, or a
