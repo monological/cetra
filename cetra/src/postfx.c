@@ -274,9 +274,8 @@ static void postfx_derive_sizes(PostFX* fx, int width, int height, int ss_scale,
 // internal resolutions (it engages at 4K/SSAA sizes). Hand-built chain, so
 // MAX_LEVEL is mandatory (an incomplete chain samples as black); one FBO gets
 // re-attached per level like the hi-z build. MIN filter samples bilinearly
-// WITHIN the level the passes pin. Shaped after create_ssr_buffers, with the
-// FBO attached and validated here because unlike the hi-z pyramid this one is
-// drawn into immediately.
+// WITHIN the level the passes pin. The FBO is attached and validated here,
+// unlike the hi-z pyramid's, because this one is drawn into immediately.
 static bool create_bloom_pyramid(PostFX* fx) {
     int bw = fx->bloom_width;
     int bh = fx->bloom_height;
@@ -429,10 +428,9 @@ static bool postfx_alloc_targets(PostFX* fx) {
 // resources -- the luminance measure target, the noise texture, and the froxel
 // volumes (frustum-sized by design) -- so a resize keeps them.
 //
-// Deletes ONLY. The bookkeeping that says those groups no longer exist is
-// postfx_invalidate_targets' job, because a resize needs both and free_postfx
-// needs only this one: writing flags into a struct that is about to be freed
-// is a dead store, and one that reads like it matters.
+// For teardown only. Anything that keeps the PostFX alive afterwards wants
+// postfx_invalidate_targets, which does this and then clears the flags saying
+// the groups exist.
 static void postfx_free_targets(PostFX* fx) {
     gl_delete_fbo(&fx->hdr_fbo);
     gl_delete_texture(&fx->hdr_texture);
@@ -500,10 +498,12 @@ static void postfx_free_targets(PostFX* fx) {
     gl_delete_texture(&fx->spec_texture);
 }
 
-// Forget that the lazily-allocated groups exist, so the next frame that needs
-// one rebuilds it at the current size. The companion to postfx_free_targets,
-// separate from it because only a resize wants both: after a free the struct
-// is gone, and these writes would be dead.
+// Delete the targets AND forget they existed, so the next frame that needs a
+// lazily-allocated group rebuilds it at the current size. One call, not a
+// pair: a ready flag left true beside a deleted handle makes the ensure_
+// guard return early, and the pass then binds framebuffer 0 and samples
+// texture 0 -- it draws into the default framebuffer instead of failing.
+// free_shadow_map_array (shadow.c) is the same shape for the same reason.
 //
 // froxel_ready and froxel_prev_frame are deliberately absent. Those volumes
 // are frustum-sized, not framebuffer-sized, so a resolution change does not
@@ -512,6 +512,7 @@ static void postfx_free_targets(PostFX* fx) {
 // would cost a frame of un-averaged cascade taps (visibly stair-stepped fog)
 // to re-derive what already holds.
 static void postfx_invalidate_targets(PostFX* fx) {
+    postfx_free_targets(fx);
     fx->ssgi_ready = false;
     fx->dof_ready = false;
     fx->fog_layer_ready = false;
@@ -1201,7 +1202,6 @@ bool postfx_resize(PostFX* fx, int width, int height, int ss_scale, float render
         ss_scale = 1;
     render_scale = postfx_clamp_render_scale(render_scale);
 
-    postfx_free_targets(fx);
     postfx_invalidate_targets(fx);
     postfx_derive_sizes(fx, width, height, ss_scale, render_scale);
 
@@ -1216,7 +1216,6 @@ bool postfx_resize(PostFX* fx, int width, int height, int ss_scale, float render
         // then true of the data, not merely of the one caller that happens to
         // latch a flag on the way out.
         log_error("postfx_resize: rebuild failed at %dx%d", fx->width, fx->height);
-        postfx_free_targets(fx);
         postfx_invalidate_targets(fx);
         glUseProgram(0);
         glBindFramebuffer(GL_FRAMEBUFFER, 0);

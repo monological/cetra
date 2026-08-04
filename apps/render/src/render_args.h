@@ -132,9 +132,8 @@ typedef struct {
                                 // path and never user-set)
     int ssaa;                   // Supersampling factor (0 = keep engine default)
     float render_scale;         // TAAU render-res scale [0.5, 1) (0 = full res)
-    // Diagnostic render-scale schedule (--render-scale-at), parsed at parse
-    // time like every other multi-value flag so a malformed one fails before
-    // the window exists. Applied from the app's per-frame update callback.
+    // Diagnostic render-scale schedule (--render-scale-at): switch to
+    // scale_at_value[i] on frame scale_at_frame[i]. Empty on a normal run.
     int scale_at_count;
     int scale_at_frame[RENDER_SCALE_AT_MAX];
     float scale_at_value[RENDER_SCALE_AT_MAX];

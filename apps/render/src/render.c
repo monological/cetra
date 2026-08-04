@@ -183,8 +183,9 @@ static void print_usage(const char* prog) {
                     "                         (headless needs --taa --headless-jitter)\n");
     fprintf(stderr,
             "      --render-scale-at <frame:scale[,frame:scale...]>  Diagnostic: switch the\n"
-            "                         render scale mid-run, exercising the runtime rebuild\n"
-            "                         (same headless preconditions as --render-scale)\n");
+            "                         render scale mid-run, exercising the runtime rebuild.\n"
+            "                         Takes effect the frame AFTER the one named; max 64\n"
+            "                         entries; same headless preconditions as --render-scale\n");
     fprintf(stderr,
             "      --film             Cinematic finish preset (vignette+grain+sharpen+grade)\n");
     fprintf(stderr, "      --vignette <s>     Vignette strength (enables it; default on ~0.25)\n");
@@ -850,9 +851,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
                 return -1;
             }
-            // "frame:scale[,frame:scale...]" -- lexed here rather than in main
-            // so a malformed schedule fails before the window and GL context
-            // are up, like every other multi-value flag.
+            // "frame:scale[,frame:scale...]". Lexed at parse time, so a
+            // malformed schedule fails before the window and GL context exist.
             for (const char* p = argv[i]; *p;) {
                 if (args->scale_at_count >= RENDER_SCALE_AT_MAX) {
                     fprintf(stderr, "Error: --render-scale-at takes at most %d entries\n",
@@ -862,7 +862,10 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 int frame = 0;
                 float scale = 0.0f;
                 if (sscanf(p, "%d:%f", &frame, &scale) != 2) {
-                    fprintf(stderr, "Error: --render-scale-at expects frame:scale pairs\n");
+                    // Echo from the failure position, so a long schedule says
+                    // which entry is malformed rather than just that one is.
+                    fprintf(stderr, "Error: --render-scale-at wants frame:scale pairs, got '%s'\n",
+                            p);
                     return -1;
                 }
                 args->scale_at_frame[args->scale_at_count] = frame;
@@ -1044,6 +1047,11 @@ static int frames_rendered = 0;
  * Stretch diagnostic (--check-stretch)
  */
 static int check_stretch = 0;
+
+/*
+ * Render-scale schedule (--render-scale-at), read by the per-frame update hook
+ */
+static const RenderArgs* scale_schedule = NULL;
 
 /*
  * Recenter offset (computed at load): translates the model so its bounding-box
@@ -1241,26 +1249,28 @@ void key_callback(Engine* engine, int key, int scancode, int action, int mods) {
     }
 }
 
-// engine_run's per-frame update hook. Only job today is the --render-scale-at
-// diagnostic: request any scale due this frame, which the engine adopts at the
-// next frame top (the rebuild is deferred there, so a switch named for frame N
-// takes effect on N+1 -- fine for a diagnostic whose frame numbers are chosen
-// by whoever passes the flag). Compared for equality, not ">=", so each entry
-// fires exactly once. Runs before any scene GL work; see game_frame_update for
-// the same hook doing real work.
+// engine_run's per-frame update hook, running before any scene GL work. Only
+// job today is the --render-scale-at diagnostic: request any scale due this
+// frame. The engine defers the rebuild to the next frame top, so a switch
+// named for frame N takes effect on N+1.
+//
+// Matched by equality, not ">=", so an entry fires on exactly the frame named
+// and once -- which is what lets a switched run be compared against a straight
+// one at a fixed frame (the equivalence gate, specs/11.8).
 static void render_frame_update(Engine* engine, float dt) {
     (void)dt;
-    const RenderArgs* a = engine_get_user_data(engine);
-    if (!a)
-        return;
-    for (int i = 0; i < a->scale_at_count; i++) {
-        if (a->scale_at_frame[i] != (int)engine->total_frames)
+    for (int i = 0; i < scale_schedule->scale_at_count; i++) {
+        if (scale_schedule->scale_at_frame[i] != (int)engine->total_frames)
             continue;
-        set_engine_render_scale(engine, a->scale_at_value[i]);
-        // Log what the setter settled on, not what was asked: it clamps, and
-        // refuses outright in headless without jitter, so logging the request
-        // would report switches that never happened.
-        printf("frame %d: render scale -> %.2f\n", a->scale_at_frame[i], engine->render_scale);
+        set_engine_render_scale(engine, scale_schedule->scale_at_value[i]);
+        // stderr, not stdout: this line is the record of how far a stress run
+        // got, and stdout is block-buffered when redirected, so a crash would
+        // take it with it. It also keeps the switch ordered against the
+        // engine's own log lines rather than split across two streams.
+        // Reports what the setter settled on, not what was asked -- it clamps,
+        // and refuses outright in headless without jitter.
+        fprintf(stderr, "frame %d: render scale -> %.2f\n", scale_schedule->scale_at_frame[i],
+                engine->render_scale);
     }
 }
 
@@ -2605,10 +2615,7 @@ int main(int argc, char** argv) {
         set_engine_taa_enabled(engine, true);
     }
 
-    // The update hook reads the parsed schedule back out; the slot is free
-    // here because it is reserved for run_game's Game*, and this is not a game
-    // app. Passed even with an empty schedule so the wiring has one shape.
-    engine_set_user_data(engine, &args);
+    scale_schedule = &args;
     engine_run(engine, render_frame_update, render_scene_callback);
 
     printf("Cleaning up...\n");

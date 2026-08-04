@@ -25,11 +25,14 @@ void draw_fullscreen_quad(GLuint vao);
 // Delete a GL object and zero the handle. The zeroing is what makes these
 // worth a helper: a handle holding a deleted name is a double-delete once the
 // driver recycles it, and any "is this allocated?" test on the handle reads
-// true for a buffer that is gone. Use them wherever a handle OUTLIVES the
-// delete (a target rebuilt at a new size, a lazily-recreated resource) --
-// not in a free_* path that is about to release the struct, where the store
-// would be dead. glDelete* on 0 is a no-op, so these are safe over a
+// true for a buffer that is gone -- postfx's TAAU seam dispatches on exactly
+// such a test, so a stale post_fbo there is a live-looking buffer that no
+// longer exists. glDelete* on 0 is a no-op, so these are also safe over a
 // partially-constructed object.
+//
+// Not worth converting a delete-then-immediately-regenerate site: the next
+// line overwrites the handle, so the zero says nothing (ibl.c and probe.c
+// have several).
 void gl_delete_fbo(GLuint* fbo);
 void gl_delete_texture(GLuint* tex);
 

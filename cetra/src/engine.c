@@ -124,8 +124,8 @@ static void _gbuffer_attachments(Engine* engine, GBufferAttachment out[GBUFFER_A
 Engine* create_engine(const char* window_title, int width, int height) {
     // Zeroed, not malloc'd: every field below is still set explicitly, but a
     // struct this wide cannot rely on each new field being remembered here --
-    // and a field that is only ever written conditionally (a failure latch, an
-    // opt-in schedule) has no other initializer at all.
+    // and a field only ever written conditionally, like render_suspended, has
+    // no other initializer at all.
     Engine* engine = calloc(1, sizeof(Engine));
     if (!engine) {
         log_error("Failed to allocate memory for engine");
