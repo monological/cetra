@@ -160,12 +160,15 @@ New: `gi_volume.c/h`, `gi_project_frag.glsl`, `gi_border_frag.glsl`, `include/oc
 **Owns foundations:** octahedral encode/decode include; generalized capture-at-position helper;
 atlas+gutter machinery. **Depends on:** A1+A2 soft (probes should capture clustered/area-lit scenes).
 
-### A5. Bent-normal specular occlusion from GTAO (Jimenez 2016) — Effort M — **DELIVERED OPT-IN (spec 11.3)**
-Shipped behind `--spec-occ <off|legacy|bent>` with legacy (the shipped heuristic) still the
-default. The look review found mottling on smooth metal that is architectural, not tunable: the
-reflection vector queries at normal-map frequency while the bent normal is a half-res
-geometry-scale field. The default flip is deferred to spec 11.4, which splits ambient specular
-onto its own G-buffer target so occlusion multiplies exactly the specular it models.
+### A5. Bent-normal specular occlusion from GTAO (Jimenez 2016) — Effort M — **DONE (specs 11.3 + 11.4)**
+11.3 built the machinery behind `--spec-occ <off|legacy|bent>` but its look review found
+mottling on smooth metal that is architectural, not tunable: the reflection vector queries at
+normal-map frequency while the bent normal is a half-res geometry-scale field, and the
+tonemap-stage term must guess the specular share of a pre-summed buffer. 11.4 fixed the
+placement: ambient specular routes to its own G-buffer attachment (7, R11G11B10F) and a
+composite pass occludes exactly that share with the cone term — before TAA, so the reunited
+frame stabilizes as one image — with plain AO on everything else. Default is `split`; the
+mode's TAA churn measures lower than legacy's, and the four-mode combo stays for A/B.
 Directional spec occlusion nearly free from the existing visibility-bitmask GTAO: bent normal =
 popCount-weighted average of the UNSET sector bits (the shader's own comment calls this out).
 **Widen existing AO targets** rather than second MRT: `AoOut = vec4(ao, bentN*0.5+0.5)`, ssao_fbo
@@ -358,8 +361,8 @@ its own spec, branch, reviews and gates. It exists because using the engine surf
 roadmap's feature items could not — a wrong tonemap constant, non-photometric light scales, shadow
 banding at real viewing distances, off-spec KHR materials against reference renderers, and temporal
 flicker whose root cause was an estimator, not a filter. The series continued past B2 with 11.1
-and 11.2 (below). **Tier 1 is complete; Tier 2's A5 bent-normal specular occlusion is delivered
-opt-in (spec 11.3), with the default flip staged through 11.4's split ambient specular.**
+and 11.2 (below). **Tier 1 is complete; Tier 2's A5 bent-normal specular occlusion is done
+(11.3 machinery + 11.4 split ambient specular, default `split`).**
 
 - **9.9–10.0 photometry:** PBR Neutral desaturation blend was inverted vs the Khronos reference;
   then punctual lights went genuinely photometric (candela/lux imported as authored, EV100 camera)
@@ -404,7 +407,7 @@ opt-in (spec 11.3), with the default flip staged through 11.4's split ambient sp
 **Tier 2 — image quality & performance:**
 | # | Item | Effort | Why here |
 |---|------|--------|----------|
-| 9 | A5 Bent-normal spec-occ | M | **Delivered opt-in (11.3);** default flip staged through 11.4's split ambient specular. |
+| 9 | A5 Bent-normal spec-occ | M | **DONE (11.3 + 11.4):** split ambient specular, default `split`, exact occlusion by construction. |
 | 10 | B5 Bokeh DoF | M | Self-contained palate cleanser between the big lifts. |
 | 11 | B4 TAAU | L | After B1's composite settles so the post-res migration happens once; funds Tier 1 at 4K. |
 | 12 | B3 Pre-integrated skin | S | Character tier begins; S effort, zero infra. |
