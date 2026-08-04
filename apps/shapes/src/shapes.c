@@ -152,8 +152,11 @@ void create_scene_light(Scene* scene) {
     vec3 light_pos = {0.0f, 50.0f, 200.0f};
     set_light_original_position(light, light_pos);
     set_light_global_position(light, light_pos);
-    set_light_intensity(light, 5000.0f);
-    set_light_color(light, (vec3){100.0f, 100.0f, 100.0f});
+    // 206u from a layout that spans ~120u: inverse-square across that distance
+    // is what makes the candela figure this large, not a unit error.
+    set_light_intensity(light, 17800000.0f);
+    set_light_color(light, (vec3){1.0f, 1.0f, 1.0f});
+    set_light_range(light, 400.0f);
     add_light_to_scene(scene, light);
 
     SceneNode* light_node = create_node();
