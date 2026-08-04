@@ -946,12 +946,12 @@ ShaderProgram* create_dof_coc_program() {
     return program;
 }
 
-ShaderProgram* create_dof_blur_program() {
+ShaderProgram* create_dof_gather_program() {
     ShaderProgram* program = NULL;
 
-    if ((program = create_program_from_source("dof_blur", post_vert_shader_str,
-                                              dof_blur_frag_shader_str, NULL)) == NULL) {
-        log_error("Failed to initialize DoF blur shader program");
+    if ((program = create_program_from_source("dof_gather", post_vert_shader_str,
+                                              dof_gather_frag_shader_str, NULL)) == NULL) {
+        log_error("Failed to initialize DoF gather shader program");
         return NULL;
     }
 

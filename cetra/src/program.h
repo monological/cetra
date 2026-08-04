@@ -113,7 +113,7 @@ ShaderProgram* create_froxel_composite_program();
 ShaderProgram* create_gi_project_program();
 ShaderProgram* create_lum_measure_program();
 ShaderProgram* create_dof_coc_program();
-ShaderProgram* create_dof_blur_program();
+ShaderProgram* create_dof_gather_program();
 ShaderProgram* create_dof_composite_program();
 ShaderProgram* create_motion_blur_program();
 ShaderProgram* create_motion_blur_tilemax_program();

@@ -1868,6 +1868,8 @@ static void _engine_gui_panel(Engine* engine) {
         igEndDisabled();
         igSliderFloat("Focus Range", &fx->dof_focus_range, 0.1f, 100.0f, "%.2f", 0);
         igSliderFloat("Max CoC", &fx->dof_max_coc, 0.0f, 40.0f, "%.1f", 0);
+        igSliderInt("Blades", &fx->dof_blades, 0, 9, "%d", 0);
+        igSliderFloat("Rotation", &fx->dof_rotation, 0.0f, 180.0f, "%.0f deg", 0);
         _end_effect_group();
 
         _begin_effect_group("Motion Blur", &fx->motion_blur_enabled);

@@ -143,6 +143,8 @@ typedef struct {
     float dof_focus; // Focus distance in view units (-1 = auto: subject)
     float dof_range; // Ramp-to-full-blur width (-1 = scene-scaled default)
     float dof_max_coc;
+    int dof_blades;          // Aperture blade count (-1 = keep engine default)
+    float dof_rotation;      // Aperture rotation in degrees (< 0 = keep default)
     int motion_blur;         // --motion-blur: enable motion blur
     float motion_blur_scale; // --motion-blur-scale shutter (-1 = engine default)
     int width;

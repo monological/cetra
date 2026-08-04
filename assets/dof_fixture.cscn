@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "models": [
+    { "path": "dof_fixture.gltf" }
+  ],
+  "environment": {
+    "ambient": [0.03, 0.03, 0.03]
+  },
+  "lights": [
+    {
+      "name": "PanelKey",
+      "type": "point",
+      "position": [2.0, 3.0, 3.0],
+      "color": [1.0, 0.97, 0.92],
+      "intensity": 500.0,
+      "intensity_unit": "lumens",
+      "range": 15.0,
+      "cast_shadows": true
+    }
+  ],
+  "camera": {
+    "eye": [0.0, 1.2, 6.0],
+    "target": [0.0, 1.0, 0.0],
+    "fov": 40
+  },
+  "post": {
+    "tonemap": "neutral",
+    "exposure": 1.0
+  }
+}

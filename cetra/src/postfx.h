@@ -326,12 +326,14 @@ typedef struct PostFX {
     float dof_focus_distance;              // View-space distance kept sharp
     float dof_focus_range;                 // Ramp width to full blur
     float dof_max_coc;                     // Max blur radius, half-res texels
+    int dof_blades;                        // Aperture blade count (< 3 = circular)
+    float dof_rotation;                    // Aperture rotation, degrees
     bool dof_ready;                        // Lazy-alloc guard for the targets below
     GLuint dof_coc_fbo, dof_coc_texture;   // Half-res: scene + signed CoC in .a
     GLuint dof_blur_fbo, dof_blur_texture; // Half-res: gathered blur
     GLuint dof_fbo, dof_texture;           // Full-res: composited scene
     ShaderProgram* dof_coc_program;
-    ShaderProgram* dof_blur_program;
+    ShaderProgram* dof_gather_program;
     ShaderProgram* dof_composite_program;
 
     // Motion blur (McGuire velocity reconstruction, 4.15). Reads the aux

@@ -314,6 +314,8 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     fx->dof_focus_range = 1.5f;
     fx->dof_max_coc = 6.0f; // ~12px max blur — a natural background falloff,
                             // not the over-creamy look of a larger radius
+    fx->dof_blades = 0;     // Circular aperture; >= 3 warps the kernel to an N-gon
+    fx->dof_rotation = 0.0f;
     fx->dof_ready = false;
 
     // Volumetric fog (off by default; targets allocated lazily on first
@@ -503,7 +505,7 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     fx->froxel_composite_program = create_froxel_composite_program();
     fx->taa_resolve_program = create_taa_resolve_program();
     fx->dof_coc_program = create_dof_coc_program();
-    fx->dof_blur_program = create_dof_blur_program();
+    fx->dof_gather_program = create_dof_gather_program();
     fx->dof_composite_program = create_dof_composite_program();
     fx->motion_blur_program = create_motion_blur_program();
     fx->motion_blur_tilemax_program = create_motion_blur_tilemax_program();
@@ -523,7 +525,7 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
         !fx->taa_resolve_program || !fx->dof_coc_program ||
         !fx->froxel_inject_program || !fx->froxel_integrate_program ||
         !fx->froxel_composite_program ||
-        !fx->dof_blur_program || !fx->dof_composite_program) {
+        !fx->dof_gather_program || !fx->dof_composite_program) {
         free_postfx(fx);
         return NULL;
     }
@@ -574,8 +576,8 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     glUseProgram(fx->dof_coc_program->id);
     uniform_set_int(fx->dof_coc_program->uniforms, "sceneTex", 0);
     uniform_set_int(fx->dof_coc_program->uniforms, "depthTex", 1);
-    glUseProgram(fx->dof_blur_program->id);
-    uniform_set_int(fx->dof_blur_program->uniforms, "cocColorTex", 0);
+    glUseProgram(fx->dof_gather_program->id);
+    uniform_set_int(fx->dof_gather_program->uniforms, "cocColorTex", 0);
     glUseProgram(fx->dof_composite_program->id);
     uniform_set_int(fx->dof_composite_program->uniforms, "sceneTex", 0);
     uniform_set_int(fx->dof_composite_program->uniforms, "blurTex", 1);
@@ -1125,6 +1127,33 @@ static void postfx_run_bloom(PostFX* fx, GLuint scene_tex) {
 // Depth of field: signed CoC + gather at half res, composite at full res into
 // fx->dof_texture. Callers must have ensured the targets exist and read
 // fx->dof_texture as the scene afterward.
+// Aperture kernel taps; must match dof_gather_frag's kernel[] length.
+#define DOF_TAPS 64
+
+// Unit-radius aperture points: a Vogel spiral (uniform disk coverage),
+// optionally warped so each angular wedge maps onto a regular N-gon's wedge
+// (per-wedge radial scale cos(seg/2)/cos(a) -- linear in area, so density
+// stays uniform). Pure libm on fixed inputs: no RNG, identical across runs
+// and builds, which is what keeps DoF goldens deterministic. The rotation is
+// applied here, once, CPU-side -- never per pixel, which would grind the
+// polygon shape into grainy noise.
+static void dof_build_kernel(int blades, float rotation_deg, float k[DOF_TAPS][2]) {
+    const float ga = 2.399963229728653f; // golden angle
+    float rot = rotation_deg * GLM_PIf / 180.0f;
+    for (int i = 0; i < DOF_TAPS; i++) {
+        float r = sqrtf(((float)i + 0.5f) / (float)DOF_TAPS);
+        float th = (float)i * ga;
+        if (blades >= 3) {
+            float seg = 2.0f * GLM_PIf / (float)blades;
+            float a = fmodf(th, seg) - 0.5f * seg;
+            r *= cosf(0.5f * seg) / cosf(a);
+        }
+        th += rot;
+        k[i][0] = r * cosf(th);
+        k[i][1] = r * sinf(th);
+    }
+}
+
 static void postfx_run_dof(PostFX* fx, mat4 projection) {
     const float dof_texel[2] = {1.0f / (float)fx->bloom_width, 1.0f / (float)fx->bloom_height};
 
@@ -1142,12 +1171,20 @@ static void postfx_run_dof(PostFX* fx, mat4 projection) {
     uniform_set_float(fx->dof_coc_program->uniforms, "maxCoC", fx->dof_max_coc);
     draw_fullscreen_quad(fx->quad_vao);
 
-    // Pass 2: gather blur (half res)
+    // Pass 2: aperture gather (half res). The kernel is rebuilt per frame --
+    // 64 sincos is nothing, and it keeps the GUI blade/rotation sliders live
+    // with no dirty tracking.
     glBindFramebuffer(GL_FRAMEBUFFER, fx->dof_blur_fbo);
-    glUseProgram(fx->dof_blur_program->id);
+    glUseProgram(fx->dof_gather_program->id);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, fx->dof_coc_texture);
-    uniform_set_vec2(fx->dof_blur_program->uniforms, "texelSize", dof_texel);
+    uniform_set_vec2(fx->dof_gather_program->uniforms, "texelSize", dof_texel);
+    float kernel[DOF_TAPS][2];
+    dof_build_kernel(fx->dof_blades, fx->dof_rotation, kernel);
+    // Ranged upload of the contiguous array (the SSS-profile idiom).
+    GLint kloc = uniform_location(fx->dof_gather_program->uniforms, "kernel[0]");
+    if (kloc >= 0)
+        glUniform2fv(kloc, DOF_TAPS, (const GLfloat*)kernel);
     draw_fullscreen_quad(fx->quad_vao);
 
     // Pass 3: composite sharp + blur (full res)
@@ -1254,7 +1291,7 @@ void free_postfx(PostFX* fx) {
     free_program(fx->froxel_composite_program);
     free_program(fx->taa_resolve_program);
     free_program(fx->dof_coc_program);
-    free_program(fx->dof_blur_program);
+    free_program(fx->dof_gather_program);
     free_program(fx->dof_composite_program);
     free_program(fx->motion_blur_program);
     free_program(fx->motion_blur_tilemax_program);

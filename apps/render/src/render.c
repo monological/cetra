@@ -190,6 +190,9 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --dof-focus <m>    Pin focus distance (disables autofocus)\n");
     fprintf(stderr, "      --dof-range <m>    Distance over which blur ramps in (default: auto)\n");
     fprintf(stderr, "      --dof-max-coc <px> Max blur radius in half-res texels (default: 6)\n");
+    fprintf(stderr, "      --dof-blades <n>   Aperture blade count for bokeh shape (default: 0 = "
+                    "circle)\n");
+    fprintf(stderr, "      --dof-rotation <deg> Aperture rotation (default: 0)\n");
     fprintf(stderr,
             "      --motion-blur      Velocity-buffer motion blur (McGuire reconstruction)\n");
     fprintf(stderr, "      --motion-blur-scale <s> Shutter/velocity multiplier (default: 1)\n");
@@ -234,6 +237,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->dof_focus = -1.0f;
     args->dof_range = -1.0f;
     args->dof_max_coc = -1.0f;
+    args->dof_blades = -1;
+    args->dof_rotation = -1.0f;
     args->motion_blur_scale = -1.0f;
     args->light_size = -1.0f;      // -1 = scene-radius default
     args->point_light_grid = 0;    // off
@@ -886,6 +891,18 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 return -1;
             }
             args->dof_max_coc = (float)atof(argv[i]);
+        } else if (strcmp(argv[i], "--dof-blades") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->dof_blades = atoi(argv[i]);
+        } else if (strcmp(argv[i], "--dof-rotation") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->dof_rotation = (float)atof(argv[i]);
         } else if (strcmp(argv[i], "--motion-blur") == 0) {
             args->motion_blur = 1;
         } else if (strcmp(argv[i], "--motion-blur-scale") == 0) {
@@ -2214,6 +2231,10 @@ int main(int argc, char** argv) {
         fx->dof_focus_range = args.dof_range > 0.0f ? args.dof_range : scene_radius * 1.5f;
         if (args.dof_max_coc > 0.0f)
             fx->dof_max_coc = args.dof_max_coc;
+        if (args.dof_blades >= 0)
+            fx->dof_blades = args.dof_blades;
+        if (args.dof_rotation >= 0.0f)
+            fx->dof_rotation = args.dof_rotation;
     }
 
     // Motion blur: off unless requested. Velocity comes from the aux buffer

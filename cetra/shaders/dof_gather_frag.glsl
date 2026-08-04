@@ -2,24 +2,18 @@
 in vec2 TexCoords;
 out vec4 FragColor;
 
-// Depth-of-field, pass 2 of 3: gather blur at half resolution. Each pixel
-// spreads a Vogel disk sized by its own circle-of-confusion; a neighbour
+// Depth-of-field gather at half resolution. Each pixel spreads the CPU-built
+// aperture kernel sized by its own circle-of-confusion; a neighbour
 // contributes only if its CoC reaches back to this pixel (scatter-as-gather),
 // which keeps a sharp foreground from bleeding onto a blurred background.
-// Unrotated on purpose — a per-pixel rotation would turn the tap count into
-// grainy bokeh noise.
+// The kernel arrives pre-warped to the aperture's N-gon and pre-rotated --
+// deliberately NOT rotated per pixel, which would grind the polygon shape
+// into grainy noise.
 uniform sampler2D cocColorTex; // Half-res scene colour (rgb) + signed CoC (a)
 uniform vec2 texelSize;        // Half-res texel size
+uniform vec2 kernel[64];       // Unit-radius aperture points (disk or N-gon)
 
-const int TAPS = 16;
-const float GOLDEN_ANGLE = 2.399963230;
-
-vec2 vogel(int i)
-{
-    float r = sqrt((float(i) + 0.5) / float(TAPS));
-    float theta = float(i) * GOLDEN_ANGLE;
-    return r * vec2(cos(theta), sin(theta));
-}
+const int TAPS = 64;
 
 void main()
 {
@@ -29,7 +23,7 @@ void main()
     vec3 sum = center.rgb;
     float total = 1.0;
     for (int i = 0; i < TAPS; i++) {
-        vec2 v = vogel(i);
+        vec2 v = kernel[i];
         vec4 tap = texture(cocColorTex, TexCoords + v * radius * texelSize);
         float sampleDist = length(v) * radius; // texels from centre
         // The tap reaches this pixel only if its own blur is at least that wide
