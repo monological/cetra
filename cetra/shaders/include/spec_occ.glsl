@@ -57,3 +57,25 @@ float specOcclusionCone(float ao, float roughness, vec3 bentN, vec3 R)
     float open = coneOverlap(0.0, cosAs, bDotR);
     return open > 1e-4 ? clamp(visible / open, 0.0, 1.0) : 1.0;
 }
+
+// The split-mode term for one pixel: guard, view ray, bent decode, cone --
+// the whole evaluation, so the composite pass and the tonemap's debug view
+// call one function and cannot drift. The includer must declare
+// sampler2D aoTex / normalsTex / auxTex (the depth.glsl contract style).
+float specOccSplitAt(vec2 uv, vec2 invFocal)
+{
+    vec4 aoSample = texture(aoTex, uv);
+    vec4 nrm = texture(normalsTex, uv);
+    // Sky/hair (zero normal) and the shadow-catcher floor: no trustworthy
+    // reflection direction, so the plain AO answer serves. The catcher test
+    // is the marker's SIGN, matching what the catcher writes and the SSR
+    // march reads -- its magnitude is the edge falloff, so any threshold
+    // would hand part of the plane's outer ring to the cone term.
+    if (dot(nrm.xyz, nrm.xyz) < 0.01 || nrm.a < 0.0)
+        return aoSample.r;
+    vec2 ndc = uv * 2.0 - 1.0;
+    vec3 V = normalize(vec3(-ndc * invFocal, 1.0));
+    vec3 N = normalize(nrm.xyz);
+    vec3 bentN = normalize(aoSample.gba * 2.0 - 1.0);
+    return specOcclusionCone(aoSample.r, texture(auxTex, uv).w, bentN, reflect(-V, N));
+}

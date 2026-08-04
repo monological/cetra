@@ -168,7 +168,7 @@ typedef struct PostFX {
     bool ssao_enabled;
     float ssao_radius; // Occlusion reach in view-space units
     float ssao_strength;
-    PostFXSpecOccMode spec_occlusion_mode; // Keep GTAO off specular (spec-occ at tonemap)
+    PostFXSpecOccMode spec_occlusion_mode; // How the AO factor treats specular (see the enum)
     bool ao_edge_filter_enabled; // Depth-bilateral AO blur (no silhouette bleed onto the floor)
 
     // Screen-space contact shadows (spec 9.3): an AO-res depth march toward the
@@ -415,15 +415,22 @@ void postfx_apply_film_look(PostFX* fx);
 // Resolve msaa_fbo, run SSAO and bloom, and tone map (fx->tonemap_mode) into
 // target_fbo (0 = default framebuffer). projection is the camera projection
 // used to render the frame (needed to reconstruct positions from depth).
+// Which scene-MRT attachments the scene pass actually wrote this frame -- the
+// engine's frame-start decisions, passed through rather than re-derived from
+// fx flags that may have changed mid-frame.
+typedef struct PostFXGBufferWrites {
+    bool normals; // attachment 1
+    bool aux;     // attachment 2 (motion + linear-Z + roughness)
+    bool albedo;  // attachment 3
+    bool sss;     // attachment 4 (skin diffuse)
+    bool spec;    // attachment 7 (split ambient specular)
+} PostFXGBufferWrites;
+
 // Pass frame_is_hdr = false for frames whose shaders already emitted
 // display-ready colors (debug render modes): they are copied unchanged,
-// skipping SSAO, bloom, and tone mapping. normals_written reports whether
-// the scene pass produced color attachment 1 this frame — the engine's
-// frame-start decision, passed through rather than re-derived from fx flags
-// that may have changed mid-frame.
+// skipping SSAO, bloom, and tone mapping.
 void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hdr,
-                bool normals_written, bool aux_written, bool albedo_written, bool sss_written,
-                bool spec_written, GLuint oit_fbo, mat4 projection, mat4 view);
+                const PostFXGBufferWrites* writes, GLuint oit_fbo, mat4 projection, mat4 view);
 
 // Producer-side predicate: true when some active effect will consume the
 // normals G-buffer, so the scene pass should write color attachment 1. The

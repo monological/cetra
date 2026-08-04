@@ -73,6 +73,11 @@ typedef struct GBufferAttachment {
 } GBufferAttachment;
 
 #define GBUFFER_ATTACHMENT_COUNT 6
+// Draw-buffer slots the scene MRT spans: highest attachment in the table
+// (7) + 1. Sizes the draw-buffer list and the GL_MAX_DRAW_BUFFERS check, so
+// a table row past slot 7 fails the startup check instead of silently
+// overrunning the list.
+#define GBUFFER_DRAW_BUFFER_SLOTS 8
 
 // Describe this engine's scene-MRT attachments. Pure (no GL): the
 // tex/this_frame pointers alias Engine fields so create/destroy/clear share one
@@ -487,24 +492,16 @@ static void _add_msaa_color_attachment(GLuint* out_tex, GLenum internal_format, 
 static int _create_msaa_attachments(Engine* engine, int rw, int rh, int samples) {
     glBindFramebuffer(GL_FRAMEBUFFER, engine->framebuffer);
 
-    // The draw-buffer list is sized by the highest attachment slot in the
-    // table, not the row count (attachment 7 needs an 8-entry list with
-    // GL_NONE holes at the OIT slots). GL 4.1 guarantees >= 8, but query once
-    // so a hypothetical thin driver fails loudly here instead of silently
-    // dropping the last attachment.
+    // GL 4.1 guarantees >= 8 draw buffers, but query once so a hypothetical
+    // thin driver fails loudly here instead of silently dropping the last
+    // attachment.
     GBufferAttachment gb[GBUFFER_ATTACHMENT_COUNT];
     _gbuffer_attachments(engine, gb);
-    GLint needed_draw_buffers = 0;
-    for (int i = 0; i < GBUFFER_ATTACHMENT_COUNT; i++) {
-        GLint slot = (GLint)(gb[i].attachment - GL_COLOR_ATTACHMENT0) + 1;
-        if (slot > needed_draw_buffers)
-            needed_draw_buffers = slot;
-    }
     GLint max_draw_buffers = 0;
     glGetIntegerv(GL_MAX_DRAW_BUFFERS, &max_draw_buffers);
-    if (max_draw_buffers < needed_draw_buffers)
+    if (max_draw_buffers < GBUFFER_DRAW_BUFFER_SLOTS)
         log_error("GL_MAX_DRAW_BUFFERS is %d (< %d): the last scene-MRT attachment will not bind",
-                  max_draw_buffers, needed_draw_buffers);
+                  max_draw_buffers, GBUFFER_DRAW_BUFFER_SLOTS);
 
     // Draw-buffer layout: 0 HDR color, 1 view normals (SSAO/SSR), 2 aux (TAA
     // motion + GTAO linear-Z), 3 albedo (SSGI), 4 skin diffuse (SSS), 7
@@ -2014,9 +2011,12 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode) {
     if (fx_scene && fx_scene->sky)
         sky_update_aerial(fx_scene->sky, engine->view_matrix, engine->projection_matrix);
     sky_publish_to_postfx(fx_scene ? fx_scene->sky : NULL, engine->postfx);
-    postfx_run(engine->postfx, engine->framebuffer, 0, frame_mode == RENDER_MODE_PBR,
-               engine->normals_this_frame, engine->aux_this_frame, engine->albedo_this_frame,
-               engine->sss_this_frame, engine->spec_this_frame,
+    const PostFXGBufferWrites writes = {.normals = engine->normals_this_frame,
+                                        .aux = engine->aux_this_frame,
+                                        .albedo = engine->albedo_this_frame,
+                                        .sss = engine->sss_this_frame,
+                                        .spec = engine->spec_this_frame};
+    postfx_run(engine->postfx, engine->framebuffer, 0, frame_mode == RENDER_MODE_PBR, &writes,
                engine->oit_this_frame ? engine->oit_fbo : 0, engine->draw_projection,
                engine->view_matrix);
 
@@ -2060,11 +2060,11 @@ void engine_set_scene_draw_buffers(const Engine* engine, bool with_gbuffer) {
     const bool gbuffer = with_gbuffer && !engine->capturing;
     GBufferAttachment gb[GBUFFER_ATTACHMENT_COUNT];
     _gbuffer_attachments((Engine*)engine, gb);
-    // 8 slots: bufs[slot] carries GL_COLOR_ATTACHMENT0+slot or GL_NONE (0), so
+    // bufs[slot] carries GL_COLOR_ATTACHMENT0+slot or GL_NONE (0), so
     // fragment output location N always lands on attachment N. Slots 5/6 stay
     // GL_NONE here -- those locations are the OIT accumulate targets, bound on
     // the OIT FBO.
-    GLenum bufs[8] = {GL_COLOR_ATTACHMENT0}; // rest GL_NONE (0)
+    GLenum bufs[GBUFFER_DRAW_BUFFER_SLOTS] = {GL_COLOR_ATTACHMENT0}; // rest GL_NONE (0)
     int count = 1;
     for (int i = 1; i < GBUFFER_ATTACHMENT_COUNT; i++) {
         if (gbuffer && *gb[i].this_frame) {
@@ -2281,8 +2281,9 @@ void engine_end_oit_pass(Engine* engine) {
     glBindFramebuffer(GL_FRAMEBUFFER, engine->framebuffer);
     glViewport(0, 0, rw, rh);
     engine_set_scene_draw_buffers(engine, false);
-    // Undo the indexed blend we set on draw buffers 5/6 (symmetry -- benign today
-    // since the scene MRT stops at slot 4, but a latent trap if it ever widens).
+    // Undo the indexed blend we set on draw buffers 5/6. The scene MRT now
+    // spans slot 7, but 5/6 stay structurally reserved for these OIT targets
+    // (the attachment table skips them), so the disables cannot collide.
     glDisablei(GL_BLEND, 5);
     glDisablei(GL_BLEND, 6);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);

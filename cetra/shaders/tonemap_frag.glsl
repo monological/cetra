@@ -169,9 +169,10 @@ vec3 toneSelect(vec3 c)
 // so a reflection aimed into an occluder stays dark while one aimed at open
 // sky is untouched, which the smoothness blend cannot distinguish.
 //
-// Mode 3 (split) does not reach this function at all: the composite pass
-// already multiplied the specular share by the cone term and the rest by
-// plain AO, so the tonemap's ambient factor stays 1.
+// Mode 3 (split) normally does not reach this function: the composite pass
+// applied the cone term to the specular share and plain AO to the rest, and
+// aoEnabled arrives false. If the composite could not run, aoEnabled stays
+// true and mode 3 falls through to the legacy blend below.
 //
 // Mode 0 returns raw ao -> byte-identical to the pre-feature path.
 #include "spec_occ.glsl"
@@ -272,25 +273,11 @@ void main()
     if (debugView == 7) {
         // Spec-occ AO visibility (what actually multiplies the scene) -- the
         // reflection relief vs the raw AO of debug view 1. Split mode shows
-        // the cone term the composite applied to the specular share,
-        // recomputed from the same include so this view cannot drift from it.
-        if (specOccMode == 3) {
-            vec4 aoS = texture(aoTex, TexCoords);
-            vec4 nrm = texture(normalsTex, TexCoords);
-            float so;
-            if (dot(nrm.xyz, nrm.xyz) < 0.01 || nrm.a < 0.0) {
-                so = aoS.r;
-            } else {
-                vec2 ndc = TexCoords * 2.0 - 1.0;
-                vec3 V = normalize(vec3(-ndc * invFocal, 1.0));
-                vec3 bentN = normalize(aoS.gba * 2.0 - 1.0);
-                so = specOcclusionCone(aoS.r, texture(auxTex, TexCoords).w, bentN,
-                                       reflect(-V, normalize(nrm.xyz)));
-            }
-            FragColor = vec4(vec3(so), 1.0);
-            return;
-        }
-        FragColor = vec4(vec3(aoVisibility()), 1.0);
+        // the term the composite applied to the specular share, through the
+        // same shared function so this view cannot drift from it.
+        FragColor = vec4(vec3(specOccMode == 3 ? specOccSplitAt(TexCoords, invFocal)
+                                               : aoVisibility()),
+                         1.0);
         return;
     }
     if (debugView == 8) {
@@ -311,9 +298,9 @@ void main()
     // Occlude before adding bloom: bloom models lens scatter, which happens
     // after the light already left the scene
     float aoFactor = 1.0;
-    // Split mode's factor stays exactly 1.0: the composite pass already
-    // applied AO to the scene and the cone term to the specular share.
-    if (aoEnabled == 1 && specOccMode != 3)
+    // aoEnabled arrives false when the split composite already applied AO --
+    // one C-side owner decides who multiplies, this pass never re-derives it.
+    if (aoEnabled == 1)
         aoFactor = mix(1.0, aoVisibility(), aoStrength);
     // Contact shadows fold into the same factor (so the sharpen taps inherit
     // them like AO) but stay independent of AO/spec-occ: they occlude direct

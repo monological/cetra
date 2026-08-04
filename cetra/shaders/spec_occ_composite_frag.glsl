@@ -30,21 +30,7 @@ void main()
         FragColor = vec4(spec, 1.0);
         return;
     }
-    vec4 aoSample = texture(aoTex, TexCoords);
-    float ao = aoSample.r;
-    vec4 nrm = texture(normalsTex, TexCoords);
-    float so;
-    if (dot(nrm.xyz, nrm.xyz) < 0.01 || nrm.a < 0.0) {
-        // Sky/hair (zero normal) and the shadow-catcher floor (negative
-        // marker): no trustworthy reflection direction; both carry zero
-        // split specular, so the plain AO answer serves for the factor.
-        so = ao;
-    } else {
-        vec2 ndc = TexCoords * 2.0 - 1.0;
-        vec3 V = normalize(vec3(-ndc * invFocal, 1.0));
-        vec3 N = normalize(nrm.xyz);
-        vec3 bentN = normalize(aoSample.gba * 2.0 - 1.0);
-        so = specOcclusionCone(ao, texture(auxTex, TexCoords).w, bentN, reflect(-V, N));
-    }
+    float ao = texture(aoTex, TexCoords).r;
+    float so = specOccSplitAt(TexCoords, invFocal);
     FragColor = vec4(spec * mix(1.0, so, aoStrength), mix(1.0, ao, aoStrength));
 }

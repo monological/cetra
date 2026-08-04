@@ -269,7 +269,7 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     fx->ssao_enabled = true;
     fx->ssao_radius = 0.4f;
     fx->ssao_strength = 0.8f;
-    fx->spec_occlusion_mode = POSTFX_SPEC_OCC_SPLIT; // Keep GTAO off specular; on when AO is on
+    fx->spec_occlusion_mode = POSTFX_SPEC_OCC_SPLIT; // Ambient spec on its own target, occluded in post
     fx->ao_edge_filter_enabled = true; // Depth-aware AO blur (no silhouette bleed)
     fx->contact_shadows_enabled = false; // Opt-in (spec 9.3); off leaves the frame untouched
     fx->cs_strength = 0.23f;             // Subtle: it stacks on CSM + AO in the same crevices, so a
@@ -598,6 +598,12 @@ PostFX* create_postfx(int width, int height, int ss_scale) {
     uniform_set_int(fx->oit_resolve_program->uniforms, "accumTex", 0);
     uniform_set_int(fx->oit_resolve_program->uniforms, "revealageTex", 1);
 
+    glUseProgram(fx->spec_occ_composite_program->id);
+    uniform_set_int(fx->spec_occ_composite_program->uniforms, "specTex", 0);
+    uniform_set_int(fx->spec_occ_composite_program->uniforms, "aoTex", 1);
+    uniform_set_int(fx->spec_occ_composite_program->uniforms, "normalsTex", 2);
+    uniform_set_int(fx->spec_occ_composite_program->uniforms, "auxTex", 3);
+
     glUseProgram(fx->gtao_program->id);
     uniform_set_int(fx->gtao_program->uniforms, "linDepthTex", 0);
     uniform_set_int(fx->gtao_program->uniforms, "noiseTex", 1);
@@ -853,6 +859,44 @@ static void postfx_run_motion_blur(PostFX* fx) {
                       GL_NEAREST);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     check_gl_error("postfx motion blur");
+}
+
+// Split spec-occ composite: fold the ambient specular the scene pass routed
+// to its own buffer back over the scene, in one blended pass -- the shader
+// outputs (spec * SO, aoFactor) and the (GL_ONE, GL_SRC_ALPHA) blend forms
+// spec * SO + scene * aoFactor in place. This is where AO lands on the whole
+// frame in split mode; the tonemap's ambient factor stands down via aoEnabled.
+// Runs before TAA so the reunited frame is stabilized as one image, and
+// before the SSR march / fog / bloom so every later pass sees the corrected
+// color.
+static void postfx_run_spec_occ_composite(PostFX* fx, GLuint ao_result_tex, bool have_normals,
+                                          bool aux_written, mat4 projection) {
+    glBindFramebuffer(GL_FRAMEBUFFER, fx->hdr_fbo);
+    glViewport(0, 0, fx->width, fx->height);
+    glUseProgram(fx->spec_occ_composite_program->id);
+    UniformManager* sc = fx->spec_occ_composite_program->uniforms;
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, fx->spec_texture);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, fx->ssao_enabled ? ao_result_tex : 0);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, have_normals ? fx->normal_texture : 0);
+    glActiveTexture(GL_TEXTURE3);
+    glBindTexture(GL_TEXTURE_2D, aux_written ? fx->aux_texture : 0);
+    const float inv_focal[2] = {1.0f / projection[0][0], 1.0f / projection[1][1]};
+    uniform_set_vec2(sc, "invFocal", inv_focal);
+    // The cone term needs the same inputs the tonemap's spec-occ did: AO,
+    // normals, and the aux roughness. Missing any of them, fold the specular
+    // back unoccluded rather than read an unbound unit.
+    uniform_set_int(sc, "aoActive",
+                    fx->ssao_enabled && have_normals && aux_written ? 1 : 0);
+    uniform_set_float(sc, "aoStrength", fx->ssao_strength);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_ONE, GL_SRC_ALPHA);
+    draw_fullscreen_quad(fx->quad_vao);
+    glDisable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    check_gl_error("postfx spec-occ composite");
 }
 
 // Allocate the ambient-specular resolve target on the first split frame.
@@ -1288,8 +1332,12 @@ bool postfx_wants_albedo(const PostFX* fx) {
 
 bool postfx_wants_spec_split(const PostFX* fx) {
     // Not gated on ssao_enabled: with AO off the composite still owes the
-    // scene its ambient specular (it folds back with occlusion 1).
-    return fx && fx->spec_occlusion_mode == POSTFX_SPEC_OCC_SPLIT;
+    // scene its ambient specular (it folds back with occlusion 1). Gated on
+    // the tonemap mode: a passthrough frame blits hdr and never runs the
+    // composite, so splitting would silently discard the specular -- keep it
+    // inline there instead.
+    return fx && fx->spec_occlusion_mode == POSTFX_SPEC_OCC_SPLIT &&
+           fx->tonemap_mode != POSTFX_TONEMAP_PASSTHROUGH;
 }
 
 bool postfx_ssr_active(const PostFX* fx, bool normals_written) {
@@ -1812,8 +1860,12 @@ static void postfx_run_oit(PostFX* fx, GLuint oit_fbo) {
 }
 
 void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hdr,
-                bool normals_written, bool aux_written, bool albedo_written, bool sss_written,
-                bool spec_written, GLuint oit_fbo, mat4 projection, mat4 view) {
+                const PostFXGBufferWrites* writes, GLuint oit_fbo, mat4 projection, mat4 view) {
+    const bool normals_written = writes->normals;
+    const bool aux_written = writes->aux;
+    const bool albedo_written = writes->albedo;
+    const bool sss_written = writes->sss;
+    const bool spec_written = writes->spec;
     if (!fx)
         return;
 
@@ -1874,10 +1926,23 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
                                      fx->height);
         }
         // Resolve the ambient-specular attachment (7) for the split spec-occ
-        // composite, iff the scene pass wrote it (same threading as the others).
-        if (spec_written && postfx_ensure_spec_target(fx)) {
-            resolve_color_attachment(msaa_fbo, GL_COLOR_ATTACHMENT7, fx->spec_fbo, fx->width,
-                                     fx->height);
+        // composite, iff the scene pass wrote it (same threading as the
+        // others). split_live is the ONE owner of "the composite runs this
+        // frame": the resolve, the composite draw, and the tonemap's
+        // aoEnabled stand-down all derive from it, so they cannot disagree.
+        // If the target or program is unavailable the mode latches back to
+        // legacy -- a half-live split loses the specular the scene already
+        // routed away, and would lose AO too if the tonemap stood down.
+        bool split_live = false;
+        if (spec_written) {
+            split_live = postfx_ensure_spec_target(fx) && fx->spec_occ_composite_program != NULL;
+            if (split_live) {
+                resolve_color_attachment(msaa_fbo, GL_COLOR_ATTACHMENT7, fx->spec_fbo, fx->width,
+                                         fx->height);
+            } else {
+                log_error("split spec-occ unavailable; falling back to legacy");
+                fx->spec_occlusion_mode = POSTFX_SPEC_OCC_LEGACY;
+            }
         }
 
         // Resolve the scene pass's second attachment (normal .xyz + SSR marker .a)
@@ -2068,49 +2133,9 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         if (!ao_accum_ran)
             fx->ao_history.valid = false;
 
-        // Split spec-occ composite: fold the ambient specular the scene pass
-        // routed to its own buffer back over the scene, in one blended pass --
-        // (spec * SO, aoFactor) under (GL_ONE, GL_SRC_ALPHA) forms
-        // spec * SO + scene * aoFactor in place. This is where AO lands on the
-        // whole frame in split mode; the tonemap's ambient factor stays 1.
-        // Before TAA so the reunited frame is stabilized as one image, and
-        // before the SSR march / fog / bloom so every later pass sees the
-        // corrected color. aoActive mirrors the tonemap's own gate: the AO
-        // factor exists only when AO is enabled AND its denoised result was
-        // produced this frame.
-        if (spec_written && fx->spec_ready && fx->spec_occ_composite_program) {
-            const bool composite_ao = fx->ssao_enabled && gtao_active;
-            glBindFramebuffer(GL_FRAMEBUFFER, fx->hdr_fbo);
-            glViewport(0, 0, fx->width, fx->height);
-            glUseProgram(fx->spec_occ_composite_program->id);
-            UniformManager* sc = fx->spec_occ_composite_program->uniforms;
-            uniform_set_int(sc, "specTex", 0);
-            uniform_set_int(sc, "aoTex", 1);
-            uniform_set_int(sc, "normalsTex", 2);
-            uniform_set_int(sc, "auxTex", 3);
-            glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, fx->spec_texture);
-            glActiveTexture(GL_TEXTURE1);
-            glBindTexture(GL_TEXTURE_2D, composite_ao ? ao_result_tex : 0);
-            glActiveTexture(GL_TEXTURE2);
-            glBindTexture(GL_TEXTURE_2D, have_normals ? fx->normal_texture : 0);
-            glActiveTexture(GL_TEXTURE3);
-            glBindTexture(GL_TEXTURE_2D, aux_written ? fx->aux_texture : 0);
-            const float sc_inv_focal[2] = {1.0f / projection[0][0], 1.0f / projection[1][1]};
-            uniform_set_vec2(sc, "invFocal", sc_inv_focal);
-            // The cone term needs the same inputs the tonemap's spec-occ did:
-            // AO, normals, and the aux roughness. Missing any of them, fold
-            // the specular back unoccluded rather than read an unbound unit.
-            uniform_set_int(sc, "aoActive",
-                            composite_ao && have_normals && aux_written ? 1 : 0);
-            uniform_set_float(sc, "aoStrength", fx->ssao_strength);
-            glEnable(GL_BLEND);
-            glBlendFunc(GL_ONE, GL_SRC_ALPHA);
-            draw_fullscreen_quad(fx->quad_vao);
-            glDisable(GL_BLEND);
-            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-            check_gl_error("postfx spec-occ composite");
-        }
+        if (split_live)
+            postfx_run_spec_occ_composite(fx, ao_result_tex, have_normals, aux_written,
+                                          projection);
 
         // Temporal AA resolve, after the AO chain and before every HDR
         // consumer (SSR/DoF/bloom/tonemap read anti-aliased color). The AO
@@ -2283,7 +2308,9 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         UniformManager* tm = fx->tonemap_program->uniforms;
         uniform_set_float(tm, "bloomStrength", fx->bloom_strength);
         uniform_set_int(tm, "bloomEnabled", fx->bloom_enabled ? 1 : 0);
-        uniform_set_int(tm, "aoEnabled", fx->ssao_enabled ? 1 : 0);
+        // False when the split composite already applied AO this frame --
+        // split_live owns the handoff, the shader never re-derives it.
+        uniform_set_int(tm, "aoEnabled", fx->ssao_enabled && !split_live ? 1 : 0);
         uniform_set_float(tm, "aoStrength", fx->ssao_strength);
         // Specular occlusion keeps GTAO off reflections. Needs the aux buffer
         // (linZ + roughness) and the normals; both ride the same AO-on gating,
