@@ -9,6 +9,9 @@
 
 #define MAX_ANIM_FILES 32
 
+// Entries in the --render-scale-at diagnostic schedule
+#define RENDER_SCALE_AT_MAX 64
+
 typedef struct {
     const char* model_path;
     const char* texture_dir;
@@ -33,103 +36,108 @@ typedef struct {
     float aperture;
     float shutter_speed;
     float iso;
-    int no_flip_uv;              // For assets baked with the opposite V convention
-    float ao_radius;             // AO/GI reach override in world units (0 = auto)
-    int force_taa;               // TAA even in headless (temporal passes active)
-    int no_ground;               // Disable skybox ground projection
-    int no_key_light;            // Pure IBL: skip the analytic key lights
-    int no_shadows;              // Keep key lights but disable shadow maps
-    int no_pcss;                 // Fixed-width PCF instead of contact-hardening
-    float light_size;            // Emitter size override (-1 = scene default)
-    float shadow_softness;       // PCSS softness override (-1 = default)
-    int shadow_cascades;         // Cascades per caster (0 = keep engine default)
-    int csm_debug;               // Tint fragments by selected cascade
-    int no_springs;              // Disable spring-bone secondary motion
-    int no_ssao;                 // Disable screen-space ambient occlusion
-    int ssao_debug;              // Show the raw SSAO buffer
-    int spec_occ_mode;           // PostFXSpecOccMode override (-1 = keep engine default)
-    int spec_occ_debug;          // Show the AO visibility the scene is multiplied by
-    int bent_debug;              // Show the bent normal from the AO chain
-    int no_ao_edge_filter;       // Disable the depth-aware AO blur (allow silhouette bleed)
-    int ssgi;                    // Enable screen-space GI (indirect diffuse)
-    int ssgi_debug;              // Show the raw gathered GI radiance
-    int probe;                   // Enable the local reflection probe
-    int probe_pos_set;           // --probe-pos given
-    float probe_pos[3];          // Probe capture position override
-    int probe_scene;             // Capture the scene meshes too (interiors)
-    int probe_debug;             // Show the raw capture as the background
-    int gi_volume;               // Enable the DDGI irradiance probe volume
-    int gi_probes[3];            // Probe grid counts (0,0,0 = default)
-    int gi_rate;                 // Probes captured per frame while dirty (0 = default)
-    int gi_debug;                // Blit the probe atlas into the frame corner
-    int sky;                     // Procedural physically-based sky instead of -e
-    int sky_debug;               // Blit the sky LUTs into the frame corner
-    int clouds;                  // Volumetric cloud layer (implies --sky)
-    float cloud_coverage;        // 0..1; negative = keep the engine default
-    float cloud_density;         // extinction scale; negative = default
-    float cloud_wind_kmh;        // drift speed; negative = default (still)
-    float cloud_wind_deg;        // drift direction; negative = default
-    float sun_elevation;         // Sky sun elevation in degrees (-999 = default)
-    float sun_azimuth;           // Sky sun azimuth in degrees (-999 = default)
-    float world_scale;           // World units per km for the atmosphere (-1 = default)
-    int flip_uv;                 // Force the UV V-flip ON (asset baked opposite to format default)
-    int no_unit_scale;           // Skip import unit normalization (raw file units)
-    float import_scale;          // Extra uniform scale on top of unit normalization (1 = none)
-    int no_aerial;               // Disable aerial perspective (on by default with --sky)
-    int sky_rebake_stress;       // Diagnostic: N headless sun re-bakes then restore
-    int fog;                     // Enable volumetric fog
-    float fog_density;           // Extinction override (0 = scene-scaled)
-    float fog_height;            // Height falloff override (0 = scene-scaled)
-    float fog_anisotropy;        // Scatter anisotropy (-999 = keep engine default)
-    int contact_shadows;         // Enable screen-space contact shadows
-    int contact_shadows_debug;   // Show the raw contact-shadow visibility term
-    float cs_distance;           // March reach override (-1 = scene-scaled)
-    float cs_strength;           // Darkening weight override (-1 = engine default)
-    int albedo_debug;            // Show the resolved albedo G-buffer
-    int no_normals_mrt;          // Disable the normals G-buffer
-    int normals_debug;           // Show the resolved normals G-buffer
-    int no_ssr;                  // Disable screen-space reflections
-    int no_ssr_full_res;         // Trace SSR at half res (the old, serrated path)
-    int no_ssr_temporal;         // Disable SSR temporal accumulation (raw single-frame march)
-    int no_ssr_denoise;          // Disable the SSR denoiser (deterministic march, no jitter)
-    float ssr_jitter;            // SSR stochastic ray-jitter spread override (-1 = default)
-    int ssr_debug;               // Show the reflection buffer
-    float ssr_strength;          // SSR strength override (-1 = default)
-    float specular_aa;           // Specular AA strength override (-1 = default)
-    int no_energy_comp;          // Disable multi-scatter energy compensation
-    int no_refraction;           // Disable screen-space refraction
-    int no_clearcoat;            // Disable the clearcoat second specular lobe
-    int no_specular;             // Disable KHR_materials_specular F0 tint + weight
-    int no_sheen;                // Disable KHR_materials_sheen cloth lobe
-    int no_parallax;             // Disable parallax occlusion mapping (POM)
-    float parallax_scale;        // POM depth override (< 0 = keep engine default)
-    int no_sss;                  // Disable separable subsurface scattering
-    int oit;                     // Enable weighted-blended OIT (default off)
-    int show_lights;             // Draw light gizmos (position + cull radius)
-    int cluster_heatmap;         // Tint by cluster light count
-    int area_light;              // --area-light given: spawn one LTC panel
-    float area_light_pos[3];     // Panel center (world)
-    float area_light_dir[3];     // Panel normal; it lights the side this points at
-    float area_light_size[2];    // Panel width x height (world units)
-    float area_light_intensity;  // Emitted radiance
-    float area_light_color[3];   // Panel tint (default white)
-    int point_light_grid;        // N: spawn an NxN point-light test grid (0 = off)
-    float plg_radius;            // Grid spacing == per-light cull radius
-    float plg_intensity;         // Grid light intensity
-    float sss_radius;            // SSS scatter radius override (< 0 = fixture default)
-    float sss_color[3];          // SSS scatter color override (< 0 in [0] = fixture default)
-    int no_bloom;                // Disable bloom
-    int bloom_enable;            // -1 = keep default; 0/1 force (scene file)
-    float bloom_strength;        // -1 = keep engine default
-    float bloom_threshold;       // -1 = keep engine default
-    float ibl_intensity;         // -1 = keep engine default
-    int no_scene_file;           // Ignore any .cscn (input still allowed, look skipped)
-    int tonemap_mode;            // PostFXTonemapMode override (0 = keep default;
-                                 // coincides with PASSTHROUGH, which is a blit
-                                 // path and never user-set)
-    int ssaa;                    // Supersampling factor (0 = keep engine default)
-    float render_scale;          // TAAU render-res scale [0.5, 1) (0 = full res)
-    const char* render_scale_at; // Diagnostic schedule "frame:scale[,frame:scale...]"
+    int no_flip_uv;             // For assets baked with the opposite V convention
+    float ao_radius;            // AO/GI reach override in world units (0 = auto)
+    int force_taa;              // TAA even in headless (temporal passes active)
+    int no_ground;              // Disable skybox ground projection
+    int no_key_light;           // Pure IBL: skip the analytic key lights
+    int no_shadows;             // Keep key lights but disable shadow maps
+    int no_pcss;                // Fixed-width PCF instead of contact-hardening
+    float light_size;           // Emitter size override (-1 = scene default)
+    float shadow_softness;      // PCSS softness override (-1 = default)
+    int shadow_cascades;        // Cascades per caster (0 = keep engine default)
+    int csm_debug;              // Tint fragments by selected cascade
+    int no_springs;             // Disable spring-bone secondary motion
+    int no_ssao;                // Disable screen-space ambient occlusion
+    int ssao_debug;             // Show the raw SSAO buffer
+    int spec_occ_mode;          // PostFXSpecOccMode override (-1 = keep engine default)
+    int spec_occ_debug;         // Show the AO visibility the scene is multiplied by
+    int bent_debug;             // Show the bent normal from the AO chain
+    int no_ao_edge_filter;      // Disable the depth-aware AO blur (allow silhouette bleed)
+    int ssgi;                   // Enable screen-space GI (indirect diffuse)
+    int ssgi_debug;             // Show the raw gathered GI radiance
+    int probe;                  // Enable the local reflection probe
+    int probe_pos_set;          // --probe-pos given
+    float probe_pos[3];         // Probe capture position override
+    int probe_scene;            // Capture the scene meshes too (interiors)
+    int probe_debug;            // Show the raw capture as the background
+    int gi_volume;              // Enable the DDGI irradiance probe volume
+    int gi_probes[3];           // Probe grid counts (0,0,0 = default)
+    int gi_rate;                // Probes captured per frame while dirty (0 = default)
+    int gi_debug;               // Blit the probe atlas into the frame corner
+    int sky;                    // Procedural physically-based sky instead of -e
+    int sky_debug;              // Blit the sky LUTs into the frame corner
+    int clouds;                 // Volumetric cloud layer (implies --sky)
+    float cloud_coverage;       // 0..1; negative = keep the engine default
+    float cloud_density;        // extinction scale; negative = default
+    float cloud_wind_kmh;       // drift speed; negative = default (still)
+    float cloud_wind_deg;       // drift direction; negative = default
+    float sun_elevation;        // Sky sun elevation in degrees (-999 = default)
+    float sun_azimuth;          // Sky sun azimuth in degrees (-999 = default)
+    float world_scale;          // World units per km for the atmosphere (-1 = default)
+    int flip_uv;                // Force the UV V-flip ON (asset baked opposite to format default)
+    int no_unit_scale;          // Skip import unit normalization (raw file units)
+    float import_scale;         // Extra uniform scale on top of unit normalization (1 = none)
+    int no_aerial;              // Disable aerial perspective (on by default with --sky)
+    int sky_rebake_stress;      // Diagnostic: N headless sun re-bakes then restore
+    int fog;                    // Enable volumetric fog
+    float fog_density;          // Extinction override (0 = scene-scaled)
+    float fog_height;           // Height falloff override (0 = scene-scaled)
+    float fog_anisotropy;       // Scatter anisotropy (-999 = keep engine default)
+    int contact_shadows;        // Enable screen-space contact shadows
+    int contact_shadows_debug;  // Show the raw contact-shadow visibility term
+    float cs_distance;          // March reach override (-1 = scene-scaled)
+    float cs_strength;          // Darkening weight override (-1 = engine default)
+    int albedo_debug;           // Show the resolved albedo G-buffer
+    int no_normals_mrt;         // Disable the normals G-buffer
+    int normals_debug;          // Show the resolved normals G-buffer
+    int no_ssr;                 // Disable screen-space reflections
+    int no_ssr_full_res;        // Trace SSR at half res (the old, serrated path)
+    int no_ssr_temporal;        // Disable SSR temporal accumulation (raw single-frame march)
+    int no_ssr_denoise;         // Disable the SSR denoiser (deterministic march, no jitter)
+    float ssr_jitter;           // SSR stochastic ray-jitter spread override (-1 = default)
+    int ssr_debug;              // Show the reflection buffer
+    float ssr_strength;         // SSR strength override (-1 = default)
+    float specular_aa;          // Specular AA strength override (-1 = default)
+    int no_energy_comp;         // Disable multi-scatter energy compensation
+    int no_refraction;          // Disable screen-space refraction
+    int no_clearcoat;           // Disable the clearcoat second specular lobe
+    int no_specular;            // Disable KHR_materials_specular F0 tint + weight
+    int no_sheen;               // Disable KHR_materials_sheen cloth lobe
+    int no_parallax;            // Disable parallax occlusion mapping (POM)
+    float parallax_scale;       // POM depth override (< 0 = keep engine default)
+    int no_sss;                 // Disable separable subsurface scattering
+    int oit;                    // Enable weighted-blended OIT (default off)
+    int show_lights;            // Draw light gizmos (position + cull radius)
+    int cluster_heatmap;        // Tint by cluster light count
+    int area_light;             // --area-light given: spawn one LTC panel
+    float area_light_pos[3];    // Panel center (world)
+    float area_light_dir[3];    // Panel normal; it lights the side this points at
+    float area_light_size[2];   // Panel width x height (world units)
+    float area_light_intensity; // Emitted radiance
+    float area_light_color[3];  // Panel tint (default white)
+    int point_light_grid;       // N: spawn an NxN point-light test grid (0 = off)
+    float plg_radius;           // Grid spacing == per-light cull radius
+    float plg_intensity;        // Grid light intensity
+    float sss_radius;           // SSS scatter radius override (< 0 = fixture default)
+    float sss_color[3];         // SSS scatter color override (< 0 in [0] = fixture default)
+    int no_bloom;               // Disable bloom
+    int bloom_enable;           // -1 = keep default; 0/1 force (scene file)
+    float bloom_strength;       // -1 = keep engine default
+    float bloom_threshold;      // -1 = keep engine default
+    float ibl_intensity;        // -1 = keep engine default
+    int no_scene_file;          // Ignore any .cscn (input still allowed, look skipped)
+    int tonemap_mode;           // PostFXTonemapMode override (0 = keep default;
+                                // coincides with PASSTHROUGH, which is a blit
+                                // path and never user-set)
+    int ssaa;                   // Supersampling factor (0 = keep engine default)
+    float render_scale;         // TAAU render-res scale [0.5, 1) (0 = full res)
+    // Diagnostic render-scale schedule (--render-scale-at), parsed at parse
+    // time like every other multi-value flag so a malformed one fails before
+    // the window exists. Applied from the app's per-frame update callback.
+    int scale_at_count;
+    int scale_at_frame[RENDER_SCALE_AT_MAX];
+    float scale_at_value[RENDER_SCALE_AT_MAX];
     // Finishing grade (-1 = keep engine default; >=0 enables + sets)
     int film_preset; // --film: enable the whole finishing stack at sane defaults
     float vignette;

@@ -45,9 +45,6 @@ typedef struct EngineFrameClock {
 // frame-for-frame. Also the game framework's default sim timestep.
 #define ENGINE_FIXED_FRAME_DT (1.0 / 60.0)
 
-// Entries in the diagnostic render-scale switch schedule (see Engine below)
-#define ENGINE_RENDER_SCALE_SCHEDULE_MAX 64
-
 typedef struct Engine {
     GLFWwindow* window;
     char* window_title; // Title of the GLFW window
@@ -73,12 +70,6 @@ typedef struct Engine {
     // and declines to retry a size that already failed.
     int target_render_w, target_render_h;
     int target_post_w, target_post_h;
-    // Diagnostic: scheduled render-scale switches, applied at the listed frame
-    // numbers. The only way to exercise the runtime rebuild headless, where a
-    // GUI slider cannot reach. Empty (count 0) on every normal run.
-    int render_scale_schedule_count;
-    int render_scale_schedule_frame[ENGINE_RENDER_SCALE_SCHEDULE_MAX];
-    float render_scale_schedule_value[ENGINE_RENDER_SCALE_SCHEDULE_MAX];
     int msaa_samples; // MSAA sample count for the scene framebuffer (1 = off,
                       // 4 = 4x). Runtime-changeable via set_engine_msaa_samples.
 
@@ -321,9 +312,6 @@ void set_engine_ss_scale(Engine* engine, int ss_scale);
 // frame top. Forced to 1 in headless without headless_jitter, which TAAU
 // needs to reconstruct from.
 void set_engine_render_scale(Engine* engine, float render_scale);
-// Diagnostic: apply `scale` at frame `frame`, exercising the runtime rebuild
-// on a run that has no GUI. Returns false if the schedule is full.
-bool engine_schedule_render_scale(Engine* engine, int frame, float scale);
 // MSAA sample count for the scene framebuffer (clamped to [1, driver max]).
 // 1 disables MSAA. Safe to call before init_engine (stored) or at runtime
 // (rebuilds the multisample attachments).

@@ -1507,36 +1507,6 @@ void set_engine_render_scale(Engine* engine, float render_scale) {
     // panel, which draws mid-frame after the post chain has already run.
 }
 
-bool engine_schedule_render_scale(Engine* engine, int frame, float scale) {
-    if (!engine)
-        return false;
-    if (engine->render_scale_schedule_count >= ENGINE_RENDER_SCALE_SCHEDULE_MAX) {
-        log_warn("render-scale schedule is full (%d entries); ignoring frame %d",
-                 ENGINE_RENDER_SCALE_SCHEDULE_MAX, frame);
-        return false;
-    }
-    int i = engine->render_scale_schedule_count++;
-    engine->render_scale_schedule_frame[i] = frame;
-    engine->render_scale_schedule_value[i] = scale;
-    return true;
-}
-
-// Apply any scheduled switch due this frame. Compared for equality rather than
-// ">= frame" so a schedule fires exactly once, on the frame named, which is
-// what makes a switched run comparable against a straight one.
-static void _engine_apply_render_scale_schedule(Engine* engine) {
-    for (int i = 0; i < engine->render_scale_schedule_count; i++) {
-        if (engine->render_scale_schedule_frame[i] == (int)engine->total_frames) {
-            set_engine_render_scale(engine, engine->render_scale_schedule_value[i]);
-            // Log what the setter settled on, not what was asked: it clamps,
-            // and refuses outright in headless without jitter, so logging the
-            // request would report switches that never happened.
-            log_info("frame %d: render scale -> %.2f",
-                     engine->render_scale_schedule_frame[i], engine->render_scale);
-        }
-    }
-}
-
 void set_engine_screenshot_path(Engine* engine, const char* path) {
     if (!engine)
         return;
@@ -2593,7 +2563,6 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EngineRenderFunc render
         // Adopt any pending resolution change (render scale, window size)
         // before this frame touches GL. Everything below assumes the scene
         // target and the post chain agree on a size.
-        _engine_apply_render_scale_schedule(engine);
         _engine_sync_render_targets(engine);
         if (!_engine_frame_renderable(engine)) {
             // Nothing to draw. There is no swap on this path, so nothing
