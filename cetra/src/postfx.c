@@ -1142,6 +1142,74 @@ static bool postfx_ensure_sss_targets(PostFX* fx) {
     return true;
 }
 
+// Rebuild every resolution-dependent target at a new size / render scale,
+// in place. Only GL handles and derived sizes move: the ~90 setting,
+// per-frame-published, and borrowed-pointer fields on PostFX are untouched,
+// which is why this is a teardown-and-rebuild rather than a destroy and
+// re-create (a re-create would need a restore list of all of them, and would
+// silently drop whichever one was added without updating it).
+//
+// The caller must have rebuilt the engine's MSAA scene target to the same
+// render size FIRST: every G-buffer resolve in postfx_run is a multisample
+// blit, which requires identical source and destination rects.
+bool postfx_resize(PostFX* fx, int width, int height, int ss_scale, float render_scale) {
+    if (!fx)
+        return false;
+    if (width <= 0 || height <= 0) {
+        log_error("postfx_resize: invalid size %dx%d", width, height);
+        return false;
+    }
+    if (ss_scale < 1)
+        ss_scale = 1;
+    // The third door onto the same clamp create_postfx and
+    // set_engine_render_scale use; all three must answer alike.
+    if (render_scale < 0.5f || render_scale > 1.0f)
+        render_scale = render_scale < 0.5f ? 0.5f : 1.0f;
+
+    postfx_free_targets(fx);
+    postfx_derive_sizes(fx, width, height, ss_scale, render_scale);
+    if (!postfx_alloc_targets(fx)) {
+        log_error("postfx_resize: failed to allocate targets at %dx%d", fx->width, fx->height);
+        return false;
+    }
+
+    // The one size-dependent uniform seeded once at create rather than per
+    // draw. Stale, GTAO tiles its rotation noise wrong and mis-scales the
+    // screen-space radius it early-outs on.
+    if (fx->gtao_program) {
+        glUseProgram(fx->gtao_program->id);
+        const float noise_scale[2] = {(float)fx->half_width / 4.0f,
+                                      (float)fx->half_height / 4.0f};
+        uniform_set_vec2(fx->gtao_program->uniforms, "noiseScale", noise_scale);
+    }
+    // The TAAU resolve is compiled only for a reduced scale, so a chain that
+    // started at 1.0 has none. Compile and seed it the first time one is
+    // needed; going back to 1.0 leaves it compiled but unused, since the seam
+    // dispatches on the canvas, not on the program.
+    if (fx->render_scale < 1.0f && !fx->taau_resolve_program) {
+        fx->taau_resolve_program = create_taau_resolve_program();
+        if (!fx->taau_resolve_program) {
+            log_error("postfx_resize: failed to compile the TAAU resolve");
+            return false;
+        }
+        glUseProgram(fx->taau_resolve_program->id);
+        uniform_set_int(fx->taau_resolve_program->uniforms, "currentTex", 0);
+        uniform_set_int(fx->taau_resolve_program->uniforms, "velocityTex", 1);
+        uniform_set_int(fx->taau_resolve_program->uniforms, "historyTex", 2);
+    }
+    glUseProgram(0);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    // The froxel volumes survive (fixed dimensions), and so does their
+    // adjacency stamp: they reproject volume-to-volume through their own
+    // stored camera, which carries no resolution. Resetting it would force a
+    // frame of un-averaged cascade taps -- visibly stair-stepped fog -- for
+    // nothing. postfx_free_targets already reset the render-res fog layer's
+    // stamp and every ping-pong's validity.
+    check_gl_error("postfx_resize");
+    return true;
+}
+
 void postfx_reset_sss_profiles(PostFX* fx) {
     if (fx)
         fx->sss_profile_count = 0;

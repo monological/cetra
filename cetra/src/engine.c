@@ -557,6 +557,68 @@ static int _setup_engine_msaa(Engine* engine) {
     return 0;
 }
 
+// Bring the scene target and the whole post chain to the current
+// fb_width/fb_height/ss_scale/render_scale. The MSAA scene target goes first
+// and its failure is checked before postfx is touched: every G-buffer resolve
+// is a multisample blit, which needs identical rects, so a half-applied
+// resize is worse than none. Suspends rendering rather than limping on if
+// either half fails -- a chain whose hdr target is 0 would blit into the
+// default framebuffer.
+static void _engine_rebuild_render_targets(Engine* engine) {
+    int rw, rh;
+    engine_render_size(engine, &rw, &rh);
+
+    _destroy_msaa_attachments(engine);
+    if (_create_msaa_attachments(engine, rw, rh, engine->msaa_samples) != 0) {
+        log_error("Render target rebuild failed at %dx%d; rendering suspended", rw, rh);
+        engine->render_suspended = true;
+        return;
+    }
+    if (!postfx_resize(engine->postfx, engine->fb_width, engine->fb_height, engine->ss_scale,
+                       engine->render_scale)) {
+        engine->render_suspended = true;
+        return;
+    }
+    engine->render_suspended = false;
+    // The lazily-sized engine targets (opaque color, scene depth, OIT) each
+    // compare their stored size and rebuild themselves on next use.
+    log_info("Render targets rebuilt: %dx%d render, scale %.2f", rw, rh, engine->render_scale);
+}
+
+// False when the frame cannot be drawn: a zero-area (minimized) window, or a
+// rebuild that failed and left the chain without usable targets.
+static bool engine_frame_renderable(const Engine* engine) {
+    return !engine->render_suspended && engine->fb_width > 0 && engine->fb_height > 0;
+}
+
+// Frame-top self-heal: if the sizes the engine now derives disagree with what
+// the post chain was built at, rebuild. Keyed on the built sizes rather than
+// on an event flag so that every trigger -- the GUI slider, a window resize,
+// the diagnostic schedule, a future dynamic-resolution controller -- works
+// without its own call site, and so a size field changing behind our back
+// heals instead of desyncing. The idiom is _ensure_opaque_color_target's and
+// ensure_march_targets'.
+static void _engine_sync_render_targets(Engine* engine) {
+    if (!engine->postfx)
+        return;
+    int rw, rh, pw, ph;
+    engine_render_size(engine, &rw, &rh);
+    engine_post_size(engine, &pw, &ph);
+    // A minimized window reports 0x0, where every downstream size formula
+    // degenerates (NaN aspect, +inf cluster params, incomplete framebuffers).
+    // Hold the existing targets untouched; engine_frame_renderable is what
+    // skips the frame, so no flag has to be un-set when the window returns.
+    if (rw < 1 || rh < 1 || pw < 1 || ph < 1)
+        return;
+    // Sizes agree: nothing to do. This is also what stops a failed rebuild
+    // retrying every frame -- the failure left these sizes in place, so the
+    // next attempt waits for a size that actually differs.
+    if (rw == engine->postfx->width && rh == engine->postfx->height &&
+        pw == engine->postfx->post_width && ph == engine->postfx->post_height)
+        return;
+    _engine_rebuild_render_targets(engine);
+}
+
 // Change the MSAA sample count. Before init_engine this just stores the request;
 // at runtime it rebuilds the multisample attachments in place (the single-sample
 // post-process resolve targets are unaffected by the sample count).
@@ -1331,19 +1393,53 @@ void set_engine_ss_scale(Engine* engine, int ss_scale) {
 void set_engine_render_scale(Engine* engine, float render_scale) {
     if (!engine)
         return;
-    // Fixed at startup: every postfx target is sized once at create_postfx and
-    // there is no resize path, so a post-init change would desync the MSAA
-    // scene target from the resolve targets.
-    if (engine->postfx) {
-        log_warn("render scale is fixed at startup; ignoring %.2f", render_scale);
-        return;
-    }
     if (render_scale < 0.5f || render_scale > 1.0f) {
         float clamped = render_scale < 0.5f ? 0.5f : 1.0f;
         log_warn("render scale %.2f outside [0.5, 1]; using %.2f", render_scale, clamped);
         render_scale = clamped;
     }
+    // TAAU reconstructs from the jitter, and headless suppresses the jitter
+    // unless headless_jitter is set -- without it the resolve integrates one
+    // repeated sample position forever, which does not fail, it just looks
+    // permanently soft. The same rule init_engine applies, re-applied because
+    // this is now reachable at runtime.
+    if (engine->headless && !engine->headless_jitter && render_scale < 1.0f) {
+        log_warn("render scale needs jitter under headless; staying at full resolution");
+        render_scale = 1.0f;
+    }
+    if (render_scale == engine->render_scale)
+        return;
     engine->render_scale = render_scale;
+    // The targets follow at the next frame top (_engine_sync_render_targets).
+    // Deferred rather than rebuilt here because this is reachable from the GUI
+    // panel, which draws mid-frame after the post chain has already run.
+}
+
+bool engine_schedule_render_scale(Engine* engine, int frame, float scale) {
+    if (!engine)
+        return false;
+    if (engine->render_scale_schedule_count >= ENGINE_RENDER_SCALE_SCHEDULE_MAX) {
+        log_warn("render-scale schedule is full (%d entries); ignoring frame %d",
+                 ENGINE_RENDER_SCALE_SCHEDULE_MAX, frame);
+        return false;
+    }
+    int i = engine->render_scale_schedule_count++;
+    engine->render_scale_schedule_frame[i] = frame;
+    engine->render_scale_schedule_value[i] = scale;
+    return true;
+}
+
+// Apply any scheduled switch due this frame. Compared for equality rather than
+// ">= frame" so a schedule fires exactly once, on the frame named, which is
+// what makes a switched run comparable against a straight one.
+static void _engine_apply_render_scale_schedule(Engine* engine) {
+    for (int i = 0; i < engine->render_scale_schedule_count; i++) {
+        if (engine->render_scale_schedule_frame[i] == (int)engine->total_frames) {
+            log_info("frame %d: render scale -> %.2f", engine->render_scale_schedule_frame[i],
+                     engine->render_scale_schedule_value[i]);
+            set_engine_render_scale(engine, engine->render_scale_schedule_value[i]);
+        }
+    }
 }
 
 void set_engine_screenshot_path(Engine* engine, const char* path) {
@@ -2386,6 +2482,16 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EngineRenderFunc render
             engine->fps = (float)engine->frame_count / engine->fps_update_timer;
             engine->frame_count = 0;
             engine->fps_update_timer = 0.0f;
+        }
+
+        // Adopt any pending resolution change (render scale, window size)
+        // before this frame touches GL. Everything below assumes the scene
+        // target and the post chain agree on a size.
+        _engine_apply_render_scale_schedule(engine);
+        _engine_sync_render_targets(engine);
+        if (!engine_frame_renderable(engine)) {
+            glfwPollEvents();
+            continue;
         }
 
         // Begin the ImGui frame before the app's render_func, so both the app

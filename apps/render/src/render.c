@@ -181,6 +181,8 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --render-scale <f> TAAU: render the scene at this fraction of the\n"
                     "                         display size [0.5, 1) and upscale temporally\n"
                     "                         (headless needs --taa --headless-jitter)\n");
+    fprintf(stderr, "      --render-scale-at <f:s[,f:s...]>  Diagnostic: switch render scale to\n"
+                    "                         s at frame f, exercising the runtime rebuild\n");
     fprintf(stderr,
             "      --film             Cinematic finish preset (vignette+grain+sharpen+grade)\n");
     fprintf(stderr, "      --vignette <s>     Vignette strength (enables it; default on ~0.25)\n");
@@ -841,6 +843,12 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 return -1;
             }
             args->render_scale = (float)atof(argv[i]);
+        } else if (strcmp(argv[i], "--render-scale-at") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->render_scale_at = argv[i];
         } else if (strcmp(argv[i], "--film") == 0) {
             args->film_preset = 1;
         } else if (strcmp(argv[i], "--vignette") == 0) {
@@ -1572,6 +1580,24 @@ int main(int argc, char** argv) {
                             "rendering at full resolution\n");
         } else {
             set_engine_render_scale(engine, args.render_scale);
+        }
+    }
+    // Diagnostic schedule: "frame:scale" pairs, comma separated. Parsed here
+    // rather than in the engine so the engine keeps no string handling.
+    if (args.render_scale_at) {
+        const char* p = args.render_scale_at;
+        while (*p) {
+            int frame = 0;
+            float scale = 0.0f;
+            if (sscanf(p, "%d:%f", &frame, &scale) != 2) {
+                fprintf(stderr, "Error: --render-scale-at wants frame:scale pairs, got '%s'\n", p);
+                return -1;
+            }
+            engine_schedule_render_scale(engine, frame, scale);
+            const char* comma = strchr(p, ',');
+            if (!comma)
+                break;
+            p = comma + 1;
         }
     }
     set_engine_exit_after_frames(engine, args.max_frames);

@@ -427,6 +427,15 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale);
 // the half-res chains halve exactly. The one formula both the engine's MSAA
 // target and the postfx resolve targets derive from -- they must agree.
 int postfx_scaled_dim(int post_dim, float render_scale);
+
+// Rebuild every resolution-dependent target at a new display size / ss_scale /
+// render scale. Settings, per-frame published state, the SSS profile table and
+// the borrowed exposure pointer all survive; temporal histories are reset.
+// The caller must rebuild the engine's MSAA scene target to the matching
+// render size FIRST -- the G-buffer resolves are multisample blits, which
+// require identical rects. Returns false if allocation failed, in which case
+// the chain is unusable until a later size succeeds.
+bool postfx_resize(PostFX* fx, int width, int height, int ss_scale, float render_scale);
 void free_postfx(PostFX* fx);
 
 // Borrow the Engine's exposure. Must be called before the first postfx_run; the
