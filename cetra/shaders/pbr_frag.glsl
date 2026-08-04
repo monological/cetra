@@ -1509,8 +1509,14 @@ void main() {
         }
 
         if (splitAmbientSpec > 0) {
+            // aoMap dims the DIFFUSE share only: baked AO models diffuse
+            // hemispherical occlusion, and the specular lobe's occlusion is
+            // the post chain's directional cone term. The inline arm below
+            // keeps aoMap on the sum -- it is the byte-identity anchor for
+            // the legacy/bent modes and the capture/OIT paths, retired
+            // together with them.
             ambient = kD * diffuse * aoMap * envScale;
-            ambSpec = specular * aoMap * envScale;
+            ambSpec = specular * envScale;
         } else {
             ambient = (kD * diffuse + specular) * aoMap * envScale;
         }
@@ -1539,7 +1545,7 @@ void main() {
             // own lobe is specular, so it joins ambSpec when splitting.
             if (splitAmbientSpec > 0) {
                 ambient = ambient * (1.0 - ccF);
-                ambSpec = ambSpec * (1.0 - ccF) + coatIBL * aoMap * iblIntensity;
+                ambSpec = ambSpec * (1.0 - ccF) + coatIBL * iblIntensity;
             } else {
                 ambient = ambient * (1.0 - ccF) + coatIBL * aoMap * iblIntensity;
             }
@@ -1557,7 +1563,7 @@ void main() {
             if (splitAmbientSpec > 0) {
                 ambient = ambient * sheenScale;
                 ambSpec = ambSpec * sheenScale +
-                          sheenColorPx * sheenPre * sheenE * aoMap * iblIntensity;
+                          sheenColorPx * sheenPre * sheenE * iblIntensity;
             } else {
                 ambient = ambient * sheenScale +
                           sheenColorPx * sheenPre * sheenE * aoMap * iblIntensity;
