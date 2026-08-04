@@ -1512,9 +1512,7 @@ void main() {
             // aoMap dims the DIFFUSE share only: baked AO models diffuse
             // hemispherical occlusion, and the specular lobe's occlusion is
             // the post chain's directional cone term. The inline arm below
-            // keeps aoMap on the sum -- it is the byte-identity anchor for
-            // the legacy/bent modes and the capture/OIT paths, retired
-            // together with them.
+            // deliberately keeps aoMap on the sum.
             ambient = kD * diffuse * aoMap * envScale;
             ambSpec = specular * envScale;
         } else {

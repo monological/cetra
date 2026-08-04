@@ -3,12 +3,6 @@
   "version": "2.0",
   "generator": "gen_ao_fixture.py"
  },
- "samplers": [
-  {
-   "wrapS": 10497,
-   "wrapT": 10497
-  }
- ],
  "images": [
   {
    "uri": "ao_fixture_ao.png"
@@ -16,8 +10,7 @@
  ],
  "textures": [
   {
-   "source": 0,
-   "sampler": 0
+   "source": 0
   }
  ],
  "materials": [

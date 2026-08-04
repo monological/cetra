@@ -2,10 +2,11 @@
 """Generate assets/ao_fixture.gltf + ao_fixture_ao.png, the baked-AO test asset.
 
 A sphere on a ground quad, one white material carrying a glTF occlusionTexture
-with an unmistakable pattern: a dark radial ring (the ground quad maps the full
-texture, so the ring reads as a ring; the sphere's lat-long UVs wrap it into
-dark bands). occlusionTexture.strength is authored at 0.8 so the strength path
-is pinned too, not just the texture path.
+with an unmistakable pattern: a dark radial ring. The ground quad maps the full
+texture, so the ring reads 1:1 and is the readable signal; on the sphere's
+lat-long UVs the ring maps to a loop on the far (-X) side, away from the
+authored camera. occlusionTexture.strength is authored at 0.8 so the strength
+path is pinned too, not just the texture path.
 
 What this asset guards, in order of discovery:
   - glTF occlusion IMPORT: assimp delivers occlusionTexture as LIGHTMAP, which
@@ -64,8 +65,9 @@ def add_quad(p0, p1, p2, p3, n):
 add_quad((-2.0, 0.0, 2.0), (2.0, 0.0, 2.0), (2.0, 0.0, -2.0), (-2.0, 0.0, -2.0),
          (0.0, 1.0, 0.0))
 
-# Lat-long sphere, radius 0.6, resting on the ground. The shared texture wraps
-# into horizontal dark bands on it.
+# Lat-long sphere, radius 0.6, resting on the ground. Its share of the ring
+# lands on the far side; the sphere's job is pinning the sphere-on-ground
+# GTAO/contact interaction, not showing the texture.
 LAT = 24
 LON = 32
 R_S = 0.6
@@ -98,9 +100,8 @@ pmax = [max(p[k] for p in positions) for k in range(3)]
 
 gltf = {
     "asset": {"version": "2.0", "generator": "gen_ao_fixture.py"},
-    "samplers": [{"wrapS": 10497, "wrapT": 10497}],
     "images": [{"uri": "ao_fixture_ao.png"}],
-    "textures": [{"source": 0, "sampler": 0}],
+    "textures": [{"source": 0}],
     "materials": [
         {
             "name": "ao_white",

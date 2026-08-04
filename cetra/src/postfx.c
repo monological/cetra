@@ -2077,10 +2077,8 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             glBindTexture(GL_TEXTURE_2D, have_normals ? fx->normal_texture : 0);
             glActiveTexture(GL_TEXTURE3);
             glBindTexture(GL_TEXTURE_2D, ssgi_active ? fx->hdr_texture : 0);
-            // Under split, hdr is missing its ambient specular until the
-            // composite folds it back -- which runs after this pass, so the
-            // gather sums the split buffer to see the occluder's full
-            // outgoing radiance.
+            // The composite has not rejoined ambient spec yet; the gather
+            // sums it itself (rationale at the shader's specTex declaration).
             const bool gather_spec = ssgi_active && split_live;
             glActiveTexture(GL_TEXTURE4);
             glBindTexture(GL_TEXTURE_2D, gather_spec ? fx->spec_texture : 0);

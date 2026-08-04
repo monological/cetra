@@ -594,9 +594,11 @@ static Material* process_ai_material(struct aiMaterial* ai_mat, TexturePool* tex
     // glTF occlusion arrives as LIGHTMAP (assimp's glTF2 importer maps
     // occlusionTexture there, not to AMBIENT_OCCLUSION) -- without this
     // fallback a glTF AO texture is silently dropped while its strength
-    // (read in extract_material_properties) still applies. Guarded so a
-    // format that maps the explicit AO row keeps it.
-    if (!material->ambient_occlusion_tex &&
+    // (read in extract_material_properties) still applies. The guard probes
+    // the SOURCE material, not the destination slot: table-row loads attach
+    // asynchronously, so the slot is still empty here even when an explicit
+    // AO row matched, and only the source says whether one exists.
+    if (aiGetMaterialTextureCount(ai_mat, aiTextureType_AMBIENT_OCCLUSION) == 0 &&
         AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_LIGHTMAP, 0, &str, NULL, NULL,
                                            NULL, NULL, NULL, NULL)) {
         load_material_texture(material, tex_pool, ai_scene, loader, str.data, false,
