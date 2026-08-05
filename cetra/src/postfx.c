@@ -1830,22 +1830,26 @@ static GLuint run_atrous(PostFX* fx, ShaderProgram* prog, PingPong* pp, int w, i
 // that reaches only one shader would otherwise render silently wrong.
 // The caller has the program current and has bound the CSM array (unit 1) and
 // the spot depth map (unit 2).
-// The volume's front face. The camera's near plane is a triangle-z-precision
-// number -- 0.1 is ordinary -- and the slice mapping is exponential, so equal
-// depth RATIOS get equal slices: inheriting it spends half the volume on the
-// first couple of units of air and leaves single digits for the scene. Deriving
-// from fog_far keeps the near:far ratio, and so the slice budget, scene-scale
-// invariant.
-float postfx_fog_near(const PostFX* fx) {
+// The volume's front face. Defaults to the camera's near plane, which puts the
+// most slices closest to the viewer -- the distribution the AC4 paper settled on
+// deliberately, because that is where precision is needed and where aliasing
+// shows first for a camera sitting inside the medium.
+//
+// The cost is that an exponential mapping gives equal depth RATIOS equal slices,
+// so a small near spends much of the volume on air near the lens. A scene whose
+// medium is all far away sets fog_near itself to buy those slices back;
+// fog_depth_dist biases the curve without moving either end.
+float postfx_fog_near(const PostFX* fx, mat4 projection) {
     if (fx->fog_near > 0.0f)
         return fx->fog_near;
-    return fx->fog_far > 0.0f ? fx->fog_far / 50.0f : 1.0f;
+    float cam_near = projection[3][2] / (projection[2][2] - 1.0f);
+    return cam_near > 0.0f ? cam_near : 0.1f;
 }
 
 static void upload_fog_uniforms(PostFX* fx, UniformManager* u, mat4 projection, mat4 inv_view) {
     uniform_set_mat4(u, "projection", (float*)projection);
     uniform_set_mat4(u, "invView", (float*)inv_view);
-    uniform_set_float(u, "fogNear", postfx_fog_near(fx));
+    uniform_set_float(u, "fogNear", postfx_fog_near(fx, projection));
     uniform_set_float(u, "fogFar", fx->fog_far);
     uniform_set_float(u, "fogDepthDist", fx->fog_depth_dist);
     uniform_set_vec3(u, "ambientColor", fx->fog_ambient);
@@ -1938,7 +1942,7 @@ static void postfx_build_fog_volume(PostFX* fx, mat4 projection, mat4 view) {
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_3D, fx->froxel_scatter[write]);
     uniform_set_mat4(gu, "projection", (float*)projection);
-    uniform_set_float(gu, "fogNear", postfx_fog_near(fx));
+    uniform_set_float(gu, "fogNear", postfx_fog_near(fx, projection));
     uniform_set_float(gu, "fogFar", fx->fog_far);
     uniform_set_float(gu, "fogDepthDist", fx->fog_depth_dist);
     uniform_set_int(gu, "froxelDepth", fx->froxel_built_z);
@@ -1997,7 +2001,7 @@ static void postfx_run_atmosphere(PostFX* fx, GLuint canvas_fbo, bool aux_writte
     glBindTexture(GL_TEXTURE_3D, fx->aerial_volume);
     glActiveTexture(GL_TEXTURE0);
     uniform_set_mat4(cu, "projection", (float*)projection);
-    uniform_set_float(cu, "fogNear", postfx_fog_near(fx));
+    uniform_set_float(cu, "fogNear", postfx_fog_near(fx, projection));
     uniform_set_float(cu, "fogFar", fx->fog_far);
     uniform_set_float(cu, "fogDepthDist", fx->fog_depth_dist);
     uniform_set_float(cu, "aerialFar", fx->aerial_far);

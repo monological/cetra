@@ -81,12 +81,13 @@ typedef enum PostFXSpecOccMode {
 // useful density is set by that world-space reach, not by pixel count. Depth
 // slices are exponential, matching the cluster grid's Doom-2016 slicing.
 // 160*90*64 RGBA16F is ~7.4 MB per volume.
-// 8-pixel tiles at 2560x1440, matching the density UE's volumetric fog defaults
-// to (r.VolumetricFog.GridPixelSize 8). The previous 160x90 was half this, and
-// a spot cone sharp enough to clip at the tonemap resolved its silhouette at
-// the cell, not the pixel.
-#define POSTFX_FROXEL_X 320
-#define POSTFX_FROXEL_Y 180
+// The AC4 paper's own dimensions. It argues this is sufficient because the
+// stored signal is low frequency and the 3D lookup filters across cells, so
+// single texels are not visible -- and where that fails, the signal has broken
+// the low-frequency assumption and wants band-limiting, not a denser grid.
+// Defaults for the froxel_grid_* fields, which is where a scene overrides them.
+#define POSTFX_FROXEL_X 160
+#define POSTFX_FROXEL_Y 90
 #define POSTFX_FROXEL_Z 64
 
 typedef struct PostFX {
