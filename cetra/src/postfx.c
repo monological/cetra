@@ -743,9 +743,12 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     fx->motion_blur_tilemax_program = create_motion_blur_tilemax_program();
     fx->motion_blur_neighbormax_program = create_motion_blur_neighbormax_program();
     fx->sss_blur_program = create_sss_blur_program();
+    fx->sss_pyr_seed_program = create_sss_pyr_seed_program();
+    fx->sss_pyr_down_program = create_sss_pyr_down_program();
     fx->contact_shadow_program = create_contact_shadow_program();
     fx->oit_resolve_program = create_oit_resolve_program();
-    if (!fx->contact_shadow_program || !fx->oit_resolve_program || !fx->sss_blur_program ||
+    if (!fx->sss_pyr_seed_program || !fx->sss_pyr_down_program ||
+        !fx->contact_shadow_program || !fx->oit_resolve_program || !fx->sss_blur_program ||
         !fx->motion_blur_program ||
         !fx->motion_blur_tilemax_program || !fx->motion_blur_neighbormax_program ||
         !fx->bloom_bright_program || !fx->bloom_down_program || !fx->bloom_up_program ||
@@ -837,6 +840,12 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     uniform_set_int(fx->sss_blur_program->uniforms, "srcTex", 0);
     uniform_set_int(fx->sss_blur_program->uniforms, "origTex", 1);
     uniform_set_int(fx->sss_blur_program->uniforms, "auxTex", 2);
+    glUseProgram(fx->sss_pyr_seed_program->id);
+    uniform_set_int(fx->sss_pyr_seed_program->uniforms, "srcTex", 0);
+    uniform_set_int(fx->sss_pyr_seed_program->uniforms, "auxTex", 1);
+    glUseProgram(fx->sss_pyr_down_program->id);
+    uniform_set_int(fx->sss_pyr_down_program->uniforms, "srcColor", 0);
+    uniform_set_int(fx->sss_pyr_down_program->uniforms, "srcDepth", 1);
     glUseProgram(fx->oit_resolve_program->id);
     uniform_set_int(fx->oit_resolve_program->uniforms, "accumTex", 0);
     uniform_set_int(fx->oit_resolve_program->uniforms, "revealageTex", 1);
@@ -1277,6 +1286,77 @@ static bool create_sss_pyramid(PostFX* fx) {
         log_error("SSS pyramid framebuffer incomplete");
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     return ok;
+}
+
+// Build the scatter pyramid for one profile: seed level 0 from the resolved
+// skin diffuse, then halve to the top.
+//
+// Leaves BOTH textures reopened (BASE 0, MAX top) and the FBO unbound; the
+// caller re-binds for the gather.
+static void postfx_build_sss_pyramid(PostFX* fx, int profile_tag, float proj_scale) {
+    glBindFramebuffer(GL_FRAMEBUFFER, fx->sss_pyr_fbo);
+    const GLenum bufs[2] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1};
+
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                           fx->sss_pyr_color_texture, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D,
+                           fx->sss_pyr_depth_texture, 0);
+    glDrawBuffers(2, bufs);
+    glViewport(0, 0, fx->width, fx->height);
+    glUseProgram(fx->sss_pyr_seed_program->id);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, fx->sss_diffuse_texture);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, fx->aux_texture);
+    uniform_set_int(fx->sss_pyr_seed_program->uniforms, "profileTag", profile_tag);
+    draw_fullscreen_quad(fx->quad_vao);
+
+    glUseProgram(fx->sss_pyr_down_program->id);
+    float sigma_z = fx->sss_profiles[profile_tag - 1][3];
+    for (int mip = 1; mip < fx->sss_pyr_mips; mip++) {
+        int lw, lh, sw, sh;
+        sss_pyr_level_size(fx, mip, &lw, &lh);
+        sss_pyr_level_size(fx, mip - 1, &sw, &sh);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                               fx->sss_pyr_color_texture, mip);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D,
+                               fx->sss_pyr_depth_texture, mip);
+        glDrawBuffers(2, bufs);
+        glViewport(0, 0, lw, lh);
+        // Pin the source level on BOTH textures. GL 4.1 has no texture barrier,
+        // so without this the level being written is also reachable for reading
+        // and the result is undefined -- and undefined here means "works on the
+        // GPU you tested". Pinning only the colour texture is the easy half-slip.
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, fx->sss_pyr_color_texture);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, mip - 1);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, mip - 1);
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, fx->sss_pyr_depth_texture);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, mip - 1);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, mip - 1);
+
+        uniform_set_vec2(fx->sss_pyr_down_program->uniforms, "texelSize",
+                         (const float[]){1.0f / (float)sw, 1.0f / (float)sh});
+        // World units one SOURCE texel spans per unit of view depth. A source
+        // texel is 2^(mip-1) render texels, and a render texel subtends
+        // 1/proj_scale per unit depth.
+        uniform_set_float(fx->sss_pyr_down_program->uniforms, "srcFootprint",
+                          proj_scale > 0.0f ? (float)(1 << (mip - 1)) / proj_scale : 0.0f);
+        uniform_set_float(fx->sss_pyr_down_program->uniforms, "sigmaZFloor", sigma_z);
+        draw_fullscreen_quad(fx->quad_vao);
+    }
+
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, fx->sss_pyr_color_texture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, fx->sss_pyr_mips - 1);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, fx->sss_pyr_depth_texture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, fx->sss_pyr_mips - 1);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    check_gl_error("postfx sss pyramid build");
 }
 
 static bool postfx_ensure_sss_targets(PostFX* fx) {

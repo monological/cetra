@@ -930,6 +930,14 @@ ShaderProgram* create_sss_blur_program() {
     return create_post_program("sss_blur", sss_blur_frag_shader_str);
 }
 
+ShaderProgram* create_sss_pyr_seed_program() {
+    return create_post_program("sss_pyr_seed", sss_pyr_seed_frag_shader_str);
+}
+
+ShaderProgram* create_sss_pyr_down_program() {
+    return create_post_program("sss_pyr_down", sss_pyr_down_frag_shader_str);
+}
+
 ShaderProgram* create_contact_shadow_program() {
     return create_post_program("contact_shadow", contact_shadow_frag_shader_str);
 }
