@@ -73,10 +73,13 @@ typedef struct Material {
     int subsurface_profile; // Index into PostFX's per-material scatter profiles (color + radius);
                             // -1 = unassigned. pbr_frag writes it into the skin-diffuse alpha so
                             // the blur picks this material's profile per pixel.
-    float curvature_scale;  // Pre-integrated skin (§11.13): 0 = off, 1 = the physically implied
-                            // width. Scales the ANGULAR scatter only, so it trades against the
-                            // profile radius rather than duplicating it. Inert unless
-                            // subsurface > 0 and a profile is assigned.
+    float curvature_scale;  // Pre-integrated skin (§11.13): 0 = off, 1 = the full authored width.
+                            // NOT a physical constant -- the width it delivers is whatever the
+                            // scatter profile's radius says, which is an artistic number here.
+                            // Scales the ANGULAR scatter only, so it trades against that radius
+                            // rather than duplicating it: fix one and tune the other, or they
+                            // multiply and you chase yourself. Inert unless subsurface > 0 and a
+                            // profile is assigned.
     vec2 uvOffset;          // Texture coordinate offset (KHR_texture_transform)
     vec2 uvScale;           // Texture coordinate scale (KHR_texture_transform)
     float uvRotation;       // Texture coordinate rotation in radians (KHR_texture_transform)

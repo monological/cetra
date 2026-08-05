@@ -162,6 +162,8 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --parallax-scale <f> POM depth (default 0.05; 0 = off)\n");
     fprintf(stderr, "      --no-sss           Disable separable subsurface scattering\n");
     fprintf(stderr, "      --no-skin-preint   Disable pre-integrated skin diffuse\n");
+    fprintf(stderr, "      --curvature-scale <f> Pre-integration strength on every skin "
+                    "material (0 = off)\n");
     fprintf(stderr, "      --oit              Weighted-blended OIT for translucent meshes\n");
     fprintf(stderr, "      --sss-radius <f>   SSS scatter radius (world units)\n");
     fprintf(stderr, "      --sss-color <r,g,b> SSS per-channel scatter color (e.g. 1.0,0.3,0.2)\n");
@@ -237,6 +239,7 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->ssr_jitter = -1.0f;     // -1 = keep the engine default
     args->parallax_scale = -1.0f; // -1 = keep the engine default POM depth
     args->sss_radius = -1.0f;     // -1 = keep the fixture default SSS radius
+    args->curvature_scale = -1.0f; // -1 = keep whatever the material authored
     args->sss_color[0] = -1.0f;   // -1 = keep the fixture default SSS scatter color
     args->vignette = -1.0f;
     args->grain = -1.0f;
@@ -740,6 +743,12 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->no_sss = 1;
         } else if (strcmp(argv[i], "--no-skin-preint") == 0) {
             args->no_skin_preint = 1;
+        } else if (strcmp(argv[i], "--curvature-scale") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->curvature_scale = (float)atof(argv[i]);
         } else if (strcmp(argv[i], "--oit") == 0) {
             args->oit = 1;
         } else if (strcmp(argv[i], "--no-oit") == 0) {
@@ -1951,6 +1960,23 @@ int main(int argc, char** argv) {
     // block should see the base material settled before anything layers on it.
     apply_cscene_material_overrides(scene, cscn);
     configure_sss_materials(engine, scene, args.sss_radius, args.sss_color, cscn);
+    // Applied to every skin material rather than only those that authored a
+    // value, so the flag doubles as "turn this on for this scene at strength X"
+    // -- which is what tuning it against sss radius actually needs. Runs after
+    // configure_sss_materials because that is what assigns the profiles it keys
+    // off. -1 leaves the authored values alone.
+    if (args.curvature_scale >= 0.0f) {
+        int tagged = 0;
+        for (size_t i = 0; i < scene->material_count; i++) {
+            Material* m = scene->materials[i];
+            if (m && m->subsurface > 0.0f && m->subsurface_profile >= 0) {
+                m->curvature_scale = args.curvature_scale;
+                tagged++;
+            }
+        }
+        printf("Pre-integrated skin: curvature scale %.3f on %d material(s)\n",
+               args.curvature_scale, tagged);
+    }
     apply_cscene_wind(scene, cscn);
 
     // Scene-file and CLI-authored lights precede the environment/key-light
