@@ -357,9 +357,8 @@ static int find_material_param(const char* key) {
 }
 
 static void write_material_param(Material* m, int slot, const CSceneMaterialParam* p) {
-    // Reached through void*, not char*: offsetof already guarantees the member's
-    // alignment, but stepping there via a byte pointer and casting straight to
-    // float* is the shape the portability check rejects.
+    // The void* hop is not decoration: cppcheck's invalidPointerCast rejects a
+    // direct char* -> float* cast. offsetof already guarantees the alignment.
     void* field = (void*)((char*)m + MATERIAL_PARAMS[slot].offset);
     switch (MATERIAL_PARAMS[slot].type) {
     case MP_VEC3:

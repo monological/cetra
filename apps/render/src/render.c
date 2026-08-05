@@ -1527,7 +1527,7 @@ void configure_sss_materials(Engine* engine, Scene* scene, float radius, const f
     // registry (every imported material lands there via add_material_to_scene).
     // --sss-radius/--sss-color still override.
     if (cscn && cscn->material_count > 0) {
-        int sss_index = 0; // counts SSS entries only (the table also holds wind overrides)
+        int sss_index = 0; // counts SSS entries only; the table also holds plain material params
         for (int k = 0; k < cscn->material_count; k++) {
             const CSceneMaterialOverride* mo = &cscn->materials[k];
             if (!mo->has_sss) // wind-only overrides live in the same table

@@ -20,7 +20,7 @@ scattering gives Penner's pre-integrated falloff:
 
 K mirrors profileWeight() in sss_blur_frag.glsl -- the SAME diffusion profile the
 screen-space blur uses, so the two mechanisms cannot disagree about the shape of
-skin. That coupling has no compiler behind it, which is why --verify exists.
+skin. That coupling has no compiler behind it, which is why the default mode re-measures it.
 
 Two things about K that are easy to get wrong, and both bias the fit sharp:
 
@@ -99,7 +99,7 @@ import math
 import sys
 
 # Mirror of profileWeight() in cetra/shaders/sss_blur_frag.glsl (weight, sigma
-# multiplier). If that changes, re-run --verify: nothing else couples them.
+# multiplier). If that changes, re-run this tool: nothing else couples them.
 PROFILE = ((0.35, 0.30), (0.40, 1.00), (0.25, 2.20))
 
 # Pasted from a --fit run: TABLE_N rows of (w, a1, a2, a3, d0, e0), one per
@@ -128,9 +128,6 @@ FITTED = (
 )
 
 KERNEL_SAMPLES = 1024  # periodic + smooth, so the trapezoid is spectrally accurate
-# Stage 1 fits each of these independently, so a fine grid costs time but not
-# conditioning -- and stage 2 needs enough points to draw a curve through.
-FIT_SIGMAS = [0.04 * (1.25 ** i) for i in range(18)]  # ~0.04 .. 2.2, log spaced
 FIT_THETAS = [math.pi * i / 60.0 for i in range(61)]  # 3 degree steps, 0 .. pi
 SHIPPED_BAND = 0.6  # sigma the fixture and a close-up head actually reach
 
@@ -223,16 +220,11 @@ def evaluate(coef, ndotl):
     t = (ndotl + w) / (1.0 + w)
     if t < 0.0:
         t = 0.0
-    return d0 + e0 * ndotl + t * (a1 + t * (a2 + t * a3))
-
-
-def evaluate_shape(shape, ndotl):
-    """Same evaluation from a raw per-sigma shape, for the stage-1 fit."""
-    return evaluate(shape, ndotl)
-
-
-def build_truth(sigmas, thetas):
-    return {s: ground_truth(s, thetas) for s in sigmas}
+    # Mirrors skinDiffuse's outer max(). The objective below never penalises
+    # sign, so the fit is free to dip below zero on the dark side; the shader
+    # clamps it and this has to clamp identically or the reported error
+    # describes a shader nobody ships.
+    return max(d0 + e0 * ndotl + t * (a1 + t * (a2 + t * a3)), 0.0)
 
 
 def shape_objective(shape, thetas, ref, dtheta):
@@ -241,7 +233,7 @@ def shape_objective(shape, thetas, ref, dtheta):
     energy = 0.0
     prev = None
     for i, t in enumerate(thetas):
-        got = evaluate_shape(shape, math.cos(t))
+        got = evaluate(shape, math.cos(t))
         total += (got - ref[i]) ** 2
         energy += got
         # theta ascends so NdotL descends: D must not increase along it.
@@ -255,7 +247,7 @@ def shape_objective(shape, thetas, ref, dtheta):
 
 
 def nelder_mead(fn, start, step, iters=4000):
-    """Compact Nelder-Mead. No scipy, and none needed for nine parameters."""
+    """Compact Nelder-Mead. No scipy, and none needed at this size."""
     n = len(start)
     simplex = [list(start)]
     for i in range(n):
@@ -341,19 +333,42 @@ def report(params, label):
             f"  {s:6.3f}   {max_abs:9.5f}  {math.sqrt(sq / len(thetas)):9.5f}  "
             f"{max_rel:14.4f}   {energy_err:9.5f}   {'ok' if mono_here else 'FAIL'}"
         )
+    band_rms = math.sqrt(sum_sq_band / max(n_band, 1))
     print()
+    # These are the ACCEPTED values, not aspirational bars. The 0.005 / 0.0015
+    # targets this fit was originally written against were not met and were
+    # superseded (spec 11.13 §K6) by a rendered-image bar; printing them here
+    # told anyone who ran the tool that the shipped table was failing.
     print(f"  shipped band (sigma <= {SHIPPED_BAND}):  max {worst_band:.5f}  "
-          f"rms {math.sqrt(sum_sq_band / max(n_band, 1)):.5f}   (bars 0.005 / 0.0015)")
+          f"rms {band_rms:.5f}")
     print(f"  full domain  (sigma <= 2.0):  max {worst_full:.5f}  "
           f"rms {math.sqrt(sum_sq_full / max(n_full, 1)):.5f}")
-    print(f"  worst energy error: {worst_energy:.5f}   (bar 0.005)")
+    print(f"  worst energy error: {worst_energy:.5f}")
     print(f"  monotone in NdotL:  {'yes' if monotone else 'NO'}")
 
     # sigma = 0 must be Lambert bit-exactly, or the off path is not free.
     coef0 = coefficients(params, 0.0)
     exact = all(evaluate(coef0, math.cos(t)) == max(math.cos(t), 0.0) for t in thetas)
     print(f"  sigma = 0 is bit-exact Lambert: {'yes' if exact else 'NO'}")
-    return worst_band, worst_energy, monotone, exact
+
+    # Regression bars, set from the accepted measurement with headroom. The
+    # point is to catch profileWeight() drifting out from under the table, not
+    # to re-litigate the accuracy the spec already accepted -- so they sit just
+    # above what ships rather than at the original targets.
+    fails = []
+    if worst_band > 0.035:
+        fails.append(f"band max {worst_band:.5f} > 0.035")
+    if band_rms > 0.012:
+        fails.append(f"band rms {band_rms:.5f} > 0.012")
+    if worst_energy > 0.05:
+        fails.append(f"energy {worst_energy:.5f} > 0.05")
+    if not monotone:
+        fails.append("not monotone in NdotL")
+    if not exact:
+        fails.append("sigma = 0 is not bit-exact Lambert")
+    if fails:
+        print("\n  REGRESSED: " + "; ".join(fails))
+    return fails
 
 
 def chord_vs_arc():
@@ -399,8 +414,11 @@ def area_weights():
 
 def main():
     do_fit = "--fit" in sys.argv
-    area_weights()
-    chord_vs_arc()
+    # Derivations, not verification: they re-integrate from scratch and the
+    # default mode never consults them, so they ride with --fit.
+    if do_fit:
+        area_weights()
+        chord_vs_arc()
 
     if do_fit:
         print("\nfitting the shape at each table sigma (this takes a minute)...")
@@ -430,13 +448,12 @@ def main():
             print(f"        {', '.join(f'{v:+.6f}' for v in row)},"
                   f"   // sigma {sigmas[i]:.4f}")
         print("    )")
-        return
+        return 0
 
-    if not any(FITTED):
-        print("\nFITTED is still all zeros -- run with --fit first.")
-        return
-    report(FITTED, "CHECKED-IN FIT")
+    # Non-zero on regression, so this is usable as a check rather than a report.
+    # The coupling to profileWeight() has nothing else enforcing it.
+    return 1 if report(FITTED, "CHECKED-IN FIT") else 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

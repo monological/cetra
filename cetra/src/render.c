@@ -112,23 +112,29 @@ void render_update_skinning_uniforms(ShaderProgram* program, const Mesh* mesh) {
 // Uploaded per program switch rather than per material because
 // _update_program_material_uniforms has no Engine, and widening its signature
 // to reach postfx would be a far larger blast radius than one call here.
-static void _upload_skin_preint_uniforms(Engine* engine, UniformManager* u) {
-    PostFX* fx = engine->postfx;
+static void _upload_skin_preint_uniforms(const Engine* engine, UniformManager* u) {
+    const PostFX* fx = engine->postfx;
     if (!fx)
         return;
     GLint prof_loc = uniform_location(u, "sssProfiles[0]");
     if (prof_loc >= 0 && fx->sss_profile_count > 0)
         glUniform4fv(prof_loc, fx->sss_profile_count, (const GLfloat*)fx->sss_profiles);
 
-    // Zero when the blur is not running at all: the shader reads this as "the
+    // Zero when the blur will not run: the shader reads this as "the
     // screen-space pass will deliver nothing", so pre-integration takes the
-    // whole authored width instead of the shortfall. Without this, --no-sss
-    // computes a deficit against a blur that is not there and the falloff comes
-    // out narrower the more the absent blur would have covered.
+    // whole authored width instead of the shortfall. Without it, the deficit is
+    // computed against a blur that is not there and the falloff comes out
+    // narrower the more the absent blur would have covered.
+    //
+    // Gated on sss_this_frame rather than sss_enabled, because those differ:
+    // the pass also needs a scene that actually carries subsurface and a PBR
+    // frame mode (engine.c). Reading the toggle instead leaves the same defect
+    // reachable through a debug render mode.
     float reach = 0.0f;
-    if (engine->sss_enabled) {
-        // The un-jittered projection, matching what postfx_run_sss is handed: a
-        // jittered proj[1][1] would make the reach flicker with the TAA sequence.
+    if (engine->sss_this_frame) {
+        // proj[1][1] is jitter-independent: TAA jitter is a clip-space shear
+        // applied to [2][0]/[2][1], so this matches the projection postfx uses
+        // to size the same kernel no matter which of the two matrices it holds.
         float proj_scale = 0.5f * engine->projection_matrix[1][1] * (float)fx->height;
         if (proj_scale > 0.0f)
             reach = SSS_MAX_BLUR_PX / proj_scale;

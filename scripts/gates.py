@@ -282,7 +282,12 @@ SKIN_WRAP_DEG = 95.0   # just past the terminator: Lambert is zero, scatter is n
 SKIN_LIT_DEG = 20.0    # well inside the lit cap, as the per-sphere reference
 SKIN_MID_DEG = 45.0    # the reddening comparison point
 SKIN_ORDER_RATIO = 1.15  # required step per 2x curvature
-SKIN_MIN_RADIUS_PX = 60  # below this the samples land on too few pixels to trust
+# Guard against a camera edit shrinking the spheres into sampling noise, as a
+# FRACTION of frame height rather than an absolute pixel count. An absolute
+# threshold silently encodes the author's display: this fixture yields 36 px at
+# 800x500 on a 1x framebuffer and 72 px on a 2x one, so a 60 px floor passes on
+# a retina laptop and hard-fails in CI for a reason unrelated to the feature.
+SKIN_MIN_RADIUS_FRAC = 0.06
 
 
 def _skin_sample_points(radius, cx):
@@ -415,9 +420,9 @@ def run_skin_curvature_gate(workdir):
         c0 = project((cx, 0.0, 0.0))
         c1 = project((cx, radius, 0.0))
         px_radius = math.hypot(c1[0] - c0[0], c1[1] - c0[1])
-        if px_radius < SKIN_MIN_RADIUS_PX:
-            print(f"  skin-curve   ERROR sphere {name} is {px_radius:.0f} px "
-                  f"(want >= {SKIN_MIN_RADIUS_PX})")
+        if px_radius < SKIN_MIN_RADIUS_FRAC * h:
+            print(f"  skin-curve   ERROR sphere {name} is {px_radius:.0f} px of {h} "
+                  f"(want >= {SKIN_MIN_RADIUS_FRAC:.0%} of frame height)")
             return ["skin-curvature"]
         wrap_on[name] = _linear_luma(on, w, h, *project(at(SKIN_WRAP_DEG)))
         wrap_off[name] = _linear_luma(off, w, h, *project(at(SKIN_WRAP_DEG)))

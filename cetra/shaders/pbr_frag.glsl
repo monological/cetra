@@ -1108,10 +1108,13 @@ void main() {
     // branch is uniform across the draw: the derivatives inside are well-defined
     // (as at specularAAStrength above) and a non-skin draw pays nothing.
     //
-    // sssProfileIndex >= 0 is not belt-and-braces. pbr_frag tags the skin buffer
+    // sssProfileIndex >= 0 is not belt-and-braces: the skin buffer is tagged
     // with profile + 1, so an unassigned -1 writes the tag reserved for "not
     // skin" and the blur rejects those pixels. A material the blur already
-    // ignores must not get pre-integration either, or the two disagree.
+    // ignores must not get pre-integration either, or the two disagree. It is
+    // NOT what keeps foliage out -- tree leaves and grass carry both a
+    // subsurface weight and a real profile. curvature_scale defaulting to 0 is
+    // the only thing holding that line.
     // Deliberately NOT gated on sssEnabled. Pre-integration is a shading model,
     // not a screen-space pass: with the blur off there is no hdr + blur(D) - D
     // to cancel against, so putting the falloff in Lo alone is simply correct.
@@ -1425,22 +1428,32 @@ void main() {
         // rewritten (float reassociation there is the byte-identity gate for
         // every non-skin material).
         //
-        // Added to Lo AND to the tap, with the same value, because postfx folds
-        // this back as hdr + blur(D) - D. That subtraction only cancels when D
-        // is the diffuse actually present in hdr; change one and the response
-        // arrives as a signed second difference of itself, which measured at 5%
-        // of the intended effect. The dark side is where the difference lives,
-        // so dot(N, L) is recomputed UNCLAMPED -- NdotL above is clamped at 0.
+        // It goes into Lo AND the tap because postfx folds this back as
+        // hdr + blur(D) - D, and that subtraction only cancels when D is the
+        // diffuse actually present in hdr; change one and the response arrives
+        // as a signed second difference of itself, which measures at 5% of the
+        // intended effect. The dark side is where the difference lives, so
+        // dot(N, L) is recomputed UNCLAMPED -- NdotL above is clamped at 0.
         //
-        // Raw, like the tap above: no sheenScale, no coatAtten, no firefly
-        // clamp. Those sit on Lo's diffuse and not on the tap, and matching the
-        // tap keeps that pre-existing mismatch confined to the Lambert part
-        // instead of growing a second one.
+        // Each side is scaled by the factors ITS OWN diffuse already carries:
+        // Lo's by the sheen dimming, the clearcoat attenuation and the firefly
+        // clamp, the tap by none of them. That makes the substitution
+        // NdotL -> D on each side separately. Adding the same raw term to both
+        // instead leaves Lo's diffuse at Lu*(D - (1-c)*NdotL), which turns
+        // NEGATIVE once c falls below ~0.58 at the widest sigma -- and the
+        // firefly clamp alone reaches 0.39 at the roughness floor, so a gloss
+        // highlight on clearcoated skin would push negative radiance into an
+        // RGBA16F target that feeds the bloom brightpass and the TAA history.
         if (skinPreint) {
             vec3 dSkin = kD * albedoMap / PI *
                          (skinDiffuse(skinShapeF, dot(N, L)) - vec3(NdotL)) * radiance * shadow;
-            Lo += dSkin;
-            sssDiffuse += dSkin;
+            Lo += dSkin * sheenScale * (1.0 - coatAtten) *
+                  min(1.0, BRDF_MAX / max(maxComp(brdf), 1e-6));
+            // Guarded: with SSS off attachment 4 is unbound and the accumulator
+            // is discarded, which is exactly the --no-sss configuration the
+            // curvature gate measures in.
+            if (sss)
+                sssDiffuse += dSkin;
         }
 
         // SSS back-light transmission: thin-region glow when the light is

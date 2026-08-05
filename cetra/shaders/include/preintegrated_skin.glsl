@@ -147,15 +147,25 @@ SkinShape skinShape(vec3 sigma) {
 //
 // No pow(): pow(x, 1.0) is not guaranteed exact to an ulp and pow(0, 1) is
 // undefined in GLSL, either of which would cost the bit-exact identity above.
+// The outer max() is not defensive. The fit's objective penalises squared
+// error, monotonicity and energy -- never SIGN -- and rows 1 to 5 come back with
+// d0 < e0, so D(-1) = d0 - e0 lands around -0.010. The true integral is a
+// non-negative kernel against a clamped cosine and cannot be negative anywhere.
+// Because sigma is per-channel and skin profiles weight red widest, it is green
+// and blue that sit in that band at ordinary curvatures: without this the far
+// side of a lit head SUBTRACTS green and blue from whatever fill reaches it, and
+// what looks like reddening is partly the other two channels being removed. It
+// clips to black in an ambient-free fixture, which is why the golden cannot see
+// it. Costs nothing at sigma 0: max(max(x,0), 0) is max(x,0).
 vec3 skinDiffuse(SkinShape s, float ndotl) {
     vec3 t = max((vec3(ndotl) + s.w) / (vec3(1.0) + s.w), vec3(0.0));
-    return s.d0 + s.e0 * ndotl + t * (s.a1 + t * (s.a2 + t * s.a3));
+    return max(s.d0 + s.e0 * ndotl + t * (s.a1 + t * (s.a2 + t * s.a3)), vec3(0.0));
 }
 
 // The angular width this fragment scatters over, per channel.
 //
 // `deficit` is why pre-integration and the screen-space blur do not double
-// count. The blur's kernel is capped at SSS_MAX_PX pixels, so past a certain
+// count. The blur's kernel is capped at SSS_MAX_BLUR_PX pixels (postfx.h), so past a certain
 // closeness it delivers less than the authored world radius -- and how much less
 // depends on resolution, which is a defect in its own right. This takes up
 // exactly the slack: where the blur already delivers the authored width the
