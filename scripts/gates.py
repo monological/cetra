@@ -372,15 +372,20 @@ def run_skin_offpath_gate(workdir):
             fails.append("skin-offpath")
 
     # The live half, and deliberately through the FULL path -- blur on, nothing
-    # disabled. It also has to run large: pre-integration only takes up the slack
-    # the blur's pixel cap creates, so at a small render the cap never binds,
-    # there is no slack, and the feature correctly contributes nothing. A gate
-    # that asserted "> 0" at 400x300 would be asserting a bug.
+    # disabled. It has to run at a radius the blur CANNOT deliver, because
+    # pre-integration only takes up slack and there is none otherwise.
+    #
+    # Until spec 11.14 the slack came from the blur's pixel cap, so this ran at a
+    # large resolution to make the cap bind. That is no longer a lever: the cap is
+    # now a scatter ceiling in world units per unit depth, so resolution does not
+    # create slack at any size and this gate read 0 px. The lever is the authored
+    # radius against the ceiling -- SSS_MAX_SCATTER_PER_DEPTH * depth is about
+    # 0.42 at the fixture's framing, so 0.28 is delivered in full and 1.5 is not.
     fixture = os.path.join(ROOT, "assets", "skin_curvature_fixture.cscn")
     if os.path.exists(fixture):
         a = os.path.join(workdir, "skinlive_a.ppm")
         b = os.path.join(workdir, "skinlive_b.ppm")
-        big = ["-W", "1200", "-H", "750"]
+        big = ["-W", "1200", "-H", "750", "--sss-radius", "1.5"]
         err = render(fixture, a, big)
         err = err or render(fixture, b, big + ["--no-skin-preint"])
         if err:
@@ -389,8 +394,9 @@ def run_skin_offpath_gate(workdir):
         else:
             ae, _ = compare(a, b)
             ok = ae > 0
-            print(f"  skin-live    {'PASS' if ok else 'FAIL'}  opted-in fixture, full path: "
-                  f"{ae} px (want > 0, else the three zeros above prove nothing)")
+            print(f"  skin-live    {'PASS' if ok else 'FAIL'}  opted-in fixture, full path "
+                  f"past the ceiling: {ae} px "
+                  f"(want > 0, else the three zeros above prove nothing)")
             if not ok:
                 fails.append("skin-offpath")
     return fails
@@ -425,73 +431,157 @@ def _skin_terminator_width(pix, w, h, project, at, lit):
     return hits[0.1] - hits[0.9]
 
 
+def _skin_falloff_crossing(pix, w, h, project, at, lit, frac=0.05):
+    """Angle where the falloff drops through `frac` of the lit reference.
+
+    Preferred over the 90-to-10 width for anything measuring how much the blur
+    delivers. Scatter's whole job is pushing light PAST the terminator, so a low
+    crossing tracks delivered width almost directly, while the 90% end barely
+    moves. Measured on the same renders, the two disagree badly: across an 8x
+    framebuffer sweep the crossing holds to 0.7% while the width's ON-minus-OFF
+    difference swings 13%, because that difference subtracts two ~36 degree
+    numbers and amplifies whatever they do by about 12x (spec 11.14 phase 2).
+    """
+    prev_a = prev_v = None
+    level = frac * lit
+    a = float(SKIN_LIT_DEG)
+    while a <= 175.0:
+        v = _linear_luma(pix, w, h, *project(at(a)))
+        if prev_v is not None and prev_v >= level > v:
+            span = prev_v - v
+            t = (prev_v - level) / span if span > 1e-12 else 0.0
+            return prev_a + t * (a - prev_a)
+        prev_a, prev_v = a, v
+        a += 0.25
+    return None
+
+
+def _skin_sample(workdir, tag, dims, extra):
+    """Render the curvature fixture and sample the mid sphere.
+
+    Returns (crossing angle, wrap-over-lit ratio). The two answer different
+    questions and neither covers the other's range: the crossing is the sensitive
+    instrument for how far scatter reaches, but it CEASES TO EXIST once the
+    scatter is wide enough that no point on the visible hemisphere falls to 5% of
+    lit -- measured, anything past radius ~0.4 on this fixture. The ratio at a
+    fixed angle is coarser but always defined, which is what a gate spanning both
+    regimes needs.
+    """
+    scene = os.path.join(ROOT, "assets", "skin_curvature_fixture.cscn")
+    out = os.path.join(workdir, f"skinm_{tag}.ppm")
+    # --no-shadows so the far side is not multiplied away, --no-bloom so nothing
+    # smears the falloff being measured.
+    cmd = [RENDER, "-m", scene, "-x", "-f", "30", "--no-auto-exposure", "-E", "1.0",
+           "--no-shadows", "--no-bloom", "-W", dims[0], "-H", dims[1], "-S", out] + extra
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0 or not os.path.exists(out):
+        return None
+    w, h, pix = _read_ppm(out)
+    project = _projector(SKIN_CAM, w, h)
+    # The mid sphere: big enough to sample finely, small enough to sit well
+    # inside the frame at every resolution used here.
+    _name, radius, cx = SKIN_SPHERES[1]
+    at = _skin_sample_points(radius, cx)
+    lit = _linear_luma(pix, w, h, *project(at(SKIN_LIT_DEG)))
+    wrap = _linear_luma(pix, w, h, *project(at(SKIN_WRAP_DEG)))
+    return (_skin_falloff_crossing(pix, w, h, project, at, lit),
+            wrap / max(lit, 1e-9))
+
+
+def run_sss_invariance_gate(workdir):
+    """The blur delivers the SAME world scatter however large the frame is.
+
+    This is spec 11.14's headline, and the defect it replaced was live in shipped
+    code from the day SSS landed -- specs/4.12-sss.md:115 names "blur-width
+    scaling ... must scale with render resolution" as a risk with nothing behind
+    it. Capping the kernel in PIXELS made the delivered world width fall as
+    1/height once the cap engaged: measured rho = 0.025 across a 500->4000 px
+    sweep, i.e. 2.5% of the low-resolution effect survived at 4K.
+
+    Runs --no-skin-preint so the angular falloff contributes nothing and every
+    degree measured is the screen-space pass. Each height renders twice, with and
+    without SSS, and the gate compares how far the blur pushes the falloff past
+    where Lambert leaves it -- see _skin_falloff_crossing for why not the width.
+
+    An 8x sweep rather than 2x: the old cap engaged part-way up, so a short sweep
+    could sit entirely inside the clamped regime and read flat while being wrong.
+    """
+    scene = os.path.join(ROOT, "assets", "skin_curvature_fixture.cscn")
+    if not os.path.exists(scene):
+        print("  sss-scale    SKIP  (missing skin_curvature_fixture.cscn)")
+        return []
+
+    pushes = []
+    for tag, dims in (("lo", ("250", "156")), ("hi", ("2000", "1250"))):
+        off = _skin_sample(workdir, tag + "_lam", dims, ["--no-sss", "--no-skin-preint"])
+        on = _skin_sample(workdir, tag + "_sss", dims, ["--no-skin-preint"])
+        if off is None or on is None or off[0] is None or on[0] is None:
+            print(f"  sss-scale    ERROR while rendering at {dims[0]}x{dims[1]}")
+            return ["sss-invariance"]
+        pushes.append(on[0] - off[0])
+
+    lo, hi = pushes
+    drift = abs(hi / lo - 1.0) if abs(lo) > 1e-9 else float("inf")
+    ok = drift <= 0.05 and lo > 1.0
+    print(f"  sss-scale    {'PASS' if ok else 'FAIL'}  blur pushes the falloff "
+          f"{lo:+.2f} deg at 250p and {hi:+.2f} deg at 2000p, drift {drift:.1%} "
+          f"(want <= 5%, and a real push at all)")
+    return [] if ok else ["sss-invariance"]
+
+
 def run_skin_handoff_gate(workdir):
-    """D5: the angular half takes over in proportion to how hard the blur is capped.
+    """D5: the angular half carries exactly what the blur cannot, and no more.
 
-    The blur's kernel is capped in PIXELS (SSS_MAX_BLUR_PX), so the world width it
-    delivers falls as 1/height once the cap binds; phase 0 measured the delivered
-    scatter collapsing to 0.282 of its unclamped value across a 5x sweep. D5 has
-    pbr_frag compute that shortfall per fragment and open the angular falloff by
-    exactly the slack, so the harder the cap bites, the more pre-integration
-    carries. That handoff is what this asserts.
+    Both legs run at ONE resolution and differ only in the authored radius. That
+    is the whole re-pointing: until spec 11.14 the blur's shortfall came from a
+    cap measured in PIXELS, so resolution was the lever and this gate swept two
+    heights. The cap is now a scatter ceiling in world units per unit depth, so
+    resolution creates no shortfall at any size -- swept legs converge and the
+    gate asserted nothing. What creates shortfall now is an authored radius
+    exceeding the ceiling, which is a scene property, as it should be.
 
-    It deliberately does NOT assert the total is resolution-INVARIANT, which is
-    what D5 was originally specified to achieve. Measured, it is not: across a 4x
-    sweep the total drifts 13.4% with the feature on against 8.3% with it off,
-    and in the opposite direction. The two halves are not interchangeable
-    currencies -- at the terminator the surface is turning away from the camera,
-    so the screen-space blur compresses there on top of its pixel cap while the
-    angular falloff does not, and trading one for the other changes the delivered
-    width. Recorded in specs/11.13, section D5.
+    SSS_MAX_SCATTER_PER_DEPTH * depth is about 0.42 at this framing, so 0.28 is
+    delivered whole and 1.5 is delivered at roughly a quarter.
 
-    The bars come from the two ways D5 can be broken. Hardcoding the deficit to 0
-    kills the feature wherever SSS runs and gives 0 at both heights, which the
-    high bar catches; hardcoding it to 1 removes the composition entirely and
-    contributes 11.9 deg at the LOW height, falling as resolution rises, which
-    the low bar catches. Nothing else on the branch covers either: every other
-    skin measurement runs --no-sss, which forces the deficit to 1.
+    The bars come from the two ways D5 can be broken. Pinning the deficit to 0
+    kills the feature and makes the wide leg quiet too, which the second bar
+    catches. Pinning it to 1 removes the composition, so the narrow leg starts
+    contributing on top of a blur that already delivers in full, which the first
+    bar catches. Nothing else covers either: every other skin measurement runs
+    --no-sss, which forces the deficit to 1 by construction.
+
+    Phase 3 confirmed the composition is right rather than merely self-consistent.
+    Penner's integral, evaluated by tools/gen_skin_preint_fit.py, says the
+    fixture's terminator should move +8.96 deg; the blur alone now moves it
+    +11.54. It is already at the reference, so pre-integration standing down where
+    the blur is unclamped is correct, not a feature going missing.
     """
     scene = os.path.join(ROOT, "assets", "skin_curvature_fixture.cscn")
     if not os.path.exists(scene):
         print("  skin-handoff SKIP  (missing skin_curvature_fixture.cscn)")
         return []
 
-    def width_at(tag, dims, extra):
-        out = os.path.join(workdir, f"skinscat_{tag}.ppm")
-        # SSS ON: the whole point is the two mechanisms summing. --no-shadows so
-        # the far side is not multiplied away, --no-bloom so nothing smears the
-        # falloff being measured.
-        cmd = [RENDER, "-m", scene, "-x", "-f", "30", "--no-auto-exposure", "-E", "1.0",
-               "--no-shadows", "--no-bloom", "-W", dims[0], "-H", dims[1], "-S", out] + extra
-        r = subprocess.run(cmd, capture_output=True, text=True)
-        if r.returncode != 0 or not os.path.exists(out):
-            return None
-        w, h, pix = _read_ppm(out)
-        project = _projector(SKIN_CAM, w, h)
-        # The mid sphere: big enough to sample finely, small enough to sit well
-        # inside the frame at both resolutions.
-        name, radius, cx = SKIN_SPHERES[1]
-        at = _skin_sample_points(radius, cx)
-        lit = _linear_luma(pix, w, h, *project(at(SKIN_LIT_DEG)))
-        return _skin_terminator_width(pix, w, h, project, at, lit)
-
-    # 800x500 leaves the mid sphere's terminator under the pixel cap; 1600x1000
-    # puts it roughly 2x over.
+    # Read through the wrap-over-lit ratio, not the crossing angle: at a radius
+    # far enough past the ceiling to make the deficit bite, no point on the
+    # visible hemisphere falls to 5% of lit and the crossing does not exist.
+    dims = ("1200", "750")
     given = {}
-    for tag, dims in (("lo", ("800", "500")), ("hi", ("1600", "1000"))):
-        on = width_at(tag + "_on", dims, [])
-        off = width_at(tag + "_off", dims, ["--no-skin-preint"])
+    for tag, radius in (("within", "0.28"), ("past", "1.5")):
+        extra = ["--sss-radius", radius]
+        on = _skin_sample(workdir, "hand_" + tag + "_on", dims, extra)
+        off = _skin_sample(workdir, "hand_" + tag + "_off", dims,
+                           extra + ["--no-skin-preint"])
         if on is None or off is None:
-            print(f"  skin-handoff ERROR while rendering at {dims[0]}x{dims[1]}")
+            print(f"  skin-handoff ERROR while rendering at radius {radius}")
             return ["skin-handoff"]
-        given[tag] = on - off
+        given[tag] = on[1] / max(off[1], 1e-9)
 
-    quiet = given["lo"] <= 0.5
-    carries = given["hi"] >= 3.0
+    quiet = given["within"] <= 1.02
+    carries = given["past"] >= 1.15
     ok = quiet and carries
-    print(f"  skin-handoff {'PASS' if ok else 'FAIL'}  angular half gives "
-          f"{given['lo']:+.2f} deg at 800x500 (want <= +0.50, blur is unclamped) and "
-          f"{given['hi']:+.2f} deg at 1600x1000 (want >= +3.00, blur is capped)")
+    print(f"  skin-handoff {'PASS' if ok else 'FAIL'}  angular half lifts the wrap "
+          f"{given['within']:.3f}x at radius 0.28 (want <= 1.02, blur delivers it) "
+          f"and {given['past']:.3f}x at radius 1.5 (want >= 1.15, past the ceiling)")
     return [] if ok else ["skin-handoff"]
 
 
@@ -1144,8 +1234,10 @@ def main():
         failures += run_skin_offpath_gate(workdir)
         print("pre-integrated skin (curvature ordering):")
         failures += run_skin_curvature_gate(workdir)
-        print("pre-integrated skin (handoff from the capped blur):")
+        print("pre-integrated skin (handoff past the scatter ceiling):")
         failures += run_skin_handoff_gate(workdir)
+        print("subsurface blur (world width vs frame size):")
+        failures += run_sss_invariance_gate(workdir)
         print("import:")
         failures += run_range_gate()
         failures += run_fbx_unit_gate()
