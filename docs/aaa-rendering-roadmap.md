@@ -280,15 +280,24 @@ load-bearing claims turned out wrong:
   textbook clamped-wrap form cannot represent the response floor at all (skin facing away from a
   light still returns ~0.012 at sigma 0.3, tending to 1/pi).
 
-Two limits found by measurement and recorded rather than fixed. **The cast shadow eats the wrap
-past the terminator**: on a convex caster the `NdotL = 0` boundary *is* the self-shadow boundary,
-and `shadow` multiplies outside the diffuse, so B3 brightens and reddens the *approach* to the
-terminator without wrapping light past it. And **total scatter is not resolution-independent** —
-the composition rule that divides work between the angular falloff and the screen-space blur
-treats their widths as interchangeable, which at the terminator they are not; measured 13.4% width
-drift across a 4x sweep against 8.3% with the feature off. The handoff mechanism is gated
-(`skin-handoff`); the invariance is not, because it does not hold. Real fix is a downsampled blur
-chain, which would also give the two halves a common reference to calibrate against.
+Two limits found by measurement. **The cast shadow eats the wrap past the terminator**: on a convex
+caster the `NdotL = 0` boundary *is* the self-shadow boundary, and `shadow` multiplies outside the
+diffuse, so B3 brightens and reddens the *approach* to the terminator without wrapping light past
+it. That one stands, and B3.1 is what recovers it.
+
+The second — **total scatter is not resolution-independent** — was **fixed by 11.14, and B3 was not
+the cause.** The composition rule was blamed for treating the two widths as interchangeable; the
+actual fault was the screen-space blur capping its kernel in PIXELS, so the delivered world width
+fell as 1/height. Moving that cap into world-scatter-per-unit-depth makes the projection cancel
+algebraically. `deficit = sqrt(1 - k^2)` was measured against Penner's integral afterwards and
+kept.
+
+**Consequence, and it is the honest headline for this row: pre-integrated skin is now inert for
+realistic content.** It fires only where the authored radius exceeds the scatter ceiling, under
+`--no-sss`, and only on materials that opt in — one fixture today. Fixing the blur removed the
+shortfall B3 existed to fill, which is the composition law working correctly, not a regression. The
+machinery, the fit tool, the fixture and the gates all remain correct and are what B3.1 and B3.2
+build on; but anyone reading this row expecting B3 to be carrying a terminator today should not.
 
 Curvature-aware diffuse falloff under the existing screen-space SSS. **Analytic fit, no LUT** —
 pbr_frag units 7/9 go to LTC, and Penner's lookup has well-behaved analytic approximations (~10 ALU
@@ -480,17 +489,19 @@ and 11.2 (below). **Tiers 1 and 2 are complete**, Tier 2 closing with B3 pre-int
 | 9 | A5 Bent-normal spec-occ | M | **DONE (11.3 + 11.4):** split ambient specular, default `split`, exact occlusion by construction. |
 | 10 | B5 Bokeh DoF | M | **DONE (11.6):** near/far gather, N-gon kernel, first DoF golden. |
 | 11 | B4 TAAU | L | **DONE (11.7):** render/post/half split, separate upscaling resolve, `--render-scale`; ~2x at 0.67. |
-| 12 | B3 Pre-integrated skin | S→**M** | **DONE (11.13):** opt-in `curvature_scale`, 16-row const table, `.cscn` material overrides. Not zero infra: fit tool, fixture, 3 gates, golden. Shadow limits the wrap (→ B3.1); scatter is not resolution-invariant. |
+| 12 | B3 Pre-integrated skin | S→**M** | **DONE (11.13):** opt-in `curvature_scale`, 16-row const table, `.cscn` material overrides. Not zero infra: fit tool, fixture, 3 gates, golden. Shadow limits the wrap (→ B3.1). **Inert for realistic content since 11.14** fixed the blur it was compensating for. |
+| 12.1 | SSS blur width | M | **DONE (11.14):** the blur capped its kernel in pixels, so delivered world scatter fell as 1/height — 2.5% of its low-res value at 4K. Cap moved into world units per unit depth; resolution cancels algebraically. First SSS-ON golden; `sss-scale` gate. |
 
 **Tier 3 — polish & late-tier (unparked: Tiers 1-2 have landed):**
 | # | Item | Effort | Why here |
 |---|------|--------|----------|
-| 13 | B3.1 Shadow-penumbra scattering | M | Recovers what B3 measured it could not do: the cast shadow owns the terminator on a convex character. Cheapest real gain in the character tier, and the PCSS penumbra estimate is already computed. |
-| 14 | B3.2 Skin under an area light | M | Skin gets no SSS at all under an LTC panel today, and a softbox portrait is the canonical skin setup. Shares its shape with the IBL gap. |
-| 15 | B6 Moment-based OIT | L | |
-| 16 | B7 Lens flare / finishing | S/M | |
-| 17 | A6 Moment shadow maps | L | |
-| 18 | B8 Hair | XL | Wants B3.1 and B3.2 settled first — hair shares the shadow-scattering and area-light problems and is far more expensive to iterate on. |
+| 13 | SSS is dead in procedural scenes | S | **Bug, found in 11.14.** `scene_has_subsurface()` walks `scene->materials`, which only `import.c` ever fills, so a scene that builds materials in code never runs the SSS pass. `apps/tree` authors `subsurface` 0.6 / 0.45 and two profiles and has never rendered any of it. Fixing it switches subsurface ON for the tree for the first time, so it wants a look pass, not just a one-line fix. |
+| 14 | B3.1 Shadow-penumbra scattering | M | Recovers what B3 measured it could not do: the cast shadow owns the terminator on a convex character. Cheapest real gain in the character tier, and the PCSS penumbra estimate is already computed. |
+| 15 | B3.2 Skin under an area light | M | Skin gets no SSS at all under an LTC panel today, and a softbox portrait is the canonical skin setup. Shares its shape with the IBL gap. |
+| 16 | B6 Moment-based OIT | L | |
+| 17 | B7 Lens flare / finishing | S/M | |
+| 18 | A6 Moment shadow maps | L | |
+| 19 | B8 Hair | XL | Wants B3.1 and B3.2 settled first — hair shares the shadow-scattering and area-light problems and is far more expensive to iterate on. |
 
 ## Foundations ownership (just-in-time)
 
