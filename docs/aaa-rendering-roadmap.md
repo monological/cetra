@@ -490,7 +490,7 @@ and 11.2 (below). **Tiers 1 and 2 are complete**, Tier 2 closing with B3 pre-int
 | 10 | B5 Bokeh DoF | M | **DONE (11.6):** near/far gather, N-gon kernel, first DoF golden. |
 | 11 | B4 TAAU | L | **DONE (11.7):** render/post/half split, separate upscaling resolve, `--render-scale`; ~2x at 0.67. |
 | 12 | B3 Pre-integrated skin | S→**M** | **DONE (11.13):** opt-in `curvature_scale`, 16-row const table, `.cscn` material overrides. Not zero infra: fit tool, fixture, 3 gates, golden. Shadow limits the wrap (→ B3.1). **Inert for realistic content since 11.14** fixed the blur it was compensating for. |
-| 12.1 | SSS blur width | M | **DONE (11.14):** the blur capped its kernel in pixels, so delivered world scatter fell as 1/height — 2.5% of its low-res value at 4K. Cap moved into world units per unit depth; resolution cancels algebraically. First SSS-ON golden; `sss-scale` gate. |
+| 12.1 | SSS blur width | M→**L** | **DONE (11.14):** the blur capped its kernel in PIXELS, so delivered world scatter fell as 1/height — 2.5% of its low-res value at 4K, a defect live since SSS shipped and named in `specs/4.12-sss.md` with nothing behind it. Fixing the units alone was correct arithmetic and an unshippable image: a resolution-independent world width means an unbounded PIXEL width, and 12 fixed taps then resolve individually as rings. Replaced the separable blur with a scale-space pyramid — one trilinear tap per profile Gaussian per channel — so reach stops depending on the tap budget. Now 2.5% drift across a 4x sweep, and 91% of Penner's integral against the old kernel's 129%. New `sss-scale` and `sss-band` gates; first SSS-ON golden. |
 
 **Tier 3 — polish & late-tier (unparked: Tiers 1-2 have landed):**
 | # | Item | Effort | Why here |
