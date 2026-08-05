@@ -37,6 +37,12 @@ void apply_cscene_light_overrides(Scene* scene, const CetraSceneDesc* cscn, floa
 // after the scene graph and materials exist.
 void apply_cscene_wind(Scene* scene, const CetraSceneDesc* cscn);
 
+// Apply the scene file's plain PBR material overrides (albedo, roughness,
+// metallic) onto matching materials by authored name. Subsurface is NOT applied
+// here: it also has to register a scatter profile with PostFX, so it stays in
+// configure_sss_materials where that engine handle is in scope.
+void apply_cscene_material_overrides(Scene* scene, const CetraSceneDesc* cscn);
+
 // Build the scene's ambient dust particle system (if the .cscn declares a dust
 // block), sized to the scene bounds. Replaces the old hardcoded filename gate.
 void apply_cscene_dust(struct Engine* engine, Scene* scene, const CetraSceneDesc* cscn, vec3 center,

@@ -1,4 +1,5 @@
 #include <math.h>
+#include <stddef.h> // offsetof, for the material parameter table
 #include <stdio.h>
 #include <string.h>
 
@@ -9,6 +10,7 @@
 #include "cetra/ext/cwalk.h"
 #include "cetra/ext/log.h"
 #include "cetra/light.h"
+#include "cetra/material.h"
 #include "cetra/noise.h"
 #include "cetra/particle_emitter.h"
 #include "cetra/particle_module.h"
@@ -290,25 +292,134 @@ void apply_cscene_wind(Scene* scene, const CetraSceneDesc* cscn) {
         }
     }
 
-    // 2. Per-material opt-in: mark responsive materials by name (keyed against
-    //    the scene's flat material registry, like configure_sss_materials). The
-    //    mask bounds are supplied per-mesh at draw time from each mesh's AABB.
+    // Per-material opt-in (windResponse, windMode) is not handled here: both
+    // are plain Material fields, so they ride the shared parameter table in
+    // apply_cscene_material_overrides like every other authored scalar. This
+    // function owns only the wind FIELD, which is scene state and has no
+    // material to hang off. The mask bounds that pin a cloth's top and free its
+    // hem stay per-mesh, supplied at draw time from each mesh's AABB.
+}
+
+typedef enum { MP_FLOAT, MP_VEC3, MP_INT } MatParamType;
+
+/*
+ * The scene file's material vocabulary, and the only place a .cscn key is tied
+ * to a Material field. Adding a parameter is one row -- the parser records keys
+ * generically and never learns their meaning.
+ *
+ * SHADING ONLY, on purpose. alphaMode, alphaCutoff, doubleSided and
+ * foliage_shadows are deliberately absent: they decide which PASS a mesh draws
+ * in and whether it is culled, so a mistyped value there moves geometry between
+ * the opaque and transparent queues instead of merely misshading it. Everything
+ * below can be applied blind because the worst case is an ugly surface.
+ *
+ * Subsurface is absent for a different reason (see CSceneMaterialOverride): its
+ * consumer is PostFX's scatter profile table, not a Material field.
+ */
+static const struct {
+    const char* key;
+    size_t offset;
+    MatParamType type;
+} MATERIAL_PARAMS[] = {
+    {"albedo", offsetof(Material, albedo), MP_VEC3},
+    {"roughness", offsetof(Material, roughness), MP_FLOAT},
+    {"metallic", offsetof(Material, metallic), MP_FLOAT},
+    {"ao", offsetof(Material, ao), MP_FLOAT},
+    {"opacity", offsetof(Material, opacity), MP_FLOAT},
+    {"emissive", offsetof(Material, emissive), MP_VEC3},
+    {"emissiveStrength", offsetof(Material, emissive_strength), MP_FLOAT},
+    {"normalScale", offsetof(Material, normalScale), MP_FLOAT},
+    {"aoStrength", offsetof(Material, aoStrength), MP_FLOAT},
+    {"ior", offsetof(Material, ior), MP_FLOAT},
+    {"transmission", offsetof(Material, transmission), MP_FLOAT},
+    {"thickness", offsetof(Material, thickness), MP_FLOAT},
+    {"filmThickness", offsetof(Material, filmThickness), MP_FLOAT},
+    {"clearcoat", offsetof(Material, clearcoat), MP_FLOAT},
+    {"clearcoatRoughness", offsetof(Material, clearcoat_roughness), MP_FLOAT},
+    {"specularFactor", offsetof(Material, specular_factor), MP_FLOAT},
+    {"specularColor", offsetof(Material, specular_color_factor), MP_VEC3},
+    {"sheenColor", offsetof(Material, sheen_color_factor), MP_VEC3},
+    {"sheenRoughness", offsetof(Material, sheen_roughness_factor), MP_FLOAT},
+    {"parallaxScale", offsetof(Material, parallax_scale), MP_FLOAT},
+    {"windResponse", offsetof(Material, wind_response), MP_FLOAT},
+    {"windMode", offsetof(Material, wind_mode), MP_INT},
+};
+
+#define MATERIAL_PARAM_COUNT (sizeof(MATERIAL_PARAMS) / sizeof(MATERIAL_PARAMS[0]))
+
+static int find_material_param(const char* key) {
+    for (size_t i = 0; i < MATERIAL_PARAM_COUNT; i++) {
+        if (strcmp(MATERIAL_PARAMS[i].key, key) == 0)
+            return (int)i;
+    }
+    return -1;
+}
+
+static void write_material_param(Material* m, int slot, const CSceneMaterialParam* p) {
+    // Reached through void*, not char*: offsetof already guarantees the member's
+    // alignment, but stepping there via a byte pointer and casting straight to
+    // float* is the shape the portability check rejects.
+    void* field = (void*)((char*)m + MATERIAL_PARAMS[slot].offset);
+    switch (MATERIAL_PARAMS[slot].type) {
+    case MP_VEC3:
+        glm_vec3_copy((float*)p->value, field);
+        break;
+    case MP_FLOAT:
+        *(float*)field = p->value[0];
+        break;
+    case MP_INT:
+        *(int*)field = (int)p->value[0];
+        break;
+    }
+}
+
+void apply_cscene_material_overrides(Scene* scene, const CetraSceneDesc* cscn) {
+    if (!scene || !cscn)
+        return;
     for (int k = 0; k < cscn->material_count; k++) {
         const CSceneMaterialOverride* mo = &cscn->materials[k];
-        if (!mo->has_wind_response)
+        if (mo->param_count == 0)
+            continue; // sss-only entries belong to configure_sss_materials
+
+        // Resolve and report the vocabulary once per override, not once per
+        // matching material -- and before the match, so an unknown key is still
+        // reported when the material name is also wrong.
+        int slots[CSCENE_MAX_MATERIAL_PARAMS];
+        int usable = 0;
+        for (int p = 0; p < mo->param_count; p++) {
+            const CSceneMaterialParam* prm = &mo->params[p];
+            int slot = find_material_param(prm->key);
+            if (slot < 0) {
+                fprintf(stderr, "Warning: material '%s': unknown key '%s'\n", mo->material,
+                        prm->key);
+            } else if ((MATERIAL_PARAMS[slot].type == MP_VEC3) != (prm->components == 3)) {
+                fprintf(stderr, "Warning: material '%s': key '%s' wants %s\n", mo->material,
+                        prm->key,
+                        MATERIAL_PARAMS[slot].type == MP_VEC3 ? "3 numbers" : "one number");
+                slot = -1;
+            }
+            slots[p] = slot;
+            if (slot >= 0)
+                usable++;
+        }
+        if (usable == 0)
             continue;
+
         int tagged = 0;
         for (size_t i = 0; i < scene->material_count; i++) {
             Material* m = scene->materials[i];
-            if (m && m->name && strcmp(m->name, mo->material) == 0) {
-                m->wind_response = mo->wind_response;
-                tagged++;
+            if (!m || !m->name || strcmp(m->name, mo->material) != 0)
+                continue;
+            for (int p = 0; p < mo->param_count; p++) {
+                if (slots[p] >= 0)
+                    write_material_param(m, slots[p], &mo->params[p]);
             }
+            tagged++;
         }
-        printf("Scene file: wind response %.2f on material '%s' (%d material(s))\n",
-               mo->wind_response, mo->material, tagged);
+        printf("Scene file: %d override(s) on material '%s' (%d material(s))\n", usable,
+               mo->material, tagged);
         if (tagged == 0)
-            fprintf(stderr, "Warning: wind material '%s' not found in scene\n", mo->material);
+            fprintf(stderr, "Warning: material '%s' not found in scene\n", mo->material);
     }
 }
 

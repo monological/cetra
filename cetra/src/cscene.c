@@ -370,15 +370,57 @@ static void parse_materials(CetraSceneDesc* d, const cJSON* root) {
         CSceneMaterialOverride* out = &d->materials[d->material_count];
         snprintf(out->material, CSCENE_MAX_NAME, "%s", m->string);
 
+        // sss is the one compound key: colour and radius describe a single
+        // scatter profile and are meaningless apart, so both are required.
         const cJSON* sss = cJSON_GetObjectItemCaseSensitive(m, "sss");
         out->has_sss = cJSON_IsObject(sss) && get_vec3(sss, "color", out->sss_color) &&
                        get_float(sss, "radius", &out->sss_radius);
 
-        out->has_wind_response = get_float(m, "windResponse", &out->wind_response);
+        // Everything else is recorded by NAME and SHAPE only. Whether a key
+        // exists is the application's business (cscene_apply.c owns the table),
+        // so a parameter added there needs no change here -- and an unknown key
+        // reaches the app to be reported rather than being swallowed silently.
+        out->param_count = 0;
+        const cJSON* p = NULL;
+        cJSON_ArrayForEach(p, m) {
+            if (!p->string || p->string[0] == '_') // _comment and friends
+                continue;
+            if (strcmp(p->string, "sss") == 0)
+                continue;
+            if (out->param_count >= CSCENE_MAX_MATERIAL_PARAMS) {
+                log_warn("cscene: material '%s' has more than %d parameters; extras ignored",
+                         out->material, CSCENE_MAX_MATERIAL_PARAMS);
+                break;
+            }
+            CSceneMaterialParam* prm = &out->params[out->param_count];
+            if (cJSON_IsNumber(p)) {
+                prm->value[0] = (float)p->valuedouble;
+                prm->components = 1;
+            } else if (cJSON_IsArray(p) && cJSON_GetArraySize(p) == 3) {
+                for (int c = 0; c < 3; c++) {
+                    const cJSON* e = cJSON_GetArrayItem(p, c);
+                    if (!cJSON_IsNumber(e)) {
+                        prm->components = 0;
+                        break;
+                    }
+                    prm->value[c] = (float)e->valuedouble;
+                    prm->components = 3;
+                }
+            } else {
+                prm->components = 0;
+            }
+            if (prm->components == 0) {
+                log_warn("cscene: material '%s' key '%s' is neither a number nor a 3-array; "
+                         "ignored",
+                         out->material, p->string);
+                continue;
+            }
+            snprintf(prm->key, CSCENE_MAX_PARAM_KEY, "%s", p->string);
+            out->param_count++;
+        }
 
-        if (!out->has_sss && !out->has_wind_response) {
-            log_warn("cscene: material '%s' has no usable sss or windResponse; skipped",
-                     out->material);
+        if (!out->has_sss && out->param_count == 0) {
+            log_warn("cscene: material '%s' has no usable keys; skipped", out->material);
             continue;
         }
         d->material_count++;

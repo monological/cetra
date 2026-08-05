@@ -82,13 +82,36 @@ typedef struct CSceneLightOverride {
     float intensity;
 } CSceneLightOverride;
 
+#define CSCENE_MAX_MATERIAL_PARAMS 24
+#define CSCENE_MAX_PARAM_KEY       24
+
+// One authored key from a material override block. The parser deliberately does
+// NOT know what any key means -- it records the name and the number(s) and
+// nothing else. Resolving a name to a Material field is application policy and
+// lives in one table in cscene_apply.c, which is what keeps this header free of
+// material.h and makes a new parameter one table row rather than an edit in
+// three files.
+typedef struct CSceneMaterialParam {
+    char key[CSCENE_MAX_PARAM_KEY];
+    float value[3]; // scalars occupy value[0]
+    int components; // 1 or 3, as authored
+} CSceneMaterialParam;
+
+// Per-material overrides, keyed on the AUTHORED material name. Absent keys keep
+// whatever the model imported, so this is an override sheet rather than a
+// material definition. Formats that cannot express a property at all (glTF has
+// no subsurface) are the main reason it exists.
 typedef struct CSceneMaterialOverride {
     char material[CSCENE_MAX_NAME];
+    CSceneMaterialParam params[CSCENE_MAX_MATERIAL_PARAMS];
+    int param_count;
+    // sss stays explicit rather than joining the table above: it is compound
+    // (colour and radius are one scatter profile and meaningless apart), and
+    // its consumer is PostFX's profile table rather than any Material field, so
+    // no offset could describe it.
     bool has_sss;
-    float sss_color[3];
-    float sss_radius;
-    bool has_wind_response; // opts the material into the scene wind (WPO cloth)
-    float wind_response;    // 0 = rigid; 1 = full sway
+    float sss_color[3]; // per-channel scatter WIDTH weight, not a tint
+    float sss_radius;   // world units
 } CSceneMaterialOverride;
 
 // Ambient dust: a scene-level particle effect (like fog). Each field carries a

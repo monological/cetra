@@ -1940,6 +1940,10 @@ int main(int argc, char** argv) {
     }
 
     configure_visor_materials(scene);
+    // Plain PBR overrides first: configure_sss_materials reads a material's
+    // final look only through the profile it registers, but a reader of this
+    // block should see the base material settled before anything layers on it.
+    apply_cscene_material_overrides(scene, cscn);
     configure_sss_materials(engine, scene, args.sss_radius, args.sss_color, cscn);
     apply_cscene_wind(scene, cscn);
 
