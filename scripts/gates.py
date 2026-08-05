@@ -396,6 +396,105 @@ def run_skin_offpath_gate(workdir):
     return fails
 
 
+def _skin_terminator_width(pix, w, h, project, at, lit):
+    """Terminator 90%-to-10% falloff, measured in SURFACE DEGREES.
+
+    Sampling by angle rather than by pixel is what makes the number comparable
+    across resolutions at all: a width in pixels doubles when the frame does,
+    a width in degrees does not.
+    """
+    prev_a = prev_v = None
+    hits = {}
+    # Starts at the lit reference itself: by 50 degrees Lambert is already at
+    # 0.68 of its 20-degree value, so a later start misses the 90% crossing.
+    a = float(SKIN_LIT_DEG)
+    while a <= 150.0:
+        v = _linear_luma(pix, w, h, *project(at(a)))
+        for frac in (0.9, 0.1):
+            if frac in hits or prev_v is None:
+                continue
+            level = frac * lit
+            if prev_v >= level > v:
+                span = prev_v - v
+                t = (prev_v - level) / span if span > 1e-12 else 0.0
+                hits[frac] = prev_a + t * (a - prev_a)
+        prev_a, prev_v = a, v
+        a += 0.5
+    if 0.9 not in hits or 0.1 not in hits:
+        return None
+    return hits[0.1] - hits[0.9]
+
+
+def run_skin_handoff_gate(workdir):
+    """D5: the angular half takes over in proportion to how hard the blur is capped.
+
+    The blur's kernel is capped in PIXELS (SSS_MAX_BLUR_PX), so the world width it
+    delivers falls as 1/height once the cap binds; phase 0 measured the delivered
+    scatter collapsing to 0.282 of its unclamped value across a 5x sweep. D5 has
+    pbr_frag compute that shortfall per fragment and open the angular falloff by
+    exactly the slack, so the harder the cap bites, the more pre-integration
+    carries. That handoff is what this asserts.
+
+    It deliberately does NOT assert the total is resolution-INVARIANT, which is
+    what D5 was originally specified to achieve. Measured, it is not: across a 4x
+    sweep the total drifts 13.4% with the feature on against 8.3% with it off,
+    and in the opposite direction. The two halves are not interchangeable
+    currencies -- at the terminator the surface is turning away from the camera,
+    so the screen-space blur compresses there on top of its pixel cap while the
+    angular falloff does not, and trading one for the other changes the delivered
+    width. Recorded in specs/11.13, section D5.
+
+    The bars come from the two ways D5 can be broken. Hardcoding the deficit to 0
+    kills the feature wherever SSS runs and gives 0 at both heights, which the
+    high bar catches; hardcoding it to 1 removes the composition entirely and
+    contributes 11.9 deg at the LOW height, falling as resolution rises, which
+    the low bar catches. Nothing else on the branch covers either: every other
+    skin measurement runs --no-sss, which forces the deficit to 1.
+    """
+    scene = os.path.join(ROOT, "assets", "skin_curvature_fixture.cscn")
+    if not os.path.exists(scene):
+        print("  skin-handoff SKIP  (missing skin_curvature_fixture.cscn)")
+        return []
+
+    def width_at(tag, dims, extra):
+        out = os.path.join(workdir, f"skinscat_{tag}.ppm")
+        # SSS ON: the whole point is the two mechanisms summing. --no-shadows so
+        # the far side is not multiplied away, --no-bloom so nothing smears the
+        # falloff being measured.
+        cmd = [RENDER, "-m", scene, "-x", "-f", "30", "--no-auto-exposure", "-E", "1.0",
+               "--no-shadows", "--no-bloom", "-W", dims[0], "-H", dims[1], "-S", out] + extra
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        if r.returncode != 0 or not os.path.exists(out):
+            return None
+        w, h, pix = _read_ppm(out)
+        project = _projector(SKIN_CAM, w, h)
+        # The mid sphere: big enough to sample finely, small enough to sit well
+        # inside the frame at both resolutions.
+        name, radius, cx = SKIN_SPHERES[1]
+        at = _skin_sample_points(radius, cx)
+        lit = _linear_luma(pix, w, h, *project(at(SKIN_LIT_DEG)))
+        return _skin_terminator_width(pix, w, h, project, at, lit)
+
+    # 800x500 leaves the mid sphere's terminator under the pixel cap; 1600x1000
+    # puts it roughly 2x over.
+    given = {}
+    for tag, dims in (("lo", ("800", "500")), ("hi", ("1600", "1000"))):
+        on = width_at(tag + "_on", dims, [])
+        off = width_at(tag + "_off", dims, ["--no-skin-preint"])
+        if on is None or off is None:
+            print(f"  skin-handoff ERROR while rendering at {dims[0]}x{dims[1]}")
+            return ["skin-handoff"]
+        given[tag] = on - off
+
+    quiet = given["lo"] <= 0.5
+    carries = given["hi"] >= 3.0
+    ok = quiet and carries
+    print(f"  skin-handoff {'PASS' if ok else 'FAIL'}  angular half gives "
+          f"{given['lo']:+.2f} deg at 800x500 (want <= +0.50, blur is unclamped) and "
+          f"{given['hi']:+.2f} deg at 1600x1000 (want >= +3.00, blur is capped)")
+    return [] if ok else ["skin-handoff"]
+
+
 def run_skin_curvature_gate(workdir):
     scene = os.path.join(ROOT, "assets", "skin_curvature_fixture.cscn")
     if not os.path.exists(scene):
@@ -1045,6 +1144,8 @@ def main():
         failures += run_skin_offpath_gate(workdir)
         print("pre-integrated skin (curvature ordering):")
         failures += run_skin_curvature_gate(workdir)
+        print("pre-integrated skin (handoff from the capped blur):")
+        failures += run_skin_handoff_gate(workdir)
         print("import:")
         failures += run_range_gate()
         failures += run_fbx_unit_gate()
