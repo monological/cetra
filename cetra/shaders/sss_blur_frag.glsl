@@ -96,11 +96,32 @@ void main()
     vec3 sigma = max(sssColor, vec3(1e-3)) * radPx; // per-channel base width
     float sigmaZ = max(sssRadius, 1e-3);            // view-Z bilateral extent (world units)
 
+    // Nodes are QUADRATIC in the index, so the taps bunch where the profile has
+    // structure instead of spreading evenly over a range that is mostly tail.
+    // With the pixel cap gone radPx can be hundreds of texels, and 12 evenly
+    // spaced taps across 2.2x that would alias the core badly enough to band.
+    //
+    // This moves the quadrature NODES, not the kernel: profileWeight and TAIL are
+    // untouched, so gen_skin_preint_fit.py's table still describes what runs, and
+    // the sum lands closer to the continuous profile the tool integrated.
+    //
+    // Uniform spacing also mis-served the narrow channels at EVERY radius, not
+    // just wide ones. Tap gap over sigma1 was 0.61 for red but 1.75 for green and
+    // 2.44 for blue, so the green and blue cores collapsed onto the centre tap.
+    //
+    // The 2i factor is the cell width and is not optional: with non-uniform nodes
+    // profileWeight alone is no longer a Riemann sum of the same kernel. In units
+    // of T/N^2 tap i sits at i^2 and owns ((i+1)^2 - (i-1)^2)/2 = 2i, while the
+    // centre owns t1 = 1 -- which is why the two seeds below stay literally true.
+    // Uniform spacing is the special case where both widths are 1, and that is
+    // the only reason omitting the factor was ever correct.
     vec3 sum = centerSrc;   // center tap; profileWeight(0) = 0.35+0.40+0.25 = 1.0 exactly
-    vec3 sumW = vec3(1.0);
+    vec3 sumW = vec3(1.0);  // ... times a cell width of exactly 1
     for (int i = 1; i <= HALF_TAPS; i++) {
-        float t = float(i) / float(HALF_TAPS) * radPx * TAIL; // reach the broad tail
-        vec3 pw = profileWeight(t, sigma); // independent of the ±side below -- hoist it
+        float u = float(i) / float(HALF_TAPS);
+        float t = u * u * radPx * TAIL; // reach the broad tail
+        // Independent of the ±side below -- hoist it.
+        vec3 pw = profileWeight(t, sigma) * (2.0 * float(i));
         vec2 off = dir * t * texelSize;
         for (int s = -1; s <= 1; s += 2) {
             vec2 uv = TexCoords + off * float(s);
