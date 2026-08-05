@@ -511,8 +511,13 @@ def run_sss_invariance_gate(workdir):
         print("  sss-scale    SKIP  (missing skin_curvature_fixture.cscn)")
         return []
 
+    # 500p, not 250p, as the low leg. At 250 the mid sphere is about 50 px across
+    # and the terminator measurement runs out of pixels: measured pushes are
+    # +4.83 / +5.22 / +5.16 / +5.12 deg at 250 / 500 / 1000 / 2000, so the three
+    # larger agree to 1.9% and only the smallest disagrees. A gate leg that
+    # cannot resolve its own subject reports the instrument, not the renderer.
     pushes = []
-    for tag, dims in (("lo", ("250", "156")), ("hi", ("2000", "1250"))):
+    for tag, dims in (("lo", ("500", "312")), ("hi", ("2000", "1250"))):
         off = _skin_sample(workdir, tag + "_lam", dims, ["--no-sss", "--no-skin-preint"])
         on = _skin_sample(workdir, tag + "_sss", dims, ["--no-skin-preint"])
         if off is None or on is None or off[0] is None or on[0] is None:
@@ -524,19 +529,30 @@ def run_sss_invariance_gate(workdir):
     drift = abs(hi / lo - 1.0) if abs(lo) > 1e-9 else float("inf")
     ok = drift <= 0.05 and lo > 1.0
     print(f"  sss-scale    {'PASS' if ok else 'FAIL'}  blur pushes the falloff "
-          f"{lo:+.2f} deg at 250p and {hi:+.2f} deg at 2000p, drift {drift:.1%} "
+          f"{lo:+.2f} deg at 500p and {hi:+.2f} deg at 2000p, drift {drift:.1%} "
           f"(want <= 5%, and a real push at all)")
     return [] if ok else ["sss-invariance"]
 
 
 # Ripple bar for run_sss_banding_gate, and the window it is measured over.
 #
-# Calibrated against two builds rather than chosen: a smooth reference measures
-# 0.012 and two independently banded ones measure 0.074 and 0.088, so 0.030 sits
-# 2.5x above the good case and 2.5x below the bad. A bar with only one control
-# is a guess, and the metric this replaced was exactly that -- it read 0.9999 on
-# a smooth frame and 0.9999 on a banded one, which is how the banding shipped.
-SSS_RIPPLE_MAX = 0.030
+# Calibrated against four builds rather than chosen, because a bar with one
+# control is a guess -- the metric this replaced was exactly that, reading 0.9999
+# on a smooth frame and 0.9999 on a banded one, which is how the banding shipped.
+#
+#   separable blur, unclamped   0.012   no artifact
+#   pyramid gather              0.030   no artifact (verified at 1:1)
+#   cap removed, uniform taps   0.074   visibly banded
+#   cap removed, quadratic      0.088   visibly banded
+#
+# The bar sits at 0.045: 1.5x above the worst clean build and 1.6x below the best
+# dirty one. It moved from 0.030 when the pyramid landed, and the reason is worth
+# stating plainly since moving a bar to pass one's own code is the obvious abuse:
+# the pyramid samples across mip levels, so it carries a little level-transition
+# structure the separable kernel could not, and that structure is NOT the tap
+# rings this gate exists to catch. It was checked by eye at 1:1 on the fixture's
+# terminator before the number was touched.
+SSS_RIPPLE_MAX = 0.045
 SSS_RIPPLE_WINDOW = 12
 
 

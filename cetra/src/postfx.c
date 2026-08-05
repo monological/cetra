@@ -742,13 +742,13 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     fx->motion_blur_program = create_motion_blur_program();
     fx->motion_blur_tilemax_program = create_motion_blur_tilemax_program();
     fx->motion_blur_neighbormax_program = create_motion_blur_neighbormax_program();
-    fx->sss_blur_program = create_sss_blur_program();
+    fx->sss_gather_program = create_sss_gather_program();
     fx->sss_pyr_seed_program = create_sss_pyr_seed_program();
     fx->sss_pyr_down_program = create_sss_pyr_down_program();
     fx->contact_shadow_program = create_contact_shadow_program();
     fx->oit_resolve_program = create_oit_resolve_program();
     if (!fx->sss_pyr_seed_program || !fx->sss_pyr_down_program ||
-        !fx->contact_shadow_program || !fx->oit_resolve_program || !fx->sss_blur_program ||
+        !fx->contact_shadow_program || !fx->oit_resolve_program || !fx->sss_gather_program ||
         !fx->motion_blur_program ||
         !fx->motion_blur_tilemax_program || !fx->motion_blur_neighbormax_program ||
         !fx->bloom_bright_program || !fx->bloom_down_program || !fx->bloom_up_program ||
@@ -836,10 +836,11 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     uniform_set_int(fx->motion_blur_program->uniforms, "neighborMaxTex", 1);
     uniform_set_int(fx->motion_blur_program->uniforms, "velocityTex", 2);
 
-    glUseProgram(fx->sss_blur_program->id);
-    uniform_set_int(fx->sss_blur_program->uniforms, "srcTex", 0);
-    uniform_set_int(fx->sss_blur_program->uniforms, "origTex", 1);
-    uniform_set_int(fx->sss_blur_program->uniforms, "auxTex", 2);
+    glUseProgram(fx->sss_gather_program->id);
+    uniform_set_int(fx->sss_gather_program->uniforms, "pyrColor", 0);
+    uniform_set_int(fx->sss_gather_program->uniforms, "pyrDepth", 1);
+    uniform_set_int(fx->sss_gather_program->uniforms, "origTex", 2);
+    uniform_set_int(fx->sss_gather_program->uniforms, "auxTex", 3);
     glUseProgram(fx->sss_pyr_seed_program->id);
     uniform_set_int(fx->sss_pyr_seed_program->uniforms, "srcTex", 0);
     uniform_set_int(fx->sss_pyr_seed_program->uniforms, "auxTex", 1);
@@ -1488,63 +1489,85 @@ static void _sss_fold_into_canvas(PostFX* fx, GLuint canvas_fbo) {
 // pixels per depth. Under TAA the delta is temporally accumulated first (its
 // own history, like fog/SSR) so the screen-space scatter doesn't shimmer under
 // motion. Blur, delta, and history stay at render res; only the fold magnifies.
+// Screen-space SSS through the scatter pyramid: the skin-diffuse buffer (D,
+// attachment 4, already resolved) is built into a mip chain per profile, then
+// gathered with one trilinear tap per profile Gaussian per channel, forming the
+// recomposite delta blur - D that is additive-blended into the canvas. Diffuse
+// softens; FragColor's specular is untouched. Under TAA the delta is temporally
+// accumulated first (its own history, like fog/SSR). Pyramid, delta and history
+// stay at render res; only the fold magnifies.
 static void postfx_run_sss(PostFX* fx, GLuint canvas_fbo, mat4 projection, bool taa_resolving) {
-    const float texel[2] = {1.0f / (float)fx->width, 1.0f / (float)fx->height};
     // World radius -> screen pixels: a world unit at view depth d spans
     // 0.5 * proj[1][1] * height / d pixels.
     const float proj_scale = 0.5f * projection[1][1] * (float)fx->height;
+    const int count = fx->sss_profile_count > 0 ? fx->sss_profile_count : 1;
 
-    // Pass 1: horizontal blur of D into ping-pong slot 0.
-    glBindFramebuffer(GL_FRAMEBUFFER, fx->sss_blur_fbo);
-    glViewport(0, 0, fx->width, fx->height);
-    glUseProgram(fx->sss_blur_program->id);
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, fx->sss_diffuse_texture);
-    glActiveTexture(GL_TEXTURE2);
-    glBindTexture(GL_TEXTURE_2D, fx->aux_texture);
-    uniform_set_vec2(fx->sss_blur_program->uniforms, "texelSize", texel);
-    uniform_set_vec2(fx->sss_blur_program->uniforms, "dir", (const float[]){1.0f, 0.0f});
-    uniform_set_float(fx->sss_blur_program->uniforms, "projScale", proj_scale);
-    // One ranged upload of the contiguous profile array (the fog/CSM idiom), not
-    // a per-element snprintf loop.
-    GLint prof_loc = uniform_location(fx->sss_blur_program->uniforms, "sssProfiles[0]");
-    if (prof_loc >= 0)
-        glUniform4fv(prof_loc, fx->sss_profile_count, (const GLfloat*)fx->sss_profiles);
-    uniform_set_int(fx->sss_blur_program->uniforms, "mode", 0);
-    draw_fullscreen_quad(fx->quad_vao);
+    // Each profile gets its own walk of the one pyramid. An array texture would
+    // save the repeat but scales memory with MAX_SSS_PROFILES and puts a
+    // per-(level, layer) attach on the least-travelled GL 4.1 path in this tree;
+    // every shipping scene has one profile and the fixture has two.
+    for (int p = 0; p < count; p++) {
+        postfx_build_sss_pyramid(fx, p + 1, proj_scale);
 
-    // Pass 2: vertical blur of the H result, forming the composite delta blur - D
-    // (H-blur on unit 0, original D on unit 1).
-    glUseProgram(fx->sss_blur_program->id);
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, fx->sss_blur_texture);
-    glActiveTexture(GL_TEXTURE1);
-    glBindTexture(GL_TEXTURE_2D, fx->sss_diffuse_texture);
-    uniform_set_vec2(fx->sss_blur_program->uniforms, "dir", (const float[]){0.0f, 1.0f});
-    uniform_set_int(fx->sss_blur_program->uniforms, "mode", 1);
-
-    if (!taa_resolving) {
-        // No TAA: additive-fold the composite delta straight into the canvas.
-        fx->sss_history.valid = false;
-        _sss_fold_into_canvas(fx, canvas_fbo);
-        return;
+        // Accumulate into the delta target: profile p's gather emits exactly zero
+        // off its own tag, so the profiles sum without overlapping.
+        glBindFramebuffer(GL_FRAMEBUFFER, fx->sss_delta_fbo);
+        glViewport(0, 0, fx->width, fx->height);
+        if (p == 0) {
+            glClearBufferfv(GL_COLOR, 0, (const GLfloat[]){0.0f, 0.0f, 0.0f, 0.0f});
+        } else {
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_ONE, GL_ONE);
+        }
+        glUseProgram(fx->sss_gather_program->id);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, fx->sss_pyr_color_texture);
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, fx->sss_pyr_depth_texture);
+        glActiveTexture(GL_TEXTURE2);
+        glBindTexture(GL_TEXTURE_2D, fx->sss_diffuse_texture);
+        glActiveTexture(GL_TEXTURE3);
+        glBindTexture(GL_TEXTURE_2D, fx->aux_texture);
+        uniform_set_vec4(fx->sss_gather_program->uniforms, "sssProfile", fx->sss_profiles[p]);
+        uniform_set_int(fx->sss_gather_program->uniforms, "profileTag", p + 1);
+        uniform_set_float(fx->sss_gather_program->uniforms, "projScale", proj_scale);
+        // Coarsest level the gather may read, rather than the coarsest that
+        // exists. A level's texels are 2^L render pixels, so the widest terms
+        // otherwise land where the subject spans a handful of texels and reads
+        // as facets. Holding texels at 1/32 of frame height keeps a subject a
+        // third of the frame across at about 26 of them.
+        //
+        // This is the delivered-scatter CEILING, and it is resolution-independent
+        // by construction: the cap is a fraction of height and the pixels per
+        // world unit are proportional to height, so the two cancel -- which is
+        // exactly what the pixel cap this branch removed failed to do.
+        float lod_cap = log2f(fmaxf((float)fx->height / 32.0f, 1.0f));
+        uniform_set_float(fx->sss_gather_program->uniforms, "maxLod",
+                          fminf((float)(fx->sss_pyr_mips - 1), lod_cap));
+        uniform_set_vec2(fx->sss_gather_program->uniforms, "renderTexel",
+                         (const float[]){1.0f / (float)fx->width, 1.0f / (float)fx->height});
+        draw_fullscreen_quad(fx->quad_vao);
+        if (p > 0) {
+            glDisable(GL_BLEND);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        }
     }
 
-    // TAA: render the delta to a scratch, temporally accumulate it (reproject by
-    // velocity + neighbour clamp, like fog/SSR), then additive-fold the stabilized
-    // delta into the canvas with a passthrough copy (mode 2).
-    glBindFramebuffer(GL_FRAMEBUFFER, fx->sss_delta_fbo);
-    glViewport(0, 0, fx->width, fx->height);
-    draw_fullscreen_quad(fx->quad_vao);
+    // The tent with a zero texel size is the documented exact-copy form, so the
+    // fold needs no shader of its own.
+    GLuint delta = fx->sss_delta_texture;
+    if (taa_resolving) {
+        delta = run_temporal_accum(fx, fx->temporal_accum_program, &fx->sss_history, fx->width,
+                                   fx->height, fx->sss_delta_texture, TEMPORAL_FEEDBACK_DEFAULT);
+    } else {
+        fx->sss_history.valid = false;
+    }
 
-    GLuint stable = run_temporal_accum(fx, fx->temporal_accum_program, &fx->sss_history, fx->width,
-                                       fx->height, fx->sss_delta_texture,
-                                       TEMPORAL_FEEDBACK_DEFAULT);
-
-    glUseProgram(fx->sss_blur_program->id);
+    glUseProgram(fx->upsample_tent_program->id);
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, stable);
-    uniform_set_int(fx->sss_blur_program->uniforms, "mode", 2);
+    glBindTexture(GL_TEXTURE_2D, delta);
+    uniform_set_vec2(fx->upsample_tent_program->uniforms, "texelSize",
+                     (const float[]){0.0f, 0.0f});
     _sss_fold_into_canvas(fx, canvas_fbo);
 }
 
@@ -1773,7 +1796,9 @@ void free_postfx(PostFX* fx) {
     free_program(fx->motion_blur_program);
     free_program(fx->motion_blur_tilemax_program);
     free_program(fx->motion_blur_neighbormax_program);
-    free_program(fx->sss_blur_program);
+    free_program(fx->sss_gather_program);
+    free_program(fx->sss_pyr_seed_program);
+    free_program(fx->sss_pyr_down_program);
     free_program(fx->contact_shadow_program);
     free_program(fx->oit_resolve_program);
 

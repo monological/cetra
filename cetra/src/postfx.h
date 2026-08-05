@@ -446,7 +446,7 @@ typedef struct PostFX {
     // fog/SSR) before the additive fold; without TAA these stay unused.
     GLuint sss_delta_fbo, sss_delta_texture;
     PingPong sss_history;
-    ShaderProgram* sss_blur_program;
+    ShaderProgram* sss_gather_program;
 
     // Scale-space pyramid for the scatter kernel (spec 11.14).
     //

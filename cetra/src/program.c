@@ -926,8 +926,8 @@ ShaderProgram* create_motion_blur_neighbormax_program() {
     return create_post_program("motion_blur_neighbormax", motion_blur_neighbormax_frag_shader_str);
 }
 
-ShaderProgram* create_sss_blur_program() {
-    return create_post_program("sss_blur", sss_blur_frag_shader_str);
+ShaderProgram* create_sss_gather_program() {
+    return create_post_program("sss_gather", sss_gather_frag_shader_str);
 }
 
 ShaderProgram* create_sss_pyr_seed_program() {
