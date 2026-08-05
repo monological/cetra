@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "_comment": [
+    "Subject for pre-integrated skin (spec 11.13). Three nodes share one unit",
+    "sphere at scales 0.5 / 1.0 / 2.0, so curvature is exactly 2.0 / 1.0 / 0.5;",
+    "the ellipsoid above them varies curvature continuously across one surface.",
+    "",
+    "The key is a single directional light and it is deliberately NOT axis",
+    "aligned. A directional light pointing exactly down a world axis makes this",
+    "geometry shadow itself completely -- the whole lit hemisphere goes black.",
+    "Recorded in specs/11.13 phase 0; tilt is the workaround, not the fix.",
+    "",
+    "Grazing rather than back-lit, unlike sss_scale_fixture.cscn, which puts its",
+    "key BEHIND the spheres to reach the back-light transmission accumulator and",
+    "is therefore blind to a front-facing falloff. Here the terminator has to sit",
+    "on the visible disc of every object at once.",
+    "",
+    "No environment and no fill: ambient 0 means diffuse past the terminator is",
+    "exactly zero, so anything measured there is scatter and nothing else.",
+    "",
+    "Scatter radius 0.28 puts every object in the CLAMPED regime at the recipe's",
+    "resolution (requested kernel 64-76 px against the 48 px cap in",
+    "sss_blur_frag.glsl:30). That is on purpose: pre-integration only has work to",
+    "do where the screen-space blur cannot deliver the authored width.",
+    "",
+    "Which is also why the recipe renders at -W 1200 -H 750 rather than the usual",
+    "800x500. The blur-to-object RATIO is scale-free -- both scale with",
+    "resolution -- so the pixel cap is the only thing that breaks it, and the only",
+    "way into the clamped regime is more absolute pixels. Widening the scatter",
+    "instead would reach the cap by smearing the small sphere into mush, which is",
+    "the same trade the cap itself is making.",
+    "",
+    "The base material in the .gltf is plain grey; the skin look is authored",
+    "here, which is also what exercises the scene file's material overrides."
+  ],
+  "models": [
+    { "path": "skin_curvature_fixture.gltf" }
+  ],
+  "materials": {
+    "skin": {
+      "albedo": [0.76, 0.57, 0.48],
+      "roughness": 0.45,
+      "metallic": 0.0,
+      "sss": { "color": [1.0, 0.35, 0.25], "radius": 0.28 }
+    }
+  },
+  "lights": [
+    {
+      "name": "key",
+      "type": "directional",
+      "direction": [0.93, -0.26, -0.26],
+      "color": [1.0, 0.97, 0.93],
+      "intensity": 3.0,
+      "cast_shadows": true
+    }
+  ],
+  "camera": { "eye": [-0.2, 0.93, 9.5], "target": [-0.2, 0.93, 0.0], "fov": 40 },
+  "post": { "tonemap": "neutral", "exposure": 1.0 }
+}
