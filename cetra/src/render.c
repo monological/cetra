@@ -103,11 +103,11 @@ void render_update_skinning_uniforms(ShaderProgram* program, const Mesh* mesh) {
 // Scatter profiles and the blur's reach, for pre-integrated skin (§11.13).
 //
 // pbr_frag needs both because it takes up exactly the slack the screen-space
-// blur cannot deliver: the blur's kernel is capped in PIXELS, so past a certain
-// closeness it falls short of the authored world radius by an amount that
-// depends on resolution. `sssMaxScatterPerDepth` is the world scatter the blur
-// can still reach per unit of view depth -- MAX_PX converted out of pixels once
-// here, so the shader never mirrors the cap or the projection.
+// blur cannot deliver: the blur caps its base scatter radius, so past a certain
+// closeness it falls short of the authored world radius. `sssMaxScatterPerDepth`
+// is the world scatter the blur can still reach per unit of view depth, which
+// since §11.14 IS the cap -- it is already expressed in those units, so there is
+// no conversion to get wrong and no projection to read.
 //
 // Uploaded per program switch rather than per material because
 // _update_program_material_uniforms has no Engine, and widening its signature
@@ -130,15 +130,7 @@ static void _upload_skin_preint_uniforms(const Engine* engine, UniformManager* u
     // the pass also needs a scene that actually carries subsurface and a PBR
     // frame mode (engine.c). Reading the toggle instead leaves the same defect
     // reachable through a debug render mode.
-    float reach = 0.0f;
-    if (engine->sss_this_frame) {
-        // proj[1][1] is jitter-independent: TAA jitter is a clip-space shear
-        // applied to [2][0]/[2][1], so this matches the projection postfx uses
-        // to size the same kernel no matter which of the two matrices it holds.
-        float proj_scale = 0.5f * engine->projection_matrix[1][1] * (float)fx->height;
-        if (proj_scale > 0.0f)
-            reach = SSS_MAX_BLUR_PX / proj_scale;
-    }
+    float reach = engine->sss_this_frame ? SSS_MAX_SCATTER_PER_DEPTH : 0.0f;
     uniform_set_float(u, "sssMaxScatterPerDepth", reach);
 }
 

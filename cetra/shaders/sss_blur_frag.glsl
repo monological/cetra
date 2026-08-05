@@ -27,8 +27,20 @@ uniform int mode; // 0 = H blur, 1 = V/composite (blur - origDiffuse),
                   // 2 = passthrough copy of srcTex (TAA delta fold)
 
 const int HALF_TAPS = 12;   // samples per side (cover the broad tail Gaussian)
-const float MAX_PX = 48.0;  // clamp the blur radius; mirror of SSS_MAX_BLUR_PX (postfx.h)
 const float TAIL = 2.2;     // how far (x the base radius) the widest Gaussian reaches
+
+// Ceiling on the base scatter radius, in WORLD units per unit of view depth --
+// i.e. a scatter half-angle, 2.86 degrees. Mirror of SSS_MAX_SCATTER_PER_DEPTH
+// (postfx.h).
+//
+// The units are the whole point. Capping the radius in PIXELS made the delivered
+// world width fall as 1/height once the cap engaged, so the same material
+// scattered differently on a larger display: measured rho = 0.025 across a
+// 500->4000 px sweep, i.e. 2.5% of the low-resolution effect survived at 4K
+// (spec 11.14 phase 0). Capping the world radius instead makes projScale cancel
+// identically below, so the delivered width is either the authored radius or
+// this ceiling times depth, at every resolution, SSAA factor and render scale.
+const float MAX_SCATTER_PER_DEPTH = 0.05;
 
 // Jimenez-style separable skin diffusion profile: a sum of three Gaussians per
 // channel (sharp core + mid + broad colored tail) gives the characteristic skin
@@ -75,7 +87,12 @@ void main()
     float sssRadius = sssProfiles[idx].w;
 
     float depth = -centerZ;
-    float radPx = clamp(sssRadius * projScale / depth, 1.0, MAX_PX);
+    // Cap in world units BEFORE projecting, so the delivered width is
+    // max(min(sssRadius, MAX_SCATTER_PER_DEPTH * depth), depth / projScale) and
+    // projScale survives only in that last term -- the one-texel floor, which is
+    // a genuine "do not blur below a texel" guard rather than a scatter budget.
+    // depth > 0 is guaranteed by the centerZ >= 0 early-out above.
+    float radPx = max(min(sssRadius / depth, MAX_SCATTER_PER_DEPTH) * projScale, 1.0);
     vec3 sigma = max(sssColor, vec3(1e-3)) * radPx; // per-channel base width
     float sigmaZ = max(sssRadius, 1e-3);            // view-Z bilateral extent (world units)
 

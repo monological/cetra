@@ -165,12 +165,16 @@ vec3 skinDiffuse(SkinShape s, float ndotl) {
 // The angular width this fragment scatters over, per channel.
 //
 // `deficit` is why pre-integration and the screen-space blur do not double
-// count. The blur's kernel is capped at SSS_MAX_BLUR_PX pixels (postfx.h), so past a certain
-// closeness it delivers less than the authored world radius -- and how much less
-// depends on resolution, which is a defect in its own right. This takes up
-// exactly the slack: where the blur already delivers the authored width the
-// deficit is 0 and pre-integration contributes NOTHING, leaving the frame
-// byte-identical to today. Variances add, hence the sqrt.
+// count. The blur caps its base scatter radius at SSS_MAX_SCATTER_PER_DEPTH
+// world units per unit of view depth (postfx.h), so past a certain closeness it
+// delivers less than the authored radius. This takes up exactly the slack: where
+// the blur already delivers the authored width the deficit is 0 and
+// pre-integration contributes NOTHING. Variances add, hence the sqrt.
+//
+// `got` below is the blur's delivered width EXACTLY, not an estimate of it,
+// because both are now min(authored, cap * depth) in the same units -- §11.14
+// moved the cap out of pixels, and before that this had to reconstruct a pixel
+// budget through a projection it could only assume matched the one postfx used.
 vec3 skinSigma(vec3 scatterColor, float scatterRadius, float curvature,
                float curvatureScale, float maxScatterPerDepth, float viewDepth) {
     float want = scatterRadius;
