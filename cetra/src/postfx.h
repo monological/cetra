@@ -448,6 +448,31 @@ typedef struct PostFX {
     PingPong sss_history;
     ShaderProgram* sss_blur_program;
 
+    // Scale-space pyramid for the scatter kernel (spec 11.14).
+    //
+    // A screen-space blur samples its profile at discrete taps, so a kernel wide
+    // enough in pixels shows those taps as rings. Pre-filtering is what removes
+    // the tap budget from the picture: each of the profile's three Gaussians is
+    // read as ONE trilinear tap at a level where its sigma is a few texels, so
+    // reach in world units is bounded only by the level count.
+    //
+    // Level count halves to <= 4 px rather than stopping at a fixed cap the way
+    // the bloom chain does. A cap that does not grow with resolution puts the
+    // ceiling back in pixels, which is the defect this exists to remove.
+    //
+    // colour carries coverage-premultiplied diffuse in rgb and coverage in a;
+    // depth carries the coverage-weighted mean view depth, which the gather
+    // needs to reject a coarse texel dominated by a different surface. Walked
+    // once per profile, so the two textures do not scale with MAX_SSS_PROFILES.
+    bool sss_pyr_ready;
+    int sss_pyr_mips;
+    int sss_pyr_profiles; // profile count the chain was last built for
+    GLuint sss_pyr_fbo;   // one FBO, re-attached per level (the hiz idiom)
+    GLuint sss_pyr_color_texture;
+    GLuint sss_pyr_depth_texture;
+    ShaderProgram* sss_pyr_seed_program;
+    ShaderProgram* sss_pyr_down_program;
+
     // Weighted-blended OIT: single-sample resolves of the engine's OIT MSAA
     // accum/revealage attachments (a separate FBO sharing the scene depth), then a
     // resolve shader folds them over the opaque scene in hdr_fbo before TAA/etc.

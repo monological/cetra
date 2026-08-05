@@ -490,6 +490,9 @@ static void postfx_free_targets(PostFX* fx) {
     gl_delete_fbo(&fx->sss_delta_fbo);
     gl_delete_texture(&fx->sss_delta_texture);
     free_pingpong(&fx->sss_history);
+    gl_delete_fbo(&fx->sss_pyr_fbo);
+    gl_delete_texture(&fx->sss_pyr_color_texture);
+    gl_delete_texture(&fx->sss_pyr_depth_texture);
     gl_delete_fbo(&fx->oit_accum_fbo);
     gl_delete_texture(&fx->oit_accum_texture);
     gl_delete_fbo(&fx->oit_revealage_fbo);
@@ -523,6 +526,11 @@ static void postfx_invalidate_targets(PostFX* fx) {
     fx->cs_ready = false;
     fx->motion_blur_ready = false;
     fx->sss_ready = false;
+    // Cleared beside sss_ready, never separately: the pyramid is allocated under
+    // that same guard, so a stale true here beside a deleted texture would make
+    // the walk bind level attachments on a dead FBO.
+    fx->sss_pyr_ready = false;
+    fx->sss_pyr_profiles = 0;
     fx->oit_ready = false;
     fx->spec_ready = false;
 }
@@ -1202,6 +1210,75 @@ static bool postfx_ensure_spec_target(PostFX* fx) {
 
 // Allocate the SSS targets on first skin frame (DoF pattern): the full-res
 // resolve of the skin-diffuse attachment plus the H/V separable-blur ping-pong.
+// Size of pyramid level L. The ONE place the chain's geometry is expressed, so
+// the allocator and the walk cannot disagree -- a mismatch there writes a level
+// at the wrong viewport and corrupts the chain silently, and the bloom walk's
+// `width >> mip` form is only safe because it stops at 15 px, where it still
+// agrees with a halving loop. Below that the two diverge.
+static void sss_pyr_level_size(const PostFX* fx, int level, int* w, int* h) {
+    int mw = fx->width;
+    int mh = fx->height;
+    for (int i = 0; i < level; i++) {
+        mw = mw > 1 ? mw / 2 : 1;
+        mh = mh > 1 ? mh / 2 : 1;
+    }
+    *w = mw;
+    *h = mh;
+}
+
+static bool create_sss_pyramid(PostFX* fx) {
+    int mw = fx->width;
+    int mh = fx->height;
+    fx->sss_pyr_mips = 1;
+    // Down to <= 4 px, NOT the bloom chain's fixed cap: the coarsest level sets
+    // the widest deliverable scatter, so a level count that stops growing with
+    // resolution reintroduces the 1/height dependence being removed. Stopping at
+    // 4 rather than 1 because odd-size halving has made the level anisotropic by
+    // then, and a level whose two axes disagree breaks the sigma-to-LOD table.
+    while (mw > 4 && mh > 4) {
+        mw = mw > 1 ? mw / 2 : 1;
+        mh = mh > 1 ? mh / 2 : 1;
+        fx->sss_pyr_mips++;
+    }
+
+    const GLenum fmts[2] = {GL_RGBA16F, GL_R32F};
+    const GLenum chans[2] = {GL_RGBA, GL_RED};
+    GLuint* texes[2] = {&fx->sss_pyr_color_texture, &fx->sss_pyr_depth_texture};
+    for (int t = 0; t < 2; t++) {
+        glGenTextures(1, texes[t]);
+        glBindTexture(GL_TEXTURE_2D, *texes[t]);
+        for (int mip = 0; mip < fx->sss_pyr_mips; mip++) {
+            int lw, lh;
+            sss_pyr_level_size(fx, mip, &lw, &lh);
+            glTexImage2D(GL_TEXTURE_2D, mip, fmts[t], lw, lh, 0, chans[t], GL_FLOAT, NULL);
+        }
+        // LINEAR between mips, unlike the bloom pyramid's MIPMAP_NEAREST. Bloom
+        // pins a level per draw; the gather's LOD is continuous in the scatter
+        // radius, and NEAREST would step at every level boundary -- rings again,
+        // in the one place this whole pyramid exists to remove them.
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        // Without this a hand-built chain samples as black.
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, fx->sss_pyr_mips - 1);
+    }
+
+    glGenFramebuffers(1, &fx->sss_pyr_fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, fx->sss_pyr_fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                           fx->sss_pyr_color_texture, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D,
+                           fx->sss_pyr_depth_texture, 0);
+    const GLenum bufs[2] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1};
+    glDrawBuffers(2, bufs);
+    bool ok = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+    if (!ok)
+        log_error("SSS pyramid framebuffer incomplete");
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    return ok;
+}
+
 static bool postfx_ensure_sss_targets(PostFX* fx) {
     if (fx->sss_ready)
         return true;
@@ -1215,6 +1292,9 @@ static bool postfx_ensure_sss_targets(PostFX* fx) {
         log_error("Failed to allocate SSS targets");
         return false;
     }
+    if (!create_sss_pyramid(fx))
+        return false;
+    fx->sss_pyr_ready = true;
     fx->sss_ready = true;
     return true;
 }
