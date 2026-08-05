@@ -81,8 +81,12 @@ typedef enum PostFXSpecOccMode {
 // useful density is set by that world-space reach, not by pixel count. Depth
 // slices are exponential, matching the cluster grid's Doom-2016 slicing.
 // 160*90*64 RGBA16F is ~7.4 MB per volume.
-#define POSTFX_FROXEL_X 160
-#define POSTFX_FROXEL_Y 90
+// 8-pixel tiles at 2560x1440, matching the density UE's volumetric fog defaults
+// to (r.VolumetricFog.GridPixelSize 8). The previous 160x90 was half this, and
+// a spot cone sharp enough to clip at the tonemap resolved its silhouette at
+// the cell, not the pixel.
+#define POSTFX_FROXEL_X 320
+#define POSTFX_FROXEL_Y 180
 #define POSTFX_FROXEL_Z 64
 
 typedef struct PostFX {
@@ -239,7 +243,22 @@ typedef struct PostFX {
     float fog_density;        // Extinction at floor height (1/world units)
     float fog_height_falloff; // World units for a 1/e density drop
     float fog_floor_y;        // World height of max density; no medium below it
+    float fog_near;           // Near end of the volume's depth range; 0 = derive from fog_far
     float fog_far;            // Far end of the volume's depth range: where its slices are spent
+    float fog_depth_dist;     // Slice bias on top of the exponential; 1 = pure exponential,
+                              // >1 bunches slices toward fog_far, <1 toward the camera
+    float fog_temporal_blend; // Weight the froxel accumulator gives its history
+    // Volume dimensions, defaulted from the POSTFX_FROXEL_* constants. Runtime
+    // because XY is what resolves a beam's SILHOUETTE: the volume traces it at
+    // this density and the composite can only put a one-cell ramp under each
+    // step, so anything sharp enough to clip at the tonemap shows the grid.
+    // Changing any of them reallocates the volumes at the next fog frame.
+    int froxel_grid_x;
+    int froxel_grid_y;
+    int froxel_grid_z;
+    int froxel_built_x; // Dimensions the live volumes were allocated at
+    int froxel_built_y;
+    int froxel_built_z;
     float fog_anisotropy;     // Henyey-Greenstein g (forward scattering)
     float fog_sun_boost;      // Artistic multiplier on the shaft in-scatter
     vec3 fog_ambient;         // Isotropic ambient in-scatter radiance

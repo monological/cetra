@@ -44,7 +44,7 @@ void main() {
     // composite indexes both volumes with the same expression instead of
     // carrying two off-by-half-a-slice rules.
     vec3 viewPos = froxelViewPos(TexCoords, float(sliceIndex), 1.0, nearZ, aerialFar,
-                                 float(aerialDepth), invFocal);
+                                 float(aerialDepth), invFocal, 1.0);
     vec3 camPos = invView[3].xyz;
     vec3 toCell = (invView * vec4(viewPos, 1.0)).xyz - camPos;
     float distKm = length(toCell) / unitsPerKm;

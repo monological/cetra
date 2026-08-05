@@ -29,11 +29,15 @@ out vec4 FragColor; // rgb = accumulated in-scatter, a = transmittance to this s
 uniform sampler3D scatterVolume;
 uniform int sliceIndex;
 uniform mat4 projection;
+uniform float fogNear;
 uniform float fogFar;
+uniform float fogDepthDist;
 uniform int froxelDepth; // Slice count; mirrors POSTFX_FROXEL_Z
 
 void main() {
-    float nearZ = projection[3][2] / (projection[2][2] - 1.0);
+    // The VOLUME's near, and it must be the same one the inject pass built with
+    // or this column walks different slices than were written.
+    float nearZ = fogNear;
 
     // Slices are constant-DEPTH planes, but extinction integrates along the
     // ray, which is longer than the depth step by 1/cos of the ray's angle off
@@ -43,15 +47,15 @@ void main() {
     vec2 ndc = (gl_FragCoord.xy / vec2(textureSize(scatterVolume, 0).xy)) * 2.0 - 1.0;
     float rayScale = length(vec3(ndc * invFocal, 1.0));
 
-    // Consecutive slice depths differ by a constant ratio (the mapping is
-    // exponential), so the walk is one multiply per step instead of a pow.
-    float sliceRatio = pow(froxelFarZ(nearZ, fogFar) / nearZ, 1.0 / float(froxelDepth));
-
+    // Slice depths came from a constant ratio while the mapping was a pure
+    // exponential; a depth-distribution bias breaks that, so the walk asks the
+    // mapping for each depth rather than multiplying its way along one.
     vec3 L = vec3(0.0);
     float T = 1.0;
     float prevZ = nearZ;
     for (int s = 0; s <= sliceIndex; s++) {
-        float z = prevZ * sliceRatio;
+        float z = froxelSliceToViewZ(float(s) + 1.0, nearZ, fogFar, float(froxelDepth),
+                                     fogDepthDist);
         float dt = (z - prevZ) * rayScale;
         prevZ = z;
 

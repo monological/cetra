@@ -21,7 +21,9 @@ uniform sampler3D integratedVolume; // Fog: front-to-back (inscatter, transmitta
 uniform sampler3D aerialVolume;     // Atmosphere: same encoding, camera to cell
 uniform sampler2D layerTex; // mode 1 only: an already-composited layer to fold
 uniform mat4 projection;
+uniform float fogNear;
 uniform float fogFar;
+uniform float fogDepthDist;
 uniform float aerialFar;
 // Slice counts, and the medium's on/off state: zero means absent.
 uniform int froxelDepth;
@@ -42,7 +44,11 @@ void main() {
         return;
     }
 
-    float nearZ = projection[3][2] / (projection[2][2] - 1.0);
+    // The two media do NOT share a near. Fog's volume is built from fogNear
+    // (postfx.c owns it); the aerial LUT is built by aerial_lut_frag from the
+    // camera's, so sampling it against fog's would index the wrong slices --
+    // silently, as haze at the wrong distance rather than as an error.
+    float camNearZ = projection[3][2] / (projection[2][2] - 1.0);
     float linZ = texture(linDepthTex, TexCoords).z;
 
     // Sky/background: the aux buffer's sentinel is 0, there is no surface.
@@ -57,11 +63,13 @@ void main() {
     // sky-view LUT, which is the same integral the aerial volume holds, so
     // applying it there too would count the same air twice and wash the sky out.
     vec4 fogLayer =
-        froxelSampleMedium(integratedVolume, TexCoords, sky ? fogFar : -linZ, nearZ, fogFar,
-                           froxelDepth);
+        froxelSampleMedium(integratedVolume, TexCoords, sky ? fogFar : -linZ, fogNear, fogFar,
+                           froxelDepth, fogDepthDist);
+    // Aerial keeps the pure exponential aerial_lut_frag builds it with, as well
+    // as its own near.
     vec4 aerialLayer =
-        froxelSampleMedium(aerialVolume, TexCoords, -linZ, nearZ, aerialFar,
-                           sky ? 0 : aerialDepth);
+        froxelSampleMedium(aerialVolume, TexCoords, -linZ, camNearZ, aerialFar,
+                           sky ? 0 : aerialDepth, 1.0);
 
     // Two media in series. Fog is the nearer one -- a local ground layer, where
     // the atmosphere spans the whole ray -- so the far medium's in-scatter is

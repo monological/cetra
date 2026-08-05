@@ -74,9 +74,9 @@ static bool create_color_fbo(int width, int height, GLenum internal_format, GLui
 // across every slice.
 static void draw_volume_slices(PostFX* fx, GLuint volume, UniformManager* um) {
     glBindFramebuffer(GL_FRAMEBUFFER, fx->froxel_fbo);
-    glViewport(0, 0, POSTFX_FROXEL_X, POSTFX_FROXEL_Y);
+    glViewport(0, 0, fx->froxel_built_x, fx->froxel_built_y);
     glBindVertexArray(fx->quad_vao);
-    for (int slice = 0; slice < POSTFX_FROXEL_Z; slice++) {
+    for (int slice = 0; slice < fx->froxel_built_z; slice++) {
         glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, volume, 0, slice);
         if (slice == 0 && glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
             log_error("Froxel volume FBO incomplete; disabling fog");
@@ -626,7 +626,16 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     fx->fog_density = 0.02f;
     fx->fog_height_falloff = 4.0f;
     fx->fog_floor_y = 0.0f;
+    fx->fog_near = 0.0f; // derive
     fx->fog_far = 60.0f;
+    fx->fog_depth_dist = 1.0f;
+    fx->fog_temporal_blend = 0.9f;
+    fx->froxel_grid_x = POSTFX_FROXEL_X;
+    fx->froxel_grid_y = POSTFX_FROXEL_Y;
+    fx->froxel_grid_z = POSTFX_FROXEL_Z;
+    fx->froxel_built_x = 0;
+    fx->froxel_built_y = 0;
+    fx->froxel_built_z = 0;
     fx->fog_anisotropy = 0.45f;
     fx->fog_sun_boost = 1.0f;
     glm_vec3_copy((vec3){0.05f, 0.05f, 0.05f}, fx->fog_ambient);
@@ -953,8 +962,26 @@ static bool postfx_ensure_ssgi_targets(PostFX* fx) {
 // the inject pass reprojects against. Fixed dimensions -- the grid covers the
 // frustum out to fog_far, so render resolution does not size it.
 static bool postfx_ensure_froxel_targets(PostFX* fx) {
+    // A dimension change invalidates the volumes AND the history in them, so it
+    // drops the adjacency stamp too -- reprojecting a differently-sized history
+    // would read neighbours, not this cell.
+    if (fx->froxel_ready &&
+        (fx->froxel_built_x != fx->froxel_grid_x || fx->froxel_built_y != fx->froxel_grid_y ||
+         fx->froxel_built_z != fx->froxel_grid_z)) {
+        glDeleteTextures(2, fx->froxel_scatter);
+        glDeleteTextures(1, &fx->froxel_integrated);
+        glDeleteFramebuffers(1, &fx->froxel_fbo);
+        fx->froxel_scatter[0] = fx->froxel_scatter[1] = 0;
+        fx->froxel_integrated = 0;
+        fx->froxel_fbo = 0;
+        fx->froxel_ready = false;
+        fx->froxel_prev_frame = -1;
+    }
     if (fx->froxel_ready)
         return true;
+    fx->froxel_built_x = fx->froxel_grid_x > 0 ? fx->froxel_grid_x : POSTFX_FROXEL_X;
+    fx->froxel_built_y = fx->froxel_grid_y > 0 ? fx->froxel_grid_y : POSTFX_FROXEL_Y;
+    fx->froxel_built_z = fx->froxel_grid_z > 0 ? fx->froxel_grid_z : POSTFX_FROXEL_Z;
     // GL_TEXTURE_3D rather than the codebase's usual GL_TEXTURE_2D_ARRAY: the
     // composite reads a single trilinear tap that filters ACROSS slices, which
     // an array texture does not do, and CLAMP on R makes a lookup past the last
@@ -963,11 +990,13 @@ static bool postfx_ensure_froxel_targets(PostFX* fx) {
     // completeness is only meaningful once a layer is attached (checked there).
     glGenFramebuffers(1, &fx->froxel_fbo);
     for (int i = 0; i < 2; i++) {
-        fx->froxel_scatter[i] = create_texture_3d_float(
-            POSTFX_FROXEL_X, POSTFX_FROXEL_Y, POSTFX_FROXEL_Z, GL_RGBA16F, GL_RGBA, NULL);
+        fx->froxel_scatter[i] =
+            create_texture_3d_float(fx->froxel_built_x, fx->froxel_built_y, fx->froxel_built_z,
+                                    GL_RGBA16F, GL_RGBA, NULL);
     }
-    fx->froxel_integrated = create_texture_3d_float(POSTFX_FROXEL_X, POSTFX_FROXEL_Y,
-                                                    POSTFX_FROXEL_Z, GL_RGBA16F, GL_RGBA, NULL);
+    fx->froxel_integrated =
+        create_texture_3d_float(fx->froxel_built_x, fx->froxel_built_y, fx->froxel_built_z,
+                                GL_RGBA16F, GL_RGBA, NULL);
     if (!fx->froxel_scatter[0] || !fx->froxel_scatter[1] || !fx->froxel_integrated) {
         log_error("Failed to allocate froxel fog volumes");
         return false;
@@ -976,9 +1005,9 @@ static bool postfx_ensure_froxel_targets(PostFX* fx) {
     // undefined (glTexImage3D with NULL), and the temporal blend would weight
     // that at 0.9 and write the result back as the next frame's history.
     glBindFramebuffer(GL_FRAMEBUFFER, fx->froxel_fbo);
-    glViewport(0, 0, POSTFX_FROXEL_X, POSTFX_FROXEL_Y);
+    glViewport(0, 0, fx->froxel_built_x, fx->froxel_built_y);
     for (int i = 0; i < 2; i++) {
-        for (int slice = 0; slice < POSTFX_FROXEL_Z; slice++) {
+        for (int slice = 0; slice < fx->froxel_built_z; slice++) {
             glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, fx->froxel_scatter[i],
                                       0, slice);
             glClear(GL_COLOR_BUFFER_BIT);
@@ -1801,10 +1830,24 @@ static GLuint run_atrous(PostFX* fx, ShaderProgram* prog, PingPong* pp, int w, i
 // that reaches only one shader would otherwise render silently wrong.
 // The caller has the program current and has bound the CSM array (unit 1) and
 // the spot depth map (unit 2).
+// The volume's front face. The camera's near plane is a triangle-z-precision
+// number -- 0.1 is ordinary -- and the slice mapping is exponential, so equal
+// depth RATIOS get equal slices: inheriting it spends half the volume on the
+// first couple of units of air and leaves single digits for the scene. Deriving
+// from fog_far keeps the near:far ratio, and so the slice budget, scene-scale
+// invariant.
+float postfx_fog_near(const PostFX* fx) {
+    if (fx->fog_near > 0.0f)
+        return fx->fog_near;
+    return fx->fog_far > 0.0f ? fx->fog_far / 50.0f : 1.0f;
+}
+
 static void upload_fog_uniforms(PostFX* fx, UniformManager* u, mat4 projection, mat4 inv_view) {
     uniform_set_mat4(u, "projection", (float*)projection);
     uniform_set_mat4(u, "invView", (float*)inv_view);
+    uniform_set_float(u, "fogNear", postfx_fog_near(fx));
     uniform_set_float(u, "fogFar", fx->fog_far);
+    uniform_set_float(u, "fogDepthDist", fx->fog_depth_dist);
     uniform_set_vec3(u, "ambientColor", fx->fog_ambient);
     uniform_set_float(u, "density", fx->fog_density);
     uniform_set_float(u, "heightFalloff", fx->fog_height_falloff);
@@ -1880,8 +1923,9 @@ static void postfx_build_fog_volume(PostFX* fx, mat4 projection, mat4 view) {
     glBindTexture(GL_TEXTURE_3D, fx->froxel_scatter[prev]);
     glActiveTexture(GL_TEXTURE0);
     upload_fog_uniforms(fx, iu, projection, inv_view);
-    uniform_set_int(iu, "froxelDepth", POSTFX_FROXEL_Z);
+    uniform_set_int(iu, "froxelDepth", fx->froxel_built_z);
     uniform_set_int(iu, "temporal", temporal);
+    uniform_set_float(iu, "temporalBlend", fx->fog_temporal_blend);
     uniform_set_int(iu, "frameIndex", fx->frame_index);
     uniform_set_mat4(iu, "prevView", (float*)fx->froxel_prev_view);
     uniform_set_mat4(iu, "prevProjection", (float*)fx->froxel_prev_proj);
@@ -1894,8 +1938,10 @@ static void postfx_build_fog_volume(PostFX* fx, mat4 projection, mat4 view) {
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_3D, fx->froxel_scatter[write]);
     uniform_set_mat4(gu, "projection", (float*)projection);
+    uniform_set_float(gu, "fogNear", postfx_fog_near(fx));
     uniform_set_float(gu, "fogFar", fx->fog_far);
-    uniform_set_int(gu, "froxelDepth", POSTFX_FROXEL_Z);
+    uniform_set_float(gu, "fogDepthDist", fx->fog_depth_dist);
+    uniform_set_int(gu, "froxelDepth", fx->froxel_built_z);
     draw_volume_slices(fx, fx->froxel_integrated, gu);
 
     // Remember the camera and the frame this volume was built with; next frame
@@ -1951,12 +1997,14 @@ static void postfx_run_atmosphere(PostFX* fx, GLuint canvas_fbo, bool aux_writte
     glBindTexture(GL_TEXTURE_3D, fx->aerial_volume);
     glActiveTexture(GL_TEXTURE0);
     uniform_set_mat4(cu, "projection", (float*)projection);
+    uniform_set_float(cu, "fogNear", postfx_fog_near(fx));
     uniform_set_float(cu, "fogFar", fx->fog_far);
+    uniform_set_float(cu, "fogDepthDist", fx->fog_depth_dist);
     uniform_set_float(cu, "aerialFar", fx->aerial_far);
     // A slice count of zero IS the "medium absent" signal -- the shader reads a
     // neutral (0,0,0,1) for it. One state per medium rather than a count plus a
     // separate on/off flag that could disagree with it.
-    uniform_set_int(cu, "froxelDepth", fog_on ? POSTFX_FROXEL_Z : 0);
+    uniform_set_int(cu, "froxelDepth", fog_on ? fx->froxel_built_z : 0);
     uniform_set_int(cu, "aerialDepth", aerial_on ? fx->aerial_slices : 0);
     uniform_set_int(cu, "mode", 0);
 

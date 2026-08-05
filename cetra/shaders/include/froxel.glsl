@@ -31,16 +31,26 @@ float froxelFarZ(float nearZ, float farZ) {
     return max(farZ, nearZ * 1.01);
 }
 
+// `dist` biases WHERE the slices bunch, on top of the exponential curve: the
+// normalized slice coordinate is raised to it before the exponential is taken.
+// 1 is the pure exponential above. Above 1 pulls slices toward the far end,
+// below 1 toward the camera. It exists because near and far alone give one
+// curve shape, and the depth a scene actually needs resolved is rarely the one
+// a pure exponential spends its budget on (UE carries the same knob as
+// r.VolumetricFog.DepthDistributionScale).
+
 // Slice index (0 .. slices, continuous) -> positive view depth.
-float froxelSliceToViewZ(float slice, float nearZ, float farZ, float slices) {
-    return nearZ * pow(froxelFarZ(nearZ, farZ) / nearZ, slice / slices);
+float froxelSliceToViewZ(float slice, float nearZ, float farZ, float slices, float dist) {
+    float t = clamp(slice / slices, 0.0, 1.0);
+    return nearZ * pow(froxelFarZ(nearZ, farZ) / nearZ, pow(t, dist));
 }
 
 // Positive view depth -> continuous slice coordinate. Inverse of the above;
 // the caller clamps into [0, slices] as its lookup requires.
-float froxelViewZToSlice(float viewZ, float nearZ, float farZ, float slices) {
+float froxelViewZToSlice(float viewZ, float nearZ, float farZ, float slices, float dist) {
     float far1 = froxelFarZ(nearZ, farZ);
-    return log(max(viewZ, nearZ) / nearZ) / log(far1 / nearZ) * slices;
+    float t = log(max(viewZ, nearZ) / nearZ) / log(far1 / nearZ);
+    return pow(max(t, 0.0), 1.0 / max(dist, 1e-3)) * slices;
 }
 
 // Sample a front-to-back integrated medium volume at a planar view depth.
@@ -53,10 +63,11 @@ float froxelViewZToSlice(float viewZ, float nearZ, float farZ, float slices) {
 // slices == 0 means the medium is absent, and returns its identity for the
 // (inscatter, transmittance) composite: add nothing, attenuate by nothing. That
 // keeps "is this medium on" in the data, so a consumer cannot forget to branch.
-vec4 froxelSampleMedium(sampler3D vol, vec2 uv, float viewZ, float nearZ, float farZ, int slices) {
+vec4 froxelSampleMedium(sampler3D vol, vec2 uv, float viewZ, float nearZ, float farZ, int slices,
+                        float dist) {
     if (slices == 0)
         return vec4(0.0, 0.0, 0.0, 1.0);
-    float slice = froxelViewZToSlice(min(viewZ, farZ), nearZ, farZ, float(slices));
+    float slice = froxelViewZToSlice(min(viewZ, farZ), nearZ, farZ, float(slices), dist);
     return texture(vol, vec3(uv, (slice - 0.5) / float(slices)));
 }
 
@@ -66,8 +77,8 @@ vec4 froxelSampleMedium(sampler3D vol, vec2 uv, float viewZ, float nearZ, float 
 // View space is right-handed with z negative in front of the camera, matching
 // include/depth.glsl.
 vec3 froxelViewPos(vec2 uv, float slice, float jitter, float nearZ, float farZ, float slices,
-                   vec2 invFocal) {
-    float viewZ = froxelSliceToViewZ(slice + jitter, nearZ, farZ, slices);
+                   vec2 invFocal, float dist) {
+    float viewZ = froxelSliceToViewZ(slice + jitter, nearZ, farZ, slices, dist);
     vec2 ndc = uv * 2.0 - 1.0;
     return vec3(ndc * viewZ * invFocal, -viewZ);
 }

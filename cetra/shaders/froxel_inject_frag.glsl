@@ -26,7 +26,9 @@ uniform int sliceIndex;  // Which volume layer this draw is writing
 uniform int froxelDepth; // Slice count; mirrors POSTFX_FROXEL_Z
 uniform mat4 projection; // Focal terms reconstruct the froxel's view position
 uniform mat4 invView;    // view -> world (camera pose)
+uniform float fogNear;   // Near end of the volume's exponential depth range
 uniform float fogFar;    // Far end of the volume's exponential depth range
+uniform float fogDepthDist; // Slice bias exponent; 1 = pure exponential
 
 uniform sampler2DArray shadowMaps;
 uniform mat4 lightSpaceMatrix[MAX_FOG_LIGHTS * FOG_CASCADES];
@@ -62,6 +64,7 @@ uniform mat4 spotLightSpaceMatrix;
 // jitter and skips the blend, so headless renders stay byte-deterministic --
 // the same contract every other accumulator in this stack honours.
 uniform int temporal;
+uniform float temporalBlend; // History weight; higher averages more frames
 uniform int frameIndex;
 uniform sampler3D historyVolume;
 uniform mat4 prevView;       // World -> the previous frame's view space
@@ -118,9 +121,8 @@ float fogVisibility(int layer0, vec3 P) {
 }
 
 void main() {
-    // Near plane recovered from the projection (the app's near clip varies) --
-    // the same recovery contact_shadow_frag makes.
-    float nearZ = projection[3][2] / (projection[2][2] - 1.0);
+    // The VOLUME's near, not the camera's: see fogNear's owner in postfx.c.
+    float nearZ = fogNear;
     vec2 invFocal = 1.0 / vec2(projection[0][0], projection[1][1]);
 
     // Sub-cell sample offset. The offset is the SAME for every cell -- a
@@ -139,7 +141,7 @@ void main() {
     }
     vec2 cellUv = TexCoords + (jitter.xy - 0.5) / vec2(textureSize(historyVolume, 0).xy);
     vec3 viewPos = froxelViewPos(cellUv, float(sliceIndex), jitter.z, nearZ, fogFar,
-                                 float(froxelDepth), invFocal);
+                                 float(froxelDepth), invFocal, fogDepthDist);
     vec3 camPos = invView[3].xyz;
     vec3 P = (invView * vec4(viewPos, 1.0)).xyz;
     // The cell's UNJITTERED centre, kept for reprojection only. Reprojecting the
@@ -150,7 +152,7 @@ void main() {
     // exactly this cell's own history, which is what turns the blend into a
     // running average of the jittered samples.
     vec3 centreView = froxelViewPos(TexCoords, float(sliceIndex), 0.5, nearZ, fogFar,
-                                    float(froxelDepth), invFocal);
+                                    float(froxelDepth), invFocal, fogDepthDist);
     vec3 centreP = (invView * vec4(centreView, 1.0)).xyz;
     // Direction from the camera toward this cell: the phase function's second
     // argument, and the froxel equivalent of the march's per-pixel rayDir.
@@ -241,7 +243,8 @@ void main() {
         if (prevZ > nearZ) {
             vec2 prevFocal = vec2(prevProjection[0][0], prevProjection[1][1]);
             vec2 prevUv = (prevViewPos.xy * prevFocal / prevZ) * 0.5 + 0.5;
-            float prevSlice = froxelViewZToSlice(prevZ, nearZ, fogFar, float(froxelDepth));
+            float prevSlice =
+                froxelViewZToSlice(prevZ, nearZ, fogFar, float(froxelDepth), fogDepthDist);
             // Scatter cells sit at their slice centre (slice s spans continuous
             // s..s+1), so continuous coordinate c reads texel c-0.5, i.e. the
             // normalized coordinate is just c/depth.
@@ -251,7 +254,7 @@ void main() {
             if (all(greaterThanEqual(prevUvw, vec3(0.0))) &&
                 all(lessThanEqual(prevUvw, vec3(1.0)))) {
                 vec4 history = texture(historyVolume, prevUvw);
-                result = mix(result, history, 0.9);
+                result = mix(result, history, temporalBlend);
             }
         }
     }
