@@ -6,7 +6,7 @@
 // integral per pixel is out of the question; this is the fit.
 //
 // Constants come from tools/gen_skin_preint_fit.py, which integrates the
-// response against the SAME profile sss_blur_frag.glsl blurs with, so the
+// response against the SAME profile include/sss_profile.glsl defines, so the
 // angular and screen-space halves of subsurface cannot disagree about the shape
 // of skin. Nothing in the build enforces that coupling: if profileWeight()
 // changes, re-run the tool's default (verify) mode, which reports the error of
@@ -19,6 +19,8 @@
 // sigma is dimensionless: sssColor_c * sssRadius * curvature, per channel. The
 // reduction is exact rather than small-angle -- substituting the true chord
 // 2 sin(x/2) makes the radius cancel identically.
+
+#include "sss_profile.glsl"
 
 #define SKIN_TABLE_N   16
 #define SKIN_SIGMA_MAX 2.0
@@ -165,25 +167,22 @@ vec3 skinDiffuse(SkinShape s, float ndotl) {
 // The angular width this fragment scatters over, per channel.
 //
 // `deficit` is why pre-integration and the screen-space blur do not double
-// count. The blur caps its base scatter radius at SSS_MAX_SCATTER_PER_DEPTH
-// world units per unit of view depth (postfx.h), so past a certain closeness it
-// delivers less than the authored radius. This takes up exactly the slack: where
-// the blur already delivers the authored width the deficit is 0 and
-// pre-integration contributes NOTHING. Variances add, hence the sqrt.
-//
-// `got` below is the blur's delivered width EXACTLY, not an estimate of it,
-// because both are now min(authored, cap * depth) in the same units -- §11.14
-// moved the cap out of pixels, and before that this had to reconstruct a pixel
-// budget through a projection it could only assume matched the one postfx used.
+// count. The blur's pyramid stops being sampled while its texels are still small
+// against the subject, so past a certain closeness it delivers less than the
+// authored radius; `maxScatterPerDepth` is what it can still reach, reported by
+// postfx_sss_max_sigma_per_depth. This takes up the slack: where the blur
+// delivers the authored width the deficit is 0 and pre-integration contributes
+// NOTHING.
 vec3 skinSigma(vec3 scatterColor, float scatterRadius, float curvature,
                float curvatureScale, float maxScatterPerDepth, float viewDepth) {
     // maxScatterPerDepth is the widest SIGMA the screen-space pass can deliver,
     // so convert it back to the base radius that sigma came from before
-    // comparing: the widest term is TAIL times the reddest channel times the
-    // radius. Comparing a base radius against a tail-scale ceiling would report
-    // the pass as complete while its longest reach was still being cut.
+    // comparing: the widest term is the tail multiplier times the reddest
+    // channel times the radius. Comparing a base radius against a tail-scale
+    // ceiling would report the pass as complete while its longest reach was
+    // still being cut.
     float peakColor = max(max(scatterColor.r, scatterColor.g), scatterColor.b);
-    float reachToBase = 1.0 / max(2.2 * peakColor, 1e-3);
+    float reachToBase = 1.0 / max(SSS_PROFILE_MULT.z * peakColor, 1e-3);
     float want = scatterRadius;
     float got = min(want, maxScatterPerDepth * reachToBase * viewDepth);
     float k = got / max(want, 1e-6);
@@ -209,7 +208,6 @@ vec3 skinSigma(vec3 scatterColor, float scatterRadius, float curvature,
     // (dimensionless) rather than curvature (1/length) keeps this free of scene
     // scale. It is a look parameter as much as a domain guard: a nose tip or ear
     // rim runs far past it.
-    float peak = max(max(scatterColor.r, scatterColor.g), scatterColor.b);
-    base = min(base, SKIN_SIGMA_MAX / max(peak, 1e-3));
+    base = min(base, SKIN_SIGMA_MAX / max(peakColor, 1e-3));
     return scatterColor * base;
 }

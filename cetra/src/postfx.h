@@ -8,8 +8,8 @@
 #include "exposure.h"
 #include "program.h"
 
-// Max distinct per-material SSS scatter profiles per scene. Mirrored as the
-// sssProfiles[] array size in sss_blur_frag.glsl -- keep the two in sync.
+// Max distinct per-material SSS scatter profiles per scene. C-side only: the
+// gather takes one profile per walk, so no shader mirrors this array.
 #define MAX_SSS_PROFILES 8
 
 // The scatter pyramid stops being sampled while its texels are still small
@@ -421,25 +421,24 @@ typedef struct PostFX {
     ShaderProgram* motion_blur_tilemax_program;
     ShaderProgram* motion_blur_neighbormax_program;
 
-    // Separable screen-space subsurface scattering. Resolves the scene
-    // pass's skin-diffuse attachment (4), blurs it separably (depth-aware,
-    // per-channel), and additive-blends blur - diffuse into hdr_fbo so the
+    // Screen-space subsurface scattering. Resolves the scene pass's skin-diffuse
+    // attachment (4), gathers it through a scale-space pyramid (depth-aware,
+    // per-channel), and additive-blends blur - diffuse into the canvas so the
     // diffuse softens while specular stays sharp. Lazily allocated (sss_ready).
     // Off when engine->sss_enabled is off (attachment 4 unwritten -> pass skipped).
     // Per-material scatter profiles: rgb = per-channel scatter weight (skin
     // ~(1,0.3,0.2), red widest), w = world-space blur radius. pbr_frag tags each
     // skin pixel with its material's profile index (in the diffuse alpha); the
-    // blur reads that per pixel and looks the profile up here. Slot 0 is the
+    // pyramid seed keeps only pixels matching the walk's own tag. Slot 0 is the
     // default skin profile (used when a scene configures no profiles).
     vec4 sss_profiles[MAX_SSS_PROFILES];
     int sss_profile_count;
     bool sss_ready; // Lazy-alloc guard for the targets below
     GLuint sss_diffuse_fbo,
-        sss_diffuse_texture;               // Full-res resolve of attachment 4 (skin diffuse D)
-    GLuint sss_blur_fbo, sss_blur_texture; // Full-res H-blur scratch (V pass composites to hdr)
-    // Under TAA the V pass writes the composite delta (blur - D) here instead of
-    // straight into hdr, so it can be temporally accumulated (its own history, like
-    // fog/SSR) before the additive fold; without TAA these stay unused.
+        sss_diffuse_texture; // Full-res resolve of attachment 4 (skin diffuse D)
+    // The gather writes the composite delta (blur - D) here; under TAA it is
+    // temporally accumulated (its own history, like fog/SSR) before the additive
+    // fold.
     GLuint sss_delta_fbo, sss_delta_texture;
     PingPong sss_history;
     ShaderProgram* sss_gather_program;
@@ -457,13 +456,11 @@ typedef struct PostFX {
     // ceiling back in pixels, which is the defect this exists to remove.
     //
     // colour carries coverage-premultiplied diffuse in rgb and coverage in a;
-    // depth carries the coverage-weighted mean view depth, which the gather
-    // needs to reject a coarse texel dominated by a different surface. Walked
-    // once per profile, so the two textures do not scale with MAX_SSS_PROFILES.
-    bool sss_pyr_ready;
+    // depth carries the coverage-weighted mean view depth, which the DOWNSAMPLE
+    // reads for its own per-level bilateral. The gather does not sample it.
+    // Walked once per profile, so neither texture scales with MAX_SSS_PROFILES.
     int sss_pyr_mips;
-    int sss_pyr_profiles; // profile count the chain was last built for
-    GLuint sss_pyr_fbo;   // one FBO, re-attached per level (the hiz idiom)
+    GLuint sss_pyr_fbo; // one FBO, re-attached per level (the hiz idiom)
     GLuint sss_pyr_color_texture;
     GLuint sss_pyr_depth_texture;
     ShaderProgram* sss_pyr_seed_program;

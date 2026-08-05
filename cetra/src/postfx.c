@@ -485,8 +485,6 @@ static void postfx_free_targets(PostFX* fx) {
     gl_delete_texture(&fx->motion_blur_neighbor_texture);
     gl_delete_fbo(&fx->sss_diffuse_fbo);
     gl_delete_texture(&fx->sss_diffuse_texture);
-    gl_delete_fbo(&fx->sss_blur_fbo);
-    gl_delete_texture(&fx->sss_blur_texture);
     gl_delete_fbo(&fx->sss_delta_fbo);
     gl_delete_texture(&fx->sss_delta_texture);
     free_pingpong(&fx->sss_history);
@@ -526,11 +524,6 @@ static void postfx_invalidate_targets(PostFX* fx) {
     fx->cs_ready = false;
     fx->motion_blur_ready = false;
     fx->sss_ready = false;
-    // Cleared beside sss_ready, never separately: the pyramid is allocated under
-    // that same guard, so a stale true here beside a deleted texture would make
-    // the walk bind level attachments on a dead FBO.
-    fx->sss_pyr_ready = false;
-    fx->sss_pyr_profiles = 0;
     fx->oit_ready = false;
     fx->spec_ready = false;
 }
@@ -838,9 +831,8 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
 
     glUseProgram(fx->sss_gather_program->id);
     uniform_set_int(fx->sss_gather_program->uniforms, "pyrColor", 0);
-    uniform_set_int(fx->sss_gather_program->uniforms, "pyrDepth", 1);
-    uniform_set_int(fx->sss_gather_program->uniforms, "origTex", 2);
-    uniform_set_int(fx->sss_gather_program->uniforms, "auxTex", 3);
+    uniform_set_int(fx->sss_gather_program->uniforms, "origTex", 1);
+    uniform_set_int(fx->sss_gather_program->uniforms, "auxTex", 2);
     glUseProgram(fx->sss_pyr_seed_program->id);
     uniform_set_int(fx->sss_pyr_seed_program->uniforms, "srcTex", 0);
     uniform_set_int(fx->sss_pyr_seed_program->uniforms, "auxTex", 1);
@@ -1220,6 +1212,21 @@ static bool postfx_ensure_spec_target(PostFX* fx) {
 
 // Allocate the SSS targets on first skin frame (DoF pattern): the full-res
 // resolve of the skin-diffuse attachment plus the H/V separable-blur ping-pong.
+// Coarsest level the gather may read, from the render height alone.
+//
+// A level's texels are 2^L render pixels, so the wide terms otherwise land where
+// the subject spans a handful of them and reads as facets. Holding texels at
+// 1/SSS_MAX_LEVEL_TEXEL_FRACTION of frame height keeps a subject a third of the
+// frame across at about a dozen of them.
+//
+// This is the delivered-scatter CEILING, and it is resolution-independent by
+// construction: the cap is a fraction of height and the pixels per world unit
+// are proportional to height, so the two cancel -- which is exactly what the
+// pixel cap this branch removed failed to do.
+static float sss_lod_cap_for_height(int height) {
+    return log2f(fmaxf((float)height / SSS_MAX_LEVEL_TEXEL_FRACTION, 1.0f));
+}
+
 // Size of pyramid level L. The ONE place the chain's geometry is expressed, so
 // the allocator and the walk cannot disagree -- a mismatch there writes a level
 // at the wrong viewport and corrupts the chain silently, and the bloom walk's
@@ -1239,17 +1246,14 @@ static void sss_pyr_level_size(const PostFX* fx, int level, int* w, int* h) {
 static bool create_sss_pyramid(PostFX* fx) {
     int mw = fx->width;
     int mh = fx->height;
-    fx->sss_pyr_mips = 1;
-    // Down to <= 4 px, NOT the bloom chain's fixed cap: the coarsest level sets
-    // the widest deliverable scatter, so a level count that stops growing with
-    // resolution reintroduces the 1/height dependence being removed. Stopping at
-    // 4 rather than 1 because odd-size halving has made the level anisotropic by
-    // then, and a level whose two axes disagree breaks the sigma-to-LOD table.
-    while (mw > 4 && mh > 4) {
-        mw = mw > 1 ? mw / 2 : 1;
-        mh = mh > 1 ? mh / 2 : 1;
-        fx->sss_pyr_mips++;
-    }
+    // Build exactly as far as the gather can read, and no further. The level
+    // count and the LOD cap are the same rule; expressing them separately built
+    // two levels per frame per profile that nothing could sample, at ~17 GL
+    // calls each. The cap is a fraction of frame height, so this still grows
+    // with resolution -- which is what keeps the ceiling resolution-independent.
+    fx->sss_pyr_mips = (int)ceilf(sss_lod_cap_for_height(fx->height)) + 1;
+    (void)mw;
+    (void)mh;
 
     const GLenum fmts[2] = {GL_RGBA16F, GL_R32F};
     const GLenum chans[2] = {GL_RGBA, GL_RED};
@@ -1297,10 +1301,8 @@ static float sss_level_sigma_px(float level) {
     return powf(2.0f, level) * sqrtf(0.5833333f * (1.0f - powf(2.0f, -2.0f * level)));
 }
 
-// Coarsest level the gather may read. Mirrors the cap uploaded as maxLod.
 static float sss_lod_cap(const PostFX* fx) {
-    float by_texel = log2f(fmaxf((float)fx->height / SSS_MAX_LEVEL_TEXEL_FRACTION, 1.0f));
-    return fminf((float)(fx->sss_pyr_mips - 1), by_texel);
+    return fminf((float)(fx->sss_pyr_mips - 1), sss_lod_cap_for_height(fx->height));
 }
 
 // Build the scatter pyramid for one profile: seed level 0 from the resolved
@@ -1379,8 +1381,6 @@ static bool postfx_ensure_sss_targets(PostFX* fx) {
         return true;
     if (!create_color_fbo(fx->width, fx->height, GL_RGBA16F, &fx->sss_diffuse_fbo,
                           &fx->sss_diffuse_texture) ||
-        !create_color_fbo(fx->width, fx->height, GL_RGBA16F, &fx->sss_blur_fbo,
-                          &fx->sss_blur_texture) ||
         !create_color_fbo(fx->width, fx->height, GL_RGBA16F, &fx->sss_delta_fbo,
                           &fx->sss_delta_texture) ||
         !create_pingpong(fx->width, fx->height, GL_RGBA16F, &fx->sss_history)) {
@@ -1389,7 +1389,6 @@ static bool postfx_ensure_sss_targets(PostFX* fx) {
     }
     if (!create_sss_pyramid(fx))
         return false;
-    fx->sss_pyr_ready = true;
     fx->sss_ready = true;
     return true;
 }
@@ -1482,8 +1481,8 @@ static GLuint run_temporal_accum(PostFX* fx, ShaderProgram* prog, PingPong* pp, 
 // boiling; the AO-length window shrinks the per-frame share 3.3x.
 #define TEMPORAL_FEEDBACK_SSR 0.97f
 
-// Additive-fold the currently-bound fullscreen setup (sss_blur_program + its
-// textures/uniforms) into the canvas (GL_ONE,GL_ONE), restoring blend state.
+// Additive-fold the currently-bound fullscreen setup into the canvas
+// (GL_ONE,GL_ONE), restoring blend state.
 static void _sss_fold_into_canvas(PostFX* fx, GLuint canvas_fbo) {
     glBindFramebuffer(GL_FRAMEBUFFER, canvas_fbo);
     glViewport(0, 0, fx->post_width, fx->post_height);
@@ -1495,14 +1494,6 @@ static void _sss_fold_into_canvas(PostFX* fx, GLuint canvas_fbo) {
     check_gl_error("postfx sss");
 }
 
-// Separable screen-space SSS: the skin-diffuse buffer (D, attachment 4, already
-// resolved to sss_diffuse_texture) is blurred H then V with a depth-aware
-// per-channel profile; the V pass forms the recomposite delta blur - D, additive-
-// blended into the canvas (scene + blur - D). Diffuse softens; FragColor's
-// specular is untouched. projection scales the world scatter radius to screen
-// pixels per depth. Under TAA the delta is temporally accumulated first (its
-// own history, like fog/SSR) so the screen-space scatter doesn't shimmer under
-// motion. Blur, delta, and history stay at render res; only the fold magnifies.
 // Screen-space SSS through the scatter pyramid: the skin-diffuse buffer (D,
 // attachment 4, already resolved) is built into a mip chain per profile, then
 // gathered with one trilinear tap per profile Gaussian per channel, forming the
@@ -1537,24 +1528,12 @@ static void postfx_run_sss(PostFX* fx, GLuint canvas_fbo, mat4 projection, bool 
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, fx->sss_pyr_color_texture);
         glActiveTexture(GL_TEXTURE1);
-        glBindTexture(GL_TEXTURE_2D, fx->sss_pyr_depth_texture);
-        glActiveTexture(GL_TEXTURE2);
         glBindTexture(GL_TEXTURE_2D, fx->sss_diffuse_texture);
-        glActiveTexture(GL_TEXTURE3);
+        glActiveTexture(GL_TEXTURE2);
         glBindTexture(GL_TEXTURE_2D, fx->aux_texture);
         uniform_set_vec4(fx->sss_gather_program->uniforms, "sssProfile", fx->sss_profiles[p]);
         uniform_set_int(fx->sss_gather_program->uniforms, "profileTag", p + 1);
         uniform_set_float(fx->sss_gather_program->uniforms, "projScale", proj_scale);
-        // Coarsest level the gather may read, rather than the coarsest that
-        // exists. A level's texels are 2^L render pixels, so the widest terms
-        // otherwise land where the subject spans a handful of texels and reads
-        // as facets. Holding texels at 1/32 of frame height keeps a subject a
-        // third of the frame across at about 26 of them.
-        //
-        // This is the delivered-scatter CEILING, and it is resolution-independent
-        // by construction: the cap is a fraction of height and the pixels per
-        // world unit are proportional to height, so the two cancel -- which is
-        // exactly what the pixel cap this branch removed failed to do.
         uniform_set_float(fx->sss_gather_program->uniforms, "maxLod", sss_lod_cap(fx));
         uniform_set_vec2(fx->sss_gather_program->uniforms, "renderTexel",
                          (const float[]){1.0f / (float)fx->width, 1.0f / (float)fx->height});
@@ -1840,11 +1819,18 @@ void postfx_apply_film_look(PostFX* fx) {
 }
 
 float postfx_sss_max_sigma_per_depth(const PostFX* fx, mat4 projection) {
-    if (!fx || !fx->sss_pyr_ready || fx->sss_pyr_mips < 2)
+    if (!fx)
         return 0.0f;
     float proj_scale = 0.5f * projection[1][1] * (float)fx->height;
     if (proj_scale <= 0.0f)
         return 0.0f;
+    // Deliberately NOT gated on the pyramid being allocated. The targets are
+    // allocated lazily inside postfx_run, which is AFTER render.c has uploaded
+    // this frame's value -- so gating here reported a zero ceiling on the first
+    // skin frame and on the frame after every resize, which reads as
+    // pre-integration snapping to full strength for one frame. The cap depends
+    // only on the render height and the projection, both known before any
+    // allocation, so it does not need the guard.
     return sss_level_sigma_px(sss_lod_cap(fx)) / proj_scale;
 }
 

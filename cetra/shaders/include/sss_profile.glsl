@@ -16,8 +16,14 @@
 const vec3 SSS_PROFILE_PEAK = vec3(0.35, 0.40, 0.25);
 const vec3 SSS_PROFILE_MULT = vec3(0.30, 1.00, 2.20);
 
-// Per-channel weight at distance t, for a base width sigma. Used by any
-// evaluation that samples the profile directly rather than through a pyramid.
+// Per-channel weight at distance t, for a base width sigma.
+//
+// NOT called by any shader since the pyramid replaced the separable blur, which
+// marched this directly. It is kept as the executable statement of the profile's
+// shape: tools/gen_skin_preint_fit.py integrates exactly this to produce
+// preintegrated_skin.glsl's coefficient table, and deleting it would leave that
+// table mirroring prose. Any future evaluation that samples the profile at a
+// distance rather than through a level should call it.
 vec3 profileWeight(float t, vec3 sigma) {
     vec3 s1 = sigma * SSS_PROFILE_MULT.x;
     vec3 s2 = sigma * SSS_PROFILE_MULT.y;

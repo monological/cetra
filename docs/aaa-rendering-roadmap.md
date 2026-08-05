@@ -288,9 +288,12 @@ it. That one stands, and B3.1 is what recovers it.
 The second — **total scatter is not resolution-independent** — was **fixed by 11.14, and B3 was not
 the cause.** The composition rule was blamed for treating the two widths as interchangeable; the
 actual fault was the screen-space blur capping its kernel in PIXELS, so the delivered world width
-fell as 1/height. Moving that cap into world-scatter-per-unit-depth makes the projection cancel
-algebraically. `deficit = sqrt(1 - k^2)` was measured against Penner's integral afterwards and
-kept.
+fell as 1/height. Moving that cap into world units was necessary but not sufficient — it banded,
+because a resolution-independent world width implies an unbounded PIXEL width no fixed tap budget
+can sample — so 11.14 replaced the blur with a scale-space pyramid. `deficit = sqrt(1 - k^2)` was
+then measured against Penner's integral and **replaced** by `(1 - k)^2`: the sqrt form assumes
+angular and screen-space sigma are interchangeable, and at the pyramid's ceiling it overshoots to
+269% of reference.
 
 **Consequence, and it is the honest headline for this row: pre-integrated skin is now inert for
 realistic content.** It fires only where the authored radius exceeds the scatter ceiling, under

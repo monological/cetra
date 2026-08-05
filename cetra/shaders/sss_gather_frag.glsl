@@ -20,7 +20,6 @@ out vec4 FragColor;
 // describes what runs.
 
 uniform sampler2D pyrColor; // rgb = coverage-premultiplied diffuse, a = coverage
-uniform sampler2D pyrDepth; // coverage-weighted view depth (positive)
 uniform sampler2D origTex;  // resolved attachment 4: the sharp diffuse D
 uniform sampler2D auxTex;   // .z = linear view Z, negative in front
 
@@ -90,7 +89,11 @@ float lodForSigma(float sigmaPx, float lodCap) {
     // where assuming the asymptote would mis-size the sharpest term.
     float L = log2(sigmaPx / 0.7637626);
     L += log2(sigmaPx / max(levelSigmaPx(max(L, 1.0)), 1e-6));
-    return clamp(L, 0.0, min(maxLod, lodCap));
+    // Floored at 1.0 so the two branches MEET. The fade-in reaches exactly 1.0
+    // at s1 while this one lands at 0.79 there, and an unfloored 0.21-LOD jump
+    // at the seam is a step in delivered width -- the same class of artifact the
+    // exact inversion exists to avoid.
+    return min(max(L, 1.0), lodCap);
 }
 
 void main()
@@ -125,10 +128,6 @@ void main()
     vec3 num = vec3(0.0);
     vec3 den = vec3(0.0);
     for (int term = 0; term < 3; term++) {
-        float mult = term == 0 ? SSS_PROFILE_MULT.x
-                   : term == 1 ? SSS_PROFILE_MULT.y
-                               : SSS_PROFILE_MULT.z;
-        float mass = term == 0 ? masses.x : term == 1 ? masses.y : masses.z;
 
         // Depth rejection lives ONLY in the downsample, where it compares texels
         // one apart at that level. A second guard here, against the level's MEAN
@@ -141,12 +140,23 @@ void main()
         // and the composite then subtracts.
         //
         // What that guard was meant to catch -- a coarse texel whose mean sits
-        // on a different surface, a hand in front of a face -- is left to the
-        // build-time guard and to coverage. It is a real gap, and the fixture
-        // has no case for it; recorded in spec 11.14 rather than papered over.
+        // on a different surface, a hand in front of a face -- is NOT caught by
+        // anything today. Coverage cannot see it: two surfaces of the same
+        // profile are both fully covered. And the downsample's own tolerance is
+        // floored at the authored radius, which dominates its level term for the
+        // first several levels, so it does not catch it either. A real gap, with
+        // no case for it in any fixture. Spec 11.14 records what a fix looks
+        // like: reject on a per-texel depth SPREAD rather than a mean.
+        float sigmaBase = SSS_PROFILE_MULT[term] * basePx;
+        float mass = masses[term];
         for (int c = 0; c < 3; c++) {
-            float sigmaPx = mult * sssProfile[c] * basePx;
-            vec4 t = tentLod(pyrColor, TexCoords, lodForSigma(sigmaPx, maxLod));
+            float lod = lodForSigma(sigmaBase * sssProfile[c], maxLod);
+            // Below level 1 there is no texel grid to smooth: level 0 is
+            // unfiltered and its texels are single render pixels, so the tent
+            // would be four fetches averaging what hardware bilinear already
+            // gives. The core term sits here at almost every framing.
+            vec4 t = lod < 1.0 ? textureLod(pyrColor, TexCoords, lod)
+                               : tentLod(pyrColor, TexCoords, lod);
             num[c] += mass * t[c];
             den[c] += mass * t.a;
         }

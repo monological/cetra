@@ -62,6 +62,7 @@ Scene* create_scene() {
     }
     scene->transparent_mesh_count = 0;
     scene->transmissive_mesh_count = 0;
+    scene->materials_dirty = true;
 
     // Initialize shadow system
     scene->shadow_system = create_shadow_system(DEFAULT_SHADOW_MAP_SIZE);
@@ -230,6 +231,12 @@ void set_scene_root_node(Scene* scene, SceneNode* root_node) {
     if (!scene)
         return;
     scene->root_node = root_node;
+    scene->materials_dirty = true;
+}
+
+void scene_mark_materials_dirty(Scene* scene) {
+    if (scene)
+        scene->materials_dirty = true;
 }
 
 /*
@@ -384,12 +391,16 @@ static void _register_node_materials(Scene* scene, SceneNode* node) {
 // free_scene -- which meant those materials were also leaked, since nothing else
 // in the tree calls free_material.
 //
-// Safe to call repeatedly: add_material_to_scene already dedupes, and only marks
-// the mask array dirty when it actually appends.
+// Gated on the graph having changed, because it is otherwise a reconciliation
+// loop whose only job is to discover nothing happened: the walk is recursive and
+// add_material_to_scene linear-scans per mesh, so an unguarded per-frame call is
+// O(meshes x materials) forever to maintain state that moves only when the graph
+// does.
 void scene_sync_materials(Scene* scene) {
-    if (!scene)
+    if (!scene || !scene->materials_dirty)
         return;
     _register_node_materials(scene, scene->root_node);
+    scene->materials_dirty = false;
 }
 
 void set_scene_wind(Scene* scene, struct Wind* wind) {

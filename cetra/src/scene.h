@@ -101,6 +101,7 @@ typedef struct Scene {
 
     Material** materials;
     size_t material_count;
+    bool materials_dirty; // graph may hold materials the registry has not seen
 
     TexturePool* tex_pool;
 
@@ -186,9 +187,16 @@ void scene_update_particle_systems(Scene* scene, float dt, float t);
 
 // material
 int add_material_to_scene(Scene* scene, Material* material);
-// Register every material reachable from the graph. Idempotent; call after
-// building or mutating the graph, or let the engine call it per frame.
+// Register every material reachable from the graph, if it is marked dirty.
+// Idempotent and free when clean, so the engine calls it every frame.
 void scene_sync_materials(Scene* scene);
+// Mark the graph as having gained materials the registry has not seen.
+//
+// Needed because a SceneNode has no way back to its Scene, so add_mesh_to_node
+// cannot mark this itself. Creating a scene and setting its root both mark it,
+// which covers building a graph before the first frame -- an app that attaches
+// meshes carrying NEW materials mid-run has to say so.
+void scene_mark_materials_dirty(Scene* scene);
 
 // wind (scene-owned; freed in free_scene). Replaces any existing wind.
 void set_scene_wind(Scene* scene, struct Wind* wind);

@@ -18,7 +18,7 @@ scattering gives Penner's pre-integrated falloff:
 
     K(x) = SUM_i w_i * exp( -(2 sin(x/2))^2 / (2 (c_i sigma)^2) )
 
-K mirrors profileWeight() in sss_blur_frag.glsl -- the SAME diffusion profile the
+K mirrors profileWeight() in include/sss_profile.glsl -- the SAME diffusion profile the
 screen-space blur uses, so the two mechanisms cannot disagree about the shape of
 skin. That coupling has no compiler behind it, which is why the default mode re-measures it.
 
@@ -98,7 +98,7 @@ each add energy.
 import math
 import sys
 
-# Mirror of profileWeight() in cetra/shaders/sss_blur_frag.glsl (weight, sigma
+# Mirror of profileWeight() in cetra/shaders/include/sss_profile.glsl (weight, sigma
 # multiplier). If that changes, re-run this tool: nothing else couples them.
 PROFILE = ((0.35, 0.30), (0.40, 1.00), (0.25, 2.20))
 

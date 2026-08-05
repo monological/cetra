@@ -379,7 +379,7 @@ def run_skin_offpath_gate(workdir):
     # large resolution to make the cap bind. That is no longer a lever: the cap is
     # now a scatter ceiling in world units per unit depth, so resolution does not
     # create slack at any size and this gate read 0 px. The lever is the authored
-    # radius against the ceiling -- SSS_MAX_SCATTER_PER_DEPTH * depth is about
+    # radius against the ceiling -- The pyramid's ceiling is about
     # 0.42 at the fixture's framing, so 0.28 is delivered in full and 1.5 is not.
     fixture = os.path.join(ROOT, "assets", "skin_curvature_fixture.cscn")
     if os.path.exists(fixture):
@@ -400,35 +400,6 @@ def run_skin_offpath_gate(workdir):
             if not ok:
                 fails.append("skin-offpath")
     return fails
-
-
-def _skin_terminator_width(pix, w, h, project, at, lit):
-    """Terminator 90%-to-10% falloff, measured in SURFACE DEGREES.
-
-    Sampling by angle rather than by pixel is what makes the number comparable
-    across resolutions at all: a width in pixels doubles when the frame does,
-    a width in degrees does not.
-    """
-    prev_a = prev_v = None
-    hits = {}
-    # Starts at the lit reference itself: by 50 degrees Lambert is already at
-    # 0.68 of its 20-degree value, so a later start misses the 90% crossing.
-    a = float(SKIN_LIT_DEG)
-    while a <= 150.0:
-        v = _linear_luma(pix, w, h, *project(at(a)))
-        for frac in (0.9, 0.1):
-            if frac in hits or prev_v is None:
-                continue
-            level = frac * lit
-            if prev_v >= level > v:
-                span = prev_v - v
-                t = (prev_v - level) / span if span > 1e-12 else 0.0
-                hits[frac] = prev_a + t * (a - prev_a)
-        prev_a, prev_v = a, v
-        a += 0.5
-    if 0.9 not in hits or 0.1 not in hits:
-        return None
-    return hits[0.1] - hits[0.9]
 
 
 def _skin_falloff_crossing(pix, w, h, project, at, lit, frac=0.05):
@@ -503,8 +474,8 @@ def run_sss_invariance_gate(workdir):
     without SSS, and the gate compares how far the blur pushes the falloff past
     where Lambert leaves it -- see _skin_falloff_crossing for why not the width.
 
-    An 8x sweep rather than 2x: the old cap engaged part-way up, so a short sweep
-    could sit entirely inside the clamped regime and read flat while being wrong.
+    A 4x sweep: the old cap engaged part-way up, so a short sweep could sit
+    entirely inside the clamped regime and read flat while being wrong.
     """
     scene = os.path.join(ROOT, "assets", "skin_curvature_fixture.cscn")
     if not os.path.exists(scene):
@@ -522,16 +493,16 @@ def run_sss_invariance_gate(workdir):
         on = _skin_sample(workdir, tag + "_sss", dims, ["--no-skin-preint"])
         if off is None or on is None or off[0] is None or on[0] is None:
             print(f"  sss-scale    ERROR while rendering at {dims[0]}x{dims[1]}")
-            return ["sss-invariance"]
+            return ["sss-scale"]
         pushes.append(on[0] - off[0])
 
     lo, hi = pushes
     drift = abs(hi / lo - 1.0) if abs(lo) > 1e-9 else float("inf")
-    ok = drift <= 0.05 and lo > 1.0
+    ok = drift <= SSS_DRIFT_MAX and lo > 1.0
     print(f"  sss-scale    {'PASS' if ok else 'FAIL'}  blur pushes the falloff "
           f"{lo:+.2f} deg at 500p and {hi:+.2f} deg at 2000p, drift {drift:.1%} "
-          f"(want <= 5%, and a real push at all)")
-    return [] if ok else ["sss-invariance"]
+          f"(want <= {SSS_DRIFT_MAX:.0%}, and a real push at all)")
+    return [] if ok else ["sss-scale"]
 
 
 # Ripple bar for run_sss_banding_gate, and the window it is measured over.
@@ -541,18 +512,27 @@ def run_sss_invariance_gate(workdir):
 # on a smooth frame and 0.9999 on a banded one, which is how the banding shipped.
 #
 #   separable blur, unclamped   0.012   no artifact
-#   pyramid gather              0.030   no artifact (verified at 1:1)
+#   pyramid gather (shipped)    0.014   no artifact (verified at 1:1)
 #   cap removed, uniform taps   0.074   visibly banded
 #   cap removed, quadratic      0.088   visibly banded
 #
-# The bar sits at 0.045: 1.5x above the worst clean build and 1.6x below the best
-# dirty one. It moved from 0.030 when the pyramid landed, and the reason is worth
-# stating plainly since moving a bar to pass one's own code is the obvious abuse:
-# the pyramid samples across mip levels, so it carries a little level-transition
-# structure the separable kernel could not, and that structure is NOT the tap
-# rings this gate exists to catch. It was checked by eye at 1:1 on the fixture's
-# terminator before the number was touched.
-SSS_RIPPLE_MAX = 0.045
+# The bar sits at 0.030: 2.1x above the shipped build and 2.5x below the best
+# dirty one. It was briefly loosened to 0.045 mid-branch, when an interim pyramid
+# measured 0.030 -- that build was superseded three commits later and the bar was
+# never re-tightened, leaving the shipped code sitting 3.2x under its own gate.
+# Loosening a bar to pass one's own code is the obvious abuse, so: it is back
+# where it started, and the row above records what the shipped build actually
+# measures rather than what the interim one did.
+SSS_RIPPLE_MAX = 0.030
+
+# Drift bar for run_sss_invariance_gate.
+#
+# Spec 11.14 set the exit criterion at 2%; the gate first shipped at 5% with no
+# justification recorded anywhere, which is the one bar on this branch that was
+# moved rather than argued. 3% is the honest number: the shipped build measures
+# 2.5%, so this is 20% of headroom over a real measurement, against the 8.3%
+# the separable blur drifted and the rho = 0.025 collapse before that.
+SSS_DRIFT_MAX = 0.03
 SSS_RIPPLE_WINDOW = 12
 
 
@@ -619,7 +599,7 @@ def run_sss_banding_gate(workdir):
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0 or not os.path.exists(out):
         print("  sss-band     ERROR while rendering the curvature fixture")
-        return ["sss-banding"]
+        return ["sss-band"]
 
     w, h, pix = _read_ppm(out)
     project = _projector(SKIN_CAM, w, h)
@@ -631,13 +611,13 @@ def run_sss_banding_gate(workdir):
     ripple = _scanline_ripple(pix, w, h, project, radius, cx)
     if ripple is None:
         print("  sss-band     ERROR sphere too small to scan at 1200x750")
-        return ["sss-banding"]
+        return ["sss-band"]
 
     ok = ripple <= SSS_RIPPLE_MAX
     print(f"  sss-band     {'PASS' if ok else 'FAIL'}  kernel ripple {ripple:.4f} "
           f"(want <= {SSS_RIPPLE_MAX:.3f}; smooth reference measures 0.012, "
           f"visibly banded 0.074)")
-    return [] if ok else ["sss-banding"]
+    return [] if ok else ["sss-band"]
 
 
 def run_skin_handoff_gate(workdir):
@@ -651,7 +631,7 @@ def run_skin_handoff_gate(workdir):
     gate asserted nothing. What creates shortfall now is an authored radius
     exceeding the ceiling, which is a scene property, as it should be.
 
-    SSS_MAX_SCATTER_PER_DEPTH * depth is about 0.42 at this framing, so 0.28 is
+    The pyramid's ceiling is about 0.42 at this framing, so 0.28 is
     delivered whole and 1.5 is delivered at roughly a quarter.
 
     The bars come from the two ways D5 can be broken. Pinning the deficit to 0
