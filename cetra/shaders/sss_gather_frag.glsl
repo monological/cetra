@@ -110,6 +110,18 @@ void main()
     // count is free to grow with resolution now; only the world width is fixed.
     float basePx = sssProfile.w * projScale / depth;
 
+    // Apply the ceiling to the BASE radius, not to each channel's sigma.
+    //
+    // Red scatters widest, so a per-channel clamp bites red first and leaves
+    // green and blue untouched -- which compresses exactly the ratio that makes
+    // skin redden rather than grey out. Measured against the separable blur it
+    // visibly desaturated the terminator. Clamping the base keeps red:green:blue
+    // exact through the ceiling, the same reason skinSigma clamps its base rather
+    // than its channels (§11.13 D6).
+    float peak = max(max(sssProfile.r, sssProfile.g), sssProfile.b);
+    float widestMult = SSS_PROFILE_MULT.z * max(peak, 1e-3);
+    basePx = min(basePx, levelSigmaPx(maxLod) / widestMult);
+
     vec3 num = vec3(0.0);
     vec3 den = vec3(0.0);
     for (int term = 0; term < 3; term++) {

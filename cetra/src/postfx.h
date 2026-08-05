@@ -16,7 +16,7 @@
 // against the subject, so the widest term it can deliver is set by that cap
 // rather than by a constant. postfx_sss_max_sigma_per_depth reports it; there is
 // no mirrored #define, because the number now depends on the target.
-#define SSS_MAX_LEVEL_TEXEL_FRACTION 32.0f
+#define SSS_MAX_LEVEL_TEXEL_FRACTION 18.0f
 
 /*
  * Post-processing stack: the scene renders in linear HDR into the engine's
