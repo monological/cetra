@@ -186,6 +186,9 @@ void scene_update_particle_systems(Scene* scene, float dt, float t);
 
 // material
 int add_material_to_scene(Scene* scene, Material* material);
+// Register every material reachable from the graph. Idempotent; call after
+// building or mutating the graph, or let the engine call it per frame.
+void scene_sync_materials(Scene* scene);
 
 // wind (scene-owned; freed in free_scene). Replaces any existing wind.
 void set_scene_wind(Scene* scene, struct Wind* wind);

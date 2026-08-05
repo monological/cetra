@@ -2694,6 +2694,12 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EngineRenderFunc render
         glViewport(0, 0, rw, rh);
         engine->normals_this_frame =
             frame_mode == RENDER_MODE_PBR && postfx_wants_normals(engine->postfx);
+        // Make the material registry describe what the graph actually draws
+        // before anything reads it. An app that builds materials in code never
+        // called add_material_to_scene, so its registry was empty and every
+        // consumer of it -- the subsurface gate below included -- silently saw a
+        // scene with no materials at all.
+        scene_sync_materials(shadow_scene);
         // SSS writes attachment 4 (skin diffuse) only when it has real work: the
         // feature is on AND the scene carries a subsurface material. This keeps a
         // non-skin scene byte-identical to master (the blur/composite would add 0)

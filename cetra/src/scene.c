@@ -361,6 +361,37 @@ int add_material_to_scene(Scene* scene, Material* material) {
     return 0;
 }
 
+static void _register_node_materials(Scene* scene, SceneNode* node) {
+    if (!node)
+        return;
+    for (size_t i = 0; i < node->mesh_count; i++) {
+        if (node->meshes[i] && node->meshes[i]->material)
+            add_material_to_scene(scene, node->meshes[i]->material);
+    }
+    for (size_t i = 0; i < node->children_count; i++)
+        _register_node_materials(scene, node->children[i]);
+}
+
+// Register every material reachable from the graph, so the registry describes
+// what the scene actually draws rather than only what an importer put there.
+//
+// Until this existed, `add_material_to_scene` was called from exactly one place
+// -- the Assimp import path -- so a scene that built its materials in code had
+// an EMPTY registry no matter how many meshes it drew. Four things read that
+// registry and all four were silently wrong for such a scene: subsurface
+// detection (so `apps/tree` authored subsurface on leaves and grass and never
+// once ran the SSS pass), mask-array packing, lookup by material name, and
+// free_scene -- which meant those materials were also leaked, since nothing else
+// in the tree calls free_material.
+//
+// Safe to call repeatedly: add_material_to_scene already dedupes, and only marks
+// the mask array dirty when it actually appends.
+void scene_sync_materials(Scene* scene) {
+    if (!scene)
+        return;
+    _register_node_materials(scene, scene->root_node);
+}
+
 void set_scene_wind(Scene* scene, struct Wind* wind) {
     if (!scene)
         return;
