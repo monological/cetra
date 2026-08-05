@@ -630,6 +630,13 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     fx->fog_far = 60.0f;
     fx->fog_depth_dist = 1.0f;
     fx->fog_temporal_blend = 0.9f;
+    fx->fog_esm_array = 0;
+    fx->fog_esm_scratch = 0;
+    fx->fog_esm_fbo = 0;
+    fx->fog_esm_layers = 0;
+    // Sharper than this and the exponential stops surviving the blur (and fp32);
+    // softer and blockers leak light through their own shadow.
+    fx->fog_esm_k = 40.0f;
     fx->froxel_grid_x = POSTFX_FROXEL_X;
     fx->froxel_grid_y = POSTFX_FROXEL_Y;
     fx->froxel_grid_z = POSTFX_FROXEL_Z;
@@ -710,6 +717,7 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     fx->froxel_inject_program = create_froxel_inject_program();
     fx->froxel_integrate_program = create_froxel_integrate_program();
     fx->froxel_composite_program = create_froxel_composite_program();
+    fx->fog_esm_program = create_fog_esm_program();
     fx->taa_resolve_program = create_taa_resolve_program();
     // The TAAU resolve is compiled on demand -- here when the launch scale is
     // already reduced, otherwise at the resize that first reduces it.
@@ -1892,11 +1900,91 @@ static void upload_fog_uniforms(PostFX* fx, UniformManager* u, mat4 projection, 
     }
 }
 
+// Downsample the scene's depth cascades into the fog's exponential shadow
+// representation, then blur it separably. Runs before the volume is injected,
+// once per frame, and only while a caster is published.
+//
+// Layer count follows the publish, so a cascade-count change reallocates rather
+// than reading layers that no longer exist.
+static bool postfx_build_fog_esm(PostFX* fx) {
+    int layers = fx->fog_light_count * fx->fog_cascade_count;
+    if (!fx->fog_shadow_map_array || layers <= 0 || !fx->fog_esm_program)
+        return false;
+
+    if (fx->fog_esm_layers != layers) {
+        if (fx->fog_esm_array)
+            glDeleteTextures(1, &fx->fog_esm_array);
+        if (fx->fog_esm_scratch)
+            glDeleteTextures(1, &fx->fog_esm_scratch);
+        fx->fog_esm_array = create_texture_2d_array_float(POSTFX_FOG_ESM_SIZE, POSTFX_FOG_ESM_SIZE,
+                                                          layers, GL_R32F, GL_RED);
+        fx->fog_esm_scratch = create_texture_2d_array_float(
+            POSTFX_FOG_ESM_SIZE, POSTFX_FOG_ESM_SIZE, layers, GL_R32F, GL_RED);
+        if (!fx->fog_esm_array || !fx->fog_esm_scratch) {
+            log_error("Failed to allocate fog ESM cascades");
+            fx->fog_esm_layers = 0;
+            return false;
+        }
+        fx->fog_esm_layers = layers;
+    }
+    if (!fx->fog_esm_fbo)
+        glGenFramebuffers(1, &fx->fog_esm_fbo);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, fx->fog_esm_fbo);
+    glViewport(0, 0, POSTFX_FOG_ESM_SIZE, POSTFX_FOG_ESM_SIZE);
+    glUseProgram(fx->fog_esm_program->id);
+    UniformManager* eu = fx->fog_esm_program->uniforms;
+    uniform_set_int(eu, "srcDepth", 0);
+    uniform_set_int(eu, "srcEsm", 1);
+    uniform_set_float(eu, "esmK", fx->fog_esm_k);
+    glBindVertexArray(fx->quad_vao);
+
+    const float texel = 1.0f / (float)POSTFX_FOG_ESM_SIZE;
+    for (int layer = 0; layer < layers; layer++) {
+        uniform_set_int(eu, "layer", layer);
+        // 0: depth -> exp, into the scratch. 1,2: blur scratch -> array -> back,
+        // one axis each, so the finished term lands in fog_esm_array.
+        const struct {
+            GLuint dst;
+            GLuint src;
+            int mode;
+            float dx, dy;
+        } steps[3] = {
+            {fx->fog_esm_scratch, fx->fog_shadow_map_array, 0, 0.0f, 0.0f},
+            {fx->fog_esm_array, fx->fog_esm_scratch, 1, texel, 0.0f},
+            {fx->fog_esm_scratch, fx->fog_esm_array, 1, 0.0f, texel},
+        };
+        for (int s = 0; s < 3; s++) {
+            glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, steps[s].dst, 0, layer);
+            if (layer == 0 && s == 0 &&
+                glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+                log_error("Fog ESM FBO incomplete; falling back to the binary tap");
+                glBindFramebuffer(GL_FRAMEBUFFER, 0);
+                return false;
+            }
+            glActiveTexture(GL_TEXTURE0 + (steps[s].mode == 0 ? 0 : 1));
+            glBindTexture(GL_TEXTURE_2D_ARRAY, steps[s].src);
+            uniform_set_int(eu, "mode", steps[s].mode);
+            uniform_set_vec2(eu, "blurStep", (vec2){steps[s].dx, steps[s].dy});
+            glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+        }
+        // The vertical blur wrote the scratch, so the finished layer is there;
+        // swap the handles once at the end rather than adding a fourth copy.
+    }
+    GLuint done = fx->fog_esm_scratch;
+    fx->fog_esm_scratch = fx->fog_esm_array;
+    fx->fog_esm_array = done;
+
+    glActiveTexture(GL_TEXTURE0);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    return true;
+}
+
 // Build the fog scattering volume: light the medium once per cell, then
 // integrate front-to-back along each froxel column. Everything about froxel
 // parity, reprojection and the adjacency stamp lives here, so the composite
 // stage above it does not have to carry any of it.
-static void postfx_build_fog_volume(PostFX* fx, mat4 projection, mat4 view) {
+static void postfx_build_fog_volume(PostFX* fx, mat4 projection, mat4 view, bool esm_on) {
     // Frame parity picks this frame's write target; the other volume still
     // holds the previous frame's scattering for reprojection.
     const int write = fx->frame_index & 1;
@@ -1919,8 +2007,10 @@ static void postfx_build_fog_volume(PostFX* fx, mat4 projection, mat4 view) {
     // 1. Inject: scattering + extinction per cell, one draw per slice.
     glUseProgram(fx->froxel_inject_program->id);
     UniformManager* iu = fx->froxel_inject_program->uniforms;
+    // The medium reads the ESM cascades when they built this frame, the exact
+    // depth array otherwise -- the shader branches on esmEnabled.
     glActiveTexture(GL_TEXTURE1);
-    glBindTexture(GL_TEXTURE_2D_ARRAY, fx->fog_shadow_map_array);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, esm_on ? fx->fog_esm_array : fx->fog_shadow_map_array);
     glActiveTexture(GL_TEXTURE2);
     glBindTexture(GL_TEXTURE_2D_ARRAY, fx->fog_punctual_shadow_maps);
     glActiveTexture(GL_TEXTURE3);
@@ -1930,6 +2020,8 @@ static void postfx_build_fog_volume(PostFX* fx, mat4 projection, mat4 view) {
     uniform_set_int(iu, "froxelDepth", fx->froxel_built_z);
     uniform_set_int(iu, "temporal", temporal);
     uniform_set_float(iu, "temporalBlend", fx->fog_temporal_blend);
+    uniform_set_int(iu, "esmEnabled", esm_on ? 1 : 0);
+    uniform_set_float(iu, "esmK", fx->fog_esm_k);
     uniform_set_int(iu, "frameIndex", fx->frame_index);
     uniform_set_mat4(iu, "prevView", (float*)fx->froxel_prev_view);
     uniform_set_mat4(iu, "prevProjection", (float*)fx->froxel_prev_proj);
@@ -1971,8 +2063,10 @@ static void postfx_run_atmosphere(PostFX* fx, GLuint canvas_fbo, bool aux_writte
     if (!aux_written || (!fog_on && !aerial_on))
         return;
 
+    // Before the volume: the inject pass reads what this writes.
+    bool esm_on = fog_on && postfx_build_fog_esm(fx);
     if (fog_on)
-        postfx_build_fog_volume(fx, projection, view);
+        postfx_build_fog_volume(fx, projection, view, esm_on);
 
     // Composite: out = inscatter + scene * transmittance, the same
     // enable/draw/restore idiom the screen-space fog and SSR composites use.

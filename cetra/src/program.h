@@ -112,6 +112,9 @@ ShaderProgram* create_ssr_accum_program();
 ShaderProgram* create_froxel_inject_program();
 ShaderProgram* create_froxel_integrate_program();
 ShaderProgram* create_froxel_composite_program();
+// Downsamples the scene's depth cascades into the fog's own filterable
+// exponential representation (spec 11.12); one pass per layer per axis.
+ShaderProgram* create_fog_esm_program();
 ShaderProgram* create_gi_project_program();
 ShaderProgram* create_lum_measure_program();
 ShaderProgram* create_dof_coc_program();

@@ -142,6 +142,25 @@ GLuint create_texture_3d_float(int width, int height, int depth, GLenum internal
     return tex;
 }
 
+// A filterable float 2D array, CLAMP_TO_EDGE and bilinear WITHIN each layer --
+// never across layers, which is what separates this from the 3D entry point
+// above. For array-of-maps data where a layer is an independent image (the fog's
+// ESM cascades) rather than a sampled volume.
+GLuint create_texture_2d_array_float(int width, int height, int layers, GLenum internal_format,
+                                     GLenum data_format) {
+    GLuint tex = 0;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, tex);
+    glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, (GLint)internal_format, width, height, layers, 0,
+                 data_format, GL_FLOAT, NULL);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
+    return tex;
+}
+
 // The tiling-volume entry point the note above reserves: RGBA8 pixels, REPEAT
 // on all three axes, trilinear mips (glGenerateMipmap after the level-0
 // upload -- still no glTexStorage3D on 4.1). For CPU-baked noise fields whose

@@ -82,6 +82,10 @@ GLuint create_texture_3d_float(int width, int height, int depth, GLenum internal
 // the level-0 pixels). For CPU-baked repeating fields whose coarser mips a
 // marcher samples via textureLod. Returns the raw GL name; the caller owns
 // deletion.
+// Filterable float 2D array; bilinear within a layer, never across layers.
+GLuint create_texture_2d_array_float(int width, int height, int layers, GLenum internal_format,
+                                     GLenum data_format);
+
 GLuint create_texture_3d_rgba8_tiling(int width, int height, int depth,
                                       const unsigned char* pixels);
 

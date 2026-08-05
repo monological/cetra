@@ -90,6 +90,12 @@ typedef enum PostFXSpecOccMode {
 #define POSTFX_FROXEL_Y 90
 #define POSTFX_FROXEL_Z 64
 
+// Side of the fog's ESM cascades. Deliberately far below the scene's shadow
+// resolution and independent of it: the point is to throw the high-frequency
+// detail away, and a size that tracked the source would keep whatever the
+// source has.
+#define POSTFX_FOG_ESM_SIZE 512
+
 typedef struct PostFX {
     int width, height;             // Render size: what the scene and the pre-TAA
                                    // chain rasterize at (post size x render_scale)
@@ -169,7 +175,9 @@ typedef struct PostFX {
     ShaderProgram* upsample_tent_program;    // Shared tent composite (bloom mips, SSR)
     ShaderProgram* froxel_inject_program;    // Per-cell scattering into the volume (spec 9.5)
     ShaderProgram* froxel_integrate_program; // Front-to-back gather along each slice column
-    ShaderProgram* froxel_composite_program; // One trilinear tap, folded into the HDR scene
+    ShaderProgram* froxel_composite_program;
+    ShaderProgram* fog_esm_program; // Builds fog_esm_array from the depth cascades // One trilinear
+                                    // tap, folded into the HDR scene
     ShaderProgram* taa_resolve_program;
     ShaderProgram* taau_resolve_program; // Compiled the first time render_scale < 1 (at
                                          // create or at a resize), and kept afterward
@@ -315,6 +323,15 @@ typedef struct PostFX {
     vec3 fog_light_dir[POSTFX_FOG_MAX_LIGHTS];   // normalized travel direction
     GLuint fog_shadow_map_array;                 // 0 when shadows are off
     float fog_shadow_bias;
+    // The fog's own shadow representation, built from the array above: small,
+    // exponential, and blurred, so the medium gets a soft low-frequency
+    // occlusion instead of the surface path's exact binary compare. 0 until the
+    // first shadowed fog frame.
+    GLuint fog_esm_array;
+    GLuint fog_esm_scratch; // Ping target for the separable blur
+    GLuint fog_esm_fbo;     // Re-attached per layer
+    int fog_esm_layers;     // Layers the pair was allocated for
+    float fog_esm_k;        // Exponent scale; the one tuning constant
 
     // One volumetric spot light (the flashlight), published alongside the
     // directional casters. The fog march scatters it per step (cone + distance

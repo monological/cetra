@@ -903,6 +903,10 @@ ShaderProgram* create_froxel_composite_program() {
     return create_post_program("froxel_composite", froxel_composite_frag_shader_str);
 }
 
+ShaderProgram* create_fog_esm_program() {
+    return create_post_program("fog_esm", fog_esm_frag_shader_str);
+}
+
 // GI probe projection (spec 9.7). Writes a sub-rectangle of the probe atlas
 // picked by glViewport rather than a whole target, which is why it is an
 // ordinary fullscreen-quad pass despite drawing a 10x10 tile.

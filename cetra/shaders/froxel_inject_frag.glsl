@@ -43,6 +43,11 @@ uniform float floorY;        // World height of max density
 uniform float anisotropy;    // Henyey-Greenstein g
 uniform float sunBoost;
 uniform float shadowBias;
+// shadowMaps holds the fog's own ESM cascades when this is 1, and the scene's
+// exact depth array when it is 0 (the build can decline: no caster, or an
+// allocation that failed).
+uniform int esmEnabled;
+uniform float esmK;
 
 // One volumetric spot light (the flashlight).
 uniform int spotEnabled;
@@ -113,6 +118,15 @@ float fogVisibility(int layer0, vec3 P) {
         vec3 proj = (lightSpaceMatrix[layer] * vec4(P, 1.0)).xyz * 0.5 + 0.5;
         if (proj.z > 1.0 || proj.x < 0.0 || proj.x > 1.0 || proj.y < 0.0 || proj.y > 1.0) {
             continue;
+        }
+        // exp(k*d_blocker) * exp(-k*d_receiver) = exp(k*(d_b - d_r)): at or in
+        // front of the blocker the exponent is >= 0 and this saturates to lit,
+        // behind it the term decays smoothly. The value being filterable is what
+        // lets the medium read a blurred, downsampled cascade at all; a depth
+        // compare would have to be re-evaluated per tap.
+        if (esmEnabled == 1) {
+            float occ = texture(shadowMaps, vec3(proj.xy, float(layer))).r;
+            return clamp(occ * exp(-esmK * proj.z), 0.0, 1.0);
         }
         float d = texture(shadowMaps, vec3(proj.xy, float(layer))).r;
         return proj.z - shadowBias > d ? 0.0 : 1.0;
