@@ -80,9 +80,11 @@ Binding for all features (three new links in the `_Static_assert` chain, `render
   per-program and pbr_frag never sampled the skybox cube)
 - Contact shadows + bent-normal spec-occ consume **zero** pbr_frag units (postfx-only).
 - Clustered forward consumes **zero** units (UBOs, not data textures).
-- Pre-integrated skin uses an **analytic fit, no LUT** — partly to keep this ledger intact. Its
-  documented LUT fallback would collide with the DDGI atlas on unit 14; if the fit ever disappoints,
-  the fallback packs into shared atlas space instead (flagged in both subplans).
+- Pre-integrated skin consumes **zero** units (spec 11.13). The fit did disappoint — the analytic
+  form cost 9x the achievable error — but the escalation was to a 16-row `const` array in GLSL, not
+  to a sampled texture, so neither the ledger nor unit 14 was ever at risk. Worth generalising: the
+  "no LUT" constraint this ledger imposes is a constraint on *texture* lookups, and a table small
+  enough to live in uniform/const space is not one.
 
 ## Track A — Direct Lighting & Global Illumination
 
@@ -254,7 +256,40 @@ New: `include/clouds.glsl`, `cloud_march_frag.glsl`, `cloud_reproject_frag.glsl`
 CLI: `--clouds`, `--cloud-coverage`. **Owns foundations:** CPU 3D noise generation (Worley +
 packing + threaded bake). **Depends on:** B1's `create_texture_3d` (hard).
 
-### B3. Pre-integrated skin shading (Penner 2011) — Effort S
+### B3. Pre-integrated skin shading (Penner 2011) — Effort S — **DONE (spec 11.13), effort was M**
+Shipped, opt-in via `Material.curvature_scale` (default 0, so every existing asset and all 16
+goldens are byte-identical by construction). The sketch below is preserved, and four of its
+load-bearing claims turned out wrong:
+
+- **"extend `include/skin.glsl`" is a build break.** That file is linear-blend *bone* skinning,
+  `#include`d by two VERTEX shaders; `dFdx` does not compile in a vertex stage, so following it
+  literally breaks the shadow depth pass for every skinned mesh. Landed as a new
+  `include/preintegrated_skin.glsl`.
+- **"under the existing screen-space SSS" understates the coupling.** Replacing only the att4 tap
+  delivers 5% of the intended wrap, because `hdr` still carries Lambert at full strength and the
+  new response enters as a signed second difference. The falloff has to replace `NdotL` in BOTH
+  `Lo` and the tap.
+- **`length(fwidth(N))` measures the normal map, not the mesh.** `N` is post-normal-mapping, and
+  pbr_frag already computes that exact quantity as a texture-detail metric for specular AA. Since
+  sigma scales linearly in curvature, millimetre normal detail dissolves the terminator entirely.
+  Curvature must come from the interpolated geometric normal, and the fwidth ratio itself carries
+  up to 40% frame-orientation bias — shipped as an RMS form.
+- **"analytic fit, no LUT" cost 9x the achievable error.** The objection to a LUT was texture units,
+  of which pbr_frag has none spare; a `const` array in GLSL costs none. Shipped as a 16-row sampled
+  table. The polynomial-in-sigma fit could not represent a kink in the coefficient curves, and the
+  textbook clamped-wrap form cannot represent the response floor at all (skin facing away from a
+  light still returns ~0.012 at sigma 0.3, tending to 1/pi).
+
+Two limits found by measurement and recorded rather than fixed. **The cast shadow eats the wrap
+past the terminator**: on a convex caster the `NdotL = 0` boundary *is* the self-shadow boundary,
+and `shadow` multiplies outside the diffuse, so B3 brightens and reddens the *approach* to the
+terminator without wrapping light past it. And **total scatter is not resolution-independent** —
+the composition rule that divides work between the angular falloff and the screen-space blur
+treats their widths as interchangeable, which at the terminator they are not; measured 13.4% width
+drift across a 4x sweep against 8.3% with the feature off. The handoff mechanism is gated
+(`skin-handoff`); the invariance is not, because it does not hold. Real fix is a downsampled blur
+chain, which would also give the two halves a common reference to calibrate against.
+
 Curvature-aware diffuse falloff under the existing screen-space SSS. **Analytic fit, no LUT** —
 pbr_frag units 7/9 go to LTC, and Penner's lookup has well-behaved analytic approximations (~10 ALU
 on skin pixels, fully deterministic). Curvature = `length(fwidth(N))/length(fwidth(P)) *
@@ -265,6 +300,24 @@ specular and `subsurfaceTransmission` back-light untouched. Material gains `curv
 4-step scalar recipe.
 New: extend `include/skin.glsl`. CLI: `--no-skin-preint`. Test asset: curvature-sweep sphere-row GLB.
 **Owns foundations:** none (deliberately). **Depends on:** nothing.
+
+### B3.1. Shadow-penumbra scattering (Penner's second LUT) — Effort M
+The half of Penner 2011 that B3 deliberately left out, and the one that recovers what B3 could not.
+B3 owns the *attached* terminator; a cast shadow's edge is still a hard multiply outside the
+diffuse, so on a convex character the two boundaries coincide and the shadow wins. Penner's second
+table pre-integrates the diffusion profile against the shadow's own penumbra gradient, which is
+what lets light bleed across a shadow edge instead of being multiplied to zero at it. Needs the
+penumbra width the shadow lookup already estimates for PCSS, so the input is largely in hand.
+**Owns foundations:** none. **Depends on:** B3 (shipped), PCSS (shipped).
+
+### B3.2. Skin under an area light — Effort M
+Skin lit by an area/LTC panel gets **no subsurface scattering at all** today: the SSS accumulation
+path `continue`s past panels, so `sssDiffuse` never sees them. Self-consistent rather than broken —
+LTC integrates the whole panel analytically and has no single `L` to feed a diffusion profile — but
+a softbox portrait is *the* canonical skin setup, so the gap is exactly where the feature matters
+most. Same shape of gap as the IBL one: B3 also does nothing on an IBL-lit face, since the ambient
+tap has no `L` either. Both want a representative direction and a solid-angle-aware width.
+**Owns foundations:** none. **Depends on:** A2 LTC (shipped), B3 (shipped).
 
 ### B4. TAAU temporal upscaling (Karis-style) — Effort L — **DONE (spec 11.7)**
 Shipped as planned below, with three deviations. The buffer split landed as
@@ -318,7 +371,7 @@ optical depth b0, new attachments on the OIT FBO. Transparents draw **twice** (m
 color bracket weighted by reconstructed transmittance — the `engine_begin/end_oit_pass` bracket
 splits in two; main engine-side surgery). Hamburger 4-moment solver in `include/mboit.glsl`;
 `oit_moments` toggle keeps WBOIT fallback; off → 0px. ~+16 MB at 4× MSAA 1080p. Best customer: hair
-card tips (B8). **Park until Tier 2 lands.**
+card tips (B8). ~~**Park until Tier 2 lands.**~~ Tier 2 landed with 11.13; unparked.
 
 ### B7. Lens flare / cinematic finishing — Effort S/M — sketch
 Quarter-res Chapman-style ghost chain off the bloom bright buffer (scaled/flipped UV ghosts +
@@ -378,8 +431,8 @@ its own spec, branch, reviews and gates. It exists because using the engine surf
 roadmap's feature items could not — a wrong tonemap constant, non-photometric light scales, shadow
 banding at real viewing distances, off-spec KHR materials against reference renderers, and temporal
 flicker whose root cause was an estimator, not a filter. The series continued past B2 with 11.1
-and 11.2 (below). **Tier 1 is complete; Tier 2's A5 bent-normal specular occlusion is done
-(11.3 machinery + 11.4 split ambient specular, default `split`).**
+and 11.2 (below). **Tiers 1 and 2 are complete**, Tier 2 closing with B3 pre-integrated skin
+(11.13). Tier 3 is unparked.
 
 - **9.9–10.0 photometry:** PBR Neutral desaturation blend was inverted vs the Khronos reference;
   then punctual lights went genuinely photometric (candela/lux imported as authored, EV100 camera)
@@ -427,15 +480,17 @@ and 11.2 (below). **Tier 1 is complete; Tier 2's A5 bent-normal specular occlusi
 | 9 | A5 Bent-normal spec-occ | M | **DONE (11.3 + 11.4):** split ambient specular, default `split`, exact occlusion by construction. |
 | 10 | B5 Bokeh DoF | M | **DONE (11.6):** near/far gather, N-gon kernel, first DoF golden. |
 | 11 | B4 TAAU | L | **DONE (11.7):** render/post/half split, separate upscaling resolve, `--render-scale`; ~2x at 0.67. |
-| 12 | B3 Pre-integrated skin | S | Character tier begins; S effort, zero infra. |
+| 12 | B3 Pre-integrated skin | S→**M** | **DONE (11.13):** opt-in `curvature_scale`, 16-row const table, `.cscn` material overrides. Not zero infra: fit tool, fixture, 3 gates, golden. Shadow limits the wrap (→ B3.1); scatter is not resolution-invariant. |
 
-**Tier 3 — polish & late-tier (parked until Tiers 1-2 land):**
-| # | Item | Effort |
-|---|------|--------|
-| 13 | B6 Moment-based OIT | L |
-| 14 | B7 Lens flare / finishing | S/M |
-| 15 | A6 Moment shadow maps | L |
-| 16 | B8 Hair | XL |
+**Tier 3 — polish & late-tier (unparked: Tiers 1-2 have landed):**
+| # | Item | Effort | Why here |
+|---|------|--------|----------|
+| 13 | B3.1 Shadow-penumbra scattering | M | Recovers what B3 measured it could not do: the cast shadow owns the terminator on a convex character. Cheapest real gain in the character tier, and the PCSS penumbra estimate is already computed. |
+| 14 | B3.2 Skin under an area light | M | Skin gets no SSS at all under an LTC panel today, and a softbox portrait is the canonical skin setup. Shares its shape with the IBL gap. |
+| 15 | B6 Moment-based OIT | L | |
+| 16 | B7 Lens flare / finishing | S/M | |
+| 17 | A6 Moment shadow maps | L | |
+| 18 | B8 Hair | XL | Wants B3.1 and B3.2 settled first — hair shares the shadow-scattering and area-light problems and is far more expensive to iterate on. |
 
 ## Foundations ownership (just-in-time)
 
