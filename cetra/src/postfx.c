@@ -1289,6 +1289,20 @@ static bool create_sss_pyramid(PostFX* fx) {
     return ok;
 }
 
+// Pre-filter sigma of pyramid level L, in render pixels. Mirrors levelSigmaPx
+// in sss_gather_frag.glsl; one 13-tap step contributes variance 0.4375 in its
+// destination texels, so var_L = 0.5833 * (1 - 4^-L) and level L's texels are
+// 2^L render pixels wide.
+static float sss_level_sigma_px(float level) {
+    return powf(2.0f, level) * sqrtf(0.5833333f * (1.0f - powf(2.0f, -2.0f * level)));
+}
+
+// Coarsest level the gather may read. Mirrors the cap uploaded as maxLod.
+static float sss_lod_cap(const PostFX* fx) {
+    float by_texel = log2f(fmaxf((float)fx->height / SSS_MAX_LEVEL_TEXEL_FRACTION, 1.0f));
+    return fminf((float)(fx->sss_pyr_mips - 1), by_texel);
+}
+
 // Build the scatter pyramid for one profile: seed level 0 from the resolved
 // skin diffuse, then halve to the top.
 //
@@ -1541,9 +1555,7 @@ static void postfx_run_sss(PostFX* fx, GLuint canvas_fbo, mat4 projection, bool 
         // by construction: the cap is a fraction of height and the pixels per
         // world unit are proportional to height, so the two cancel -- which is
         // exactly what the pixel cap this branch removed failed to do.
-        float lod_cap = log2f(fmaxf((float)fx->height / 32.0f, 1.0f));
-        uniform_set_float(fx->sss_gather_program->uniforms, "maxLod",
-                          fminf((float)(fx->sss_pyr_mips - 1), lod_cap));
+        uniform_set_float(fx->sss_gather_program->uniforms, "maxLod", sss_lod_cap(fx));
         uniform_set_vec2(fx->sss_gather_program->uniforms, "renderTexel",
                          (const float[]){1.0f / (float)fx->width, 1.0f / (float)fx->height});
         draw_fullscreen_quad(fx->quad_vao);
@@ -1825,6 +1837,15 @@ void postfx_apply_film_look(PostFX* fx) {
     glm_vec3_copy((vec3){0.0f, 0.0f, 0.01f}, fx->grade_lift); // whisper-cool shadows
     glm_vec3_one(fx->grade_gamma);
     glm_vec3_copy((vec3){1.05f, 1.0f, 0.95f}, fx->grade_gain); // warm highlights
+}
+
+float postfx_sss_max_sigma_per_depth(const PostFX* fx, mat4 projection) {
+    if (!fx || !fx->sss_pyr_ready || fx->sss_pyr_mips < 2)
+        return 0.0f;
+    float proj_scale = 0.5f * projection[1][1] * (float)fx->height;
+    if (proj_scale <= 0.0f)
+        return 0.0f;
+    return sss_level_sigma_px(sss_lod_cap(fx)) / proj_scale;
 }
 
 bool postfx_wants_normals(const PostFX* fx) {

@@ -130,7 +130,9 @@ static void _upload_skin_preint_uniforms(const Engine* engine, UniformManager* u
     // the pass also needs a scene that actually carries subsurface and a PBR
     // frame mode (engine.c). Reading the toggle instead leaves the same defect
     // reachable through a debug render mode.
-    float reach = engine->sss_this_frame ? SSS_MAX_SCATTER_PER_DEPTH : 0.0f;
+    float reach = engine->sss_this_frame
+                      ? postfx_sss_max_sigma_per_depth(fx, engine->projection_matrix)
+                      : 0.0f;
     uniform_set_float(u, "sssMaxScatterPerDepth", reach);
 }
 

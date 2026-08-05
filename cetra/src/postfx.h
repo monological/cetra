@@ -12,15 +12,11 @@
 // sssProfiles[] array size in sss_blur_frag.glsl -- keep the two in sync.
 #define MAX_SSS_PROFILES 8
 
-// Ceiling on the SSS blur's base scatter radius, in WORLD units per unit of view
-// depth -- a scatter half-angle of 2.86 degrees. Mirrored as
-// MAX_SCATTER_PER_DEPTH in sss_blur_frag.glsl -- keep the two in sync.
-//
-// pbr_frag needs the number because pre-integrated skin (§11.13) supplies the
-// blur's shortfall in the angular domain, so it has to know what the blur will
-// not deliver. In these units that is a scene property the shader can compute
-// from the authored radius and a depth, with no projection involved.
-#define SSS_MAX_SCATTER_PER_DEPTH 0.05f
+// The scatter pyramid stops being sampled while its texels are still small
+// against the subject, so the widest term it can deliver is set by that cap
+// rather than by a constant. postfx_sss_max_sigma_per_depth reports it; there is
+// no mirrored #define, because the number now depends on the target.
+#define SSS_MAX_LEVEL_TEXEL_FRACTION 32.0f
 
 /*
  * Post-processing stack: the scene renders in linear HDR into the engine's
@@ -561,6 +557,17 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
 // normals G-buffer, so the scene pass should write color attachment 1. The
 // engine samples this at frame start and hands the result to postfx_run.
 bool postfx_wants_normals(const PostFX* fx);
+
+// Widest scatter sigma the pyramid can deliver, in WORLD units per unit of view
+// depth. Pre-integrated skin (§11.13) supplies whatever the screen-space pass
+// cannot, so it has to know where that pass stops.
+//
+// A function rather than a constant because the ceiling is now a property of
+// the chain: it is where the walk stops being sampled, not a number someone
+// chose. It is still resolution-independent -- the cap is a fraction of frame
+// height and the pixels per world unit are proportional to height, so the two
+// cancel and what remains depends only on the vertical FOV.
+float postfx_sss_max_sigma_per_depth(const PostFX* fx, mat4 projection);
 
 // Producer-side predicate: true when TAA runs this frame (jitter + velocity
 // buffer + resolve all gate on it). Mirrors postfx_wants_normals.

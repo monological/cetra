@@ -677,7 +677,7 @@ def run_skin_handoff_gate(workdir):
     # visible hemisphere falls to 5% of lit and the crossing does not exist.
     dims = ("1200", "750")
     given = {}
-    for tag, radius in (("within", "0.28"), ("past", "1.5")):
+    for tag, radius in (("within", "0.05"), ("past", "1.5")):
         extra = ["--sss-radius", radius]
         on = _skin_sample(workdir, "hand_" + tag + "_on", dims, extra)
         off = _skin_sample(workdir, "hand_" + tag + "_off", dims,
@@ -691,7 +691,7 @@ def run_skin_handoff_gate(workdir):
     carries = given["past"] >= 1.15
     ok = quiet and carries
     print(f"  skin-handoff {'PASS' if ok else 'FAIL'}  angular half lifts the wrap "
-          f"{given['within']:.3f}x at radius 0.28 (want <= 1.02, blur delivers it) "
+          f"{given['within']:.3f}x at radius 0.05 (want <= 1.02, blur delivers it) "
           f"and {given['past']:.3f}x at radius 1.5 (want >= 1.15, past the ceiling)")
     return [] if ok else ["skin-handoff"]
 

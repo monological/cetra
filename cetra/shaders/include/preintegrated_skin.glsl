@@ -177,10 +177,32 @@ vec3 skinDiffuse(SkinShape s, float ndotl) {
 // budget through a projection it could only assume matched the one postfx used.
 vec3 skinSigma(vec3 scatterColor, float scatterRadius, float curvature,
                float curvatureScale, float maxScatterPerDepth, float viewDepth) {
+    // maxScatterPerDepth is the widest SIGMA the screen-space pass can deliver,
+    // so convert it back to the base radius that sigma came from before
+    // comparing: the widest term is TAIL times the reddest channel times the
+    // radius. Comparing a base radius against a tail-scale ceiling would report
+    // the pass as complete while its longest reach was still being cut.
+    float peakColor = max(max(scatterColor.r, scatterColor.g), scatterColor.b);
+    float reachToBase = 1.0 / max(2.2 * peakColor, 1e-3);
     float want = scatterRadius;
-    float got = min(want, maxScatterPerDepth * viewDepth);
+    float got = min(want, maxScatterPerDepth * reachToBase * viewDepth);
     float k = got / max(want, 1e-6);
-    float deficit = sqrt(max(1.0 - k * k, 0.0));
+    // The shortfall SQUARED, not sqrt(1 - k^2).
+    //
+    // The sqrt form assumed variances add, which requires a unit of angular
+    // sigma to be worth a unit of screen-space sigma. Measured against Penner's
+    // integral it is not, and the error is large: with the pyramid delivering
+    // k = 0.24 of the authored radius, sqrt(1 - k^2) is 0.97 and the total lands
+    // at 269% of what the integral asks for. 11.13 recorded the two halves as
+    // not interchangeable currencies but could not see the size of it, because
+    // the blur was then delivering enough that the deficit stayed near zero.
+    //
+    // (1 - k)^2 lands the total at 126% of the reference, which is where the
+    // separable blur sat before this branch (129%) -- so the look is held against
+    // ground truth while the resolution defect is fixed. It is a fitted exponent,
+    // not a derivation, and it is fitted to one fixture; that is why it is
+    // written as the shortfall rather than dressed up as a variance identity.
+    float deficit = (1.0 - k) * (1.0 - k);
     float base = want * curvature * curvatureScale * deficit;
     // Clamped on the BASE, not per channel, so the red-widest relationship that
     // makes skin redden rather than grey out survives the clamp. Clamping sigma
