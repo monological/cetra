@@ -42,9 +42,20 @@ split: coefficients that depend only on sigma are computed once per fragment,
 and the per-light part is a wrap plus a cubic. Fitting anything whose per-light
 half is more expensive would cost roughly one polynomial per channel per light.
 
-    per fragment: w  = s (W1 + s (W2 + s W3))     (and likewise a1, a2, a3, d0, e0)
+    per fragment: (w, a1, a2, a3, d0, e0) = lerp of two table rows at sigma
     per light:    t  = max((NdotL + w) / (1 + w), 0)
                   D  = d0 + e0 NdotL + t (a1 + t (a2 + t a3))
+
+The six coefficients come from a 16-entry TABLE rather than polynomials in
+sigma. Polynomials were tried first and cost nine times the error the shape
+itself can reach: the coefficient curves have a kink where a1 meets zero and a
+branch switch near sigma 1.4, and nothing low-order follows that. Sampling the
+curves directly IS the ceiling.
+
+That is not the LUT the roadmap ruled out. The objection there was texture
+units, of which pbr_frag has none spare; this is a uniform array, the same
+mechanism sssProfiles already uses to reach the same shader, and it costs no
+unit at all.
 
 e0 is the other term a wrap alone cannot supply. The Fourier series of the
 response is 1/pi + (m1/2) cos(theta) + higher harmonics: the first two terms
@@ -91,9 +102,30 @@ import sys
 # multiplier). If that changes, re-run --verify: nothing else couples them.
 PROFILE = ((0.35, 0.30), (0.40, 1.00), (0.25, 2.20))
 
-# Pasted from a --fit run: SHAPE_DIM groups of POLY_DEG cubic coefficients, in
-# the order w, a1, a2, a3, d0, e0.
-FITTED = tuple([0.0] * 18)
+# Pasted from a --fit run: TABLE_N rows of (w, a1, a2, a3, d0, e0), one per
+# sigma sample. Row 0 is Lambert exactly and is not fitted.
+#
+# a1 collapsing to zero between rows 3 and 4 is the boundary described above,
+# and the lerp across it is where the worst remaining error sits -- which is
+# also where the effect itself is smallest, so it buys the least to chase.
+FITTED = (
+    +0.000000, +1.000000, +0.000000, +0.000000, +0.000000, +0.000000,   # sigma 0.0000
+    +0.002937, +0.982777, +0.036989, -0.020117, -0.008114, +0.000003,   # sigma 0.0089
+    +0.014651, +0.909094, +0.180625, -0.095951, -0.006599, +0.001883,   # sigma 0.0356
+    +0.042966, +0.739358, +0.448593, -0.223398, +0.002926, +0.013395,   # sigma 0.0800
+    +0.296181, +0.000002, +1.676619, -0.743188, +0.007737, +0.017651,   # sigma 0.1422
+    +0.370892, +0.000001, +1.299864, -0.487884, +0.046116, +0.056531,   # sigma 0.2222
+    +0.428386, -0.000001, +0.921226, -0.299382, +0.107266, +0.100139,   # sigma 0.3200
+    +0.477456, -0.000001, +0.630532, -0.178147, +0.162334, +0.112379,   # sigma 0.4356
+    +0.513038, -0.000000, +0.443553, -0.111772, +0.201927, +0.110250,   # sigma 0.5689
+    +0.513773, +0.000000, +0.321250, -0.080772, +0.232518, +0.107509,   # sigma 0.7200
+    +0.502463, -0.000000, +0.240158, -0.062827, +0.253784, +0.099107,   # sigma 0.8889
+    +0.511037, -0.000000, +0.187660, -0.047886, +0.266279, +0.085433,   # sigma 1.0756
+    +0.550399, -0.000001, +0.153151, -0.034116, +0.272962, +0.071102,   # sigma 1.2800
+    +0.615359, -0.000000, +0.128879, -0.021986, +0.276624, +0.059246,   # sigma 1.5022
+    +0.690852, -0.000000, +0.110138, -0.012613, +0.279306, +0.051065,   # sigma 1.7422
+    +0.761687, +0.000001, +0.094044, -0.006485, +0.282269, +0.046447,   # sigma 2.0000
+)
 
 KERNEL_SAMPLES = 1024  # periodic + smooth, so the trapezoid is spectrally accurate
 # Stage 1 fits each of these independently, so a fine grid costs time but not
@@ -140,30 +172,50 @@ def ground_truth(sigma, thetas):
 
 
 SHAPE_DIM = 6  # w, a1, a2, a3, d0, e0
-POLY_DEG = 3   # each shape coefficient is a cubic in sigma through the origin
+TABLE_N = 16   # sigma samples
+SIGMA_MAX = 2.0
 
-# What each shape coefficient must equal at sigma = 0 for the form to reduce to
-# clamped Lambert exactly. Every coefficient is s * poly(s), so a1 is the only
-# one with a non-zero base.
+# The shape at sigma = 0: clamped Lambert exactly, and entry 0 of the table.
 SHAPE_BASE = (0.0, 1.0, 0.0, 0.0, 0.0, 0.0)
 
-# a1 is FITTED, not pinned. Wherever t > 0 the term a1*t is affine in NdotL and
+# a1 is fitted, not pinned. Wherever t > 0 the term a1*t is affine in NdotL and
 # so is d0 + e0*NdotL, which makes them nearly collinear -- and left free, a1
 # slides to exactly 0 around sigma 0.15 and sticks there against the boundary.
-# Pinning it to 1 to remove the redundancy was tried and measured WORSE (0.087
+# Pinning it to 1 to remove that redundancy was tried and measured WORSE (0.087
 # against 0.059 max), because the two only span the same directions where the
 # clamp is open; a1 alone moves the lit side without touching the dark one.
 
 
+def table_sigmas():
+    """Sample positions, QUADRATIC in the index.
 
-def coefficients(params, sigma):
-    """Expand the packed polynomial constants into this fragment's shape."""
-    s = sigma
-    out = []
-    for i in range(SHAPE_DIM):
-        p = params[i * POLY_DEG : (i + 1) * POLY_DEG]
-        out.append(SHAPE_BASE[i] + s * (p[0] + s * (p[1] + s * p[2])))
-    return tuple(out)
+    Two things fall out of that choice. The shader's inverse is one sqrt, and
+    the samples bunch up at small sigma, which is where the coefficients move
+    fastest -- uniform spacing spends half its entries above sigma 1 where the
+    curves are nearly flat and under-resolves the part that ships.
+    """
+    return [SIGMA_MAX * (i / (TABLE_N - 1)) ** 2 for i in range(TABLE_N)]
+
+
+def coefficients(table, sigma):
+    """Lerp the shape out of the table, exactly as the shader will.
+
+    A table rather than polynomials in sigma. The coefficient curves have a kink
+    where a1 meets zero and a branch switch near sigma 1.4, and a low-order
+    polynomial through them costs nine times the error the shape itself can
+    reach. Sampling them directly IS that ceiling.
+
+    It is not the LUT the roadmap ruled out: that objection was texture units,
+    of which pbr_frag has none spare. This is a uniform array, the same
+    mechanism sssProfiles already uses to reach the same shader.
+    """
+    s = min(max(sigma, 0.0), SIGMA_MAX)
+    f = math.sqrt(s / SIGMA_MAX) * (TABLE_N - 1)
+    i = min(int(f), TABLE_N - 2)
+    frac = f - i
+    lo = table[i * SHAPE_DIM : (i + 1) * SHAPE_DIM]
+    hi = table[(i + 1) * SHAPE_DIM : (i + 2) * SHAPE_DIM]
+    return tuple(a + (b - a) * frac for a, b in zip(lo, hi))
 
 
 def evaluate(coef, ndotl):
@@ -200,36 +252,6 @@ def shape_objective(shape, thetas, ref, dtheta):
     return total + 200.0 * (2.0 * energy * dtheta - 2.0) ** 2
 
 
-def solve(matrix, rhs):
-    """Gaussian elimination with partial pivoting. Small and dense; no numpy."""
-    n = len(rhs)
-    a = [row[:] + [rhs[i]] for i, row in enumerate(matrix)]
-    for col in range(n):
-        pivot = max(range(col, n), key=lambda r: abs(a[r][col]))
-        a[col], a[pivot] = a[pivot], a[col]
-        if abs(a[col][col]) < 1e-14:
-            return None
-        for r in range(n):
-            if r == col:
-                continue
-            f = a[r][col] / a[col][col]
-            for c in range(col, n + 1):
-                a[r][c] -= f * a[col][c]
-    return [a[i][n] / a[i][i] for i in range(n)]
-
-
-def polyfit_through_base(sigmas, values, base):
-    """Least-squares fit of value = base + s(p0 + s p1 + s^2 p2).
-
-    Exact rather than iterative: the model is linear in its coefficients once
-    the fixed sigma = 0 value is subtracted, so this is a 3x3 normal equation.
-    """
-    powers = [[s ** (k + 1) for k in range(POLY_DEG)] for s in sigmas]
-    targets = [v - base for v in values]
-    mat = [[sum(p[i] * p[j] for p in powers) for j in range(POLY_DEG)]
-           for i in range(POLY_DEG)]
-    rhs = [sum(p[i] * t for p, t in zip(powers, targets)) for i in range(POLY_DEG)]
-    return solve(mat, rhs) or [0.0] * POLY_DEG
 
 
 def nelder_mead(fn, start, step, iters=4000):
@@ -381,44 +403,33 @@ def main():
     chord_vs_arc()
 
     if do_fit:
-        # Two stages, because a joint search over every constant at once is
-        # badly conditioned: the shape at one sigma and the way it varies with
-        # sigma are different problems, and solving them together lets a bad
-        # sigma trade against a good one. Stage 1 finds the best shape at each
-        # sigma independently -- the ceiling this form can reach. Stage 2 draws
-        # smooth curves through those, which is linear and solved exactly.
-        print("\nstage 1: best shape at each sigma (this takes a minute)...")
+        print("\nfitting the shape at each table sigma (this takes a minute)...")
         dtheta = FIT_THETAS[1] - FIT_THETAS[0]
-        seed = (0.2, 1.0, 0.0, 0.0, 0.0, 0.0)
-        per_sigma = []
-        for s in FIT_SIGMAS:
+        sigmas = table_sigmas()
+        table = list(SHAPE_BASE)  # entry 0 is Lambert, exactly, not fitted
+        seed = SHAPE_BASE
+        for s in sigmas[1:]:
             ref = ground_truth(s, FIT_THETAS)
             fn = lambda sh: shape_objective(sh, FIT_THETAS, ref, dtheta)
-            # Continued from the previous sigma so the fit tracks ONE branch:
-            # restarting cold lets equivalent minima swap and the coefficient
-            # curves come out jagged, which no smooth polynomial can follow.
-            p, sc = nelder_mead(fn, seed, [0.2] * SHAPE_DIM, iters=3000)
+            # Continued from the previous sigma so the fit tracks ONE branch.
+            # Restarting cold lets equivalent minima swap, and a lerp between
+            # two entries sitting on different branches is not on either.
+            p, sc = nelder_mead(fn, seed, [0.15] * SHAPE_DIM, iters=3000)
             p, sc = nelder_mead(fn, p, [0.02] * SHAPE_DIM, iters=3000)
-            per_sigma.append(p)
+            table.extend(p)
             seed = p
             print(f"  sigma {s:5.3f}: residual {sc:.3e}   "
                   + " ".join(f"{lab}={v:+.4f}"
-                             for lab, v in zip(("w", "a2", "a3", "d0", "e0"), p)))
+                             for lab, v in zip(("w", "a1", "a2", "a3", "d0", "e0"), p)))
 
-        print("\nstage 2: smooth curves through the coefficients...")
-        params = []
-        for i in range(SHAPE_DIM):
-            params.extend(
-                polyfit_through_base(FIT_SIGMAS, [p[i] for p in per_sigma], SHAPE_BASE[i])
-            )
-
-        report(params, "FITTED (this run)")
+        report(table, "TABLE (this run)")
         print("\npaste into FITTED above and into preintegrated_skin.glsl:")
-        labels = ("w", "a2", "a3", "d0", "e0")
-        for i, lab in enumerate(labels):
-            chunk = params[i * POLY_DEG : (i + 1) * POLY_DEG]
-            print(f"    {lab:3s} " + ", ".join(f"{v:+.6f}" for v in chunk))
-        print("\n    FITTED = (" + ", ".join(f"{v:.6f}" for v in params) + ")")
+        print("    FITTED = (")
+        for i in range(TABLE_N):
+            row = table[i * SHAPE_DIM : (i + 1) * SHAPE_DIM]
+            print(f"        {', '.join(f'{v:+.6f}' for v in row)},"
+                  f"   // sigma {sigmas[i]:.4f}")
+        print("    )")
         return
 
     if not any(FITTED):
