@@ -212,6 +212,13 @@ uniform int sssEnabled;       // Global separable-SSS toggle (--no-sss)
 uniform float subsurface;     // Per-material SSS strength (0 = off; also the skin flag)
 uniform int sssProfileIndex;  // This material's scatter-profile slot; written into DiffuseOut.a so
                               // the screen-space blur can look up the profile per pixel
+#define MAX_SSS_PROFILES 8 // mirror of postfx.h MAX_SSS_PROFILES
+uniform int skinPreintEnabled;  // Global pre-integrated skin toggle (--no-skin-preint)
+uniform float curvatureScale;   // Per-material pre-integration strength (0 = off)
+uniform float sssMaxScatterPerDepth; // World scatter the SSS blur can still reach per unit view
+                                     // depth; its kernel is capped in pixels, so past a certain
+                                     // closeness it under-delivers the authored radius
+uniform vec4 sssProfiles[MAX_SSS_PROFILES]; // rgb = per-channel scatter weight, w = world radius
 uniform vec3 subsurfaceColor; // Scatter tint; here it colors the back-light transmission (the
                               // front-scatter radius/color live on the global SSS blur pass)
 
@@ -397,6 +404,7 @@ float distributionGGX(vec3 N, vec3 H, float roughness) {
 }
 
 #include "sheen.glsl"
+#include "preintegrated_skin.glsl"
 
 // Peak RGB channel (the engine's inline max(r, max(g, b)) idiom).
 float maxComp(vec3 v) {
@@ -1096,6 +1104,26 @@ void main() {
     bool sss = sssEnabled > 0 && subsurface > 0.0;
     vec3 sssDiffuse = vec3(0.0);
 
+    // Pre-integrated skin (§11.13). Every term of the gate is a uniform, so the
+    // branch is uniform across the draw: the derivatives inside are well-defined
+    // (as at specularAAStrength above) and a non-skin draw pays nothing.
+    //
+    // sssProfileIndex >= 0 is not belt-and-braces. pbr_frag tags the skin buffer
+    // with profile + 1, so an unassigned -1 writes the tag reserved for "not
+    // skin" and the blur rejects those pixels. A material the blur already
+    // ignores must not get pre-integration either, or the two disagree.
+    bool skinPreint = sss && skinPreintEnabled > 0 && curvatureScale > 0.0 &&
+                      sssProfileIndex >= 0;
+    SkinShape skinShapeF;
+    if (skinPreint) {
+        vec4 prof = sssProfiles[clamp(sssProfileIndex, 0, MAX_SSS_PROFILES - 1)];
+        // Curvature from the GEOMETRIC normal. N here is post-normal-map, and
+        // its derivative is a texture-detail metric -- see preintegrated_skin.
+        float curv = skinCurvature(normalize(Normal), ddxWorld, ddyWorld);
+        skinShapeF = skinShape(skinSigma(prof.rgb, prof.w, curv, curvatureScale,
+                                         sssMaxScatterPerDepth, -ViewPos.z));
+    }
+
     // Get tangent and bitangent for anisotropy
     vec3 T = normalize(TBN[0]);
     vec3 B = normalize(TBN[1]);
@@ -1384,6 +1412,29 @@ void main() {
         // -- does not modify the Lo expression above.
         if (sss) {
             sssDiffuse += kD * albedoMap / PI * radiance * NdotL * shadow;
+        }
+
+        // Pre-integrated skin: swap this light's clamped-Lambert falloff for the
+        // curvature-widened one, as a DELTA so neither statement above has to be
+        // rewritten (float reassociation there is the byte-identity gate for
+        // every non-skin material).
+        //
+        // Added to Lo AND to the tap, with the same value, because postfx folds
+        // this back as hdr + blur(D) - D. That subtraction only cancels when D
+        // is the diffuse actually present in hdr; change one and the response
+        // arrives as a signed second difference of itself, which measured at 5%
+        // of the intended effect. The dark side is where the difference lives,
+        // so dot(N, L) is recomputed UNCLAMPED -- NdotL above is clamped at 0.
+        //
+        // Raw, like the tap above: no sheenScale, no coatAtten, no firefly
+        // clamp. Those sit on Lo's diffuse and not on the tap, and matching the
+        // tap keeps that pre-existing mismatch confined to the Lambert part
+        // instead of growing a second one.
+        if (skinPreint) {
+            vec3 dSkin = kD * albedoMap / PI *
+                         (skinDiffuse(skinShapeF, dot(N, L)) - vec3(NdotL)) * radiance * shadow;
+            Lo += dSkin;
+            sssDiffuse += dSkin;
         }
 
         // SSS back-light transmission: thin-region glow when the light is

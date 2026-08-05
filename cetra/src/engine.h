@@ -173,6 +173,9 @@ typedef struct Engine {
                                 // (materials with no height map / scale 0 are unaffected)
     bool sss_enabled;           // Separable screen-space SSS; off skips the diffuse
                                 // separation + blur (materials with subsurface 0 are unaffected)
+    bool skin_preint_enabled;   // Pre-integrated skin diffuse (§11.13); off keeps the clamped
+                                // Lambert falloff (materials with curvature_scale 0 are
+                                // unaffected either way)
     bool oit_enabled;           // Weighted-blended OIT for ALPHA_BLEND meshes (--oit); off keeps
                                 // the unsorted alpha-blend late pass
 

@@ -110,6 +110,7 @@ typedef struct {
     int no_parallax;            // Disable parallax occlusion mapping (POM)
     float parallax_scale;       // POM depth override (< 0 = keep engine default)
     int no_sss;                 // Disable separable subsurface scattering
+    int no_skin_preint;         // Disable pre-integrated skin diffuse (§11.13)
     int oit;                    // Enable weighted-blended OIT (default off)
     int show_lights;            // Draw light gizmos (position + cull radius)
     int cluster_heatmap;        // Tint by cluster light count

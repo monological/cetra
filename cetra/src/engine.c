@@ -215,6 +215,8 @@ Engine* create_engine(const char* window_title, int width, int height) {
     engine->sheen_enabled = true;       // KHR sheen on; inert unless a material carries it
     engine->parallax_enabled = true;    // POM on; inert unless a material carries height + scale
     engine->sss_enabled = true;         // SSS on; inert unless a material carries subsurface > 0
+    engine->skin_preint_enabled = true; // Pre-integrated skin on; inert unless a material carries
+                                        // curvature_scale > 0
     engine->oit_enabled = false; // OIT off by default (--oit opt-in); keeps the byte-identical
                                  // unsorted alpha-blend late pass
 
@@ -2072,6 +2074,7 @@ static void _engine_gui_panel(Engine* engine) {
         igCheckbox("Sheen", &engine->sheen_enabled);
         igCheckbox("Parallax (POM)", &engine->parallax_enabled);
         igCheckbox("Subsurface (SSS)", &engine->sss_enabled);
+        igCheckbox("Skin Pre-integration", &engine->skin_preint_enabled);
         igCheckbox("OIT (weighted blended)", &engine->oit_enabled);
     }
 

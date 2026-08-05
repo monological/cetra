@@ -12,6 +12,16 @@
 // sssProfiles[] array size in sss_blur_frag.glsl -- keep the two in sync.
 #define MAX_SSS_PROFILES 8
 
+// Ceiling on the SSS blur's kernel, in RENDER pixels. Mirrored as MAX_PX in
+// sss_blur_frag.glsl -- keep the two in sync.
+//
+// A cap in pixels means the delivered world scatter falls short of the authored
+// radius once a subject is close enough, by an amount that varies with
+// resolution. pbr_frag needs the number for exactly that reason: pre-integrated
+// skin (§11.13) supplies the shortfall in the angular domain, so it has to know
+// how much the blur is going to miss by.
+#define SSS_MAX_BLUR_PX 48.0f
+
 /*
  * Post-processing stack: the scene renders in linear HDR into the engine's
  * multisampled RGBA16F framebuffer; postfx_run resolves it, computes

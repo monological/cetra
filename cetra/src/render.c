@@ -100,6 +100,33 @@ void render_update_skinning_uniforms(ShaderProgram* program, const Mesh* mesh) {
     }
 }
 
+// Scatter profiles and the blur's reach, for pre-integrated skin (§11.13).
+//
+// pbr_frag needs both because it takes up exactly the slack the screen-space
+// blur cannot deliver: the blur's kernel is capped in PIXELS, so past a certain
+// closeness it falls short of the authored world radius by an amount that
+// depends on resolution. `sssMaxScatterPerDepth` is the world scatter the blur
+// can still reach per unit of view depth -- MAX_PX converted out of pixels once
+// here, so the shader never mirrors the cap or the projection.
+//
+// Uploaded per program switch rather than per material because
+// _update_program_material_uniforms has no Engine, and widening its signature
+// to reach postfx would be a far larger blast radius than one call here.
+static void _upload_skin_preint_uniforms(Engine* engine, UniformManager* u) {
+    PostFX* fx = engine->postfx;
+    if (!fx)
+        return;
+    GLint prof_loc = uniform_location(u, "sssProfiles[0]");
+    if (prof_loc >= 0 && fx->sss_profile_count > 0)
+        glUniform4fv(prof_loc, fx->sss_profile_count, (const GLfloat*)fx->sss_profiles);
+
+    // The un-jittered projection, matching what postfx_run_sss is handed: a
+    // jittered proj[1][1] would make the reach flicker with the TAA sequence.
+    float proj_scale = 0.5f * engine->projection_matrix[1][1] * (float)fx->height;
+    uniform_set_float(u, "sssMaxScatterPerDepth",
+                      proj_scale > 0.0f ? SSS_MAX_BLUR_PX / proj_scale : 0.0f);
+}
+
 // `a2c_capable` is whether the current target has MSAA samples for
 // alpha-to-coverage to dither into. It gates only the coverage path -- whether
 // the material is masked at all is uploaded separately, because the shadow and
@@ -145,6 +172,7 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
     uniform_set_float(u, "subsurface", material->subsurface);        // SSS strength (0 = off)
     uniform_set_vec3(u, "subsurfaceColor", (const float*)&material->subsurface_color);
     uniform_set_int(u, "sssProfileIndex", material->subsurface_profile); // scatter-profile slot
+    uniform_set_float(u, "curvatureScale", material->curvature_scale);   // pre-integrated skin
     uniform_set_vec2(u, "uvOffset", (const float*)&material->uvOffset);
     uniform_set_vec2(u, "uvScale", (const float*)&material->uvScale);
     uniform_set_float(u, "uvRotation", material->uvRotation);
@@ -346,6 +374,14 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
             uniform_set_int(u, "sheenEnabled", engine->sheen_enabled ? 1 : 0);
             uniform_set_int(u, "parallaxEnabled", engine->parallax_enabled ? 1 : 0);
             uniform_set_int(u, "sssEnabled", engine->sss_enabled ? 1 : 0);
+            // Pre-integrated skin is off under capture, and that is correctness
+            // rather than thrift: it modifies FragColor, which lands in probe and
+            // DDGI radiance, and its width depends on the CAPTURE camera's
+            // projection and depth. Baking a view-dependent falloff into an
+            // irradiance probe shows up later as GI that changes when you move.
+            uniform_set_int(u, "skinPreintEnabled",
+                            engine->skin_preint_enabled && !engine->capturing ? 1 : 0);
+            _upload_skin_preint_uniforms(engine, u);
             uniform_set_int(u, "clusterDebug", engine->cluster_debug ? 1 : 0);
             uniform_set_int(u, "oitPass", oit_accumulate ? 1 : 0);
             // Split ambient specular only where attachment 7 is live: the

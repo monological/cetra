@@ -27,7 +27,7 @@ uniform int mode; // 0 = H blur, 1 = V/composite (blur - origDiffuse),
                   // 2 = passthrough copy of srcTex (TAA delta fold)
 
 const int HALF_TAPS = 12;   // samples per side (cover the broad tail Gaussian)
-const float MAX_PX = 48.0;  // clamp the screen-space blur radius
+const float MAX_PX = 48.0;  // clamp the blur radius; mirror of SSS_MAX_BLUR_PX (postfx.h)
 const float TAIL = 2.2;     // how far (x the base radius) the widest Gaussian reaches
 
 // Jimenez-style separable skin diffusion profile: a sum of three Gaussians per

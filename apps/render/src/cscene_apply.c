@@ -341,6 +341,7 @@ static const struct {
     {"sheenColor", offsetof(Material, sheen_color_factor), MP_VEC3},
     {"sheenRoughness", offsetof(Material, sheen_roughness_factor), MP_FLOAT},
     {"parallaxScale", offsetof(Material, parallax_scale), MP_FLOAT},
+    {"curvatureScale", offsetof(Material, curvature_scale), MP_FLOAT},
     {"windResponse", offsetof(Material, wind_response), MP_FLOAT},
     {"windMode", offsetof(Material, wind_mode), MP_INT},
 };
