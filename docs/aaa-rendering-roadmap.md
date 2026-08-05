@@ -498,7 +498,7 @@ and 11.2 (below). **Tiers 1 and 2 are complete**, Tier 2 closing with B3 pre-int
 **Tier 3 — polish & late-tier (unparked: Tiers 1-2 have landed):**
 | # | Item | Effort | Why here |
 |---|------|--------|----------|
-| 13 | SSS is dead in procedural scenes | S | **Bug, found in 11.14.** `scene_has_subsurface()` walks `scene->materials`, which only `import.c` ever fills, so a scene that builds materials in code never runs the SSS pass. `apps/tree` authors `subsurface` 0.6 / 0.45 and two profiles and has never rendered any of it. Fixing it switches subsurface ON for the tree for the first time, so it wants a look pass, not just a one-line fix. |
+| 13 | SSS is dead in procedural scenes | S | **DONE (11.14).** `scene_has_subsurface()` reads `scene->materials`, which only `import.c` ever filled, so a scene building materials in code never ran the SSS pass — `apps/tree` had authored `subsurface` 0.6 / 0.45 and two profiles and never rendered any of it. Fixed at the registry (`scene_sync_materials`), so mask packing, name lookup and material ownership are fixed with it. Moves 26.7% of the tree's frame; no gate covers that, only a look pass. |
 | 14 | B3.1 Shadow-penumbra scattering | M | Recovers what B3 measured it could not do: the cast shadow owns the terminator on a convex character. Cheapest real gain in the character tier, and the PCSS penumbra estimate is already computed. |
 | 15 | B3.2 Skin under an area light | M | Skin gets no SSS at all under an LTC panel today, and a softbox portrait is the canonical skin setup. Shares its shape with the IBL gap. |
 | 16 | B6 Moment-based OIT | L | |
