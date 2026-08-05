@@ -1381,6 +1381,11 @@ int main(int argc, char** argv) {
     set_engine_screenshot_path(engine, args.screenshot);
     set_engine_screenshot_every(engine, args.screenshot_every);
     set_engine_exit_after_frames(engine, args.frames);
+    // TAAU: render the scene at 70% and reconstruct temporally. Set before
+    // init_engine, because create_postfx sizes every target from it. Headless
+    // drops back to full resolution unless --headless-jitter, since the resolve
+    // reconstructs from the jitter and headless suppresses it.
+    set_engine_render_scale(engine, 0.70f);
 
     if (init_engine(engine) != 0) {
         fprintf(stderr, "Failed to initialize engine\n");
@@ -1537,7 +1542,7 @@ int main(int argc, char** argv) {
     if (engine->postfx) {
         postfx_reset_sss_profiles(engine->postfx);
         leaf_material->subsurface_profile =
-            postfx_add_sss_profile(engine->postfx, (vec3){0.45f, 0.75f, 0.2f}, 1.5f);
+            postfx_add_sss_profile(engine->postfx, (vec3){0.45f, 0.75f, 0.2f}, 0.25f);
     }
     apply_season(season);
     prev_season = season;
@@ -1573,37 +1578,44 @@ int main(int argc, char** argv) {
     // and the unblurred energy composites back as blown-out speckle.
     if (engine->postfx)
         grass_material->subsurface_profile =
-            postfx_add_sss_profile(engine->postfx, (vec3){0.40f, 0.70f, 0.16f}, 1.0f);
+            postfx_add_sss_profile(engine->postfx, (vec3){0.40f, 0.70f, 0.16f}, 0.15f);
     set_material_shader_program(grass_material, pbr_program);
 
     create_island(root);
 
     /*
-     * Post-processing: a film look rather than the engine defaults. AgX holds
-     * the saturated foliage and the sun disc without skewing hue.
+     * Post-processing: a film look rather than the engine defaults, on PBR
+     * Neutral so foliage colour stays faithful rather than being pushed.
      */
     PostFX* fx = engine->postfx;
     if (fx) {
-        fx->tonemap_mode = POSTFX_TONEMAP_AGX;
+        fx->tonemap_mode = POSTFX_TONEMAP_NEUTRAL;
         postfx_apply_film_look(fx);
-        fx->grain_strength = 0.05f;
+        fx->grain_strength = 0.015f;
 
-        fx->fog_enabled = args.no_fog == 0;
+        // TAAU is a temporal reconstruction, so the render scale above does
+        // nothing without this: the seam only dispatches when the resolve runs,
+        // and unset it would render at 70% and simply magnify.
+        fx->taa_enabled = true;
+
+        fx->fog_enabled = false;
         fx->fog_density = 0.0005f;
         fx->fog_height_falloff = 75.0f;
         fx->fog_floor_y = 0.0f;
         fx->fog_far = 800.0f;
 
-        fx->dof_enabled = true;
+        fx->dof_enabled = false;
         fx->dof_autofocus = true;
         fx->dof_focus_distance = 620.0f;
         fx->dof_focus_range = 320.0f;
 
         if (fx->ssao_radius < 1.6f)
             fx->ssao_radius = 1.6f;
-        // Nothing here is smooth enough to reflect; SSR would be pure cost.
-        fx->ssr_enabled = false;
+        fx->contact_shadows_enabled = true;
+        fx->ssr_enabled = true;
+        fx->ssgi_enabled = true;
     }
+    engine->oit_enabled = true;
 
     // Tree shape
     params.seed = args.seed;
