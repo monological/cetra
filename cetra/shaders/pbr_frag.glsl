@@ -1112,7 +1112,13 @@ void main() {
     // with profile + 1, so an unassigned -1 writes the tag reserved for "not
     // skin" and the blur rejects those pixels. A material the blur already
     // ignores must not get pre-integration either, or the two disagree.
-    bool skinPreint = sss && skinPreintEnabled > 0 && curvatureScale > 0.0 &&
+    // Deliberately NOT gated on sssEnabled. Pre-integration is a shading model,
+    // not a screen-space pass: with the blur off there is no hdr + blur(D) - D
+    // to cancel against, so putting the falloff in Lo alone is simply correct.
+    // That also makes --no-sss the way to measure this term on its own, which
+    // is what the curvature gate needs -- and a scene can carry curvature
+    // without paying for the blur.
+    bool skinPreint = skinPreintEnabled > 0 && curvatureScale > 0.0 && subsurface > 0.0 &&
                       sssProfileIndex >= 0;
     SkinShape skinShapeF;
     if (skinPreint) {

@@ -41,7 +41,8 @@
       "albedo": [0.76, 0.57, 0.48],
       "roughness": 0.45,
       "metallic": 0.0,
-      "sss": { "color": [1.0, 0.35, 0.25], "radius": 0.28 }
+      "sss": { "color": [1.0, 0.35, 0.25], "radius": 0.28 },
+      "curvatureScale": 1.0
     }
   },
   "lights": [

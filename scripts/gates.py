@@ -252,6 +252,265 @@ def _linear_luma(pix, w, h, px, py):
     return total / 3.0
 
 
+def _linear_rgb(pix, w, h, px, py):
+    """Per-channel sibling of _linear_luma; the reddening assertion needs the
+    channels apart, and an average would hide exactly what it is looking for."""
+    x = max(0, min(w - 1, int(round(px))))
+    y = max(0, min(h - 1, int(round(py))))
+    o = (y * w + x) * 3
+    out = []
+    for k in range(3):
+        c = pix[o + k] / 255.0
+        out.append(c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4)
+    return out
+
+
+# Pre-integrated skin (spec 11.13), measured on assets/skin_curvature_fixture.
+#
+# Three nodes share one unit sphere at scales 0.5 / 1.0 / 2.0, so their
+# curvatures are exactly 2.0 / 1.0 / 0.5 -- and the angular width of the effect
+# is proportional to curvature. The gate asserts the ORDERING that follows,
+# which needs no stored reference and cannot drift: a falloff that ignores
+# curvature is a wrap term, and a wrap term is two lines and cheaper.
+#
+# These numbers mirror the fixture and its .cscn. Change either and the gate
+# measures a different scene than it predicts.
+SKIN_CAM = {"eye": (-0.2, 0.93, 9.5), "target": (-0.2, 0.93, 0.0), "fovy_deg": 40.0}
+SKIN_LIGHT_TRAVEL = (0.93, -0.26, -0.26)  # direction light travels
+SKIN_SPHERES = [("r050", 0.5, -3.6), ("r100", 1.0, -1.7), ("r200", 2.0, 1.7)]
+SKIN_WRAP_DEG = 95.0   # just past the terminator: Lambert is zero, scatter is not
+SKIN_LIT_DEG = 20.0    # well inside the lit cap, as the per-sphere reference
+SKIN_MID_DEG = 45.0    # the reddening comparison point
+SKIN_ORDER_RATIO = 1.15  # required step per 2x curvature
+SKIN_MIN_RADIUS_PX = 60  # below this the samples land on too few pixels to trust
+
+
+def _skin_sample_points(radius, cx):
+    """Surface points at known angles from the light, on the visible side.
+
+    A point at angle theta from L is C + R(cos(theta) L + sin(theta) T), where T
+    is the component of the view direction perpendicular to L. That keeps every
+    sample on the hemisphere facing the camera while pinning NdotL = cos(theta)
+    analytically, so the gate never has to search an image for a feature.
+    """
+    def norm(v):
+        m = math.sqrt(sum(c * c for c in v))
+        return tuple(c / m for c in v)
+
+    centre = (cx, 0.0, 0.0)
+    light = norm(tuple(-c for c in SKIN_LIGHT_TRAVEL))  # surface -> light
+    view = norm(tuple(SKIN_CAM["eye"][i] - centre[i] for i in range(3)))
+    vdotl = sum(view[i] * light[i] for i in range(3))
+    tang = norm(tuple(view[i] - vdotl * light[i] for i in range(3)))
+
+    def at(deg):
+        t = math.radians(deg)
+        return tuple(
+            centre[i] + radius * (math.cos(t) * light[i] + math.sin(t) * tang[i])
+            for i in range(3)
+        )
+
+    return at
+
+
+def _skin_render(workdir, tag, extra):
+    out = os.path.join(workdir, f"skin_{tag}.ppm")
+    scene = os.path.join(ROOT, "assets", "skin_curvature_fixture.cscn")
+    # --no-sss isolates the analytic falloff from the screen-space blur, which is
+    # the only way to attribute what is measured. --no-shadows because the far
+    # side of a convex caster is in its own shadow, so shadows multiply the whole
+    # band by zero. --no-bloom because bloom smears the band being measured.
+    cmd = [RENDER, "-m", scene, "-x", "-f", "30", "--no-auto-exposure", "-E", "1.0",
+           "--no-sss", "--no-shadows", "--no-bloom", "-W", "800", "-H", "500",
+           "-S", out] + extra
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0 or not os.path.exists(out):
+        return None
+    return out
+
+
+# Scenes that must be untouched by pre-integrated skin. The first two carry no
+# subsurface at all; sss_scale_fixture DOES, with a profile assigned, and is the
+# one that proves the opt-in rather than the feature merely being unreachable.
+SKIN_OFFPATH_SCENES = ("cornell_point.cscn", "contact_fixture.cscn", "sss_scale_fixture.cscn")
+
+
+def run_skin_offpath_gate(workdir):
+    """A material that has not opted in must render identically either way.
+
+    Exact zero, not one LSB: nothing in these scenes sets curvature_scale, so the
+    shader takes the same branch and the arithmetic is the same arithmetic. A
+    single differing bit here means the guard leaks.
+
+    The last assertion is the one that stops this passing for the wrong reason.
+    Three zeros are also what a dead flag, a broken parser or a fixture that
+    stopped opting in would produce, so the curvature fixture must differ.
+    """
+    fails = []
+    for scene_name in SKIN_OFFPATH_SCENES:
+        scene = os.path.join(ROOT, "assets", scene_name)
+        if not os.path.exists(scene):
+            print(f"  skin-off     SKIP  (missing {scene_name})")
+            continue
+        base = os.path.join(workdir, f"skinoff_{scene_name}")
+        err = render(scene, base + "_a.ppm", [])
+        err = err or render(scene, base + "_b.ppm", ["--no-skin-preint"])
+        if err:
+            print(f"  skin-off     ERROR while rendering {scene_name}")
+            fails.append("skin-offpath")
+            continue
+        ae, _ = compare(base + "_a.ppm", base + "_b.ppm")
+        ok = ae == 0
+        print(f"  skin-off     {'PASS' if ok else 'FAIL'}  {scene_name}: {ae} px "
+              f"(want exactly 0)")
+        if not ok:
+            fails.append("skin-offpath")
+
+    # The live half, and deliberately through the FULL path -- blur on, nothing
+    # disabled. It also has to run large: pre-integration only takes up the slack
+    # the blur's pixel cap creates, so at a small render the cap never binds,
+    # there is no slack, and the feature correctly contributes nothing. A gate
+    # that asserted "> 0" at 400x300 would be asserting a bug.
+    fixture = os.path.join(ROOT, "assets", "skin_curvature_fixture.cscn")
+    if os.path.exists(fixture):
+        a = os.path.join(workdir, "skinlive_a.ppm")
+        b = os.path.join(workdir, "skinlive_b.ppm")
+        big = ["-W", "1200", "-H", "750"]
+        err = render(fixture, a, big)
+        err = err or render(fixture, b, big + ["--no-skin-preint"])
+        if err:
+            print("  skin-live    ERROR while rendering the curvature fixture")
+            fails.append("skin-offpath")
+        else:
+            ae, _ = compare(a, b)
+            ok = ae > 0
+            print(f"  skin-live    {'PASS' if ok else 'FAIL'}  opted-in fixture, full path: "
+                  f"{ae} px (want > 0, else the three zeros above prove nothing)")
+            if not ok:
+                fails.append("skin-offpath")
+    return fails
+
+
+def run_skin_curvature_gate(workdir):
+    scene = os.path.join(ROOT, "assets", "skin_curvature_fixture.cscn")
+    if not os.path.exists(scene):
+        print("  skin-curve   SKIP  (missing skin_curvature_fixture.cscn)")
+        return []
+
+    on_path = _skin_render(workdir, "on", [])
+    off_path = _skin_render(workdir, "off", ["--no-skin-preint"])
+    if not (on_path and off_path):
+        print("  skin-curve   ERROR while rendering the curvature fixture")
+        return ["skin-curvature"]
+
+    w, h, on = _read_ppm(on_path)
+    _, _, off = _read_ppm(off_path)
+    project = _projector(SKIN_CAM, w, h)
+
+    wrap_on, lit_on, lit_off, wrap_off, red = {}, {}, {}, {}, {}
+    for name, radius, cx in SKIN_SPHERES:
+        at = _skin_sample_points(radius, cx)
+        # Screen radius, as a guard: a camera edit that shrinks the spheres
+        # would quietly reduce this gate to sampling noise.
+        c0 = project((cx, 0.0, 0.0))
+        c1 = project((cx, radius, 0.0))
+        px_radius = math.hypot(c1[0] - c0[0], c1[1] - c0[1])
+        if px_radius < SKIN_MIN_RADIUS_PX:
+            print(f"  skin-curve   ERROR sphere {name} is {px_radius:.0f} px "
+                  f"(want >= {SKIN_MIN_RADIUS_PX})")
+            return ["skin-curvature"]
+        wrap_on[name] = _linear_luma(on, w, h, *project(at(SKIN_WRAP_DEG)))
+        wrap_off[name] = _linear_luma(off, w, h, *project(at(SKIN_WRAP_DEG)))
+        lit_on[name] = _linear_luma(on, w, h, *project(at(SKIN_LIT_DEG)))
+        lit_off[name] = _linear_luma(off, w, h, *project(at(SKIN_LIT_DEG)))
+        red[name] = (_linear_rgb(on, w, h, *project(at(SKIN_WRAP_DEG))),
+                     _linear_rgb(on, w, h, *project(at(SKIN_MID_DEG))))
+
+    fails = []
+
+    # Controls, on the OFF frame. Without these a broken rig looks like a pass.
+    worst_dark = max(wrap_off[n] / max(lit_off[n], 1e-6) for n, _, _ in SKIN_SPHERES)
+    ok = worst_dark <= 0.02
+    print(f"  skin-dark    {'PASS' if ok else 'FAIL'}  off-frame wrap band "
+          f"{worst_dark:.4f} of lit (want <= 0.02: Lambert is black past the terminator)")
+    if not ok:
+        fails.append("skin-dark")
+
+    # The key is directional, so NdotL at a given angle is identical on all
+    # three; the residual spread is SPECULAR, which depends on view angle and so
+    # varies along a row spanning 8 units of x. Measured at 0.05, and the bar
+    # sits above it rather than at it -- the control only has to be much smaller
+    # than the ordering step it is protecting, which is 15%.
+    lits = [lit_off[n] for n, _, _ in SKIN_SPHERES]
+    spread = (max(lits) - min(lits)) / max(max(lits), 1e-6)
+    ok = spread <= 0.08
+    print(f"  skin-even    {'PASS' if ok else 'FAIL'}  off-frame lit spread "
+          f"{spread:.4f} (want <= 0.08: any ON spread is curvature, not framing)")
+    if not ok:
+        fails.append("skin-even")
+
+    # A1: the wrap must follow curvature. This is the assertion the whole
+    # fixture exists for.
+    small, mid, big = (wrap_on[n] for n, _, _ in SKIN_SPHERES)
+    step1 = small / max(mid, 1e-6)
+    step2 = mid / max(big, 1e-6)
+    ok = step1 >= SKIN_ORDER_RATIO and step2 >= SKIN_ORDER_RATIO
+    print(f"  skin-order   {'PASS' if ok else 'FAIL'}  wrap steps {step1:.2f}x, {step2:.2f}x "
+          f"per 2x curvature (want >= {SKIN_ORDER_RATIO}x)")
+    if not ok:
+        fails.append("skin-order")
+
+    # A2: and it must actually deliver light, not merely order correctly.
+    floor = small / max(lit_on["r050"], 1e-6)
+    ok = floor >= 0.05
+    print(f"  skin-floor   {'PASS' if ok else 'FAIL'}  sharpest wrap {floor:.4f} of lit "
+          f"(want >= 0.05)")
+    if not ok:
+        fails.append("skin-floor")
+
+    # A3: reddening. Red scatters furthest through flesh, so the wrap band must
+    # be warmer than the mid-lit surface; a grey wrap is the wrong model.
+    wrap_rgb, mid_rgb = red["r050"]
+    wrap_ratio = wrap_rgb[0] / max(wrap_rgb[1], 1e-6)
+    mid_ratio = mid_rgb[0] / max(mid_rgb[1], 1e-6)
+    ok = wrap_ratio >= mid_ratio * 1.10
+    print(f"  skin-red     {'PASS' if ok else 'FAIL'}  R/G {wrap_ratio:.3f} at the wrap vs "
+          f"{mid_ratio:.3f} at 45 deg (want >= 1.10x)")
+    if not ok:
+        fails.append("skin-red")
+
+    # A4: no free lunch, and it is the assertion that separates a real
+    # pre-integration from a glow hack.
+    #
+    # Convolution with a normalised kernel conserves energy, so the light the
+    # wrap band gained has to come from the lit cap -- it MUST dim. Requiring it
+    # to be unchanged, as an earlier version of this gate did, asks for
+    # conservation to be violated. What it must not do is brighten, because
+    # anything that adds energy is inventing light rather than moving it.
+    #
+    # The dimming also has to ORDER by curvature, for the same reason the wrap
+    # does: sharper curvature scatters over a wider angle and gives up more.
+    # Ground truth for this fixture predicts 14.1% / 4.8% / 1.2%; the rendered
+    # numbers differ because the frame is tonemapped, so the ordering is
+    # asserted and the magnitude only reported.
+    ratios = [lit_on[n] / max(lit_off[n], 1e-6) for n, _, _ in SKIN_SPHERES]
+    brightest = max(ratios)
+    ok = brightest <= 1.01
+    print(f"  skin-energy  {'PASS' if ok else 'FAIL'}  lit cap {ratios[0]:.3f} / "
+          f"{ratios[1]:.3f} / {ratios[2]:.3f} of Lambert by curvature "
+          f"(want <= 1.01: it may dim, never brighten)")
+    if not ok:
+        fails.append("skin-energy")
+
+    ok = ratios[0] < ratios[1] < ratios[2]
+    print(f"  skin-give    {'PASS' if ok else 'FAIL'}  dimming orders with curvature "
+          f"(want sharpest gives up most)")
+    if not ok:
+        fails.append("skin-give")
+
+    return fails
+
+
 def run_penumbra_gate(workdir):
     fixture = os.path.join(ROOT, "assets", "area_shadow_fixture.gltf")
     if not os.path.exists(fixture):
@@ -777,6 +1036,10 @@ def main():
         failures += run_catcher_gate(workdir)
         print("cloud layer (steady-state churn, report-only):")
         failures += run_cloud_churn_gate(workdir)
+        print("pre-integrated skin (off-path byte identity):")
+        failures += run_skin_offpath_gate(workdir)
+        print("pre-integrated skin (curvature ordering):")
+        failures += run_skin_curvature_gate(workdir)
         print("import:")
         failures += run_range_gate()
         failures += run_fbx_unit_gate()

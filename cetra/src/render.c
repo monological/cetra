@@ -120,11 +120,20 @@ static void _upload_skin_preint_uniforms(Engine* engine, UniformManager* u) {
     if (prof_loc >= 0 && fx->sss_profile_count > 0)
         glUniform4fv(prof_loc, fx->sss_profile_count, (const GLfloat*)fx->sss_profiles);
 
-    // The un-jittered projection, matching what postfx_run_sss is handed: a
-    // jittered proj[1][1] would make the reach flicker with the TAA sequence.
-    float proj_scale = 0.5f * engine->projection_matrix[1][1] * (float)fx->height;
-    uniform_set_float(u, "sssMaxScatterPerDepth",
-                      proj_scale > 0.0f ? SSS_MAX_BLUR_PX / proj_scale : 0.0f);
+    // Zero when the blur is not running at all: the shader reads this as "the
+    // screen-space pass will deliver nothing", so pre-integration takes the
+    // whole authored width instead of the shortfall. Without this, --no-sss
+    // computes a deficit against a blur that is not there and the falloff comes
+    // out narrower the more the absent blur would have covered.
+    float reach = 0.0f;
+    if (engine->sss_enabled) {
+        // The un-jittered projection, matching what postfx_run_sss is handed: a
+        // jittered proj[1][1] would make the reach flicker with the TAA sequence.
+        float proj_scale = 0.5f * engine->projection_matrix[1][1] * (float)fx->height;
+        if (proj_scale > 0.0f)
+            reach = SSS_MAX_BLUR_PX / proj_scale;
+    }
+    uniform_set_float(u, "sssMaxScatterPerDepth", reach);
 }
 
 // `a2c_capable` is whether the current target has MSAA samples for
