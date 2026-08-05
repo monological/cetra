@@ -529,6 +529,101 @@ def run_sss_invariance_gate(workdir):
     return [] if ok else ["sss-invariance"]
 
 
+# Ripple bar for run_sss_banding_gate, and the window it is measured over.
+#
+# Calibrated against two builds rather than chosen: a smooth reference measures
+# 0.012 and two independently banded ones measure 0.074 and 0.088, so 0.030 sits
+# 2.5x above the good case and 2.5x below the bad. A bar with only one control
+# is a guess, and the metric this replaced was exactly that -- it read 0.9999 on
+# a smooth frame and 0.9999 on a banded one, which is how the banding shipped.
+SSS_RIPPLE_MAX = 0.030
+SSS_RIPPLE_WINDOW = 12
+
+
+def _scanline_ripple(pix, w, h, project, radius, cx, half=SSS_RIPPLE_WINDOW):
+    """RMS ripple along the horizontal line through a sphere's centre.
+
+    Measured in SCREEN space, not in surface angle, because that is where the
+    artifact is periodic: a discrete-tap kernel puts its rings at the tap
+    spacing, which is a pixel quantity. Sampling by angle smears them and gets
+    barely 2x separation; sampling by pixel gets 6x.
+
+    Compares the scanline against its own moving average, so it needs no
+    reference image and cannot drift -- the property every gate in this file
+    has.
+    """
+    c = project((cx, 0.0, 0.0))
+    edge = project((cx, radius, 0.0))
+    r_px = abs(edge[1] - c[1])
+    y = int(round(c[1]))
+    # 0.92 of the radius: the silhouette itself is a real discontinuity and
+    # would read as ripple in any build.
+    x0 = max(0, int(round(c[0] - 0.92 * r_px)))
+    x1 = min(w - 1, int(round(c[0] + 0.92 * r_px)))
+    vals = [_linear_luma(pix, w, h, x, y) for x in range(x0, x1 + 1)]
+    if len(vals) < 4 * half:
+        return None
+    res = []
+    for i in range(half, len(vals) - half):
+        sm = sum(vals[i - half:i + half + 1]) / (2 * half + 1)
+        if sm < 1e-4:
+            continue
+        res.append((vals[i] - sm) / sm)
+    if len(res) < 8:
+        return None
+    return (sum(r * r for r in res) / len(res)) ** 0.5
+
+
+def run_sss_banding_gate(workdir):
+    """The blur's kernel must not be visible as rings.
+
+    A screen-space blur samples its profile at discrete taps. While the kernel
+    is small the taps land within a pixel or two of each other and the result
+    reads as smooth; widen the kernel without adding taps and the taps become
+    individually resolvable, as concentric rings through the terminator.
+
+    That is not hypothetical. Spec 11.14 removed the blur's 48 px cap so the
+    delivered world width would stop depending on resolution -- correct, and it
+    took radPx from 48 to 68 px at this framing, which was enough to make the
+    taps visible. Nothing in the battery caught it; a human looked at the image.
+    This gate exists so that cannot happen twice, and it is why any change to the
+    kernel's width or tap budget has to come past a measurement.
+
+    Runs with SSS ON, which is the whole point -- every other skin gate runs
+    --no-sss and is structurally blind to this.
+    """
+    scene = os.path.join(ROOT, "assets", "skin_curvature_fixture.cscn")
+    if not os.path.exists(scene):
+        print("  sss-band     SKIP  (missing skin_curvature_fixture.cscn)")
+        return []
+
+    out = os.path.join(workdir, "sssband.ppm")
+    cmd = [RENDER, "-m", scene, "-x", "-f", "30", "--no-auto-exposure", "-E", "1.0",
+           "--no-shadows", "--no-bloom", "-W", "1200", "-H", "750", "-S", out]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0 or not os.path.exists(out):
+        print("  sss-band     ERROR while rendering the curvature fixture")
+        return ["sss-banding"]
+
+    w, h, pix = _read_ppm(out)
+    project = _projector(SKIN_CAM, w, h)
+    # The mid sphere only. The radius-2.0 one runs off the frame at this
+    # framing, so a scanline through its centre leaves the silhouette and reads
+    # background -- which saturates any relative measure at 1.0 and would make
+    # this gate pass or fail on framing rather than on shading.
+    _name, radius, cx = SKIN_SPHERES[1]
+    ripple = _scanline_ripple(pix, w, h, project, radius, cx)
+    if ripple is None:
+        print("  sss-band     ERROR sphere too small to scan at 1200x750")
+        return ["sss-banding"]
+
+    ok = ripple <= SSS_RIPPLE_MAX
+    print(f"  sss-band     {'PASS' if ok else 'FAIL'}  kernel ripple {ripple:.4f} "
+          f"(want <= {SSS_RIPPLE_MAX:.3f}; smooth reference measures 0.012, "
+          f"visibly banded 0.074)")
+    return [] if ok else ["sss-banding"]
+
+
 def run_skin_handoff_gate(workdir):
     """D5: the angular half carries exactly what the blur cannot, and no more.
 
@@ -1238,6 +1333,8 @@ def main():
         failures += run_skin_handoff_gate(workdir)
         print("subsurface blur (world width vs frame size):")
         failures += run_sss_invariance_gate(workdir)
+        print("subsurface blur (kernel not visible as rings):")
+        failures += run_sss_banding_gate(workdir)
         print("import:")
         failures += run_range_gate()
         failures += run_fbx_unit_gate()
