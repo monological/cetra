@@ -2052,6 +2052,12 @@ static void _engine_gui_panel(Engine* engine) {
         igSliderInt("Grid X", &fx->froxel_grid_x, 40, 640, "%d", 0);
         igSliderInt("Grid Y", &fx->froxel_grid_y, 24, 360, "%d", 0);
         igSliderInt("Grid Z", &fx->froxel_grid_z, 16, 256, "%d", 0);
+        // Shadow softness in the medium. k is the exponential's sharpness: high
+        // converges back toward the hard binary compare, low goes soft and
+        // starts leaking light through blockers. Sweeping it IS the demo.
+        igCheckbox("ESM Shadows", &fx->fog_esm_enabled);
+        igSliderFloat("ESM Sharpness", &fx->fog_esm_k, 5.0f, 200.0f, "%.0f",
+                      ImGuiSliderFlags_Logarithmic);
         // Editing takes ownership away from the sky, which otherwise republishes
         // its own zenith radiance every frame and the picker would snap back.
         if (igColorEdit3("Fog Ambient", fx->fog_ambient, 0) && scene && scene->sky)

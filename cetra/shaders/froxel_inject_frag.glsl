@@ -48,6 +48,7 @@ uniform float shadowBias;
 // allocation that failed).
 uniform int esmEnabled;
 uniform float esmK;
+uniform int spotEsmLayer; // The spot's layer in shadowMaps, after the cascades
 
 // One volumetric spot light (the flashlight).
 uniform int spotEnabled;
@@ -199,11 +200,21 @@ void main() {
                 vec4 ls = spotLightSpaceMatrix * vec4(P, 1.0);
                 if (ls.w > 0.0) { // in front of the light plane
                     vec3 pc = ls.xyz / ls.w * 0.5 + 0.5;
-                    if (pc.z <= 1.0 && pc.x >= 0.0 && pc.x <= 1.0 && pc.y >= 0.0 && pc.y <= 1.0)
-                        vis = (pc.z - shadowBias >
-                               texture(punctualShadowMaps, vec3(pc.xy, float(spotShadowLayer))).r)
-                                  ? 0.0
-                                  : 1.0;
+                    if (pc.z <= 1.0 && pc.x >= 0.0 && pc.x <= 1.0 && pc.y >= 0.0 && pc.y <= 1.0) {
+                        // Same exponential test the cascades take, from the layer
+                        // the build parks the spot in after them -- one array for
+                        // the medium whatever is casting into it.
+                        if (esmEnabled == 1) {
+                            float occ = texture(shadowMaps, vec3(pc.xy, float(spotEsmLayer))).r;
+                            vis = clamp(occ * exp(-esmK * pc.z), 0.0, 1.0);
+                        } else {
+                            vis = (pc.z - shadowBias >
+                                   texture(punctualShadowMaps, vec3(pc.xy, float(spotShadowLayer)))
+                                       .r)
+                                      ? 0.0
+                                      : 1.0;
+                        }
+                    }
                 }
             }
             float spotPhase = phaseHG(dot(spotDir, -rayDir), anisotropy) * sunBoost;

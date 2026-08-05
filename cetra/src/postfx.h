@@ -332,6 +332,7 @@ typedef struct PostFX {
     GLuint fog_esm_fbo;     // Re-attached per layer
     int fog_esm_layers;     // Layers the pair was allocated for
     float fog_esm_k;        // Exponent scale; the one tuning constant
+    bool fog_esm_enabled;   // false falls the medium back to the exact binary tap
 
     // One volumetric spot light (the flashlight), published alongside the
     // directional casters. The fog march scatters it per step (cone + distance

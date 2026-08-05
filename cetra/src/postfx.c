@@ -637,6 +637,7 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     // Sharper than this and the exponential stops surviving the blur (and fp32);
     // softer and blockers leak light through their own shadow.
     fx->fog_esm_k = 40.0f;
+    fx->fog_esm_enabled = true;
     fx->froxel_grid_x = POSTFX_FROXEL_X;
     fx->froxel_grid_y = POSTFX_FROXEL_Y;
     fx->froxel_grid_z = POSTFX_FROXEL_Z;
@@ -1906,9 +1907,38 @@ static void upload_fog_uniforms(PostFX* fx, UniformManager* u, mat4 projection, 
 //
 // Layer count follows the publish, so a cascade-count change reallocates rather
 // than reading layers that no longer exist.
+// One layer, three passes: depth -> exp into dst, then blur dst -> scratch and
+// scratch -> dst, one axis each. Ending in dst is why there is no handle swap
+// and no fourth copy. `layer` addresses the SOURCE, which is the depth array on
+// the first pass and the ESM array on the other two.
+static void esm_build_layer(PostFX* fx, UniformManager* eu, GLuint src_depth, int src_layer,
+                            int dst_layer) {
+    const float texel = 1.0f / (float)POSTFX_FOG_ESM_SIZE;
+    const struct {
+        GLuint dst, src;
+        int layer, mode;
+        float dx, dy;
+    } steps[3] = {
+        {fx->fog_esm_array, src_depth, src_layer, 0, 0.0f, 0.0f},
+        {fx->fog_esm_scratch, fx->fog_esm_array, dst_layer, 1, texel, 0.0f},
+        {fx->fog_esm_array, fx->fog_esm_scratch, dst_layer, 1, 0.0f, texel},
+    };
+    for (int s = 0; s < 3; s++) {
+        glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, steps[s].dst, 0, dst_layer);
+        uniform_set_int(eu, "layer", steps[s].layer);
+        uniform_set_int(eu, "mode", steps[s].mode);
+        uniform_set_vec2(eu, "blurStep", (vec2){steps[s].dx, steps[s].dy});
+        glActiveTexture(GL_TEXTURE0 + (steps[s].mode == 0 ? 0 : 1));
+        glBindTexture(GL_TEXTURE_2D_ARRAY, steps[s].src);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    }
+}
+
 static bool postfx_build_fog_esm(PostFX* fx) {
-    int layers = fx->fog_light_count * fx->fog_cascade_count;
-    if (!fx->fog_shadow_map_array || layers <= 0 || !fx->fog_esm_program)
+    int cascade_layers = fx->fog_shadow_map_array ? fx->fog_light_count * fx->fog_cascade_count : 0;
+    bool spot = fx->fog_spot_enabled && fx->fog_spot_shadowed && fx->fog_punctual_shadow_maps;
+    int layers = cascade_layers + (spot ? 1 : 0);
+    if (layers <= 0 || !fx->fog_esm_program || !fx->fog_esm_enabled)
         return false;
 
     if (fx->fog_esm_layers != layers) {
@@ -1938,42 +1968,22 @@ static bool postfx_build_fog_esm(PostFX* fx) {
     uniform_set_int(eu, "srcEsm", 1);
     uniform_set_float(eu, "esmK", fx->fog_esm_k);
     glBindVertexArray(fx->quad_vao);
-
-    const float texel = 1.0f / (float)POSTFX_FOG_ESM_SIZE;
-    for (int layer = 0; layer < layers; layer++) {
-        uniform_set_int(eu, "layer", layer);
-        // 0: depth -> exp, into the scratch. 1,2: blur scratch -> array -> back,
-        // one axis each, so the finished term lands in fog_esm_array.
-        const struct {
-            GLuint dst;
-            GLuint src;
-            int mode;
-            float dx, dy;
-        } steps[3] = {
-            {fx->fog_esm_scratch, fx->fog_shadow_map_array, 0, 0.0f, 0.0f},
-            {fx->fog_esm_array, fx->fog_esm_scratch, 1, texel, 0.0f},
-            {fx->fog_esm_scratch, fx->fog_esm_array, 1, 0.0f, texel},
-        };
-        for (int s = 0; s < 3; s++) {
-            glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, steps[s].dst, 0, layer);
-            if (layer == 0 && s == 0 &&
-                glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-                log_error("Fog ESM FBO incomplete; falling back to the binary tap");
-                glBindFramebuffer(GL_FRAMEBUFFER, 0);
-                return false;
-            }
-            glActiveTexture(GL_TEXTURE0 + (steps[s].mode == 0 ? 0 : 1));
-            glBindTexture(GL_TEXTURE_2D_ARRAY, steps[s].src);
-            uniform_set_int(eu, "mode", steps[s].mode);
-            uniform_set_vec2(eu, "blurStep", (vec2){steps[s].dx, steps[s].dy});
-            glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-        }
-        // The vertical blur wrote the scratch, so the finished layer is there;
-        // swap the handles once at the end rather than adding a fourth copy.
+    // Completeness is only meaningful once a layer is attached, and a driver
+    // that rejects a layered array attachment would otherwise fail silently.
+    glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, fx->fog_esm_array, 0, 0);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        log_error("Fog ESM FBO incomplete; falling back to the binary tap");
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        return false;
     }
-    GLuint done = fx->fog_esm_scratch;
-    fx->fog_esm_scratch = fx->fog_esm_array;
-    fx->fog_esm_array = done;
+
+    for (int layer = 0; layer < cascade_layers; layer++)
+        esm_build_layer(fx, eu, fx->fog_shadow_map_array, layer, layer);
+    // The spot rides the same array in the layer after the cascades, so the
+    // medium reads one texture whatever is casting into it.
+    if (spot)
+        esm_build_layer(fx, eu, fx->fog_punctual_shadow_maps, fx->fog_spot_shadow_layer,
+                        cascade_layers);
 
     glActiveTexture(GL_TEXTURE0);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -2022,6 +2032,8 @@ static void postfx_build_fog_volume(PostFX* fx, mat4 projection, mat4 view, bool
     uniform_set_float(iu, "temporalBlend", fx->fog_temporal_blend);
     uniform_set_int(iu, "esmEnabled", esm_on ? 1 : 0);
     uniform_set_float(iu, "esmK", fx->fog_esm_k);
+    // Where the spot's ESM landed: the layer after the cascades.
+    uniform_set_int(iu, "spotEsmLayer", fx->fog_light_count * fx->fog_cascade_count);
     uniform_set_int(iu, "frameIndex", fx->frame_index);
     uniform_set_mat4(iu, "prevView", (float*)fx->froxel_prev_view);
     uniform_set_mat4(iu, "prevProjection", (float*)fx->froxel_prev_proj);
