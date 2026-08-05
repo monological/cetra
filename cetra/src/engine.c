@@ -2038,6 +2038,20 @@ static void _engine_gui_panel(Engine* engine) {
                       ImGuiSliderFlags_Logarithmic);
         igSliderFloat("Anisotropy", &fx->fog_anisotropy, -0.9f, 0.9f, "%.2f", 0);
         igSliderFloat("Sun Boost", &fx->fog_sun_boost, 0.0f, 8.0f, "%.2f", 0);
+        // The volume's own depth range, which is NOT the camera's: the mapping
+        // is exponential, so a near pinned to the clip plane spends most of the
+        // slices on air in front of the lens. 0 derives it from Far.
+        igSliderFloat("Volume Near", &fx->fog_near, 0.0f, 20.0f, "%.2f",
+                      ImGuiSliderFlags_Logarithmic);
+        igSliderFloat("Volume Far", &fx->fog_far, 1.0f, 5000.0f, "%.1f",
+                      ImGuiSliderFlags_Logarithmic);
+        igSliderFloat("Depth Distribution", &fx->fog_depth_dist, 0.25f, 4.0f, "%.2f", 0);
+        igSliderFloat("Temporal Blend", &fx->fog_temporal_blend, 0.0f, 0.98f, "%.2f", 0);
+        // Grid XY is what resolves a beam's silhouette; a change reallocates the
+        // volumes and restarts their history at the next fog frame.
+        igSliderInt("Grid X", &fx->froxel_grid_x, 40, 640, "%d", 0);
+        igSliderInt("Grid Y", &fx->froxel_grid_y, 24, 360, "%d", 0);
+        igSliderInt("Grid Z", &fx->froxel_grid_z, 16, 256, "%d", 0);
         // Editing takes ownership away from the sky, which otherwise republishes
         // its own zenith radiance every frame and the picker would snap back.
         if (igColorEdit3("Fog Ambient", fx->fog_ambient, 0) && scene && scene->sky)

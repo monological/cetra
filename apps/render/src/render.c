@@ -267,6 +267,9 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->bloom_strength = -1.0f;   // -1 = keep the engine default
     args->bloom_threshold = -1.0f;  // -1 = keep the engine default
     args->fog_anisotropy = -999.0f; // -999 = keep default (-1..1 is valid)
+    args->fog_near = -1.0f;         // -1 = keep default (0 is valid: derive from far)
+    args->fog_far = -1.0f;
+    args->fog_depth_dist = -1.0f;
     args->ibl_intensity = -1.0f;    // -1 = keep the engine default
     args->cs_distance = -1.0f;      // -1 = scene-scaled contact-shadow reach
     args->cs_strength = -1.0f;      // -1 = keep the engine default
@@ -1807,6 +1810,15 @@ int main(int argc, char** argv) {
         }
         if (args.fog_anisotropy > -900.0f) {
             fx->fog_anisotropy = args.fog_anisotropy;
+        }
+        if (args.fog_near >= 0.0f) {
+            fx->fog_near = args.fog_near;
+        }
+        if (args.fog_far > 0.0f) {
+            fx->fog_far = args.fog_far;
+        }
+        if (args.fog_depth_dist > 0.0f) {
+            fx->fog_depth_dist = args.fog_depth_dist;
         }
         if (args.tonemap_mode != 0) {
             fx->tonemap_mode = (PostFXTonemapMode)args.tonemap_mode;

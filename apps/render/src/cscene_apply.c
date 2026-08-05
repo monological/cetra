@@ -140,6 +140,15 @@ int cscene_setup(RenderArgs* args, CetraSceneDesc** out_cscn) {
     if (args->fog_anisotropy < -900.0f && cscn->has_fog_anisotropy) {
         args->fog_anisotropy = cscn->fog_anisotropy;
     }
+    if (args->fog_near < 0.0f && cscn->has_fog_near) {
+        args->fog_near = cscn->fog_near;
+    }
+    if (args->fog_far < 0.0f && cscn->has_fog_far) {
+        args->fog_far = cscn->fog_far;
+    }
+    if (args->fog_depth_dist < 0.0f && cscn->has_fog_depth_dist) {
+        args->fog_depth_dist = cscn->fog_depth_dist;
+    }
     if (!args->cam_eye_set && !args->cam_target_set && cscn->has_camera) {
         glm_vec3_copy(cscn->cam_eye, args->cam_eye);
         glm_vec3_copy(cscn->cam_target, args->cam_target);

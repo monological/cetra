@@ -37,7 +37,10 @@
     "fog": {
       "enabled": true,
       "density": 0.15,
-      "ambient": [0.02, 0.02, 0.025]
+      "ambient": [0.02, 0.02, 0.025],
+      "near": 0.0,
+      "far": 60.0,
+      "depthDistribution": 1.0
     }
   }
 }

@@ -84,6 +84,9 @@ typedef struct {
     float fog_density;          // Extinction override (0 = scene-scaled)
     float fog_height;           // Height falloff override (0 = scene-scaled)
     float fog_anisotropy;       // Scatter anisotropy (-999 = keep engine default)
+    float fog_near;             // Volume near (-1 = keep engine default; 0 derives from far)
+    float fog_far;              // Volume far (-1 = keep engine default)
+    float fog_depth_dist;       // Slice bias exponent (-1 = keep engine default)
     int contact_shadows;        // Enable screen-space contact shadows
     int contact_shadows_debug;  // Show the raw contact-shadow visibility term
     float cs_distance;          // March reach override (-1 = scene-scaled)

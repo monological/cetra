@@ -31,7 +31,10 @@
     "auto_exposure": true,
     "fog": {
       "enabled": true,
-      "density": 0.08
+      "density": 0.08,
+      "near": 0.0,
+      "far": 60.0,
+      "depthDistribution": 1.0
     }
   }
 }

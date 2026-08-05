@@ -47,7 +47,10 @@
     "fog": {
       "enabled": true,
       "density": 0.008,
-      "anisotropy": 0.25
+      "anisotropy": 0.25,
+      "near": 0.0,
+      "far": 60.0,
+      "depthDistribution": 1.0
     }
   },
   "materials": {

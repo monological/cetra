@@ -164,6 +164,14 @@ typedef struct CetraSceneDesc {
     float fog_density;
     bool has_fog_anisotropy;
     float fog_anisotropy;
+    // The volume's own depth range and how its slices bunch inside it. Distinct
+    // from the camera's clip planes, which have no business sizing a medium.
+    bool has_fog_near;
+    float fog_near; // fog.near: 0 derives from far
+    bool has_fog_far;
+    float fog_far;
+    bool has_fog_depth_dist;
+    float fog_depth_dist; // fog.depthDistribution: 1 = pure exponential
     bool has_fog_ambient;
     float fog_ambient[3]; // fog.ambient: isotropic in-scatter radiance (cd/m^2)
 
