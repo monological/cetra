@@ -1471,13 +1471,30 @@ int main(int argc, char** argv) {
         }
     }
 
-    // Shadows, sized to the tree rather than the engine's 2000-unit default.
+    // Shadows. Both bounds have to span the GROUND, not the tree -- sized to the
+    // tree (300 / 1200) the map ended mid-shadow and left a hard straight edge
+    // across the island.
+    //
+    // far_plane is the one that actually bit, and it is the less obvious of the
+    // two: compute_directional_light_space_matrix puts the light's eye at
+    // far_plane/2 back and gives the ortho a depth range of far_plane, so the
+    // map spans only +/-far_plane/2 ALONG THE LIGHT. At 1200 that is +/-600
+    // against an 1800-unit island, and everything past it projects outside the
+    // map and reads unshadowed -- a plane perpendicular to the light, which is
+    // why the edge is straight. ortho_size was undersized too, but fixing it
+    // alone barely moved the artifact.
+    //
+    // The requirement is roughly 2 * (ground radius + tree height / tan(sun
+    // elevation)): the shadow has to fit along the light, and it lengthens fast
+    // as the sun drops -- 3400 at the default 14 degrees, 4100 at 10, 5600 at 6.
+    // 6000 holds the slider down to about 5 degrees; below that the shadow is
+    // longer than the island and runs off it regardless.
     ShadowSystem* ss = scene->shadow_system;
     if (ss) {
         ss->enabled = args.no_shadows == 0;
-        ss->ortho_size = 300.0f;
+        ss->ortho_size = GROUND_RADIUS;
         ss->near_plane = 0.1f;
-        ss->far_plane = 1200.0f;
+        ss->far_plane = 6000.0f;
         ss->pcss_enabled = true;
         ss->pcss_softness = 1.5f;
         ss->cascade_count = SHADOW_CASCADES;
