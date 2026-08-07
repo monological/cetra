@@ -31,7 +31,8 @@
 - Forward renderer, HDR + MSAA, multi-target G-buffer (color / normals / motion / albedo / SSS)
 - Clustered forward light culling on a 16x8x24 frustum grid, up to 64 lights per draw
 - Temporal AA, plus TAAU render-scale upscaling with runtime resolution switching
-- Supersampling, weighted-blended OIT, screen-space refraction
+- Supersampling, order-independent transparency (weighted-blended, or
+  moment-based for layered stacks), screen-space refraction
 - Soft particles, shadow catcher, procedural skybox and HDR ground projection
 
 ### Lighting

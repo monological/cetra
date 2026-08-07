@@ -1108,6 +1108,17 @@ OIT_TRUTH_TOL = 0.008
 # the truth by a wide margin, then a later scheme matching the truth would prove
 # nothing about the scheme. Weighted-blended measures 0.077 RMS here.
 OIT_DISCRIMINATION_MIN = 0.02
+# How much of weighted-blended's error moment weighting has to remove. It removes
+# 4.9x of it (0.0773 -> 0.0157 RMS), which is the whole justification for the
+# feature, so the bar is a ratio rather than an absolute: an absolute one would
+# have to be re-derived every time the fixture's alpha or layer count changed.
+#
+# 2.5x, comfortably under the measurement and comfortably over "indistinguishable".
+# The residual that survives is the method's own conservatism -- the
+# reconstruction returns a LOWER bound on the absorbance in front, so twelve
+# layers over a 25:1 depth range come out slightly under-occluded no matter how
+# the moments are stored.
+OIT_MOMENT_GAIN_MIN = 2.5
 
 
 def _oit_fixture_materials():
@@ -1192,7 +1203,8 @@ def run_oit_gate(workdir):
 
     sorted_frame = _oit_render(workdir, "sorted", ["--no-oit"])
     weighted = _oit_render(workdir, "weighted", ["--oit"])
-    if sorted_frame is None or weighted is None:
+    moments = _oit_render(workdir, "moments", ["--oit-moments"])
+    if sorted_frame is None or weighted is None or moments is None:
         print("  oit-cards    ERROR while rendering the card stack")
         return ["oit-cards"]
 
@@ -1209,6 +1221,15 @@ def run_oit_gate(workdir):
     print(f"  oit-weighted {'PASS' if ok else 'FAIL'}  weighted-blended vs arithmetic: "
           f"worst {w_worst:.5f} rms {w_rms:.5f} "
           f"(want rms >= {OIT_DISCRIMINATION_MIN}, else the fixture cannot discriminate)")
+    if not ok:
+        fails.append("oit-cards")
+
+    m_worst, m_rms = _oit_error(moments, truth)
+    gain = w_rms / m_rms if m_rms > 0 else float("inf")
+    ok = gain >= OIT_MOMENT_GAIN_MIN
+    print(f"  oit-moments  {'PASS' if ok else 'FAIL'}  moment-weighted vs arithmetic: "
+          f"worst {m_worst:.5f} rms {m_rms:.5f}, {gain:.2f}x closer than weighted-blended "
+          f"(want >= {OIT_MOMENT_GAIN_MIN}x)")
     if not ok:
         fails.append("oit-cards")
     return fails

@@ -547,8 +547,13 @@ typedef struct PostFXGBufferWrites {
 // Pass frame_is_hdr = false for frames whose shaders already emitted
 // display-ready colors (debug render modes): they are copied unchanged,
 // skipping SSAO, bloom, and tone mapping.
+// oit_moments says which form the accumulation is in: moment-weighted layers
+// already carry their own transmittance and composite as a straight sum, while
+// weighted-blended ones are a weighted average and must be divided by their own
+// weight first. Meaningless when oit_fbo is 0.
 void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hdr,
-                const PostFXGBufferWrites* writes, GLuint oit_fbo, mat4 projection, mat4 view);
+                const PostFXGBufferWrites* writes, GLuint oit_fbo, bool oit_moments,
+                mat4 projection, mat4 view);
 
 // Producer-side predicate: true when some active effect will consume the
 // normals G-buffer, so the scene pass should write color attachment 1. The

@@ -165,6 +165,8 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --curvature-scale <f> Pre-integration strength on every skin "
                     "material (0 = off)\n");
     fprintf(stderr, "      --oit              Weighted-blended OIT for translucent meshes\n");
+    fprintf(stderr,
+            "      --oit-moments      Weight OIT by measured absorbance moments (implies --oit)\n");
     fprintf(stderr, "      --sss-radius <f>   SSS scatter radius (world units)\n");
     fprintf(stderr, "      --sss-color <r,g,b> SSS per-channel scatter color (e.g. 1.0,0.3,0.2)\n");
     fprintf(stderr, "      --no-bloom         Disable bloom\n");
@@ -753,6 +755,12 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->oit = 1;
         } else if (strcmp(argv[i], "--no-oit") == 0) {
             args->oit = 0;
+            args->oit_moments = 0;
+        } else if (strcmp(argv[i], "--oit-moments") == 0) {
+            // Moment weighting is a better weight INSIDE the OIT accumulate, not
+            // a second transparency path, so asking for it asks for OIT.
+            args->oit = 1;
+            args->oit_moments = 1;
         } else if (strcmp(argv[i], "--area-light") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -1802,6 +1810,9 @@ int main(int argc, char** argv) {
     }
     if (args.oit) {
         engine->oit_enabled = true;
+    }
+    if (args.oit_moments) {
+        engine->oit_moments_enabled = true;
     }
     engine->show_lights = args.show_lights != 0;
     engine->cluster_debug = args.cluster_heatmap != 0;

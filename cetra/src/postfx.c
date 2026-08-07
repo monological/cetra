@@ -2551,7 +2551,7 @@ static bool postfx_ensure_oit_targets(PostFX* fx) {
 // revealage (attachment 6) to single-sample, then fold the weighted-average color
 // over the opaque scene in hdr_fbo (out = avgColor*(1-reveal) + hdr*reveal). Runs
 // before every downstream HDR pass so TAA/SSR/bloom/tonemap see the transparency.
-static void postfx_run_oit(PostFX* fx, GLuint oit_fbo) {
+static void postfx_run_oit(PostFX* fx, GLuint oit_fbo, bool moments) {
     if (!postfx_ensure_oit_targets(fx))
         return;
     resolve_color_attachment(oit_fbo, GL_COLOR_ATTACHMENT5, fx->oit_accum_fbo, fx->width,
@@ -2561,12 +2561,19 @@ static void postfx_run_oit(PostFX* fx, GLuint oit_fbo) {
     glBindFramebuffer(GL_FRAMEBUFFER, fx->hdr_fbo);
     glViewport(0, 0, fx->width, fx->height);
     glUseProgram(fx->oit_resolve_program->id);
+    uniform_set_int(fx->oit_resolve_program->uniforms, "momentWeighted", moments ? 1 : 0);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, fx->oit_accum_texture);
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, fx->oit_revealage_texture);
     glEnable(GL_BLEND);
-    glBlendFunc(GL_ONE_MINUS_SRC_ALPHA, GL_SRC_ALPHA); // avgColor*(1-reveal) + scene*reveal
+    // Moment-weighted layers already carry their own transmittance, so the sum
+    // IS the foreground and only the background needs attenuating; the
+    // weighted-blended average has to displace the background in proportion.
+    if (moments)
+        glBlendFunc(GL_ONE, GL_SRC_ALPHA); // sum + scene*reveal
+    else
+        glBlendFunc(GL_ONE_MINUS_SRC_ALPHA, GL_SRC_ALPHA); // avgColor*(1-reveal) + scene*reveal
     draw_fullscreen_quad(fx->quad_vao);
     glDisable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -2574,7 +2581,8 @@ static void postfx_run_oit(PostFX* fx, GLuint oit_fbo) {
 }
 
 void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hdr,
-                const PostFXGBufferWrites* writes, GLuint oit_fbo, mat4 projection, mat4 view) {
+                const PostFXGBufferWrites* writes, GLuint oit_fbo, bool oit_moments,
+                mat4 projection, mat4 view) {
     const bool normals_written = writes->normals;
     const bool aux_written = writes->aux;
     const bool albedo_written = writes->albedo;
@@ -2602,7 +2610,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
     // resolved opaque scene before any downstream HDR pass (TAA/SSR/bloom/tonemap)
     // reads it. oit_fbo is 0 when the OIT accumulate pass did not run this frame.
     if (oit_fbo != 0)
-        postfx_run_oit(fx, oit_fbo);
+        postfx_run_oit(fx, oit_fbo, oit_moments);
 
     if (mode == POSTFX_TONEMAP_PASSTHROUGH) {
         // Display-ready frame: copy to the target, skipping bloom and tone

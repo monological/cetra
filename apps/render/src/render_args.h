@@ -113,6 +113,7 @@ typedef struct {
     int no_skin_preint;         // Disable pre-integrated skin diffuse (§11.13)
     float curvature_scale;      // Pre-integration strength override (< 0 = keep the material's)
     int oit;                    // Enable weighted-blended OIT (default off)
+    int oit_moments;            // Weight the OIT accumulate by absorbance moments (§11.17)
     int show_lights;            // Draw light gizmos (position + cull radius)
     int cluster_heatmap;        // Tint by cluster light count
     int area_light;             // --area-light given: spawn one LTC panel

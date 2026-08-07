@@ -202,7 +202,21 @@ uniform int clearcoatEnabled; // Global clearcoat lobe toggle (--no-clearcoat)
 uniform int specularEnabled;  // Global KHR_materials_specular toggle (--no-specular)
 uniform int sheenEnabled;     // Global KHR_materials_sheen toggle (--no-sheen)
 uniform int parallaxEnabled;  // Global POM toggle (--no-parallax, §4.11)
-uniform int oitPass;          // 1 during the weighted-blended OIT accumulate pass (else 0)
+// Which OIT sub-pass is drawing: 0 none, 1 weighted-blended accumulate,
+// 2 moment generation, 3 moment-weighted accumulate (spec 11.17).
+uniform int oitPass;
+// The moment atlas arrives through the refraction sampler rather than one of
+// its own, and that is forced rather than clever: the driver counts DECLARED
+// fragment samplers against the 16-unit limit, not distinct units, so a second
+// uniform pointing at unit 6 is still a seventeenth sampler and fails to link.
+// This shader declares exactly sixteen.
+//
+// The two tenants cannot collide, and for a structural reason rather than a
+// convention: the accumulate sub-pass draws only non-transmissive meshes, and
+// sceneColorTex is read only where transmission > 0.
+#define oitMomentTex sceneColorTex
+uniform vec2 oitMomentInvSize; // Reciprocal atlas size (twice the frame's height)
+uniform vec2 oitNearFar; // Camera near/far, the interval the depth warp spans
 // 1 = route ambient specular to SpecOut instead of FragColor. 0 (the GLSL
 // uniform default) is the inline path, so a draw that never sets it -- a
 // capture, the late/OIT passes, every non-split mode -- keeps its specular
@@ -720,6 +734,18 @@ vec3 clearcoatNormal(vec2 uv) {
 // front order without sorting. z is positive view distance (-ViewPos.z).
 float oitWeight(float z) {
     return clamp(0.03 / (1e-5 + pow(z / 200.0, 4.0)), 1e-2, 3e3);
+}
+
+#include "mboit.glsl"
+
+// Transmittance in front of this fragment, measured off the moment atlas rather
+// than guessed from its depth. The atlas is twice the render height with b0
+// below b1..b4, so the second tap is the first shifted half a texture down.
+float oitMomentWeight(float viewZ) {
+    vec2 uv = gl_FragCoord.xy * oitMomentInvSize;
+    vec4 moments = textureLod(oitMomentTex, uv, 0.0);
+    float b0 = textureLod(oitMomentTex, uv + vec2(0.0, 0.5), 0.0).r;
+    return mboitTransmittance(b0, moments, mboitWarpDepth(viewZ, oitNearFar));
 }
 
 void main() {
@@ -1802,12 +1828,23 @@ void main() {
     // bound when splitting, but every bound attachment must be written.
     SpecOut = vec4(min(ambSpec * preExposure, vec3(WS_SCENE_MAX)), finalOpacity);
 
-    // Weighted-blended OIT accumulate (guarded so oitPass 0 leaves FragColor and
-    // the opaque/alpha-blend paths byte-identical): premultiplied color * depth
-    // weight into AccumOut, alpha into RevealageOut. Indexed blend on the OIT FBO
-    // sums the first (GL_ONE,GL_ONE) and multiplies (1 - alpha) into the second.
-    if (oitPass > 0) {
-        float w = oitWeight(-ViewPos.z);
+    // OIT sub-passes (guarded so oitPass 0 leaves FragColor and the opaque/
+    // alpha-blend paths byte-identical). Both write the same two locations; the
+    // engine points them at a different FBO and a different blend per sub-pass.
+    if (oitPass == 2) {
+        // Moment generation: this layer's absorbance and its four power moments
+        // at its warped depth, summed additively over every layer (GL_ONE,GL_ONE
+        // on both slots). No colour is shaded into these -- they are a summary of
+        // WHERE the opacity is, which the accumulate below reads back.
+        float absorbance = mboitAbsorbance(finalOpacity);
+        AccumOut = mboitMoments(absorbance, mboitWarpDepth(-ViewPos.z, oitNearFar));
+        RevealageOut = vec4(absorbance);
+    } else if (oitPass > 0) {
+        // Accumulate: premultiplied colour times how much of this fragment
+        // survives what is in front of it -- measured from the moments when they
+        // were generated, guessed from the depth curve otherwise. Alpha into
+        // RevealageOut, whose multiplicative blend builds the product of (1-a).
+        float w = oitPass == 3 ? oitMomentWeight(-ViewPos.z) : oitWeight(-ViewPos.z);
         // Clamp the premultiplied weighted color to the fp16 ceiling (the accum
         // target is RGBA16F) so a bright near-camera translucent frag -- where the
         // depth weight nears its max -- can't write Inf and resolve to a white blob.

@@ -377,13 +377,20 @@ New: `dof_tile_frag.glsl`, `dof_gather_frag.glsl`; rewritten `dof_composite_frag
 CLI: `--dof --dof-blades 6`. Test asset: "bokeh chart" GLB (emissive quads spanning 0.5-50 m).
 **Owns foundations:** none. **Depends on:** nothing (adapts to B4's post-res if TAAU lands first).
 
-### B6. Moment-based OIT (Münstermann 2018) — Effort L — parked sketch
-**Power moments** (not trig — avoids complex arithmetic in GLSL 330): 4 power moments RGBA16F +
-optical depth b0, new attachments on the OIT FBO. Transparents draw **twice** (moments bracket, then
-color bracket weighted by reconstructed transmittance — the `engine_begin/end_oit_pass` bracket
-splits in two; main engine-side surgery). Hamburger 4-moment solver in `include/mboit.glsl`;
-`oit_moments` toggle keeps WBOIT fallback; off → 0px. ~+16 MB at 4× MSAA 1080p. Best customer: hair
-card tips (B8). ~~**Park until Tier 2 lands.**~~ Tier 2 landed with 11.13; unparked.
+### B6. Moment-based OIT (Münstermann 2018) — Effort L — **DONE (spec 11.17)**
+**Power moments** (not trig — avoids complex arithmetic in GLSL 330): 4 power moments + optical
+depth b0, on a second FBO reusing output locations 5/6. Transparents draw **three** times (moments,
+then colour weighted by reconstructed transmittance, then the transmissive late pass). Hamburger
+4-moment solver in `include/mboit.glsl`; `--oit-moments` keeps the WBOIT fallback; off measured at
+0 px against a build of the base commit, WBOIT included. Best customer: hair card tips (B8).
+
+Three sketch estimates were wrong and are worth carrying into B8 and A6:
+**memory** is 244 MB at 800x500 on a Retina framebuffer, not ~16 MB — fp32 is worth a third of the
+accuracy and the resolve needs its own atlas; **the composite changes**, since moment-weighted
+layers carry their own transmittance and sum rather than average; and **there is no seventeenth
+sampler in `pbr_frag` for any unit**, free or not, because the driver counts declarations — the
+moments ride the refraction sampler through a `#define`, which caps them at four floats and is why
+six or eight moments are a re-plan rather than a tweak.
 
 ### B7. Lens flare / cinematic finishing — Effort S/M — sketch
 Quarter-res Chapman-style ghost chain off the bloom bright buffer (scaled/flipped UV ghosts +
@@ -501,7 +508,7 @@ and 11.2 (below). **Tiers 1 and 2 are complete**, Tier 2 closing with B3 pre-int
 | 13 | SSS is dead in procedural scenes | S | **DONE (11.14).** `scene_has_subsurface()` reads `scene->materials`, which only `import.c` ever filled, so a scene building materials in code never ran the SSS pass — `apps/tree` had authored `subsurface` 0.6 / 0.45 and two profiles and never rendered any of it. Fixed at the registry (`scene_sync_materials`), so mask packing, name lookup and material ownership are fixed with it. Moves 26.7% of the tree's frame; no gate covers that, only a look pass. |
 | 14 | B3.1 Shadow-penumbra scattering | M | Recovers what B3 measured it could not do: the cast shadow owns the terminator on a convex character. Cheapest real gain in the character tier, and the PCSS penumbra estimate is already computed. |
 | 15 | B3.2 Skin under an area light | M | Skin gets no SSS at all under an LTC panel today, and a softbox portrait is the canonical skin setup. Shares its shape with the IBL gap. |
-| 16 | B6 Moment-based OIT | L | |
+| 16 | B6 Moment-based OIT | L | **DONE (11.17):** four power moments, opt-in `--oit-moments`, 4.94x closer to the arithmetic than the weighted-blended weight (0.0157 RMS against 0.0773). Not zero infra: a card-stack fixture with an analytic answer, three gates, the first OIT golden. Two plan corrections worth carrying forward — the old `oit_fixture` **cannot discriminate any two OIT schemes**, because weighted-blended is exact whenever every layer shares a colour; and `pbr_frag` has no seventeenth sampler for ANY unit, free or not, since the driver counts declarations. Six or eight moments would need a third fragment output location and GL 4.1 guarantees eight, all spoken for. |
 | 17 | B7 Lens flare / finishing | S/M | |
 | 18 | A6 Moment shadow maps | L | |
 | 19 | B8 Hair | XL | Wants B3.1 and B3.2 settled first — hair shares the shadow-scattering and area-light problems and is far more expensive to iterate on. |

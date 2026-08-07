@@ -185,6 +185,13 @@ Engine* create_engine(const char* window_title, int width, int height) {
     engine->oit_revealage_multisample_texture = 0;
     engine->oit_w = 0;
     engine->oit_h = 0;
+    engine->moment_fbo = 0;
+    engine->moment_multisample_texture = 0;
+    engine->moment_b0_multisample_texture = 0;
+    engine->moment_atlas_fbo = 0;
+    engine->moment_atlas_texture = 0;
+    engine->moment_w = 0;
+    engine->moment_h = 0;
     engine->light_cluster = NULL;
     engine->cluster_debug = false;
     engine->scene_color_this_frame = false;
@@ -194,6 +201,7 @@ Engine* create_engine(const char* window_title, int width, int height) {
     engine->sss_this_frame = false;
     engine->spec_this_frame = false;
     engine->oit_this_frame = false;
+    engine->moments_this_frame = false;
 
     engine->camera = NULL;
     engine->camera_mode = CAMERA_MODE_ORBIT;
@@ -219,6 +227,7 @@ Engine* create_engine(const char* window_title, int width, int height) {
                                         // curvature_scale > 0
     engine->oit_enabled = false; // OIT off by default (--oit opt-in); keeps the byte-identical
                                  // unsorted alpha-blend late pass
+    engine->oit_moments_enabled = false; // Moment weighting off (--oit-moments opt-in)
 
     glm_mat4_identity(engine->model_matrix);
     glm_mat4_identity(engine->view_matrix);
@@ -479,13 +488,21 @@ static void _destroy_msaa_attachments(Engine* engine) {
     }
     glDeleteRenderbuffers(1, &engine->depth_renderbuffer);
     engine->depth_renderbuffer = 0;
-    // The OIT FBO shares depth_renderbuffer; tear it down too so it is rebuilt
-    // against the fresh depth on the next OIT frame (0 handles when never created).
+    // The OIT and moment FBOs share depth_renderbuffer; tear them down too so
+    // they are rebuilt against the fresh depth on the next OIT frame (0 handles
+    // when never created).
     gl_delete_fbo(&engine->oit_fbo);
     gl_delete_texture(&engine->oit_accum_multisample_texture);
     gl_delete_texture(&engine->oit_revealage_multisample_texture);
     engine->oit_w = 0;
     engine->oit_h = 0;
+    gl_delete_fbo(&engine->moment_fbo);
+    gl_delete_texture(&engine->moment_multisample_texture);
+    gl_delete_texture(&engine->moment_b0_multisample_texture);
+    gl_delete_fbo(&engine->moment_atlas_fbo);
+    gl_delete_texture(&engine->moment_atlas_texture);
+    engine->moment_w = 0;
+    engine->moment_h = 0;
 }
 
 // Create one multisample color attachment (texture + framebuffer binding) on
@@ -2076,6 +2093,7 @@ static void _engine_gui_panel(Engine* engine) {
         igCheckbox("Subsurface (SSS)", &engine->sss_enabled);
         igCheckbox("Skin Pre-integration", &engine->skin_preint_enabled);
         igCheckbox("OIT (weighted blended)", &engine->oit_enabled);
+        igCheckbox("OIT Moments", &engine->oit_moments_enabled);
     }
 
     if (engine->postfx &&
@@ -2260,8 +2278,8 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode) {
                                         .sss = engine->sss_this_frame,
                                         .spec = engine->spec_this_frame};
     postfx_run(engine->postfx, engine->framebuffer, 0, frame_mode == RENDER_MODE_PBR, &writes,
-               engine->oit_this_frame ? engine->oit_fbo : 0, engine->draw_projection,
-               engine->view_matrix);
+               engine->oit_this_frame ? engine->oit_fbo : 0, engine->moments_this_frame,
+               engine->draw_projection, engine->view_matrix);
 
     // Sky LUT debug overlay onto the composited frame (an acceptance tool,
     // the csm_debug shape: a library-side flag the app/GUI toggles)
@@ -2525,6 +2543,120 @@ void engine_end_oit_pass(Engine* engine) {
     glDisablei(GL_BLEND, 5);
     glDisablei(GL_BLEND, 6);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+}
+
+// Lazy allocation for the moment-based OIT generation targets (spec 11.17):
+// b1..b4 (attachment 5) and b0 (attachment 6) as multisample color textures on a
+// dedicated FBO sharing engine->depth_renderbuffer, plus the single-sample atlas
+// the two resolve into. Same lifetime and teardown as the OIT targets beside
+// them.
+//
+// Both generation targets are RGBA16F, including the one that carries a single
+// scalar: a multisample resolve blit demands identical formats, and both halves
+// blit into the one atlas texture the accumulate pass can afford to sample (see
+// the atlas note in engine.h). The atlas is twice as tall for the same reason.
+static bool _ensure_moment_targets(Engine* engine, int rw, int rh) {
+    if (engine->moment_fbo != 0 && engine->moment_w == rw && engine->moment_h == rh)
+        return true;
+    gl_delete_fbo(&engine->moment_fbo);
+    gl_delete_texture(&engine->moment_multisample_texture);
+    gl_delete_texture(&engine->moment_b0_multisample_texture);
+    gl_delete_fbo(&engine->moment_atlas_fbo);
+    gl_delete_texture(&engine->moment_atlas_texture);
+
+    glGenFramebuffers(1, &engine->moment_fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, engine->moment_fbo);
+    _add_msaa_color_attachment(&engine->moment_multisample_texture, GL_RGBA32F,
+                               GL_COLOR_ATTACHMENT5, rw, rh, engine->msaa_samples);
+    _add_msaa_color_attachment(&engine->moment_b0_multisample_texture, GL_RGBA32F,
+                               GL_COLOR_ATTACHMENT6, rw, rh, engine->msaa_samples);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER,
+                              engine->depth_renderbuffer);
+    bool ok = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+
+    if (ok) {
+        glGenTextures(1, &engine->moment_atlas_texture);
+        glBindTexture(GL_TEXTURE_2D, engine->moment_atlas_texture);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, rw, rh * 2, 0, GL_RGBA, GL_FLOAT, NULL);
+        // Point sampling only: the accumulate pass reads its own pixel, and a
+        // filtered tap would mix moments across a silhouette.
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glGenFramebuffers(1, &engine->moment_atlas_fbo);
+        glBindFramebuffer(GL_FRAMEBUFFER, engine->moment_atlas_fbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                               engine->moment_atlas_texture, 0);
+        ok = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+    }
+
+    if (!ok) {
+        log_error("OIT moment framebuffer incomplete");
+        gl_delete_texture(&engine->moment_multisample_texture);
+        gl_delete_texture(&engine->moment_b0_multisample_texture);
+        gl_delete_fbo(&engine->moment_fbo);
+        gl_delete_texture(&engine->moment_atlas_texture);
+        gl_delete_fbo(&engine->moment_atlas_fbo);
+        return false;
+    }
+    engine->moment_w = rw;
+    engine->moment_h = rh;
+    // Worth a line, because it is the largest single allocation the renderer
+    // makes and it buys accuracy rather than resolution: two fp32 targets at the
+    // scene's sample count, plus the resolved atlas. fp16 would halve it and
+    // costs a third of the accuracy (spec 11.17).
+    double mb = ((double)rw * rh * 16.0 * (2.0 * engine->msaa_samples + 2.0)) / (1024.0 * 1024.0);
+    log_info("OIT moments: %dx%d x%d fp32 + %dx%d atlas (%.0f MB)", rw, rh, engine->msaa_samples,
+             rw, rh * 2, mb);
+    return true;
+}
+
+// Begin the moment generation sub-pass: bind the moment FBO, clear both targets
+// to zero, and make both additive. Absorbance adds where transmittance
+// multiplies, which is the whole reason the summary can be built in one unsorted
+// pass -- so unlike the OIT accumulate beside it, BOTH slots sum here.
+bool engine_begin_moment_pass(Engine* engine) {
+    int rw, rh;
+    engine_render_size(engine, &rw, &rh);
+    if (!_ensure_moment_targets(engine, rw, rh))
+        return false;
+    glBindFramebuffer(GL_FRAMEBUFFER, engine->moment_fbo);
+    glViewport(0, 0, rw, rh);
+    GLenum bufs[7] = {
+        GL_NONE, GL_NONE, GL_NONE, GL_NONE, GL_NONE, GL_COLOR_ATTACHMENT5, GL_COLOR_ATTACHMENT6};
+    glDrawBuffers(7, bufs);
+    const GLfloat zero[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    glClearBufferfv(GL_COLOR, 5, zero);
+    glClearBufferfv(GL_COLOR, 6, zero);
+    glEnablei(GL_BLEND, 5);
+    glEnablei(GL_BLEND, 6);
+    glBlendFunci(5, GL_ONE, GL_ONE);
+    glBlendFunci(6, GL_ONE, GL_ONE);
+    return true;
+}
+
+// End the moment generation sub-pass and hand back the atlas texture the
+// accumulate reads, or 0 if it could not be produced. Resolves each multisample
+// target into its own half of the atlas: same size, different destination
+// origin, which a multisample blit allows (it forbids scaling, not offsets).
+GLuint engine_end_moment_pass(Engine* engine) {
+    int rw, rh;
+    engine_render_size(engine, &rw, &rh);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, engine->moment_fbo);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, engine->moment_atlas_fbo);
+    glReadBuffer(GL_COLOR_ATTACHMENT5);
+    glBlitFramebuffer(0, 0, rw, rh, 0, 0, rw, rh, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    glReadBuffer(GL_COLOR_ATTACHMENT6);
+    glBlitFramebuffer(0, 0, rw, rh, 0, rh, rw, rh * 2, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, engine->framebuffer);
+    glViewport(0, 0, rw, rh);
+    engine_set_scene_draw_buffers(engine, false);
+    glDisablei(GL_BLEND, 5);
+    glDisablei(GL_BLEND, 6);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    return engine->moment_atlas_texture;
 }
 
 // POM (§4.11): resolve "<name>_height" sibling maps once the async texture

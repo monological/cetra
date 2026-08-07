@@ -113,6 +113,24 @@ typedef struct Engine {
     GLuint oit_accum_multisample_texture;
     GLuint oit_revealage_multisample_texture;
     int oit_w, oit_h;
+    // Moment-based OIT (spec 11.17): a second FBO, same shape, that the
+    // generation sub-pass sums absorbance moments into -- b1..b4 at attachment
+    // 5, the total b0 at attachment 6 -- before the accumulate sub-pass weights
+    // colour by them.
+    //
+    // They land in one ATLAS rather than staying two textures because the
+    // accumulate reads them from pbr_frag, which already declares all sixteen
+    // fragment samplers the driver allows -- and the driver counts DECLARED
+    // samplers, not distinct units, so there is no seventeenth even for a unit
+    // that is provably free. The moments have to arrive through the one sampler
+    // that is idle in that sub-pass, which is four floats against their five.
+    // Hence the atlas: twice the render height, b1..b4 above b0.
+    GLuint moment_fbo;
+    GLuint moment_multisample_texture;    // attachment 5: b1..b4
+    GLuint moment_b0_multisample_texture; // attachment 6: b0 (.r)
+    GLuint moment_atlas_fbo;
+    GLuint moment_atlas_texture;
+    int moment_w, moment_h;
     // Clustered-forward lighting (spec 9.1). The module owns its own GPU
     // buffers and scratch; rebuilt per render_current_scene invocation.
     struct LightClusterContext* light_cluster;
@@ -129,6 +147,8 @@ typedef struct Engine {
     bool sss_this_frame;         // Attachment 4 (skin diffuse) written this frame (SSS active)
     bool spec_this_frame;        // Attachment 7 (ambient specular) written this frame (split mode)
     bool oit_this_frame;         // OIT accumulate pass ran this frame (postfx composites oit_fbo)
+    bool moments_this_frame;     // Moment generation ran, so the accumulate weighted by measured
+                             // transmittance rather than the depth curve (changes the composite)
 
     // The scene is being rendered into an offscreen capture target (a probe face,
     // a GI probe face) rather than into engine->framebuffer. Set for the duration
@@ -178,6 +198,8 @@ typedef struct Engine {
                                 // unaffected either way)
     bool oit_enabled;           // Weighted-blended OIT for ALPHA_BLEND meshes (--oit); off keeps
                                 // the unsorted alpha-blend late pass
+    bool oit_moments_enabled;   // Weight the OIT accumulate by absorbance moments (spec 11.17)
+                                // instead of the depth curve; inert unless oit_enabled
 
     mat4 model_matrix;
     mat4 view_matrix;
@@ -385,6 +407,12 @@ GLuint engine_resolve_scene_depth(Engine* engine);
 // targets couldn't allocate (caller falls back to the classic late pass).
 bool engine_begin_oit_pass(Engine* engine);
 void engine_end_oit_pass(Engine* engine);
+
+// Moment generation sub-pass bracket (spec 11.17), run before the accumulate
+// when moment weighting is on. The end call returns the atlas texture holding
+// the summary, or 0 if it could not be produced.
+bool engine_begin_moment_pass(Engine* engine);
+GLuint engine_end_moment_pass(Engine* engine);
 
 // Render
 void set_engine_show_wireframe(Engine* engine, bool show_wireframe);
