@@ -381,8 +381,10 @@ CLI: `--dof --dof-blades 6`. Test asset: "bokeh chart" GLB (emissive quads spann
 **Power moments** (not trig — avoids complex arithmetic in GLSL 330): 4 power moments + optical
 depth b0, on a second FBO reusing output locations 5/6. Transparents draw **three** times (moments,
 then colour weighted by reconstructed transmittance, then the transmissive late pass). Hamburger
-4-moment solver in `include/mboit.glsl`; `--oit-moments` keeps the WBOIT fallback; off measured at
-0 px against a build of the base commit, WBOIT included. Best customer: hair card tips (B8).
+4-moment solver in `include/mboit.glsl`; `--no-oit-moments` keeps the WBOIT fallback; off measured
+at 0 px against a build of the base commit, WBOIT included. **Both default ON**, which 4.17 had
+left as a later call. Best customer: hair card tips (B8) — and the only non-fixture asset the
+default flip moves is the raiden rig's hair, 0.12% of frame.
 
 Three sketch estimates were wrong and are worth carrying into B8 and A6:
 **memory** is 244 MB at 800x500 on a Retina framebuffer, not ~16 MB — fp32 is worth a third of the
@@ -508,7 +510,7 @@ and 11.2 (below). **Tiers 1 and 2 are complete**, Tier 2 closing with B3 pre-int
 | 13 | SSS is dead in procedural scenes | S | **DONE (11.14).** `scene_has_subsurface()` reads `scene->materials`, which only `import.c` ever filled, so a scene building materials in code never ran the SSS pass — `apps/tree` had authored `subsurface` 0.6 / 0.45 and two profiles and never rendered any of it. Fixed at the registry (`scene_sync_materials`), so mask packing, name lookup and material ownership are fixed with it. Moves 26.7% of the tree's frame; no gate covers that, only a look pass. |
 | 14 | B3.1 Shadow-penumbra scattering | M | Recovers what B3 measured it could not do: the cast shadow owns the terminator on a convex character. Cheapest real gain in the character tier, and the PCSS penumbra estimate is already computed. |
 | 15 | B3.2 Skin under an area light | M | Skin gets no SSS at all under an LTC panel today, and a softbox portrait is the canonical skin setup. Shares its shape with the IBL gap. |
-| 16 | B6 Moment-based OIT | L | **DONE (11.17):** four power moments, opt-in `--oit-moments`, 4.94x closer to the arithmetic than the weighted-blended weight (0.0157 RMS against 0.0773). Not zero infra: a card-stack fixture with an analytic answer, three gates, the first OIT golden. Two plan corrections worth carrying forward — the old `oit_fixture` **cannot discriminate any two OIT schemes**, because weighted-blended is exact whenever every layer shares a colour; and `pbr_frag` has no seventeenth sampler for ANY unit, free or not, since the driver counts declarations. Six or eight moments would need a third fragment output location and GL 4.1 guarantees eight, all spoken for. |
+| 16 | B6 Moment-based OIT | L | **DONE (11.17):** four power moments, **on by default** with OIT, 4.94x closer to the arithmetic than the weighted-blended weight (0.0157 RMS against 0.0773). No golden moves (none of their scenes has an alpha-blend mesh); the raiden baseline moves 0.12%, the hair silhouette. 4.17's ordering defect is now on the default path and is the one known cost. Not zero infra: a card-stack fixture with an analytic answer, three gates, the first OIT golden. Two plan corrections worth carrying forward — the old `oit_fixture` **cannot discriminate any two OIT schemes**, because weighted-blended is exact whenever every layer shares a colour; and `pbr_frag` has no seventeenth sampler for ANY unit, free or not, since the driver counts declarations. Six or eight moments would need a third fragment output location and GL 4.1 guarantees eight, all spoken for. |
 | 17 | B7 Lens flare / finishing | S/M | |
 | 18 | A6 Moment shadow maps | L | |
 | 19 | B8 Hair | XL | Wants B3.1 and B3.2 settled first — hair shares the shadow-scattering and area-light problems and is far more expensive to iterate on. |

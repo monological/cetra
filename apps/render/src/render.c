@@ -164,9 +164,10 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --no-skin-preint   Disable pre-integrated skin diffuse\n");
     fprintf(stderr, "      --curvature-scale <f> Pre-integration strength on every skin "
                     "material (0 = off)\n");
-    fprintf(stderr, "      --oit              Weighted-blended OIT for translucent meshes\n");
     fprintf(stderr,
-            "      --oit-moments      Weight OIT by measured absorbance moments (implies --oit)\n");
+            "      --no-oit           Unsorted alpha-blend late pass instead of OIT (OIT is on)\n");
+    fprintf(stderr, "      --no-oit-moments   Weighted-blended OIT: the depth curve, not the "
+                    "measured moments\n");
     fprintf(stderr, "      --sss-radius <f>   SSS scatter radius (world units)\n");
     fprintf(stderr, "      --sss-color <r,g,b> SSS per-channel scatter color (e.g. 1.0,0.3,0.2)\n");
     fprintf(stderr, "      --no-bloom         Disable bloom\n");
@@ -260,6 +261,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->plg_intensity = 5.0f;
     args->shadow_softness = -1.0f;      // -1 = keep the engine default
     args->auto_exposure_override = -1;  // -1 = unset; an authored exposure then pins
+    args->oit = -1;                     // -1 = unset; both default ON in the engine
+    args->oit_moments = -1;
     args->sun_elevation = -999.0f; // -999 = keep the sky default
     args->cloud_coverage = -1.0f; // -1 = keep the engine default
     args->cloud_density = -1.0f;
@@ -761,6 +764,9 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             // a second transparency path, so asking for it asks for OIT.
             args->oit = 1;
             args->oit_moments = 1;
+        } else if (strcmp(argv[i], "--no-oit-moments") == 0) {
+            // Drops back to the McGuire depth weight without leaving OIT
+            args->oit_moments = 0;
         } else if (strcmp(argv[i], "--area-light") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -1808,11 +1814,11 @@ int main(int argc, char** argv) {
     if (args.no_skin_preint) {
         engine->skin_preint_enabled = false;
     }
-    if (args.oit) {
-        engine->oit_enabled = true;
+    if (args.oit >= 0) {
+        engine->oit_enabled = args.oit != 0;
     }
-    if (args.oit_moments) {
-        engine->oit_moments_enabled = true;
+    if (args.oit_moments >= 0) {
+        engine->oit_moments_enabled = args.oit_moments != 0;
     }
     engine->show_lights = args.show_lights != 0;
     engine->cluster_debug = args.cluster_heatmap != 0;

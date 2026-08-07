@@ -225,9 +225,16 @@ Engine* create_engine(const char* window_title, int width, int height) {
     engine->sss_enabled = true;         // SSS on; inert unless a material carries subsurface > 0
     engine->skin_preint_enabled = true; // Pre-integrated skin on; inert unless a material carries
                                         // curvature_scale > 0
-    engine->oit_enabled = false; // OIT off by default (--oit opt-in); keeps the byte-identical
-                                 // unsorted alpha-blend late pass
-    engine->oit_moments_enabled = false; // Moment weighting off (--oit-moments opt-in)
+    // Order-independent transparency on, and weighted by measured absorbance
+    // moments rather than the depth curve. --no-oit is the unsorted late pass.
+    //
+    // The known cost of this default is an ordering one, inherited from 4.17:
+    // the accumulation composites in postfx AFTER the scene FBO resolves, while
+    // the shadow catcher and overlays draw INTO it, so a translucent surface
+    // behind the catcher plane lands in front of it. The classic late pass gets
+    // that order right for free by drawing in the same buffer.
+    engine->oit_enabled = true;
+    engine->oit_moments_enabled = true;
 
     glm_mat4_identity(engine->model_matrix);
     glm_mat4_identity(engine->view_matrix);

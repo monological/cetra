@@ -1201,8 +1201,11 @@ def run_oit_gate(workdir):
     bg, cards = _oit_fixture_materials()
     truth = _oit_truth(bg, cards)
 
+    # Every arm names its weighting explicitly. --oit alone would inherit
+    # whichever one is default, so the weighted arm has to say --no-oit-moments
+    # or it silently measures the moment path against itself.
     sorted_frame = _oit_render(workdir, "sorted", ["--no-oit"])
-    weighted = _oit_render(workdir, "weighted", ["--oit"])
+    weighted = _oit_render(workdir, "weighted", ["--oit", "--no-oit-moments"])
     moments = _oit_render(workdir, "moments", ["--oit-moments"])
     if sorted_frame is None or weighted is None or moments is None:
         print("  oit-cards    ERROR while rendering the card stack")
