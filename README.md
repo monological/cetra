@@ -10,8 +10,6 @@
     Cetra Graphics Engine
 </h3>
 
-<a href="https://cetra.pixelgenesis.com">cetra.pixelgenesis.com</a>
-
 </div>
 
 
