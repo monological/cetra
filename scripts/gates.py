@@ -1067,6 +1067,153 @@ def run_cloud_churn_gate(workdir):
     return []  # report-only this cycle; flip to failures on the next
 
 
+# Order-independent transparency (spec 11.17), measured on assets/oit_cards_fixture.
+#
+# Twelve emissive cards of one alpha over an opaque backdrop, arranged so a
+# horizontal scan crosses regions of exactly 0, 1, ... 12 layers with each step
+# adding one card IN FRONT. The correct composite of band b is then the front-to-
+# back recursion S_b = C*a + (1-a)*S_(b-1) with no free parameters -- the card
+# colours are the authored emissive constants, the backdrop is its own, and the
+# tonemap and display gamma are inverted exactly (the fixture keeps every value
+# inside the Neutral curve's affine stretch to make that possible).
+#
+# So this gate does not compare OIT against a stored image or against another
+# OIT. It compares it against the arithmetic, and the sorted render is checked
+# against the same arithmetic first, which is what earns it the right to be
+# called ground truth.
+#
+# Why a new fixture at all: weighted-blended OIT is EXACT whenever every layer
+# carries the same colour, at any weights, because the accumulator divides by its
+# own alpha sum. oit_fixture is three near-identical quads, so it cannot separate
+# any two OIT schemes and never could. Colour varying WITH depth is what
+# discriminates -- see the header of assets/gen_oit_cards_fixture.py.
+#
+# Mirrors that generator's band layout; the colours and alpha are read from the
+# .gltf so the one thing that cannot be checked by inspection cannot drift.
+OIT_BAND_LEFT = 0.06
+OIT_BAND_RIGHT = 0.94
+# Fresnel-boosted opacity: pbr_frag mixes the authored alpha toward 1 by the
+# Fresnel term, so the alpha that actually composites is not the authored one.
+# The cards face the camera and the bands are sampled on the horizon line, which
+# holds (1 - NdotV)^5 below 1e-5 -- so only the normal-incidence F0 survives, and
+# the effective alpha is a constant rather than a per-pixel function.
+OIT_IOR = 1.5
+
+# What the SORTED render is allowed to deviate from the arithmetic. It measures
+# 0.0026, and one 8-bit step is 0.0044 at the brightest band, so this is under
+# two quantization steps -- and 25x below the error weighted-blended OIT commits
+# on the same frame, which is the number it has to be small against.
+OIT_TRUTH_TOL = 0.008
+# The inverse half. If the fixture did not separate a real OIT approximation from
+# the truth by a wide margin, then a later scheme matching the truth would prove
+# nothing about the scheme. Weighted-blended measures 0.077 RMS here.
+OIT_DISCRIMINATION_MIN = 0.02
+
+
+def _oit_fixture_materials():
+    """(background rgb, [(card rgb, alpha)]) straight out of the fixture."""
+    path = os.path.join(ROOT, "assets", "oit_cards_fixture.gltf")
+    with open(path) as f:
+        mats = json.load(f)["materials"]
+    bg = mats[0]["emissiveFactor"]
+    cards = [(m["emissiveFactor"], m["pbrMetallicRoughness"]["baseColorFactor"][3])
+             for m in mats[1:]]
+    return bg, cards
+
+
+def _oit_truth(bg, cards):
+    """Correct front-to-back composite of every band, in linear HDR."""
+    f0 = ((OIT_IOR - 1.0) / (OIT_IOR + 1.0)) ** 2
+    out = [list(bg)]
+    for color, alpha in cards:
+        a = alpha + (1.0 - alpha) * f0
+        out.append([color[c] * a + (1.0 - a) * out[-1][c] for c in range(3)])
+    return out
+
+
+def _oit_untonemap(rgb):
+    """Display sample -> linear HDR, inverting displayEncode and Neutral.
+
+    Neutral subtracts an offset driven by the sample's MINIMUM channel: a flat
+    0.04 above a 0.08 toe, and 6.25x^2 below it. Both branches invert in closed
+    form, and the fixture's colours are chosen to stay in the first one -- the
+    second is here so a future colour edit fails loudly rather than quietly
+    reading 4% low.
+    """
+    ldr = [max(0.0, min(1.0, c)) ** 2.2 for c in rgb]
+    m = min(ldr)
+    offset = 0.4 * math.sqrt(m) - m if m < 0.04 else 0.04
+    return [c + offset for c in ldr]
+
+
+def _oit_bands(path, count):
+    w, h, pix = _read_ppm(path)
+    width = (OIT_BAND_RIGHT - OIT_BAND_LEFT) / (count + 1)
+    out = []
+    for b in range(count + 1):
+        u = OIT_BAND_LEFT + (b + 0.5) * width
+        x = max(0, min(w - 1, int(round(u * w))))
+        y = h // 2
+        o = (y * w + x) * 3
+        out.append(_oit_untonemap([pix[o + k] / 255.0 for k in range(3)]))
+    return out
+
+
+def _oit_error(path, truth):
+    """(worst channel deviation, RMS) of a render against the arithmetic."""
+    meas = _oit_bands(path, len(truth) - 1)
+    diffs = [abs(meas[b][c] - truth[b][c]) for b in range(len(truth)) for c in range(3)]
+    return max(diffs), math.sqrt(sum(d * d for d in diffs) / len(diffs))
+
+
+def _oit_render(workdir, tag, extra):
+    out = os.path.join(workdir, f"oit_{tag}.ppm")
+    scene = os.path.join(ROOT, "assets", "oit_cards_fixture.cscn")
+    # --no-vignette is load-bearing, not tidiness: the default vignette is on and
+    # radial, so it would darken the outer bands by a fraction of the very error
+    # being measured. The rest keeps anything that could add to a flat emissive
+    # surface out of the frame.
+    cmd = [RENDER, "-m", scene, "-x", "-f", "30", "-W", "800", "-H", "500",
+           "--no-auto-exposure", "-E", "1.0", "--no-vignette", "--no-bloom",
+           "--no-ssao", "--no-ssr", "-S", out] + extra
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0 or not os.path.exists(out):
+        return None
+    return out
+
+
+def run_oit_gate(workdir):
+    fixture = os.path.join(ROOT, "assets", "oit_cards_fixture.cscn")
+    if not os.path.exists(fixture):
+        print("  oit-cards    SKIP  (missing oit_cards_fixture.cscn)")
+        return []
+    bg, cards = _oit_fixture_materials()
+    truth = _oit_truth(bg, cards)
+
+    sorted_frame = _oit_render(workdir, "sorted", ["--no-oit"])
+    weighted = _oit_render(workdir, "weighted", ["--oit"])
+    if sorted_frame is None or weighted is None:
+        print("  oit-cards    ERROR while rendering the card stack")
+        return ["oit-cards"]
+
+    fails = []
+    worst, rms = _oit_error(sorted_frame, truth)
+    ok = worst <= OIT_TRUTH_TOL
+    print(f"  oit-sorted   {'PASS' if ok else 'FAIL'}  back-to-front vs arithmetic: "
+          f"worst {worst:.5f} rms {rms:.5f} (want worst <= {OIT_TRUTH_TOL})")
+    if not ok:
+        fails.append("oit-cards")
+
+    w_worst, w_rms = _oit_error(weighted, truth)
+    ok = w_rms >= OIT_DISCRIMINATION_MIN
+    print(f"  oit-weighted {'PASS' if ok else 'FAIL'}  weighted-blended vs arithmetic: "
+          f"worst {w_worst:.5f} rms {w_rms:.5f} "
+          f"(want rms >= {OIT_DISCRIMINATION_MIN}, else the fixture cannot discriminate)")
+    if not ok:
+        fails.append("oit-cards")
+    return fails
+
+
 def run_dir_shadow_gate(workdir):
     fixture = os.path.join(ROOT, "assets", "dir_shadow_fixture.cscn")
     if not os.path.exists(fixture):
@@ -1319,6 +1466,8 @@ def main():
         failures += run_dir_shadow_gate(workdir)
         print("catcher over a real ground (contact fixture):")
         failures += run_catcher_gate(workdir)
+        print("order-independent transparency (analytic card stack):")
+        failures += run_oit_gate(workdir)
         print("cloud layer (steady-state churn, report-only):")
         failures += run_cloud_churn_gate(workdir)
         print("pre-integrated skin (off-path byte identity):")
