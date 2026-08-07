@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "models": [
+    { "path": "catcher_transparency_fixture.gltf" }
+  ],
+  "environment": {
+    "mode": "sky",
+    "sun": { "elevation": 42, "azimuth": 250 }
+  },
+  "camera": {
+    "eye": [0.0, 2.4, 7.0],
+    "target": [0.0, 0.1, 0.0],
+    "fov": 45
+  },
+  "post": {
+    "tonemap": "neutral",
+    "exposure": 6.0
+  }
+}

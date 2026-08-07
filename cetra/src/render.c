@@ -854,6 +854,105 @@ void render_current_scene(Engine* engine) {
         }
     }
 
+    // Shadow catcher: darken the environment floor where the model blocks the
+    // shadow-casting lights. Over the skybox, which it blends onto, and BEFORE
+    // everything that has to sort against the floor (spec 11.18).
+    //
+    // It used to draw last, and its depth was inert because of it. Nothing
+    // ordered against a plane that arrived after every other draw, so
+    // translucent geometry behind the floor composited over the shadow instead
+    // of being hidden by it -- in the unsorted late pass, in the OIT
+    // accumulate, and in the particle depth resolve alike, since all three test
+    // against this one buffer. Drawn here, one plane serves all three.
+    //
+    // Ahead of the refraction resolve too, so transmissive surfaces see the
+    // shadowed floor rather than an unshadowed one.
+    if (scene->shadow_catcher && scene->shadow_system && scene->shadow_system->enabled &&
+        scene->shadow_system->directional_count > 0 && engine->shadow_catcher_program &&
+        engine->catcher_vao) {
+        ShaderProgram* catcher = engine->shadow_catcher_program;
+        ShadowSystem* ss = scene->shadow_system;
+
+        glUseProgram(catcher->id);
+        uniform_set_mat4(catcher->uniforms, "view", (const float*)*view);
+        uniform_set_mat4(catcher->uniforms, "projection", (const float*)draw_projection);
+        uniform_set_float(catcher->uniforms, "catcherStrength", scene->shadow_catcher_strength);
+        uniform_set_float(catcher->uniforms, "planeRadius", scene->skybox_gp_radius);
+
+        // With SSR active the floor publishes depth and the reflective
+        // marker across the whole quad (surfaceMode 1 skips the unshadowed
+        // discard) so the reflection march has a surface to start from
+        bool ssr_floor =
+            engine->postfx && postfx_ssr_active(engine->postfx, engine->normals_this_frame);
+        uniform_set_int(catcher->uniforms, "surfaceMode", ssr_floor ? 1 : 0);
+        uniform_set_int(catcher->uniforms, "numShadowLights", (int)ss->directional_count);
+        uniform_set_float(catcher->uniforms, "shadowBias", ss->shadow_bias);
+
+        // Weight each caster's shadow by its light's share of analytic light
+        float weights[MAX_SHADOW_LIGHTS] = {0};
+        float weight_total = 0.0f;
+        for (size_t i = 0; i < scene->light_count; i++) {
+            const Light* light = scene->lights[i];
+            if (light && light->shadow_map_index >= 0 &&
+                light->shadow_map_index < MAX_SHADOW_LIGHTS) {
+                weights[light->shadow_map_index] = light->intensity;
+                weight_total += light->intensity;
+            }
+        }
+        shadow_upload_cascade_uniforms(ss, catcher->uniforms);
+
+        for (size_t i = 0; i < ss->directional_count && i < MAX_SHADOW_LIGHTS; i++) {
+            char name[64];
+            snprintf(name, sizeof(name), "shadowLightWeight[%zu]", i);
+            uniform_set_float(catcher->uniforms, name,
+                              weight_total > 0.0f ? weights[i] / weight_total : 0.0f);
+        }
+
+        float texel = 1.0f / (float)ss->default_map_size;
+        GLint loc = uniform_location(catcher->uniforms, "shadowTexelSize");
+        if (loc >= 0)
+            glUniform2f(loc, texel, texel);
+
+        glActiveTexture(GL_TEXTURE0 + SHADOW_MAP_TEXTURE_UNIT);
+        glBindTexture(GL_TEXTURE_2D_ARRAY, ss->shadow_map_array);
+        uniform_set_int(catcher->uniforms, "shadowMaps", SHADOW_MAP_TEXTURE_UNIT);
+
+        // Explicit state: blended, visible from both sides. Depth writes stay
+        // ON, and that is now load-bearing rather than incidental: this plane
+        // is what the transparent and particle passes below sort against, and
+        // what gives the model a contact shadow in the postfx SSAO resolve.
+        // The floor it stands in for writes no depth of its own.
+        GLboolean cull_was_enabled = glIsEnabled(GL_CULL_FACE);
+        glDisable(GL_CULL_FACE);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        // The quad sits at y=0, and a scene may ship its own ground plane at
+        // exactly that height. Pushed a few depth ULPs behind everything so
+        // real geometry always wins the depth test at equal depth -- without
+        // this, interpolation rounding lets the quad win in jitter-dependent
+        // patches and it stamps its own shadow term over the already-shaded
+        // floor as flickering rectangles. The backdrop dome floor writes no
+        // depth, so shadows land there exactly as before.
+        glEnable(GL_POLYGON_OFFSET_FILL);
+        glPolygonOffset(1.0f, 8.0f);
+        // The floor writes the reflective marker only when SSR consumes it;
+        // otherwise it draws color-only and leaves the normals buffer (and
+        // SSAO's read of it) untouched. Must come after the blanket blend
+        // enable above, which resets the indexed blend-off state this call
+        // establishes for attachment 1.
+        engine_set_scene_draw_buffers(engine, ssr_floor);
+
+        glBindVertexArray(engine->catcher_vao);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+        glBindVertexArray(0);
+
+        engine_set_scene_draw_buffers(engine, false);
+        glDisable(GL_POLYGON_OFFSET_FILL);
+        glPolygonOffset(0.0f, 0.0f);
+        if (cull_was_enabled)
+            glEnable(GL_CULL_FACE);
+    }
+
     // Refraction source: resolve the opaque scene (including the skybox
     // just drawn) into the mipped color texture transmissive surfaces
     // sample. Gated on this frame's count, the engine toggle, and PBR mode
@@ -945,93 +1044,6 @@ void render_current_scene(Engine* engine) {
             particle_system_render(scene->particle_systems[i], &pctx);
         glDepthMask(GL_TRUE);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); // restore engine baseline
-    }
-
-    // Shadow catcher: darken the environment floor where the model blocks
-    // the shadow-casting lights (drawn over the skybox, blended)
-    if (scene->shadow_catcher && scene->shadow_system && scene->shadow_system->enabled &&
-        scene->shadow_system->directional_count > 0 && engine->shadow_catcher_program &&
-        engine->catcher_vao) {
-        ShaderProgram* catcher = engine->shadow_catcher_program;
-        ShadowSystem* ss = scene->shadow_system;
-
-        glUseProgram(catcher->id);
-        uniform_set_mat4(catcher->uniforms, "view", (const float*)*view);
-        uniform_set_mat4(catcher->uniforms, "projection", (const float*)draw_projection);
-        uniform_set_float(catcher->uniforms, "catcherStrength", scene->shadow_catcher_strength);
-        uniform_set_float(catcher->uniforms, "planeRadius", scene->skybox_gp_radius);
-
-        // With SSR active the floor publishes depth and the reflective
-        // marker across the whole quad (surfaceMode 1 skips the unshadowed
-        // discard) so the reflection march has a surface to start from
-        bool ssr_floor =
-            engine->postfx && postfx_ssr_active(engine->postfx, engine->normals_this_frame);
-        uniform_set_int(catcher->uniforms, "surfaceMode", ssr_floor ? 1 : 0);
-        uniform_set_int(catcher->uniforms, "numShadowLights", (int)ss->directional_count);
-        uniform_set_float(catcher->uniforms, "shadowBias", ss->shadow_bias);
-
-        // Weight each caster's shadow by its light's share of analytic light
-        float weights[MAX_SHADOW_LIGHTS] = {0};
-        float weight_total = 0.0f;
-        for (size_t i = 0; i < scene->light_count; i++) {
-            const Light* light = scene->lights[i];
-            if (light && light->shadow_map_index >= 0 &&
-                light->shadow_map_index < MAX_SHADOW_LIGHTS) {
-                weights[light->shadow_map_index] = light->intensity;
-                weight_total += light->intensity;
-            }
-        }
-        shadow_upload_cascade_uniforms(ss, catcher->uniforms);
-
-        for (size_t i = 0; i < ss->directional_count && i < MAX_SHADOW_LIGHTS; i++) {
-            char name[64];
-            snprintf(name, sizeof(name), "shadowLightWeight[%zu]", i);
-            uniform_set_float(catcher->uniforms, name,
-                              weight_total > 0.0f ? weights[i] / weight_total : 0.0f);
-        }
-
-        float texel = 1.0f / (float)ss->default_map_size;
-        GLint loc = uniform_location(catcher->uniforms, "shadowTexelSize");
-        if (loc >= 0)
-            glUniform2f(loc, texel, texel);
-
-        glActiveTexture(GL_TEXTURE0 + SHADOW_MAP_TEXTURE_UNIT);
-        glBindTexture(GL_TEXTURE_2D_ARRAY, ss->shadow_map_array);
-        uniform_set_int(catcher->uniforms, "shadowMaps", SHADOW_MAP_TEXTURE_UNIT);
-
-        // Explicit state: blended, visible from both sides. Depth writes
-        // stay ON: this is the last geometry of the frame, so its depth only
-        // feeds the postfx SSAO resolve, giving the model a contact shadow
-        // on the projected floor (which otherwise writes no depth)
-        GLboolean cull_was_enabled = glIsEnabled(GL_CULL_FACE);
-        glDisable(GL_CULL_FACE);
-        glEnable(GL_BLEND);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        // The quad sits at y=0, and a scene may ship its own ground plane at
-        // exactly that height. Pushed a few depth ULPs behind everything so
-        // real geometry always wins the depth test at equal depth -- without
-        // this, interpolation rounding lets the quad win in jitter-dependent
-        // patches and it stamps its own shadow term over the already-shaded
-        // floor as flickering rectangles. The backdrop dome floor writes no
-        // depth, so shadows land there exactly as before.
-        glEnable(GL_POLYGON_OFFSET_FILL);
-        glPolygonOffset(1.0f, 8.0f);
-        // The floor writes the reflective marker only when SSR consumes it;
-        // otherwise it draws color-only and leaves the normals buffer (and
-        // SSAO's read of it) untouched. Must come after the blanket blend
-        // enable above, which resets the indexed blend-off state this call
-        // establishes for attachment 1.
-        engine_set_scene_draw_buffers(engine, ssr_floor);
-
-        glBindVertexArray(engine->catcher_vao);
-        glDrawArrays(GL_TRIANGLES, 0, 6);
-        glBindVertexArray(0);
-
-        engine_set_scene_draw_buffers(engine, false);
-        glDisable(GL_POLYGON_OFFSET_FILL);
-        glPolygonOffset(0.0f, 0.0f);
-        if (cull_was_enabled)
-            glEnable(GL_CULL_FACE);
     }
 
     // Light overlay last, so the X-ray lines sit on top of the finished scene
