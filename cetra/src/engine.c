@@ -2092,8 +2092,11 @@ static void _engine_gui_panel(Engine* engine) {
         igCheckbox("Parallax (POM)", &engine->parallax_enabled);
         igCheckbox("Subsurface (SSS)", &engine->sss_enabled);
         igCheckbox("Skin Pre-integration", &engine->skin_preint_enabled);
-        igCheckbox("OIT (weighted blended)", &engine->oit_enabled);
-        igCheckbox("OIT Moments", &engine->oit_moments_enabled);
+        // Moment weighting is a better weight INSIDE the accumulate, not a
+        // second transparency path, so it greys out with the pass it rides.
+        _begin_effect_group("OIT", &engine->oit_enabled);
+        igCheckbox("OIT Moment Weighting", &engine->oit_moments_enabled);
+        _end_effect_group();
     }
 
     if (engine->postfx &&
