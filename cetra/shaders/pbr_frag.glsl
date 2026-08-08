@@ -752,18 +752,32 @@ float oitWeight(float z) {
 
 #include "mboit.glsl"
 
-// Translucency rises toward opaque at glancing angles: blend the authored
-// opacity toward 1 by the Fresnel term.
+// Alpha carries two unrelated quantities and only one of them is a Fresnel
+// event:
+//
+//   coverage        how much of this pixel has geometry in it, authored per
+//                   texel. A hair card's alpha is a stencil -- "there is no
+//                   hair here".
+//   materialOpacity how much light the SURFACE transmits, a scalar. A visor is
+//                   20% opaque everywhere.
+//
+// A dielectric reflects nearly everything at grazing incidence, so less
+// background transmits and a translucent surface really does go opaque -- that
+// is the mix() below, and it is the complement to the specular Fresnel rather
+// than a duplicate of it. But where coverage is zero there is no interface, so
+// there is no Fresnel event to have; lifting coverage invents surface the
+// artist deleted. Hence the split: the boost scales the scalar, coverage rides
+// through untouched, and opacity can never exceed coverage.
 //
 // Shared by the shading path and the moment-generation early-out, and that
 // sharing is the point -- the moments summarise WHERE the opacity is, so they
 // have to be built from the same number the accumulate later writes. Two copies
 // of this expression would mis-weight every layer without failing anything.
-float fresnelOpacity(float opacity, float iorF0, float NdotV) {
-    if (opacity >= 1.0)
-        return opacity;
+float fresnelOpacity(float coverage, float materialOpacity, float iorF0, float NdotV) {
+    if (materialOpacity >= 1.0)
+        return coverage;
     float f = iorF0 + (1.0 - iorF0) * pow(clamp(1.0 - NdotV, 0.0, 1.0), 5.0);
-    return mix(opacity, 1.0, f);
+    return coverage * mix(materialOpacity, 1.0, f);
 }
 
 void main() {
@@ -827,6 +841,8 @@ void main() {
             discard;
         }
         vec3 color = linearToSRGB(albedoMapOnly);
+        // coverage * materialOpacity, and no Fresnel: this view answers "what is
+        // authored here", so lifting it at grazing would be the wrong question.
         FragColor = vec4(color, materialOpacity * texAlphaOnly);
         return;
     }
@@ -951,13 +967,15 @@ void main() {
         emissiveMap = emissiveFactor;
     }
 
-    float opacity = materialOpacity;
-    if (opacityLayer >= 0) {
-        opacity = texture(maskArray, vec3(uv, float(opacityLayer))).r * materialOpacity;
-    } else if (texAlpha < 1.0) {
-        // Use albedo texture alpha if no separate opacity texture
-        opacity = texAlpha * materialOpacity;
-    }
+    // Geometric coverage, kept apart from the scalar translucency it used to be
+    // multiplied into (see fresnelOpacity). A dedicated opacity map and an
+    // alpha-cut albedo are both stencils, so they COMBINE -- the map used to
+    // replace texAlpha outright, which silently dropped the cutout on any
+    // material carrying both.
+    float coverage = texAlpha;
+    if (opacityLayer >= 0)
+        coverage *= texture(maskArray, vec3(uv, float(opacityLayer))).r;
+    float opacity = coverage * materialOpacity;
 
     // Microsurface detail - modulates roughness for fine surface detail
     if (microsurfaceLayer >= 0) {
@@ -1087,7 +1105,8 @@ void main() {
     // Legal to leave the other outputs unwritten: the generation FBO binds only
     // locations 5 and 6. oitPass is a uniform, so the branch is coherent.
     if (oitPass == 2) {
-        float absorbance = mboitAbsorbance(fresnelOpacity(opacity, iorF0, NdotV));
+        float absorbance =
+            mboitAbsorbance(fresnelOpacity(coverage, materialOpacity, iorF0, NdotV));
         AccumOut = mboitMoments(absorbance, mboitWarpDepth(-ViewPos.z, oitNearFar));
         RevealageOut = vec4(absorbance);
         return;
@@ -1801,7 +1820,7 @@ void main() {
         }
     }
 
-    float finalOpacity = fresnelOpacity(opacity, iorF0, NdotV);
+    float finalOpacity = fresnelOpacity(coverage, materialOpacity, iorF0, NdotV);
 
     // `color` is already working space -- converted upstream so the clamps in
     // between operate on the scale they were written for.
