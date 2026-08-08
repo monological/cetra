@@ -2,6 +2,7 @@
 #define _MATERIAL_H_
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <cglm/cglm.h>
 
 #include "texture.h"
@@ -186,6 +187,48 @@ typedef struct Material {
 
     ShaderProgram* shader_program;
 } Material;
+
+typedef enum MaterialParamType {
+    MATERIAL_PARAM_FLOAT,
+    MATERIAL_PARAM_VEC3, // always a colour in this table, so editors may assume it
+    MATERIAL_PARAM_INT,
+} MaterialParamType;
+
+// One tunable material property: the name a scene file authors it under, where
+// it lives, and the range an editor should offer.
+typedef struct MaterialParam {
+    const char* key;
+    size_t offset; // into Material
+    MaterialParamType type;
+    float min, max; // editor range only; an authored value is never clamped to it
+} MaterialParam;
+
+/*
+ * The material vocabulary, and the ONLY place a name is tied to a Material
+ * field. Adding a property is one row and both consumers pick it up: the scene
+ * file parser resolves authored keys through it, and the GUI builds a control
+ * per row. Two tables would drift the moment someone extended one of them.
+ *
+ * SHADING ONLY, on purpose. alpha_mode, alphaCutoff, doubleSided and
+ * foliage_shadows are deliberately absent: they decide which PASS a mesh draws
+ * in and whether it is culled, so a wrong value there moves geometry between
+ * the opaque and transparent queues instead of merely misshading it.
+ * Everything here can be set blind because the worst case is an ugly surface.
+ *
+ * Subsurface is absent for a different reason: its consumer is PostFX's
+ * scatter-profile table rather than any field here, so no offset describes it.
+ * Textures are absent because an offset cannot express "load and retain".
+ */
+extern const MaterialParam MATERIAL_PARAMS[];
+extern const size_t MATERIAL_PARAM_COUNT;
+
+// Look a key up in the table above; NULL if the vocabulary has no such name.
+const MaterialParam* material_param_find(const char* key);
+
+// Read/write a parameter generically. `values` is 3 floats for VEC3 and one
+// for the rest, so a caller can round-trip any row without switching on type.
+void material_param_get(const Material* material, const MaterialParam* param, float* values);
+void material_param_set(Material* material, const MaterialParam* param, const float* values);
 
 Material* create_material();
 void free_material(Material* material);

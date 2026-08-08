@@ -1653,6 +1653,69 @@ static void _light_gui_label(char* out, size_t out_size, const Light* light, int
         snprintf(out, out_size, "%d: %s", index, light_type_name(light->type));
 }
 
+// Combo entry for one material. Same reason the index leads as for lights:
+// ImGui keys widgets by label, and glTF happily ships two materials called
+// "Material.001".
+static const char* _material_gui_label(const Material* material, int index) {
+    static char out[128];
+    if (!material)
+        snprintf(out, sizeof(out), "%d: <empty>", index);
+    else if (material->name && material->name[0])
+        snprintf(out, sizeof(out), "%d: %s", index, material->name);
+    else
+        snprintf(out, sizeof(out), "%d: <unnamed>", index);
+    return out;
+}
+
+// Write a material's non-default properties to the clipboard as a .cscn
+// materials block.
+//
+// Only what DIFFERS from a fresh material, compared against create_material()
+// rather than a hardcoded list -- an override sheet that restated every default
+// would bury the two values that were actually tuned, and a hardcoded list
+// would go stale the first time a default moved. Textures are not emitted: the
+// panel cannot change them, so anything it wrote would be a guess.
+static void _material_copy_as_cscn(const Material* material) {
+    Material* fresh = create_material();
+    if (!fresh)
+        return;
+
+    char out[4096];
+    int n = snprintf(out, sizeof(out), "\"%s\": {\n",
+                     material->name && material->name[0] ? material->name : "UNNAMED");
+    for (size_t i = 0; i < MATERIAL_PARAM_COUNT && n > 0 && n < (int)sizeof(out); i++) {
+        const MaterialParam* p = &MATERIAL_PARAMS[i];
+        float now[3] = {0}, was[3] = {0};
+        material_param_get(material, p, now);
+        material_param_get(fresh, p, was);
+        int count = p->type == MATERIAL_PARAM_VEC3 ? 3 : 1;
+        bool same = true;
+        for (int c = 0; c < count; c++)
+            same = same && fabsf(now[c] - was[c]) < 1e-6f;
+        if (same)
+            continue;
+        if (count == 3)
+            n += snprintf(out + n, sizeof(out) - n, "  \"%s\": [%.4g, %.4g, %.4g],\n", p->key,
+                          now[0], now[1], now[2]);
+        else
+            n += snprintf(out + n, sizeof(out) - n, "  \"%s\": %.4g,\n", p->key, now[0]);
+    }
+    // snprintf reports what it WOULD have written, so n can run past the buffer
+    // on truncation; clamp before the tail writes index off it.
+    if (n < 0 || n >= (int)sizeof(out))
+        n = (int)sizeof(out) - 1;
+    // Drop the trailing comma so the result is valid JSON when pasted.
+    if (n >= 2 && out[n - 2] == ',')
+        snprintf(out + n - 2, sizeof(out) - (n - 2), "\n}");
+    else
+        snprintf(out + n, sizeof(out) - n, "}");
+
+    igSetClipboardText(out);
+    log_info("Material '%s' copied as .cscn:\n%s",
+             material->name ? material->name : "(unnamed)", out);
+    free_material(fresh);
+}
+
 // The one "environment changed on release" chain, shared by the sun sliders
 // and the cloud controls so the downstream consumers cannot drift apart:
 // re-bake the env WITH clouds when the layer is on (the per-drag path never
@@ -1744,6 +1807,65 @@ static void _engine_gui_panel(Engine* engine) {
     }
 
     Scene* scene = get_current_scene(engine);
+    if (scene && scene->material_count > 0 &&
+        igCollapsingHeader_TreeNodeFlags("Material", 0)) {
+        // Like the light section below, this addresses ONE material: a scene
+        // carries dozens and a single slider cannot honestly show two values.
+        static int mat_sel = 0;
+        if (mat_sel < 0 || mat_sel >= (int)scene->material_count)
+            mat_sel = 0; // a scene swap can leave the index past the new count
+        if (igBeginCombo("Material", _material_gui_label(scene->materials[mat_sel], mat_sel), 0)) {
+            for (size_t i = 0; i < scene->material_count; i++) {
+                if (igSelectable_Bool(_material_gui_label(scene->materials[i], (int)i),
+                                      (int)i == mat_sel, 0, (ImVec2){0, 0}))
+                    mat_sel = (int)i;
+                if ((int)i == mat_sel)
+                    igSetItemDefaultFocus();
+            }
+            igEndCombo();
+        }
+
+        Material* mat = scene->materials[mat_sel];
+        if (mat) {
+            // Every row of the shared vocabulary gets a control, rather than a
+            // hand-written widget per property: a table that both the scene
+            // file and this panel read cannot drift, and a property added for
+            // one of them turns up in the other for free.
+            for (size_t i = 0; i < MATERIAL_PARAM_COUNT; i++) {
+                const MaterialParam* p = &MATERIAL_PARAMS[i];
+                float v[3] = {0};
+                material_param_get(mat, p, v);
+                bool changed = false;
+                switch (p->type) {
+                case MATERIAL_PARAM_VEC3:
+                    changed = igColorEdit3(p->key, v, ImGuiColorEditFlags_Float);
+                    break;
+                case MATERIAL_PARAM_FLOAT:
+                    changed = igSliderFloat(p->key, v, p->min, p->max, "%.3f", 0);
+                    break;
+                case MATERIAL_PARAM_INT: {
+                    int iv = (int)v[0];
+                    changed = igSliderInt(p->key, &iv, (int)p->min, (int)p->max, "%d", 0);
+                    v[0] = (float)iv;
+                    break;
+                }
+                }
+                if (changed)
+                    material_param_set(mat, p, v);
+            }
+
+            // Tuning that cannot be saved is tuning done twice. This writes the
+            // panel's state back out in the scene file's own vocabulary, so a
+            // look found here survives as a file rather than as a memory.
+            if (igButton("Copy as .cscn", (ImVec2){0, 0}))
+                _material_copy_as_cscn(mat);
+            if (igIsItemHovered(0))
+                igSetTooltip("Copy this material's non-default values to the clipboard as a "
+                             "materials block, ready to paste into a .cscn. Only properties "
+                             "that differ from a fresh material are written.");
+        }
+    }
+
     if (scene && scene->light_count > 0 &&
         igCollapsingHeader_TreeNodeFlags("Lighting", ImGuiTreeNodeFlags_DefaultOpen)) {
         // The controls below address ONE light. A single slider cannot honestly

@@ -1,6 +1,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 #include <cglm/cglm.h>
 #include <GL/glew.h>
@@ -9,6 +10,103 @@
 #include "ext/log.h"
 #include "material.h"
 #include "program.h"
+
+#define MP(field, type, lo, hi) offsetof(Material, field), type, lo, hi
+
+const MaterialParam MATERIAL_PARAMS[] = {
+    {"albedo", MP(albedo, MATERIAL_PARAM_VEC3, 0.0f, 1.0f)},
+    {"roughness", MP(roughness, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
+    {"metallic", MP(metallic, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
+    {"ao", MP(ao, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
+    {"opacity", MP(opacity, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
+    {"emissive", MP(emissive, MATERIAL_PARAM_VEC3, 0.0f, 1.0f)},
+    {"emissiveStrength", MP(emissive_strength, MATERIAL_PARAM_FLOAT, 0.0f, 20.0f)},
+    {"normalScale", MP(normalScale, MATERIAL_PARAM_FLOAT, 0.0f, 4.0f)},
+    {"aoStrength", MP(aoStrength, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
+    {"ior", MP(ior, MATERIAL_PARAM_FLOAT, 1.0f, 3.0f)},
+    {"transmission", MP(transmission, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
+    {"thickness", MP(thickness, MATERIAL_PARAM_FLOAT, 0.0f, 5.0f)},
+    {"filmThickness", MP(filmThickness, MATERIAL_PARAM_FLOAT, 0.0f, 1000.0f)},
+    {"clearcoat", MP(clearcoat, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
+    {"clearcoatRoughness", MP(clearcoat_roughness, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
+    // -1 means the KHR extension was absent, which is NOT the same as 0 (an
+    // explicit zero weight), so the range has to reach below zero to express it.
+    {"specularFactor", MP(specular_factor, MATERIAL_PARAM_FLOAT, -1.0f, 2.0f)},
+    {"specularColor", MP(specular_color_factor, MATERIAL_PARAM_VEC3, 0.0f, 1.0f)},
+    {"sheenColor", MP(sheen_color_factor, MATERIAL_PARAM_VEC3, 0.0f, 1.0f)},
+    {"sheenRoughness", MP(sheen_roughness_factor, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
+    {"parallaxScale", MP(parallax_scale, MATERIAL_PARAM_FLOAT, 0.0f, 0.2f)},
+    {"curvatureScale", MP(curvature_scale, MATERIAL_PARAM_FLOAT, 0.0f, 2.0f)},
+    {"windResponse", MP(wind_response, MATERIAL_PARAM_FLOAT, 0.0f, 2.0f)},
+    {"windMode", MP(wind_mode, MATERIAL_PARAM_INT, 0.0f, 2.0f)},
+    {"hairShading", MP(hair_shading, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
+    {"hairRoughness", MP(hair_roughness, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
+    {"hairShift", MP(hair_shift, MATERIAL_PARAM_FLOAT, 0.0f, 0.3f)},
+    {"hairTint", MP(hair_tint, MATERIAL_PARAM_VEC3, 0.0f, 1.0f)},
+    {"hairBacklit", MP(hair_backlit, MATERIAL_PARAM_FLOAT, 0.0f, 2.0f)},
+    {"hairJitter", MP(hair_jitter, MATERIAL_PARAM_FLOAT, 0.0f, 4.0f)},
+};
+
+#undef MP
+
+const size_t MATERIAL_PARAM_COUNT = sizeof(MATERIAL_PARAMS) / sizeof(MATERIAL_PARAMS[0]);
+
+const MaterialParam* material_param_find(const char* key) {
+    if (!key)
+        return NULL;
+    for (size_t i = 0; i < MATERIAL_PARAM_COUNT; i++) {
+        if (strcmp(MATERIAL_PARAMS[i].key, key) == 0)
+            return &MATERIAL_PARAMS[i];
+    }
+    return NULL;
+}
+
+// The void* hop is not decoration: cppcheck's invalidPointerCast rejects a
+// direct char* -> float* cast. offsetof already guarantees the alignment.
+// Split by constness rather than casting it away, so the read path cannot
+// silently gain the right to write.
+static const void* material_param_field_const(const Material* material,
+                                              const MaterialParam* param) {
+    return (const void*)((const char*)material + param->offset);
+}
+
+static void* material_param_field(Material* material, const MaterialParam* param) {
+    return (void*)((char*)material + param->offset);
+}
+
+void material_param_get(const Material* material, const MaterialParam* param, float* values) {
+    if (!material || !param || !values)
+        return;
+    const void* field = material_param_field_const(material, param);
+    switch (param->type) {
+    case MATERIAL_PARAM_VEC3:
+        glm_vec3_copy((float*)field, values);
+        break;
+    case MATERIAL_PARAM_FLOAT:
+        values[0] = *(const float*)field;
+        break;
+    case MATERIAL_PARAM_INT:
+        values[0] = (float)*(const int*)field;
+        break;
+    }
+}
+
+void material_param_set(Material* material, const MaterialParam* param, const float* values) {
+    if (!material || !param || !values)
+        return;
+    void* field = material_param_field(material, param);
+    switch (param->type) {
+    case MATERIAL_PARAM_VEC3:
+        glm_vec3_copy((float*)values, field);
+        break;
+    case MATERIAL_PARAM_FLOAT:
+        *(float*)field = values[0];
+        break;
+    case MATERIAL_PARAM_INT:
+        *(int*)field = (int)values[0];
+        break;
+    }
+}
 
 Material* create_material() {
     Material* material = (Material*)malloc(sizeof(Material));

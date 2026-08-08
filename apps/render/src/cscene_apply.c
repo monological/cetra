@@ -301,69 +301,16 @@ void apply_cscene_wind(Scene* scene, const CetraSceneDesc* cscn) {
     // hem stay per-mesh, supplied at draw time from each mesh's AABB.
 }
 
-typedef enum { MP_FLOAT, MP_VEC3, MP_INT } MatParamType;
-
 /*
- * The scene file's material vocabulary, and the only place a .cscn key is tied
- * to a Material field. Adding a parameter is one row -- the parser records keys
- * generically and never learns their meaning.
+ * The scene file's material vocabulary lives in material.c (MATERIAL_PARAMS),
+ * shared with the GUI editor so the two cannot disagree about what a name means
+ * or which properties are safe to set. The parser records keys generically and
+ * never learns their meaning; this file only resolves them.
  *
- * SHADING ONLY, on purpose. alphaMode, alphaCutoff, doubleSided and
- * foliage_shadows are deliberately absent: they decide which PASS a mesh draws
- * in and whether it is culled, so a mistyped value there moves geometry between
- * the opaque and transparent queues instead of merely misshading it. Everything
- * below can be applied blind because the worst case is an ugly surface.
- *
- * Subsurface is absent for a different reason (see CSceneMaterialOverride): its
- * consumer is PostFX's scatter profile table, not a Material field.
- */
-static const struct {
-    const char* key;
-    size_t offset;
-    MatParamType type;
-} MATERIAL_PARAMS[] = {
-    {"albedo", offsetof(Material, albedo), MP_VEC3},
-    {"roughness", offsetof(Material, roughness), MP_FLOAT},
-    {"metallic", offsetof(Material, metallic), MP_FLOAT},
-    {"ao", offsetof(Material, ao), MP_FLOAT},
-    {"opacity", offsetof(Material, opacity), MP_FLOAT},
-    {"emissive", offsetof(Material, emissive), MP_VEC3},
-    {"emissiveStrength", offsetof(Material, emissive_strength), MP_FLOAT},
-    {"normalScale", offsetof(Material, normalScale), MP_FLOAT},
-    {"aoStrength", offsetof(Material, aoStrength), MP_FLOAT},
-    {"ior", offsetof(Material, ior), MP_FLOAT},
-    {"transmission", offsetof(Material, transmission), MP_FLOAT},
-    {"thickness", offsetof(Material, thickness), MP_FLOAT},
-    {"filmThickness", offsetof(Material, filmThickness), MP_FLOAT},
-    {"clearcoat", offsetof(Material, clearcoat), MP_FLOAT},
-    {"clearcoatRoughness", offsetof(Material, clearcoat_roughness), MP_FLOAT},
-    {"specularFactor", offsetof(Material, specular_factor), MP_FLOAT},
-    {"specularColor", offsetof(Material, specular_color_factor), MP_VEC3},
-    {"sheenColor", offsetof(Material, sheen_color_factor), MP_VEC3},
-    {"sheenRoughness", offsetof(Material, sheen_roughness_factor), MP_FLOAT},
-    {"parallaxScale", offsetof(Material, parallax_scale), MP_FLOAT},
-    {"curvatureScale", offsetof(Material, curvature_scale), MP_FLOAT},
-    {"windResponse", offsetof(Material, wind_response), MP_FLOAT},
-    {"windMode", offsetof(Material, wind_mode), MP_INT},
-    // Hair swaps a BRDF, never a pass, so it belongs here by the rule above --
-    // the worst a mistyped value can do is an ugly highlight.
-    {"hairShading", offsetof(Material, hair_shading), MP_FLOAT},
-    {"hairRoughness", offsetof(Material, hair_roughness), MP_FLOAT},
-    {"hairShift", offsetof(Material, hair_shift), MP_FLOAT},
-    {"hairTint", offsetof(Material, hair_tint), MP_VEC3},
-    {"hairBacklit", offsetof(Material, hair_backlit), MP_FLOAT},
-    {"hairJitter", offsetof(Material, hair_jitter), MP_FLOAT},
-};
-
-#define MATERIAL_PARAM_COUNT (sizeof(MATERIAL_PARAMS) / sizeof(MATERIAL_PARAMS[0]))
-
-/*
- * The same vocabulary for keys whose value is a texture path rather than a
- * number, and the same SHADING ONLY rule: a hair strand map feeds a BRDF, so
- * the worst a wrong path can do is an ugly highlight. A texture key differs
- * from a scalar only in needing a pool load and a mask-array rebuild, which is
- * why it gets its own table instead of a type tag in the one above -- an
- * offset cannot describe "call this setter".
+ * Textures need their own small table: a key whose value is a path differs from
+ * a scalar in needing a pool load and a mask-array rebuild, and an offset
+ * cannot describe "call this setter". Same SHADING ONLY rule -- a hair strand
+ * map feeds a BRDF, so the worst a wrong path can do is an ugly highlight.
  *
  * Loaded LINEAR. Every texture reachable from here carries data, not colour;
  * an sRGB decode would silently bend the values.
@@ -377,37 +324,12 @@ static const struct {
 
 #define MATERIAL_TEXTURE_COUNT (sizeof(MATERIAL_TEXTURES) / sizeof(MATERIAL_TEXTURES[0]))
 
-static int find_material_param(const char* key) {
-    for (size_t i = 0; i < MATERIAL_PARAM_COUNT; i++) {
-        if (strcmp(MATERIAL_PARAMS[i].key, key) == 0)
-            return (int)i;
-    }
-    return -1;
-}
-
 static int find_material_texture(const char* key) {
     for (size_t i = 0; i < MATERIAL_TEXTURE_COUNT; i++) {
         if (strcmp(MATERIAL_TEXTURES[i].key, key) == 0)
             return (int)i;
     }
     return -1;
-}
-
-static void write_material_param(Material* m, int slot, const CSceneMaterialParam* p) {
-    // The void* hop is not decoration: cppcheck's invalidPointerCast rejects a
-    // direct char* -> float* cast. offsetof already guarantees the alignment.
-    void* field = (void*)((char*)m + MATERIAL_PARAMS[slot].offset);
-    switch (MATERIAL_PARAMS[slot].type) {
-    case MP_VEC3:
-        glm_vec3_copy((float*)p->value, field);
-        break;
-    case MP_FLOAT:
-        *(float*)field = p->value[0];
-        break;
-    case MP_INT:
-        *(int*)field = (int)p->value[0];
-        break;
-    }
 }
 
 void apply_cscene_material_overrides(Scene* scene, const CetraSceneDesc* cscn) {
@@ -421,22 +343,22 @@ void apply_cscene_material_overrides(Scene* scene, const CetraSceneDesc* cscn) {
         // Resolve and report the vocabulary once per override, not once per
         // matching material -- and before the match, so an unknown key is still
         // reported when the material name is also wrong.
-        int slots[CSCENE_MAX_MATERIAL_PARAMS];
+        const MaterialParam* slots[CSCENE_MAX_MATERIAL_PARAMS];
         int usable = 0;
         for (int p = 0; p < mo->param_count; p++) {
             const CSceneMaterialParam* prm = &mo->params[p];
-            int slot = find_material_param(prm->key);
-            if (slot < 0) {
+            const MaterialParam* slot = material_param_find(prm->key);
+            if (!slot) {
                 fprintf(stderr, "Warning: material '%s': unknown key '%s'\n", mo->material,
                         prm->key);
-            } else if ((MATERIAL_PARAMS[slot].type == MP_VEC3) != (prm->components == 3)) {
+            } else if ((slot->type == MATERIAL_PARAM_VEC3) != (prm->components == 3)) {
                 fprintf(stderr, "Warning: material '%s': key '%s' wants %s\n", mo->material,
                         prm->key,
-                        MATERIAL_PARAMS[slot].type == MP_VEC3 ? "3 numbers" : "one number");
-                slot = -1;
+                        slot->type == MATERIAL_PARAM_VEC3 ? "3 numbers" : "one number");
+                slot = NULL;
             }
             slots[p] = slot;
-            if (slot >= 0)
+            if (slot)
                 usable++;
         }
 
@@ -472,8 +394,8 @@ void apply_cscene_material_overrides(Scene* scene, const CetraSceneDesc* cscn) {
             if (!m || !m->name || strcmp(m->name, mo->material) != 0)
                 continue;
             for (int p = 0; p < mo->param_count; p++) {
-                if (slots[p] >= 0)
-                    write_material_param(m, slots[p], &mo->params[p]);
+                if (slots[p])
+                    material_param_set(m, slots[p], mo->params[p].value);
             }
             for (int t = 0; t < mo->texture_count; t++) {
                 if (tex_slots[t] < 0)
