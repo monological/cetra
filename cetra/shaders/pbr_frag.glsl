@@ -101,7 +101,7 @@ uniform float hairRoughness;
 uniform float hairShift;
 uniform vec3 hairTint;
 uniform float hairBacklit;
-uniform float hairJitter; // inert without a strand map: nothing to randomise BY
+uniform float hairJitter; // in LOBE HALF-WIDTHS; inert without a strand map
 uniform float parallaxScale;        // POM march depth in UV units (0 = off, §4.11)
 uniform vec2 uvOffset;      // Texture coordinate offset (KHR_texture_transform)
 uniform vec2 uvScale;       // Texture coordinate scale (KHR_texture_transform)
@@ -1298,7 +1298,8 @@ void main() {
         // shift is not -- flipping T would swap which end R and TRT sit at.
         flowT *= (dot(flowT, T) < 0.0) ? -1.0 : 1.0;
         hairT = normalize(mix(T, normalize(flowT), strand.z));
-        hairShiftAt = hairShift + (strand.w * 2.0 - 1.0) * hairJitter;
+        hairShiftAt = hairShift +
+                      (strand.w * 2.0 - 1.0) * hairJitter * hairLobeHalfWidth(hairRoughness);
     }
 
     for (int k = 0; k < numDir + clusterCount; k++) {

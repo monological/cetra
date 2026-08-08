@@ -432,6 +432,125 @@ def run_skin_offpath_gate(workdir):
 SKIN_AREA_MIN_PX = 50000
 
 
+# The map arm must split the card's halves at least this hard, and the two
+# control arms must not split them at all. Measured at this gate's size: map
+# 7.21x, no map 1.02x, GGX 1.05x. The thresholds sit either side of a gap of
+# SIX, not on a knife edge -- the gap is the result, and the absolute numbers
+# are incidental (they fall toward 1.8x when the atlas is minified enough for
+# the mip chain to average the orientation, which is why the size is pinned).
+HAIR_FLOW_MIN_RATIO = 1.35
+HAIR_FLAT_MAX_RATIO = 1.10
+# Jitter has to MOVE the lit half, as RMS over its own mean. Measured 0.46 at
+# the calibrated default, and identically 0 with jitter off.
+HAIR_JITTER_MIN_RMS = 0.10
+
+# sRGB decode table. The gate measures a brightness RATIO, which is only
+# meaningful on a linear signal, and a per-pixel pow over a 800x600 frame is
+# slow enough in pure Python to notice.
+_HAIR_SRGB = [(c / 255.0 / 12.92) if c / 255.0 <= 0.04045
+              else (((c / 255.0) + 0.055) / 1.055) ** 2.4 for c in range(256)]
+
+
+def _hair_halves(path):
+    """Linear-luma samples of the card's left and right halves.
+
+    Excludes a margin around the seam where the two painted strand fields meet:
+    the structure tensor genuinely cannot resolve an orientation there, reports
+    low coherence, and the shader correctly falls back -- which is right
+    behaviour and would only add noise to the measurement.
+    """
+    w, h, pix = _read_ppm(path)
+    lum = [(_HAIR_SRGB[pix[i * 3]] + _HAIR_SRGB[pix[i * 3 + 1]] +
+            _HAIR_SRGB[pix[i * 3 + 2]]) / 3.0 for i in range(w * h)]
+    lit = [i for i, v in enumerate(lum) if v > 0.002]
+    if not lit:
+        return None
+    xs = [i % w for i in lit]
+    ys = [i // w for i in lit]
+    x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
+    mid = (x0 + x1) // 2
+    pad = max(1, int(0.10 * (x1 - x0)))
+    left, right = [], []
+    for y in range(y0, y1 + 1):
+        row = y * w
+        left += [lum[row + x] for x in range(x0 + pad, mid - pad)]
+        right += [lum[row + x] for x in range(mid + pad, x1 - pad)]
+    return left, right
+
+
+def _hair_ratio(halves):
+    left, right = halves
+    lm = sum(left) / max(len(left), 1)
+    rm = sum(right) / max(len(right), 1)
+    return rm / max(lm, 1e-6)
+
+
+def run_hair_flow_gate(workdir):
+    """The hair lobes must be driven by the strand map, not by the card tangent.
+
+    One quad, one material, one draw, one tangent. The atlas paints strands
+    along the tangent in the left half and across it in the right, with the key
+    off to the side, so a shader that reads the map splits the halves and one
+    that does not cannot. Geometry, normal, material, light and tangent are
+    identical either side of the seam, so nothing else can produce a split.
+
+    The two control arms are what make that attributable. Hair with NO map must
+    come out flat, and so must plain GGX -- and 'flat' is also what an invented
+    per-texel jitter measures as, which is the failure this replaced: a hash of
+    the texel coordinate varies within each half but has the same distribution
+    in both, so it moves the variance and leaves the ratio at 1.
+    """
+    arms = (("map", "hair_fixture.cscn"),
+            ("no map", "hair_fixture_nomap.cscn"),
+            ("ggx", "hair_fixture_ggx.cscn"),
+            ("no jitter", "hair_fixture_nojitter.cscn"))
+    # Large enough that the atlas lands near 1:1 on screen. Minified past that
+    # the mip chain averages the strand identity away -- correctly, but it is
+    # not what this is measuring.
+    size = ["-W", "800", "-H", "600"]
+    fails, shots = [], {}
+    for label, name in arms:
+        scene = os.path.join(ROOT, "assets", name)
+        if not os.path.exists(scene):
+            print(f"  hair-flow    SKIP  (missing {name})")
+            return []
+        out = os.path.join(workdir, name.replace(".cscn", ".ppm"))
+        err = render(scene, out, size)
+        if err:
+            print(f"  hair-flow    ERROR while rendering {name}")
+            return ["hair-flow"]
+        shots[label] = _hair_halves(out)
+        if shots[label] is None:
+            print(f"  hair-flow    ERROR  {name} rendered an empty frame")
+            return ["hair-flow"]
+
+    ratio = _hair_ratio(shots["map"])
+    ok = ratio >= HAIR_FLOW_MIN_RATIO
+    print(f"  hair-flow    {'PASS' if ok else 'FAIL'}  strands across vs along the key: "
+          f"{ratio:.3f}x (want >= {HAIR_FLOW_MIN_RATIO}; only the map can split these halves)")
+    if not ok:
+        fails.append("hair-flow")
+
+    for label in ("no map", "ggx"):
+        flat = _hair_ratio(shots[label])
+        ok = flat <= HAIR_FLAT_MAX_RATIO
+        print(f"  hair-flat    {'PASS' if ok else 'FAIL'}  {label}: {flat:.3f}x "
+              f"(want <= {HAIR_FLAT_MAX_RATIO}; the control that makes the split the map's doing)")
+        if not ok:
+            fails.append("hair-flat")
+
+    lit, plain = shots["map"][1], shots["no jitter"][1]
+    mean = sum(plain) / max(len(plain), 1)
+    rms = math.sqrt(sum((a - b) ** 2 for a, b in zip(lit, plain)) / max(len(plain), 1))
+    rel = rms / max(mean, 1e-6)
+    ok = rel >= HAIR_JITTER_MIN_RMS
+    print(f"  hair-strand  {'PASS' if ok else 'FAIL'}  per-strand shift moves the lit half "
+          f"{rel:.3f} rms of mean (want >= {HAIR_JITTER_MIN_RMS}; 0 = one sheet again)")
+    if not ok:
+        fails.append("hair-strand")
+    return fails
+
+
 def run_skin_area_gate(workdir):
     """Skin lit only by an area panel must respond to SSS being on.
 
@@ -1662,6 +1781,8 @@ def main():
         failures += run_skin_handoff_gate(workdir)
         print("subsurface under an area light (spec 11.19 / B3.2):")
         failures += run_skin_area_gate(workdir)
+        print("hair lobes driven by the strand map (spec 11.20 / B8):")
+        failures += run_hair_flow_gate(workdir)
         print("subsurface blur (world width vs frame size):")
         failures += run_sss_invariance_gate(workdir)
         print("subsurface blur (kernel not visible as rings):")

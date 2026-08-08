@@ -51,7 +51,7 @@ Material* create_material() {
     material->hair_shift = 0.04f;
     glm_vec3_copy((vec3){0.55f, 0.34f, 0.22f}, material->hair_tint); // warm brown absorption
     material->hair_backlit = 0.35f;
-    material->hair_jitter = 0.06f;
+    material->hair_jitter = 1.0f; // one lobe half-width; see material.h
     glm_vec2_zero(material->uvOffset);
     glm_vec2_one(material->uvScale);
     material->uvRotation = 0.0f;

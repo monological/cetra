@@ -87,6 +87,22 @@ float hairExponent(float roughness) {
     return mix(160.0, 4.0, r * r);
 }
 
+// Half-angle at which the lobe falls to half its peak -- the width, in radians,
+// that a per-strand shift has to clear before neighbouring strands stop sharing
+// one highlight.
+//
+// This is what hairJitter is denominated in, and the reason it is: the shift is
+// a tangent tilt, so the jitter needed to separate strands is set entirely by
+// how WIDE the lobe is, which hairRoughness controls. A jitter in raw tilt units
+// would therefore have to be re-tuned every time roughness moved, and would fail
+// silently -- it does not look wrong when it stops separating, it just goes back
+// to being a sheet. Measured on the fixture at roughness 0.30 (half-width 0.097):
+// a jitter of one half-width moves 17% of lit texels for no energy loss, two
+// move 28% but start costing 5%, and four cost 14%.
+float hairLobeHalfWidth(float roughness) {
+    return acos(pow(0.5, 1.0 / hairExponent(roughness)));
+}
+
 // The three lobes, summed. Returns radiance-scale colour to be multiplied by the
 // light and its shadow, exactly like the GGX specular it replaces.
 //

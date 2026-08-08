@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "_comment": "Control: the same card with hair shading off. GGX sees one flat quad, so the two halves must match -- which is what makes a difference in the hair arm attributable to the map.",
+  "models": [
+    {
+      "path": "hair_fixture.gltf"
+    }
+  ],
+  "materials": {
+    "hair_card": {
+      "hairShading": 0.0,
+      "hairRoughness": 0.3,
+      "hairShift": 0.05,
+      "hairTint": [
+        0.8,
+        0.78,
+        0.72
+      ],
+      "hairBacklit": 0.35,
+      "hairMap": "hair_fixture_flow.png"
+    }
+  },
+  "lights": [
+    {
+      "name": "key",
+      "type": "directional",
+      "direction": [
+        -0.7071,
+        0.0,
+        -0.7071
+      ],
+      "color": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "intensity": 3.0
+    }
+  ],
+  "camera": {
+    "eye": [
+      0.0,
+      0.0,
+      3.2
+    ],
+    "target": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "fov": 45
+  },
+  "post": {
+    "tonemap": "neutral",
+    "exposure": 1.0,
+    "auto_exposure": false
+  }
+}

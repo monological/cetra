@@ -96,12 +96,16 @@ typedef struct Material {
                           // it is what the fibre did to the light on the way through.
     float hair_backlit;   // TT strength: the glow when the light is behind the strand.
                           // The one lobe that needs no view-side highlight to be visible.
-    float hair_jitter;    // Per-strand randomisation of hair_shift, in the same units.
-                          // Inert without hair_flow_tex: with no map there is no
-                          // per-strand value to randomise BY, and inventing one
-                          // (a hash of the texel coordinate) correlates with the
-                          // painted strands only if they run exactly the way the
-                          // hash keys, which real grooms never do.
+    float hair_jitter;    // Per-strand randomisation of hair_shift, in LOBE HALF-WIDTHS
+                          // rather than tilt units -- what it must clear to separate
+                          // neighbouring strands is the lobe's own width, which
+                          // hair_roughness sets, so a raw number would need re-tuning
+                          // whenever roughness moved and would fail SILENTLY (the
+                          // highlight just goes back to being one sheet). 1 = strands
+                          // separated by one half-width, measured as the point where
+                          // disruption is maximal and energy loss is still nil.
+                          // Inert without hair_flow_tex: no map, no per-strand value
+                          // to randomise by, and inventing one is what this replaced.
 
     vec2 uvOffset;    // Texture coordinate offset (KHR_texture_transform)
     vec2 uvScale;     // Texture coordinate scale (KHR_texture_transform)
