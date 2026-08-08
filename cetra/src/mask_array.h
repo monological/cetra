@@ -7,13 +7,19 @@
 struct Scene;
 struct Engine;
 
-// A GL_TEXTURE_2D_ARRAY holding a scene's UNIQUE linear scalar-mask textures
-// (roughness/metallic/ao/opacity/microsurface/anisotropy/subsurface) as
-// canonical-size layers, so the fragment stage samples ONE array instead of
-// seven separate 2D mask samplers -- the GL 4.1 way to stay under the 16
-// texture-image-unit ceiling and scale to new mask types by adding a layer.
-// Each material records a per-mask layer index (Material *_layer; -1 = absent,
-// shader falls back to the scalar factor), resolved here at build time.
+// A GL_TEXTURE_2D_ARRAY holding a scene's UNIQUE linear per-texel material
+// data (roughness/metallic/ao/opacity/microsurface/anisotropy/subsurface, and
+// the hair strand map) as canonical-size layers, so the fragment stage samples
+// ONE array instead of that many separate 2D samplers -- the GL 4.1 way to stay
+// under the 16 texture-image-unit ceiling and scale to new data by adding a
+// layer. Each material records a per-slot layer index (Material *_layer;
+// -1 = absent, shader falls back to the scalar factor), resolved at build time.
+//
+// Mostly scalar masks, but not by definition: the hair layer is a VECTOR field
+// (.rg an orientation, .b a strand identity). That is why the orientation is
+// stored as a doubled angle -- step 4 resamples through a linear filter and
+// step 5 mips, and only the doubled-angle form averages correctly. Anything
+// added here has to survive those two steps.
 //
 // Layers share one size, so masks smaller than the canonical size are
 // upsampled (a mask already AT the canonical size copies 1:1, byte-exact);

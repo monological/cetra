@@ -94,6 +94,14 @@ uniform float specularFactor;     // KHR_materials_specular weight (-1 = extensi
 uniform vec3 specularColorFactor; // KHR_materials_specular F0 tint (white = no tint)
 uniform vec3 sheenColorFactor;      // KHR_materials_sheen color ((0,0,0) = no sheen lobe)
 uniform float sheenRoughnessFactor; // KHR_materials_sheen roughness
+// Hair lobes (roadmap B8). hairShading 0 leaves the GGX highlight untouched, so
+// every non-hair material compiles the same specular expression it always did.
+uniform float hairShading;
+uniform float hairRoughness;
+uniform float hairShift;
+uniform vec3 hairTint;
+uniform float hairBacklit;
+uniform float hairJitter; // inert without a strand map: nothing to randomise BY
 uniform float parallaxScale;        // POM march depth in UV units (0 = off, §4.11)
 uniform vec2 uvOffset;      // Texture coordinate offset (KHR_texture_transform)
 uniform vec2 uvScale;       // Texture coordinate scale (KHR_texture_transform)
@@ -118,7 +126,9 @@ uniform sampler2D heightTex;          // POM height field (unit 4, §4.11); whit
 // The scalar masks (roughness/metallic/ao/opacity/microsurface/anisotropy/
 // subsurface) share ONE array texture. Each material selects a layer per mask;
 // a layer < 0 means no texture -> fall back to the scalar factor. roughness
-// reads .g and metallic reads .b (glTF ORM); the rest read .r.
+// reads .g and metallic reads .b (glTF ORM); the rest read .r. The hair layer
+// is the one that is not a scalar mask: .rg carry a doubled-angle strand
+// orientation and .b a strand identity (see hair.glsl).
 uniform sampler2DArray maskArray;
 uniform int roughnessLayer;
 uniform int metallicLayer;
@@ -126,6 +136,7 @@ uniform int aoLayer;
 uniform int opacityLayer;
 uniform int microsurfaceLayer;
 uniform int anisotropyLayer;
+uniform int hairFlowLayer;
 
 uniform int albedoTexExists;
 uniform int normalTexExists;
@@ -271,6 +282,9 @@ uniform float probeMaxLOD;
 uniform float probeBoxFade;
 
 const float PI = 3.14159265359;
+
+// Below PI on purpose: the hair lobes are normalised against it.
+#include "hair.glsl"
 
 // Firefly ceiling on the BRDF -- dimensionless, so it is independent of both
 // light magnitude and exposure. That independence is the whole point; a ceiling
@@ -1265,6 +1279,28 @@ void main() {
         ltcAmp = textureLod(ltcTex, vec3(ltcUV, LTC_LAYER_AMP), 0.0).xy;
     }
 
+    // Hair strand frame, resolved once. Both terms depend on the SURFACE, not on
+    // any light, so they are hoisted above the loop -- inside it they would be
+    // the same texture fetch repeated per light.
+    //
+    // Without a map the card tangent stands and the jitter is zero: one flat
+    // sheet, honestly. Inventing per-strand variation from the texel coordinate
+    // instead is what an earlier revision did, and it correlates with painted
+    // strands only when they run exactly the way the invention keys, which the
+    // raiden groom (curving, leaning up to 30 degrees) does not.
+    vec3 hairT = T;
+    float hairShiftAt = hairShift;
+    if (hairShading > 0.0 && hairFlowLayer >= 0) {
+        vec4 strand = hairStrandData(maskArray, uv, hairFlowLayer);
+        vec3 flowT = strand.x * T + strand.y * B;
+        // The map stores an ORIENTATION, which has no sign; adopt the card
+        // tangent's. The lobes themselves are sign-invariant, but the cuticle
+        // shift is not -- flipping T would swap which end R and TRT sit at.
+        flowT *= (dot(flowT, T) < 0.0) ? -1.0 : 1.0;
+        hairT = normalize(mix(T, normalize(flowT), strand.z));
+        hairShiftAt = hairShift + (strand.w * 2.0 - 1.0) * hairJitter;
+    }
+
     for (int k = 0; k < numDir + clusterCount; k++) {
         vec3 L;
         float attenuation;
@@ -1440,6 +1476,25 @@ void main() {
         vec3 numerator = NDF * G * F;
         float denominator = 4.0 * NdotV * NdotL + 0.0001;
         vec3 specular = numerator / denominator * energyComp;
+
+        // Hair (roadmap B8): replace the microfacet highlight outright rather
+        // than adding to it. GGX wants a surface normal and a half vector; a
+        // strand has a tangent and a whole circle of valid normals, so the two
+        // models cannot be summed without counting the same light twice.
+        //
+        // The card tangent is only the CARD's direction. Which way an individual
+        // strand runs is painted in the atlas and reaches the shader through the
+        // strand map (hairT above), because a quad carries one tangent and the
+        // hair on it does not.
+        //
+        // Guarded rather than mixed: at hairShading 0 this branch is dead and
+        // every other material compiles the specular expression above unchanged,
+        // which is the byte-identity gate the whole corpus rests on.
+        if (hairShading > 0.0) {
+            vec3 hairSpec = hairSpecular(hairT, N, L, V, hairRoughness, hairShiftAt, hairTint,
+                                         hairBacklit, maxComp(F));
+            specular = mix(specular, hairSpec, hairShading);
+        }
 
         // Energy conservation: diffuse and specular must not exceed 1.0
         vec3 kS = F;

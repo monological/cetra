@@ -97,6 +97,24 @@ typedef struct CSceneMaterialParam {
     int components; // 1 or 3, as authored
 } CSceneMaterialParam;
 
+#define CSCENE_MAX_MATERIAL_TEXTURES 2
+
+// One authored TEXTURE key from a material override block. Kept apart from the
+// numeric params because a float array cannot hold a path, not because it is a
+// different kind of authored value. The parser's blindness is preserved -- it
+// records the key and the string and still learns nothing about what either
+// means.
+//
+// Unlike model_path and env_hdr, this is NOT resolved against the scene file's
+// directory: material textures go through the texture pool, which resolves
+// against its own directory (the app's -t argument) like every other texture
+// the engine loads. So the authored value is a plain filename living beside the
+// model's other textures, with no path prefix to get wrong.
+typedef struct CSceneMaterialTexture {
+    char key[CSCENE_MAX_PARAM_KEY];
+    char path[CSCENE_MAX_PATH]; // resolved by the texture pool, not by the scene file
+} CSceneMaterialTexture;
+
 // Per-material overrides, keyed on the AUTHORED material name. Absent keys keep
 // whatever the model imported, so this is an override sheet rather than a
 // material definition. Formats that cannot express a property at all (glTF has
@@ -105,6 +123,8 @@ typedef struct CSceneMaterialOverride {
     char material[CSCENE_MAX_NAME];
     CSceneMaterialParam params[CSCENE_MAX_MATERIAL_PARAMS];
     int param_count;
+    CSceneMaterialTexture textures[CSCENE_MAX_MATERIAL_TEXTURES];
+    int texture_count;
     // sss stays explicit rather than joining the table above: it is compound
     // (colour and radius are one scatter profile and meaningless apart), and
     // its consumer is PostFX's profile table rather than any Material field, so

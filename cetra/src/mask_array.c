@@ -54,9 +54,9 @@ void free_material_mask_array(MaterialMaskArray* arr) {
     free(arr);
 }
 
-// Number of scalar-mask slots per material (roughness/metallic/ao/opacity/
-// microsurface/anisotropy); bounds the unique-texture buffer.
-#define MASKS_PER_MATERIAL 6
+// Number of mask slots per material (roughness/metallic/ao/opacity/
+// microsurface/anisotropy/hair-flow); bounds the unique-texture buffer.
+#define MASKS_PER_MATERIAL 7
 
 // Find texture t's layer in the dedup list (by GL id, so a shared glTF ORM
 // texture yields one layer), appending it if new. Returns -1 for an absent map.
@@ -98,6 +98,16 @@ int mask_array_build(MaterialMaskArray* arr, struct Scene* scene, struct Engine*
         mat->opacity_layer = mask_layer_for(ids, texs, &count, mat->opacity_tex);
         mat->microsurface_layer = mask_layer_for(ids, texs, &count, mat->microsurface_tex);
         mat->anisotropy_layer = mask_layer_for(ids, texs, &count, mat->anisotropy_tex);
+        mat->hair_flow_layer = mask_layer_for(ids, texs, &count, mat->hair_flow_tex);
+        // Hair shading without a strand map renders a card as one flat sheet:
+        // the quad's single tangent drives the lobe and there is nothing to
+        // jitter the cuticle shift by. That is a legitimate state to be in, so
+        // it is a warning and not an error -- but it is invisible in the frame
+        // (it looks like a bad material, not a missing file) and worth saying.
+        if (mat->hair_shading > 0.0f && mat->hair_flow_layer < 0)
+            log_warn("material '%s': hair shading is on with no hair map; the card will "
+                     "highlight as one sheet (see tools/gen_hair_flow.py)",
+                     mat->name ? mat->name : "(unnamed)");
     }
 
     if (count == 0) {

@@ -80,10 +80,33 @@ typedef struct Material {
                             // rather than duplicating it: fix one and tune the other, or they
                             // multiply and you chase yourself. Inert unless subsurface > 0 and a
                             // profile is assigned.
-    vec2 uvOffset;          // Texture coordinate offset (KHR_texture_transform)
-    vec2 uvScale;           // Texture coordinate scale (KHR_texture_transform)
-    float uvRotation;       // Texture coordinate rotation in radians (KHR_texture_transform)
-    bool doubleSided;       // Disable backface culling for this material
+    // Hair shading (roadmap B8, spec 11.19). Two shifted anisotropic lobes along
+    // the strand tangent instead of the isotropic GGX highlight -- the R lobe
+    // near the root, uncoloured because it reflects off the cuticle before
+    // entering the fibre, and the TRT lobe toward the tip, tinted because that
+    // one has been through the hair and back.
+    //
+    // Shading only: it swaps a BRDF, never a pass, so unlike alpha_mode it is
+    // safe in the .cscn material vocabulary and is registered there.
+    float hair_shading;   // 0 = off (the GGX highlight stands), 1 = full hair lobes
+    float hair_roughness; // Longitudinal width of both lobes; 0 = a hard glint, 1 = a broad sheen
+    float hair_shift;     // Cuticle tilt in tangent-space units. Separates the two
+                          // lobes along the strand; 0 collapses them into one.
+    vec3 hair_tint;       // Absorption colour the TRT lobe carries. NOT albedo --
+                          // it is what the fibre did to the light on the way through.
+    float hair_backlit;   // TT strength: the glow when the light is behind the strand.
+                          // The one lobe that needs no view-side highlight to be visible.
+    float hair_jitter;    // Per-strand randomisation of hair_shift, in the same units.
+                          // Inert without hair_flow_tex: with no map there is no
+                          // per-strand value to randomise BY, and inventing one
+                          // (a hash of the texel coordinate) correlates with the
+                          // painted strands only if they run exactly the way the
+                          // hash keys, which real grooms never do.
+
+    vec2 uvOffset;    // Texture coordinate offset (KHR_texture_transform)
+    vec2 uvScale;     // Texture coordinate scale (KHR_texture_transform)
+    float uvRotation; // Texture coordinate rotation in radians (KHR_texture_transform)
+    bool doubleSided; // Disable backface culling for this material
 
     // ALPHA_MASK opt-in to the shadow map: the depth pass draws this material
     // with an alpha test (casts) and the shading pass samples the map for it
@@ -130,6 +153,20 @@ typedef struct Material {
     Texture* reflectance_tex;      // Reflectance Map
     Texture* clearcoat_normal_tex; // Clearcoat normal map (orange-peel / weave)
 
+    // Per-texel strand data for the hair lobes: .rg a coherence-weighted
+    // doubled-angle orientation, .b a strand identity. LINEAR data, not colour.
+    //
+    // Doubled-angle because a strand has no head or tail and this rides the mask
+    // array, which resamples and mips every layer -- averaging a raw direction
+    // with its negation would give zero exactly where hair is minified. The
+    // vector's LENGTH is the coherence, so a neighbourhood of disagreeing
+    // strands shortens toward zero on its own and the shader falls back to the
+    // interpolated card tangent rather than trusting an average of nothing.
+    //
+    // Produced by tools/gen_hair_flow.py from a hair atlas, or baked from the
+    // groom in a DCC; the engine cannot tell the difference and does not care.
+    Texture* hair_flow_tex;
+
     // Per-mask layer indices into the scene's material mask sampler2DArray
     // (-1 = no texture -> the shader falls back to the scalar factor). The
     // *_tex pointers above are the load-time source; these are resolved when
@@ -141,6 +178,7 @@ typedef struct Material {
     int opacity_layer;
     int microsurface_layer;
     int anisotropy_layer;
+    int hair_flow_layer; // reads .rg (orientation) and .b (strand id), not one scalar
 
     ShaderProgram* shader_program;
 } Material;
@@ -167,5 +205,6 @@ void set_material_reflectance_tex(Material* material, Texture* texture);
 void set_material_clearcoat_normal_tex(Material* material, Texture* texture);
 void set_material_microsurface_tex(Material* material, Texture* texture);
 void set_material_anisotropy_tex(Material* material, Texture* texture);
+void set_material_hair_flow_tex(Material* material, Texture* texture);
 
 #endif // _MATERIAL_H_

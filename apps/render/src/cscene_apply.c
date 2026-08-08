@@ -20,6 +20,7 @@
 #include "cetra/postfx.h"
 #include "cetra/program.h"
 #include "cetra/scene.h"
+#include "cetra/texture.h"
 #include "cetra/util.h"
 #include "cetra/wind.h"
 
@@ -344,13 +345,49 @@ static const struct {
     {"curvatureScale", offsetof(Material, curvature_scale), MP_FLOAT},
     {"windResponse", offsetof(Material, wind_response), MP_FLOAT},
     {"windMode", offsetof(Material, wind_mode), MP_INT},
+    // Hair swaps a BRDF, never a pass, so it belongs here by the rule above --
+    // the worst a mistyped value can do is an ugly highlight.
+    {"hairShading", offsetof(Material, hair_shading), MP_FLOAT},
+    {"hairRoughness", offsetof(Material, hair_roughness), MP_FLOAT},
+    {"hairShift", offsetof(Material, hair_shift), MP_FLOAT},
+    {"hairTint", offsetof(Material, hair_tint), MP_VEC3},
+    {"hairBacklit", offsetof(Material, hair_backlit), MP_FLOAT},
+    {"hairJitter", offsetof(Material, hair_jitter), MP_FLOAT},
 };
 
 #define MATERIAL_PARAM_COUNT (sizeof(MATERIAL_PARAMS) / sizeof(MATERIAL_PARAMS[0]))
 
+/*
+ * The same vocabulary for keys whose value is a texture path rather than a
+ * number, and the same SHADING ONLY rule: a hair strand map feeds a BRDF, so
+ * the worst a wrong path can do is an ugly highlight. A texture key differs
+ * from a scalar only in needing a pool load and a mask-array rebuild, which is
+ * why it gets its own table instead of a type tag in the one above -- an
+ * offset cannot describe "call this setter".
+ *
+ * Loaded LINEAR. Every texture reachable from here carries data, not colour;
+ * an sRGB decode would silently bend the values.
+ */
+static const struct {
+    const char* key;
+    void (*set)(Material*, Texture*);
+} MATERIAL_TEXTURES[] = {
+    {"hairMap", set_material_hair_flow_tex},
+};
+
+#define MATERIAL_TEXTURE_COUNT (sizeof(MATERIAL_TEXTURES) / sizeof(MATERIAL_TEXTURES[0]))
+
 static int find_material_param(const char* key) {
     for (size_t i = 0; i < MATERIAL_PARAM_COUNT; i++) {
         if (strcmp(MATERIAL_PARAMS[i].key, key) == 0)
+            return (int)i;
+    }
+    return -1;
+}
+
+static int find_material_texture(const char* key) {
+    for (size_t i = 0; i < MATERIAL_TEXTURE_COUNT; i++) {
+        if (strcmp(MATERIAL_TEXTURES[i].key, key) == 0)
             return (int)i;
     }
     return -1;
@@ -378,7 +415,7 @@ void apply_cscene_material_overrides(Scene* scene, const CetraSceneDesc* cscn) {
         return;
     for (int k = 0; k < cscn->material_count; k++) {
         const CSceneMaterialOverride* mo = &cscn->materials[k];
-        if (mo->param_count == 0)
+        if (mo->param_count == 0 && mo->texture_count == 0)
             continue; // sss-only entries belong to configure_sss_materials
 
         // Resolve and report the vocabulary once per override, not once per
@@ -402,6 +439,30 @@ void apply_cscene_material_overrides(Scene* scene, const CetraSceneDesc* cscn) {
             if (slot >= 0)
                 usable++;
         }
+
+        // Textures resolve and LOAD here rather than per matching material: the
+        // pool would dedup a repeat load anyway, and doing it once means a bad
+        // path is reported once instead of once per material that shares it.
+        Texture* tex_val[CSCENE_MAX_MATERIAL_TEXTURES];
+        int tex_slots[CSCENE_MAX_MATERIAL_TEXTURES];
+        for (int t = 0; t < mo->texture_count; t++) {
+            tex_val[t] = NULL;
+            tex_slots[t] = find_material_texture(mo->textures[t].key);
+            if (tex_slots[t] < 0) {
+                fprintf(stderr, "Warning: material '%s': unknown texture key '%s'\n", mo->material,
+                        mo->textures[t].key);
+                continue;
+            }
+            tex_val[t] = load_texture_path_into_pool(scene->tex_pool, mo->textures[t].path, false);
+            if (!tex_val[t]) {
+                fprintf(stderr, "Warning: material '%s': cannot load texture '%s'\n", mo->material,
+                        mo->textures[t].path);
+                tex_slots[t] = -1;
+                continue;
+            }
+            usable++;
+        }
+
         if (usable == 0)
             continue;
 
@@ -413,6 +474,14 @@ void apply_cscene_material_overrides(Scene* scene, const CetraSceneDesc* cscn) {
             for (int p = 0; p < mo->param_count; p++) {
                 if (slots[p] >= 0)
                     write_material_param(m, slots[p], &mo->params[p]);
+            }
+            for (int t = 0; t < mo->texture_count; t++) {
+                if (tex_slots[t] < 0)
+                    continue;
+                MATERIAL_TEXTURES[tex_slots[t]].set(m, tex_val[t]);
+                // The layer index is assigned when the array is rebuilt, and
+                // the material reads its own scalar fallback until then.
+                scene->mask_array_dirty = true;
             }
             tagged++;
         }

@@ -381,12 +381,33 @@ static void parse_materials(CetraSceneDesc* d, const cJSON* root) {
         // so a parameter added there needs no change here -- and an unknown key
         // reaches the app to be reported rather than being swallowed silently.
         out->param_count = 0;
+        out->texture_count = 0;
         const cJSON* p = NULL;
         cJSON_ArrayForEach(p, m) {
             if (!p->string || p->string[0] == '_') // _comment and friends
                 continue;
             if (strcmp(p->string, "sss") == 0)
                 continue;
+            // A string value is a texture path. Recorded apart from the numeric
+            // params because it needs resolving against the scene file's
+            // directory below; the key still means nothing here.
+            if (cJSON_IsString(p)) {
+                if (!p->valuestring || !p->valuestring[0]) {
+                    log_warn("cscene: material '%s' key '%s' is an empty path; ignored",
+                             out->material, p->string);
+                    continue;
+                }
+                if (out->texture_count >= CSCENE_MAX_MATERIAL_TEXTURES) {
+                    log_warn("cscene: material '%s' has more than %d textures; extras ignored",
+                             out->material, CSCENE_MAX_MATERIAL_TEXTURES);
+                    continue;
+                }
+                CSceneMaterialTexture* tex = &out->textures[out->texture_count];
+                snprintf(tex->key, CSCENE_MAX_PARAM_KEY, "%s", p->string);
+                snprintf(tex->path, CSCENE_MAX_PATH, "%s", p->valuestring);
+                out->texture_count++;
+                continue;
+            }
             if (out->param_count >= CSCENE_MAX_MATERIAL_PARAMS) {
                 log_warn("cscene: material '%s' has more than %d parameters; extras ignored",
                          out->material, CSCENE_MAX_MATERIAL_PARAMS);
@@ -419,7 +440,7 @@ static void parse_materials(CetraSceneDesc* d, const cJSON* root) {
             out->param_count++;
         }
 
-        if (!out->has_sss && out->param_count == 0) {
+        if (!out->has_sss && out->param_count == 0 && out->texture_count == 0) {
             log_warn("cscene: material '%s' has no usable keys; skipped", out->material);
             continue;
         }
@@ -492,6 +513,12 @@ CetraSceneDesc* cscene_load(const char* path) {
     }
     resolve_in_place(d->model_path, CSCENE_MAX_PATH, dir);
     resolve_in_place(d->env_hdr, CSCENE_MAX_PATH, dir);
+    // Material texture paths are deliberately NOT resolved here. Every texture
+    // the engine loads resolves against the texture pool's directory (the -t
+    // argument) through find_existing_subpath, and a material's textures are
+    // not a different kind of thing just because a scene file named them.
+    // Resolving them here instead would put the same path through two
+    // resolvers, and the pool's would win.
     return d;
 }
 
