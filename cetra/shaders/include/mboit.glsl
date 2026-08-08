@@ -11,9 +11,11 @@
 // Power moments, not trigonometric: the trigonometric variant needs complex
 // arithmetic and every shader here is #version 330 core.
 //
-// Both passes include this file so a constant cannot drift between them -- the
-// warp especially, which is the coordinate the moments are moments OF. Same
-// reason preintegrated_skin.glsl is shared (spec 11.13).
+// Split out so the two passes cannot disagree about a constant -- the warp
+// especially, which is the coordinate the moments are moments OF -- and so the
+// atlas layout has one home instead of being restated wherever it is touched.
+// Only pbr_frag includes it today; both passes live there. Same reason
+// preintegrated_skin.glsl is shared (spec 11.13).
 
 // Depth warp: linear view depth -> [-1, 1], logarithmically. Logarithmic
 // because a moment is a weighted average and a linear parameterisation would
@@ -51,9 +53,13 @@ vec4 mboitMoments(float absorbance, float z) {
 // of a Hankel matrix built from the moments, and that matrix is singular exactly
 // when the depth distribution is degenerate -- one layer, or several at one
 // depth, which is the common case rather than the pathological one. Blending the
-// moments a hair toward those of a uniform distribution over [-1, 1] keeps it
-// definite. The reference's single-precision constant, and the targets are fp32
-// for the same reason it has to exist at all.
+// moments a hair toward a fixed well-conditioned vector keeps it definite.
+//
+// Both are the reference's, at single precision. The vector is NOT the moments
+// of a uniform distribution on the warp range (those would be 0, 1/3, 0, 1/5) --
+// it is a conditioning constant chosen against that range, so it and the [-1, 1]
+// warp above only mean anything together. The targets are fp32 for the same
+// reason this has to exist at all.
 #define MBOIT_BIAS        5.0e-7
 #define MBOIT_BIAS_VECTOR vec4(0.0, 0.375, 0.0, 0.375)
 // Fraction of a fragment's OWN layer counted as being in front of it.
@@ -110,14 +116,30 @@ float mboitTransmittance(float b0, vec4 moments, float z) {
     float f01 = (f1 - f0) / (z1 - z);
     float f12 = (f2 - f1) / (z2 - z1);
     float f012 = (f12 - f01) / (z2 - z);
+    float c1 = f01 - f012 * z1; // Newton coefficient, before the shift to z
     vec3 poly;
     poly[2] = f012;
-    poly[1] = f01 - f012 * z1;
-    poly[0] = f0 - poly[1] * z;
-    poly[1] = poly[1] - f012 * z;
+    poly[1] = c1 - f012 * z;
+    poly[0] = f0 - c1 * z;
 
     // Expectation of that polynomial under the moments IS the absorbance in
     // front, normalised; b0 puts it back on its own scale
     float absorbance = poly[0] + dot(b.xy, poly.yz);
     return clamp(exp(-b0 * absorbance), 0.0, 1.0);
+}
+
+// The generation pass resolves its two multisample targets into ONE texture of
+// twice the render height: b1..b4 in the lower half, b0 in the upper. That
+// layout is stated here and read back here, so the tap offset and the reciprocal
+// size cannot drift apart; the blit that produces it is engine_end_moment_pass.
+#define MBOIT_ATLAS_B0_TAP vec2(0.0, 0.5)
+
+// Transmittance in front of this fragment, measured off the atlas rather than
+// guessed from its depth. invAtlasSize is the reciprocal of the ATLAS, so its y
+// is half the frame's.
+float mboitTransmittanceAtlas(sampler2D atlas, vec2 invAtlasSize, vec2 nearFar, float viewZ) {
+    vec2 uv = gl_FragCoord.xy * invAtlasSize;
+    return mboitTransmittance(textureLod(atlas, uv + MBOIT_ATLAS_B0_TAP, 0.0).r,
+                              textureLod(atlas, uv, 0.0),
+                              mboitWarpDepth(viewZ, nearFar));
 }

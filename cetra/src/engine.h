@@ -124,7 +124,8 @@ typedef struct Engine {
     // samplers, not distinct units, so there is no seventeenth even for a unit
     // that is provably free. The moments have to arrive through the one sampler
     // that is idle in that sub-pass, which is four floats against their five.
-    // Hence the atlas: twice the render height, b1..b4 above b0.
+    // Hence the atlas: twice the render height, b1..b4 in the lower half and b0
+    // in the upper.
     GLuint moment_fbo;
     GLuint moment_multisample_texture;    // attachment 5: b1..b4
     GLuint moment_b0_multisample_texture; // attachment 6: b0 (.r)
@@ -409,10 +410,11 @@ bool engine_begin_oit_pass(Engine* engine);
 void engine_end_oit_pass(Engine* engine);
 
 // Moment generation sub-pass bracket (spec 11.17), run before the accumulate
-// when moment weighting is on. The end call returns the atlas texture holding
-// the summary, or 0 if it could not be produced.
+// when moment weighting is on. Same shape as the accumulate bracket beside it:
+// begin returns false if the targets couldn't allocate, and the caller falls
+// back to the depth-curve weight.
 bool engine_begin_moment_pass(Engine* engine);
-GLuint engine_end_moment_pass(Engine* engine);
+void engine_end_moment_pass(Engine* engine);
 
 // Render
 void set_engine_show_wireframe(Engine* engine, bool show_wireframe);

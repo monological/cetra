@@ -31,6 +31,23 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RENDER = os.path.join(ROOT, "out", "bin", "render")
 SCALE = 1000.0
 
+
+def _cscn_camera(name, **extra):
+    """Camera read out of the fixture's own .cscn, in _projector's dict shape.
+
+    A gate that predicts where geometry lands on screen needs the exact camera
+    the render used. Transcribing it leaves two copies that agree only until
+    someone edits the .cscn, and the failure is silent -- the gate keeps passing
+    while measuring a different scene than it predicts. Reading it removes the
+    copy. Anything passed as **extra is the gate's OWN choice (sample columns,
+    thresholds), which is worth keeping visibly distinct from what the scene
+    file dictates.
+    """
+    with open(os.path.join(ROOT, "assets", name)) as f:
+        cam = json.load(f)["camera"]
+    return {"eye": tuple(cam["eye"]), "target": tuple(cam["target"]),
+            "fovy_deg": float(cam["fov"]), **extra}
+
 # Scale-invariance gates. Scaling every emitter by K and the exposure by 1/K is
 # a no-op on a correctly normalised pipeline, so the two frames must match.
 SCALE_GATES = [
@@ -156,13 +173,13 @@ def run_scale_gates(workdir):
 # currently a reference for a bug (spec 10.3), so none of them can arbitrate a
 # change to the shadow projection.
 #
-# Mirrors assets/area_shadow_fixture.cscn and gen_area_shadow_fixture.py -- these
-# five numbers and the camera below have to match the fixture or the gate is
-# measuring a different scene than it is predicting.
-PENUMBRA = {
-    "panel_half": 0.3, "panel_h": 3.0, "occluder_half": 0.5, "occluder_h": 1.0,
-    "eye": (0.0, 2.2, 3.2), "target": (0.0, 0.0, 0.0), "fovy_deg": 40.0,
-}
+# The four geometry numbers mirror gen_area_shadow_fixture.py and have to match
+# it or the gate predicts a penumbra the scene does not cast; the camera comes
+# from the scene file.
+PENUMBRA = _cscn_camera(
+    "area_shadow_fixture.cscn",
+    panel_half=0.3, panel_h=3.0, occluder_half=0.5, occluder_h=1.0,
+)
 # What the CENTRE of the transition is allowed to drift, in world units. It is a
 # geometric fact, so every phase must hold it; only the WIDTH is expected to move
 # (it is ~0.01 with a hard 3x3 filter and should approach the analytic band once
@@ -273,9 +290,7 @@ def _linear_rgb(pix, w, h, px, py):
 # which needs no stored reference and cannot drift: a falloff that ignores
 # curvature is a wrap term, and a wrap term is two lines and cheaper.
 #
-# These numbers mirror the fixture and its .cscn. Change either and the gate
-# measures a different scene than it predicts.
-SKIN_CAM = {"eye": (-0.2, 0.93, 9.5), "target": (-0.2, 0.93, 0.0), "fovy_deg": 40.0}
+SKIN_CAM = _cscn_camera("skin_curvature_fixture.cscn")
 SKIN_LIGHT_TRAVEL = (0.93, -0.26, -0.26)  # direction light travels
 SKIN_SPHERES = [("r050", 0.5, -3.6), ("r100", 1.0, -1.7), ("r200", 2.0, 1.7)]
 SKIN_WRAP_DEG = 95.0   # just past the terminator: Lambert is zero, scatter is not
@@ -1150,6 +1165,14 @@ def _oit_untonemap(rgb):
     form, and the fixture's colours are chosen to stay in the first one -- the
     second is here so a future colour edit fails loudly rather than quietly
     reading 4% low.
+
+    pow(2.2), NOT the sRGB piecewise curve _linear_rgb uses: tonemap_frag's
+    displayEncode is a plain 1/2.2 gamma, so this is the one that matches the
+    engine. The two differ by ~0.01 in the shadows, which matters here because
+    this gate compares absolute radiance against arithmetic rather than
+    comparing two samples of one render. Reconciling _linear_rgb would re-tune
+    every threshold fitted through it, so the divergence stands and is recorded
+    rather than silently inherited.
     """
     ldr = [max(0.0, min(1.0, c)) ** 2.2 for c in rgb]
     m = min(ldr)
@@ -1253,14 +1276,13 @@ def run_oit_gate(workdir):
 # the fixture's opaque wall is for, and it is why this needs no second render
 # and no stored reference.
 #
-# These five numbers mirror the fixture and its .cscn. Change either and the
-# gate measures a different scene than it predicts.
-CATCHER_TRANSPARENCY = {
-    "eye": (0.0, 2.4, 7.0), "target": (0.0, 0.1, 0.0), "fovy_deg": 45.0,
-    "panel_x": 1.2,   # inside the panel, which spans x 0.2 .. 2.2
-    "beside_x": 3.0,  # clear of the panel, its cast shadow, and the caster's
-    "sample_y": 0.7,  # sampled at +/- this, both well clear of the plane
-}
+# The sample columns are this gate's own; the camera comes from the scene file.
+CATCHER_TRANSPARENCY = _cscn_camera(
+    "catcher_transparency_fixture.cscn",
+    panel_x=1.2,   # inside the panel, which spans x 0.2 .. 2.2
+    beside_x=3.0,  # clear of the panel, its cast shadow, and the caster's
+    sample_y=0.7,  # sampled at +/- this, both well clear of the plane
+)
 # What "the floor hid it" is allowed to measure. Both samples read the same
 # backdrop texel once the panel is occluded, so the honest bar is quantization:
 # one 8-bit step is about 0.005 at this brightness, so this is two of them.

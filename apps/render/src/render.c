@@ -168,6 +168,7 @@ static void print_usage(const char* prog) {
             "      --no-oit           Unsorted alpha-blend late pass instead of OIT (OIT is on)\n");
     fprintf(stderr, "      --no-oit-moments   Weighted-blended OIT: the depth curve, not the "
                     "measured moments\n");
+    fprintf(stderr, "      --oit / --oit-moments  Restate the defaults (both are already on)\n");
     fprintf(stderr, "      --sss-radius <f>   SSS scatter radius (world units)\n");
     fprintf(stderr, "      --sss-color <r,g,b> SSS per-channel scatter color (e.g. 1.0,0.3,0.2)\n");
     fprintf(stderr, "      --no-bloom         Disable bloom\n");
@@ -754,18 +755,19 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 return -1;
             }
             args->curvature_scale = (float)atof(argv[i]);
+            // Moment weighting is a better weight INSIDE the OIT accumulate, not
+            // a second transparency path. So it cannot outlive the pass it rides:
+            // turning OIT off takes it with it, and asking for it asks for OIT.
         } else if (strcmp(argv[i], "--oit") == 0) {
             args->oit = 1;
         } else if (strcmp(argv[i], "--no-oit") == 0) {
             args->oit = 0;
             args->oit_moments = 0;
         } else if (strcmp(argv[i], "--oit-moments") == 0) {
-            // Moment weighting is a better weight INSIDE the OIT accumulate, not
-            // a second transparency path, so asking for it asks for OIT.
             args->oit = 1;
             args->oit_moments = 1;
         } else if (strcmp(argv[i], "--no-oit-moments") == 0) {
-            // Drops back to the McGuire depth weight without leaving OIT
+            // Back to the McGuire depth weight, still inside OIT
             args->oit_moments = 0;
         } else if (strcmp(argv[i], "--area-light") == 0) {
             if (++i >= argc) {

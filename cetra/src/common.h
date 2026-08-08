@@ -76,6 +76,17 @@ typedef enum {
     RENDER_MODE_VELOCITY         // Motion-vector (velocity) visualization
 } RenderMode;
 
+// Which OIT sub-pass is rasterizing (spec 11.17). Mirrored as pbr_frag's
+// `oitPass`, so the numbering is load-bearing. Whether the accumulate weights by
+// measured moments or by the depth curve is a SEPARATE bit -- it varies
+// independently of which sub-pass is drawing, and the composite carries it under
+// its own name too.
+typedef enum {
+    OIT_SUBPASS_NONE = 0,
+    OIT_SUBPASS_ACCUMULATE = 1, // weighted colour into the OIT FBO
+    OIT_SUBPASS_MOMENTS = 2     // absorbance moments into the moment FBO
+} OitSubpass;
+
 // Axis vertices: 6 vertices, 2 for each line (origin and end)
 extern float xyz_vertices[];
 extern const size_t xyz_vertices_size;

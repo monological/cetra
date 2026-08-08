@@ -27,8 +27,10 @@ layout(location = 3) out vec4 AlbedoOut;
 // hdr + blur - this, softening diffuse while FragColor's specular stays sharp.
 // Only lands when attachment 4 is enabled (sssEnabled); otherwise discarded.
 layout(location = 4) out vec4 DiffuseOut;
-// Weighted-blended OIT (only bound during the OIT accumulate pass, oitPass > 0):
-// AccumOut = premultiplied color * depth weight, RevealageOut = alpha (.r).
+// OIT's two slots, bound only during an OIT sub-pass and carrying a different
+// pair in each -- a different FBO and a different blend behind them:
+//   accumulate (oitPass 1): premultiplied colour * weight, and alpha (.r)
+//   generation (oitPass 2): the power moments b1..b4, and absorbance b0 (.r)
 layout(location = 5) out vec4 AccumOut;
 layout(location = 6) out vec4 RevealageOut;
 // Ambient specular, split out for the post-chain occlusion composite (spec
@@ -71,7 +73,9 @@ uniform float ior;
 // with the resolved opaque scene color sampled through the surface
 uniform float transmission;
 uniform float transmissionThickness; // KHR_materials_volume, world units
-uniform sampler2D sceneColorTex;     // Mipped opaque-scene resolve (unit 6)
+// Mipped opaque-scene resolve (unit 6). Also carries the moment atlas during the
+// OIT accumulate -- see oitMomentTex below before narrowing or relocating this.
+uniform sampler2D sceneColorTex;
 uniform int sceneColorAvailable;     // 1 only in the late pass after the resolve
 // Coarsest blur mip the transmission sample may select (the resolve's mip
 // generation stops here too -- keep in step with OPAQUE_COLOR_MAX_LOD)
@@ -202,9 +206,12 @@ uniform int clearcoatEnabled; // Global clearcoat lobe toggle (--no-clearcoat)
 uniform int specularEnabled;  // Global KHR_materials_specular toggle (--no-specular)
 uniform int sheenEnabled;     // Global KHR_materials_sheen toggle (--no-sheen)
 uniform int parallaxEnabled;  // Global POM toggle (--no-parallax, §4.11)
-// Which OIT sub-pass is drawing: 0 none, 1 weighted-blended accumulate,
-// 2 moment generation, 3 moment-weighted accumulate (spec 11.17).
+// Which OIT sub-pass is drawing: 0 none, 1 accumulate, 2 moment generation.
 uniform int oitPass;
+// 1 = weight the accumulate by measured transmittance rather than the depth
+// curve. Orthogonal to which sub-pass is drawing, and separate from oitPass for
+// that reason; oit_resolve_frag carries the same bit under the same name.
+uniform int oitMomentWeighted;
 // The moment atlas arrives through the refraction sampler rather than one of
 // its own, and that is forced rather than clever: the driver counts DECLARED
 // fragment samplers against the 16-unit limit, not distinct units, so a second
@@ -215,6 +222,13 @@ uniform int oitPass;
 // convention: the accumulate sub-pass draws only non-transmissive meshes, and
 // sceneColorTex is read only where transmission > 0.
 #define oitMomentTex sceneColorTex
+// Generation is a mode in this shader rather than a program of its own on
+// purpose. A separate program would have to reproduce the UV transform, POM, the
+// mask-array opacity chain and the Fresnel to reach the same finalOpacity the
+// accumulate writes, and the moments have to describe exactly that opacity --
+// a drift there mis-weights every layer silently, where a mode cannot drift at
+// all. The cost a mode would otherwise carry, shading a fragment whose colour is
+// discarded, is paid off by the early-out in main.
 uniform vec2 oitMomentInvSize; // Reciprocal atlas size (twice the frame's height)
 uniform vec2 oitNearFar; // Camera near/far, the interval the depth warp spans
 // 1 = route ambient specular to SpecOut instead of FragColor. 0 (the GLSL
@@ -738,14 +752,18 @@ float oitWeight(float z) {
 
 #include "mboit.glsl"
 
-// Transmittance in front of this fragment, measured off the moment atlas rather
-// than guessed from its depth. The atlas is twice the render height with b0
-// below b1..b4, so the second tap is the first shifted half a texture down.
-float oitMomentWeight(float viewZ) {
-    vec2 uv = gl_FragCoord.xy * oitMomentInvSize;
-    vec4 moments = textureLod(oitMomentTex, uv, 0.0);
-    float b0 = textureLod(oitMomentTex, uv + vec2(0.0, 0.5), 0.0).r;
-    return mboitTransmittance(b0, moments, mboitWarpDepth(viewZ, oitNearFar));
+// Translucency rises toward opaque at glancing angles: blend the authored
+// opacity toward 1 by the Fresnel term.
+//
+// Shared by the shading path and the moment-generation early-out, and that
+// sharing is the point -- the moments summarise WHERE the opacity is, so they
+// have to be built from the same number the accumulate later writes. Two copies
+// of this expression would mis-weight every layer without failing anything.
+float fresnelOpacity(float opacity, float iorF0, float NdotV) {
+    if (opacity >= 1.0)
+        return opacity;
+    float f = iorF0 + (1.0 - iorF0) * pow(clamp(1.0 - NdotV, 0.0, 1.0), 5.0);
+    return mix(opacity, 1.0, f);
 }
 
 void main() {
@@ -1058,6 +1076,22 @@ void main() {
     F0 = mix(F0, albedoMap, metallicMap);
 
     float NdotV = max(dot(N, V), 0.0);
+
+    // Moment generation ends here. It needs opacity and depth and nothing else:
+    // it is a summary of WHERE the opacity is, never of what colour it is, so
+    // everything below -- the clustered light loop and its shadow taps, IBL,
+    // area lights, SSS, clearcoat, sheen -- would be shaded and thrown away. The
+    // driver cannot drop it on its own, because FragColor is written
+    // unconditionally at the end.
+    //
+    // Legal to leave the other outputs unwritten: the generation FBO binds only
+    // locations 5 and 6. oitPass is a uniform, so the branch is coherent.
+    if (oitPass == 2) {
+        float absorbance = mboitAbsorbance(fresnelOpacity(opacity, iorF0, NdotV));
+        AccumOut = mboitMoments(absorbance, mboitWarpDepth(-ViewPos.z, oitNearFar));
+        RevealageOut = vec4(absorbance);
+        return;
+    }
 
     // Transmission is only real when this pass has the opaque resolve to
     // sample; without it (refraction disabled, debug modes, probe capture)
@@ -1767,14 +1801,7 @@ void main() {
         }
     }
 
-    // For translucent materials, apply Fresnel-based alpha
-    // Edges become more reflective (less transparent) at glancing angles
-    float finalOpacity = opacity;
-    if (opacity < 1.0) {
-        float fresnelOpacity = iorF0 + (1.0 - iorF0) * pow(clamp(1.0 - NdotV, 0.0, 1.0), 5.0);
-        // Blend between base opacity and full opacity based on Fresnel
-        finalOpacity = mix(opacity, 1.0, fresnelOpacity);
-    }
+    float finalOpacity = fresnelOpacity(opacity, iorF0, NdotV);
 
     // `color` is already working space -- converted upstream so the clamps in
     // between operate on the scale they were written for.
@@ -1828,23 +1855,15 @@ void main() {
     // bound when splitting, but every bound attachment must be written.
     SpecOut = vec4(min(ambSpec * preExposure, vec3(WS_SCENE_MAX)), finalOpacity);
 
-    // OIT sub-passes (guarded so oitPass 0 leaves FragColor and the opaque/
-    // alpha-blend paths byte-identical). Both write the same two locations; the
-    // engine points them at a different FBO and a different blend per sub-pass.
-    if (oitPass == 2) {
-        // Moment generation: this layer's absorbance and its four power moments
-        // at its warped depth, summed additively over every layer (GL_ONE,GL_ONE
-        // on both slots). No colour is shaded into these -- they are a summary of
-        // WHERE the opacity is, which the accumulate below reads back.
-        float absorbance = mboitAbsorbance(finalOpacity);
-        AccumOut = mboitMoments(absorbance, mboitWarpDepth(-ViewPos.z, oitNearFar));
-        RevealageOut = vec4(absorbance);
-    } else if (oitPass > 0) {
-        // Accumulate: premultiplied colour times how much of this fragment
-        // survives what is in front of it -- measured from the moments when they
-        // were generated, guessed from the depth curve otherwise. Alpha into
-        // RevealageOut, whose multiplicative blend builds the product of (1-a).
-        float w = oitPass == 3 ? oitMomentWeight(-ViewPos.z) : oitWeight(-ViewPos.z);
+    // The OIT accumulate (guarded so oitPass 0 leaves FragColor and the opaque/
+    // alpha-blend paths byte-identical): premultiplied colour times how much of
+    // this fragment survives what is in front of it -- measured from the moments
+    // where they were generated, guessed from the depth curve otherwise. Alpha
+    // into RevealageOut, whose multiplicative blend builds the product of (1-a).
+    if (oitPass == 1) {
+        float w = oitMomentWeighted > 0 ? mboitTransmittanceAtlas(oitMomentTex, oitMomentInvSize,
+                                                                 oitNearFar, -ViewPos.z)
+                                        : oitWeight(-ViewPos.z);
         // Clamp the premultiplied weighted color to the fp16 ceiling (the accum
         // target is RGBA16F) so a bright near-camera translucent frag -- where the
         // depth weight nears its max -- can't write Inf and resolve to a white blob.

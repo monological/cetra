@@ -228,11 +228,8 @@ Engine* create_engine(const char* window_title, int width, int height) {
     // Order-independent transparency on, and weighted by measured absorbance
     // moments rather than the depth curve. --no-oit is the unsorted late pass.
     //
-    // The known cost of this default is an ordering one, inherited from 4.17:
-    // the accumulation composites in postfx AFTER the scene FBO resolves, while
-    // the shadow catcher and overlays draw INTO it, so a translucent surface
-    // behind the catcher plane lands in front of it. The classic late pass gets
-    // that order right for free by drawing in the same buffer.
+    // Costs nothing on a scene with no alpha-blend mesh: the whole path is gated
+    // on oit_mesh_count, so it allocates nothing and runs no extra pass there.
     engine->oit_enabled = true;
     engine->oit_moments_enabled = true;
 
@@ -2286,9 +2283,11 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode) {
                                         .aux = engine->aux_this_frame,
                                         .albedo = engine->albedo_this_frame,
                                         .sss = engine->sss_this_frame,
-                                        .spec = engine->spec_this_frame};
+                                        .spec = engine->spec_this_frame,
+                                        .oit_fbo =
+                                            engine->oit_this_frame ? engine->oit_fbo : 0,
+                                        .oit_moment_weighted = engine->moments_this_frame};
     postfx_run(engine->postfx, engine->framebuffer, 0, frame_mode == RENDER_MODE_PBR, &writes,
-               engine->oit_this_frame ? engine->oit_fbo : 0, engine->moments_this_frame,
                engine->draw_projection, engine->view_matrix);
 
     // Sky LUT debug overlay onto the composited frame (an acceptance tool,
@@ -2561,7 +2560,7 @@ void engine_end_oit_pass(Engine* engine) {
 // the two resolve into. Same lifetime and teardown as the OIT targets beside
 // them.
 //
-// Both generation targets are RGBA16F, including the one that carries a single
+// Both generation targets are RGBA32F, including the one that carries a single
 // scalar: a multisample resolve blit demands identical formats, and both halves
 // blit into the one atlas texture the accumulate pass can afford to sample (see
 // the atlas note in engine.h). The atlas is twice as tall for the same reason.
@@ -2646,11 +2645,12 @@ bool engine_begin_moment_pass(Engine* engine) {
     return true;
 }
 
-// End the moment generation sub-pass and hand back the atlas texture the
-// accumulate reads, or 0 if it could not be produced. Resolves each multisample
-// target into its own half of the atlas: same size, different destination
+// End the moment generation sub-pass, resolving each multisample target into its
+// own half of the atlas the accumulate reads: same size, different destination
 // origin, which a multisample blit allows (it forbids scaling, not offsets).
-GLuint engine_end_moment_pass(Engine* engine) {
+// b1..b4 land in the lower half, b0 in the upper -- MBOIT_ATLAS_B0_TAP is the
+// other end of that agreement.
+void engine_end_moment_pass(Engine* engine) {
     int rw, rh;
     engine_render_size(engine, &rw, &rh);
     glBindFramebuffer(GL_READ_FRAMEBUFFER, engine->moment_fbo);
@@ -2666,7 +2666,6 @@ GLuint engine_end_moment_pass(Engine* engine) {
     glDisablei(GL_BLEND, 5);
     glDisablei(GL_BLEND, 6);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    return engine->moment_atlas_texture;
 }
 
 // POM (§4.11): resolve "<name>_height" sibling maps once the async texture

@@ -275,7 +275,7 @@ static void _update_camera_uniforms(ShaderProgram* program, Camera* camera) {
 static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Camera* camera,
                          mat4 view, mat4 projection, RenderMode render_mode,
                          GLuint* current_program, Material** current_material,
-                         const Frustum* frustum, bool alpha_pass, int oit_pass) {
+                         const Frustum* frustum, bool alpha_pass, OitSubpass oit_pass) {
 
     if (!node->meshes || node->mesh_count == 0)
         return;
@@ -312,7 +312,7 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
         bool draw_here;
         if (!alpha_pass)
             draw_here = !is_late;
-        else if (oit_pass != 0)
+        else if (oit_pass != OIT_SUBPASS_NONE)
             draw_here = is_blend && !is_transmissive;
         else if (engine->oit_this_frame) // OIT accumulate ran -> blend already went to the OIT FBO
             draw_here = is_transmissive;
@@ -394,19 +394,7 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
             _upload_skin_preint_uniforms(engine, u);
             uniform_set_int(u, "clusterDebug", engine->cluster_debug ? 1 : 0);
             uniform_set_int(u, "oitPass", oit_pass);
-            // The moment atlas is twice the render height (b0 sits under
-            // b1..b4), so its reciprocal size is not the frame's. Only read at
-            // oit_pass 3, which cannot happen unless the generation pass sized
-            // these.
-            if (engine->moment_w > 0) {
-                const float inv_size[2] = {1.0f / (float)engine->moment_w,
-                                           1.0f / (float)(engine->moment_h * 2)};
-                uniform_set_vec2(u, "oitMomentInvSize", inv_size);
-            }
-            if (camera) {
-                const float near_far[2] = {camera->near_clip, camera->far_clip};
-                uniform_set_vec2(u, "oitNearFar", near_far);
-            }
+            uniform_set_int(u, "oitMomentWeighted", engine->moments_this_frame ? 1 : 0);
             // Split ambient specular only where attachment 7 is live: the
             // opaque pass of a split-mode PBR frame. The late/OIT passes and
             // captures draw into targets with no attachment 7, so their
@@ -422,14 +410,28 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
             // They cannot collide, and not by convention: the accumulate draws
             // only non-transmissive meshes, and that is the same routing that
             // makes sceneColorTex unreadable there.
-            bool moments_bound = oit_pass == 3 && engine->moment_atlas_texture != 0;
+            bool moments_bound = oit_pass == OIT_SUBPASS_ACCUMULATE &&
+                                 engine->moments_this_frame && engine->moment_atlas_texture != 0;
             uniform_set_int(u, "sceneColorAvailable",
                             engine->scene_color_this_frame && !moments_bound ? 1 : 0);
             if (moments_bound || engine->scene_color_this_frame) {
-                glActiveTexture(GL_TEXTURE6);
+                glActiveTexture(GL_TEXTURE0 + TEXUNIT_SCENE_COLOR);
                 glBindTexture(GL_TEXTURE_2D, moments_bound ? engine->moment_atlas_texture
                                                            : engine->opaque_color_texture);
                 glActiveTexture(GL_TEXTURE0);
+            }
+            // Both are read only inside an OIT sub-pass, so they upload only
+            // there: the warp interval the moments are stated over, and (where
+            // the atlas is actually bound) its reciprocal size, which is not the
+            // frame's because the atlas is twice as tall.
+            if (oit_pass != OIT_SUBPASS_NONE) {
+                const float near_far[2] = {camera->near_clip, camera->far_clip};
+                uniform_set_vec2(u, "oitNearFar", near_far);
+            }
+            if (moments_bound) {
+                const float inv_size[2] = {1.0f / (float)engine->moment_w,
+                                           1.0f / (float)(engine->moment_h * 2)};
+                uniform_set_vec2(u, "oitMomentInvSize", inv_size);
             }
             _update_camera_uniforms(program, camera);
 
@@ -614,7 +616,7 @@ static void _render_scene_iterative(const Engine* engine, Scene* scene, SceneNod
                                     Camera* camera, mat4 view, mat4 projection,
                                     RenderMode render_mode, GLuint* current_program,
                                     Material** current_material, const Frustum* frustum,
-                                    bool alpha_pass, int oit_pass) {
+                                    bool alpha_pass, OitSubpass oit_pass) {
     if (!scene) {
         log_error("error: render called with NULL scene");
         return;
@@ -828,7 +830,8 @@ void render_current_scene(Engine* engine) {
     engine->oit_this_frame = false; // set true below if the OIT accumulate pass runs
     engine->moments_this_frame = false;
     _render_scene_iterative(engine, scene, root_node, camera, *view, draw_projection,
-                            render_mode, &current_program, &current_material, &frustum, false, 0);
+                            render_mode, &current_program, &current_material, &frustum, false,
+                            OIT_SUBPASS_NONE);
     engine_set_scene_draw_buffers(engine, false);
 
     // Skybox after opaques (depth-tested against them at the far plane).
@@ -858,13 +861,10 @@ void render_current_scene(Engine* engine) {
     // shadow-casting lights. Over the skybox, which it blends onto, and BEFORE
     // everything that has to sort against the floor (spec 11.18).
     //
-    // It used to draw last, and its depth was inert because of it. Nothing
-    // ordered against a plane that arrived after every other draw, so
-    // translucent geometry behind the floor composited over the shadow instead
-    // of being hidden by it -- in the unsorted late pass, in the OIT
-    // accumulate, and in the particle depth resolve alike, since all three test
-    // against this one buffer. Drawn here, one plane serves all three.
-    //
+    // The position is load-bearing. The unsorted late pass, the OIT accumulate
+    // and the particle depth resolve all test against this one depth buffer, so
+    // the plane has to be in it before any of them run or translucency behind
+    // the floor composites over the shadow instead of being hidden by it.
     // Ahead of the refraction resolve too, so transmissive surfaces see the
     // shadowed floor rather than an unshadowed one.
     if (scene->shadow_catcher && scene->shadow_system && scene->shadow_system->enabled &&
@@ -918,10 +918,9 @@ void render_current_scene(Engine* engine) {
         uniform_set_int(catcher->uniforms, "shadowMaps", SHADOW_MAP_TEXTURE_UNIT);
 
         // Explicit state: blended, visible from both sides. Depth writes stay
-        // ON, and that is now load-bearing rather than incidental: this plane
-        // is what the transparent and particle passes below sort against, and
-        // what gives the model a contact shadow in the postfx SSAO resolve.
-        // The floor it stands in for writes no depth of its own.
+        // ON: this plane is what the transparent and particle passes below sort
+        // against, and what gives the model a contact shadow in the postfx SSAO
+        // resolve. The backdrop it stands in for writes no depth of its own.
         GLboolean cull_was_enabled = glIsEnabled(GL_CULL_FACE);
         glDisable(GL_CULL_FACE);
         glEnable(GL_BLEND);
@@ -970,15 +969,15 @@ void render_current_scene(Engine* engine) {
         current_program = 0;
         current_material = NULL;
         glDepthMask(GL_FALSE);
-        // OIT (--oit, PBR only, and only when there are alpha-blend meshes to
-        // accumulate): weighted-blended accumulate of the blend meshes into the OIT
-        // FBO (postfx resolves + composites them). Sets oit_this_frame so the
-        // trailing late pass below draws transmissive-only; if OIT is off/non-PBR/
-        // no blend meshes/targets fail, oit_this_frame stays false and that pass
-        // draws all late meshes (the classic unsorted path). _render_node routes on
-        // oit_this_frame, so the trailing call is correct either way.
+        // OIT (PBR only, and only when there are alpha-blend meshes to
+        // accumulate): the blend meshes accumulate into the OIT FBO, which postfx
+        // resolves and composites. Sets oit_this_frame so the trailing late pass
+        // below draws transmissive-only; if OIT is off/non-PBR/no blend
+        // meshes/targets fail, oit_this_frame stays false and that pass draws all
+        // late meshes (the classic unsorted path, --no-oit). _render_node routes
+        // on oit_this_frame, so the trailing call is correct either way.
         // Not under capture: engine_end_oit_pass re-binds engine->framebuffer at
-        // the main render size, same hijack as the particle path above.
+        // the main render size, same hijack as the particle path below.
         if (engine->oit_enabled && !engine->capturing && render_mode == RENDER_MODE_PBR &&
             scene->oit_mesh_count > 0) {
             // Moment generation (spec 11.17), over the same mesh set and before
@@ -988,31 +987,34 @@ void render_current_scene(Engine* engine) {
             // where transmittance multiplies, which is what lets one unsorted
             // pass build it. Failing to allocate leaves the weighted-blended
             // path exactly as it was.
+            bool moments_ready = false;
             if (engine->oit_moments_enabled && engine_begin_moment_pass(engine)) {
                 _render_scene_iterative(engine, scene, root_node, camera, *view, draw_projection,
                                         render_mode, &current_program, &current_material, &frustum,
-                                        true, 2); // moment generation
-                engine->moments_this_frame = engine_end_moment_pass(engine) != 0;
+                                        true, OIT_SUBPASS_MOMENTS);
+                engine_end_moment_pass(engine);
+                moments_ready = true;
                 current_program = 0;
                 current_material = NULL;
             }
             if (engine_begin_oit_pass(engine)) {
                 engine->oit_this_frame = true;
+                // Published only here, where the accumulate that consumes them
+                // provably runs: postfx reads this to pick the composite's blend,
+                // so moments announced without an accumulate behind them would
+                // mis-composite the whole frame.
+                engine->moments_this_frame = moments_ready;
                 _render_scene_iterative(engine, scene, root_node, camera, *view, draw_projection,
                                         render_mode, &current_program, &current_material, &frustum,
-                                        true, engine->moments_this_frame ? 3 : 1);
+                                        true, OIT_SUBPASS_ACCUMULATE);
                 engine_end_oit_pass(engine);
-            } else {
-                // No accumulate means no composite, so the moments have nothing
-                // to weight and the classic late pass draws the blend meshes.
-                engine->moments_this_frame = false;
             }
             current_program = 0;
             current_material = NULL;
         }
         _render_scene_iterative(engine, scene, root_node, camera, *view, draw_projection,
                                 render_mode, &current_program, &current_material, &frustum, true,
-                                0);
+                                OIT_SUBPASS_NONE);
         glDepthMask(GL_TRUE);
     }
 

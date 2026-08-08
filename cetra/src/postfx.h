@@ -537,23 +537,25 @@ void postfx_apply_film_look(PostFX* fx);
 // engine's frame-start decisions, passed through rather than re-derived from
 // fx flags that may have changed mid-frame.
 typedef struct PostFXGBufferWrites {
-    bool normals; // attachment 1
-    bool aux;     // attachment 2 (motion + linear-Z + roughness)
-    bool albedo;  // attachment 3
-    bool sss;     // attachment 4 (skin diffuse)
-    bool spec;    // attachment 7 (split ambient specular)
+    bool normals;   // attachment 1
+    bool aux;       // attachment 2 (motion + linear-Z + roughness)
+    bool albedo;    // attachment 3
+    bool sss;       // attachment 4 (skin diffuse)
+    bool spec;      // attachment 7 (split ambient specular)
+    GLuint oit_fbo; // 0 when the OIT accumulate did not run this frame
+    // Which form the accumulation is in: moment-weighted layers already carry
+    // their own transmittance and composite as a straight sum, while
+    // weighted-blended ones are a weighted average and must be divided by their
+    // own weight first. Adjacent to oit_fbo because it is meaningless when that
+    // is 0.
+    bool oit_moment_weighted;
 } PostFXGBufferWrites;
 
 // Pass frame_is_hdr = false for frames whose shaders already emitted
 // display-ready colors (debug render modes): they are copied unchanged,
 // skipping SSAO, bloom, and tone mapping.
-// oit_moments says which form the accumulation is in: moment-weighted layers
-// already carry their own transmittance and composite as a straight sum, while
-// weighted-blended ones are a weighted average and must be divided by their own
-// weight first. Meaningless when oit_fbo is 0.
 void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hdr,
-                const PostFXGBufferWrites* writes, GLuint oit_fbo, bool oit_moments,
-                mat4 projection, mat4 view);
+                const PostFXGBufferWrites* writes, mat4 projection, mat4 view);
 
 // Producer-side predicate: true when some active effect will consume the
 // normals G-buffer, so the scene pass should write color attachment 1. The
