@@ -283,7 +283,9 @@ load-bearing claims turned out wrong:
 Two limits found by measurement. **The cast shadow eats the wrap past the terminator**: on a convex
 caster the `NdotL = 0` boundary *is* the self-shadow boundary, and `shadow` multiplies outside the
 diffuse, so B3 brightens and reddens the *approach* to the terminator without wrapping light past
-it. That one stands, and B3.1 is what recovers it.
+it. That one stands as a description of the ANGULAR term — but B3.1 turned out not to be what
+recovers it, because the screen-space blur already does (spec 11.19; B3.1 is now **rejected**, see
+its section below).
 
 The second — **total scatter is not resolution-independent** — was **fixed by 11.14, and B3 was not
 the cause.** The composition rule was blamed for treating the two widths as interchangeable; the
@@ -313,22 +315,47 @@ specular and `subsurfaceTransmission` back-light untouched. Material gains `curv
 New: extend `include/skin.glsl`. CLI: `--no-skin-preint`. Test asset: curvature-sweep sphere-row GLB.
 **Owns foundations:** none (deliberately). **Depends on:** nothing.
 
-### B3.1. Shadow-penumbra scattering (Penner's second LUT) — Effort M
-The half of Penner 2011 that B3 deliberately left out, and the one that recovers what B3 could not.
-B3 owns the *attached* terminator; a cast shadow's edge is still a hard multiply outside the
-diffuse, so on a convex character the two boundaries coincide and the shadow wins. Penner's second
-table pre-integrates the diffusion profile against the shadow's own penumbra gradient, which is
-what lets light bleed across a shadow edge instead of being multiplied to zero at it. Needs the
-penumbra width the shadow lookup already estimates for PCSS, so the input is largely in hand.
+### B3.1. Shadow-penumbra scattering (Penner's second LUT) — Effort M — **REJECTED (11.19)**
+The half of Penner 2011 that B3 deliberately left out: a second table pre-integrating the diffusion
+profile against the shadow's own penumbra gradient, so light bleeds across a cast-shadow edge
+instead of being multiplied to zero at it.
+
+**Not built, because the effect already ships.** `assets/skin_shadow_fixture.cscn` was written to be
+the subject — a cast shadow thrown across skin, on the cascade instrument's own geometry — and it
+measures the opposite of the premise:
+
+- SSS on vs `--no-sss`: **186,847 px (11.7%)**. Hard black ellipses become soft red bleeds.
+- SSS on vs `--no-skin-preint`: **0 px**. The angular term contributes nothing; the screen-space
+  blur is delivering all of it.
+
+`shadow` rides *inside* `sssDiffuse`, so the blur that 11.14 repaired scatters across a cast-shadow
+edge for free. B3.1 would add an angular term on top, and it would be inert for exactly the reason
+row 12 already records B3 as inert — it fires only where the authored radius outruns the scatter
+ceiling. A feature whose whole value is a deficit that 11.14 closed.
+
+Reopen only if the pyramid's ceiling becomes a real constraint again, or if a scene needs this under
+`--no-sss`. The measurement above is the thing to re-run first.
 **Owns foundations:** none. **Depends on:** B3 (shipped), PCSS (shipped).
 
-### B3.2. Skin under an area light — Effort M
-Skin lit by an area/LTC panel gets **no subsurface scattering at all** today: the SSS accumulation
-path `continue`s past panels, so `sssDiffuse` never sees them. Self-consistent rather than broken —
-LTC integrates the whole panel analytically and has no single `L` to feed a diffusion profile — but
-a softbox portrait is *the* canonical skin setup, so the gap is exactly where the feature matters
-most. Same shape of gap as the IBL one: B3 also does nothing on an IBL-lit face, since the ambient
-tap has no `L` either. Both want a representative direction and a solid-angle-aware width.
+### B3.2. Skin under an area light — Effort M — **DONE (spec 11.19)**
+Skin lit by an area/LTC panel got **no subsurface scattering at all**: the SSS accumulation path
+`continue`d past panels, so `sssDiffuse` never saw them. Self-consistent rather than broken — LTC
+integrates the whole panel analytically and has no single `L` to feed a diffusion profile — but a
+softbox portrait is *the* canonical skin setup, so the gap was exactly where the feature matters
+most.
+
+Closed by tapping the panel's diffuse into the skin buffer the way the punctual site taps its
+Lambert term. `areaDiff` is already the diffuse in `Lo`, so postfx's `hdr + blur(D) - D` still
+cancels. **0 px → 551,295 px (34.5%)** on `skin_area_fixture.cscn`, which reuses the curvature
+fixture's geometry and material and swaps only the light. Gated with a directional control arm,
+because zero is also what a dead flag would produce.
+
+**Still open, and it is the interesting half:** the pre-integrated wrap stays out of the area path —
+it substitutes a widened falloff for `dot(N, L)`, and a rectangle has no single `L`. Smaller hole
+than it sounds, since `ff.x` already integrates the clamped cosine over the whole rectangle, so a
+wide panel wraps geometrically; what is missing is the widening from transport. Same shape as the
+IBL gap, which is also still open — B3 does nothing on an IBL-lit face for the same reason. Both
+want a representative direction and a solid-angle-aware width.
 **Owns foundations:** none. **Depends on:** A2 LTC (shipped), B3 (shipped).
 
 ### B4. TAAU temporal upscaling (Karis-style) — Effort L — **DONE (spec 11.7)**
@@ -501,19 +528,19 @@ and 11.2 (below). **Tiers 1 and 2 are complete**, Tier 2 closing with B3 pre-int
 | 9 | A5 Bent-normal spec-occ | M | **DONE (11.3 + 11.4):** split ambient specular, default `split`, exact occlusion by construction. |
 | 10 | B5 Bokeh DoF | M | **DONE (11.6):** near/far gather, N-gon kernel, first DoF golden. |
 | 11 | B4 TAAU | L | **DONE (11.7):** render/post/half split, separate upscaling resolve, `--render-scale`; ~2x at 0.67. |
-| 12 | B3 Pre-integrated skin | S→**M** | **DONE (11.13):** opt-in `curvature_scale`, 16-row const table, `.cscn` material overrides. Not zero infra: fit tool, fixture, 3 gates, golden. Shadow limits the wrap (→ B3.1). **Inert for realistic content since 11.14** fixed the blur it was compensating for. |
+| 12 | B3 Pre-integrated skin | S→**M** | **DONE (11.13):** opt-in `curvature_scale`, 16-row const table, `.cscn` material overrides. Not zero infra: fit tool, fixture, 3 gates, golden. Shadow limits the wrap — and 11.19 measured that the blur, not an angular term, is what recovers it, which is why B3.1 was rejected rather than built. **Inert for realistic content since 11.14** fixed the blur it was compensating for. |
 | 12.1 | SSS blur width | M→**L** | **DONE (11.14):** the blur capped its kernel in PIXELS, so delivered world scatter fell as 1/height — 2.5% of its low-res value at 4K, a defect live since SSS shipped and named in `specs/4.12-sss.md` with nothing behind it. Fixing the units alone was correct arithmetic and an unshippable image: a resolution-independent world width means an unbounded PIXEL width, and 12 fixed taps then resolve individually as rings. Replaced the separable blur with a scale-space pyramid — one trilinear tap per profile Gaussian per channel — so reach stops depending on the tap budget. Now 2.5% drift across a 4x sweep, and 91% of Penner's integral against the old kernel's 129%. New `sss-scale` and `sss-band` gates; first SSS-ON golden. |
 
 **Tier 3 — polish & late-tier (unparked: Tiers 1-2 have landed):**
 | # | Item | Effort | Why here |
 |---|------|--------|----------|
 | 13 | SSS is dead in procedural scenes | S | **DONE (11.14).** `scene_has_subsurface()` reads `scene->materials`, which only `import.c` ever filled, so a scene building materials in code never ran the SSS pass — `apps/tree` had authored `subsurface` 0.6 / 0.45 and two profiles and never rendered any of it. Fixed at the registry (`scene_sync_materials`), so mask packing, name lookup and material ownership are fixed with it. Moves 26.7% of the tree's frame; no gate covers that, only a look pass. |
-| 14 | B3.1 Shadow-penumbra scattering | M | Recovers what B3 measured it could not do: the cast shadow owns the terminator on a convex character. Cheapest real gain in the character tier, and the PCSS penumbra estimate is already computed. |
-| 15 | B3.2 Skin under an area light | M | Skin gets no SSS at all under an LTC panel today, and a softbox portrait is the canonical skin setup. Shares its shape with the IBL gap. |
+| 14 | B3.1 Shadow-penumbra scattering | M | **REJECTED (11.19):** the premise no longer holds. A cast shadow across skin already scatters — `skin_shadow_fixture.cscn` measures 186,847 px between SSS on and off, hard black ellipses becoming soft red bleeds — because `shadow` rides *inside* `sssDiffuse` and the blur 11.14 repaired carries it. The angular term contributes **0 px** there (`--no-skin-preint` is byte-identical), so Penner's second LUT would be inert for the same reason row 12 records B3 as inert. Reopen only if the pyramid's ceiling binds again or a scene needs this under `--no-sss`. |
+| 15 | B3.2 Skin under an area light | M | **DONE (11.19):** the area branch added its diffuse to `Lo` and skipped the SSS tap, so a softbox — the canonical portrait setup — gave skin nothing at all; SSS on measured byte-identical to `--no-sss`. Tapping `areaDiff` into the skin buffer takes it 0 → 551,295 px. New `skin_area_fixture.cscn` (curvature fixture's geometry and material, light swapped) and a two-arm gate carrying the directional control. The pre-integrated wrap stays out: a rectangle has no single `L`, and that half — shared with the IBL gap — is still open. |
 | 16 | B6 Moment-based OIT | L | **DONE (11.17):** four power moments, **on by default** with OIT, 4.94x closer to the arithmetic than the weighted-blended weight (0.0157 RMS against 0.0773). No golden moves (none of their scenes has an alpha-blend mesh); the raiden baseline moves 0.12%, the hair silhouette. 4.17's ordering defect came with it onto the default path and was **fixed in 11.18** — the catcher simply drew too late; moving it ahead of the transparent pass repaired the unsorted late pass and the particle depth resolve too, with all 18 goldens at 0 px. Not zero infra: a card-stack fixture with an analytic answer, three gates, the first OIT golden. Two plan corrections worth carrying forward — the old `oit_fixture` **cannot discriminate any two OIT schemes**, because weighted-blended is exact whenever every layer shares a colour; and `pbr_frag` has no seventeenth sampler for ANY unit, free or not, since the driver counts declarations. Six or eight moments would need a third fragment output location and GL 4.1 guarantees eight, all spoken for. |
 | 17 | B7 Lens flare / finishing | S/M | |
 | 18 | A6 Moment shadow maps | L | |
-| 19 | B8 Hair | XL | Wants B3.1 and B3.2 settled first — hair shares the shadow-scattering and area-light problems and is far more expensive to iterate on. |
+| 19 | B8 Hair | XL | **Its gate is now clear.** B3.2 landed and B3.1 was rejected on measurement (11.19), so "settle B3.1 and B3.2 first" is discharged. Its transparency half is also largely answered: 11.19 found raiden's groom **already banded across two materials on one atlas** — a MASK core and a BLEND layer sharing `Image_20` — which is the core/tips architecture authored where the alpha band belongs, so the renderer-side dual pass was rejected too. What remains is the shading model itself: `hair_frag.glsl`, the R/TT/TRT lobes, card tangents at import, and a lobe-ordering gate. |
 
 ## Foundations ownership (just-in-time)
 

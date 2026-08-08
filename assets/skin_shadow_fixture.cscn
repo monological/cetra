@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "_comment": [
+    "A CAST shadow falling across skin -- the subject roadmap B3.1 exists for.",
+    "B3 (spec 11.13) owns the ATTACHED terminator, where the surface turns away",
+    "from the light. It has nothing to say about a shadow thrown onto skin by",
+    "something else, and on a convex character the two boundaries coincide, so",
+    "the hard shadow multiply wins and the pre-integrated wrap is invisible.",
+    "",
+    "Reuses dir_shadow_fixture.gltf so the geometry stays the cascade",
+    "instrument's -- two spheres over a ground plane, throwing closed-form",
+    "ellipses (see gen_dir_shadow_fixture.py). Only the ground's material",
+    "changes: it becomes skin, so the ellipse edge crosses a scattering",
+    "surface instead of a diffuse one.",
+    "",
+    "Same sun and camera as dir_shadow_fixture.cscn, so the two scenes stay",
+    "directly comparable and any difference is the material."
+  ],
+  "models": [ { "path": "dir_shadow_fixture.gltf" } ],
+  "materials": {
+    "dir_ground": {
+      "albedo": [0.76, 0.57, 0.48],
+      "roughness": 0.45,
+      "metallic": 0.0,
+      "sss": { "color": [1.0, 0.35, 0.25], "radius": 0.28 },
+      "curvatureScale": 1.0
+    }
+  },
+  "lights": [
+    {
+      "name": "GateSun",
+      "type": "directional",
+      "direction": [0.0, -0.642788, -0.766044],
+      "color": [1.0, 1.0, 1.0],
+      "intensity": 3.0,
+      "cast_shadows": true
+    }
+  ],
+  "camera": { "eye": [6.5, 8.0, 2.5], "target": [0.8, 0.0, -1.0], "fov": 55 },
+  "post": { "tonemap": "neutral", "exposure": 1.0 }
+}
