@@ -1808,7 +1808,7 @@ static void _engine_gui_panel(Engine* engine) {
 
     Scene* scene = get_current_scene(engine);
     if (scene && scene->material_count > 0 &&
-        igCollapsingHeader_TreeNodeFlags("Material", 0)) {
+        igCollapsingHeader_TreeNodeFlags("Materials", 0)) {
         // Like the light section below, this addresses ONE material: a scene
         // carries dozens and a single slider cannot honestly show two values.
         static int mat_sel = 0;
@@ -1827,6 +1827,14 @@ static void _engine_gui_panel(Engine* engine) {
 
         Material* mat = scene->materials[mat_sel];
         if (mat) {
+            // Scope every control below to the selected material. ImGui keys
+            // widgets by label within a window, and these labels are the
+            // material vocabulary rather than strings chosen for this panel --
+            // so without a scope any future property could silently collide
+            // with a control in another section. Keying on the selection also
+            // stops a drag on one material leaving state on the next.
+            igPushID_Int(mat_sel);
+
             // Every row of the shared vocabulary gets a control, rather than a
             // hand-written widget per property: a table that both the scene
             // file and this panel read cannot drift, and a property added for
@@ -1863,6 +1871,7 @@ static void _engine_gui_panel(Engine* engine) {
                 igSetTooltip("Copy this material's non-default values to the clipboard as a "
                              "materials block, ready to paste into a .cscn. Only properties "
                              "that differ from a fresh material are written.");
+            igPopID();
         }
     }
 
