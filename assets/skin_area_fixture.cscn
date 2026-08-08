@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "_comment": [
+    "The canonical skin setup the engine could not do: a softbox on a face.",
+    "Same geometry and same skin material as skin_curvature_fixture.cscn, with",
+    "the directional key swapped for an LTC panel -- which is the whole point.",
+    "LTC integrates the panel analytically and has no single L to feed a",
+    "diffusion profile, so the area branch used to add its diffuse to Lo and",
+    "skip the SSS tap entirely (spec 11.19 / roadmap B3.2).",
+    "",
+    "The assertion this exists for is self-verifying and needs no reference",
+    "image: rendered with SSS on and with --no-sss, a skin material under this",
+    "panel must DIFFER. Before B3.2 the two are byte-identical, which is the bug",
+    "stated as a measurement.",
+    "",
+    "The panel is close and large on purpose -- a softbox subtends a wide solid",
+    "angle, which is the regime where a single representative direction is",
+    "least defensible and where the scatter has the most room to show."
+  ],
+  "models": [
+    { "path": "skin_curvature_fixture.gltf" }
+  ],
+  "materials": {
+    "skin": {
+      "albedo": [0.76, 0.57, 0.48],
+      "roughness": 0.45,
+      "metallic": 0.0,
+      "sss": { "color": [1.0, 0.35, 0.25], "radius": 0.28 },
+      "curvatureScale": 1.0
+    }
+  },
+  "lights": [
+    {
+      "name": "softbox",
+      "type": "area",
+      "position": [3.2, 1.6, 4.0],
+      "direction": [-0.62, -0.16, -0.77],
+      "size": [3.0, 3.0],
+      "color": [1.0, 0.97, 0.93],
+      "intensity": 12.0
+    }
+  ],
+  "camera": { "eye": [-0.2, 0.93, 9.5], "target": [-0.2, 0.93, 0.0], "fov": 40 },
+  "post": { "tonemap": "neutral", "exposure": 1.0 }
+}

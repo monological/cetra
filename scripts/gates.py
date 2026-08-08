@@ -417,6 +417,55 @@ def run_skin_offpath_gate(workdir):
     return fails
 
 
+# Skin under an LTC panel must actually scatter. The bug this pins was total
+# rather than partial: the area branch added its diffuse to Lo and skipped the
+# SSS tap, because LTC integrates the whole rectangle analytically and has no
+# single L to hand a diffusion profile. So a softbox -- the canonical portrait
+# setup, and the one place skin matters most -- produced no subsurface response
+# at all, and SSS on measured byte-identical to --no-sss.
+#
+# Stated as on-vs-off rather than against a reference image, so it needs no
+# golden and cannot drift: the assertion is "the feature does something", and
+# the failure it guards is a hard zero. Measured 551295 px after the fix, 0
+# before; the floor is set an order of magnitude below that because what is
+# being detected is presence, not amount.
+SKIN_AREA_MIN_PX = 50000
+
+
+def run_skin_area_gate(workdir):
+    """Skin lit only by an area panel must respond to SSS being on.
+
+    The directional arm is what stops this passing for the wrong reason. Zero is
+    also what a dead --no-sss flag, a broken .cscn parse or a fixture that lost
+    its subsurface would produce, so a scene the feature already worked in has to
+    differ by the same measurement.
+    """
+    fails = []
+    for label, scene_name in (("area", "skin_area_fixture.cscn"),
+                              ("directional", "skin_curvature_fixture.cscn")):
+        scene = os.path.join(ROOT, "assets", scene_name)
+        if not os.path.exists(scene):
+            print(f"  skin-area    SKIP  (missing {scene_name})")
+            continue
+        base = os.path.join(workdir, f"skinarea_{label}")
+        size = ["-W", "800", "-H", "500"]
+        err = render(scene, base + "_on.ppm", size)
+        err = err or render(scene, base + "_off.ppm", size + ["--no-sss"])
+        if err:
+            print(f"  skin-area    ERROR while rendering {scene_name}")
+            fails.append("skin-area")
+            continue
+        ae, _ = compare(base + "_on.ppm", base + "_off.ppm")
+        ok = ae >= SKIN_AREA_MIN_PX
+        note = ("a panel used to give skin nothing" if label == "area"
+                else "the control: this one always worked")
+        print(f"  skin-area    {'PASS' if ok else 'FAIL'}  {label} light, sss on vs off: "
+              f"{ae} px (want >= {SKIN_AREA_MIN_PX}; {note})")
+        if not ok:
+            fails.append("skin-area")
+    return fails
+
+
 def _skin_falloff_crossing(pix, w, h, project, at, lit, frac=0.05):
     """Angle where the falloff drops through `frac` of the lit reference.
 
@@ -1611,6 +1660,8 @@ def main():
         failures += run_skin_curvature_gate(workdir)
         print("pre-integrated skin (handoff past the scatter ceiling):")
         failures += run_skin_handoff_gate(workdir)
+        print("subsurface under an area light (spec 11.19 / B3.2):")
+        failures += run_skin_area_gate(workdir)
         print("subsurface blur (world width vs frame size):")
         failures += run_sss_invariance_gate(workdir)
         print("subsurface blur (kernel not visible as rings):")

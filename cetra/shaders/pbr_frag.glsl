@@ -1332,6 +1332,29 @@ void main() {
                 // the dimensionless factor, colorIntensity carries the nits.
                 Lo += min(areaDiff + areaSpec, vec3(BRDF_MAX)) *
                       clusterLights[li].colorIntensity.xyz * aShadow;
+
+                // Tap the panel's diffuse into the skin buffer, exactly as the
+                // punctual site does with its Lambert term. Without this a
+                // softbox -- the canonical portrait setup -- produced no
+                // subsurface response whatsoever: SSS on and --no-sss rendered
+                // byte-identical (spec 11.19, roadmap B3.2).
+                //
+                // areaDiff is already the diffuse that went into Lo, so the
+                // postfx fold hdr + blur(D) - D still cancels against the
+                // diffuse actually present. Raw rather than clamp-scaled, which
+                // is the punctual tap's convention -- the clamp above bounds a
+                // specular spike and the diffuse is not what overshoots.
+                //
+                // The pre-integrated wrap (skinPreint) stays out: it substitutes
+                // a widened falloff for dot(N, L), and a rectangle has no single
+                // L. Less of a hole than it sounds -- ff.x already integrates the
+                // clamped cosine over the whole rectangle, so a wide panel
+                // already wraps geometrically. What is still missing is the
+                // widening from subsurface transport, which needs a
+                // representative direction and a solid-angle-aware sigma.
+                if (sss) {
+                    sssDiffuse += areaDiff * clusterLights[li].colorIntensity.xyz * aShadow;
+                }
                 continue;
             }
 
