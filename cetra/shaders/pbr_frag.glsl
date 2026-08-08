@@ -35,8 +35,15 @@ layout(location = 5) out vec4 AccumOut;
 layout(location = 6) out vec4 RevealageOut;
 // Ambient specular, split out for the post-chain occlusion composite (spec
 // 11.4). Only lands when attachment 7 is enabled (split spec-occ); otherwise
-// discarded. Alpha mirrors FragColor's for the same A2C reason NormalOut's
-// does: coverage derives from the LAST active color output's alpha.
+// discarded.
+//
+// Its alpha is inert, and deliberately still mirrors FragColor's. The A2C rule
+// is that coverage comes from the last active output that HAS an alpha channel,
+// and attachment 7 is R11F_G11F_B10F -- three channels, so it is skipped and
+// coverage falls to NormalOut. Measured: forcing this alpha to 1.0 moves 0
+// pixels on a masked-hair frame where corrupting its RGB moves 88%, so the
+// attachment is live and the alpha is not. Kept mirroring anyway, because the
+// day the format gains an alpha channel this silently becomes load-bearing.
 layout(location = 7) out vec4 SpecOut;
 
 uniform mat4 view;
@@ -1834,7 +1841,16 @@ void main() {
     // the buffer unwritten is worse (stale normals of whatever drew behind
     // the hair, under the hair's depth). Their alpha must mirror FragColor's:
     // Apple's driver derives A2C coverage from the last color output's alpha,
-    // not output 0, and any other value reshapes the card cutouts.
+    // not output 0, and any other value reshapes the card cutouts. Measured --
+    // forcing this alpha to 1.0 moves 8580 px of masked hair.
+    //
+    // "Last" means last output carrying an alpha CHANNEL: attachment 7 sits
+    // above this one and its alpha is inert (see SpecOut). The hazard that
+    // leaves is attachment 4, which does have alpha and holds an SSS profile
+    // index -- if it ever binds alongside masked geometry it would take the
+    // coverage this write is providing. No scene has both today, so it is
+    // predicted rather than observed, and confirming it needs a fixture
+    // carrying subsurface and alpha-mask at once.
     NormalOut = alphaMasked > 0
                     ? vec4(0.0, 0.0, 0.0, finalOpacity)
                     : vec4(normalize(mat3(view) * N), 0.0);
