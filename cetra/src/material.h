@@ -198,7 +198,8 @@ typedef enum MaterialParamType {
 // it lives, and the range an editor should offer.
 typedef struct MaterialParam {
     const char* key;
-    size_t offset; // into Material
+    const char* group; // editor grouping; rows sharing a name are shown together
+    size_t offset;     // into Material
     MaterialParamType type;
     float min, max; // editor range only; an authored value is never clamped to it
 } MaterialParam;

@@ -1839,8 +1839,23 @@ static void _engine_gui_panel(Engine* engine) {
             // hand-written widget per property: a table that both the scene
             // file and this panel read cannot drift, and a property added for
             // one of them turns up in the other for free.
+            //
+            // Walked group by group, in table order, so a property only has to
+            // name its group to land in the right place. The first group is the
+            // one every surface has and opens by default; the rest describe
+            // features a material opts into, and stay shut so the panel is a
+            // handful of controls rather than all thirty at once.
+            const char* shown = NULL;
+            bool open = false;
             for (size_t i = 0; i < MATERIAL_PARAM_COUNT; i++) {
                 const MaterialParam* p = &MATERIAL_PARAMS[i];
+                if (!shown || strcmp(shown, p->group) != 0) {
+                    shown = p->group;
+                    open = igCollapsingHeader_TreeNodeFlags(
+                        p->group, i == 0 ? ImGuiTreeNodeFlags_DefaultOpen : 0);
+                }
+                if (!open)
+                    continue;
                 float v[3] = {0};
                 material_param_get(mat, p, v);
                 bool changed = false;

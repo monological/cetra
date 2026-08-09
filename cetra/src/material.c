@@ -13,38 +13,51 @@
 
 #define MP(field, type, lo, hi) offsetof(Material, field), type, lo, hi
 
+// Group order here is the order an editor shows them in, and it is deliberate:
+// the handful of properties that describe every surface come first, and the
+// ones that only matter to a material that opted into a feature follow. A flat
+// list of all of them is technically complete and useless to tune against.
 const MaterialParam MATERIAL_PARAMS[] = {
-    {"albedo", MP(albedo, MATERIAL_PARAM_VEC3, 0.0f, 1.0f)},
-    {"roughness", MP(roughness, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
-    {"metallic", MP(metallic, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
-    {"ao", MP(ao, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
-    {"opacity", MP(opacity, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
-    {"emissive", MP(emissive, MATERIAL_PARAM_VEC3, 0.0f, 1.0f)},
-    {"emissiveStrength", MP(emissive_strength, MATERIAL_PARAM_FLOAT, 0.0f, 20.0f)},
-    {"normalScale", MP(normalScale, MATERIAL_PARAM_FLOAT, 0.0f, 4.0f)},
-    {"aoStrength", MP(aoStrength, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
-    {"ior", MP(ior, MATERIAL_PARAM_FLOAT, 1.0f, 3.0f)},
-    {"transmission", MP(transmission, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
-    {"thickness", MP(thickness, MATERIAL_PARAM_FLOAT, 0.0f, 5.0f)},
-    {"filmThickness", MP(filmThickness, MATERIAL_PARAM_FLOAT, 0.0f, 1000.0f)},
-    {"clearcoat", MP(clearcoat, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
-    {"clearcoatRoughness", MP(clearcoat_roughness, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
+    {"albedo", "Base", MP(albedo, MATERIAL_PARAM_VEC3, 0.0f, 1.0f)},
+    {"roughness", "Base", MP(roughness, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
+    {"metallic", "Base", MP(metallic, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
+    {"ao", "Base", MP(ao, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
+    {"opacity", "Base", MP(opacity, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
+
+    {"hairShading", "Hair", MP(hair_shading, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
+    {"hairRoughness", "Hair", MP(hair_roughness, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
+    {"hairShift", "Hair", MP(hair_shift, MATERIAL_PARAM_FLOAT, 0.0f, 0.3f)},
+    {"hairTint", "Hair", MP(hair_tint, MATERIAL_PARAM_VEC3, 0.0f, 1.0f)},
+    {"hairBacklit", "Hair", MP(hair_backlit, MATERIAL_PARAM_FLOAT, 0.0f, 2.0f)},
+    {"hairJitter", "Hair", MP(hair_jitter, MATERIAL_PARAM_FLOAT, 0.0f, 4.0f)},
+
+    {"emissive", "Emissive", MP(emissive, MATERIAL_PARAM_VEC3, 0.0f, 1.0f)},
+    {"emissiveStrength", "Emissive", MP(emissive_strength, MATERIAL_PARAM_FLOAT, 0.0f, 20.0f)},
+
+    {"clearcoat", "Coat and sheen", MP(clearcoat, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
+    {"clearcoatRoughness", "Coat and sheen",
+     MP(clearcoat_roughness, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
+    {"sheenColor", "Coat and sheen", MP(sheen_color_factor, MATERIAL_PARAM_VEC3, 0.0f, 1.0f)},
+    {"sheenRoughness", "Coat and sheen",
+     MP(sheen_roughness_factor, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
     // -1 means the KHR extension was absent, which is NOT the same as 0 (an
     // explicit zero weight), so the range has to reach below zero to express it.
-    {"specularFactor", MP(specular_factor, MATERIAL_PARAM_FLOAT, -1.0f, 2.0f)},
-    {"specularColor", MP(specular_color_factor, MATERIAL_PARAM_VEC3, 0.0f, 1.0f)},
-    {"sheenColor", MP(sheen_color_factor, MATERIAL_PARAM_VEC3, 0.0f, 1.0f)},
-    {"sheenRoughness", MP(sheen_roughness_factor, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
-    {"parallaxScale", MP(parallax_scale, MATERIAL_PARAM_FLOAT, 0.0f, 0.2f)},
-    {"curvatureScale", MP(curvature_scale, MATERIAL_PARAM_FLOAT, 0.0f, 2.0f)},
-    {"windResponse", MP(wind_response, MATERIAL_PARAM_FLOAT, 0.0f, 2.0f)},
-    {"windMode", MP(wind_mode, MATERIAL_PARAM_INT, 0.0f, 2.0f)},
-    {"hairShading", MP(hair_shading, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
-    {"hairRoughness", MP(hair_roughness, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
-    {"hairShift", MP(hair_shift, MATERIAL_PARAM_FLOAT, 0.0f, 0.3f)},
-    {"hairTint", MP(hair_tint, MATERIAL_PARAM_VEC3, 0.0f, 1.0f)},
-    {"hairBacklit", MP(hair_backlit, MATERIAL_PARAM_FLOAT, 0.0f, 2.0f)},
-    {"hairJitter", MP(hair_jitter, MATERIAL_PARAM_FLOAT, 0.0f, 4.0f)},
+    {"specularFactor", "Coat and sheen", MP(specular_factor, MATERIAL_PARAM_FLOAT, -1.0f, 2.0f)},
+    {"specularColor", "Coat and sheen",
+     MP(specular_color_factor, MATERIAL_PARAM_VEC3, 0.0f, 1.0f)},
+
+    {"ior", "Transmission", MP(ior, MATERIAL_PARAM_FLOAT, 1.0f, 3.0f)},
+    {"transmission", "Transmission", MP(transmission, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
+    {"thickness", "Transmission", MP(thickness, MATERIAL_PARAM_FLOAT, 0.0f, 5.0f)},
+    {"filmThickness", "Transmission", MP(filmThickness, MATERIAL_PARAM_FLOAT, 0.0f, 1000.0f)},
+
+    {"curvatureScale", "Skin", MP(curvature_scale, MATERIAL_PARAM_FLOAT, 0.0f, 2.0f)},
+
+    {"normalScale", "Maps and wind", MP(normalScale, MATERIAL_PARAM_FLOAT, 0.0f, 4.0f)},
+    {"aoStrength", "Maps and wind", MP(aoStrength, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
+    {"parallaxScale", "Maps and wind", MP(parallax_scale, MATERIAL_PARAM_FLOAT, 0.0f, 0.2f)},
+    {"windResponse", "Maps and wind", MP(wind_response, MATERIAL_PARAM_FLOAT, 0.0f, 2.0f)},
+    {"windMode", "Maps and wind", MP(wind_mode, MATERIAL_PARAM_INT, 0.0f, 2.0f)},
 };
 
 #undef MP
