@@ -57,7 +57,7 @@ uniform int vignetteEnabled;
 uniform float vignetteStrength;
 uniform float vignetteRadius;
 uniform int caEnabled;    // Chromatic aberration; separates channels radially
-uniform float caStrength; // UV shift at the corner, before the r^2 falloff
+uniform float caStrength; // Channel separation at the CORNER, in pixels
 uniform int grainEnabled;
 uniform float grainStrength;
 uniform float grainSeed; // Per-frame, deterministic across equal --frames runs
@@ -341,7 +341,15 @@ void main()
     vec3 sceneRgb;
     if (caEnabled == 1) {
         vec2 toCentre = TexCoords - 0.5;
-        vec2 shift = toCentre * (caStrength * dot(toCentre, toCentre));
+        // r is 0 at the centre and 1 at a corner (0.7071 is the centre-to-corner
+        // UV distance, the same constant the vignette uses).
+        float r = length(toCentre) / 0.7071;
+        // caStrength is in PIXELS at the corner. Denominated that way because
+        // the useful band is one to a few pixels, and a raw UV offset put the
+        // sensible values three decimal places down where every slider range
+        // and default was wrong by two orders of magnitude.
+        vec2 dir = toCentre / max(length(toCentre), 1e-5);
+        vec2 shift = dir * (caStrength * r * r) * texelSize;
         sceneRgb = vec3(texture(hdrTex, TexCoords + shift).r, texture(hdrTex, TexCoords).g,
                         texture(hdrTex, TexCoords - shift).b);
     } else {

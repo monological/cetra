@@ -631,7 +631,7 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     fx->vignette_strength = 0.25f;
     fx->vignette_radius = 0.6f;
     fx->ca_enabled = false;
-    fx->ca_strength = 0.35f;
+    fx->ca_strength = 3.0f; // pixels at the corner
     fx->grain_enabled = false;
     fx->grain_strength = 0.015f;
     fx->frame_index = 0;

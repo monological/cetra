@@ -743,7 +743,7 @@ static void _engine_gui_panel(Engine* engine) {
         // earlier in the shader -- a lens effect, so it acts on the light
         // before the sensor rather than in the finishing block these sit in.
         _begin_effect_group("Chromatic Aberration", &fx->ca_enabled);
-        igSliderFloat("CA Amount", &fx->ca_strength, 0.0f, 2.0f, "%.2f", 0);
+        igSliderFloat("CA Pixels", &fx->ca_strength, 0.0f, 40.0f, "%.1f px", 0);
         _end_effect_group();
 
         _begin_effect_group("Sharpen", &fx->sharpen_enabled);
