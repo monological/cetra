@@ -2351,17 +2351,36 @@ static void _engine_gui_panel(Engine* engine) {
         }
     }
 
+    // Read while this window is still current, to place the material editor
+    // beside it rather than on top of it.
+    ImVec2 panel_pos = igGetWindowPos();
+    ImVec2 panel_size = igGetWindowSize();
+
     igEnd();
 
     // A sibling window, so it opens outside the main panel rather than pushing
-    // everything below it off the bottom. Raised after igEnd() because a
+    // everything after it off the bottom. Raised after igEnd() because a
     // material can disappear under it -- a scene swap leaves the index stale,
     // and the bounds check has to run against whatever scene is current now.
     if (mat_editor_open && scene && scene->material_count > 0) {
         if (mat_sel < 0 || mat_sel >= (int)scene->material_count)
             mat_sel = 0;
-        if (scene->materials[mat_sel])
+        if (scene->materials[mat_sel]) {
+            // Both FirstUseEver, so this is a starting point and never fights a
+            // window the user has since moved or resized (or one restored from
+            // imgui.ini).
+            //
+            // The size is not cosmetic. A window with no size auto-fits its
+            // contents, but a slider's width is derived FROM the window width,
+            // so the two settle on something far too narrow and every label
+            // clips -- the property names are the widest thing here and they
+            // sit to the right of each control. 470 clears the longest of them
+            // at ImGui's default 65/35 split.
+            igSetNextWindowPos((ImVec2){panel_pos.x + panel_size.x + 12.0f, panel_pos.y},
+                               ImGuiCond_FirstUseEver, (ImVec2){0, 0});
+            igSetNextWindowSize((ImVec2){470.0f, 560.0f}, ImGuiCond_FirstUseEver);
             _engine_gui_material_window(scene->materials[mat_sel], mat_sel, &mat_editor_open);
+        }
     }
 }
 
