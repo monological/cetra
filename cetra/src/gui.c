@@ -519,9 +519,34 @@ static void _engine_gui_panel(Engine* engine) {
             igSliderInt("Cascades", &ss->cascade_count, 1, SHADOW_CASCADES, "%d",
                         ImGuiSliderFlags_AlwaysClamp);
             igCheckbox("Cascade Tint", &ss->csm_debug);
+
+            _begin_effect_group("Moment Shadows", &ss->msm_enabled);
+            // A combo, not a slider: each distinct value reallocates two array
+            // textures, and a continuous drag would rebuild them every frame it
+            // moved. The sizes are the ones worth comparing -- edge quality is
+            // visibly short of PCF at 1024 and matches it at 2048.
+            // Per LAYER, since the layer count is the caster count times the
+            // cascade count and varies by scene; the allocation logs the total.
+            static const char* const msm_sizes[] = {"1024 (16 MB/layer)", "2048 (67 MB/layer)",
+                                                    "4096 (268 MB/layer)"};
+            int msm_size_idx = ss->msm_size >= 4096 ? 2 : (ss->msm_size >= 2048 ? 1 : 0);
+            if (igCombo_Str_arr("Moment Size", &msm_size_idx, msm_sizes, 3, -1))
+                ss->msm_size = 1024 << msm_size_idx;
+            // Blur trades thin-caster occlusion for softness and the exchange
+            // rate is steep: on the gate's 0.3-wide pillar band, 0.25 already
+            // lets 9% of the light through and 1.0 lets 42% (spec 11.22).
+            igSliderFloat("Moment Blur", &ss->msm_blur, 0.0f, 1.0f, "%.2f", 0);
+            igSliderFloat("Moment Bleed", &ss->msm_bleed, 0.0f, 0.5f, "%.2f", 0);
+            _end_effect_group();
+
+            // Inert while moments are live: the cascade lookup branches on
+            // msmEnabled before it ever reads pcssEnabled, so leaving this
+            // interactive would show a checkbox that does nothing.
+            igBeginDisabled(ss->msm_enabled);
             _begin_effect_group("PCSS", &ss->pcss_enabled);
             igSliderFloat("Shadow Softness", &ss->pcss_softness, 0.0f, 4.0f, "%.2f", 0);
             _end_effect_group();
+            igEndDisabled();
             _end_effect_group();
         }
 
