@@ -112,3 +112,23 @@ magick compare -metric PAE a.png b.png null:
   Measured 1/255 PAE (last-bit).
 
 Regenerate the fixture with `python3 assets/gen_area_light_fixture.py`.
+
+## flare_fixture_golden.png
+
+```
+./out/bin/render -m assets/flare_fixture.cscn -x -f 30 -W 800 -H 500 \
+    --no-auto-exposure -E 1.0 --flare 0.15 --chromatic-aberration 12
+```
+
+The one golden where the lens flare and chromatic aberration are LIVE -- every
+other golden asserts they are dormant, so this is the only image that moves if
+either path changes.
+
+What to look for: the emitter up and to the left, its ghosts on the OPPOSITE
+side of frame centre, and colour fringing on the two dim marks that is visibly
+stronger on the corner one than the inner one -- that difference is the r^2
+falloff, and equal fringing would mean it went linear.
+
+Ghosts are square here because the emitter is a quad, and a mid mip softens a
+ghost's edge without changing its shape. That is the fixture, not a defect;
+`run_flare_gate` is what asserts the behaviour.

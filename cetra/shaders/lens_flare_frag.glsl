@@ -31,9 +31,13 @@ uniform float chroma;   // Per-channel separation in PIXELS at the frame edge
 uniform vec2 texelSize; // Display-pixel size, so chroma can be denominated in pixels
 uniform int ghostCount;
 // Which pyramid level to read. Explicitly a MID mip, not level 0: an internal
-// reflection is badly out of focus, so a ghost is a soft blob. Sampling the
-// sharp level reproduces the source's outline instead -- a square emitter comes
-// back as a square, which reads as a copy-paste rather than an artifact.
+// reflection is badly out of focus, so a ghost wants soft edges.
+//
+// It buys the EDGE, not the shape. Blurring a square yields a soft square until
+// the blur exceeds the source, so a square emitter gives square ghosts at every
+// level -- visible in flare_fixture_golden.png, whose emitter is a quad. Real
+// sources are small and round and this does not come up; do not read a square
+// ghost there as this level being wrong.
 uniform float sourceLod;
 
 // Ghosts are tinted by how far off-axis they land: light that reflects at a
