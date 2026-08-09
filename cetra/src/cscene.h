@@ -82,15 +82,16 @@ typedef struct CSceneLightOverride {
     float intensity;
 } CSceneLightOverride;
 
-#define CSCENE_MAX_MATERIAL_PARAMS 24
+// Sized to hold the whole material vocabulary with room to grow. It is not an
+// arbitrary bound: exceeding it silently drops the extra keys, so a cap under
+// the vocabulary's size turns "you used most of it" into "extras ignored".
+#define CSCENE_MAX_MATERIAL_PARAMS 48
 #define CSCENE_MAX_PARAM_KEY       24
 
 // One authored key from a material override block. The parser deliberately does
 // NOT know what any key means -- it records the name and the number(s) and
-// nothing else. Resolving a name to a Material field is application policy and
-// lives in one table in cscene_apply.c, which is what keeps this header free of
-// material.h and makes a new parameter one table row rather than an edit in
-// three files.
+// nothing else, which is what keeps this header free of material.h and makes a
+// new parameter one row in the vocabulary rather than an edit here.
 typedef struct CSceneMaterialParam {
     char key[CSCENE_MAX_PARAM_KEY];
     float value[3]; // scalars occupy value[0]

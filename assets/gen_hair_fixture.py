@@ -197,11 +197,14 @@ BASE_HAIR = {"hairShading": 1.0, "hairRoughness": 0.30, "hairShift": 0.05,
              "hairMap": "hair_fixture_flow.png"}
 
 
-def write_cscn(name, comment, drop=(), **hair):
+def write_cscn(name, comment, **hair):
+    """Overrides on BASE_HAIR; a value of None removes the key instead."""
     material = dict(BASE_HAIR)
-    material.update(hair)
-    for key in drop:
-        material.pop(key, None)
+    for key, value in hair.items():
+        if value is None:
+            material.pop(key, None)
+        else:
+            material[key] = value
     doc = {
         "version": 1,
         "_comment": comment,
@@ -234,13 +237,9 @@ if __name__ == "__main__":
                "makes the reference arm's split attributable to the map rather "
                "than to the lobes, and it is the shape the coordinate hash this "
                "replaced would have measured as.",
-               drop=("hairMap",))
+               hairMap=None)
     write_cscn("hair_fixture_nojitter.cscn",
                "Strand identity disabled. Isolates what the per-strand shift "
                "offset contributes from what the orientation contributes.",
                hairJitter=0.0)
-    write_cscn("hair_fixture_noshift.cscn",
-               "Cuticle tilt zeroed, which collapses R and TRT onto each other. "
-               "Separates the two-lobe behaviour from the single-lobe one.",
-               hairShift=0.0)
     print("wrote hair_fixture atlas, flow map, gltf and 4 scene files")

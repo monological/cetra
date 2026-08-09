@@ -1656,15 +1656,53 @@ static void _light_gui_label(char* out, size_t out_size, const Light* light, int
 // Combo entry for one material. Same reason the index leads as for lights:
 // ImGui keys widgets by label, and glTF happily ships two materials called
 // "Material.001".
-static const char* _material_gui_label(const Material* material, int index) {
-    static char out[128];
+static void _material_gui_label(char* out, size_t out_size, const Material* material, int index) {
     if (!material)
-        snprintf(out, sizeof(out), "%d: <empty>", index);
+        snprintf(out, out_size, "%d: <empty>", index);
     else if (material->name && material->name[0])
-        snprintf(out, sizeof(out), "%d: %s", index, material->name);
+        snprintf(out, out_size, "%d: %s", index, material->name);
     else
-        snprintf(out, sizeof(out), "%d: <unnamed>", index);
-    return out;
+        snprintf(out, out_size, "%d: <unnamed>", index);
+}
+
+// One control for one row of the shared material vocabulary. Every row gets one
+// rather than a hand-written widget per property, so a property added for the
+// scene file turns up here for free and the two cannot disagree about what
+// exists.
+static void _material_param_control(Material* material, const MaterialParam* p) {
+    // A texture is read-only here: the panel has no file picker, and showing
+    // whether one is bound is more use than a control that cannot bind it.
+    if (p->type == MATERIAL_PARAM_TEXTURE) {
+        igTextDisabled("%s: %s", p->key,
+                       material_param_texture(material, p) ? "bound" : "none (author in a .cscn)");
+        return;
+    }
+
+    float v[3] = {0};
+    material_param_get(material, p, v);
+    bool changed = false;
+    switch (p->type) {
+    case MATERIAL_PARAM_COLOR:
+        changed = igColorEdit3(p->key, v, ImGuiColorEditFlags_Float);
+        break;
+    case MATERIAL_PARAM_FLOAT:
+        changed = igSliderFloat(p->key, v, p->min, p->max, "%.3f", 0);
+        break;
+    case MATERIAL_PARAM_INT: {
+        // Named where the table names them: dragging an integer to reach "leaf"
+        // asks the reader to know a numbering nothing shows them.
+        int iv = (int)v[0];
+        changed = p->enum_labels
+                      ? igCombo_Str_arr(p->key, &iv, p->enum_labels, p->enum_count, -1)
+                      : igSliderInt(p->key, &iv, (int)p->min, (int)p->max, "%d", 0);
+        v[0] = (float)iv;
+        break;
+    }
+    case MATERIAL_PARAM_TEXTURE:
+        break; // handled above
+    }
+    if (changed)
+        material_param_set(material, p, v);
 }
 
 // The material property editor, in its own window so it can be moved, resized
@@ -1674,8 +1712,9 @@ static void _engine_gui_material_window(Material* material, int index, bool* ope
     // "###" pins the window ID while the visible title tracks the selection.
     // Without it a rename or a different material would read as a new window
     // and lose the position and size the user put it in.
-    char title[160];
-    snprintf(title, sizeof(title), "%s###material_editor", _material_gui_label(material, index));
+    char label[128], title[160];
+    _material_gui_label(label, sizeof(label), material, index);
+    snprintf(title, sizeof(title), "%s###material_editor", label);
     if (!igBegin(title, open, 0)) {
         igEnd();
         return;
@@ -1697,47 +1736,23 @@ static void _engine_gui_material_window(Material* material, int index, bool* ope
     // group to land in the right place. The first group is the one every
     // surface has and opens by default; the rest describe features a material
     // opts into, and stay shut.
-    const char* shown = NULL;
-    bool group_open = false;
-    for (size_t i = 0; i < MATERIAL_PARAM_COUNT; i++) {
-        const MaterialParam* p = &MATERIAL_PARAMS[i];
-        if (!shown || strcmp(shown, p->group) != 0) {
+    // Consumed a group at a time so the indent push and pop are lexically
+    // paired: a loop that carried the open state across iterations would leak an
+    // indent level into every panel below the moment someone added an early exit
+    // to the row body.
+    for (size_t i = 0; i < MATERIAL_PARAM_COUNT;) {
+        const char* group = MATERIAL_PARAMS[i].group;
+        bool group_open = igCollapsingHeader_TreeNodeFlags(
+            group, i == 0 ? ImGuiTreeNodeFlags_DefaultOpen : 0);
+        if (group_open)
+            igIndent(0.0f);
+        for (; i < MATERIAL_PARAM_COUNT && strcmp(MATERIAL_PARAMS[i].group, group) == 0; i++) {
             if (group_open)
-                igUnindent(0.0f); // close the previous group's step
-            shown = p->group;
-            group_open = igCollapsingHeader_TreeNodeFlags(
-                p->group, i == 0 ? ImGuiTreeNodeFlags_DefaultOpen : 0);
-            if (group_open)
-                igIndent(0.0f);
+                _material_param_control(material, &MATERIAL_PARAMS[i]);
         }
-        if (!group_open)
-            continue;
-        float v[3] = {0};
-        material_param_get(material, p, v);
-        bool changed = false;
-        switch (p->type) {
-        case MATERIAL_PARAM_VEC3:
-            changed = igColorEdit3(p->key, v, ImGuiColorEditFlags_Float);
-            break;
-        case MATERIAL_PARAM_FLOAT:
-            changed = igSliderFloat(p->key, v, p->min, p->max, "%.3f", 0);
-            break;
-        case MATERIAL_PARAM_INT: {
-            // An enum where the table names one, not a quantity: dragging a
-            // slider to reach "leaf" asks the user to know the numbering.
-            int iv = (int)v[0];
-            changed = p->enum_labels
-                          ? igCombo_Str(p->key, &iv, p->enum_labels, 0)
-                          : igSliderInt(p->key, &iv, (int)p->min, (int)p->max, "%d", 0);
-            v[0] = (float)iv;
-            break;
-        }
-        }
-        if (changed)
-            material_param_set(material, p, v);
+        if (group_open)
+            igUnindent(0.0f);
     }
-    if (group_open)
-        igUnindent(0.0f); // the last group's step, if it ended open
 
     igPopID();
     igEnd();
@@ -1836,6 +1851,11 @@ static void _engine_gui_panel(Engine* engine) {
     static int mat_sel = 0;
     static bool mat_editor_open = false;
     Scene* scene = get_current_scene(engine);
+    // Clamped here rather than at each reader: a scene swap can leave the index
+    // past the new count, and the section below only runs when its header is
+    // expanded while the editor window reads it either way.
+    if (!scene || mat_sel >= (int)scene->material_count)
+        mat_sel = 0;
 
     if (scene && scene->light_count > 0 &&
         igCollapsingHeader_TreeNodeFlags("Lighting", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -1941,12 +1961,13 @@ static void _engine_gui_panel(Engine* engine) {
 
         // Like the light section above, this addresses ONE material: a scene
         // carries dozens and a single slider cannot honestly show two values.
-        if (mat_sel < 0 || mat_sel >= (int)scene->material_count)
-            mat_sel = 0; // a scene swap can leave the index past the new count
-        if (igBeginCombo("Material", _material_gui_label(scene->materials[mat_sel], mat_sel), 0)) {
+        char label[128];
+        _material_gui_label(label, sizeof(label), scene->materials[mat_sel], mat_sel);
+        if (igBeginCombo("Material", label, 0)) {
             for (size_t i = 0; i < scene->material_count; i++) {
-                if (igSelectable_Bool(_material_gui_label(scene->materials[i], (int)i),
-                                      (int)i == mat_sel, 0, (ImVec2){0, 0}))
+                char item[128];
+                _material_gui_label(item, sizeof(item), scene->materials[i], (int)i);
+                if (igSelectable_Bool(item, (int)i == mat_sel, 0, (ImVec2){0, 0}))
                     mat_sel = (int)i;
                 if ((int)i == mat_sel)
                     igSetItemDefaultFocus();
@@ -2304,8 +2325,6 @@ static void _engine_gui_panel(Engine* engine) {
     // material can disappear under it -- a scene swap leaves the index stale,
     // and the bounds check has to run against whatever scene is current now.
     if (mat_editor_open && scene && scene->material_count > 0) {
-        if (mat_sel < 0 || mat_sel >= (int)scene->material_count)
-            mat_sel = 0;
         if (scene->materials[mat_sel]) {
             // Both FirstUseEver, so this is a starting point and never fights a
             // window the user has since moved or resized (or one restored from

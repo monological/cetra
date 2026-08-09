@@ -151,6 +151,12 @@ def _sample(field, py, px):
     return ndimage.map_coordinates(field, np.stack([py, px]), order=1, mode="nearest")
 
 
+def _decode(ux, uy):
+    """Doubled-angle vector -> unit direction. The GLSL side halves the same way."""
+    angle = 0.5 * np.arctan2(uy, ux)
+    return np.cos(angle), np.sin(angle)
+
+
 def strand_id(ux, uy, steps, step_len, strand_px, seed):
     """LIC: white noise smeared along the strands, so it is constant per strand."""
     height, width = ux.shape
@@ -164,27 +170,28 @@ def strand_id(ux, uy, steps, step_len, strand_px, seed):
 
     yy, xx = np.mgrid[0:height, 0:width].astype(np.float64)
     acc = noise.copy()
-    count = np.ones_like(noise)
 
     # Walk both ways from every texel at once. Orientation has no sign, so each
     # step re-aligns the new direction with the one being followed; without that
     # the walk reverses on itself wherever the decoded angle wraps.
+    #
+    # Every walk runs the full length -- the clip keeps them alive at the border
+    # rather than terminating them -- so the sample count is the same constant
+    # everywhere and does not need tracking per texel.
+    dir_x, dir_y = _decode(ux, uy)
     for direction in (1.0, -1.0):
         px, py = xx.copy(), yy.copy()
-        cx = np.cos(0.5 * np.arctan2(uy, ux)) * direction
-        cy = np.sin(0.5 * np.arctan2(uy, ux)) * direction
+        cx, cy = dir_x * direction, dir_y * direction
         for _ in range(steps):
             px = np.clip(px + cx * step_len, 0.0, width - 1.0)
             py = np.clip(py + cy * step_len, 0.0, height - 1.0)
             acc += _sample(noise, py, px)
-            count += 1.0
-            angle = 0.5 * np.arctan2(_sample(uy, py, px), _sample(ux, py, px))
-            nx, ny = np.cos(angle), np.sin(angle)
+            nx, ny = _decode(_sample(ux, py, px), _sample(uy, py, px))
             sign = np.sign(cx * nx + cy * ny)
             sign[sign == 0.0] = 1.0
             cx, cy = nx * sign, ny * sign
 
-    return acc / count
+    return acc / (1.0 + 2.0 * steps)
 
 
 def stretch(values, mask):

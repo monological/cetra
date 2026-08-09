@@ -15,11 +15,11 @@ struct Engine;
 // layer. Each material records a per-slot layer index (Material *_layer;
 // -1 = absent, shader falls back to the scalar factor), resolved at build time.
 //
-// Mostly scalar masks, but not by definition: the hair layer is a VECTOR field
-// (.rg an orientation, .b a strand identity). That is why the orientation is
-// stored as a doubled angle -- step 4 resamples through a linear filter and
-// step 5 mips, and only the doubled-angle form averages correctly. Anything
-// added here has to survive those two steps.
+// Mostly scalar masks, but not by definition -- a layer may carry a vector
+// field. Whatever it carries must AVERAGE meaningfully, because every layer is
+// resampled through a linear filter and then mipped: a quantity with a sign
+// ambiguity has to be encoded in a form that survives being averaged with its
+// own negation, or it vanishes exactly where the surface is minified.
 //
 // Layers share one size, so masks smaller than the canonical size are
 // upsampled (a mask already AT the canonical size copies 1:1, byte-exact);

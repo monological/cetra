@@ -38,12 +38,15 @@
 // would cancel them. Coherence arrives as the vector's LENGTH, so a
 // neighbourhood of disagreeing strands reports low confidence by itself and
 // the caller can fall back rather than trust an average of nothing.
+// Halving puts the angle in [-PI/2, PI/2], so the returned direction always has
+// a non-negative first component -- it is the representative that lies in the
+// +T half-plane, and a caller inherits the card tangent's sign for free.
 vec4 hairStrandData(sampler2DArray masks, vec2 uv, int layer) {
-    vec2 doubled = texture(masks, vec3(uv, float(layer))).rg * 2.0 - 1.0;
+    vec3 texel = texture(masks, vec3(uv, float(layer))).rgb;
+    vec2 doubled = texel.rg * 2.0 - 1.0;
     float coherence = min(length(doubled), 1.0);
     float angle = 0.5 * atan(doubled.y, doubled.x);
-    return vec4(cos(angle), sin(angle), coherence,
-                texture(masks, vec3(uv, float(layer))).b);
+    return vec4(cos(angle), sin(angle), coherence, texel.b);
 }
 
 // Kajiya-Kay: the anisotropic response of a fibre running along T. sin of the
@@ -61,15 +64,15 @@ vec4 hairStrandData(sampler2DArray masks, vec2 uv, int layer) {
 // in the sine of the strand angle rather than the half-vector angle, so the
 // constant carries over; it is an approximation to the true fibre integral, not
 // a derivation from it.
-float hairStrandSpec(vec3 T, vec3 L, vec3 V, float exponent) {
+// `TdotV`, `sinTV` and `norm` come from the frame rather than being recomputed:
+// none of the three depends on the light, and this runs once per light per
+// pixel on geometry that overdraws heavily.
+float hairStrandSpec(vec3 T, vec3 L, float TdotV, float sinTV, float exponent, float norm) {
     float TdotL = dot(T, L);
-    float TdotV = dot(T, V);
     float sinTL = sqrt(max(1.0 - TdotL * TdotL, 0.0));
-    float sinTV = sqrt(max(1.0 - TdotV * TdotV, 0.0));
     // The Kajiya-Kay bracket, clamped: negative means the lobe is behind the
     // strand for this pair and contributes nothing.
-    float lobe = pow(max(sinTL * sinTV - TdotL * TdotV, 0.0), exponent);
-    return lobe * (exponent + 2.0) / (8.0 * PI);
+    return pow(max(sinTL * sinTV - TdotL * TdotV, 0.0), exponent) * norm;
 }
 
 // The cuticle tilt. Shifting the tangent along the NORMAL is what moves a lobe
@@ -103,33 +106,58 @@ float hairLobeHalfWidth(float roughness) {
     return acos(pow(0.5, 1.0 / hairExponent(roughness)));
 }
 
+// Everything about a hair fragment that does not depend on which light is being
+// integrated: the three lobes' shifted tangents, their exponents, and the
+// view-side half of the Kajiya-Kay bracket.
+//
+// This exists because the surrounding loop runs per light per pixel and hair
+// cards overdraw heavily, so recomputing two normalize() and three sqrt per
+// light is the difference the file already pays to avoid elsewhere (fragCascade
+// and the LTC lookups are hoisted for the same reason).
+struct HairFrame {
+    vec3 Tr, Ttrt, Ttt;    // R, TRT and TT tangents, cuticle shift applied
+    vec3 TdotV;            // per lobe, in the same order
+    vec3 sinTV;            //  "
+    vec3 exponent;         //  "
+    vec3 norm;             // Blinn-Phong normalisation per lobe
+};
+
+HairFrame hairMakeFrame(vec3 T, vec3 N, vec3 V, float roughness, float shift) {
+    float e = hairExponent(roughness);
+    HairFrame f;
+    // R sits toward the root and TRT toward the tip -- opposite shifts along the
+    // normal. TT is unshifted; it comes through the fibre rather than off it.
+    f.Tr = hairShiftTangent(T, N, -shift);
+    f.Ttrt = hairShiftTangent(T, N, shift * 2.0);
+    f.Ttt = T;
+    // TRT is broader than R (two refractions and a bounce spread it) and TT
+    // broader still.
+    f.exponent = vec3(e, e * 0.5, max(e * 0.25, 1.0));
+    f.norm = (f.exponent + 2.0) / (8.0 * PI);
+    f.TdotV = vec3(dot(f.Tr, V), dot(f.Ttrt, V), dot(f.Ttt, V));
+    f.sinTV = sqrt(max(vec3(1.0) - f.TdotV * f.TdotV, vec3(0.0)));
+    return f;
+}
+
 // The three lobes, summed. Returns radiance-scale colour to be multiplied by the
 // light and its shadow, exactly like the GGX specular it replaces.
 //
 // tint applies to TRT and TT and NOT to R, which is the whole reason hair reads
 // as having two highlights of different colours.
-vec3 hairSpecular(vec3 T, vec3 N, vec3 L, vec3 V, float roughness, float shift, vec3 tint,
-                  float backlit, float fresnel) {
-    float e = hairExponent(roughness);
+vec3 hairSpecular(HairFrame f, vec3 N, vec3 L, vec3 tint, float backlit, float fresnel) {
+    // R: uncoloured, and the sharper of the two -- a first-surface reflection,
+    // so nothing has scattered it. Weighted by the SAME Fresnel the microfacet
+    // lobe used: this is still light off a dielectric interface, and dropping
+    // the term is what makes a face-on strand as bright as a grazing one.
+    float r = hairStrandSpec(f.Tr, L, f.TdotV.x, f.sinTV.x, f.exponent.x, f.norm.x) * fresnel;
 
-    // R: toward the root, uncoloured, and the sharper of the two -- it is a
-    // first-surface reflection, so it has not been scattered by anything.
-    // Weighted by the SAME Fresnel the microfacet lobe used: this is still light
-    // bouncing off a dielectric interface, and dropping the term is what makes a
-    // face-on strand as bright as a grazing one.
-    vec3 Tr = hairShiftTangent(T, N, -shift);
-    float r = hairStrandSpec(Tr, L, V, e) * fresnel;
-
-    // TRT: toward the tip, tinted, and broader. Two refractions and a bounce
-    // spread it, so it gets a lower exponent rather than the same one.
-    vec3 Ttrt = hairShiftTangent(T, N, shift * 2.0);
-    float trt = hairStrandSpec(Ttrt, L, V, e * 0.5);
+    float trt = hairStrandSpec(f.Ttrt, L, f.TdotV.y, f.sinTV.y, f.exponent.y, f.norm.y);
 
     // TT: the light is behind the strand, so this keys on the BACK-facing
-    // geometry term. Broad by nature -- it has been through the fibre -- and
-    // tinted twice over, which is why it reads deeper than TRT.
+    // geometry term. Tinted twice over, which is why it reads deeper than TRT.
     float ttWrap = max(-dot(N, L), 0.0);
-    float tt = backlit * ttWrap * hairStrandSpec(T, -L, V, max(e * 0.25, 1.0));
+    float tt = backlit * ttWrap *
+               hairStrandSpec(f.Ttt, -L, f.TdotV.z, f.sinTV.z, f.exponent.z, f.norm.z);
 
     return vec3(r) + tint * trt + tint * tint * tt;
 }

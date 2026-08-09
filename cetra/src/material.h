@@ -196,17 +196,22 @@ typedef struct Material {
 
 typedef enum MaterialParamType {
     MATERIAL_PARAM_FLOAT,
-    MATERIAL_PARAM_VEC3, // always a colour in this table, so editors may assume it
+    MATERIAL_PARAM_COLOR, // a vec3 that is a colour; editors may pick accordingly
     MATERIAL_PARAM_INT,
+    MATERIAL_PARAM_TEXTURE, // uses `set_tex`, not `offset`
 } MaterialParamType;
 
 // One tunable material property: the name a scene file authors it under, where
 // it lives, and the range an editor should offer.
 typedef struct MaterialParam {
     const char* key;
-    const char* group; // editor grouping; rows sharing a name are shown together
-    size_t offset;     // into Material
+    const char* group; // editor grouping; CONSECUTIVE rows sharing a name group
     MaterialParamType type;
+    size_t offset; // into Material; for TEXTURE rows, at the Texture* member
+    // TEXTURE rows only. Writing one is not a store -- it releases what was
+    // there and retains the new one -- so an offset can address the field for
+    // reading but cannot set it.
+    void (*set_tex)(Material*, Texture*);
     // The range an editor OFFERS, which is the useful band and not the
     // expressible one. A scene file may author outside it and nothing clamps
     // the stored value; only dragging the control brings it into the band. The
@@ -214,17 +219,25 @@ typedef struct MaterialParam {
     // the effect invites exactly that, and the result then looks like a broken
     // feature rather than an extreme setting (spec 11.20 records this
     // happening, on hair roughness and jitter specifically).
+    //
+    // INT rows with `enum_labels` derive `max` from the label count instead, so
+    // the number of modes is stated once rather than twice.
     float min, max;
-    // INT rows only: ImGui-style "a\0b\0c\0\0" names, when the value is an enum
-    // rather than a quantity. NULL falls back to a numeric slider.
-    const char* enum_labels;
+    // INT rows only: the names of the values, NULL when the value is a quantity
+    // rather than an enum. Kept as an array rather than a widget library's
+    // packed form -- nothing else in this layer knows what a GUI is.
+    const char* const* enum_labels;
+    int enum_count;
 } MaterialParam;
 
 /*
  * The material vocabulary, and the ONLY place a name is tied to a Material
- * field. Adding a property is one row and both consumers pick it up: the scene
+ * field. Adding a property is one row and every consumer picks it up: the scene
  * file parser resolves authored keys through it, and the GUI builds a control
- * per row. Two tables would drift the moment someone extended one of them.
+ * per row. Two tables would drift the moment someone extended one of them,
+ * which is why textures live here too rather than app-side -- they are the same
+ * namespace and the same authored vocabulary, they just need a setter call
+ * where the others need a store.
  *
  * SHADING ONLY, on purpose. alpha_mode, alphaCutoff, doubleSided and
  * foliage_shadows are deliberately absent: they decide which PASS a mesh draws
@@ -234,7 +247,9 @@ typedef struct MaterialParam {
  *
  * Subsurface is absent for a different reason: its consumer is PostFX's
  * scatter-profile table rather than any field here, so no offset describes it.
- * Textures are absent because an offset cannot express "load and retain".
+ *
+ * Keys must fit CSCENE_MAX_PARAM_KEY or a scene file truncates them and reports
+ * the result as an unknown key.
  */
 extern const MaterialParam MATERIAL_PARAMS[];
 extern const size_t MATERIAL_PARAM_COUNT;
@@ -242,9 +257,13 @@ extern const size_t MATERIAL_PARAM_COUNT;
 // Look a key up in the table above; NULL if the vocabulary has no such name.
 const MaterialParam* material_param_find(const char* key);
 
-// Read/write a parameter generically. `values` is 3 floats for VEC3 and one
-// for the rest, so a caller can round-trip any row without switching on type.
+// Read/write a parameter generically. `values` is 3 floats for COLOR and one
+// for the other value types; TEXTURE rows are not addressable this way.
 void material_param_get(const Material* material, const MaterialParam* param, float* values);
+
+// What a TEXTURE row currently points at; NULL for an unbound slot or a row of
+// any other type.
+const Texture* material_param_texture(const Material* material, const MaterialParam* param);
 void material_param_set(Material* material, const MaterialParam* param, const float* values);
 
 Material* create_material();

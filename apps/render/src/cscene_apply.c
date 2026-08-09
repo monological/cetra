@@ -1,5 +1,5 @@
 #include <math.h>
-#include <stddef.h> // offsetof, for the material parameter table
+#include <stddef.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -308,36 +308,12 @@ void apply_cscene_wind(Scene* scene, const CetraSceneDesc* cscn) {
 }
 
 /*
- * The scene file's material vocabulary lives in material.c (MATERIAL_PARAMS),
- * shared with the GUI editor so the two cannot disagree about what a name means
- * or which properties are safe to set. The parser records keys generically and
- * never learns their meaning; this file only resolves them.
- *
- * Textures need their own small table: a key whose value is a path differs from
- * a scalar in needing a pool load and a mask-array rebuild, and an offset
- * cannot describe "call this setter". Same SHADING ONLY rule -- a hair strand
- * map feeds a BRDF, so the worst a wrong path can do is an ugly highlight.
- *
- * Loaded LINEAR. Every texture reachable from here carries data, not colour;
- * an sRGB decode would silently bend the values.
+ * The material vocabulary lives in material.c (MATERIAL_PARAMS), shared with
+ * the GUI editor so the two cannot disagree about what a name means or which
+ * properties are safe to set. The parser records keys generically and never
+ * learns their meaning; this file only resolves them and applies the one thing
+ * the engine cannot do for itself -- turning an authored path into a texture.
  */
-static const struct {
-    const char* key;
-    void (*set)(Material*, Texture*);
-} MATERIAL_TEXTURES[] = {
-    {"hairMap", set_material_hair_flow_tex},
-};
-
-#define MATERIAL_TEXTURE_COUNT (sizeof(MATERIAL_TEXTURES) / sizeof(MATERIAL_TEXTURES[0]))
-
-static int find_material_texture(const char* key) {
-    for (size_t i = 0; i < MATERIAL_TEXTURE_COUNT; i++) {
-        if (strcmp(MATERIAL_TEXTURES[i].key, key) == 0)
-            return (int)i;
-    }
-    return -1;
-}
-
 void apply_cscene_material_overrides(Scene* scene, const CetraSceneDesc* cscn) {
     if (!scene || !cscn)
         return;
@@ -357,10 +333,14 @@ void apply_cscene_material_overrides(Scene* scene, const CetraSceneDesc* cscn) {
             if (!slot) {
                 fprintf(stderr, "Warning: material '%s': unknown key '%s'\n", mo->material,
                         prm->key);
-            } else if ((slot->type == MATERIAL_PARAM_VEC3) != (prm->components == 3)) {
+            } else if (slot->type == MATERIAL_PARAM_TEXTURE) {
+                fprintf(stderr, "Warning: material '%s': key '%s' wants a path\n", mo->material,
+                        prm->key);
+                slot = NULL;
+            } else if ((slot->type == MATERIAL_PARAM_COLOR) != (prm->components == 3)) {
                 fprintf(stderr, "Warning: material '%s': key '%s' wants %s\n", mo->material,
                         prm->key,
-                        slot->type == MATERIAL_PARAM_VEC3 ? "3 numbers" : "one number");
+                        slot->type == MATERIAL_PARAM_COLOR ? "3 numbers" : "one number");
                 slot = NULL;
             }
             slots[p] = slot;
@@ -371,28 +351,39 @@ void apply_cscene_material_overrides(Scene* scene, const CetraSceneDesc* cscn) {
         // Textures resolve and LOAD here rather than per matching material: the
         // pool would dedup a repeat load anyway, and doing it once means a bad
         // path is reported once instead of once per material that shares it.
-        Texture* tex_val[CSCENE_MAX_MATERIAL_TEXTURES];
-        int tex_slots[CSCENE_MAX_MATERIAL_TEXTURES];
+        //
+        // LINEAR, never sRGB. Every texture reachable from here carries data
+        // rather than colour, and an sRGB decode would silently bend the values.
+        struct {
+            const MaterialParam* slot;
+            Texture* tex;
+        } textures[CSCENE_MAX_MATERIAL_TEXTURES] = {0};
         for (int t = 0; t < mo->texture_count; t++) {
-            tex_val[t] = NULL;
-            tex_slots[t] = find_material_texture(mo->textures[t].key);
-            if (tex_slots[t] < 0) {
-                fprintf(stderr, "Warning: material '%s': unknown texture key '%s'\n", mo->material,
+            const MaterialParam* slot = material_param_find(mo->textures[t].key);
+            if (!slot || slot->type != MATERIAL_PARAM_TEXTURE) {
+                fprintf(stderr, "Warning: material '%s': %s '%s'\n", mo->material,
+                        slot ? "not a texture key:" : "unknown texture key",
                         mo->textures[t].key);
                 continue;
             }
-            tex_val[t] = load_texture_path_into_pool(scene->tex_pool, mo->textures[t].path, false);
-            if (!tex_val[t]) {
+            Texture* tex = load_texture_path_into_pool(scene->tex_pool, mo->textures[t].path, false);
+            if (!tex) {
                 fprintf(stderr, "Warning: material '%s': cannot load texture '%s'\n", mo->material,
                         mo->textures[t].path);
-                tex_slots[t] = -1;
                 continue;
             }
+            textures[t].slot = slot;
+            textures[t].tex = tex;
             usable++;
         }
 
         if (usable == 0)
             continue;
+
+        // Scene state, not per-material: the layer indices are assigned when the
+        // array next rebuilds, and until then each material reads its fallback.
+        if (mo->texture_count > 0)
+            scene->mask_array_dirty = true;
 
         int tagged = 0;
         for (size_t i = 0; i < scene->material_count; i++) {
@@ -404,12 +395,8 @@ void apply_cscene_material_overrides(Scene* scene, const CetraSceneDesc* cscn) {
                     material_param_set(m, slots[p], mo->params[p].value);
             }
             for (int t = 0; t < mo->texture_count; t++) {
-                if (tex_slots[t] < 0)
-                    continue;
-                MATERIAL_TEXTURES[tex_slots[t]].set(m, tex_val[t]);
-                // The layer index is assigned when the array is rebuilt, and
-                // the material reads its own scalar fallback until then.
-                scene->mask_array_dirty = true;
+                if (textures[t].slot)
+                    textures[t].slot->set_tex(m, textures[t].tex);
             }
             tagged++;
         }

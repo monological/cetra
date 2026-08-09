@@ -11,47 +11,53 @@
 #include "material.h"
 #include "program.h"
 
-#define MP(field, type, lo, hi) offsetof(Material, field), type, lo, hi, NULL
-#define MPE(field, type, hi, labels) offsetof(Material, field), type, 0.0f, hi, labels
+#define MP(field, ty, lo, hi)                                                                      \
+    .offset = offsetof(Material, field), .type = ty, .min = lo, .max = hi
+
+// Names, not indices: the vegetation modes also redefine what UV1 MEANS on a
+// material, which is not a thing to discover by dragging an integer.
+static const char* const WIND_MODE_NAMES[] = {"cloth", "vegetation branch", "vegetation leaf"};
 
 // Group order here is the order an editor shows them in, and it is deliberate:
 // the handful of properties that describe every surface come first, and the
 // ones that only matter to a material that opted into a feature follow. A flat
 // list of all of them is technically complete and useless to tune against.
+//
+// Rows of a group must stay CONSECUTIVE -- an editor walks runs, so a row
+// separated from its group would open a second section under the same name.
 const MaterialParam MATERIAL_PARAMS[] = {
-    {"albedo", "Base", MP(albedo, MATERIAL_PARAM_VEC3, 0.0f, 1.0f)},
+    {"albedo", "Base", MP(albedo, MATERIAL_PARAM_COLOR, 0.0f, 1.0f)},
     {"roughness", "Base", MP(roughness, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
     {"metallic", "Base", MP(metallic, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
     {"ao", "Base", MP(ao, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
     {"opacity", "Base", MP(opacity, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
 
-    // Hair ranges are the measured useful bands, not the expressible ones.
-    // Roughness past ~0.6 collapses the lobe exponent toward 4 and erases every
-    // trace of strand definition; jitter past ~2 half-widths starts costing
-    // real energy (5% at two, 14% at four) and mottles rather than separates.
-    // Both were reachable before and both look like a broken feature rather
-    // than an extreme setting (spec 11.20).
+    // Ranges are the measured useful bands, not the expressible ones -- see the
+    // MaterialParam declaration for why, and spec 11.20 for the measurements
+    // behind these particular numbers.
     {"hairShading", "Hair", MP(hair_shading, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
     {"hairRoughness", "Hair", MP(hair_roughness, MATERIAL_PARAM_FLOAT, 0.05f, 0.6f)},
     {"hairShift", "Hair", MP(hair_shift, MATERIAL_PARAM_FLOAT, 0.0f, 0.15f)},
-    {"hairTint", "Hair", MP(hair_tint, MATERIAL_PARAM_VEC3, 0.0f, 1.0f)},
+    {"hairTint", "Hair", MP(hair_tint, MATERIAL_PARAM_COLOR, 0.0f, 1.0f)},
     {"hairBacklit", "Hair", MP(hair_backlit, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
     {"hairJitter", "Hair", MP(hair_jitter, MATERIAL_PARAM_FLOAT, 0.0f, 2.0f)},
+    {"hairMap", "Hair", .type = MATERIAL_PARAM_TEXTURE,
+     .offset = offsetof(Material, hair_flow_tex), .set_tex = set_material_hair_flow_tex},
 
-    {"emissive", "Emissive", MP(emissive, MATERIAL_PARAM_VEC3, 0.0f, 1.0f)},
+    {"emissive", "Emissive", MP(emissive, MATERIAL_PARAM_COLOR, 0.0f, 1.0f)},
     {"emissiveStrength", "Emissive", MP(emissive_strength, MATERIAL_PARAM_FLOAT, 0.0f, 20.0f)},
 
     {"clearcoat", "Coat and sheen", MP(clearcoat, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
     {"clearcoatRoughness", "Coat and sheen",
      MP(clearcoat_roughness, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
-    {"sheenColor", "Coat and sheen", MP(sheen_color_factor, MATERIAL_PARAM_VEC3, 0.0f, 1.0f)},
+    {"sheenColor", "Coat and sheen", MP(sheen_color_factor, MATERIAL_PARAM_COLOR, 0.0f, 1.0f)},
     {"sheenRoughness", "Coat and sheen",
      MP(sheen_roughness_factor, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
     // -1 means the KHR extension was absent, which is NOT the same as 0 (an
     // explicit zero weight), so the range has to reach below zero to express it.
     {"specularFactor", "Coat and sheen", MP(specular_factor, MATERIAL_PARAM_FLOAT, -1.0f, 2.0f)},
     {"specularColor", "Coat and sheen",
-     MP(specular_color_factor, MATERIAL_PARAM_VEC3, 0.0f, 1.0f)},
+     MP(specular_color_factor, MATERIAL_PARAM_COLOR, 0.0f, 1.0f)},
 
     {"ior", "Transmission", MP(ior, MATERIAL_PARAM_FLOAT, 1.0f, 3.0f)},
     {"transmission", "Transmission", MP(transmission, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
@@ -64,11 +70,9 @@ const MaterialParam MATERIAL_PARAMS[] = {
     {"aoStrength", "Maps and wind", MP(aoStrength, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
     {"parallaxScale", "Maps and wind", MP(parallax_scale, MATERIAL_PARAM_FLOAT, 0.0f, 0.1f)},
     {"windResponse", "Maps and wind", MP(wind_response, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
-    // Names, not indices: the vegetation modes also redefine what UV1 MEANS on
-    // a material, which is not a thing to discover by dragging.
-    {"windMode", "Maps and wind",
-     MPE(wind_mode, MATERIAL_PARAM_INT, 2.0f,
-         "cloth\0vegetation branch\0vegetation leaf\0")},
+    {"windMode", "Maps and wind", .offset = offsetof(Material, wind_mode),
+     .type = MATERIAL_PARAM_INT, .enum_labels = WIND_MODE_NAMES,
+     .enum_count = (int)(sizeof(WIND_MODE_NAMES) / sizeof(WIND_MODE_NAMES[0]))},
 };
 
 #undef MP
@@ -87,8 +91,12 @@ const MaterialParam* material_param_find(const char* key) {
 
 // The void* hop is not decoration: cppcheck's invalidPointerCast rejects a
 // direct char* -> float* cast. offsetof already guarantees the alignment.
-// Split by constness rather than casting it away, so the read path cannot
-// silently gain the right to write.
+//
+// Two helpers rather than one that casts constness away, because a single
+// const-taking version makes cppcheck's constParameterPointer fire on the
+// setter -- it cannot see the write through the void*, and that check is not
+// suppressed here. memcpy rather than glm_vec3_copy for the same reason: cglm
+// takes a non-const vec3, so copying through it would put the cast back.
 static const void* material_param_field_const(const Material* material,
                                               const MaterialParam* param) {
     return (const void*)((const char*)material + param->offset);
@@ -99,12 +107,12 @@ static void* material_param_field(Material* material, const MaterialParam* param
 }
 
 void material_param_get(const Material* material, const MaterialParam* param, float* values) {
-    if (!material || !param || !values)
+    if (!material || !param || !values || param->type == MATERIAL_PARAM_TEXTURE)
         return;
     const void* field = material_param_field_const(material, param);
     switch (param->type) {
-    case MATERIAL_PARAM_VEC3:
-        glm_vec3_copy((float*)field, values);
+    case MATERIAL_PARAM_COLOR:
+        memcpy(values, field, sizeof(vec3));
         break;
     case MATERIAL_PARAM_FLOAT:
         values[0] = *(const float*)field;
@@ -112,16 +120,25 @@ void material_param_get(const Material* material, const MaterialParam* param, fl
     case MATERIAL_PARAM_INT:
         values[0] = (float)*(const int*)field;
         break;
+    case MATERIAL_PARAM_TEXTURE:
+        break; // unreachable; guarded above
     }
 }
 
+const Texture* material_param_texture(const Material* material, const MaterialParam* param) {
+    if (!material || !param || param->type != MATERIAL_PARAM_TEXTURE)
+        return NULL;
+    const Texture* const* slot = material_param_field_const(material, param);
+    return *slot;
+}
+
 void material_param_set(Material* material, const MaterialParam* param, const float* values) {
-    if (!material || !param || !values)
+    if (!material || !param || !values || param->type == MATERIAL_PARAM_TEXTURE)
         return;
     void* field = material_param_field(material, param);
     switch (param->type) {
-    case MATERIAL_PARAM_VEC3:
-        glm_vec3_copy((float*)values, field);
+    case MATERIAL_PARAM_COLOR:
+        memcpy(field, values, sizeof(vec3));
         break;
     case MATERIAL_PARAM_FLOAT:
         *(float*)field = values[0];
@@ -129,6 +146,8 @@ void material_param_set(Material* material, const MaterialParam* param, const fl
     case MATERIAL_PARAM_INT:
         *(int*)field = (int)values[0];
         break;
+    case MATERIAL_PARAM_TEXTURE:
+        break; // unreachable; guarded above
     }
 }
 

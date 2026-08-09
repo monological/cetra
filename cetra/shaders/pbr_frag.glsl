@@ -1288,18 +1288,21 @@ void main() {
     // instead is what an earlier revision did, and it correlates with painted
     // strands only when they run exactly the way the invention keys, which the
     // raiden groom (curving, leaning up to 30 degrees) does not.
-    vec3 hairT = T;
-    float hairShiftAt = hairShift;
-    if (hairShading > 0.0 && hairFlowLayer >= 0) {
-        vec4 strand = hairStrandData(maskArray, uv, hairFlowLayer);
-        vec3 flowT = strand.x * T + strand.y * B;
-        // The map stores an ORIENTATION, which has no sign; adopt the card
-        // tangent's. The lobes themselves are sign-invariant, but the cuticle
-        // shift is not -- flipping T would swap which end R and TRT sit at.
-        flowT *= (dot(flowT, T) < 0.0) ? -1.0 : 1.0;
-        hairT = normalize(mix(T, normalize(flowT), strand.z));
-        hairShiftAt = hairShift +
-                      (strand.w * 2.0 - 1.0) * hairJitter * hairLobeHalfWidth(hairRoughness);
+    HairFrame hairFrame;
+    if (hairShading > 0.0) {
+        vec3 hairT = T;
+        float hairShiftAt = hairShift;
+        if (hairFlowLayer >= 0) {
+            vec4 strand = hairStrandData(maskArray, uv, hairFlowLayer);
+            // The decode returns the +T half-plane representative, so this
+            // already carries the card tangent's sign. That matters: the lobes
+            // are sign-invariant but the cuticle shift is not, and a flipped T
+            // would swap which end R and TRT sit at.
+            hairT = normalize(mix(T, normalize(strand.x * T + strand.y * B), strand.z));
+            hairShiftAt = hairShift +
+                          (strand.w * 2.0 - 1.0) * hairJitter * hairLobeHalfWidth(hairRoughness);
+        }
+        hairFrame = hairMakeFrame(hairT, N, V, hairRoughness, hairShiftAt);
     }
 
     for (int k = 0; k < numDir + clusterCount; k++) {
@@ -1488,12 +1491,9 @@ void main() {
         // strand map (hairT above), because a quad carries one tangent and the
         // hair on it does not.
         //
-        // Guarded rather than mixed: at hairShading 0 this branch is dead and
-        // every other material compiles the specular expression above unchanged,
-        // which is the byte-identity gate the whole corpus rests on.
+        // hairShading 0 leaves the expression above untouched.
         if (hairShading > 0.0) {
-            vec3 hairSpec = hairSpecular(hairT, N, L, V, hairRoughness, hairShiftAt, hairTint,
-                                         hairBacklit, maxComp(F));
+            vec3 hairSpec = hairSpecular(hairFrame, N, L, hairTint, hairBacklit, maxComp(F));
             specular = mix(specular, hairSpec, hairShading);
         }
 

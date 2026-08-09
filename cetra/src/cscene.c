@@ -296,9 +296,11 @@ static void parse_post(CetraSceneDesc* d, const cJSON* root) {
         }
     }
 
-    // Refused rather than clamped: 1.0 is not "no scaling" downstream, it is a
-    // value the render app rejects outright, and silently moving an authored
-    // number into range would hide a typo behind a slightly soft frame.
+    // Refused rather than clamped: silently moving an authored number into
+    // range hides a typo behind a slightly soft frame, and the author never
+    // learns the value they wrote is not the value they got. The bound matches
+    // postfx's own (see postfx_clamp_render_scale), which clamps instead
+    // because it takes runtime input rather than an authored file.
     if (get_float(post, "render_scale", &d->render_scale)) {
         d->has_render_scale = d->render_scale >= 0.5f && d->render_scale < 1.0f;
         if (!d->has_render_scale)
@@ -398,8 +400,8 @@ static void parse_materials(CetraSceneDesc* d, const cJSON* root) {
             if (strcmp(p->string, "sss") == 0)
                 continue;
             // A string value is a texture path. Recorded apart from the numeric
-            // params because it needs resolving against the scene file's
-            // directory below; the key still means nothing here.
+            // params only because a float array cannot hold one; the key still
+            // means nothing here.
             if (cJSON_IsString(p)) {
                 if (!p->valuestring || !p->valuestring[0]) {
                     log_warn("cscene: material '%s' key '%s' is an empty path; ignored",
@@ -413,7 +415,7 @@ static void parse_materials(CetraSceneDesc* d, const cJSON* root) {
                 }
                 CSceneMaterialTexture* tex = &out->textures[out->texture_count];
                 snprintf(tex->key, CSCENE_MAX_PARAM_KEY, "%s", p->string);
-                snprintf(tex->path, CSCENE_MAX_PATH, "%s", p->valuestring);
+                copy_string(tex->path, CSCENE_MAX_PATH, p);
                 out->texture_count++;
                 continue;
             }

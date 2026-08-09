@@ -257,16 +257,20 @@ def _read_ppm(path):
     return int(fields[1]), int(fields[2]), data[i + 1:]
 
 
+# The sRGB decode, once, indexed by the raw byte. Every measurement here is on
+# a linear signal, and the per-pixel pow is slow enough in pure Python to notice
+# on the gates that scan whole frames.
+_SRGB_TO_LINEAR = [(c / 255.0 / 12.92) if c / 255.0 <= 0.04045
+                   else (((c / 255.0) + 0.055) / 1.055) ** 2.4 for c in range(256)]
+
+
 def _linear_luma(pix, w, h, px, py):
     """Undo the sRGB encode -- the transition is measured on a linear signal."""
     x = max(0, min(w - 1, int(round(px))))
     y = max(0, min(h - 1, int(round(py))))
     o = (y * w + x) * 3
-    total = 0.0
-    for k in range(3):
-        c = pix[o + k] / 255.0
-        total += c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
-    return total / 3.0
+    return (_SRGB_TO_LINEAR[pix[o]] + _SRGB_TO_LINEAR[pix[o + 1]] +
+            _SRGB_TO_LINEAR[pix[o + 2]]) / 3.0
 
 
 def _linear_rgb(pix, w, h, px, py):
@@ -275,11 +279,7 @@ def _linear_rgb(pix, w, h, px, py):
     x = max(0, min(w - 1, int(round(px))))
     y = max(0, min(h - 1, int(round(py))))
     o = (y * w + x) * 3
-    out = []
-    for k in range(3):
-        c = pix[o + k] / 255.0
-        out.append(c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4)
-    return out
+    return [_SRGB_TO_LINEAR[pix[o + k]] for k in range(3)]
 
 
 # Pre-integrated skin (spec 11.13), measured on assets/skin_curvature_fixture.
@@ -444,15 +444,27 @@ HAIR_FLAT_MAX_RATIO = 1.10
 # the calibrated default, and identically 0 with jitter off.
 HAIR_JITTER_MIN_RMS = 0.10
 
-# sRGB decode table. The gate measures a brightness RATIO, which is only
-# meaningful on a linear signal, and a per-pixel pow over a 800x600 frame is
-# slow enough in pure Python to notice.
-_HAIR_SRGB = [(c / 255.0 / 12.92) if c / 255.0 <= 0.04045
-              else (((c / 255.0) + 0.055) / 1.055) ** 2.4 for c in range(256)]
+def _hair_card_box(path):
+    """Bounding box of the lit card, as (x0, x1, y0, y1)."""
+    w, h, pix = _read_ppm(path)
+    lum = [(_SRGB_TO_LINEAR[pix[i * 3]] + _SRGB_TO_LINEAR[pix[i * 3 + 1]] +
+            _SRGB_TO_LINEAR[pix[i * 3 + 2]]) / 3.0 for i in range(w * h)]
+    lit = [i for i, v in enumerate(lum) if v > 0.002]
+    if not lit:
+        return None
+    xs = [i % w for i in lit]
+    ys = [i // w for i in lit]
+    return min(xs), max(xs), min(ys), max(ys)
 
 
-def _hair_halves(path):
-    """Linear-luma samples of the card's left and right halves.
+def _hair_halves(path, box):
+    """Linear-luma samples of the card's left and right halves, within `box`.
+
+    The box is passed in rather than derived per image, because arms are
+    compared element-wise: jitter changes brightness at the lit edges, so one
+    pixel crossing the threshold in one arm and not another would shift the
+    crop, misalign every subsequent sample, and silently change what the
+    comparison means.
 
     Excludes a margin around the seam where the two painted strand fields meet:
     the structure tensor genuinely cannot resolve an orientation there, reports
@@ -460,14 +472,9 @@ def _hair_halves(path):
     behaviour and would only add noise to the measurement.
     """
     w, h, pix = _read_ppm(path)
-    lum = [(_HAIR_SRGB[pix[i * 3]] + _HAIR_SRGB[pix[i * 3 + 1]] +
-            _HAIR_SRGB[pix[i * 3 + 2]]) / 3.0 for i in range(w * h)]
-    lit = [i for i, v in enumerate(lum) if v > 0.002]
-    if not lit:
-        return None
-    xs = [i % w for i in lit]
-    ys = [i // w for i in lit]
-    x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
+    lum = [(_SRGB_TO_LINEAR[pix[i * 3]] + _SRGB_TO_LINEAR[pix[i * 3 + 1]] +
+            _SRGB_TO_LINEAR[pix[i * 3 + 2]]) / 3.0 for i in range(w * h)]
+    x0, x1, y0, y1 = box
     mid = (x0 + x1) // 2
     pad = max(1, int(0.10 * (x1 - x0)))
     left, right = [], []
@@ -508,7 +515,7 @@ def run_hair_flow_gate(workdir):
     # the mip chain averages the strand identity away -- correctly, but it is
     # not what this is measuring.
     size = ["-W", "800", "-H", "600"]
-    fails, shots = [], {}
+    fails, frames, box = [], {}, None
     for label, name in arms:
         scene = os.path.join(ROOT, "assets", name)
         if not os.path.exists(scene):
@@ -519,10 +526,16 @@ def run_hair_flow_gate(workdir):
         if err:
             print(f"  hair-flow    ERROR while rendering {name}")
             return ["hair-flow"]
-        shots[label] = _hair_halves(out)
-        if shots[label] is None:
-            print(f"  hair-flow    ERROR  {name} rendered an empty frame")
-            return ["hair-flow"]
+        frames[label] = out
+        if box is None:
+            box = _hair_card_box(out)
+            if box is None:
+                print(f"  hair-flow    ERROR  {name} rendered an empty frame")
+                return ["hair-flow"]
+
+    # One crop for every arm, taken from the first: the arms are compared
+    # element-wise, so a per-image box would misalign them (see _hair_halves).
+    shots = {label: _hair_halves(path, box) for label, path in frames.items()}
 
     ratio = _hair_ratio(shots["map"])
     ok = ratio >= HAIR_FLOW_MIN_RATIO
