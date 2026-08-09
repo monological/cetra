@@ -421,11 +421,38 @@ sampler in `pbr_frag` for any unit**, free or not, because the driver counts dec
 moments ride the refraction sampler through a `#define`, which caps them at four floats and is why
 six or eight moments are a re-plan rather than a tweak.
 
-### B7. Lens flare / cinematic finishing — Effort S/M — sketch
-Quarter-res Chapman-style ghost chain off the bloom bright buffer (scaled/flipped UV ghosts +
-chromatic offset + lens-color gradient + halo + starburst), additive pre-tonemap composite, optional
-dirt mask. Finishing in tonemap uniforms: frame_index-hashed deterministic grain, vignette, edge
-chromatic aberration — all default-off (tonemap output stays byte-identical). Runs at post res.
+### B7. Lens flare / cinematic finishing — Effort S/M — DONE (spec 11.21)
+Quarter-res Chapman-style ghost chain, additive pre-tonemap composite, plus lateral chromatic
+aberration on the scene tap. Both default off.
+
+**The sketch overstated the work.** It listed grain, vignette and edge aberration as remaining;
+grain, vignette, sharpen and grade had already shipped (`tonemap_frag.glsl`, and
+`postfx_apply_film_look` presets four of them). What was genuinely unbuilt was the flare chain and
+aberration. Starburst and the dirt mask stay unbuilt — the mask needs an authored texture and a
+sampler binding, which is an asset-pipeline question this is not.
+
+**Ghosts read the finished bloom pyramid, not a private bright pass.** Bloom's upsample writes back
+onto level 0, so no thresholded buffer survives it; taking one would duplicate the threshold, knee
+and firefly clamp, and a second copy of that arithmetic drifts. A mid mip is already thresholded and
+blurred, which is what a defocused reflection wants. This does NOT couple the flare to bloom being
+on — the pyramid is built whenever any consumer wants one.
+
+**Aberration is denominated in PIXELS at the corner**, falling off as r^2. It first shipped as a raw
+UV offset, which put the default at ~450 px and triplicated the frame; the unit was the fix, not the
+constant. It sits ahead of the tonemap, not in the finishing block the sketch named — by there the
+colour is a scalar and aberration has to resample.
+
+**The fixture's premise was false and measurement caught it.** It declared no lights, so the render
+app added its three-point rig and the "black" backdrop measured 0.224; declining the rig took the
+opposite-half signal from +3.5% to +125%. A gate calibrated against it would have locked in a 35x
+weaker signal and passed. Two dim marks at different radii make the r^2 falloff falsifiable — with
+one, a linear ramp passes identically.
+
+**Every gate arm was falsified against a deliberate break before being trusted**, and one arm did
+not survive that: "off is off" (`--flare` absent vs strength 0) measured 0 px even with the
+composite deliberately broken, because the C side short-circuits and both arms take the same path.
+It read as coverage and was not. Replaced by a linearity assertion, which fails at gain 1.000 when
+the composite ignores strength.
 
 ### B8. Physically based hair (Karis/Marschner) — Effort XL — CLOSED, split (spec 11.20)
 The per-texel strand map shipped. The fibre lobes were built, rejected on look at every setting,
@@ -560,7 +587,7 @@ and 11.2 (below). **Tiers 1 and 2 are complete**, Tier 2 closing with B3 pre-int
 | 14 | B3.1 Shadow-penumbra scattering | M | **REJECTED (11.19):** the premise no longer holds. A cast shadow across skin already scatters — `skin_shadow_fixture.cscn` measures 186,847 px between SSS on and off, hard black ellipses becoming soft red bleeds — because `shadow` rides *inside* `sssDiffuse` and the blur 11.14 repaired carries it. The angular term contributes **0 px** there (`--no-skin-preint` is byte-identical), so Penner's second LUT would be inert for the same reason row 12 records B3 as inert. Reopen only if the pyramid's ceiling binds again or a scene needs this under `--no-sss`. |
 | 15 | B3.2 Skin under an area light | M | **DONE (11.19):** the area branch added its diffuse to `Lo` and skipped the SSS tap, so a softbox — the canonical portrait setup — gave skin nothing at all; SSS on measured byte-identical to `--no-sss`. Tapping `areaDiff` into the skin buffer takes it 0 → 551,295 px. New `skin_area_fixture.cscn` (curvature fixture's geometry and material, light swapped) and a two-arm gate carrying the directional control. The pre-integrated wrap stays out: a rectangle has no single `L`, and that half — shared with the IBL gap — is still open. |
 | 16 | B6 Moment-based OIT | L | **DONE (11.17):** four power moments, **on by default** with OIT, 4.94x closer to the arithmetic than the weighted-blended weight (0.0157 RMS against 0.0773). No golden moves (none of their scenes has an alpha-blend mesh); the raiden baseline moves 0.12%, the hair silhouette. 4.17's ordering defect came with it onto the default path and was **fixed in 11.18** — the catcher simply drew too late; moving it ahead of the transparent pass repaired the unsorted late pass and the particle depth resolve too, with all 18 goldens at 0 px. Not zero infra: a card-stack fixture with an analytic answer, three gates, the first OIT golden. Two plan corrections worth carrying forward — the old `oit_fixture` **cannot discriminate any two OIT schemes**, because weighted-blended is exact whenever every layer shares a colour; and `pbr_frag` has no seventeenth sampler for ANY unit, free or not, since the driver counts declarations. Six or eight moments would need a third fragment output location and GL 4.1 guarantees eight, all spoken for. |
-| 17 | B7 Lens flare / finishing | S/M | |
+| 17 | B7 Lens flare / finishing | S/M | **DONE (11.21).** Chapman ghost chain off the bloom pyramid + lateral chromatic aberration, both default off, all 18 goldens 0 px. The sketch overstated the scope: grain, vignette, sharpen and grade had already shipped, so the real work was the flare chain and aberration; starburst and the dirt mask remain unbuilt. Three lessons carry forward. **Units, again** — aberration shipped as a raw UV offset (~450 px, frame triplicated) and the flare repeated it three more times in one file: ghost brightness scaled with ghost COUNT, halo width was a UV radius so the one circular part of a flare rendered as an aspect-dependent ellipse, and width 0 was the slider's BRIGHTEST setting. **A fixture is a claim and must be measured** — this one declared no lights, got the auto three-point rig, and its "black" backdrop measured 0.224, diluting the signal 35x. **A gate arm that cannot fail is not coverage** — "off is off" passed against a deliberately broken composite, because the C short-circuit means both arms take the same path; it was replaced by a linearity assertion that fails at 1.000. Also filed: no golden runner exists, so "all 18 at 0 px" means scraping recipes out of a dozen specs by hand. |
 | 18 | A6 Moment shadow maps | L | |
 | 19 | B8 Hair | XL | **CLOSED, split (spec 11.20).** The strand map shipped and is live: it rides the **anisotropy** slot that already existed, so binding one stretches the ordinary GGX highlight along the painted grain — general enough for brushed metal and satin, which hair merely motivated. The R/TT/TRT fibre lobes were built, swept low and high in all combinations, rejected at every setting, and **deleted**. Two structural faults, neither tunable: the lobe replaced the whole microfacet term without its `/(4·NdotV·NdotL)` or energy compensation AND still flowed through a surface integrand (`NdotL` on the card normal, a coat/sheen stack, a half-vector diffuse); and cards carry no normal map, so per-texel facing is absent from the asset. The lesson worth more than the feature: `set_material_anisotropy_tex` had zero callers, so an energy-paired direction channel was already sitting there and this work built a second one beside it before anyone looked. |
 

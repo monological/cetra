@@ -62,6 +62,14 @@ EMITTER_HALF = 0.125
 # where the aberration is strongest.
 CORNER_CENTRE = (2.6, -1.9)
 CORNER_HALF = 0.16
+# A second dim mark at a SMALLER radius. Two of them is what makes the falloff
+# falsifiable: with one feature a gate can only say the channels separated,
+# which a linear ramp does too. With two, the RATIO of their separations
+# distinguishes r^2 (~3.1x here) from linear (~1.8x). Both marks are dim for
+# the same reason -- the bright emitter's bloom halo is NOT shifted by
+# aberration, so its centroid would be dragged toward an unshifted average.
+INNER_CENTRE = (1.5, -1.05)
+INNER_HALF = 0.16
 # Wider than the frame at any aspect the gate might render: at fov 50 and eye
 # z 5 the visible half-width is ~4.1 at 16:10 and more at 16:9, and a backdrop
 # that stops short leaves a clear-colour strip whose edge is an ACCIDENTAL
@@ -82,7 +90,8 @@ def main():
     for cx, cy, hx, hy, z in ((0.0, 0.0, BACKDROP_HALF[0], BACKDROP_HALF[1], -0.5),
                               (EMITTER_CENTRE[0], EMITTER_CENTRE[1], EMITTER_HALF, EMITTER_HALF,
                                0.0),
-                              (CORNER_CENTRE[0], CORNER_CENTRE[1], CORNER_HALF, CORNER_HALF, 0.0)):
+                              (CORNER_CENTRE[0], CORNER_CENTRE[1], CORNER_HALF, CORNER_HALF, 0.0),
+                              (INNER_CENTRE[0], INNER_CENTRE[1], INNER_HALF, INNER_HALF, 0.0)):
         p, n, idx = quad(cx, cy, hx, hy, z)
         base = len(positions)
         prims.append((len(indices), len(idx)))
@@ -136,11 +145,13 @@ def main():
             # assertion that contributes nothing to the pyramid and therefore
             # casts no ghosts of its own.
             emissive("corner_mark", 0.6),
+            emissive("inner_mark", 0.6),
         ],
         "meshes": [{"name": "flare_scene", "primitives": [
             {"attributes": {"POSITION": 0, "NORMAL": 1}, "indices": 2, "material": 0},
             {"attributes": {"POSITION": 0, "NORMAL": 1}, "indices": 3, "material": 1},
             {"attributes": {"POSITION": 0, "NORMAL": 1}, "indices": 4, "material": 2},
+            {"attributes": {"POSITION": 0, "NORMAL": 1}, "indices": 5, "material": 3},
         ]}],
         "nodes": [{"name": "flare_scene", "mesh": 0}],
         "scenes": [{"nodes": [0]}],
@@ -154,8 +165,8 @@ def main():
     with open(GLTF, "w") as f:
         json.dump(gltf, f, indent=1)
         f.write("\n")
-    print("wrote %s (emitter %s, corner mark %s)"
-          % (os.path.basename(GLTF), str(EMITTER_CENTRE), str(CORNER_CENTRE)))
+    print("wrote %s (emitter %s, marks %s and %s)"
+          % (os.path.basename(GLTF), str(EMITTER_CENTRE), str(INNER_CENTRE), str(CORNER_CENTRE)))
 
 
 if __name__ == "__main__":
