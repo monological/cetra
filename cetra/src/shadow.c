@@ -643,7 +643,11 @@ static void msm_build_layer(ShadowSystem* ss, UniformManager* mu, int layer) {
         {ss->msm_scratch, ss->msm_array, 1, step, 0.0f},
         {ss->msm_array, ss->msm_scratch, 1, 0.0f, step},
     };
-    for (int s = 0; s < 3; s++) {
+    // At spacing 0 the blur's taps all land on one texel, so the two passes
+    // would copy the layer twice for nothing. Skipping them is what makes the
+    // default free rather than merely harmless.
+    const int step_count = ss->msm_blur > 0.0f ? 3 : 1;
+    for (int s = 0; s < step_count; s++) {
         glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, steps[s].dst, 0, layer);
         uniform_set_int(mu, "layer", layer);
         uniform_set_int(mu, "mode", steps[s].mode);

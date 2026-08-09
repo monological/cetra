@@ -51,10 +51,25 @@
 // scratch resident for the whole pass. RGBA16F is 8 bytes a texel, so the pair
 // is 151 MB at 9 layers here against 604 MB if it matched the cascades.
 #define MSM_DEFAULT_SIZE 1024
-// Per-tap spacing of the separable blur, in moment-map texels. The filter is 5
-// taps wide; much past 1.0 and the fixed tap count stops covering the span it
-// straddles, so it combs instead of blurring.
-#define MSM_DEFAULT_BLUR 1.0f
+// Per-tap spacing of the separable blur, in moment-map texels; 0 disables the
+// two blur passes entirely, which is the default.
+//
+// Off by default because the blur is what costs thin casters their shadow, and
+// the amount is not marginal. Measured on the fixture's 0.3-wide pillar band,
+// worst shadow term across it (0 = fully shadowed, and PCF holds 0.0000):
+//
+//     blur 1.0   0.4159      blur 0.25  0.0876      blur 0   0.0074
+//
+// Resolution barely participates -- 2048 at blur 1.0 is still 0.3237, and 4096
+// at blur 0 only reaches 0.0063 -- so this is the blur smearing a band roughly
+// 15 texels wide across half its own width, not a want of texels. What moment
+// shadows buy here is the single prefiltered tap, bilinear instead of a PCF
+// stair, no acne without a bias to tune, and less churn under TAA; extra
+// softness is available on this knob for scenes with no thin caster to lose.
+//
+// The filter is 5 taps wide, so useful values stop around 1.0 anyway: past that
+// the fixed tap count no longer covers the span it straddles and it combs.
+#define MSM_DEFAULT_BLUR 0.0f
 // Fraction of the occlusion range remapped to zero. The reconstruction returns
 // a LOWER bound, so it under-occludes and an umbra reads slightly lit; this is
 // the cure, and it is scene-dependent because how much of the range is leak
