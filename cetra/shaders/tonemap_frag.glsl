@@ -56,6 +56,8 @@ uniform vec3 gradeGain;  // White point / highlight scale (1 = none)
 uniform int vignetteEnabled;
 uniform float vignetteStrength;
 uniform float vignetteRadius;
+uniform int caEnabled;    // Chromatic aberration; separates channels radially
+uniform float caStrength; // UV shift at the corner, before the r^2 falloff
 uniform int grainEnabled;
 uniform float grainStrength;
 uniform float grainSeed; // Per-frame, deterministic across equal --frames runs
@@ -322,7 +324,30 @@ void main()
     if (flareEnabled == 1)
         bloomAdd += flareStrength * texture(flareTex, TexCoords).rgb;
 
-    vec3 color = sceneToToned(texture(hdrTex, TexCoords).rgb, aoFactor, bloomAdd);
+    // Chromatic aberration: a lens focuses wavelengths at slightly different
+    // scales, so the channels separate along the radius and the effect vanishes
+    // at the optical centre.
+    //
+    // Applied to the SCENE sample, not the composited result. It is a lens
+    // effect, so it belongs on the light before the sensor -- ahead of the
+    // tonemap, and well ahead of grain, which is sensor noise that must not be
+    // resampled. Only the scene tap is offset: bloom and flare are wide blurs
+    // where a two-pixel shift is invisible, and offsetting them would cost taps
+    // for nothing.
+    //
+    // r^2, not r. Lateral chromatic aberration grows faster than linearly
+    // toward the corners; a linear ramp reads as a uniform colour cast over the
+    // whole frame instead of a corner artifact.
+    vec3 sceneRgb;
+    if (caEnabled == 1) {
+        vec2 toCentre = TexCoords - 0.5;
+        vec2 shift = toCentre * (caStrength * dot(toCentre, toCentre));
+        sceneRgb = vec3(texture(hdrTex, TexCoords + shift).r, texture(hdrTex, TexCoords).g,
+                        texture(hdrTex, TexCoords - shift).b);
+    } else {
+        sceneRgb = texture(hdrTex, TexCoords).rgb;
+    }
+    vec3 color = sceneToToned(sceneRgb, aoFactor, bloomAdd);
 
     // Sharpen: unsharp mask on the tonemapped result (4-tap cross)
     if (sharpenEnabled == 1) {

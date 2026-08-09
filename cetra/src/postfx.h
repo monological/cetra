@@ -389,6 +389,10 @@ typedef struct PostFX {
     bool vignette_enabled;
     float vignette_strength; // Edge darkening, 0..1
     float vignette_radius;   // Fraction of the half-diagonal kept bright
+    // Chromatic aberration. A lens effect, so it lands on the scene sample
+    // before the tonemap rather than in the finishing block with the others.
+    bool ca_enabled;
+    float ca_strength; // Radial UV shift at the corner, before the r^2 falloff
     bool grain_enabled;
     float grain_strength;
     int frame_index; // Copied from engine->total_frames; seeds deterministic grain

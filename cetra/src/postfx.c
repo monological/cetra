@@ -625,6 +625,8 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     fx->vignette_enabled = true;
     fx->vignette_strength = 0.25f;
     fx->vignette_radius = 0.6f;
+    fx->ca_enabled = false;
+    fx->ca_strength = 0.35f;
     fx->grain_enabled = false;
     fx->grain_strength = 0.015f;
     fx->frame_index = 0;
@@ -3212,6 +3214,8 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         uniform_set_int(tm, "vignetteEnabled", fx->vignette_enabled ? 1 : 0);
         uniform_set_float(tm, "vignetteStrength", fx->vignette_strength);
         uniform_set_float(tm, "vignetteRadius", fx->vignette_radius);
+        uniform_set_int(tm, "caEnabled", fx->ca_enabled ? 1 : 0);
+        uniform_set_float(tm, "caStrength", fx->ca_strength);
         uniform_set_int(tm, "grainEnabled", fx->grain_enabled ? 1 : 0);
         uniform_set_float(tm, "grainStrength", fx->grain_strength);
         // % 4096: same float-hash conditioning bound as PCSS/SSR
