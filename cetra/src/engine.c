@@ -1667,55 +1667,6 @@ static const char* _material_gui_label(const Material* material, int index) {
     return out;
 }
 
-// Write a material's non-default properties to the clipboard as a .cscn
-// materials block.
-//
-// Only what DIFFERS from a fresh material, compared against create_material()
-// rather than a hardcoded list -- an override sheet that restated every default
-// would bury the two values that were actually tuned, and a hardcoded list
-// would go stale the first time a default moved. Textures are not emitted: the
-// panel cannot change them, so anything it wrote would be a guess.
-static void _material_copy_as_cscn(const Material* material) {
-    Material* fresh = create_material();
-    if (!fresh)
-        return;
-
-    char out[4096];
-    int n = snprintf(out, sizeof(out), "\"%s\": {\n",
-                     material->name && material->name[0] ? material->name : "UNNAMED");
-    for (size_t i = 0; i < MATERIAL_PARAM_COUNT && n > 0 && n < (int)sizeof(out); i++) {
-        const MaterialParam* p = &MATERIAL_PARAMS[i];
-        float now[3] = {0}, was[3] = {0};
-        material_param_get(material, p, now);
-        material_param_get(fresh, p, was);
-        int count = p->type == MATERIAL_PARAM_VEC3 ? 3 : 1;
-        bool same = true;
-        for (int c = 0; c < count; c++)
-            same = same && fabsf(now[c] - was[c]) < 1e-6f;
-        if (same)
-            continue;
-        if (count == 3)
-            n += snprintf(out + n, sizeof(out) - n, "  \"%s\": [%.4g, %.4g, %.4g],\n", p->key,
-                          now[0], now[1], now[2]);
-        else
-            n += snprintf(out + n, sizeof(out) - n, "  \"%s\": %.4g,\n", p->key, now[0]);
-    }
-    // snprintf reports what it WOULD have written, so n can run past the buffer
-    // on truncation; clamp before the tail writes index off it.
-    if (n < 0 || n >= (int)sizeof(out))
-        n = (int)sizeof(out) - 1;
-    // Drop the trailing comma so the result is valid JSON when pasted.
-    if (n >= 2 && out[n - 2] == ',')
-        snprintf(out + n - 2, sizeof(out) - (n - 2), "\n}");
-    else
-        snprintf(out + n, sizeof(out) - n, "}");
-
-    igSetClipboardText(out);
-    log_info("Material '%s' copied as .cscn:\n%s",
-             material->name ? material->name : "(unnamed)", out);
-    free_material(fresh);
-}
-
 // The material property editor, in its own window so it can be moved, resized
 // and closed. `open` is the caller's persistent flag and doubles as the close
 // button's target.
@@ -1787,17 +1738,6 @@ static void _engine_gui_material_window(Material* material, int index, bool* ope
     }
     if (group_open)
         igUnindent(0.0f); // the last group's step, if it ended open
-
-    igSeparator();
-    // Tuning that cannot be saved is tuning done twice. This writes the
-    // window's state back out in the scene file's own vocabulary, so a look
-    // found here survives as a file rather than as a memory.
-    if (igButton("Copy as .cscn", (ImVec2){0, 0}))
-        _material_copy_as_cscn(material);
-    if (igIsItemHovered(0))
-        igSetTooltip("Copy this material's non-default values to the clipboard as a materials "
-                     "block, ready to paste into a .cscn. Only properties that differ from a "
-                     "fresh material are written.");
 
     igPopID();
     igEnd();
