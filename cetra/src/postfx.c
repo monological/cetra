@@ -586,7 +586,7 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     fx->flare_ghost_spacing = 0.28f;
     fx->flare_halo_width = 0.32f;
     fx->flare_chroma = 2.0f; // pixels at the frame edge
-    fx->flare_source_lod = 2.0f;
+    fx->flare_source_lod = 2;
     fx->ssao_enabled = true;
     fx->ssao_radius = 0.4f;
     fx->ssao_strength = 0.8f;
@@ -1698,7 +1698,9 @@ static bool postfx_run_flare(PostFX* fx) {
     // Clamped to what the pyramid actually has: the mip count follows the
     // resolution, so an authored level valid at 1080p silently pins to the top
     // level in a small window and the flare softens without saying why.
-    uniform_set_float(u, "sourceLod", fminf(fx->flare_source_lod, (float)(fx->bloom_mips - 1)));
+    const int top_mip = fx->bloom_mips > 0 ? fx->bloom_mips - 1 : 0;
+    uniform_set_float(u, "sourceLod",
+                      (float)(fx->flare_source_lod < top_mip ? fx->flare_source_lod : top_mip));
     draw_fullscreen_quad(fx->quad_vao);
     check_gl_error("postfx lens flare");
     return true;

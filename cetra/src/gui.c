@@ -623,6 +623,11 @@ static void _engine_gui_panel(Engine* engine) {
         igSliderFloat("Ghost Spacing", &fx->flare_ghost_spacing, 0.15f, 0.45f, "%.3f", 0);
         igSliderFloat("Halo Width", &fx->flare_halo_width, 0.0f, 1.0f, "%.2f", 0);
         igSliderFloat("Flare Dispersion", &fx->flare_chroma, 0.0f, 12.0f, "%.1f px", 0);
+        // Bounded by the pyramid that exists at this resolution rather than a
+        // constant: the mip count falls out of the frame size, so a fixed top
+        // would let the slider travel past the last real level and do nothing.
+        igSliderInt("Source Mip", &fx->flare_source_lod, 0,
+                    fx->bloom_mips > 0 ? fx->bloom_mips - 1 : 0, "%d", 0);
         _end_effect_group();
 
         _begin_effect_group("Ambient Occlusion (GTAO)", &fx->ssao_enabled);

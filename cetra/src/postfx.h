@@ -212,7 +212,7 @@ typedef struct PostFX {
     float flare_ghost_spacing;       // Fraction of the centre vector between ghosts
     float flare_halo_width;          // Halo ring radius in UV units
     float flare_chroma;              // Per-channel radial offset; 0 = achromatic
-    float flare_source_lod;          // Pyramid level; a mid mip, clamped to what exists
+    int flare_source_lod;            // Pyramid mip the ghosts read, clamped to what exists
     bool flare_ready;                // Lazy-alloc guard for the target below
     GLuint flare_fbo, flare_texture; // Quarter post-res
     int flare_width, flare_height;
