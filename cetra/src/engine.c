@@ -1809,6 +1809,12 @@ static void _engine_gui_panel(Engine* engine) {
     Scene* scene = get_current_scene(engine);
     if (scene && scene->material_count > 0 &&
         igCollapsingHeader_TreeNodeFlags("Materials", 0)) {
+        // Nested collapsing headers draw flush with their parent, so without
+        // this the group headers read as siblings of "Materials" rather than as
+        // its contents. One step in for the section, another for each open
+        // group's controls, so the nesting is visible rather than implied.
+        igIndent(0.0f);
+
         // Like the light section below, this addresses ONE material: a scene
         // carries dozens and a single slider cannot honestly show two values.
         static int mat_sel = 0;
@@ -1850,9 +1856,13 @@ static void _engine_gui_panel(Engine* engine) {
             for (size_t i = 0; i < MATERIAL_PARAM_COUNT; i++) {
                 const MaterialParam* p = &MATERIAL_PARAMS[i];
                 if (!shown || strcmp(shown, p->group) != 0) {
+                    if (open)
+                        igUnindent(0.0f); // close the previous group's step
                     shown = p->group;
                     open = igCollapsingHeader_TreeNodeFlags(
                         p->group, i == 0 ? ImGuiTreeNodeFlags_DefaultOpen : 0);
+                    if (open)
+                        igIndent(0.0f);
                 }
                 if (!open)
                     continue;
@@ -1876,6 +1886,8 @@ static void _engine_gui_panel(Engine* engine) {
                 if (changed)
                     material_param_set(mat, p, v);
             }
+            if (open)
+                igUnindent(0.0f); // the last group's step, if it ended open
 
             // Tuning that cannot be saved is tuning done twice. This writes the
             // panel's state back out in the scene file's own vocabulary, so a
@@ -1888,6 +1900,7 @@ static void _engine_gui_panel(Engine* engine) {
                              "that differ from a fresh material are written.");
             igPopID();
         }
+        igUnindent(0.0f);
     }
 
     if (scene && scene->light_count > 0 &&
