@@ -179,14 +179,8 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
     uniform_set_float(u, "sheenRoughnessFactor", material->sheen_roughness_factor);
     // Unconditional, like uWindResponse below: the gate is per material, so a
     // material that leaves it 0 must still upload the 0 or it inherits whichever
-    // hair material happened to draw before it.
-    uniform_set_float(u, "hairShading", material->hair_shading);
-    uniform_set_float(u, "hairRoughness", material->hair_roughness);
-    uniform_set_float(u, "hairShift", material->hair_shift);
-    uniform_set_vec3(u, "hairTint", (const float*)&material->hair_tint);
-    uniform_set_float(u, "hairBacklit", material->hair_backlit);
-    uniform_set_float(u, "hairJitter", material->hair_jitter);
-    uniform_set_int(u, "hairFlowLayer", material->hair_flow_layer);
+    // anisotropic material happened to draw before it.
+    uniform_set_float(u, "anisotropy", material->anisotropy);
     uniform_set_float(u, "parallaxScale", material->parallax_scale); // POM depth (0 = off)
     uniform_set_float(u, "subsurface", material->subsurface);        // SSS strength (0 = off)
     uniform_set_vec3(u, "subsurfaceColor", (const float*)&material->subsurface_color);

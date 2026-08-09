@@ -94,14 +94,8 @@ uniform float specularFactor;     // KHR_materials_specular weight (-1 = extensi
 uniform vec3 specularColorFactor; // KHR_materials_specular F0 tint (white = no tint)
 uniform vec3 sheenColorFactor;      // KHR_materials_sheen color ((0,0,0) = no sheen lobe)
 uniform float sheenRoughnessFactor; // KHR_materials_sheen roughness
-// Hair lobes (roadmap B8). hairShading 0 leaves the GGX highlight untouched, so
-// every non-hair material compiles the same specular expression it always did.
-uniform float hairShading;
-uniform float hairRoughness;
-uniform float hairShift;
-uniform vec3 hairTint;
-uniform float hairBacklit;
-uniform float hairJitter; // in LOBE HALF-WIDTHS; inert without a strand map
+// Anisotropic specular (roadmap B8). 0 leaves the isotropic highlight alone.
+uniform float anisotropy;
 uniform float parallaxScale;        // POM march depth in UV units (0 = off, §4.11)
 uniform vec2 uvOffset;      // Texture coordinate offset (KHR_texture_transform)
 uniform vec2 uvScale;       // Texture coordinate scale (KHR_texture_transform)
@@ -126,9 +120,9 @@ uniform sampler2D heightTex;          // POM height field (unit 4, §4.11); whit
 // The scalar masks (roughness/metallic/ao/opacity/microsurface/anisotropy/
 // subsurface) share ONE array texture. Each material selects a layer per mask;
 // a layer < 0 means no texture -> fall back to the scalar factor. roughness
-// reads .g and metallic reads .b (glTF ORM); the rest read .r. The hair layer
-// is the one that is not a scalar mask: .rg carry a doubled-angle strand
-// orientation and .b a strand identity (see hair.glsl).
+// reads .g and metallic reads .b (glTF ORM); the rest read .r. Anisotropy is
+// the one that is not a scalar mask: .rg carry a doubled-angle grain direction
+// and .b a per-strand identity.
 uniform sampler2DArray maskArray;
 uniform int roughnessLayer;
 uniform int metallicLayer;
@@ -136,7 +130,6 @@ uniform int aoLayer;
 uniform int opacityLayer;
 uniform int microsurfaceLayer;
 uniform int anisotropyLayer;
-uniform int hairFlowLayer;
 
 uniform int albedoTexExists;
 uniform int normalTexExists;
@@ -283,8 +276,6 @@ uniform float probeBoxFade;
 
 const float PI = 3.14159265359;
 
-// Below PI on purpose: the hair lobes are normalised against it.
-#include "hair.glsl"
 
 // Firefly ceiling on the BRDF -- dimensionless, so it is independent of both
 // light magnitude and exposure. That independence is the whole point; a ceiling
@@ -1005,9 +996,19 @@ void main() {
     }
 
     // Anisotropy - for brushed metal, hair effects
-    float anisotropyMap = 0.0;
+    // Grain direction and how confident the map is about it. The layer stores a
+    // coherence-weighted DOUBLED angle, which is the only form that survives the
+    // mask array's resample and mip chain -- a direction and its reverse are the
+    // same grain, so raw vectors would average to nothing under minification.
+    // Halving the angle on read returns the +T half-plane representative.
+    vec2 anisoDir = vec2(1.0, 0.0);
+    float anisoCoherence = 0.0;
     if (anisotropyLayer >= 0) {
-        anisotropyMap = texture(maskArray, vec3(uv, float(anisotropyLayer))).r;
+        vec3 texel = texture(maskArray, vec3(uv, float(anisotropyLayer))).rgb;
+        vec2 doubled = texel.rg * 2.0 - 1.0;
+        anisoCoherence = min(length(doubled), 1.0);
+        float grain = 0.5 * atan(doubled.y, doubled.x);
+        anisoDir = vec2(cos(grain), sin(grain));
     }
 
 
@@ -1279,30 +1280,25 @@ void main() {
         ltcAmp = textureLod(ltcTex, vec3(ltcUV, LTC_LAYER_AMP), 0.0).xy;
     }
 
-    // Hair strand frame, resolved once. Both terms depend on the SURFACE, not on
-    // any light, so they are hoisted above the loop -- inside it they would be
-    // the same texture fetch repeated per light.
+    // Anisotropic shading frame, resolved once: it depends on the SURFACE, not
+    // on any light, and the loop below runs per light on geometry (hair cards,
+    // brushed panels) that overdraws heavily.
     //
-    // Without a map the card tangent stands and the jitter is zero: one flat
-    // sheet, honestly. Inventing per-strand variation from the texel coordinate
-    // instead is what an earlier revision did, and it correlates with painted
-    // strands only when they run exactly the way the invention keys, which the
-    // raiden groom (curving, leaning up to 30 degrees) does not.
-    HairFrame hairFrame;
-    if (hairShading > 0.0) {
-        vec3 hairT = T;
-        float hairShiftAt = hairShift;
-        if (hairFlowLayer >= 0) {
-            vec4 strand = hairStrandData(maskArray, uv, hairFlowLayer);
-            // The decode returns the +T half-plane representative, so this
-            // already carries the card tangent's sign. That matters: the lobes
-            // are sign-invariant but the cuticle shift is not, and a flipped T
-            // would swap which end R and TRT sit at.
-            hairT = normalize(mix(T, normalize(strand.x * T + strand.y * B), strand.z));
-            hairShiftAt = hairShift +
-                          (strand.w * 2.0 - 1.0) * hairJitter * hairLobeHalfWidth(hairRoughness);
-        }
-        hairFrame = hairMakeFrame(hairT, N, V, hairRoughness, hairShiftAt);
+    // Aniso is the strength actually used, so the loop tests one value rather
+    // than re-deriving the gate. Without a map it stays 0 and the isotropic
+    // highlight below is untouched -- a quad has one tangent, and stretching a
+    // highlight along it would be a claim about the card rather than about what
+    // is painted on it.
+    vec3 anisoT = T, anisoB = B;
+    float aniso = 0.0;
+    if (anisotropy > 0.0 && anisotropyLayer >= 0) {
+        vec3 dir = normalize(anisoDir.x * T + anisoDir.y * B);
+        // Blended by coherence: where the map is unsure the card tangent stands,
+        // and the strength falls off with it so an averaged-to-nothing
+        // neighbourhood goes isotropic rather than picking a direction at random.
+        anisoT = normalize(mix(T, dir, anisoCoherence));
+        anisoB = normalize(cross(N, anisoT));
+        aniso = anisotropy * anisoCoherence;
     }
 
     for (int k = 0; k < numDir + clusterCount; k++) {
@@ -1438,10 +1434,14 @@ void main() {
         // throughout and converted once at the composite. See the note there.
         vec3 radiance = lightCI * attenuation;
 
-        // Cook-Torrance BRDF with optional anisotropy
+        // Cook-Torrance BRDF with optional anisotropy. The anisotropic branch
+        // substitutes only the NDF, so it keeps the shared 1/(4 NdotV NdotL) and
+        // the energy compensation below -- which is what makes a per-texel
+        // direction a redistribution of the highlight rather than a change to
+        // how much light there is.
         float NDF;
-        if (anisotropyLayer >= 0 && anisotropyMap > 0.01) {
-            NDF = distributionGGXAnisotropic(N, H, T, B, roughnessMap, anisotropyMap);
+        if (aniso > 0.01) {
+            NDF = distributionGGXAnisotropic(N, H, anisoT, anisoB, roughnessMap, aniso);
         } else {
             NDF = areaLightNorm * distributionGGX(N, H, areaLightRoughness);
         }
@@ -1481,21 +1481,6 @@ void main() {
         float denominator = 4.0 * NdotV * NdotL + 0.0001;
         vec3 specular = numerator / denominator * energyComp;
 
-        // Hair (roadmap B8): replace the microfacet highlight outright rather
-        // than adding to it. GGX wants a surface normal and a half vector; a
-        // strand has a tangent and a whole circle of valid normals, so the two
-        // models cannot be summed without counting the same light twice.
-        //
-        // The card tangent is only the CARD's direction. Which way an individual
-        // strand runs is painted in the atlas and reaches the shader through the
-        // strand map (hairT above), because a quad carries one tangent and the
-        // hair on it does not.
-        //
-        // hairShading 0 leaves the expression above untouched.
-        if (hairShading > 0.0) {
-            vec3 hairSpec = hairSpecular(hairFrame, N, L, hairTint, hairBacklit, maxComp(F));
-            specular = mix(specular, hairSpec, hairShading);
-        }
 
         // Energy conservation: diffuse and specular must not exceed 1.0
         vec3 kS = F;

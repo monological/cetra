@@ -8,16 +8,8 @@
   ],
   "materials": {
     "hair_card": {
-      "hairShading": 1.0,
-      "hairRoughness": 0.3,
-      "hairShift": 0.05,
-      "hairTint": [
-        0.8,
-        0.78,
-        0.72
-      ],
-      "hairBacklit": 0.35,
-      "hairMap": "hair_fixture_flow.png"
+      "anisotropy": 0.85,
+      "anisotropyMap": "hair_fixture_flow.png"
     }
   },
   "lights": [

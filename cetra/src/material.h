@@ -81,38 +81,14 @@ typedef struct Material {
                             // rather than duplicating it: fix one and tune the other, or they
                             // multiply and you chase yourself. Inert unless subsurface > 0 and a
                             // profile is assigned.
-    // Hair shading (roadmap B8, spec 11.20). Three shifted fibre lobes along the
-    // strand tangent instead of the isotropic GGX highlight: R off the cuticle,
-    // uncoloured because it never entered the fibre; TRT toward the tip, tinted
-    // because it went through and back; TT the backlit glow.
+    // Anisotropic specular: stretches the highlight ALONG a direction rather
+    // than leaving it round. Brushed metal, vinyl, and hair cards (roadmap B8,
+    // spec 11.20), which is the case that drove the per-texel direction below.
     //
-    // OFF by default, and 11.20 is the argument for leaving it that way -- the
-    // lobe replaces the microfacet term without carrying its 1/(4 NdotV NdotL)
-    // or its energy compensation, so the two are on different scales and it
-    // blows out white. That is a units mismatch, not a magnitude, which is why
-    // no combination of the values below rescues it. Read 11.20 before
-    // enabling this on anything.
-    //
-    // Shading only: it swaps a BRDF, never a pass, so unlike alpha_mode it is
-    // safe in the material vocabulary shared by scene files and the GUI.
-    float hair_shading;   // 0 = off (the GGX highlight stands), 1 = full hair lobes
-    float hair_roughness; // Longitudinal width of both lobes; 0 = a hard glint, 1 = a broad sheen
-    float hair_shift;     // Cuticle tilt in tangent-space units. Separates the two
-                          // lobes along the strand; 0 collapses them into one.
-    vec3 hair_tint;       // Absorption colour the TRT lobe carries. NOT albedo --
-                          // it is what the fibre did to the light on the way through.
-    float hair_backlit;   // TT strength: the glow when the light is behind the strand.
-                          // The one lobe that needs no view-side highlight to be visible.
-    float hair_jitter;    // Per-strand randomisation of hair_shift, in LOBE HALF-WIDTHS
-                          // rather than tilt units -- what it must clear to separate
-                          // neighbouring strands is the lobe's own width, which
-                          // hair_roughness sets, so a raw number would need re-tuning
-                          // whenever roughness moved and would fail SILENTLY (the
-                          // highlight just goes back to being one sheet). 1 = strands
-                          // separated by one half-width, measured as the point where
-                          // disruption is maximal and energy loss is still nil.
-                          // Inert without hair_flow_tex: no map, no per-strand value
-                          // to randomise by, and inventing one is what this replaced.
+    // 0 = off, and the GGX highlight the rest of the engine uses stands
+    // unchanged. Inert without anisotropy_tex: the strength scales a direction,
+    // and without a map there is no direction that is not the whole card's.
+    float anisotropy;
 
     vec2 uvOffset;    // Texture coordinate offset (KHR_texture_transform)
     vec2 uvScale;     // Texture coordinate scale (KHR_texture_transform)
@@ -157,26 +133,25 @@ typedef struct Material {
     Texture* height_tex;            // Height Map (Displacement Map)
 
     // Additional Advanced PBR Textures
-    Texture* opacity_tex;          // Opacity Map
-    Texture* microsurface_tex;     // Microsurface (Detail) Map
-    Texture* anisotropy_tex;       // Anisotropy Map
+    Texture* opacity_tex;      // Opacity Map
+    Texture* microsurface_tex; // Microsurface (Detail) Map
+    // Per-texel strand/grain direction, as a coherence-weighted DOUBLED-ANGLE
+    // vector in .rg plus a strand identity in .b. LINEAR data, not colour.
+    //
+    // Doubled-angle because a grain direction has no sign and this rides the
+    // mask array, which resamples and mips every layer -- averaging a raw
+    // direction with its own negation gives zero, exactly where the surface is
+    // minified. The vector's LENGTH is the coherence, so a neighbourhood of
+    // disagreeing directions shortens toward zero on its own and the shader
+    // falls back to an isotropic highlight rather than trusting an average of
+    // nothing.
+    //
+    // Produced by tools/gen_hair_flow.py from a hair atlas, or baked from a
+    // groom or a brush pattern in a DCC; the engine cannot tell the difference.
+    Texture* anisotropy_tex;
     Texture* sheen_tex;            // Sheen Map (for fabrics)
     Texture* reflectance_tex;      // Reflectance Map
     Texture* clearcoat_normal_tex; // Clearcoat normal map (orange-peel / weave)
-
-    // Per-texel strand data for the hair lobes: .rg a coherence-weighted
-    // doubled-angle orientation, .b a strand identity. LINEAR data, not colour.
-    //
-    // Doubled-angle because a strand has no head or tail and this rides the mask
-    // array, which resamples and mips every layer -- averaging a raw direction
-    // with its negation would give zero exactly where hair is minified. The
-    // vector's LENGTH is the coherence, so a neighbourhood of disagreeing
-    // strands shortens toward zero on its own and the shader falls back to the
-    // interpolated card tangent rather than trusting an average of nothing.
-    //
-    // Produced by tools/gen_hair_flow.py from a hair atlas, or baked from the
-    // groom in a DCC; the engine cannot tell the difference and does not care.
-    Texture* hair_flow_tex;
 
     // Per-mask layer indices into the scene's material mask sampler2DArray
     // (-1 = no texture -> the shader falls back to the scalar factor). The
@@ -189,7 +164,6 @@ typedef struct Material {
     int opacity_layer;
     int microsurface_layer;
     int anisotropy_layer;
-    int hair_flow_layer; // reads .rg (orientation) and .b (strand id), not one scalar
 
     ShaderProgram* shader_program;
 } Material;
@@ -288,6 +262,5 @@ void set_material_reflectance_tex(Material* material, Texture* texture);
 void set_material_clearcoat_normal_tex(Material* material, Texture* texture);
 void set_material_microsurface_tex(Material* material, Texture* texture);
 void set_material_anisotropy_tex(Material* material, Texture* texture);
-void set_material_hair_flow_tex(Material* material, Texture* texture);
 
 #endif // _MATERIAL_H_

@@ -5,7 +5,7 @@
 
 Writes the atlas, derives the strand map from it with tools/gen_hair_flow.py,
 checks the derivation against the angles it painted, and emits the glTF and the
-four scene files the gate renders.
+three scene files the gate renders.
 
 WHAT THIS IS FOR
 
@@ -26,7 +26,7 @@ half, and the key light sits off to the side in X:
     right strands perpendicular   ->  sin(T,L) = 1    ->  lobe bright
 
 Geometry, normal, material, light and tangent are IDENTICAL in the two halves,
-so nothing but the map can separate them. Switching hairShading off is the
+so nothing but the map can separate them. Switching anisotropy off is the
 control: GGX sees one flat quad and both halves must match.
 
 That falsifies the coordinate hash too. A hash keyed on the texel coordinate
@@ -192,9 +192,7 @@ LIGHT = {"name": "key", "type": "directional",
          "direction": [-0.7071, 0.0, -0.7071],
          "color": [1.0, 1.0, 1.0], "intensity": 3.0}
 
-BASE_HAIR = {"hairShading": 1.0, "hairRoughness": 0.30, "hairShift": 0.05,
-             "hairTint": [0.80, 0.78, 0.72], "hairBacklit": 0.35,
-             "hairMap": "hair_fixture_flow.png"}
+BASE_HAIR = {"anisotropy": 0.85, "anisotropyMap": "hair_fixture_flow.png"}
 
 
 def write_cscn(name, comment, **hair):
@@ -229,7 +227,7 @@ if __name__ == "__main__":
                "Control: the same card with hair shading off. GGX sees one flat "
                "quad, so the two halves must match -- which is what makes a "
                "difference in the hair arm attributable to the map.",
-               hairShading=0.0)
+               anisotropy=0.0)
     write_cscn("hair_fixture_nomap.cscn",
                "The same lobes with NO strand map, which is the state the "
                "feature is worthless in: one tangent for the whole quad, so the "
@@ -237,9 +235,5 @@ if __name__ == "__main__":
                "makes the reference arm's split attributable to the map rather "
                "than to the lobes, and it is the shape the coordinate hash this "
                "replaced would have measured as.",
-               hairMap=None)
-    write_cscn("hair_fixture_nojitter.cscn",
-               "Strand identity disabled. Isolates what the per-strand shift "
-               "offset contributes from what the orientation contributes.",
-               hairJitter=0.0)
-    print("wrote hair_fixture atlas, flow map, gltf and 4 scene files")
+               anisotropyMap=None)
+    print("wrote hair_fixture atlas, flow map, gltf and 3 scene files")

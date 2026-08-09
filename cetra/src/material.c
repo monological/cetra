@@ -32,17 +32,11 @@ const MaterialParam MATERIAL_PARAMS[] = {
     {"ao", "Base", MP(ao, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
     {"opacity", "Base", MP(opacity, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
 
-    // Ranges are the measured useful bands, not the expressible ones -- see the
-    // MaterialParam declaration for why, and spec 11.20 for the measurements
-    // behind these particular numbers.
-    {"hairShading", "Hair", MP(hair_shading, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
-    {"hairRoughness", "Hair", MP(hair_roughness, MATERIAL_PARAM_FLOAT, 0.05f, 0.6f)},
-    {"hairShift", "Hair", MP(hair_shift, MATERIAL_PARAM_FLOAT, 0.0f, 0.15f)},
-    {"hairTint", "Hair", MP(hair_tint, MATERIAL_PARAM_COLOR, 0.0f, 1.0f)},
-    {"hairBacklit", "Hair", MP(hair_backlit, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
-    {"hairJitter", "Hair", MP(hair_jitter, MATERIAL_PARAM_FLOAT, 0.0f, 2.0f)},
-    {"hairMap", "Hair", .type = MATERIAL_PARAM_TEXTURE,
-     .offset = offsetof(Material, hair_flow_tex), .set_tex = set_material_hair_flow_tex},
+    // Capped below 1: the anisotropic NDF divides by the cross-strand roughness,
+    // which a strength of 1 drives to zero.
+    {"anisotropy", "Anisotropy", MP(anisotropy, MATERIAL_PARAM_FLOAT, 0.0f, 0.95f)},
+    {"anisotropyMap", "Anisotropy", .type = MATERIAL_PARAM_TEXTURE,
+     .offset = offsetof(Material, anisotropy_tex), .set_tex = set_material_anisotropy_tex},
 
     {"emissive", "Emissive", MP(emissive, MATERIAL_PARAM_COLOR, 0.0f, 1.0f)},
     {"emissiveStrength", "Emissive", MP(emissive_strength, MATERIAL_PARAM_FLOAT, 0.0f, 20.0f)},
@@ -185,14 +179,7 @@ Material* create_material() {
     glm_vec3_copy((vec3){1.0f, 0.3f, 0.2f}, material->subsurface_color); // skin-ish default tint
     material->subsurface_profile = -1; // no scatter profile until configured
     material->curvature_scale = 0.0f;  // pre-integrated skin off until a material opts in
-    // Hair lobes off until a material opts in; the rest are the shape they take
-    // WHEN it does, so enabling is one key rather than five.
-    material->hair_shading = 0.0f;
-    material->hair_roughness = 0.35f;
-    material->hair_shift = 0.04f;
-    glm_vec3_copy((vec3){0.55f, 0.34f, 0.22f}, material->hair_tint); // warm brown absorption
-    material->hair_backlit = 0.35f;
-    material->hair_jitter = 1.0f; // one lobe half-width; see material.h
+    material->anisotropy = 0.0f; // isotropic until a material opts in
     glm_vec2_zero(material->uvOffset);
     glm_vec2_one(material->uvScale);
     material->uvRotation = 0.0f;
@@ -215,7 +202,6 @@ Material* create_material() {
     material->sheen_tex = NULL;
     material->reflectance_tex = NULL;
     material->clearcoat_normal_tex = NULL;
-    material->hair_flow_tex = NULL;
 
     // No mask array layers until the array is built from loaded textures
     material->roughness_layer = -1;
@@ -224,7 +210,6 @@ Material* create_material() {
     material->opacity_layer = -1;
     material->microsurface_layer = -1;
     material->anisotropy_layer = -1;
-    material->hair_flow_layer = -1;
 
     material->shader_program = NULL;
 
@@ -273,8 +258,6 @@ void free_material(Material* material) {
             texture_release(material->reflectance_tex);
         if (material->clearcoat_normal_tex)
             texture_release(material->clearcoat_normal_tex);
-        if (material->hair_flow_tex)
-            texture_release(material->hair_flow_tex);
 
         // Shader program managed by engine. Do not free here.
         free(material);
@@ -398,10 +381,3 @@ void set_material_anisotropy_tex(Material* material, Texture* texture) {
     material->anisotropy_tex = texture_retain(texture);
 }
 
-void set_material_hair_flow_tex(Material* material, Texture* texture) {
-    if (!material)
-        return;
-    if (material->hair_flow_tex)
-        texture_release(material->hair_flow_tex);
-    material->hair_flow_tex = texture_retain(texture);
-}
