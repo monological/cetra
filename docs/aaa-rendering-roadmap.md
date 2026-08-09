@@ -427,31 +427,36 @@ chromatic offset + lens-color gradient + halo + starburst), additive pre-tonemap
 dirt mask. Finishing in tonemap uniforms: frame_index-hashed deterministic grain, vignette, edge
 chromatic aberration — all default-off (tonemap output stays byte-identical). Runs at post res.
 
-### B8. Physically based hair (Karis/Marschner) — Effort XL — BUILT, SHIPPED OFF (spec 11.20)
-The strand map ships and is gated. The lobes it drives default to **off**, and the engine's default
-look is unchanged.
+### B8. Physically based hair (Karis/Marschner) — Effort XL — CLOSED, split (spec 11.20)
+The per-texel strand map shipped. The fibre lobes were built, rejected on look at every setting,
+and deleted.
 
-**Shipped and working.** `tools/gen_hair_flow.py` derives a per-texel strand map from a hair atlas
-(structure-tensor orientation, LIC strand identity), carried as a `mask_array` layer encoding a
-**coherence-weighted doubled angle** — the only form that survives the array's resample and mip
-chain, since a strand equals its own reverse. `run_hair_flow_gate` proves the shader reads it: one
-quad whose atlas paints strands along the card tangent on one side and across it on the other splits
-**7.21×** with the map and **1.02×** without, which is also what the coordinate hash it replaced
-would score. Scene files gained a texture vocabulary; the GUI gained a material editor.
+**Shipped and live.** `tools/gen_hair_flow.py` derives a strand map from a hair atlas
+(structure-tensor orientation, LIC identity) and it rides the **anisotropy** slot that already
+existed — so binding a map stretches the ordinary GGX highlight along the painted grain. Encoded as
+a **coherence-weighted doubled angle**, the only form that survives the mask array's resample and
+mip chain, since a grain direction equals its own reverse. `run_hair_flow_gate` proves the shader
+reads it: one quad whose atlas paints strands along the card tangent on one side and across it on
+the other splits 1.31x with a map against 1.05x without. Scene files gained a texture vocabulary;
+the GUI gained a material editor.
 
-**Why the lobes are off, and what would have to change.** Two reasons, in spec 11.20:
-1. **Structural, and the place to start.** The hair branch replaces the microfacet term with a bare
-   normalised Kajiya-Kay lobe carrying neither `/(4·NdotV·NdotL)` nor the energy compensation, so the
-   two are on different scales by construction — blown white highlights that no slider fixes,
-   because it is a units mismatch rather than a magnitude.
-2. **Categorical.** Cards carry no normal map, so per-texel *facing* is not in the asset however good
-   the direction map is; the atlas already has hair shading painted in, which the lobes compete with
-   rather than modulate; and white hair makes R and TRT read identically, hiding the whole payoff.
+**Why the lobes lost.** Two faults, both structural, in spec 11.20:
+1. The branch replaced the whole microfacet term with a bare normalised Kajiya-Kay lobe carrying
+   neither `/(4·NdotV·NdotL)` nor the energy compensation — a units mismatch that reads as blown
+   white highlights and that no slider fixes. Pairing the scales is necessary and NOT sufficient:
+   the lobe still flows through `NdotL` on the CARD normal, a surface-layering stack, and a
+   half-vector diffuse, so the unit of substitution is wrong rather than just its scale.
+2. Cards carry no normal map, so per-texel *facing* is absent from the asset however good the
+   direction map is; the atlas already has hair shading painted in for the lobes to compete with;
+   and white hair makes the uncoloured and tinted lobes read identically, hiding the payoff.
 
-Swept low and high in all combinations and rejected on look at every setting. **Do not re-open on
-raiden**: it needs (1) fixed, a per-texel normal bent around the strand, and a dark-haired subject.
-The transparency half is separately discharged — 11.19 found raiden's groom already banded across a
-MASK core and a BLEND layer sharing one atlas, so the renderer-side dual pass was rejected too.
+**The cheapest lesson, recorded so it is not repeated.** `set_material_anisotropy_tex` had zero
+callers — the engine already had an energy-paired per-texel direction channel, taking the same
+`.rg`-plus-third-channel layout as KHR_materials_anisotropy — and the first version of this work
+built a second one beside it. Nobody looked before building.
+
+Do not re-open the fibre lobes on raiden. What survives is a general anisotropic-specular feature
+that hair motivated.
 
 ### B9. Aerial perspective (Hillaire 2016) — Effort S
 The distance haze that sells outdoor scale: geometry fading into the atmosphere's own colour rather
@@ -557,7 +562,7 @@ and 11.2 (below). **Tiers 1 and 2 are complete**, Tier 2 closing with B3 pre-int
 | 16 | B6 Moment-based OIT | L | **DONE (11.17):** four power moments, **on by default** with OIT, 4.94x closer to the arithmetic than the weighted-blended weight (0.0157 RMS against 0.0773). No golden moves (none of their scenes has an alpha-blend mesh); the raiden baseline moves 0.12%, the hair silhouette. 4.17's ordering defect came with it onto the default path and was **fixed in 11.18** — the catcher simply drew too late; moving it ahead of the transparent pass repaired the unsorted late pass and the particle depth resolve too, with all 18 goldens at 0 px. Not zero infra: a card-stack fixture with an analytic answer, three gates, the first OIT golden. Two plan corrections worth carrying forward — the old `oit_fixture` **cannot discriminate any two OIT schemes**, because weighted-blended is exact whenever every layer shares a colour; and `pbr_frag` has no seventeenth sampler for ANY unit, free or not, since the driver counts declarations. Six or eight moments would need a third fragment output location and GL 4.1 guarantees eight, all spoken for. |
 | 17 | B7 Lens flare / finishing | S/M | |
 | 18 | A6 Moment shadow maps | L | |
-| 19 | B8 Hair | XL | **BUILT, SHIPPED OFF (spec 11.20).** The strand map, its tool and its gate ship and work — the shader splits a purpose-built card 7.21x on painted strand direction, against 1.02x with no map. The R/TT/TRT lobes it drives default to off: they were swept low and high in all combinations and lose to the GGX highlight at every setting. Two reasons, one fixable — the lobe replaces the microfacet term without its `/(4·NdotV·NdotL)` or energy compensation, so the scales mismatch by construction and it blows out white — and one not: cards carry no normal map, so per-texel facing is absent from the asset, and the atlas already has hair shading painted in for the lobes to fight. Do not re-open on raiden. |
+| 19 | B8 Hair | XL | **CLOSED, split (spec 11.20).** The strand map shipped and is live: it rides the **anisotropy** slot that already existed, so binding one stretches the ordinary GGX highlight along the painted grain — general enough for brushed metal and satin, which hair merely motivated. The R/TT/TRT fibre lobes were built, swept low and high in all combinations, rejected at every setting, and **deleted**. Two structural faults, neither tunable: the lobe replaced the whole microfacet term without its `/(4·NdotV·NdotL)` or energy compensation AND still flowed through a surface integrand (`NdotL` on the card normal, a coat/sheen stack, a half-vector diffuse); and cards carry no normal map, so per-texel facing is absent from the asset. The lesson worth more than the feature: `set_material_anisotropy_tex` had zero callers, so an energy-paired direction channel was already sitting there and this work built a second one beside it before anyone looked. |
 
 ## Foundations ownership (just-in-time)
 
