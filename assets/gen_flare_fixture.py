@@ -21,15 +21,30 @@ measurable are both geometric:
     -- "ghosts appeared opposite the source" and "the image got brighter" would
     be the same measurement.
 
-So: one small emissive quad up and to the left, a large dark backdrop, and
-nothing else. The ghosts belong down and to the right.
+The sibling .cscn declares a zero-intensity light for the first of those. Not
+because the scene wants light, but because a scene with NO lights gets a
+three-point rig added for it, which lifts the backdrop off black and dilutes
+the thing being measured: measured, the opposite-half rise is +3.5% with the
+rig and +276% without it.
+
+THE CORNER SUBJECT
+
+Chromatic aberration falls off as r^2 from the optical centre, so a fixture
+whose only feature sits mid-frame can measure that the channels separated but
+not that the separation follows r^2 -- a linear ramp passes that identically,
+and distinguishing the two is the entire reason the falloff is r^2.
+
+So there is a second, DIM quad in the far corner. Dim is load-bearing: at 0.6
+it sits below the bloom threshold of 1.0, so it never enters the pyramid, casts
+no ghosts of its own, and leaves the flare measurement untouched. It exists
+purely as a high-contrast edge at large r.
 
 GEOMETRY
 
-Two quads in the XY plane, both facing +Z, camera on +Z looking back:
-  - backdrop, 8x6, near-black, non-emissive
-  - emitter, 0.25x0.25, centred at (-1.6, 1.1), emissive far above 1 so it
-    clears the bloom threshold by a wide margin
+Quads in the XY plane facing +Z, camera on +Z looking back:
+  - backdrop, oversized so no clear colour shows at any sane aspect
+  - emitter, small, up and to the LEFT, emissive far above the bloom threshold
+  - corner mark, small, bottom-RIGHT, emissive below the bloom threshold
 """
 
 import base64
@@ -43,7 +58,15 @@ GLTF = os.path.join(HERE, "flare_fixture.gltf")
 # Up and to the LEFT, so the ghosts owe the gate the lower-right.
 EMITTER_CENTRE = (-1.6, 1.1)
 EMITTER_HALF = 0.125
-BACKDROP_HALF = (4.0, 3.0)
+# Far corner, for the r^2 assertion. Pushed out to sit near the frame edge
+# where the aberration is strongest.
+CORNER_CENTRE = (2.6, -1.9)
+CORNER_HALF = 0.16
+# Wider than the frame at any aspect the gate might render: at fov 50 and eye
+# z 5 the visible half-width is ~4.1 at 16:10 and more at 16:9, and a backdrop
+# that stops short leaves a clear-colour strip whose edge is an ACCIDENTAL
+# high-contrast feature a gate could latch onto without noticing.
+BACKDROP_HALF = (6.0, 4.0)
 
 
 def quad(cx, cy, hx, hy, z):
@@ -58,10 +81,11 @@ def main():
     prims = []
     for cx, cy, hx, hy, z in ((0.0, 0.0, BACKDROP_HALF[0], BACKDROP_HALF[1], -0.5),
                               (EMITTER_CENTRE[0], EMITTER_CENTRE[1], EMITTER_HALF, EMITTER_HALF,
-                               0.0)):
+                               0.0),
+                              (CORNER_CENTRE[0], CORNER_CENTRE[1], CORNER_HALF, CORNER_HALF, 0.0)):
         p, n, idx = quad(cx, cy, hx, hy, z)
         base = len(positions)
-        prims.append((base, len(indices), len(idx)))
+        prims.append((len(indices), len(idx)))
         positions += p
         normals += n
         indices += [base + i for i in idx]
@@ -83,32 +107,40 @@ def main():
          "max": [max(p[k] for p in positions) for k in range(3)]},
         {"bufferView": 1, "componentType": 5126, "count": len(normals), "type": "VEC3"},
     ]
-    # One accessor per primitive's index range, so the two quads can carry
-    # different materials off one shared buffer.
-    for _, first, count in prims:
+    # One accessor per primitive's index range, so the quads can carry different
+    # materials off one shared position/normal buffer.
+    for first, count in prims:
         accessors.append({"bufferView": 2, "byteOffset": first * 2, "componentType": 5123,
                           "count": count, "type": "SCALAR"})
+
+    def emissive(name, strength):
+        return {"name": name,
+                "pbrMetallicRoughness": {"baseColorFactor": [0.0, 0.0, 0.0, 1.0],
+                                         "metallicFactor": 0.0, "roughnessFactor": 1.0},
+                "emissiveFactor": [1.0, 0.96, 0.9],
+                "extensions": {"KHR_materials_emissive_strength":
+                               {"emissiveStrength": strength}}}
 
     gltf = {
         "asset": {"version": "2.0", "generator": "gen_flare_fixture.py"},
         "extensionsUsed": ["KHR_materials_emissive_strength"],
         "materials": [
             {"name": "backdrop",
-             "pbrMetallicRoughness": {"baseColorFactor": [0.02, 0.02, 0.025, 1.0],
-                                      "metallicFactor": 0.0, "roughnessFactor": 1.0}},
-            # Emissive far above 1 so it clears the bloom threshold by a wide
-            # margin -- the flare reads the pyramid, and a source that only just
-            # crosses the knee would make the gate sensitive to the threshold
-            # rather than to the flare.
-            {"name": "emitter",
              "pbrMetallicRoughness": {"baseColorFactor": [0.0, 0.0, 0.0, 1.0],
-                                      "metallicFactor": 0.0, "roughnessFactor": 1.0},
-             "emissiveFactor": [1.0, 0.96, 0.9],
-             "extensions": {"KHR_materials_emissive_strength": {"emissiveStrength": 60.0}}},
+                                      "metallicFactor": 0.0, "roughnessFactor": 1.0}},
+            # Far above the bloom threshold so the pyramid sees it by a wide
+            # margin -- a source that only just crosses the knee would make the
+            # gate sensitive to the threshold rather than to the flare.
+            emissive("emitter", 60.0),
+            # BELOW the threshold of 1.0 on purpose: an edge for the aberration
+            # assertion that contributes nothing to the pyramid and therefore
+            # casts no ghosts of its own.
+            emissive("corner_mark", 0.6),
         ],
         "meshes": [{"name": "flare_scene", "primitives": [
             {"attributes": {"POSITION": 0, "NORMAL": 1}, "indices": 2, "material": 0},
             {"attributes": {"POSITION": 0, "NORMAL": 1}, "indices": 3, "material": 1},
+            {"attributes": {"POSITION": 0, "NORMAL": 1}, "indices": 4, "material": 2},
         ]}],
         "nodes": [{"name": "flare_scene", "mesh": 0}],
         "scenes": [{"nodes": [0]}],
@@ -122,7 +154,8 @@ def main():
     with open(GLTF, "w") as f:
         json.dump(gltf, f, indent=1)
         f.write("\n")
-    print("wrote %s (emitter at %s)" % (os.path.basename(GLTF), str(EMITTER_CENTRE)))
+    print("wrote %s (emitter %s, corner mark %s)"
+          % (os.path.basename(GLTF), str(EMITTER_CENTRE), str(CORNER_CENTRE)))
 
 
 if __name__ == "__main__":

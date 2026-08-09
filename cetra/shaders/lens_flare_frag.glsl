@@ -16,12 +16,19 @@ out vec4 FragColor;
 // buffer left to read; taking one here would duplicate the threshold, knee and
 // firefly clamp, and a second copy of that arithmetic drifts from the first.
 // The pyramid is already thresholded and blurred, and ghosts are defocused by
-// construction, so the reuse is correct rather than a compromise. It does mean
-// this pass is only meaningful when bloom is on.
+// construction, so the reuse is correct rather than a compromise. The pyramid
+// is built whenever a consumer wants one, so this does not require bloom to be
+// switched on -- only that something asked for a thresholded bright image.
 uniform sampler2D bloomTex;
 uniform float ghostSpacing; // Fraction of the centre vector between ghosts
-uniform float haloWidth;    // Radius of the halo ring, in UV units
-uniform float chroma;       // Per-channel radial offset; 0 = achromatic ghosts
+// Halo radius as a fraction of the HALF-DIAGONAL, matching how the tonemap's
+// vignette and aberration measure radius. A plain UV radius would make the ring
+// elliptical: UV is not isotropic, so the same offset covers 1.78x the pixel
+// distance horizontally as vertically on a 16:9 frame -- and the aperture ring
+// is the one part of a flare that is physically a circle.
+uniform float haloWidth;
+uniform float chroma;   // Per-channel separation in PIXELS at the frame edge
+uniform vec2 texelSize; // Display-pixel size, so chroma can be denominated in pixels
 uniform int ghostCount;
 // Which pyramid level to read. Explicitly a MID mip, not level 0: an internal
 // reflection is badly out of focus, so a ghost is a soft blob. Sampling the
@@ -40,19 +47,29 @@ const vec3 LENS_TINT[5] = vec3[5](vec3(1.00, 0.95, 0.85),  // on-axis, near whit
                                   vec3(0.55, 0.60, 1.00)); // far off-axis
 
 vec3 lensTint(float r) {
-    float t = clamp(r, 0.0, 0.999) * 4.0;
-    int i = int(t);
-    return mix(LENS_TINT[i], LENS_TINT[i + 1], fract(t));
+    float t = clamp(r, 0.0, 1.0) * 4.0;
+    int i = min(int(t), 3); // keeps i + 1 in range at exactly r == 1
+    return mix(LENS_TINT[i], LENS_TINT[i + 1], t - float(i));
 }
 
-// One sample with the three channels pulled apart along the radius. This is
-// what separates a ghost from a blurred copy of the source: a real internal
-// reflection is dispersed by the glass, so its edges fringe.
-vec3 sampleDispersed(vec2 uv, float amount) {
+// One reflection: the source read at `uv`, tinted and faded by how far
+// off-axis it lands, with the channels pulled apart along the radius. The
+// dispersion is what separates a ghost from a blurred copy of the source -- a
+// real internal reflection is spread by the glass, so its edges fringe.
+//
+// Shared by the ghosts and the halo. They differ only in where they sample,
+// and keeping the tint/falloff policy in one place stops a change to the
+// falloff applying to one and not the other.
+vec3 flareTap(vec2 uv) {
     vec2 toCentre = vec2(0.5) - uv;
-    return vec3(textureLod(bloomTex, uv + toCentre * amount, sourceLod).r,
+    // Radius normalised so 1 is a CORNER, the same convention the tonemap uses.
+    float r = length(toCentre) / 0.7071;
+    float w = clamp(1.0 - r, 0.0, 1.0);
+    vec2 shift = toCentre * chroma * texelSize;
+    return vec3(textureLod(bloomTex, uv + shift, sourceLod).r,
                 textureLod(bloomTex, uv, sourceLod).g,
-                textureLod(bloomTex, uv - toCentre * amount, sourceLod).b);
+                textureLod(bloomTex, uv - shift, sourceLod).b) *
+           lensTint(r) * (w * w);
 }
 
 void main()
@@ -60,29 +77,29 @@ void main()
     // Mirror through frame centre: every ghost lies along this vector, which is
     // why the source has to be off-centre for any of this to be visible.
     vec2 flipped = vec2(1.0) - TexCoords;
-    vec2 toCentre = vec2(0.5) - flipped;
+    vec2 toCentre = TexCoords - 0.5; // == 0.5 - flipped
+    float centreDist = length(toCentre);
 
     vec3 flare = vec3(0.0);
     for (int i = 0; i < ghostCount; i++) {
         // Successive reflections land at successive fractions along the centre
         // vector. i + 1 so no ghost sits exactly on the mirrored source, which
         // would read as a second light rather than an artifact.
-        vec2 uv = flipped + toCentre * (float(i + 1) * ghostSpacing);
-        // Distance from centre drives both the tint and the falloff: a ghost
-        // thrown far off-axis is dimmer because less of the cone makes it back.
-        float r = length(vec2(0.5) - uv) * 2.0;
-        float weight = pow(clamp(1.0 - r, 0.0, 1.0), 2.0);
-        flare += sampleDispersed(uv, chroma) * lensTint(r) * weight;
+        flare += flareTap(flipped + toCentre * (float(i + 1) * ghostSpacing));
     }
 
-    // The halo: not a discrete reflection but the aperture ring itself, so it
-    // samples at a FIXED radius from centre rather than a fraction of the
-    // source's offset -- it stays put while the ghosts slide.
-    vec2 haloDir = normalize(toCentre + vec2(1e-6));
-    vec2 haloUV = flipped + haloDir * haloWidth;
-    float haloR = length(vec2(0.5) - haloUV) * 2.0;
-    float haloWeight = pow(clamp(1.0 - haloR, 0.0, 1.0), 2.0);
-    flare += sampleDispersed(haloUV, chroma) * lensTint(haloR) * haloWeight;
+    // The halo is the aperture ring rather than a discrete reflection, so it
+    // sits at a FIXED radius from centre instead of a fraction of the source's
+    // offset -- it stays put while the ghosts slide. Skipped at width 0, which
+    // would otherwise sample the mirrored source itself at full weight and make
+    // the slider's low end its brightest setting.
+    if (haloWidth > 0.0) {
+        vec2 haloDir = toCentre / max(centreDist, 1e-6);
+        flare += flareTap(flipped + haloDir * (haloWidth * 0.7071));
+    }
 
-    FragColor = vec4(flare, 1.0);
+    // Normalised by the tap count so brightness is a property of strength
+    // alone. Without this, dragging the ghost count doubles the total energy
+    // and every other control in the group cross-talks into exposure.
+    FragColor = vec4(flare / float(ghostCount + 1), 1.0);
 }

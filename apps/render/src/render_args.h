@@ -149,8 +149,8 @@ typedef struct {
     int no_vignette; // Force the default vignette off
     float grain;
     float sharpen;
-    float flare;     // Lens ghosts; needs bloom, which is what feeds them
-    float chromatic; // Chromatic aberration strength
+    float flare;     // Lens ghost strength
+    float chromatic; // Channel separation at the corner, in pixels
     int grade_set;   // A grade component was given -> enable the grade
     float grade_lift[3];
     float grade_gamma[3];

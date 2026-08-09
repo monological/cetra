@@ -11,9 +11,9 @@
    "name": "backdrop",
    "pbrMetallicRoughness": {
     "baseColorFactor": [
-     0.02,
-     0.02,
-     0.025,
+     0.0,
+     0.0,
+     0.0,
      1.0
     ],
     "metallicFactor": 0.0,
@@ -42,6 +42,29 @@
      "emissiveStrength": 60.0
     }
    }
+  },
+  {
+   "name": "corner_mark",
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 1.0
+   },
+   "emissiveFactor": [
+    1.0,
+    0.96,
+    0.9
+   ],
+   "extensions": {
+    "KHR_materials_emissive_strength": {
+     "emissiveStrength": 0.6
+    }
+   }
   }
  ],
  "meshes": [
@@ -63,6 +86,14 @@
      },
      "indices": 3,
      "material": 1
+    },
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1
+     },
+     "indices": 4,
+     "material": 2
     }
    ]
   }
@@ -85,23 +116,23 @@
   {
    "bufferView": 0,
    "componentType": 5126,
-   "count": 8,
+   "count": 12,
    "type": "VEC3",
    "min": [
+    -6.0,
     -4.0,
-    -3.0,
     -0.5
    ],
    "max": [
+    6.0,
     4.0,
-    3.0,
     0.0
    ]
   },
   {
    "bufferView": 1,
    "componentType": 5126,
-   "count": 8,
+   "count": 12,
    "type": "VEC3"
   },
   {
@@ -117,30 +148,37 @@
    "componentType": 5123,
    "count": 6,
    "type": "SCALAR"
+  },
+  {
+   "bufferView": 2,
+   "byteOffset": 24,
+   "componentType": 5123,
+   "count": 6,
+   "type": "SCALAR"
   }
  ],
  "bufferViews": [
   {
    "buffer": 0,
    "byteOffset": 0,
-   "byteLength": 96
+   "byteLength": 144
   },
   {
    "buffer": 0,
-   "byteOffset": 96,
-   "byteLength": 96
+   "byteOffset": 144,
+   "byteLength": 144
   },
   {
    "buffer": 0,
-   "byteOffset": 192,
-   "byteLength": 24,
+   "byteOffset": 288,
+   "byteLength": 36,
    "target": 34963
   }
  ],
  "buffers": [
   {
-   "byteLength": 216,
-   "uri": "data:application/octet-stream;base64,AACAwAAAQEAAAAC/AACAQAAAQEAAAAC/AACAQAAAQMAAAAC/AACAwAAAQMAAAAC/zczcv83MnD8AAAAAzcy8v83MnD8AAAAAzcy8v5qZeT8AAAAAzczcv5qZeT8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAADAAIAAAACAAEABAAHAAYABAAGAAUA"
+   "byteLength": 324,
+   "uri": "data:application/octet-stream;base64,AADAwAAAgEAAAAC/AADAQAAAgEAAAAC/AADAQAAAgMAAAAC/AADAwAAAgMAAAAC/zczcv83MnD8AAAAAzcy8v83MnD8AAAAAzcy8v5qZeT8AAAAAzczcv5qZeT8AAAAA9igcQFK43r8AAAAA16MwQFK43r8AAAAA16MwQArXA8AAAAAA9igcQArXA8AAAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAADAAIAAAACAAEABAAHAAYABAAGAAUACAALAAoACAAKAAkA"
   }
  ]
 }

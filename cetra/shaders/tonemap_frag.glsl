@@ -237,6 +237,34 @@ float aoVisibility()
 // No exposure here. The buffer arrives fully exposed -- camera AND adaptation
 // both, applied at the scene passes (view.glsl) -- so this pass only maps
 // working space to display.
+// The one place this pass reads the scene, so aberration cannot apply to some
+// samples and not others.
+//
+// Chromatic aberration is a LENS effect: it acts on the light before the
+// sensor, which puts it ahead of the tonemap entirely and far ahead of grain,
+// which is sensor noise that must not be resampled. Applying it here rather
+// than to the composited result also keeps it in linear HDR, where a blown
+// highlight is still hundreds of times white -- the fringe stays saturated
+// instead of being clipped to a grey smear by the tone curve.
+//
+// Only the scene is offset. Bloom and flare are wide blurs where a two-pixel
+// shift is invisible.
+vec3 sceneTap(vec2 uv)
+{
+    if (caEnabled == 0)
+        return texture(hdrTex, uv).rgb;
+    // dir * r^2 collapses: normalising cancels one power of the radius, so
+    // there is no division and no degenerate case at the optical centre.
+    // caStrength is in PIXELS at the corner -- denominated that way because the
+    // useful band is one to a few of them, and as a raw UV offset the sensible
+    // values sat three decimal places down, where the shipped default and
+    // slider range were both wrong by two orders of magnitude.
+    vec2 toCentre = uv - 0.5;
+    vec2 shift = toCentre * (length(toCentre) * caStrength / (0.7071 * 0.7071)) * texelSize;
+    return vec3(texture(hdrTex, uv + shift).r, texture(hdrTex, uv).g,
+                texture(hdrTex, uv - shift).b);
+}
+
 vec3 sceneToToned(vec3 hdr, float aoFactor, vec3 bloomAdd)
 {
     // Sanitize a +INF texel (half-float overflow upstream) — both tonemap
@@ -338,34 +366,17 @@ void main()
     // r^2, not r. Lateral chromatic aberration grows faster than linearly
     // toward the corners; a linear ramp reads as a uniform colour cast over the
     // whole frame instead of a corner artifact.
-    vec3 sceneRgb;
-    if (caEnabled == 1) {
-        vec2 toCentre = TexCoords - 0.5;
-        // r is 0 at the centre and 1 at a corner (0.7071 is the centre-to-corner
-        // UV distance, the same constant the vignette uses).
-        float r = length(toCentre) / 0.7071;
-        // caStrength is in PIXELS at the corner. Denominated that way because
-        // the useful band is one to a few pixels, and a raw UV offset put the
-        // sensible values three decimal places down where every slider range
-        // and default was wrong by two orders of magnitude.
-        vec2 dir = toCentre / max(length(toCentre), 1e-5);
-        vec2 shift = dir * (caStrength * r * r) * texelSize;
-        sceneRgb = vec3(texture(hdrTex, TexCoords + shift).r, texture(hdrTex, TexCoords).g,
-                        texture(hdrTex, TexCoords - shift).b);
-    } else {
-        sceneRgb = texture(hdrTex, TexCoords).rgb;
-    }
-    vec3 color = sceneToToned(sceneRgb, aoFactor, bloomAdd);
+    vec3 color = sceneToToned(sceneTap(TexCoords), aoFactor, bloomAdd);
 
     // Sharpen: unsharp mask on the tonemapped result (4-tap cross)
     if (sharpenEnabled == 1) {
-        vec3 blur = sceneToToned(texture(hdrTex, TexCoords + vec2(texelSize.x, 0.0)).rgb, aoFactor,
+        vec3 blur = sceneToToned(sceneTap(TexCoords + vec2(texelSize.x, 0.0)), aoFactor,
                                  bloomAdd) +
-                    sceneToToned(texture(hdrTex, TexCoords - vec2(texelSize.x, 0.0)).rgb, aoFactor,
+                    sceneToToned(sceneTap(TexCoords - vec2(texelSize.x, 0.0)), aoFactor,
                                  bloomAdd) +
-                    sceneToToned(texture(hdrTex, TexCoords + vec2(0.0, texelSize.y)).rgb, aoFactor,
+                    sceneToToned(sceneTap(TexCoords + vec2(0.0, texelSize.y)), aoFactor,
                                  bloomAdd) +
-                    sceneToToned(texture(hdrTex, TexCoords - vec2(0.0, texelSize.y)).rgb, aoFactor,
+                    sceneToToned(sceneTap(TexCoords - vec2(0.0, texelSize.y)), aoFactor,
                                  bloomAdd);
         color = clamp(color + sharpenStrength * (color - blur * 0.25), 0.0, 1.0);
     }

@@ -497,6 +497,8 @@ static void postfx_free_targets(PostFX* fx) {
     gl_delete_texture(&fx->oit_revealage_texture);
     gl_delete_fbo(&fx->spec_fbo);
     gl_delete_texture(&fx->spec_texture);
+    gl_delete_fbo(&fx->flare_fbo);
+    gl_delete_texture(&fx->flare_texture);
 }
 
 // Delete the targets AND forget they existed, so the next frame that needs a
@@ -516,14 +518,7 @@ static void postfx_invalidate_targets(PostFX* fx) {
     postfx_free_targets(fx);
     fx->ssgi_ready = false;
     fx->dof_ready = false;
-    // Sized from the POST resolution, so a resize or a render-scale change has
-    // to drop it -- otherwise the composite magnifies a target built for the
-    // old frame.
-    if (fx->flare_ready) {
-        glDeleteFramebuffers(1, &fx->flare_fbo);
-        glDeleteTextures(1, &fx->flare_texture);
-        fx->flare_ready = false;
-    }
+    fx->flare_ready = false;
     fx->fog_layer_ready = false;
     // One-shot latch: without clearing it, a transient failure at the old size
     // would permanently disable temporal fog at every later one.
@@ -578,9 +573,6 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     fx->bloom_strength = 0.015f;
     fx->bloom_enabled = true;
 
-    // Off, so the default frame is byte-identical to one built before this
-    // existed. The rest are the shape the effect takes WHEN enabled, so turning
-    // it on is one key rather than six.
     fx->flare_enabled = false;
     // Measured on the flare fixture: 0.02 is present but easy to miss, 0.06
     // is unmistakable, and past ~0.15 the ghosts stop being artifacts and
@@ -588,12 +580,12 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     // this sums roughly five taps of it, so the numbers are not comparable.
     fx->flare_strength = 0.03f;
     fx->flare_ghosts = 4;
-    // Ghosts land at successive fractions along the vector from the mirrored
-    // source to frame centre. Spacing below ~0.2 stacks them into one smear;
-    // above ~0.4 the later ones fall outside the frame and are wasted work.
+    // Fraction of the mirrored-source-to-centre vector between ghosts. Below
+    // ~0.2 they stack into one smear; near 1.0 they pile onto frame centre,
+    // which is where the falloff weights them highest.
     fx->flare_ghost_spacing = 0.28f;
     fx->flare_halo_width = 0.32f;
-    fx->flare_chroma = 0.012f;
+    fx->flare_chroma = 2.0f; // pixels at the frame edge
     fx->flare_source_lod = 2.0f;
     fx->ssao_enabled = true;
     fx->ssao_radius = 0.4f;
@@ -1600,61 +1592,6 @@ static void postfx_run_sss(PostFX* fx, GLuint canvas_fbo, mat4 projection, bool 
 // everywhere: the mip-count policy at allocation stops at >= 8 px per
 // axis, so the shifts never degenerate and viewport always agrees with
 // texelSize.
-// Lens flare target, allocated on first use like the DoF and fog chains: a
-// scene that never enables it never pays the memory. Quarter POST res -- ghosts
-// are defocused, so resolution buys nothing, and the magnified read on
-// composite costs less than the fill would.
-static bool postfx_ensure_flare(PostFX* fx) {
-    if (fx->flare_ready)
-        return true;
-    fx->flare_width = fx->out_width > 4 ? fx->out_width / 4 : 1;
-    fx->flare_height = fx->out_height > 4 ? fx->out_height / 4 : 1;
-
-    glGenFramebuffers(1, &fx->flare_fbo);
-    glGenTextures(1, &fx->flare_texture);
-    glBindTexture(GL_TEXTURE_2D, fx->flare_texture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_R11F_G11F_B10F, fx->flare_width, fx->flare_height, 0, GL_RGB,
-                 GL_FLOAT, NULL);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    // Clamped, not wrapped: a ghost sampled past the edge must fade out rather
-    // than fold a bright source back in from the opposite side.
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glBindFramebuffer(GL_FRAMEBUFFER, fx->flare_fbo);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, fx->flare_texture,
-                           0);
-    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-        log_error("PostFX: lens flare target incomplete");
-        return false;
-    }
-    fx->flare_ready = true;
-    log_info("Lens flare: %dx%d", fx->flare_width, fx->flare_height);
-    return true;
-}
-
-// Ghosts from the finished bloom pyramid. Runs AFTER postfx_run_bloom, which
-// leaves the chain reopened at level 0 -- see lens_flare_frag.glsl for why the
-// source is the pyramid rather than a private bright pass.
-static void postfx_run_flare(PostFX* fx) {
-    if (!postfx_ensure_flare(fx))
-        return;
-    glBindFramebuffer(GL_FRAMEBUFFER, fx->flare_fbo);
-    glViewport(0, 0, fx->flare_width, fx->flare_height);
-    glUseProgram(fx->flare_program->id);
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, fx->bloom_texture);
-    UniformManager* u = fx->flare_program->uniforms;
-    uniform_set_int(u, "bloomTex", 0);
-    uniform_set_int(u, "ghostCount", fx->flare_ghosts);
-    uniform_set_float(u, "ghostSpacing", fx->flare_ghost_spacing);
-    uniform_set_float(u, "haloWidth", fx->flare_halo_width);
-    uniform_set_float(u, "chroma", fx->flare_chroma);
-    uniform_set_float(u, "sourceLod", fx->flare_source_lod);
-    draw_fullscreen_quad(fx->quad_vao);
-    check_gl_error("postfx lens flare");
-}
-
 static void postfx_run_bloom(PostFX* fx, GLuint scene_tex) {
     // Bright pass into pyramid level 0 (linear sampling downsamples)
     glBindFramebuffer(GL_FRAMEBUFFER, fx->bloom_fbo);
@@ -1713,6 +1650,60 @@ static void postfx_run_bloom(PostFX* fx, GLuint scene_tex) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, fx->bloom_mips - 1);
     check_gl_error("postfx bloom pyramid");
 }
+// Lens flare target, allocated on first use like the DoF and fog chains: a
+// scene that never enables it never pays the memory.
+//
+// Quarter of the OUTPUT resolution -- the size the tonemap composites at.
+// Ghosts are defocused, so resolution buys nothing. Dropped by
+// postfx_invalidate_targets on any rebuild; note render_scale does not move
+// out_*, so that drop is broader than this target strictly needs.
+static bool postfx_ensure_flare(PostFX* fx) {
+    if (fx->flare_ready)
+        return true;
+    fx->flare_width = fx->out_width > 4 ? fx->out_width / 4 : 1;
+    fx->flare_height = fx->out_height > 4 ? fx->out_height / 4 : 1;
+    if (!create_color_fbo(fx->flare_width, fx->flare_height, GL_R11F_G11F_B10F, &fx->flare_fbo,
+                          &fx->flare_texture)) {
+        log_error("PostFX: lens flare target incomplete");
+        // Latch off rather than retry: this runs every frame, and a driver
+        // refusing the target would otherwise leak an FBO and a texture per
+        // frame. Same shape as the froxel volume and the DoF chain.
+        fx->flare_enabled = false;
+        return false;
+    }
+    fx->flare_ready = true;
+    return true;
+}
+
+// Ghosts from the finished bloom pyramid; see lens_flare_frag.glsl for why the
+// source is the pyramid rather than a private bright pass. Returns whether it
+// actually wrote the target, which is what the composite needs to know --
+// flare_ready only says a target exists.
+static bool postfx_run_flare(PostFX* fx) {
+    if (!postfx_ensure_flare(fx))
+        return false;
+    glBindFramebuffer(GL_FRAMEBUFFER, fx->flare_fbo);
+    glViewport(0, 0, fx->flare_width, fx->flare_height);
+    glUseProgram(fx->flare_program->id);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, fx->bloom_texture);
+    UniformManager* u = fx->flare_program->uniforms;
+    uniform_set_int(u, "bloomTex", 0);
+    uniform_set_int(u, "ghostCount", fx->flare_ghosts);
+    uniform_set_float(u, "ghostSpacing", fx->flare_ghost_spacing);
+    uniform_set_float(u, "haloWidth", fx->flare_halo_width);
+    uniform_set_float(u, "chroma", fx->flare_chroma);
+    uniform_set_vec2(u, "texelSize",
+                     (vec2){1.0f / (float)fx->out_width, 1.0f / (float)fx->out_height});
+    // Clamped to what the pyramid actually has: the mip count follows the
+    // resolution, so an authored level valid at 1080p silently pins to the top
+    // level in a small window and the flare softens without saying why.
+    uniform_set_float(u, "sourceLod", fminf(fx->flare_source_lod, (float)(fx->bloom_mips - 1)));
+    draw_fullscreen_quad(fx->quad_vao);
+    check_gl_error("postfx lens flare");
+    return true;
+}
+
 
 // Unit-radius aperture points: a Vogel spiral (uniform disk coverage),
 // optionally warped so each angular wedge maps onto a regular N-gon's wedge
@@ -1846,10 +1837,6 @@ void free_postfx(PostFX* fx) {
     free_program(fx->bloom_down_program);
     free_program(fx->bloom_up_program);
     free_program(fx->flare_program);
-    if (fx->flare_ready) {
-        glDeleteFramebuffers(1, &fx->flare_fbo);
-        glDeleteTextures(1, &fx->flare_texture);
-    }
     free_program(fx->tonemap_program);
     free_program(fx->spec_occ_composite_program);
     free_program(fx->gtao_program);
@@ -3119,15 +3106,18 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             exposure_reset_adaptation(fx->exposure);
         }
 
-        // Flare rides bloom's output, so it is gated on bloom having run at
-        // all: with bloom off the pyramid holds the previous frame, or nothing.
+        // The pyramid is the frame's thresholded bright image, not bloom's
+        // private output, so it is built whenever a consumer wants one. Running
+        // it with bloomEnabled 0 at the composite costs a pass and changes
+        // nothing visible -- which is what lets the flare stand on its own
+        // instead of carrying "needs bloom" through the CLI, the GUI, two
+        // headers and a shader.
+        const bool flare_wanted = fx->flare_enabled && fx->flare_strength > 0.0f;
         bool flare_active = false;
-        if (fx->bloom_enabled) {
+        if (fx->bloom_enabled || flare_wanted) {
             postfx_run_bloom(fx, scene_tex);
-            if (fx->flare_enabled && fx->flare_strength > 0.0f) {
-                postfx_run_flare(fx);
-                flare_active = fx->flare_ready;
-            }
+            if (flare_wanted)
+                flare_active = postfx_run_flare(fx);
         }
 
         // Composite + tone map into the target framebuffer. The quad runs at

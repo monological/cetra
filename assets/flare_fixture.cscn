@@ -2,19 +2,33 @@
   "version": 1,
   "_comment": [
     "Lens flare fixture (spec 11.21). One small bright emissive quad up and to",
-    "the LEFT on a near-black backdrop, which is the only configuration a ghost",
+    "the LEFT on a black backdrop, which is the only configuration a ghost",
     "chain is measurable in: ghosts are the source mirrored through frame",
     "centre, so they owe the lower-right, and a scene with large bright areas",
     "would put a source in every pixel and read as a wash instead.",
     "",
-    "No lights. The emitter is the whole scene, so the frame is exactly the",
-    "bloom pyramid's content and nothing else can move the measurement.",
+    "The zero-intensity light is not lighting -- it is how a scene declines the",
+    "three-point rig the render app adds when a scene declares none (the",
+    "oit_cards idiom). That rig lifts the backdrop off black and dilutes the",
+    "measurement: the opposite-half rise is +3.5% with it and +276% without.",
     "",
-    "Bloom stays ON because the flare reads its pyramid -- there is no other",
-    "thresholded image in the chain. Exposure is pinned so two runs compare."
+    "A second, DIM quad sits in the far corner for the chromatic-aberration",
+    "assertion, which needs a high-contrast edge at large radius. At emissive",
+    "0.6 it is below the bloom threshold, so it never enters the pyramid and",
+    "casts no ghosts -- it cannot disturb the flare measurement.",
+    "",
+    "Bloom stays ON because the flare reads its pyramid. Exposure is pinned so",
+    "two runs compare."
   ],
   "models": [ { "path": "flare_fixture.gltf" } ],
-  "environment": { "mode": "hdr", "intensity": 0.0 },
+  "lights": [
+    {
+      "name": "flare_no_rig",
+      "type": "directional",
+      "direction": [0.0, -1.0, 0.0],
+      "intensity": 0.0
+    }
+  ],
   "camera": { "eye": [0.0, 0.0, 5.0], "target": [0.0, 0.0, 0.0], "fov": 50 },
   "post": {
     "tonemap": "neutral",

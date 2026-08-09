@@ -203,24 +203,16 @@ typedef struct PostFX {
     float bloom_strength;
     bool bloom_enabled;
 
-    // Lens flare (spec 11.21). Ghosts of a bright source, mirrored through
-    // frame centre, composited additively in the tonemap beside bloom.
-    //
-    // Reads the finished bloom pyramid rather than its own bright pass, so it
-    // produces nothing when bloom is off -- the pyramid holds the only
-    // thresholded image in the chain, and taking a second one would duplicate
-    // the threshold/knee/firefly arithmetic where the copies can drift.
+    // Lens flare (spec 11.21): ghosts of a bright source, mirrored through
+    // frame centre, composited additively in the tonemap beside bloom. Reads
+    // the bloom pyramid; see lens_flare_frag.glsl for why and how.
     bool flare_enabled;
     float flare_strength;
     int flare_ghosts;
-    float flare_ghost_spacing; // Fraction of the centre vector between ghosts
-    float flare_halo_width;    // Halo ring radius in UV units
-    float flare_chroma;        // Per-channel radial offset; 0 = achromatic
-    // Pyramid level the ghosts read. A mid mip, not 0: an internal reflection is
-    // badly out of focus, and the sharp level returns the source's own outline
-    // instead -- a square emitter comes back a square, which reads as a
-    // copy-paste rather than an artifact.
-    float flare_source_lod;
+    float flare_ghost_spacing;       // Fraction of the centre vector between ghosts
+    float flare_halo_width;          // Halo ring radius in UV units
+    float flare_chroma;              // Per-channel radial offset; 0 = achromatic
+    float flare_source_lod;          // Pyramid level; a mid mip, clamped to what exists
     bool flare_ready;                // Lazy-alloc guard for the target below
     GLuint flare_fbo, flare_texture; // Quarter post-res
     int flare_width, flare_height;
@@ -397,12 +389,7 @@ typedef struct PostFX {
     // Chromatic aberration. A lens effect, so it lands on the scene sample
     // before the tonemap rather than in the finishing block with the others.
     bool ca_enabled;
-    // Channel separation at the CORNER, in PIXELS, falling to nothing at the
-    // optical centre. Pixels rather than UV because the useful band is one to a
-    // few of them: expressed as a UV offset the sensible values sit three
-    // decimal places down, and every default and slider range written against
-    // them was wrong by two orders of magnitude.
-    float ca_strength;
+    float ca_strength; // Channel separation at the corner, in pixels
     bool grain_enabled;
     float grain_strength;
     int frame_index; // Copied from engine->total_frames; seeds deterministic grain

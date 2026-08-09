@@ -200,9 +200,9 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --grain <s>        Film grain strength (enables it)\n");
     fprintf(stderr, "      --sharpen <s>      Unsharp-mask strength (enables it)\n");
     fprintf(stderr,
-            "      --flare <s>        Lens ghost strength (enables it; needs bloom)\n");
+            "      --flare <s>        Lens ghost strength (enables it)\n");
     fprintf(stderr,
-            "      --chromatic-aberration <s>  Radial channel split (enables it)\n");
+            "      --chromatic-aberration <px> Channel split at the corner (enables it)\n");
     fprintf(stderr, "      --grade-lift/gamma/gain r,g,b  Colour grade (enables it)\n");
     fprintf(stderr, "      --dof              Depth of field, autofocused on the subject\n");
     fprintf(stderr, "      --no-dof           Force depth of field off (e.g. with --film)\n");

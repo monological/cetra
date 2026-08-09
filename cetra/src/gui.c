@@ -615,20 +615,14 @@ static void _engine_gui_panel(Engine* engine) {
         igSliderFloat("Bloom Threshold", &fx->bloom_threshold, 0.0f, 8.0f, "%.2f", 0);
         _end_effect_group();
 
-        // Directly under bloom because it reads bloom's output: with that
-        // checkbox off these do nothing, and sitting next to it is the cheapest
-        // way to say so.
+        // Under bloom because it reads the same thresholded pyramid, though it
+        // no longer needs bloom switched on to get one.
         _begin_effect_group("Lens Flare", &fx->flare_enabled);
-        if (!fx->bloom_enabled)
-            igTextDisabled("(needs bloom -- the pyramid is what it samples)");
         igSliderFloat("Flare Strength", &fx->flare_strength, 0.0f, 0.15f, "%.3f", 0);
         igSliderInt("Ghosts", &fx->flare_ghosts, 0, 8, "%d", 0);
-        // Below ~0.2 the ghosts stack into one smear; above ~0.4 the later ones
-        // land outside the frame and are fill for nothing.
         igSliderFloat("Ghost Spacing", &fx->flare_ghost_spacing, 0.15f, 0.45f, "%.3f", 0);
-        igSliderFloat("Halo Width", &fx->flare_halo_width, 0.0f, 0.6f, "%.3f", 0);
-        igSliderFloat("Flare Dispersion", &fx->flare_chroma, 0.0f, 0.05f, "%.4f", 0);
-        igSliderFloat("Source Blur (mip)", &fx->flare_source_lod, 0.0f, 5.0f, "%.1f", 0);
+        igSliderFloat("Halo Width", &fx->flare_halo_width, 0.0f, 1.0f, "%.2f", 0);
+        igSliderFloat("Flare Dispersion", &fx->flare_chroma, 0.0f, 12.0f, "%.1f px", 0);
         _end_effect_group();
 
         _begin_effect_group("Ambient Occlusion (GTAO)", &fx->ssao_enabled);
