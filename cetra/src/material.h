@@ -81,14 +81,20 @@ typedef struct Material {
                             // rather than duplicating it: fix one and tune the other, or they
                             // multiply and you chase yourself. Inert unless subsurface > 0 and a
                             // profile is assigned.
-    // Hair shading (roadmap B8, spec 11.19). Two shifted anisotropic lobes along
-    // the strand tangent instead of the isotropic GGX highlight -- the R lobe
-    // near the root, uncoloured because it reflects off the cuticle before
-    // entering the fibre, and the TRT lobe toward the tip, tinted because that
-    // one has been through the hair and back.
+    // Hair shading (roadmap B8, spec 11.20). Three shifted fibre lobes along the
+    // strand tangent instead of the isotropic GGX highlight: R off the cuticle,
+    // uncoloured because it never entered the fibre; TRT toward the tip, tinted
+    // because it went through and back; TT the backlit glow.
+    //
+    // OFF by default, and 11.20 is the argument for leaving it that way -- the
+    // lobe replaces the microfacet term without carrying its 1/(4 NdotV NdotL)
+    // or its energy compensation, so the two are on different scales and it
+    // blows out white. That is a units mismatch, not a magnitude, which is why
+    // no combination of the values below rescues it. Read 11.20 before
+    // enabling this on anything.
     //
     // Shading only: it swaps a BRDF, never a pass, so unlike alpha_mode it is
-    // safe in the .cscn material vocabulary and is registered there.
+    // safe in the material vocabulary shared by scene files and the GUI.
     float hair_shading;   // 0 = off (the GGX highlight stands), 1 = full hair lobes
     float hair_roughness; // Longitudinal width of both lobes; 0 = a hard glint, 1 = a broad sheen
     float hair_shift;     // Cuticle tilt in tangent-space units. Separates the two
