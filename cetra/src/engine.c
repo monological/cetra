@@ -1833,36 +1833,9 @@ static void _engine_gui_panel(Engine* engine) {
         }
     }
 
-    // Material selection lives in this panel; the properties live in their own
-    // window (below, after this one ends). Thirty controls inside an already
-    // long panel pushes everything after them off the bottom, and a material is
-    // the one thing here you tune while watching the frame rather than glance
-    // at -- so it gets a window that can be moved, resized and closed.
     static int mat_sel = 0;
     static bool mat_editor_open = false;
     Scene* scene = get_current_scene(engine);
-    if (scene && scene->material_count > 0 &&
-        igCollapsingHeader_TreeNodeFlags("Materials", 0)) {
-        igIndent(0.0f);
-
-        // Like the light section below, this addresses ONE material: a scene
-        // carries dozens and a single slider cannot honestly show two values.
-        if (mat_sel < 0 || mat_sel >= (int)scene->material_count)
-            mat_sel = 0; // a scene swap can leave the index past the new count
-        if (igBeginCombo("Material", _material_gui_label(scene->materials[mat_sel], mat_sel), 0)) {
-            for (size_t i = 0; i < scene->material_count; i++) {
-                if (igSelectable_Bool(_material_gui_label(scene->materials[i], (int)i),
-                                      (int)i == mat_sel, 0, (ImVec2){0, 0}))
-                    mat_sel = (int)i;
-                if ((int)i == mat_sel)
-                    igSetItemDefaultFocus();
-            }
-            igEndCombo();
-        }
-        if (igButton("Edit Material", (ImVec2){0, 0}))
-            mat_editor_open = true;
-        igUnindent(0.0f);
-    }
 
     if (scene && scene->light_count > 0 &&
         igCollapsingHeader_TreeNodeFlags("Lighting", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -1955,6 +1928,34 @@ static void _engine_gui_panel(Engine* engine) {
                 igTextDisabled("(needs point/spot lights)");
             }
         }
+    }
+
+    // Material selection lives in this panel; the properties live in their own
+    // window (raised after this one ends). Thirty controls inside an already
+    // long panel pushes everything after them off the bottom, and a material is
+    // the one thing here you tune while watching the frame rather than glance
+    // at -- so it gets a window that can be moved, resized and closed.
+    if (scene && scene->material_count > 0 &&
+        igCollapsingHeader_TreeNodeFlags("Materials", 0)) {
+        igIndent(0.0f);
+
+        // Like the light section above, this addresses ONE material: a scene
+        // carries dozens and a single slider cannot honestly show two values.
+        if (mat_sel < 0 || mat_sel >= (int)scene->material_count)
+            mat_sel = 0; // a scene swap can leave the index past the new count
+        if (igBeginCombo("Material", _material_gui_label(scene->materials[mat_sel], mat_sel), 0)) {
+            for (size_t i = 0; i < scene->material_count; i++) {
+                if (igSelectable_Bool(_material_gui_label(scene->materials[i], (int)i),
+                                      (int)i == mat_sel, 0, (ImVec2){0, 0}))
+                    mat_sel = (int)i;
+                if ((int)i == mat_sel)
+                    igSetItemDefaultFocus();
+            }
+            igEndCombo();
+        }
+        if (igButton("Edit Material", (ImVec2){0, 0}))
+            mat_editor_open = true;
+        igUnindent(0.0f);
     }
 
     if (scene && scene->render_skybox && scene->ibl &&
