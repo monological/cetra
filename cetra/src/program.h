@@ -93,6 +93,7 @@ ShaderProgram* create_shadow_catcher_program();
 ShaderProgram* create_bloom_bright_program();
 ShaderProgram* create_bloom_down_program();
 ShaderProgram* create_bloom_up_program();
+ShaderProgram* create_lens_flare_program();
 ShaderProgram* create_tonemap_program();
 ShaderProgram* create_spec_occ_composite_program();
 ShaderProgram* create_gtao_program();

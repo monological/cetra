@@ -771,6 +771,10 @@ ShaderProgram* create_bloom_up_program() {
     return create_post_program("bloom_upsample", upsample_tent_frag_shader_str);
 }
 
+ShaderProgram* create_lens_flare_program() {
+    return create_post_program("lens_flare", lens_flare_frag_shader_str);
+}
+
 ShaderProgram* create_tonemap_program() {
     ShaderProgram* program = NULL;
 

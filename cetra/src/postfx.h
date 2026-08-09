@@ -202,6 +202,24 @@ typedef struct PostFX {
     float bloom_max_brightness; // Firefly clamp on the bloom input
     float bloom_strength;
     bool bloom_enabled;
+
+    // Lens flare (spec 11.21). Ghosts of a bright source, mirrored through
+    // frame centre, composited additively in the tonemap beside bloom.
+    //
+    // Reads the finished bloom pyramid rather than its own bright pass, so it
+    // produces nothing when bloom is off -- the pyramid holds the only
+    // thresholded image in the chain, and taking a second one would duplicate
+    // the threshold/knee/firefly arithmetic where the copies can drift.
+    bool flare_enabled;
+    float flare_strength;
+    int flare_ghosts;
+    float flare_ghost_spacing;       // Fraction of the centre vector between ghosts
+    float flare_halo_width;          // Halo ring radius in UV units
+    float flare_chroma;              // Per-channel radial offset; 0 = achromatic
+    bool flare_ready;                // Lazy-alloc guard for the target below
+    GLuint flare_fbo, flare_texture; // Quarter post-res
+    int flare_width, flare_height;
+    ShaderProgram* flare_program;
     bool ssao_enabled;
     float ssao_radius; // Occlusion reach in view-space units
     float ssao_strength;

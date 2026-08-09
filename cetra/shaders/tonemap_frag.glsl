@@ -15,6 +15,10 @@ uniform sampler2D bloomTex;
 uniform sampler2D aoTex; // Blurred SSAO, upsampled by its linear filter
 uniform float bloomStrength;
 uniform int bloomEnabled;
+// Lens flare (spec 11.21), quarter post-res, composited with bloom below.
+uniform sampler2D flareTex;
+uniform float flareStrength;
+uniform int flareEnabled;
 uniform int aoEnabled;
 uniform float aoStrength;
 uniform sampler2D normalsTex; // Resolved view-space normal .xyz + SSR marker .a
@@ -311,6 +315,12 @@ void main()
     vec3 bloomAdd = vec3(0.0);
     if (bloomEnabled == 1)
         bloomAdd = bloomStrength * texture(bloomTex, TexCoords).rgb;
+    // Lens flare joins bloom's additive term rather than getting a composite
+    // pass of its own: both are pre-tonemap light added to the scene, and
+    // folding it in here means the sharpen taps below see it exactly as they
+    // see bloom instead of sampling a different image.
+    if (flareEnabled == 1)
+        bloomAdd += flareStrength * texture(flareTex, TexCoords).rgb;
 
     vec3 color = sceneToToned(texture(hdrTex, TexCoords).rgb, aoFactor, bloomAdd);
 
