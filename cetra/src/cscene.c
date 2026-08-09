@@ -296,6 +296,15 @@ static void parse_post(CetraSceneDesc* d, const cJSON* root) {
         }
     }
 
+    // Refused rather than clamped: 1.0 is not "no scaling" downstream, it is a
+    // value the render app rejects outright, and silently moving an authored
+    // number into range would hide a typo behind a slightly soft frame.
+    if (get_float(post, "render_scale", &d->render_scale)) {
+        d->has_render_scale = d->render_scale >= 0.5f && d->render_scale < 1.0f;
+        if (!d->has_render_scale)
+            log_warn("cscene: post.render_scale %.3f out of [0.5, 1); ignored", d->render_scale);
+    }
+
     const cJSON* bloom = cJSON_GetObjectItemCaseSensitive(post, "bloom");
     if (cJSON_IsObject(bloom)) {
         d->has_bloom_enabled = get_bool(bloom, "enabled", &d->bloom_enabled);

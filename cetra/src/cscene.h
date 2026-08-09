@@ -196,6 +196,13 @@ typedef struct CetraSceneDesc {
     float aperture;      // f-number
     float shutter_speed; // seconds
     float iso;
+    // TAAU render-resolution scale in [0.5, 1). Everything before the TAA seam
+    // renders at this fraction and the upscale resolve brings it to post res.
+    // It rides TAA, which windowed sessions turn on and headless ones do not --
+    // so a headless run of a scene that authors this still needs --taa
+    // --headless-jitter or the app refuses it and renders full res.
+    bool has_render_scale;
+    float render_scale;
     bool has_bloom_enabled;
     bool bloom_enabled;
     bool has_bloom_strength;

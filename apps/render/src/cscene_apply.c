@@ -125,6 +125,12 @@ int cscene_setup(RenderArgs* args, CetraSceneDesc** out_cscn) {
         args->auto_exposure_override = cscn->auto_exposure ? 1 : 0;
         log_info("cscene: auto-exposure %s (authored)", cscn->auto_exposure ? "on" : "off");
     }
+    if (args->render_scale == 0.0f && cscn->has_render_scale) {
+        args->render_scale = cscn->render_scale;
+        log_info("cscene: render scale %.2f authored (TAAU; headless also needs "
+                 "--taa --headless-jitter)",
+                 cscn->render_scale);
+    }
     if (args->bloom_enable < 0 && cscn->has_bloom_enabled) {
         args->bloom_enable = cscn->bloom_enabled ? 1 : 0;
     }
