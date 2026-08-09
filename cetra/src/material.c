@@ -11,7 +11,8 @@
 #include "material.h"
 #include "program.h"
 
-#define MP(field, type, lo, hi) offsetof(Material, field), type, lo, hi
+#define MP(field, type, lo, hi) offsetof(Material, field), type, lo, hi, NULL
+#define MPE(field, type, hi, labels) offsetof(Material, field), type, 0.0f, hi, labels
 
 // Group order here is the order an editor shows them in, and it is deliberate:
 // the handful of properties that describe every surface come first, and the
@@ -24,12 +25,18 @@ const MaterialParam MATERIAL_PARAMS[] = {
     {"ao", "Base", MP(ao, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
     {"opacity", "Base", MP(opacity, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
 
+    // Hair ranges are the measured useful bands, not the expressible ones.
+    // Roughness past ~0.6 collapses the lobe exponent toward 4 and erases every
+    // trace of strand definition; jitter past ~2 half-widths starts costing
+    // real energy (5% at two, 14% at four) and mottles rather than separates.
+    // Both were reachable before and both look like a broken feature rather
+    // than an extreme setting (spec 11.20).
     {"hairShading", "Hair", MP(hair_shading, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
-    {"hairRoughness", "Hair", MP(hair_roughness, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
-    {"hairShift", "Hair", MP(hair_shift, MATERIAL_PARAM_FLOAT, 0.0f, 0.3f)},
+    {"hairRoughness", "Hair", MP(hair_roughness, MATERIAL_PARAM_FLOAT, 0.05f, 0.6f)},
+    {"hairShift", "Hair", MP(hair_shift, MATERIAL_PARAM_FLOAT, 0.0f, 0.15f)},
     {"hairTint", "Hair", MP(hair_tint, MATERIAL_PARAM_VEC3, 0.0f, 1.0f)},
-    {"hairBacklit", "Hair", MP(hair_backlit, MATERIAL_PARAM_FLOAT, 0.0f, 2.0f)},
-    {"hairJitter", "Hair", MP(hair_jitter, MATERIAL_PARAM_FLOAT, 0.0f, 4.0f)},
+    {"hairBacklit", "Hair", MP(hair_backlit, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
+    {"hairJitter", "Hair", MP(hair_jitter, MATERIAL_PARAM_FLOAT, 0.0f, 2.0f)},
 
     {"emissive", "Emissive", MP(emissive, MATERIAL_PARAM_VEC3, 0.0f, 1.0f)},
     {"emissiveStrength", "Emissive", MP(emissive_strength, MATERIAL_PARAM_FLOAT, 0.0f, 20.0f)},
@@ -53,11 +60,15 @@ const MaterialParam MATERIAL_PARAMS[] = {
 
     {"curvatureScale", "Skin", MP(curvature_scale, MATERIAL_PARAM_FLOAT, 0.0f, 2.0f)},
 
-    {"normalScale", "Maps and wind", MP(normalScale, MATERIAL_PARAM_FLOAT, 0.0f, 4.0f)},
+    {"normalScale", "Maps and wind", MP(normalScale, MATERIAL_PARAM_FLOAT, 0.0f, 2.0f)},
     {"aoStrength", "Maps and wind", MP(aoStrength, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
-    {"parallaxScale", "Maps and wind", MP(parallax_scale, MATERIAL_PARAM_FLOAT, 0.0f, 0.2f)},
-    {"windResponse", "Maps and wind", MP(wind_response, MATERIAL_PARAM_FLOAT, 0.0f, 2.0f)},
-    {"windMode", "Maps and wind", MP(wind_mode, MATERIAL_PARAM_INT, 0.0f, 2.0f)},
+    {"parallaxScale", "Maps and wind", MP(parallax_scale, MATERIAL_PARAM_FLOAT, 0.0f, 0.1f)},
+    {"windResponse", "Maps and wind", MP(wind_response, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
+    // Names, not indices: the vegetation modes also redefine what UV1 MEANS on
+    // a material, which is not a thing to discover by dragging.
+    {"windMode", "Maps and wind",
+     MPE(wind_mode, MATERIAL_PARAM_INT, 2.0f,
+         "cloth\0vegetation branch\0vegetation leaf\0")},
 };
 
 #undef MP

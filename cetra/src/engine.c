@@ -1716,6 +1716,93 @@ static void _material_copy_as_cscn(const Material* material) {
     free_material(fresh);
 }
 
+// The material property editor, in its own window so it can be moved, resized
+// and closed. `open` is the caller's persistent flag and doubles as the close
+// button's target.
+static void _engine_gui_material_window(Material* material, int index, bool* open) {
+    // "###" pins the window ID while the visible title tracks the selection.
+    // Without it a rename or a different material would read as a new window
+    // and lose the position and size the user put it in.
+    char title[160];
+    snprintf(title, sizeof(title), "%s###material_editor", _material_gui_label(material, index));
+    if (!igBegin(title, open, 0)) {
+        igEnd();
+        return;
+    }
+
+    // Scope every control to the selected material. ImGui keys widgets by
+    // label within a window, and these labels are the material vocabulary
+    // rather than strings chosen for this panel -- so without a scope a future
+    // property could silently collide with something else. Keying on the
+    // selection also stops a drag on one material leaving state on the next.
+    igPushID_Int(index);
+
+    // Every row of the shared vocabulary gets a control, rather than a
+    // hand-written widget per property: a table that both the scene file and
+    // this window read cannot drift, and a property added for one of them turns
+    // up in the other for free.
+    //
+    // Walked group by group in table order, so a property only has to name its
+    // group to land in the right place. The first group is the one every
+    // surface has and opens by default; the rest describe features a material
+    // opts into, and stay shut.
+    const char* shown = NULL;
+    bool group_open = false;
+    for (size_t i = 0; i < MATERIAL_PARAM_COUNT; i++) {
+        const MaterialParam* p = &MATERIAL_PARAMS[i];
+        if (!shown || strcmp(shown, p->group) != 0) {
+            if (group_open)
+                igUnindent(0.0f); // close the previous group's step
+            shown = p->group;
+            group_open = igCollapsingHeader_TreeNodeFlags(
+                p->group, i == 0 ? ImGuiTreeNodeFlags_DefaultOpen : 0);
+            if (group_open)
+                igIndent(0.0f);
+        }
+        if (!group_open)
+            continue;
+        float v[3] = {0};
+        material_param_get(material, p, v);
+        bool changed = false;
+        switch (p->type) {
+        case MATERIAL_PARAM_VEC3:
+            changed = igColorEdit3(p->key, v, ImGuiColorEditFlags_Float);
+            break;
+        case MATERIAL_PARAM_FLOAT:
+            changed = igSliderFloat(p->key, v, p->min, p->max, "%.3f", 0);
+            break;
+        case MATERIAL_PARAM_INT: {
+            // An enum where the table names one, not a quantity: dragging a
+            // slider to reach "leaf" asks the user to know the numbering.
+            int iv = (int)v[0];
+            changed = p->enum_labels
+                          ? igCombo_Str(p->key, &iv, p->enum_labels, 0)
+                          : igSliderInt(p->key, &iv, (int)p->min, (int)p->max, "%d", 0);
+            v[0] = (float)iv;
+            break;
+        }
+        }
+        if (changed)
+            material_param_set(material, p, v);
+    }
+    if (group_open)
+        igUnindent(0.0f); // the last group's step, if it ended open
+
+    igSeparator();
+    // Tuning that cannot be saved is tuning done twice. This writes the
+    // window's state back out in the scene file's own vocabulary, so a look
+    // found here survives as a file rather than as a memory.
+    if (igButton("Copy as .cscn", (ImVec2){0, 0}))
+        _material_copy_as_cscn(material);
+    if (igIsItemHovered(0))
+        igSetTooltip("Copy this material's non-default values to the clipboard as a materials "
+                     "block, ready to paste into a .cscn. Only properties that differ from a "
+                     "fresh material are written.");
+
+    igPopID();
+    igEnd();
+}
+
 // The one "environment changed on release" chain, shared by the sun sliders
 // and the cloud controls so the downstream consumers cannot drift apart:
 // re-bake the env WITH clouds when the layer is on (the per-drag path never
@@ -1806,18 +1893,20 @@ static void _engine_gui_panel(Engine* engine) {
         }
     }
 
+    // Material selection lives in this panel; the properties live in their own
+    // window (below, after this one ends). Thirty controls inside an already
+    // long panel pushes everything after them off the bottom, and a material is
+    // the one thing here you tune while watching the frame rather than glance
+    // at -- so it gets a window that can be moved, resized and closed.
+    static int mat_sel = 0;
+    static bool mat_editor_open = false;
     Scene* scene = get_current_scene(engine);
     if (scene && scene->material_count > 0 &&
         igCollapsingHeader_TreeNodeFlags("Materials", 0)) {
-        // Nested collapsing headers draw flush with their parent, so without
-        // this the group headers read as siblings of "Materials" rather than as
-        // its contents. One step in for the section, another for each open
-        // group's controls, so the nesting is visible rather than implied.
         igIndent(0.0f);
 
         // Like the light section below, this addresses ONE material: a scene
         // carries dozens and a single slider cannot honestly show two values.
-        static int mat_sel = 0;
         if (mat_sel < 0 || mat_sel >= (int)scene->material_count)
             mat_sel = 0; // a scene swap can leave the index past the new count
         if (igBeginCombo("Material", _material_gui_label(scene->materials[mat_sel], mat_sel), 0)) {
@@ -1830,76 +1919,8 @@ static void _engine_gui_panel(Engine* engine) {
             }
             igEndCombo();
         }
-
-        Material* mat = scene->materials[mat_sel];
-        if (mat) {
-            // Scope every control below to the selected material. ImGui keys
-            // widgets by label within a window, and these labels are the
-            // material vocabulary rather than strings chosen for this panel --
-            // so without a scope any future property could silently collide
-            // with a control in another section. Keying on the selection also
-            // stops a drag on one material leaving state on the next.
-            igPushID_Int(mat_sel);
-
-            // Every row of the shared vocabulary gets a control, rather than a
-            // hand-written widget per property: a table that both the scene
-            // file and this panel read cannot drift, and a property added for
-            // one of them turns up in the other for free.
-            //
-            // Walked group by group, in table order, so a property only has to
-            // name its group to land in the right place. The first group is the
-            // one every surface has and opens by default; the rest describe
-            // features a material opts into, and stay shut so the panel is a
-            // handful of controls rather than all thirty at once.
-            const char* shown = NULL;
-            bool open = false;
-            for (size_t i = 0; i < MATERIAL_PARAM_COUNT; i++) {
-                const MaterialParam* p = &MATERIAL_PARAMS[i];
-                if (!shown || strcmp(shown, p->group) != 0) {
-                    if (open)
-                        igUnindent(0.0f); // close the previous group's step
-                    shown = p->group;
-                    open = igCollapsingHeader_TreeNodeFlags(
-                        p->group, i == 0 ? ImGuiTreeNodeFlags_DefaultOpen : 0);
-                    if (open)
-                        igIndent(0.0f);
-                }
-                if (!open)
-                    continue;
-                float v[3] = {0};
-                material_param_get(mat, p, v);
-                bool changed = false;
-                switch (p->type) {
-                case MATERIAL_PARAM_VEC3:
-                    changed = igColorEdit3(p->key, v, ImGuiColorEditFlags_Float);
-                    break;
-                case MATERIAL_PARAM_FLOAT:
-                    changed = igSliderFloat(p->key, v, p->min, p->max, "%.3f", 0);
-                    break;
-                case MATERIAL_PARAM_INT: {
-                    int iv = (int)v[0];
-                    changed = igSliderInt(p->key, &iv, (int)p->min, (int)p->max, "%d", 0);
-                    v[0] = (float)iv;
-                    break;
-                }
-                }
-                if (changed)
-                    material_param_set(mat, p, v);
-            }
-            if (open)
-                igUnindent(0.0f); // the last group's step, if it ended open
-
-            // Tuning that cannot be saved is tuning done twice. This writes the
-            // panel's state back out in the scene file's own vocabulary, so a
-            // look found here survives as a file rather than as a memory.
-            if (igButton("Copy as .cscn", (ImVec2){0, 0}))
-                _material_copy_as_cscn(mat);
-            if (igIsItemHovered(0))
-                igSetTooltip("Copy this material's non-default values to the clipboard as a "
-                             "materials block, ready to paste into a .cscn. Only properties "
-                             "that differ from a fresh material are written.");
-            igPopID();
-        }
+        if (igButton("Edit Material", (ImVec2){0, 0}))
+            mat_editor_open = true;
         igUnindent(0.0f);
     }
 
@@ -2331,6 +2352,17 @@ static void _engine_gui_panel(Engine* engine) {
     }
 
     igEnd();
+
+    // A sibling window, so it opens outside the main panel rather than pushing
+    // everything below it off the bottom. Raised after igEnd() because a
+    // material can disappear under it -- a scene swap leaves the index stale,
+    // and the bounds check has to run against whatever scene is current now.
+    if (mat_editor_open && scene && scene->material_count > 0) {
+        if (mat_sel < 0 || mat_sel >= (int)scene->material_count)
+            mat_sel = 0;
+        if (scene->materials[mat_sel])
+            _engine_gui_material_window(scene->materials[mat_sel], mat_sel, &mat_editor_open);
+    }
 }
 
 // Frameless FPS readout pinned to the top-right corner, with an optional live

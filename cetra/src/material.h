@@ -207,7 +207,17 @@ typedef struct MaterialParam {
     const char* group; // editor grouping; rows sharing a name are shown together
     size_t offset;     // into Material
     MaterialParamType type;
-    float min, max; // editor range only; an authored value is never clamped to it
+    // The range an editor OFFERS, which is the useful band and not the
+    // expressible one. A scene file may author outside it and nothing clamps
+    // the stored value; only dragging the control brings it into the band. The
+    // band is narrow on purpose -- a slider that reaches settings which destroy
+    // the effect invites exactly that, and the result then looks like a broken
+    // feature rather than an extreme setting (spec 11.20 records this
+    // happening, on hair roughness and jitter specifically).
+    float min, max;
+    // INT rows only: ImGui-style "a\0b\0c\0\0" names, when the value is an enum
+    // rather than a quantity. NULL falls back to a numeric slider.
+    const char* enum_labels;
 } MaterialParam;
 
 /*
