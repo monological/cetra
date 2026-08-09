@@ -582,7 +582,11 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     // existed. The rest are the shape the effect takes WHEN enabled, so turning
     // it on is one key rather than six.
     fx->flare_enabled = false;
-    fx->flare_strength = 0.05f;
+    // Measured on the flare fixture: 0.02 is present but easy to miss, 0.06
+    // is unmistakable, and past ~0.15 the ghosts stop being artifacts and
+    // start being the image. Bloom composites the SAME pyramid at 0.015, and
+    // this sums roughly five taps of it, so the numbers are not comparable.
+    fx->flare_strength = 0.03f;
     fx->flare_ghosts = 4;
     // Ghosts land at successive fractions along the vector from the mirrored
     // source to frame centre. Spacing below ~0.2 stacks them into one smear;
@@ -590,6 +594,7 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     fx->flare_ghost_spacing = 0.28f;
     fx->flare_halo_width = 0.32f;
     fx->flare_chroma = 0.012f;
+    fx->flare_source_lod = 2.0f;
     fx->ssao_enabled = true;
     fx->ssao_radius = 0.4f;
     fx->ssao_strength = 0.8f;
@@ -1645,6 +1650,7 @@ static void postfx_run_flare(PostFX* fx) {
     uniform_set_float(u, "ghostSpacing", fx->flare_ghost_spacing);
     uniform_set_float(u, "haloWidth", fx->flare_halo_width);
     uniform_set_float(u, "chroma", fx->flare_chroma);
+    uniform_set_float(u, "sourceLod", fx->flare_source_lod);
     draw_fullscreen_quad(fx->quad_vao);
     check_gl_error("postfx lens flare");
 }

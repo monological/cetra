@@ -204,6 +204,12 @@ typedef struct CetraSceneDesc {
     // --headless-jitter or the app refuses it and renders full res.
     bool has_render_scale;
     float render_scale;
+    // Lens ghosts. Fed by the bloom pyramid, so a scene that authors this and
+    // disables bloom gets nothing -- the flag says so rather than the parser.
+    bool has_flare;
+    float flare;
+    bool has_chromatic_aberration;
+    float chromatic_aberration;
     bool has_bloom_enabled;
     bool bloom_enabled;
     bool has_bloom_strength;

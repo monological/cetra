@@ -131,6 +131,12 @@ int cscene_setup(RenderArgs* args, CetraSceneDesc** out_cscn) {
                  "--taa --headless-jitter)",
                  cscn->render_scale);
     }
+    if (args->flare < 0.0f && cscn->has_flare) {
+        args->flare = cscn->flare;
+    }
+    if (args->chromatic < 0.0f && cscn->has_chromatic_aberration) {
+        args->chromatic = cscn->chromatic_aberration;
+    }
     if (args->bloom_enable < 0 && cscn->has_bloom_enabled) {
         args->bloom_enable = cscn->bloom_enabled ? 1 : 0;
     }

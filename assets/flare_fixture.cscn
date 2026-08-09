@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "_comment": [
+    "Lens flare fixture (spec 11.21). One small bright emissive quad up and to",
+    "the LEFT on a near-black backdrop, which is the only configuration a ghost",
+    "chain is measurable in: ghosts are the source mirrored through frame",
+    "centre, so they owe the lower-right, and a scene with large bright areas",
+    "would put a source in every pixel and read as a wash instead.",
+    "",
+    "No lights. The emitter is the whole scene, so the frame is exactly the",
+    "bloom pyramid's content and nothing else can move the measurement.",
+    "",
+    "Bloom stays ON because the flare reads its pyramid -- there is no other",
+    "thresholded image in the chain. Exposure is pinned so two runs compare."
+  ],
+  "models": [ { "path": "flare_fixture.gltf" } ],
+  "environment": { "mode": "hdr", "intensity": 0.0 },
+  "camera": { "eye": [0.0, 0.0, 5.0], "target": [0.0, 0.0, 0.0], "fov": 50 },
+  "post": {
+    "tonemap": "neutral",
+    "exposure": 1.0,
+    "auto_exposure": false,
+    "bloom": { "enabled": true }
+  }
+}

@@ -23,6 +23,11 @@ uniform float ghostSpacing; // Fraction of the centre vector between ghosts
 uniform float haloWidth;    // Radius of the halo ring, in UV units
 uniform float chroma;       // Per-channel radial offset; 0 = achromatic ghosts
 uniform int ghostCount;
+// Which pyramid level to read. Explicitly a MID mip, not level 0: an internal
+// reflection is badly out of focus, so a ghost is a soft blob. Sampling the
+// sharp level reproduces the source's outline instead -- a square emitter comes
+// back as a square, which reads as a copy-paste rather than an artifact.
+uniform float sourceLod;
 
 // Ghosts are tinted by how far off-axis they land: light that reflects at a
 // steep angle takes a longer path through the glass and comes back warmer.
@@ -45,9 +50,9 @@ vec3 lensTint(float r) {
 // reflection is dispersed by the glass, so its edges fringe.
 vec3 sampleDispersed(vec2 uv, float amount) {
     vec2 toCentre = vec2(0.5) - uv;
-    return vec3(texture(bloomTex, uv + toCentre * amount).r,
-                texture(bloomTex, uv).g,
-                texture(bloomTex, uv - toCentre * amount).b);
+    return vec3(textureLod(bloomTex, uv + toCentre * amount, sourceLod).r,
+                textureLod(bloomTex, uv, sourceLod).g,
+                textureLod(bloomTex, uv - toCentre * amount, sourceLod).b);
 }
 
 void main()

@@ -307,6 +307,10 @@ static void parse_post(CetraSceneDesc* d, const cJSON* root) {
             log_warn("cscene: post.render_scale %.3f out of [0.5, 1); ignored", d->render_scale);
     }
 
+    d->has_flare = get_float(post, "flare", &d->flare);
+    d->has_chromatic_aberration =
+        get_float(post, "chromatic_aberration", &d->chromatic_aberration);
+
     const cJSON* bloom = cJSON_GetObjectItemCaseSensitive(post, "bloom");
     if (cJSON_IsObject(bloom)) {
         d->has_bloom_enabled = get_bool(bloom, "enabled", &d->bloom_enabled);

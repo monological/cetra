@@ -213,9 +213,14 @@ typedef struct PostFX {
     bool flare_enabled;
     float flare_strength;
     int flare_ghosts;
-    float flare_ghost_spacing;       // Fraction of the centre vector between ghosts
-    float flare_halo_width;          // Halo ring radius in UV units
-    float flare_chroma;              // Per-channel radial offset; 0 = achromatic
+    float flare_ghost_spacing; // Fraction of the centre vector between ghosts
+    float flare_halo_width;    // Halo ring radius in UV units
+    float flare_chroma;        // Per-channel radial offset; 0 = achromatic
+    // Pyramid level the ghosts read. A mid mip, not 0: an internal reflection is
+    // badly out of focus, and the sharp level returns the source's own outline
+    // instead -- a square emitter comes back a square, which reads as a
+    // copy-paste rather than an artifact.
+    float flare_source_lod;
     bool flare_ready;                // Lazy-alloc guard for the target below
     GLuint flare_fbo, flare_texture; // Quarter post-res
     int flare_width, flare_height;

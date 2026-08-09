@@ -199,6 +199,10 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --no-vignette      Disable the default vignette\n");
     fprintf(stderr, "      --grain <s>        Film grain strength (enables it)\n");
     fprintf(stderr, "      --sharpen <s>      Unsharp-mask strength (enables it)\n");
+    fprintf(stderr,
+            "      --flare <s>        Lens ghost strength (enables it; needs bloom)\n");
+    fprintf(stderr,
+            "      --chromatic-aberration <s>  Radial channel split (enables it)\n");
     fprintf(stderr, "      --grade-lift/gamma/gain r,g,b  Colour grade (enables it)\n");
     fprintf(stderr, "      --dof              Depth of field, autofocused on the subject\n");
     fprintf(stderr, "      --no-dof           Force depth of field off (e.g. with --film)\n");
@@ -248,6 +252,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->vignette = -1.0f;
     args->grain = -1.0f;
     args->sharpen = -1.0f;
+    args->flare = -1.0f;
+    args->chromatic = -1.0f;
     args->grade_gamma[0] = args->grade_gamma[1] = args->grade_gamma[2] = 1.0f;
     args->grade_gain[0] = args->grade_gain[1] = args->grade_gain[2] = 1.0f;
     args->dof_focus = -1.0f;
@@ -929,6 +935,18 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 return -1;
             }
             args->sharpen = (float)atof(argv[i]);
+        } else if (strcmp(argv[i], "--flare") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->flare = (float)atof(argv[i]);
+        } else if (strcmp(argv[i], "--chromatic-aberration") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->chromatic = (float)atof(argv[i]);
         } else if (strcmp(argv[i], "--grade-lift") == 0 || strcmp(argv[i], "--grade-gamma") == 0 ||
                    strcmp(argv[i], "--grade-gain") == 0) {
             const char* flag = argv[i];
@@ -1872,6 +1890,14 @@ int main(int argc, char** argv) {
         if (args.grain >= 0.0f) {
             fx->grain_enabled = true;
             fx->grain_strength = args.grain;
+        }
+        if (args.flare >= 0.0f) {
+            fx->flare_enabled = true;
+            fx->flare_strength = args.flare;
+        }
+        if (args.chromatic >= 0.0f) {
+            fx->ca_enabled = true;
+            fx->ca_strength = args.chromatic;
         }
         if (args.sharpen >= 0.0f) {
             fx->sharpen_enabled = true;
