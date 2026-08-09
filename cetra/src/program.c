@@ -659,6 +659,18 @@ ShaderProgram* create_mask_copy_program() {
     return program;
 }
 
+ShaderProgram* create_msm_resolve_program() {
+    ShaderProgram* program = NULL;
+
+    if ((program = create_program_from_source("msm_resolve", post_vert_shader_str,
+                                              msm_resolve_frag_shader_str, NULL)) == NULL) {
+        log_error("Failed to initialize moment shadow resolve shader program");
+        return NULL;
+    }
+
+    return program;
+}
+
 ShaderProgram* create_sky_env_program() {
     ShaderProgram* program = NULL;
 

@@ -40,6 +40,7 @@ struct Scene;
 // cubemap afterwards.
 typedef struct SceneCaptureState {
     int cascade_count;
+    bool msm_enabled;
     double render_time;
     double render_delta;
 } SceneCaptureState;

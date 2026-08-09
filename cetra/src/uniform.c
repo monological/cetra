@@ -152,6 +152,8 @@ void uniform_cache_shadows(UniformManager* mgr, size_t max_shadow_lights, size_t
     uniform_location(mgr, "punctualShadowCount");
     uniform_location(mgr, "punctualShadowMatrix[0]");
     uniform_location(mgr, "punctualShadowMapSize");
+    uniform_location(mgr, "msmEnabled");
+    uniform_location(mgr, "msmBleed");
 
     warn_if_array_shorter(mgr, "lightSpaceMatrix", max_shadow_lights * max_cascades);
     warn_if_array_shorter(mgr, "punctualShadowMatrix", max_punctual_layers);

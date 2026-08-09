@@ -50,6 +50,8 @@ ShaderProgram* create_particle_sim_program();
 ShaderProgram* create_shape_program();
 ShaderProgram* create_xyz_program();
 ShaderProgram* create_shadow_depth_program();
+// Resolves the depth cascades into the filterable moment cascades (--msm)
+ShaderProgram* create_msm_resolve_program();
 
 // IBL Programs
 ShaderProgram* create_skybox_program();

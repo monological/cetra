@@ -41,6 +41,25 @@
 #define PUNCTUAL_SHADOW_MAX_SIZE 4096
 // DEPTH_COMPONENT24 is one 4-byte texel, so this is layers * size^2 * 4.
 #define PUNCTUAL_SHADOW_VRAM_BUDGET (96u * 1024u * 1024u)
+// Moment shadow maps (spec 11.22). Half the cascade edge, deliberately: the
+// whole claim of a filterable representation is that it survives being
+// averaged, so it does not need the depth array's texel density. The fog's ESM
+// cascades make the same trade harder (512 against the same 2048).
+//
+// The cost is additive, not a swap -- the depth array stays, as this array's
+// source -- and there are two of these, since the separable blur needs its
+// scratch resident for the whole pass. RGBA16F is 8 bytes a texel, so the pair
+// is 151 MB at 9 layers here against 604 MB if it matched the cascades.
+#define MSM_DEFAULT_SIZE 1024
+// Per-tap spacing of the separable blur, in moment-map texels. The filter is 5
+// taps wide; much past 1.0 and the fixed tap count stops covering the span it
+// straddles, so it combs instead of blurring.
+#define MSM_DEFAULT_BLUR 1.0f
+// Fraction of the occlusion range remapped to zero. The reconstruction returns
+// a LOWER bound, so it under-occludes and an umbra reads slightly lit; this is
+// the cure, and it is scene-dependent because how much of the range is leak
+// depends on how degenerate the depth spread inside a texel is.
+#define MSM_DEFAULT_BLEED 0.20f
 // Depth-pass polygon offset, applied to every shadow map (cascade and
 // punctual share one near-side storage policy, shadow.c).
 // glPolygonOffset(factor, units) pushes a fragment by
@@ -140,6 +159,33 @@ typedef struct ShadowSystem {
     // rather than point the lookup at an undrawn layer.
     int punctual_layer_count;
     bool punctual_pool_warned; // Latch so pool exhaustion logs once, not per frame
+
+    // Moment shadow maps (spec 11.22): a filterable RGBA16F copy of the depth
+    // cascades, resolved after the depth pass and read in ONE tap where the
+    // default path runs a PCF kernel.
+    //
+    // msm_array is a SEPARATE handle and shadow_map_array is never repointed at
+    // it. That is load-bearing rather than tidy: shadow_publish_to_postfx hands
+    // shadow_map_array straight to the fog, whose ESM build and froxel inject
+    // both read .r as a depth. Repointing it would feed them a first moment
+    // instead, with no error anywhere -- just wrong fog.
+    GLuint msm_array;
+    GLuint msm_scratch; // Blur ping target; the pass ends in msm_array, so no swap
+    GLuint msm_fbo;
+    GLuint msm_quad_vao;
+    GLuint msm_quad_vbo;
+    ShaderProgram* msm_program;
+    int msm_allocated_layers; // Layer capacity built; a count change rebuilds
+    int msm_allocated_size;   // Edge built at; a size change rebuilds
+    bool msm_enabled;         // true = sample moments; PCSS cannot run alongside
+    // Whether the resolve actually produced an array THIS frame. The bind reads
+    // this, not msm_enabled: with the flag on but no directional caster (or a
+    // failed allocation) there is nothing to sample, and the depth array has to
+    // stay bound so the lookup keeps working.
+    bool msm_built;
+    int msm_size;    // Edge to build at; 0 = MSM_DEFAULT_SIZE
+    float msm_blur;  // Per-tap blur spacing, in moment-map texels
+    float msm_bleed; // Occlusion below this fraction is remapped to zero
 } ShadowSystem;
 
 // Creation and destruction

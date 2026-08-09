@@ -43,6 +43,10 @@ typedef struct {
     int no_key_light;           // Pure IBL: skip the analytic key lights
     int no_shadows;             // Keep key lights but disable shadow maps
     int no_pcss;                // Fixed-width PCF instead of contact-hardening
+    int msm;                    // Moment shadow maps; excludes PCSS
+    int msm_size;               // Moment cascade edge (0 = keep engine default)
+    float msm_blur;             // Moment blur spacing in texels (-1 = default)
+    float msm_bleed;            // Moment leak cutoff (-1 = default)
     float light_size;           // Emitter size override (-1 = scene default)
     float shadow_softness;      // PCSS softness override (-1 = default)
     int shadow_cascades;        // Cascades per caster (0 = keep engine default)

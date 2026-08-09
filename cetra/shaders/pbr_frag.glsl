@@ -609,6 +609,14 @@ float shadowPCF3x3(int layer, vec2 uv, float currentDepth, vec2 duv_dz) {
 // One cascade layer's shadow estimate for a projected position already known
 // to be in bounds: PCSS when enabled and the emitter resolves, else 3x3 PCF.
 float cascadeShadowTap(int layer, vec3 projCoords, vec2 duv_dz, float lightSize) {
+    // One tap, ahead of BOTH branches below: neither the kernel nor the
+    // receiver-plane bias applies, because the moments already carry the depth
+    // spread inside the footprint that those exist to cope with. Placed here
+    // rather than relying on the app clearing pcssEnabled, so a GUI toggle
+    // cannot put PCSS on a map whose .r is a mean depth and not a depth.
+    if (msmEnabled == 1)
+        return 1.0 - csmMomentOcclusion(layer, projCoords.xy, projCoords.z);
+
     float currentDepth = projCoords.z;
 
     if (pcssEnabled == 0) {

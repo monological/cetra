@@ -21,7 +21,17 @@
 #define MAX_SHADOW_LIGHTS 3
 #define SHADOW_CASCADES 3
 
+// The moment reconstruction, for the msmEnabled branch below.
+#include "msm.glsl"
+
+// Same declaration, two possible textures. Under --msm the C side binds an
+// RGBA16F moment array to this sampler INSTEAD of the depth array, so .r stops
+// being a depth and becomes the first moment -- which is why moment shadows cost
+// no additional sampler, and why every read of this texture has to go through
+// the branch rather than sampling .r directly.
 uniform sampler2DArray shadowMaps;
+uniform int msmEnabled;  // 1 = shadowMaps holds moments, not depths
+uniform float msmBleed;  // Occlusion below this fraction is remapped to zero
 // Layers stride by the RUNTIME cascadeCount (layer = slot*cascadeCount + c),
 // so at cascadeCount 1 the indices match the classic single-map layout
 uniform mat4 lightSpaceMatrix[MAX_SHADOW_LIGHTS * SHADOW_CASCADES];
@@ -33,6 +43,16 @@ uniform vec2 shadowTexelSize;
 // Flat bias for the outermost-map consumers below; the per-fragment cascade
 // path in pbr_frag uses the receiver-plane bias instead and never reads this.
 uniform float shadowBias;
+
+// Occlusion at one shadow-array layer from a SINGLE moment tap, 0 lit to 1 fully
+// shadowed. Meaningful only where msmEnabled is 1; the two lookups below each
+// branch to it rather than calling it unconditionally, because the depth path
+// needs a kernel and a bias that this one has no use for -- the moments already
+// carry the depth spread inside the footprint that those exist to cope with.
+float csmMomentOcclusion(int layer, vec2 uv, float depth01) {
+    return msmReduceBleed(
+        msmOcclusion(texture(shadowMaps, vec3(uv, float(layer))), msmWarpDepth(depth01)), msmBleed);
+}
 
 // Define CSM_OUTERMOST_PCF before including for the soft scene-scale lookup
 // that the shadow catcher and the particle motes share, and set
@@ -66,6 +86,12 @@ float csmOutermostOcclusion(vec3 worldPos, int slot)
     vec3 proj = lightSpace.xyz / lightSpace.w * 0.5 + 0.5;
     if (proj.z > 1.0 || proj.x < 0.0 || proj.x > 1.0 || proj.y < 0.0 || proj.y > 1.0)
         return 0.0;
+
+    // The moment map is already prefiltered, so the kernel below would be
+    // blurring a blur -- and these consumers ask for softness, which is exactly
+    // what the resolve's own blur radius sets.
+    if (msmEnabled == 1)
+        return csmMomentOcclusion(layer, proj.xy, proj.z);
 
     vec2 kernelStep = shadowTexelSize * 1.5;
     float shadow = 0.0;

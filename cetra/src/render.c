@@ -1078,6 +1078,7 @@ void scene_capture_begin(Engine* engine, Scene* scene, SceneCaptureState* saved)
     mask_array_ensure_built(scene, engine);
 
     saved->cascade_count = scene->shadow_system ? scene->shadow_system->cascade_count : 1;
+    saved->msm_enabled = scene->shadow_system ? scene->shadow_system->msm_enabled : false;
     saved->render_time = engine->render_time;
     saved->render_delta = engine->render_delta;
     engine_set_render_time(engine, 0.0, 0.0);
@@ -1087,6 +1088,11 @@ void scene_capture_begin(Engine* engine, Scene* scene, SceneCaptureState* saved)
     // publishes numShadowLights 0 when shadows are off.
     if (scene->shadow_system && scene->shadow_system->enabled) {
         scene->shadow_system->cascade_count = 1;
+        // A bake reads the depth cascades directly and never the moment ones
+        // (spec 11.22). Resolving here would cost a full array pass per cube
+        // face, and because the moment array is sized from the cascade count it
+        // would thrash between the bake's one layer and the frame's three.
+        scene->shadow_system->msm_enabled = false;
         render_shadow_depth_pass(engine, scene);
     }
 }
@@ -1095,8 +1101,10 @@ void scene_capture_end(Engine* engine, Scene* scene, const SceneCaptureState* sa
     if (!engine || !scene || !saved)
         return;
     engine_set_render_time(engine, saved->render_time, saved->render_delta);
-    if (scene->shadow_system)
+    if (scene->shadow_system) {
         scene->shadow_system->cascade_count = saved->cascade_count;
+        scene->shadow_system->msm_enabled = saved->msm_enabled;
+    }
 }
 
 void scene_capture_faces(Engine* engine, struct IBLResources* ibl, const vec3 position,

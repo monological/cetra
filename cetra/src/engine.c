@@ -1247,6 +1247,13 @@ static int _create_default_shaders_for_engine(Engine* engine) {
 
     add_shader_program_to_engine(engine, shadow_depth_program);
 
+    // Not fatal if it fails: --msm falls back to the depth cascades, which are
+    // rendered either way.
+    ShaderProgram* msm_resolve_program = create_msm_resolve_program();
+    if (msm_resolve_program) {
+        add_shader_program_to_engine(engine, msm_resolve_program);
+    }
+
     // IBL Programs
     ShaderProgram* skybox_program = create_skybox_program();
     if (skybox_program) {

@@ -80,6 +80,10 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --cluster-heatmap  Tint fragments by cluster light count\n");
     fprintf(stderr, "      --no-shadows       Keep key lights but disable shadow maps\n");
     fprintf(stderr, "      --no-pcss          Fixed-width PCF instead of contact-hardening\n");
+    fprintf(stderr, "      --msm              Moment shadow maps: one prefiltered tap, no PCSS\n");
+    fprintf(stderr, "      --msm-size <n>     Moment cascade edge (default: 1024)\n");
+    fprintf(stderr, "      --msm-blur <f>     Moment blur spacing in texels (default: 1)\n");
+    fprintf(stderr, "      --msm-bleed <f>    Moment leak cutoff, 0-1 (default: 0.2)\n");
     fprintf(stderr, "      --light-size <f>   Emitter size for penumbra (default: scene-scaled)\n");
     fprintf(stderr, "      --shadow-softness <f> PCSS softness multiplier (default: 1)\n");
     fprintf(stderr, "      --shadow-cascades <n> Shadow cascades per caster, 1-3 (default: 3)\n");
@@ -267,6 +271,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->plg_radius = 10.0f;
     args->plg_intensity = 5.0f;
     args->shadow_softness = -1.0f;      // -1 = keep the engine default
+    args->msm_blur = -1.0f;             // -1 = keep the engine default
+    args->msm_bleed = -1.0f;            // -1 = keep the engine default
     args->auto_exposure_override = -1;  // -1 = unset; an authored exposure then pins
     args->oit = -1;                     // -1 = unset; both default ON in the engine
     args->oit_moments = -1;
@@ -480,6 +486,30 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->no_shadows = 1;
         } else if (strcmp(argv[i], "--no-pcss") == 0) {
             args->no_pcss = 1;
+        } else if (strcmp(argv[i], "--msm") == 0) {
+            args->msm = 1;
+        } else if (strcmp(argv[i], "--msm-size") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->msm_size = atoi(argv[i]);
+            if (args->msm_size < 256 || args->msm_size > 4096) {
+                fprintf(stderr, "Error: --msm-size must be 256..4096\n");
+                return -1;
+            }
+        } else if (strcmp(argv[i], "--msm-blur") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->msm_blur = (float)atof(argv[i]);
+        } else if (strcmp(argv[i], "--msm-bleed") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->msm_bleed = (float)atof(argv[i]);
         } else if (strcmp(argv[i], "--light-size") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -2365,6 +2395,22 @@ int main(int argc, char** argv) {
         // default light size (50m) is absurd against a ~2x-scene-radius ortho
         // frustum, so size the emitter to the scene; --light-size overrides.
         scene->shadow_system->pcss_enabled = !args.no_pcss;
+        // Moment shadows and PCSS cannot both run: PCSS estimates a blocker
+        // depth by reading .r as a depth, and under MSM .r is the first moment
+        // -- a mean over the footprint, which includes the receiver's own
+        // surface. Stated out loud rather than silently, since the user asked
+        // for one default-off feature and is losing another that is on.
+        scene->shadow_system->msm_enabled = args.msm != 0;
+        if (args.msm && scene->shadow_system->pcss_enabled) {
+            printf("--msm: contact-hardening (PCSS) off; the moment blur sets softness\n");
+            scene->shadow_system->pcss_enabled = false;
+        }
+        if (args.msm_size > 0)
+            scene->shadow_system->msm_size = args.msm_size;
+        if (args.msm_blur >= 0.0f)
+            scene->shadow_system->msm_blur = args.msm_blur;
+        if (args.msm_bleed >= 0.0f)
+            scene->shadow_system->msm_bleed = args.msm_bleed;
         if (args.shadow_softness >= 0.0f) {
             scene->shadow_system->pcss_softness = args.shadow_softness;
         }
