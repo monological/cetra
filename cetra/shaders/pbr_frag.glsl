@@ -608,7 +608,10 @@ float shadowPCF3x3(int layer, vec2 uv, float currentDepth, vec2 duv_dz) {
 // rectangular emitter to a single dimension.
 // One cascade layer's shadow estimate for a projected position already known
 // to be in bounds: PCSS when enabled and the emitter resolves, else 3x3 PCF.
-float cascadeShadowTap(int layer, vec3 projCoords, vec2 duv_dz, float lightSize) {
+// The OPAQUE half: what the depth cascades (or the moment array in their place)
+// say about light reaching this point. cascadeShadowTap below folds in the
+// translucent half.
+float cascadeOpaqueTap(int layer, vec3 projCoords, vec2 duv_dz, float lightSize) {
     // One tap, ahead of BOTH branches below: neither the kernel nor the
     // receiver-plane bias applies, because the moments already carry the depth
     // spread inside the footprint that those exist to cope with. Placed here
@@ -704,6 +707,19 @@ float cascadeShadowTap(int layer, vec3 projCoords, vec2 duv_dz, float lightSize)
 // position, hoisted by the caller. The hoist is mandatory, not a convenience:
 // this runs inside the fused light loop, whose trip count is per-fragment
 // (clusterCount), so a local dFdx here is undefined.
+// Opaque occlusion times translucent transmittance (spec 11.26).
+//
+// A product, not a min: the two caster sets are disjoint by construction -- a
+// mesh is represented by one map or the other, never both -- so they are
+// independent attenuations of the same light ray. The return stays a scalar,
+// which is what keeps every consumer of this value unchanged.
+float cascadeShadowTap(int layer, vec3 projCoords, vec2 duv_dz, float lightSize) {
+    float visibility = cascadeOpaqueTap(layer, projCoords, duv_dz, lightSize);
+    if (tsmEnabled == 1)
+        visibility *= csmTransmittance(layer, projCoords.xy, projCoords.z);
+    return visibility;
+}
+
 float calculateShadow(int shadowIndex, int cascade, vec3 worldPos, float lightSize,
                       vec3 ddxWorld, vec3 ddyWorld) {
     // Union the occlusion of the fragment's cascade and every wider one

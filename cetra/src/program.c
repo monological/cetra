@@ -671,6 +671,30 @@ ShaderProgram* create_msm_resolve_program() {
     return program;
 }
 
+ShaderProgram* create_shadow_absorb_program() {
+    ShaderProgram* program = NULL;
+
+    if ((program = create_program_from_source("shadow_absorb", shadow_absorb_vert_shader_str,
+                                              shadow_absorb_frag_shader_str, NULL)) == NULL) {
+        log_error("Failed to initialize translucent shadow absorb shader program");
+        return NULL;
+    }
+
+    return program;
+}
+
+ShaderProgram* create_tsm_resolve_program() {
+    ShaderProgram* program = NULL;
+
+    if ((program = create_program_from_source("tsm_resolve", post_vert_shader_str,
+                                              tsm_resolve_frag_shader_str, NULL)) == NULL) {
+        log_error("Failed to initialize translucent shadow resolve shader program");
+        return NULL;
+    }
+
+    return program;
+}
+
 ShaderProgram* create_sky_env_program() {
     ShaderProgram* program = NULL;
 

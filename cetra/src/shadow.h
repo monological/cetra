@@ -80,6 +80,40 @@
 // NaN and anything past it inverts the sign; well below that the umbra is gone
 // anyway, so this is where the knob stops being useful rather than a safety gap.
 #define MSM_MAX_BLEED 0.5f
+// Translucent shadow maps (spec 11.26): per-texel light transmittance for
+// casters the depth pass cannot represent -- ALPHA_MASK (hair), ALPHA_BLEND
+// (glass, curtains) and KHR transmission, which today either cast nothing or
+// cast solid black.
+//
+// The layers live in shadow_map_array itself, past the cascade block, rather
+// than in an array of their own. pbr_frag declares all 16 samplers GL
+// guarantees and the driver counts declarations, so there is no seventeenth --
+// but the transmittance has to be read ALONGSIDE the occlusion, so it cannot
+// ride unit 10 by exclusion the way the moment array does. Appending layers is
+// what makes one sampler serve both. DEPTH_COMPONENT24 is a 24-bit UNORM, which
+// is better storage for a value in [0,1] than the moment array's fp16, and the
+// array's existing white CLAMP_TO_BORDER already reads "nothing occludes here".
+//
+// What is stored is exp(-b0), the transmittance, NOT the accumulated absorbance
+// b0. That is the whole reason the filter is legal: transmittance averages
+// linearly and absorbance does not, so a PCF box over these layers is exact
+// where averaging moments would carry Jensen's bias (spec 11.17 measured that
+// error at 0.368 reconstructed against a true 0.568).
+//
+// Part 1 is the nearest translucent depth, so a receiver IN FRONT of a caster
+// is not darkened by it. Without it every receiver is treated as behind every
+// translucent caster.
+#define TSM_PARTS 2
+// Directional slots that get transmittance. ONE in v1: the second and third
+// casters would triple the cost of the largest array the renderer allocates,
+// and the engine already treats the key light specially elsewhere (contact
+// shadows march it alone). Slots 1..2 keep today's behaviour.
+#define TSM_SLOTS 1
+// First layer of the transmittance block. Fixed at the cascade block's full
+// extent -- MAX_SHADOW_LIGHTS, not the live caster count -- so the index law
+// does not move when a light starts or stops casting mid-run.
+#define TSM_BASE(cc)                 (MAX_SHADOW_LIGHTS * (cc))
+#define TSM_LAYER(cc, cascade, part) (TSM_BASE(cc) + (cascade) * TSM_PARTS + (part))
 // Depth-pass polygon offset, applied to every shadow map (cascade and
 // punctual share one near-side storage policy, shadow.c).
 // glPolygonOffset(factor, units) pushes a fragment by
@@ -210,6 +244,24 @@ typedef struct ShadowSystem {
     int msm_size;    // Edge to build at, clamped to the depth map's own edge
     float msm_blur;  // Per-tap blur spacing, in moment-map texels
     float msm_bleed; // Occlusion below this fraction is remapped to zero
+
+    // Translucent shadow maps (spec 11.26). The layers are in shadow_map_array
+    // (see TSM_BASE above); what is separate is the accumulation scratch.
+    GLuint tsm_scratch;     // R32F, one layer: absorbance sums before the resolve
+    GLuint tsm_scratch_fbo; // Colour FBO for the accumulate; the array's is depth-only
+    GLuint tsm_quad_vao;    // Resolve quad; separate from the MSM one so either
+    GLuint tsm_quad_vbo;    // feature can run without the other allocating
+    ShaderProgram* tsm_absorb_program;
+    ShaderProgram* tsm_resolve_program;
+    bool tsm_enabled; // Request; the array is sized for it at the next rebuild
+    // Whether the transmittance layers were actually produced THIS frame. The
+    // bind reads this, never tsm_enabled: with the flag on but no translucent
+    // caster (or a failed allocation) there is nothing to sample and the lookup
+    // must fall back to occlusion alone. Same latch as msm_built, for the
+    // reason 11.22 had to learn twice -- a bailed frame IS the off path, so
+    // every arm passes while measuring nothing.
+    bool tsm_built;
+    bool tsm_allocated; // Array currently carries the transmittance block
 } ShadowSystem;
 
 // Creation and destruction

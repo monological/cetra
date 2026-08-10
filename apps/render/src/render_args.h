@@ -43,6 +43,8 @@ typedef struct {
     int no_key_light;           // Pure IBL: skip the analytic key lights
     int no_shadows;             // Keep key lights but disable shadow maps
     int no_pcss;                // Fixed-width PCF instead of contact-hardening
+    int translucent_shadows;    // Per-texel transmittance for hair/glass/foliage casters
+    int no_translucent_shadows; // Force it off (the off-path and inverse arms)
     int msm;                    // Moment shadow maps; excludes PCSS
     int msm_size;               // Moment cascade edge (0 = keep engine default)
     float msm_blur;             // Moment blur spacing in texels (-1 = default)

@@ -80,6 +80,9 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --cluster-heatmap  Tint fragments by cluster light count\n");
     fprintf(stderr, "      --no-shadows       Keep key lights but disable shadow maps\n");
     fprintf(stderr, "      --no-pcss          Fixed-width PCF instead of contact-hardening\n");
+    fprintf(stderr,
+            "      --translucent-shadows  Partial shadows from hair/glass/foliage casters\n");
+    fprintf(stderr, "      --no-translucent-shadows  Force them off\n");
     fprintf(stderr, "      --msm              Moment shadow maps: one prefiltered tap, no PCSS\n");
     fprintf(stderr, "      --msm-size <n>     Moment cascade edge (default: 1024)\n");
     fprintf(stderr, "      --msm-blur <f>     Moment blur spacing in texels (default: 0, off)\n");
@@ -491,6 +494,10 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->no_shadows = 1;
         } else if (strcmp(argv[i], "--no-pcss") == 0) {
             args->no_pcss = 1;
+        } else if (strcmp(argv[i], "--translucent-shadows") == 0) {
+            args->translucent_shadows = 1;
+        } else if (strcmp(argv[i], "--no-translucent-shadows") == 0) {
+            args->no_translucent_shadows = 1;
         } else if (strcmp(argv[i], "--msm") == 0) {
             args->msm = 1;
         } else if (strcmp(argv[i], "--msm-size") == 0) {
@@ -2441,6 +2448,15 @@ int main(int argc, char** argv) {
         // enforces it at the uniform upload; this only reports it, because the
         // user asked for one default-off feature and is losing another that is
         // on by default here.
+        // Translucent shadows (spec 11.26). Opt-in: it appends layers to the
+        // largest array the renderer allocates, and --no-translucent-shadows is
+        // load-bearing rather than a convenience -- it is the off-path identity
+        // arm, the inverse arm, and the escape hatch a baseline captured before
+        // this point needs.
+        if (args.translucent_shadows)
+            scene->shadow_system->tsm_enabled = true;
+        if (args.no_translucent_shadows)
+            scene->shadow_system->tsm_enabled = false;
         scene->shadow_system->msm_enabled = args.msm != 0;
         if (args.msm && !args.no_pcss)
             printf("--msm: contact-hardening (PCSS) off; the moment blur sets softness\n");

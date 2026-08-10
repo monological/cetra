@@ -40,6 +40,14 @@ uniform mat4 lightSpaceMatrix[MAX_SHADOW_LIGHTS * SHADOW_CASCADES];
 uniform vec4 cascadeParams[MAX_SHADOW_LIGHTS * SHADOW_CASCADES];
 uniform int cascadeCount;
 uniform vec2 shadowTexelSize;
+// Translucent shadow maps (spec 11.26). Mirrors of shadow.h's layer law: the
+// transmittance block sits past the cascade block in this SAME array, which is
+// what lets one sampler carry both -- the transmittance has to be read
+// ALONGSIDE the occlusion, so unlike the moments it cannot ride unit 10 by
+// exclusion. TSM_SLOTS is 1: only the first directional caster has one.
+#define TSM_PARTS 2
+#define TSM_SLOTS 1
+uniform int tsmEnabled; // 1 = the transmittance layers were built THIS frame
 // Flat bias for the outermost-map consumers below; the per-fragment cascade
 // path in pbr_frag uses the receiver-plane bias instead and never reads this.
 uniform float shadowBias;
@@ -52,6 +60,42 @@ uniform float shadowBias;
 float csmMomentOcclusion(int layer, vec2 uv, float depth01) {
     return msmReduceBleed(
         msmOcclusion(texture(shadowMaps, vec3(uv, float(layer))), msmWarpDepth(depth01)), msmBleed);
+}
+
+// Light transmittance through the translucent casters in front of a receiver,
+// 1 = nothing blocks. Multiplies the occlusion term rather than joining it: the
+// two caster sets are disjoint by construction (a mesh goes to one map or the
+// other), so they are independent attenuations of the same ray.
+//
+// The 3x3 box is exact here, which is the point of storing exp(-b0) rather than
+// b0. Transmittance averages linearly; absorbance does not, and averaging it
+// would carry Jensen's bias -- worst on exactly the dense casters this exists
+// for. The moment path cannot make the same claim.
+float csmTransmittance(int layer, vec2 uv, float depth01) {
+    if (tsmEnabled == 0)
+        return 1.0;
+    int slot = layer / cascadeCount;
+    if (slot >= TSM_SLOTS)
+        return 1.0;
+    int cascade = layer - slot * cascadeCount;
+    int base = MAX_SHADOW_LIGHTS * cascadeCount + cascade * TSM_PARTS;
+
+    // Front-layer gate. Without it every receiver is treated as behind every
+    // translucent caster, so a shoulder IN FRONT of hair that hangs behind it
+    // is wrongly darkened. The stored depth carries no polygon offset (the
+    // transmittance passes run after it is disabled), hence the explicit bias.
+    float nearest = texture(shadowMaps, vec3(uv, float(base + 1))).r;
+    if (depth01 <= nearest + shadowBias)
+        return 1.0;
+
+    float sum = 0.0;
+    for (int y = -1; y <= 1; ++y) {
+        for (int x = -1; x <= 1; ++x) {
+            vec2 o = vec2(float(x), float(y)) * shadowTexelSize;
+            sum += texture(shadowMaps, vec3(uv + o, float(base))).r;
+        }
+    }
+    return sum / 9.0;
 }
 
 // Define CSM_OUTERMOST_PCF before including for the soft scene-scale lookup

@@ -52,6 +52,8 @@ ShaderProgram* create_xyz_program();
 ShaderProgram* create_shadow_depth_program();
 // Resolves the depth cascades into the filterable moment cascades (--msm)
 ShaderProgram* create_msm_resolve_program();
+ShaderProgram* create_shadow_absorb_program();
+ShaderProgram* create_tsm_resolve_program();
 
 // IBL Programs
 ShaderProgram* create_skybox_program();

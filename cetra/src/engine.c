@@ -1254,6 +1254,18 @@ static int _create_default_shaders_for_engine(Engine* engine) {
         add_shader_program_to_engine(engine, msm_resolve_program);
     }
 
+    // Same contract as the moment resolve above: if either fails to compile,
+    // shadow_build_tsm finds no program and leaves tsm_built false, which is
+    // the feature off rather than a broken frame.
+    ShaderProgram* shadow_absorb_program = create_shadow_absorb_program();
+    if (shadow_absorb_program) {
+        add_shader_program_to_engine(engine, shadow_absorb_program);
+    }
+    ShaderProgram* tsm_resolve_program = create_tsm_resolve_program();
+    if (tsm_resolve_program) {
+        add_shader_program_to_engine(engine, tsm_resolve_program);
+    }
+
     // IBL Programs
     ShaderProgram* skybox_program = create_skybox_program();
     if (skybox_program) {
