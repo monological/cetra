@@ -61,12 +61,19 @@ vec4 msmMoments(float z) {
 // where this does a case analysis on the roots and that takes an expectation
 // under the moments.
 //
-// Sharing the kernel is a real follow-up and deliberately not taken here. Note
-// the safe shape when it is: write the shared helper in MBOIT's order so its
-// emitted arithmetic is unchanged, and move THIS side onto it -- mboit rides the
-// default OIT path where the reconstruction is ill-conditioned exactly where hair
-// sits, and reshuffling it alone moves the raiden baseline (spec 11.21), while
-// the moment shadow path has no baseline yet to protect.
+// Sharing the kernel with mboit was measured and rejected (spec 11.22); an
+// earlier version of this comment proposed it as a follow-up and understated
+// what it costs. Two facts decide it. The regularisation constants are 60x
+// apart and each is its own paper's reference value, and mboit normalises its
+// moments by a total absorbance this side has no counterpart for -- so a shared
+// helper takes both as parameters, which is a wrapper around 18 lines rather
+// than an abstraction. And the two orderings above cannot both survive: one
+// side's rounding has to move.
+//
+// The retraction worth carrying: that proposal argued the moment shadow path
+// had no baseline to protect. It has six analytic gate arms measuring this
+// reconstruction against numeric tolerances, which is exactly what reshuffling
+// this arithmetic disturbs. A baseline need not be a stored image.
 float msmOcclusion(vec4 moments, float z) {
     vec4 b = mix(moments, MSM_BIAS_VECTOR, MSM_BIAS);
 
