@@ -732,13 +732,27 @@ Strugar, *Continuous Distance-Dependent LOD* (CDLOD, 2009).
 
 ## Track E — Image finishing & the perf floor
 
-### E1. Output dither / debanding — Effort S
-There is no dithering anywhere at the 8-bit write. Everything smooth and dark bands: sky gradients,
-froxel fog, bloom falloff, the inside of a DoF bokeh. This is the single highest ratio of visible
-improvement to lines changed left in the engine — a triangular-PDF dither at the final gamma encode,
-roughly ten lines in `tonemap_frag.glsl`.
-**Refs.** Mikkelsen, *Banding in Games: A Noisy Rant* (2010).
-**Depends on:** nothing. **Wall 1:** unaffected (postfx).
+### E1. Output dither / debanding — Effort S — **DONE (spec 11.24)**
+Shipped on by default, `--no-dither` a provable 0 px. The sky's longest run of one 8-bit value
+down a column goes **192 px → 22 px**; 0.5 LSB only reaches 134, which is why the default is the
+textbook ±1 and not less. Raiden moves 68.6% of pixels at **PAE exactly 1/255**.
+
+**The sketch's one technical claim was wrong and arithmetic caught it before any shader was
+written.** `ign(p) - ign(p + c)` is not a TPDF: `ign` is a sawtooth on a linear ramp, so a
+constant offset shifts only its phase and the difference collapses to **four distinct values** —
+a staircase. Decorrelation has to come from changing the *scale*, not the offset. Evaluating the
+pure function in Python cost minutes and saved shipping a patterned dither.
+
+Two things the plan got right for the right reason. The pattern is **static**: an animated one
+would have put ~half the frame 1 LSB apart between consecutive frames, landing in every churn
+measurement *including its floor arm*, so both sides inflate and the comparison stops
+discriminating — measured 79,593 px vs 79,176, a 0.5% difference. And `include/noise.glsl`
+already had `ign()` with a comment instructing new code to use it, so B8's lesson was applied in
+advance for once.
+**Refs.** Mikkelsen, *Banding in Games: A Noisy Rant* (2010); Jimenez, interleaved gradient
+noise (2014), already in the tree.
+**Residual:** dither reaches only the finishing block, so `--cs-debug` and the other debug views
+are un-dithered by construction (they return from `main()` early — correct, they are data).
 
 ### E2. 3D LUT colour grading — Effort S
 `tonemap_frag.glsl:52-55` grades with lift/gamma/gain and nothing else. A 32³ `.cube` LUT is the
@@ -865,7 +879,7 @@ not scheduled.
 **Tier 4 — completeness, authoring & the perf floor (proposed, nothing scheduled):**
 | # | Item | Effort | Why here |
 |---|------|--------|----------|
-| 20 | E1 Output dither | S | Ten lines, visible immediately, blocks nothing and is blocked by nothing. Goes first because there is no reason for it to go anywhere else. |
+| 20 | E1 Output dither | S | **DONE (11.24).** On by default, `--no-dither` 0 px; sky bands 192 px → 22 px. The sketch's TPDF construction was wrong — a constant `ign` offset only phase-shifts the same sawtooth and collapses to four values — and evaluating the pure function in Python caught it before any shader existed. Static by construction, which measurement confirms costs the churn gates 0.5%. **The re-bake found the golden corpus is a third unverifiable:** six of nineteen cannot be reproduced, two of them because the fixture is not in the tree at all. |
 | 21 | C1 Moment transmittance shadows | M | The one item on this list that starts from a **defect** rather than a feature: hair casts no shadow at all today (`shadow.c:485-488`) and glass casts a black one. Third consumer of moment machinery already built twice. |
 | 22 | D2 Local fog + cloud shadows | M | Highest look-per-line left in the atmosphere stack, and its valuable half (froxel injection) needs nothing from D0. B2 deferred cloud shadows explicitly; this collects the debt. |
 | 23 | C2 Emissive → area lights | S/M | A fit plus a registration — `Light` already carries every field the fit produces. Makes practicals and screens light rooms instead of just glowing. |
@@ -895,9 +909,17 @@ scheduled.
   as the wall behind it. Standard forward-renderer behaviour; the clean fix wants the froxel volume
   sampled inside `pbr_frag`, which is Wall 1. A partial fix (per-draw analytic fog on transparent
   meshes) is available and cheap but will not match the froxel result.
-- **No golden runner.** Filed by 11.21 and still true: "all 18 goldens at 0 px" means scraping recipes
-  out of a dozen specs by hand. For a codebase whose verification policy is this strict, it is the
-  most out-of-place hole in it.
+- **No golden runner, and the corpus is a third unverifiable.** Filed by 11.21; 11.24 paid the
+  scraping cost again and measured how bad it has got. Of nineteen goldens, twelve reproduce from
+  a recipe scraped out of the spec that introduced it, one (`contact_debug`) is a debug view that
+  correctly never moves, and **six cannot be reproduced at all**: `cloud_fixture` and
+  `cloud_fixture_lowsun` reference a fixture **that is not in the tree** — only the PNGs are —
+  `flare_fixture`'s recipe is unrecorded and its fixture was regenerated after the bake, and
+  `roughness_sweep` / `guard_thin_panel` / `backface_dark` have no recipe anywhere. 11.24 also
+  found two *recorded* facts stale: `cornell_box` is not unreproducible (3 px, PAE 1 LSB, against
+  11.17's 86%), and `contact_debug` and `froxel_fog` do have recipes, in 9.4 and 9.5. Every branch
+  that touches the final image rediscovers this. `scripts/goldens.py` with one recipe table and
+  `--check` / `--rebake` is the fix, and it is now overdue rather than nice-to-have.
 - **Anisotropic filtering is capped at 8x** (`texture.c:89`) and never exposed as a setting.
 - **The GL 4.1 ceiling itself is the Tier 5 question.** Nothing in Tier 4 needs compute. Lumen-class
   GI, virtual shadow maps, GPU-driven culling and hardware ray tracing all do, and
