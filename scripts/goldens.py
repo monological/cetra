@@ -79,6 +79,17 @@ RECIPES = [
                "--cs-debug"]},
     {"name": "ao_fixture", "scene": "assets/ao_fixture.gltf", "size": (1600, 1000),
      "flags": ["-f", "30", "-W", "800", "-H", "500", "--no-auto-exposure", "-E", "1.0"]},
+    # The gate arms sample lines and erode every band edge by construction. What
+    # a scalar cannot see is two-dimensional: acne in the transmittance target,
+    # a silhouette losing its shape, a cascade seam cutting a band diagonally --
+    # which is exactly how the half-covered resolve presented before it was
+    # found. Dither and vignette stay ON: this is a picture, not a data read.
+    # --no-pcss because at a canopy height of 8 the default emitter smears the
+    # bands into each other and the image stops being legible.
+    {"name": "translucent_shadow", "scene": "assets/translucent_shadow_fixture.cscn",
+     "size": (1600, 1000),
+     "flags": ["-f", "30", "-W", "800", "-H", "500", "--no-auto-exposure", "-E", "1.0",
+               "--no-pcss", "--translucent-shadows"]},
 
     # --- global illumination and punctual shadows -----------------------------
     {"name": "cornell_box", "scene": "assets/cornell_box.gltf", "size": (1600, 1200),

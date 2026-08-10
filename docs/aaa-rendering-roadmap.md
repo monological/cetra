@@ -576,6 +576,43 @@ it gates the honesty of everything in Track E's tail.
 What the light path still cannot express. Every item here is UBO-only or postfx-only, so **Track C
 does not touch Wall 1** — which is exactly why it is the track to start with.
 
+### C1. Translucent shadow maps — Effort M → **L, DONE (spec 11.26)**
+Shipped as **deep opacity maps** (transmittance storage), not the four-moment
+reconstruction the sketch below assumed. Opt-in behind `--translucent-shadows`; hair casts a
+partial shadow, glass stops casting a black one.
+
+**The sampler wall turned out not to reach this**, which is the finding worth carrying. Unit 10
+already binds one of two textures and a branch picks, so there are two homes for transmittance
+that never coexist; this took the depth-array home, which keeps PCF/PCSS intact and leaves the
+moment path alone. `DEPTH_COMPONENT24` is a 24-bit UNORM — better storage for a value in [0,1]
+than the moment array's fp16 — and the array's white `CLAMP_TO_BORDER` already reads as
+"nothing occludes here".
+
+**Storing `exp(-b0)` rather than the absorbance is what makes the filter legal.** Transmittance
+averages linearly and absorbance does not, so a 3x3 box over these layers is exact where
+averaging moments carries Jensen's bias. The same arithmetic is why opaque casters stay out of
+the map entirely: the error goes as `A²/8` and opaque is the maximum-absorbance case.
+
+Measured against the analytic answer on a new fixture: bands read 0.650 / 0.421 / 0.273 / 0.179
+against 0.65^k, worst error **0.0016**; the mask ramp matches `1 - alpha(x)` at **RMS 0.0025**,
+where a binary alpha test scores 126x worse. Raiden moves **331,967 px (4.0%)** and the diff is
+the groom and the shoulder under it, nothing else.
+
+**Three bugs found by the arms rather than by reading, all three presenting as something they
+were not**: an unrestored blend FUNCTION that desaturated the whole frame while the shadows
+looked right; a resolve that drew a 4-vertex triangle STRIP as `GL_TRIANGLES, 0, 3` and so
+covered half the map, leaving a diagonal edge and values that were exact wherever they appeared;
+and two instrument faults (a vignetted lit reference, a GTAO-darkened black point) that each read
+as a renderer error.
+
+**Deferred, with reasons:** the four-moment reconstruction (it pairs MSM's linear warp with
+MBOIT's, a configuration in neither paper, and 11.17 measured it ill-conditioned exactly where
+hair lives); hair *receiving* its own shadow (measured: 195,821 px of card-shaped streaks); the
+punctual path (unit 15 has no moment branch and the layers would collapse every punctual map to
+its 1024 floor); coloured transmittance (breaks the scalar contract at three sites).
+
+<details><summary>The original sketch, kept for the record — it priced this as M and assumed the moment path</summary>
+
 ### C1. Moment transmittance shadow maps — Effort M
 **The standout item, and it starts from a defect rather than a feature.** `shadow.c:485-488` excludes
 alpha-masked materials from the shadow map entirely unless they opt back in via `foliage_shadows` —
@@ -599,6 +636,8 @@ umbra discriminates nothing, because every reconstruction agrees there.
 Bavoil, *Fourier Opacity Mapping* (I3D 2010); Yuksel & Keyser, *Deep Opacity Maps* (EG 2008).
 **Owns foundations:** transmittance-vs-depth storage in the shadow path.
 **Depends on:** A6 (shipped), B6 (shipped). **Wall 1:** unaffected (replaces a sampler, as A6 did).
+
+</details>
 
 ### C2. Emissive geometry → LTC area lights — Effort S/M
 An emissive mesh lights nothing today. It is bright in the frame, it feeds bloom, and its only path
@@ -880,7 +919,7 @@ not scheduled.
 | # | Item | Effort | Why here |
 |---|------|--------|----------|
 | 20 | E1 Output dither | S | **DONE (11.24).** On by default, `--no-dither` 0 px; sky bands 192 px → 22 px. The sketch's TPDF construction was wrong — a constant `ign` offset only phase-shifts the same sawtooth and collapses to four values — and evaluating the pure function in Python caught it before any shader existed. Static by construction, which measurement confirms costs the churn gates 0.5%. The re-bake reported six of nineteen goldens unreproducible; **11.25 showed that was wrong and all nineteen reproduce** — four recipes were in a ledger nobody opened, and `cloud_fixture` names no file at all. |
-| 21 | C1 Moment transmittance shadows | M | The one item on this list that starts from a **defect** rather than a feature: hair casts no shadow at all today (`shadow.c:485-488`) and glass casts a black one. Third consumer of moment machinery already built twice. |
+| 21 | C1 Translucent shadows | M→**L** | **DONE (11.26).** Shipped as deep opacity maps — transmittance storage, not the moment reconstruction the sketch assumed, which is why it stayed inside the sampler budget. Bands measure 0.0016 against 0.65^k and the mask ramp 0.0025 against 1-alpha, where a binary alpha test scores 126x worse. Raiden moves 4.0%, all of it the groom and the shoulder under it. Three bugs found by the arms, each presenting as something else — a blend function that desaturated the frame while the shadows looked right, a resolve that covered half the map with a diagonal edge, and two instrument faults that read as renderer faults. |
 | 22 | D2 Local fog + cloud shadows | M | Highest look-per-line left in the atmosphere stack, and its valuable half (froxel injection) needs nothing from D0. B2 deferred cloud shadows explicitly; this collects the debt. |
 | 23 | C2 Emissive → area lights | S/M | A fit plus a registration — `Light` already carries every field the fit produces. Makes practicals and screens light rooms instead of just glowing. |
 | 24 | E4 GPU timer queries | S | Wall 3. Cheap, and every perf claim after it is honest in a way the ones before it are not. Sequence before E5/D4 or their thresholds are guesses. |
