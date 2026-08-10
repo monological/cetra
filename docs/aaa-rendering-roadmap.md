@@ -11,6 +11,17 @@ This master plan is a tiered roadmap of SIGGRAPH-grade features, each feasible a
 passes + LUTs + probe bakes on GL 4.1. The plan will be committed to `specs/` as the umbrella spec;
 each tier item later gets its own subplan (feature branch + spec) before implementation.
 
+**Status: Tiers 1-3 are closed.** Every item is DONE, REJECTED-with-a-measurement, or CLOSED-and-split
+— the original plan is finished. **Tier 4 (Tracks C/D/E below) is the new frontier**, and it is shaped
+by a different constraint than Tiers 1-3 were: those items could each be built as another gated
+fullscreen pass, and Tier 4's cannot. Three structural walls now decide what is reachable at all; they
+are stated before Track C because half the Tier 4 items are blocked on one of them.
+
+Everything in Tracks C/D/E is a **sketch**, in the sense this document has taught the word: a
+pre-implementation guess whose load-bearing claims are wrong often enough that B3 lists four, B6 lists
+three, and A6 lists two of three premises stale by the time the code landed. Read each Tier 4 row as
+a hypothesis with an effort guess attached, not as a design.
+
 **User decisions locked in:**
 - **Environments first** — GI, clustered lighting, clouds, fog lead; skin/hair follow.
 - **Strict GL 4.1, single code path** — no dual GL 4.3 compute variants. Individual shaders may bump
@@ -85,6 +96,17 @@ Binding for all features (three new links in the `_Static_assert` chain, `render
   to a sampled texture, so neither the ledger nor unit 14 was ever at risk. Worth generalising: the
   "no LUT" constraint this ledger imposes is a constraint on *texture* lookups, and a table small
   enough to live in uniform/const space is not one.
+
+**The ledger is now FULL — 16 of 16, with no reserved slack left.** As of A7 and 11.17 the map is
+0 albedo, 1 normal, 2 masks, 3 clearcoat-normal, 4 height, 5 emissive, 6 scene-colour, 7 LTC,
+8 sheen, 9 Charlie env, 10 CSM (the depth array, or A6's RGBA16F moment array in its place under
+`--msm` — one sampler either way, which is what took A6 from L to M), 11 IBL irradiance,
+12 IBL prefilter, 13 BRDF LUT, 14 skybox/GI atlas (shared by the equality assert), 15 punctual
+shadow array. 11.17 established the rule that makes this a hard stop rather than a tight fit: **the
+driver counts sampler *declarations*, not uses**, so there is no seventeenth sampler in `pbr_frag`
+for a free unit either. Two escapes are already precedented and both are narrow — ride an existing
+declaration through a `#define` when the two consumers are mutually exclusive (moments over
+`sceneColorTex`), or put the table in `const`/uniform space (11.13). See **Wall 1** below.
 
 ## Track A — Direct Lighting & Global Illumination
 
@@ -517,6 +539,242 @@ it "one extra tap": the composite's single blend carries one (inscatter, transmi
 fog pass early-returned with fog off, so the two media are combined analytically inside one
 composite and `postfx_run_fog` became `postfx_run_atmosphere`.*
 
+## The three walls (Tier 4 preamble)
+
+Tiers 1-3 shared a shape: each item was another gated, lazily-allocated fullscreen pass, and the
+engine absorbed a dozen of them without structural change. That is over. Three walls now stand
+between the current renderer and the next tier, and naming them is more useful than any single
+feature below, because each one decides which features are reachable *at all*.
+
+**Wall 1 — `pbr_frag` is sampler-saturated (16/16).** Detailed in the ledger section above. It blocks,
+today, every feature whose data has to reach the *forward shading* stage as a texture: decals, light
+cookies, IES textures, detail/wetness maps, a cloud shadow map, and sampling the froxel volume from
+the transparent pass. It does NOT block anything that lives in postfx (which has its own budget and
+is nowhere near full), anything that fits in a UBO, or anything small enough to be a `const` table.
+Note which Tier 4 items below are postfx-only or UBO-only: those are the cheap ones, and they are
+cheap *because* of this wall, not in spite of it.
+
+**Wall 2 — geometry submission does not scale.** One draw per mesh; program and material changes are
+change-tracked (`current_program` / `current_material` in `render.c`) but draws are issued in
+scene-traversal order, not sorted. Culling is a per-mesh AABB test against the un-jittered frustum
+(`render.c:345`) and that is the entire culling story: **no LOD, no occlusion culling, and no
+instancing anywhere outside `particle_renderer.c`.** `apps/tree` shows the consequence honestly — its
+grass field is one CPU-baked mega-mesh rebuilt and re-uploaded whole on every slider change
+(`regenerate_grass`, `apps/tree/src/tree.c:1013`). The renderer is AAA-caliber per pixel and
+early-2000s per object. Every item in Track D that adds *objects* rather than *pixels* runs into this.
+
+**Wall 3 — the GPU is unmeasured.** There is not one `glGenQueries` / `GL_TIME_ELAPSED` /
+`glQueryCounter` in `cetra/src` outside the vendored deps, and the HUD shows FPS and nothing else
+(`gui.c:871`). Every perf number in every spec in this tree — 44 -> 22 ms at 0.67 scale, the 73.6 ms
+cloud re-bake — is wall-clock frame time measured around the whole frame. That was adequate while the
+question was "did this feature cost anything"; it is not adequate for "which of these 30 passes should
+lose 2 ms", which is the question a Tier 4 perf budget asks. This is the cheapest wall to remove and
+it gates the honesty of everything in Track E's tail.
+
+## Track C — Lighting completeness
+
+What the light path still cannot express. Every item here is UBO-only or postfx-only, so **Track C
+does not touch Wall 1** — which is exactly why it is the track to start with.
+
+### C1. Moment transmittance shadow maps — Effort M
+**The standout item, and it starts from a defect rather than a feature.** `shadow.c:485-488` excludes
+alpha-masked materials from the shadow map entirely unless they opt back in via `foliage_shadows` —
+so **hair casts no shadow at all**, by a deliberate choice whose reasoning (strand-scale acne vs
+card-shaped streaks at map-texel scale) is sound and whose result is a character standing in light
+with nothing under their hair. Alpha-blend materials are not filtered at all, so glass casts a solid
+black shadow. Both are the same missing concept: the shadow map stores a binary depth, and these
+surfaces need a *transmittance function* of depth.
+
+The engine has now built the machinery for exactly that twice — `include/msm.glsl` (A6/11.22, four
+power moments over a depth distribution) and `include/mboit.glsl` (B6/11.17, four power moments over
+an absorbance distribution). A transmittance shadow map is the second one pointed at the light's
+frustum instead of the camera's. Reuses A6's resolve-from-the-finished-array structure, which is what
+made `--no-msm` a provable 0 px; the same structure should make `--no-translucent-shadows` provable
+here.
+**Carry forward from 11.22 before starting:** four moments run out on a thin caster (blur 1.0 leaks
+0.4159), and hair is thin casters — so the honest prior is that this reconstructs a *soft* hair
+shadow well and a crisp one badly. Also carry 11.22's gate lesson: an arm measured deep inside an
+umbra discriminates nothing, because every reconstruction agrees there.
+**Refs.** Münstermann et al., *Moment-Based Order-Independent Transparency* (I3D 2018); Jansen &
+Bavoil, *Fourier Opacity Mapping* (I3D 2010); Yuksel & Keyser, *Deep Opacity Maps* (EG 2008).
+**Owns foundations:** transmittance-vs-depth storage in the shadow path.
+**Depends on:** A6 (shipped), B6 (shipped). **Wall 1:** unaffected (replaces a sampler, as A6 did).
+
+### C2. Emissive geometry → LTC area lights — Effort S/M
+An emissive mesh lights nothing today. It is bright in the frame, it feeds bloom, and its only path
+into the lighting solution is a 16²-face DDGI capture that converges over seconds and resolves no
+detail. Practicals, screens, strip lights and neon — the entire vocabulary of interior lighting — are
+therefore decorative.
+
+`Light` already carries exactly the fit's output: `position`, `direction` (panel normal), `up`,
+`size`, and a photometric `intensity` in nits (`light.h:45-73`). So the item is a fit — plane-fit an
+emissive mesh's dominant quad, integrate its emissive to a radiance — plus a registration into the
+packed light array A1 already uploads. **No new shading code, no new machinery, no new units.**
+v1 limits worth writing down now: one rectangle per emissive mesh (a curved neon tube is out), static
+fit at load (an animated emitter re-fits per frame or is excluded), and the same single-sided
+constraint A2 shipped with.
+**Refs.** Heitz, Dupuy, Hill & Neubelt, *Real-Time Polygonal-Light Shading with Linearly Transformed
+Cosines* (SIGGRAPH 2016) — already shipped as A2; this item is a producer for it.
+**Depends on:** A1 (shipped), A2 (shipped). **Wall 1:** unaffected.
+
+### C3. IES photometric profiles — Effort S
+9.9/10.0 made punctual lights genuinely photometric — candela and lux imported as authored, an EV100
+camera — and then every one of those lights radiates through a bare analytic cone. IES profiles are
+the payoff for work already done, and they are what makes an architectural interior read as lit
+rather than as shaded.
+
+**This one fits Wall 1 rather than fighting it.** Most real IES profiles are near rotationally
+symmetric about the luminaire axis, so a 32- or 64-tap intensity-vs-angle table per *profile* (not
+per light) lives in the existing std140 light UBO alongside the packed lights, costing **zero texture
+units**. That is the same escape 11.13 took for the skin table, and it generalises: the ledger
+constrains *texture* lookups only. Asymmetric profiles (wall-washers) are the v2 case and do need a
+2D table; defer them rather than paying a unit for the symmetric 90%.
+**Refs.** Karis, *Real Shading in Unreal Engine 4* (SIGGRAPH 2013 course) — the IES section;
+IESNA LM-63 for the file format.
+**Depends on:** A1's UBO machinery (shipped), 10.0's photometric units (shipped). **Wall 1:** avoided
+by construction.
+
+### C4. Clustered specular probes — Effort L
+`scene->probe` is singular (`scene.h:127`) — **one** parallax-corrected reflection probe for an entire
+scene. SSR covers what is on screen; everything it misses falls back to that one probe plus the IBL
+cube, so a character walking from a lit hall into a side room keeps the hall's reflections. A4 gave
+diffuse GI a spatial structure and specular never got one.
+
+The two pieces this needs are both already built and both already own the foundation: **A1's cluster
+grid** for probe→cluster assignment (the same CPU pass that culls lights culls probe AABBs) and
+**A4's octahedral atlas + `include/octahedral.glsl`** for storage, so N probes cost one sampler, not
+N. The unresolved design question is the capture budget: A4's answer — converge, then idle at
+literally zero — is available here too and is probably right, but a probe re-capture is a full
+6-face scene render at a useful resolution, not A4's 16².
+**Refs.** Lagarde & Zanuttini, *Local Image-Based Lighting with Parallax-Corrected Cubemaps*
+(SIGGRAPH 2012 talk) — shipped as the single-probe path; McGuire et al., *Real-Time Global
+Illumination using Precomputed Light Field Probes* (I3D 2017) for the atlas/visibility structure.
+**Depends on:** A1 (shipped), A4 (shipped). **Wall 1:** unaffected (one atlas sampler, reusing A4's).
+
+### C5. Screen-space shadows for local lights — Effort S
+A3 marches contact shadows along **one** light — the key. Every other light in the scene lands on
+CSM/punctual maps whose texel footprint loses the millimetre-scale contact, which is the specific
+artifact A3 exists to fix. Extending the march to the N nearest cluster lights per pixel is the
+cheapest remaining grounding win, and it is postfx-only: A3 already publishes the key light's
+view-space direction, and A1's cluster grid already answers "which lights touch this pixel".
+Cost scales linearly in N, so v1 is N=2 with a per-light distance cap.
+**Refs.** the Uncharted 4 contact-shadow technique already cited by A3.
+**Depends on:** A1 (shipped), A3 (shipped). **Wall 1:** unaffected (postfx).
+
+## Track D — Surfaces & environment
+
+Where Wall 1 actually bites. D1 and D2's ground-shadow half both need a texture inside `pbr_frag`,
+so **D0 is a hard prerequisite for them** and should not be started until one of them is scheduled
+(the roadmap's own just-in-time rule: foundations land with their first consumer).
+
+### D0. Free two `pbr_frag` sampler units — Effort M
+Not a feature; the unblocking item. The concrete candidate: **unit 11 (IBL irradiance) folds into the
+GI atlas on unit 14** as a single octahedral tile. `pbr_frag` already samples that atlas, the
+octahedral encode/decode include already exists from A4, and a cosine-convolved environment is
+precisely what one atlas tile holds — so the fold costs no new sampler and frees a whole unit. Second
+candidate, riskier: share unit 6 (`sceneColorTex`) the way 11.17 shared it for moments, valid only
+where the two consumers are provably mutually exclusive.
+**The 0-diff gate here is unusually strong and should be demanded**: folding irradiance into an atlas
+tile is a pure storage change, so the raiden baseline must be 0 px, and if it is not, the
+octahedral resampling is lossy in a way that matters and the item should stop.
+**Depends on:** A4 (shipped). **Owns foundations:** the freed units D1/D2 spend.
+
+### D1. Clustered decals — Effort L
+The largest **environment-art** gap in the engine: there is no way to author localised surface detail
+onto geometry — no scorch marks, no leaks, no edge wear, no posters, no puddle edges. Forward
+rendering rules out the deferred screen-space decal every AAA engine uses, but the clustered form
+fits A1 exactly: box decals culled into the same 16x8x24 grid, sampled in `pbr_frag` before the
+lighting loop, modifying albedo / normal / roughness in place.
+**Hard-blocked on D0** — a decal atlas is a texture in `pbr_frag`, which is the one thing the ledger
+has none of. Second cost worth pricing before committing: decals are the first feature that makes the
+forward shader's cost data-dependent per pixel in a way clustering cannot bound tightly.
+**Refs.** Persson, *Practical Clustered Shading* (SIGGRAPH 2013 course); Wronski,
+*Screen-Space Decals* (GDC 2014).
+**Depends on:** A1 (shipped), **D0 (hard)**.
+
+### D2. Local fog volumes + cloud shadows — Effort M
+Two gaps in the shipped atmosphere, one item because they share the froxel injection point.
+**Local fog volumes**: B1's froxel volume carries one global medium, so a smoky room, a dust shaft or
+a mist pocket cannot be authored — only the whole world's fog can change. Per-object density boxes
+injected into `froxel_inject_frag` is the standard answer and that shader is already the roadmap's
+declared integration point. **Cloud shadows**: B2 shipped clouds and explicitly deferred their
+shadows, so the sky has weather and the ground does not know. This is the highest look-per-line item
+left in the atmosphere stack — the noise and the march already exist, and a low-res cloud shadow map
+sampled in `froxel_inject` (postfx, no wall) buys the moving dappled light that sells an outdoor
+scene. Sampling it in `pbr_frag` for direct sun occlusion is the half that needs D0; **the froxel half
+does not, and is where the visible payoff is** — do it first and measure whether the surface half is
+still worth a unit.
+**Refs.** Hillaire, *Physically Based and Unified Volumetric Rendering in Frostbite* (SIGGRAPH 2015
+course); Schneider & Vos, *The Real-Time Volumetric Cloudscapes of Horizon Zero Dawn* (SIGGRAPH 2015)
+— already shipped as B2.
+**Depends on:** B1 (shipped), B2 (shipped); surface half on D0.
+
+### D3. Tessellated water — Effort L
+The one flagship surface the engine does not have, and the one that would exercise four shipped
+subsystems at once (screen-space refraction, SSR, aerial perspective, OIT).
+**The enabling fact nobody has used: tessellation shaders are GL 4.0, legal under the 4.1 ceiling,
+and there is not a single `GL_TESS_CONTROL_SHADER` or `GL_PATCHES` in the tree.** The whole
+tessellation stage is unspent headroom on a codebase that has otherwise mined GL 4.1 to the wall.
+Water is its most valuable first consumer; POM silhouettes and D4 terrain are the others.
+**Refs.** Tessendorf, *Simulating Ocean Water* (SIGGRAPH 2001 course) for FFT; Gerstner waves for the
+cheaper v1.
+**Depends on:** nothing hard. **Owns foundations:** the tessellation pipeline (program creation,
+patch draw path, LOD-by-distance heuristic).
+
+### D4. Terrain — Effort XL
+No terrain system exists. Real gap, but only for outdoor scale, and it depends on Wall 2 far more
+than on any rendering technique — a clipmap without instancing, LOD and a streaming story is a
+mega-mesh with extra steps, which `apps/tree`'s grass already demonstrates the cost of. **Do not
+schedule this before Track E's E5.**
+**Refs.** Asirvatham & Hoppe, *Terrain Rendering Using GPU-Based Geometry Clipmaps* (GPU Gems 2);
+Strugar, *Continuous Distance-Dependent LOD* (CDLOD, 2009).
+**Depends on:** E5 (hard, in practice), D3's tessellation path (soft).
+
+## Track E — Image finishing & the perf floor
+
+### E1. Output dither / debanding — Effort S
+There is no dithering anywhere at the 8-bit write. Everything smooth and dark bands: sky gradients,
+froxel fog, bloom falloff, the inside of a DoF bokeh. This is the single highest ratio of visible
+improvement to lines changed left in the engine — a triangular-PDF dither at the final gamma encode,
+roughly ten lines in `tonemap_frag.glsl`.
+**Refs.** Mikkelsen, *Banding in Games: A Noisy Rant* (2010).
+**Depends on:** nothing. **Wall 1:** unaffected (postfx).
+
+### E2. 3D LUT colour grading — Effort S
+`tonemap_frag.glsl:52-55` grades with lift/gamma/gain and nothing else. A 32³ `.cube` LUT is the
+format a colourist actually hands back, and post shaders are nowhere near their sampler budget, so
+this is a self-contained pass with a real workflow payoff. Sequence it *after* the tonemap, and pin
+which space the LUT is authored in — the working-space contract from 10.1/10.2 is the thing this
+item is most likely to violate quietly.
+**Depends on:** 10.1-10.2's working-space contract (shipped). **Wall 1:** unaffected.
+
+### E3. Histogram auto-exposure — Effort M
+`lum_measure_frag.glsl:44` writes `log2(lum)` and the mip chain averages it: a flat, unweighted,
+whole-frame log-average with no metering mask and no percentile clipping. One bright practical, one
+sun disc, one specular highlight drags the entire frame dark — and because exposure multiplies every
+pixel, that is also the single largest source of cross-build non-determinism this repo has measured
+(99.77% of pixels, per CLAUDE.md). A histogram with low/high percentile rejection fixes the image and
+narrows that noise source at the same time.
+**Refs.** Lagarde & de Rousiers, *Moving Frostbite to Physically Based Rendering* (SIGGRAPH 2014
+course) — the exposure section.
+**Depends on:** nothing. **Wall 1:** unaffected.
+
+### E4. GPU timer queries + per-pass HUD — Effort S
+**Wall 3.** `glGenQueries` around each named pass, a ring of N-frame-deep results to avoid the stall,
+and an ImGui table. Cheap, and it is the instrument every later perf claim depends on — including the
+question this roadmap has never been able to answer: what does the full post chain actually cost,
+pass by pass, at 4K.
+**Depends on:** nothing. **Owns foundations:** per-pass GPU timing (consumed by E5, D4, any budget
+work).
+
+### E5. Instancing + LOD + sorted submission — Effort L
+**Wall 2**, taken directly. Instanced draws for repeated meshes (foliage, props, grass blades — the
+`glVertexAttribDivisor` path already exists in `particle_renderer.c` and has never been generalised),
+distance LOD on the mesh, and draw sorting by program/material so the change-tracking in `render.c`
+actually pays off. This is the item that separates "renders beautifully" from "ships", and it is the
+prerequisite the rest of Track D quietly assumes.
+**Depends on:** E4 (soft — do the measurement first, or the LOD thresholds are guesses).
+
 ## Sequencing — tiers & rationale
 
 **Tier 1 — the AAA leap (environments):**
@@ -540,8 +798,9 @@ its own spec, branch, reviews and gates. It exists because using the engine surf
 roadmap's feature items could not — a wrong tonemap constant, non-photometric light scales, shadow
 banding at real viewing distances, off-spec KHR materials against reference renderers, and temporal
 flicker whose root cause was an estimator, not a filter. The series continued past B2 with 11.1
-and 11.2 (below). **Tiers 1 and 2 are complete**, Tier 2 closing with B3 pre-integrated skin
-(11.13). Tier 3 is unparked.
+and 11.2 (below). **Tiers 1, 2 and 3 are all complete** — Tier 2 closing with B3 pre-integrated skin
+(11.13), Tier 3 with A6 moment shadow maps (11.22) and B8's split (11.20). Tier 4 below is proposed,
+not scheduled.
 
 - **9.9–10.0 photometry:** PBR Neutral desaturation blend was inverted vs the Khronos reference;
   then punctual lights went genuinely photometric (candela/lux imported as authored, EV100 camera)
@@ -603,6 +862,49 @@ and 11.2 (below). **Tiers 1 and 2 are complete**, Tier 2 closing with B3 pre-int
 | 18 | A6 Moment shadow maps | L→**M** | **DONE (11.22).** Filterable 4-moment cascades, opt-in `--msm`; PCF/PCSS stay default. Resolved *from* the finished depth array, so the depth pass is byte-identical and `--no-msm` is a provable 0 px — which also retires two of spec 10.4's five reasons for deferring VSM. No new sampler: MSM replaces unit 10 rather than adding to it, and that is what took the effort from L to M. 75 MB, half the sketch's estimate. The one thing it does that PCSS cannot is exceed `PCSS_MAX_RADIUS_UV`, since a prefiltered tap costs the same however wide it blurs. **Two arms that could not fail, both caught here.** The `hole` arm the plan called "the number that decides the item" left `hole-msm` at 0.0084 unchanged to four decimals against a deliberately broken two-moment reconstruction that moved the frame 6339 px — deep inside an umbra every reconstruction agrees, so it was coverage of nothing; the `pillar` arm on the thin caster's band reads 0.4249 vs 0.0000 and does discriminate. Then all six MSM arms turned out to pass silently when `shadow_build_msm` bails, because that frame *is* `--no-msm`; the fix is an inverse arm asserting blurred moments DO leak. Prefiltering a thin caster is still where four moments run out (blur 1.0 leaks 0.4159, so the default is 0), and the sketch's "one prefiltered tap beats 32 stochastic ones" does not hold at that default (7775 px vs 7545). No golden: six analytic arms cover it better than a stored PNG of an off-by-default path would. **The three structural unifications eight reviewers raised against it were measured and declined** — the shared prefilter helper is 6 identical lines wanting 8 parameters across 2 callers, the shared moment kernel is forbidden by two reference constants 60x apart plus a normalisation only one side has, and the PCSS/MSM enum turns out to guard a case already guarded twice over. Recorded in 11.22 as rejections rather than deferrals, since deferred reads as pending and this is the kind of thing a review raises every round. |
 | 19 | B8 Hair | XL | **CLOSED, split (spec 11.20).** The strand map shipped and is live: it rides the **anisotropy** slot that already existed, so binding one stretches the ordinary GGX highlight along the painted grain — general enough for brushed metal and satin, which hair merely motivated. The R/TT/TRT fibre lobes were built, swept low and high in all combinations, rejected at every setting, and **deleted**. Two structural faults, neither tunable: the lobe replaced the whole microfacet term without its `/(4·NdotV·NdotL)` or energy compensation AND still flowed through a surface integrand (`NdotL` on the card normal, a coat/sheen stack, a half-vector diffuse); and cards carry no normal map, so per-texel facing is absent from the asset. The lesson worth more than the feature: `set_material_anisotropy_tex` had zero callers, so an energy-paired direction channel was already sitting there and this work built a second one beside it before anyone looked. |
 
+**Tier 4 — completeness, authoring & the perf floor (proposed, nothing scheduled):**
+| # | Item | Effort | Why here |
+|---|------|--------|----------|
+| 20 | E1 Output dither | S | Ten lines, visible immediately, blocks nothing and is blocked by nothing. Goes first because there is no reason for it to go anywhere else. |
+| 21 | C1 Moment transmittance shadows | M | The one item on this list that starts from a **defect** rather than a feature: hair casts no shadow at all today (`shadow.c:485-488`) and glass casts a black one. Third consumer of moment machinery already built twice. |
+| 22 | D2 Local fog + cloud shadows | M | Highest look-per-line left in the atmosphere stack, and its valuable half (froxel injection) needs nothing from D0. B2 deferred cloud shadows explicitly; this collects the debt. |
+| 23 | C2 Emissive → area lights | S/M | A fit plus a registration — `Light` already carries every field the fit produces. Makes practicals and screens light rooms instead of just glowing. |
+| 24 | E4 GPU timer queries | S | Wall 3. Cheap, and every perf claim after it is honest in a way the ones before it are not. Sequence before E5/D4 or their thresholds are guesses. |
+| 25 | C3 IES profiles | S | Collects the payoff for 9.9/10.0's photometric work. Fits Wall 1 by living in the light UBO — zero texture units. |
+| 26 | C5 Contact shadows for local lights | S | A3 generalised from one light to N. Postfx-only. |
+| 27 | E3 Histogram exposure | M | Fixes the image *and* narrows the largest measured source of cross-build non-determinism. |
+| 28 | E2 3D LUT grading | S | Colourist workflow. Watch the working-space contract. |
+| 29 | C4 Clustered specular probes | L | Diffuse GI got a spatial structure in A4; specular still has exactly one probe. Reuses A1's grid and A4's atlas. |
+| 30 | E5 Instancing + LOD + sorting | L | Wall 2, taken directly. The item that separates "renders beautifully" from "ships", and the one the rest of Track D assumes. |
+| 31 | D0 Free two sampler units | M | Foundation only — schedule it **with** D1 or D2's surface half, never before, per the just-in-time rule. |
+| 32 | D1 Clustered decals | L | Largest environment-art gap. Hard-blocked on D0. |
+| 33 | D3 Tessellated water | L | Spends the tessellation stage — GL 4.0, legal here, and completely unused. |
+| 34 | D4 Terrain | XL | Only after E5; a clipmap without instancing/LOD is a mega-mesh with extra steps. |
+
+**If only five ever get built: 20 -> 21 -> 22 -> 23 -> 24.** One afternoon, then three items that each
+reuse a shipped subsystem rather than building new machinery, then the instrument the rest needs.
+
+### Known limitations not booked as items
+
+Recorded because they are real, understood, and currently nobody's row — not because they are
+scheduled.
+
+- **Volumetrics, DoF and AO do not see transparent surfaces.** The transparent pass runs with
+  `glDepthMask(GL_FALSE)` (`render.c:975`), so the aux linear-Z target holds whatever opaque surface
+  is *behind* the glass. Fog, aerial perspective, DoF and GTAO therefore all treat a transparent pixel
+  as the wall behind it. Standard forward-renderer behaviour; the clean fix wants the froxel volume
+  sampled inside `pbr_frag`, which is Wall 1. A partial fix (per-draw analytic fog on transparent
+  meshes) is available and cheap but will not match the froxel result.
+- **No golden runner.** Filed by 11.21 and still true: "all 18 goldens at 0 px" means scraping recipes
+  out of a dozen specs by hand. For a codebase whose verification policy is this strict, it is the
+  most out-of-place hole in it.
+- **Anisotropic filtering is capped at 8x** (`texture.c:89`) and never exposed as a setting.
+- **The GL 4.1 ceiling itself is the Tier 5 question.** Nothing in Tier 4 needs compute. Lumen-class
+  GI, virtual shadow maps, GPU-driven culling and hardware ray tracing all do, and
+  `docs/rendering-roadmap.md` §5 already prices the three honest answers (offline CPU path tracer /
+  hybrid Metal RT via IOSurface / a full Metal or Vulkan backend). That document owns the question;
+  this one should not re-open it.
+
 ## Foundations ownership (just-in-time)
 
 | Foundation | Owner | Later consumers |
@@ -618,6 +920,10 @@ and 11.2 (below). **Tiers 1 and 2 are complete**, Tier 2 closing with B3 pre-int
 | `create_texture_3d_float` + `include/froxel.glsl` (slice count parameterized, so a differently-sized volume reuses it) | B1 | B9 aerial perspective, B2 clouds, future volumetrics |
 | CPU 3D noise (`noise_worley3`, Perlin-Worley packing, threaded bake) | B2 | ground fog detail, media |
 | Render-res/post-res split — **delivered** as four sizes (`width/height` render, `post_*`, `out_*`, `half_*` = render/2), plus the canvas locals every post-seam pass composites onto | B4 | B5, B7, tonemap |
+| Transmittance-vs-depth storage in the shadow path | C1 (proposed) | any translucent caster: hair, glass, foliage tips, smoke |
+| Freed `pbr_frag` sampler units | D0 (proposed) | D1 decals, D2's surface-shadow half, detail/wetness maps |
+| Tessellation pipeline (program creation, patch draw, distance LOD) | D3 (proposed) | D4 terrain, POM silhouettes |
+| Per-pass GPU timing | E4 (proposed) | E5 LOD thresholds, D4, all budget work |
 
 ## Cross-track integration contracts
 
@@ -657,8 +963,10 @@ and 11.2 (below). **Tiers 1 and 2 are complete**, Tier 2 closing with B3 pre-int
    `remote-build-orchestration` work stays untouched in the working tree).
 2. **Per item, later:** its own subplan session → spec in `specs/` → feature branch → implement →
    verify (off-gate + on-reference) → merge. Foundations land inside their owner's branch.
-3. Tier order as above; 5↔6 swappable; Tier 3 items are parked sketches whose subplans get written
-   only when scheduled.
+3. Tier order as above; 5↔6 swappable; Tier 3 items were parked sketches whose subplans got written
+   only when scheduled, and **Tier 4 items are the same** — a row here is a hypothesis with an effort
+   guess, and the subplan session is where it gets checked against the code before any of it is
+   believed.
 
 ## Files most touched across the roadmap
 
@@ -669,3 +977,11 @@ and 11.2 (below). **Tiers 1 and 2 are complete**, Tier 2 closing with B3 pre-int
 - `cetra/src/sky.c/h` — B9 aerial perspective + sky-published fog colors, B2 clouds
 - `cetra/src/probe.c` — A4 capture-core extraction
 - `apps/render/src/render.c` — CLI flags for every feature
+
+Tier 4 adds three that Tiers 1-3 barely touched:
+
+- `cetra/src/shadow.c` — C1 caster filtering + the transmittance resolve (the hair exclusion at
+  `shadow.c:485` is C1's starting point)
+- `cetra/src/render.c` — E5 submission: instanced draws, LOD selection, draw sorting; D1 decal binding
+- `cetra/shaders/tonemap_frag.glsl` — E1 dither, E2 LUT (both at the very end of the chain, where the
+  colour is already a display-referred scalar)
