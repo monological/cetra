@@ -97,9 +97,13 @@ SUN_DIR = [0.0, -math.sin(math.radians(SUN_ELEV_DEG)),
 SHIFT = PANEL_Y0 / math.tan(math.radians(SUN_ELEV_DEG))   # 2.14 at y=8, elev 75
 
 # --- camera ----------------------------------------------------------------
-CAM_EYE = [0.0, 5.0, 8.0]
+# Framed for MARGIN, not for a flattering picture: at the original (0,5,8)/35
+# the leftmost stair band cleared the frame edge by 13 px and the ramp's left
+# end missed it by 9, so the ramp arms were reading the picture's edge. Every
+# sampled point now clears by at least 1.5 world units.
+CAM_EYE = [0.0, 6.0, 10.0]
 CAM_TARGET = [0.0, 0.0, 0.0]
-FOVY_DEG = 35.0
+FOVY_DEG = 38.0
 ASPECT = 1.6            # the 800x500 the gate and the golden render at
 
 RAMP_PX = 512
@@ -120,6 +124,21 @@ def _visible_z():
     near = CAM_EYE[2] - CAM_EYE[1] / math.tan(-(pitch - half))
     far = CAM_EYE[2] - CAM_EYE[1] / math.tan(-(pitch + half))
     return far, near
+
+
+def _visible_x(z):
+    """Half-width of the frame at ground depth z -- the other half of the guard.
+
+    _visible_z alone let a sample sit inside the picture in depth and a world
+    unit outside it across, which is how the first opaque-umbra sample came to
+    project to px 809 of an 800-wide frame. ASPECT was declared for this and
+    then not used, so the x extent went unchecked entirely.
+    """
+    fwd = [t - e for t, e in zip(CAM_TARGET, CAM_EYE)]
+    n = math.sqrt(sum(c * c for c in fwd))
+    fwd = [c / n for c in fwd]
+    depth = sum((p - e) * f for p, e, f in zip([0.0, 0.0, z], CAM_EYE, fwd))
+    return depth * math.tan(math.radians(FOVY_DEG) * 0.5) * ASPECT
 
 
 VISIBLE_Z = _visible_z()
@@ -316,11 +335,31 @@ with open(os.path.join(here, "translucent_shadow_fixture.cscn"), "w") as f:
     json.dump(cscn, f, indent=1)
     f.write("\n")
 
+# The x each band's arms actually READ -- the staircase reads band centres from
+# -6 out to +2, the ramp reads across the widest panel only, the red panel one
+# point on the axis. Not the same span, so they cannot share a guard.
+SAMPLED_X = {
+    "staircase": (BAND_X0 + 0.5 * BAND_W, BAND_X0 + (PANELS + 0.5) * BAND_W),
+    "ramp": (BAND_X0 + BAND_W, CANOPY_XR),
+    "red": (0.0, 0.0),
+}
+
 for label, (z0, z1) in (("staircase", STAIR_Z), ("ramp", RAMP_Z), ("red", RED_Z)):
     c0, c1 = z0 + SHIFT, z1 + SHIFT
     assert VISIBLE_Z[0] < c0 and c1 < VISIBLE_Z[1], (
         "%s casts to z %.2f..%.2f, outside the visible ground z %.2f..%.2f"
         % (label, c0, c1, VISIBLE_Z[0], VISIBLE_Z[1]))
+    # x, at the band CENTRE, which is the z the gate reads. Asserted over the
+    # extreme sampled x rather than the canopy's full span: the outer panels
+    # are allowed to overhang the picture, the sampled points are not. The
+    # margin is required, not merely positive -- the framing this replaced had
+    # every arm nominally passing with the leftmost sample 13 px from the edge.
+    zc, xs = 0.5 * (c0 + c1), SAMPLED_X[label]
+    half, need = _visible_x(zc), 1.0
+    worst = min(half - abs(x) for x in xs)
+    assert worst >= need, (
+        "%s samples reach x %.2f at z %.2f, clearing the frame edge (+/-%.2f) by "
+        "only %.2f -- want %.2f" % (label, max(abs(x) for x in xs), zc, half, worst, need))
 assert all_min[0] == -all_max[0] and all_min[2] == -all_max[2] and all_min[1] == 0.0, \
     "bounds must centre in x/z with base y=0 or the app's recenter moves the scene"
 

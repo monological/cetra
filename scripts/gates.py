@@ -2115,17 +2115,23 @@ TSL_RED_ZC = 0.0 + TSL_SHIFT
 # default vignette is radial, so a reference out at x=-10 sits darker than the
 # bands it normalises and pulls every transmittance up. --no-vignette below
 # removes it; sampling near the bands keeps the arm honest if it ever returns.
-TSL_LIT_X, TSL_ACNE_X = 4.0, -9.5
-TSL_OPAQUE_SAMPLE = (6.0, 0.0, -3.0 + 1.6 / math.tan(math.radians(75.0)))
+TSL_LIT_X = 4.0
+# A point in the opaque block's cast umbra that the camera can actually SEE.
+# The block is 1.6 tall at elevation 75, so it shifts its own shadow only 0.43
+# in z and stands in front of the rest: the umbra runs z -3.57..-1.57 but the
+# block's own footprint hides it back to -2.0, leaving a 0.43-deep sliver.
+# Centred in that sliver, and in the block's x. The first version sampled
+# (6, 0, -2.57) -- inside the block, and off an 800-wide frame at px 809.
+TSL_OPAQUE_SAMPLE = (6.0, 0.0, -1.786)
 
 
 def _tsl_render(workdir, tag, extra):
     out = os.path.join(workdir, f"tsl_{tag}.ppm")
     scene = os.path.join(ROOT, "assets", "translucent_shadow_fixture.cscn")
-    # --no-ssao is load-bearing, not tidiness: the black point is the opaque
-    # block's umbra, and GTAO darkens the ground around that block by an amount
-    # the canopy bands do not get. Measured: it biased every band ~2.8% high.
-    # The rest keeps anything that could add to flat lit ground out of frame.
+    # --no-ssao is load-bearing, not tidiness: the arms compare shadowed ground
+    # against lit ground, and GTAO darkens near the panels by an amount the open
+    # reference does not get. Measured: it biased every band ~2.8%. The rest
+    # keeps anything that could add to flat lit ground out of frame.
     cmd = [RENDER, "-m", scene, "-x", "-f", "30", "-W", "800", "-H", "500",
            "--no-auto-exposure", "-E", "1.0", "--no-pcss", "--no-ssao", "--no-ssr",
            "--no-bloom", "--no-dither", "--no-vignette", "-S", out] + extra
@@ -2148,8 +2154,12 @@ def _tsl_reader(path):
 
     def at(p):
         px, py = project(p)
-        x = max(0, min(w - 1, int(round(px))))
-        y = max(0, min(h - 1, int(round(py))))
+        x, y = int(round(px)), int(round(py))
+        # Raising rather than clamping, because clamping is how a sample walks
+        # off the frame and keeps reporting: the first opaque-umbra point
+        # projected to px 809 of 800 and silently read the frame's right edge.
+        if not (0 <= x < w and 0 <= y < h):
+            raise AssertionError(f"sample {p} projects to ({px:.1f}, {py:.1f}), outside {w}x{h}")
         o = (y * w + x) * 3
         return _oit_untonemap([pix[o + k] / 255.0 for k in range(3)])
 
@@ -2172,14 +2182,15 @@ def run_translucent_shadow_gate(workdir):
         return sum(at(p)) / 3.0
 
     lit = lum((TSL_LIT_X, 0.0, TSL_STAIR_ZC))
-    black = lum(TSL_OPAQUE_SAMPLE)
-    direct = lit - black
-    if direct <= 1e-3:
-        print(f"  tsl          ERROR degenerate reference (lit {lit:.4f} black {black:.4f})")
-        return ["tsl"]
 
+    # The zero of the scale is 0 BY CONSTRUCTION, not measured: the fixture
+    # declares one directional light and no environment, so a fully shadowed
+    # ground texel receives nothing. Taking it from the opaque block's umbra
+    # instead made tsl-opaque a tautology -- it asserted that (black - black)
+    # was under a bound, which is exactly 0 for any renderer whatsoever, and
+    # would have passed a shader that flooded every umbra with full light.
     def transmittance(p):
-        return (lum(p) - black) / direct
+        return lum(p) / lit
 
     failures = []
 
@@ -2237,9 +2248,16 @@ def run_translucent_shadow_gate(workdir):
         failures.append("tsl-discrim")
 
     # --- solid stays solid, bare stays bare, both in THIS frame -------------
-    ok = bands[0] >= 1.0 - TSL_ACNE_TOL
-    print(f"  tsl-acne     {'PASS' if ok else 'FAIL'}  bare band reads {bands[0]:.4f} "
-          f"(want >= {1.0 - TSL_ACNE_TOL})")
+    # The gap in z BETWEEN the stair cast band (ends -2.36) and the ramp's
+    # (starts -1.30), sampled as a strip. Deliberately not band 0, which
+    # tsl-stack already reads -- that would restate tsl-stack at a looser bound
+    # and catch nothing new. Not the x < -8 bare strip either: at this camera
+    # the frame only reaches x = -7.5, so those samples are off-picture.
+    acne = [transmittance((x, 0.0, -1.83)) for x in (-4.0, -2.0, 0.0, 2.0, 4.0)]
+    worst_acne = max(abs(a - 1.0) for a in acne)
+    ok = worst_acne <= TSL_ACNE_TOL
+    print(f"  tsl-acne     {'PASS' if ok else 'FAIL'}  worst |T-1| over uncovered ground "
+          f"{worst_acne:.4f} (bound {TSL_ACNE_TOL}: a target never cleared darkens everything)")
     if not ok:
         failures.append("tsl-acne")
 
@@ -2251,11 +2269,16 @@ def run_translucent_shadow_gate(workdir):
         failures.append("tsl-opaque")
 
     # --- monochrome, as shipped --------------------------------------------
+    # Two claims on one sample, because the spread alone is 0 on bare ground and
+    # 0 in a full umbra -- it passes if the sample walks off the panel. Pinning
+    # the level too says the sample IS under the panel, and checks the
+    # single-layer prediction at an alpha the staircase does not use.
     red = at((0.0, 0.0, TSL_RED_ZC))
     spread = max(red) - min(red)
-    ok = spread <= TSL_MONO_TOL
-    print(f"  tsl-mono     {'PASS' if ok else 'FAIL'}  channel spread under the red panel "
-          f"{spread:.4f} (want <= {TSL_MONO_TOL}: transmittance is scalar as shipped)")
+    red_t = (sum(red) / 3.0) / lit
+    ok = spread <= TSL_MONO_TOL and abs(red_t - 0.5) <= TSL_STACK_TOL
+    print(f"  tsl-mono     {'PASS' if ok else 'FAIL'}  red panel T {red_t:.4f} (want 0.5 "
+          f"+/-{TSL_STACK_TOL}) at a channel spread of {spread:.4f} (want <= {TSL_MONO_TOL})")
     if not ok:
         failures.append("tsl-mono")
 

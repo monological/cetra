@@ -587,7 +587,16 @@ static void _render_shadow_node(SceneNode* node, ShaderProgram* program, GLuint*
 
             // A two-sided card has no back face, so culling either way would
             // drop it from the map entirely.
-            bool two_sided = mat && mat->doubleSided;
+            //
+            // Excluded on the translucent pass, which runs with culling off
+            // for EVERY mesh so a closed volume accumulates both its surfaces.
+            // Restoring it here would re-enable culling for the rest of that
+            // cascade's traversal, halving the absorbance of every translucent
+            // mesh drawn after the first two-sided one -- transmittance would
+            // come out as its square root, and which meshes were affected
+            // would depend on scene-graph order.
+            bool two_sided =
+                mat && mat->doubleSided && set != SHADOW_CASTERS_TRANSLUCENT;
             if (two_sided)
                 glDisable(GL_CULL_FACE);
 
@@ -894,9 +903,23 @@ static bool shadow_build_msm(ShadowSystem* ss, Engine* engine) {
 // taken ONCE, at the resolve, so what the array holds is a transmittance: that
 // is what makes the shadow lookup's PCF box over these layers exact, where
 // averaging absorbance would carry Jensen's bias.
-static bool shadow_build_tsm(ShadowSystem* ss, Engine* engine, Scene* scene) {
+// Acquire everything the transmittance pass needs and answer, ONCE, whether it
+// will run this frame. Split from the build because the depth pass has to know
+// the answer BEFORE it decides which casters to withhold, and it cannot know it
+// from `tsm_enabled`: a shader that failed to compile or an allocation that
+// failed leaves the request true and the map empty, so the casters come out of
+// the depth pass and nothing represents them -- glass casting NOTHING, which is
+// worse than the black shadow this feature exists to replace.
+static bool shadow_tsm_prepare(ShadowSystem* ss, Engine* engine) {
     if (!ss->tsm_enabled || !ss->tsm_allocated || ss->shadow_map_array == 0 ||
         ss->directional_count == 0)
+        return false;
+    // Excluded by the moment path, at the one place that knows it is live --
+    // the same home, and for the same reason, as the PCSS exclusion below.
+    // Under --msm unit 10 carries msm_array, which has directional_count*cc
+    // layers and no transmittance block at all, so the lookup would index past
+    // its end and read a mean depth as a transmittance.
+    if (ss->msm_enabled)
         return false;
 
     if (!ss->tsm_absorb_program)
@@ -911,15 +934,12 @@ static bool shadow_build_tsm(ShadowSystem* ss, Engine* engine, Scene* scene) {
 
     if (ss->tsm_scratch == 0) {
         // R32F and not R16F: a dense groom sums many strand absorbances into
-        // one texel, and -log(1-a) is unbounded as a approaches 1.
-        glGenTextures(1, &ss->tsm_scratch);
-        glBindTexture(GL_TEXTURE_2D, ss->tsm_scratch);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, size, size, 0, GL_RED, GL_FLOAT, NULL);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glBindTexture(GL_TEXTURE_2D, 0);
+        // one texel, and -log(1-a) is unbounded as a approaches 1. The shared
+        // helper's LINEAR filter is moot -- tsm_resolve_frag reads this with
+        // texelFetch, which never filters.
+        ss->tsm_scratch = create_texture_2d_float(size, size, GL_R32F, GL_RED, NULL);
+        if (ss->tsm_scratch == 0)
+            return false;
         glGenFramebuffers(1, &ss->tsm_scratch_fbo);
         glBindFramebuffer(GL_FRAMEBUFFER, ss->tsm_scratch_fbo);
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
@@ -935,12 +955,22 @@ static bool shadow_build_tsm(ShadowSystem* ss, Engine* engine, Scene* scene) {
         log_info("Translucent shadows: %d layer(s) at %d^2 appended to the depth array "
                  "(%.0f MB incl. a %.0f MB accumulation scratch)",
                  TSM_SLOTS * cc * TSM_PARTS, size,
-                 (TSM_SLOTS * cc * TSM_PARTS * (double)size * size * 4.0 + size * (double)size * 4.0) /
+                 (TSM_SLOTS * cc * TSM_PARTS * (double)size * size * 4.0 +
+                  size * (double)size * 4.0) /
                      (1024.0 * 1024.0),
                  size * (double)size * 4.0 / (1024.0 * 1024.0));
     }
     if (ss->tsm_quad_vao == 0)
         create_fullscreen_quad_vao(&ss->tsm_quad_vao, &ss->tsm_quad_vbo);
+    return true;
+}
+
+// Draw the transmittance layers. Callable only when shadow_tsm_prepare returned
+// true, so every resource here is known to exist.
+static bool shadow_build_tsm(ShadowSystem* ss, const Engine* engine, Scene* scene) {
+    const int size = ss->default_map_size;
+    const int cc = ss->cascade_count;
+    bool ok = true;
 
     GLboolean blend_was = glIsEnabled(GL_BLEND);
     GLboolean cull_was = glIsEnabled(GL_CULL_FACE);
@@ -992,8 +1022,14 @@ static bool shadow_build_tsm(ShadowSystem* ss, Engine* engine, Scene* scene) {
         // The depth clear is 1.0, which is exactly "fully transmitting", so a
         // cascade with no translucent caster needs no special case and the
         // array's white CLAMP_TO_BORDER agrees with it outside the footprint.
-        if (!begin_depth_layer(ss->cascade_fbo, ss->shadow_map_array, TSM_LAYER(cc, c, 0), size))
+        // A failed layer bind leaves every LATER layer uncleared, holding
+        // undefined glTexImage3D content that the lookup would read as a
+        // transmittance -- so this reports failure rather than returning true
+        // over a partial build, exactly as shadow_build_msm does.
+        if (!begin_depth_layer(ss->cascade_fbo, ss->shadow_map_array, TSM_LAYER(cc, c, 0), size)) {
+            ok = false;
             break;
+        }
         glEnable(GL_DEPTH_TEST);
         glDepthFunc(GL_ALWAYS);
         glDepthMask(GL_TRUE);
@@ -1001,20 +1037,16 @@ static bool shadow_build_tsm(ShadowSystem* ss, Engine* engine, Scene* scene) {
         uniform_set_int(ss->tsm_resolve_program->uniforms, "absorbance", 0);
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, ss->tsm_scratch);
-        // TRIANGLE_STRIP over 4 vertices: create_fullscreen_quad_vao builds a
-        // strip, and drawing it as GL_TRIANGLES with 3 vertices covers exactly
-        // half the map -- which resolves a triangular wedge and leaves the rest
-        // at the cleared 1.0, i.e. a shadow with a diagonal edge.
-        glBindVertexArray(ss->tsm_quad_vao);
-        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-        glBindVertexArray(0);
+        draw_fullscreen_quad(ss->tsm_quad_vao);
         glBindTexture(GL_TEXTURE_2D, 0);
 
         // --- nearest translucent depth -------------------------------------
         // The ordinary depth program and the ordinary depth test: the hardware
         // min-blends for free, so this layer needs no shader of its own.
-        if (!begin_depth_layer(ss->cascade_fbo, ss->shadow_map_array, TSM_LAYER(cc, c, 1), size))
+        if (!begin_depth_layer(ss->cascade_fbo, ss->shadow_map_array, TSM_LAYER(cc, c, 1), size)) {
+            ok = false;
             break;
+        }
         glDepthFunc(GL_LESS);
         current_program = 0;
         glUseProgram(ss->depth_program->id);
@@ -1042,7 +1074,7 @@ static bool shadow_build_tsm(ShadowSystem* ss, Engine* engine, Scene* scene) {
         glEnable(GL_DEPTH_TEST);
     else
         glDisable(GL_DEPTH_TEST);
-    return true;
+    return ok;
 }
 
 void render_shadow_depth_pass(Engine* engine, Scene* scene) {
@@ -1068,12 +1100,7 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     // Same latch, same reason: every early return below must leave the lookup
     // reading occlusion alone rather than an array that was never filled.
     ss->tsm_built = false;
-    // Withholding translucent casters from the depth pass is legal only when
-    // there is a transmittance map to represent them instead. Computed once so
-    // the two depth loops and the bind cannot disagree about it.
-    const ShadowCasterSet opaque_set = (ss->tsm_enabled && ss->tsm_allocated)
-                                           ? SHADOW_CASTERS_OPAQUE_TSM
-                                           : SHADOW_CASTERS_OPAQUE;
+    ss->tsm_live = false;
     int punctual_needed = 0;
     const Light* pool_overflow = NULL;
     const Light* dir_overflow = NULL;
@@ -1157,6 +1184,10 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     // VRAM back, and it is the largest array the renderer allocates.
     if (ss->initialized && ss->tsm_allocated != ss->tsm_enabled) {
         free_shadow_map_array(ss);
+        // The scratch is NOT part of the array, so the line above does not
+        // reach it -- without this, turning the feature off hands back the
+        // layers and keeps a 16 MB accumulation target until shutdown.
+        free_tsm_resources(ss);
     }
 
     // Always initialize the shadow map array texture (needed for sampler2DArray in shader)
@@ -1293,12 +1324,23 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     wind_upload_to_program(scene->wind, ss->depth_program->uniforms);
     uniform_set_float(ss->depth_program->uniforms, "time", (float)engine->render_time);
 
+    // Resolved HERE, after the caster classification that tells it whether any
+    // directional light casts, and before the first draw that depends on it.
+    // Withholding a translucent caster from the depth pass is legal only when
+    // the transmittance map will actually exist to represent it, and only for
+    // the slots that HAVE one -- TSM_SLOTS is 1, so casters 1 and 2 keep the
+    // solid shadow they have always cast rather than losing it for nothing.
+    ss->tsm_live = shadow_tsm_prepare(ss, engine);
+
     for (size_t i = 0; i < ss->directional_count; ++i) {
+        const ShadowCasterSet set = (ss->tsm_live && i < TSM_SLOTS)
+                                        ? SHADOW_CASTERS_OPAQUE_TSM
+                                        : SHADOW_CASTERS_OPAQUE;
         for (int c = 0; c < cc; ++c) {
             size_t layer = i * (size_t)cc + (size_t)c;
             begin_shadow_pass(ss, layer);
             draw_shadow_layer(ss, scene->root_node, (const float*)ss->cascade_matrices[layer],
-                              &current_program, opaque_set);
+                              &current_program, set);
         }
     }
 
@@ -1342,7 +1384,7 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     // holds. It disables cull for its own draws, so the cull face this pass set
     // and never saved cannot reach it either.
     ss->msm_built = shadow_build_msm(ss, engine);
-    ss->tsm_built = shadow_build_tsm(ss, engine, scene);
+    ss->tsm_built = ss->tsm_live && shadow_build_tsm(ss, engine, scene);
 
     glViewport(prev_viewport[0], prev_viewport[1], prev_viewport[2], prev_viewport[3]);
 }

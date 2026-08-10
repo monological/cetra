@@ -674,7 +674,11 @@ ShaderProgram* create_msm_resolve_program() {
 ShaderProgram* create_shadow_absorb_program() {
     ShaderProgram* program = NULL;
 
-    if ((program = create_program_from_source("shadow_absorb", shadow_absorb_vert_shader_str,
+    // shadow_depth's vertex stage, not a copy of it. Skinning and wind must
+    // displace an absorbance caster exactly as they displace the same surface
+    // in the depth pass, and the only way two files stay identical is to be
+    // one file -- the copy this replaced had already drifted in its comments.
+    if ((program = create_program_from_source("shadow_absorb", shadow_depth_vert_shader_str,
                                               shadow_absorb_frag_shader_str, NULL)) == NULL) {
         log_error("Failed to initialize translucent shadow absorb shader program");
         return NULL;

@@ -147,7 +147,15 @@ float csmOutermostOcclusion(vec3 worldPos, int slot)
         }
     }
     const float taps = float(2 * CSM_PCF_HALF_KERNEL + 1) * float(2 * CSM_PCF_HALF_KERNEL + 1);
-    return shadow / taps;
+    float occlusion = shadow / taps;
+
+    // Translucent casters are withheld from the depth this function reads, so
+    // without this they would be invisible to the catcher and the particles --
+    // a glass panel that cast a solid shadow on the catcher ground would cast
+    // NONE, which is worse than the feature being off. Polarity flips here:
+    // this function returns occlusion where csmTransmittance returns
+    // visibility.
+    return 1.0 - (1.0 - occlusion) * csmTransmittance(layer, proj.xy, proj.z);
 }
 
 #endif // CSM_OUTERMOST_PCF

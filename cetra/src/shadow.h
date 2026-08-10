@@ -262,6 +262,12 @@ typedef struct ShadowSystem {
     // every arm passes while measuring nothing.
     bool tsm_built;
     bool tsm_allocated; // Array currently carries the transmittance block
+    // Whether the pass WILL run, resolved once before the depth pass commits to
+    // withholding anything. The depth routing cannot read tsm_enabled: a failed
+    // program or allocation leaves the request true and the map empty, and the
+    // casters would then be withheld with nothing representing them -- glass
+    // casting nothing at all, which is worse than the defect this replaces.
+    bool tsm_live;
 } ShadowSystem;
 
 // Creation and destruction
