@@ -1,5 +1,11 @@
 # LTC area-light goldens (spec 9.2)
 
+**The render commands live in `scripts/goldens.py`, not here** (spec 11.25). Check them with
+`python3 scripts/goldens.py --only roughness_sweep`, re-bake with `--rebake <name>`, and read
+the exact flags with `--list`. This file keeps what a command cannot carry: what each image is
+supposed to show, and which bug a given deviation implies. Nothing below duplicates a command,
+because a command in two places drifts and the drift is silent.
+
 Reference renders for `--area-light`. The sweep and backface goldens use
 `assets/area_light_fixture.gltf` (roughness 0.15 -> 0.95, left to right, over
 a diffuse ground quad); the guard golden uses `assets/area_light_guard.gltf`
@@ -30,12 +36,7 @@ current goldens are the first with correct geometry.
 
 ## roughness_sweep_golden.png
 
-```
-./out/bin/render -m assets/area_light_fixture.gltf -W 640 -H 360 -x -f 2 \
-    --no-auto-exposure -E 1.0 --no-scene-file \
-    --cam-eye 0,1.6,6 --cam-target 0,0.5,0 \
-    --area-light 0,2.2,1.2,0,-0.6,-0.8,2.0,0.7,30
-```
+`python3 scripts/goldens.py --only roughness_sweep`
 
 What to look for: a small, sharp reflection with recognisable rectangular
 structure on the left, broadening smoothly rightward into a near-uniform wash
@@ -56,7 +57,9 @@ version of this golden precisely because it was only ever reviewed small.
 
 ## backface_dark_golden.png
 
-Same command with the panel normal negated (`0,0.6,0.8`). Every sphere and
+`python3 scripts/goldens.py --only backface_dark`
+
+The sweep's recipe with the panel normal negated (`0,0.6,0.8`). Every sphere and
 the ground must be pure black: a panel lights only the half-space its
 direction points into. If anything is lit here, the single-sided plane test
 or the corner winding flipped.
@@ -70,12 +73,7 @@ singularity (an edge subtending ~pi makes `theta/sin(theta)` genuinely
 infinite; fp32 lands on the arbitrary 1e-7 clamp and emits a structured
 radial fan instead of a highlight).
 
-```
-./out/bin/render -m assets/area_light_guard.gltf --no-scene-file -W 800 -H 600 \
-    --fov 50.0 -x -f 2 --no-auto-exposure -E 1.0 \
-    --cam-eye 0.549,0.780,1.525 --cam-target 0.549,0.500,0.000 \
-    --area-light 0,2.2,1.2,0,-0.6,-0.8,0.25,1.8,30
-```
+`python3 scripts/goldens.py --only guard_thin_panel`
 
 What to look for: one clean, smooth highlight (it shades at the floor, 0.12).
 Any speckled fan radiating from it means the floor was lowered, removed, or a
@@ -115,10 +113,7 @@ Regenerate the fixture with `python3 assets/gen_area_light_fixture.py`.
 
 ## flare_fixture_golden.png
 
-```
-./out/bin/render -m assets/flare_fixture.cscn -x -f 30 -W 800 -H 500 \
-    --no-auto-exposure -E 1.0 --flare 0.15 --chromatic-aberration 12
-```
+`python3 scripts/goldens.py --only flare_fixture`
 
 The one golden where the lens flare and chromatic aberration are LIVE -- every
 other golden asserts they are dormant, so this is the only image that moves if

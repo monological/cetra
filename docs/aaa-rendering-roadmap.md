@@ -879,7 +879,7 @@ not scheduled.
 **Tier 4 — completeness, authoring & the perf floor (proposed, nothing scheduled):**
 | # | Item | Effort | Why here |
 |---|------|--------|----------|
-| 20 | E1 Output dither | S | **DONE (11.24).** On by default, `--no-dither` 0 px; sky bands 192 px → 22 px. The sketch's TPDF construction was wrong — a constant `ign` offset only phase-shifts the same sawtooth and collapses to four values — and evaluating the pure function in Python caught it before any shader existed. Static by construction, which measurement confirms costs the churn gates 0.5%. **The re-bake found the golden corpus is a third unverifiable:** six of nineteen cannot be reproduced, two of them because the fixture is not in the tree at all. |
+| 20 | E1 Output dither | S | **DONE (11.24).** On by default, `--no-dither` 0 px; sky bands 192 px → 22 px. The sketch's TPDF construction was wrong — a constant `ign` offset only phase-shifts the same sawtooth and collapses to four values — and evaluating the pure function in Python caught it before any shader existed. Static by construction, which measurement confirms costs the churn gates 0.5%. The re-bake reported six of nineteen goldens unreproducible; **11.25 showed that was wrong and all nineteen reproduce** — four recipes were in a ledger nobody opened, and `cloud_fixture` names no file at all. |
 | 21 | C1 Moment transmittance shadows | M | The one item on this list that starts from a **defect** rather than a feature: hair casts no shadow at all today (`shadow.c:485-488`) and glass casts a black one. Third consumer of moment machinery already built twice. |
 | 22 | D2 Local fog + cloud shadows | M | Highest look-per-line left in the atmosphere stack, and its valuable half (froxel injection) needs nothing from D0. B2 deferred cloud shadows explicitly; this collects the debt. |
 | 23 | C2 Emissive → area lights | S/M | A fit plus a registration — `Light` already carries every field the fit produces. Makes practicals and screens light rooms instead of just glowing. |
@@ -909,17 +909,16 @@ scheduled.
   as the wall behind it. Standard forward-renderer behaviour; the clean fix wants the froxel volume
   sampled inside `pbr_frag`, which is Wall 1. A partial fix (per-draw analytic fog on transparent
   meshes) is available and cheap but will not match the froxel result.
-- **No golden runner, and the corpus is a third unverifiable.** Filed by 11.21; 11.24 paid the
-  scraping cost again and measured how bad it has got. Of nineteen goldens, twelve reproduce from
-  a recipe scraped out of the spec that introduced it, one (`contact_debug`) is a debug view that
-  correctly never moves, and **six cannot be reproduced at all**: `cloud_fixture` and
-  `cloud_fixture_lowsun` reference a fixture **that is not in the tree** — only the PNGs are —
-  `flare_fixture`'s recipe is unrecorded and its fixture was regenerated after the bake, and
-  `roughness_sweep` / `guard_thin_panel` / `backface_dark` have no recipe anywhere. 11.24 also
-  found two *recorded* facts stale: `cornell_box` is not unreproducible (3 px, PAE 1 LSB, against
-  11.17's 86%), and `contact_debug` and `froxel_fog` do have recipes, in 9.4 and 9.5. Every branch
-  that touches the final image rediscovers this. `scripts/goldens.py` with one recipe table and
-  `--check` / `--rebake` is the fix, and it is now overdue rather than nice-to-have.
+- ~~**No golden runner.**~~ **BUILT (spec 11.25)** — `python3 scripts/goldens.py` checks all
+  nineteen in one command, and every render command now lives in one table instead of in whichever
+  spec introduced it. **The corpus was never broken**, which is the part worth carrying: 11.17
+  recorded three goldens as having no recipe anywhere, 11.21 repeated it and named four, and 11.24
+  concluded six of nineteen were unreproducible and wrote that here. All three were wrong. Four of
+  the six had their recipe in `assets/area_light_goldens.md`, a per-feature ledger nobody thought
+  to open; the two `cloud_fixture` goldens do not name a fixture at all, since **no such file has
+  ever existed in this repository** — they are the aerial fixture with `--clouds`. Three specs in
+  a row reached a false conclusion from the same cause, which is a better argument for one table
+  than any of them made on purpose.
 - **Anisotropic filtering is capped at 8x** (`texture.c:89`) and never exposed as a setting.
 - **The GL 4.1 ceiling itself is the Tier 5 question.** Nothing in Tier 4 needs compute. Lumen-class
   GI, virtual shadow maps, GPU-driven culling and hardware ray tracing all do, and
