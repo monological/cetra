@@ -82,8 +82,9 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --no-pcss          Fixed-width PCF instead of contact-hardening\n");
     fprintf(stderr, "      --msm              Moment shadow maps: one prefiltered tap, no PCSS\n");
     fprintf(stderr, "      --msm-size <n>     Moment cascade edge (default: 1024)\n");
-    fprintf(stderr, "      --msm-blur <f>     Moment blur spacing in texels (default: 1)\n");
-    fprintf(stderr, "      --msm-bleed <f>    Moment leak cutoff, 0-1 (default: 0.2)\n");
+    fprintf(stderr, "      --msm-blur <f>     Moment blur spacing in texels (default: 0, off)\n");
+    fprintf(stderr, "      --msm-bleed <f>    Moment leak cutoff, 0-%.2f (default: 0.2)\n",
+            (double)MSM_MAX_BLEED);
     fprintf(stderr, "      --light-size <f>   Emitter size for penumbra (default: scene-scaled)\n");
     fprintf(stderr, "      --shadow-softness <f> PCSS softness multiplier (default: 1)\n");
     fprintf(stderr, "      --shadow-cascades <n> Shadow cascades per caster, 1-3 (default: 3)\n");
@@ -510,6 +511,12 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 return -1;
             }
             args->msm_bleed = (float)atof(argv[i]);
+            // Not cosmetic: msmReduceBleed divides by (1 - bleed), so 1.0 is a
+            // NaN and clamp() of a NaN is undefined in GLSL.
+            if (args->msm_bleed < 0.0f || args->msm_bleed > MSM_MAX_BLEED) {
+                fprintf(stderr, "Error: --msm-bleed must be 0..%.2f\n", (double)MSM_MAX_BLEED);
+                return -1;
+            }
         } else if (strcmp(argv[i], "--light-size") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -2380,11 +2387,38 @@ int main(int argc, char** argv) {
                                       ? args.ground_height
                                       : scene->skybox_gp_radius * (1.2f / 5.0f);
     }
+    // KNOWN, NOT FIXED HERE: the shadow catcher sizes its quad off
+    // skybox_gp_radius, which the block above only fits for a projected dome. A
+    // catcher in a scene without one therefore sits at scene.c's human-scale 5.0
+    // default whatever the model's scale. It predates this branch -- a sky-lit
+    // scene with no ground projection already hit it -- and giving the catcher
+    // its own radius was measured to move contact_debug_golden by 1 px, which is
+    // not a trade to make inside a moment-shadow change. Filed in spec 11.22.
 
     // Fit the shadow frustum to the scene; the library default (ortho 2000)
     // leaves a human-sized model with no effective shadow map resolution
     if (scene->shadow_system && args.no_shadows) {
         scene->shadow_system->enabled = false;
+    }
+    // Technique selection, NOT frustum fitting, so it sits outside the
+    // scene_radius gate below: a degenerate radius is a live case (see the
+    // camera_distance fallback further down) and --msm silently doing nothing
+    // there, with no diagnostic, is worse than a coarse shadow map.
+    if (scene->shadow_system) {
+        // Moment shadows exclude PCSS -- the blocker search reads .r as a depth
+        // and under moments .r is a mean over the footprint. The library
+        // enforces it at the uniform upload; this only reports it, because the
+        // user asked for one default-off feature and is losing another that is
+        // on by default here.
+        scene->shadow_system->msm_enabled = args.msm != 0;
+        if (args.msm && !args.no_pcss)
+            printf("--msm: contact-hardening (PCSS) off; the moment blur sets softness\n");
+        if (args.msm_size > 0)
+            scene->shadow_system->msm_size = args.msm_size;
+        if (args.msm_blur >= 0.0f)
+            scene->shadow_system->msm_blur = args.msm_blur;
+        if (args.msm_bleed >= 0.0f)
+            scene->shadow_system->msm_bleed = args.msm_bleed;
     }
     if (scene->shadow_system && scene_radius > 0.0f) {
         scene->shadow_system->ortho_size = scene_radius * 2.0f;
@@ -2395,22 +2429,6 @@ int main(int argc, char** argv) {
         // default light size (50m) is absurd against a ~2x-scene-radius ortho
         // frustum, so size the emitter to the scene; --light-size overrides.
         scene->shadow_system->pcss_enabled = !args.no_pcss;
-        // Moment shadows and PCSS cannot both run: PCSS estimates a blocker
-        // depth by reading .r as a depth, and under MSM .r is the first moment
-        // -- a mean over the footprint, which includes the receiver's own
-        // surface. Stated out loud rather than silently, since the user asked
-        // for one default-off feature and is losing another that is on.
-        scene->shadow_system->msm_enabled = args.msm != 0;
-        if (args.msm && scene->shadow_system->pcss_enabled) {
-            printf("--msm: contact-hardening (PCSS) off; the moment blur sets softness\n");
-            scene->shadow_system->pcss_enabled = false;
-        }
-        if (args.msm_size > 0)
-            scene->shadow_system->msm_size = args.msm_size;
-        if (args.msm_blur >= 0.0f)
-            scene->shadow_system->msm_blur = args.msm_blur;
-        if (args.msm_bleed >= 0.0f)
-            scene->shadow_system->msm_bleed = args.msm_bleed;
         if (args.shadow_softness >= 0.0f) {
             scene->shadow_system->pcss_softness = args.shadow_softness;
         }

@@ -54,9 +54,20 @@ static void free_depth_array(GLuint* tex, GLuint* fbo) {
 // Drop the moment cascades and everything that only exists to fill them. The
 // allocation is lazy and rebuilt on demand, so this is both the teardown and the
 // resize path; zeroing the built extents is what makes the rebuild trigger.
+//
+// The FBO and the quad depend on neither size nor layer count, so they survive a
+// resize and are torn down only with the system -- a cascade-count change should
+// not re-upload a quad.
 static void free_msm_arrays(ShadowSystem* system) {
     gl_delete_texture(&system->msm_array);
     gl_delete_texture(&system->msm_scratch);
+    system->msm_allocated_layers = 0;
+    system->msm_allocated_size = 0;
+    system->msm_built = false;
+}
+
+static void free_msm_resources(ShadowSystem* system) {
+    free_msm_arrays(system);
     gl_delete_fbo(&system->msm_fbo);
     if (system->msm_quad_vao) {
         glDeleteVertexArrays(1, &system->msm_quad_vao);
@@ -64,9 +75,6 @@ static void free_msm_arrays(ShadowSystem* system) {
         system->msm_quad_vao = 0;
         system->msm_quad_vbo = 0;
     }
-    system->msm_allocated_layers = 0;
-    system->msm_allocated_size = 0;
-    system->msm_built = false;
 }
 
 // Point the FBO at one layer and clear it for a depth-only pass. False means
@@ -137,7 +145,7 @@ void free_shadow_system(ShadowSystem* system) {
 
     free_shadow_map_array(system);
     free_depth_array(&system->punctual_map_array, &system->punctual_fbo);
-    free_msm_arrays(system);
+    free_msm_resources(system);
 
     free(system);
 }
@@ -385,7 +393,7 @@ void bind_shadow_maps_to_program(ShadowSystem* system, ShaderProgram* program) {
     // Gated on msm_built, not msm_enabled: the flag can be on with nothing
     // resolved (no directional caster, a failed allocation, a bake), and the
     // lookup has to keep working in all three.
-    const bool msm_on = on && system->msm_built && system->msm_array;
+    const bool msm_on = on && system->msm_built;
     // The array texture binds even when nothing casts: a sampler2DArray must
     // resolve to something for the program to be complete.
     glActiveTexture(GL_TEXTURE0 + SHADOW_MAP_TEXTURE_UNIT);
@@ -428,7 +436,11 @@ void bind_shadow_maps_to_program(ShadowSystem* system, ShaderProgram* program) {
     uniform_set_float(u, "shadowBias", system->shadow_bias);
 
     // PCSS controls; the per-cascade ortho geometry rides in cascadeParams
-    uniform_set_int(u, "pcssEnabled", system->pcss_enabled ? 1 : 0);
+    // The exclusion lives here, at the one place that already knows whether the
+    // moment path is live. The app used to clear pcss_enabled instead, which
+    // was lossy: turning moments off again in the GUI left the field false, so
+    // the user got plain PCF back rather than the PCSS they started with.
+    uniform_set_int(u, "pcssEnabled", (system->pcss_enabled && !msm_on) ? 1 : 0);
     uniform_set_float(u, "pcssSoftness", system->pcss_softness);
     uniform_set_int(u, "pcssStochastic", system->pcss_stochastic ? 1 : 0);
     uniform_set_int(u, "pcssFrameIndex", system->pcss_frame_index);
@@ -632,32 +644,45 @@ static void draw_shadow_layer(ShadowSystem* ss, SceneNode* root, const float* ma
 // msm_array is why there is no handle swap and no fourth copy. Both source and
 // destination are the same layer index, since this array mirrors the cascades
 // one for one.
+// One draw. `mode` doubles as the sampler unit -- the two sources are distinct
+// uniforms on distinct units, so neither pass rebinds the other's texture.
+static void msm_pass(ShadowSystem* ss, UniformManager* mu, int layer, GLuint dst, GLuint src,
+                     int mode, float dx, float dy) {
+    glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, dst, 0, layer);
+    uniform_set_int(mu, "mode", mode);
+    uniform_set_vec2(mu, "blurStep", (vec2){dx, dy});
+    glActiveTexture(GL_TEXTURE0 + mode);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, src);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+}
+
 static void msm_build_layer(ShadowSystem* ss, UniformManager* mu, int layer) {
-    const float step = ss->msm_blur / (float)ss->msm_allocated_size;
-    const struct {
-        GLuint dst, src;
-        int mode;
-        float dx, dy;
-    } steps[3] = {
-        {ss->msm_array, ss->shadow_map_array, 0, 0.0f, 0.0f},
-        {ss->msm_scratch, ss->msm_array, 1, step, 0.0f},
-        {ss->msm_array, ss->msm_scratch, 1, 0.0f, step},
-    };
-    // At spacing 0 the blur's taps all land on one texel, so the two passes
+    uniform_set_int(mu, "layer", layer);
+    msm_pass(ss, mu, layer, ss->msm_array, ss->shadow_map_array, 0, 0.0f, 0.0f);
+    // At spacing 0 every blur tap lands on the same texel, so the two passes
     // would copy the layer twice for nothing. Skipping them is what makes the
-    // default free rather than merely harmless.
-    const int step_count = ss->msm_blur > 0.0f ? 3 : 1;
-    for (int s = 0; s < step_count; s++) {
-        glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, steps[s].dst, 0, layer);
-        uniform_set_int(mu, "layer", layer);
-        uniform_set_int(mu, "mode", steps[s].mode);
-        uniform_set_vec2(mu, "blurStep", (vec2){steps[s].dx, steps[s].dy});
-        // The two sources are distinct sampler uniforms, so they sit on distinct
-        // units and neither pass has to rebind the other's texture.
-        glActiveTexture(GL_TEXTURE0 + (steps[s].mode == 0 ? 0 : 1));
-        glBindTexture(GL_TEXTURE_2D_ARRAY, steps[s].src);
-        draw_fullscreen_quad(ss->msm_quad_vao);
-    }
+    // default free rather than merely harmless -- and is why msm_scratch is not
+    // allocated at all until a blur asks for it.
+    if (ss->msm_blur <= 0.0f)
+        return;
+    // Texels of the NARROWEST cascade, with the wider ones scaled down to match
+    // its world width.
+    //
+    // A fixed texel spacing would be a different world-space softness in every
+    // cascade -- cascade 0 is a near view-slice fit, the outermost is the whole
+    // scene -- so the penumbra would step at each seam, which is the artifact
+    // PCSS divides by frustumWidth to avoid (see lightSizeUV in pbr_frag).
+    // Denominating in world units instead is the obvious fix and the wrong one:
+    // the filter is 5 fixed taps and combs past ~1 texel, so the widest cascade
+    // sets a ceiling that leaves the useful range a sliver either side of 0.02.
+    // Scaling from the narrowest cascade gives equal world width AND keeps every
+    // cascade under the comb limit whenever the knob is <= 1.
+    const float texel = 1.0f / (float)ss->msm_allocated_size;
+    const float near_width = ss->cascade_params[layer - (layer % ss->cascade_count)][0];
+    const float width = ss->cascade_params[layer][0];
+    const float step = width > 0.0f ? ss->msm_blur * texel * (near_width / width) : 0.0f;
+    msm_pass(ss, mu, layer, ss->msm_scratch, ss->msm_array, 1, step, 0.0f);
+    msm_pass(ss, mu, layer, ss->msm_array, ss->msm_scratch, 1, 0.0f, step);
 }
 
 // Derive the filterable moment cascades from the depth cascades the pass above
@@ -671,35 +696,63 @@ static void msm_build_layer(ShadowSystem* ss, UniformManager* mu, int layer) {
 // so the off path is the path that was there before rather than a rebuild of it.
 static bool shadow_build_msm(ShadowSystem* ss, Engine* engine) {
     const int layers = (int)ss->directional_count * ss->cascade_count;
-    if (!ss->msm_enabled || !ss->shadow_map_array || layers <= 0)
+    if (!ss->msm_enabled || !ss->shadow_map_array || layers <= 0) {
+        // Hand the VRAM back when the feature is switched off, but keep the FBO
+        // and quad: the capture path clears msm_enabled around every cube face
+        // (render.c), so tying those to the flag would rebuild them per face.
+        if (ss->msm_array)
+            free_msm_arrays(ss);
         return false;
+    }
 
     if (!ss->msm_program)
         ss->msm_program = get_engine_shader_program_by_name(engine, "msm_resolve");
     if (!ss->msm_program || !ss->msm_program->uniforms)
         return false;
 
-    const int size = ss->msm_size > 0 ? ss->msm_size : MSM_DEFAULT_SIZE;
-    if (ss->msm_allocated_layers != layers || ss->msm_allocated_size != size) {
-        free_msm_arrays(ss);
-        ss->msm_array = create_texture_2d_array_float(size, size, layers, GL_RGBA16F, GL_RGBA);
-        ss->msm_scratch = create_texture_2d_array_float(size, size, layers, GL_RGBA16F, GL_RGBA);
-        if (!ss->msm_array || !ss->msm_scratch) {
+    // Never above the depth array it resolves FROM. The 2x2 gather in the shader
+    // is a downsample, so at parity it degenerates to a half-texel shift and
+    // above it to an upsample -- more memory for strictly less information.
+    int size = ss->msm_size;
+    if (size > ss->default_map_size) {
+        log_warn("Moment cascade %d^2 exceeds the depth map; clamping to %d^2", size,
+                 ss->default_map_size);
+        size = ss->default_map_size;
+        ss->msm_size = size;
+    }
+    // Only when a blur is asked for. The scratch exists solely as the separable
+    // filter's ping target, and the default blur is 0, so allocating it eagerly
+    // was doubling the feature's resting cost for a texture no draw touches.
+    const bool want_scratch = ss->msm_blur > 0.0f;
+    if (ss->msm_allocated_layers != layers || ss->msm_allocated_size != size ||
+        (want_scratch && !ss->msm_scratch)) {
+        const bool resized = ss->msm_allocated_layers != layers || ss->msm_allocated_size != size;
+        if (resized)
+            free_msm_arrays(ss);
+        if (!ss->msm_array)
+            ss->msm_array = create_texture_2d_array_float(size, size, layers, GL_RGBA16F, GL_RGBA);
+        if (want_scratch && !ss->msm_scratch)
+            ss->msm_scratch =
+                create_texture_2d_array_float(size, size, layers, GL_RGBA16F, GL_RGBA);
+        if (!ss->msm_array || (want_scratch && !ss->msm_scratch)) {
             log_error("Failed to allocate moment shadow cascades");
             free_msm_arrays(ss);
             return false;
         }
         ss->msm_allocated_layers = layers;
         ss->msm_allocated_size = size;
-        // Both arrays and the depth array they come from, since this is what
-        // --msm costs ON TOP of a scene that already pays for cascades.
-        log_info("Moment shadow cascades: %d layer(s) at %d^2 (%.0f MB, on top of the depth array)",
-                 layers, size, 2.0 * layers * (double)size * size * 8.0 / (1024.0 * 1024.0));
+        // What is actually resident, not what a blurred configuration would
+        // cost, and stated as the amount --msm adds ON TOP of the depth cascades.
+        log_info("Moment shadow cascades: %d layer(s) at %d^2 (%.0f MB%s, on top of the depth "
+                 "array)",
+                 layers, size,
+                 (want_scratch ? 2.0 : 1.0) * layers * (double)size * size * 8.0 /
+                     (1024.0 * 1024.0),
+                 want_scratch ? " incl. blur scratch" : "");
     }
 
-    GLint prev_fbo = 0, prev_viewport[4];
-    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_fbo);
-    glGetIntegerv(GL_VIEWPORT, prev_viewport);
+    // The caller restored the viewport immediately before this and every path
+    // into the depth pass leaves the FBO at 0, so neither is queried back.
     GLboolean blend_was = glIsEnabled(GL_BLEND);
     GLboolean cull_was = glIsEnabled(GL_CULL_FACE);
     GLboolean depth_was = glIsEnabled(GL_DEPTH_TEST);
@@ -717,6 +770,11 @@ static bool shadow_build_msm(ShadowSystem* ss, Engine* engine) {
     UniformManager* mu = ss->msm_program->uniforms;
     uniform_set_int(mu, "srcDepth", 0);
     uniform_set_int(mu, "srcMoments", 1);
+    // Bound once for the whole pass: the quad never changes, and unit 0 always
+    // holds the depth array -- only unit 1 alternates, inside msm_pass.
+    glBindVertexArray(ss->msm_quad_vao);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, ss->shadow_map_array);
 
     // Completeness is only meaningful once a layer is attached, and a driver that
     // rejects RGBA16F as a layered colour attachment would otherwise fail
@@ -730,15 +788,20 @@ static bool shadow_build_msm(ShadowSystem* ss, Engine* engine) {
             msm_build_layer(ss, mu, layer);
     }
 
+    glBindVertexArray(0);
     glUseProgram(0);
-    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prev_fbo);
-    glViewport(prev_viewport[0], prev_viewport[1], prev_viewport[2], prev_viewport[3]);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
     if (blend_was)
         glEnable(GL_BLEND);
     if (cull_was)
         glEnable(GL_CULL_FACE);
     if (depth_was)
         glEnable(GL_DEPTH_TEST);
+    // Both units, not just 0: a blurred build leaves the scratch on unit 1, and
+    // this file already records drivers complaining about samplers left pointed
+    // at array targets they no longer own.
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
     return ok;
@@ -1001,13 +1064,13 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     glPolygonOffset(0.0f, 0.0f);
     glUseProgram(0);
 
-    glViewport(prev_viewport[0], prev_viewport[1], prev_viewport[2], prev_viewport[3]);
-
-    // After the restore rather than before it, so the resolve starts from the
-    // state the caller left rather than from this pass's depth policy -- the
-    // cull face this pass sets is never saved, and inheriting it would make the
-    // resolve's own state depend on whether a caster was double-sided.
+    // Ahead of the viewport restore, so the one restore below covers the resolve
+    // too rather than the resolve querying back a value this function already
+    // holds. It disables cull for its own draws, so the cull face this pass set
+    // and never saved cannot reach it either.
     ss->msm_built = shadow_build_msm(ss, engine);
+
+    glViewport(prev_viewport[0], prev_viewport[1], prev_viewport[2], prev_viewport[3]);
 }
 
 // Flatten this frame's shadow casters + their lights into postfx's fog block.

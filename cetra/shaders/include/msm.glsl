@@ -40,10 +40,10 @@ vec4 msmMoments(float z) {
 // hair toward a fixed well-conditioned vector keeps it definite.
 //
 // The vector is the same one mboit.glsl carries and is only meaningful against the
-// [-1,1] warp above -- change one and the other stops meaning anything. The
-// magnitude is larger than MBOIT's because it is doing more work: those targets are
-// fp32 and the bias only has to hold the factorisation together, while these are
-// fp16 and it absorbs the storage error too.
+// [-1,1] warp above -- change one and the other stops meaning anything. Both
+// magnitudes are their own paper's reference constant, Peters' here and
+// Munstermann's there; the difference between them is not derived from anything
+// in this codebase, so do not reason from it.
 #define MSM_BIAS        3.0e-5
 #define MSM_BIAS_VECTOR vec4(0.0, 0.375, 0.0, 0.375)
 
@@ -54,17 +54,23 @@ vec4 msmMoments(float z) {
 // the occlusion off which side of the fragment those roots fall.
 //
 // The factorisation and the root solve are the same arithmetic as
-// mboitTransmittance's, down to the operation order; only the last step differs,
-// where this does a case analysis on the roots and that takes an expectation under
-// the moments. Sharing the kernel is a real follow-up and deliberately not taken
-// here: mboit rides the default OIT path, its reconstruction is ill-conditioned
-// exactly where hair sits, and reshuffling its arithmetic alone moves the raiden
-// baseline (spec 11.21). That change has to land on its own, against that baseline.
+// mboitTransmittance's, but NOT the same operation order: this follows Peters in
+// keeping the third pivot as the product D33D22 and applying it as
+// `c[2] *= D22 / D33D22`, where mboit follows Munstermann in dividing through
+// first. Same number, different expression. Only the last step genuinely differs,
+// where this does a case analysis on the roots and that takes an expectation
+// under the moments.
+//
+// Sharing the kernel is a real follow-up and deliberately not taken here. Note
+// the safe shape when it is: write the shared helper in MBOIT's order so its
+// emitted arithmetic is unchanged, and move THIS side onto it -- mboit rides the
+// default OIT path where the reconstruction is ill-conditioned exactly where hair
+// sits, and reshuffling it alone moves the raiden baseline (spec 11.21), while
+// the moment shadow path has no baseline yet to protect.
 float msmOcclusion(vec4 moments, float z) {
     vec4 b = mix(moments, MSM_BIAS_VECTOR, MSM_BIAS);
 
-    // Cholesky of the Hankel matrix. The products are kept rather than the
-    // quotients so the whole factorisation costs one divide.
+    // Cholesky of the Hankel matrix, keeping the third pivot as a product.
     float L32D22 = b[2] - b[0] * b[1];
     float D22 = b[1] - b[0] * b[0];
     float squaredDepthVariance = b[3] - b[1] * b[1];

@@ -47,9 +47,10 @@
 // cascades make the same trade harder (512 against the same 2048).
 //
 // The cost is additive, not a swap -- the depth array stays, as this array's
-// source -- and there are two of these, since the separable blur needs its
-// scratch resident for the whole pass. RGBA16F is 8 bytes a texel, so the pair
-// is 151 MB at 9 layers here against 604 MB if it matched the cascades.
+// source. RGBA16F is 8 bytes a texel, so 9 layers here is 75 MB against 302 MB
+// if it matched the cascades. A blur doubles that, since the separable filter
+// needs a scratch array resident for the pass; at the default blur of 0 the
+// scratch is not allocated at all.
 #define MSM_DEFAULT_SIZE 1024
 // Per-tap spacing of the separable blur, in moment-map texels; 0 disables the
 // two blur passes entirely, which is the default.
@@ -75,6 +76,10 @@
 // the cure, and it is scene-dependent because how much of the range is leak
 // depends on how degenerate the depth spread inside a texel is.
 #define MSM_DEFAULT_BLEED 0.20f
+// Ceiling on the above. The reconstruction divides by (1 - bleed), so 1.0 is a
+// NaN and anything past it inverts the sign; well below that the umbra is gone
+// anyway, so this is where the knob stops being useful rather than a safety gap.
+#define MSM_MAX_BLEED 0.5f
 // Depth-pass polygon offset, applied to every shadow map (cascade and
 // punctual share one near-side storage policy, shadow.c).
 // glPolygonOffset(factor, units) pushes a fragment by
@@ -198,7 +203,7 @@ typedef struct ShadowSystem {
     // failed allocation) there is nothing to sample, and the depth array has to
     // stay bound so the lookup keeps working.
     bool msm_built;
-    int msm_size;    // Edge to build at; 0 = MSM_DEFAULT_SIZE
+    int msm_size;    // Edge to build at, clamped to the depth map's own edge
     float msm_blur;  // Per-tap blur spacing, in moment-map texels
     float msm_bleed; // Occlusion below this fraction is remapped to zero
 } ShadowSystem;

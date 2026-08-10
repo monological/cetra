@@ -726,8 +726,11 @@ float calculateShadow(int shadowIndex, int cascade, vec3 worldPos, float lightSi
             continue;
         }
 
-        // Per layer: each cascade has its own matrix, so its own gradient.
-        vec2 duv_dz = csmPlaneGradient(layer, ddxWorld, ddyWorld);
+        // Per layer: each cascade has its own matrix, so its own gradient. Not
+        // computed on the moment path, which never biases a tap -- two mat3
+        // products and a divide per cascade per light per fragment otherwise.
+        vec2 duv_dz =
+            msmEnabled == 1 ? vec2(0.0) : csmPlaneGradient(layer, ddxWorld, ddyWorld);
         visibility = min(visibility, cascadeShadowTap(layer, projCoords, duv_dz, lightSize));
         if (visibility <= 0.0)
             break; // fully occluded; wider maps cannot add more

@@ -1299,7 +1299,23 @@ DIR_HOLE_MAX = 0.02   # umbra term; a single authored light means true umbra ~ 0
 # configuration two moments cannot represent and four can.
 DIR_PILLAR_X = (-3.61, -3.39)
 DIR_PILLAR_Z = (-3.2, -0.6)
+# PCF reads 0.0000 here and the moment path at the shipped blur reads 0.0074, so
+# this sits 2.7x above what passes and 21x below what fails (blur 1.0 leaks
+# 0.4159, the two-moment bound 0.4249).
 DIR_PILLAR_MAX = 0.02
+# The inverse half, and the arm that makes the other six mean anything.
+#
+# Every MSM arm asserts the moment path is no WORSE than PCF -- and
+# shadow_build_msm falls back to the depth cascades without logging on three
+# paths (flag unparsed, program missing, allocation failed), which renders a
+# frame byte-identical to --no-msm and passes all six while measuring nothing.
+# That is the defect run_flare_gate records at its own arm 1 and run_oit_gate
+# guards with OIT_DISCRIMINATION_MIN.
+#
+# Blur is the knob that provably moves this band, so leaking under it is what
+# says the moments were built and read. Bound is a fifth of the 0.4159 measured
+# at spacing 1.0 -- far above PCF's 0.0000, far below the reading it checks for.
+DIR_PILLAR_BLUR_MIN = 0.10
 DIR_ACNE_TOL = 0.05   # |term - 1| on bare ground; acne and false-dark are 10x+
 DIR_EDGE_TOL = 0.05   # world units; ~3 outermost texels
 # Churn bound: TAA-jittered frames never repeat byte-for-byte, so the shadowed
@@ -1776,7 +1792,11 @@ def run_dir_shadow_gate(workdir):
     m40_cc1 = _dir_render(workdir, "dir_shadow_fixture.cscn", "40_cc1_msm",
                           msm + ["--shadow-cascades", "1"])
     m10 = _dir_render(workdir, "dir_shadow_fixture_lowsun.cscn", "10_msm", msm)
-    if not all((r40, r40_ns, r40_cc1, r10, r10_ns, m40, m40_cc1, m10)):
+    # Deliberately blurred, for the inverse arm below. It is the only render
+    # here whose job is to FAIL a bound rather than pass one.
+    mblur = _dir_render(workdir, "dir_shadow_fixture.cscn", "40_msm_blur",
+                        msm + ["--msm-blur", "1.0"])
+    if not all((r40, r40_ns, r40_cc1, r10, r10_ns, m40, m40_cc1, m10, mblur)):
         print("  dir-shadow   ERROR while rendering the fixture")
         return failures + ["dir-shadow"]
 
@@ -1786,6 +1806,7 @@ def run_dir_shadow_gate(workdir):
     mterm40 = _term_reader(m40, r40_ns)
     mterm40_cc1 = _term_reader(m40_cc1, r40_ns)
     mterm10 = _term_reader(m10, r10_ns)
+    mterm_blur = _term_reader(mblur, r40_ns)
 
     # --- holes: eroded umbra of both ellipses must be dark ------------------
     # Light leaking through an umbra is the signature failure of every filterable
@@ -1811,39 +1832,48 @@ def run_dir_shadow_gate(workdir):
                         measured += 1
             if measured < 30:
                 # No silent caps: enough of the umbra must actually be measured.
-                print(f"  hole-{label:<8} ERROR only {measured} umbra samples visible "
+                print(f"  hole-{label:<7}ERROR only {measured} umbra samples visible "
                       f"({skipped} occluded)")
                 failures.append(f"dir-hole-{label}")
             else:
                 ok = worst_hole <= DIR_HOLE_MAX
-                print(f"  hole-{label:<8} {'PASS' if ok else 'FAIL'}  worst umbra term "
+                print(f"  hole-{label:<7}{'PASS' if ok else 'FAIL'}  worst umbra term "
                       f"{worst_hole:.4f} over {measured} samples, {skipped} caster-occluded "
                       f"(want <= {DIR_HOLE_MAX})")
                 if not ok:
                     failures.append(f"dir-hole-{label}")
         except ValueError as e:
-            print(f"  hole-{label:<8} ERROR {e}")
+            print(f"  hole-{label:<7}ERROR {e}")
             failures.append(f"dir-hole-{label}")
 
     # --- pillar band: the thin caster, where reconstructions differ ---------
+    # Hoisted: the band is fixture geometry and carries no shadow technique, so
+    # rebuilding it per label would report one geometry fault once per label.
+    pillar_pts = [(DIR_PILLAR_X[0] + (DIR_PILLAR_X[1] - DIR_PILLAR_X[0]) * ix / 2.0, 0.0,
+                   DIR_PILLAR_Z[0] + (DIR_PILLAR_Z[1] - DIR_PILLAR_Z[0]) * iz / 12.0)
+                  for ix in range(3) for iz in range(13)]
     for label, term in (("pcf", term40), ("msm", mterm40)):
         try:
-            worst = 0.0
-            measured = 0
-            for ix in range(3):
-                for iz in range(13):
-                    x = DIR_PILLAR_X[0] + (DIR_PILLAR_X[1] - DIR_PILLAR_X[0]) * ix / 2.0
-                    z = DIR_PILLAR_Z[0] + (DIR_PILLAR_Z[1] - DIR_PILLAR_Z[0]) * iz / 12.0
-                    worst = max(worst, term((x, 0.0, z)))
-                    measured += 1
+            worst = max(term(p) for p in pillar_pts)
             ok = worst <= DIR_PILLAR_MAX
-            print(f"  pillar-{label:<6} {'PASS' if ok else 'FAIL'}  worst band term {worst:.4f} "
-                  f"over {measured} samples (want <= {DIR_PILLAR_MAX})")
+            print(f"  pillar-{label:<5} {'PASS' if ok else 'FAIL'}  worst band term {worst:.4f} "
+                  f"over {len(pillar_pts)} samples (want <= {DIR_PILLAR_MAX})")
             if not ok:
                 failures.append(f"dir-pillar-{label}")
         except ValueError as e:
-            print(f"  pillar-{label:<6} ERROR {e}")
+            print(f"  pillar-{label:<5} ERROR {e}")
             failures.append(f"dir-pillar-{label}")
+
+    try:
+        leak = max(mterm_blur(p) for p in pillar_pts)
+        ok = leak >= DIR_PILLAR_BLUR_MIN
+        print(f"  pillar-blur  {'PASS' if ok else 'FAIL'}  blurred moments leak {leak:.4f} "
+              f"(want >= {DIR_PILLAR_BLUR_MIN}; under it the moment path never ran)")
+        if not ok:
+            failures.append("dir-pillar-blur")
+    except ValueError as e:
+        print(f"  pillar-blur  ERROR {e}")
+        failures.append("dir-pillar-blur")
 
     # --- acne: bare ground must divide to 1, at both elevations -------------
     for label, term in (("40deg", term40), ("10deg", term10),
@@ -1904,11 +1934,11 @@ def run_dir_shadow_gate(workdir):
         for label, extra in (("pcf", hard), ("msm", msm)):
             churn = _taa_churn(workdir, fixture, f"dir_{label}", extra)
             if churn is None:
-                print(f"  churn-{label:<7} ERROR while rendering the TAA sequence")
+                print(f"  churn-{label:<6}ERROR while rendering the TAA sequence")
                 failures.append(f"dir-churn-{label}")
                 continue
             ok = churn <= floor * DIR_CHURN_FACTOR + DIR_CHURN_SLACK_PX
-            print(f"  churn-{label:<7} {'PASS' if ok else 'FAIL'}  {churn} px frame-to-frame "
+            print(f"  churn-{label:<6}{'PASS' if ok else 'FAIL'}  {churn} px frame-to-frame "
                   f"(no-shadow floor {floor} px)")
             if not ok:
                 failures.append(f"dir-churn-{label}")
