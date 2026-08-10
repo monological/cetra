@@ -465,6 +465,10 @@ static void _engine_gui_panel(Engine* engine) {
                     ImGuiSliderFlags_AlwaysClamp);
         igCheckbox("Cascade Tint", &ss->csm_debug);
 
+        // Toggling this reallocates the depth array (the transmittance layers
+        // live in it), so it is a checkbox rather than anything continuous.
+        igCheckbox("Translucent Shadows", &ss->tsm_enabled);
+
         _begin_effect_group("Moment Shadows", &ss->msm_enabled);
         // A combo, not a slider: each distinct value reallocates two array
         // textures, and a continuous drag would rebuild them every frame it

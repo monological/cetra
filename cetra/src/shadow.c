@@ -1001,8 +1001,12 @@ static bool shadow_build_tsm(ShadowSystem* ss, Engine* engine, Scene* scene) {
         uniform_set_int(ss->tsm_resolve_program->uniforms, "absorbance", 0);
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, ss->tsm_scratch);
+        // TRIANGLE_STRIP over 4 vertices: create_fullscreen_quad_vao builds a
+        // strip, and drawing it as GL_TRIANGLES with 3 vertices covers exactly
+        // half the map -- which resolves a triangular wedge and leaves the rest
+        // at the cleared 1.0, i.e. a shadow with a diagonal edge.
         glBindVertexArray(ss->tsm_quad_vao);
-        glDrawArrays(GL_TRIANGLES, 0, 3);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
         glBindVertexArray(0);
         glBindTexture(GL_TEXTURE_2D, 0);
 

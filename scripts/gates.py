@@ -2083,6 +2083,234 @@ def run_dither_gate(workdir):
     return failures
 
 
+# Translucent shadows (spec 11.26 / C1), on assets/translucent_shadow_fixture.
+#
+# The fixture's whole point is that the answer is knowable: transmittance
+# through N translucent layers is prod(1 - a), which is ORDER-INDEPENDENT and
+# equal to exp of the summed absorbances. So these arms constrain the ANSWER and
+# not the storage -- an implementation that accumulates absorbance additively
+# and one that multiplies transmittances satisfy them identically.
+TSL_ALPHA = 0.35                # authored on the staircase panels
+TSL_PANELS = 4
+TSL_STACK_TOL = 0.02            # absolute error against 0.65^k
+TSL_RATIO_TOL = 0.03            # per-layer ratio, measured without a reference
+TSL_RAMP_RMS_MAX = 0.03         # ramp against 1 - alpha(x)
+TSL_RAMP_DISCRIM = 3.0          # ... and how much better than a binary step
+TSL_OPAQUE_MAX = 0.02           # an opaque umbra must stay an umbra
+TSL_ACNE_TOL = 0.05             # bare ground must stay lit
+TSL_MONO_TOL = 0.02             # the red panel is monochrome as shipped
+TSL_LIVE_MIN_PX = 50000         # the inverse arm: the flag must DO something
+
+# Geometry mirrors of the generator. Not read from the .gltf: these are the
+# numbers the PREDICTION uses, and a gate that derived them from the asset would
+# agree with a broken asset.
+TSL_BAND_X0, TSL_BAND_W = -7.0, 2.0
+TSL_CANOPY_XR = 3.0
+TSL_SHIFT = 8.0 / math.tan(math.radians(75.0))   # sun elevation 75
+TSL_STAIR_ZC = -5.5 + TSL_SHIFT                  # centre of the cast band
+TSL_RAMP_Z0, TSL_RAMP_Z1 = -3.5, -1.5
+TSL_RAMP_ZC = 0.5 * (TSL_RAMP_Z0 + TSL_RAMP_Z1) + TSL_SHIFT
+TSL_RED_ZC = 0.0 + TSL_SHIFT
+# Lit reference taken just clear of the canopy, NOT at the frame edge: the
+# default vignette is radial, so a reference out at x=-10 sits darker than the
+# bands it normalises and pulls every transmittance up. --no-vignette below
+# removes it; sampling near the bands keeps the arm honest if it ever returns.
+TSL_LIT_X, TSL_ACNE_X = 4.0, -9.5
+TSL_OPAQUE_SAMPLE = (6.0, 0.0, -3.0 + 1.6 / math.tan(math.radians(75.0)))
+
+
+def _tsl_render(workdir, tag, extra):
+    out = os.path.join(workdir, f"tsl_{tag}.ppm")
+    scene = os.path.join(ROOT, "assets", "translucent_shadow_fixture.cscn")
+    # --no-ssao is load-bearing, not tidiness: the black point is the opaque
+    # block's umbra, and GTAO darkens the ground around that block by an amount
+    # the canopy bands do not get. Measured: it biased every band ~2.8% high.
+    # The rest keeps anything that could add to flat lit ground out of frame.
+    cmd = [RENDER, "-m", scene, "-x", "-f", "30", "-W", "800", "-H", "500",
+           "--no-auto-exposure", "-E", "1.0", "--no-pcss", "--no-ssao", "--no-ssr",
+           "--no-bloom", "--no-dither", "--no-vignette", "-S", out] + extra
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0 or not os.path.exists(out):
+        return None
+    return out
+
+
+def _tsl_reader(path):
+    """World point -> linear radiance, through the CORRECT tonemap inversion.
+
+    NOT _term_reader: that uses _linear_luma, which inverts the sRGB curve but
+    not Khronos Neutral, and reads ~23% low. Its own arms are immune (they sit
+    at ~0, ~1 and 50% crossings); an assertion of the form T = (1-a)^k is not.
+    """
+    w, h, pix = _read_ppm(path)
+    cam = _cscn_camera("translucent_shadow_fixture.cscn")
+    project = _projector(cam, w, h)
+
+    def at(p):
+        px, py = project(p)
+        x = max(0, min(w - 1, int(round(px))))
+        y = max(0, min(h - 1, int(round(py))))
+        o = (y * w + x) * 3
+        return _oit_untonemap([pix[o + k] / 255.0 for k in range(3)])
+
+    return at
+
+
+def run_translucent_shadow_gate(workdir):
+    fixture = os.path.join(ROOT, "assets", "translucent_shadow_fixture.cscn")
+    if not os.path.exists(fixture):
+        print("  tsl          SKIP  (missing translucent_shadow_fixture.cscn)")
+        return []
+
+    on = _tsl_render(workdir, "on", ["--translucent-shadows"])
+    if on is None:
+        print("  tsl          ERROR while rendering the fixture")
+        return ["tsl"]
+    at = _tsl_reader(on)
+
+    def lum(p):
+        return sum(at(p)) / 3.0
+
+    lit = lum((TSL_LIT_X, 0.0, TSL_STAIR_ZC))
+    black = lum(TSL_OPAQUE_SAMPLE)
+    direct = lit - black
+    if direct <= 1e-3:
+        print(f"  tsl          ERROR degenerate reference (lit {lit:.4f} black {black:.4f})")
+        return ["tsl"]
+
+    def transmittance(p):
+        return (lum(p) - black) / direct
+
+    failures = []
+
+    # --- the staircase, absolute -------------------------------------------
+    bands = [transmittance((TSL_BAND_X0 + (j + 0.5) * TSL_BAND_W, 0.0, TSL_STAIR_ZC))
+             for j in range(TSL_PANELS + 1)]
+    pred = [(1.0 - TSL_ALPHA) ** j for j in range(TSL_PANELS + 1)]
+    worst = max(abs(b - p) for b, p in zip(bands, pred))
+    ok = worst <= TSL_STACK_TOL
+    print(f"  tsl-stack    {'PASS' if ok else 'FAIL'}  worst {worst:.4f} against 0.65^k "
+          f"(bound {TSL_STACK_TOL}); measured "
+          + " ".join(f"{b:.3f}" for b in bands))
+    if not ok:
+        failures.append("tsl-stack")
+
+    # --- the staircase, as ratios, with NO reference frame ------------------
+    # Deliberately a second path to the same claim: this one is immune to the
+    # tonemap inversion, the exposure pin and the black point, so the two arms
+    # cannot fail for the same instrument reason.
+    raw = [lum((TSL_BAND_X0 + (j + 0.5) * TSL_BAND_W, 0.0, TSL_STAIR_ZC))
+           for j in range(TSL_PANELS + 1)]
+    ratios = [raw[j + 1] / raw[j] for j in range(TSL_PANELS) if raw[j] > 1e-6]
+    worst_r = max(abs(r - (1.0 - TSL_ALPHA)) for r in ratios) if ratios else 1.0
+    ok = worst_r <= TSL_RATIO_TOL
+    print(f"  tsl-ratio    {'PASS' if ok else 'FAIL'}  worst |ratio - 0.65| {worst_r:.4f} "
+          f"(bound {TSL_RATIO_TOL}); " + " ".join(f"{r:.3f}" for r in ratios))
+    if not ok:
+        failures.append("tsl-ratio")
+
+    # --- the mask ramp ------------------------------------------------------
+    # A LINEAR ramp is preserved exactly by any symmetric filter -- PCF,
+    # bilinear, a mip -- so filtering cannot bias this and only a wrong law can.
+    # A binary alpha test at the cutoff is the law this is here to reject.
+    xs = [TSL_BAND_X0 + TSL_BAND_W + (TSL_CANOPY_XR - (TSL_BAND_X0 + TSL_BAND_W)) *
+          (0.1 + 0.8 * i / 23.0) for i in range(24)]
+    meas = [transmittance((x, 0.0, TSL_RAMP_ZC)) for x in xs]
+    truth = [1.0 - (x - (TSL_BAND_X0 + TSL_BAND_W)) /
+             (TSL_CANOPY_XR - (TSL_BAND_X0 + TSL_BAND_W)) for x in xs]
+    rms = math.sqrt(sum((m - t) ** 2 for m, t in zip(meas, truth)) / len(meas))
+    ok = rms <= TSL_RAMP_RMS_MAX
+    print(f"  tsl-ramp     {'PASS' if ok else 'FAIL'}  RMS {rms:.4f} against 1-alpha(x) "
+          f"(bound {TSL_RAMP_RMS_MAX})")
+    if not ok:
+        failures.append("tsl-ramp")
+
+    # The inverse of the arm above. Without it, a fixture that stopped
+    # resolving the ramp scores its BEST possible mark and asserts nothing.
+    best_step = min(
+        math.sqrt(sum((m - (1.0 if x < c else 0.0)) ** 2 for m, x in zip(meas, xs)) / len(meas))
+        for c in xs)
+    ok = rms * TSL_RAMP_DISCRIM <= best_step
+    print(f"  tsl-discrim  {'PASS' if ok else 'FAIL'}  best binary step RMS {best_step:.4f} "
+          f"must be >= {TSL_RAMP_DISCRIM}x the ramp's {rms:.4f}")
+    if not ok:
+        failures.append("tsl-discrim")
+
+    # --- solid stays solid, bare stays bare, both in THIS frame -------------
+    ok = bands[0] >= 1.0 - TSL_ACNE_TOL
+    print(f"  tsl-acne     {'PASS' if ok else 'FAIL'}  bare band reads {bands[0]:.4f} "
+          f"(want >= {1.0 - TSL_ACNE_TOL})")
+    if not ok:
+        failures.append("tsl-acne")
+
+    opaque_t = transmittance(TSL_OPAQUE_SAMPLE)
+    ok = abs(opaque_t) <= TSL_OPAQUE_MAX
+    print(f"  tsl-opaque   {'PASS' if ok else 'FAIL'}  opaque umbra reads {opaque_t:.4f} "
+          f"(want <= {TSL_OPAQUE_MAX}: transmittance must not leak onto opaque casters)")
+    if not ok:
+        failures.append("tsl-opaque")
+
+    # --- monochrome, as shipped --------------------------------------------
+    red = at((0.0, 0.0, TSL_RED_ZC))
+    spread = max(red) - min(red)
+    ok = spread <= TSL_MONO_TOL
+    print(f"  tsl-mono     {'PASS' if ok else 'FAIL'}  channel spread under the red panel "
+          f"{spread:.4f} (want <= {TSL_MONO_TOL}: transmittance is scalar as shipped)")
+    if not ok:
+        failures.append("tsl-mono")
+
+    return failures
+
+
+def run_translucent_offpath_gate(workdir):
+    """Off is byte-identical; ON is byte-identical too where nothing is
+    translucent; and the flag must visibly DO something where something is.
+
+    The third arm is the one 11.22 had to learn twice: three zeros are also what
+    a dead flag, an unparsed argument or a failed allocation produce.
+    """
+    failures = []
+    for name, rel, extra in (
+        ("cornell_point", "assets/cornell_point.cscn", ["-W", "800", "-H", "600"]),
+        ("dir_shadow", "assets/dir_shadow_fixture.cscn", ["-W", "800", "-H", "600", "--no-pcss"]),
+        ("contact", "assets/contact_fixture.cscn", ["-W", "640", "-H", "400"]),
+    ):
+        scene = os.path.join(ROOT, rel)
+        if not os.path.exists(scene):
+            print(f"  tsl-off      SKIP  (missing {rel})")
+            continue
+        outs = []
+        for tag, flag in (("off", []), ("on", ["--translucent-shadows"])):
+            out = os.path.join(workdir, f"tsloff_{name}_{tag}.ppm")
+            cmd = [RENDER, "-m", scene, "-x", "-f", "30", "--no-auto-exposure", "-E", "1.0",
+                   "-S", out] + extra + flag
+            subprocess.run(cmd, capture_output=True, text=True)
+            outs.append(out if os.path.exists(out) else None)
+        if not all(outs):
+            print(f"  tsl-off      ERROR while rendering {name}")
+            failures.append("tsl-offpath")
+            continue
+        ae, _ = compare(outs[0], outs[1])
+        ok = ae == 0
+        print(f"  tsl-off      {'PASS' if ok else 'FAIL'}  {name}: {ae} px with the flag ON "
+              f"(want exactly 0; nothing here is translucent)")
+        if not ok:
+            failures.append("tsl-offpath")
+
+    off = _tsl_render(workdir, "live_off", ["--no-translucent-shadows"])
+    on = _tsl_render(workdir, "live_on", ["--translucent-shadows"])
+    if off is None or on is None:
+        print("  tsl-live     ERROR while rendering the fixture pair")
+        return failures + ["tsl-live"]
+    ae, _ = compare(off, on)
+    ok = ae >= TSL_LIVE_MIN_PX
+    print(f"  tsl-live     {'PASS' if ok else 'FAIL'}  {ae} px between off and on "
+          f"(want >= {TSL_LIVE_MIN_PX}: the three zeros above are also what a dead flag gives)")
+    if not ok:
+        failures.append("tsl-live")
+    return failures
+
+
 def run_range_gate():
     """glTF KHR_lights_punctual `range` must survive import unchanged."""
     fixture = os.path.join(ROOT, "assets", "point_import_fixture.gltf")
@@ -2239,6 +2467,10 @@ def main():
         failures += run_sss_banding_gate(workdir)
         print("output dither (8-bit contour bands, spec 11.24 / E1):")
         failures += run_dither_gate(workdir)
+        print("translucent shadows (analytic layer stack, spec 11.26 / C1):")
+        failures += run_translucent_shadow_gate(workdir)
+        print("translucent shadows (off-path identity and the inverse arm):")
+        failures += run_translucent_offpath_gate(workdir)
         print("import:")
         failures += run_range_gate()
         failures += run_fbx_unit_gate()
