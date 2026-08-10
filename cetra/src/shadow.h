@@ -126,6 +126,10 @@ typedef struct ShadowSystem {
     // it, silently dropping the spot map in scenes with no directional light.
     // Other light types keep their own counts.
     size_t directional_count;
+    // Latch so slot exhaustion logs once, not per frame. Separate from the
+    // punctual latch because the two pools run out independently and a scene
+    // can exhaust both.
+    bool dir_slot_warned;
     int default_map_size;
     ShaderProgram* depth_program;
     float ortho_size;

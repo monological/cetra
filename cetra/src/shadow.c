@@ -829,6 +829,7 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     ss->msm_built = false;
     int punctual_needed = 0;
     const Light* pool_overflow = NULL;
+    const Light* dir_overflow = NULL;
     vec3 scene_center = {0.0f, 0.0f, 0.0f};
 
     for (size_t i = 0; i < scene->light_count; ++i) {
@@ -843,6 +844,8 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
         if (light->type == LIGHT_DIRECTIONAL) {
             if (ss->directional_count < MAX_SHADOW_LIGHTS)
                 ss->directional_count++;
+            else if (!dir_overflow)
+                dir_overflow = light;
             continue;
         }
         if (light->type != LIGHT_SPOT && light->type != LIGHT_POINT &&
@@ -870,6 +873,19 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
                  pool_overflow->name ? pool_overflow->name : "unnamed light");
     }
     ss->punctual_pool_warned = pool_overflow != NULL;
+
+    // Same latch for the cascade slots, which run out one light sooner than the
+    // UBO does: it carries LC_MAX_DIR_LIGHTS directionals and there are only
+    // MAX_SHADOW_LIGHTS slots. The overflowing light still lights the scene at
+    // full strength -- the shader leaves its shadow term at 1.0 -- so without
+    // this it is indistinguishable from one that never asked to cast. Which
+    // light loses is scene->lights order, so the name is the whole point.
+    if (dir_overflow && !ss->dir_slot_warned) {
+        log_warn("Directional shadow slots full (%d casters): '%s' and any further caster will not cast",
+                 MAX_SHADOW_LIGHTS,
+                 dir_overflow->name ? dir_overflow->name : "unnamed light");
+    }
+    ss->dir_slot_warned = dir_overflow != NULL;
 
     // Clamp the runtime count into the compile-time ceiling: the splits and
     // matrix arrays are sized by SHADOW_CASCADES and the count is writable
