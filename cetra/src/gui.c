@@ -478,7 +478,7 @@ static void _engine_gui_panel(Engine* engine) {
         // Blur trades thin-caster occlusion for softness and the exchange rate
         // is steep: on the gate's 0.3-wide pillar band, 0.25 already lets 9% of
         // the light through and 1.0 lets 42% (spec 11.22).
-        igSliderFloat("Moment Blur", &ss->msm_blur, 0.0f, 1.0f, "%.2f", 0);
+        igSliderFloat("Moment Blur", &ss->msm_blur, 0.0f, 1.0f, "%.2f px", 0);
         igSliderFloat("Moment Bleed", &ss->msm_bleed, 0.0f, 0.5f, "%.2f", 0);
         _end_effect_group();
 
@@ -509,14 +509,15 @@ static void _engine_gui_panel(Engine* engine) {
             bool sun_moved = false;
             bool sun_released = false;
             sun_moved |=
-                igSliderFloat("Sun Elevation", &sky->sun_elevation_deg, -6.0f, 89.0f, "%.1f", 0);
+                igSliderFloat("Sun Elevation", &sky->sun_elevation_deg, -6.0f, 89.0f, "%.1f deg",
+                              0);
             sun_released |= igIsItemDeactivatedAfterEdit();
             sun_moved |=
-                igSliderFloat("Sun Azimuth", &sky->sun_azimuth_deg, 0.0f, 360.0f, "%.1f", 0);
+                igSliderFloat("Sun Azimuth", &sky->sun_azimuth_deg, 0.0f, 360.0f, "%.1f deg", 0);
             sun_released |= igIsItemDeactivatedAfterEdit();
             // Disc size feeds only the analytic background sun (sampled live);
             // it is not in the env cube, so it needs no re-bake.
-            igSliderFloat("Sun Disc", &sky->sun_disc_deg, 0.1f, 3.0f, "%.2f", 0);
+            igSliderFloat("Sun Disc", &sky->sun_disc_deg, 0.1f, 3.0f, "%.2f deg", 0);
             if (sun_moved)
                 sky_update_sun(sky, scene->ibl, engine);
             if (sun_released)
@@ -539,7 +540,7 @@ static void _engine_gui_panel(Engine* engine) {
                 igSliderFloat("Cloud Density", &sky->clouds.density, 0.1f, 3.0f, "%.2f", 0);
                 cloud_edit |= igIsItemDeactivatedAfterEdit();
                 igSliderFloat("Wind km/h", &sky->clouds.wind_speed_kmh, 0.0f, 300.0f, "%.0f", 0);
-                igSliderFloat("Wind Dir", &sky->clouds.wind_dir_deg, 0.0f, 360.0f, "%.0f", 0);
+                igSliderFloat("Wind Dir", &sky->clouds.wind_dir_deg, 0.0f, 360.0f, "%.0f deg", 0);
                 _end_effect_group();
                 bool toggled = clouds_were_on != sky->clouds.enabled;
                 if (toggled || (cloud_edit && sky->clouds.enabled))
@@ -551,9 +552,9 @@ static void _engine_gui_panel(Engine* engine) {
         // Log scale + wide range: the dome radius is a world-space distance
         // apps typically scale to the scene, anywhere from a few units
         // (meter-scale models) to thousands (large-unit assets).
-        igSliderFloat("Dome Radius", &scene->skybox_gp_radius, 1.0f, 10000.0f, "%.2f",
+        igSliderFloat("Dome Radius", &scene->skybox_gp_radius, 1.0f, 10000.0f, "%.2f m",
                       ImGuiSliderFlags_Logarithmic);
-        igSliderFloat("Capture Height", &scene->skybox_gp_height, 0.1f, 10.0f, "%.2f", 0);
+        igSliderFloat("Capture Height", &scene->skybox_gp_height, 0.1f, 10.0f, "%.2f m", 0);
         _end_effect_group();
 
         igSliderFloat("IBL Intensity", &scene->ibl->intensity, 0.0f, 4.0f, "%.2f", 0);
@@ -663,7 +664,7 @@ static void _engine_gui_panel(Engine* engine) {
         // Log scale + wide range: the AO/GI reach is a world-space distance, so
         // apps scale it to the scene (meter-scale models sit near the bottom,
         // large-unit scenes in the hundreds).
-        igSliderFloat("AO Radius", &fx->ssao_radius, 0.05f, 1000.0f, "%.2f",
+        igSliderFloat("AO Radius", &fx->ssao_radius, 0.05f, 1000.0f, "%.2f m",
                       ImGuiSliderFlags_Logarithmic);
         igSliderFloat("AO Strength", &fx->ssao_strength, 0.0f, 1.0f, "%.2f", 0);
         static const char* const spec_occ_names[] = {"Off", "Legacy", "Bent normal", "Split"};
@@ -678,7 +679,7 @@ static void _engine_gui_panel(Engine* engine) {
         igSliderFloat("CS Strength", &fx->cs_strength, 0.0f, 1.0f, "%.2f", 0);
         // Log scale + wide range: the march reach is a world-space distance the
         // app scales to the scene, like SSR Distance.
-        igSliderFloat("CS Distance", &fx->cs_distance, 0.01f, 1000.0f, "%.3f",
+        igSliderFloat("CS Distance", &fx->cs_distance, 0.01f, 1000.0f, "%.3f m",
                       ImGuiSliderFlags_Logarithmic);
         // The pass needs a shadow-casting directional (its published direction);
         // say so rather than let the toggle look inert.
@@ -691,7 +692,7 @@ static void _engine_gui_panel(Engine* engine) {
         // Log scale + wide range: the march reach is a world-space distance
         // the app scales to the scene (a couple of units on meter-scale
         // models, thousands on large-unit assets)
-        igSliderFloat("SSR Distance", &fx->ssr_max_distance, 1.0f, 20000.0f, "%.2f",
+        igSliderFloat("SSR Distance", &fx->ssr_max_distance, 1.0f, 20000.0f, "%.2f m",
                       ImGuiSliderFlags_Logarithmic);
         igSliderFloat("SSR Floor Rough", &fx->ssr_floor_roughness, 0.0f, 1.0f, "%.2f", 0);
         bool ssr_full_res = fx->ssr_full_res;
