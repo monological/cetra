@@ -626,6 +626,9 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     fx->ca_strength = 3.0f; // pixels at the corner
     fx->grain_enabled = false;
     fx->grain_strength = 0.015f;
+    // On by default: banding is a defect of the 8-bit write, not a look.
+    fx->dither_enabled = true;
+    fx->dither_strength = 1.0f;
     fx->frame_index = 0;
 
     fx->taa_enabled = false; // Enabled per-app (the render app turns it on when windowed)
@@ -3218,6 +3221,9 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         uniform_set_float(tm, "grainStrength", fx->grain_strength);
         // % 4096: same float-hash conditioning bound as PCSS/SSR
         uniform_set_float(tm, "grainSeed", (float)(fx->frame_index % 4096));
+        // No frame term here, deliberately -- see the shader's dither block.
+        uniform_set_int(tm, "ditherEnabled", fx->dither_enabled ? 1 : 0);
+        uniform_set_float(tm, "ditherStrength", fx->dither_strength);
         draw_fullscreen_quad(fx->quad_vao);
 
         glUseProgram(0);

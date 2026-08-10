@@ -151,6 +151,8 @@ typedef struct {
     int film_preset; // --film: enable the whole finishing stack at sane defaults
     float vignette;
     int no_vignette; // Force the default vignette off
+    float dither;
+    int no_dither; // Force the default output dither off
     float grain;
     float sharpen;
     float flare;     // Lens ghost strength

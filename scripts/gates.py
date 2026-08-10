@@ -1946,6 +1946,92 @@ def run_dir_shadow_gate(workdir):
     return failures
 
 
+# Output dither (spec 11.24 / E1), measured on assets/aerial_fixture.
+#
+# The sky is a shallow gradient, which is exactly where the 8-bit write leaves
+# contour bands: long runs of one value separated by 1-LSB steps. Dither breaks
+# the runs without moving the local mean, so the longest run down a column is
+# the statistic that discriminates -- and it needs no stored reference.
+#
+# Measured on this fixture at this size: 115 px undithered, 20 px at the 1.0 LSB
+# default, 4 px at 2.0. The bounds below sit roughly halfway between those, so a
+# real regression fails before a resampling detail does.
+DITHER_MAX_RUN = 45   # dithered: the band must collapse well past this
+DITHER_MIN_BAND = 60  # undithered: the fixture must still BAND, or the gate is
+                      # measuring a flat image and cannot fail
+
+
+def _longest_flat_run(pix, w, h):
+    """Longest run of one 8-bit value down a column, over sampled columns.
+
+    Clipped 0/255 runs are excluded. A clamped region has no gradient to band
+    and the dither is clamped away there by construction, so counting it would
+    measure the letterbox rather than the sky.
+    """
+    worst = 0
+    for x in range(20, w - 20, max(1, (w - 40) // 24)):
+        for ch in range(3):
+            prev, n = None, 0
+            for y in range(h + 1):
+                v = pix[(y * w + x) * 3 + ch] if y < h else None
+                if v == prev:
+                    n += 1
+                    continue
+                if prev is not None and prev not in (0, 255):
+                    worst = max(worst, n)
+                prev, n = v, 1
+    return worst
+
+
+def run_dither_gate(workdir):
+    fixture = os.path.join(ROOT, "assets", "aerial_fixture.gltf")
+    if not os.path.exists(fixture):
+        print("  dither       SKIP  (missing aerial_fixture.gltf)")
+        return []
+
+    def measure(tag, extra):
+        out = os.path.join(workdir, f"dither_{tag}.ppm")
+        if render(fixture, out, ["--no-auto-exposure", "-E", "1.0"] + extra):
+            return None
+        w, h, pix = _read_ppm(out)
+        return _longest_flat_run(pix, w, h)
+
+    off = measure("off", ["--no-dither"])
+    on = measure("on", [])
+    strong = measure("strong", ["--dither", "2.0"])
+    if off is None or on is None or strong is None:
+        print("  dither       ERROR while rendering the gradient fixture")
+        return ["dither"]
+
+    failures = []
+    # The inverse arm. Without it the whole gate passes on a flat image, which
+    # is also what a broken fixture produces (spec 11.22: six MSM arms passed
+    # silently because the frame they measured *was* the feature-off frame).
+    ok = off >= DITHER_MIN_BAND
+    print(f"  band-inverse {'PASS' if ok else 'FAIL'}  {off} px undithered run "
+          f"(needs >= {DITHER_MIN_BAND} to be a gradient worth dithering)")
+    if not ok:
+        failures.append("dither-band-inverse")
+
+    ok = on <= DITHER_MAX_RUN and on < off
+    print(f"  band-run     {'PASS' if ok else 'FAIL'}  {on} px dithered run "
+          f"(bound {DITHER_MAX_RUN}, undithered {off})")
+    if not ok:
+        failures.append("dither-band-run")
+
+    # Strength must do something. "Off is off" would NOT cover this: the C side
+    # short-circuits, so both arms take one path and the check passes against a
+    # dead feature (spec 11.21 shipped exactly that arm). Comparing two live
+    # amplitudes fails if the shader ignores the uniform.
+    ok = strong < on
+    print(f"  band-linear  {'PASS' if ok else 'FAIL'}  {strong} px at 2.0 LSB "
+          f"(must beat {on} px at the 1.0 default)")
+    if not ok:
+        failures.append("dither-band-linearity")
+
+    return failures
+
+
 def run_range_gate():
     """glTF KHR_lights_punctual `range` must survive import unchanged."""
     fixture = os.path.join(ROOT, "assets", "point_import_fixture.gltf")
@@ -2100,6 +2186,8 @@ def main():
         failures += run_sss_invariance_gate(workdir)
         print("subsurface blur (kernel not visible as rings):")
         failures += run_sss_banding_gate(workdir)
+        print("output dither (8-bit contour bands, spec 11.24 / E1):")
+        failures += run_dither_gate(workdir)
         print("import:")
         failures += run_range_gate()
         failures += run_fbx_unit_gate()

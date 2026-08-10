@@ -392,7 +392,11 @@ typedef struct PostFX {
     float ca_strength; // Channel separation at the corner, in pixels
     bool grain_enabled;
     float grain_strength;
-    int frame_index; // Copied from engine->total_frames; seeds deterministic grain
+    // Dither applied at the 8-bit write, so a shallow gradient stops quantizing
+    // to contour bands. Screen-space static: it carries no frame term.
+    bool dither_enabled;
+    float dither_strength; // Peak amplitude in 8-bit LSB (1 = textbook TPDF)
+    int frame_index;       // Copied from engine->total_frames; seeds deterministic grain
 
     // Temporal anti-aliasing. Consumes the per-pixel velocity buffer and a
     // reprojected history to resolve sub-pixel-jittered frames. History buffers

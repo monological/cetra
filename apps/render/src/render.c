@@ -202,6 +202,9 @@ static void print_usage(const char* prog) {
             "      --film             Cinematic finish preset (vignette+grain+sharpen+grade)\n");
     fprintf(stderr, "      --vignette <s>     Vignette strength (enables it; default on ~0.25)\n");
     fprintf(stderr, "      --no-vignette      Disable the default vignette\n");
+    fprintf(stderr,
+            "      --dither <lsb>     Output dither amplitude in 8-bit LSB (default on, 1.0)\n");
+    fprintf(stderr, "      --no-dither        Disable the default output dither\n");
     fprintf(stderr, "      --grain <s>        Film grain strength (enables it)\n");
     fprintf(stderr, "      --sharpen <s>      Unsharp-mask strength (enables it)\n");
     fprintf(stderr,
@@ -255,6 +258,7 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->curvature_scale = -1.0f; // -1 = keep whatever the material authored
     args->sss_color[0] = -1.0f;   // -1 = keep the fixture default SSS scatter color
     args->vignette = -1.0f;
+    args->dither = -1.0f;
     args->grain = -1.0f;
     args->sharpen = -1.0f;
     args->flare = -1.0f;
@@ -960,6 +964,14 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->vignette = (float)atof(argv[i]);
         } else if (strcmp(argv[i], "--no-vignette") == 0) {
             args->no_vignette = 1;
+        } else if (strcmp(argv[i], "--dither") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->dither = (float)atof(argv[i]);
+        } else if (strcmp(argv[i], "--no-dither") == 0) {
+            args->no_dither = 1;
         } else if (strcmp(argv[i], "--grain") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -1923,6 +1935,13 @@ int main(int argc, char** argv) {
         if (args.vignette >= 0.0f) {
             fx->vignette_enabled = true;
             fx->vignette_strength = args.vignette;
+        }
+        if (args.no_dither) {
+            fx->dither_enabled = false;
+        }
+        if (args.dither >= 0.0f) {
+            fx->dither_enabled = true;
+            fx->dither_strength = args.dither;
         }
         if (args.grain >= 0.0f) {
             fx->grain_enabled = true;

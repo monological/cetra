@@ -783,6 +783,10 @@ static void _engine_gui_panel(Engine* engine) {
         igSliderFloat("Grain Amount", &fx->grain_strength, 0.0f, 0.3f, "%.3f", 0);
         _end_effect_group();
 
+        _begin_effect_group("Dither", &fx->dither_enabled);
+        igSliderFloat("Dither LSB", &fx->dither_strength, 0.0f, 4.0f, "%.2f", 0);
+        _end_effect_group();
+
         _begin_effect_group("Color Grade", &fx->grade_enabled);
         igDragFloat3("Lift", fx->grade_lift, 0.005f, -1.0f, 1.0f, "%.3f", 0);
         igDragFloat3("Gamma", fx->grade_gamma, 0.01f, 0.1f, 4.0f, "%.3f", 0);

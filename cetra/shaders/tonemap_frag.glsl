@@ -9,6 +9,7 @@ out vec4 FragColor;
 // applies the residual EV bias, so WS_SCENE_MAX below is the same ceiling the
 // shading passes wrote under.
 #include "view.glsl"
+#include "noise.glsl"
 
 uniform sampler2D hdrTex;
 uniform sampler2D bloomTex;
@@ -61,6 +62,8 @@ uniform float caStrength; // Channel separation at the CORNER, in pixels
 uniform int grainEnabled;
 uniform float grainStrength;
 uniform float grainSeed; // Per-frame, deterministic across equal --frames runs
+uniform int ditherEnabled;
+uniform float ditherStrength; // Peak dither amplitude in 8-bit LSB (1 = textbook TPDF)
 
 // ACES filmic fit (Narkowicz 2015). High contrast: crushes shadows,
 // desaturates highlights — the cinematic look.
@@ -265,6 +268,26 @@ vec3 sceneTap(vec2 uv)
                 texture(hdrTex, uv - shift).b);
 }
 
+// Triangular-PDF dither in (-1, 1) LSB, one independent sample per channel.
+//
+// The subtrahend swaps and SCALES the coordinates rather than offsetting them.
+// ign() is a sawtooth riding a linear ramp in p, so a constant offset shifts
+// only that sawtooth's phase: ign(p) - ign(p + c) is two sawtooths at one
+// frequency and collapses to four distinct values -- a staircase, not a dither.
+// Changing the scale changes the frequency, which is what makes the taps
+// independent.
+//
+// Each channel varies in both the swap and the scale for the same reason. Three
+// channels sharing a frequency would dither only along the grey axis, leaving a
+// colour gradient's contours standing in whichever channel banded elsewhere.
+vec3 ditherPattern(vec2 p)
+{
+    return vec3(
+        ign(p) - ign(vec2(p.y * 1.37 + 19.0, p.x * 1.37 + 7.0)),
+        ign(p * 1.61 + vec2(7.0, 31.0)) - ign(vec2(p.y * 0.83 + 53.0, p.x * 0.83 + 11.0)),
+        ign(p * 0.71 + vec2(31.0, 3.0)) - ign(vec2(p.y * 2.13 + 97.0, p.x * 2.13 + 61.0)));
+}
+
 vec3 sceneToToned(vec3 hdr, float aoFactor, vec3 bloomAdd)
 {
     // Sanitize a +INF texel (half-float overflow upstream) — both tonemap
@@ -407,6 +430,20 @@ void main()
         float w = 1.0 - abs(2.0 * luma - 1.0);
         color = clamp(color + n * grainStrength * w, 0.0, 1.0);
     }
+
+    // Dither the 8-bit write: a shallow gradient otherwise quantizes to contour
+    // bands (sky, fog, bloom falloff). Last stage by construction — anything
+    // added after this would itself be quantized undithered.
+    //
+    // Static, with no frame term. An animated pattern would put roughly half the
+    // frame's pixels 1 LSB apart between any two consecutive frames, and that
+    // lands in every temporal-churn measurement taken off the final framebuffer
+    // — including the no-feature floor arms those measurements are scaled
+    // against, so both sides would inflate together and the comparison would
+    // stop discriminating.
+    if (ditherEnabled == 1)
+        color = clamp(color + ditherPattern(gl_FragCoord.xy) * ditherStrength * (1.0 / 255.0),
+                      0.0, 1.0);
 
     FragColor = vec4(color, 1.0);
 }
