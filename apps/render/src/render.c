@@ -969,7 +969,19 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
                 return -1;
             }
-            args->dither = (float)atof(argv[i]);
+            // Validated rather than atof'd: atof maps a non-numeric argument to
+            // 0.0, which here reads as "dither on at zero amplitude" -- the flag
+            // says enabled, the image has none, and the next flag is swallowed
+            // as the value. A negative silently misses the >= 0 apply test below
+            // and renders at the default instead.
+            char* end = NULL;
+            double v = strtod(argv[i], &end);
+            if (end == argv[i] || *end != '\0' || v < 0.0) {
+                fprintf(stderr, "Error: --dither needs a non-negative number, got '%s'\n",
+                        argv[i]);
+                return -1;
+            }
+            args->dither = (float)v;
         } else if (strcmp(argv[i], "--no-dither") == 0) {
             args->no_dither = 1;
         } else if (strcmp(argv[i], "--grain") == 0) {

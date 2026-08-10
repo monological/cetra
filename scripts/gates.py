@@ -22,6 +22,7 @@ import argparse
 import json
 import math
 import os
+from itertools import groupby
 import shutil
 import subprocess
 import sys
@@ -635,9 +636,13 @@ def _skin_sample(workdir, tag, dims, extra):
     scene = os.path.join(ROOT, "assets", "skin_curvature_fixture.cscn")
     out = os.path.join(workdir, f"skinm_{tag}.ppm")
     # --no-shadows so the far side is not multiplied away, --no-bloom so nothing
-    # smears the falloff being measured.
+    # smears the falloff being measured, --no-dither because the crossing is
+    # interpolated from single pixels at 5% of the lit reference, where one LSB
+    # of the default output dither is a large relative step and the two legs of
+    # the drift subtraction pick up independent offsets that do not cancel.
     cmd = [RENDER, "-m", scene, "-x", "-f", "30", "--no-auto-exposure", "-E", "1.0",
-           "--no-shadows", "--no-bloom", "-W", dims[0], "-H", dims[1], "-S", out] + extra
+           "--no-shadows", "--no-bloom", "--no-dither",
+           "-W", dims[0], "-H", dims[1], "-S", out] + extra
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0 or not os.path.exists(out):
         return None
@@ -992,8 +997,13 @@ def run_sss_banding_gate(workdir):
         return []
 
     out = os.path.join(workdir, "sssband.ppm")
+    # --no-dither is load-bearing here, not tidiness: this gate's statistic is
+    # per-pixel deviation from a 25px moving average, which is exactly the
+    # frequency the output dither injects. With the default on it reads 0.0196
+    # against a 0.030 bound where the blur itself contributes 0.0142, so the
+    # gate would start failing on dither amplitude rather than on kernel rings.
     cmd = [RENDER, "-m", scene, "-x", "-f", "30", "--no-auto-exposure", "-E", "1.0",
-           "--no-shadows", "--no-bloom", "-W", "1200", "-H", "750", "-S", out]
+           "--no-shadows", "--no-bloom", "--no-dither", "-W", "1200", "-H", "750", "-S", out]
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0 or not os.path.exists(out):
         print("  sss-band     ERROR while rendering the curvature fixture")
@@ -1623,10 +1633,12 @@ def _oit_render(workdir, tag, extra):
     # --no-vignette is load-bearing, not tidiness: the default vignette is on and
     # radial, so it would darken the outer bands by a fraction of the very error
     # being measured. The rest keeps anything that could add to a flat emissive
-    # surface out of the frame.
+    # surface out of the frame. --no-dither is the same class and the same
+    # reason: the bands are sampled ONE pixel each, so a per-pixel LSB of dither
+    # lands on them as a function of framing and doubles the worst deviation.
     cmd = [RENDER, "-m", scene, "-x", "-f", "30", "-W", "800", "-H", "500",
            "--no-auto-exposure", "-E", "1.0", "--no-vignette", "--no-bloom",
-           "--no-ssao", "--no-ssr", "-S", out] + extra
+           "--no-ssao", "--no-ssr", "--no-dither", "-S", out] + extra
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0 or not os.path.exists(out):
         return None
@@ -1728,8 +1740,11 @@ def _catcher_render(workdir, tag, extra):
     # --no-recenter is the fixture's whole premise: the app lifts a model's
     # bounding-box base onto y=0, and the geometry under test is the half of the
     # panel BELOW y=0. Recentred, there is nothing left to measure.
+    # --no-dither beside --no-vignette: the hidden arm differences two SINGLE
+    # pixels at different fragcoords, and an independent LSB on each can reach
+    # CATCHER_HIDDEN_TOL on its own, before any ordering error contributes.
     cmd = [RENDER, "-m", scene, "--no-recenter", "-x", "-f", "30", "-W", "800", "-H", "500",
-           "--no-vignette", "-S", out] + extra
+           "--no-vignette", "--no-dither", "-S", out] + extra
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0 or not os.path.exists(out):
         return None
@@ -1953,34 +1968,39 @@ def run_dir_shadow_gate(workdir):
 # the runs without moving the local mean, so the longest run down a column is
 # the statistic that discriminates -- and it needs no stored reference.
 #
-# Measured on this fixture at this size: 115 px undithered, 20 px at the 1.0 LSB
-# default, 4 px at 2.0. The bounds below sit roughly halfway between those, so a
-# real regression fails before a resampling detail does.
-DITHER_MAX_RUN = 45   # dithered: the band must collapse well past this
-DITHER_MIN_BAND = 60  # undithered: the fixture must still BAND, or the gate is
-                      # measuring a flat image and cannot fail
+# Bounds are FRACTIONS OF FRAME HEIGHT, not pixel counts. A run length scales
+# with the frame, and `render()` asks for a 400x300 window whose framebuffer is
+# 800x600 on a HiDPI display and 400x300 everywhere else -- so absolute counts
+# calibrated on one machine sit at zero margin on the other. Measured both ways:
+# 115/20/4 px at 800x600 and 60/14/4 at 400x300, i.e. ~19%/3.3%/0.7% of height
+# either way. The fractions below sit about halfway between those.
+DITHER_MAX_RUN_FRAC = 0.08   # dithered: the band must collapse past this
+DITHER_MIN_BAND_FRAC = 0.10  # undithered: the fixture must still BAND
+DITHER_MIN_SPAN = 24         # 8-bit levels the sampled columns must cover
+DITHER_MEAN_TOL = 0.05       # LSB the frame mean may move when dither turns on
 
 
-def _longest_flat_run(pix, w, h):
-    """Longest run of one 8-bit value down a column, over sampled columns.
+def _flat_run_and_span(pix, w, h):
+    """Longest single-value run down a column, and the value range covered.
 
-    Clipped 0/255 runs are excluded. A clamped region has no gradient to band
-    and the dither is clamped away there by construction, so counting it would
-    measure the letterbox rather than the sky.
+    The run is the debanding statistic: a quantization contour is a long run of
+    one value, and dither breaks it without moving the local mean. Clipped 0/255
+    runs are excluded -- the dither is faded to nothing at the clip points, so a
+    clamped region neither bands nor dithers and would only measure letterbox.
+
+    The span is what stops the run being read on its own. A CONSTANT image
+    MAXIMIZES run length, so a floor on the run alone is satisfied at its best
+    possible score by a fixture that lost its gradient entirely.
     """
-    worst = 0
+    worst, lo, hi = 0, 255, 0
     for x in range(20, w - 20, max(1, (w - 40) // 24)):
         for ch in range(3):
-            prev, n = None, 0
-            for y in range(h + 1):
-                v = pix[(y * w + x) * 3 + ch] if y < h else None
-                if v == prev:
-                    n += 1
-                    continue
-                if prev is not None and prev not in (0, 255):
-                    worst = max(worst, n)
-                prev, n = v, 1
-    return worst
+            col = pix[x * 3 + ch:w * h * 3:w * 3]
+            lo, hi = min(lo, min(col)), max(hi, max(col))
+            for v, run in groupby(col):
+                if v not in (0, 255):
+                    worst = max(worst, sum(1 for _ in run))
+    return worst, hi - lo
 
 
 def run_dither_gate(workdir):
@@ -1994,7 +2014,7 @@ def run_dither_gate(workdir):
         if render(fixture, out, ["--no-auto-exposure", "-E", "1.0"] + extra):
             return None
         w, h, pix = _read_ppm(out)
-        return _longest_flat_run(pix, w, h)
+        return _flat_run_and_span(pix, w, h) + (h,)
 
     off = measure("off", ["--no-dither"])
     on = measure("on", [])
@@ -2002,20 +2022,26 @@ def run_dither_gate(workdir):
     if off is None or on is None or strong is None:
         print("  dither       ERROR while rendering the gradient fixture")
         return ["dither"]
+    (off_run, off_span, h), (on_run, _, _), (strong_run, _, _) = off, on, strong
+    min_band, max_run = DITHER_MIN_BAND_FRAC * h, DITHER_MAX_RUN_FRAC * h
 
     failures = []
-    # The inverse arm. Without it the whole gate passes on a flat image, which
-    # is also what a broken fixture produces (spec 11.22: six MSM arms passed
-    # silently because the frame they measured *was* the feature-off frame).
-    ok = off >= DITHER_MIN_BAND
-    print(f"  band-inverse {'PASS' if ok else 'FAIL'}  {off} px undithered run "
-          f"(needs >= {DITHER_MIN_BAND} to be a gradient worth dithering)")
+    # The inverse arm, and it takes TWO statistics. A run-length floor alone is
+    # maximized by a constant image -- exactly what a fixture that lost its sky
+    # produces -- so it would pass at its best possible score while measuring
+    # nothing. The span is the half that a constant image fails. (Spec 11.22:
+    # six MSM arms passed silently because the frame they measured *was* the
+    # feature-off frame.)
+    ok = off_span >= DITHER_MIN_SPAN and off_run >= min_band
+    print(f"  band-inverse {'PASS' if ok else 'FAIL'}  undithered run {off_run} px "
+          f"(needs >= {min_band:.0f}) over a {off_span}-level span "
+          f"(needs >= {DITHER_MIN_SPAN}: a flat frame is not a gradient)")
     if not ok:
         failures.append("dither-band-inverse")
 
-    ok = on <= DITHER_MAX_RUN and on < off
-    print(f"  band-run     {'PASS' if ok else 'FAIL'}  {on} px dithered run "
-          f"(bound {DITHER_MAX_RUN}, undithered {off})")
+    ok = on_run <= max_run and on_run < off_run
+    print(f"  band-run     {'PASS' if ok else 'FAIL'}  {on_run} px dithered run "
+          f"(bound {max_run:.0f}, undithered {off_run})")
     if not ok:
         failures.append("dither-band-run")
 
@@ -2023,11 +2049,36 @@ def run_dither_gate(workdir):
     # short-circuits, so both arms take one path and the check passes against a
     # dead feature (spec 11.21 shipped exactly that arm). Comparing two live
     # amplitudes fails if the shader ignores the uniform.
-    ok = strong < on
-    print(f"  band-linear  {'PASS' if ok else 'FAIL'}  {strong} px at 2.0 LSB "
-          f"(must beat {on} px at the 1.0 default)")
+    ok = strong_run < on_run
+    print(f"  band-linear  {'PASS' if ok else 'FAIL'}  {strong_run} px at 2.0 LSB "
+          f"(must beat {on_run} px at the 1.0 default)")
     if not ok:
         failures.append("dither-band-linearity")
+
+    # Dither must not move the picture, only its quantization error. The arm
+    # that matters is at the CLIP POINTS: a value already at 0 or 1 has no error
+    # to decorrelate, so a dither that is added and then clamped keeps one half
+    # of its distribution and shifts the mean -- flat white stipples to 254,
+    # flat black lifts off zero. That is a DC bias, and none of the run-length
+    # arms above can see it. Measured on a deliberately blown frame (ACES holds
+    # its clip rather than rolling off, so ~63% of channels sit at 255).
+    def clip_mean(tag, extra):
+        out = os.path.join(workdir, f"dither_{tag}.ppm")
+        if render(fixture, out, ["--no-auto-exposure", "-E", "500",
+                                 "--tonemap", "aces"] + extra):
+            return None
+        _, _, pix = _read_ppm(out)
+        return sum(pix) / len(pix)
+
+    m_off, m_on = clip_mean("clipoff", ["--no-dither"]), clip_mean("clipon", [])
+    if m_off is None or m_on is None:
+        print("  band-mean    ERROR while rendering the clipped frame")
+        return failures + ["dither-band-mean"]
+    ok = abs(m_on - m_off) <= DITHER_MEAN_TOL
+    print(f"  band-mean    {'PASS' if ok else 'FAIL'}  clipped-frame mean moves "
+          f"{abs(m_on - m_off):.4f} LSB (bound {DITHER_MEAN_TOL})")
+    if not ok:
+        failures.append("dither-band-mean")
 
     return failures
 

@@ -47,7 +47,9 @@ uniform vec2 texelSize; // Display-pixel size, for the sharpen taps
 
 // Finishing grade — a "look" stack applied after tone mapping. Each stage is
 // gated by its own toggle; with all off the output is the plain tonemapped
-// frame. Order: sharpen -> grade -> vignette -> gamma -> grain.
+// frame. Order: sharpen -> grade -> vignette -> gamma -> grain -> dither.
+// Dither is last and must stay last: it is the quantization stage, so anything
+// appended after it reaches the 8-bit target undithered.
 uniform int sharpenEnabled;
 uniform float sharpenStrength;
 uniform int gradeEnabled;
@@ -280,12 +282,18 @@ vec3 sceneTap(vec2 uv)
 // Each channel varies in both the swap and the scale for the same reason. Three
 // channels sharing a frequency would dither only along the grey axis, leaving a
 // colour gradient's contours standing in whichever channel banded elsewhere.
+float ditherTap(vec2 p, float sa, vec2 oa, float sb, vec2 ob)
+{
+    return ign(p * sa + oa) - ign(p.yx * sb + ob);
+}
+
+// The scale pairs read down the column -- 1.00/1.37, 1.61/0.83, 0.71/2.13 --
+// so a channel that lost its frequency split is visible without re-deriving it.
 vec3 ditherPattern(vec2 p)
 {
-    return vec3(
-        ign(p) - ign(vec2(p.y * 1.37 + 19.0, p.x * 1.37 + 7.0)),
-        ign(p * 1.61 + vec2(7.0, 31.0)) - ign(vec2(p.y * 0.83 + 53.0, p.x * 0.83 + 11.0)),
-        ign(p * 0.71 + vec2(31.0, 3.0)) - ign(vec2(p.y * 2.13 + 97.0, p.x * 2.13 + 61.0)));
+    return vec3(ditherTap(p, 1.00, vec2(0.0, 0.0), 1.37, vec2(19.0, 7.0)),
+                ditherTap(p, 1.61, vec2(7.0, 31.0), 0.83, vec2(53.0, 11.0)),
+                ditherTap(p, 0.71, vec2(31.0, 3.0), 2.13, vec2(97.0, 61.0)));
 }
 
 vec3 sceneToToned(vec3 hdr, float aoFactor, vec3 bloomAdd)
@@ -432,8 +440,10 @@ void main()
     }
 
     // Dither the 8-bit write: a shallow gradient otherwise quantizes to contour
-    // bands (sky, fog, bloom falloff). Last stage by construction — anything
-    // added after this would itself be quantized undithered.
+    // bands (sky, fog, bloom falloff). Last stage of this pass — anything added
+    // after it would itself be quantized undithered. (The GUI and the LUT debug
+    // overlays do draw to the same target afterwards; they are flat UI fills,
+    // not image-forming, so they are deliberately left alone.)
     //
     // Static, with no frame term. An animated pattern would put roughly half the
     // frame's pixels 1 LSB apart between any two consecutive frames, and that
@@ -441,9 +451,18 @@ void main()
     // — including the no-feature floor arms those measurements are scaled
     // against, so both sides would inflate together and the comparison would
     // stop discriminating.
-    if (ditherEnabled == 1)
-        color = clamp(color + ditherPattern(gl_FragCoord.xy) * ditherStrength * (1.0 / 255.0),
-                      0.0, 1.0);
+    // Faded out where the signal has no room for the full swing. A value
+    // already at 0 or 1 carries no quantization error to decorrelate, and the
+    // clamp below would keep only one half of the TPDF there -- flat white
+    // stipples to 254 and flat black lifts off zero, which is a DC bias, not
+    // noise. `room` is the distance to the nearer endpoint measured in units of
+    // the dither's own amplitude, so full swing resumes as soon as the
+    // distribution fits, and the fade widens correctly as the strength rises.
+    if (ditherEnabled == 1) {
+        float amp = ditherStrength * (1.0 / 255.0);
+        vec3 room = clamp(min(color, 1.0 - color) / max(amp, 1e-6), 0.0, 1.0);
+        color = clamp(color + ditherPattern(gl_FragCoord.xy) * amp * room, 0.0, 1.0);
+    }
 
     FragColor = vec4(color, 1.0);
 }
