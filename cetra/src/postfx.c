@@ -2699,6 +2699,11 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         // magnifies rather than reconstructs. Linear filtering box-downsamples
         // the supersampled buffer to the display size (a 1:1 identity blit at
         // supersampling 1 and render scale 1).
+        //
+        // Also skips the output dither, which lives in the tonemap shader: a
+        // blit cannot dither without becoming a shader pass. Deliberate -- this
+        // branch carries debug and LDR-authored frames, which are data rather
+        // than graded images, and they skip exposure and tone mapping too.
         glBindFramebuffer(GL_READ_FRAMEBUFFER, fx->hdr_fbo);
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, target_fbo);
         glBlitFramebuffer(0, 0, fx->width, fx->height, 0, 0, fx->out_width, fx->out_height,
