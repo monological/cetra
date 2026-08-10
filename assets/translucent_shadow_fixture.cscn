@@ -1,0 +1,42 @@
+{
+ "version": 1,
+ "models": [
+  {
+   "path": "translucent_shadow_fixture.gltf"
+  }
+ ],
+ "lights": [
+  {
+   "name": "tsl_sun",
+   "type": "directional",
+   "direction": [
+    0.0,
+    -0.9659258262890683,
+    0.25881904510252074
+   ],
+   "intensity": 3.0,
+   "cast_shadows": true
+  }
+ ],
+ "camera": {
+  "eye": [
+   0.0,
+   5.0,
+   8.0
+  ],
+  "target": [
+   0.0,
+   0.0,
+   0.0
+  ],
+  "fov": 35.0
+ },
+ "post": {
+  "tonemap": "neutral",
+  "exposure": 1.0,
+  "auto_exposure": false,
+  "bloom": {
+   "enabled": false
+  }
+ }
+}
