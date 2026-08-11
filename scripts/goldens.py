@@ -100,6 +100,16 @@ RECIPES = [
     {"name": "cornell_point", "scene": "assets/cornell_point.gltf", "size": (1600, 1200),
      "flags": ["-f", "30", "--no-auto-exposure", "-E", "1.0", "-W", "800", "-H", "600"]},
 
+    # The cascade fixture, here for a reason the other cascade coverage does not
+    # give: run_dir_shadow_gate and run_translucent_offpath_gate both read it
+    # WITHIN one build (a ratio against its own --no-shadows reference, and an
+    # on-vs-off identity), so neither can see a change that moves the whole
+    # frame. This is the only stored reference it has across builds. Matches
+    # _dir_render's flags so a golden failure and a gate failure describe the
+    # same picture.
+    {"name": "dir_shadow", "scene": "assets/dir_shadow_fixture.cscn", "size": (1600, 1200),
+     "flags": ["-f", "30", "--no-auto-exposure", "-E", "1.0", "-W", "800", "-H", "600"]},
+
     # --- LTC area lights (prose: assets/area_light_goldens.md) ----------------
     # --no-scene-file is required: the fixture has a sibling .cscn the app would
     # auto-load, which lights the scene with a second panel. No -e <hdr>: the
