@@ -27,7 +27,7 @@
 #include "import.h" // resolve_height_maps (POM height convention)
 #include "render.h"
 #include "springbone.h"
-#include "gpu_profiler.h"
+#include "profiler.h"
 
 #include "ext/log.h"
 
@@ -269,8 +269,8 @@ Engine* create_engine(const char* window_title, int width, int height) {
     engine->catcher_vbo = 0;
 
     engine->postfx = NULL;
-    engine->gpu_profiler = NULL;
-    engine->gpu_profile = false;
+    engine->profiler = NULL;
+    engine->profiler_enabled = false;
 
     init_input_state(&engine->input);
 
@@ -358,8 +358,8 @@ void free_engine(Engine* engine) {
 
     // Its query objects belong to the context, so this has to happen above
     // glfwDestroyWindow like every other GL teardown in this function.
-    free_gpu_profiler(engine->gpu_profiler);
-    engine->gpu_profiler = NULL;
+    free_profiler(engine->profiler);
+    engine->profiler = NULL;
 
     gl_delete_texture(&engine->brdf_lut);
 
@@ -811,8 +811,8 @@ int init_engine(Engine* engine) {
 
     // Only when asked for (spec 11.27). Not fatal if it fails: losing the
     // instrument should not cost the frame it was meant to measure.
-    if (engine->gpu_profile) {
-        engine->gpu_profiler = create_gpu_profiler();
+    if (engine->profiler_enabled) {
+        engine->profiler = create_profiler();
     }
 
     engine->brdf_lut = ibl_bake_brdf_lut(engine);
@@ -878,7 +878,7 @@ int init_engine(Engine* engine) {
     }
 
     postfx_set_exposure(engine->postfx, &engine->exposure);
-    postfx_set_gpu_profiler(engine->postfx, engine->gpu_profiler);
+    postfx_set_profiler(engine->postfx, engine->profiler);
 
     // Record what init just built at, or the first frame-top sync would see
     // zeroes, decide the sizes had changed, and rebuild everything once for
@@ -1453,10 +1453,10 @@ void set_engine_headless(Engine* engine, bool headless) {
     engine->headless = headless;
 }
 
-void set_engine_gpu_profile(Engine* engine, bool enabled) {
+void set_engine_profiler(Engine* engine, bool enabled) {
     if (!engine)
         return;
-    engine->gpu_profile = enabled;
+    engine->profiler_enabled = enabled;
 }
 
 void set_engine_taa_enabled(Engine* engine, bool enabled) {
@@ -1686,9 +1686,9 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode) {
 
     // GUI last, after tone mapping. gui_render_frame self-gates on
     // gui_frame_active, so it no-ops when no panel/overlay is enabled.
-    gpu_profiler_scope_begin_if(engine->gpu_profiler, engine->gui_frame_active, "gui");
+    profiler_scope_begin_if(engine->profiler, engine->gui_frame_active, "gui");
     gui_render_frame(engine);
-    gpu_profiler_scope_end(engine->gpu_profiler);
+    profiler_scope_end(engine->profiler);
 }
 
 void engine_set_scene_draw_buffers(const Engine* engine, bool with_gbuffer) {
@@ -2103,7 +2103,7 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EngineRenderFunc render
 
         // Retires the ring slot this frame is about to reuse, before any scope
         // opens.
-        gpu_profiler_begin_frame(engine->gpu_profiler);
+        profiler_begin_frame(engine->profiler);
 
         engine->frame_count++;
         double fps_dt = engine->delta_time > 0.1 ? 0.1 : engine->delta_time;
@@ -2128,7 +2128,7 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EngineRenderFunc render
             // Closes the frame the begin above opened. Skipping it would stall
             // the ring index and the latch for as long as the window stays
             // minimized, so the table would freeze rather than empty.
-            gpu_profiler_end_frame(engine->gpu_profiler, engine->delta_time);
+            profiler_end_frame(engine->profiler, engine->delta_time);
             _engine_advance_frame(engine);
             if (engine->headless)
                 glfwPollEvents();
@@ -2217,10 +2217,10 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EngineRenderFunc render
             // Timed only while probes remain to bake. A converged volume is the
             // steady state, so an unconditional scope would file a 0.000 ms row
             // on nearly every frame of a run.
-            gpu_profiler_scope_begin_if(engine->gpu_profiler,
+            profiler_scope_begin_if(engine->profiler,
                                         shadow_scene->gi_volume->dirty_count > 0, "gi capture");
             gi_volume_update(shadow_scene->gi_volume, engine, shadow_scene);
-            gpu_profiler_scope_end(engine->gpu_profiler);
+            profiler_scope_end(engine->profiler);
         }
 
         // Shadow depth pass (before main render)
@@ -2263,7 +2263,7 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EngineRenderFunc render
         // AO -- with AO off the composite still owes the scene its specular.
         engine->spec_this_frame =
             frame_mode == RENDER_MODE_PBR && postfx_wants_spec_split(engine->postfx);
-        gpu_profiler_scope_begin(engine->gpu_profiler, "scene clear");
+        profiler_scope_begin(engine->profiler, "scene clear");
         engine_set_scene_draw_buffers(engine, true);
         GBufferAttachment gb[GBUFFER_ATTACHMENT_COUNT];
         _gbuffer_attachments(engine, gb);
@@ -2279,7 +2279,7 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EngineRenderFunc render
                 glClearBufferfv(GL_COLOR, (GLint)(gb[i].attachment - GL_COLOR_ATTACHMENT0),
                                 gb[i].clear);
         }
-        gpu_profiler_scope_end(engine->gpu_profiler);
+        profiler_scope_end(engine->profiler);
 
         Scene* current_scene = get_current_scene(engine);
 
@@ -2303,7 +2303,7 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EngineRenderFunc render
         engine->current_render_mode = saved_render_mode;
 
         engine_present_frame(engine, frame_mode);
-        gpu_profiler_end_frame(engine->gpu_profiler, engine->delta_time);
+        profiler_end_frame(engine->profiler, engine->delta_time);
 
         // Engine-owned frame limit (CI/headless): requests close so the
         // final-frame screenshot below fires this same iteration.

@@ -2,7 +2,7 @@
 #include <stdlib.h>
 
 #include "postfx.h"
-#include "gpu_profiler.h"
+#include "profiler.h"
 #include "texture.h"
 #include "uniform.h"
 #include "util.h"
@@ -1485,7 +1485,7 @@ void postfx_set_exposure(PostFX* fx, Exposure* exposure) {
     fx->exposure = exposure;
 }
 
-void postfx_set_gpu_profiler(PostFX* fx, struct GPUProfiler* profiler) {
+void postfx_set_profiler(PostFX* fx, struct Profiler* profiler) {
     if (!fx)
         return;
     fx->profiler = profiler;
@@ -1695,7 +1695,7 @@ static bool postfx_run_flare(PostFX* fx) {
     // Below the allocation gate: the call site cannot see it, and it captures
     // this function's own return value only after a call-site scope would
     // already have filed the row.
-    gpu_profiler_scope_begin(fx->profiler, "lens flare");
+    profiler_scope_begin(fx->profiler, "lens flare");
     glBindFramebuffer(GL_FRAMEBUFFER, fx->flare_fbo);
     glViewport(0, 0, fx->flare_width, fx->flare_height);
     glUseProgram(fx->flare_program->id);
@@ -1717,7 +1717,7 @@ static bool postfx_run_flare(PostFX* fx) {
                       (float)(fx->flare_source_lod < top_mip ? fx->flare_source_lod : top_mip));
     draw_fullscreen_quad(fx->quad_vao);
     check_gl_error("postfx lens flare");
-    gpu_profiler_scope_end(fx->profiler);
+    profiler_scope_end(fx->profiler);
     return true;
 }
 
@@ -2363,7 +2363,7 @@ static void postfx_run_atmosphere(PostFX* fx, GLuint canvas_fbo, bool aux_writte
     // Inside the callee, below its early return: this function is a no-op on
     // most frames, and a scope at the call site would file a 0.000 ms row for
     // every one of them. Absent has to mean off.
-    gpu_profiler_scope_begin(fx->profiler, "atmosphere");
+    profiler_scope_begin(fx->profiler, "atmosphere");
 
     // Before the volume: the inject pass reads what this writes.
     bool esm_on = fog_on && postfx_build_fog_esm(fx);
@@ -2443,7 +2443,7 @@ static void postfx_run_atmosphere(PostFX* fx, GLuint canvas_fbo, bool aux_writte
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
     check_gl_error("postfx atmosphere");
-    gpu_profiler_scope_end(fx->profiler);
+    profiler_scope_end(fx->profiler);
 }
 
 // Screen-space reflections: rebuild the Hi-Z min-depth pyramid, march the
@@ -2655,7 +2655,7 @@ static void postfx_run_oit(PostFX* fx, GLuint oit_fbo, bool moments) {
     if (!postfx_ensure_oit_targets(fx))
         return;
     // Below the allocation gate, which only this function can see.
-    gpu_profiler_scope_begin(fx->profiler, "oit composite");
+    profiler_scope_begin(fx->profiler, "oit composite");
     resolve_color_attachment(oit_fbo, GL_COLOR_ATTACHMENT5, fx->oit_accum_fbo, fx->width,
                              fx->height);
     resolve_color_attachment(oit_fbo, GL_COLOR_ATTACHMENT6, fx->oit_revealage_fbo, fx->width,
@@ -2680,7 +2680,7 @@ static void postfx_run_oit(PostFX* fx, GLuint oit_fbo, bool moments) {
     glDisable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     check_gl_error("postfx oit");
-    gpu_profiler_scope_end(fx->profiler);
+    profiler_scope_end(fx->profiler);
 }
 
 void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hdr,
@@ -2703,12 +2703,12 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
 
     // Resolve MSAA HDR into the single-sample HDR texture (formats must
     // match exactly for a multisample blit, both are RGBA16F)
-    gpu_profiler_scope_begin(fx->profiler, "msaa resolve");
+    profiler_scope_begin(fx->profiler, "msaa resolve");
     glBindFramebuffer(GL_READ_FRAMEBUFFER, msaa_fbo);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fx->hdr_fbo);
     glBlitFramebuffer(0, 0, fx->width, fx->height, 0, 0, fx->width, fx->height, GL_COLOR_BUFFER_BIT,
                       GL_NEAREST);
-    gpu_profiler_scope_end(fx->profiler);
+    profiler_scope_end(fx->profiler);
 
     // OIT: composite the accumulated transparent layer over the resolved opaque
     // scene before any downstream HDR pass (TAA/SSR/bloom/tonemap) reads it.
@@ -2726,12 +2726,12 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         // blit cannot dither without becoming a shader pass. Deliberate -- this
         // branch carries debug and LDR-authored frames, which are data rather
         // than graded images, and they skip exposure and tone mapping too.
-        gpu_profiler_scope_begin(fx->profiler, "passthrough blit");
+        profiler_scope_begin(fx->profiler, "passthrough blit");
         glBindFramebuffer(GL_READ_FRAMEBUFFER, fx->hdr_fbo);
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, target_fbo);
         glBlitFramebuffer(0, 0, fx->width, fx->height, 0, 0, fx->out_width, fx->out_height,
                           GL_COLOR_BUFFER_BIT, GL_LINEAR);
-        gpu_profiler_scope_end(fx->profiler);
+        profiler_scope_end(fx->profiler);
     } else {
         // The color TAA resolves iff it is enabled and its velocity buffer was
         // produced. The single invariant behind both the TAA pass and the AO
@@ -2746,7 +2746,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         // of one blit each: they are the same operation on adjacent
         // attachments, and which of them ran is already decided by the
         // engine's per-frame write flags.
-        gpu_profiler_scope_begin(fx->profiler, "gbuffer resolves");
+        profiler_scope_begin(fx->profiler, "gbuffer resolves");
         if (aux_written) {
             resolve_color_attachment(msaa_fbo, GL_COLOR_ATTACHMENT2, fx->aux_fbo, fx->width,
                                      fx->height);
@@ -2794,7 +2794,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
                                      fx->height);
             check_gl_error("postfx normals resolve");
         }
-        gpu_profiler_scope_end(fx->profiler);
+        profiler_scope_end(fx->profiler);
 
         // Contact shadows (spec 9.3): an AO-res depth march toward the key light,
         // blurred and temporally accumulated like GTAO, consumed by tonemap.
@@ -2809,7 +2809,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
                                fx->fog_light_count > 0 && fx->cs_distance > 0.0f &&
                                postfx_ensure_contact_targets(fx);
         if (cs_active) {
-            gpu_profiler_scope_begin(fx->profiler, "contact shadows");
+            profiler_scope_begin(fx->profiler, "contact shadows");
             // World-space travel direction -> view-space TOWARD-light unit vector
             // (pbr uses L = -light->direction; fog_light_dir[0] is that direction).
             vec3 toward, cs_dir_vs;
@@ -2859,7 +2859,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
                 cs_accum_ran = true;
             }
             check_gl_error("postfx contact shadows");
-            gpu_profiler_scope_end(fx->profiler);
+            profiler_scope_end(fx->profiler);
         }
         if (!cs_accum_ran)
             fx->cs_history.valid = false;
@@ -2873,13 +2873,13 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             // Resolve depth alongside color so screen-space passes can
             // reconstruct view-space positions (formats match: both are
             // DEPTH24_STENCIL8)
-            gpu_profiler_scope_begin(fx->profiler, "depth resolve");
+            profiler_scope_begin(fx->profiler, "depth resolve");
             glBindFramebuffer(GL_READ_FRAMEBUFFER, msaa_fbo);
             glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fx->depth_fbo);
             glBlitFramebuffer(0, 0, fx->width, fx->height, 0, 0, fx->width, fx->height,
                               GL_DEPTH_BUFFER_BIT, GL_NEAREST);
             check_gl_error("postfx depth resolve");
-            gpu_profiler_scope_end(fx->profiler);
+            profiler_scope_end(fx->profiler);
 
             glm_mat4_inv(projection, inv_projection);
         }
@@ -2897,7 +2897,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         bool ao_accum_ran = false;
         bool gi_accum_ran = false;
         if (gtao_active) {
-            gpu_profiler_scope_begin(fx->profiler, "gtao sweep");
+            profiler_scope_begin(fx->profiler, "gtao sweep");
             // Raw occlusion at half res. GTAO reads linear view-Z from the aux
             // buffer's .z (unit 0) and reconstructs positions from it -- the
             // non-linear depth buffer staircased flat surfaces into AO banding.
@@ -2935,7 +2935,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             uniform_set_int(fx->gtao_program->uniforms, "gatherGI", ssgi_active ? 1 : 0);
             uniform_set_int(fx->gtao_program->uniforms, "gatherSpec", gather_spec ? 1 : 0);
             draw_fullscreen_quad(fx->quad_vao);
-            gpu_profiler_scope_end(fx->profiler);
+            profiler_scope_end(fx->profiler);
 
             if (fx->ssao_enabled) {
                 // Accumulate the RAW sweep, then blur the accumulation -- the
@@ -2953,7 +2953,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
                 // history back onto the current noisy estimate. Ordered this way
                 // the clamp sees the unfiltered spread and passes the history it
                 // was meant to keep, while still rejecting a genuine disocclusion.
-                gpu_profiler_scope_begin(fx->profiler, "ao denoise");
+                profiler_scope_begin(fx->profiler, "ao denoise");
                 GLuint ao_denoise_src = fx->ssao_texture[0];
                 if (taa_resolving) {
                     ao_denoise_src =
@@ -2981,17 +2981,17 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
                                 fx->ao_edge_filter_enabled ? 1 : 0);
                 draw_fullscreen_quad(fx->quad_vao);
                 ao_result_tex = fx->ssao_texture[1];
-                gpu_profiler_scope_end(fx->profiler);
+                profiler_scope_end(fx->profiler);
             }
         }
         if (!ao_accum_ran)
             fx->ao_history.valid = false;
 
         if (split_live) {
-            gpu_profiler_scope_begin(fx->profiler, "spec occ composite");
+            profiler_scope_begin(fx->profiler, "spec occ composite");
             postfx_run_spec_occ_composite(fx, ao_result_tex, have_normals, aux_written,
                                           projection);
-            gpu_profiler_scope_end(fx->profiler);
+            profiler_scope_end(fx->profiler);
         }
 
         // The seam. Everything above ran at render res into hdr_fbo; everything
@@ -3011,7 +3011,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         // shimmering against its own occlusion. The one input this moves:
         // SSGI's gather now samples pre-TAA color (it rides the GTAO sweep).
         if (taa_resolving) {
-            gpu_profiler_scope_begin(fx->profiler, "taa resolve");
+            profiler_scope_begin(fx->profiler, "taa resolve");
             // The history is post-res either way; only how this frame reaches
             // it differs -- TAAU reconstructs the smaller raster onto it, plain
             // TAA accumulates a same-size frame.
@@ -3031,20 +3031,20 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             glBlitFramebuffer(0, 0, fx->post_width, fx->post_height, 0, 0, fx->post_width,
                               fx->post_height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
             check_gl_error("postfx taa");
-            gpu_profiler_scope_end(fx->profiler);
+            profiler_scope_end(fx->profiler);
         } else {
             // Bilinear magnify onto the post canvas: the fallback when TAA is
             // toggled off at a reduced scale -- nothing else would bring the
             // frame to display size. At full scale the canvas IS hdr_fbo and
             // there is nothing to bring anywhere.
             if (post_canvas) {
-                gpu_profiler_scope_begin(fx->profiler, "seam magnify");
+                profiler_scope_begin(fx->profiler, "seam magnify");
                 glBindFramebuffer(GL_READ_FRAMEBUFFER, fx->hdr_fbo);
                 glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fx->post_fbo);
                 glBlitFramebuffer(0, 0, fx->width, fx->height, 0, 0, fx->post_width,
                                   fx->post_height, GL_COLOR_BUFFER_BIT, GL_LINEAR);
                 check_gl_error("postfx taau seam");
-                gpu_profiler_scope_end(fx->profiler);
+                profiler_scope_end(fx->profiler);
             }
             fx->taa_history.valid = false;
         }
@@ -3055,7 +3055,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         // raw signal, smooth the accumulation.
         GLuint gi_result_tex = fx->ssgi_gi_texture;
         if (ssgi_active) {
-            gpu_profiler_scope_begin(fx->profiler, "ssgi denoise");
+            profiler_scope_begin(fx->profiler, "ssgi denoise");
             if (taa_resolving) {
                 gi_result_tex =
                     run_temporal_accum(fx, fx->ssgi_accum_program, &fx->ssgi_history,
@@ -3069,20 +3069,20 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
                 run_atrous(fx, fx->ssgi_atrous_program, &fx->ssgi_atrous, fx->half_width,
                            fx->half_height, gi_result_tex, have_normals);
             check_gl_error("postfx ssgi denoise");
-            gpu_profiler_scope_end(fx->profiler);
+            profiler_scope_end(fx->profiler);
         }
         if (!gi_accum_ran)
             fx->ssgi_history.valid = false;
 
         if (ssr_active) {
-            gpu_profiler_scope_begin(fx->profiler, "ssr");
+            profiler_scope_begin(fx->profiler, "ssr");
             postfx_run_ssr(fx, canvas_fbo, canvas_tex, have_normals, taa_resolving, projection,
                            inv_projection, view);
-            gpu_profiler_scope_end(fx->profiler);
+            profiler_scope_end(fx->profiler);
         }
 
         if (ssgi_active && albedo_written) {
-            gpu_profiler_scope_begin(fx->profiler, "ssgi composite");
+            profiler_scope_begin(fx->profiler, "ssgi composite");
             // Add one bounce of indirect diffuse (albedo x gathered GI x intensity)
             // into the canvas before bloom, so bounce light blooms like direct
             // light. Half-res GI is bilinear-upsampled; albedo is render-res.
@@ -3101,7 +3101,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             glDisable(GL_BLEND);
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
             check_gl_error("postfx ssgi composite");
-            gpu_profiler_scope_end(fx->profiler);
+            profiler_scope_end(fx->profiler);
         }
 
         postfx_run_atmosphere(fx, canvas_fbo, aux_written, taa_resolving, projection, view);
@@ -3112,27 +3112,27 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         // Skipped when SSS is off (attachment 4 unwritten); a no-op (adds 0) on
         // scenes with no skin material.
         if (sss_written && fx->sss_ready) {
-            gpu_profiler_scope_begin(fx->profiler, "sss");
+            profiler_scope_begin(fx->profiler, "sss");
             postfx_run_sss(fx, canvas_fbo, projection, taa_resolving);
-            gpu_profiler_scope_end(fx->profiler);
+            profiler_scope_end(fx->profiler);
         }
 
         // Motion blur (4.15): velocity-driven blur on the linear HDR scene,
         // blitted back into the canvas so DoF/bloom/tonemap see it. Needs the
         // aux velocity buffer; skipped (frame untouched) when off or unavailable.
         if (fx->motion_blur_enabled && aux_written && postfx_ensure_motion_blur_targets(fx)) {
-            gpu_profiler_scope_begin(fx->profiler, "motion blur");
+            profiler_scope_begin(fx->profiler, "motion blur");
             postfx_run_motion_blur(fx, canvas_fbo, canvas_tex);
-            gpu_profiler_scope_end(fx->profiler);
+            profiler_scope_end(fx->profiler);
         }
 
         // Depth of field replaces the scene that bloom and tone mapping read.
         // scene_tex is the sharp canvas unless DoF ran into fx->dof_texture.
         GLuint scene_tex = canvas_tex;
         if (dof_active && postfx_ensure_dof_targets(fx)) {
-            gpu_profiler_scope_begin(fx->profiler, "dof");
+            profiler_scope_begin(fx->profiler, "dof");
             postfx_run_dof(fx, canvas_tex, projection);
-            gpu_profiler_scope_end(fx->profiler);
+            profiler_scope_end(fx->profiler);
             scene_tex = fx->dof_texture;
         }
 
@@ -3159,7 +3159,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             // row carries the whole frame's outstanding GPU work rather than
             // the cost of a 64x64 draw. Left attributable here instead of
             // smeared into whichever neighbour it was folded in with.
-            gpu_profiler_scope_begin(fx->profiler, "exposure meter (drains)");
+            profiler_scope_begin(fx->profiler, "exposure meter (drains)");
             glBindFramebuffer(GL_FRAMEBUFFER, fx->lum_fbo);
             glViewport(0, 0, LUM_MEASURE_SIZE, LUM_MEASURE_SIZE);
             glUseProgram(fx->lum_measure_program->id);
@@ -3176,7 +3176,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             glGetTexImage(GL_TEXTURE_2D, LUM_MEASURE_TOP_MIP, GL_RED, GL_FLOAT, &measured);
             exposure_submit_measurement(fx->exposure, measured);
             check_gl_error("postfx auto exposure");
-            gpu_profiler_scope_end(fx->profiler);
+            profiler_scope_end(fx->profiler);
         } else {
             // Drop the history, or re-enabling auto-exposure would pre-expose by
             // a value metered under whatever was on screen before.
@@ -3192,9 +3192,9 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         const bool flare_wanted = fx->flare_enabled && fx->flare_strength > 0.0f;
         bool flare_active = false;
         if (fx->bloom_enabled || flare_wanted) {
-            gpu_profiler_scope_begin(fx->profiler, "bloom pyramid");
+            profiler_scope_begin(fx->profiler, "bloom pyramid");
             postfx_run_bloom(fx, scene_tex);
-            gpu_profiler_scope_end(fx->profiler);
+            profiler_scope_end(fx->profiler);
             if (flare_wanted)
                 flare_active = postfx_run_flare(fx);
         }
@@ -3204,7 +3204,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         // output pixel linearly averages its 2x2 source block (the SSAA
         // resolve). Tone mapping the averaged linear radiance is correct; a 1:1
         // pass-through when supersampling is off.
-        gpu_profiler_scope_begin(fx->profiler, "tonemap + finishing");
+        profiler_scope_begin(fx->profiler, "tonemap + finishing");
         glBindFramebuffer(GL_FRAMEBUFFER, target_fbo);
         glViewport(0, 0, fx->out_width, fx->out_height);
         glUseProgram(fx->tonemap_program->id);
@@ -3300,7 +3300,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         uniform_set_int(tm, "ditherEnabled", fx->dither_enabled ? 1 : 0);
         uniform_set_float(tm, "ditherStrength", fx->dither_strength);
         draw_fullscreen_quad(fx->quad_vao);
-        gpu_profiler_scope_end(fx->profiler);
+        profiler_scope_end(fx->profiler);
 
         glUseProgram(0);
         glActiveTexture(GL_TEXTURE0);

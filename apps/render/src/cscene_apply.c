@@ -275,6 +275,11 @@ void apply_cscene_light_overrides(Scene* scene, const CetraSceneDesc* cscn, floa
             // reading that does not silently change what the number means.
             set_light_intensity_units(light, ov->intensity, light_display_units(light));
         }
+        if (ov->has_cast_shadows) {
+            set_light_cast_shadows(light, ov->cast_shadows);
+            printf("Scene file: light '%s' cast_shadows %s\n", ov->name,
+                   ov->cast_shadows ? "on" : "off");
+        }
     }
 }
 

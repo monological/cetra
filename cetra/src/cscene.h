@@ -80,6 +80,8 @@ typedef struct CSceneLightOverride {
     float size_from_angle; // authored angular size in radians
     bool has_intensity;
     float intensity;
+    bool has_cast_shadows;
+    bool cast_shadows; // whether the named light casts; imported lights arrive false
 } CSceneLightOverride;
 
 // Sized to hold the whole material vocabulary with room to grow. It is not an

@@ -8,7 +8,7 @@
 #include "exposure.h"
 #include "program.h"
 
-struct GPUProfiler;
+struct Profiler;
 
 // Max distinct per-material SSS scatter profiles per scene. C-side only: the
 // gather takes one profile per walk, so no shader mirrors this array.
@@ -508,7 +508,7 @@ typedef struct PostFX {
     ShaderProgram* spec_occ_composite_program;
 
     // Borrowed, owned by the Engine. NULL means no pass here is timed.
-    struct GPUProfiler* profiler;
+    struct Profiler* profiler;
 } PostFX;
 
 // width/height are the display (downsample-target) size; ss_scale supersamples
@@ -547,7 +547,7 @@ void free_postfx(PostFX* fx);
 void postfx_set_exposure(PostFX* fx, Exposure* exposure);
 // Borrowed, same shape as the exposure above: Engine-owned, PostFX-reads. NULL
 // leaves every pass here untimed.
-void postfx_set_gpu_profiler(PostFX* fx, struct GPUProfiler* profiler);
+void postfx_set_profiler(PostFX* fx, struct Profiler* profiler);
 
 // Per-material SSS scatter profiles. The app resets the table when it configures
 // a scene's skin materials, then adds one profile per distinct skin material

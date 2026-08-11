@@ -1,0 +1,1478 @@
+{
+  "asset": {
+    "version": "2.0",
+    "generator": "gen_instancing_fixture.py"
+  },
+  "materials": [
+    {
+      "name": "PropGrey",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [
+          0.72,
+          0.7,
+          0.66,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.6
+      }
+    },
+    {
+      "name": "GroundSlate",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [
+          0.32,
+          0.33,
+          0.35,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.9
+      }
+    }
+  ],
+  "scene": 0,
+  "scenes": [
+    {
+      "nodes": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31,
+        32,
+        33,
+        34,
+        35,
+        36,
+        37,
+        38,
+        39,
+        40,
+        41,
+        42,
+        43,
+        44,
+        45,
+        46,
+        47,
+        48,
+        49,
+        50,
+        51,
+        52,
+        53,
+        54,
+        55,
+        56,
+        57,
+        58,
+        59,
+        60,
+        61,
+        62,
+        63,
+        64,
+        65,
+        66,
+        67,
+        68,
+        69,
+        70,
+        71,
+        72,
+        73,
+        74,
+        75,
+        76,
+        77,
+        78,
+        79,
+        80,
+        81,
+        82,
+        83,
+        84,
+        85,
+        86,
+        87,
+        88,
+        89,
+        90,
+        91,
+        92,
+        93,
+        94,
+        95,
+        96,
+        97,
+        98,
+        99,
+        100,
+        101,
+        102,
+        103,
+        104,
+        105,
+        106,
+        107,
+        108,
+        109,
+        110,
+        111,
+        112,
+        113,
+        114,
+        115,
+        116,
+        117,
+        118,
+        119,
+        120,
+        121,
+        122,
+        123,
+        124,
+        125,
+        126,
+        127,
+        128,
+        129,
+        130
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "name": "Ground",
+      "mesh": 1
+    },
+    {
+      "name": "Prop_000",
+      "mesh": 0,
+      "translation": [
+        -3.72,
+        0.15,
+        -2.79
+      ]
+    },
+    {
+      "name": "Prop_001",
+      "mesh": 0,
+      "translation": [
+        -3.1,
+        0.15,
+        -2.79
+      ]
+    },
+    {
+      "name": "Prop_002",
+      "mesh": 0,
+      "translation": [
+        -2.48,
+        0.15,
+        -2.79
+      ]
+    },
+    {
+      "name": "Prop_003",
+      "mesh": 0,
+      "translation": [
+        -1.86,
+        0.15,
+        -2.79
+      ]
+    },
+    {
+      "name": "Prop_004",
+      "mesh": 0,
+      "translation": [
+        -1.24,
+        0.15,
+        -2.79
+      ]
+    },
+    {
+      "name": "Prop_005",
+      "mesh": 0,
+      "translation": [
+        -0.62,
+        0.15,
+        -2.79
+      ]
+    },
+    {
+      "name": "Prop_006",
+      "mesh": 0,
+      "translation": [
+        0.0,
+        0.15,
+        -2.79
+      ]
+    },
+    {
+      "name": "Prop_007",
+      "mesh": 0,
+      "translation": [
+        0.62,
+        0.15,
+        -2.79
+      ]
+    },
+    {
+      "name": "Prop_008",
+      "mesh": 0,
+      "translation": [
+        1.24,
+        0.15,
+        -2.79
+      ]
+    },
+    {
+      "name": "Prop_009",
+      "mesh": 0,
+      "translation": [
+        1.86,
+        0.15,
+        -2.79
+      ]
+    },
+    {
+      "name": "Prop_010",
+      "mesh": 0,
+      "translation": [
+        2.48,
+        0.15,
+        -2.79
+      ]
+    },
+    {
+      "name": "Prop_011",
+      "mesh": 0,
+      "translation": [
+        3.1,
+        0.15,
+        -2.79
+      ]
+    },
+    {
+      "name": "Prop_012",
+      "mesh": 0,
+      "translation": [
+        3.72,
+        0.15,
+        -2.79
+      ]
+    },
+    {
+      "name": "Prop_013",
+      "mesh": 0,
+      "translation": [
+        -3.72,
+        0.15,
+        -2.17
+      ]
+    },
+    {
+      "name": "Prop_014",
+      "mesh": 0,
+      "translation": [
+        -3.1,
+        0.15,
+        -2.17
+      ]
+    },
+    {
+      "name": "Prop_015",
+      "mesh": 0,
+      "translation": [
+        -2.48,
+        0.15,
+        -2.17
+      ]
+    },
+    {
+      "name": "Prop_016",
+      "mesh": 0,
+      "translation": [
+        -1.86,
+        0.15,
+        -2.17
+      ]
+    },
+    {
+      "name": "Prop_017",
+      "mesh": 0,
+      "translation": [
+        -1.24,
+        0.15,
+        -2.17
+      ]
+    },
+    {
+      "name": "Prop_018",
+      "mesh": 0,
+      "translation": [
+        -0.62,
+        0.15,
+        -2.17
+      ]
+    },
+    {
+      "name": "Prop_019",
+      "mesh": 0,
+      "translation": [
+        0.0,
+        0.15,
+        -2.17
+      ]
+    },
+    {
+      "name": "Prop_020",
+      "mesh": 0,
+      "translation": [
+        0.62,
+        0.15,
+        -2.17
+      ]
+    },
+    {
+      "name": "Prop_021",
+      "mesh": 0,
+      "translation": [
+        1.24,
+        0.15,
+        -2.17
+      ]
+    },
+    {
+      "name": "Prop_022",
+      "mesh": 0,
+      "translation": [
+        1.86,
+        0.15,
+        -2.17
+      ]
+    },
+    {
+      "name": "Prop_023",
+      "mesh": 0,
+      "translation": [
+        2.48,
+        0.15,
+        -2.17
+      ]
+    },
+    {
+      "name": "Prop_024",
+      "mesh": 0,
+      "translation": [
+        3.1,
+        0.15,
+        -2.17
+      ]
+    },
+    {
+      "name": "Prop_025",
+      "mesh": 0,
+      "translation": [
+        3.72,
+        0.15,
+        -2.17
+      ]
+    },
+    {
+      "name": "Prop_026",
+      "mesh": 0,
+      "translation": [
+        -3.72,
+        0.15,
+        -1.55
+      ]
+    },
+    {
+      "name": "Prop_027",
+      "mesh": 0,
+      "translation": [
+        -3.1,
+        0.15,
+        -1.55
+      ]
+    },
+    {
+      "name": "Prop_028",
+      "mesh": 0,
+      "translation": [
+        -2.48,
+        0.15,
+        -1.55
+      ]
+    },
+    {
+      "name": "Prop_029",
+      "mesh": 0,
+      "translation": [
+        -1.86,
+        0.15,
+        -1.55
+      ]
+    },
+    {
+      "name": "Prop_030",
+      "mesh": 0,
+      "translation": [
+        -1.24,
+        0.15,
+        -1.55
+      ]
+    },
+    {
+      "name": "Prop_031",
+      "mesh": 0,
+      "translation": [
+        -0.62,
+        0.15,
+        -1.55
+      ]
+    },
+    {
+      "name": "Prop_032",
+      "mesh": 0,
+      "translation": [
+        0.0,
+        0.15,
+        -1.55
+      ]
+    },
+    {
+      "name": "Prop_033",
+      "mesh": 0,
+      "translation": [
+        0.62,
+        0.15,
+        -1.55
+      ]
+    },
+    {
+      "name": "Prop_034",
+      "mesh": 0,
+      "translation": [
+        1.24,
+        0.15,
+        -1.55
+      ]
+    },
+    {
+      "name": "Prop_035",
+      "mesh": 0,
+      "translation": [
+        1.86,
+        0.15,
+        -1.55
+      ]
+    },
+    {
+      "name": "Prop_036",
+      "mesh": 0,
+      "translation": [
+        2.48,
+        0.15,
+        -1.55
+      ]
+    },
+    {
+      "name": "Prop_037",
+      "mesh": 0,
+      "translation": [
+        3.1,
+        0.15,
+        -1.55
+      ]
+    },
+    {
+      "name": "Prop_038",
+      "mesh": 0,
+      "translation": [
+        3.72,
+        0.15,
+        -1.55
+      ]
+    },
+    {
+      "name": "Prop_039",
+      "mesh": 0,
+      "translation": [
+        -3.72,
+        0.15,
+        -0.93
+      ]
+    },
+    {
+      "name": "Prop_040",
+      "mesh": 0,
+      "translation": [
+        -3.1,
+        0.15,
+        -0.93
+      ]
+    },
+    {
+      "name": "Prop_041",
+      "mesh": 0,
+      "translation": [
+        -2.48,
+        0.15,
+        -0.93
+      ]
+    },
+    {
+      "name": "Prop_042",
+      "mesh": 0,
+      "translation": [
+        -1.86,
+        0.15,
+        -0.93
+      ]
+    },
+    {
+      "name": "Prop_043",
+      "mesh": 0,
+      "translation": [
+        -1.24,
+        0.15,
+        -0.93
+      ]
+    },
+    {
+      "name": "Prop_044",
+      "mesh": 0,
+      "translation": [
+        -0.62,
+        0.15,
+        -0.93
+      ]
+    },
+    {
+      "name": "Prop_045",
+      "mesh": 0,
+      "translation": [
+        0.0,
+        0.15,
+        -0.93
+      ]
+    },
+    {
+      "name": "Prop_046",
+      "mesh": 0,
+      "translation": [
+        0.62,
+        0.15,
+        -0.93
+      ]
+    },
+    {
+      "name": "Prop_047",
+      "mesh": 0,
+      "translation": [
+        1.24,
+        0.15,
+        -0.93
+      ]
+    },
+    {
+      "name": "Prop_048",
+      "mesh": 0,
+      "translation": [
+        1.86,
+        0.15,
+        -0.93
+      ]
+    },
+    {
+      "name": "Prop_049",
+      "mesh": 0,
+      "translation": [
+        2.48,
+        0.15,
+        -0.93
+      ]
+    },
+    {
+      "name": "Prop_050",
+      "mesh": 0,
+      "translation": [
+        3.1,
+        0.15,
+        -0.93
+      ]
+    },
+    {
+      "name": "Prop_051",
+      "mesh": 0,
+      "translation": [
+        3.72,
+        0.15,
+        -0.93
+      ]
+    },
+    {
+      "name": "Prop_052",
+      "mesh": 0,
+      "translation": [
+        -3.72,
+        0.15,
+        -0.31
+      ]
+    },
+    {
+      "name": "Prop_053",
+      "mesh": 0,
+      "translation": [
+        -3.1,
+        0.15,
+        -0.31
+      ]
+    },
+    {
+      "name": "Prop_054",
+      "mesh": 0,
+      "translation": [
+        -2.48,
+        0.15,
+        -0.31
+      ]
+    },
+    {
+      "name": "Prop_055",
+      "mesh": 0,
+      "translation": [
+        -1.86,
+        0.15,
+        -0.31
+      ]
+    },
+    {
+      "name": "Prop_056",
+      "mesh": 0,
+      "translation": [
+        -1.24,
+        0.15,
+        -0.31
+      ]
+    },
+    {
+      "name": "Prop_057",
+      "mesh": 0,
+      "translation": [
+        -0.62,
+        0.15,
+        -0.31
+      ]
+    },
+    {
+      "name": "Prop_058",
+      "mesh": 0,
+      "translation": [
+        0.0,
+        0.15,
+        -0.31
+      ]
+    },
+    {
+      "name": "Prop_059",
+      "mesh": 0,
+      "translation": [
+        0.62,
+        0.15,
+        -0.31
+      ]
+    },
+    {
+      "name": "Prop_060",
+      "mesh": 0,
+      "translation": [
+        1.24,
+        0.15,
+        -0.31
+      ]
+    },
+    {
+      "name": "Prop_061",
+      "mesh": 0,
+      "translation": [
+        1.86,
+        0.15,
+        -0.31
+      ]
+    },
+    {
+      "name": "Prop_062",
+      "mesh": 0,
+      "translation": [
+        2.48,
+        0.15,
+        -0.31
+      ]
+    },
+    {
+      "name": "Prop_063",
+      "mesh": 0,
+      "translation": [
+        3.1,
+        0.15,
+        -0.31
+      ]
+    },
+    {
+      "name": "Prop_064",
+      "mesh": 0,
+      "translation": [
+        3.72,
+        0.15,
+        -0.31
+      ]
+    },
+    {
+      "name": "Prop_065",
+      "mesh": 0,
+      "translation": [
+        -3.72,
+        0.15,
+        0.31
+      ]
+    },
+    {
+      "name": "Prop_066",
+      "mesh": 0,
+      "translation": [
+        -3.1,
+        0.15,
+        0.31
+      ]
+    },
+    {
+      "name": "Prop_067",
+      "mesh": 0,
+      "translation": [
+        -2.48,
+        0.15,
+        0.31
+      ]
+    },
+    {
+      "name": "Prop_068",
+      "mesh": 0,
+      "translation": [
+        -1.86,
+        0.15,
+        0.31
+      ]
+    },
+    {
+      "name": "Prop_069",
+      "mesh": 0,
+      "translation": [
+        -1.24,
+        0.15,
+        0.31
+      ]
+    },
+    {
+      "name": "Prop_070",
+      "mesh": 0,
+      "translation": [
+        -0.62,
+        0.15,
+        0.31
+      ]
+    },
+    {
+      "name": "Prop_071",
+      "mesh": 0,
+      "translation": [
+        0.0,
+        0.15,
+        0.31
+      ]
+    },
+    {
+      "name": "Prop_072",
+      "mesh": 0,
+      "translation": [
+        0.62,
+        0.15,
+        0.31
+      ]
+    },
+    {
+      "name": "Prop_073",
+      "mesh": 0,
+      "translation": [
+        1.24,
+        0.15,
+        0.31
+      ]
+    },
+    {
+      "name": "Prop_074",
+      "mesh": 0,
+      "translation": [
+        1.86,
+        0.15,
+        0.31
+      ]
+    },
+    {
+      "name": "Prop_075",
+      "mesh": 0,
+      "translation": [
+        2.48,
+        0.15,
+        0.31
+      ]
+    },
+    {
+      "name": "Prop_076",
+      "mesh": 0,
+      "translation": [
+        3.1,
+        0.15,
+        0.31
+      ]
+    },
+    {
+      "name": "Prop_077",
+      "mesh": 0,
+      "translation": [
+        3.72,
+        0.15,
+        0.31
+      ]
+    },
+    {
+      "name": "Prop_078",
+      "mesh": 0,
+      "translation": [
+        -3.72,
+        0.15,
+        0.93
+      ]
+    },
+    {
+      "name": "Prop_079",
+      "mesh": 0,
+      "translation": [
+        -3.1,
+        0.15,
+        0.93
+      ]
+    },
+    {
+      "name": "Prop_080",
+      "mesh": 0,
+      "translation": [
+        -2.48,
+        0.15,
+        0.93
+      ]
+    },
+    {
+      "name": "Prop_081",
+      "mesh": 0,
+      "translation": [
+        -1.86,
+        0.15,
+        0.93
+      ]
+    },
+    {
+      "name": "Prop_082",
+      "mesh": 0,
+      "translation": [
+        -1.24,
+        0.15,
+        0.93
+      ]
+    },
+    {
+      "name": "Prop_083",
+      "mesh": 0,
+      "translation": [
+        -0.62,
+        0.15,
+        0.93
+      ]
+    },
+    {
+      "name": "Prop_084",
+      "mesh": 0,
+      "translation": [
+        0.0,
+        0.15,
+        0.93
+      ]
+    },
+    {
+      "name": "Prop_085",
+      "mesh": 0,
+      "translation": [
+        0.62,
+        0.15,
+        0.93
+      ]
+    },
+    {
+      "name": "Prop_086",
+      "mesh": 0,
+      "translation": [
+        1.24,
+        0.15,
+        0.93
+      ]
+    },
+    {
+      "name": "Prop_087",
+      "mesh": 0,
+      "translation": [
+        1.86,
+        0.15,
+        0.93
+      ]
+    },
+    {
+      "name": "Prop_088",
+      "mesh": 0,
+      "translation": [
+        2.48,
+        0.15,
+        0.93
+      ]
+    },
+    {
+      "name": "Prop_089",
+      "mesh": 0,
+      "translation": [
+        3.1,
+        0.15,
+        0.93
+      ]
+    },
+    {
+      "name": "Prop_090",
+      "mesh": 0,
+      "translation": [
+        3.72,
+        0.15,
+        0.93
+      ]
+    },
+    {
+      "name": "Prop_091",
+      "mesh": 0,
+      "translation": [
+        -3.72,
+        0.15,
+        1.55
+      ]
+    },
+    {
+      "name": "Prop_092",
+      "mesh": 0,
+      "translation": [
+        -3.1,
+        0.15,
+        1.55
+      ]
+    },
+    {
+      "name": "Prop_093",
+      "mesh": 0,
+      "translation": [
+        -2.48,
+        0.15,
+        1.55
+      ]
+    },
+    {
+      "name": "Prop_094",
+      "mesh": 0,
+      "translation": [
+        -1.86,
+        0.15,
+        1.55
+      ]
+    },
+    {
+      "name": "Prop_095",
+      "mesh": 0,
+      "translation": [
+        -1.24,
+        0.15,
+        1.55
+      ]
+    },
+    {
+      "name": "Prop_096",
+      "mesh": 0,
+      "translation": [
+        -0.62,
+        0.15,
+        1.55
+      ]
+    },
+    {
+      "name": "Prop_097",
+      "mesh": 0,
+      "translation": [
+        0.0,
+        0.15,
+        1.55
+      ]
+    },
+    {
+      "name": "Prop_098",
+      "mesh": 0,
+      "translation": [
+        0.62,
+        0.15,
+        1.55
+      ]
+    },
+    {
+      "name": "Prop_099",
+      "mesh": 0,
+      "translation": [
+        1.24,
+        0.15,
+        1.55
+      ]
+    },
+    {
+      "name": "Prop_100",
+      "mesh": 0,
+      "translation": [
+        1.86,
+        0.15,
+        1.55
+      ]
+    },
+    {
+      "name": "Prop_101",
+      "mesh": 0,
+      "translation": [
+        2.48,
+        0.15,
+        1.55
+      ]
+    },
+    {
+      "name": "Prop_102",
+      "mesh": 0,
+      "translation": [
+        3.1,
+        0.15,
+        1.55
+      ]
+    },
+    {
+      "name": "Prop_103",
+      "mesh": 0,
+      "translation": [
+        3.72,
+        0.15,
+        1.55
+      ]
+    },
+    {
+      "name": "Prop_104",
+      "mesh": 0,
+      "translation": [
+        -3.72,
+        0.15,
+        2.17
+      ]
+    },
+    {
+      "name": "Prop_105",
+      "mesh": 0,
+      "translation": [
+        -3.1,
+        0.15,
+        2.17
+      ]
+    },
+    {
+      "name": "Prop_106",
+      "mesh": 0,
+      "translation": [
+        -2.48,
+        0.15,
+        2.17
+      ]
+    },
+    {
+      "name": "Prop_107",
+      "mesh": 0,
+      "translation": [
+        -1.86,
+        0.15,
+        2.17
+      ]
+    },
+    {
+      "name": "Prop_108",
+      "mesh": 0,
+      "translation": [
+        -1.24,
+        0.15,
+        2.17
+      ]
+    },
+    {
+      "name": "Prop_109",
+      "mesh": 0,
+      "translation": [
+        -0.62,
+        0.15,
+        2.17
+      ]
+    },
+    {
+      "name": "Prop_110",
+      "mesh": 0,
+      "translation": [
+        0.0,
+        0.15,
+        2.17
+      ]
+    },
+    {
+      "name": "Prop_111",
+      "mesh": 0,
+      "translation": [
+        0.62,
+        0.15,
+        2.17
+      ]
+    },
+    {
+      "name": "Prop_112",
+      "mesh": 0,
+      "translation": [
+        1.24,
+        0.15,
+        2.17
+      ]
+    },
+    {
+      "name": "Prop_113",
+      "mesh": 0,
+      "translation": [
+        1.86,
+        0.15,
+        2.17
+      ]
+    },
+    {
+      "name": "Prop_114",
+      "mesh": 0,
+      "translation": [
+        2.48,
+        0.15,
+        2.17
+      ]
+    },
+    {
+      "name": "Prop_115",
+      "mesh": 0,
+      "translation": [
+        3.1,
+        0.15,
+        2.17
+      ]
+    },
+    {
+      "name": "Prop_116",
+      "mesh": 0,
+      "translation": [
+        3.72,
+        0.15,
+        2.17
+      ]
+    },
+    {
+      "name": "Prop_117",
+      "mesh": 0,
+      "translation": [
+        -3.72,
+        0.15,
+        2.79
+      ]
+    },
+    {
+      "name": "Prop_118",
+      "mesh": 0,
+      "translation": [
+        -3.1,
+        0.15,
+        2.79
+      ]
+    },
+    {
+      "name": "Prop_119",
+      "mesh": 0,
+      "translation": [
+        -2.48,
+        0.15,
+        2.79
+      ]
+    },
+    {
+      "name": "Prop_120",
+      "mesh": 0,
+      "translation": [
+        -1.86,
+        0.15,
+        2.79
+      ]
+    },
+    {
+      "name": "Prop_121",
+      "mesh": 0,
+      "translation": [
+        -1.24,
+        0.15,
+        2.79
+      ]
+    },
+    {
+      "name": "Prop_122",
+      "mesh": 0,
+      "translation": [
+        -0.62,
+        0.15,
+        2.79
+      ]
+    },
+    {
+      "name": "Prop_123",
+      "mesh": 0,
+      "translation": [
+        0.0,
+        0.15,
+        2.79
+      ]
+    },
+    {
+      "name": "Prop_124",
+      "mesh": 0,
+      "translation": [
+        0.62,
+        0.15,
+        2.79
+      ]
+    },
+    {
+      "name": "Prop_125",
+      "mesh": 0,
+      "translation": [
+        1.24,
+        0.15,
+        2.79
+      ]
+    },
+    {
+      "name": "Prop_126",
+      "mesh": 0,
+      "translation": [
+        1.86,
+        0.15,
+        2.79
+      ]
+    },
+    {
+      "name": "Prop_127",
+      "mesh": 0,
+      "translation": [
+        2.48,
+        0.15,
+        2.79
+      ]
+    },
+    {
+      "name": "Prop_128",
+      "mesh": 0,
+      "translation": [
+        3.1,
+        0.15,
+        2.79
+      ]
+    },
+    {
+      "name": "Prop_129",
+      "mesh": 0,
+      "translation": [
+        3.72,
+        0.15,
+        2.79
+      ]
+    }
+  ],
+  "meshes": [
+    {
+      "name": "PropBox",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 0,
+            "NORMAL": 1
+          },
+          "indices": 2,
+          "material": 0
+        }
+      ]
+    },
+    {
+      "name": "GroundQuad",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 3,
+            "NORMAL": 4
+          },
+          "indices": 5,
+          "material": 1
+        }
+      ]
+    }
+  ],
+  "accessors": [
+    {
+      "bufferView": 0,
+      "componentType": 5126,
+      "count": 24,
+      "type": "VEC3",
+      "min": [
+        -0.15,
+        -0.15,
+        -0.15
+      ],
+      "max": [
+        0.15,
+        0.15,
+        0.15
+      ]
+    },
+    {
+      "bufferView": 1,
+      "componentType": 5126,
+      "count": 24,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 2,
+      "componentType": 5123,
+      "count": 36,
+      "type": "SCALAR"
+    },
+    {
+      "bufferView": 3,
+      "componentType": 5126,
+      "count": 4,
+      "type": "VEC3",
+      "min": [
+        -5.5,
+        0.0,
+        -5.5
+      ],
+      "max": [
+        5.5,
+        0.0,
+        5.5
+      ]
+    },
+    {
+      "bufferView": 4,
+      "componentType": 5126,
+      "count": 4,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 5,
+      "componentType": 5123,
+      "count": 6,
+      "type": "SCALAR"
+    }
+  ],
+  "bufferViews": [
+    {
+      "buffer": 0,
+      "byteOffset": 0,
+      "byteLength": 288,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 288,
+      "byteLength": 288,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 576,
+      "byteLength": 72,
+      "target": 34963
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 648,
+      "byteLength": 48,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 696,
+      "byteLength": 48,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 744,
+      "byteLength": 12,
+      "target": 34963
+    }
+  ],
+  "buffers": [
+    {
+      "byteLength": 756,
+      "uri": "data:application/octet-stream;base64,mpkZvpqZGb6amRk+mpkZPpqZGb6amRk+mpkZPpqZGT6amRk+mpkZvpqZGT6amRk+mpkZPpqZGb6amRm+mpkZvpqZGb6amRm+mpkZvpqZGT6amRm+mpkZPpqZGT6amRm+mpkZPpqZGb6amRk+mpkZPpqZGb6amRm+mpkZPpqZGT6amRm+mpkZPpqZGT6amRk+mpkZvpqZGb6amRm+mpkZvpqZGb6amRk+mpkZvpqZGT6amRk+mpkZvpqZGT6amRm+mpkZvpqZGT6amRk+mpkZPpqZGT6amRk+mpkZPpqZGT6amRm+mpkZvpqZGT6amRm+mpkZvpqZGb6amRm+mpkZPpqZGb6amRm+mpkZPpqZGb6amRk+mpkZvpqZGb6amRk+AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAABAAIAAAACAAMABAAFAAYABAAGAAcACAAJAAoACAAKAAsADAANAA4ADAAOAA8AEAARABIAEAASABMAFAAVABYAFAAWABcAAACwwAAAAAAAALDAAACwQAAAAAAAALDAAACwQAAAAAAAALBAAACwwAAAAAAAALBAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAACAAEAAAADAAIA"
+    }
+  ]
+}

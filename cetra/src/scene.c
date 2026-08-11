@@ -871,6 +871,7 @@ void print_scene(const Scene* scene) {
     print_scene_node(scene->root_node, 0);
 }
 
+
 static void _compute_node_bounds(SceneNode* node, vec3 scene_min, vec3 scene_max,
                                  bool* initialized) {
     if (!node)

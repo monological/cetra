@@ -13,7 +13,7 @@
 #include "mesh.h"
 #include "engine.h"
 #include "shadow.h"
-#include "gpu_profiler.h"
+#include "profiler.h"
 #include "texture.h"
 #include "render.h"
 #include "animation.h"
@@ -494,7 +494,7 @@ typedef enum ShadowCasterSet {
 } ShadowCasterSet;
 
 static void _render_shadow_node(SceneNode* node, ShaderProgram* program, GLuint* current_program,
-                                ShadowCasterSet set) {
+                                ShadowCasterSet set, SubmitStats* stats) {
     if (!node)
         return;
 
@@ -553,6 +553,14 @@ static void _render_shadow_node(SceneNode* node, ShaderProgram* program, GLuint*
                     continue;
             }
 
+            // Counted after the caster-set filter, so meshes_seen is the set
+            // this layer could draw rather than the set the graph holds. A mesh
+            // routed to a different caster set was never this pass's to skip,
+            // and counting it here would put the drawn + culled identity out by
+            // however many the routing removed.
+            if (stats)
+                stats->meshes_seen++;
+
             uniform_set_int(u, "alphaTested", foliage ? 1 : 0);
             if (foliage)
                 uniform_set_float(u, "alphaCutoff", mat->alphaCutoff);
@@ -604,6 +612,10 @@ static void _render_shadow_node(SceneNode* node, ShaderProgram* program, GLuint*
             glBindVertexArray(mesh->vao);
             glDrawElements(mesh->draw_mode, mesh->index_count, GL_UNSIGNED_INT, 0);
             glBindVertexArray(0);
+            if (stats) {
+                stats->draws++;
+                stats->instances++;
+            }
 
             if (two_sided)
                 glEnable(GL_CULL_FACE);
@@ -611,7 +623,7 @@ static void _render_shadow_node(SceneNode* node, ShaderProgram* program, GLuint*
     }
 
     for (size_t i = 0; i < node->children_count; i++) {
-        _render_shadow_node(node->children[i], program, current_program, set);
+        _render_shadow_node(node->children[i], program, current_program, set, stats);
     }
 }
 
@@ -718,9 +730,9 @@ static int compute_punctual_matrices(const Light* light, const ShadowSystem* ss,
 // The body both depth-pass loops share, once a layer is bound: aim the depth
 // program at one light-space matrix and walk the scene into it.
 static void draw_shadow_layer(ShadowSystem* ss, SceneNode* root, const float* matrix,
-                              GLuint* current_program, ShadowCasterSet set) {
+                              GLuint* current_program, ShadowCasterSet set, SubmitStats* stats) {
     uniform_set_mat4(ss->depth_program->uniforms, "lightSpaceMatrix", matrix);
-    _render_shadow_node(root, ss->depth_program, current_program, set);
+    _render_shadow_node(root, ss->depth_program, current_program, set, stats);
     end_shadow_pass(ss);
 }
 
@@ -1016,7 +1028,7 @@ static bool shadow_build_tsm(ShadowSystem* ss, const Engine* engine, Scene* scen
         wind_upload_to_program(scene->wind, au);
         uniform_set_float(au, "time", (float)engine->render_time);
         _render_shadow_node(scene->root_node, ss->tsm_absorb_program, &current_program,
-                            SHADOW_CASTERS_TRANSLUCENT);
+                            SHADOW_CASTERS_TRANSLUCENT, profiler_submit(engine->profiler));
         glDisable(GL_BLEND);
 
         // --- resolve to transmittance --------------------------------------
@@ -1054,7 +1066,7 @@ static bool shadow_build_tsm(ShadowSystem* ss, const Engine* engine, Scene* scen
         current_program = ss->depth_program->id;
         uniform_set_mat4(ss->depth_program->uniforms, "lightSpaceMatrix", matrix);
         _render_shadow_node(scene->root_node, ss->depth_program, &current_program,
-                            SHADOW_CASTERS_TRANSLUCENT);
+                            SHADOW_CASTERS_TRANSLUCENT, profiler_submit(engine->profiler));
     }
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -1333,7 +1345,7 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     // solid shadow they have always cast rather than losing it for nothing.
     ss->tsm_live = shadow_tsm_prepare(ss, engine);
 
-    gpu_profiler_scope_begin_if(engine->gpu_profiler, ss->directional_count > 0, "shadow cascades");
+    profiler_scope_begin_if(engine->profiler, ss->directional_count > 0, "shadow cascades");
     for (size_t i = 0; i < ss->directional_count; ++i) {
         const ShadowCasterSet set = (ss->tsm_live && i < TSM_SLOTS)
                                         ? SHADOW_CASTERS_OPAQUE_TSM
@@ -1342,16 +1354,16 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
             size_t layer = i * (size_t)cc + (size_t)c;
             begin_shadow_pass(ss, layer);
             draw_shadow_layer(ss, scene->root_node, (const float*)ss->cascade_matrices[layer],
-                              &current_program, set);
+                              &current_program, set, profiler_submit(engine->profiler));
         }
     }
-    gpu_profiler_scope_end(engine->gpu_profiler);
+    profiler_scope_end(engine->profiler);
 
     // Punctual maps (for surface shadows + the volumetric beam), one layer per
     // caster. Reuses the allocation (a no-op once it is large enough), the
     // bound depth program, and the depth policy set above.
     if (punctual_needed > 0 && init_punctual_shadow_array(ss, punctual_needed) == 0) {
-        gpu_profiler_scope_begin(engine->gpu_profiler, "shadow punctual");
+        profiler_scope_begin(engine->profiler, "shadow punctual");
         for (size_t i = 0; i < scene->light_count; ++i) {
             Light* light = scene->lights[i];
             if (!light || light->shadow_layer < 0)
@@ -1371,13 +1383,13 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
                 // second lookup), so withholding translucent casters here
                 // would take away the solid shadow without replacing it.
                 draw_shadow_layer(ss, scene->root_node, (const float*)ss->punctual_matrices[layer],
-                                  &current_program, SHADOW_CASTERS_OPAQUE);
+                                  &current_program, SHADOW_CASTERS_OPAQUE, profiler_submit(engine->profiler));
                 // Layers are handed out in increasing order, so the last one
                 // drawn is the bound the shader needs
                 ss->punctual_layer_count = layer + 1;
             }
         }
-        gpu_profiler_scope_end(engine->gpu_profiler);
+        profiler_scope_end(engine->profiler);
     }
 
     glDisable(GL_POLYGON_OFFSET_FILL);
@@ -1392,13 +1404,13 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     // other two clauses (no array, no layers) are not visible from here, so a
     // frame that trips those still files a zero row -- the alternative is
     // copying a three-clause guard that would drift, which it already did once.
-    gpu_profiler_scope_begin_if(engine->gpu_profiler, ss->msm_enabled, "shadow msm");
+    profiler_scope_begin_if(engine->profiler, ss->msm_enabled, "shadow msm");
     ss->msm_built = shadow_build_msm(ss, engine);
-    gpu_profiler_scope_end(engine->gpu_profiler);
+    profiler_scope_end(engine->profiler);
 
-    gpu_profiler_scope_begin_if(engine->gpu_profiler, ss->tsm_live, "shadow tsm");
+    profiler_scope_begin_if(engine->profiler, ss->tsm_live, "shadow tsm");
     ss->tsm_built = ss->tsm_live && shadow_build_tsm(ss, engine, scene);
-    gpu_profiler_scope_end(engine->gpu_profiler);
+    profiler_scope_end(engine->profiler);
 
     glViewport(prev_viewport[0], prev_viewport[1], prev_viewport[2], prev_viewport[3]);
 }

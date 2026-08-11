@@ -1,0 +1,113 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "path": "abandoned_window.glb"
+    }
+  ],
+  "environment": {
+    "mode": "hdr",
+    "hdr": "abandoned_window_env.hdr",
+    "probe_scene": true,
+    "intensity": 0.07
+  },
+  "lights": [
+    {
+      "name": "BounceFill",
+      "type": "point",
+      "position": [
+        2.4,
+        1.8,
+        0.35
+      ],
+      "color": [
+        1.0,
+        0.82,
+        0.42
+      ],
+      "intensity": 115.0,
+      "intensity_unit": "lumens",
+      "range": 12.0
+    }
+  ],
+  "light_overrides": [
+    {
+      "name": "SunKey",
+      "size_from_angle": 0.11,
+      "cast_shadows": true
+    }
+  ],
+  "post": {
+    "tonemap": "agx",
+    "exposure": 0.7846,
+    "bloom": {
+      "enabled": true,
+      "strength": 0.487,
+      "threshold": 1.0
+    },
+    "fog": {
+      "enabled": true,
+      "density": 0.008,
+      "anisotropy": 0.25,
+      "near": 0.0,
+      "far": 60.0,
+      "depthDistribution": 1.0
+    }
+  },
+  "materials": {
+    "IvyLeafReal": {
+      "sss": {
+        "color": [
+          0.727,
+          1.0,
+          0.614
+        ],
+        "radius": 0.06
+      }
+    },
+    "LaceCurtain": {
+      "windResponse": 1.0
+    },
+    "SheerCurtain": {
+      "windResponse": 1.0
+    }
+  },
+  "camera": {
+    "eye": [
+      0.9833,
+      0.778,
+      1.3887
+    ],
+    "target": [
+      1.7485,
+      1.1575,
+      0.0245
+    ],
+    "fov": 51.98
+  },
+  "wind": {
+    "direction": [
+      0.15,
+      -0.1,
+      1.0
+    ],
+    "strength": 0.06,
+    "speed": 1.2,
+    "gustFrequency": 0.6,
+    "gustAmount": 0.7,
+    "turbulence": 0.25
+  },
+  "dust": {
+    "curl": {
+      "scale": 0.3,
+      "strength": 0.02,
+      "timescale": 0.03
+    },
+    "drift": [
+      0.0,
+      0.0015,
+      0.0
+    ],
+    "damping": 0.95
+  }
+}

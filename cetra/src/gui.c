@@ -9,7 +9,7 @@
 #include "gui.h"
 
 #include "engine.h"
-#include "gpu_profiler.h"
+#include "profiler.h"
 #include "ext/log.h"
 #include "gi_volume.h"
 #include "light.h"
@@ -843,26 +843,51 @@ static void _engine_gui_panel(Engine* engine) {
         }
     }
 
-    // Per-pass GPU timing (spec 11.27). Present only when --gpu-profile built
-    // the profiler; there is nothing to show and nothing to say otherwise.
-    if (engine->gpu_profiler && igCollapsingHeader_TreeNodeFlags("GPU Timing", 0)) {
-        if (igBeginTable("gpu_timing", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp,
+    // Per-pass GPU time, CPU time and submission counts (specs 11.27, 11.28).
+    // Present only when the flag built the profiler; there is nothing to show
+    // and nothing to say otherwise.
+    if (engine->profiler && igCollapsingHeader_TreeNodeFlags("Profiler", 0)) {
+        if (igBeginTable("gpu_timing", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp,
                          (ImVec2){0, 0}, 0.0f)) {
-            int rows = gpu_profiler_row_count(engine->gpu_profiler);
+            igTableNextColumn();
+            igText("pass");
+            igTableNextColumn();
+            igText("GPU");
+            igTableNextColumn();
+            igText("CPU");
+            int rows = profiler_row_count(engine->profiler);
             for (int row = 0; row < rows; row++) {
                 igTableNextColumn();
-                igText("%s", gpu_profiler_row_name(engine->gpu_profiler, row));
+                igText("%s", profiler_row_name(engine->profiler, row));
                 igTableNextColumn();
-                igText("%.3f ms", gpu_profiler_row_ms(engine->gpu_profiler, row));
+                igText("%.3f ms", profiler_row_ms(engine->profiler, row));
+                igTableNextColumn();
+                igText("%.3f ms", profiler_row_cpu_ms(engine->profiler, row));
             }
             igTableNextColumn();
             igText("TIMED");
             igTableNextColumn();
-            igText("%.3f ms", gpu_profiler_total_ms(engine->gpu_profiler));
+            igText("%.3f ms", profiler_total_ms(engine->profiler));
+            igTableNextColumn();
+            igText("%.3f ms", profiler_cpu_total_ms(engine->profiler));
             igTableNextColumn();
             igText("FRAME (wall)");
             igTableNextColumn();
-            igText("%.3f ms", gpu_profiler_frame_ms(engine->gpu_profiler));
+            igText("%.3f ms", profiler_frame_ms(engine->profiler));
+            igTableNextColumn();
+            igText(" ");
+            igEndTable();
+        }
+
+        if (igBeginTable("submission", 2,
+                         ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp,
+                         (ImVec2){0, 0}, 0.0f)) {
+            for (int row = 0; row < profiler_submit_row_count(); row++) {
+                igTableNextColumn();
+                igText("%s", profiler_submit_row_name(row));
+                igTableNextColumn();
+                igText("%zu", profiler_submit_row_value(engine->profiler, row));
+            }
             igEndTable();
         }
     }

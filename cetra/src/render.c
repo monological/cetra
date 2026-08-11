@@ -23,7 +23,7 @@
 #include "common.h"
 #include "engine.h"
 #include "render.h"
-#include "gpu_profiler.h"
+#include "profiler.h"
 #include "light_cluster.h"
 #include "util.h"
 #include "shadow.h"
@@ -295,6 +295,7 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
     // it alone would take the A2C path with no coverage hardware behind it and
     // bake solid quads into the capture.
     bool a2c_capable = engine->msaa_samples > 1 && !engine->capturing;
+    SubmitStats* stats = profiler_submit(engine->profiler);
 
     for (size_t i = 0; i < node->mesh_count; ++i) {
         Mesh* mesh = node->meshes[i];
@@ -343,16 +344,24 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
             continue;
         }
 
-        // Frustum culling: skip mesh if its AABB is completely outside the view frustum
-        if (frustum && !frustum_test_aabb_transformed(frustum, mesh->aabb.min, mesh->aabb.max,
-                                                      node->global_transform)) {
-            continue;
-        }
-
+        // Resolved before the mesh is counted, so that every counted mesh is
+        // either drawn or culled and the seen == instances + culled identity is
+        // a property of the control flow rather than of the fixture. The
+        // frustum test is pure, so testing this first changes nothing.
         Material* mat = mesh->material;
         ShaderProgram* program = mat->shader_program;
         if (!program || !program->uniforms)
             continue;
+
+        // Frustum culling: skip mesh if its AABB is completely outside the view frustum
+        if (stats)
+            stats->meshes_seen++;
+        if (frustum && !frustum_test_aabb_transformed(frustum, mesh->aabb.min, mesh->aabb.max,
+                                                      node->global_transform)) {
+            if (stats)
+                stats->meshes_culled++;
+            continue;
+        }
 
         UniformManager* u = program->uniforms;
 
@@ -532,6 +541,8 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
         if (*current_material != mat) {
             _update_program_material_uniforms(program, mat, a2c_capable);
             *current_material = mat;
+            if (stats)
+                stats->material_switches++;
         }
 
         // Update skinning uniforms for skinned meshes
@@ -558,6 +569,10 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
         glBindVertexArray(mesh->vao);
         glDrawElements(mesh->draw_mode, mesh->index_count, GL_UNSIGNED_INT, 0);
         glBindVertexArray(0);
+        if (stats) {
+            stats->draws++;
+            stats->instances++;
+        }
 
         if (mat->doubleSided) {
             glEnable(GL_CULL_FACE);
@@ -726,13 +741,13 @@ void render_current_scene(Engine* engine) {
     // invocation's camera and viewport -- probe-capture faces re-enter here
     // with their own view/projection, so each face gets a correct grid.
     if (engine->light_cluster) {
-        gpu_profiler_scope_begin(engine->gpu_profiler, "cluster build");
+        profiler_scope_begin(engine->profiler, "cluster build");
         GLint cluster_viewport[4];
         glGetIntegerv(GL_VIEWPORT, cluster_viewport);
         light_cluster_build_and_upload(engine->light_cluster, scene, *view, *projection,
                                        cluster_viewport[2], cluster_viewport[3], camera->near_clip,
                                        camera->far_clip);
-        gpu_profiler_scope_end(engine->gpu_profiler);
+        profiler_scope_end(engine->profiler);
     }
 
     // ViewParams (spec 10.1): republished per invocation for the same reason the
@@ -819,10 +834,10 @@ void render_current_scene(Engine* engine) {
     if (scene->sky && !engine->capturing && render_mode == RENDER_MODE_PBR) {
         // Clouds are off by default, and the callee self-gates on that, so an
         // unconditional scope files a phantom row on every --sky run.
-        gpu_profiler_scope_begin_if(engine->gpu_profiler, scene->sky->clouds.enabled,
+        profiler_scope_begin_if(engine->profiler, scene->sky->clouds.enabled,
                                     "cloud march");
         sky_clouds_march(scene->sky, engine, *view, *projection);
-        gpu_profiler_scope_end(engine->gpu_profiler);
+        profiler_scope_end(engine->profiler);
     }
 
     // Track current program and material to avoid redundant state changes
@@ -841,11 +856,11 @@ void render_current_scene(Engine* engine) {
     engine->scene_color_this_frame = false;
     engine->oit_this_frame = false; // set true below if the OIT accumulate pass runs
     engine->moments_this_frame = false;
-    gpu_profiler_scope_begin(engine->gpu_profiler, "opaque");
+    profiler_scope_begin(engine->profiler, "opaque");
     _render_scene_iterative(engine, scene, root_node, camera, *view, draw_projection,
                             render_mode, &current_program, &current_material, &frustum, false,
                             OIT_SUBPASS_NONE);
-    gpu_profiler_scope_end(engine->gpu_profiler);
+    profiler_scope_end(engine->profiler);
     engine_set_scene_draw_buffers(engine, false);
 
     // Skybox after opaques (depth-tested against them at the far plane).
@@ -854,7 +869,7 @@ void render_current_scene(Engine* engine) {
     // With the probe debug view on, the probe content replaces the skybox
     // (environment-only probes have no capture; show their prefilter source).
     if (scene->ibl && scene->ibl->precomputed && render_mode == RENDER_MODE_PBR) {
-        gpu_profiler_scope_begin(engine->gpu_profiler, "skybox");
+        profiler_scope_begin(engine->profiler, "skybox");
         if (scene->probe && scene->probe->debug_background) {
             render_skybox_cubemap(scene->ibl,
                                   scene->probe->cubemap ? scene->probe->cubemap
@@ -870,7 +885,7 @@ void render_current_scene(Engine* engine) {
                           scene->skybox_ground_projection, scene->skybox_gp_radius,
                           scene->skybox_gp_height);
         }
-        gpu_profiler_scope_end(engine->gpu_profiler);
+        profiler_scope_end(engine->profiler);
     }
 
     // Shadow catcher: darken the environment floor where the model blocks the
@@ -886,7 +901,7 @@ void render_current_scene(Engine* engine) {
     if (scene->shadow_catcher && scene->shadow_system && scene->shadow_system->enabled &&
         scene->shadow_system->directional_count > 0 && engine->shadow_catcher_program &&
         engine->catcher_vao) {
-        gpu_profiler_scope_begin(engine->gpu_profiler, "shadow catcher");
+        profiler_scope_begin(engine->profiler, "shadow catcher");
         ShaderProgram* catcher = engine->shadow_catcher_program;
         ShadowSystem* ss = scene->shadow_system;
 
@@ -967,7 +982,7 @@ void render_current_scene(Engine* engine) {
         glPolygonOffset(0.0f, 0.0f);
         if (cull_was_enabled)
             glEnable(GL_CULL_FACE);
-        gpu_profiler_scope_end(engine->gpu_profiler);
+        profiler_scope_end(engine->profiler);
     }
 
     // Refraction source: resolve the opaque scene (including the skybox
@@ -976,9 +991,9 @@ void render_current_scene(Engine* engine) {
     // (debug modes skip the skybox and never reach the shader branch).
     if (scene->transmissive_mesh_count > 0 && render_mode == RENDER_MODE_PBR &&
         engine->refraction_enabled) {
-        gpu_profiler_scope_begin(engine->gpu_profiler, "refraction resolve");
+        profiler_scope_begin(engine->profiler, "refraction resolve");
         engine->scene_color_this_frame = engine_resolve_opaque_color(engine);
-        gpu_profiler_scope_end(engine->gpu_profiler);
+        profiler_scope_end(engine->profiler);
     }
 
     // Pass 2: blend-mode (translucent) and transmissive meshes, composited
@@ -1009,11 +1024,11 @@ void render_current_scene(Engine* engine) {
             // path exactly as it was.
             bool moments_ready = false;
             if (engine->oit_moments_enabled && engine_begin_moment_pass(engine)) {
-                gpu_profiler_scope_begin(engine->gpu_profiler, "oit moments");
+                profiler_scope_begin(engine->profiler, "oit moments");
                 _render_scene_iterative(engine, scene, root_node, camera, *view, draw_projection,
                                         render_mode, &current_program, &current_material, &frustum,
                                         true, OIT_SUBPASS_MOMENTS);
-                gpu_profiler_scope_end(engine->gpu_profiler);
+                profiler_scope_end(engine->profiler);
                 engine_end_moment_pass(engine);
                 moments_ready = true;
                 current_program = 0;
@@ -1026,21 +1041,21 @@ void render_current_scene(Engine* engine) {
                 // so moments announced without an accumulate behind them would
                 // mis-composite the whole frame.
                 engine->moments_this_frame = moments_ready;
-                gpu_profiler_scope_begin(engine->gpu_profiler, "oit accumulate");
+                profiler_scope_begin(engine->profiler, "oit accumulate");
                 _render_scene_iterative(engine, scene, root_node, camera, *view, draw_projection,
                                         render_mode, &current_program, &current_material, &frustum,
                                         true, OIT_SUBPASS_ACCUMULATE);
-                gpu_profiler_scope_end(engine->gpu_profiler);
+                profiler_scope_end(engine->profiler);
                 engine_end_oit_pass(engine);
             }
             current_program = 0;
             current_material = NULL;
         }
-        gpu_profiler_scope_begin(engine->gpu_profiler, "transparent");
+        profiler_scope_begin(engine->profiler, "transparent");
         _render_scene_iterative(engine, scene, root_node, camera, *view, draw_projection,
                                 render_mode, &current_program, &current_material, &frustum, true,
                                 OIT_SUBPASS_NONE);
-        gpu_profiler_scope_end(engine->gpu_profiler);
+        profiler_scope_end(engine->profiler);
         glDepthMask(GL_TRUE);
     }
 
@@ -1062,7 +1077,7 @@ void render_current_scene(Engine* engine) {
     if (live_particles > 0) {
         // One scope covering all systems, not one per system: the row is the
         // pass, not the emitter count.
-        gpu_profiler_scope_begin(engine->gpu_profiler, "particles");
+        profiler_scope_begin(engine->profiler, "particles");
         GLuint particle_depth = engine_resolve_scene_depth(engine);
         glDepthMask(GL_FALSE);
         glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA); // premultiplied
@@ -1075,7 +1090,7 @@ void render_current_scene(Engine* engine) {
             particle_system_render(scene->particle_systems[i], &pctx);
         glDepthMask(GL_TRUE);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); // restore engine baseline
-        gpu_profiler_scope_end(engine->gpu_profiler);
+        profiler_scope_end(engine->profiler);
     }
 
     // Light overlay last, so the X-ray lines sit on top of the finished scene
@@ -1106,7 +1121,7 @@ void scene_capture_begin(Engine* engine, Scene* scene, SceneCaptureState* saved)
     // frame's cascade row. A caller cannot reach a capture without coming
     // through here, which is why the policy lives here rather than in each of
     // them.
-    gpu_profiler_suspend(engine->gpu_profiler);
+    profiler_suspend(engine->profiler);
 
     // The mask array must be packed before the first face: a capture taken with
     // the scalar fallbacks still in place bakes them into the cubemap forever.
@@ -1135,7 +1150,7 @@ void scene_capture_begin(Engine* engine, Scene* scene, SceneCaptureState* saved)
 void scene_capture_end(Engine* engine, Scene* scene, const SceneCaptureState* saved) {
     if (!engine || !scene || !saved)
         return;
-    gpu_profiler_resume(engine->gpu_profiler);
+    profiler_resume(engine->profiler);
     engine_set_render_time(engine, saved->render_time, saved->render_delta);
     if (scene->shadow_system) {
         scene->shadow_system->cascade_count = saved->cascade_count;
@@ -1168,7 +1183,7 @@ void scene_capture_faces(Engine* engine, struct IBLResources* ibl, const vec3 po
     // itself uses; timing them would file a 256-pixel cube face under the row
     // that means the main pass. This is the one place the renderer re-renders
     // the world, so it is the one place that has to say so.
-    gpu_profiler_suspend(engine->gpu_profiler);
+    profiler_suspend(engine->profiler);
 
     // Save everything the capture substitutes
     mat4 saved_view, saved_projection, saved_view_proj, saved_prev_view_proj;
@@ -1293,7 +1308,7 @@ void scene_capture_faces(Engine* engine, struct IBLResources* ibl, const vec3 po
                           GL_LINEAR);
     }
 
-    gpu_profiler_resume(engine->gpu_profiler);
+    profiler_resume(engine->profiler);
 
     glDeleteFramebuffers(1, &face_fbo);
     if (ss_tex)

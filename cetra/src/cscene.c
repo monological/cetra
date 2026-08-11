@@ -257,6 +257,7 @@ static void parse_light_overrides(CetraSceneDesc* d, const cJSON* root) {
             continue;
         out->has_size_from_angle = get_float(o, "size_from_angle", &out->size_from_angle);
         out->has_intensity = get_float(o, "intensity", &out->intensity);
+        out->has_cast_shadows = get_bool(o, "cast_shadows", &out->cast_shadows);
         d->light_override_count++;
     }
 }
