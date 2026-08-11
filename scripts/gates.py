@@ -2332,20 +2332,32 @@ def _gpu_cmd(out, extra, profile, fixture=GPU_FIXTURE, size=("800", "600")):
             + (["--profiler"] if profile else []) + extra)
 
 
-# Every banner-delimited block the report prints, and how to read a row of it.
-# One parser rather than one per gate: the row formats are a shared assertion
-# surface, and a second copy would let a format change fail in one gate and
-# pass in another.
-_SUBMIT_ROW = re.compile(r"^(.*?)\s+(\d+)$")
-_REPORT_BLOCKS = {"GPU TIMING": ("gpu", _GPU_ROW, float),
-                  "CPU TIMING": ("cpu", _GPU_ROW, float),
-                  "SUBMISSION": ("submit", _SUBMIT_ROW, int)}
+# Every banner-delimited block the report prints. One parser rather than one per
+# gate: the row formats are a shared assertion surface, and a second copy would
+# let a format change fail in one gate and pass in another.
+#
+# unparsed is counted PER BLOCK. Folding them together made a SUBMISSION format
+# change fail gpu-parse, which claims to be about the GPU table -- an arm going
+# red for something it does not name is the failure this suite exists to avoid.
+_REPORT_BANNERS = {"GPU TIMING": "gpu", "CPU TIMING": "cpu", "SUBMISSION": "submit"}
+
+# The SUBMISSION block is a matrix, one row per pass: a %-28s name field then one
+# right-aligned integer per counter. Column names contain spaces, so the header
+# cannot be split reliably -- the order is fixed here instead, and submit-parse
+# asserts the header still says what this expects.
+SUBMIT_COLS = ("meshes seen", "meshes culled", "draws", "instances", "material switches")
+_SUBMIT_NAME_WIDTH = 28
 
 
 def _report_tables(text):
-    """Parse every block of a --profiler report. Returns {name: rows, 'unparsed': n}."""
-    out = {key: {} for key, _, _ in _REPORT_BLOCKS.values()}
-    out["unparsed"] = 0
+    """Parse every block of a --profiler report.
+
+    Returns {"gpu": {pass: ms}, "cpu": {pass: ms},
+             "submit": {pass: {col: int}}, "submit_header": str|None,
+             "unparsed": {block: n}}
+    """
+    out = {"gpu": {}, "cpu": {}, "submit": {}, "submit_header": None,
+           "unparsed": {"gpu": 0, "cpu": 0, "submit": 0}}
     block = None
     for line in text.splitlines():
         stripped = line.rstrip()
@@ -2354,18 +2366,28 @@ def _report_tables(text):
             continue
         if stripped.startswith("====="):
             block = None
-            for banner, spec in _REPORT_BLOCKS.items():
+            for banner, key in _REPORT_BANNERS.items():
                 if stripped.startswith("===== " + banner):
-                    block = spec
+                    block = key
             continue
         if block is None or not stripped.strip():
             continue
-        key, pattern, cast = block
-        m = pattern.match(stripped)
+        if block == "submit":
+            name = stripped[:_SUBMIT_NAME_WIDTH].strip()
+            values = stripped[_SUBMIT_NAME_WIDTH:].split()
+            if name == "pass":
+                out["submit_header"] = stripped[_SUBMIT_NAME_WIDTH:].strip()
+                continue
+            if len(values) == len(SUBMIT_COLS) and all(v.isdigit() for v in values):
+                out["submit"][name] = dict(zip(SUBMIT_COLS, (int(v) for v in values)))
+            else:
+                out["unparsed"]["submit"] += 1
+            continue
+        m = _GPU_ROW.match(stripped)
         if m:
-            out[key][m.group(1).strip()] = cast(m.group(2))
+            out[block][m.group(1).strip()] = float(m.group(2))
         elif stripped.strip() != "no passes timed":
-            out["unparsed"] += 1
+            out["unparsed"][block] += 1
     return out
 
 
@@ -2385,7 +2407,7 @@ def _gpu_table(workdir, tag, extra, screenshot=None):
     tables = _profiled_run(workdir, tag, extra, screenshot)
     if tables is None:
         return None, None
-    return tables["gpu"], tables["unparsed"]
+    return tables["gpu"], tables["unparsed"]["gpu"]
 
 
 def run_profiler_gate(workdir):
@@ -2517,19 +2539,47 @@ def run_profiler_gate(workdir):
 # real; a draw count has no floor to measure, so "553 became 71" is either true
 # or the feature does not work. Nothing here can inherit the suite's flakiness.
 SUBMIT_FIXTURE = "instancing_fixture.cscn"
-SUBMIT_MESH_NODES = 131       # 130 prop nodes sharing one mesh, plus the ground
-SUBMIT_CASCADES = 3           # default cascade count; the shadow pass walks the graph once each
-SUBMIT_ROWS = ("meshes seen", "meshes culled", "draws", "instances", "material switches")
+SUBMIT_CASCADES = 3   # pinned on the command line below, not inherited from the C default
+
+
+def _fixture_mesh_nodes():
+    """Mesh-bearing node count, read from the fixture rather than copied.
+
+    A hand-mirrored constant goes stale the moment the generator changes and
+    takes the arm with it -- silently, because the arm would still pass against
+    whatever it was told to expect.
+    """
+    path = os.path.join(ROOT, "assets", "instancing_fixture.gltf")
+    with open(path) as f:
+        gltf = json.load(f)
+    return sum(1 for n in gltf["nodes"] if "mesh" in n)
 
 
 def _submit_run(workdir, tag, extra):
     """One profiled run of the submission fixture, at a size that renders fast.
 
     All three tables come out of ONE render, so an arm reading a count against
-    a timing is reading the same frame rather than two runs of it.
+    a timing is reading the same frame rather than two runs of it. The cascade
+    count is pinned here so SUBMIT_CASCADES stops shadowing a C constant it
+    cannot see change.
     """
-    return _profiled_run(workdir, f"submit_{tag}", extra,
+    return _profiled_run(workdir, f"submit_{tag}",
+                         ["--shadow-cascades", str(SUBMIT_CASCADES)] + extra,
                          fixture=SUBMIT_FIXTURE, size=("400", "300"))
+
+
+def _submit_sum_ok(tables, label, failures, name):
+    """seen == instances + culled, for every pass and for the total."""
+    bad = []
+    rows = dict(tables["submit"])
+    for pass_name, row in rows.items():
+        if row["meshes seen"] != row["instances"] + row["meshes culled"]:
+            bad.append((pass_name, row["meshes seen"], row["instances"], row["meshes culled"]))
+    ok = bool(rows) and not bad
+    print(f"  {name:<12} {'PASS' if ok else 'FAIL'}  {label}: {len(rows)} passes, "
+          f"{'identity holds in each' if ok else f'violations {bad}'}")
+    if not ok:
+        failures.append(name)
 
 
 def run_submission_gate(workdir):
@@ -2538,45 +2588,59 @@ def run_submission_gate(workdir):
         return []
 
     failures = []
+    mesh_nodes = _fixture_mesh_nodes()
     base = _submit_run(workdir, "base", [])
     if base is None:
         return ["submit-parse"]
     counts, gpu, cpu = base["submit"], base["gpu"], base["cpu"]
 
     # --- submit-parse: the report format is the assertion surface -----------
-    # Covers all three blocks: _report_tables folds every unreadable row into
-    # one counter, so a shifted CPU or SUBMISSION format fails here by name
-    # rather than as passes that appear to have vanished.
-    missing = [name for name in SUBMIT_ROWS if name not in counts]
-    ok = not missing and base["unparsed"] == 0
-    print(f"  submit-parse {'PASS' if ok else 'FAIL'}  {len(counts)} count rows, "
-          f"{base['unparsed']} unparsed across all blocks, missing {missing or 'none'}")
+    # Asserts each block is NON-EMPTY as well as fully parsed: a renamed banner
+    # yields zero unparsed rows and an empty table, which "0 unparsed" alone
+    # reads as success.
+    unparsed = sum(base["unparsed"].values())
+    empty = [k for k in ("gpu", "cpu", "submit") if not base[k]]
+    header_ok = base["submit_header"] == " ".join(
+        f"{c:>10}" for c in SUBMIT_COLS).strip()
+    ok = not empty and unparsed == 0 and header_ok
+    print(f"  submit-parse {'PASS' if ok else 'FAIL'}  {len(counts)} passes counted, "
+          f"{unparsed} unparsed, empty blocks {empty or 'none'}, "
+          f"header matches: {header_ok}")
     if not ok:
         failures.append("submit-parse")
 
     # --- submit-sum: two counters incremented on opposite branches ----------
-    # Written on INSTANCES rather than draws, because batching makes one draw
-    # carry many meshes: an invariant a later phase breaks is not an invariant.
-    seen = counts.get("meshes seen", -1)
-    inst = counts.get("instances", -1)
-    culled = counts.get("meshes culled", -1)
-    ok = seen >= 0 and seen == inst + culled
-    print(f"  submit-sum   {'PASS' if ok else 'FAIL'}  seen {seen} == instances {inst} + "
-          f"culled {culled} ({inst + culled})")
-    if not ok:
-        failures.append("submit-sum")
+    # Evaluated per pass and on the far run below, so the culled term is not
+    # always zero. On the base run the fixture is entirely in frustum by design,
+    # which is exactly why the base run alone could not fail this.
+    _submit_sum_ok(base, "base", failures, "submit-sum")
 
     # --- submit-count: the totals are predictable before the render ---------
-    # 131 mesh-bearing nodes, drawn once by the camera and once per cascade.
-    # Fails if a pass stops drawing, double-counts, or the fixture changes
-    # shape without this constant following it.
-    expect = SUBMIT_MESH_NODES * (1 + SUBMIT_CASCADES)
-    drawn = counts.get("draws", -1)
-    ok = drawn == expect and inst == expect
-    print(f"  submit-count {'PASS' if ok else 'FAIL'}  draws {drawn}, instances {inst}, "
-          f"want {SUBMIT_MESH_NODES} nodes x (1 camera + {SUBMIT_CASCADES} cascades) = {expect}")
+    # The camera pass sees every mesh-bearing node once; each cascade sees them
+    # again. Fails if a pass stops drawing, double-counts, or the fixture
+    # changes shape (the node count is read from the glTF, not copied).
+    opaque = counts.get("opaque", {})
+    shadow = counts.get("shadow cascades", {})
+    want_shadow = mesh_nodes * SUBMIT_CASCADES
+    ok = (opaque.get("draws") == mesh_nodes and shadow.get("draws") == want_shadow)
+    print(f"  submit-count {'PASS' if ok else 'FAIL'}  opaque draws {opaque.get('draws')} "
+          f"(want {mesh_nodes}, one per mesh node), shadow draws {shadow.get('draws')} "
+          f"(want {want_shadow} = {mesh_nodes} x {SUBMIT_CASCADES} cascades)")
     if not ok:
         failures.append("submit-count")
+
+    # --- submit-matsw: the depth pass uploads material blocks, and says so ---
+    # The fixture has two materials; each cascade re-walks the graph, so the
+    # depth path must report exactly one switch per material per cascade. Wired
+    # to one of the two walkers this reads 0, which is what it read before the
+    # counter was added to shadow.c.
+    want_matsw = 2 * SUBMIT_CASCADES
+    got_matsw = shadow.get("material switches")
+    ok = got_matsw == want_matsw
+    print(f"  submit-matsw {'PASS' if ok else 'FAIL'}  depth-pass material switches "
+          f"{got_matsw} (want {want_matsw} = 2 materials x {SUBMIT_CASCADES} cascades)")
+    if not ok:
+        failures.append("submit-matsw")
 
     # --- submit-cull: the counters are attached to submission, not to nodes -
     # A camera aimed away culls every mesh in the camera pass and none in the
@@ -2588,19 +2652,24 @@ def run_submission_gate(workdir):
     if far is None:
         failures.append("submit-cull")
     else:
-        shadow_only = SUBMIT_MESH_NODES * SUBMIT_CASCADES
+        far_opaque = far["submit"].get("opaque", {})
+        far_shadow = far["submit"].get("shadow cascades", {})
         # A timing, so compared with a tolerance rather than to zero exactly --
         # the row is present and should be empty, not absent.
         opaque_ms = far["gpu"].get("opaque", -1.0)
-        ok = (far["submit"].get("meshes culled") == SUBMIT_MESH_NODES
-              and far["submit"].get("draws") == shadow_only
+        ok = (far_opaque.get("meshes culled") == mesh_nodes
+              and far_opaque.get("draws") == 0
+              and far_shadow.get("draws") == want_shadow
               and 0.0 <= opaque_ms < 0.01)
-        print(f"  submit-cull  {'PASS' if ok else 'FAIL'}  culled "
-              f"{far['submit'].get('meshes culled')} (want {SUBMIT_MESH_NODES}), draws "
-              f"{far['submit'].get('draws')} (want {shadow_only}, shadow only), opaque GPU "
-              f"{opaque_ms} ms (want < 0.01)")
+        print(f"  submit-cull  {'PASS' if ok else 'FAIL'}  opaque culled "
+              f"{far_opaque.get('meshes culled')} (want {mesh_nodes}) and drew "
+              f"{far_opaque.get('draws')} (want 0); shadow still drew "
+              f"{far_shadow.get('draws')} (want {want_shadow}, it has no cull); "
+              f"opaque GPU {opaque_ms} ms (want < 0.01)")
         if not ok:
             failures.append("submit-cull")
+        # The identity again, on the run where culled is non-zero.
+        _submit_sum_ok(far, "far camera", failures, "submit-sum-far")
 
     # --- submit-exact: an integer has no run-to-run spread ------------------
     # If this ever fails the counters are frame-phase dependent and cannot
@@ -2609,30 +2678,42 @@ def run_submission_gate(workdir):
     if again is None:
         failures.append("submit-exact")
     else:
-        diff = {k: (counts.get(k), again["submit"].get(k))
-                for k in SUBMIT_ROWS if counts.get(k) != again["submit"].get(k)}
+        diff = {p: (counts.get(p), again["submit"].get(p))
+                for p in set(counts) | set(again["submit"])
+                if counts.get(p) != again["submit"].get(p)}
         ok = not diff
         print(f"  submit-exact {'PASS' if ok else 'FAIL'}  "
               f"{'identical across two runs' if ok else f'differs: {diff}'}")
         if not ok:
             failures.append("submit-exact")
 
+    # --- cpu-bound: the CPU column has a ceiling, and it is structural ------
+    # Scopes are flat and non-overlapping, so no pass can spend more wall time
+    # than the frame that contains it. Without this, a CPU column reading an
+    # absolute clock rather than an interval prints milliseconds-since-startup
+    # for every row and the whole suite stays green -- which is the state this
+    # arm was written after reproducing.
+    frame_ms = cpu.get("FRAME (wall)", 0.0)
+    over = {name: ms for name, ms in cpu.items()
+            if name not in ("TIMED", "FRAME (wall)") and ms > frame_ms + 0.05}
+    timed_ok = cpu.get("TIMED", 0.0) <= frame_ms + 0.05
+    ok = frame_ms > 0.0 and not over and timed_ok
+    print(f"  cpu-bound    {'PASS' if ok else 'FAIL'}  TIMED {cpu.get('TIMED')} ms and every row "
+          f"<= FRAME {frame_ms} ms; over-budget rows: {over or 'none'}")
+    if not ok:
+        failures.append("cpu-bound")
+
     # --- cpu-attrib: the CPU column measures something the GPU one cannot ---
-    # Structural rather than statistical: GL_TIME_ELAPSED does not count
-    # glBlitFramebuffer on this driver, so the resolve passes read exactly
-    # 0.000 ms of GPU time while genuinely costing CPU. A column wired to the
-    # wrong clock cannot produce that pair.
-    #
-    # NB the plan's original form of this arm -- opaque CPU > opaque GPU -- is
-    # false and was dropped: opaque measured 0.992 ms CPU against 1.316 GPU on
-    # the ivy scene, because that pass is pixel-bound, which is the finding
-    # rather than a failure.
-    blit_rows = [(n, cpu.get(n, 0.0)) for n, ms in gpu.items() if ms == 0.0]
+    # Rows that read exactly 0.000 ms of GPU time still cost CPU. The subject is
+    # whichever passes fall below the print threshold at this gate's size, NOT
+    # specifically blits -- three of the rows it finds are not blits, and one
+    # leaves the set entirely at higher resolution. So it SKIPs when the set is
+    # empty; cpu-bound above is the arm that always applies.
+    blit_rows = [(n, cpu.get(n, 0.0)) for n, ms in gpu.items()
+                 if ms == 0.0 and n not in ("TIMED", "FRAME (wall)")]
     hits = [(n, c) for n, c in blit_rows if c > 0.0]
     if not blit_rows:
-        # A driver that does count blits leaves nothing to compare. Reported
-        # rather than failed: the arm has lost its subject, not found a defect.
-        print("  cpu-attrib   SKIP  no zero-GPU rows on this driver")
+        print("  cpu-attrib   SKIP  no zero-GPU rows at this size")
     else:
         ok = bool(hits)
         print(f"  cpu-attrib   {'PASS' if ok else 'FAIL'}  {len(hits)} of {len(blit_rows)} "

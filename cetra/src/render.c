@@ -298,7 +298,10 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
 
     for (size_t i = 0; i < node->mesh_count; ++i) {
         Mesh* mesh = node->meshes[i];
-        if (!mesh || !mesh->material)
+        // vao == 0 matters now that the bind is guarded: with nothing uploaded
+        // the tracker's 0 would match, the bind would be skipped, and the draw
+        // would inherit whatever the previous pass left bound.
+        if (!mesh || !mesh->material || mesh->vao == 0)
             continue;
 
         // Blend and transmissive materials render in the late pass after the
@@ -925,9 +928,7 @@ void render_current_scene(Engine* engine) {
         }
 
         float texel = 1.0f / (float)ss->default_map_size;
-        GLint loc = uniform_location(catcher->uniforms, "shadowTexelSize");
-        if (loc >= 0)
-            glUniform2f(loc, texel, texel);
+        uniform_set_vec2(catcher->uniforms, "shadowTexelSize", (vec2){texel, texel});
 
         glActiveTexture(GL_TEXTURE0 + SHADOW_MAP_TEXTURE_UNIT);
         glBindTexture(GL_TEXTURE_2D_ARRAY, ss->shadow_map_array);
@@ -1452,10 +1453,9 @@ void render_light_overlay(Engine* engine, Scene* scene) {
     glBufferData(GL_ARRAY_BUFFER, vertex_floats * sizeof(float), vertices, GL_DYNAMIC_DRAW);
 
     glUseProgram(engine->bone_program->id);
-    glUniformMatrix4fv(glGetUniformLocation(engine->bone_program->id, "view"), 1, GL_FALSE,
-                       (float*)engine->view_matrix);
-    glUniformMatrix4fv(glGetUniformLocation(engine->bone_program->id, "projection"), 1, GL_FALSE,
-                       (float*)engine->projection_matrix);
+    uniform_set_mat4(engine->bone_program->uniforms, "view", (const float*)engine->view_matrix);
+    uniform_set_mat4(engine->bone_program->uniforms, "projection",
+                     (const float*)engine->projection_matrix);
 
     // X-ray: lights are usually inside or behind geometry
     glDisable(GL_DEPTH_TEST);
@@ -1624,10 +1624,9 @@ void render_skeleton_bones(Engine* engine, Skeleton* skeleton, AnimationState* a
 
     // Use bone program
     glUseProgram(engine->bone_program->id);
-    glUniformMatrix4fv(glGetUniformLocation(engine->bone_program->id, "view"), 1, GL_FALSE,
-                       (float*)engine->view_matrix);
-    glUniformMatrix4fv(glGetUniformLocation(engine->bone_program->id, "projection"), 1, GL_FALSE,
-                       (float*)engine->projection_matrix);
+    uniform_set_mat4(engine->bone_program->uniforms, "view", (const float*)engine->view_matrix);
+    uniform_set_mat4(engine->bone_program->uniforms, "projection",
+                     (const float*)engine->projection_matrix);
 
     // Disable depth test for X-ray effect (bones always visible). Quads are
     // camera-facing but built without regard to winding, so back-face culling

@@ -459,9 +459,7 @@ void bind_shadow_maps_to_program(ShadowSystem* system, ShaderProgram* program) {
         return; // nothing below is read at count 0
 
     float texel_size = 1.0f / (float)system->default_map_size;
-    GLint loc = uniform_location(u, "shadowTexelSize");
-    if (loc >= 0)
-        glUniform2f(loc, texel_size, texel_size);
+    uniform_set_vec2(u, "shadowTexelSize", (vec2){texel_size, texel_size});
 
     // Scalar shadow uniforms are shared across casters; set once
     uniform_set_float(u, "shadowBias", system->shadow_bias);
@@ -597,8 +595,11 @@ static void _render_shadow_node(SceneNode* node, ShaderProgram* program, SubmitS
             // Everything the material decides, uploaded once per material
             // rather than once per mesh -- a canopy of leaf cards is hundreds
             // of meshes sharing one of these.
-            if (submit_take_material(state, mat))
+            if (submit_take_material(state, mat)) {
                 _upload_shadow_material(u, mat, foliage);
+                if (stats)
+                    stats->material_switches++;
+            }
 
             // Per mesh, because it is the mesh's own bounds: where along Y the
             // cloth mask ramps from anchored to free.
@@ -1339,8 +1340,7 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     glEnable(GL_POLYGON_OFFSET_FILL);
     glPolygonOffset(SHADOW_DEPTH_SLOPE_BIAS, SHADOW_DEPTH_CONSTANT_BIAS);
 
-    SubmitState state = {0};
-    submit_use_program(&state, ss->depth_program->id);
+    glUseProgram(ss->depth_program->id);
 
     // Wind globals for the whole pass (per-mesh response/mask ride along in the
     // node walk). render_time is the frame's single render clock, which the
@@ -1356,6 +1356,13 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     // the slots that HAVE one -- TSM_SLOTS is 1, so casters 1 and 2 keep the
     // solid shadow they have always cast rather than losing it for nothing.
     ss->tsm_live = shadow_tsm_prepare(ss, engine);
+
+    // Tracking starts AFTER tsm_prepare, which resolves programs by name and
+    // builds a quad VAO. Claiming state across a callee that binds is how the
+    // tracker goes wrong, and ordering costs nothing where a remembered reset
+    // would have to be remembered.
+    SubmitState state = {0};
+    submit_use_program(&state, ss->depth_program->id);
 
     profiler_scope_begin_if(engine->profiler, ss->directional_count > 0, "shadow cascades");
     for (size_t i = 0; i < ss->directional_count; ++i) {
@@ -1408,6 +1415,10 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     glDisable(GL_POLYGON_OFFSET_FILL);
     glPolygonOffset(0.0f, 0.0f);
     glUseProgram(0);
+    // The walk stopped unbinding after each draw, so the last caster's is still
+    // bound. Released here for the same reason the scene passes release theirs:
+    // a pass should not hand its successor state it never asked for.
+    glBindVertexArray(0);
 
     // Ahead of the viewport restore, so the one restore below covers the resolve
     // too rather than the resolve querying back a value this function already

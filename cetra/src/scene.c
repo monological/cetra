@@ -794,9 +794,17 @@ void apply_transform_to_nodes(SceneNode* root, mat4 transform) {
         glm_mat4_copy(node->global_transform, node->prev_global_transform);
         glm_mat4_mul(parent_transform, node->original_transform, node->global_transform);
 
-        mat4 inv_global;
-        glm_mat4_inv(node->global_transform, inv_global);
-        glm_mat4_pick3t(inv_global, node->normal_matrix);
+        // Only for nodes that actually moved. The copy above makes
+        // prev_global_transform the previous frame's value, so this comparison
+        // IS "did this node move", and it is bit-exact rather than a tolerance.
+        // Worth the compare because bones are SceneNodes: a rigged model is
+        // mostly nodes whose transform is recomputed and mostly unchanged, and
+        // an unconditional inverse there costs more than the draw path it saves.
+        if (memcmp(node->global_transform, node->prev_global_transform, sizeof(mat4)) != 0) {
+            mat4 inv_global;
+            glm_mat4_inv(node->global_transform, inv_global);
+            glm_mat4_pick3t(inv_global, node->normal_matrix);
+        }
 
         // Update light position and direction if present
         if (node->light) {

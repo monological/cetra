@@ -42,26 +42,36 @@
 
 typedef struct Profiler Profiler;
 
-// What one frame's submission issued. meshes_seen counts every mesh a pass
-// considered, so meshes_seen == instances + meshes_culled holds exactly; the
-// identity is on instances rather than draws because batching makes one draw
-// carry many meshes, and an invariant that a later phase breaks is not one.
+// What one PASS's submission issued -- per scope, like the two timing columns,
+// because that is the granularity every question about it is asked at: whether
+// culling shrank the shadow layers, whether batching shrank the opaque pass,
+// whether one traversal replaced four. A frame-wide bag can answer none of
+// those, and it silently folds in work the timing columns exclude.
+//
+// meshes_seen counts every mesh a pass considered, so
+// meshes_seen == instances + meshes_culled holds exactly. The identity is on
+// instances rather than draws because batching makes one draw carry many
+// meshes, and an invariant that a later phase breaks is not one.
 typedef struct SubmitStats {
     size_t meshes_seen;
     size_t meshes_culled;
     size_t draws;             // glDraw* calls issued for scene meshes
     size_t instances;         // meshes those draws carried; equals draws until batching
-    size_t material_switches; // shading-pass re-uploads; the depth path has no material state
+    size_t material_switches; // material blocks uploaded, in whichever pass has one
 } SubmitStats;
 
 // NULL on allocation failure, or when the driver has no timer queries at all.
 Profiler* create_profiler(void);
 void free_profiler(Profiler* profiler);
 
-// The frame's counters, to increment at a draw site. NULL when there is no
-// profiler, which is what keeps an unprofiled run free of the counting: the
-// call sites test it once and skip.
+// The counters of the scope currently open, to increment at a draw site. NULL
+// when there is no profiler, when timing is suspended, or when no scope is
+// open -- so an unprofiled run keeps no counts, and a nested re-render that
+// the timing columns sit out cannot inflate the counts either.
 SubmitStats* profiler_submit(Profiler* profiler);
+
+// Summed over the scopes that ran, for the whole-frame totals.
+SubmitStats profiler_submit_total(const Profiler* profiler);
 
 // Frame bracket. Every frame that calls begin must call end, including frames
 // that render nothing: the ring index and the display latch both advance here,
@@ -120,7 +130,11 @@ float profiler_cpu_total_ms(const Profiler* profiler);
 // one vocabulary instead of each spelling the field names out.
 int profiler_submit_row_count(void);
 const char* profiler_submit_row_name(int row);
-size_t profiler_submit_row_value(const Profiler* profiler, int row);
+size_t submit_stat_value(const SubmitStats* stats, int row);
+
+// One pass's counters, by the same row index the timing accessors use, so a
+// caller can walk scopes once and read time and submission together.
+const SubmitStats* profiler_row_submit(const Profiler* profiler, int row);
 
 // Mean wall-clock frame time over the same window, published beside the total
 // as the ceiling to read it against.

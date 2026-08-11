@@ -879,14 +879,33 @@ static void _engine_gui_panel(Engine* engine) {
             igEndTable();
         }
 
-        if (igBeginTable("submission", 2,
+        int submit_cols = profiler_submit_row_count();
+        if (igBeginTable("submission", submit_cols + 1,
                          ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp,
                          (ImVec2){0, 0}, 0.0f)) {
-            for (int row = 0; row < profiler_submit_row_count(); row++) {
+            igTableNextColumn();
+            igText("pass");
+            for (int col = 0; col < submit_cols; col++) {
                 igTableNextColumn();
-                igText("%s", profiler_submit_row_name(row));
+                igText("%s", profiler_submit_row_name(col));
+            }
+            for (int row = 0; row < profiler_row_count(engine->profiler); row++) {
+                const SubmitStats* s = profiler_row_submit(engine->profiler, row);
+                if (!s || s->meshes_seen == 0)
+                    continue;
                 igTableNextColumn();
-                igText("%zu", profiler_submit_row_value(engine->profiler, row));
+                igText("%s", profiler_row_name(engine->profiler, row));
+                for (int col = 0; col < submit_cols; col++) {
+                    igTableNextColumn();
+                    igText("%zu", submit_stat_value(s, col));
+                }
+            }
+            SubmitStats total = profiler_submit_total(engine->profiler);
+            igTableNextColumn();
+            igText("TOTAL");
+            for (int col = 0; col < submit_cols; col++) {
+                igTableNextColumn();
+                igText("%zu", submit_stat_value(&total, col));
             }
             igEndTable();
         }

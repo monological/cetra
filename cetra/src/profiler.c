@@ -38,6 +38,11 @@ typedef struct ProfilerScope {
     double cpu_accum_ms;
     int cpu_samples;
     float cpu_shown_ms;
+
+    // This pass's submission, for the frame just gone. Not latched with the
+    // timings: an average over a half-second window would give the one quantity
+    // here with no run-to-run spread some.
+    SubmitStats submit;
 } ProfilerScope;
 
 struct Profiler {
@@ -66,8 +71,6 @@ struct Profiler {
 
     int zero_streak;
     int warned_zero;
-
-    SubmitStats submit;
 };
 
 // The one place the submission vocabulary is written. Both consumers walk it,
@@ -177,11 +180,37 @@ void profiler_begin_frame(Profiler* profiler) {
     profiler->suppressed = 0;
     profiler->suspends = 0;
     // Must precede the shadow depth pass, which draws.
-    profiler->submit = (SubmitStats){0};
+    for (int i = 0; i < profiler->scope_count; ++i)
+        profiler->scopes[i].submit = (SubmitStats){0};
 }
 
 SubmitStats* profiler_submit(Profiler* profiler) {
-    return profiler ? &profiler->submit : NULL;
+    // No open scope means either a suspended re-render or work outside any
+    // pass, and neither belongs in a per-pass count.
+    if (!profiler || profiler->active < 0)
+        return NULL;
+    return &profiler->scopes[profiler->active].submit;
+}
+
+SubmitStats profiler_submit_total(const Profiler* profiler) {
+    SubmitStats total = {0};
+    if (!profiler)
+        return total;
+    for (int i = 0; i < profiler->scope_count; ++i) {
+        const SubmitStats* s = &profiler->scopes[i].submit;
+        total.meshes_seen += s->meshes_seen;
+        total.meshes_culled += s->meshes_culled;
+        total.draws += s->draws;
+        total.instances += s->instances;
+        total.material_switches += s->material_switches;
+    }
+    return total;
+}
+
+const SubmitStats* profiler_row_submit(const Profiler* profiler, int row) {
+    if (!profiler || row < 0 || row >= profiler->row_count)
+        return NULL;
+    return &profiler->scopes[profiler->rows[row]].submit;
 }
 
 int profiler_submit_row_count(void) {
@@ -194,10 +223,10 @@ const char* profiler_submit_row_name(int row) {
     return k_submit_fields[row].name;
 }
 
-size_t profiler_submit_row_value(const Profiler* profiler, int row) {
-    if (!profiler || row < 0 || row >= profiler_submit_row_count())
+size_t submit_stat_value(const SubmitStats* stats, int row) {
+    if (!stats || row < 0 || row >= profiler_submit_row_count())
         return 0;
-    return *(const size_t*)((const char*)&profiler->submit + k_submit_fields[row].offset);
+    return *(const size_t*)((const char*)stats + k_submit_fields[row].offset);
 }
 
 // Publish the averages and start a new window. Rows are rebuilt each latch from
@@ -388,13 +417,30 @@ void profiler_report(Profiler* profiler) {
     print_timing_table(profiler, "GPU", false);
     print_timing_table(profiler, "CPU", true);
 
-    // Counts, from the last completed frame rather than the latch window: they
-    // are exact per frame, and averaging them would turn the one quantity here
-    // with no run-to-run spread into one that has some.
+    // Counts, per pass and from the last completed frame rather than the latch
+    // window: they are exact per frame, and averaging them would turn the one
+    // quantity here with no run-to-run spread into one that has some.
+    //
+    // Per pass because that is the granularity the questions are asked at --
+    // whether culling shrank the shadow layers, whether batching shrank the
+    // opaque pass. TOTAL is the sum, for the identities that hold frame-wide.
     printf("\n===== SUBMISSION =====\n");
-    for (int row = 0; row < profiler_submit_row_count(); ++row) {
-        printf("%-28s %8zu\n", profiler_submit_row_name(row),
-               profiler_submit_row_value(profiler, row));
+    printf("%-28s", "pass");
+    for (int col = 0; col < profiler_submit_row_count(); ++col)
+        printf(" %10s", profiler_submit_row_name(col));
+    printf("\n");
+    for (int row = 0; row < profiler->row_count; ++row) {
+        const SubmitStats* s = profiler_row_submit(profiler, row);
+        if (!s || s->meshes_seen == 0)
+            continue; // a pass that submits no scene mesh has nothing to say here
+        printf("%-28s", profiler_row_name(profiler, row));
+        for (int col = 0; col < profiler_submit_row_count(); ++col)
+            printf(" %10zu", submit_stat_value(s, col));
+        printf("\n");
     }
-    printf("===== END SUBMISSION =====\n\n");
+    SubmitStats total = profiler_submit_total(profiler);
+    printf("%-28s", "TOTAL");
+    for (int col = 0; col < profiler_submit_row_count(); ++col)
+        printf(" %10zu", submit_stat_value(&total, col));
+    printf("\n===== END SUBMISSION =====\n\n");
 }
