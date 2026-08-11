@@ -594,9 +594,10 @@ averaging moments carries Jensen's bias. The same arithmetic is why opaque caste
 the map entirely: the error goes as `A²/8` and opaque is the maximum-absorbance case.
 
 Measured against the analytic answer on a new fixture: bands read 0.650 / 0.421 / 0.273 / 0.179
-against 0.65^k, worst error **0.0016**; the mask ramp matches `1 - alpha(x)` at **RMS 0.0025**,
-where a binary alpha test scores 126x worse. Raiden moves **331,967 px (4.0%)** and the diff is
-the groom and the shoulder under it, nothing else.
+against 0.65^k, worst error **0.0016**; the mask ramp matches `1 - alpha(x)` at **RMS 0.0029**,
+where a binary alpha test scores 109x worse. Raiden moves **331,967 px (4.0%)** and the diff is
+the groom and the shoulder under it, nothing else — that last figure predates the review pass
+and has not been re-measured since.
 
 **Three bugs found by the arms rather than by reading, all three presenting as something they
 were not**: an unrestored blend FUNCTION that desaturated the whole frame while the shadows
@@ -613,7 +614,9 @@ its 1024 floor); coloured transmittance (breaks the scalar contract at three sit
 
 <details><summary>The original sketch, kept for the record — it priced this as M and assumed the moment path</summary>
 
-### C1. Moment transmittance shadow maps — Effort M
+**Moment transmittance shadow maps — Effort M** *(archived pitch, not a live item: this is what
+C1 looked like before it shipped. The four-moment reconstruction it argues for is deferred, with
+the measured reason recorded above.)*
 **The standout item, and it starts from a defect rather than a feature.** `shadow.c:485-488` excludes
 alpha-masked materials from the shadow map entirely unless they opt back in via `foliage_shadows` —
 so **hair casts no shadow at all**, by a deliberate choice whose reasoning (strand-scale acne vs
