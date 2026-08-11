@@ -2866,11 +2866,13 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             // Resolve depth alongside color so screen-space passes can
             // reconstruct view-space positions (formats match: both are
             // DEPTH24_STENCIL8)
+            gpu_profiler_scope_begin(fx->profiler, "depth resolve");
             glBindFramebuffer(GL_READ_FRAMEBUFFER, msaa_fbo);
             glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fx->depth_fbo);
             glBlitFramebuffer(0, 0, fx->width, fx->height, 0, 0, fx->width, fx->height,
                               GL_DEPTH_BUFFER_BIT, GL_NEAREST);
             check_gl_error("postfx depth resolve");
+            gpu_profiler_scope_end(fx->profiler);
 
             glm_mat4_inv(projection, inv_projection);
         }
@@ -2944,6 +2946,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
                 // history back onto the current noisy estimate. Ordered this way
                 // the clamp sees the unfiltered spread and passes the history it
                 // was meant to keep, while still rejecting a genuine disocclusion.
+                gpu_profiler_scope_begin(fx->profiler, "ao denoise");
                 GLuint ao_denoise_src = fx->ssao_texture[0];
                 if (taa_resolving) {
                     ao_denoise_src =
@@ -2971,14 +2974,18 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
                                 fx->ao_edge_filter_enabled ? 1 : 0);
                 draw_fullscreen_quad(fx->quad_vao);
                 ao_result_tex = fx->ssao_texture[1];
+                gpu_profiler_scope_end(fx->profiler);
             }
         }
         if (!ao_accum_ran)
             fx->ao_history.valid = false;
 
-        if (split_live)
+        if (split_live) {
+            gpu_profiler_scope_begin(fx->profiler, "spec occ composite");
             postfx_run_spec_occ_composite(fx, ao_result_tex, have_normals, aux_written,
                                           projection);
+            gpu_profiler_scope_end(fx->profiler);
+        }
 
         // The seam. Everything above ran at render res into hdr_fbo; everything
         // below composites onto the canvas at post res. At render scale 1 the
@@ -3039,6 +3046,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         // raw signal, smooth the accumulation.
         GLuint gi_result_tex = fx->ssgi_gi_texture;
         if (ssgi_active) {
+            gpu_profiler_scope_begin(fx->profiler, "ssgi denoise");
             if (taa_resolving) {
                 gi_result_tex =
                     run_temporal_accum(fx, fx->ssgi_accum_program, &fx->ssgi_history,
@@ -3052,6 +3060,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
                 run_atrous(fx, fx->ssgi_atrous_program, &fx->ssgi_atrous, fx->half_width,
                            fx->half_height, gi_result_tex, have_normals);
             check_gl_error("postfx ssgi denoise");
+            gpu_profiler_scope_end(fx->profiler);
         }
         if (!gi_accum_ran)
             fx->ssgi_history.valid = false;
@@ -3064,6 +3073,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         }
 
         if (ssgi_active && albedo_written) {
+            gpu_profiler_scope_begin(fx->profiler, "ssgi composite");
             // Add one bounce of indirect diffuse (albedo x gathered GI x intensity)
             // into the canvas before bloom, so bounce light blooms like direct
             // light. Half-res GI is bilinear-upsampled; albedo is render-res.
@@ -3082,6 +3092,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             glDisable(GL_BLEND);
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
             check_gl_error("postfx ssgi composite");
+            gpu_profiler_scope_end(fx->profiler);
         }
 
         postfx_run_atmosphere(fx, canvas_fbo, aux_written, taa_resolving, projection, view);

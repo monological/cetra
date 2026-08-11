@@ -726,11 +726,13 @@ void render_current_scene(Engine* engine) {
     // invocation's camera and viewport -- probe-capture faces re-enter here
     // with their own view/projection, so each face gets a correct grid.
     if (engine->light_cluster) {
+        gpu_profiler_scope_begin(engine->gpu_profiler, "cluster build");
         GLint cluster_viewport[4];
         glGetIntegerv(GL_VIEWPORT, cluster_viewport);
         light_cluster_build_and_upload(engine->light_cluster, scene, *view, *projection,
                                        cluster_viewport[2], cluster_viewport[3], camera->near_clip,
                                        camera->far_clip);
+        gpu_profiler_scope_end(engine->gpu_profiler);
     }
 
     // ViewParams (spec 10.1): republished per invocation for the same reason the
@@ -815,7 +817,9 @@ void render_current_scene(Engine* engine) {
     // modes would march, advance the wind clock, and discard the result.
     // Unjittered projection, the aerial/froxel discipline.
     if (scene->sky && !engine->capturing && render_mode == RENDER_MODE_PBR) {
+        gpu_profiler_scope_begin(engine->gpu_profiler, "cloud march");
         sky_clouds_march(scene->sky, engine, *view, *projection);
+        gpu_profiler_scope_end(engine->gpu_profiler);
     }
 
     // Track current program and material to avoid redundant state changes
@@ -879,6 +883,7 @@ void render_current_scene(Engine* engine) {
     if (scene->shadow_catcher && scene->shadow_system && scene->shadow_system->enabled &&
         scene->shadow_system->directional_count > 0 && engine->shadow_catcher_program &&
         engine->catcher_vao) {
+        gpu_profiler_scope_begin(engine->gpu_profiler, "shadow catcher");
         ShaderProgram* catcher = engine->shadow_catcher_program;
         ShadowSystem* ss = scene->shadow_system;
 
@@ -959,6 +964,7 @@ void render_current_scene(Engine* engine) {
         glPolygonOffset(0.0f, 0.0f);
         if (cull_was_enabled)
             glEnable(GL_CULL_FACE);
+        gpu_profiler_scope_end(engine->gpu_profiler);
     }
 
     // Refraction source: resolve the opaque scene (including the skybox
@@ -967,7 +973,9 @@ void render_current_scene(Engine* engine) {
     // (debug modes skip the skybox and never reach the shader branch).
     if (scene->transmissive_mesh_count > 0 && render_mode == RENDER_MODE_PBR &&
         engine->refraction_enabled) {
+        gpu_profiler_scope_begin(engine->gpu_profiler, "refraction resolve");
         engine->scene_color_this_frame = engine_resolve_opaque_color(engine);
+        gpu_profiler_scope_end(engine->gpu_profiler);
     }
 
     // Pass 2: blend-mode (translucent) and transmissive meshes, composited
