@@ -2108,9 +2108,8 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EngineRenderFunc render
         engine->delta_time = current_time - engine->last_frame_time;
         engine->last_frame_time = current_time;
 
-        // Retires the ring slot this frame is about to reuse. Before any scope
-        // opens, and before the resolution sync below, which can rebuild every
-        // render target and is worth seeing in the table.
+        // Retires the ring slot this frame is about to reuse, before any scope
+        // opens.
         gpu_profiler_begin_frame(engine->gpu_profiler);
 
         engine->frame_count++;

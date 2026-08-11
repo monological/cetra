@@ -1049,7 +1049,8 @@ void render_current_scene(Engine* engine) {
             live_particles = particle_system_live_count(scene->particle_systems[i]);
     }
     if (live_particles > 0) {
-        // One scope for every system, not one per system: the row is the pass.
+        // One scope covering all systems, not one per system: the row is the
+        // pass, not the emitter count.
         gpu_profiler_scope_begin(engine->gpu_profiler, "particles");
         GLuint particle_depth = engine_resolve_scene_depth(engine);
         glDepthMask(GL_FALSE);
