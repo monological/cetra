@@ -1537,8 +1537,8 @@ static void copy_aiMatrix_to_mat4(const struct aiMatrix4x4* from, mat4 to) {
 // worker pool; skeletons/bones are extracted synchronously here regardless.
 static SceneNode* process_ai_node(Scene* scene, struct aiNode* ai_node,
                                   const struct aiScene* ai_scene, TexturePool* tex_pool,
-                                  AsyncLoader* loader, Material** mat_cache) {
-    if (!scene || !ai_node || !ai_scene || !tex_pool || !loader || !mat_cache)
+                                  AsyncLoader* loader, Material** mat_cache, Mesh** mesh_cache) {
+    if (!scene || !ai_node || !ai_scene || !tex_pool || !loader || !mat_cache || !mesh_cache)
         return NULL;
 
     SceneNode* node = create_node();
@@ -1553,6 +1553,20 @@ static SceneNode* process_ai_node(Scene* scene, struct aiNode* ai_node,
     for (unsigned int i = 0; i < node->mesh_count; i++) {
         unsigned int meshIndex = ai_node->mMeshes[i];
         struct aiMesh* ai_mesh = ai_scene->mMeshes[meshIndex];
+
+        // Geometry, deduped by aiMesh index, exactly as the material below is
+        // deduped by aiMaterial index. A file that points two nodes at one
+        // aiMesh is SAYING they are the same geometry, and building it twice
+        // discards that -- along with a second copy of every vertex array and a
+        // second VAO. The shared pointer is also what a batcher keys on: two
+        // nodes drawing one Mesh* is the definition of an instance.
+        //
+        // Only the geometry is shared. The node's transform still varies, and
+        // so does everything derived from it.
+        if (mesh_cache[meshIndex]) {
+            node->meshes[i] = mesh_ref(mesh_cache[meshIndex]);
+            continue;
+        }
 
         Mesh* mesh = create_mesh();
         process_ai_mesh(mesh, ai_mesh);
@@ -1596,6 +1610,7 @@ static SceneNode* process_ai_node(Scene* scene, struct aiNode* ai_node,
         }
 
         calculate_aabb(mesh);
+        mesh_cache[meshIndex] = mesh;
         node->meshes[i] = mesh;
     }
 
@@ -1604,7 +1619,8 @@ static SceneNode* process_ai_node(Scene* scene, struct aiNode* ai_node,
     node->children = malloc(sizeof(SceneNode*) * node->children_count);
     for (unsigned int i = 0; i < node->children_count; i++) {
         node->children[i] =
-            process_ai_node(scene, ai_node->mChildren[i], ai_scene, tex_pool, loader, mat_cache);
+            process_ai_node(scene, ai_node->mChildren[i], ai_scene, tex_pool, loader, mat_cache,
+                            mesh_cache);
         if (node->children[i]) {
             node->children[i]->parent = node;
         }
@@ -1729,20 +1745,35 @@ Scene* create_scene_from_model_path(const char* path, const char* texture_direct
     process_ai_cameras(ai_scene, &scene->cameras, &scene->camera_count);
 
     // Process the root node (this also extracts skeletons and bone weights).
-    // mat_cache dedups the cetra Material per aiMaterial index across the tree;
-    // at least one slot so calloc(0) can't be mistaken for OOM.
+    // The two caches dedup the cetra Material per aiMaterial index and the cetra
+    // Mesh per aiMesh index across the whole tree; at least one slot each so
+    // calloc(0) can't be mistaken for OOM.
     Material** mat_cache =
         calloc(ai_scene->mNumMaterials ? ai_scene->mNumMaterials : 1, sizeof(Material*));
-    if (!mat_cache) {
-        log_error("import: failed to allocate material cache (%u materials)",
-                  ai_scene->mNumMaterials);
+    Mesh** mesh_cache = calloc(ai_scene->mNumMeshes ? ai_scene->mNumMeshes : 1, sizeof(Mesh*));
+    if (!mat_cache || !mesh_cache) {
+        log_error("import: failed to allocate import caches (%u materials, %u meshes)",
+                  ai_scene->mNumMaterials, ai_scene->mNumMeshes);
+        free(mat_cache);
+        free(mesh_cache);
         free_scene(scene);
         aiReleaseImport(ai_scene);
         return NULL;
     }
-    scene->root_node =
-        process_ai_node(scene, ai_scene->mRootNode, ai_scene, tex_pool, loader, mat_cache);
+    scene->root_node = process_ai_node(scene, ai_scene->mRootNode, ai_scene, tex_pool, loader,
+                                       mat_cache, mesh_cache);
+
+    size_t shared = 0;
+    for (unsigned int i = 0; i < ai_scene->mNumMeshes; ++i) {
+        if (mesh_cache[i] && mesh_cache[i]->refs > 1)
+            shared++;
+    }
+    if (shared > 0)
+        log_info("Import: %u distinct meshes, %zu of them shared by more than one node",
+                 ai_scene->mNumMeshes, shared);
+
     free(mat_cache);
+    free(mesh_cache);
 
     associate_cameras_and_lights_with_nodes(scene->root_node, scene);
 

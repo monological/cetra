@@ -38,6 +38,13 @@ Mesh* create_mesh() {
     mesh->vertex_count = 0;
     mesh->index_count = 0;
 
+    // One share, held by whoever asked for the mesh. That makes the single-node
+    // case identical to the ownership this had before refcounting, including
+    // leaking a mesh nobody ever attached to a node.
+    mesh->refs = 1;
+    static unsigned next_id = 1;
+    mesh->id = next_id++;
+
     // Generate and bind the Vertex Array Object (vao)
     glGenVertexArrays(1, &mesh->vao);
     glBindVertexArray(mesh->vao);
@@ -78,9 +85,17 @@ Mesh* create_mesh() {
     return mesh;
 }
 
+Mesh* mesh_ref(Mesh* mesh) {
+    if (mesh)
+        mesh->refs++;
+    return mesh;
+}
+
 void free_mesh(Mesh* mesh) {
     if (!mesh)
         return;
+    if (--mesh->refs > 0)
+        return; // another node still draws this geometry
 
     // Free OpenGL buffers
     glDeleteBuffers(1, &mesh->vbo);
