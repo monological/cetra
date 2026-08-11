@@ -16,6 +16,7 @@
 #include "cetra/scene.h"
 #include "cetra/util.h"
 #include "cetra/engine.h"
+#include "cetra/gpu_profiler.h"
 #include "cetra/import.h"
 #include "cetra/render.h"
 #include "cetra/transform.h"
@@ -83,6 +84,8 @@ static void print_usage(const char* prog) {
     fprintf(stderr,
             "      --translucent-shadows  Partial shadows from hair/glass/foliage casters\n");
     fprintf(stderr, "      --no-translucent-shadows  Force them off\n");
+    fprintf(stderr,
+            "      --gpu-profile  Per-pass GPU timing: a HUD table, and one on stdout at exit\n");
     fprintf(stderr, "      --msm              Moment shadow maps: one prefiltered tap, no PCSS\n");
     fprintf(stderr, "      --msm-size <n>     Moment cascade edge (default: 1024)\n");
     fprintf(stderr, "      --msm-blur <f>     Moment blur spacing in texels (default: 0, off)\n");
@@ -498,6 +501,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->translucent_shadows = 1;
         } else if (strcmp(argv[i], "--no-translucent-shadows") == 0) {
             args->no_translucent_shadows = 1;
+        } else if (strcmp(argv[i], "--gpu-profile") == 0) {
+            args->gpu_profile = 1;
         } else if (strcmp(argv[i], "--msm") == 0) {
             args->msm = 1;
         } else if (strcmp(argv[i], "--msm-size") == 0) {
@@ -1735,6 +1740,8 @@ int main(int argc, char** argv) {
     Engine* engine = create_engine("Cetra Engine", args.width, args.height);
 
     set_engine_headless(engine, args.headless != 0);
+    // Before init_engine, which is where the profiler is built.
+    set_engine_gpu_profile(engine, args.gpu_profile != 0);
     engine->headless_jitter = args.headless_jitter != 0;
     set_engine_screenshot_path(engine, args.screenshot_path);
     set_engine_screenshot_every(engine, args.screenshot_every);
@@ -2821,6 +2828,12 @@ int main(int argc, char** argv) {
 
     scale_schedule = &args;
     engine_run(engine, render_frame_update, render_scene_callback);
+
+    // After the last frame and before free_engine, so the GL context is still
+    // alive. Headless has no HUD to read, and this is the only way the numbers
+    // reach a spec or a gate.
+    if (args.gpu_profile)
+        gpu_profiler_report(engine->gpu_profiler);
 
     printf("Cleaning up...\n");
     if (anim_state) {

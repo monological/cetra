@@ -25,6 +25,7 @@ typedef enum CameraMode {
 
 struct Engine;
 struct LightClusterContext;
+struct GPUProfiler;
 struct Ubo;
 
 typedef void (*CursorPositionCallback)(struct Engine* engine, double xpos, double ypos);
@@ -285,6 +286,12 @@ typedef struct Engine {
     // HDR post-processing (bloom + tone mapping)
     PostFX* postfx;
 
+    // Per-pass GPU timing (spec 11.27). NULL unless gpu_profile asked for it
+    // before init_engine, and every entry point no-ops on NULL, so an ordinary
+    // run issues no query calls at all.
+    struct GPUProfiler* gpu_profiler;
+    bool gpu_profile; // true = build the profiler (set before init_engine)
+
     // The camera's exposure -- read by render.c when it publishes ViewParams,
     // and by PostFX, which runs the metering that feeds it. On the Engine rather
     // than inside PostFX because it defines the working space the SCENE passes
@@ -330,6 +337,9 @@ void free_engine(Engine* engine);
 
 int init_engine(Engine* engine);
 void set_engine_headless(Engine* engine, bool headless);
+// Build the per-pass GPU profiler. Must be called before init_engine, which is
+// where the profiler is created; setting it afterwards does nothing.
+void set_engine_gpu_profile(Engine* engine, bool enabled);
 // Supersampling factor (clamped to [1, 2]). Safe before init_engine (stored)
 // or at runtime, where the render targets are rebuilt at the next frame top.
 void set_engine_ss_scale(Engine* engine, int ss_scale);

@@ -2291,6 +2291,114 @@ def run_translucent_shadow_gate(workdir):
     return failures
 
 
+GPU_MIN_ROWS = 4              # named passes the table must carry
+GPU_SUM_TOLERANCE = 0.60      # sum of rows vs the whole-frame scope, GL backend
+GPU_SCALE_DROP = 0.20         # render-res passes must shed this much at half scale
+
+
+def _gpu_table(workdir, tag, extra):
+    """--gpu-profile once; returns {pass name: ms} and the backend string.
+
+    Long enough to close a latch window (the profiler publishes on a 0.5s
+    bucket), or the table comes back empty and every arm below reads as a
+    failure of the renderer rather than of the run length.
+    """
+    out = os.path.join(workdir, f"gpu_{tag}.ppm")
+    cmd = [RENDER, "-m", os.path.join(ROOT, "assets", "dir_shadow_fixture.cscn"),
+           "--gpu-profile", "-x", "-f", "90", "-W", "800", "-H", "600",
+           "--no-auto-exposure", "-E", "1.0", "-S", out] + extra
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0:
+        return None, None
+    rows, backend, inside = {}, None, False
+    for line in (r.stdout + r.stderr).splitlines():
+        if line.startswith("===== GPU TIMING"):
+            backend = line[line.find("(") + 1:line.rfind(")")]
+            inside = True
+            continue
+        if line.startswith("===== END GPU TIMING"):
+            inside = False
+            continue
+        if inside and line.rstrip().endswith(" ms"):
+            name = line[:line.rfind(" ", 0, line.rfind(" ", 0, line.rfind(" ")))].strip()
+            try:
+                rows[name] = float(line.rsplit(" ", 2)[-2])
+            except ValueError:
+                continue
+    return rows, backend
+
+
+def run_gpu_profile_gate(workdir):
+    base, backend = _gpu_table(workdir, "base", [])
+    if base is None:
+        print("  gpu          ERROR while rendering with --gpu-profile")
+        return ["gpu"]
+    failures = []
+
+    ok = backend is not None and backend != ""
+    print(f"  gpu-backend  {'PASS' if ok else 'FAIL'}  reports '{backend}' "
+          f"(the fallback inflates totals; a table that does not say which is unreadable)")
+    if not ok:
+        failures.append("gpu-backend")
+
+    named = {k: v for k, v in base.items() if k != "TOTAL"}
+    ok = len(named) >= GPU_MIN_ROWS
+    print(f"  gpu-rows     {'PASS' if ok else 'FAIL'}  {len(named)} named passes "
+          f"(want >= {GPU_MIN_ROWS})")
+    if not ok:
+        failures.append("gpu-rows")
+
+    total = sum(named.values())
+    ok = total > 0.0 and all(v >= 0.0 for v in named.values())
+    print(f"  gpu-nonzero  {'PASS' if ok else 'FAIL'}  total {total:.3f} ms over {len(named)} "
+          f"passes (a driver that accepts queries and reports zeros looks exactly like one "
+          f"that works, until here)")
+    if not ok:
+        failures.append("gpu-nonzero")
+
+    # The inverse arm. A pass that is off must have NO row, and turning it on
+    # must produce one that costs something -- without this, every arm above
+    # passes against a profiler printing plausible constants.
+    dof_on, _ = _gpu_table(workdir, "dof", ["--dof", "--dof-focus", "6"])
+    if dof_on is None:
+        print("  gpu-dof      ERROR while rendering with --dof")
+        return failures + ["gpu-dof"]
+    absent = "dof" not in named
+    present = dof_on.get("dof", 0.0) > 0.0
+    ok = absent and present
+    print(f"  gpu-dof      {'PASS' if ok else 'FAIL'}  dof absent without the flag: {absent}; "
+          f"{dof_on.get('dof', 0.0):.3f} ms with it (want > 0)")
+    if not ok:
+        failures.append("gpu-dof")
+
+    # Attached to real work, not to the frame counter: the passes that run at
+    # render resolution have to get cheaper when there are fewer pixels.
+    half, _ = _gpu_table(workdir, "half", ["--taa", "--headless-jitter", "--render-scale", "0.5"])
+    if half is None:
+        print("  gpu-scale    ERROR while rendering at --render-scale 0.5")
+        return failures + ["gpu-scale"]
+    # Presence is asserted before the ratio. Reading a missing row as 0 ms would
+    # score a vanished pass as a 100% saving, which is how this arm first
+    # "passed" against a table that timed nothing at all.
+    before = named.get("opaque")
+    after = half.get("opaque")
+    if before is None or after is None or before <= 0.0:
+        ok = False
+        drop = 0.0
+        print(f"  gpu-scale    FAIL  no opaque row to compare "
+              f"(full={before}, half={after}); the pass was not timed, not cheap")
+    else:
+        drop = (before - after) / before
+        ok = drop >= GPU_SCALE_DROP
+        print(f"  gpu-scale    {'PASS' if ok else 'FAIL'}  opaque {before:.3f} -> {after:.3f} ms "
+              f"at half render scale, {drop * 100.0:.0f}% off "
+              f"(want >= {GPU_SCALE_DROP * 100.0:.0f}%)")
+    if not ok:
+        failures.append("gpu-scale")
+
+    return failures
+
+
 def run_translucent_offpath_gate(workdir):
     """Off is byte-identical; ON is byte-identical too where nothing is
     translucent; and the flag must visibly DO something where something is.
@@ -2510,6 +2618,8 @@ def main():
         failures += run_translucent_shadow_gate(workdir)
         print("translucent shadows (off-path identity and the inverse arm):")
         failures += run_translucent_offpath_gate(workdir)
+        print("gpu timing (per-pass queries, spec 11.27 / E4):")
+        failures += run_gpu_profile_gate(workdir)
         print("import:")
         failures += run_range_gate()
         failures += run_fbx_unit_gate()

@@ -23,6 +23,7 @@
 #include "common.h"
 #include "engine.h"
 #include "render.h"
+#include "gpu_profiler.h"
 #include "light_cluster.h"
 #include "util.h"
 #include "shadow.h"
@@ -833,9 +834,11 @@ void render_current_scene(Engine* engine) {
     engine->scene_color_this_frame = false;
     engine->oit_this_frame = false; // set true below if the OIT accumulate pass runs
     engine->moments_this_frame = false;
+    gpu_profiler_scope_begin(engine->gpu_profiler, "opaque");
     _render_scene_iterative(engine, scene, root_node, camera, *view, draw_projection,
                             render_mode, &current_program, &current_material, &frustum, false,
                             OIT_SUBPASS_NONE);
+    gpu_profiler_scope_end(engine->gpu_profiler);
     engine_set_scene_draw_buffers(engine, false);
 
     // Skybox after opaques (depth-tested against them at the far plane).
@@ -844,6 +847,7 @@ void render_current_scene(Engine* engine) {
     // With the probe debug view on, the probe content replaces the skybox
     // (environment-only probes have no capture; show their prefilter source).
     if (scene->ibl && scene->ibl->precomputed && render_mode == RENDER_MODE_PBR) {
+        gpu_profiler_scope_begin(engine->gpu_profiler, "skybox");
         if (scene->probe && scene->probe->debug_background) {
             render_skybox_cubemap(scene->ibl,
                                   scene->probe->cubemap ? scene->probe->cubemap
@@ -859,6 +863,7 @@ void render_current_scene(Engine* engine) {
                           scene->skybox_ground_projection, scene->skybox_gp_radius,
                           scene->skybox_gp_height);
         }
+        gpu_profiler_scope_end(engine->gpu_profiler);
     }
 
     // Shadow catcher: darken the environment floor where the model blocks the
@@ -993,9 +998,11 @@ void render_current_scene(Engine* engine) {
             // path exactly as it was.
             bool moments_ready = false;
             if (engine->oit_moments_enabled && engine_begin_moment_pass(engine)) {
+                gpu_profiler_scope_begin(engine->gpu_profiler, "oit moments");
                 _render_scene_iterative(engine, scene, root_node, camera, *view, draw_projection,
                                         render_mode, &current_program, &current_material, &frustum,
                                         true, OIT_SUBPASS_MOMENTS);
+                gpu_profiler_scope_end(engine->gpu_profiler);
                 engine_end_moment_pass(engine);
                 moments_ready = true;
                 current_program = 0;
@@ -1008,17 +1015,21 @@ void render_current_scene(Engine* engine) {
                 // so moments announced without an accumulate behind them would
                 // mis-composite the whole frame.
                 engine->moments_this_frame = moments_ready;
+                gpu_profiler_scope_begin(engine->gpu_profiler, "oit accumulate");
                 _render_scene_iterative(engine, scene, root_node, camera, *view, draw_projection,
                                         render_mode, &current_program, &current_material, &frustum,
                                         true, OIT_SUBPASS_ACCUMULATE);
+                gpu_profiler_scope_end(engine->gpu_profiler);
                 engine_end_oit_pass(engine);
             }
             current_program = 0;
             current_material = NULL;
         }
+        gpu_profiler_scope_begin(engine->gpu_profiler, "transparent");
         _render_scene_iterative(engine, scene, root_node, camera, *view, draw_projection,
                                 render_mode, &current_program, &current_material, &frustum, true,
                                 OIT_SUBPASS_NONE);
+        gpu_profiler_scope_end(engine->gpu_profiler);
         glDepthMask(GL_TRUE);
     }
 
@@ -1038,6 +1049,8 @@ void render_current_scene(Engine* engine) {
             live_particles = particle_system_live_count(scene->particle_systems[i]);
     }
     if (live_particles > 0) {
+        // One scope for every system, not one per system: the row is the pass.
+        gpu_profiler_scope_begin(engine->gpu_profiler, "particles");
         GLuint particle_depth = engine_resolve_scene_depth(engine);
         glDepthMask(GL_FALSE);
         glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA); // premultiplied
@@ -1050,6 +1063,7 @@ void render_current_scene(Engine* engine) {
             particle_system_render(scene->particle_systems[i], &pctx);
         glDepthMask(GL_TRUE);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); // restore engine baseline
+        gpu_profiler_scope_end(engine->gpu_profiler);
     }
 
     // Light overlay last, so the X-ray lines sit on top of the finished scene

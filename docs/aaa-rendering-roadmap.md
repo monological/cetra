@@ -812,7 +812,12 @@ narrows that noise source at the same time.
 course) — the exposure section.
 **Depends on:** nothing. **Wall 1:** unaffected.
 
-### E4. GPU timer queries + per-pass HUD — Effort S
+### E4. GPU timer queries + per-pass HUD — Effort S — **DONE (spec 11.27)**
+**Wall 3 removed.** `GL_TIME_ELAPSED` works on the GL-over-Metal driver; `GL_TIMESTAMP` returns 0,
+so scopes are flat. First measurement at 1600x1200 with fog/DoF/SSGI: **opaque 24.3 ms of a
+40.9 ms frame**, SSR 7.1 ms, GTAO 2.0 ms, tonemap 0.55 ms. The forward pass dominates the whole
+post chain, which points the next perf work at Wall 2 rather than at pixels.
+
 **Wall 3.** `glGenQueries` around each named pass, a ring of N-frame-deep results to avoid the stall,
 and an ImGui table. Cheap, and it is the instrument every later perf claim depends on — including the
 question this roadmap has never been able to answer: what does the full post chain actually cost,

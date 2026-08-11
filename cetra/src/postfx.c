@@ -2,6 +2,7 @@
 #include <stdlib.h>
 
 #include "postfx.h"
+#include "gpu_profiler.h"
 #include "texture.h"
 #include "uniform.h"
 #include "util.h"
@@ -2863,6 +2864,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         bool ao_accum_ran = false;
         bool gi_accum_ran = false;
         if (gtao_active) {
+            gpu_profiler_scope_begin(fx->profiler, "gtao sweep");
             // Raw occlusion at half res. GTAO reads linear view-Z from the aux
             // buffer's .z (unit 0) and reconstructs positions from it -- the
             // non-linear depth buffer staircased flat surfaces into AO banding.
@@ -2900,6 +2902,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             uniform_set_int(fx->gtao_program->uniforms, "gatherGI", ssgi_active ? 1 : 0);
             uniform_set_int(fx->gtao_program->uniforms, "gatherSpec", gather_spec ? 1 : 0);
             draw_fullscreen_quad(fx->quad_vao);
+            gpu_profiler_scope_end(fx->profiler);
 
             if (fx->ssao_enabled) {
                 // Accumulate the RAW sweep, then blur the accumulation -- the
@@ -3027,9 +3030,12 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         if (!gi_accum_ran)
             fx->ssgi_history.valid = false;
 
-        if (ssr_active)
+        if (ssr_active) {
+            gpu_profiler_scope_begin(fx->profiler, "ssr");
             postfx_run_ssr(fx, canvas_fbo, canvas_tex, have_normals, taa_resolving, projection,
                            inv_projection, view);
+            gpu_profiler_scope_end(fx->profiler);
+        }
 
         if (ssgi_active && albedo_written) {
             // Add one bounce of indirect diffuse (albedo x gathered GI x intensity)
@@ -3052,27 +3058,37 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             check_gl_error("postfx ssgi composite");
         }
 
+        gpu_profiler_scope_begin(fx->profiler, "atmosphere");
         postfx_run_atmosphere(fx, canvas_fbo, aux_written, taa_resolving, projection, view);
+        gpu_profiler_scope_end(fx->profiler);
 
         // Separable SSS: blur the resolved skin-diffuse buffer and fold
         // blur - diffuse into the canvas, softening diffuse while specular
         // stays sharp. Runs on the composited scene, before motion blur / DoF.
         // Skipped when SSS is off (attachment 4 unwritten); a no-op (adds 0) on
         // scenes with no skin material.
-        if (sss_written && fx->sss_ready)
+        if (sss_written && fx->sss_ready) {
+            gpu_profiler_scope_begin(fx->profiler, "sss");
             postfx_run_sss(fx, canvas_fbo, projection, taa_resolving);
+            gpu_profiler_scope_end(fx->profiler);
+        }
 
         // Motion blur (4.15): velocity-driven blur on the linear HDR scene,
         // blitted back into the canvas so DoF/bloom/tonemap see it. Needs the
         // aux velocity buffer; skipped (frame untouched) when off or unavailable.
-        if (fx->motion_blur_enabled && aux_written && postfx_ensure_motion_blur_targets(fx))
+        if (fx->motion_blur_enabled && aux_written && postfx_ensure_motion_blur_targets(fx)) {
+            gpu_profiler_scope_begin(fx->profiler, "motion blur");
             postfx_run_motion_blur(fx, canvas_fbo, canvas_tex);
+            gpu_profiler_scope_end(fx->profiler);
+        }
 
         // Depth of field replaces the scene that bloom and tone mapping read.
         // scene_tex is the sharp canvas unless DoF ran into fx->dof_texture.
         GLuint scene_tex = canvas_tex;
         if (dof_active && postfx_ensure_dof_targets(fx)) {
+            gpu_profiler_scope_begin(fx->profiler, "dof");
             postfx_run_dof(fx, canvas_tex, projection);
+            gpu_profiler_scope_end(fx->profiler);
             scene_tex = fx->dof_texture;
         }
 
@@ -3094,6 +3110,12 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         // way round everywhere else, so it does here too.
         const bool metering = fx->exposure && fx->exposure->automatic;
         if (metering) {
+            // Its own scope, and the number it reports is not comparable with
+            // the others: the blocking read below drains the pipeline, so this
+            // row carries the whole frame's outstanding GPU work rather than
+            // the cost of a 64x64 draw. Left attributable here instead of
+            // smeared into whichever neighbour it was folded in with.
+            gpu_profiler_scope_begin(fx->profiler, "exposure meter (drains)");
             glBindFramebuffer(GL_FRAMEBUFFER, fx->lum_fbo);
             glViewport(0, 0, LUM_MEASURE_SIZE, LUM_MEASURE_SIZE);
             glUseProgram(fx->lum_measure_program->id);
@@ -3110,6 +3132,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             glGetTexImage(GL_TEXTURE_2D, LUM_MEASURE_TOP_MIP, GL_RED, GL_FLOAT, &measured);
             exposure_submit_measurement(fx->exposure, measured);
             check_gl_error("postfx auto exposure");
+            gpu_profiler_scope_end(fx->profiler);
         } else {
             // Drop the history, or re-enabling auto-exposure would pre-expose by
             // a value metered under whatever was on screen before.
@@ -3125,9 +3148,14 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         const bool flare_wanted = fx->flare_enabled && fx->flare_strength > 0.0f;
         bool flare_active = false;
         if (fx->bloom_enabled || flare_wanted) {
+            gpu_profiler_scope_begin(fx->profiler, "bloom pyramid");
             postfx_run_bloom(fx, scene_tex);
-            if (flare_wanted)
+            gpu_profiler_scope_end(fx->profiler);
+            if (flare_wanted) {
+                gpu_profiler_scope_begin(fx->profiler, "lens flare");
                 flare_active = postfx_run_flare(fx);
+                gpu_profiler_scope_end(fx->profiler);
+            }
         }
 
         // Composite + tone map into the target framebuffer. The quad runs at
@@ -3135,6 +3163,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         // output pixel linearly averages its 2x2 source block (the SSAA
         // resolve). Tone mapping the averaged linear radiance is correct; a 1:1
         // pass-through when supersampling is off.
+        gpu_profiler_scope_begin(fx->profiler, "tonemap + finishing");
         glBindFramebuffer(GL_FRAMEBUFFER, target_fbo);
         glViewport(0, 0, fx->out_width, fx->out_height);
         glUseProgram(fx->tonemap_program->id);
@@ -3230,6 +3259,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         uniform_set_int(tm, "ditherEnabled", fx->dither_enabled ? 1 : 0);
         uniform_set_float(tm, "ditherStrength", fx->dither_strength);
         draw_fullscreen_quad(fx->quad_vao);
+        gpu_profiler_scope_end(fx->profiler);
 
         glUseProgram(0);
         glActiveTexture(GL_TEXTURE0);

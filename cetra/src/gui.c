@@ -9,6 +9,7 @@
 #include "gui.h"
 
 #include "engine.h"
+#include "gpu_profiler.h"
 #include "ext/log.h"
 #include "gi_volume.h"
 #include "light.h"
@@ -839,6 +840,31 @@ static void _engine_gui_panel(Engine* engine) {
                    camera->look_at[0], camera->look_at[1], camera->look_at[2], camera->up_vector[0],
                    camera->up_vector[1], camera->up_vector[2]);
             fflush(stdout);
+        }
+    }
+
+    // Per-pass GPU timing (spec 11.27). Present only when --gpu-profile built
+    // the profiler; there is nothing to show and nothing to say otherwise.
+    if (engine->gpu_profiler && igCollapsingHeader_TreeNodeFlags("GPU Timing", 0)) {
+        // Which backend produced these. The fallback drains the pipeline at
+        // every scope edge, so its totals are inflated and are not comparable
+        // with a GL-query run -- a reader who cannot tell them apart will
+        // draw the wrong conclusion from the same-looking table.
+        igTextDisabled("%s", gpu_profiler_backend(engine->gpu_profiler));
+        if (igBeginTable("gpu_timing", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp,
+                         (ImVec2){0, 0}, 0.0f)) {
+            int rows = gpu_profiler_row_count(engine->gpu_profiler);
+            for (int row = 0; row < rows; row++) {
+                igTableNextColumn();
+                igText("%s", gpu_profiler_row_name(engine->gpu_profiler, row));
+                igTableNextColumn();
+                igText("%.3f ms", gpu_profiler_row_ms(engine->gpu_profiler, row));
+            }
+            igTableNextColumn();
+            igText("TOTAL");
+            igTableNextColumn();
+            igText("%.3f ms", gpu_profiler_total_ms(engine->gpu_profiler));
+            igEndTable();
         }
     }
 

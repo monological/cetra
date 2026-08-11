@@ -8,6 +8,8 @@
 #include "exposure.h"
 #include "program.h"
 
+struct GPUProfiler;
+
 // Max distinct per-material SSS scatter profiles per scene. C-side only: the
 // gather takes one profile per walk, so no shader mirrors this array.
 #define MAX_SSS_PROFILES 8
@@ -504,6 +506,12 @@ typedef struct PostFX {
     bool spec_ready;
     GLuint spec_fbo, spec_texture;
     ShaderProgram* spec_occ_composite_program;
+
+    // Borrowed, owned by the Engine, NULL unless --gpu-profile (spec 11.27).
+    // Held here rather than threaded through postfx_run's signature because the
+    // pass functions below it are static and numerous; the alternative was a
+    // parameter on every one of them.
+    struct GPUProfiler* profiler;
 } PostFX;
 
 // width/height are the display (downsample-target) size; ss_scale supersamples
