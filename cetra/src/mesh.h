@@ -72,16 +72,16 @@ typedef struct Mesh {
     struct Skeleton* skeleton; // Shared skeleton pointer (not owned)
     bool is_skinned;
 
-    // How many SceneNodes hold this mesh. One node is the ordinary case and
-    // behaves exactly as it did when the pointer was owned outright; more than
-    // one is what an importer produces for geometry the file says is shared,
-    // and what lets a batcher key on the pointer.
+    // Outstanding shares. One is the ordinary case and behaves exactly as the
+    // pointer did when it was owned outright, including for a mesh no node ever
+    // takes; more than one is geometry a file says is shared.
     int refs;
 
     // Stable within a run, assigned in creation order. A sort or batch key has
     // to be this rather than the pointer: allocation addresses are not stable
     // across runs, and an order that varies run to run varies the pixels where
-    // coplanar surfaces meet.
+    // coplanar surfaces meet. Unsynchronised, which is safe only because
+    // create_mesh issues GL calls and so runs on the context thread.
     unsigned id;
 
 } Mesh;
@@ -91,9 +91,8 @@ typedef struct Mesh {
  */
 Mesh* create_mesh();
 
-// Claim a share of an existing mesh, for a second node that draws the same
-// geometry. Returns the mesh, so a caller can write `node->meshes[i] =
-// mesh_ref(cached)`.
+// Claim a share of an existing mesh, for a second holder that draws the same
+// geometry. Returns the mesh, so it can be used in place.
 Mesh* mesh_ref(Mesh* mesh);
 
 // Release one share. The mesh and its GL buffers go only when the last holder

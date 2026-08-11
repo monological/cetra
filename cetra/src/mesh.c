@@ -16,6 +16,10 @@
 #include "mesh.h"
 #include "util.h"
 
+// Process-lifetime, unsynchronised: create_mesh issues GL calls, so it only
+// ever runs on the context thread.
+static unsigned g_next_mesh_id = 1;
+
 Mesh* create_mesh() {
     Mesh* mesh = malloc(sizeof(Mesh));
     if (!mesh) {
@@ -42,8 +46,7 @@ Mesh* create_mesh() {
     // case identical to the ownership this had before refcounting, including
     // leaking a mesh nobody ever attached to a node.
     mesh->refs = 1;
-    static unsigned next_id = 1;
-    mesh->id = next_id++;
+    mesh->id = g_next_mesh_id++;
 
     // Generate and bind the Vertex Array Object (vao)
     glGenVertexArrays(1, &mesh->vao);

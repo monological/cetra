@@ -2391,15 +2391,27 @@ def _report_tables(text):
     return out
 
 
+_IMPORT_DEDUP = re.compile(r"Import: (\d+) meshes built, (\d+) shared references")
+
+
 def _profiled_run(workdir, tag, extra, screenshot=None, fixture=GPU_FIXTURE, size=("800", "600")):
-    """One profiled render. Returns the parsed tables, or None on failure."""
+    """One profiled render. Returns the parsed tables, or None on failure.
+
+    The tables carry an "import" entry as well, because the dedup counters are
+    logged rather than tabled and an arm that wanted them would otherwise pay
+    for a whole extra render to see one line.
+    """
     out = screenshot or os.path.join(workdir, f"gpu_{tag}.ppm")
     r = subprocess.run(_gpu_cmd(out, extra, True, fixture, size), capture_output=True, text=True)
     if r.returncode != 0 or not os.path.exists(out):
         print(f"  profiler     ERROR {tag} exited {r.returncode}: "
               f"{(r.stdout + r.stderr).strip()[-300:]}")
         return None
-    return _report_tables(r.stdout + r.stderr)
+    text = r.stdout + r.stderr
+    tables = _report_tables(text)
+    m = _IMPORT_DEDUP.search(text)
+    tables["import"] = {"built": int(m.group(1)), "shared": int(m.group(2))} if m else None
+    return tables
 
 
 def _gpu_table(workdir, tag, extra, screenshot=None):
@@ -2608,6 +2620,26 @@ def run_submission_gate(workdir):
           f"header matches: {header_ok}")
     if not ok:
         failures.append("submit-parse")
+
+    # --- dedup-count: the importer built each mesh once ---------------------
+    # Both terms come from the mechanism, not from the file: a cache that stops
+    # hitting reports every node reference as a build and zero shares, which is
+    # the dead-feature failure. The expectations are read from the glTF, so
+    # regenerating the fixture cannot leave the arm asserting a stale shape.
+    with open(os.path.join(ROOT, "assets", "instancing_fixture.gltf")) as f:
+        want_built = len(json.load(f)["meshes"])
+    imported = base.get("import")
+    if imported is None:
+        print("  dedup-count  FAIL  no import line to read")
+        failures.append("dedup-count")
+    else:
+        want_shared = mesh_nodes - want_built
+        ok = imported["built"] == want_built and imported["shared"] == want_shared
+        print(f"  dedup-count  {'PASS' if ok else 'FAIL'}  {imported['built']} built "
+              f"(want {want_built}, the glTF's mesh count) and {imported['shared']} shared "
+              f"(want {want_shared} = {mesh_nodes} nodes - {want_built} meshes)")
+        if not ok:
+            failures.append("dedup-count")
 
     # --- submit-sum: two counters incremented on opposite branches ----------
     # Evaluated per pass and on the far run below, so the culled term is not
