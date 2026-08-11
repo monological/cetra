@@ -13,6 +13,7 @@
 #include "mesh.h"
 #include "engine.h"
 #include "shadow.h"
+#include "gpu_profiler.h"
 #include "texture.h"
 #include "render.h"
 #include "animation.h"
@@ -1332,6 +1333,8 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     // solid shadow they have always cast rather than losing it for nothing.
     ss->tsm_live = shadow_tsm_prepare(ss, engine);
 
+    if (ss->directional_count > 0)
+        gpu_profiler_scope_begin(engine->gpu_profiler, "shadow cascades");
     for (size_t i = 0; i < ss->directional_count; ++i) {
         const ShadowCasterSet set = (ss->tsm_live && i < TSM_SLOTS)
                                         ? SHADOW_CASTERS_OPAQUE_TSM
@@ -1343,11 +1346,14 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
                               &current_program, set);
         }
     }
+    if (ss->directional_count > 0)
+        gpu_profiler_scope_end(engine->gpu_profiler);
 
     // Punctual maps (for surface shadows + the volumetric beam), one layer per
     // caster. Reuses the allocation (a no-op once it is large enough), the
     // bound depth program, and the depth policy set above.
     if (punctual_needed > 0 && init_punctual_shadow_array(ss, punctual_needed) == 0) {
+        gpu_profiler_scope_begin(engine->gpu_profiler, "shadow punctual");
         for (size_t i = 0; i < scene->light_count; ++i) {
             Light* light = scene->lights[i];
             if (!light || light->shadow_layer < 0)
@@ -1373,6 +1379,7 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
                 ss->punctual_layer_count = layer + 1;
             }
         }
+        gpu_profiler_scope_end(engine->gpu_profiler);
     }
 
     glDisable(GL_POLYGON_OFFSET_FILL);
@@ -1383,8 +1390,20 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     // too rather than the resolve querying back a value this function already
     // holds. It disables cull for its own draws, so the cull face this pass set
     // and never saved cannot reach it either.
-    ss->msm_built = shadow_build_msm(ss, engine);
-    ss->tsm_built = ss->tsm_live && shadow_build_tsm(ss, engine, scene);
+    if (ss->msm_enabled) {
+        gpu_profiler_scope_begin(engine->gpu_profiler, "shadow msm");
+        ss->msm_built = shadow_build_msm(ss, engine);
+        gpu_profiler_scope_end(engine->gpu_profiler);
+    } else {
+        ss->msm_built = shadow_build_msm(ss, engine);
+    }
+    if (ss->tsm_live) {
+        gpu_profiler_scope_begin(engine->gpu_profiler, "shadow tsm");
+        ss->tsm_built = shadow_build_tsm(ss, engine, scene);
+        gpu_profiler_scope_end(engine->gpu_profiler);
+    } else {
+        ss->tsm_built = false;
+    }
 
     glViewport(prev_viewport[0], prev_viewport[1], prev_viewport[2], prev_viewport[3]);
 }

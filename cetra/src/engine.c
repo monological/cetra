@@ -813,8 +813,6 @@ int init_engine(Engine* engine) {
     // instrument should not cost the frame it was meant to measure.
     if (engine->gpu_profile) {
         engine->gpu_profiler = create_gpu_profiler();
-        if (engine->gpu_profiler)
-            log_info("GPU profiler: %s", gpu_profiler_backend(engine->gpu_profiler));
     }
 
     engine->brdf_lut = ibl_bake_brdf_lut(engine);
@@ -880,8 +878,7 @@ int init_engine(Engine* engine) {
     }
 
     postfx_set_exposure(engine->postfx, &engine->exposure);
-    // PostFX times its own passes and has no Engine pointer to reach through.
-    engine->postfx->profiler = engine->gpu_profiler;
+    postfx_set_gpu_profiler(engine->postfx, engine->gpu_profiler);
 
     // Record what init just built at, or the first frame-top sync would see
     // zeroes, decide the sizes had changed, and rebuild everything once for
@@ -1689,9 +1686,16 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode) {
 
     // GUI last, after tone mapping. gui_render_frame self-gates on
     // gui_frame_active, so it no-ops when no panel/overlay is enabled.
-    gpu_profiler_scope_begin(engine->gpu_profiler, "gui");
-    gui_render_frame(engine);
-    gpu_profiler_scope_end(engine->gpu_profiler);
+    // Gated on the same latch the callee checks, so a headless run gets no row
+    // rather than a 0.000 ms one. A row for a pass that did not run breaks the
+    // contract the gates lean on: absent means off.
+    if (engine->gui_frame_active) {
+        gpu_profiler_scope_begin(engine->gpu_profiler, "gui");
+        gui_render_frame(engine);
+        gpu_profiler_scope_end(engine->gpu_profiler);
+    } else {
+        gui_render_frame(engine);
+    }
 }
 
 void engine_set_scene_draw_buffers(const Engine* engine, bool with_gbuffer) {
@@ -2129,6 +2133,10 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EngineRenderFunc render
             // core while a window sits minimized (GLFW's iconify pattern).
             // Headless has no events to wake on, so it polls and relies on the
             // frame limit to end the run.
+            // Closes the frame the begin above opened. Skipping it would stall
+            // the ring index and the latch for as long as the window stays
+            // minimized, so the table would freeze rather than empty.
+            gpu_profiler_end_frame(engine->gpu_profiler, engine->delta_time);
             _engine_advance_frame(engine);
             if (engine->headless)
                 glfwPollEvents();

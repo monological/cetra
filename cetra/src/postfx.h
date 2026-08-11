@@ -507,10 +507,7 @@ typedef struct PostFX {
     GLuint spec_fbo, spec_texture;
     ShaderProgram* spec_occ_composite_program;
 
-    // Borrowed, owned by the Engine, NULL unless --gpu-profile (spec 11.27).
-    // Held here rather than threaded through postfx_run's signature because the
-    // pass functions below it are static and numerous; the alternative was a
-    // parameter on every one of them.
+    // Borrowed, owned by the Engine. NULL means no pass here is timed.
     struct GPUProfiler* profiler;
 } PostFX;
 
@@ -548,6 +545,9 @@ void free_postfx(PostFX* fx);
 // chain reads camera settings and the adaptation key from it, and writes each
 // frame's metered luminance back through exposure_set_adapted_luminance.
 void postfx_set_exposure(PostFX* fx, Exposure* exposure);
+// Borrowed, same shape as the exposure above: Engine-owned, PostFX-reads. NULL
+// leaves every pass here untimed.
+void postfx_set_gpu_profiler(PostFX* fx, struct GPUProfiler* profiler);
 
 // Per-material SSS scatter profiles. The app resets the table when it configures
 // a scene's skin materials, then adds one profile per distinct skin material

@@ -814,9 +814,14 @@ course) — the exposure section.
 
 ### E4. GPU timer queries + per-pass HUD — Effort S — **DONE (spec 11.27)**
 **Wall 3 removed.** `GL_TIME_ELAPSED` works on the GL-over-Metal driver; `GL_TIMESTAMP` returns 0,
-so scopes are flat. First measurement at 1600x1200 with fog/DoF/SSGI: **opaque 24.3 ms of a
-40.9 ms frame**, SSR 7.1 ms, GTAO 2.0 ms, tonemap 0.55 ms. The forward pass dominates the whole
-post chain, which points the next perf work at Wall 2 rather than at pixels.
+so scopes are flat. At 1600x1200 with fog/DoF/SSGI/TAA: **opaque 10.1 ms, SSR 8.3, atmosphere 4.2,
+DoF 2.5, TAA 1.9, GTAO 1.9, bloom 1.0, tonemap 0.5 — 30.5 ms timed against a 54.7 ms wall frame.**
+The post chain at 20.3 ms is larger than the forward pass, and SSR alone is within 20% of it.
+
+An earlier draft of this entry read "opaque 24.3 ms of a 40.9 ms frame … which points the next perf
+work at Wall 2 rather than at pixels". That denominator was a sum over eight rows with ~21 passes
+unscoped, SSGI among them. **Withdrawn** — the numbers above reverse it, and no track ordering is
+claimed from them here.
 
 **Wall 3.** `glGenQueries` around each named pass, a ring of N-frame-deep results to avoid the stall,
 and an ImGui table. Cheap, and it is the instrument every later perf claim depends on — including the

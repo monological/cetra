@@ -1140,6 +1140,14 @@ void scene_capture_faces(Engine* engine, struct IBLResources* ibl, const vec3 po
     if (!keep_depth && !ibl)
         return;
 
+    // Below every early return, because a suspend that leaks is a profiler that
+    // silently times nothing for the rest of the run. Six re-entries into
+    // render_current_scene follow, each opening the same scope names the frame
+    // itself uses; timing them would file a 256-pixel cube face under the row
+    // that means the main pass. This is the one place the renderer re-renders
+    // the world, so it is the one place that has to say so.
+    gpu_profiler_suspend(engine->gpu_profiler);
+
     // Save everything the capture substitutes
     mat4 saved_view, saved_projection, saved_view_proj, saved_prev_view_proj;
     glm_mat4_copy(engine->view_matrix, saved_view);
@@ -1262,6 +1270,8 @@ void scene_capture_faces(Engine* engine, struct IBLResources* ibl, const vec3 po
         glBlitFramebuffer(0, 0, ss_size, ss_size, 0, 0, face_size, face_size, GL_COLOR_BUFFER_BIT,
                           GL_LINEAR);
     }
+
+    gpu_profiler_resume(engine->gpu_profiler);
 
     glDeleteFramebuffers(1, &face_fbo);
     if (ss_tex)

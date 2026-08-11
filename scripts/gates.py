@@ -21,6 +21,7 @@ The rule: a gate that pins exposure cannot see a space-mixing bug.
 import argparse
 import json
 import math
+import re
 import os
 from itertools import groupby
 import shutil
@@ -2291,110 +2292,178 @@ def run_translucent_shadow_gate(workdir):
     return failures
 
 
-GPU_MIN_ROWS = 4              # named passes the table must carry
-GPU_SUM_TOLERANCE = 0.60      # sum of rows vs the whole-frame scope, GL backend
+# Passes asserted BY NAME rather than by a count. A threshold drifts with the
+# scope list and cannot say which pass vanished; the defect this catches -- the
+# whole post chain writing through a NULL profiler -- left exactly three rows
+# standing, which any count low enough to be safe would have cleared.
+GPU_REQUIRED_ROWS = frozenset(
+    {"shadows", "opaque", "gtao sweep", "ssr", "bloom pyramid", "tonemap + finishing"})
+GPU_MIN_POSITIVE = 4          # rows that must be strictly > 0, not merely present
+GPU_SUM_MIN = 0.30            # TIMED must be at least this fraction of FRAME
 GPU_SCALE_DROP = 0.20         # render-res passes must shed this much at half scale
 
 
-def _gpu_table(workdir, tag, extra):
-    """--gpu-profile once; returns {pass name: ms} and the backend string.
+# The report's row format is the assertion surface, so a shifted format has to
+# report as a named FAIL rather than as missing rows -- the arms below would
+# otherwise blame the renderer for a parser change. Anchored on the " ms"
+# suffix; the non-greedy name cannot swallow the number.
+_GPU_ROW = re.compile(r"^(.*?)\s+(-?\d+\.\d+) ms$")
 
-    Long enough to close a latch window (the profiler publishes on a 0.5s
+
+def _gpu_table(workdir, tag, extra, screenshot=None):
+    """--gpu-profile once. Returns (rows, unparsed) or (None, None) on failure.
+
+    Run long enough to close a latch window (the profiler publishes on a 0.5s
     bucket), or the table comes back empty and every arm below reads as a
     failure of the renderer rather than of the run length.
     """
-    out = os.path.join(workdir, f"gpu_{tag}.ppm")
+    out = screenshot or os.path.join(workdir, f"gpu_{tag}.ppm")
     cmd = [RENDER, "-m", os.path.join(ROOT, "assets", "dir_shadow_fixture.cscn"),
            "--gpu-profile", "-x", "-f", "90", "-W", "800", "-H", "600",
            "--no-auto-exposure", "-E", "1.0", "-S", out] + extra
     r = subprocess.run(cmd, capture_output=True, text=True)
-    if r.returncode != 0:
+    if r.returncode != 0 or not os.path.exists(out):
+        print(f"  gpu          ERROR {tag} exited {r.returncode}: "
+              f"{(r.stdout + r.stderr).strip()[-300:]}")
         return None, None
-    rows, backend, inside = {}, None, False
+    rows, unparsed, inside = {}, 0, False
     for line in (r.stdout + r.stderr).splitlines():
         if line.startswith("===== GPU TIMING"):
-            backend = line[line.find("(") + 1:line.rfind(")")]
             inside = True
             continue
         if line.startswith("===== END GPU TIMING"):
             inside = False
             continue
-        if inside and line.rstrip().endswith(" ms"):
-            name = line[:line.rfind(" ", 0, line.rfind(" ", 0, line.rfind(" ")))].strip()
-            try:
-                rows[name] = float(line.rsplit(" ", 2)[-2])
-            except ValueError:
-                continue
-    return rows, backend
+        if not inside or not line.strip():
+            continue
+        m = _GPU_ROW.match(line.rstrip())
+        if m:
+            rows[m.group(1).strip()] = float(m.group(2))
+        elif line.strip() != "no passes timed":
+            unparsed += 1
+    return rows, unparsed
 
 
 def run_gpu_profile_gate(workdir):
-    base, backend = _gpu_table(workdir, "base", [])
+    fixture = os.path.join(ROOT, "assets", "dir_shadow_fixture.cscn")
+    if not os.path.exists(fixture):
+        print("  gpu          SKIP  (missing dir_shadow_fixture.cscn)")
+        return []
+
+    on_ppm = os.path.join(workdir, "gpu_on.ppm")
+    base, unparsed = _gpu_table(workdir, "base", [], screenshot=on_ppm)
     if base is None:
-        print("  gpu          ERROR while rendering with --gpu-profile")
         return ["gpu"]
     failures = []
 
-    ok = backend is not None and backend != ""
-    print(f"  gpu-backend  {'PASS' if ok else 'FAIL'}  reports '{backend}' "
-          f"(the fallback inflates totals; a table that does not say which is unreadable)")
+    ok = unparsed == 0
+    print(f"  gpu-parse    {'PASS' if ok else 'FAIL'}  {unparsed} unreadable rows "
+          f"(a shifted report format must fail here, not as missing passes below)")
     if not ok:
-        failures.append("gpu-backend")
+        failures.append("gpu-parse")
 
-    named = {k: v for k, v in base.items() if k != "TOTAL"}
-    ok = len(named) >= GPU_MIN_ROWS
-    print(f"  gpu-rows     {'PASS' if ok else 'FAIL'}  {len(named)} named passes "
-          f"(want >= {GPU_MIN_ROWS})")
+    named = {k: v for k, v in base.items() if k not in ("TIMED", "FRAME (wall)")}
+
+    # By name, not by count: a count cannot say WHICH pass vanished, and the
+    # real defect left three rows standing.
+    missing = sorted(GPU_REQUIRED_ROWS - set(named))
+    ok = not missing
+    print(f"  gpu-rows     {'PASS' if ok else 'FAIL'}  {len(named)} passes; "
+          f"{'none missing' if ok else 'MISSING ' + ', '.join(missing)}")
     if not ok:
         failures.append("gpu-rows")
 
-    total = sum(named.values())
-    ok = total > 0.0 and all(v >= 0.0 for v in named.values())
-    print(f"  gpu-nonzero  {'PASS' if ok else 'FAIL'}  total {total:.3f} ms over {len(named)} "
-          f"passes (a driver that accepts queries and reports zeros looks exactly like one "
-          f"that works, until here)")
+    # Strictly positive and finite. "total > 0" passed on a single nonzero row,
+    # and a driver that reports zeros is the thing this arm exists for.
+    positive = [v for v in named.values() if v > 0.0]
+    finite = all(math.isfinite(v) for v in named.values())
+    ok = len(positive) >= GPU_MIN_POSITIVE and finite
+    print(f"  gpu-nonzero  {'PASS' if ok else 'FAIL'}  {len(positive)} of {len(named)} passes "
+          f"above zero, all finite: {finite} (want >= {GPU_MIN_POSITIVE} positive; a driver "
+          f"that accepts queries and measures nothing looks identical until here)")
     if not ok:
         failures.append("gpu-nonzero")
+
+    # TIMED against the wall-clock ceiling. Their difference also carries CPU
+    # time and GPU idle, so this is a loose bound on how much GPU work no scope
+    # covers -- loose is still the only thing standing between the table and a
+    # third of the frame going unnamed.
+    timed, frame = base.get("TIMED"), base.get("FRAME (wall)")
+    if timed is None or frame is None or frame <= 0.0:
+        ok = False
+        print(f"  gpu-sum      FAIL  report carries no TIMED/FRAME pair (timed={timed}, "
+              f"frame={frame})")
+    else:
+        ok = timed >= GPU_SUM_MIN * frame
+        print(f"  gpu-sum      {'PASS' if ok else 'FAIL'}  TIMED {timed:.3f} ms is "
+              f"{timed / frame * 100.0:.0f}% of the {frame:.3f} ms frame "
+              f"(want >= {GPU_SUM_MIN * 100.0:.0f}%)")
+    if not ok:
+        failures.append("gpu-sum")
+
+    # The claim the goldens cannot make: they run WITHOUT the flag, so they say
+    # nothing about whether wrapping every pass in a query moves a pixel.
+    off_ppm = os.path.join(workdir, "gpu_off.ppm")
+    cmd = [RENDER, "-m", fixture, "-x", "-f", "90", "-W", "800", "-H", "600",
+           "--no-auto-exposure", "-E", "1.0", "-S", off_ppm]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0 or not os.path.exists(off_ppm):
+        print("  gpu-off      ERROR while rendering without the flag")
+        failures.append("gpu-off")
+    else:
+        ae, _ = compare(on_ppm, off_ppm)
+        ok = ae == 0
+        print(f"  gpu-off      {'PASS' if ok else 'FAIL'}  {ae} px between profiled and "
+              f"unprofiled (want exactly 0: the instrument must not move what it measures)")
+        if not ok:
+            failures.append("gpu-off")
 
     # The inverse arm. A pass that is off must have NO row, and turning it on
     # must produce one that costs something -- without this, every arm above
     # passes against a profiler printing plausible constants.
     dof_on, _ = _gpu_table(workdir, "dof", ["--dof", "--dof-focus", "6"])
     if dof_on is None:
-        print("  gpu-dof      ERROR while rendering with --dof")
-        return failures + ["gpu-dof"]
-    absent = "dof" not in named
-    present = dof_on.get("dof", 0.0) > 0.0
-    ok = absent and present
-    print(f"  gpu-dof      {'PASS' if ok else 'FAIL'}  dof absent without the flag: {absent}; "
-          f"{dof_on.get('dof', 0.0):.3f} ms with it (want > 0)")
-    if not ok:
         failures.append("gpu-dof")
-
-    # Attached to real work, not to the frame counter: the passes that run at
-    # render resolution have to get cheaper when there are fewer pixels.
-    half, _ = _gpu_table(workdir, "half", ["--taa", "--headless-jitter", "--render-scale", "0.5"])
-    if half is None:
-        print("  gpu-scale    ERROR while rendering at --render-scale 0.5")
-        return failures + ["gpu-scale"]
-    # Presence is asserted before the ratio. Reading a missing row as 0 ms would
-    # score a vanished pass as a 100% saving, which is how this arm first
-    # "passed" against a table that timed nothing at all.
-    before = named.get("opaque")
-    after = half.get("opaque")
-    if before is None or after is None or before <= 0.0:
-        ok = False
-        drop = 0.0
-        print(f"  gpu-scale    FAIL  no opaque row to compare "
-              f"(full={before}, half={after}); the pass was not timed, not cheap")
     else:
-        drop = (before - after) / before
-        ok = drop >= GPU_SCALE_DROP
-        print(f"  gpu-scale    {'PASS' if ok else 'FAIL'}  opaque {before:.3f} -> {after:.3f} ms "
-              f"at half render scale, {drop * 100.0:.0f}% off "
-              f"(want >= {GPU_SCALE_DROP * 100.0:.0f}%)")
-    if not ok:
+        absent = "dof" not in named
+        present = dof_on.get("dof", 0.0) > 0.0
+        ok = absent and present
+        print(f"  gpu-dof      {'PASS' if ok else 'FAIL'}  dof absent without the flag: "
+              f"{absent}; {dof_on.get('dof', 0.0):.3f} ms with it (want > 0)")
+        if not ok:
+            failures.append("gpu-dof")
+
+    # Attached to real work, not to the frame counter. Both runs carry --taa
+    # --headless-jitter so the only difference is the pixel count: TAA jitters
+    # the projection the opaque pass draws with, and a control that changes
+    # three things cannot attribute the delta to one of them.
+    taa = ["--taa", "--headless-jitter"]
+    full, _ = _gpu_table(workdir, "full", taa + ["--render-scale", "1.0"])
+    half, _ = _gpu_table(workdir, "half", taa + ["--render-scale", "0.5"])
+    # A second full-scale run, to say what run-to-run variance is before
+    # claiming a drop is real. Timings are noisier than pixels, and this tree
+    # requires the floor be measured rather than assumed.
+    full2, _ = _gpu_table(workdir, "full2", taa + ["--render-scale", "1.0"])
+    if full is None or half is None or full2 is None:
         failures.append("gpu-scale")
+    else:
+        # Presence before ratio. A missing row read as 0 ms scores a vanished
+        # pass as a 100% saving.
+        before, after, repeat = full.get("opaque"), half.get("opaque"), full2.get("opaque")
+        if before is None or after is None or repeat is None or before <= 0.0:
+            print(f"  gpu-scale    FAIL  no opaque row to compare (full={before}, half={after}, "
+                  f"repeat={repeat}); the pass was not timed, not cheap")
+            failures.append("gpu-scale")
+        else:
+            noise = abs(before - repeat) / before
+            drop = (before - after) / before
+            ok = drop >= GPU_SCALE_DROP and noise < GPU_SCALE_DROP
+            print(f"  gpu-scale    {'PASS' if ok else 'FAIL'}  opaque {before:.3f} -> "
+                  f"{after:.3f} ms at half scale, {drop * 100.0:.0f}% off "
+                  f"(want >= {GPU_SCALE_DROP * 100.0:.0f}%), against a "
+                  f"{noise * 100.0:.0f}% run-to-run floor")
+            if not ok:
+                failures.append("gpu-scale")
 
     return failures
 

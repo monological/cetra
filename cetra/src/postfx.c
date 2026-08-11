@@ -1485,6 +1485,12 @@ void postfx_set_exposure(PostFX* fx, Exposure* exposure) {
     fx->exposure = exposure;
 }
 
+void postfx_set_gpu_profiler(PostFX* fx, struct GPUProfiler* profiler) {
+    if (!fx)
+        return;
+    fx->profiler = profiler;
+}
+
 static GLuint run_temporal_accum(PostFX* fx, ShaderProgram* prog, PingPong* pp, int w, int h,
                                  GLuint current_tex, float feedback);
 
@@ -2349,6 +2355,10 @@ static void postfx_run_atmosphere(PostFX* fx, GLuint canvas_fbo, bool aux_writte
     const bool aerial_on = fx->aerial_volume != 0;
     if (!aux_written || (!fog_on && !aerial_on))
         return;
+    // Inside the callee, below its early return: this function is a no-op on
+    // most frames, and a scope at the call site would file a 0.000 ms row for
+    // every one of them. Absent has to mean off.
+    gpu_profiler_scope_begin(fx->profiler, "atmosphere");
 
     // Before the volume: the inject pass reads what this writes.
     bool esm_on = fog_on && postfx_build_fog_esm(fx);
@@ -2428,6 +2438,7 @@ static void postfx_run_atmosphere(PostFX* fx, GLuint canvas_fbo, bool aux_writte
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
     check_gl_error("postfx atmosphere");
+    gpu_profiler_scope_end(fx->profiler);
 }
 
 // Screen-space reflections: rebuild the Hi-Z min-depth pyramid, march the
@@ -2684,15 +2695,20 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
 
     // Resolve MSAA HDR into the single-sample HDR texture (formats must
     // match exactly for a multisample blit, both are RGBA16F)
+    gpu_profiler_scope_begin(fx->profiler, "msaa resolve");
     glBindFramebuffer(GL_READ_FRAMEBUFFER, msaa_fbo);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fx->hdr_fbo);
     glBlitFramebuffer(0, 0, fx->width, fx->height, 0, 0, fx->width, fx->height, GL_COLOR_BUFFER_BIT,
                       GL_NEAREST);
+    gpu_profiler_scope_end(fx->profiler);
 
     // OIT: composite the accumulated transparent layer over the resolved opaque
     // scene before any downstream HDR pass (TAA/SSR/bloom/tonemap) reads it.
-    if (writes->oit_fbo != 0)
+    if (writes->oit_fbo != 0) {
+        gpu_profiler_scope_begin(fx->profiler, "oit composite");
         postfx_run_oit(fx, writes->oit_fbo, writes->oit_moment_weighted);
+        gpu_profiler_scope_end(fx->profiler);
+    }
 
     if (mode == POSTFX_TONEMAP_PASSTHROUGH) {
         // Display-ready frame: copy to the target, skipping bloom and tone
@@ -2719,6 +2735,11 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         // once, ahead of both consumers -- TAA reprojection reads the motion,
         // GTAO reconstructs positions from the linear Z. Hoisted out of the TAA
         // block so GTAO gets linear depth even when TAA is off.
+        // One scope for all five G-buffer resolves below rather than five rows
+        // of one blit each: they are the same operation on adjacent
+        // attachments, and which of them ran is already decided by the
+        // engine's per-frame write flags.
+        gpu_profiler_scope_begin(fx->profiler, "gbuffer resolves");
         if (aux_written) {
             resolve_color_attachment(msaa_fbo, GL_COLOR_ATTACHMENT2, fx->aux_fbo, fx->width,
                                      fx->height);
@@ -2766,6 +2787,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
                                      fx->height);
             check_gl_error("postfx normals resolve");
         }
+        gpu_profiler_scope_end(fx->profiler);
 
         // Contact shadows (spec 9.3): an AO-res depth march toward the key light,
         // blurred and temporally accumulated like GTAO, consumed by tonemap.
@@ -2780,6 +2802,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
                                fx->fog_light_count > 0 && fx->cs_distance > 0.0f &&
                                postfx_ensure_contact_targets(fx);
         if (cs_active) {
+            gpu_profiler_scope_begin(fx->profiler, "contact shadows");
             // World-space travel direction -> view-space TOWARD-light unit vector
             // (pbr uses L = -light->direction; fog_light_dir[0] is that direction).
             vec3 toward, cs_dir_vs;
@@ -2829,6 +2852,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
                 cs_accum_ran = true;
             }
             check_gl_error("postfx contact shadows");
+            gpu_profiler_scope_end(fx->profiler);
         }
         if (!cs_accum_ran)
             fx->cs_history.valid = false;
@@ -2973,6 +2997,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         // shimmering against its own occlusion. The one input this moves:
         // SSGI's gather now samples pre-TAA color (it rides the GTAO sweep).
         if (taa_resolving) {
+            gpu_profiler_scope_begin(fx->profiler, "taa resolve");
             // The history is post-res either way; only how this frame reaches
             // it differs -- TAAU reconstructs the smaller raster onto it, plain
             // TAA accumulates a same-size frame.
@@ -2992,6 +3017,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             glBlitFramebuffer(0, 0, fx->post_width, fx->post_height, 0, 0, fx->post_width,
                               fx->post_height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
             check_gl_error("postfx taa");
+            gpu_profiler_scope_end(fx->profiler);
         } else {
             // Bilinear magnify onto the post canvas: the fallback when TAA is
             // toggled off at a reduced scale -- nothing else would bring the
@@ -3058,9 +3084,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             check_gl_error("postfx ssgi composite");
         }
 
-        gpu_profiler_scope_begin(fx->profiler, "atmosphere");
         postfx_run_atmosphere(fx, canvas_fbo, aux_written, taa_resolving, projection, view);
-        gpu_profiler_scope_end(fx->profiler);
 
         // Separable SSS: blur the resolved skin-diffuse buffer and fold
         // blur - diffuse into the canvas, softening diffuse while specular

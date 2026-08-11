@@ -9,10 +9,9 @@
 // should give back two milliseconds.
 //
 // Scopes are FLAT -- non-overlapping, never nested. That is not a
-// simplification, it is the only thing available: GL_TIME_ELAPSED permits one
-// active query per target, and the primitive that does nest (GL_TIMESTAMP via
-// glQueryCounter) returns 0 on the GL-over-Metal driver this engine runs on.
-// Measured, in spec 11.27, before the design was fixed.
+// simplification: GL_TIME_ELAPSED permits one active query per target, and the
+// primitive that does nest (GL_TIMESTAMP via glQueryCounter) returns 0 on the
+// GL-over-Metal driver this engine runs on.
 //
 // Lives for the length of the engine and is created only when asked for, so a
 // run without the flag issues no query calls at all.
@@ -27,21 +26,38 @@
 
 typedef struct GPUProfiler GPUProfiler;
 
-// NULL on allocation failure. Picks its backend here: GL timer queries when the
-// driver has them, CPU timestamps with a glFinish per scope when it does not.
+// NULL on allocation failure, or when the driver has no timer queries at all.
 GPUProfiler* create_gpu_profiler(void);
 void free_gpu_profiler(GPUProfiler* profiler);
 
-// Frame bracket. dt is the frame's wall-clock delta in seconds, used only to
-// drive the display latch -- the timings themselves come from the GPU.
+// Frame bracket. Every frame that calls begin must call end, including frames
+// that render nothing: the ring index and the display latch both advance here,
+// and a frame that skips end freezes both.
+//
+// dt is the frame's wall-clock delta in seconds. It drives the latch, and it is
+// also reported alongside the pass rows as the denominator they should be read
+// against -- see gpu_profiler_frame_ms.
 void gpu_profiler_begin_frame(GPUProfiler* profiler);
 void gpu_profiler_end_frame(GPUProfiler* profiler, double dt);
 
 // name must be a string literal with static lifetime: it is stored by pointer
-// and never copied. Ending without a matching begin, or beginning twice, is
-// ignored rather than fatal -- a profiler must not be able to crash a frame.
+// and never copied.
+//
+// Two constraints, both enforced rather than assumed. A name may open at most
+// ONCE per frame -- a loop is one scope, not one per iteration -- and scopes may
+// not overlap. A begin that violates either is refused AND its matching end is
+// swallowed, so a caller cannot be desynchronised by the refusal; re-entering
+// the renderer inside an open scope (cubemap capture does this) is therefore
+// safe, it simply goes untimed.
 void gpu_profiler_scope_begin(GPUProfiler* profiler, const char* name);
 void gpu_profiler_scope_end(GPUProfiler* profiler);
+
+// Stop and restart timing around a nested re-render of the whole scene. Without
+// this the capture's passes would be refused one at a time and reported as a
+// wall of errors; with it they are skipped as a block and the frame's own rows
+// stay attributable.
+void gpu_profiler_suspend(GPUProfiler* profiler);
+void gpu_profiler_resume(GPUProfiler* profiler);
 
 // Latched results, stable for half a second at a time. A pass that did not run
 // during the window has no row, which is what lets the gates assert that a
@@ -49,13 +65,19 @@ void gpu_profiler_scope_end(GPUProfiler* profiler);
 int gpu_profiler_row_count(const GPUProfiler* profiler);
 const char* gpu_profiler_row_name(const GPUProfiler* profiler, int row);
 float gpu_profiler_row_ms(const GPUProfiler* profiler, int row);
+
+// Sum of the rows: GPU time this profiler ACCOUNTED FOR, not the frame.
 float gpu_profiler_total_ms(const GPUProfiler* profiler);
 
-// "GL timer queries" or "CPU+glFinish (SERIALIZED)". Printed everywhere the
-// numbers are: the fallback inflates totals by draining the pipeline at every
-// scope edge, so a reader who cannot tell which one produced a table can draw
-// the wrong conclusion from it.
-const char* gpu_profiler_backend(const GPUProfiler* profiler);
+// Mean wall-clock frame time over the same window, published beside the total
+// as the ceiling to read it against.
+//
+// The two are NOT the same quantity and their difference is not a single
+// thing: it is GPU work no scope covers, plus CPU time, plus whatever the GPU
+// spent idle. So a gap does not prove the instrumentation is incomplete -- but
+// a total that tracks the frame closely does bound how much can be missing,
+// and a bare total bounds nothing at all.
+float gpu_profiler_frame_ms(const GPUProfiler* profiler);
 
 // One table on stdout. For headless runs, where there is no HUD to read.
 // Non-const: a run too short to have latched a window is published here, so a
