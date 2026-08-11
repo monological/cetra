@@ -1447,9 +1447,15 @@ def _taa_churn(workdir, fixture, tag, extra):
     cmd = [RENDER, "-m", fixture, "-x", "-f", "120", "--no-auto-exposure", "-E", "1.0",
            "--taa", "--headless-jitter", "--screenshot-every", "30",
            "-W", "800", "-H", "600", "-S", base] + extra
-    subprocess.run(cmd, capture_output=True, text=True)
+    r = subprocess.run(cmd, capture_output=True, text=True)
     f90 = base[:-4] + "_000090.ppm"
     f120 = base[:-4] + "_000120.ppm"
+    # Both frames can exist and still be wrong if the run died between them, so
+    # the exit code is checked as well as the files.
+    if r.returncode != 0:
+        print(f"  churn        ERROR {tag} exited {r.returncode}: "
+              f"{(r.stdout + r.stderr).strip()[-300:]}")
+        return None
     if not (os.path.exists(f90) and os.path.exists(f120)):
         return None
     return compare(f90, f120)[0]
@@ -2307,7 +2313,17 @@ def run_translucent_offpath_gate(workdir):
             out = os.path.join(workdir, f"tsloff_{name}_{tag}.ppm")
             cmd = [RENDER, "-m", scene, "-x", "-f", "30", "--no-auto-exposure", "-E", "1.0",
                    "-S", out] + extra + flag
-            subprocess.run(cmd, capture_output=True, text=True)
+            r = subprocess.run(cmd, capture_output=True, text=True)
+            # The exit code, not just the file: a render that dies partway can
+            # leave a short or half-written PPM behind, and existence alone
+            # would read that as a successful frame and compare it. The child's
+            # output goes with the error, because a gate that says only "ERROR"
+            # gives the next person nothing to work from.
+            if r.returncode != 0:
+                print(f"  tsl-off      ERROR {name}/{tag} exited {r.returncode}: "
+                      f"{(r.stdout + r.stderr).strip()[-300:]}")
+                outs.append(None)
+                continue
             outs.append(out if os.path.exists(out) else None)
         if not all(outs):
             print(f"  tsl-off      ERROR while rendering {name}")
