@@ -211,9 +211,37 @@ Texture* create_texture() {
     texture->height = 0;
     texture->internal_format = 0;
     texture->data_format = 0;
+    // Matches texture_set_default_sampler_state, which is what every upload
+    // path applies -- so the recorded value describes the texture object even
+    // for the sites that never ask for anything else.
+    texture->wrap_s = GL_REPEAT;
+    texture->wrap_t = GL_REPEAT;
     texture->ref_count = 1;
 
     return texture;
+}
+
+void texture_apply_wrap(Texture* texture, GLenum wrap_s, GLenum wrap_t) {
+    if (!texture || texture->id == 0)
+        return;
+    if (texture->wrap_s == wrap_s && texture->wrap_t == wrap_t)
+        return;
+    // The pool caches by filepath, so one image can be reached by materials
+    // that disagree. Whoever asks last wins -- but say so, because the loser
+    // gets wrap it did not ask for and the symptom (edge bleed on one model
+    // and not another sharing the atlas) is not one anybody would guess at.
+    if (texture->wrap_s != GL_REPEAT || texture->wrap_t != GL_REPEAT)
+        log_warn("Texture %s re-wrapped (0x%x,0x%x -> 0x%x,0x%x); it is shared by materials that "
+                 "declare different wrap",
+                 texture->filepath ? texture->filepath : "?", texture->wrap_s, texture->wrap_t,
+                 wrap_s, wrap_t);
+
+    glBindTexture(GL_TEXTURE_2D, texture->id);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, (GLint)wrap_s);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, (GLint)wrap_t);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    texture->wrap_s = wrap_s;
+    texture->wrap_t = wrap_t;
 }
 
 void free_texture(Texture* texture) {

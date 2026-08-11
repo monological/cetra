@@ -19,6 +19,13 @@ typedef struct Texture {
     GLenum internal_format; // This is the format of the texture object in OpenGL (e.g., GL_RGB,
                             // GL_RGBA)
     GLenum data_format;     // This is the format of the texture data (e.g., GL_RGB, GL_RGBA)
+    // Wrap as the ASSET declared it, GL_REPEAT until something says otherwise.
+    // Recorded rather than write-only because the pool caches by filepath: two
+    // materials can reach the same image wanting different wrap, and the
+    // recorded value is what lets that be detected instead of silently
+    // last-one-wins.
+    GLenum wrap_s;
+    GLenum wrap_t;
 
     size_t ref_count; // Reference count for shared ownership
 
@@ -37,6 +44,12 @@ void set_texture_width(Texture* texture, int width);
 void set_texture_height(Texture* texture, int height);
 void set_texture_internal_format(Texture* texture, GLenum internal_format);
 void set_texture_data_format(Texture* texture, GLenum data_format);
+
+// Re-point an already-uploaded texture's wrap at what the asset asked for.
+// Separate from the upload because the upload runs on a worker and this is GL
+// state; a no-op when the wrap already matches, so the common REPEAT case
+// costs nothing.
+void texture_apply_wrap(Texture* texture, GLenum wrap_s, GLenum wrap_t);
 
 /*
  * Texture Pool

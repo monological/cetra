@@ -503,15 +503,39 @@ static Texture* load_embedded_texture(TexturePool* tex_pool, const struct aiScen
 /*
  * Async texture load callback context
  */
+// Assimp's wrap enum to GL's. Assimp reports per-axis modes for every format
+// that carries them; glTF's sampler.wrapS/wrapT arrive here directly.
+//
+// Decal maps to CLAMP_TO_BORDER, whose border colour defaults to transparent
+// black -- which is what "decal" means: outside the image is nothing, not the
+// edge texel smeared outward.
+static GLenum gl_wrap_from_assimp(enum aiTextureMapMode mode) {
+    switch (mode) {
+    case aiTextureMapMode_Clamp:
+        return GL_CLAMP_TO_EDGE;
+    case aiTextureMapMode_Mirror:
+        return GL_MIRRORED_REPEAT;
+    case aiTextureMapMode_Decal:
+        return GL_CLAMP_TO_BORDER;
+    default:
+        return GL_REPEAT;
+    }
+}
+
 typedef struct AsyncTexCallback {
     Material* material;
     void (*setter)(Material*, Texture*);
     const char* tex_type;
+    GLenum wrap_s;
+    GLenum wrap_t;
 } AsyncTexCallback;
 
 static void async_tex_callback(Texture* tex, void* user_data) {
     AsyncTexCallback* ctx = (AsyncTexCallback*)user_data;
     if (tex && ctx->material && ctx->setter) {
+        // Before the setter, so nothing can sample the texture with the
+        // upload's default wrap in the frame it arrives.
+        texture_apply_wrap(tex, ctx->wrap_s, ctx->wrap_t);
         ctx->setter(ctx->material, tex);
         // A late-arriving opacity map can flip the material to BLEND
         material_finalize_alpha_mode(ctx->material);
@@ -521,7 +545,7 @@ static void async_tex_callback(Texture* tex, void* user_data) {
 }
 
 static AsyncTexCallback* make_async_tex_ctx(Material* mat, void (*setter)(Material*, Texture*),
-                                            const char* tex_type) {
+                                            const char* tex_type, GLenum wrap_s, GLenum wrap_t) {
     AsyncTexCallback* ctx = malloc(sizeof(AsyncTexCallback));
     if (!ctx) {
         log_error("Failed to allocate AsyncTexCallback");
@@ -530,6 +554,8 @@ static AsyncTexCallback* make_async_tex_ctx(Material* mat, void (*setter)(Materi
     ctx->material = mat;
     ctx->setter = setter;
     ctx->tex_type = tex_type;
+    ctx->wrap_s = wrap_s;
+    ctx->wrap_t = wrap_t;
     return ctx;
 }
 
@@ -539,7 +565,8 @@ static AsyncTexCallback* make_async_tex_ctx(Material* mat, void (*setter)(Materi
 static void load_material_texture(Material* material, TexturePool* tex_pool,
                                   const struct aiScene* ai_scene, AsyncLoader* loader,
                                   const char* tex_path, bool is_srgb,
-                                  void (*setter)(Material*, Texture*), const char* tex_type_name) {
+                                  void (*setter)(Material*, Texture*), const char* tex_type_name,
+                                  GLenum wrap_s, GLenum wrap_t) {
     if (tex_path[0] == '*' && ai_scene) {
         int idx = atoi(tex_path + 1);
         const struct aiTexture* ai_tex =
@@ -548,7 +575,8 @@ static void load_material_texture(Material* material, TexturePool* tex_pool,
         if (ai_tex && ai_tex->mHeight == 0) {
             // Compressed embedded (PNG/JPG): decode on a worker like a file. For
             // a compressed aiTexture, mWidth is the byte size of pcData.
-            AsyncTexCallback* ctx = make_async_tex_ctx(material, setter, tex_type_name);
+            AsyncTexCallback* ctx =
+                make_async_tex_ctx(material, setter, tex_type_name, wrap_s, wrap_t);
             if (ctx) {
                 load_texture_from_memory_async(loader, tex_pool, tex_path,
                                                (const unsigned char*)ai_tex->pcData,
@@ -559,11 +587,13 @@ static void load_material_texture(Material* material, TexturePool* tex_pool,
             // Raw (uncompressed) embedded pixels: decode inline (rare).
             Texture* tex = load_embedded_texture(tex_pool, ai_scene, tex_path, is_srgb);
             if (tex) {
+                texture_apply_wrap(tex, wrap_s, wrap_t);
                 setter(material, tex);
             }
         }
     } else {
-        AsyncTexCallback* ctx = make_async_tex_ctx(material, setter, tex_type_name);
+        AsyncTexCallback* ctx =
+            make_async_tex_ctx(material, setter, tex_type_name, wrap_s, wrap_t);
         if (ctx) {
             load_texture_async(loader, tex_pool, tex_path, is_srgb, async_tex_callback, ctx);
         }
@@ -580,14 +610,26 @@ static Material* process_ai_material(struct aiMaterial* ai_mat, TexturePool* tex
     extract_material_properties(ai_mat, material);
 
     struct aiString str;
+    // Assimp fills both axes; seeded to Wrap so a format that reports nothing
+    // lands on the tiling default this engine used unconditionally before.
+    enum aiTextureMapMode mapmode[2];
+
+#define TSL_MAPMODE_RESET()                                                                        \
+    do {                                                                                           \
+        mapmode[0] = aiTextureMapMode_Wrap;                                                        \
+        mapmode[1] = aiTextureMapMode_Wrap;                                                        \
+    } while (0)
 
     // Load textures from the mapping table
     for (size_t i = 0; i < texture_mapping_count; i++) {
         const TextureMapping* mapping = &texture_mappings[i];
+        TSL_MAPMODE_RESET();
         if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, mapping->ai_type, 0, &str, NULL, NULL, NULL,
-                                               NULL, NULL, NULL)) {
+                                               NULL, mapmode, NULL)) {
             load_material_texture(material, tex_pool, ai_scene, loader, str.data, mapping->is_srgb,
-                                  mapping->setter, mapping->name);
+                                  mapping->setter, mapping->name,
+                                  gl_wrap_from_assimp(mapmode[0]),
+                                  gl_wrap_from_assimp(mapmode[1]));
         }
     }
 
@@ -598,35 +640,44 @@ static Material* process_ai_material(struct aiMaterial* ai_mat, TexturePool* tex
     // the SOURCE material, not the destination slot: table-row loads attach
     // asynchronously, so the slot is still empty here even when an explicit
     // AO row matched, and only the source says whether one exists.
+    TSL_MAPMODE_RESET();
     if (aiGetMaterialTextureCount(ai_mat, aiTextureType_AMBIENT_OCCLUSION) == 0 &&
         AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_LIGHTMAP, 0, &str, NULL, NULL,
-                                           NULL, NULL, NULL, NULL)) {
+                                           NULL, NULL, mapmode, NULL)) {
         load_material_texture(material, tex_pool, ai_scene, loader, str.data, false,
-                              set_material_ambient_occlusion_tex, "Occlusion(lightmap)");
+                              set_material_ambient_occlusion_tex, "Occlusion(lightmap)",
+                              gl_wrap_from_assimp(mapmode[0]), gl_wrap_from_assimp(mapmode[1]));
     }
 
     // Handle glTF combined metallic-roughness texture (uses same texture for both)
+    TSL_MAPMODE_RESET();
     if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_UNKNOWN, 0, &str, NULL, NULL, NULL,
-                                           NULL, NULL, NULL)) {
+                                           NULL, mapmode, NULL)) {
         // glTF often stores metallicRoughness as UNKNOWN type
         // Only use if we don't already have metalness/roughness textures
         if (!material->metalness_tex) {
             load_material_texture(material, tex_pool, ai_scene, loader, str.data, false,
-                                  set_material_metalness_tex, "MetallicRoughness(metalness)");
+                                  set_material_metalness_tex, "MetallicRoughness(metalness)",
+                                  gl_wrap_from_assimp(mapmode[0]), gl_wrap_from_assimp(mapmode[1]));
         }
         if (!material->roughness_tex) {
             load_material_texture(material, tex_pool, ai_scene, loader, str.data, false,
-                                  set_material_roughness_tex, "MetallicRoughness(roughness)");
+                                  set_material_roughness_tex, "MetallicRoughness(roughness)",
+                                  gl_wrap_from_assimp(mapmode[0]), gl_wrap_from_assimp(mapmode[1]));
         }
     }
 
     // Clearcoat normal at aiTextureType_CLEARCOAT index 2 (the index-0 table
     // can't reach it); linear normal data.
+    TSL_MAPMODE_RESET();
     if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_CLEARCOAT, 2, &str, NULL, NULL,
-                                           NULL, NULL, NULL, NULL)) {
+                                           NULL, NULL, mapmode, NULL)) {
         load_material_texture(material, tex_pool, ai_scene, loader, str.data, false,
-                              set_material_clearcoat_normal_tex, "ClearcoatNormal");
+                              set_material_clearcoat_normal_tex, "ClearcoatNormal",
+                              gl_wrap_from_assimp(mapmode[0]), gl_wrap_from_assimp(mapmode[1]));
     }
+
+#undef TSL_MAPMODE_RESET
 
     material_finalize_alpha_mode(material);
 
