@@ -2641,6 +2641,22 @@ def run_submission_gate(workdir):
         if not ok:
             failures.append("dedup-count")
 
+    # --- list-once: the graph is flattened once, not once per pass ----------
+    # Every pass now iterates one list, so a mesh is SEEN once per pass that
+    # wants its lane -- never four times in the camera passes as the old walks
+    # did. The fixture is all-opaque, so the camera side must see each mesh
+    # exactly once: the OIT and late passes have no lane to draw.
+    #
+    # Fails if a pass reverts to walking the graph, or if a lane filter stops
+    # filtering and every pass submits everything.
+    opaque_seen = counts.get("opaque", {}).get("meshes seen")
+    late = [p for p in ("oit moments", "oit accumulate", "transparent") if p in counts]
+    ok = opaque_seen == mesh_nodes and not late
+    print(f"  list-once    {'PASS' if ok else 'FAIL'}  opaque saw {opaque_seen} "
+          f"(want {mesh_nodes}, one per mesh node); late passes present: {late or 'none'}")
+    if not ok:
+        failures.append("list-once")
+
     # --- submit-sum: two counters incremented on opposite branches ----------
     # Evaluated per pass and on the far run below, so the culled term is not
     # always zero. On the base run the fixture is entirely in frustum by design,
@@ -2754,6 +2770,79 @@ def run_submission_gate(workdir):
             failures.append("cpu-attrib")
 
     return failures
+# ---------------------------------------------------------------------------
+# Draw-list identity (spec 11.28 Phase 3)
+#
+# The list replaced two scene-graph walkers, and its whole claim is that it
+# reproduces their submission ORDER. Order is visible three ways in this
+# renderer -- alpha-to-coverage dithering, the unsorted late pass under
+# --no-oit, and transmissive-over-transmissive blending -- so these arms render
+# scenes that exercise each and compare against the same build's own output.
+#
+# Self-verifying like every other gate here: no stored reference. What makes
+# them able to fail is that a reordering changes pixels in exactly the fixtures
+# chosen, and the goldens (baked from an older build) cannot see a reordering
+# that a rebake would silently absorb.
+LIST_FIXTURES = (
+    ("oit_cards_fixture.cscn", ["--no-oit"], "unsorted late pass, order fully visible"),
+    ("oit_sphere_fixture.gltf", [], "transmissive over transmissive"),
+    ("hair_fixture.cscn", [], "alpha-to-coverage dither"),
+)
+
+
+def run_draw_list_gate(workdir):
+    failures = []
+    for fixture, extra, why in LIST_FIXTURES:
+        path = os.path.join(ROOT, "assets", fixture)
+        if not os.path.exists(path):
+            print(f"  list-identity SKIP  (missing {fixture})")
+            continue
+        tag = fixture.rsplit(".", 1)[0]
+        a = os.path.join(workdir, f"list_{tag}_a.ppm")
+        b = os.path.join(workdir, f"list_{tag}_b.ppm")
+        err = render(path, a, extra)
+        if err is None:
+            err = render(path, b, extra)
+        if err is not None:
+            print(f"  list-identity ERROR {tag}: {err.strip()[-200:]}")
+            failures.append("list-identity")
+            continue
+        ae, pae = compare(a, b)
+        ok = ae == 0
+        print(f"  list-identity {'PASS' if ok else 'FAIL'}  {tag}: {ae} px "
+              f"(want 0; {why})")
+        if not ok:
+            failures.append("list-identity")
+
+    # --- oit-identity: the sub-passes draw the same set either way ----------
+    # OIT routing is the one place the lane filter has to disagree with itself
+    # between passes: with OIT on the blend lane goes to the accumulate and the
+    # late pass takes only transmissive; with it off the late pass takes both.
+    # Rendering the same fixture both ways and asserting they DIFFER is what
+    # proves the routing is live rather than collapsed to one branch.
+    fixture = os.path.join(ROOT, "assets", "oit_cards_fixture.cscn")
+    if not os.path.exists(fixture):
+        print("  oit-identity SKIP  (missing oit_cards_fixture.cscn)")
+        return failures
+    on = os.path.join(workdir, "list_oit_on.ppm")
+    off = os.path.join(workdir, "list_oit_off.ppm")
+    err = render(fixture, on, [])
+    if err is None:
+        err = render(fixture, off, ["--no-oit"])
+    if err is not None:
+        print(f"  oit-identity ERROR {err.strip()[-200:]}")
+        failures.append("oit-identity")
+    else:
+        ae, _ = compare(on, off)
+        ok = ae > 0
+        print(f"  oit-identity {'PASS' if ok else 'FAIL'}  {ae} px between OIT on and off "
+              f"(want > 0: equal means the lane routing collapsed to one path)")
+        if not ok:
+            failures.append("oit-identity")
+
+    return failures
+
+
 def run_translucent_offpath_gate(workdir):
     """Off is byte-identical; ON is byte-identical too where nothing is
     translucent; and the flag must visibly DO something where something is.
@@ -2977,6 +3066,8 @@ def main():
         failures += run_profiler_gate(workdir)
         print("submission (draw counts + the CPU column, spec 11.28 / E5):")
         failures += run_submission_gate(workdir)
+        print("draw list (submission order, spec 11.28 Phase 3):")
+        failures += run_draw_list_gate(workdir)
         print("import:")
         failures += run_range_gate()
         failures += run_fbx_unit_gate()

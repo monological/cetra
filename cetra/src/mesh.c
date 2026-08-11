@@ -14,6 +14,8 @@
 #include "ext/log.h"
 #include "material.h"
 #include "mesh.h"
+
+#include "draw_list.h"
 #include "util.h"
 
 // Process-lifetime, unsynchronised: create_mesh issues GL calls, so it only
@@ -99,6 +101,7 @@ void free_mesh(Mesh* mesh) {
         return;
     if (--mesh->refs > 0)
         return; // another node still draws this geometry
+    scene_graph_touched();
 
     // Free OpenGL buffers
     glDeleteBuffers(1, &mesh->vbo);
@@ -175,6 +178,9 @@ void calculate_aabb(Mesh* mesh) {
 void upload_mesh_buffers_to_gpu(Mesh* mesh) {
     if (!mesh)
         return;
+    // A mesh with no VAO is not drawable and the list refuses it, so the upload
+    // that makes it drawable has to invalidate.
+    scene_graph_touched();
 
     // Bind the Vertex Array Object (vao)
     glBindVertexArray(mesh->vao);

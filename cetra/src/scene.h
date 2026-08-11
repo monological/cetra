@@ -16,6 +16,7 @@
 #include "ibl.h"
 #include "probe.h"
 #include "animation.h"
+#include "draw_list.h"
 
 // Forward-declared so scene.h and particle_system.h never include each other
 // (particle_system.h forward-declares SceneNode in turn) -- avoids a cycle.
@@ -114,10 +115,16 @@ typedef struct Scene {
     ShaderProgram* xyz_shader_program;
     ShaderProgram* outlines_shader_program;
 
-    // Pre-allocated traversal stack (avoids per-frame malloc)
-    SceneNode** traversal_stack;
-    mat4* traversal_transforms; // Used by apply_transform_to_nodes
-    size_t traversal_stack_capacity;
+    // The graph flattened for drawing, rebuilt once a frame. Every pass reads
+    // it; nothing walks the graph to draw any more.
+    //
+    // Keyed on the frame index alone, and that is sufficient because the list
+    // is STRUCTURAL: it holds which meshes exist and which pass draws each, not
+    // where they are. Moving a node does not invalidate it -- the transform is
+    // read through the node at submit. Only adding or removing geometry, or
+    // changing a material's alpha mode, does, and both are seen at the next
+    // frame's rebuild.
+    DrawList draw_list;
     size_t transparent_mesh_count;  // Late-pass meshes seen in this frame's opaque pass
     size_t transmissive_mesh_count; // Subset with transmission > 0; gates the mid-frame
                                     // opaque-color resolve refraction samples from

@@ -277,9 +277,14 @@ static void _update_camera_uniforms(ShaderProgram* program, Camera* camera) {
     // built. Post passes reconstruct view-Z from the projection matrix instead.
 }
 
-static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Camera* camera,
+static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* item, Camera* camera,
                          mat4 view, mat4 projection, RenderMode render_mode, SubmitState* state,
-                         const Frustum* frustum, bool alpha_pass, OitSubpass oit_pass) {
+                         const Frustum* frustum, OitSubpass oit_pass) {
+    SceneNode* node = item->node;
+    Mesh* mesh = item->mesh;
+    // Only the opaque pass submits the opaque lane, so the lane says which pass
+    // this is without the caller having to.
+    bool alpha_pass = item->lane != DRAW_LANE_OPAQUE;
 
     if (!node->meshes || node->mesh_count == 0)
         return;
@@ -296,73 +301,20 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
     bool a2c_capable = engine->msaa_samples > 1 && !engine->capturing;
     SubmitStats* stats = profiler_submit(engine->profiler);
 
-    for (size_t i = 0; i < node->mesh_count; ++i) {
-        Mesh* mesh = node->meshes[i];
-        // vao == 0 matters now that the bind is guarded: with nothing uploaded
-        // the tracker's 0 would match, the bind would be skipped, and the draw
-        // would inherit whatever the previous pass left bound.
-        if (!mesh || !mesh->material || mesh->vao == 0)
-            continue;
-
-        // Blend and transmissive materials render in the late pass after the
-        // skybox so they composite against the real background; everything
-        // else (including alpha-masked hair) renders in the opaque pass.
-        // Transmissive meshes are counted separately: their count gates the
-        // mid-frame opaque-color resolve refraction samples from.
-        bool is_transmissive = mesh->material->transmission > 0.0f;
-        bool is_blend = mesh->material->alpha_mode == ALPHA_BLEND;
-        bool is_late = is_blend || is_transmissive;
-        // Which (sub-)pass draws this mesh: opaque -> non-late; any OIT sub-pass
-        // (moment generation or accumulate) -> pure alpha-blend (transmission
-        // keeps its refraction path); refraction sub-pass (OIT on) ->
-        // transmissive only (blend already went to OIT); classic late pass
-        // (OIT off) -> all late.
-        bool draw_here;
-        if (!alpha_pass)
-            draw_here = !is_late;
-        else if (oit_pass != OIT_SUBPASS_NONE)
-            draw_here = is_blend && !is_transmissive;
-        else if (engine->oit_this_frame) // OIT accumulate ran -> blend already went to the OIT FBO
-            draw_here = is_transmissive;
-        else
-            draw_here = is_late;
-        if (!draw_here) {
-            // Count late meshes once, in the opaque pass -- gates the late pass, the
-            // OIT accumulate (blend, non-transmissive), and the mid-frame refraction
-            // resolve (transmissive). Unchanged by OIT routing.
-            if (!alpha_pass && is_late) {
-                scene->transparent_mesh_count++;
-                if (is_blend && !is_transmissive)
-                    scene->oit_mesh_count++;
-                // Frustum-gate the transmissive count: it triggers the
-                // full-frame resolve, which off-screen glass must not pay
-                // for (the late-pass re-traversal it shares with blend
-                // meshes is cheap and keeps its pre-cull count)
-                if (is_transmissive && (!frustum || frustum_test_aabb_transformed(
-                                                        frustum, mesh->aabb.min, mesh->aabb.max,
-                                                        node->global_transform)))
-                    scene->transmissive_mesh_count++;
-            }
-            continue;
-        }
-
-        // Resolved before the mesh is counted, so that every counted mesh is
-        // either drawn or culled and the seen == instances + culled identity is
-        // a property of the control flow rather than of the fixture. The
-        // frustum test is pure, so testing this first changes nothing.
+    {
         Material* mat = mesh->material;
         ShaderProgram* program = mat->shader_program;
-        if (!program || !program->uniforms)
-            continue;
 
-        // Frustum culling: skip mesh if its AABB is completely outside the view frustum
+        // Frustum culling: skip mesh if its AABB is completely outside the view
+        // frustum. Counted either side of the test and nowhere else, so
+        // seen == instances + culled is a property of this control flow.
         if (stats)
             stats->meshes_seen++;
         if (frustum && !frustum_test_aabb_transformed(frustum, mesh->aabb.min, mesh->aabb.max,
                                                       node->global_transform)) {
             if (stats)
                 stats->meshes_culled++;
-            continue;
+            return;
         }
 
         UniformManager* u = program->uniforms;
@@ -550,13 +502,13 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
         // MSAA converts fractional alpha into sample coverage for soft,
         // order-independent edges, and uncovered samples stay open for the
         // skybox drawn later
-        bool use_a2c = mat->alpha_mode == ALPHA_MASK && a2c_capable;
+        bool use_a2c = (item->flags & DRAW_ALPHA_MASKED) && a2c_capable;
         if (use_a2c) {
             glEnable(GL_SAMPLE_ALPHA_TO_COVERAGE);
         }
 
         // Handle double-sided materials
-        if (mat->doubleSided) {
+        if (item->flags & DRAW_DOUBLE_SIDED) {
             glDisable(GL_CULL_FACE);
         }
 
@@ -567,7 +519,7 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
             stats->instances++;
         }
 
-        if (mat->doubleSided) {
+        if (item->flags & DRAW_DOUBLE_SIDED) {
             glEnable(GL_CULL_FACE);
         }
         if (use_a2c) {
@@ -593,88 +545,67 @@ static void _render_xyz(SceneNode* node, mat4 view, mat4 projection, SubmitState
     glDrawArrays(GL_LINES, 0, xyz_vertices_size / (6 * sizeof(float)));
 }
 
-// Helper to ensure scene's traversal stack has enough capacity
-static int _ensure_traversal_stack_capacity(Scene* scene, size_t required) {
-    if (scene->traversal_stack_capacity >= required)
-        return 0;
+// One pass over the flattened list. `lanes` is a bitmask of DrawLane, so a
+// pass names the meshes it draws instead of re-deriving them: the opaque pass
+// takes OPAQUE and XYZ, the OIT sub-passes take BLEND, the late pass takes
+// whichever of BLEND and TRANSMISSIVE the OIT routing left for it.
+static void _submit_lanes(const Engine* engine, Scene* scene, const DrawList* list, Camera* camera,
+                          mat4 view, mat4 projection, RenderMode render_mode, SubmitState* state,
+                          const Frustum* frustum, unsigned lanes, OitSubpass oit_pass) {
+    if (!scene || !list)
+        return;
 
-    size_t new_capacity = scene->traversal_stack_capacity;
-    while (new_capacity < required)
-        new_capacity *= 2;
-
-    // Realloc each array separately to avoid dangling pointers on partial failure
-    SceneNode** new_stack = realloc(scene->traversal_stack, new_capacity * sizeof(SceneNode*));
-    if (!new_stack) {
-        log_error("Failed to grow traversal stack");
-        return -1;
+    for (size_t i = 0; i < list->count; ++i) {
+        const DrawItem* item = &list->items[i];
+        if (!(lanes & (1u << item->lane)))
+            continue;
+        _submit_item(engine, scene, item, camera, view, projection, render_mode, state, frustum,
+                     oit_pass);
     }
-    scene->traversal_stack = new_stack;
-
-    mat4* new_transforms = realloc(scene->traversal_transforms, new_capacity * sizeof(mat4));
-    if (!new_transforms) {
-        log_error("Failed to grow traversal transforms");
-        return -1;
-    }
-    scene->traversal_transforms = new_transforms;
-
-    scene->traversal_stack_capacity = new_capacity;
-    return 0;
 }
 
-static void _render_scene_iterative(const Engine* engine, Scene* scene, SceneNode* root,
-                                    Camera* camera, mat4 view, mat4 projection,
-                                    RenderMode render_mode, SubmitState* state,
-                                    const Frustum* frustum, bool alpha_pass, OitSubpass oit_pass) {
-    if (!scene) {
-        log_error("error: render called with NULL scene");
+// The axis gizmos, after the meshes of the pass that draws them. They used to be
+// interleaved per node; nothing sorts against them (they are unlit lines drawn
+// with depth test on) and no fixture enables them, so the move is recorded here
+// rather than claimed as verified.
+static void _submit_gizmos(const DrawList* list, mat4 view, mat4 projection, SubmitState* state) {
+    if (!list)
         return;
-    }
+    for (size_t i = 0; i < list->gizmo_count; ++i)
+        _render_xyz(list->gizmos[i], view, projection, state);
+}
 
-    if (!root) {
-        log_error("error: render called with NULL root node");
+// The three counts that gate the late passes, taken from the list rather than
+// accumulated as a side effect of the opaque pass. They used to be, which meant
+// changing or skipping that pass silently switched off the ones after it.
+//
+// The transmissive count is frustum-gated and the other two are not, which is
+// deliberate: it triggers a full-frame resolve that off-screen glass must not
+// pay for, where the late pass the other two gate is cheap to enter.
+static void _count_late_meshes(Scene* scene, const DrawList* list, const Frustum* frustum) {
+    scene->transparent_mesh_count = 0;
+    scene->transmissive_mesh_count = 0;
+    scene->oit_mesh_count = 0;
+    if (!list)
         return;
-    }
 
-    // Use scene's pre-allocated traversal stack
-    if (!scene->traversal_stack) {
-        log_error("Scene traversal stack not initialized");
+    // Two of the three are lane populations, known at build.
+    scene->oit_mesh_count = list->lane_count[DRAW_LANE_BLEND];
+    scene->transparent_mesh_count =
+        list->lane_count[DRAW_LANE_BLEND] + list->lane_count[DRAW_LANE_TRANSMISSIVE];
+
+    // Only the third varies per view, so only it needs a scan -- and only over
+    // the transmissive lane.
+    if (list->lane_count[DRAW_LANE_TRANSMISSIVE] == 0)
         return;
-    }
-
-    size_t stack_size = 0;
-
-    // Push root node
-    scene->traversal_stack[stack_size++] = root;
-
-    while (stack_size > 0) {
-        // Pop from stack
-        SceneNode* node = scene->traversal_stack[--stack_size];
-
-        // Render this node's meshes (lights arrive via the clustered UBOs,
-        // uploaded once per frame -- no per-node selection)
-        _render_node(engine, scene, node, camera, view, projection, render_mode, state, frustum,
-                     alpha_pass, oit_pass);
-
-        // Render xyz axes if enabled (opaque pass only, to avoid duplicates)
-        if (!alpha_pass && node->show_xyz && node->xyz_shader_program) {
-            _render_xyz(node, view, projection, state);
-        }
-
-        // Push children in reverse order to maintain left-to-right traversal
-        for (size_t i = node->children_count; i > 0; i--) {
-            SceneNode* child = node->children[i - 1];
-            if (!child)
-                continue;
-
-            // Grow stack if needed
-            if (stack_size >= scene->traversal_stack_capacity) {
-                if (_ensure_traversal_stack_capacity(scene, stack_size + 1) != 0) {
-                    return;
-                }
-            }
-
-            scene->traversal_stack[stack_size++] = child;
-        }
+    for (size_t i = 0; i < list->count; ++i) {
+        const DrawItem* item = &list->items[i];
+        if (item->lane != DRAW_LANE_TRANSMISSIVE)
+            continue;
+        if (!frustum ||
+            frustum_test_aabb_transformed(frustum, item->mesh->aabb.min, item->mesh->aabb.max,
+                                          item->node->global_transform))
+            scene->transmissive_mesh_count++;
     }
 }
 
@@ -724,6 +655,22 @@ void render_current_scene(Engine* engine) {
     glm_mat4_mul(*projection, *view, engine->view_proj);
     Frustum frustum;
     frustum_extract_from_vp(engine->view_proj, &frustum);
+
+    // Flatten once. Cube captures re-enter here six times with their own
+    // camera; the stamp makes those five reuses rather than five rebuilds,
+    // which is right on both counts -- the graph did not change, and each face
+    // still culls against its own frustum at submit.
+    //
+    // The frame index alone would NOT be enough: an app that rebuilds geometry
+    // in its render callback (apps/tree on a slider) frees meshes the shadow
+    // pass already flattened, and a list reused on frame index would then draw
+    // freed memory. The graph epoch is what makes that a rebuild.
+    //
+    // A build failure falls through with an empty list rather than returning:
+    // every consumer loops over count, and returning here would skip the
+    // per-frame flag resets and the prev_view_proj stash below, poisoning the
+    // NEXT frame's motion vectors as well as this one's composite.
+    draw_list_build(&scene->draw_list, scene, engine->total_frames ^ (scene_graph_epoch() << 32));
 
     // Clustered forward (spec 9.1): rebuild the light grid + UBOs for THIS
     // invocation's camera and viewport -- probe-capture faces re-enter here
@@ -831,22 +778,21 @@ void render_current_scene(Engine* engine) {
     // Bound state the draw loop skips re-setting; see render.h
     SubmitState submit_state = {0};
 
-    // Pass 1: opaque and alpha-masked meshes (counts skipped blend meshes).
-    // The only pass that publishes the normals G-buffer; every later pass
-    // (skybox, translucents, catcher, overlays) writes color only.
+    _count_late_meshes(scene, &scene->draw_list, &frustum);
+
+    // Pass 1: opaque and alpha-masked meshes. The only pass that publishes the
+    // normals G-buffer; every later pass (skybox, translucents, catcher,
+    // overlays) writes color only.
     engine_set_scene_draw_buffers(engine, true);
-    scene->transparent_mesh_count = 0;
-    scene->transmissive_mesh_count = 0;
-    scene->oit_mesh_count = 0;
     // False until this frame's resolve runs, so pass 1 never uploads or
     // binds a stale refraction source
     engine->scene_color_this_frame = false;
     engine->oit_this_frame = false; // set true below if the OIT accumulate pass runs
     engine->moments_this_frame = false;
     profiler_scope_begin(engine->profiler, "opaque");
-    _render_scene_iterative(engine, scene, root_node, camera, *view, draw_projection,
-                            render_mode, &submit_state, &frustum, false,
-                            OIT_SUBPASS_NONE);
+    _submit_lanes(engine, scene, &scene->draw_list, camera, *view, draw_projection, render_mode,
+                  &submit_state, &frustum, 1u << DRAW_LANE_OPAQUE, OIT_SUBPASS_NONE);
+    _submit_gizmos(&scene->draw_list, *view, draw_projection, &submit_state);
     profiler_scope_end(engine->profiler);
     engine_set_scene_draw_buffers(engine, false);
 
@@ -1009,9 +955,9 @@ void render_current_scene(Engine* engine) {
             bool moments_ready = false;
             if (engine->oit_moments_enabled && engine_begin_moment_pass(engine)) {
                 profiler_scope_begin(engine->profiler, "oit moments");
-                _render_scene_iterative(engine, scene, root_node, camera, *view, draw_projection,
-                                        render_mode, &submit_state, &frustum,
-                                        true, OIT_SUBPASS_MOMENTS);
+                _submit_lanes(engine, scene, &scene->draw_list, camera, *view, draw_projection,
+                              render_mode, &submit_state, &frustum, 1u << DRAW_LANE_BLEND,
+                              OIT_SUBPASS_MOMENTS);
                 profiler_scope_end(engine->profiler);
                 engine_end_moment_pass(engine);
                 moments_ready = true;
@@ -1025,18 +971,22 @@ void render_current_scene(Engine* engine) {
                 // mis-composite the whole frame.
                 engine->moments_this_frame = moments_ready;
                 profiler_scope_begin(engine->profiler, "oit accumulate");
-                _render_scene_iterative(engine, scene, root_node, camera, *view, draw_projection,
-                                        render_mode, &submit_state, &frustum,
-                                        true, OIT_SUBPASS_ACCUMULATE);
+                _submit_lanes(engine, scene, &scene->draw_list, camera, *view, draw_projection,
+                              render_mode, &submit_state, &frustum, 1u << DRAW_LANE_BLEND,
+                              OIT_SUBPASS_ACCUMULATE);
                 profiler_scope_end(engine->profiler);
                 engine_end_oit_pass(engine);
             }
             submit_state_reset(&submit_state);
         }
+        // Whatever OIT did not take: transmissive alone when the accumulate ran
+        // (blend went to the OIT FBO), both lanes when it did not.
+        unsigned late_lanes = engine->oit_this_frame
+                                  ? (1u << DRAW_LANE_TRANSMISSIVE)
+                                  : ((1u << DRAW_LANE_BLEND) | (1u << DRAW_LANE_TRANSMISSIVE));
         profiler_scope_begin(engine->profiler, "transparent");
-        _render_scene_iterative(engine, scene, root_node, camera, *view, draw_projection,
-                                render_mode, &submit_state, &frustum, true,
-                                OIT_SUBPASS_NONE);
+        _submit_lanes(engine, scene, &scene->draw_list, camera, *view, draw_projection, render_mode,
+                      &submit_state, &frustum, late_lanes, OIT_SUBPASS_NONE);
         profiler_scope_end(engine->profiler);
         glDepthMask(GL_TRUE);
     }

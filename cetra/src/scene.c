@@ -48,18 +48,6 @@ Scene* create_scene() {
 
     scene->xyz_shader_program = NULL;
 
-    // Pre-allocate traversal stack (avoids per-frame malloc)
-    scene->traversal_stack_capacity = 64;
-    scene->traversal_stack = malloc(scene->traversal_stack_capacity * sizeof(SceneNode*));
-    scene->traversal_transforms = malloc(scene->traversal_stack_capacity * sizeof(mat4));
-    if (!scene->traversal_stack || !scene->traversal_transforms) {
-        log_error("Failed to allocate traversal stack");
-        free(scene->traversal_stack);
-        free(scene->traversal_transforms);
-        scene->traversal_stack = NULL;
-        scene->traversal_transforms = NULL;
-        scene->traversal_stack_capacity = 0;
-    }
     scene->transparent_mesh_count = 0;
     scene->transmissive_mesh_count = 0;
     scene->materials_dirty = true;
@@ -149,13 +137,7 @@ void free_scene(Scene* scene) {
         free_node(scene->root_node);
     }
 
-    // Free traversal stack
-    if (scene->traversal_stack) {
-        free(scene->traversal_stack);
-    }
-    if (scene->traversal_transforms) {
-        free(scene->traversal_transforms);
-    }
+    draw_list_free(&scene->draw_list);
 
     // Free shadow system
     if (scene->shadow_system) {
@@ -531,6 +513,7 @@ SceneNode* create_node() {
 void free_node(SceneNode* node) {
     if (!node)
         return;
+    scene_graph_touched();
 
     for (size_t i = 0; i < node->children_count; i++) {
         free_node(node->children[i]);
@@ -559,6 +542,7 @@ void free_node(SceneNode* node) {
 }
 
 int add_child_node(SceneNode* node, SceneNode* child) {
+    scene_graph_touched();
     if (!node || !child)
         return -1;
 
@@ -577,6 +561,9 @@ int add_child_node(SceneNode* node, SceneNode* child) {
 }
 
 int add_mesh_to_node(SceneNode* node, Mesh* mesh) {
+    // Also covers apps that then write node->mesh_count directly: the epoch has
+    // already moved by the time the next build asks.
+    scene_graph_touched();
     if (!node || !mesh)
         return -1;
 

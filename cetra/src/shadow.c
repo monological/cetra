@@ -523,66 +523,44 @@ static void _upload_shadow_material(UniformManager* u, const Material* mat, bool
     uniform_set_int(u, "uWindMode", mat->wind_mode);
 }
 
-static void _render_shadow_node(SceneNode* node, ShaderProgram* program, SubmitState* state,
-                                ShadowCasterSet set, SubmitStats* stats) {
-    if (!node)
+// Whether this caster set wants this item, from flags the list settled at build.
+// Alpha-masked geometry casts NOTHING on the depth path -- at map-texel scale
+// hair strands resolve as card-shaped streaks or strand-scale acne either way,
+// and their occlusion comes from AO instead. Foliage opts back in, because leaf
+// cards are centimetres across and an alpha test resolves them.
+static bool caster_set_wants(ShadowCasterSet set, uint8_t lane, uint8_t flags) {
+    bool masked_only = (flags & DRAW_ALPHA_MASKED) && !(flags & DRAW_FOLIAGE);
+    // What a transmittance map represents instead of a depth map: geometry that
+    // casts NOTHING on the depth path (masked without foliage) or casts SOLID
+    // where it should not (blend, transmission -- i.e. any non-opaque lane).
+    bool translucent = masked_only || lane != DRAW_LANE_OPAQUE;
+
+    if (set == SHADOW_CASTERS_TRANSLUCENT)
+        return translucent;
+    if (masked_only)
+        return false;
+    // Blend and transmission leave the depth pass ONLY when a transmittance map
+    // will receive them. With the flag off this never fires and the depth
+    // rendered is the depth that was rendered before, bit for bit.
+    return !(set == SHADOW_CASTERS_OPAQUE_TSM && translucent);
+}
+
+static void _draw_shadow_items(const DrawList* list, ShaderProgram* program, SubmitState* state,
+                               ShadowCasterSet set, SubmitStats* stats) {
+    if (!list)
         return;
 
-    if (node->meshes && node->mesh_count > 0) {
-        submit_use_program(state, program->id);
+    for (size_t idx = 0; idx < list->count; ++idx) {
+        const DrawItem* item = &list->items[idx];
+        if (!caster_set_wants(set, item->lane, item->flags))
+            continue;
 
-        uniform_set_mat4(program->uniforms, "model", (const float*)node->global_transform);
-
-        for (size_t i = 0; i < node->mesh_count; ++i) {
-            Mesh* mesh = node->meshes[i];
-            // A mesh with no material is not drawn by the scene pass either, so
-            // it has nothing to cast. Refusing it here also keeps NULL free to
-            // mean "no material claimed yet" in the tracker, which it could not
-            // if a NULL-material mesh were a legitimate thing to upload.
-            if (!mesh || mesh->vao == 0 || !mesh->material)
-                continue;
-
+        {
+            const SceneNode* node = item->node;
+            Mesh* mesh = item->mesh;
             Material* mat = mesh->material;
             UniformManager* u = program->uniforms;
-
-            // Alpha-masked materials (hair cards) are excluded from the
-            // shadow map entirely: at map-texel scale (millimeters) their
-            // strands can neither cast nor receive cleanly — solid-quad
-            // casting draws card-shaped streaks, alpha-tested casting
-            // draws strand-scale acne on whatever is beneath. Their
-            // occlusion comes from the AO texture and SSAO instead.
-            //
-            // Foliage opts back in (material.h foliage_shadows): leaf cards
-            // are centimeters across, so an alpha test resolves them cleanly,
-            // and the dappled canopy shadow they cast is the reason the
-            // surface exists at all.
-            bool masked = mat->alpha_mode == ALPHA_MASK;
-            bool foliage =
-                masked && mat->foliage_shadows && mat->alphaCutoff > 0.0f && mat->albedo_tex;
-            // What the transmittance map represents instead of the depth map
-            // (spec 11.26). Masked-without-foliage is here because it casts
-            // NOTHING today; blend and transmission because they cast SOLID.
-            // Foliage is deliberately absent: it already resolves cleanly on
-            // the alpha-tested depth path, and apps/tree is the only A2C
-            // content in the repo, so moving it would move a baseline for no
-            // defect.
-            bool translucent = ((masked && !foliage) ||
-                                       mat->alpha_mode == ALPHA_BLEND ||
-                                       mat->transmission > 0.0f);
-
-            if (set == SHADOW_CASTERS_TRANSLUCENT) {
-                if (!translucent)
-                    continue;
-            } else {
-                if (masked && !foliage)
-                    continue;
-                // Blend and transmission leave the depth pass ONLY when there
-                // is a transmittance map to receive them. With the flag off
-                // this branch never fires and the depth rendered is the depth
-                // that was rendered before, bit for bit.
-                if (set == SHADOW_CASTERS_OPAQUE_TSM && translucent)
-                    continue;
-            }
+            bool foliage = (item->flags & DRAW_FOLIAGE) != 0;
 
             // Counted after the caster-set filter, so meshes_seen is the set
             // this layer could draw rather than the set the graph holds. A mesh
@@ -591,6 +569,10 @@ static void _render_shadow_node(SceneNode* node, ShaderProgram* program, SubmitS
             // however many the routing removed.
             if (stats)
                 stats->meshes_seen++;
+
+            // Per node, and the list is in node order, so consecutive meshes of
+            // one node still upload it once.
+            uniform_set_mat4(u, "model", (const float*)node->global_transform);
 
             // Everything the material decides, uploaded once per material
             // rather than once per mesh -- a canopy of leaf cards is hundreds
@@ -620,7 +602,7 @@ static void _render_shadow_node(SceneNode* node, ShaderProgram* program, SubmitS
             // come out as its square root, and which meshes were affected
             // would depend on scene-graph order.
             bool two_sided =
-                mat->doubleSided && set != SHADOW_CASTERS_TRANSLUCENT;
+                (item->flags & DRAW_DOUBLE_SIDED) && set != SHADOW_CASTERS_TRANSLUCENT;
             if (two_sided)
                 glDisable(GL_CULL_FACE);
 
@@ -634,10 +616,6 @@ static void _render_shadow_node(SceneNode* node, ShaderProgram* program, SubmitS
             if (two_sided)
                 glEnable(GL_CULL_FACE);
         }
-    }
-
-    for (size_t i = 0; i < node->children_count; i++) {
-        _render_shadow_node(node->children[i], program, state, set, stats);
     }
 }
 
@@ -743,10 +721,10 @@ static int compute_punctual_matrices(const Light* light, const ShadowSystem* ss,
 
 // The body both depth-pass loops share, once a layer is bound: aim the depth
 // program at one light-space matrix and walk the scene into it.
-static void draw_shadow_layer(ShadowSystem* ss, SceneNode* root, const float* matrix,
+static void draw_shadow_layer(ShadowSystem* ss, const DrawList* list, const float* matrix,
                               SubmitState* state, ShadowCasterSet set, SubmitStats* stats) {
     uniform_set_mat4(ss->depth_program->uniforms, "lightSpaceMatrix", matrix);
-    _render_shadow_node(root, ss->depth_program, state, set, stats);
+    _draw_shadow_items(list, ss->depth_program, state, set, stats);
     end_shadow_pass(ss);
 }
 
@@ -1040,8 +1018,8 @@ static bool shadow_build_tsm(ShadowSystem* ss, const Engine* engine, Scene* scen
         uniform_set_int(au, "albedoTex", 0);
         wind_upload_to_program(scene->wind, au);
         uniform_set_float(au, "time", (float)engine->render_time);
-        _render_shadow_node(scene->root_node, ss->tsm_absorb_program, &state,
-                            SHADOW_CASTERS_TRANSLUCENT, profiler_submit(engine->profiler));
+        _draw_shadow_items(&scene->draw_list, ss->tsm_absorb_program, &state,
+                           SHADOW_CASTERS_TRANSLUCENT, profiler_submit(engine->profiler));
         glDisable(GL_BLEND);
 
         // --- resolve to transmittance --------------------------------------
@@ -1079,8 +1057,8 @@ static bool shadow_build_tsm(ShadowSystem* ss, const Engine* engine, Scene* scen
         submit_state_reset(&state);
         submit_use_program(&state, ss->depth_program->id);
         uniform_set_mat4(ss->depth_program->uniforms, "lightSpaceMatrix", matrix);
-        _render_shadow_node(scene->root_node, ss->depth_program, &state,
-                            SHADOW_CASTERS_TRANSLUCENT, profiler_submit(engine->profiler));
+        _draw_shadow_items(&scene->draw_list, ss->depth_program, &state,
+                           SHADOW_CASTERS_TRANSLUCENT, profiler_submit(engine->profiler));
     }
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -1107,6 +1085,12 @@ static bool shadow_build_tsm(ShadowSystem* ss, const Engine* engine, Scene* scen
 void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     if (!engine || !scene || !scene->shadow_system)
         return;
+
+    // This pass runs BEFORE the camera passes, so it is usually the one that
+    // flattens the graph; the stamp makes the camera pass reuse what this built
+    // rather than build a second time -- unless the app mutated the graph in
+    // between, which the epoch half of the stamp catches.
+    draw_list_build(&scene->draw_list, scene, engine->total_frames ^ (scene_graph_epoch() << 32));
 
     ShadowSystem* ss = scene->shadow_system;
 
@@ -1372,7 +1356,7 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
         for (int c = 0; c < cc; ++c) {
             size_t layer = i * (size_t)cc + (size_t)c;
             begin_shadow_pass(ss, layer);
-            draw_shadow_layer(ss, scene->root_node, (const float*)ss->cascade_matrices[layer],
+            draw_shadow_layer(ss, &scene->draw_list, (const float*)ss->cascade_matrices[layer],
                               &state, set, profiler_submit(engine->profiler));
         }
     }
@@ -1401,7 +1385,7 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
                 // the directional cascades only (unit 15 has no room for a
                 // second lookup), so withholding translucent casters here
                 // would take away the solid shadow without replacing it.
-                draw_shadow_layer(ss, scene->root_node, (const float*)ss->punctual_matrices[layer],
+                draw_shadow_layer(ss, &scene->draw_list, (const float*)ss->punctual_matrices[layer],
                                   &state, SHADOW_CASTERS_OPAQUE,
                                   profiler_submit(engine->profiler));
                 // Layers are handed out in increasing order, so the last one
