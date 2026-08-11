@@ -42,6 +42,16 @@ enum {
     DRAW_ALPHA_MASKED = 1u << 0,
     DRAW_FOLIAGE = 1u << 1, // alpha-masked and opted back into casting
     DRAW_DOUBLE_SIDED = 1u << 2,
+    // The AABB does not bound where this mesh actually draws, so a frustum test
+    // on it would reject geometry that is really inside. Skinned meshes carry
+    // their BIND-POSE bounds (calculate_aabb runs once at import, never per
+    // animated frame) and wind displaces vertices the shader computes.
+    //
+    // The camera pass has always culled both anyway, and the visible artefact
+    // is the same either way -- but on the camera the wrong answer costs a
+    // popped object at the screen edge, where in a shadow map it costs a
+    // missing shadow in the middle of a lit scene. Not worth inheriting.
+    DRAW_UNBOUNDED = 1u << 3,
 };
 
 typedef struct DrawItem {

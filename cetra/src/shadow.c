@@ -12,6 +12,7 @@
 #include "light.h"
 #include "mesh.h"
 #include "engine.h"
+#include "intersect.h"
 #include "shadow.h"
 #include "profiler.h"
 #include "texture.h"
@@ -546,7 +547,7 @@ static bool caster_set_wants(ShadowCasterSet set, uint8_t lane, uint8_t flags) {
 }
 
 static void _draw_shadow_items(const DrawList* list, ShaderProgram* program, SubmitState* state,
-                               ShadowCasterSet set, SubmitStats* stats) {
+                               ShadowCasterSet set, SubmitStats* stats, const Frustum* frustum) {
     if (!list)
         return;
 
@@ -555,20 +556,26 @@ static void _draw_shadow_items(const DrawList* list, ShaderProgram* program, Sub
         if (!caster_set_wants(set, item->lane, item->flags))
             continue;
 
+        if (stats)
+            stats->meshes_seen++;
+        // The layer's own volume, so a rejected caster contributed nothing to
+        // it. Exact rather than merely conservative: the cascade fit pushes the
+        // eye back by radius + scene_pad precisely so casters outside the view
+        // slice but toward the light stay inside the box.
+        if (frustum && !(item->flags & DRAW_UNBOUNDED) &&
+            !frustum_test_aabb_transformed(frustum, item->mesh->aabb.min, item->mesh->aabb.max,
+                                           item->node->global_transform)) {
+            if (stats)
+                stats->meshes_culled++;
+            continue;
+        }
+
         {
             const SceneNode* node = item->node;
             Mesh* mesh = item->mesh;
             Material* mat = mesh->material;
             UniformManager* u = program->uniforms;
             bool foliage = (item->flags & DRAW_FOLIAGE) != 0;
-
-            // Counted after the caster-set filter, so meshes_seen is the set
-            // this layer could draw rather than the set the graph holds. A mesh
-            // routed to a different caster set was never this pass's to skip,
-            // and counting it here would put the drawn + culled identity out by
-            // however many the routing removed.
-            if (stats)
-                stats->meshes_seen++;
 
             // Per node, and the list is in node order, so consecutive meshes of
             // one node still upload it once.
@@ -724,7 +731,12 @@ static int compute_punctual_matrices(const Light* light, const ShadowSystem* ss,
 static void draw_shadow_layer(ShadowSystem* ss, const DrawList* list, const float* matrix,
                               SubmitState* state, ShadowCasterSet set, SubmitStats* stats) {
     uniform_set_mat4(ss->depth_program->uniforms, "lightSpaceMatrix", matrix);
-    _draw_shadow_items(list, ss->depth_program, state, set, stats);
+    // The matrix IS the layer's coverage volume, and Gribb-Hartmann does not
+    // care whether it is ortho or perspective -- so cascades and punctual faces
+    // cull through the same six planes.
+    Frustum layer_frustum;
+    frustum_extract_from_vp(*(mat4*)(uintptr_t)matrix, &layer_frustum);
+    _draw_shadow_items(list, ss->depth_program, state, set, stats, &layer_frustum);
     end_shadow_pass(ss);
 }
 
@@ -997,6 +1009,10 @@ static bool shadow_build_tsm(ShadowSystem* ss, const Engine* engine, Scene* scen
 
     for (int c = 0; c < cc; ++c) {
         const float* matrix = (const float*)ss->cascade_matrices[c];
+        // Same volume the depth layer culls against; both TSM walks below write
+        // the layers this cascade owns.
+        Frustum tsm_frustum;
+        frustum_extract_from_vp(*(mat4*)(uintptr_t)matrix, &tsm_frustum);
         SubmitState state = {0};
 
         // --- accumulate absorbance -----------------------------------------
@@ -1019,7 +1035,8 @@ static bool shadow_build_tsm(ShadowSystem* ss, const Engine* engine, Scene* scen
         wind_upload_to_program(scene->wind, au);
         uniform_set_float(au, "time", (float)engine->render_time);
         _draw_shadow_items(&scene->draw_list, ss->tsm_absorb_program, &state,
-                           SHADOW_CASTERS_TRANSLUCENT, profiler_submit(engine->profiler));
+                           SHADOW_CASTERS_TRANSLUCENT, profiler_submit(engine->profiler),
+                           &tsm_frustum);
         glDisable(GL_BLEND);
 
         // --- resolve to transmittance --------------------------------------
@@ -1058,7 +1075,8 @@ static bool shadow_build_tsm(ShadowSystem* ss, const Engine* engine, Scene* scen
         submit_use_program(&state, ss->depth_program->id);
         uniform_set_mat4(ss->depth_program->uniforms, "lightSpaceMatrix", matrix);
         _draw_shadow_items(&scene->draw_list, ss->depth_program, &state,
-                           SHADOW_CASTERS_TRANSLUCENT, profiler_submit(engine->profiler));
+                           SHADOW_CASTERS_TRANSLUCENT, profiler_submit(engine->profiler),
+                           &tsm_frustum);
     }
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);

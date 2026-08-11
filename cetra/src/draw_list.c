@@ -87,6 +87,8 @@ static void classify(const Material* mat, uint8_t* lane, uint8_t* flags) {
         *flags |= DRAW_FOLIAGE;
     if (mat->doubleSided)
         *flags |= DRAW_DOUBLE_SIDED;
+    if (mat->wind_response > 0.0f)
+        *flags |= DRAW_UNBOUNDED;
 }
 
 // Depth-first, children left to right, a node's meshes before its gizmo --
@@ -107,6 +109,8 @@ static bool append_node(DrawList* list, SceneNode* node) {
 
         DrawItem item = {.mesh = mesh, .node = node};
         classify(mesh->material, &item.lane, &item.flags);
+        if (mesh->is_skinned)
+            item.flags |= DRAW_UNBOUNDED;
         if (!push(list, item))
             return false;
     }

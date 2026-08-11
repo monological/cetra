@@ -2567,16 +2567,18 @@ def _fixture_mesh_nodes():
     return sum(1 for n in gltf["nodes"] if "mesh" in n)
 
 
-def _submit_run(workdir, tag, extra):
+def _submit_run(workdir, tag, extra, cascades=None):
     """One profiled run of the submission fixture, at a size that renders fast.
 
     All three tables come out of ONE render, so an arm reading a count against
     a timing is reading the same frame rather than two runs of it. The cascade
-    count is pinned here so SUBMIT_CASCADES stops shadowing a C constant it
-    cannot see change.
+    count is pinned on the command line so SUBMIT_CASCADES stops shadowing a C
+    constant it cannot see change.
     """
-    return _profiled_run(workdir, f"submit_{tag}",
-                         ["--shadow-cascades", str(SUBMIT_CASCADES)] + extra,
+    count = SUBMIT_CASCADES if cascades is None else cascades
+    pinned = [] if any(a == "--shadow-cascades" for a in extra) else \
+        ["--shadow-cascades", str(count)]
+    return _profiled_run(workdir, f"submit_{tag}", pinned + extra,
                          fixture=SUBMIT_FIXTURE, size=("400", "300"))
 
 
@@ -2670,10 +2672,15 @@ def run_submission_gate(workdir):
     opaque = counts.get("opaque", {})
     shadow = counts.get("shadow cascades", {})
     want_shadow = mesh_nodes * SUBMIT_CASCADES
-    ok = (opaque.get("draws") == mesh_nodes and shadow.get("draws") == want_shadow)
+    # The shadow pass culls now, so its DRAWS depend on the cascade fit. What is
+    # still exact is what it SAW: every mesh node, once per cascade.
+    ok = (opaque.get("draws") == mesh_nodes
+          and shadow.get("meshes seen") == want_shadow
+          and shadow.get("draws") + shadow.get("meshes culled", 0) == want_shadow)
     print(f"  submit-count {'PASS' if ok else 'FAIL'}  opaque draws {opaque.get('draws')} "
-          f"(want {mesh_nodes}, one per mesh node), shadow draws {shadow.get('draws')} "
-          f"(want {want_shadow} = {mesh_nodes} x {SUBMIT_CASCADES} cascades)")
+          f"(want {mesh_nodes}, one per mesh node), shadow saw {shadow.get('meshes seen')} "
+          f"(want {want_shadow} = {mesh_nodes} x {SUBMIT_CASCADES} cascades) and drew "
+          f"{shadow.get('draws')} + culled {shadow.get('meshes culled')}")
     if not ok:
         failures.append("submit-count")
 
@@ -2689,6 +2696,51 @@ def run_submission_gate(workdir):
           f"{got_matsw} (want {want_matsw} = 2 materials x {SUBMIT_CASCADES} cascades)")
     if not ok:
         failures.append("submit-matsw")
+
+    # --- shadowcull-draws: the shadow pass culls, and only where it should ---
+    # At 3 cascades each layer is a slice of the view frustum, so a scene wider
+    # than one slice must lose casters. At 1 cascade the fit is the WHOLE scene
+    # and the same code must reject NOTHING -- that half is the inverse arm, and
+    # it is what fails for a cull wired to something other than the light's own
+    # volume, which would reject at both counts.
+    one = _submit_run(workdir, "cascade1", ["--shadow-cascades", "1"], cascades=1)
+    if one is None:
+        failures.append("shadowcull-draws")
+    else:
+        one_shadow = one["submit"].get("shadow cascades", {})
+        three_shadow = counts.get("shadow cascades", {})
+        ok = (one_shadow.get("meshes culled") == 0
+              and one_shadow.get("draws") == mesh_nodes
+              and three_shadow.get("meshes culled", 0) > 0)
+        print(f"  shadowcull-draws {'PASS' if ok else 'FAIL'}  1 cascade: culled "
+              f"{one_shadow.get('meshes culled')} (want 0, the fit is the whole scene) and drew "
+              f"{one_shadow.get('draws')} (want {mesh_nodes}); 3 cascades: culled "
+              f"{three_shadow.get('meshes culled')} (want > 0, the near slices are tighter)")
+        if not ok:
+            failures.append("shadowcull-draws")
+
+    # --- shadowcull-live: culling that never rejects anything is not culling --
+    # The fixture above is inside every cascade by construction, so it can only
+    # show the cull NOT firing. abandoned_window is 553 meshes spread wider than
+    # a near slice, so its cascades must reject a substantial share -- and the
+    # goldens prove the frame is unchanged while they do.
+    wide = os.path.join(ROOT, "assets", "abandoned_window", "abandoned_window_shadowed.cscn")
+    if not os.path.exists(wide):
+        print("  shadowcull-live SKIP  (missing abandoned_window_shadowed.cscn)")
+    else:
+        tables = _profiled_run(workdir, "shadowcull_wide", [], fixture=os.path.join(
+            "abandoned_window", "abandoned_window_shadowed.cscn"), size=("200", "150"))
+        if tables is None:
+            failures.append("shadowcull-live")
+        else:
+            row = tables["submit"].get("shadow cascades", {})
+            seen, culled = row.get("meshes seen", 0), row.get("meshes culled", 0)
+            share = culled / seen if seen else 0.0
+            ok = share >= 0.15
+            print(f"  shadowcull-live {'PASS' if ok else 'FAIL'}  {culled} of {seen} casters "
+                  f"culled ({share * 100.0:.0f}%, want >= 15%)")
+            if not ok:
+                failures.append("shadowcull-live")
 
     # --- submit-cull: the counters are attached to submission, not to nodes -
     # A camera aimed away culls every mesh in the camera pass and none in the
@@ -2707,12 +2759,14 @@ def run_submission_gate(workdir):
         opaque_ms = far["gpu"].get("opaque", -1.0)
         ok = (far_opaque.get("meshes culled") == mesh_nodes
               and far_opaque.get("draws") == 0
-              and far_shadow.get("draws") == want_shadow
+              and far_shadow.get("meshes seen") == want_shadow
+              and far_shadow.get("draws", 0) > 0
               and 0.0 <= opaque_ms < 0.01)
         print(f"  submit-cull  {'PASS' if ok else 'FAIL'}  opaque culled "
               f"{far_opaque.get('meshes culled')} (want {mesh_nodes}) and drew "
-              f"{far_opaque.get('draws')} (want 0); shadow still drew "
-              f"{far_shadow.get('draws')} (want {want_shadow}, it has no cull); "
+              f"{far_opaque.get('draws')} (want 0); shadow still saw "
+              f"{far_shadow.get('meshes seen')} (want {want_shadow}) and drew "
+              f"{far_shadow.get('draws')} (want > 0: it follows the light, not the camera); "
               f"opaque GPU {opaque_ms} ms (want < 0.01)")
         if not ok:
             failures.append("submit-cull")
