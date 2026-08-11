@@ -493,22 +493,55 @@ typedef enum ShadowCasterSet {
     SHADOW_CASTERS_TRANSLUCENT,
 } ShadowCasterSet;
 
-static void _render_shadow_node(SceneNode* node, ShaderProgram* program, GLuint* current_program,
+// Everything about a caster that its MATERIAL decides, for whichever of the two
+// depth programs is bound. Every uniform here is location-guarded, so the ones
+// belonging to the absorb program no-op on the depth program and the two
+// traversals stay one function.
+static void _upload_shadow_material(UniformManager* u, const Material* mat, bool foliage) {
+    uniform_set_int(u, "alphaTested", foliage ? 1 : 0);
+    if (foliage)
+        uniform_set_float(u, "alphaCutoff", mat->alphaCutoff);
+
+    // Transmission scales the coverage: a fully transmissive interface blocks
+    // nothing.
+    float opacity = mat->opacity;
+    if (mat->transmission > 0.0f)
+        opacity *= (1.0f - mat->transmission);
+    uniform_set_float(u, "tsmOpacity", opacity);
+    uniform_set_int(u, "tsmHasAlbedo", mat->albedo_tex ? 1 : 0);
+
+    // Bound whenever one exists, not just for foliage: a sampler left pointing
+    // at an empty unit makes some drivers warn even though this shader only
+    // reads it under alphaTested.
+    if (mat->albedo_tex) {
+        uniform_set_int(u, "albedoTex", 0);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, mat->albedo_tex->id);
+    }
+
+    // Wind must displace the caster exactly as the shading pass displaces the
+    // surface, or the shadow detaches from what casts it.
+    uniform_set_float(u, "uWindResponse", mat->wind_response);
+    uniform_set_int(u, "uWindMode", mat->wind_mode);
+}
+
+static void _render_shadow_node(SceneNode* node, ShaderProgram* program, SubmitState* state,
                                 ShadowCasterSet set, SubmitStats* stats) {
     if (!node)
         return;
 
     if (node->meshes && node->mesh_count > 0) {
-        if (*current_program != program->id) {
-            glUseProgram(program->id);
-            *current_program = program->id;
-        }
+        submit_use_program(state, program->id);
 
         uniform_set_mat4(program->uniforms, "model", (const float*)node->global_transform);
 
         for (size_t i = 0; i < node->mesh_count; ++i) {
             Mesh* mesh = node->meshes[i];
-            if (!mesh || mesh->vao == 0)
+            // A mesh with no material is not drawn by the scene pass either, so
+            // it has nothing to cast. Refusing it here also keeps NULL free to
+            // mean "no material claimed yet" in the tracker, which it could not
+            // if a NULL-material mesh were a legitimate thing to upload.
+            if (!mesh || mesh->vao == 0 || !mesh->material)
                 continue;
 
             Material* mat = mesh->material;
@@ -525,7 +558,7 @@ static void _render_shadow_node(SceneNode* node, ShaderProgram* program, GLuint*
             // are centimeters across, so an alpha test resolves them cleanly,
             // and the dappled canopy shadow they cast is the reason the
             // surface exists at all.
-            bool masked = mat && mat->alpha_mode == ALPHA_MASK;
+            bool masked = mat->alpha_mode == ALPHA_MASK;
             bool foliage =
                 masked && mat->foliage_shadows && mat->alphaCutoff > 0.0f && mat->albedo_tex;
             // What the transmittance map represents instead of the depth map
@@ -535,7 +568,7 @@ static void _render_shadow_node(SceneNode* node, ShaderProgram* program, GLuint*
             // the alpha-tested depth path, and apps/tree is the only A2C
             // content in the repo, so moving it would move a baseline for no
             // defect.
-            bool translucent = mat && ((masked && !foliage) ||
+            bool translucent = ((masked && !foliage) ||
                                        mat->alpha_mode == ALPHA_BLEND ||
                                        mat->transmission > 0.0f);
 
@@ -561,33 +594,14 @@ static void _render_shadow_node(SceneNode* node, ShaderProgram* program, GLuint*
             if (stats)
                 stats->meshes_seen++;
 
-            uniform_set_int(u, "alphaTested", foliage ? 1 : 0);
-            if (foliage)
-                uniform_set_float(u, "alphaCutoff", mat->alphaCutoff);
-            // The absorb program's own uniforms. Location-guarded, so setting
-            // them on the depth program is a no-op and the two traversals stay
-            // one function. Transmission scales the coverage because a fully
-            // transmissive interface blocks nothing.
-            if (mat) {
-                float op = mat->opacity;
-                if (mat->transmission > 0.0f)
-                    op *= (1.0f - mat->transmission);
-                uniform_set_float(u, "tsmOpacity", op);
-                uniform_set_int(u, "tsmHasAlbedo", mat->albedo_tex ? 1 : 0);
-            }
-            // Bind whenever one exists, not just for foliage: a sampler left
-            // pointing at an empty unit makes some drivers warn even though
-            // this shader only reads it under alphaTested.
-            if (mat && mat->albedo_tex) {
-                uniform_set_int(u, "albedoTex", 0);
-                glActiveTexture(GL_TEXTURE0);
-                glBindTexture(GL_TEXTURE_2D, mat->albedo_tex->id);
-            }
+            // Everything the material decides, uploaded once per material
+            // rather than once per mesh -- a canopy of leaf cards is hundreds
+            // of meshes sharing one of these.
+            if (submit_take_material(state, mat))
+                _upload_shadow_material(u, mat, foliage);
 
-            // Wind must displace the caster exactly as the shading pass
-            // displaces the surface, or the shadow detaches from what casts it.
-            uniform_set_float(u, "uWindResponse", mat ? mat->wind_response : 0.0f);
-            uniform_set_int(u, "uWindMode", mat ? mat->wind_mode : 0);
+            // Per mesh, because it is the mesh's own bounds: where along Y the
+            // cloth mask ramps from anchored to free.
             uniform_set_float(u, "uWindMaskMinY", mesh->aabb.min[1]);
             uniform_set_float(u, "uWindMaskMaxY", mesh->aabb.max[1]);
 
@@ -605,13 +619,12 @@ static void _render_shadow_node(SceneNode* node, ShaderProgram* program, GLuint*
             // come out as its square root, and which meshes were affected
             // would depend on scene-graph order.
             bool two_sided =
-                mat && mat->doubleSided && set != SHADOW_CASTERS_TRANSLUCENT;
+                mat->doubleSided && set != SHADOW_CASTERS_TRANSLUCENT;
             if (two_sided)
                 glDisable(GL_CULL_FACE);
 
-            glBindVertexArray(mesh->vao);
+            submit_bind_vao(state, mesh->vao);
             glDrawElements(mesh->draw_mode, mesh->index_count, GL_UNSIGNED_INT, 0);
-            glBindVertexArray(0);
             if (stats) {
                 stats->draws++;
                 stats->instances++;
@@ -623,7 +636,7 @@ static void _render_shadow_node(SceneNode* node, ShaderProgram* program, GLuint*
     }
 
     for (size_t i = 0; i < node->children_count; i++) {
-        _render_shadow_node(node->children[i], program, current_program, set, stats);
+        _render_shadow_node(node->children[i], program, state, set, stats);
     }
 }
 
@@ -730,9 +743,9 @@ static int compute_punctual_matrices(const Light* light, const ShadowSystem* ss,
 // The body both depth-pass loops share, once a layer is bound: aim the depth
 // program at one light-space matrix and walk the scene into it.
 static void draw_shadow_layer(ShadowSystem* ss, SceneNode* root, const float* matrix,
-                              GLuint* current_program, ShadowCasterSet set, SubmitStats* stats) {
+                              SubmitState* state, ShadowCasterSet set, SubmitStats* stats) {
     uniform_set_mat4(ss->depth_program->uniforms, "lightSpaceMatrix", matrix);
-    _render_shadow_node(root, ss->depth_program, current_program, set, stats);
+    _render_shadow_node(root, ss->depth_program, state, set, stats);
     end_shadow_pass(ss);
 }
 
@@ -1005,7 +1018,7 @@ static bool shadow_build_tsm(ShadowSystem* ss, const Engine* engine, Scene* scen
 
     for (int c = 0; c < cc; ++c) {
         const float* matrix = (const float*)ss->cascade_matrices[c];
-        GLuint current_program = 0;
+        SubmitState state = {0};
 
         // --- accumulate absorbance -----------------------------------------
         // No depth buffer here at all, so no test and no offset: every
@@ -1020,14 +1033,13 @@ static bool shadow_build_tsm(ShadowSystem* ss, const Engine* engine, Scene* scen
         glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
         glClear(GL_COLOR_BUFFER_BIT);
 
-        glUseProgram(ss->tsm_absorb_program->id);
-        current_program = ss->tsm_absorb_program->id;
+        submit_use_program(&state, ss->tsm_absorb_program->id);
         UniformManager* au = ss->tsm_absorb_program->uniforms;
         uniform_set_mat4(au, "lightSpaceMatrix", matrix);
         uniform_set_int(au, "albedoTex", 0);
         wind_upload_to_program(scene->wind, au);
         uniform_set_float(au, "time", (float)engine->render_time);
-        _render_shadow_node(scene->root_node, ss->tsm_absorb_program, &current_program,
+        _render_shadow_node(scene->root_node, ss->tsm_absorb_program, &state,
                             SHADOW_CASTERS_TRANSLUCENT, profiler_submit(engine->profiler));
         glDisable(GL_BLEND);
 
@@ -1061,11 +1073,12 @@ static bool shadow_build_tsm(ShadowSystem* ss, const Engine* engine, Scene* scen
             break;
         }
         glDepthFunc(GL_LESS);
-        current_program = 0;
-        glUseProgram(ss->depth_program->id);
-        current_program = ss->depth_program->id;
+        // The fullscreen resolve above bound its own program and its own VAO,
+        // so nothing the walk below tracked is still true.
+        submit_state_reset(&state);
+        submit_use_program(&state, ss->depth_program->id);
         uniform_set_mat4(ss->depth_program->uniforms, "lightSpaceMatrix", matrix);
-        _render_shadow_node(scene->root_node, ss->depth_program, &current_program,
+        _render_shadow_node(scene->root_node, ss->depth_program, &state,
                             SHADOW_CASTERS_TRANSLUCENT, profiler_submit(engine->profiler));
     }
 
@@ -1326,9 +1339,8 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     glEnable(GL_POLYGON_OFFSET_FILL);
     glPolygonOffset(SHADOW_DEPTH_SLOPE_BIAS, SHADOW_DEPTH_CONSTANT_BIAS);
 
-    GLuint current_program = 0;
-    glUseProgram(ss->depth_program->id);
-    current_program = ss->depth_program->id;
+    SubmitState state = {0};
+    submit_use_program(&state, ss->depth_program->id);
 
     // Wind globals for the whole pass (per-mesh response/mask ride along in the
     // node walk). render_time is the frame's single render clock, which the
@@ -1354,7 +1366,7 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
             size_t layer = i * (size_t)cc + (size_t)c;
             begin_shadow_pass(ss, layer);
             draw_shadow_layer(ss, scene->root_node, (const float*)ss->cascade_matrices[layer],
-                              &current_program, set, profiler_submit(engine->profiler));
+                              &state, set, profiler_submit(engine->profiler));
         }
     }
     profiler_scope_end(engine->profiler);
@@ -1383,7 +1395,8 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
                 // second lookup), so withholding translucent casters here
                 // would take away the solid shadow without replacing it.
                 draw_shadow_layer(ss, scene->root_node, (const float*)ss->punctual_matrices[layer],
-                                  &current_program, SHADOW_CASTERS_OPAQUE, profiler_submit(engine->profiler));
+                                  &state, SHADOW_CASTERS_OPAQUE,
+                                  profiler_submit(engine->profiler));
                 // Layers are handed out in increasing order, so the last one
                 // drawn is the bound the shader needs
                 ss->punctual_layer_count = layer + 1;

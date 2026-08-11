@@ -511,6 +511,7 @@ SceneNode* create_node() {
     glm_mat4_identity(node->original_transform);
     glm_mat4_identity(node->global_transform);
     glm_mat4_identity(node->prev_global_transform);
+    glm_mat3_identity(node->normal_matrix);
 
     node->meshes = NULL;
     node->mesh_count = 0;
@@ -792,6 +793,10 @@ void apply_transform_to_nodes(SceneNode* root, mat4 transform) {
         // Remember last frame's transform for motion vectors, then recompute.
         glm_mat4_copy(node->global_transform, node->prev_global_transform);
         glm_mat4_mul(parent_transform, node->original_transform, node->global_transform);
+
+        mat4 inv_global;
+        glm_mat4_inv(node->global_transform, inv_global);
+        glm_mat4_pick3t(inv_global, node->normal_matrix);
 
         // Update light position and direction if present
         if (node->light) {

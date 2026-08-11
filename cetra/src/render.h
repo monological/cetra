@@ -83,6 +83,63 @@ AnimationState* get_render_animation_state(void);
 // the active animation state; shared by the scene and shadow depth passes
 void render_update_skinning_uniforms(ShaderProgram* program, const Mesh* mesh);
 
+// What a draw loop has already bound, so it can skip re-binding it. Shared by
+// the scene and shadow depth walkers.
+//
+// Every field is an identity key covering a BLOCK of work, never a single value
+// -- `material` guards the whole material upload, textures included, in both
+// walkers. A tracker per individual resource would be the same idea one level
+// too low: it multiplies fields, and it splits one question ("is this material
+// current?") into several that can disagree.
+//
+// The fields are written only by the operations below, which is what keeps the
+// tracker and GL in step. Anything ELSE that binds a program or a VAO between
+// two walks -- a fullscreen resolve between sub-passes, say -- makes every key
+// here a lie, and must be followed by submit_state_reset.
+typedef struct SubmitState {
+    GLuint program;
+    Material* material;
+    GLuint vao;
+} SubmitState;
+
+// Forget everything tracked, without touching GL. Pessimistic by construction:
+// claiming nothing is bound costs at most one redundant bind, where claiming
+// something is bound when it is not drops the draw.
+static inline void submit_state_reset(SubmitState* state) {
+    state->program = 0;
+    state->material = NULL;
+    state->vao = 0;
+}
+
+// True when the program actually changed, i.e. when its per-program uniforms
+// need uploading. Drops the material key on a switch: uniform state belongs to
+// the program object, so a block uploaded to the old program says nothing about
+// what the new one holds.
+static inline bool submit_use_program(SubmitState* state, GLuint program_id) {
+    if (state->program == program_id)
+        return false;
+    glUseProgram(program_id);
+    state->program = program_id;
+    state->material = NULL;
+    return true;
+}
+
+// True when the caller must upload this material's block. Claims it either way,
+// so an early return between this and the upload would silently skip it.
+static inline bool submit_take_material(SubmitState* state, Material* material) {
+    if (state->material == material)
+        return false;
+    state->material = material;
+    return true;
+}
+
+static inline void submit_bind_vao(SubmitState* state, GLuint vao) {
+    if (state->vao != vao) {
+        glBindVertexArray(vao);
+        state->vao = vao;
+    }
+}
+
 // Bone X-ray visualization
 // Renders skeleton bones as colored lines overlaid on the model
 // If anim_state is provided, shows animated pose in red

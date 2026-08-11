@@ -1,4 +1,5 @@
 
+#include <stdbool.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -32,38 +33,89 @@ void free_uniform_manager(UniformManager* mgr) {
     free(mgr);
 }
 
-static GLint cache_uniform(UniformManager* mgr, const char* name) {
-    UniformBinding* binding = malloc(sizeof(UniformBinding));
+static UniformBinding* cache_uniform(UniformManager* mgr, const char* name) {
+    // calloc, not malloc: `count` is the sentinel that says nothing has been
+    // written yet, and a recycled allocation carrying a plausible count and
+    // value would let the first write be skipped -- on a sampler unit that
+    // means the program samples whatever is bound to unit 0.
+    UniformBinding* binding = calloc(1, sizeof(UniformBinding));
     if (!binding) {
         log_error("Failed to allocate UniformBinding");
-        return -1;
+        return NULL;
     }
 
     binding->name = safe_strdup(name);
     if (!binding->name) {
         log_error("Failed to allocate uniform name");
         free(binding);
-        return -1;
+        return NULL;
     }
 
     binding->location = glGetUniformLocation(mgr->program_id, name);
 
     HASH_ADD_KEYPTR(hh, mgr->cache, binding->name, strlen(binding->name), binding);
 
-    return binding->location;
+    return binding;
 }
 
-GLint uniform_location(UniformManager* mgr, const char* name) {
+// The binding, without disturbing its cached value. Only the setters below use
+// this; everything outside this file goes through uniform_location, which
+// invalidates. Keeping this one static is what makes that invalidation an
+// enforced boundary rather than a habit.
+static UniformBinding* uniform_binding(UniformManager* mgr, const char* name) {
     if (!mgr || !name)
-        return -1;
+        return NULL;
 
     UniformBinding* found = NULL;
     HASH_FIND_STR(mgr->cache, name, found);
-
     if (found)
-        return found->location;
+        return found;
 
+    // Cached even for a name the program does not have, so the negative result
+    // costs one glGetUniformLocation rather than one per frame.
     return cache_uniform(mgr, name);
+}
+
+GLint uniform_location(UniformManager* mgr, const char* name) {
+    UniformBinding* binding = uniform_binding(mgr, name);
+    if (!binding)
+        return -1;
+    // Handing out the location means the caller may write the uniform behind
+    // the setters' back, so what is cached here is no longer known to be what
+    // the program holds.
+    binding->count = 0;
+    return binding->location;
+}
+
+// Whether the write should be issued: the program has this uniform, and does
+// not already hold this value. Records the value as a side effect, and hands
+// back the location so the caller does not resolve twice.
+static bool uniform_write_wanted(UniformManager* mgr, const char* name, const float* value,
+                                 unsigned char count, GLint* out_location) {
+    UniformBinding* binding = uniform_binding(mgr, name);
+    if (!binding || binding->location < 0)
+        return false;
+#if CETRA_CHECK_UNIFORM_BINDING
+    // glUniform writes the BOUND program, so a set issued under another one
+    // updates that program and records it against this one -- after which a
+    // later legitimate write here is skipped as already-held. Nothing in GL
+    // catches it and no pixel necessarily moves.
+    //
+    // Off even in debug builds, and not merely as thrift: this is a GL query
+    // per uniform set, thousands a frame, and leaving it on would put roughly
+    // six percent on the frame -- which is more than most of what this file's
+    // caching wins, so every timing taken with it on would be wrong.
+    GLint bound = 0;
+    glGetIntegerv(GL_CURRENT_PROGRAM, &bound);
+    if ((GLuint)bound != mgr->program_id)
+        log_error("uniform '%s' set on program %u while %d is bound", name, mgr->program_id, bound);
+#endif
+    *out_location = binding->location;
+    if (binding->count == count && memcmp(binding->value, value, count * sizeof(float)) == 0)
+        return false;
+    memcpy(binding->value, value, count * sizeof(float));
+    binding->count = count;
+    return true;
 }
 
 void uniform_cache_standard(UniformManager* mgr) {
@@ -160,43 +212,46 @@ void uniform_cache_shadows(UniformManager* mgr, size_t max_shadow_lights, size_t
 }
 
 void uniform_set_int(UniformManager* mgr, const char* name, int value) {
-    GLint loc = uniform_location(mgr, name);
-    if (loc >= 0)
+    // Compared as a float, which is exact for what these carry: flags, sampler
+    // units and small counts, all far inside the 24-bit mantissa.
+    const float as_float = (float)value;
+    GLint loc;
+    if (uniform_write_wanted(mgr, name, &as_float, 1, &loc))
         glUniform1i(loc, value);
 }
 
 void uniform_set_float(UniformManager* mgr, const char* name, float value) {
-    GLint loc = uniform_location(mgr, name);
-    if (loc >= 0)
+    GLint loc;
+    if (uniform_write_wanted(mgr, name, &value, 1, &loc))
         glUniform1f(loc, value);
 }
 
 void uniform_set_vec2(UniformManager* mgr, const char* name, const float* value) {
-    GLint loc = uniform_location(mgr, name);
-    if (loc >= 0)
+    GLint loc;
+    if (uniform_write_wanted(mgr, name, value, 2, &loc))
         glUniform2fv(loc, 1, value);
 }
 
 void uniform_set_vec3(UniformManager* mgr, const char* name, const float* value) {
-    GLint loc = uniform_location(mgr, name);
-    if (loc >= 0)
+    GLint loc;
+    if (uniform_write_wanted(mgr, name, value, 3, &loc))
         glUniform3fv(loc, 1, value);
 }
 
 void uniform_set_vec4(UniformManager* mgr, const char* name, const float* value) {
-    GLint loc = uniform_location(mgr, name);
-    if (loc >= 0)
+    GLint loc;
+    if (uniform_write_wanted(mgr, name, value, 4, &loc))
         glUniform4fv(loc, 1, value);
 }
 
 void uniform_set_mat3(UniformManager* mgr, const char* name, const float* value) {
-    GLint loc = uniform_location(mgr, name);
-    if (loc >= 0)
+    GLint loc;
+    if (uniform_write_wanted(mgr, name, value, 9, &loc))
         glUniformMatrix3fv(loc, 1, GL_FALSE, value);
 }
 
 void uniform_set_mat4(UniformManager* mgr, const char* name, const float* value) {
-    GLint loc = uniform_location(mgr, name);
-    if (loc >= 0)
+    GLint loc;
+    if (uniform_write_wanted(mgr, name, value, 16, &loc))
         glUniformMatrix4fv(loc, 1, GL_FALSE, value);
 }

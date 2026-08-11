@@ -33,6 +33,11 @@ typedef struct SceneNode {
     struct SceneNode** children;
 
     size_t children_count;
+    // transpose(inverse(global_transform)) upper 3x3 -- what normals need under
+    // non-uniform scale. Computed where global_transform is, because the draw
+    // path wants it once per node and would otherwise invert a mat4 per mesh
+    // per pass for a value that changed once.
+    mat3 normal_matrix;
     mat4 original_transform;
     mat4 global_transform;
     mat4 prev_global_transform; // Last frame's global_transform, for motion vectors

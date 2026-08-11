@@ -7,9 +7,34 @@
 
 #include "ext/uthash.h"
 
+// Audit that every uniform set happens with its own program bound -- the one
+// assumption the value cache below makes that GL does not enforce. Costs a GL
+// query per set, so it is a deliberate build-time opt-in rather than a debug
+// default: build with -DCETRA_CHECK_UNIFORM_BINDING=1 to run it.
+#ifndef CETRA_CHECK_UNIFORM_BINDING
+#define CETRA_CHECK_UNIFORM_BINDING 0
+#endif
+
 typedef struct UniformBinding {
     char* name;
     GLint location;
+    // Last value written through a setter, so an unchanged one costs a compare
+    // instead of a driver call. Sound because uniform state belongs to the
+    // PROGRAM OBJECT in GL and survives glUseProgram; every site that relinks
+    // (program.c reload_program_from_paths) builds a fresh UniformManager, so
+    // no cache outlives the program whose state it describes.
+    //
+    // It also assumes the setters are called with that program BOUND, which is
+    // this codebase's per-pass idiom rather than anything GL enforces -- a set
+    // issued under a different program writes that one and records it here.
+    // Asserted in debug builds for exactly that reason.
+    //
+    // 16 floats covers every setter up to mat4. count is the validity sentinel:
+    // 0 means nothing has been written, so the first write always reaches GL,
+    // which matters because the cache cannot know what the driver initialised
+    // the uniform to.
+    float value[16];
+    unsigned char count;
     UT_hash_handle hh;
 } UniformBinding;
 
@@ -26,7 +51,13 @@ void uniform_cache_standard(UniformManager* mgr);
 void uniform_cache_shadows(UniformManager* mgr, size_t max_shadow_lights, size_t max_cascades,
                            size_t max_punctual_layers);
 
-// Get cached location (caches on first call if not found)
+// Get cached location (caches on first call if not found).
+//
+// Callers that use the location to write the uniform THEMSELVES -- the ranged
+// glUniform*v array uploads the setters below cannot express -- must obtain it
+// here, and this invalidates the value cache for that binding as a result. The
+// two ways of writing one uniform would otherwise disagree, silently, and only
+// on whichever program happened to use both.
 GLint uniform_location(UniformManager* mgr, const char* name);
 
 // Setters

@@ -278,8 +278,7 @@ static void _update_camera_uniforms(ShaderProgram* program, Camera* camera) {
 }
 
 static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Camera* camera,
-                         mat4 view, mat4 projection, RenderMode render_mode,
-                         GLuint* current_program, Material** current_material,
+                         mat4 view, mat4 projection, RenderMode render_mode, SubmitState* state,
                          const Frustum* frustum, bool alpha_pass, OitSubpass oit_pass) {
 
     if (!node->meshes || node->mesh_count == 0)
@@ -366,11 +365,7 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
         UniformManager* u = program->uniforms;
 
         // Only switch program if different from current
-        if (*current_program != program->id) {
-            glUseProgram(program->id);
-            *current_program = program->id;
-            // Force material update when program changes
-            *current_material = NULL;
+        if (submit_use_program(state, program->id)) {
 
             // Set view/projection/camera uniforms once per program switch.
             // projection is the jittered matrix (rasterization); the motion-vector
@@ -524,13 +519,10 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
         // under non-uniform scale. The vertex shaders used to compute it
         // themselves, which meant a full mat4 inverse PER VERTEX for a value
         // that is constant across the draw -- hundreds of thousands of times a
-        // frame on the grass mesh. Once per node here instead. Location-guarded,
-        // so programs without the uniform (shadow depth, particles) no-op.
-        mat4 inv_model;
-        glm_mat4_inv(node->global_transform, inv_model);
-        mat3 normal_matrix;
-        glm_mat4_pick3t(inv_model, normal_matrix);
-        uniform_set_mat3(u, "uNormalMatrix", (const float*)normal_matrix);
+        // frame on the grass mesh. It now rides on the node, computed where the
+        // transform it derives from is. Location-guarded, so programs without
+        // the uniform (shadow depth, particles) no-op.
+        uniform_set_mat3(u, "uNormalMatrix", (const float*)node->normal_matrix);
         uniform_set_float(u, "lineWidth", mesh->line_width);
         // Wind cloth-mask bounds: per-mesh geometry (local AABB Y). The shader
         // uses them only when this mesh's material opted in (uWindResponse > 0).
@@ -538,9 +530,8 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
         uniform_set_float(u, "uWindMaskMaxY", mesh->aabb.max[1]);
 
         // Only update material uniforms if material changed
-        if (*current_material != mat) {
+        if (submit_take_material(state, mat)) {
             _update_program_material_uniforms(program, mat, a2c_capable);
-            *current_material = mat;
             if (stats)
                 stats->material_switches++;
         }
@@ -566,9 +557,8 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
             glDisable(GL_CULL_FACE);
         }
 
-        glBindVertexArray(mesh->vao);
+        submit_bind_vao(state, mesh->vao);
         glDrawElements(mesh->draw_mode, mesh->index_count, GL_UNSIGNED_INT, 0);
-        glBindVertexArray(0);
         if (stats) {
             stats->draws++;
             stats->instances++;
@@ -583,25 +573,21 @@ static void _render_node(const Engine* engine, Scene* scene, SceneNode* node, Ca
     }
 }
 
-static void _render_xyz(SceneNode* node, mat4 view, mat4 projection, GLuint* current_program) {
+static void _render_xyz(SceneNode* node, mat4 view, mat4 projection, SubmitState* state) {
     if (!node || !node->xyz_shader_program || !node->xyz_shader_program->uniforms)
         return;
 
     ShaderProgram* program = node->xyz_shader_program;
     UniformManager* u = program->uniforms;
 
-    if (*current_program != program->id) {
-        glUseProgram(program->id);
-        *current_program = program->id;
-    }
+    submit_use_program(state, program->id);
 
     uniform_set_mat4(u, "model", (const float*)node->global_transform);
     uniform_set_mat4(u, "view", (const float*)view);
     uniform_set_mat4(u, "projection", (const float*)projection);
 
-    glBindVertexArray(node->xyz_vao);
+    submit_bind_vao(state, node->xyz_vao);
     glDrawArrays(GL_LINES, 0, xyz_vertices_size / (6 * sizeof(float)));
-    glBindVertexArray(0);
 }
 
 // Helper to ensure scene's traversal stack has enough capacity
@@ -634,9 +620,8 @@ static int _ensure_traversal_stack_capacity(Scene* scene, size_t required) {
 
 static void _render_scene_iterative(const Engine* engine, Scene* scene, SceneNode* root,
                                     Camera* camera, mat4 view, mat4 projection,
-                                    RenderMode render_mode, GLuint* current_program,
-                                    Material** current_material, const Frustum* frustum,
-                                    bool alpha_pass, OitSubpass oit_pass) {
+                                    RenderMode render_mode, SubmitState* state,
+                                    const Frustum* frustum, bool alpha_pass, OitSubpass oit_pass) {
     if (!scene) {
         log_error("error: render called with NULL scene");
         return;
@@ -664,12 +649,12 @@ static void _render_scene_iterative(const Engine* engine, Scene* scene, SceneNod
 
         // Render this node's meshes (lights arrive via the clustered UBOs,
         // uploaded once per frame -- no per-node selection)
-        _render_node(engine, scene, node, camera, view, projection, render_mode, current_program,
-                     current_material, frustum, alpha_pass, oit_pass);
+        _render_node(engine, scene, node, camera, view, projection, render_mode, state, frustum,
+                     alpha_pass, oit_pass);
 
         // Render xyz axes if enabled (opaque pass only, to avoid duplicates)
         if (!alpha_pass && node->show_xyz && node->xyz_shader_program) {
-            _render_xyz(node, view, projection, current_program);
+            _render_xyz(node, view, projection, state);
         }
 
         // Push children in reverse order to maintain left-to-right traversal
@@ -840,9 +825,8 @@ void render_current_scene(Engine* engine) {
         profiler_scope_end(engine->profiler);
     }
 
-    // Track current program and material to avoid redundant state changes
-    GLuint current_program = 0;
-    Material* current_material = NULL;
+    // Bound state the draw loop skips re-setting; see render.h
+    SubmitState submit_state = {0};
 
     // Pass 1: opaque and alpha-masked meshes (counts skipped blend meshes).
     // The only pass that publishes the normals G-buffer; every later pass
@@ -858,7 +842,7 @@ void render_current_scene(Engine* engine) {
     engine->moments_this_frame = false;
     profiler_scope_begin(engine->profiler, "opaque");
     _render_scene_iterative(engine, scene, root_node, camera, *view, draw_projection,
-                            render_mode, &current_program, &current_material, &frustum, false,
+                            render_mode, &submit_state, &frustum, false,
                             OIT_SUBPASS_NONE);
     profiler_scope_end(engine->profiler);
     engine_set_scene_draw_buffers(engine, false);
@@ -1001,8 +985,7 @@ void render_current_scene(Engine* engine) {
     // (typical models have few translucent meshes, e.g. a visor). Skipped
     // entirely when pass 1 saw none.
     if (scene->transparent_mesh_count > 0) {
-        current_program = 0;
-        current_material = NULL;
+        submit_state_reset(&submit_state);
         glDepthMask(GL_FALSE);
         // OIT (PBR only, and only when there are alpha-blend meshes to
         // accumulate): the blend meshes accumulate into the OIT FBO, which postfx
@@ -1026,13 +1009,12 @@ void render_current_scene(Engine* engine) {
             if (engine->oit_moments_enabled && engine_begin_moment_pass(engine)) {
                 profiler_scope_begin(engine->profiler, "oit moments");
                 _render_scene_iterative(engine, scene, root_node, camera, *view, draw_projection,
-                                        render_mode, &current_program, &current_material, &frustum,
+                                        render_mode, &submit_state, &frustum,
                                         true, OIT_SUBPASS_MOMENTS);
                 profiler_scope_end(engine->profiler);
                 engine_end_moment_pass(engine);
                 moments_ready = true;
-                current_program = 0;
-                current_material = NULL;
+                submit_state_reset(&submit_state);
             }
             if (engine_begin_oit_pass(engine)) {
                 engine->oit_this_frame = true;
@@ -1043,21 +1025,25 @@ void render_current_scene(Engine* engine) {
                 engine->moments_this_frame = moments_ready;
                 profiler_scope_begin(engine->profiler, "oit accumulate");
                 _render_scene_iterative(engine, scene, root_node, camera, *view, draw_projection,
-                                        render_mode, &current_program, &current_material, &frustum,
+                                        render_mode, &submit_state, &frustum,
                                         true, OIT_SUBPASS_ACCUMULATE);
                 profiler_scope_end(engine->profiler);
                 engine_end_oit_pass(engine);
             }
-            current_program = 0;
-            current_material = NULL;
+            submit_state_reset(&submit_state);
         }
         profiler_scope_begin(engine->profiler, "transparent");
         _render_scene_iterative(engine, scene, root_node, camera, *view, draw_projection,
-                                render_mode, &current_program, &current_material, &frustum, true,
+                                render_mode, &submit_state, &frustum, true,
                                 OIT_SUBPASS_NONE);
         profiler_scope_end(engine->profiler);
         glDepthMask(GL_TRUE);
     }
+    // The mesh passes no longer unbind after every draw, so the one they left
+    // bound is released once here. Hygiene rather than a requirement: the
+    // particle and post paths bind their own.
+    submit_state_reset(&submit_state);
+    glBindVertexArray(0);
 
     // Particle systems attached to scene nodes: transparent pass into the HDR
     // framebuffer (so bloom/tonemap apply), with their own depth/blend bracket.
