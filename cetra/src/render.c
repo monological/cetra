@@ -817,7 +817,10 @@ void render_current_scene(Engine* engine) {
     // modes would march, advance the wind clock, and discard the result.
     // Unjittered projection, the aerial/froxel discipline.
     if (scene->sky && !engine->capturing && render_mode == RENDER_MODE_PBR) {
-        gpu_profiler_scope_begin(engine->gpu_profiler, "cloud march");
+        // Clouds are off by default, and the callee self-gates on that, so an
+        // unconditional scope files a phantom row on every --sky run.
+        gpu_profiler_scope_begin_if(engine->gpu_profiler, scene->sky->clouds.enabled,
+                                    "cloud march");
         sky_clouds_march(scene->sky, engine, *view, *projection);
         gpu_profiler_scope_end(engine->gpu_profiler);
     }
@@ -1096,6 +1099,15 @@ void scene_capture_begin(Engine* engine, Scene* scene, SceneCaptureState* saved)
     if (!engine || !scene || !saved)
         return;
 
+    // Nothing inside a capture burst is timed, and this is the seam that owns
+    // that -- not scene_capture_faces, which starts too late: the shadow
+    // re-bake below opens the same cascade scopes the frame does, and a probe
+    // captured before the loop starts would file its bake into the first
+    // frame's cascade row. A caller cannot reach a capture without coming
+    // through here, which is why the policy lives here rather than in each of
+    // them.
+    gpu_profiler_suspend(engine->gpu_profiler);
+
     // The mask array must be packed before the first face: a capture taken with
     // the scalar fallbacks still in place bakes them into the cubemap forever.
     mask_array_ensure_built(scene, engine);
@@ -1123,6 +1135,7 @@ void scene_capture_begin(Engine* engine, Scene* scene, SceneCaptureState* saved)
 void scene_capture_end(Engine* engine, Scene* scene, const SceneCaptureState* saved) {
     if (!engine || !scene || !saved)
         return;
+    gpu_profiler_resume(engine->gpu_profiler);
     engine_set_render_time(engine, saved->render_time, saved->render_delta);
     if (scene->shadow_system) {
         scene->shadow_system->cascade_count = saved->cascade_count;

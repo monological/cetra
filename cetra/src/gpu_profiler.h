@@ -2,6 +2,7 @@
 #define GPU_PROFILER_H
 
 #include <GL/glew.h>
+#include <stdbool.h>
 
 // Per-pass GPU timing (spec 11.27). Exists because every performance number in
 // this tree before it was wall-clock measured around the WHOLE frame, which can
@@ -51,6 +52,14 @@ void gpu_profiler_end_frame(GPUProfiler* profiler, double dt);
 // safe, it simply goes untimed.
 void gpu_profiler_scope_begin(GPUProfiler* profiler, const char* name);
 void gpu_profiler_scope_end(GPUProfiler* profiler);
+
+// Open a scope only when `timed`, and swallow the matching end when not. For a
+// pass whose gate is known at the call site: it keeps the row absent on frames
+// the pass sits out, without the caller duplicating the work call to put the
+// begin/end on one arm of an if. Passing a NULL name to the plain begin above
+// does NOT do this -- that returns without recording a refusal, so the end
+// would close whatever scope was already open.
+void gpu_profiler_scope_begin_if(GPUProfiler* profiler, bool timed, const char* name);
 
 // Stop and restart timing around a nested re-render of the whole scene. Without
 // this the capture's passes would be refused one at a time and reported as a

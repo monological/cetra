@@ -1692,6 +1692,10 @@ static bool postfx_ensure_flare(PostFX* fx) {
 static bool postfx_run_flare(PostFX* fx) {
     if (!postfx_ensure_flare(fx))
         return false;
+    // Below the allocation gate: the call site cannot see it, and it captures
+    // this function's own return value only after a call-site scope would
+    // already have filed the row.
+    gpu_profiler_scope_begin(fx->profiler, "lens flare");
     glBindFramebuffer(GL_FRAMEBUFFER, fx->flare_fbo);
     glViewport(0, 0, fx->flare_width, fx->flare_height);
     glUseProgram(fx->flare_program->id);
@@ -1713,6 +1717,7 @@ static bool postfx_run_flare(PostFX* fx) {
                       (float)(fx->flare_source_lod < top_mip ? fx->flare_source_lod : top_mip));
     draw_fullscreen_quad(fx->quad_vao);
     check_gl_error("postfx lens flare");
+    gpu_profiler_scope_end(fx->profiler);
     return true;
 }
 
@@ -2649,6 +2654,8 @@ static bool postfx_ensure_oit_targets(PostFX* fx) {
 static void postfx_run_oit(PostFX* fx, GLuint oit_fbo, bool moments) {
     if (!postfx_ensure_oit_targets(fx))
         return;
+    // Below the allocation gate, which only this function can see.
+    gpu_profiler_scope_begin(fx->profiler, "oit composite");
     resolve_color_attachment(oit_fbo, GL_COLOR_ATTACHMENT5, fx->oit_accum_fbo, fx->width,
                              fx->height);
     resolve_color_attachment(oit_fbo, GL_COLOR_ATTACHMENT6, fx->oit_revealage_fbo, fx->width,
@@ -2673,6 +2680,7 @@ static void postfx_run_oit(PostFX* fx, GLuint oit_fbo, bool moments) {
     glDisable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     check_gl_error("postfx oit");
+    gpu_profiler_scope_end(fx->profiler);
 }
 
 void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hdr,
@@ -2704,11 +2712,8 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
 
     // OIT: composite the accumulated transparent layer over the resolved opaque
     // scene before any downstream HDR pass (TAA/SSR/bloom/tonemap) reads it.
-    if (writes->oit_fbo != 0) {
-        gpu_profiler_scope_begin(fx->profiler, "oit composite");
+    if (writes->oit_fbo != 0)
         postfx_run_oit(fx, writes->oit_fbo, writes->oit_moment_weighted);
-        gpu_profiler_scope_end(fx->profiler);
-    }
 
     if (mode == POSTFX_TONEMAP_PASSTHROUGH) {
         // Display-ready frame: copy to the target, skipping bloom and tone
@@ -3190,11 +3195,8 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             gpu_profiler_scope_begin(fx->profiler, "bloom pyramid");
             postfx_run_bloom(fx, scene_tex);
             gpu_profiler_scope_end(fx->profiler);
-            if (flare_wanted) {
-                gpu_profiler_scope_begin(fx->profiler, "lens flare");
+            if (flare_wanted)
                 flare_active = postfx_run_flare(fx);
-                gpu_profiler_scope_end(fx->profiler);
-            }
         }
 
         // Composite + tone map into the target framebuffer. The quad runs at

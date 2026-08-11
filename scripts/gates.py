@@ -2297,7 +2297,7 @@ def run_translucent_shadow_gate(workdir):
 # whole post chain writing through a NULL profiler -- left exactly three rows
 # standing, which any count low enough to be safe would have cleared.
 GPU_REQUIRED_ROWS = frozenset(
-    {"shadows", "opaque", "gtao sweep", "ssr", "bloom pyramid", "tonemap + finishing"})
+    {"shadow cascades", "opaque", "gtao sweep", "ssr", "bloom pyramid", "tonemap + finishing"})
 GPU_MIN_POSITIVE = 4          # rows that must be strictly > 0, not merely present
 GPU_SUM_MIN = 0.30            # TIMED must be at least this fraction of FRAME
 GPU_SCALE_DROP = 0.20         # render-res passes must shed this much at half scale
@@ -2310,18 +2310,29 @@ GPU_SCALE_DROP = 0.20         # render-res passes must shed this much at half sc
 _GPU_ROW = re.compile(r"^(.*?)\s+(-?\d+\.\d+) ms$")
 
 
-def _gpu_table(workdir, tag, extra, screenshot=None):
-    """--gpu-profile once. Returns (rows, unparsed) or (None, None) on failure.
+GPU_FIXTURE = "dir_shadow_fixture.cscn"
 
-    Run long enough to close a latch window (the profiler publishes on a 0.5s
-    bucket), or the table comes back empty and every arm below reads as a
-    failure of the renderer rather than of the run length.
+
+def _gpu_cmd(out, extra, profile):
+    """The one command line every run in this gate uses.
+
+    Built in one place because gpu-off's whole claim is that its two renders
+    differ in exactly one flag; two hand-written lists could drift and the arm
+    would then compare two different pictures and blame the instrument.
+
+    -f 45 is enough to close a latch window (0.5s at this fixture's frame time
+    is ~frame 38) and gpu_profiler_report publishes whatever is left over
+    regardless, so the run length is not load-bearing beyond that.
     """
+    return ([RENDER, "-m", os.path.join(ROOT, "assets", GPU_FIXTURE), "-x", "-f", "45",
+             "-W", "800", "-H", "600", "--no-auto-exposure", "-E", "1.0", "-S", out]
+            + (["--gpu-profile"] if profile else []) + extra)
+
+
+def _gpu_table(workdir, tag, extra, screenshot=None):
+    """One profiled run. Returns (rows, unparsed) or (None, None) on failure."""
     out = screenshot or os.path.join(workdir, f"gpu_{tag}.ppm")
-    cmd = [RENDER, "-m", os.path.join(ROOT, "assets", "dir_shadow_fixture.cscn"),
-           "--gpu-profile", "-x", "-f", "90", "-W", "800", "-H", "600",
-           "--no-auto-exposure", "-E", "1.0", "-S", out] + extra
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    r = subprocess.run(_gpu_cmd(out, extra, True), capture_output=True, text=True)
     if r.returncode != 0 or not os.path.exists(out):
         print(f"  gpu          ERROR {tag} exited {r.returncode}: "
               f"{(r.stdout + r.stderr).strip()[-300:]}")
@@ -2345,9 +2356,8 @@ def _gpu_table(workdir, tag, extra, screenshot=None):
 
 
 def run_gpu_profile_gate(workdir):
-    fixture = os.path.join(ROOT, "assets", "dir_shadow_fixture.cscn")
-    if not os.path.exists(fixture):
-        print("  gpu          SKIP  (missing dir_shadow_fixture.cscn)")
+    if not os.path.exists(os.path.join(ROOT, "assets", GPU_FIXTURE)):
+        print(f"  gpu          SKIP  (missing {GPU_FIXTURE})")
         return []
 
     on_ppm = os.path.join(workdir, "gpu_on.ppm")
@@ -2404,9 +2414,7 @@ def run_gpu_profile_gate(workdir):
     # The claim the goldens cannot make: they run WITHOUT the flag, so they say
     # nothing about whether wrapping every pass in a query moves a pixel.
     off_ppm = os.path.join(workdir, "gpu_off.ppm")
-    cmd = [RENDER, "-m", fixture, "-x", "-f", "90", "-W", "800", "-H", "600",
-           "--no-auto-exposure", "-E", "1.0", "-S", off_ppm]
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    r = subprocess.run(_gpu_cmd(off_ppm, [], False), capture_output=True, text=True)
     if r.returncode != 0 or not os.path.exists(off_ppm):
         print("  gpu-off      ERROR while rendering without the flag")
         failures.append("gpu-off")

@@ -1686,16 +1686,9 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode) {
 
     // GUI last, after tone mapping. gui_render_frame self-gates on
     // gui_frame_active, so it no-ops when no panel/overlay is enabled.
-    // Gated on the same latch the callee checks, so a headless run gets no row
-    // rather than a 0.000 ms one. A row for a pass that did not run breaks the
-    // contract the gates lean on: absent means off.
-    if (engine->gui_frame_active) {
-        gpu_profiler_scope_begin(engine->gpu_profiler, "gui");
-        gui_render_frame(engine);
-        gpu_profiler_scope_end(engine->gpu_profiler);
-    } else {
-        gui_render_frame(engine);
-    }
+    gpu_profiler_scope_begin_if(engine->gpu_profiler, engine->gui_frame_active, "gui");
+    gui_render_frame(engine);
+    gpu_profiler_scope_end(engine->gpu_profiler);
 }
 
 void engine_set_scene_draw_buffers(const Engine* engine, bool with_gbuffer) {
@@ -2221,16 +2214,21 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EngineRenderFunc render
         // and bakes its own, and the pass below then restores the camera-fit
         // cascades by simply overwriting them. No-op on a converged volume.
         if (shadow_scene && shadow_scene->gi_volume) {
-            gpu_profiler_scope_begin(engine->gpu_profiler, "gi capture");
+            // Timed only while probes remain to bake. A converged volume is the
+            // steady state, so an unconditional scope would file a 0.000 ms row
+            // on nearly every frame of a run.
+            gpu_profiler_scope_begin_if(engine->gpu_profiler,
+                                        shadow_scene->gi_volume->dirty_count > 0, "gi capture");
             gi_volume_update(shadow_scene->gi_volume, engine, shadow_scene);
             gpu_profiler_scope_end(engine->gpu_profiler);
         }
 
         // Shadow depth pass (before main render)
         if (shadow_scene && shadow_scene->shadow_system && shadow_scene->shadow_system->enabled) {
-            gpu_profiler_scope_begin(engine->gpu_profiler, "shadows");
+            // Unscoped here on purpose: render_shadow_depth_pass opens its own
+            // cascade/punctual/msm/tsm scopes, and an outer one would swallow
+            // all four -- flat scopes mean the coarser wrapper simply wins.
             render_shadow_depth_pass(engine, shadow_scene);
-            gpu_profiler_scope_end(engine->gpu_profiler);
         }
 
         glBindFramebuffer(GL_FRAMEBUFFER, engine->framebuffer);

@@ -235,6 +235,16 @@ void gpu_profiler_scope_begin(GPUProfiler* profiler, const char* name) {
     profiler->active = index;
 }
 
+void gpu_profiler_scope_begin_if(GPUProfiler* profiler, bool timed, const char* name) {
+    if (!profiler)
+        return;
+    if (!timed) {
+        profiler->suppressed++;
+        return;
+    }
+    gpu_profiler_scope_begin(profiler, name);
+}
+
 void gpu_profiler_scope_end(GPUProfiler* profiler) {
     if (!profiler)
         return;
