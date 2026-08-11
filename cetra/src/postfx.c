@@ -2721,10 +2721,12 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         // blit cannot dither without becoming a shader pass. Deliberate -- this
         // branch carries debug and LDR-authored frames, which are data rather
         // than graded images, and they skip exposure and tone mapping too.
+        gpu_profiler_scope_begin(fx->profiler, "passthrough blit");
         glBindFramebuffer(GL_READ_FRAMEBUFFER, fx->hdr_fbo);
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, target_fbo);
         glBlitFramebuffer(0, 0, fx->width, fx->height, 0, 0, fx->out_width, fx->out_height,
                           GL_COLOR_BUFFER_BIT, GL_LINEAR);
+        gpu_profiler_scope_end(fx->profiler);
     } else {
         // The color TAA resolves iff it is enabled and its velocity buffer was
         // produced. The single invariant behind both the TAA pass and the AO
@@ -3031,11 +3033,13 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             // frame to display size. At full scale the canvas IS hdr_fbo and
             // there is nothing to bring anywhere.
             if (post_canvas) {
+                gpu_profiler_scope_begin(fx->profiler, "seam magnify");
                 glBindFramebuffer(GL_READ_FRAMEBUFFER, fx->hdr_fbo);
                 glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fx->post_fbo);
                 glBlitFramebuffer(0, 0, fx->width, fx->height, 0, 0, fx->post_width,
                                   fx->post_height, GL_COLOR_BUFFER_BIT, GL_LINEAR);
                 check_gl_error("postfx taau seam");
+                gpu_profiler_scope_end(fx->profiler);
             }
             fx->taa_history.valid = false;
         }

@@ -2265,6 +2265,7 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EngineRenderFunc render
         // AO -- with AO off the composite still owes the scene its specular.
         engine->spec_this_frame =
             frame_mode == RENDER_MODE_PBR && postfx_wants_spec_split(engine->postfx);
+        gpu_profiler_scope_begin(engine->gpu_profiler, "scene clear");
         engine_set_scene_draw_buffers(engine, true);
         GBufferAttachment gb[GBUFFER_ATTACHMENT_COUNT];
         _gbuffer_attachments(engine, gb);
@@ -2280,6 +2281,7 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EngineRenderFunc render
                 glClearBufferfv(GL_COLOR, (GLint)(gb[i].attachment - GL_COLOR_ATTACHMENT0),
                                 gb[i].clear);
         }
+        gpu_profiler_scope_end(engine->gpu_profiler);
 
         Scene* current_scene = get_current_scene(engine);
 
