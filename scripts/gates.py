@@ -2567,18 +2567,16 @@ def _fixture_mesh_nodes():
     return sum(1 for n in gltf["nodes"] if "mesh" in n)
 
 
-def _submit_run(workdir, tag, extra, cascades=None):
+def _submit_run(workdir, tag, extra, cascades=SUBMIT_CASCADES):
     """One profiled run of the submission fixture, at a size that renders fast.
 
     All three tables come out of ONE render, so an arm reading a count against
     a timing is reading the same frame rather than two runs of it. The cascade
-    count is pinned on the command line so SUBMIT_CASCADES stops shadowing a C
-    constant it cannot see change.
+    count is always pinned on the command line, so SUBMIT_CASCADES stops
+    shadowing a C constant it cannot see change.
     """
-    count = SUBMIT_CASCADES if cascades is None else cascades
-    pinned = [] if any(a == "--shadow-cascades" for a in extra) else \
-        ["--shadow-cascades", str(count)]
-    return _profiled_run(workdir, f"submit_{tag}", pinned + extra,
+    return _profiled_run(workdir, f"submit_{tag}",
+                         ["--shadow-cascades", str(cascades)] + extra,
                          fixture=SUBMIT_FIXTURE, size=("400", "300"))
 
 
@@ -2676,7 +2674,7 @@ def run_submission_gate(workdir):
     # still exact is what it SAW: every mesh node, once per cascade.
     ok = (opaque.get("draws") == mesh_nodes
           and shadow.get("meshes seen") == want_shadow
-          and shadow.get("draws") + shadow.get("meshes culled", 0) == want_shadow)
+          and shadow.get("draws", 0) + shadow.get("meshes culled", 0) == want_shadow)
     print(f"  submit-count {'PASS' if ok else 'FAIL'}  opaque draws {opaque.get('draws')} "
           f"(want {mesh_nodes}, one per mesh node), shadow saw {shadow.get('meshes seen')} "
           f"(want {want_shadow} = {mesh_nodes} x {SUBMIT_CASCADES} cascades) and drew "
@@ -2703,7 +2701,7 @@ def run_submission_gate(workdir):
     # and the same code must reject NOTHING -- that half is the inverse arm, and
     # it is what fails for a cull wired to something other than the light's own
     # volume, which would reject at both counts.
-    one = _submit_run(workdir, "cascade1", ["--shadow-cascades", "1"], cascades=1)
+    one = _submit_run(workdir, "cascade1", [], cascades=1)
     if one is None:
         failures.append("shadowcull-draws")
     else:
@@ -2728,8 +2726,11 @@ def run_submission_gate(workdir):
     if not os.path.exists(wide):
         print("  shadowcull-live SKIP  (missing abandoned_window_shadowed.cscn)")
     else:
-        tables = _profiled_run(workdir, "shadowcull_wide", [], fixture=os.path.join(
-            "abandoned_window", "abandoned_window_shadowed.cscn"), size=("200", "150"))
+        tables = _profiled_run(workdir, "shadowcull_wide",
+                               ["--shadow-cascades", str(SUBMIT_CASCADES)],
+                               fixture=os.path.join("abandoned_window",
+                                                    "abandoned_window_shadowed.cscn"),
+                               size=("200", "150"))
         if tables is None:
             failures.append("shadowcull-live")
         else:
@@ -2743,10 +2744,10 @@ def run_submission_gate(workdir):
                 failures.append("shadowcull-live")
 
     # --- submit-cull: the counters are attached to submission, not to nodes -
-    # A camera aimed away culls every mesh in the camera pass and none in the
-    # shadow pass, which has no culling yet. Asserting the exact residue is
-    # what makes this fail for a counter wired to the node list instead: that
-    # one would not move at all.
+    # A camera aimed away empties the camera pass. The shadow pass follows the
+    # LIGHT, so it still sees every caster and still draws most of them --
+    # which is what makes this fail for a counter wired to the node list: that
+    # one would report the same number for both passes.
     far = _submit_run(workdir, "far", ["--cam-eye", "500,500,500",
                                        "--cam-target", "501,500,500"])
     if far is None:

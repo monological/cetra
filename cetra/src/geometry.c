@@ -88,6 +88,11 @@ void free_curve(Curve* curve) {
     }
 }
 
+// Every generator below computes the mesh's bounds before returning. That is an
+// invariant of the generator rather than a rule for its caller because the cost
+// of forgetting is no longer a popped object at the screen edge: the shadow
+// depth pass culls on these bounds too, and a degenerate AABB there is a
+// missing shadow in the middle of a lit scene.
 void generate_point_to_mesh(Mesh* mesh, const Point* point) {
     mesh->vertex_count = 1;
     float* new_vertices = (float*)safe_realloc(mesh->vertices, 3 * sizeof(float));
@@ -104,6 +109,7 @@ void generate_point_to_mesh(Mesh* mesh, const Point* point) {
     mesh->index_count = 0;
     free(mesh->indices);
     mesh->indices = NULL;
+    calculate_aabb(mesh);
 }
 
 void generate_circle_to_mesh(Mesh* mesh, const Circle* circle) {
@@ -184,6 +190,7 @@ void generate_circle_to_mesh(Mesh* mesh, const Circle* circle) {
         mesh->line_width = circle->line_width;
     }
     mesh->draw_mode = draw_mode;
+    calculate_aabb(mesh);
 }
 
 void generate_rect_to_mesh(Mesh* mesh, const Rect* rect) {
@@ -371,6 +378,7 @@ void generate_rect_to_mesh(Mesh* mesh, const Rect* rect) {
             mesh->line_width = rect->line_width;
         }
     }
+    calculate_aabb(mesh);
 }
 
 void generate_curve_to_mesh(Mesh* mesh, const Curve* curve) {
@@ -417,6 +425,7 @@ void generate_curve_to_mesh(Mesh* mesh, const Curve* curve) {
 
     mesh->line_width = curve->line_width;
     mesh->draw_mode = MESH_LINE_STRIP;
+    calculate_aabb(mesh);
 }
 
 void generate_cylinder_to_mesh(Mesh* mesh, const Cylinder* cylinder) {
@@ -545,6 +554,7 @@ void generate_cylinder_to_mesh(Mesh* mesh, const Cylinder* cylinder) {
     }
 
     mesh->draw_mode = MESH_TRIANGLES;
+    calculate_aabb(mesh);
 }
 
 void generate_box_to_mesh(Mesh* mesh, const Box* box) {

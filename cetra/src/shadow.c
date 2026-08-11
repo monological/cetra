@@ -559,10 +559,17 @@ static void _draw_shadow_items(const DrawList* list, ShaderProgram* program, Sub
         if (stats)
             stats->meshes_seen++;
         // The layer's own volume, so a rejected caster contributed nothing to
-        // it. Exact rather than merely conservative: the cascade fit pushes the
-        // eye back by radius + scene_pad precisely so casters outside the view
-        // slice but toward the light stay inside the box.
-        if (frustum && !(item->flags & DRAW_UNBOUNDED) &&
+        // it -- the matrix IS the clip volume, and nothing here enables
+        // GL_DEPTH_CLAMP, so anything this rejects the rasterizer would have
+        // clipped. That is what makes the map bit-identical rather than merely
+        // close, and it holds whatever fit produced the matrix: the padded
+        // cascade slices, the outermost whole-scene fit, and the punctual faces
+        // that have no pad at all.
+        //
+        // Enabling depth clamp on this pass -- the usual remedy for a caster
+        // between the light and the near plane -- would break that, and would
+        // do it silently: casters this test drops would then have contributed.
+        if (!(item->flags & DRAW_UNBOUNDED) &&
             !frustum_test_aabb_transformed(frustum, item->mesh->aabb.min, item->mesh->aabb.max,
                                            item->node->global_transform)) {
             if (stats)
@@ -728,14 +735,14 @@ static int compute_punctual_matrices(const Light* light, const ShadowSystem* ss,
 
 // The body both depth-pass loops share, once a layer is bound: aim the depth
 // program at one light-space matrix and walk the scene into it.
-static void draw_shadow_layer(ShadowSystem* ss, const DrawList* list, const float* matrix,
+static void draw_shadow_layer(ShadowSystem* ss, const DrawList* list, mat4 matrix,
                               SubmitState* state, ShadowCasterSet set, SubmitStats* stats) {
-    uniform_set_mat4(ss->depth_program->uniforms, "lightSpaceMatrix", matrix);
+    uniform_set_mat4(ss->depth_program->uniforms, "lightSpaceMatrix", (const float*)matrix);
     // The matrix IS the layer's coverage volume, and Gribb-Hartmann does not
     // care whether it is ortho or perspective -- so cascades and punctual faces
     // cull through the same six planes.
     Frustum layer_frustum;
-    frustum_extract_from_vp(*(mat4*)(uintptr_t)matrix, &layer_frustum);
+    frustum_extract_from_vp(matrix, &layer_frustum);
     _draw_shadow_items(list, ss->depth_program, state, set, stats, &layer_frustum);
     end_shadow_pass(ss);
 }
@@ -1012,7 +1019,7 @@ static bool shadow_build_tsm(ShadowSystem* ss, const Engine* engine, Scene* scen
         // Same volume the depth layer culls against; both TSM walks below write
         // the layers this cascade owns.
         Frustum tsm_frustum;
-        frustum_extract_from_vp(*(mat4*)(uintptr_t)matrix, &tsm_frustum);
+        frustum_extract_from_vp(ss->cascade_matrices[c], &tsm_frustum);
         SubmitState state = {0};
 
         // --- accumulate absorbance -----------------------------------------
@@ -1374,7 +1381,7 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
         for (int c = 0; c < cc; ++c) {
             size_t layer = i * (size_t)cc + (size_t)c;
             begin_shadow_pass(ss, layer);
-            draw_shadow_layer(ss, &scene->draw_list, (const float*)ss->cascade_matrices[layer],
+            draw_shadow_layer(ss, &scene->draw_list, ss->cascade_matrices[layer],
                               &state, set, profiler_submit(engine->profiler));
         }
     }
@@ -1403,7 +1410,7 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
                 // the directional cascades only (unit 15 has no room for a
                 // second lookup), so withholding translucent casters here
                 // would take away the solid shadow without replacing it.
-                draw_shadow_layer(ss, &scene->draw_list, (const float*)ss->punctual_matrices[layer],
+                draw_shadow_layer(ss, &scene->draw_list, ss->punctual_matrices[layer],
                                   &state, SHADOW_CASTERS_OPAQUE,
                                   profiler_submit(engine->profiler));
                 // Layers are handed out in increasing order, so the last one

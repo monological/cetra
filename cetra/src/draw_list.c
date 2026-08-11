@@ -66,10 +66,10 @@ static bool push_gizmo(DrawList* list, SceneNode* node) {
     return true;
 }
 
-// The material decides which pass draws a mesh and what the depth pass may do
-// with it. Both were recomputed per mesh per pass before; neither depends on
-// the pass.
-static void classify(const Material* mat, uint8_t* lane, uint8_t* flags) {
+// Which pass draws this mesh, and what a pass may assume about it. All of it was
+// recomputed per mesh per pass before; none of it depends on the pass.
+static void classify(const Mesh* mesh, uint8_t* lane, uint8_t* flags) {
+    const Material* mat = mesh->material;
     bool transmissive = mat->transmission > 0.0f;
     bool blend = mat->alpha_mode == ALPHA_BLEND;
     bool masked = mat->alpha_mode == ALPHA_MASK;
@@ -87,7 +87,10 @@ static void classify(const Material* mat, uint8_t* lane, uint8_t* flags) {
         *flags |= DRAW_FOLIAGE;
     if (mat->doubleSided)
         *flags |= DRAW_DOUBLE_SIDED;
-    if (mat->wind_response > 0.0f)
+    // Neither is bounded by mesh->aabb: calculate_aabb runs once at import, so
+    // a skinned mesh carries bind-pose bounds, and wind displacement is computed
+    // in the shader after the fact.
+    if (mesh->is_skinned || mat->wind_response > 0.0f)
         *flags |= DRAW_UNBOUNDED;
 }
 
@@ -108,9 +111,7 @@ static bool append_node(DrawList* list, SceneNode* node) {
             continue;
 
         DrawItem item = {.mesh = mesh, .node = node};
-        classify(mesh->material, &item.lane, &item.flags);
-        if (mesh->is_skinned)
-            item.flags |= DRAW_UNBOUNDED;
+        classify(mesh, &item.lane, &item.flags);
         if (!push(list, item))
             return false;
     }
