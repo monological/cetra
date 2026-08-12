@@ -14,8 +14,10 @@ each tier item later gets its own subplan (feature branch + spec) before impleme
 **Status: Tiers 1-3 are closed.** Every item is DONE, REJECTED-with-a-measurement, or CLOSED-and-split
 — the original plan is finished. **Tier 4 (Tracks C/D/E below) is the new frontier**, and it is shaped
 by a different constraint than Tiers 1-3 were: those items could each be built as another gated
-fullscreen pass, and Tier 4's cannot. Three structural walls now decide what is reachable at all; they
-are stated before Track C because half the Tier 4 items are blocked on one of them.
+fullscreen pass, and Tier 4's cannot. Four structural walls now decide what is reachable at all; they
+are stated before Track C because half the Tier 4 items are blocked on one of them. Two have since
+fallen (Wall 3 to E4, most of Wall 2 to E5) and one was added after the fact (Wall 4), which is the
+section's own record of having mis-framed the geometry problem.
 
 Everything in Tracks C/D/E is a **sketch**, in the sense this document has taught the word: a
 pre-implementation guess whose load-bearing claims are wrong often enough that B3 lists four, B6 lists
@@ -539,12 +541,18 @@ it "one extra tap": the composite's single blend carries one (inscatter, transmi
 fog pass early-returned with fog off, so the two media are combined analytically inside one
 composite and `postfx_run_fog` became `postfx_run_atmosphere`.*
 
-## The three walls (Tier 4 preamble)
+## The four walls (Tier 4 preamble)
 
 Tiers 1-3 shared a shape: each item was another gated, lazily-allocated fullscreen pass, and the
-engine absorbed a dozen of them without structural change. That is over. Three walls now stand
+engine absorbed a dozen of them without structural change. That is over. Four walls now stand
 between the current renderer and the next tier, and naming them is more useful than any single
 feature below, because each one decides which features are reachable *at all*.
+
+*Wall 4 was added after 11.29 and it is the one this section got wrong. There were three here for
+the whole of Tiers 1-3, and the reason a fourth appeared is worth reading before the list: Wall 2
+named the geometry problem as **submission** — draws, objects, triangles — and every remedy under it
+reduces submission. That framing survived unchallenged for the length of the roadmap because no
+scene in the corpus had overdraw. The first one that did inverted it in a single profiler run.*
 
 **Wall 1 — `pbr_frag` is sampler-saturated (16/16).** Detailed in the ledger section above. It blocks,
 today, every feature whose data has to reach the *forward shading* stage as a texture: decals, light
@@ -554,22 +562,67 @@ is nowhere near full), anything that fits in a UBO, or anything small enough to 
 Note which Tier 4 items below are postfx-only or UBO-only: those are the cheap ones, and they are
 cheap *because* of this wall, not in spite of it.
 
-**Wall 2 — geometry submission does not scale.** One draw per mesh; program and material changes are
-change-tracked (`current_program` / `current_material` in `render.c`) but draws are issued in
-scene-traversal order, not sorted. Culling is a per-mesh AABB test against the un-jittered frustum
-(`render.c:345`) and that is the entire culling story: **no LOD, no occlusion culling, and no
-instancing anywhere outside `particle_renderer.c`.** `apps/tree` shows the consequence honestly — its
-grass field is one CPU-baked mega-mesh rebuilt and re-uploaded whole on every slider change
-(`regenerate_grass`, `apps/tree/src/tree.c:1013`). The renderer is AAA-caliber per pixel and
-early-2000s per object. Every item in Track D that adds *objects* rather than *pixels* runs into this.
+**Wall 2 — geometry submission does not scale — MOSTLY REMOVED (specs 11.28 / 11.29).** Instancing,
+LOD chains and per-cascade shadow culling shipped in E5; on `abandoned_window_shadowed` that is shadow
+CPU **−83%**, frame **−38%**, 2,148 draws → 272. What remains of the wall is the third limb, draw
+**ordering**, which E5 deferred as unfalsifiable against the corpus it had — see E6 below, where it is
+no longer unfalsifiable.
 
-**Wall 3 — the GPU is unmeasured.** There is not one `glGenQueries` / `GL_TIME_ELAPSED` /
-`glQueryCounter` in `cetra/src` outside the vendored deps, and the HUD shows FPS and nothing else
-(`gui.c:871`). Every perf number in every spec in this tree — 44 -> 22 ms at 0.67 scale, the 73.6 ms
-cloud re-bake — is wall-clock frame time measured around the whole frame. That was adequate while the
-question was "did this feature cost anything"; it is not adequate for "which of these 30 passes should
-lose 2 ms", which is the question a Tier 4 perf budget asks. This is the cheapest wall to remove and
-it gates the honesty of everything in Track E's tail.
+*The original wall text read: "One draw per mesh … no LOD, no occlusion culling, and no instancing
+anywhere outside `particle_renderer.c`. The renderer is AAA-caliber per pixel and early-2000s per
+object." Two of those three are now false. The occlusion clause was always true and is now Wall 4's
+business rather than this one's.*
+
+**Wall 4 — the opaque pass is unshielded.** There is no depth prepass anywhere in the engine, no
+occlusion culling of any kind, and opaque draws are issued in draw-list order — a pre-order DFS
+flatten, Morton-ordered within a prototype for batch contiguity, which is deliberately
+*camera-independent*. A forward renderer with no prepass depends entirely on hardware early-Z to
+avoid shading hidden fragments, and early-Z rejects nothing unless nearer geometry wrote depth first.
+So every layer of a canopy shades in full, at whatever the uber-shader costs, into five MRT RGBA16F
+targets at 4x MSAA.
+
+`apps/forest` measures it, and the numbers are not subtle. At the default 1600x900 on an M1 (a
+3200x1800 Retina framebuffer): **opaque 312 ms of a 346 ms timed frame** — 90% of it — against shadow
+cascades at 23 ms. The shadow pass pushes **5x the triangles** (130M vs 26M) for **1/14th the time**,
+because it is depth-only.
+
+Three probes, and the conditions differ so they are worth stating rather than pooling:
+
+| probe | condition | result |
+|---|---|---|
+| 3.2x fewer triangles (`--lod-bias 0.2`) | 800x450 fb, MSAA off — fill minimised | 42.6 → 38.6 ms, **9%** |
+| 12x more draws (`--no-instancing` 2,617 vs `--no-lod` 219) | same | 44.2 vs 65.6 ms — more draws is **faster** |
+| MSAA 4 → 1 | 3200x1800 fb | 312 → 220 ms, **−92 ms** |
+
+Neither triangle count nor draw count is the limit, and MSAA is only 30% of it. Fragments are. (The
+draw-count row is not perfectly single-variable — the two configs also differ 25.9M vs 28.7M triangles
+— but it fails in the direction that matters: the config with 12x fewer draws is the slower one.)
+
+Two properties of the content make it the worst case rather than merely a bad one, and both are
+ordinary authoring choices: the foliage material is `doubleSided` (backface culling off, so every leaf
+card rasterizes twice) and `ALPHA_MASK` (a shader that can `discard` cannot have its depth resolved
+before it runs, so those draws forfeit early-Z outright).
+
+**This wall was invisible for the length of Tiers 1-3 for a structural reason, not an accidental
+one.** The corpus was props, a character and an interior — content with no depth complexity, where
+submission genuinely is the bottleneck and Wall 2's framing is correct. E4's per-pass timings were
+taken on exactly that content. The word "overdraw" appears nowhere in this document or in any spec
+before this entry. `apps/forest` was built to exercise E5 and its spec measures triangles, draws and
+material switches throughout — every one a submission metric — while carrying `opaque GPU 435 ms` in
+its own results table, read as a baseline for comparing LOD settings rather than as one pass taking
+435 milliseconds. The instrument was right, present, and pointed at the answer; the model decided
+what the number meant.
+
+**Wall 3 — the GPU is unmeasured — REMOVED (spec 11.27).** Per-pass `GL_TIME_ELAPSED` scopes, a
+ring of N-frame-deep results, a HUD table and submission counters. It was the cheapest wall to remove
+and it gated the honesty of everything in Track E's tail — which it then delivered twice over: E4's
+own first draft drew a conclusion the instrument reversed, and Wall 4 above exists because the
+instrument said "opaque 312 ms" in a single run.
+
+*Original text: "There is not one `glGenQueries` / `GL_TIME_ELAPSED` / `glQueryCounter` in `cetra/src`
+outside the vendored deps, and the HUD shows FPS and nothing else (`gui.c:871`). Every perf number in
+every spec in this tree — 44 -> 22 ms at 0.67 scale, the 73.6 ms cloud re-bake — is wall-clock frame
+time measured around the whole frame."*
 
 ## Track C — Lighting completeness
 
@@ -767,7 +820,14 @@ patch draw path, LOD-by-distance heuristic).
 No terrain system exists. Real gap, but only for outdoor scale, and it depends on Wall 2 far more
 than on any rendering technique — a clipmap without instancing, LOD and a streaming story is a
 mega-mesh with extra steps, which `apps/tree`'s grass already demonstrates the cost of. **Do not
-schedule this before Track E's E5.**
+schedule this before Track E's E5** — now satisfied.
+
+**`apps/forest` (11.29) is not this item and must not be read as it.** It is a *consumer* of E5:
+fixed tiles, per-tile LOD chains, everything resident, capped at 1 km² by exactly the streaming story
+this item owns. It is the "mega-mesh with extra steps" the paragraph above warns about, chosen
+knowingly because at that scale the warning does not bite. What it does contribute is a fixture — the
+first content in the tree where instancing, LOD and culling all matter at once, and the scene that
+found Wall 4.
 **Refs.** Asirvatham & Hoppe, *Terrain Rendering Using GPU-Based Geometry Clipmaps* (GPU Gems 2);
 Strugar, *Continuous Distance-Dependent LOD* (CDLOD, 2009).
 **Depends on:** E5 (hard, in practice), D3's tessellation path (soft).
@@ -833,13 +893,111 @@ pass by pass, at 4K.
 **Depends on:** nothing. **Owns foundations:** per-pass GPU timing (consumed by E5, D4, any budget
 work).
 
-### E5. Instancing + LOD + sorted submission — Effort L
-**Wall 2**, taken directly. Instanced draws for repeated meshes (foliage, props, grass blades — the
-`glVertexAttribDivisor` path already exists in `particle_renderer.c` and has never been generalised),
-distance LOD on the mesh, and draw sorting by program/material so the change-tracking in `render.c`
-actually pays off. This is the item that separates "renders beautifully" from "ships", and it is the
-prerequisite the rest of Track D quietly assumes.
-**Depends on:** E4 (soft — do the measurement first, or the LOD thresholds are guesses).
+### E5. Instancing + LOD + sorted submission — Effort L — **DONE, two limbs of three (specs 11.28 / 11.29)**
+**Wall 2, mostly removed.** Geometry dedup by `aiMesh` index (refcounted `Mesh`), one flattened
+pre-order draw list replacing both walkers, per-cascade shadow-layer culling, instanced draws through
+a std140 `InstanceBlock`, and LOD chains built at import as index ranges in the one EBO. On
+`abandoned_window_shadowed`: shadow CPU **−83%**, TIMED **−41%**, frame **−38%**, 2,148 draws → 272.
+
+**The third limb — draw sorting by program/material — did not ship**, deferred with a stated reason:
+`abandoned_window` exports its 483 ivy leaves as one contiguous name-ordered block, so DFS order
+already cost ~60 material switches in 553 draws and no other asset interleaved materials at all.
+Shipping it would have been an unfalsifiable claim. That reason was true then and `apps/forest` has
+since made it false; the limb moves to **E6**, where it belongs with the ordering objectives it
+actually competes with.
+
+Four things the specs established that no fixture had shown before, all in 11.29:
+
+- **Scatter ORDER decides whether batching happens at all.** The batcher joins only *consecutive*
+  survivors, so with most props frustum-culled a randomly-ordered scatter collapses to runs of one.
+  Morton-ordering within each prototype takes the same 2,979 instances from **2,368 draws to 1,287** —
+  identical instances, identical triangles, only the draw count moves.
+- **LOD fights instancing, inherently.** The batch key is `(mesh, lod)`, so one prototype spanning a
+  range of distances splits into separate runs. A CPU-for-GPU trade whose direction depends on framing.
+- **The relationship is not monotonic.** At `--lod-bias 0.35` LOD *saves* draws (997 against 1,287),
+  because once enough neighbours collapse onto the same coarse level they share runs again.
+  Fragmentation peaks when a level boundary cuts through a cluster and falls away on both sides.
+- **"meshoptimizer locks mesh borders" was wrong, and was wrong before E5.** `simplifier.cpp:533`
+  promotes `Kind_Border` to `Kind_Locked` **only** under `meshopt_SimplifyLockBorder`; `lod.c` passes
+  `0`. Borders are weighted, not locked. The belief had propagated into three headers (`lod.h`,
+  `rock.h`, `terrain.h`) and spec 11.28, and it was load-bearing twice over: it justified a design
+  choice (icosphere over UV sphere, for a border a UV sphere does not really have), and `terrain.h`'s
+  crack-free tiling argument does not hold — two neighbours at different LOD levels can T-junction.
+  None has been observed; that is luck, not a guarantee. It was never checked against the vendored
+  source it was a claim *about*, which was one grep away for the whole of E5.
+
+**Depends on:** E4 (soft — done first, as intended; the LOD thresholds are measured, not guessed).
+
+### E6. Depth prepass + opaque draw ordering — Effort M
+**Wall 4**, taken directly, and the highest-value perf item on this document by a wide margin — the
+312 ms of a 346 ms timed frame is what it addresses. Two halves that share one design and must be
+measured together.
+
+**The prepass.** Render opaque depth-only first, then shade with `glDepthFunc(GL_EQUAL)` and
+`glDepthMask(GL_FALSE)`. Every hidden fragment is then rejected by the depth test before the uber-shader
+runs, at the cost of one extra geometry pass. The shadow pass already proves that pass is cheap here:
+23 ms for 130M triangles, against 312 ms for 26M shaded. It is not free and it is not universally a
+win — it pays back only above some depth-complexity threshold, and `apps/forest` should be measured on
+both sides of it rather than assumed to clear it.
+
+**Two things that will bite, and both are already visible in the tree.** Masked geometry must be
+prepassed with the *same* cutoff and the same alpha source or its depth will not match and `GL_EQUAL`
+will drop it — and `render.c:509` enables `GL_SAMPLE_ALPHA_TO_COVERAGE` for masked materials under
+MSAA, so the prepass has to reproduce the coverage decision, not merely the discard. Second, anything
+whose vertex shader displaces (wind, `pbr_vert`'s `windOffset`) must displace *identically* in both
+passes or the depths disagree — which makes this the item that finally forces wind to be deterministic
+per-pass rather than merely per-frame.
+
+**The ordering.** One sort key now has three objectives competing on it, which is why E5's third limb
+belongs here rather than as its own row:
+
+| objective | wants | costs |
+|---|---|---|
+| batch contiguity (E5, shipped) | identical `(mesh, lod)` adjacent | Morton order, camera-independent |
+| material switches (E5's deferred limb) | same program/material adjacent | fights both others |
+| front-to-back (new, Wall 4) | near before far | camera-dependent, rebuilt per frame |
+
+A prepass changes the arithmetic: with one, front-to-back matters much less (the depth buffer is
+already complete), so the key can stay on batching and materials. Without one, front-to-back is the
+only lever on overdraw. **Decide the prepass first; the sort key falls out of it.** `apps/forest` is
+the fixture that makes all three falsifiable, which is exactly what 11.28 said it lacked.
+**Refs.** The prepass/`GL_EQUAL` idiom is standard; the alpha-to-coverage interaction is the part
+worth reading up on rather than deriving.
+**Depends on:** E4 (hard — this is a perf item and its whole claim is a measurement). **Wall 1:** unaffected.
+
+### E7. Occlusion culling — Effort L
+Named in Wall 2's original text, deferred by 11.28 with one line ("its own latency story on GL 4.1
+occlusion queries"), and never given a row until now. Object-level rejection of what is behind other
+geometry — the complement to E6, which rejects at the fragment level.
+
+**The latency story is the whole item.** GL 4.1 has `GL_SAMPLES_PASSED` / `GL_ANY_SAMPLES_PASSED` and
+nothing else; there is no compute, no indirect draw, no GPU-driven culling under the macOS ceiling.
+Reading a query in the frame that issued it stalls the pipeline and costs more than it saves, so the
+only viable shape is the classic one: test bounding volumes against *last* frame's depth buffer, accept
+one frame of latency, and accept popping on fast camera motion. A software HZB (downsample the depth
+pyramid, test AABBs on the CPU) avoids the query round-trip entirely and is worth pricing against the
+query path before either is built.
+
+**Sequence it after E6, and expect E6 to shrink it.** A prepass already gets most of the benefit for
+opaque geometry, cheaply and with no latency or popping. What occlusion culling adds on top is
+skipping the *vertex* and submission cost of hidden objects, which E6 still pays in full — relevant
+only once vertex or draw cost is measurable, and today `apps/forest` says it is not (12x more draws is
+faster). **On current evidence this item is not yet justified**; it is booked so the gap is visible,
+not because a measurement demands it.
+**Depends on:** E6 (soft — build the cheap shield first and re-measure). **Wall 1:** unaffected.
+
+### E8. Fixing the wind cull — Effort S
+`draw_list.c:94` marks any `wind_response > 0` material `DRAW_UNBOUNDED`, and `draw_item_visible`
+(`draw_list.c:201`) then accepts it unconditionally — camera *and* every shadow cascade. Wind-responsive geometry is
+therefore never culled by anything. The fix is to expand those meshes' AABB by maximum wind
+displacement so they become cullable rather than exempt.
+
+Small, self-contained, and it removes a real correctness-shaped hole in E5's culling. It also unblocks
+wind on scattered content: `apps/forest` carries **no wind on 2,000 trees** specifically to avoid this,
+which is a visible look compromise made for a fixable engine reason. Pairs naturally with per-instance
+wind phase (`windOffset` is object-space with per-mesh uniforms, so every instance of a shared tree
+sways identically) — one instance-block field, and the two want the same arms.
+**Depends on:** nothing. **Wall 1:** unaffected.
 
 ## Sequencing — tiers & rationale
 
@@ -941,14 +1099,20 @@ not scheduled.
 | 27 | E3 Histogram exposure | M | Fixes the image *and* narrows the largest measured source of cross-build non-determinism. |
 | 28 | E2 3D LUT grading | S | Colourist workflow. Watch the working-space contract. |
 | 29 | C4 Clustered specular probes | L | Diffuse GI got a spatial structure in A4; specular still has exactly one probe. Reuses A1's grid and A4's atlas. |
-| 30 | E5 Instancing + LOD + sorting | L | Wall 2, taken directly. The item that separates "renders beautifully" from "ships", and the one the rest of Track D assumes. |
-| 31 | D0 Free two sampler units | M | Foundation only — schedule it **with** D1 or D2's surface half, never before, per the just-in-time rule. |
-| 32 | D1 Clustered decals | L | Largest environment-art gap. Hard-blocked on D0. |
-| 33 | D3 Tessellated water | L | Spends the tessellation stage — GL 4.0, legal here, and completely unused. |
-| 34 | D4 Terrain | XL | Only after E5; a clipmap without instancing/LOD is a mega-mesh with extra steps. |
+| 30 | E5 Instancing + LOD + sorting | L | **DONE, two limbs of three (11.28 / 11.29).** Wall 2 mostly removed: `abandoned_window_shadowed` shadow CPU −83%, frame −38%, 2,148 draws → 272. Sorting deferred as unfalsifiable against the corpus, which `apps/forest` has since falsified — moved to E6. Established that scatter *order* decides whether batching happens at all (2,368 → 1,287 draws for identical geometry), that LOD fights instancing on the `(mesh, lod)` key non-monotonically, and that "meshoptimizer locks mesh borders" — in three headers and spec 11.28 — was wrong from the start. |
+| 31 | **E6 Depth prepass + opaque ordering** | M | **Wall 4.** The largest single perf number on this document: opaque is 312 ms of a ~350 ms frame on `apps/forest`, where the depth-only shadow pass does 5x the triangles in 1/14th the time. Absorbs E5's deferred sorting limb, because a prepass changes what the sort key should optimise for. |
+| 32 | D0 Free two sampler units | M | Foundation only — schedule it **with** D1 or D2's surface half, never before, per the just-in-time rule. |
+| 33 | D1 Clustered decals | L | Largest environment-art gap. Hard-blocked on D0. |
+| 34 | E8 Fix the wind cull | S | Small, self-contained, closes a real hole in E5's culling — wind geometry is currently exempt from the camera frustum *and* every cascade. Unblocks wind on scattered content, which `apps/forest` gave up to avoid it. |
+| 35 | D3 Tessellated water | L | Spends the tessellation stage — GL 4.0, legal here, and completely unused. |
+| 36 | D4 Terrain | XL | Only after E5; a clipmap without instancing/LOD is a mega-mesh with extra steps. `apps/forest` is a *consumer* of E5, not this — fixed tiles with per-tile chains, fine at 1 km² and explicitly not the answer above it. |
+| 37 | E7 Occlusion culling | L | Booked so the gap is visible, **not because a measurement demands it** — on current evidence E6 gets most of the benefit for far less, and `apps/forest` says draw count is not the limit. Re-price after E6. |
 
 **If only five ever get built: 20 -> 21 -> 22 -> 23 -> 24.** One afternoon, then three items that each
 reuse a shipped subsystem rather than building new machinery, then the instrument the rest needs.
+
+**If only one more ever gets built, it is 31 (E6).** Nothing else on this table is worth 250 ms.
+That sentence could not have been written before 11.29, and the reason is recorded in Wall 4.
 
 ### Known limitations not booked as items
 
@@ -972,8 +1136,41 @@ scheduled.
   a row reached a false conclusion from the same cause, which is a better argument for one table
   than any of them made on purpose.
 - **Anisotropic filtering is capped at 8x** (`texture.c:89`) and never exposed as a setting.
+- **Shadows read last frame's transforms.** `render_shadow_depth_pass` runs at `engine.c:2231`;
+  `apply_transform_to_nodes` runs inside the app callback *after* it. A real latent one-frame lag,
+  found during 11.28. It is a bug rather than a feature, it is invisible in every golden (which are
+  static or frame-locked), and it deserves its own arm — a moving caster whose shadow trails it by a
+  frame is the fixture, and nothing in the corpus is one today.
+- **`glUseProgram` has no choke point, and the uniform value cache assumes one.** The setters write
+  through `glUniform*`, which targets whatever is *bound*, not what the `UniformManager` names — so a
+  set under the wrong program updates that program and records the value here, after which the next
+  legitimate write is skipped as already-held. Verified clean (zero violations across seven scenes
+  under `-DCETRA_CHECK_UNIFORM_BINDING=1`) but only *believed* going forward, because the check costs
+  a `glGetIntegerv` per set, about 6% of the frame, and is off by default. Neither Godot nor Unreal has
+  this problem, and not by asserting harder: neither lets app code call `glUseProgram` at all, so
+  "what is bound" is a mirrored variable and the check is a compare rather than a driver round trip.
+  Cetra calls it from ~30 sites. The fix is one function; the cost is touching all 30.
+- **Skinned meshes cannot instance.** Blocked on the single global `g_current_animation_state`, so
+  `raiden` and every other rig submits one draw per mesh regardless. 11.28's `skinned-nobatch` and
+  `skinned-identity` arms hold the line deliberately: a program without an `InstanceBlock` may never
+  carry more than one instance.
+- **No scene-owned mesh pool.** Refcounting on `Mesh` (11.28) is the interim; a pool is the correct
+  ownership model and composes with the refcount rather than replacing it.
+- **No screen-size / density culling.** Falls out of the flattened draw list in a few lines once a
+  consumer asks. No content demands it — `apps/forest` is dense but its problem is fragments, not
+  object count.
+- **Transparent geometry is never depth-sorted.** OIT is on by default and order-independent, so this
+  costs nothing today; it would only matter under `--no-oit`, where sorting would move pixels
+  (including the raiden hair, which has already moved four times) for no measured win.
+- **Terrain tiles can crack at LOD boundaries, in principle.** `lod.c` simplifies with options `0`,
+  so tile borders are weighted rather than locked and two neighbours at different levels can
+  T-junction. None has been observed at any framing tried, which is large tiles and near-straight
+  borders rather than a guarantee. The fix is `meshopt_SimplifyLockBorder` on the terrain path
+  specifically — deliberately not applied globally, since it would constrain every other chain
+  through the same call.
 - **The GL 4.1 ceiling itself is the Tier 5 question.** Nothing in Tier 4 needs compute. Lumen-class
-  GI, virtual shadow maps, GPU-driven culling and hardware ray tracing all do, and
+  GI, virtual shadow maps, GPU-driven culling, Nanite-style cluster DAGs (which additionally want
+  SSBOs, `glMultiDrawElementsIndirect` and 64-bit atomics) and hardware ray tracing all do, and
   `docs/rendering-roadmap.md` §5 already prices the three honest answers (offline CPU path tracer /
   hybrid Metal RT via IOSurface / a full Metal or Vulkan backend). That document owns the question;
   this one should not re-open it.
