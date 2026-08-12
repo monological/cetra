@@ -69,4 +69,6 @@ void ubo_wire_blocks(GLuint program_id) {
     ubo_wire_program_block(program_id, "ClusterIndexBlock", UBO_BINDING_CLUSTER_INDICES,
                            UBO_CLUSTER_INDICES_BLOCK_SIZE);
     ubo_wire_program_block(program_id, "ViewParams", UBO_BINDING_VIEW, UBO_VIEW_BLOCK_SIZE);
+    ubo_wire_program_block(program_id, "InstanceBlock", UBO_BINDING_INSTANCES,
+                           UBO_INSTANCES_BLOCK_SIZE);
 }

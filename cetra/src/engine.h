@@ -140,6 +140,11 @@ typedef struct Engine {
     // scene radiance reads. Engine-owned rather than PostFX-owned because it
     // must be live during the SCENE passes, which run before postfx does.
     struct Ubo* view_ubo;
+    // Per-instance transforms for batched draws (spec 11.28). Engine-owned for
+    // the same reason as view_ubo: the scene passes and the depth pass both
+    // fill it, and it must outlive either.
+    struct Ubo* instance_ubo;
+    bool instancing_enabled;     // false = every run submits one draw per mesh
     bool cluster_debug;          // Tint fragments by cluster light count (heatmap)
     bool scene_color_this_frame; // Resolve ran this frame; transmissive draws may sample
     bool normals_this_frame;     // Attachment 1 written this frame (PBR + consumer active)

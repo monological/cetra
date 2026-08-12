@@ -15,6 +15,7 @@ uniform float time;
 // uPrevBoneRows and the vertex uniform budget that comes with it.
 #include "skin.glsl"
 #include "wind.glsl" // must match the shading passes exactly -- see the chunk
+#include "instancing.glsl"
 
 void main()
 {
@@ -27,5 +28,5 @@ void main()
     localPos.xyz += windOffset(aPos, aTexCoords, aTexCoords2, time);
 
     TexCoords = aTexCoords;
-    gl_Position = lightSpaceMatrix * model * localPos;
+    gl_Position = lightSpaceMatrix * cetra_instance_model(model) * localPos;
 }

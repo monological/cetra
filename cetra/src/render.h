@@ -6,7 +6,9 @@
 #include <GL/glew.h>
 
 #include "common.h"
+#include "draw_list.h"
 #include "mesh.h"
+#include "ubo.h"
 #include "program.h"
 #include "shader.h"
 #include "light.h"
@@ -132,6 +134,19 @@ static inline bool submit_take_material(SubmitState* state, Material* material) 
     state->material = material;
     return true;
 }
+
+// One chunk of per-instance transforms, mirroring InstanceBlock in
+// include/instancing.glsl. The C layout is validated against the driver's
+// reported block size at link, so a drift between the two reports rather than
+// reading the wrong floats.
+typedef struct InstanceChunk {
+    mat4 model[UBO_INSTANCE_MAX];
+    mat4 prev_model[UBO_INSTANCE_MAX];
+    mat4 normal[UBO_INSTANCE_MAX]; // upper 3x3 read as mat3; see instancing.glsl
+} InstanceChunk;
+
+_Static_assert(sizeof(InstanceChunk) == UBO_INSTANCES_BLOCK_SIZE,
+               "InstanceChunk must match the std140 block size the shader declares");
 
 static inline void submit_bind_vao(SubmitState* state, GLuint vao) {
     if (state->vao != vao) {

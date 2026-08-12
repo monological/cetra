@@ -2670,15 +2670,17 @@ def run_submission_gate(workdir):
     opaque = counts.get("opaque", {})
     shadow = counts.get("shadow cascades", {})
     want_shadow = mesh_nodes * SUBMIT_CASCADES
-    # The shadow pass culls now, so its DRAWS depend on the cascade fit. What is
-    # still exact is what it SAW: every mesh node, once per cascade.
-    ok = (opaque.get("draws") == mesh_nodes
+    # Culling and batching both moved DRAWS away from the mesh count, so the
+    # exact quantities are what a pass SAW and what it ultimately submitted:
+    # every mesh node once per pass, each either carried by a draw or culled.
+    ok = (opaque.get("instances") == mesh_nodes
           and shadow.get("meshes seen") == want_shadow
-          and shadow.get("draws", 0) + shadow.get("meshes culled", 0) == want_shadow)
-    print(f"  submit-count {'PASS' if ok else 'FAIL'}  opaque draws {opaque.get('draws')} "
-          f"(want {mesh_nodes}, one per mesh node), shadow saw {shadow.get('meshes seen')} "
-          f"(want {want_shadow} = {mesh_nodes} x {SUBMIT_CASCADES} cascades) and drew "
-          f"{shadow.get('draws')} + culled {shadow.get('meshes culled')}")
+          and shadow.get("instances", 0) + shadow.get("meshes culled", 0) == want_shadow)
+    print(f"  submit-count {'PASS' if ok else 'FAIL'}  opaque carried "
+          f"{opaque.get('instances')} instances (want {mesh_nodes}, one per mesh node); "
+          f"shadow saw {shadow.get('meshes seen')} (want {want_shadow} = {mesh_nodes} x "
+          f"{SUBMIT_CASCADES} cascades) and carried {shadow.get('instances')} + culled "
+          f"{shadow.get('meshes culled')}")
     if not ok:
         failures.append("submit-count")
 
@@ -2708,11 +2710,11 @@ def run_submission_gate(workdir):
         one_shadow = one["submit"].get("shadow cascades", {})
         three_shadow = counts.get("shadow cascades", {})
         ok = (one_shadow.get("meshes culled") == 0
-              and one_shadow.get("draws") == mesh_nodes
+              and one_shadow.get("instances") == mesh_nodes
               and three_shadow.get("meshes culled", 0) > 0)
         print(f"  shadowcull-draws {'PASS' if ok else 'FAIL'}  1 cascade: culled "
-              f"{one_shadow.get('meshes culled')} (want 0, the fit is the whole scene) and drew "
-              f"{one_shadow.get('draws')} (want {mesh_nodes}); 3 cascades: culled "
+              f"{one_shadow.get('meshes culled')} (want 0, the fit is the whole scene) and "
+              f"carried {one_shadow.get('instances')} (want {mesh_nodes}); 3 cascades: culled "
               f"{three_shadow.get('meshes culled')} (want > 0, the near slices are tighter)")
         if not ok:
             failures.append("shadowcull-draws")
@@ -2742,6 +2744,63 @@ def run_submission_gate(workdir):
                   f"culled ({share * 100.0:.0f}%, want >= 15%)")
             if not ok:
                 failures.append("shadowcull-live")
+
+    # --- inst-count: batching collapses draws, and instances still add up ---
+    # 130 props share one mesh, so the opaque pass must submit them in chunks of
+    # CETRA_INSTANCE_MAX rather than one at a time -- and every mesh must still
+    # be accounted for, which is what separates real batching from dropped
+    # geometry. The shadow pass batches the same way per cascade.
+    inst_max = 64
+    want_opaque_draws = -(-(mesh_nodes - 1) // inst_max) + 1  # props in chunks, ground alone
+    ok = (opaque.get("draws") == want_opaque_draws
+          and opaque.get("instances") == mesh_nodes
+          and shadow.get("draws", 0) < shadow.get("instances", 0))
+    print(f"  inst-count   {'PASS' if ok else 'FAIL'}  opaque {opaque.get('draws')} draws "
+          f"carrying {opaque.get('instances')} instances (want {want_opaque_draws} draws for "
+          f"{mesh_nodes} meshes); shadow {shadow.get('draws')} draws carrying "
+          f"{shadow.get('instances')}")
+    if not ok:
+        failures.append("inst-count")
+
+    # --- inst-identity: batched and unbatched draw the same picture ---------
+    # The UBO carries the same floats into the same shader arithmetic, so this
+    # is 0 px by construction rather than by tolerance. It is the arm the
+    # attribute-divisor alternative could not have had: packing transforms into
+    # the free vertex slots needs the normal matrix derived in-shader, which
+    # differs in the last bits from the CPU-side one.
+    on = os.path.join(workdir, "inst_on.ppm")
+    off = os.path.join(workdir, "inst_off.ppm")
+    fixture_path = os.path.join(ROOT, "assets", SUBMIT_FIXTURE)
+    err = render(fixture_path, on, ["--shadow-cascades", str(SUBMIT_CASCADES)])
+    if err is None:
+        err = render(fixture_path, off, ["--shadow-cascades", str(SUBMIT_CASCADES),
+                                         "--no-instancing"])
+    if err is not None:
+        print(f"  inst-identity ERROR {err.strip()[-200:]}")
+        failures.append("inst-identity")
+    else:
+        ae, _ = compare(on, off)
+        ok = ae == 0
+        print(f"  inst-identity {'PASS' if ok else 'FAIL'}  {ae} px between batched and "
+              f"unbatched (want 0)")
+        if not ok:
+            failures.append("inst-identity")
+
+    # --- inst-off: the flag reaches the batching it names -------------------
+    # Without this, inst-identity passes trivially for a flag that does nothing
+    # -- both runs would simply be the batched path.
+    unbatched = _submit_run(workdir, "nobatch", ["--no-instancing"])
+    if unbatched is None:
+        failures.append("inst-off")
+    else:
+        un_opaque = unbatched["submit"].get("opaque", {})
+        ok = (un_opaque.get("draws") == mesh_nodes
+              and un_opaque.get("draws") == un_opaque.get("instances"))
+        print(f"  inst-off     {'PASS' if ok else 'FAIL'}  --no-instancing: {un_opaque.get('draws')} "
+              f"draws for {un_opaque.get('instances')} instances (want both {mesh_nodes}: one "
+              f"draw per mesh)")
+        if not ok:
+            failures.append("inst-off")
 
     # --- submit-cull: the counters are attached to submission, not to nodes -
     # A camera aimed away empties the camera pass. The shadow pass follows the

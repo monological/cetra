@@ -233,6 +233,10 @@ Engine* create_engine(const char* window_title, int width, int height) {
     // Costs nothing on a scene with no alpha-blend mesh: the whole path is gated
     // on oit_mesh_count, so it allocates nothing and runs no extra pass there.
     engine->oit_enabled = true;
+    // On by default: the batched and unbatched paths upload the same floats to
+    // the same shader arithmetic, so the two agree at 0 px and there is nothing
+    // to opt into. --no-instancing is the escape hatch and the identity arm.
+    engine->instancing_enabled = true;
     engine->oit_moments_enabled = true;
 
     glm_mat4_identity(engine->model_matrix);
@@ -340,6 +344,7 @@ void free_engine(Engine* engine) {
 
     free_light_cluster_context(engine->light_cluster);
     free_ubo(engine->view_ubo);
+    free_ubo(engine->instance_ubo);
 
     glDeleteFramebuffers(1, &engine->framebuffer);
     _destroy_msaa_attachments(engine); // color attachments + depth renderbuffer
@@ -772,6 +777,7 @@ int init_engine(Engine* engine) {
     // Clustered-forward lighting (spec 9.1): owns its own UBOs + scratch
     engine->light_cluster = create_light_cluster_context();
     engine->view_ubo = create_ubo(UBO_VIEW_BLOCK_SIZE, UBO_BINDING_VIEW);
+    engine->instance_ubo = create_ubo(UBO_INSTANCES_BLOCK_SIZE, UBO_BINDING_INSTANCES);
     if (!engine->light_cluster) {
         log_error("Failed to create light cluster context");
         return -1;

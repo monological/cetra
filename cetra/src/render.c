@@ -279,7 +279,7 @@ static void _update_camera_uniforms(ShaderProgram* program, Camera* camera) {
 
 static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* item, Camera* camera,
                          mat4 view, mat4 projection, RenderMode render_mode, SubmitState* state,
-                         const Frustum* frustum, OitSubpass oit_pass) {
+                         const Frustum* frustum, OitSubpass oit_pass, size_t instances) {
     SceneNode* node = item->node;
     Mesh* mesh = item->mesh;
     // Only the opaque pass submits the opaque lane, so the lane says which pass
@@ -304,18 +304,6 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
     {
         Material* mat = mesh->material;
         ShaderProgram* program = mat->shader_program;
-
-        // Frustum culling: skip mesh if its AABB is completely outside the view
-        // frustum. Counted either side of the test and nowhere else, so
-        // seen == instances + culled is a property of this control flow.
-        if (stats)
-            stats->meshes_seen++;
-        if (frustum && !frustum_test_aabb_transformed(frustum, mesh->aabb.min, mesh->aabb.max,
-                                                      node->global_transform)) {
-            if (stats)
-                stats->meshes_culled++;
-            return;
-        }
 
         UniformManager* u = program->uniforms;
 
@@ -513,10 +501,15 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
         }
 
         submit_bind_vao(state, mesh->vao);
-        glDrawElements(mesh->draw_mode, mesh->index_count, GL_UNSIGNED_INT, 0);
+        uniform_set_int(u, "uInstanced", instances > 1 ? 1 : 0);
+        if (instances > 1)
+            glDrawElementsInstanced(mesh->draw_mode, mesh->index_count, GL_UNSIGNED_INT, 0,
+                                    (GLsizei)instances);
+        else
+            glDrawElements(mesh->draw_mode, mesh->index_count, GL_UNSIGNED_INT, 0);
         if (stats) {
             stats->draws++;
-            stats->instances++;
+            stats->instances += instances;
         }
 
         if (item->flags & DRAW_DOUBLE_SIDED) {
@@ -545,6 +538,29 @@ static void _render_xyz(SceneNode* node, mat4 view, mat4 projection, SubmitState
     glDrawArrays(GL_LINES, 0, xyz_vertices_size / (6 * sizeof(float)));
 }
 
+// How many items from `first` one draw can carry: consecutive, same geometry,
+// all visible, capped at a chunk.
+//
+// Contiguity is required in the ACCEPTED stream, not the raw list. An item this
+// pass does not draw -- wrong lane, or culled -- ends the run, because the batch
+// submits whatever the chunk holds and skipping one would draw the next in its
+// place. Cutting the run short is always safe: the remainder starts a new one.
+static size_t _visible_run(const DrawList* list, size_t first, unsigned lanes,
+                           const Frustum* frustum, const Mesh* mesh) {
+    size_t n = 1;
+    while (first + n < list->count && n < UBO_INSTANCE_MAX) {
+        const DrawItem* next = &list->items[first + n];
+        if (!(lanes & (1u << next->lane)) || next->mesh != mesh)
+            break;
+        if (frustum && !(next->flags & DRAW_UNBOUNDED) &&
+            !frustum_test_aabb_transformed(frustum, next->mesh->aabb.min, next->mesh->aabb.max,
+                                           next->node->global_transform))
+            break;
+        n++;
+    }
+    return n;
+}
+
 // One pass over the flattened list. `lanes` is a bitmask of DrawLane, so a
 // pass names the meshes it draws instead of re-deriving them: the opaque pass
 // takes OPAQUE and XYZ, the OIT sub-passes take BLEND, the late pass takes
@@ -555,12 +571,57 @@ static void _submit_lanes(const Engine* engine, Scene* scene, const DrawList* li
     if (!scene || !list)
         return;
 
+    SubmitStats* stats = profiler_submit(engine->profiler);
+    InstanceChunk chunk;
+
     for (size_t i = 0; i < list->count; ++i) {
         const DrawItem* item = &list->items[i];
         if (!(lanes & (1u << item->lane)))
             continue;
+
+        // Cull BEFORE the run is formed. A rejected item inside a chunk would
+        // shift every instance after it, so visibility has to be settled while
+        // the run can still be cut short.
+        if (stats)
+            stats->meshes_seen++;
+        if (frustum && !(item->flags & DRAW_UNBOUNDED) &&
+            !frustum_test_aabb_transformed(frustum, item->mesh->aabb.min, item->mesh->aabb.max,
+                                           item->node->global_transform)) {
+            if (stats)
+                stats->meshes_culled++;
+            continue;
+        }
+
+        // How many of the following items this draw can carry. One is the
+        // ordinary path and issues exactly what it always did.
+        size_t run = 1;
+        if (engine->instancing_enabled && engine->instance_ubo)
+            run = _visible_run(list, i, lanes, frustum, item->mesh);
+        if (run > 1) {
+            for (size_t k = 0; k < run; ++k) {
+                const DrawItem* i_k = &list->items[i + k];
+                glm_mat4_copy(i_k->node->global_transform, chunk.model[k]);
+                glm_mat4_copy(i_k->node->prev_global_transform, chunk.prev_model[k]);
+                // Column by column: a mat3 is three tight vec3s in C, where
+                // the mat4 the block declares puts each column four floats
+                // apart. Copying the block wholesale would interleave them.
+                glm_mat4_identity(chunk.normal[k]);
+                for (int c = 0; c < 3; ++c) {
+                    chunk.normal[k][c][0] = i_k->node->normal_matrix[c][0];
+                    chunk.normal[k][c][1] = i_k->node->normal_matrix[c][1];
+                    chunk.normal[k][c][2] = i_k->node->normal_matrix[c][2];
+                }
+            }
+            ubo_upload(engine->instance_ubo, &chunk, sizeof(chunk));
+            // The run's own items were counted as seen above only for the
+            // first; the rest are counted here so the identity still holds.
+            if (stats)
+                stats->meshes_seen += run - 1;
+        }
+
         _submit_item(engine, scene, item, camera, view, projection, render_mode, state, frustum,
-                     oit_pass);
+                     oit_pass, run);
+        i += run - 1;
     }
 }
 

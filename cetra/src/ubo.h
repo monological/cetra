@@ -18,6 +18,7 @@
 #define UBO_BINDING_CLUSTERS        1
 #define UBO_BINDING_CLUSTER_INDICES 2
 #define UBO_BINDING_VIEW            3
+#define UBO_BINDING_INSTANCES       4
 
 // std140 byte sizes of the engine's blocks, asserted against the C mirror
 // structs (light_cluster.h) and validated against the driver's
@@ -28,6 +29,18 @@
 #define UBO_CLUSTER_INDICES_BLOCK_SIZE 12288
 // Four floats, rounded up to std140's 16-byte block granularity.
 #define UBO_VIEW_BLOCK_SIZE 16
+
+// Per-instance transforms: model, prevModel and the normal matrix, the three
+// values a draw needs per object. 64 instances x 3 mat4 x 64 B = 12288, which
+// is the same size the cluster blocks already use and comfortably inside the
+// 16 KB floor -- so a chunk is 64 instances and a longer run submits in
+// several draws.
+//
+// The normal matrix is stored as a mat4 rather than std140's padded mat3. It
+// costs 16 bytes an instance and removes the whole class of hand-packed-column
+// bugs that ubo_validate_program_block exists to catch.
+#define UBO_INSTANCE_MAX         64
+#define UBO_INSTANCES_BLOCK_SIZE 12288
 
 typedef struct Ubo {
     GLuint id;

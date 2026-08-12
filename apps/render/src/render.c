@@ -86,6 +86,7 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --no-translucent-shadows  Force them off\n");
     fprintf(stderr, "      --profiler         Per-pass GPU + CPU time and submission counts: "
                     "HUD tables, and stdout at exit\n");
+    fprintf(stderr, "      --no-instancing    One draw per mesh, no batching\n");
     fprintf(stderr, "      --msm              Moment shadow maps: one prefiltered tap, no PCSS\n");
     fprintf(stderr, "      --msm-size <n>     Moment cascade edge (default: 1024)\n");
     fprintf(stderr, "      --msm-blur <f>     Moment blur spacing in texels (default: 0, off)\n");
@@ -501,6 +502,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->translucent_shadows = 1;
         } else if (strcmp(argv[i], "--no-translucent-shadows") == 0) {
             args->no_translucent_shadows = 1;
+        } else if (strcmp(argv[i], "--no-instancing") == 0) {
+            args->no_instancing = 1;
         } else if (strcmp(argv[i], "--profiler") == 0) {
             args->profiler_enabled = 1;
         } else if (strcmp(argv[i], "--msm") == 0) {
@@ -1742,6 +1745,7 @@ int main(int argc, char** argv) {
     set_engine_headless(engine, args.headless != 0);
     // Before init_engine, which is where the profiler is built.
     set_engine_profiler(engine, args.profiler_enabled != 0);
+    engine->instancing_enabled = args.no_instancing == 0;
     engine->headless_jitter = args.headless_jitter != 0;
     set_engine_screenshot_path(engine, args.screenshot_path);
     set_engine_screenshot_every(engine, args.screenshot_every);

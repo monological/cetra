@@ -46,6 +46,7 @@ typedef struct {
     int translucent_shadows;    // Per-texel transmittance for hair/glass/foliage casters
     int no_translucent_shadows; // Force it off (the off-path and inverse arms)
     int profiler_enabled;       // Per-pass GPU + CPU time and submission counts
+    int no_instancing;          // Force one draw per mesh (the identity arm)
     int msm;                    // Moment shadow maps; excludes PCSS
     int msm_size;               // Moment cascade edge (0 = keep engine default)
     float msm_blur;             // Moment blur spacing in texels (-1 = default)

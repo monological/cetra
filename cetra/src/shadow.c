@@ -546,10 +546,33 @@ static bool caster_set_wants(ShadowCasterSet set, uint8_t lane, uint8_t flags) {
     return !(set == SHADOW_CASTERS_OPAQUE_TSM && translucent);
 }
 
+// How many casters from `first` one draw can carry: same geometry, all wanted
+// by this set, all visible, capped at a chunk. Same contiguity rule as the
+// camera path -- a skipped item ends the run, because the batch submits
+// whatever the chunk holds.
+static size_t _visible_caster_run(const DrawList* list, size_t first, ShadowCasterSet set,
+                                  const Frustum* frustum, const Mesh* mesh) {
+    size_t n = 1;
+    while (first + n < list->count && n < UBO_INSTANCE_MAX) {
+        const DrawItem* next = &list->items[first + n];
+        if (next->mesh != mesh || !caster_set_wants(set, next->lane, next->flags))
+            break;
+        if (frustum && !(next->flags & DRAW_UNBOUNDED) &&
+            !frustum_test_aabb_transformed(frustum, next->mesh->aabb.min, next->mesh->aabb.max,
+                                           next->node->global_transform))
+            break;
+        n++;
+    }
+    return n;
+}
+
 static void _draw_shadow_items(const DrawList* list, ShaderProgram* program, SubmitState* state,
-                               ShadowCasterSet set, SubmitStats* stats, const Frustum* frustum) {
+                               ShadowCasterSet set, SubmitStats* stats, const Frustum* frustum,
+                               const Engine* engine) {
     if (!list)
         return;
+
+    InstanceChunk chunk;
 
     for (size_t idx = 0; idx < list->count; ++idx) {
         const DrawItem* item = &list->items[idx];
@@ -583,6 +606,21 @@ static void _draw_shadow_items(const DrawList* list, ShaderProgram* program, Sub
             Material* mat = mesh->material;
             UniformManager* u = program->uniforms;
             bool foliage = (item->flags & DRAW_FOLIAGE) != 0;
+
+            size_t run = 1;
+            if (engine && engine->instancing_enabled && engine->instance_ubo)
+                run = _visible_caster_run(list, idx, set, frustum, mesh);
+            if (run > 1) {
+                for (size_t k = 0; k < run; ++k) {
+                    const DrawItem* i_k = &list->items[idx + k];
+                    glm_mat4_copy(i_k->node->global_transform, chunk.model[k]);
+                    glm_mat4_copy(i_k->node->prev_global_transform, chunk.prev_model[k]);
+                    glm_mat4_identity(chunk.normal[k]);
+                }
+                ubo_upload(engine->instance_ubo, &chunk, sizeof(chunk));
+                if (stats)
+                    stats->meshes_seen += run - 1;
+            }
 
             // Per node, and the list is in node order, so consecutive meshes of
             // one node still upload it once.
@@ -621,11 +659,17 @@ static void _draw_shadow_items(const DrawList* list, ShaderProgram* program, Sub
                 glDisable(GL_CULL_FACE);
 
             submit_bind_vao(state, mesh->vao);
-            glDrawElements(mesh->draw_mode, mesh->index_count, GL_UNSIGNED_INT, 0);
+            uniform_set_int(u, "uInstanced", run > 1 ? 1 : 0);
+            if (run > 1)
+                glDrawElementsInstanced(mesh->draw_mode, mesh->index_count, GL_UNSIGNED_INT, 0,
+                                        (GLsizei)run);
+            else
+                glDrawElements(mesh->draw_mode, mesh->index_count, GL_UNSIGNED_INT, 0);
             if (stats) {
                 stats->draws++;
-                stats->instances++;
+                stats->instances += run;
             }
+            idx += run - 1;
 
             if (two_sided)
                 glEnable(GL_CULL_FACE);
@@ -736,14 +780,15 @@ static int compute_punctual_matrices(const Light* light, const ShadowSystem* ss,
 // The body both depth-pass loops share, once a layer is bound: aim the depth
 // program at one light-space matrix and walk the scene into it.
 static void draw_shadow_layer(ShadowSystem* ss, const DrawList* list, mat4 matrix,
-                              SubmitState* state, ShadowCasterSet set, SubmitStats* stats) {
+                              SubmitState* state, ShadowCasterSet set, SubmitStats* stats,
+                              const Engine* engine) {
     uniform_set_mat4(ss->depth_program->uniforms, "lightSpaceMatrix", (const float*)matrix);
     // The matrix IS the layer's coverage volume, and Gribb-Hartmann does not
     // care whether it is ortho or perspective -- so cascades and punctual faces
     // cull through the same six planes.
     Frustum layer_frustum;
     frustum_extract_from_vp(matrix, &layer_frustum);
-    _draw_shadow_items(list, ss->depth_program, state, set, stats, &layer_frustum);
+    _draw_shadow_items(list, ss->depth_program, state, set, stats, &layer_frustum, engine);
     end_shadow_pass(ss);
 }
 
@@ -1043,7 +1088,7 @@ static bool shadow_build_tsm(ShadowSystem* ss, const Engine* engine, Scene* scen
         uniform_set_float(au, "time", (float)engine->render_time);
         _draw_shadow_items(&scene->draw_list, ss->tsm_absorb_program, &state,
                            SHADOW_CASTERS_TRANSLUCENT, profiler_submit(engine->profiler),
-                           &tsm_frustum);
+                           &tsm_frustum, engine);
         glDisable(GL_BLEND);
 
         // --- resolve to transmittance --------------------------------------
@@ -1083,7 +1128,7 @@ static bool shadow_build_tsm(ShadowSystem* ss, const Engine* engine, Scene* scen
         uniform_set_mat4(ss->depth_program->uniforms, "lightSpaceMatrix", matrix);
         _draw_shadow_items(&scene->draw_list, ss->depth_program, &state,
                            SHADOW_CASTERS_TRANSLUCENT, profiler_submit(engine->profiler),
-                           &tsm_frustum);
+                           &tsm_frustum, engine);
     }
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -1382,7 +1427,7 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
             size_t layer = i * (size_t)cc + (size_t)c;
             begin_shadow_pass(ss, layer);
             draw_shadow_layer(ss, &scene->draw_list, ss->cascade_matrices[layer],
-                              &state, set, profiler_submit(engine->profiler));
+                              &state, set, profiler_submit(engine->profiler), engine);
         }
     }
     profiler_scope_end(engine->profiler);
@@ -1412,7 +1457,7 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
                 // would take away the solid shadow without replacing it.
                 draw_shadow_layer(ss, &scene->draw_list, ss->punctual_matrices[layer],
                                   &state, SHADOW_CASTERS_OPAQUE,
-                                  profiler_submit(engine->profiler));
+                                  profiler_submit(engine->profiler), engine);
                 // Layers are handed out in increasing order, so the last one
                 // drawn is the bound the shader needs
                 ss->punctual_layer_count = layer + 1;
