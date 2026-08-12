@@ -152,6 +152,10 @@ typedef struct Engine {
     // order-independent, so this may not move a pixel; it moves what early-Z can
     // reject and how often the material block uploads.
     bool opaque_sort_enabled;
+    // true = opaque geometry that cannot discard writes depth in a cheap
+    // position-only pass first, so the shading pass rejects hidden fragments
+    // before the uber-shader runs. Alpha-masked materials sit it out.
+    bool depth_prepass_enabled;
     // Scratch for the above, owned by the engine because it is rebuilt every
     // pass and freed once. Never the list the other passes read.
     DrawList sorted_opaque;
@@ -292,6 +296,10 @@ typedef struct Engine {
     // Split-sum BRDF tables (GGX A/B in RG, Charlie sheen E in blue), baked
     // once at init; environment-independent, like the LTC tables
     GLuint brdf_lut;
+
+    // Depth prepass (spec 11.30): position-only program, built lazily on the
+    // first frame the pass runs so an engine that never enables it pays nothing.
+    ShaderProgram* depth_prepass_program;
 
     // Shadow catcher (ground plane that receives shadows over the skybox)
     ShaderProgram* shadow_catcher_program;

@@ -2699,6 +2699,61 @@ def _forest_run(workdir, tag, extra, cam=None):
     return tables
 
 
+def run_prepass_gate(workdir):
+    """The depth prepass: identical picture, less shading (spec 11.30 / E6).
+
+    The identity arm runs on `instancing_fixture` rather than on forest, and
+    that is deliberate twice over. It is purely opaque, so every item goes
+    through the prepass and none sits it out; and it is the one subject measured
+    at exactly 0 px across a draw-order change, so a failure here is the prepass
+    and not the scene.
+    """
+    failures = []
+
+    off = os.path.join(workdir, "prepass_off.ppm")
+    on = os.path.join(workdir, "prepass_on.ppm")
+    err = render(os.path.join(ROOT, "assets", "instancing_fixture.cscn"), off,
+                 ["--no-auto-exposure", "-E", "1.0"])
+    err = err or render(os.path.join(ROOT, "assets", "instancing_fixture.cscn"), on,
+                        ["--no-auto-exposure", "-E", "1.0", "--depth-prepass"])
+    if err:
+        print(f"  prepass-identity ERROR render failed: {err.strip()[-200:]}")
+        return ["prepass-identity"]
+
+    # 0 px, not a budget. The prepass writes depth from a DIFFERENT program than
+    # the one that shades, and the shading pass then tests against it with
+    # GL_LEQUAL -- so this arm is what proves `invariant gl_Position` and the
+    # shared object-position chunk actually hold. A near miss here is fragments
+    # failing the test, i.e. holes, not a slightly different picture.
+    ae, _ = compare(off, on)
+    ok = ae == 0
+    print(f"  prepass-identity {'PASS' if ok else 'FAIL'}  {ae} px between prepass on and off "
+          f"(want exactly 0)")
+    if not ok:
+        failures.append("prepass-identity")
+
+    # --- prepass-shading: it removes shading, and the row appears -----------
+    base = _forest_run(workdir, "pp_base", ["--taa", "--headless-jitter", "--no-sort-opaque"])
+    pre = _forest_run(workdir, "pp_on",
+                      ["--taa", "--headless-jitter", "--no-sort-opaque", "--depth-prepass"])
+    if base is None or pre is None:
+        failures.append("prepass-shading")
+    else:
+        b, p = base["shading"], pre["shading"]
+        # Depth complexity is the claim; draws rising is the cost, asserted so a
+        # prepass that silently stopped submitting would not read as a win.
+        drew_more = pre["opaque"]["draws"] > base["opaque"]["draws"]
+        ok = p["complexity"] < b["complexity"] and drew_more
+        print(f"  prepass-shading {'PASS' if ok else 'FAIL'}  depth complexity "
+              f"{b['complexity']:.2f} -> {p['complexity']:.2f} (want lower), "
+              f"{base['opaque']['draws']} -> {pre['opaque']['draws']} draws (want higher: the "
+              f"prepass submits its own)")
+        if not ok:
+            failures.append("prepass-shading")
+
+    return failures
+
+
 def run_forest_gate(workdir):
     """The forest app: does scattered content actually batch, and does LOD fire.
 
@@ -3658,6 +3713,8 @@ def main():
         failures += run_draw_list_gate(workdir)
         print("LOD chains (selection by projected size, spec 11.28 Phase 6):")
         failures += run_lod_gate(workdir)
+        print("depth prepass (identical picture, less shading, spec 11.30 / E6):")
+        failures += run_prepass_gate(workdir)
         print("forest (scattered content: batching, ordering, LOD, spec 11.29):")
         failures += run_forest_gate(workdir)
         print("import:")

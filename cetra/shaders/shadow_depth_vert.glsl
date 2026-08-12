@@ -16,16 +16,22 @@ uniform float time;
 #include "skin.glsl"
 #include "wind.glsl" // must match the shading passes exactly -- see the chunk
 #include "instancing.glsl"
+#include "object_position.glsl"
 
 void main()
 {
-    vec4 localPos = vec4(aPos, 1.0);
-
-    if (skinned) {
-        localPos = skinMatrix(aBoneIds, aBoneWeights) * vec4(aPos, 1.0);
-    }
-
-    localPos.xyz += windOffset(aPos, aTexCoords, aTexCoords2, time);
+    // Same posing and wind as the shading passes, from the same chunk. This
+    // stage keeps its own final multiply rather than taking
+    // cetra_object_position: a light has one lightSpaceMatrix where the camera
+    // splits view and projection, and this pass renders under a polygon offset
+    // and is read through a bias, so it has no bit-exactness to preserve. The
+    // DEPTH PREPASS is the stage that does -- see object_position.glsl.
+    // Branch kept rather than folded into the call: skinMatrix blends four
+    // bones, and as an argument it would run for every rigid vertex too.
+    mat4 bone = mat4(1.0);
+    if (skinned)
+        bone = skinMatrix(aBoneIds, aBoneWeights);
+    vec4 localPos = cetra_local_position(aPos, bone, skinned, aTexCoords, aTexCoords2, time);
 
     TexCoords = aTexCoords;
     gl_Position = lightSpaceMatrix * cetra_instance_model(model) * localPos;

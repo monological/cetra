@@ -279,6 +279,9 @@ Engine* create_engine(const char* window_title, int width, int height) {
     engine->bone_line_vbo = 0;
 
     engine->shadow_catcher_program = NULL;
+    engine->depth_prepass_program = NULL;
+    // Off while it is measured (spec 11.30); --depth-prepass turns it on.
+    engine->depth_prepass_enabled = false;
     engine->catcher_vao = 0;
     engine->catcher_vbo = 0;
 

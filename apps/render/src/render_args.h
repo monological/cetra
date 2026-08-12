@@ -48,6 +48,7 @@ typedef struct {
     int profiler_enabled;       // Per-pass GPU + CPU time and submission counts
     int no_instancing;          // Force one draw per mesh (the identity arm)
     int no_sort_opaque;         // Draw the opaque lane in graph order (default is sorted)
+    int depth_prepass;          // Position-only depth for non-masked opaques (default off)
     int no_lod;                 // Draw every mesh at LOD level 0
     float lod_bias;             // LOD distance bias (0 = keep engine default)
     int msm;                    // Moment shadow maps; excludes PCSS

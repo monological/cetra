@@ -527,6 +527,18 @@ ShaderProgram* create_shadow_depth_program() {
     return program;
 }
 
+ShaderProgram* create_depth_prepass_program() {
+    ShaderProgram* program = NULL;
+
+    if ((program = create_program_from_source("depth_prepass", depth_prepass_vert_shader_str,
+                                              depth_prepass_frag_shader_str, NULL)) == NULL) {
+        log_error("Failed to initialize depth prepass shader program");
+        return NULL;
+    }
+
+    return program;
+}
+
 ShaderProgram* create_skybox_program() {
     ShaderProgram* program = NULL;
 

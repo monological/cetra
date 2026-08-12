@@ -57,6 +57,10 @@ ShaderProgram* create_particle_sim_program();
 ShaderProgram* create_shape_program();
 ShaderProgram* create_xyz_program();
 ShaderProgram* create_shadow_depth_program();
+// Position only, for the depth prepass (spec 11.30). Shares the object-position
+// chunk with pbr_vert so the two agree to the bit, which GL_LEQUAL against its
+// output depends on.
+ShaderProgram* create_depth_prepass_program();
 // Resolves the depth cascades into the filterable moment cascades (--msm)
 ShaderProgram* create_msm_resolve_program();
 ShaderProgram* create_shadow_absorb_program();

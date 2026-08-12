@@ -81,6 +81,7 @@ typedef struct ForestArgs {
     int no_lod;
     int no_instancing;
     int no_sort_opaque;   // opaque front-to-back ordering is on by default
+    int depth_prepass;    // position-only depth before shading; off by default
     int force_taa;        // TAA headless too; diagnostic, costs determinism
     int headless_jitter;  // sub-pixel jitter headless; TAA is inert without it
     int render_mode;     // RenderMode override; 0 = PBR
@@ -739,6 +740,8 @@ static void on_init(Game* game) {
         engine->instancing_enabled = false;
     if (g_args.no_sort_opaque)
         engine->opaque_sort_enabled = false;
+    if (g_args.depth_prepass)
+        engine->depth_prepass_enabled = true;
     if (g_args.lod_bias > 0.0f)
         engine->lod_bias = g_args.lod_bias;
 
@@ -913,6 +916,7 @@ static void print_usage(const char* argv0) {
     fprintf(stderr, "      --no-lod            Draw every mesh at LOD level 0\n");
     fprintf(stderr, "      --no-instancing     One draw per mesh\n");
     fprintf(stderr, "      --no-sort-opaque    Draw opaques in graph order\n");
+    fprintf(stderr, "      --depth-prepass     Depth-only pass before shading\n");
     fprintf(stderr, "      --taa               TAA headless too (diagnostic)\n");
     fprintf(stderr, "      --headless-jitter   Sub-pixel jitter headless\n");
     fprintf(stderr, "      --no-sky            Plain directional rig, no atmosphere\n");
@@ -956,6 +960,8 @@ int main(int argc, char** argv) {
             g_args.no_instancing = 1;
         } else if (!strcmp(a, "--no-sort-opaque")) {
             g_args.no_sort_opaque = 1;
+        } else if (!strcmp(a, "--depth-prepass")) {
+            g_args.depth_prepass = 1;
         } else if (!strcmp(a, "--taa")) {
             g_args.force_taa = 1;
         } else if (!strcmp(a, "--headless-jitter")) {

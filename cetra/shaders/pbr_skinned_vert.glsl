@@ -41,21 +41,25 @@ uniform float uDeltaTime; // render clock advance, for the previous-frame positi
 // This stage writes motion vectors, so it takes the previous-pose half too.
 #define SKIN_PREV_POSE
 #include "skin.glsl"
+#include "object_position.glsl"
+
+// See pbr_vert: the depth prepass must reach the same clip position from a
+// different program, and GL_EQUAL is unforgiving about the last bit.
+invariant gl_Position;
 
 void main() {
     vec4 localPos;
     vec4 prevLocalPos; // Skinned position under last frame's pose (motion vectors)
     vec3 localNormal;
     vec3 localTangent;
+    mat4 boneTransform = mat4(1.0);
 
     if (skinned) {
         // Current and previous pose in one pass, so the motion vector captures
         // the deformation and not just the node transform.
-        mat4 boneTransform = skinMatrix(aBoneIds, aBoneWeights);
+        boneTransform = skinMatrix(aBoneIds, aBoneWeights);
         mat4 prevBoneTransform = skinMatrixPrev(aBoneIds, aBoneWeights);
 
-        // Transform position and normals by bone matrix
-        localPos = boneTransform * vec4(aPos, 1.0);
         prevLocalPos = prevBoneTransform * vec4(aPos, 1.0);
         mat3 boneRotation = mat3(boneTransform);
         // Normals transform by the inverse-transpose, not the matrix itself.
@@ -71,19 +75,19 @@ void main() {
         localTangent = boneRotation * aTangent.xyz;
     } else {
         // Non-skinned: pass through unchanged
-        localPos = vec4(aPos, 1.0);
         prevLocalPos = vec4(aPos, 1.0);
         localNormal = aNormal;
         localTangent = aTangent.xyz;
     }
 
-    // Wind (object-space displacement, masked by height). aPos is the un-skinned
-    // rest position -- the right reference for the top-pinned/hem-free mask.
-    localPos.xyz += windOffset(aPos, aTexCoords, aTexCoords2, time);
+    // Posed and wind-displaced, through the chunk the prepass also uses so the
+    // two cannot drift. The previous-frame position stays here: it feeds motion
+    // vectors, which no depth stage writes.
+    localPos = cetra_local_position(aPos, boneTransform, skinned, aTexCoords, aTexCoords2, time);
     prevLocalPos.xyz += windOffset(aPos, aTexCoords, aTexCoords2, time - uDeltaTime);
 
-    // Transform to world space
-    vec4 worldPos = model * localPos;
+    CetraObjectPos obj = cetra_object_position(model, view, projection, localPos);
+    vec4 worldPos = obj.world;
     WorldPos = worldPos.xyz;
 
     // Motion vectors (un-jittered): current vs previous skinned position, so
@@ -91,10 +95,9 @@ void main() {
     CurrClip = uCurrViewProjNoJitter * worldPos;
     PrevClip = uPrevViewProj * uPrevModel * prevLocalPos;
 
-    vec4 viewPos = view * worldPos;
-    ViewPos = viewPos.xyz;
+    ViewPos = obj.view.xyz;
 
-    vec4 clipPos = projection * viewPos;
+    vec4 clipPos = obj.clip;
 
     Normal = normalize(uNormalMatrix * localNormal);
     TexCoords = aTexCoords;

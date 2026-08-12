@@ -620,6 +620,118 @@ void instance_chunk_upload(Ubo* ubo, InstanceChunk* chunk, const DrawList* list,
 // pass names the meshes it draws instead of re-deriving them: the opaque pass
 // takes OPAQUE and XYZ, the OIT sub-passes take BLEND, the late pass takes
 // whichever of BLEND and TRANSMISSIVE the OIT routing left for it.
+// Position-only depth for opaque geometry that cannot discard, so the shading
+// pass rejects hidden fragments before the uber-shader runs.
+//
+// ALPHA-MASKED MATERIALS SIT THIS OUT, and that is the design rather than a
+// shortcut. Their coverage depends on the KHR texture transform, the POM march,
+// the vertex-colour alpha and -- under alpha-to-coverage -- on finalOpacity,
+// which needs the normal map and the TBN. Reproducing that here means
+// reproducing most of pbr_frag; getting it wrong by a fragment either drills a
+// hole through the canopy or writes depth where no leaf was. What they still
+// gain is being tested against a complete OPAQUE depth buffer, which is what
+// rejects foliage hidden behind terrain and trunks.
+//
+// The shading pass then runs GL_LEQUAL rather than GL_EQUAL. Equal is the
+// textbook pairing and is wrong here: masked geometry has no prepass depth to
+// equal, so it would fail against whatever the prepass left. LEQUAL rejects
+// everything strictly behind -- the whole win -- and lets both prepassed
+// surfaces (equal) and masked ones (nearer) through.
+static void _submit_depth_prepass(Engine* engine, const Scene* scene, const DrawList* list,
+                                  mat4 view, mat4 projection, const Frustum* frustum) {
+    if (!engine->depth_prepass_program || !list)
+        return;
+
+    SubmitStats* stats = profiler_submit(engine->profiler);
+    ShaderProgram* program = engine->depth_prepass_program;
+    UniformManager* u = program->uniforms;
+    SubmitState state = {0};
+    InstanceChunk chunk;
+
+    submit_use_program(&state, program->id);
+    uniform_set_mat4(u, "view", (const float*)view);
+    uniform_set_mat4(u, "projection", (const float*)projection);
+    uniform_set_float(u, "time", (float)engine->render_time);
+    wind_upload_to_program(scene->wind, u);
+
+    // Depth only: colour writes off rather than the draw buffers detached, so
+    // the attachment list the shading pass expects is untouched and nothing has
+    // to be rebuilt between the two passes.
+    glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+    glDepthFunc(GL_LESS);
+    glDepthMask(GL_TRUE);
+
+    for (size_t i = 0; i < list->count; ++i) {
+        const DrawItem* item = &list->items[i];
+        if (item->lane != DRAW_LANE_OPAQUE || (item->flags & DRAW_ALPHA_MASKED))
+            continue;
+        if (stats)
+            stats->meshes_seen++;
+        if (!draw_item_visible(item, frustum)) {
+            if (stats)
+                stats->meshes_culled++;
+            continue;
+        }
+
+        // Run length over the items THIS pass accepts, which is not the set the
+        // shading pass accepts -- masked items break a run here and not there.
+        // That is safe because the two passes never share a chunk: each uploads
+        // its own before its own draw.
+        size_t run = 1;
+        if (engine->instancing_enabled && engine->instance_ubo && program->instanced) {
+            while (i + run < list->count) {
+                const DrawItem* next = &list->items[i + run];
+                if (next->lane != DRAW_LANE_OPAQUE || (next->flags & DRAW_ALPHA_MASKED) ||
+                    !draw_run_can_join(item, next, frustum) || run >= UBO_INSTANCE_MAX)
+                    break;
+                run++;
+            }
+        }
+        if (stats)
+            stats->meshes_seen += run - 1;
+        if (run > 1)
+            instance_chunk_upload(engine->instance_ubo, &chunk, list, i, run, false);
+
+        Mesh* mesh = item->mesh;
+        uniform_set_mat4(u, "model", (const float*)item->node->global_transform);
+        uniform_set_float(u, "uWindMaskMinY", mesh->aabb.min[1]);
+        uniform_set_float(u, "uWindMaskMaxY", mesh->aabb.max[1]);
+        if (submit_take_material(&state, mesh->material)) {
+            uniform_set_float(u, "uWindResponse", mesh->material->wind_response);
+            uniform_set_int(u, "uWindMode", mesh->material->wind_mode);
+            if (stats)
+                stats->material_switches++;
+        }
+        render_update_skinning_uniforms(program, mesh);
+
+        bool two_sided = (item->flags & DRAW_DOUBLE_SIDED) != 0;
+        if (two_sided)
+            glDisable(GL_CULL_FACE);
+
+        GLsizei index_count;
+        const void* index_offset;
+        mesh_lod_range(mesh, item->lod, &index_count, &index_offset);
+        submit_bind_vao(&state, mesh->vao);
+        uniform_set_int(u, "uInstanced", run > 1 ? 1 : 0);
+        if (run > 1)
+            glDrawElementsInstanced(mesh->draw_mode, index_count, GL_UNSIGNED_INT, index_offset,
+                                    (GLsizei)run);
+        else
+            glDrawElements(mesh->draw_mode, index_count, GL_UNSIGNED_INT, index_offset);
+        if (stats) {
+            stats->draws++;
+            stats->instances += run;
+            stats->triangles += (size_t)(index_count / 3) * run;
+        }
+        if (two_sided)
+            glEnable(GL_CULL_FACE);
+        i += run - 1;
+    }
+
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glUseProgram(0);
+}
+
 static void _submit_lanes(const Engine* engine, Scene* scene, const DrawList* list, Camera* camera,
                           mat4 view, mat4 projection, RenderMode render_mode, SubmitState* state,
                           const Frustum* frustum, unsigned lanes, OitSubpass oit_pass) {
@@ -898,10 +1010,6 @@ void render_current_scene(Engine* engine) {
     engine->oit_this_frame = false; // set true below if the OIT accumulate pass runs
     engine->moments_this_frame = false;
     profiler_scope_begin(engine->profiler, "opaque");
-    // Depth complexity is measured around the shaded pass and nothing else: it
-    // is the one place where a sample surviving the depth test means the
-    // uber-shader ran for it.
-    profiler_samples_begin(engine->profiler);
     // Sorted from THIS pass's camera, not the frame's: a cube-capture face
     // re-enters here with its own, and ordering a face against the main camera
     // would put it backwards. Falls back to graph order if the copy cannot grow,
@@ -920,9 +1028,36 @@ void render_current_scene(Engine* engine) {
         draw_list_sort_lane(&engine->sorted_opaque, &scene->draw_list, DRAW_LANE_OPAQUE,
                             camera->position))
         opaque_list = &engine->sorted_opaque;
+    // Prepass first, inside the opaque scope so its cost lands on the row it is
+    // spent to shrink rather than looking free in a row of its own. Skipped
+    // during captures for the same reason the sort is.
+    bool prepass = engine->depth_prepass_enabled && !engine->capturing &&
+                   render_mode == RENDER_MODE_PBR;
+    if (prepass) {
+        if (!engine->depth_prepass_program) {
+            engine->depth_prepass_program = create_depth_prepass_program();
+            // Registered so the engine owns and frees it with every other
+            // program; built here rather than at init so a run that never turns
+            // the pass on compiles nothing.
+            if (engine->depth_prepass_program)
+                add_shader_program_to_engine(engine, engine->depth_prepass_program);
+        }
+        _submit_depth_prepass(engine, scene, opaque_list, *view, draw_projection, &frustum);
+        // Everything strictly behind the depth just written is now rejected
+        // before the uber-shader. Depth writes stay ON: masked geometry sat the
+        // prepass out and still has to write its own.
+        glDepthFunc(GL_LEQUAL);
+    }
+    // Opened AFTER the prepass, deliberately. It measures samples the
+    // uber-shader ran for, and the prepass's own samples pass the depth test
+    // too -- counting them made the number RISE when the pass that exists to
+    // lower it was switched on (3.87 to 5.27, measured).
+    profiler_samples_begin(engine->profiler);
     _submit_lanes(engine, scene, opaque_list, camera, *view, draw_projection, render_mode,
                   &submit_state, &frustum, 1u << DRAW_LANE_OPAQUE, OIT_SUBPASS_NONE);
     profiler_samples_end(engine->profiler);
+    if (prepass)
+        glDepthFunc(GL_LESS);
     _submit_gizmos(&scene->draw_list, *view, draw_projection, &submit_state);
     profiler_scope_end(engine->profiler);
     engine_set_scene_draw_buffers(engine, false);

@@ -88,6 +88,7 @@ static void print_usage(const char* prog) {
                     "HUD tables, and stdout at exit\n");
     fprintf(stderr, "      --no-instancing    One draw per mesh, no batching\n");
     fprintf(stderr, "      --no-sort-opaque   Draw opaques in graph order (default: sorted)\n");
+    fprintf(stderr, "      --depth-prepass    Depth-only pass before shading (default off)\n");
     fprintf(stderr, "      --no-lod           Draw every mesh at LOD level 0\n");
     fprintf(stderr, "      --lod-bias <f>     >1 holds detail longer, <1 drops it sooner\n");
     fprintf(stderr, "      --msm              Moment shadow maps: one prefiltered tap, no PCSS\n");
@@ -509,6 +510,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->no_instancing = 1;
         } else if (strcmp(argv[i], "--no-sort-opaque") == 0) {
             args->no_sort_opaque = 1;
+        } else if (strcmp(argv[i], "--depth-prepass") == 0) {
+            args->depth_prepass = 1;
         } else if (strcmp(argv[i], "--no-lod") == 0) {
             args->no_lod = 1;
         } else if (strcmp(argv[i], "--lod-bias") == 0) {
@@ -1762,6 +1765,8 @@ int main(int argc, char** argv) {
         engine->instancing_enabled = false;
     if (args.no_sort_opaque)
         engine->opaque_sort_enabled = false;
+    if (args.depth_prepass)
+        engine->depth_prepass_enabled = true;
     if (args.no_lod)
         engine->lod_enabled = false;
     if (args.lod_bias > 0.0f)
