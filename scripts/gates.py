@@ -2618,6 +2618,8 @@ def _submit_sum_ok(tables, label, failures, name):
 
 FOREST = os.path.join(ROOT, "out", "bin", "forest")
 _FOREST_CHAINS = re.compile(r"Forest: (\d+) LOD chains built, (\d+) refused")
+_FOREST_TRACE = re.compile(
+    r"player t=\s*([\d.]+) pos\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)")
 
 # One framing for every arm that is not about framing. Inside the terrain, high
 # enough to see past the near trees, so a good fraction of the world is culled
@@ -2738,6 +2740,31 @@ def run_forest_gate(workdir):
               f"(want fewer, and the same instances)")
         if not ok:
             failures.append("forest-lod")
+
+    # --- forest-rest: a character with no input does not travel -------------
+    # Slope sliding is invisible from inside the app, because the camera follows
+    # the thing that is drifting. It also survived one fix that looked right:
+    # leaving ANY downward velocity on a grounded character makes ExtendedUpdate
+    # resolve it along the surface, so a -2 m/s residual became 0.36 m/s downhill
+    # on a 10-degree face. Asserted on the position, which cannot be argued with.
+    rest = subprocess.run(
+        [FOREST, "-x", "-f", "240", "-W", "320", "-H", "180", "--trace-player", "--no-fog"],
+        capture_output=True, text=True)
+    samples = _FOREST_TRACE.findall(rest.stdout + rest.stderr)
+    if len(samples) < 4:
+        print(f"  forest-rest  FAIL  only {len(samples)} trace samples")
+        failures.append("forest-rest")
+    else:
+        # Skip the first two: the capsule has to resolve contact before it can
+        # be said to be standing on anything.
+        xs = [float(s[1]) for s in samples[2:]]
+        zs = [float(s[3]) for s in samples[2:]]
+        drift = max(abs(max(xs) - min(xs)), abs(max(zs) - min(zs)))
+        ok = drift < 0.05
+        print(f"  forest-rest  {'PASS' if ok else 'FAIL'}  idle drift {drift:.3f} units over "
+              f"{len(xs)} samples (want < 0.05)")
+        if not ok:
+            failures.append("forest-rest")
 
     # --- forest-cull: the frustum still removes most of the world -----------
     away = _forest_run(workdir, "away", ["--cam-eye", "0,300,0", "--cam-target", "600,900,600"])

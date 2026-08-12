@@ -87,7 +87,8 @@ typedef struct ForestArgs {
     float sun_elevation; // degrees; < -900 keeps the app default
     float sun_azimuth;
     int no_aerial; // keep the sky, drop aerial perspective
-    int no_fog;    // volumetric fog is on by default
+    int no_fog;       // volumetric fog is on by default
+    int trace_player; // log position, ground state and velocity each second
     float lod_bias;
     unsigned seed;
     int cam_set;
@@ -663,8 +664,12 @@ static void on_init(Game* game) {
     else
         build_sky_and_sun(engine);
 
-    // The character, dropped in above the surface at the origin.
-    float spawn_y = terrain_height_at(&g_terrain, 0.0f, 0.0f) + 3.0f;
+    // Standing on the surface, not dropped onto it. The capsule's origin sits
+    // half_height + radius above whatever it rests on, so spawning any higher
+    // means the first second of every run is a fall -- which reads as the
+    // character sliding before it settles.
+    const float capsule_rest = 0.9f + 0.4f;
+    float spawn_y = terrain_height_at(&g_terrain, 0.0f, 0.0f) + capsule_rest + 0.02f;
     g_player = create_entity(em, "player");
     entity_set_position(g_player, (vec3){0.0f, spawn_y, 0.0f});
     CharacterControllerConfig cc = character_controller_default_config();
@@ -793,14 +798,13 @@ static void on_update(Game* game, double dt) {
     vel[2] = move[2];
 
     if (grounded) {
-        // Reset the fall each step instead of integrating gravity forever.
-        // Left to accumulate, downward velocity grows without bound while
-        // walking, and ExtendedUpdate resolves that against a sloped surface by
-        // converting it into travel ALONG the slope -- which is exactly the
-        // sliding-on-ice feel. A small residual keeps the capsule on the ground
-        // over convex breaks instead of launching off them.
-        if (vel[1] < 0.0f)
-            vel[1] = -2.0f;
+        // Zero, not a small negative. Any downward velocity left on a grounded
+        // character is resolved by ExtendedUpdate ALONG the surface, so on a
+        // slope it becomes downhill travel: measured at 0.36 m/s on a 10-degree
+        // face from a -2 m/s residual, which is 2*sin(10) and exactly the
+        // skating this was meant to cure. Ground adherence is
+        // stick_to_floor_distance's job, not a velocity's.
+        vel[1] = 0.0f;
     } else {
         vel[1] -= 22.0f * (float)dt;
     }
@@ -809,6 +813,22 @@ static void on_update(Game* game, double dt) {
         vel[1] = 9.5f;
 
     character_controller_set_velocity(cc, vel);
+
+    // Whether the character is at rest is not something the frame shows -- the
+    // camera follows it, so drift and stillness look identical from inside.
+    if (g_args.trace_player) {
+        static int step;
+        if (step++ % 30 == 0) {
+            vec3 pos, gn;
+            character_controller_get_position(cc, pos);
+            character_controller_get_ground_normal(cc, gn);
+            printf("player t=%5.2f pos %8.2f %8.2f %8.2f  vel %6.2f %6.2f %6.2f  "
+                   "grounded %d  ground_n.y %.3f  terrain %.2f\n",
+                   (double)step / 60.0, (double)pos[0], (double)pos[1], (double)pos[2],
+                   (double)vel[0], (double)vel[1], (double)vel[2], grounded ? 1 : 0, (double)gn[1],
+                   (double)terrain_height_at(&g_terrain, pos[0], pos[2]));
+        }
+    }
 }
 
 static void on_render(Game* game, double alpha) {
@@ -933,6 +953,8 @@ int main(int argc, char** argv) {
             g_args.no_sky = 1;
         } else if (!strcmp(a, "--no-fog")) {
             g_args.no_fog = 1;
+        } else if (!strcmp(a, "--trace-player")) {
+            g_args.trace_player = 1;
         } else if (!strcmp(a, "--no-aerial")) {
             g_args.no_aerial = 1;
         } else if (!strcmp(a, "--sun-elevation") && i + 1 < argc) {
