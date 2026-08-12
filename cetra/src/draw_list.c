@@ -103,7 +103,14 @@ static void classify(const Mesh* mesh, uint8_t* lane, uint8_t* flags) {
 // level in the scene at once, which is visible as the whole frame changing
 // silhouette; holding the ladder in world terms costs a little detail at narrow
 // FOV and never pops en masse.
-static const float LOD_SWITCH[CETRA_LOD_MAX - 1] = {0.045f, 0.022f, 0.011f};
+static const float LOD_SWITCH[] = {0.045f, 0.022f, 0.011f};
+
+// Sized off the literals, then checked against the cap. Declaring it
+// [CETRA_LOD_MAX - 1] instead would zero-pad when the cap is raised, and a
+// threshold of 0 is one no projected size ever falls below -- so the new levels
+// would be unreachable and nothing would say so.
+_Static_assert(sizeof(LOD_SWITCH) / sizeof(LOD_SWITCH[0]) == CETRA_LOD_MAX - 1,
+               "LOD_SWITCH needs one threshold per level below the top");
 
 // Level for this item, from its own bounds. Zero whenever the chain is absent
 // or selection is off, which is what makes --no-lod reach the pre-chain frame.
@@ -111,26 +118,19 @@ static uint8_t select_lod(const Mesh* mesh, const SceneNode* node, const LodSele
     if (!lod || !lod->enabled || mesh->lod_levels <= 1)
         return 0;
 
-    // Half the diagonal of the local box, grown by the largest axis scale in the
-    // transform. An approximation of the world radius that costs three dot
-    // products instead of transforming eight corners, and errs LARGE -- which
-    // holds detail slightly too long rather than dropping it too early.
-    vec3 extent;
-    glm_vec3_sub((float*)mesh->aabb.max, (float*)mesh->aabb.min, extent);
+    // The same world bound the culler tests against, from the same function, so
+    // "how big is this mesh in the world" has one definition rather than a
+    // second one here free to drift from it.
+    // Zeroed because they are out-params of a call in another translation unit,
+    // which static analysis reads as a use before write.
+    vec3 world_min = {0.0f, 0.0f, 0.0f}, world_max = {0.0f, 0.0f, 0.0f};
+    vec3 world_centre, extent;
+    aabb_transform((float*)mesh->aabb.min, (float*)mesh->aabb.max,
+                   (vec4*)node->global_transform, world_min, world_max);
+    glm_vec3_add(world_min, world_max, world_centre);
+    glm_vec3_scale(world_centre, 0.5f, world_centre);
+    glm_vec3_sub(world_max, world_min, extent);
     float radius = glm_vec3_norm(extent) * 0.5f;
-    float scale = 0.0f;
-    for (int c = 0; c < 3; ++c) {
-        float len = glm_vec3_norm((float*)node->global_transform[c]);
-        if (len > scale)
-            scale = len;
-    }
-    radius *= scale;
-
-    vec3 centre;
-    glm_vec3_add((float*)mesh->aabb.min, (float*)mesh->aabb.max, centre);
-    glm_vec3_scale(centre, 0.5f, centre);
-    vec3 world_centre;
-    glm_mat4_mulv3((vec4*)node->global_transform, centre, 1.0f, world_centre);
 
     float distance = glm_vec3_distance((float*)lod->eye, world_centre);
     if (distance < 1e-4f)

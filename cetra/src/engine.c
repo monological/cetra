@@ -238,11 +238,6 @@ Engine* create_engine(const char* window_title, int width, int height) {
     // --no-instancing is the escape hatch.
     engine->instancing_enabled = true;
     engine->oit_moments_enabled = true;
-    // LOD selection on, but inert until a mesh has a chain -- and the corpus
-    // here mostly cannot get one: meshoptimizer locks mesh borders, and a leaf
-    // card or a grass blade is nearly all border. Built for content that does
-    // not exist here yet, so on a scene of small props this changes nothing at
-    // all rather than a little.
     engine->lod_enabled = true;
     engine->lod_bias = 1.0f;
 

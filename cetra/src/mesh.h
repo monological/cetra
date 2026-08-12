@@ -12,9 +12,12 @@
 // Forward declaration
 struct Skeleton;
 
-// Levels in a mesh's LOD chain, level 0 (the original indices) included. Four
-// is the point where the ladder below stops being able to halve without falling
-// under the floor a chain is worth building for at all.
+// Levels in a mesh's LOD chain, level 0 (the original indices) included.
+//
+// A budget, not a derived bound: the builder's own floor would allow more rungs
+// on a dense enough mesh, and four is where the index memory (which grows with
+// the chain) stops being worth the triangles the next rung would save. Raising
+// it means extending LOD_SWITCH in draw_list.c, which a static assert enforces.
 #define CETRA_LOD_MAX 4
 
 // Axis-Aligned Bounding Box
@@ -89,15 +92,12 @@ typedef struct Mesh {
     //
     // Level 0 is always the original index data at offset 0, which is what makes
     // a mesh with no chain byte-identical to one built before chains existed.
-    // Read these through mesh_lod_range, never directly: it answers for a mesh
-    // that has no chain too.
+    // Read these through mesh_lod_range and mesh_index_total, never directly:
+    // they answer for a mesh that has no chain too, which is most of them.
     size_t lod_offset[CETRA_LOD_MAX]; // byte offset into the EBO
     size_t lod_count[CETRA_LOD_MAX];  // indices at this level
     float lod_error[CETRA_LOD_MAX];   // meshopt's deviation estimate, mesh units
     int lod_levels;                   // <= 1 means no chain
-    // Indices in the EBO, which is every level end to end. Zero means no chain
-    // was built and index_count is the whole of it.
-    size_t index_total;
 
 } Mesh;
 
@@ -106,15 +106,28 @@ typedef struct Mesh {
 // caller never has to ask whether a chain exists.
 static inline void mesh_lod_range(const Mesh* mesh, int level, GLsizei* count,
                                   const void** offset) {
-    if (mesh->lod_levels > 1 && level > 0) {
-        if (level >= mesh->lod_levels)
-            level = mesh->lod_levels - 1;
-        *count = (GLsizei)mesh->lod_count[level];
-        *offset = (const void*)mesh->lod_offset[level];
+    if (mesh->lod_levels <= 1) {
+        *count = (GLsizei)mesh->index_count;
+        *offset = NULL;
         return;
     }
-    *count = (GLsizei)mesh->index_count;
-    *offset = NULL;
+    if (level < 0)
+        level = 0;
+    if (level >= mesh->lod_levels)
+        level = mesh->lod_levels - 1;
+    *count = (GLsizei)mesh->lod_count[level];
+    *offset = (const void*)mesh->lod_offset[level];
+}
+
+// Indices in the EBO: every level end to end, since the chain is appended to
+// the original. Derived rather than stored so there is one answer to "how many
+// indices does this mesh have" per level and one for the buffer, and no third
+// field that a future chain builder could forget to set.
+static inline size_t mesh_index_total(const Mesh* mesh) {
+    if (mesh->lod_levels <= 1)
+        return mesh->index_count;
+    int last = mesh->lod_levels - 1;
+    return mesh->lod_offset[last] / sizeof(unsigned int) + mesh->lod_count[last];
 }
 
 /*

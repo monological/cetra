@@ -47,7 +47,6 @@ Mesh* create_mesh() {
     memset(mesh->lod_count, 0, sizeof(mesh->lod_count));
     memset(mesh->lod_error, 0, sizeof(mesh->lod_error));
     mesh->lod_levels = 1;
-    mesh->index_total = 0;
 
     // One share, held by whoever asked for the mesh. That makes the single-node
     // case identical to the ownership this had before refcounting, including
@@ -199,7 +198,7 @@ void upload_mesh_buffers_to_gpu(Mesh* mesh) {
     // Indices. index_total covers every LOD level end to end and equals
     // index_count when no chain was built, so this is the whole EBO either way.
     if (mesh->indices) {
-        size_t total = mesh->index_total ? mesh->index_total : mesh->index_count;
+        size_t total = mesh_index_total(mesh);
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, mesh->ebo);
         glBufferData(GL_ELEMENT_ARRAY_BUFFER, total * sizeof(unsigned int), mesh->indices,
                      GL_STATIC_DRAW);

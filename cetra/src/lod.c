@@ -10,10 +10,16 @@
 // halving a handful of triangles saves nothing measurable.
 #define LOD_MIN_TRIANGLES 256
 
-// Each level aims for this fraction of the level above it. Halving is the usual
-// choice and keeps the whole chain under 2x the original index memory: 1 + 1/2
-// + 1/4 + 1/8.
+// Each level AIMS for this fraction of the level above it. What the chain
+// actually costs is bounded by LOD_MIN_SHRINK, not by this: a level that only
+// reaches 0.85 is still kept, so the worst case is 1 + 0.85 + 0.85^2 = 2.57x
+// the original index memory rather than the 1.875x halving would suggest.
 #define LOD_DECIMATION 0.5f
+
+// A level below this many triangles is not worth a rung of its own. Separate
+// from the entry floor above: a mesh has to be reasonably large before a chain
+// pays for itself at all, but once it has one the bottom rung can go finer.
+#define LOD_MIN_LEVEL_TRIANGLES 64
 
 // How far a level may deviate from the original surface, as a fraction of the
 // mesh's own extent. meshopt treats this as a ceiling and returns early when it
@@ -33,7 +39,6 @@ int mesh_build_lod_chain(Mesh* mesh) {
     mesh->lod_offset[0] = 0;
     mesh->lod_count[0] = mesh->index_count;
     mesh->lod_error[0] = 0.0f;
-    mesh->index_total = mesh->index_count;
 
     if (!mesh->indices || !mesh->vertices)
         return 1;
@@ -44,6 +49,17 @@ int mesh_build_lod_chain(Mesh* mesh) {
         return 1;
     if (mesh->index_count / 3 < LOD_MIN_TRIANGLES)
         return 1;
+
+    // Every index has to name a real vertex before the simplifier dereferences
+    // it. The import fills indices per FACE over face.mNumIndices, and
+    // aiProcess_Triangulate leaves line and point primitives alone, so a
+    // 2-index face leaves the third slot of its triple at whatever malloc
+    // returned. That garbage used to reach only the GPU, which clamps; the
+    // simplifier reads vertex_positions + idx * stride and does not.
+    for (size_t i = 0; i < mesh->index_count; ++i) {
+        if (mesh->indices[i] >= mesh->vertex_count)
+            return 1;
+    }
 
     // Worst case every level is the size of the one above, which the shrink
     // test stops long before -- but the buffer has to exist before the test can
@@ -61,7 +77,7 @@ int mesh_build_lod_chain(Mesh* mesh) {
     for (int level = 1; level < CETRA_LOD_MAX; ++level) {
         size_t target = (size_t)((float)previous * LOD_DECIMATION);
         target -= target % 3;
-        if (target / 3 < LOD_MIN_TRIANGLES / 4)
+        if (target / 3 < LOD_MIN_LEVEL_TRIANGLES)
             break;
 
         float error = 0.0f;
@@ -101,6 +117,5 @@ int mesh_build_lod_chain(Mesh* mesh) {
     unsigned int* shrunk = realloc(chain, total * sizeof(unsigned int));
     free(mesh->indices);
     mesh->indices = shrunk ? shrunk : chain;
-    mesh->index_total = total;
     return mesh->lod_levels;
 }

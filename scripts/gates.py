@@ -2623,6 +2623,15 @@ LOD_FIXTURE = "lod_fixture.gltf"
 LOD_SWEEP = ("0,1.5,4", "0,3,30", "0,6,90")
 
 
+def _skin_fixture_triangles():
+    """Triangle count of the skinned fixture, read from the glTF it generated."""
+    path = os.path.join(ROOT, "assets", SKIN_FIXTURE)
+    with open(path) as f:
+        gltf = json.load(f)
+    prim = gltf["meshes"][0]["primitives"][0]
+    return gltf["accessors"][prim["indices"]]["count"] // 3
+
+
 def _lod_run(workdir, tag, eye, extra):
     return _profiled_run(workdir, f"lod_{tag}",
                          ["--cam-eye", eye, "--cam-target", "0,0.5,-6"] + extra,
@@ -2644,16 +2653,23 @@ def run_lod_gate(workdir):
 
     failures = []
     runs = [_lod_run(workdir, f"near{i}", eye, []) for i, eye in enumerate(LOD_SWEEP)]
-    if any(r is None for r in runs):
+    # `import` is None when the log line does not match, so this also catches a
+    # renamed counter -- and catches it as a named failure rather than as a
+    # TypeError that takes the whole suite down with it.
+    if any(r is None or r["import"] is None for r in runs):
         return ["lod-parse"]
 
     # --- lod-chain: meshoptimizer actually produced one ---------------------
     # Without this every arm below passes trivially on a fixture that has no
     # chain to select from: the triangle count would simply never move.
+    #
+    # Exactly one, not at least one: the fixture has two meshes and the ground
+    # quad is two triangles, so a second chain would mean the floor stopped
+    # working rather than that the fixture got better.
     chains = runs[0]["import"]["lod_chains"]
-    ok = chains >= 1
+    ok = chains == 1
     print(f"  lod-chain    {'PASS' if ok else 'FAIL'}  import built {chains} LOD chain(s) "
-          f"(want >= 1: the sphere is dense and closed, so it has no locked border)")
+          f"(want exactly 1: the sphere is dense and closed; the ground quad is 2 triangles)")
     if not ok:
         failures.append("lod-chain")
 
@@ -2681,18 +2697,44 @@ def run_lod_gate(workdir):
         if not ok:
             failures.append("lod-off")
 
+    # --- lod-bias: the knob reaches the ladder ------------------------------
+    # Shipped with a flag and a GUI slider and, until this arm, nothing that
+    # could tell a parsed bias from a dropped one -- which is the failure the
+    # spec's own arm table names as having been shipped twice already.
+    #
+    # Measured at the MIDDLE eye, the only one of the three with levels above
+    # and below it to move into.
+    hi = _lod_run(workdir, "bias_hi", LOD_SWEEP[1], ["--lod-bias", "4"])
+    lo = _lod_run(workdir, "bias_lo", LOD_SWEEP[1], ["--lod-bias", "0.25"])
+    if hi is None or lo is None:
+        failures.append("lod-bias")
+    else:
+        h = hi["submit"]["opaque"]["triangles"]
+        l = lo["submit"]["opaque"]["triangles"]
+        ok = h > tris[1] > l
+        print(f"  lod-bias     {'PASS' if ok else 'FAIL'}  bias 4 -> {h}, unbiased {tris[1]}, "
+              f"bias 0.25 -> {l} (want strictly decreasing: >1 holds detail, <1 drops it)")
+        if not ok:
+            failures.append("lod-bias")
+
     # --- lod-skinned: decimation does not reach a rig -----------------------
-    # The fixture is 2048 triangles, well over lod.c's floor, so a refusal here
-    # can only be the skinning rule. A four-vertex quad would be refused for its
-    # size and this arm would pass without testing anything.
+    # Over lod.c's triangle floor by a wide margin, so a refusal here can only be
+    # the skinning rule. Read from the generator rather than mirrored: a fixture
+    # that shrank below the floor would make this arm pass for the wrong reason,
+    # silently.
+    skin_tris = _skin_fixture_triangles()
     skinned = _profiled_run(workdir, "lod_skin", [], fixture=SKIN_FIXTURE, size=("400", "300"))
-    if skinned is None:
+    if skinned is None or skinned["import"] is None:
+        failures.append("lod-skinned")
+    elif skin_tris < 256:
+        print(f"  lod-skinned  FAIL  fixture is {skin_tris} triangles, under lod.c's floor -- "
+              f"a refusal would prove nothing about skinning")
         failures.append("lod-skinned")
     else:
         n = skinned["import"]["lod_chains"]
         ok = n == 0
-        print(f"  lod-skinned  {'PASS' if ok else 'FAIL'}  {n} chains on a 2048-triangle SKINNED "
-              f"mesh (want 0: weights do not transfer to surviving vertices)")
+        print(f"  lod-skinned  {'PASS' if ok else 'FAIL'}  {n} chains on a {skin_tris}-triangle "
+              f"SKINNED mesh (want 0: weights do not transfer to surviving vertices)")
         if not ok:
             failures.append("lod-skinned")
 

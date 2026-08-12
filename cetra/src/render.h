@@ -76,11 +76,18 @@ void scene_capture_faces(Engine* engine, struct IBLResources* ibl, const vec3 po
                          GLuint dst_cubemap, GLuint dst_depth_cubemap, int face_size,
                          float near_clip, float far_clip);
 
-// The LOD view for this frame: the engine's main camera and its LOD settings.
-// Both flatten sites call it, so whichever of them builds the list first picks
-// levels the other agrees with -- the depth map and the shaded frame have to be
-// looking at the same geometry.
-void engine_lod_select(const Engine* engine, LodSelect* out);
+// Flatten the scene for this frame, if it has not been flattened already.
+//
+// One function rather than the three lines it replaces, because two of those
+// lines are invariants and neither survives being retyped: the stamp decides
+// when a list may be reused, and the LOD view decides what levels every pass
+// will draw at. A site that spelled either differently would silently get a
+// second list, or a depth map drawn at levels the camera pass disagrees with.
+//
+// Idempotent within a frame -- the first caller settles both, and the rest
+// reuse. That ordering is load-bearing where a caller is about to substitute
+// the camera: see scene_capture_begin.
+void engine_build_draw_list(Engine* engine, struct Scene* scene);
 
 // Animation state for skinned mesh rendering
 // Set before rendering to enable bone matrix upload for skinned meshes

@@ -1159,10 +1159,7 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     // flattens the graph; the stamp makes the camera pass reuse what this built
     // rather than build a second time -- unless the app mutated the graph in
     // between, which the epoch half of the stamp catches.
-    LodSelect lod;
-    engine_lod_select(engine, &lod);
-    draw_list_build(&scene->draw_list, scene, engine->total_frames ^ (scene_graph_epoch() << 32),
-                    &lod);
+    engine_build_draw_list((Engine*)engine, scene);
 
     ShadowSystem* ss = scene->shadow_system;
 

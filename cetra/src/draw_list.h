@@ -67,16 +67,9 @@ typedef struct DrawItem {
     struct SceneNode* node; // transform; never the geometry
     uint8_t lane;
     uint8_t flags;
-    // Level from this mesh's chain, chosen once per frame from the CAMERA, and
-    // used by every pass including the shadow layers.
-    //
-    // Not per view, deliberately. A caster drawn into the depth map at a coarser
-    // level than the camera shades it with gets a silhouette that disagrees with
-    // its own surface, which reads as self-shadow acne along the seam -- so the
-    // saving of a per-light level would be paid for in exactly the artefact
-    // shadows are hardest to debug. The cube-capture faces inherit the main
-    // camera's levels for the same reason, though they see the scene from
-    // somewhere else entirely.
+    // Level from this mesh's chain, chosen from the camera and used by every
+    // pass. A per-light level would let a caster's depth-map silhouette
+    // disagree with the surface it is shaded with, which reads as acne.
     uint8_t lod;
 } DrawItem;
 
@@ -146,10 +139,8 @@ bool draw_item_visible(const DrawItem* item, const Frustum* frustum);
 // caller adds its own "does this pass want it" test -- that part differs per
 // pass, this part does not.
 //
-// The level joins the key because one draw submits one index range. Two
-// instances of a mesh at different distances are the same geometry and still
-// cannot share a draw, which is not a limitation: grouping by level is what
-// makes a hundred distant copies collapse into one cheap draw.
+// The level joins the key because one draw submits one index range, so two
+// instances of a mesh at different distances cannot share a draw.
 bool draw_run_can_join(const DrawItem* head, const DrawItem* next, const Frustum* frustum);
 
 #endif // DRAW_LIST_H

@@ -579,13 +579,18 @@ static size_t _visible_run(const DrawList* list, size_t first, unsigned lanes,
     return n;
 }
 
-void engine_lod_select(const Engine* engine, LodSelect* out) {
-    out->enabled = engine && engine->lod_enabled;
-    out->bias = engine && engine->lod_bias > 0.0f ? engine->lod_bias : 1.0f;
-    if (engine && engine->camera)
-        glm_vec3_copy(engine->camera->position, out->eye);
+void engine_build_draw_list(Engine* engine, Scene* scene) {
+    if (!engine || !scene)
+        return;
+    LodSelect lod;
+    lod.enabled = engine->lod_enabled;
+    lod.bias = engine->lod_bias;
+    if (engine->camera)
+        glm_vec3_copy(engine->camera->position, lod.eye);
     else
-        glm_vec3_zero(out->eye);
+        glm_vec3_zero(lod.eye);
+    draw_list_build(&scene->draw_list, scene, engine->total_frames ^ (scene_graph_epoch() << 32),
+                    &lod);
 }
 
 void instance_chunk_upload(Ubo* ubo, InstanceChunk* chunk, const DrawList* list, size_t first,
@@ -773,10 +778,7 @@ void render_current_scene(Engine* engine) {
     // every consumer loops over count, and returning here would skip the
     // per-frame flag resets and the prev_view_proj stash below, poisoning the
     // NEXT frame's motion vectors as well as this one's composite.
-    LodSelect lod;
-    engine_lod_select(engine, &lod);
-    draw_list_build(&scene->draw_list, scene, engine->total_frames ^ (scene_graph_epoch() << 32),
-                    &lod);
+    engine_build_draw_list((Engine*)engine, scene);
 
     // Clustered forward (spec 9.1): rebuild the light grid + UBOs for THIS
     // invocation's camera and viewport -- probe-capture faces re-enter here
@@ -1169,6 +1171,15 @@ void scene_capture_begin(Engine* engine, Scene* scene, SceneCaptureState* saved)
     // The mask array must be packed before the first face: a capture taken with
     // the scalar fallbacks still in place bakes them into the cubemap forever.
     mask_array_ensure_built(scene, engine);
+
+    // Flatten from the CAMERA before the capture substitutes camera->position
+    // with its own. The list is stamped per frame, so whoever builds it first
+    // fixes the LOD levels every pass will draw at -- and the six faces about to
+    // re-enter render_current_scene would otherwise be that first builder, in
+    // which case the whole frame, main camera included, draws at levels measured
+    // from a probe. Only reachable with shadows off, since the depth pass below
+    // builds it otherwise, which is exactly why it cannot live inside that guard.
+    engine_build_draw_list(engine, scene);
 
     saved->cascade_count = scene->shadow_system ? scene->shadow_system->cascade_count : 1;
     saved->msm_enabled = scene->shadow_system ? scene->shadow_system->msm_enabled : false;
