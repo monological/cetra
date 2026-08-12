@@ -80,7 +80,9 @@ typedef struct ForestArgs {
     int profiler;
     int no_lod;
     int no_instancing;
-    int render_mode; // RenderMode override; 0 = PBR
+    int render_mode;     // RenderMode override; 0 = PBR
+    int no_spatial_sort; // scatter in draw order rather than Morton order
+    int width, height;   // 0 = the default window size
     float lod_bias;
     unsigned seed;
     int cam_set;
@@ -227,11 +229,18 @@ static unsigned morton_key(const TerrainParams* p, float x, float z) {
 
 // Prototype first so each one is a contiguous block (a foreign mesh between two
 // instances ends the run), then spatially within it.
+//
+// --no-spatial-sort keeps the prototype grouping and drops only the spatial
+// half, which is what isolates the finding: without it the props are still one
+// mesh per block and still all batchable, and the ONLY thing that changed is
+// whether the survivors of a frustum test end up next to each other.
 static int placement_cmp(const void* a, const void* b) {
     const Placement* pa = (const Placement*)a;
     const Placement* pb = (const Placement*)b;
     if (pa->proto != pb->proto)
         return pa->proto < pb->proto ? -1 : 1;
+    if (g_args.no_spatial_sort)
+        return 0;
     if (pa->key != pb->key)
         return pa->key < pb->key ? -1 : 1;
     return 0;
@@ -780,9 +789,12 @@ static void print_usage(const char* argv0) {
     fprintf(stderr, "  -x, --headless          Hidden window (capture / CI)\n");
     fprintf(stderr, "  -f, --frames N          Exit after N frames\n");
     fprintf(stderr, "  -S, --screenshot PATH   Save the final frame as PPM\n");
+    fprintf(stderr, "  -W, -H <n>              Window size\n");
     fprintf(stderr, "      --profiler          Per-pass timing + submission counters\n");
     fprintf(stderr, "      --no-lod            Draw every mesh at LOD level 0\n");
     fprintf(stderr, "      --no-instancing     One draw per mesh\n");
+    fprintf(stderr, "      --no-spatial-sort   Scatter without Morton ordering\n");
+    fprintf(stderr, "      --render-mode N     1 = normals, 6 = albedo\n");
     fprintf(stderr, "      --lod-bias F        >1 holds detail longer\n");
     fprintf(stderr, "      --seed N            Terrain and scatter seed\n");
     fprintf(stderr, "      --cam-eye x,y,z     Pin the camera (disables follow)\n");
@@ -814,6 +826,12 @@ int main(int argc, char** argv) {
             g_args.no_instancing = 1;
         } else if (!strcmp(a, "--lod-bias") && i + 1 < argc) {
             g_args.lod_bias = strtof(argv[++i], NULL);
+        } else if ((!strcmp(a, "-W") || !strcmp(a, "--width")) && i + 1 < argc) {
+            g_args.width = atoi(argv[++i]);
+        } else if ((!strcmp(a, "-H") || !strcmp(a, "--height")) && i + 1 < argc) {
+            g_args.height = atoi(argv[++i]);
+        } else if (!strcmp(a, "--no-spatial-sort")) {
+            g_args.no_spatial_sort = 1;
         } else if (!strcmp(a, "--render-mode") && i + 1 < argc) {
             g_args.render_mode = atoi(argv[++i]);
         } else if (!strcmp(a, "--seed") && i + 1 < argc) {
@@ -832,8 +850,8 @@ int main(int argc, char** argv) {
 
     GameConfig config = game_default_config();
     config.title = "Cetra Forest";
-    config.width = 1600;
-    config.height = 900;
+    config.width = g_args.width > 0 ? g_args.width : 1600;
+    config.height = g_args.height > 0 ? g_args.height : 900;
     config.headless = g_args.headless != 0;
     config.exit_after_frames = g_args.frames;
     config.screenshot_path = g_args.screenshot;
