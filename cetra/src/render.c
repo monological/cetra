@@ -898,8 +898,13 @@ void render_current_scene(Engine* engine) {
     engine->oit_this_frame = false; // set true below if the OIT accumulate pass runs
     engine->moments_this_frame = false;
     profiler_scope_begin(engine->profiler, "opaque");
+    // Depth complexity is measured around the shaded pass and nothing else: it
+    // is the one place where a sample surviving the depth test means the
+    // uber-shader ran for it.
+    profiler_samples_begin(engine->profiler);
     _submit_lanes(engine, scene, &scene->draw_list, camera, *view, draw_projection, render_mode,
                   &submit_state, &frustum, 1u << DRAW_LANE_OPAQUE, OIT_SUBPASS_NONE);
+    profiler_samples_end(engine->profiler);
     _submit_gizmos(&scene->draw_list, *view, draw_projection, &submit_state);
     profiler_scope_end(engine->profiler);
     engine_set_scene_draw_buffers(engine, false);

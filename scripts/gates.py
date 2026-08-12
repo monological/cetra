@@ -2310,6 +2310,27 @@ GPU_SCALE_DROP = 0.20         # render-res passes must shed this much at half sc
 _GPU_ROW = re.compile(r"^(.*?)\s+(-?\d+\.\d+) ms$")
 
 
+# The SHADING block, read on its own rather than through _report_tables. Its rows
+# are bare integers where every block that parser knows ends in " ms" or carries
+# exactly len(SUBMIT_COLS) columns, so teaching it this shape would mean either a
+# third row format in the shared parser or every SHADING row landing in
+# `unparsed` -- and four gates assert that `unparsed` is zero.
+_SHADING_SAMPLES = re.compile(r"^samples shaded\s+(\d+)$", re.M)
+_SHADING_BUDGET = re.compile(r"^sample budget\s+(\d+)$", re.M)
+_SHADING_COMPLEXITY = re.compile(r"^depth complexity\s+([\d.]+)$", re.M)
+
+
+def _shading_block(text):
+    """{"shaded", "budget", "complexity"} or None if the block did not print."""
+    s = _SHADING_SAMPLES.search(text)
+    b = _SHADING_BUDGET.search(text)
+    c = _SHADING_COMPLEXITY.search(text)
+    if not s or not b or not c:
+        return None
+    return {"shaded": int(s.group(1)), "budget": int(b.group(1)),
+            "complexity": float(c.group(1))}
+
+
 GPU_FIXTURE = "dir_shadow_fixture.cscn"
 
 
@@ -2663,14 +2684,17 @@ def _forest_run(workdir, tag, extra, cam=None):
     tables = _report_tables(text)
     m = _FOREST_CHAINS.search(text)
     mm = _FOREST_MESHES.search(text)
+    shading = _shading_block(text)
     unparsed = sum(tables["unparsed"].values())
-    if not m or not mm or unparsed or "opaque" not in tables["submit"]:
+    if not m or not mm or not shading or unparsed or "opaque" not in tables["submit"]:
         print(f"  forest       ERROR {tag} report unreadable: {unparsed} unparsed rows, "
               f"chains {'yes' if m else 'no'}, meshes {'yes' if mm else 'no'}, "
+              f"shading {'yes' if shading else 'no'}, "
               f"opaque {'yes' if 'opaque' in tables['submit'] else 'no'}")
         return None
     tables["chains"] = {"built": int(m.group(1)), "refused": int(m.group(2))}
     tables["meshes"] = int(mm.group(1))
+    tables["shading"] = shading
     tables["opaque"] = tables["submit"]["opaque"]
     return tables
 
@@ -2821,7 +2845,28 @@ def run_forest_gate(workdir):
     away = _forest_run(workdir, "away", [], cam=FOREST_CAM_AWAY)
     if away is None:
         failures.append("forest-cull")
+        failures.append("overdraw-probe")
     else:
+        # --- overdraw-probe: the depth-complexity instrument measures ------
+        # GL_SAMPLES_PASSED is the neighbouring primitive to GL_TIME_ELAPSED, and
+        # this driver answers GL_TIMESTAMP with 0 while its scoped queries work --
+        # so "the call was accepted" proves nothing and the arm has to show the
+        # number MOVING. Aimed at the sky the opaque pass draws nothing, so the
+        # only reading that can be correct is exactly 0; over the forest it must
+        # exceed 1, or samples are being counted once and the instrument is blind
+        # to the one thing it exists to see.
+        sky = away["shading"]
+        base_shading = base["shading"]
+        ok = (sky["shaded"] == 0 and base_shading["shaded"] > 0
+              and base_shading["complexity"] > 1.0
+              and base_shading["budget"] == sky["budget"])
+        print(f"  overdraw-probe {'PASS' if ok else 'FAIL'}  depth complexity "
+              f"{base_shading['complexity']:.2f} over the forest "
+              f"({base_shading['shaded']} of {base_shading['budget']} samples, want > 1.0), "
+              f"{sky['shaded']} aimed at sky (want exactly 0)")
+        if not ok:
+            failures.append("overdraw-probe")
+
         a = away["opaque"]
         # Exact, not an inequality: aimed into the sky every mesh is outside the
         # frustum, so seen == culled and draws == 0. `seen` matching the base run

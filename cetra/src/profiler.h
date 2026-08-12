@@ -150,6 +150,48 @@ const SubmitStats* profiler_row_submit(const Profiler* profiler, int row);
 // and a bare total bounds nothing at all.
 float profiler_frame_ms(const Profiler* profiler);
 
+// Samples that survived the depth test between these calls -- for the opaque
+// pass, the samples the uber-shader actually ran for. Against the frame's sample
+// budget that is mean depth complexity, which is the quantity Wall 4 of the
+// roadmap is about and the one thing this instrument could not previously see:
+// every counter above measures what was SUBMITTED, and overdraw is invisible to
+// all of them.
+//
+// A single GL_SAMPLES_PASSED query rather than one per scope. It is only
+// meaningful where scene geometry is shaded, and issuing it around thirty
+// fullscreen post passes would spend real query traffic measuring a constant.
+// GL_SAMPLES_PASSED is a different query TARGET from GL_TIME_ELAPSED, so this
+// nests inside a timing scope rather than competing with it.
+//
+// Counts samples that PASSED, not fragments that shaded, and the two differ in
+// two directions that matter:
+//
+//   - Early-Z rejects before the shader runs, so a rejected fragment costs
+//     nothing and passes nothing. Correct bias: a prepass works by making
+//     early-Z reject, so the number it is meant to move is the one counted.
+//   - A fragment that DISCARDS costs a full shader invocation and passes no
+//     sample. So this UNDERSTATES the work wherever alpha-masked geometry
+//     dominates -- which is exactly the foliage case a prepass most wants to
+//     shield. Measured: apps/forest reads 1.85 here while shading samples 4.4x
+//     slower than an interior reading 2.78, and the gap is the leaf cards
+//     whose fragments run and then discard.
+//
+// So this is a floor on depth complexity, not an estimate of it. A number above
+// 1 proves redundant shading; a number near 1 does not prove its absence.
+void profiler_samples_begin(Profiler* profiler);
+void profiler_samples_end(Profiler* profiler);
+
+// The frame's sample budget -- render width * height * MSAA samples -- as the
+// denominator the count is read against. Published by whoever owns the scene
+// target: the profiler cannot know the supersample or render-scale factors.
+void profiler_set_sample_budget(Profiler* profiler, size_t samples);
+
+// From the last RETIRED frame, so this lags by up to PROFILER_RING frames and
+// reads 0 until the first one lands. Exact rather than averaged, for the reason
+// the submission counters are.
+size_t profiler_samples_shaded(const Profiler* profiler);
+size_t profiler_sample_budget(const Profiler* profiler);
+
 // One table on stdout. For headless runs, where there is no HUD to read.
 // Non-const: a run too short to have latched a window is published here, so a
 // two-second capture reports what it measured instead of an empty table.

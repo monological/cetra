@@ -69,6 +69,15 @@ struct Profiler {
     float cpu_total_ms;
     float frame_ms;
 
+    // Depth complexity. One query on its own ring, generated on first use so a
+    // caller that never asks pays nothing.
+    GLuint samples_query[PROFILER_RING];
+    unsigned char samples_issued[PROFILER_RING];
+    int samples_generated;
+    int samples_open; // a query is live; guards an unmatched end
+    size_t samples_shaded;
+    size_t sample_budget;
+
     int zero_streak;
     int warned_zero;
 };
@@ -109,6 +118,8 @@ void free_profiler(Profiler* profiler) {
         return;
     for (int i = 0; i < profiler->scope_count; ++i)
         glDeleteQueries(PROFILER_RING, profiler->scopes[i].query);
+    if (profiler->samples_generated)
+        glDeleteQueries(PROFILER_RING, profiler->samples_query);
     free(profiler);
 }
 
@@ -159,6 +170,21 @@ static void retire_slot(Profiler* profiler, int slot) {
         saw_any = 1;
         if (ns != 0)
             saw_nonzero = 1;
+    }
+
+    // The depth-complexity query rides the same slot and the same
+    // check-never-wait rule. Kept out of the zero-streak accounting below: zero
+    // samples passed is a legitimate answer (a frame aimed at empty sky), where
+    // zero nanoseconds is not.
+    if (profiler->samples_generated && profiler->samples_issued[slot]) {
+        profiler->samples_issued[slot] = 0;
+        GLuint available = 0;
+        glGetQueryObjectuiv(profiler->samples_query[slot], GL_QUERY_RESULT_AVAILABLE, &available);
+        if (available) {
+            GLuint64 passed = 0;
+            glGetQueryObjectui64v(profiler->samples_query[slot], GL_QUERY_RESULT, &passed);
+            profiler->samples_shaded = (size_t)passed;
+        }
     }
 
     if (!saw_any)
@@ -283,6 +309,42 @@ void profiler_end_frame(Profiler* profiler, double dt) {
         latch_rows(profiler);
         profiler->latch_timer = 0.0;
     }
+}
+
+void profiler_samples_begin(Profiler* profiler) {
+    // Suspended means a nested re-render (cubemap capture); its coverage is not
+    // this frame's and would overwrite the number with somebody else's viewport.
+    if (!profiler || profiler->suspends > 0 || profiler->samples_open)
+        return;
+    if (!profiler->samples_generated) {
+        glGenQueries(PROFILER_RING, profiler->samples_query);
+        profiler->samples_generated = 1;
+    }
+    if (profiler->samples_issued[profiler->slot])
+        return; // already measured this frame; a second pass would replace it
+    glBeginQuery(GL_SAMPLES_PASSED, profiler->samples_query[profiler->slot]);
+    profiler->samples_issued[profiler->slot] = 1;
+    profiler->samples_open = 1;
+}
+
+void profiler_samples_end(Profiler* profiler) {
+    if (!profiler || !profiler->samples_open)
+        return;
+    glEndQuery(GL_SAMPLES_PASSED);
+    profiler->samples_open = 0;
+}
+
+void profiler_set_sample_budget(Profiler* profiler, size_t samples) {
+    if (profiler)
+        profiler->sample_budget = samples;
+}
+
+size_t profiler_samples_shaded(const Profiler* profiler) {
+    return profiler ? profiler->samples_shaded : 0;
+}
+
+size_t profiler_sample_budget(const Profiler* profiler) {
+    return profiler ? profiler->sample_budget : 0;
 }
 
 void profiler_suspend(Profiler* profiler) {
@@ -444,5 +506,21 @@ void profiler_report(Profiler* profiler) {
     printf("%-28s", "TOTAL");
     for (int col = 0; col < profiler_submit_row_count(); ++col)
         printf(" %10zu", submit_stat_value(&total, col));
-    printf("\n===== END SUBMISSION =====\n\n");
+    printf("\n===== END SUBMISSION =====\n");
+
+    // Its own block rather than a SUBMISSION column: every column there is a
+    // count of what was submitted, and this is a count of what survived, which
+    // is a different question measured by a different instrument. Folding it in
+    // would also change the row format four gates parse.
+    //
+    // Printed even at zero, because zero is a result -- a frame aimed at empty
+    // sky shades nothing, and an absent block would read as "not measured".
+    printf("\n===== SHADING =====\n");
+    printf("%-28s %12zu\n", "samples shaded", profiler->samples_shaded);
+    printf("%-28s %12zu\n", "sample budget", profiler->sample_budget);
+    printf("%-28s %12.2f\n", "depth complexity",
+           profiler->sample_budget > 0
+               ? (double)profiler->samples_shaded / (double)profiler->sample_budget
+               : 0.0);
+    printf("===== END SHADING =====\n\n");
 }

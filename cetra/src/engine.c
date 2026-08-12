@@ -2245,6 +2245,12 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EngineRenderFunc render
         int rw, rh;
         engine_render_size(engine, &rw, &rh);
         glViewport(0, 0, rw, rh);
+        // Published from here rather than computed inside the profiler, because
+        // this is where the render size and the sample count are both settled --
+        // supersample, render scale and any mid-run resolution change have all
+        // been applied by now.
+        profiler_set_sample_budget(engine->profiler,
+                                   (size_t)rw * (size_t)rh * (size_t)engine->msaa_samples);
         engine->normals_this_frame =
             frame_mode == RENDER_MODE_PBR && postfx_wants_normals(engine->postfx);
         // Make the material registry describe what the graph actually draws
