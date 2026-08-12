@@ -83,6 +83,11 @@ typedef struct ForestArgs {
     int render_mode;     // RenderMode override; 0 = PBR
     int no_spatial_sort; // scatter in draw order rather than Morton order
     int width, height;   // 0 = the default window size
+    int no_sky;          // swap the atmosphere for a plain directional rig
+    float sun_elevation; // degrees; < -900 keeps the app default
+    float sun_azimuth;
+    int no_aerial; // keep the sky, drop aerial perspective
+    int no_fog;    // volumetric fog is on by default
     float lod_bias;
     unsigned seed;
     int cam_set;
@@ -521,18 +526,54 @@ static void build_rocks(void) {
     printf("Rocks: %d instances over %d prototypes\n", placed, ROCK_PROTOTYPES);
 }
 
+// The lighting when --no-sky takes the atmosphere away. Not merely "skip the
+// sky": the sky IS this scene's light -- it supplies the sun, the IBL and the
+// aerial perspective -- so removing it without a replacement renders black.
+//
+// A single directional caster with a flat ambient, which is enough to keep the
+// geometry readable and the shadow pass working. It looks worse than the real
+// thing on purpose; the flag exists to take the atmosphere's cost out of a
+// measurement, not to offer a second look.
+static void build_fallback_sun(void) {
+    Light* sun = create_light();
+    set_light_name(sun, "sun");
+    set_light_type(sun, LIGHT_DIRECTIONAL);
+    set_light_direction(sun, (vec3){-0.45f, -0.78f, -0.44f});
+    set_light_color(sun, (vec3){1.0f, 0.96f, 0.88f});
+    set_light_intensity(sun, 3.2f);
+    set_light_cast_shadows(sun, true);
+    set_light_size(sun, 4.0f, 4.0f);
+    add_light_to_scene(g_scene, sun);
+
+    SceneNode* node = create_node();
+    set_node_name(node, "sun");
+    set_node_light(node, sun);
+    add_child_node(g_root, node);
+
+    // No IBL without the sky, so this uniform term is the whole of the fill.
+    // It defaults to zero, which would leave every shadowed surface black.
+    // Cool, because the thing it stands in for is skylight.
+    glm_vec3_copy((vec3){0.45f, 0.55f, 0.75f}, g_scene->ambient_radiance);
+    g_scene->render_skybox = false;
+}
+
 static void build_sky_and_sun(Engine* engine) {
     SkyAtmosphere* sky = create_sky_atmosphere();
     IBLResources* ibl = create_ibl_resources();
     if (!sky || !ibl)
         return;
 
-    sky->sun_elevation_deg = 44.0f;
-    sky->sun_azimuth_deg = 130.0f;
+    // The CLI wins, and must land before the bake: the LUTs are a function of
+    // where the sun is.
+    // Low on purpose. A high sun lights the fog uniformly from above and the
+    // medium reads as haze; a low one rakes through it, so the anisotropy has a
+    // direction to work along and the ridge lines separate into layers.
+    sky->sun_elevation_deg = g_args.sun_elevation > -900.0f ? g_args.sun_elevation : 15.0f;
+    sky->sun_azimuth_deg = g_args.sun_azimuth > -900.0f ? g_args.sun_azimuth : 152.0f;
     // One world unit is one metre here, which is what makes aerial perspective
     // read correctly over a kilometre instead of hazing the near ground.
     sky->world_units_per_km = 1000.0f;
-    sky->aerial_enabled = true;
+    sky->aerial_enabled = !g_args.no_aerial;
     sky_update_sun_dir(sky);
 
     if (sky_bake_static_luts(sky, engine) != 0 || sky_bake(sky, ibl, engine) != 0)
@@ -617,7 +658,10 @@ static void on_init(Game* game) {
     build_terrain(physics, em);
     build_trees();
     build_rocks();
-    build_sky_and_sun(engine);
+    if (g_args.no_sky)
+        build_fallback_sun();
+    else
+        build_sky_and_sun(engine);
 
     // The character, dropped in above the surface at the origin.
     float spawn_y = terrain_height_at(&g_terrain, 0.0f, 0.0f) + 3.0f;
@@ -627,7 +671,14 @@ static void on_init(Game* game) {
     cc.capsule_radius = 0.4f;
     cc.capsule_half_height = 0.9f;
     cc.step_height = 0.5f;
-    cc.max_slope_angle = 55.0f;
+    // 45, not 55: terrain this steep is common, and a controller willing to
+    // stand on a 55-degree face spends its time creeping down one.
+    cc.max_slope_angle = 45.0f;
+    // Longer than the 0.5 default, because the ground here is a triangle mesh
+    // and a capsule crossing a convex edge otherwise leaves it for a frame,
+    // loses ground contact, and starts falling mid-stride.
+    cc.stick_to_floor_distance = 1.2f;
+    cc.penetration_recovery_speed = 1.5f;
     entity_add_character_controller(g_player, physics, &cc);
 
     physics_world_optimize(physics);
@@ -679,6 +730,28 @@ static void on_init(Game* game) {
     if (g_args.lod_bias > 0.0f)
         engine->lod_bias = g_args.lod_bias;
 
+    // Volumetric fog, on by default, and sized to the world rather than left at
+    // the struct defaults -- fog_far bounds the froxel volume, so a value short
+    // of the far plane simply stops the medium partway across the terrain and
+    // leaves a visible edge where it ends.
+    //
+    // Scale matters more than density here: one unit is one metre, so the
+    // extinction is per metre and the numbers are small.
+    if (engine->postfx && !g_args.no_fog) {
+        PostFX* fx = engine->postfx;
+        fx->fog_enabled = true;
+        fx->fog_density = 0.0022f;
+        fx->fog_height_falloff = 42.0f; // thick in the valleys, thin off the ridges
+        fx->fog_floor_y = -30.0f;
+        fx->fog_near = 0.0f; // derive from fog_far
+        fx->fog_far = 1400.0f;
+        // Forward-scattering, so looking toward the sun lights the medium up and
+        // looking away leaves it flat -- most of what reads as "moody".
+        fx->fog_anisotropy = 0.72f;
+        fx->fog_sun_boost = 2.2f;
+        glm_vec3_copy((vec3){0.030f, 0.038f, 0.055f}, fx->fog_ambient);
+    }
+
     set_engine_show_gui(engine, !engine->headless);
     set_engine_show_fps(engine, !engine->headless);
 
@@ -709,11 +782,30 @@ static void on_update(Game* game, double dt) {
     vec3 move = {0.0f, 0.0f, 0.0f};
     glm_vec3_muladds(fwd, -input_dir[2] * speed, move);
     glm_vec3_muladds(right, input_dir[0] * speed, move);
+
+    bool grounded = character_controller_is_grounded(cc);
+
+    // Horizontal velocity is SET, not accumulated, so releasing the keys stops
+    // the character rather than coasting. On a slope that is not enough on its
+    // own -- see the vertical term below, which is what actually caused the
+    // skating.
     vel[0] = move[0];
     vel[2] = move[2];
-    vel[1] -= 22.0f * (float)dt;
 
-    if (input_key_pressed(&game->input, GLFW_KEY_SPACE) && character_controller_is_grounded(cc))
+    if (grounded) {
+        // Reset the fall each step instead of integrating gravity forever.
+        // Left to accumulate, downward velocity grows without bound while
+        // walking, and ExtendedUpdate resolves that against a sloped surface by
+        // converting it into travel ALONG the slope -- which is exactly the
+        // sliding-on-ice feel. A small residual keeps the capsule on the ground
+        // over convex breaks instead of launching off them.
+        if (vel[1] < 0.0f)
+            vel[1] = -2.0f;
+    } else {
+        vel[1] -= 22.0f * (float)dt;
+    }
+
+    if (input_key_pressed(&game->input, GLFW_KEY_SPACE) && grounded)
         vel[1] = 9.5f;
 
     character_controller_set_velocity(cc, vel);
@@ -793,6 +885,11 @@ static void print_usage(const char* argv0) {
     fprintf(stderr, "      --profiler          Per-pass timing + submission counters\n");
     fprintf(stderr, "      --no-lod            Draw every mesh at LOD level 0\n");
     fprintf(stderr, "      --no-instancing     One draw per mesh\n");
+    fprintf(stderr, "      --no-sky            Plain directional rig, no atmosphere\n");
+    fprintf(stderr, "      --no-fog            Disable the volumetric fog\n");
+    fprintf(stderr, "      --no-aerial         Keep the sky, drop aerial perspective\n");
+    fprintf(stderr, "      --sun-elevation <d> Sun elevation in degrees\n");
+    fprintf(stderr, "      --sun-azimuth <d>   Sun azimuth in degrees\n");
     fprintf(stderr, "      --no-spatial-sort   Scatter without Morton ordering\n");
     fprintf(stderr, "      --render-mode N     1 = normals, 6 = albedo\n");
     fprintf(stderr, "      --lod-bias F        >1 holds detail longer\n");
@@ -808,6 +905,8 @@ static bool parse_vec3(const char* s, vec3 out) {
 int main(int argc, char** argv) {
     memset(&g_args, 0, sizeof(g_args));
     g_args.seed = 1337u;
+    g_args.sun_elevation = -1000.0f; // sentinel: keep the app's own angle
+    g_args.sun_azimuth = -1000.0f;
     int cam_eye_set = 0, cam_target_set = 0;
 
     for (int i = 1; i < argc; ++i) {
@@ -830,6 +929,16 @@ int main(int argc, char** argv) {
             g_args.width = atoi(argv[++i]);
         } else if ((!strcmp(a, "-H") || !strcmp(a, "--height")) && i + 1 < argc) {
             g_args.height = atoi(argv[++i]);
+        } else if (!strcmp(a, "--no-sky")) {
+            g_args.no_sky = 1;
+        } else if (!strcmp(a, "--no-fog")) {
+            g_args.no_fog = 1;
+        } else if (!strcmp(a, "--no-aerial")) {
+            g_args.no_aerial = 1;
+        } else if (!strcmp(a, "--sun-elevation") && i + 1 < argc) {
+            g_args.sun_elevation = strtof(argv[++i], NULL);
+        } else if (!strcmp(a, "--sun-azimuth") && i + 1 < argc) {
+            g_args.sun_azimuth = strtof(argv[++i], NULL);
         } else if (!strcmp(a, "--no-spatial-sort")) {
             g_args.no_spatial_sort = 1;
         } else if (!strcmp(a, "--render-mode") && i + 1 < argc) {
