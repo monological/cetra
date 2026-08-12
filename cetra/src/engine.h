@@ -145,6 +145,8 @@ typedef struct Engine {
     // fill it, and it must outlive either.
     struct Ubo* instance_ubo;
     bool instancing_enabled;     // false = every run submits one draw per mesh
+    bool lod_enabled;            // false = every draw takes LOD level 0
+    float lod_bias;              // > 1 holds detail longer, < 1 drops it sooner
     bool cluster_debug;          // Tint fragments by cluster light count (heatmap)
     bool scene_color_this_frame; // Resolve ran this frame; transmissive draws may sample
     bool normals_this_frame;     // Attachment 1 written this frame (PBR + consumer active)

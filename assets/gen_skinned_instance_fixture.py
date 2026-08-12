@@ -36,17 +36,35 @@ import json
 import os
 import struct
 
-HALF = 0.4      # quad half-extent
-OFFSET = 0.55   # each quad's distance from the origin along X
+HALF = 0.4      # panel half-extent
+OFFSET = 0.55   # each panel's distance from the origin along X
+SEG = 32        # subdivisions per side
 
-# ---- one quad in the XY plane, normal +Z ----------------------------------
-quad_pos = [(-HALF, -HALF, 0.0), (HALF, -HALF, 0.0), (HALF, HALF, 0.0), (-HALF, HALF, 0.0)]
-quad_nrm = [(0.0, 0.0, 1.0)] * 4
-quad_idx = [0, 1, 2, 0, 2, 3]
+# ---- one subdivided panel in the XY plane, normal +Z -----------------------
+# Subdivided, not a single quad, so it clears lod.c's triangle floor by a wide
+# margin. That is what makes the lod-skinned arm mean something: a mesh this
+# size WOULD be given a chain, and the only reason it is not is that it is
+# skinned. A four-vertex quad would be refused for being small and the arm would
+# pass without ever exercising the rule it names.
+quad_pos = []
+quad_nrm = []
+for v in range(SEG + 1):
+    for u in range(SEG + 1):
+        x = -HALF + 2.0 * HALF * u / SEG
+        y = -HALF + 2.0 * HALF * v / SEG
+        quad_pos.append((x, y, 0.0))
+        quad_nrm.append((0.0, 0.0, 1.0))
+
+quad_idx = []
+row = SEG + 1
+for v in range(SEG):
+    for u in range(SEG):
+        a = v * row + u
+        quad_idx.extend([a, a + 1, a + row, a + 1, a + row + 1, a + row])
 
 # Every vertex rigid to joint 0: the bind pose, and nothing that can drift.
-quad_joints = [(0, 0, 0, 0)] * 4
-quad_weights = [(1.0, 0.0, 0.0, 0.0)] * 4
+quad_joints = [(0, 0, 0, 0)] * len(quad_pos)
+quad_weights = [(1.0, 0.0, 0.0, 0.0)] * len(quad_pos)
 
 IDENTITY = (1.0, 0.0, 0.0, 0.0,
             0.0, 1.0, 0.0, 0.0,
@@ -61,7 +79,7 @@ def pack(fmt, rows):
 chunks = [
     pack("<3f", quad_pos),
     pack("<3f", quad_nrm),
-    struct.pack("<%dH" % len(quad_idx), *quad_idx),
+    struct.pack("<%dI" % len(quad_idx), *quad_idx),
     pack("<4H", quad_joints),
     pack("<4f", quad_weights),
     struct.pack("<16f", *IDENTITY),
@@ -85,6 +103,7 @@ ARRAY_BUFFER = 34962
 ELEMENT_ARRAY_BUFFER = 34963
 FLOAT = 5126
 UNSIGNED_SHORT = 5123
+UNSIGNED_INT = 5125
 
 quad_min = [min(r[k] for r in quad_pos) for k in range(3)]
 quad_max = [max(r[k] for r in quad_pos) for k in range(3)]
@@ -129,7 +148,7 @@ gltf = {
         {"bufferView": 0, "componentType": FLOAT, "count": len(quad_pos), "type": "VEC3",
          "min": quad_min, "max": quad_max},
         {"bufferView": 1, "componentType": FLOAT, "count": len(quad_nrm), "type": "VEC3"},
-        {"bufferView": 2, "componentType": UNSIGNED_SHORT, "count": len(quad_idx),
+        {"bufferView": 2, "componentType": UNSIGNED_INT, "count": len(quad_idx),
          "type": "SCALAR"},
         {"bufferView": 3, "componentType": UNSIGNED_SHORT, "count": len(quad_joints),
          "type": "VEC4"},
@@ -165,5 +184,6 @@ with open(out, "w") as f:
     f.write("\n")
 
 print("wrote %s" % out)
-print("  2 mesh-bearing nodes -> 1 skinned mesh, %d triangles" % (len(quad_idx) // 3))
+print("  2 mesh-bearing nodes -> 1 skinned mesh, %d triangles (over lod.c's floor)"
+      % (len(quad_idx) // 3))
 print("  both nodes share the mesh; only the program stops them batching")

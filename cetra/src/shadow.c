@@ -654,16 +654,22 @@ static void _draw_shadow_items(const DrawList* list, ShaderProgram* program, Sub
             if (two_sided)
                 glDisable(GL_CULL_FACE);
 
+            // The camera's level, not one chosen for this light: see DrawItem.
+            GLsizei index_count;
+            const void* index_offset;
+            mesh_lod_range(mesh, item->lod, &index_count, &index_offset);
+
             submit_bind_vao(state, mesh->vao);
             uniform_set_int(u, "uInstanced", run > 1 ? 1 : 0);
             if (run > 1)
-                glDrawElementsInstanced(mesh->draw_mode, mesh->index_count, GL_UNSIGNED_INT, 0,
+                glDrawElementsInstanced(mesh->draw_mode, index_count, GL_UNSIGNED_INT, index_offset,
                                         (GLsizei)run);
             else
-                glDrawElements(mesh->draw_mode, mesh->index_count, GL_UNSIGNED_INT, 0);
+                glDrawElements(mesh->draw_mode, index_count, GL_UNSIGNED_INT, index_offset);
             if (stats) {
                 stats->draws++;
                 stats->instances += run;
+                stats->triangles += (size_t)(index_count / 3) * run;
             }
             idx += run - 1;
 
@@ -1153,7 +1159,10 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     // flattens the graph; the stamp makes the camera pass reuse what this built
     // rather than build a second time -- unless the app mutated the graph in
     // between, which the epoch half of the stamp catches.
-    draw_list_build(&scene->draw_list, scene, engine->total_frames ^ (scene_graph_epoch() << 32));
+    LodSelect lod;
+    engine_lod_select(engine, &lod);
+    draw_list_build(&scene->draw_list, scene, engine->total_frames ^ (scene_graph_epoch() << 32),
+                    &lod);
 
     ShadowSystem* ss = scene->shadow_system;
 

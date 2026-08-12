@@ -16,3 +16,6 @@
 [submodule "cetra/src/ext/assimp"]
 	path = cetra/src/ext/assimp
 	url = https://github.com/assimp/assimp
+[submodule "cetra/src/ext/meshoptimizer"]
+	path = cetra/src/ext/meshoptimizer
+	url = https://github.com/zeux/meshoptimizer.git

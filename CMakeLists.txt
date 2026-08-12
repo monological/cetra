@@ -214,6 +214,13 @@ if(WIN32)
     endif()
 endif()
 
+# meshoptimizer: LOD chain generation at import (spec 11.28). Static and not
+# installed -- it is an implementation detail of import.c, linked PRIVATE below,
+# so nothing about it reaches an app's include path or install tree.
+set(MESHOPT_BUILD_SHARED_LIBS OFF CACHE BOOL "Build meshoptimizer static" FORCE)
+set(MESHOPT_INSTALL OFF CACHE BOOL "Do not install meshoptimizer" FORCE)
+add_subdirectory(cetra/src/ext/meshoptimizer)
+
 # Build the cetra library
 add_subdirectory(cetra)
 

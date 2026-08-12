@@ -47,6 +47,8 @@ typedef struct {
     int no_translucent_shadows; // Force it off (the off-path and inverse arms)
     int profiler_enabled;       // Per-pass GPU + CPU time and submission counts
     int no_instancing;          // Force one draw per mesh (the identity arm)
+    int no_lod;                 // Draw every mesh at LOD level 0
+    float lod_bias;             // LOD distance bias (0 = keep engine default)
     int msm;                    // Moment shadow maps; excludes PCSS
     int msm_size;               // Moment cascade edge (0 = keep engine default)
     float msm_blur;             // Moment blur spacing in texels (-1 = default)

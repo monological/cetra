@@ -2345,7 +2345,8 @@ _REPORT_BANNERS = {"GPU TIMING": "gpu", "CPU TIMING": "cpu", "SUBMISSION": "subm
 # right-aligned integer per counter. Column names contain spaces, so the header
 # cannot be split reliably -- the order is fixed here instead, and submit-parse
 # asserts the header still says what this expects.
-SUBMIT_COLS = ("meshes seen", "meshes culled", "draws", "instances", "material switches")
+SUBMIT_COLS = ("meshes seen", "meshes culled", "draws", "instances", "material switches",
+               "triangles")
 _SUBMIT_NAME_WIDTH = 28
 
 
@@ -2391,7 +2392,8 @@ def _report_tables(text):
     return out
 
 
-_IMPORT_DEDUP = re.compile(r"Import: (\d+) meshes built, (\d+) shared references")
+_IMPORT_DEDUP = re.compile(
+    r"Import: (\d+) meshes built, (\d+) shared references, (\d+) LOD chains")
 
 
 def _profiled_run(workdir, tag, extra, screenshot=None, fixture=GPU_FIXTURE, size=("800", "600")):
@@ -2410,7 +2412,8 @@ def _profiled_run(workdir, tag, extra, screenshot=None, fixture=GPU_FIXTURE, siz
     text = r.stdout + r.stderr
     tables = _report_tables(text)
     m = _IMPORT_DEDUP.search(text)
-    tables["import"] = {"built": int(m.group(1)), "shared": int(m.group(2))} if m else None
+    tables["import"] = ({"built": int(m.group(1)), "shared": int(m.group(2)),
+                         "lod_chains": int(m.group(3))} if m else None)
     return tables
 
 
@@ -2611,6 +2614,89 @@ def _submit_sum_ok(tables, label, failures, name):
           f"{'identity holds in each' if ok else f'violations {bad}'}")
     if not ok:
         failures.append(name)
+
+
+LOD_FIXTURE = "lod_fixture.gltf"
+# Eye positions marching away from the same target. Not a golden's framing --
+# the arm reads triangle counts, and what matters is that the sweep crosses
+# enough of the ladder for a level to change.
+LOD_SWEEP = ("0,1.5,4", "0,3,30", "0,6,90")
+
+
+def _lod_run(workdir, tag, eye, extra):
+    return _profiled_run(workdir, f"lod_{tag}",
+                         ["--cam-eye", eye, "--cam-target", "0,0.5,-6"] + extra,
+                         fixture=LOD_FIXTURE, size=("400", "300"))
+
+
+def run_lod_gate(workdir):
+    """LOD chains: that one gets built, that distance selects down it, that the
+    flag reaches it, and that skinned geometry is refused one.
+
+    Everything here is an integer out of the SUBMISSION table's `triangles`
+    column, which is the ONLY counter a level change moves -- switching level
+    leaves draws and instances exactly where they were, so an arm watching those
+    could not tell working selection from none.
+    """
+    if not os.path.exists(os.path.join(ROOT, "assets", LOD_FIXTURE)):
+        print(f"  lod          SKIP  (missing {LOD_FIXTURE})")
+        return []
+
+    failures = []
+    runs = [_lod_run(workdir, f"near{i}", eye, []) for i, eye in enumerate(LOD_SWEEP)]
+    if any(r is None for r in runs):
+        return ["lod-parse"]
+
+    # --- lod-chain: meshoptimizer actually produced one ---------------------
+    # Without this every arm below passes trivially on a fixture that has no
+    # chain to select from: the triangle count would simply never move.
+    chains = runs[0]["import"]["lod_chains"]
+    ok = chains >= 1
+    print(f"  lod-chain    {'PASS' if ok else 'FAIL'}  import built {chains} LOD chain(s) "
+          f"(want >= 1: the sphere is dense and closed, so it has no locked border)")
+    if not ok:
+        failures.append("lod-chain")
+
+    # --- lod-monotone: further away is never more triangles -----------------
+    tris = [r["submit"]["opaque"]["triangles"] for r in runs]
+    ok = all(tris[i] >= tris[i + 1] for i in range(len(tris) - 1)) and tris[-1] < tris[0]
+    print(f"  lod-monotone {'PASS' if ok else 'FAIL'}  triangles across the sweep {tris} "
+          f"(want non-increasing, and the far end below the near end)")
+    if not ok:
+        failures.append("lod-monotone")
+
+    # --- lod-off: the flag reaches the selection it names -------------------
+    # The inverse arm. Without it lod-monotone could be measuring culling, or a
+    # fixture that happens to shrink for some other reason.
+    off_near = _lod_run(workdir, "off_near", LOD_SWEEP[0], ["--no-lod"])
+    off_far = _lod_run(workdir, "off_far", LOD_SWEEP[-1], ["--no-lod"])
+    if off_near is None or off_far is None:
+        failures.append("lod-off")
+    else:
+        a = off_near["submit"]["opaque"]["triangles"]
+        b = off_far["submit"]["opaque"]["triangles"]
+        ok = a == b == tris[0]
+        print(f"  lod-off      {'PASS' if ok else 'FAIL'}  --no-lod near {a} far {b} "
+              f"(want both {tris[0]}: level 0 whatever the distance)")
+        if not ok:
+            failures.append("lod-off")
+
+    # --- lod-skinned: decimation does not reach a rig -----------------------
+    # The fixture is 2048 triangles, well over lod.c's floor, so a refusal here
+    # can only be the skinning rule. A four-vertex quad would be refused for its
+    # size and this arm would pass without testing anything.
+    skinned = _profiled_run(workdir, "lod_skin", [], fixture=SKIN_FIXTURE, size=("400", "300"))
+    if skinned is None:
+        failures.append("lod-skinned")
+    else:
+        n = skinned["import"]["lod_chains"]
+        ok = n == 0
+        print(f"  lod-skinned  {'PASS' if ok else 'FAIL'}  {n} chains on a 2048-triangle SKINNED "
+              f"mesh (want 0: weights do not transfer to surviving vertices)")
+        if not ok:
+            failures.append("lod-skinned")
+
+    return failures
 
 
 def run_submission_gate(workdir):
@@ -3239,6 +3325,8 @@ def main():
         failures += run_submission_gate(workdir)
         print("draw list (submission order, spec 11.28 Phase 3):")
         failures += run_draw_list_gate(workdir)
+        print("LOD chains (selection by projected size, spec 11.28 Phase 6):")
+        failures += run_lod_gate(workdir)
         print("import:")
         failures += run_range_gate()
         failures += run_fbx_unit_gate()

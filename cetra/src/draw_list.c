@@ -94,9 +94,60 @@ static void classify(const Mesh* mesh, uint8_t* lane, uint8_t* flags) {
         *flags |= DRAW_UNBOUNDED;
 }
 
+// Projected size at which a level gives way to the next, as the ratio of a
+// mesh's world radius to its distance from the eye -- so it is a screen-size
+// ladder, independent of scene units, and a big object holds detail further out
+// than a small one at the same distance.
+//
+// FOV is deliberately not in it. Folding it in would make a zoom re-pick every
+// level in the scene at once, which is visible as the whole frame changing
+// silhouette; holding the ladder in world terms costs a little detail at narrow
+// FOV and never pops en masse.
+static const float LOD_SWITCH[CETRA_LOD_MAX - 1] = {0.045f, 0.022f, 0.011f};
+
+// Level for this item, from its own bounds. Zero whenever the chain is absent
+// or selection is off, which is what makes --no-lod reach the pre-chain frame.
+static uint8_t select_lod(const Mesh* mesh, const SceneNode* node, const LodSelect* lod) {
+    if (!lod || !lod->enabled || mesh->lod_levels <= 1)
+        return 0;
+
+    // Half the diagonal of the local box, grown by the largest axis scale in the
+    // transform. An approximation of the world radius that costs three dot
+    // products instead of transforming eight corners, and errs LARGE -- which
+    // holds detail slightly too long rather than dropping it too early.
+    vec3 extent;
+    glm_vec3_sub((float*)mesh->aabb.max, (float*)mesh->aabb.min, extent);
+    float radius = glm_vec3_norm(extent) * 0.5f;
+    float scale = 0.0f;
+    for (int c = 0; c < 3; ++c) {
+        float len = glm_vec3_norm((float*)node->global_transform[c]);
+        if (len > scale)
+            scale = len;
+    }
+    radius *= scale;
+
+    vec3 centre;
+    glm_vec3_add((float*)mesh->aabb.min, (float*)mesh->aabb.max, centre);
+    glm_vec3_scale(centre, 0.5f, centre);
+    vec3 world_centre;
+    glm_mat4_mulv3((vec4*)node->global_transform, centre, 1.0f, world_centre);
+
+    float distance = glm_vec3_distance((float*)lod->eye, world_centre);
+    if (distance < 1e-4f)
+        return 0;
+
+    float projected = (radius / distance) * (lod->bias > 0.0f ? lod->bias : 1.0f);
+    uint8_t level = 0;
+    while (level < CETRA_LOD_MAX - 1 && projected < LOD_SWITCH[level])
+        level++;
+    if (level >= mesh->lod_levels)
+        level = (uint8_t)(mesh->lod_levels - 1);
+    return level;
+}
+
 // Depth-first, children left to right, a node's meshes before its gizmo --
 // the order the two recursive walks produced between them.
-static bool append_node(DrawList* list, SceneNode* node) {
+static bool append_node(DrawList* list, SceneNode* node, const LodSelect* lod) {
     if (!node)
         return true;
 
@@ -110,7 +161,7 @@ static bool append_node(DrawList* list, SceneNode* node) {
         if (!mesh->material->shader_program || !mesh->material->shader_program->uniforms)
             continue;
 
-        DrawItem item = {.mesh = mesh, .node = node};
+        DrawItem item = {.mesh = mesh, .node = node, .lod = select_lod(mesh, node, lod)};
         classify(mesh, &item.lane, &item.flags);
         if (!push(list, item))
             return false;
@@ -122,13 +173,13 @@ static bool append_node(DrawList* list, SceneNode* node) {
     }
 
     for (size_t i = 0; i < node->children_count; ++i) {
-        if (!append_node(list, node->children[i]))
+        if (!append_node(list, node->children[i], lod))
             return false;
     }
     return true;
 }
 
-bool draw_list_build(DrawList* list, Scene* scene, uint64_t stamp) {
+bool draw_list_build(DrawList* list, Scene* scene, uint64_t stamp, const LodSelect* lod) {
     if (!list || !scene)
         return false;
     if (list->valid && list->stamp == stamp)
@@ -138,7 +189,7 @@ bool draw_list_build(DrawList* list, Scene* scene, uint64_t stamp) {
     list->gizmo_count = 0;
     memset(list->lane_count, 0, sizeof(list->lane_count));
     list->valid = false;
-    if (!append_node(list, scene->root_node))
+    if (!append_node(list, scene->root_node, lod))
         return false;
 
     list->stamp = stamp;
@@ -154,5 +205,5 @@ bool draw_item_visible(const DrawItem* item, const Frustum* frustum) {
 }
 
 bool draw_run_can_join(const DrawItem* head, const DrawItem* next, const Frustum* frustum) {
-    return next->mesh == head->mesh && draw_item_visible(next, frustum);
+    return next->mesh == head->mesh && next->lod == head->lod && draw_item_visible(next, frustum);
 }

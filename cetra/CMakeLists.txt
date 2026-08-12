@@ -104,6 +104,10 @@ if(CETRA_BUILD_JOLTC)
         ${CMAKE_CURRENT_SOURCE_DIR}/src/ext/JoltC)
 endif()
 
+# meshoptimizer (defined at the top level). PRIVATE: only import.c calls it, and
+# a mesh's LOD chain is index offsets on Mesh by the time anything else looks.
+target_link_libraries(cetra PRIVATE meshoptimizer)
+
 # Dear ImGui via cimgui (defined at the top level). PUBLIC so all apps that
 # link cetra also get the GUI backend.
 target_link_libraries(cetra PUBLIC cimgui)

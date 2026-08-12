@@ -55,11 +55,29 @@ enum {
     DRAW_UNBOUNDED = 1u << 3,
 };
 
+// How a view picks a level out of a mesh's LOD chain.
+typedef struct LodSelect {
+    vec3 eye;     // where projected size is measured from
+    float bias;   // > 1 holds detail longer, < 1 drops it sooner
+    bool enabled; // false pins every item to level 0
+} LodSelect;
+
 typedef struct DrawItem {
     Mesh* mesh;             // never NULL: an item exists because a mesh does
     struct SceneNode* node; // transform; never the geometry
     uint8_t lane;
     uint8_t flags;
+    // Level from this mesh's chain, chosen once per frame from the CAMERA, and
+    // used by every pass including the shadow layers.
+    //
+    // Not per view, deliberately. A caster drawn into the depth map at a coarser
+    // level than the camera shades it with gets a silhouette that disagrees with
+    // its own surface, which reads as self-shadow acne along the seam -- so the
+    // saving of a per-light level would be paid for in exactly the artefact
+    // shadows are hardest to debug. The cube-capture faces inherit the main
+    // camera's levels for the same reason, though they see the scene from
+    // somewhere else entirely.
+    uint8_t lod;
 } DrawItem;
 
 typedef struct DrawList {
@@ -106,7 +124,10 @@ void scene_graph_touched(void);
 
 // Flatten the graph, unless the stamp says the last flattening still describes
 // it. Returns false only if it could not grow.
-bool draw_list_build(DrawList* list, struct Scene* scene, uint64_t stamp);
+//
+// `lod` may be NULL, which selects level 0 throughout -- what a caller that has
+// no camera to measure against should pass rather than inventing one.
+bool draw_list_build(DrawList* list, struct Scene* scene, uint64_t stamp, const LodSelect* lod);
 
 // Whether this item survives the frustum. A NULL frustum accepts everything,
 // which is how a pass says it does not cull.
@@ -121,9 +142,14 @@ bool draw_list_build(DrawList* list, struct Scene* scene, uint64_t stamp);
 bool draw_item_visible(const DrawItem* item, const Frustum* frustum);
 
 // Whether `next` can ride in the same draw as the run that `head` started:
-// same geometry, and visible under the same frustum. The caller adds its own
-// "does this pass want it" test -- that part differs per pass, this part does
-// not, and this is the part a new batch key has to be threaded through.
+// same geometry AT THE SAME LEVEL, and visible under the same frustum. The
+// caller adds its own "does this pass want it" test -- that part differs per
+// pass, this part does not.
+//
+// The level joins the key because one draw submits one index range. Two
+// instances of a mesh at different distances are the same geometry and still
+// cannot share a draw, which is not a limitation: grouping by level is what
+// makes a hundred distant copies collapse into one cheap draw.
 bool draw_run_can_join(const DrawItem* head, const DrawItem* next, const Frustum* frustum);
 
 #endif // DRAW_LIST_H

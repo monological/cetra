@@ -762,6 +762,13 @@ static void _engine_gui_panel(Engine* engine) {
         _begin_effect_group("OIT", &engine->oit_enabled);
         igCheckbox("OIT Moment Weighting", &engine->oit_moments_enabled);
         _end_effect_group();
+
+        igCheckbox("Instancing", &engine->instancing_enabled);
+        // The bias greys out with selection because it has no meaning without
+        // it: level 0 is level 0 at any distance.
+        _begin_effect_group("LOD", &engine->lod_enabled);
+        igSliderFloat("LOD Bias", &engine->lod_bias, 0.25f, 4.0f, "%.2f", 0);
+        _end_effect_group();
     }
 
     if (engine->postfx &&

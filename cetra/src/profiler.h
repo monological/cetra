@@ -58,6 +58,10 @@ typedef struct SubmitStats {
     size_t draws;             // glDraw* calls issued for scene meshes
     size_t instances;         // meshes those draws carried; equals draws until batching
     size_t material_switches; // material blocks uploaded, in whichever pass has one
+    // Triangles actually submitted, summed over instances. The one counter LOD
+    // moves: a level change leaves draws and instances alone and shows up only
+    // here, so an arm that watches draws cannot see whether selection works.
+    size_t triangles;
 } SubmitStats;
 
 // NULL on allocation failure, or when the driver has no timer queries at all.

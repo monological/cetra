@@ -23,6 +23,7 @@
 #include "animation.h"
 #include "rigging.h"
 #include "scene.h"
+#include "lod.h"
 #include "mesh.h"
 #include "light.h"
 #include "camera.h"
@@ -1538,7 +1539,7 @@ static void copy_aiMatrix_to_mat4(const struct aiMatrix4x4* from, mat4 to) {
 static SceneNode* process_ai_node(Scene* scene, struct aiNode* ai_node,
                                   const struct aiScene* ai_scene, TexturePool* tex_pool,
                                   AsyncLoader* loader, Material** mat_cache, Mesh** mesh_cache,
-                                  size_t* built, size_t* shared_refs) {
+                                  size_t* built, size_t* shared_refs, size_t* lod_chains) {
     if (!scene || !ai_node || !ai_scene || !tex_pool || !loader || !mat_cache || !mesh_cache)
         return NULL;
 
@@ -1612,6 +1613,10 @@ static SceneNode* process_ai_node(Scene* scene, struct aiNode* ai_node,
         }
 
         calculate_aabb(mesh);
+        // After the AABB (which describes the vertices, and those do not change)
+        // and before any upload, since this rewrites the index array.
+        if (mesh_build_lod_chain(mesh) > 1)
+            (*lod_chains)++;
         mesh_cache[meshIndex] = mesh;
         (*built)++;
         node->meshes[i] = mesh;
@@ -1623,7 +1628,7 @@ static SceneNode* process_ai_node(Scene* scene, struct aiNode* ai_node,
     for (unsigned int i = 0; i < node->children_count; i++) {
         node->children[i] =
             process_ai_node(scene, ai_node->mChildren[i], ai_scene, tex_pool, loader, mat_cache,
-                            mesh_cache, built, shared_refs);
+                            mesh_cache, built, shared_refs, lod_chains);
         if (node->children[i]) {
             node->children[i]->parent = node;
         }
@@ -1763,15 +1768,16 @@ Scene* create_scene_from_model_path(const char* path, const char* texture_direct
         aiReleaseImport(ai_scene);
         return NULL;
     }
-    size_t built = 0, shared_refs = 0;
+    size_t built = 0, shared_refs = 0, lod_chains = 0;
     scene->root_node = process_ai_node(scene, ai_scene->mRootNode, ai_scene, tex_pool, loader,
-                                       mat_cache, mesh_cache, &built, &shared_refs);
+                                       mat_cache, mesh_cache, &built, &shared_refs, &lod_chains);
 
     // What the dedup DID, not what the file contains: mNumMeshes reads the same
     // whether or not the cache ever hit, and a count of shared meshes says one
     // for a scene that collapsed four hundred references. Unconditional, so a
     // cache that stops hitting reports 0 shared rather than reporting nothing.
-    log_info("Import: %zu meshes built, %zu shared references", built, shared_refs);
+    log_info("Import: %zu meshes built, %zu shared references, %zu LOD chains", built, shared_refs,
+             lod_chains);
 
     free(mat_cache);
     free(mesh_cache);

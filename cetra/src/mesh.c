@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 #include <cglm/cglm.h>
 #include <GL/glew.h>
@@ -39,6 +40,14 @@ Mesh* create_mesh() {
 
     mesh->vertex_count = 0;
     mesh->index_count = 0;
+
+    // No chain until one is built; mesh_lod_range reads the whole mesh at every
+    // level while this holds.
+    memset(mesh->lod_offset, 0, sizeof(mesh->lod_offset));
+    memset(mesh->lod_count, 0, sizeof(mesh->lod_count));
+    memset(mesh->lod_error, 0, sizeof(mesh->lod_error));
+    mesh->lod_levels = 1;
+    mesh->index_total = 0;
 
     // One share, held by whoever asked for the mesh. That makes the single-node
     // case identical to the ownership this had before refcounting, including
@@ -187,11 +196,13 @@ void upload_mesh_buffers_to_gpu(Mesh* mesh) {
     glVertexAttribPointer(GL_ATTR_POSITION, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
     glEnableVertexAttribArray(GL_ATTR_POSITION);
 
-    // Indices
+    // Indices. index_total covers every LOD level end to end and equals
+    // index_count when no chain was built, so this is the whole EBO either way.
     if (mesh->indices) {
+        size_t total = mesh->index_total ? mesh->index_total : mesh->index_count;
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, mesh->ebo);
-        glBufferData(GL_ELEMENT_ARRAY_BUFFER, mesh->index_count * sizeof(unsigned int),
-                     mesh->indices, GL_STATIC_DRAW);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, total * sizeof(unsigned int), mesh->indices,
+                     GL_STATIC_DRAW);
     }
 
     // Normals

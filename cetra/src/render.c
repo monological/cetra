@@ -514,16 +514,23 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
             glDisable(GL_CULL_FACE);
         }
 
+        // The level is part of the run key, so every instance in this draw
+        // shares one index range.
+        GLsizei index_count;
+        const void* index_offset;
+        mesh_lod_range(mesh, item->lod, &index_count, &index_offset);
+
         submit_bind_vao(state, mesh->vao);
         uniform_set_int(u, "uInstanced", instances > 1 ? 1 : 0);
         if (instances > 1)
-            glDrawElementsInstanced(mesh->draw_mode, mesh->index_count, GL_UNSIGNED_INT, 0,
+            glDrawElementsInstanced(mesh->draw_mode, index_count, GL_UNSIGNED_INT, index_offset,
                                     (GLsizei)instances);
         else
-            glDrawElements(mesh->draw_mode, mesh->index_count, GL_UNSIGNED_INT, 0);
+            glDrawElements(mesh->draw_mode, index_count, GL_UNSIGNED_INT, index_offset);
         if (stats) {
             stats->draws++;
             stats->instances += instances;
+            stats->triangles += (size_t)(index_count / 3) * instances;
         }
 
         if (item->flags & DRAW_DOUBLE_SIDED) {
@@ -570,6 +577,15 @@ static size_t _visible_run(const DrawList* list, size_t first, unsigned lanes,
         n++;
     }
     return n;
+}
+
+void engine_lod_select(const Engine* engine, LodSelect* out) {
+    out->enabled = engine && engine->lod_enabled;
+    out->bias = engine && engine->lod_bias > 0.0f ? engine->lod_bias : 1.0f;
+    if (engine && engine->camera)
+        glm_vec3_copy(engine->camera->position, out->eye);
+    else
+        glm_vec3_zero(out->eye);
 }
 
 void instance_chunk_upload(Ubo* ubo, InstanceChunk* chunk, const DrawList* list, size_t first,
@@ -757,7 +773,10 @@ void render_current_scene(Engine* engine) {
     // every consumer loops over count, and returning here would skip the
     // per-frame flag resets and the prev_view_proj stash below, poisoning the
     // NEXT frame's motion vectors as well as this one's composite.
-    draw_list_build(&scene->draw_list, scene, engine->total_frames ^ (scene_graph_epoch() << 32));
+    LodSelect lod;
+    engine_lod_select(engine, &lod);
+    draw_list_build(&scene->draw_list, scene, engine->total_frames ^ (scene_graph_epoch() << 32),
+                    &lod);
 
     // Clustered forward (spec 9.1): rebuild the light grid + UBOs for THIS
     // invocation's camera and viewport -- probe-capture faces re-enter here

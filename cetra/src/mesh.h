@@ -12,6 +12,11 @@
 // Forward declaration
 struct Skeleton;
 
+// Levels in a mesh's LOD chain, level 0 (the original indices) included. Four
+// is the point where the ladder below stops being able to halve without falling
+// under the floor a chain is worth building for at all.
+#define CETRA_LOD_MAX 4
+
 // Axis-Aligned Bounding Box
 typedef struct {
     vec3 min;
@@ -77,7 +82,40 @@ typedef struct Mesh {
     // takes; more than one is geometry a file says is shared.
     int refs;
 
+    // LOD chain: simplified INDEX RANGES over the same vertices, concatenated
+    // into the one EBO. No extra buffers, no extra VAO, and the offset works
+    // just as well on glDrawElementsInstanced -- so a level composes with
+    // batching rather than competing with it.
+    //
+    // Level 0 is always the original index data at offset 0, which is what makes
+    // a mesh with no chain byte-identical to one built before chains existed.
+    // Read these through mesh_lod_range, never directly: it answers for a mesh
+    // that has no chain too.
+    size_t lod_offset[CETRA_LOD_MAX]; // byte offset into the EBO
+    size_t lod_count[CETRA_LOD_MAX];  // indices at this level
+    float lod_error[CETRA_LOD_MAX];   // meshopt's deviation estimate, mesh units
+    int lod_levels;                   // <= 1 means no chain
+    // Indices in the EBO, which is every level end to end. Zero means no chain
+    // was built and index_count is the whole of it.
+    size_t index_total;
+
 } Mesh;
+
+// The index range to draw for `level`, clamped to what this mesh actually has.
+// A mesh with no chain answers with the whole mesh whatever the level, so a
+// caller never has to ask whether a chain exists.
+static inline void mesh_lod_range(const Mesh* mesh, int level, GLsizei* count,
+                                  const void** offset) {
+    if (mesh->lod_levels > 1 && level > 0) {
+        if (level >= mesh->lod_levels)
+            level = mesh->lod_levels - 1;
+        *count = (GLsizei)mesh->lod_count[level];
+        *offset = (const void*)mesh->lod_offset[level];
+        return;
+    }
+    *count = (GLsizei)mesh->index_count;
+    *offset = NULL;
+}
 
 /*
  * Mesh

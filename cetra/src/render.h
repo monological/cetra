@@ -76,6 +76,12 @@ void scene_capture_faces(Engine* engine, struct IBLResources* ibl, const vec3 po
                          GLuint dst_cubemap, GLuint dst_depth_cubemap, int face_size,
                          float near_clip, float far_clip);
 
+// The LOD view for this frame: the engine's main camera and its LOD settings.
+// Both flatten sites call it, so whichever of them builds the list first picks
+// levels the other agrees with -- the depth map and the shaded frame have to be
+// looking at the same geometry.
+void engine_lod_select(const Engine* engine, LodSelect* out);
+
 // Animation state for skinned mesh rendering
 // Set before rendering to enable bone matrix upload for skinned meshes
 void set_render_animation_state(AnimationState* state);

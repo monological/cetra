@@ -84,6 +84,7 @@ static const struct {
     {"draws", offsetof(SubmitStats, draws)},
     {"instances", offsetof(SubmitStats, instances)},
     {"material switches", offsetof(SubmitStats, material_switches)},
+    {"triangles", offsetof(SubmitStats, triangles)},
 };
 
 Profiler* create_profiler(void) {
@@ -203,6 +204,7 @@ SubmitStats profiler_submit_total(const Profiler* profiler) {
         total.draws += s->draws;
         total.instances += s->instances;
         total.material_switches += s->material_switches;
+        total.triangles += s->triangles;
     }
     return total;
 }
