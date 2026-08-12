@@ -80,6 +80,7 @@ typedef struct ForestArgs {
     int profiler;
     int no_lod;
     int no_instancing;
+    int render_mode; // RenderMode override; 0 = PBR
     float lod_bias;
     unsigned seed;
     int cam_set;
@@ -655,7 +656,12 @@ static void on_init(Game* game) {
     // clips to white, which is what sent me looking for a bug in the rock
     // material that was never there.
     engine->exposure.automatic = false;
-    engine->exposure.multiplier = 1.0f;
+    // Picked by measuring, not by eye: at 1.0 the lit ground averages 72/255,
+    // which reads as dusk. 1.8 puts it near 120 with nothing clipping.
+    engine->exposure.multiplier = 1.8f;
+
+    if (g_args.render_mode > 0)
+        engine->current_render_mode = (RenderMode)g_args.render_mode;
 
     if (g_args.no_lod)
         engine->lod_enabled = false;
@@ -808,6 +814,8 @@ int main(int argc, char** argv) {
             g_args.no_instancing = 1;
         } else if (!strcmp(a, "--lod-bias") && i + 1 < argc) {
             g_args.lod_bias = strtof(argv[++i], NULL);
+        } else if (!strcmp(a, "--render-mode") && i + 1 < argc) {
+            g_args.render_mode = atoi(argv[++i]);
         } else if (!strcmp(a, "--seed") && i + 1 < argc) {
             g_args.seed = (unsigned)strtoul(argv[++i], NULL, 10);
         } else if (!strcmp(a, "--cam-eye") && i + 1 < argc) {
