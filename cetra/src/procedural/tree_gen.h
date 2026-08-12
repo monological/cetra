@@ -4,7 +4,7 @@
 #include <stdbool.h>
 #include <cglm/cglm.h>
 
-#include "mesh.h"
+#include "../mesh.h"
 
 // Procedural tree generation, in two phases.
 //

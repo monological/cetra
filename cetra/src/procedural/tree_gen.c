@@ -4,8 +4,8 @@
 #include <string.h>
 
 #include "tree_gen.h"
-#include "mesh_builder.h"
-#include "util.h"
+#include "../mesh_builder.h"
+#include "../util.h"
 
 // Growth budget. The slider ranges multiply out fast (depth 6 x 5-way splits x
 // laterals is millions of branches), so generation stops dead at these caps

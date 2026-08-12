@@ -32,7 +32,7 @@
 #include "cetra/particle_renderer.h"
 #include "cetra/particle_sim.h"
 
-#include "cetra/tree_gen.h"
+#include "cetra/procedural/tree_gen.h"
 #include "ground.h"
 #include "grass.h"
 

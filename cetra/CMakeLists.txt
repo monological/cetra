@@ -26,6 +26,7 @@ set(CETRA_PUBLIC_INCLUDE_DIR ${CMAKE_BINARY_DIR}/include)
 file(GLOB _cetra_public_headers RELATIVE ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/src/*.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/game/*.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/procedural/*.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ext/*.h)
 foreach(_rel IN LISTS _cetra_public_headers)
     file(CONFIGURE
@@ -66,6 +67,7 @@ file(GLOB CETRA_SOURCES
     src/ext/log.c
     src/ext/progressbar.c
     src/game/*.c
+    src/procedural/*.c
 )
 
 # Create the static library
