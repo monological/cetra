@@ -20,6 +20,12 @@ bool mb_init(MeshBuilder* mb, size_t vres, size_t ires, bool want_colors) {
         mb->col = malloc(mb->vcap * 4 * sizeof(float));
         mb->ok = mb->ok && mb->col != NULL;
     }
+    // Release whatever did succeed before reporting failure, so a caller can
+    // treat false as "nothing was allocated" and simply return. Every caller
+    // does exactly that, and none of them would otherwise have anything left to
+    // free the partial set with.
+    if (!mb->ok)
+        mb_free(mb);
     return mb->ok;
 }
 

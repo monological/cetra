@@ -28,7 +28,7 @@
 
 // A level has to be meaningfully smaller than the one above or it is not worth
 // a chain entry: the selector would switch to it and draw almost the same
-// triangles. This is what ends the chain on border-locked geometry.
+// triangles. This is what ends the chain on boundary-dominated geometry.
 #define LOD_MIN_SHRINK 0.85f
 
 int mesh_build_lod_chain(Mesh* mesh) {
@@ -42,6 +42,12 @@ int mesh_build_lod_chain(Mesh* mesh) {
 
     if (!mesh->indices || !mesh->vertices)
         return 1;
+    // NOTE: there is no cheap way to refuse an already-uploaded mesh here, which
+    // would be worth doing -- a chain built after the upload rewrites
+    // mesh->indices without touching the EBO, so every level past 0 points past
+    // what the GPU holds and draws wrong in silence. create_mesh generates the
+    // VAO and EBO names up front, so neither handle distinguishes "created" from
+    // "uploaded"; catching it needs a flag on Mesh that nothing else wants yet.
     if (mesh->draw_mode != MESH_TRIANGLES || mesh->index_count % 3 != 0)
         return 1;
     // See the header for why skinned meshes are refused rather than approximated.
@@ -90,8 +96,10 @@ int mesh_build_lod_chain(Mesh* mesh) {
                                         target, LOD_TARGET_ERROR, 0, &error);
         if (count == 0 || count % 3 != 0)
             break;
-        // Border-locked geometry lands here: it returns something close to what
-        // it was given, and a level that saves nothing is worse than no level.
+        // Boundary-dominated geometry lands here: collapsing a boundary edge
+        // costs more error than LOD_TARGET_ERROR allows, so it returns something
+        // close to what it was given, and a level that saves nothing is worse
+        // than no level.
         if ((float)count > (float)previous * LOD_MIN_SHRINK)
             break;
 

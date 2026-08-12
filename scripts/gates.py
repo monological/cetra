@@ -2618,8 +2618,12 @@ def _submit_sum_ok(tables, label, failures, name):
 
 FOREST = os.path.join(ROOT, "out", "bin", "forest")
 _FOREST_CHAINS = re.compile(r"Forest: (\d+) LOD chains built, (\d+) refused")
+_FOREST_MESHES = re.compile(r"Forest: (\d+) distinct meshes")
+# Position, velocity, ground state and ground normal. The last two are what let
+# forest-rest tell "standing still" from "fell through the collider".
 _FOREST_TRACE = re.compile(
-    r"player t=\s*([\d.]+) pos\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)")
+    r"player t=\s*[\d.]+ pos\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+"
+    r"vel\s+-?[\d.]+\s+-?[\d.]+\s+-?[\d.]+\s+grounded (\d)\s+ground_n\.y (-?[\d.]+)")
 
 # One framing for every arm that is not about framing. Inside the terrain, high
 # enough to see past the near trees, so a good fraction of the world is culled
@@ -2627,17 +2631,29 @@ _FOREST_TRACE = re.compile(
 # numbers mean something rather than measuring an empty or a fully-visible frame.
 FOREST_CAM = ["--cam-eye", "0,40,120", "--cam-target", "0,10,0"]
 
+# Above the terrain aimed up and away, so nothing the scatter placed is in front
+# of the camera and forest-cull can assert exact numbers instead of a direction.
+FOREST_CAM_AWAY = ["--cam-eye", "0,300,0", "--cam-target", "600,900,600"]
 
-def _forest_run(workdir, tag, extra):
-    """One profiled forest run. Returns the parsed tables plus the chain counts.
+
+def _forest_run(workdir, tag, extra, cam=None):
+    """One profiled forest run, or None if it did not produce a readable report.
 
     Built in one place for the same reason _gpu_cmd is: several arms here claim
     their two runs differ in exactly one flag, and two hand-written command lists
     would let that stop being true without anything failing.
+
+    Returning None for an unreadable report -- rather than an empty table every
+    caller then has to .get() its way around -- is what lets the arms index
+    columns directly. An arm reading a missing column as 0 does not fail loudly;
+    it compares 0 against 0 and passes.
     """
     out = os.path.join(workdir, f"forest_{tag}.ppm")
-    cmd = ([FOREST, "-x", "-f", "20", "-W", "800", "-H", "450", "--profiler", "-S", out]
-           + FOREST_CAM + extra)
+    # --no-fog because the app defaults it on: it is a froxel volume with its own
+    # accumulator and it costs real time per run, while contributing nothing to
+    # the submission counts every arm here reads.
+    cmd = ([FOREST, "-x", "-f", "20", "-W", "800", "-H", "450", "--profiler", "--no-fog",
+            "-S", out] + (cam or FOREST_CAM) + extra)
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0 or not os.path.exists(out):
         print(f"  forest       ERROR {tag} exited {r.returncode}: "
@@ -2646,13 +2662,17 @@ def _forest_run(workdir, tag, extra):
     text = r.stdout + r.stderr
     tables = _report_tables(text)
     m = _FOREST_CHAINS.search(text)
-    tables["chains"] = ({"built": int(m.group(1)), "refused": int(m.group(2))} if m else None)
-    tables["frame"] = out
+    mm = _FOREST_MESHES.search(text)
+    unparsed = sum(tables["unparsed"].values())
+    if not m or not mm or unparsed or "opaque" not in tables["submit"]:
+        print(f"  forest       ERROR {tag} report unreadable: {unparsed} unparsed rows, "
+              f"chains {'yes' if m else 'no'}, meshes {'yes' if mm else 'no'}, "
+              f"opaque {'yes' if 'opaque' in tables['submit'] else 'no'}")
+        return None
+    tables["chains"] = {"built": int(m.group(1)), "refused": int(m.group(2))}
+    tables["meshes"] = int(mm.group(1))
+    tables["opaque"] = tables["submit"]["opaque"]
     return tables
-
-
-def _forest_opaque(run):
-    return run["submit"].get("opaque", {}) if run else {}
 
 
 def run_forest_gate(workdir):
@@ -2668,41 +2688,79 @@ def run_forest_gate(workdir):
 
     failures = []
     base = _forest_run(workdir, "base", [])
-    if base is None or base["chains"] is None:
+    # Nothing below can mean anything if the base run did not report, so this is
+    # the one arm that returns rather than accumulating.
+    if base is None:
         return ["forest-parse"]
-    opaque = _forest_opaque(base)
+    opaque = base["opaque"]
 
-    # --- forest-chains: procedural meshes got chains at all -----------------
+    # --- forest-chains: every generated mesh got a chain --------------------
     # mesh_build_lod_chain has one caller in the engine, in import.c. Everything
     # this app draws is generated, so if the app stopped asking for chains every
     # LOD arm below would still pass -- against a scene where nothing had one.
+    #
+    # Exact, not `> 0`. Sixty-four of the meshes are terrain tiles, so a
+    # regression that refused a chain to every TREE and every ROCK would still
+    # leave built == 64, and forest-lod would still pass on the terrain alone.
+    # Both operands are read from the app rather than mirrored here.
     built = base["chains"]["built"]
-    ok = built > 0
-    print(f"  forest-chains {'PASS' if ok else 'FAIL'}  {built} LOD chains built on generated "
-          f"meshes (want > 0: nothing in the engine builds one for them)")
+    refused = base["chains"]["refused"]
+    distinct = base["meshes"]
+    ok = refused == 0 and built == distinct
+    print(f"  forest-chains {'PASS' if ok else 'FAIL'}  {built} chains built, {refused} refused, "
+          f"against {distinct} distinct meshes (want every mesh chained)")
     if not ok:
         failures.append("forest-chains")
 
-    # --- forest-batch: the scatter actually batches -------------------------
-    draws, inst = opaque.get("draws", 0), opaque.get("instances", 0)
-    ratio = (inst / draws) if draws else 0.0
-    ok = ratio >= 2.0
-    print(f"  forest-batch {'PASS' if ok else 'FAIL'}  opaque {inst} instances in {draws} draws "
-          f"(ratio {ratio:.2f}, want >= 2.0)")
-    if not ok:
-        failures.append("forest-batch")
-
-    # --- forest-batch-off: the inverse, so the arm above means something ----
+    # --- forest-batch-off: one draw per instance, the baseline for the ratio -
     off = _forest_run(workdir, "noinst", ["--no-instancing"])
     if off is None:
         failures.append("forest-batch-off")
+        failures.append("forest-batch")
     else:
-        o = _forest_opaque(off)
-        ok = o.get("draws") == o.get("instances") and o.get("draws", 0) > 0
+        o = off["opaque"]
+        ok = o["draws"] == o["instances"] and o["draws"] > 0
         print(f"  forest-batch-off {'PASS' if ok else 'FAIL'}  --no-instancing: "
-              f"{o.get('draws')} draws for {o.get('instances')} instances (want equal)")
+              f"{o['draws']} draws for {o['instances']} instances (want equal)")
         if not ok:
             failures.append("forest-batch-off")
+
+    # --- forest-batch: the scatter actually batches -------------------------
+    # Measured with LOD OFF, on the run forest-lod already pays for. With LOD on
+    # the ratio conflates two things -- run contiguity, which this arm is about,
+    # and (mesh, lod) fragmentation, which the spec documents as a real and
+    # variable effect. That conflation is not academic: the default framing
+    # gives 2.31 at the pinned seed and 1.94 at --seed 7, so a threshold with
+    # any useful margin cannot be set on it. With LOD off the same property
+    # reads 13.2 and 10.4.
+    draws, inst = opaque["draws"], opaque["instances"]
+    nolod = _forest_run(workdir, "nolod", ["--no-lod"])
+    if nolod is None:
+        failures.append("forest-batch")
+        failures.append("forest-lod")
+    else:
+        n = nolod["opaque"]
+        n_draws, n_inst = n["draws"], n["instances"]
+        ratio = (n_inst / n_draws) if n_draws else 0.0
+        ok = ratio >= 8.0
+        print(f"  forest-batch {'PASS' if ok else 'FAIL'}  opaque {n_inst} instances in {n_draws} "
+              f"draws with LOD off (ratio {ratio:.1f}, want >= 8)")
+        if not ok:
+            failures.append("forest-batch")
+
+        # --- forest-lod: level selection fires on generated geometry --------
+        # A fixed camera comparing on against off, NOT a distance sweep: pulling
+        # back over scattered content reveals more world, so triangles rise with
+        # distance however well LOD works. Identical instances is what proves the
+        # difference is level selection and not visibility.
+        same_vis = n_inst == inst
+        saving = 1.0 - (opaque["triangles"] / n["triangles"]) if n["triangles"] else 0.0
+        ok = same_vis and saving >= 0.10
+        print(f"  forest-lod   {'PASS' if ok else 'FAIL'}  {opaque['triangles']} triangles with "
+              f"LOD vs {n['triangles']} without ({saving * 100.0:.0f}% saved, want >= 10%), both "
+              f"carrying {inst} instances")
+        if not ok:
+            failures.append("forest-lod")
 
     # --- forest-order: spatial ordering is what makes batching work ---------
     # The app's largest finding, and without this arm nothing defends it. The
@@ -2713,33 +2771,15 @@ def run_forest_gate(workdir):
     if unsorted_run is None:
         failures.append("forest-order")
     else:
-        u = _forest_opaque(unsorted_run)
-        same_work = (u.get("instances") == inst and u.get("triangles") == opaque.get("triangles"))
-        ok = same_work and draws < u.get("draws", 0)
+        u = unsorted_run["opaque"]
+        same_work = u["instances"] == inst and u["triangles"] == opaque["triangles"]
+        ok = same_work and draws < u["draws"]
         print(f"  forest-order {'PASS' if ok else 'FAIL'}  Morton {draws} draws vs unsorted "
-              f"{u.get('draws')}, same {inst} instances and "
-              f"{'same' if u.get('triangles') == opaque.get('triangles') else 'DIFFERENT'} "
+              f"{u['draws']}, same {inst} instances and "
+              f"{'same' if u['triangles'] == opaque['triangles'] else 'DIFFERENT'} "
               f"triangles (want fewer draws for identical work)")
         if not ok:
             failures.append("forest-order")
-
-    # --- forest-lod: level selection fires on generated geometry ------------
-    # A fixed camera comparing on against off, NOT a distance sweep: pulling back
-    # over scattered content reveals more world, so triangles rise with distance
-    # however well LOD works. Identical instances is what proves the difference
-    # is level selection and not visibility.
-    nolod = _forest_run(workdir, "nolod", ["--no-lod"])
-    if nolod is None:
-        failures.append("forest-lod")
-    else:
-        n = _forest_opaque(nolod)
-        same_vis = n.get("instances") == inst
-        ok = same_vis and opaque.get("triangles", 0) < n.get("triangles", 0)
-        print(f"  forest-lod   {'PASS' if ok else 'FAIL'}  {opaque.get('triangles')} triangles "
-              f"with LOD vs {n.get('triangles')} without, both carrying {inst} instances "
-              f"(want fewer, and the same instances)")
-        if not ok:
-            failures.append("forest-lod")
 
     # --- forest-rest: a character with no input does not travel -------------
     # Slope sliding is invisible from inside the app, because the camera follows
@@ -2750,33 +2790,47 @@ def run_forest_gate(workdir):
     rest = subprocess.run(
         [FOREST, "-x", "-f", "240", "-W", "320", "-H", "180", "--trace-player", "--no-fog"],
         capture_output=True, text=True)
-    samples = _FOREST_TRACE.findall(rest.stdout + rest.stderr)
-    if len(samples) < 4:
-        print(f"  forest-rest  FAIL  only {len(samples)} trace samples")
+    rest_text = rest.stdout + rest.stderr
+    samples = _FOREST_TRACE.findall(rest_text)
+    # Skip the first two: the capsule has to resolve contact before it can be
+    # said to be standing on anything.
+    settled = samples[2:]
+    if rest.returncode != 0 or len(settled) < 4:
+        print(f"  forest-rest  FAIL  exit {rest.returncode}, {len(samples)} trace samples: "
+              f"{rest_text.strip()[-200:]}")
         failures.append("forest-rest")
     else:
-        # Skip the first two: the capsule has to resolve contact before it can
-        # be said to be standing on anything.
-        xs = [float(s[1]) for s in samples[2:]]
-        zs = [float(s[3]) for s in samples[2:]]
+        xs = [float(s[0]) for s in settled]
+        zs = [float(s[2]) for s in settled]
         drift = max(abs(max(xs) - min(xs)), abs(max(zs) - min(zs)))
-        ok = drift < 0.05
+        # Grounded on every settled sample, or a character that fell THROUGH the
+        # collider would pass: its x/z are constant too. The spec's physics
+        # check asks for exactly this and nothing was asserting it.
+        grounded = all(s[3] == "1" for s in settled)
+        # And the ground has to be sloped, or the arm is vacuous -- a flat spawn
+        # cannot express the defect, which is downhill travel.
+        slope = min(float(s[4]) for s in settled)
+        ok = drift < 0.05 and grounded and slope < 0.99
         print(f"  forest-rest  {'PASS' if ok else 'FAIL'}  idle drift {drift:.3f} units over "
-              f"{len(xs)} samples (want < 0.05)")
+              f"{len(settled)} samples (want < 0.05), grounded throughout: {grounded}, "
+              f"ground normal y {slope:.3f} (want < 0.99, i.e. actually on a slope)")
         if not ok:
             failures.append("forest-rest")
 
     # --- forest-cull: the frustum still removes most of the world -----------
-    away = _forest_run(workdir, "away", ["--cam-eye", "0,300,0", "--cam-target", "600,900,600"])
+    away = _forest_run(workdir, "away", [], cam=FOREST_CAM_AWAY)
     if away is None:
         failures.append("forest-cull")
     else:
-        a = _forest_opaque(away)
-        ok = (a.get("meshes culled", 0) > opaque.get("meshes culled", 0)
-              and a.get("draws", 1) < draws)
-        print(f"  forest-cull  {'PASS' if ok else 'FAIL'}  aimed away: {a.get('meshes culled')} "
-              f"culled and {a.get('draws')} draws, against {opaque.get('meshes culled')} and "
-              f"{draws} in frame")
+        a = away["opaque"]
+        # Exact, not an inequality: aimed into the sky every mesh is outside the
+        # frustum, so seen == culled and draws == 0. `seen` matching the base run
+        # is what stops a scene that failed to load from satisfying the rest.
+        ok = (a["meshes seen"] == opaque["meshes seen"] and a["meshes culled"] == a["meshes seen"]
+              and a["draws"] == 0)
+        print(f"  forest-cull  {'PASS' if ok else 'FAIL'}  aimed away: {a['meshes culled']} of "
+              f"{a['meshes seen']} culled and {a['draws']} draws (want all of "
+              f"{opaque['meshes seen']} culled, 0 draws)")
         if not ok:
             failures.append("forest-cull")
 

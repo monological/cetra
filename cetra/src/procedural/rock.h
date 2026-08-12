@@ -9,15 +9,12 @@
 // A noise-displaced icosphere.
 //
 // An ICOsphere rather than a UV sphere, and that choice is about LOD rather than
-// about looks. meshoptimizer locks mesh borders, and a UV sphere has two: the
-// pole fans and the seam meridian where u wraps 1 -> 0, which splits vertices
-// that are geometrically coincident. An icosphere has neither -- it is a closed
-// manifold with every vertex shared -- so the simplifier can collapse anywhere
-// and a rock produces the cleanest LOD chain in the engine.
-//
-// Which is the point: leaf cards and grass blades are nearly all border and
-// refuse to simplify at all, so a scene needs geometry of this class before a
-// LOD chain can demonstrate anything.
+// about looks. A UV sphere's seam meridian splits vertices that are
+// geometrically coincident (u wraps 1 -> 0), which meshoptimizer classifies as a
+// seam and constrains; its pole fans concentrate degenerate triangles at two
+// points. An icosphere has neither -- a closed manifold with every vertex
+// shared, congruent faces, and every vertex of degree five or six -- so the
+// simplifier can collapse anywhere and a rock gives the cleanest chain here.
 
 typedef struct RockParams {
     float radius;

@@ -4,8 +4,11 @@
 #include <cglm/cglm.h>
 
 // Engine noise utilities: 3D Perlin + a divergence-free curl field that drive
-// organic particle turbulence. (apps/tree carries its own separate 2D Perlin;
-// consolidating the two is a follow-up.) See specs/5.0-particle-system.md.
+// organic particle turbulence. See specs/5.0-particle-system.md.
+//
+// A SECOND, 2D Perlin lives in procedural/vegetation_tex.h, on its own srand()-
+// backed table. Consolidating them is still open; it is not free, because the
+// two lattices differ and merging them moves every procedurally textured frame.
 
 // Re-seed the permutation table (deterministic). Called lazily with a default
 // seed on first use if never called.

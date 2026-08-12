@@ -39,8 +39,10 @@ typedef struct TerrainParams {
 // shadows with no diagnostic.
 TerrainParams terrain_default_params(void);
 
-// Surface height at a world XZ. Pure, thread-safe, and cheap enough to call per
-// scattered prop -- it builds its permutation table on the stack from the seed.
+// Surface height at a world XZ. A pure function of (params, x, z): the same
+// arguments always give the same answer, and nothing has to be initialised
+// first. NOT thread-safe -- it memoizes its permutation table in file statics,
+// because a build evaluates this around a million times.
 float terrain_height_at(const TerrainParams* p, float x, float z);
 
 // Surface normal at a world XZ, by central difference on the height function.
@@ -52,10 +54,15 @@ void terrain_normal_at(const TerrainParams* p, float x, float z, vec3 out);
 // which carry the slope and altitude tint -- there is no splat-map system, and a
 // per-vertex blend is what stops a kilometre of terrain reading as one flat hue.
 //
-// Adjacent tiles share their edge vertices exactly, because both sample the same
-// analytic height at the same world coordinate. That survives LOD: meshoptimizer
-// locks mesh borders, so two neighbours at different levels still meet without a
-// crack -- the property that makes per-tile LOD viable at all here.
+// Adjacent tiles share their edge vertices exactly at level 0, because both
+// sample the same analytic height at the same world coordinate.
+//
+// That does NOT survive simplification. lod.c builds chains with options 0, and
+// meshoptimizer only promotes a border vertex to locked under
+// meshopt_SimplifyLockBorder -- without it a border is merely weighted, so a
+// tile's perimeter can collapse and two neighbours at different levels can
+// T-junction. No crack has been observed at the framings tried so far, and the
+// fix if one appears is that flag rather than anything here.
 bool terrain_build_tile(const TerrainParams* p, int tx, int tz, Mesh* mesh);
 
 // One mesh spanning the whole terrain at `segments` quads per side, for physics.

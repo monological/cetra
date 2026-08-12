@@ -21,10 +21,13 @@
 //   - non-triangle draw modes, since meshopt_simplify indexes triangles.
 //   - anything under a triangle floor, where a level costs more to select than
 //     the triangles it saves.
-//   - a level that fails to get meaningfully smaller, which ends the chain --
-//     meshoptimizer locks mesh borders, so a mesh that is nearly all border
-//     (a leaf card, a grass blade) simplifies to approximately itself and
-//     honestly reports that it cannot do better.
+//   - a level that fails to get meaningfully smaller, which ends the chain.
+//     This is what a mesh that is nearly all boundary (a leaf card, a grass
+//     blade) does: meshopt weights boundary and seam edges heavily, so
+//     collapsing one costs far more error than the target allows and it returns
+//     approximately what it was given. Weighted, not locked -- chains are built
+//     with options 0, and only meshopt_SimplifyLockBorder makes a border
+//     genuinely uncollapsible.
 int mesh_build_lod_chain(Mesh* mesh);
 
 #endif // _LOD_H_

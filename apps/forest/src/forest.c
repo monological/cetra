@@ -114,7 +114,7 @@ static Material* g_mat_rock;
 // fixed point rather than a moving one.
 static float g_cam_yaw = 0.6f;
 static float g_cam_pitch = 0.28f;
-static float g_cam_dist = 14.0f;
+static const float CAM_DISTANCE = 14.0f;
 
 // Reported at startup, and the numbers the gate arms read from the log.
 static size_t g_distinct_meshes;
@@ -130,6 +130,9 @@ static size_t g_chains_refused;
 // share.
 static unsigned g_rng;
 
+// Half-open [0, 1): the numerator is masked to 24 bits and the divisor is 2^24,
+// so 1.0 is not reachable. Callers index prototype arrays with (int)(rnd() * N)
+// and rely on that.
 static float rnd(void) {
     g_rng ^= g_rng << 13;
     g_rng ^= g_rng >> 17;
@@ -143,13 +146,9 @@ static float rnd_range(float lo, float hi) {
 
 // --- mesh finalisation -----------------------------------------------------
 
-// The one place a generated mesh becomes drawable, because the order is easy to
-// get wrong and silent when it is: the chain REWRITES mesh->indices, so building
-// it after the upload would send only level 0 and leave every later level's
-// offset pointing past the end of the buffer.
-//
-// mesh_build_lod_chain is called from import.c and nowhere else in the engine,
-// so a procedurally generated mesh gets no chain unless an app asks for one.
+// The one place a generated mesh becomes drawable. The chain REWRITES
+// mesh->indices, so it has to precede the upload -- doing it after sends level 0
+// and leaves every later level's offset pointing past the end of the buffer.
 static void finalize_mesh(Mesh* mesh, Material* material) {
     mesh->material = material;
     int levels = mesh_build_lod_chain(mesh);
@@ -172,20 +171,17 @@ static void set_node_trs(SceneNode* node, const vec3 pos, float yaw, const vec3 
     glm_mat4_copy(m, node->original_transform);
 }
 
-// One instance of a shared prototype.
-//
-// `first` consumes the reference create_mesh already handed out; every holder
-// after it takes its own, because free_node calls free_mesh on each mesh it
-// holds and the refcount is what decides which of those calls actually destroys
-// the geometry.
-static SceneNode* add_instance(SceneNode* group, Mesh* mesh, bool first, const vec3 pos, float yaw,
-                               const vec3 scale) {
+// One instance of a shared prototype. Every holder takes its own reference; the
+// creator drops the one create_mesh handed out after emitting, so the plain rule
+// holds -- whoever creates it releases it -- and a prototype that ends up with
+// no instances is freed rather than leaked.
+static void add_instance(SceneNode* group, Mesh* mesh, const vec3 pos, float yaw,
+                         const vec3 scale) {
     SceneNode* node = create_node();
-    add_mesh_to_node(node, first ? mesh : mesh_ref(mesh));
+    add_mesh_to_node(node, mesh_ref(mesh));
     set_node_trs(node, pos, yaw, scale);
     add_child_node(group, node);
     g_node_count++;
-    return node;
 }
 
 static SceneNode* make_group(const char* name) {
@@ -221,8 +217,9 @@ static unsigned part1by1(unsigned n) {
 // the survivors contiguous too. Row-major would hold only along one axis, and a
 // camera looking across the rows would shred every run back to length one.
 //
-// Randomly ordered scatter measured 2742 instances in 2144 draws. It is the
-// single largest thing standing between a scene like this and its batching.
+// It is the single largest thing standing between a scene like this and its
+// batching; --no-spatial-sort exists so the difference can be measured rather
+// than asserted, and specs/11.29 records the figures.
 static unsigned morton_key(const TerrainParams* p, float x, float z) {
     float u = (x + p->extent) / (2.0f * p->extent);
     float v = (z + p->extent) / (2.0f * p->extent);
@@ -236,17 +233,18 @@ static unsigned morton_key(const TerrainParams* p, float x, float z) {
 // Prototype first so each one is a contiguous block (a foreign mesh between two
 // instances ends the run), then spatially within it.
 //
-// --no-spatial-sort keeps the prototype grouping and drops only the spatial
-// half, which is what isolates the finding: without it the props are still one
-// mesh per block and still all batchable, and the ONLY thing that changed is
-// whether the survivors of a frustum test end up next to each other.
+// A pure function of its two arguments. --no-spatial-sort is honoured in the
+// KEY (zeroed at fill time) rather than here, which produces the same comparator
+// outputs over the same array and keeps the hidden global out of a comparator.
+//
+// Prototype grouping does not depend on this: emit_placements filters by
+// prototype, so each one is contiguous whatever order the array is in. Sorting
+// on it anyway keeps the two agreeing about block order.
 static int placement_cmp(const void* a, const void* b) {
     const Placement* pa = (const Placement*)a;
     const Placement* pb = (const Placement*)b;
     if (pa->proto != pb->proto)
         return pa->proto < pb->proto ? -1 : 1;
-    if (g_args.no_spatial_sort)
-        return 0;
     if (pa->key != pb->key)
         return pa->key < pb->key ? -1 : 1;
     return 0;
@@ -261,14 +259,12 @@ static void emit_placements(const Placement* items, int count, Mesh* const* prot
         char name[40];
         snprintf(name, sizeof(name), "%s_%d", prefix, i);
         SceneNode* group = NULL;
-        bool first = true;
         for (int k = 0; k < count; ++k) {
             if (items[k].proto != i)
                 continue;
             if (!group)
                 group = make_group(name);
-            add_instance(group, protos[i], first, items[k].pos, items[k].yaw, items[k].scale);
-            first = false;
+            add_instance(group, protos[i], items[k].pos, items[k].yaw, items[k].scale);
         }
     }
 }
@@ -465,8 +461,8 @@ static void build_trees(void) {
         glm_vec3_copy(p, items[placed].pos);
         glm_vec3_copy((vec3){s, s, s}, items[placed].scale);
         items[placed].yaw = rnd_range(0.0f, 6.2831853f);
-        items[placed].proto = (int)(rnd() * (float)TREE_PROTOTYPES) % TREE_PROTOTYPES;
-        items[placed].key = morton_key(&g_terrain, p[0], p[2]);
+        items[placed].proto = (int)(rnd() * (float)TREE_PROTOTYPES);
+        items[placed].key = g_args.no_spatial_sort ? 0u : morton_key(&g_terrain, p[0], p[2]);
         placed++;
     }
     qsort(items, (size_t)placed, sizeof(Placement), placement_cmp);
@@ -477,6 +473,12 @@ static void build_trees(void) {
     // and batching would silently do nothing.
     emit_placements(items, placed, bark, TREE_PROTOTYPES, "bark");
     emit_placements(items, placed, leaf, TREE_PROTOTYPES, "leaf");
+    // Release the creation reference now that every holder has taken its own.
+    // A prototype that drew no placements is destroyed here rather than leaked.
+    for (int i = 0; i < TREE_PROTOTYPES; ++i) {
+        free_mesh(bark[i]);
+        free_mesh(leaf[i]);
+    }
     printf("Trees: %d instances over %d prototypes\n", placed, TREE_PROTOTYPES);
 }
 
@@ -514,16 +516,23 @@ static void build_rocks(void) {
         // lying on the ground rather than as a boulder sitting in it.
         p[1] -= s * 0.22f;
         glm_vec3_copy(p, items[placed].pos);
-        glm_vec3_copy((vec3){s * rnd_range(0.85f, 1.25f), s * rnd_range(0.7f, 1.05f),
-                             s * rnd_range(0.85f, 1.25f)},
-                      items[placed].scale);
+        // One draw per statement. Inside an initializer list these three are
+        // indeterminately sequenced (C11 6.7.9p23), and each one advances the
+        // shared generator -- so the compiler would be free to pick the order,
+        // reshaping every rock and shifting the whole stream after it.
+        float sx = rnd_range(0.85f, 1.25f);
+        float sy = rnd_range(0.7f, 1.05f);
+        float sz = rnd_range(0.85f, 1.25f);
+        glm_vec3_copy((vec3){s * sx, s * sy, s * sz}, items[placed].scale);
         items[placed].yaw = rnd_range(0.0f, 6.2831853f);
-        items[placed].proto = (int)(rnd() * (float)ROCK_PROTOTYPES) % ROCK_PROTOTYPES;
-        items[placed].key = morton_key(&g_terrain, p[0], p[2]);
+        items[placed].proto = (int)(rnd() * (float)ROCK_PROTOTYPES);
+        items[placed].key = g_args.no_spatial_sort ? 0u : morton_key(&g_terrain, p[0], p[2]);
         placed++;
     }
     qsort(items, (size_t)placed, sizeof(Placement), placement_cmp);
     emit_placements(items, placed, rocks, ROCK_PROTOTYPES, "rock");
+    for (int i = 0; i < ROCK_PROTOTYPES; ++i)
+        free_mesh(rocks[i]);
     printf("Rocks: %d instances over %d prototypes\n", placed, ROCK_PROTOTYPES);
 }
 
@@ -592,10 +601,9 @@ static void build_sky_and_sun(Engine* engine) {
     set_light_cast_shadows(sun, true);
     set_light_size(sun, 4.0f, 4.0f);
     sky->sun_light = sun;
-    // 3, not the tree app's 10. That app frames one subject against a backdrop
-    // and can afford to blow the highlights; here every lit surface facing a
-    // 44-degree sun clips at 9, which turned bare rock white and left everything
-    // in shadow crushed -- a dynamic-range problem that reads as a material bug.
+    // Lower than the tree app's 10: that app frames one subject against a
+    // backdrop and can afford to blow its highlights, where a whole terrain of
+    // mid-albedo surfaces facing the sun clips instead.
     sky->sun_base_intensity = 6.0f;
     sky_apply_sun_to_light(sky);
     add_light_to_scene(g_scene, sun);
@@ -713,16 +721,10 @@ static void on_init(Game* game) {
     set_engine_camera(engine, camera);
     set_engine_camera_mode(engine, CAMERA_MODE_FREE);
 
-    // Exposure pinned rather than adaptive. Two reasons, and the second is the
-    // one that matters: AGENTS.md names auto-exposure as the top determinism
-    // hazard for anything compared across builds, and every arm here reads a
-    // frame or a counter from this app. The first is that a scene of dark
-    // foliage makes the meter boost until the brightest surface -- bare rock --
-    // clips to white, which is what sent me looking for a bug in the rock
-    // material that was never there.
+    // Pinned rather than adaptive: auto-exposure is the top determinism hazard
+    // for anything compared across builds, and every arm here reads a frame or a
+    // counter from this app.
     engine->exposure.automatic = false;
-    // Picked by measuring, not by eye: at 1.0 the lit ground averages 72/255,
-    // which reads as dusk. 1.8 puts it near 120 with nothing clipping.
     engine->exposure.multiplier = 1.8f;
 
     if (g_args.render_mode > 0)
@@ -864,9 +866,9 @@ static void on_render(Game* game, double alpha) {
             target[1] += 1.5f;
 
             float ch = cosf(g_cam_pitch);
-            vec3 eye = {target[0] - sinf(g_cam_yaw) * ch * g_cam_dist,
-                        target[1] + sinf(g_cam_pitch) * g_cam_dist,
-                        target[2] - cosf(g_cam_yaw) * ch * g_cam_dist};
+            vec3 eye = {target[0] - sinf(g_cam_yaw) * ch * CAM_DISTANCE,
+                        target[1] + sinf(g_cam_pitch) * CAM_DISTANCE,
+                        target[2] - cosf(g_cam_yaw) * ch * CAM_DISTANCE};
             // Never below the ground the character is standing on.
             float floor_y = terrain_height_at(&g_terrain, eye[0], eye[2]) + 1.0f;
             if (eye[1] < floor_y)
@@ -911,6 +913,7 @@ static void print_usage(const char* argv0) {
     fprintf(stderr, "      --sun-elevation <d> Sun elevation in degrees\n");
     fprintf(stderr, "      --sun-azimuth <d>   Sun azimuth in degrees\n");
     fprintf(stderr, "      --no-spatial-sort   Scatter without Morton ordering\n");
+    fprintf(stderr, "      --trace-player      Log position, velocity and ground state\n");
     fprintf(stderr, "      --render-mode N     1 = normals, 6 = albedo\n");
     fprintf(stderr, "      --lod-bias F        >1 holds detail longer\n");
     fprintf(stderr, "      --seed N            Terrain and scatter seed\n");
@@ -971,9 +974,12 @@ int main(int argc, char** argv) {
             cam_eye_set = parse_vec3(argv[++i], g_args.cam_eye);
         } else if (!strcmp(a, "--cam-target") && i + 1 < argc) {
             cam_target_set = parse_vec3(argv[++i], g_args.cam_target);
+        } else if (!strcmp(a, "-h") || !strcmp(a, "--help")) {
+            print_usage(argv[0]);
+            return 0;
         } else {
             print_usage(argv[0]);
-            return a[0] == '-' ? 1 : 0;
+            return 1;
         }
     }
     // Both or neither: half a camera would silently aim at the origin.
