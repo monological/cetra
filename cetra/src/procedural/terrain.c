@@ -12,10 +12,14 @@
 
 // Surface tints, blended per vertex. There is no splat-map system, so this is
 // what stops a kilometre of ground reading as one flat hue.
-static const vec3 TINT_GRASS = {0.19f, 0.31f, 0.13f};
-static const vec3 TINT_DIRT = {0.31f, 0.25f, 0.17f};
-static const vec3 TINT_ROCK = {0.42f, 0.40f, 0.38f};
-static const vec3 TINT_SNOW = {0.86f, 0.88f, 0.92f};
+// Measured-ish albedos rather than picked-by-eye ones. Exposure is pinned, so
+// these land where a real surface would: grass around 0.2, dry earth 0.25,
+// weathered granite 0.3.
+static const vec3 TINT_GRASS = {0.15f, 0.21f, 0.10f};
+static const vec3 TINT_MOSS = {0.11f, 0.17f, 0.08f};
+static const vec3 TINT_DIRT = {0.25f, 0.20f, 0.14f};
+static const vec3 TINT_ROCK = {0.30f, 0.29f, 0.27f};
+static const vec3 TINT_SNOW = {0.78f, 0.81f, 0.86f};
 
 TerrainParams terrain_default_params(void) {
     TerrainParams p;
@@ -114,18 +118,33 @@ void terrain_normal_at(const TerrainParams* p, float x, float z, vec3 out) {
     glm_vec3_normalize_to(n, out);
 }
 
-static void terrain_tint(const TerrainParams* p, float height, const vec3 normal, float* rgba) {
+static void terrain_tint(const TerrainParams* p, float x, float z, float height, const vec3 normal,
+                         float* rgba) {
     float slope = normal[1]; // 1 flat, 0 vertical
     float alt = p->height > 0.0f ? height / p->height : 0.0f;
 
+    // Two extra noise fields, at frequencies unrelated to the height's, so the
+    // ground does not simply restate its own shape in colour. Without them every
+    // vertex at one slope and altitude is the same hue, and a kilometre of it
+    // reads as a single flat green whatever the palette.
+    const NoisePerm* t = perm_for(p->seed);
+    float ox = x + p->extent, oz = z + p->extent;
+    float patch = noise_perlin3_tiled(t, ox * 0.011f, 11.3f, oz * 0.011f, TERRAIN_NOISE_PERIOD);
+    float grain = noise_perlin3_tiled(t, ox * 0.09f, 23.9f, oz * 0.09f, TERRAIN_NOISE_PERIOD);
+
     float rockiness = 1.0f - smoothstep01(0.62f, 0.88f, slope);
+    // Bare ground creeps in where the patch field is high, independent of slope.
+    rockiness = rockiness + (1.0f - rockiness) * smoothstep01(0.30f, 0.62f, patch) * 0.45f;
     // Snow needs altitude AND a surface shallow enough to hold it, or peaks come
     // out frosted on their overhangs.
     float snowiness = smoothstep01(0.34f, 0.62f, alt) * smoothstep01(0.55f, 0.80f, slope);
     float dirtiness = 1.0f - smoothstep01(-0.35f, -0.05f, alt);
 
     vec3 c;
-    glm_vec3_lerp((float*)TINT_GRASS, (float*)TINT_DIRT, dirtiness, c);
+    // Grass to moss first, at the fine frequency: it is what stops a hillside
+    // of one hue from looking painted.
+    glm_vec3_lerp((float*)TINT_GRASS, (float*)TINT_MOSS, grain * 0.5f + 0.5f, c);
+    glm_vec3_lerp(c, (float*)TINT_DIRT, dirtiness, c);
     glm_vec3_lerp(c, (float*)TINT_ROCK, rockiness, c);
     glm_vec3_lerp(c, (float*)TINT_SNOW, snowiness, c);
 
@@ -169,7 +188,7 @@ static bool build_grid(const TerrainParams* p, float x0, float z0, float span, i
                 // broadly up, so the two can never be parallel here.
                 glm_vec3_muladds(n, -glm_vec3_dot(n, t), t);
                 glm_vec3_normalize(t);
-                terrain_tint(p, y, n, rgba);
+                terrain_tint(p, x, z, y, n, rgba);
             }
 
             vec3 pos = {x, y, z};

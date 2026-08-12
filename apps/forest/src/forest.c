@@ -32,6 +32,7 @@
 #include "cetra/lod.h"
 #include "cetra/material.h"
 #include "cetra/mesh.h"
+#include "cetra/noise.h"
 #include "cetra/profiler.h"
 #include "cetra/program.h"
 #include "cetra/render.h"
@@ -50,6 +51,8 @@
 #include "cetra/procedural/rock.h"
 #include "cetra/procedural/terrain.h"
 #include "cetra/procedural/tree_gen.h"
+#include "cetra/procedural/vegetation_tex.h"
+#include "cetra/texture.h"
 
 // --- scene scale -----------------------------------------------------------
 
@@ -254,9 +257,25 @@ static void emit_placements(const Placement* items, int count, Mesh* const* prot
     }
 }
 
-// Rejection sampling against slope, so nothing stands on a cliff face. Returns
-// false when a candidate is unusable and the caller should draw another.
-static bool sample_ground(float max_slope, vec3 out_pos) {
+// Its own table, not the global one: the texture bake reseeds the shared
+// srand-backed generator, and a scatter that shifted depending on whether
+// textures were baked first would not be reproducible.
+static NoisePerm g_clump;
+
+// Density field, in [0,1]. Without it the scatter is uniform, and a uniform
+// scatter of one prototype reads as an orchard however good the tree is --
+// clearings and thickets are what make it a forest.
+static float clump_density(float x, float z, float freq) {
+    float u = (x + g_terrain.extent) * freq;
+    float v = (z + g_terrain.extent) * freq;
+    float n = noise_perlin3_tiled(&g_clump, u, 3.7f, v, 256);
+    n = n * 0.5f + 0.5f;
+    return n < 0.0f ? 0.0f : (n > 1.0f ? 1.0f : n);
+}
+
+// Rejection sampling against slope and against that density. Returns false when
+// a candidate is unusable and the caller should draw another.
+static bool sample_ground(float max_slope, float clump_freq, float clump_power, vec3 out_pos) {
     float margin = g_terrain.extent * 0.96f;
     float x = rnd_range(-margin, margin);
     float z = rnd_range(-margin, margin);
@@ -264,6 +283,11 @@ static bool sample_ground(float max_slope, vec3 out_pos) {
     terrain_normal_at(&g_terrain, x, z, n);
     if (n[1] < max_slope)
         return false;
+    if (clump_freq > 0.0f) {
+        float d = clump_density(x, z, clump_freq);
+        if (rnd() > powf(d, clump_power))
+            return false;
+    }
     out_pos[0] = x;
     out_pos[1] = terrain_height_at(&g_terrain, x, z);
     out_pos[2] = z;
@@ -271,6 +295,45 @@ static bool sample_ground(float max_slope, vec3 out_pos) {
 }
 
 // --- scene construction ----------------------------------------------------
+
+#define BARK_TEX_SIZE 1024
+#define LEAF_CELL_SIZE 256
+
+static Texture* bake(Scene* scene, unsigned char* data, int w, int h, int channels, bool srgb,
+                     const char* key) {
+    if (!data)
+        return NULL;
+    Texture* t = load_texture_from_memory(scene->tex_pool, key, data, w, h, channels, srgb);
+    free(data);
+    return t;
+}
+
+// Bark and foliage, synthesised rather than loaded -- the app ships no assets.
+// Without the leaf atlas's alpha channel the cards render as solid quads, which
+// is the difference between a canopy and a cloud of confetti.
+static void bake_vegetation_textures(Scene* scene) {
+    const int B = BARK_TEX_SIZE;
+    float* field = malloc((size_t)B * B * sizeof(float));
+    if (field) {
+        veg_bark_height_field(field, B, B);
+        set_material_albedo_tex(g_mat_bark,
+                                bake(scene, veg_bark_albedo(B, B, field), B, B, 3, true,
+                                     "forest_bark_albedo"));
+        set_material_normal_tex(g_mat_bark, bake(scene, veg_bark_normal(B, B, field), B, B, 3,
+                                                 false, "forest_bark_normal"));
+        set_material_roughness_tex(g_mat_bark, bake(scene, veg_bark_roughness(B, B, field), B, B, 3,
+                                                    false, "forest_bark_rough"));
+        free(field);
+    }
+
+    const int LW = LEAF_CELL_SIZE * TG_LEAF_VARIANTS;
+    const int LH = LEAF_CELL_SIZE;
+    unsigned char *la = NULL, *ln = NULL, *lr = NULL;
+    veg_leaf_cluster_maps(LW, LH, &la, &ln, &lr);
+    set_material_albedo_tex(g_mat_leaf, bake(scene, la, LW, LH, 4, true, "forest_leaf_albedo"));
+    set_material_normal_tex(g_mat_leaf, bake(scene, ln, LW, LH, 3, false, "forest_leaf_normal"));
+    set_material_roughness_tex(g_mat_leaf, bake(scene, lr, LW, LH, 3, false, "forest_leaf_rough"));
+}
 
 static Material* make_material(const char* name, vec3 albedo, float roughness, float metallic) {
     Material* m = create_material();
@@ -346,8 +409,10 @@ static void build_trees(void) {
         tp.lateral_density = 0.8f;
         tp.twig_scale = 0.75f;
         tp.show_leaves = 1;
-        tp.leaf_size = 15.0f;
-        tp.leaf_density = 1.2f;
+        // The tree app's 15 is a hero-tree size -- a card is a sprig, and at
+        // that scale a sprig is two metres across on a twelve-metre tree.
+        tp.leaf_size = 9.0f;
+        tp.leaf_density = 8.0f;
 
         TreeSkeleton skel;
         memset(&skel, 0, sizeof(skel));
@@ -377,9 +442,10 @@ static void build_trees(void) {
     int placed = 0;
     for (int attempt = 0; attempt < TREE_COUNT * 12 && placed < TREE_COUNT; ++attempt) {
         vec3 p = {0.0f, 0.0f, 0.0f}; // out-param; zeroed for static analysis
-        if (!sample_ground(0.86f, p))
+        // Tight clumps: groves with real clearings between them.
+        if (!sample_ground(0.86f, 0.0022f, 2.2f, p))
             continue;
-        float s = TREE_WORLD_SCALE * rnd_range(0.75f, 1.35f);
+        float s = TREE_WORLD_SCALE * rnd_range(0.65f, 1.6f);
         glm_vec3_copy(p, items[placed].pos);
         glm_vec3_copy((vec3){s, s, s}, items[placed].scale);
         items[placed].yaw = rnd_range(0.0f, 6.2831853f);
@@ -419,17 +485,21 @@ static void build_rocks(void) {
     int placed = 0;
     for (int attempt = 0; attempt < ROCK_COUNT * 12 && placed < ROCK_COUNT; ++attempt) {
         vec3 p = {0.0f, 0.0f, 0.0f}; // out-param; zeroed for static analysis
-        if (!sample_ground(0.55f, p))
+        // Looser and at a different frequency, so rock fields do not simply
+        // mirror the tree groves.
+        if (!sample_ground(0.55f, 0.0035f, 1.3f, p))
             continue;
         // Non-uniform scale on purpose: it sits the rock into the ground and,
         // less decoratively, makes each instance's normal matrix differ from
         // mat3(model) -- the lane spec 11.28's fixture was blind to until its
         // props stopped being translation-only boxes.
-        float s = rnd_range(0.6f, 2.6f);
-        p[1] -= s * 0.25f;
+        float s = rnd_range(0.9f, 5.5f);
+        // Sunk a little, but not squashed: a y-scale near half reads as a disc
+        // lying on the ground rather than as a boulder sitting in it.
+        p[1] -= s * 0.22f;
         glm_vec3_copy(p, items[placed].pos);
-        glm_vec3_copy((vec3){s * rnd_range(0.8f, 1.3f), s * rnd_range(0.5f, 0.9f),
-                             s * rnd_range(0.8f, 1.3f)},
+        glm_vec3_copy((vec3){s * rnd_range(0.85f, 1.25f), s * rnd_range(0.7f, 1.05f),
+                             s * rnd_range(0.85f, 1.25f)},
                       items[placed].scale);
         items[placed].yaw = rnd_range(0.0f, 6.2831853f);
         items[placed].proto = (int)(rnd() * (float)ROCK_PROTOTYPES) % ROCK_PROTOTYPES;
@@ -447,7 +517,7 @@ static void build_sky_and_sun(Engine* engine) {
     if (!sky || !ibl)
         return;
 
-    sky->sun_elevation_deg = 28.0f;
+    sky->sun_elevation_deg = 44.0f;
     sky->sun_azimuth_deg = 130.0f;
     // One world unit is one metre here, which is what makes aerial perspective
     // read correctly over a kilometre instead of hazing the near ground.
@@ -470,7 +540,11 @@ static void build_sky_and_sun(Engine* engine) {
     set_light_cast_shadows(sun, true);
     set_light_size(sun, 4.0f, 4.0f);
     sky->sun_light = sun;
-    sky->sun_base_intensity = 9.0f;
+    // 3, not the tree app's 10. That app frames one subject against a backdrop
+    // and can afford to blow the highlights; here every lit surface facing a
+    // 44-degree sun clips at 9, which turned bare rock white and left everything
+    // in shadow crushed -- a dynamic-range problem that reads as a material bug.
+    sky->sun_base_intensity = 6.0f;
     sky_apply_sun_to_light(sky);
     add_light_to_scene(g_scene, sun);
 
@@ -494,13 +568,35 @@ static void on_init(Game* game) {
 
     g_terrain = terrain_default_params();
     g_terrain.seed = g_args.seed;
+    // Taller and broader than the library default: at 55 over a 250-unit
+    // wavelength the ground reads as flat from anywhere a person stands, and
+    // terrain that reads flat gives LOD and culling nothing to work with.
+    g_terrain.height = 95.0f;
+    g_terrain.base_freq = 0.0026f;
+    g_terrain.octaves = 6;
     g_rng = g_args.seed * 2654435761u + 1u;
+    noise_perm_init(&g_clump, g_args.seed ^ 0x5bf03635u);
 
+    // Albedo white on the textured materials: the shader multiplies factor by
+    // map, so any factor below one darkens the whole range.
     g_mat_terrain = make_material("terrain", (vec3){1.0f, 1.0f, 1.0f}, 0.92f, 0.0f);
-    g_mat_bark = make_material("bark", (vec3){0.28f, 0.21f, 0.15f}, 0.85f, 0.0f);
-    g_mat_leaf = make_material("leaf", (vec3){0.16f, 0.29f, 0.11f}, 0.65f, 0.0f);
+    g_mat_bark = make_material("bark", (vec3){1.0f, 1.0f, 1.0f}, 1.0f, 0.0f);
+    g_mat_leaf = make_material("leaf", (vec3){0.85f, 1.0f, 0.8f}, 1.0f, 0.0f);
+    // Cutout, two-sided, and allowed into the shadow map -- foliage_shadows is
+    // what dapples the ground, and without alpha_mode the cards are solid quads.
+    g_mat_leaf->alpha_mode = ALPHA_MASK;
+    g_mat_leaf->alphaCutoff = 0.4f;
     g_mat_leaf->doubleSided = true;
-    g_mat_rock = make_material("rock", (vec3){0.38f, 0.37f, 0.35f}, 0.78f, 0.0f);
+    g_mat_leaf->foliage_shadows = true;
+    // Thin leaves transmit; without it a backlit canopy reads as opaque plastic.
+    g_mat_leaf->subsurface = 0.55f;
+    // Dark wet stone. Rock is the only light NEUTRAL surface in a scene of dark
+    // foliage, so anything near a realistic granite albedo reads as white against
+    // it however the lighting is balanced -- the surrounding palette sets what
+    // this can be, not the material on its own.
+    g_mat_rock = make_material("rock", (vec3){0.085f, 0.082f, 0.078f}, 0.88f, 0.0f);
+
+    bake_vegetation_textures(g_scene);
 
     PhysicsConfig pc = physics_default_config();
     PhysicsWorld* physics = create_physics_world(&pc);
@@ -550,6 +646,16 @@ static void on_init(Game* game) {
     set_camera_up_vector(camera, (vec3){0.0f, 1.0f, 0.0f});
     set_engine_camera(engine, camera);
     set_engine_camera_mode(engine, CAMERA_MODE_FREE);
+
+    // Exposure pinned rather than adaptive. Two reasons, and the second is the
+    // one that matters: AGENTS.md names auto-exposure as the top determinism
+    // hazard for anything compared across builds, and every arm here reads a
+    // frame or a counter from this app. The first is that a scene of dark
+    // foliage makes the meter boost until the brightest surface -- bare rock --
+    // clips to white, which is what sent me looking for a bug in the rock
+    // material that was never there.
+    engine->exposure.automatic = false;
+    engine->exposure.multiplier = 1.0f;
 
     if (g_args.no_lod)
         engine->lod_enabled = false;
