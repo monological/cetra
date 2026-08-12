@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include <cglm/cglm.h>
 
-#include "cetra/mesh.h"
+#include "mesh.h"
 
 // Growable parallel vertex arrays that become a Mesh's arrays outright.
 //

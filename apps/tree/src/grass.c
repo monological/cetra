@@ -5,7 +5,7 @@
 
 #include "grass.h"
 #include "ground.h"
-#include "mesh_builder.h"
+#include "cetra/mesh_builder.h"
 #include "cetra/noise.h"
 
 // Cap, for the same reason the tree has one: the sliders multiply out and a

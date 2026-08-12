@@ -4,7 +4,7 @@
 #include <stdbool.h>
 #include <cglm/cglm.h>
 
-#include "cetra/mesh.h"
+#include "mesh.h"
 
 // Procedural tree generation, in two phases.
 //

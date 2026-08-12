@@ -2,7 +2,7 @@
 #include <string.h>
 
 #include "mesh_builder.h"
-#include "cetra/util.h"
+#include "util.h"
 
 bool mb_init(MeshBuilder* mb, size_t vres, size_t ires, bool want_colors) {
     memset(mb, 0, sizeof(*mb));
