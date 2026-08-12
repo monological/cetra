@@ -551,15 +551,13 @@ static bool caster_set_wants(ShadowCasterSet set, uint8_t lane, uint8_t flags) {
 // camera path -- a skipped item ends the run, because the batch submits
 // whatever the chunk holds.
 static size_t _visible_caster_run(const DrawList* list, size_t first, ShadowCasterSet set,
-                                  const Frustum* frustum, const Mesh* mesh) {
+                                  const Frustum* frustum) {
+    const DrawItem* head = &list->items[first];
     size_t n = 1;
     while (first + n < list->count && n < UBO_INSTANCE_MAX) {
         const DrawItem* next = &list->items[first + n];
-        if (next->mesh != mesh || !caster_set_wants(set, next->lane, next->flags))
-            break;
-        if (frustum && !(next->flags & DRAW_UNBOUNDED) &&
-            !frustum_test_aabb_transformed(frustum, next->mesh->aabb.min, next->mesh->aabb.max,
-                                           next->node->global_transform))
+        if (!caster_set_wants(set, next->lane, next->flags) ||
+            !draw_run_can_join(head, next, frustum))
             break;
         n++;
     }
@@ -567,11 +565,11 @@ static size_t _visible_caster_run(const DrawList* list, size_t first, ShadowCast
 }
 
 static void _draw_shadow_items(const DrawList* list, ShaderProgram* program, SubmitState* state,
-                               ShadowCasterSet set, SubmitStats* stats, const Frustum* frustum,
-                               const Engine* engine) {
-    if (!list)
+                               ShadowCasterSet set, const Frustum* frustum, const Engine* engine) {
+    if (!list || !engine)
         return;
 
+    SubmitStats* stats = profiler_submit(engine->profiler);
     InstanceChunk chunk;
 
     for (size_t idx = 0; idx < list->count; ++idx) {
@@ -592,9 +590,7 @@ static void _draw_shadow_items(const DrawList* list, ShaderProgram* program, Sub
         // Enabling depth clamp on this pass -- the usual remedy for a caster
         // between the light and the near plane -- would break that, and would
         // do it silently: casters this test drops would then have contributed.
-        if (!(item->flags & DRAW_UNBOUNDED) &&
-            !frustum_test_aabb_transformed(frustum, item->mesh->aabb.min, item->mesh->aabb.max,
-                                           item->node->global_transform)) {
+        if (!draw_item_visible(item, frustum)) {
             if (stats)
                 stats->meshes_culled++;
             continue;
@@ -613,19 +609,14 @@ static void _draw_shadow_items(const DrawList* list, ShaderProgram* program, Sub
             // definition. Gated on the program all the same, so this follows
             // the shader rather than restating what it does.
             size_t run = 1;
-            if (engine && engine->instancing_enabled && engine->instance_ubo && program->instanced)
-                run = _visible_caster_run(list, idx, set, frustum, mesh);
-            if (run > 1) {
-                for (size_t k = 0; k < run; ++k) {
-                    const DrawItem* i_k = &list->items[idx + k];
-                    glm_mat4_copy(i_k->node->global_transform, chunk.model[k]);
-                    glm_mat4_copy(i_k->node->prev_global_transform, chunk.prev_model[k]);
-                    glm_mat4_identity(chunk.normal[k]);
-                }
-                ubo_upload(engine->instance_ubo, &chunk, sizeof(chunk));
-                if (stats)
-                    stats->meshes_seen += run - 1;
-            }
+            if (engine->instancing_enabled && engine->instance_ubo && program->instanced)
+                run = _visible_caster_run(list, idx, set, frustum);
+            if (stats)
+                stats->meshes_seen += run - 1;
+            // No shading transforms: this stage reads uInstModel and nothing
+            // else, so the rest of the block is bytes it cannot look at.
+            if (run > 1)
+                instance_chunk_upload(engine->instance_ubo, &chunk, list, idx, run, false);
 
             // Per node, and the list is in node order, so consecutive meshes of
             // one node still upload it once.
@@ -785,15 +776,14 @@ static int compute_punctual_matrices(const Light* light, const ShadowSystem* ss,
 // The body both depth-pass loops share, once a layer is bound: aim the depth
 // program at one light-space matrix and walk the scene into it.
 static void draw_shadow_layer(ShadowSystem* ss, const DrawList* list, mat4 matrix,
-                              SubmitState* state, ShadowCasterSet set, SubmitStats* stats,
-                              const Engine* engine) {
+                              SubmitState* state, ShadowCasterSet set, const Engine* engine) {
     uniform_set_mat4(ss->depth_program->uniforms, "lightSpaceMatrix", (const float*)matrix);
     // The matrix IS the layer's coverage volume, and Gribb-Hartmann does not
     // care whether it is ortho or perspective -- so cascades and punctual faces
     // cull through the same six planes.
     Frustum layer_frustum;
     frustum_extract_from_vp(matrix, &layer_frustum);
-    _draw_shadow_items(list, ss->depth_program, state, set, stats, &layer_frustum, engine);
+    _draw_shadow_items(list, ss->depth_program, state, set, &layer_frustum, engine);
     end_shadow_pass(ss);
 }
 
@@ -1092,8 +1082,7 @@ static bool shadow_build_tsm(ShadowSystem* ss, const Engine* engine, Scene* scen
         wind_upload_to_program(scene->wind, au);
         uniform_set_float(au, "time", (float)engine->render_time);
         _draw_shadow_items(&scene->draw_list, ss->tsm_absorb_program, &state,
-                           SHADOW_CASTERS_TRANSLUCENT, profiler_submit(engine->profiler),
-                           &tsm_frustum, engine);
+                           SHADOW_CASTERS_TRANSLUCENT, &tsm_frustum, engine);
         glDisable(GL_BLEND);
 
         // --- resolve to transmittance --------------------------------------
@@ -1132,8 +1121,7 @@ static bool shadow_build_tsm(ShadowSystem* ss, const Engine* engine, Scene* scen
         submit_use_program(&state, ss->depth_program->id);
         uniform_set_mat4(ss->depth_program->uniforms, "lightSpaceMatrix", matrix);
         _draw_shadow_items(&scene->draw_list, ss->depth_program, &state,
-                           SHADOW_CASTERS_TRANSLUCENT, profiler_submit(engine->profiler),
-                           &tsm_frustum, engine);
+                           SHADOW_CASTERS_TRANSLUCENT, &tsm_frustum, engine);
     }
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -1431,8 +1419,8 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
         for (int c = 0; c < cc; ++c) {
             size_t layer = i * (size_t)cc + (size_t)c;
             begin_shadow_pass(ss, layer);
-            draw_shadow_layer(ss, &scene->draw_list, ss->cascade_matrices[layer],
-                              &state, set, profiler_submit(engine->profiler), engine);
+            draw_shadow_layer(ss, &scene->draw_list, ss->cascade_matrices[layer], &state, set,
+                              engine);
         }
     }
     profiler_scope_end(engine->profiler);
@@ -1460,9 +1448,8 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
                 // the directional cascades only (unit 15 has no room for a
                 // second lookup), so withholding translucent casters here
                 // would take away the solid shadow without replacing it.
-                draw_shadow_layer(ss, &scene->draw_list, ss->punctual_matrices[layer],
-                                  &state, SHADOW_CASTERS_OPAQUE,
-                                  profiler_submit(engine->profiler), engine);
+                draw_shadow_layer(ss, &scene->draw_list, ss->punctual_matrices[layer], &state,
+                                  SHADOW_CASTERS_OPAQUE, engine);
                 // Layers are handed out in increasing order, so the last one
                 // drawn is the bound the shader needs
                 ss->punctual_layer_count = layer + 1;

@@ -3,6 +3,7 @@
 
 #include <GL/glew.h>
 #include <stdbool.h>
+#include <stddef.h>
 
 // Uniform-buffer plumbing for std140 blocks (first used by clustered forward
 // lighting, spec 9.1). GLSL 330 cannot write layout(binding=N) -- that
@@ -57,6 +58,12 @@ void free_ubo(Ubo* ubo);
 // Replace the buffer contents. Orphans the old storage first
 // (glBufferData(NULL), then glBufferSubData) so the driver never stalls on a
 // store the previous frame may still be reading. size must be <= create size.
+//
+// Always the WHOLE buffer, even where the consumer reads a prefix of it. A
+// partial write after the orphan measured 4.3 ms/frame SLOWER than sending all
+// 12 KB on the instance block (spec 11.28): replacing the whole allocation
+// lets the driver hand back a fresh block, where a prefix leaves it owing an
+// answer for the rest, and that costs more than the copy it saves.
 void ubo_upload(Ubo* ubo, const void* data, GLsizeiptr size);
 
 // Wire a program's named block to a binding point and check the driver's

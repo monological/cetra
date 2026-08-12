@@ -145,3 +145,14 @@ bool draw_list_build(DrawList* list, Scene* scene, uint64_t stamp) {
     list->valid = true;
     return true;
 }
+
+bool draw_item_visible(const DrawItem* item, const Frustum* frustum) {
+    if (!frustum || (item->flags & DRAW_UNBOUNDED))
+        return true;
+    return frustum_test_aabb_transformed(frustum, item->mesh->aabb.min, item->mesh->aabb.max,
+                                         item->node->global_transform);
+}
+
+bool draw_run_can_join(const DrawItem* head, const DrawItem* next, const Frustum* frustum) {
+    return next->mesh == head->mesh && draw_item_visible(next, frustum);
+}

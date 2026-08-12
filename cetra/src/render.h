@@ -148,6 +148,16 @@ typedef struct InstanceChunk {
 _Static_assert(sizeof(InstanceChunk) == UBO_INSTANCES_BLOCK_SIZE,
                "InstanceChunk must match the std140 block size the shader declares");
 
+// Pack a run's transforms into the block and send it.
+//
+// `shading` is what the two consumers disagree about. The depth stage takes
+// uInstModel alone, so filling prev_model and the normal matrix for it is
+// stores no shader can observe -- two thirds of the block, on the pass that
+// issues most of the batches. It still SENDS them, for the reason ubo_upload
+// gives; this only skips writing them.
+void instance_chunk_upload(Ubo* ubo, InstanceChunk* chunk, const DrawList* list, size_t first,
+                           size_t run, bool shading);
+
 static inline void submit_bind_vao(SubmitState* state, GLuint vao) {
     if (state->vao != vao) {
         glBindVertexArray(vao);

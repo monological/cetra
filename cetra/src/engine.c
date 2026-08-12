@@ -233,9 +233,9 @@ Engine* create_engine(const char* window_title, int width, int height) {
     // Costs nothing on a scene with no alpha-blend mesh: the whole path is gated
     // on oit_mesh_count, so it allocates nothing and runs no extra pass there.
     engine->oit_enabled = true;
-    // On by default: the batched and unbatched paths upload the same floats to
-    // the same shader arithmetic, so the two agree at 0 px and there is nothing
-    // to opt into. --no-instancing is the escape hatch and the identity arm.
+    // On by default: the batched and unbatched paths carry the same floats into
+    // the same shader arithmetic, so there is nothing to opt into.
+    // --no-instancing is the escape hatch.
     engine->instancing_enabled = true;
     engine->oit_moments_enabled = true;
 

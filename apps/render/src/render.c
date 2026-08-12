@@ -1745,7 +1745,8 @@ int main(int argc, char** argv) {
     set_engine_headless(engine, args.headless != 0);
     // Before init_engine, which is where the profiler is built.
     set_engine_profiler(engine, args.profiler_enabled != 0);
-    engine->instancing_enabled = args.no_instancing == 0;
+    if (args.no_instancing)
+        engine->instancing_enabled = false;
     engine->headless_jitter = args.headless_jitter != 0;
     set_engine_screenshot_path(engine, args.screenshot_path);
     set_engine_screenshot_every(engine, args.screenshot_every);

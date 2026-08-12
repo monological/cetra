@@ -77,13 +77,6 @@ typedef struct Mesh {
     // takes; more than one is geometry a file says is shared.
     int refs;
 
-    // Stable within a run, assigned in creation order. A sort or batch key has
-    // to be this rather than the pointer: allocation addresses are not stable
-    // across runs, and an order that varies run to run varies the pixels where
-    // coplanar surfaces meet. Unsynchronised, which is safe only because
-    // create_mesh issues GL calls and so runs on the context thread.
-    unsigned id;
-
 } Mesh;
 
 /*

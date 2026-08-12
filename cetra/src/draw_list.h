@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "intersect.h"
 #include "mesh.h"
 
 struct Scene;
@@ -106,5 +107,23 @@ void scene_graph_touched(void);
 // Flatten the graph, unless the stamp says the last flattening still describes
 // it. Returns false only if it could not grow.
 bool draw_list_build(DrawList* list, struct Scene* scene, uint64_t stamp);
+
+// Whether this item survives the frustum. A NULL frustum accepts everything,
+// which is how a pass says it does not cull.
+//
+// One function rather than the expression, because every pass has to reach the
+// same answer twice -- once deciding whether to draw an item and once deciding
+// whether the item can join the run in front of it -- and those two answers
+// disagreeing is not a missed cull but a wrong picture: the batch submits
+// whatever the chunk holds, so an item accepted by one test and rejected by
+// the other shifts every instance behind it. Four hand-written copies of this
+// had already drifted on the null guard.
+bool draw_item_visible(const DrawItem* item, const Frustum* frustum);
+
+// Whether `next` can ride in the same draw as the run that `head` started:
+// same geometry, and visible under the same frustum. The caller adds its own
+// "does this pass want it" test -- that part differs per pass, this part does
+// not, and this is the part a new batch key has to be threaded through.
+bool draw_run_can_join(const DrawItem* head, const DrawItem* next, const Frustum* frustum);
 
 #endif // DRAW_LIST_H

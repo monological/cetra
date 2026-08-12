@@ -277,9 +277,12 @@ static void _update_camera_uniforms(ShaderProgram* program, Camera* camera) {
     // built. Post passes reconstruct view-Z from the projection matrix instead.
 }
 
+// Draws one item, carrying `instances` objects. Visibility is the caller's:
+// once a run is formed the chunk holds exactly these objects, so nothing here
+// may decline to draw.
 static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* item, Camera* camera,
                          mat4 view, mat4 projection, RenderMode render_mode, SubmitState* state,
-                         const Frustum* frustum, OitSubpass oit_pass, size_t instances) {
+                         OitSubpass oit_pass, size_t instances) {
     SceneNode* node = item->node;
     Mesh* mesh = item->mesh;
     // Only the opaque pass submits the opaque lane, so the lane says which pass
@@ -455,17 +458,28 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
             gi_volume_bind(scene ? scene->gi_volume : NULL, program);
         }
 
-        // Per-mesh uniforms (model matrix is always per-mesh)
-        uniform_set_mat4(u, "model", (const float*)node->global_transform);
-        uniform_set_mat4(u, "uPrevModel", (const float*)node->prev_global_transform);
-        // Normal matrix = transpose(inverse(model)), the transform normals need
-        // under non-uniform scale. The vertex shaders used to compute it
-        // themselves, which meant a full mat4 inverse PER VERTEX for a value
-        // that is constant across the draw -- hundreds of thousands of times a
-        // frame on the grass mesh. It now rides on the node, computed where the
-        // transform it derives from is. Location-guarded, so programs without
-        // the uniform (shadow depth, particles) no-op.
-        uniform_set_mat3(u, "uNormalMatrix", (const float*)node->normal_matrix);
+        // The three per-object transforms, for a draw that carries one object.
+        // A batched draw reads them out of the instance block instead, and
+        // writing them anyway is not merely wasted: `model` changing per draw
+        // is what makes the driver's program uniform block dirty, which costs a
+        // copy of the WHOLE block at submission. Batching removed most of the
+        // draws that pay it; leaving these here would have kept the rest paying.
+        //
+        // Skipping the write leaves the value cache and GL agreeing -- the
+        // cache records what it wrote -- so the next single-object draw of this
+        // program still uploads correctly.
+        if (instances == 1) {
+            uniform_set_mat4(u, "model", (const float*)node->global_transform);
+            uniform_set_mat4(u, "uPrevModel", (const float*)node->prev_global_transform);
+            // Normal matrix = transpose(inverse(model)), the transform normals
+            // need under non-uniform scale. The vertex shaders used to compute
+            // it themselves, which meant a full mat4 inverse PER VERTEX for a
+            // value that is constant across the draw -- hundreds of thousands
+            // of times a frame on the grass mesh. It now rides on the node,
+            // computed where the transform it derives from is. Location-guarded,
+            // so programs without the uniform (particles) no-op.
+            uniform_set_mat3(u, "uNormalMatrix", (const float*)node->normal_matrix);
+        }
         uniform_set_float(u, "lineWidth", mesh->line_width);
         // Wind cloth-mask bounds: per-mesh geometry (local AABB Y). The shader
         // uses them only when this mesh's material opted in (uWindResponse > 0).
@@ -546,19 +560,39 @@ static void _render_xyz(SceneNode* node, mat4 view, mat4 projection, SubmitState
 // submits whatever the chunk holds and skipping one would draw the next in its
 // place. Cutting the run short is always safe: the remainder starts a new one.
 static size_t _visible_run(const DrawList* list, size_t first, unsigned lanes,
-                           const Frustum* frustum, const Mesh* mesh) {
+                           const Frustum* frustum) {
+    const DrawItem* head = &list->items[first];
     size_t n = 1;
     while (first + n < list->count && n < UBO_INSTANCE_MAX) {
         const DrawItem* next = &list->items[first + n];
-        if (!(lanes & (1u << next->lane)) || next->mesh != mesh)
-            break;
-        if (frustum && !(next->flags & DRAW_UNBOUNDED) &&
-            !frustum_test_aabb_transformed(frustum, next->mesh->aabb.min, next->mesh->aabb.max,
-                                           next->node->global_transform))
+        if (!(lanes & (1u << next->lane)) || !draw_run_can_join(head, next, frustum))
             break;
         n++;
     }
     return n;
+}
+
+void instance_chunk_upload(Ubo* ubo, InstanceChunk* chunk, const DrawList* list, size_t first,
+                           size_t run, bool shading) {
+    for (size_t k = 0; k < run; ++k) {
+        const SceneNode* node = list->items[first + k].node;
+        glm_mat4_copy(node->global_transform, chunk->model[k]);
+        if (!shading)
+            continue;
+        glm_mat4_copy(node->prev_global_transform, chunk->prev_model[k]);
+        // The block declares the normal matrix as a mat4 because std140 pads a
+        // mat3's columns to 16 bytes where C packs them tight; ins3 writes the
+        // upper 3x3 of an identity at that stride.
+        glm_mat4_identity(chunk->normal[k]);
+        glm_mat4_ins3(node->normal_matrix, chunk->normal[k]);
+    }
+
+    // The whole block, however short the run: sending only the live prefix
+    // measured slower, and ubo_upload records why. Everything past `run`, and
+    // the two arrays a depth pass skips, therefore go up carrying whatever the
+    // last batch left there -- unread either way, since the shader indexes
+    // [0, run) and reads only what its stage declares.
+    ubo_upload(ubo, chunk, sizeof(*chunk));
 }
 
 // One pass over the flattened list. `lanes` is a bitmask of DrawLane, so a
@@ -584,9 +618,7 @@ static void _submit_lanes(const Engine* engine, Scene* scene, const DrawList* li
         // the run can still be cut short.
         if (stats)
             stats->meshes_seen++;
-        if (frustum && !(item->flags & DRAW_UNBOUNDED) &&
-            !frustum_test_aabb_transformed(frustum, item->mesh->aabb.min, item->mesh->aabb.max,
-                                           item->node->global_transform)) {
+        if (!draw_item_visible(item, frustum)) {
             if (stats)
                 stats->meshes_culled++;
             continue;
@@ -604,31 +636,17 @@ static void _submit_lanes(const Engine* engine, Scene* scene, const DrawList* li
         bool batchable = mat && mat->shader_program && mat->shader_program->instanced;
         size_t run = 1;
         if (batchable && engine->instancing_enabled && engine->instance_ubo)
-            run = _visible_run(list, i, lanes, frustum, item->mesh);
-        if (run > 1) {
-            for (size_t k = 0; k < run; ++k) {
-                const DrawItem* i_k = &list->items[i + k];
-                glm_mat4_copy(i_k->node->global_transform, chunk.model[k]);
-                glm_mat4_copy(i_k->node->prev_global_transform, chunk.prev_model[k]);
-                // Column by column: a mat3 is three tight vec3s in C, where
-                // the mat4 the block declares puts each column four floats
-                // apart. Copying the block wholesale would interleave them.
-                glm_mat4_identity(chunk.normal[k]);
-                for (int c = 0; c < 3; ++c) {
-                    chunk.normal[k][c][0] = i_k->node->normal_matrix[c][0];
-                    chunk.normal[k][c][1] = i_k->node->normal_matrix[c][1];
-                    chunk.normal[k][c][2] = i_k->node->normal_matrix[c][2];
-                }
-            }
-            ubo_upload(engine->instance_ubo, &chunk, sizeof(chunk));
-            // The run's own items were counted as seen above only for the
-            // first; the rest are counted here so the identity still holds.
-            if (stats)
-                stats->meshes_seen += run - 1;
-        }
+            run = _visible_run(list, i, lanes, frustum);
+        // The run's own items were counted as seen above only for the first;
+        // the rest are counted here so the identity still holds. A no-op at
+        // run == 1.
+        if (stats)
+            stats->meshes_seen += run - 1;
+        if (run > 1)
+            instance_chunk_upload(engine->instance_ubo, &chunk, list, i, run, true);
 
-        _submit_item(engine, scene, item, camera, view, projection, render_mode, state, frustum,
-                     oit_pass, run);
+        _submit_item(engine, scene, item, camera, view, projection, render_mode, state, oit_pass,
+                     run);
         i += run - 1;
     }
 }
