@@ -26,12 +26,8 @@ void main()
     // splits view and projection, and this pass renders under a polygon offset
     // and is read through a bias, so it has no bit-exactness to preserve. The
     // DEPTH PREPASS is the stage that does -- see object_position.glsl.
-    // Branch kept rather than folded into the call: skinMatrix blends four
-    // bones, and as an argument it would run for every rigid vertex too.
-    mat4 bone = mat4(1.0);
-    if (skinned)
-        bone = skinMatrix(aBoneIds, aBoneWeights);
-    vec4 localPos = cetra_local_position(aPos, bone, skinned, aTexCoords, aTexCoords2, time);
+    vec4 localPos = cetra_local_position(aPos, skinMatrixOrIdentity(aBoneIds, aBoneWeights),
+                                         skinned, aTexCoords, aTexCoords2, time);
 
     TexCoords = aTexCoords;
     gl_Position = lightSpaceMatrix * cetra_instance_model(model) * localPos;

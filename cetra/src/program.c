@@ -429,6 +429,9 @@ ShaderProgram* create_pbr_program() {
         return NULL;
     }
 
+    // pbr_vert takes its clip position from object_position.glsl, the same chunk
+    // depth_prepass_vert uses, and declares `invariant gl_Position`.
+    program->depth_prepass_safe = true;
     return program;
 }
 
@@ -488,6 +491,9 @@ ShaderProgram* create_pbr_skinned_program() {
         return NULL;
     }
 
+    // Same chunk, same invariant. Its skinning matches depth_prepass_vert's
+    // because both call skin.glsl's skinMatrix on the same uniforms.
+    program->depth_prepass_safe = true;
     return program;
 }
 

@@ -651,30 +651,9 @@ static void _draw_shadow_items(const DrawList* list, ShaderProgram* program, Sub
             // would depend on scene-graph order.
             bool two_sided =
                 (item->flags & DRAW_DOUBLE_SIDED) && set != SHADOW_CASTERS_TRANSLUCENT;
-            if (two_sided)
-                glDisable(GL_CULL_FACE);
-
             // The camera's level, not one chosen for this light: see DrawItem.
-            GLsizei index_count;
-            const void* index_offset;
-            mesh_lod_range(mesh, item->lod, &index_count, &index_offset);
-
-            submit_bind_vao(state, mesh->vao);
-            uniform_set_int(u, "uInstanced", run > 1 ? 1 : 0);
-            if (run > 1)
-                glDrawElementsInstanced(mesh->draw_mode, index_count, GL_UNSIGNED_INT, index_offset,
-                                        (GLsizei)run);
-            else
-                glDrawElements(mesh->draw_mode, index_count, GL_UNSIGNED_INT, index_offset);
-            if (stats) {
-                stats->draws++;
-                stats->instances += run;
-                stats->triangles += (size_t)(index_count / 3) * run;
-            }
+            submit_draw_run(state, u, item, run, two_sided, stats);
             idx += run - 1;
-
-            if (two_sided)
-                glEnable(GL_CULL_FACE);
         }
     }
 }

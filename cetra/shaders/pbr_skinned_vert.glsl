@@ -44,7 +44,7 @@ uniform float uDeltaTime; // render clock advance, for the previous-frame positi
 #include "object_position.glsl"
 
 // See pbr_vert: the depth prepass must reach the same clip position from a
-// different program, and GL_EQUAL is unforgiving about the last bit.
+// different program, and GL_LEQUAL rejects anything that lands behind it.
 invariant gl_Position;
 
 void main() {

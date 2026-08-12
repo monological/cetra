@@ -43,12 +43,12 @@ uniform float uDeltaTime; // render clock advance, for the previous-frame positi
 #include "instancing.glsl"
 #include "object_position.glsl"
 
-// The depth prepass rasterizes these same triangles and the shading pass then
-// tests against its depth with GL_EQUAL, so this value has to be bit-identical
+// The depth prepass rasterizes these same triangles and this pass then tests
+// against its depth with GL_LEQUAL, so this value has to be bit-identical
 // between two programs compiled from different source files. Without the
 // qualifier the driver is free to schedule the same arithmetic differently in
-// each and fragments start failing the test -- surfaces disappearing, not
-// shading subtly wrong.
+// each, and a fragment landing a bit BEHIND the depth it just wrote fails --
+// surfaces disappearing, not shading subtly wrong.
 invariant gl_Position;
 
 void main() {
@@ -62,7 +62,9 @@ void main() {
 
     // Wind displaces the object-space position; the previous-frame position uses
     // t - dt so the motion vector stays honest (no TAA/motion-blur smear).
-    vec4 local = cetra_local_position_rigid(aPos, aTexCoords, aTexCoords2, time);
+    // No skeleton in this stage: identity bone, and false so the posed branch
+    // folds away.
+    vec4 local = cetra_local_position(aPos, mat4(1.0), false, aTexCoords, aTexCoords2, time);
     vec3 posPrev = aPos + windOffset(aPos, aTexCoords, aTexCoords2, time - uDeltaTime);
 
     CetraObjectPos obj = cetra_object_position(mModel, view, projection, local);

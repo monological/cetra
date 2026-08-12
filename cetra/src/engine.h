@@ -300,6 +300,7 @@ typedef struct Engine {
     // Depth prepass (spec 11.30): position-only program, built lazily on the
     // first frame the pass runs so an engine that never enables it pays nothing.
     ShaderProgram* depth_prepass_program;
+    bool depth_prepass_failed; // true = compile was tried and failed; do not retry
 
     // Shadow catcher (ground plane that receives shadows over the skybox)
     ShaderProgram* shadow_catcher_program;

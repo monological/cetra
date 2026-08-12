@@ -19,6 +19,17 @@ typedef struct ShaderProgram {
     // must carry exactly one object: the transform arrives as a plain uniform,
     // so every instance of a batched draw would land on the first one's.
     bool instanced;
+    // Whether this program's gl_Position comes from object_position.glsl, so a
+    // depth prepass drawing the same mesh with depth_prepass_vert lands on the
+    // same value and the shading pass survives GL_LEQUAL against it.
+    //
+    // Opt-IN, because the failure is silent and ugly. `shape` is the standing
+    // counter-example: it is GL_LINES plus a geometry shader that expands each
+    // segment into a screen-facing quad, and its vertex stage emits a WORLD
+    // position for the geometry stage to re-project. Prepassing it would stamp
+    // depth along unexpanded lines that nothing ever shades. Its meshes are
+    // ALPHA_OPAQUE, so the lane alone cannot tell them apart.
+    bool depth_prepass_safe;
     UT_hash_handle hh;
 } ShaderProgram;
 

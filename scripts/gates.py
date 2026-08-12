@@ -2699,6 +2699,28 @@ def _forest_run(workdir, tag, extra, cam=None):
     return tables
 
 
+RAIDEN = os.path.join(ROOT, "my_models", "raiden", "source", "raiden_textured_rigged.glb")
+
+
+def _raiden_render(out, extra):
+    """The AGENTS.md baseline recipe, which is 0 px run-to-run.
+
+    Here rather than in a gate because it is the corpus's only ALPHA_MASK +
+    ALPHA_BLEND subject: every other fixture is opaque, so it is the only thing
+    that can see a change to masked geometry at all.
+    """
+    cmd = [RENDER, "-m", RAIDEN,
+           "-t", os.path.join(ROOT, "my_models", "raiden", "textures"),
+           "-e", os.path.join(ROOT, "my_models", "studio_small_03_8k.hdr"),
+           "-a", os.path.join(ROOT, "my_models", "animations", "strut_walk.fbx"),
+           "-s", os.path.join(ROOT, "my_models", "animations", "T-Pose.fbx"),
+           "-x", "-f", "120", "--no-springs", "--no-auto-exposure", "-E", "1.0", "-S", out]
+    r = subprocess.run(cmd + extra, capture_output=True, text=True)
+    if r.returncode != 0 or not os.path.exists(out):
+        return r.stdout + r.stderr
+    return None
+
+
 def run_prepass_gate(workdir):
     """The depth prepass: identical picture, less shading (spec 11.30 / E6).
 
@@ -2731,6 +2753,47 @@ def run_prepass_gate(workdir):
           f"(want exactly 0)")
     if not ok:
         failures.append("prepass-identity")
+
+    # --- prepass-masked: the arm above CANNOT see the flag's real cost -------
+    # instancing_fixture is purely opaque, so nothing sits the prepass out and
+    # its 0 px says nothing about the case that does. Masked geometry is not
+    # prepassed, so GL_LEQUAL leaves it tested against ITSELF, and coincident
+    # cards that GL_LESS rejected now pass and blend again.
+    #
+    # Asserted as a BOUND rather than 0, because 0 is not the truth here and an
+    # arm that demanded it would just be turned off. The number is what stops it
+    # drifting quietly: raiden is the corpus's one masked+blend subject and is
+    # 0 px run-to-run, so any movement is the flag.
+    rai_off = os.path.join(workdir, "prepass_rai_off.ppm")
+    rai_on = os.path.join(workdir, "prepass_rai_on.ppm")
+    if not os.path.exists(RAIDEN):
+        # my_models is not in every checkout. SKIP rather than pass: this is the
+        # only arm that can see the flag's cost, so a silent pass would be worse
+        # than no arm at all.
+        print("  prepass-masked SKIP  (my_models/raiden not present)")
+        err = None
+    elif (err := _raiden_render(rai_off, []) or _raiden_render(rai_on, ["--depth-prepass"])):
+        print(f"  prepass-masked ERROR render failed: {err.strip()[-200:]}")
+        failures.append("prepass-masked")
+    else:
+        ae, _ = compare(rai_off, rai_on)
+        # Measured 46,314 at the time of writing. The band catches both a silent
+        # blow-up and the day masked geometry joins the prepass and this drops
+        # toward 0 -- at which point the flag becomes a 0 px flag and this arm
+        # should be replaced by prepass-identity on raiden.
+        ok = 20000 <= ae <= 80000
+        print(f"  prepass-masked {'PASS' if ok else 'FAIL'}  raiden moves {ae} px under "
+              f"--depth-prepass (want 20000..80000; NOT 0 -- masked geometry sits the "
+              f"prepass out, see spec 11.30)")
+        if not ok:
+            failures.append("prepass-masked")
+
+    # Everything below needs the forest binary, which run_forest_gate skips on
+    # when absent -- and this gate runs first, so without the guard a tree with
+    # no out/bin/forest raises FileNotFoundError instead of skipping.
+    if not os.path.exists(FOREST):
+        print("  prepass-shading SKIP  (forest not built)")
+        return failures
 
     # --- prepass-shading: it removes shading, and the row appears -----------
     base = _forest_run(workdir, "pp_base", ["--taa", "--headless-jitter", "--no-sort-opaque"])
@@ -2791,6 +2854,19 @@ def run_forest_gate(workdir):
     if not ok:
         failures.append("forest-chains")
 
+    # --- forest-batch-ship: batching still happens as the engine ACTUALLY runs -
+    # Reads `base`, so it costs no extra render. A low floor on purpose: with LOD
+    # and the depth sort both fragmenting runs the shipping ratio is ~1.77, and
+    # the thing worth catching is not a drift from that but a COLLAPSE to 1.0,
+    # which is the value that means batching stopped happening at all.
+    inst = opaque["instances"]
+    ship = inst / opaque["draws"] if opaque["draws"] else 0.0
+    ok = ship >= 1.4
+    print(f"  forest-batch-ship {'PASS' if ok else 'FAIL'}  shipping config: {inst} instances "
+          f"in {opaque['draws']} draws (ratio {ship:.2f}, want >= 1.4; 1.0 means no batching)")
+    if not ok:
+        failures.append("forest-batch-ship")
+
     # --- forest-batch-off: one draw per instance, the baseline for the ratio -
     off = _forest_run(workdir, "noinst", ["--no-instancing"])
     if off is None:
@@ -2818,9 +2894,11 @@ def run_forest_gate(workdir):
     # property reads 13.2 and 10.4, which is a claim about the batcher.
     #
     # This is not the threshold being relaxed to fit: the floor stays at 8, and
-    # both flags remove a KNOWN confounder rather than a regression. What the
-    # shipping configuration costs in draws is forest-order's business.
-    inst = opaque["instances"]
+    # both flags remove a KNOWN confounder rather than a regression. The cost in
+    # the configuration that actually ships is forest-batch-ship, below --
+    # written because excluding two confounders left NO arm measuring batching
+    # as the engine runs it, and a change that collapsed it to one draw per
+    # instance would have passed everything here.
     nolod = _forest_run(workdir, "nolod", ["--no-lod", "--no-sort-opaque"])
     if nolod is None:
         failures.append("forest-batch")

@@ -39,6 +39,20 @@ mat4 skinMatrix(ivec4 ids, vec4 weights)
     return total < 0.001 ? mat4(1.0) : m;
 }
 
+// The guard every depth stage kept writing out for itself. The branch stays
+// here rather than folding into the caller's argument list: GLSL evaluates
+// arguments unconditionally, so `skinMatrix(...)` passed inline would blend four
+// bones for every RIGID vertex too.
+//
+// pbr_skinned_vert deliberately does not use this -- it needs the matrix inside
+// its own branch for the normal and the tangent as well.
+mat4 skinMatrixOrIdentity(ivec4 ids, vec4 weights)
+{
+    if (!skinned)
+        return mat4(1.0);
+    return skinMatrix(ids, weights);
+}
+
 #ifdef SKIN_PREV_POSE
 // Previous frame's bones for motion vectors, packed as 3 affine rows per bone
 // (the implicit 4th row is 0,0,0,1) so a second full set fits the vertex

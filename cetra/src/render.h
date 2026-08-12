@@ -8,6 +8,7 @@
 #include "common.h"
 #include "draw_list.h"
 #include "mesh.h"
+#include "profiler.h" // SubmitStats, which submit_draw_run fills
 #include "ubo.h"
 #include "program.h"
 #include "shader.h"
@@ -170,6 +171,22 @@ _Static_assert(sizeof(InstanceChunk) == UBO_INSTANCES_BLOCK_SIZE,
 // gives; this only skips writing them.
 void instance_chunk_upload(Ubo* ubo, InstanceChunk* chunk, const DrawList* list, size_t first,
                            size_t run, bool shading);
+
+// One draw of `instances` copies of `item`, plus the counters that describe it.
+//
+// Shared because "what a draw is" must not be able to differ between the passes:
+// the depth prepass writes depth the shading pass then tests against, and the
+// shadow pass writes depth the same geometry is shaded under. Three copies of
+// this had already appeared, including three of `triangles += index_count / 3 *
+// instances` -- a counter every submission gate reads.
+//
+// `two_sided` is RESOLVED BY THE CALLER rather than read from the item's flags,
+// because the policy genuinely differs: the translucent shadow set runs with
+// culling off for its whole traversal, so a per-item toggle there would
+// re-enable it mid-pass and halve the absorbance of everything after the first
+// two-sided caster.
+void submit_draw_run(SubmitState* state, UniformManager* u, const DrawItem* item, size_t instances,
+                     bool two_sided, SubmitStats* stats);
 
 static inline void submit_bind_vao(SubmitState* state, GLuint vao) {
     if (state->vao != vao) {

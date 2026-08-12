@@ -112,25 +112,38 @@ static const float LOD_SWITCH[] = {0.045f, 0.022f, 0.011f};
 _Static_assert(sizeof(LOD_SWITCH) / sizeof(LOD_SWITCH[0]) == CETRA_LOD_MAX - 1,
                "LOD_SWITCH needs one threshold per level below the top");
 
+// Where a mesh sits in the world and how big it is, from the same world bound
+// the culler tests against -- so "how big is this mesh" has ONE definition
+// rather than one per consumer free to drift from the others. `out_radius` may
+// be NULL for a caller that only wants the centre.
+//
+// Zeroed because they are out-params of a call in another translation unit,
+// which static analysis reads as a use before write.
+static void item_world_bounds(const Mesh* mesh, const SceneNode* node, vec3 out_centre,
+                              float* out_radius) {
+    vec3 world_min = {0.0f, 0.0f, 0.0f}, world_max = {0.0f, 0.0f, 0.0f};
+    aabb_transform((float*)mesh->aabb.min, (float*)mesh->aabb.max,
+                   (vec4*)node->global_transform, world_min, world_max);
+    glm_vec3_add(world_min, world_max, out_centre);
+    glm_vec3_scale(out_centre, 0.5f, out_centre);
+    if (out_radius) {
+        vec3 extent;
+        glm_vec3_sub(world_max, world_min, extent);
+        *out_radius = glm_vec3_norm(extent) * 0.5f;
+    }
+}
+
 // Level for this item, from its own bounds. Zero whenever the chain is absent
 // or selection is off, which is what makes --no-lod reach the pre-chain frame.
 static uint8_t select_lod(const Mesh* mesh, const SceneNode* node, const LodSelect* lod) {
     if (!lod || !lod->enabled || mesh->lod_levels <= 1)
         return 0;
 
-    // The same world bound the culler tests against, from the same function, so
-    // "how big is this mesh in the world" has one definition rather than a
-    // second one here free to drift from it.
-    // Zeroed because they are out-params of a call in another translation unit,
-    // which static analysis reads as a use before write.
-    vec3 world_min = {0.0f, 0.0f, 0.0f}, world_max = {0.0f, 0.0f, 0.0f};
-    vec3 world_centre, extent;
-    aabb_transform((float*)mesh->aabb.min, (float*)mesh->aabb.max,
-                   (vec4*)node->global_transform, world_min, world_max);
-    glm_vec3_add(world_min, world_max, world_centre);
-    glm_vec3_scale(world_centre, 0.5f, world_centre);
-    glm_vec3_sub(world_max, world_min, extent);
-    float radius = glm_vec3_norm(extent) * 0.5f;
+    // Zeroed for the same reason the bounds inside item_world_bounds are: an
+    // out-param filled by a callee reads as a use before write to cppcheck.
+    vec3 world_centre = {0.0f, 0.0f, 0.0f};
+    float radius = 0.0f;
+    item_world_bounds(mesh, node, world_centre, &radius);
 
     float distance = glm_vec3_distance((float*)lod->eye, world_centre);
     if (distance < 1e-4f)
@@ -208,39 +221,59 @@ bool draw_run_can_join(const DrawItem* head, const DrawItem* next, const Frustum
     return next->mesh == head->mesh && next->lod == head->lod && draw_item_visible(next, frustum);
 }
 
-// Distance from `eye` to an item's world-space bound centre. Same bound the
-// culler and the LOD selector use, from the same function, so "where is this
-// mesh" has one definition here too.
+// Distance from `eye` to an item's world-space bound centre, through the same
+// helper select_lod uses -- which is what makes the claim above true rather than
+// merely asserted.
 static float item_distance(const DrawItem* item, const vec3 eye) {
-    vec3 world_min = {0.0f, 0.0f, 0.0f}, world_max = {0.0f, 0.0f, 0.0f};
-    vec3 centre;
-    aabb_transform((float*)item->mesh->aabb.min, (float*)item->mesh->aabb.max,
-                   (vec4*)item->node->global_transform, world_min, world_max);
-    glm_vec3_add(world_min, world_max, centre);
-    glm_vec3_scale(centre, 0.5f, centre);
+    vec3 centre = {0.0f, 0.0f, 0.0f};
+    item_world_bounds(item->mesh, item->node, centre, NULL);
     return glm_vec3_distance((float*)eye, centre);
 }
 
-// The sort key, packed so one integer compare orders the whole thing. Laid out
-// most-significant first: depth bucket, then material, then mesh, then level.
+// The sort key, packed so one integer compare orders the whole thing:
+// [63:48] depth bucket  [47:28] material  [27:4] mesh  [3:0] level.
 //
-// Material above mesh is E5's deferred third limb: two different meshes sharing
-// a material land adjacent, so the material block uploads once for both. Mesh
-// above level is what the batcher needs; level last because it only ever splits
-// a run that already agreed on everything else.
+// Mesh above level is what the batcher needs; level last because it only ever
+// splits a run that already agreed on everything else.
+//
+// MATERIAL IS NOT E5's THIRD LIMB AND DOES NOT DELIVER IT. This comment used to
+// claim that putting material above mesh made two meshes sharing a material land
+// adjacent, so the block uploaded once for both. Measured on apps/forest, that
+// is backwards: material switches go 4 -> 106 with the sort on, because the
+// depth bucket sits ABOVE material and shatters material coherence before this
+// field is ever consulted -- and Morton-grouped graph order already had nearly
+// perfect coherence to lose. The field orders WITHIN a bucket and nothing more.
+// It is kept because grouping inside a bucket is still the right tiebreak, not
+// because it buys what E5 wanted; that limb needs material above depth, which is
+// a different sort with a different measurement behind it.
 typedef struct SortKey {
-    uint64_t key;
+    // One slot, two phases: the first pass stores the distance, because the
+    // bucket needs a range not known until every item has been measured; the
+    // second overwrites it with the packed key. A union rather than two fields
+    // so the struct stays the size qsort has to move.
+    union {
+        float dist;
+        uint64_t key;
+    };
+    // What makes the order TOTAL. Without it every instance of one prototype at
+    // one level in one bucket ties, which is the DOMINANT case in a scatter --
+    // and qsort is not stable, so their order would be whatever the pivots did.
+    // That is observable: masked materials still blend, and coplanar surfaces
+    // break their depth tie by draw order. It would also differ across libc,
+    // which is exactly the run-to-run instability Mesh.id was added to avoid.
+    // Ties resolve to graph order, which is what every golden was baked from.
+    uint32_t index;
     DrawItem item;
 } SortKey;
 
 static int sort_key_cmp(const void* a, const void* b) {
-    uint64_t ka = ((const SortKey*)a)->key;
-    uint64_t kb = ((const SortKey*)b)->key;
+    const SortKey* x = a;
+    const SortKey* y = b;
     // Not (ka - kb): the difference of two uint64 wraps, and a comparator that
     // wraps sorts arbitrarily rather than wrongly-but-consistently.
-    if (ka != kb)
-        return ka < kb ? -1 : 1;
-    return 0;
+    if (x->key != y->key)
+        return x->key < y->key ? -1 : 1;
+    return x->index < y->index ? -1 : 1;
 }
 
 bool draw_list_sort_lane(DrawList* dst, const DrawList* src, uint8_t lane, const vec3 eye) {
@@ -276,8 +309,8 @@ bool draw_list_sort_lane(DrawList* dst, const DrawList* src, uint8_t lane, const
         if (count == 0 || d > far_d)
             far_d = d;
         keys[count].item = src->items[i];
-        // Stash the distance; the bucket needs the range, which is not known yet.
-        memcpy(&keys[count].key, &d, sizeof(float));
+        keys[count].index = (uint32_t)count;
+        keys[count].dist = d;
         count++;
     }
 
@@ -287,11 +320,18 @@ bool draw_list_sort_lane(DrawList* dst, const DrawList* src, uint8_t lane, const
     float scale = span > 1e-4f ? (float)(DRAW_SORT_DEPTH_BUCKETS - 1) / span : 0.0f;
 
     for (size_t i = 0; i < count; ++i) {
-        float d;
-        memcpy(&d, &keys[i].key, sizeof(float));
-        uint64_t bucket = (uint64_t)((d - near_d) * scale);
-        if (bucket >= DRAW_SORT_DEPTH_BUCKETS)
-            bucket = DRAW_SORT_DEPTH_BUCKETS - 1;
+        // Clamped BEFORE the integer conversion, not after. (uint64_t) of a NaN
+        // or of an out-of-range float is undefined (C11 6.3.1.4) -- it saturates
+        // to 0 on arm64 and to 0x8000... on x86-64 -- and a NaN reaches here from
+        // any node whose transform went bad, at which point `scale` is 0 and
+        // EVERY item takes the conversion. `!(t > 0)` catches NaN where `t < 0`
+        // would not.
+        float t = (keys[i].dist - near_d) * scale;
+        if (!(t > 0.0f))
+            t = 0.0f;
+        else if (t > (float)(DRAW_SORT_DEPTH_BUCKETS - 1))
+            t = (float)(DRAW_SORT_DEPTH_BUCKETS - 1);
+        uint64_t bucket = (uint64_t)t;
 
         // NOTE: masked items are sorted along with everything else, and that is
         // not free. A masked material writes finalOpacity < 1 into attachment 0,
@@ -307,7 +347,7 @@ bool draw_list_sort_lane(DrawList* dst, const DrawList* src, uint8_t lane, const
         // group, which costs a material upload and never a wrong picture.
         keys[i].key = (bucket << 48) | ((mat_id & 0xFFFFF) << 28) |
                       (((uint64_t)keys[i].item.mesh->id & 0xFFFFFF) << 4) |
-                      (uint64_t)keys[i].item.lod;
+                      ((uint64_t)keys[i].item.lod & 0xF);
     }
 
     qsort(keys, count, sizeof(SortKey), sort_key_cmp);

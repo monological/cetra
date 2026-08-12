@@ -30,13 +30,8 @@ invariant gl_Position;
 
 void main()
 {
-    // Branch kept rather than folded into the call: skinMatrix blends four
-    // bones, and as an argument it would run for every rigid vertex too.
-    mat4 bone = mat4(1.0);
-    if (skinned)
-        bone = skinMatrix(aBoneIds, aBoneWeights);
-
-    vec4 localPos = cetra_local_position(aPos, bone, skinned, aTexCoords, aTexCoords2, time);
+    vec4 localPos = cetra_local_position(aPos, skinMatrixOrIdentity(aBoneIds, aBoneWeights),
+                                         skinned, aTexCoords, aTexCoords2, time);
     gl_Position =
         cetra_object_position(cetra_instance_model(model), view, projection, localPos).clip;
 }

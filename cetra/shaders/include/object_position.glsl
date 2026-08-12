@@ -2,7 +2,7 @@
 // the shading passes, the shadow depth pass, and the depth prepass.
 //
 // The prepass is why this exists. It draws the same triangles as pbr_vert and
-// the shading pass then tests against its depth with GL_EQUAL, so the two must
+// the shading pass then tests against its depth with GL_LEQUAL, so the two must
 // agree to the LAST BIT -- not merely be the same formula written twice. Before
 // this chunk there were three hand-written copies of the position path
 // (pbr_vert, pbr_skinned_vert, shadow_depth_vert) which were meant to agree,
@@ -15,10 +15,20 @@
 // Same argument as wind.glsl and skin.glsl, which exist because a shadow that
 // displaces differently from its caster detaches from it. This one is stricter:
 // there the failure is a visibly wrong shadow, here it is fragments silently
-// failing GL_EQUAL and the surface disappearing.
+// failing the depth test and the surface disappearing.
+//
+// Under LEQUAL the exposure is ONE-SIDED, and that is worth knowing before
+// writing a new stage: a shading fragment landing a last bit NEARER than the
+// depth the prepass wrote still passes, one landing a bit FARTHER is rejected
+// and takes its surface with it. So drift is not symmetric noise here -- half of
+// it deletes geometry.
+#include "wind.glsl" // windOffset, below. Included rather than assumed: this
+                     // chunk lands in five programs and the expansion is
+                     // include-once, so requiring callers to order it right
+                     // would buy nothing but a startup compile error.
 
 // The object-space position a vertex actually occupies: posed by `bone`, then
-// displaced by wind. Requires wind.glsl.
+// displaced by wind.
 //
 // The bone matrix is a PARAMETER rather than computed here, because
 // pbr_skinned_vert needs that same matrix for the normal and tangent and would
@@ -36,10 +46,6 @@ vec4 cetra_local_position(vec3 rest, mat4 bone, bool isSkinned, vec2 uv0, vec2 u
     return local;
 }
 
-// The rigid case, for a stage with no skeleton at all.
-vec4 cetra_local_position_rigid(vec3 rest, vec2 uv0, vec2 uv1, float t) {
-    return cetra_local_position(rest, mat4(1.0), false, uv0, uv1, t);
-}
 
 // Object -> world -> view -> clip, as THREE chained matrix-vector products in
 // that nesting, and the nesting is the point.
@@ -48,7 +54,7 @@ vec4 cetra_local_position_rigid(vec3 rest, vec2 uv0, vec2 uv1, float t) {
 // arithmetic and different values in floats: the concatenated form sums four
 // products per element before touching the vertex, the chained form rounds at
 // each stage. Either is fine on its own; mixing them between two passes that
-// compare depths with GL_EQUAL is not.
+// compare depths is not.
 //
 // Returned as a struct rather than three functions so a caller cannot take the
 // world position from here and compute view or clip its own way.

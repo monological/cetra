@@ -177,13 +177,18 @@ static void retire_slot(Profiler* profiler, int slot) {
     // samples passed is a legitimate answer (a frame aimed at empty sky), where
     // zero nanoseconds is not.
     if (profiler->samples_generated && profiler->samples_issued[slot]) {
-        profiler->samples_issued[slot] = 0;
         GLuint available = 0;
         glGetQueryObjectuiv(profiler->samples_query[slot], GL_QUERY_RESULT_AVAILABLE, &available);
+        // The flag clears only once the result has actually been taken. Clearing
+        // it first -- as this did -- drops an unready result permanently and
+        // leaves samples_shaded holding an older frame's number with nothing to
+        // say so. The slot is about to be reissued either way, so the worst case
+        // is one lost sample rather than a stale reading that looks live.
         if (available) {
             GLuint64 passed = 0;
             glGetQueryObjectui64v(profiler->samples_query[slot], GL_QUERY_RESULT, &passed);
             profiler->samples_shaded = (size_t)passed;
+            profiler->samples_issued[slot] = 0;
         }
     }
 
@@ -297,6 +302,15 @@ void profiler_end_frame(Profiler* profiler, double dt) {
                   profiler->scopes[profiler->active].name);
         profiler->active = -1;
     }
+    // Same recovery for the samples query, which had none: an early return
+    // between begin and end would otherwise leave it open forever, so no query
+    // is ever issued again and the depth-complexity reading freezes at its last
+    // value -- nonzero, so the arm that reads it keeps passing.
+    if (profiler->samples_open) {
+        log_error("Profiler: the samples query was never closed");
+        glEndQuery(GL_SAMPLES_PASSED);
+        profiler->samples_open = 0;
+    }
     profiler->frame++;
 
     // Clamped for the reason the FPS counter clamps: one long hitch should not
@@ -337,14 +351,6 @@ void profiler_samples_end(Profiler* profiler) {
 void profiler_set_sample_budget(Profiler* profiler, size_t samples) {
     if (profiler)
         profiler->sample_budget = samples;
-}
-
-size_t profiler_samples_shaded(const Profiler* profiler) {
-    return profiler ? profiler->samples_shaded : 0;
-}
-
-size_t profiler_sample_budget(const Profiler* profiler) {
-    return profiler ? profiler->sample_budget : 0;
 }
 
 void profiler_suspend(Profiler* profiler) {

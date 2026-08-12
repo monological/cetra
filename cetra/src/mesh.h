@@ -89,8 +89,11 @@ typedef struct Mesh {
     // pointer identifies the same geometry and would sort correctly, but its
     // value comes from the allocator -- so a sort keyed on it produces a
     // different draw order run to run, and the 0 px bar every ordering arm rests
-    // on could not be met. Assigned once and never reused; two meshes never
-    // share one, so it also breaks ties the rest of a key leaves equal.
+    // on could not be met. Assigned once and never reused.
+    //
+    // It does NOT follow that an id breaks every tie: draw_list.c truncates it
+    // to 24 bits to pack the key, so two meshes 16M apart collide there. What
+    // makes that sort a total order is its source index, not this.
     unsigned id;
 
     // LOD chain: simplified INDEX RANGES over the same vertices, concatenated

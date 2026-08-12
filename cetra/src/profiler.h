@@ -186,12 +186,6 @@ void profiler_samples_end(Profiler* profiler);
 // target: the profiler cannot know the supersample or render-scale factors.
 void profiler_set_sample_budget(Profiler* profiler, size_t samples);
 
-// From the last RETIRED frame, so this lags by up to PROFILER_RING frames and
-// reads 0 until the first one lands. Exact rather than averaged, for the reason
-// the submission counters are.
-size_t profiler_samples_shaded(const Profiler* profiler);
-size_t profiler_sample_budget(const Profiler* profiler);
-
 // One table on stdout. For headless runs, where there is no HUD to read.
 // Non-const: a run too short to have latched a window is published here, so a
 // two-second capture reports what it measured instead of an empty table.
