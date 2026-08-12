@@ -17,9 +17,16 @@ rather than for closed-form radiometry.
     whole-frame comparison against a same-chunked build cannot see, and a
     comparison against a differently-chunked one can.
 
-  - Every prop is IDENTICAL in size and material and differs only in position,
-    so the batch key is the mesh pointer alone and nothing else can be blamed
-    when a run fails to batch.
+  - Every prop is the same mesh with the same material, so the batch key is the
+    mesh pointer alone and nothing else can be blamed when a run fails to batch.
+
+  - Each prop carries a ROTATION and a NON-UNIFORM SCALE, and that is what makes
+    the identity arm mean anything about the normal matrix. Under translation
+    alone every prop's normal matrix is the identity, so a transposed pack, a
+    wrong instance index, or uploading mat3(model) in its place all produce a
+    bit-identical frame -- the lane the mat4 storage was chosen to protect would
+    have been checked by nothing. Uniform scale is not enough either: its normal
+    matrix is (1/s)I, which the shader's normalize() cancels exactly.
 
   - The grid is entirely inside the gate camera's frustum, so `meshes culled`
     is 0 for the camera pass and any nonzero reading is the culler, not the
@@ -39,6 +46,7 @@ Regenerate with:
 
 import base64
 import json
+import math
 import os
 import struct
 
@@ -51,27 +59,41 @@ GROUND = 5.5      # ground half-extent
 
 assert COLS * ROWS == PROP_COUNT
 
-# ---- prop: a unit box, 24 vertices so each face gets a flat normal ---------
-# 12 triangles. Small on purpose: the fixture measures submission cost, and
-# heavy geometry would bury it under vertex work.
+# ---- prop: an octahedron, 8 flat-shaded triangles --------------------------
+# Small on purpose: the fixture measures submission cost, and heavy geometry
+# would bury it under vertex work.
+#
+# An octahedron rather than a box because EVERY face normal here is (+/-1, +/-1,
+# +/-1)/sqrt(3), and off-axis is the entire point. A box's normals are axis
+# aligned, and for an axis-aligned normal under a diagonal scale the true normal
+# matrix and mat3(model) differ only in magnitude along that one axis -- which
+# the shader's normalize() removes exactly. So a box CANNOT tell the two apart
+# at any anisotropy, the same cancellation that makes a uniformly scaled mesh
+# useless here, and the identity arm would be blind to the normal lane no matter
+# what poses the props were given.
 h = PROP_HALF
-FACES = [
-    ((0.0, 0.0, 1.0), [(-h, -h, h), (h, -h, h), (h, h, h), (-h, h, h)]),
-    ((0.0, 0.0, -1.0), [(h, -h, -h), (-h, -h, -h), (-h, h, -h), (h, h, -h)]),
-    ((1.0, 0.0, 0.0), [(h, -h, h), (h, -h, -h), (h, h, -h), (h, h, h)]),
-    ((-1.0, 0.0, 0.0), [(-h, -h, -h), (-h, -h, h), (-h, h, h), (-h, h, -h)]),
-    ((0.0, 1.0, 0.0), [(-h, h, h), (h, h, h), (h, h, -h), (-h, h, -h)]),
-    ((0.0, -1.0, 0.0), [(-h, -h, -h), (h, -h, -h), (h, -h, h), (-h, -h, h)]),
-]
+_AXIS_PTS = [(h, 0.0, 0.0), (-h, 0.0, 0.0), (0.0, h, 0.0),
+             (0.0, -h, 0.0), (0.0, 0.0, h), (0.0, 0.0, -h)]
 
 box_pos = []
 box_nrm = []
 box_idx = []
-for normal, corners in FACES:
-    base = len(box_pos)
-    box_pos.extend(corners)
-    box_nrm.extend([normal] * 4)
-    box_idx.extend([base, base + 1, base + 2, base, base + 2, base + 3])
+for sx in (0, 1):
+    for sy in (2, 3):
+        for sz in (4, 5):
+            a, b, c = _AXIS_PTS[sx], _AXIS_PTS[sy], _AXIS_PTS[sz]
+            # Outward winding: flip when an odd number of components is negative
+            # so every face is front-facing from outside.
+            if (sx % 2) ^ (sy % 2) ^ (sz % 2):
+                b, c = c, b
+            nx = 1.0 if sx == 0 else -1.0
+            ny = 1.0 if sy == 2 else -1.0
+            nz = 1.0 if sz == 4 else -1.0
+            inv = 1.0 / math.sqrt(3.0)
+            base = len(box_pos)
+            box_pos.extend([a, b, c])
+            box_nrm.extend([(nx * inv, ny * inv, nz * inv)] * 3)
+            box_idx.extend([base, base + 1, base + 2])
 
 # ---- ground: one quad in the XZ plane, normal +Y --------------------------
 ground_pos = [(-GROUND, 0.0, -GROUND), (GROUND, 0.0, -GROUND),
@@ -121,6 +143,41 @@ def bounds(rows):
 box_min, box_max = bounds(box_pos)
 ground_min, ground_max = bounds(ground_pos)
 
+# Rotation about a deliberately off-axis direction, so no column of the normal
+# matrix stays trivially aligned with a world axis.
+AXIS = (0.3, 1.0, 0.2)
+_alen = math.sqrt(sum(c * c for c in AXIS))
+AXIS = tuple(c / _alen for c in AXIS)
+
+
+def prop_pose(i):
+    """Rotation quaternion and non-uniform scale for prop i.
+
+    A closed form of the index, not a random draw: the fixture is compared
+    against itself across builds, so every number in it has to be reproducible
+    from the generator alone.
+
+    The scale must be ANISOTROPIC or there is no signal at all: the normal
+    matrix of a uniform scale is (1/s)I, which the shader's normalize() cancels
+    exactly. Anisotropy is necessary and not sufficient -- the prop's off-axis
+    normals are what turn it into a visible difference; see the note above.
+
+    Props are 0.15 half-extent on a 0.62 grid, so even at 1.45 a rotated prop
+    cannot reach its neighbour or leave the camera frustum -- `meshes culled`
+    must stay 0 for the opaque pass, or inst-count is measuring the framing
+    instead of the batcher.
+    """
+    angle = math.radians((i * 37) % 360)
+    s = math.sin(angle / 2.0)
+    rotation = [AXIS[0] * s, AXIS[1] * s, AXIS[2] * s, math.cos(angle / 2.0)]
+    scale = [
+        1.0 + 0.45 * math.sin(i * 1.7),
+        1.0 + 0.45 * math.sin(i * 0.9 + 2.1),
+        1.0 + 0.45 * math.sin(i * 2.3 + 4.2),
+    ]
+    return [round(v, 6) for v in rotation], [round(v, 6) for v in scale]
+
+
 # ---- nodes: one ground, then PROP_COUNT nodes ALL pointing at mesh 0 -------
 nodes = [{"name": "Ground", "mesh": 1}]
 for i in range(PROP_COUNT):
@@ -128,10 +185,13 @@ for i in range(PROP_COUNT):
     row = i // COLS
     x = (col - (COLS - 1) / 2.0) * SPACING
     z = (row - (ROWS - 1) / 2.0) * SPACING
+    rotation, scale = prop_pose(i)
     nodes.append({
         "name": "Prop_%03d" % i,
         "mesh": 0,
-        "translation": [round(x, 6), PROP_HALF, round(z, 6)],
+        "translation": [round(x, 6), PROP_HALF * scale[1], round(z, 6)],
+        "rotation": rotation,
+        "scale": scale,
     })
 
 gltf = {
@@ -139,10 +199,13 @@ gltf = {
     "materials": [
         {
             "name": "PropGrey",
+            # Glossy on purpose: a tight specular lobe turns a small change in
+            # the shading normal into a large change in the pixel, where a
+            # matte prop shades through N.L and varies too slowly to show one.
             "pbrMetallicRoughness": {
                 "baseColorFactor": [0.72, 0.70, 0.66, 1.0],
                 "metallicFactor": 0.0,
-                "roughnessFactor": 0.6,
+                "roughnessFactor": 0.15,
             },
         },
         {
