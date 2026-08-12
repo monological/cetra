@@ -2,6 +2,7 @@
 #define _PHYSICS_H_
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <cglm/cglm.h>
 
@@ -43,8 +44,15 @@ typedef enum {
 // Motion types
 typedef enum { MOTION_STATIC, MOTION_KINEMATIC, MOTION_DYNAMIC } PhysicsMotionType;
 
-// Shape types
-typedef enum { SHAPE_BOX, SHAPE_SPHERE, SHAPE_CAPSULE, SHAPE_CYLINDER } PhysicsShapeType;
+// Shape types. SHAPE_MESH is STATIC ONLY -- Jolt has no inertia tensor for a
+// triangle soup, so a dynamic or kinematic body cannot carry one.
+typedef enum {
+    SHAPE_BOX,
+    SHAPE_SPHERE,
+    SHAPE_CAPSULE,
+    SHAPE_CYLINDER,
+    SHAPE_MESH
+} PhysicsShapeType;
 
 // Constraint types
 typedef enum {
@@ -86,6 +94,15 @@ typedef struct PhysicsShapeDesc {
             float radius;
             float half_height;
         } cylinder;
+        // Borrowed for the duration of the create call only: Jolt copies the
+        // triangles into its own BVH, so the caller may free them afterwards.
+        // Positions are 3 floats per vertex, indices 3 per triangle.
+        struct {
+            const float* vertices;
+            size_t vertex_count;
+            const unsigned int* indices;
+            size_t index_count;
+        } mesh;
     };
     float density;
 } PhysicsShapeDesc;
@@ -263,6 +280,11 @@ JPC_Shape* physics_create_box_shape(vec3 half_extents, float density);
 JPC_Shape* physics_create_sphere_shape(float radius, float density);
 JPC_Shape* physics_create_capsule_shape(float radius, float half_height, float density);
 JPC_Shape* physics_create_cylinder_shape(float radius, float half_height, float density);
+// Static collision geometry from a triangle list -- terrain, or any surface no
+// primitive approximates. The arrays are borrowed for the call only. NULL if the
+// triangles are malformed or Jolt refuses them.
+JPC_Shape* physics_create_mesh_shape(const float* vertices, size_t vertex_count,
+                                     const unsigned int* indices, size_t index_count);
 JPC_Shape* physics_create_shape_from_desc(const PhysicsShapeDesc* desc);
 
 // RigidBody component API

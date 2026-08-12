@@ -36,6 +36,8 @@ Game* create_game(const GameConfig* config) {
 
     // Headless must be set before init_engine (read during GLFW window setup)
     set_engine_headless(game->engine, config->headless);
+    // Same reason: init_engine is where the profiler is built.
+    set_engine_profiler(game->engine, config->profiler);
 
     // Initialize engine
     if (init_engine(game->engine) != 0) {

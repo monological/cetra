@@ -34,6 +34,11 @@ typedef struct GameConfig {
     bool headless;               // Hidden window, no vsync (set before init_engine)
     int exit_after_frames;       // Exit cleanly after N rendered frames (0 = run forever)
     const char* screenshot_path; // Save the final frame here as PPM (NULL = off)
+    // Per-pass GPU/CPU timing and the submission counters. A config field rather
+    // than something an app sets afterwards, because the profiler is built
+    // during init_engine and create_game owns that call -- so a game-framework
+    // app had no way to enable it at all.
+    bool profiler;
 } GameConfig;
 
 // Main game structure

@@ -3,6 +3,8 @@
 #include "JoltC/JoltC.h"
 #include "uthash.h"
 
+#include "../ext/log.h"
+
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -440,6 +442,69 @@ JPC_Shape* physics_create_cylinder_shape(float radius, float half_height, float 
     return shape;
 }
 
+JPC_Shape* physics_create_mesh_shape(const float* vertices, size_t vertex_count,
+                                     const unsigned int* indices, size_t index_count) {
+    if (!vertices || !indices || vertex_count == 0 || index_count < 3 || index_count % 3 != 0) {
+        log_error("Mesh shape: needs a non-empty triangle list (%zu verts, %zu indices)",
+                  vertex_count, index_count);
+        return NULL;
+    }
+
+    // Jolt wants its own vertex and triangle types, so this is a conversion pass
+    // rather than a view. It copies again internally when it builds the BVH,
+    // which is why the caller's arrays are only borrowed for this call.
+    JPC_Float3* verts = malloc(vertex_count * sizeof(JPC_Float3));
+    size_t tri_count = index_count / 3u;
+    JPC_IndexedTriangle* tris = malloc(tri_count * sizeof(JPC_IndexedTriangle));
+    if (!verts || !tris) {
+        log_error("Mesh shape: could not allocate %zu verts / %zu triangles", vertex_count,
+                  tri_count);
+        free(verts);
+        free(tris);
+        return NULL;
+    }
+
+    for (size_t i = 0; i < vertex_count; ++i) {
+        verts[i].x = vertices[i * 3u + 0u];
+        verts[i].y = vertices[i * 3u + 1u];
+        verts[i].z = vertices[i * 3u + 2u];
+    }
+    for (size_t i = 0; i < tri_count; ++i) {
+        // An out-of-range index is an out-of-bounds read inside Jolt's builder,
+        // so it is checked here rather than trusted.
+        for (int k = 0; k < 3; ++k) {
+            unsigned int v = indices[i * 3u + (size_t)k];
+            if (v >= vertex_count) {
+                log_error("Mesh shape: index %u out of range (%zu verts)", v, vertex_count);
+                free(verts);
+                free(tris);
+                return NULL;
+            }
+            tris[i].idx[k] = v;
+        }
+        tris[i].materialIndex = 0;
+        tris[i].userData = 0;
+    }
+
+    JPC_MeshShapeSettings settings;
+    JPC_MeshShapeSettings_default(&settings);
+    settings.TriangleVertices = verts;
+    settings.TriangleVerticesLen = vertex_count;
+    settings.IndexedTriangles = tris;
+    settings.IndexedTrianglesLen = tri_count;
+
+    JPC_Shape* shape = NULL;
+    JPC_String* error = NULL;
+    bool ok = JPC_MeshShapeSettings_Create(&settings, &shape, &error);
+    free(verts);
+    free(tris);
+    if (!ok) {
+        log_error("Mesh shape: Jolt refused %zu triangles", tri_count);
+        return NULL;
+    }
+    return shape;
+}
+
 JPC_Shape* physics_create_shape_from_desc(const PhysicsShapeDesc* desc) {
     if (!desc)
         return NULL;
@@ -455,6 +520,9 @@ JPC_Shape* physics_create_shape_from_desc(const PhysicsShapeDesc* desc) {
         case SHAPE_CYLINDER:
             return physics_create_cylinder_shape(desc->cylinder.radius, desc->cylinder.half_height,
                                                  desc->density);
+        case SHAPE_MESH:
+            return physics_create_mesh_shape(desc->mesh.vertices, desc->mesh.vertex_count,
+                                             desc->mesh.indices, desc->mesh.index_count);
         default:
             return NULL;
     }
@@ -495,6 +563,14 @@ RigidBody* entity_add_rigid_body(Entity* entity, PhysicsWorld* world,
         return NULL;
 
     if (entity_has_component(entity, COMPONENT_RIGID_BODY)) {
+        return NULL;
+    }
+
+    // A triangle soup has no inertia tensor, so Jolt cannot integrate one.
+    // Refused here with a name rather than left to assert inside the library,
+    // where the message would say nothing about which body was at fault.
+    if (shape_desc->type == SHAPE_MESH && motion_type != MOTION_STATIC) {
+        log_error("Entity '%s': a mesh shape must be MOTION_STATIC", entity->name);
         return NULL;
     }
 
