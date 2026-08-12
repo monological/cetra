@@ -145,6 +145,10 @@ void material_param_set(Material* material, const MaterialParam* param, const fl
     }
 }
 
+// See Mesh.id: creation order, because a sort keyed on the pointer would order
+// draws by allocator address and differ run to run.
+static unsigned g_next_material_id = 1;
+
 Material* create_material() {
     Material* material = (Material*)malloc(sizeof(Material));
     if (!material) {
@@ -152,6 +156,7 @@ Material* create_material() {
         return NULL;
     }
 
+    material->id = g_next_material_id++;
     material->name = NULL;
     glm_vec3_fill(material->albedo, 1.0f);
     glm_vec3_zero(material->emissive);

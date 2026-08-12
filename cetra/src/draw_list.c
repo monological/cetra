@@ -207,3 +207,118 @@ bool draw_item_visible(const DrawItem* item, const Frustum* frustum) {
 bool draw_run_can_join(const DrawItem* head, const DrawItem* next, const Frustum* frustum) {
     return next->mesh == head->mesh && next->lod == head->lod && draw_item_visible(next, frustum);
 }
+
+// Distance from `eye` to an item's world-space bound centre. Same bound the
+// culler and the LOD selector use, from the same function, so "where is this
+// mesh" has one definition here too.
+static float item_distance(const DrawItem* item, const vec3 eye) {
+    vec3 world_min = {0.0f, 0.0f, 0.0f}, world_max = {0.0f, 0.0f, 0.0f};
+    vec3 centre;
+    aabb_transform((float*)item->mesh->aabb.min, (float*)item->mesh->aabb.max,
+                   (vec4*)item->node->global_transform, world_min, world_max);
+    glm_vec3_add(world_min, world_max, centre);
+    glm_vec3_scale(centre, 0.5f, centre);
+    return glm_vec3_distance((float*)eye, centre);
+}
+
+// The sort key, packed so one integer compare orders the whole thing. Laid out
+// most-significant first: depth bucket, then material, then mesh, then level.
+//
+// Material above mesh is E5's deferred third limb: two different meshes sharing
+// a material land adjacent, so the material block uploads once for both. Mesh
+// above level is what the batcher needs; level last because it only ever splits
+// a run that already agreed on everything else.
+typedef struct SortKey {
+    uint64_t key;
+    DrawItem item;
+} SortKey;
+
+static int sort_key_cmp(const void* a, const void* b) {
+    uint64_t ka = ((const SortKey*)a)->key;
+    uint64_t kb = ((const SortKey*)b)->key;
+    // Not (ka - kb): the difference of two uint64 wraps, and a comparator that
+    // wraps sorts arbitrarily rather than wrongly-but-consistently.
+    if (ka != kb)
+        return ka < kb ? -1 : 1;
+    return 0;
+}
+
+bool draw_list_sort_lane(DrawList* dst, const DrawList* src, uint8_t lane, const vec3 eye) {
+    if (!dst || !src)
+        return false;
+
+    dst->count = 0;
+    dst->gizmo_count = 0;
+    memset(dst->lane_count, 0, sizeof(dst->lane_count));
+
+    size_t n = src->lane_count[lane];
+    if (n == 0) {
+        dst->valid = true;
+        return true;
+    }
+
+    SortKey* keys = malloc(n * sizeof(SortKey));
+    if (!keys)
+        return false;
+
+    // Two passes over the lane: the first measures the depth range so the
+    // buckets span what is actually drawn rather than the far plane. A scene
+    // occupying a tenth of the frustum would otherwise land in three buckets and
+    // sort no better than not sorting at all.
+    size_t count = 0;
+    float near_d = 0.0f, far_d = 0.0f;
+    for (size_t i = 0; i < src->count; ++i) {
+        if (src->items[i].lane != lane)
+            continue;
+        float d = item_distance(&src->items[i], eye);
+        if (count == 0 || d < near_d)
+            near_d = d;
+        if (count == 0 || d > far_d)
+            far_d = d;
+        keys[count].item = src->items[i];
+        // Stash the distance; the bucket needs the range, which is not known yet.
+        memcpy(&keys[count].key, &d, sizeof(float));
+        count++;
+    }
+
+    float span = far_d - near_d;
+    // Everything at one depth: every bucket would be 0 anyway, and dividing by
+    // the span would not be defined.
+    float scale = span > 1e-4f ? (float)(DRAW_SORT_DEPTH_BUCKETS - 1) / span : 0.0f;
+
+    for (size_t i = 0; i < count; ++i) {
+        float d;
+        memcpy(&d, &keys[i].key, sizeof(float));
+        uint64_t bucket = (uint64_t)((d - near_d) * scale);
+        if (bucket >= DRAW_SORT_DEPTH_BUCKETS)
+            bucket = DRAW_SORT_DEPTH_BUCKETS - 1;
+
+        // NOTE: masked items are sorted along with everything else, and that is
+        // not free. A masked material writes finalOpacity < 1 into attachment 0,
+        // which still has SRC_ALPHA blending (engine.c:440 disables it only for
+        // slots >= 1), so reordering two overlapping leaf cards changes the
+        // pixel. Holding them out was measured and is worse on both counts: it
+        // wins no GPU time and still moves the image, because moving them after
+        // the opaques changes what they blend against.
+        const Material* mat = keys[i].item.mesh->material;
+        uint64_t mat_id = mat ? (uint64_t)mat->id : 0;
+        // 20 bits of material and 24 of mesh: a scene with more than a million
+        // materials or sixteen million meshes would alias two of them into one
+        // group, which costs a material upload and never a wrong picture.
+        keys[i].key = (bucket << 48) | ((mat_id & 0xFFFFF) << 28) |
+                      (((uint64_t)keys[i].item.mesh->id & 0xFFFFFF) << 4) |
+                      (uint64_t)keys[i].item.lod;
+    }
+
+    qsort(keys, count, sizeof(SortKey), sort_key_cmp);
+
+    for (size_t i = 0; i < count; ++i) {
+        if (!push(dst, keys[i].item)) {
+            free(keys);
+            return false;
+        }
+    }
+    free(keys);
+    dst->valid = true;
+    return true;
+}

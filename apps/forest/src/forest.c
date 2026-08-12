@@ -80,6 +80,9 @@ typedef struct ForestArgs {
     int profiler;
     int no_lod;
     int no_instancing;
+    int sort_opaque;      // opaque front-to-back ordering is off by default
+    int force_taa;        // TAA headless too; diagnostic, costs determinism
+    int headless_jitter;  // sub-pixel jitter headless; TAA is inert without it
     int render_mode;     // RenderMode override; 0 = PBR
     int no_spatial_sort; // scatter in draw order rather than Morton order
     int width, height;   // 0 = the default window size
@@ -734,6 +737,8 @@ static void on_init(Game* game) {
         engine->lod_enabled = false;
     if (g_args.no_instancing)
         engine->instancing_enabled = false;
+    if (g_args.sort_opaque)
+        engine->opaque_sort_enabled = true;
     if (g_args.lod_bias > 0.0f)
         engine->lod_bias = g_args.lod_bias;
 
@@ -907,6 +912,9 @@ static void print_usage(const char* argv0) {
     fprintf(stderr, "      --profiler          Per-pass timing + submission counters\n");
     fprintf(stderr, "      --no-lod            Draw every mesh at LOD level 0\n");
     fprintf(stderr, "      --no-instancing     One draw per mesh\n");
+    fprintf(stderr, "      --sort-opaque       Draw opaques front-to-back\n");
+    fprintf(stderr, "      --taa               TAA headless too (diagnostic)\n");
+    fprintf(stderr, "      --headless-jitter   Sub-pixel jitter headless\n");
     fprintf(stderr, "      --no-sky            Plain directional rig, no atmosphere\n");
     fprintf(stderr, "      --no-fog            Disable the volumetric fog\n");
     fprintf(stderr, "      --no-aerial         Keep the sky, drop aerial perspective\n");
@@ -946,6 +954,12 @@ int main(int argc, char** argv) {
             g_args.no_lod = 1;
         } else if (!strcmp(a, "--no-instancing")) {
             g_args.no_instancing = 1;
+        } else if (!strcmp(a, "--sort-opaque")) {
+            g_args.sort_opaque = 1;
+        } else if (!strcmp(a, "--taa")) {
+            g_args.force_taa = 1;
+        } else if (!strcmp(a, "--headless-jitter")) {
+            g_args.headless_jitter = 1;
         } else if (!strcmp(a, "--lod-bias") && i + 1 < argc) {
             g_args.lod_bias = strtof(argv[++i], NULL);
         } else if ((!strcmp(a, "-W") || !strcmp(a, "--width")) && i + 1 < argc) {
@@ -1004,6 +1018,20 @@ int main(int argc, char** argv) {
     game_set_update(game, on_update);
     game_set_render(game, on_render);
     game_set_shutdown(game, on_shutdown);
+
+    game->engine->headless_jitter = g_args.headless_jitter != 0;
+    // TAA replaces MSAA rather than joining it, which is what the render app has
+    // always done and what this app was missing: it shipped 4x MSAA with no
+    // temporal filter at all, so masked foliage got raw coverage dither and the
+    // dark A2C fringe spec 11.19 measured, with nothing to resolve either.
+    //
+    // Headless keeps MSAA and skips TAA unless asked, because jitter plus a
+    // history makes the frame sensitive to async load timing -- the same
+    // diagnostic-only escape the render app carries.
+    if (!g_args.headless || g_args.force_taa) {
+        set_engine_msaa_samples(game->engine, 1);
+        set_engine_taa_enabled(game->engine, true);
+    }
 
     run_game(game);
     free_game(game);

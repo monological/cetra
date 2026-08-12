@@ -764,6 +764,7 @@ static void _engine_gui_panel(Engine* engine) {
         _end_effect_group();
 
         igCheckbox("Instancing", &engine->instancing_enabled);
+        igCheckbox("Sort Opaque Front-to-Back", &engine->opaque_sort_enabled);
         // The bias greys out with selection because it has no meaning without
         // it: level 0 is level 0 at any distance.
         _begin_effect_group("LOD", &engine->lod_enabled);

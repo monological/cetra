@@ -41,6 +41,10 @@ typedef enum AlphaMode {
 } AlphaMode;
 
 typedef struct Material {
+    // Creation order. Same contract and same reason as Mesh.id: a stable key for
+    // grouping draws that share a material, where the pointer would order them
+    // by allocator address.
+    unsigned id;
     char* name; // authored material name (glTF/FBX); scene files match on it
     vec3 albedo;
     vec3 emissive;           // Emissive color factor (multiplied with emissive texture)

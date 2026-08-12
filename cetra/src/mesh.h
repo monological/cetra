@@ -85,6 +85,14 @@ typedef struct Mesh {
     // takes; more than one is geometry a file says is shared.
     int refs;
 
+    // Creation order, for a sort key that has to be STABLE across runs. The
+    // pointer identifies the same geometry and would sort correctly, but its
+    // value comes from the allocator -- so a sort keyed on it produces a
+    // different draw order run to run, and the 0 px bar every ordering arm rests
+    // on could not be met. Assigned once and never reused; two meshes never
+    // share one, so it also breaks ties the rest of a key leaves equal.
+    unsigned id;
+
     // LOD chain: simplified INDEX RANGES over the same vertices, concatenated
     // into the one EBO. No extra buffers, no extra VAO, and the offset works
     // just as well on glDrawElementsInstanced -- so a level composes with

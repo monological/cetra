@@ -240,6 +240,10 @@ Engine* create_engine(const char* window_title, int width, int height) {
     engine->oit_moments_enabled = true;
     engine->lod_enabled = true;
     engine->lod_bias = 1.0f;
+    // Off by default while it is being measured (spec 11.30). Unlike the two
+    // above it costs a copy and a sort every pass, and what it buys has not been
+    // shown yet -- so the default is the configuration with no new cost.
+    engine->opaque_sort_enabled = false;
 
     glm_mat4_identity(engine->model_matrix);
     glm_mat4_identity(engine->view_matrix);
@@ -299,6 +303,10 @@ Engine* create_engine(const char* window_title, int width, int height) {
 void free_engine(Engine* engine) {
     if (!engine)
         return;
+
+    // Borrows nothing: it holds copies of DrawItems, and a DrawItem borrows its
+    // mesh and node. So this is safe before or after the scenes go.
+    draw_list_free(&engine->sorted_opaque);
 
     // Free text renderer
     if (engine->text_renderer) {

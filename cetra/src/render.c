@@ -902,7 +902,16 @@ void render_current_scene(Engine* engine) {
     // is the one place where a sample surviving the depth test means the
     // uber-shader ran for it.
     profiler_samples_begin(engine->profiler);
-    _submit_lanes(engine, scene, &scene->draw_list, camera, *view, draw_projection, render_mode,
+    // Sorted from THIS pass's camera, not the frame's: a cube-capture face
+    // re-enters here with its own, and ordering a face against the main camera
+    // would put it backwards. Falls back to graph order if the copy cannot grow,
+    // which draws the right picture more slowly rather than dropping geometry.
+    const DrawList* opaque_list = &scene->draw_list;
+    if (engine->opaque_sort_enabled &&
+        draw_list_sort_lane(&engine->sorted_opaque, &scene->draw_list, DRAW_LANE_OPAQUE,
+                            camera->position))
+        opaque_list = &engine->sorted_opaque;
+    _submit_lanes(engine, scene, opaque_list, camera, *view, draw_projection, render_mode,
                   &submit_state, &frustum, 1u << DRAW_LANE_OPAQUE, OIT_SUBPASS_NONE);
     profiler_samples_end(engine->profiler);
     _submit_gizmos(&scene->draw_list, *view, draw_projection, &submit_state);

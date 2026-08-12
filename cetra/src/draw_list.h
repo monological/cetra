@@ -143,4 +143,31 @@ bool draw_item_visible(const DrawItem* item, const Frustum* frustum);
 // instances of a mesh at different distances cannot share a draw.
 bool draw_run_can_join(const DrawItem* head, const DrawItem* next, const Frustum* frustum);
 
+// Copy one lane out of `src` into `dst`, ordered coarsely front-to-back so early
+// depth rejection has something to reject with, then by material and mesh so the
+// batcher still finds its runs. `dst` is a scratch list owned by the caller;
+// `src` is left untouched.
+//
+// A COPY rather than a permutation of `src`, because the shadow pass reads the
+// same list and reorders would follow it there: its runs are formed from
+// adjacency too, and a camera-relative order means nothing in a light's frustum.
+//
+// Depth is BUCKETED, and that is the whole design rather than a shortcut. An
+// exact front-to-back sort puts every item at a distinct key, so the batcher --
+// which joins only CONSECUTIVE items sharing (mesh, lod) -- finds runs of one
+// and instancing collapses. Quantising to DRAW_SORT_DEPTH_BUCKETS leaves
+// identical meshes adjacent inside a bucket, so ordering and batching both get
+// most of what they want. The bucket count is the knob between them: more
+// buckets order better and batch worse.
+//
+// eye is where distance is measured from, and it must be THIS pass's camera --
+// a cube-capture face re-enters with a different one, and sorting a face against
+// the main camera would order it backwards.
+bool draw_list_sort_lane(DrawList* dst, const DrawList* src, uint8_t lane, const vec3 eye);
+
+// Buckets spanning the drawn depth range. A starting value, not a measured one:
+// the arms that would settle it compare draw count against depth complexity, and
+// both move with it in opposite directions.
+#define DRAW_SORT_DEPTH_BUCKETS 32
+
 #endif // DRAW_LIST_H

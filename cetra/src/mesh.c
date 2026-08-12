@@ -19,12 +19,19 @@
 #include "draw_list.h"
 #include "util.h"
 
+// Never reset and never reused, so an id identifies one mesh for the life of the
+// process. Wrapping after 4 billion creations would only cost a sort tie, and
+// nothing here allocates at a rate that reaches it.
+static unsigned g_next_mesh_id = 1;
+
 Mesh* create_mesh() {
     Mesh* mesh = malloc(sizeof(Mesh));
     if (!mesh) {
         log_error("Failed to allocate memory for Mesh");
         return NULL;
     }
+
+    mesh->id = g_next_mesh_id++;
 
     mesh->draw_mode = GL_TRIANGLES;
 

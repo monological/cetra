@@ -144,9 +144,17 @@ typedef struct Engine {
     // the same reason as view_ubo: the scene passes and the depth pass both
     // fill it, and it must outlive either.
     struct Ubo* instance_ubo;
-    bool instancing_enabled;     // false = every run submits one draw per mesh
-    bool lod_enabled;            // false = every draw takes LOD level 0
-    float lod_bias;              // > 1 holds detail longer, < 1 drops it sooner
+    bool instancing_enabled; // false = every run submits one draw per mesh
+    bool lod_enabled;        // false = every draw takes LOD level 0
+    float lod_bias;          // > 1 holds detail longer, < 1 drops it sooner
+    // true = the opaque lane is drawn coarsely front-to-back, grouped by
+    // material and mesh, instead of in graph order. Opaque geometry is
+    // order-independent, so this may not move a pixel; it moves what early-Z can
+    // reject and how often the material block uploads.
+    bool opaque_sort_enabled;
+    // Scratch for the above, owned by the engine because it is rebuilt every
+    // pass and freed once. Never the list the other passes read.
+    DrawList sorted_opaque;
     bool cluster_debug;          // Tint fragments by cluster light count (heatmap)
     bool scene_color_this_frame; // Resolve ran this frame; transmissive draws may sample
     bool normals_this_frame;     // Attachment 1 written this frame (PBR + consumer active)
