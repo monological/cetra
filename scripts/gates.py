@@ -2552,19 +2552,38 @@ def run_profiler_gate(workdir):
 # or the feature does not work. Nothing here can inherit the suite's flakiness.
 SUBMIT_FIXTURE = "instancing_fixture.cscn"
 SUBMIT_CASCADES = 3   # pinned on the command line below, not inherited from the C default
+# The eligibility fixture: one skinned mesh on two nodes. No .cscn -- it needs
+# no look, only a program that cannot read InstanceBlock.
+SKIN_FIXTURE = "skinned_instance_fixture.gltf"
 
 
-def _fixture_mesh_nodes():
+def _fixture_mesh_nodes(name="instancing_fixture.gltf"):
     """Mesh-bearing node count, read from the fixture rather than copied.
 
     A hand-mirrored constant goes stale the moment the generator changes and
     takes the arm with it -- silently, because the arm would still pass against
     whatever it was told to expect.
     """
-    path = os.path.join(ROOT, "assets", "instancing_fixture.gltf")
+    path = os.path.join(ROOT, "assets", name)
     with open(path) as f:
         gltf = json.load(f)
     return sum(1 for n in gltf["nodes"] if "mesh" in n)
+
+
+def _ubo_instance_max():
+    """The chunk size, read from ubo.h for the same reason as the node count.
+
+    inst-count's expected draw count is mesh_nodes divided by this. Mirroring
+    it here would let the C constant move while the arm kept asserting the old
+    quotient -- and passing, because it would still be checking the renderer
+    against a number it made up.
+    """
+    path = os.path.join(ROOT, "cetra", "src", "ubo.h")
+    with open(path) as f:
+        m = re.search(r"^#define\s+UBO_INSTANCE_MAX\s+(\d+)", f.read(), re.M)
+    if not m:
+        raise RuntimeError("UBO_INSTANCE_MAX not found in cetra/src/ubo.h")
+    return int(m.group(1))
 
 
 def _submit_run(workdir, tag, extra, cascades=SUBMIT_CASCADES):
@@ -2750,7 +2769,7 @@ def run_submission_gate(workdir):
     # CETRA_INSTANCE_MAX rather than one at a time -- and every mesh must still
     # be accounted for, which is what separates real batching from dropped
     # geometry. The shadow pass batches the same way per cascade.
-    inst_max = 64
+    inst_max = _ubo_instance_max()
     want_opaque_draws = -(-(mesh_nodes - 1) // inst_max) + 1  # props in chunks, ground alone
     ok = (opaque.get("draws") == want_opaque_draws
           and opaque.get("instances") == mesh_nodes
@@ -2762,36 +2781,13 @@ def run_submission_gate(workdir):
     if not ok:
         failures.append("inst-count")
 
-    # --- inst-identity: batched and unbatched draw the same picture ---------
-    # The UBO carries the same floats into the same shader arithmetic, so this
-    # is 0 px by construction rather than by tolerance. It is the arm the
-    # attribute-divisor alternative could not have had: packing transforms into
-    # the free vertex slots needs the normal matrix derived in-shader, which
-    # differs in the last bits from the CPU-side one.
-    on = os.path.join(workdir, "inst_on.ppm")
-    off = os.path.join(workdir, "inst_off.ppm")
-    fixture_path = os.path.join(ROOT, "assets", SUBMIT_FIXTURE)
-    err = render(fixture_path, on, ["--shadow-cascades", str(SUBMIT_CASCADES)])
-    if err is None:
-        err = render(fixture_path, off, ["--shadow-cascades", str(SUBMIT_CASCADES),
-                                         "--no-instancing"])
-    if err is not None:
-        print(f"  inst-identity ERROR {err.strip()[-200:]}")
-        failures.append("inst-identity")
-    else:
-        ae, _ = compare(on, off)
-        ok = ae == 0
-        print(f"  inst-identity {'PASS' if ok else 'FAIL'}  {ae} px between batched and "
-              f"unbatched (want 0)")
-        if not ok:
-            failures.append("inst-identity")
-
     # --- inst-off: the flag reaches the batching it names -------------------
     # Without this, inst-identity passes trivially for a flag that does nothing
     # -- both runs would simply be the batched path.
     unbatched = _submit_run(workdir, "nobatch", ["--no-instancing"])
     if unbatched is None:
         failures.append("inst-off")
+        failures.append("inst-identity")
     else:
         un_opaque = unbatched["submit"].get("opaque", {})
         ok = (un_opaque.get("draws") == mesh_nodes
@@ -2801,6 +2797,67 @@ def run_submission_gate(workdir):
               f"draw per mesh)")
         if not ok:
             failures.append("inst-off")
+
+        # --- inst-identity: batched and unbatched draw the same picture -----
+        # The UBO carries the same floats into the same shader arithmetic, so
+        # this is 0 px by construction rather than by tolerance. It is the arm
+        # the attribute-divisor alternative could not have had: packing
+        # transforms into the free vertex slots needs the normal matrix derived
+        # in-shader, which differs in the last bits from the CPU-side one.
+        #
+        # Both frames come from runs the arms above already paid for, which is
+        # what puts them on _gpu_cmd's pinned exposure. Rendering them here
+        # instead cost two extra renders AND dropped the pin, leaving the arm
+        # asserting 0 px across a live auto-exposure -- the one difference
+        # CLAUDE.md names as able to move every pixel in the frame.
+        on = os.path.join(workdir, "gpu_submit_base.ppm")
+        off = os.path.join(workdir, "gpu_submit_nobatch.ppm")
+        ae, _ = compare(on, off)
+        ok = ae == 0
+        print(f"  inst-identity {'PASS' if ok else 'FAIL'}  {ae} px between batched and "
+              f"unbatched (want 0)")
+        if not ok:
+            failures.append("inst-identity")
+
+    # --- skinned-nobatch: a run needs a program that can READ the instances --
+    # Every batching precondition except one: two adjacent nodes, one shared
+    # skinned mesh, one material. pbr_skinned takes the object transform from a
+    # plain uniform and declares no instance block, so batching the pair draws
+    # both copies at the first node's transform and the second quad vanishes.
+    #
+    # Asserted on draws rather than on pixels because the count says WHY: one
+    # draw carrying two instances is the defect itself, where a pixel diff only
+    # says the frame moved. The inverse arm below supplies the pixels.
+    skin_nodes = _fixture_mesh_nodes(SKIN_FIXTURE)
+    skinned = _profiled_run(workdir, "skin_on", [], fixture=SKIN_FIXTURE, size=("400", "300"))
+    if skinned is None:
+        failures.append("skinned-nobatch")
+        failures.append("skinned-identity")
+    else:
+        sk_opaque = skinned["submit"].get("opaque", {})
+        ok = (sk_opaque.get("draws") == skin_nodes
+              and sk_opaque.get("instances") == skin_nodes)
+        print(f"  skinned-nobatch {'PASS' if ok else 'FAIL'}  {sk_opaque.get('draws')} draws for "
+              f"{sk_opaque.get('instances')} instances (want both {skin_nodes}: a program "
+              f"without InstanceBlock may never carry more than one)")
+        if not ok:
+            failures.append("skinned-nobatch")
+
+        # --- skinned-identity: and the frame proves it is not merely counted -
+        # Measured at 171757 px (35.8%) against a build that batched these --
+        # the whole second quad. An arm that can fail, and did.
+        skin_off = _profiled_run(workdir, "skin_off", ["--no-instancing"],
+                                 fixture=SKIN_FIXTURE, size=("400", "300"))
+        if skin_off is None:
+            failures.append("skinned-identity")
+        else:
+            ae, _ = compare(os.path.join(workdir, "gpu_skin_on.ppm"),
+                            os.path.join(workdir, "gpu_skin_off.ppm"))
+            ok = ae == 0
+            print(f"  skinned-identity {'PASS' if ok else 'FAIL'}  {ae} px between default and "
+                  f"--no-instancing (want 0: neither may batch this)")
+            if not ok:
+                failures.append("skinned-identity")
 
     # --- submit-cull: the counters are attached to submission, not to nodes -
     # A camera aimed away empties the camera pass. The shadow pass follows the

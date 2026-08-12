@@ -607,8 +607,13 @@ static void _draw_shadow_items(const DrawList* list, ShaderProgram* program, Sub
             UniformManager* u = program->uniforms;
             bool foliage = (item->flags & DRAW_FOLIAGE) != 0;
 
+            // The depth stage reads InstanceBlock, so casters batch here even
+            // when the same mesh cannot batch on the camera path: skinning is
+            // a single global pose, which every instance of one mesh shares by
+            // definition. Gated on the program all the same, so this follows
+            // the shader rather than restating what it does.
             size_t run = 1;
-            if (engine && engine->instancing_enabled && engine->instance_ubo)
+            if (engine && engine->instancing_enabled && engine->instance_ubo && program->instanced)
                 run = _visible_caster_run(list, idx, set, frustum, mesh);
             if (run > 1) {
                 for (size_t k = 0; k < run; ++k) {

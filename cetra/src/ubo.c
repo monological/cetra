@@ -47,28 +47,31 @@ void ubo_upload(Ubo* ubo, const void* data, GLsizeiptr size) {
     glBindBuffer(GL_UNIFORM_BUFFER, 0);
 }
 
-void ubo_wire_program_block(GLuint program_id, const char* block_name, GLuint binding,
+bool ubo_wire_program_block(GLuint program_id, const char* block_name, GLuint binding,
                             GLsizeiptr expected_size) {
     GLuint index = glGetUniformBlockIndex(program_id, block_name);
     if (index == GL_INVALID_INDEX)
-        return; // program doesn't reference this block
+        return false; // program doesn't reference this block
 
     glUniformBlockBinding(program_id, index, binding);
 
     GLint data_size = 0;
     glGetActiveUniformBlockiv(program_id, index, GL_UNIFORM_BLOCK_DATA_SIZE, &data_size);
-    if ((GLsizeiptr)data_size != expected_size)
+    if ((GLsizeiptr)data_size != expected_size) {
         log_error("UBO block '%s': driver std140 size %d != C-side %ld -- layout mismatch",
                   block_name, data_size, (long)expected_size);
+        return false;
+    }
+    return true;
 }
 
-void ubo_wire_blocks(GLuint program_id) {
+bool ubo_wire_blocks(GLuint program_id) {
     ubo_wire_program_block(program_id, "LightsBlock", UBO_BINDING_LIGHTS, UBO_LIGHTS_BLOCK_SIZE);
     ubo_wire_program_block(program_id, "ClusterBlock", UBO_BINDING_CLUSTERS,
                            UBO_CLUSTERS_BLOCK_SIZE);
     ubo_wire_program_block(program_id, "ClusterIndexBlock", UBO_BINDING_CLUSTER_INDICES,
                            UBO_CLUSTER_INDICES_BLOCK_SIZE);
     ubo_wire_program_block(program_id, "ViewParams", UBO_BINDING_VIEW, UBO_VIEW_BLOCK_SIZE);
-    ubo_wire_program_block(program_id, "InstanceBlock", UBO_BINDING_INSTANCES,
-                           UBO_INSTANCES_BLOCK_SIZE);
+    return ubo_wire_program_block(program_id, "InstanceBlock", UBO_BINDING_INSTANCES,
+                                  UBO_INSTANCES_BLOCK_SIZE);
 }

@@ -65,12 +65,25 @@ void ubo_upload(Ubo* ubo, const void* data, GLsizeiptr size);
 // mismatch). Call once after link. A program without the block -- absent, or
 // stripped as unreferenced -- is a no-op: glGetUniformBlockIndex returns
 // GL_INVALID_INDEX, so one lookup answers both questions.
-void ubo_wire_program_block(GLuint program_id, const char* block_name, GLuint binding,
+//
+// Returns whether the program can actually read this block: present AND the
+// driver's layout agrees with ours. A mismatch returns false rather than
+// wiring it anyway, so a caller that gates on the result reads no floats
+// through a layout it does not understand.
+bool ubo_wire_program_block(GLuint program_id, const char* block_name, GLuint binding,
                             GLsizeiptr expected_size);
 
 // Wire every engine-owned block a program might declare: the three
-// clustered-forward light blocks (spec 9.1) and ViewParams (spec 10.1).
-// Programs that don't sample a block are unaffected.
+// clustered-forward light blocks (spec 9.1), ViewParams (spec 10.1) and
+// InstanceBlock (spec 11.28). Programs that don't sample a block are
+// unaffected.
+//
+// Returns whether the program declares a usable InstanceBlock. Every other
+// block is data a shader reads or ignores; this one alone changes what the
+// SUBMITTER may do, because a program without it takes its transform from a
+// per-draw uniform and a batch would draw every instance at the first one's.
+// Resolving it from the linked program is what makes that structural rather
+// than a hand-kept list of which programs are safe to batch.
 //
 // ViewParams goes through here rather than a per-program upload on purpose. It
 // carries the working-space contract, which EVERY pass writing scene radiance
@@ -78,6 +91,6 @@ void ubo_wire_program_block(GLuint program_id, const char* block_name, GLuint bi
 // do their own glUseProgram and are missed by render.c's scene-traversal
 // uniform block. Eight hand-maintained upload sites is how a ninth pass gets
 // added silently wrong.
-void ubo_wire_blocks(GLuint program_id);
+bool ubo_wire_blocks(GLuint program_id);
 
 #endif // _UBO_H_

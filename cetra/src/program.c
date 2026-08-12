@@ -12,7 +12,7 @@
 static ShaderProgram* create_post_program(const char* name, const char* frag_src);
 
 ShaderProgram* create_program(const char* name) {
-    ShaderProgram* program = malloc(sizeof(ShaderProgram));
+    ShaderProgram* program = calloc(1, sizeof(ShaderProgram));
     if (!program) {
         log_error("Failed to allocate memory for shader program");
         return NULL;
@@ -303,7 +303,7 @@ GLboolean reload_program_from_paths(ShaderProgram* program, const char* vert_pat
     }
 
     // Block bindings are program state reset by re-linking; re-wire them
-    ubo_wire_blocks(program->id);
+    program->instanced = ubo_wire_blocks(program->id);
 
     log_info("Reloaded shader program: %s", program->name);
     return GL_TRUE;
@@ -415,8 +415,9 @@ void setup_program_uniforms(ShaderProgram* program) {
 
     // Clustered-forward blocks (spec 9.1): bind to the global binding points
     // and guard against C/GLSL layout drift. No-ops for programs that don't
-    // declare (or strip) them.
-    ubo_wire_blocks(program->id);
+    // declare (or strip) them. InstanceBlock is the one whose absence the
+    // submitter has to know about, so its answer is kept on the program.
+    program->instanced = ubo_wire_blocks(program->id);
 }
 
 ShaderProgram* create_pbr_program() {

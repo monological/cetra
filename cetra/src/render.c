@@ -594,8 +594,16 @@ static void _submit_lanes(const Engine* engine, Scene* scene, const DrawList* li
 
         // How many of the following items this draw can carry. One is the
         // ordinary path and issues exactly what it always did.
+        //
+        // Only a program that reads InstanceBlock may carry more than one: the
+        // rest take their transform from a per-draw uniform, so a batch would
+        // stack every instance on the first one's transform and the others
+        // would simply not appear. pbr_skinned is in that class, and so is any
+        // program an app assigns to a scene mesh.
+        const Material* mat = item->mesh->material;
+        bool batchable = mat && mat->shader_program && mat->shader_program->instanced;
         size_t run = 1;
-        if (engine->instancing_enabled && engine->instance_ubo)
+        if (batchable && engine->instancing_enabled && engine->instance_ubo)
             run = _visible_run(list, i, lanes, frustum, item->mesh);
         if (run > 1) {
             for (size_t k = 0; k < run; ++k) {

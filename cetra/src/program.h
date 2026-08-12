@@ -1,6 +1,8 @@
 #ifndef _PROGRAM_H_
 #define _PROGRAM_H_
 
+#include <stdbool.h>
+
 #include "shader.h"
 #include "uniform.h"
 
@@ -12,6 +14,11 @@ typedef struct ShaderProgram {
     Shader** shaders;
     size_t shader_count;
     UniformManager* uniforms;
+    // Whether this program reads its per-object transforms from InstanceBlock,
+    // resolved from the linked program (ubo_wire_blocks). False means a draw
+    // must carry exactly one object: the transform arrives as a plain uniform,
+    // so every instance of a batched draw would land on the first one's.
+    bool instanced;
     UT_hash_handle hh;
 } ShaderProgram;
 

@@ -1,0 +1,173 @@
+{
+  "asset": {
+    "version": "2.0",
+    "generator": "gen_skinned_instance_fixture.py"
+  },
+  "materials": [
+    {
+      "name": "QuadWarm",
+      "doubleSided": true,
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [
+          0.78,
+          0.62,
+          0.44,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.55
+      }
+    }
+  ],
+  "scene": 0,
+  "scenes": [
+    {
+      "nodes": [
+        0,
+        1,
+        2
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "name": "Joint_Root"
+    },
+    {
+      "name": "SkinnedQuad_A",
+      "mesh": 0,
+      "skin": 0,
+      "translation": [
+        -0.55,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "name": "SkinnedQuad_B",
+      "mesh": 0,
+      "skin": 0,
+      "translation": [
+        0.55,
+        0.0,
+        0.0
+      ]
+    }
+  ],
+  "skins": [
+    {
+      "joints": [
+        0
+      ],
+      "inverseBindMatrices": 5
+    }
+  ],
+  "meshes": [
+    {
+      "name": "SkinnedQuad",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 0,
+            "NORMAL": 1,
+            "JOINTS_0": 3,
+            "WEIGHTS_0": 4
+          },
+          "indices": 2,
+          "material": 0
+        }
+      ]
+    }
+  ],
+  "accessors": [
+    {
+      "bufferView": 0,
+      "componentType": 5126,
+      "count": 4,
+      "type": "VEC3",
+      "min": [
+        -0.4,
+        -0.4,
+        0.0
+      ],
+      "max": [
+        0.4,
+        0.4,
+        0.0
+      ]
+    },
+    {
+      "bufferView": 1,
+      "componentType": 5126,
+      "count": 4,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 2,
+      "componentType": 5123,
+      "count": 6,
+      "type": "SCALAR"
+    },
+    {
+      "bufferView": 3,
+      "componentType": 5123,
+      "count": 4,
+      "type": "VEC4"
+    },
+    {
+      "bufferView": 4,
+      "componentType": 5126,
+      "count": 4,
+      "type": "VEC4"
+    },
+    {
+      "bufferView": 5,
+      "componentType": 5126,
+      "count": 1,
+      "type": "MAT4"
+    }
+  ],
+  "bufferViews": [
+    {
+      "buffer": 0,
+      "byteOffset": 0,
+      "byteLength": 48,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 48,
+      "byteLength": 48,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 96,
+      "byteLength": 12,
+      "target": 34963
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 108,
+      "byteLength": 32,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 140,
+      "byteLength": 64,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 204,
+      "byteLength": 64
+    }
+  ],
+  "buffers": [
+    {
+      "byteLength": 268,
+      "uri": "data:application/octet-stream;base64,zczMvs3MzL4AAAAAzczMPs3MzL4AAAAAzczMPs3MzD4AAAAAzczMvs3MzD4AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAABAAIAAAACAAMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAAAAAACAPw=="
+    }
+  ]
+}
