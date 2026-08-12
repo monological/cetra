@@ -906,8 +906,17 @@ void render_current_scene(Engine* engine) {
     // re-enters here with its own, and ordering a face against the main camera
     // would put it backwards. Falls back to graph order if the copy cannot grow,
     // which draws the right picture more slowly rather than dropping geometry.
+    // Not during a capture, on cost alone: a cubemap face is small enough that
+    // the overdraw saved is worth less than the sort of the whole lane, and a
+    // bake pays that six times a face. A capture is also the one consumer that
+    // reads the frame back instead of displaying it, so anything it does differ
+    // by resurfaces later as changed irradiance rather than as a faster pass.
+    //
+    // This does NOT fix cornell_box's 1 px (spec 11.30): that survives the
+    // exclusion and comes from the camera pass, where two coplanar quads tie on
+    // depth and GL_LESS breaks the tie by whichever drew first.
     const DrawList* opaque_list = &scene->draw_list;
-    if (engine->opaque_sort_enabled &&
+    if (engine->opaque_sort_enabled && !engine->capturing &&
         draw_list_sort_lane(&engine->sorted_opaque, &scene->draw_list, DRAW_LANE_OPAQUE,
                             camera->position))
         opaque_list = &engine->sorted_opaque;

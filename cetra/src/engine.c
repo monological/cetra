@@ -240,10 +240,14 @@ Engine* create_engine(const char* window_title, int width, int height) {
     engine->oit_moments_enabled = true;
     engine->lod_enabled = true;
     engine->lod_bias = 1.0f;
-    // Off by default while it is being measured (spec 11.30). Unlike the two
-    // above it costs a copy and a sort every pass, and what it buys has not been
-    // shown yet -- so the default is the configuration with no new cost.
-    engine->opaque_sort_enabled = false;
+    // On by default (spec 11.30): -29% of the opaque pass on apps/forest, for a
+    // per-pass copy and a qsort of one lane. --no-sort-opaque is the escape.
+    //
+    // Unlike --no-instancing this one is NOT a 0 px flag, and the reason is a
+    // defect it did not cause: masked materials still blend into attachment 0
+    // (engine.c:440), so reordering them changes the picture. What it changes is
+    // the loss of shading that hidden leaves were contributing -- see 11.30.
+    engine->opaque_sort_enabled = true;
 
     glm_mat4_identity(engine->model_matrix);
     glm_mat4_identity(engine->view_matrix);

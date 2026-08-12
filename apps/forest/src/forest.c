@@ -80,7 +80,7 @@ typedef struct ForestArgs {
     int profiler;
     int no_lod;
     int no_instancing;
-    int sort_opaque;      // opaque front-to-back ordering is off by default
+    int no_sort_opaque;   // opaque front-to-back ordering is on by default
     int force_taa;        // TAA headless too; diagnostic, costs determinism
     int headless_jitter;  // sub-pixel jitter headless; TAA is inert without it
     int render_mode;     // RenderMode override; 0 = PBR
@@ -737,8 +737,8 @@ static void on_init(Game* game) {
         engine->lod_enabled = false;
     if (g_args.no_instancing)
         engine->instancing_enabled = false;
-    if (g_args.sort_opaque)
-        engine->opaque_sort_enabled = true;
+    if (g_args.no_sort_opaque)
+        engine->opaque_sort_enabled = false;
     if (g_args.lod_bias > 0.0f)
         engine->lod_bias = g_args.lod_bias;
 
@@ -912,7 +912,7 @@ static void print_usage(const char* argv0) {
     fprintf(stderr, "      --profiler          Per-pass timing + submission counters\n");
     fprintf(stderr, "      --no-lod            Draw every mesh at LOD level 0\n");
     fprintf(stderr, "      --no-instancing     One draw per mesh\n");
-    fprintf(stderr, "      --sort-opaque       Draw opaques front-to-back\n");
+    fprintf(stderr, "      --no-sort-opaque    Draw opaques in graph order\n");
     fprintf(stderr, "      --taa               TAA headless too (diagnostic)\n");
     fprintf(stderr, "      --headless-jitter   Sub-pixel jitter headless\n");
     fprintf(stderr, "      --no-sky            Plain directional rig, no atmosphere\n");
@@ -954,8 +954,8 @@ int main(int argc, char** argv) {
             g_args.no_lod = 1;
         } else if (!strcmp(a, "--no-instancing")) {
             g_args.no_instancing = 1;
-        } else if (!strcmp(a, "--sort-opaque")) {
-            g_args.sort_opaque = 1;
+        } else if (!strcmp(a, "--no-sort-opaque")) {
+            g_args.no_sort_opaque = 1;
         } else if (!strcmp(a, "--taa")) {
             g_args.force_taa = 1;
         } else if (!strcmp(a, "--headless-jitter")) {

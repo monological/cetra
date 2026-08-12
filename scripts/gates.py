@@ -2750,15 +2750,23 @@ def run_forest_gate(workdir):
             failures.append("forest-batch-off")
 
     # --- forest-batch: the scatter actually batches -------------------------
-    # Measured with LOD OFF, on the run forest-lod already pays for. With LOD on
-    # the ratio conflates two things -- run contiguity, which this arm is about,
-    # and (mesh, lod) fragmentation, which the spec documents as a real and
-    # variable effect. That conflation is not academic: the default framing
-    # gives 2.31 at the pinned seed and 1.94 at --seed 7, so a threshold with
-    # any useful margin cannot be set on it. With LOD off the same property
-    # reads 13.2 and 10.4.
-    draws, inst = opaque["draws"], opaque["instances"]
-    nolod = _forest_run(workdir, "nolod", ["--no-lod"])
+    # Measured with LOD OFF and SORTING OFF, because the batcher joins only
+    # consecutive items sharing (mesh, lod) and each of those is a separate
+    # source of fragmentation this arm is not about:
+    #
+    #   LOD    splits a prototype spanning a distance range across levels.
+    #   SORT   scatters identical meshes across DRAW_SORT_DEPTH_BUCKETS.
+    #
+    # Neither conflation is academic. With LOD on the ratio reads 2.31 at the
+    # pinned seed and 1.94 at --seed 7, so no threshold with useful margin can
+    # sit on it; with sorting on as well it reads 2.1. With both off the same
+    # property reads 13.2 and 10.4, which is a claim about the batcher.
+    #
+    # This is not the threshold being relaxed to fit: the floor stays at 8, and
+    # both flags remove a KNOWN confounder rather than a regression. What the
+    # shipping configuration costs in draws is forest-order's business.
+    inst = opaque["instances"]
+    nolod = _forest_run(workdir, "nolod", ["--no-lod", "--no-sort-opaque"])
     if nolod is None:
         failures.append("forest-batch")
         failures.append("forest-lod")
@@ -2768,7 +2776,7 @@ def run_forest_gate(workdir):
         ratio = (n_inst / n_draws) if n_draws else 0.0
         ok = ratio >= 8.0
         print(f"  forest-batch {'PASS' if ok else 'FAIL'}  opaque {n_inst} instances in {n_draws} "
-              f"draws with LOD off (ratio {ratio:.1f}, want >= 8)")
+              f"draws with LOD and sorting off (ratio {ratio:.1f}, want >= 8)")
         if not ok:
             failures.append("forest-batch")
 
@@ -2777,6 +2785,12 @@ def run_forest_gate(workdir):
         # back over scattered content reveals more world, so triangles rise with
         # distance however well LOD works. Identical instances is what proves the
         # difference is level selection and not visibility.
+        #
+        # The two runs also differ in --no-sort-opaque, which the shared nolod
+        # run carries for forest-batch above. That is safe HERE and only here:
+        # sorting reorders draws without changing which meshes survive the
+        # frustum, so it moves neither instances nor triangles -- the only two
+        # columns this arm reads.
         same_vis = n_inst == inst
         saving = 1.0 - (opaque["triangles"] / n["triangles"]) if n["triangles"] else 0.0
         ok = same_vis and saving >= 0.10
@@ -2791,16 +2805,25 @@ def run_forest_gate(workdir):
     # guard is that instances and triangles must be IDENTICAL: the two runs draw
     # exactly the same geometry, and the only thing that changed is whether the
     # survivors of a frustum test ended up next to each other in the list.
-    unsorted_run = _forest_run(workdir, "nosort", ["--no-spatial-sort"])
-    if unsorted_run is None:
+    #
+    # Both runs take --no-sort-opaque, because the depth sort REPLACES the
+    # scatter order this arm is about: with it on the comparison reads 1684 vs
+    # 1819 instead of 1287 vs 2368, which is the arm measuring the bucket count
+    # rather than the Morton ordering. Sorting moves neither instances nor
+    # triangles, so the base run stays usable as the sorted side elsewhere.
+    sorted_run = _forest_run(workdir, "morton", ["--no-sort-opaque"])
+    unsorted_run = _forest_run(workdir, "nosort", ["--no-sort-opaque", "--no-spatial-sort"])
+    if sorted_run is None or unsorted_run is None:
         failures.append("forest-order")
     else:
+        s = sorted_run["opaque"]
         u = unsorted_run["opaque"]
-        same_work = u["instances"] == inst and u["triangles"] == opaque["triangles"]
-        ok = same_work and draws < u["draws"]
-        print(f"  forest-order {'PASS' if ok else 'FAIL'}  Morton {draws} draws vs unsorted "
-              f"{u['draws']}, same {inst} instances and "
-              f"{'same' if u['triangles'] == opaque['triangles'] else 'DIFFERENT'} "
+        m_draws, m_inst = s["draws"], s["instances"]
+        same_work = u["instances"] == m_inst and u["triangles"] == s["triangles"]
+        ok = same_work and m_draws < u["draws"]
+        print(f"  forest-order {'PASS' if ok else 'FAIL'}  Morton {m_draws} draws vs unsorted "
+              f"{u['draws']}, same {m_inst} instances and "
+              f"{'same' if u['triangles'] == s['triangles'] else 'DIFFERENT'} "
               f"triangles (want fewer draws for identical work)")
         if not ok:
             failures.append("forest-order")

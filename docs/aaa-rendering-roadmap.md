@@ -624,6 +624,18 @@ floor on depth complexity, not an estimate: above 1 proves redundant shading, ne
 its absence. And 1.85 is a whole-frame average including sky, where no opaque sample passes at all;
 within the covered region it is materially higher.
 
+**And that caveat immediately proved load-bearing: the real figure is 3.87.** Forest was running 4x
+MSAA with no temporal filter, so a leaf at alpha 0.5 wrote two samples of four and the counter saw
+half the fragments that actually shaded. Giving the app TAA instead of MSAA — what the render app has
+always done, and what forest was missing — drops the sample budget 4x and the reading rises **1.85 →
+3.87**, at the same time as costing 29% less (opaque 551 → 393 ms, frame 578 → 427).
+
+So the withdrawal above is itself partly withdrawn: the prize is roughly twice what Phase 0 recorded,
+though still not the whole 312 ms. **Every number in this section was taken on the MSAA path and
+understates the true depth complexity by about half.** The lesson worth keeping is not any of the
+figures but that three consecutive readings of this scene — 1.85, 2.78, 3.87 — each looked
+authoritative and each was an artefact of the configuration it was taken in.
+
 The honest position is that the *prize* is now unmeasured rather than large, and 11.30's Phase 4
 exists to measure it. What has not moved is the diagnosis: neither triangles nor draws nor MSAA is
 the limit, and the opaque pass shades every layer it is handed because nothing rejects them first.

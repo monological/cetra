@@ -47,7 +47,7 @@ typedef struct {
     int no_translucent_shadows; // Force it off (the off-path and inverse arms)
     int profiler_enabled;       // Per-pass GPU + CPU time and submission counts
     int no_instancing;          // Force one draw per mesh (the identity arm)
-    int sort_opaque;            // Draw the opaque lane front-to-back (default off, spec 11.30)
+    int no_sort_opaque;         // Draw the opaque lane in graph order (default is sorted)
     int no_lod;                 // Draw every mesh at LOD level 0
     float lod_bias;             // LOD distance bias (0 = keep engine default)
     int msm;                    // Moment shadow maps; excludes PCSS
