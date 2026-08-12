@@ -603,15 +603,44 @@ ordinary authoring choices: the foliage material is `doubleSided` (backface cull
 card rasterizes twice) and `ALPHA_MASK` (a shader that can `discard` cannot have its depth resolved
 before it runs, so those draws forfeit early-Z outright).
 
-**This wall was invisible for the length of Tiers 1-3 for a structural reason, not an accidental
-one.** The corpus was props, a character and an interior — content with no depth complexity, where
-submission genuinely is the bottleneck and Wall 2's framing is correct. E4's per-pass timings were
-taken on exactly that content. The word "overdraw" appears nowhere in this document or in any spec
-before this entry. `apps/forest` was built to exercise E5 and its spec measures triangles, draws and
-material switches throughout — every one a submission metric — while carrying `opaque GPU 435 ms` in
-its own results table, read as a baseline for comparing LOD settings rather than as one pass taking
-435 milliseconds. The instrument was right, present, and pointed at the answer; the model decided
-what the number meant.
+**Measured, and it is not what the paragraphs above assumed.** 11.30's Phase 0 added the instrument
+this section was written without — `GL_SAMPLES_PASSED` around the opaque pass, against the frame's
+sample budget — and the reading reorders the story:
+
+| scene | opaque GPU | depth complexity | samples/sec |
+|---|---|---|---|
+| `apps/forest` | 312 ms | **1.85** | 137M |
+| `abandoned_window_shadowed` | 35 ms | **2.78** | 602M |
+
+So the interior has *more* redundant shading than the forest, and the forest shades **4.4x slower per
+sample**. Forest's 312 ms is therefore mostly per-sample shader cost, not overdraw — which means a
+prepass cannot be worth the 250 ms this entry's last line claims, and that line is now an upper bound
+nothing has demonstrated.
+
+Two caveats keep this from settling the question in the other direction. The counter counts samples
+that PASS, and **a fragment that `discard`s costs a full shader invocation while passing nothing** —
+so it understates the work exactly where alpha-masked foliage dominates, which is forest. It is a
+floor on depth complexity, not an estimate: above 1 proves redundant shading, near 1 does not prove
+its absence. And 1.85 is a whole-frame average including sky, where no opaque sample passes at all;
+within the covered region it is materially higher.
+
+The honest position is that the *prize* is now unmeasured rather than large, and 11.30's Phase 4
+exists to measure it. What has not moved is the diagnosis: neither triangles nor draws nor MSAA is
+the limit, and the opaque pass shades every layer it is handed because nothing rejects them first.
+
+**This wall was invisible for the length of Tiers 1-3 because nothing measured it**, and the word
+"overdraw" appears nowhere in this document or in any spec before this entry. `apps/forest` was built
+to exercise E5 and its spec measures triangles, draws and material switches throughout — every one a
+submission metric — while carrying `opaque GPU 435 ms` in its own results table, read as a baseline
+for comparing LOD settings rather than as one pass taking 435 milliseconds. The timing instrument was
+right, present, and pointed at the answer; the model decided what the number meant.
+
+*An earlier draft of this paragraph explained the blindness by asserting the corpus had "no depth
+complexity" — props, a character and an interior, where submission genuinely is the bottleneck.
+**Measurement withdrew that**: the interior reads 2.78 against forest's 1.85, the highest in anything
+tried. The corpus was never short of depth complexity; it was short of an instrument, and the
+explanation was a second guess offered in the same breath as admitting the first one had gone
+unchecked.*
 
 **Wall 3 — the GPU is unmeasured — REMOVED (spec 11.27).** Per-pass `GL_TIME_ELAPSED` scopes, a
 ring of N-frame-deep results, a HUD table and submission counters. It was the cheapest wall to remove
@@ -928,10 +957,20 @@ Four things the specs established that no fixture had shown before, all in 11.29
 
 **Depends on:** E4 (soft — done first, as intended; the LOD thresholds are measured, not guessed).
 
-### E6. Depth prepass + opaque draw ordering — Effort M
-**Wall 4**, taken directly, and the highest-value perf item on this document by a wide margin — the
-312 ms of a 346 ms timed frame is what it addresses. Two halves that share one design and must be
-measured together.
+### E6. Depth prepass + opaque draw ordering — Effort M — **IN PROGRESS (spec 11.30)**
+**Wall 4**, taken directly: the 312 ms of a 346 ms timed frame is what it addresses. Two halves that
+share one design and must be measured together.
+
+**Phase 0 shipped and it moved the goalposts.** The depth-complexity instrument this item needed did
+not exist, so it was built first — `GL_SAMPLES_PASSED` around the opaque pass — and it reads **1.85 on
+`apps/forest`, 2.78 on the interior**. This entry previously called E6 "the highest-value perf item on
+this document by a wide margin"; that claim rested on an unmeasured assumption about overdraw and is
+**withdrawn**. The prize is now unmeasured rather than large, and Phase 4 exists to measure it.
+
+Nothing about the *diagnosis* moved — neither triangles nor draws nor MSAA is the limit, and the
+opaque pass still shades every layer handed to it. But the counter is a floor, not an estimate: a
+discarding fragment costs an invocation and passes no sample, so forest's foliage is undercounted by
+construction. Both directions of that uncertainty are live until Phase 4 renders a verdict.
 
 **The prepass.** Render opaque depth-only first, then shade with `glDepthFunc(GL_EQUAL)` and
 `glDepthMask(GL_FALSE)`. Every hidden fragment is then rejected by the depth test before the uber-shader
@@ -1100,7 +1139,7 @@ not scheduled.
 | 28 | E2 3D LUT grading | S | Colourist workflow. Watch the working-space contract. |
 | 29 | C4 Clustered specular probes | L | Diffuse GI got a spatial structure in A4; specular still has exactly one probe. Reuses A1's grid and A4's atlas. |
 | 30 | E5 Instancing + LOD + sorting | L | **DONE, two limbs of three (11.28 / 11.29).** Wall 2 mostly removed: `abandoned_window_shadowed` shadow CPU −83%, frame −38%, 2,148 draws → 272. Sorting deferred as unfalsifiable against the corpus, which `apps/forest` has since falsified — moved to E6. Established that scatter *order* decides whether batching happens at all (2,368 → 1,287 draws for identical geometry), that LOD fights instancing on the `(mesh, lod)` key non-monotonically, and that "meshoptimizer locks mesh borders" — in three headers and spec 11.28 — was wrong from the start. |
-| 31 | **E6 Depth prepass + opaque ordering** | M | **Wall 4.** The largest single perf number on this document: opaque is 312 ms of a ~350 ms frame on `apps/forest`, where the depth-only shadow pass does 5x the triangles in 1/14th the time. Absorbs E5's deferred sorting limb, because a prepass changes what the sort key should optimise for. |
+| 31 | **E6 Depth prepass + opaque ordering** | M | **IN PROGRESS (11.30), Phase 0 shipped.** Wall 4: opaque is 312 ms of a 346 ms frame on `apps/forest`, where the depth-only shadow pass does 5x the triangles in 1/14th the time. Absorbs E5's deferred sorting limb, because a prepass changes what the sort key should optimise for. **Phase 0 built the depth-complexity instrument this item was scheduled without, and it reads 1.85 on forest against 2.78 on the interior** — so the row's original "largest single perf number" framing is withdrawn pending Phase 4. |
 | 32 | D0 Free two sampler units | M | Foundation only — schedule it **with** D1 or D2's surface half, never before, per the just-in-time rule. |
 | 33 | D1 Clustered decals | L | Largest environment-art gap. Hard-blocked on D0. |
 | 34 | E8 Fix the wind cull | S | Small, self-contained, closes a real hole in E5's culling — wind geometry is currently exempt from the camera frustum *and* every cascade. Unblocks wind on scattered content, which `apps/forest` gave up to avoid it. |
@@ -1111,8 +1150,12 @@ not scheduled.
 **If only five ever get built: 20 -> 21 -> 22 -> 23 -> 24.** One afternoon, then three items that each
 reuse a shipped subsystem rather than building new machinery, then the instrument the rest needs.
 
-**If only one more ever gets built, it is 31 (E6).** Nothing else on this table is worth 250 ms.
-That sentence could not have been written before 11.29, and the reason is recorded in Wall 4.
+**If only one more ever gets built, it is 31 (E6)** — but for the diagnosis, not for a number. An
+earlier draft of this line read "nothing else on this table is worth 250 ms", which priced E6 at the
+whole of the opaque pass and was written before anything measured how much of that pass is redundant.
+11.30's Phase 0 measured it and **the 250 ms is withdrawn**; what survives is that E6 is the only item
+here addressing the pass that costs 90% of the frame, and the only one whose payoff is still unknown
+in the direction of being larger than stated as well as smaller.
 
 ### Known limitations not booked as items
 
