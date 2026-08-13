@@ -18,8 +18,25 @@
  * slot for. A dedicated program starts from sixteen again.
  */
 
-// Cells per side of the surface grid.
+// Cells per side of one patch.
 #define WATER_GRID_RES 128
+
+/*
+ * Camera-snapped clipmap rings.
+ *
+ * A uniform grid puts its samples where the WORLD is; this puts them where the
+ * PIXELS are. Level 0 is a full grid at `extent / 2^(levels-1)`, and each further
+ * level is a ring at twice the half-extent with its inner quarter removed -- which
+ * is exactly the level inside it, so the hole matches by construction.
+ *
+ * THE SNAP IS THE WHOLE TRICK. Every level snaps its origin to the COARSEST level's
+ * cell, not its own. Level L's cell divides that exactly (2^(levels-1-L)) and every
+ * half-extent is an integer multiple of it, so all ring boundaries land on one shared
+ * grid and the rings tile with no gap, no overlap, and therefore no coplanar depth
+ * tie. Snapping each level to its own cell -- the obvious thing -- is what puts a
+ * mismatch at every boundary.
+ */
+#define WATER_RING_LEVELS 5
 
 // Resolved single-sample scene depth, for the water column and the shoreline test.
 //
@@ -126,7 +143,8 @@ typedef struct Water {
     GLuint grid_vao;
     GLuint grid_vbo;
     GLuint grid_ebo;
-    int grid_index_count;
+    int grid_index_count; // centre patch: the whole grid
+    int ring_index_count; // one ring: the grid minus its inner quarter
     bool failed;
 
     // Spectral state, allocated only under WATER_WAVES_FFT. The initial spectrum
