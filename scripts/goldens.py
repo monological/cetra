@@ -70,12 +70,13 @@ RECIPES = [
     {"name": "froxel_fog", "scene": "assets/contact_fixture.gltf", "size": (1280, 800),
      "flags": ["--fog", "--no-aerial", "-f", "30", "--no-auto-exposure", "-E", "1.0",
                "-W", "640", "-H", "400"]},
-    # The water surface (spec 11.32). Exposure is pinned by the fixture's own
-    # .cscn as well, but repeated here: a golden is compared across BUILDS, where
-    # auto-exposure is the largest known source of drift.
+    # The water surface (spec 11.32). The surface and every one of its properties come
+    # from the fixture's own `water` block since 11.33 phase 5, so this asks for none of
+    # it -- which makes the golden the one thing that guards that authoring path across
+    # builds. Exposure is pinned by the .cscn as well, but repeated here: a golden is
+    # compared across BUILDS, where auto-exposure is the largest known source of drift.
     {"name": "water_fixture", "scene": "assets/water_fixture.cscn", "size": (800, 600),
-     "flags": ["--water", "--water-extent", "14", "-f", "30", "-W", "400", "-H", "300",
-               "--no-auto-exposure", "-E", "1.0"]},
+     "flags": ["-f", "30", "-W", "400", "-H", "300", "--no-auto-exposure", "-E", "1.0"]},
 
     # --- shadows and occlusion ------------------------------------------------
     # The --cs-debug term itself, so the image is independent of cs_strength.

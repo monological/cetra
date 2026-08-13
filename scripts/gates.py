@@ -2923,15 +2923,17 @@ WATER_FIXTURE = "water_fixture.cscn"
 # only difference.
 WATER_NO_CATCHER = ["--no-shadows"]
 WATER_PIN = ["--no-auto-exposure", "-E", "1.0"]
-# The photometric arms keep the default lighting: their boxes read open water, the
-# catcher is suppressed under --water anyway, and holding shadows out changes what
-# the bed radiates and flattens the ratios they measure.
-WATER_FLAGS = ["--water", "--water-extent", "14"] + WATER_PIN
-# The on/off pair for the liveness arm ONLY, with the catcher held out of both. Note
-# --water-extent is NOT here: it implies --water, so putting it in the shared base
-# turned water on in the "off" frame and the arm compared a frame with itself.
-WATER_LIVE_ON = ["--water"] + WATER_PIN + WATER_NO_CATCHER
-WATER_LIVE_OFF = WATER_PIN + WATER_NO_CATCHER
+# The surface itself comes from the fixture's own `water` block since spec 11.33 phase
+# 5, so nothing here asks for water on the command line -- only for the properties an
+# individual arm needs to differ. The photometric arms keep the default lighting: their
+# boxes read open water, the catcher is suppressed under water anyway, and holding
+# shadows out changes what the bed radiates and flattens the ratios they measure.
+WATER_FLAGS = WATER_PIN
+# The on/off pair for the liveness arm ONLY, with the catcher held out of both. The off
+# side needs --no-water explicitly now: omitting a flag no longer turns the surface off,
+# because the scene file is what asks for it.
+WATER_LIVE_ON = WATER_PIN + WATER_NO_CATCHER
+WATER_LIVE_OFF = WATER_PIN + WATER_NO_CATCHER + ["--no-water"]
 # Re-measured with the catcher held out of both sides.
 WATER_LIVE_MIN_PX = 40000
 
@@ -2942,7 +2944,7 @@ WATER_LIVE_MIN_PX = 40000
 # change alone and passed the arm meant to catch it.
 # The level is composed in rather than substituted out, so no arm depends on the
 # position of a value in a list.
-WATER_FFT_CORE = ["--water", "--water-extent", "70", "--no-auto-exposure", "-E",
+WATER_FFT_CORE = ["--water-extent", "70", "--no-auto-exposure", "-E",
                   "1.0"] + WATER_NO_CATCHER
 WATER_FFT_FLAGS = WATER_FFT_CORE + ["--water-level", "0.6", "--water-waves", "fft"]
 WATER_GERSTNER_REF = WATER_FFT_CORE + ["--water-level", "0.6", "--water-waves", "gerstner"]
@@ -2987,6 +2989,35 @@ WATER_FOG_BED_TOTAL_MIN = 1.25
 # 116,796 after; the Gerstner path, which always had it, reads 77,150 on the same pair.
 WATER_FFT_MOTION_MIN_PX = 20000
 
+# The .cscn water block (spec 11.33 phase 5). Two arms, because reproducing the CLI
+# frame at 0 px proves only that the authored values match the defaults -- a key that
+# parsed and was never applied would pass that.
+#
+# absorption has NO command-line flag, so a frame that moves when only absorption is
+# authored proves the value reached the shader through a path the CLI cannot fake.
+# Measured 262,950 px; red extinction 0.45 -> 2.2 is a strong change and the floor is a
+# long way under it.
+WATER_CSCN_ABSORB = {"absorption": [2.2, 0.5, 0.35]}
+WATER_CSCN_MIN_PX = 20000
+# And `level` is a field both paths can set, so authoring it must land in exactly the
+# same place the flag does. 0 px or one of them is lying.
+WATER_CSCN_LEVEL = 0.9
+
+# The CPU wave query (spec 11.33 phase 5), read through --water-probe. There is no other
+# way to see it: the GPU surface leaves no number behind, so without the probe the seam
+# buoyancy is meant to consume would ship with nothing checking it at all.
+#
+# `residual` is the assertion that matters. The query has to INVERT the Gerstner
+# horizontal map to answer about a WORLD position rather than about a wave parameter, and
+# an unconverged inversion still returns a point on the surface -- just not the one over
+# the query -- so every other number it prints looks fine either way. Measured worst
+# 0.00146 world units against a 0.06 amplitude.
+WATER_PROBE_MAX_RESIDUAL = 0.01
+# The train has to actually be evaluated: a flat answer would satisfy the residual
+# perfectly. Measured spread 0.154 over the 16 probes, against amplitude 0.06 summed over
+# four falling octaves (0.106 is the analytic ceiling either side of the level).
+WATER_PROBE_MIN_SPREAD = 0.03
+
 # Shoaling, over the analytic dome --water-bed installs (spec 11.33 phase 6). The two
 # real Tier 3 consumers cannot measure this: apps/forest is not pixel-deterministic and
 # apps/tree's floor is tens of thousands of pixels. This config is 0 px twice.
@@ -3024,7 +3055,7 @@ WATER_FOAM_BAND_MIN_PX = 300
 
 # Clipmap rings (spec 11.33). At a large extent the near field is where the uniform
 # grid failed, so this is the config the rings exist for.
-WATER_CLIP_FLAGS = ["--water", "--water-waves", "fft", "--water-extent", "500",
+WATER_CLIP_FLAGS = ["--water-waves", "fft", "--water-extent", "500",
                     "--water-level", "0.0", "--no-auto-exposure", "-E", "1.0"] + \
                    WATER_NO_CATCHER
 # Exact structure: 1 centre draw + 1 instanced ring draw; 1 + (levels - 1) instances;
@@ -3106,6 +3137,42 @@ def _water_closest_to_background(pix, bg, w, h, box):
                                    abs(_SRGB_TO_LINEAR[pix[o + 1]] - _SRGB_TO_LINEAR[bg[o + 1]]),
                                    abs(_SRGB_TO_LINEAR[pix[o + 2]] - _SRGB_TO_LINEAR[bg[o + 2]])))
     return worst
+
+
+def _water_probe(extra):
+    """Run --water-probe and return (header dict, [row dicts])."""
+    cmd = [RENDER, "-m", os.path.join(ROOT, "assets", WATER_FIXTURE), "-x", "-f", "2",
+           "-W", "200", "-H", "150", "--water-probe"] + extra
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    head, rows = {}, []
+    for line in (r.stdout + r.stderr).splitlines():
+        if not line.startswith("water-probe "):
+            continue
+        parts = line.split()[1:]
+        if "model=" in parts[0]:
+            head = dict(p.split("=", 1) for p in parts)
+            continue
+        row = {"x": float(parts[0]), "z": float(parts[1])}
+        row.update({k: v for k, v in (p.split("=", 1) for p in parts[2:])})
+        rows.append(row)
+    return head, rows
+
+
+def _water_cscn_variant(src, dst, overrides):
+    """Copy a .cscn with its water block overridden, model paths made absolute.
+
+    Generated rather than committed as a hand-edited twin, for the reason
+    scaled_copy gives: the two halves then cannot differ in anything except the
+    keys named here, which is what the arm asserts.
+    """
+    with open(src) as f:
+        d = json.load(f)
+    d.setdefault("water", {}).update(overrides)
+    for m in d.get("models", []):
+        if not os.path.isabs(m["path"]):
+            m["path"] = os.path.join(os.path.dirname(os.path.abspath(src)), m["path"])
+    with open(dst, "w") as f:
+        json.dump(d, f, indent=1)
 
 
 def _water_roughness(pix, w, h, box):
@@ -3210,6 +3277,15 @@ def run_water_gate(workdir):
                       nothing to dither into there, so the shader must fall back to
                       the cutoff -- if it kept the fractional fragment instead, the
                       sliver would be written at full strength.
+      water-cscn      the scene file's water block reaches the surface, and the flags
+                      override it rather than the reverse. absorption is read because
+                      no flag can set it, so the frame can only have moved through the
+                      authoring path.
+      water-cpu       the CPU wave query inverts the horizontal map (an unconverged
+                      inversion answers about the wrong point while looking correct),
+                      evaluates a real train rather than a plane, and DECLINES on the
+                      spectral model instead of returning a flat surface a caller would
+                      trust.
       water-row       the profiler row appears with the flag and is ABSENT without
                       it, which is what a scope opened inside the pass predicate
                       gives.
@@ -3381,6 +3457,57 @@ def run_water_gate(workdir):
             if not ok:
                 failures.append("water-under-fog")
 
+    # The scene file's water block: authored values reach the surface, and the flags
+    # override them rather than the other way round.
+    absorb_scn = os.path.join(workdir, "water_cscn_absorb.cscn")
+    level_scn = os.path.join(workdir, "water_cscn_level.cscn")
+    _water_cscn_variant(scene, absorb_scn, WATER_CSCN_ABSORB)
+    _water_cscn_variant(scene, level_scn, {"level": WATER_CSCN_LEVEL})
+    cscn_absorb = os.path.join(workdir, "water_cscn_absorb.ppm")
+    cscn_level = os.path.join(workdir, "water_cscn_level.ppm")
+    cli_level = os.path.join(workdir, "water_cli_level.ppm")
+    err = render(absorb_scn, cscn_absorb, WATER_PIN)
+    if not err:
+        err = render(level_scn, cscn_level, WATER_PIN)
+    if not err:
+        err = render(scene, cli_level, WATER_PIN + ["--water-level", str(WATER_CSCN_LEVEL)])
+    if err:
+        print(f"  water-cscn   ERROR render failed: {err.strip()[-200:]}")
+        failures.append("water-cscn")
+    else:
+        ae_absorb, _ = compare(a, cscn_absorb)
+        ae_level, _ = compare(cscn_level, cli_level)
+        ok = ae_absorb >= WATER_CSCN_MIN_PX and ae_level == 0
+        print(f"  water-cscn   {'PASS' if ok else 'FAIL'}  authored absorption moves "
+              f"{ae_absorb} px (want >={WATER_CSCN_MIN_PX}, no flag can set it); "
+              f"authored level vs --water-level {ae_level} px (want 0)")
+        if not ok:
+            failures.append("water-cscn")
+
+    # The CPU wave query. Nothing else in this suite can see it.
+    head, rows = _water_probe(WATER_PIN)
+    fft_head, fft_rows = _water_probe(WATER_PIN + ["--water-waves", "fft"])
+    if not rows or not fft_rows:
+        print("  water-cpu    FAIL  --water-probe printed nothing")
+        failures.append("water-cpu")
+    else:
+        worst = max(float(r["residual"]) for r in rows)
+        heights = [float(r["h"]) for r in rows]
+        spread = max(heights) - min(heights)
+        upright = all(float(r["n"].split(",")[1]) > 0.5 for r in rows)
+        # The spectral model has no CPU answer and must SAY so rather than return a
+        # plausible flat surface that a caller would trust.
+        fft_flat = (fft_head.get("available") == "0" and
+                    all(abs(float(r["h"]) - float(fft_head["level"])) < 1e-6 for r in fft_rows))
+        ok = (head.get("available") == "1" and worst <= WATER_PROBE_MAX_RESIDUAL and
+              spread >= WATER_PROBE_MIN_SPREAD and upright and fft_flat)
+        print(f"  water-cpu    {'PASS' if ok else 'FAIL'}  inverse residual <= "
+              f"{worst:.5f} (want <={WATER_PROBE_MAX_RESIDUAL}), height spread "
+              f"{spread:.4f} (want >={WATER_PROBE_MIN_SPREAD}), normals upright "
+              f"{upright}, spectral declines {fft_flat}")
+        if not ok:
+            failures.append("water-cpu")
+
     # Shoaling, which needs the diagnostic bed: every other water arm runs over a bed
     # the vertex stage cannot see, so the whole Tier 3 path was untested.
     dome = os.path.join(workdir, "water_dome.ppm")
@@ -3483,7 +3610,7 @@ def run_water_gate(workdir):
     err = render(scene, clip, WATER_CLIP_FLAGS)
     if not err:
         # The SAME framing with the surface absent, which is what a hole would show.
-        err = render(scene, clip_bg, WATER_PIN + WATER_NO_CATCHER)
+        err = render(scene, clip_bg, WATER_PIN + WATER_NO_CATCHER + ["--no-water"])
     if err:
         print(f"  water-crack  ERROR render failed: {err.strip()[-200:]}")
         failures.append("water-crack")
@@ -3516,7 +3643,8 @@ def run_water_gate(workdir):
 
     on = _profiled_run(workdir, "water_on", WATER_FLAGS + ["--profiler"],
                        fixture=WATER_FIXTURE, size=("400", "300"))
-    off_t = _profiled_run(workdir, "water_off", ["--profiler", "--no-auto-exposure", "-E", "1.0"],
+    off_t = _profiled_run(workdir, "water_off",
+                          ["--profiler", "--no-water", "--no-auto-exposure", "-E", "1.0"],
                           fixture=WATER_FIXTURE, size=("400", "300"))
     if on is None or off_t is None:
         failures.append("water-row")
