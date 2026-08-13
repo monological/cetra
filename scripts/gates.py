@@ -2957,26 +2957,39 @@ WATER_FFT_CORE = ["--water-extent", "70", "--no-auto-exposure", "-E",
 WATER_FFT_FLAGS = WATER_FFT_CORE + ["--water-level", "0.6", "--water-waves", "fft"]
 WATER_GERSTNER_REF = WATER_FFT_CORE + ["--water-level", "0.6", "--water-waves", "gerstner"]
 # Level above the fixture's eye (y 1.35), so the camera is under the surface.
-WATER_SUBMERGED_FLAGS = WATER_FFT_CORE + ["--water-level", "3.0", "--water-waves", "fft"]
+#
+# SHALLOW, and GERSTNER, and both are forced by geometry rather than chosen (spec 11.34).
+# The camera is pitched 11.9 degrees down, so the highest ray that can reach a surface
+# overhead leaves at 9.1 degrees and the nearest visible interface sits at
+# clearance / tan(9.1) = 6.25x the eye's depth. At the old level of 3.0 that is 10.5 units,
+# where red is already down to e^(-0.45*10.5) = 1% transmitted -- the whole band the boxes
+# read is saturated body colour and there is no gradient left to be monotone. So the depth
+# has to be small for this arm's claim to be observable at all, and at a small depth the
+# FFT sea state (metre-scale waves) puts the eye INSIDE the wave envelope, which is the
+# projected grid's own degenerate case. Gerstner's authored amplitude of 0.06 is two orders
+# under the clearance, so the framing is unambiguous.
+WATER_SUBMERGED_FLAGS = WATER_FFT_CORE + ["--water-level", "1.9", "--water-waves", "gerstner"]
 # One flag apart now, so this is the wave model alone.
 WATER_FFT_LIVE_MIN_PX = 20000
 # The submerged INTERFACE, read on the underside of the surface where the optical
 # path is the sight line itself (water_frag takes `path = length(ViewPos)` below the
-# plane). Boxes walk away from directly-overhead: measured 0.5714 / 0.3269 / 0.2177.
+# plane). Boxes walk away from the nearest point of the interface: measured
+# 0.3432 / 0.2617 / 0.0966, which is 4.0 to 18.7 units of sight line.
 #
-# These boxes have now moved TWICE, and the reason is worth knowing before moving them
-# again. They are fixed screen positions reading a ratio off a surface whose shape is
-# one random realisation of a spectrum, so anything that re-rolls the realisation moves
-# what sits inside them. Phase 2's underwater medium saturated the open-water band they
-# started in (all three went flat at 0.053, the body colour). Phase 4's per-mode phase
-# seeding then reshaped the interface itself and flattened the ramp to 1.69x.
+# The boxes themselves have never moved; the CONFIGURATION under them has, three times,
+# and the reason is worth knowing before touching either. They are fixed screen positions
+# reading a ratio off whatever the surface puts there. 11.32 phase 2's underwater medium
+# saturated the open-water band they started in (all three flat at 0.053, the body
+# colour). 11.33 phase 4's per-mode phase seeding reshaped the interface and flattened the
+# ramp to 1.69x. 11.34's projected grid stopped drawing the near-overhead surface the
+# clipmap covered, which is what moved the level and the wave model above.
 #
 # The ORDERING is the durable half of this arm; the endpoint ratio is not, and a floor
 # well under the measurement is the only honest way to write it.
 WATER_UNDER_BOXES = [(0.40, 0.030, 0.60, 0.055),
                      (0.40, 0.105, 0.60, 0.130),
                      (0.40, 0.160, 0.60, 0.185)]
-# Measured end-to-end 2.62x. Ordering is asserted separately to catch an inversion the
+# Measured end-to-end 3.55x. Ordering is asserted separately to catch an inversion the
 # endpoints alone would hide.
 WATER_UNDER_TOTAL_MIN = 2.0
 
@@ -3108,18 +3121,19 @@ WATER_FOAM_BAND_BOX = (0.02, 0.26, 0.32, 0.31)
 WATER_FOAM_SHOALED_BOX = (0.02, 0.55, 0.32, 0.90)
 WATER_FOAM_BAND_MIN_PX = 300
 
-# Clipmap rings (spec 11.33). At a large extent the near field is where the uniform
-# grid failed, so this is the config the rings exist for.
+# The surface's mesh structure (spec 11.34). A large extent with the level at the eye's
+# height is the framing that stresses near AND far at once, which is what the grid has to
+# resolve simultaneously.
 WATER_CLIP_FLAGS = ["--water-waves", "fft", "--water-extent", "500",
                     "--water-level", "0.0", "--no-auto-exposure", "-E", "1.0"] + \
                    WATER_NO_CATCHER
-# Exact structure: 1 centre draw + 1 instanced ring draw; 1 + (levels - 1) instances;
-# 128^2 cells = 32,768 centre triangles and 12,288 ring cells = 24,576 per ring, so
-# 32,768 + 4 * 24,576. Integers, so there is no floor to measure -- the ring topology
-# either is this or the feature does not work.
-WATER_CLIP_DRAWS = 2
-WATER_CLIP_INSTANCES = 5
-WATER_CLIP_TRIANGLES = 32768 + 4 * 24576
+# Exact structure: ONE lattice, one draw, no instancing, no rings -- 256^2 cells = 131,072
+# triangles. Integers, so there is no floor to measure. The count is deliberately the same
+# as the clipmap's 5 levels of a 128 grid (32,768 + 4 * 24,576), so this arm asserts the
+# projected grid spends the budget it replaced rather than buying its reach with triangles.
+WATER_GRID_DRAWS = 1
+WATER_GRID_INSTANCES = 1
+WATER_GRID_TRIANGLES = 256 * 256 * 2
 # A T-junction crack is a HOLE, so what it shows is whatever the water was covering --
 # exactly, because no water fragment was written there. So the test is a per-pixel
 # distance from the same frame rendered with no water at all: everything the surface
@@ -3332,7 +3346,8 @@ def run_water_gate(workdir):
       water-submerged absorption is monotone along the submerged INTERFACE, which only
                       that branch produces. A pixel count here would pass on a surface
                       that drew nothing, since raising the level moves 91% of the frame
-                      regardless.
+                      regardless. Shallow and Gerstner for a geometric reason, not a
+                      convenient one -- see WATER_SUBMERGED_FLAGS.
       water-under-fog the submerged RAMP fades with distance. It is opaque and has no
                       water interface between it and the eye, so the froxel volume's
                       second medium is the only thing that can absorb it -- which is
@@ -3742,7 +3757,7 @@ def run_water_gate(workdir):
         if not ok:
             failures.append("water-shore-hard")
 
-    # Clipmap rings. The draw structure is integers; the crack check is a per-pixel
+    # Mesh structure. The draw counts are integers; the crack check is a per-pixel
     # distance from the same frame with no water in it, over the boxes water-absorb
     # reads as means. A crack is one pixel wide and a mean would swallow it.
     clip = os.path.join(workdir, "water_clip.ppm")
@@ -3772,7 +3787,7 @@ def run_water_gate(workdir):
     else:
         row = clipt["submit"]["water"]
         got = (row["draws"], row["instances"], row["triangles"])
-        want = (WATER_CLIP_DRAWS, WATER_CLIP_INSTANCES, WATER_CLIP_TRIANGLES)
+        want = (WATER_GRID_DRAWS, WATER_GRID_INSTANCES, WATER_GRID_TRIANGLES)
         ok = got == want
         print(f"  water-draws  {'PASS' if ok else 'FAIL'}  "
               f"draws/instances/triangles={got[0]}/{got[1]}/{got[2]} want "
@@ -5095,7 +5110,7 @@ GATE_GROUPS = [
     ("oit", "order-independent transparency (analytic card stack):", run_oit_gate),
     ("absorption", "volume absorption (path length and channel selectivity, spec 11.32):",
      run_absorption_gate),
-    ("water", "water surface (determinism, absorption, shoreline, clipmap; specs 11.32/11.33):",
+    ("water", "water surface (determinism, absorption, shoreline, reach; specs 11.32-11.34):",
      run_water_gate),
     ("clouds", "cloud layer (steady-state churn, report-only):", run_cloud_churn_gate),
     ("skin-offpath", "pre-integrated skin (off-path byte identity):", run_skin_offpath_gate),
