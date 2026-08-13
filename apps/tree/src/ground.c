@@ -1,14 +1,40 @@
 #include <math.h>
 #include <stdlib.h>
 
+#include "cetra/mesh_builder.h"
+
 #include "ground.h"
+
+// Central-difference step for ground_normal_at. Wide enough that the difference is not
+// last-bit noise on a 620-unit dome, narrow enough to resolve the shore's own curvature.
+#define GROUND_NORMAL_STEP 0.5f
 
 float ground_height_at(float x, float z) {
     float d = sqrtf(x * x + z * z);
-    if (d >= GROUND_RADIUS)
-        return -GROUND_HEIGHT;
-    float t = d / GROUND_RADIUS;
-    return GROUND_HEIGHT * (1.0f - t * t) - GROUND_HEIGHT;
+    if (d < GROUND_RADIUS) {
+        float t = d / GROUND_RADIUS;
+        return GROUND_HEIGHT * (1.0f - t * t) - GROUND_HEIGHT;
+    }
+    /*
+     * The seabed, past the rim.
+     *
+     * Continues the rim's own descent and flattens into it, rather than stepping to a
+     * constant: `1 - (1 - u)^2` over u = (d - R)/(seabedR - R) starts at the dome's depth with
+     * slope 2*DROP/span and arrives level at the outer edge. GROUND_SEABED_DROP is derived so
+     * that starting slope equals the dome's arriving one -- see the header -- so the flank the
+     * shore stands on and the open bed are one surface with no kink between them.
+     */
+    float u = fminf((d - GROUND_RADIUS) / (GROUND_SEABED_RADIUS - GROUND_RADIUS), 1.0f);
+    float ease = 1.0f - (1.0f - u) * (1.0f - u);
+    return -GROUND_HEIGHT - GROUND_SEABED_DROP * ease;
+}
+
+void ground_normal_at(float x, float z, vec3 out) {
+    const float h = GROUND_NORMAL_STEP;
+    float dx = ground_height_at(x + h, z) - ground_height_at(x - h, z);
+    float dz = ground_height_at(x, z + h) - ground_height_at(x, z - h);
+    vec3 n = {-dx, 2.0f * h, -dz};
+    glm_vec3_normalize_to(n, out);
 }
 
 float ground_sphere_fit(vec3 out_center) {
@@ -131,4 +157,56 @@ void ground_build_mesh(Mesh* mesh, int rings, int segments, float uv_tiles) {
     // create_mesh starts with, the ground collapses to a point at the origin
     // and gets culled the moment that point leaves the view.
     calculate_aabb(mesh);
+}
+
+bool ground_build_seabed(Mesh* mesh, int rings, int segments, float uv_tiles) {
+    MeshBuilder mb;
+    // Exact counts, so the builder never copies: (rings + 1) rows of `segments` vertices,
+    // and two triangles per quad between consecutive rows.
+    const size_t vres = (size_t)(rings + 1) * (size_t)segments;
+    const size_t ires = (size_t)rings * (size_t)segments * 6;
+    if (!mb_init(&mb, vres, ires, false))
+        return false;
+
+    for (int r = 0; r <= rings; r++) {
+        // Geometric in the RADIUS, so the ring spacing grows with distance -- see the header.
+        const float u = (float)r / (float)rings;
+        const float radius =
+            GROUND_RADIUS * powf(GROUND_SEABED_RADIUS / GROUND_RADIUS, u);
+        for (int s = 0; s < segments; s++) {
+            const float angle = 2.0f * (float)M_PI * (float)s / (float)segments;
+            const float ca = cosf(angle), sa = sinf(angle);
+            const float x = radius * ca;
+            const float z = radius * sa;
+            // Height and normal both from ground_height_at, so the rim row lands exactly on
+            // the island's own last row and the two meshes share an edge rather than
+            // approaching one. The island is built about its crown and translated down by
+            // GROUND_HEIGHT; this mesh is authored in world space, so the translation comes
+            // back out here.
+            vec3 p = {x, ground_height_at(x, z) + GROUND_HEIGHT, z};
+            vec3 n = GLM_VEC3_ZERO_INIT;
+            ground_normal_at(x, z, n);
+            // Tangent along the circle, which is perpendicular to the radial slope for a
+            // surface of revolution -- so it is already orthogonal to the normal and needs no
+            // Gram-Schmidt. Matches the island mesh's convention, handedness +1.
+            vec3 t = {-sa, 0.0f, ca};
+            mb_vertex(&mb, p, n, t, (0.5f + 0.5f * x / GROUND_SEABED_RADIUS) * uv_tiles,
+                      (0.5f + 0.5f * z / GROUND_SEABED_RADIUS) * uv_tiles, 0.0f, 0.0f, NULL);
+        }
+    }
+
+    for (int r = 0; r < rings; r++) {
+        const unsigned int inner = (unsigned int)(r * segments);
+        const unsigned int outer = (unsigned int)((r + 1) * segments);
+        for (int s = 0; s < segments; s++) {
+            const unsigned int s1 = (unsigned int)((s + 1) % segments);
+            // Same winding as the island's rings: counter-clockwise seen from above, so the
+            // lit face points at the sky rather than into the bed.
+            mb_tri(&mb, inner + (unsigned int)s, outer + s1, outer + (unsigned int)s);
+            mb_tri(&mb, inner + (unsigned int)s, inner + s1, outer + s1);
+        }
+    }
+
+    mesh->draw_mode = MESH_TRIANGLES;
+    return mb_transfer(&mb, mesh);
 }

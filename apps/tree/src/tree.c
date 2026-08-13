@@ -232,6 +232,8 @@ static Material* leaf_material = NULL;
 static SceneNode* tree_root = NULL;
 static SceneNode* island_node = NULL;
 static Material* island_material = NULL;
+static SceneNode* seabed_node = NULL;
+static Material* seabed_material = NULL;
 
 static GrassParams grass_params;
 static GrassParams prev_grass_params;
@@ -317,6 +319,28 @@ static void create_island(SceneNode* parent) {
     // Static for the program's lifetime, so it uploads once here rather than
     // riding along with every tree rebuild.
     upload_buffers_to_gpu_for_nodes(island_node);
+}
+
+/*
+ * Create the seabed (spec 11.34 phase 6).
+ *
+ * Authored in WORLD space, unlike the island, which is built about its crown and translated:
+ * the seabed's whole job is to continue the island's flank, and reading ground_height_at
+ * directly is how it shares that edge rather than approaching it.
+ */
+static void create_seabed(SceneNode* parent) {
+    Mesh* mesh = create_mesh();
+    if (!ground_build_seabed(mesh, 40, 96, 60.0f)) {
+        free_mesh(mesh);
+        return;
+    }
+    mesh->material = seabed_material;
+
+    seabed_node = create_node();
+    set_node_name(seabed_node, "seabed");
+    add_mesh_to_node(seabed_node, mesh);
+    add_child_node(parent, seabed_node);
+    upload_buffers_to_gpu_for_nodes(seabed_node);
 }
 
 /*
@@ -954,6 +978,19 @@ int main(int argc, char** argv) {
     set_material_albedo_tex(island_material, island_albedo_tex);
     set_material_normal_tex(island_material, island_normal_tex);
 
+    // The seabed reuses the island's textures with a darker, cooler albedo rather than a
+    // third procedural generator: it is only ever seen through metres of water, which is a
+    // colour filter strong enough that the difference a bespoke texture would make does not
+    // survive it. Rougher than the beach, and nothing else -- opaque, no wind, no subsurface.
+    seabed_material = create_material();
+    glm_vec3_copy((vec3){0.34f, 0.36f, 0.33f}, seabed_material->albedo);
+    seabed_material->roughness = 0.95f;
+    seabed_material->metallic = 0.0f;
+    seabed_material->ao = 1.0f;
+    set_material_shader_program(seabed_material, pbr_program);
+    set_material_albedo_tex(seabed_material, island_albedo_tex);
+    set_material_normal_tex(seabed_material, island_normal_tex);
+
     // Grass. Opaque, so it casts and receives shadows with no special handling
     // -- the canopy dapple landing on it is the point of having it. Colour is
     // entirely per-vertex, so no textures and no AO map to collide with UV1.
@@ -981,11 +1018,13 @@ int main(int argc, char** argv) {
 
     create_island(root);
 
-    // The sea around it. Attached after the island because the level is derived
-    // from the dome's own constants, and the bed provider is the same function the
-    // island mesh and the grass root themselves with -- so the shoreline cannot
-    // drift from the ground it meets.
+    // The sea around it, and the bed under the sea. Both after the island because the level is
+    // derived from the dome's own constants, and the bed provider is the same function the
+    // island mesh and the grass root themselves with -- so the shoreline cannot drift from the
+    // ground it meets. Under ONE guard because they are one feature: a seabed with no sea over
+    // it is a plate around a dome, which is the saucer --no-water exists to avoid.
     if (!args.no_water) {
+        create_seabed(root);
         Water* water = create_water();
         if (water) {
             water->level =

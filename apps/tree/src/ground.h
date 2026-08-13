@@ -42,13 +42,36 @@
 #define GROUND_SHORE_T 0.5f
 
 /*
+ * How far the seabed mesh reaches, and how deep it goes past the rim (spec 11.34 phase 6).
+ *
+ * The sea itself reaches the horizon, so the bed cannot cover all of it and does not need to:
+ * it only has to cover what can be SEEN through the water, and this app's own camera far
+ * plane is 3000.
+ *
+ * The DROP is derived, not chosen. `ground_height_at` eases the bed down with 1 - (1 - u)^2,
+ * whose slope at the rim is 2*DROP/span; the dome's own slope arriving there is 2H/R. Setting
+ * those equal gives DROP = (H/R) * span, so the flank and the bed meet with no kink -- one
+ * surface rather than a disc sitting on a plate, which is what the eye reads the moment the
+ * camera goes under. Pick DROP by hand and that continuity is silently gone.
+ */
+#define GROUND_SEABED_RADIUS 2800.0f
+#define GROUND_SEABED_DROP \
+    ((GROUND_HEIGHT / GROUND_RADIUS) * (GROUND_SEABED_RADIUS - GROUND_RADIUS))
+
+/*
  * Surface height at a world XZ, world space, translation included.
  *
- * Beyond the rim it holds at -GROUND_HEIGHT rather than at 0: the dome is a solid that ends,
- * so the ground outside it continues at the depth the rim reached. (This said "Flat (0)
- * beyond the rim" for three specs while the code did the other thing.)
+ * Continuous everywhere, including across the rim: inside it is the dome, outside it descends
+ * to the seabed and flattens. ONE authority, so the island mesh, the grass, the seabed mesh,
+ * the water's shoaling bed and the leaf litter cannot disagree about where the ground is.
+ * (The header said "Flat (0) beyond the rim" for three specs while the code returned
+ * -GROUND_HEIGHT, which was neither.)
  */
 float ground_height_at(float x, float z);
+
+// Surface normal at a world XZ, by central differences on ground_height_at -- so a consumer
+// cannot derive a normal from a different surface than the one it stands on.
+void ground_normal_at(float x, float z, vec3 out);
 
 // Curvature-matched sphere for the dome's crown: centre in `out_center`, returning the
 // radius. A paraboloid with H far under R is a sphere to within a couple of units over the
@@ -60,5 +83,17 @@ float ground_sphere_fit(vec3 out_center);
 // times so a terrain-sized disc keeps texel detail. Positions, normals, tangents and the
 // AABB; the caller owns upload.
 void ground_build_mesh(Mesh* mesh, int rings, int segments, float uv_tiles);
+
+/*
+ * The seabed: an annulus from the dome's rim out to GROUND_SEABED_RADIUS.
+ *
+ * Rings are spaced GEOMETRICALLY rather than evenly, because what it covers spans a factor of
+ * four and half of it is at grazing incidence under saturated water -- even spacing would put
+ * most of the vertices where nothing can be seen. Shares the rim vertices' height with the
+ * island by construction, since both read ground_height_at.
+ *
+ * Returns false if the builder ran out of memory, leaving the mesh untouched.
+ */
+bool ground_build_seabed(Mesh* mesh, int rings, int segments, float uv_tiles);
 
 #endif // _GROUND_H_
