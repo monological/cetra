@@ -997,10 +997,19 @@ now uses TAA instead of 4x MSAA (−29% on its own, and what the render app alwa
 recorded as **not pixel-deterministic** — 34,991 px run-to-run, the Hillaire sky, a precondition spec
 11.29 asserted and never checked.
 
-**What is left is one thing:** masked geometry cannot enter the prepass until `pbr_frag`'s coverage
-chain — KHR texture transform, POM march, vertex-colour alpha, and `finalOpacity` under
-alpha-to-coverage — is extracted into a shared chunk, the way `object_position.glsl` now shares the
-vertex half. That is what would take forest from 2.80 to the interior's 1.00.
+**What was left is now done (spec 11.31), and it changed the answer.** Masked geometry enters the
+prepass by being drawn with its own `pbr` program in a `depthOnly` mode — one source, two
+permutations, rather than the shared coverage chunk this row proposed. Forest's complexity falls to
+0.72.
+
+**Three of this row's numbers are withdrawn by that work.** Every depth-complexity figure above is
+**twice** the truth: the budget came from `engine->msaa_samples`, and this driver returns a 2-sample
+target when asked for one sample, so the whole TAA path double-counted. Halve them. The −64% on
+`abandoned_window_shadowed` does not reproduce at either AA path — that scene measures the prepass
+**costing** 6.7% while reaching a perfect complexity of 1.00. And "worth more together" was an
+artefact of the masked exclusion: with it gone the sort and the prepass are substitutes, the sort is
+the cheaper of the two, and the prepass has no configuration in this corpus where it pays. Defaults
+stay sort-on, prepass-off, now on measurement rather than caution.
 
 **The prepass.** Render opaque depth-only first, then shade with `glDepthFunc(GL_EQUAL)` and
 `glDepthMask(GL_FALSE)`. Every hidden fragment is then rejected by the depth test before the uber-shader
@@ -1169,13 +1178,13 @@ not scheduled.
 | 28 | E2 3D LUT grading | S | Colourist workflow. Watch the working-space contract. |
 | 29 | C4 Clustered specular probes | L | Diffuse GI got a spatial structure in A4; specular still has exactly one probe. Reuses A1's grid and A4's atlas. |
 | 30 | E5 Instancing + LOD + sorting | L | **DONE, two limbs of three (11.28 / 11.29).** Wall 2 mostly removed: `abandoned_window_shadowed` shadow CPU −83%, frame −38%, 2,148 draws → 272. Sorting deferred as unfalsifiable against the corpus, which `apps/forest` has since falsified — moved to E6. Established that scatter *order* decides whether batching happens at all (2,368 → 1,287 draws for identical geometry), that LOD fights instancing on the `(mesh, lod)` key non-monotonically, and that "meshoptimizer locks mesh borders" — in three headers and spec 11.28 — was wrong from the start. |
-| 31 | **E6 Depth prepass + opaque ordering** | M | **DONE (11.30).** `apps/forest` opaque **397 → 234 ms (−41%)**, depth complexity 3.87 → 1.94; `abandoned_window_shadowed` **31.5 → 11.2 ms (−64%)** at complexity exactly **1.00**. Ordering ships on, the prepass off. Forest stalls at 2.80 because masked foliage sits the prepass out — bringing it in needs `pbr_frag`'s coverage chain shared the way `object_position.glsl` now shares the vertex half. Four of this row's original claims, including the 250 ms, were withdrawn by the instrument the item was scheduled without. |
+| 31 | **E6 Depth prepass + opaque ordering** | M | **DONE (11.30 + 11.31).** `apps/forest` opaque **306 → 169 ms (−45%)** from the ORDERING alone, depth complexity 1.93 → 1.08. Masked geometry now prepasses too (11.31, via a `depthOnly` mode in `pbr_frag`) and reaches a better 0.72 — and is still **slower** than the sort, because a full extra geometry pass costs more than the shading it saves. The two are substitutes, not complements: 11.30's "worth more together" was an artefact of the masked exclusion. Ordering ships on, the prepass off, with a gate arm asserting the prepass **costs** on a scene with no overdraw. 11.30's own figures were doubled by a budget that trusted `msaa_samples` over the driver, and its −64% interior does not reproduce. Between them these two specs withdrew seven claims — every one from an instrument that had never been checked against a scene with a known answer. |
 | 32 | D0 Free two sampler units | M | Foundation only — schedule it **with** D1 or D2's surface half, never before, per the just-in-time rule. |
 | 33 | D1 Clustered decals | L | Largest environment-art gap. Hard-blocked on D0. |
 | 34 | E8 Fix the wind cull | S | Small, self-contained, closes a real hole in E5's culling — wind geometry is currently exempt from the camera frustum *and* every cascade. Unblocks wind on scattered content, which `apps/forest` gave up to avoid it. |
 | 35 | D3 Tessellated water | L | Spends the tessellation stage — GL 4.0, legal here, and completely unused. |
 | 36 | D4 Terrain | XL | Only after E5; a clipmap without instancing/LOD is a mega-mesh with extra steps. `apps/forest` is a *consumer* of E5, not this — fixed tiles with per-tile chains, fine at 1 km² and explicitly not the answer above it. |
-| 37 | E7 Occlusion culling | L | Booked so the gap is visible, **not because a measurement demands it** — on current evidence E6 gets most of the benefit for far less, and `apps/forest` says draw count is not the limit. Re-price after E6. |
+| 37 | E7 Occlusion culling | L | Booked so the gap is visible, **not because a measurement demands it**, and 11.31 lowers the price further rather than raising it: forest's opaque lane already runs at complexity 1.08 from ordering alone, so there is little redundant shading left to remove, and the one thing that reached 0.72 — the prepass — lost on the clock anyway because the extra submission cost more than the fragments it saved. An occlusion pass is a bigger version of that same trade. `assets/overdraw_layers.gltf` is the instrument to price it with. |
 
 **If only five ever get built: 20 -> 21 -> 22 -> 23 -> 24.** One afternoon, then three items that each
 reuse a shipped subsystem rather than building new machinery, then the instrument the rest needs.
