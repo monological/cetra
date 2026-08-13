@@ -2699,6 +2699,80 @@ def _forest_run(workdir, tag, extra, cam=None):
     return tables
 
 
+MASK_FIXTURE = "mask_fixture.cscn"
+
+# Interiors of the two quads, as fractions of the frame so the arm reads the
+# same surface whatever the display scale reports. Inset well clear of the
+# silhouettes: the edges are where TAA and the geometric AA live, and neither is
+# what this measures.
+MASK_REF_BOX = (0.19, 0.34, 0.41, 0.63)
+MASK_CUT_BOX = (0.59, 0.34, 0.81, 0.63)
+# Mean linear luma of a lit quad against this fixture's backdrop. A load failure
+# leaves both boxes reading the same background, which would satisfy an equality
+# arm perfectly -- so the surfaces have to be shown to be THERE before their
+# agreement means anything.
+MASK_LIT_FLOOR = 0.15
+
+
+def _mask_box_luma(pix, w, h, box):
+    """Mean linear luma over a fractional box, on a 12x12 grid."""
+    x0, y0, x1, y1 = box
+    total, n = 0.0, 0
+    for iy in range(12):
+        for ix in range(12):
+            px = (x0 + (x1 - x0) * (ix + 0.5) / 12.0) * w
+            py = (y0 + (y1 - y0) * (iy + 0.5) / 12.0) * h
+            total += _linear_luma(pix, w, h, px, py)
+            n += 1
+    return total / n
+
+
+def run_mask_gate(workdir):
+    """ALPHA_MASK is binary above the cutoff (spec 11.31).
+
+    glTF's rule for MASK is that a fragment at or above alphaCutoff renders
+    fully opaque. The opaque lane used to inherit global SRC_ALPHA blending, so
+    a masked fragment at alpha 0.6 landed at 0.6 of itself over the CLEAR
+    COLOUR -- the pass runs before the skybox -- and nothing in the corpus could
+    see it. Every golden's masked geometry is either absent or, in
+    translucent_shadow's case, a caster held above the frame, so all 21 goldens
+    pass either way.
+
+    Two coplanar quads in ONE frame rather than two renders: same light, same
+    normal, same base colour, and the only difference is that one carries a
+    COLOR_0 alpha of 0.6. No stored image, and no cross-run comparison to hold
+    still.
+
+    --taa is what drops the engine to one sample, and it is load-bearing here
+    rather than cosmetic. Under alpha-to-coverage a fractional alpha is SUPPOSED
+    to become fractional sample coverage, so on the 4x MSAA path these two quads
+    legitimately differ and this invariant does not hold.
+    """
+    scene = os.path.join(ROOT, "assets", MASK_FIXTURE)
+    if not os.path.exists(scene):
+        print("  mask-opaque  SKIP  (mask_fixture.cscn not present)")
+        return []
+
+    out = os.path.join(workdir, "mask_binary.ppm")
+    err = render(scene, out, ["--taa", "--headless-jitter", "--no-auto-exposure", "-E", "1.0"])
+    if err:
+        print(f"  mask-opaque  ERROR render failed: {err.strip()[-200:]}")
+        return ["mask-opaque"]
+
+    w, h, pix = _read_ppm(out)
+    ref = _mask_box_luma(pix, w, h, MASK_REF_BOX)
+    cut = _mask_box_luma(pix, w, h, MASK_CUT_BOX)
+    lit = ref >= MASK_LIT_FLOOR and cut >= MASK_LIT_FLOOR
+    # Relative, not absolute: the quantity is "these are the same surface", and
+    # the exposure and tonemap are free to move what that surface reads as.
+    delta = abs(ref - cut) / ref if ref > 0 else 1.0
+    ok = lit and delta <= 0.02
+    print(f"  mask-opaque  {'PASS' if ok else 'FAIL'}  masked quad {cut:.4f} vs opaque "
+          f"reference {ref:.4f} linear luma, {delta * 100.0:.2f}% apart (want <= 2%, and both "
+          f"lit above {MASK_LIT_FLOOR}: {lit}). Blending the masked lane reads ~36% low.")
+    return [] if ok else ["mask-opaque"]
+
+
 RAIDEN = os.path.join(ROOT, "my_models", "raiden", "source", "raiden_textured_rigged.glb")
 
 
@@ -2758,12 +2832,12 @@ def run_prepass_gate(workdir):
     # instancing_fixture is purely opaque, so nothing sits the prepass out and
     # its 0 px says nothing about the case that does. Masked geometry is not
     # prepassed, so GL_LEQUAL leaves it tested against ITSELF, and coincident
-    # cards that GL_LESS rejected now pass and blend again.
+    # cards that GL_LESS rejected now pass a second time.
     #
     # Asserted as a BOUND rather than 0, because 0 is not the truth here and an
     # arm that demanded it would just be turned off. The number is what stops it
-    # drifting quietly: raiden is the corpus's one masked+blend subject and is
-    # 0 px run-to-run, so any movement is the flag.
+    # drifting quietly: raiden is the corpus's one masked subject and is 0 px
+    # run-to-run, so any movement is the flag.
     rai_off = os.path.join(workdir, "prepass_rai_off.ppm")
     rai_on = os.path.join(workdir, "prepass_rai_on.ppm")
     if not os.path.exists(RAIDEN):
@@ -2777,14 +2851,20 @@ def run_prepass_gate(workdir):
         failures.append("prepass-masked")
     else:
         ae, _ = compare(rai_off, rai_on)
-        # Measured 46,314 at the time of writing. The band catches both a silent
-        # blow-up and the day masked geometry joins the prepass and this drops
-        # toward 0 -- at which point the flag becomes a 0 px flag and this arm
-        # should be replaced by prepass-identity on raiden.
-        ok = 20000 <= ae <= 80000
+        # 46,314 when this arm was written; 395 once the opaque lane stopped
+        # blending (spec 11.31). Most of what it was measuring was never the
+        # prepass -- a coincident card that LEQUAL lets through used to composite
+        # a second time, and now it overwrites with the value already there. What
+        # is left is the cards whose colours genuinely differ, where which one
+        # wins is still visible.
+        #
+        # Still a bound rather than 0: masked geometry sits the prepass out until
+        # 11.31 phase 2 admits it, and this becomes prepass-identity on raiden
+        # when it does.
+        ok = 0 < ae <= 2000
         print(f"  prepass-masked {'PASS' if ok else 'FAIL'}  raiden moves {ae} px under "
-              f"--depth-prepass (want 20000..80000; NOT 0 -- masked geometry sits the "
-              f"prepass out, see spec 11.30)")
+              f"--depth-prepass (want 1..2000; NOT 0 -- masked geometry sits the "
+              f"prepass out, see spec 11.31)")
         if not ok:
             failures.append("prepass-masked")
 
@@ -3791,6 +3871,8 @@ def main():
         failures += run_draw_list_gate(workdir)
         print("LOD chains (selection by projected size, spec 11.28 Phase 6):")
         failures += run_lod_gate(workdir)
+        print("alpha mask (binary above the cutoff, spec 11.31):")
+        failures += run_mask_gate(workdir)
         print("depth prepass (identical picture, less shading, spec 11.30 / E6):")
         failures += run_prepass_gate(workdir)
         print("forest (scattered content: batching, ordering, LOD, spec 11.29):")

@@ -1,0 +1,43 @@
+{
+ "version": 1,
+ "models": [
+  {
+   "path": "mask_fixture.gltf"
+  }
+ ],
+ "lights": [
+  {
+   "name": "MaskSun",
+   "type": "directional",
+   "direction": [
+    0.0,
+    -0.3,
+    -0.95
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 3.0,
+   "cast_shadows": false
+  }
+ ],
+ "camera": {
+  "eye": [
+   0.0,
+   1.0,
+   5.4
+  ],
+  "target": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "fov": 45
+ },
+ "post": {
+  "tonemap": "neutral",
+  "exposure": 1.0
+ }
+}

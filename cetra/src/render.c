@@ -1074,6 +1074,22 @@ void render_current_scene(Engine* engine) {
         prepassed =
             _submit_depth_prepass(engine, scene, opaque_list, *view, draw_projection, &frustum);
     }
+    // Nothing this lane draws is translucent, so nothing it draws should blend.
+    // Blending is enabled globally (engine.c) with per-attachment disables for
+    // slots >= 1, which left slot 0 blending through a pass that never asked for
+    // it: an ALPHA_MASK fragment above the cutoff wrote fractional alpha and got
+    // lerped toward the CLEAR COLOUR, since this pass runs before the skybox.
+    // glTF says MASK is binary -- opaque above the cutoff -- so the blend was
+    // never anything but a darkening (spec 11.31).
+    //
+    // Scoped to the lane and not to engine_set_scene_draw_buffers: 11.19 records
+    // that doing it there blacked out 60% of the frame, because the skybox rides
+    // the same state.
+    //
+    // Under alpha-to-coverage this is the same repair Godot spells
+    // ALPHA_TO_COVERAGE_AND_TO_ONE -- coverage has already spent the alpha, and
+    // spending it a second time in the blend equation squares it.
+    glDisable(GL_BLEND);
     // Opened AFTER the prepass, deliberately. It measures samples the
     // uber-shader ran for, and the prepass's own samples pass the depth test
     // too -- counting them made the number RISE when the pass that exists to
@@ -1082,6 +1098,7 @@ void render_current_scene(Engine* engine) {
     _submit_lanes(engine, scene, opaque_list, camera, *view, draw_projection, render_mode,
                   &submit_state, &frustum, 1u << DRAW_LANE_OPAQUE, OIT_SUBPASS_NONE);
     profiler_samples_end(engine->profiler);
+    glEnable(GL_BLEND);
     if (prepassed)
         glDepthFunc(GL_LESS);
     _submit_gizmos(&scene->draw_list, *view, draw_projection, &submit_state);
