@@ -1,3 +1,5 @@
+#include <math.h>
+#include <stdint.h>
 #include <stdlib.h>
 
 #include "water.h"
@@ -9,6 +11,244 @@
 #include "scene.h"
 #include "uniform.h"
 #include "util.h"
+
+/*
+ * The three spectral bands, ported from the reference study.
+ *
+ * cutoff_low/high are the wavenumber window each band owns, in rad/m, and they
+ * ABUT rather than overlap: a mode counted in two cascades is energy the sea
+ * state never had. The short band reaches 24 rad/m -- decimetre waves -- and is
+ * deliberately not carried into the mesh, where it would alias into a ridged
+ * texture; it shades the interface only.
+ */
+static const struct WaterCascadeConfig {
+    float length_scale;
+    float cutoff_low;
+    float cutoff_high;
+    float amplitude_scale;
+    float secondary_scale; // weight of a second, cross-travelling swell
+    uint32_t seed;
+} WATER_CASCADE_CFG[WATER_CASCADE_COUNT] = {
+    {240.0f, 0.024f, 0.36f, 0.45f, 0.22f, 0x51f15eu},
+    {64.0f, 0.30f, 1.42f, 0.45f, 0.08f, 0x72a93bu},
+    {12.0f, 1.22f, 24.0f, 0.82f, 0.0f, 0x19ce47u},
+};
+
+const float WATER_CASCADE_LENGTH[WATER_CASCADE_COUNT] = {240.0f, 64.0f, 12.0f};
+// How hard each band's horizontal displacement pulls. The short band is damped:
+// it exists to shade, and choppiness there sharpens nothing the mesh resolves.
+const float WATER_CASCADE_CHOPPINESS[WATER_CASCADE_COUNT] = {1.18f, 1.05f, 0.40f};
+
+// Sea state. One set of numbers for all three bands, so the bands are windows
+// onto ONE spectrum rather than three independently authored looks.
+#define WATER_SEA_DEPTH 54.0f
+#define WATER_WIND_SPEED 11.5f
+#define WATER_FETCH 120000.0f
+#define WATER_WIND_ANGLE (-0.48f)
+#define WATER_PEAK_ENHANCEMENT 3.3f
+#define WATER_SWELL 0.38f
+
+// The reference's deterministic PRNG, ported exactly rather than swapped for
+// rand(): the spectrum it seeds IS the ocean's identity, so a different sequence
+// is a different sea, and a headless render has to reproduce this one.
+static float _water_rand(uint32_t* state) {
+    *state += 0x6d2b79f5u;
+    uint32_t v = *state;
+    v = (v ^ (v >> 15)) * (v | 1u);
+    v ^= v + (v ^ (v >> 7)) * (v | 61u);
+    return (float)((v ^ (v >> 14))) / 4294967296.0f;
+}
+
+static void _water_gaussian(uint32_t* state, float* out_a, float* out_b) {
+    float u = fmaxf(_water_rand(state), 1e-7f);
+    float v = _water_rand(state);
+    float radius = sqrtf(-2.0f * logf(u));
+    float angle = 6.28318530718f * v;
+    *out_a = radius * cosf(angle);
+    *out_b = radius * sinf(angle);
+}
+
+static float _water_wrap_angle(float a) {
+    while (a > 3.14159265359f)
+        a -= 6.28318530718f;
+    while (a < -3.14159265359f)
+        a += 6.28318530718f;
+    return a;
+}
+
+// Normalisation for the cos^(2s)(theta/2) directional spread, via the gamma
+// function's Stirling series. Without it a narrower spread would also be a
+// brighter one, and "directional focus" would double as an amplitude knob.
+static float _water_spread_norm(float spread) {
+    // ln(Gamma(s + 1)) - ln(Gamma(s + 0.5)) evaluated by Stirling; the ratio is
+    // what the normalisation needs and it stays well-conditioned where the
+    // gammas themselves overflow.
+    float s = spread;
+    float a = s + 1.0f;
+    float b = s + 0.5f;
+    float lga = (a - 0.5f) * logf(a) - a + 0.9189385332f + 1.0f / (12.0f * a);
+    float lgb = (b - 0.5f) * logf(b) - b + 0.9189385332f + 1.0f / (12.0f * b);
+    return expf(lga - lgb) / (2.0f * sqrtf(3.14159265359f));
+}
+
+// JONSWAP with the TMA shallow-water correction, at one wavenumber.
+static float _water_jonswap(float omega, float peak_omega, float alpha, float tma,
+                            float enhancement) {
+    const float g = 9.81f;
+    float sigma = omega <= peak_omega ? 0.07f : 0.09f;
+    float peak_distance = (omega - peak_omega) / fmaxf(sigma * peak_omega, 1e-5f);
+    float peak_shape = expf(-0.5f * peak_distance * peak_distance);
+    float peak_ratio = peak_omega / omega;
+    return tma * alpha * g * g / powf(omega, 5.0f) *
+           expf(-1.25f * powf(peak_ratio, 4.0f)) * powf(enhancement, peak_shape);
+}
+
+/*
+ * Seed one cascade: the conjugate-symmetric initial spectrum, the per-mode wave
+ * vector and dispersion, and (once) the Stockham twiddle table.
+ *
+ * initial holds h0(k) in .xy and conj(h0(-k)) in .zw, which is what lets the
+ * evolution step produce a REAL surface from one complex multiply per mode
+ * instead of enforcing symmetry afterwards.
+ */
+static void _water_build_spectrum(int size, const struct WaterCascadeConfig* cfg, float* initial,
+                                  float* wave_data, float* twiddle) {
+    const float g = 9.81f;
+    const float delta_k = 6.28318530718f / cfg->length_scale;
+    const float alpha =
+        0.076f * powf(g * WATER_FETCH / (WATER_WIND_SPEED * WATER_WIND_SPEED), -0.22f);
+    const float peak_omega =
+        22.0f * powf(WATER_WIND_SPEED * WATER_FETCH / (g * g), -0.33f);
+
+    float* h0 = calloc((size_t)size * size * 2, sizeof(float));
+    if (!h0)
+        return;
+    uint32_t rng = cfg->seed;
+
+    for (int y = 0; y < size; y++) {
+        for (int x = 0; x < size; x++) {
+            const int pixel = y * size + x;
+            const float kx = (float)(x - size / 2) * delta_k;
+            const float kz = (float)(y - size / 2) * delta_k;
+            const float k_len = sqrtf(kx * kx + kz * kz);
+            float* wd = &wave_data[pixel * 4];
+
+            if (k_len < cfg->cutoff_low || k_len > cfg->cutoff_high) {
+                // Outside this band's window. 1/k is stored as 1 rather than 0
+                // so the evolution's multiply stays finite on a dead mode.
+                wd[0] = 0.0f;
+                wd[1] = 1.0f;
+                wd[2] = 0.0f;
+                wd[3] = 0.0f;
+                continue;
+            }
+
+            const float kh = fminf(k_len * WATER_SEA_DEPTH, 20.0f);
+            const float tanh_kh = tanhf(kh);
+            const float omega = sqrtf(g * k_len * tanh_kh);
+            const float sech2 = 1.0f - tanh_kh * tanh_kh;
+            // d(omega)/dk, which converts a spectral density in frequency to one
+            // in wavenumber. Getting this wrong scales the whole sea state.
+            const float domega =
+                g * (WATER_SEA_DEPTH * k_len * sech2 + tanh_kh) / fmaxf(omega * 2.0f, 1e-5f);
+            const float omega_h = omega * sqrtf(WATER_SEA_DEPTH / g);
+            const float tma = omega_h <= 1.0f ? 0.5f * omega_h * omega_h
+                              : omega_h < 2.0f ? 1.0f - 0.5f * (2.0f - omega_h) * (2.0f - omega_h)
+                                               : 1.0f;
+
+            const float jonswap =
+                _water_jonswap(omega, peak_omega, alpha, tma, WATER_PEAK_ENHANCEMENT);
+            const float theta = _water_wrap_angle(atan2f(kz, kx) - WATER_WIND_ANGLE);
+            const float omega_ratio = omega / peak_omega;
+            const float spread_power =
+                ((omega > peak_omega ? 9.77f * powf(omega_ratio, -2.5f)
+                                     : 6.97f * powf(omega_ratio, 5.0f)) +
+                 16.0f * tanhf(fminf(omega_ratio, 20.0f)) * WATER_SWELL * WATER_SWELL) *
+                0.58f;
+            const float focused = _water_spread_norm(spread_power) *
+                                  powf(fabsf(cosf(theta * 0.5f)), 2.0f * spread_power);
+            const float broad = 2.0f / 3.14159265359f * powf(fmaxf(cosf(theta), 0.0f), 2.0f);
+            const float direction = focused * 0.68f + broad * 0.32f;
+            // Rolls the very short modes off before the band edge, so the window
+            // does not end in a hard spectral cliff that rings after transform.
+            const float short_fade = expf(-0.00016f * k_len * k_len);
+            float density = jonswap * direction * short_fade;
+
+            if (cfg->secondary_scale > 0.0f) {
+                // A second swell train, older and crossing the wind. One
+                // direction of travel, however well spread, reads as corduroy.
+                const float sw_wind = 8.4f;
+                const float sw_fetch = 310000.0f;
+                const float sw_peak = 22.0f * powf(sw_wind * sw_fetch / (g * g), -0.33f);
+                const float sw_alpha = 0.076f * powf(g * sw_fetch / (sw_wind * sw_wind), -0.22f);
+                const float sw_spectrum = _water_jonswap(omega, sw_peak, sw_alpha, tma, 2.6f);
+                const float sw_theta =
+                    _water_wrap_angle(atan2f(kz, kx) - (WATER_WIND_ANGLE + 0.82f));
+                const float sw_ratio = omega / sw_peak;
+                const float sw_spread =
+                    ((omega > sw_peak ? 9.77f * powf(sw_ratio, -2.5f)
+                                      : 6.97f * powf(sw_ratio, 5.0f)) +
+                     9.0f) *
+                    0.72f;
+                const float sw_dir = _water_spread_norm(sw_spread) *
+                                     powf(fabsf(cosf(sw_theta * 0.5f)), 2.0f * sw_spread);
+                density += sw_spectrum * sw_dir * short_fade * cfg->secondary_scale;
+            }
+
+            const float amplitude =
+                sqrtf(fmaxf(0.0f, 2.0f * density * fabsf(domega) / k_len * delta_k * delta_k)) *
+                cfg->amplitude_scale;
+            float ga, gb;
+            _water_gaussian(&rng, &ga, &gb);
+            h0[pixel * 2 + 0] = ga * amplitude;
+            h0[pixel * 2 + 1] = gb * amplitude;
+
+            wd[0] = kx;
+            wd[1] = 1.0f / k_len;
+            wd[2] = kz;
+            wd[3] = omega;
+        }
+    }
+
+    // Pack h0(k) beside conj(h0(-k)). The mirror index wraps at 0 because -0 is
+    // 0 in a periodic grid, which is why the modulo is here and not a negation.
+    for (int y = 0; y < size; y++) {
+        for (int x = 0; x < size; x++) {
+            const int pixel = y * size + x;
+            const int mirror = ((size - y) % size) * size + ((size - x) % size);
+            initial[pixel * 4 + 0] = h0[pixel * 2 + 0];
+            initial[pixel * 4 + 1] = h0[pixel * 2 + 1];
+            initial[pixel * 4 + 2] = h0[mirror * 2 + 0];
+            initial[pixel * 4 + 3] = -h0[mirror * 2 + 1];
+        }
+    }
+    free(h0);
+
+    if (!twiddle)
+        return;
+    // Stockham twiddles: per stage and per output index, the rotation and the two
+    // input indices the butterfly reads. Precomputing the INDICES is what keeps
+    // the shader a pure gather with no bit-reversal pass of its own.
+    for (int stage = 0; stage < WATER_SPECTRUM_LOG; stage++) {
+        const int block = size >> (stage + 1);
+        for (int out = 0; out < size / 2; out++) {
+            const int first = (2 * block * (out / block) + out % block) % size;
+            const float angle = -6.28318530718f / (float)size * (float)(out / block) * (float)block;
+            const float c = cosf(angle);
+            const float s = sinf(angle);
+            float* lo = &twiddle[(stage * size + out) * 4];
+            float* hi = &twiddle[(stage * size + out + size / 2) * 4];
+            lo[0] = c;
+            lo[1] = s;
+            lo[2] = (float)first;
+            lo[3] = (float)(first + block);
+            hi[0] = -c;
+            hi[1] = -s;
+            hi[2] = (float)first;
+            hi[3] = (float)(first + block);
+        }
+    }
+}
 
 Water* create_water(void) {
     Water* water = calloc(1, sizeof(Water));
@@ -35,6 +275,10 @@ Water* create_water(void) {
     water->wavelength = 6.0f;
     water->steepness = 0.6f;
     water->spread = 0.42f;
+    // Gerstner by default: it allocates no GPU state, costs no passes, and is the
+    // right model at the scale most scenes put water at. The spectral path is an
+    // ocean, and asks for 45 passes and 24 textures to say so.
+    water->wave_model = WATER_WAVES_GERSTNER;
     return water;
 }
 
@@ -47,6 +291,25 @@ void free_water(Water* water) {
         glDeleteBuffers(1, &water->grid_vbo);
     if (water->grid_ebo)
         glDeleteBuffers(1, &water->grid_ebo);
+    if (water->fft_vao)
+        glDeleteVertexArrays(1, &water->fft_vao);
+    if (water->fft_vbo)
+        glDeleteBuffers(1, &water->fft_vbo);
+    if (water->twiddle_tex)
+        glDeleteTextures(1, &water->twiddle_tex);
+    for (int c = 0; c < WATER_CASCADE_COUNT; c++) {
+        if (water->cascade_initial[c])
+            glDeleteTextures(1, &water->cascade_initial[c]);
+        if (water->cascade_wave[c])
+            glDeleteTextures(1, &water->cascade_wave[c]);
+        for (int b = 0; b < 2; b++) {
+            for (int t = 0; t < 2; t++)
+                if (water->cascade_field[c][b][t])
+                    glDeleteTextures(1, &water->cascade_field[c][b][t]);
+            if (water->cascade_fbo[c][b])
+                glDeleteFramebuffers(1, &water->cascade_fbo[c][b]);
+        }
+    }
     free(water);
 }
 
@@ -124,12 +387,193 @@ static bool water_ensure_grid(Water* water) {
     return true;
 }
 
+static GLuint _water_make_field(int size) {
+    GLuint tex = 0;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    // RGBA16F is enough for a transformed field and halves the bandwidth of 45
+    // passes. The SOURCE data stays fp32 (below): a spectrum spans decades, and
+    // quantising it before the transform quantises the sea state itself.
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, size, size, 0, GL_RGBA, GL_FLOAT, NULL);
+    // LINEAR + REPEAT: the surface samples these as tiling world-space fields.
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    return tex;
+}
+
+static GLuint _water_make_data_tex(int w, int h, const float* data) {
+    GLuint tex = 0;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, w, h, 0, GL_RGBA, GL_FLOAT, data);
+    // NEAREST and CLAMP throughout: every read of these is an exact texelFetch by
+    // integer index, and a filtered twiddle index would be a different butterfly.
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    return tex;
+}
+
+static bool _water_ensure_spectra(Water* water) {
+    if (water->spectra_ready)
+        return true;
+    if (water->failed)
+        return false;
+
+    const int size = WATER_SPECTRUM_RES;
+    float* initial = calloc((size_t)size * size * 4, sizeof(float));
+    float* wave = calloc((size_t)size * size * 4, sizeof(float));
+    float* twiddle = calloc((size_t)size * WATER_SPECTRUM_LOG * 4, sizeof(float));
+    if (!initial || !wave || !twiddle) {
+        log_error("Water spectrum allocation failed; disabling water");
+        free(initial);
+        free(wave);
+        free(twiddle);
+        water->failed = true;
+        return false;
+    }
+
+    for (int c = 0; c < WATER_CASCADE_COUNT; c++) {
+        // The twiddle table depends only on the transform size, so it is built
+        // with the first cascade and shared by all of them.
+        _water_build_spectrum(size, &WATER_CASCADE_CFG[c], initial, wave, c == 0 ? twiddle : NULL);
+        water->cascade_initial[c] = _water_make_data_tex(size, size, initial);
+        water->cascade_wave[c] = _water_make_data_tex(size, size, wave);
+        if (c == 0)
+            water->twiddle_tex = _water_make_data_tex(size, WATER_SPECTRUM_LOG, twiddle);
+
+        for (int b = 0; b < 2; b++) {
+            for (int t = 0; t < 2; t++)
+                water->cascade_field[c][b][t] = _water_make_field(size);
+
+            glGenFramebuffers(1, &water->cascade_fbo[c][b]);
+            glBindFramebuffer(GL_FRAMEBUFFER, water->cascade_fbo[c][b]);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                                   water->cascade_field[c][b][0], 0);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D,
+                                   water->cascade_field[c][b][1], 0);
+            const GLenum targets[2] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1};
+            glDrawBuffers(2, targets);
+            if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+                log_error("Water spectral framebuffer incomplete; disabling water");
+                glBindFramebuffer(GL_FRAMEBUFFER, 0);
+                free(initial);
+                free(wave);
+                free(twiddle);
+                water->failed = true;
+                return false;
+            }
+        }
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    free(initial);
+    free(wave);
+    free(twiddle);
+    create_fullscreen_quad_vao(&water->fft_vao, &water->fft_vbo);
+    water->spectra_ready = true;
+    log_info("Water: %d spectral cascades at %d^2, %d passes/frame", WATER_CASCADE_COUNT, size,
+             WATER_CASCADE_COUNT * (1 + WATER_SPECTRUM_LOG * 2));
+    return true;
+}
+
+/*
+ * Advance every cascade one frame: evolve the spectrum, then transform it.
+ *
+ * No barriers and no read-write hazard anywhere: the evolve writes buffer 0 while
+ * reading only the immutable seed textures, and each FFT stage reads one buffer
+ * and writes the other. GL 4.1 has no texture barrier, and this needs none --
+ * which is the same structure postfx.c's froxel inject/integrate pair relies on.
+ *
+ * 14 stages, so the final result lands back in buffer 0 (stage 13 reads 1, writes
+ * 0). The surface shader therefore always samples buffer 0 and needs no parity.
+ */
+static void _water_run_spectral(Water* water, struct Engine* engine, float time) {
+    ShaderProgram* evolve = get_engine_shader_program_by_name(engine, "water_spectrum");
+    ShaderProgram* fft = get_engine_shader_program_by_name(engine, "water_fft");
+    if (!evolve || !fft) {
+        log_error("Water spectral programs missing; disabling water");
+        water->failed = true;
+        return;
+    }
+
+    GLint saved_viewport[4];
+    glGetIntegerv(GL_VIEWPORT, saved_viewport);
+    const GLboolean depth_was_enabled = glIsEnabled(GL_DEPTH_TEST);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_BLEND);
+    glViewport(0, 0, WATER_SPECTRUM_RES, WATER_SPECTRUM_RES);
+    glBindVertexArray(water->fft_vao);
+
+    for (int c = 0; c < WATER_CASCADE_COUNT; c++) {
+        glUseProgram(evolve->id);
+        glBindFramebuffer(GL_FRAMEBUFFER, water->cascade_fbo[c][0]);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, water->cascade_initial[c]);
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, water->cascade_wave[c]);
+        uniform_set_int(evolve->uniforms, "initialSpectrum", 0);
+        uniform_set_int(evolve->uniforms, "waveData", 1);
+        uniform_set_float(evolve->uniforms, "time", time);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+
+        glUseProgram(fft->id);
+        uniform_set_int(fft->uniforms, "twiddleTex", 0);
+        uniform_set_int(fft->uniforms, "in0", 1);
+        uniform_set_int(fft->uniforms, "in1", 2);
+        uniform_set_int(fft->uniforms, "size", WATER_SPECTRUM_RES);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, water->twiddle_tex);
+
+        for (int pass = 0; pass < WATER_SPECTRUM_LOG * 2; pass++) {
+            const int src = pass % 2;
+            const int dst = 1 - src;
+            glBindFramebuffer(GL_FRAMEBUFFER, water->cascade_fbo[c][dst]);
+            glActiveTexture(GL_TEXTURE1);
+            glBindTexture(GL_TEXTURE_2D, water->cascade_field[c][src][0]);
+            glActiveTexture(GL_TEXTURE2);
+            glBindTexture(GL_TEXTURE_2D, water->cascade_field[c][src][1]);
+            uniform_set_int(fft->uniforms, "axis", pass < WATER_SPECTRUM_LOG ? 0 : 1);
+            uniform_set_int(fft->uniforms, "stage", pass % WATER_SPECTRUM_LOG);
+            // The fftshift folds into the LAST stage as a checkerboard sign, which
+            // is why it is a uniform rather than a separate pass.
+            uniform_set_int(fft->uniforms, "finalize",
+                            pass == WATER_SPECTRUM_LOG * 2 - 1 ? 1 : 0);
+            glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+        }
+    }
+
+    glBindVertexArray(0);
+    glBindFramebuffer(GL_FRAMEBUFFER, engine->framebuffer);
+    glViewport(saved_viewport[0], saved_viewport[1], saved_viewport[2], saved_viewport[3]);
+    if (depth_was_enabled)
+        glEnable(GL_DEPTH_TEST);
+    glEnable(GL_BLEND);
+    glActiveTexture(GL_TEXTURE0);
+    check_gl_error("water spectral");
+}
+
 void water_render(Water* water, struct Scene* scene, struct Engine* engine, const mat4 view,
                   const mat4 draw_projection) {
     if (!water_active(water) || !scene || !engine)
         return;
     if (!water_ensure_grid(water))
         return;
+
+    // The spectral bands, before anything that samples them. Its own profiler
+    // scope would need the caller's, so it stays inside the water row -- the
+    // simulation is part of what water costs.
+    const bool fft = water->wave_model == WATER_WAVES_FFT;
+    if (fft) {
+        if (!_water_ensure_spectra(water))
+            return;
+        _water_run_spectral(water, engine, (float)engine->render_time);
+    }
 
     ShaderProgram* program = get_engine_shader_program_by_name(engine, "water");
     if (!program) {
@@ -209,6 +653,27 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
         uniform_set_int(u, "iblEnabled", 0);
         uniform_set_float(u, "iblIntensity", 1.0f);
         uniform_set_float(u, "maxReflectionLOD", 0.0f);
+    }
+
+    // The transformed cascades. Bound whichever model is running, and the units
+    // are pointed at unconditionally for the same reason the samplerCube above
+    // is: a sampler left at the default 0 is a type mismatch against whatever 2D
+    // texture happens to live there.
+    uniform_set_int(u, "waveModel", fft ? 1 : 0);
+    for (int c = 0; c < WATER_CASCADE_COUNT; c++) {
+        for (int t = 0; t < 2; t++) {
+            const int unit = WATER_CASCADE_UNIT0 + c * 2 + t;
+            char name[32];
+            snprintf(name, sizeof(name), "cascade%d_%d", c, t);
+            glActiveTexture(GL_TEXTURE0 + unit);
+            glBindTexture(GL_TEXTURE_2D, fft ? water->cascade_field[c][0][t] : 0);
+            uniform_set_int(u, name, unit);
+        }
+        char len[32], chop[32];
+        snprintf(len, sizeof(len), "cascadeLength[%d]", c);
+        snprintf(chop, sizeof(chop), "cascadeChoppiness[%d]", c);
+        uniform_set_float(u, len, WATER_CASCADE_LENGTH[c]);
+        uniform_set_float(u, chop, WATER_CASCADE_CHOPPINESS[c]);
     }
 
     glActiveTexture(GL_TEXTURE0);

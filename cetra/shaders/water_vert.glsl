@@ -19,6 +19,7 @@ out vec3 ViewPos;
 out vec3 Normal;
 out vec4 CurrClip;
 out vec4 PrevClip;
+out float Jacobian;
 
 // Required for the same reason pbr_vert declares it: without the qualifier the
 // driver may schedule this position's arithmetic differently from another
@@ -34,6 +35,7 @@ void main() {
     OceanSurface s = oceanEvaluate(p, time);
     WorldPos = s.world;
     Normal = s.normal;
+    Jacobian = s.jacobian;
 
     vec4 viewPos = view * vec4(s.world, 1.0);
     ViewPos = viewPos.xyz;

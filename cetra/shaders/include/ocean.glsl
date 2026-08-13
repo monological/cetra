@@ -29,9 +29,27 @@ const float OCEAN_LENGTH_FALLOFF = 0.42;
 const float OCEAN_AMPLITUDE_FALLOFF = 0.44;
 const float OCEAN_GRAVITY = 9.81;
 
+// Spectral cascades (waveModel 1). Sampled in the VERTEX stage as well as the
+// fragment stage, which GL 3.3 allows and which is the whole point -- the long and
+// medium bands displace real geometry.
+uniform int waveModel; // 0 = Gerstner octaves, 1 = spectral cascades
+uniform sampler2D cascade0_0;
+uniform sampler2D cascade0_1;
+uniform sampler2D cascade1_0;
+uniform sampler2D cascade1_1;
+uniform sampler2D cascade2_0;
+uniform sampler2D cascade2_1;
+uniform float cascadeLength[3];
+uniform float cascadeChoppiness[3];
+
 struct OceanSurface {
     vec3 world;  // displaced world position
     vec3 normal; // unit normal from the analytic derivatives
+    // Horizontal-map Jacobian. Below 1 the surface is COMPRESSING, which is where
+    // a real sea throws whitewater, so this is the foam selector rather than a
+    // height threshold. Always 1 on the Gerstner path, whose steepness is
+    // clamped so the mapping cannot compress that far.
+    float jacobian;
 };
 
 /*
@@ -49,7 +67,55 @@ struct OceanSurface {
  * would make "sharp" mean something different at every wavelength and put a
  * self-intersecting surface one slider nudge away.
  */
+/*
+ * Spectral surface: the long and medium bands displace the mesh, the short band
+ * is left for the fragment stage's slope distribution.
+ *
+ * Every derivative comes out of the same transform as the height -- field0.a is a
+ * cross derivative, field1.rg the two slopes, field1.ba the two horizontal
+ * derivatives -- so the normal below is analytic and costs nothing extra. That
+ * packing is the reason to spend two RGBA targets per cascade.
+ */
+OceanSurface oceanEvaluateSpectral(vec2 p) {
+    vec4 long0 = texture(cascade0_0, fract(p / cascadeLength[0] + 0.5));
+    vec4 long1 = texture(cascade0_1, fract(p / cascadeLength[0] + 0.5));
+    vec4 med0 = texture(cascade1_0, fract(p / cascadeLength[1] + 0.5));
+    vec4 med1 = texture(cascade1_1, fract(p / cascadeLength[1] + 0.5));
+
+    float q0 = cascadeChoppiness[0];
+    float q1 = cascadeChoppiness[1];
+
+    vec2 horizontal = long0.rg * q0 + med0.rg * q1;
+    float height = long0.b + med0.b;
+    // A linear random sea is vertically symmetric, and a real one is not: crests
+    // are sharper than troughs are deep. This low-order bound-harmonic term is the
+    // cheap weakly-nonlinear correction for that, kept small deliberately -- pushed
+    // harder it folds the surface, which is what the choppy-wave literature bounds.
+    height += 0.14 * (long0.b * long0.b - 0.080) + 0.32 * (med0.b * med0.b - 0.030);
+    // Not named `cross`: that is a builtin this function calls two lines below.
+    float crossDeriv = long0.a * q0 + med0.a * q1;
+    vec2 slope = long1.rg + med1.rg;
+    vec2 dHoriz = long1.ba * q0 + med1.ba * q1;
+
+    OceanSurface s;
+    // No amplitude knob here, deliberately. The spectrum is already physical --
+    // its height comes out of the wind speed and fetch it was seeded with -- so
+    // scaling it would be authoring over a sea state rather than choosing one.
+    // waterAmplitude belongs to the Gerstner path, where there is no sea state to
+    // ask. A calmer spectral ocean is a lower wind speed, not a smaller number
+    // here.
+    s.world = vec3(p.x + horizontal.x, waterLevel + height, p.y + horizontal.y);
+    vec3 dPdx = vec3(1.0 + dHoriz.x, slope.x, crossDeriv);
+    vec3 dPdz = vec3(crossDeriv, slope.y, 1.0 + dHoriz.y);
+    s.normal = normalize(cross(dPdz, dPdx));
+    s.jacobian = (1.0 + dHoriz.x) * (1.0 + dHoriz.y) - crossDeriv * crossDeriv;
+    return s;
+}
+
 OceanSurface oceanEvaluate(vec2 p, float t) {
+    if (waveModel == 1)
+        return oceanEvaluateSpectral(p);
+
     vec3 displaced = vec3(p.x, waterLevel, p.y);
     // Partial derivatives of the displaced position with respect to the
     // undisplaced grid coordinates. The identity rows are the flat plane's
@@ -103,5 +169,9 @@ OceanSurface oceanEvaluate(vec2 p, float t) {
     // cross(dPdz, dPdx) and not the reverse: on a flat surface that is +Y, and
     // the flipped order would light every wave from underneath.
     s.normal = normalize(cross(dPdz, dPdx));
+    // Steepness is clamped so this mapping cannot compress; reporting 1 says
+    // "nothing to select foam from" rather than approximating a number the model
+    // does not produce.
+    s.jacobian = 1.0;
     return s;
 }

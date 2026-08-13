@@ -2888,6 +2888,12 @@ def run_absorption_gate(workdir):
 # where the quantity it names stops being the thing on screen.
 WATER_FIXTURE = "water_fixture.cscn"
 WATER_FLAGS = ["--water", "--water-extent", "14", "--no-auto-exposure", "-E", "1.0"]
+# The spectral path, at an extent and level where the cascades are resolvable by
+# the grid. Its determinism is the interesting claim: 45 ping-pong passes per frame
+# over three cascades, and the whole thing has to reproduce to the bit.
+WATER_FFT_FLAGS = ["--water", "--water-waves", "fft", "--water-extent", "70",
+                   "--water-level", "0.6", "--no-auto-exposure", "-E", "1.0"]
+WATER_FFT_LIVE_MIN_PX = 50000
 # Three boxes down the left side, clear of the ramp, at increasing distance.
 WATER_ABSORB_BOXES = [(0.06, 0.86, 0.20, 0.94),
                       (0.06, 0.72, 0.20, 0.80),
@@ -2993,6 +2999,33 @@ def run_water_gate(workdir):
           f"want >={WATER_DRY_RB_MIN}")
     if not ok:
         failures.append("water-dry")
+
+    fa = os.path.join(workdir, "water_fft_a.ppm")
+    fb = os.path.join(workdir, "water_fft_b.ppm")
+    fft_ok = True
+    for path in (fa, fb):
+        err = render(scene, path, WATER_FFT_FLAGS)
+        if err:
+            print(f"  water-fft-det ERROR render failed: {err.strip()[-200:]}")
+            failures.append("water-fft-det")
+            fft_ok = False
+            break
+    if fft_ok:
+        ae_fft, _ = compare(fa, fb)
+        ok = ae_fft == 0
+        print(f"  water-fft-det {'PASS' if ok else 'FAIL'}  {ae_fft} px between two runs, want 0")
+        if not ok:
+            failures.append("water-fft-det")
+
+        # The spectral surface must not merely run -- it must produce a DIFFERENT
+        # surface from the Gerstner one. A cascade chain that transformed to zero
+        # would still be deterministic, and would still pass the arm above.
+        ae_model, _ = compare(fa, a)
+        ok = ae_model >= WATER_FFT_LIVE_MIN_PX
+        print(f"  water-fft-live {'PASS' if ok else 'FAIL'}  {ae_model} px vs gerstner, "
+              f"want >={WATER_FFT_LIVE_MIN_PX}")
+        if not ok:
+            failures.append("water-fft-live")
 
     on = _profiled_run(workdir, "water_on", WATER_FLAGS + ["--profiler"],
                        fixture=WATER_FIXTURE, size=("400", "300"))

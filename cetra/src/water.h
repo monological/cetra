@@ -35,6 +35,37 @@
 // fade. Sampler units are per program, so this collides with nothing -- it is
 // the same argument particle_frag makes for its own depth tap on unit 7.
 #define WATER_DEPTH_UNIT 7
+// Six transformed cascade fields (3 bands x 2 targets) start here. Units 0-1 are
+// albedo/normal by house convention and 6-7 are taken above, so this sits clear of
+// both and of the engine-bound IBL block at 9-15.
+#define WATER_CASCADE_UNIT0 16
+
+/*
+ * Spectral cascades (--water-waves fft).
+ *
+ * A Tessendorf ocean: the surface is described statistically in frequency space,
+ * each Fourier mode is advanced by the gravity-wave dispersion relation, and an
+ * inverse FFT recovers displacement. Three bands rather than one, because a
+ * single periodic field asked to carry both swell and capillary detail either
+ * repeats visibly or resolves neither.
+ *
+ * WHY THIS RUNS AT ALL ON GL 4.1. Every stage is a pure gather: the Stockham
+ * butterfly reads exactly two texels plus a twiddle row and writes one texel to
+ * two targets, and the spectrum evolution is per-texel. Neither needs shared
+ * memory, atomics or scatter, so both are fragment passes with MRT and the
+ * missing compute stage costs ping-pong draws rather than a redesign.
+ *
+ * 7 stages per axis, two axes, three cascades plus one evolve each = 45 draws at
+ * 128 squared per frame. Small in pixels; the cost is per-pass overhead.
+ */
+#define WATER_SPECTRUM_RES  128
+#define WATER_SPECTRUM_LOG  7 // log2(WATER_SPECTRUM_RES)
+#define WATER_CASCADE_COUNT 3
+
+typedef enum WaterWaveModel {
+    WATER_WAVES_GERSTNER = 0, // closed-form octaves; lake scale, no GPU state
+    WATER_WAVES_FFT,          // spectral cascades; ocean scale
+} WaterWaveModel;
 
 struct Engine;
 struct Scene;
@@ -81,6 +112,8 @@ typedef struct Water {
     WaterHeightFn height_at; // optional bed provider; see WaterHeightFn
     void* height_ctx;
 
+    WaterWaveModel wave_model;
+
     // Lazily built GPU state, on the postfx ensure_* pattern. `failed` latches
     // so a missing program costs one log line rather than one per frame forever.
     GLuint grid_vao;
@@ -88,7 +121,29 @@ typedef struct Water {
     GLuint grid_ebo;
     int grid_index_count;
     bool failed;
+
+    // Spectral state, allocated only under WATER_WAVES_FFT. The initial spectrum
+    // and wave data are seeded once on the CPU and never change; the field pair
+    // ping-pongs through the FFT stages every frame.
+    //
+    // Two RGBA16F targets per buffer because the transform carries FOUR complex
+    // fields at once -- displacement xz, height with a cross derivative, the two
+    // slopes, and the two horizontal derivatives. Packing them into one transform
+    // is what makes the derivatives free rather than three more FFTs.
+    GLuint cascade_initial[WATER_CASCADE_COUNT];
+    GLuint cascade_wave[WATER_CASCADE_COUNT];
+    GLuint cascade_field[WATER_CASCADE_COUNT][2][2]; // [cascade][buffer][target]
+    GLuint cascade_fbo[WATER_CASCADE_COUNT][2];      // one per buffer, both targets attached
+    GLuint twiddle_tex;
+    GLuint fft_vao, fft_vbo; // fullscreen quad for the spectral passes
+    bool spectra_ready;
 } Water;
+
+// World-space tiling period of each cascade, in metres. Public because the
+// surface shader needs the same numbers to build its sample UVs, and a second
+// copy of them would be a silent mismatch rather than an error.
+extern const float WATER_CASCADE_LENGTH[WATER_CASCADE_COUNT];
+extern const float WATER_CASCADE_CHOPPINESS[WATER_CASCADE_COUNT];
 
 Water* create_water(void);
 void free_water(Water* water);

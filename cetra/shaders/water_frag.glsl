@@ -31,6 +31,7 @@ in vec3 ViewPos;
 in vec3 Normal;
 in vec4 CurrClip;
 in vec4 PrevClip;
+in float Jacobian;
 
 uniform mat4 view;
 uniform mat4 projection;
@@ -59,6 +60,11 @@ uniform float maxReflectionLOD;
 
 #include "view.glsl"
 #include "depth.glsl"
+// The surface definition, for its cascade samplers and its wave-model switch. The
+// fragment stage does not re-evaluate the surface -- the vertex stage's position
+// and normal are interpolated in -- but it reads the SHORT band, which by design
+// never reaches the mesh.
+#include "ocean.glsl"
 
 // Coarsest mip the transmission may select. The resolve stops generating there.
 const float WATER_TRANSMISSION_MAX_LOD = 6.0;
@@ -73,6 +79,21 @@ const float WATER_MIN_PATH = 0.01;
 // little to do with the ray -- the validity check below catches the wrong ones,
 // but not reaching for them is cheaper than rejecting them.
 const float WATER_MAX_BEND = 1.0;
+// The short cascade's resolved slope is faded out between these view distances,
+// its energy moving into roughness. Metres: at 12 m tiling, past ~120 m a period
+// is a couple of pixels and a literal normal there is aliasing, not detail.
+const float WATER_SHORT_NEAR = 42.0;
+const float WATER_SHORT_FAR = 118.0;
+const float WATER_SHORT_SLOPE_GAIN = 0.42;
+// Interface roughness spans calm-glass to rippled as the short slopes build.
+const float WATER_ROUGH_CALM = 0.035;
+const float WATER_ROUGH_RIPPLED = 0.115;
+// Jacobian compression at which foam starts and saturates.
+const float WATER_FOAM_ON = 0.16;
+const float WATER_FOAM_FULL = 0.42;
+// Whitewater is not white: it is a bright grey with the sky in it.
+const vec3 WATER_FOAM_COLOR = vec3(0.72, 0.80, 0.78);
+const float WATER_FOAM_MAX = 0.62;
 
 vec2 screenVelocity() {
     return (CurrClip.xy / CurrClip.w - PrevClip.xy / PrevClip.w) * 0.5;
@@ -86,6 +107,34 @@ void main() {
     vec2 uv = gl_FragCoord.xy / max(screenSize, vec2(1.0));
 
     vec3 N = normalize(Normal);
+    float roughness = waterRoughness;
+    float foam = 0.0;
+    if (waveModel == 1) {
+        // The short cascade shades but never displaces. Carried into the mesh it
+        // would alias into a ridged texture; carried into the NORMAL alone it
+        // shimmers as the waves recede past a pixel. So its slope is faded out
+        // with distance and its remaining energy moved into roughness instead --
+        // the geometry-to-BRDF transition, which is what keeps the horizon stable
+        // without throwing the simulated detail away.
+        vec2 shortUv = fract(WorldPos.xz / cascadeLength[2] + 0.5);
+        vec4 short0 = texture(cascade2_0, shortUv);
+        vec4 short1 = texture(cascade2_1, shortUv);
+        float fade = 1.0 - smoothstep(WATER_SHORT_NEAR, WATER_SHORT_FAR, length(ViewPos));
+        vec2 shortSlope = short1.rg * fade;
+        N = normalize(N + vec3(-shortSlope.x, 0.0, -shortSlope.y) * WATER_SHORT_SLOPE_GAIN);
+        roughness = mix(WATER_ROUGH_CALM, WATER_ROUGH_RIPPLED,
+                        smoothstep(0.012, 0.30, length(shortSlope)));
+
+        // Foam where the horizontal map COMPRESSES, from the vertex Jacobian plus
+        // the short band's own. Deformation, not a height threshold: a tall smooth
+        // swell does not break and a compressing one does, and selecting on height
+        // puts white on the wrong crests.
+        float shortCross = short0.a * cascadeChoppiness[2];
+        vec2 shortDeriv = short1.ba * cascadeChoppiness[2];
+        float shortJ = (1.0 + shortDeriv.x) * (1.0 + shortDeriv.y) - shortCross * shortCross;
+        float compression = max(0.0, 1.0 - Jacobian) + max(0.0, 1.0 - shortJ) * fade * 0.62;
+        foam = smoothstep(WATER_FOAM_ON, WATER_FOAM_FULL, compression) * fade;
+    }
     vec3 V = normalize(-ViewPos);
     // The interface is shaded in view space, so the normal has to arrive there
     // too -- the surface normal is authored in world space by ocean.glsl.
@@ -136,7 +185,7 @@ void main() {
             if (-viewZFromNdcZ(probeNdc) < surfaceDist)
                 refrUV = uv;
         }
-        bed = textureLod(sceneColorTex, refrUV, waterRoughness * WATER_TRANSMISSION_MAX_LOD).rgb;
+        bed = textureLod(sceneColorTex, refrUV, roughness * WATER_TRANSMISSION_MAX_LOD).rgb;
     } else {
         bed = vec3(0.0);
     }
@@ -148,19 +197,27 @@ void main() {
     // authored.
     float f0s = (waterIor - 1.0) / (waterIor + 1.0);
     vec3 F0 = vec3(f0s * f0s);
-    vec3 F = fresnelSchlickRoughness(NdotV, F0, waterRoughness);
-    vec2 ab = texture(brdfLUT, vec2(NdotV, waterRoughness)).rg;
+    vec3 F = fresnelSchlickRoughness(NdotV, F0, roughness);
+    vec2 ab = texture(brdfLUT, vec2(NdotV, roughness)).rg;
     vec3 specWeight = F * ab.x + ab.y;
     vec3 reflected = vec3(0.0);
     if (iblEnabled > 0) {
         vec3 R = reflect(-V, Nv);
         vec3 Rw = normalize(mat3(transpose(view)) * R);
-        reflected = textureLod(prefilteredMap, Rw, waterRoughness * maxReflectionLOD).rgb *
+        reflected = textureLod(prefilteredMap, Rw, roughness * maxReflectionLOD).rgb *
                     iblIntensity * preExposure;
     }
 
     // Energy split: what the interface reflects it does not transmit.
     vec3 color = body * (1.0 - specWeight) + reflected * specWeight;
+
+    // Foam sits ON the interface, so it replaces both halves rather than being
+    // added to them: whitewater is opaque, and adding it would let the body colour
+    // show through a surface that is full of air.
+    if (foam > 0.0) {
+        vec3 lit = WATER_FOAM_COLOR * (iblEnabled > 0 ? iblIntensity * preExposure : preExposure);
+        color = mix(color, lit, clamp(foam, 0.0, 1.0) * WATER_FOAM_MAX);
+    }
 
     FragColor = vec4(min(color, vec3(WS_SCENE_MAX)), 1.0);
     // Alpha 0: an opaque model surface, NOT the catcher's negative reflective
@@ -170,7 +227,7 @@ void main() {
     NormalOut = vec4(Nv, 0.0);
     // Linear view-Z in .z is what makes the atmosphere composite fog this
     // surface at the water's own depth rather than the bed's.
-    VelocityOut = vec4(screenVelocity(), ViewPos.z, waterRoughness);
+    VelocityOut = vec4(screenVelocity(), ViewPos.z, roughness);
     AlbedoOut = vec4(waterScatter, 1.0);
     DiffuseOut = vec4(0.0);
     // No ambient specular routed out for occlusion: water's reflection stays in

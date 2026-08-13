@@ -147,6 +147,7 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --water-level <f>  Still-water plane, world Y (implies --water)\n");
     fprintf(stderr,
             "      --water-extent <f> Half-size of the water surface (implies --water)\n");
+    fprintf(stderr, "      --water-waves <m>  gerstner (default) or fft spectral cascades\n");
     fprintf(stderr, "      --sky              Procedural physically-based sky (instead of -e)\n");
     fprintf(stderr, "      --sky-debug        Blit the sky LUTs into the frame corner\n");
     fprintf(stderr, "      --clouds           Volumetric cloud layer (implies --sky)\n");
@@ -666,6 +667,20 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 return -1;
             }
             args->water_level = (float)atof(argv[i]);
+            args->water = 1;
+        } else if (strcmp(argv[i], "--water-waves") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            if (strcmp(argv[i], "fft") == 0) {
+                args->water_fft = 1;
+            } else if (strcmp(argv[i], "gerstner") == 0) {
+                args->water_fft = 0;
+            } else {
+                fprintf(stderr, "Error: unknown water wave model '%s' (gerstner|fft)\n", argv[i]);
+                return -1;
+            }
             args->water = 1;
         } else if (strcmp(argv[i], "--water-extent") == 0) {
             if (++i >= argc) {
@@ -2876,6 +2891,8 @@ int main(int argc, char** argv) {
                 water->level = args.water_level;
             if (args.water_extent > 0.0f)
                 water->extent = args.water_extent;
+            if (args.water_fft)
+                water->wave_model = WATER_WAVES_FFT;
             scene->water = water;
         }
     }

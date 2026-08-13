@@ -557,6 +557,33 @@ ShaderProgram* create_water_program() {
     return program;
 }
 
+// The two spectral passes. Both are fullscreen quads over a 128^2 target with two
+// MRT outputs -- create_post_program is not used because that helper is built for
+// the post chain's single-target passes.
+ShaderProgram* create_water_spectrum_program() {
+    ShaderProgram* program = NULL;
+
+    if ((program = create_program_from_source("water_spectrum", post_vert_shader_str,
+                                             water_spectrum_frag_shader_str, NULL)) == NULL) {
+        log_error("Failed to initialize water spectrum shader program");
+        return NULL;
+    }
+
+    return program;
+}
+
+ShaderProgram* create_water_fft_program() {
+    ShaderProgram* program = NULL;
+
+    if ((program = create_program_from_source("water_fft", post_vert_shader_str,
+                                             water_fft_frag_shader_str, NULL)) == NULL) {
+        log_error("Failed to initialize water FFT shader program");
+        return NULL;
+    }
+
+    return program;
+}
+
 ShaderProgram* create_skybox_program() {
     ShaderProgram* program = NULL;
 

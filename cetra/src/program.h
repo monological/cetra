@@ -90,6 +90,10 @@ ShaderProgram* create_depth_prepass_program();
 // because it samples the resolved scene depth, and pbr_frag has declared all
 // sixteen fragment samplers the driver allows.
 ShaderProgram* create_water_program();
+// The spectral cascade passes (--water-waves fft): evolve the spectrum, then one
+// Stockham inverse-FFT stage per draw. Both write two MRT targets.
+ShaderProgram* create_water_spectrum_program();
+ShaderProgram* create_water_fft_program();
 // Resolves the depth cascades into the filterable moment cascades (--msm)
 ShaderProgram* create_msm_resolve_program();
 ShaderProgram* create_shadow_absorb_program();
