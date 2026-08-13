@@ -2990,6 +2990,28 @@ WATER_FOG_BED_BOXES = [(0.40, 0.390, 0.60, 0.420),
                        (0.40, 0.540, 0.60, 0.570)]
 WATER_FOG_BED_TOTAL_MIN = 1.25
 
+# Reach invariance (spec 11.34). The arm that catches "the water stops short of the
+# horizon", which the clipmap did by 5.1 degrees while a comment claimed otherwise.
+#
+# Formulated so it needs NO horizon row, no camera parameters and no tuned threshold: if
+# the surface reaches the horizon, multiplying the nominal extent by four orders of
+# magnitude cannot move its top edge, because the edge is already at the vanishing line.
+# If it does move, the extent was the reach.
+#
+# The top edge is "the highest row that differs from the same frame with no water" --
+# above the surface both frames show identical sky, so agreement IS absence.
+#
+# Measured on the clipmap build: 207 -> 136 of 600 rows, a 71 px move. Independently
+# predicted at 0.348 and 0.217 of frame height from the camera geometry, which is the
+# reason to trust the instrument rather than the threshold.
+WATER_REACH_BIG_EXTENT = "200000"
+# A few pixels of slack for the lattice's own quantisation at the horizon row, well under
+# the 71 px defect and far under the 78 px the geometry predicts for this framing.
+WATER_REACH_MAX_MOVE_PX = 4
+# Left strip, clear of the fixture's ramp. Shadows are held out of both sides so the
+# ramp's cast shadow cannot read as water.
+WATER_REACH_STRIP = (0.02, 0.30)
+
 # Spectral motion vectors (spec 11.33 phase 4). The camera is static in headless, so
 # camera velocity is exactly zero and motion blur is a no-op on anything that reports
 # no motion of its own -- which is what makes this a velocity measurement rather than a
@@ -3237,6 +3259,26 @@ def _water_foam_px(pix, w, h, box):
     return n
 
 
+def _water_top_row(wet, dry, w, h, min_run=6):
+    """Highest row where the wet frame differs from the dry one over a run of pixels.
+
+    A run rather than a single pixel so one stray LSB cannot report an edge; and a
+    difference rather than a colour test so the arm needs to know nothing about what water
+    or sky look like.
+    """
+    x0, x1 = int(WATER_REACH_STRIP[0] * w), int(WATER_REACH_STRIP[1] * w)
+    for y in range(h):
+        run = 0
+        for x in range(x0, x1):
+            o = (y * w + x) * 3
+            d = max(abs(wet[o] - dry[o]), abs(wet[o + 1] - dry[o + 1]),
+                    abs(wet[o + 2] - dry[o + 2]))
+            run = run + 1 if d > 2 else 0
+            if run >= min_run:
+                return y
+    return h
+
+
 def _water_shore_fall(path, window):
     """Median sharpest single-row fall down each column crossing the waterline.
 
@@ -3307,6 +3349,11 @@ def run_water_gate(workdir):
                       override it rather than the reverse. absorption is read because
                       no flag can set it, so the frame can only have moved through the
                       authoring path.
+      water-horizon   the surface reaches the horizon, asserted as REACH INVARIANCE:
+                      multiplying the nominal extent by 14,000 must not move the water's
+                      top edge, because an edge already at the vanishing line cannot go
+                      higher. Needs no horizon row and no camera parameters. The clipmap
+                      fails it by 71 px, which is what it was written against.
       water-flags     the flags override the scene file, and a NEGATIVE flag neither
                       creates a surface nor loses to a sibling. Read through the probe,
                       which reports what the surface is rather than what it looks like:
@@ -3522,6 +3569,33 @@ def run_water_gate(workdir):
               f"authored level vs --water-level {ae_level} px (want 0)")
         if not ok:
             failures.append("water-cscn")
+
+    # Reach invariance. `off` is the matching dry reference -- same flags, --no-water.
+    reach_a = os.path.join(workdir, "water_reach_authored.ppm")
+    reach_b = os.path.join(workdir, "water_reach_big.ppm")
+    err = render(scene, reach_a, WATER_PIN + WATER_NO_CATCHER)
+    if not err:
+        err = render(scene, reach_b, WATER_PIN + WATER_NO_CATCHER +
+                     ["--water-extent", WATER_REACH_BIG_EXTENT])
+    if err:
+        print(f"  water-horizon ERROR render failed: {err.strip()[-200:]}")
+        failures.append("water-horizon")
+    else:
+        wr, hr, pix_a = _read_ppm(reach_a)
+        _, _, pix_b = _read_ppm(reach_b)
+        _, _, pix_dry = _read_ppm(off)
+        top_a = _water_top_row(pix_a, pix_dry, wr, hr)
+        top_b = _water_top_row(pix_b, pix_dry, wr, hr)
+        moved = abs(top_a - top_b)
+        # Both must find a surface at all: two misses would report 0 movement and pass.
+        found = top_a < hr and top_b < hr
+        ok = found and moved <= WATER_REACH_MAX_MOVE_PX
+        print(f"  water-horizon {'PASS' if ok else 'FAIL'}  top water row {top_a} -> "
+              f"{top_b} of {hr} at extent x{int(float(WATER_REACH_BIG_EXTENT) / 14)}, "
+              f"moved {moved} px (want <={WATER_REACH_MAX_MOVE_PX}); surface found "
+              f"both sides {found}")
+        if not ok:
+            failures.append("water-horizon")
 
     # Flag precedence over the scene file. No pixels: the probe reports what the surface
     # IS, and every case here was a silent defect that a rendered frame could not show.
