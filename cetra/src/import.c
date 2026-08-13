@@ -362,8 +362,27 @@ static void extract_material_properties(struct aiMaterial* ai_mat, Material* mat
                 aiGetMaterialFloat(ai_mat, AI_MATKEY_VOLUME_THICKNESS_FACTOR, &thickness)) {
                 material->thickness = thickness;
             }
-            log_info("Material is transmissive: transmission=%.2f ior=%.2f thickness=%.2f",
-                     material->transmission, material->ior, material->thickness);
+            // Read as a pair: an attenuation colour with no distance has nothing to
+            // scale it, and glTF's default distance is infinity, so a lone colour
+            // must stay inert rather than absorb over the thickness by accident.
+            ai_real attenuation_distance;
+            if (AI_SUCCESS == aiGetMaterialFloat(ai_mat, AI_MATKEY_VOLUME_ATTENUATION_DISTANCE,
+                                                 &attenuation_distance) &&
+                attenuation_distance > 0.0f) {
+                material->attenuation_distance = attenuation_distance;
+                struct aiColor4D attenuation_color;
+                if (AI_SUCCESS == aiGetMaterialColor(ai_mat, AI_MATKEY_VOLUME_ATTENUATION_COLOR,
+                                                     &attenuation_color)) {
+                    glm_vec3_copy((vec3){attenuation_color.r, attenuation_color.g,
+                                         attenuation_color.b},
+                                  material->attenuation_color);
+                }
+            }
+            log_info("Material is transmissive: transmission=%.2f ior=%.2f thickness=%.2f "
+                     "attenuation=%.2f,%.2f,%.2f over %.2f",
+                     material->transmission, material->ior, material->thickness,
+                     material->attenuation_color[0], material->attenuation_color[1],
+                     material->attenuation_color[2], material->attenuation_distance);
         }
     }
 

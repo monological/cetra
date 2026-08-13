@@ -80,6 +80,8 @@ uniform float ior;
 // with the resolved opaque scene color sampled through the surface
 uniform float transmission;
 uniform float transmissionThickness; // KHR_materials_volume, world units
+uniform vec3 attenuationColor;       // KHR_materials_volume, survivor at attenuationDistance
+uniform float attenuationDistance;   // KHR_materials_volume, world units (0 = infinite: no absorption)
 // Mipped opaque-scene resolve (unit 6). Also carries the moment atlas during the
 // OIT accumulate -- see oitMomentTex below before narrowing or relocating this.
 uniform sampler2D sceneColorTex;
@@ -1894,6 +1896,20 @@ void main() {
         // read a progressively softer background
         vec3 sceneSample =
             textureLod(sceneColorTex, refrUV, roughnessMap * TRANSMISSION_MAX_LOD).rgb;
+        // KHR_materials_volume absorption, over the same path the bend above
+        // travelled. attenuationColor is defined as what survives exactly
+        // attenuationDistance, so the extinction reproducing it is
+        // -log(color)/distance. Distance 0 is this material's spelling of the
+        // extension's infinite default and leaves the sample untouched, which is
+        // what keeps every scene that never authored a volume bit-identical.
+        //
+        // The colour is clamped off zero because a fully absorbing channel is an
+        // infinite extinction, and inf * 0 -- an opaque tint on thin glass, which
+        // is a legal authoring combination -- is NaN, not black.
+        if (attenuationDistance > 0.0) {
+            vec3 sigmaT = -log(max(attenuationColor, vec3(1e-5))) / attenuationDistance;
+            sceneSample *= exp(-sigmaT * transmissionThickness);
+        }
         vec3 Ft = fresnelSchlickRoughness(NdotV, F0, roughnessMap);
         // KHR_materials_specular: the transmitted share is an energy trade
         // against the specular layer, so the extension path uses the same

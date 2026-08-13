@@ -56,6 +56,13 @@ const MaterialParam MATERIAL_PARAMS[] = {
     {"ior", "Transmission", MP(ior, MATERIAL_PARAM_FLOAT, 1.0f, 3.0f)},
     {"transmission", "Transmission", MP(transmission, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
     {"thickness", "Transmission", MP(thickness, MATERIAL_PARAM_FLOAT, 0.0f, 5.0f)},
+    {"attenuationColor", "Transmission",
+     MP(attenuation_color, MATERIAL_PARAM_COLOR, 0.0f, 1.0f)},
+    // Reaches 0 because that is how this field spells glTF's default of infinity;
+    // an editor dragging to the bottom of the range turns absorption off rather
+    // than driving the extinction to a divide by zero.
+    {"attenuationDistance", "Transmission",
+     MP(attenuation_distance, MATERIAL_PARAM_FLOAT, 0.0f, 20.0f)},
     {"filmThickness", "Transmission", MP(filmThickness, MATERIAL_PARAM_FLOAT, 0.0f, 1000.0f)},
 
     {"curvatureScale", "Skin", MP(curvature_scale, MATERIAL_PARAM_FLOAT, 0.0f, 2.0f)},
@@ -172,6 +179,8 @@ Material* create_material() {
     material->ior = 1.5f;
     material->transmission = 0.0f;
     material->thickness = 0.0f;
+    glm_vec3_one(material->attenuation_color);
+    material->attenuation_distance = 0.0f; // glTF's infinity: absorption off until imported
     material->filmThickness = 0.0f;
     material->clearcoat = 0.0f;
     material->clearcoat_roughness = 0.0f;

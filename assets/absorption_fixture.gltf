@@ -1,0 +1,304 @@
+{
+ "asset": {
+  "version": "2.0",
+  "generator": "gen_absorption_fixture.py"
+ },
+ "extensionsUsed": [
+  "KHR_materials_transmission",
+  "KHR_materials_ior",
+  "KHR_materials_volume"
+ ],
+ "scene": 0,
+ "scenes": [
+  {
+   "nodes": [
+    0,
+    1,
+    2,
+    3
+   ]
+  }
+ ],
+ "nodes": [
+  {
+   "name": "absorb_backdrop",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    1.0,
+    -1.5
+   ],
+   "scale": [
+    5.0,
+    3.0,
+    1.0
+   ]
+  },
+  {
+   "name": "absorb_t000",
+   "mesh": 1,
+   "translation": [
+    -1.1,
+    1.0,
+    0.0
+   ],
+   "scale": [
+    0.9,
+    0.9,
+    1.0
+   ]
+  },
+  {
+   "name": "absorb_t030",
+   "mesh": 2,
+   "translation": [
+    0.0,
+    1.0,
+    0.0
+   ],
+   "scale": [
+    0.9,
+    0.9,
+    1.0
+   ]
+  },
+  {
+   "name": "absorb_t060",
+   "mesh": 3,
+   "translation": [
+    1.1,
+    1.0,
+    0.0
+   ],
+   "scale": [
+    0.9,
+    0.9,
+    1.0
+   ]
+  }
+ ],
+ "meshes": [
+  {
+   "name": "absorb_backdrop",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1
+     },
+     "indices": 2,
+     "material": 0
+    }
+   ]
+  },
+  {
+   "name": "absorb_t000",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1
+     },
+     "indices": 2,
+     "material": 1
+    }
+   ]
+  },
+  {
+   "name": "absorb_t030",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1
+     },
+     "indices": 2,
+     "material": 2
+    }
+   ]
+  },
+  {
+   "name": "absorb_t060",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1
+     },
+     "indices": 2,
+     "material": 3
+    }
+   ]
+  }
+ ],
+ "materials": [
+  {
+   "name": "absorb_backdrop",
+   "doubleSided": true,
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 1.0
+   },
+   "emissiveFactor": [
+    0.6,
+    0.6,
+    0.6
+   ]
+  },
+  {
+   "name": "absorb_t000",
+   "doubleSided": true,
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     1.0,
+     1.0,
+     1.0,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 0.0
+   },
+   "extensions": {
+    "KHR_materials_transmission": {
+     "transmissionFactor": 1.0
+    },
+    "KHR_materials_ior": {
+     "ior": 1.5
+    },
+    "KHR_materials_volume": {
+     "thicknessFactor": 0.0,
+     "attenuationColor": [
+      1.0,
+      0.35,
+      0.35
+     ],
+     "attenuationDistance": 0.3
+    }
+   }
+  },
+  {
+   "name": "absorb_t030",
+   "doubleSided": true,
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     1.0,
+     1.0,
+     1.0,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 0.0
+   },
+   "extensions": {
+    "KHR_materials_transmission": {
+     "transmissionFactor": 1.0
+    },
+    "KHR_materials_ior": {
+     "ior": 1.5
+    },
+    "KHR_materials_volume": {
+     "thicknessFactor": 0.3,
+     "attenuationColor": [
+      1.0,
+      0.35,
+      0.35
+     ],
+     "attenuationDistance": 0.3
+    }
+   }
+  },
+  {
+   "name": "absorb_t060",
+   "doubleSided": true,
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     1.0,
+     1.0,
+     1.0,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 0.0
+   },
+   "extensions": {
+    "KHR_materials_transmission": {
+     "transmissionFactor": 1.0
+    },
+    "KHR_materials_ior": {
+     "ior": 1.5
+    },
+    "KHR_materials_volume": {
+     "thicknessFactor": 0.6,
+     "attenuationColor": [
+      1.0,
+      0.35,
+      0.35
+     ],
+     "attenuationDistance": 0.3
+    }
+   }
+  }
+ ],
+ "accessors": [
+  {
+   "bufferView": 0,
+   "componentType": 5126,
+   "count": 4,
+   "type": "VEC3",
+   "min": [
+    -0.5,
+    -0.5,
+    0.0
+   ],
+   "max": [
+    0.5,
+    0.5,
+    0.0
+   ]
+  },
+  {
+   "bufferView": 1,
+   "componentType": 5126,
+   "count": 4,
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 2,
+   "componentType": 5123,
+   "count": 6,
+   "type": "SCALAR"
+  }
+ ],
+ "bufferViews": [
+  {
+   "buffer": 0,
+   "byteOffset": 0,
+   "byteLength": 48,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 48,
+   "byteLength": 48,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 96,
+   "byteLength": 12,
+   "target": 34963
+  }
+ ],
+ "buffers": [
+  {
+   "uri": "data:application/octet-stream;base64,AAAAvwAAAL8AAAAAAAAAPwAAAL8AAAAAAAAAPwAAAD8AAAAAAAAAvwAAAD8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAABAAIAAAACAAMA",
+   "byteLength": 108
+  }
+ ]
+}

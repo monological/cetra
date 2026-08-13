@@ -54,14 +54,19 @@ typedef struct Material {
     float ao;
     float opacity;
     AlphaMode alpha_mode;
-    float alphaCutoff;   // Alpha cutoff threshold for hair/foliage (0 = disabled, 0.5 typical)
-    float normalScale;   // Normal map intensity scale (1.0 = full strength)
-    float aoStrength;    // Occlusion texture strength (1.0 = full effect)
-    float ior;           // Index of refraction (1.5 for plastic/glass, 1.33 for water)
-    float transmission;  // KHR_materials_transmission factor (0 = opaque; > 0 joins the
-                         // late pass and samples the resolved opaque scene color)
-    float thickness;     // KHR_materials_volume thickness in world units (0 = thin: no
-                         // refraction bend, only tint/blur)
+    float alphaCutoff;      // Alpha cutoff threshold for hair/foliage (0 = disabled, 0.5 typical)
+    float normalScale;      // Normal map intensity scale (1.0 = full strength)
+    float aoStrength;       // Occlusion texture strength (1.0 = full effect)
+    float ior;              // Index of refraction (1.5 for plastic/glass, 1.33 for water)
+    float transmission;     // KHR_materials_transmission factor (0 = opaque; > 0 joins the
+                            // late pass and samples the resolved opaque scene color)
+    float thickness;        // KHR_materials_volume thickness in world units (0 = thin: no
+                            // refraction bend, only tint/blur)
+    vec3 attenuation_color; // KHR_materials_volume: the colour a path of exactly
+                            // attenuation_distance leaves unabsorbed (white = none)
+    float attenuation_distance; // KHR_materials_volume distance in world units. 0 stands for the
+                                // glTF default of infinity -- no absorption at any thickness --
+                                // because a real distance is always positive.
     float filmThickness; // Thin-film thickness in nanometers (0 = disabled, 200-600nm typical)
     float clearcoat;     // KHR_materials_clearcoat weight (0 = no coat lobe)
     float clearcoat_roughness;  // Clearcoat lobe roughness (glTF default 0 = mirror-smooth)

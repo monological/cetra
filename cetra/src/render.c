@@ -171,6 +171,8 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
     uniform_set_float(u, "ior", material->ior);
     uniform_set_float(u, "transmission", material->transmission);
     uniform_set_float(u, "transmissionThickness", material->thickness);
+    uniform_set_vec3(u, "attenuationColor", (const float*)&material->attenuation_color);
+    uniform_set_float(u, "attenuationDistance", material->attenuation_distance);
     uniform_set_float(u, "filmThickness", material->filmThickness);
     uniform_set_float(u, "clearcoat", material->clearcoat);
     uniform_set_float(u, "clearcoatRoughness", material->clearcoat_roughness);
