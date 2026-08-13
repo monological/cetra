@@ -396,6 +396,7 @@ static void parse_water(CetraSceneDesc* d, const cJSON* root) {
     out->has_scatter = get_vec3(water, "scatter", out->scatter);
     out->has_caustics = get_bool(water, "caustics", &out->caustics);
     out->has_shore_coverage = get_bool(water, "shoreCoverage", &out->shore_coverage);
+    out->has_far_lod = get_bool(water, "farLod", &out->far_lod);
 
     // Refused rather than defaulted, on the same reasoning post.render_scale is: a
     // misspelled model name should not quietly select the cheap simulation and leave

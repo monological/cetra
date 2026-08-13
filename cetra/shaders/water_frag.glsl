@@ -34,6 +34,10 @@ in vec4 CurrClip;
 in vec4 PrevClip;
 in float Jacobian;
 in float Shoal;
+// How much of the displacing bands' slope the vertex stage's footprint filtered away. The
+// other half of the geometry-to-BRDF handover: what left the mesh arrives here as
+// roughness.
+in float Filtered;
 
 uniform mat4 view;
 uniform mat4 projection;
@@ -99,8 +103,9 @@ const float WATER_MAX_BEND = 1.0;
 const float WATER_SHORT_NEAR = 42.0;
 const float WATER_SHORT_FAR = 118.0;
 const float WATER_SHORT_SLOPE_GAIN = 0.42;
-// Interface roughness spans calm-glass to rippled as the short slopes build.
-const float WATER_ROUGH_CALM = 0.035;
+// Where interface roughness lands once ALL of the resolved slope has been handed over. The
+// low end is the authored waterRoughness, not a constant here: the calm value is a property
+// of the water being described, and only the far end is a property of this mechanism.
 const float WATER_ROUGH_RIPPLED = 0.115;
 // Jacobian compression at which foam starts and saturates.
 const float WATER_FOAM_ON = 0.16;
@@ -131,7 +136,20 @@ void main() {
     vec2 uv = gl_FragCoord.xy / max(screenSize, vec2(1.0));
 
     vec3 N = normalize(Normal);
-    float roughness = waterRoughness;
+    /*
+     * The geometry-to-BRDF handover, which arrives from two directions.
+     *
+     * `Filtered` is what the vertex stage's cell footprint removed from the bands that
+     * DISPLACE -- mip levels on the spectral path, dropped octaves on the Gerstner one --
+     * and it is what makes the far field a widening specular lobe rather than the glass
+     * plane the filtering leaves behind. Below, the short band adds what its own distance
+     * fade removed from the bands that only SHADE.
+     *
+     * Combined with max, not summed: each is already a fraction of the same surface's slope
+     * energy, and adding them would push the horizon past rippled on the strength of
+     * double-counted overlap.
+     */
+    float handover = Filtered;
     float foam = 0.0;
     if (waveModel == 1) {
         // The short cascade shades but never displaces. Carried into the mesh it
@@ -144,9 +162,14 @@ void main() {
         // undisplaced grid parameter. The two lattices are offset by the long and medium
         // horizontal displacement, and that is deliberate: this band shades the surface
         // the eye sees, so its detail belongs where that surface ended up.
+        // LOD 0 explicitly. oceanCascadeUv wraps with fract, so the implicit screen
+        // derivative reads a whole period across every tile seam -- which, the moment this
+        // band's texture carries mips, prints as a blurred line through each of them. The
+        // short band is not mipped today and this still states the intent rather than
+        // relying on it.
         vec2 shortUv = oceanCascadeUv(WorldPos.xz, 2);
-        vec4 short0 = texture(cascade2_0, shortUv);
-        vec4 short1 = texture(cascade2_1, shortUv);
+        vec4 short0 = textureLod(cascade2_0, shortUv, 0.0);
+        vec4 short1 = textureLod(cascade2_1, shortUv, 0.0);
         float fade = 1.0 - smoothstep(WATER_SHORT_NEAR, WATER_SHORT_FAR, length(ViewPos));
         vec2 shortSlope = short1.rg * fade;
         N = normalize(N + vec3(-shortSlope.x, 0.0, -shortSlope.y) * WATER_SHORT_SLOPE_GAIN);
@@ -156,8 +179,7 @@ void main() {
         // distant water toward the calm value in both, so the horizon got smoother
         // as its waves went sub-pixel, which is backwards.
         vec2 handedOver = short1.rg * (1.0 - fade);
-        roughness = mix(waterRoughness, WATER_ROUGH_RIPPLED,
-                        smoothstep(0.012, 0.30, length(handedOver)));
+        handover = max(handover, smoothstep(0.012, 0.30, length(handedOver)));
 
         // Foam where the horizontal map COMPRESSES, from the vertex Jacobian plus
         // the short band's own. Deformation, not a height threshold: a tall smooth
@@ -177,6 +199,9 @@ void main() {
     // second time.
     float band = smoothstep(0.02, 0.22, Shoal) * (1.0 - smoothstep(0.30, 0.72, Shoal));
     foam = max(foam, band * WATER_SHORE_FOAM);
+
+    float roughness = mix(waterRoughness, WATER_ROUGH_RIPPLED, clamp(handover, 0.0, 1.0));
+
     vec3 V = normalize(-ViewPos);
     // The interface is shaded in view space, so the normal has to arrive there
     // too -- the surface normal is authored in world space by ocean.glsl.
@@ -277,9 +302,15 @@ void main() {
             vec2 crossing = WorldPos.xz - sunDir.xz / max(sunDir.y, 0.12) * path * 0.18;
             vec2 uvMed = oceanCascadeUv(crossing, 1);
             vec2 uvShort = oceanCascadeUv(crossing, 2);
-            float mj = oceanBandJacobian(texture(cascade1_0, uvMed), texture(cascade1_1, uvMed),
+            // LOD 0: `crossing` walks with the sun ray and the path length, so its screen
+            // derivative describes neither the surface nor a footprint, and the medium band
+            // IS mipped. Caustics are a near-field effect anyway -- WATER_CAUSTIC_DEEP_OFF
+            // closes them well before a cell covers a period.
+            float mj = oceanBandJacobian(textureLod(cascade1_0, uvMed, 0.0),
+                                         textureLod(cascade1_1, uvMed, 0.0),
                                          cascadeChoppiness[1]);
-            float sj = oceanBandJacobian(texture(cascade2_0, uvShort), texture(cascade2_1, uvShort),
+            float sj = oceanBandJacobian(textureLod(cascade2_0, uvShort, 0.0),
+                                         textureLod(cascade2_1, uvShort, 0.0),
                                          cascadeChoppiness[2]);
             float focus = max(0.0, 1.0 - mj) * 0.48 + max(0.0, 1.0 - sj) * 0.52;
             float window = smoothstep(0.0, WATER_CAUSTIC_SHALLOW, path) *

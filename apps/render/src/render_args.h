@@ -79,10 +79,11 @@ typedef struct {
     int gi_probes[3];           // Probe grid counts (0,0,0 = default)
     int water;                  // Enable the water surface (spec 11.32)
     float water_level;          // Still-water plane, world Y (-9999 = keep default)
-    float water_extent;         // Half-size of the drawn surface (0 = keep default)
+    float water_extent;         // Half-size of the shoaling bed's domain (0 = keep default)
     int water_waves;            // Wave model: -1 = unset, 0 = Gerstner, 1 = spectral
     int no_water_caustics;      // Bisect lever: drop the surface's light focusing
     int no_water_coverage;      // Bisect lever: hard shoreline cutoff, no coverage
+    int no_water_lod;           // Bisect lever: full wave detail at any cell footprint
     int water_bed_dome;         // Install the analytic dome bed provider (shoaling)
     int no_water;               // Drop a water surface a scene file asked for
     int water_probe;            // Print the CPU wave query over a grid, then continue

@@ -171,7 +171,10 @@ typedef struct CSceneWater {
     bool has_level;
     float level; // still-water plane, world Y
     bool has_extent;
-    float extent; // half-size of the drawn surface
+    // Half-size of the SHOALING BED's domain, not of the drawn surface: since spec 11.34 the
+    // grid is projected from the frustum and reaches the horizon, and outside this the bed
+    // field reads its nearest edge texel, which is open water.
+    float extent;
     bool has_waves;
     bool waves_fft; // false = Gerstner octaves
     bool has_wavelength;
@@ -196,6 +199,8 @@ typedef struct CSceneWater {
     bool caustics;
     bool has_shore_coverage;
     bool shore_coverage; // false = hard shoreline cutoff, no derivative coverage
+    bool has_far_lod;
+    bool far_lod; // false = full wave detail whatever world a cell covers
 } CSceneWater;
 
 typedef struct CetraSceneDesc {

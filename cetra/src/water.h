@@ -148,6 +148,10 @@ typedef struct Water {
     // false = the shoreline is a hard cutoff at the pixel the water column closes.
     // Inert wherever the target has no samples to spend coverage on.
     bool shore_coverage;
+    // false = every vertex evaluates the wave field at full detail regardless of how much
+    // world its cell covers, and no slope energy is handed to roughness. Bisect lever, and
+    // the only way back to the aliased far field a projected grid has without it.
+    bool far_lod;
 
     // Lazily built GPU state, on the postfx ensure_* pattern. `failed` latches
     // so a missing program costs one log line rather than one per frame forever.

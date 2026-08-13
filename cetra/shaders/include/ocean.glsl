@@ -177,7 +177,49 @@ struct OceanSurface {
     // Horizontal-map Jacobian; below 1 the map is compressing. 1 means "not
     // computed", which is the Gerstner path.
     float jacobian;
+    // Fraction of the displacing bands' slope variance that the sample footprint
+    // filtered away: 0 where the surface is fully resolved, 1 where it has collapsed to
+    // the still plane. What roughness picks up, so the energy is handed over rather than
+    // lost -- see oceanCascadeLod.
+    float filtered;
 };
+
+/*
+ * THE FAR FIELD IS A FILTERING PROBLEM (spec 11.34).
+ *
+ * A projected grid's far cells cover kilometres, so a sample there is one arbitrary phase
+ * of a wave the cell cannot resolve -- which shimmers rather than describes anything. Both
+ * wave models therefore take the world footprint of the cell being evaluated and drop what
+ * sits under it: the spectral path by mip level, the Gerstner path by octave. Both report
+ * how much they dropped, and water_frag turns that into roughness.
+ *
+ * The filtered surface converges to its own MEAN, and for a wave field the mean is the
+ * still plane -- so the far field flattens by construction instead of by a special case.
+ */
+
+// The cascades' resolution, so a world footprint converts to a mip level without a second
+// constant that could drift from the C side: a band's texel is cascadeLength/cascadeRes and
+// its top level is log2(cascadeRes), where the field is a single texel and therefore its
+// mean.
+uniform float cascadeRes;
+
+// Cells per wavelength at which a Gerstner octave is fully gone and fully kept. Two is the
+// Nyquist bound; leaving at five rather than at three is what stops an octave popping in
+// and out as the camera moves, and linear reconstruction between samples needs the margin
+// anyway.
+const float OCEAN_NYQUIST_OFF = 2.0;
+const float OCEAN_NYQUIST_ON = 5.0;
+
+float oceanCascadeTopLod() {
+    return log2(max(cascadeRes, 2.0));
+}
+
+// Mip level for one band at a given world footprint. Clamped at 0 because a cell finer
+// than a texel gains nothing from a sharper level that does not exist.
+float oceanCascadeLod(float footprint, int band) {
+    float texel = cascadeLength[band] / max(cascadeRes, 1.0);
+    return clamp(log2(max(footprint / max(texel, 1e-6), 1.0)), 0.0, oceanCascadeTopLod());
+}
 
 /*
  * Spectral surface: the long and medium bands displace the mesh, the short band
@@ -266,6 +308,8 @@ OceanSurface oceanAssemble(vec2 p, vec3 disp, vec3 dispDx, vec3 dispDz, vec3 sh)
     // surf-zone foam.
     s.jacobian = dPdx.x * dPdz.z - dPdz.x * dPdx.z;
     s.shoal = shoal;
+    // Each model overwrites this with what its own filtering removed.
+    s.filtered = 0.0;
     return s;
 }
 
@@ -281,13 +325,18 @@ vec3 oceanSpectralPosition(vec2 p, vec4 long0, vec4 med0, float shoal) {
  * the Gerstner path, where there is no sea state to ask. A calmer spectral ocean is a
  * lower wind speed, not a smaller number here.
  */
-OceanSurface oceanEvaluateSpectral(vec2 p, vec3 sh) {
+OceanSurface oceanEvaluateSpectral(vec2 p, vec3 sh, float footprint) {
+    // Explicit LOD, never the implicit derivative, and not only because the vertex stage
+    // has none: oceanCascadeUv wraps with fract, so a screen-space derivative reads a whole
+    // period across the tile seam and blurs a line through every one of them.
+    float lodLong = oceanCascadeLod(footprint, 0);
+    float lodMed = oceanCascadeLod(footprint, 1);
     vec2 uvLong = oceanCascadeUv(p, 0);
     vec2 uvMed = oceanCascadeUv(p, 1);
-    vec4 long0 = texture(cascade0_0, uvLong);
-    vec4 long1 = texture(cascade0_1, uvLong);
-    vec4 med0 = texture(cascade1_0, uvMed);
-    vec4 med1 = texture(cascade1_1, uvMed);
+    vec4 long0 = textureLod(cascade0_0, uvLong, lodLong);
+    vec4 long1 = textureLod(cascade0_1, uvLong, lodLong);
+    vec4 med0 = textureLod(cascade1_0, uvMed, lodMed);
+    vec4 med1 = textureLod(cascade1_1, uvMed, lodMed);
 
     float q0 = cascadeChoppiness[0];
     float q1 = cascadeChoppiness[1];
@@ -301,9 +350,15 @@ OceanSurface oceanEvaluateSpectral(vec2 p, vec3 sh) {
                  med1.rg * (1.0 + 2.0 * OCEAN_BOUND_MED * med0.b);
     vec2 dHoriz = long1.ba * q0 + med1.ba * q1;
 
-    return oceanAssemble(p, oceanSpectralDisplacement(long0, med0),
-                         vec3(dHoriz.x, slope.x, crossDeriv),
-                         vec3(crossDeriv, slope.y, dHoriz.y), sh);
+    OceanSurface s = oceanAssemble(p, oceanSpectralDisplacement(long0, med0),
+                                   vec3(dHoriz.x, slope.x, crossDeriv),
+                                   vec3(crossDeriv, slope.y, dHoriz.y), sh);
+    // Each band's slope survives in proportion to how much of it the mip still resolves,
+    // reaching nothing at the top level. Averaged rather than weighted because the two
+    // displacing bands are seeded at the same amplitude scale, so they carry comparable
+    // energy -- see the cascade table.
+    s.filtered = 0.5 * (lodLong + lodMed) / oceanCascadeTopLod();
+    return s;
 }
 
 /*
@@ -325,9 +380,9 @@ OceanSurface oceanEvaluateSpectral(vec2 p, vec3 sh) {
  * `t` is used here and ignored by the spectral path, which reads cascades that
  * already hold one instant -- see the previous-position note in water_vert.
  */
-OceanSurface oceanEvaluateAt(vec2 p, float t, vec3 sh) {
+OceanSurface oceanEvaluateAt(vec2 p, float t, vec3 sh, float footprint) {
     if (waveModel == 1)
-        return oceanEvaluateSpectral(p, sh);
+        return oceanEvaluateSpectral(p, sh, footprint);
 
     // Accumulated UNSHOALED, then scaled once at the end by oceanAssemble. The shoal
     // factor multiplies the whole displacement, so its gradient multiplies the whole
@@ -338,6 +393,12 @@ OceanSurface oceanEvaluateAt(vec2 p, float t, vec3 sh) {
     // are not part of what shoals.
     vec3 dDispDx = vec3(0.0);
     vec3 dDispDz = vec3(0.0);
+    // Slope variance the set carries, and how much of it survives the footprint. This is
+    // the Gerstner path's own answer to what mip levels do for the spectral one: an octave
+    // shorter than a couple of cells is not detail the mesh can hold, and evaluating its
+    // closed form anyway samples one arbitrary phase per cell.
+    float slopeEnergy = 0.0;
+    float slopeKept = 0.0;
 
     float wavelength = waterWavelength;
     // Note what the shoal factor must NOT be folded into: q is amplitude's reciprocal,
@@ -369,12 +430,23 @@ OceanSurface oceanEvaluateAt(vec2 p, float t, vec3 sh) {
         float q = waterSteepness / max(k * amplitude * float(OCEAN_WAVES), 1e-4);
         float qa = q * amplitude;
 
-        disp.x += qa * dir.x * cosp;
-        disp.y += amplitude * sinp;
-        disp.z += qa * dir.y * cosp;
+        // How much of this octave the footprint can carry. Applied to the displacement AND
+        // its derivatives, for the reason the shoal factor is: fading the height while
+        // leaving the lateral shuffle at full strength describes a surface that slides
+        // without rising. amplitude*k is the octave's slope amplitude, so its square is the
+        // variance it contributes.
+        float keep = smoothstep(OCEAN_NYQUIST_OFF, OCEAN_NYQUIST_ON,
+                                wavelength / max(footprint, 1e-4));
+        float slope = amplitude * k;
+        slopeEnergy += slope * slope;
+        slopeKept += slope * slope * keep;
 
-        float dqa = qa * k * sinp;
-        float dah = amplitude * k * cosp;
+        disp.x += keep * qa * dir.x * cosp;
+        disp.y += keep * amplitude * sinp;
+        disp.z += keep * qa * dir.y * cosp;
+
+        float dqa = keep * qa * k * sinp;
+        float dah = keep * amplitude * k * cosp;
         dDispDx.x -= dqa * dir.x * dir.x;
         dDispDx.y += dah * dir.x;
         dDispDx.z -= dqa * dir.y * dir.x;
@@ -387,6 +459,7 @@ OceanSurface oceanEvaluateAt(vec2 p, float t, vec3 sh) {
     }
 
     OceanSurface s = oceanAssemble(p, disp, dDispDx, dDispDz, sh);
+    s.filtered = 1.0 - slopeKept / max(slopeEnergy, 1e-9);
     // A Gerstner map DOES compress -- that bunching is what sharpens its crests -- but
     // its Jacobian is not reported here, so the determinant oceanAssemble computed is
     // overwritten. 1 means "no selector on this path", which is what the foam and
@@ -394,13 +467,6 @@ OceanSurface oceanEvaluateAt(vec2 p, float t, vec3 sh) {
     // argument for why they are FFT-only into a lie.
     s.jacobian = 1.0;
     return s;
-}
-
-// The shoal factor is a function of position alone, so a caller with several questions
-// about one point should fetch it once and use oceanEvaluateAt. This is the convenience
-// form for callers with only one.
-OceanSurface oceanEvaluate(vec2 p, float t) {
-    return oceanEvaluateAt(p, t, oceanShoal(p));
 }
 
 /*
@@ -414,10 +480,17 @@ OceanSurface oceanEvaluate(vec2 p, float t) {
  *
  * Only the two displacing bands are retained, which is all this needs: the short band
  * never reaches the mesh, so it has no position to have moved.
+ *
+ * The FOOTPRINT has to be the caller's own, on both models: a previous position filtered
+ * differently from the current one is the velocity of a surface the raster never drew, and
+ * near the horizon -- where the level is the top one and the surface is the still plane --
+ * the difference would be the whole wave.
  */
-vec3 oceanPreviousWorldAt(vec2 p, float tPrev, vec3 sh) {
+vec3 oceanPreviousWorldAt(vec2 p, float tPrev, vec3 sh, float footprint) {
     if (waveModel == 0)
-        return oceanEvaluateAt(p, tPrev, sh).world;
+        return oceanEvaluateAt(p, tPrev, sh, footprint).world;
+    float lodLong = oceanCascadeLod(footprint, 0);
+    float lodMed = oceanCascadeLod(footprint, 1);
     vec2 uvLong = oceanCascadeUv(p, 0);
     vec2 uvMed = oceanCascadeUv(p, 1);
     // Fetched inside the branches, not before them: reading the current fields and then
@@ -427,15 +500,11 @@ vec3 oceanPreviousWorldAt(vec2 p, float tPrev, vec3 sh) {
     // expression -- so this is two branches.
     vec4 long0, med0;
     if (prevAvailable == 1) {
-        long0 = texture(cascadePrev0, uvLong);
-        med0 = texture(cascadePrev1, uvMed);
+        long0 = textureLod(cascadePrev0, uvLong, lodLong);
+        med0 = textureLod(cascadePrev1, uvMed, lodMed);
     } else {
-        long0 = texture(cascade0_0, uvLong);
-        med0 = texture(cascade1_0, uvMed);
+        long0 = textureLod(cascade0_0, uvLong, lodLong);
+        med0 = textureLod(cascade1_0, uvMed, lodMed);
     }
     return oceanSpectralPosition(p, long0, med0, sh.x);
-}
-
-vec3 oceanPreviousWorld(vec2 p, float tPrev) {
-    return oceanPreviousWorldAt(p, tPrev, oceanShoal(p));
 }

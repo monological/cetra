@@ -320,6 +320,7 @@ Water* create_water(void) {
     water->wave_model = WATER_WAVES_GERSTNER;
     water->caustics = true;
     water->shore_coverage = true;
+    water->far_lod = true;
     return water;
 }
 
@@ -562,7 +563,19 @@ static bool water_ensure_grid(Water* water) {
     return true;
 }
 
-static GLuint _water_make_field(int size) {
+/*
+ * One transformed cascade field.
+ *
+ * `mipped` is for the bands that DISPLACE the mesh, and it is what makes the far field
+ * possible (spec 11.34): a projected grid's distant cells cover more than a wave period, so
+ * level 0 there is one arbitrary phase per cell rather than detail. The mip chain is
+ * generated after each frame's transform, and the vertex stage selects a level from the
+ * cell's world footprint. Costs no sampler unit -- these are textures water already binds.
+ *
+ * The short band is NOT mipped: it never reaches the mesh, and its own energy already
+ * leaves through the distance fade in water_frag.
+ */
+static GLuint _water_make_field(int size, bool mipped) {
     GLuint tex = 0;
     // Unit 0 explicitly: these run lazily on whatever unit the previous pass left
     // active, and the trailing unbind would otherwise clear that unit's 2D slot.
@@ -574,12 +587,25 @@ static GLuint _water_make_field(int size) {
     // quantising it before the transform quantises the sea state itself.
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, size, size, 0, GL_RGBA, GL_FLOAT, NULL);
     // LINEAR + REPEAT: the surface samples these as tiling world-space fields.
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
+                    mipped ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    // Allocate the chain now rather than on the first generate, so the texture is complete
+    // from the moment it is bound -- an incomplete mipmapped texture samples as black, and
+    // it would do so on whichever frame happened to read it first.
+    if (mipped)
+        glGenerateMipmap(GL_TEXTURE_2D);
     glBindTexture(GL_TEXTURE_2D, 0);
     return tex;
+}
+
+// Which cascades displace the mesh, and therefore need a mip chain. The same count the
+// retained previous fields use: only a band that reaches the mesh has a position to filter
+// or to have moved.
+static bool _water_cascade_mipped(int cascade) {
+    return cascade < WATER_PREV_CASCADES;
 }
 
 static GLuint _water_make_data_tex(int w, int h, const float* data) {
@@ -646,7 +672,7 @@ static bool _water_ensure_spectra(Water* water) {
 
         for (int b = 0; b < 2; b++) {
             for (int t = 0; t < 2; t++)
-                water->cascade_field[c][b][t] = _water_make_field(size);
+                water->cascade_field[c][b][t] = _water_make_field(size, _water_cascade_mipped(c));
 
             glGenFramebuffers(1, &water->cascade_fbo[c][b]);
             glBindFramebuffer(GL_FRAMEBUFFER, water->cascade_fbo[c][b]);
@@ -670,10 +696,12 @@ static bool _water_ensure_spectra(Water* water) {
     glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)saved_fbo);
 
     // Same format and filtering as the fields they hold a copy of, because that is
-    // exactly what they are. No framebuffer: they are only ever written by a copy out
-    // of one of the buffers above.
+    // exactly what they are -- mip chain included, since the vertex stage has to read a
+    // previous position at the SAME level as the current one or the velocity describes a
+    // surface that was never drawn. No framebuffer: they are only ever written by a copy
+    // out of one of the buffers above.
     for (int c = 0; c < WATER_PREV_CASCADES; c++)
-        water->cascade_prev[c] = _water_make_field(size);
+        water->cascade_prev[c] = _water_make_field(size, true);
 
     free(initial);
     free(wave);
@@ -731,6 +759,10 @@ static void _water_run_spectral(Water* water, struct Engine* engine, float time)
             glBindTexture(GL_TEXTURE_2D, water->cascade_prev[c]);
             glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, WATER_SPECTRUM_RES,
                                 WATER_SPECTRUM_RES);
+            // The copy writes level 0 only, so the chain under it is last frame's -- which
+            // is a level mismatch against level 0 rather than a stale frame, and shows up
+            // as far-field velocity that disagrees with the near field.
+            glGenerateMipmap(GL_TEXTURE_2D);
         }
         glBindTexture(GL_TEXTURE_2D, 0);
     }
@@ -776,6 +808,22 @@ static void _water_run_spectral(Water* water, struct Engine* engine, float time)
     }
 
     glBindVertexArray(0);
+
+    // Mip chains for the bands that displace, AFTER the ping-pong: these textures are the
+    // render targets it writes, so generating earlier would filter a half-transformed field.
+    // 14 stages land back in buffer 0, which is why buffer 0 is the one that gets a chain --
+    // the same reason the previous-frame copy above reads it.
+    glActiveTexture(GL_TEXTURE0);
+    for (int c = 0; c < WATER_CASCADE_COUNT; c++) {
+        if (!_water_cascade_mipped(c))
+            continue;
+        for (int t = 0; t < 2; t++) {
+            glBindTexture(GL_TEXTURE_2D, water->cascade_field[c][0][t]);
+            glGenerateMipmap(GL_TEXTURE_2D);
+        }
+    }
+    glBindTexture(GL_TEXTURE_2D, 0);
+
     water->spectral_frames++;
     glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)saved_fbo);
     glViewport(saved_viewport[0], saved_viewport[1], saved_viewport[2], saved_viewport[3]);
@@ -842,6 +890,11 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
     // The projector's origin. Every lattice vertex is a ray from here through its own
     // screen position, so this is the surface's whole placement input.
     uniform_set_vec3(u, "waterCamPos", (const float*)&engine->camera->position);
+    // The lattice's own resolution, which is how the vertex stage sizes a cell, and the
+    // cascades', which is how a cell size becomes a mip level.
+    uniform_set_int(u, "waterGridRes", WATER_GRID_RES);
+    uniform_set_float(u, "cascadeRes", (float)WATER_SPECTRUM_RES);
+    uniform_set_int(u, "waterFarLod", water->far_lod ? 1 : 0);
     uniform_set_float(u, "waterRoughness", water->roughness);
     uniform_set_float(u, "waterIor", water->ior);
     uniform_set_vec3(u, "waterAbsorption", (const float*)&water->absorption);

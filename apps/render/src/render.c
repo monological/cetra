@@ -148,10 +148,11 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --no-water         Drop a surface the scene file asked for\n");
     fprintf(stderr, "      --water-level <f>  Still-water plane, world Y (implies --water)\n");
     fprintf(stderr,
-            "      --water-extent <f> Half-size of the water surface (implies --water)\n");
+            "      --water-extent <f> Half-size of the shoaling bed (implies --water)\n");
     fprintf(stderr, "      --water-waves <m>  gerstner (default) or fft spectral cascades\n");
     fprintf(stderr, "      --no-water-caustics  Drop the surface's light focusing\n");
     fprintf(stderr, "      --no-water-coverage  Hard shoreline cutoff, no coverage\n");
+    fprintf(stderr, "      --no-water-lod     Full wave detail at any cell footprint\n");
     fprintf(stderr, "      --water-bed <m>    none (default) or dome: an analytic bed to shoal\n");
     fprintf(stderr, "      --water-probe      Print the CPU wave query over a grid\n");
     fprintf(stderr, "      --sky              Procedural physically-based sky (instead of -e)\n");
@@ -703,6 +704,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->no_water_caustics = 1;
         } else if (strcmp(argv[i], "--no-water-coverage") == 0) {
             args->no_water_coverage = 1;
+        } else if (strcmp(argv[i], "--no-water-lod") == 0) {
+            args->no_water_lod = 1;
         } else if (strcmp(argv[i], "--water-waves") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -2987,6 +2990,8 @@ int main(int argc, char** argv) {
             water->caustics = false;
         if (args.no_water_coverage)
             water->shore_coverage = false;
+        if (args.no_water_lod)
+            water->far_lod = false;
         if (args.water_bed_dome) {
             water->height_at = render_dome_bed_height;
             water->height_ctx = water;

@@ -363,6 +363,8 @@ void apply_cscene_water(Scene* scene, const CetraSceneDesc* cscn) {
         water->caustics = w->caustics;
     if (w->has_shore_coverage)
         water->shore_coverage = w->shore_coverage;
+    if (w->has_far_lod)
+        water->far_lod = w->far_lod;
     scene->water = water;
     printf("Scene file: water level %.2f, extent %.1f, %s waves\n", (double)water->level,
            (double)water->extent,

@@ -68,7 +68,8 @@
    0.12
   ],
   "caustics": true,
-  "shoreCoverage": true
+  "shoreCoverage": true,
+  "farLod": true
  },
  "post": {
   "tonemap": "neutral",

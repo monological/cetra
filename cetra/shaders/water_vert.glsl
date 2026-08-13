@@ -14,6 +14,12 @@ uniform float time;
 uniform float uDeltaTime;
 // The projector's origin. waterLevel and waterExtent are declared by ocean.glsl.
 uniform vec3 waterCamPos;
+// Lattice cells per side, for the cell footprint below.
+uniform int waterGridRes;
+// 0 = report a zero footprint, which is exactly full detail everywhere: a zero footprint
+// selects mip 0 on every band and keeps every Gerstner octave, so this is the bisect lever
+// rather than a second code path.
+uniform int waterFarLod;
 
 out vec3 WorldPos;
 out vec3 ViewPos;
@@ -22,6 +28,7 @@ out vec4 CurrClip;
 out vec4 PrevClip;
 out float Jacobian;
 out float Shoal;
+out float Filtered;
 
 // Kept for symmetry with pbr_vert, where it is load-bearing because the depth
 // prepass rasterizes the same triangles from a second program. Nothing rasterizes
@@ -47,18 +54,36 @@ const float WATER_CLIP_Z_EPS = 1.0e-5;
 void main() {
     vec2 p = oceanProjectedPosition(aGrid, view, projection, waterCamPos);
 
+    /*
+     * The world footprint of this lattice cell, which is what decides how much of the wave
+     * field the cell can carry at all.
+     *
+     * Taken from the placement itself rather than estimated from the distance, because a
+     * projected grid's cells are wildly anisotropic: near the horizon the radial span is
+     * thousands of times the lateral one, and a distance-only estimate is wrong by that
+     * factor exactly where it matters. Two extra ray solves, no extra texture fetches.
+     */
+    float footprint = 0.0;
+    if (waterFarLod == 1) {
+        float cell = 1.0 / float(max(waterGridRes, 1));
+        vec2 px = oceanProjectedPosition(aGrid + vec2(cell, 0.0), view, projection, waterCamPos);
+        vec2 pz = oceanProjectedPosition(aGrid + vec2(0.0, cell), view, projection, waterCamPos);
+        footprint = max(distance(px, p), distance(pz, p));
+    }
+
     // One shoal fetch per point, shared by the current surface and the previous position.
     // Both are functions of the same p, and asking twice cost a second bed texture fetch
     // plus its smoothstep and gradient on every vertex.
     vec3 sh = oceanShoal(p);
-    OceanSurface s = oceanEvaluateAt(p, time, sh);
+    OceanSurface s = oceanEvaluateAt(p, time, sh, footprint);
     float tPrev = time - uDeltaTime;
-    vec3 prevWorld = oceanPreviousWorldAt(p, tPrev, sh);
+    vec3 prevWorld = oceanPreviousWorldAt(p, tPrev, sh, footprint);
 
     WorldPos = s.world;
     Normal = s.normal;
     Jacobian = s.jacobian;
     Shoal = s.shoal;
+    Filtered = s.filtered;
 
     vec4 viewPos = view * vec4(s.world, 1.0);
     ViewPos = viewPos.xyz;
