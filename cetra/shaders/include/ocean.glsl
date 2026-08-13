@@ -120,79 +120,112 @@ const float OCEAN_BOUND_MED = 0.32;
 const float OCEAN_BOUND_LONG_VAR = 0.080;
 const float OCEAN_BOUND_MED_VAR = 0.030;
 
-/*
- * The displaced position, from the two displacing bands' target 0 alone.
- *
- * Split out because the PREVIOUS frame's position is computed from retained copies of
- * exactly these two samples, and it has to be the same arithmetic. Two copies of the
- * bound-harmonic term would be two places for it to drift, and a velocity computed
- * from a different surface than the raster drew is the failure this file exists to
- * prevent -- pointing at the previous frame rather than at the normal.
- */
-vec3 oceanSpectralPosition(vec2 p, vec4 long0, vec4 med0, float shoal) {
-    vec2 horizontal = long0.rg * cascadeChoppiness[0] + med0.rg * cascadeChoppiness[1];
-    float height = long0.b + med0.b;
-    height += OCEAN_BOUND_LONG * (long0.b * long0.b - OCEAN_BOUND_LONG_VAR) +
-              OCEAN_BOUND_MED * (med0.b * med0.b - OCEAN_BOUND_MED_VAR);
-    return vec3(p.x + horizontal.x * shoal, waterLevel + height * shoal,
-                p.y + horizontal.y * shoal);
+// One band's tiling lookup. Written out eleven times before this existed, twice per band
+// for the two targets of a single sample point.
+vec2 oceanCascadeUv(vec2 p, int band) {
+    return fract(p / cascadeLength[band] + 0.5);
 }
 
-OceanSurface oceanEvaluateSpectral(vec2 p) {
-    vec4 long0 = texture(cascade0_0, fract(p / cascadeLength[0] + 0.5));
-    vec4 long1 = texture(cascade0_1, fract(p / cascadeLength[0] + 0.5));
-    vec4 med0 = texture(cascade1_0, fract(p / cascadeLength[1] + 0.5));
-    vec4 med1 = texture(cascade1_1, fract(p / cascadeLength[1] + 0.5));
+/*
+ * One band's horizontal-map Jacobian, from its packed derivatives. Below 1 the map is
+ * compressing, which is what selects whitecaps and caustic focus.
+ *
+ * NO shoal term, deliberately: this is asked about the bands that shade the interface and
+ * never displace the mesh, so there is no shoal factor scaling them and the two
+ * off-diagonals really are equal. That is why this is a square where oceanAssemble's
+ * determinant is not -- the distinction is the shoal gradient, and it belongs here in
+ * writing because three hand-written copies of this shape invited "unifying" them the
+ * wrong way.
+ */
+float oceanBandJacobian(vec4 field0, vec4 field1, float choppiness) {
+    float c = field0.a * choppiness;
+    vec2 d = field1.ba * choppiness;
+    return (1.0 + d.x) * (1.0 + d.y) - c * c;
+}
+
+/*
+ * The UNSHOALED displacement of the two bands that reach the mesh: horizontal in .xz,
+ * height in .y, crest term included.
+ *
+ * The one place the height model is written. The previous frame's position comes from
+ * retained copies of exactly these two samples and has to be the same arithmetic, and the
+ * derivative rows below multiply the same value -- so a second copy is a second place for
+ * the bound-harmonic term to drift, which is the failure this file exists to prevent.
+ */
+vec3 oceanSpectralDisplacement(vec4 long0, vec4 med0) {
+    vec2 h = long0.rg * cascadeChoppiness[0] + med0.rg * cascadeChoppiness[1];
+    float y = long0.b + med0.b +
+              OCEAN_BOUND_LONG * (long0.b * long0.b - OCEAN_BOUND_LONG_VAR) +
+              OCEAN_BOUND_MED * (med0.b * med0.b - OCEAN_BOUND_MED_VAR);
+    return vec3(h.x, y, h.y);
+}
+
+/*
+ * Both wave models end here.
+ *
+ * disp is the unshoaled displacement; dispDx/dispDz are its derivatives with respect to
+ * the undisplaced grid coordinates. The shoal factor scales the displacement and its
+ * GRADIENT therefore enters as a product-rule term -- over a flat bed sh.yz is zero and
+ * these reduce to the plain scaled derivatives.
+ *
+ * Shared rather than written per model because the two epilogues were the same expression
+ * character for character: the identity rows, the product rule, the cross order and the
+ * determinant each existed twice, and the Jacobian in particular is easy to "simplify"
+ * back into a square, which is only correct while the gradient is zero.
+ */
+OceanSurface oceanAssemble(vec2 p, vec3 disp, vec3 dispDx, vec3 dispDz, vec3 sh) {
+    float shoal = sh.x;
+    OceanSurface s;
+    s.world = vec3(p.x, waterLevel, p.y) + disp * shoal;
+    vec3 dPdx = vec3(1.0, 0.0, 0.0) + dispDx * shoal + disp * sh.y;
+    vec3 dPdz = vec3(0.0, 0.0, 1.0) + dispDz * shoal + disp * sh.z;
+    // cross(dPdz, dPdx) and not the reverse: on a flat surface that is +Y, and the
+    // flipped order would light every wave from underneath.
+    s.normal = normalize(cross(dPdz, dPdx));
+    // The horizontal map's determinant, from those same rows. The two off-diagonals are
+    // NOT equal once the shoal gradient is in, so this cannot be shortened back to a
+    // square -- and the difference between them IS the shoaling compression that selects
+    // surf-zone foam.
+    s.jacobian = dPdx.x * dPdz.z - dPdz.x * dPdx.z;
+    s.shoal = shoal;
+    return s;
+}
+
+vec3 oceanSpectralPosition(vec2 p, vec4 long0, vec4 med0, float shoal) {
+    vec3 d = oceanSpectralDisplacement(long0, med0);
+    return vec3(p.x, waterLevel, p.y) + d * shoal;
+}
+
+/*
+ * Spectral surface. No amplitude knob, deliberately: the spectrum is already physical --
+ * its height comes out of the wind speed and fetch it was seeded with -- so scaling it
+ * would be authoring over a sea state rather than choosing one. waterAmplitude belongs to
+ * the Gerstner path, where there is no sea state to ask. A calmer spectral ocean is a
+ * lower wind speed, not a smaller number here.
+ */
+OceanSurface oceanEvaluateSpectral(vec2 p, vec3 sh) {
+    vec2 uvLong = oceanCascadeUv(p, 0);
+    vec2 uvMed = oceanCascadeUv(p, 1);
+    vec4 long0 = texture(cascade0_0, uvLong);
+    vec4 long1 = texture(cascade0_1, uvLong);
+    vec4 med0 = texture(cascade1_0, uvMed);
+    vec4 med1 = texture(cascade1_1, uvMed);
 
     float q0 = cascadeChoppiness[0];
     float q1 = cascadeChoppiness[1];
 
-    // Not named `cross`: that is a builtin this function calls below.
+    // Not named `cross`: that is a builtin oceanAssemble calls.
     float crossDeriv = long0.a * q0 + med0.a * q1;
-    // The crest-sharpening term changes the height, so its derivative has to be in
-    // the slope or the normal is the normal of a DIFFERENT surface than the one
-    // rasterized. d/dp of b*(h*h - c) is 2*b*h*dh, per band.
+    // The crest-sharpening term changes the height, so its derivative has to be in the
+    // slope or the normal is the normal of a DIFFERENT surface than the one rasterized.
+    // d/dp of b*(h*h - c) is 2*b*h*dh, per band.
     vec2 slope = long1.rg * (1.0 + 2.0 * OCEAN_BOUND_LONG * long0.b) +
                  med1.rg * (1.0 + 2.0 * OCEAN_BOUND_MED * med0.b);
     vec2 dHoriz = long1.ba * q0 + med1.ba * q1;
-    // The unshoaled displacement, which the product-rule terms below multiply. Same
-    // expressions oceanSpectralPosition uses; the height carries its crest term
-    // because that is part of what the shoal factor scales.
-    vec2 horizontal = long0.rg * q0 + med0.rg * q1;
-    float height = long0.b + med0.b +
-                   OCEAN_BOUND_LONG * (long0.b * long0.b - OCEAN_BOUND_LONG_VAR) +
-                   OCEAN_BOUND_MED * (med0.b * med0.b - OCEAN_BOUND_MED_VAR);
 
-    vec3 sh = oceanShoal(p);
-    float shoal = sh.x;
-
-    OceanSurface s;
-    // No amplitude knob here, deliberately. The spectrum is already physical --
-    // its height comes out of the wind speed and fetch it was seeded with -- so
-    // scaling it would be authoring over a sea state rather than choosing one.
-    // waterAmplitude belongs to the Gerstner path, where there is no sea state to
-    // ask. A calmer spectral ocean is a lower wind speed, not a smaller number
-    // here.
-    s.world = oceanSpectralPosition(p, long0, med0, shoal);
-    // Scaled by the same factor, so the normal tracks the displacement rather than
-    // the open-water surface it would otherwise describe -- and the factor's own
-    // gradient enters as a product-rule term, since the displacement it scales varies
-    // with position too. Over a flat bed sh.yz is zero and these reduce to the plain
-    // scaled derivatives.
-    vec3 dPdx = vec3(1.0 + dHoriz.x * shoal + horizontal.x * sh.y,
-                     slope.x * shoal + height * sh.y,
-                     crossDeriv * shoal + horizontal.y * sh.y);
-    vec3 dPdz = vec3(crossDeriv * shoal + horizontal.x * sh.z,
-                     slope.y * shoal + height * sh.z,
-                     1.0 + dHoriz.y * shoal + horizontal.y * sh.z);
-    s.normal = normalize(cross(dPdz, dPdx));
-    // The horizontal map's determinant, from those same rows. The two off-diagonals
-    // are no longer equal once the shoal gradient is in, so this cannot be shortened
-    // back to a square -- and the difference between them IS the shoaling compression
-    // that selects surf-zone foam.
-    s.jacobian = dPdx.x * dPdz.z - dPdz.x * dPdx.z;
-    s.shoal = shoal;
-    return s;
+    return oceanAssemble(p, oceanSpectralDisplacement(long0, med0),
+                         vec3(dHoriz.x, slope.x, crossDeriv),
+                         vec3(crossDeriv, slope.y, dHoriz.y), sh);
 }
 
 /*
@@ -214,15 +247,13 @@ OceanSurface oceanEvaluateSpectral(vec2 p) {
  * `t` is used here and ignored by the spectral path, which reads cascades that
  * already hold one instant -- see the previous-position note in water_vert.
  */
-OceanSurface oceanEvaluate(vec2 p, float t) {
+OceanSurface oceanEvaluateAt(vec2 p, float t, vec3 sh) {
     if (waveModel == 1)
-        return oceanEvaluateSpectral(p);
+        return oceanEvaluateSpectral(p, sh);
 
-    vec3 sh = oceanShoal(p);
-    float shoal = sh.x;
-    // Accumulated UNSHOALED, then scaled once at the end. The shoal factor multiplies
-    // the whole displacement, so its gradient multiplies the whole displacement too --
-    // which is one line out here and would be six inside the loop.
+    // Accumulated UNSHOALED, then scaled once at the end by oceanAssemble. The shoal
+    // factor multiplies the whole displacement, so its gradient multiplies the whole
+    // displacement too -- which is one line out there and would be six inside the loop.
     vec3 disp = vec3(0.0);
     // Partial derivatives of the displacement with respect to the undisplaced grid
     // coordinates. The flat plane's own identity rows are added at the end, since they
@@ -277,23 +308,21 @@ OceanSurface oceanEvaluate(vec2 p, float t) {
         amplitude *= OCEAN_AMPLITUDE_FALLOFF;
     }
 
-    OceanSurface s;
-    s.world = vec3(p.x, waterLevel, p.y) + disp * shoal;
-    // The flat plane's identity rows, plus the scaled wave derivatives, plus the shoal
-    // factor's own gradient acting on the displacement it scales. sh.yz is zero over a
-    // flat bed and with no bed at all, so this is the previous expression there.
-    vec3 dPdx = vec3(1.0, 0.0, 0.0) + dDispDx * shoal + disp * sh.y;
-    vec3 dPdz = vec3(0.0, 0.0, 1.0) + dDispDz * shoal + disp * sh.z;
-    // cross(dPdz, dPdx) and not the reverse: on a flat surface that is +Y, and
-    // the flipped order would light every wave from underneath.
-    s.normal = normalize(cross(dPdz, dPdx));
-    // A Gerstner map DOES compress -- that bunching is what sharpens its crests --
-    // but its Jacobian is not reported here. 1 means "no selector on this path", which
-    // is what the foam and caustics gates read it as; deriving it would turn the
-    // clamped-steepness argument for why they are FFT-only into a lie.
+    OceanSurface s = oceanAssemble(p, disp, dDispDx, dDispDz, sh);
+    // A Gerstner map DOES compress -- that bunching is what sharpens its crests -- but
+    // its Jacobian is not reported here, so the determinant oceanAssemble computed is
+    // overwritten. 1 means "no selector on this path", which is what the foam and
+    // caustics gates read it as; reporting a real one would turn the clamped-steepness
+    // argument for why they are FFT-only into a lie.
     s.jacobian = 1.0;
-    s.shoal = shoal;
     return s;
+}
+
+// The shoal factor is a function of position alone, so a caller with several questions
+// about one point should fetch it once and use oceanEvaluateAt. This is the convenience
+// form for callers with only one.
+OceanSurface oceanEvaluate(vec2 p, float t) {
+    return oceanEvaluateAt(p, t, oceanShoal(p));
 }
 
 /*
@@ -308,18 +337,27 @@ OceanSurface oceanEvaluate(vec2 p, float t) {
  * Only the two displacing bands are retained, which is all this needs: the short band
  * never reaches the mesh, so it has no position to have moved.
  */
-vec3 oceanPreviousWorld(vec2 p, float tPrev) {
+vec3 oceanPreviousWorldAt(vec2 p, float tPrev, vec3 sh) {
     if (waveModel == 0)
-        return oceanEvaluate(p, tPrev).world;
-    // Two branches rather than a ternary on the samplers themselves: GLSL 3.30
-    // samplers are opaque and may not appear in an expression.
-    vec2 uvLong = fract(p / cascadeLength[0] + 0.5);
-    vec2 uvMed = fract(p / cascadeLength[1] + 0.5);
-    vec4 long0 = texture(cascade0_0, uvLong);
-    vec4 med0 = texture(cascade1_0, uvMed);
+        return oceanEvaluateAt(p, tPrev, sh).world;
+    vec2 uvLong = oceanCascadeUv(p, 0);
+    vec2 uvMed = oceanCascadeUv(p, 1);
+    // Fetched inside the branches, not before them: reading the current fields and then
+    // overwriting from the retained ones spent two texture fetches on every vertex from
+    // frame two onward, which is essentially always. A ternary on the samplers themselves
+    // is not the alternative -- GLSL 3.30 samplers are opaque and may not appear in an
+    // expression -- so this is two branches.
+    vec4 long0, med0;
     if (prevAvailable == 1) {
         long0 = texture(cascadePrev0, uvLong);
         med0 = texture(cascadePrev1, uvMed);
+    } else {
+        long0 = texture(cascade0_0, uvLong);
+        med0 = texture(cascade1_0, uvMed);
     }
-    return oceanSpectralPosition(p, long0, med0, oceanShoal(p).x);
+    return oceanSpectralPosition(p, long0, med0, sh.x);
+}
+
+vec3 oceanPreviousWorld(vec2 p, float tPrev) {
+    return oceanPreviousWorldAt(p, tPrev, oceanShoal(p));
 }

@@ -68,6 +68,8 @@ uniform float iblIntensity;
 uniform float maxReflectionLOD;
 
 #include "view.glsl"
+#include "velocity.glsl"
+#include "fresnel.glsl"
 #include "depth.glsl"
 // The surface definition, for its cascade samplers and its wave-model switch. The
 // fragment stage does not re-evaluate the surface -- the vertex stage's position
@@ -125,14 +127,6 @@ const float WATER_CAUSTIC_SHALLOW = 0.35;
 const float WATER_CAUSTIC_DEEP_ON = 9.0;
 const float WATER_CAUSTIC_DEEP_OFF = 20.0;
 
-vec2 screenVelocity() {
-    return (CurrClip.xy / CurrClip.w - PrevClip.xy / PrevClip.w) * 0.5;
-}
-
-vec3 fresnelSchlickRoughness(float cosTheta, vec3 F0, float roughness) {
-    return F0 + (max(vec3(1.0 - roughness), F0) - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
-}
-
 void main() {
     vec2 uv = gl_FragCoord.xy / max(screenSize, vec2(1.0));
 
@@ -146,7 +140,11 @@ void main() {
         // with distance and its remaining energy moved into roughness instead --
         // the geometry-to-BRDF transition, which is what keeps the horizon stable
         // without throwing the simulated detail away.
-        vec2 shortUv = fract(WorldPos.xz / cascadeLength[2] + 0.5);
+        // Sampled at the DISPLACED position, where the vertex stage samples at the
+        // undisplaced grid parameter. The two lattices are offset by the long and medium
+        // horizontal displacement, and that is deliberate: this band shades the surface
+        // the eye sees, so its detail belongs where that surface ended up.
+        vec2 shortUv = oceanCascadeUv(WorldPos.xz, 2);
         vec4 short0 = texture(cascade2_0, shortUv);
         vec4 short1 = texture(cascade2_1, shortUv);
         float fade = 1.0 - smoothstep(WATER_SHORT_NEAR, WATER_SHORT_FAR, length(ViewPos));
@@ -165,20 +163,20 @@ void main() {
         // the short band's own. Deformation, not a height threshold: a tall smooth
         // swell does not break and a compressing one does, and selecting on height
         // puts white on the wrong crests.
-        float shortCross = short0.a * cascadeChoppiness[2];
-        vec2 shortDeriv = short1.ba * cascadeChoppiness[2];
-        float shortJ = (1.0 + shortDeriv.x) * (1.0 + shortDeriv.y) - shortCross * shortCross;
+        float shortJ = oceanBandJacobian(short0, short1, cascadeChoppiness[2]);
         float compression = max(0.0, 1.0 - Jacobian) + max(0.0, 1.0 - shortJ) * fade * 0.62;
         foam = smoothstep(WATER_FOAM_ON, WATER_FOAM_FULL, compression) * fade;
     }
     // Shore foam, on both wave models. A band where the bed has risen close to the
-    // surface but has not broken it -- the whitewater a beach carries even where
-    // nothing is breaking. Windowed on both sides: at shoal 0 the surface is about
-    // to be discarded anyway, and at 1 there is no shore to foam against.
-    if (bedAvailable == 1) {
-        float band = smoothstep(0.02, 0.22, Shoal) * (1.0 - smoothstep(0.30, 0.72, Shoal));
-        foam = max(foam, band * WATER_SHORE_FOAM);
-    }
+    // surface but has not broken it -- the whitewater a beach carries even where nothing
+    // is breaking. Windowed on both sides: at shoal 0 the surface is about to be discarded
+    // anyway, and at 1 there is no shore to foam against.
+    //
+    // No bedAvailable guard: with no bed the shoal factor is exactly 1 everywhere, so the
+    // window's upper edge already zeroes this. The uniform test enforced the same fact a
+    // second time.
+    float band = smoothstep(0.02, 0.22, Shoal) * (1.0 - smoothstep(0.30, 0.72, Shoal));
+    foam = max(foam, band * WATER_SHORE_FOAM);
     vec3 V = normalize(-ViewPos);
     // The interface is shaded in view space, so the normal has to arrive there
     // too -- the surface normal is authored in world space by ocean.glsl.
@@ -234,17 +232,14 @@ void main() {
         float edge = signedPath - WATER_MIN_PATH;
         coverage = clamp(edge / max(fwidth(edge), 1e-5) + 0.5, 0.0, 1.0);
         path = max(signedPath, 0.0);
-        if (alphaToCoverage == 1) {
-            if (coverage < WATER_MIN_COVERAGE)
-                discard;
-        } else {
-            // No samples to dither into: the cutoff is the only thing a
-            // single-sample target can express, and keeping a fractional fragment
-            // there would write the sliver at full strength.
-            if (edge < 0.0)
-                discard;
-            coverage = 1.0;
-        }
+        // One rule and one discard. A single-sample target has nothing to dither into, so
+        // there the fraction rounds to the cutoff -- keeping a fractional fragment would
+        // write the sliver at full strength. fwidth above still sits in uniform control
+        // flow, before any discard.
+        if (alphaToCoverage == 0)
+            coverage = step(0.0, edge);
+        if (coverage < WATER_MIN_COVERAGE)
+            discard;
     }
     path = min(path, WATER_MAX_PATH);
 
@@ -280,16 +275,12 @@ void main() {
         // its mapping cannot compress. The same reasoning gates its foam.
         if (waveModel == 1 && sunAvailable == 1 && causticsEnabled == 1) {
             vec2 crossing = WorldPos.xz - sunDir.xz / max(sunDir.y, 0.12) * path * 0.18;
-            vec4 m0 = texture(cascade1_0, fract(crossing / cascadeLength[1] + 0.5));
-            vec4 m1 = texture(cascade1_1, fract(crossing / cascadeLength[1] + 0.5));
-            vec4 s0 = texture(cascade2_0, fract(crossing / cascadeLength[2] + 0.5));
-            vec4 s1 = texture(cascade2_1, fract(crossing / cascadeLength[2] + 0.5));
-            float mc = m0.a * cascadeChoppiness[1];
-            vec2 md = m1.ba * cascadeChoppiness[1];
-            float sc = s0.a * cascadeChoppiness[2];
-            vec2 sd = s1.ba * cascadeChoppiness[2];
-            float mj = (1.0 + md.x) * (1.0 + md.y) - mc * mc;
-            float sj = (1.0 + sd.x) * (1.0 + sd.y) - sc * sc;
+            vec2 uvMed = oceanCascadeUv(crossing, 1);
+            vec2 uvShort = oceanCascadeUv(crossing, 2);
+            float mj = oceanBandJacobian(texture(cascade1_0, uvMed), texture(cascade1_1, uvMed),
+                                         cascadeChoppiness[1]);
+            float sj = oceanBandJacobian(texture(cascade2_0, uvShort), texture(cascade2_1, uvShort),
+                                         cascadeChoppiness[2]);
             float focus = max(0.0, 1.0 - mj) * 0.48 + max(0.0, 1.0 - sj) * 0.52;
             float window = smoothstep(0.0, WATER_CAUSTIC_SHALLOW, path) *
                            (1.0 - smoothstep(WATER_CAUSTIC_DEEP_ON, WATER_CAUSTIC_DEEP_OFF, path));
@@ -352,7 +343,7 @@ void main() {
     NormalOut = vec4(Nv, coverage);
     // Linear view-Z in .z is what makes the atmosphere composite fog this
     // surface at the water's own depth rather than the bed's.
-    VelocityOut = vec4(screenVelocity(), ViewPos.z, roughness);
+    VelocityOut = packVelocityAux(ViewPos.z, roughness);
     // Alpha is METALNESS here, not coverage. Water is a dielectric, and 1.0 would
     // tell SSGI to give it no indirect diffuse (kD = 1 - alpha) and tell the
     // spec-occ composite to hand nearly all its energy to the specular answer.

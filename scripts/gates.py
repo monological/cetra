@@ -74,41 +74,49 @@ SCALE_GATES = [
 LSB = 1.0 / 255.0 + 1e-6
 
 
-def scaled_copy(src, dst, factor):
-    """Multiply every authored intensity by `factor` and divide exposure by it.
+def cscn_copy(src, dst, mutate):
+    """Copy a .cscn through `mutate(dict)`, with model paths made absolute.
 
-    Doing this mechanically rather than committing a hand-edited twin is the
-    point: it is impossible for the two halves to drift in any way except the
-    scale, which is exactly the property the gate is asserting.
+    Generating a twin mechanically rather than committing a hand-edited one is the point:
+    the two halves then cannot differ in anything except what `mutate` touched, which is
+    the property every arm built on one of these asserts.
+
+    The path absolutization is the half worth having in one place. It is a quiet
+    correctness requirement -- model paths resolve against the scene file's directory, so
+    an out-of-tree copy must carry absolute ones -- and a copy that forgets it fails as a
+    render error rather than as a mismatch.
     """
     with open(src) as f:
         d = json.load(f)
-
-    for light in d.get("lights", []):
-        if "intensity" in light:
-            light["intensity"] *= factor
-
-    env = d.get("environment")
-    if env:
-        if "intensity" in env:
-            env["intensity"] *= factor
-        if "ambient" in env:
-            env["ambient"] = [c * factor for c in env["ambient"]]
-
-    post = d.setdefault("post", {})
-    fog = post.get("fog")
-    if fog and "ambient" in fog:
-        fog["ambient"] = [c * factor for c in fog["ambient"]]
-    post["exposure"] = post.get("exposure", 1.0) / factor
-
-    # Model paths resolve against the scene file's directory, so an out-of-tree
-    # copy has to carry absolute ones.
+    mutate(d)
     for m in d.get("models", []):
         if not os.path.isabs(m["path"]):
             m["path"] = os.path.join(os.path.dirname(os.path.abspath(src)), m["path"])
-
     with open(dst, "w") as f:
         json.dump(d, f, indent=1)
+
+
+def scaled_copy(src, dst, factor):
+    """Multiply every authored intensity by `factor` and divide exposure by it."""
+    def scale(d):
+        for light in d.get("lights", []):
+            if "intensity" in light:
+                light["intensity"] *= factor
+
+        env = d.get("environment")
+        if env:
+            if "intensity" in env:
+                env["intensity"] *= factor
+            if "ambient" in env:
+                env["ambient"] = [c * factor for c in env["ambient"]]
+
+        post = d.setdefault("post", {})
+        fog = post.get("fog")
+        if fog and "ambient" in fog:
+            fog["ambient"] = [c * factor for c in fog["ambient"]]
+        post["exposure"] = post.get("exposure", 1.0) / factor
+
+    cscn_copy(src, dst, scale)
 
 
 def render(scene, out, extra):
@@ -3003,6 +3011,29 @@ WATER_CSCN_MIN_PX = 20000
 # same place the flag does. 0 px or one of them is lying.
 WATER_CSCN_LEVEL = 0.9
 
+# Flag precedence, read through --water-probe because it is the only output that reports
+# what the surface actually IS rather than what it looks like. Every case here was broken
+# when the arm was written, and each failed silently:
+#
+#   --no-water plus any sibling flag  the siblings all set args.water, so the surface was
+#                                     freed and then immediately recreated as a default
+#   a negative flag on its own        --no-water-caustics / --no-water-coverage /
+#                                     --water-bed none each turned the feature ON
+#   --water-waves gerstner            a bool could only write its true half, so it could
+#                                     not override an authored "waves": "fft"
+#
+# The pixel arms could not see any of it: water-cscn varies only `level`, and every
+# --no-water in the suite is unaccompanied.
+WATER_PRECEDENCE = [
+    # (label, extra flags, authored waves, expect a surface, expected model or None)
+    ("--no-water", ["--no-water"], "gerstner", False, None),
+    ("--no-water + sibling", ["--no-water", "--water-waves", "fft"], "gerstner", False, None),
+    ("--no-water + extent", ["--no-water", "--water-extent", "40"], "gerstner", False, None),
+    ("authored fft", [], "fft", True, "fft"),
+    ("flag overrides fft", ["--water-waves", "gerstner"], "fft", True, "gerstner"),
+    ("flag overrides gerstner", ["--water-waves", "fft"], "gerstner", True, "fft"),
+]
+
 # The CPU wave query (spec 11.33 phase 5), read through --water-probe. There is no other
 # way to see it: the GPU surface leaves no number behind, so without the probe the seam
 # buoyancy is meant to consume would ship with nothing checking it at all.
@@ -3026,7 +3057,9 @@ WATER_PROBE_MIN_SPREAD = 0.03
 # has lost its displacement, so its reflection is uniform where an open-water one is
 # broken up; that is what a wave looks like to a box of pixels.
 WATER_DOME_BED = ["--water-bed", "dome"]
-WATER_NO_BED = ["--water-bed", "none"]
+# No WATER_NO_BED: no bed is the DEFAULT, so the base flag set already is the no-bed
+# frame. Spelling it out rendered a byte-identical duplicate of a frame two arms already
+# had on disk, which is a third of a minute of suite time for a restated default.
 # The dome's radius is 0.62 of the extent, so at extent 70 it reaches 43 units and the
 # far field is beyond it -- flat bed, column 9 units, shoal exactly 1. Which is why the
 # arm can assert the open box does NOT move: a local bed that calmed the whole sea
@@ -3114,11 +3147,10 @@ WATER_ABSORB_STEP_MIN = 1.25
 # Dry land reads 2.07 and water never exceeds 0.33 anywhere in the frame, so this
 # sits in an empty band between the two populations.
 WATER_DRY_RB_MIN = 1.4
-WATER_GRID = 12
 
 
 def _water_rb(pix, w, h, box):
-    rgb = _absorb_box_rgb(pix, w, h, box, WATER_GRID)
+    rgb = _absorb_box_rgb(pix, w, h, box)
     return rgb[0] / rgb[2] if rgb[2] > 1e-6 else float("nan")
 
 
@@ -3139,9 +3171,13 @@ def _water_closest_to_background(pix, bg, w, h, box):
     return worst
 
 
-def _water_probe(extra):
-    """Run --water-probe and return (header dict, [row dicts])."""
-    cmd = [RENDER, "-m", os.path.join(ROOT, "assets", WATER_FIXTURE), "-x", "-f", "2",
+def _water_probe(extra, scene=None):
+    """Run --water-probe and return (header dict, [row dicts]).
+
+    An empty header means no surface survived the flags, which is a result rather than a
+    failure -- the precedence arm asserts exactly that for --no-water.
+    """
+    cmd = [RENDER, "-m", scene or os.path.join(ROOT, "assets", WATER_FIXTURE), "-x", "-f", "2",
            "-W", "200", "-H", "150", "--water-probe"] + extra
     r = subprocess.run(cmd, capture_output=True, text=True)
     head, rows = {}, []
@@ -3159,20 +3195,8 @@ def _water_probe(extra):
 
 
 def _water_cscn_variant(src, dst, overrides):
-    """Copy a .cscn with its water block overridden, model paths made absolute.
-
-    Generated rather than committed as a hand-edited twin, for the reason
-    scaled_copy gives: the two halves then cannot differ in anything except the
-    keys named here, which is what the arm asserts.
-    """
-    with open(src) as f:
-        d = json.load(f)
-    d.setdefault("water", {}).update(overrides)
-    for m in d.get("models", []):
-        if not os.path.isabs(m["path"]):
-            m["path"] = os.path.join(os.path.dirname(os.path.abspath(src)), m["path"])
-    with open(dst, "w") as f:
-        json.dump(d, f, indent=1)
+    """Copy a .cscn with its water block overridden."""
+    cscn_copy(src, dst, lambda d: d.setdefault("water", {}).update(overrides))
 
 
 def _water_roughness(pix, w, h, box):
@@ -3234,7 +3258,9 @@ def _water_shore_fall(path, window):
 def run_water_gate(workdir):
     """The water surface is alive, deterministic, and absorbs with path length.
 
-    Nine arms:
+    The arms, in the order they run. Keep this list and the code in step: a docstring
+    naming a different set than the function runs is what a reviewer reads to decide
+    what is covered, which makes a stale one worse than none.
 
       water-det       two runs of one build at 0 px. The surface is a pure function
                       of the frame clock, so this is the precondition every other
@@ -3281,6 +3307,10 @@ def run_water_gate(workdir):
                       override it rather than the reverse. absorption is read because
                       no flag can set it, so the frame can only have moved through the
                       authoring path.
+      water-flags     the flags override the scene file, and a NEGATIVE flag neither
+                      creates a surface nor loses to a sibling. Read through the probe,
+                      which reports what the surface is rather than what it looks like:
+                      every case here was a silent defect no rendered frame could show.
       water-cpu       the CPU wave query inverts the horizontal map (an unconverged
                       inversion answers about the wrong point while looking correct),
                       evaluates a real train rather than a plane, and DECLINES on the
@@ -3295,10 +3325,14 @@ def run_water_gate(workdir):
     that instrument -- it is an above-water frame and it would move. An arm comparing
     two renders of one build cannot see it at all.
 
-    Known blind spot: the fixture sets no height provider, so bedAvailable is 0 and
-    the shoaling factor and shore-foam band are dead in every frame here. They are
-    reachable only through `apps/forest --water`, which has no deterministic arm to
-    hang them on.
+    The blind spot this used to record -- no height provider, so shoaling and the
+    shore-foam band were dead in every frame -- is closed: `--water-bed dome` installs an
+    analytic bed, and water-shoal and water-shore-foam run over it.
+
+    What is still NOT covered, and cannot be from here: nothing compares the CPU wave
+    query against the rasterized surface. water-cpu checks the solver against itself.
+    The two evaluate the same sum from the same fields with duplicated constants, and
+    closing that needs a GPU readback this harness does not have.
     """
     scene = os.path.join(ROOT, "assets", WATER_FIXTURE)
     if not os.path.exists(scene):
@@ -3377,15 +3411,20 @@ def run_water_gate(workdir):
         gref = os.path.join(workdir, "water_gerstner_ref.ppm")
         err = render(scene, gref, WATER_GERSTNER_REF)
         if err:
+            # Appended and CONTINUED, not returned. This used to bail, which abandoned
+            # the nine arms below it with no output at all -- the exact "a pass that
+            # prints nothing reads as a pass" failure the SKIP block above exists to
+            # avoid. Only water-shore-foam needs this frame, and it says so itself.
             print(f"  water-fft-live ERROR render failed: {err.strip()[-200:]}")
             failures.append("water-fft-live")
-            return failures
-        ae_model, _ = compare(fa, gref)
-        ok = ae_model >= WATER_FFT_LIVE_MIN_PX
-        print(f"  water-fft-live {'PASS' if ok else 'FAIL'}  {ae_model} px vs gerstner, "
-              f"want >={WATER_FFT_LIVE_MIN_PX}")
-        if not ok:
-            failures.append("water-fft-live")
+            gref = None
+        if gref:
+            ae_model, _ = compare(fa, gref)
+            ok = ae_model >= WATER_FFT_LIVE_MIN_PX
+            print(f"  water-fft-live {'PASS' if ok else 'FAIL'}  {ae_model} px vs gerstner, "
+                  f"want >={WATER_FFT_LIVE_MIN_PX}")
+            if not ok:
+                failures.append("water-fft-live")
 
     # The spectral surface's own motion, read through the one pass that consumes
     # velocity and nothing else.
@@ -3484,6 +3523,24 @@ def run_water_gate(workdir):
         if not ok:
             failures.append("water-cscn")
 
+    # Flag precedence over the scene file. No pixels: the probe reports what the surface
+    # IS, and every case here was a silent defect that a rendered frame could not show.
+    prec_fail = []
+    for label, extra, waves, want_surface, want_model in WATER_PRECEDENCE:
+        variant = os.path.join(workdir, f"water_prec_{waves}.cscn")
+        _water_cscn_variant(scene, variant, {"waves": waves})
+        head, _ = _water_probe(WATER_PIN + extra, scene=variant)
+        got_surface = bool(head)
+        if got_surface != want_surface:
+            prec_fail.append(f"{label}: surface={got_surface} want {want_surface}")
+        elif want_model and head.get("model") != want_model:
+            prec_fail.append(f"{label}: model={head.get('model')} want {want_model}")
+    ok = not prec_fail
+    print(f"  water-flags  {'PASS' if ok else 'FAIL'}  {len(WATER_PRECEDENCE)} precedence "
+          f"cases" + ("" if ok else "; " + "; ".join(prec_fail)))
+    if not ok:
+        failures.append("water-flags")
+
     # The CPU wave query. Nothing else in this suite can see it.
     head, rows = _water_probe(WATER_PIN)
     fft_head, fft_rows = _water_probe(WATER_PIN + ["--water-waves", "fft"])
@@ -3510,17 +3567,19 @@ def run_water_gate(workdir):
 
     # Shoaling, which needs the diagnostic bed: every other water arm runs over a bed
     # the vertex stage cannot see, so the whole Tier 3 path was untested.
+    # The no-bed reference is `fa`, already on disk: no bed IS the default, so
+    # WATER_FFT_FLAGS alone is the no-bed frame and rendering it again under
+    # --water-bed none produced a byte-identical duplicate.
     dome = os.path.join(workdir, "water_dome.ppm")
-    nobed = os.path.join(workdir, "water_nobed.ppm")
-    err = render(scene, dome, WATER_FFT_FLAGS + WATER_DOME_BED)
-    if not err:
-        err = render(scene, nobed, WATER_FFT_FLAGS + WATER_NO_BED)
-    if err:
+    err = None if not fft_ok else render(scene, dome, WATER_FFT_FLAGS + WATER_DOME_BED)
+    if not fft_ok:
+        print("  water-shoal  SKIP  (the spectral render this compares against failed)")
+    elif err:
         print(f"  water-shoal  ERROR render failed: {err.strip()[-200:]}")
         failures.append("water-shoal")
     else:
         wd, hd, pixd = _read_ppm(dome)
-        wn, hn, pixn = _read_ppm(nobed)
+        wn, hn, pixn = _read_ppm(fa)
         mid_on = _water_roughness(pixd, wd, hd, WATER_SHOAL_MID_BOX)
         mid_off = _water_roughness(pixn, wn, hn, WATER_SHOAL_MID_BOX)
         open_on = _water_roughness(pixd, wd, hd, WATER_SHOAL_OPEN_BOX)
@@ -3539,17 +3598,17 @@ def run_water_gate(workdir):
 
     # The shore foam band, isolated by running Gerstner: no crest foam on that path, so
     # whatever whitewater is in the frame is the shore band.
+    # Its no-bed reference is `gref` -- already rendered, and no bed is the default.
     gdome = os.path.join(workdir, "water_gerstner_dome.ppm")
-    gnone = os.path.join(workdir, "water_gerstner_nobed.ppm")
-    err = render(scene, gdome, WATER_GERSTNER_REF + WATER_DOME_BED)
-    if not err:
-        err = render(scene, gnone, WATER_GERSTNER_REF + WATER_NO_BED)
-    if err:
+    err = None if not gref else render(scene, gdome, WATER_GERSTNER_REF + WATER_DOME_BED)
+    if not gref:
+        print("  water-shore-foam SKIP  (the gerstner reference render failed)")
+    elif err:
         print(f"  water-shore-foam ERROR render failed: {err.strip()[-200:]}")
         failures.append("water-shore-foam")
     else:
         wg, hg, pixg = _read_ppm(gdome)
-        wb, hb, pixb = _read_ppm(gnone)
+        wb, hb, pixb = _read_ppm(gref)
         band = _water_foam_px(pixg, wg, hg, WATER_FOAM_BAND_BOX)
         at_open = _water_foam_px(pixg, wg, hg, WATER_FOAM_OPEN_BOX)
         at_shoal = _water_foam_px(pixg, wg, hg, WATER_FOAM_SHOALED_BOX)
@@ -3596,9 +3655,16 @@ def run_water_gate(workdir):
         failures.append("water-shore-hard")
     else:
         ae_1s, _ = compare(soft_1s, hard_1s)
-        ok = ae_1s == 0
-        print(f"  water-shore-hard {'PASS' if ok else 'FAIL'}  {ae_1s} px at one sample, "
-              f"want 0")
+        # Presence first, because 0 px is also what two WATERLESS frames read. --taa is
+        # the only config in this gate that runs at one sample, so nothing else here
+        # establishes that the surface survives it -- and an arm whose pass condition is
+        # "identical" must prove there is something to be identical about.
+        w1s, h1s, pix1s = _read_ppm(soft_1s)
+        present = all(_water_rb(pix1s, w1s, h1s, box) < WATER_DRY_RB_MIN
+                      for box in WATER_ABSORB_BOXES)
+        ok = ae_1s == 0 and present
+        print(f"  water-shore-hard {'PASS' if ok else 'FAIL'}  {ae_1s} px at one sample "
+              f"(want 0), water present in all three boxes {present}")
         if not ok:
             failures.append("water-shore-hard")
 
@@ -3606,11 +3672,10 @@ def run_water_gate(workdir):
     # distance from the same frame with no water in it, over the boxes water-absorb
     # reads as means. A crack is one pixel wide and a mean would swallow it.
     clip = os.path.join(workdir, "water_clip.ppm")
-    clip_bg = os.path.join(workdir, "water_clip_bg.ppm")
+    # The background a hole would show is `off` -- the same framing with the surface
+    # absent, already rendered for water-live and byte-identical to a fresh one.
+    clip_bg = off
     err = render(scene, clip, WATER_CLIP_FLAGS)
-    if not err:
-        # The SAME framing with the surface absent, which is what a hole would show.
-        err = render(scene, clip_bg, WATER_PIN + WATER_NO_CATCHER + ["--no-water"])
     if err:
         print(f"  water-crack  ERROR render failed: {err.strip()[-200:]}")
         failures.append("water-crack")

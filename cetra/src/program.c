@@ -557,31 +557,18 @@ ShaderProgram* create_water_program() {
     return program;
 }
 
-// The two spectral passes. Both are fullscreen quads over a 128^2 target with two
-// MRT outputs -- create_post_program is not used because that helper is built for
-// the post chain's single-target passes.
+// The two spectral passes: fullscreen quads over a 128^2 target with two MRT outputs.
+// Through create_post_program like every other fullscreen pass -- an earlier comment here
+// claimed that helper was "built for the post chain's single-target passes" and bypassed
+// it, which is not what it does. It only picks the vertex shader; MRT lives in the
+// fragment shader's `out` declarations and the caller's glDrawBuffers, and
+// dof_gather_frag already ships two targets through it.
 ShaderProgram* create_water_spectrum_program() {
-    ShaderProgram* program = NULL;
-
-    if ((program = create_program_from_source("water_spectrum", post_vert_shader_str,
-                                             water_spectrum_frag_shader_str, NULL)) == NULL) {
-        log_error("Failed to initialize water spectrum shader program");
-        return NULL;
-    }
-
-    return program;
+    return create_post_program("water_spectrum", water_spectrum_frag_shader_str);
 }
 
 ShaderProgram* create_water_fft_program() {
-    ShaderProgram* program = NULL;
-
-    if ((program = create_program_from_source("water_fft", post_vert_shader_str,
-                                             water_fft_frag_shader_str, NULL)) == NULL) {
-        log_error("Failed to initialize water FFT shader program");
-        return NULL;
-    }
-
-    return program;
+    return create_post_program("water_fft", water_fft_frag_shader_str);
 }
 
 ShaderProgram* create_skybox_program() {

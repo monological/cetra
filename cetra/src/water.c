@@ -10,6 +10,7 @@
 #include "profiler.h"
 #include "program.h"
 #include "scene.h"
+#include "texture.h"
 #include "uniform.h"
 #include "util.h"
 
@@ -34,17 +35,15 @@ static const struct WaterCascadeConfig {
     float cutoff_high;
     float amplitude_scale;
     float secondary_scale; // weight of a second, cross-travelling swell
+    // How hard this band's horizontal displacement pulls. The short band is damped: it
+    // exists to shade, and choppiness there sharpens nothing the mesh resolves.
+    float choppiness;
     uint32_t seed;
 } WATER_CASCADE_CFG[WATER_CASCADE_COUNT] = {
-    {240.0f, 0.024f, 0.30f, 0.45f, 0.22f, 0x51f15eu},
-    {64.0f, 0.30f, 1.22f, 0.45f, 0.08f, 0x72a93bu},
-    {12.0f, 1.22f, 24.0f, 0.82f, 0.0f, 0x19ce47u},
+    {240.0f, 0.024f, 0.30f, 0.45f, 0.22f, 1.18f, 0x51f15eu},
+    {64.0f, 0.30f, 1.22f, 0.45f, 0.08f, 1.05f, 0x72a93bu},
+    {12.0f, 1.22f, 24.0f, 0.82f, 0.0f, 0.40f, 0x19ce47u},
 };
-
-const float WATER_CASCADE_LENGTH[WATER_CASCADE_COUNT] = {240.0f, 64.0f, 12.0f};
-// How hard each band's horizontal displacement pulls. The short band is damped:
-// it exists to shade, and choppiness there sharpens nothing the mesh resolves.
-const float WATER_CASCADE_CHOPPINESS[WATER_CASCADE_COUNT] = {1.18f, 1.05f, 0.40f};
 
 // Sea state. One set of numbers for all three bands, so the bands are windows
 // onto ONE spectrum rather than three independently authored looks.
@@ -327,36 +326,21 @@ Water* create_water(void) {
 void free_water(Water* water) {
     if (!water)
         return;
-    if (water->grid_vao)
-        glDeleteVertexArrays(1, &water->grid_vao);
-    if (water->grid_vbo)
-        glDeleteBuffers(1, &water->grid_vbo);
-    if (water->grid_ebo)
-        glDeleteBuffers(1, &water->grid_ebo);
-    if (water->fft_vao)
-        glDeleteVertexArrays(1, &water->fft_vao);
-    if (water->fft_vbo)
-        glDeleteBuffers(1, &water->fft_vbo);
-    if (water->twiddle_tex)
-        glDeleteTextures(1, &water->twiddle_tex);
-    if (water->bed_tex)
-        glDeleteTextures(1, &water->bed_tex);
-    for (int c = 0; c < WATER_CASCADE_COUNT; c++) {
-        if (water->cascade_initial[c])
-            glDeleteTextures(1, &water->cascade_initial[c]);
-        if (water->cascade_wave[c])
-            glDeleteTextures(1, &water->cascade_wave[c]);
-        for (int b = 0; b < 2; b++) {
-            for (int t = 0; t < 2; t++)
-                if (water->cascade_field[c][b][t])
-                    glDeleteTextures(1, &water->cascade_field[c][b][t]);
-            if (water->cascade_fbo[c][b])
-                glDeleteFramebuffers(1, &water->cascade_fbo[c][b]);
-        }
-    }
-    for (int c = 0; c < WATER_PREV_CASCADES; c++)
-        if (water->cascade_prev[c])
-            glDeleteTextures(1, &water->cascade_prev[c]);
+    // No `if (handle)` guards: glDelete* on 0 is a no-op (util.h says so), and the
+    // cascade arrays are contiguous GLuint, so each family is one call rather than a
+    // nest of loops over single deletes.
+    glDeleteVertexArrays(1, &water->grid_vao);
+    glDeleteBuffers(1, &water->grid_vbo);
+    glDeleteBuffers(1, &water->grid_ebo);
+    glDeleteVertexArrays(1, &water->fft_vao);
+    glDeleteBuffers(1, &water->fft_vbo);
+    glDeleteTextures(1, &water->twiddle_tex);
+    glDeleteTextures(1, &water->bed_tex);
+    glDeleteTextures(WATER_CASCADE_COUNT, water->cascade_initial);
+    glDeleteTextures(WATER_CASCADE_COUNT, water->cascade_wave);
+    glDeleteTextures(WATER_CASCADE_COUNT * 4, &water->cascade_field[0][0][0]);
+    glDeleteFramebuffers(WATER_CASCADE_COUNT * 2, &water->cascade_fbo[0][0]);
+    glDeleteTextures(WATER_PREV_CASCADES, water->cascade_prev);
     free(water);
 }
 
@@ -460,16 +444,12 @@ static void _water_bake_bed(Water* water) {
         }
     }
 
-    glActiveTexture(GL_TEXTURE0); // see _water_make_field
-    if (!water->bed_tex)
-        glGenTextures(1, &water->bed_tex);
-    glBindTexture(GL_TEXTURE_2D, water->bed_tex);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, res, res, 0, GL_RGBA, GL_FLOAT, heights);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glBindTexture(GL_TEXTURE_2D, 0);
+    // The engine's own float-LUT upload: LINEAR / CLAMP_TO_EDGE / no mips is exactly
+    // this texture's policy, so there is nothing here to hand-roll. Deleted and recreated
+    // rather than re-uploaded because that helper returns a fresh name; the extent change
+    // that brought us here is rare enough that the churn does not matter.
+    gl_delete_texture(&water->bed_tex);
+    water->bed_tex = create_texture_2d_float(res, res, GL_RGBA32F, GL_RGBA, heights);
 
     free(heights);
     water->bed_baked = true;
@@ -1005,8 +985,8 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
         char len[32], chop[32];
         snprintf(len, sizeof(len), "cascadeLength[%d]", c);
         snprintf(chop, sizeof(chop), "cascadeChoppiness[%d]", c);
-        uniform_set_float(u, len, WATER_CASCADE_LENGTH[c]);
-        uniform_set_float(u, chop, WATER_CASCADE_CHOPPINESS[c]);
+        uniform_set_float(u, len, WATER_CASCADE_CFG[c].length_scale);
+        uniform_set_float(u, chop, WATER_CASCADE_CFG[c].choppiness);
     }
 
     // Last frame's displacement, for the spectral path's motion vectors. Only usable

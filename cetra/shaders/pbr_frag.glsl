@@ -179,6 +179,8 @@ uniform int pcssFrameIndex; // Advances the per-frame rotation; frozen when off
 // point/spot/area set via the per-fragment cluster index list.
 #include "lights_ubo.glsl"
 #include "view.glsl"
+#include "velocity.glsl"
+#include "fresnel.glsl"
 #include "ltc.glsl"
 // Indirect diffuse from a probe grid, when one is present (spec 9.7). Only the
 // diffuse IBL term changes; specular, clearcoat and sheen stay on the env map.
@@ -384,16 +386,6 @@ vec3 sRGBToLinear(vec3 srgb) {
 
 vec3 linearToSRGB(vec3 linear) {
     return pow(linear, vec3(1.0 / 2.2));
-}
-
-// Fresnel-Schlick approximation
-vec3 fresnelSchlick(float cosTheta, vec3 F0) {
-    return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
-}
-
-// Fresnel-Schlick with roughness for IBL
-vec3 fresnelSchlickRoughness(float cosTheta, vec3 F0, float roughness) {
-    return F0 + (max(vec3(1.0 - roughness), F0) - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
 }
 
 // KHR_materials_specular's dielectric fresnel: mix(f0, f90, (1-cos)^5).
@@ -761,12 +753,6 @@ float calculateShadow(int shadowIndex, int cascade, vec3 worldPos, float lightSi
             break; // fully occluded; wider maps cannot add more
     }
     return visibility;
-}
-
-// Per-pixel screen-space motion vector in UV units: current vs previous
-// un-jittered clip position. Shared by the velocity G-buffer and the debug view.
-vec2 screenVelocity() {
-    return (CurrClip.xy / CurrClip.w - PrevClip.xy / PrevClip.w) * 0.5;
 }
 
 // Clearcoat normal: the geometric normal, perturbed by the coat normal map if
@@ -2011,7 +1997,7 @@ void main() {
     // the tonemap specular-occlusion pass. Reconstructing occlusion positions
     // from a linear Z avoids the non-linear DEPTH24 buffer, whose grazing-angle
     // quantization staircases the reconstructed floor into AO banding.
-    VelocityOut = vec4(screenVelocity(), ViewPos.z, roughnessMap);
+    VelocityOut = packVelocityAux(ViewPos.z, roughnessMap);
     AlbedoOut = vec4(albedoMap, metallicMap);
     // SSS diffuse: subsurface-scaled skin diffuse (0 off-skin) in .rgb, this
     // material's scatter-profile index + 1 in .a (0 = non-skin, so the blur

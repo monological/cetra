@@ -61,9 +61,13 @@ void main() {
     float cell;
     vec2 p = clipmapPosition(level, aGrid, cell);
 
-    OceanSurface s = oceanEvaluate(p, time);
+    // One shoal fetch per point, shared by the current surface and the previous position.
+    // Both are functions of the same p, and asking twice cost a second bed texture fetch
+    // plus its smoothstep and gradient on every vertex.
+    vec3 sh = oceanShoal(p);
+    OceanSurface s = oceanEvaluateAt(p, time, sh);
     float tPrev = time - uDeltaTime;
-    vec3 prevWorld = oceanPreviousWorld(p, tPrev);
+    vec3 prevWorld = oceanPreviousWorldAt(p, tPrev, sh);
 
     /*
      * T-junction stitch, on the patch's OUTER edge only.
@@ -79,27 +83,32 @@ void main() {
      * straight line the coarser edge draws there. Exact, and it costs two extra
      * evaluations on one row of vertices per patch.
      */
-    if (level < waterRingLevels - 1) {
-        vec2 onEdge = step(0.4999, abs(aGrid));
-        if (onEdge.x + onEdge.y > 0.5) {
-            // Index ALONG the edge: the free axis is whichever one is not pinned.
-            vec2 along = onEdge.x > 0.5 ? vec2(0.0, 1.0) : vec2(1.0, 0.0);
-            float idx = dot(aGrid + 0.5, along) * float(waterGridRes);
-            if (mod(floor(idx + 0.5), 2.0) > 0.5) {
-                vec2 step2 = along * cell;
-                OceanSurface lo = oceanEvaluate(p - step2, time);
-                OceanSurface hi = oceanEvaluate(p + step2, time);
-                s.world = 0.5 * (lo.world + hi.world);
-                // The previous position takes the same average, so a stitched vertex
-                // reports the velocity of the point the raster actually drew rather
-                // than of the one it would have drawn unstitched.
-                prevWorld = 0.5 * (oceanPreviousWorld(p - step2, tPrev) +
-                                   oceanPreviousWorld(p + step2, tPrev));
-                // The normal is left as this vertex's own. Averaging it too would
-                // flatten the shading along every boundary into a visible seam,
-                // where a position that matches the neighbour is all the crack needs.
-            }
-        }
+    vec2 onEdge = step(0.4999, abs(aGrid));
+    // Index ALONG the edge: the free axis is whichever one is not pinned. Hoisted out of
+    // the predicate below, which short-circuits, so an interior vertex computes these two
+    // scalars and stops -- against removing two levels of nesting.
+    //
+    // A CORNER never stitches, and that is load-bearing rather than lucky: both onEdge
+    // components are set there, `along` picks the y axis, and idx is 0 or waterGridRes --
+    // even, because WATER_GRID_RES is even. An odd grid resolution would break it.
+    vec2 along = onEdge.x > 0.5 ? vec2(0.0, 1.0) : vec2(1.0, 0.0);
+    float idx = dot(aGrid + 0.5, along) * float(waterGridRes);
+    if (level < waterRingLevels - 1 && onEdge.x + onEdge.y > 0.5 &&
+        mod(floor(idx + 0.5), 2.0) > 0.5) {
+        vec2 step2 = along * cell;
+        // Both neighbours' shoal once each, then both quantities averaged over the same
+        // two points -- the position and its history have to agree about WHICH points
+        // they averaged, or a stitched vertex reports the velocity of a point the raster
+        // never drew.
+        vec3 shLo = oceanShoal(p - step2);
+        vec3 shHi = oceanShoal(p + step2);
+        s.world = 0.5 * (oceanEvaluateAt(p - step2, time, shLo).world +
+                         oceanEvaluateAt(p + step2, time, shHi).world);
+        prevWorld = 0.5 * (oceanPreviousWorldAt(p - step2, tPrev, shLo) +
+                           oceanPreviousWorldAt(p + step2, tPrev, shHi));
+        // The normal is left as this vertex's own. Averaging it too would flatten the
+        // shading along every boundary into a visible seam, where a position that matches
+        // the neighbour is all the crack needs.
     }
     WorldPos = s.world;
     Normal = s.normal;

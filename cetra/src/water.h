@@ -224,11 +224,10 @@ typedef struct Water {
  */
 void water_publish_to_postfx(const Water* water, struct Engine* engine);
 
-// World-space tiling period of each cascade, in metres. Public because the
-// surface shader needs the same numbers to build its sample UVs, and a second
-// copy of them would be a silent mismatch rather than an error.
-extern const float WATER_CASCADE_LENGTH[WATER_CASCADE_COUNT];
-extern const float WATER_CASCADE_CHOPPINESS[WATER_CASCADE_COUNT];
+// The per-cascade tiling periods and choppiness are columns of water.c's own cascade
+// table and are uploaded from there. They were briefly published here as two extra
+// arrays, on the reasoning that a second copy "would be a silent mismatch rather than an
+// error" -- which is precisely what publishing them created, five lines from the table.
 
 Water* create_water(void);
 void free_water(Water* water);
