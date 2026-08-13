@@ -59,6 +59,84 @@ uniform sampler2D bedTex;
 uniform int bedAvailable;
 uniform float waterExtent;
 
+/*
+ * PROJECTED GRID placement (spec 11.34).
+ *
+ * The lattice is a fixed grid in NDC rather than in the world: each vertex is a ray
+ * through its own screen position, and where that ray meets the still-water plane is the
+ * point the surface gets evaluated at. So sample density is uniform in PIXELS and reach is
+ * whatever the frustum sees -- the two properties a camera-centred mesh has to trade
+ * against each other, because for it they are both the same number.
+ *
+ * The ray is built from the FORWARD projection, not an uploaded inverse: invFocal undoes
+ * the two focal scales and mat3(transpose(view)) is the view rotation's inverse while the
+ * view is orthonormal, which is the idiom the rest of this tree reconstructs rays with.
+ */
+
+// The lattice's horizon row is placed exactly ON the horizon, where the ray is parallel to
+// the plane and there is no intersection at all -- so "infinity" has to be a distance.
+// Large enough that the row lands within a fraction of a pixel of the true vanishing line:
+// the miss angle is atan(eyeHeight / this), 1e-4 rad at a 100-unit eye height.
+const float OCEAN_FAR_DIST = 1.0e6;
+
+// Rays are cast slightly outside the frustum. The horizontal half of the displacement
+// moves a vertex ACROSS the screen, so an edge vertex can be pulled inward and leave a
+// wedge of background along the frame border. Not applied to the horizon edge, which is
+// not a screen edge -- there is no water beyond it to be pulled in from.
+const float OCEAN_OVERSCAN = 1.12;
+
+// A camera exactly in the plane projects the whole plane onto the horizon line, so every
+// ray meets it at distance zero and the lattice collapses to a single point. Exactly right
+// for a FLAT plane and useless for a displaced one, so the eye is held a hair off the
+// surface rather than in it.
+const float OCEAN_MIN_EYE_HEIGHT = 0.05;
+
+vec2 oceanProjectedPosition(vec2 lattice, mat4 view, mat4 projection, vec3 camPos) {
+    vec2 invFocal = 1.0 / vec2(projection[0][0], projection[1][1]);
+    mat3 viewToWorld = mat3(transpose(view));
+
+    float ndcX = lattice.x * 2.0 * OCEAN_OVERSCAN;
+    bool above = camPos.y >= waterLevel;
+
+    /*
+     * Which NDC row this column's horizon sits on.
+     *
+     * A ray's world-Y slope is ndcX*invFocal.x*a + ndcY*invFocal.y*b - c over the world-Y
+     * components of the three view basis vectors; setting that to zero and solving for
+     * ndcY gives the row running parallel to the plane. Per COLUMN, because a rolled
+     * camera's horizon is not a horizontal line on screen.
+     *
+     * Solving for it is what makes the lattice worth its vertices. Rows past the horizon
+     * see no water at all, so without this the usable fraction of the lattice is whatever
+     * the pitch happens to leave -- and half is a common answer.
+     */
+    float a = viewToWorld[0].y;
+    float b = viewToWorld[1].y;
+    float c = viewToWorld[2].y;
+    float denom = invFocal.y * b;
+    // b is the world-Y of the view's up axis, so it vanishes looking straight down or up,
+    // and then no row is parallel to the plane and the whole lattice is usable. Off the
+    // top of the screen when the eye is above the surface, off the bottom when below.
+    float horizonY = abs(denom) > 1e-6 ? (c - ndcX * invFocal.x * a) / denom
+                                       : (above ? 1.0e30 : -1.0e30);
+
+    // Above the surface the water is the region BELOW the horizon row; below it, the
+    // region above. Either way the lattice spans exactly that region and nothing else.
+    float y0 = above ? -OCEAN_OVERSCAN : max(horizonY, -OCEAN_OVERSCAN);
+    float y1 = above ? min(horizonY, OCEAN_OVERSCAN) : OCEAN_OVERSCAN;
+    float ndcY = mix(y0, y1, lattice.y + 0.5);
+
+    vec3 rd = normalize(viewToWorld * vec3(vec2(ndcX, ndcY) * invFocal, -1.0));
+    float eye = camPos.y - waterLevel;
+    eye = above ? max(eye, OCEAN_MIN_EYE_HEIGHT) : min(eye, -OCEAN_MIN_EYE_HEIGHT);
+    float t = -eye / rd.y;
+    // A ray running away from the plane, or grazing it, runs to the cap instead. Written as
+    // a positive range rather than a negation so that a division by zero -- inf, or NaN
+    // when the numerator vanishes too -- takes the same branch.
+    t = (t > 0.0 && t < OCEAN_FAR_DIST) ? t : OCEAN_FAR_DIST;
+    return camPos.xz + rd.xz * t;
+}
+
 // Depth over which a wave goes from fully shoaled to fully open-water. Waves
 // shorten and steepen as the bed rises under them; below the floor there is not
 // enough water column left to carry any displacement at all.

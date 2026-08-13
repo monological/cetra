@@ -20,25 +20,20 @@
  * slot for. A dedicated program starts from sixteen again.
  */
 
-// Cells per side of one patch.
-#define WATER_GRID_RES 128
-
 /*
- * Camera-snapped clipmap rings.
+ * Lattice cells per side of the PROJECTED GRID (spec 11.34).
  *
- * A uniform grid puts its samples where the WORLD is; this puts them where the
- * PIXELS are. Level 0 is a full grid at `extent / 2^(levels-1)`, and each further
- * level is a ring at twice the half-extent with its inner quarter removed -- which
- * is exactly the level inside it, so the hole matches by construction.
+ * The mesh is a fixed lattice in screen space, projected onto the water plane per vertex,
+ * so this is a pixels-per-cell quality knob and not a world size: cell density is uniform
+ * in pixels at any camera and any resolution, and how far the surface reaches is whatever
+ * the frustum sees. Those two were one number under the clipmap this replaced -- rings tile
+ * only because every level snaps to the coarsest cell, so reach and near-field detail were
+ * welded together and the surface stopped 5 degrees short of the horizon.
  *
- * THE SNAP IS THE WHOLE TRICK. Every level snaps its origin to the COARSEST level's
- * cell, not its own. Level L's cell divides that exactly (2^(levels-1-L)) and every
- * half-extent is an integer multiple of it, so all ring boundaries land on one shared
- * grid and the rings tile with no gap, no overlap, and therefore no coplanar depth
- * tie. Snapping each level to its own cell -- the obvious thing -- is what puts a
- * mismatch at every boundary.
+ * 256 is chosen to spend the clipmap's own triangle budget: 5 levels of a 128 grid came to
+ * 131,072 triangles, and so does this, from 4/5 as many vertex invocations.
  */
-#define WATER_RING_LEVELS 5
+#define WATER_GRID_RES 256
 
 // Resolved single-sample scene depth, for the water column and the shoreline test.
 //
@@ -116,8 +111,11 @@ typedef float (*WaterHeightFn)(void* ctx, float x, float z);
 typedef struct Water {
     bool enabled;
 
-    float level;  // still-water plane, world Y
-    float extent; // half-size of the drawn surface, world units
+    float level; // still-water plane, world Y
+    // Half-size of the shoaling bed's domain, world units. NOT a bound on the drawn
+    // surface, which the projected grid takes from the frustum -- outside this the bed
+    // field reads its nearest edge texel, which is open water.
+    float extent;
 
     // Optical properties of the body, authored rather than derived from a
     // transparency slider. absorption is extinction per world unit per channel,
@@ -156,8 +154,7 @@ typedef struct Water {
     GLuint grid_vao;
     GLuint grid_vbo;
     GLuint grid_ebo;
-    int grid_index_count; // centre patch: the whole grid
-    int ring_index_count; // one ring: the grid minus its inner quarter
+    int grid_index_count;
     bool failed;
 
     // Spectral state, allocated only under WATER_WAVES_FFT. The initial spectrum

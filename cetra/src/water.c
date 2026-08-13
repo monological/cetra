@@ -482,10 +482,11 @@ bool water_will_draw(const Water* water, const struct Engine* engine, RenderMode
            !engine->capturing;
 }
 
-// One indexed grid in the XZ plane over [-0.5, 0.5]^2, positions only. Where it
-// lands and how it is displaced is the vertex shader's business, so the mesh
-// carries no normals: a displaced surface's normal is the derivative of the
-// displacement, and a stored one would just be overwritten.
+// One indexed lattice over [-0.5, 0.5]^2, positions only. The vertex stage reads it as
+// SCREEN space and casts a ray through each point onto the water plane, so this buffer
+// depends on neither the resolution nor the extent and is built once. No normals: a
+// displaced surface's normal is the derivative of the displacement, and a stored one would
+// just be overwritten.
 static bool water_ensure_grid(Water* water) {
     if (water->grid_vao)
         return true;
@@ -514,40 +515,28 @@ static bool water_ensure_grid(Water* water) {
             verts[i + 1] = (float)z / (float)res - 0.5f;
         }
     }
-    // Two index sets over the same vertices. The centre patch is the whole grid;
-    // a ring is the whole grid MINUS its inner quarter, which is exactly the
-    // extent of the level inside it -- so the hole matches by construction rather
-    // than by tuning, and the ring set is written second into the same buffer.
-    unsigned* ring_indices = malloc((size_t)index_count * sizeof(unsigned));
-    if (!ring_indices) {
-        log_error("Water ring allocation failed; disabling water");
-        free(verts);
-        free(indices);
-        water->failed = true;
-        return false;
-    }
-
+    /*
+     * WINDING, and it is load-bearing rather than cosmetic.
+     *
+     * Culling is off, but water_frag flips its normal on !gl_FrontFacing -- so a
+     * consistently BACK-facing surface is shaded upside down everywhere, which reads as a
+     * plausible-looking sea whose reflection comes out of the environment's lower
+     * hemisphere. The clipmap this replaced had the opposite winding for the same index
+     * order, because a lattice in NDC maps STRAIGHT to window coordinates (x right, y up)
+     * where a world-XZ grid maps through the view: increasing Z runs toward a camera
+     * looking down -Z, so its screen orientation is mirrored. Same indices, opposite
+     * face.
+     */
     int w = 0;
-    int rw = 0;
     for (int z = 0; z < res; z++) {
         for (int x = 0; x < res; x++) {
             const unsigned a = (unsigned)(z * verts_per_side + x);
             const unsigned b = a + 1;
             const unsigned c = a + (unsigned)verts_per_side;
             const unsigned d = c + 1;
-            const unsigned quad[6] = {a, c, b, b, c, d};
+            const unsigned quad[6] = {a, b, c, b, d, c};
             for (int k = 0; k < 6; k++)
                 indices[w++] = quad[k];
-
-            // Cell CENTRE against the inner quarter, so a cell is either wholly in
-            // the hole or wholly in the ring. Testing a corner instead would leave
-            // the boundary row half-classified and tear the seam the levels meet on.
-            const float cx = ((float)x + 0.5f) / (float)res - 0.5f;
-            const float cz = ((float)z + 0.5f) / (float)res - 0.5f;
-            if (fabsf(cx) < 0.25f && fabsf(cz) < 0.25f)
-                continue;
-            for (int k = 0; k < 6; k++)
-                ring_indices[rw++] = quad[k];
         }
     }
 
@@ -559,27 +548,17 @@ static bool water_ensure_grid(Water* water) {
                  GL_STATIC_DRAW);
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), (void*)0);
-    // Both sets in ONE element buffer, centre first: the ring draw is the same VAO
-    // at an index offset, so switching between them costs no rebind.
     glGenBuffers(1, &water->grid_ebo);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, water->grid_ebo);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER,
-                 (GLsizeiptr)(index_count + rw) * sizeof(unsigned), NULL, GL_STATIC_DRAW);
-    glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0, (GLsizeiptr)index_count * sizeof(unsigned),
-                    indices);
-    glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, (GLintptr)index_count * sizeof(unsigned),
-                    (GLsizeiptr)rw * sizeof(unsigned), ring_indices);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)index_count * sizeof(unsigned),
+                 indices, GL_STATIC_DRAW);
     glBindVertexArray(0);
 
     free(verts);
     free(indices);
-    free(ring_indices);
     water->grid_index_count = index_count;
-    water->ring_index_count = rw;
-    log_info("Water: %d levels, %dx%d grid, %d centre + %d ring triangles, level %.2f, "
-             "extent %.1f",
-             WATER_RING_LEVELS, res, res, index_count / 3, rw / 3, (double)water->level,
-             (double)water->extent);
+    log_info("Water: projected grid %dx%d, %d triangles, level %.2f, bed extent %.1f", res,
+             res, index_count / 3, (double)water->level, (double)water->extent);
     return true;
 }
 
@@ -860,12 +839,8 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
 
     uniform_set_float(u, "waterLevel", water->level);
     uniform_set_float(u, "waterExtent", water->extent);
-    // The clipmap's placement inputs. base is the CENTRE patch's half-extent, so
-    // the outermost ring reaches `extent`: base * 2^(levels-1) == extent.
-    uniform_set_float(u, "waterRingBase",
-                      water->extent / (float)(1 << (WATER_RING_LEVELS - 1)));
-    uniform_set_int(u, "waterRingLevels", WATER_RING_LEVELS);
-    uniform_set_int(u, "waterGridRes", WATER_GRID_RES);
+    // The projector's origin. Every lattice vertex is a ray from here through its own
+    // screen position, so this is the surface's whole placement input.
     uniform_set_vec3(u, "waterCamPos", (const float*)&engine->camera->position);
     uniform_set_float(u, "waterRoughness", water->roughness);
     uniform_set_float(u, "waterIor", water->ior);
@@ -1021,31 +996,18 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
     engine_set_scene_draw_buffers(engine, true);
 
     glBindVertexArray(water->grid_vao);
-    // Centre patch, then every ring in one instanced draw. gl_InstanceID + 1 is the
-    // level, so the vertex stage needs no per-ring uniform and the ring count is a
-    // draw parameter rather than a loop.
-    uniform_set_int(u, "waterLevelBase", 0);
     glDrawElements(GL_TRIANGLES, water->grid_index_count, GL_UNSIGNED_INT, 0);
-    if (WATER_RING_LEVELS > 1) {
-        uniform_set_int(u, "waterLevelBase", 1);
-        glDrawElementsInstanced(
-            GL_TRIANGLES, water->ring_index_count, GL_UNSIGNED_INT,
-            (const void*)((size_t)water->grid_index_count * sizeof(unsigned)),
-            WATER_RING_LEVELS - 1);
-    }
     glBindVertexArray(0);
 
-    // Submission counters, so water has a SUBMISSION row and a gate can assert
-    // integers on the ring structure. meshes_seen must equal instances + culled or
-    // the profiler's own sum check fires.
+    // Submission counters, so water has a SUBMISSION row and a gate can assert integers on
+    // the lattice. meshes_seen must equal instances + culled or the profiler's own sum
+    // check fires.
     SubmitStats* submit = profiler_submit(engine->profiler);
     if (submit) {
-        const size_t rings = WATER_RING_LEVELS > 1 ? (size_t)WATER_RING_LEVELS - 1 : 0;
-        submit->draws += rings > 0 ? 2 : 1;
-        submit->instances += 1 + rings;
-        submit->meshes_seen += 1 + rings;
-        submit->triangles += (size_t)water->grid_index_count / 3 +
-                             rings * ((size_t)water->ring_index_count / 3);
+        submit->draws += 1;
+        submit->instances += 1;
+        submit->meshes_seen += 1;
+        submit->triangles += (size_t)water->grid_index_count / 3;
     }
 
     engine_set_scene_draw_buffers(engine, false);
