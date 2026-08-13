@@ -41,6 +41,13 @@ uniform sampler2D cascade2_0;
 uniform sampler2D cascade2_1;
 uniform float cascadeLength[3];
 uniform float cascadeChoppiness[3];
+// Last frame's target 0 for the two cascades that displace, and whether they hold a
+// frame yet. 0 on the first two frames, and then the previous position falls back to
+// the current one -- which reports camera motion only, the behaviour the whole
+// spectral path had before these existed.
+uniform sampler2D cascadePrev0;
+uniform sampler2D cascadePrev1;
+uniform int prevAvailable;
 
 // The baked bed, for shoaling. Absent (bedAvailable 0) is the normal case: the
 // per-fragment water column comes from the resolved scene depth instead, which is
@@ -86,6 +93,34 @@ struct OceanSurface {
  * derivatives -- so the normal below is analytic and costs nothing extra. That
  * packing is the reason to spend two RGBA targets per cascade.
  */
+// A linear random sea is vertically symmetric, and a real one is not: crests are
+// sharper than troughs are deep. These are the low-order bound-harmonic correction
+// for that, kept small deliberately -- pushed harder the surface folds, which is what
+// the choppy-wave literature bounds. The subtracted constants are each band's mean
+// square, so the correction reshapes the surface without raising its mean level.
+const float OCEAN_BOUND_LONG = 0.14;
+const float OCEAN_BOUND_MED = 0.32;
+const float OCEAN_BOUND_LONG_VAR = 0.080;
+const float OCEAN_BOUND_MED_VAR = 0.030;
+
+/*
+ * The displaced position, from the two displacing bands' target 0 alone.
+ *
+ * Split out because the PREVIOUS frame's position is computed from retained copies of
+ * exactly these two samples, and it has to be the same arithmetic. Two copies of the
+ * bound-harmonic term would be two places for it to drift, and a velocity computed
+ * from a different surface than the raster drew is the failure this file exists to
+ * prevent -- pointing at the previous frame rather than at the normal.
+ */
+vec3 oceanSpectralPosition(vec2 p, vec4 long0, vec4 med0, float shoal) {
+    vec2 horizontal = long0.rg * cascadeChoppiness[0] + med0.rg * cascadeChoppiness[1];
+    float height = long0.b + med0.b;
+    height += OCEAN_BOUND_LONG * (long0.b * long0.b - OCEAN_BOUND_LONG_VAR) +
+              OCEAN_BOUND_MED * (med0.b * med0.b - OCEAN_BOUND_MED_VAR);
+    return vec3(p.x + horizontal.x * shoal, waterLevel + height * shoal,
+                p.y + horizontal.y * shoal);
+}
+
 OceanSurface oceanEvaluateSpectral(vec2 p) {
     vec4 long0 = texture(cascade0_0, fract(p / cascadeLength[0] + 0.5));
     vec4 long1 = texture(cascade0_1, fract(p / cascadeLength[0] + 0.5));
@@ -95,20 +130,13 @@ OceanSurface oceanEvaluateSpectral(vec2 p) {
     float q0 = cascadeChoppiness[0];
     float q1 = cascadeChoppiness[1];
 
-    vec2 horizontal = long0.rg * q0 + med0.rg * q1;
-    float height = long0.b + med0.b;
-    // A linear random sea is vertically symmetric, and a real one is not: crests
-    // are sharper than troughs are deep. This low-order bound-harmonic term is the
-    // cheap weakly-nonlinear correction for that, kept small deliberately -- pushed
-    // harder it folds the surface, which is what the choppy-wave literature bounds.
-    height += 0.14 * (long0.b * long0.b - 0.080) + 0.32 * (med0.b * med0.b - 0.030);
     // Not named `cross`: that is a builtin this function calls below.
     float crossDeriv = long0.a * q0 + med0.a * q1;
-    // The crest-sharpening term above changes the height, so its derivative has to
-    // be in the slope or the normal is the normal of a DIFFERENT surface than the
-    // one rasterized -- the exact failure this file's header exists to prevent.
-    // d/dp of 0.14*(h*h - c) is 0.28*h*dh, per cascade, hence the two factors.
-    vec2 slope = long1.rg * (1.0 + 0.28 * long0.b) + med1.rg * (1.0 + 0.64 * med0.b);
+    // The crest-sharpening term changes the height, so its derivative has to be in
+    // the slope or the normal is the normal of a DIFFERENT surface than the one
+    // rasterized. d/dp of b*(h*h - c) is 2*b*h*dh, per band.
+    vec2 slope = long1.rg * (1.0 + 2.0 * OCEAN_BOUND_LONG * long0.b) +
+                 med1.rg * (1.0 + 2.0 * OCEAN_BOUND_MED * med0.b);
     vec2 dHoriz = long1.ba * q0 + med1.ba * q1;
 
     float shoal = oceanShoal(p);
@@ -120,8 +148,7 @@ OceanSurface oceanEvaluateSpectral(vec2 p) {
     // waterAmplitude belongs to the Gerstner path, where there is no sea state to
     // ask. A calmer spectral ocean is a lower wind speed, not a smaller number
     // here.
-    s.world = vec3(p.x + horizontal.x * shoal, waterLevel + height * shoal,
-                   p.y + horizontal.y * shoal);
+    s.world = oceanSpectralPosition(p, long0, med0, shoal);
     // Scaled by the same factor, so the normal tracks the displacement rather than
     // the open-water surface it would otherwise describe. The shoal GRADIENT's own
     // product-rule term is dropped: inert over a flat bed, and wrong by that much
@@ -227,4 +254,32 @@ OceanSurface oceanEvaluate(vec2 p, float t) {
     s.jacobian = 1.0;
     s.shoal = shoal;
     return s;
+}
+
+/*
+ * Where this point was one frame ago, which is a motion vector's other half.
+ *
+ * Gerstner re-evaluates at t - dt and gets it in closed form. The spectral path
+ * cannot: its cascades hold ONE instant, the current one, so reading them at t - dt
+ * returns the same surface and the waves report no motion of their own. That is what
+ * the retained copies answer -- the same position arithmetic against last frame's
+ * fields.
+ *
+ * Only the two displacing bands are retained, which is all this needs: the short band
+ * never reaches the mesh, so it has no position to have moved.
+ */
+vec3 oceanPreviousWorld(vec2 p, float tPrev) {
+    if (waveModel == 0)
+        return oceanEvaluate(p, tPrev).world;
+    // Two branches rather than a ternary on the samplers themselves: GLSL 3.30
+    // samplers are opaque and may not appear in an expression.
+    vec2 uvLong = fract(p / cascadeLength[0] + 0.5);
+    vec2 uvMed = fract(p / cascadeLength[1] + 0.5);
+    vec4 long0 = texture(cascade0_0, uvLong);
+    vec4 med0 = texture(cascade1_0, uvMed);
+    if (prevAvailable == 1) {
+        long0 = texture(cascadePrev0, uvLong);
+        med0 = texture(cascadePrev1, uvMed);
+    }
+    return oceanSpectralPosition(p, long0, med0, oceanShoal(p));
 }

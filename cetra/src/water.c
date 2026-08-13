@@ -326,6 +326,9 @@ void free_water(Water* water) {
                 glDeleteFramebuffers(1, &water->cascade_fbo[c][b]);
         }
     }
+    for (int c = 0; c < WATER_PREV_CASCADES; c++)
+        if (water->cascade_prev[c])
+            glDeleteTextures(1, &water->cascade_prev[c]);
     free(water);
 }
 
@@ -626,6 +629,12 @@ static bool _water_ensure_spectra(Water* water) {
     }
     glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)saved_fbo);
 
+    // Same format and filtering as the fields they hold a copy of, because that is
+    // exactly what they are. No framebuffer: they are only ever written by a copy out
+    // of one of the buffers above.
+    for (int c = 0; c < WATER_PREV_CASCADES; c++)
+        water->cascade_prev[c] = _water_make_field(size);
+
     free(initial);
     free(wave);
     free(twiddle);
@@ -665,6 +674,27 @@ static void _water_run_spectral(Water* water, struct Engine* engine, float time)
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_BLEND);
     glViewport(0, 0, WATER_SPECTRUM_RES, WATER_SPECTRUM_RES);
+
+    // Keep the frame that is about to be overwritten. Buffer 0 holds the completed
+    // transform of the last frame -- 14 stages land back where they started -- and the
+    // evolve below is the first thing that writes over it, so this is the only moment
+    // the previous surface still exists.
+    //
+    // A copy rather than a third ping-pong buffer: the alternative is a parity the
+    // surface shader would have to know about, which is state in the wrong place for
+    // one texture fetch's worth of saving.
+    if (water->spectral_frames > 0) {
+        glActiveTexture(GL_TEXTURE0);
+        for (int c = 0; c < WATER_PREV_CASCADES; c++) {
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, water->cascade_fbo[c][0]);
+            glReadBuffer(GL_COLOR_ATTACHMENT0);
+            glBindTexture(GL_TEXTURE_2D, water->cascade_prev[c]);
+            glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, WATER_SPECTRUM_RES,
+                                WATER_SPECTRUM_RES);
+        }
+        glBindTexture(GL_TEXTURE_2D, 0);
+    }
+
     glBindVertexArray(water->fft_vao);
 
     for (int c = 0; c < WATER_CASCADE_COUNT; c++) {
@@ -706,6 +736,7 @@ static void _water_run_spectral(Water* water, struct Engine* engine, float time)
     }
 
     glBindVertexArray(0);
+    water->spectral_frames++;
     glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)saved_fbo);
     glViewport(saved_viewport[0], saved_viewport[1], saved_viewport[2], saved_viewport[3]);
     if (depth_was_enabled)
@@ -899,6 +930,21 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
         uniform_set_float(u, len, WATER_CASCADE_LENGTH[c]);
         uniform_set_float(u, chop, WATER_CASCADE_CHOPPINESS[c]);
     }
+
+    // Last frame's displacement, for the spectral path's motion vectors. Only usable
+    // from the third frame on: the first has nothing to copy from and the second holds
+    // a copy of the first, so the count has to reach 2 before this is a real previous
+    // surface rather than the current one under a different name.
+    const bool prev_ready = fft && water->spectral_frames >= 2;
+    for (int c = 0; c < WATER_PREV_CASCADES; c++) {
+        const int unit = WATER_PREV_UNIT0 + c;
+        char name[32];
+        snprintf(name, sizeof(name), "cascadePrev%d", c);
+        glActiveTexture(GL_TEXTURE0 + unit);
+        glBindTexture(GL_TEXTURE_2D, prev_ready ? water->cascade_prev[c] : 0);
+        uniform_set_int(u, name, unit);
+    }
+    uniform_set_int(u, "prevAvailable", prev_ready ? 1 : 0);
 
     glActiveTexture(GL_TEXTURE0);
 

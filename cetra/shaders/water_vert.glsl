@@ -62,6 +62,8 @@ void main() {
     vec2 p = clipmapPosition(level, aGrid, cell);
 
     OceanSurface s = oceanEvaluate(p, time);
+    float tPrev = time - uDeltaTime;
+    vec3 prevWorld = oceanPreviousWorld(p, tPrev);
 
     /*
      * T-junction stitch, on the patch's OUTER edge only.
@@ -88,6 +90,11 @@ void main() {
                 OceanSurface lo = oceanEvaluate(p - step2, time);
                 OceanSurface hi = oceanEvaluate(p + step2, time);
                 s.world = 0.5 * (lo.world + hi.world);
+                // The previous position takes the same average, so a stitched vertex
+                // reports the velocity of the point the raster actually drew rather
+                // than of the one it would have drawn unstitched.
+                prevWorld = 0.5 * (oceanPreviousWorld(p - step2, tPrev) +
+                                   oceanPreviousWorld(p + step2, tPrev));
                 // The normal is left as this vertex's own. Averaging it too would
                 // flatten the shading along every boundary into a visible seam,
                 // where a position that matches the neighbour is all the crack needs.
@@ -106,18 +113,11 @@ void main() {
     // jittered projection. The jitter is a sub-pixel sampling offset; letting it
     // into the velocity would report it to TAA and motion blur as scene motion.
     //
-    // Gerstner re-evaluates at t - dt, so its waves report the motion they have.
-    // The SPECTRAL path cannot: the cascades hold one instant, the current one, and
-    // reading them at t - dt returns the same surface. So a spectral ocean reports
-    // CAMERA motion only, and TAA reprojects travelling wave detail as if it were
-    // static. Fixing it needs the previous frame's transformed cascades kept alive
-    // -- a third buffer, since pass 0 overwrites the one that still holds them --
-    // and that is not built. The branch also avoids four texture fetches whose
-    // result is known to equal s.world.
+    // Both wave models report the motion their waves have -- see oceanPreviousWorld
+    // for how each one gets there and what the spectral path needs kept alive to do
+    // it. Before that, a spectral ocean reported CAMERA motion only and TAA
+    // reprojected travelling wave detail as though it were static.
     CurrClip = uCurrViewProjNoJitter * vec4(s.world, 1.0);
-    vec3 prevWorld = s.world;
-    if (waveModel == 0)
-        prevWorld = oceanEvaluate(p, time - uDeltaTime).world;
     PrevClip = uPrevViewProj * vec4(prevWorld, 1.0);
 
     gl_Position = projection * viewPos;

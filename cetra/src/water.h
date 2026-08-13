@@ -54,6 +54,14 @@
 #define WATER_CASCADE_UNIT0 0
 // The baked bed heightfield, sampled in the VERTEX stage for shoaling.
 #define WATER_BED_UNIT 8
+// Last frame's transformed field for the two cascades that displace the mesh, for the
+// spectral path's motion vectors. Units 9 and 10 hold the Charlie sheen cubemap and
+// the shadow map array, both of which are OTHER binding points on those units -- the
+// same reasoning WATER_DEPTH_UNIT above rests on, and the water program binds neither.
+#define WATER_PREV_UNIT0 9
+// Only the long and medium bands reach the mesh; the short one shades the interface
+// and never displaces, so it has no previous position to remember.
+#define WATER_PREV_CASCADES 2
 
 // Resolution of the baked bed heightfield. It only has to resolve the SHOALING
 // ramp -- how fast the water shallows -- not the terrain's own detail, which the
@@ -165,6 +173,24 @@ typedef struct Water {
     GLuint twiddle_tex;
     GLuint fft_vao, fft_vbo; // fullscreen quad for the spectral passes
     bool spectra_ready;
+
+    /*
+     * Last frame's target 0 for the two cascades that displace the mesh, copied out
+     * before this frame's transform overwrites it.
+     *
+     * A motion vector needs the position this vertex HELD, and the cascades only ever
+     * hold one instant -- so without this the spectral path could only report camera
+     * motion, and TAA reprojected travelling waves as though they were static. Target
+     * 0 alone is enough: it carries the horizontal displacement and the height, which
+     * is the whole position. The slopes in target 1 belong to the normal, and a
+     * previous normal is not a thing anything reads.
+     *
+     * Counted rather than flagged, because the first frame has no previous: at 0 there
+     * is nothing to copy, at 1 the copy is this frame's own work, and only from 2 does
+     * the pair hold a frame the surface actually drew.
+     */
+    GLuint cascade_prev[WATER_PREV_CASCADES];
+    int spectral_frames;
 
     /*
      * The bed, baked from height_at once.
