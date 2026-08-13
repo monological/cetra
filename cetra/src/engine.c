@@ -2064,7 +2064,13 @@ static bool _ensure_moment_targets(Engine* engine, int rw, int rh) {
     glBindFramebuffer(GL_FRAMEBUFFER, engine->moment_fbo);
     _add_scene_color_attachment(&engine->moment_multisample_texture, GL_RGBA32F,
                                 GL_COLOR_ATTACHMENT5, rw, rh, engine->msaa_samples);
-    _add_scene_color_attachment(&engine->moment_b0_multisample_texture, GL_RGBA32F,
+    // b0 carries one scalar, and above one sample it is padded to RGBA32F
+    // anyway: a MULTISAMPLE resolve blit demands identical formats on both
+    // sides, and it shares the atlas with the four-channel b1..b4. A
+    // single-sample blit only needs compatibility, so at one sample the padding
+    // goes -- a quarter of the b0 target, on the path that ships.
+    _add_scene_color_attachment(&engine->moment_b0_multisample_texture,
+                                engine->msaa_samples > 1 ? GL_RGBA32F : GL_R32F,
                                 GL_COLOR_ATTACHMENT6, rw, rh, engine->msaa_samples);
     glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER,
                               engine->depth_renderbuffer);
@@ -2108,7 +2114,10 @@ static bool _ensure_moment_targets(Engine* engine, int rw, int rh) {
     // believed the request understated the renderer's largest allocation on the
     // shipping path.
     int samples = engine->msaa_samples_actual;
-    double mb = ((double)rw * rh * 16.0 * (2.0 * samples + 2.0)) / (1024.0 * 1024.0);
+    // Per scene pixel: b1..b4 at 16 bytes a sample, b0 at 16 above one sample
+    // and 4 at one (R32F -- see the allocation), and the two-high RGBA32F atlas.
+    double b0_bytes = samples > 1 ? 16.0 * samples : 4.0;
+    double mb = ((double)rw * rh * (16.0 * samples + b0_bytes + 32.0)) / (1024.0 * 1024.0);
     log_info("OIT moments: %dx%d x%d fp32 + %dx%d atlas (%.0f MB)", rw, rh, samples, rw, rh * 2,
              mb);
     return true;
