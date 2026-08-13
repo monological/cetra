@@ -32,6 +32,7 @@ in vec3 Normal;
 in vec4 CurrClip;
 in vec4 PrevClip;
 in float Jacobian;
+in float Shoal;
 
 uniform mat4 view;
 uniform mat4 projection;
@@ -94,6 +95,9 @@ const float WATER_FOAM_FULL = 0.42;
 // Whitewater is not white: it is a bright grey with the sky in it.
 const vec3 WATER_FOAM_COLOR = vec3(0.72, 0.80, 0.78);
 const float WATER_FOAM_MAX = 0.62;
+// Shore band strength. Lower than a breaking crest: this is water going shallow,
+// not water breaking, and at crest strength every lake edge would read as surf.
+const float WATER_SHORE_FOAM = 0.45;
 
 vec2 screenVelocity() {
     return (CurrClip.xy / CurrClip.w - PrevClip.xy / PrevClip.w) * 0.5;
@@ -134,6 +138,14 @@ void main() {
         float shortJ = (1.0 + shortDeriv.x) * (1.0 + shortDeriv.y) - shortCross * shortCross;
         float compression = max(0.0, 1.0 - Jacobian) + max(0.0, 1.0 - shortJ) * fade * 0.62;
         foam = smoothstep(WATER_FOAM_ON, WATER_FOAM_FULL, compression) * fade;
+    }
+    // Shore foam, on both wave models. A band where the bed has risen close to the
+    // surface but has not broken it -- the whitewater a beach carries even where
+    // nothing is breaking. Windowed on both sides: at shoal 0 the surface is about
+    // to be discarded anyway, and at 1 there is no shore to foam against.
+    if (bedAvailable == 1) {
+        float band = smoothstep(0.02, 0.22, Shoal) * (1.0 - smoothstep(0.30, 0.72, Shoal));
+        foam = max(foam, band * WATER_SHORE_FOAM);
     }
     vec3 V = normalize(-ViewPos);
     // The interface is shaded in view space, so the normal has to arrive there

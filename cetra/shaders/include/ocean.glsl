@@ -42,9 +42,36 @@ uniform sampler2D cascade2_1;
 uniform float cascadeLength[3];
 uniform float cascadeChoppiness[3];
 
+// The baked bed, for shoaling. Absent (bedAvailable 0) is the normal case: the
+// per-fragment water column comes from the resolved scene depth instead, which is
+// exact and works against arbitrary geometry. This answers the one question screen
+// depth cannot -- a vertex needs its own depth to know how far to move, and
+// sampling screen depth would need the position that depth is meant to produce.
+uniform sampler2D bedTex;
+uniform int bedAvailable;
+uniform float waterExtent;
+
+// Depth over which a wave goes from fully shoaled to fully open-water. Waves
+// shorten and steepen as the bed rises under them; below the floor there is not
+// enough water column left to carry any displacement at all.
+const float OCEAN_SHOAL_MIN = 0.14;
+const float OCEAN_SHOAL_FULL = 2.7;
+
+// 1 in open water, falling to 0 as the bed comes up. Multiplies displacement, not
+// height alone: the horizontal term has to shrink with it or the surface slides
+// sideways over a beach it is no longer above.
+float oceanShoal(vec2 p) {
+    if (bedAvailable == 0)
+        return 1.0;
+    vec2 uv = p / (waterExtent * 2.0) + 0.5;
+    float bed = texture(bedTex, clamp(uv, vec2(0.0), vec2(1.0))).r;
+    return smoothstep(OCEAN_SHOAL_MIN, OCEAN_SHOAL_FULL, waterLevel - bed);
+}
+
 struct OceanSurface {
     vec3 world;  // displaced world position
     vec3 normal; // unit normal from the analytic derivatives
+    float shoal; // 1 = open water, 0 = the bed has reached the surface
     // Horizontal-map Jacobian. Below 1 the surface is COMPRESSING, which is where
     // a real sea throws whitewater, so this is the foam selector rather than a
     // height threshold. Always 1 on the Gerstner path, whose steepness is
@@ -97,6 +124,8 @@ OceanSurface oceanEvaluateSpectral(vec2 p) {
     vec2 slope = long1.rg + med1.rg;
     vec2 dHoriz = long1.ba * q0 + med1.ba * q1;
 
+    float shoal = oceanShoal(p);
+
     OceanSurface s;
     // No amplitude knob here, deliberately. The spectrum is already physical --
     // its height comes out of the wind speed and fetch it was seeded with -- so
@@ -104,11 +133,16 @@ OceanSurface oceanEvaluateSpectral(vec2 p) {
     // waterAmplitude belongs to the Gerstner path, where there is no sea state to
     // ask. A calmer spectral ocean is a lower wind speed, not a smaller number
     // here.
-    s.world = vec3(p.x + horizontal.x, waterLevel + height, p.y + horizontal.y);
-    vec3 dPdx = vec3(1.0 + dHoriz.x, slope.x, crossDeriv);
-    vec3 dPdz = vec3(crossDeriv, slope.y, 1.0 + dHoriz.y);
+    s.world = vec3(p.x + horizontal.x * shoal, waterLevel + height * shoal,
+                   p.y + horizontal.y * shoal);
+    // The derivatives carry the same factor, so the normal stays the normal OF the
+    // displaced surface rather than of the open-water one it would have been.
+    vec3 dPdx = vec3(1.0 + dHoriz.x * shoal, slope.x * shoal, crossDeriv * shoal);
+    vec3 dPdz = vec3(crossDeriv * shoal, slope.y * shoal, 1.0 + dHoriz.y * shoal);
     s.normal = normalize(cross(dPdz, dPdx));
-    s.jacobian = (1.0 + dHoriz.x) * (1.0 + dHoriz.y) - crossDeriv * crossDeriv;
+    s.jacobian = (1.0 + dHoriz.x * shoal) * (1.0 + dHoriz.y * shoal) -
+                 crossDeriv * crossDeriv * shoal * shoal;
+    s.shoal = shoal;
     return s;
 }
 
@@ -116,6 +150,7 @@ OceanSurface oceanEvaluate(vec2 p, float t) {
     if (waveModel == 1)
         return oceanEvaluateSpectral(p);
 
+    float shoal = oceanShoal(p);
     vec3 displaced = vec3(p.x, waterLevel, p.y);
     // Partial derivatives of the displaced position with respect to the
     // undisplaced grid coordinates. The identity rows are the flat plane's
@@ -124,7 +159,7 @@ OceanSurface oceanEvaluate(vec2 p, float t) {
     vec3 dPdz = vec3(0.0, 0.0, 1.0);
 
     float wavelength = waterWavelength;
-    float amplitude = waterAmplitude;
+    float amplitude = waterAmplitude * shoal;
     vec2 base = normalize(waterWindDir + vec2(1e-6, 0.0));
 
     for (int i = 0; i < OCEAN_WAVES; i++) {
@@ -173,5 +208,6 @@ OceanSurface oceanEvaluate(vec2 p, float t) {
     // "nothing to select foam from" rather than approximating a number the model
     // does not produce.
     s.jacobian = 1.0;
+    s.shoal = shoal;
     return s;
 }

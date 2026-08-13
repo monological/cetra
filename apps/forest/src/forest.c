@@ -39,6 +39,7 @@
 #include "cetra/scene.h"
 #include "cetra/shadow.h"
 #include "cetra/sky.h"
+#include "cetra/water.h"
 #include "cetra/transform.h"
 #include "cetra/util.h"
 
@@ -98,6 +99,8 @@ typedef struct ForestArgs {
     int cam_set;
     vec3 cam_eye;
     vec3 cam_target;
+    int water;         // flood the terrain to --water-level (spec 11.32)
+    float water_level; // world Y of the still surface
 } ForestArgs;
 
 static ForestArgs g_args;
@@ -360,6 +363,14 @@ static Material* make_material(const char* name, vec3 albedo, float roughness, f
     set_material_shader_program(m, g_pbr);
     add_material_to_scene(g_scene, m);
     return m;
+}
+
+// WaterHeightFn over the terrain. A thin adapter rather than a cast, because
+// terrain_height_at takes its params first and the water system passes a context
+// pointer -- and because the signature is the contract, so it should be written
+// out where a reader can see the two agree.
+static float forest_bed_height(void* ctx, float x, float z) {
+    return terrain_height_at((const TerrainParams*)ctx, x, z);
 }
 
 static void build_terrain(PhysicsWorld* physics, EntityManager* em) {
@@ -676,6 +687,22 @@ static void on_init(Game* game) {
     else
         build_sky_and_sun(engine);
 
+    // Flood it. This is the whole point of the water system's height provider:
+    // terrain_height_at is a pure function of (params, x, z), so it satisfies
+    // WaterHeightFn directly and the surface can shoal against real terrain with
+    // no heightmap stored anywhere and no data copied.
+    if (g_args.water) {
+        Water* water = create_water();
+        if (water) {
+            water->level = g_args.water_level;
+            // The drawn surface covers the whole terrain square.
+            water->extent = g_terrain.extent;
+            water->height_at = forest_bed_height;
+            water->height_ctx = &g_terrain;
+            g_scene->water = water;
+        }
+    }
+
     // Standing on the surface, not dropped onto it. The capsule's origin sits
     // half_height + radius above whatever it rests on, so spawning any higher
     // means the first second of every run is a fall -- which reads as the
@@ -928,6 +955,8 @@ static void print_usage(const char* argv0) {
     fprintf(stderr, "      --trace-player      Log position, velocity and ground state\n");
     fprintf(stderr, "      --render-mode N     1 = normals, 6 = albedo\n");
     fprintf(stderr, "      --lod-bias F        >1 holds detail longer\n");
+    fprintf(stderr, "      --water             Flood the terrain (spec 11.32)\n");
+    fprintf(stderr, "      --water-level <f>   Still-water world Y (implies --water)\n");
     fprintf(stderr, "      --seed N            Terrain and scatter seed\n");
     fprintf(stderr, "      --cam-eye x,y,z     Pin the camera (disables follow)\n");
     fprintf(stderr, "      --cam-target x,y,z  Pinned camera aim point\n");
@@ -976,6 +1005,11 @@ int main(int argc, char** argv) {
             g_args.no_sky = 1;
         } else if (!strcmp(a, "--no-fog")) {
             g_args.no_fog = 1;
+        } else if (!strcmp(a, "--water")) {
+            g_args.water = 1;
+        } else if (!strcmp(a, "--water-level") && i + 1 < argc) {
+            g_args.water_level = strtof(argv[++i], NULL);
+            g_args.water = 1;
         } else if (!strcmp(a, "--trace-player")) {
             g_args.trace_player = 1;
         } else if (!strcmp(a, "--no-aerial")) {

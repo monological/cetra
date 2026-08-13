@@ -39,6 +39,13 @@
 // albedo/normal by house convention and 6-7 are taken above, so this sits clear of
 // both and of the engine-bound IBL block at 9-15.
 #define WATER_CASCADE_UNIT0 16
+// The baked bed heightfield, sampled in the VERTEX stage for shoaling.
+#define WATER_BED_UNIT 8
+
+// Resolution of the baked bed heightfield. It only has to resolve the SHOALING
+// ramp -- how fast the water shallows -- not the terrain's own detail, which the
+// depth buffer already carries per fragment.
+#define WATER_BED_RES 256
 
 /*
  * Spectral cascades (--water-waves fft).
@@ -137,7 +144,27 @@ typedef struct Water {
     GLuint twiddle_tex;
     GLuint fft_vao, fft_vbo; // fullscreen quad for the spectral passes
     bool spectra_ready;
+
+    /*
+     * The bed, baked from height_at once.
+     *
+     * A CPU callback cannot be called from a vertex shader, so Tier 3 arrives as a
+     * texture rather than as the function itself. Baked rather than streamed
+     * because the drawn surface is a fixed extent about the origin: the same
+     * region every frame, so the same samples every frame.
+     *
+     * Resolution is chosen for the shoaling RAMP, not for the terrain. Per-fragment
+     * water depth still comes from the resolved scene depth, which is exact and
+     * works against geometry no heightfield describes; this exists only to answer
+     * the one question screen depth cannot, in the stage it has to be answered in.
+     */
+    GLuint bed_tex;
+    bool bed_baked;
 } Water;
+
+// Bake the bed heightfield from `height_at`. Called automatically on the first
+// frame after a provider is set; call again if the bed itself changed.
+void water_invalidate_bed(Water* water);
 
 // World-space tiling period of each cascade, in metres. Public because the
 // surface shader needs the same numbers to build its sample UVs, and a second

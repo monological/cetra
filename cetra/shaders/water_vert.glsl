@@ -10,9 +10,9 @@ uniform mat4 view;
 uniform mat4 projection; // TAA-jittered, like every other raster in the frame
 uniform mat4 uCurrViewProjNoJitter;
 uniform mat4 uPrevViewProj;
-uniform float waterExtent;
 uniform float time;
 uniform float uDeltaTime;
+// waterExtent is declared by ocean.glsl, which needs it to index the bed field.
 
 out vec3 WorldPos;
 out vec3 ViewPos;
@@ -20,6 +20,7 @@ out vec3 Normal;
 out vec4 CurrClip;
 out vec4 PrevClip;
 out float Jacobian;
+out float Shoal;
 
 // Required for the same reason pbr_vert declares it: without the qualifier the
 // driver may schedule this position's arithmetic differently from another
@@ -36,6 +37,7 @@ void main() {
     WorldPos = s.world;
     Normal = s.normal;
     Jacobian = s.jacobian;
+    Shoal = s.shoal;
 
     vec4 viewPos = view * vec4(s.world, 1.0);
     ViewPos = viewPos.xyz;

@@ -297,6 +297,8 @@ void free_water(Water* water) {
         glDeleteBuffers(1, &water->fft_vbo);
     if (water->twiddle_tex)
         glDeleteTextures(1, &water->twiddle_tex);
+    if (water->bed_tex)
+        glDeleteTextures(1, &water->bed_tex);
     for (int c = 0; c < WATER_CASCADE_COUNT; c++) {
         if (water->cascade_initial[c])
             glDeleteTextures(1, &water->cascade_initial[c]);
@@ -311,6 +313,52 @@ void free_water(Water* water) {
         }
     }
     free(water);
+}
+
+void water_invalidate_bed(Water* water) {
+    if (water)
+        water->bed_baked = false;
+}
+
+// Bake height_at over the drawn extent. One R32F texel per sample, CLAMP so a
+// vertex just outside the baked square reads the nearest shore rather than
+// wrapping to the far side of the scene.
+static void _water_bake_bed(Water* water) {
+    if (water->bed_baked || !water->height_at)
+        return;
+
+    const int res = WATER_BED_RES;
+    float* heights = malloc((size_t)res * res * sizeof(float));
+    if (!heights) {
+        log_error("Water bed bake allocation failed; shoaling disabled");
+        water->bed_baked = true; // latched: retrying every frame would not help
+        return;
+    }
+
+    const float span = water->extent * 2.0f;
+    for (int z = 0; z < res; z++) {
+        for (int x = 0; x < res; x++) {
+            // Texel CENTRES, so the sampled field lines up with the bilinear tap
+            // the vertex shader makes rather than sitting half a texel off it.
+            const float wx = ((float)x + 0.5f) / (float)res * span - water->extent;
+            const float wz = ((float)z + 0.5f) / (float)res * span - water->extent;
+            heights[z * res + x] = water->height_at(water->height_ctx, wx, wz);
+        }
+    }
+
+    if (!water->bed_tex)
+        glGenTextures(1, &water->bed_tex);
+    glBindTexture(GL_TEXTURE_2D, water->bed_tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, res, res, 0, GL_RED, GL_FLOAT, heights);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    free(heights);
+    water->bed_baked = true;
+    log_info("Water: bed baked at %d^2 over %.0f units", res, (double)span);
 }
 
 bool water_active(const Water* water) {
@@ -568,6 +616,8 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
     // The spectral bands, before anything that samples them. Its own profiler
     // scope would need the caller's, so it stays inside the water row -- the
     // simulation is part of what water costs.
+    _water_bake_bed(water);
+
     const bool fft = water->wave_model == WATER_WAVES_FFT;
     if (fft) {
         if (!_water_ensure_spectra(water))
@@ -631,6 +681,17 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
     glBindTexture(GL_TEXTURE_2D, scene_depth);
     uniform_set_int(u, "sceneDepthTex", WATER_DEPTH_UNIT);
     uniform_set_int(u, "sceneDepthAvailable", scene_depth ? 1 : 0);
+
+    // The baked bed, for vertex-stage shoaling. Absent is the normal case and not
+    // a degraded one: the per-fragment water column still comes from the depth
+    // resolve above, which is exact and works against geometry a heightfield
+    // cannot describe. What the bed buys is the one thing screen depth cannot
+    // answer in the vertex stage -- how much to shorten a wave that is running out
+    // of water underneath it.
+    glActiveTexture(GL_TEXTURE0 + WATER_BED_UNIT);
+    glBindTexture(GL_TEXTURE_2D, water->bed_tex);
+    uniform_set_int(u, "bedTex", WATER_BED_UNIT);
+    uniform_set_int(u, "bedAvailable", water->bed_tex ? 1 : 0);
 
     // The split-sum BRDF table is engine-owned and bound for every scene,
     // environment or not, so the Fresnel lobe's lookup is always valid.
