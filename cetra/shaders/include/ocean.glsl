@@ -59,6 +59,11 @@ uniform sampler2D bedTex;
 uniform int bedAvailable;
 uniform float waterExtent;
 
+// The eye, in world space. Two things need it and both are about magnitude rather than
+// about the camera: it is the projector's origin, and it is the origin every cascade lookup
+// is taken relative to so the argument stays small.
+uniform vec3 waterCamPos;
+
 /*
  * PROJECTED GRID placement (spec 11.34).
  *
@@ -91,12 +96,12 @@ const float OCEAN_OVERSCAN = 1.12;
 // surface rather than in it.
 const float OCEAN_MIN_EYE_HEIGHT = 0.05;
 
-vec2 oceanProjectedPosition(vec2 lattice, mat4 view, mat4 projection, vec3 camPos) {
+vec2 oceanProjectedPosition(vec2 lattice, mat4 view, mat4 projection) {
     vec2 invFocal = 1.0 / vec2(projection[0][0], projection[1][1]);
     mat3 viewToWorld = mat3(transpose(view));
 
     float ndcX = lattice.x * 2.0 * OCEAN_OVERSCAN;
-    bool above = camPos.y >= waterLevel;
+    bool above = waterCamPos.y >= waterLevel;
 
     /*
      * Which NDC row this column's horizon sits on.
@@ -127,14 +132,14 @@ vec2 oceanProjectedPosition(vec2 lattice, mat4 view, mat4 projection, vec3 camPo
     float ndcY = mix(y0, y1, lattice.y + 0.5);
 
     vec3 rd = normalize(viewToWorld * vec3(vec2(ndcX, ndcY) * invFocal, -1.0));
-    float eye = camPos.y - waterLevel;
+    float eye = waterCamPos.y - waterLevel;
     eye = above ? max(eye, OCEAN_MIN_EYE_HEIGHT) : min(eye, -OCEAN_MIN_EYE_HEIGHT);
     float t = -eye / rd.y;
     // A ray running away from the plane, or grazing it, runs to the cap instead. Written as
     // a positive range rather than a negation so that a division by zero -- inf, or NaN
     // when the numerator vanishes too -- takes the same branch.
     t = (t > 0.0 && t < OCEAN_FAR_DIST) ? t : OCEAN_FAR_DIST;
-    return camPos.xz + rd.xz * t;
+    return waterCamPos.xz + rd.xz * t;
 }
 
 // Depth over which a wave goes from fully shoaled to fully open-water. Waves
@@ -240,10 +245,32 @@ const float OCEAN_BOUND_MED = 0.32;
 const float OCEAN_BOUND_LONG_VAR = 0.080;
 const float OCEAN_BOUND_MED_VAR = 0.030;
 
-// One band's tiling lookup. Written out eleven times before this existed, twice per band
-// for the two targets of a single sample point.
+/*
+ * One band's tiling lookup. Written out eleven times before this existed, twice per band
+ * for the two targets of a single sample point.
+ *
+ * Sampled relative to a camera origin SNAPPED to this band's own period (spec 11.34). fract
+ * is periodic with exactly that period, so subtracting an integer multiple of it cannot
+ * change the answer -- what it changes is the MAGNITUDE of the argument, and therefore how
+ * many mantissa bits are left for the fraction the lookup needs. Without it, p/240 at a
+ * quarter-million units is ~1300, which has spent eleven bits on an integer part that fract
+ * is about to discard. The snap is exact arithmetic: floor of a quotient times the divisor,
+ * then a subtraction of two nearby values, which fp32 does without error.
+ *
+ * WHAT THIS DOES NOT FIX, measured rather than assumed. The division was only one of the
+ * terms, and the small one: `p` ITSELF is quantised, because it is built as
+ * waterCamPos.xz + rd.xz*t and the camera term dominates -- 0.03 units at a quarter-million.
+ * Removing the division's share moved a translation-invariance comparison by 3%. Fixing the
+ * rest means carrying the lattice position camera-RELATIVE, so the error tracks distance from
+ * the eye rather than from the world origin, and that is an engine-wide change rather than
+ * water's: absolute fp32 world coordinates are what every mesh in such a world is built from.
+ * Nothing in this tree is further than about a thousand units out, where all of this is far
+ * below a last bit.
+ */
 vec2 oceanCascadeUv(vec2 p, int band) {
-    return fract(p / cascadeLength[band] + 0.5);
+    float period = cascadeLength[band];
+    vec2 origin = floor(waterCamPos.xz / period) * period;
+    return fract((p - origin) / period + 0.5);
 }
 
 /*

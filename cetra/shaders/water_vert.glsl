@@ -12,8 +12,7 @@ uniform mat4 uCurrViewProjNoJitter;
 uniform mat4 uPrevViewProj;
 uniform float time;
 uniform float uDeltaTime;
-// The projector's origin. waterLevel and waterExtent are declared by ocean.glsl.
-uniform vec3 waterCamPos;
+// waterLevel, waterExtent and waterCamPos are declared by ocean.glsl.
 // Lattice cells per side, for the cell footprint below.
 uniform int waterGridRes;
 // 0 = report a zero footprint, which is exactly full detail everywhere: a zero footprint
@@ -52,7 +51,7 @@ invariant gl_Position;
 const float WATER_CLIP_Z_EPS = 1.0e-5;
 
 void main() {
-    vec2 p = oceanProjectedPosition(aGrid, view, projection, waterCamPos);
+    vec2 p = oceanProjectedPosition(aGrid, view, projection);
 
     /*
      * The world footprint of this lattice cell, which is what decides how much of the wave
@@ -66,8 +65,8 @@ void main() {
     float footprint = 0.0;
     if (waterFarLod == 1) {
         float cell = 1.0 / float(max(waterGridRes, 1));
-        vec2 px = oceanProjectedPosition(aGrid + vec2(cell, 0.0), view, projection, waterCamPos);
-        vec2 pz = oceanProjectedPosition(aGrid + vec2(0.0, cell), view, projection, waterCamPos);
+        vec2 px = oceanProjectedPosition(aGrid + vec2(cell, 0.0), view, projection);
+        vec2 pz = oceanProjectedPosition(aGrid + vec2(0.0, cell), view, projection);
         footprint = max(distance(px, p), distance(pz, p));
     }
 
