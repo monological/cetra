@@ -185,9 +185,31 @@ void main() {
     // formula's maximum density and fog the ground from underneath.
     float sigma = P.y < floorY ? 0.0 : density * exp(-(P.y - floorY) / heightFalloff);
 
-    // A cell below the surface is water, not denser air, so the two media do not
-    // blend -- see the override after the light accumulation below.
-    bool inWater = waterMedium == 1 && P.y < waterLevelY;
+    // A cell below the surface is water, not denser air, so the two media do not blend:
+    // this REPLACES air's terms rather than adding to them, and everything the air path
+    // computes below would be overwritten. So it exits here instead -- the whole light
+    // accumulation, its shadow taps, and the temporal reprojection are all dead work for
+    // a submerged cell, and a submerged camera puts most of the frustum down here.
+    //
+    // Coherent by construction: the test is a world-Y half-space, so divergence is
+    // confined to the slice band straddling the surface.
+    if (waterMedium == 1 && P.y < waterLevelY) {
+        // Luminance mean, because a cell carries ONE scalar extinction and the integrate
+        // pass multiplies one scalar transmittance. The colour moves into the in-scatter,
+        // so distance fades the seabed TOWARD the body colour rather than reddening out
+        // of it on the way. The exact per-channel Beer-Lambert still runs in the surface
+        // shader for everything seen through the interface, which is the path that
+        // carries the look from above; this one only has to make being under the surface
+        // read as being under something.
+        //
+        // And the body's in-scatter is a constant rather than scattered sunlight, so
+        // there are no shafts down here. Real, and not modelled -- which is also why
+        // there is nothing for the temporal accumulator to average: the value is
+        // constant per frame, so blending it against its own history is a no-op.
+        float bodySigma = dot(waterExtinction, vec3(0.2126, 0.7152, 0.0722));
+        FragColor = vec4(min(waterInscatter * preExposure, vec3(WS_MEDIA_MAX)), bodySigma);
+        return;
+    }
 
     vec3 S = ambientColor;
     for (int j = 0; j < numLights; j++) {
@@ -265,30 +287,6 @@ void main() {
     // Keep shafts HDR (they must bloom) but bound hostile parameter combos away
     // from fp16 overflow, as the screen-space march does. 500 now means 500x
     // white rather than 500 nits.
-    /*
-     * Water below the surface (spec 11.33), replacing both terms rather than adding
-     * to them.
-     *
-     * TWO approximations, both forced by what a cell can hold, and both confined to
-     * the volume:
-     *
-     * The extinction arrives as a LUMINANCE MEAN. Water's is per-channel -- red dies
-     * first, which is why deep water is blue -- but a cell stores one scalar in .a
-     * and the integrate pass multiplies one scalar transmittance, so the colour moves
-     * into the in-scatter instead: distance fades the seabed TOWARD the body colour
-     * rather than reddening out of it on the way. The exact per-channel Beer-Lambert
-     * still runs in the surface shader for everything seen through the interface,
-     * which is the path that carries the look from above; this one only has to make
-     * being under the surface read as being under something.
-     *
-     * And the body's in-scatter is a constant rather than scattered sunlight, so
-     * there are no shafts down here. Real, and not modelled.
-     */
-    if (inWater) {
-        sigma = dot(waterExtinction, vec3(0.2126, 0.7152, 0.0722));
-        S = waterInscatter;
-    }
-
     vec4 result = vec4(min(S * preExposure, vec3(WS_MEDIA_MAX)), sigma);
 
     // Temporal reprojection: find where this cell's world position sat in the

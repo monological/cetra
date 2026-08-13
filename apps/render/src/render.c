@@ -273,6 +273,9 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     // -1, not 0: the library gives 0 its own meaning (capture every dirty probe
     // in one frame), so a 0 sentinel here would make --gi-rate 0 unreachable.
     args->gi_rate = -1;
+    // -1 = unset, so `--water-waves gerstner` can override a scene file that authored
+    // fft. A 0 sentinel would make the Gerstner half of the flag unreachable.
+    args->water_waves = -1;
     args->specular_aa = -1.0f;    // -1 = keep the engine default
     args->ssr_strength = -1.0f;   // -1 = keep the engine default
     args->ssr_jitter = -1.0f;     // -1 = keep the engine default
@@ -681,20 +684,24 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             // escape hatch from a scene file that authors a surface.
             args->no_water = 1;
         } else if (strcmp(argv[i], "--no-water-caustics") == 0) {
+            // The negative flags do NOT imply --water. A flag whose whole job is to turn
+            // a feature off has no business turning the feature on, and `--no-water
+            // --no-water-caustics` reading as "water, without caustics" is the shape that
+            // made --no-water losable in the first place.
             args->no_water_caustics = 1;
-            args->water = 1;
         } else if (strcmp(argv[i], "--no-water-coverage") == 0) {
             args->no_water_coverage = 1;
-            args->water = 1;
         } else if (strcmp(argv[i], "--water-waves") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
                 return -1;
             }
+            // Tri-state, so `gerstner` can override an authored "waves": "fft". A bool
+            // could only ever write its true half, which made half the flag inert.
             if (strcmp(argv[i], "fft") == 0) {
-                args->water_fft = 1;
+                args->water_waves = 1;
             } else if (strcmp(argv[i], "gerstner") == 0) {
-                args->water_fft = 0;
+                args->water_waves = 0;
             } else {
                 fprintf(stderr, "Error: unknown water wave model '%s' (gerstner|fft)\n", argv[i]);
                 return -1;
@@ -720,7 +727,6 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 fprintf(stderr, "Error: unknown water bed '%s' (none|dome)\n", argv[i]);
                 return -1;
             }
-            args->water = 1;
         } else if (strcmp(argv[i], "--gi-debug") == 0) {
             args->gi_volume = 1;
             args->gi_debug = 1;
@@ -2942,43 +2948,42 @@ int main(int argc, char** argv) {
         }
     }
 
-    // The water surface. Attached here rather than at scene load so the level
-    // and extent can default off the finished scene bounds, which the probe and
-    // GI blocks above may have recentred.
-    //
-    // The scene file goes on first and the flags below override it, so `--water-level`
-    // retunes an authored surface instead of discarding one.
+    /*
+     * The water surface: the scene file supplies it, the flags override it.
+     *
+     * One decision then one override pass, rather than a sequence of create/free stages
+     * whose order was the precedence rule. --no-water wins outright and cannot be undone
+     * by a sibling flag arriving later, which is what an `else if` buys over two
+     * independent `if`s.
+     */
     apply_cscene_water(scene, cscn);
-    if (args.no_water && scene->water) {
+    if (args.no_water) {
         free_water(scene->water);
         scene->water = NULL;
-    }
-    if (args.water && !scene->water)
+    } else if (args.water && !scene->water) {
         scene->water = create_water();
-    if (args.water) {
+    }
+    if (scene->water) {
         Water* water = scene->water;
-        if (water) {
-            if (args.water_level > -9000.0f)
-                water->level = args.water_level;
-            if (args.water_extent > 0.0f)
-                water->extent = args.water_extent;
-            if (args.water_fft)
-                water->wave_model = WATER_WAVES_FFT;
-            if (args.no_water_caustics)
-                water->caustics = false;
-            if (args.no_water_coverage)
-                water->shore_coverage = false;
-            if (args.water_bed_dome) {
-                water->height_at = render_dome_bed_height;
-                water->height_ctx = water;
-            }
-            scene->water = water;
+        if (args.water_level > -9000.0f)
+            water->level = args.water_level;
+        if (args.water_extent > 0.0f)
+            water->extent = args.water_extent;
+        if (args.water_waves >= 0)
+            water->wave_model = args.water_waves ? WATER_WAVES_FFT : WATER_WAVES_GERSTNER;
+        if (args.no_water_caustics)
+            water->caustics = false;
+        if (args.no_water_coverage)
+            water->shore_coverage = false;
+        if (args.water_bed_dome) {
+            water->height_at = render_dome_bed_height;
+            water->height_ctx = water;
         }
     }
 
     /*
      * --water-probe: the CPU wave query, printed. It is the only way anything outside
-     * this process can see water_height_at at all -- the GPU surface leaves no number
+     * this process can see water_surface_at at all -- the GPU surface leaves no number
      * behind, so without this the seam buoyancy is meant to consume would ship untested.
      *
      * `residual` is the whole point of printing it: the query has to INVERT the Gerstner

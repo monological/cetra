@@ -27,11 +27,16 @@
  * water_waves_available says so rather than leaving them to discover a flat answer.
  */
 
-// Whether water_height_at returns a displaced surface or just the still level.
+// Whether water_surface_at returns a displaced surface or just the still level.
 bool water_waves_available(const Water* water);
 
 /*
- * Surface height under (x, z) at time t, in world units.
+ * Surface height under (x, z) at time t, in world units, and optionally the normal there
+ * -- pass NULL for out_normal to skip the derivative work entirely.
+ *
+ * One entry point rather than a height-only sibling: the normal comes out of the same
+ * derivatives the height sum already computes, so asking separately would evaluate the
+ * whole train twice and, worse, invites the two answers to come from different `t`.
  *
  * `t` is the same clock the render passes ocean.glsl -- engine->render_time -- and
  * passing a different one silently answers about a different instant of the same sea.
@@ -39,16 +44,6 @@ bool water_waves_available(const Water* water);
  * Returns water->level unchanged for a NULL or disabled surface, and for the spectral
  * model (see above), so a caller that forgot to check gets a usable plane rather than a
  * zero.
- */
-float water_height_at(const Water* water, float x, float z, float t);
-
-/*
- * Height and the surface normal together, for anything that needs an orientation --
- * a hull to sit level, a splash to eject along the surface.
- *
- * One call rather than two because the normal comes out of the same derivatives the
- * height sum already computes: asking separately would evaluate the whole train twice
- * and, worse, invites the two answers to come from different `t`.
  */
 float water_surface_at(const Water* water, float x, float z, float t, vec3 out_normal);
 

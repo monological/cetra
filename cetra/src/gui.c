@@ -580,11 +580,13 @@ static void _engine_gui_panel(Engine* engine) {
         if (scene->water) {
             Water* water = scene->water;
             _begin_effect_group("Water", &water->enabled);
-            // The level is what an author reaches for first, and it re-derives the
-            // shoreline against whatever bed is under it, so the bed bake has to be
-            // re-armed when it moves.
-            if (igSliderFloat("Level", &water->level, -50.0f, 50.0f, "%.2f", 0))
-                water_invalidate_bed(water);
+            // No bed invalidation here: the bake stores height and gradient, neither of
+            // which depends on the level -- the level enters in the shader, as
+            // waterLevel - bed. Re-arming it from this slider re-baked an identical
+            // texture on every dragged frame, which on a real terrain provider is 65,536
+            // noise evaluations and a 1 MB upload per frame. The bake now notices its own
+            // inputs changing (see _water_bake_bed).
+            igSliderFloat("Level", &water->level, -50.0f, 50.0f, "%.2f", 0);
             igSliderFloat("Wavelength", &water->wavelength, 1.0f, 400.0f, "%.1f",
                           ImGuiSliderFlags_Logarithmic);
             igSliderFloat("Amplitude", &water->amplitude, 0.0f, 8.0f, "%.3f",

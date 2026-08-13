@@ -367,40 +367,32 @@ void water_publish_to_postfx(const Water* water, struct Engine* engine) {
 
     if (!water_active(water)) {
         fx->water_medium = 0;
-        fx->water_camera_below = 0;
+        fx->water_suppress_aerial = 0;
         return;
     }
 
-    fx->water_medium = 1;
+    /*
+     * Only while the eye is submerged. Above the surface the body is behind the
+     * water's own absorption, which the surface shader already integrates, so a volume
+     * there would buy nothing -- and water_medium is what ARMS the froxel pass, so
+     * publishing it unconditionally would bill every water scene for a volume.
+     *
+     * Aerial perspective is suppressed for the same frame: it holds the sky-view
+     * integral, which is air the sight line never crosses down here, so leaving it on
+     * hazes the seabed with atmosphere.
+     *
+     * Both are published as REQUESTS rather than written into the flags that answer
+     * them. fog_enabled belongs to the app and the GUI checkbox and nothing resets it
+     * per frame, so setting it here would turn volumetric fog on permanently after one
+     * submerged frame; aerial_volume belongs to the sky, which republishes every frame,
+     * so clearing it here would make publish call order load-bearing.
+     */
+    const bool submerged = engine->camera && engine->camera->position[1] < water->level;
+    fx->water_medium = submerged ? 1 : 0;
+    fx->water_suppress_aerial = submerged ? 1 : 0;
     fx->water_level_y = water->level;
     memcpy(fx->water_extinction, water->absorption, sizeof(vec3));
     memcpy(fx->water_inscatter, water->scatter, sizeof(vec3));
-    fx->water_camera_below =
-        (engine->camera && engine->camera->position[1] < water->level) ? 1 : 0;
-
-    /*
-     * Arm the volume when the eye is under the surface.
-     *
-     * The froxel volume is off by default, so without this the underwater medium
-     * would silently depend on --fog and "looking down from a boat" and "swimming"
-     * would be lit by different rules for a reason nobody could see. Only while
-     * submerged: above the surface the medium is behind the water's own absorption,
-     * which the surface shader already integrates, and paying for a volume there
-     * would buy nothing.
-     *
-     * Aerial perspective is dropped for the same frame. It holds the sky-view
-     * integral -- air the sight line never crosses down here -- so leaving it on
-     * would haze the seabed with atmosphere.
-     */
-    if (fx->water_camera_below) {
-        fx->fog_enabled = true;
-        fx->aerial_volume = 0;
-    }
-}
-
-void water_invalidate_bed(Water* water) {
-    if (water)
-        water->bed_baked = false;
 }
 
 /*
@@ -420,7 +412,14 @@ void water_invalidate_bed(Water* water) {
  * is not reliably filterable everywhere this runs.
  */
 static void _water_bake_bed(Water* water) {
-    if (water->bed_baked || !water->height_at)
+    if (!water->height_at)
+        return;
+    // Self-checking, on the engine's own pattern for a lazily sized target
+    // (_ensure_scene_depth_target): store what was baked and rebuild when the request
+    // disagrees. Manual invalidation had the dependency backwards -- the GUI re-armed it
+    // from the LEVEL, which the bake does not read, and nothing re-armed it when the
+    // EXTENT moved, which is the one input it does.
+    if (water->bed_baked && water->bed_extent == water->extent)
         return;
 
     const int res = WATER_BED_RES;
@@ -474,11 +473,33 @@ static void _water_bake_bed(Water* water) {
 
     free(heights);
     water->bed_baked = true;
+    water->bed_extent = water->extent;
     log_info("Water: bed baked at %d^2 over %.0f units", res, (double)span);
 }
 
 bool water_active(const Water* water) {
     return water && water->enabled && !water->failed;
+}
+
+float water_effective_steepness(const Water* water) {
+    // Clamped rather than trusted, and clamped HERE rather than at the uniform upload,
+    // because the CPU wave query reads the same number. Applied only on the way out, it
+    // gave the GPU 1.0 and the CPU whatever a .cscn authored, and the two surfaces then
+    // disagreed -- which is the one failure the CPU query exists to avoid.
+    //
+    // Above 1 the summed Gerstner steepness makes the horizontal map non-injective and
+    // the surface folds through itself. The shader's per-octave normalisation guarantees
+    // that bound only for an in-range value.
+    return water ? glm_clamp(water->steepness, 0.0f, 1.0f) : 0.0f;
+}
+
+bool water_will_draw(const Water* water, const struct Engine* engine, RenderMode render_mode) {
+    // Debug modes take a passthrough blit and skip the whole surface; a cube capture
+    // must not run the depth resolve, which blits at the main render size and re-binds
+    // the scene framebuffer. Both were previously terms at the DRAW site only, so the
+    // catcher and the fog medium disagreed with the draw about whether water existed.
+    return water_active(water) && engine && render_mode == RENDER_MODE_PBR &&
+           !engine->capturing;
 }
 
 // One indexed grid in the XZ plane over [-0.5, 0.5]^2, positions only. Where it
@@ -873,10 +894,7 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
     uniform_set_vec2(u, "waterWindDir", (const float*)&water->wind_dir);
     uniform_set_float(u, "waterAmplitude", water->amplitude);
     uniform_set_float(u, "waterWavelength", water->wavelength);
-    // Clamped here rather than trusted. Above 1 the summed Gerstner steepness makes
-    // the horizontal map non-injective and the surface folds through itself; the
-    // shader's normalisation guarantees the bound only for an in-range value.
-    uniform_set_float(u, "waterSteepness", glm_clamp(water->steepness, 0.0f, 1.0f));
+    uniform_set_float(u, "waterSteepness", water_effective_steepness(water));
     uniform_set_float(u, "waterSpread", water->spread);
     // The animation clock, not the wall clock: frame N must be phase N or a
     // headless run stops being comparable to itself.

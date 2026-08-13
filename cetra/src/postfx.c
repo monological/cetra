@@ -1967,8 +1967,8 @@ bool postfx_wants_aux_gbuffer(const PostFX* fx) {
     // the buffer for the same reason fog does. Keyed on the published volume
     // rather than a toggle: with no sky there is nothing to composite.
     return fx && (fx->taa_enabled || fx->ssao_enabled || fx->ssgi_enabled || fx->fog_enabled ||
-                  fx->motion_blur_enabled || fx->contact_shadows_enabled ||
-                  fx->aerial_volume != 0);
+                  fx->water_medium != 0 || fx->motion_blur_enabled ||
+                  fx->contact_shadows_enabled || fx->aerial_volume != 0);
 }
 
 bool postfx_wants_albedo(const PostFX* fx) {
@@ -2362,8 +2362,14 @@ static void postfx_run_atmosphere(PostFX* fx, GLuint canvas_fbo, bool aux_writte
                                   bool taa_resolving, mat4 projection, mat4 view) {
     // Both need the aux buffer: it is the only source of the linear depth the
     // composite indexes by.
-    const bool fog_on = fx->fog_enabled && postfx_ensure_froxel_targets(fx);
-    const bool aerial_on = fx->aerial_volume != 0;
+    // The union of the two things that put a medium in the volume: the app's height fog
+    // and a submerged water body. Water arms the pass this way rather than by setting
+    // fog_enabled, which belongs to the app and the GUI and is never cleared per frame.
+    const bool fog_on =
+        (fx->fog_enabled || fx->water_medium != 0) && postfx_ensure_froxel_targets(fx);
+    // Suppressed while submerged: the volume holds the sky-view integral, and that is
+    // air the sight line never crosses down there.
+    const bool aerial_on = fx->aerial_volume != 0 && !fx->water_suppress_aerial;
     if (!aux_written || (!fog_on && !aerial_on))
         return;
     // Inside the callee, below its early return: this function is a no-op on

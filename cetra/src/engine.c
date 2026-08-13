@@ -1728,9 +1728,13 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode) {
     if (fx_scene && fx_scene->sky)
         sky_update_aerial(fx_scene->sky, engine->view_matrix, engine->projection_matrix);
     sky_publish_to_postfx(fx_scene ? fx_scene->sky : NULL, engine->postfx);
-    // After the sky's, because a submerged camera drops the aerial volume the line
-    // above just published: down there it is air the sight line never crosses.
-    water_publish_to_postfx(fx_scene ? fx_scene->water : NULL, engine);
+    // Order-independent of the sky's: water publishes a suppression REQUEST rather than
+    // clearing the aerial volume the line above filled, so neither publish can undo the
+    // other. Gated on the surface actually drawing -- a debug mode or a capture that
+    // skips the water pass must not leave a medium behind for the volume to integrate.
+    water_publish_to_postfx(
+        fx_scene && water_will_draw(fx_scene->water, engine, frame_mode) ? fx_scene->water : NULL,
+        engine);
     const PostFXGBufferWrites writes = {.normals = engine->normals_this_frame,
                                         .aux = engine->aux_this_frame,
                                         .albedo = engine->albedo_this_frame,

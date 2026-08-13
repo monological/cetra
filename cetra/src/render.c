@@ -1264,9 +1264,10 @@ void render_current_scene(Engine* engine) {
     // water rather than as z-fighting. Two stand-in ground planes in one scene is
     // not a configuration to arbitrate; water is the more specific one, so it
     // wins and the catcher sits the frame out.
-    if (scene->shadow_catcher && !water_active(scene->water) && scene->shadow_system &&
-        scene->shadow_system->enabled && scene->shadow_system->directional_count > 0 &&
-        engine->shadow_catcher_program && engine->catcher_vao) {
+    if (scene->shadow_catcher && !water_will_draw(scene->water, engine, render_mode) &&
+        scene->shadow_system && scene->shadow_system->enabled &&
+        scene->shadow_system->directional_count > 0 && engine->shadow_catcher_program &&
+        engine->catcher_vao) {
         profiler_scope_begin(engine->profiler, "shadow catcher");
         ShaderProgram* catcher = engine->shadow_catcher_program;
         ShadowSystem* ss = scene->shadow_system;
@@ -1374,7 +1375,7 @@ void render_current_scene(Engine* engine) {
     // depth resolve blits at the MAIN render size and re-binds
     // engine->framebuffer, which would redirect the rest of a cube face into the
     // scene FBO. A probe therefore captures no water.
-    if (water_active(scene->water) && render_mode == RENDER_MODE_PBR && !engine->capturing) {
+    if (water_will_draw(scene->water, engine, render_mode)) {
         profiler_scope_begin(engine->profiler, "water");
         water_render(scene->water, scene, engine, *view, draw_projection);
         profiler_scope_end(engine->profiler);

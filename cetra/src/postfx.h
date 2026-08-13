@@ -337,17 +337,22 @@ typedef struct PostFX {
                           // count crosses the same seam the same way)
 
     // Published per frame by water_publish_to_postfx (mirrors the sky and probe
-    // blocks; postfx never learns about Water). water_medium 0 = no water, which is
-    // the single "one medium only" state.
+    // blocks; postfx never learns about Water). water_medium 0 = one medium only.
     //
     // The froxel volume carries TWO media once this is set: air above water_level and
     // the body below it. Without that, submerged geometry renders as though in air --
     // the surface shades correctly from below and the seabed behind it does not.
-    int water_medium;       // 1 = the volume has a second medium below water_level
-    int water_camera_below; // eye is under the surface, so the medium reaches it
-    float water_level_y;    // world height of the still surface
-    vec3 water_extinction;  // per-channel, per world unit
-    vec3 water_inscatter;   // colour the absorbed energy returns as
+    //
+    // Both flags are REQUESTS, not answers. water_medium arms the froxel pass alongside
+    // fog_enabled rather than by setting it, because that flag is the app's and the
+    // GUI's and nothing clears it per frame; water_suppress_aerial is ANDed by the
+    // composite rather than clearing aerial_volume, because that handle is the sky's and
+    // the sky republishes it every frame.
+    int water_medium;          // 1 = the volume has a second medium below water_level
+    int water_suppress_aerial; // 1 = drop the sky-view integral; it is air not crossed
+    float water_level_y;       // world height of the still surface
+    vec3 water_extinction;     // per-channel, per world unit
+    vec3 water_inscatter;      // colour the absorbed energy returns as
 
     // Published per frame by shadow_publish_to_postfx (mirrors the probe
     // block; postfx never learns about the shadow system): the casters'

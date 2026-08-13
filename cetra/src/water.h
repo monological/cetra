@@ -5,6 +5,8 @@
 #include <stdbool.h>
 #include <cglm/cglm.h>
 
+#include "common.h" // RenderMode, for water_will_draw
+
 /*
  * Water surface (spec 11.32, roadmap D3).
  *
@@ -207,10 +209,11 @@ typedef struct Water {
      */
     GLuint bed_tex;
     bool bed_baked;
+    // The extent the bake was taken at. Compared against `extent` each frame, so moving
+    // the extent re-bakes and moving anything the bake does NOT read (the level) does
+    // not -- rather than every caller having to know which is which.
+    float bed_extent;
 } Water;
-
-// Marks the baked bed stale; the next draw re-bakes it from height_at.
-void water_invalidate_bed(Water* water);
 
 /*
  * Flatten the body (or its absence) into postfx's per-frame block, so the froxel
@@ -230,16 +233,32 @@ extern const float WATER_CASCADE_CHOPPINESS[WATER_CASCADE_COUNT];
 Water* create_water(void);
 void free_water(Water* water);
 
-// Should the surface draw this frame.
+// Is there a usable surface at all: authored on, and no latched failure.
 bool water_active(const Water* water);
 
+// The steepness the surface is actually built from, clamped to the range where the
+// Gerstner horizontal map stays injective. Every consumer must read it through here --
+// the GPU and the CPU query both evaluate the same train, so a value clamped on only one
+// of the two paths is two different surfaces.
+float water_effective_steepness(const Water* water);
+
 /*
- * Draw the surface into the currently bound scene FBO.
+ * Will the surface actually rasterize this frame.
  *
- * Preconditions the caller owns: the refraction resolve has run this frame (the
- * surface samples it for transmission) and this is not a cube capture -- the
- * depth resolve blits at the main render size and re-binds the scene
- * framebuffer, which would redirect the rest of a capture.
+ * The whole predicate, in one place, because more than the draw depends on it -- the
+ * shadow catcher steps aside for water and the froxel volume takes it as a second
+ * medium, and both were reading `water_active` alone. A debug render mode or a cube
+ * capture then suppressed the ground plane on behalf of a surface that never drew,
+ * leaving the frame with no floor.
+ */
+bool water_will_draw(const Water* water, const struct Engine* engine, RenderMode render_mode);
+
+/*
+ * Draw the surface into the currently bound scene FBO. Callers gate on
+ * water_will_draw; this repeats the check rather than trusting it.
+ *
+ * The one precondition still on the caller: the refraction resolve has run this frame,
+ * since the surface samples it for transmission.
  *
  * Restores the framebuffer binding, viewport, blend, depth test, cull face and the
  * draw-buffer list. Leaves its own program and texture bindings current.

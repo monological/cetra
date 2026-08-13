@@ -78,7 +78,7 @@ typedef struct {
     int water;                  // Enable the water surface (spec 11.32)
     float water_level;          // Still-water plane, world Y (-9999 = keep default)
     float water_extent;         // Half-size of the drawn surface (0 = keep default)
-    int water_fft;              // Spectral cascades instead of Gerstner octaves
+    int water_waves;            // Wave model: -1 = unset, 0 = Gerstner, 1 = spectral
     int no_water_caustics;      // Bisect lever: drop the surface's light focusing
     int no_water_coverage;      // Bisect lever: hard shoreline cutoff, no coverage
     int water_bed_dome;         // Install the analytic dome bed provider (shoaling)
