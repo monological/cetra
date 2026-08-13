@@ -1,0 +1,43 @@
+{
+ "version": 1,
+ "models": [
+  {
+   "path": "overdraw_layers.gltf"
+  }
+ ],
+ "lights": [
+  {
+   "name": "OverdrawSun",
+   "type": "directional",
+   "direction": [
+    0.0,
+    -0.25,
+    -0.97
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 3.0,
+   "cast_shadows": false
+  }
+ ],
+ "camera": {
+  "eye": [
+   0.0,
+   3.8832521472477666,
+   5.75
+  ],
+  "target": [
+   0.0,
+   3.8832521472477666,
+   0.0
+  ],
+  "fov": 45.0
+ },
+ "post": {
+  "tonemap": "neutral",
+  "exposure": 1.0
+ }
+}

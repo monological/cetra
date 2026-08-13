@@ -2435,6 +2435,11 @@ def _profiled_run(workdir, tag, extra, screenshot=None, fixture=GPU_FIXTURE, siz
     m = _IMPORT_DEDUP.search(text)
     tables["import"] = ({"built": int(m.group(1)), "shared": int(m.group(2)),
                          "lod_chains": int(m.group(3))} if m else None)
+    # None when the block did not print, which is what a caller asserting on it
+    # has to notice; _report_tables cannot carry it, since SHADING rows are bare
+    # integers where every block it knows ends in " ms" or has SUBMIT_COLS
+    # columns, and four gates assert its `unparsed` count is zero.
+    tables["shading"] = _shading_block(text)
     return tables
 
 
@@ -2801,6 +2806,118 @@ def run_mask_gate(workdir):
     return failures
 
 
+OVERDRAW_LAYERS = "overdraw_layers.cscn"
+OVERDRAW_TILES = "overdraw_tiles.cscn"
+# Must match --layers in gen_overdraw_fixture.py. Read back from the fixture
+# rather than trusted: the quad count IS the expected complexity, so a
+# regenerated fixture must move the assertion with it or the arm tests nothing.
+OVERDRAW_TOLERANCE = 0.02
+# Above the 1.5% run-to-run floor these renders measure, and far below the 14.5%
+# the prepass actually costs here.
+CROSSOVER_MIN = 0.05
+
+
+def _overdraw_layer_count():
+    """How many quads the stacked fixture has, from the glTF it generated."""
+    path = os.path.join(ROOT, "assets", "overdraw_layers.gltf")
+    with open(path) as f:
+        return len(json.load(f)["meshes"])
+
+
+def run_overdraw_gate(workdir):
+    """Depth complexity, against a scene whose answer is known (spec 11.31).
+
+    apps/forest cannot pin this instrument and never could. Its reading moves
+    with the AA mode, the draw order and the scatter, so `overdraw-probe` was
+    reading 1.05 against a > 1.0 bar for those reasons rather than because the
+    measurement was marginal. N stacked full-frame opaque quads submitted
+    far-to-near are covered exactly N times, which is an integer with no noise
+    floor -- and the same scene sorted, or prepassed, must collapse to 1.
+
+    This is the fixture spec 11.30 listed in its own Files table and never
+    wrote, and building it immediately found a real defect: the budget was
+    published from engine->msaa_samples, but asking this driver for a 1-sample
+    target returns a 2-sample one, so every reading on the TAA path was exactly
+    double. A single full-frame quad read 2.00.
+    """
+    layers_scene = os.path.join(ROOT, "assets", OVERDRAW_LAYERS)
+    if not os.path.exists(layers_scene):
+        print(f"  overdraw-exact SKIP  ({OVERDRAW_LAYERS} not present)")
+        return []
+
+    failures = []
+    want = float(_overdraw_layer_count())
+    taa = ["--taa", "--headless-jitter"]
+    stacked = _profiled_run(workdir, "od_stack", taa + ["--no-sort-opaque"],
+                            fixture=OVERDRAW_LAYERS, size=("400", "300"))
+    sorted_run = _profiled_run(workdir, "od_sorted", taa,
+                               fixture=OVERDRAW_LAYERS, size=("400", "300"))
+    pre = _profiled_run(workdir, "od_pre", taa + ["--no-sort-opaque", "--depth-prepass"],
+                        fixture=OVERDRAW_LAYERS, size=("400", "300"))
+    if stacked is None or sorted_run is None or pre is None or not stacked["shading"]:
+        return ["overdraw-exact"]
+
+    got = stacked["shading"]["complexity"]
+    ok = abs(got - want) <= OVERDRAW_TOLERANCE
+    print(f"  overdraw-exact {'PASS' if ok else 'FAIL'}  {want:.0f} stacked quads read "
+          f"{got:.2f} (want {want:.2f} +/- {OVERDRAW_TOLERANCE}; every layer covers the "
+          f"frame, so the count is exact)")
+    if not ok:
+        failures.append("overdraw-exact")
+
+    # The same scene, twice, by the two mechanisms that exist to remove overdraw.
+    # Both must reach 1: an arm that only watched the number FALL would pass on
+    # a sort that merely reordered a little.
+    s = sorted_run["shading"]["complexity"]
+    p = pre["shading"]["complexity"]
+    ok = abs(s - 1.0) <= OVERDRAW_TOLERANCE and abs(p - 1.0) <= OVERDRAW_TOLERANCE
+    print(f"  overdraw-culled {'PASS' if ok else 'FAIL'}  sorted {s:.2f}, prepassed {p:.2f} "
+          f"(want both 1.00 +/- {OVERDRAW_TOLERANCE}, from {want:.0f})")
+    if not ok:
+        failures.append("overdraw-culled")
+
+    # --- prepass-crossover: the case the prepass should LOSE ----------------
+    # 11.30 went looking for this with instancing_fixture, expected it to lose
+    # at complexity 0.71 and measured it winning by 10%, and recorded that as an
+    # absence of evidence. Here the geometry is explicit about it: complexity
+    # exactly 1.00, hundreds of separate meshes so nothing batches, and not one
+    # fragment for the prepass to reject. It can only cost.
+    #
+    # A timing arm, so it measures its own floor first -- the only honest way to
+    # claim a delta, and what gpu-scale does two gates up.
+    tiles = os.path.join(ROOT, "assets", OVERDRAW_TILES)
+    if not os.path.exists(tiles):
+        print(f"  prepass-crossover SKIP  ({OVERDRAW_TILES} not present)")
+        return failures
+
+    base = _profiled_run(workdir, "od_t1", taa + ["--no-sort-opaque"],
+                         fixture=OVERDRAW_TILES, size=("800", "600"))
+    floor_run = _profiled_run(workdir, "od_t2", taa + ["--no-sort-opaque"],
+                              fixture=OVERDRAW_TILES, size=("800", "600"))
+    on = _profiled_run(workdir, "od_t3", taa + ["--no-sort-opaque", "--depth-prepass"],
+                       fixture=OVERDRAW_TILES, size=("800", "600"))
+    if base is None or floor_run is None or on is None:
+        return failures + ["prepass-crossover"]
+
+    b = base["gpu"].get("opaque")
+    f = floor_run["gpu"].get("opaque")
+    o = on["gpu"].get("opaque")
+    if not b or not f or not o:
+        print("  prepass-crossover FAIL  no opaque row to compare")
+        return failures + ["prepass-crossover"]
+
+    noise = abs(b - f) / b
+    cost = (o - b) / b
+    ok = cost >= CROSSOVER_MIN and noise < CROSSOVER_MIN
+    print(f"  prepass-crossover {'PASS' if ok else 'FAIL'}  opaque {b:.3f} -> {o:.3f} ms with "
+          f"the prepass, {cost * 100.0:+.0f}% (want >= +{CROSSOVER_MIN * 100.0:.0f}%: nothing "
+          f"to reject at complexity 1.0), against a {noise * 100.0:.0f}% floor")
+    if not ok:
+        failures.append("prepass-crossover")
+
+    return failures
+
+
 RAIDEN = os.path.join(ROOT, "my_models", "raiden", "source", "raiden_textured_rigged.glb")
 
 
@@ -3116,27 +3233,29 @@ def run_forest_gate(workdir):
     away = _forest_run(workdir, "away", [], cam=FOREST_CAM_AWAY)
     if away is None:
         failures.append("forest-cull")
-        failures.append("overdraw-probe")
+        failures.append("overdraw-empty")
     else:
-        # --- overdraw-probe: the depth-complexity instrument measures ------
+        # --- overdraw-empty: nothing shaded where nothing is drawn ----------
+        # What is left here of the old overdraw-probe, which also tried to assert
+        # the reading over the forest and could not: that number moves with the
+        # AA mode, the draw order and the scatter, so it sat at 1.05 against a
+        # > 1.0 bar. The exact half of the claim moved to overdraw-exact, where
+        # the answer is an integer. This half still belongs on forest, because
+        # only a real scene can be emptied by the CULLER rather than by framing.
+        #
         # GL_SAMPLES_PASSED is the neighbouring primitive to GL_TIME_ELAPSED, and
-        # this driver answers GL_TIMESTAMP with 0 while its scoped queries work --
-        # so "the call was accepted" proves nothing and the arm has to show the
-        # number MOVING. Aimed at the sky the opaque pass draws nothing, so the
-        # only reading that can be correct is exactly 0; over the forest it must
-        # exceed 1, or samples are being counted once and the instrument is blind
-        # to the one thing it exists to see.
+        # this driver answers GL_TIMESTAMP with 0 while its scoped queries work,
+        # so "the call was accepted" proves nothing: aimed at empty sky the only
+        # reading that can be right is exactly 0, and over the forest it must not
+        # be.
         sky = away["shading"]
         base_shading = base["shading"]
-        ok = (sky["shaded"] == 0 and base_shading["shaded"] > 0
-              and base_shading["complexity"] > 1.0
-              and base_shading["budget"] == sky["budget"])
-        print(f"  overdraw-probe {'PASS' if ok else 'FAIL'}  depth complexity "
-              f"{base_shading['complexity']:.2f} over the forest "
-              f"({base_shading['shaded']} of {base_shading['budget']} samples, want > 1.0), "
-              f"{sky['shaded']} aimed at sky (want exactly 0)")
+        ok = sky["shaded"] == 0 and base_shading["shaded"] > 0
+        print(f"  overdraw-empty {'PASS' if ok else 'FAIL'}  {sky['shaded']} samples aimed at "
+              f"sky (want exactly 0), {base_shading['shaded']} over the forest (want > 0; "
+              f"complexity {base_shading['complexity']:.2f}, pinned by overdraw-exact)")
         if not ok:
-            failures.append("overdraw-probe")
+            failures.append("overdraw-empty")
 
         a = away["opaque"]
         # Exact, not an inequality: aimed into the sky every mesh is outside the
@@ -3908,6 +4027,8 @@ def main():
         failures += run_lod_gate(workdir)
         print("alpha mask (binary above the cutoff, spec 11.31):")
         failures += run_mask_gate(workdir)
+        print("depth complexity (a scene whose answer is known, spec 11.31):")
+        failures += run_overdraw_gate(workdir)
         print("depth prepass (identical picture, less shading, spec 11.30 / E6):")
         failures += run_prepass_gate(workdir)
         print("forest (scattered content: batching, ordering, LOD, spec 11.29):")

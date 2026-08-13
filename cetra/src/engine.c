@@ -2264,8 +2264,21 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EngineRenderFunc render
         // this is where the render size and the sample count are both settled --
         // supersample, render scale and any mid-run resolution change have all
         // been applied by now.
+        //
+        // The sample count is READ BACK from the bound framebuffer rather than
+        // taken from engine->msaa_samples, and the difference is not academic:
+        // ask this driver for a 1-sample multisample target and it gives you a
+        // 2-sample one. GL_SAMPLES_PASSED then counts two samples per pixel
+        // against a budget that said one, so every depth-complexity reading on
+        // the TAA path -- which is the path that sets msaa_samples to 1, and the
+        // path the engine ships -- came out at exactly twice the truth. A single
+        // full-frame quad read 2.00 where it must read 1.00.
+        GLint fb_samples = 0;
+        glGetIntegerv(GL_SAMPLES, &fb_samples);
+        if (fb_samples < 1)
+            fb_samples = 1;
         profiler_set_sample_budget(engine->profiler,
-                                   (size_t)rw * (size_t)rh * (size_t)engine->msaa_samples);
+                                   (size_t)rw * (size_t)rh * (size_t)fb_samples);
         engine->normals_this_frame =
             frame_mode == RENDER_MODE_PBR && postfx_wants_normals(engine->postfx);
         // Make the material registry describe what the graph actually draws
