@@ -2871,6 +2871,146 @@ def run_absorption_gate(workdir):
     return failures
 
 
+# Water surface (spec 11.32), on assets/water_fixture.
+#
+# A ramp rising out of the water over a flat bed. Absorption is monotone in path
+# length, and on a flat bed the path GROWS with distance because the sight line
+# gets more grazing -- so a scanline up the frame is a continuous sweep of path
+# length across one surface, and the tinted channel has to fall along it.
+#
+# Red is the channel to read: clear water's extinction is ~7x higher in red than
+# in blue, so R/B is the absorption signal and blue is very nearly the reference.
+# Measured near/mid/far: 0.2133, 0.1452, 0.0938.
+#
+# The horizon is deliberately NOT sampled. There the Fresnel reflection of the
+# sky dominates the transmitted term and R/B rises again (0.328) -- correctly, and
+# it would break a monotonicity arm that reached that far. An arm has to stop
+# where the quantity it names stops being the thing on screen.
+WATER_FIXTURE = "water_fixture.cscn"
+WATER_FLAGS = ["--water", "--water-extent", "14", "--no-auto-exposure", "-E", "1.0"]
+# Three boxes down the left side, clear of the ramp, at increasing distance.
+WATER_ABSORB_BOXES = [(0.06, 0.86, 0.20, 0.94),
+                      (0.06, 0.72, 0.20, 0.80),
+                      (0.06, 0.60, 0.20, 0.68)]
+# The emerged part of the ramp: dry land, and the control that fails if the
+# surface draws over it.
+WATER_DRY_BOX = (0.44, 0.42, 0.56, 0.46)
+# Measured steps are 1.47x and 1.55x, so this is a wide floor under them that
+# still fails a constant tint.
+WATER_ABSORB_STEP_MIN = 1.25
+# Dry land reads 2.07 and water never exceeds 0.33 anywhere in the frame, so this
+# sits in an empty band between the two populations.
+WATER_DRY_RB_MIN = 1.4
+# The flag moves 299,283 px of a 480,000 px frame. A tenth of that is far below
+# the signal and far above anything incidental.
+WATER_LIVE_MIN_PX = 50000
+WATER_GRID = 12
+
+
+def _water_box_rgb(pix, w, h, box, n=WATER_GRID):
+    """Mean linear RGB over a fractional box; per-channel, because the whole
+    measurement is one channel falling faster than another."""
+    x0, y0, x1, y1 = box
+    acc = [0.0, 0.0, 0.0]
+    for iy in range(n):
+        for ix in range(n):
+            rgb = _linear_rgb(pix, w, h, (x0 + (x1 - x0) * (ix + 0.5) / n) * w,
+                              (y0 + (y1 - y0) * (iy + 0.5) / n) * h)
+            for k in range(3):
+                acc[k] += rgb[k]
+    return [a / (n * n) for a in acc]
+
+
+def _water_rb(pix, w, h, box):
+    rgb = _water_box_rgb(pix, w, h, box)
+    return rgb[0] / rgb[2] if rgb[2] > 1e-6 else float("nan")
+
+
+def run_water_gate(workdir):
+    """The water surface is alive, deterministic, and absorbs with path length.
+
+    Five arms:
+
+      water-det     two runs of one build at 0 px. The surface is a pure function
+                    of the frame clock, so this is the precondition every other
+                    arm and the golden rest on -- and the one thing no amount of
+                    looking at a frame establishes.
+      water-live    the flag moves the frame. Three zeros are also what a dead
+                    flag, an unparsed argument or a failed program compile
+                    produce, so the off-path arms alone prove nothing.
+      water-absorb  R/B falls monotonically with distance. Fails a constant tint,
+                    which is what absorption applied without the path length is.
+      water-dry     the emerged ramp is NOT water-tinted. Fails the surface
+                    drawing a film over dry ground, which is the shoreline
+                    discard's whole job.
+      water-row     the profiler row appears with the flag and is ABSENT without
+                    it, which is what a scope opened with profiler_scope_begin_if
+                    is supposed to give.
+    """
+    scene = os.path.join(ROOT, "assets", WATER_FIXTURE)
+    if not os.path.exists(scene):
+        print(f"  water-det    SKIP  ({WATER_FIXTURE} not present)")
+        return []
+
+    a = os.path.join(workdir, "water_a.ppm")
+    b = os.path.join(workdir, "water_b.ppm")
+    off = os.path.join(workdir, "water_off.ppm")
+    for path, extra in ((a, WATER_FLAGS), (b, WATER_FLAGS),
+                        (off, ["--no-auto-exposure", "-E", "1.0"])):
+        err = render(scene, path, extra)
+        if err:
+            print(f"  water-det    ERROR render failed: {err.strip()[-200:]}")
+            return ["water-det"]
+
+    failures = []
+
+    ae, _ = compare(a, b)
+    ok = ae == 0
+    print(f"  water-det    {'PASS' if ok else 'FAIL'}  {ae} px between two runs, want 0")
+    if not ok:
+        failures.append("water-det")
+
+    ae_live, _ = compare(a, off)
+    ok = ae_live >= WATER_LIVE_MIN_PX
+    print(f"  water-live   {'PASS' if ok else 'FAIL'}  {ae_live} px vs no --water, "
+          f"want >={WATER_LIVE_MIN_PX}")
+    if not ok:
+        failures.append("water-live")
+
+    w, h, pix = _read_ppm(a)
+    ratios = [_water_rb(pix, w, h, box) for box in WATER_ABSORB_BOXES]
+    steps = [ratios[i] / max(ratios[i + 1], 1e-6) for i in range(len(ratios) - 1)]
+    ok = all(s >= WATER_ABSORB_STEP_MIN for s in steps)
+    print(f"  water-absorb {'PASS' if ok else 'FAIL'}  "
+          f"R/B={'/'.join(f'{r:.4f}' for r in ratios)} "
+          f"steps={','.join(f'{s:.2f}x' for s in steps)} want >={WATER_ABSORB_STEP_MIN}x")
+    if not ok:
+        failures.append("water-absorb")
+
+    dry = _water_rb(pix, w, h, WATER_DRY_BOX)
+    ok = dry >= WATER_DRY_RB_MIN
+    print(f"  water-dry    {'PASS' if ok else 'FAIL'}  ramp R/B={dry:.4f} "
+          f"want >={WATER_DRY_RB_MIN}")
+    if not ok:
+        failures.append("water-dry")
+
+    on = _profiled_run(workdir, "water_on", WATER_FLAGS + ["--profiler"],
+                       fixture=WATER_FIXTURE, size=("400", "300"))
+    off_t = _profiled_run(workdir, "water_off", ["--profiler", "--no-auto-exposure", "-E", "1.0"],
+                          fixture=WATER_FIXTURE, size=("400", "300"))
+    if on is None or off_t is None:
+        failures.append("water-row")
+    else:
+        present = "water" in on["gpu"]
+        absent = "water" not in off_t["gpu"]
+        ok = present and absent
+        print(f"  water-row    {'PASS' if ok else 'FAIL'}  present={present} absent_off={absent}")
+        if not ok:
+            failures.append("water-row")
+
+    return failures
+
+
 def run_mask_gate(workdir):
     """ALPHA_MASK is binary above the cutoff, and absent below it (spec 11.31).
 
@@ -4164,6 +4304,8 @@ def main():
         failures += run_oit_gate(workdir)
         print("volume absorption (path length and channel selectivity, spec 11.32):")
         failures += run_absorption_gate(workdir)
+        print("water surface (determinism, absorption, shoreline; spec 11.32):")
+        failures += run_water_gate(workdir)
         print("cloud layer (steady-state churn, report-only):")
         failures += run_cloud_churn_gate(workdir)
         print("pre-integrated skin (off-path byte identity):")

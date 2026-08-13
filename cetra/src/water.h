@@ -69,6 +69,15 @@ typedef struct Water {
     float roughness; // interface roughness; picks the environment lobe's mip
     float ior;       // 1.333 for water -> F0 0.020
 
+    // Wave train. amplitude/wavelength describe the LONGEST octave; the rest are
+    // derived from it inside ocean.glsl. steepness is a bounded 0..1 knob rather
+    // than a Gerstner Q, so no value of it can fold the surface over itself.
+    vec2 wind_dir;
+    float amplitude;
+    float wavelength;
+    float steepness;
+    float spread; // per-octave direction fan, radians
+
     WaterHeightFn height_at; // optional bed provider; see WaterHeightFn
     void* height_ctx;
 

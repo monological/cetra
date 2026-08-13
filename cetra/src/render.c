@@ -1256,9 +1256,17 @@ void render_current_scene(Engine* engine) {
     // the floor composites over the shadow instead of being hidden by it.
     // Ahead of the refraction resolve too, so transmissive surfaces see the
     // shadowed floor rather than an unshadowed one.
-    if (scene->shadow_catcher && scene->shadow_system && scene->shadow_system->enabled &&
-        scene->shadow_system->directional_count > 0 && engine->shadow_catcher_program &&
-        engine->catcher_vao) {
+    // Not alongside water. The catcher is an invisible stand-in for ground that
+    // was never modelled, and it sits at y = 0 -- which is where a water plane
+    // usually is, making the two exactly coplanar. GL_LESS then resolves the tie
+    // per pixel off whichever interpolated its depth differently, and the seam
+    // between them wanders in an organic-looking band that reads as a hole in the
+    // water rather than as z-fighting. Two stand-in ground planes in one scene is
+    // not a configuration to arbitrate; water is the more specific one, so it
+    // wins and the catcher sits the frame out.
+    if (scene->shadow_catcher && !water_active(scene->water) && scene->shadow_system &&
+        scene->shadow_system->enabled && scene->shadow_system->directional_count > 0 &&
+        engine->shadow_catcher_program && engine->catcher_vao) {
         profiler_scope_begin(engine->profiler, "shadow catcher");
         ShaderProgram* catcher = engine->shadow_catcher_program;
         ShadowSystem* ss = scene->shadow_system;

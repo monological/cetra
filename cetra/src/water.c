@@ -28,6 +28,13 @@ Water* create_water(void) {
     glm_vec3_copy((vec3){0.02f, 0.10f, 0.12f}, water->scatter);
     water->roughness = 0.04f;
     water->ior = 1.333f;
+    // Lake-scale defaults: a 6 m longest wave at 6 cm, which is a light breeze
+    // rather than a sea state. An ocean wants both numbers an order up.
+    glm_vec2_copy((vec2){0.86f, 0.51f}, water->wind_dir);
+    water->amplitude = 0.06f;
+    water->wavelength = 6.0f;
+    water->steepness = 0.6f;
+    water->spread = 0.42f;
     return water;
 }
 
@@ -155,6 +162,11 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
     uniform_set_float(u, "waterIor", water->ior);
     uniform_set_vec3(u, "waterAbsorption", (const float*)&water->absorption);
     uniform_set_vec3(u, "waterScatter", (const float*)&water->scatter);
+    uniform_set_vec2(u, "waterWindDir", (const float*)&water->wind_dir);
+    uniform_set_float(u, "waterAmplitude", water->amplitude);
+    uniform_set_float(u, "waterWavelength", water->wavelength);
+    uniform_set_float(u, "waterSteepness", water->steepness);
+    uniform_set_float(u, "waterSpread", water->spread);
     // The animation clock, not the wall clock: frame N must be phase N or a
     // headless run stops being comparable to itself.
     uniform_set_float(u, "time", (float)engine->render_time);

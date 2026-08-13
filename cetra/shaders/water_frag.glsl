@@ -66,6 +66,13 @@ const float WATER_TRANSMISSION_MAX_LOD = 6.0;
 // exponential is already zero, and an unbounded value from a sky-depth sample
 // would only cost precision.
 const float WATER_MAX_PATH = 64.0;
+// Below this column the surface has emerged through the bed; see the discard.
+const float WATER_MIN_PATH = 0.01;
+// Ceiling on the refraction bend, in world units. The bend is a screen-space
+// approximation, and past a metre or so of offset the sample it reaches has
+// little to do with the ray -- the validity check below catches the wrong ones,
+// but not reaching for them is cheaper than rejecting them.
+const float WATER_MAX_BEND = 1.0;
 
 vec2 screenVelocity() {
     return (CurrClip.xy / CurrClip.w - PrevClip.xy / PrevClip.w) * 0.5;
@@ -97,6 +104,16 @@ void main() {
         float bedDist = -viewZFromNdcZ(bedNdc);
         float rayScale = length(ViewPos) / surfaceDist;
         path = max(bedDist - surfaceDist, 0.0) * rayScale;
+        // Shoreline. Where the column has closed the surface has come up
+        // through the bed, and what is left is a sliver almost coplanar with it:
+        // depth rounding decides which wins per pixel and it reads as a dotted
+        // edge rather than as a thin film. Dropping it is the honest answer.
+        //
+        // A hard threshold, so this edge aliases. Derivative-width coverage is
+        // the fix and it needs an alpha this pass does not have -- the surface is
+        // in the opaque lane precisely so it can write depth.
+        if (path < WATER_MIN_PATH)
+            discard;
     }
     path = min(path, WATER_MAX_PATH);
 
@@ -105,9 +122,20 @@ void main() {
     vec3 refrDir = refract(-V, Nv, 1.0 / waterIor);
     vec3 bed;
     if (sceneColorAvailable == 1) {
-        vec3 exitView = ViewPos + refrDir * min(path, 8.0);
+        vec3 exitView = ViewPos + refrDir * min(path, WATER_MAX_BEND);
         vec4 refrClip = projection * vec4(exitView, 1.0);
         vec2 refrUV = clamp(refrClip.xy / refrClip.w * 0.5 + 0.5, vec2(0.001), vec2(0.999));
+        // Validity: the offset is a screen-space approximation of a world-space
+        // bend, so it can walk onto something that is NOT under the water --
+        // most cheaply the sky above the far shore, which arrives as bright
+        // mottled patches wherever a wave happens to aim the ray there. If the
+        // sample it landed on sits in FRONT of this surface, it was never behind
+        // the water and the unbent sample is the honest answer.
+        if (sceneDepthAvailable == 1) {
+            float probeNdc = texture(sceneDepthTex, refrUV).r * 2.0 - 1.0;
+            if (-viewZFromNdcZ(probeNdc) < surfaceDist)
+                refrUV = uv;
+        }
         bed = textureLod(sceneColorTex, refrUV, waterRoughness * WATER_TRANSMISSION_MAX_LOD).rgb;
     } else {
         bed = vec3(0.0);
