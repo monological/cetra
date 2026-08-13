@@ -1900,8 +1900,7 @@ void main() {
         // travelled. attenuationColor is defined as what survives exactly
         // attenuationDistance, so the extinction reproducing it is
         // -log(color)/distance. Distance 0 is this material's spelling of the
-        // extension's infinite default and leaves the sample untouched, which is
-        // what keeps every scene that never authored a volume bit-identical.
+        // extension's infinite default and leaves the sample untouched.
         //
         // The colour is clamped off zero because a fully absorbing channel is an
         // infinite extinction, and inf * 0 -- an opaque tint on thin glass, which

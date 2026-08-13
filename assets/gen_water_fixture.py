@@ -54,9 +54,10 @@ def mesh_bytes(positions, normals, indices):
     return pos, nrm, idx
 
 
-# The wedge: a ramp climbing from the deep far end to dry land at the near end,
-# plus the two side walls that stop it being a floating sheet when the camera is
-# low enough to see under it.
+# The wedge: one doubleSided quad climbing from the deep far end to dry land at the
+# near end. A sheet, not a solid -- the camera sits below its extended plane, so what
+# the "dry land" boxes read is its underside. Fine for an emissive surface, and worth
+# knowing before assuming a box is looking at a beach.
 wedge_positions = [
     (-WEDGE_HALF_X, WEDGE_LOW, WEDGE_FAR_Z),
     (WEDGE_HALF_X, WEDGE_LOW, WEDGE_FAR_Z),
@@ -189,6 +190,8 @@ scene_desc = {
 out_dir = os.path.dirname(os.path.abspath(__file__))
 with open(os.path.join(out_dir, "water_fixture.gltf"), "w") as f:
     json.dump(gltf, f, indent=1)
+    f.write("\n")
 with open(os.path.join(out_dir, "water_fixture.cscn"), "w") as f:
     json.dump(scene_desc, f, indent=1)
+    f.write("\n")
 print("wrote water_fixture.gltf + water_fixture.cscn")

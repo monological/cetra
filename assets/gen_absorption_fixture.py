@@ -189,6 +189,8 @@ scene_desc = {
 out_dir = os.path.dirname(os.path.abspath(__file__))
 with open(os.path.join(out_dir, "absorption_fixture.gltf"), "w") as f:
     json.dump(gltf, f, indent=1)
+    f.write("\n")
 with open(os.path.join(out_dir, "absorption_fixture.cscn"), "w") as f:
     json.dump(scene_desc, f, indent=1)
+    f.write("\n")
 print("wrote absorption_fixture.gltf + absorption_fixture.cscn")

@@ -68,7 +68,7 @@ void main() {
     if (finalize == 1) {
         // (-1)^(x+y) is the spatial-domain equivalent of shifting the spectrum's
         // origin from the corner to the centre, which is where the seeding put it.
-        // Folded into this stage rather than run as a 45th pass.
+        // Folded into this stage rather than a fourth pass per cascade.
         float checker = 1.0 - 2.0 * float((id.x + id.y) % 2);
         v0 *= checker;
         v1 *= checker;

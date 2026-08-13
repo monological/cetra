@@ -3,7 +3,8 @@
 /*
  * Water surface shading (spec 11.32).
  *
- * A single-layer water interface: exact dielectric Fresnel splits the view into
+ * A single-layer water interface: Schlick-approximated dielectric Fresnel, with F0
+ * taken from the IOR rather than authored, splits the view into
  * a reflected share taken from the environment cubemap and a transmitted share
  * taken from the resolved opaque scene, attenuated through the body by
  * Beer-Lambert over the real path length the depth buffer gives.
@@ -15,10 +16,10 @@
  * counted twice. view.glsl is the authority on that contract.
  */
 
-// The full G-buffer. Every location the opaque draw-buffer list can enable has
-// to be written: engine_set_scene_draw_buffers turns a slot on when a CONSUMER
-// wants it that frame, not per draw, so a location left unwritten while enabled
-// leaves whatever the pass before put there.
+// The full G-buffer. Every location the opaque draw-buffer list may enable has to
+// be written: slots are turned on for the FRAME, by whether a consumer wants them,
+// not per draw -- so a location enabled and left unwritten keeps whatever the
+// previous pass put there.
 layout(location = 0) out vec4 FragColor;
 layout(location = 1) out vec4 NormalOut;
 layout(location = 2) out vec4 VelocityOut;
@@ -46,18 +47,17 @@ uniform vec3 waterScatter;    // in-scattered colour, absolute scene radiance
 // Mipped resolve of the opaque scene (colour + skybox), already pre-exposed.
 uniform sampler2D sceneColorTex;
 uniform int sceneColorAvailable;
-// Single-sample resolved scene depth. This is the tap pbr_frag has no sampler
-// slot left for, and the reason water ships its own program.
+// Single-sample resolved scene depth: the water column and the shoreline test.
 uniform sampler2D sceneDepthTex;
 uniform int sceneDepthAvailable;
 
-// Split-sum environment, bound by bind_ibl_textures. The procedural sky bakes
-// into this cubemap, so the reflection follows the sun with no extra plumbing.
 uniform vec3 sunDir; // toward the sun, world space
 uniform int sunAvailable;
 uniform int cameraSubmerged;
 uniform int causticsEnabled;
 
+// Split-sum environment cubemap, engine-bound. The procedural sky bakes into it,
+// so a reflection taken from here tracks the sun without asking.
 uniform samplerCube prefilteredMap;
 uniform sampler2D brdfLUT;
 uniform int iblEnabled;
@@ -109,8 +109,7 @@ const float WATER_SHORE_FOAM = 0.45;
  * lit -- not of a texture pasted onto the floor. Sampling the cascade derivatives
  * where the refracted sun ray CROSSED the surface is what ties the two together;
  * the reference study rejected cellular caustics for exactly this reason and then
- * capped its own derivation at +14%, which is why nothing was visible in its
- * frames. Delivered here at a strength that can be seen.
+ * WATER_CAUSTIC_GAIN sets the strength.
  */
 const float WATER_CAUSTIC_ON = 0.060;
 const float WATER_CAUSTIC_FULL = 0.27;
@@ -147,8 +146,14 @@ void main() {
         float fade = 1.0 - smoothstep(WATER_SHORT_NEAR, WATER_SHORT_FAR, length(ViewPos));
         vec2 shortSlope = short1.rg * fade;
         N = normalize(N + vec3(-shortSlope.x, 0.0, -shortSlope.y) * WATER_SHORT_SLOPE_GAIN);
-        roughness = mix(WATER_ROUGH_CALM, WATER_ROUGH_RIPPLED,
-                        smoothstep(0.012, 0.30, length(shortSlope)));
+        // Roughness takes the slope energy the fade REMOVED -- the unfaded slope
+        // times (1 - fade) -- which is what makes this a handover rather than two
+        // channels dimming together. Driving it from the faded slope instead sent
+        // distant water toward the calm value in both, so the horizon got smoother
+        // as its waves went sub-pixel, which is backwards.
+        vec2 handedOver = short1.rg * (1.0 - fade);
+        roughness = mix(waterRoughness, WATER_ROUGH_RIPPLED,
+                        smoothstep(0.012, 0.30, length(handedOver)));
 
         // Foam where the horizontal map COMPRESSES, from the vertex Jacobian plus
         // the short band's own. Deformation, not a height threshold: a tall smooth
@@ -172,10 +177,13 @@ void main() {
     // The interface is shaded in view space, so the normal has to arrive there
     // too -- the surface normal is authored in world space by ocean.glsl.
     vec3 Nv = normalize(mat3(view) * N);
-    // Seen from below, the interface faces the other way. Culling is already off,
-    // so the backfaces rasterize; without this flip they would shade as if lit
-    // from above the surface they are under.
-    if (cameraSubmerged == 1)
+    // Face the eye. Two separate cases need it, and both rasterize because culling
+    // is off: the whole surface seen from underneath, and the back sides of steep
+    // crests seen from above. Left unflipped, dot(Nv, V) goes negative -- full
+    // Fresnel with no transmitted share, and a refract() whose incident ray is on
+    // the same side as the normal, which returns a direction on the wrong side of
+    // the interface and sends the refraction sample to an arbitrary texel.
+    if (cameraSubmerged == 1 || !gl_FrontFacing)
         Nv = -Nv;
     float NdotV = clamp(dot(Nv, V), 0.0, 1.0);
 
@@ -209,8 +217,9 @@ void main() {
     }
     path = min(path, WATER_MAX_PATH);
 
-    // Transmitted share: the scene behind, bent along the refracted ray by the
-    // path it travels, then absorbed over that same path.
+    // Transmitted share: the scene behind, bent along the refracted ray and then
+    // absorbed over the full path. The bend itself is capped at WATER_MAX_BEND,
+    // where the absorption is not.
     vec3 refrDir = refract(-V, Nv, 1.0 / waterIor);
     vec3 bed;
     if (sceneColorAvailable == 1) {
@@ -299,7 +308,10 @@ void main() {
     // Linear view-Z in .z is what makes the atmosphere composite fog this
     // surface at the water's own depth rather than the bed's.
     VelocityOut = vec4(screenVelocity(), ViewPos.z, roughness);
-    AlbedoOut = vec4(waterScatter, 1.0);
+    // Alpha is METALNESS here, not coverage. Water is a dielectric, and 1.0 would
+    // tell SSGI to give it no indirect diffuse (kD = 1 - alpha) and tell the
+    // spec-occ composite to hand nearly all its energy to the specular answer.
+    AlbedoOut = vec4(waterScatter, 0.0);
     DiffuseOut = vec4(0.0);
     // No ambient specular routed out for occlusion: water's reflection stays in
     // FragColor above, so there is nothing here for the spec-occ composite to

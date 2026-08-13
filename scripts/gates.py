@@ -2782,15 +2782,29 @@ ABSORB_BOXES = {
     "t030": (0.4500, 0.44, 0.5500, 0.56),
     "t060": (0.6665, 0.44, 0.7665, 0.56),
 }
-# Zero path length must be an exact identity, so this is quantization-tight
-# rather than a tolerance band.
+# Bare backdrop seen through the GAP between the middle and right panels, at the
+# same frame rows as the panel boxes so the vignette and the tone curve cancel out
+# of the comparison. (A box in the frame corner does not: measured 0.1018 there
+# against 0.5271 on a panel, which is the vignette, not absorption.)
+#
+# This is the presence floor. The backdrop is ONE uniform emissive grey, so if the
+# panels fail to load or the transmissive lane is skipped, every panel box reads that
+# same colour -- and absorb-thin and absorb-red are then satisfied perfectly by an
+# empty frame. That is the hole run_mask_gate records at MASK_LIT_FLOOR. Green is the
+# channel to compare: unabsorbed through the gap, heavily absorbed through the
+# thickest panel, so the ratio is large and unambiguous.
+ABSORB_GAP_BOX = (0.598, 0.44, 0.626, 0.56)
+ABSORB_PRESENCE_MIN = 3.0
+# Zero path length must be an exact identity, so this is quantization-tight rather
+# than a tolerance band. Measured 1.0000.
 ABSORB_THIN_EPS = 0.02
 # Red carries attenuationColor 1.0 and must survive every thickness untouched.
 # Relative, because the three panels share one backdrop and one Fresnel term.
+# Measured spread 0.0000 across the three (0.5271 each).
 ABSORB_RED_TOL = 0.02
-# Each step of 0.3 in thickness should cost the green channel a large factor;
-# 0.35 per step analytically, so a 1.6x fall is a wide floor under it that still
-# fails an implementation applying absorption without the thickness.
+# Each step of 0.3 in thickness should cost the green channel a large factor; 0.35
+# per step analytically, and measured 3.32x then 4.47x (the tonemap steepens it), so
+# 1.6x is a wide floor that still fails absorption applied without the thickness.
 ABSORB_STEP_MIN = 1.6
 ABSORB_GRID = 12
 
@@ -2841,8 +2855,19 @@ def run_absorption_gate(workdir):
 
     failures = []
     w, h, pix = _read_ppm(out)
-    rgb = {k: _absorb_box_rgb(pix, w, h, b) for k, b in ABSORB_BOXES.items()}
+    rgb = {k: _absorb_box_rgb(pix, w, h, b, ABSORB_GRID) for k, b in ABSORB_BOXES.items()}
     ratio = {k: (v[1] / v[0] if v[0] > 1e-6 else float("nan")) for k, v in rgb.items()}
+
+    # Presence first: every arm below is an equality or a ratio, and an empty frame
+    # satisfies two of the three.
+    gap = _absorb_box_rgb(pix, w, h, ABSORB_GAP_BOX, ABSORB_GRID)
+    presence = gap[1] / max(rgb["t060"][1], 1e-6)
+    ok = presence >= ABSORB_PRESENCE_MIN
+    print(f"  absorb-panels {'PASS' if ok else 'FAIL'}  gap G={gap[1]:.4f} vs "
+          f"thickest panel G={rgb['t060'][1]:.4f}, ratio={presence:.2f} "
+          f"want >={ABSORB_PRESENCE_MIN}")
+    if not ok:
+        failures.append("absorb-panels")
 
     ok = abs(ratio["t000"] - 1.0) <= ABSORB_THIN_EPS
     print(f"  absorb-thin  {'PASS' if ok else 'FAIL'}  "
@@ -2887,20 +2912,63 @@ def run_absorption_gate(workdir):
 # it would break a monotonicity arm that reached that far. An arm has to stop
 # where the quantity it names stops being the thing on screen.
 WATER_FIXTURE = "water_fixture.cscn"
-WATER_FLAGS = ["--water", "--water-extent", "14", "--no-auto-exposure", "-E", "1.0"]
-# The spectral path, at an extent and level where the cascades are resolvable by
-# the grid. Its determinism is the interesting claim: 45 ping-pong passes per frame
-# over three cascades, and the whole thing has to reproduce to the bit.
-WATER_FFT_FLAGS = ["--water", "--water-waves", "fft", "--water-extent", "70",
-                   "--water-level", "0.6", "--no-auto-exposure", "-E", "1.0"]
-WATER_FFT_LIVE_MIN_PX = 50000
+# --no-shadows on BOTH sides of the on/off comparison, and it is load-bearing.
+# `--water` also suppresses the shadow catcher, and this fixture has one (its .cscn
+# asks for a sky, and render.c turns that into shadow_catcher = true). The catcher
+# quad covers about 62% of the frame here and overwrites normals, aux and albedo
+# across all of it, so an arm that let it appear on one side only would measure the
+# catcher: the first version read 299,283 px of 480,000, which is 62.4% -- the
+# catcher's own coverage, and a number water could have contributed nothing to.
+# Clearing shadows makes the catcher absent in both frames and leaves `--water` the
+# only difference.
+WATER_NO_CATCHER = ["--no-shadows"]
+WATER_PIN = ["--no-auto-exposure", "-E", "1.0"]
+# The photometric arms keep the default lighting: their boxes read open water, the
+# catcher is suppressed under --water anyway, and holding shadows out changes what
+# the bed radiates and flattens the ratios they measure.
+WATER_FLAGS = ["--water", "--water-extent", "14"] + WATER_PIN
+# The on/off pair for the liveness arm ONLY, with the catcher held out of both. Note
+# --water-extent is NOT here: it implies --water, so putting it in the shared base
+# turned water on in the "off" frame and the arm compared a frame with itself.
+WATER_LIVE_ON = ["--water"] + WATER_PIN + WATER_NO_CATCHER
+WATER_LIVE_OFF = WATER_PIN + WATER_NO_CATCHER
+# Re-measured with the catcher held out of both sides.
+WATER_LIVE_MIN_PX = 40000
+
+# The spectral path, at an extent and level where the cascades are resolvable by the
+# grid. Built from ONE base so each arm below varies exactly the flag it names --
+# the first version differed in model, extent AND level at once, which meant a
+# cascade chain transforming to zero would still have moved 330k px on the level
+# change alone and passed the arm meant to catch it.
+# The level is composed in rather than substituted out, so no arm depends on the
+# position of a value in a list.
+WATER_FFT_CORE = ["--water", "--water-extent", "70", "--no-auto-exposure", "-E",
+                  "1.0"] + WATER_NO_CATCHER
+WATER_FFT_FLAGS = WATER_FFT_CORE + ["--water-level", "0.6", "--water-waves", "fft"]
+WATER_GERSTNER_REF = WATER_FFT_CORE + ["--water-level", "0.6", "--water-waves", "gerstner"]
+# Level above the fixture's eye (y 1.35), so the camera is under the surface.
+WATER_SUBMERGED_FLAGS = WATER_FFT_CORE + ["--water-level", "3.0", "--water-waves", "fft"]
+# One flag apart now, so this is the wave model alone.
+WATER_FFT_LIVE_MIN_PX = 20000
+# Absorption read from BELOW, where the optical path is the sight line itself
+# (water_frag takes `path = length(ViewPos)` when submerged) and so grows down the
+# frame toward the horizontal.
+#
+# Read in the deep band, NOT on the surface's underside directly overhead. Measured
+# there, R/B swings 0.37-0.73 non-monotonically: the underside is dominated by wave
+# normals, and no amount of choosing boxes makes wave structure into a path ramp.
+# The band below it is clean -- measured 0.1688 / 0.0911 / 0.0790.
+WATER_UNDER_BOXES = [(0.30, 0.245, 0.44, 0.265),
+                     (0.30, 0.280, 0.44, 0.300),
+                     (0.30, 0.315, 0.44, 0.335)]
+# Per-step falls of 1.85x then 1.15x, so the second step alone is too shallow to
+# floor. The end-to-end ratio (measured 2.14x) is the assertion, with strict
+# ordering to catch an inversion the endpoints would hide.
+WATER_UNDER_TOTAL_MIN = 1.5
 # Caustics move 12,509 px of a 480,000 px frame on this fixture -- a small share,
 # because only the submerged part of the ramp is inside the focusing depth window.
 # A quarter of that is well clear of nothing and well under the signal.
 WATER_CAUSTIC_MIN_PX = 3000
-# The submerged camera is a different surface entirely -- backfaces with a flipped
-# normal, and the optical path becomes the sight line rather than the depth behind.
-WATER_SUBMERGED_MIN_PX = 50000
 # Three boxes down the left side, clear of the ramp, at increasing distance.
 WATER_ABSORB_BOXES = [(0.06, 0.86, 0.20, 0.94),
                       (0.06, 0.72, 0.20, 0.80),
@@ -2914,51 +2982,52 @@ WATER_ABSORB_STEP_MIN = 1.25
 # Dry land reads 2.07 and water never exceeds 0.33 anywhere in the frame, so this
 # sits in an empty band between the two populations.
 WATER_DRY_RB_MIN = 1.4
-# The flag moves 299,283 px of a 480,000 px frame. A tenth of that is far below
-# the signal and far above anything incidental.
-WATER_LIVE_MIN_PX = 50000
 WATER_GRID = 12
 
 
-def _water_box_rgb(pix, w, h, box, n=WATER_GRID):
-    """Mean linear RGB over a fractional box; per-channel, because the whole
-    measurement is one channel falling faster than another."""
-    x0, y0, x1, y1 = box
-    acc = [0.0, 0.0, 0.0]
-    for iy in range(n):
-        for ix in range(n):
-            rgb = _linear_rgb(pix, w, h, (x0 + (x1 - x0) * (ix + 0.5) / n) * w,
-                              (y0 + (y1 - y0) * (iy + 0.5) / n) * h)
-            for k in range(3):
-                acc[k] += rgb[k]
-    return [a / (n * n) for a in acc]
-
-
 def _water_rb(pix, w, h, box):
-    rgb = _water_box_rgb(pix, w, h, box)
+    rgb = _absorb_box_rgb(pix, w, h, box, WATER_GRID)
     return rgb[0] / rgb[2] if rgb[2] > 1e-6 else float("nan")
 
 
 def run_water_gate(workdir):
     """The water surface is alive, deterministic, and absorbs with path length.
 
-    Five arms:
+    Nine arms:
 
-      water-det     two runs of one build at 0 px. The surface is a pure function
-                    of the frame clock, so this is the precondition every other
-                    arm and the golden rest on -- and the one thing no amount of
-                    looking at a frame establishes.
-      water-live    the flag moves the frame. Three zeros are also what a dead
-                    flag, an unparsed argument or a failed program compile
-                    produce, so the off-path arms alone prove nothing.
-      water-absorb  R/B falls monotonically with distance. Fails a constant tint,
-                    which is what absorption applied without the path length is.
-      water-dry     the emerged ramp is NOT water-tinted. Fails the surface
-                    drawing a film over dry ground, which is the shoreline
-                    discard's whole job.
-      water-row     the profiler row appears with the flag and is ABSENT without
-                    it, which is what a scope opened with profiler_scope_begin_if
-                    is supposed to give.
+      water-det       two runs of one build at 0 px. The surface is a pure function
+                      of the frame clock, so this is the precondition every other
+                      arm and the golden rest on -- and the one thing no amount of
+                      looking at a frame establishes.
+      water-live      the flag moves the frame. Three zeros are also what a dead
+                      flag, an unparsed argument or a failed program compile
+                      produce, so the off-path arms alone prove nothing. Shadows
+                      are OFF on both sides so this is not measuring the catcher --
+                      see WATER_NO_CATCHER.
+      water-absorb    R/B falls monotonically with distance. Fails a constant tint,
+                      which is what absorption applied without the path length is.
+      water-dry       the emerged ramp is NOT water-tinted. NOTE this does not test
+                      the shoreline discard: those water fragments are behind the
+                      ramp and GL_LESS rejects them anyway. It tests that nothing
+                      tints dry land, which is a weaker but real claim.
+      water-fft-det   the spectral path reproduces across two runs, over 45
+                      ping-pong passes and three cascades.
+      water-fft-live  the spectral surface differs from Gerstner at the SAME extent
+                      and level, so the wave model is the only variable. Fails a
+                      cascade chain that transformed to zero.
+      water-caustic   light focusing moves the frame; one flag apart.
+      water-submerged absorption is monotone along the UNDERSIDE, which only the
+                      submerged branch produces. A pixel count here would pass on a
+                      surface that drew nothing, since raising the level moves 91%
+                      of the frame regardless.
+      water-row       the profiler row appears with the flag and is ABSENT without
+                      it, which is what a scope opened inside the pass predicate
+                      gives.
+
+    Known blind spot: the fixture sets no height provider, so bedAvailable is 0 and
+    the shoaling factor and shore-foam band are dead in every frame here. They are
+    reachable only through `apps/forest --water`, which has no deterministic arm to
+    hang them on.
     """
     scene = os.path.join(ROOT, "assets", WATER_FIXTURE)
     if not os.path.exists(scene):
@@ -2968,8 +3037,9 @@ def run_water_gate(workdir):
     a = os.path.join(workdir, "water_a.ppm")
     b = os.path.join(workdir, "water_b.ppm")
     off = os.path.join(workdir, "water_off.ppm")
+    on_nc = os.path.join(workdir, "water_live_on.ppm")
     for path, extra in ((a, WATER_FLAGS), (b, WATER_FLAGS),
-                        (off, ["--no-auto-exposure", "-E", "1.0"])):
+                        (on_nc, WATER_LIVE_ON), (off, WATER_LIVE_OFF)):
         err = render(scene, path, extra)
         if err:
             print(f"  water-det    ERROR render failed: {err.strip()[-200:]}")
@@ -2983,7 +3053,7 @@ def run_water_gate(workdir):
     if not ok:
         failures.append("water-det")
 
-    ae_live, _ = compare(a, off)
+    ae_live, _ = compare(on_nc, off)
     ok = ae_live >= WATER_LIVE_MIN_PX
     print(f"  water-live   {'PASS' if ok else 'FAIL'}  {ae_live} px vs no --water, "
           f"want >={WATER_LIVE_MIN_PX}")
@@ -3015,6 +3085,10 @@ def run_water_gate(workdir):
         if err:
             print(f"  water-fft-det ERROR render failed: {err.strip()[-200:]}")
             failures.append("water-fft-det")
+            # Named, not silently dropped: three arms below hang off this render,
+            # and a pass that prints nothing reads as a pass.
+            for dropped in ("water-fft-live", "water-caustic", "water-submerged"):
+                print(f"  {dropped:<15} SKIP  (spectral render failed)")
             fft_ok = False
             break
     if fft_ok:
@@ -3027,7 +3101,15 @@ def run_water_gate(workdir):
         # The spectral surface must not merely run -- it must produce a DIFFERENT
         # surface from the Gerstner one. A cascade chain that transformed to zero
         # would still be deterministic, and would still pass the arm above.
-        ae_model, _ = compare(fa, a)
+        # Compared against a Gerstner render at the SAME extent and level, so the
+        # wave model is the only thing that moved.
+        gref = os.path.join(workdir, "water_gerstner_ref.ppm")
+        err = render(scene, gref, WATER_GERSTNER_REF)
+        if err:
+            print(f"  water-fft-live ERROR render failed: {err.strip()[-200:]}")
+            failures.append("water-fft-live")
+            return failures
+        ae_model, _ = compare(fa, gref)
         ok = ae_model >= WATER_FFT_LIVE_MIN_PX
         print(f"  water-fft-live {'PASS' if ok else 'FAIL'}  {ae_model} px vs gerstner, "
               f"want >={WATER_FFT_LIVE_MIN_PX}")
@@ -3050,21 +3132,27 @@ def run_water_gate(workdir):
             if not ok:
                 failures.append("water-caustic")
 
-        # Raising the level above the fixture's camera puts the eye under the
-        # surface, which is a different shading path rather than the same one seen
-        # from elsewhere: backfaces, a flipped normal, and the optical path taken
-        # along the sight line instead of from the depth buffer.
+        # The submerged interface, measured by what only it produces. Raising the
+        # level moves 91% of the frame whatever the underwater branch does, so a
+        # pixel-count arm here would pass on a surface that drew nothing, NaN'd, or
+        # forgot the normal flip. From below the optical path IS the sight line, so
+        # absorption grows with distance along the underside -- the same
+        # monotonicity `water-absorb` reads, on the other side of the interface.
         sub = os.path.join(workdir, "water_submerged.ppm")
-        sub_flags = [f if f != "0.6" else "3.0" for f in WATER_FFT_FLAGS]
-        err = render(scene, sub, sub_flags)
+        err = render(scene, sub, WATER_SUBMERGED_FLAGS)
         if err:
             print(f"  water-submerged ERROR render failed: {err.strip()[-200:]}")
             failures.append("water-submerged")
         else:
-            ae_s, _ = compare(fa, sub)
-            ok = ae_s >= WATER_SUBMERGED_MIN_PX
-            print(f"  water-submerged {'PASS' if ok else 'FAIL'}  {ae_s} px vs above water, "
-                  f"want >={WATER_SUBMERGED_MIN_PX}")
+            w2, h2, pix2 = _read_ppm(sub)
+            under = [_water_rb(pix2, w2, h2, box) for box in WATER_UNDER_BOXES]
+            ordered = all(under[i] > under[i + 1] for i in range(len(under) - 1))
+            total = under[0] / max(under[-1], 1e-6)
+            ok = ordered and total >= WATER_UNDER_TOTAL_MIN
+            print(f"  water-submerged {'PASS' if ok else 'FAIL'}  submerged "
+                  f"R/B={'/'.join(f'{r:.4f}' for r in under)} "
+                  f"falling={ordered} end-to-end={total:.2f}x "
+                  f"want >={WATER_UNDER_TOTAL_MIN}x")
             if not ok:
                 failures.append("water-submerged")
 

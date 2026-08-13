@@ -15,11 +15,16 @@
 /*
  * The three spectral bands, ported from the reference study.
  *
- * cutoff_low/high are the wavenumber window each band owns, in rad/m, and they
- * ABUT rather than overlap: a mode counted in two cascades is energy the sea
- * state never had. The short band reaches 24 rad/m -- decimetre waves -- and is
- * deliberately not carried into the mesh, where it would alias into a ridged
- * texture; it shades the interface only.
+ * cutoff_low/high are the wavenumber window each band owns, in rad/m. The windows
+ * OVERLAP slightly -- [0.30, 0.36] and [1.22, 1.42] -- so the handful of modes in
+ * those strips are seeded in two cascades and their energy is counted twice. These
+ * are the reference study's own numbers and the overlap is inherited from it, not
+ * chosen; closing it means retuning a sea state against a look, which is a change
+ * worth measuring rather than a constant worth editing in passing.
+ *
+ * The short band reaches 24 rad/m -- decimetre waves -- and is deliberately not
+ * carried into the mesh, where it would alias into a ridged texture; it shades the
+ * interface only.
  */
 static const struct WaterCascadeConfig {
     float length_scale;
@@ -111,7 +116,7 @@ static float _water_jonswap(float omega, float peak_omega, float alpha, float tm
  * evolution step produce a REAL surface from one complex multiply per mode
  * instead of enforcing symmetry afterwards.
  */
-static void _water_build_spectrum(int size, const struct WaterCascadeConfig* cfg, float* initial,
+static bool _water_build_spectrum(int size, const struct WaterCascadeConfig* cfg, float* initial,
                                   float* wave_data, float* twiddle) {
     const float g = 9.81f;
     const float delta_k = 6.28318530718f / cfg->length_scale;
@@ -120,9 +125,14 @@ static void _water_build_spectrum(int size, const struct WaterCascadeConfig* cfg
     const float peak_omega =
         22.0f * powf(WATER_WIND_SPEED * WATER_FETCH / (g * g), -0.33f);
 
+    // Reported rather than shrugged off: returning quietly would leave wave_data
+    // unwritten and the twiddle table all zeros, so every butterfly would read
+    // texel 0 and the transform would collapse into a flat ocean with no error --
+    // and for a later cascade the buffers still hold the PREVIOUS one's spectrum,
+    // which is worse than flat because it looks plausible.
     float* h0 = calloc((size_t)size * size * 2, sizeof(float));
     if (!h0)
-        return;
+        return false;
     uint32_t rng = cfg->seed;
 
     for (int y = 0; y < size; y++) {
@@ -225,7 +235,7 @@ static void _water_build_spectrum(int size, const struct WaterCascadeConfig* cfg
     free(h0);
 
     if (!twiddle)
-        return;
+        return true;
     // Stockham twiddles: per stage and per output index, the rotation and the two
     // input indices the butterfly reads. Precomputing the INDICES is what keeps
     // the shader a pure gather with no bit-reversal pass of its own.
@@ -248,6 +258,7 @@ static void _water_build_spectrum(int size, const struct WaterCascadeConfig* cfg
             hi[3] = (float)(first + block);
         }
     }
+    return true;
 }
 
 Water* create_water(void) {
@@ -347,6 +358,7 @@ static void _water_bake_bed(Water* water) {
         }
     }
 
+    glActiveTexture(GL_TEXTURE0); // see _water_make_field
     if (!water->bed_tex)
         glGenTextures(1, &water->bed_tex);
     glBindTexture(GL_TEXTURE_2D, water->bed_tex);
@@ -438,6 +450,9 @@ static bool water_ensure_grid(Water* water) {
 
 static GLuint _water_make_field(int size) {
     GLuint tex = 0;
+    // Unit 0 explicitly: these run lazily on whatever unit the previous pass left
+    // active, and the trailing unbind would otherwise clear that unit's 2D slot.
+    glActiveTexture(GL_TEXTURE0);
     glGenTextures(1, &tex);
     glBindTexture(GL_TEXTURE_2D, tex);
     // RGBA16F is enough for a transformed field and halves the bandwidth of 45
@@ -455,6 +470,9 @@ static GLuint _water_make_field(int size) {
 
 static GLuint _water_make_data_tex(int w, int h, const float* data) {
     GLuint tex = 0;
+    // Unit 0 explicitly: these run lazily on whatever unit the previous pass left
+    // active, and the trailing unbind would otherwise clear that unit's 2D slot.
+    glActiveTexture(GL_TEXTURE0);
     glGenTextures(1, &tex);
     glBindTexture(GL_TEXTURE_2D, tex);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, w, h, 0, GL_RGBA, GL_FLOAT, data);
@@ -474,6 +492,13 @@ static bool _water_ensure_spectra(Water* water) {
     if (water->failed)
         return false;
 
+    // Restored on every exit, including the failure ones. Binding 0 and returning
+    // would leave the WINDOW framebuffer current, and every pass after water --
+    // the transparent lane, the OIT accumulate, the particle depth resolve --
+    // would draw into it instead of the scene target.
+    GLint saved_fbo = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &saved_fbo);
+
     const int size = WATER_SPECTRUM_RES;
     float* initial = calloc((size_t)size * size * 4, sizeof(float));
     float* wave = calloc((size_t)size * size * 4, sizeof(float));
@@ -490,7 +515,16 @@ static bool _water_ensure_spectra(Water* water) {
     for (int c = 0; c < WATER_CASCADE_COUNT; c++) {
         // The twiddle table depends only on the transform size, so it is built
         // with the first cascade and shared by all of them.
-        _water_build_spectrum(size, &WATER_CASCADE_CFG[c], initial, wave, c == 0 ? twiddle : NULL);
+        if (!_water_build_spectrum(size, &WATER_CASCADE_CFG[c], initial, wave,
+                                   c == 0 ? twiddle : NULL)) {
+            log_error("Water cascade %d seeding failed; disabling water", c);
+            glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)saved_fbo);
+            free(initial);
+            free(wave);
+            free(twiddle);
+            water->failed = true;
+            return false;
+        }
         water->cascade_initial[c] = _water_make_data_tex(size, size, initial);
         water->cascade_wave[c] = _water_make_data_tex(size, size, wave);
         if (c == 0)
@@ -510,7 +544,7 @@ static bool _water_ensure_spectra(Water* water) {
             glDrawBuffers(2, targets);
             if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
                 log_error("Water spectral framebuffer incomplete; disabling water");
-                glBindFramebuffer(GL_FRAMEBUFFER, 0);
+                glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)saved_fbo);
                 free(initial);
                 free(wave);
                 free(twiddle);
@@ -519,7 +553,7 @@ static bool _water_ensure_spectra(Water* water) {
             }
         }
     }
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)saved_fbo);
 
     free(initial);
     free(wave);
@@ -552,8 +586,11 @@ static void _water_run_spectral(Water* water, struct Engine* engine, float time)
     }
 
     GLint saved_viewport[4];
+    GLint saved_fbo = 0;
     glGetIntegerv(GL_VIEWPORT, saved_viewport);
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &saved_fbo);
     const GLboolean depth_was_enabled = glIsEnabled(GL_DEPTH_TEST);
+    const GLboolean blend_was_enabled = glIsEnabled(GL_BLEND);
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_BLEND);
     glViewport(0, 0, WATER_SPECTRUM_RES, WATER_SPECTRUM_RES);
@@ -598,11 +635,12 @@ static void _water_run_spectral(Water* water, struct Engine* engine, float time)
     }
 
     glBindVertexArray(0);
-    glBindFramebuffer(GL_FRAMEBUFFER, engine->framebuffer);
+    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)saved_fbo);
     glViewport(saved_viewport[0], saved_viewport[1], saved_viewport[2], saved_viewport[3]);
     if (depth_was_enabled)
         glEnable(GL_DEPTH_TEST);
-    glEnable(GL_BLEND);
+    if (blend_was_enabled)
+        glEnable(GL_BLEND);
     glActiveTexture(GL_TEXTURE0);
     check_gl_error("water spectral");
 }
@@ -614,11 +652,11 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
     if (!water_ensure_grid(water))
         return;
 
-    // The spectral bands, before anything that samples them. Its own profiler
-    // scope would need the caller's, so it stays inside the water row -- the
-    // simulation is part of what water costs.
     _water_bake_bed(water);
 
+    // The spectral bands, before anything that samples them. No profiler scope of
+    // its own: it would have to nest inside the caller's, and the simulation is
+    // part of what water costs anyway.
     const bool fft = water->wave_model == WATER_WAVES_FFT;
     if (fft) {
         if (!_water_ensure_spectra(water))
@@ -636,8 +674,14 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
     // The surface's own transmission source. Both resolves re-bind the scene
     // framebuffer on the way out, so this is safe here and the pass below draws
     // into the scene target as usual.
-    if (!engine->scene_color_this_frame)
-        engine->scene_color_this_frame = engine_resolve_opaque_color(engine);
+    //
+    // Held LOCAL, never published to engine->scene_color_this_frame. That flag is
+    // the one place engine->refraction_enabled is enforced, and the transmissive
+    // lane reads it downstream -- setting it here would refract glass that
+    // --no-refraction had switched off, silently.
+    bool scene_color = engine->scene_color_this_frame;
+    if (!scene_color)
+        scene_color = engine_resolve_opaque_color(engine);
     const GLuint scene_depth = engine_resolve_scene_depth(engine);
 
     glUseProgram(program->id);
@@ -660,7 +704,10 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
     uniform_set_vec2(u, "waterWindDir", (const float*)&water->wind_dir);
     uniform_set_float(u, "waterAmplitude", water->amplitude);
     uniform_set_float(u, "waterWavelength", water->wavelength);
-    uniform_set_float(u, "waterSteepness", water->steepness);
+    // Clamped here rather than trusted. Above 1 the summed Gerstner steepness makes
+    // the horizontal map non-injective and the surface folds through itself; the
+    // shader's normalisation guarantees the bound only for an in-range value.
+    uniform_set_float(u, "waterSteepness", glm_clamp(water->steepness, 0.0f, 1.0f));
     uniform_set_float(u, "waterSpread", water->spread);
     // The animation clock, not the wall clock: frame N must be phase N or a
     // headless run stops being comparable to itself.
@@ -704,7 +751,7 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
     glActiveTexture(GL_TEXTURE0 + TEXUNIT_SCENE_COLOR);
     glBindTexture(GL_TEXTURE_2D, engine->opaque_color_texture);
     uniform_set_int(u, "sceneColorTex", TEXUNIT_SCENE_COLOR);
-    uniform_set_int(u, "sceneColorAvailable", engine->scene_color_this_frame ? 1 : 0);
+    uniform_set_int(u, "sceneColorAvailable", scene_color ? 1 : 0);
 
     glActiveTexture(GL_TEXTURE0 + WATER_DEPTH_UNIT);
     glBindTexture(GL_TEXTURE_2D, scene_depth);
@@ -737,8 +784,7 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
         // The samplerCube still has to be POINTED at its unit even with nothing
         // to sample. Left at the default 0, where a 2D texture lives, it is a
         // sampler type mismatch -- undefined for the whole program, not just for
-        // the branch that reads it. render.c records the same hazard costing a
-        // fixture 62,009 px.
+        // the branch that reads it.
         uniform_set_int(u, "prefilteredMap", IBL_PREFILTER_TEXTURE_UNIT);
         uniform_set_int(u, "iblEnabled", 0);
         uniform_set_float(u, "iblIntensity", 1.0f);
@@ -771,10 +817,11 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
     // Depth writes ON, unlike the skybox and the late pass. The particle depth
     // resolve and everything that sorts against the surface read this.
     const GLboolean cull_was_enabled = glIsEnabled(GL_CULL_FACE);
+    const GLboolean blend_was_enabled = glIsEnabled(GL_BLEND);
     glDisable(GL_CULL_FACE);
     // Nothing here is translucent -- coverage is a discard, not an alpha -- and
     // the G-buffer list about to be bound carries indexed blend disables that a
-    // blanket glEnable(GL_BLEND) would wipe. Same bracket the opaque lane uses.
+    // blanket glEnable(GL_BLEND) would wipe.
     glDisable(GL_BLEND);
     engine_set_scene_draw_buffers(engine, true);
 
@@ -783,7 +830,8 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
     glBindVertexArray(0);
 
     engine_set_scene_draw_buffers(engine, false);
-    glEnable(GL_BLEND);
+    if (blend_was_enabled)
+        glEnable(GL_BLEND);
     if (cull_was_enabled)
         glEnable(GL_CULL_FACE);
 

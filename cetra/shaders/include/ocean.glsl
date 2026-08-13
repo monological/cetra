@@ -72,28 +72,11 @@ struct OceanSurface {
     vec3 world;  // displaced world position
     vec3 normal; // unit normal from the analytic derivatives
     float shoal; // 1 = open water, 0 = the bed has reached the surface
-    // Horizontal-map Jacobian. Below 1 the surface is COMPRESSING, which is where
-    // a real sea throws whitewater, so this is the foam selector rather than a
-    // height threshold. Always 1 on the Gerstner path, whose steepness is
-    // clamped so the mapping cannot compress that far.
+    // Horizontal-map Jacobian; below 1 the map is compressing. 1 means "not
+    // computed", which is the Gerstner path.
     float jacobian;
 };
 
-/*
- * Sum of Gerstner waves.
- *
- * A Gerstner wave moves its surface points horizontally as well as vertically,
- * bunching them toward the crest, which is what sharpens a crest and broadens a
- * trough instead of leaving a symmetric sine. The horizontal term is what makes
- * it a Gerstner wave rather than a height field, and it is also what can fold the
- * surface over itself: the mapping stops being injective once Q*A*k exceeds 1.
- *
- * So steepness is NOT passed through to Q. It is divided by the octave's own
- * A*k and by the octave count, which makes waterSteepness a bounded 0..1 knob
- * that cannot fold the mesh at any amplitude or wavelength. Authoring Q directly
- * would make "sharp" mean something different at every wavelength and put a
- * self-intersecting surface one slider nudge away.
- */
 /*
  * Spectral surface: the long and medium bands displace the mesh, the short band
  * is left for the fragment stage's slope distribution.
@@ -119,9 +102,13 @@ OceanSurface oceanEvaluateSpectral(vec2 p) {
     // cheap weakly-nonlinear correction for that, kept small deliberately -- pushed
     // harder it folds the surface, which is what the choppy-wave literature bounds.
     height += 0.14 * (long0.b * long0.b - 0.080) + 0.32 * (med0.b * med0.b - 0.030);
-    // Not named `cross`: that is a builtin this function calls two lines below.
+    // Not named `cross`: that is a builtin this function calls below.
     float crossDeriv = long0.a * q0 + med0.a * q1;
-    vec2 slope = long1.rg + med1.rg;
+    // The crest-sharpening term above changes the height, so its derivative has to
+    // be in the slope or the normal is the normal of a DIFFERENT surface than the
+    // one rasterized -- the exact failure this file's header exists to prevent.
+    // d/dp of 0.14*(h*h - c) is 0.28*h*dh, per cascade, hence the two factors.
+    vec2 slope = long1.rg * (1.0 + 0.28 * long0.b) + med1.rg * (1.0 + 0.64 * med0.b);
     vec2 dHoriz = long1.ba * q0 + med1.ba * q1;
 
     float shoal = oceanShoal(p);
@@ -135,8 +122,11 @@ OceanSurface oceanEvaluateSpectral(vec2 p) {
     // here.
     s.world = vec3(p.x + horizontal.x * shoal, waterLevel + height * shoal,
                    p.y + horizontal.y * shoal);
-    // The derivatives carry the same factor, so the normal stays the normal OF the
-    // displaced surface rather than of the open-water one it would have been.
+    // Scaled by the same factor, so the normal tracks the displacement rather than
+    // the open-water surface it would otherwise describe. The shoal GRADIENT's own
+    // product-rule term is dropped: inert over a flat bed, and wrong by that much
+    // where the bed is steep, which is the surf zone `apps/forest --water` shoals
+    // over.
     vec3 dPdx = vec3(1.0 + dHoriz.x * shoal, slope.x * shoal, crossDeriv * shoal);
     vec3 dPdz = vec3(crossDeriv * shoal, slope.y * shoal, 1.0 + dHoriz.y * shoal);
     s.normal = normalize(cross(dPdz, dPdx));
@@ -146,6 +136,25 @@ OceanSurface oceanEvaluateSpectral(vec2 p) {
     return s;
 }
 
+/*
+ * Sum of Gerstner waves.
+ *
+ * A Gerstner wave moves its surface points horizontally as well as vertically,
+ * bunching them toward the crest, which is what sharpens a crest and broadens a
+ * trough instead of leaving a symmetric sine. The horizontal term is what makes
+ * it a Gerstner wave rather than a height field, and it is also what can fold the
+ * surface over itself: the mapping stops being injective once Q*A*k exceeds 1.
+ *
+ * So steepness is NOT passed through to Q. It is divided by the octave's own A*k
+ * and by the octave count, so the set sums to the authored value: at or below 1
+ * the map stays injective at any amplitude or wavelength. Above 1 it folds, which
+ * is why the C side clamps the uniform rather than trusting the caller. Authoring
+ * Q directly would instead make "sharp" mean something different at every
+ * wavelength.
+ *
+ * `t` is used here and ignored by the spectral path, which reads cascades that
+ * already hold one instant -- see the previous-position note in water_vert.
+ */
 OceanSurface oceanEvaluate(vec2 p, float t) {
     if (waveModel == 1)
         return oceanEvaluateSpectral(p);
@@ -159,7 +168,12 @@ OceanSurface oceanEvaluate(vec2 p, float t) {
     vec3 dPdz = vec3(0.0, 0.0, 1.0);
 
     float wavelength = waterWavelength;
-    float amplitude = waterAmplitude * shoal;
+    // Shoal is applied to BOTH terms explicitly below rather than folded in here.
+    // Folding it into amplitude does not reach the horizontal displacement: q is
+    // amplitude's reciprocal, so qa = steepness/(k*N) and the factor cancels --
+    // which left the lateral shuffle running at full strength over a beach whose
+    // vertical motion had already faded to nothing.
+    float amplitude = waterAmplitude;
     vec2 base = normalize(waterWindDir + vec2(1e-6, 0.0));
 
     for (int i = 0; i < OCEAN_WAVES; i++) {
@@ -178,16 +192,19 @@ OceanSurface oceanEvaluate(vec2 p, float t) {
         float sinp = sin(phase);
         float cosp = cos(phase);
 
-        // See the note above: Q is derived so the surface cannot fold.
+        // Q normalised by this octave's own A*k and by the octave count, so the
+        // steepness uniform sums to itself across the set: at or below 1 the map
+        // stays injective. See the header note.
         float q = waterSteepness / max(k * amplitude * float(OCEAN_WAVES), 1e-4);
-        float qa = q * amplitude;
+        float qa = q * amplitude * shoal;
+        float ah = amplitude * shoal;
 
         displaced.x += qa * dir.x * cosp;
-        displaced.y += amplitude * sinp;
+        displaced.y += ah * sinp;
         displaced.z += qa * dir.y * cosp;
 
         float dqa = qa * k * sinp;
-        float dah = amplitude * k * cosp;
+        float dah = ah * k * cosp;
         dPdx.x -= dqa * dir.x * dir.x;
         dPdx.y += dah * dir.x;
         dPdx.z -= dqa * dir.y * dir.x;
@@ -204,9 +221,9 @@ OceanSurface oceanEvaluate(vec2 p, float t) {
     // cross(dPdz, dPdx) and not the reverse: on a flat surface that is +Y, and
     // the flipped order would light every wave from underneath.
     s.normal = normalize(cross(dPdz, dPdx));
-    // Steepness is clamped so this mapping cannot compress; reporting 1 says
-    // "nothing to select foam from" rather than approximating a number the model
-    // does not produce.
+    // A Gerstner map DOES compress -- that bunching is what sharpens its crests --
+    // but its Jacobian is not derived here. 1 reports "no selector on this path"
+    // rather than a number the code did not compute.
     s.jacobian = 1.0;
     s.shoal = shoal;
     return s;

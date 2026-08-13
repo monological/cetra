@@ -22,10 +22,10 @@ out vec4 PrevClip;
 out float Jacobian;
 out float Shoal;
 
-// Required for the same reason pbr_vert declares it: without the qualifier the
-// driver may schedule this position's arithmetic differently from another
-// program's, and under a depth test a fragment landing a bit behind the depth it
-// just wrote disappears rather than shading subtly wrong.
+// Kept for symmetry with pbr_vert, where it is load-bearing because the depth
+// prepass rasterizes the same triangles from a second program. Nothing rasterizes
+// this grid twice today, so here it is harmless rather than required -- and cheap
+// insurance if a depth-only water pass ever appears.
 invariant gl_Position;
 
 #include "ocean.glsl"
@@ -46,13 +46,19 @@ void main() {
     // jittered projection. The jitter is a sub-pixel sampling offset; letting it
     // into the velocity would report it to TAA and motion blur as scene motion.
     //
-    // The previous position re-evaluates the surface at t - dt rather than
-    // reusing this one, so an animated surface reports the motion it actually
-    // has. On a still plane the two agree exactly and the velocity is zero,
-    // which is correct and not a special case.
+    // Gerstner re-evaluates at t - dt, so its waves report the motion they have.
+    // The SPECTRAL path cannot: the cascades hold one instant, the current one, and
+    // reading them at t - dt returns the same surface. So a spectral ocean reports
+    // CAMERA motion only, and TAA reprojects travelling wave detail as if it were
+    // static. Fixing it needs the previous frame's transformed cascades kept alive
+    // -- a third buffer, since pass 0 overwrites the one that still holds them --
+    // and that is not built. The branch also avoids four texture fetches whose
+    // result is known to equal s.world.
     CurrClip = uCurrViewProjNoJitter * vec4(s.world, 1.0);
-    OceanSurface sPrev = oceanEvaluate(p, time - uDeltaTime);
-    PrevClip = uPrevViewProj * vec4(sPrev.world, 1.0);
+    vec3 prevWorld = s.world;
+    if (waveModel == 0)
+        prevWorld = oceanEvaluate(p, time - uDeltaTime).world;
+    PrevClip = uPrevViewProj * vec4(prevWorld, 1.0);
 
     gl_Position = projection * viewPos;
 }

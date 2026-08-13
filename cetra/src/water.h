@@ -8,37 +8,33 @@
 /*
  * Water surface (spec 11.32, roadmap D3).
  *
- * A single-layer water surface: it draws in the OPAQUE-like slot after the
- * refraction resolve, writes depth and the G-buffer, and does its own
- * transmission. It is not translucent geometry and takes no part in OIT --
- * sorting a water plane against itself is not a question anyone asked, and the
- * things that must sort against water (particles, translucents) run after it
- * against the depth it wrote.
+ * A single-layer water surface: one interface that reflects and transmits, drawn
+ * with depth writes on rather than as translucent geometry, so it takes no part in
+ * OIT and everything that must sort against it can test the depth it wrote.
  *
- * Writing the aux attachment is what makes fog and aerial perspective land at
- * the WATER's depth rather than at the depth of the bed behind it: the
- * atmosphere composite is driven by aux linear-Z, and the late pass writes no
- * aux, which is why a translucent surface is fogged wrong today and water is
- * not.
- *
- * WHY ITS OWN PROGRAM. pbr_frag declares all sixteen fragment samplers the
- * driver allows and the driver counts declarations, not distinct units (see
- * engine.h on the moment atlas). Water needs the resolved scene depth, which
- * pbr_frag has no slot for. A dedicated program starts from sixteen again.
+ * WHY ITS OWN PROGRAM. pbr_frag declares all sixteen fragment samplers the driver
+ * allows and the driver counts declarations, not distinct units (see engine.h on
+ * the moment atlas). Water needs the resolved scene depth, which pbr_frag has no
+ * slot for. A dedicated program starts from sixteen again.
  */
 
-// Cells per side of the surface grid. The mesh is a plain indexed grid in the XZ
-// plane; how it is placed and displaced is the vertex shader's business.
+// Cells per side of the surface grid.
 #define WATER_GRID_RES 128
 
-// Resolved single-sample scene depth, for the water column and the shoreline
-// fade. Sampler units are per program, so this collides with nothing -- it is
-// the same argument particle_frag makes for its own depth tap on unit 7.
+// Resolved single-sample scene depth, for the water column and the shoreline test.
+//
+// Sampler UNIFORMS are per program, but the bindings are global, so sharing a
+// number with a material slot is only safe for a reason. 7 is TEXUNIT_LTC, whose
+// tenant is a 2D_ARRAY -- a different binding point on the same unit. 8 below is
+// TEXUNIT_SHEEN and IS the same target, safe because pbr rebinds it from the same
+// pointer that gates its use.
 #define WATER_DEPTH_UNIT 7
-// Six transformed cascade fields (3 bands x 2 targets) start here. Units 0-1 are
-// albedo/normal by house convention and 6-7 are taken above, so this sits clear of
-// both and of the engine-bound IBL block at 9-15.
-#define WATER_CASCADE_UNIT0 16
+// Six transformed cascade fields (3 bands x 2 targets) start here. Units 0-5,
+// which this program leaves free: its other tenants are 6, 7, 8 and the
+// engine-bound IBL block at 9-15. Everything has to fit under 16 --
+// GL_MAX_TEXTURE_IMAGE_UNITS is exactly that on this hardware, and spec 4.10
+// records a slot at 16 surviving only on the driver's tolerance.
+#define WATER_CASCADE_UNIT0 0
 // The baked bed heightfield, sampled in the VERTEX stage for shoaling.
 #define WATER_BED_UNIT 8
 
@@ -108,8 +104,9 @@ typedef struct Water {
     float ior;       // 1.333 for water -> F0 0.020
 
     // Wave train. amplitude/wavelength describe the LONGEST octave; the rest are
-    // derived from it inside ocean.glsl. steepness is a bounded 0..1 knob rather
-    // than a Gerstner Q, so no value of it can fold the surface over itself.
+    // derived from it inside ocean.glsl. steepness is 0..1 rather than a Gerstner Q
+    // -- 1 is the steepest crest whose horizontal map is still injective -- and is
+    // clamped to that range on upload.
     vec2 wind_dir;
     float amplitude;
     float wavelength;
@@ -165,8 +162,7 @@ typedef struct Water {
     bool bed_baked;
 } Water;
 
-// Bake the bed heightfield from `height_at`. Called automatically on the first
-// frame after a provider is set; call again if the bed itself changed.
+// Marks the baked bed stale; the next draw re-bakes it from height_at.
 void water_invalidate_bed(Water* water);
 
 // World-space tiling period of each cascade, in metres. Public because the
@@ -189,7 +185,8 @@ bool water_active(const Water* water);
  * depth resolve blits at the main render size and re-binds the scene
  * framebuffer, which would redirect the rest of a capture.
  *
- * Leaves the GL state it touched as it found it, including the draw-buffer list.
+ * Restores the framebuffer binding, viewport, blend, depth test, cull face and the
+ * draw-buffer list. Leaves its own program and texture bindings current.
  */
 void water_render(Water* water, struct Scene* scene, struct Engine* engine, const mat4 view,
                   const mat4 draw_projection);
