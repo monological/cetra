@@ -49,11 +49,12 @@ uniform sampler2D cascadePrev0;
 uniform sampler2D cascadePrev1;
 uniform int prevAvailable;
 
-// The baked bed, for shoaling. Absent (bedAvailable 0) is the normal case: the
-// per-fragment water column comes from the resolved scene depth instead, which is
-// exact and works against arbitrary geometry. This answers the one question screen
-// depth cannot -- a vertex needs its own depth to know how far to move, and
-// sampling screen depth would need the position that depth is meant to produce.
+// The baked bed, for shoaling: height in R, its world-space gradient in G,B. Absent
+// (bedAvailable 0) is the normal case: the per-fragment water column comes from the
+// resolved scene depth instead, which is exact and works against arbitrary geometry.
+// This answers the one question screen depth cannot -- a vertex needs its own depth to
+// know how far to move, and sampling screen depth would need the position that depth
+// is meant to produce.
 uniform sampler2D bedTex;
 uniform int bedAvailable;
 uniform float waterExtent;
@@ -64,15 +65,31 @@ uniform float waterExtent;
 const float OCEAN_SHOAL_MIN = 0.14;
 const float OCEAN_SHOAL_FULL = 2.7;
 
-// 1 in open water, falling to 0 as the bed comes up. Multiplies displacement, not
-// height alone: the horizontal term has to shrink with it or the surface slides
-// sideways over a beach it is no longer above.
-float oceanShoal(vec2 p) {
+/*
+ * 1 in open water, falling to 0 as the bed comes up, with its own gradient.
+ *
+ * Multiplies displacement, not height alone: the horizontal term has to shrink with it
+ * or the surface slides sideways over a beach it is no longer above. And because it
+ * multiplies the displacement, its GRADIENT is a product-rule term in every surface
+ * derivative -- the factor alone describes a surface whose normal is the open-water
+ * one wherever the bed is steep, which is the surf zone specifically. Zero over a flat
+ * bed and zero with no bed at all, so the term costs nothing where it says nothing.
+ *
+ * .x is the factor; .yz is d(factor)/d(world x, world z).
+ */
+vec3 oceanShoal(vec2 p) {
     if (bedAvailable == 0)
-        return 1.0;
+        return vec3(1.0, 0.0, 0.0);
     vec2 uv = p / (waterExtent * 2.0) + 0.5;
-    float bed = texture(bedTex, clamp(uv, vec2(0.0), vec2(1.0))).r;
-    return smoothstep(OCEAN_SHOAL_MIN, OCEAN_SHOAL_FULL, waterLevel - bed);
+    vec3 bed = texture(bedTex, clamp(uv, vec2(0.0), vec2(1.0))).rgb;
+    float column = waterLevel - bed.r;
+    float span = OCEAN_SHOAL_FULL - OCEAN_SHOAL_MIN;
+    float u = clamp((column - OCEAN_SHOAL_MIN) / span, 0.0, 1.0);
+    // d/dp smoothstep(u(p)) = 6u(1-u) * du/dp, and du/dp = -d(bed)/dp / span. Flat
+    // outside the window, where smoothstep has clamped and the bed can move without
+    // the factor moving.
+    float dFactor = 6.0 * u * (1.0 - u) / span;
+    return vec3(u * u * (3.0 - 2.0 * u), -dFactor * bed.g, -dFactor * bed.b);
 }
 
 struct OceanSurface {
@@ -138,8 +155,16 @@ OceanSurface oceanEvaluateSpectral(vec2 p) {
     vec2 slope = long1.rg * (1.0 + 2.0 * OCEAN_BOUND_LONG * long0.b) +
                  med1.rg * (1.0 + 2.0 * OCEAN_BOUND_MED * med0.b);
     vec2 dHoriz = long1.ba * q0 + med1.ba * q1;
+    // The unshoaled displacement, which the product-rule terms below multiply. Same
+    // expressions oceanSpectralPosition uses; the height carries its crest term
+    // because that is part of what the shoal factor scales.
+    vec2 horizontal = long0.rg * q0 + med0.rg * q1;
+    float height = long0.b + med0.b +
+                   OCEAN_BOUND_LONG * (long0.b * long0.b - OCEAN_BOUND_LONG_VAR) +
+                   OCEAN_BOUND_MED * (med0.b * med0.b - OCEAN_BOUND_MED_VAR);
 
-    float shoal = oceanShoal(p);
+    vec3 sh = oceanShoal(p);
+    float shoal = sh.x;
 
     OceanSurface s;
     // No amplitude knob here, deliberately. The spectrum is already physical --
@@ -150,15 +175,22 @@ OceanSurface oceanEvaluateSpectral(vec2 p) {
     // here.
     s.world = oceanSpectralPosition(p, long0, med0, shoal);
     // Scaled by the same factor, so the normal tracks the displacement rather than
-    // the open-water surface it would otherwise describe. The shoal GRADIENT's own
-    // product-rule term is dropped: inert over a flat bed, and wrong by that much
-    // where the bed is steep, which is the surf zone `apps/forest --water` shoals
-    // over.
-    vec3 dPdx = vec3(1.0 + dHoriz.x * shoal, slope.x * shoal, crossDeriv * shoal);
-    vec3 dPdz = vec3(crossDeriv * shoal, slope.y * shoal, 1.0 + dHoriz.y * shoal);
+    // the open-water surface it would otherwise describe -- and the factor's own
+    // gradient enters as a product-rule term, since the displacement it scales varies
+    // with position too. Over a flat bed sh.yz is zero and these reduce to the plain
+    // scaled derivatives.
+    vec3 dPdx = vec3(1.0 + dHoriz.x * shoal + horizontal.x * sh.y,
+                     slope.x * shoal + height * sh.y,
+                     crossDeriv * shoal + horizontal.y * sh.y);
+    vec3 dPdz = vec3(crossDeriv * shoal + horizontal.x * sh.z,
+                     slope.y * shoal + height * sh.z,
+                     1.0 + dHoriz.y * shoal + horizontal.y * sh.z);
     s.normal = normalize(cross(dPdz, dPdx));
-    s.jacobian = (1.0 + dHoriz.x * shoal) * (1.0 + dHoriz.y * shoal) -
-                 crossDeriv * crossDeriv * shoal * shoal;
+    // The horizontal map's determinant, from those same rows. The two off-diagonals
+    // are no longer equal once the shoal gradient is in, so this cannot be shortened
+    // back to a square -- and the difference between them IS the shoaling compression
+    // that selects surf-zone foam.
+    s.jacobian = dPdx.x * dPdz.z - dPdz.x * dPdx.z;
     s.shoal = shoal;
     return s;
 }
@@ -186,20 +218,23 @@ OceanSurface oceanEvaluate(vec2 p, float t) {
     if (waveModel == 1)
         return oceanEvaluateSpectral(p);
 
-    float shoal = oceanShoal(p);
-    vec3 displaced = vec3(p.x, waterLevel, p.y);
-    // Partial derivatives of the displaced position with respect to the
-    // undisplaced grid coordinates. The identity rows are the flat plane's
-    // contribution, which the horizontal displacement then bends.
-    vec3 dPdx = vec3(1.0, 0.0, 0.0);
-    vec3 dPdz = vec3(0.0, 0.0, 1.0);
+    vec3 sh = oceanShoal(p);
+    float shoal = sh.x;
+    // Accumulated UNSHOALED, then scaled once at the end. The shoal factor multiplies
+    // the whole displacement, so its gradient multiplies the whole displacement too --
+    // which is one line out here and would be six inside the loop.
+    vec3 disp = vec3(0.0);
+    // Partial derivatives of the displacement with respect to the undisplaced grid
+    // coordinates. The flat plane's own identity rows are added at the end, since they
+    // are not part of what shoals.
+    vec3 dDispDx = vec3(0.0);
+    vec3 dDispDz = vec3(0.0);
 
     float wavelength = waterWavelength;
-    // Shoal is applied to BOTH terms explicitly below rather than folded in here.
-    // Folding it into amplitude does not reach the horizontal displacement: q is
-    // amplitude's reciprocal, so qa = steepness/(k*N) and the factor cancels --
-    // which left the lateral shuffle running at full strength over a beach whose
-    // vertical motion had already faded to nothing.
+    // Note what the shoal factor must NOT be folded into: q is amplitude's reciprocal,
+    // so scaling amplitude here leaves qa = steepness/(k*N) unchanged and the lateral
+    // shuffle would run at full strength over a beach whose vertical motion had
+    // already faded to nothing.
     float amplitude = waterAmplitude;
     vec2 base = normalize(waterWindDir + vec2(1e-6, 0.0));
 
@@ -223,34 +258,39 @@ OceanSurface oceanEvaluate(vec2 p, float t) {
         // steepness uniform sums to itself across the set: at or below 1 the map
         // stays injective. See the header note.
         float q = waterSteepness / max(k * amplitude * float(OCEAN_WAVES), 1e-4);
-        float qa = q * amplitude * shoal;
-        float ah = amplitude * shoal;
+        float qa = q * amplitude;
 
-        displaced.x += qa * dir.x * cosp;
-        displaced.y += ah * sinp;
-        displaced.z += qa * dir.y * cosp;
+        disp.x += qa * dir.x * cosp;
+        disp.y += amplitude * sinp;
+        disp.z += qa * dir.y * cosp;
 
         float dqa = qa * k * sinp;
-        float dah = ah * k * cosp;
-        dPdx.x -= dqa * dir.x * dir.x;
-        dPdx.y += dah * dir.x;
-        dPdx.z -= dqa * dir.y * dir.x;
-        dPdz.x -= dqa * dir.x * dir.y;
-        dPdz.y += dah * dir.y;
-        dPdz.z -= dqa * dir.y * dir.y;
+        float dah = amplitude * k * cosp;
+        dDispDx.x -= dqa * dir.x * dir.x;
+        dDispDx.y += dah * dir.x;
+        dDispDx.z -= dqa * dir.y * dir.x;
+        dDispDz.x -= dqa * dir.x * dir.y;
+        dDispDz.y += dah * dir.y;
+        dDispDz.z -= dqa * dir.y * dir.y;
 
         wavelength *= OCEAN_LENGTH_FALLOFF;
         amplitude *= OCEAN_AMPLITUDE_FALLOFF;
     }
 
     OceanSurface s;
-    s.world = displaced;
+    s.world = vec3(p.x, waterLevel, p.y) + disp * shoal;
+    // The flat plane's identity rows, plus the scaled wave derivatives, plus the shoal
+    // factor's own gradient acting on the displacement it scales. sh.yz is zero over a
+    // flat bed and with no bed at all, so this is the previous expression there.
+    vec3 dPdx = vec3(1.0, 0.0, 0.0) + dDispDx * shoal + disp * sh.y;
+    vec3 dPdz = vec3(0.0, 0.0, 1.0) + dDispDz * shoal + disp * sh.z;
     // cross(dPdz, dPdx) and not the reverse: on a flat surface that is +Y, and
     // the flipped order would light every wave from underneath.
     s.normal = normalize(cross(dPdz, dPdx));
     // A Gerstner map DOES compress -- that bunching is what sharpens its crests --
-    // but its Jacobian is not derived here. 1 reports "no selector on this path"
-    // rather than a number the code did not compute.
+    // but its Jacobian is not reported here. 1 means "no selector on this path", which
+    // is what the foam and caustics gates read it as; deriving it would turn the
+    // clamped-steepness argument for why they are FFT-only into a lie.
     s.jacobian = 1.0;
     s.shoal = shoal;
     return s;
@@ -281,5 +321,5 @@ vec3 oceanPreviousWorld(vec2 p, float tPrev) {
         long0 = texture(cascadePrev0, uvLong);
         med0 = texture(cascadePrev1, uvMed);
     }
-    return oceanSpectralPosition(p, long0, med0, oceanShoal(p));
+    return oceanSpectralPosition(p, long0, med0, oceanShoal(p).x);
 }

@@ -375,15 +375,28 @@ void water_invalidate_bed(Water* water) {
         water->bed_baked = false;
 }
 
-// Bake height_at over the drawn extent. One R32F texel per sample, CLAMP so a
-// vertex just outside the baked square reads the nearest shore rather than
-// wrapping to the far side of the scene.
+/*
+ * Bake height_at over the drawn extent: the height in R, and its world-space
+ * gradient in G,B.
+ *
+ * The gradient is here rather than taken with fwidth in the shader because a VERTEX
+ * stage has no derivatives, and it is the vertex stage that needs it -- the shoal
+ * factor scales the displacement, so the factor's own slope is a product-rule term in
+ * the surface derivatives. Central differences over the baked grid, which is the
+ * gradient of the field the shader actually samples rather than of the callback
+ * behind it; a finer difference than the texels would describe a bed the surface
+ * never sees.
+ *
+ * CLAMP so a vertex just outside the baked square reads the nearest shore rather than
+ * wrapping to the far side of the scene, and RGBA32F because a 3-channel float texture
+ * is not reliably filterable everywhere this runs.
+ */
 static void _water_bake_bed(Water* water) {
     if (water->bed_baked || !water->height_at)
         return;
 
     const int res = WATER_BED_RES;
-    float* heights = malloc((size_t)res * res * sizeof(float));
+    float* heights = malloc((size_t)res * res * 4 * sizeof(float));
     if (!heights) {
         log_error("Water bed bake allocation failed; shoaling disabled");
         water->bed_baked = true; // latched: retrying every frame would not help
@@ -397,7 +410,26 @@ static void _water_bake_bed(Water* water) {
             // the vertex shader makes rather than sitting half a texel off it.
             const float wx = ((float)x + 0.5f) / (float)res * span - water->extent;
             const float wz = ((float)z + 0.5f) / (float)res * span - water->extent;
-            heights[z * res + x] = water->height_at(water->height_ctx, wx, wz);
+            heights[(z * res + x) * 4] = water->height_at(water->height_ctx, wx, wz);
+        }
+    }
+
+    // Second pass, so every central difference reads baked neighbours rather than
+    // re-entering the callback. One-sided at the border, where the far neighbour does
+    // not exist -- CLAMP means the field is flat past the edge anyway.
+    const float cell = span / (float)res;
+    for (int z = 0; z < res; z++) {
+        for (int x = 0; x < res; x++) {
+            const int x0 = x > 0 ? x - 1 : x;
+            const int x1 = x < res - 1 ? x + 1 : x;
+            const int z0 = z > 0 ? z - 1 : z;
+            const int z1 = z < res - 1 ? z + 1 : z;
+            float* t = &heights[(z * res + x) * 4];
+            t[1] = (heights[(z * res + x1) * 4] - heights[(z * res + x0) * 4]) /
+                   ((float)(x1 - x0) * cell);
+            t[2] = (heights[(z1 * res + x) * 4] - heights[(z0 * res + x) * 4]) /
+                   ((float)(z1 - z0) * cell);
+            t[3] = 0.0f;
         }
     }
 
@@ -405,7 +437,7 @@ static void _water_bake_bed(Water* water) {
     if (!water->bed_tex)
         glGenTextures(1, &water->bed_tex);
     glBindTexture(GL_TEXTURE_2D, water->bed_tex);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, res, res, 0, GL_RED, GL_FLOAT, heights);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, res, res, 0, GL_RGBA, GL_FLOAT, heights);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
