@@ -55,6 +55,9 @@ uniform vec3 sunDir; // toward the sun, world space
 uniform int sunAvailable;
 uniform int cameraSubmerged;
 uniform int causticsEnabled;
+// 1 = the shoreline writes fractional coverage for alpha-to-coverage; 0 = the
+// binary cutoff, which is all a single-sample target can express.
+uniform int alphaToCoverage;
 
 // Split-sum environment cubemap, engine-bound. The procedural sky bakes into it,
 // so a reflection taken from here tracks the sun without asking.
@@ -80,6 +83,9 @@ const float WATER_TRANSMISSION_MAX_LOD = 6.0;
 const float WATER_MAX_PATH = 64.0;
 // Below this column the surface has emerged through the bed; see the discard.
 const float WATER_MIN_PATH = 0.01;
+// Coverage below this contributes no samples at any supported sample count, so the
+// fragment is dropped rather than shaded for nothing.
+const float WATER_MIN_COVERAGE = 0.02;
 // Ceiling on the refraction bend, in world units. The bend is a screen-space
 // approximation, and past a metre or so of offset the sample it reaches has
 // little to do with the ray -- the validity check below catches the wrong ones,
@@ -194,6 +200,8 @@ void main() {
     // deepest-looking.
     float surfaceDist = max(-ViewPos.z, 1e-4);
     float path = WATER_MAX_PATH;
+    // How much of this pixel still has water in it. 1 everywhere but the shoreline.
+    float coverage = 1.0;
     if (cameraSubmerged == 1) {
         // From below, the body is between the EYE and the surface rather than
         // beyond it, so the optical path is the sight line itself. The depth buffer
@@ -203,17 +211,40 @@ void main() {
         float bedNdc = texture(sceneDepthTex, uv).r * 2.0 - 1.0;
         float bedDist = -viewZFromNdcZ(bedNdc);
         float rayScale = length(ViewPos) / surfaceDist;
-        path = max(bedDist - surfaceDist, 0.0) * rayScale;
-        // Shoreline. Where the column has closed the surface has come up
-        // through the bed, and what is left is a sliver almost coplanar with it:
-        // depth rounding decides which wins per pixel and it reads as a dotted
-        // edge rather than as a thin film. Dropping it is the honest answer.
+        // Signed, and kept signed until coverage has been taken from it: clamping
+        // to zero first flattens the derivative on the dry side of the edge, which
+        // halves the width the transition is measured over.
+        float signedPath = (bedDist - surfaceDist) * rayScale;
+        // Shoreline. Where the column has closed the surface has come up through
+        // the bed, and what is left is a sliver almost coplanar with it: depth
+        // rounding decides which wins per pixel and it reads as a dotted edge
+        // rather than as a thin film. So the sliver goes -- but the boundary it
+        // leaves is a hard step across one pixel, and an edge inside the opaque
+        // lane gets no smoothing from anything downstream.
         //
-        // A hard threshold, so this edge aliases. Derivative-width coverage is
-        // the fix and it needs an alpha this pass does not have -- the surface is
-        // in the opaque lane precisely so it can write depth.
-        if (path < WATER_MIN_PATH)
-            discard;
+        // Derivative coverage over that step: the distance to the threshold
+        // divided by how fast the column changes per pixel is the threshold's
+        // offset MEASURED IN PIXELS, so a half-covered pixel reads 0.5 whatever
+        // the scene scale or the camera angle. Alpha-to-coverage then spends it as
+        // samples. Only pixels the edge actually crosses come out fractional; a
+        // silhouette of submerged geometry that happens to sit within one pixel
+        // width of the surface is the one place this reads low where the water is
+        // whole, and it is a pixel wide, at a shoreline, where the water is
+        // already going.
+        float edge = signedPath - WATER_MIN_PATH;
+        coverage = clamp(edge / max(fwidth(edge), 1e-5) + 0.5, 0.0, 1.0);
+        path = max(signedPath, 0.0);
+        if (alphaToCoverage == 1) {
+            if (coverage < WATER_MIN_COVERAGE)
+                discard;
+        } else {
+            // No samples to dither into: the cutoff is the only thing a
+            // single-sample target can express, and keeping a fractional fragment
+            // there would write the sliver at full strength.
+            if (edge < 0.0)
+                discard;
+            coverage = 1.0;
+        }
     }
     path = min(path, WATER_MAX_PATH);
 
@@ -299,12 +330,26 @@ void main() {
         color = mix(color, lit, clamp(foam, 0.0, 1.0) * WATER_FOAM_MAX);
     }
 
-    FragColor = vec4(min(color, vec3(WS_SCENE_MAX)), 1.0);
-    // Alpha 0: an opaque model surface, NOT the catcher's negative reflective
-    // marker. SSR only shades the catcher, and giving water the marker would put
-    // it in a channel whose magnitude is already the catcher's edge falloff --
-    // the two are not separable there (see the spec's phase 1b note).
-    NormalOut = vec4(Nv, 0.0);
+    // Alpha is the shoreline coverage, in BOTH writes below, because which output
+    // the driver derives alpha-to-coverage from is not something a shader gets to
+    // choose. These two are the only outputs whose alpha water does not otherwise
+    // need: FragColor's is inert in the opaque lane, where nothing blends, and the
+    // normals' is a marker read for its SIGN. The three above them each carry a
+    // value a consumer reads -- aux roughness, albedo metalness, SSS profile -- so
+    // coverage cannot be put there to be safe.
+    //
+    // Which means this rests on the driver NOT reading the highest-numbered alpha
+    // it can find, and that is measured rather than assumed: albedo binds under
+    // --ssgi with a 0 in its alpha, above both of these, and the shoreline still
+    // moves by the same 4.4k px it moves without it. If the rule were "highest
+    // alpha-bearing output", zero coverage from there would have erased the
+    // surface entirely.
+    FragColor = vec4(min(color, vec3(WS_SCENE_MAX)), coverage);
+    // Non-negative alpha, so NOT the catcher's negative reflective marker: SSR
+    // only shades the catcher, and giving water the marker would put it in a
+    // channel whose magnitude is already the catcher's edge falloff -- the two
+    // are not separable there (see the spec's phase 1b note).
+    NormalOut = vec4(Nv, coverage);
     // Linear view-Z in .z is what makes the atmosphere composite fog this
     // surface at the water's own depth rather than the bed's.
     VelocityOut = vec4(screenVelocity(), ViewPos.z, roughness);

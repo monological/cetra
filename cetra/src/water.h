@@ -137,6 +137,9 @@ typedef struct Water {
     // Caustics on refracted geometry. Inert on the Gerstner path, whose steepness
     // is clamped so its mapping cannot compress and therefore cannot focus.
     bool caustics;
+    // false = the shoreline is a hard cutoff at the pixel the water column closes.
+    // Inert wherever the target has no samples to spend coverage on.
+    bool shore_coverage;
 
     // Lazily built GPU state, on the postfx ensure_* pattern. `failed` latches
     // so a missing program costs one log line rather than one per frame forever.

@@ -80,6 +80,7 @@ typedef struct {
     float water_extent;         // Half-size of the drawn surface (0 = keep default)
     int water_fft;              // Spectral cascades instead of Gerstner octaves
     int no_water_caustics;      // Bisect lever: drop the surface's light focusing
+    int no_water_coverage;      // Bisect lever: hard shoreline cutoff, no coverage
     int gi_rate;                // Probes captured per frame while dirty (0 = default)
     int gi_debug;               // Blit the probe atlas into the frame corner
     int sky;                    // Procedural physically-based sky instead of -e

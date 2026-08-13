@@ -292,6 +292,7 @@ Water* create_water(void) {
     // ocean, and asks for 45 passes and 24 textures to say so.
     water->wave_model = WATER_WAVES_GERSTNER;
     water->caustics = true;
+    water->shore_coverage = true;
     return water;
 }
 
@@ -825,6 +826,16 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
     glm_vec3_copy(engine->camera->position, cam_world);
     uniform_set_int(u, "cameraSubmerged", cam_world[1] < water->level ? 1 : 0);
 
+    // The shoreline's coverage needs samples to be dithered into, and the same two
+    // conditions the opaque lane's masked materials read decide whether there are
+    // any: the sample count the APP asked for (a 1-sample request comes back as a
+    // 2-sample target, so the actual count never says 1), and whether a capture is
+    // bound -- capture targets are always single-sample, so reading the scene
+    // target's count alone would spend coverage against no coverage hardware and
+    // write the shoreline sliver at full strength into the capture.
+    const bool a2c = water->shore_coverage && engine->msaa_samples > 1 && !engine->capturing;
+    uniform_set_int(u, "alphaToCoverage", a2c ? 1 : 0);
+
     glActiveTexture(GL_TEXTURE0 + TEXUNIT_SCENE_COLOR);
     glBindTexture(GL_TEXTURE_2D, engine->opaque_color_texture);
     uniform_set_int(u, "sceneColorTex", TEXUNIT_SCENE_COLOR);
@@ -896,10 +907,12 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
     const GLboolean cull_was_enabled = glIsEnabled(GL_CULL_FACE);
     const GLboolean blend_was_enabled = glIsEnabled(GL_BLEND);
     glDisable(GL_CULL_FACE);
-    // Nothing here is translucent -- coverage is a discard, not an alpha -- and
-    // the G-buffer list about to be bound carries indexed blend disables that a
-    // blanket glEnable(GL_BLEND) would wipe.
+    // Nothing here is translucent: the shoreline's fractional alpha is spent as
+    // sample coverage, never as a blend, and the G-buffer list about to be bound
+    // carries indexed blend disables that a blanket glEnable(GL_BLEND) would wipe.
     glDisable(GL_BLEND);
+    if (a2c)
+        glEnable(GL_SAMPLE_ALPHA_TO_COVERAGE);
     engine_set_scene_draw_buffers(engine, true);
 
     glBindVertexArray(water->grid_vao);
@@ -931,6 +944,8 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
     }
 
     engine_set_scene_draw_buffers(engine, false);
+    if (a2c)
+        glDisable(GL_SAMPLE_ALPHA_TO_COVERAGE);
     if (blend_was_enabled)
         glEnable(GL_BLEND);
     if (cull_was_enabled)
