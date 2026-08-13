@@ -3001,6 +3001,22 @@ WATER_CLIP_TRIANGLES = 32768 + 4 * 24576
 # a sub-pixel crack that never fully clears the surface will slip under it. Deciding
 # that properly needs the depth buffer, which this harness cannot read.
 WATER_CRACK_LUMA_MAX = 0.44
+
+# Shoreline coverage (spec 11.33 phase 3). The waterline on this fixture runs across
+# the ramp in a wave-modulated band; the diff between the two coverage modes lands
+# entirely inside these rows and this x range, so the measurement window is where the
+# effect is and nowhere else.
+WATER_SHORE_WINDOW = (0.30, 0.47, 0.70, 0.555)
+# One flag apart at 4x MSAA. Measured 4,352 px at peak 44/255 -- small because most of
+# this edge was never a shader edge: the water surface CROSSES the bed here, and the
+# per-sample depth test antialiases a depth crossing on its own. Coverage carries the
+# part the depth test cannot see, which is the threshold sliver the discard removes.
+WATER_SHORE_MIN_PX = 1500
+# And it has to be a SOFTENING, not just a change: the sharpest single-row fall across
+# the waterline drops. Measured medians 0.0343 (coverage) against 0.0416 (cutoff) =
+# 0.823x, so this ceiling sits above the effect while still failing a wash, an offset,
+# or a coverage value that came out constant.
+WATER_SHORE_FALL_RATIO = 0.92
 # Caustics move 12,509 px of a 480,000 px frame on this fixture -- a small share,
 # because only the submerged part of the ramp is inside the focusing depth window.
 # A quarter of that is well clear of nothing and well under the signal.
@@ -3043,6 +3059,24 @@ def _water_max_luma(pix, w, h, box):
     return worst
 
 
+def _water_shore_fall(path, window):
+    """Median sharpest single-row fall down each column crossing the waterline.
+
+    A hard edge spends the whole dry-to-water drop in one row; coverage splits it
+    across two, so the sharpest step falls. Median over columns rather than a mean:
+    the ramp's own silhouette contributes a few columns with a much larger step and
+    a mean would follow those instead of the waterline.
+    """
+    w, h, pix = _read_ppm(path)
+    x0, y0, x1, y1 = window
+    falls = []
+    for px in range(int(x0 * w), int(x1 * w)):
+        col = [_linear_luma(pix, w, h, px, py) for py in range(int(y0 * h), int(y1 * h))]
+        falls.append(max(col[i] - col[i + 1] for i in range(len(col) - 1)))
+    falls.sort()
+    return falls[len(falls) // 2] if falls else float("nan")
+
+
 def run_water_gate(workdir):
     """The water surface is alive, deterministic, and absorbs with path length.
 
@@ -3077,6 +3111,14 @@ def run_water_gate(workdir):
                       water interface between it and the eye, so the froxel volume's
                       second medium is the only thing that can absorb it -- which is
                       what rendered as though in air before 11.33.
+      water-shore-soft the shoreline is antialiased rather than cut off: the frame
+                      moves against --no-water-coverage AND the sharpest single-row
+                      fall across the waterline gets shallower. The second half is
+                      what makes this a softening claim and not just a liveness one.
+      water-shore-hard the same flag at ONE sample is 0 px. Alpha-to-coverage has
+                      nothing to dither into there, so the shader must fall back to
+                      the cutoff -- if it kept the fractional fragment instead, the
+                      sliver would be written at full strength.
       water-row       the profiler row appears with the flag and is ABSENT without
                       it, which is what a scope opened inside the pass predicate
                       gives.
@@ -3231,6 +3273,45 @@ def run_water_gate(workdir):
                   f"want >={WATER_FOG_BED_TOTAL_MIN}x")
             if not ok:
                 failures.append("water-under-fog")
+
+    # Shoreline coverage, one flag apart at 4x MSAA, and then the same flag at one
+    # sample where it must do nothing at all.
+    hard = os.path.join(workdir, "water_shore_hard.ppm")
+    err = render(scene, hard, WATER_FLAGS + ["--no-water-coverage"])
+    if err:
+        print(f"  water-shore-soft ERROR render failed: {err.strip()[-200:]}")
+        failures.append("water-shore-soft")
+    else:
+        ae_cov, _ = compare(a, hard)
+        soft_fall = _water_shore_fall(a, WATER_SHORE_WINDOW)
+        hard_fall = _water_shore_fall(hard, WATER_SHORE_WINDOW)
+        ratio = soft_fall / max(hard_fall, 1e-6)
+        ok = ae_cov >= WATER_SHORE_MIN_PX and ratio <= WATER_SHORE_FALL_RATIO
+        print(f"  water-shore-soft {'PASS' if ok else 'FAIL'}  {ae_cov} px vs cutoff "
+              f"(want >={WATER_SHORE_MIN_PX}), sharpest fall {soft_fall:.4f} vs "
+              f"{hard_fall:.4f} = {ratio:.3f}x want <={WATER_SHORE_FALL_RATIO}")
+        if not ok:
+            failures.append("water-shore-soft")
+
+    # The fallback, and it is the reason the shader carries the cutoff at all: at one
+    # sample glEnable(GL_SAMPLE_ALPHA_TO_COVERAGE) is a no-op, so a fractional alpha
+    # would write the sliver at full strength instead of dropping it. --taa is how the
+    # render app reaches one sample headless.
+    soft_1s = os.path.join(workdir, "water_shore_1s_soft.ppm")
+    hard_1s = os.path.join(workdir, "water_shore_1s_hard.ppm")
+    err = render(scene, soft_1s, WATER_FLAGS + ["--taa"])
+    if not err:
+        err = render(scene, hard_1s, WATER_FLAGS + ["--taa", "--no-water-coverage"])
+    if err:
+        print(f"  water-shore-hard ERROR render failed: {err.strip()[-200:]}")
+        failures.append("water-shore-hard")
+    else:
+        ae_1s, _ = compare(soft_1s, hard_1s)
+        ok = ae_1s == 0
+        print(f"  water-shore-hard {'PASS' if ok else 'FAIL'}  {ae_1s} px at one sample, "
+              f"want 0")
+        if not ok:
+            failures.append("water-shore-hard")
 
     # Clipmap rings. The draw structure is integers, and the crack check is a
     # per-pixel ceiling on the same boxes water-absorb reads as means -- a crack is
