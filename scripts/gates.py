@@ -2950,21 +2950,30 @@ WATER_GERSTNER_REF = WATER_FFT_CORE + ["--water-level", "0.6", "--water-waves", 
 WATER_SUBMERGED_FLAGS = WATER_FFT_CORE + ["--water-level", "3.0", "--water-waves", "fft"]
 # One flag apart now, so this is the wave model alone.
 WATER_FFT_LIVE_MIN_PX = 20000
-# Absorption read from BELOW, where the optical path is the sight line itself
-# (water_frag takes `path = length(ViewPos)` when submerged) and so grows down the
-# frame toward the horizontal.
+# The submerged INTERFACE, read on the underside of the surface where the optical
+# path is the sight line itself (water_frag takes `path = length(ViewPos)` below the
+# plane). Boxes walk away from directly-overhead: measured 0.2624 / 0.0958 / 0.0589.
 #
-# Read in the deep band, NOT on the surface's underside directly overhead. Measured
-# there, R/B swings 0.37-0.73 non-monotonically: the underside is dominated by wave
-# normals, and no amount of choosing boxes makes wave structure into a path ramp.
-# The band below it is clean -- measured 0.1688 / 0.0911 / 0.0790.
-WATER_UNDER_BOXES = [(0.30, 0.245, 0.44, 0.265),
-                     (0.30, 0.280, 0.44, 0.300),
-                     (0.30, 0.315, 0.44, 0.335)]
-# Per-step falls of 1.85x then 1.15x, so the second step alone is too shallow to
-# floor. The end-to-end ratio (measured 2.14x) is the assertion, with strict
-# ordering to catch an inversion the endpoints would hide.
-WATER_UNDER_TOTAL_MIN = 1.5
+# These are not the boxes 11.33 phase 1 used. Those sat in the open-water band, and
+# the underwater medium added in phase 2 saturates it -- all three went flat at 0.053,
+# because with the body's own extinction applied the far field is entirely body
+# colour. The signal moved, so the boxes moved with it.
+WATER_UNDER_BOXES = [(0.40, 0.020, 0.60, 0.050),
+                     (0.40, 0.060, 0.60, 0.090),
+                     (0.40, 0.110, 0.60, 0.140)]
+# Measured end-to-end 4.4x. Ordering is asserted separately to catch an inversion the
+# endpoints alone would hide.
+WATER_UNDER_TOTAL_MIN = 2.0
+
+# The medium acting on GEOMETRY, which is the thing that rendered as though in air
+# before phase 2. Three boxes down the submerged ramp: it is opaque, and with the eye
+# under the surface there is no water interface between it and the camera, so the ONLY
+# thing that can absorb it is the froxel volume. Farther is further down the frame
+# here (the ramp recedes downward and narrows), and R/B falls 1.35 / 1.19 / 0.85.
+WATER_FOG_BED_BOXES = [(0.40, 0.390, 0.60, 0.420),
+                       (0.40, 0.460, 0.60, 0.490),
+                       (0.40, 0.540, 0.60, 0.570)]
+WATER_FOG_BED_TOTAL_MIN = 1.25
 
 # Clipmap rings (spec 11.33). At a large extent the near field is where the uniform
 # grid failed, so this is the config the rings exist for.
@@ -3060,13 +3069,22 @@ def run_water_gate(workdir):
                       and level, so the wave model is the only variable. Fails a
                       cascade chain that transformed to zero.
       water-caustic   light focusing moves the frame; one flag apart.
-      water-submerged absorption is monotone along the UNDERSIDE, which only the
-                      submerged branch produces. A pixel count here would pass on a
-                      surface that drew nothing, since raising the level moves 91%
-                      of the frame regardless.
+      water-submerged absorption is monotone along the submerged INTERFACE, which only
+                      that branch produces. A pixel count here would pass on a surface
+                      that drew nothing, since raising the level moves 91% of the frame
+                      regardless.
+      water-under-fog the submerged RAMP fades with distance. It is opaque and has no
+                      water interface between it and the eye, so the froxel volume's
+                      second medium is the only thing that can absorb it -- which is
+                      what rendered as though in air before 11.33.
       water-row       the profiler row appears with the flag and is ABSENT without
                       it, which is what a scope opened inside the pass predicate
                       gives.
+
+    Not an arm here, deliberately: "arming the fog volume when submerged cannot leak
+    into an above-water frame" is a cross-BUILD claim, and the water golden already is
+    that instrument -- it is an above-water frame and it would move. An arm comparing
+    two renders of one build cannot see it at all.
 
     Known blind spot: the fixture sets no height provider, so bedAvailable is 0 and
     the shoaling factor and shore-foam band are dead in every frame here. They are
@@ -3193,12 +3211,26 @@ def run_water_gate(workdir):
             ordered = all(under[i] > under[i + 1] for i in range(len(under) - 1))
             total = under[0] / max(under[-1], 1e-6)
             ok = ordered and total >= WATER_UNDER_TOTAL_MIN
-            print(f"  water-submerged {'PASS' if ok else 'FAIL'}  submerged "
+            print(f"  water-submerged {'PASS' if ok else 'FAIL'}  interface "
                   f"R/B={'/'.join(f'{r:.4f}' for r in under)} "
                   f"falling={ordered} end-to-end={total:.2f}x "
                   f"want >={WATER_UNDER_TOTAL_MIN}x")
             if not ok:
                 failures.append("water-submerged")
+
+            # The medium on geometry. Separate arm and separate boxes from the one
+            # above on purpose: that reads the interface, this reads the opaque ramp
+            # behind it, which nothing but the froxel volume can absorb.
+            bed = [_water_rb(pix2, w2, h2, box) for box in WATER_FOG_BED_BOXES]
+            bed_ordered = all(bed[i] > bed[i + 1] for i in range(len(bed) - 1))
+            bed_total = bed[0] / max(bed[-1], 1e-6)
+            ok = bed_ordered and bed_total >= WATER_FOG_BED_TOTAL_MIN
+            print(f"  water-under-fog {'PASS' if ok else 'FAIL'}  submerged ramp "
+                  f"R/B={'/'.join(f'{r:.4f}' for r in bed)} "
+                  f"falling={bed_ordered} end-to-end={bed_total:.2f}x "
+                  f"want >={WATER_FOG_BED_TOTAL_MIN}x")
+            if not ok:
+                failures.append("water-under-fog")
 
     # Clipmap rings. The draw structure is integers, and the crack check is a
     # per-pixel ceiling on the same boxes water-absorb reads as means -- a crack is
