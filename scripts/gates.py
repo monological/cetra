@@ -2941,12 +2941,17 @@ def run_overdraw_gate(workdir):
         print(f"  prepass-crossover SKIP  ({OVERDRAW_TILES} not present)")
         return failures
 
+    # 800x600, and the smaller size was tried and reverted. At 400x300 the
+    # opaque row reads ~1.7 ms, where the GPU timer's own jitter can exceed the
+    # 3% noise ceiling this arm asserts -- it went from +15% passing to failing
+    # on an unchanged renderer. A timing arm's headroom is the thing it is for;
+    # three seconds of suite time is not worth trading for it.
     base = _profiled_run(workdir, "od_t1", taa + ["--no-sort-opaque"],
-                         fixture=OVERDRAW_TILES, size=("400", "300"))
+                         fixture=OVERDRAW_TILES, size=("800", "600"))
     floor_run = _profiled_run(workdir, "od_t2", taa + ["--no-sort-opaque"],
-                              fixture=OVERDRAW_TILES, size=("400", "300"))
+                              fixture=OVERDRAW_TILES, size=("800", "600"))
     on = _profiled_run(workdir, "od_t3", taa + ["--no-sort-opaque", "--depth-prepass"],
-                       fixture=OVERDRAW_TILES, size=("400", "300"))
+                       fixture=OVERDRAW_TILES, size=("800", "600"))
     if base is None or floor_run is None or on is None:
         return failures + ["prepass-crossover"]
 

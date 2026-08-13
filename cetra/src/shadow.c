@@ -498,8 +498,15 @@ typedef enum ShadowCasterSet {
 // traversals stay one function.
 static void _upload_shadow_material(UniformManager* u, const Material* mat, bool foliage) {
     uniform_set_int(u, "alphaTested", foliage ? 1 : 0);
-    if (foliage)
+    if (foliage) {
         uniform_set_float(u, "alphaCutoff", mat->alphaCutoff);
+        // The same UV transform the surface is shaded with. Without it the
+        // cutout was sampled at raw TexCoords, so a caster carrying a texture
+        // transform cast a shadow of the wrong shape (spec 11.31).
+        uniform_set_vec2(u, "uvOffset", (const float*)&mat->uvOffset);
+        uniform_set_vec2(u, "uvScale", (const float*)&mat->uvScale);
+        uniform_set_float(u, "uvRotation", mat->uvRotation);
+    }
 
     // Transmission scales the coverage: a fully transmissive interface blocks
     // nothing.
@@ -635,6 +642,11 @@ static void _draw_shadow_items(const DrawList* list, ShaderProgram* program, Sub
             // cloth mask ramps from anchored to free.
             uniform_set_float(u, "uWindMaskMinY", mesh->aabb.min[1]);
             uniform_set_float(u, "uWindMaskMaxY", mesh->aabb.max[1]);
+            // Per mesh for the same reason the shading pass sets it per mesh:
+            // whether COLOR_0 exists is geometry, not material. The cutout
+            // multiplies it in, so a caster carrying its alpha there rather than
+            // in the albedo map used to cast as though it were solid.
+            uniform_set_int(u, "vertexColorExists", mesh->colors ? 1 : 0);
 
             // Skin animated meshes so they cast animated shadows
             render_update_skinning_uniforms(program, mesh);

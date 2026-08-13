@@ -1,11 +1,16 @@
 #version 330 core
 layout (location = 0) in vec3 aPos;
 layout (location = 2) in vec2 aTexCoords;
+layout (location = 5) in vec4 aColor;
 layout (location = 6) in ivec4 aBoneIds;
 layout (location = 7) in vec4 aBoneWeights;
 layout (location = 8) in vec2 aTexCoords2;
 
 out vec2 TexCoords; // for the alpha test on foliage (material.h foliage_shadows)
+// Vertex-colour alpha multiplies into the cutout the same way it does when the
+// surface is shaded. A caster whose alpha comes from COLOR_0 rather than from
+// its albedo map used to cast as if it were solid.
+out vec4 VertexColor;
 
 uniform mat4 model;
 uniform mat4 lightSpaceMatrix;
@@ -30,5 +35,6 @@ void main()
                                          skinned, aTexCoords, aTexCoords2, time);
 
     TexCoords = aTexCoords;
+    VertexColor = aColor;
     gl_Position = lightSpaceMatrix * cetra_instance_model(model) * localPos;
 }
