@@ -66,6 +66,16 @@ uniform int alphaToCoverage;
 // dither into and switches off on a 1-sample buffer, but the material is still
 // masked, and the shadow/GTAO rules below key off the material, not the AA mode.
 uniform int alphaMasked;
+// 1 = the depth prepass is drawing this mesh, so run the coverage decision and
+// stop. A mode rather than a second program for the reason the OIT moment
+// generation below is one: a prepass that decided coverage its own way would
+// have to reproduce the UV transform, the POM march and the vertex-colour alpha,
+// and a fragment of drift there either drills a hole in the canopy or writes
+// depth where nothing was. A mode cannot drift at all.
+//
+// The lean depth_prepass program still draws everything that CANNOT discard --
+// this is only for the masked geometry that has a decision to make.
+uniform int depthOnly;
 // Masked material that opted back into the shadow map (material.h
 // foliage_shadows). Leaf cards are large enough to resolve at map-texel scale,
 // so they read the cascades like opaque geometry does.
@@ -939,6 +949,19 @@ void main() {
         discard;
     }
 
+    // The prepass is done here whenever the answer is binary. Surviving the test
+    // above IS the depth decision, and with one sample per pixel there is no
+    // coverage left to compute -- no output is read, since the pass draws with
+    // colour writes masked off.
+    //
+    // Under alpha-to-coverage the alpha additionally chooses WHICH samples take
+    // depth, so that path cannot stop here; it runs on to the exit beside the
+    // moment generation, where finalOpacity exists. That is the whole reason
+    // this is two exits rather than one: the shipping AA path (TAA, one sample)
+    // never pays for a coverage number nothing will read.
+    if (depthOnly > 0 && alphaToCoverage == 0)
+        return;
+
     vec3 N;
     if (normalTexExists > 0) {
         // Re-orthonormalize the interpolated TBN (Gram-Schmidt) before
@@ -1158,6 +1181,23 @@ void main() {
             mboitAbsorbance(fresnelOpacity(coverage, materialOpacity, iorF0, NdotV));
         AccumOut = mboitMoments(absorbance, mboitWarpDepth(-ViewPos.z, oitNearFar));
         RevealageOut = vec4(absorbance);
+        return;
+    }
+
+    // The prepass's alpha-to-coverage exit, reached only when A2C is live -- the
+    // binary case left at the cutoff. Written to the SAME output the shading
+    // pass derives coverage from, and for the same reason recorded at NormalOut
+    // below: this driver takes A2C from the last colour output carrying an alpha
+    // channel, not from output 0. Feeding it a different number here would give
+    // the two passes different sample masks and GL_LEQUAL would then delete the
+    // samples they disagreed on.
+    //
+    // FragColor is written too, and is not redundant: it is the last
+    // alpha-bearing output when the normals G-buffer is off this frame.
+    if (depthOnly > 0) {
+        float depthCoverage = fresnelOpacity(coverage, materialOpacity, iorF0, NdotV);
+        FragColor = vec4(0.0, 0.0, 0.0, depthCoverage);
+        NormalOut = vec4(0.0, 0.0, 0.0, depthCoverage);
         return;
     }
 

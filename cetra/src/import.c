@@ -324,8 +324,9 @@ static void extract_material_properties(struct aiMaterial* ai_mat, Material* mat
     }
 
     // Extract glTF alpha mode and cutoff for hair/foliage transparency.
-    // Formats without alphaMode fall back to the opacity heuristic in
-    // material_finalize_alpha_mode once textures are loaded.
+    // Formats without alphaMode leave it OPAQUE here; the lane is decided from
+    // the opacity and the opacity map by classify() (draw_list.c), so nothing
+    // has to be written back once the textures arrive.
     struct aiString alphaMode;
     if (AI_SUCCESS == aiGetMaterialString(ai_mat, AI_MATKEY_GLTF_ALPHAMODE, &alphaMode)) {
         if (strcmp(alphaMode.data, "MASK") == 0) {
@@ -538,8 +539,6 @@ static void async_tex_callback(Texture* tex, void* user_data) {
         // upload's default wrap in the frame it arrives.
         texture_apply_wrap(tex, ctx->wrap_s, ctx->wrap_t);
         ctx->setter(ctx->material, tex);
-        // A late-arriving opacity map can flip the material to BLEND
-        material_finalize_alpha_mode(ctx->material);
         log_info("%s texture loaded async: %s", ctx->tex_type, tex->filepath);
     }
     free(ctx);
@@ -679,8 +678,6 @@ static Material* process_ai_material(struct aiMaterial* ai_mat, TexturePool* tex
     }
 
 #undef TSL_MAPMODE_RESET
-
-    material_finalize_alpha_mode(material);
 
     return material;
 }

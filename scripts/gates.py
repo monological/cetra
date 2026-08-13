@@ -2701,76 +2701,104 @@ def _forest_run(workdir, tag, extra, cam=None):
 
 MASK_FIXTURE = "mask_fixture.cscn"
 
-# Interiors of the two quads, as fractions of the frame so the arm reads the
-# same surface whatever the display scale reports. Inset well clear of the
-# silhouettes: the edges are where TAA and the geometric AA live, and neither is
-# what this measures.
-MASK_REF_BOX = (0.19, 0.34, 0.41, 0.63)
-MASK_CUT_BOX = (0.59, 0.34, 0.81, 0.63)
-# Mean linear luma of a lit quad against this fixture's backdrop. A load failure
-# leaves both boxes reading the same background, which would satisfy an equality
-# arm perfectly -- so the surfaces have to be shown to be THERE before their
-# agreement means anything.
+# Quad interiors as fractions of the frame, so the arm reads the same surface
+# whatever the display scale reports. Inset well clear of the silhouettes, which
+# is where TAA and the geometric AA live and neither is what this measures.
+#
+# Measured from the fixture rather than derived: they are tied to
+# mask_fixture.cscn's camera AND to the 4:3 that `render` renders at, so a box
+# that stopped landing on its quad would read the backdrop and fail loudly --
+# 0.048 against a 0.47 surface is not a near miss.
+#
+# REF and KEPT are frame-symmetric (0.2175 and 0.7812 about the centre), and
+# that is load-bearing: the vignette falls off with radius, so equal radii make
+# it cancel between the pair instead of biasing one. Re-centring either box on
+# its quad would quietly remove that.
+MASK_REF_BOX = (0.165, 0.42, 0.270, 0.58)
+MASK_KEPT_BOX = (0.729, 0.42, 0.834, 0.58)
+MASK_GONE_BOX = (0.448, 0.42, 0.553, 0.58)
+# Mean linear luma of a lit quad against this fixture's backdrop, which measures
+# 0.048. A load failure leaves every box reading that same background, which
+# would satisfy an equality arm perfectly -- so the surfaces have to be shown to
+# be THERE before their agreement means anything.
 MASK_LIT_FLOOR = 0.15
+# And the discarded quad has to be shown to be ABSENT. Nearer the backdrop than
+# to a lit surface, with room for the vignette and the tonemap toe.
+MASK_GONE_CEIL = 0.10
+MASK_GRID = 12
 
 
 def _mask_box_luma(pix, w, h, box):
-    """Mean linear luma over a fractional box, on a 12x12 grid."""
+    """Mean linear luma over a fractional box, on a MASK_GRID square grid."""
     x0, y0, x1, y1 = box
-    total, n = 0.0, 0
-    for iy in range(12):
-        for ix in range(12):
-            px = (x0 + (x1 - x0) * (ix + 0.5) / 12.0) * w
-            py = (y0 + (y1 - y0) * (iy + 0.5) / 12.0) * h
-            total += _linear_luma(pix, w, h, px, py)
-            n += 1
-    return total / n
+    n = MASK_GRID
+    samples = [_linear_luma(pix, w, h, (x0 + (x1 - x0) * (ix + 0.5) / n) * w,
+                            (y0 + (y1 - y0) * (iy + 0.5) / n) * h)
+               for iy in range(n) for ix in range(n)]
+    return sum(samples) / len(samples)
 
 
 def run_mask_gate(workdir):
-    """ALPHA_MASK is binary above the cutoff (spec 11.31).
+    """ALPHA_MASK is binary above the cutoff, and absent below it (spec 11.31).
 
     glTF's rule for MASK is that a fragment at or above alphaCutoff renders
-    fully opaque. The opaque lane used to inherit global SRC_ALPHA blending, so
-    a masked fragment at alpha 0.6 landed at 0.6 of itself over the CLEAR
-    COLOUR -- the pass runs before the skybox -- and nothing in the corpus could
-    see it. Every golden's masked geometry is either absent or, in
-    translucent_shadow's case, a caster held above the frame, so all 21 goldens
-    pass either way.
+    fully opaque and one below is discarded. The opaque lane used to inherit
+    global SRC_ALPHA blending, so a masked fragment at alpha 0.6 landed at 0.6
+    of itself over the CLEAR COLOUR -- the pass runs before the skybox -- and
+    nothing in the corpus could see it. Every golden's masked geometry is either
+    absent or, in translucent_shadow's case, a caster held above the frame, so
+    all 21 goldens pass either way.
 
-    Two coplanar quads in ONE frame rather than two renders: same light, same
-    normal, same base colour, and the only difference is that one carries a
-    COLOR_0 alpha of 0.6. No stored image, and no cross-run comparison to hold
-    still.
+    Three quads in ONE frame rather than three renders: same light, same normal,
+    same base colour, differing only in the COLOR_0 alpha they carry. No stored
+    image and no cross-run comparison to hold still.
 
-    --taa is what drops the engine to one sample, and it is load-bearing here
-    rather than cosmetic. Under alpha-to-coverage a fractional alpha is SUPPOSED
-    to become fractional sample coverage, so on the 4x MSAA path these two quads
-    legitimately differ and this invariant does not hold.
+    BOTH arms are needed and neither implies the other. Without the cutoff arm a
+    regression that stopped discarding renders every masked fragment, still
+    opaque, and passes -- which is the "masked geometry would render as solid
+    quads" failure render.c names.
+
+    --taa is what drops the engine to one sample, and it is load-bearing rather
+    than cosmetic: under alpha-to-coverage a fractional alpha is SUPPOSED to
+    become fractional sample coverage, so on the 4x MSAA path the kept quad
+    legitimately differs from the reference and this invariant does not hold.
+    Exposure and tonemap are pinned by the fixture's own .cscn.
     """
     scene = os.path.join(ROOT, "assets", MASK_FIXTURE)
     if not os.path.exists(scene):
-        print("  mask-opaque  SKIP  (mask_fixture.cscn not present)")
+        print(f"  mask-opaque  SKIP  ({MASK_FIXTURE} not present)")
         return []
 
     out = os.path.join(workdir, "mask_binary.ppm")
-    err = render(scene, out, ["--taa", "--headless-jitter", "--no-auto-exposure", "-E", "1.0"])
+    err = render(scene, out, ["--taa", "--headless-jitter"])
     if err:
         print(f"  mask-opaque  ERROR render failed: {err.strip()[-200:]}")
         return ["mask-opaque"]
 
+    failures = []
     w, h, pix = _read_ppm(out)
     ref = _mask_box_luma(pix, w, h, MASK_REF_BOX)
-    cut = _mask_box_luma(pix, w, h, MASK_CUT_BOX)
-    lit = ref >= MASK_LIT_FLOOR and cut >= MASK_LIT_FLOOR
+    kept = _mask_box_luma(pix, w, h, MASK_KEPT_BOX)
+    gone = _mask_box_luma(pix, w, h, MASK_GONE_BOX)
+
+    lit = ref >= MASK_LIT_FLOOR and kept >= MASK_LIT_FLOOR
     # Relative, not absolute: the quantity is "these are the same surface", and
     # the exposure and tonemap are free to move what that surface reads as.
-    delta = abs(ref - cut) / ref if ref > 0 else 1.0
+    delta = abs(ref - kept) / ref if ref > 0 else 1.0
     ok = lit and delta <= 0.02
-    print(f"  mask-opaque  {'PASS' if ok else 'FAIL'}  masked quad {cut:.4f} vs opaque "
+    print(f"  mask-opaque  {'PASS' if ok else 'FAIL'}  masked quad {kept:.4f} vs opaque "
           f"reference {ref:.4f} linear luma, {delta * 100.0:.2f}% apart (want <= 2%, and both "
           f"lit above {MASK_LIT_FLOOR}: {lit}). Blending the masked lane reads ~36% low.")
-    return [] if ok else ["mask-opaque"]
+    if not ok:
+        failures.append("mask-opaque")
+
+    ok = gone <= MASK_GONE_CEIL
+    print(f"  mask-cutoff  {'PASS' if ok else 'FAIL'}  below-cutoff quad reads {gone:.4f} "
+          f"(want <= {MASK_GONE_CEIL}, i.e. backdrop; a lit one reads {kept:.4f})")
+    if not ok:
+        failures.append("mask-cutoff")
+
+    return failures
 
 
 RAIDEN = os.path.join(ROOT, "my_models", "raiden", "source", "raiden_textured_rigged.glb")
@@ -2839,6 +2867,7 @@ def run_prepass_gate(workdir):
     # drifting quietly: raiden is the corpus's one masked subject and is 0 px
     # run-to-run, so any movement is the flag.
     rai_off = os.path.join(workdir, "prepass_rai_off.ppm")
+    rai_off2 = os.path.join(workdir, "prepass_rai_floor.ppm")
     rai_on = os.path.join(workdir, "prepass_rai_on.ppm")
     if not os.path.exists(RAIDEN):
         # my_models is not in every checkout. SKIP rather than pass: this is the
@@ -2846,25 +2875,31 @@ def run_prepass_gate(workdir):
         # than no arm at all.
         print("  prepass-masked SKIP  (my_models/raiden not present)")
         err = None
-    elif (err := _raiden_render(rai_off, []) or _raiden_render(rai_on, ["--depth-prepass"])):
+    elif (err := _raiden_render(rai_off, []) or _raiden_render(rai_off2, []) or
+                 _raiden_render(rai_on, ["--depth-prepass"])):
         print(f"  prepass-masked ERROR render failed: {err.strip()[-200:]}")
         failures.append("prepass-masked")
     else:
+        # The floor, rendered rather than asserted. It used to be a comment
+        # saying raiden is 0 px run-to-run, which was true and was never
+        # checked -- fine against 46,314, not fine against 395, where an
+        # unmeasured floor is within an order of magnitude of the signal.
+        floor, _ = compare(rai_off, rai_off2)
         ae, _ = compare(rai_off, rai_on)
-        # 46,314 when this arm was written; 395 once the opaque lane stopped
-        # blending (spec 11.31). Most of what it was measuring was never the
-        # prepass -- a coincident card that LEQUAL lets through used to composite
-        # a second time, and now it overwrites with the value already there. What
-        # is left is the cards whose colours genuinely differ, where which one
-        # wins is still visible.
+        # 46,314 when this arm was written; 395 now, and BOTH reductions have
+        # causes worth keeping apart. The opaque lane stopping blending took most
+        # of it -- a coincident card that LEQUAL lets through used to composite a
+        # second time and now overwrites with the value already there. Admitting
+        # masked geometry to the prepass took none of it, which was a surprise.
         #
-        # Still a bound rather than 0: masked geometry sits the prepass out until
-        # 11.31 phase 2 admits it, and this becomes prepass-identity on raiden
-        # when it does.
-        ok = 0 < ae <= 2000
+        # What is left is inherent to HAVING a prepass and will not reach 0: the
+        # shading pass must test LEQUAL, so two surfaces at exactly equal depth
+        # both pass and the last drawn wins, where GL_LESS rejected the second.
+        # Same mechanism as cornell_box's 1 px coplanar tie.
+        ok = floor < ae <= 2000
         print(f"  prepass-masked {'PASS' if ok else 'FAIL'}  raiden moves {ae} px under "
-              f"--depth-prepass (want 1..2000; NOT 0 -- masked geometry sits the "
-              f"prepass out, see spec 11.31)")
+              f"--depth-prepass against a {floor} px floor (want above the floor and "
+              f"<= 2000; coincident surfaces under LEQUAL, see spec 11.31)")
         if not ok:
             failures.append("prepass-masked")
 

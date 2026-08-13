@@ -280,9 +280,16 @@ static void _update_camera_uniforms(ShaderProgram* program, Camera* camera) {
 // Draws one item, carrying `instances` objects. Visibility is the caller's:
 // once a run is formed the chunk holds exactly these objects, so nothing here
 // may decline to draw.
+//
+// `depth_only` is the depth prepass borrowing this function to draw masked
+// geometry with the real shader stopped at its coverage decision. It is a
+// parameter rather than a second function for the reason the pass itself gives:
+// everything below -- the program switch, the material uniforms and their
+// textures, skinning, the alpha-to-coverage bracket, the instanced draw -- is
+// what the two passes have to agree on, and one copy cannot disagree.
 static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* item, Camera* camera,
                          mat4 view, mat4 projection, RenderMode render_mode, SubmitState* state,
-                         OitSubpass oit_pass, size_t instances) {
+                         OitSubpass oit_pass, size_t instances, bool depth_only) {
     SceneNode* node = item->node;
     Mesh* mesh = item->mesh;
     // Only the opaque pass submits the opaque lane, so the lane says which pass
@@ -349,6 +356,12 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
             _upload_skin_preint_uniforms(engine, u);
             uniform_set_int(u, "clusterDebug", engine->cluster_debug ? 1 : 0);
             uniform_set_int(u, "oitPass", oit_pass);
+            // Asserted by every pass rather than cleaned up by the one that sets
+            // it: the prepass and the shading pass carry their own SubmitState,
+            // so each switches the program itself and each says which mode it
+            // wants. A shading pass that inherited a stale 1 here would return
+            // before writing any colour and the surface would simply vanish.
+            uniform_set_int(u, "depthOnly", depth_only ? 1 : 0);
             uniform_set_int(u, "oitMomentWeighted", engine->moments_this_frame ? 1 : 0);
             // Split ambient specular only where attachment 7 is live: the
             // opaque pass of a split-mode PBR frame. The late/OIT passes and
@@ -625,8 +638,12 @@ void submit_draw_run(SubmitState* state, UniformManager* u, const DrawItem* item
 //
 // Named once rather than spelled out at the two places that ask, which is the
 // shape draw_run_can_join's contract asks for. NOT a DrawItem flag: it is
-// derivable from `lane` and DRAW_ALPHA_MASKED, and draw_list.h holds that a
-// second encoding of one fact is a second thing to keep in agreement.
+// derivable from `lane`, and draw_list.h holds that a second encoding of one
+// fact is a second thing to keep in agreement.
+//
+// Masked geometry is IN, since 11.31 -- it is drawn by its own program in
+// depth-only mode rather than by the position-only one, so there is no coverage
+// decision here to get wrong.
 //
 // The program test is the one that is not obvious. Lane is decided by the
 // MATERIAL's alpha mode, so it says nothing about which vertex stage will shade
@@ -634,42 +651,34 @@ void submit_draw_run(SubmitState* state, UniformManager* u, const DrawItem* item
 // with a program whose position they do not use. See ShaderProgram.
 static bool item_is_prepassable(const DrawItem* item) {
     const Material* mat = item->mesh->material;
-    return item->lane == DRAW_LANE_OPAQUE && !(item->flags & DRAW_ALPHA_MASKED) &&
-           mat->shader_program && mat->shader_program->depth_prepass_safe;
+    return item->lane == DRAW_LANE_OPAQUE && mat->shader_program &&
+           mat->shader_program->depth_prepass_safe;
 }
 
-// Position-only depth for opaque geometry that cannot discard, so the shading
-// pass rejects hidden fragments before the uber-shader runs. Returns whether it
-// actually drew: the caller may only switch the shading pass to GL_LEQUAL when
-// there is prepass depth behind it.
+// Depth for the whole opaque lane, so the shading pass rejects hidden fragments
+// before the uber-shader runs. Returns whether it actually drew: the caller may
+// only switch the shading pass to GL_LEQUAL when there is prepass depth behind
+// it.
 //
-// ALPHA-MASKED MATERIALS SIT THIS OUT, and that is the design rather than a
-// shortcut. Their coverage depends on the KHR texture transform, the POM march,
-// the vertex-colour alpha and -- under alpha-to-coverage -- on finalOpacity,
-// which needs the normal map and the TBN. Reproducing that here means
-// reproducing most of pbr_frag; getting it wrong by a fragment either drills a
-// hole through the canopy or writes depth where no leaf was. What they still
-// gain is being tested against a complete OPAQUE depth buffer, which is what
-// rejects foliage hidden behind terrain and trunks.
+// TWO PROGRAMS, and the split is the design. Geometry that cannot discard takes
+// the lean position-only program. Masked geometry takes its OWN pbr program with
+// depthOnly = 1, which is what admits it to the pass at all: its coverage
+// depends on the KHR texture transform, the POM march, the vertex-colour alpha
+// and -- under alpha-to-coverage -- on finalOpacity, and running the real
+// shader means none of that can drift from what the shading pass decides. A
+// fragment of drift either drills a hole through the canopy or writes depth
+// where no leaf was.
 //
-// The shading pass then runs GL_LEQUAL rather than GL_EQUAL. Equal is the
-// textbook pairing and is wrong here: masked geometry has no prepass depth to
-// equal, so it would fail against whatever the prepass left.
+// It costs pbr_vert twice on masked draws -- wind for two frames, the motion
+// vectors, the tangent basis -- against not shading a leaf twice. That is the
+// trade the whole pass is built on; foliage is fragment-bound.
 //
-// AND THAT COSTS PIXELS ON MASKED GEOMETRY -- measured, not feared. Masked
-// materials sat the prepass out, so LEQUAL leaves them tested against
-// THEMSELVES: two coincident cards at one depth both pass where GL_LESS
-// rejected the second, and masked materials still blend into attachment 0. The
-// raiden recipe moves 46,314 px at PAE 97/255 under --depth-prepass, against a
-// verified 0 px floor, and the diff is the groom and the shoulder decal.
-// `instancing_fixture` cannot see it -- it is purely opaque, so nothing sits the
-// pass out -- which is why prepass-raiden exists beside prepass-identity.
-//
-// The fix is the deferred one: prepass masked geometry too, through a shared
-// coverage chunk, and then EQUAL becomes correct and this whole caveat goes.
-// Until then --depth-prepass is 0 px on opaque content and not on masked.
-static bool _submit_depth_prepass(Engine* engine, const Scene* scene, const DrawList* list,
-                                  mat4 view, mat4 projection, const Frustum* frustum) {
+// The shading pass still runs GL_LEQUAL rather than GL_EQUAL, because a program
+// without depth_prepass_safe (`shape`) sits the pass out and has no prepass
+// depth to equal.
+static bool _submit_depth_prepass(Engine* engine, Scene* scene, const DrawList* list,
+                                  Camera* camera, mat4 view, mat4 projection,
+                                  RenderMode render_mode, const Frustum* frustum) {
     if (!engine->depth_prepass_program || !scene || !list)
         return false;
 
@@ -704,20 +713,48 @@ static bool _submit_depth_prepass(Engine* engine, const Scene* scene, const Draw
             continue;
         }
 
-        // The same helper the shading pass uses, with no masked test of its own:
-        // classify() derives lane and flags from the MESH's material alone, and
-        // draw_run_can_join requires mesh equality, so anything that can join a
-        // run shares the head's lane and flags by construction. A masked item can
-        // only end a run where a mesh change already would.
+        // Masked geometry is drawn by its OWN program in depth-only mode, not by
+        // the lean one. That is what lets it be prepassed at all: the coverage
+        // decision is then the same code the shading pass runs rather than a
+        // second copy of it, and gl_Position comes from the same program rather
+        // than from two that promise to agree.
+        bool masked = (item->flags & DRAW_ALPHA_MASKED) != 0;
+        const ShaderProgram* draw_program =
+            masked ? item->mesh->material->shader_program : program;
+
+        // Run formation has to match the shading pass EXACTLY, and `instanced`
+        // is a property of whichever program will draw -- read off the lean one
+        // for a masked item it would batch where the shading pass does not, and
+        // gl_InstanceID would then index a different transform.
+        //
+        // The lane/flag test is the shading pass's own: classify() derives both
+        // from the MESH's material, and draw_run_can_join requires mesh equality,
+        // so a run is homogeneous in maskedness by construction.
         size_t run = 1;
-        if (engine->instancing_enabled && engine->instance_ubo && program->instanced)
+        if (engine->instancing_enabled && engine->instance_ubo && draw_program->instanced)
             run = _visible_run(list, i, 1u << DRAW_LANE_OPAQUE, frustum);
         if (stats)
             stats->meshes_seen += run - 1;
+        // `shading` follows the program, not the pass. pbr_vert reads the normal
+        // matrix out of the block to build the TBN, and under alpha-to-coverage
+        // the TBN reaches the coverage number through NdotV -- so a masked run
+        // uploaded as depth-only would carry a stale basis into the very value
+        // the two passes must agree on.
         if (run > 1)
-            instance_chunk_upload(engine->instance_ubo, &chunk, list, i, run, false);
+            instance_chunk_upload(engine->instance_ubo, &chunk, list, i, run, masked);
+
+        if (masked) {
+            _submit_item(engine, scene, item, camera, view, projection, render_mode, &state,
+                         OIT_SUBPASS_NONE, run, true);
+            i += run - 1;
+            continue;
+        }
 
         Mesh* mesh = item->mesh;
+        // Re-asserted per item rather than once before the loop: a masked run
+        // between two opaque ones binds its own program, and the lean one has to
+        // come back. Costs nothing when it is already current.
+        submit_use_program(&state, program->id);
         // Only for a draw that carries one object, for the reason
         // _submit_item's own guard records: a batched draw reads the transform
         // from the instance block, and writing `model` anyway dirties the
@@ -799,7 +836,7 @@ static void _submit_lanes(const Engine* engine, Scene* scene, const DrawList* li
             instance_chunk_upload(engine->instance_ubo, &chunk, list, i, run, true);
 
         _submit_item(engine, scene, item, camera, view, projection, render_mode, state, oit_pass,
-                     run);
+                     run, false);
         i += run - 1;
     }
 }
@@ -1058,6 +1095,29 @@ void render_current_scene(Engine* engine) {
     // false when it drew nothing, so a failed shader compile loses the
     // optimisation instead of silently flipping coplanar tie-breaking under a
     // depth buffer no prepass filled.
+    // Nothing this lane draws is translucent, so nothing it draws should blend.
+    // Blending is enabled globally (engine.c) with per-attachment disables for
+    // slots >= 1, which left slot 0 blending through a pass that never asked for
+    // it: an ALPHA_MASK fragment above the cutoff wrote fractional alpha and got
+    // lerped toward the CLEAR COLOUR, since this pass runs before the skybox.
+    // glTF says MASK is binary -- opaque above the cutoff -- so the blend was
+    // never anything but a darkening (spec 11.31).
+    //
+    // Scoped to the lane and not to engine_set_scene_draw_buffers: 11.19 records
+    // that doing it there blacked out 60% of the frame, because the skybox rides
+    // the same state.
+    //
+    // Under alpha-to-coverage it is the repair Godot spells
+    // ALPHA_TO_COVERAGE_AND_TO_ONE, for the colour: coverage has already spent
+    // the alpha, and spending it again in the blend equation squares it. Godot
+    // additionally forces the written alpha to 1 where this leaves the coverage
+    // value in the destination -- inert here, since the resolve is a blit and
+    // every post pass reads SOURCE alpha.
+    //
+    // Opened before the prepass so one bracket covers the whole opaque phase,
+    // rather than the prepass drawing the same geometry under different state
+    // from the pass it is supposed to agree with.
+    glDisable(GL_BLEND);
     bool prepassed = false;
     if (engine->depth_prepass_enabled && !engine->capturing && render_mode == RENDER_MODE_PBR) {
         if (!engine->depth_prepass_program && !engine->depth_prepass_failed) {
@@ -1071,25 +1131,9 @@ void render_current_scene(Engine* engine) {
             if (engine->depth_prepass_program)
                 add_shader_program_to_engine(engine, engine->depth_prepass_program);
         }
-        prepassed =
-            _submit_depth_prepass(engine, scene, opaque_list, *view, draw_projection, &frustum);
+        prepassed = _submit_depth_prepass(engine, scene, opaque_list, camera, *view,
+                                          draw_projection, render_mode, &frustum);
     }
-    // Nothing this lane draws is translucent, so nothing it draws should blend.
-    // Blending is enabled globally (engine.c) with per-attachment disables for
-    // slots >= 1, which left slot 0 blending through a pass that never asked for
-    // it: an ALPHA_MASK fragment above the cutoff wrote fractional alpha and got
-    // lerped toward the CLEAR COLOUR, since this pass runs before the skybox.
-    // glTF says MASK is binary -- opaque above the cutoff -- so the blend was
-    // never anything but a darkening (spec 11.31).
-    //
-    // Scoped to the lane and not to engine_set_scene_draw_buffers: 11.19 records
-    // that doing it there blacked out 60% of the frame, because the skybox rides
-    // the same state.
-    //
-    // Under alpha-to-coverage this is the same repair Godot spells
-    // ALPHA_TO_COVERAGE_AND_TO_ONE -- coverage has already spent the alpha, and
-    // spending it a second time in the blend equation squares it.
-    glDisable(GL_BLEND);
     // Opened AFTER the prepass, deliberately. It measures samples the
     // uber-shader ran for, and the prepass's own samples pass the depth test
     // too -- counting them made the number RISE when the pass that exists to
@@ -1098,12 +1142,21 @@ void render_current_scene(Engine* engine) {
     _submit_lanes(engine, scene, opaque_list, camera, *view, draw_projection, render_mode,
                   &submit_state, &frustum, 1u << DRAW_LANE_OPAQUE, OIT_SUBPASS_NONE);
     profiler_samples_end(engine->profiler);
-    glEnable(GL_BLEND);
     if (prepassed)
         glDepthFunc(GL_LESS);
     _submit_gizmos(&scene->draw_list, *view, draw_projection, &submit_state);
     profiler_scope_end(engine->profiler);
     engine_set_scene_draw_buffers(engine, false);
+    // Restored only once the G-buffer scope is closed. glEnable(GL_BLEND) is
+    // blanket -- it re-enables every draw buffer -- so issuing it while the
+    // multi-target list is still bound would undo the per-attachment disables
+    // engine_set_scene_draw_buffers made for slots >= 1, and the gizmos above
+    // would blend undefined values into normals, aux and albedo. engine.c
+    // records the same hazard, and the shadow catcher is already ordered around
+    // it. So the gizmos now draw unblended where they used to blend, which is
+    // no change to the picture -- xyz_frag writes alpha 1, making SRC_ALPHA an
+    // identity -- and the correct state for a debug overlay that owns its pixel.
+    glEnable(GL_BLEND);
 
     // Skybox after opaques (depth-tested against them at the far plane).
     // Skipped in debug render modes: those frames bypass tone mapping, and

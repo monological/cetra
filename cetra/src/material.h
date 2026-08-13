@@ -247,10 +247,6 @@ void material_param_set(Material* material, const MaterialParam* param, const fl
 Material* create_material();
 void free_material(Material* material);
 
-// Derive ALPHA_BLEND from opacity/opacity_tex when no explicit mode was set
-// (call after all material properties and textures are assigned)
-void material_finalize_alpha_mode(Material* material);
-
 void set_material_shader_program(Material* material, ShaderProgram* shader_program);
 
 void set_material_albedo_tex(Material* material, Texture* texture);

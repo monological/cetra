@@ -221,17 +221,6 @@ Material* create_material() {
     return material;
 }
 
-void material_finalize_alpha_mode(Material* material) {
-    if (!material)
-        return;
-    // Formats without an explicit alpha mode: translucency is implied by a
-    // fractional opacity or a dedicated opacity map
-    if (material->alpha_mode == ALPHA_OPAQUE &&
-        (material->opacity < 1.0f || material->opacity_tex)) {
-        material->alpha_mode = ALPHA_BLEND;
-    }
-}
-
 void free_material(Material* material) {
     if (material) {
         if (material->name)

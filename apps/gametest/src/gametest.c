@@ -56,13 +56,6 @@ static SceneNode* create_box_node(Scene* scene, vec3 size, vec3 color, bool glas
     if (glass) {
         mat->roughness = 0.05f;
         mat->metallic = 0.0f;
-        // Stated, not implied. A fractional opacity is what makes this
-        // translucent, and the lane is chosen from alpha_mode alone -- left
-        // OPAQUE it drew in the opaque lane and was translucent only because
-        // that lane used to blend, which it no longer does. Importers get this
-        // promotion from material_finalize_alpha_mode; materials built in C do
-        // not.
-        mat->alpha_mode = ALPHA_BLEND;
         mat->opacity = 0.2f;
         mat->ior = 1.5f;
     } else {

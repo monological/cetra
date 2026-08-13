@@ -71,7 +71,22 @@ static bool push_gizmo(DrawList* list, SceneNode* node) {
 static void classify(const Mesh* mesh, uint8_t* lane, uint8_t* flags) {
     const Material* mat = mesh->material;
     bool transmissive = mat->transmission > 0.0f;
-    bool blend = mat->alpha_mode == ALPHA_BLEND;
+    // Translucency is IMPLIED by a fractional opacity or a dedicated opacity
+    // map, whatever the declared mode -- formats that carry no alpha mode rely
+    // on it, and so does anything built in C or overridden from a .cscn.
+    //
+    // Derived here rather than written back onto the material at load, which is
+    // where it used to live: only the two importers ever called that, so the
+    // GUI's opacity slider and .cscn material overrides could put a fractional
+    // opacity on a material that stayed in the opaque lane. That was survivable
+    // while the lane blended by accident and stopped being so the moment it
+    // correctly did not (spec 11.31) -- the slider simply did nothing. As a
+    // predicate it cannot be skipped by a caller, and it picks up an opacity map
+    // that arrives late from the async loader for free, since the list is
+    // rebuilt when the graph changes.
+    bool blend = mat->alpha_mode == ALPHA_BLEND ||
+                 (mat->alpha_mode == ALPHA_OPAQUE &&
+                  (mat->opacity < 1.0f || mat->opacity_tex != NULL));
     bool masked = mat->alpha_mode == ALPHA_MASK;
     // Foliage opts alpha-masked geometry back into casting: leaf cards are
     // centimetres across, so an alpha test resolves them, where hair strands at
