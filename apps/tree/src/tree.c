@@ -262,157 +262,28 @@ static float sun_azimuth = 235.0f;
 static MouseDragController* drag_controller = NULL;
 
 /*
- * Generate island mesh - a domed disc
- */
-static void generate_island_mesh(Mesh* mesh, float radius, float height, int rings, int segments,
-                                 float uv_tiles) {
-    // Create a domed disc with rings from center to edge
-    int num_vertices = 1 + rings * segments; // center + rings
-    int num_triangles = segments + (rings - 1) * segments * 2;
-
-    mesh->vertex_count = num_vertices;
-    mesh->vertices = malloc(num_vertices * 3 * sizeof(float));
-    mesh->normals = malloc(num_vertices * 3 * sizeof(float));
-    mesh->tex_coords = malloc(num_vertices * 2 * sizeof(float));
-    mesh->tangents = malloc(num_vertices * 4 * sizeof(float)); // xyz + handedness
-    mesh->index_count = num_triangles * 3;
-    mesh->indices = malloc(mesh->index_count * sizeof(unsigned int));
-
-    // Center vertex (top of dome)
-    mesh->vertices[0] = 0.0f;
-    mesh->vertices[1] = height;
-    mesh->vertices[2] = 0.0f;
-    mesh->normals[0] = 0.0f;
-    mesh->normals[1] = 1.0f;
-    mesh->normals[2] = 0.0f;
-    mesh->tangents[0] = 1.0f;
-    mesh->tangents[1] = 0.0f;
-    mesh->tangents[2] = 0.0f;
-    mesh->tangents[3] = 1.0f; // cross((0,1,0), (1,0,0)) = (0,0,1)
-    mesh->tex_coords[0] = 0.5f * uv_tiles;
-    mesh->tex_coords[1] = 0.5f * uv_tiles;
-
-    // Generate ring vertices
-    int vi = 1;
-    for (int r = 1; r <= rings; r++) {
-        float ring_radius = radius * (float)r / rings;
-        float ring_height = height * (1.0f - ((float)r / rings) * ((float)r / rings));
-
-        for (int s = 0; s < segments; s++) {
-            float angle = 2.0f * (float)M_PI * s / segments;
-            float x = ring_radius * cosf(angle);
-            float z = ring_radius * sinf(angle);
-
-            mesh->vertices[vi * 3] = x;
-            mesh->vertices[vi * 3 + 1] = ring_height;
-            mesh->vertices[vi * 3 + 2] = z;
-
-            // True surface normal of the dome y = height * (1 - (d/radius)^2),
-            // whose slope at distance d is 2*height*d/radius^2. The old normal
-            // was the radial direction, which tilted the ground up to 60 degrees
-            // off vertical -- it faced sideways and never caught the sun.
-            float slope = 2.0f * height * ring_radius / (radius * radius);
-            vec3 normal = {cosf(angle) * slope, 1.0f, sinf(angle) * slope};
-            glm_vec3_normalize(normal);
-            mesh->normals[vi * 3] = normal[0];
-            mesh->normals[vi * 3 + 1] = normal[1];
-            mesh->normals[vi * 3 + 2] = normal[2];
-
-            // Tangent along the circle (perpendicular to radial). The shader
-            // derives the bitangent as cross(N, T), which for this normal and
-            // tangent works out to (cos, -slope, sin) -- the slope-tilted
-            // vector this used to store explicitly -- so the handedness is +1.
-            mesh->tangents[vi * 4] = -sinf(angle);
-            mesh->tangents[vi * 4 + 1] = 0.0f;
-            mesh->tangents[vi * 4 + 2] = cosf(angle);
-            mesh->tangents[vi * 4 + 3] = 1.0f;
-
-            // UV coordinates, tiled so a terrain-sized disc keeps texel detail
-            mesh->tex_coords[vi * 2] = (0.5f + 0.5f * x / radius) * uv_tiles;
-            mesh->tex_coords[vi * 2 + 1] = (0.5f + 0.5f * z / radius) * uv_tiles;
-
-            vi++;
-        }
-    }
-
-    // Generate indices
-    int ii = 0;
-
-    // Center fan (first ring). Wound counter-clockwise as seen from above, so
-    // the lit side faces the sky -- the original order was reversed, which put
-    // every ground triangle's front face underground where back-face culling
-    // threw it away.
-    for (int s = 0; s < segments; s++) {
-        mesh->indices[ii++] = 0;
-        mesh->indices[ii++] = 1 + (s + 1) % segments;
-        mesh->indices[ii++] = 1 + s;
-    }
-
-    // Remaining rings
-    for (int r = 1; r < rings; r++) {
-        int ring_start = 1 + (r - 1) * segments;
-        int next_ring_start = 1 + r * segments;
-
-        for (int s = 0; s < segments; s++) {
-            int curr = ring_start + s;
-            int next = ring_start + (s + 1) % segments;
-            int curr_outer = next_ring_start + s;
-            int next_outer = next_ring_start + (s + 1) % segments;
-
-            // Two triangles per quad
-            mesh->indices[ii++] = curr;
-            mesh->indices[ii++] = next_outer;
-            mesh->indices[ii++] = curr_outer;
-
-            mesh->indices[ii++] = curr;
-            mesh->indices[ii++] = next;
-            mesh->indices[ii++] = next_outer;
-        }
-    }
-
-    mesh->draw_mode = MESH_TRIANGLES;
-    // Required: the renderer frustum-culls on this. Left at the zero AABB
-    // create_mesh starts with, the ground collapses to a point at the origin
-    // and gets culled the moment that point leaves the view.
-    calculate_aabb(mesh);
-}
-
-/*
- * Create the ground
- *
- * Wide enough to reach the horizon: at the old radius of 120 the disc read as
- * a saucer floating in the sky's dark virtual ground rather than as terrain.
- * The dome is nearly flat across the near field and falls away at the rim, and
- * it is dropped by its own height so its crown lands at y = 0, where the tree
- * roots start.
- */
-// The one place the dome's shape is defined. generate_island_mesh builds its
-// rings from the same expression, and grass roots itself with this, so the
-// surface and the things standing on it cannot drift apart. Includes the node
-// translation, so the value is a world height ready to use.
-/*
  * The sea (spec 11.32). ON by default here, unlike `render` and `forest`, because
  * this app's ground is not a landscape that happens to end -- it is a dome, and a
  * dome surrounded by nothing reads as a saucer floating in the sky. `--no-water`
  * returns the old dry framing.
  *
- * The level is derived from the dome rather than picked: the ground drops
- * GROUND_HEIGHT over GROUND_RADIUS as height = H*(1 - t^2) - H, so a level of
- * -H*t^2 puts the shoreline at radius t*GROUND_RADIUS. At 0.35 the shore lands
- * around 315 units out, which is where this app's camera (600 back, canopy 250
- * tall) frames it as an island rather than as a puddle or a horizon.
+ * The level is DERIVED from the dome, not picked: over y = H*(1 - t^2) - H a level of
+ * -H*t^2 puts the waterline at exactly t*GROUND_RADIUS, so changing the island's shape
+ * moves the sea to match instead of needing it re-tuned. See ground.h for the shape and for
+ * why GROUND_SHORE_T is where it is.
  *
  * The wave train is scaled to THIS app's units, not carried over from the water
  * fixture. A trunk here is 125 units, so the fixture's 6-unit wavelength would be
  * invisible.
  */
-#define TREE_WATER_SHORE_T 0.35f
-#define TREE_WATER_LEVEL (-GROUND_HEIGHT * TREE_WATER_SHORE_T * TREE_WATER_SHORE_T)
-// The SHOALING BED's domain: past the dome's rim, so the shore has bed to shoal against on
-// both sides of the waterline. It is not what makes the sea reach the horizon -- since spec
-// 11.34 the grid is projected from the frustum and does that at any extent -- so this is
-// sized for the shoal ramp and nothing else.
-#define TREE_WATER_EXTENT 1100.0f
+#define TREE_WATER_LEVEL (-GROUND_HEIGHT * GROUND_SHORE_T * GROUND_SHORE_T)
+// The SHOALING BED's domain, and nothing else -- since spec 11.34 the grid is projected from
+// the frustum and reaches the horizon at any extent. So this is sized for the SHORE BAND
+// rather than for the island: tight enough that bed texels land on the shoal ramp (3.1 units
+// per texel here, against a ramp 8.4 units wide), and clear of the waterline at 310 on both
+// sides. Outside it the bed field reads its edge, which is open water -- correct, because the
+// per-fragment water column comes from the depth buffer and not from here.
+#define TREE_WATER_EXTENT 400.0f
 
 // WaterHeightFn over the dome. ground_height_at takes no context -- it reads two
 // compile-time constants -- so the adapter drops the unused pointer rather than the
@@ -422,20 +293,20 @@ static float tree_bed_height(void* ctx, float x, float z) {
     return ground_height_at(x, z);
 }
 
-float ground_height_at(float x, float z) {
-    float d = sqrtf(x * x + z * z);
-    if (d >= GROUND_RADIUS)
-        return -GROUND_HEIGHT;
-    float t = d / GROUND_RADIUS;
-    return GROUND_HEIGHT * (1.0f - t * t) - GROUND_HEIGHT;
-}
-
+/*
+ * Create the ground.
+ *
+ * Wide enough to reach the horizon: at the old radius of 120 the disc read as a saucer
+ * floating in the sky's dark virtual ground rather than as terrain. Built about its crown
+ * and translated down by its own height, so the crown lands at y = 0 where the tree roots
+ * start -- which is the convention ground_height_at reports in.
+ */
 static void create_island(SceneNode* parent) {
     island_node = create_node();
     set_node_name(island_node, "ground");
 
     Mesh* mesh = create_mesh();
-    generate_island_mesh(mesh, GROUND_RADIUS, GROUND_HEIGHT, 24, 64, 40.0f);
+    ground_build_mesh(mesh, 24, 64, 40.0f);
     mesh->material = island_material;
 
     glm_mat4_identity(island_node->original_transform);
@@ -856,11 +727,15 @@ static void create_falling_leaves(Engine* engine, Scene* scene, float canopy_rad
     particle_emitter_add_module(em, particle_module_update_drift(fall));
     particle_emitter_add_module(em, particle_module_update_integrate(0.96f));
 
-    // The ground's crown sits at y = 0.
-    vec3 ground_p = {0.0f, 0.0f, 0.0f};
-    vec3 ground_n = {0.0f, 1.0f, 0.0f};
-    particle_emitter_add_module(
-        em, particle_module_collider_plane(ground_p, ground_n, 0.0f));
+    // Litter lands ON the dome, which a plane cannot follow: a plane at the crown leaves
+    // every leaf outside the trunk floating, and the deeper the island the further. The
+    // dome's own curvature-matched sphere does follow it -- to 0.01 units under the canopy
+    // and 2 units at the rim -- and is an analytic collider the particle system already has.
+    vec3 fit_center = GLM_VEC3_ZERO_INIT;
+    float fit_radius = ground_sphere_fit(fit_center);
+    particle_emitter_add_module(em,
+                                particle_module_collider_sphere(fit_center, fit_radius,
+                                                                COLLIDER_KEEP_OUT, 0.0f, 0.0f));
 
     particle_system_add_emitter(sys, em);
     add_particle_system_to_scene(scene, sys);
