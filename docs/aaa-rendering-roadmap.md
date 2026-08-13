@@ -845,28 +845,37 @@ course); Schneider & Vos, *The Real-Time Volumetric Cloudscapes of Horizon Zero 
 — already shipped as B2.
 **Depends on:** B1 (shipped), B2 (shipped); surface half on D0.
 
-### D3. Tessellated water — SHIPPED as specs 11.32 + 11.33, and NOT tessellated
+### D3. Tessellated water — SHIPPED as specs 11.32 + 11.33 + 11.34, and NOT tessellated
 The flagship surface landed: Gerstner and Tessendorf FFT wave models, Beer-Lambert absorption,
 caustics and foam from the surface Jacobian, shoaling against a bed provider, an underwater medium,
 and a `.cscn` block. It exercises the four subsystems this entry named it for.
 
 **The tessellation rationale did not survive, and that is the entry's lesson.** This item was framed
-around unspent GL 4.0 tessellation headroom, and water never needed it. Geometry clipmaps supply the
-same thing — near-field detail without a uniform grid's waste — as **five instanced rings snapped to
-the coarsest level's cell** (11.33 phase 1), which costs two draws and no new pipeline stage. The
-patch-density problem tessellation solves is the one a clipmap already solved in 2005, and the paper
-saying so is cited two entries down under D4.
+around unspent GL 4.0 tessellation headroom, and water never needed it. The patch-density problem
+tessellation solves is a *screen-space sampling* problem, and it has had screen-space answers since
+2004 and 2005 — neither of which needs a pipeline stage.
 
-11.32 deferred the clipmap on the grounds that instanced rings mismatch at their boundaries and
-produce a coplanar depth tie. That was arithmetic nobody had done: snapping every level to the
-*coarsest* cell makes each level's cell divide it exactly and every half-extent an integer multiple
-of it, so the rings tile with no gap and no overlap. Measured across five rings at a grazing camera:
-no seam, no sky through the surface.
+**The mesh went through both of them, in that order, and the second one is what ships.** 11.33 phase 1
+replaced 11.32's uniform world grid with a geometry clipmap: five instanced rings snapped to the
+coarsest level's cell, which — against 11.32's own deferral, on arithmetic nobody had done — tile with
+no gap, no overlap and no coplanar tie, because each level's cell divides the coarsest exactly. That
+worked and nothing recorded about it was false. **What it could not do was reach the horizon**, and the
+reason is the same snap: reach and near-field detail are welded to one number, so pushing the extent
+out coarsened the finest cell until the swell disappeared. The surface stopped 5° short while a comment
+claimed otherwise. 11.34 replaced it with a **projected grid** (Johanson 2004): a fixed lattice in NDC,
+one draw, each vertex a ray onto the still plane. Density exact rather than in 2× steps, no
+T-junctions, reach decoupled from detail — and the same triangle budget the rings spent.
+
+**The far field then became a filtering problem rather than a mesh-reach one**, which is the part
+neither mesh scheme addresses: distant cells cover more than a wave period, so each model drops what
+sits under its footprint and hands the removed slope energy to roughness. That is a BRDF answer to a
+geometry question, and it is where the remaining detail goes once no mesh can carry it.
 
 **So the tessellation stage is still entirely unspent** — POM silhouettes and D4 terrain remain its
 candidate first consumers, and neither inherits a pipeline from here.
-**Refs.** Tessendorf, *Simulating Ocean Water* (SIGGRAPH 2001 course); Asirvatham & Hoppe (GPU Gems
-2) for the ring structure that replaced the tessellation plan.
+**Refs.** Tessendorf, *Simulating Ocean Water* (SIGGRAPH 2001 course); Johanson, *Real-time Water
+Rendering: Introducing the Projected Grid Concept* (2004) for the mesh that ships; Asirvatham & Hoppe
+(GPU Gems 2) for the clipmap it replaced, whose real home is D4 below.
 **Owns foundations:** none of the ones this entry predicted. What it does own is the water subsystem
 itself, its bed-provider seam (`WaterHeightFn`, which `apps/forest`'s terrain satisfies directly),
 and the CPU wave query buoyancy would consume.
@@ -883,9 +892,26 @@ this item owns. It is the "mega-mesh with extra steps" the paragraph above warns
 knowingly because at that scale the warning does not bite. What it does contribute is a fixture — the
 first content in the tree where instancing, LOD and culling all matter at once, and the scene that
 found Wall 4.
+
+**This item inherits a working geometry clipmap, and git is where it is kept.** D3 built one for water
+and 11.34 removed it — the snap arithmetic and the T-junction stitch are at commit `8d04658`, which is
+D4's reference implementation rather than dead code kept live for a hypothetical consumer. **The part
+water never used is the part terrain needs**: rings as windows into a mip pyramid of streamed height
+data, which is what Asirvatham & Hoppe invented them for and why that paper is this entry's first
+reference. Nothing was pre-shaped into a "shared" primitive, because this entry has not chosen between
+Hoppe's rings and Strugar's CDLOD, and extracting one would be guessing at that choice.
+
+**And the stitch is a better answer to E5's open T-junction gap than the one recorded there.**
+`meshopt_SimplifyLockBorder` fixes cracks by never simplifying a border, which keeps full border
+density forever. The water stitch let both sides simplify and made the FINER side agree instead:
+evaluate the two even neighbours on the shared edge and average, which is by definition the straight
+line the coarser edge draws there — exact, and paid for on one vertex row per patch. It needs a surface
+evaluable at arbitrary points, which `terrain_height_at` is by construction (`procedural/terrain.h`, "a
+pure function of (params, x, z)"), so terrain can use it where a general mesh could not.
 **Refs.** Asirvatham & Hoppe, *Terrain Rendering Using GPU-Based Geometry Clipmaps* (GPU Gems 2);
 Strugar, *Continuous Distance-Dependent LOD* (CDLOD, 2009).
 **Depends on:** E5 (hard, in practice), D3's tessellation path (soft).
+**Inherits:** D3's clipmap implementation at `8d04658`, including the T-junction stitch.
 
 ## Track E — Image finishing & the perf floor
 
@@ -1197,8 +1223,8 @@ not scheduled.
 | 33 | D1 Clustered decals | L | Largest environment-art gap. Hard-blocked on D0. |
 | 34 | E8 Fix the wind cull | S | Small, self-contained, closes a real hole in E5's culling — wind geometry is currently exempt from the camera frustum *and* every cascade. Unblocks wind on scattered content, which `apps/forest` gave up to avoid it. |
 | 34b | **E9 One sample means one sample** | M | **DONE (11.34).** `apps/forest` opaque **150.9 → 121.6 ms (−19.4%)** against a 0.23% floor, with byte-identical submission integers — the same work, cheaper. One branch in the one allocator plus one at the depth renderbuffer flips the scene, OIT and moment FBOs in lockstep, since they share the depth attachment. The row's original prescription was wrong twice: there is no `sampler2DMS` anywhere in the corpus (11.17 rejected it), and postfx reaches the scene target only through blits, so the GLSL surface was zero files and postfx changed nothing. Priced before built with a new `--msaa <n>` lever, which also decomposed the first confounded A/B: A2C alone costs 202 ms of forest's opaque row (fragment-set explosion, headless-only), a sample ~93 ms on that inflated set. TAA-only edges verified by crops (raiden groom, forest canopy — indistinguishable), all 23 goldens 0 px, and MBOIT's moment-resolve bias (11.17) is now absent on the TAA path for free. |
-| 35 | ~~D3 Tessellated water~~ | — | **SHIPPED (11.32, 11.33) and it spent no tessellation.** Geometry clipmap rings gave the same near-field density for two draws, so the stage this item was scheduled to open is still closed — see D3. |
-| 36 | D4 Terrain | XL | Only after E5; a clipmap without instancing/LOD is a mega-mesh with extra steps. `apps/forest` is a *consumer* of E5, not this — fixed tiles with per-tile chains, fine at 1 km² and explicitly not the answer above it. |
+| 35 | ~~D3 Tessellated water~~ | — | **SHIPPED (11.32, 11.33, 11.34) and it spent no tessellation.** The mesh went through two screen-space schemes instead: clipmap rings (11.33), then a **projected grid** (11.34) after the rings turned out to weld reach to near-field detail — the snap that makes them tile is the same thing that kept the surface 5° short of the horizon while a comment claimed otherwise. The stage this item was scheduled to open is still closed. Reaching the horizon then moved the problem from the MESH to filtering: distant cells cover more than a wave period, so each wave model drops what sits under its footprint and hands the slope energy to roughness — a BRDF answer to a geometry question. See D3. |
+| 36 | D4 Terrain | XL | Only after E5; a clipmap without instancing/LOD is a mega-mesh with extra steps. `apps/forest` is a *consumer* of E5, not this — fixed tiles with per-tile chains, fine at 1 km² and explicitly not the answer above it. **Inherits D3's clipmap at `8d04658`** — the rings-over-a-mip-pyramid half water never used is the half terrain needs — and its T-junction stitch, which is a better fix for the crack risk E5 left open than locking borders. |
 | 37 | E7 Occlusion culling | L | Booked so the gap is visible, **not because a measurement demands it**, and 11.31 lowers the price further rather than raising it: forest's opaque lane already runs at complexity 1.08 from ordering alone, so there is little redundant shading left to remove, and the one thing that reached 0.72 — the prepass — lost on the clock anyway because the extra submission cost more than the fragments it saved. An occlusion pass is a bigger version of that same trade. `assets/overdraw_layers.gltf` is the instrument to price it with. |
 
 **If only five ever get built: 20 -> 21 -> 22 -> 23 -> 24.** One afternoon, then three items that each
@@ -1263,9 +1289,12 @@ scheduled.
 - **Terrain tiles can crack at LOD boundaries, in principle.** `lod.c` simplifies with options `0`,
   so tile borders are weighted rather than locked and two neighbours at different levels can
   T-junction. None has been observed at any framing tried, which is large tiles and near-straight
-  borders rather than a guarantee. The fix is `meshopt_SimplifyLockBorder` on the terrain path
+  borders rather than a guarantee. The obvious fix is `meshopt_SimplifyLockBorder` on the terrain path
   specifically — deliberately not applied globally, since it would constrain every other chain
-  through the same call.
+  through the same call. **There is a better one, and D4 now records it**: the T-junction stitch D3's
+  water clipmap used (commit `8d04658`) lets both sides simplify and makes the finer one agree, which
+  needs a height function evaluable at arbitrary points — which terrain has and a general mesh does
+  not. Locking a border keeps its full density forever; the stitch does not.
 - **The GL 4.1 ceiling itself is the Tier 5 question.** Nothing in Tier 4 needs compute. Lumen-class
   GI, virtual shadow maps, GPU-driven culling, Nanite-style cluster DAGs (which additionally want
   SSBOs, `glMultiDrawElementsIndirect` and 64-bit atomics) and hardware ray tracing all do, and
@@ -1292,6 +1321,8 @@ scheduled.
 | Freed `pbr_frag` sampler units | D0 (proposed) | D1 decals, D2's surface-shadow half, detail/wetness maps |
 | Tessellation pipeline (program creation, patch draw, distance LOD) | **still unowned** — D3 shipped without it | D4 terrain, POM silhouettes |
 | Bed-height seam (`WaterHeightFn`) + the CPU Gerstner query | D3 — **delivered** (11.32, 11.33) | Jolt buoyancy, gameplay water tests, any surface that shoals |
+| Geometry clipmap: coarsest-cell snap + T-junction stitch | D3 — built (11.33), **removed** (11.34), kept at `8d04658` | D4 terrain, where the streamed-mip-pyramid half water never used is the point |
+| Screen-space footprint → detail handover (mip level or dropped octave, energy into roughness) | D3 — **delivered** (11.34) | any procedural surface a projected or adaptive mesh under-samples at distance |
 | Per-pass GPU timing | E4 (proposed) | E5 LOD thresholds, D4, all budget work |
 
 ## Cross-track integration contracts

@@ -404,14 +404,14 @@ static void generate_island_mesh(Mesh* mesh, float radius, float height, int rin
  *
  * The wave train is scaled to THIS app's units, not carried over from the water
  * fixture. A trunk here is 125 units, so the fixture's 6-unit wavelength would be
- * invisible; and the grid is uniform in world space, so a wavelength has to be
- * several cells wide at the extent below to survive at all.
+ * invisible.
  */
 #define TREE_WATER_SHORE_T 0.35f
 #define TREE_WATER_LEVEL (-GROUND_HEIGHT * TREE_WATER_SHORE_T * TREE_WATER_SHORE_T)
-// Past the dome's rim, so the sea reaches the horizon rather than ending in a visible
-// edge. 128 cells over 2 * 1100 is an 17-unit cell, which the 90-unit swell below
-// spans comfortably.
+// The SHOALING BED's domain: past the dome's rim, so the shore has bed to shoal against on
+// both sides of the waterline. It is not what makes the sea reach the horizon -- since spec
+// 11.34 the grid is projected from the frustum and does that at any extent -- so this is
+// sized for the shoal ramp and nothing else.
 #define TREE_WATER_EXTENT 1100.0f
 
 // WaterHeightFn over the dome. ground_height_at takes no context -- it reads two
@@ -1117,10 +1117,11 @@ int main(int argc, char** argv) {
                 args.water_level > -9000.0f ? args.water_level : TREE_WATER_LEVEL;
             water->extent = TREE_WATER_EXTENT;
             water->height_at = tree_bed_height;
-            // Shorter and livelier than the swell 11.32 had to settle for. The
-            // clipmap's centre patch is a ~1-unit cell here, so a 45-unit wave spans
-            // forty of them; before the rings landed, a cell was 17 units and
-            // anything under ~150 read as facets. This is what that trade buys back.
+            // Shorter and livelier than the swell 11.32 had to settle for, when a
+            // world-space grid put a 17-unit cell here and anything under ~150 units read
+            // as facets. The projected grid sizes its cells in pixels instead, so what a
+            // wavelength has to survive is no longer the extent -- it is the footprint
+            // where the eye is looking, and near the shore that is well under a unit.
             water->wavelength = 45.0f;
             water->amplitude = 0.85f;
             water->steepness = 0.55f;
