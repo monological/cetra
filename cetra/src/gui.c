@@ -17,6 +17,7 @@
 #include "material.h"
 #include "postfx.h"
 #include "probe.h"
+#include "water.h"
 #include "render.h"
 #include "springbone.h"
 #include "scene.h"
@@ -571,6 +572,37 @@ static void _engine_gui_panel(Engine* engine) {
             igSliderFloat("Probe Intensity", &scene->probe->intensity, 0.0f, 4.0f, "%.2f", 0);
             igSliderFloat("Box Fade", &scene->probe->box_fade, 0.0f, 0.5f, "%.2f", 0);
             igCheckbox("Show Capture", &scene->probe->debug_background);
+            _end_effect_group();
+        }
+
+        // Attached water always carries its own bed and cascades; the toggle
+        // switches whether the surface draws.
+        if (scene->water) {
+            Water* water = scene->water;
+            _begin_effect_group("Water", &water->enabled);
+            // The level is what an author reaches for first, and it re-derives the
+            // shoreline against whatever bed is under it, so the bed bake has to be
+            // re-armed when it moves.
+            if (igSliderFloat("Level", &water->level, -50.0f, 50.0f, "%.2f", 0))
+                water_invalidate_bed(water);
+            igSliderFloat("Wavelength", &water->wavelength, 1.0f, 400.0f, "%.1f",
+                          ImGuiSliderFlags_Logarithmic);
+            igSliderFloat("Amplitude", &water->amplitude, 0.0f, 8.0f, "%.3f",
+                          ImGuiSliderFlags_Logarithmic);
+            // 1 is the steepest crest whose horizontal map is still injective;
+            // the range stops there because past it the surface folds.
+            igSliderFloat("Steepness", &water->steepness, 0.0f, 1.0f, "%.2f", 0);
+            igSliderFloat("Roughness", &water->roughness, 0.0f, 0.3f, "%.3f", 0);
+            igColorEdit3("Absorption", water->absorption, ImGuiColorEditFlags_Float);
+            igColorEdit3("Scatter", water->scatter, ImGuiColorEditFlags_Float);
+            // Spectral cascades allocate 24 textures and 45 passes a frame, so the
+            // switch is offered rather than assumed. Caustics and foam ride on it:
+            // both are selected from Jacobian compression, which the Gerstner path
+            // does not compute.
+            bool fft = water->wave_model == WATER_WAVES_FFT;
+            if (igCheckbox("Spectral cascades (FFT)", &fft))
+                water->wave_model = fft ? WATER_WAVES_FFT : WATER_WAVES_GERSTNER;
+            igCheckbox("Caustics", &water->caustics);
             _end_effect_group();
         }
 

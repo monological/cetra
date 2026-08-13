@@ -22,6 +22,7 @@
 #include "cetra/texture.h"
 #include "cetra/app.h"
 #include "cetra/sky.h"
+#include "cetra/water.h"
 #include "cetra/ibl.h"
 #include "cetra/shadow.h"
 #include "cetra/wind.h"
@@ -389,6 +390,38 @@ static void generate_island_mesh(Mesh* mesh, float radius, float height, int rin
 // rings from the same expression, and grass roots itself with this, so the
 // surface and the things standing on it cannot drift apart. Includes the node
 // translation, so the value is a world height ready to use.
+/*
+ * The sea (spec 11.32). ON by default here, unlike `render` and `forest`, because
+ * this app's ground is not a landscape that happens to end -- it is a dome, and a
+ * dome surrounded by nothing reads as a saucer floating in the sky. `--no-water`
+ * returns the old dry framing.
+ *
+ * The level is derived from the dome rather than picked: the ground drops
+ * GROUND_HEIGHT over GROUND_RADIUS as height = H*(1 - t^2) - H, so a level of
+ * -H*t^2 puts the shoreline at radius t*GROUND_RADIUS. At 0.35 the shore lands
+ * around 315 units out, which is where this app's camera (600 back, canopy 250
+ * tall) frames it as an island rather than as a puddle or a horizon.
+ *
+ * The wave train is scaled to THIS app's units, not carried over from the water
+ * fixture. A trunk here is 125 units, so the fixture's 6-unit wavelength would be
+ * invisible; and the grid is uniform in world space, so a wavelength has to be
+ * several cells wide at the extent below to survive at all.
+ */
+#define TREE_WATER_SHORE_T 0.35f
+#define TREE_WATER_LEVEL (-GROUND_HEIGHT * TREE_WATER_SHORE_T * TREE_WATER_SHORE_T)
+// Past the dome's rim, so the sea reaches the horizon rather than ending in a visible
+// edge. 128 cells over 2 * 1100 is an 17-unit cell, which the 90-unit swell below
+// spans comfortably.
+#define TREE_WATER_EXTENT 1100.0f
+
+// WaterHeightFn over the dome. ground_height_at takes no context -- it reads two
+// compile-time constants -- so the adapter drops the unused pointer rather than the
+// water system special-casing a nullary provider.
+static float tree_bed_height(void* ctx, float x, float z) {
+    (void)ctx;
+    return ground_height_at(x, z);
+}
+
 float ground_height_at(float x, float z) {
     float d = sqrtf(x * x + z * z);
     if (d >= GROUND_RADIUS)
@@ -693,6 +726,8 @@ typedef struct {
     int seed;
     float sun_elevation;
     float sun_azimuth;
+    int no_water;      // the sea is ON here: this app's ground IS an island
+    float water_level; // world Y of the still surface (-9999 = the default)
 } TreeArgs;
 
 static void print_usage(const char* prog) {
@@ -709,6 +744,9 @@ static void print_usage(const char* prog) {
     printf("      --no-shadows        Disable the shadow pass\n");
     printf("      --no-fog            Disable the volumetric fog\n");
     printf("      --no-falling-leaves Disable the falling-leaf particles\n");
+    printf("      --no-water          Dry land: drop the sea around the island\n");
+    printf("      --water-level D     Still-water world Y (default %.1f)\n",
+           (double)TREE_WATER_LEVEL);
     printf("  -h, --help              This message\n");
 }
 
@@ -719,6 +757,9 @@ static bool parse_args(int argc, char** argv, TreeArgs* a) {
     a->seed = 42;
     a->sun_elevation = 14.0f;
     a->sun_azimuth = 235.0f;
+    // 0 is a legal water level -- it is the dome's summit -- so the unset value has
+    // to sit outside every plausible one.
+    a->water_level = -9999.0f;
 
     for (int i = 1; i < argc; i++) {
         const char* s = argv[i];
@@ -742,6 +783,10 @@ static bool parse_args(int argc, char** argv, TreeArgs* a) {
             a->sun_elevation = (float)atof(argv[++i]);
         } else if (!strcmp(s, "--sun-azimuth") && has_next) {
             a->sun_azimuth = (float)atof(argv[++i]);
+        } else if (!strcmp(s, "--no-water")) {
+            a->no_water = 1;
+        } else if (!strcmp(s, "--water-level") && has_next) {
+            a->water_level = (float)atof(argv[++i]);
         } else if (!strcmp(s, "--no-shadows")) {
             a->no_shadows = 1;
         } else if (!strcmp(s, "--no-fog")) {
@@ -1060,6 +1105,37 @@ int main(int argc, char** argv) {
     set_material_shader_program(grass_material, pbr_program);
 
     create_island(root);
+
+    // The sea around it. Attached after the island because the level is derived
+    // from the dome's own constants, and the bed provider is the same function the
+    // island mesh and the grass root themselves with -- so the shoreline cannot
+    // drift from the ground it meets.
+    if (!args.no_water) {
+        Water* water = create_water();
+        if (water) {
+            water->level =
+                args.water_level > -9000.0f ? args.water_level : TREE_WATER_LEVEL;
+            water->extent = TREE_WATER_EXTENT;
+            water->height_at = tree_bed_height;
+            // Long and low. The grid is uniform in world space, so at this extent a
+            // cell is ~17 units and a wavelength has to be many cells wide or the
+            // crests read as facets; 150 buys about nine. Until the clipmap lands
+            // that trade -- swell length against crest smoothness -- is the only
+            // lever here.
+            water->wavelength = 150.0f;
+            water->amplitude = 1.3f;
+            water->steepness = 0.45f;
+            // Wide fan: four octaves off one direction at this scale print as
+            // corduroy, and the sea is most of the frame.
+            water->spread = 0.85f;
+            // A lagoon rather than open ocean: a shorter sight line through the
+            // body than the library default, so the shallows over the dome's flank
+            // read green before they go blue.
+            glm_vec3_copy((vec3){0.10f, 0.035f, 0.020f}, water->absorption);
+            glm_vec3_copy((vec3){0.03f, 0.13f, 0.14f}, water->scatter);
+            scene->water = water;
+        }
+    }
 
     /*
      * Post-processing: a film look rather than the engine defaults, on PBR
