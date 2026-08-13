@@ -22,6 +22,7 @@
 #include "cetra/scene.h"
 #include "cetra/texture.h"
 #include "cetra/util.h"
+#include "cetra/water.h"
 #include "cetra/wind.h"
 
 #include "cscene_apply.h"
@@ -316,6 +317,56 @@ void apply_cscene_wind(Scene* scene, const CetraSceneDesc* cscn) {
     // function owns only the wind FIELD, which is scene state and has no
     // material to hang off. The mask bounds that pin a cloth's top and free its
     // hem stay per-mesh, supplied at draw time from each mesh's AABB.
+}
+
+/*
+ * The scene file's water surface. Attached here so `--water` and its family become
+ * OVERRIDES of an authored surface rather than the only way to get one -- the CLI block
+ * in render.c runs after this and writes over whatever it was given on the command line.
+ *
+ * Nothing is defaulted here: an absent field keeps create_water's own value, so a block
+ * that authors a level alone still gets clear-water extinction and a Gerstner train,
+ * and the two places that know those numbers stay one place.
+ */
+void apply_cscene_water(Scene* scene, const CetraSceneDesc* cscn) {
+    if (!scene || !cscn || !cscn->water.enabled)
+        return;
+    const CSceneWater* w = &cscn->water;
+    Water* water = create_water();
+    if (!water)
+        return;
+    if (w->has_level)
+        water->level = w->level;
+    if (w->has_extent)
+        water->extent = w->extent;
+    if (w->has_waves)
+        water->wave_model = w->waves_fft ? WATER_WAVES_FFT : WATER_WAVES_GERSTNER;
+    if (w->has_wavelength)
+        water->wavelength = w->wavelength;
+    if (w->has_amplitude)
+        water->amplitude = w->amplitude;
+    if (w->has_steepness)
+        water->steepness = w->steepness;
+    if (w->has_spread)
+        water->spread = w->spread;
+    if (w->has_wind_dir)
+        glm_vec2_copy((float*)w->wind_dir, water->wind_dir);
+    if (w->has_roughness)
+        water->roughness = w->roughness;
+    if (w->has_ior)
+        water->ior = w->ior;
+    if (w->has_absorption)
+        glm_vec3_copy((float*)w->absorption, water->absorption);
+    if (w->has_scatter)
+        glm_vec3_copy((float*)w->scatter, water->scatter);
+    if (w->has_caustics)
+        water->caustics = w->caustics;
+    if (w->has_shore_coverage)
+        water->shore_coverage = w->shore_coverage;
+    scene->water = water;
+    printf("Scene file: water level %.2f, extent %.1f, %s waves\n", (double)water->level,
+           (double)water->extent,
+           water->wave_model == WATER_WAVES_FFT ? "spectral" : "gerstner");
 }
 
 /*

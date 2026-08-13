@@ -82,6 +82,8 @@ typedef struct {
     int no_water_caustics;      // Bisect lever: drop the surface's light focusing
     int no_water_coverage;      // Bisect lever: hard shoreline cutoff, no coverage
     int water_bed_dome;         // Install the analytic dome bed provider (shoaling)
+    int no_water;               // Drop a water surface a scene file asked for
+    int water_probe;            // Print the CPU wave query over a grid, then continue
     int gi_rate;                // Probes captured per frame while dirty (0 = default)
     int gi_debug;               // Blit the probe atlas into the frame corner
     int sky;                    // Procedural physically-based sky instead of -e

@@ -42,6 +42,34 @@
   ],
   "fov": 42
  },
+ "water": {
+  "enabled": true,
+  "level": 0.0,
+  "extent": 14.0,
+  "waves": "gerstner",
+  "wavelength": 6.0,
+  "amplitude": 0.06,
+  "steepness": 0.6,
+  "spread": 0.42,
+  "windDirection": [
+   0.86,
+   0.51
+  ],
+  "roughness": 0.04,
+  "ior": 1.333,
+  "absorption": [
+   0.45,
+   0.09,
+   0.06
+  ],
+  "scatter": [
+   0.02,
+   0.1,
+   0.12
+  ],
+  "caustics": true,
+  "shoreCoverage": true
+ },
  "post": {
   "tonemap": "neutral",
   "exposure": 1.0,

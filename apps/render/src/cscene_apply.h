@@ -43,6 +43,10 @@ void apply_cscene_wind(Scene* scene, const CetraSceneDesc* cscn);
 // configure_sss_materials where that engine handle is in scope.
 void apply_cscene_material_overrides(Scene* scene, const CetraSceneDesc* cscn);
 
+// Attach the scene file's water surface (if the .cscn declares a water block).
+// Runs BEFORE the CLI water block, which overrides whatever it finds.
+void apply_cscene_water(Scene* scene, const CetraSceneDesc* cscn);
+
 // Build the scene's ambient dust particle system (if the .cscn declares a dust
 // block), sized to the scene bounds. Replaces the old hardcoded filename gate.
 void apply_cscene_dust(struct Engine* engine, Scene* scene, const CetraSceneDesc* cscn, vec3 center,

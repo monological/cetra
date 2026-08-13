@@ -26,6 +26,7 @@
 #include "cetra/sky.h"
 #include "cetra/gi_volume.h"
 #include "cetra/water.h"
+#include "cetra/procedural/water_waves.h"
 #include "cetra/app.h"
 
 #include "cetra/shader_strings.h"
@@ -144,6 +145,7 @@ static void print_usage(const char* prog) {
     fprintf(stderr,
             "      --gi-debug         Blit the probe atlas into the frame corner\n");
     fprintf(stderr, "      --water            Water surface (spec 11.32)\n");
+    fprintf(stderr, "      --no-water         Drop a surface the scene file asked for\n");
     fprintf(stderr, "      --water-level <f>  Still-water plane, world Y (implies --water)\n");
     fprintf(stderr,
             "      --water-extent <f> Half-size of the water surface (implies --water)\n");
@@ -151,6 +153,7 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --no-water-caustics  Drop the surface's light focusing\n");
     fprintf(stderr, "      --no-water-coverage  Hard shoreline cutoff, no coverage\n");
     fprintf(stderr, "      --water-bed <m>    none (default) or dome: an analytic bed to shoal\n");
+    fprintf(stderr, "      --water-probe      Print the CPU wave query over a grid\n");
     fprintf(stderr, "      --sky              Procedural physically-based sky (instead of -e)\n");
     fprintf(stderr, "      --sky-debug        Blit the sky LUTs into the frame corner\n");
     fprintf(stderr, "      --clouds           Volumetric cloud layer (implies --sky)\n");
@@ -671,6 +674,12 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             }
             args->water_level = (float)atof(argv[i]);
             args->water = 1;
+        } else if (strcmp(argv[i], "--water-probe") == 0) {
+            args->water_probe = 1;
+        } else if (strcmp(argv[i], "--no-water") == 0) {
+            // Does NOT imply --water, obviously, and it wins over it: this is the
+            // escape hatch from a scene file that authors a surface.
+            args->no_water = 1;
         } else if (strcmp(argv[i], "--no-water-caustics") == 0) {
             args->no_water_caustics = 1;
             args->water = 1;
@@ -2936,8 +2945,18 @@ int main(int argc, char** argv) {
     // The water surface. Attached here rather than at scene load so the level
     // and extent can default off the finished scene bounds, which the probe and
     // GI blocks above may have recentred.
+    //
+    // The scene file goes on first and the flags below override it, so `--water-level`
+    // retunes an authored surface instead of discarding one.
+    apply_cscene_water(scene, cscn);
+    if (args.no_water && scene->water) {
+        free_water(scene->water);
+        scene->water = NULL;
+    }
+    if (args.water && !scene->water)
+        scene->water = create_water();
     if (args.water) {
-        Water* water = create_water();
+        Water* water = scene->water;
         if (water) {
             if (args.water_level > -9000.0f)
                 water->level = args.water_level;
@@ -2954,6 +2973,34 @@ int main(int argc, char** argv) {
                 water->height_ctx = water;
             }
             scene->water = water;
+        }
+    }
+
+    /*
+     * --water-probe: the CPU wave query, printed. It is the only way anything outside
+     * this process can see water_height_at at all -- the GPU surface leaves no number
+     * behind, so without this the seam buoyancy is meant to consume would ship untested.
+     *
+     * `residual` is the whole point of printing it: the query has to INVERT the Gerstner
+     * horizontal map to answer about a world position, so the check that matters is
+     * whether the parameter it found pushes forward onto the point that was asked for.
+     */
+    if (args.water_probe && scene->water) {
+        const Water* w = scene->water;
+        printf("water-probe model=%s available=%d level=%.4f\n",
+               w->wave_model == WATER_WAVES_FFT ? "fft" : "gerstner",
+               water_waves_available(w) ? 1 : 0, (double)w->level);
+        const float span = w->extent * 0.5f;
+        for (int iz = 0; iz < 4; iz++) {
+            for (int ix = 0; ix < 4; ix++) {
+                const float x = -span + span * 2.0f * (float)ix / 3.0f;
+                const float z = -span + span * 2.0f * (float)iz / 3.0f;
+                vec3 n;
+                const float h = water_surface_at(w, x, z, 0.0f, n);
+                printf("water-probe %.4f %.4f h=%.6f n=%.4f,%.4f,%.4f residual=%.8f\n",
+                       (double)x, (double)z, (double)h, (double)n[0], (double)n[1], (double)n[2],
+                       (double)water_waves_inverse_residual(w, x, z, 0.0f));
+            }
         }
     }
 

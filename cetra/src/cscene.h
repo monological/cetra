@@ -159,6 +159,45 @@ typedef struct CSceneDust {
     float damping;
 } CSceneDust;
 
+// Water surface (water.h). Presence-flagged like dust and wind, so a block that
+// authors only a level leaves every other property at the subsystem's own default
+// rather than at whatever zero happens to mean for it.
+//
+// `waves` is spelled rather than numbered -- "gerstner" or "fft" -- because the two
+// are different simulations with wildly different costs, and a scene file that said
+// `1` would tell a reader nothing about which one it asked for.
+typedef struct CSceneWater {
+    bool enabled;
+    bool has_level;
+    float level; // still-water plane, world Y
+    bool has_extent;
+    float extent; // half-size of the drawn surface
+    bool has_waves;
+    bool waves_fft; // false = Gerstner octaves
+    bool has_wavelength;
+    float wavelength; // the LONGEST octave; Gerstner only
+    bool has_amplitude;
+    float amplitude; // half crest-to-trough of that octave; Gerstner only
+    bool has_steepness;
+    float steepness; // 0..1, where 1 is the steepest still-injective crest
+    bool has_spread;
+    float spread; // per-octave direction fan, radians
+    bool has_wind_dir;
+    float wind_dir[2]; // the longest wave's travel direction, XZ; normalised on upload
+    bool has_roughness;
+    float roughness; // interface roughness; picks the environment lobe's mip
+    bool has_ior;
+    float ior; // 1.333 for water; F0 falls out of it rather than being authored
+    bool has_absorption;
+    float absorption[3]; // extinction per world unit, per channel
+    bool has_scatter;
+    float scatter[3]; // colour the absorbed energy returns as
+    bool has_caustics;
+    bool caustics;
+    bool has_shore_coverage;
+    bool shore_coverage; // false = hard shoreline cutoff, no derivative coverage
+} CSceneWater;
+
 typedef struct CetraSceneDesc {
     // Paths are resolved against the scene file's directory at load time;
     // consumers receive directly usable paths.
@@ -249,6 +288,7 @@ typedef struct CetraSceneDesc {
     float wind_turbulence;
 
     CSceneDust dust;
+    CSceneWater water;
 
     CSceneMaterialOverride materials[CSCENE_MAX_MATERIALS];
     int material_count;

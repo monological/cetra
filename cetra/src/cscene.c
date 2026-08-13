@@ -370,6 +370,51 @@ static void parse_dust(CetraSceneDesc* d, const cJSON* root) {
     out->has_damping = get_float(dust, "damping", &out->damping);
 }
 
+/*
+ * water -- a scene subsystem, so a TOP-LEVEL block beside wind and dust rather than one
+ * inside `post`. The plan for this put it next to `fog`, which is wrong about where it
+ * belongs: fog is a field on PostFX and water is owned by the Scene, so authoring it
+ * under `post` would put a scene-graph citizen in the post chain's namespace.
+ */
+static void parse_water(CetraSceneDesc* d, const cJSON* root) {
+    const cJSON* water = cJSON_GetObjectItemCaseSensitive(root, "water");
+    if (!cJSON_IsObject(water))
+        return;
+    CSceneWater* out = &d->water;
+    out->enabled = true; // presence implies on unless "enabled": false
+    get_bool(water, "enabled", &out->enabled);
+    out->has_level = get_float(water, "level", &out->level);
+    out->has_extent = get_float(water, "extent", &out->extent);
+    out->has_wavelength = get_float(water, "wavelength", &out->wavelength);
+    out->has_amplitude = get_float(water, "amplitude", &out->amplitude);
+    out->has_steepness = get_float(water, "steepness", &out->steepness);
+    out->has_spread = get_float(water, "spread", &out->spread);
+    out->has_wind_dir = get_floats(water, "windDirection", out->wind_dir, 2);
+    out->has_roughness = get_float(water, "roughness", &out->roughness);
+    out->has_ior = get_float(water, "ior", &out->ior);
+    out->has_absorption = get_vec3(water, "absorption", out->absorption);
+    out->has_scatter = get_vec3(water, "scatter", out->scatter);
+    out->has_caustics = get_bool(water, "caustics", &out->caustics);
+    out->has_shore_coverage = get_bool(water, "shoreCoverage", &out->shore_coverage);
+
+    // Refused rather than defaulted, on the same reasoning post.render_scale is: a
+    // misspelled model name should not quietly select the cheap simulation and leave
+    // the author wondering where their ocean went.
+    const cJSON* waves = cJSON_GetObjectItemCaseSensitive(water, "waves");
+    if (cJSON_IsString(waves) && waves->valuestring) {
+        if (strcmp(waves->valuestring, "fft") == 0) {
+            out->has_waves = true;
+            out->waves_fft = true;
+        } else if (strcmp(waves->valuestring, "gerstner") == 0) {
+            out->has_waves = true;
+            out->waves_fft = false;
+        } else {
+            log_warn("cscene: water.waves '%s' is not gerstner or fft; ignored",
+                     waves->valuestring);
+        }
+    }
+}
+
 static void parse_materials(CetraSceneDesc* d, const cJSON* root) {
     const cJSON* mats = cJSON_GetObjectItemCaseSensitive(root, "materials");
     if (!cJSON_IsObject(mats))
@@ -510,6 +555,7 @@ CetraSceneDesc* cscene_load(const char* path) {
     parse_post(d, root);
     parse_wind(d, root);
     parse_dust(d, root);
+    parse_water(d, root);
     parse_materials(d, root);
     parse_camera(d, root);
     cJSON_Delete(root);
