@@ -71,9 +71,11 @@ static bool push_gizmo(DrawList* list, SceneNode* node) {
 static void classify(const Mesh* mesh, uint8_t* lane, uint8_t* flags) {
     const Material* mat = mesh->material;
     bool transmissive = mat->transmission > 0.0f;
-    // Translucency is IMPLIED by a fractional opacity or a dedicated opacity
-    // map, whatever the declared mode -- formats that carry no alpha mode rely
-    // on it, and so does anything built in C or overridden from a .cscn.
+    // Translucency is IMPLIED by a fractional opacity or a dedicated opacity map
+    // on a material that declared no mode -- formats carrying no alpha mode rely
+    // on it, and so does anything built in C or overridden from a .cscn. ALPHA_MASK
+    // is deliberately not swept in: masked hair with a fractional opacity is
+    // still stencilled, not translucent.
     //
     // Derived here rather than written back onto the material at load, which is
     // where it used to live: only the two importers ever called that, so the
@@ -349,12 +351,15 @@ bool draw_list_sort_lane(DrawList* dst, const DrawList* src, uint8_t lane, const
         uint64_t bucket = (uint64_t)t;
 
         // NOTE: masked items are sorted along with everything else, and that is
-        // not free. A masked material writes finalOpacity < 1 into attachment 0,
-        // which still has SRC_ALPHA blending (engine.c:440 disables it only for
-        // slots >= 1), so reordering two overlapping leaf cards changes the
-        // pixel. Holding them out was measured and is worse on both counts: it
-        // wins no GPU time and still moves the image, because moving them after
-        // the opaques changes what they blend against.
+        // no longer nearly free. It cost six figures of pixels while the opaque
+        // lane still blended -- reordering two overlapping leaf cards changed
+        // what each composited against -- and 11.31 stopped that lane blending.
+        // What remains is the coplanar tie: two surfaces at exactly equal depth
+        // both pass and the later one wins, so draw order still decides between
+        // them. Raiden moves 31 px, cornell_box 1.
+        //
+        // Holding them out was measured separately and is worse on both counts:
+        // it wins no GPU time and still moves the image.
         const Material* mat = keys[i].item.mesh->material;
         uint64_t mat_id = mat ? (uint64_t)mat->id : 0;
         // 20 bits of material and 24 of mesh: a scene with more than a million

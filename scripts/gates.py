@@ -2803,25 +2803,50 @@ def run_mask_gate(workdir):
     if not ok:
         failures.append("mask-cutoff")
 
+    # --- mask-prepass: the A2C depth-only exit, which nothing else reaches ---
+    # NO --taa here, and that is the whole point: TAA drops the engine to one
+    # sample, which is the path the two arms above take and the path on which
+    # alpha-to-coverage does not run at all. At 4x MSAA the masked prepass goes
+    # through pbr_frag's second depth-only exit and has to produce the same
+    # sample mask as the shading pass, or GL_LEQUAL deletes the samples they
+    # disagree on.
+    #
+    # The fixture's BACKDROP is what makes this falsifiable, and it was added
+    # because the arm could not fail without it. A prepass sample mask that
+    # covers more than the shading pass writes depth where nothing shades, and
+    # the symptom is the surface behind being occluded -- with nothing behind,
+    # any disagreement is invisible. Measured while proving that: skipping the
+    # lighting-environment binds for depth-only draws reads 0 px on a fixture
+    # with no backdrop and 62,009 px on this one.
+    pre_off = os.path.join(workdir, "mask_pre_off.ppm")
+    pre_on = os.path.join(workdir, "mask_pre_on.ppm")
+    err = render(scene, pre_off, []) or render(scene, pre_on, ["--depth-prepass"])
+    if err:
+        print(f"  mask-prepass ERROR render failed: {err.strip()[-200:]}")
+        return failures + ["mask-prepass"]
+
+    ae, _ = compare(pre_off, pre_on)
+    ok = ae == 0
+    print(f"  mask-prepass {'PASS' if ok else 'FAIL'}  {ae} px between prepass on and off at "
+          f"4x MSAA (want exactly 0: the prepass and the shading pass must derive the same "
+          f"alpha-to-coverage sample mask)")
+    if not ok:
+        failures.append("mask-prepass")
+
     return failures
 
 
 OVERDRAW_LAYERS = "overdraw_layers.cscn"
 OVERDRAW_TILES = "overdraw_tiles.cscn"
-# Must match --layers in gen_overdraw_fixture.py. Read back from the fixture
-# rather than trusted: the quad count IS the expected complexity, so a
-# regenerated fixture must move the assertion with it or the arm tests nothing.
+# Depth complexity here is an integer by construction, so this absorbs only the
+# last-digit rounding of the report's %.2f -- it is not a band for noise.
 OVERDRAW_TOLERANCE = 0.02
-# Above the 1.5% run-to-run floor these renders measure, and far below the 14.5%
-# the prepass actually costs here.
+# The prepass costs 8-14% on this fixture. The bar sits above the 1.5% floor
+# these renders measure and well below the effect.
 CROSSOVER_MIN = 0.05
-
-
-def _overdraw_layer_count():
-    """How many quads the stacked fixture has, from the glTF it generated."""
-    path = os.path.join(ROOT, "assets", "overdraw_layers.gltf")
-    with open(path) as f:
-        return len(json.load(f)["meshes"])
+# Separate from the bar, because one literal doing both jobs would pass a run
+# whose floor (4.9%) had swallowed its own signal (5.1%).
+CROSSOVER_NOISE_MAX = 0.03
 
 
 def run_overdraw_gate(workdir):
@@ -2846,7 +2871,12 @@ def run_overdraw_gate(workdir):
         return []
 
     failures = []
-    want = float(_overdraw_layer_count())
+    # Read back from the fixture, not mirrored: the quad count IS the expected
+    # complexity, so a regenerated fixture has to move the assertion with it.
+    # _fixture_mesh_nodes rather than a private reader, and it is also the more
+    # correct question -- what gets drawn is a node count, which stays right if
+    # the generator ever shares one quad mesh across N nodes.
+    want = float(_fixture_mesh_nodes(os.path.splitext(OVERDRAW_LAYERS)[0] + ".gltf"))
     taa = ["--taa", "--headless-jitter"]
     stacked = _profiled_run(workdir, "od_stack", taa + ["--no-sort-opaque"],
                             fixture=OVERDRAW_LAYERS, size=("400", "300"))
@@ -2854,8 +2884,13 @@ def run_overdraw_gate(workdir):
                                fixture=OVERDRAW_LAYERS, size=("400", "300"))
     pre = _profiled_run(workdir, "od_pre", taa + ["--no-sort-opaque", "--depth-prepass"],
                         fixture=OVERDRAW_LAYERS, size=("400", "300"))
-    if stacked is None or sorted_run is None or pre is None or not stacked["shading"]:
-        return ["overdraw-exact"]
+    # All three, not just the first. `_profiled_run` stores None when the SHADING
+    # block did not print, so guarding one and indexing the others raises
+    # TypeError and takes the whole suite down instead of failing one arm.
+    if any(t is None or not t["shading"] for t in (stacked, sorted_run, pre)):
+        print("  overdraw-exact FAIL  a run produced no SHADING block")
+        print("  overdraw-culled FAIL  (same)")
+        return ["overdraw-exact", "overdraw-culled"]
 
     got = stacked["shading"]["complexity"]
     ok = abs(got - want) <= OVERDRAW_TOLERANCE
@@ -2891,11 +2926,11 @@ def run_overdraw_gate(workdir):
         return failures
 
     base = _profiled_run(workdir, "od_t1", taa + ["--no-sort-opaque"],
-                         fixture=OVERDRAW_TILES, size=("800", "600"))
+                         fixture=OVERDRAW_TILES, size=("400", "300"))
     floor_run = _profiled_run(workdir, "od_t2", taa + ["--no-sort-opaque"],
-                              fixture=OVERDRAW_TILES, size=("800", "600"))
+                              fixture=OVERDRAW_TILES, size=("400", "300"))
     on = _profiled_run(workdir, "od_t3", taa + ["--no-sort-opaque", "--depth-prepass"],
-                       fixture=OVERDRAW_TILES, size=("800", "600"))
+                       fixture=OVERDRAW_TILES, size=("400", "300"))
     if base is None or floor_run is None or on is None:
         return failures + ["prepass-crossover"]
 
@@ -2908,10 +2943,15 @@ def run_overdraw_gate(workdir):
 
     noise = abs(b - f) / b
     cost = (o - b) / b
-    ok = cost >= CROSSOVER_MIN and noise < CROSSOVER_MIN
+    # The premise, asserted rather than left in a comment: this fixture has
+    # nothing to reject. If it ever gained overlap the arm would quietly be
+    # measuring a different scene.
+    flat = base["shading"] and abs(base["shading"]["complexity"] - 1.0) <= OVERDRAW_TOLERANCE
+    ok = cost >= CROSSOVER_MIN and noise < CROSSOVER_NOISE_MAX and flat
     print(f"  prepass-crossover {'PASS' if ok else 'FAIL'}  opaque {b:.3f} -> {o:.3f} ms with "
           f"the prepass, {cost * 100.0:+.0f}% (want >= +{CROSSOVER_MIN * 100.0:.0f}%: nothing "
-          f"to reject at complexity 1.0), against a {noise * 100.0:.0f}% floor")
+          f"to reject at complexity 1.0), against a {noise * 100.0:.0f}% floor "
+          f"(want < {CROSSOVER_NOISE_MAX * 100.0:.0f}%); complexity 1.0: {flat}")
     if not ok:
         failures.append("prepass-crossover")
 
@@ -2974,10 +3014,10 @@ def run_prepass_gate(workdir):
         failures.append("prepass-identity")
 
     # --- prepass-masked: the arm above CANNOT see the flag's real cost -------
-    # instancing_fixture is purely opaque, so nothing sits the prepass out and
-    # its 0 px says nothing about the case that does. Masked geometry is not
-    # prepassed, so GL_LEQUAL leaves it tested against ITSELF, and coincident
-    # cards that GL_LESS rejected now pass a second time.
+    # instancing_fixture is purely opaque, so nothing about it changes when
+    # masked geometry does. Masked geometry IS prepassed since 11.31, but the
+    # shading pass still runs GL_LEQUAL, so coincident cards that GL_LESS
+    # rejected now both pass and the later one wins.
     #
     # Asserted as a BOUND rather than 0, because 0 is not the truth here and an
     # arm that demanded it would just be turned off. The number is what stops it

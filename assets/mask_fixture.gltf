@@ -9,11 +9,21 @@
    "nodes": [
     0,
     1,
-    2
+    2,
+    3
    ]
   }
  ],
  "nodes": [
+  {
+   "name": "backdrop",
+   "mesh": 3,
+   "translation": [
+    0.0,
+    0.0,
+    -1.5
+   ]
+  },
   {
    "name": "opaque_ref",
    "mesh": 0,
@@ -51,7 +61,7 @@
       "POSITION": 0,
       "NORMAL": 1
      },
-     "indices": 4,
+     "indices": 5,
      "material": 0
     }
    ]
@@ -65,7 +75,7 @@
       "NORMAL": 1,
       "COLOR_0": 2
      },
-     "indices": 4,
+     "indices": 5,
      "material": 1
     }
    ]
@@ -79,7 +89,20 @@
       "NORMAL": 1,
       "COLOR_0": 3
      },
-     "indices": 4,
+     "indices": 5,
+     "material": 1
+    }
+   ]
+  },
+  {
+   "name": "backdrop",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 4,
+      "NORMAL": 1
+     },
+     "indices": 5,
      "material": 2
     }
    ]
@@ -88,21 +111,6 @@
  "materials": [
   {
    "name": "mask_ref",
-   "pbrMetallicRoughness": {
-    "baseColorFactor": [
-     0.55,
-     0.55,
-     0.58,
-     1.0
-    ],
-    "metallicFactor": 0.0,
-    "roughnessFactor": 0.6
-   }
-  },
-  {
-   "name": "mask_kept",
-   "alphaMode": "MASK",
-   "alphaCutoff": 0.4,
    "pbrMetallicRoughness": {
     "baseColorFactor": [
      0.55,
@@ -127,6 +135,19 @@
     ],
     "metallicFactor": 0.0,
     "roughnessFactor": 0.6
+   }
+  },
+  {
+   "name": "mask_backdrop",
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     0.06,
+     0.07,
+     0.1,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 0.9
    }
   }
  ],
@@ -167,6 +188,22 @@
   },
   {
    "bufferView": 4,
+   "componentType": 5126,
+   "count": 4,
+   "type": "VEC3",
+   "min": [
+    -4.0,
+    -0.4,
+    0.0
+   ],
+   "max": [
+    4.0,
+    1.6400000000000001,
+    0.0
+   ]
+  },
+  {
+   "bufferView": 5,
    "componentType": 5123,
    "count": 6,
    "type": "SCALAR"
@@ -200,14 +237,20 @@
   {
    "buffer": 0,
    "byteOffset": 224,
+   "byteLength": 48,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 272,
    "byteLength": 12,
    "target": 34963
   }
  ],
  "buffers": [
   {
-   "uri": "data:application/octet-stream;base64,UrgevwAAAAAAAAAAUrgePwAAAAAAAAAAUrgeP1K4nj8AAAAAUrgev1K4nj8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AACAPwAAgD8AAIA/mpkZPwAAgD8AAIA/AACAP5qZGT8AAIA/AACAPwAAgD+amRk/AACAPwAAgD8AAIA/mpkZPwAAgD8AAIA/AACAP83MTD4AAIA/AACAPwAAgD/NzEw+AACAPwAAgD8AAIA/zcxMPgAAgD8AAIA/AACAP83MTD4AAAEAAgAAAAIAAwA=",
-   "byteLength": 236
+   "uri": "data:application/octet-stream;base64,UrgevwAAAAAAAAAAUrgePwAAAAAAAAAAUrgeP1K4nj8AAAAAUrgev1K4nj8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AACAPwAAgD8AAIA/mpkZPwAAgD8AAIA/AACAP5qZGT8AAIA/AACAPwAAgD+amRk/AACAPwAAgD8AAIA/mpkZPwAAgD8AAIA/AACAP83MTD4AAIA/AACAPwAAgD/NzEw+AACAPwAAgD8AAIA/zcxMPgAAgD8AAIA/AACAP83MTD4AAIDAzczMvgAAAAAAAIBAzczMvgAAAAAAAIBAhevRPwAAAAAAAIDAhevRPwAAAAAAAAEAAgAAAAIAAwA=",
+   "byteLength": 284
   }
  ]
 }

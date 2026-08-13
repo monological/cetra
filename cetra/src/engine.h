@@ -71,8 +71,15 @@ typedef struct Engine {
     // and declines to retry a size that already failed.
     int target_render_w, target_render_h;
     int target_post_w, target_post_h;
-    int msaa_samples; // MSAA sample count for the scene framebuffer (1 = off,
-                      // 4 = 4x). Runtime-changeable via set_engine_msaa_samples.
+    // MSAA sample count REQUESTED for the scene framebuffer (1 = off, 4 = 4x).
+    // Runtime-changeable via set_engine_msaa_samples.
+    //
+    // A request, not a measurement, and the difference has bitten once: ask this
+    // driver for 1 and the target comes back with 2. Anything that needs the
+    // count the framebuffer actually has must read GL_SAMPLES back from it --
+    // the depth-complexity budget does, after reporting every figure on the TAA
+    // path at exactly twice the truth (spec 11.31).
+    int msaa_samples;
 
     GLFWerrorfun error_callback;
 

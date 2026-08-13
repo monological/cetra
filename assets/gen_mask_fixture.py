@@ -63,30 +63,68 @@ CUTOFF = 0.4
 kept_colors = [(1.0, 1.0, 1.0, 0.6)] * 4
 cut_colors = [(1.0, 1.0, 1.0, 0.2)] * 4
 
+# Wide enough to sit behind all three and fill the frame, so every masked sample
+# has something behind it to wrongly occlude.
+BACK = 4.0
+back_positions = [(-BACK, -0.4, 0.0), (BACK, -0.4, 0.0), (BACK, 2.0 * HALF + 0.4, 0.0),
+                  (-BACK, 2.0 * HALF + 0.4, 0.0)]
+
 pos_bytes = b"".join(struct.pack("<3f", *p) for p in positions)
 nrm_bytes = b"".join(struct.pack("<3f", *n) for n in normals)
 kept_bytes = b"".join(struct.pack("<4f", *c) for c in kept_colors)
 cut_bytes = b"".join(struct.pack("<4f", *c) for c in cut_colors)
+back_bytes = b"".join(struct.pack("<3f", *p) for p in back_positions)
 idx_bytes = b"".join(struct.pack("<H", i) for i in indices)
-buffer_bytes = pos_bytes + nrm_bytes + kept_bytes + cut_bytes + idx_bytes
+_chunks = [(pos_bytes, 34962), (nrm_bytes, 34962), (kept_bytes, 34962), (cut_bytes, 34962),
+           (back_bytes, 34962), (idx_bytes, 34963)]
+buffer_bytes = b"".join(c for c, _ in _chunks)
+
+
+def _views(chunks):
+    """One bufferView per chunk, offsets accumulated rather than re-summed.
+
+    Written as a running total because the hand-written form was a chain of
+    len(a) + len(b) + len(c) that grew a term every time the fixture gained an
+    attribute -- and a wrong offset there is not a build error, it is geometry
+    that renders subtly wrong.
+    """
+    views, offset = [], 0
+    for data, target in chunks:
+        views.append({"buffer": 0, "byteOffset": offset, "byteLength": len(data),
+                      "target": target})
+        offset += len(data)
+    return views
 
 mn = [min(p[i] for p in positions) for i in range(3)]
 mx = [max(p[i] for p in positions) for i in range(3)]
+back_mn = [min(p[i] for p in back_positions) for i in range(3)]
+back_mx = [max(p[i] for p in back_positions) for i in range(3)]
 
 # One albedo for both, mid-grey rather than white: white clips against the
 # tonemap and two clipped quads compare equal however wrong the alpha is.
 ALBEDO = [0.55, 0.55, 0.58, 1.0]
+# Clearly darker than the quads, so a masked sample that wrongly occludes the
+# backdrop reads as a hole rather than as a shade of the same grey.
+BACK_ALBEDO = [0.06, 0.07, 0.10, 1.0]
 
 gltf = {
     "asset": {"version": "2.0", "generator": "gen_mask_fixture.py"},
     "scene": 0,
-    "scenes": [{"nodes": [0, 1, 2]}],
+    "scenes": [{"nodes": [0, 1, 2, 3]}],
     # The two quads the gate COMPARES sit symmetrically about the frame centre,
     # and the one that must vanish sits between them. Symmetry is not tidiness:
     # the vignette is a function of radius from the centre, so equal radii make
     # it cancel exactly between the pair rather than biasing one of them. It also
     # puts the negative control where a failure to discard is unmissable.
+    #
+    # The backdrop is what makes any of it falsifiable under alpha-to-coverage.
+    # A prepass whose sample mask disagrees with the shading pass's writes depth
+    # where no fragment will shade, and the symptom is that the surface BEHIND
+    # gets occluded at those samples. With nothing behind, a wrong coverage is
+    # invisible and the arm passes on a scene that cannot fail -- which is what
+    # this fixture did until it was measured for it.
     "nodes": [
+        {"name": "backdrop", "mesh": 3, "translation": [0.0, 0.0, -1.5]},
         {"name": "opaque_ref", "mesh": 0, "translation": [-2.0 * (HALF + GAP), 0.0, 0.0]},
         {"name": "masked_cut", "mesh": 2, "translation": [0.0, 0.0, 0.0]},
         {"name": "masked_kept", "mesh": 1, "translation": [2.0 * (HALF + GAP), 0.0, 0.0]},
@@ -96,24 +134,23 @@ gltf = {
         # it and texAlpha stays 1.0 -- the comparison is against a fragment that
         # never entered the alpha path, not against one that entered it at 1.0.
         {"name": "opaque_ref",
-         "primitives": [{"attributes": {"POSITION": 0, "NORMAL": 1}, "indices": 4,
+         "primitives": [{"attributes": {"POSITION": 0, "NORMAL": 1}, "indices": 5,
                          "material": 0}]},
+        # BOTH masked quads point at ONE material, so "the only difference is
+        # which side of the cutoff the alpha falls" is structural rather than a
+        # promise maintained across two dict literals.
         {"name": "masked_kept",
-         "primitives": [{"attributes": {"POSITION": 0, "NORMAL": 1, "COLOR_0": 2}, "indices": 4,
+         "primitives": [{"attributes": {"POSITION": 0, "NORMAL": 1, "COLOR_0": 2}, "indices": 5,
                          "material": 1}]},
-        # Same material parameters as the one beside it, so the ONLY difference
-        # between kept and cut is which side of the cutoff its alpha falls.
         {"name": "masked_cut",
-         "primitives": [{"attributes": {"POSITION": 0, "NORMAL": 1, "COLOR_0": 3}, "indices": 4,
+         "primitives": [{"attributes": {"POSITION": 0, "NORMAL": 1, "COLOR_0": 3}, "indices": 5,
+                         "material": 1}]},
+        {"name": "backdrop",
+         "primitives": [{"attributes": {"POSITION": 4, "NORMAL": 1}, "indices": 5,
                          "material": 2}]},
     ],
     "materials": [
         {"name": "mask_ref",
-         "pbrMetallicRoughness": {"baseColorFactor": ALBEDO, "metallicFactor": 0.0,
-                                  "roughnessFactor": 0.6}},
-        {"name": "mask_kept",
-         "alphaMode": "MASK",
-         "alphaCutoff": CUTOFF,
          "pbrMetallicRoughness": {"baseColorFactor": ALBEDO, "metallicFactor": 0.0,
                                   "roughnessFactor": 0.6}},
         {"name": "mask_cut",
@@ -121,25 +158,20 @@ gltf = {
          "alphaCutoff": CUTOFF,
          "pbrMetallicRoughness": {"baseColorFactor": ALBEDO, "metallicFactor": 0.0,
                                   "roughnessFactor": 0.6}},
+        {"name": "mask_backdrop",
+         "pbrMetallicRoughness": {"baseColorFactor": BACK_ALBEDO, "metallicFactor": 0.0,
+                                  "roughnessFactor": 0.9}},
     ],
     "accessors": [
         {"bufferView": 0, "componentType": 5126, "count": 4, "type": "VEC3", "min": mn, "max": mx},
         {"bufferView": 1, "componentType": 5126, "count": 4, "type": "VEC3"},
         {"bufferView": 2, "componentType": 5126, "count": 4, "type": "VEC4"},
         {"bufferView": 3, "componentType": 5126, "count": 4, "type": "VEC4"},
-        {"bufferView": 4, "componentType": 5123, "count": 6, "type": "SCALAR"},
+        {"bufferView": 4, "componentType": 5126, "count": 4, "type": "VEC3",
+         "min": back_mn, "max": back_mx},
+        {"bufferView": 5, "componentType": 5123, "count": 6, "type": "SCALAR"},
     ],
-    "bufferViews": [
-        {"buffer": 0, "byteOffset": 0, "byteLength": len(pos_bytes), "target": 34962},
-        {"buffer": 0, "byteOffset": len(pos_bytes), "byteLength": len(nrm_bytes), "target": 34962},
-        {"buffer": 0, "byteOffset": len(pos_bytes) + len(nrm_bytes), "byteLength": len(kept_bytes),
-         "target": 34962},
-        {"buffer": 0, "byteOffset": len(pos_bytes) + len(nrm_bytes) + len(kept_bytes),
-         "byteLength": len(cut_bytes), "target": 34962},
-        {"buffer": 0,
-         "byteOffset": len(pos_bytes) + len(nrm_bytes) + len(kept_bytes) + len(cut_bytes),
-         "byteLength": len(idx_bytes), "target": 34963},
-    ],
+    "bufferViews": _views(_chunks),
     "buffers": [
         {"uri": "data:application/octet-stream;base64," +
                 base64.b64encode(buffer_bytes).decode("ascii"),

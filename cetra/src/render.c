@@ -420,6 +420,16 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
             mask_array_bind(scene ? scene->mask_array : NULL, TEXUNIT_MASKS);
             uniform_set_int(u, "maskArray", TEXUNIT_MASKS);
 
+            // NOT skipped for a depth-only draw, though it looks like free money
+            // and was tried: the lighting environment below is a dozen
+            // glBindTexture pairs the coverage decision never reads. But the IBL
+            // else-branch also points three samplerCube uniforms at their units,
+            // and leaving them at 0 -- where a 2D texture lives -- is a sampler
+            // type mismatch, which is undefined for the WHOLE program and not
+            // just for the part after the early return. Measured: the mask
+            // fixture goes 0 px -> 62,009 px against a backdrop. The saving was
+            // separately measured as nothing, inside a +/-3 ms noise floor, so
+            // this is a correctness risk bought for no gain.
             bind_ltc_tables(engine->ltc, program);
 
             // Engine-owned BRDF tables: bound for every scene, environment
@@ -636,10 +646,10 @@ void submit_draw_run(SubmitState* state, UniformManager* u, const DrawItem* item
 
 // Whether the depth prepass may draw this item.
 //
-// Named once rather than spelled out at the two places that ask, which is the
-// shape draw_run_can_join's contract asks for. NOT a DrawItem flag: it is
-// derivable from `lane`, and draw_list.h holds that a second encoding of one
-// fact is a second thing to keep in agreement.
+// Named rather than spelled out inline, which is the shape draw_run_can_join's
+// contract asks for. NOT a DrawItem flag: it is derivable from `lane`, and
+// draw_list.h holds that a second encoding of one fact is a second thing to
+// keep in agreement.
 //
 // Masked geometry is IN, since 11.31 -- it is drawn by its own program in
 // depth-only mode rather than by the position-only one, so there is no coverage
@@ -675,10 +685,15 @@ static bool item_is_prepassable(const DrawItem* item) {
 //
 // The shading pass still runs GL_LEQUAL rather than GL_EQUAL, because a program
 // without depth_prepass_safe (`shape`) sits the pass out and has no prepass
-// depth to equal.
+// depth to equal. The caller owns that bracket, both halves adjacent.
+//
+// No RenderMode parameter: the caller only reaches this on RENDER_MODE_PBR, and
+// that is load-bearing rather than incidental -- pbr_frag's debug-mode returns
+// sit ABOVE its depth-only exits, so any other mode would write colour and never
+// reach the coverage decision at all.
 static bool _submit_depth_prepass(Engine* engine, Scene* scene, const DrawList* list,
                                   Camera* camera, mat4 view, mat4 projection,
-                                  RenderMode render_mode, const Frustum* frustum) {
+                                  const Frustum* frustum) {
     if (!engine->depth_prepass_program || !scene || !list)
         return false;
 
@@ -688,12 +703,6 @@ static bool _submit_depth_prepass(Engine* engine, Scene* scene, const DrawList* 
     SubmitState state = {0};
     InstanceChunk chunk;
 
-    submit_use_program(&state, program->id);
-    uniform_set_mat4(u, "view", (const float*)view);
-    uniform_set_mat4(u, "projection", (const float*)projection);
-    uniform_set_float(u, "time", (float)engine->render_time);
-    wind_upload_to_program(scene->wind, u);
-
     // Depth only: colour writes off rather than the draw buffers detached, so
     // the attachment list the shading pass expects is untouched and nothing has
     // to be rebuilt between the two passes.
@@ -701,9 +710,32 @@ static bool _submit_depth_prepass(Engine* engine, Scene* scene, const DrawList* 
     glDepthFunc(GL_LESS);
     glDepthMask(GL_TRUE);
 
+    // TWO SWEEPS, not one loop that branches, and the reason is measured: the
+    // opaque lane is sorted by depth bucket, so masked and unmasked items
+    // interleave freely, and a single loop switched program 64 times a frame on
+    // apps/forest. Every switch back into the shading program re-runs its whole
+    // per-program block -- the uniform writes are value-cached, but the shadow
+    // map, mask array, LTC, BRDF LUT, IBL, probe and GI binds are not -- inside
+    // the one pass whose entire justification is being cheaper than the pass it
+    // shields. Sweeping by class costs one extra walk of a flat array and binds
+    // each program once.
+    //
+    // Provably the same depth buffer: this pass writes depth alone under
+    // GL_LESS with colour masked, so two draws at equal depth store the same
+    // value whichever wins, and _visible_run reads the ORIGINAL list, breaking
+    // on mesh inequality -- a run is homogeneous in maskedness by construction,
+    // so no run straddles the partition and none is formed differently.
+    bool drew = false;
+
+    submit_use_program(&state, program->id);
+    uniform_set_mat4(u, "view", (const float*)view);
+    uniform_set_mat4(u, "projection", (const float*)projection);
+    uniform_set_float(u, "time", (float)engine->render_time);
+    wind_upload_to_program(scene->wind, u);
+
     for (size_t i = 0; i < list->count; ++i) {
         const DrawItem* item = &list->items[i];
-        if (!item_is_prepassable(item))
+        if (!item_is_prepassable(item) || (item->flags & DRAW_ALPHA_MASKED))
             continue;
         if (stats)
             stats->meshes_seen++;
@@ -713,48 +745,15 @@ static bool _submit_depth_prepass(Engine* engine, Scene* scene, const DrawList* 
             continue;
         }
 
-        // Masked geometry is drawn by its OWN program in depth-only mode, not by
-        // the lean one. That is what lets it be prepassed at all: the coverage
-        // decision is then the same code the shading pass runs rather than a
-        // second copy of it, and gl_Position comes from the same program rather
-        // than from two that promise to agree.
-        bool masked = (item->flags & DRAW_ALPHA_MASKED) != 0;
-        const ShaderProgram* draw_program =
-            masked ? item->mesh->material->shader_program : program;
-
-        // Run formation has to match the shading pass EXACTLY, and `instanced`
-        // is a property of whichever program will draw -- read off the lean one
-        // for a masked item it would batch where the shading pass does not, and
-        // gl_InstanceID would then index a different transform.
-        //
-        // The lane/flag test is the shading pass's own: classify() derives both
-        // from the MESH's material, and draw_run_can_join requires mesh equality,
-        // so a run is homogeneous in maskedness by construction.
         size_t run = 1;
-        if (engine->instancing_enabled && engine->instance_ubo && draw_program->instanced)
+        if (engine->instancing_enabled && engine->instance_ubo && program->instanced)
             run = _visible_run(list, i, 1u << DRAW_LANE_OPAQUE, frustum);
         if (stats)
             stats->meshes_seen += run - 1;
-        // `shading` follows the program, not the pass. pbr_vert reads the normal
-        // matrix out of the block to build the TBN, and under alpha-to-coverage
-        // the TBN reaches the coverage number through NdotV -- so a masked run
-        // uploaded as depth-only would carry a stale basis into the very value
-        // the two passes must agree on.
         if (run > 1)
-            instance_chunk_upload(engine->instance_ubo, &chunk, list, i, run, masked);
-
-        if (masked) {
-            _submit_item(engine, scene, item, camera, view, projection, render_mode, &state,
-                         OIT_SUBPASS_NONE, run, true);
-            i += run - 1;
-            continue;
-        }
+            instance_chunk_upload(engine->instance_ubo, &chunk, list, i, run, false);
 
         Mesh* mesh = item->mesh;
-        // Re-asserted per item rather than once before the loop: a masked run
-        // between two opaque ones binds its own program, and the lean one has to
-        // come back. Costs nothing when it is already current.
-        submit_use_program(&state, program->id);
         // Only for a draw that carries one object, for the reason
         // _submit_item's own guard records: a batched draw reads the transform
         // from the instance block, and writing `model` anyway dirties the
@@ -773,16 +772,57 @@ static bool _submit_depth_prepass(Engine* engine, Scene* scene, const DrawList* 
         render_update_skinning_uniforms(program, mesh);
 
         submit_draw_run(&state, u, item, run, (item->flags & DRAW_DOUBLE_SIDED) != 0, stats);
+        drew = true;
+        i += run - 1;
+    }
+
+    // Masked geometry, through its OWN program in depth-only mode. That is what
+    // lets it be prepassed at all: the coverage decision is then the same code
+    // the shading pass runs rather than a second copy of it, and gl_Position
+    // comes from the same program rather than from two that promise to agree.
+    for (size_t i = 0; i < list->count; ++i) {
+        const DrawItem* item = &list->items[i];
+        if (!item_is_prepassable(item) || !(item->flags & DRAW_ALPHA_MASKED))
+            continue;
+        if (stats)
+            stats->meshes_seen++;
+        if (!draw_item_visible(item, frustum)) {
+            if (stats)
+                stats->meshes_culled++;
+            continue;
+        }
+
+        // `instanced` off the program that will actually DRAW: read off the lean
+        // one instead, a masked item would batch where the shading pass does not
+        // and gl_InstanceID would index a different transform.
+        const ShaderProgram* masked_program = item->mesh->material->shader_program;
+        size_t run = 1;
+        if (engine->instancing_enabled && engine->instance_ubo && masked_program->instanced)
+            run = _visible_run(list, i, 1u << DRAW_LANE_OPAQUE, frustum);
+        if (stats)
+            stats->meshes_seen += run - 1;
+        // Uploaded as SHADING, not depth-only: pbr_vert reads the normal matrix
+        // out of the block to build the TBN, and under alpha-to-coverage the TBN
+        // reaches the coverage number through NdotV -- so a depth-only upload
+        // would carry a stale basis into the very value the two passes must agree
+        // on.
+        if (run > 1)
+            instance_chunk_upload(engine->instance_ubo, &chunk, list, i, run, true);
+
+        _submit_item(engine, scene, item, camera, view, projection, RENDER_MODE_PBR, &state,
+                     OIT_SUBPASS_NONE, run, true);
+        drew = true;
         i += run - 1;
     }
 
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     glUseProgram(0);
-    // Set here, next to the depth this describes, rather than by the caller:
-    // one owner for the whole bracket, and it cannot be reached when the pass
-    // returned early above with nothing written.
-    glDepthFunc(GL_LEQUAL);
-    return true;
+    // Honest about drawing nothing. A lane whose every item is culled, or whose
+    // programs all decline the pass, leaves the depth buffer as it found it --
+    // and the caller may only relax the shading pass to GL_LEQUAL when there is
+    // prepass depth behind it, or coplanar tie-breaking flips under a buffer no
+    // prepass filled.
+    return drew;
 }
 
 // One pass over the flattened list. `lanes` is a bitmask of DrawLane, so a
@@ -1132,8 +1172,14 @@ void render_current_scene(Engine* engine) {
                 add_shader_program_to_engine(engine, engine->depth_prepass_program);
         }
         prepassed = _submit_depth_prepass(engine, scene, opaque_list, camera, *view,
-                                          draw_projection, render_mode, &frustum);
+                                          draw_projection, &frustum);
     }
+    // Both halves of the bracket here, adjacent, rather than the relax inside the
+    // prepass and the restore 400 lines away in the caller. GL_LEQUAL and not
+    // GL_EQUAL because a program without depth_prepass_safe sits the pass out and
+    // has no prepass depth to equal.
+    if (prepassed)
+        glDepthFunc(GL_LEQUAL);
     // Opened AFTER the prepass, deliberately. It measures samples the
     // uber-shader ran for, and the prepass's own samples pass the depth test
     // too -- counting them made the number RISE when the pass that exists to
