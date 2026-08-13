@@ -308,6 +308,20 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
     // during a capture -- capture targets are always single-sample, so reading
     // it alone would take the A2C path with no coverage hardware behind it and
     // bake solid quads into the capture.
+    // The REQUEST, deliberately, where almost everything else that cares about
+    // sample counts now reads msaa_samples_actual. This one asks "which AA mode
+    // did the app choose", not "what did the driver allocate" -- and those
+    // diverge, because a 1-sample request comes back as a 2-sample target.
+    //
+    // Routing it to the actual count was tried and rejected. It would switch
+    // alpha-to-coverage on in every configuration, since the driver never
+    // returns 1: measured at 1,488,830 px (18%) on the raiden recipe, all of it
+    // the groom, and it looks good. It is still wrong twice over. A2C is the
+    // technique the TAA era replaced -- it belongs to forward+MSAA, which is not
+    // the path this engine ships -- and turning it on everywhere makes
+    // alphaCutoff meaningless engine-wide, since only A2C_MIN_ALPHA is ever
+    // compared against. Soft masked edges under TAA are what hashed alpha
+    // testing is for (spec 11.31 defers it).
     bool a2c_capable = engine->msaa_samples > 1 && !engine->capturing;
     SubmitStats* stats = profiler_submit(engine->profiler);
 

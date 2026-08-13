@@ -74,12 +74,16 @@ typedef struct Engine {
     // MSAA sample count REQUESTED for the scene framebuffer (1 = off, 4 = 4x).
     // Runtime-changeable via set_engine_msaa_samples.
     //
-    // A request, not a measurement, and the difference has bitten once: ask this
-    // driver for 1 and the target comes back with 2. Anything that needs the
-    // count the framebuffer actually has must read GL_SAMPLES back from it --
-    // the depth-complexity budget does, after reporting every figure on the TAA
-    // path at exactly twice the truth (spec 11.31).
+    // A REQUEST, not a measurement. Ask this driver for 1 and the target comes
+    // back with 2, so anything that needs the count the framebuffer actually has
+    // must read msaa_samples_actual instead -- reading this one reported every
+    // depth-complexity figure on the TAA path at exactly twice the truth
+    // (spec 11.31). Set this to choose the AA mode; read the other to reason
+    // about what the target can do.
     int msaa_samples;
+    // What the driver returned for the request above, read back from the scene
+    // FBO at every build. Always >= 1 and never a promise the request made.
+    int msaa_samples_actual;
 
     GLFWerrorfun error_callback;
 
