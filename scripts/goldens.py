@@ -91,6 +91,21 @@ RECIPES = [
      "flags": ["-f", "30", "-W", "800", "-H", "500", "--no-auto-exposure", "-E", "1.0",
                "--no-pcss", "--translucent-shadows"]},
 
+    # The only golden that can SEE masked geometry, and it exists because the
+    # other twenty pass whether masked rendering is right or wrong. The corpus's
+    # one other MASK material is translucent_shadow's ramp panel, which is a
+    # caster held above the frame -- what that golden measures is its shadow. So
+    # the blend defect spec 11.31 fixed, which moved 12.8% of the raiden recipe,
+    # moved exactly zero stored pixels and had survived two specs undetected.
+    #
+    # NO --taa, deliberately: the default 4x MSAA path is the one where
+    # alpha-to-coverage is live, so this covers the coverage chain as well as the
+    # cutoff. The three quads are an opaque reference, a MASK quad above the
+    # cutoff and one below it, over a backdrop that makes wrong coverage visible
+    # as occlusion rather than invisible.
+    {"name": "mask_fixture", "scene": "assets/mask_fixture.cscn", "size": (800, 600),
+     "flags": ["-f", "30", "-W", "400", "-H", "300", "--no-auto-exposure", "-E", "1.0"]},
+
     # --- global illumination and punctual shadows -----------------------------
     {"name": "cornell_box", "scene": "assets/cornell_box.gltf", "size": (1600, 1200),
      "flags": ["--gi-volume", "-f", "30", "--no-auto-exposure", "-E", "1.0",
