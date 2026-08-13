@@ -3822,12 +3822,19 @@ OVERDRAW_TILES = "overdraw_tiles.cscn"
 # Depth complexity here is an integer by construction, so this absorbs only the
 # last-digit rounding of the report's %.2f -- it is not a band for noise.
 OVERDRAW_TOLERANCE = 0.02
-# The prepass costs 8-14% on this fixture. The bar sits above the 1.5% floor
-# these renders measure and well below the effect.
+# The prepass costs 8-18% on this fixture; the bar sits well below that effect.
+# The floor is NOT reliably below it -- it has been observed at 5% -- which is
+# why the separation rule below exists rather than a ceiling on the floor.
 CROSSOVER_MIN = 0.05
-# Separate from the bar, because one literal doing both jobs would pass a run
-# whose floor (4.9%) had swallowed its own signal (5.1%).
-CROSSOVER_NOISE_MAX = 0.03
+# The effect must clear the MEASURED floor by this much -- a ratio, not a fixed
+# ceiling on the floor itself. A fixed ceiling was tried twice and flaked twice:
+# at ~3 ms absolute this driver's single-run timings wander 0.2-5% (probed x3),
+# and one base pair per suite run samples that spread once. A run whose floor
+# came up 5% under an 18% effect is a sound measurement at 3.6x separation; a
+# rule that rejects it is asserting on the weather. The ratio keeps the honest
+# property the ceiling was for -- a floor that swallows its own signal still
+# fails -- without failing on a wide floor under a wider effect.
+CROSSOVER_SEPARATION = 3.0
 
 
 def run_overdraw_gate(workdir):
@@ -3842,9 +3849,10 @@ def run_overdraw_gate(workdir):
 
     This is the fixture spec 11.30 listed in its own Files table and never
     wrote, and building it immediately found a real defect: the budget was
-    published from engine->msaa_samples, but asking this driver for a 1-sample
-    target returns a 2-sample one, so every reading on the TAA path was exactly
-    double. A single full-frame quad read 2.00.
+    published from engine->msaa_samples, but at the time a 1-sample request was
+    allocated multisample and this driver rounded it up to 2, so every reading
+    on the TAA path was exactly double -- a single full-frame quad read 2.00.
+    (11.34 has since made a 1-sample request genuinely single-sample.)
     """
     layers_scene = os.path.join(ROOT, "assets", OVERDRAW_LAYERS)
     if not os.path.exists(layers_scene):
@@ -3907,10 +3915,10 @@ def run_overdraw_gate(workdir):
         return failures
 
     # 800x600, and the smaller size was tried and reverted. At 400x300 the
-    # opaque row reads ~1.7 ms, where the GPU timer's own jitter can exceed the
-    # 3% noise ceiling this arm asserts -- it went from +15% passing to failing
-    # on an unchanged renderer. A timing arm's headroom is the thing it is for;
-    # three seconds of suite time is not worth trading for it.
+    # opaque row reads ~1.7 ms, where the GPU timer's own jitter dwarfs the
+    # separation this arm asserts -- it went from +15% passing to failing on an
+    # unchanged renderer. A timing arm's headroom is the thing it is for; three
+    # seconds of suite time is not worth trading for it.
     base = _profiled_run(workdir, "od_t1", taa + ["--no-sort-opaque"],
                          fixture=OVERDRAW_TILES, size=("800", "600"))
     floor_run = _profiled_run(workdir, "od_t2", taa + ["--no-sort-opaque"],
@@ -3929,11 +3937,11 @@ def run_overdraw_gate(workdir):
     # nothing to reject. If it ever gained overlap the arm would quietly be
     # measuring a different scene.
     flat = base["shading"] and abs(base["shading"]["complexity"] - 1.0) <= OVERDRAW_TOLERANCE
-    ok = cost >= CROSSOVER_MIN and noise < CROSSOVER_NOISE_MAX and flat
+    ok = cost >= CROSSOVER_MIN and cost >= CROSSOVER_SEPARATION * noise and flat
     print(f"  prepass-crossover {'PASS' if ok else 'FAIL'}  opaque {b:.3f} -> {o:.3f} ms with "
           f"the prepass, {cost * 100.0:+.0f}% (want >= +{CROSSOVER_MIN * 100.0:.0f}%: nothing "
           f"to reject at complexity 1.0), against a {noise * 100.0:.0f}% floor "
-          f"(want < {CROSSOVER_NOISE_MAX * 100.0:.0f}%); complexity 1.0: {flat}")
+          f"(want {CROSSOVER_SEPARATION:.0f}x separation); complexity 1.0: {flat}")
     if not ok:
         failures.append("prepass-crossover")
 

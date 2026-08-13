@@ -74,15 +74,16 @@ typedef struct Engine {
     // MSAA sample count REQUESTED for the scene framebuffer (1 = off, 4 = 4x).
     // Runtime-changeable via set_engine_msaa_samples.
     //
-    // A REQUEST, not a measurement. Ask this driver for 1 and the target comes
-    // back with 2, so anything that needs the count the framebuffer actually has
-    // must read msaa_samples_actual instead -- reading this one reported every
-    // depth-complexity figure on the TAA path at exactly twice the truth
-    // (spec 11.31). Set this to choose the AA mode; read the other to reason
-    // about what the target can do.
+    // A request the allocator honours at 1: a single-sample request gets a
+    // plain GL_TEXTURE_2D target (spec 11.34), where it used to get a
+    // multisample one the driver silently rounded up to 2. Above 1 the driver
+    // may still adjust the count, so anything reasoning about what the target
+    // actually holds reads msaa_samples_actual; this field is which AA mode was
+    // chosen.
     int msaa_samples;
     // What the driver returned for the request above, read back from the scene
-    // FBO at every build. Always >= 1 and never a promise the request made.
+    // FBO at every build. Equal to the request at 1 by construction now; above 1
+    // it is still the driver's answer, not the request's promise.
     int msaa_samples_actual;
 
     GLFWerrorfun error_callback;
@@ -92,8 +93,12 @@ typedef struct Engine {
     KeyCallback key_callback;
     ScrollCallback scroll_callback;
 
-    GLuint framebuffer;                // Framebuffer object
-    GLuint multisample_texture;        // Multisample HDR color (attachment 0)
+    GLuint framebuffer; // Framebuffer object
+    // The *_multisample_texture names predate spec 11.34: at msaa_samples == 1
+    // these are plain GL_TEXTURE_2D targets, multisample only above that. The
+    // attachment layout and every consumer (all blit-side) are the same either
+    // way, which is why the fields keep their names.
+    GLuint multisample_texture;        // HDR color (attachment 0)
     GLuint normal_multisample_texture; // Multisample view-space normal .xyz + SSR reflective marker
                                        // .a (0 model / -1 floor / +alpha A2C) (attachment 1)
     GLuint aux_multisample_texture;    // Multisample aux G-buffer: motion .xy + linear view-Z .z +

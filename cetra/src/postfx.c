@@ -29,20 +29,10 @@
 // Creates a single-sample color-only FBO; returns false on failure
 static bool create_color_fbo(int width, int height, GLenum internal_format, GLuint* out_fbo,
                              GLuint* out_texture) {
-    // RGBA is the default; only the single-channel and packed-RGB formats
-    // need the narrower pixel-transfer format (data is always NULL anyway).
-    GLenum format = GL_RGBA;
-    if (internal_format == GL_R8 || internal_format == GL_R16F)
-        format = GL_RED;
-    else if (internal_format == GL_RG16F)
-        format = GL_RG;
-    else if (internal_format == GL_R11F_G11F_B10F)
-        format = GL_RGB;
-
     glGenTextures(1, out_texture);
     glBindTexture(GL_TEXTURE_2D, *out_texture);
-    glTexImage2D(GL_TEXTURE_2D, 0, (GLint)internal_format, width, height, 0, format, GL_FLOAT,
-                 NULL);
+    glTexImage2D(GL_TEXTURE_2D, 0, (GLint)internal_format, width, height, 0,
+                 gl_transfer_format(internal_format), GL_FLOAT, NULL);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     // Clamp so bloom sampling doesn't wrap around screen edges

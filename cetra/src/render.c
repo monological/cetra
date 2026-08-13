@@ -311,20 +311,20 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
     // during a capture -- capture targets are always single-sample, so reading
     // it alone would take the A2C path with no coverage hardware behind it and
     // bake solid quads into the capture.
-    // The REQUEST, deliberately, where almost everything else that cares about
-    // sample counts now reads msaa_samples_actual. This one asks "which AA mode
-    // did the app choose", not "what did the driver allocate" -- and those
-    // diverge, because a 1-sample request comes back as a 2-sample target.
+    // The REQUEST, which since spec 11.34 the allocator honours at 1 -- so the
+    // divergence this comment used to hedge against is gone, and request and
+    // actual agree on the shipping path. The field is still the right one to
+    // read: this asks "which AA mode did the app choose", not "what did the
+    // driver allocate".
     //
-    // Routing it to the actual count was tried and rejected. It would switch
-    // alpha-to-coverage on in every configuration, since the driver never
-    // returns 1: measured at 1,488,830 px (18%) on the raiden recipe, all of it
-    // the groom, and it looks good. It is still wrong twice over. A2C is the
-    // technique the TAA era replaced -- it belongs to forward+MSAA, which is not
-    // the path this engine ships -- and turning it on everywhere makes
-    // alphaCutoff meaningless engine-wide, since only A2C_MIN_ALPHA is ever
-    // compared against. Soft masked edges under TAA are what hashed alpha
-    // testing is for (spec 11.31 defers it).
+    // Kept for the record: routing this to msaa_samples_actual back when a
+    // 1-sample request came back as 2 was tried and rejected. It switched
+    // alpha-to-coverage on everywhere -- 1,488,830 px (18%) on the raiden
+    // recipe, all groom, and it looked good -- and was still wrong twice over:
+    // A2C is the technique the TAA era replaced, and with it on everywhere
+    // alphaCutoff is meaningless, since only A2C_MIN_ALPHA is ever compared
+    // against. Soft masked edges under TAA are what hashed alpha testing is
+    // for (spec 11.31 defers it).
     bool a2c_capable = engine->msaa_samples > 1 && !engine->capturing;
     SubmitStats* stats = profiler_submit(engine->profiler);
 

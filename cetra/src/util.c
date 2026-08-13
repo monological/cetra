@@ -91,6 +91,20 @@ void gl_delete_texture(GLuint* tex) {
     *tex = 0;
 }
 
+GLenum gl_transfer_format(GLenum internal_format) {
+    switch (internal_format) {
+    case GL_R8:
+    case GL_R16F:
+        return GL_RED;
+    case GL_RG16F:
+        return GL_RG;
+    case GL_R11F_G11F_B10F:
+        return GL_RGB;
+    default:
+        return GL_RGBA;
+    }
+}
+
 void print_indentation(int depth) {
     for (int i = 0; i < depth; i++) {
         printf("    ");

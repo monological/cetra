@@ -39,12 +39,8 @@ typedef struct {
     int no_flip_uv;             // For assets baked with the opposite V convention
     float ao_radius;            // AO/GI reach override in world units (0 = auto)
     int force_taa;              // TAA even in headless (temporal passes active)
-    int msaa;                   // Requested MSAA sample count; 0 = policy decides
-                                // (windowed/--taa request 1, headless keeps 4).
-                                // Applied AFTER that policy, so --taa --msaa 4
-                                // is expressible -- the lever spec 11.34 needed
-                                // to price a sample, since nothing else varies
-                                // the count independently of TAA.
+    int msaa;                   // Requested MSAA sample count; 0 = the
+                                // TAA/headless policy decides
     int no_ground;              // Disable skybox ground projection
     int no_key_light;           // Pure IBL: skip the analytic key lights
     int no_shadows;             // Keep key lights but disable shadow maps

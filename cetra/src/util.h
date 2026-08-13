@@ -36,6 +36,13 @@ void draw_fullscreen_quad(GLuint vao);
 void gl_delete_fbo(GLuint* fbo);
 void gl_delete_texture(GLuint* tex);
 
+// The transfer format glTexImage2D wants beside an internal format when the
+// data pointer is NULL -- a formality the spec still validates for base
+// compatibility. ONE mapping for the two allocators that need it (postfx's
+// render targets and the engine's scene attachments), so a new format is added
+// once rather than remembered twice.
+GLenum gl_transfer_format(GLenum internal_format);
+
 /*
  * String
  */

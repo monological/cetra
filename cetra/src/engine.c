@@ -558,9 +558,7 @@ static void _destroy_msaa_attachments(Engine* engine) {
 // It used to be multisample even at samples == 1, which was a live cost: this
 // driver refuses a 1-sample multisample target and returns a 2-sample one (see
 // msaa_samples_actual), so the TAA path -- which requests one sample precisely
-// to avoid MSAA -- silently rasterized two samples per pixel. Measured before
-// fixing (spec 11.34): a sample of this scene costs ~93 ms of forest's opaque
-// row at 1600x900.
+// to avoid MSAA -- silently rasterized two samples per pixel (spec 11.34).
 //
 // The single-sample texture sets sampler state where the multisample one cannot
 // carry any: nothing samples these targets today (every consumer is a blit),
@@ -577,17 +575,9 @@ static void _add_scene_color_attachment(GLuint* out_tex, GLenum internal_format,
                                0);
         return;
     }
-    // The transfer format is a formality (data is NULL), but it must be
-    // base-compatible with the internal format -- postfx's create_color_fbo is
-    // the house pattern and this is its mapping for the formats the scene MRT
-    // and the OIT targets use.
-    GLenum format = GL_RGBA;
-    if (internal_format == GL_R16F)
-        format = GL_RED;
-    else if (internal_format == GL_R11F_G11F_B10F)
-        format = GL_RGB;
     glBindTexture(GL_TEXTURE_2D, *out_tex);
-    glTexImage2D(GL_TEXTURE_2D, 0, (GLint)internal_format, rw, rh, 0, format, GL_FLOAT, NULL);
+    glTexImage2D(GL_TEXTURE_2D, 0, (GLint)internal_format, rw, rh, 0,
+                 gl_transfer_format(internal_format), GL_FLOAT, NULL);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -641,12 +631,14 @@ static int _create_msaa_attachments(Engine* engine, int rw, int rh, int samples)
         return -1;
     }
 
-    // What the driver ACTUALLY gave us, which is not always what was asked for:
-    // request one sample here and this one returns a 2-sample target. Read back
-    // while the target is still bound, once per build, so no consumer has to
-    // repeat the query or -- worse -- trust the request. Spec 11.31 found this
-    // by way of every depth-complexity figure on the TAA path reading exactly
-    // twice the truth.
+    // What the driver ACTUALLY gave us, which above one sample is not always
+    // what was asked for. Read back while the target is still bound, once per
+    // build, so no consumer has to repeat the query or -- worse -- trust the
+    // request. The readback earned its keep before 11.34: back when a 1-sample
+    // request was still allocated multisample, this driver rounded it up to 2,
+    // and trusting the request had every depth-complexity figure on the TAA
+    // path reading exactly twice the truth (spec 11.31). At one sample the
+    // plain-texture path now makes request and answer agree by construction.
     GLint got = 0;
     glGetIntegerv(GL_SAMPLES, &got);
     engine->msaa_samples_actual = got < 1 ? 1 : got;
@@ -1988,9 +1980,9 @@ static bool _ensure_oit_targets(Engine* engine, int rw, int rh) {
     glGenFramebuffers(1, &engine->oit_fbo);
     glBindFramebuffer(GL_FRAMEBUFFER, engine->oit_fbo);
     _add_scene_color_attachment(&engine->oit_accum_multisample_texture, GL_RGBA16F,
-                               GL_COLOR_ATTACHMENT5, rw, rh, engine->msaa_samples);
+                                GL_COLOR_ATTACHMENT5, rw, rh, engine->msaa_samples);
     _add_scene_color_attachment(&engine->oit_revealage_multisample_texture, GL_R16F,
-                               GL_COLOR_ATTACHMENT6, rw, rh, engine->msaa_samples);
+                                GL_COLOR_ATTACHMENT6, rw, rh, engine->msaa_samples);
     glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER,
                               engine->depth_renderbuffer);
     if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
@@ -2071,9 +2063,9 @@ static bool _ensure_moment_targets(Engine* engine, int rw, int rh) {
     glGenFramebuffers(1, &engine->moment_fbo);
     glBindFramebuffer(GL_FRAMEBUFFER, engine->moment_fbo);
     _add_scene_color_attachment(&engine->moment_multisample_texture, GL_RGBA32F,
-                               GL_COLOR_ATTACHMENT5, rw, rh, engine->msaa_samples);
+                                GL_COLOR_ATTACHMENT5, rw, rh, engine->msaa_samples);
     _add_scene_color_attachment(&engine->moment_b0_multisample_texture, GL_RGBA32F,
-                               GL_COLOR_ATTACHMENT6, rw, rh, engine->msaa_samples);
+                                GL_COLOR_ATTACHMENT6, rw, rh, engine->msaa_samples);
     glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER,
                               engine->depth_renderbuffer);
     bool ok = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
@@ -2110,10 +2102,11 @@ static bool _ensure_moment_targets(Engine* engine, int rw, int rh) {
     // makes and it buys accuracy rather than resolution: two fp32 targets at the
     // scene's sample count, plus the resolved atlas. fp16 would halve it and
     // costs a third of the accuracy (spec 11.17).
-    // The count the targets were actually built at, not the one requested: this
-    // driver rounds a 1-sample request up, and a VRAM figure that believed the
-    // request understated the largest allocation the renderer makes by 2x on the
-    // path that ships.
+    // The count the targets were actually built at, not the one requested.
+    // Above one sample the driver may adjust the count; and back when 1-sample
+    // requests were still allocated multisample (pre-11.34), a VRAM figure that
+    // believed the request understated the renderer's largest allocation on the
+    // shipping path.
     int samples = engine->msaa_samples_actual;
     double mb = ((double)rw * rh * 16.0 * (2.0 * samples + 2.0)) / (1024.0 * 1024.0);
     log_info("OIT moments: %dx%d x%d fp32 + %dx%d atlas (%.0f MB)", rw, rh, samples, rw, rh * 2,
@@ -2355,12 +2348,13 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EngineRenderFunc render
         // supersample, render scale and any mid-run resolution change have all
         // been applied by now.
         //
-        // msaa_samples_actual, never msaa_samples: ask this driver for a
-        // 1-sample multisample target and it gives you a 2-sample one, so
-        // GL_SAMPLES_PASSED counts two samples per pixel against a budget that
-        // said one. Every depth-complexity reading on the TAA path -- the path
-        // that requests 1, and the path the engine ships -- came out at exactly
-        // twice the truth until this read the count back.
+        // msaa_samples_actual, never msaa_samples: above one sample the driver
+        // may adjust the count, and GL_SAMPLES_PASSED counts what the target
+        // HAS. The rule was written in scar tissue -- back when a 1-sample
+        // request was allocated multisample, this driver returned 2 and every
+        // depth-complexity reading on the TAA path came out at exactly twice
+        // the truth until this read the count back (spec 11.31; the request is
+        // honoured at 1 since 11.34).
         profiler_set_sample_budget(engine->profiler, (size_t)rw * (size_t)rh *
                                                          (size_t)engine->msaa_samples_actual);
         engine->normals_this_frame =

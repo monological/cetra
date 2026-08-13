@@ -915,13 +915,14 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
     glm_vec3_copy(engine->camera->position, cam_world);
     uniform_set_int(u, "cameraSubmerged", cam_world[1] < water->level ? 1 : 0);
 
-    // The shoreline's coverage needs samples to be dithered into, and the same two
-    // conditions the opaque lane's masked materials read decide whether there are
-    // any: the sample count the APP asked for (a 1-sample request comes back as a
-    // 2-sample target, so the actual count never says 1), and whether a capture is
-    // bound -- capture targets are always single-sample, so reading the scene
-    // target's count alone would spend coverage against no coverage hardware and
-    // write the shoreline sliver at full strength into the capture.
+    // The shoreline's coverage needs samples to be dithered into, and the same
+    // two conditions the opaque lane's masked materials read decide whether
+    // there are any: the sample count the APP asked for -- the right question
+    // even now that a 1-sample request is honoured (spec 11.34), since this asks
+    // which AA mode was chosen -- and whether a capture is bound. Capture
+    // targets are always single-sample, so reading the scene target's count
+    // alone would spend coverage against no coverage hardware and write the
+    // shoreline sliver at full strength into the capture.
     const bool a2c = water->shore_coverage && engine->msaa_samples > 1 && !engine->capturing;
     uniform_set_int(u, "alphaToCoverage", a2c ? 1 : 0);
 
