@@ -150,6 +150,7 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --water-waves <m>  gerstner (default) or fft spectral cascades\n");
     fprintf(stderr, "      --no-water-caustics  Drop the surface's light focusing\n");
     fprintf(stderr, "      --no-water-coverage  Hard shoreline cutoff, no coverage\n");
+    fprintf(stderr, "      --water-bed <m>    none (default) or dome: an analytic bed to shoal\n");
     fprintf(stderr, "      --sky              Procedural physically-based sky (instead of -e)\n");
     fprintf(stderr, "      --sky-debug        Blit the sky LUTs into the frame corner\n");
     fprintf(stderr, "      --clouds           Volumetric cloud layer (implies --sky)\n");
@@ -696,6 +697,20 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 return -1;
             }
             args->water_extent = (float)atof(argv[i]);
+            args->water = 1;
+        } else if (strcmp(argv[i], "--water-bed") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            if (strcmp(argv[i], "dome") == 0) {
+                args->water_bed_dome = 1;
+            } else if (strcmp(argv[i], "none") == 0) {
+                args->water_bed_dome = 0;
+            } else {
+                fprintf(stderr, "Error: unknown water bed '%s' (none|dome)\n", argv[i]);
+                return -1;
+            }
             args->water = 1;
         } else if (strcmp(argv[i], "--gi-debug") == 0) {
             args->gi_volume = 1;
@@ -1271,6 +1286,35 @@ static void apply_model_recenter(Engine* engine, SceneNode* root_node) {
  */
 static float clip_near_max = 0.0f;   // Load-time near (0.05 x scene radius)
 static float clip_near_floor = 0.0f; // Lower bound (matches the 10% min zoom)
+
+/*
+ * --water-bed dome: an analytic bed that rises to a shoal in the middle of the drawn
+ * extent, for exercising the shoaling path from a deterministic fixture.
+ *
+ * apps/forest and apps/tree are the real Tier 3 consumers, and neither is a usable
+ * instrument -- forest is not pixel-deterministic and tree's own floor is tens of
+ * thousands of pixels. This exists so a shoal can be measured at all, and it is a
+ * DIAGNOSTIC: the surface shoals over a bed that no geometry in the frame stands on,
+ * so nothing here claims to look right, only to vary the way a bed makes it vary.
+ *
+ * Sized off the water's own extent so it lands inside the drawn surface at any
+ * --water-extent, and centred on the origin like the extent is.
+ */
+static float render_dome_bed_height(void* ctx, float x, float z) {
+    const Water* water = (const Water*)ctx;
+    const float radius = water->extent * 0.62f;
+    const float r = sqrtf(x * x + z * z) / fmaxf(radius, 1e-3f);
+    // Deep floor to a crown a little above the still level, so one frame carries open
+    // water, the whole shoaling ramp, and a dry shoal.
+    const float floor_y = water->level - 9.0f;
+    const float crown_y = water->level + 0.6f;
+    if (r >= 1.0f)
+        return floor_y;
+    // Smoothstep in r, so the ramp has no crease at the crown or at the toe -- a bed
+    // with a kink in it would put a kink in the shoal gradient this exists to test.
+    const float t = 1.0f - r;
+    return floor_y + (crown_y - floor_y) * t * t * (3.0f - 2.0f * t);
+}
 
 /*
  * CPU-skin a vertex with the animation state's bone matrices, mirroring the
@@ -2905,6 +2949,10 @@ int main(int argc, char** argv) {
                 water->caustics = false;
             if (args.no_water_coverage)
                 water->shore_coverage = false;
+            if (args.water_bed_dome) {
+                water->height_at = render_dome_bed_height;
+                water->height_ctx = water;
+            }
             scene->water = water;
         }
     }
