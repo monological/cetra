@@ -84,6 +84,8 @@ typedef struct ForestArgs {
     int no_sort_opaque;   // opaque front-to-back ordering is on by default
     int depth_prepass;    // position-only depth before shading; off by default
     int force_taa;        // TAA headless too; diagnostic, costs determinism
+    int msaa;             // requested sample count; 0 = the TAA/headless policy
+                          // decides. Applied after it, so --taa --msaa 4 works.
     int headless_jitter;  // sub-pixel jitter headless; TAA is inert without it
     int render_mode;     // RenderMode override; 0 = PBR
     int no_spatial_sort; // scatter in draw order rather than Morton order
@@ -945,6 +947,8 @@ static void print_usage(const char* argv0) {
     fprintf(stderr, "      --no-sort-opaque    Draw opaques in graph order\n");
     fprintf(stderr, "      --depth-prepass     Depth-only pass before shading\n");
     fprintf(stderr, "      --taa               TAA headless too (diagnostic)\n");
+    fprintf(stderr, "      --msaa <n>          Request a sample count, overriding the\n");
+    fprintf(stderr, "                          TAA/headless policy (--taa --msaa 4 works)\n");
     fprintf(stderr, "      --headless-jitter   Sub-pixel jitter headless\n");
     fprintf(stderr, "      --no-sky            Plain directional rig, no atmosphere\n");
     fprintf(stderr, "      --no-fog            Disable the volumetric fog\n");
@@ -993,6 +997,8 @@ int main(int argc, char** argv) {
             g_args.depth_prepass = 1;
         } else if (!strcmp(a, "--taa")) {
             g_args.force_taa = 1;
+        } else if (!strcmp(a, "--msaa") && i + 1 < argc) {
+            g_args.msaa = atoi(argv[++i]);
         } else if (!strcmp(a, "--headless-jitter")) {
             g_args.headless_jitter = 1;
         } else if (!strcmp(a, "--lod-bias") && i + 1 < argc) {
@@ -1072,6 +1078,10 @@ int main(int argc, char** argv) {
         set_engine_msaa_samples(game->engine, 1);
         set_engine_taa_enabled(game->engine, true);
     }
+    // After the policy, so --taa --msaa 4 is expressible -- the lever that
+    // prices a sample (spec 11.34); nothing else varies the count with TAA held.
+    if (g_args.msaa > 0)
+        set_engine_msaa_samples(game->engine, g_args.msaa);
 
     run_game(game);
     free_game(game);

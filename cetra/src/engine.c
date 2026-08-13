@@ -541,28 +541,58 @@ static void _destroy_msaa_attachments(Engine* engine) {
     engine->moment_h = 0;
 }
 
-// Create one multisample color attachment (texture + framebuffer binding) on
-// the currently-bound framebuffer. Each G-buffer target is written only when a
-// consumer is active (see engine_set_scene_draw_buffers); the texture is always
-// allocated so the FBO layout is stable across frames.
-// ALWAYS multisample, even at samples == 1, and that is a live cost rather than
-// a tidy default. This driver refuses a 1-sample multisample target and returns
-// a 2-sample one (see msaa_samples_actual), so the AA path the engine SHIPS --
-// TAA, which requests one sample precisely to avoid MSAA -- silently rasterizes
-// two samples per pixel and resolves them. Twice the depth and colour storage
-// and a resolve nobody asked for, on the config whose -29% was measured
-// believing it had none of that.
+// Create one scene color attachment (texture + framebuffer binding) on the
+// currently-bound framebuffer -- multisample above one sample, a plain
+// GL_TEXTURE_2D at one. Each G-buffer target is written only when a consumer is
+// active (see engine_set_scene_draw_buffers); the texture is always allocated so
+// the FBO layout is stable across frames.
 //
-// Making one sample mean one sample needs a non-multisample path: a plain
-// GL_TEXTURE_2D here, and postfx's resolve reaching it through sampler2D
-// instead of sampler2DMS. Sized as a real perf item rather than cleanup, and
-// deferred in spec 11.31.
-static void _add_msaa_color_attachment(GLuint* out_tex, GLenum internal_format, GLenum attachment,
-                                       int rw, int rh, int samples) {
+// The branch is HERE, in the one allocator, rather than at its four call sites,
+// and that placement is load-bearing: the scene, OIT and moment FBOs all share
+// depth_renderbuffer, and GL requires every attachment of an FBO to carry the
+// same sample count. One branch on the one field every caller passes flips all
+// three FBOs in lockstep by construction; four caller-side branches could
+// disagree and the failure would be a quietly-incomplete OIT FBO falling back
+// to the unsorted late pass.
+//
+// It used to be multisample even at samples == 1, which was a live cost: this
+// driver refuses a 1-sample multisample target and returns a 2-sample one (see
+// msaa_samples_actual), so the TAA path -- which requests one sample precisely
+// to avoid MSAA -- silently rasterized two samples per pixel. Measured before
+// fixing (spec 11.34): a sample of this scene costs ~93 ms of forest's opaque
+// row at 1600x900.
+//
+// The single-sample texture sets sampler state where the multisample one cannot
+// carry any: nothing samples these targets today (every consumer is a blit),
+// but a plain texture left at the GL_NEAREST_MIPMAP_LINEAR default would be
+// mip-incomplete the day something does, and that failure is black, not loud.
+static void _add_scene_color_attachment(GLuint* out_tex, GLenum internal_format, GLenum attachment,
+                                        int rw, int rh, int samples) {
     glGenTextures(1, out_tex);
-    glBindTexture(GL_TEXTURE_2D_MULTISAMPLE, *out_tex);
-    glTexImage2DMultisample(GL_TEXTURE_2D_MULTISAMPLE, samples, internal_format, rw, rh, GL_TRUE);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, attachment, GL_TEXTURE_2D_MULTISAMPLE, *out_tex, 0);
+    if (samples > 1) {
+        glBindTexture(GL_TEXTURE_2D_MULTISAMPLE, *out_tex);
+        glTexImage2DMultisample(GL_TEXTURE_2D_MULTISAMPLE, samples, internal_format, rw, rh,
+                                GL_TRUE);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, attachment, GL_TEXTURE_2D_MULTISAMPLE, *out_tex,
+                               0);
+        return;
+    }
+    // The transfer format is a formality (data is NULL), but it must be
+    // base-compatible with the internal format -- postfx's create_color_fbo is
+    // the house pattern and this is its mapping for the formats the scene MRT
+    // and the OIT targets use.
+    GLenum format = GL_RGBA;
+    if (internal_format == GL_R16F)
+        format = GL_RED;
+    else if (internal_format == GL_R11F_G11F_B10F)
+        format = GL_RGB;
+    glBindTexture(GL_TEXTURE_2D, *out_tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, (GLint)internal_format, rw, rh, 0, format, GL_FLOAT, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, attachment, GL_TEXTURE_2D, *out_tex, 0);
 }
 
 // (Re)create the multisample attachments on engine->framebuffer at the given
@@ -588,13 +618,20 @@ static int _create_msaa_attachments(Engine* engine, int rw, int rh, int samples)
     // (re)build for a stable FBO layout, but written only when its consumer is
     // active (see engine_set_scene_draw_buffers).
     for (int i = 0; i < GBUFFER_ATTACHMENT_COUNT; i++) {
-        _add_msaa_color_attachment(gb[i].tex, gb[i].internal_format, gb[i].attachment, rw,
-                                   rh, samples);
+        _add_scene_color_attachment(gb[i].tex, gb[i].internal_format, gb[i].attachment, rw,
+                                    rh, samples);
     }
 
     glGenRenderbuffers(1, &engine->depth_renderbuffer);
     glBindRenderbuffer(GL_RENDERBUFFER, engine->depth_renderbuffer);
-    glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples, GL_DEPTH24_STENCIL8, rw, rh);
+    // Same branch as the colour allocator, for the same shared-depth reason: a
+    // plain renderbuffer at one sample, multisample above. It stays a
+    // renderbuffer either way -- it was never sampleable, which is why
+    // engine_resolve_scene_depth exists.
+    if (samples > 1)
+        glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples, GL_DEPTH24_STENCIL8, rw, rh);
+    else
+        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, rw, rh);
     glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER,
                               engine->depth_renderbuffer);
 
@@ -1950,9 +1987,9 @@ static bool _ensure_oit_targets(Engine* engine, int rw, int rh) {
     }
     glGenFramebuffers(1, &engine->oit_fbo);
     glBindFramebuffer(GL_FRAMEBUFFER, engine->oit_fbo);
-    _add_msaa_color_attachment(&engine->oit_accum_multisample_texture, GL_RGBA16F,
+    _add_scene_color_attachment(&engine->oit_accum_multisample_texture, GL_RGBA16F,
                                GL_COLOR_ATTACHMENT5, rw, rh, engine->msaa_samples);
-    _add_msaa_color_attachment(&engine->oit_revealage_multisample_texture, GL_R16F,
+    _add_scene_color_attachment(&engine->oit_revealage_multisample_texture, GL_R16F,
                                GL_COLOR_ATTACHMENT6, rw, rh, engine->msaa_samples);
     glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER,
                               engine->depth_renderbuffer);
@@ -2033,9 +2070,9 @@ static bool _ensure_moment_targets(Engine* engine, int rw, int rh) {
 
     glGenFramebuffers(1, &engine->moment_fbo);
     glBindFramebuffer(GL_FRAMEBUFFER, engine->moment_fbo);
-    _add_msaa_color_attachment(&engine->moment_multisample_texture, GL_RGBA32F,
+    _add_scene_color_attachment(&engine->moment_multisample_texture, GL_RGBA32F,
                                GL_COLOR_ATTACHMENT5, rw, rh, engine->msaa_samples);
-    _add_msaa_color_attachment(&engine->moment_b0_multisample_texture, GL_RGBA32F,
+    _add_scene_color_attachment(&engine->moment_b0_multisample_texture, GL_RGBA32F,
                                GL_COLOR_ATTACHMENT6, rw, rh, engine->msaa_samples);
     glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER,
                               engine->depth_renderbuffer);

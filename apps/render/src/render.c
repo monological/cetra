@@ -213,6 +213,8 @@ static void print_usage(const char* prog) {
     fprintf(stderr,
             "      --ssaa <int>       Supersampling factor (default: 1 = off; 2 = 2x SSAA)\n");
     fprintf(stderr, "      --no-ssaa          Disable supersampling (render at 1x)\n");
+    fprintf(stderr, "      --msaa <int>       Request an MSAA sample count, overriding the\n"
+                    "                         TAA/headless policy (so --taa --msaa 4 works)\n");
     fprintf(stderr, "      --render-scale <f> TAAU: render the scene at this fraction of the\n"
                     "                         display size [0.5, 1) and upscale temporally\n"
                     "                         (headless needs --taa --headless-jitter)\n");
@@ -494,6 +496,16 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             }
         } else if (strcmp(argv[i], "--taa") == 0) {
             args->force_taa = 1;
+        } else if (strcmp(argv[i], "--msaa") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->msaa = atoi(argv[i]);
+            if (args->msaa < 1) {
+                fprintf(stderr, "Error: --msaa wants a sample count >= 1\n");
+                return -1;
+            }
         } else if (strcmp(argv[i], "--ground") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -3021,6 +3033,11 @@ int main(int argc, char** argv) {
         set_engine_msaa_samples(engine, 1);
         set_engine_taa_enabled(engine, true);
     }
+    // After the policy, deliberately, so --taa --msaa 4 is expressible: nothing
+    // else can vary the sample count independently of TAA, and pricing a sample
+    // (spec 11.34) needs exactly that.
+    if (args.msaa > 0)
+        set_engine_msaa_samples(engine, args.msaa);
 
     scale_schedule = &args;
     engine_run(engine, render_frame_update, render_scene_callback);
