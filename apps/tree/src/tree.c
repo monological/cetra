@@ -1117,14 +1117,13 @@ int main(int argc, char** argv) {
                 args.water_level > -9000.0f ? args.water_level : TREE_WATER_LEVEL;
             water->extent = TREE_WATER_EXTENT;
             water->height_at = tree_bed_height;
-            // Long and low. The grid is uniform in world space, so at this extent a
-            // cell is ~17 units and a wavelength has to be many cells wide or the
-            // crests read as facets; 150 buys about nine. Until the clipmap lands
-            // that trade -- swell length against crest smoothness -- is the only
-            // lever here.
-            water->wavelength = 150.0f;
-            water->amplitude = 1.3f;
-            water->steepness = 0.45f;
+            // Shorter and livelier than the swell 11.32 had to settle for. The
+            // clipmap's centre patch is a ~1-unit cell here, so a 45-unit wave spans
+            // forty of them; before the rings landed, a cell was 17 units and
+            // anything under ~150 read as facets. This is what that trade buys back.
+            water->wavelength = 45.0f;
+            water->amplitude = 0.85f;
+            water->steepness = 0.55f;
             // Wide fan: four octaves off one direction at this scale print as
             // corduroy, and the sea is most of the frame.
             water->spread = 0.85f;
