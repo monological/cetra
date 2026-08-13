@@ -12,6 +12,7 @@
 #include "sky.h"
 #include "wind.h"
 #include "gi_volume.h"
+#include "water.h"
 #include "program.h"
 #include "uniform.h"
 #include "shader.h"
@@ -1348,6 +1349,26 @@ void render_current_scene(Engine* engine) {
         engine->refraction_enabled) {
         profiler_scope_begin(engine->profiler, "refraction resolve");
         engine->scene_color_this_frame = engine_resolve_opaque_color(engine);
+        profiler_scope_end(engine->profiler);
+    }
+
+    // Water surface (spec 11.32). Between the resolve above and the late pass
+    // below, and the position is load-bearing at both ends: it samples the
+    // resolve for transmission, so it cannot precede it, and it writes DEPTH, so
+    // everything that sorts against the surface -- translucents, the OIT
+    // accumulate, the particle depth resolve -- has to come after it. Same
+    // argument the shadow catcher makes above, for the same buffer.
+    //
+    // It resolves the scene colour itself when the predicate above did not: a
+    // scene can have water and no transmissive mesh, which is the common case.
+    //
+    // Not under capture, for the reason the particle block below states: the
+    // depth resolve blits at the MAIN render size and re-binds
+    // engine->framebuffer, which would redirect the rest of a cube face into the
+    // scene FBO. A probe therefore captures no water.
+    if (water_active(scene->water) && render_mode == RENDER_MODE_PBR && !engine->capturing) {
+        profiler_scope_begin(engine->profiler, "water");
+        water_render(scene->water, scene, engine, *view, draw_projection);
         profiler_scope_end(engine->profiler);
     }
 

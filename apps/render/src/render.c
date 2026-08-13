@@ -25,6 +25,7 @@
 #include "cetra/ibl.h"
 #include "cetra/sky.h"
 #include "cetra/gi_volume.h"
+#include "cetra/water.h"
 #include "cetra/app.h"
 
 #include "cetra/shader_strings.h"
@@ -142,6 +143,10 @@ static void print_usage(const char* prog) {
             "      --gi-rate <n>      Probes captured per frame while dirty (default 2)\n");
     fprintf(stderr,
             "      --gi-debug         Blit the probe atlas into the frame corner\n");
+    fprintf(stderr, "      --water            Water surface (spec 11.32)\n");
+    fprintf(stderr, "      --water-level <f>  Still-water plane, world Y (implies --water)\n");
+    fprintf(stderr,
+            "      --water-extent <f> Half-size of the water surface (implies --water)\n");
     fprintf(stderr, "      --sky              Procedural physically-based sky (instead of -e)\n");
     fprintf(stderr, "      --sky-debug        Blit the sky LUTs into the frame corner\n");
     fprintf(stderr, "      --clouds           Volumetric cloud layer (implies --sky)\n");
@@ -298,6 +303,9 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->cloud_wind_kmh = -1.0f;
     args->cloud_wind_deg = -1.0f;
     args->sun_azimuth = -999.0f;
+    // A water plane at y = 0 is the useful default and 0 is a legal level, so the
+    // "unset" value has to sit outside every plausible one rather than at zero.
+    args->water_level = -9999.0f;
     args->world_scale = -1.0f; // -1 = keep the sky's default (1 unit = 1 metre)
     args->spec_occ_mode = -1;  // -1 = keep the engine default
     args->import_scale = 1.0f; // 1 = none
@@ -650,6 +658,22 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             }
             args->gi_rate = atoi(argv[i]);
             args->gi_volume = 1;
+        } else if (strcmp(argv[i], "--water") == 0) {
+            args->water = 1;
+        } else if (strcmp(argv[i], "--water-level") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->water_level = (float)atof(argv[i]);
+            args->water = 1;
+        } else if (strcmp(argv[i], "--water-extent") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->water_extent = (float)atof(argv[i]);
+            args->water = 1;
         } else if (strcmp(argv[i], "--gi-debug") == 0) {
             args->gi_volume = 1;
             args->gi_debug = 1;
@@ -2839,6 +2863,20 @@ int main(int argc, char** argv) {
             compute_scene_bounds(scene, gi_min, gi_max);
             gi_volume_fit(gi, gi_min, gi_max);
             scene->gi_volume = gi;
+        }
+    }
+
+    // The water surface. Attached here rather than at scene load so the level
+    // and extent can default off the finished scene bounds, which the probe and
+    // GI blocks above may have recentred.
+    if (args.water) {
+        Water* water = create_water();
+        if (water) {
+            if (args.water_level > -9000.0f)
+                water->level = args.water_level;
+            if (args.water_extent > 0.0f)
+                water->extent = args.water_extent;
+            scene->water = water;
         }
     }
 

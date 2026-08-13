@@ -12,6 +12,7 @@
 #include "sky.h"
 #include "wind.h"
 #include "gi_volume.h"
+#include "water.h"
 #include "mask_array.h"
 #include "program.h"
 #include "shader.h"
@@ -61,6 +62,7 @@ Scene* create_scene() {
     scene->sky = NULL;
     scene->wind = NULL;
     scene->gi_volume = NULL;
+    scene->water = NULL;
     glm_vec3_zero(scene->ambient_radiance); // no IBL and no authored ambient = black
     scene->render_skybox = false;
     scene->skybox_brightness = 1.0f;
@@ -173,6 +175,12 @@ void free_scene(Scene* scene) {
     if (scene->gi_volume) {
         free_gi_volume(scene->gi_volume);
         scene->gi_volume = NULL;
+    }
+
+    // Free the water surface
+    if (scene->water) {
+        free_water(scene->water);
+        scene->water = NULL;
     }
 
     // Free the material mask texture array

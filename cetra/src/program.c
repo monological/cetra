@@ -545,6 +545,18 @@ ShaderProgram* create_depth_prepass_program() {
     return program;
 }
 
+ShaderProgram* create_water_program() {
+    ShaderProgram* program = NULL;
+
+    if ((program = create_program_from_source("water", water_vert_shader_str,
+                                              water_frag_shader_str, NULL)) == NULL) {
+        log_error("Failed to initialize water shader program");
+        return NULL;
+    }
+
+    return program;
+}
+
 ShaderProgram* create_skybox_program() {
     ShaderProgram* program = NULL;
 
