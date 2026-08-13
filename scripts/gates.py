@@ -2975,6 +2975,48 @@ WATER_FOG_BED_BOXES = [(0.40, 0.390, 0.60, 0.420),
                        (0.40, 0.540, 0.60, 0.570)]
 WATER_FOG_BED_TOTAL_MIN = 1.25
 
+# Spectral motion vectors (spec 11.33 phase 4). The camera is static in headless, so
+# camera velocity is exactly zero and motion blur is a no-op on anything that reports
+# no motion of its own -- which is what makes this a velocity measurement rather than a
+# blur-pass liveness one. Measured 0 px before the previous cascades were retained,
+# 116,796 after; the Gerstner path, which always had it, reads 77,150 on the same pair.
+WATER_FFT_MOTION_MIN_PX = 20000
+
+# Shoaling, over the analytic dome --water-bed installs (spec 11.33 phase 6). The two
+# real Tier 3 consumers cannot measure this: apps/forest is not pixel-deterministic and
+# apps/tree's floor is tens of thousands of pixels. This config is 0 px twice.
+#
+# Read as surface ROUGHNESS -- the per-pixel spread of luma in a box. A shoaled surface
+# has lost its displacement, so its reflection is uniform where an open-water one is
+# broken up; that is what a wave looks like to a box of pixels.
+WATER_DOME_BED = ["--water-bed", "dome"]
+WATER_NO_BED = ["--water-bed", "none"]
+# The dome's radius is 0.62 of the extent, so at extent 70 it reaches 43 units and the
+# far field is beyond it -- flat bed, column 9 units, shoal exactly 1. Which is why the
+# arm can assert the open box does NOT move: a local bed that calmed the whole sea
+# would be a global amplitude knob wearing a bed's name.
+WATER_SHOAL_MID_BOX = (0.06, 0.40, 0.30, 0.55)
+WATER_SHOAL_OPEN_BOX = (0.06, 0.17, 0.30, 0.26)
+# Measured 0.63x on the mid box; the floor is loose enough to survive a retune of the
+# shoal window and still fail an inert bed.
+WATER_SHOAL_MAX_RATIO = 0.80
+WATER_SHOAL_OPEN_TOL = 0.05
+
+# The shore foam band, on the GERSTNER path -- which is what isolates it. Crest foam is
+# selected from Jacobian compression and the Gerstner map's steepness is clamped so it
+# cannot compress, so on that path the shore band is the only foam there is. Measured
+# 1,306 px in the band with a bed and 0 at both extremes, 0 everywhere with no bed.
+WATER_FOAM_LUMA_MIN = 0.21
+WATER_FOAM_RB_MIN = 0.55
+# Windowed on BOTH sides of the shoal factor, so the band has to be a band: at shoal 0
+# the surface is about to be discarded and at 1 there is no shore to foam against.
+# Nearer is further down the frame here (the camera sits over the crown), so the
+# fully-shoaled box is the low one and the open-water box is the high one.
+WATER_FOAM_OPEN_BOX = (0.02, 0.10, 0.32, 0.24)
+WATER_FOAM_BAND_BOX = (0.02, 0.26, 0.32, 0.31)
+WATER_FOAM_SHOALED_BOX = (0.02, 0.55, 0.32, 0.90)
+WATER_FOAM_BAND_MIN_PX = 300
+
 # Clipmap rings (spec 11.33). At a large extent the near field is where the uniform
 # grid failed, so this is the config the rings exist for.
 WATER_CLIP_FLAGS = ["--water", "--water-waves", "fft", "--water-extent", "500",
@@ -3059,6 +3101,44 @@ def _water_max_luma(pix, w, h, box):
     return worst
 
 
+def _water_roughness(pix, w, h, box):
+    """Per-pixel linear-luma standard deviation in a fractional box.
+
+    A wave, to a box of pixels, is spread: the surface tilts, so the reflection it
+    returns varies across the box. A shoaled surface has lost its displacement and
+    returns nearly one value. The MEAN would not see this at all -- calm and choppy
+    water average to much the same place.
+    """
+    x0, y0, x1, y1 = box
+    vals = [_linear_luma(pix, w, h, px, py)
+            for py in range(int(y0 * h), int(y1 * h))
+            for px in range(int(x0 * w), int(x1 * w))]
+    mean = sum(vals) / len(vals)
+    return (sum((v - mean) ** 2 for v in vals) / len(vals)) ** 0.5
+
+
+def _water_foam_px(pix, w, h, box):
+    """Pixels in a fractional box that read as whitewater: bright AND near-neutral.
+
+    Both halves are needed. Bright alone catches a specular hit off calm water and the
+    sky above the horizon; neutral alone catches the dry ramp, which is the mistake the
+    first version of water-crack made. Foam is a bright grey with the sky in it, and
+    water at this depth is decisively blue, so the red/blue ratio separates them where
+    brightness cannot.
+    """
+    x0, y0, x1, y1 = box
+    n = 0
+    for py in range(int(y0 * h), int(y1 * h)):
+        for px in range(int(x0 * w), int(x1 * w)):
+            o = (py * w + px) * 3
+            r = _SRGB_TO_LINEAR[pix[o]]
+            g = _SRGB_TO_LINEAR[pix[o + 1]]
+            b = _SRGB_TO_LINEAR[pix[o + 2]]
+            if (r + g + b) / 3.0 > WATER_FOAM_LUMA_MIN and r / max(b, 1e-6) > WATER_FOAM_RB_MIN:
+                n += 1
+    return n
+
+
 def _water_shore_fall(path, window):
     """Median sharpest single-row fall down each column crossing the waterline.
 
@@ -3102,6 +3182,10 @@ def run_water_gate(workdir):
       water-fft-live  the spectral surface differs from Gerstner at the SAME extent
                       and level, so the wave model is the only variable. Fails a
                       cascade chain that transformed to zero.
+      water-fft-motion the spectral surface reports the motion its waves have. The
+                      camera is static, so motion blur can only move a pixel whose
+                      velocity is the wave's own -- it moved 0 px before the previous
+                      cascades were retained.
       water-caustic   light focusing moves the frame; one flag apart.
       water-submerged absorption is monotone along the submerged INTERFACE, which only
                       that branch produces. A pixel count here would pass on a surface
@@ -3220,6 +3304,22 @@ def run_water_gate(workdir):
         if not ok:
             failures.append("water-fft-live")
 
+    # The spectral surface's own motion, read through the one pass that consumes
+    # velocity and nothing else.
+    if fft_ok:
+        mb = os.path.join(workdir, "water_fft_motionblur.ppm")
+        err = render(scene, mb, WATER_FFT_FLAGS + ["--motion-blur"])
+        if err:
+            print(f"  water-fft-motion ERROR render failed: {err.strip()[-200:]}")
+            failures.append("water-fft-motion")
+        else:
+            ae_mb, _ = compare(fa, mb)
+            ok = ae_mb >= WATER_FFT_MOTION_MIN_PX
+            print(f"  water-fft-motion {'PASS' if ok else 'FAIL'}  {ae_mb} px under "
+                  f"--motion-blur with a static camera, want >={WATER_FFT_MOTION_MIN_PX}")
+            if not ok:
+                failures.append("water-fft-motion")
+
     # Caustics, and the submerged side of the interface. Both only exist on the
     # spectral path, so both hang off the FFT render above.
     if fft_ok:
@@ -3273,6 +3373,61 @@ def run_water_gate(workdir):
                   f"want >={WATER_FOG_BED_TOTAL_MIN}x")
             if not ok:
                 failures.append("water-under-fog")
+
+    # Shoaling, which needs the diagnostic bed: every other water arm runs over a bed
+    # the vertex stage cannot see, so the whole Tier 3 path was untested.
+    dome = os.path.join(workdir, "water_dome.ppm")
+    nobed = os.path.join(workdir, "water_nobed.ppm")
+    err = render(scene, dome, WATER_FFT_FLAGS + WATER_DOME_BED)
+    if not err:
+        err = render(scene, nobed, WATER_FFT_FLAGS + WATER_NO_BED)
+    if err:
+        print(f"  water-shoal  ERROR render failed: {err.strip()[-200:]}")
+        failures.append("water-shoal")
+    else:
+        wd, hd, pixd = _read_ppm(dome)
+        wn, hn, pixn = _read_ppm(nobed)
+        mid_on = _water_roughness(pixd, wd, hd, WATER_SHOAL_MID_BOX)
+        mid_off = _water_roughness(pixn, wn, hn, WATER_SHOAL_MID_BOX)
+        open_on = _water_roughness(pixd, wd, hd, WATER_SHOAL_OPEN_BOX)
+        open_off = _water_roughness(pixn, wn, hn, WATER_SHOAL_OPEN_BOX)
+        mid_ratio = mid_on / max(mid_off, 1e-6)
+        open_ratio = open_on / max(open_off, 1e-6)
+        ok = (mid_ratio <= WATER_SHOAL_MAX_RATIO and
+              abs(open_ratio - 1.0) <= WATER_SHOAL_OPEN_TOL)
+        print(f"  water-shoal  {'PASS' if ok else 'FAIL'}  roughness over the bed "
+              f"{mid_off:.4f} -> {mid_on:.4f} = {mid_ratio:.2f}x "
+              f"(want <={WATER_SHOAL_MAX_RATIO}), beyond it {open_off:.4f} -> "
+              f"{open_on:.4f} = {open_ratio:.2f}x (want 1.00 +/-"
+              f"{WATER_SHOAL_OPEN_TOL})")
+        if not ok:
+            failures.append("water-shoal")
+
+    # The shore foam band, isolated by running Gerstner: no crest foam on that path, so
+    # whatever whitewater is in the frame is the shore band.
+    gdome = os.path.join(workdir, "water_gerstner_dome.ppm")
+    gnone = os.path.join(workdir, "water_gerstner_nobed.ppm")
+    err = render(scene, gdome, WATER_GERSTNER_REF + WATER_DOME_BED)
+    if not err:
+        err = render(scene, gnone, WATER_GERSTNER_REF + WATER_NO_BED)
+    if err:
+        print(f"  water-shore-foam ERROR render failed: {err.strip()[-200:]}")
+        failures.append("water-shore-foam")
+    else:
+        wg, hg, pixg = _read_ppm(gdome)
+        wb, hb, pixb = _read_ppm(gnone)
+        band = _water_foam_px(pixg, wg, hg, WATER_FOAM_BAND_BOX)
+        at_open = _water_foam_px(pixg, wg, hg, WATER_FOAM_OPEN_BOX)
+        at_shoal = _water_foam_px(pixg, wg, hg, WATER_FOAM_SHOALED_BOX)
+        none_band = _water_foam_px(pixb, wb, hb, WATER_FOAM_BAND_BOX)
+        ok = (band >= WATER_FOAM_BAND_MIN_PX and at_open == 0 and at_shoal == 0 and
+              none_band == 0)
+        print(f"  water-shore-foam {'PASS' if ok else 'FAIL'}  band {band} px "
+              f"(want >={WATER_FOAM_BAND_MIN_PX}), open water {at_open} and fully "
+              f"shoaled {at_shoal} (want 0 at both extremes), same box with no bed "
+              f"{none_band} (want 0)")
+        if not ok:
+            failures.append("water-shore-foam")
 
     # Shoreline coverage, one flag apart at 4x MSAA, and then the same flag at one
     # sample where it must do nothing at all.
