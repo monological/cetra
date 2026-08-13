@@ -2965,6 +2965,33 @@ WATER_UNDER_BOXES = [(0.30, 0.245, 0.44, 0.265),
 # floor. The end-to-end ratio (measured 2.14x) is the assertion, with strict
 # ordering to catch an inversion the endpoints would hide.
 WATER_UNDER_TOTAL_MIN = 1.5
+
+# Clipmap rings (spec 11.33). At a large extent the near field is where the uniform
+# grid failed, so this is the config the rings exist for.
+WATER_CLIP_FLAGS = ["--water", "--water-waves", "fft", "--water-extent", "500",
+                    "--water-level", "0.0", "--no-auto-exposure", "-E", "1.0"] + \
+                   WATER_NO_CATCHER
+# Exact structure: 1 centre draw + 1 instanced ring draw; 1 + (levels - 1) instances;
+# 128^2 cells = 32,768 centre triangles and 12,288 ring cells = 24,576 per ring, so
+# 32,768 + 4 * 24,576. Integers, so there is no floor to measure -- the ring topology
+# either is this or the feature does not work.
+WATER_CLIP_DRAWS = 2
+WATER_CLIP_INSTANCES = 5
+WATER_CLIP_TRIANGLES = 32768 + 4 * 24576
+# A T-junction crack is a hole, so it shows the bed unabsorbed. LUMA, not R/B: the
+# first version of this arm used R/B and measured FOAM, because bare bed (R/B ~1.0)
+# and whitewater (0.92) are both near-neutral and the ratio cannot tell them apart.
+# It read 4,705 of 16,128 pixels "cracked" on a frame with no crack in it -- and the
+# foam was only there because the clipmap had started resolving near-field waves.
+#
+# Brightness does separate them, and the band is empty: measured on these boxes, the
+# brightest foam pixel is 0.3702 linear and bare bed (the same boxes with --water
+# off) is 0.5049. A ceiling in between catches a hole and ignores whitewater.
+#
+# What this arm does NOT do: distinguish a hole from a very bright specular hit, and
+# a sub-pixel crack that never fully clears the surface will slip under it. Deciding
+# that properly needs the depth buffer, which this harness cannot read.
+WATER_CRACK_LUMA_MAX = 0.44
 # Caustics move 12,509 px of a 480,000 px frame on this fixture -- a small share,
 # because only the submerged part of the ramp is inside the focusing depth window.
 # A quarter of that is well clear of nothing and well under the signal.
@@ -2988,6 +3015,23 @@ WATER_GRID = 12
 def _water_rb(pix, w, h, box):
     rgb = _absorb_box_rgb(pix, w, h, box, WATER_GRID)
     return rgb[0] / rgb[2] if rgb[2] > 1e-6 else float("nan")
+
+
+def _water_max_luma(pix, w, h, box):
+    """Brightest per-pixel linear luma in a fractional box, every pixel.
+
+    Per-pixel and not a mean: a hole in the surface is one or two pixels wide and a
+    box average would swallow it, which is the whole reason this exists beside
+    _water_rb.
+    """
+    x0, y0, x1, y1 = box
+    worst = 0.0
+    for py in range(max(0, int(y0 * h)), min(h, int(y1 * h))):
+        for px in range(max(0, int(x0 * w)), min(w, int(x1 * w))):
+            o = (py * w + px) * 3
+            worst = max(worst, (_SRGB_TO_LINEAR[pix[o]] + _SRGB_TO_LINEAR[pix[o + 1]] +
+                                _SRGB_TO_LINEAR[pix[o + 2]]) / 3.0)
+    return worst
 
 
 def run_water_gate(workdir):
@@ -3155,6 +3199,39 @@ def run_water_gate(workdir):
                   f"want >={WATER_UNDER_TOTAL_MIN}x")
             if not ok:
                 failures.append("water-submerged")
+
+    # Clipmap rings. The draw structure is integers, and the crack check is a
+    # per-pixel ceiling on the same boxes water-absorb reads as means -- a crack is
+    # one pixel wide and a mean would swallow it.
+    clip = os.path.join(workdir, "water_clip.ppm")
+    err = render(scene, clip, WATER_CLIP_FLAGS)
+    if err:
+        print(f"  water-crack  ERROR render failed: {err.strip()[-200:]}")
+        failures.append("water-crack")
+    else:
+        wc, hc, pixc = _read_ppm(clip)
+        worst = max(_water_max_luma(pixc, wc, hc, box) for box in WATER_ABSORB_BOXES)
+        ok = worst <= WATER_CRACK_LUMA_MAX
+        print(f"  water-crack  {'PASS' if ok else 'FAIL'}  brightest px luma={worst:.4f} "
+              f"want <={WATER_CRACK_LUMA_MAX} (foam peaks 0.37, bare bed 0.50)")
+        if not ok:
+            failures.append("water-crack")
+
+    clipt = _profiled_run(workdir, "water_clip", WATER_CLIP_FLAGS + ["--profiler"],
+                          fixture=WATER_FIXTURE, size=("400", "300"))
+    if clipt is None or "water" not in clipt.get("submit", {}):
+        print("  water-draws  FAIL  no water SUBMISSION row")
+        failures.append("water-draws")
+    else:
+        row = clipt["submit"]["water"]
+        got = (row["draws"], row["instances"], row["triangles"])
+        want = (WATER_CLIP_DRAWS, WATER_CLIP_INSTANCES, WATER_CLIP_TRIANGLES)
+        ok = got == want
+        print(f"  water-draws  {'PASS' if ok else 'FAIL'}  "
+              f"draws/instances/triangles={got[0]}/{got[1]}/{got[2]} want "
+              f"{want[0]}/{want[1]}/{want[2]}")
+        if not ok:
+            failures.append("water-draws")
 
     on = _profiled_run(workdir, "water_on", WATER_FLAGS + ["--profiler"],
                        fixture=WATER_FIXTURE, size=("400", "300"))
@@ -4440,87 +4517,103 @@ def run_fbx_unit_gate():
     return [] if ok else ["fbx-unit"]
 
 
+def _run_import_gates(workdir):
+    del workdir # both drive the importer directly rather than a render
+    return run_range_gate() + run_fbx_unit_gate()
+
+
+# Every gate group in run order, as (selector, banner, fn).
+#
+# A table rather than a sequence of calls so --only can filter it. The suite is
+# minutes long, and a change that touches one subsystem should not have to pay for
+# all of them -- a check nobody waits for is a check nobody runs. The full run stays
+# the default, so CI and the specs' verification blocks are unaffected.
+GATE_GROUPS = [
+    ("scale", "scale invariance (lights x1000, exposure /1000):", run_scale_gates),
+    ("penumbra", "area shadow (analytic penumbra):", run_penumbra_gate),
+    ("grazing", "punctual grazing (leak wall base):", run_grazing_gate),
+    ("dir-shadow", "cascade shadow (analytic ellipse):", run_dir_shadow_gate),
+    ("catcher", "catcher over a real ground (contact fixture):", run_catcher_gate),
+    ("catcher-transparency", "catcher vs transparency (panel through the plane):",
+     run_catcher_transparency_gate),
+    ("oit", "order-independent transparency (analytic card stack):", run_oit_gate),
+    ("absorption", "volume absorption (path length and channel selectivity, spec 11.32):",
+     run_absorption_gate),
+    ("water", "water surface (determinism, absorption, shoreline, clipmap; specs 11.32/11.33):",
+     run_water_gate),
+    ("clouds", "cloud layer (steady-state churn, report-only):", run_cloud_churn_gate),
+    ("skin-offpath", "pre-integrated skin (off-path byte identity):", run_skin_offpath_gate),
+    ("skin-curvature", "pre-integrated skin (curvature ordering):", run_skin_curvature_gate),
+    ("skin-handoff", "pre-integrated skin (handoff past the scatter ceiling):",
+     run_skin_handoff_gate),
+    ("skin-area", "subsurface under an area light (spec 11.19 / B3.2):", run_skin_area_gate),
+    ("hair", "hair lobes driven by the strand map (spec 11.20 / B8):", run_hair_flow_gate),
+    ("flare", "lens flare and chromatic aberration (spec 11.21 / B7):", run_flare_gate),
+    ("sss-invariance", "subsurface blur (world width vs frame size):", run_sss_invariance_gate),
+    ("sss-banding", "subsurface blur (kernel not visible as rings):", run_sss_banding_gate),
+    ("dither", "output dither (8-bit contour bands, spec 11.24 / E1):", run_dither_gate),
+    ("translucent", "translucent shadows (analytic layer stack, spec 11.26 / C1):",
+     run_translucent_shadow_gate),
+    ("translucent-offpath", "translucent shadows (off-path identity and the inverse arm):",
+     run_translucent_offpath_gate),
+    ("profiler", "gpu timing (per-pass queries, spec 11.27 / E4):", run_profiler_gate),
+    ("submission", "submission (draw counts + the CPU column, spec 11.28 / E5):",
+     run_submission_gate),
+    ("draw-list", "draw list (submission order, spec 11.28 Phase 3):", run_draw_list_gate),
+    ("lod", "LOD chains (selection by projected size, spec 11.28 Phase 6):", run_lod_gate),
+    ("mask", "alpha mask (binary above the cutoff, spec 11.31):", run_mask_gate),
+    ("overdraw", "depth complexity (a scene whose answer is known, spec 11.31):",
+     run_overdraw_gate),
+    ("prepass", "depth prepass (identical picture, less shading, spec 11.30 / E6):",
+     run_prepass_gate),
+    ("forest", "forest (scattered content: batching, ordering, LOD, spec 11.29):",
+     run_forest_gate),
+    ("import", "import:", _run_import_gates),
+]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--keep", action="store_true", help="keep the generated scenes and frames")
+    ap.add_argument("--only", metavar="SEL",
+                    help="run only groups whose selector contains SEL (comma-separated)")
+    ap.add_argument("--list", action="store_true", help="list group selectors and exit")
     args = ap.parse_args()
+
+    if args.list:
+        for selector, banner, _ in GATE_GROUPS:
+            print(f"  {selector:<22} {banner}")
+        return 0
 
     if not os.path.exists(RENDER):
         sys.exit(f"{RENDER} not found -- run ./build.sh first")
 
+    groups = GATE_GROUPS
+    if args.only:
+        wanted = [s.strip() for s in args.only.split(",") if s.strip()]
+        groups = [g for g in GATE_GROUPS if any(w in g[0] for w in wanted)]
+        # A selector that matches nothing is a typo, and running zero gates while
+        # reporting success is the worst outcome this script has.
+        if not groups:
+            sys.exit(f"--only {args.only!r} matched no group; --list to see them")
+
     workdir = tempfile.mkdtemp(prefix="cetra_gates_")
+    failures = []
     try:
-        print("scale invariance (lights x1000, exposure /1000):")
-        failures = run_scale_gates(workdir)
-        print("area shadow (analytic penumbra):")
-        failures += run_penumbra_gate(workdir)
-        print("punctual grazing (leak wall base):")
-        failures += run_grazing_gate(workdir)
-        print("cascade shadow (analytic ellipse):")
-        failures += run_dir_shadow_gate(workdir)
-        print("catcher over a real ground (contact fixture):")
-        failures += run_catcher_gate(workdir)
-        print("catcher vs transparency (panel through the plane):")
-        failures += run_catcher_transparency_gate(workdir)
-        print("order-independent transparency (analytic card stack):")
-        failures += run_oit_gate(workdir)
-        print("volume absorption (path length and channel selectivity, spec 11.32):")
-        failures += run_absorption_gate(workdir)
-        print("water surface (determinism, absorption, shoreline; spec 11.32):")
-        failures += run_water_gate(workdir)
-        print("cloud layer (steady-state churn, report-only):")
-        failures += run_cloud_churn_gate(workdir)
-        print("pre-integrated skin (off-path byte identity):")
-        failures += run_skin_offpath_gate(workdir)
-        print("pre-integrated skin (curvature ordering):")
-        failures += run_skin_curvature_gate(workdir)
-        print("pre-integrated skin (handoff past the scatter ceiling):")
-        failures += run_skin_handoff_gate(workdir)
-        print("subsurface under an area light (spec 11.19 / B3.2):")
-        failures += run_skin_area_gate(workdir)
-        print("hair lobes driven by the strand map (spec 11.20 / B8):")
-        failures += run_hair_flow_gate(workdir)
-        print("lens flare and chromatic aberration (spec 11.21 / B7):")
-        failures += run_flare_gate(workdir)
-        print("subsurface blur (world width vs frame size):")
-        failures += run_sss_invariance_gate(workdir)
-        print("subsurface blur (kernel not visible as rings):")
-        failures += run_sss_banding_gate(workdir)
-        print("output dither (8-bit contour bands, spec 11.24 / E1):")
-        failures += run_dither_gate(workdir)
-        print("translucent shadows (analytic layer stack, spec 11.26 / C1):")
-        failures += run_translucent_shadow_gate(workdir)
-        print("translucent shadows (off-path identity and the inverse arm):")
-        failures += run_translucent_offpath_gate(workdir)
-        print("gpu timing (per-pass queries, spec 11.27 / E4):")
-        failures += run_profiler_gate(workdir)
-        print("submission (draw counts + the CPU column, spec 11.28 / E5):")
-        failures += run_submission_gate(workdir)
-        print("draw list (submission order, spec 11.28 Phase 3):")
-        failures += run_draw_list_gate(workdir)
-        print("LOD chains (selection by projected size, spec 11.28 Phase 6):")
-        failures += run_lod_gate(workdir)
-        print("alpha mask (binary above the cutoff, spec 11.31):")
-        failures += run_mask_gate(workdir)
-        print("depth complexity (a scene whose answer is known, spec 11.31):")
-        failures += run_overdraw_gate(workdir)
-        print("depth prepass (identical picture, less shading, spec 11.30 / E6):")
-        failures += run_prepass_gate(workdir)
-        print("forest (scattered content: batching, ordering, LOD, spec 11.29):")
-        failures += run_forest_gate(workdir)
-        print("import:")
-        failures += run_range_gate()
-        failures += run_fbx_unit_gate()
+        for _, banner, fn in groups:
+            print(banner)
+            failures += fn(workdir)
     finally:
         if args.keep:
             print(f"\nartifacts in {workdir}")
         else:
             shutil.rmtree(workdir, ignore_errors=True)
 
+    scope = "" if groups is GATE_GROUPS else f" ({len(groups)} of {len(GATE_GROUPS)} groups)"
     if failures:
-        print(f"\n{len(failures)} gate(s) failed: {', '.join(failures)}")
+        print(f"\n{len(failures)} gate(s) failed{scope}: {', '.join(failures)}")
         return 1
-    print("\nall gates passed")
+    print(f"\nall gates passed{scope}")
     return 0
 
 
