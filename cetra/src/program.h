@@ -19,9 +19,23 @@ typedef struct ShaderProgram {
     // must carry exactly one object: the transform arrives as a plain uniform,
     // so every instance of a batched draw would land on the first one's.
     bool instanced;
-    // Whether this program's gl_Position comes from object_position.glsl, so a
-    // depth prepass drawing the same mesh with depth_prepass_vert lands on the
-    // same value and the shading pass survives GL_LEQUAL against it.
+    // Whether the depth prepass may draw this program's meshes. TWO
+    // requirements, and they are separate even though today's two flagged
+    // programs happen to satisfy both:
+    //
+    //   1. gl_Position comes from object_position.glsl, so the lean
+    //      depth_prepass_vert lands on the same value and the shading pass
+    //      survives GL_LEQUAL against it. This is what the flag was named for.
+    //   2. The FRAGMENT stage implements passMode == SUBMIT_PASS_DEPTH_ONLY,
+    //      because masked meshes are prepassed through this program rather than
+    //      the lean one (spec 11.31). A program satisfying (1) but not (2) gets
+    //      its passMode upload silently swallowed -- uniform writes are
+    //      location-guarded -- and the prepass then stamps depth across the whole
+    //      quad with no coverage test, punching a hole in whatever is behind.
+    //
+    // Both hold only because `pbr` and `pbr_skinned` are the sole setters and
+    // both use pbr_frag. Anything setting this for reason (1) alone must either
+    // carry pbr_frag or be kept out of the masked sweep.
     //
     // Opt-IN, because the failure is silent and ugly. `shape` is the standing
     // counter-example: it is GL_LINES plus a geometry shader that expands each

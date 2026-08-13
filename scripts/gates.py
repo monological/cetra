@@ -2451,6 +2451,21 @@ def _gpu_table(workdir, tag, extra, screenshot=None):
     return tables["gpu"], tables["unparsed"]["gpu"]
 
 
+def _timing_delta(base, repeat, variant, row="opaque"):
+    """(before, after, signed relative delta, run-to-run floor) or None.
+
+    One helper because two arms make the same claim in the same shape -- "this
+    config moved the row by X against a floor of Y" -- and the second copy had
+    already drifted: it could not tell a MISSING row from one that read 0.000 ms,
+    which is the exact confusion gpu-scale's own comment was written to prevent.
+    A vanished pass reading 0 scores as a 100% saving.
+    """
+    b, r, v = base.get(row), repeat.get(row), variant.get(row)
+    if b is None or r is None or v is None or b <= 0.0:
+        return None
+    return b, v, (v - b) / b, abs(b - r) / b
+
+
 def run_profiler_gate(workdir):
     if not os.path.exists(os.path.join(ROOT, "assets", GPU_FIXTURE)):
         print(f"  gpu          SKIP  (missing {GPU_FIXTURE})")
@@ -2551,16 +2566,17 @@ def run_profiler_gate(workdir):
     if full is None or half is None or full2 is None:
         failures.append("gpu-scale")
     else:
-        # Presence before ratio. A missing row read as 0 ms scores a vanished
-        # pass as a 100% saving.
-        before, after, repeat = full.get("opaque"), half.get("opaque"), full2.get("opaque")
-        if before is None or after is None or repeat is None or before <= 0.0:
-            print(f"  gpu-scale    FAIL  no opaque row to compare (full={before}, half={after}, "
-                  f"repeat={repeat}); the pass was not timed, not cheap")
+        # Presence before ratio, in _timing_delta: a missing row read as 0 ms
+        # scores a vanished pass as a 100% saving.
+        timing = _timing_delta(full, full2, half)
+        if timing is None:
+            print(f"  gpu-scale    FAIL  no usable opaque row to compare (full="
+                  f"{full.get('opaque')}, half={half.get('opaque')}, "
+                  f"repeat={full2.get('opaque')}); the pass was not timed, not cheap")
             failures.append("gpu-scale")
         else:
-            noise = abs(before - repeat) / before
-            drop = (before - after) / before
+            before, after, signed, noise = timing
+            drop = -signed  # half scale should make it SMALLER
             ok = drop >= GPU_SCALE_DROP and noise < GPU_SCALE_DROP
             print(f"  gpu-scale    {'PASS' if ok else 'FAIL'}  opaque {before:.3f} -> "
                   f"{after:.3f} ms at half scale, {drop * 100.0:.0f}% off "
@@ -2934,15 +2950,11 @@ def run_overdraw_gate(workdir):
     if base is None or floor_run is None or on is None:
         return failures + ["prepass-crossover"]
 
-    b = base["gpu"].get("opaque")
-    f = floor_run["gpu"].get("opaque")
-    o = on["gpu"].get("opaque")
-    if not b or not f or not o:
-        print("  prepass-crossover FAIL  no opaque row to compare")
+    timing = _timing_delta(base["gpu"], floor_run["gpu"], on["gpu"])
+    if timing is None:
+        print("  prepass-crossover FAIL  no usable opaque row to compare")
         return failures + ["prepass-crossover"]
-
-    noise = abs(b - f) / b
-    cost = (o - b) / b
+    b, o, cost, noise = timing
     # The premise, asserted rather than left in a comment: this fixture has
     # nothing to reject. If it ever gained overlap the arm would quietly be
     # measuring a different scene.

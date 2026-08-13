@@ -29,8 +29,8 @@ layout(location = 3) out vec4 AlbedoOut;
 layout(location = 4) out vec4 DiffuseOut;
 // OIT's two slots, bound only during an OIT sub-pass and carrying a different
 // pair in each -- a different FBO and a different blend behind them:
-//   accumulate (oitPass 1): premultiplied colour * weight, and alpha (.r)
-//   generation (oitPass 2): the power moments b1..b4, and absorbance b0 (.r)
+//   accumulate (passMode 1): premultiplied colour * weight, and alpha (.r)
+//   generation (passMode 2): the power moments b1..b4, and absorbance b0 (.r)
 layout(location = 5) out vec4 AccumOut;
 layout(location = 6) out vec4 RevealageOut;
 // Ambient specular, split out for the post-chain occlusion composite (spec
@@ -66,16 +66,6 @@ uniform int alphaToCoverage;
 // dither into and switches off on a 1-sample buffer, but the material is still
 // masked, and the shadow/GTAO rules below key off the material, not the AA mode.
 uniform int alphaMasked;
-// 1 = the depth prepass is drawing this mesh, so run the coverage decision and
-// stop. A mode rather than a second program for the reason the OIT moment
-// generation below is one: a prepass that decided coverage its own way would
-// have to reproduce the UV transform, the POM march and the vertex-colour alpha,
-// and a fragment of drift there either drills a hole in the canopy or writes
-// depth where nothing was. A mode cannot drift at all.
-//
-// The lean depth_prepass program still draws everything that CANNOT discard --
-// this is only for the masked geometry that has a decision to make.
-uniform int depthOnly;
 // Masked material that opted back into the shadow map (material.h
 // foliage_shadows). Leaf cards are large enough to resolve at map-texel scale,
 // so they read the cascades like opaque geometry does.
@@ -227,10 +217,17 @@ uniform int clearcoatEnabled; // Global clearcoat lobe toggle (--no-clearcoat)
 uniform int specularEnabled;  // Global KHR_materials_specular toggle (--no-specular)
 uniform int sheenEnabled;     // Global KHR_materials_sheen toggle (--no-sheen)
 uniform int parallaxEnabled;  // Global POM toggle (--no-parallax, §4.11)
-// Which OIT sub-pass is drawing: 0 none, 1 accumulate, 2 moment generation.
-uniform int oitPass;
+// Which pass is drawing, and therefore where this shader stops: 0 shade,
+// 1 OIT accumulate, 2 OIT moment generation, 3 depth prepass. Mirrors
+// SubmitPass in common.h, so the numbering is load-bearing.
+//
+// The depth prepass is a VALUE here rather than a flag beside this one, and the
+// reason is that the states are mutually exclusive: nothing is a moment draw and
+// a depth-only draw at once. As two uniforms that pairing was expressible and
+// its behaviour fell out of which early return happened to be written first.
+uniform int passMode;
 // 1 = weight the accumulate by measured transmittance rather than the depth
-// curve. Orthogonal to which sub-pass is drawing, and separate from oitPass for
+// curve. Orthogonal to which pass is drawing, and separate from passMode for
 // that reason; oit_resolve_frag carries the same bit under the same name.
 uniform int oitMomentWeighted;
 // The moment atlas arrives through the refraction sampler rather than one of
@@ -959,7 +956,7 @@ void main() {
     // moment generation, where finalOpacity exists. That is the whole reason
     // this is two exits rather than one: the shipping AA path (TAA, one sample)
     // never pays for a coverage number nothing will read.
-    if (depthOnly > 0 && alphaToCoverage == 0)
+    if (passMode == 3 && alphaToCoverage == 0)
         return;
 
     vec3 N;
@@ -1167,6 +1164,14 @@ void main() {
 
     float NdotV = max(dot(N, V), 0.0);
 
+    // The opacity every exit below writes, computed ONCE. Three passes used to
+    // call fresnelOpacity with the same four arguments at three points in this
+    // function, agreeing only by inspection -- and the moments have to describe
+    // exactly the opacity the accumulate later writes, which is the drift
+    // fresnelOpacity's own comment says two copies would hide. Nothing between
+    // here and the last use reassigns any input.
+    float finalOpacity = fresnelOpacity(coverage, materialOpacity, iorF0, NdotV);
+
     // Moment generation ends here. It needs opacity and depth and nothing else:
     // it is a summary of WHERE the opacity is, never of what colour it is, so
     // everything below -- the clustered light loop and its shadow taps, IBL,
@@ -1175,10 +1180,10 @@ void main() {
     // unconditionally at the end.
     //
     // Legal to leave the other outputs unwritten: the generation FBO binds only
-    // locations 5 and 6. oitPass is a uniform, so the branch is coherent.
-    if (oitPass == 2) {
+    // locations 5 and 6. passMode is a uniform, so the branch is coherent.
+    if (passMode == 2) {
         float absorbance =
-            mboitAbsorbance(fresnelOpacity(coverage, materialOpacity, iorF0, NdotV));
+            mboitAbsorbance(finalOpacity);
         AccumOut = mboitMoments(absorbance, mboitWarpDepth(-ViewPos.z, oitNearFar));
         RevealageOut = vec4(absorbance);
         return;
@@ -1194,10 +1199,9 @@ void main() {
     //
     // FragColor is written too, and is not redundant: it is the last
     // alpha-bearing output when the normals G-buffer is off this frame.
-    if (depthOnly > 0) {
-        float depthCoverage = fresnelOpacity(coverage, materialOpacity, iorF0, NdotV);
-        FragColor = vec4(0.0, 0.0, 0.0, depthCoverage);
-        NormalOut = vec4(0.0, 0.0, 0.0, depthCoverage);
+    if (passMode == 3) {
+        FragColor = vec4(0.0, 0.0, 0.0, finalOpacity);
+        NormalOut = vec4(0.0, 0.0, 0.0, finalOpacity);
         return;
     }
 
@@ -1958,7 +1962,7 @@ void main() {
         }
     }
 
-    float finalOpacity = fresnelOpacity(coverage, materialOpacity, iorF0, NdotV);
+
 
     // `color` is already working space -- converted upstream so the clamps in
     // between operate on the scale they were written for.
@@ -2021,12 +2025,12 @@ void main() {
     // bound when splitting, but every bound attachment must be written.
     SpecOut = vec4(min(ambSpec * preExposure, vec3(WS_SCENE_MAX)), finalOpacity);
 
-    // The OIT accumulate (guarded so oitPass 0 leaves FragColor and the opaque/
+    // The OIT accumulate (guarded so passMode 0 leaves FragColor and the opaque/
     // alpha-blend paths byte-identical): premultiplied colour times how much of
     // this fragment survives what is in front of it -- measured from the moments
     // where they were generated, guessed from the depth curve otherwise. Alpha
     // into RevealageOut, whose multiplicative blend builds the product of (1-a).
-    if (oitPass == 1) {
+    if (passMode == 1) {
         float w = oitMomentWeighted > 0 ? mboitTransmittanceAtlas(oitMomentTex, oitMomentInvSize,
                                                                  oitNearFar, -ViewPos.z)
                                         : oitWeight(-ViewPos.z);

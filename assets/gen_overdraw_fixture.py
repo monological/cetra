@@ -88,10 +88,12 @@ def _build(quads):
     meshes, nodes = [], []
     for i, corners in enumerate(quads):
         offset = len(blob)
-        blob += b"".join(struct.pack("<3f", *c) for c in corners)
+        packed = b"".join(struct.pack("<3f", *c) for c in corners)
+        blob += packed
         mn = [min(c[k] for c in corners) for k in range(3)]
         mx = [max(c[k] for c in corners) for k in range(3)]
-        views.append({"buffer": 0, "byteOffset": offset, "byteLength": 48, "target": 34962})
+        views.append({"buffer": 0, "byteOffset": offset, "byteLength": len(packed),
+                      "target": 34962})
         accessors.append({"bufferView": len(views) - 1, "componentType": 5126, "count": 4,
                           "type": "VEC3", "min": mn, "max": mx})
         meshes.append({"name": f"quad_{i}",
@@ -102,7 +104,14 @@ def _build(quads):
     return blob, views, accessors, meshes, nodes
 
 
-def _write(name, quads, eye_z, centre_y, note):
+def _write(name, quads, note):
+    # Camera DERIVED from the quads it has to frame, rather than returned
+    # alongside them by each layout. The module docstring claims the camera
+    # cannot go stale when a spacing changes; computing it from the geometry here
+    # is what makes that true rather than true-by-coincidence.
+    eye_z = max(c[2] for q in quads for c in q) + NEAR_GAP
+    ys = [c[1] for q in quads for c in q]
+    centre_y = (min(ys) + max(ys)) * 0.5
     blob, views, accessors, meshes, nodes = _build(quads)
     gltf = {
         "asset": {"version": "2.0", "generator": "gen_overdraw_fixture.py"},
@@ -161,9 +170,8 @@ def layers(n):
     #
     # It is therefore ALSO a direct test of the front-to-back sort: with the
     # sort on, this same scene must collapse back toward 1.
-    quads = [_quad(-half_w, 0.0, half_w, 2.0 * half_h, -span * 0.5 + k * SPACING)
-             for k in range(n)]
-    return quads, eye_z, half_h
+    return [_quad(-half_w, 0.0, half_w, 2.0 * half_h, -span * 0.5 + k * SPACING)
+            for k in range(n)]
 
 
 def tiles(m):
@@ -179,7 +187,7 @@ def tiles(m):
             y0 = 2.0 * half_h * row / m
             y1 = 2.0 * half_h * (row + 1) / m
             quads.append(_quad(x0, y0, x1, y1, 0.0))
-    return quads, eye_z, half_h
+    return quads
 
 
 if __name__ == "__main__":
@@ -190,10 +198,7 @@ if __name__ == "__main__":
                     help="grid edge; emits this squared non-overlapping quads")
     args = ap.parse_args()
 
-    quads, eye_z, half_h = layers(args.layers)
-    _write("overdraw_layers", quads, eye_z, half_h,
+    _write("overdraw_layers", layers(args.layers),
            f"depth complexity should read exactly {args.layers}.00")
-
-    quads, eye_z, half_h = tiles(args.tiles)
-    _write("overdraw_tiles", quads, eye_z, half_h,
+    _write("overdraw_tiles", tiles(args.tiles),
            f"{args.tiles}x{args.tiles} grid, complexity 1.0, one draw each")

@@ -217,11 +217,18 @@ typedef struct MaterialParam {
  * namespace and the same authored vocabulary, they just need a setter call
  * where the others need a store.
  *
- * SHADING ONLY, on purpose. alpha_mode, alphaCutoff, doubleSided and
- * foliage_shadows are deliberately absent: they decide which PASS a mesh draws
- * in and whether it is culled, so a wrong value there moves geometry between
- * the opaque and transparent queues instead of merely misshading it.
- * Everything here can be set blind because the worst case is an ugly surface.
+ * alpha_mode, alphaCutoff, doubleSided and foliage_shadows are deliberately
+ * absent: they decide which PASS a mesh draws in and whether it is culled, so a
+ * wrong value there moves geometry between queues instead of merely misshading
+ * it.
+ *
+ * That is NOT the same as "nothing here changes the lane", and it used to be
+ * stated as if it were. `transmission` has always routed to
+ * DRAW_LANE_TRANSMISSIVE, and since 11.31 `opacity` decides the blend lane too --
+ * classify() derives it rather than the importer writing it back, which is what
+ * makes editing opacity here work at all. Before that the slider moved a number
+ * nothing read. So the rule is: a param may imply a lane, as long as the lane is
+ * DERIVED from it every frame rather than cached at load.
  *
  * Subsurface is absent for a different reason: its consumer is PostFX's
  * scatter-profile table rather than any field here, so no offset describes it.

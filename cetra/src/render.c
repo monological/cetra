@@ -281,15 +281,15 @@ static void _update_camera_uniforms(ShaderProgram* program, Camera* camera) {
 // once a run is formed the chunk holds exactly these objects, so nothing here
 // may decline to draw.
 //
-// `depth_only` is the depth prepass borrowing this function to draw masked
-// geometry with the real shader stopped at its coverage decision. It is a
-// parameter rather than a second function for the reason the pass itself gives:
+// SUBMIT_PASS_DEPTH_ONLY is the depth prepass borrowing this function to draw
+// masked geometry with the real shader stopped at its coverage decision. A pass
+// value rather than a second function for the reason the pass itself gives:
 // everything below -- the program switch, the material uniforms and their
 // textures, skinning, the alpha-to-coverage bracket, the instanced draw -- is
 // what the two passes have to agree on, and one copy cannot disagree.
 static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* item, Camera* camera,
                          mat4 view, mat4 projection, RenderMode render_mode, SubmitState* state,
-                         OitSubpass oit_pass, size_t instances, bool depth_only) {
+                         SubmitPass pass, size_t instances) {
     SceneNode* node = item->node;
     Mesh* mesh = item->mesh;
     // Only the opaque pass submits the opaque lane, so the lane says which pass
@@ -355,13 +355,12 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
                             engine->skin_preint_enabled && !engine->capturing ? 1 : 0);
             _upload_skin_preint_uniforms(engine, u);
             uniform_set_int(u, "clusterDebug", engine->cluster_debug ? 1 : 0);
-            uniform_set_int(u, "oitPass", oit_pass);
-            // Asserted by every pass rather than cleaned up by the one that sets
+            // Asserted by every pass rather than cleaned up by the one that set
             // it: the prepass and the shading pass carry their own SubmitState,
-            // so each switches the program itself and each says which mode it
-            // wants. A shading pass that inherited a stale 1 here would return
+            // so each switches the program itself and each says which pass it
+            // is. A shading pass that inherited a stale DEPTH_ONLY would return
             // before writing any colour and the surface would simply vanish.
-            uniform_set_int(u, "depthOnly", depth_only ? 1 : 0);
+            uniform_set_int(u, "passMode", pass);
             uniform_set_int(u, "oitMomentWeighted", engine->moments_this_frame ? 1 : 0);
             // Split ambient specular only where attachment 7 is live: the
             // opaque pass of a split-mode PBR frame. The late/OIT passes and
@@ -378,7 +377,7 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
             // They cannot collide, and not by convention: the accumulate draws
             // only non-transmissive meshes, and that is the same routing that
             // makes sceneColorTex unreadable there.
-            bool moments_bound = oit_pass == OIT_SUBPASS_ACCUMULATE &&
+            bool moments_bound = pass == SUBMIT_PASS_OIT_ACCUMULATE &&
                                  engine->moments_this_frame && engine->moment_atlas_texture != 0;
             uniform_set_int(u, "sceneColorAvailable",
                             engine->scene_color_this_frame && !moments_bound ? 1 : 0);
@@ -392,7 +391,9 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
             // there: the warp interval the moments are stated over, and (where
             // the atlas is actually bound) its reciprocal size, which is not the
             // frame's because the atlas is twice as tall.
-            if (oit_pass != OIT_SUBPASS_NONE) {
+            // Named, not "anything but SHADE": the depth prepass is also not the
+            // shading pass and has no use for the warp interval.
+            if (pass == SUBMIT_PASS_OIT_ACCUMULATE || pass == SUBMIT_PASS_OIT_MOMENTS) {
                 const float near_far[2] = {camera->near_clip, camera->far_clip};
                 uniform_set_vec2(u, "oitNearFar", near_far);
             }
@@ -810,7 +811,7 @@ static bool _submit_depth_prepass(Engine* engine, Scene* scene, const DrawList* 
             instance_chunk_upload(engine->instance_ubo, &chunk, list, i, run, true);
 
         _submit_item(engine, scene, item, camera, view, projection, RENDER_MODE_PBR, &state,
-                     OIT_SUBPASS_NONE, run, true);
+                     SUBMIT_PASS_DEPTH_ONLY, run);
         drew = true;
         i += run - 1;
     }
@@ -831,7 +832,7 @@ static bool _submit_depth_prepass(Engine* engine, Scene* scene, const DrawList* 
 // whichever of BLEND and TRANSMISSIVE the OIT routing left for it.
 static void _submit_lanes(const Engine* engine, Scene* scene, const DrawList* list, Camera* camera,
                           mat4 view, mat4 projection, RenderMode render_mode, SubmitState* state,
-                          const Frustum* frustum, unsigned lanes, OitSubpass oit_pass) {
+                          const Frustum* frustum, unsigned lanes, SubmitPass pass) {
     if (!scene || !list)
         return;
 
@@ -875,8 +876,7 @@ static void _submit_lanes(const Engine* engine, Scene* scene, const DrawList* li
         if (run > 1)
             instance_chunk_upload(engine->instance_ubo, &chunk, list, i, run, true);
 
-        _submit_item(engine, scene, item, camera, view, projection, render_mode, state, oit_pass,
-                     run, false);
+        _submit_item(engine, scene, item, camera, view, projection, render_mode, state, pass, run);
         i += run - 1;
     }
 }
@@ -1186,7 +1186,7 @@ void render_current_scene(Engine* engine) {
     // lower it was switched on (3.87 to 5.27, measured).
     profiler_samples_begin(engine->profiler);
     _submit_lanes(engine, scene, opaque_list, camera, *view, draw_projection, render_mode,
-                  &submit_state, &frustum, 1u << DRAW_LANE_OPAQUE, OIT_SUBPASS_NONE);
+                  &submit_state, &frustum, 1u << DRAW_LANE_OPAQUE, SUBMIT_PASS_SHADE);
     profiler_samples_end(engine->profiler);
     if (prepassed)
         glDepthFunc(GL_LESS);
@@ -1365,7 +1365,7 @@ void render_current_scene(Engine* engine) {
                 profiler_scope_begin(engine->profiler, "oit moments");
                 _submit_lanes(engine, scene, &scene->draw_list, camera, *view, draw_projection,
                               render_mode, &submit_state, &frustum, 1u << DRAW_LANE_BLEND,
-                              OIT_SUBPASS_MOMENTS);
+                              SUBMIT_PASS_OIT_MOMENTS);
                 profiler_scope_end(engine->profiler);
                 engine_end_moment_pass(engine);
                 moments_ready = true;
@@ -1381,7 +1381,7 @@ void render_current_scene(Engine* engine) {
                 profiler_scope_begin(engine->profiler, "oit accumulate");
                 _submit_lanes(engine, scene, &scene->draw_list, camera, *view, draw_projection,
                               render_mode, &submit_state, &frustum, 1u << DRAW_LANE_BLEND,
-                              OIT_SUBPASS_ACCUMULATE);
+                              SUBMIT_PASS_OIT_ACCUMULATE);
                 profiler_scope_end(engine->profiler);
                 engine_end_oit_pass(engine);
             }
@@ -1394,7 +1394,7 @@ void render_current_scene(Engine* engine) {
                                   : ((1u << DRAW_LANE_BLEND) | (1u << DRAW_LANE_TRANSMISSIVE));
         profiler_scope_begin(engine->profiler, "transparent");
         _submit_lanes(engine, scene, &scene->draw_list, camera, *view, draw_projection, render_mode,
-                      &submit_state, &frustum, late_lanes, OIT_SUBPASS_NONE);
+                      &submit_state, &frustum, late_lanes, SUBMIT_PASS_SHADE);
         profiler_scope_end(engine->profiler);
         glDepthMask(GL_TRUE);
     }

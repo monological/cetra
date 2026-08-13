@@ -76,16 +76,26 @@ typedef enum {
     RENDER_MODE_VELOCITY         // Motion-vector (velocity) visualization
 } RenderMode;
 
-// Which OIT sub-pass is rasterizing (spec 11.17). Mirrored as pbr_frag's
-// `oitPass`, so the numbering is load-bearing. Whether the accumulate weights by
-// measured moments or by the depth curve is a SEPARATE bit -- it varies
-// independently of which sub-pass is drawing, and the composite carries it under
-// its own name too.
+// Which pass is rasterizing this mesh, and therefore where the uber-shader
+// stops. Mirrored as pbr_frag's `passMode`, so the numbering is load-bearing.
+//
+// ONE enum rather than a mode plus a flag beside it. The depth prepass arrived
+// (spec 11.31) as a second boolean, and the four states are mutually exclusive:
+// nothing is a moment-generation draw AND a depth-only draw. As two independent
+// bits that combination was constructible and its meaning fell out of the order
+// the shader's early returns happened to be written in -- which is an answer to
+// a question that has none. As one value it cannot be asked.
+//
+// Whether the accumulate weights by measured moments or by the depth curve stays
+// a SEPARATE bit, and that is the test this enum applies: it varies
+// independently of which pass is drawing, and the composite carries it under its
+// own name too.
 typedef enum {
-    OIT_SUBPASS_NONE = 0,
-    OIT_SUBPASS_ACCUMULATE = 1, // weighted colour into the OIT FBO
-    OIT_SUBPASS_MOMENTS = 2     // absorbance moments into the moment FBO
-} OitSubpass;
+    SUBMIT_PASS_SHADE = 0,          // the full shading pass
+    SUBMIT_PASS_OIT_ACCUMULATE = 1, // weighted colour into the OIT FBO
+    SUBMIT_PASS_OIT_MOMENTS = 2,    // absorbance moments into the moment FBO
+    SUBMIT_PASS_DEPTH_ONLY = 3      // depth prepass: stop at the coverage decision
+} SubmitPass;
 
 // Axis vertices: 6 vertices, 2 for each line (origin and end)
 extern float xyz_vertices[];
