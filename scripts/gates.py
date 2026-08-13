@@ -2952,16 +2952,21 @@ WATER_SUBMERGED_FLAGS = WATER_FFT_CORE + ["--water-level", "3.0", "--water-waves
 WATER_FFT_LIVE_MIN_PX = 20000
 # The submerged INTERFACE, read on the underside of the surface where the optical
 # path is the sight line itself (water_frag takes `path = length(ViewPos)` below the
-# plane). Boxes walk away from directly-overhead: measured 0.2624 / 0.0958 / 0.0589.
+# plane). Boxes walk away from directly-overhead: measured 0.5714 / 0.3269 / 0.2177.
 #
-# These are not the boxes 11.33 phase 1 used. Those sat in the open-water band, and
-# the underwater medium added in phase 2 saturates it -- all three went flat at 0.053,
-# because with the body's own extinction applied the far field is entirely body
-# colour. The signal moved, so the boxes moved with it.
-WATER_UNDER_BOXES = [(0.40, 0.020, 0.60, 0.050),
-                     (0.40, 0.060, 0.60, 0.090),
-                     (0.40, 0.110, 0.60, 0.140)]
-# Measured end-to-end 4.4x. Ordering is asserted separately to catch an inversion the
+# These boxes have now moved TWICE, and the reason is worth knowing before moving them
+# again. They are fixed screen positions reading a ratio off a surface whose shape is
+# one random realisation of a spectrum, so anything that re-rolls the realisation moves
+# what sits inside them. Phase 2's underwater medium saturated the open-water band they
+# started in (all three went flat at 0.053, the body colour). Phase 4's per-mode phase
+# seeding then reshaped the interface itself and flattened the ramp to 1.69x.
+#
+# The ORDERING is the durable half of this arm; the endpoint ratio is not, and a floor
+# well under the measurement is the only honest way to write it.
+WATER_UNDER_BOXES = [(0.40, 0.030, 0.60, 0.055),
+                     (0.40, 0.105, 0.60, 0.130),
+                     (0.40, 0.160, 0.60, 0.185)]
+# Measured end-to-end 2.62x. Ordering is asserted separately to catch an inversion the
 # endpoints alone would hide.
 WATER_UNDER_TOTAL_MIN = 2.0
 
@@ -3029,20 +3034,22 @@ WATER_CLIP_FLAGS = ["--water", "--water-waves", "fft", "--water-extent", "500",
 WATER_CLIP_DRAWS = 2
 WATER_CLIP_INSTANCES = 5
 WATER_CLIP_TRIANGLES = 32768 + 4 * 24576
-# A T-junction crack is a hole, so it shows the bed unabsorbed. LUMA, not R/B: the
-# first version of this arm used R/B and measured FOAM, because bare bed (R/B ~1.0)
-# and whitewater (0.92) are both near-neutral and the ratio cannot tell them apart.
-# It read 4,705 of 16,128 pixels "cracked" on a frame with no crack in it -- and the
-# foam was only there because the clipmap had started resolving near-field waves.
+# A T-junction crack is a HOLE, so what it shows is whatever the water was covering --
+# exactly, because no water fragment was written there. So the test is a per-pixel
+# distance from the same frame rendered with no water at all: everything the surface
+# does moves a pixel AWAY from that background, and only a hole leaves it untouched.
 #
-# Brightness does separate them, and the band is empty: measured on these boxes, the
-# brightest foam pixel is 0.3702 linear and bare bed (the same boxes with --water
-# off) is 0.5049. A ceiling in between catches a hole and ignores whitewater.
+# Two earlier versions of this arm were both proxies and both broke. R/B measured FOAM,
+# because bare bed (R/B ~1.0) and whitewater (0.92) are equally near-neutral -- it read
+# 4,705 of 16,128 pixels "cracked" on a frame with no crack in it. A luma CEILING then
+# worked only while foam stayed darker than bare bed, and the moment the sea state got
+# rougher (spec 11.33 phase 4) foam reached 0.67 against bare bed's 0.50 and the two
+# populations crossed. Distance-from-background cannot cross: it is the definition of
+# the defect rather than a correlate of it.
 #
-# What this arm does NOT do: distinguish a hole from a very bright specular hit, and
-# a sub-pixel crack that never fully clears the surface will slip under it. Deciding
-# that properly needs the depth buffer, which this harness cannot read.
-WATER_CRACK_LUMA_MAX = 0.44
+# Measured on a crack-free frame, the closest any water pixel comes to the background
+# is 0.133 per channel; the floor here is a third of that.
+WATER_CRACK_MIN_DELTA = 0.04
 
 # Shoreline coverage (spec 11.33 phase 3). The waterline on this fixture runs across
 # the ramp in a wave-modulated band; the diff between the two coverage modes lands
@@ -3084,20 +3091,20 @@ def _water_rb(pix, w, h, box):
     return rgb[0] / rgb[2] if rgb[2] > 1e-6 else float("nan")
 
 
-def _water_max_luma(pix, w, h, box):
-    """Brightest per-pixel linear luma in a fractional box, every pixel.
+def _water_closest_to_background(pix, bg, w, h, box):
+    """Smallest per-pixel distance to the no-water frame, over a fractional box.
 
-    Per-pixel and not a mean: a hole in the surface is one or two pixels wide and a
-    box average would swallow it, which is the whole reason this exists beside
-    _water_rb.
+    Per-pixel and a MINIMUM, not a mean: a hole in the surface is one or two pixels
+    wide, and any average over the box would swallow it.
     """
     x0, y0, x1, y1 = box
-    worst = 0.0
+    worst = 1e9
     for py in range(max(0, int(y0 * h)), min(h, int(y1 * h))):
         for px in range(max(0, int(x0 * w)), min(w, int(x1 * w))):
             o = (py * w + px) * 3
-            worst = max(worst, (_SRGB_TO_LINEAR[pix[o]] + _SRGB_TO_LINEAR[pix[o + 1]] +
-                                _SRGB_TO_LINEAR[pix[o + 2]]) / 3.0)
+            worst = min(worst, max(abs(_SRGB_TO_LINEAR[pix[o]] - _SRGB_TO_LINEAR[bg[o]]),
+                                   abs(_SRGB_TO_LINEAR[pix[o + 1]] - _SRGB_TO_LINEAR[bg[o + 1]]),
+                                   abs(_SRGB_TO_LINEAR[pix[o + 2]] - _SRGB_TO_LINEAR[bg[o + 2]])))
     return worst
 
 
@@ -3468,20 +3475,26 @@ def run_water_gate(workdir):
         if not ok:
             failures.append("water-shore-hard")
 
-    # Clipmap rings. The draw structure is integers, and the crack check is a
-    # per-pixel ceiling on the same boxes water-absorb reads as means -- a crack is
-    # one pixel wide and a mean would swallow it.
+    # Clipmap rings. The draw structure is integers; the crack check is a per-pixel
+    # distance from the same frame with no water in it, over the boxes water-absorb
+    # reads as means. A crack is one pixel wide and a mean would swallow it.
     clip = os.path.join(workdir, "water_clip.ppm")
+    clip_bg = os.path.join(workdir, "water_clip_bg.ppm")
     err = render(scene, clip, WATER_CLIP_FLAGS)
+    if not err:
+        # The SAME framing with the surface absent, which is what a hole would show.
+        err = render(scene, clip_bg, WATER_PIN + WATER_NO_CATCHER)
     if err:
         print(f"  water-crack  ERROR render failed: {err.strip()[-200:]}")
         failures.append("water-crack")
     else:
         wc, hc, pixc = _read_ppm(clip)
-        worst = max(_water_max_luma(pixc, wc, hc, box) for box in WATER_ABSORB_BOXES)
-        ok = worst <= WATER_CRACK_LUMA_MAX
-        print(f"  water-crack  {'PASS' if ok else 'FAIL'}  brightest px luma={worst:.4f} "
-              f"want <={WATER_CRACK_LUMA_MAX} (foam peaks 0.37, bare bed 0.50)")
+        _, _, pixbg = _read_ppm(clip_bg)
+        closest = min(_water_closest_to_background(pixc, pixbg, wc, hc, box)
+                      for box in WATER_ABSORB_BOXES)
+        ok = closest >= WATER_CRACK_MIN_DELTA
+        print(f"  water-crack  {'PASS' if ok else 'FAIL'}  closest px to the no-water "
+              f"frame={closest:.4f} want >={WATER_CRACK_MIN_DELTA} (a hole reads 0)")
         if not ok:
             failures.append("water-crack")
 
