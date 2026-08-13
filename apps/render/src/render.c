@@ -148,6 +148,7 @@ static void print_usage(const char* prog) {
     fprintf(stderr,
             "      --water-extent <f> Half-size of the water surface (implies --water)\n");
     fprintf(stderr, "      --water-waves <m>  gerstner (default) or fft spectral cascades\n");
+    fprintf(stderr, "      --no-water-caustics  Drop the surface's light focusing\n");
     fprintf(stderr, "      --sky              Procedural physically-based sky (instead of -e)\n");
     fprintf(stderr, "      --sky-debug        Blit the sky LUTs into the frame corner\n");
     fprintf(stderr, "      --clouds           Volumetric cloud layer (implies --sky)\n");
@@ -667,6 +668,9 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 return -1;
             }
             args->water_level = (float)atof(argv[i]);
+            args->water = 1;
+        } else if (strcmp(argv[i], "--no-water-caustics") == 0) {
+            args->no_water_caustics = 1;
             args->water = 1;
         } else if (strcmp(argv[i], "--water-waves") == 0) {
             if (++i >= argc) {
@@ -2893,6 +2897,8 @@ int main(int argc, char** argv) {
                 water->extent = args.water_extent;
             if (args.water_fft)
                 water->wave_model = WATER_WAVES_FFT;
+            if (args.no_water_caustics)
+                water->caustics = false;
             scene->water = water;
         }
     }

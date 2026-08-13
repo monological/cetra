@@ -279,6 +279,7 @@ Water* create_water(void) {
     // right model at the scale most scenes put water at. The spectral path is an
     // ocean, and asks for 45 passes and 24 textures to say so.
     water->wave_model = WATER_WAVES_GERSTNER;
+    water->caustics = true;
     return water;
 }
 
@@ -671,6 +672,34 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
     int rw, rh;
     engine_render_size(engine, &rw, &rh);
     uniform_set_vec2(u, "screenSize", (vec2){(float)rw, (float)rh});
+
+    // The sun, for caustics: light focusing is a property of the path from the SUN
+    // through the surface, so it needs the direction light arrives from rather than
+    // anything about the view. First directional light wins; a scene with two suns
+    // has a bigger problem than its caustics.
+    vec3 sun_dir = {0.0f, 1.0f, 0.0f};
+    bool has_sun = false;
+    for (size_t i = 0; i < scene->light_count && !has_sun; i++) {
+        const Light* light = scene->lights[i];
+        if (light && light->type == LIGHT_DIRECTIONAL) {
+            // Lights store the direction they SHINE; the shader wants the direction
+            // toward the source.
+            glm_vec3_negate_to((float*)light->direction, sun_dir);
+            glm_vec3_normalize(sun_dir);
+            has_sun = true;
+        }
+    }
+    uniform_set_vec3(u, "sunDir", (const float*)&sun_dir);
+    uniform_set_int(u, "sunAvailable", has_sun ? 1 : 0);
+    uniform_set_int(u, "causticsEnabled", water->caustics ? 1 : 0);
+
+    // Which side of the surface the eye is on. Compared against the still level
+    // rather than the displaced surface: a camera within a wave height of the
+    // waterline would otherwise flip models several times a second as crests pass
+    // it, and every temporal history in the frame would reset each time.
+    vec3 cam_world;
+    glm_vec3_copy(engine->camera->position, cam_world);
+    uniform_set_int(u, "cameraSubmerged", cam_world[1] < water->level ? 1 : 0);
 
     glActiveTexture(GL_TEXTURE0 + TEXUNIT_SCENE_COLOR);
     glBindTexture(GL_TEXTURE_2D, engine->opaque_color_texture);

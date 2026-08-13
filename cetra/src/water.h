@@ -120,6 +120,9 @@ typedef struct Water {
     void* height_ctx;
 
     WaterWaveModel wave_model;
+    // Caustics on refracted geometry. Inert on the Gerstner path, whose steepness
+    // is clamped so its mapping cannot compress and therefore cannot focus.
+    bool caustics;
 
     // Lazily built GPU state, on the postfx ensure_* pattern. `failed` latches
     // so a missing program costs one log line rather than one per frame forever.

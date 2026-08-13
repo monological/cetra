@@ -53,6 +53,11 @@ uniform int sceneDepthAvailable;
 
 // Split-sum environment, bound by bind_ibl_textures. The procedural sky bakes
 // into this cubemap, so the reflection follows the sun with no extra plumbing.
+uniform vec3 sunDir; // toward the sun, world space
+uniform int sunAvailable;
+uniform int cameraSubmerged;
+uniform int causticsEnabled;
+
 uniform samplerCube prefilteredMap;
 uniform sampler2D brdfLUT;
 uniform int iblEnabled;
@@ -98,6 +103,22 @@ const float WATER_FOAM_MAX = 0.62;
 // Shore band strength. Lower than a breaking crest: this is water going shallow,
 // not water breaking, and at crest strength every lake edge would read as surf.
 const float WATER_SHORE_FOAM = 0.45;
+/*
+ * Caustics. Light crossing the surface is focused by the surface's own curvature,
+ * so the brightness on the bed is a property of the WAVES above the point being
+ * lit -- not of a texture pasted onto the floor. Sampling the cascade derivatives
+ * where the refracted sun ray CROSSED the surface is what ties the two together;
+ * the reference study rejected cellular caustics for exactly this reason and then
+ * capped its own derivation at +14%, which is why nothing was visible in its
+ * frames. Delivered here at a strength that can be seen.
+ */
+const float WATER_CAUSTIC_ON = 0.060;
+const float WATER_CAUSTIC_FULL = 0.27;
+const float WATER_CAUSTIC_GAIN = 1.35;
+// Caustics need water above them to focus through, and lose coherence with depth.
+const float WATER_CAUSTIC_SHALLOW = 0.35;
+const float WATER_CAUSTIC_DEEP_ON = 9.0;
+const float WATER_CAUSTIC_DEEP_OFF = 20.0;
 
 vec2 screenVelocity() {
     return (CurrClip.xy / CurrClip.w - PrevClip.xy / PrevClip.w) * 0.5;
@@ -151,6 +172,11 @@ void main() {
     // The interface is shaded in view space, so the normal has to arrive there
     // too -- the surface normal is authored in world space by ocean.glsl.
     vec3 Nv = normalize(mat3(view) * N);
+    // Seen from below, the interface faces the other way. Culling is already off,
+    // so the backfaces rasterize; without this flip they would shade as if lit
+    // from above the surface they are under.
+    if (cameraSubmerged == 1)
+        Nv = -Nv;
     float NdotV = clamp(dot(Nv, V), 0.0, 1.0);
 
     // Optical path through the body: the view-Z gap between this surface and
@@ -160,7 +186,12 @@ void main() {
     // deepest-looking.
     float surfaceDist = max(-ViewPos.z, 1e-4);
     float path = WATER_MAX_PATH;
-    if (sceneDepthAvailable == 1) {
+    if (cameraSubmerged == 1) {
+        // From below, the body is between the EYE and the surface rather than
+        // beyond it, so the optical path is the sight line itself. The depth buffer
+        // behind the surface describes air and has nothing to say about it.
+        path = length(ViewPos);
+    } else if (sceneDepthAvailable == 1) {
         float bedNdc = texture(sceneDepthTex, uv).r * 2.0 - 1.0;
         float bedDist = -viewZFromNdcZ(bedNdc);
         float rayScale = length(ViewPos) / surfaceDist;
@@ -198,6 +229,34 @@ void main() {
                 refrUV = uv;
         }
         bed = textureLod(sceneColorTex, refrUV, roughness * WATER_TRANSMISSION_MAX_LOD).rgb;
+
+        // Caustics, on whatever the surface is refracting -- the bed, a rock, a
+        // hull. Walk back along the refracted sun ray to where it crossed the
+        // surface, and read the compression of the cascades THERE: a converging
+        // patch of surface is a lens, and its focus is what brightens the floor.
+        //
+        // FFT only, and that is principled rather than a gap: caustics come from
+        // compression, and the Gerstner path's steepness is clamped precisely so
+        // its mapping cannot compress. The same reasoning gates its foam.
+        if (waveModel == 1 && sunAvailable == 1 && causticsEnabled == 1) {
+            vec2 crossing = WorldPos.xz - sunDir.xz / max(sunDir.y, 0.12) * path * 0.18;
+            vec4 m0 = texture(cascade1_0, fract(crossing / cascadeLength[1] + 0.5));
+            vec4 m1 = texture(cascade1_1, fract(crossing / cascadeLength[1] + 0.5));
+            vec4 s0 = texture(cascade2_0, fract(crossing / cascadeLength[2] + 0.5));
+            vec4 s1 = texture(cascade2_1, fract(crossing / cascadeLength[2] + 0.5));
+            float mc = m0.a * cascadeChoppiness[1];
+            vec2 md = m1.ba * cascadeChoppiness[1];
+            float sc = s0.a * cascadeChoppiness[2];
+            vec2 sd = s1.ba * cascadeChoppiness[2];
+            float mj = (1.0 + md.x) * (1.0 + md.y) - mc * mc;
+            float sj = (1.0 + sd.x) * (1.0 + sd.y) - sc * sc;
+            float focus = max(0.0, 1.0 - mj) * 0.48 + max(0.0, 1.0 - sj) * 0.52;
+            float window = smoothstep(0.0, WATER_CAUSTIC_SHALLOW, path) *
+                           (1.0 - smoothstep(WATER_CAUSTIC_DEEP_ON, WATER_CAUSTIC_DEEP_OFF, path));
+            float focused =
+                pow(smoothstep(WATER_CAUSTIC_ON, WATER_CAUSTIC_FULL, focus), 2.0) * window;
+            bed *= 1.0 + focused * WATER_CAUSTIC_GAIN;
+        }
     } else {
         bed = vec3(0.0);
     }

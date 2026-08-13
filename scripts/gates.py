@@ -2894,6 +2894,13 @@ WATER_FLAGS = ["--water", "--water-extent", "14", "--no-auto-exposure", "-E", "1
 WATER_FFT_FLAGS = ["--water", "--water-waves", "fft", "--water-extent", "70",
                    "--water-level", "0.6", "--no-auto-exposure", "-E", "1.0"]
 WATER_FFT_LIVE_MIN_PX = 50000
+# Caustics move 12,509 px of a 480,000 px frame on this fixture -- a small share,
+# because only the submerged part of the ramp is inside the focusing depth window.
+# A quarter of that is well clear of nothing and well under the signal.
+WATER_CAUSTIC_MIN_PX = 3000
+# The submerged camera is a different surface entirely -- backfaces with a flipped
+# normal, and the optical path becomes the sight line rather than the depth behind.
+WATER_SUBMERGED_MIN_PX = 50000
 # Three boxes down the left side, clear of the ramp, at increasing distance.
 WATER_ABSORB_BOXES = [(0.06, 0.86, 0.20, 0.94),
                       (0.06, 0.72, 0.20, 0.80),
@@ -3026,6 +3033,40 @@ def run_water_gate(workdir):
               f"want >={WATER_FFT_LIVE_MIN_PX}")
         if not ok:
             failures.append("water-fft-live")
+
+    # Caustics, and the submerged side of the interface. Both only exist on the
+    # spectral path, so both hang off the FFT render above.
+    if fft_ok:
+        nc = os.path.join(workdir, "water_nocaustic.ppm")
+        err = render(scene, nc, WATER_FFT_FLAGS + ["--no-water-caustics"])
+        if err:
+            print(f"  water-caustic ERROR render failed: {err.strip()[-200:]}")
+            failures.append("water-caustic")
+        else:
+            ae_c, _ = compare(fa, nc)
+            ok = ae_c >= WATER_CAUSTIC_MIN_PX
+            print(f"  water-caustic {'PASS' if ok else 'FAIL'}  {ae_c} px vs no caustics, "
+                  f"want >={WATER_CAUSTIC_MIN_PX}")
+            if not ok:
+                failures.append("water-caustic")
+
+        # Raising the level above the fixture's camera puts the eye under the
+        # surface, which is a different shading path rather than the same one seen
+        # from elsewhere: backfaces, a flipped normal, and the optical path taken
+        # along the sight line instead of from the depth buffer.
+        sub = os.path.join(workdir, "water_submerged.ppm")
+        sub_flags = [f if f != "0.6" else "3.0" for f in WATER_FFT_FLAGS]
+        err = render(scene, sub, sub_flags)
+        if err:
+            print(f"  water-submerged ERROR render failed: {err.strip()[-200:]}")
+            failures.append("water-submerged")
+        else:
+            ae_s, _ = compare(fa, sub)
+            ok = ae_s >= WATER_SUBMERGED_MIN_PX
+            print(f"  water-submerged {'PASS' if ok else 'FAIL'}  {ae_s} px vs above water, "
+                  f"want >={WATER_SUBMERGED_MIN_PX}")
+            if not ok:
+                failures.append("water-submerged")
 
     on = _profiled_run(workdir, "water_on", WATER_FLAGS + ["--profiler"],
                        fixture=WATER_FIXTURE, size=("400", "300"))
