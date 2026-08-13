@@ -16,12 +16,13 @@
 /*
  * The three spectral bands, ported from the reference study.
  *
- * cutoff_low/high are the wavenumber window each band owns, in rad/m. The windows
- * OVERLAP slightly -- [0.30, 0.36] and [1.22, 1.42] -- so the handful of modes in
- * those strips are seeded in two cascades and their energy is counted twice. These
- * are the reference study's own numbers and the overlap is inherited from it, not
- * chosen; closing it means retuning a sea state against a look, which is a change
- * worth measuring rather than a constant worth editing in passing.
+ * cutoff_low/high are the wavenumber window each band owns, in rad/m, and they ABUT:
+ * each band's high bound is the next band's low bound, so every mode is seeded in
+ * exactly one cascade. The reference study's own numbers overlapped -- [0.30, 0.36] and
+ * [1.22, 1.42] -- and the modes in those two strips had their energy counted twice,
+ * which is a brighter sea in two narrow bands that nobody chose. A mode landing exactly
+ * on a boundary is still seeded twice; k here is a 2D float norm, so that is a
+ * measure-zero case rather than a bound worth an extra comparison.
  *
  * The short band reaches 24 rad/m -- decimetre waves -- and is deliberately not
  * carried into the mesh, where it would alias into a ridged texture; it shades the
@@ -35,8 +36,8 @@ static const struct WaterCascadeConfig {
     float secondary_scale; // weight of a second, cross-travelling swell
     uint32_t seed;
 } WATER_CASCADE_CFG[WATER_CASCADE_COUNT] = {
-    {240.0f, 0.024f, 0.36f, 0.45f, 0.22f, 0x51f15eu},
-    {64.0f, 0.30f, 1.42f, 0.45f, 0.08f, 0x72a93bu},
+    {240.0f, 0.024f, 0.30f, 0.45f, 0.22f, 0x51f15eu},
+    {64.0f, 0.30f, 1.22f, 0.45f, 0.08f, 0x72a93bu},
     {12.0f, 1.22f, 24.0f, 0.82f, 0.0f, 0x19ce47u},
 };
 
@@ -63,6 +64,33 @@ static float _water_rand(uint32_t* state) {
     v = (v ^ (v >> 15)) * (v | 1u);
     v ^= v + (v ^ (v >> 7)) * (v | 61u);
     return (float)((v ^ (v >> 14))) / 4294967296.0f;
+}
+
+/*
+ * The RNG state for one mode, from its grid index alone.
+ *
+ * This is what makes a cutoff a cutoff. Advancing one sequence across the grid and
+ * drawing only for modes inside the window ties the RNG's POSITION to how many modes
+ * passed -- so moving a cutoff by 0.06 rad/m re-randomises every phase after it, and
+ * the edit lands as a different ocean rather than as the same one minus a strip.
+ * Measured while closing the overlap above: 78% of the frame moved, where the energy
+ * actually removed accounts for 28%.
+ *
+ * Seeding per mode also makes the sea independent of the traversal order and of the
+ * grid resolution's relationship to it, which a sequence is not.
+ */
+static uint32_t _water_mode_seed(uint32_t seed, int x, int y) {
+    // Weyl-style mixing of the two indices, then an integer avalanche so neighbouring
+    // modes are uncorrelated -- adjacent seeds differing in low bits would otherwise
+    // hand adjacent wavenumbers near-identical phases and print as a directional
+    // pattern in the surface.
+    uint32_t h = seed + (uint32_t)x * 0x9e3779b9u + (uint32_t)y * 0x85ebca6bu;
+    h ^= h >> 16;
+    h *= 0x7feb352du;
+    h ^= h >> 15;
+    h *= 0x846ca68bu;
+    h ^= h >> 16;
+    return h;
 }
 
 static void _water_gaussian(uint32_t* state, float* out_a, float* out_b) {
@@ -134,7 +162,6 @@ static bool _water_build_spectrum(int size, const struct WaterCascadeConfig* cfg
     float* h0 = calloc((size_t)size * size * 2, sizeof(float));
     if (!h0)
         return false;
-    uint32_t rng = cfg->seed;
 
     for (int y = 0; y < size; y++) {
         for (int x = 0; x < size; x++) {
@@ -210,6 +237,7 @@ static bool _water_build_spectrum(int size, const struct WaterCascadeConfig* cfg
                 sqrtf(fmaxf(0.0f, 2.0f * density * fabsf(domega) / k_len * delta_k * delta_k)) *
                 cfg->amplitude_scale;
             float ga, gb;
+            uint32_t rng = _water_mode_seed(cfg->seed, x, y);
             _water_gaussian(&rng, &ga, &gb);
             h0[pixel * 2 + 0] = ga * amplitude;
             h0[pixel * 2 + 1] = gb * amplitude;
