@@ -3151,6 +3151,35 @@ WATER_GRID_TRIANGLES = 256 * 256 * 2
 # is 0.133 per channel; the floor here is a third of that.
 WATER_CRACK_MIN_DELTA = 0.04
 
+# Far-field filtering (spec 11.34 phase 2). A projected grid's distant cells cover more than
+# a wave period, so evaluating the field at full detail there samples one arbitrary phase per
+# cell -- which is the speckle band the horizon gained the moment the surface reached it.
+# --no-water-lod is the control: it reports a zero footprint, which is full detail on every
+# band, and reaches the pre-phase-2 frame at exactly 0 px.
+#
+# Just under the horizon, clear of the ramp. Well below the water's top edge at 0.225 of
+# frame height, which water-horizon pins to within 4 px, so this box cannot eat sky.
+WATER_FAR_BOX = (0.05, 0.25, 0.30, 0.30)
+# Spatial standard deviation in that box, which is what aliasing IS: a filtered surface
+# returns nearly one value across a box that far away, an unfiltered one returns noise.
+# Measured 0.0314 unfiltered against 0.0090 filtered, a 3.5x drop.
+WATER_FAR_SD_RATIO_MAX = 0.5
+# And the filtering has to be CONFINED to the far field: the near box is byte-identical
+# across the same pair, which is what fails if a footprint term leaks into the near field.
+WATER_FAR_NEAR_BOX = (0.06, 0.86, 0.20, 0.94)
+# The handover, measured as the far field's SENSITIVITY to the authored roughness. Filtering
+# moves the resolved slope energy into roughness, so out there the value the author asked for
+# has been taken over; with filtering off it still governs. Measured 0.00972 unfiltered
+# against 0.00118 filtered, an 8.2x drop.
+#
+# What this does NOT establish is the DIRECTION -- a handover that drove roughness toward the
+# calm value instead of the rippled one would read as the same insensitivity. That half is a
+# code fact rather than a measurement here (one mix toward WATER_ROUGH_RIPPLED, from a
+# quantity that only rises with footprint), because at this fixture's viewing angles the
+# specular share is about 2% and roughness barely moves a pixel except at grazing.
+WATER_FAR_ROUGH_AUTHORED = 0.115
+WATER_FAR_ROUGH_RATIO_MAX = 0.35
+
 # Shoreline coverage (spec 11.33 phase 3). The waterline on this fixture runs across
 # the ramp in a wave-modulated band; the diff between the two coverage modes lands
 # entirely inside these rows and this x range, so the measurement window is where the
@@ -3249,6 +3278,31 @@ def _water_roughness(pix, w, h, box):
             for px in range(int(x0 * w), int(x1 * w))]
     mean = sum(vals) / len(vals)
     return (sum((v - mean) ** 2 for v in vals) / len(vals)) ** 0.5
+
+
+def _water_box_max_delta(a, b, w, h, box):
+    """Largest per-pixel channel difference between two frames over a fractional box.
+
+    A MAXIMUM, where the arms above take means: this is used to assert that a region did
+    not change, and a mean can average a real local change back to nothing.
+    """
+    x0, y0, x1, y1 = box
+    worst = 0
+    for py in range(int(y0 * h), int(y1 * h)):
+        for px in range(int(x0 * w), int(x1 * w)):
+            o = (py * w + px) * 3
+            worst = max(worst, abs(a[o] - b[o]), abs(a[o + 1] - b[o + 1]),
+                        abs(a[o + 2] - b[o + 2]))
+    return worst
+
+
+def _water_box_luma(pix, w, h, box):
+    """Mean linear luma over a fractional box."""
+    x0, y0, x1, y1 = box
+    vals = [_linear_luma(pix, w, h, px, py)
+            for py in range(int(y0 * h), int(y1 * h))
+            for px in range(int(x0 * w), int(x1 * w))]
+    return sum(vals) / len(vals)
 
 
 def _water_foam_px(pix, w, h, box):
@@ -3369,6 +3423,12 @@ def run_water_gate(workdir):
                       top edge, because an edge already at the vanishing line cannot go
                       higher. Needs no horizon row and no camera parameters. The clipmap
                       fails it by 71 px, which is what it was written against.
+      water-farfield  the far field is FILTERED rather than aliased, the filtering is
+                      confined to the far field, and the slope energy it removes arrives
+                      as roughness rather than being dropped. Read against
+                      --no-water-lod, which reports a zero footprint and so reaches the
+                      unfiltered surface exactly. The direction of the roughness handover
+                      is not measurable here -- see WATER_FAR_ROUGH_AUTHORED.
       water-flags     the flags override the scene file, and a NEGATIVE flag neither
                       creates a surface nor loses to a sibling. Read through the probe,
                       which reports what the surface is rather than what it looks like:
@@ -3778,6 +3838,52 @@ def run_water_gate(workdir):
               f"frame={closest:.4f} want >={WATER_CRACK_MIN_DELTA} (a hole reads 0)")
         if not ok:
             failures.append("water-crack")
+
+    # Far-field filtering, against its own bisect lever. Four renders, because both halves
+    # are two-sided: filtering on/off says whether it is live and confined, and the same
+    # pair at a second authored roughness says whether the energy went into roughness or
+    # was simply dropped.
+    far_on = os.path.join(workdir, "water_far_on.ppm")
+    far_off = os.path.join(workdir, "water_far_off.ppm")
+    far_r_on = os.path.join(workdir, "water_far_rough_on.ppm")
+    far_r_off = os.path.join(workdir, "water_far_rough_off.ppm")
+    rough_scene = os.path.join(workdir, "water_rough.cscn")
+    cscn_copy(scene, rough_scene,
+              lambda d: d["water"].update({"roughness": WATER_FAR_ROUGH_AUTHORED}))
+    err = render(scene, far_on, WATER_PIN + WATER_NO_CATCHER)
+    if not err:
+        err = render(scene, far_off, WATER_PIN + WATER_NO_CATCHER + ["--no-water-lod"])
+    if not err:
+        err = render(rough_scene, far_r_on, WATER_PIN + WATER_NO_CATCHER)
+    if not err:
+        err = render(rough_scene, far_r_off,
+                     WATER_PIN + WATER_NO_CATCHER + ["--no-water-lod"])
+    if err:
+        print(f"  water-farfield ERROR render failed: {err.strip()[-200:]}")
+        failures.append("water-farfield")
+    else:
+        wf, hf, p_on = _read_ppm(far_on)
+        _, _, p_off = _read_ppm(far_off)
+        _, _, p_r_on = _read_ppm(far_r_on)
+        _, _, p_r_off = _read_ppm(far_r_off)
+        sd_on = _water_roughness(p_on, wf, hf, WATER_FAR_BOX)
+        sd_off = _water_roughness(p_off, wf, hf, WATER_FAR_BOX)
+        sd_ratio = sd_on / max(sd_off, 1e-9)
+        near_delta = _water_box_max_delta(p_on, p_off, wf, hf, WATER_FAR_NEAR_BOX)
+        sens_on = abs(_water_box_luma(p_on, wf, hf, WATER_FAR_BOX) -
+                      _water_box_luma(p_r_on, wf, hf, WATER_FAR_BOX))
+        sens_off = abs(_water_box_luma(p_off, wf, hf, WATER_FAR_BOX) -
+                       _water_box_luma(p_r_off, wf, hf, WATER_FAR_BOX))
+        sens_ratio = sens_on / max(sens_off, 1e-9)
+        ok = (sd_ratio <= WATER_FAR_SD_RATIO_MAX and near_delta == 0 and
+              sens_ratio <= WATER_FAR_ROUGH_RATIO_MAX)
+        print(f"  water-farfield {'PASS' if ok else 'FAIL'}  far-box spread {sd_off:.4f} -> "
+              f"{sd_on:.4f} = {sd_ratio:.2f}x (want <={WATER_FAR_SD_RATIO_MAX}), near box "
+              f"unchanged {near_delta} (want 0), authored-roughness sensitivity "
+              f"{sens_off:.5f} -> {sens_on:.5f} = {sens_ratio:.2f}x (want "
+              f"<={WATER_FAR_ROUGH_RATIO_MAX})")
+        if not ok:
+            failures.append("water-farfield")
 
     clipt = _profiled_run(workdir, "water_clip", WATER_CLIP_FLAGS + ["--profiler"],
                           fixture=WATER_FIXTURE, size=("400", "300"))
