@@ -336,6 +336,19 @@ typedef struct PostFX {
                           // the sky owns its own dimension (the fog cascade
                           // count crosses the same seam the same way)
 
+    // Published per frame by water_publish_to_postfx (mirrors the sky and probe
+    // blocks; postfx never learns about Water). water_medium 0 = no water, which is
+    // the single "one medium only" state.
+    //
+    // The froxel volume carries TWO media once this is set: air above water_level and
+    // the body below it. Without that, submerged geometry renders as though in air --
+    // the surface shades correctly from below and the seabed behind it does not.
+    int water_medium;       // 1 = the volume has a second medium below water_level
+    int water_camera_below; // eye is under the surface, so the medium reaches it
+    float water_level_y;    // world height of the still surface
+    vec3 water_extinction;  // per-channel, per world unit
+    vec3 water_inscatter;   // colour the absorbed energy returns as
+
     // Published per frame by shadow_publish_to_postfx (mirrors the probe
     // block; postfx never learns about the shadow system): the casters'
     // matrices, radiance, and map array. Count 0 = ambient-only fog.

@@ -183,6 +183,15 @@ typedef struct Water {
 // Marks the baked bed stale; the next draw re-bakes it from height_at.
 void water_invalidate_bed(Water* water);
 
+/*
+ * Flatten the body (or its absence) into postfx's per-frame block, so the froxel
+ * volume can carry water as a second medium below the surface.
+ *
+ * Needs the camera to decide which side the eye is on, which is why it takes the
+ * engine rather than just the water.
+ */
+void water_publish_to_postfx(const Water* water, struct Engine* engine);
+
 // World-space tiling period of each cascade, in metres. Public because the
 // surface shader needs the same numbers to build its sample UVs, and a second
 // copy of them would be a silent mismatch rather than an error.

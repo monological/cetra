@@ -328,6 +328,44 @@ void free_water(Water* water) {
     free(water);
 }
 
+void water_publish_to_postfx(const Water* water, struct Engine* engine) {
+    if (!engine || !engine->postfx)
+        return;
+    PostFX* fx = engine->postfx;
+
+    if (!water_active(water)) {
+        fx->water_medium = 0;
+        fx->water_camera_below = 0;
+        return;
+    }
+
+    fx->water_medium = 1;
+    fx->water_level_y = water->level;
+    memcpy(fx->water_extinction, water->absorption, sizeof(vec3));
+    memcpy(fx->water_inscatter, water->scatter, sizeof(vec3));
+    fx->water_camera_below =
+        (engine->camera && engine->camera->position[1] < water->level) ? 1 : 0;
+
+    /*
+     * Arm the volume when the eye is under the surface.
+     *
+     * The froxel volume is off by default, so without this the underwater medium
+     * would silently depend on --fog and "looking down from a boat" and "swimming"
+     * would be lit by different rules for a reason nobody could see. Only while
+     * submerged: above the surface the medium is behind the water's own absorption,
+     * which the surface shader already integrates, and paying for a volume there
+     * would buy nothing.
+     *
+     * Aerial perspective is dropped for the same frame. It holds the sky-view
+     * integral -- air the sight line never crosses down here -- so leaving it on
+     * would haze the seabed with atmosphere.
+     */
+    if (fx->water_camera_below) {
+        fx->fog_enabled = true;
+        fx->aerial_volume = 0;
+    }
+}
+
 void water_invalidate_bed(Water* water) {
     if (water)
         water->bed_baked = false;

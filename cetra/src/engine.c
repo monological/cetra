@@ -21,6 +21,7 @@
 #include "intersect.h"
 #include "shadow.h"
 #include "sky.h"
+#include "water.h"
 #include "gi_volume.h"
 #include "mask_array.h"
 #include "texture.h"
@@ -1727,6 +1728,9 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode) {
     if (fx_scene && fx_scene->sky)
         sky_update_aerial(fx_scene->sky, engine->view_matrix, engine->projection_matrix);
     sky_publish_to_postfx(fx_scene ? fx_scene->sky : NULL, engine->postfx);
+    // After the sky's, because a submerged camera drops the aerial volume the line
+    // above just published: down there it is air the sight line never crosses.
+    water_publish_to_postfx(fx_scene ? fx_scene->water : NULL, engine);
     const PostFXGBufferWrites writes = {.normals = engine->normals_this_frame,
                                         .aux = engine->aux_this_frame,
                                         .albedo = engine->albedo_this_frame,

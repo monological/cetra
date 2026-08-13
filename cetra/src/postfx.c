@@ -2151,6 +2151,12 @@ static void upload_fog_uniforms(PostFX* fx, UniformManager* u, mat4 projection, 
     uniform_set_float(u, "density", fx->fog_density);
     uniform_set_float(u, "heightFalloff", fx->fog_height_falloff);
     uniform_set_float(u, "floorY", fx->fog_floor_y);
+    // Water's medium, published by water_publish_to_postfx. 0 when there is no water,
+    // which is the one "air only" state -- no separate enable to disagree with it.
+    uniform_set_int(u, "waterMedium", fx->water_medium);
+    uniform_set_float(u, "waterLevelY", fx->water_level_y);
+    uniform_set_vec3(u, "waterExtinction", fx->water_extinction);
+    uniform_set_vec3(u, "waterInscatter", fx->water_inscatter);
     uniform_set_float(u, "anisotropy", fx->fog_anisotropy);
     uniform_set_float(u, "sunBoost", fx->fog_sun_boost);
     uniform_set_float(u, "shadowBias", fx->fog_shadow_bias);
