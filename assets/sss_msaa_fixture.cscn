@@ -1,0 +1,69 @@
+{
+ "version": 1,
+ "_comment": [
+  "Two SSS profiles in one frame, small enough that the silhouette is a real fraction",
+  "of every sphere (spec 11.37 phase 3).",
+  "",
+  "The profile a pixel belongs to is stored as a LABEL NUMBER in attachment 4's alpha --",
+  "0 = not skin, 1 = the first profile, 2 = the second -- and that attachment is",
+  "MSAA-resolved by a blit, which is a box filter. Averaging a label destroys it: the mean",
+  "of 2 and the uncovered 0 is 1, which does not mean 'half of profile 2', it means",
+  "PROFILE 1. So at 4x MSAA the partly covered pixels of the tag-2 sphere are seeded into",
+  "the tag-1 walk and blurred with the wrong profile's radius and colour.",
+  "",
+  "Only ONE of the two spheres can show that, and which one is not arbitrary:",
+  "  sss_skin_a -> slot 0 -> tag 1. Its silhouette averages toward 0, which reads as 'not",
+  "               skin', so those pixels are DROPPED. Absence, not corruption. The control.",
+  "  sss_skin_b -> slot 1 -> tag 2. Its silhouette averages toward 1, so those pixels are",
+  "               blurred as profile a. The subject.",
+  "Slots are assigned in the order the materials appear in THIS BLOCK (configure_sss_",
+  "materials, apps/render/src/render.c), and the slot is printed at startup, so the",
+  "assignment is observable rather than inferred.",
+  "",
+  "The two profiles differ in CHANNEL WEIGHTS and share one radius, and that split was",
+  "measured rather than guessed. Weights give the larger signal: opposite weights at equal",
+  "radius move the read 3.6%, while equal weights at radii 1.2 against 0.35 move it only",
+  "2.0%. The misfile substitutes the other profile's weights, and the scatter delta is what",
+  "the blur differs from the sharp value by, so a weight difference acts on it directly.",
+  "Equal radii also keep the halos from crossing the 26 px gap between the spheres, which a",
+  "wide profile a does -- and since the twin the arm compares against has no profile a at",
+  "all, a halo that reaches the read band would put a difference there that is nothing to do",
+  "with the tag.",
+  "",
+  "The colour is a per-channel scatter WIDTH, not a tint (cscene.h), which is why these read",
+  "as bleeds rather than as paint.",
+  "",
+  "The key sits BEHIND the spheres, as in sss_scale_fixture: scatter is what a back-lit",
+  "silhouette shows, and a front-lit one would put the signal where the geometry is",
+  "opaque and the rim contributes least.",
+  "",
+  "Deliberately NOT a golden. It exists to differ between two sample counts, and the arm",
+  "compares within one build."
+ ],
+ "models": [
+  { "path": "sss_fixture.gltf" }
+ ],
+ "materials": {
+  "sss_skin_a": { "sss": { "color": [1.00, 0.10, 0.10], "radius": 0.35 } },
+  "sss_skin_b": { "sss": { "color": [0.10, 1.00, 0.12], "radius": 0.35 } }
+ },
+ "lights": [
+  {
+   "name": "SkinKey",
+   "type": "point",
+   "position": [0.0, 1.0, -1.6],
+   "color": [1.0, 0.97, 0.92],
+   "intensity": 220.0,
+   "range": 40.0
+  }
+ ],
+ "camera": {
+  "eye": [0.0, 1.0, 20.6],
+  "target": [0.0, 1.0, 0.0],
+  "fov": 40
+ },
+ "post": {
+  "tonemap": "neutral",
+  "exposure": 1.0
+ }
+}
