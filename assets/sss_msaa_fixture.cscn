@@ -33,9 +33,15 @@
   "The colour is a per-channel scatter WIDTH, not a tint (cscene.h), which is why these read",
   "as bleeds rather than as paint.",
   "",
-  "The key sits BEHIND the spheres, as in sss_scale_fixture: scatter is what a back-lit",
-  "silhouette shows, and a front-lit one would put the signal where the geometry is",
-  "opaque and the rim contributes least.",
+  "The key is SIDE-ON, giving each sphere a terminator, and that is not a lighting",
+  "preference -- it is what makes the measurement exist at all. The scatter delta is",
+  "blur minus centre, so a uniformly lit sphere has blur == centre and contributes",
+  "nothing however wrong its profile is. A back key was tried first and produced flat",
+  "discs: the whole gather moved 129 px of the frame, the misfile moved 23, and the",
+  "signal that looked like a 3.6% effect was BLOOM spreading the other sphere's shading",
+  "across the read band. The tag chooses which profile blurs a pixel; where no profile",
+  "blurs, choosing wrong is free. Same direction as skin_curvature_fixture's key, which",
+  "is the fixture that does show scatter.",
   "",
   "Deliberately NOT a golden. It exists to differ between two sample counts, and the arm",
   "compares within one build."
@@ -50,11 +56,11 @@
  "lights": [
   {
    "name": "SkinKey",
-   "type": "point",
-   "position": [0.0, 1.0, -1.6],
+   "type": "directional",
+   "direction": [0.93, -0.26, -0.26],
    "color": [1.0, 0.97, 0.92],
-   "intensity": 220.0,
-   "range": 40.0
+   "intensity": 3.0,
+   "cast_shadows": false
   }
  ],
  "camera": {
