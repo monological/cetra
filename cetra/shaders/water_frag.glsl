@@ -92,6 +92,10 @@ const float WATER_MIN_PATH = 0.01;
 // Coverage below this contributes no samples at any supported sample count, so the
 // fragment is dropped rather than shaded for nothing.
 const float WATER_MIN_COVERAGE = 0.02;
+// Depth at or above which the buffer is holding its cleared value rather than geometry. One
+// code short of 1.0 at 24 bits, so a real surface sitting exactly on the far plane is the only
+// thing this can misread -- and that surface is already at the limit of what depth can express.
+const float WATER_DEPTH_EMPTY = 0.99999;
 // Ceiling on the refraction bend, in world units. The bend is a screen-space
 // approximation, and past a metre or so of offset the sample it reaches has
 // little to do with the ray -- the validity check below catches the wrong ones,
@@ -230,7 +234,22 @@ void main() {
         // beyond it, so the optical path is the sight line itself. The depth buffer
         // behind the surface describes air and has nothing to say about it.
         path = length(ViewPos);
-    } else if (sceneDepthAvailable == 1) {
+    } else if (sceneDepthAvailable == 1 && texture(sceneDepthTex, uv).r < WATER_DEPTH_EMPTY) {
+        /*
+         * There is geometry behind this fragment, so the column can be measured.
+         *
+         * The guard is load-bearing and its absence was a visible defect (spec 11.34). Where
+         * nothing was drawn the depth buffer holds its cleared value, which reads back as the
+         * FAR PLANE -- and the surface itself now runs to the horizon, far past any far plane.
+         * So `bedDist - surfaceDist` came out hugely negative out there, the shoreline test
+         * read it as "the bed has come up through the surface", and the discard removed every
+         * fragment past the last geometry in the scene. It printed as a band of empty sky
+         * between the sea and the horizon, whose lower edge sat exactly at the outermost mesh:
+         * a water bug that looked like a sky bug.
+         *
+         * No bed behind means OPEN WATER, which is the `path = WATER_MAX_PATH` and
+         * `coverage = 1` this branch is skipped in favour of.
+         */
         float bedNdc = texture(sceneDepthTex, uv).r * 2.0 - 1.0;
         float bedDist = -viewZFromNdcZ(bedNdc);
         float rayScale = length(ViewPos) / surfaceDist;
