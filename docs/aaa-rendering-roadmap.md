@@ -59,10 +59,17 @@ Ground truth that shapes every design below (library at `cetra/src/`, shaders at
     NDF — Toksvig/LEAN — which spec 11.35's far-field handover already does, so the engine gets
     this right in one place and not in the resolve) and **att1's `.a` SSR marker**, a negative
     alpha whose magnitude is the catcher's edge falloff, so part categorical and part continuous.
-    The fix is stencil for the tag (8 bits allocated at `engine.c:622/:624`, **zero first-party
-    `glStencil*` calls**) and the depth buffer for the depth, via a linearize pass — sampling the
-    resolved depth while stencil-testing the same texture is a **GL 4.1 feedback loop**, since the
-    write-mask carve-out is GL 4.5. Note the industry's answer to this exact incompatibility was
+    The depth half is fixed (11.37 phase 1, from the depth buffer, which resolves by selecting).
+    ~~The fix is stencil for the tag~~ — **struck: stencil was built, measured and reverted**
+    (11.37 phase 2). It does remove the misfile, +2.174% to 0.000%, and it breaks `sss-scale`,
+    the gate holding scatter width independent of resolution. **Per-sample storage cannot serve a
+    per-pixel reader**: the SSS passes are fullscreen quads, so they read ONE stencil value per
+    pixel, and resolving a per-sample tag selects a single sample and discards coverage — a rim
+    pixel 90% covered is dropped if that sample missed, one 10% covered is kept if it hit. The
+    alpha rule it replaced was at least monotonic in coverage, and monotonic error cancels across
+    resolutions where arbitrary error does not. So it trades a categorical error for an arbitrary
+    one. **The tag defect stays open**, measured and guarded by `sss-tag`. Note the industry's
+    answer to this exact incompatibility was
     to stop multisampling the G-buffer: it is why MSAA left AAA after ~2013, and this engine's
     interactive path is *already* 1-sample + TAA (`render.c:3029-3040`) and structurally immune —
     the defect lives on the headless default and explicit `--taa --msaa N`. Full recipe and
