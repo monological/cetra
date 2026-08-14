@@ -646,9 +646,10 @@ typedef struct {
     // origin, which is usually what a report means.
     vec3 cam_eye, cam_target, cam_up;
     int cam_eye_set, cam_target_set, cam_up_set;
-    float fov;         // vertical, radians; 0 = the app's own framing
-    int player;        // first-person walker instead of the orbit camera
-    float walk_speed;  // units/s on the flat; 0 = the walker's own default
+    float fov;          // vertical, radians; 0 = the app's own framing
+    int player;         // first-person walker instead of the orbit camera
+    float walk_speed;   // units/s on the flat; 0 = the walker's own default
+    int arrows_upright; // up arrow looks UP; the walker's default is inverted
 } TreeArgs;
 
 static void print_usage(const char* prog) {
@@ -678,6 +679,8 @@ static void print_usage(const char* prog) {
     printf("                          cursor for the GUI. With --cam-eye, spawn at its x,z\n");
     printf("      --walk-speed U      Units/s on the flat (default %.0f; implies --player)\n",
            (double)PLAYER_WALK_SPEED);
+    printf("      --no-invert-arrows  Up arrow looks UP. Default is inverted, arrows only --\n");
+    printf("                          the mouse is never inverted either way\n");
     printf("  -h, --help              This message\n");
 }
 
@@ -724,6 +727,9 @@ static bool parse_args(int argc, char** argv, TreeArgs* a) {
             a->player = 1;
         } else if (!strcmp(s, "--walk-speed") && has_next) {
             a->walk_speed = (float)atof(argv[++i]);
+            a->player = 1;
+        } else if (!strcmp(s, "--no-invert-arrows")) {
+            a->arrows_upright = 1;
             a->player = 1;
         } else if (!strcmp(s, "--cam-eye") && has_next) {
             a->cam_eye_set = sscanf(argv[++i], "%f,%f,%f", &a->cam_eye[0], &a->cam_eye[1],
@@ -913,7 +919,11 @@ int main(int argc, char** argv) {
         // Yaw 0 looks down -Z, so facing the origin from `bearing` is that same angle: the
         // spawn point and the direction home are the same bearing, one negated in Z.
         player_init(player, engine, spawn_x, spawn_z,
-                    args.cam_eye_set ? atan2f(spawn_x, spawn_z) : bearing, args.walk_speed);
+                    args.cam_eye_set ? atan2f(spawn_x, spawn_z) : bearing);
+        if (args.walk_speed > 0.0f)
+            player->walk_speed = args.walk_speed;
+        if (args.arrows_upright)
+            player->invert_arrow_pitch = false;
     } else {
         drag_controller = create_mouse_drag_controller(engine);
     }

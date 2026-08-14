@@ -48,11 +48,12 @@ static void player_set_capture(Player* p, struct Engine* engine, bool capture) {
     }
 }
 
-void player_init(Player* p, struct Engine* engine, float x, float z, float yaw, float walk_speed) {
+void player_init(Player* p, struct Engine* engine, float x, float z, float yaw) {
     p->feet[0] = x;
     p->feet[1] = ground_height_at(x, z);
     p->feet[2] = z;
-    p->walk_speed = walk_speed > 0.0f ? walk_speed : PLAYER_WALK_SPEED;
+    p->walk_speed = PLAYER_WALK_SPEED;
+    p->invert_arrow_pitch = true;
     p->yaw = yaw;
     p->pitch = 0.0f;
     p->vertical_velocity = 0.0f;
@@ -123,8 +124,7 @@ void player_update(Player* p, struct Engine* engine, float dt) {
         p->last_mouse_y = my;
 
         // The arrow keys: a held RATE, so this one is scaled by dt. Additive with the mouse
-        // rather than instead of it, so there is no mode to be in the wrong one of. Same sign
-        // convention: right and down look right and down.
+        // rather than instead of it, so there is no mode to be in the wrong one of.
         float dyaw = 0.0f, dpitch = 0.0f;
         if (glfwGetKey(win, GLFW_KEY_LEFT) == GLFW_PRESS)
             dyaw += 1.0f;
@@ -134,6 +134,11 @@ void player_update(Player* p, struct Engine* engine, float dt) {
             dpitch += 1.0f;
         if (glfwGetKey(win, GLFW_KEY_DOWN) == GLFW_PRESS)
             dpitch -= 1.0f;
+        // Pitch only, and only for the arrows. Yaw is never inverted -- left means left in every
+        // convention there is -- and the mouse keeps its own sign, so the two devices genuinely
+        // disagree about up here. That is deliberate rather than an oversight.
+        if (p->invert_arrow_pitch)
+            dpitch = -dpitch;
         p->yaw += dyaw * PLAYER_KEY_LOOK_RATE * dt;
         p->pitch += dpitch * PLAYER_KEY_LOOK_RATE * dt;
 

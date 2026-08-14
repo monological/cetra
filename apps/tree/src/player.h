@@ -51,9 +51,17 @@ struct Engine;
 
 typedef struct Player {
     vec3 feet; // world position of the soles; the camera sits PLAYER_EYE_HEIGHT above
-    // Units per second on the flat, before the sprint multiplier. Seeded from
-    // PLAYER_WALK_SPEED; --walk-speed replaces it.
+    /*
+     * Tunables. player_init seeds them and the caller overwrites what a flag asked for, rather
+     * than each one becoming another init parameter -- they are plain data with no invariant
+     * between them, and the alternative was a six-argument constructor.
+     */
+    // Units per second on the flat, before the sprint multiplier.
     float walk_speed;
+    // true = the up arrow looks DOWN. Default, and it applies to the ARROWS ONLY: the mouse is
+    // a direct pointing device where inversion is a minority taste, while an arrow key is a
+    // pitch lever and up-is-down is the older convention for those.
+    bool invert_arrow_pitch;
     // Where the head is pointing. Driven by the mouse and by the arrow keys, additively: one is
     // a displacement per pixel and the other a rate per second, which is why only the second is
     // scaled by the frame delta.
@@ -69,9 +77,9 @@ typedef struct Player {
     double last_mouse_x, last_mouse_y;
 } Player;
 
-// Spawn standing on the ground at (x, z), looking at `yaw`. Captures the cursor.
-// `walk_speed` of 0 or less takes PLAYER_WALK_SPEED.
-void player_init(Player* p, struct Engine* engine, float x, float z, float yaw, float walk_speed);
+// Spawn standing on the ground at (x, z), looking at `yaw`. Captures the cursor and seeds the
+// tunables above to their defaults; overwrite them afterwards to change them.
+void player_init(Player* p, struct Engine* engine, float x, float z, float yaw);
 
 // Advance one frame and write the result to the engine camera. `dt` is the frame delta.
 void player_update(Player* p, struct Engine* engine, float dt);
