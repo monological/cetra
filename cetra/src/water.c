@@ -299,11 +299,12 @@ Water* create_water(void) {
     water->enabled = true;
     water->level = 0.0f;
     water->extent = 60.0f;
-    // Clear-water extinction per metre, red first. Not a look control at the
-    // scale of a pond -- over the couple of metres a lake fixture spans these
-    // barely bite -- but it is the physical ordering, and the depth-graded
-    // colour that reads as water comes from it rather than from a tint.
-    glm_vec3_copy((vec3){0.45f, 0.09f, 0.06f}, water->absorption);
+    // Not a look control at the scale of a pond -- over the couple of metres a lake
+    // fixture spans these barely bite -- but it is the physical ordering, and the
+    // depth-graded colour that reads as water comes from it rather than from a tint.
+    // Stored per world unit, so this default is the physical figure for a world where
+    // one unit is one metre; see the field's own contract.
+    glm_vec3_copy(WATER_CLEAR_ABSORPTION_PER_M, water->absorption);
     glm_vec3_copy((vec3){0.02f, 0.10f, 0.12f}, water->scatter);
     water->roughness = 0.04f;
     water->ior = 1.333f;

@@ -88,23 +88,34 @@ const float WATER_TRANSMISSION_MAX_LOD = 6.0;
  * exponential is already zero, and an unbounded value from a sky-depth sample
  * would only cost precision.
  *
- * The budget is in EXTINCTION LENGTHS rather than world units, because that is what
- * the sentence above actually says, and a length in units only means it at one world
- * scale. 3.84 is 64 units at a blue extinction of 0.06 per unit -- clear seawater in a
- * metre-scale world, which is what this was tuned against. A world of 22 units to the
- * metre gets the same optical depth instead of a sight line 22x shorter than the water
- * it authored.
+ * The budget is in EXTINCTION LENGTHS, which is scale-free; the same number in world
+ * units means what it says at exactly one world scale. 3.84 is 64 units at a blue
+ * extinction of 0.06 per unit -- clear seawater where a unit is a metre, which is what
+ * this was tuned against.
  *
  * The WEAKEST channel sets it: the clamp has to sit past the point the LAST channel
  * dies, and in water that is blue. Truncation at the clamp therefore leaves at most
- * exp(-3.84) = 2.15% -- a derivative kink rather than a step, and the bound to claim
- * instead of claiming nothing is truncated.
+ * exp(-3.84) = 2.15%, a derivative kink rather than a step.
+ *
+ * 5.54 -- ln(255), where the leak falls under one 8-bit code -- was the alternative,
+ * and 2.15% against 0.39% did not pay for re-baking the fixture golden and
+ * re-validating every water arm. Raising it later is this one line.
  *
  * WATER_MAX_PATH survives as a FLOOR, so this can only lengthen a clamp, never shorten
  * one -- no scene loses reach to the rounding of the division.
  */
 const float WATER_MAX_PATH = 64.0;
 const float WATER_MAX_OPTICAL_DEPTH = 3.84;
+/*
+ * Floor on the extinction the budget divides by, and it is load-bearing rather than
+ * defensive: a channel of exactly 0 is authorable (`water{ absorption }` takes what it
+ * is given) and would make the budget infinite, then `exp(-0.0 * inf)` is NaN -- one
+ * zeroed channel would take the whole surface with it.
+ *
+ * 1e-4 per unit is a 10,000-unit e-folding length, past every far plane in this tree, so
+ * the floor can only bind on water nothing could see through in the first place.
+ */
+const float WATER_MIN_EXTINCTION = 1e-4;
 // Below this column the surface has emerged through the bed; see the discard.
 const float WATER_MIN_PATH = 0.01;
 // Coverage below this contributes no samples at any supported sample count, so the
@@ -244,13 +255,10 @@ void main() {
     // charged the vertical column and read too shallow exactly where water is
     // deepest-looking.
     float surfaceDist = max(-ViewPos.z, 1e-4);
-    // Uniform: one value for the whole draw, so nothing below diverges per fragment and the
-    // fwidth further down keeps the uniform control flow it documents.
-    float maxPath = max(WATER_MAX_PATH,
-                        WATER_MAX_OPTICAL_DEPTH /
-                            max(min(min(waterAbsorption.r, waterAbsorption.g),
-                                    waterAbsorption.b),
-                                1e-4));
+    // Derives only from a uniform, so it is one value for the whole draw.
+    float minExtinction = max(min(min(waterAbsorption.r, waterAbsorption.g), waterAbsorption.b),
+                              WATER_MIN_EXTINCTION);
+    float maxPath = max(WATER_MAX_PATH, WATER_MAX_OPTICAL_DEPTH / minExtinction);
     float path = maxPath;
     // How much of this pixel still has water in it. 1 everywhere but the shoreline.
     float coverage = 1.0;

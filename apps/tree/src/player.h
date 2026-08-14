@@ -32,11 +32,12 @@ struct Engine;
  */
 
 /*
- * SCALE. The one object in this app with a known real-world size is the grass: blades are
- * authored at 5.5 units and grass stands about 0.25 m, which puts the world near 22 units per
- * metre -- and squares with the tree, 250 units for a mature tree's 11 m. That fixes the eye
- * height at 1.7 m, and it is worth keeping physical because eye height is what decides how the
- * world LOOKS: how far down the grass is, where the waterline crosses you.
+ * 1.7 m at this world's scale, which `GROUND_UNITS_PER_METRE` states and derives. Worth
+ * keeping physical because eye height is what decides how the world LOOKS: how far down the
+ * grass is, where the waterline crosses you.
+ *
+ * Not written as the product. 1.7 x 22 is 37.4, and rounding it here rather than there keeps
+ * every frame ever captured in this mode comparable.
  */
 #define PLAYER_EYE_HEIGHT 37.0f
 

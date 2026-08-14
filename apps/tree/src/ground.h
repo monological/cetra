@@ -37,15 +37,11 @@
 #define GROUND_HEIGHT 190.0f
 
 /*
- * SCALE, as one number, because more than one thing needs it and they must agree.
+ * SCALE. The anchor is the grass: blades are authored at 5.5 units and grass stands about
+ * 0.25 m, which squares with the tree at 250 units for a mature 11 m.
  *
- * The anchor is the grass: blades are authored at 5.5 units and grass stands about 0.25 m,
- * which squares with the tree at 250 units for a mature 11 m. `player.h` spends this on the
- * eye height and the gravity; the water spends it converting extinction, which is authored
- * per METRE and stored per world unit.
- *
- * Here rather than in `player.h` because it is a property of the WORLD, not of the walker --
- * the sea is authored in frames that have no player in them.
+ * Here rather than in `player.h`, which documented the same derivation first, because it is
+ * a property of the WORLD and not of the walker -- there are frames with no player in them.
  */
 #define GROUND_UNITS_PER_METRE 22.0f
 

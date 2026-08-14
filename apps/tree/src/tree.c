@@ -1270,18 +1270,18 @@ int main(int argc, char** argv) {
             water->spread = 0.85f;
             /*
              * Optical properties. `absorption` is extinction per WORLD UNIT, and the
-             * library's default is clear water per METRE -- correct as it stands only
-             * where a unit IS a metre. This world is 22 units to it, so the default is
-             * DIVIDED rather than re-typed at this scale: the numerator stays in one
-             * place and cannot drift from the value it is meant to be.
+             * library's default (0.45, 0.09, 0.06) is clear seawater per METRE -- correct
+             * as it stands only where a unit IS a metre. This world is 22 units to it, so
+             * the default is DIVIDED rather than re-typed at this scale: the numerator
+             * stays in one place and cannot drift from the value it means.
              *
-             * Authored per metre it was a sight line of about a metre, which is why
-             * nothing under the surface could be seen from anywhere.
+             * Taken per metre it was a sight line of about a metre, so nothing under the
+             * surface could be seen from anywhere.
              *
-             * SCATTER is not divided. It is the colour the absorbed energy comes back
-             * as -- a radiance, with no length in it to convert. It is also where the
-             * lagoon now lives: greener than the library's open-ocean blue, against an
-             * extinction that is plain clear seawater.
+             * SCATTER is not divided. It is the colour the absorbed energy comes back as
+             * -- a radiance, with no length in it to convert. It is also where the lagoon
+             * lives: greener than the library's open-ocean blue, against an extinction
+             * that is plain clear seawater.
              */
             glm_vec3_divs(water->absorption, GROUND_UNITS_PER_METRE, water->absorption);
             glm_vec3_copy((vec3){0.03f, 0.13f, 0.14f}, water->scatter);

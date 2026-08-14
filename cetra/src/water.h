@@ -66,6 +66,13 @@
 #define WATER_BED_RES 256
 
 /*
+ * Clear seawater's extinction, per METRE, red first. Named here rather than left inside
+ * create_water so a world at another scale can divide it without having to run
+ * create_water to find out what it was dividing.
+ */
+#define WATER_CLEAR_ABSORPTION_PER_M ((vec3){0.45f, 0.09f, 0.06f})
+
+/*
  * Spectral cascades (--water-waves fft).
  *
  * A Tessendorf ocean: the surface is described statistically in frequency space,
@@ -122,6 +129,10 @@ typedef struct Water {
     // so a bigger number is a shorter sight line; scatter is the colour the
     // absorbed energy comes back as. Water absorbs red first, which is why the
     // default is ordered the way it is.
+    //
+    // PER WORLD UNIT, and the physical figures below are per METRE: a world whose
+    // unit is not a metre divides them by its own units-per-metre, or its sea is
+    // that factor too absorbing. scatter carries no length and does not convert.
     vec3 absorption;
     vec3 scatter;
 
