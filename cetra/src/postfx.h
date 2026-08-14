@@ -506,25 +506,6 @@ typedef struct PostFX {
     GLuint sss_pyr_fbo; // one FBO, re-attached per level (the hiz idiom)
     GLuint sss_pyr_color_texture;
     GLuint sss_pyr_depth_texture;
-    /*
-     * The profile tag, as stencil. A RENDERBUFFER rather than a texture, and that is the whole
-     * reason it exists separately from `depth_texture` (spec 11.37 phase 2).
-     *
-     * Which profile a pixel belongs to used to ride in the skin-diffuse buffer's alpha, where
-     * the MSAA resolve -- a box filter -- averaged it: the mean of tag 2 and the uncovered 0 is
-     * 1, so a partly covered pixel was blurred as a DIFFERENT profile. Stencil is integer and
-     * per sample, so it has no mean to take.
-     *
-     * It cannot be `depth_texture`, which already carries the same stencil bits. Both SSS
-     * passes SAMPLE that texture for view depth, and attaching a texture to the draw
-     * framebuffer while sampling it is undefined on GL 4.1 -- the write-mask carve-out is
-     * GL 4.5 / ARB_texture_barrier, which this platform never reaches. A renderbuffer cannot be
-     * sampled at all, which is exactly the property wanted: it makes the conflict
-     * unconstructible rather than merely avoided. One extra blit and one D24S8 at render res.
-     */
-    GLuint sss_stencil_rb;  // D24S8; only the stencil half is read, by the fixed-function test
-    GLuint sss_stencil_fbo; // blit destination, so the copy does not depend on which
-                            // colour level sss_pyr_fbo happens to have attached
     ShaderProgram* sss_pyr_seed_program;
     ShaderProgram* sss_pyr_down_program;
 

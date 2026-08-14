@@ -2108,22 +2108,8 @@ void main() {
     //
     // Clamped like FragColor: this is an RGBA16F attachment too, and it was the
     // one G-buffer write with no ceiling at all.
-    /*
-     * Alpha is COVERAGE, not a profile tag, and that substitution is what makes this channel
-     * survive its own resolve (spec 11.37 phase 2).
-     *
-     * It held the tag until the tag moved to stencil. A tag is categorical, and an MSAA colour
-     * resolve is a box filter, so the mean of tag 2 and the uncovered 0 was 1 -- a valid, wrong
-     * profile. Coverage has the opposite property: it is LINEAR in what the resolve computes.
-     * Every covered sample writes 1, so the resolve returns the covered fraction exactly, which
-     * is the one quantity a box filter is entitled to produce here.
-     *
-     * The rgb beside it is coverage-premultiplied by that same resolve, so the pair is a
-     * premultiplied colour and the pyramid can divide the coverage back out at the gather
-     * instead of darkening toward the black around a silhouette.
-     */
     DiffuseOut = vec4(min(subsurface * sssDiffuse * preExposure, vec3(WS_SCENE_MAX)),
-                      sssProfileIndex >= 0 ? 1.0 : 0.0);
+                      float(max(sssProfileIndex + 1, 0)));
 
     // Ambient specular, same working-space conversion and fp ceiling as
     // FragColor (the composite adds this back into the same buffer, so it must

@@ -482,11 +482,6 @@ static void postfx_free_targets(PostFX* fx) {
     gl_delete_fbo(&fx->sss_pyr_fbo);
     gl_delete_texture(&fx->sss_pyr_color_texture);
     gl_delete_texture(&fx->sss_pyr_depth_texture);
-    gl_delete_fbo(&fx->sss_stencil_fbo);
-    if (fx->sss_stencil_rb) {
-        glDeleteRenderbuffers(1, &fx->sss_stencil_rb);
-        fx->sss_stencil_rb = 0;
-    }
     gl_delete_fbo(&fx->oit_accum_fbo);
     gl_delete_texture(&fx->oit_accum_texture);
     gl_delete_fbo(&fx->oit_revealage_fbo);
@@ -1309,37 +1304,9 @@ static bool create_sss_pyramid(PostFX* fx) {
                            fx->sss_pyr_depth_texture, 0);
     const GLenum bufs[2] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1};
     glDrawBuffers(2, bufs);
-    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER,
-                              fx->sss_stencil_rb);
     bool ok = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
     if (!ok)
         log_error("SSS pyramid framebuffer incomplete");
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    return ok;
-}
-
-// The resolved profile tag, in stencil, shared by the seed and the gather.
-//
-// One renderbuffer for both: they read the same tag at the same resolution, and sharing it
-// mirrors how the scene, OIT and moment FBOs share one depth-stencil. Its own FBO exists only
-// as the blit destination -- copying into sss_pyr_fbo instead would make the copy depend on
-// which colour mip that FBO happened to have attached at the time.
-static bool create_sss_stencil(PostFX* fx) {
-    glGenRenderbuffers(1, &fx->sss_stencil_rb);
-    glBindRenderbuffer(GL_RENDERBUFFER, fx->sss_stencil_rb);
-    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, fx->width, fx->height);
-    glBindRenderbuffer(GL_RENDERBUFFER, 0);
-
-    glGenFramebuffers(1, &fx->sss_stencil_fbo);
-    glBindFramebuffer(GL_FRAMEBUFFER, fx->sss_stencil_fbo);
-    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER,
-                              fx->sss_stencil_rb);
-    // No colour attachment, so nothing to draw into -- this is a blit target only.
-    glDrawBuffer(GL_NONE);
-    glReadBuffer(GL_NONE);
-    bool ok = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
-    if (!ok)
-        log_error("SSS stencil framebuffer incomplete");
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     return ok;
 }
@@ -1383,35 +1350,9 @@ static void postfx_build_sss_pyramid(PostFX* fx, int profile_tag, float proj_sca
     // from a surface partway to the sky.
     glActiveTexture(GL_TEXTURE2);
     glBindTexture(GL_TEXTURE_2D, fx->depth_texture);
+    uniform_set_int(fx->sss_pyr_seed_program->uniforms, "profileTag", profile_tag);
     uniform_set_mat4(fx->sss_pyr_seed_program->uniforms, "projection", projection);
-    /*
-     * Only this profile's pixels survive, decided by the STENCIL rather than by rounding a
-     * resolved float. The tag is written per sample in the scene pass, so a partly covered
-     * pixel carries the tag of whatever actually covered it.
-     *
-     * The clear is what the test costs. The seed used to write explicit zeros wherever the
-     * pixel was not this profile's; a discarded fragment writes nothing at all, so without
-     * this level 0 would still hold the PREVIOUS profile's seed and every profile after the
-     * first would blur someone else's skin. Clears ignore the stencil test, so this reaches
-     * every texel.
-     */
-    glClearBufferfv(GL_COLOR, 0, (const GLfloat[]){0.0f, 0.0f, 0.0f, 0.0f});
-    glClearBufferfv(GL_COLOR, 1, (const GLfloat[]){0.0f, 0.0f, 0.0f, 0.0f});
-    glEnable(GL_STENCIL_TEST);
-    glStencilFunc(GL_EQUAL, profile_tag, 0xFF);
-    // KEEP on all three outcomes is what makes this read-only. NOT glStencilMask(0), which
-    // looks like the safer way to say the same thing and is a trap: the write mask also gates
-    // glClear, so leaving it at 0 stops the frame clear clearing stencil AND stops the scene
-    // pass replacing the tag. The buffer then freezes at frame 1 and every later frame blurs
-    // where the geometry USED to be -- pale stationary discs that stay put while the subject
-    // moves, which is how this was found.
-    glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
     draw_fullscreen_quad(fx->quad_vao);
-    // OFF for the mip chain. The stencil is full render res while each level draws into a
-    // smaller viewport, so the test would compare against texels belonging to other pixels --
-    // and the levels have no tag of their own to test anyway: they are a pure reduction of
-    // level 0, which is already this profile's alone.
-    glDisable(GL_STENCIL_TEST);
 
     glUseProgram(fx->sss_pyr_down_program->id);
     float sigma_z = fx->sss_profiles[profile_tag - 1][3];
@@ -1472,21 +1413,8 @@ static bool postfx_ensure_sss_targets(PostFX* fx) {
         log_error("Failed to allocate SSS targets");
         return false;
     }
-    // Before the pyramid, which attaches it.
-    if (!create_sss_stencil(fx))
-        return false;
     if (!create_sss_pyramid(fx))
         return false;
-    // The gather tests the same tag, so it takes the same attachment.
-    glBindFramebuffer(GL_FRAMEBUFFER, fx->sss_delta_fbo);
-    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER,
-                              fx->sss_stencil_rb);
-    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-        log_error("SSS delta framebuffer incomplete after attaching stencil");
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        return false;
-    }
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
     fx->sss_ready = true;
     return true;
 }
@@ -1638,19 +1566,13 @@ static void postfx_run_sss(PostFX* fx, GLuint canvas_fbo, mat4 projection, bool 
         glActiveTexture(GL_TEXTURE3);
         glBindTexture(GL_TEXTURE_2D, fx->depth_texture);
         uniform_set_vec4(fx->sss_gather_program->uniforms, "sssProfile", fx->sss_profiles[p]);
+        uniform_set_int(fx->sss_gather_program->uniforms, "profileTag", p + 1);
         uniform_set_mat4(fx->sss_gather_program->uniforms, "projection", projection);
         uniform_set_float(fx->sss_gather_program->uniforms, "projScale", proj_scale);
         uniform_set_float(fx->sss_gather_program->uniforms, "maxLod", sss_lod_cap(fx));
         uniform_set_vec2(fx->sss_gather_program->uniforms, "renderTexel",
                          (const float[]){1.0f / (float)fx->width, 1.0f / (float)fx->height});
-        // Same test as the seed. No clear needed here: p == 0 clears and the rest blend
-        // additively, so a discarded fragment is exactly the +0 this pass already relied on
-        // when the tag compare lived in the shader.
-        glEnable(GL_STENCIL_TEST);
-        glStencilFunc(GL_EQUAL, p + 1, 0xFF);
-        glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP); // read-only; see the seed on why not a mask
         draw_fullscreen_quad(fx->quad_vao);
-        glDisable(GL_STENCIL_TEST);
         if (p > 0) {
             glDisable(GL_BLEND);
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -3006,17 +2928,6 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fx->depth_fbo);
             glBlitFramebuffer(0, 0, fx->width, fx->height, 0, 0, fx->width, fx->height,
                               GL_DEPTH_BUFFER_BIT, GL_NEAREST);
-            // The profile tag, into its own renderbuffer. A second copy rather than the
-            // stencil half of the one above, because both SSS passes SAMPLE depth_texture and
-            // a texture cannot be attached and sampled at once on GL 4.1 -- see
-            // PostFX.sss_stencil_rb. A stencil downsample is implementation-dependent in the
-            // spec rather than promised to select a sample, but a bitmask has no meaningful
-            // mean, so every implementation selects.
-            if (sss_active) {
-                glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fx->sss_stencil_fbo);
-                glBlitFramebuffer(0, 0, fx->width, fx->height, 0, 0, fx->width, fx->height,
-                                  GL_STENCIL_BUFFER_BIT, GL_NEAREST);
-            }
             check_gl_error("postfx depth resolve");
             profiler_scope_end(fx->profiler);
 

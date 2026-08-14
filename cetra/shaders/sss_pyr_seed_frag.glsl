@@ -10,21 +10,20 @@ layout(location = 1) out float DepthOut; // coverage-weighted view depth (positi
 // means a partially covered coarse texel can be divided back out at the gather
 // instead of darkening toward the uncovered black around it.
 //
-// WHICH profile is not decided here. The caller sets a stencil test, so only this profile's
-// pixels reach this shader at all, and a coarse texel can still only ever hold one profile's
-// light -- the property this test used to provide by comparing srcTex's alpha.
+// The profile test lives here rather than in the gather, so that a coarse texel can only
+// ever hold one profile's light and no FILTERED tag is compared while walking the pyramid.
 //
-// It stopped being able to. A tag is categorical and an MSAA colour resolve is a box filter,
-// so a partly covered pixel arrived holding the MEAN of this profile's tag and its neighbours'
-// -- and the mean of tag 2 and the cleared 0 is 1, a valid and wrong tag. At one sample there
-// was nothing to average and the compare was exact; above one it misfiled silhouette pixels,
-// which is most of a thin subject. Stencil is integer and per sample, so it has no mean to
-// take, and it cannot be read here either way: GL 4.1 has no stencil texturing
-// (ARB_stencil_texturing is 4.3), which is why the test is fixed-function rather than a fetch.
-uniform sampler2D srcTex;   // resolved attachment 4: skin diffuse
+// What it does NOT survive is the resolve that produces srcTex. A tag is categorical and an
+// MSAA colour resolve is a box filter, so a partly covered pixel arrives holding the mean of
+// this profile's tag and its neighbours' -- and the mean of tag 2 and the cleared 0 is a
+// valid, wrong tag. At one sample there is nothing to average and the test is exact; above
+// one it misfiles silhouette pixels, which is most of a thin subject. Fixing that needs the
+// tag somewhere per-sample, i.e. stencil (spec 11.37 phase 2).
+uniform sampler2D srcTex;   // resolved attachment 4: skin diffuse, a = profile tag
 uniform sampler2D auxTex;   // .z = linear view Z, negative in front, 0 = sky
 uniform sampler2D depthTex; // resolved scene depth, NDC
 uniform mat4 projection;    // viewZFromNdcZ reads this by name
+uniform int profileTag;     // this walk's profile index + 1, matching the alpha
 
 #include "depth.glsl"
 
@@ -46,24 +45,24 @@ void main()
      */
     float onSurface = texture(auxTex, TexCoords).z;
     float z = viewZFromNdcZ(texture(depthTex, TexCoords).r * 2.0 - 1.0);
-    // onSurface >= 0 is sky or an uncovered pixel, and it contributes nothing rather than
-    // black, because coverage 0 removes it from the average entirely. Pixels belonging to
-    // another profile never arrive: the stencil test rejects them before this shader runs.
+    // onSurface >= 0 is sky or an uncovered pixel; a different tag belongs to another
+    // profile's walk. Both contribute nothing rather than black, because
+    // coverage 0 removes them from the average entirely.
     /*
      * COVERAGE comes out of the resolve, and declaring it 1.0 is what put light in the frame
      * that nothing emitted.
      *
      * srcTex is an MSAA resolve, so a partly covered pixel arrives with its rgb averaged
      * against the uncovered samples' zeros -- already premultiplied by coverage -- and its
-     * alpha averaged the same way. Since the scene pass writes 1 on skin and 0 elsewhere, that
-     * alpha IS the covered fraction: k of n samples resolves to k/n.
+     * alpha averaged the same way. With one profile in the frame that alpha IS the coverage:
+     * tag 1 over k of n samples resolves to k/n.
      *
-     * Declaring it 1.0 instead, which this did while alpha still carried the profile tag, says
-     * a blade covering half a pixel is fully covered while it carries half a blade's radiance.
-     * The composite is hdr + blur - D: D is the dimmed value, blur a neighbourhood at full
-     * brightness, and the difference -- about (1 - coverage) of the true radiance -- was ADDED
-     * as light. It grows with the scatter radius, because a wider kernel reaches more fully
-     * covered neighbours, which is why the radius slider appeared to control it.
+     * The old test rounded that alpha to an integer, so a blade covering half a pixel passed
+     * as fully covered while carrying half a blade's radiance. The composite is
+     * hdr + blur - D: D was the dimmed value, blur was a neighbourhood at full brightness, and
+     * the difference -- about (1 - coverage) of the true radiance -- was ADDED as light. It
+     * grows with the scatter radius, because a wider kernel reaches more fully covered
+     * neighbours, which is why the radius slider controls it.
      *
      * rgb stays premultiplied: the resolve already did it, and the pyramid is built on
      * premultiplied colour with coverage alongside precisely so a partly covered texel can be
@@ -90,7 +89,7 @@ void main()
      */
     const float SSS_MAX_DIFFUSE = 2.0;
 
-    bool covered = onSurface < 0.0;
-    ColorOut = covered ? vec4(min(d.rgb, vec3(SSS_MAX_DIFFUSE)), d.a) : vec4(0.0);
+    bool covered = onSurface < 0.0 && int(d.a + 0.5) == profileTag;
+    ColorOut = covered ? vec4(min(d.rgb, vec3(SSS_MAX_DIFFUSE)), 1.0) : vec4(0.0);
     DepthOut = covered ? -z : 0.0;
 }

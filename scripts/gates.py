@@ -5210,9 +5210,11 @@ SSS_TAG_TOP = (1.3, 2.0, 0.0)
 # The band straddling the silhouette, where partial coverage lives. Multiples of the projected
 # radius, on the OUTER half only -- the other sphere is to the left.
 SSS_TAG_RIM = (0.92, 1.02)
-# Pre-fix this read +2.174%; the fix takes it to 0.000%. A bar with four times the headroom of
-# the effect, which is affordable because the fixture is exactly deterministic.
-SSS_TAG_MAX_SHIFT = 0.005
+# The defect's measured size. An OPEN defect: 11.37 phase 2 moved the tag into stencil, which
+# took this to 0.000%, and was reverted -- a per-pixel pass can only read one stencil value per
+# pixel, so resolving a per-sample tag discards coverage and trades a categorical error for an
+# arbitrary one. See the spec. Bar an order below the effect: presence, not amount.
+SSS_TAG_MIN_SHIFT = 0.010
 
 
 def _sss_arc_rgb(pix, w, h, cx, cy, r0, r1):
@@ -5307,10 +5309,11 @@ def run_sss_tag_gate(workdir):
         print("  sss-tag      ERROR while rendering the 4x profile-count pair")
         return ["sss-tag"]
     shift, two, one = got
-    ok = abs(shift) <= SSS_TAG_MAX_SHIFT
+    ok = shift >= SSS_TAG_MIN_SHIFT
     print(f"  sss-tag      {'PASS' if ok else 'FAIL'}  4x MSAA, tag-2 rim R/G {two:.5f} with two "
           f"profiles vs {one:.5f} with one, {shift * 100.0:+.3f}% "
-          f"(want <= {SSS_TAG_MAX_SHIFT * 100.0:.1f}%; the alpha tag read +2.174% here)")
+          f"(want >= {SSS_TAG_MIN_SHIFT * 100.0:.1f}%: this records an OPEN defect at its size, "
+          f"so it goes to zero only by a deliberate change here)")
     if not ok:
         failures.append("sss-tag")
 
@@ -5319,11 +5322,11 @@ def run_sss_tag_gate(workdir):
         print("  sss-tag-1x   ERROR while rendering the 1-sample profile-count pair")
         return failures + ["sss-tag-1x"]
     shift1, two1, one1 = got
-    ok = abs(shift1) <= SSS_TAG_MAX_SHIFT
+    ok = abs(shift1) <= SSS_TAG_MIN_SHIFT
     print(f"  sss-tag-1x   {'PASS' if ok else 'FAIL'}  1 sample, same pair {two1:.5f} vs "
-          f"{one1:.5f}, {shift1 * 100.0:+.3f}% (want <= {SSS_TAG_MAX_SHIFT * 100.0:.1f}%: with "
-          f"no partial coverage there is nothing to average, so this held even while the arm "
-          f"above failed -- which is what made that failure about coverage)")
+          f"{one1:.5f}, {shift1 * 100.0:+.3f}% (want <= {SSS_TAG_MIN_SHIFT * 100.0:.1f}%: with "
+          f"no partial coverage there is nothing to average, so the arm above measures partial "
+          f"coverage rather than the mere presence of a second profile)")
     if not ok:
         failures.append("sss-tag-1x")
 

@@ -530,11 +530,6 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
         // Only update material uniforms if material changed
         if (submit_take_material(state, mat)) {
             _update_program_material_uniforms(program, mat, a2c_capable);
-            // The SSS profile tag, at exactly the granularity it varies: per material, beside
-            // the uniforms it belongs with. Free unless the shading lane enabled the stencil
-            // test -- every other pass leaves this as state nothing reads. -1 is "not skin"
-            // and becomes ref 0, the value the frame clear already leaves behind.
-            glStencilFunc(GL_ALWAYS, mat->subsurface_profile + 1, 0xFF);
             if (stats)
                 stats->material_switches++;
         }
@@ -1207,33 +1202,8 @@ void render_current_scene(Engine* engine) {
     // too -- counting them made the number RISE when the pass that exists to
     // lower it was switched on (3.87 to 5.27, measured).
     profiler_samples_begin(engine->profiler);
-    /*
-     * The SSS profile tag is written HERE and only here, as stencil (spec 11.37 phase 2).
-     *
-     * It used to ride in the skin-diffuse buffer's alpha, where the MSAA resolve averaged it --
-     * and a tag is categorical, so the mean of tag 2 and the uncovered 0 is 1: a valid, wrong
-     * profile at every partly covered pixel. Stencil is integer and per SAMPLE, so a pixel the
-     * grass covers a quarter of carries the grass tag on that quarter and nothing has to
-     * average.
-     *
-     * ONE bracket rather than an opt-out at every other pass, and that is the load-bearing
-     * choice. A stencil write requires GL_STENCIL_TEST, so with the test enabled only across
-     * this lane the skybox, catcher, water, OIT, particles, gizmos, overlays and the prepass
-     * cannot touch the tag -- not because each was told not to, but because none of them can.
-     * The alternative was a glStencilMask(0) at a dozen sites in four files, one of them an
-     * app, which the next pass added to this FBO would silently fail to join.
-     *
-     * REPLACE on depth-pass, KEEP otherwise, so the tag follows the surface that wins the depth
-     * test in either draw order. The ref is per material, set beside its uniforms; non-skin
-     * materials carry -1 and so write 0, which is "not skin" -- an occluder clears the tag it
-     * covers for free.
-     */
-    glEnable(GL_STENCIL_TEST);
-    glStencilFunc(GL_ALWAYS, 0, 0xFF); // per-material ref follows, at the material switch
-    glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
     _submit_lanes(engine, scene, opaque_list, camera, *view, draw_projection, render_mode,
                   &submit_state, &frustum, 1u << DRAW_LANE_OPAQUE, SUBMIT_PASS_SHADE);
-    glDisable(GL_STENCIL_TEST);
     profiler_samples_end(engine->profiler);
     if (prepassed)
         glDepthFunc(GL_LESS);

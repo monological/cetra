@@ -28,6 +28,7 @@ uniform mat4 projection;    // viewZFromNdcZ reads this by name
 #include "depth.glsl"
 
 uniform vec4 sssProfile;  // rgb = per-channel scatter weight, w = world radius
+uniform int profileTag;   // this walk's profile index + 1
 uniform float projScale;  // 0.5 * proj[1][1] * renderHeight
 uniform float maxLod;     // coarsest level the gather may read (see lodCap, postfx.c)
 uniform vec2 renderTexel; // one RENDER-res texel, for sizing a level's own texel
@@ -107,11 +108,9 @@ void main()
     // soft edge, and the depth buffer answers "how far", where a mean would be a blur radius
     // taken from a surface that is nowhere. See sss_pyr_seed_frag.
     float onSurface = texture(auxTex, TexCoords).z;
-    // Sky contributes exactly nothing, alpha included, so the additive fold provably cannot
-    // paint outside the subject. Another profile's pixels are rejected by the stencil test
-    // before this runs -- they used to be caught here by rounding the resolved tag, which is a
-    // box-filtered categorical value and so named the wrong profile at partial coverage.
-    if (onSurface >= 0.0) {
+    // Off-skin and sky contribute exactly nothing, alpha included, so the
+    // additive fold provably cannot paint outside the subject.
+    if (onSurface >= 0.0 || int(center.a + 0.5) != profileTag) {
         FragColor = vec4(0.0);
         return;
     }
@@ -198,30 +197,17 @@ void main()
      * there is nothing to renormalise to.
      */
     const vec3 SSS_COVERAGE_KNEE = vec3(1e-3);
-    /*
-     * UN-PREMULTIPLY before comparing, because the two sides are on different scales.
-     *
-     * center.rgb is coverage-premultiplied -- the resolve averaged this surface's radiance
-     * against the uncovered samples' zeros -- while num/den is a coverage-WEIGHTED mean and so
-     * carries none. Subtracting one from the other is only valid where coverage is 1, which is
-     * every pixel except the silhouette, which is the only place any of this matters.
-     */
-    float coverage = center.a;
-    vec3 sharp = center.rgb / max(coverage, SSS_COVERAGE_KNEE.x);
-    vec3 blur = mix(sharp, num / max(den, SSS_COVERAGE_KNEE),
+    vec3 blur = mix(center.rgb, num / max(den, SSS_COVERAGE_KNEE),
                     smoothstep(vec3(0.0), SSS_COVERAGE_KNEE, den));
 
-    /*
-     * The composite is hdr + blur - D, folded additively. Alpha 0 so the fold leaves canvas
-     * alpha untouched.
-     *
-     * Scaled BACK by coverage, because the canvas this adds to is itself a resolve: at a partly
-     * covered pixel it holds k of this surface and 1-k of whatever is behind. A delta computed
-     * on un-premultiplied radiance would hand that pixel a whole surface's worth of scatter --
-     * the speck this pass used to add at every thin silhouette.
-     *
-     * At coverage 1 this is exactly the old blur - center.rgb, so nothing but the silhouette
-     * can move.
-     */
-    FragColor = vec4(coverage * (blur - sharp), 0.0);
+    // The composite is hdr + blur - D, folded additively. Alpha 0 so the fold
+    // leaves canvas alpha untouched.
+    //
+    // Scaled BACK by coverage, because the canvas this adds to is itself a resolve: at a partly
+    // covered pixel it holds k of this surface and 1-k of whatever is behind. A delta computed
+    // on un-premultiplied radiance would hand the pixel a whole surface's worth of scatter,
+    // which is the speck this pass used to add at every thin silhouette.
+    // The composite is hdr + blur - D, folded additively. Alpha 0 so the fold
+    // leaves canvas alpha untouched.
+    FragColor = vec4(blur - center.rgb, 0.0);
 }
