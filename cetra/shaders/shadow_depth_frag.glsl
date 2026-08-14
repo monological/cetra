@@ -1,7 +1,9 @@
 #version 330 core
 
+// centroid, because this stage pairs with pbr_vert and the qualifier is part of the interface:
+// a mismatch fails the link rather than shading differently. See pbr_vert for what it prevents.
 in vec2 TexCoords;
-in vec4 VertexColor;
+centroid in vec4 VertexColor;
 
 // Alpha-tested depth for foliage (material.h foliage_shadows). Off by default:
 // opaque geometry writes depth with no texture fetch at all, exactly as before.

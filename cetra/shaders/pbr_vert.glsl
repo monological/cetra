@@ -6,12 +6,32 @@ layout(location = 3) in vec4 aTangent; // xyz tangent, w bitangent handedness
 layout(location = 5) in vec4 aColor;
 layout(location = 8) in vec2 aTexCoords2;
 
+/*
+ * CENTROID, and it is not a quality tweak -- it is what stops a partly covered pixel being
+ * shaded from attributes that were never on the surface.
+ *
+ * With MSAA the fragment shader runs once per pixel and interpolates varyings at the pixel
+ * CENTRE. On a pixel the primitive only partly covers, that centre can lie outside the
+ * triangle, so every value here is EXTRAPOLATED past the vertices that bound it: a colour
+ * leaves 0..1, a normal stops being a plausible direction, a UV leaves the chart. Thin
+ * geometry is nothing but such pixels -- a grass blade a pixel wide is partly covered along
+ * its whole length -- and apps/tree colours its grass entirely per vertex, so the
+ * extrapolation goes straight into the shading and prints as bright specks that appear with
+ * MSAA and vanish without it.
+ *
+ * `centroid` moves the sample to the centroid of the COVERED samples, which is inside the
+ * primitive by construction, so the values stay within the ones the vertices actually carry.
+ * It costs a different interpolation point on partly covered pixels and nothing on full ones.
+ *
+ * The qualifier is part of the interface and must match in the fragment stage, and in
+ * pbr_skinned_vert, or the programs fail to link.
+ */
 out vec3 Normal;
-out vec3 WorldPos;     // World position
-out vec3 ViewPos;      // View position
+out vec3 WorldPos;    // World position
+out vec3 ViewPos;     // View position
 out vec2 TexCoords;
-out vec2 TexCoords2;   // UV1 for lightmaps/AO
-out vec4 VertexColor;  // Vertex color (RGBA)
+out vec2 TexCoords2;  // UV1 for lightmaps/AO
+centroid out vec4 VertexColor; // Vertex color (RGBA)
 out mat3 TBN;
 flat out float TangentW; // bitangent handedness, per-island constant
 out vec4 CurrClip;     // Un-jittered current clip position (motion vectors)

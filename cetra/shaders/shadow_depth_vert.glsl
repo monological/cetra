@@ -6,11 +6,12 @@ layout (location = 6) in ivec4 aBoneIds;
 layout (location = 7) in vec4 aBoneWeights;
 layout (location = 8) in vec2 aTexCoords2;
 
+// centroid to match shadow_depth_frag, which also pairs with pbr_vert; see pbr_vert.
 out vec2 TexCoords; // for the alpha test on foliage (material.h foliage_shadows)
 // Vertex-colour alpha multiplies into the cutout the same way it does when the
 // surface is shaded. A caster whose alpha comes from COLOR_0 rather than from
 // its albedo map used to cast as if it were solid.
-out vec4 VertexColor;
+centroid out vec4 VertexColor;
 
 uniform mat4 model;
 uniform mat4 lightSpaceMatrix;

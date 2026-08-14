@@ -1,10 +1,12 @@
 #version 330 core
+// centroid, matching both vertex stages -- see pbr_vert for why. Without it a partly covered
+// pixel is shaded from extrapolated attributes, which is where the MSAA-only specks came from.
 in vec3 Normal;
 in vec3 WorldPos;
 in vec3 ViewPos;
 in vec2 TexCoords;
-in vec2 TexCoords2;   // UV1 for lightmaps/AO
-in vec4 VertexColor;  // Vertex color (RGBA)
+in vec2 TexCoords2;  // UV1 for lightmaps/AO
+centroid in vec4 VertexColor; // Vertex color (RGBA)
 in mat3 TBN;
 // Bitangent handedness (tangent.w), flat because it is constant per UV island
 // -- interpolating across a mirror seam would blend +1 toward -1.

@@ -8,12 +8,14 @@ layout(location = 6) in ivec4 aBoneIds;
 layout(location = 7) in vec4 aBoneWeights;
 layout(location = 8) in vec2 aTexCoords2;
 
+// centroid, matching pbr_vert and pbr_frag -- the qualifier is part of the interface, so all
+// three have to agree or the program fails to link. See pbr_vert for what it prevents.
 out vec3 Normal;
 out vec3 WorldPos;
 out vec3 ViewPos;
 out vec2 TexCoords;
 out vec2 TexCoords2;
-out vec4 VertexColor;
+centroid out vec4 VertexColor;
 out mat3 TBN;
 flat out float TangentW; // bitangent handedness, per-island constant
 out vec4 CurrClip;     // Un-jittered current clip position (motion vectors)
