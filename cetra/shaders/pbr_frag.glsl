@@ -1979,12 +1979,26 @@ void main() {
      * between two frames.
      */
     if (renderMode == 10) {
-        float lum = dot(color / max(preExposure, 1e-6), vec3(0.2126, 0.7152, 0.0722));
-        vec3 band = lum > 16.0  ? vec3(1.0, 0.0, 0.0)   // blown
-                    : lum > 4.0 ? vec3(1.0, 0.55, 0.0)  // very hot
-                    : lum > 1.0 ? vec3(1.0, 1.0, 0.0)   // above mid grey
-                    : lum > 0.25 ? vec3(0.0, 0.6, 0.0)  // ordinary lit
-                                 : vec3(0.0, 0.0, 0.35); // near black
+        /*
+         * Banded on the PRE-EXPOSED value, which is the number the bloom threshold and the
+         * tonemap actually see -- "will this speck bloom" is a question about this scale, not
+         * about absolute radiance. Dividing pre-exposure back out answered a different
+         * question and, in a scene lit by a 0.8 degree sun, put every pixel in one band.
+         *
+         * Nine stops rather than five, because the interesting comparison is between a
+         * subject and a speck ON that subject, and in a dark frame both live near the bottom.
+         * Each band is 4x the one below it.
+         */
+        float lum = dot(color, vec3(0.2126, 0.7152, 0.0722));
+        vec3 band = lum > 64.0      ? vec3(1.0, 1.0, 1.0)    // far past anything displayable
+                    : lum > 16.0    ? vec3(1.0, 0.0, 0.0)    // blown
+                    : lum > 4.0     ? vec3(1.0, 0.45, 0.0)   // very hot
+                    : lum > 1.0     ? vec3(1.0, 1.0, 0.0)    // at or above white
+                    : lum > 0.25    ? vec3(0.4, 0.9, 0.2)    // brightly lit
+                    : lum > 0.0625  ? vec3(0.0, 0.55, 0.1)   // ordinary lit
+                    : lum > 0.0156  ? vec3(0.0, 0.35, 0.5)   // dim
+                    : lum > 0.0039  ? vec3(0.1, 0.1, 0.5)    // very dim
+                                    : vec3(0.02, 0.02, 0.08); // effectively black
         FragColor = vec4(band, finalOpacity);
         NormalOut = vec4(0.0);
         VelocityOut = packVelocityAux(ViewPos.z, roughnessMap);
