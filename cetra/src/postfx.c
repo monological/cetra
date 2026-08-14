@@ -2742,10 +2742,40 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         // branch carries debug and LDR-authored frames, which are data rather
         // than graded images, and they skip exposure and tone mapping too.
         profiler_scope_begin(fx->profiler, "passthrough blit");
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, fx->hdr_fbo);
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, target_fbo);
-        glBlitFramebuffer(0, 0, fx->width, fx->height, 0, 0, fx->out_width, fx->out_height,
-                          GL_COLOR_BUFFER_BIT, GL_LINEAR);
+        if (fx->width == fx->out_width && fx->height == fx->out_height) {
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, fx->hdr_fbo);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, target_fbo);
+            glBlitFramebuffer(0, 0, fx->width, fx->height, 0, 0, fx->out_width, fx->out_height,
+                              GL_COLOR_BUFFER_BIT, GL_NEAREST);
+        } else {
+            /*
+             * A SCALED blit is not available here, so the copy goes through a shader.
+             *
+             * glBlitFramebuffer refuses a stretch whenever either side is multisample, and the
+             * DEFAULT framebuffer is exactly that on a windowed session that asked for
+             * samples. It raises GL_INVALID_OPERATION and draws nothing -- and because GL
+             * errors are sticky it is then reported by whichever pass checks next, which is
+             * the sky's aerial bake on the following frame. That is a debug view failing to
+             * present and blaming the atmosphere.
+             *
+             * It only bites when the two sizes disagree, which is why it hid: at a window the
+             * compositor grants in full they are equal and the blit is an identity. Ask for
+             * one larger than the display, or supersample, and the sizes part.
+             *
+             * The tent with a zero texel size is the documented exact-copy form, so at 1:1
+             * this is the same image the blit produced, and above 1:1 it magnifies where a
+             * scaled blit would have box-filtered. Debug frames are data rather than graded
+             * images; a nearest magnification of data is the honest one.
+             */
+            glUseProgram(fx->upsample_tent_program->id);
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, fx->hdr_texture);
+            uniform_set_vec2(fx->upsample_tent_program->uniforms, "texelSize",
+                             (const float[]){0.0f, 0.0f});
+            glBindFramebuffer(GL_FRAMEBUFFER, target_fbo);
+            glViewport(0, 0, fx->out_width, fx->out_height);
+            draw_fullscreen_quad(fx->quad_vao);
+        }
         profiler_scope_end(fx->profiler);
     } else {
         // The color TAA resolves iff it is enabled and its velocity buffer was
