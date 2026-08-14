@@ -1,0 +1,87 @@
+{
+ "_comment": [
+  "SUBSURFACE ON ALPHA-MASKED GEOMETRY, in one frame with an opaque control.",
+  "",
+  "pbr_frag.glsl predicted this combination and said no scene had it: attachment 4",
+  "carries an SSS profile tag in its alpha, and masked geometry needs that alpha for",
+  "coverage. The two uses are mutually exclusive and nothing in the corpus held both,",
+  "so the collision was documented and never observed. apps/tree holds both -- its",
+  "leaf material is ALPHA_MASK and carries a subsurface profile -- and shows blown-out",
+  "quads that move with the wind.",
+  "",
+  "This reuses mask_fixture.gltf because it already ships the two materials needed:",
+  "mask_cut is alphaMode MASK at cutoff 0.4, mask_ref is opaque, and both sit in one",
+  "frame at the same depth under the same light. Adding an sss block to each is the",
+  "whole fixture -- no new geometry, and the masked/opaque pair is the control.",
+  "",
+  "READ IT AT TWO SAMPLE COUNTS. At --msaa 1 there is no coverage to collide with, so",
+  "masked and opaque should agree. At --msaa 4 they should not, and the masked one is",
+  "the one that breaks. That difference is the measurement; a single frame proves",
+  "nothing here."
+ ],
+ "version": 1,
+ "models": [
+  {
+   "path": "mask_fixture.gltf"
+  }
+ ],
+ "materials": {
+  "mask_cut": {
+   "sss": {
+    "color": [
+     0.45,
+     0.75,
+     0.2
+    ],
+    "radius": 0.25
+   },
+   "subsurface": 0.45
+  },
+  "mask_ref": {
+   "sss": {
+    "color": [
+     0.45,
+     0.75,
+     0.2
+    ],
+    "radius": 0.25
+   },
+   "subsurface": 0.45
+  }
+ },
+ "lights": [
+  {
+   "name": "MaskSun",
+   "type": "directional",
+   "direction": [
+    0.0,
+    -0.3,
+    -0.95
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 3.0,
+   "cast_shadows": false
+  }
+ ],
+ "camera": {
+  "eye": [
+   0.0,
+   0.62,
+   5.4
+  ],
+  "target": [
+   0.0,
+   0.62,
+   0.0
+  ],
+  "fov": 45
+ },
+ "post": {
+  "tonemap": "neutral",
+  "exposure": 1.0
+ }
+}
