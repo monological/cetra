@@ -1261,7 +1261,7 @@ int main(int argc, char** argv) {
     // argument.
     if (args.render_mode > 0) {
         engine->current_render_mode =
-            (RenderMode)(args.render_mode > RENDER_MODE_HDR_HOTSPOTS ? RENDER_MODE_HDR_HOTSPOTS
+            (RenderMode)(args.render_mode > RENDER_MODE_SSS_HOTSPOTS ? RENDER_MODE_SSS_HOTSPOTS
                                                                      : args.render_mode);
     }
 

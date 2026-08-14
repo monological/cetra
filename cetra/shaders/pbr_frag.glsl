@@ -1978,7 +1978,7 @@ void main() {
      * doing; otherwise every band moves when the exposure drifts and nothing can be compared
      * between two frames.
      */
-    if (renderMode == 10) {
+    if (renderMode == 10 || renderMode == 11) {
         /*
          * Banded on the PRE-EXPOSED value, which is the number the bloom threshold and the
          * tonemap actually see -- "will this speck bloom" is a question about this scale, not
@@ -1989,7 +1989,15 @@ void main() {
          * subject and a speck ON that subject, and in a dark frame both live near the bottom.
          * Each band is 4x the one below it.
          */
-        float lum = dot(color, vec3(0.2126, 0.7152, 0.0722));
+        /*
+         * Mode 10 bands the shaded colour; mode 11 bands the SSS DIFFUSE instead, which is the
+         * buffer the scatter pyramid is built from. They are different numbers: attachment 4
+         * carries subsurface * sssDiffuse, so it can be hot where FragColor is not, and a
+         * pyramid amplifies whatever it was given. Banding only the visible colour cannot see
+         * a bad input to a later pass.
+         */
+        vec3 probe = renderMode == 11 ? subsurface * sssDiffuse * preExposure : color;
+        float lum = dot(probe, vec3(0.2126, 0.7152, 0.0722));
         vec3 band = lum > 64.0      ? vec3(1.0, 1.0, 1.0)    // far past anything displayable
                     : lum > 16.0    ? vec3(1.0, 0.0, 0.0)    // blown
                     : lum > 4.0     ? vec3(1.0, 0.45, 0.0)   // very hot

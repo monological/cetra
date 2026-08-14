@@ -82,7 +82,11 @@ typedef enum {
      * speck that is already hot here was shaded hot, and one that only appears in PBR was
      * made by something downstream.
      */
-    RENDER_MODE_HDR_HOTSPOTS
+    RENDER_MODE_HDR_HOTSPOTS,
+    // The same ramp over the SSS DIFFUSE instead of the shaded colour: attachment 4 is what
+    // the scatter pyramid is built from, so a hot texel there is amplified by a pass the
+    // visible colour never passes through.
+    RENDER_MODE_SSS_HOTSPOTS
 } RenderMode;
 
 // Which pass is rasterizing this mesh, and therefore where the uber-shader

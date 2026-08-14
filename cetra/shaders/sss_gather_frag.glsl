@@ -181,9 +181,32 @@ void main()
     // floored denominator instead would return zero and make the composite
     // SUBTRACT the diffuse, which is the worst available answer and is what a
     // too-tight depth guard used to produce across whole surfaces.
-    vec3 blur = mix(center.rgb, num / max(den, vec3(1e-5)),
-                    smoothstep(vec3(0.0), vec3(1e-3), den));
+    /*
+     * The divide is floored at the SAME coverage the fade starts trusting, and that identity is
+     * the whole point.
+     *
+     * It used to floor at 1e-5 while the smoothstep below ran to 1e-3. Two decades apart, so a
+     * texel holding almost no coverage produced a ratio up to a hundred times too large, and
+     * the fade was already letting a share of it through. With a near-zero numerator -- which
+     * is what this buffer holds under a low sun -- the output was still saturated, because the
+     * size of the answer came from the denominator rather than from any light in the scene.
+     *
+     * Flooring at the knee bounds the ratio by num/1e-3 exactly where the mix begins to believe
+     * it, and below the knee the mix is heading to center.rgb anyway, so no reachable denominator
+     * can manufacture brightness. A coverage of 1e-3 is a thousandth of a texel: past that
+     * there is nothing to renormalise to.
+     */
+    const vec3 SSS_COVERAGE_KNEE = vec3(1e-3);
+    vec3 blur = mix(center.rgb, num / max(den, SSS_COVERAGE_KNEE),
+                    smoothstep(vec3(0.0), SSS_COVERAGE_KNEE, den));
 
+    // The composite is hdr + blur - D, folded additively. Alpha 0 so the fold
+    // leaves canvas alpha untouched.
+    //
+    // Scaled BACK by coverage, because the canvas this adds to is itself a resolve: at a partly
+    // covered pixel it holds k of this surface and 1-k of whatever is behind. A delta computed
+    // on un-premultiplied radiance would hand the pixel a whole surface's worth of scatter,
+    // which is the speck this pass used to add at every thin silhouette.
     // The composite is hdr + blur - D, folded additively. Alpha 0 so the fold
     // leaves canvas alpha untouched.
     FragColor = vec4(blur - center.rgb, 0.0);

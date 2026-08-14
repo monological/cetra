@@ -272,7 +272,7 @@ static void _engine_gui_panel(Engine* engine) {
     static const char* const render_modes[] = {
         "PBR",        "Normals", "World Pos",       "Tex Coords",         "Tangent Space",
         "Flat Color", "Albedo",  "Simple Lighting", "Metallic/Roughness", "Velocity",
-        "HDR Hotspots"};
+        "HDR Hotspots", "SSS Hotspots"};
     int rm = engine->current_render_mode;
     int render_mode_count = (int)(sizeof(render_modes) / sizeof(render_modes[0]));
     if (igCombo_Str_arr("Render Mode", &rm, render_modes, render_mode_count, -1))
@@ -791,6 +791,27 @@ static void _engine_gui_panel(Engine* engine) {
         igCheckbox("Sheen", &engine->sheen_enabled);
         igCheckbox("Parallax (POM)", &engine->parallax_enabled);
         igCheckbox("Subsurface (SSS)", &engine->sss_enabled);
+        /*
+         * The scatter RADIUS, per profile, live.
+         *
+         * It is postfx state rather than material state, so the material editor cannot reach
+         * it -- and it is the one number spec 11.14 names as the proximate cause of the
+         * blown-out square it recorded and did not fix. Dropping it from 1.5 to 0.25 hid that
+         * artifact; the mechanism above the ceiling was left in place. A knob nobody can turn
+         * cannot be swept, and a cause that cannot be swept cannot be confirmed.
+         *
+         * The whole row group hides when there are no profiles, which is every scene that
+         * authors no subsurface material.
+         */
+        if (engine->postfx && engine->postfx->sss_profile_count > 0) {
+            igIndent(0.0f);
+            for (int p = 0; p < engine->postfx->sss_profile_count; p++) {
+                char label[32];
+                snprintf(label, sizeof(label), "SSS Radius %d", p);
+                igSliderFloat(label, &engine->postfx->sss_profiles[p][3], 0.0f, 2.0f, "%.3f", 0);
+            }
+            igUnindent(0.0f);
+        }
         igCheckbox("Skin Pre-integration", &engine->skin_preint_enabled);
         // Moment weighting is a better weight INSIDE the accumulate, not a
         // second transparency path, so it greys out with the pass it rides.
