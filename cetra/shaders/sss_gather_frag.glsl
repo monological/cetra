@@ -22,6 +22,10 @@ out vec4 FragColor;
 uniform sampler2D pyrColor; // rgb = coverage-premultiplied diffuse, a = coverage
 uniform sampler2D origTex;  // resolved attachment 4: the sharp diffuse D
 uniform sampler2D auxTex;   // .z = linear view Z, negative in front
+uniform sampler2D depthTex; // resolved scene depth, NDC
+uniform mat4 projection;    // viewZFromNdcZ reads this by name
+
+#include "depth.glsl"
 
 uniform vec4 sssProfile;  // rgb = per-channel scatter weight, w = world radius
 uniform int profileTag;   // this walk's profile index + 1
@@ -99,15 +103,19 @@ float lodForSigma(float sigmaPx, float lodCap) {
 void main()
 {
     vec4 center = texture(origTex, TexCoords);
-    float z = texture(auxTex, TexCoords).z;
+    // Two depths, deliberately, and the seed makes the same split for the same reason: the
+    // aux buffer answers "is there geometry here", where its resolve being a mean costs a
+    // soft edge, and the depth buffer answers "how far", where a mean would be a blur radius
+    // taken from a surface that is nowhere. See sss_pyr_seed_frag.
+    float onSurface = texture(auxTex, TexCoords).z;
     // Off-skin and sky contribute exactly nothing, alpha included, so the
     // additive fold provably cannot paint outside the subject.
-    if (z >= 0.0 || int(center.a + 0.5) != profileTag) {
+    if (onSurface >= 0.0 || int(center.a + 0.5) != profileTag) {
         FragColor = vec4(0.0);
         return;
     }
 
-    float depth = -z;
+    float depth = -viewZFromNdcZ(texture(depthTex, TexCoords).r * 2.0 - 1.0);
     vec3 masses = sssProfileMasses();
     // Base width in render pixels, from the authored world radius. The pixel
     // count is free to grow with resolution now; only the world width is fixed.

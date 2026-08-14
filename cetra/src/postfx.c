@@ -849,9 +849,11 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     uniform_set_int(fx->sss_gather_program->uniforms, "pyrColor", 0);
     uniform_set_int(fx->sss_gather_program->uniforms, "origTex", 1);
     uniform_set_int(fx->sss_gather_program->uniforms, "auxTex", 2);
+    uniform_set_int(fx->sss_gather_program->uniforms, "depthTex", 3);
     glUseProgram(fx->sss_pyr_seed_program->id);
     uniform_set_int(fx->sss_pyr_seed_program->uniforms, "srcTex", 0);
     uniform_set_int(fx->sss_pyr_seed_program->uniforms, "auxTex", 1);
+    uniform_set_int(fx->sss_pyr_seed_program->uniforms, "depthTex", 2);
     glUseProgram(fx->sss_pyr_down_program->id);
     uniform_set_int(fx->sss_pyr_down_program->uniforms, "srcColor", 0);
     uniform_set_int(fx->sss_pyr_down_program->uniforms, "srcDepth", 1);
@@ -1326,7 +1328,8 @@ static float sss_lod_cap(const PostFX* fx) {
 //
 // Leaves BOTH textures reopened (BASE 0, MAX top) and the FBO unbound; the
 // caller re-binds for the gather.
-static void postfx_build_sss_pyramid(PostFX* fx, int profile_tag, float proj_scale) {
+static void postfx_build_sss_pyramid(PostFX* fx, int profile_tag, float proj_scale,
+                                     mat4 projection) {
     glBindFramebuffer(GL_FRAMEBUFFER, fx->sss_pyr_fbo);
     const GLenum bufs[2] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1};
 
@@ -1341,7 +1344,14 @@ static void postfx_build_sss_pyramid(PostFX* fx, int profile_tag, float proj_sca
     glBindTexture(GL_TEXTURE_2D, fx->sss_diffuse_texture);
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, fx->aux_texture);
+    // The RESOLVED depth buffer, not the aux buffer's linear Z. Both describe the same
+    // surface, but a depth resolve selects a sample where a colour resolve averages, and
+    // an averaged depth is the difference between a petal's own blur radius and one taken
+    // from a surface partway to the sky.
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, fx->depth_texture);
     uniform_set_int(fx->sss_pyr_seed_program->uniforms, "profileTag", profile_tag);
+    uniform_set_mat4(fx->sss_pyr_seed_program->uniforms, "projection", projection);
     draw_fullscreen_quad(fx->quad_vao);
 
     glUseProgram(fx->sss_pyr_down_program->id);
@@ -1534,7 +1544,7 @@ static void postfx_run_sss(PostFX* fx, GLuint canvas_fbo, mat4 projection, bool 
     // per-(level, layer) attach on the least-travelled GL 4.1 path in this tree;
     // every shipping scene has one profile and the fixture has two.
     for (int p = 0; p < count; p++) {
-        postfx_build_sss_pyramid(fx, p + 1, proj_scale);
+        postfx_build_sss_pyramid(fx, p + 1, proj_scale, projection);
 
         // Accumulate into the delta target: profile p's gather emits exactly zero
         // off its own tag, so the profiles sum without overlapping.
@@ -1553,8 +1563,11 @@ static void postfx_run_sss(PostFX* fx, GLuint canvas_fbo, mat4 projection, bool 
         glBindTexture(GL_TEXTURE_2D, fx->sss_diffuse_texture);
         glActiveTexture(GL_TEXTURE2);
         glBindTexture(GL_TEXTURE_2D, fx->aux_texture);
+        glActiveTexture(GL_TEXTURE3);
+        glBindTexture(GL_TEXTURE_2D, fx->depth_texture);
         uniform_set_vec4(fx->sss_gather_program->uniforms, "sssProfile", fx->sss_profiles[p]);
         uniform_set_int(fx->sss_gather_program->uniforms, "profileTag", p + 1);
+        uniform_set_mat4(fx->sss_gather_program->uniforms, "projection", projection);
         uniform_set_float(fx->sss_gather_program->uniforms, "projScale", proj_scale);
         uniform_set_float(fx->sss_gather_program->uniforms, "maxLod", sss_lod_cap(fx));
         uniform_set_vec2(fx->sss_gather_program->uniforms, "renderTexel",
@@ -2870,8 +2883,13 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         // no longer needs it -- it reconstructs from the aux buffer's linear Z.
         bool ssr_active = postfx_ssr_active(fx, have_normals);
         bool dof_active = fx->dof_enabled;
+        // SSS needs it for a reason the other two do not: it wants a depth that is a
+        // SAMPLE rather than a mean. A depth blit resolves by selecting; a colour blit
+        // averages, and a depth averaged with the cleared far value describes a surface
+        // that is nowhere -- which the gather then divides its blur radius by.
+        bool sss_active = sss_written && fx->sss_ready;
         mat4 inv_projection;
-        if (ssr_active || dof_active) {
+        if (ssr_active || dof_active || sss_active) {
             // Resolve depth alongside color so screen-space passes can
             // reconstruct view-space positions (formats match: both are
             // DEPTH24_STENCIL8)
