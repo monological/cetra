@@ -36,6 +36,7 @@
 #include "cetra/procedural/tree_gen.h"
 #include "cetra/procedural/vegetation_tex.h"
 #include "ground.h"
+#include "player.h"
 #include "grass.h"
 
 #define CIMGUI_DEFINE_ENUMS_AND_STRUCTS
@@ -262,6 +263,9 @@ static float sun_azimuth = 235.0f;
  * Mouse drag controller
  */
 static MouseDragController* drag_controller = NULL;
+// Non-NULL only under --player; the orbit controller and the walker both own the camera, so
+// exactly one of them exists at a time.
+static Player* player = NULL;
 
 /*
  * The sea (spec 11.32). ON by default here, unlike `render` and `forest`, because
@@ -541,6 +545,12 @@ void mouse_button_callback(Engine* engine, int button, int action, int mods) {
 void key_callback(Engine* engine, int key, int scancode, int action, int mods) {
     (void)scancode;
 
+    // The walker owns Tab; its WASD is polled per frame rather than event-driven, because a
+    // key-repeat stream is not a velocity.
+    if (player && player_on_key(player, engine, key, action)) {
+        return;
+    }
+
     // Camera movement
     if (drag_controller && camera_controller_on_key(drag_controller, key, action, mods)) {
         return;
@@ -592,9 +602,14 @@ void render_scene_callback(Engine* engine, Scene* scene) {
         memcpy(&prev_grass_params, &grass_params, sizeof(GrassParams));
     }
 
-    // Update camera - only if not hovering over GUI. Deliberately the wall
-    // clock, not the frame clock: drag damping is input response.
-    if (drag_controller && app_can_process_3d_input(engine)) {
+    if (player) {
+        // The frame delta, not the wall clock: this integrates gravity and a walk speed, and
+        // both are per-unit-of-time quantities that have to advance with the frame the surface
+        // is about to be drawn for.
+        player_update(player, engine, (float)engine->render_delta);
+    } else if (drag_controller && app_can_process_3d_input(engine)) {
+        // Update camera - only if not hovering over GUI. Deliberately the wall
+        // clock, not the frame clock: drag damping is input response.
         mouse_drag_update(drag_controller, glfwGetTime());
     }
 
@@ -631,7 +646,8 @@ typedef struct {
     // origin, which is usually what a report means.
     vec3 cam_eye, cam_target, cam_up;
     int cam_eye_set, cam_target_set, cam_up_set;
-    float fov; // vertical, radians; 0 = the app's own framing
+    float fov;  // vertical, radians; 0 = the app's own framing
+    int player; // first-person walker instead of the orbit camera
 } TreeArgs;
 
 static void print_usage(const char* prog) {
@@ -656,6 +672,9 @@ static void print_usage(const char* prog) {
     printf("      --cam-target x,y,z  Pin what it looks at\n");
     printf("      --cam-up x,y,z      Pin the up vector\n");
     printf("      --fov D             Vertical field of view, DEGREES\n");
+    printf("      --player            Walk the island. WASD moves, mouse OR arrow keys turn\n");
+    printf("                          the head, Shift runs, Space jumps, Tab releases the\n");
+    printf("                          cursor for the GUI. With --cam-eye, spawn at its x,z\n");
     printf("  -h, --help              This message\n");
 }
 
@@ -698,6 +717,8 @@ static bool parse_args(int argc, char** argv, TreeArgs* a) {
             a->water_level = (float)atof(argv[++i]);
         } else if (!strcmp(s, "--gerstner-waves")) {
             a->gerstner_waves = 1;
+        } else if (!strcmp(s, "--player")) {
+            a->player = 1;
         } else if (!strcmp(s, "--cam-eye") && has_next) {
             a->cam_eye_set = sscanf(argv[++i], "%f,%f,%f", &a->cam_eye[0], &a->cam_eye[1],
                                     &a->cam_eye[2]) == 3;
@@ -860,7 +881,36 @@ int main(int argc, char** argv) {
     set_engine_camera(engine, camera);
     camera->distance = glm_vec3_distance(cam_pos, look_at);
 
-    drag_controller = create_mouse_drag_controller(engine);
+    if (args.player) {
+        /*
+         * Stand where the default camera stands, facing what it faces.
+         *
+         * Taken from cam_pos rather than authored, so the walker inherits the framing this app
+         * was composed around -- tree ahead, sun behind, sea past it -- and keeps inheriting it
+         * if that camera moves. Only the BEARING is reused, at 65% of the waterline radius: the
+         * camera itself is 616 units out and over open water, and a walker has to start on the
+         * island.
+         */
+        const float bearing = atan2f(cam_pos[0], cam_pos[2]);
+        const float spawn_r = GROUND_SHORE_T * GROUND_RADIUS * 0.65f;
+        float spawn_x = sinf(bearing) * spawn_r;
+        float spawn_z = cosf(bearing) * spawn_r;
+        // --cam-eye doubles as "stand here", which is how a walk into the sea gets verified at
+        // all: the only other way to reach the water is to hold W, which a headless run cannot.
+        // Its Y is ignored -- the ground decides that.
+        if (args.cam_eye_set) {
+            spawn_x = args.cam_eye[0];
+            spawn_z = args.cam_eye[2];
+        }
+        static Player walker;
+        player = &walker;
+        // Yaw 0 looks down -Z, so facing the origin from `bearing` is that same angle: the
+        // spawn point and the direction home are the same bearing, one negated in Z.
+        player_init(player, engine, spawn_x, spawn_z,
+                    args.cam_eye_set ? atan2f(spawn_x, spawn_z) : bearing);
+    } else {
+        drag_controller = create_mouse_drag_controller(engine);
+    }
 
     Scene* scene = create_scene();
     SceneNode* root = create_node();
