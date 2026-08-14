@@ -732,6 +732,9 @@ typedef struct {
     // Spectral by default here. Gerstner is the A/B, and the only way to reach the
     // wavelength/amplitude/steepness/spread this app authors, which the spectral path ignores.
     int gerstner_waves;
+    // RenderMode override, 0 = PBR. The GUI has always had the combo; without this the debug
+    // modes could not be reached headlessly, so anything they diagnose could not be captured.
+    int render_mode;
     // Explicit camera pose, for reproducing a framing exactly. Degrees on the command line,
     // radians here. Each is independent: eye alone re-places the default look direction's
     // origin, which is usually what a report means.
@@ -762,6 +765,7 @@ static void print_usage(const char* prog) {
     printf("      --water-level D     Still-water world Y (default %.1f)\n",
            (double)TREE_WATER_LEVEL);
     printf("      --gerstner-waves    Closed-form octaves instead of spectral cascades\n");
+    printf("      --render-mode N     Debug view; 10 = HDR hotspots (see the GUI combo)\n");
     printf("      --cam-eye x,y,z     Pin the camera position (exact-repro framing)\n");
     printf("      --cam-target x,y,z  Pin what it looks at\n");
     printf("      --cam-up x,y,z      Pin the up vector\n");
@@ -818,6 +822,8 @@ static bool parse_args(int argc, char** argv, TreeArgs* a) {
             a->water_level = (float)atof(argv[++i]);
         } else if (!strcmp(s, "--gerstner-waves")) {
             a->gerstner_waves = 1;
+        } else if (!strcmp(s, "--render-mode") && has_next) {
+            a->render_mode = atoi(argv[++i]);
         } else if (!strcmp(s, "--player")) {
             a->player = 1;
         } else if (!strcmp(s, "--walk-speed") && has_next) {
@@ -1249,6 +1255,15 @@ int main(int argc, char** argv) {
      */
     grass_material->subsurface_profile = leaf_material->subsurface_profile;
     set_material_shader_program(grass_material, pbr_program);
+
+    // Clamped rather than trusted: an out-of-range mode reaches the shader as an integer that
+    // matches no branch, which shades nothing and reads as a black frame rather than as a bad
+    // argument.
+    if (args.render_mode > 0) {
+        engine->current_render_mode =
+            (RenderMode)(args.render_mode > RENDER_MODE_HDR_HOTSPOTS ? RENDER_MODE_HDR_HOTSPOTS
+                                                                     : args.render_mode);
+    }
 
     create_island(root);
 

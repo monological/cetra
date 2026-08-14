@@ -271,7 +271,8 @@ static void _engine_gui_panel(Engine* engine) {
     // camera mode. Global viewport controls, so they lead the panel.
     static const char* const render_modes[] = {
         "PBR",        "Normals", "World Pos",       "Tex Coords",         "Tangent Space",
-        "Flat Color", "Albedo",  "Simple Lighting", "Metallic/Roughness", "Velocity"};
+        "Flat Color", "Albedo",  "Simple Lighting", "Metallic/Roughness", "Velocity",
+        "HDR Hotspots"};
     int rm = engine->current_render_mode;
     int render_mode_count = (int)(sizeof(render_modes) / sizeof(render_modes[0]));
     if (igCombo_Str_arr("Render Mode", &rm, render_modes, render_mode_count, -1))

@@ -73,7 +73,16 @@ typedef enum {
     RENDER_MODE_ALBEDO,          // Albedo Only
     RENDER_MODE_SIMPLE_LIGHTING, // Simple Diffuse Lighting
     RENDER_MODE_METALLIC_ROUGH,  // Metallic and Roughness Visualization
-    RENDER_MODE_VELOCITY         // Motion-vector (velocity) visualization
+    RENDER_MODE_VELOCITY,        // Motion-vector (velocity) visualization
+    /*
+     * Shaded HDR magnitude as a heat ramp, banded by stops above mid grey.
+     *
+     * Debug modes skip the whole post chain, so this shows what the SCENE pass produced
+     * before bloom or tonemap can flatter or blame it. That is the split it exists for: a
+     * speck that is already hot here was shaded hot, and one that only appears in PBR was
+     * made by something downstream.
+     */
+    RENDER_MODE_HDR_HOTSPOTS
 } RenderMode;
 
 // Which pass is rasterizing this mesh, and therefore where the uber-shader

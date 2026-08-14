@@ -1965,6 +1965,35 @@ void main() {
 
 
 
+    /*
+     * HDR hotspots: what the SCENE pass produced, banded, before the post chain runs.
+     *
+     * Debug modes take a passthrough blit, so nothing downstream can add a speck here or hide
+     * one. A fragment that already reads red was shaded that bright; a speck visible only in
+     * PBR was made after this point. Bands rather than a gradient because the question is
+     * which STOP a pixel is on -- an eye cannot rank two dim greys, and 4x versus 16x mid grey
+     * is the difference between a hot highlight and a broken one.
+     *
+     * Pre-exposure is divided out so the ramp means the same thing whatever the metering is
+     * doing; otherwise every band moves when the exposure drifts and nothing can be compared
+     * between two frames.
+     */
+    if (renderMode == 10) {
+        float lum = dot(color / max(preExposure, 1e-6), vec3(0.2126, 0.7152, 0.0722));
+        vec3 band = lum > 16.0  ? vec3(1.0, 0.0, 0.0)   // blown
+                    : lum > 4.0 ? vec3(1.0, 0.55, 0.0)  // very hot
+                    : lum > 1.0 ? vec3(1.0, 1.0, 0.0)   // above mid grey
+                    : lum > 0.25 ? vec3(0.0, 0.6, 0.0)  // ordinary lit
+                                 : vec3(0.0, 0.0, 0.35); // near black
+        FragColor = vec4(band, finalOpacity);
+        NormalOut = vec4(0.0);
+        VelocityOut = packVelocityAux(ViewPos.z, roughnessMap);
+        AlbedoOut = vec4(0.0);
+        DiffuseOut = vec4(0.0);
+        SpecOut = vec4(0.0, 0.0, 0.0, finalOpacity);
+        return;
+    }
+
     // `color` is already working space -- converted upstream so the clamps in
     // between operate on the scale they were written for.
     FragColor = vec4(color, finalOpacity);
