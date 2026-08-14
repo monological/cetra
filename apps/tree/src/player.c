@@ -21,6 +21,10 @@
 // that speed has to be comfortable for the whole turn rather than quick for a glance. 1.0 rad/s
 // is a bit under 60 degrees a second, so a full turn takes about six.
 #define PLAYER_KEY_LOOK_RATE 1.0f
+// Ceiling on ONE frame's mouse travel, in pixels. Not a sensitivity: at 60 Hz this is already a
+// faster hand movement than anyone makes, so it never touches real input and only bounds the
+// jumps that come from the cursor being moved by something other than a hand.
+#define PLAYER_MAX_LOOK_PIXELS 200.0
 // Just short of straight up and down, so the forward vector never degenerates against the up
 // axis and the look-at matrix stays defined.
 #define PLAYER_PITCH_LIMIT 1.5533f // 89 degrees
@@ -53,6 +57,7 @@ void player_init(Player* p, struct Engine* engine, float x, float z, float yaw) 
     p->vertical_velocity = 0.0f;
     p->grounded = true;
     p->warp_pending = true;
+    p->look_was_live = false;
     p->last_mouse_x = 0.0;
     p->last_mouse_y = 0.0;
     player_set_capture(p, engine, true);
@@ -82,6 +87,14 @@ void player_update(Player* p, struct Engine* engine, float dt) {
     // cursor wherever the user took it, and the whole excursion arrives as one frame's delta.
     const bool look_live =
         p->mouse_captured && glfwGetWindowAttrib(win, GLFW_FOCUSED) == GLFW_TRUE;
+    // Any transition INTO look-live re-seeds the reference, not just a capture. Focus regain is
+    // the case that was missing and it is the one that bites: the cursor moved while the window
+    // was away, `last_mouse` is from before it left, and the difference arrives as a single
+    // enormous delta. Re-seeding costs one frame of look and cannot be wrong.
+    if (look_live && !p->look_was_live)
+        p->warp_pending = true;
+    p->look_was_live = look_live;
+
     if (look_live) {
         // The mouse: a DISPLACEMENT already, so it must not be scaled by dt or the same hand
         // movement would turn a different amount at a different frame rate.
@@ -90,8 +103,20 @@ void player_update(Player* p, struct Engine* engine, float dt) {
         if (p->warp_pending) {
             p->warp_pending = false;
         } else {
-            p->yaw -= (float)(mx - p->last_mouse_x) * PLAYER_LOOK_SENSITIVITY;
-            p->pitch -= (float)(my - p->last_mouse_y) * PLAYER_LOOK_SENSITIVITY;
+            /*
+             * Bounded per frame, which is a guard rather than a feel adjustment.
+             *
+             * The delta is a difference of two absolute cursor readings, so anything that moves
+             * the cursor other than the user's hand -- a warp, a focus round trip, a mode change
+             * under us -- arrives here as a jump, and an unbounded jump is an instant spin with
+             * no way back except quitting. A hand cannot travel this far in one frame, so
+             * clamping costs nothing real and turns any such event into a nudge.
+             */
+            const double lim = PLAYER_MAX_LOOK_PIXELS;
+            const double dx = glm_clamp((double)(mx - p->last_mouse_x), -lim, lim);
+            const double dy = glm_clamp((double)(my - p->last_mouse_y), -lim, lim);
+            p->yaw -= (float)dx * PLAYER_LOOK_SENSITIVITY;
+            p->pitch -= (float)dy * PLAYER_LOOK_SENSITIVITY;
         }
         p->last_mouse_x = mx;
         p->last_mouse_y = my;

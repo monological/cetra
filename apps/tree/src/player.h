@@ -49,7 +49,8 @@ typedef struct Player {
     // Mouse look is only live while the cursor is captured, so the ImGui sliders this app is
     // built around stay reachable. Toggled with Tab.
     bool mouse_captured;
-    bool warp_pending; // skip one frame's delta after a capture, or the view snaps
+    bool warp_pending;  // skip one frame's delta after a capture, or the view snaps
+    bool look_was_live; // so a focus regain re-seeds too, not only a capture
     double last_mouse_x, last_mouse_y;
 } Player;
 
