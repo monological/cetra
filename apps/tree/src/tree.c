@@ -1132,7 +1132,10 @@ int main(int argc, char** argv) {
      * None of these may take an AO texture: the PBR shader reads UV1 as the AO
      * map's UV, and UV1 on the tree meshes carries wind data.
      */
+    // Named so the material editor can address them. Procedural materials get no name
+    // from an importer, and an unnamed row cannot be told apart from the four beside it.
     bark_material = create_material();
+    bark_material->name = safe_strdup("bark");
     glm_vec3_one(bark_material->albedo);
     bark_material->roughness = 1.0f; // the map carries it (factor x map)
     bark_material->metallic = 0.0f;
@@ -1147,6 +1150,7 @@ int main(int argc, char** argv) {
     set_material_height_tex(bark_material, bark_height_tex);
 
     leaf_material = create_material();
+    leaf_material->name = safe_strdup("leaf");
     glm_vec3_one(leaf_material->albedo);
     // 1.0 because the roughness map is authoritative: the shader multiplies
     // factor by map, so any factor below 1 darkens the whole range and pushes
@@ -1179,6 +1183,7 @@ int main(int argc, char** argv) {
     prev_season = season;
 
     island_material = create_material();
+    island_material->name = safe_strdup("island");
     glm_vec3_one(island_material->albedo);
     island_material->roughness = 0.9f;
     island_material->metallic = 0.0f;
@@ -1192,6 +1197,7 @@ int main(int argc, char** argv) {
     // colour filter strong enough that the difference a bespoke texture would make does not
     // survive it. Rougher than the beach, and nothing else -- opaque, no wind, no subsurface.
     seabed_material = create_material();
+    seabed_material->name = safe_strdup("seabed");
     glm_vec3_copy((vec3){0.34f, 0.36f, 0.33f}, seabed_material->albedo);
     seabed_material->roughness = 0.95f;
     seabed_material->metallic = 0.0f;
@@ -1204,6 +1210,7 @@ int main(int argc, char** argv) {
     // -- the canopy dapple landing on it is the point of having it. Colour is
     // entirely per-vertex, so no textures and no AO map to collide with UV1.
     grass_material = create_material();
+    grass_material->name = safe_strdup("grass");
     glm_vec3_one(grass_material->albedo);
     grass_material->roughness = 0.78f;
     grass_material->metallic = 0.0f;

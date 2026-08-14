@@ -53,6 +53,14 @@ const MaterialParam MATERIAL_PARAMS[] = {
     {"specularColor", "Coat and sheen",
      MP(specular_color_factor, MATERIAL_PARAM_COLOR, 0.0f, 1.0f)},
 
+    // Subsurface was absent from this table for its whole life, which made the SSS path the
+    // one shading feature the editor could not switch off -- so "every knob to zero, no
+    // change" said nothing about it. subsurfaceColor tints the back-light transmission term
+    // in pbr_frag; the SCATTER profile (colour and radius) is postfx state rather than
+    // material state, so it is still not reachable from here.
+    {"subsurface", "Subsurface", MP(subsurface, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
+    {"subsurfaceColor", "Subsurface", MP(subsurface_color, MATERIAL_PARAM_COLOR, 0.0f, 1.0f)},
+
     {"ior", "Transmission", MP(ior, MATERIAL_PARAM_FLOAT, 1.0f, 3.0f)},
     {"transmission", "Transmission", MP(transmission, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
     {"thickness", "Transmission", MP(thickness, MATERIAL_PARAM_FLOAT, 0.0f, 5.0f)},
