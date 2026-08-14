@@ -1220,9 +1220,27 @@ int main(int argc, char** argv) {
     // -1 writes the tag reserved for "not a subsurface surface". The blur then
     // skips those pixels while their diffuse is still sitting in the buffer,
     // and the unblurred energy composites back as blown-out speckle.
-    if (engine->postfx)
-        grass_material->subsurface_profile =
-            postfx_add_sss_profile(engine->postfx, (vec3){0.40f, 0.70f, 0.16f}, 0.15f);
+    /*
+     * SHARES the leaf's profile rather than registering a second one, and that is a
+     * correctness choice, not a saving.
+     *
+     * The profile tag is written into the skin-diffuse buffer's alpha and that buffer is
+     * MSAA-resolved -- a box filter over a CATEGORICAL value. With two tags in the frame a
+     * partly covered pixel resolves to their mean, and the mean of tag 2 and the uncovered 0
+     * is tag 1: grass and petals, which are thin enough that most of their pixels are
+     * silhouette pixels, get blurred with the LEAF profile instead of their own. Wind moves
+     * the coverage every frame, so the misfiling flickers -- which is what it looks like.
+     *
+     * With ONE tag in the frame the same averaging is harmless: a pixel at or above half
+     * coverage rounds back to that tag, and below half it rounds to 0 and is simply dropped.
+     * Wrong-profile selection stops being expressible.
+     *
+     * What it costs is the radius distinction, 0.25 against 0.15. The two profiles' colours
+     * were already within 0.05 of each other, so that is the whole difference. The library
+     * fix -- the tag in stencil, which is integer and per-sample -- is spec 11.37 phase 2,
+     * and this goes back to two profiles once that lands.
+     */
+    grass_material->subsurface_profile = leaf_material->subsurface_profile;
     set_material_shader_program(grass_material, pbr_program);
 
     create_island(root);
