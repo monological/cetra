@@ -180,10 +180,15 @@ bool ground_build_seabed(Mesh* mesh, int rings, int segments, float uv_tiles) {
             const float z = radius * sa;
             // Height and normal both from ground_height_at, so the rim row lands exactly on
             // the island's own last row and the two meshes share an edge rather than
-            // approaching one. The island is built about its crown and translated down by
-            // GROUND_HEIGHT; this mesh is authored in world space, so the translation comes
-            // back out here.
-            vec3 p = {x, ground_height_at(x, z) + GROUND_HEIGHT, z};
+            // approaching one.
+            //
+            // Straight through, with NO translation added back. ground_height_at already
+            // reports world space and this node carries an identity transform -- unlike the
+            // island's, which is built about its crown and translated down. Adding
+            // GROUND_HEIGHT here to "undo" that translation lifted the whole bed by 190 units,
+            // which put its inner ring 47.5 units clear of the waterline: a black wall standing
+            // around the island, visible from any camera outside the rim.
+            vec3 p = {x, ground_height_at(x, z), z};
             vec3 n = GLM_VEC3_ZERO_INIT;
             ground_normal_at(x, z, n);
             // Tangent along the circle, which is perpendicular to the radial slope for a

@@ -626,6 +626,12 @@ typedef struct {
     // Spectral by default here. Gerstner is the A/B, and the only way to reach the
     // wavelength/amplitude/steepness/spread this app authors, which the spectral path ignores.
     int gerstner_waves;
+    // Explicit camera pose, for reproducing a framing exactly. Degrees on the command line,
+    // radians here. Each is independent: eye alone re-places the default look direction's
+    // origin, which is usually what a report means.
+    vec3 cam_eye, cam_target, cam_up;
+    int cam_eye_set, cam_target_set, cam_up_set;
+    float fov; // vertical, radians; 0 = the app's own framing
 } TreeArgs;
 
 static void print_usage(const char* prog) {
@@ -646,6 +652,10 @@ static void print_usage(const char* prog) {
     printf("      --water-level D     Still-water world Y (default %.1f)\n",
            (double)TREE_WATER_LEVEL);
     printf("      --gerstner-waves    Closed-form octaves instead of spectral cascades\n");
+    printf("      --cam-eye x,y,z     Pin the camera position (exact-repro framing)\n");
+    printf("      --cam-target x,y,z  Pin what it looks at\n");
+    printf("      --cam-up x,y,z      Pin the up vector\n");
+    printf("      --fov D             Vertical field of view, DEGREES\n");
     printf("  -h, --help              This message\n");
 }
 
@@ -688,6 +698,20 @@ static bool parse_args(int argc, char** argv, TreeArgs* a) {
             a->water_level = (float)atof(argv[++i]);
         } else if (!strcmp(s, "--gerstner-waves")) {
             a->gerstner_waves = 1;
+        } else if (!strcmp(s, "--cam-eye") && has_next) {
+            a->cam_eye_set = sscanf(argv[++i], "%f,%f,%f", &a->cam_eye[0], &a->cam_eye[1],
+                                    &a->cam_eye[2]) == 3;
+        } else if (!strcmp(s, "--cam-target") && has_next) {
+            a->cam_target_set = sscanf(argv[++i], "%f,%f,%f", &a->cam_target[0],
+                                       &a->cam_target[1], &a->cam_target[2]) == 3;
+        } else if (!strcmp(s, "--cam-up") && has_next) {
+            a->cam_up_set = sscanf(argv[++i], "%f,%f,%f", &a->cam_up[0], &a->cam_up[1],
+                                   &a->cam_up[2]) == 3;
+        } else if (!strcmp(s, "--fov") && has_next) {
+            // Degrees in, radians out: every other angle this app takes on the command line
+            // is in degrees, and a lone radian argument is the kind of inconsistency that
+            // gets a bug report filed against the renderer.
+            a->fov = (float)atof(argv[++i]) * (float)M_PI / 180.0f;
         } else if (!strcmp(s, "--no-shadows")) {
             a->no_shadows = 1;
         } else if (!strcmp(s, "--no-fog")) {
@@ -815,14 +839,24 @@ int main(int argc, char** argv) {
 
     // Camera: low and off-axis so the canopy tops the frame and the low sun
     // rakes its shadows toward the viewer.
+    //
+    // Overridable, because a look bug in a scene this size is reported as a viewpoint and
+    // there was previously no way to hand one over -- the orbit controller's state is not
+    // expressible on a command line. Same flags render and forest already carry.
     Camera* camera = create_camera();
     vec3 cam_pos = {140.0f, 95.0f, 600.0f};
     vec3 look_at = {0.0f, 145.0f, 0.0f};
     vec3 up = {0.0f, 1.0f, 0.0f};
+    if (args.cam_eye_set)
+        glm_vec3_copy(args.cam_eye, cam_pos);
+    if (args.cam_target_set)
+        glm_vec3_copy(args.cam_target, look_at);
+    if (args.cam_up_set)
+        glm_vec3_copy(args.cam_up, up);
     set_camera_position(camera, cam_pos);
     set_camera_look_at(camera, look_at);
     set_camera_up_vector(camera, up);
-    set_camera_perspective(camera, 0.55f, 2.0f, 3000.0f);
+    set_camera_perspective(camera, args.fov > 0.0f ? args.fov : 0.55f, 2.0f, 3000.0f);
     set_engine_camera(engine, camera);
     camera->distance = glm_vec3_distance(cam_pos, look_at);
 
