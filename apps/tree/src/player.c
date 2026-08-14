@@ -14,8 +14,13 @@
 #define PLAYER_LOOK_SENSITIVITY 0.0022f
 // Arrow-key look, radians per SECOND -- the opposite of the mouse above, and deliberately so: a
 // held key is a rate, not a displacement, so this one has to be scaled by dt or the turn speed
-// becomes whatever the frame rate is. 2.2 rad/s is a little over a half-turn per second.
-#define PLAYER_KEY_LOOK_RATE 2.2f
+// becomes whatever the frame rate is.
+//
+// SLOWER than it looks like it should be, and lower than the first attempt's 2.2. A key has no
+// way to modulate its own rate the way a hand on a mouse does, so it is stuck at one speed and
+// that speed has to be comfortable for the whole turn rather than quick for a glance. 1.0 rad/s
+// is a bit under 60 degrees a second, so a full turn takes about six.
+#define PLAYER_KEY_LOOK_RATE 1.0f
 // Just short of straight up and down, so the forward vector never degenerates against the up
 // axis and the look-at matrix stays defined.
 #define PLAYER_PITCH_LIMIT 1.5533f // 89 degrees
