@@ -48,10 +48,11 @@ static void player_set_capture(Player* p, struct Engine* engine, bool capture) {
     }
 }
 
-void player_init(Player* p, struct Engine* engine, float x, float z, float yaw) {
+void player_init(Player* p, struct Engine* engine, float x, float z, float yaw, float walk_speed) {
     p->feet[0] = x;
     p->feet[1] = ground_height_at(x, z);
     p->feet[2] = z;
+    p->walk_speed = walk_speed > 0.0f ? walk_speed : PLAYER_WALK_SPEED;
     p->yaw = yaw;
     p->pitch = 0.0f;
     p->vertical_velocity = 0.0f;
@@ -161,7 +162,7 @@ void player_update(Player* p, struct Engine* engine, float dt) {
     if (glm_vec3_norm(wish) > 1e-4f)
         glm_vec3_normalize(wish);
 
-    float speed = PLAYER_WALK_SPEED;
+    float speed = p->walk_speed;
     if (look_live && (glfwGetKey(win, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS ||
                               glfwGetKey(win, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS))
         speed *= PLAYER_SPRINT_MULT;

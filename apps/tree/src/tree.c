@@ -646,8 +646,9 @@ typedef struct {
     // origin, which is usually what a report means.
     vec3 cam_eye, cam_target, cam_up;
     int cam_eye_set, cam_target_set, cam_up_set;
-    float fov;  // vertical, radians; 0 = the app's own framing
-    int player; // first-person walker instead of the orbit camera
+    float fov;         // vertical, radians; 0 = the app's own framing
+    int player;        // first-person walker instead of the orbit camera
+    float walk_speed;  // units/s on the flat; 0 = the walker's own default
 } TreeArgs;
 
 static void print_usage(const char* prog) {
@@ -675,6 +676,8 @@ static void print_usage(const char* prog) {
     printf("      --player            Walk the island. WASD moves, mouse OR arrow keys turn\n");
     printf("                          the head, Shift runs, Space jumps, Tab releases the\n");
     printf("                          cursor for the GUI. With --cam-eye, spawn at its x,z\n");
+    printf("      --walk-speed U      Units/s on the flat (default %.0f; implies --player)\n",
+           (double)PLAYER_WALK_SPEED);
     printf("  -h, --help              This message\n");
 }
 
@@ -718,6 +721,9 @@ static bool parse_args(int argc, char** argv, TreeArgs* a) {
         } else if (!strcmp(s, "--gerstner-waves")) {
             a->gerstner_waves = 1;
         } else if (!strcmp(s, "--player")) {
+            a->player = 1;
+        } else if (!strcmp(s, "--walk-speed") && has_next) {
+            a->walk_speed = (float)atof(argv[++i]);
             a->player = 1;
         } else if (!strcmp(s, "--cam-eye") && has_next) {
             a->cam_eye_set = sscanf(argv[++i], "%f,%f,%f", &a->cam_eye[0], &a->cam_eye[1],
@@ -907,7 +913,7 @@ int main(int argc, char** argv) {
         // Yaw 0 looks down -Z, so facing the origin from `bearing` is that same angle: the
         // spawn point and the direction home are the same bearing, one negated in Z.
         player_init(player, engine, spawn_x, spawn_z,
-                    args.cam_eye_set ? atan2f(spawn_x, spawn_z) : bearing);
+                    args.cam_eye_set ? atan2f(spawn_x, spawn_z) : bearing, args.walk_speed);
     } else {
         drag_controller = create_mouse_drag_controller(engine);
     }

@@ -24,14 +24,26 @@ struct Engine;
  */
 
 /*
- * SCALE, anchored rather than picked. The one object in this app with a known real-world size
- * is the grass: blades are authored at 5.5 units and grass stands about 0.25 m, which puts the
- * world at roughly 22 units per metre -- and squares with the tree, 250 units for something a
- * mature tree's 11 m. So a 1.7 m eye is 37 units and a 1.4 m/s walk is 31 units/s.
+ * SCALE. The one object in this app with a known real-world size is the grass: blades are
+ * authored at 5.5 units and grass stands about 0.25 m, which puts the world near 22 units per
+ * metre -- and squares with the tree, 250 units for a mature tree's 11 m. That fixes the eye
+ * height at 1.7 m, and it is worth keeping physical because eye height is what decides how the
+ * world LOOKS: how far down the grass is, where the waterline crosses you.
  */
-#define PLAYER_EYE_HEIGHT  37.0f
-#define PLAYER_WALK_SPEED  31.0f
-#define PLAYER_SPRINT_MULT 2.6f
+#define PLAYER_EYE_HEIGHT 37.0f
+
+/*
+ * SPEED is NOT physical, and pretending otherwise was the mistake. At 22 units/m a real 1.4 m/s
+ * walk is 31 units/s, which is 10 seconds from the trunk to the waterline and a minute and a
+ * half out to the seabed's edge -- correct, and far too slow to look around with.
+ *
+ * So this is a game speed chosen from TRAVERSAL TIME, which is the thing that actually decides
+ * how the mode feels: 80 units/s puts the shore about 4 seconds away and the far seabed about
+ * 35, with sprint cutting both to under half. It reads as roughly a jog at this scale.
+ * --walk-speed overrides it, because feel is not something to settle by rebuild.
+ */
+#define PLAYER_WALK_SPEED  80.0f
+#define PLAYER_SPRINT_MULT 2.5f
 // 9.81 m/s^2 at 22 units/m. Jump apex is (v^2)/(2g) -- 100 units/s clears about 23, which is
 // half a body height, i.e. a jump rather than a leap.
 #define PLAYER_GRAVITY    216.0f
@@ -39,6 +51,9 @@ struct Engine;
 
 typedef struct Player {
     vec3 feet; // world position of the soles; the camera sits PLAYER_EYE_HEIGHT above
+    // Units per second on the flat, before the sprint multiplier. Seeded from
+    // PLAYER_WALK_SPEED; --walk-speed replaces it.
+    float walk_speed;
     // Where the head is pointing. Driven by the mouse and by the arrow keys, additively: one is
     // a displacement per pixel and the other a rate per second, which is why only the second is
     // scaled by the frame delta.
@@ -55,7 +70,8 @@ typedef struct Player {
 } Player;
 
 // Spawn standing on the ground at (x, z), looking at `yaw`. Captures the cursor.
-void player_init(Player* p, struct Engine* engine, float x, float z, float yaw);
+// `walk_speed` of 0 or less takes PLAYER_WALK_SPEED.
+void player_init(Player* p, struct Engine* engine, float x, float z, float yaw, float walk_speed);
 
 // Advance one frame and write the result to the engine camera. `dt` is the frame delta.
 void player_update(Player* p, struct Engine* engine, float dt);
