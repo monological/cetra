@@ -256,8 +256,27 @@ static float leaf_spawn_rate = 2.5f;
 static float season = 0.0f;
 static float prev_season = -1.0f;
 
-static float sun_elevation = 14.0f;
-static float sun_azimuth = 235.0f;
+/*
+ * A sunset, and both numbers are derived rather than dialled.
+ *
+ * ELEVATION 8. Low sun is what the Hillaire atmosphere turns orange -- the slant path through
+ * the air is long, Rayleigh scattering takes the blue out of it, and because the sky couples the
+ * key light through its own transmittance LUT the DIRECT light warms with the sky rather than
+ * only the backdrop. Measured on the beach, which is a diffuse near-neutral surface so its tint
+ * is the light's tint: R/B goes 1.42 at 14 degrees to 1.59 at 6. Below about 2 it inverts to
+ * 0.23, blue, because the sun is extinguished and skylight is all that is left -- which is real
+ * twilight and not a bug. The floor is the SHADOW MAP: it needs roughly
+ * 2 * (radius + treeHeight / tan(elevation)), which is 5,997 of a 6,000 budget at 6 degrees and
+ * 4,798 at 8. So 8 is the lowest elevation with margin, not the lowest that renders.
+ *
+ * AZIMUTH 193. sun_dir is (cos(el)sin(az), sin(el), cos(el)cos(az)), so putting the sun behind
+ * the tree from a camera at (140, ., 600) is atan2(-140, -600) = 193 degrees. That is what makes
+ * it a sunset rather than a low side-light: the glow blooms through the canopy, the sea carries
+ * it back, and the trunk goes to silhouette. A few degrees more brings the disc out from behind
+ * the tree -- 210 shows it clear of the trunk, over open water.
+ */
+static float sun_elevation = 8.0f;
+static float sun_azimuth = 193.0f;
 
 /*
  * Mouse drag controller
@@ -690,8 +709,8 @@ static bool parse_args(int argc, char** argv, TreeArgs* a) {
     a->width = (int)WIDTH;
     a->height = (int)HEIGHT;
     a->seed = 42;
-    a->sun_elevation = 14.0f;
-    a->sun_azimuth = 235.0f;
+    a->sun_elevation = 8.0f;
+    a->sun_azimuth = 193.0f;
     // 0 is a legal water level -- it is the dome's summit -- so the unset value has
     // to sit outside every plausible one.
     a->water_level = -9999.0f;
@@ -1004,9 +1023,11 @@ int main(int argc, char** argv) {
     //
     // The requirement is roughly 2 * (ground radius + tree height / tan(sun
     // elevation)): the shadow has to fit along the light, and it lengthens fast
-    // as the sun drops -- 3400 at the default 14 degrees, 4100 at 10, 5600 at 6.
-    // 6000 holds the slider down to about 5 degrees; below that the shadow is
-    // longer than the island and runs off it regardless.
+    // as the sun drops. At the 620-unit radius and a 250-unit tree that is 4,800
+    // at the default 8 degrees, 5,997 at 6, and 6,956 at 5 -- so 6000 holds the
+    // slider to about 6, and below that the shadow is longer than the island and
+    // runs off it regardless. The TREE-HEIGHT term dominates, which is why
+    // shrinking the radius from 900 in spec 11.34 barely moved any of these.
     ShadowSystem* ss = scene->shadow_system;
     if (ss) {
         ss->enabled = args.no_shadows == 0;
