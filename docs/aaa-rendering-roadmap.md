@@ -938,6 +938,39 @@ closed spec is not where anyone looks for work that is still outstanding.
    between them** — and tree is where the bug was found, by eye. A scene whose far plane is small
    relative to the horizon is the instrument this corpus lacks.
 
+4. **A camera AT the waterline is unhandled, and it is the framing `--player` put in front of people.**
+   Wading in `apps/tree` produces a clean horizontal boundary between above-water and below-water
+   shading. It should be a wavy, irregular line — the surface crossing the eye plane — and a clean
+   sweep means the split is decided by the flat still level rather than by where the waves are.
+   **Confirmed by reading, independent of that symptom:** the same question is answered twice with
+   different scopes. The normal flip (`water_frag.glsl:248`) is per-PIXEL,
+   `cameraSubmerged || !gl_FrontFacing`; the optical-path branch (`:265`) is per-FRAME,
+   `cameraSubmerged` alone, and `cameraSubmerged` itself is one bool per frame from
+   `cam_world[1] < water->level` (`water.c:945`) against the STILL level. So a fragment whose normal
+   was flipped toward the eye — a crest closing over a camera that is still above the still level —
+   is then charged its path against the depth buffer BEHIND the surface, which is air there.
+   Unifying those two into one `seenFromBelow` is a small change, verified 0 px on `water_fixture`,
+   and **the fixture cannot see it at all**: at amplitude 0.06 no crest ever shows its underside, so
+   `!gl_FrontFacing` is never true. Another instance of item 3.
+   The geometry half is separate and larger: the projector picks its side per frame too
+   (`above = waterCamPos.y >= waterLevel`), so the lattice covers one side of the eye plane when a
+   straddling camera needs both. Item 1's plane offset does not fix that — it moves the plane, where
+   this needs coverage on both sides of it. **Rank above item 1**: it fires whenever a walker enters
+   the water, where item 1 needs a specific camera regime.
+
+5. **The water shader does not know how big a world unit is, and 11.36 made that visible.** Clear
+   water in `apps/tree` promotes four more world-unit constants in `water_frag.glsl` from harmless to
+   conspicuous: `WATER_MAX_BEND` (1.0, whose comment says "a metre or so" — 4.5 cm at 22 units/m, so
+   refraction distortion of the now-visible bed is imperceptible), the caustic depth window
+   (`0.35 / 9 / 20`, a 1.6 cm–0.9 m ring hugging the shore, and tree is **FFT by default** so
+   caustics are live there — expect a bright band with clear bed beyond it), `WATER_SHORT_NEAR/FAR`
+   (42/118, whose comment says "Metres:" outright), and `OCEAN_SHOAL_MIN/FULL`. The engine already
+   owns the number — `Sky.world_units_per_km`, default 1000 — and **`apps/tree` never initialises
+   it**, so its aerial perspective is wrong by the same factor with the opposite sign: 22× too
+   *thick*, where the water was 22× too absorbing. Plumbing one float into the water program scales
+   all five at once. 11.36 introduced `GROUND_UNITS_PER_METRE`, which is that number, so the app half
+   already exists.
+
 **Queued:** `specs/11.36-water-clarity-at-world-scale.md` — the absorption is authored per metre and
 stored per world unit, so `apps/tree` (22 units/m) is 4.9–8.6× too absorbing per channel, and
 `WATER_MAX_PATH` is a world-unit clamp justified in its own comment as an optical-depth budget. Fixing
