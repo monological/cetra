@@ -1,0 +1,43 @@
+{
+ "version": 1,
+ "models": [
+  {
+   "path": "varying_fixture.gltf"
+  }
+ ],
+ "lights": [
+  {
+   "name": "VarySun",
+   "type": "directional",
+   "direction": [
+    0.0,
+    -0.15,
+    -0.99
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 3.0,
+   "cast_shadows": false
+  }
+ ],
+ "camera": {
+  "eye": [
+   0.0,
+   0.5,
+   2.0
+  ],
+  "target": [
+   0.0,
+   0.5,
+   0.0
+  ],
+  "fov": 45
+ },
+ "post": {
+  "tonemap": "neutral",
+  "exposure": 1.0
+ }
+}
