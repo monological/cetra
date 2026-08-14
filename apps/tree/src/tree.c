@@ -623,6 +623,9 @@ typedef struct {
     float sun_azimuth;
     int no_water;      // the sea is ON here: this app's ground IS an island
     float water_level; // world Y of the still surface (-9999 = the default)
+    // Spectral by default here. Gerstner is the A/B, and the only way to reach the
+    // wavelength/amplitude/steepness/spread this app authors, which the spectral path ignores.
+    int gerstner_waves;
 } TreeArgs;
 
 static void print_usage(const char* prog) {
@@ -642,6 +645,7 @@ static void print_usage(const char* prog) {
     printf("      --no-water          Dry land: drop the sea around the island\n");
     printf("      --water-level D     Still-water world Y (default %.1f)\n",
            (double)TREE_WATER_LEVEL);
+    printf("      --gerstner-waves    Closed-form octaves instead of spectral cascades\n");
     printf("  -h, --help              This message\n");
 }
 
@@ -682,6 +686,8 @@ static bool parse_args(int argc, char** argv, TreeArgs* a) {
             a->no_water = 1;
         } else if (!strcmp(s, "--water-level") && has_next) {
             a->water_level = (float)atof(argv[++i]);
+        } else if (!strcmp(s, "--gerstner-waves")) {
+            a->gerstner_waves = 1;
         } else if (!strcmp(s, "--no-shadows")) {
             a->no_shadows = 1;
         } else if (!strcmp(s, "--no-fog")) {
@@ -1031,6 +1037,23 @@ int main(int argc, char** argv) {
                 args.water_level > -9000.0f ? args.water_level : TREE_WATER_LEVEL;
             water->extent = TREE_WATER_EXTENT;
             water->height_at = tree_bed_height;
+            /*
+             * SPECTRAL, not the library's Gerstner default, and the sea is why (spec 11.34).
+             *
+             * Gerstner is four octaves off one wind direction, so at grazing incidence -- which
+             * is most of this frame -- it reads as corduroy: parallel bands marching to the
+             * horizon. The fan (`spread` below) hides that near the camera and cannot far away,
+             * because the footprint filtering leaves only the longest octave out there and one
+             * sinusoid is one sinusoid however it is aimed. A directional spectrum has no
+             * preferred phase to line up, so it does not do this.
+             *
+             * The library default stays Gerstner because it allocates nothing, which is right
+             * where water is incidental. Here the sea IS the frame, and 45 ping-pong draws
+             * against that is a trade worth making. --gerstner-waves is the A/B, and the only
+             * way to reach the four wave parameters below: the spectral path ignores them
+             * because its sea state comes out of a wind speed and a fetch instead.
+             */
+            water->wave_model = args.gerstner_waves ? WATER_WAVES_GERSTNER : WATER_WAVES_FFT;
             // Shorter and livelier than the swell 11.32 had to settle for, when a
             // world-space grid put a 17-unit cell here and anything under ~150 units read
             // as facets. The projected grid sizes its cells in pixels instead, so what a
