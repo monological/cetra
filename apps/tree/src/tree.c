@@ -538,13 +538,83 @@ static void render_tree_gui(const Engine* engine, Scene* scene) {
                           0);
         }
 
+        /*
+         * Sun and sky, grouped by WHAT AN EDIT COSTS -- which is not visible from the parameter
+         * names, and which two of these were initially filed under wrongly:
+         *
+         *   RE-BAKE, via sky_update_sun: only what the sky-view LUT and the environment cubemap
+         *   are a function of, which is the sun's POSITION and nothing else here. Its header
+         *   says it is cheap enough to run per slider frame, and it is the single entry point
+         *   for "the sun moved" -- it re-derives sun_dir, re-bakes, and retints the key light.
+         *
+         *   RETINT, via sky_apply_sun_to_light: the key light's strength. No bake.
+         *
+         *   FREE: everything else below is a per-frame uniform, read by the pass that consumes
+         *   it. Checked rather than assumed -- see the notes on Disc Size and Units per km,
+         *   both of which look like sky state and are not.
+         */
         igSeparatorText("Sun");
-        bool sun_moved = igSliderFloat("Elevation", &sun_elevation, -5.0f, 89.0f, "%.1f", 0);
-        sun_moved |= igSliderFloat("Azimuth", &sun_azimuth, 0.0f, 360.0f, "%.1f", 0);
+        bool sun_moved = igSliderFloat("Elevation", &sun_elevation, -5.0f, 89.0f, "%.1f deg", 0);
+        sun_moved |= igSliderFloat("Azimuth", &sun_azimuth, 0.0f, 360.0f, "%.1f deg", 0);
         if (sun_moved && sky) {
             sky->sun_elevation_deg = sun_elevation;
             sky->sun_azimuth_deg = sun_azimuth;
             sky_update_sun(sky, ibl, (Engine*)engine);
+        }
+        if (sky) {
+            /*
+             * Angular DIAMETER of the drawn disc; the real sun is 0.53 degrees.
+             *
+             * SKYBOX ONLY, and worth knowing before reaching for it: sunCosRadius reaches
+             * sky_background_frag and sky_background_clouds_frag and nothing else -- not
+             * sky_env_frag. So the disc is absent from the environment cubemap, which means
+             * reflections and the water's sun glint do NOT follow it. Free to drag for the same
+             * reason: no bake consumes it.
+             */
+            igSliderFloat("Disc Size", &sky->sun_disc_deg, 0.05f, 6.0f, "%.2f deg", 0);
+            // Retint only. The light's COLOUR is deliberately not offered: it comes from
+            // atmospheric transmittance, which is what keeps the sun matching the sky it is in,
+            // and a picker here would make this a second owner of it.
+            if (igSliderFloat("Intensity", &sky->sun_base_intensity, 0.0f, 40.0f, "%.1f", 0))
+                sky_apply_sun_to_light(sky);
+        }
+        // Emitter size, straight onto the light: it drives the PCSS penumbra, so this is the
+        // shadow-softness control. Square, because a directional sun has no reason to be
+        // oblong and two sliders for one physical quantity is worse than one.
+        if (sun_light) {
+            igSliderFloat("Shadow Softness", &sun_light->size[0], 0.5f, 40.0f, "%.1f", 0);
+            sun_light->size[1] = sun_light->size[0];
+        }
+
+        igSeparatorText("Sky");
+        if (sky) {
+            /*
+             * World units per kilometre, and it is the strongest knob in this panel.
+             *
+             * The atmosphere is modelled in km while a scene is in whatever it was authored in,
+             * so this mapping decides how much AIR the frame looks through: lower it and the
+             * island sits under kilometres of haze, raise it and the same geometry becomes a
+             * tabletop under a clear sky. Logarithmic, because the useful range spans decades.
+             *
+             * Also free, which was a surprise: it reaches only the per-frame aerial volume and
+             * the cloud march, never the baked LUTs -- so the aerial perspective moves with it
+             * while the sky-view LUT does not.
+             */
+            igSliderFloat("Units per km", &sky->world_units_per_km, 1.0f, 100000.0f, "%.0f",
+                          ImGuiSliderFlags_Logarithmic);
+            igCheckbox("Aerial Perspective", &sky->aerial_enabled);
+            igCheckbox("Sky drives Fog Ambient", &sky->publish_fog_ambient);
+            igCheckbox("Debug: LUTs", &sky->debug_luts);
+        }
+        if (scene) {
+            igSliderFloat("Skybox Brightness", &scene->skybox_brightness, 0.0f, 4.0f, "%.2f", 0);
+            // The radius comes WITH the toggle, not after it: the library default is 5 units,
+            // which against a 620-unit island projects the sky onto a puddle at the origin and
+            // reads as a bug rather than as a feature that needs sizing.
+            igCheckbox("Ground Projection", &scene->skybox_ground_projection);
+            if (scene->skybox_ground_projection)
+                igSliderFloat("GP Radius", &scene->skybox_gp_radius, 5.0f, 2000.0f, "%.0f",
+                              ImGuiSliderFlags_Logarithmic);
         }
     }
     igEnd();
