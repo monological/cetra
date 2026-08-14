@@ -86,7 +86,18 @@ typedef enum {
     // The same ramp over the SSS DIFFUSE instead of the shaded colour: attachment 4 is what
     // the scatter pyramid is built from, so a hot texel there is amplified by a pass the
     // visible colour never passes through.
-    RENDER_MODE_SSS_HOTSPOTS
+    RENDER_MODE_SSS_HOTSPOTS,
+    /*
+     * Per-varying MSAA extrapolation: R the normal, G the tangent, B the UV.
+     *
+     * Reports how far each one left the range its own vertices bound, which under MSAA is a
+     * measure of how far outside the triangle this pixel was shaded. Zero everywhere at one
+     * sample, by construction -- there is no partial coverage to extrapolate from.
+     *
+     * R and G are exact on any asset; B is only meaningful where the mesh authored its UVs in
+     * [0,1]. The arithmetic and the reason each channel is what it is live in pbr_frag.
+     */
+    RENDER_MODE_EXTRAPOLATION
 } RenderMode;
 
 // Which pass is rasterizing this mesh, and therefore where the uber-shader

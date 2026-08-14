@@ -735,6 +735,11 @@ typedef struct {
     // RenderMode override, 0 = PBR. The GUI has always had the combo; without this the debug
     // modes could not be reached headlessly, so anything they diagnose could not be captured.
     int render_mode;
+    // MSAA sample count, 0 = leave the engine default (4). This app runs MSAA *and* TAA, which
+    // is why the extrapolation specks surfaced here first; without the flag the one comparison
+    // that identifies them -- against a single sample, where no coverage is partial -- cannot
+    // be made in the app that shows them.
+    int msaa;
     // Explicit camera pose, for reproducing a framing exactly. Degrees on the command line,
     // radians here. Each is independent: eye alone re-places the default look direction's
     // origin, which is usually what a report means.
@@ -765,7 +770,8 @@ static void print_usage(const char* prog) {
     printf("      --water-level D     Still-water world Y (default %.1f)\n",
            (double)TREE_WATER_LEVEL);
     printf("      --gerstner-waves    Closed-form octaves instead of spectral cascades\n");
-    printf("      --render-mode N     Debug view; 10 = HDR hotspots (see the GUI combo)\n");
+    printf("      --render-mode N     Debug view; 10 = HDR hotspots, 12 = extrapolation\n");
+    printf("      --msaa N            MSAA samples (default 4); 1 has no partial coverage\n");
     printf("      --cam-eye x,y,z     Pin the camera position (exact-repro framing)\n");
     printf("      --cam-target x,y,z  Pin what it looks at\n");
     printf("      --cam-up x,y,z      Pin the up vector\n");
@@ -824,6 +830,8 @@ static bool parse_args(int argc, char** argv, TreeArgs* a) {
             a->gerstner_waves = 1;
         } else if (!strcmp(s, "--render-mode") && has_next) {
             a->render_mode = atoi(argv[++i]);
+        } else if (!strcmp(s, "--msaa") && has_next) {
+            a->msaa = atoi(argv[++i]);
         } else if (!strcmp(s, "--player")) {
             a->player = 1;
         } else if (!strcmp(s, "--walk-speed") && has_next) {
@@ -959,6 +967,10 @@ int main(int argc, char** argv) {
     // drops back to full resolution unless --headless-jitter, since the resolve
     // reconstructs from the jitter and headless suppresses it.
     set_engine_render_scale(engine, 0.70f);
+    // Before init_engine so the count is the one the scene target is first built at, rather than
+    // a rebuild on the frame after. The engine clamps it to what the driver offers.
+    if (args.msaa > 0)
+        set_engine_msaa_samples(engine, args.msaa);
 
     if (init_engine(engine) != 0) {
         fprintf(stderr, "Failed to initialize engine\n");
@@ -1261,8 +1273,8 @@ int main(int argc, char** argv) {
     // argument.
     if (args.render_mode > 0) {
         engine->current_render_mode =
-            (RenderMode)(args.render_mode > RENDER_MODE_SSS_HOTSPOTS ? RENDER_MODE_SSS_HOTSPOTS
-                                                                     : args.render_mode);
+            (RenderMode)(args.render_mode > RENDER_MODE_EXTRAPOLATION ? RENDER_MODE_EXTRAPOLATION
+                                                                      : args.render_mode);
     }
 
     create_island(root);

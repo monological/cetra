@@ -272,7 +272,7 @@ static void _engine_gui_panel(Engine* engine) {
     static const char* const render_modes[] = {
         "PBR",        "Normals", "World Pos",       "Tex Coords",         "Tangent Space",
         "Flat Color", "Albedo",  "Simple Lighting", "Metallic/Roughness", "Velocity",
-        "HDR Hotspots", "SSS Hotspots"};
+        "HDR Hotspots", "SSS Hotspots", "Extrapolation"};
     int rm = engine->current_render_mode;
     int render_mode_count = (int)(sizeof(render_modes) / sizeof(render_modes[0]));
     if (igCombo_Str_arr("Render Mode", &rm, render_modes, render_mode_count, -1))

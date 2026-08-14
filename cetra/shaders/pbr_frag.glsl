@@ -856,6 +856,44 @@ void main() {
         FragColor = vec4(tangent, 1.0);
         return;
     }
+    if (renderMode == 12) {
+        /*
+         * How far a varying left the range its own three vertices bound.
+         *
+         * Under MSAA this stage runs once per PIXEL while coverage is per SAMPLE, so a varying
+         * is evaluated at one point -- the pixel centre, unless it is qualified `centroid`. On a
+         * partly covered pixel that centre can sit outside the triangle, and interpolating
+         * outside a triangle is extrapolation: the barycentric weights go negative and the
+         * result leaves the convex hull of the three vertex values.
+         *
+         * R and G are EXACT tests, on any asset, with nothing to calibrate. The vertex stage
+         * normalizes both vectors, so every vertex value is unit -- and a convex combination of
+         * unit vectors has length at most one, by the triangle inequality, with equality only
+         * when they are all equal. A length above one therefore PROVES a negative weight; no
+         * other input can produce it. Rounding cannot fake it either: fp32 error on a length is
+         * ~1e-7 and the gain below needs 6e-5 before the 8-bit write sees anything.
+         *
+         * TBN[1] gets no channel, deliberately. It is cross(N, T) * w, whose length at a vertex
+         * is the sine of the angle between N and T -- at most one, but not one, so the same
+         * test would report authored non-perpendicularity as extrapolation.
+         *
+         * B is the one channel that is FIXTURE-SCOPED, and the difference is not a detail:
+         * nothing bounds a UV except what the mesh authored, so leaving [0,1] is evidence only
+         * where the mesh authored [0,1]. On anything tiling, leaving [0,1] is the normal case
+         * and this channel means nothing.
+         *
+         * The gain is load-bearing rather than cosmetic. A debug frame still takes the MSAA
+         * resolve, which is a box filter, so an excursion arrives scaled by its own coverage --
+         * and the excursion is largest exactly where the coverage is smallest. Unscaled, that
+         * product lands under one 8-bit code.
+         */
+        const float EXTRAP_GAIN = 64.0;
+        vec2 uvOut = max(-TexCoords, TexCoords - 1.0);
+        vec3 excursion =
+            vec3(length(Normal) - 1.0, length(TBN[0]) - 1.0, max(uvOut.x, uvOut.y));
+        FragColor = vec4(clamp(excursion * EXTRAP_GAIN, 0.0, 1.0), 1.0);
+        return;
+    }
     if (renderMode == 6) {
         // Albedo Only - only sample albedo texture
         vec2 uvAlbedo = transformUV(TexCoords);
