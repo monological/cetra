@@ -65,7 +65,7 @@ uniform float waterExtent;
 uniform vec3 waterCamPos;
 
 /*
- * PROJECTED GRID placement (spec 11.34).
+ * PROJECTED GRID placement (spec 11.35).
  *
  * The lattice is a fixed grid in NDC rather than in the world: each vertex is a ray
  * through its own screen position, and where that ray meets the still-water plane is the
@@ -190,7 +190,7 @@ struct OceanSurface {
 };
 
 /*
- * THE FAR FIELD IS A FILTERING PROBLEM (spec 11.34).
+ * THE FAR FIELD IS A FILTERING PROBLEM (spec 11.35).
  *
  * A projected grid's far cells cover kilometres, so a sample there is one arbitrary phase
  * of a wave the cell cannot resolve -- which shimmers rather than describes anything. Both
@@ -249,7 +249,7 @@ const float OCEAN_BOUND_MED_VAR = 0.030;
  * One band's tiling lookup. Written out eleven times before this existed, twice per band
  * for the two targets of a single sample point.
  *
- * Sampled relative to a camera origin SNAPPED to this band's own period (spec 11.34). fract
+ * Sampled relative to a camera origin SNAPPED to this band's own period (spec 11.35). fract
  * is periodic with exactly that period, so subtracting an integer multiple of it cannot
  * change the answer -- what it changes is the MAGNITUDE of the argument, and therefore how
  * many mantissa bits are left for the fraction the lookup needs. Without it, p/240 at a

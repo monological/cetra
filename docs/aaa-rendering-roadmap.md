@@ -845,7 +845,7 @@ course); Schneider & Vos, *The Real-Time Volumetric Cloudscapes of Horizon Zero 
 — already shipped as B2.
 **Depends on:** B1 (shipped), B2 (shipped); surface half on D0.
 
-### D3. Tessellated water — SHIPPED as specs 11.32 + 11.33 + 11.34, and NOT tessellated
+### D3. Tessellated water — SHIPPED as specs 11.32 + 11.33 + 11.35, and NOT tessellated
 The flagship surface landed: Gerstner and Tessendorf FFT wave models, Beer-Lambert absorption,
 caustics and foam from the surface Jacobian, shoaling against a bed provider, an underwater medium,
 and a `.cscn` block. It exercises the four subsystems this entry named it for.
@@ -862,7 +862,7 @@ no gap, no overlap and no coplanar tie, because each level's cell divides the co
 worked and nothing recorded about it was false. **What it could not do was reach the horizon**, and the
 reason is the same snap: reach and near-field detail are welded to one number, so pushing the extent
 out coarsened the finest cell until the swell disappeared. The surface stopped 5° short while a comment
-claimed otherwise. 11.34 replaced it with a **projected grid** (Johanson 2004): a fixed lattice in NDC,
+claimed otherwise. 11.35 replaced it with a **projected grid** (Johanson 2004): a fixed lattice in NDC,
 one draw, each vertex a ray onto the still plane. Density exact rather than in 2× steps, no
 T-junctions, reach decoupled from detail — and the same triangle budget the rings spent.
 
@@ -894,7 +894,7 @@ first content in the tree where instancing, LOD and culling all matter at once, 
 found Wall 4.
 
 **This item inherits a working geometry clipmap, and git is where it is kept.** D3 built one for water
-and 11.34 removed it — the snap arithmetic and the T-junction stitch are at commit `8d04658`, which is
+and 11.35 removed it — the snap arithmetic and the T-junction stitch are at commit `8d04658`, which is
 D4's reference implementation rather than dead code kept live for a hypothetical consumer. **The part
 water never used is the part terrain needs**: rings as windows into a mip pyramid of streamed height
 data, which is what Asirvatham & Hoppe invented them for and why that paper is this entry's first
@@ -1223,7 +1223,7 @@ not scheduled.
 | 33 | D1 Clustered decals | L | Largest environment-art gap. Hard-blocked on D0. |
 | 34 | E8 Fix the wind cull | S | Small, self-contained, closes a real hole in E5's culling — wind geometry is currently exempt from the camera frustum *and* every cascade. Unblocks wind on scattered content, which `apps/forest` gave up to avoid it. |
 | 34b | **E9 One sample means one sample** | M | **DONE (11.34).** `apps/forest` opaque **150.9 → 121.6 ms (−19.4%)** against a 0.23% floor, with byte-identical submission integers — the same work, cheaper. One branch in the one allocator plus one at the depth renderbuffer flips the scene, OIT and moment FBOs in lockstep, since they share the depth attachment. The row's original prescription was wrong twice: there is no `sampler2DMS` anywhere in the corpus (11.17 rejected it), and postfx reaches the scene target only through blits, so the GLSL surface was zero files and postfx changed nothing. Priced before built with a new `--msaa <n>` lever, which also decomposed the first confounded A/B: A2C alone costs 202 ms of forest's opaque row (fragment-set explosion, headless-only), a sample ~93 ms on that inflated set. TAA-only edges verified by crops (raiden groom, forest canopy — indistinguishable), all 23 goldens 0 px, and MBOIT's moment-resolve bias (11.17) is now absent on the TAA path for free. |
-| 35 | ~~D3 Tessellated water~~ | — | **SHIPPED (11.32, 11.33, 11.34) and it spent no tessellation.** The mesh went through two screen-space schemes instead: clipmap rings (11.33), then a **projected grid** (11.34) after the rings turned out to weld reach to near-field detail — the snap that makes them tile is the same thing that kept the surface 5° short of the horizon while a comment claimed otherwise. The stage this item was scheduled to open is still closed. Reaching the horizon then moved the problem from the MESH to filtering: distant cells cover more than a wave period, so each wave model drops what sits under its footprint and hands the slope energy to roughness — a BRDF answer to a geometry question. See D3. |
+| 35 | ~~D3 Tessellated water~~ | — | **SHIPPED (11.32, 11.33, 11.35) and it spent no tessellation.** The mesh went through two screen-space schemes instead: clipmap rings (11.33), then a **projected grid** (11.35) after the rings turned out to weld reach to near-field detail — the snap that makes them tile is the same thing that kept the surface 5° short of the horizon while a comment claimed otherwise. The stage this item was scheduled to open is still closed. Reaching the horizon then moved the problem from the MESH to filtering: distant cells cover more than a wave period, so each wave model drops what sits under its footprint and hands the slope energy to roughness — a BRDF answer to a geometry question. See D3. |
 | 36 | D4 Terrain | XL | Only after E5; a clipmap without instancing/LOD is a mega-mesh with extra steps. `apps/forest` is a *consumer* of E5, not this — fixed tiles with per-tile chains, fine at 1 km² and explicitly not the answer above it. **Inherits D3's clipmap at `8d04658`** — the rings-over-a-mip-pyramid half water never used is the half terrain needs — and its T-junction stitch, which is a better fix for the crack risk E5 left open than locking borders. |
 | 37 | E7 Occlusion culling | L | Booked so the gap is visible, **not because a measurement demands it**, and 11.31 lowers the price further rather than raising it: forest's opaque lane already runs at complexity 1.08 from ordering alone, so there is little redundant shading left to remove, and the one thing that reached 0.72 — the prepass — lost on the clock anyway because the extra submission cost more than the fragments it saved. An occlusion pass is a bigger version of that same trade. `assets/overdraw_layers.gltf` is the instrument to price it with. |
 
@@ -1321,8 +1321,8 @@ scheduled.
 | Freed `pbr_frag` sampler units | D0 (proposed) | D1 decals, D2's surface-shadow half, detail/wetness maps |
 | Tessellation pipeline (program creation, patch draw, distance LOD) | **still unowned** — D3 shipped without it | D4 terrain, POM silhouettes |
 | Bed-height seam (`WaterHeightFn`) + the CPU Gerstner query | D3 — **delivered** (11.32, 11.33) | Jolt buoyancy, gameplay water tests, any surface that shoals |
-| Geometry clipmap: coarsest-cell snap + T-junction stitch | D3 — built (11.33), **removed** (11.34), kept at `8d04658` | D4 terrain, where the streamed-mip-pyramid half water never used is the point |
-| Screen-space footprint → detail handover (mip level or dropped octave, energy into roughness) | D3 — **delivered** (11.34) | any procedural surface a projected or adaptive mesh under-samples at distance |
+| Geometry clipmap: coarsest-cell snap + T-junction stitch | D3 — built (11.33), **removed** (11.35), kept at `8d04658` | D4 terrain, where the streamed-mip-pyramid half water never used is the point |
+| Screen-space footprint → detail handover (mip level or dropped octave, energy into roughness) | D3 — **delivered** (11.35) | any procedural surface a projected or adaptive mesh under-samples at distance |
 | Per-pass GPU timing | E4 (proposed) | E5 LOD thresholds, D4, all budget work |
 
 ## Cross-track integration contracts

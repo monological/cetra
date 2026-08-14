@@ -4,7 +4,7 @@
 #include "cetra/mesh.h"
 
 /*
- * The island, in one place (spec 11.34 phase 5).
+ * The island, in one place (spec 11.35 phase 5).
  *
  * A paraboloid of revolution: y = H*(1 - t^2) - H over t = d/R, translated so the CROWN
  * sits at y = 0 where the tree roots start and the rim reaches -H. That single expression
@@ -42,7 +42,7 @@
 #define GROUND_SHORE_T 0.5f
 
 /*
- * How far the seabed mesh reaches, and how deep it goes past the rim (spec 11.34 phase 6).
+ * How far the seabed mesh reaches, and how deep it goes past the rim (spec 11.35 phase 6).
  *
  * The sea itself reaches the horizon, so the bed cannot cover all of it and does not need to:
  * it only has to cover what can be SEEN through the water, and this app's own camera far

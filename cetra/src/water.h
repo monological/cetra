@@ -21,7 +21,7 @@
  */
 
 /*
- * Lattice cells per side of the PROJECTED GRID (spec 11.34).
+ * Lattice cells per side of the PROJECTED GRID (spec 11.35).
  *
  * The mesh is a fixed lattice in screen space, projected onto the water plane per vertex,
  * so this is a pixels-per-cell quality knob and not a world size: cell density is uniform

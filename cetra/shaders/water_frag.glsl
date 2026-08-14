@@ -238,7 +238,7 @@ void main() {
         /*
          * There is geometry behind this fragment, so the column can be measured.
          *
-         * The guard is load-bearing and its absence was a visible defect (spec 11.34). Where
+         * The guard is load-bearing and its absence was a visible defect (spec 11.35). Where
          * nothing was drawn the depth buffer holds its cleared value, which reads back as the
          * FAR PLANE -- and the surface itself now runs to the horizon, far past any far plane.
          * So `bedDist - surfaceDist` came out hugely negative out there, the shoreline test

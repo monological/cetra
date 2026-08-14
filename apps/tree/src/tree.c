@@ -307,7 +307,7 @@ static Player* player = NULL;
  * invisible.
  */
 #define TREE_WATER_LEVEL (-GROUND_HEIGHT * GROUND_SHORE_T * GROUND_SHORE_T)
-// The SHOALING BED's domain, and nothing else -- since spec 11.34 the grid is projected from
+// The SHOALING BED's domain, and nothing else -- since spec 11.35 the grid is projected from
 // the frustum and reaches the horizon at any extent. So this is sized for the SHORE BAND
 // rather than for the island: tight enough that bed texels land on the shoal ramp (3.1 units
 // per texel here, against a ramp 8.4 units wide), and clear of the waterline at 310 on both
@@ -350,7 +350,7 @@ static void create_island(SceneNode* parent) {
 }
 
 /*
- * Create the seabed (spec 11.34 phase 6).
+ * Create the seabed (spec 11.35 phase 6).
  *
  * Authored in WORLD space, unlike the island, which is built about its crown and translated:
  * the seabed's whole job is to continue the island's flank, and reading ground_height_at
@@ -1102,7 +1102,7 @@ int main(int argc, char** argv) {
     // at the default 8 degrees, 5,997 at 6, and 6,956 at 5 -- so 6000 holds the
     // slider to about 6, and below that the shadow is longer than the island and
     // runs off it regardless. The TREE-HEIGHT term dominates, which is why
-    // shrinking the radius from 900 in spec 11.34 barely moved any of these.
+    // shrinking the radius from 900 in spec 11.35 barely moved any of these.
     ShadowSystem* ss = scene->shadow_system;
     if (ss) {
         ss->enabled = args.no_shadows == 0;
@@ -1241,7 +1241,7 @@ int main(int argc, char** argv) {
             water->extent = TREE_WATER_EXTENT;
             water->height_at = tree_bed_height;
             /*
-             * SPECTRAL, not the library's Gerstner default, and the sea is why (spec 11.34).
+             * SPECTRAL, not the library's Gerstner default, and the sea is why (spec 11.35).
              *
              * Gerstner is four octaves off one wind direction, so at grazing incidence -- which
              * is most of this frame -- it reads as corduroy: parallel bands marching to the

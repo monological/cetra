@@ -567,7 +567,7 @@ static bool water_ensure_grid(Water* water) {
  * One transformed cascade field.
  *
  * `mipped` is for the bands that DISPLACE the mesh, and it is what makes the far field
- * possible (spec 11.34): a projected grid's distant cells cover more than a wave period, so
+ * possible (spec 11.35): a projected grid's distant cells cover more than a wave period, so
  * level 0 there is one arbitrary phase per cell rather than detail. The mip chain is
  * generated after each frame's transform, and the vertex stage selects a level from the
  * cell's world footprint. Costs no sampler unit -- these are textures water already binds.

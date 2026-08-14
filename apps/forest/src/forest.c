@@ -698,7 +698,7 @@ static void on_init(Game* game) {
             water->level = g_args.water_level;
             // The SHOALING BED's domain, which is the terrain square, because that is
             // exactly where a bed exists to shoal against. It does not bound the drawn
-            // surface, which reaches the horizon regardless (spec 11.34) -- past the
+            // surface, which reaches the horizon regardless (spec 11.35) -- past the
             // terrain the bed field reads its edge and the sea is open water, which is
             // what a flooded island should look like from the shore anyway.
             water->extent = g_terrain.extent;

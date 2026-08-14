@@ -171,7 +171,7 @@ typedef struct CSceneWater {
     bool has_level;
     float level; // still-water plane, world Y
     bool has_extent;
-    // Half-size of the SHOALING BED's domain, not of the drawn surface: since spec 11.34 the
+    // Half-size of the SHOALING BED's domain, not of the drawn surface: since spec 11.35 the
     // grid is projected from the frustum and reaches the horizon, and outside this the bed
     // field reads its nearest edge texel, which is open water.
     float extent;

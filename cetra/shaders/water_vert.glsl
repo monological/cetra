@@ -1,6 +1,6 @@
 #version 330 core
 
-// Water surface vertex stage (specs 11.32, 11.34). The mesh is a fixed lattice over
+// Water surface vertex stage (specs 11.32, 11.35). The mesh is a fixed lattice over
 // [-0.5, 0.5]^2 read as SCREEN space, positions only: where each vertex lands on the water
 // plane is a ray/plane solve in oceanProjectedPosition, and a displaced surface's normal is
 // the derivative of the displacement, so a stored normal would only be overwritten.
@@ -39,7 +39,7 @@ invariant gl_Position;
 
 /*
  * The lattice's far rows sit at OCEAN_FAR_DIST, which is past any camera's far plane, and
- * clipping them is exactly the defect 11.34 exists to fix: it leaves a band of sky between
+ * clipping them is exactly the defect 11.35 exists to fix: it leaves a band of sky between
  * the surface's top edge and the horizon. So clip Z is held just inside the far plane,
  * which keeps the vertex's screen position and its ordering against everything that is not
  * the sky.

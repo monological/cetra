@@ -2958,7 +2958,7 @@ WATER_FFT_FLAGS = WATER_FFT_CORE + ["--water-level", "0.6", "--water-waves", "ff
 WATER_GERSTNER_REF = WATER_FFT_CORE + ["--water-level", "0.6", "--water-waves", "gerstner"]
 # Level above the fixture's eye (y 1.35), so the camera is under the surface.
 #
-# SHALLOW, and GERSTNER, and both are forced by geometry rather than chosen (spec 11.34).
+# SHALLOW, and GERSTNER, and both are forced by geometry rather than chosen (spec 11.35).
 # The camera is pitched 11.9 degrees down, so the highest ray that can reach a surface
 # overhead leaves at 9.1 degrees and the nearest visible interface sits at
 # clearance / tan(9.1) = 6.25x the eye's depth. At the old level of 3.0 that is 10.5 units,
@@ -2981,7 +2981,7 @@ WATER_FFT_LIVE_MIN_PX = 20000
 # reading a ratio off whatever the surface puts there. 11.32 phase 2's underwater medium
 # saturated the open-water band they started in (all three flat at 0.053, the body
 # colour). 11.33 phase 4's per-mode phase seeding reshaped the interface and flattened the
-# ramp to 1.69x. 11.34's projected grid stopped drawing the near-overhead surface the
+# ramp to 1.69x. 11.35's projected grid stopped drawing the near-overhead surface the
 # clipmap covered, which is what moved the level and the wave model above.
 #
 # The ORDERING is the durable half of this arm; the endpoint ratio is not, and a floor
@@ -3003,7 +3003,7 @@ WATER_FOG_BED_BOXES = [(0.40, 0.390, 0.60, 0.420),
                        (0.40, 0.540, 0.60, 0.570)]
 WATER_FOG_BED_TOTAL_MIN = 1.25
 
-# Reach invariance (spec 11.34). The arm that catches "the water stops short of the
+# Reach invariance (spec 11.35). The arm that catches "the water stops short of the
 # horizon", which the clipmap did by 5.1 degrees while a comment claimed otherwise.
 #
 # Formulated so it needs NO horizon row, no camera parameters and no tuned threshold: if
@@ -3121,7 +3121,7 @@ WATER_FOAM_BAND_BOX = (0.02, 0.26, 0.32, 0.31)
 WATER_FOAM_SHOALED_BOX = (0.02, 0.55, 0.32, 0.90)
 WATER_FOAM_BAND_MIN_PX = 300
 
-# The surface's mesh structure (spec 11.34). A large extent with the level at the eye's
+# The surface's mesh structure (spec 11.35). A large extent with the level at the eye's
 # height is the framing that stresses near AND far at once, which is what the grid has to
 # resolve simultaneously.
 WATER_CLIP_FLAGS = ["--water-waves", "fft", "--water-extent", "500",
@@ -3151,7 +3151,7 @@ WATER_GRID_TRIANGLES = 256 * 256 * 2
 # is 0.133 per channel; the floor here is a third of that.
 WATER_CRACK_MIN_DELTA = 0.04
 
-# Far-field filtering (spec 11.34 phase 2). A projected grid's distant cells cover more than
+# Far-field filtering (spec 11.35 phase 2). A projected grid's distant cells cover more than
 # a wave period, so evaluating the field at full detail there samples one arbitrary phase per
 # cell -- which is the speckle band the horizon gained the moment the surface reached it.
 # --no-water-lod is the control: it reports a zero footprint, which is full detail on every
@@ -5216,7 +5216,7 @@ GATE_GROUPS = [
     ("oit", "order-independent transparency (analytic card stack):", run_oit_gate),
     ("absorption", "volume absorption (path length and channel selectivity, spec 11.32):",
      run_absorption_gate),
-    ("water", "water surface (determinism, absorption, shoreline, reach; specs 11.32-11.34):",
+    ("water", "water surface (determinism, absorption, shoreline, reach; specs 11.32-11.35):",
      run_water_gate),
     ("clouds", "cloud layer (steady-state churn, report-only):", run_cloud_churn_gate),
     ("skin-offpath", "pre-integrated skin (off-path byte identity):", run_skin_offpath_gate),
