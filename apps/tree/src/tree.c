@@ -1268,10 +1268,22 @@ int main(int argc, char** argv) {
             // Wide fan: four octaves off one direction at this scale print as
             // corduroy, and the sea is most of the frame.
             water->spread = 0.85f;
-            // A lagoon rather than open ocean: a shorter sight line through the
-            // body than the library default, so the shallows over the dome's flank
-            // read green before they go blue.
-            glm_vec3_copy((vec3){0.10f, 0.035f, 0.020f}, water->absorption);
+            /*
+             * Optical properties. `absorption` is extinction per WORLD UNIT, and the
+             * library's default is clear water per METRE -- correct as it stands only
+             * where a unit IS a metre. This world is 22 units to it, so the default is
+             * DIVIDED rather than re-typed at this scale: the numerator stays in one
+             * place and cannot drift from the value it is meant to be.
+             *
+             * Authored per metre it was a sight line of about a metre, which is why
+             * nothing under the surface could be seen from anywhere.
+             *
+             * SCATTER is not divided. It is the colour the absorbed energy comes back
+             * as -- a radiance, with no length in it to convert. It is also where the
+             * lagoon now lives: greener than the library's open-ocean blue, against an
+             * extinction that is plain clear seawater.
+             */
+            glm_vec3_divs(water->absorption, GROUND_UNITS_PER_METRE, water->absorption);
             glm_vec3_copy((vec3){0.03f, 0.13f, 0.14f}, water->scatter);
             scene->water = water;
         }
