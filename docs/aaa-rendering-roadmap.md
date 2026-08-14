@@ -41,6 +41,30 @@ Ground truth that shapes every design below (library at `cetra/src/`, shaders at
   motion+linZ+roughness RGBA32F, att3 albedo+metallic RGBA8, att4 SSS-diffuse RGBA16F.
   **Attachments 5-7 free** on the main FBO (5/6 used only on the separate OIT FBO).
   Write-gating via `*_this_frame` flags from postfx `_wants_*` predicates.
+  - **RULE, and it is currently violated: nothing categorical or positional may live in a channel
+    that gets MSAA-resolved.** An MSAA colour resolve is a box filter
+    (`resolve_color_attachment`, `postfx.c:1992`, a `glBlitFramebuffer`), so it is only valid for
+    quantities linear in radiance. Two channels in the table above are not. **att4's alpha is a
+    categorical SSS profile tag** (`pbr_frag.glsl:2020-2021`) — the average of tag 2 and tag 0 is
+    tag 1, which does not mean "half of profile 2", it means *profile 1*, so meaning is destroyed
+    rather than degraded; at 4x MSAA a half-covered grass pixel in `apps/tree` is silently shaded
+    with the LEAF profile. **att2's `.z` is a view depth**, i.e. a position, and the average of two
+    surfaces is a surface that exists nowhere; averaged against the sky's 0 it inflates the SSS
+    gather's `basePx` and jumps it to a far coarser LOD. Together those are the reported
+    "popping fireflies" on flowers — MSAA-only, TAA-irrelevant, worst where every pixel is a
+    silhouette pixel. Untested suspects under the same rule: **att2's `.w` roughness** (averaging
+    roughness is wrong for the reason averaging normals is; the correct operation averages the
+    NDF — Toksvig/LEAN — which spec 11.35's far-field handover already does, so the engine gets
+    this right in one place and not in the resolve) and **att1's `.a` SSR marker**, a negative
+    alpha whose magnitude is the catcher's edge falloff, so part categorical and part continuous.
+    The fix is stencil for the tag (8 bits allocated at `engine.c:622/:624`, **zero first-party
+    `glStencil*` calls**) and the depth buffer for the depth, via a linearize pass — sampling the
+    resolved depth while stencil-testing the same texture is a **GL 4.1 feedback loop**, since the
+    write-mask carve-out is GL 4.5. Note the industry's answer to this exact incompatibility was
+    to stop multisampling the G-buffer: it is why MSAA left AAA after ~2013, and this engine's
+    interactive path is *already* 1-sample + TAA (`render.c:3029-3040`) and structurally immune —
+    the defect lives on the headless default and explicit `--taa --msaa N`. Full recipe and
+    feasibility check in `specs/11.36-water-clarity-at-world-scale.md`.
 - **Temporal primitive**: `PingPong` + `run_temporal_accum()` (`cetra/src/postfx.c:1143`) shared by
   TAA/AO/SSGI/SSR/fog/SSS; invalidation = `valid=false` on any skip; master gate `taa_resolving`.
 - **Pass template**: the fog pass is the canonical gated/lazy/half-res/temporal/composited postfx pass
@@ -873,6 +897,53 @@ geometry question, and it is where the remaining detail goes once no mesh can ca
 
 **So the tessellation stage is still entirely unspent** — POM silhouettes and D4 terrain remain its
 candidate first consumers, and neither inherits a pipeline from here.
+
+**Open items this entry still owns.** Recorded here rather than only in 11.35's history, because a
+closed spec is not where anyone looks for work that is still outstanding.
+
+1. **The projector aims at the still plane, not the displaceable slab.** Each lattice ray is
+   intersected with the flat plane — which is where the wave field is sampled — so the surface then
+   displaces and a wave can lift geometry into view from XZ the lattice never sampled. The nearest
+   point a ray can reach is `clearance / tan(top-of-frame angle)`. It bites when the eye is within
+   about one wave height of the surface: wading in `apps/tree --player`, a boat deck, a camera at sea
+   level. It is **why `water-submerged` sits on a shallow Gerstner framing** rather than the FFT one it
+   was written for. The fix is to offset the plane toward the eye by the max vertical displacement,
+   which costs zero lattice rows; the blocker is that nothing publishes a displacement bound. Gerstner
+   is analytic (`amplitude × Σ 0.44^i`, i<4, = **1.7188**). Spectral needs either the seeded
+   realisation's variance (exact, but the inverse FFT's normalisation has to be traced) or a
+   fetch-limited JONSWAP estimate (**≈1.2 units**, padded and labelled as padding — *not* a
+   Pierson-Moskowitz number: the seeding is JONSWAP+TMA and fetch-limited, so PM is the wrong spectrum
+   and is blind to `WATER_FETCH` and `WATER_SEA_DEPTH`). Note the single-plane offset **reduces rather
+   than removes** the artifact when the eye is *inside* the slab, because the horizon-row clamp still
+   cannot reach a crest projecting above the flat-plane horizon; Johanson's own two-plane construction
+   is the complete answer.
+2. **Water positions are absolute, so precision tracks distance from the world origin, not the
+   camera.** Measured: the same sea at 960 vs 307,200 units out differs by **227,458 px of 480,000**
+   (RMSE 0.0146) even though the spectral field is exactly periodic across the 960-unit cascade LCM, so
+   those two frames should be identical. Attributed with a flat-surface control — no waves, same
+   offset, PAE 4/255 against 77/255 with them — so it is the field lookup, not the view transform.
+   `p = camPos.xz + rd.xz * t` quantises to ~0.03 units at 3e5, which is 6% of the medium band's
+   texel. **No consumer today**: nothing in this tree exceeds ~1,000 units. And the correct fix is
+   engine-wide rather than water's — camera-relative rendering for everything, since water alone would
+   be precise standing beside jittering terrain. Full recipe in 11.35's phase 3 as-built.
+3. **The water gate corpus has a structural blind spot, and it has already cost one shipped defect.**
+   11.35's review round found the shoreline test reading a *cleared* depth buffer as bed geometry and
+   discarding every fragment past the last mesh — 40.6% of an `apps/tree` frame — while all 22 water
+   arms and all 23 goldens stayed green. It could not be caught: every water arm reads
+   `water_fixture`, and the defect's magnitude scales with (horizon distance / far plane), so on a
+   14-unit scene the affected strip is sub-degree and the fix moved that golden by 3,207 px of 480,000.
+   `water-horizon` is a reach-*invariance* arm, so the bug shifted both its frames equally;
+   `water-farfield`'s box is deliberately framed below the top edge so it cannot eat sky. Meanwhile
+   **`apps/forest --water` and `apps/tree` inherit the whole surface stack with zero pixel coverage
+   between them** — and tree is where the bug was found, by eye. A scene whose far plane is small
+   relative to the horizon is the instrument this corpus lacks.
+
+**Queued:** `specs/11.36-water-clarity-at-world-scale.md` — the absorption is authored per metre and
+stored per world unit, so `apps/tree` (22 units/m) is 4.9–8.6× too absorbing per channel, and
+`WATER_MAX_PATH` is a world-unit clamp justified in its own comment as an optical-depth budget. Fixing
+either half alone makes the frame worse. This also closes 11.35 phase 6's own open question, which
+named the water's optical properties as the blocker on a visible seabed.
+
 **Refs.** Tessendorf, *Simulating Ocean Water* (SIGGRAPH 2001 course); Johanson, *Real-time Water
 Rendering: Introducing the Projected Grid Concept* (2004) for the mesh that ships; Asirvatham & Hoppe
 (GPU Gems 2) for the clipmap it replaced, whose real home is D4 below.
