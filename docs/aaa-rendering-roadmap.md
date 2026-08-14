@@ -50,9 +50,11 @@ Ground truth that shapes every design below (library at `cetra/src/`, shaders at
     rather than degraded; at 4x MSAA a half-covered grass pixel in `apps/tree` is silently shaded
     with the LEAF profile. **att2's `.z` is a view depth**, i.e. a position, and the average of two
     surfaces is a surface that exists nowhere; averaged against the sky's 0 it inflates the SSS
-    gather's `basePx` and jumps it to a far coarser LOD. Together those are the reported
-    "popping fireflies" on flowers — MSAA-only, TAA-irrelevant, worst where every pixel is a
-    silhouette pixel. Untested suspects under the same rule: **att2's `.w` roughness** (averaging
+    gather's `basePx` and jumps it to a far coarser LOD. **Both are real defects, and neither is
+    the reported "popping fireflies" on flowers** — that attribution stood here until elimination
+    disproved it (spec 11.38). The cause was an extrapolated VARYING and these two amplified it,
+    the scatter pyramid faithfully spreading a genuinely out-of-range input. Fixing them is still
+    right; expecting the specks to go with them is not. Untested suspects under the same rule: **att2's `.w` roughness** (averaging
     roughness is wrong for the reason averaging normals is; the correct operation averages the
     NDF — Toksvig/LEAN — which spec 11.35's far-field handover already does, so the engine gets
     this right in one place and not in the resolve) and **att1's `.a` SSR marker**, a negative
@@ -64,7 +66,23 @@ Ground truth that shapes every design below (library at `cetra/src/`, shaders at
     to stop multisampling the G-buffer: it is why MSAA left AAA after ~2013, and this engine's
     interactive path is *already* 1-sample + TAA (`render.c:3029-3040`) and structurally immune —
     the defect lives on the headless default and explicit `--taa --msaa N`. Full recipe and
-    feasibility check in `specs/11.36-water-clarity-at-world-scale.md`.
+    feasibility check in `specs/11.37-sss-tag-and-depth-resolve.md`.
+  - **The SAME root cause on the INPUT side, and it is not fixable the same way** (spec 11.38).
+    The rule above is about the resolve: one box filter over N samples. Its sibling is that an
+    MSAA fragment **shades once per pixel at a point that may lie outside the primitive** —
+    coverage is per sample, shading is per pixel, so on a partly covered pixel a varying is
+    extrapolated and every value leaves the range its vertices bound. Both are the same
+    mismatch: shading rate is not coverage rate.
+    `RENDER_MODE_EXTRAPOLATION` measures it, exactly and on any asset, because `pbr_vert`
+    normalizes `Normal` and `buildTBN` the tangent, so a length above one proves a negative
+    barycentric weight. Live at 2,198 px on an `apps/tree` frame and 1,591 on raiden.
+    **`centroid` is the textbook fix and was measured and rejected**: it makes derivatives
+    inexact (undefined per the GL spec) and every remaining varying feeds one — `dFdx(Normal)`
+    the specular AA, `dFdx(WorldPos)` the curvature, UV gradients the hardware's texture LOD.
+    Every variant moves 9 to 22 goldens with the diff following the TESSELLATION across whole
+    surfaces, up to 310,313 px on the skin fixture. `VertexColor` already carries the qualifier
+    at 0 px moved because it is the one varying nothing differentiates. The real answer is the
+    one directly above: **do not multisample.** 1 sample + TAA is immune by construction.
 - **Temporal primitive**: `PingPong` + `run_temporal_accum()` (`cetra/src/postfx.c:1143`) shared by
   TAA/AO/SSGI/SSR/fog/SSS; invalidation = `valid=false` on any skip; master gate `taa_resolving`.
 - **Pass template**: the fog pass is the canonical gated/lazy/half-res/temporal/composited postfx pass
