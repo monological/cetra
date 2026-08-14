@@ -9,6 +9,14 @@ struct Engine;
 /*
  * First-person walker on the island (--player).
  *
+ * KEYBOARD ONLY, by choice. WASD moves and the arrow keys turn the head; the mouse does not
+ * touch the camera at all, and the cursor is never captured. That means the GUI sliders this
+ * app is built around stay clickable at all times with no mode to toggle -- and it removes a
+ * whole failure class with them: a mouse-look delta is a difference of two ABSOLUTE cursor
+ * readings, so anything that moves the cursor other than a hand (a warp, a focus round trip)
+ * arrives as camera motion, and a persistent one is a spin with no way out but quitting.
+ * Nothing here reads the cursor, so nothing can do that.
+ *
  * WHY NOT THE GAME FRAMEWORK. `cetra/src/game/` exists for exactly this and `apps/forest`
  * uses it -- a Jolt CharacterVirtual on a triangle-mesh collider. It is the wrong trade here:
  * this island's surface is `ground_height_at`, a closed form, so a mesh collider would be a
@@ -40,7 +48,6 @@ struct Engine;
  * So this is a game speed chosen from TRAVERSAL TIME, which is the thing that actually decides
  * how the mode feels: 80 units/s puts the shore about 4 seconds away and the far seabed about
  * 35, with sprint cutting both to under half. It reads as roughly a jog at this scale.
- * --walk-speed overrides it, because feel is not something to settle by rebuild.
  */
 #define PLAYER_WALK_SPEED  80.0f
 #define PLAYER_SPRINT_MULT 2.5f
@@ -48,43 +55,40 @@ struct Engine;
 // half a body height, i.e. a jump rather than a leap.
 #define PLAYER_GRAVITY    216.0f
 #define PLAYER_JUMP_SPEED 100.0f
+/*
+ * Arrow-key look, radians per SECOND. A rate, not a displacement, so it is scaled by the frame
+ * delta -- otherwise the turn speed is whatever the frame rate is.
+ *
+ * Slower than it looks like it should be. A key cannot modulate its own rate the way a hand on
+ * a mouse can, so it is stuck at one speed and that speed has to be comfortable for a whole
+ * turn rather than quick for a glance. 1.0 rad/s is a bit under 60 degrees a second.
+ */
+#define PLAYER_LOOK_RATE 1.0f
 
 typedef struct Player {
-    vec3 feet; // world position of the soles; the camera sits PLAYER_EYE_HEIGHT above
+    vec3 feet;   // world position of the soles; the camera sits PLAYER_EYE_HEIGHT above
+    float yaw;   // radians, 0 = -Z
+    float pitch; // radians, clamped short of straight up/down
+    float vertical_velocity;
+    bool grounded;
+
     /*
      * Tunables. player_init seeds them and the caller overwrites what a flag asked for, rather
      * than each one becoming another init parameter -- they are plain data with no invariant
      * between them, and the alternative was a six-argument constructor.
      */
-    // Units per second on the flat, before the sprint multiplier.
-    float walk_speed;
-    // true = the up arrow looks DOWN. Default, and it applies to the ARROWS ONLY: the mouse is
-    // a direct pointing device where inversion is a minority taste, while an arrow key is a
-    // pitch lever and up-is-down is the older convention for those.
-    bool invert_arrow_pitch;
-    // Where the head is pointing. Driven by the mouse and by the arrow keys, additively: one is
-    // a displacement per pixel and the other a rate per second, which is why only the second is
-    // scaled by the frame delta.
-    float yaw;   // radians, 0 = -Z
-    float pitch; // radians, clamped short of straight up/down
-    float vertical_velocity;
-    bool grounded;
-    // Mouse look is only live while the cursor is captured, so the ImGui sliders this app is
-    // built around stay reachable. Toggled with Tab.
-    bool mouse_captured;
-    bool warp_pending;  // skip one frame's delta after a capture, or the view snaps
-    bool look_was_live; // so a focus regain re-seeds too, not only a capture
-    double last_mouse_x, last_mouse_y;
+    float walk_speed; // units/s on the flat, before the sprint multiplier
+    float look_rate;  // radians/s of head turn
+    // true = the up arrow looks DOWN. Default. PITCH only: yaw is never inverted, because left
+    // means left in every convention there is.
+    bool invert_pitch;
 } Player;
 
-// Spawn standing on the ground at (x, z), looking at `yaw`. Captures the cursor and seeds the
-// tunables above to their defaults; overwrite them afterwards to change them.
+// Spawn standing on the ground at (x, z), looking at `yaw`, with the tunables above at their
+// defaults; overwrite them afterwards to change them.
 void player_init(Player* p, struct Engine* engine, float x, float z, float yaw);
 
 // Advance one frame and write the result to the engine camera. `dt` is the frame delta.
 void player_update(Player* p, struct Engine* engine, float dt);
-
-// Tab toggles cursor capture. Returns true if the key was consumed.
-bool player_on_key(Player* p, struct Engine* engine, int key, int action);
 
 #endif // _PLAYER_H_

@@ -545,11 +545,8 @@ void mouse_button_callback(Engine* engine, int button, int action, int mods) {
 void key_callback(Engine* engine, int key, int scancode, int action, int mods) {
     (void)scancode;
 
-    // The walker owns Tab; its WASD is polled per frame rather than event-driven, because a
-    // key-repeat stream is not a velocity.
-    if (player && player_on_key(player, engine, key, action)) {
-        return;
-    }
+    // Nothing for the walker here: every key it reads is a HELD state, and a key-repeat stream
+    // of events is not a velocity. It polls in player_update instead.
 
     // Camera movement
     if (drag_controller && camera_controller_on_key(drag_controller, key, action, mods)) {
@@ -649,6 +646,7 @@ typedef struct {
     float fov;          // vertical, radians; 0 = the app's own framing
     int player;         // first-person walker instead of the orbit camera
     float walk_speed;   // units/s on the flat; 0 = the walker's own default
+    float look_rate;    // radians/s of head turn; 0 = the walker's own default
     int arrows_upright; // up arrow looks UP; the walker's default is inverted
 } TreeArgs;
 
@@ -674,13 +672,16 @@ static void print_usage(const char* prog) {
     printf("      --cam-target x,y,z  Pin what it looks at\n");
     printf("      --cam-up x,y,z      Pin the up vector\n");
     printf("      --fov D             Vertical field of view, DEGREES\n");
-    printf("      --player            Walk the island. WASD moves, mouse OR arrow keys turn\n");
-    printf("                          the head, Shift runs, Space jumps, Tab releases the\n");
-    printf("                          cursor for the GUI. With --cam-eye, spawn at its x,z\n");
+    printf("      --player            Walk the island. WASD moves, ARROWS turn the head,\n");
+    printf("                          Shift runs, Space jumps. Keyboard only -- the mouse\n");
+    printf("                          never moves the camera, so the GUI stays clickable.\n");
+    printf("                          With --cam-eye, spawn at its x,z\n");
     printf("      --walk-speed U      Units/s on the flat (default %.0f; implies --player)\n",
            (double)PLAYER_WALK_SPEED);
-    printf("      --no-invert-arrows  Up arrow looks UP. Default is inverted, arrows only --\n");
-    printf("                          the mouse is never inverted either way\n");
+    printf("      --look-rate D       Head turn, DEGREES/s (default %.0f; implies --player)\n",
+           (double)(PLAYER_LOOK_RATE * 180.0f / (float)M_PI));
+    printf("      --no-invert-arrows  Up arrow looks UP; the default is inverted (pitch only,\n");
+    printf("                          never yaw)\n");
     printf("  -h, --help              This message\n");
 }
 
@@ -727,6 +728,10 @@ static bool parse_args(int argc, char** argv, TreeArgs* a) {
             a->player = 1;
         } else if (!strcmp(s, "--walk-speed") && has_next) {
             a->walk_speed = (float)atof(argv[++i]);
+            a->player = 1;
+        } else if (!strcmp(s, "--look-rate") && has_next) {
+            // Degrees per second in, radians out, like --fov and the sun angles.
+            a->look_rate = (float)atof(argv[++i]) * (float)M_PI / 180.0f;
             a->player = 1;
         } else if (!strcmp(s, "--no-invert-arrows")) {
             a->arrows_upright = 1;
@@ -922,8 +927,10 @@ int main(int argc, char** argv) {
                     args.cam_eye_set ? atan2f(spawn_x, spawn_z) : bearing);
         if (args.walk_speed > 0.0f)
             player->walk_speed = args.walk_speed;
+        if (args.look_rate > 0.0f)
+            player->look_rate = args.look_rate;
         if (args.arrows_upright)
-            player->invert_arrow_pitch = false;
+            player->invert_pitch = false;
     } else {
         drag_controller = create_mouse_drag_controller(engine);
     }

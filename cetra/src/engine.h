@@ -410,6 +410,10 @@ void set_engine_key_callback(Engine* engine, KeyCallback key_callback);
 void set_engine_scroll_callback(Engine* engine, ScrollCallback scroll_callback);
 // True when the GUI is capturing the pointer this frame; apps gate 3D input on it.
 bool engine_gui_wants_mouse(void);
+// The keyboard equivalent. The engine already applies this to the app's key CALLBACK, but an
+// app that POLLS key state per frame -- which is what a held movement key has to be -- needs to
+// ask the same question itself, or typing in a slider also walks.
+bool engine_gui_wants_keyboard(void);
 
 // Camera
 void set_engine_camera(Engine* engine, Camera* camera);

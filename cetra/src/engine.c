@@ -1014,7 +1014,7 @@ bool engine_gui_wants_mouse(void) {
     return igGetIO_Nil()->WantCaptureMouse;
 }
 
-static bool engine_gui_wants_keyboard(void) {
+bool engine_gui_wants_keyboard(void) {
     return igGetIO_Nil()->WantCaptureKeyboard;
 }
 
