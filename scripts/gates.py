@@ -5199,6 +5199,133 @@ def _run_import_gates(workdir):
     return run_range_gate() + run_fbx_unit_gate()
 
 
+SSS_TAG_FIXTURE = "sss_msaa_fixture.cscn"
+SSS_TAG_SIZE = ("400", "300")
+# The tag-2 sphere, in WORLD space: sss_fixture.gltf puts unit spheres at x = +/-1.3, y = 1.0.
+# Projected rather than measured off the image, because the obvious way to find a sphere -- the
+# extent of the pixels its own hue dominates -- includes its SCATTER HALO, so the radius it
+# reports moves with the very thing being measured. Two renders then read different rings and
+# the drift reads as signal: measured 19% that way against 3.6% with the rings pinned here.
+SSS_TAG_CENTRE = (1.3, 1.0, 0.0)
+SSS_TAG_TOP = (1.3, 2.0, 0.0)
+# Bands as multiples of the silhouette radius. `inner` is fully covered and is the control;
+# `outer` is where a misfiled rim pixel's wider, differently weighted bleed lands.
+SSS_TAG_INNER = (0.70, 0.90)
+SSS_TAG_OUTER = (1.10, 1.45)
+# Measured 3.6% on this fixture (R/G 0.7380 with two profiles against 0.7126 with one). Bar an
+# order below the effect, because what is detected is presence, not amount.
+SSS_TAG_MIN_SHIFT = 0.015
+# And the fully covered interior must NOT move -- that is what makes the outer shift
+# attributable to partial coverage rather than to the second profile existing at all.
+SSS_TAG_INNER_TOL = 0.008
+
+
+def _sss_arc_rgb(pix, w, h, cx, cy, r0, r1):
+    """Mean linear RGB over the OUTER half (px >= cx) of an annulus.
+
+    Half, not the whole ring: profile a's own halo reaches toward the gap between the spheres,
+    and in the one-profile twin that halo is absent -- so the near side carries a difference
+    that is nothing to do with the tag. To the right there is only background.
+    """
+    s = [0.0, 0.0, 0.0]
+    n = 0
+    for py in range(max(0, int(cy - r1)), min(h, int(cy + r1) + 1)):
+        for px in range(max(0, int(cx)), min(w, int(cx + r1) + 1)):
+            if not (r0 <= ((px - cx) ** 2 + (py - cy) ** 2) ** 0.5 <= r1):
+                continue
+            o = (py * w + px) * 3
+            s[0] += _SRGB_TO_LINEAR[pix[o]]
+            s[1] += _SRGB_TO_LINEAR[pix[o + 1]]
+            s[2] += _SRGB_TO_LINEAR[pix[o + 2]]
+            n += 1
+    return [v / max(n, 1) for v in s], n
+
+
+def _sss_tag_render(workdir, tag, scene):
+    out = os.path.join(workdir, f"ssstag_{tag}.ppm")
+    cmd = [RENDER, "-m", scene, "-x", "-f", "30", "-W", SSS_TAG_SIZE[0], "-H", SSS_TAG_SIZE[1],
+           "--msaa", "4", "-S", out]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0 or not os.path.exists(out):
+        return None
+    return out
+
+
+def _sss_tag_bands(path, cam):
+    """(inner R/G, outer R/G) on the tag-2 sphere's outer arc."""
+    w, h, pix = _read_ppm(path)
+    project = _projector(cam, w, h)
+    cx, cy = project(SSS_TAG_CENTRE)
+    tx, ty = project(SSS_TAG_TOP)
+    rad = ((tx - cx) ** 2 + (ty - cy) ** 2) ** 0.5
+    out = []
+    for r0, r1 in (SSS_TAG_INNER, SSS_TAG_OUTER):
+        rgb, _ = _sss_arc_rgb(pix, w, h, cx, cy, rad * r0, rad * r1)
+        out.append(rgb[0] / max(rgb[1], 1e-9))
+    return out
+
+
+def run_sss_tag_gate(workdir):
+    """A categorical profile tag cannot survive an MSAA colour resolve (spec 11.37).
+
+    Which SSS profile a pixel belongs to is stored as a LABEL in attachment 4's alpha -- 0 not
+    skin, 1 the first profile, 2 the second -- and that attachment is resolved by a blit, which
+    is a box filter. Averaging a label destroys it rather than degrading it: the mean of 2 and
+    the uncovered 0 is 1, which does not mean "half of profile 2", it means PROFILE 1. So the
+    partly covered pixels of the tag-2 sphere are blurred with the wrong profile.
+
+    Sample count is held FIXED at 4x and the two frames differ only in whether a second profile
+    EXISTS to be misfiled into -- with one profile the same averaging is harmless, because a
+    pixel either rounds back to that tag or to 0 and is dropped. That isolation is the whole
+    design: comparing 4x against 1 sample instead makes antialiasing the dominant term, and it
+    moves the rim the OPPOSITE way (0.4396 against 0.4648), so it would read as the defect
+    being absent.
+
+    This arm CHARACTERIZES an open defect at its measured size; it is not an invariant yet.
+    Phase 2 moves the tag into stencil, which is integer and per-sample, and then these two
+    frames should AGREE -- at which point this arm inverts. That is a deliberate edit here, not
+    something to discover when it starts failing.
+    """
+    scene = os.path.join(ROOT, "assets", SSS_TAG_FIXTURE)
+    if not os.path.exists(scene):
+        print(f"  sss-tag      SKIP  ({SSS_TAG_FIXTURE} not present)")
+        return []
+
+    twin = os.path.join(workdir, "sss_msaa_one.cscn")
+    cscn_copy(scene, twin, lambda d: d["materials"].pop("sss_skin_a", None))
+
+    two = _sss_tag_render(workdir, "two", scene)
+    one = _sss_tag_render(workdir, "one", twin)
+    if not two or not one:
+        print("  sss-tag      ERROR while rendering the profile-count pair")
+        return ["sss-tag"]
+
+    cam = _cscn_camera(SSS_TAG_FIXTURE)
+    two_inner, two_outer = _sss_tag_bands(two, cam)
+    one_inner, one_outer = _sss_tag_bands(one, cam)
+
+    failures = []
+    shift = (two_outer - one_outer) / max(one_outer, 1e-9)
+    ok = shift >= SSS_TAG_MIN_SHIFT
+    print(f"  sss-tag      {'PASS' if ok else 'FAIL'}  outer band R/G {two_outer:.4f} with two "
+          f"profiles vs {one_outer:.4f} with one, {shift * 100.0:+.2f}% "
+          f"(want >= {SSS_TAG_MIN_SHIFT * 100.0:.1f}%: the tag-2 rim is taking profile a's "
+          f"weights. An OPEN defect -- phase 2 inverts this arm)")
+    if not ok:
+        failures.append("sss-tag")
+
+    drift = abs(two_inner - one_inner) / max(one_inner, 1e-9)
+    ok = drift <= SSS_TAG_INNER_TOL
+    print(f"  sss-tag-core {'PASS' if ok else 'FAIL'}  fully covered interior R/G "
+          f"{two_inner:.4f} vs {one_inner:.4f}, {drift * 100.0:.2f}% apart "
+          f"(want <= {SSS_TAG_INNER_TOL * 100.0:.1f}%: a pixel at full coverage has nothing to "
+          f"average, so this is what makes the shift above attributable to the silhouette)")
+    if not ok:
+        failures.append("sss-tag-core")
+
+    return failures
+
+
 VARY_FIXTURE = "varying_fixture.cscn"
 # The UV control quad, as fractions of the frame. It is the only surface in the scene with UVs
 # authored outside [0,1], so it is how the frame separates "authored out of range" from
@@ -5380,6 +5507,8 @@ GATE_GROUPS = [
     ("lod", "LOD chains (selection by projected size, spec 11.28 Phase 6):", run_lod_gate),
     ("mask", "alpha mask (binary above the cutoff, spec 11.31):", run_mask_gate),
     ("varying", "varyings under partial coverage (spec 11.38):", run_varying_gate),
+    ("sss-tag", "subsurface profile tag through the MSAA resolve (spec 11.37):",
+     run_sss_tag_gate),
     ("overdraw", "depth complexity (a scene whose answer is known, spec 11.31):",
      run_overdraw_gate),
     ("prepass", "depth prepass (identical picture, less shading, spec 11.30 / E6):",
