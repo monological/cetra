@@ -259,15 +259,20 @@ static float prev_season = -1.0f;
 /*
  * A sunset, and both numbers are derived rather than dialled.
  *
- * ELEVATION 8. Low sun is what the Hillaire atmosphere turns orange -- the slant path through
- * the air is long, Rayleigh scattering takes the blue out of it, and because the sky couples the
- * key light through its own transmittance LUT the DIRECT light warms with the sky rather than
- * only the backdrop. Measured on the beach, which is a diffuse near-neutral surface so its tint
- * is the light's tint: R/B goes 1.42 at 14 degrees to 1.59 at 6. Below about 2 it inverts to
- * 0.23, blue, because the sun is extinguished and skylight is all that is left -- which is real
- * twilight and not a bug. The floor is the SHADOW MAP: it needs roughly
- * 2 * (radius + treeHeight / tan(elevation)), which is 5,997 of a 6,000 budget at 6 degrees and
- * 4,798 at 8. So 8 is the lowest elevation with margin, not the lowest that renders.
+ * ELEVATION 0.8, chosen for the look. Low sun is what the Hillaire atmosphere turns orange --
+ * the slant path through the air is long, Rayleigh scattering takes the blue out of it, and
+ * because the sky couples the key light through its own transmittance LUT the DIRECT light warms
+ * with the sky rather than only the backdrop. Measured on the beach, which is a diffuse
+ * near-neutral surface so its tint is the light's tint: R/B goes 1.42 at 14 degrees to 1.59 at 6,
+ * then inverts toward blue below about 2 as the sun extinguishes and skylight becomes all there
+ * is -- real twilight, not a bug, and this default sits inside that last stretch.
+ *
+ * Two things it gives up, recorded so they are not rediscovered as defects. The direct sun is
+ * nearly gone at this elevation, so the frame is lit mostly by sky and is DARK. And the shadow
+ * map cannot hold it: the span it needs is roughly 2 * (radius + treeHeight / tan(elevation)),
+ * which is 4,798 units at 8 degrees against a 6,000 budget and about 37,000 here -- so shadows
+ * run off the map rather than reaching across the island. --sun-elevation 8 is the framing that
+ * keeps both.
  *
  * AZIMUTH 193. sun_dir is (cos(el)sin(az), sin(el), cos(el)cos(az)), so putting the sun behind
  * the tree from a camera at (140, ., 600) is atan2(-140, -600) = 193 degrees. That is what makes
@@ -275,7 +280,7 @@ static float prev_season = -1.0f;
  * it back, and the trunk goes to silhouette. A few degrees more brings the disc out from behind
  * the tree -- 210 shows it clear of the trunk, over open water.
  */
-static float sun_elevation = 8.0f;
+static float sun_elevation = 0.8f;
 static float sun_azimuth = 193.0f;
 
 /*
@@ -779,7 +784,7 @@ static bool parse_args(int argc, char** argv, TreeArgs* a) {
     a->width = (int)WIDTH;
     a->height = (int)HEIGHT;
     a->seed = 42;
-    a->sun_elevation = 8.0f;
+    a->sun_elevation = 0.8f;
     a->sun_azimuth = 193.0f;
     // 0 is a legal water level -- it is the dome's summit -- so the unset value has
     // to sit outside every plausible one.
