@@ -60,6 +60,14 @@ _Static_assert(IBL_SKYBOX_TEXTURE_UNIT < 16,
 _Static_assert(GI_ATLAS_TEXTURE_UNIT == IBL_SKYBOX_TEXTURE_UNIT,
                "GI atlas unit is the skybox unit reused; pbr_frag samples neither cube");
 
+// The cloud shadow map's unit in catcher_frag, which is not pbr_frag and is nowhere near
+// the limit: that program declares exactly two samplers, this one and the cascade array
+// csm.glsl brings. Unit 0 rather than a number borrowed from the ledger above, because
+// nothing the catcher draws has a material and so none of those slots means anything here.
+#define CATCHER_CLOUD_SHADOW_UNIT 0
+_Static_assert(CATCHER_CLOUD_SHADOW_UNIT != SHADOW_MAP_TEXTURE_UNIT,
+               "the catcher's cloud shadow unit collides with its own cascade array");
+
 // Global animation state for skinned mesh rendering (set via set_render_animation_state)
 static AnimationState* g_current_animation_state = NULL;
 
@@ -1309,6 +1317,9 @@ void render_current_scene(Engine* engine) {
         uniform_set_int(catcher->uniforms, "surfaceMode", ssr_floor ? 1 : 0);
         uniform_set_int(catcher->uniforms, "numShadowLights", (int)ss->directional_count);
         uniform_set_float(catcher->uniforms, "shadowBias", ss->shadow_bias);
+        // The deck darkens the catcher the way a caster does (spec 11.41). Its own unit
+        // rather than pbr_frag's alias: this program declares one sampler, not sixteen.
+        sky_bind_cloud_shadow(scene->sky, catcher, CATCHER_CLOUD_SHADOW_UNIT);
 
         // Weight each caster's shadow by its light's share of analytic light
         float weights[MAX_SHADOW_LIGHTS] = {0};

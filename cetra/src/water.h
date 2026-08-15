@@ -59,6 +59,10 @@
 // Only the long and medium bands reach the mesh; the short one shades the interface
 // and never displaces, so it has no previous position to remember.
 #define WATER_PREV_CASCADES 2
+// The cloud deck's sun transmittance (spec 11.41). 11 is the IBL irradiance cubemap,
+// which is a different binding point on the same unit -- the same reasoning the depth
+// and bed units above rest on, and this program samples no irradiance.
+#define WATER_CLOUD_SHADOW_UNIT 11
 
 // Resolution of the baked bed heightfield. It only has to resolve the SHOALING
 // ramp -- how fast the water shallows -- not the terrain's own detail, which the

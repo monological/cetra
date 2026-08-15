@@ -10,6 +10,7 @@
 #include "profiler.h"
 #include "program.h"
 #include "scene.h"
+#include "sky.h" // sky_bind_cloud_shadow (the deck dims the caustics)
 #include "texture.h"
 #include "uniform.h"
 #include "util.h"
@@ -935,6 +936,10 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
     uniform_set_vec3(u, "sunDir", (const float*)&sun_dir);
     uniform_set_int(u, "sunAvailable", has_sun ? 1 : 0);
     uniform_set_int(u, "causticsEnabled", water->caustics ? 1 : 0);
+    // The deck dims the caustics it focuses (spec 11.41). The only place cloud shadow
+    // enters this program: water has no analytic sun lobe to occlude, and its reflection
+    // is an environment lookup that already carries the deck.
+    sky_bind_cloud_shadow(scene->sky, program, WATER_CLOUD_SHADOW_UNIT);
 
     // Which side of the surface the eye is on. Compared against the still level
     // rather than the displaced surface: a camera within a wave height of the
