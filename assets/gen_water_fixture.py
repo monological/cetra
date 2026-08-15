@@ -59,19 +59,34 @@ def mesh_bytes(positions, normals, indices):
 # near end. A sheet, not a solid -- the camera sits below its extended plane, so what
 # the "dry land" boxes read is its underside. Fine for an emissive surface, and worth
 # knowing before assuming a box is looking at a beach.
+# The ramp descends TOWARD the camera: deep at the near edge, dry at the far one.
+#
+# The other way round -- which this was until 11.42 -- puts the high edge nearest the eye,
+# and then the surface's own plane climbs past the camera (to y 2.78 at the eye's z, against
+# an eye at 1.35). The camera is then BELOW the plane it is looking at, so the frame shows
+# the ramp's underside, the near edge occludes the far one, and a zero-thickness quad seen
+# that way reads as a paper blade slicing the water rather than as ground.
 wedge_positions = [
-    (-WEDGE_HALF_X, WEDGE_LOW, WEDGE_FAR_Z),
-    (WEDGE_HALF_X, WEDGE_LOW, WEDGE_FAR_Z),
-    (WEDGE_HALF_X, WEDGE_HIGH, WEDGE_NEAR_Z),
-    (-WEDGE_HALF_X, WEDGE_HIGH, WEDGE_NEAR_Z),
+    (-WEDGE_HALF_X, WEDGE_LOW, WEDGE_NEAR_Z),
+    (WEDGE_HALF_X, WEDGE_LOW, WEDGE_NEAR_Z),
+    (WEDGE_HALF_X, WEDGE_HIGH, WEDGE_FAR_Z),
+    (-WEDGE_HALF_X, WEDGE_HIGH, WEDGE_FAR_Z),
 ]
-# One normal for the whole ramp; it is planar.
-_dy = WEDGE_HIGH - WEDGE_LOW
-_dz = WEDGE_NEAR_Z - WEDGE_FAR_Z
-_len = (_dy * _dy + _dz * _dz) ** 0.5
-wedge_normal = (0.0, _dz / _len, -_dy / _len)
+# One normal for the whole ramp; it is planar. Taken from the edge vectors rather than
+# written down, so it follows the positions above instead of having to be re-derived by
+# hand whenever they move -- which is how it came to disagree with them in the first place.
+_e1 = tuple(b - a for a, b in zip(wedge_positions[0], wedge_positions[1]))
+_e2 = tuple(b - a for a, b in zip(wedge_positions[0], wedge_positions[2]))
+_n = (_e1[1] * _e2[2] - _e1[2] * _e2[1],
+      _e1[2] * _e2[0] - _e1[0] * _e2[2],
+      _e1[0] * _e2[1] - _e1[1] * _e2[0])
+_len = (_n[0] * _n[0] + _n[1] * _n[1] + _n[2] * _n[2]) ** 0.5
+wedge_normal = tuple(c / _len for c in _n)
+assert wedge_normal[1] > 0.0, "the ramp's normal must point up out of the ground"
 wedge_normals = [wedge_normal] * 4
-wedge_indices = [0, 2, 1, 0, 3, 2]
+# Wound so the front face is the lit one: this order's cross product is the normal above,
+# which the assert pins.
+wedge_indices = [0, 1, 2, 0, 2, 3]
 
 floor_positions = [
     (-FLOOR_HALF, FLOOR_Y, -FLOOR_HALF),

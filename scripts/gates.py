@@ -4388,8 +4388,10 @@ def run_water_gate(workdir):
             if not os.path.exists(regenerated):
                 drifted.append(f"{name}: not emitted")
                 continue
-            with open(committed) as a, open(regenerated) as b:
-                if a.read() != b.read():
+            # NOT `a`/`b`: those are live render paths in this function, and binding file
+            # handles to them here fed a TextIOWrapper to compare() several arms later.
+            with open(committed) as f_committed, open(regenerated) as f_regenerated:
+                if f_committed.read() != f_regenerated.read():
                     drifted.append(name)
         ok = not drifted
         print(f"  water-fixture-roundtrip {'PASS' if ok else 'FAIL'}  regenerated 2 files, "
