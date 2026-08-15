@@ -311,6 +311,22 @@ void compute_cascade_light_space_matrix(vec3 direction, const CascadeCamera* cam
 // nowhere else.
 void shadow_upload_cascade_uniforms(const ShadowSystem* system, UniformManager* u);
 
+/*
+ * Everything csm.glsl's CSM_OUTERMOST_PCF path reads, on a caller-chosen unit, plus the
+ * array itself. For consumers that take only the widest cascade -- the shadow catcher, the
+ * water surface -- and have no punctual, PCSS or per-fragment cascade uniforms to fill.
+ *
+ * `unit` is a parameter because that is the only thing separating those callers from the
+ * full binder: water already carries a sampler2D on SHADOW_MAP_TEXTURE_UNIT, and declaring
+ * two sampler types against one image unit is an INVALID_OPERATION at draw.
+ *
+ * Returns whether any directional light casts this frame. Callers that publish their own
+ * "which slot" uniform must derive it from this return rather than from the light, or the
+ * shader can take a lookup the binding never armed.
+ */
+bool bind_outermost_cascades_to_program(const ShadowSystem* system, ShaderProgram* program,
+                                        int unit);
+
 // Shadow map binding for main render pass
 void bind_shadow_maps_to_program(ShadowSystem* system, ShaderProgram* program);
 

@@ -394,6 +394,56 @@ void shadow_upload_cascade_uniforms(const ShadowSystem* system, UniformManager* 
         glUniform4fv(loc, layers, (const GLfloat*)system->cascade_params);
 }
 
+/*
+ * The CSM_OUTERMOST_PCF subset, on a caller-chosen unit.
+ *
+ * csm.glsl says its names "are a contract with ONE C function", and that was true until
+ * three consumers needed only the widest cascade and two of them hand-rolled it at the call
+ * site rather than take bind_shadow_maps_to_program's punctual, PCSS and MSM state they
+ * have no uniforms for. Both copies then drifted the same way: neither uploaded msmEnabled
+ * or tsmEnabled, so under --msm they read the depth array while every other surface reads
+ * moments, and under --translucent-shadows csmTransmittance short-circuits to 1.0 and a
+ * translucent caster casts NOTHING -- which csm.glsl itself calls out as worse than the
+ * feature being off.
+ *
+ * The unit is the parameter because it is the only thing those callers actually needed:
+ * water carries cascadePrev1 on SHADOW_MAP_TEXTURE_UNIT, and two sampler TYPES against one
+ * image unit is an INVALID_OPERATION at draw.
+ *
+ * Returns whether anything casts, so the caller publishes its own "no slot" from the same
+ * expression that decided the binding rather than from a second one beside it.
+ */
+bool bind_outermost_cascades_to_program(const ShadowSystem* system, ShaderProgram* program,
+                                        int unit) {
+    if (!system || !program || !program->uniforms)
+        return false;
+
+    UniformManager* u = program->uniforms;
+    const bool on = system->enabled;
+    const bool directional_on = on && system->directional_count > 0 && system->shadow_map_array;
+    // msm_built and tsm_built, never the _enabled flags -- the flag can be on with nothing
+    // resolved, and the lookup has to keep working then. Same reasoning as the full binder.
+    const bool msm_on = on && system->msm_built;
+
+    // Bound even when nothing casts: a sampler2DArray must resolve to something for the
+    // program to be complete.
+    glActiveTexture(GL_TEXTURE0 + unit);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, msm_on ? system->msm_array : system->shadow_map_array);
+    uniform_set_int(u, "shadowMaps", unit);
+    uniform_set_int(u, "msmEnabled", msm_on ? 1 : 0);
+    uniform_set_int(u, "tsmEnabled", (on && system->tsm_built) ? 1 : 0);
+    uniform_set_float(u, "msmBleed", system->msm_bleed);
+    uniform_set_int(u, "numShadowLights", directional_on ? (int)system->directional_count : 0);
+    if (!directional_on)
+        return false; // nothing below is read at count 0
+
+    const float texel_size = 1.0f / (float)system->default_map_size;
+    uniform_set_vec2(u, "shadowTexelSize", (vec2){texel_size, texel_size});
+    uniform_set_float(u, "shadowBias", system->shadow_bias);
+    shadow_upload_cascade_uniforms(system, u);
+    return true;
+}
+
 // Bind whatever this frame's depth pass produced. Call UNCONDITIONALLY: every
 // per-light-type gate lives here, so a caller never has to know which types can
 // cast. That is deliberate. The gate used to sit at the call site, testing a

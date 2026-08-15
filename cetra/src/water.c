@@ -143,8 +143,8 @@ static float _water_jonswap(float omega, float peak_omega, float alpha, float tm
 }
 
 /*
- * Seed one cascade: the conjugate-symmetric initial spectrum, the per-mode wave
- * vector and dispersion, and (once) the Stockham twiddle table.
+ * Seed one cascade: the conjugate-symmetric initial spectrum, and the per-mode wave
+ * vector and dispersion.
  *
  * initial holds h0(k) in .xy and conj(h0(-k)) in .zw, which is what lets the
  * evolution step produce a REAL surface from one complex multiply per mode
@@ -152,8 +152,7 @@ static float _water_jonswap(float omega, float peak_omega, float alpha, float tm
  */
 static bool _water_build_spectrum(int size, const struct WaterCascadeConfig* cfg,
                                   const WaterSeaState* sea, float wind_angle, float* initial,
-                                  float* wave_data, float* twiddle, float* out_height_var,
-                                  float* out_slope_var) {
+                                  float* wave_data, float* out_height_var, float* out_slope_var) {
     const float g = 9.81f;
     const float delta_k = 6.28318530718f / cfg->length_scale;
     // Guarded rather than trusted: these are authored now, and a zero wind speed or fetch
@@ -307,11 +306,18 @@ static bool _water_build_spectrum(int size, const struct WaterCascadeConfig* cfg
     if (out_slope_var)
         *out_slope_var = (float)(4.0 * sum_k2_a2);
 
-    if (!twiddle)
-        return true;
-    // Stockham twiddles: per stage and per output index, the rotation and the two
-    // input indices the butterfly reads. Precomputing the INDICES is what keeps
-    // the shader a pure gather with no bit-reversal pass of its own.
+    return true;
+}
+
+/*
+ * Stockham twiddles: per stage and per output index, the rotation and the two input
+ * indices the butterfly reads. Precomputing the INDICES is what keeps the shader a
+ * pure gather with no bit-reversal pass of its own.
+ *
+ * A function of the transform SIZE alone -- no cascade, no sea state -- which is why
+ * one table serves every cascade and why a re-seed leaves it standing.
+ */
+static void _water_build_twiddle(int size, float* twiddle) {
     for (int stage = 0; stage < WATER_SPECTRUM_LOG; stage++) {
         const int block = size >> (stage + 1);
         for (int out = 0; out < size / 2; out++) {
@@ -331,7 +337,6 @@ static bool _water_build_spectrum(int size, const struct WaterCascadeConfig* cfg
             hi[3] = (float)(first + block);
         }
     }
-    return true;
 }
 
 Water* create_water(void) {
@@ -717,23 +722,27 @@ static void _water_record_seed(Water* water) {
 }
 
 /*
- * Rebuild the two seed textures from the current sea state.
+ * Build the two seed textures, and the cascade variances with them, from the current
+ * sea state. The first build and every later re-seed run this same body.
  *
- * Only those two: the transformed fields, their framebuffers and the twiddle table are
- * functions of the RESOLUTION alone, so a re-seed touches none of them and the ping-pong
- * keeps running through the change. Deleting and recreating rather than sub-uploading,
- * because that reuses the one texture-creation policy this file already states.
+ * Only those two textures: the transformed fields, their framebuffers and the twiddle
+ * table are functions of the RESOLUTION alone, so a re-seed touches none of them and the
+ * ping-pong keeps running through the change. Deleting and recreating rather than
+ * sub-uploading, because that reuses the one texture-creation policy this file already
+ * states -- and glDeleteTextures on a zero handle is defined as a no-op, which is what
+ * lets the first build take the same path.
  *
- * A failure here leaves the previous spectrum in place and says so. That is the
- * conservative direction: the alternative is a half-written seed, which transforms into a
- * plausible-looking sea that is not the one asked for.
+ * A failure leaves the previous spectrum in place. That is the conservative direction:
+ * the alternative is a half-written seed, which transforms into a plausible-looking sea
+ * that is not the one asked for. The caller decides what a failure MEANS -- fatal on the
+ * first build, survivable on a re-seed -- so this one only reports which cascade.
  */
-static bool _water_reseed(Water* water) {
+static bool _water_seed_cascades(Water* water) {
     const int size = WATER_SPECTRUM_RES;
     float* initial = calloc((size_t)size * size * 4, sizeof(float));
     float* wave = calloc((size_t)size * size * 4, sizeof(float));
     if (!initial || !wave) {
-        log_error("Water re-seed allocation failed; keeping the previous sea state");
+        log_error("Water spectrum allocation failed");
         free(initial);
         free(wave);
         return false;
@@ -741,9 +750,9 @@ static bool _water_reseed(Water* water) {
     const float wind_angle = _water_wind_angle(water);
     for (int c = 0; c < WATER_CASCADE_COUNT; c++) {
         if (!_water_build_spectrum(size, &WATER_CASCADE_CFG[c], &water->sea, wind_angle, initial,
-                                   wave, NULL, &water->cascade_height_var[c],
+                                   wave, &water->cascade_height_var[c],
                                    &water->cascade_slope_var[c])) {
-            log_error("Water cascade %d re-seed failed; keeping the previous sea state", c);
+            log_error("Water cascade %d seeding failed", c);
             free(initial);
             free(wave);
             return false;
@@ -756,6 +765,16 @@ static bool _water_reseed(Water* water) {
     free(initial);
     free(wave);
     _water_record_seed(water);
+    return true;
+}
+
+// A re-seed of a running sea: the seed textures change under an unchanged ping-pong, so
+// the two histories that describe the OLD sea have to go with it.
+static bool _water_reseed(Water* water) {
+    if (!_water_seed_cascades(water)) {
+        log_error("Water re-seed failed; keeping the previous sea state");
+        return false;
+    }
     /*
      * Both histories describe the OLD sea and have to go with it.
      *
@@ -781,46 +800,31 @@ static bool _water_ensure_spectra(Water* water) {
     if (water->failed)
         return false;
 
-    // Restored on every exit, including the failure ones. Binding 0 and returning
-    // would leave the WINDOW framebuffer current, and every pass after water --
+    const int size = WATER_SPECTRUM_RES;
+    if (!_water_seed_cascades(water)) {
+        log_error("Water spectrum seeding failed; disabling water");
+        water->failed = true;
+        return false;
+    }
+
+    float* twiddle = calloc((size_t)size * WATER_SPECTRUM_LOG * 4, sizeof(float));
+    if (!twiddle) {
+        log_error("Water twiddle allocation failed; disabling water");
+        water->failed = true;
+        return false;
+    }
+    _water_build_twiddle(size, twiddle);
+    water->twiddle_tex = _water_make_data_tex(size, WATER_SPECTRUM_LOG, twiddle);
+    free(twiddle);
+
+    // Restored on every exit past this point, including the failure ones. Binding 0 and
+    // returning would leave the WINDOW framebuffer current, and every pass after water --
     // the transparent lane, the OIT accumulate, the particle depth resolve --
     // would draw into it instead of the scene target.
     GLint saved_fbo = 0;
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &saved_fbo);
 
-    const int size = WATER_SPECTRUM_RES;
-    float* initial = calloc((size_t)size * size * 4, sizeof(float));
-    float* wave = calloc((size_t)size * size * 4, sizeof(float));
-    float* twiddle = calloc((size_t)size * WATER_SPECTRUM_LOG * 4, sizeof(float));
-    if (!initial || !wave || !twiddle) {
-        log_error("Water spectrum allocation failed; disabling water");
-        free(initial);
-        free(wave);
-        free(twiddle);
-        water->failed = true;
-        return false;
-    }
-
     for (int c = 0; c < WATER_CASCADE_COUNT; c++) {
-        // The twiddle table depends only on the transform size, so it is built
-        // with the first cascade and shared by all of them.
-        if (!_water_build_spectrum(size, &WATER_CASCADE_CFG[c], &water->sea,
-                                   _water_wind_angle(water), initial, wave,
-                                   c == 0 ? twiddle : NULL, &water->cascade_height_var[c],
-                                   &water->cascade_slope_var[c])) {
-            log_error("Water cascade %d seeding failed; disabling water", c);
-            glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)saved_fbo);
-            free(initial);
-            free(wave);
-            free(twiddle);
-            water->failed = true;
-            return false;
-        }
-        water->cascade_initial[c] = _water_make_data_tex(size, size, initial);
-        water->cascade_wave[c] = _water_make_data_tex(size, size, wave);
-        if (c == 0)
-            water->twiddle_tex = _water_make_data_tex(size, WATER_SPECTRUM_LOG, twiddle);
-
         for (int b = 0; b < 2; b++) {
             for (int t = 0; t < 2; t++)
                 water->cascade_field[c][b][t] = _water_make_field(size, _water_cascade_mipped(c));
@@ -836,9 +840,6 @@ static bool _water_ensure_spectra(Water* water) {
             if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
                 log_error("Water spectral framebuffer incomplete; disabling water");
                 glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)saved_fbo);
-                free(initial);
-                free(wave);
-                free(twiddle);
                 water->failed = true;
                 return false;
             }
@@ -867,20 +868,13 @@ static bool _water_ensure_spectra(Water* water) {
         if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
             log_error("Water foam framebuffer incomplete; disabling water");
             glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)saved_fbo);
-            free(initial);
-            free(wave);
-            free(twiddle);
             water->failed = true;
             return false;
         }
     }
     glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)saved_fbo);
 
-    free(initial);
-    free(wave);
-    free(twiddle);
     create_fullscreen_quad_vao(&water->fft_vao, &water->fft_vbo);
-    _water_record_seed(water);
     water->spectra_ready = true;
     log_info("Water: %d spectral cascades at %d^2, %d passes/frame", WATER_CASCADE_COUNT, size,
              WATER_CASCADE_COUNT * (1 + WATER_SPECTRUM_LOG * 2));
@@ -934,6 +928,33 @@ static void _water_fft_transform(ShaderProgram* fft, GLuint twiddle, const GLuin
         // is why it is a uniform rather than a separate pass.
         uniform_set_int(fft->uniforms, "finalize", pass == WATER_SPECTRUM_LOG * 2 - 1 ? 1 : 0);
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    }
+}
+
+/*
+ * The six transformed fields on WATER_CASCADE_UNIT0.., plus the per-band choppiness.
+ *
+ * Everything a consumer of ocean.glsl's cascade group needs, and nothing that belongs to
+ * only one of them: `cascadeLength` and `cascadeSlopeVar` are the surface's alone, since the
+ * foam pass works in texel space and selects folds rather than shading them.
+ *
+ * `fft` false points the units at texture 0 rather than skipping them. A sampler left at its
+ * default is a type mismatch against whatever 2D texture happens to occupy that unit, not an
+ * unused binding.
+ */
+static void _water_bind_cascades(const Water* water, UniformManager* u, bool fft) {
+    for (int c = 0; c < WATER_CASCADE_COUNT; c++) {
+        for (int t = 0; t < 2; t++) {
+            const int unit = WATER_CASCADE_UNIT0 + c * 2 + t;
+            char name[32];
+            snprintf(name, sizeof(name), "cascade%d_%d", c, t);
+            glActiveTexture(GL_TEXTURE0 + unit);
+            glBindTexture(GL_TEXTURE_2D, fft ? water->cascade_field[c][0][t] : 0);
+            uniform_set_int(u, name, unit);
+        }
+        char chop[32];
+        snprintf(chop, sizeof(chop), "cascadeChoppiness[%d]", c);
+        uniform_set_float(u, chop, WATER_CASCADE_CFG[c].choppiness);
     }
 }
 
@@ -1043,19 +1064,7 @@ static void _water_run_spectral(Water* water, struct Engine* engine, float time)
         glUseProgram(foam->id);
         glBindFramebuffer(GL_FRAMEBUFFER, water->foam_fbo[dst]);
         glBindVertexArray(water->fft_vao);
-        for (int c = 0; c < WATER_CASCADE_COUNT; c++) {
-            for (int t = 0; t < 2; t++) {
-                const int unit = WATER_CASCADE_UNIT0 + c * 2 + t;
-                char name[32];
-                snprintf(name, sizeof(name), "cascade%d_%d", c, t);
-                glActiveTexture(GL_TEXTURE0 + unit);
-                glBindTexture(GL_TEXTURE_2D, water->cascade_field[c][0][t]);
-                uniform_set_int(foam->uniforms, name, unit);
-            }
-            char chop[32];
-            snprintf(chop, sizeof(chop), "cascadeChoppiness[%d]", c);
-            uniform_set_float(foam->uniforms, chop, WATER_CASCADE_CFG[c].choppiness);
-        }
+        _water_bind_cascades(water, foam->uniforms, true);
         glActiveTexture(GL_TEXTURE0 + WATER_FOAM_UNIT);
         glBindTexture(GL_TEXTURE_2D, water->foam_tex[src]);
         uniform_set_int(foam->uniforms, "prevFoam", WATER_FOAM_UNIT);
@@ -1193,41 +1202,22 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
     uniform_set_vec3(u, "sunRadiance", (const float*)&sun_radiance);
 
     /*
-     * The cascades, for the glitter's shadow. Mirrors the shadow catcher's own bind
-     * (render.c) rather than calling bind_shadow_maps_to_program: that helper also uploads
-     * the MSM, TSM, punctual and PCSS state this program has no uniforms for, and points
-     * shadowMaps at unit 10, which is where cascadePrev1 already lives.
+     * The cascades, for the glitter's shadow. csm.glsl's CSM_OUTERMOST_PCF path reads only
+     * the widest cascade, which is scene-fitted and camera-independent -- the right lookup
+     * for a surface that runs to the horizon, and the same one the catcher and the particle
+     * motes take.
      *
-     * csm.glsl's CSM_OUTERMOST_PCF path reads only the widest cascade, which is
-     * scene-fitted and camera-independent -- the right lookup for a surface that runs to
-     * the horizon, and the same one the catcher and the particle motes take.
-     *
-     * ONE predicate, and the slot is published FROM it rather than beside it. The two were
-     * separate expressions and could disagree: `sunShadowSlot` came from the light, the
-     * uploads from the system, and the shader gates only on the slot. Switching shadows
-     * off mid-session leaves the sun holding a stale `shadow_map_index` -- only the depth
-     * pass clears it, and that pass is itself gated on `enabled` -- so the shader took the
-     * lookup against an unbound array and a never-uploaded `cascadeCount`, read full
-     * occlusion, and the glitter vanished from the whole sea.
-     *
-     * `directional_count` is in the predicate for a second reason both precedents already
-     * carry: at zero, shadow_upload_cascade_uniforms early-returns, leaving
-     * `lightSpaceMatrix` zeroed while `cascadeCount` is not -- a w of 0 and a NaN.
+     * The slot is published FROM the binder's own answer rather than from the light beside
+     * it. The two were separate expressions and could disagree: the shader gates only on
+     * the slot, so switching shadows off mid-session -- which leaves the sun holding a
+     * stale shadow_map_index, since only the depth pass clears it and that pass is itself
+     * gated on `enabled` -- took the lookup against an unbound array and a never-uploaded
+     * cascadeCount, read full occlusion, and the glitter vanished from the whole sea.
      */
-    const ShadowSystem* ss = scene->shadow_system;
-    const bool shadows = ss && ss->enabled && ss->directional_count > 0 &&
-                         ss->shadow_map_array && sun && sun->cast_shadows &&
-                         sun->shadow_map_index >= 0;
+    const bool shadows = bind_outermost_cascades_to_program(scene->shadow_system, program,
+                                                            WATER_SHADOW_UNIT) &&
+                         sun && sun->cast_shadows && sun->shadow_map_index >= 0;
     uniform_set_int(u, "sunShadowSlot", shadows ? sun->shadow_map_index : -1);
-    if (shadows) {
-        shadow_upload_cascade_uniforms(ss, u);
-        uniform_set_float(u, "shadowBias", ss->shadow_bias);
-        const float texel = 1.0f / (float)ss->default_map_size;
-        uniform_set_vec2(u, "shadowTexelSize", (vec2){texel, texel});
-    }
-    glActiveTexture(GL_TEXTURE0 + WATER_SHADOW_UNIT);
-    glBindTexture(GL_TEXTURE_2D_ARRAY, shadows ? ss->shadow_map_array : 0);
-    uniform_set_int(u, "shadowMaps", WATER_SHADOW_UNIT);
     uniform_set_int(u, "causticsEnabled", water->caustics ? 1 : 0);
     uniform_set_int(u, "glitterEnabled", water->glitter ? 1 : 0);
     // The deck dims the caustics it focuses (spec 11.41) and the sun lobe it lights
@@ -1301,21 +1291,14 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
     // is: a sampler left at the default 0 is a type mismatch against whatever 2D
     // texture happens to live there.
     uniform_set_int(u, "waveModel", fft ? 1 : 0);
+    _water_bind_cascades(water, u, fft);
+    // The two the foam pass does not read: it works in cascade texel space, so it needs no
+    // tiling period, and it selects folds rather than shading them, so it needs no variance.
     for (int c = 0; c < WATER_CASCADE_COUNT; c++) {
-        for (int t = 0; t < 2; t++) {
-            const int unit = WATER_CASCADE_UNIT0 + c * 2 + t;
-            char name[32];
-            snprintf(name, sizeof(name), "cascade%d_%d", c, t);
-            glActiveTexture(GL_TEXTURE0 + unit);
-            glBindTexture(GL_TEXTURE_2D, fft ? water->cascade_field[c][0][t] : 0);
-            uniform_set_int(u, name, unit);
-        }
-        char len[32], chop[32], svar[32];
+        char len[32], svar[32];
         snprintf(len, sizeof(len), "cascadeLength[%d]", c);
-        snprintf(chop, sizeof(chop), "cascadeChoppiness[%d]", c);
         snprintf(svar, sizeof(svar), "cascadeSlopeVar[%d]", c);
         uniform_set_float(u, len, WATER_CASCADE_CFG[c].length_scale);
-        uniform_set_float(u, chop, WATER_CASCADE_CFG[c].choppiness);
         // Zero on the Gerstner path, whose octaves report the slope they dropped directly
         // -- it has no seeded spectrum to have measured, and a stale variance from a
         // previous spectral scene would widen its lobe for waves it never carried.
@@ -1514,10 +1497,23 @@ static bool _water_fft_impulse(const Water* water, struct Engine* engine, int fx
  * which is why nothing calls this from the render loop.
  */
 void water_fft_probe(const Water* water, struct Engine* engine) {
-    if (!water || !engine || !water->spectra_ready || water->wave_model != WATER_WAVES_FFT) {
-        // A result, not a failure: the Gerstner path has no spectrum to measure, and
-        // saying so is what stops a caller reading silence as agreement.
-        printf("water-fft-probe available=0\n");
+    /*
+     * Declining is a result, not a failure: the Gerstner path has no spectrum to measure,
+     * and saying so is what stops a caller reading silence as agreement.
+     *
+     * Which of the four it is, though, is the caller's business. "No spectral sea in this
+     * build" and "the readback allocation failed" both used to arrive as a bare
+     * available=0, so a reader saw an empty result and could only report the symptom.
+     */
+    const char* declined = NULL;
+    if (!water || !engine)
+        declined = "nowater";
+    else if (water->wave_model != WATER_WAVES_FFT)
+        declined = "gerstner";
+    else if (!water->spectra_ready)
+        declined = "unseeded";
+    if (declined) {
+        printf("water-fft-probe header available=0 reason=%s\n", declined);
         return;
     }
 
@@ -1525,11 +1521,13 @@ void water_fft_probe(const Water* water, struct Engine* engine) {
     const size_t texels = (size_t)size * size;
     float* buf = malloc(texels * 4 * sizeof(float));
     if (!buf) {
-        printf("water-fft-probe available=0\n");
+        printf("water-fft-probe header available=0 reason=alloc\n");
         return;
     }
 
-    printf("water-fft-probe available=1 cascades=%d res=%d\n", WATER_CASCADE_COUNT, size);
+    // Every line leads with its kind. The reader used to tell them apart by whether the
+    // first field parsed as a number, which makes any new header key a parse change.
+    printf("water-fft-probe header available=1 cascades=%d res=%d\n", WATER_CASCADE_COUNT, size);
     glActiveTexture(GL_TEXTURE0);
     for (int c = 0; c < WATER_CASCADE_COUNT; c++) {
         // Target 0 channel b is the height, target 1 channels r,g are the two slopes --
@@ -1560,8 +1558,9 @@ void water_fft_probe(const Water* water, struct Engine* engine) {
 
         const double hp = water->cascade_height_var[c];
         const double sp = water->cascade_slope_var[c];
-        printf("water-fft-probe %d height_pred=%.6f height_meas=%.6f height_ratio=%.4f "
-               "peak=%.4f slope_pred=%.6f slope_meas=%.6f slope_ratio=%.4f\n",
+        printf("water-fft-probe cascade index=%d height_pred=%.6f height_meas=%.6f "
+               "height_ratio=%.4f peak=%.4f slope_pred=%.6f slope_meas=%.6f "
+               "slope_ratio=%.4f\n",
                c, hp, height_var, height_var / fmax(hp, 1e-12), peak, sp, slope_var,
                slope_var / fmax(sp, 1e-12));
     }

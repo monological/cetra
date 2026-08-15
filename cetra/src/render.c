@@ -1286,7 +1286,7 @@ void render_current_scene(Engine* engine) {
         engine->catcher_vao) {
         profiler_scope_begin(engine->profiler, "shadow catcher");
         ShaderProgram* catcher = engine->shadow_catcher_program;
-        ShadowSystem* ss = scene->shadow_system;
+        const ShadowSystem* ss = scene->shadow_system;
 
         glUseProgram(catcher->id);
         uniform_set_mat4(catcher->uniforms, "view", (const float*)*view);
@@ -1300,8 +1300,12 @@ void render_current_scene(Engine* engine) {
         bool ssr_floor =
             engine->postfx && postfx_ssr_active(engine->postfx, engine->normals_this_frame);
         uniform_set_int(catcher->uniforms, "surfaceMode", ssr_floor ? 1 : 0);
-        uniform_set_int(catcher->uniforms, "numShadowLights", (int)ss->directional_count);
-        uniform_set_float(catcher->uniforms, "shadowBias", ss->shadow_bias);
+        // The widest cascade and everything csm.glsl's CSM_OUTERMOST_PCF path reads. This
+        // was hand-rolled here and picked up msmEnabled and tsmEnabled by going through the
+        // shared binder: without them the catcher read depths while every other surface read
+        // moments under --msm, and csmTransmittance short-circuited so a translucent caster
+        // laid no shadow on this plane at all.
+        bind_outermost_cascades_to_program(ss, catcher, SHADOW_MAP_TEXTURE_UNIT);
         // The deck darkens the catcher the way a caster does (spec 11.41). Its own unit
         // rather than pbr_frag's alias: this program declares one sampler, not sixteen.
         sky_bind_cloud_shadow(scene->sky, catcher, SKY_CLOUD_SHADOW_UNIT);
@@ -1317,21 +1321,13 @@ void render_current_scene(Engine* engine) {
                 weight_total += light->intensity;
             }
         }
-        shadow_upload_cascade_uniforms(ss, catcher->uniforms);
-
+        // Catcher-only: the per-light weights the shared binder has no concept of.
         for (size_t i = 0; i < ss->directional_count && i < MAX_SHADOW_LIGHTS; i++) {
             char name[64];
             snprintf(name, sizeof(name), "shadowLightWeight[%zu]", i);
             uniform_set_float(catcher->uniforms, name,
                               weight_total > 0.0f ? weights[i] / weight_total : 0.0f);
         }
-
-        float texel = 1.0f / (float)ss->default_map_size;
-        uniform_set_vec2(catcher->uniforms, "shadowTexelSize", (vec2){texel, texel});
-
-        glActiveTexture(GL_TEXTURE0 + SHADOW_MAP_TEXTURE_UNIT);
-        glBindTexture(GL_TEXTURE_2D_ARRAY, ss->shadow_map_array);
-        uniform_set_int(catcher->uniforms, "shadowMaps", SHADOW_MAP_TEXTURE_UNIT);
 
         // Explicit state: blended, visible from both sides. Depth writes stay
         // ON: this plane is what the transparent and particle passes below sort
