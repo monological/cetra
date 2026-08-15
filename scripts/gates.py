@@ -3993,6 +3993,12 @@ def run_water_gate(workdir):
                       Gerstner, and is still wrong. Blind to a missed fftshift, which
                       moves the field in space and not in variance -- that is
                       water-fft-impulse's half.
+      water-fixture-roundtrip the fixture's GENERATOR still produces the fixture. No
+                      renders: it regenerates into a temp directory and compares text.
+                      Exists because gen_water_fixture.py stopped emitting the `water`
+                      block when 11.33 made that block create the surface, and stayed that
+                      way for three specs -- so the docstring's "regenerate with" line was
+                      an instruction to strip the water and fail every arm below.
       water-fft-impulse the transform matches its CLOSED FORM on two single modes: a
                       centred impulse must come back constant, and its neighbour as one
                       cycle across the grid. Run through the same 14 stages and the same
@@ -4362,6 +4368,34 @@ def run_water_gate(workdir):
               f"both sides {found}")
         if not ok:
             failures.append("water-horizon")
+
+    # The fixture's generator still produces the fixture. No renders, no GPU: this is a
+    # text comparison, and it is here because the alternative to asserting it is finding
+    # out from a stripped water block and twenty-odd red arms.
+    gen = os.path.join(ROOT, "assets", "gen_water_fixture.py")
+    regen_dir = os.path.join(workdir, "regen")
+    os.makedirs(regen_dir, exist_ok=True)
+    r = subprocess.run([sys.executable, gen, regen_dir], capture_output=True, text=True)
+    if r.returncode != 0:
+        print(f"  water-fixture-roundtrip FAIL  generator exited {r.returncode}: "
+              f"{(r.stderr or r.stdout).strip()[-200:]}")
+        failures.append("water-fixture-roundtrip")
+    else:
+        drifted = []
+        for name in ("water_fixture.gltf", WATER_FIXTURE):
+            committed = os.path.join(ROOT, "assets", name)
+            regenerated = os.path.join(regen_dir, name)
+            if not os.path.exists(regenerated):
+                drifted.append(f"{name}: not emitted")
+                continue
+            with open(committed) as a, open(regenerated) as b:
+                if a.read() != b.read():
+                    drifted.append(name)
+        ok = not drifted
+        print(f"  water-fixture-roundtrip {'PASS' if ok else 'FAIL'}  regenerated 2 files, "
+              f"{'all identical to the committed pair' if ok else 'DRIFTED: ' + ', '.join(drifted)}")
+        if not ok:
+            failures.append("water-fixture-roundtrip")
 
     # The waterline, decided per pixel. The fixture cannot see this -- at amplitude 0.06
     # no crest ever shows its underside, so !gl_FrontFacing is never true there -- so the

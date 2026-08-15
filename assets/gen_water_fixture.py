@@ -29,6 +29,7 @@ import base64
 import json
 import os
 import struct
+import sys
 
 WATER_LEVEL = 0.0
 # The wedge spans from well under the water to well over it: the shoreline has to
@@ -184,10 +185,53 @@ scene_desc = {
     "environment": {"mode": "sky", "sun_elevation": 26.0, "sun_azimuth": 135.0,
                     "intensity": 1.0},
     "camera": {"eye": EYE, "target": TARGET, "fov": 42},
+    # The surface itself, and every property an arm reads. This block CREATES the water
+    # (spec 11.33 phase 5) -- without it the fixture renders dry, so a regeneration that
+    # dropped it would take every water arm and both water goldens with it. It was in fact
+    # missing here from 11.33 until 11.42 while the committed .cscn carried it, which made
+    # the docstring's "regenerate with" line a destructive instruction for three specs.
+    #
+    # Authors EVERY key the parser understands, deliberately: an arm then names only what
+    # it varies, and a default that changes underneath cannot silently move the fixture.
+    # Keep this in step with parse_water (cscene.c).
+    "water": {
+        "enabled": True,
+        "level": WATER_LEVEL,
+        "extent": 14.0,
+        "waves": "gerstner",
+        # The Gerstner train. Lake scale, and small enough that no crest ever shows its
+        # underside -- which is why water-waterline has to author its own framing.
+        "wavelength": 6.0,
+        "amplitude": 0.06,
+        "steepness": 0.6,
+        "spread": 0.42,
+        "windDirection": [0.86, 0.51],
+        # The spectral sea state (spec 11.42), inert until --water-waves fft. Physical
+        # quantities: a calmer spectral ocean is a lower wind speed, not a smaller
+        # amplitude, and no CLI flag can set any of these.
+        "windSpeed": 11.5,
+        "fetch": 120000.0,
+        "seaDepth": 54.0,
+        "peakEnhancement": 3.3,
+        "swell": 0.38,
+        "roughness": 0.04,
+        "ior": 1.333,
+        # Clear water per metre, and this fixture's unit IS a metre (spec 11.36).
+        "absorption": [0.45, 0.09, 0.06],
+        "scatter": [0.02, 0.1, 0.12],
+        "caustics": True,
+        "shoreCoverage": True,
+        "farLod": True,
+    },
     "post": {"tonemap": "neutral", "exposure": 1.0, "auto_exposure": False},
 }
 
-out_dir = os.path.dirname(os.path.abspath(__file__))
+# Optional output directory, so a caller can regenerate somewhere harmless and diff the
+# result against the committed pair. That is what `water-fixture-roundtrip` does, and it is
+# the assertion whose absence let this script drift out of step with its own output for
+# three specs -- it stopped emitting the `water` block the fixture needs to have a surface
+# at all, and nothing noticed because nobody runs a generator that is already "done".
+out_dir = sys.argv[1] if len(sys.argv) > 1 else os.path.dirname(os.path.abspath(__file__))
 with open(os.path.join(out_dir, "water_fixture.gltf"), "w") as f:
     json.dump(gltf, f, indent=1)
     f.write("\n")
