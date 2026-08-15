@@ -1193,28 +1193,59 @@ neither mesh scheme addresses: distant cells cover more than a wave period, so e
 sits under its footprint and hands the removed slope energy to roughness. That is a BRDF answer to a
 geometry question, and it is where the remaining detail goes once no mesh can carry it.
 
+**Since 11.42 that handover is measured rather than authored.** The removed slope arrives as an
+absolute mean square rather than a fraction, and converts to a lobe width by the Beckmann relation —
+so the horizon is as rough as the waves it stopped resolving, and composes with the authored
+roughness by adding variances, collapsing to exactly the authored value where nothing is filtered.
+It replaced a lerp toward a **0.115** literal inherited from the reference study, which made the
+horizon the same roughness for a millpond and a gale and was low by about a factor of three against
+this spectrum's own slope variance. `water-farfield` improved on both halves it measures (far-box
+spread 0.24x → 0.10x, authored-roughness sensitivity 0.12x → 0.02x) with its near-box invariance
+still exactly 0.
+
+**11.42 also gave the surface a sun.** `sky_env_frag` bakes the sky *without* a disc, so under the
+procedural sky the environment lobe carried no sun at all and the sea had no specular response to
+its own key light — the one thing 11.32 planned (`:205`) and never delivered. It is now an
+anisotropic Beckmann/Cox-Munk lobe whose two variances come from the spectrum rather than from
+Cox-Munk's wind-speed regression, fed the UNRESOLVED slope so the waves the mesh already carries are
+not counted twice, shadowed through `csmOutermostOcclusion` and dimmed by the cloud deck. Whitecaps
+persist (one accumulation pass, three bands in one RGB target) instead of vanishing with the crest
+that made them, and the spectral sea state is authorable from `.cscn` instead of six `#define`s.
+
 **So the tessellation stage is still entirely unspent** — POM silhouettes and D4 terrain remain its
 candidate first consumers, and neither inherits a pipeline from here.
 
 **Open items this entry still owns.** Recorded here rather than only in 11.35's history, because a
 closed spec is not where anyone looks for work that is still outstanding.
 
-1. **The projector aims at the still plane, not the displaceable slab.** Each lattice ray is
-   intersected with the flat plane — which is where the wave field is sampled — so the surface then
-   displaces and a wave can lift geometry into view from XZ the lattice never sampled. The nearest
-   point a ray can reach is `clearance / tan(top-of-frame angle)`. It bites when the eye is within
-   about one wave height of the surface: wading in `apps/tree --player`, a boat deck, a camera at sea
-   level. It is **why `water-submerged` sits on a shallow Gerstner framing** rather than the FFT one it
-   was written for. The fix is to offset the plane toward the eye by the max vertical displacement,
-   which costs zero lattice rows; the blocker is that nothing publishes a displacement bound. Gerstner
-   is analytic (`amplitude × Σ 0.44^i`, i<4, = **1.7188**). Spectral needs either the seeded
-   realisation's variance (exact, but the inverse FFT's normalisation has to be traced) or a
-   fetch-limited JONSWAP estimate (**≈1.2 units**, padded and labelled as padding — *not* a
-   Pierson-Moskowitz number: the seeding is JONSWAP+TMA and fetch-limited, so PM is the wrong spectrum
-   and is blind to `WATER_FETCH` and `WATER_SEA_DEPTH`). Note the single-plane offset **reduces rather
-   than removes** the artifact when the eye is *inside* the slab, because the horizon-row clamp still
-   cannot reach a crest projecting above the flat-plane horizon; Johanson's own two-plane construction
-   is the complete answer.
+1. **The projector aims at the still plane, not the displaceable slab. ATTEMPTED IN 11.42 AND
+   MEASURED HARMFUL — the prescription below is wrong, and this is the correction.** Each lattice
+   ray is intersected with the flat plane — which is where the wave field is sampled — so the surface
+   then displaces and a wave can lift geometry into view from XZ the lattice never sampled. The
+   nearest point a ray can reach is `clearance / tan(top-of-frame angle)`. It bites when the eye is
+   within about one wave height of the surface: wading in `apps/tree --player`, a boat deck, a camera
+   at sea level. It is **why `water-submerged` sits on a shallow Gerstner framing** rather than the
+   FFT one it was written for.
+
+   The blocker this entry named — that nothing publishes a displacement bound — **is gone**: 11.42
+   accumulates the seeded spectrum's height and slope variance and `--water-fft-probe` traces the
+   normalisation against the transformed field (measured 0.69–0.99 of predicted, the deficit tracking
+   how few modes carry the energy). Gerstner's analytic `amplitude × Σ 0.44^i`, i<4, = **1.7188**
+   still holds.
+
+   **What did not survive is "costs zero lattice rows".** Offsetting the plane shrinks the lattice's
+   world footprint, and `OCEAN_OVERSCAN` compensates horizontal displacement as a *fraction of that
+   footprint* — so the same displacement over-runs the overscan and opens a wedge of background at
+   the frame edge. Measured on a wading framing (eye 1.5, level 0, amplitude 0.55): a grey hole in
+   the bottom-left corner, which is the defect class 11.35 exists to have fixed. Offsetting by the
+   full bound is worse still — with the eye inside the slab the plane goes *above* the camera, the
+   `OCEAN_MIN_EYE_HEIGHT` clamp pins the clearance at a hair, and the near lattice collapses about
+   sixfold. Spanning the lattice across both sides of the horizon row (the geometry half of item 4)
+   fails the same way, diluting rows into the `OCEAN_FAR_DIST` cap.
+
+   So the real fix is one of: Johanson's two-plane construction, or an overscan that scales with the
+   offset. Both are larger than the one-line change this entry predicted. Reverted cleanly in 11.42;
+   `ocean.glsl` is untouched by it.
 2. **Water positions are absolute, so precision tracks distance from the world origin, not the
    camera.** Measured: the same sea at 960 vs 307,200 units out differs by **227,458 px of 480,000**
    (RMSE 0.0146) even though the spectral field is exactly periodic across the 960-unit cascade LCM, so
@@ -1224,7 +1255,18 @@ closed spec is not where anyone looks for work that is still outstanding.
    texel. **No consumer today**: nothing in this tree exceeds ~1,000 units. And the correct fix is
    engine-wide rather than water's — camera-relative rendering for everything, since water alone would
    be precise standing beside jittering terrain. Full recipe in 11.35's phase 3 as-built.
-3. **The water gate corpus has a structural blind spot, and it has already cost one shipped defect.**
+3. **The water gate corpus has a structural blind spot, and it has already cost one shipped defect.
+   MEASURED and partly closed in 11.42.** The blind spot is no longer an inference: with the inverse
+   twiddle's conjugate deliberately dropped from `water_fft_frag.glsl` — a transform that is simply
+   wrong — **twelve arms passed**, `water-fft-det`, `water-fft-live`, `water-fft-motion` and
+   `water-caustic` among them, and every variance ratio was unchanged to four decimals. What catches
+   it is `water-fft-impulse`, which inverse-transforms two single modes through the same 14 stages
+   and the same twiddle table and compares against the closed form: `mode_err` goes from 1.9e-7 to
+   exactly 2.0. A centred impulse alone does NOT catch it, because a constant field is invariant
+   under that conjugation — which is why there are two modes. 11.42 also added `water-fft-var`,
+   `water-waterline`, `water-seastate`, `water-glitter` and `water-foam-persist`. The half that
+   remains open is the one below: every arm still reads `water_fixture`, and a scene whose far plane
+   is small relative to the horizon is still the instrument this corpus lacks.
    11.35's review round found the shoreline test reading a *cleared* depth buffer as bed geometry and
    discarding every fragment past the last mesh — 40.6% of an `apps/tree` frame — while all 22 water
    arms and all 23 goldens stayed green. It could not be caught: every water arm reads
@@ -1236,7 +1278,16 @@ closed spec is not where anyone looks for work that is still outstanding.
    between them** — and tree is where the bug was found, by eye. A scene whose far plane is small
    relative to the horizon is the instrument this corpus lacks.
 
-4. **A camera AT the waterline is unhandled, and it is the framing `--player` put in front of people.**
+4. **A camera AT the waterline is unhandled — SHADING HALF FIXED in 11.42, geometry half still open.**
+   The two scopes are now one `seenFromBelow`, computed per PIXEL and read by both the normal flip
+   and the optical-path branch, so a crest closing over a camera still above the still level is no
+   longer charged its path against air. `water-waterline` asserts it on a framing the fixture cannot
+   supply — crests have to close over the eye while the still level is below it, which needs an
+   amplitude two orders above the fixture's 0.06 — and reads an in-frame ratio of the overhead-crest
+   band against foreground the fix cannot touch: **0.1851 before, 0.2477 after**, with the reference
+   box byte-identical across the change. The geometry half is NOT fixed and is now understood to be
+   harder than this entry assumed; see item 1's correction. The original diagnosis, kept because it
+   is what led to the fix:
    Wading in `apps/tree` produces a clean horizontal boundary between above-water and below-water
    shading. It should be a wavy, irregular line — the surface crossing the eye plane — and a clean
    sweep means the split is decided by the flat still level rather than by where the waves are.
