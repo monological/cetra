@@ -42,6 +42,9 @@ in float FilteredMss;
 uniform mat4 view;
 uniform mat4 projection;
 uniform vec2 screenSize;
+// The animation clock, for the foam breakup's drift. The same value water_vert reads, so
+// the two cannot describe different instants of one surface.
+uniform float time;
 
 uniform float waterRoughness;
 uniform float waterIor;
@@ -65,6 +68,11 @@ uniform vec3 sunRadiance;
 uniform int sunShadowSlot;
 // 0 = no analytic sun lobe, which is the frame every capture before spec 11.42 rendered.
 uniform int glitterEnabled;
+// Accumulated foam, one band per channel, each in its OWN band's tiling space -- so this
+// is sampled three times at three UVs rather than once. 0 = the pass has not run, and the
+// instantaneous fold below is the whole selection.
+uniform sampler2D foamTex;
+uniform int foamAvailable;
 uniform int cameraSubmerged;
 uniform int causticsEnabled;
 // 1 = the shoreline writes fractional coverage for alpha-to-coverage; 0 = the
@@ -161,6 +169,13 @@ const float WATER_FOAM_MAX = 0.62;
 // Shore band strength. Lower than a breaking crest: this is water going shallow,
 // not water breaking, and at crest strength every lake edge would read as surf.
 const float WATER_SHORE_FOAM = 0.45;
+// Foam breakup, in cycles per world unit. Two scales an octave and a half apart, which is
+// enough that their sum does not read as either one of them.
+const float WATER_FOAM_NOISE_A = 0.42;
+const float WATER_FOAM_NOISE_B = 1.31;
+// How much coverage the breakup may take away at its darkest. Not zero: foam that
+// disappears entirely in the troughs of the noise reads as holes rather than as texture.
+const float WATER_FOAM_BREAKUP_MIN = 0.35;
 /*
  * Caustics. Light crossing the surface is focused by the surface's own curvature,
  * so the brightness on the bed is a property of the WAVES above the point being
@@ -212,6 +227,26 @@ const float WATER_GLITTER_SMITH_K = 0.0307;
 // the exposure. The distribution goes as 1/variance, so a nearly resolved surface -- calm
 // water close to the camera -- puts a spike here that no tonemap recovers from.
 const float WATER_GLITTER_MAX = 400.0;
+
+/*
+ * Value noise, for breaking foam coverage up after it has been selected.
+ *
+ * ALU rather than a texture: this program has no sampler declaration to spare, and a hash
+ * costs less than the fetch would anyway. Smoothstep interpolation rather than linear, so
+ * the derivative is continuous and the pattern has no lattice creases in it.
+ */
+float waterHash21(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+}
+
+float waterValueNoise(vec2 p) {
+    vec2 cell = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(waterHash21(cell), waterHash21(cell + vec2(1.0, 0.0)), f.x),
+               mix(waterHash21(cell + vec2(0.0, 1.0)), waterHash21(cell + vec2(1.0, 1.0)), f.x),
+               f.y);
+}
 
 float waterSmith(float ndx) {
     return ndx / (ndx * (1.0 - WATER_GLITTER_SMITH_K) + WATER_GLITTER_SMITH_K);
@@ -309,8 +344,45 @@ void main() {
         // swell does not break and a compressing one does, and selecting on height
         // puts white on the wrong crests.
         float shortJ = oceanBandJacobian(short0, short1, cascadeChoppiness[2]);
+        // This frame's fold. The vertex Jacobian is the only one carrying the shoal
+        // gradient, so it stays whatever else is added to it.
         float compression = max(0.0, 1.0 - Jacobian) + max(0.0, 1.0 - shortJ) * fade * 0.62;
+        if (foamAvailable == 1) {
+            /*
+             * The trail the crest left behind (spec 11.42).
+             *
+             * Three fetches from one texture, each in its own band's tiling space, because
+             * that is the space the accumulator read its Jacobian in. The value is a
+             * running minimum with a leak, so 1 - it is compression that OUTLIVES the fold
+             * -- which is what puts foam behind a breaking wave rather than only on it.
+             *
+             * Combined with max against the instantaneous term rather than replacing it:
+             * the accumulator cannot see the shoal gradient, so a surf-zone crest still
+             * needs the vertex Jacobian to be selected at all.
+             */
+            float turbLong = texture(foamTex, oceanCascadeUv(WorldPos.xz, 0)).r;
+            float turbMed = texture(foamTex, oceanCascadeUv(WorldPos.xz, 1)).g;
+            float turbShort = texture(foamTex, oceanCascadeUv(WorldPos.xz, 2)).b;
+            float persistent = max(0.0, 1.0 - min(turbLong, turbMed)) +
+                               max(0.0, 1.0 - turbShort) * fade * 0.62;
+            compression = max(compression, persistent);
+        }
         foam = smoothstep(WATER_FOAM_ON, WATER_FOAM_FULL, compression) * fade;
+        /*
+         * Break the coverage up, AFTER the physical selection has chosen where foam is.
+         *
+         * Value noise evaluated rather than sampled: it costs no sampler in a program that
+         * has none left, and the reference this is ported from computes it the same way.
+         * Two scales drifting at different rates, so the texture does not read as a
+         * stationary pattern the waves slide under.
+         *
+         * It may only take coverage AWAY. Foam that noise could add would be whitewater
+         * where the surface never folded, which is the painted-overlay look the whole
+         * Jacobian selection exists to avoid.
+         */
+        float breakup = waterValueNoise(WorldPos.xz * WATER_FOAM_NOISE_A + time * 0.03) * 0.62 +
+                        waterValueNoise(WorldPos.xz * WATER_FOAM_NOISE_B - time * 0.05) * 0.38;
+        foam *= mix(WATER_FOAM_BREAKUP_MIN, 1.0, smoothstep(0.25, 0.75, breakup));
     }
     // Shore foam, on both wave models. A band where the bed has risen close to the
     // surface but has not broken it -- the whitewater a beach carries even where nothing

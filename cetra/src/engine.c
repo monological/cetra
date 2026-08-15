@@ -1471,6 +1471,11 @@ static int _create_default_shaders_for_engine(Engine* engine) {
         add_shader_program_to_engine(engine, water_fft_program);
     }
 
+    ShaderProgram* water_foam_program = create_water_foam_program();
+    if (water_foam_program) {
+        add_shader_program_to_engine(engine, water_foam_program);
+    }
+
     // GI probe volume. Lives on the engine rather than on PostFX -- despite
     // being a fullscreen pass -- because the volume is a Scene citizen and the
     // atlas is consumed by the scene pass, not by post.

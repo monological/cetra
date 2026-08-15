@@ -94,6 +94,9 @@ ShaderProgram* create_water_program();
 // Stockham inverse-FFT stage per draw. Both write two MRT targets.
 ShaderProgram* create_water_spectrum_program();
 ShaderProgram* create_water_fft_program();
+// Foam accumulation (spec 11.42): one pass a frame over the transformed cascades, holding
+// whitewater on the surface after the crest that made it has passed.
+ShaderProgram* create_water_foam_program();
 // Resolves the depth cascades into the filterable moment cascades (--msm)
 ShaderProgram* create_msm_resolve_program();
 ShaderProgram* create_shadow_absorb_program();

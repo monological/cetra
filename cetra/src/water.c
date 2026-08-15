@@ -374,6 +374,11 @@ Water* create_water(void) {
     water->wave_model = WATER_WAVES_GERSTNER;
     water->caustics = true;
     water->glitter = true;
+    water->foam_history = true;
+    // Slow enough that a crest leaves a visible trail behind it and fast enough that open
+    // water is not permanently white. The reference this is ported from calls the same
+    // number 0.4 and means the same thing by it.
+    water->foam_decay = 0.4f;
     water->shore_coverage = true;
     water->far_lod = true;
     return water;
@@ -397,6 +402,8 @@ void free_water(Water* water) {
     glDeleteTextures(WATER_CASCADE_COUNT * 4, &water->cascade_field[0][0][0]);
     glDeleteFramebuffers(WATER_CASCADE_COUNT * 2, &water->cascade_fbo[0][0]);
     glDeleteTextures(WATER_PREV_CASCADES, water->cascade_prev);
+    glDeleteTextures(2, water->foam_tex);
+    glDeleteFramebuffers(2, water->foam_fbo);
     free(water);
 }
 
@@ -834,6 +841,28 @@ static bool _water_ensure_spectra(Water* water) {
     for (int c = 0; c < WATER_PREV_CASCADES; c++)
         water->cascade_prev[c] = _water_make_field(size, true);
 
+    // The foam pair. No mip chain: it is sampled at LOD 0 wherever the surface reads it,
+    // and a mip of a running minimum is not the running minimum of a mip.
+    for (int b = 0; b < 2; b++) {
+        water->foam_tex[b] = _water_make_field(size, false);
+        glGenFramebuffers(1, &water->foam_fbo[b]);
+        glBindFramebuffer(GL_FRAMEBUFFER, water->foam_fbo[b]);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                               water->foam_tex[b], 0);
+        const GLenum foam_target = GL_COLOR_ATTACHMENT0;
+        glDrawBuffers(1, &foam_target);
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+            log_error("Water foam framebuffer incomplete; disabling water");
+            glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)saved_fbo);
+            free(initial);
+            free(wave);
+            free(twiddle);
+            water->failed = true;
+            return false;
+        }
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)saved_fbo);
+
     free(initial);
     free(wave);
     free(twiddle);
@@ -955,6 +984,49 @@ static void _water_run_spectral(Water* water, struct Engine* engine, float time)
         }
     }
     glBindTexture(GL_TEXTURE_2D, 0);
+
+    /*
+     * Foam accumulation, one pass, after the transform it reads and after the mips.
+     *
+     * Reads the pair's current texel and writes the other, so the read/write separation the
+     * FFT ping-pong relies on holds here too -- GL 4.1 has no texture barrier and this
+     * needs none.
+     *
+     * Costs one draw on top of 45. The submission budget is the real price of this whole
+     * chain (spec 11.32 measured +0.24 ms GPU against +1.19 ms CPU for the 45), which is
+     * why the three bands share one target instead of taking one pass each.
+     */
+    ShaderProgram* foam = get_engine_shader_program_by_name(engine, "water_foam");
+    if (foam && water->foam_history) {
+        const int src = water->foam_index;
+        const int dst = 1 - src;
+        glUseProgram(foam->id);
+        glBindFramebuffer(GL_FRAMEBUFFER, water->foam_fbo[dst]);
+        glBindVertexArray(water->fft_vao);
+        for (int c = 0; c < WATER_CASCADE_COUNT; c++) {
+            for (int t = 0; t < 2; t++) {
+                const int unit = WATER_CASCADE_UNIT0 + c * 2 + t;
+                char name[32];
+                snprintf(name, sizeof(name), "cascade%d_%d", c, t);
+                glActiveTexture(GL_TEXTURE0 + unit);
+                glBindTexture(GL_TEXTURE_2D, water->cascade_field[c][0][t]);
+                uniform_set_int(foam->uniforms, name, unit);
+            }
+            char chop[32];
+            snprintf(chop, sizeof(chop), "cascadeChoppiness[%d]", c);
+            uniform_set_float(foam->uniforms, chop, WATER_CASCADE_CFG[c].choppiness);
+        }
+        glActiveTexture(GL_TEXTURE0 + WATER_FOAM_UNIT);
+        glBindTexture(GL_TEXTURE_2D, water->foam_tex[src]);
+        uniform_set_int(foam->uniforms, "prevFoam", WATER_FOAM_UNIT);
+        uniform_set_int(foam->uniforms, "foamHistoryAvailable", water->foam_frames > 0 ? 1 : 0);
+        uniform_set_float(foam->uniforms, "foamDt", (float)engine->render_delta);
+        uniform_set_float(foam->uniforms, "foamDecay", water->foam_decay);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+        glBindVertexArray(0);
+        water->foam_index = dst;
+        water->foam_frames++;
+    }
 
     water->spectral_frames++;
     glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)saved_fbo);
@@ -1213,6 +1285,15 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
         uniform_set_int(u, name, unit);
     }
     uniform_set_int(u, "prevAvailable", prev_ready ? 1 : 0);
+
+    // The accumulated foam. Live only once the pass has actually run a frame: before that
+    // the pair holds whatever the allocation left, and reading it as whitewater would put
+    // the sea under foam on exactly the frames a capture is most likely to take.
+    const bool foam_ready = fft && water->foam_history && water->foam_frames > 0;
+    glActiveTexture(GL_TEXTURE0 + WATER_FOAM_UNIT);
+    glBindTexture(GL_TEXTURE_2D, foam_ready ? water->foam_tex[water->foam_index] : 0);
+    uniform_set_int(u, "foamTex", WATER_FOAM_UNIT);
+    uniform_set_int(u, "foamAvailable", foam_ready ? 1 : 0);
 
     glActiveTexture(GL_TEXTURE0);
 

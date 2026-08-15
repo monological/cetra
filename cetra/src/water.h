@@ -63,6 +63,10 @@
  * above already rest on.
  */
 #define WATER_SHADOW_UNIT 11
+// The accumulated foam, three bands in three channels (spec 11.42). 15 is the punctual
+// shadow ARRAY, a different binding point from this sampler2D, and water samples no
+// punctual shadows -- the last free unit under the ledger, which this spends.
+#define WATER_FOAM_UNIT 15
 // Last frame's transformed field for the two cascades that displace the mesh, for the
 // spectral path's motion vectors. Units 9 and 10 hold the Charlie sheen cubemap and the
 // shadow map array, both of which are OTHER binding points on those units -- the same
@@ -212,6 +216,12 @@ typedef struct Water {
     // wave models: its width comes from the slope the surface stopped resolving, and the
     // Gerstner path reports that from its dropped octaves.
     bool glitter;
+    // false = whitewater is selected from THIS frame's fold and forgotten, which is the
+    // pre-11.42 foam exactly. Spectral only: the accumulator runs over the cascades, and
+    // the Gerstner path's steepness is clamped so its map cannot fold at all.
+    bool foam_history;
+    // How fast foam gives up and returns to open water, per second. Lower lingers longer.
+    float foam_decay;
     // false = the shoreline is a hard cutoff at the pixel the water column closes.
     // Inert wherever the target has no samples to spend coverage on.
     bool shore_coverage;
@@ -277,6 +287,24 @@ typedef struct Water {
      */
     float cascade_height_var[WATER_CASCADE_COUNT];
     float cascade_slope_var[WATER_CASCADE_COUNT];
+
+    /*
+     * Accumulated foam, ping-ponged (spec 11.42).
+     *
+     * One RGB target, each channel a band's whitewater in that band's own tiling space.
+     * `foam_index` is which of the pair holds the CURRENT frame, so the surface samples
+     * that one and next frame's pass reads it as history -- a parity rather than a copy,
+     * because unlike cascade_prev nothing else needs the previous value and there is no
+     * mip chain to keep in step.
+     *
+     * Counted like spectral_frames: at 0 there is no history and the pass seeds un-foamed,
+     * because seeding from a cleared texture would put the whole sea under whitewater for
+     * as long as the recovery takes.
+     */
+    GLuint foam_tex[2];
+    GLuint foam_fbo[2];
+    int foam_index;
+    int foam_frames;
 
     /*
      * Last frame's target 0 for the two cascades that displace the mesh, copied out

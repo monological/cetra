@@ -152,6 +152,7 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --water-waves <m>  gerstner (default) or fft spectral cascades\n");
     fprintf(stderr, "      --no-water-caustics  Drop the surface's light focusing\n");
     fprintf(stderr, "      --no-water-glitter Drop the analytic sun lobe on the water\n");
+    fprintf(stderr, "      --no-water-foam-history  Foam from this frame's fold only\n");
     fprintf(stderr, "      --no-water-coverage  Hard shoreline cutoff, no coverage\n");
     fprintf(stderr, "      --no-water-lod     Full wave detail at any cell footprint\n");
     fprintf(stderr, "      --water-bed <m>    none (default) or dome: an analytic bed to shoal\n");
@@ -710,6 +711,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->no_water_caustics = 1;
         } else if (strcmp(argv[i], "--no-water-glitter") == 0) {
             args->no_water_glitter = 1;
+        } else if (strcmp(argv[i], "--no-water-foam-history") == 0) {
+            args->no_water_foam_history = 1;
         } else if (strcmp(argv[i], "--no-water-coverage") == 0) {
             args->no_water_coverage = 1;
         } else if (strcmp(argv[i], "--no-water-lod") == 0) {
@@ -3005,6 +3008,8 @@ int main(int argc, char** argv) {
             water->caustics = false;
         if (args.no_water_glitter)
             water->glitter = false;
+        if (args.no_water_foam_history)
+            water->foam_history = false;
         if (args.no_water_coverage)
             water->shore_coverage = false;
         if (args.no_water_lod)

@@ -3504,6 +3504,30 @@ WATER_GLITTER_WATER = {"waves": "fft"}
 # as a magnitude: a sun that darkened the sea would be a sign error passing a pixel count.
 WATER_GLITTER_MIN_PX = 5000
 WATER_GLITTER_BOX = (0.55, 0.28, 0.95, 0.40)
+
+# Persistent foam (spec 11.42). A ROUGH sea, because whitecaps are selected from the
+# horizontal map folding and the default 11.5 m/s state folds rarely enough that the signal
+# is a few per cent -- 20 m/s is the same instrument with the effect above its own noise,
+# and it is only reachable at all because spec 11.42 made the sea state authorable.
+#
+# 90 frames, not 30: the accumulator has to have something to remember. At 30 the trail is
+# barely longer than the crest that made it.
+WATER_FOAM_SEA = {"waves": "fft", "windSpeed": 20.0, "level": 0.6, "extent": 70.0}
+WATER_FOAM_FRAMES = 90
+# Open water only -- above the ramp's crest and below the horizon band, so no dry geometry
+# and no sky is inside it. The ramp is irrelevant to this arm: crest foam is a property of
+# the wave field, where the SHORE band next door is a property of the bed, needs
+# --water-bed dome, and is identically zero on this fixture without one.
+#
+# PERSIST rather than FOAM in the name, because WATER_FOAM_OPEN_BOX already exists for
+# water-shore-foam and is a different box on a different scene. The first version of this
+# reused that name, the later definition won, and the arm measured the shore box on an
+# open-water framing and read 0 -- a green-looking 0/0 rather than an error.
+WATER_PERSIST_OPEN_BOX = (0.05, 0.20, 0.95, 0.35)
+# Measured 6,608 -> 7,490 foam pixels (+13.3%) and 85,604 px over the frame. The ratio is
+# the load-bearing half: a count alone would pass on a sea that simply got brighter.
+WATER_FOAM_PERSIST_RATIO = 1.07
+WATER_FOAM_PERSIST_MIN_PX = 20000
 # And `level` is a field both paths can set, so authoring it must land in exactly the
 # same place the flag does. 0 px or one of them is lying.
 WATER_CSCN_LEVEL = 0.9
@@ -3953,6 +3977,10 @@ def run_water_gate(workdir):
                       --no-water-lod, which reports a zero footprint and so reaches the
                       unfiltered surface exactly. The direction of the roughness handover
                       is not measurable here -- see WATER_FAR_ROUGH_AUTHORED.
+      water-foam-persist whitewater OUTLIVES the crest that made it. Read against
+                      --no-water-foam-history, which selects foam from this frame's fold
+                      alone and is the pre-11.42 behaviour exactly. On open water and on a
+                      rough sea for reasons that are both in WATER_FOAM_SEA.
       water-glitter   the sea has a specular response to its own sun, and it BRIGHTENS.
                       Under the procedural sky the environment cubemap carries no disc, so
                       before spec 11.42 there was none at all -- and the lobe's width comes
@@ -4246,6 +4274,36 @@ def run_water_gate(workdir):
               f"(want brighter)")
         if not ok:
             failures.append("water-glitter")
+
+    # Foam outlives the crest that made it. Read on open water, where the fold is the only
+    # thing that can select whitewater -- the shore band is a different mechanism and is
+    # identically zero here without a bed.
+    foam_scene = os.path.join(workdir, "water_foam.cscn")
+    _water_cscn_variant(scene, foam_scene, WATER_FOAM_SEA)
+    foam_on = os.path.join(workdir, "water_foam_on.ppm")
+    foam_off = os.path.join(workdir, "water_foam_off.ppm")
+    err = render(foam_scene, foam_on, WATER_PIN + WATER_NO_CATCHER,
+                 frames=WATER_FOAM_FRAMES)
+    if not err:
+        err = render(foam_scene, foam_off,
+                     WATER_PIN + WATER_NO_CATCHER + ["--no-water-foam-history"],
+                     frames=WATER_FOAM_FRAMES)
+    if err:
+        print(f"  water-foam-persist ERROR render failed: {err.strip()[-200:]}")
+        failures.append("water-foam-persist")
+    else:
+        ae_foam, _ = compare(foam_off, foam_on)
+        fw, fh, f_on_pix = _read_ppm(foam_on)
+        _, _, f_off_pix = _read_ppm(foam_off)
+        px_on = _water_foam_px(f_on_pix, fw, fh, WATER_PERSIST_OPEN_BOX)
+        px_off = _water_foam_px(f_off_pix, fw, fh, WATER_PERSIST_OPEN_BOX)
+        ratio = px_on / max(px_off, 1)
+        ok = ratio >= WATER_FOAM_PERSIST_RATIO and ae_foam >= WATER_FOAM_PERSIST_MIN_PX
+        print(f"  water-foam-persist {'PASS' if ok else 'FAIL'}  open-water foam {px_off} "
+              f"-> {px_on} = {ratio:.2f}x (want >={WATER_FOAM_PERSIST_RATIO}), {ae_foam} px "
+              f"over the frame (want >={WATER_FOAM_PERSIST_MIN_PX})")
+        if not ok:
+            failures.append("water-foam-persist")
 
     # The transform carries the variance the seeding predicted. The first arm in this
     # suite that reads the SPECTRUM rather than a picture of it.
