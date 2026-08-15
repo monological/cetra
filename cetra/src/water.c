@@ -46,14 +46,17 @@ static const struct WaterCascadeConfig {
     {12.0f, 1.22f, 24.0f, 0.82f, 0.0f, 0.40f, 0x19ce47u},
 };
 
-// Sea state. One set of numbers for all three bands, so the bands are windows
-// onto ONE spectrum rather than three independently authored looks.
-#define WATER_SEA_DEPTH 54.0f
-#define WATER_WIND_SPEED 11.5f
-#define WATER_FETCH 120000.0f
-#define WATER_WIND_ANGLE (-0.48f)
-#define WATER_PEAK_ENHANCEMENT 3.3f
-#define WATER_SWELL 0.38f
+// The default sea state, in the units WaterSeaState documents. A moderate wind sea:
+// force 6 over a long fetch, deep enough that the TMA correction barely bites.
+//
+// These were six file-scope #defines until spec 11.42. They are defaults now rather than
+// constants, so a scene can author a calmer or a rougher sea -- and the wind DIRECTION
+// left with them, to Water.wind_dir, which both wave models already shared.
+#define WATER_DEFAULT_SEA_DEPTH 54.0f
+#define WATER_DEFAULT_WIND_SPEED 11.5f
+#define WATER_DEFAULT_FETCH 120000.0f
+#define WATER_DEFAULT_PEAK_ENHANCEMENT 3.3f
+#define WATER_DEFAULT_SWELL 0.38f
 
 // The reference's deterministic PRNG, ported exactly rather than swapped for
 // rand(): the spectrum it seeds IS the ocean's identity, so a different sequence
@@ -145,14 +148,19 @@ static float _water_jonswap(float omega, float peak_omega, float alpha, float tm
  * evolution step produce a REAL surface from one complex multiply per mode
  * instead of enforcing symmetry afterwards.
  */
-static bool _water_build_spectrum(int size, const struct WaterCascadeConfig* cfg, float* initial,
+static bool _water_build_spectrum(int size, const struct WaterCascadeConfig* cfg,
+                                  const WaterSeaState* sea, float wind_angle, float* initial,
                                   float* wave_data, float* twiddle) {
     const float g = 9.81f;
     const float delta_k = 6.28318530718f / cfg->length_scale;
-    const float alpha =
-        0.076f * powf(g * WATER_FETCH / (WATER_WIND_SPEED * WATER_WIND_SPEED), -0.22f);
-    const float peak_omega =
-        22.0f * powf(WATER_WIND_SPEED * WATER_FETCH / (g * g), -0.33f);
+    // Guarded rather than trusted: these are authored now, and a zero wind speed or fetch
+    // divides here rather than at some later texel. The floors are far below any sea a
+    // scene would ask for, so they can only bind on a value that was never a sea state.
+    const float wind_speed = fmaxf(sea->wind_speed, 0.1f);
+    const float fetch = fmaxf(sea->fetch, 1.0f);
+    const float sea_depth = fmaxf(sea->sea_depth, 0.1f);
+    const float alpha = 0.076f * powf(g * fetch / (wind_speed * wind_speed), -0.22f);
+    const float peak_omega = 22.0f * powf(wind_speed * fetch / (g * g), -0.33f);
 
     // Reported rather than shrugged off: returning quietly would leave wave_data
     // unwritten and the twiddle table all zeros, so every butterfly would read
@@ -181,27 +189,27 @@ static bool _water_build_spectrum(int size, const struct WaterCascadeConfig* cfg
                 continue;
             }
 
-            const float kh = fminf(k_len * WATER_SEA_DEPTH, 20.0f);
+            const float kh = fminf(k_len * sea_depth, 20.0f);
             const float tanh_kh = tanhf(kh);
             const float omega = sqrtf(g * k_len * tanh_kh);
             const float sech2 = 1.0f - tanh_kh * tanh_kh;
             // d(omega)/dk, which converts a spectral density in frequency to one
             // in wavenumber. Getting this wrong scales the whole sea state.
             const float domega =
-                g * (WATER_SEA_DEPTH * k_len * sech2 + tanh_kh) / fmaxf(omega * 2.0f, 1e-5f);
-            const float omega_h = omega * sqrtf(WATER_SEA_DEPTH / g);
+                g * (sea_depth * k_len * sech2 + tanh_kh) / fmaxf(omega * 2.0f, 1e-5f);
+            const float omega_h = omega * sqrtf(sea_depth / g);
             const float tma = omega_h <= 1.0f ? 0.5f * omega_h * omega_h
                               : omega_h < 2.0f ? 1.0f - 0.5f * (2.0f - omega_h) * (2.0f - omega_h)
                                                : 1.0f;
 
             const float jonswap =
-                _water_jonswap(omega, peak_omega, alpha, tma, WATER_PEAK_ENHANCEMENT);
-            const float theta = _water_wrap_angle(atan2f(kz, kx) - WATER_WIND_ANGLE);
+                _water_jonswap(omega, peak_omega, alpha, tma, sea->peak_enhancement);
+            const float theta = _water_wrap_angle(atan2f(kz, kx) - wind_angle);
             const float omega_ratio = omega / peak_omega;
             const float spread_power =
                 ((omega > peak_omega ? 9.77f * powf(omega_ratio, -2.5f)
                                      : 6.97f * powf(omega_ratio, 5.0f)) +
-                 16.0f * tanhf(fminf(omega_ratio, 20.0f)) * WATER_SWELL * WATER_SWELL) *
+                 16.0f * tanhf(fminf(omega_ratio, 20.0f)) * sea->swell * sea->swell) *
                 0.58f;
             const float focused = _water_spread_norm(spread_power) *
                                   powf(fabsf(cosf(theta * 0.5f)), 2.0f * spread_power);
@@ -220,8 +228,11 @@ static bool _water_build_spectrum(int size, const struct WaterCascadeConfig* cfg
                 const float sw_peak = 22.0f * powf(sw_wind * sw_fetch / (g * g), -0.33f);
                 const float sw_alpha = 0.076f * powf(g * sw_fetch / (sw_wind * sw_wind), -0.22f);
                 const float sw_spectrum = _water_jonswap(omega, sw_peak, sw_alpha, tma, 2.6f);
-                const float sw_theta =
-                    _water_wrap_angle(atan2f(kz, kx) - (WATER_WIND_ANGLE + 0.82f));
+                // Crossing the wind by a fixed 0.82 rad. Not authorable with the rest:
+                // the angle BETWEEN the two trains is what makes this read as an older
+                // swell rather than as more wind sea, so it belongs to the model, and it
+                // follows the authored wind rather than sitting at an absolute bearing.
+                const float sw_theta = _water_wrap_angle(atan2f(kz, kx) - (wind_angle + 0.82f));
                 const float sw_ratio = omega / sw_peak;
                 const float sw_spread =
                     ((omega > sw_peak ? 9.77f * powf(sw_ratio, -2.5f)
@@ -316,6 +327,14 @@ Water* create_water(void) {
     water->wavelength = 6.0f;
     water->steepness = 0.6f;
     water->spread = 0.42f;
+    // The spectral sea state, inert until --water-waves fft. Unlike the train above it is
+    // physical rather than lake-scaled: the spectrum decides its own height from the wind
+    // and the fetch, which is why there is no amplitude here to scale it with.
+    water->sea.wind_speed = WATER_DEFAULT_WIND_SPEED;
+    water->sea.fetch = WATER_DEFAULT_FETCH;
+    water->sea.sea_depth = WATER_DEFAULT_SEA_DEPTH;
+    water->sea.peak_enhancement = WATER_DEFAULT_PEAK_ENHANCEMENT;
+    water->sea.swell = WATER_DEFAULT_SWELL;
     // Gerstner by default: it allocates no GPU state, costs no passes, and is the
     // right model at the scale most scenes put water at. The spectral path is an
     // ocean, and asks for 45 passes and 24 textures to say so.
@@ -628,9 +647,82 @@ static GLuint _water_make_data_tex(int w, int h, const float* data) {
     return tex;
 }
 
+/*
+ * The direction the waves travel, as the angle the spectral seeding wants.
+ *
+ * Derived from wind_dir rather than authored beside it, so the two models cannot describe
+ * seas running different ways -- which is exactly what they did until spec 11.42, when
+ * this was a private constant and a scene's windDirection reached the Gerstner train only.
+ */
+static float _water_wind_angle(const Water* water) {
+    return atan2f(water->wind_dir[1], water->wind_dir[0]);
+}
+
+// Everything the seeding reads, and nothing else. Compared by value rather than by a
+// dirty flag: a flag has to be set by every writer, and the writers are a scene file, the
+// CLI and the GUI.
+static bool _water_seed_is_current(const Water* water) {
+    const WaterSeaState* a = &water->sea;
+    const WaterSeaState* b = &water->seeded_sea;
+    return a->wind_speed == b->wind_speed && a->fetch == b->fetch &&
+           a->sea_depth == b->sea_depth && a->peak_enhancement == b->peak_enhancement &&
+           a->swell == b->swell && water->wind_dir[0] == water->seeded_wind_dir[0] &&
+           water->wind_dir[1] == water->seeded_wind_dir[1];
+}
+
+static void _water_record_seed(Water* water) {
+    water->seeded_sea = water->sea;
+    glm_vec2_copy(water->wind_dir, water->seeded_wind_dir);
+}
+
+/*
+ * Rebuild the two seed textures from the current sea state.
+ *
+ * Only those two: the transformed fields, their framebuffers and the twiddle table are
+ * functions of the RESOLUTION alone, so a re-seed touches none of them and the ping-pong
+ * keeps running through the change. Deleting and recreating rather than sub-uploading,
+ * because that reuses the one texture-creation policy this file already states.
+ *
+ * A failure here leaves the previous spectrum in place and says so. That is the
+ * conservative direction: the alternative is a half-written seed, which transforms into a
+ * plausible-looking sea that is not the one asked for.
+ */
+static bool _water_reseed(Water* water) {
+    const int size = WATER_SPECTRUM_RES;
+    float* initial = calloc((size_t)size * size * 4, sizeof(float));
+    float* wave = calloc((size_t)size * size * 4, sizeof(float));
+    if (!initial || !wave) {
+        log_error("Water re-seed allocation failed; keeping the previous sea state");
+        free(initial);
+        free(wave);
+        return false;
+    }
+    const float wind_angle = _water_wind_angle(water);
+    for (int c = 0; c < WATER_CASCADE_COUNT; c++) {
+        if (!_water_build_spectrum(size, &WATER_CASCADE_CFG[c], &water->sea, wind_angle, initial,
+                                   wave, NULL)) {
+            log_error("Water cascade %d re-seed failed; keeping the previous sea state", c);
+            free(initial);
+            free(wave);
+            return false;
+        }
+        glDeleteTextures(1, &water->cascade_initial[c]);
+        glDeleteTextures(1, &water->cascade_wave[c]);
+        water->cascade_initial[c] = _water_make_data_tex(size, size, initial);
+        water->cascade_wave[c] = _water_make_data_tex(size, size, wave);
+    }
+    free(initial);
+    free(wave);
+    _water_record_seed(water);
+    log_info("Water: re-seeded at wind %.1f m/s, fetch %.0f m, depth %.0f m",
+             (double)water->sea.wind_speed, (double)water->sea.fetch,
+             (double)water->sea.sea_depth);
+    return true;
+}
+
 static bool _water_ensure_spectra(Water* water) {
     if (water->spectra_ready)
-        return true;
+        return _water_seed_is_current(water) ? true : _water_reseed(water);
     if (water->failed)
         return false;
 
@@ -657,7 +749,8 @@ static bool _water_ensure_spectra(Water* water) {
     for (int c = 0; c < WATER_CASCADE_COUNT; c++) {
         // The twiddle table depends only on the transform size, so it is built
         // with the first cascade and shared by all of them.
-        if (!_water_build_spectrum(size, &WATER_CASCADE_CFG[c], initial, wave,
+        if (!_water_build_spectrum(size, &WATER_CASCADE_CFG[c], &water->sea,
+                                   _water_wind_angle(water), initial, wave,
                                    c == 0 ? twiddle : NULL)) {
             log_error("Water cascade %d seeding failed; disabling water", c);
             glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)saved_fbo);
@@ -709,6 +802,7 @@ static bool _water_ensure_spectra(Water* water) {
     free(wave);
     free(twiddle);
     create_fullscreen_quad_vao(&water->fft_vao, &water->fft_vbo);
+    _water_record_seed(water);
     water->spectra_ready = true;
     log_info("Water: %d spectral cascades at %d^2, %d passes/frame", WATER_CASCADE_COUNT, size,
              WATER_CASCADE_COUNT * (1 + WATER_SPECTRUM_LOG * 2));

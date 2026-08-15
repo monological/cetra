@@ -351,6 +351,16 @@ void apply_cscene_water(Scene* scene, const CetraSceneDesc* cscn) {
         water->spread = w->spread;
     if (w->has_wind_dir)
         glm_vec2_copy((float*)w->wind_dir, water->wind_dir);
+    if (w->has_wind_speed)
+        water->sea.wind_speed = w->wind_speed;
+    if (w->has_fetch)
+        water->sea.fetch = w->fetch;
+    if (w->has_sea_depth)
+        water->sea.sea_depth = w->sea_depth;
+    if (w->has_peak_enhancement)
+        water->sea.peak_enhancement = w->peak_enhancement;
+    if (w->has_swell)
+        water->sea.swell = w->swell;
     if (w->has_roughness)
         water->roughness = w->roughness;
     if (w->has_ior)

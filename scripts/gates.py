@@ -3444,6 +3444,19 @@ WATER_FFT_MOTION_MIN_PX = 20000
 # long way under it.
 WATER_CSCN_ABSORB = {"absorption": [2.2, 0.5, 0.35]}
 WATER_CSCN_MIN_PX = 20000
+
+# The spectral sea state reaches the seeding (spec 11.42). Wind speed rather than any of
+# the other four because it moves the spectrum furthest per unit of authoring, and 4 m/s
+# against the default 11.5 is a different SEA rather than a dimmer one -- the spectrum
+# takes its height from the wind, so there is no amplitude to turn down and this is the
+# only way to ask a spectral ocean for calm.
+#
+# Both sides author `waves` so the wave model is not the variable. No flag can set any of
+# the five, which is what makes this the only instrument on that path -- the same argument
+# water-cscn makes for absorption.
+WATER_SEASTATE_REF = {"waves": "fft"}
+WATER_SEASTATE_CALM = {"waves": "fft", "windSpeed": 4.0}
+WATER_SEASTATE_MIN_PX = 20000
 # And `level` is a field both paths can set, so authoring it must land in exactly the
 # same place the flag does. 0 px or one of them is lying.
 WATER_CSCN_LEVEL = 0.9
@@ -3848,6 +3861,11 @@ def run_water_gate(workdir):
                       --no-water-lod, which reports a zero footprint and so reaches the
                       unfiltered surface exactly. The direction of the roughness handover
                       is not measurable here -- see WATER_FAR_ROUGH_AUTHORED.
+      water-seastate  the spectral sea state reaches the seeding. Wind speed, fetch,
+                      depth, peak enhancement and swell are authorable since spec 11.42
+                      and NO flag can set any of them, so a scene file is the only way in
+                      and this is the only arm on that path. The wind DIRECTION reaches
+                      both models now and is covered by water-fft-live moving with it.
       water-waterline the above/below split is decided PER PIXEL. On a framing where
                       crests close over a camera that is still above the still level, a
                       backfacing fragment takes the sight line as its optical path
@@ -4071,6 +4089,27 @@ def run_water_gate(workdir):
               f"authored level vs --water-level {ae_level} px (want 0)")
         if not ok:
             failures.append("water-cscn")
+
+    # The spectral sea state is authorable and reaches the seeding.
+    ss_ref_scn = os.path.join(workdir, "water_seastate_ref.cscn")
+    ss_calm_scn = os.path.join(workdir, "water_seastate_calm.cscn")
+    _water_cscn_variant(scene, ss_ref_scn, WATER_SEASTATE_REF)
+    _water_cscn_variant(scene, ss_calm_scn, WATER_SEASTATE_CALM)
+    ss_ref = os.path.join(workdir, "water_seastate_ref.ppm")
+    ss_calm = os.path.join(workdir, "water_seastate_calm.ppm")
+    err = render(ss_ref_scn, ss_ref, WATER_PIN + WATER_NO_CATCHER)
+    if not err:
+        err = render(ss_calm_scn, ss_calm, WATER_PIN + WATER_NO_CATCHER)
+    if err:
+        print(f"  water-seastate ERROR render failed: {err.strip()[-200:]}")
+        failures.append("water-seastate")
+    else:
+        ae_sea, _ = compare(ss_ref, ss_calm)
+        ok = ae_sea >= WATER_SEASTATE_MIN_PX
+        print(f"  water-seastate {'PASS' if ok else 'FAIL'}  authored wind speed moves "
+              f"{ae_sea} px (want >={WATER_SEASTATE_MIN_PX}, no flag can set it)")
+        if not ok:
+            failures.append("water-seastate")
 
     # Reach invariance. `off` is the matching dry reference -- same flags, --no-water.
     reach_a = os.path.join(workdir, "water_reach_authored.ppm")

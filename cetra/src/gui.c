@@ -605,6 +605,25 @@ static void _engine_gui_panel(Engine* engine) {
             bool fft = water->wave_model == WATER_WAVES_FFT;
             if (igCheckbox("Spectral cascades (FFT)", &fft))
                 water->wave_model = fft ? WATER_WAVES_FFT : WATER_WAVES_GERSTNER;
+            if (fft) {
+                // The sea state, which only the spectral path reads. Moving any of these
+                // re-seeds the initial spectrum on the next frame -- a CPU pass over
+                // three 128^2 grids, so dragging a slider here costs more than the rest
+                // of this panel put together and is why they are folded behind the model
+                // that uses them.
+                //
+                // No amplitude: the spectrum takes its height from the wind and the
+                // fetch, so calm is a lower wind speed rather than a smaller number.
+                igSliderFloat("Wind speed (m/s)", &water->sea.wind_speed, 0.5f, 30.0f, "%.1f",
+                              0);
+                igSliderFloat("Fetch (km)", &water->sea.fetch, 1000.0f, 500000.0f, "%.0f",
+                              ImGuiSliderFlags_Logarithmic);
+                igSliderFloat("Sea depth (m)", &water->sea.sea_depth, 1.0f, 500.0f, "%.0f",
+                              ImGuiSliderFlags_Logarithmic);
+                igSliderFloat("Peak enhancement", &water->sea.peak_enhancement, 1.0f, 7.0f,
+                              "%.2f", 0);
+                igSliderFloat("Swell", &water->sea.swell, 0.0f, 1.0f, "%.2f", 0);
+            }
             igCheckbox("Caustics", &water->caustics);
             _end_effect_group();
         }

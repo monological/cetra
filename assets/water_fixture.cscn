@@ -55,6 +55,11 @@
    0.86,
    0.51
   ],
+  "windSpeed": 11.5,
+  "fetch": 120000.0,
+  "seaDepth": 54.0,
+  "peakEnhancement": 3.3,
+  "swell": 0.38,
   "roughness": 0.04,
   "ior": 1.333,
   "absorption": [

@@ -124,6 +124,26 @@ struct Scene;
  */
 typedef float (*WaterHeightFn)(void* ctx, float x, float z);
 
+/*
+ * The sea state the spectral cascades are seeded from (spec 11.42).
+ *
+ * One set of numbers for all three bands, so the bands stay windows onto ONE spectrum
+ * rather than three independently authored looks. Every field is a physical quantity in
+ * METRES and m/s, not a look control: a calmer spectral ocean is a lower wind speed or a
+ * shorter fetch, which is why the spectral path takes no amplitude knob at all.
+ *
+ * Gerstner reads none of this -- it has no sea state to ask, which is what `amplitude`
+ * and `wavelength` are for. The wind DIRECTION is deliberately not here: both models
+ * travel downwind and `Water.wind_dir` is the one place it is said.
+ */
+typedef struct WaterSeaState {
+    float wind_speed;       // m/s, at the standard 10 m reference height
+    float fetch;            // metres of open water the wind has blown across
+    float sea_depth;        // metres; drives the TMA shallow-water correction
+    float peak_enhancement; // JONSWAP gamma: how sharply the spectrum peaks
+    float swell;            // 0..1, how much older cross-swell rides the wind sea
+} WaterSeaState;
+
 typedef struct Water {
     bool enabled;
 
@@ -152,11 +172,19 @@ typedef struct Water {
     // derived from it inside ocean.glsl. steepness is 0..1 rather than a Gerstner Q
     // -- 1 is the steepest crest whose horizontal map is still injective -- and is
     // clamped to that range on upload.
+    // Travel direction of the waves, XZ. Read by BOTH models -- the Gerstner octaves fan
+    // off it, and the spectral seeding centres its directional spread on it -- so the two
+    // cannot describe seas running different ways. It was private to Gerstner until spec
+    // 11.42, which is why a scene authoring it got a spectral sea travelling somewhere
+    // else entirely.
     vec2 wind_dir;
     float amplitude;
     float wavelength;
     float steepness;
     float spread; // per-octave direction fan, radians
+
+    // Spectral sea state; see WaterSeaState. Inert on the Gerstner path.
+    WaterSeaState sea;
 
     WaterHeightFn height_at; // optional bed provider; see WaterHeightFn
     void* height_ctx;
@@ -196,6 +224,19 @@ typedef struct Water {
     GLuint twiddle_tex;
     GLuint fft_vao, fft_vbo; // fullscreen quad for the spectral passes
     bool spectra_ready;
+
+    /*
+     * The sea state the seed textures currently hold, compared each frame the way
+     * bed_extent is (spec 11.42). Editing wind or fetch re-seeds; editing anything the
+     * seeding does not read -- the level, the optics, the Gerstner train -- does not,
+     * rather than every caller having to know which is which.
+     *
+     * Only the two SEED textures are rewritten on a re-seed. The transformed fields, the
+     * framebuffers and the twiddle table are all functions of the resolution alone, so
+     * nothing is torn down and the ping-pong keeps running through the change.
+     */
+    WaterSeaState seeded_sea;
+    vec2 seeded_wind_dir;
 
     /*
      * Last frame's target 0 for the two cascades that displace the mesh, copied out

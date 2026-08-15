@@ -425,6 +425,11 @@ static void parse_water(CetraSceneDesc* d, const cJSON* root) {
     out->has_steepness = get_float(water, "steepness", &out->steepness);
     out->has_spread = get_float(water, "spread", &out->spread);
     out->has_wind_dir = get_floats(water, "windDirection", out->wind_dir, 2);
+    out->has_wind_speed = get_float(water, "windSpeed", &out->wind_speed);
+    out->has_fetch = get_float(water, "fetch", &out->fetch);
+    out->has_sea_depth = get_float(water, "seaDepth", &out->sea_depth);
+    out->has_peak_enhancement = get_float(water, "peakEnhancement", &out->peak_enhancement);
+    out->has_swell = get_float(water, "swell", &out->swell);
     out->has_roughness = get_float(water, "roughness", &out->roughness);
     out->has_ior = get_float(water, "ior", &out->ior);
     out->has_absorption = get_vec3(water, "absorption", out->absorption);
