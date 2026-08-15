@@ -57,9 +57,6 @@ uniform int sceneDepthAvailable;
 
 uniform vec3 sunDir; // toward the sun, world space
 uniform int sunAvailable;
-// Cloud deck (spec 11.41). Its own sampler -- this program is not at the limit
-// pbr_frag is, so it has no reason to ride another declaration.
-uniform sampler2D cloudShadowTex;
 uniform int cameraSubmerged;
 uniform int causticsEnabled;
 // 1 = the shoreline writes fractional coverage for alpha-to-coverage; 0 = the
@@ -377,21 +374,11 @@ void main() {
             // (spec 11.41). Read at the crossing rather than at the fragment for the same
             // reason the Jacobian is: this is a property of the ray, not of the pixel.
             //
-            // The only place cloud shadow enters this shader, and that is not an omission.
-            // Water has no analytic sun lobe -- its reflection is the split-sum environment
-            // lookup, which already carries the deck through the sky bake -- and the bed
-            // arrives through sceneColorTex already shaded, and so already dappled, by the
-            // pass that drew it.
-            //
-            // Gated on the slot even though this shader knows its sun by DIRECTION and needs
-            // no index to find it. Without the gate water would dim under a sun the other two
-            // surfaces cannot identify -- the deck's light is named by CSM slot, and a sun
-            // that casts no shadow has none -- and dappled caustics under flat terrain is a
-            // worse answer than no dapple at all.
-            float causticSun = cloudShadowLight >= 0
-                                   ? cloudSunAt(vec3(crossing.x, WorldPos.y, crossing.y))
-                                   : 1.0;
-            bed *= 1.0 + focused * WATER_CAUSTIC_GAIN * causticSun;
+            // The only place cloud shadow enters this shader, and that is not an omission:
+            // water has no analytic sun lobe to occlude, and its reflection is the split-sum
+            // environment lookup, which already carries the deck through the sky bake.
+            bed *= 1.0 + focused * WATER_CAUSTIC_GAIN *
+                             cloudSunAt(vec3(crossing.x, WorldPos.y, crossing.y));
         }
     } else {
         bed = vec3(0.0);

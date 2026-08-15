@@ -188,20 +188,11 @@ uniform int pcssFrameIndex; // Advances the per-frame rotation; frozen when off
 // diffuse IBL term changes; specular, clearcoat and sheen stay on the env map.
 #include "gi_volume.glsl"
 
-// Cloud-deck sun occlusion on the ground (spec 11.41), the surface half of what
-// spec 11.39 shipped into the froxel medium.
-//
-// The map arrives through the refraction sampler, for the same forced reason the
-// moment atlas does below: the driver counts DECLARED fragment samplers against
-// the 16-unit limit, not distinct units, and this shader declares exactly sixteen.
-//
-// The two cannot collide, and by a stronger argument than the moments have. Unit 6
-// carries the refraction resolve only in the LATE pass -- render.c clears
-// scene_color_this_frame at the top of the opaque pass and the resolve does not run
-// until after it -- so through the whole of the opaque pass, in every scene, that
-// unit is bound to nothing and read by nothing. Exclusivity here is by PASS, not by
-// material routing, which is why the surface half needed no sampler unit freed and
-// spent a spec cycle booked as though it did.
+// Cloud-deck sun occlusion on the ground (spec 11.41). The map rides the refraction
+// sampler for the same forced reason the moment atlas does below -- see that comment
+// for the driver rule. What differs is the exclusivity argument: this tenant is bound
+// only in the opaque shading pass, where the other two provably are not, so it rests
+// on the PASS rather than on material routing.
 #define cloudShadowTex sceneColorTex
 #include "cloud_shadow.glsl"
 
@@ -1636,18 +1627,12 @@ void main() {
         // cascades occlude the same light independently, and a fragment can be under both.
         // Placed after the punctual branch because that one OVERWRITES.
         //
-        // A slot compare rather than a direction compare -- the publisher says which light
-        // the deck occludes, on the same number the froxel medium matches against, so there
-        // is no epsilon and no way for the two halves to disagree about which light it is.
-        //
         // Deliberately NOT gated on alphaMasked, unlike the cascade tap above. That exclusion
         // exists because card-on-card depth compares at map-texel scale are pure acne; a
         // kilometre-scale transmittance field has no such failure, and foliage standing in
         // cloud shadow while the ground beside it does not is exactly the artifact this
         // feature exists to remove.
-        if (dirShadowSlot >= 0 && dirShadowSlot == cloudShadowLight) {
-            shadow *= cloudSunAt(WorldPos);
-        }
+        shadow *= cloudSunForSlot(WorldPos, dirShadowSlot);
 
         // POM self-shadow
         if (pom) {

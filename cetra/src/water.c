@@ -919,27 +919,32 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
 
     // The sun, for caustics: light focusing is a property of the path from the SUN
     // through the surface, so it needs the direction light arrives from rather than
-    // anything about the view. First directional light wins; a scene with two suns
-    // has a bigger problem than its caustics.
+    // anything about the view.
+    //
+    // The SKY's sun first, and that is not a preference (spec 11.41). Scanning for the
+    // first directional finds whichever light the scene file happened to list first,
+    // which in assets/water_fixture.cscn is a non-shadowing key -- so the caustics were
+    // focused from one light while the deck above occluded a different one. Falls back
+    // to the scan for a scene with no sky.
     vec3 sun_dir = {0.0f, 1.0f, 0.0f};
-    bool has_sun = false;
-    for (size_t i = 0; i < scene->light_count && !has_sun; i++) {
-        const Light* light = scene->lights[i];
-        if (light && light->type == LIGHT_DIRECTIONAL) {
-            // Lights store the direction they SHINE; the shader wants the direction
-            // toward the source.
-            glm_vec3_negate_to((float*)light->direction, sun_dir);
-            glm_vec3_normalize(sun_dir);
-            has_sun = true;
-        }
+    const Light* sun = (scene->sky && scene->sky->sun_light) ? scene->sky->sun_light : NULL;
+    for (size_t i = 0; !sun && i < scene->light_count; i++) {
+        if (scene->lights[i] && scene->lights[i]->type == LIGHT_DIRECTIONAL)
+            sun = scene->lights[i];
+    }
+    if (sun) {
+        // Lights store the direction they SHINE; the shader wants the direction
+        // toward the source.
+        glm_vec3_negate_to((float*)sun->direction, sun_dir);
+        glm_vec3_normalize(sun_dir);
     }
     uniform_set_vec3(u, "sunDir", (const float*)&sun_dir);
-    uniform_set_int(u, "sunAvailable", has_sun ? 1 : 0);
+    uniform_set_int(u, "sunAvailable", sun ? 1 : 0);
     uniform_set_int(u, "causticsEnabled", water->caustics ? 1 : 0);
     // The deck dims the caustics it focuses (spec 11.41). The only place cloud shadow
     // enters this program: water has no analytic sun lobe to occlude, and its reflection
     // is an environment lookup that already carries the deck.
-    sky_bind_cloud_shadow(scene->sky, program, WATER_CLOUD_SHADOW_UNIT);
+    sky_bind_cloud_shadow(scene->sky, program, SKY_CLOUD_SHADOW_UNIT);
 
     // Which side of the surface the eye is on. Compared against the still level
     // rather than the displaced surface: a camera within a wave height of the

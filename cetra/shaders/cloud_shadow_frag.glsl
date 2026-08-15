@@ -55,35 +55,24 @@ const float CLOUD_SHADOW_MIN_SUN_Y = 0.05;
 /*
  * How far the march may wander HORIZONTALLY from the texel it is computing (spec 11.41).
  *
- * This replaces a cap on the total marched LENGTH, which conflated two unrelated limits and got
- * both wrong. Capping the slant path meant the fraction of the deck actually crossed was
- * 1.2 * sinEl / thickness -- 48% straight overhead, 12% at 15 degrees, 4% at 5. So the map was
- * never a transmittance through the deck at any sun angle, and below ~10 degrees the march never
- * left the cloud base at all: no optical depth, and the map saturated to full sun with nothing
- * downstream able to tell. 11.40 fixed this same constant saturating the map to ZERO at the
- * other end; apps/tree's 0.8 degree sun sat in the dead band the whole time.
- *
- * The two limits, separated:
- *
- *   VERTICAL extent must span the deck, or the integral is not the quantity this map is named
- *   after. It is elevation-independent and not negotiable, so the march steps in equal ALTITUDE
- *   increments and always crosses bottom to top.
- *
- *   HORIZONTAL reach must stay bounded, and THAT is what this constant is. The reason is the
- *   one clouds.glsl:177 gives for its own 1.2 km sun cone -- past that, one far tap through a
- *   neighbouring tower accounts for kilometres of extinction and blackens everything -- plus a
- *   sampling reason specific to this map: the shape field tiles every 8 km under GL_REPEAT, so
- *   a 28.7 km slant at 5 degrees wraps it three and a half times and every texel's ray passes
- *   through essentially every cloud in the field. That, and not the magnitude of tau, is why
- *   11.40's longer-reach attempts came back uniformly black: the excursion decorrelates a texel
- *   from its own column, so the gaps stop being gaps. Truncating the whole path did stop it,
- *   and threw away the vertical coverage with it.
+ * ONE tile period, and derived rather than spelled, because the period IS the argument: the
+ * shape field repeats over it under GL_REPEAT, so a ray that travels further re-reads the same
+ * clouds and the texel stops describing its own column. At a 5 degree sun the slant is 28.7 km,
+ * three and a half periods, and every texel's ray then passes through essentially every cloud
+ * in the field. That decorrelation -- not the magnitude of tau -- is what made the uncapped
+ * march come back uniformly black.
  *
  * Past the reach the march keeps climbing the column it stopped at, which states plainly that
- * the deck is taken as horizontally homogeneous beyond the radius this field can be trusted
- * over. The deck's own cone already assumes exactly that.
+ * the deck is taken as horizontally homogeneous beyond the radius this field can resolve. The
+ * deck's own sun cone (clouds.glsl) already assumes exactly that.
+ *
+ * REJECTED: 1.2 km, borrowed from that cone. It binds below 64 degrees, so like the slant cap
+ * it replaced it truncates at nearly every sun angle, and it reports the map LIGHTER than the
+ * truth: measured mean 0.1611 against 0.1339 at 35 degrees, 0.1308 against 0.0080 at 15. The
+ * two values agree exactly at 75 degrees, where neither clamps, which is the check that
+ * distinguishes them.
  */
-const float CLOUD_SHADOW_REACH_KM = 8.0;
+const float CLOUD_SHADOW_REACH_KM = CLOUD_SHAPE_TILE_KM;
 
 void main()
 {
@@ -94,38 +83,46 @@ void main()
     // Exactly ONE tile of the shape field, which is what makes this map cover the whole world
     // from 256 texels. With detail off, cloudDensity is periodic in XZ with the shape texture's
     // own period, so a GL_REPEAT lookup at any world position is not an approximation of a
-    // bigger map -- it is the same value that map would hold. A finite window was tried first
-    // and its edge is plainly visible: past the window the receiver reverts to full sun, which
-    // reads as a hard diagonal across the fog wherever the sun shear runs out of texture.
-    // The column this texel owns, at the shell bottom -- the altitude the map is indexed at.
+    // bigger map -- it is the same value that map would hold.
     vec2 xz = TexCoords * CLOUD_SHAPE_TILE_KM;
 
-    // Step the DECK, not a length: the climb is the same 2.5 km at every sun angle, so the
-    // integral covers the whole cloud whatever the elevation.
+    // Step the DECK, not a length: the climb is the same at every sun angle, so the integral
+    // covers the whole cloud whatever the elevation.
     float dh = (CLOUD_TOP_KM - CLOUD_BOTTOM_KM) / float(CLOUD_SHADOW_STEPS);
-    // World XZ travelled per km of climb toward the sun. The same quantity sky.c publishes to
-    // the receivers as cloudShadowShear, for the same reason: the sun's Y divides out once.
+    // World XZ per km of climb toward the sun. Must be the same quantity the receivers get as
+    // cloudShadowShear, or the map's geometry and the lookup's disagree about which texel a
+    // point maps to.
     vec2 shear = vec2(sunDir.x, sunDir.z) / sunY;
-    // Slant travelled per step. The TRUE one, unaffected by the reach clamp below -- the light
-    // really does cross that much air, and it is what makes a grazing sun come out opaque
-    // instead of merely dim. Only the density ESTIMATE is clamped, never the path it weights.
+    // Slant travelled per step. The TRUE one, unaffected by the reach clamp -- the light really
+    // does cross that much air, and it is what makes a grazing sun come out opaque instead of
+    // merely dim. Only the density ESTIMATE is clamped, never the path it weights.
     float ds = dh / sunY;
+    // The direction is fixed and the climb only grows, so clamping the excursion IS clamping
+    // the altitude at which it stops growing. Stated once here rather than rediscovered by a
+    // length() and a divide on all 24 steps -- and above ~17 degrees it never binds at all.
+    float hReach = CLOUD_SHADOW_REACH_KM / max(length(shear), 1e-6);
+    float tauPerDensity = CLOUD_EXTINCTION * densityScale * ds;
 
     float tau = 0.0;
     for (int i = 0; i < CLOUD_SHADOW_STEPS; i++) {
         // Cell centres, not edges: a half-step offset makes the sum a midpoint rule, which is
         // exact for the linear ramps the altitude gradient is built from.
         float h = (float(i) + 0.5) * dh;
-        vec2 off = shear * h;
-        float r = length(off);
-        if (r > CLOUD_SHADOW_REACH_KM)
-            off *= CLOUD_SHADOW_REACH_KM / r;
-        vec3 p = vec3(xz.x + off.x, CLOUD_BOTTOM_KM + h, xz.y + off.y);
+        vec2 off = xz + shear * min(h, hReach);
+        vec3 p = vec3(off.x, CLOUD_BOTTOM_KM + h, off.y);
+        // Height fraction through cloudHeightFracAt, not the loop's own (i+0.5)/STEPS.
+        //
+        // The planar form is cheaper and this march is otherwise planar, but the DECK is not:
+        // clouds.glsl measures altitude spherically, and the view march shades against that.
+        // A shadow map that placed the same cloud at a different height than the deck does is
+        // the exact disagreement this file exists to avoid -- worth two decimals of curvature
+        // at the widest excursion, which is where the dapple edges visibly move.
+        //
         // detailOn false: the erosion tap is a texture-scale feature, and this map is read
         // through a filter far coarser than the detail it would add.
         float d = cloudDensity(p, cloudHeightFracAt(p), shapeTex, detailTex, coverage, cloudType,
                                false, windOffsetKm, 0.0);
-        tau += d * CLOUD_EXTINCTION * densityScale * ds;
+        tau += d * tauPerDensity;
     }
 
     FragColor = mix(1.0, exp(-tau), smoothstep(0.0, CLOUD_SHADOW_MIN_SUN_Y, sunDir.y));

@@ -26,9 +26,7 @@ layout(location = 7) out vec4 SpecOut;    // Ambient specular; the catcher emits
 #define CSM_PCF_HALF_KERNEL 2
 #include "csm.glsl"
 
-// Cloud deck (spec 11.41). This program has a unit to spare, so unlike pbr_frag
-// it declares the sampler rather than aliasing one.
-uniform sampler2D cloudShadowTex;
+// Cloud deck (spec 11.41): it darkens this plane the way a caster does.
 #include "cloud_shadow.glsl"
 
 // Catcher-only: each light's shadow is weighted by that light's share of the
@@ -52,15 +50,11 @@ void main()
 {
     float darkness = 0.0;
     for (int i = 0; i < numShadowLights && i < MAX_SHADOW_LIGHTS; i++) {
-        float occ = occlusion_from(i);
-        // The deck occludes one of these lights, and the sky says which by slot.
-        // Composed as transmittances rather than added as darknesses: the sun
-        // reaching this point is what survives BOTH the caster and the cloud, so
-        // a fragment fully shadowed by geometry cannot be darkened past black by
-        // a cloud sitting over it.
-        if (i == cloudShadowLight)
-            occ = 1.0 - (1.0 - occ) * cloudSunAt(WorldPos);
-        darkness += shadowLightWeight[i] * occ;
+        // What survives BOTH the caster and the deck. Composed as transmittances
+        // rather than added as darknesses, so a fragment already in full geometric
+        // shadow cannot be darkened past black by a cloud sitting over it.
+        float sun = (1.0 - occlusion_from(i)) * cloudSunForSlot(WorldPos, i);
+        darkness += shadowLightWeight[i] * (1.0 - sun);
     }
 
     // Fade out toward the plane edge so the quad boundary is invisible

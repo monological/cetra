@@ -263,17 +263,17 @@ void sky_update_aerial(SkyAtmosphere* sky, mat4 view, mat4 projection);
 // is the single "no aerial perspective" state consumers rely on.
 void sky_publish_to_postfx(const SkyAtmosphere* sky, struct PostFX* fx);
 
-// Upload the cloud deck's shell terms (tile / shell Y / shear / occluded CSM slot) to a
-// program that shadows its sun with them, and hand back the map. 0 = no deck, which the
-// upload has already stated as tile 0. For the caller that owns the texture bind itself:
-// pbr_frag reaches the map through a unit it shares with two other tenants, so the choice
-// of what is bound there belongs with that routing, not here.
-GLuint sky_upload_cloud_shadow(const SkyAtmosphere* sky, ShaderProgram* program);
-
-// The same, plus binding the map to `unit` and pointing cloudShadowTex at it. For a program
-// with a unit to spare. Sky owns the "is there a deck" test either way, so a call site cannot
-// get the off state wrong.
+// Bind the cloud deck's sun-transmittance map to `unit` and upload the shell terms that
+// address it. Sky owns the "is there a deck" test, so a call site cannot get the off state
+// wrong: with no deck the light slot uploads as -1 and every consumer returns full sun.
 void sky_bind_cloud_shadow(const SkyAtmosphere* sky, ShaderProgram* program, int unit);
+
+// Where a program with a spare unit takes that map. 14 is the skybox/GI atlas number, which
+// neither consumer samples -- chosen over 11 because water routes through the shared
+// bind_ibl_textures, and that points irradianceMap at 11 whether water declares it or not.
+// pbr_frag is the exception and reaches the map through TEXUNIT_SCENE_COLOR by alias, having
+// no seventeenth declaration to spend; that choice lives with the tenant routing in render.c.
+#define SKY_CLOUD_SHADOW_UNIT 14
 
 // Draw the procedural sky as the frame background (sky-view LUT + analytic
 // sun disc), replacing render_skybox in sky mode. Strips translation from

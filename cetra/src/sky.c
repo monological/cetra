@@ -365,16 +365,25 @@ static CloudShadowTerms cloud_shadow_terms(const SkyAtmosphere* sky) {
     return t;
 }
 
-GLuint sky_upload_cloud_shadow(const SkyAtmosphere* sky, ShaderProgram* program) {
-    CloudShadowTerms t = cloud_shadow_terms(sky);
+void sky_bind_cloud_shadow(const SkyAtmosphere* sky, ShaderProgram* program, int unit) {
     if (!program || !program->uniforms)
-        return t.tex;
+        return;
+    CloudShadowTerms t = cloud_shadow_terms(sky);
     UniformManager* u = program->uniforms;
     uniform_set_float(u, "cloudShadowTile", t.tile);
     uniform_set_float(u, "cloudShadowShellY", t.shell_y);
     uniform_set_vec2(u, "cloudShadowShear", t.shear);
     uniform_set_int(u, "cloudShadowLight", t.light);
-    return t.tex;
+
+    // The unit is bound and named unconditionally, texture 0 and all. Leaving the
+    // sampler at its default of 0 when there is no deck would point it at whatever
+    // that program keeps on unit 0 -- and a samplerCube tenant there is undefined
+    // shading for the whole program, which is the hazard bind_ibl_textures spells
+    // out at its own call site. `light` -1 is the off state; the unit is still ours.
+    glActiveTexture(GL_TEXTURE0 + unit);
+    glBindTexture(GL_TEXTURE_2D, t.tex);
+    glActiveTexture(GL_TEXTURE0);
+    uniform_set_int(u, "cloudShadowTex", unit);
 }
 
 void sky_publish_to_postfx(const SkyAtmosphere* sky, struct PostFX* fx) {
@@ -409,21 +418,6 @@ void sky_publish_to_postfx(const SkyAtmosphere* sky, struct PostFX* fx) {
     fx->cloud_shadow_shear[0] = cs.shear[0];
     fx->cloud_shadow_shear[1] = cs.shear[1];
     fx->cloud_shadow_light = cs.light;
-}
-
-void sky_bind_cloud_shadow(const SkyAtmosphere* sky, ShaderProgram* program, int unit) {
-    GLuint tex = sky_upload_cloud_shadow(sky, program);
-    if (!tex || !program || !program->uniforms)
-        return;
-    // Only bound when there IS a deck, and that is the whole off state: the upload above has
-    // already written tile 0, cloudSunAt returns before touching the sampler, and a unit left
-    // holding whatever the last pass put there is never read. The alternative -- a 1x1 stand-in
-    // so the unit is always complete -- is what postfx keeps for the froxel pass, and it is
-    // needed there because that shader binds unconditionally.
-    glActiveTexture(GL_TEXTURE0 + unit);
-    glBindTexture(GL_TEXTURE_2D, tex);
-    glActiveTexture(GL_TEXTURE0);
-    uniform_set_int(program->uniforms, "cloudShadowTex", unit);
 }
 
 int sky_bake_static_luts(SkyAtmosphere* sky, struct Engine* engine) {

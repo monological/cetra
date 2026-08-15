@@ -6,6 +6,7 @@
 #include <cglm/cglm.h>
 
 #include "common.h" // RenderMode, for water_will_draw
+#include "sky.h"    // SKY_CLOUD_SHADOW_UNIT, asserted against this file's own ledger below
 
 /*
  * Water surface (spec 11.32, roadmap D3).
@@ -59,10 +60,14 @@
 // Only the long and medium bands reach the mesh; the short one shades the interface
 // and never displaces, so it has no previous position to remember.
 #define WATER_PREV_CASCADES 2
-// The cloud deck's sun transmittance (spec 11.41). 11 is the IBL irradiance cubemap,
-// which is a different binding point on the same unit -- the same reasoning the depth
-// and bed units above rest on, and this program samples no irradiance.
-#define WATER_CLOUD_SHADOW_UNIT 11
+// The cloud deck's sun transmittance is SKY_CLOUD_SHADOW_UNIT (sky.h), shared with the
+// catcher rather than allocated here: it is the sky's resource and neither consumer has a
+// reason to disagree about where it lands. Asserted against this file's own range because
+// WATER_PREV_CASCADES is derived and a third displacing band would walk into it.
+_Static_assert(SKY_CLOUD_SHADOW_UNIT >= WATER_PREV_UNIT0 + WATER_PREV_CASCADES,
+               "the cloud shadow unit collides with water's previous-cascade range");
+_Static_assert(SKY_CLOUD_SHADOW_UNIT < 16,
+               "the cloud shadow unit exceeds GL_MAX_TEXTURE_IMAGE_UNITS");
 
 // Resolution of the baked bed heightfield. It only has to resolve the SHOALING
 // ramp -- how fast the water shallows -- not the terrain's own detail, which the

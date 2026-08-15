@@ -47,16 +47,9 @@ uniform int waterMedium;
 uniform float waterLevelY;
 uniform vec3 waterExtinction; // per-channel; reduced to its mean here, see below
 uniform vec3 waterInscatter;  // scene radiance, pre-exposed with everything else
-/*
- * Cloud transmittance toward the sun (spec 11.39). cloudShadowTile 0 = no deck.
- *
- * NOT a fourth medium -- a visibility term for one light, which is why it multiplies into
- * fogVisibility below rather than into sigma. The deck occludes the sun; it does not scatter.
- *
- * The lookup itself is shared with the three ground surfaces (spec 11.41), so it lives in the
- * include rather than here; this pass has a unit to spare and declares the sampler for it.
- */
-uniform sampler2D cloudShadowTex;
+// Cloud transmittance toward the sun (spec 11.39). NOT a fourth medium -- a visibility term
+// for one light, which is why it multiplies into fogVisibility below rather than into sigma.
+// The deck occludes the sun; it does not scatter.
 #include "cloud_shadow.glsl"
 
 /*
