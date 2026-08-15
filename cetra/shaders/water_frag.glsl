@@ -240,13 +240,30 @@ void main() {
     // The interface is shaded in view space, so the normal has to arrive there
     // too -- the surface normal is authored in world space by ocean.glsl.
     vec3 Nv = normalize(mat3(view) * N);
+    /*
+     * Is the body of water on the far side of this interface from the eye.
+     *
+     * ONE answer, read by the normal flip here and by the optical path below, because
+     * they are the same question asked twice. They used to disagree in scope -- the flip
+     * per PIXEL, the path per FRAME from cameraSubmerged alone -- so a crest closing over
+     * a camera still above the still level had its normal flipped toward the eye and was
+     * then charged its path against the depth buffer BEHIND the surface, which is air
+     * there.
+     *
+     * cameraSubmerged stays per frame deliberately: it is compared against the STILL
+     * level, so a camera at the waterline does not switch models several times a second
+     * as crests pass and reset every temporal history with them (water.c). The facing
+     * test is what carries the per-pixel half, and folding the two here is what lets the
+     * wavy boundary the eye actually sees decide instead of the flat one.
+     */
+    bool seenFromBelow = cameraSubmerged == 1 || !gl_FrontFacing;
     // Face the eye. Two separate cases need it, and both rasterize because culling
     // is off: the whole surface seen from underneath, and the back sides of steep
     // crests seen from above. Left unflipped, dot(Nv, V) goes negative -- full
     // Fresnel with no transmitted share, and a refract() whose incident ray is on
     // the same side as the normal, which returns a direction on the wrong side of
     // the interface and sends the refraction sample to an arbitrary texel.
-    if (cameraSubmerged == 1 || !gl_FrontFacing)
+    if (seenFromBelow)
         Nv = -Nv;
     float NdotV = clamp(dot(Nv, V), 0.0, 1.0);
 
@@ -263,7 +280,7 @@ void main() {
     float path = maxPath;
     // How much of this pixel still has water in it. 1 everywhere but the shoreline.
     float coverage = 1.0;
-    if (cameraSubmerged == 1) {
+    if (seenFromBelow) {
         // From below, the body is between the EYE and the surface rather than
         // beyond it, so the optical path is the sight line itself. The depth buffer
         // behind the surface describes air and has nothing to say about it.

@@ -3582,6 +3582,23 @@ WATER_FAR_NEAR_BOX = (0.06, 0.86, 0.20, 0.94)
 WATER_FAR_ROUGH_AUTHORED = 0.115
 WATER_FAR_ROUGH_RATIO_MAX = 0.35
 
+# The waterline, decided per PIXEL (spec 11.42). A framing the fixture cannot supply and
+# is the reason the defect shipped: crests have to close OVER the eye while the still
+# level is still below it, which needs an amplitude two orders above the fixture's 0.06
+# and a level just under its camera at y 1.35. Authored rather than flagged because
+# amplitude has no CLI override.
+WATER_WATERLINE_BLOCK = {"level": 1.05, "amplitude": 0.55}
+# The band where crests close over the eye, and foreground the change cannot reach.
+# Read as a RATIO of the two: the reference box measured byte-identical across the fix
+# (0.5057 both sides), so it anchors the crest band against exposure and build drift.
+WATER_WATERLINE_CREST_BOX = (0.10, 0.02, 0.90, 0.18)
+WATER_WATERLINE_REF_BOX = (0.30, 0.62, 0.70, 0.72)
+# Measured 0.1851 with the per-frame split against 0.2477 with the per-pixel one. A
+# backfacing crest charged the depth buffer BEHIND the surface is charged the bed's
+# distance through water that is not there, so it reads far too absorbed and the
+# failing direction is DOWN.
+WATER_WATERLINE_MIN_RATIO = 0.22
+
 # Shoreline coverage (spec 11.33 phase 3). The waterline on this fixture runs across
 # the ramp in a wave-modulated band; the diff between the two coverage modes lands
 # entirely inside these rows and this x range, so the measurement window is where the
@@ -3831,6 +3848,14 @@ def run_water_gate(workdir):
                       --no-water-lod, which reports a zero footprint and so reaches the
                       unfiltered surface exactly. The direction of the roughness handover
                       is not measurable here -- see WATER_FAR_ROUGH_AUTHORED.
+      water-waterline the above/below split is decided PER PIXEL. On a framing where
+                      crests close over a camera that is still above the still level, a
+                      backfacing fragment takes the sight line as its optical path
+                      rather than the depth buffer behind it -- which is air there, so
+                      charging it the bed's distance read far too absorbed. An in-frame
+                      ratio against foreground the fix cannot touch, so it is exposure-
+                      and build-independent. The fixture cannot see this at all and the
+                      arm authors its own framing -- see WATER_WATERLINE_BLOCK.
       water-flags     the flags override the scene file, and a NEGATIVE flag neither
                       creates a surface nor loses to a sibling. Read through the probe,
                       which reports what the surface is rather than what it looks like:
@@ -4073,6 +4098,28 @@ def run_water_gate(workdir):
               f"both sides {found}")
         if not ok:
             failures.append("water-horizon")
+
+    # The waterline, decided per pixel. The fixture cannot see this -- at amplitude 0.06
+    # no crest ever shows its underside, so !gl_FrontFacing is never true there -- so the
+    # arm authors a straddling framing of its own and reads it as an in-frame ratio.
+    wl_scene = os.path.join(workdir, "water_waterline.cscn")
+    _water_cscn_variant(scene, wl_scene, WATER_WATERLINE_BLOCK)
+    wl = os.path.join(workdir, "water_waterline.ppm")
+    err = render(wl_scene, wl, WATER_PIN + WATER_NO_CATCHER)
+    if err:
+        print(f"  water-waterline ERROR render failed: {err.strip()[-200:]}")
+        failures.append("water-waterline")
+    else:
+        ww, wh, wpix = _read_ppm(wl)
+        crest = _water_box_luma(wpix, ww, wh, WATER_WATERLINE_CREST_BOX)
+        ref = _water_box_luma(wpix, ww, wh, WATER_WATERLINE_REF_BOX)
+        ratio = crest / max(ref, 1e-9)
+        ok = ratio >= WATER_WATERLINE_MIN_RATIO
+        print(f"  water-waterline {'PASS' if ok else 'FAIL'}  crest/foreground "
+              f"{crest:.4f}/{ref:.4f} = {ratio:.4f} (want "
+              f">={WATER_WATERLINE_MIN_RATIO})")
+        if not ok:
+            failures.append("water-waterline")
 
     # Flag precedence over the scene file. No pixels: the probe reports what the surface
     # IS, and every case here was a silent defect that a rendered frame could not show.
