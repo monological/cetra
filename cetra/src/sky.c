@@ -321,6 +321,55 @@ void sky_update_aerial(SkyAtmosphere* sky, mat4 view, mat4 projection) {
     check_gl_error("sky aerial volume");
 }
 
+// Everything a consumer needs to read the deck's shadow. Derived in ONE place because two
+// stages now read the same map -- the froxel medium and the three ground surfaces -- and a
+// shear that disagreed between them would shadow the haze with a deck the ground is standing
+// somewhere else under. tile 0 is the whole off state; the other fields are then unread.
+typedef struct {
+    GLuint tex;
+    float tile;
+    float shell_y;
+    float shear[2];
+    int light;
+} CloudShadowTerms;
+
+static CloudShadowTerms cloud_shadow_terms(const SkyAtmosphere* sky) {
+    // The texture handle IS the "a march has happened" statement -- shadow_tex is only ever
+    // created inside build_cloud_shadow, so testing it needs no second frame counter.
+    CloudShadowTerms t = {0};
+    t.light = -1;
+    if (!sky || !sky->enabled || !sky->clouds.enabled || !sky->clouds.shadows_enabled ||
+        !sky->clouds.shadow_tex || sky->sun_dir[1] <= 0.0f)
+        return t;
+
+    t.tex = sky->clouds.shadow_tex;
+    t.tile = sky->clouds.shadow_tile;
+    t.shell_y = sky->clouds.shadow_shell_y;
+    // World XZ per unit of climb toward the sun. Derived here rather than handing over the
+    // direction because it is constant for the frame, and the consumer would otherwise divide
+    // by the sun's Y once per froxel cell, or once per fragment.
+    t.shear[0] = sky->sun_dir[0] / sky->sun_dir[1];
+    t.shear[1] = sky->sun_dir[2] / sky->sun_dir[1];
+    // Which light the deck occludes, as a CSM slot. The sky knows exactly, so no consumer has
+    // to recognise the sun by comparing directions. -1 when the sun is not casting (below the
+    // horizon fade) and so is absent from the shadowed-light list entirely.
+    t.light =
+        (sky->sun_light && sky->sun_light->cast_shadows) ? sky->sun_light->shadow_map_index : -1;
+    return t;
+}
+
+GLuint sky_upload_cloud_shadow(const SkyAtmosphere* sky, ShaderProgram* program) {
+    CloudShadowTerms t = cloud_shadow_terms(sky);
+    if (!program || !program->uniforms)
+        return t.tex;
+    UniformManager* u = program->uniforms;
+    uniform_set_float(u, "cloudShadowTile", t.tile);
+    uniform_set_float(u, "cloudShadowShellY", t.shell_y);
+    uniform_set_vec2(u, "cloudShadowShear", t.shear);
+    uniform_set_int(u, "cloudShadowLight", t.light);
+    return t.tex;
+}
+
 void sky_publish_to_postfx(const SkyAtmosphere* sky, struct PostFX* fx) {
     if (!fx)
         return;
@@ -345,33 +394,29 @@ void sky_publish_to_postfx(const SkyAtmosphere* sky, struct PostFX* fx) {
         fx->aerial_slices = 0;
     }
 
-    // The cloud deck's sun transmittance, for the fog to shadow its sun term with. The
-    // texture handle IS the "a march has happened" statement -- shadow_tex is only ever
-    // created inside build_cloud_shadow, so testing it needs no second frame counter.
-    //
-    // The else clears the TILE as well, the way the aerial block above clears all of its
-    // fields: tile 0 is then the single off state on its own, and the uploader hands it
-    // straight to the shader with nothing to re-derive.
-    if (sky && sky->enabled && sky->clouds.enabled && sky->clouds.shadows_enabled &&
-        sky->clouds.shadow_tex && sky->sun_dir[1] > 0.0f) {
-        fx->cloud_shadow_tex = sky->clouds.shadow_tex;
-        fx->cloud_shadow_tile = sky->clouds.shadow_tile;
-        fx->cloud_shadow_shell_y = sky->clouds.shadow_shell_y;
-        // World XZ per unit of climb toward the sun. Published rather than the direction
-        // because it is constant for the frame, and the consumer would otherwise divide by
-        // the sun's Y once per froxel cell to recover it.
-        fx->cloud_shadow_shear[0] = sky->sun_dir[0] / sky->sun_dir[1];
-        fx->cloud_shadow_shear[1] = sky->sun_dir[2] / sky->sun_dir[1];
-        // Which fog light the deck occludes. The sky knows exactly, so the consumer never
-        // has to recognise the sun by comparing directions. -1 when the sun is not casting
-        // (below the horizon fade) and so is absent from the fog light list entirely.
-        fx->cloud_shadow_light =
-            (sky->sun_light && sky->sun_light->cast_shadows) ? sky->sun_light->shadow_map_index : -1;
-    } else {
-        fx->cloud_shadow_tex = 0;
-        fx->cloud_shadow_tile = 0.0f;
-        fx->cloud_shadow_light = -1;
-    }
+    // The cloud deck's sun transmittance, for the fog to shadow its sun term with.
+    CloudShadowTerms cs = cloud_shadow_terms(sky);
+    fx->cloud_shadow_tex = cs.tex;
+    fx->cloud_shadow_tile = cs.tile;
+    fx->cloud_shadow_shell_y = cs.shell_y;
+    fx->cloud_shadow_shear[0] = cs.shear[0];
+    fx->cloud_shadow_shear[1] = cs.shear[1];
+    fx->cloud_shadow_light = cs.light;
+}
+
+void sky_bind_cloud_shadow(const SkyAtmosphere* sky, ShaderProgram* program, int unit) {
+    GLuint tex = sky_upload_cloud_shadow(sky, program);
+    if (!tex || !program || !program->uniforms)
+        return;
+    // Only bound when there IS a deck, and that is the whole off state: the upload above has
+    // already written tile 0, cloudSunAt returns before touching the sampler, and a unit left
+    // holding whatever the last pass put there is never read. The alternative -- a 1x1 stand-in
+    // so the unit is always complete -- is what postfx keeps for the froxel pass, and it is
+    // needed there because that shader binds unconditionally.
+    glActiveTexture(GL_TEXTURE0 + unit);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glActiveTexture(GL_TEXTURE0);
+    uniform_set_int(program->uniforms, "cloudShadowTex", unit);
 }
 
 int sky_bake_static_luts(SkyAtmosphere* sky, struct Engine* engine) {

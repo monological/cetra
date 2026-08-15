@@ -293,7 +293,7 @@ static void _update_camera_uniforms(ShaderProgram* program, Camera* camera) {
 static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* item, Camera* camera,
                          mat4 view, mat4 projection, RenderMode render_mode, SubmitState* state,
                          SubmitPass pass, size_t instances) {
-    SceneNode* node = item->node;
+    const SceneNode* node = item->node;
     Mesh* mesh = item->mesh;
     // Only the opaque pass submits the opaque lane, so the lane says which pass
     // this is without the caller having to.
@@ -385,23 +385,46 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
             // specular must stay inline or it is silently discarded.
             uniform_set_int(u, "splitAmbientSpec",
                             engine->spec_this_frame && !alpha_pass && !engine->capturing ? 1 : 0);
-            // Unit 6 has two disjoint tenants. The moment-weighted accumulate
-            // binds the moment atlas there; every other pass binds the
-            // refraction source, which is valid only in the late pass after the
-            // mid-frame resolve ran (pass 2 forces a program re-switch by
-            // resetting current_program, so this always re-uploads there).
+            // Unit 6 has THREE disjoint tenants, and they are disjoint by pass.
+            // The moment-weighted accumulate binds the moment atlas; the late
+            // pass binds the refraction source, valid only after the mid-frame
+            // resolve ran (pass 2 forces a program re-switch by resetting
+            // current_program, so this always re-uploads there); and the opaque
+            // pass -- where scene_color_this_frame is false by construction and
+            // nothing has ever been bound here -- takes the cloud shadow map.
             //
-            // They cannot collide, and not by convention: the accumulate draws
-            // only non-transmissive meshes, and that is the same routing that
-            // makes sceneColorTex unreadable there.
+            // The first two cannot collide by routing: the accumulate draws only
+            // non-transmissive meshes, which is the same routing that makes
+            // sceneColorTex unreadable there. The third cannot collide with
+            // either because it is only ever bound while the other two are
+            // provably absent, which is a stronger statement and the reason the
+            // ground half of cloud shadows needed no sampler unit freed.
             bool moments_bound = pass == SUBMIT_PASS_OIT_ACCUMULATE &&
                                  engine->moments_this_frame && engine->moment_atlas_texture != 0;
+            // Is the slot this draw's to take? The prepass stops at the coverage
+            // decision and shades nothing, so it reads no tenant at all.
+            bool cloud_slot_free = pass != SUBMIT_PASS_DEPTH_ONLY && !moments_bound &&
+                                   !engine->scene_color_this_frame;
+            // Uploading the terms is what arms the shader, so it happens only
+            // where the map is the tenant. Everywhere else the tile is forced to
+            // 0: cloudSunAt gates on tile alone, and the deck's tile is live for
+            // the whole frame, so a late-pass draw would otherwise sample the
+            // refraction source as though it were a shadow map.
+            GLuint cloud_shadow_tex = 0;
+            if (cloud_slot_free)
+                cloud_shadow_tex = sky_upload_cloud_shadow(scene ? scene->sky : NULL, program);
+            else
+                uniform_set_float(u, "cloudShadowTile", 0.0f);
+            bool cloud_bound = cloud_shadow_tex != 0;
+
             uniform_set_int(u, "sceneColorAvailable",
                             engine->scene_color_this_frame && !moments_bound ? 1 : 0);
-            if (moments_bound || engine->scene_color_this_frame) {
+            if (moments_bound || engine->scene_color_this_frame || cloud_bound) {
+                GLuint bound = moments_bound ? engine->moment_atlas_texture
+                               : cloud_bound ? cloud_shadow_tex
+                                             : engine->opaque_color_texture;
                 glActiveTexture(GL_TEXTURE0 + TEXUNIT_SCENE_COLOR);
-                glBindTexture(GL_TEXTURE_2D, moments_bound ? engine->moment_atlas_texture
-                                                           : engine->opaque_color_texture);
+                glBindTexture(GL_TEXTURE_2D, bound);
                 glActiveTexture(GL_TEXTURE0);
             }
             // Both are read only inside an OIT sub-pass, so they upload only

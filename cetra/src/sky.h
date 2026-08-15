@@ -263,6 +263,18 @@ void sky_update_aerial(SkyAtmosphere* sky, mat4 view, mat4 projection);
 // is the single "no aerial perspective" state consumers rely on.
 void sky_publish_to_postfx(const SkyAtmosphere* sky, struct PostFX* fx);
 
+// Upload the cloud deck's shell terms (tile / shell Y / shear / occluded CSM slot) to a
+// program that shadows its sun with them, and hand back the map. 0 = no deck, which the
+// upload has already stated as tile 0. For the caller that owns the texture bind itself:
+// pbr_frag reaches the map through a unit it shares with two other tenants, so the choice
+// of what is bound there belongs with that routing, not here.
+GLuint sky_upload_cloud_shadow(const SkyAtmosphere* sky, ShaderProgram* program);
+
+// The same, plus binding the map to `unit` and pointing cloudShadowTex at it. For a program
+// with a unit to spare. Sky owns the "is there a deck" test either way, so a call site cannot
+// get the off state wrong.
+void sky_bind_cloud_shadow(const SkyAtmosphere* sky, ShaderProgram* program, int unit);
+
 // Draw the procedural sky as the frame background (sky-view LUT + analytic
 // sun disc), replacing render_skybox in sky mode. Strips translation from
 // view like the skybox path. Borrows the unit cube from ibl (populated during
