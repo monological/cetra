@@ -863,6 +863,10 @@ where the two consumers are provably mutually exclusive.
 tile is a pure storage change, so the raiden baseline must be 0 px, and if it is not, the
 octahedral resampling is lossy in a way that matters and the item should stop.
 **Depends on:** A4 (shipped). **Owns foundations:** the freed units D1/D2 spend.
+**Demanded by measurement since 11.39**, not just by the dependency graph: D2 shipped its froxel
+half and measured the ground at RMSE 0.0013 against the air's 0.0353, so the dappled light on
+terrain that D2 was written to deliver is entirely on the far side of this item. It is now the only
+thing standing between the engine and that look, which makes it the highest-leverage entry in D.
 
 ### D1. Clustered decals — Effort L
 The largest **environment-art** gap in the engine: there is no way to author localised surface detail
@@ -877,7 +881,37 @@ forward shader's cost data-dependent per pixel in a way clustering cannot bound 
 *Screen-Space Decals* (GDC 2014).
 **Depends on:** A1 (shipped), **D0 (hard)**.
 
-### D2. Local fog volumes + cloud shadows — Effort M
+### D2. Local fog volumes + cloud shadows — SHIPPED as spec 11.39
+Both halves landed. Local fog volumes are a Scene-owned world-space AABB with density, an inward
+feather and a σ-weighted tint, authored as a top-level `fogVolumes[]` block and arming the froxel
+pass by joining the union at the gate rather than latching `fog_enabled`. Cloud shadows are a
+256² R16F sun-transmittance map built by the cloud march from the march's own wind offset, read by
+shearing each froxel up to the shell — exact for a horizontal layer, and tiled by `GL_REPEAT`
+because the density field is periodic over the shape noise's own 8 km.
+
+**The verdict this item was told to produce: the surface half IS still worth a unit, and the
+measurement says so more sharply than the entry below expected.**
+
+| band, aerial fixture with `--clouds --fog` | RMSE on/off |
+|---|---|
+| sky and air | **0.0353** |
+| ground | **0.0013** |
+
+The froxel half shadows *in-scattered light*, so it lands where the sight line crosses the most air
+and puts essentially nothing underfoot. The entry below called the froxel half "where the visible
+payoff is" — that is right about payoff per line and **wrong about which payoff**. What ships is
+weather in the haze; the moving dappled light on terrain, which is the thing the entry actually
+promised, is the `pbr_frag` half and is still entirely unbuilt. So D0 is not merely unblocked-by
+here, it is the gating dependency for the feature D2 was written to deliver.
+
+Two things measured along the way that contradict the plan and are recorded in the spec: the
+predicted wind ghost in the froxel accumulator **does not occur** at any scene scale (the fog
+volume's depth, not the shadow tile, sets the ratio), so the history clamp was not built; and the
+froxel accumulator's first active frame is not stable run-to-run when the pass is armed by a
+volume rather than by `fog_enabled`, which is unexplained and filed.
+
+Original entry follows.
+
 Two gaps in the shipped atmosphere, one item because they share the froxel injection point.
 **Local fog volumes**: B1's froxel volume carries one global medium, so a smoky room, a dust shaft or
 a mist pocket cannot be authored — only the whole world's fog can change. Per-object density boxes

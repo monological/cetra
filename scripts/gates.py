@@ -2831,6 +2831,95 @@ def _absorb_box_rgb(pix, w, h, box, n=ABSORB_GRID):
     return [a / (n * n) for a in acc]
 
 
+CLOUDSHADOW_FIXTURE = "aerial_fixture.gltf"
+# Eight boxes across the SKY band, not the ground. The froxel half shadows in-scattered
+# light, so it lands where the sight line crosses the most air -- measured RMSE 0.0353
+# over this band against 0.0013 on the terrain below it. An arm reading the ground would
+# be measuring the surface half, which is deferred (spec 11.39, the D0 verdict).
+CLOUDSHADOW_BAND = [(0.02 + 0.12 * i, 0.05, 0.12 + 0.12 * i, 0.33) for i in range(8)]
+# The deck must remove light from the medium under it. Measured 5.3% of mean luminance;
+# a wide floor, because the arm's job is direction and presence.
+CLOUDSHADOW_DARKEN_MAX = 0.99
+# ...and it must remove DIFFERENT amounts in different places. This is the arm that
+# actually reads the map's contents rather than inferring them: a lookup returning a
+# constant -- a broken shear, a dead texture, a uniform fallback -- still darkens the
+# frame and still passes the arm above. Measured spread/mean 0.63 across the band.
+CLOUDSHADOW_SPREAD_MIN = 0.15
+
+
+def run_cloud_shadow_gate(workdir):
+    """Cloud shadows in the froxel volume (spec 11.39).
+
+    Three arms, none implying the others:
+
+      cloudshadow-dark    the deck darkens the medium under it.
+      cloudshadow-vary    it darkens by DIFFERENT amounts across the frame. Fails a
+                          lookup that returns a constant, which the arm above cannot
+                          see -- and a constant is what every plausible failure of the
+                          shear, the wrap or the texture bind produces.
+      cloudshadow-nofog   with no medium to shadow, --no-cloud-shadows is byte
+                          identical. The map is still BUILT on this arm, so it also
+                          proves the extra pass perturbs nothing on its own.
+    """
+    scene = os.path.join(ROOT, "assets", CLOUDSHADOW_FIXTURE)
+    if not os.path.exists(scene):
+        print(f"  cloudshadow-dark SKIP  ({CLOUDSHADOW_FIXTURE} not present)")
+        return []
+
+    base = ["--clouds", "--no-auto-exposure", "-E", "1.0"]
+    on = os.path.join(workdir, "cloudshadow_on.ppm")
+    off = os.path.join(workdir, "cloudshadow_off.ppm")
+    err = render(scene, on, base + ["--fog"]) or \
+        render(scene, off, base + ["--fog", "--no-cloud-shadows"])
+    if err:
+        print(f"  cloudshadow-dark ERROR render failed: {err.strip()[-200:]}")
+        return ["cloudshadow-dark"]
+
+    failures = []
+    w, h, pix_on = _read_ppm(on)
+    _, _, pix_off = _read_ppm(off)
+
+    def luma(v):
+        return (v[0] + v[1] + v[2]) / 3.0
+
+    lit = [luma(_absorb_box_rgb(pix_off, w, h, b)) for b in CLOUDSHADOW_BAND]
+    shaded = [luma(_absorb_box_rgb(pix_on, w, h, b)) for b in CLOUDSHADOW_BAND]
+    ratios = [s / max(l, 1e-6) for s, l in zip(shaded, lit)]
+    mean_ratio = sum(ratios) / len(ratios)
+
+    ok = mean_ratio <= CLOUDSHADOW_DARKEN_MAX
+    print(f"  cloudshadow-dark {'PASS' if ok else 'FAIL'}  shaded/lit={mean_ratio:.4f} "
+          f"want <={CLOUDSHADOW_DARKEN_MAX}")
+    if not ok:
+        failures.append("cloudshadow-dark")
+
+    # Spread of the SHORTFALL (1 - ratio), not of the ratio: the shortfall is what the
+    # deck removed, and it is the quantity a constant lookup would make uniform.
+    short = [1.0 - r for r in ratios]
+    mean_short = sum(short) / len(short)
+    spread = (max(short) - min(short)) / max(mean_short, 1e-6)
+    ok = spread >= CLOUDSHADOW_SPREAD_MIN
+    print(f"  cloudshadow-vary {'PASS' if ok else 'FAIL'}  shortfall spread/mean="
+          f"{spread:.4f} want >={CLOUDSHADOW_SPREAD_MIN} (mean {mean_short:.4f})")
+    if not ok:
+        failures.append("cloudshadow-vary")
+
+    a = os.path.join(workdir, "cloudshadow_nofog_a.ppm")
+    b = os.path.join(workdir, "cloudshadow_nofog_b.ppm")
+    err = render(scene, a, base) or render(scene, b, base + ["--no-cloud-shadows"])
+    if err:
+        print(f"  cloudshadow-nofog ERROR render failed: {err.strip()[-200:]}")
+        return failures + ["cloudshadow-nofog"]
+    ae, pae = compare(a, b)
+    ok = ae == 0
+    print(f"  cloudshadow-nofog {'PASS' if ok else 'FAIL'}  {ae} px (PAE {pae:.5f}) "
+          f"want 0")
+    if not ok:
+        failures.append("cloudshadow-nofog")
+
+    return failures
+
+
 FOGVOL_FIXTURE = "fog_volume_fixture.cscn"
 # Three strips at the same rows, so the vignette and the tone curve cancel out of every
 # comparison. left and right are the two boxes; gap is bare backdrop between them.
@@ -5598,6 +5687,7 @@ GATE_GROUPS = [
      run_absorption_gate),
     ("fog-volume", "local fog volumes (density, tint, arming; spec 11.39):",
      run_fog_volume_gate),
+    ("cloud-shadow", "cloud shadows into the fog (spec 11.39):", run_cloud_shadow_gate),
     ("water", "water surface (determinism, absorption, shoreline, reach; specs 11.32-11.35):",
      run_water_gate),
     ("clouds", "cloud layer (steady-state churn, report-only):", run_cloud_churn_gate),
