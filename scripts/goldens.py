@@ -77,6 +77,24 @@ RECIPES = [
     # compared across BUILDS, where auto-exposure is the largest known source of drift.
     {"name": "water_fixture", "scene": "assets/water_fixture.cscn", "size": (800, 600),
      "flags": ["-f", "30", "-W", "400", "-H", "300", "--no-auto-exposure", "-E", "1.0"]},
+    # The same fixture with the surface raised over the fixed eye at y 1.35, so the camera
+    # is UNDER it (spec 11.40). The one thing the sibling above cannot see.
+    #
+    # It exists for a change 11.39 shipped and could not measure: the global fog density now
+    # uploads as zero when the app did not ask for fog, which can only move frames where
+    # fog_enabled is false AND water_medium is set -- submerged ones. Every other golden is
+    # above water, so the 0 px run 11.39 cited as evidence was guaranteed whatever the change
+    # did. Measured here: reproducing the old unconditional upload (--fog-density 0.004032,
+    # which is 0.08 / this fixture's 19.84 scene radius) moves 4,339 px, so this frame is
+    # genuinely sensitive to the quantity and would trip if it were ever re-widened.
+    #
+    # --water-level rather than --cam-eye because the gate arms already prove this exact
+    # configuration renders; flags otherwise match the sibling, so the two differ in one
+    # variable. Deterministic x2 at 30 frames, which is not automatic -- the submerged path
+    # arms the froxel volume, and 11.39 found the volume-COUNT arming route unstable there.
+    {"name": "water_submerged", "scene": "assets/water_fixture.cscn", "size": (800, 600),
+     "flags": ["--water-level", "1.9", "-f", "30", "-W", "400", "-H", "300",
+               "--no-auto-exposure", "-E", "1.0"]},
 
     # --- shadows and occlusion ------------------------------------------------
     # The --cs-debug term itself, so the image is independent of cs_strength.
