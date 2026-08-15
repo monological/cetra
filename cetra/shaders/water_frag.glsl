@@ -34,10 +34,10 @@ in vec4 CurrClip;
 in vec4 PrevClip;
 in float Jacobian;
 in float Shoal;
-// How much of the displacing bands' slope the vertex stage's footprint filtered away. The
-// other half of the geometry-to-BRDF handover: what left the mesh arrives here as
-// roughness.
-in float Filtered;
+// Mean square slope of the displacing bands that the vertex stage's footprint filtered
+// away. The other half of the geometry-to-BRDF handover: what left the mesh arrives here
+// as roughness.
+in float FilteredMss;
 
 uniform mat4 view;
 uniform mat4 projection;
@@ -137,10 +137,6 @@ const float WATER_MAX_BEND = 1.0;
 const float WATER_SHORT_NEAR = 42.0;
 const float WATER_SHORT_FAR = 118.0;
 const float WATER_SHORT_SLOPE_GAIN = 0.42;
-// Where interface roughness lands once ALL of the resolved slope has been handed over. The
-// low end is the authored waterRoughness, not a constant here: the calm value is a property
-// of the water being described, and only the far end is a property of this mechanism.
-const float WATER_ROUGH_RIPPLED = 0.115;
 // Jacobian compression at which foam starts and saturates.
 const float WATER_FOAM_ON = 0.16;
 const float WATER_FOAM_FULL = 0.42;
@@ -173,17 +169,19 @@ void main() {
     /*
      * The geometry-to-BRDF handover, which arrives from two directions.
      *
-     * `Filtered` is what the vertex stage's cell footprint removed from the bands that
-     * DISPLACE -- mip levels on the spectral path, dropped octaves on the Gerstner one --
-     * and it is what makes the far field a widening specular lobe rather than the glass
-     * plane the filtering leaves behind. Below, the short band adds what its own distance
-     * fade removed from the bands that only SHADE.
+     * `FilteredMss` is the mean square slope the vertex stage's cell footprint removed from
+     * the bands that DISPLACE -- mip levels on the spectral path, dropped octaves on the
+     * Gerstner one -- and it is what makes the far field a widening specular lobe rather
+     * than the glass plane the filtering leaves behind. Below, the short band adds what its
+     * own distance fade removed from the band that only SHADES.
      *
-     * Combined with max, not summed: each is already a fraction of the same surface's slope
-     * energy, and adding them would push the horizon past rippled on the strength of
-     * double-counted overlap.
+     * SUMMED, where this used to take the larger of two fractions. The cascades own
+     * disjoint wavenumber windows, so there is no overlap to double-count: what each band
+     * loses is slope variance the others never carried, and variances of independent
+     * fields add. The old `max` was avoiding a double count that the abutting cutoffs had
+     * already made impossible.
      */
-    float handover = Filtered;
+    float removedMss = FilteredMss;
     float foam = 0.0;
     if (waveModel == 1) {
         // The short cascade shades but never displaces. Carried into the mesh it
@@ -207,13 +205,16 @@ void main() {
         float fade = 1.0 - smoothstep(WATER_SHORT_NEAR, WATER_SHORT_FAR, length(ViewPos));
         vec2 shortSlope = short1.rg * fade;
         N = normalize(N + vec3(-shortSlope.x, 0.0, -shortSlope.y) * WATER_SHORT_SLOPE_GAIN);
-        // Roughness takes the slope energy the fade REMOVED -- the unfaded slope
-        // times (1 - fade) -- which is what makes this a handover rather than two
-        // channels dimming together. Driving it from the faded slope instead sent
-        // distant water toward the calm value in both, so the horizon got smoother
-        // as its waves went sub-pixel, which is backwards.
-        vec2 handedOver = short1.rg * (1.0 - fade);
-        handover = max(handover, smoothstep(0.012, 0.30, length(handedOver)));
+        // Roughness takes the slope variance the fade REMOVED, which is what makes this a
+        // handover rather than two channels dimming together. Driving it from the faded
+        // slope instead sent distant water toward the calm value in both, so the horizon
+        // got smoother as its waves went sub-pixel, which is backwards.
+        //
+        // The fade scales the slope, so it scales the variance by its SQUARE -- and the
+        // band's own variance is what is being scaled, rather than this one texel's slope.
+        // A per-texel read would make the lobe width depend on where in the wave the pixel
+        // happened to land, where the removed detail is a property of the whole band.
+        removedMss += (1.0 - fade) * (1.0 - fade) * cascadeSlopeVar[2];
 
         // Foam where the horizontal map COMPRESSES, from the vertex Jacobian plus
         // the short band's own. Deformation, not a height threshold: a tall smooth
@@ -234,7 +235,26 @@ void main() {
     float band = smoothstep(0.02, 0.22, Shoal) * (1.0 - smoothstep(0.30, 0.72, Shoal));
     foam = max(foam, band * WATER_SHORE_FOAM);
 
-    float roughness = mix(waterRoughness, WATER_ROUGH_RIPPLED, clamp(handover, 0.0, 1.0));
+    /*
+     * The removed slope, as a lobe width (spec 11.42).
+     *
+     * A Beckmann/GGX lobe of width alpha carries a mean square slope of alpha squared, so
+     * the slope the mesh gave up converts to a width by a square root and composes with the
+     * authored one by adding VARIANCES -- which is what makes this a handover: the surface
+     * is as rough as the waves it stopped resolving, no more and no less.
+     *
+     * alpha is the squared perceptual roughness this tree shades with, so the trip out is a
+     * second square root. With nothing filtered the expression collapses to exactly
+     * waterRoughness, which is what keeps the near field the water the scene authored.
+     *
+     * This replaced a lerp toward a 0.115 literal, inherited from the reference study. That
+     * constant was a look control standing where a property of the sea belongs: it made the
+     * horizon the same roughness for a millpond and a gale, and at this spectrum's measured
+     * slope variance it was low by a factor of three.
+     */
+    float alphaAuthored = waterRoughness * waterRoughness;
+    float alpha = sqrt(alphaAuthored * alphaAuthored + max(removedMss, 0.0));
+    float roughness = clamp(sqrt(alpha), waterRoughness, 1.0);
 
     vec3 V = normalize(-ViewPos);
     // The interface is shaded in view space, so the normal has to arrive there

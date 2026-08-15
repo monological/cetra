@@ -1150,11 +1150,16 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
             glBindTexture(GL_TEXTURE_2D, fft ? water->cascade_field[c][0][t] : 0);
             uniform_set_int(u, name, unit);
         }
-        char len[32], chop[32];
+        char len[32], chop[32], svar[32];
         snprintf(len, sizeof(len), "cascadeLength[%d]", c);
         snprintf(chop, sizeof(chop), "cascadeChoppiness[%d]", c);
+        snprintf(svar, sizeof(svar), "cascadeSlopeVar[%d]", c);
         uniform_set_float(u, len, WATER_CASCADE_CFG[c].length_scale);
         uniform_set_float(u, chop, WATER_CASCADE_CFG[c].choppiness);
+        // Zero on the Gerstner path, whose octaves report the slope they dropped directly
+        // -- it has no seeded spectrum to have measured, and a stale variance from a
+        // previous spectral scene would widen its lobe for waves it never carried.
+        uniform_set_float(u, svar, fft ? water->cascade_slope_var[c] : 0.0f);
     }
 
     // Last frame's displacement, for the spectral path's motion vectors. Only usable

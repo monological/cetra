@@ -41,6 +41,11 @@ uniform sampler2D cascade2_0;
 uniform sampler2D cascade2_1;
 uniform float cascadeLength[3];
 uniform float cascadeChoppiness[3];
+// Each band's mean square slope, measured off the spectrum it was seeded from (spec
+// 11.42). What the filtering below removes is a FRACTION of these, and a fraction has to
+// be a fraction of something -- without them the far field could only be lerped toward a
+// literal, which is a look constant standing in for a property of the sea.
+uniform float cascadeSlopeVar[3];
 // Last frame's target 0 for the two cascades that displace, and whether they hold a
 // frame yet. 0 on the first two frames, and then the previous position falls back to
 // the current one -- which reports camera motion only, the behaviour the whole
@@ -182,11 +187,15 @@ struct OceanSurface {
     // Horizontal-map Jacobian; below 1 the map is compressing. 1 means "not
     // computed", which is the Gerstner path.
     float jacobian;
-    // Fraction of the displacing bands' slope variance that the sample footprint
-    // filtered away: 0 where the surface is fully resolved, 1 where it has collapsed to
-    // the still plane. What roughness picks up, so the energy is handed over rather than
-    // lost -- see oceanCascadeLod.
-    float filtered;
+    // Mean square slope of the displacing bands that the sample footprint filtered away:
+    // 0 where the surface is fully resolved, the band's whole variance where it has
+    // collapsed to the still plane. What roughness picks up, so the energy is handed over
+    // rather than lost -- see oceanCascadeLod.
+    //
+    // ABSOLUTE, not a fraction. A fraction cannot be turned into a lobe width without
+    // knowing what it is a fraction of, which is why the far field used to lerp toward a
+    // constant instead of widening by what it actually lost (spec 11.42).
+    float filteredMss;
 };
 
 /*
@@ -336,7 +345,7 @@ OceanSurface oceanAssemble(vec2 p, vec3 disp, vec3 dispDx, vec3 dispDz, vec3 sh)
     s.jacobian = dPdx.x * dPdz.z - dPdz.x * dPdx.z;
     s.shoal = shoal;
     // Each model overwrites this with what its own filtering removed.
-    s.filtered = 0.0;
+    s.filteredMss = 0.0;
     return s;
 }
 
@@ -381,10 +390,13 @@ OceanSurface oceanEvaluateSpectral(vec2 p, vec3 sh, float footprint) {
                                    vec3(dHoriz.x, slope.x, crossDeriv),
                                    vec3(crossDeriv, slope.y, dHoriz.y), sh);
     // Each band's slope survives in proportion to how much of it the mip still resolves,
-    // reaching nothing at the top level. Averaged rather than weighted because the two
-    // displacing bands are seeded at the same amplitude scale, so they carry comparable
-    // energy -- see the cascade table.
-    s.filtered = 0.5 * (lodLong + lodMed) / oceanCascadeTopLod();
+    // reaching nothing at the top level. Weighted by each band's OWN variance and summed
+    // rather than averaged: the cascades own disjoint wavenumber windows, so what they
+    // lose adds, and the two do not in fact carry comparable energy -- the medium band
+    // measures slightly more slope than the long one despite its smaller waves, because
+    // slope is amplitude times wavenumber.
+    float top = oceanCascadeTopLod();
+    s.filteredMss = (lodLong / top) * cascadeSlopeVar[0] + (lodMed / top) * cascadeSlopeVar[1];
     return s;
 }
 
@@ -486,7 +498,11 @@ OceanSurface oceanEvaluateAt(vec2 p, float t, vec3 sh, float footprint) {
     }
 
     OceanSurface s = oceanAssemble(p, disp, dDispDx, dDispDz, sh);
-    s.filtered = 1.0 - slopeKept / max(slopeEnergy, 1e-9);
+    // What the footprint dropped, as a mean square slope rather than as a fraction. The
+    // halving is the mean square of a sine: an octave whose slope amplitude is a*k
+    // contributes (a*k)^2 / 2, and the two axes already sum to that because the octave
+    // travels in one direction.
+    s.filteredMss = (slopeEnergy - slopeKept) * 0.5;
     // A Gerstner map DOES compress -- that bunching is what sharpens its crests -- but
     // its Jacobian is not reported here, so the determinant oceanAssemble computed is
     // overwritten. 1 means "no selector on this path", which is what the foam and

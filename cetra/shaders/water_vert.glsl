@@ -27,7 +27,7 @@ out vec4 CurrClip;
 out vec4 PrevClip;
 out float Jacobian;
 out float Shoal;
-out float Filtered;
+out float FilteredMss;
 
 // Kept for symmetry with pbr_vert, where it is load-bearing because the depth
 // prepass rasterizes the same triangles from a second program. Nothing rasterizes
@@ -82,7 +82,7 @@ void main() {
     Normal = s.normal;
     Jacobian = s.jacobian;
     Shoal = s.shoal;
-    Filtered = s.filtered;
+    FilteredMss = s.filteredMss;
 
     vec4 viewPos = view * vec4(s.world, 1.0);
     ViewPos = viewPos.xyz;
