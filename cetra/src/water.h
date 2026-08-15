@@ -52,10 +52,25 @@
 #define WATER_CASCADE_UNIT0 0
 // The baked bed heightfield, sampled in the VERTEX stage for shoaling.
 #define WATER_BED_UNIT 8
+/*
+ * The cascade shadow array, for the sun glitter (spec 11.42).
+ *
+ * NOT SHADOW_MAP_TEXTURE_UNIT, which is 10 and already carries cascadePrev1. Those are a
+ * sampler2DArray and a sampler2D, and a program that declares BOTH types against one image
+ * unit is an INVALID_OPERATION at draw -- so the array needs a unit whose 2D_ARRAY binding
+ * point this program leaves alone. 11 is the IBL irradiance CUBE, a third binding point on
+ * a unit water never samples as either, which is the same aliasing the depth and bed units
+ * above already rest on.
+ */
+#define WATER_SHADOW_UNIT 11
 // Last frame's transformed field for the two cascades that displace the mesh, for the
-// spectral path's motion vectors. Units 9 and 10 hold the Charlie sheen cubemap and
-// the shadow map array, both of which are OTHER binding points on those units -- the
-// same reasoning WATER_DEPTH_UNIT above rests on, and the water program binds neither.
+// spectral path's motion vectors. Units 9 and 10 hold the Charlie sheen cubemap and the
+// shadow map array, both of which are OTHER binding points on those units -- the same
+// reasoning WATER_DEPTH_UNIT above rests on.
+//
+// This program DOES sample the cascade array since spec 11.42, and takes it on
+// WATER_SHADOW_UNIT rather than here: two sampler types against one image unit is an
+// error, where two types on one unit across DIFFERENT programs is only aliasing.
 #define WATER_PREV_UNIT0 9
 // Only the long and medium bands reach the mesh; the short one shades the interface
 // and never displaces, so it has no previous position to remember.
@@ -193,6 +208,10 @@ typedef struct Water {
     // Caustics on refracted geometry. Inert on the Gerstner path, whose steepness
     // is clamped so its mapping cannot compress and therefore cannot focus.
     bool caustics;
+    // false = no analytic sun lobe, which is every frame before spec 11.42. Live on both
+    // wave models: its width comes from the slope the surface stopped resolving, and the
+    // Gerstner path reports that from its dropped octaves.
+    bool glitter;
     // false = the shoreline is a hard cutoff at the pixel the water column closes.
     // Inert wherever the target has no samples to spend coverage on.
     bool shore_coverage;

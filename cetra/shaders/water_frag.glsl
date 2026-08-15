@@ -57,6 +57,14 @@ uniform int sceneDepthAvailable;
 
 uniform vec3 sunDir; // toward the sun, world space
 uniform int sunAvailable;
+// Scene radiance, NOT pre-exposed, with the atmosphere's transmittance already folded into
+// it by the sky. Multiplied by preExposure where it is used; view.glsl is the authority.
+uniform vec3 sunRadiance;
+// Cascade slot of the sun, or -1 where it casts nothing. Gates both the shadow lookup and
+// the deck, which names its occluded light the same way.
+uniform int sunShadowSlot;
+// 0 = no analytic sun lobe, which is the frame every capture before spec 11.42 rendered.
+uniform int glitterEnabled;
 uniform int cameraSubmerged;
 uniform int causticsEnabled;
 // 1 = the shoreline writes fractional coverage for alpha-to-coverage; 0 = the
@@ -81,6 +89,13 @@ uniform float maxReflectionLOD;
 // never reaches the mesh.
 #include "ocean.glsl"
 #include "cloud_shadow.glsl"
+// The cascades, for the glitter. The OUTERMOST-cascade lookup rather than pbr_frag's
+// per-fragment PCSS selection, and that is the right one here rather than the cheap one:
+// the widest cascade is scene-fitted and camera-independent, so a surface running to the
+// horizon takes no cascade seam across itself. Same path the catcher and the motes use.
+#define CSM_OUTERMOST_PCF
+#define CSM_PCF_HALF_KERNEL 2
+#include "csm.glsl"
 
 // Coarsest mip the transmission may select. The resolve stops generating there.
 const float WATER_TRANSMISSION_MAX_LOD = 6.0;
@@ -161,6 +176,79 @@ const float WATER_CAUSTIC_GAIN = 1.35;
 const float WATER_CAUSTIC_SHALLOW = 0.35;
 const float WATER_CAUSTIC_DEEP_ON = 9.0;
 const float WATER_CAUSTIC_DEEP_OFF = 20.0;
+
+/*
+ * COX-MUNK SUN GLITTER (spec 11.42).
+ *
+ * The sea's specular response to the sun is not a GGX highlight: it is an anisotropic
+ * Gaussian slope distribution, wider along the wind than across it, and that anisotropy is
+ * what stretches the glitter into a path rather than a blob. Cox and Munk measured it from
+ * photographs of exactly this.
+ *
+ * The two variances come from the SPECTRUM this sea was seeded with, not from Cox-Munk's
+ * clean-sea regression on wind speed. The regression is a stand-in for a spectrum, and
+ * there is a real one here -- so the glitter widens when the sea state does, for the same
+ * reason and by the same number as the rest of the surface.
+ *
+ * The variance passed in is the UNRESOLVED slope, the same quantity the roughness above is
+ * built from. Feeding it the total would count the waves twice: the ones the mesh and the
+ * short band already resolve are in the normal, and a lobe as wide as the whole spectrum
+ * sitting on top of them is a second sea.
+ */
+// Cox-Munk's measured upwind/crosswind ratio. The SPLIT is theirs; the total is the
+// spectrum's, because the seeding accumulates a single isotropic k^2 sum and a directional
+// pair would have to survive the same realisation noise the probe already reports.
+const float WATER_GLITTER_ANISO = 1.45;
+// Floor on either variance. A perfectly resolved surface has no unresolved slope at all,
+// and a zero-width Gaussian is a division by zero rather than a sharp highlight.
+const float WATER_GLITTER_MIN_VAR = 1.0e-5;
+// Smith masking-shadowing at the interface, at a fixed roughness. The lobe's own width is
+// already in the distribution, and threading it through here as well made the horizon
+// darken as the sea roughened, which is backwards for a surface whose grazing reflection
+// should approach total.
+const float WATER_GLITTER_SMITH_K = 0.0307;
+// Dimensionless ceiling on the lobe, in the sense pbr_frag's BRDF_MAX is: it bounds the
+// reflectance rather than the radiance, so it is independent of the sun's magnitude and of
+// the exposure. The distribution goes as 1/variance, so a nearly resolved surface -- calm
+// water close to the camera -- puts a spike here that no tonemap recovers from.
+const float WATER_GLITTER_MAX = 400.0;
+
+float waterSmith(float ndx) {
+    return ndx / (ndx * (1.0 - WATER_GLITTER_SMITH_K) + WATER_GLITTER_SMITH_K);
+}
+
+// All vectors in VIEW space, which is where this shader does its shading. windV is the
+// wind direction carried into view space; it need not be tangent to the surface, since the
+// frame below projects it.
+float waterSunGlitter(vec3 N, vec3 V, vec3 L, vec3 windV, float mss) {
+    float ndv = max(dot(N, V), 1.0e-3);
+    float ndl = max(dot(N, L), 1.0e-3);
+    vec3 H = normalize(V + L);
+    float ndh = max(dot(N, H), 1.0e-3);
+
+    // A surface frame aligned to the wind. Degenerate looking straight down the wind, so
+    // the cross product is taken against the normal rather than against the wind itself.
+    vec3 T = windV - N * dot(windV, N);
+    float tLen = length(T);
+    T = tLen > 1.0e-4 ? T / tLen : normalize(cross(N, vec3(0.0, 0.0, 1.0)) + vec3(1.0e-4));
+    vec3 B = normalize(cross(N, T));
+
+    float varAlong = max(mss * WATER_GLITTER_ANISO / (1.0 + WATER_GLITTER_ANISO),
+                         WATER_GLITTER_MIN_VAR);
+    float varAcross = max(mss / (1.0 + WATER_GLITTER_ANISO), WATER_GLITTER_MIN_VAR);
+    // Facet slopes: the half-vector's tilt out of the surface plane, per axis.
+    float sAlong = dot(H, T) / ndh;
+    float sAcross = dot(H, B) / ndh;
+    float pdf = exp(-0.5 * (sAlong * sAlong / varAlong + sAcross * sAcross / varAcross)) /
+                (6.28318530718 * sqrt(varAlong * varAcross));
+    // Slope density to facet density: the Jacobian of the slope-to-normal map is 1/cos^4.
+    float D = pdf / max(ndh * ndh * ndh * ndh, 1.0e-4);
+    float G = waterSmith(ndv) * waterSmith(ndl);
+    // The cosine that would multiply the incoming radiance cancels the one in the
+    // microfacet denominator, so this is the whole reflectance and the caller multiplies
+    // by radiance alone.
+    return D * G / max(4.0 * ndv, 1.0e-3);
+}
 
 void main() {
     vec2 uv = gl_FragCoord.xy / max(screenSize, vec2(1.0));
@@ -411,9 +499,10 @@ void main() {
             // (spec 11.41). Read at the crossing rather than at the fragment for the same
             // reason the Jacobian is: this is a property of the ray, not of the pixel.
             //
-            // The only place cloud shadow enters this shader, and that is not an omission:
-            // water has no analytic sun lobe to occlude, and its reflection is the split-sum
-            // environment lookup, which already carries the deck through the sky bake.
+            // One of the two places cloud shadow enters this shader; the other is the sun
+            // lobe below, which spec 11.42 gave it. The reflection is still not a third:
+            // it is the split-sum environment lookup, which carries the deck through the
+            // sky bake already.
             bed *= 1.0 + focused * WATER_CAUSTIC_GAIN *
                              cloudSunAt(vec3(crossing.x, WorldPos.y, crossing.y));
         }
@@ -441,6 +530,42 @@ void main() {
 
     // Energy split: what the interface reflects it does not transmit.
     vec3 color = body * (1.0 - specWeight) + reflected * specWeight;
+
+    /*
+     * The sun itself (spec 11.42).
+     *
+     * The environment lobe above cannot supply this. sky_env_frag bakes the sky WITHOUT the
+     * disc -- at that face size a 0.53 degree sun is a couple of texels and aliases the
+     * prefilter -- so under the procedural sky the reflection carries no sun at all, and
+     * the sea had no specular response to its own key light. An HDR environment does carry
+     * one, but blurred to whatever mip the roughness picks.
+     *
+     * Suppressed from below: a submerged eye sees the sun through total internal reflection
+     * and refraction that this lobe does not model, and the honest answer there is nothing
+     * rather than a highlight in the wrong place.
+     */
+    if (glitterEnabled == 1 && sunAvailable == 1 && !seenFromBelow) {
+        vec3 Lv = normalize(mat3(view) * sunDir);
+        vec3 windV = normalize(mat3(view) * vec3(waterWindDir.x, 0.0, waterWindDir.y));
+        float glitter = waterSunGlitter(Nv, V, Lv, windV, removedMss);
+        // Dimensionless ceiling on the BRDF, the reasoning pbr_frag states for BRDF_MAX:
+        // it bounds the lobe rather than the product, so it is independent of both the
+        // sun's magnitude and the exposure. A near-mirror sea puts an unbounded spike here
+        // otherwise, and one pixel of it survives the tonemap as a hole.
+        glitter = min(glitter, WATER_GLITTER_MAX);
+        // What survives the caster and the deck. The slot gates both: a sun with no cascade
+        // is one nothing can name, and cloudSunForSlot returns 1 for every other light.
+        float sun = 1.0;
+        if (sunShadowSlot >= 0) {
+            sun = (1.0 - csmOutermostOcclusion(WorldPos, sunShadowSlot)) *
+                  cloudSunForSlot(WorldPos, sunShadowSlot);
+        }
+        // Fresnel at the FACET rather than at the surface normal, which is what makes the
+        // glitter brighten toward grazing along with the rest of the interface.
+        vec3 Hv = normalize(V + Lv);
+        vec3 Fs = fresnelSchlick(max(dot(V, Hv), 0.0), F0);
+        color += Fs * glitter * sun * sunRadiance * preExposure;
+    }
 
     // Foam sits ON the interface, so it replaces both halves rather than being
     // added to them: whitewater is opaque, and adding it would let the body colour

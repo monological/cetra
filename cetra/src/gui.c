@@ -625,6 +625,7 @@ static void _engine_gui_panel(Engine* engine) {
                 igSliderFloat("Swell", &water->sea.swell, 0.0f, 1.0f, "%.2f", 0);
             }
             igCheckbox("Caustics", &water->caustics);
+            igCheckbox("Sun glitter", &water->glitter);
             _end_effect_group();
         }
 

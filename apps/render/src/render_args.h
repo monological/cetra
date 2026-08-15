@@ -82,6 +82,7 @@ typedef struct {
     float water_extent;         // Half-size of the shoaling bed's domain (0 = keep default)
     int water_waves;            // Wave model: -1 = unset, 0 = Gerstner, 1 = spectral
     int no_water_caustics;      // Bisect lever: drop the surface's light focusing
+    int no_water_glitter;       // Bisect lever: drop the analytic sun lobe
     int no_water_coverage;      // Bisect lever: hard shoreline cutoff, no coverage
     int no_water_lod;           // Bisect lever: full wave detail at any cell footprint
     int water_bed_dome;         // Install the analytic dome bed provider (shoaling)

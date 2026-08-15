@@ -3489,6 +3489,21 @@ WATER_CASCADES = 3
 # dc_err alone would NOT have caught it: a constant field is invariant under the
 # conjugation, which is why the second mode exists.
 WATER_FFT_IMPULSE_MAX = 1e-3
+
+# The analytic sun lobe (spec 11.42). The fixture's OWN framing cannot see it, and that is
+# geometry rather than an oversight: its sun sits at azimuth 135 and elevation 26, so the
+# mirror direction lands about 24 degrees below the bottom of a 42 degree frame -- measured
+# 0 px there with the lobe on and off. So the arm puts the sun ahead and low, which is the
+# geometry a glitter path needs and the one every photograph of one was taken in.
+WATER_GLITTER_SUN = {"sun_elevation": 14.0, "sun_azimuth": 180.0}
+WATER_GLITTER_CAMERA = {"eye": [0.0, 1.6, 7.0], "target": [0.0, 0.55, 0.0], "fov": 45}
+# Spectral, because the lobe's width is the slope the surface stopped resolving and the
+# spectral path is where that is a measured quantity rather than four dropped octaves.
+WATER_GLITTER_WATER = {"waves": "fft"}
+# Measured 20,963 px. The lobe is ADDITIVE, so the second half asserts a direction as well
+# as a magnitude: a sun that darkened the sea would be a sign error passing a pixel count.
+WATER_GLITTER_MIN_PX = 5000
+WATER_GLITTER_BOX = (0.55, 0.28, 0.95, 0.40)
 # And `level` is a field both paths can set, so authoring it must land in exactly the
 # same place the flag does. 0 px or one of them is lying.
 WATER_CSCN_LEVEL = 0.9
@@ -3753,6 +3768,21 @@ def _water_fft_probe(extra, scene=None):
     return rows, impulse
 
 
+def _water_glitter_variant(src, dst):
+    """Copy the fixture with the sun ahead and low, and the camera facing it.
+
+    Three blocks rather than the water one alone, which is why this is not a
+    _water_cscn_variant call: the lobe is a property of where the sun IS relative to the
+    eye, so the framing is the instrument and the water block only picks the wave model.
+    """
+    def mutate(d):
+        d["environment"].update(WATER_GLITTER_SUN)
+        d["camera"] = dict(WATER_GLITTER_CAMERA)
+        d.setdefault("water", {}).update(WATER_GLITTER_WATER)
+
+    cscn_copy(src, dst, mutate)
+
+
 def _water_cscn_variant(src, dst, overrides):
     """Copy a .cscn with its water block overridden."""
     cscn_copy(src, dst, lambda d: d.setdefault("water", {}).update(overrides))
@@ -3923,6 +3953,11 @@ def run_water_gate(workdir):
                       --no-water-lod, which reports a zero footprint and so reaches the
                       unfiltered surface exactly. The direction of the roughness handover
                       is not measurable here -- see WATER_FAR_ROUGH_AUTHORED.
+      water-glitter   the sea has a specular response to its own sun, and it BRIGHTENS.
+                      Under the procedural sky the environment cubemap carries no disc, so
+                      before spec 11.42 there was none at all -- and the lobe's width comes
+                      from the slope the surface stopped resolving, so it cannot be read
+                      off the fixture's own framing. See WATER_GLITTER_SUN.
       water-fft-var   the transformed field carries the variance the SEEDING predicted,
                       per band and in both height and slope. The first arm here that
                       reads the spectrum rather than a picture of it, and the only one
@@ -4185,6 +4220,32 @@ def run_water_gate(workdir):
               f"{ae_sea} px (want >={WATER_SEASTATE_MIN_PX}, no flag can set it)")
         if not ok:
             failures.append("water-seastate")
+
+    # The sun's own reflection. Under the procedural sky the environment cubemap carries no
+    # disc at all (sky_env_frag), so before this lobe the sea had no specular response to
+    # its key light and --no-water-glitter reaches exactly that frame.
+    glit_scene = os.path.join(workdir, "water_glitter.cscn")
+    _water_glitter_variant(scene, glit_scene)
+    glit_on = os.path.join(workdir, "water_glitter_on.ppm")
+    glit_off = os.path.join(workdir, "water_glitter_off.ppm")
+    err = render(glit_scene, glit_on, WATER_PIN + WATER_NO_CATCHER)
+    if not err:
+        err = render(glit_scene, glit_off, WATER_PIN + WATER_NO_CATCHER + ["--no-water-glitter"])
+    if err:
+        print(f"  water-glitter ERROR render failed: {err.strip()[-200:]}")
+        failures.append("water-glitter")
+    else:
+        ae_glit, _ = compare(glit_off, glit_on)
+        gw, gh, g_on_pix = _read_ppm(glit_on)
+        _, _, g_off_pix = _read_ppm(glit_off)
+        lum_on = _water_box_luma(g_on_pix, gw, gh, WATER_GLITTER_BOX)
+        lum_off = _water_box_luma(g_off_pix, gw, gh, WATER_GLITTER_BOX)
+        ok = ae_glit >= WATER_GLITTER_MIN_PX and lum_on > lum_off
+        print(f"  water-glitter {'PASS' if ok else 'FAIL'}  {ae_glit} px vs no glitter "
+              f"(want >={WATER_GLITTER_MIN_PX}), sun box {lum_off:.4f} -> {lum_on:.4f} "
+              f"(want brighter)")
+        if not ok:
+            failures.append("water-glitter")
 
     # The transform carries the variance the seeding predicted. The first arm in this
     # suite that reads the SPECTRUM rather than a picture of it.

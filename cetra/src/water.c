@@ -11,7 +11,8 @@
 #include "profiler.h"
 #include "program.h"
 #include "scene.h"
-#include "sky.h" // sky_bind_cloud_shadow (the deck dims the caustics)
+#include "shadow.h" // the cascades, for the glitter's shadow
+#include "sky.h"    // sky_bind_cloud_shadow (the deck dims the caustics)
 #include "texture.h"
 #include "uniform.h"
 #include "util.h"
@@ -372,6 +373,7 @@ Water* create_water(void) {
     // ocean, and asks for 45 passes and 24 textures to say so.
     water->wave_model = WATER_WAVES_GERSTNER;
     water->caustics = true;
+    water->glitter = true;
     water->shore_coverage = true;
     water->far_lod = true;
     return water;
@@ -1060,18 +1062,53 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
         if (scene->lights[i] && scene->lights[i]->type == LIGHT_DIRECTIONAL)
             sun = scene->lights[i];
     }
+    // Scene radiance, un-pre-exposed, exactly as the clustered UBO packs it for every
+    // other surface -- and the sky has already folded atmospheric transmittance into the
+    // colour (sky_apply_sun_to_light), so this one vector is the sun's magnitude AND its
+    // reddening near the horizon. The shader multiplies by preExposure; see view.glsl.
+    vec3 sun_radiance = {0.0f, 0.0f, 0.0f};
+    // Which cascade the deck occludes, for the glitter's shadow. -1 covers a sun that
+    // casts nothing, which is also the state cloud_shadow.glsl reads as "no deck".
+    int sun_slot = -1;
     if (sun) {
         // Lights store the direction they SHINE; the shader wants the direction
         // toward the source.
         glm_vec3_negate_to((float*)sun->direction, sun_dir);
         glm_vec3_normalize(sun_dir);
+        glm_vec3_scale((float*)sun->color, sun->intensity, sun_radiance);
+        sun_slot = sun->cast_shadows ? sun->shadow_map_index : -1;
     }
     uniform_set_vec3(u, "sunDir", (const float*)&sun_dir);
     uniform_set_int(u, "sunAvailable", sun ? 1 : 0);
+    uniform_set_vec3(u, "sunRadiance", (const float*)&sun_radiance);
+    uniform_set_int(u, "sunShadowSlot", sun_slot);
+
+    /*
+     * The cascades, for the glitter's shadow. Mirrors the shadow catcher's own bind
+     * (render.c) rather than calling bind_shadow_maps_to_program: that helper also uploads
+     * the MSM, TSM, punctual and PCSS state this program has no uniforms for, and points
+     * shadowMaps at unit 10, which is where cascadePrev1 already lives.
+     *
+     * csm.glsl's CSM_OUTERMOST_PCF path reads only the widest cascade, which is
+     * scene-fitted and camera-independent -- the right lookup for a surface that runs to
+     * the horizon, and the same one the catcher and the particle motes take.
+     */
+    const ShadowSystem* ss = scene->shadow_system;
+    const bool shadows = ss && ss->enabled && ss->shadow_map_array && sun_slot >= 0;
+    uniform_set_int(u, "numShadowLights", shadows ? (int)ss->directional_count : 0);
+    if (shadows) {
+        shadow_upload_cascade_uniforms(ss, u);
+        uniform_set_float(u, "shadowBias", ss->shadow_bias);
+        const float texel = 1.0f / (float)ss->default_map_size;
+        uniform_set_vec2(u, "shadowTexelSize", (vec2){texel, texel});
+    }
+    glActiveTexture(GL_TEXTURE0 + WATER_SHADOW_UNIT);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, shadows ? ss->shadow_map_array : 0);
+    uniform_set_int(u, "shadowMaps", WATER_SHADOW_UNIT);
     uniform_set_int(u, "causticsEnabled", water->caustics ? 1 : 0);
-    // The deck dims the caustics it focuses (spec 11.41). The only place cloud shadow
-    // enters this program: water has no analytic sun lobe to occlude, and its reflection
-    // is an environment lookup that already carries the deck.
+    uniform_set_int(u, "glitterEnabled", water->glitter ? 1 : 0);
+    // The deck dims the caustics it focuses (spec 11.41) and the sun lobe it lights
+    // (spec 11.42). Not the reflection, which is an environment lookup already carrying it.
     sky_bind_cloud_shadow(scene->sky, program, SKY_CLOUD_SHADOW_UNIT);
 
     // Which side of the surface the eye is on. Compared against the still level
