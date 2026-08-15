@@ -2863,21 +2863,51 @@ CLOUDSHADOW_TILE_SIZE = ("400", "400")
 # Measured 0.988 / 0.085 at the default coverage against 0.0 / 0.0 for the saturated map.
 CLOUDSHADOW_MAP_MAX_MIN = 0.30
 CLOUDSHADOW_MAP_SIGMA_MIN = 0.02
+# Eight boxes across the GROUND, for the surface half (spec 11.41). Read WITHOUT --fog, which
+# is what makes them unambiguous: with no medium in the frame the froxel half contributes
+# nothing, so every moving pixel is a shaded surface. Kept clear of the horizon, where the
+# terrain meets sky and the band would average the two.
+CLOUDSHADOW_GROUND = [(0.02 + 0.12 * i, 0.62, 0.12 + 0.12 * i, 0.88) for i in range(8)]
+# Measured shaded/lit 0.6998 over this band at coverage 0.2, against 1.0000 before the surface
+# half existed. Floor well above the measurement, because the arm's job is presence.
+CLOUDSHADOW_GROUND_MAX = 0.97
+# ...and the same variance requirement the air band carries, for the same reason: a lookup
+# returning a constant darkens the ground uniformly and sails through the arm above.
+#
+# This is the only arm that reads the map's CONTENT through a lookup, which was checked rather
+# than assumed: against a stub returning a constant 0.5 it reads 0.0512 and fails, while
+# cloudshadow-ground passes at 0.7177 and -vary, the AIR variance arm, passes at 0.9268. So the
+# air arm does not read the map either -- its spread comes from the fog's own structure -- and
+# -map plus this one are what separate a bad map from a bad lookup. Measured 0.2922.
+CLOUDSHADOW_GROUND_SPREAD_MIN = 0.15
+# Coverage for the ground arms. The 0.45 default is near-overcast -- 11.40 measured the map at
+# mean 0.023 there, which is a flat full shadow with no dapple to detect -- against 0.397 at
+# 0.2. The variance arm is unreadable at the default and the darkening arm barely varies.
+CLOUDSHADOW_GROUND_COVERAGE = "0.2"
 
 
 def run_cloud_shadow_gate(workdir):
-    """Cloud shadows in the froxel volume (spec 11.39).
+    """Cloud shadows in the froxel volume (spec 11.39) and on the ground (spec 11.41).
 
-    Three arms, none implying the others:
+    Five arms, none implying the others. The first two read the AIR with --fog, the next
+    two the GROUND without it, and the last reads the map itself:
 
       cloudshadow-dark    the deck darkens the medium under it.
       cloudshadow-vary    it darkens by DIFFERENT amounts across the frame. Fails a
                           lookup that returns a constant, which the arm above cannot
                           see -- and a constant is what every plausible failure of the
                           shear, the wrap or the texture bind produces.
-      cloudshadow-nofog   with no medium to shadow, --no-cloud-shadows is byte
-                          identical. The map is still BUILT on this arm, so it also
-                          proves the extra pass perturbs nothing on its own.
+      cloudshadow-ground  the terrain darkens too, with NO fog in the frame -- so the
+                          froxel half cannot be what moved. This pair used to assert 0 px
+                          on exactly these two renders, which was correct only while the
+                          ground was not a receiver.
+      cloudshadow-dapple  and it varies across the terrain. Same argument as -vary, on the
+                          surface: this is the arm that reads the map's content through
+                          pbr_frag rather than through the medium.
+      cloudshadow-map     the map itself carries range. Reads the --sky-debug tile, and it
+                          is the only arm that can tell a bad MAP from a bad LOOKUP -- 11.39
+                          shipped one saturated to zero at every texel with both of its
+                          downstream arms passing over it.
     """
     scene = os.path.join(ROOT, "assets", CLOUDSHADOW_FIXTURE)
     if not os.path.exists(scene):
@@ -2922,19 +2952,40 @@ def run_cloud_shadow_gate(workdir):
     if not ok:
         failures.append("cloudshadow-vary")
 
-    a = os.path.join(workdir, "cloudshadow_nofog_a.ppm")
-    b = os.path.join(workdir, "cloudshadow_nofog_b.ppm")
-    err = render(scene, a, base, frames=CLOUDSHADOW_FRAMES) or \
-        render(scene, b, base + ["--no-cloud-shadows"], frames=CLOUDSHADOW_FRAMES)
+    # The SURFACE half (spec 11.41), on the same fixture with NO fog. Where this pair used to
+    # assert 0 px -- "no medium, so nothing to shadow" -- the ground is now a receiver, so the
+    # same two renders carry the opposite claim and the arm reads the terrain instead of the
+    # frame. Nothing else can move here: with no fog the froxel half is not in the frame at all.
+    gbase = ["--clouds", "--cloud-coverage", CLOUDSHADOW_GROUND_COVERAGE,
+             "--no-auto-exposure", "-E", "1.0"]
+    g_on = os.path.join(workdir, "cloudshadow_ground_on.ppm")
+    g_off = os.path.join(workdir, "cloudshadow_ground_off.ppm")
+    err = render(scene, g_on, gbase, frames=CLOUDSHADOW_FRAMES) or \
+        render(scene, g_off, gbase + ["--no-cloud-shadows"], frames=CLOUDSHADOW_FRAMES)
     if err:
-        print(f"  cloudshadow-nofog ERROR render failed: {err.strip()[-200:]}")
-        return failures + ["cloudshadow-nofog"]
-    ae, pae = compare(a, b)
-    ok = ae == 0
-    print(f"  cloudshadow-nofog {'PASS' if ok else 'FAIL'}  {ae} px (PAE {pae:.5f}) "
-          f"want 0")
+        print(f"  cloudshadow-ground ERROR render failed: {err.strip()[-200:]}")
+        return failures + ["cloudshadow-ground"]
+    gw, gh, g_on_pix = _read_ppm(g_on)
+    _, _, g_off_pix = _read_ppm(g_off)
+    g_lit = [luma(_absorb_box_rgb(g_off_pix, gw, gh, b)) for b in CLOUDSHADOW_GROUND]
+    g_shaded = [luma(_absorb_box_rgb(g_on_pix, gw, gh, b)) for b in CLOUDSHADOW_GROUND]
+    g_ratios = [s / max(l, 1e-6) for s, l in zip(g_shaded, g_lit)]
+    g_mean = sum(g_ratios) / len(g_ratios)
+
+    ok = g_mean <= CLOUDSHADOW_GROUND_MAX
+    print(f"  cloudshadow-ground {'PASS' if ok else 'FAIL'}  shaded/lit={g_mean:.4f} "
+          f"want <={CLOUDSHADOW_GROUND_MAX}")
     if not ok:
-        failures.append("cloudshadow-nofog")
+        failures.append("cloudshadow-ground")
+
+    g_short = [1.0 - r for r in g_ratios]
+    g_mean_short = sum(g_short) / len(g_short)
+    g_spread = (max(g_short) - min(g_short)) / max(g_mean_short, 1e-6)
+    ok = g_spread >= CLOUDSHADOW_GROUND_SPREAD_MIN
+    print(f"  cloudshadow-dapple {'PASS' if ok else 'FAIL'}  shortfall spread/mean="
+          f"{g_spread:.4f} want >={CLOUDSHADOW_GROUND_SPREAD_MIN} (mean {g_mean_short:.4f})")
+    if not ok:
+        failures.append("cloudshadow-dapple")
 
     # The map itself, through the --sky-debug tile. Hand-rolled rather than render()'d: this
     # one needs a taller frame, or the tile falls off the bottom.
@@ -5782,7 +5833,8 @@ GATE_GROUPS = [
      run_absorption_gate),
     ("fog-volume", "local fog volumes (density, tint, arming; spec 11.39):",
      run_fog_volume_gate),
-    ("cloud-shadow", "cloud shadows into the fog (spec 11.39):", run_cloud_shadow_gate),
+    ("cloud-shadow", "cloud shadows into the fog and onto the ground (specs 11.39, 11.41):",
+     run_cloud_shadow_gate),
     ("water", "water surface (determinism, absorption, shoreline, reach; specs 11.32-11.35):",
      run_water_gate),
     ("clouds", "cloud layer (steady-state churn, report-only):", run_cloud_churn_gate),
