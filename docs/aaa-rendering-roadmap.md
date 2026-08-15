@@ -159,6 +159,34 @@ for a free unit either. Two escapes are already precedented and both are narrow 
 declaration through a `#define` when the two consumers are mutually exclusive (moments over
 `sceneColorTex`), or put the table in `const`/uniform space (11.13). See **Wall 1** below.
 
+**There is a THIRD escape, and it is the one nobody had written down: a unit that is idle in the
+pass you need it in.** The two escapes above trade on *consumers* being exclusive. This one trades on
+*passes* being exclusive, and it is strictly easier to satisfy. Unit 6 is set unavailable at the top
+of the opaque pass and stays unbound and unread for the whole of it — `engine->scene_color_this_frame
+= false` at `render.c:1123`, commented "pass 1 never uploads or binds a stale refraction source",
+with the resolve not running until `:1360`. So a consumer read only in the opaque pass can take unit
+6 by `#define` alias at no cost to anything, and its exclusivity argument is *by pass*, which is
+stronger than the argument the two tenants already there rely on.
+
+This has been true since the refraction resolve was written, and it went unnoticed for a whole spec
+cycle: **D2's surface half was booked as hard-blocked on D0 when it never needed a free unit at
+all — it needed a free pass.** The general lesson for this ledger is that "16/16" describes
+declarations, not occupancy, and the two are not the same question. Before booking anything as
+blocked on D0, check when its read happens.
+
+Occupancy of unit 6 across the frame, which is the map to reason from:
+
+| pass | unit 6 tenant |
+|---|---|
+| opaque | **nothing — free** |
+| late / transparent | refraction resolve (read only where transmission > 0) |
+| OIT accumulate | moment atlas |
+
+Consumers read in the opaque pass (a cloud shadow map, light cookies, detail/wetness maps) can share
+that free slot but contend with each other for it. A consumer read in the LATE pass — sampling the
+froxel volume from the transparent pass — cannot, because refraction is live there; that one still
+needs a real unit and is the honest remaining customer for D0 besides D1.
+
 **Unit 11 is the one with a way out, and it is worth only one unit.** `pbr_frag.glsl:1766` already
 selects between the irradiance cube and the GI atlas (`giEnabled > 0 ? giSampleIrradiance(...) :
 texture(irradianceMap, N).rgb`), so those two consumers are *already* mutually exclusive in use and
@@ -626,13 +654,19 @@ to new data by adding a layer". So:
 | blocked item | what it actually needs |
 |---|---|
 | detail / wetness maps | **nothing.** Per-texel material data at canonical size *is* the mask array. Never blocked |
-| decals + light cookies | plausibly ONE `sampler2DArray` between them — both are authored 2D images projected onto surfaces |
-| cloud shadow map (D2's surface half) | its own declaration: a single global R16F, not per-material data |
-| froxel volume in the transparent pass | its own unit, no exceptions — a `sampler3D` cannot share a 2D declaration with anything |
+| cloud shadow map (D2's surface half) | **nothing.** Read in the opaque pass, where unit 6 is idle — see the ledger's third escape |
+| decals + light cookies | plausibly ONE `sampler2DArray` between them, and they could take unit 6's opaque slot instead of a freed unit — but then they contend with the cloud shadow map for it |
+| froxel volume in the transparent pass | **a real unit, no exceptions.** Read in the LATE pass where refraction is live, so no idle slot exists, and a `sampler3D` cannot share a 2D declaration with anything |
 
-So one freed unit buys one of three real features, not four or five, and the froxel item can never
-be the one that shares. Anything proposing to "free a unit" should say which of the three is
-spending it before it starts.
+So of the five things this wall was said to block, **two are not blocked at all**, two could share one
+idle slot if they do not both want it, and exactly one genuinely needs a unit freed. Together with
+D1's decal atlas that leaves D0 with two honest customers rather than five.
+
+**The wall's own framing is what misled here, and is worth restating.** "Sampler-saturated 16/16" is
+about *declarations*, which is a link-time property. Blocking is about *occupancy at the moment of
+the read*, which is a per-pass property. Those are different questions, and this section asked only
+the first for the length of the roadmap. Anything proposing to free a unit should first say which
+pass its read happens in.
 
 **Wall 2 — geometry submission does not scale — MOSTLY REMOVED (specs 11.28 / 11.29).** Instancing,
 LOD chains and per-cascade shadow culling shipped in E5; on `abandoned_window_shadowed` that is shadow
@@ -883,6 +917,11 @@ Cost scales linearly in N, so v1 is N=2 with a per-light distance cap.
 
 ## Track D — Surfaces & environment
 
+*Corrected: this preamble named two dependents and only one of them is real. D2's ground-shadow half
+is read in the OPAQUE pass, where unit 6 sits idle, so it needs no free unit — see Wall 1's third
+escape. D1 still does, because a decal atlas is read on every opaque draw and would contend for the
+same slot rather than fit beside it.*
+
 Where Wall 1 actually bites. D1 and D2's ground-shadow half both need a texture inside `pbr_frag`,
 so **D0 is a hard prerequisite for them** and should not be started until one of them is scheduled
 (the roadmap's own just-in-time rule: foundations land with their first consumer).
@@ -903,6 +942,13 @@ half and measured the ground at RMSE 0.0013 against the air's 0.0353, so the dap
 terrain that D2 was written to deliver is entirely on the far side of this item. It is now the only
 thing standing between the engine and that look, which makes it the highest-leverage entry in D.
 
+***And that framing is now withdrawn.*** *D2's surface half is read in the OPAQUE pass, where unit 6
+is idle and free for an alias, so the dappled terrain light is NOT on the far side of this item and
+never was — it needed a free pass, not a free unit. The "highest-leverage entry in D" line was
+written from the dependency graph the entry itself proposed, and the graph was wrong. D0 remains
+worth doing, for D1 and for the froxel-in-transparent item, which are the two consumers that really
+cannot dodge it.*
+
 **Explored against the code after 11.40, nothing built. Five corrections to the entry above.**
 
 **1. It frees ONE unit, not two — 16/16 becomes 15/16.** Only the first mechanism holds. The second
@@ -910,7 +956,9 @@ thing standing between the engine and that look, which makes it the highest-leve
 is provably absent whenever refraction or MBOIT runs. It does not raise the count, it lets one
 specific consumer squeeze in under a constraint that is invisible at link time and fails as a wrong
 image rather than an error. Wall 1 therefore does not fall here; it becomes a one-slot budget, and
-per the table under Wall 1 that slot buys one of three real features.
+per the table under Wall 1 that slot has exactly two honest customers left — D1's decal atlas, and
+sampling the froxel volume from the transparent pass. Everything else on the wall's list either was
+never blocked or can take unit 6's idle opaque slot instead.
 
 **2. The fold is about TYPE, not storage, and that changes its cheapest shape.** `pbr_frag.glsl:1766`
 already reads `giEnabled > 0 ? giSampleIrradiance(...) : texture(irradianceMap, N).rgb` — the two are
@@ -1044,7 +1092,10 @@ still worth a unit.
 **Refs.** Hillaire, *Physically Based and Unified Volumetric Rendering in Frostbite* (SIGGRAPH 2015
 course); Schneider & Vos, *The Real-Time Volumetric Cloudscapes of Horizon Zero Dawn* (SIGGRAPH 2015)
 — already shipped as B2.
-**Depends on:** B1 (shipped), B2 (shipped); surface half on D0.
+**Depends on:** B1 (shipped), B2 (shipped). *The "surface half on D0" this line carried is withdrawn:
+that half reads in the opaque pass, where unit 6 is idle, so it takes an alias and no freed unit. The
+question the entry set — "measure whether the surface half is still worth a unit" — turns out to have
+had a third answer neither branch anticipated: it is worth building and it costs no unit.*
 
 ### D3. Tessellated water — SHIPPED as specs 11.32 + 11.33 + 11.35, and NOT tessellated
 The flagship surface landed: Gerstner and Tessendorf FFT wave models, Beer-Lambert absorption,
@@ -1490,7 +1541,7 @@ not scheduled.
 |---|------|--------|----------|
 | 20 | E1 Output dither | S | **DONE (11.24).** On by default, `--no-dither` 0 px; sky bands 192 px → 22 px. The sketch's TPDF construction was wrong — a constant `ign` offset only phase-shifts the same sawtooth and collapses to four values — and evaluating the pure function in Python caught it before any shader existed. Static by construction, which measurement confirms costs the churn gates 0.5%. The re-bake reported six of nineteen goldens unreproducible; **11.25 showed that was wrong and all nineteen reproduce** — four recipes were in a ledger nobody opened, and `cloud_fixture` names no file at all. |
 | 21 | C1 Translucent shadows | M→**L** | **DONE (11.26).** Shipped as deep opacity maps — transmittance storage, not the moment reconstruction the sketch assumed, which is why it stayed inside the sampler budget. Bands measure 0.0016 against 0.65^k and the mask ramp 0.0025 against 1-alpha, where a binary alpha test scores 126x worse. Raiden moves 4.0%, all of it the groom and the shoulder under it. Three bugs found by the arms, each presenting as something else — a blend function that desaturated the frame while the shadows looked right, a resolve that covered half the map with a diagonal edge, and two instrument faults that read as renderer faults. |
-| 22 | D2 Local fog + cloud shadows | M | **DONE (11.39 + 11.40).** Both halves of the froxel side landed; the surface side is on the far side of D0 and stayed unbuilt. The verdict the item was told to produce came back sharper than the entry expected: sky/air RMSE **0.0353** against ground **0.0013**, so what ships is weather in the haze and the dappled light on terrain is entirely D0's to unblock. The review's through-line was **green results that could not have gone red** — four arms passed over a feature dead under `--no-ssao`, and 23 goldens were cited as evidence for a change no golden could see. 11.40 closed three of the four filed items by making those claims falsifiable, and found a shipped map saturated to zero at every texel on the first use of its new debug tile. |
+| 22 | D2 Local fog + cloud shadows | M | **FROXEL HALF DONE (11.39 + 11.40); the surface half is unbuilt and is NOT blocked.** It was booked as hard-blocked on D0 for a whole spec cycle and never was — it reads in the opaque pass, where unit 6 is idle and takes a `#define` alias, so it needs a free pass rather than a free unit (Wall 1's third escape). The verdict the item was told to produce came back sharper than the entry expected: sky/air RMSE **0.0353** against ground **0.0013**, so what ships is weather in the haze and the dappled light on terrain is still to build. The review's through-line was **green results that could not have gone red** — four arms passed over a feature dead under `--no-ssao`, and 23 goldens were cited as evidence for a change no golden could see. 11.40 closed three of the four filed items by making those claims falsifiable, and found a shipped map saturated to zero at every texel on the first use of its new debug tile. |
 | 23 | C2 Emissive → area lights | S/M | A fit plus a registration — `Light` already carries every field the fit produces. Makes practicals and screens light rooms instead of just glowing. |
 | 24 | E4 GPU timer queries | S | **DONE (11.27).** Wall 3 removed. It paid for itself immediately and twice: E4's own first draft drew a conclusion the instrument reversed, and Wall 4 exists at all because the instrument said "opaque 312 ms" in a single run. |
 | 25 | C3 IES profiles | S | Collects the payoff for 9.9/10.0's photometric work. Fits Wall 1 by living in the light UBO — zero texture units. |
@@ -1500,7 +1551,7 @@ not scheduled.
 | 29 | C4 Clustered specular probes | L | Diffuse GI got a spatial structure in A4; specular still has exactly one probe. Reuses A1's grid and A4's atlas. |
 | 30 | E5 Instancing + LOD + sorting | L | **DONE, two limbs of three (11.28 / 11.29).** Wall 2 mostly removed: `abandoned_window_shadowed` shadow CPU −83%, frame −38%, 2,148 draws → 272. Sorting deferred as unfalsifiable against the corpus, which `apps/forest` has since falsified — moved to E6. Established that scatter *order* decides whether batching happens at all (2,368 → 1,287 draws for identical geometry), that LOD fights instancing on the `(mesh, lod)` key non-monotonically, and that "meshoptimizer locks mesh borders" — in three headers and spec 11.28 — was wrong from the start. |
 | 31 | **E6 Depth prepass + opaque ordering** | M | **DONE (11.30 + 11.31).** `apps/forest` opaque **306 → 169 ms (−45%)** from the ORDERING alone, depth complexity 1.93 → 1.08. Masked geometry now prepasses too (11.31, via a `depthOnly` mode in `pbr_frag`) and reaches a better 0.72 — and is still **slower** than the sort, because a full extra geometry pass costs more than the shading it saves. The two are substitutes, not complements: 11.30's "worth more together" was an artefact of the masked exclusion. Ordering ships on, the prepass off, with a gate arm asserting the prepass **costs** on a scene with no overdraw. 11.30's own figures were doubled by a budget that trusted `msaa_samples` over the driver, and its −64% interior does not reproduce. Between them these two specs withdrew seven claims — every one from an instrument that had never been checked against a scene with a known answer. |
-| 32 | D0 Free two sampler units | M | Foundation only — schedule it **with** D1 or D2's surface half, never before, per the just-in-time rule. **Explored after 11.40 and it frees ONE unit, not two** (16/16 → 15/16): the irradiance fold holds, the unit-6 share is a conditional slot rather than a freed one, and the second real candidate (unit 4, POM height into the mask array) costs POM half its resolution on `pilot` to buy a slot nothing currently spends. See D0 for the five corrections. |
+| 32 | D0 Free two sampler units | M | Foundation only — schedule it **with** D1 or D2's surface half, never before, per the just-in-time rule. **Explored after 11.40 and it frees ONE unit, not two** (16/16 → 15/16): the irradiance fold holds, the unit-6 share is a conditional slot rather than a freed one, and the second real candidate (unit 4, POM height into the mask array) costs POM half its resolution on `pilot` to buy a slot nothing currently spends. See D0 for the five corrections. **And it lost its best customer**: D2's surface half turned out not to need it, so the two honest consumers are D1's decal atlas and sampling the froxel volume from the transparent pass — the one read that happens in a pass where no unit is idle. |
 | 33 | D1 Clustered decals | L | Largest environment-art gap. Hard-blocked on D0. |
 | 34 | E8 Fix the wind cull | S | Small, self-contained, closes a real hole in E5's culling — wind geometry is currently exempt from the camera frustum *and* every cascade. Unblocks wind on scattered content, which `apps/forest` gave up to avoid it. |
 | 34b | **E9 One sample means one sample** | M | **DONE (11.34).** `apps/forest` opaque **150.9 → 121.6 ms (−19.4%)** against a 0.23% floor, with byte-identical submission integers — the same work, cheaper. One branch in the one allocator plus one at the depth renderbuffer flips the scene, OIT and moment FBOs in lockstep, since they share the depth attachment. The row's original prescription was wrong twice: there is no `sampler2DMS` anywhere in the corpus (11.17 rejected it), and postfx reaches the scene target only through blits, so the GLSL surface was zero files and postfx changed nothing. Priced before built with a new `--msaa <n>` lever, which also decomposed the first confounded A/B: A2C alone costs 202 ms of forest's opaque row (fragment-set explosion, headless-only), a sample ~93 ms on that inflated set. TAA-only edges verified by crops (raiden groom, forest canopy — indistinguishable), all 23 goldens 0 px, and MBOIT's moment-resolve bias (11.17) is now absent on the TAA path for free. |
