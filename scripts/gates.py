@@ -2847,6 +2847,22 @@ CLOUDSHADOW_DARKEN_MAX = 0.99
 CLOUDSHADOW_SPREAD_MIN = 0.15
 # Same accumulator the fog-volume fixture needs 60 frames for; these arms drive it too.
 CLOUDSHADOW_FRAMES = 60
+# The --sky-debug tile for the shadow map, at -W 400 -H 400 (framebuffer 800x800). The layout
+# is sky.c's: column two at x = 20 + 2*SKY_TRANSMITTANCE_W, below the two noise tiles, and
+# CLOUD_SHADOW_DEBUG_W a side. Rendered taller than the suite's usual 300 because at that
+# height the tile's GL y goes negative and it falls off the bottom of the frame.
+CLOUDSHADOW_TILE_BOX = (538, 420, 718, 600)
+CLOUDSHADOW_TILE_SIZE = ("400", "400")
+# The map must carry RANGE: some texel lit, and real variation between texels.
+#
+# This reads the map itself rather than its effect on the fog, and that distinction is the
+# reason the arm exists. Shipped 11.39 marched the full shell traverse and the map saturated
+# to literally zero -- max below 7.8e-5 at every one of 256^2 texels, a flat full shadow with
+# no dapple in it at all -- and BOTH downstream arms passed over it, because a constant map
+# still darkens the frame and its shortfall still varies with the fog's own structure.
+# Measured 0.988 / 0.085 at the default coverage against 0.0 / 0.0 for the saturated map.
+CLOUDSHADOW_MAP_MAX_MIN = 0.30
+CLOUDSHADOW_MAP_SIGMA_MIN = 0.02
 
 
 def run_cloud_shadow_gate(workdir):
@@ -2919,6 +2935,33 @@ def run_cloud_shadow_gate(workdir):
           f"want 0")
     if not ok:
         failures.append("cloudshadow-nofog")
+
+    # The map itself, through the --sky-debug tile. Hand-rolled rather than render()'d: this
+    # one needs a taller frame, or the tile falls off the bottom.
+    tile = os.path.join(workdir, "cloudshadow_map.ppm")
+    cmd = [RENDER, "-m", scene, "-x", "-f", "30",
+           "-W", CLOUDSHADOW_TILE_SIZE[0], "-H", CLOUDSHADOW_TILE_SIZE[1],
+           "-S", tile, "--clouds", "--sky-debug", "--no-auto-exposure", "-E", "1.0"]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0 or not os.path.exists(tile):
+        print(f"  cloudshadow-map  ERROR render failed: {(r.stdout + r.stderr)[-200:]}")
+        return failures + ["cloudshadow-map"]
+    tw, thh, tpix = _read_ppm(tile)
+    x0, y0, x1, y1 = CLOUDSHADOW_TILE_BOX
+    vals = []
+    for y in range(y0, y1, 4):
+        for x in range(x0, x1, 4):
+            i = (y * tw + x) * 3
+            vals.append(tpix[i] / 255.0)
+    peak = max(vals)
+    mean = sum(vals) / len(vals)
+    sigma = (sum((v - mean) ** 2 for v in vals) / len(vals)) ** 0.5
+    ok = peak >= CLOUDSHADOW_MAP_MAX_MIN and sigma >= CLOUDSHADOW_MAP_SIGMA_MIN
+    print(f"  cloudshadow-map  {'PASS' if ok else 'FAIL'}  peak={peak:.4f} "
+          f"(want >={CLOUDSHADOW_MAP_MAX_MIN}) sigma={sigma:.4f} "
+          f"(want >={CLOUDSHADOW_MAP_SIGMA_MIN}), mean={mean:.4f}")
+    if not ok:
+        failures.append("cloudshadow-map")
 
     return failures
 

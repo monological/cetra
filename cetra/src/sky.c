@@ -439,14 +439,16 @@ int sky_bake_static_luts(SkyAtmosphere* sky, struct Engine* engine) {
 // Draw one LUT into a screen-corner viewport rectangle with the debug
 // program (a textured-quad DRAW, not a blit: the default framebuffer is
 // multisample and single-sample blits into it are illegal on core profile)
+// mono: the source has one channel, so replicate red rather than drawing it as a red tile.
 static void sky_debug_draw(SkyAtmosphere* sky, GLuint lut, int x, int y, int w, int h,
-                           float scale) {
+                           float scale, bool mono) {
     glViewport(x, y, w, h);
     glUseProgram(sky->debug_program->id);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, lut);
     uniform_set_int(sky->debug_program->uniforms, "lut", 0);
     uniform_set_float(sky->debug_program->uniforms, "scale", scale);
+    uniform_set_int(sky->debug_program->uniforms, "mono", mono ? 1 : 0);
     draw_fullscreen_quad(sky->quad_vao);
 }
 
@@ -715,13 +717,15 @@ void sky_debug_blit_luts(SkyAtmosphere* sky, int screen_w, int screen_h) {
     // square. Psi is a normalized per-sun-illuminance transfer factor with
     // very small stored values, so the multiscatter view is heavily boosted.
     int tw = SKY_TRANSMITTANCE_W * 2, th = SKY_TRANSMITTANCE_H * 2;
-    sky_debug_draw(sky, sky->transmittance_lut, 10, screen_h - 10 - th, tw, th, 1.0f);
+    sky_debug_draw(sky, sky->transmittance_lut, 10, screen_h - 10 - th, tw, th, 1.0f, false);
     int mw = SKY_MULTISCATTER_SIZE * 4;
-    sky_debug_draw(sky, sky->multiscatter_lut, 10, screen_h - 20 - th - mw, mw, mw, 200.0f);
+    sky_debug_draw(sky, sky->multiscatter_lut, 10, screen_h - 20 - th - mw, mw, mw, 200.0f,
+                   false);
     // Sky-view LUT below (mild boost to reveal the HDR horizon/zenith range)
     if (sky->sky_view_lut) {
         int sw = SKY_VIEW_W * 2, sh = SKY_VIEW_H * 2;
-        sky_debug_draw(sky, sky->sky_view_lut, 10, screen_h - 30 - th - mw - sh, sw, sh, 0.3f);
+        sky_debug_draw(sky, sky->sky_view_lut, 10, screen_h - 30 - th - mw - sh, sw, sh, 0.3f,
+                       false);
     }
 
     // Cloud-noise fields, mid-volume slices: the shape's Perlin-Worley above
@@ -733,6 +737,16 @@ void sky_debug_blit_luts(SkyAtmosphere* sky, int screen_w, int screen_h) {
         sky_debug_draw_noise(sky, sky->clouds.shape_tex, 0, cx, screen_h - 10 - cw, cw, cw);
         sky_debug_draw_noise(sky, sky->clouds.detail_tex, 0, cx, screen_h - 20 - cw - dw, dw, dw);
         glBindTexture(GL_TEXTURE_3D, 0);
+
+        // The sun-transmittance map below them, and the only 2D LUT in this stack that had
+        // no viewer. Without it a failing cloudshadow-vary cannot be told apart from a
+        // failing lookup, which is the bisect --no-cloud-shadows exists to serve.
+        // Transmittance is already [0,1], so no boost; mono because it is R16F.
+        if (sky->clouds.shadow_tex) {
+            int hw = CLOUD_SHADOW_DEBUG_W;
+            sky_debug_draw(sky, sky->clouds.shadow_tex, cx, screen_h - 30 - cw - dw - hw, hw, hw,
+                           1.0f, true);
+        }
     }
 
     glViewport(prev_viewport[0], prev_viewport[1], prev_viewport[2], prev_viewport[3]);

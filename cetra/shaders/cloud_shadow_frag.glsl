@@ -61,16 +61,24 @@ const float CLOUD_SHADOW_MIN_SUN_Y = 0.05;
  * every tap is weighted by dt, so a single d=0.3 sample contributes tau ~ 15.6 and blacks the
  * texel outright, and the wind offset re-rolls which taps land each frame.
  *
- * clouds.glsl's own sun march rejects exactly this for exactly this reason -- see the comment
- * on its lightOff cone about one far tap accounting for kilometres of extinction.
+ * The reach is the deck's OWN light cone, and matching it is the point rather than a
+ * coincidence. clouds.glsl:177 spends 1.2 km on its sun march and says why: past that, one far
+ * tap through a neighbouring tower accounts for kilometres of extinction and blackens
+ * everything. That argument is about this noise field at this extinction, so it governs here
+ * too -- the deck and the shadow it casts should not disagree about how far light travels.
  *
- * Half the tile, and the bound that matters is the LOWER one: the cap must exceed the shell
- * thickness, or it truncates the vertical path an overhead sun takes and dims the shadow where
- * there was never any aliasing to fix. At 4 km against a 2.5 km shell it never bites above 39
- * degrees, and at the floor it holds dt to ~167 m -- under three shape texels, where uncapped
- * was 2 km and thirty-three of them.
+ * A longer reach was tried and is exactly the failure that comment predicts. The full shell
+ * traverse, and then a 4 km cap, both SATURATE: at coverage 0.45 the mean density over a
+ * slanted path puts tau near 25 * 0.1 * 4 = 10 at every texel, and the map goes uniformly
+ * black -- a flat full shadow with no gaps, which reads as the deck having no holes in it. It
+ * survived review because the arms watch the shadow's effect on the fog rather than the map,
+ * and a constant map still darkens and still varies downstream. The debug tile is what found
+ * it.
+ *
+ * 24 steps over 1.2 km is dt = 50 m, inside one 62.5 m shape texel, so the field is sampled
+ * rather than aliased at every sun angle.
  */
-const float CLOUD_SHADOW_SPAN_CAP_KM = CLOUD_SHAPE_TILE_KM * 0.5;
+const float CLOUD_SHADOW_SPAN_CAP_KM = 1.2;
 
 void main()
 {

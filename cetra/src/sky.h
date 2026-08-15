@@ -53,6 +53,9 @@
 // bytes are identical at any thread count).
 #define SKY_CLOUD_SHAPE_SIZE  128
 #define SKY_CLOUD_DETAIL_SIZE 32
+// Side of the cloud-shadow debug tile. Fixed rather than a multiple of the map's own 256,
+// which would overflow the column it shares with the noise fields.
+#define CLOUD_SHADOW_DEBUG_W 192
 
 typedef struct CloudLayer {
     bool enabled;     // master switch; off = no bake, no GL objects, no cost
