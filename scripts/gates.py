@@ -3404,13 +3404,16 @@ WATER_UNDER_BOXES = [(0.40, 0.030, 0.60, 0.055),
 WATER_UNDER_TOTAL_MIN = 2.0
 
 # The medium acting on GEOMETRY, which is the thing that rendered as though in air
-# before phase 2. Three boxes down the submerged ramp: it is opaque, and with the eye
+# before phase 2. Three bands down the submerged ramp: it is opaque, and with the eye
 # under the surface there is no water interface between it and the camera, so the ONLY
-# thing that can absorb it is the froxel volume. Farther is further down the frame
-# here (the ramp recedes downward and narrows), and R/B falls 1.35 / 1.19 / 0.85.
-WATER_FOG_BED_BOXES = [(0.40, 0.390, 0.60, 0.420),
-                       (0.40, 0.460, 0.60, 0.490),
-                       (0.40, 0.540, 0.60, 0.570)]
+# thing that can absorb it is the froxel volume.
+#
+# As fractions ALONG THE RAMP, sorted by distance from the eye (_water_fog_bed_boxes), not
+# as screen rows near-to-far. Which end of the wedge is far is a property of which way it
+# faces: turning it round made "further down the frame" mean nearer, and a falling R/B
+# became a rising one (0.8312 / 0.9074 / 0.9821) with nothing wrong but the transcription.
+# Measured 1.1448 / 0.9692 / 0.7910 = 1.45x once the order comes from the camera.
+WATER_FOG_BED_SPANS = ((0.15, 0.25), (0.45, 0.55), (0.75, 0.85))
 WATER_FOG_BED_TOTAL_MIN = 1.25
 
 # Reach invariance (spec 11.35). The arm that catches "the water stops short of the
@@ -3737,14 +3740,25 @@ WATER_WATERLINE_MIN_RATIO = 0.22
 
 # Shoreline coverage (spec 11.33 phase 3). The waterline on this fixture runs across
 # the ramp in a wave-modulated band; the diff between the two coverage modes lands
-# entirely inside these rows and this x range, so the measurement window is where the
+# entirely inside these heights and this x range, so the measurement window is where the
 # effect is and nowhere else.
-WATER_SHORE_WINDOW = (0.30, 0.47, 0.70, 0.555)
-# One flag apart at 4x MSAA. Measured 4,352 px at peak 44/255 -- small because most of
-# this edge was never a shader edge: the water surface CROSSES the bed here, and the
-# per-sample depth test antialiases a depth crossing on its own. Coverage carries the
-# part the depth test cannot see, which is the threshold sliver the discard removes.
-WATER_SHORE_MIN_PX = 1500
+#
+# Stated as HEIGHTS ON THE RAMP and projected (_water_ramp_band), not as screen rows. The
+# band straddles the waterline, which is height 0 by definition -- so it follows the wedge
+# when the wedge moves, instead of aiming at where the wedge used to be. The rows these
+# produce on the pre-flip ramp are 0.470 and 0.555, which is what they replace.
+WATER_SHORE_HEIGHTS = (-0.5535, 0.3241)
+# One flag apart at 4x MSAA. Small because most of this edge was never a shader edge: the
+# water surface CROSSES the bed here, and the per-sample depth test antialiases a depth
+# crossing on its own. Coverage carries the part the depth test cannot see, which is the
+# threshold sliver the discard removes.
+#
+# 1,121 px since the ramp was turned round in 11.43, against 2,980 before it. The effect
+# did not weaken -- the sharpest-fall ratio went the right way, 0.846x to 0.756x -- the
+# waterline simply moved from z 0.18 to z -1.38, half again as far from the eye, so the
+# same sliver covers fewer pixels. The floor follows the geometry rather than pinning a
+# count the fixture no longer produces.
+WATER_SHORE_MIN_PX = 700
 # And it has to be a SOFTENING, not just a change: the sharpest single-row fall across
 # the waterline drops. Measured medians 0.0343 (coverage) against 0.0416 (cutoff) =
 # 0.823x, so this ceiling sits above the effect while still failing a wash, an offset,
@@ -3759,8 +3773,10 @@ WATER_ABSORB_BOXES = [(0.06, 0.86, 0.20, 0.94),
                       (0.06, 0.72, 0.20, 0.80),
                       (0.06, 0.60, 0.20, 0.68)]
 # The emerged part of the ramp: dry land, and the control that fails if the
-# surface draws over it.
-WATER_DRY_BOX = (0.44, 0.42, 0.56, 0.46)
+# surface draws over it. Heights again, well clear of the waterline at 0 on the dry side,
+# so the box is on land whichever way round the wedge faces. Rows 0.420 and 0.460 on the
+# pre-flip ramp.
+WATER_DRY_HEIGHTS = (0.3968, 0.6470)
 # Measured steps are 1.47x and 1.55x, so this is a wide floor under them that
 # still fails a constant tint.
 WATER_ABSORB_STEP_MIN = 1.25
@@ -3845,6 +3861,30 @@ def _water_ramp_at(height):
     lo, hi = _water_ramp_edges()
     t = (height - lo[1]) / (hi[1] - lo[1])
     return tuple(lo[i] + t * (hi[i] - lo[i]) for i in range(3))
+
+
+def _water_fog_bed_boxes():
+    """Three bands down the submerged ramp, returned NEAREST first.
+
+    The ordering is computed from the camera rather than written into the row numbers,
+    because which end of the wedge is far is a property of which way the wedge faces.
+    """
+    lo, hi = _water_ramp_edges()
+    cam = _cscn_camera(WATER_FIXTURE)
+    eye = cam["eye"]
+    project = _projector(cam, 400.0, 300.0)
+
+    def at(t):
+        return tuple(lo[i] + t * (hi[i] - lo[i]) for i in range(3))
+
+    def dist(t):
+        return sum((at(t)[i] - eye[i]) ** 2 for i in range(3))
+
+    bands = []
+    for t0, t1 in WATER_FOG_BED_SPANS:
+        rows = sorted(project(at(t))[1] / 300.0 for t in (t0, t1))
+        bands.append((dist(0.5 * (t0 + t1)), (0.40, rows[0], 0.60, rows[1])))
+    return [box for _, box in sorted(bands, key=lambda b: b[0])]
 
 
 def _water_ramp_band(h0, h1, x0f, x1f):
@@ -4302,7 +4342,7 @@ def run_water_gate(workdir):
     if not ok:
         failures.append("water-absorb")
 
-    dry = _water_rb(pix, w, h, WATER_DRY_BOX)
+    dry = _water_rb(pix, w, h, _water_ramp_band(*WATER_DRY_HEIGHTS, 0.44, 0.56))
     ok = dry >= WATER_DRY_RB_MIN
     print(f"  water-dry    {'PASS' if ok else 'FAIL'}  ramp R/B={dry:.4f} "
           f"want >={WATER_DRY_RB_MIN}")
@@ -4412,7 +4452,7 @@ def run_water_gate(workdir):
             # The medium on geometry. Separate arm and separate boxes from the one
             # above on purpose: that reads the interface, this reads the opaque ramp
             # behind it, which nothing but the froxel volume can absorb.
-            bed = [_water_rb(pix2, w2, h2, box) for box in WATER_FOG_BED_BOXES]
+            bed = [_water_rb(pix2, w2, h2, box) for box in _water_fog_bed_boxes()]
             bed_ordered = all(bed[i] > bed[i + 1] for i in range(len(bed) - 1))
             bed_total = bed[0] / max(bed[-1], 1e-6)
             ok = bed_ordered and bed_total >= WATER_FOG_BED_TOTAL_MIN
@@ -4793,8 +4833,9 @@ def run_water_gate(workdir):
         failures.append("water-shore-soft")
     else:
         ae_cov, _ = compare(a, hard)
-        soft_fall = _water_shore_fall(a, WATER_SHORE_WINDOW)
-        hard_fall = _water_shore_fall(hard, WATER_SHORE_WINDOW)
+        shore_window = _water_ramp_band(*WATER_SHORE_HEIGHTS, 0.30, 0.70)
+        soft_fall = _water_shore_fall(a, shore_window)
+        hard_fall = _water_shore_fall(hard, shore_window)
         ratio = soft_fall / max(hard_fall, 1e-6)
         ok = ae_cov >= WATER_SHORE_MIN_PX and ratio <= WATER_SHORE_FALL_RATIO
         print(f"  water-shore-soft {'PASS' if ok else 'FAIL'}  {ae_cov} px vs cutoff "

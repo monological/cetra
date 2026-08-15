@@ -55,26 +55,23 @@ def mesh_bytes(positions, normals, indices):
     return pos, nrm, idx
 
 
-# The wedge: one doubleSided quad climbing from the deep far end to dry land at the
-# near end. A sheet, not a solid -- the camera sits below its extended plane, so what
-# the "dry land" boxes read is its underside. Fine for an emissive surface, and worth
-# knowing before assuming a box is looking at a beach.
-# TEMPORARILY the original orientation: the high edge nearest the eye.
+# The wedge: one doubleSided quad DESCENDING toward the camera -- deep at the near edge,
+# dry land at the far one. A sheet, not a solid.
 #
-# This reads as a paper blade slicing the water -- the surface's own plane climbs to y 2.78
-# at the eye's z against an eye at 1.35, so the camera is BELOW the plane it is looking at
-# and sees a zero-thickness quad's underside, with the near edge occluding the far one.
-# Flipping it (LOW at NEAR_Z, HIGH at FAR_Z, winding [0,1,2, 0,2,3]) fixes that and moves
-# the waterline from row 0.508 to 0.453, which mis-aims every hand-written box in
-# run_water_gate. Held here until those are derived rather than transcribed, so that the
-# review fixes and the geometry change can each be validated against a green suite.
+# The other way round -- which this was until 11.42, and again briefly in 11.43 so the
+# review fixes could be validated against a suite that was not also changing shape -- puts
+# the high edge nearest the eye. The surface's own plane then climbs past the camera, to
+# y 2.78 at the eye's z against an eye at 1.35, so the camera is BELOW the plane it is
+# looking at: the frame shows the ramp's underside, the near edge occludes the far one, and
+# a zero-thickness quad seen that way reads as a paper blade slicing the water rather than
+# as ground.
 wedge_positions = [
-    (-WEDGE_HALF_X, WEDGE_LOW, WEDGE_FAR_Z),
-    (WEDGE_HALF_X, WEDGE_LOW, WEDGE_FAR_Z),
-    (WEDGE_HALF_X, WEDGE_HIGH, WEDGE_NEAR_Z),
-    (-WEDGE_HALF_X, WEDGE_HIGH, WEDGE_NEAR_Z),
+    (-WEDGE_HALF_X, WEDGE_LOW, WEDGE_NEAR_Z),
+    (WEDGE_HALF_X, WEDGE_LOW, WEDGE_NEAR_Z),
+    (WEDGE_HALF_X, WEDGE_HIGH, WEDGE_FAR_Z),
+    (-WEDGE_HALF_X, WEDGE_HIGH, WEDGE_FAR_Z),
 ]
-wedge_indices = [0, 2, 1, 0, 3, 2]
+wedge_indices = [0, 1, 2, 0, 2, 3]
 # One normal for the whole ramp; it is planar. Taken from the edge vectors rather than
 # written down, so it follows the positions above instead of having to be re-derived by
 # hand whenever they move -- which is how it came to disagree with them in the first place.
