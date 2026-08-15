@@ -174,6 +174,12 @@ all — it needed a free pass.** The general lesson for this ledger is that "16/
 declarations, not occupancy, and the two are not the same question. Before booking anything as
 blocked on D0, check when its read happens.
 
+**Spent, and it works — this is no longer a proposal.** Spec 11.41 put the cloud shadow map on unit 6
+by `#define cloudShadowTex sceneColorTex` in the opaque pass, shipped dappled sunlight on terrain,
+the shadow catcher and water, and moved no golden that does not carry clouds. Unit 6 now has three
+tenants disjoint by pass (opaque / late / OIT accumulate) and `render.c` picks between them in one
+place. The ledger stayed at 16/16 throughout.
+
 Occupancy of unit 6 across the frame, which is the map to reason from:
 
 | pass | unit 6 tenant |
@@ -684,7 +690,7 @@ to new data by adding a layer". So:
 | blocked item | what it actually needs |
 |---|---|
 | detail / wetness maps | **nothing.** Per-texel material data at canonical size *is* the mask array. Never blocked |
-| cloud shadow map (D2's surface half) | **nothing.** Read in the opaque pass, where unit 6 is idle — see the ledger's third escape |
+| cloud shadow map (D2's surface half) | **nothing, and this is now SHIPPED rather than argued** (11.41). Read in the opaque pass, where unit 6 is idle — see the ledger's third escape |
 | decals + light cookies | **a flat 2D atlas gets them the idle opaque slot too**; only the `sampler2DArray` form needs a freed unit, since every array in the shader (2, 7, 10, 15) is read during opaque shading. Cookies additionally want transparent receivers, where the slot is not free |
 | froxel volume in the transparent pass | **a real unit, no exceptions.** Read in the LATE pass where refraction is live, so no idle slot exists, and a `sampler3D` cannot share a 2D declaration with anything |
 
@@ -1092,8 +1098,26 @@ prerequisite; the array's convenience is real but it is convenience, not necessi
 *Screen-Space Decals* (GDC 2014).
 **Depends on:** A1 (shipped), **D0 (hard)**.
 
-### D2. Local fog volumes + cloud shadows — SHIPPED as spec 11.39
-Both halves landed. Local fog volumes are a Scene-owned world-space AABB with density, an inward
+### D2. Local fog volumes + cloud shadows — SHIPPED as specs 11.39 + 11.41
+Both halves landed. **The surface half too, in 11.41, and it never needed D0** — it reads in the
+opaque pass where unit 6 is idle, so it took a `#define` alias and cost the ledger nothing. Ground
+RMSE **0.0072 → 0.1241** at coverage 0.10, with the air band unchanged to four decimals as the
+control. `pbr_frag`, the shadow catcher and water's caustics all receive; they are three different
+mechanisms rather than one lookup in three places, because the catcher is a darkening plane and not
+a lit surface, and water has no analytic sun lobe at all.
+
+**And 11.41 found the MAP wrong, which retro-dates every cloud figure above.** The march capped the
+SLANT path at 1.2 km while crossing the 2.5 km deck takes `2.5/sin(el)`, so it traversed 48% of the
+cloud at zenith, 12% at 15°, 4% at 5° — and below ~10° it never left the cloud base and returned
+uniformly 1.0. `apps/tree` runs a 0.8° sun and had never had a cloud shadow from either half. It now
+steps equal ALTITUDE increments across the whole deck and clamps only the HORIZONTAL excursion, at
+the shape field's own 8 km tile period. **The lesson is the same one 11.40 filed and this item then
+repeated twice**: a constant that bounds a length will bind everywhere unless the thing it bounds is
+elevation-independent. 11.41's own first attempt at the fix picked 1.2 km for the horizontal reach
+and bound below 64° — the identical flaw, caught only by checking that two candidate values agree at
+high sun where neither should clamp.
+
+*Original as-shipped notes follow.* Local fog volumes are a Scene-owned world-space AABB with density, an inward
 feather and a σ-weighted tint, authored as a top-level `fogVolumes[]` block and arming the froxel
 pass by joining the union at the gate rather than latching `fog_enabled`. Cloud shadows are a
 256² R16F sun-transmittance map built by the cloud march from the march's own wind offset, read by
@@ -1112,8 +1136,9 @@ The froxel half shadows *in-scattered light*, so it lands where the sight line c
 and puts essentially nothing underfoot. The entry below called the froxel half "where the visible
 payoff is" — that is right about payoff per line and **wrong about which payoff**. What ships is
 weather in the haze; the moving dappled light on terrain, which is the thing the entry actually
-promised, is the `pbr_frag` half and is still entirely unbuilt. So D0 is not merely unblocked-by
-here, it is the gating dependency for the feature D2 was written to deliver.
+promised, is the `pbr_frag` half. *That last sentence used to end "and is still entirely unbuilt. So
+D0 is not merely unblocked-by here, it is the gating dependency for the feature D2 was written to
+deliver." Both clauses were withdrawn by 11.41: the half is built and D0 gated nothing.*
 
 Two things measured along the way that contradict the plan and are recorded in the spec: the
 predicted wind ghost in the froxel accumulator **does not occur** at any scene scale (the fog
@@ -1586,7 +1611,7 @@ not scheduled.
 |---|------|--------|----------|
 | 20 | E1 Output dither | S | **DONE (11.24).** On by default, `--no-dither` 0 px; sky bands 192 px → 22 px. The sketch's TPDF construction was wrong — a constant `ign` offset only phase-shifts the same sawtooth and collapses to four values — and evaluating the pure function in Python caught it before any shader existed. Static by construction, which measurement confirms costs the churn gates 0.5%. The re-bake reported six of nineteen goldens unreproducible; **11.25 showed that was wrong and all nineteen reproduce** — four recipes were in a ledger nobody opened, and `cloud_fixture` names no file at all. |
 | 21 | C1 Translucent shadows | M→**L** | **DONE (11.26).** Shipped as deep opacity maps — transmittance storage, not the moment reconstruction the sketch assumed, which is why it stayed inside the sampler budget. Bands measure 0.0016 against 0.65^k and the mask ramp 0.0025 against 1-alpha, where a binary alpha test scores 126x worse. Raiden moves 4.0%, all of it the groom and the shoulder under it. Three bugs found by the arms, each presenting as something else — a blend function that desaturated the frame while the shadows looked right, a resolve that covered half the map with a diagonal edge, and two instrument faults that read as renderer faults. |
-| 22 | D2 Local fog + cloud shadows | M | **FROXEL HALF DONE (11.39 + 11.40); the surface half is unbuilt and is NOT blocked.** It was booked as hard-blocked on D0 for a whole spec cycle and never was — it reads in the opaque pass, where unit 6 is idle and takes a `#define` alias, so it needs a free pass rather than a free unit (Wall 1's third escape). The verdict the item was told to produce came back sharper than the entry expected: sky/air RMSE **0.0353** against ground **0.0013**, so what ships is weather in the haze and the dappled light on terrain is still to build. The review's through-line was **green results that could not have gone red** — four arms passed over a feature dead under `--no-ssao`, and 23 goldens were cited as evidence for a change no golden could see. 11.40 closed three of the four filed items by making those claims falsifiable, and found a shipped map saturated to zero at every texel on the first use of its new debug tile. |
+| 22 | D2 Local fog + cloud shadows | M | **DONE, both halves (11.39 + 11.40 froxel, 11.41 surface).** The surface half was booked as hard-blocked on D0 for a whole spec cycle and never was — it reads in the opaque pass, where unit 6 is idle, so it took a `#define` alias and cost the ledger nothing (Wall 1's third escape). Ground RMSE **0.0072 → 0.1241** with the air band unchanged to four decimals as the control. 11.41's arms then found the shadow MAP itself blank below ~10° of sun and truncated above it, so **every cloud figure from 11.39/11.40 was taken through a map crossing 4-48% of the deck**; fixing it moved both cloud goldens. The review's through-line was **green results that could not have gone red** — four arms passed over a feature dead under `--no-ssao`, and 23 goldens were cited as evidence for a change no golden could see. 11.40 closed three of the four filed items by making those claims falsifiable, and found a shipped map saturated to zero at every texel on the first use of its new debug tile. |
 | 23 | C2 Emissive → area lights | S/M | A fit plus a registration — `Light` already carries every field the fit produces. Makes practicals and screens light rooms instead of just glowing. |
 | 24 | E4 GPU timer queries | S | **DONE (11.27).** Wall 3 removed. It paid for itself immediately and twice: E4's own first draft drew a conclusion the instrument reversed, and Wall 4 exists at all because the instrument said "opaque 312 ms" in a single run. |
 | 25 | C3 IES profiles | S | Collects the payoff for 9.9/10.0's photometric work. Fits Wall 1 by living in the light UBO — zero texture units. |
@@ -1596,7 +1621,7 @@ not scheduled.
 | 29 | C4 Clustered specular probes | L | Diffuse GI got a spatial structure in A4; specular still has exactly one probe. Reuses A1's grid and A4's atlas. |
 | 30 | E5 Instancing + LOD + sorting | L | **DONE, two limbs of three (11.28 / 11.29).** Wall 2 mostly removed: `abandoned_window_shadowed` shadow CPU −83%, frame −38%, 2,148 draws → 272. Sorting deferred as unfalsifiable against the corpus, which `apps/forest` has since falsified — moved to E6. Established that scatter *order* decides whether batching happens at all (2,368 → 1,287 draws for identical geometry), that LOD fights instancing on the `(mesh, lod)` key non-monotonically, and that "meshoptimizer locks mesh borders" — in three headers and spec 11.28 — was wrong from the start. |
 | 31 | **E6 Depth prepass + opaque ordering** | M | **DONE (11.30 + 11.31).** `apps/forest` opaque **306 → 169 ms (−45%)** from the ORDERING alone, depth complexity 1.93 → 1.08. Masked geometry now prepasses too (11.31, via a `depthOnly` mode in `pbr_frag`) and reaches a better 0.72 — and is still **slower** than the sort, because a full extra geometry pass costs more than the shading it saves. The two are substitutes, not complements: 11.30's "worth more together" was an artefact of the masked exclusion. Ordering ships on, the prepass off, with a gate arm asserting the prepass **costs** on a scene with no overdraw. 11.30's own figures were doubled by a budget that trusted `msaa_samples` over the driver, and its −64% interior does not reproduce. Between them these two specs withdrew seven claims — every one from an instrument that had never been checked against a scene with a known answer. |
-| 32 | D0 Free two sampler units | M | Foundation only — schedule it **with** D1 or D2's surface half, never before, per the just-in-time rule. **Explored after 11.40 and it frees ONE unit, not two** (16/16 → 15/16): the irradiance fold holds, the unit-6 share is a conditional slot rather than a freed one, and the second real candidate (unit 4, POM height into the mask array) costs POM half its resolution on `pilot` to buy a slot nothing currently spends. See D0 for the five corrections. **And the ledger sweep left it with no SCHEDULED consumer at all**: D2's surface half never needed it, and D1 can dodge it with a flat 2D decal atlas rather than a `sampler2DArray`. The one consumer that genuinely cannot dodge it is sampling the froxel volume from the transparent pass — a `sampler3D` in the one pass where refraction is live — and that is not booked. Judge the item on its own measurement, not on what it unblocks. |
+| 32 | D0 Free two sampler units | M | Foundation only — schedule it **with** D1 or D2's surface half, never before, per the just-in-time rule. **Explored after 11.40 and it frees ONE unit, not two** (16/16 → 15/16): the irradiance fold holds, the unit-6 share is a conditional slot rather than a freed one, and the second real candidate (unit 4, POM height into the mask array) costs POM half its resolution on `pilot` to buy a slot nothing currently spends. See D0 for the five corrections. **And the ledger sweep left it with no SCHEDULED consumer at all**: D2's surface half never needed it — **shipped without it in 11.41, so that is now demonstrated rather than predicted** — and D1 can dodge it with a flat 2D decal atlas rather than a `sampler2DArray`. The one consumer that genuinely cannot dodge it is sampling the froxel volume from the transparent pass — a `sampler3D` in the one pass where refraction is live — and that is not booked. Judge the item on its own measurement, not on what it unblocks. |
 | 33 | D1 Clustered decals | L | Largest environment-art gap. ~~Hard-blocked on D0.~~ **Blocked by a texture-layout choice, not by the ledger**: decals read in the opaque pass where unit 6 is idle, so a flat 2D atlas with computed tile UVs takes the alias and needs no freed unit. Only the `sampler2DArray` form is blocked. Price the flat atlas first. |
 | 34 | E8 Fix the wind cull | S | Small, self-contained, closes a real hole in E5's culling — wind geometry is currently exempt from the camera frustum *and* every cascade. Unblocks wind on scattered content, which `apps/forest` gave up to avoid it. |
 | 34b | **E9 One sample means one sample** | M | **DONE (11.34).** `apps/forest` opaque **150.9 → 121.6 ms (−19.4%)** against a 0.23% floor, with byte-identical submission integers — the same work, cheaper. One branch in the one allocator plus one at the depth renderbuffer flips the scene, OIT and moment FBOs in lockstep, since they share the depth attachment. The row's original prescription was wrong twice: there is no `sampler2DMS` anywhere in the corpus (11.17 rejected it), and postfx reaches the scene target only through blits, so the GLSL surface was zero files and postfx changed nothing. Priced before built with a new `--msaa <n>` lever, which also decomposed the first confounded A/B: A2C alone costs 202 ms of forest's opaque row (fragment-set explosion, headless-only), a sample ~93 ms on that inflated set. TAA-only edges verified by crops (raiden groom, forest canopy — indistinguishable), all 23 goldens 0 px, and MBOIT's moment-resolve bias (11.17) is now absent on the TAA path for free. |
