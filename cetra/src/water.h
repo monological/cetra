@@ -58,9 +58,9 @@
  * NOT SHADOW_MAP_TEXTURE_UNIT, which is 10 and already carries cascadePrev1. Those are a
  * sampler2DArray and a sampler2D, and a program that declares BOTH types against one image
  * unit is an INVALID_OPERATION at draw -- so the array needs a unit whose 2D_ARRAY binding
- * point this program leaves alone. 11 is the IBL irradiance CUBE, a third binding point on
- * a unit water never samples as either, which is the same aliasing the depth and bed units
- * above already rest on.
+ * point this program leaves alone. 11's other tenant is the IBL irradiance CUBE, a third
+ * binding point, and water declares no cube there -- its own prefiltered cube is on 12.
+ * Same aliasing the depth and bed units above already rest on.
  */
 #define WATER_SHADOW_UNIT 11
 // The accumulated foam, three bands in three channels (spec 11.42). 15 is the punctual
@@ -270,12 +270,17 @@ typedef struct Water {
     /*
      * What the seeded spectrum's variance actually is, per cascade (spec 11.42).
      *
-     * Accumulated over the modes as they are drawn, which is the only place the
-     * per-mode amplitude exists. Three consumers, and they are why this is stored rather
-     * than re-derived: the displaceable slab's half-thickness (the projector has to know
-     * how far a crest can reach above the still plane), the far field's roughness (the
-     * slope energy filtering removed has to arrive somewhere, and it needs the total to
-     * be a fraction OF), and the glitter lobe's facet distribution.
+     * Accumulated over the modes as they are drawn, which is the only place the per-mode
+     * amplitude exists.
+     *
+     * slope_var has two consumers and is why this is stored rather than re-derived: the
+     * far field's roughness, and the glitter lobe's facet distribution. Both need what the
+     * filtering removed to be a fraction OF something.
+     *
+     * height_var has ONE reader, and it is water_fft_probe. It exists to check the
+     * transform's normalisation, not to feed shading. The projector-slab consumer it was
+     * accumulated for was measured harmful and reverted (spec 11.42 phase 4), so anything
+     * reading it as a live displacement bound is reading a number nothing acts on.
      *
      * height_var is in world units squared, slope_var is dimensionless -- a mean square
      * slope, which is what Cox-Munk's tables are also in.

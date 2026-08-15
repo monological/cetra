@@ -616,7 +616,7 @@ static void _engine_gui_panel(Engine* engine) {
                 // fetch, so calm is a lower wind speed rather than a smaller number.
                 igSliderFloat("Wind speed (m/s)", &water->sea.wind_speed, 0.5f, 30.0f, "%.1f",
                               0);
-                igSliderFloat("Fetch (km)", &water->sea.fetch, 1000.0f, 500000.0f, "%.0f",
+                igSliderFloat("Fetch (m)", &water->sea.fetch, 1000.0f, 500000.0f, "%.0f",
                               ImGuiSliderFlags_Logarithmic);
                 igSliderFloat("Sea depth (m)", &water->sea.sea_depth, 1.0f, 500.0f, "%.0f",
                               ImGuiSliderFlags_Logarithmic);

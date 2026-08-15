@@ -333,11 +333,14 @@ void main() {
         // slope instead sent distant water toward the calm value in both, so the horizon
         // got smoother as its waves went sub-pixel, which is backwards.
         //
-        // The fade scales the slope, so it scales the variance by its SQUARE -- and the
-        // band's own variance is what is being scaled, rather than this one texel's slope.
-        // A per-texel read would make the lobe width depend on where in the wave the pixel
+        // The band's OWN variance is what is scaled, not this one texel's slope: a
+        // per-texel read would make the lobe width depend on where in the wave the pixel
         // happened to land, where the removed detail is a property of the whole band.
-        removedMss += (1.0 - fade) * (1.0 - fade) * cascadeSlopeVar[2];
+        //
+        // The kept scale is the fade AND the gain, because the slope reaching the normal
+        // two lines above is scaled by both. Leaving the gain out booked the 58% of this
+        // band that WATER_SHORT_SLOPE_GAIN discards as if it were still in the normal.
+        removedMss += oceanRemovedMss(fade * WATER_SHORT_SLOPE_GAIN, cascadeSlopeVar[2]);
 
         // Foam where the horizontal map COMPRESSES, from the vertex Jacobian plus
         // the short band's own. Deformation, not a height threshold: a tall smooth

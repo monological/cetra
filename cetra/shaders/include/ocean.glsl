@@ -230,6 +230,23 @@ float oceanCascadeTopLod() {
 
 // Mip level for one band at a given world footprint. Clamped at 0 because a cell finer
 // than a texel gains nothing from a sharper level that does not exist.
+/*
+ * The variance a band gives up when the slope reaching the normal is scaled by `kept`.
+ *
+ * `kept` scales the SLOPE, so the surviving variance is kept^2 * V and what has to be
+ * handed to roughness is the rest of it. NOT (1 - kept)^2 * V, which is the variance of
+ * the difference field -- a quantity that would only be the answer if the kept and removed
+ * halves were independent fields, where they are one field scaled. That form under-delivers
+ * everywhere between the endpoints and is wrong by 3x at kept = 0.5, which is the middle of
+ * the band the handover exists for.
+ *
+ * One function because the two wave models and the short band all need it and all three
+ * wrote it differently.
+ */
+float oceanRemovedMss(float kept, float variance) {
+    return max(0.0, 1.0 - kept * kept) * variance;
+}
+
 float oceanCascadeLod(float footprint, int band) {
     float texel = cascadeLength[band] / max(cascadeRes, 1.0);
     return clamp(log2(max(footprint / max(texel, 1e-6), 1.0)), 0.0, oceanCascadeTopLod());
@@ -389,14 +406,22 @@ OceanSurface oceanEvaluateSpectral(vec2 p, vec3 sh, float footprint) {
     OceanSurface s = oceanAssemble(p, oceanSpectralDisplacement(long0, med0),
                                    vec3(dHoriz.x, slope.x, crossDeriv),
                                    vec3(crossDeriv, slope.y, dHoriz.y), sh);
-    // Each band's slope survives in proportion to how much of it the mip still resolves,
-    // reaching nothing at the top level. Weighted by each band's OWN variance and summed
-    // rather than averaged: the cascades own disjoint wavenumber windows, so what they
-    // lose adds, and the two do not in fact carry comparable energy -- the medium band
-    // measures slightly more slope than the long one despite its smaller waves, because
-    // slope is amplitude times wavenumber.
+    /*
+     * Each band's slope survives in proportion to how much of it the mip still resolves,
+     * reaching nothing at the top level. Weighted by each band's OWN variance and summed
+     * rather than averaged: the cascades own disjoint wavenumber windows, so what they
+     * lose adds, and the two do not in fact carry comparable energy -- the medium band
+     * measures slightly more slope than the long one despite its smaller waves, because
+     * slope is amplitude times wavenumber.
+     *
+     * The mip level enters as a KEPT SCALE, `1 - lod/top`, so it goes through the same
+     * oceanRemovedMss as the other two paths. That is a heuristic either way -- a mip is
+     * a box filter, not a scaling of the field -- but stating it in the same vocabulary is
+     * what lets the three consumers be compared at all. They used three different laws.
+     */
     float top = oceanCascadeTopLod();
-    s.filteredMss = (lodLong / top) * cascadeSlopeVar[0] + (lodMed / top) * cascadeSlopeVar[1];
+    s.filteredMss = oceanRemovedMss(1.0 - lodLong / top, cascadeSlopeVar[0]) +
+                    oceanRemovedMss(1.0 - lodMed / top, cascadeSlopeVar[1]);
     return s;
 }
 
@@ -432,12 +457,11 @@ OceanSurface oceanEvaluateAt(vec2 p, float t, vec3 sh, float footprint) {
     // are not part of what shoals.
     vec3 dDispDx = vec3(0.0);
     vec3 dDispDz = vec3(0.0);
-    // Slope variance the set carries, and how much of it survives the footprint. This is
-    // the Gerstner path's own answer to what mip levels do for the spectral one: an octave
-    // shorter than a couple of cells is not detail the mesh can hold, and evaluating its
-    // closed form anyway samples one arbitrary phase per cell.
-    float slopeEnergy = 0.0;
-    float slopeKept = 0.0;
+    // Slope variance the footprint removed, summed over the octaves. This is the Gerstner
+    // path's own answer to what mip levels do for the spectral one: an octave shorter than
+    // a couple of cells is not detail the mesh can hold, and evaluating its closed form
+    // anyway samples one arbitrary phase per cell.
+    float removedMss = 0.0;
 
     float wavelength = waterWavelength;
     // Note what the shoal factor must NOT be folded into: q is amplitude's reciprocal,
@@ -476,9 +500,10 @@ OceanSurface oceanEvaluateAt(vec2 p, float t, vec3 sh, float footprint) {
         // variance it contributes.
         float keep = smoothstep(OCEAN_NYQUIST_OFF, OCEAN_NYQUIST_ON,
                                 wavelength / max(footprint, 1e-4));
+        // Mean square of a sine of slope amplitude a*k, and both axes already sum to it
+        // because the octave travels in one direction.
         float slope = amplitude * k;
-        slopeEnergy += slope * slope;
-        slopeKept += slope * slope * keep;
+        removedMss += oceanRemovedMss(keep, slope * slope * 0.5);
 
         disp.x += keep * qa * dir.x * cosp;
         disp.y += keep * amplitude * sinp;
@@ -502,7 +527,11 @@ OceanSurface oceanEvaluateAt(vec2 p, float t, vec3 sh, float footprint) {
     // halving is the mean square of a sine: an octave whose slope amplitude is a*k
     // contributes (a*k)^2 / 2, and the two axes already sum to that because the octave
     // travels in one direction.
-    s.filteredMss = (slopeEnergy - slopeKept) * 0.5;
+    //
+    // Accumulated through oceanRemovedMss per octave rather than as a difference of two
+    // running totals: `keep` scales the octave's AMPLITUDE, so the survivor is keep^2 of
+    // the variance and a plain (energy - kept) books (1 - keep) where (1 - keep^2) is owed.
+    s.filteredMss = removedMss;
     // A Gerstner map DOES compress -- that bunching is what sharpens its crests -- but
     // its Jacobian is not reported here, so the determinant oceanAssemble computed is
     // overwritten. 1 means "no selector on this path", which is what the foam and

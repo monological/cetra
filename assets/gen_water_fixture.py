@@ -72,21 +72,28 @@ wedge_positions = [
     (WEDGE_HALF_X, WEDGE_HIGH, WEDGE_FAR_Z),
     (-WEDGE_HALF_X, WEDGE_HIGH, WEDGE_FAR_Z),
 ]
+wedge_indices = [0, 1, 2, 0, 2, 3]
 # One normal for the whole ramp; it is planar. Taken from the edge vectors rather than
 # written down, so it follows the positions above instead of having to be re-derived by
 # hand whenever they move -- which is how it came to disagree with them in the first place.
-_e1 = tuple(b - a for a, b in zip(wedge_positions[0], wedge_positions[1]))
-_e2 = tuple(b - a for a, b in zip(wedge_positions[0], wedge_positions[2]))
+#
+# The edges come from the FIRST TRIANGLE'S OWN INDICES, not from a hand-written (0,1,2).
+# That is what makes the check below real: with the triple written out, reversing the
+# winding left the emitted normal untouched and the assert still passed, so it pinned
+# nothing it claimed to. Now the two cannot disagree.
+_i0, _i1, _i2 = wedge_indices[:3]
+_e1 = tuple(b - a for a, b in zip(wedge_positions[_i0], wedge_positions[_i1]))
+_e2 = tuple(b - a for a, b in zip(wedge_positions[_i0], wedge_positions[_i2]))
 _n = (_e1[1] * _e2[2] - _e1[2] * _e2[1],
       _e1[2] * _e2[0] - _e1[0] * _e2[2],
       _e1[0] * _e2[1] - _e1[1] * _e2[0])
 _len = (_n[0] * _n[0] + _n[1] * _n[1] + _n[2] * _n[2]) ** 0.5
 wedge_normal = tuple(c / _len for c in _n)
-assert wedge_normal[1] > 0.0, "the ramp's normal must point up out of the ground"
+# raise, not assert: a module-level assert is stripped under `python -O`, and a fixture
+# generated with the ramp facing into the ground would look plausible enough to commit.
+if wedge_normal[1] <= 0.0:
+    raise ValueError("the ramp's winding and its normal disagree: normal points down")
 wedge_normals = [wedge_normal] * 4
-# Wound so the front face is the lit one: this order's cross product is the normal above,
-# which the assert pins.
-wedge_indices = [0, 1, 2, 0, 2, 3]
 
 floor_positions = [
     (-FLOOR_HALF, FLOOR_Y, -FLOOR_HALF),

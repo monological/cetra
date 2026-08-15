@@ -3660,9 +3660,15 @@ WATER_FAR_NEAR_BOX = (0.06, 0.86, 0.20, 0.94)
 #
 # What this does NOT establish is the DIRECTION -- a handover that drove roughness toward the
 # calm value instead of the rippled one would read as the same insensitivity. That half is a
-# code fact rather than a measurement here (one mix toward WATER_ROUGH_RIPPLED, from a
-# quantity that only rises with footprint), because at this fixture's viewing angles the
-# specular share is about 2% and roughness barely moves a pixel except at grazing.
+# code fact rather than a measurement here: since spec 11.42 the roughness is
+# sqrt(sqrt(authored^4 + removedMss)), which is monotone in a removed variance that only
+# rises with footprint, so it cannot move toward calm. (Before 11.42 the same argument was
+# one mix toward a WATER_ROUGH_RIPPLED literal, which that spec deleted.) The measurement is
+# unavailable here either way: at this fixture's viewing angles the specular share is about
+# 2% and roughness barely moves a pixel except at grazing.
+#
+# The value below is an AUTHORED roughness for the .cscn override, and 0.115 is only what
+# the deleted literal happened to be -- nothing in the shader carries that number now.
 WATER_FAR_ROUGH_AUTHORED = 0.115
 WATER_FAR_ROUGH_RATIO_MAX = 0.35
 

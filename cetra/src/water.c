@@ -756,6 +756,19 @@ static bool _water_reseed(Water* water) {
     free(initial);
     free(wave);
     _water_record_seed(water);
+    /*
+     * Both histories describe the OLD sea and have to go with it.
+     *
+     * cascade_prev holds last frame's displacement, so a frame that kept it would report a
+     * velocity between two unrelated oceans -- a full-surface smear through TAA and motion
+     * blur. Zeroing the counter reuses the startup path exactly: two frames of no reported
+     * wave motion, which is already the known-good state on frame one.
+     *
+     * The foam accumulator is the same argument: it is a running minimum of a Jacobian the
+     * new spectrum never folded.
+     */
+    water->spectral_frames = 0;
+    water->foam_frames = 0;
     log_info("Water: re-seeded at wind %.1f m/s, fetch %.0f m, depth %.0f m",
              (double)water->sea.wind_speed, (double)water->sea.fetch,
              (double)water->sea.sea_depth);
@@ -885,6 +898,45 @@ static bool _water_ensure_spectra(Water* water) {
  * 14 stages, so the final result lands back in buffer 0 (stage 13 reads 1, writes
  * 0). The surface shader therefore always samples buffer 0 and needs no parity.
  */
+/*
+ * One complete inverse transform over a ping-pong pair, in place.
+ *
+ * 2 * WATER_SPECTRUM_LOG stages, so the result lands back in buffer 0 and no caller needs a
+ * parity. The caller supplies the pair and has already bound the fullscreen quad.
+ *
+ * SHARED with the impulse probe, and that is the whole point rather than tidiness. The
+ * probe's claim is that it exercises the transform the sea runs; a second copy of this loop
+ * would make that claim true of the shader and false of the SCHEDULE, so reordering the
+ * stages here would leave the probe testing the old order and still reporting near-zero
+ * error -- the same shape of green-over-wrong the probe exists to catch.
+ */
+static void _water_fft_transform(ShaderProgram* fft, GLuint twiddle, const GLuint fbo[2],
+                                 const GLuint field[2][2]) {
+    glUseProgram(fft->id);
+    uniform_set_int(fft->uniforms, "twiddleTex", 0);
+    uniform_set_int(fft->uniforms, "in0", 1);
+    uniform_set_int(fft->uniforms, "in1", 2);
+    uniform_set_int(fft->uniforms, "size", WATER_SPECTRUM_RES);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, twiddle);
+
+    for (int pass = 0; pass < WATER_SPECTRUM_LOG * 2; pass++) {
+        const int src = pass % 2;
+        const int dst = 1 - src;
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo[dst]);
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, field[src][0]);
+        glActiveTexture(GL_TEXTURE2);
+        glBindTexture(GL_TEXTURE_2D, field[src][1]);
+        uniform_set_int(fft->uniforms, "axis", pass < WATER_SPECTRUM_LOG ? 0 : 1);
+        uniform_set_int(fft->uniforms, "stage", pass % WATER_SPECTRUM_LOG);
+        // The fftshift folds into the LAST stage as a checkerboard sign, which
+        // is why it is a uniform rather than a separate pass.
+        uniform_set_int(fft->uniforms, "finalize", pass == WATER_SPECTRUM_LOG * 2 - 1 ? 1 : 0);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    }
+}
+
 static void _water_run_spectral(Water* water, struct Engine* engine, float time) {
     ShaderProgram* evolve = get_engine_shader_program_by_name(engine, "water_spectrum");
     ShaderProgram* fft = get_engine_shader_program_by_name(engine, "water_fft");
@@ -942,30 +994,8 @@ static void _water_run_spectral(Water* water, struct Engine* engine, float time)
         uniform_set_float(evolve->uniforms, "time", time);
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 
-        glUseProgram(fft->id);
-        uniform_set_int(fft->uniforms, "twiddleTex", 0);
-        uniform_set_int(fft->uniforms, "in0", 1);
-        uniform_set_int(fft->uniforms, "in1", 2);
-        uniform_set_int(fft->uniforms, "size", WATER_SPECTRUM_RES);
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, water->twiddle_tex);
-
-        for (int pass = 0; pass < WATER_SPECTRUM_LOG * 2; pass++) {
-            const int src = pass % 2;
-            const int dst = 1 - src;
-            glBindFramebuffer(GL_FRAMEBUFFER, water->cascade_fbo[c][dst]);
-            glActiveTexture(GL_TEXTURE1);
-            glBindTexture(GL_TEXTURE_2D, water->cascade_field[c][src][0]);
-            glActiveTexture(GL_TEXTURE2);
-            glBindTexture(GL_TEXTURE_2D, water->cascade_field[c][src][1]);
-            uniform_set_int(fft->uniforms, "axis", pass < WATER_SPECTRUM_LOG ? 0 : 1);
-            uniform_set_int(fft->uniforms, "stage", pass % WATER_SPECTRUM_LOG);
-            // The fftshift folds into the LAST stage as a checkerboard sign, which
-            // is why it is a uniform rather than a separate pass.
-            uniform_set_int(fft->uniforms, "finalize",
-                            pass == WATER_SPECTRUM_LOG * 2 - 1 ? 1 : 0);
-            glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-        }
+        _water_fft_transform(fft, water->twiddle_tex, water->cascade_fbo[c],
+                             water->cascade_field[c]);
     }
 
     glBindVertexArray(0);
@@ -996,8 +1026,18 @@ static void _water_run_spectral(Water* water, struct Engine* engine, float time)
      * chain (spec 11.32 measured +0.24 ms GPU against +1.19 ms CPU for the 45), which is
      * why the three bands share one target instead of taking one pass each.
      */
-    ShaderProgram* foam = get_engine_shader_program_by_name(engine, "water_foam");
-    if (foam && water->foam_history) {
+    ShaderProgram* foam =
+        water->foam_history ? get_engine_shader_program_by_name(engine, "water_foam") : NULL;
+    // A missing program is reported and the feature switched off, not shrugged through a
+    // truthiness test every frame: this file's policy is stated at the evolve/fft lookups
+    // above, and the failure it guards against is the same one -- a sea that renders
+    // plausibly while silently missing what was asked for, with a green gate over it.
+    // Clearing the flag is what makes it one log line rather than one per frame.
+    if (water->foam_history && !foam) {
+        log_error("Water: foam program missing; foam history disabled");
+        water->foam_history = false;
+    }
+    if (foam) {
         const int src = water->foam_index;
         const int dst = 1 - src;
         glUseProgram(foam->id);
@@ -1141,19 +1181,16 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
     vec3 sun_radiance = {0.0f, 0.0f, 0.0f};
     // Which cascade the deck occludes, for the glitter's shadow. -1 covers a sun that
     // casts nothing, which is also the state cloud_shadow.glsl reads as "no deck".
-    int sun_slot = -1;
     if (sun) {
         // Lights store the direction they SHINE; the shader wants the direction
         // toward the source.
         glm_vec3_negate_to((float*)sun->direction, sun_dir);
         glm_vec3_normalize(sun_dir);
         glm_vec3_scale((float*)sun->color, sun->intensity, sun_radiance);
-        sun_slot = sun->cast_shadows ? sun->shadow_map_index : -1;
     }
     uniform_set_vec3(u, "sunDir", (const float*)&sun_dir);
     uniform_set_int(u, "sunAvailable", sun ? 1 : 0);
     uniform_set_vec3(u, "sunRadiance", (const float*)&sun_radiance);
-    uniform_set_int(u, "sunShadowSlot", sun_slot);
 
     /*
      * The cascades, for the glitter's shadow. Mirrors the shadow catcher's own bind
@@ -1164,10 +1201,24 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
      * csm.glsl's CSM_OUTERMOST_PCF path reads only the widest cascade, which is
      * scene-fitted and camera-independent -- the right lookup for a surface that runs to
      * the horizon, and the same one the catcher and the particle motes take.
+     *
+     * ONE predicate, and the slot is published FROM it rather than beside it. The two were
+     * separate expressions and could disagree: `sunShadowSlot` came from the light, the
+     * uploads from the system, and the shader gates only on the slot. Switching shadows
+     * off mid-session leaves the sun holding a stale `shadow_map_index` -- only the depth
+     * pass clears it, and that pass is itself gated on `enabled` -- so the shader took the
+     * lookup against an unbound array and a never-uploaded `cascadeCount`, read full
+     * occlusion, and the glitter vanished from the whole sea.
+     *
+     * `directional_count` is in the predicate for a second reason both precedents already
+     * carry: at zero, shadow_upload_cascade_uniforms early-returns, leaving
+     * `lightSpaceMatrix` zeroed while `cascadeCount` is not -- a w of 0 and a NaN.
      */
     const ShadowSystem* ss = scene->shadow_system;
-    const bool shadows = ss && ss->enabled && ss->shadow_map_array && sun_slot >= 0;
-    uniform_set_int(u, "numShadowLights", shadows ? (int)ss->directional_count : 0);
+    const bool shadows = ss && ss->enabled && ss->directional_count > 0 &&
+                         ss->shadow_map_array && sun && sun->cast_shadows &&
+                         sun->shadow_map_index >= 0;
+    uniform_set_int(u, "sunShadowSlot", shadows ? sun->shadow_map_index : -1);
     if (shadows) {
         shadow_upload_cascade_uniforms(ss, u);
         uniform_set_float(u, "shadowBias", ss->shadow_bias);
@@ -1337,30 +1388,13 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
 }
 
 /*
- * MEASURE the transformed field and print it beside what the seeding predicted.
- *
- * The only instrument on the transform itself. Everything else in this subsystem reads
- * pixels, and pixels cannot distinguish a correct ocean from a wrong-but-deterministic one
- * -- a swapped twiddle sign or an off-by-one butterfly partner still renders a plausible
- * sea, still reproduces across runs, and still differs from Gerstner. That is the shape of
- * defect spec 11.39 shipped in the cloud shadow map with two green arms over it.
- *
- * Reading back inside the library rather than from the app, unlike --water-probe: the
- * cascades are water's own GPU state, and an app reaching into them would be reaching past
- * the seam that owns them.
- *
- * Costs a full pipeline stall per cascade. That is fine here and would not be per frame,
- * which is why nothing calls this from the render loop.
- */
-/*
  * Inverse-transform ONE Fourier mode and compare against its closed form.
  *
- * The isolation test the variance rows above cannot be. A transform whose butterfly reads
- * the wrong partner, whose twiddle is conjugated the wrong way, or which drops the
- * fftshift still produces a field with the right variance -- so it still renders a
- * plausible sea, still reproduces across runs, and still differs from Gerstner. Every
- * existing arm passes on it. Against a single mode there is one right answer and it is a
- * closed form.
+ * The isolation test the variance rows cannot be. A transform whose butterfly reads the
+ * wrong partner, whose twiddle is conjugated the wrong way, or which drops the fftshift
+ * still produces a field with the right variance -- so it still renders a plausible sea,
+ * still reproduces across runs, and still differs from Gerstner. Every existing arm passes
+ * on it. Against a single mode there is one right answer and it is a closed form.
  *
  * A centred impulse at (N/2 + fx, N/2 + fy) must come back as exp(i*2pi*(fx*x + fy*y)/N),
  * which is what the finalize stage's (-1)^(x+y) is FOR: the seeding centres k on the grid,
@@ -1407,34 +1441,18 @@ static bool _water_fft_impulse(const Water* water, struct Engine* engine, int fx
     }
     free(data);
 
+    const GLboolean depth_was_enabled = glIsEnabled(GL_DEPTH_TEST);
+    const GLboolean blend_was_enabled = glIsEnabled(GL_BLEND);
+
     if (complete) {
         glDisable(GL_DEPTH_TEST);
         glDisable(GL_BLEND);
         glViewport(0, 0, size, size);
-        glUseProgram(fft->id);
-        uniform_set_int(fft->uniforms, "twiddleTex", 0);
-        uniform_set_int(fft->uniforms, "in0", 1);
-        uniform_set_int(fft->uniforms, "in1", 2);
-        uniform_set_int(fft->uniforms, "size", size);
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, water->twiddle_tex);
         glBindVertexArray(water->fft_vao);
-        // The same 14 stages the sea runs, in the same order and off the same table --
-        // a test against a private copy of the transform would prove nothing about this one.
-        for (int pass = 0; pass < WATER_SPECTRUM_LOG * 2; pass++) {
-            const int src = pass % 2;
-            const int dst = 1 - src;
-            glBindFramebuffer(GL_FRAMEBUFFER, fbo[dst]);
-            glActiveTexture(GL_TEXTURE1);
-            glBindTexture(GL_TEXTURE_2D, tex[src][0]);
-            glActiveTexture(GL_TEXTURE2);
-            glBindTexture(GL_TEXTURE_2D, tex[src][1]);
-            uniform_set_int(fft->uniforms, "axis", pass < WATER_SPECTRUM_LOG ? 0 : 1);
-            uniform_set_int(fft->uniforms, "stage", pass % WATER_SPECTRUM_LOG);
-            uniform_set_int(fft->uniforms, "finalize",
-                            pass == WATER_SPECTRUM_LOG * 2 - 1 ? 1 : 0);
-            glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-        }
+        // The sea's OWN transform, not a copy of it -- which is what makes this test's
+        // result a statement about the shipping path rather than about a sibling that
+        // happens to agree today.
+        _water_fft_transform(fft, water->twiddle_tex, fbo, tex);
         glBindVertexArray(0);
 
         float* out = malloc(texels * 4 * sizeof(float));
@@ -1467,10 +1485,34 @@ static bool _water_fft_impulse(const Water* water, struct Engine* engine, int fx
     glDeleteTextures(4, &tex[0][0]);
     glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)saved_fbo);
     glViewport(saved_viewport[0], saved_viewport[1], saved_viewport[2], saved_viewport[3]);
+    // Restored on every exit including the failure ones, matching _water_run_spectral. The
+    // only caller today runs after the loop has stopped, so nothing downstream would notice
+    // -- but a diagnostic that leaves the pipeline in a different state than it found it
+    // cannot later be called from anywhere else, and nothing in the signature says so.
+    if (depth_was_enabled)
+        glEnable(GL_DEPTH_TEST);
+    if (blend_was_enabled)
+        glEnable(GL_BLEND);
+    glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, 0);
     return complete;
 }
 
+/*
+ * MEASURE the transformed field and print it beside what the seeding predicted.
+ *
+ * The only instrument on the transform itself. Everything else in this subsystem reads
+ * pixels, and pixels cannot distinguish a correct ocean from a wrong-but-deterministic one
+ * -- that is the shape of defect spec 11.39 shipped in the cloud shadow map with two green
+ * arms over it, and the impulse pair below is what closes it.
+ *
+ * Reading back inside the library rather than from the app, unlike --water-probe: the
+ * cascades are water's own GPU state, and an app reaching into them would be reaching past
+ * the seam that owns them.
+ *
+ * Costs a full pipeline stall per cascade. That is fine here and would not be per frame,
+ * which is why nothing calls this from the render loop.
+ */
 void water_fft_probe(const Water* water, struct Engine* engine) {
     if (!water || !engine || !water->spectra_ready || water->wave_model != WATER_WAVES_FFT) {
         // A result, not a failure: the Gerstner path has no spectrum to measure, and
