@@ -53,18 +53,11 @@ uniform vec3 waterInscatter;  // scene radiance, pre-exposed with everything els
  * NOT a fourth medium -- a visibility term for one light, which is why it multiplies into
  * fogVisibility below rather than into sigma. The deck occludes the sun; it does not scatter.
  *
- * Exact for a horizontal shell rather than an approximation of one: the sun ray from P crosses
- * the deck at a single point, so shearing P up to cloudShadowShellY and reading there IS the
- * answer, at any altitude below the deck. No matrix, no cascade, no depth compare.
- *
- * And it TILES rather than windowing: with the detail octave off the field is exactly periodic
- * over cloudShadowTile, so one period wrapped by the sampler is the whole world.
+ * The lookup itself is shared with the three ground surfaces (spec 11.41), so it lives in the
+ * include rather than here; this pass has a unit to spare and declares the sampler for it.
  */
 uniform sampler2D cloudShadowTex;
-uniform float cloudShadowTile;   // world units the map's period covers; 0 = no deck
-uniform float cloudShadowShellY; // world Y the map is indexed at
-uniform vec2 cloudShadowShear;   // world XZ travelled per unit of climb toward the sun
-uniform int cloudShadowLight;    // which light below the deck occludes; -1 = none
+#include "cloud_shadow.glsl"
 
 /*
  * Local fog volumes (spec 11.39): boxes of denser air, for a smoky room or a dust shaft
@@ -274,20 +267,9 @@ void main() {
         sigmaTint += localFogTint[i] * s;
     }
 
-    /*
-     * How much of the deck this cell sits under. Hoisted: one lookup serves every light,
-     * because only one of them can be the sun.
-     *
-     * Shear P up the sun ray to the shell and read there. No bounds test: the map holds one
-     * period of a periodic field and the sampler wraps, so every world position lands on a
-     * real value. A finite window was tried first and its edge reads as a hard diagonal across
-     * the fog, wherever the shear runs past the last texel.
-     */
-    float cloudSun = 1.0;
-    if (cloudShadowTile > 0.0) {
-        vec2 hit = P.xz + cloudShadowShear * (cloudShadowShellY - P.y);
-        cloudSun = texture(cloudShadowTex, hit / cloudShadowTile).r;
-    }
+    // How much of the deck this cell sits under. Hoisted: one lookup serves every light,
+    // because only one of them can be the sun.
+    float cloudSun = cloudSunAt(P);
 
     vec3 S = ambientColor;
     for (int j = 0; j < numLights; j++) {
