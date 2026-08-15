@@ -3475,6 +3475,20 @@ WATER_FFT_VAR_MAX = 1.5
 # Mirrors WATER_CASCADE_COUNT (water.h). Asserted rather than assumed: a probe that
 # printed two rows would otherwise be read as two passing cascades.
 WATER_CASCADES = 3
+
+# The transform against its closed form (spec 11.42). Measured 0.0 and 1.9e-7 on the two
+# modes -- fp32 scratch, so this is round-off over 14 stages and nothing else.
+#
+# The threshold is four orders above that and still decisive, which was verified by
+# BREAKING the shader rather than by argument: dropping the conjugate from the inverse
+# twiddle (water_fft_frag.glsl) takes mode_err to exactly 2.0, the largest error a
+# unit-magnitude value admits. In that same run every variance ratio was unchanged to four
+# decimals and twelve pixel arms passed, water-fft-det and water-fft-live among them --
+# which is the blind spot D3 item 3 names, measured.
+#
+# dc_err alone would NOT have caught it: a constant field is invariant under the
+# conjugation, which is why the second mode exists.
+WATER_FFT_IMPULSE_MAX = 1e-3
 # And `level` is a field both paths can set, so authoring it must land in exactly the
 # same place the flag does. 0 px or one of them is lying.
 WATER_CSCN_LEVEL = 0.9
@@ -3710,9 +3724,9 @@ def _water_probe(extra, scene=None):
 
 
 def _water_fft_probe(extra, scene=None):
-    """Run --water-fft-probe and return one row dict per cascade.
+    """Run --water-fft-probe and return (per-cascade rows, impulse dict).
 
-    An empty list is a failure at every call site here, unlike _water_probe where
+    Empty results are a failure at every call site here, unlike _water_probe where
     declining is one of the results: the flag is only ever passed with a spectral surface
     already asked for, so nothing to measure means the surface did not survive the flags.
     """
@@ -3720,17 +3734,23 @@ def _water_fft_probe(extra, scene=None):
            "-W", "200", "-H", "150", "--water-fft-probe"] + extra
     r = subprocess.run(cmd, capture_output=True, text=True)
     rows = []
+    impulse = {}
     for line in (r.stdout + r.stderr).splitlines():
         if not line.startswith("water-fft-probe "):
             continue
         parts = line.split()[1:]
-        # The header carries available/cascades/res; the per-cascade rows lead with an index.
+        # Three line shapes: a header of key=value, the impulse pair, and the per-cascade
+        # rows, which are the only ones leading with a bare index.
+        if parts[0] == "impulse":
+            impulse = {k: float(v) for k, v in (p.split("=", 1) for p in parts[1:])
+                       if k != "available"}
+            continue
         if "=" in parts[0]:
             continue
         row = {"cascade": int(parts[0])}
         row.update({k: float(v) for k, v in (p.split("=", 1) for p in parts[1:])})
         rows.append(row)
-    return rows
+    return rows, impulse
 
 
 def _water_cscn_variant(src, dst, overrides):
@@ -3910,6 +3930,12 @@ def run_water_gate(workdir):
                       Gerstner, and is still wrong. Blind to a missed fftshift, which
                       moves the field in space and not in variance -- that is
                       water-fft-impulse's half.
+      water-fft-impulse the transform matches its CLOSED FORM on two single modes: a
+                      centred impulse must come back constant, and its neighbour as one
+                      cycle across the grid. Run through the same 14 stages and the same
+                      twiddle table the sea uses, so it tests this transform rather than
+                      a copy. Verified by breaking the shader -- see
+                      WATER_FFT_IMPULSE_MAX for what the rest of the suite did then.
       water-seastate  the spectral sea state reaches the seeding. Wind speed, fetch,
                       depth, peak enhancement and swell are authorable since spec 11.42
                       and NO flag can set any of them, so a scene file is the only way in
@@ -4162,7 +4188,7 @@ def run_water_gate(workdir):
 
     # The transform carries the variance the seeding predicted. The first arm in this
     # suite that reads the SPECTRUM rather than a picture of it.
-    var_rows = _water_fft_probe(WATER_PIN + ["--water-waves", "fft"])
+    var_rows, impulse = _water_fft_probe(WATER_PIN + ["--water-waves", "fft"])
     if len(var_rows) != WATER_CASCADES:
         print(f"  water-fft-var FAIL  --water-fft-probe printed {len(var_rows)} cascades, "
               f"want {WATER_CASCADES}")
@@ -4176,6 +4202,20 @@ def run_water_gate(workdir):
               f"(want {WATER_FFT_VAR_MIN}-{WATER_FFT_VAR_MAX} on all six)")
         if not ok:
             failures.append("water-fft-var")
+
+    # The transform against its closed form. The only arm in this suite that can fail on
+    # a transform which is deterministic, differs from Gerstner, and is still wrong.
+    if not impulse:
+        print("  water-fft-impulse FAIL  --water-fft-probe printed no impulse result")
+        failures.append("water-fft-impulse")
+    else:
+        dc = impulse.get("dc_err", 1.0)
+        mode = impulse.get("mode_err", 1.0)
+        ok = dc <= WATER_FFT_IMPULSE_MAX and mode <= WATER_FFT_IMPULSE_MAX
+        print(f"  water-fft-impulse {'PASS' if ok else 'FAIL'}  dc {dc:.2e} mode "
+              f"{mode:.2e} (want <={WATER_FFT_IMPULSE_MAX} on both)")
+        if not ok:
+            failures.append("water-fft-impulse")
 
     # Reach invariance. `off` is the matching dry reference -- same flags, --no-water.
     reach_a = os.path.join(workdir, "water_reach_authored.ppm")

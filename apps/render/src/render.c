@@ -3075,7 +3075,7 @@ int main(int argc, char** argv) {
     // them needs a live GL context. AFTER the loop rather than before it, unlike
     // --water-probe -- there is nothing to measure until a frame has run one.
     if (args.water_fft_probe)
-        water_fft_probe(scene->water);
+        water_fft_probe(scene->water, engine);
 
     printf("Cleaning up...\n");
     if (anim_state) {

@@ -357,6 +357,6 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
  * `available=0` rather than a number, since a caller reading silence as agreement is the
  * failure this exists to prevent.
  */
-void water_fft_probe(const Water* water);
+void water_fft_probe(const Water* water, struct Engine* engine);
 
 #endif // _WATER_H_

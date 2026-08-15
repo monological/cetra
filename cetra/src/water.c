@@ -1229,8 +1229,127 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
  * Costs a full pipeline stall per cascade. That is fine here and would not be per frame,
  * which is why nothing calls this from the render loop.
  */
-void water_fft_probe(const Water* water) {
-    if (!water || !water->spectra_ready || water->wave_model != WATER_WAVES_FFT) {
+/*
+ * Inverse-transform ONE Fourier mode and compare against its closed form.
+ *
+ * The isolation test the variance rows above cannot be. A transform whose butterfly reads
+ * the wrong partner, whose twiddle is conjugated the wrong way, or which drops the
+ * fftshift still produces a field with the right variance -- so it still renders a
+ * plausible sea, still reproduces across runs, and still differs from Gerstner. Every
+ * existing arm passes on it. Against a single mode there is one right answer and it is a
+ * closed form.
+ *
+ * A centred impulse at (N/2 + fx, N/2 + fy) must come back as exp(i*2pi*(fx*x + fy*y)/N),
+ * which is what the finalize stage's (-1)^(x+y) is FOR: the seeding centres k on the grid,
+ * so the shift belongs in the transform rather than at every consumer.
+ *
+ * Run on fp32 scratch rather than the fp16 the cascades use. What is under test is the
+ * indexing, the twiddles and the shift, none of which depend on the format, and fp16 would
+ * put its own 1e-3 floor exactly where the tolerance sits.
+ */
+static bool _water_fft_impulse(const Water* water, struct Engine* engine, int fx, int fy,
+                               double* out_max_err) {
+    ShaderProgram* fft = get_engine_shader_program_by_name(engine, "water_fft");
+    if (!fft || !water->twiddle_tex || !water->fft_vao)
+        return false;
+
+    const int size = WATER_SPECTRUM_RES;
+    const size_t texels = (size_t)size * size;
+    float* data = calloc(texels * 4, sizeof(float));
+    if (!data)
+        return false;
+    // Real unit impulse in the first packed complex pair; the second stays zero and rides
+    // along, which is also a check that the two halves do not leak into each other.
+    data[(((size_t)(size / 2 + fy) * size) + (size_t)(size / 2 + fx)) * 4 + 0] = 1.0f;
+
+    GLint saved_viewport[4];
+    GLint saved_fbo = 0;
+    glGetIntegerv(GL_VIEWPORT, saved_viewport);
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &saved_fbo);
+
+    GLuint tex[2][2];
+    GLuint fbo[2];
+    bool complete = true;
+    for (int b = 0; b < 2; b++) {
+        for (int t = 0; t < 2; t++)
+            tex[b][t] = _water_make_data_tex(size, size, (b == 0 && t == 0) ? data : NULL);
+        glGenFramebuffers(1, &fbo[b]);
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo[b]);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex[b][0], 0);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, tex[b][1], 0);
+        const GLenum targets[2] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1};
+        glDrawBuffers(2, targets);
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+            complete = false;
+    }
+    free(data);
+
+    if (complete) {
+        glDisable(GL_DEPTH_TEST);
+        glDisable(GL_BLEND);
+        glViewport(0, 0, size, size);
+        glUseProgram(fft->id);
+        uniform_set_int(fft->uniforms, "twiddleTex", 0);
+        uniform_set_int(fft->uniforms, "in0", 1);
+        uniform_set_int(fft->uniforms, "in1", 2);
+        uniform_set_int(fft->uniforms, "size", size);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, water->twiddle_tex);
+        glBindVertexArray(water->fft_vao);
+        // The same 14 stages the sea runs, in the same order and off the same table --
+        // a test against a private copy of the transform would prove nothing about this one.
+        for (int pass = 0; pass < WATER_SPECTRUM_LOG * 2; pass++) {
+            const int src = pass % 2;
+            const int dst = 1 - src;
+            glBindFramebuffer(GL_FRAMEBUFFER, fbo[dst]);
+            glActiveTexture(GL_TEXTURE1);
+            glBindTexture(GL_TEXTURE_2D, tex[src][0]);
+            glActiveTexture(GL_TEXTURE2);
+            glBindTexture(GL_TEXTURE_2D, tex[src][1]);
+            uniform_set_int(fft->uniforms, "axis", pass < WATER_SPECTRUM_LOG ? 0 : 1);
+            uniform_set_int(fft->uniforms, "stage", pass % WATER_SPECTRUM_LOG);
+            uniform_set_int(fft->uniforms, "finalize",
+                            pass == WATER_SPECTRUM_LOG * 2 - 1 ? 1 : 0);
+            glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+        }
+        glBindVertexArray(0);
+
+        float* out = malloc(texels * 4 * sizeof(float));
+        if (out) {
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, tex[0][0]);
+            glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_FLOAT, out);
+            double worst = 0.0;
+            for (int y = 0; y < size; y++) {
+                for (int x = 0; x < size; x++) {
+                    const double phase =
+                        6.283185307179586 * ((double)fx * x + (double)fy * y) / (double)size;
+                    const size_t o = ((size_t)y * size + (size_t)x) * 4;
+                    const double dr = out[o + 0] - cos(phase);
+                    const double di = out[o + 1] - sin(phase);
+                    if (fabs(dr) > worst)
+                        worst = fabs(dr);
+                    if (fabs(di) > worst)
+                        worst = fabs(di);
+                }
+            }
+            *out_max_err = worst;
+            free(out);
+        } else {
+            complete = false;
+        }
+    }
+
+    glDeleteFramebuffers(2, fbo);
+    glDeleteTextures(4, &tex[0][0]);
+    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)saved_fbo);
+    glViewport(saved_viewport[0], saved_viewport[1], saved_viewport[2], saved_viewport[3]);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    return complete;
+}
+
+void water_fft_probe(const Water* water, struct Engine* engine) {
+    if (!water || !engine || !water->spectra_ready || water->wave_model != WATER_WAVES_FFT) {
         // A result, not a failure: the Gerstner path has no spectrum to measure, and
         // saying so is what stops a caller reading silence as agreement.
         printf("water-fft-probe available=0\n");
@@ -1283,5 +1402,19 @@ void water_fft_probe(const Water* water) {
     }
     glBindTexture(GL_TEXTURE_2D, 0);
     free(buf);
+
+    // Two modes, because one is not enough. The centred impulse checks the shift and the
+    // overall scale; the neighbouring one checks that a mode lands at the wavenumber it
+    // was given, which is what an off-by-one butterfly partner breaks and what a constant
+    // field cannot distinguish.
+    double err_dc = 0.0;
+    double err_one = 0.0;
+    const bool ran = _water_fft_impulse(water, engine, 0, 0, &err_dc) &&
+                     _water_fft_impulse(water, engine, 1, 0, &err_one);
+    if (ran)
+        printf("water-fft-probe impulse dc_err=%.8f mode_err=%.8f\n", err_dc, err_one);
+    else
+        printf("water-fft-probe impulse available=0\n");
+
     check_gl_error("water fft probe");
 }
