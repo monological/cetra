@@ -45,6 +45,21 @@ uniform int waterMedium;
 uniform float waterLevelY;
 uniform vec3 waterExtinction; // per-channel; reduced to its mean here, see below
 uniform vec3 waterInscatter;  // scene radiance, pre-exposed with everything else
+/*
+ * Cloud transmittance toward the sun (spec 11.39). Texture 0 / cloudShadowTile 0 = no deck.
+ *
+ * Exact for a horizontal shell rather than an approximation of one: the sun ray from P crosses
+ * the deck at a single point, so shearing P up to cloudShadowShellY and reading there IS the
+ * answer, at any altitude below the deck. No matrix, no cascade, no depth compare.
+ *
+ * And it TILES rather than windowing: with the detail octave off the field is exactly periodic
+ * over cloudShadowTile, so one period wrapped by the sampler is the whole world.
+ */
+uniform sampler2D cloudShadowTex;
+uniform float cloudShadowTile;   // world units the map's period covers; 0 = no deck
+uniform float cloudShadowShellY; // world Y the map is indexed at
+uniform vec3 cloudShadowSun;     // TOWARD the sun -- lightDir[] below is the opposite
+
 uniform float anisotropy;    // Henyey-Greenstein g
 uniform float sunBoost;
 uniform float shadowBias;
@@ -211,10 +226,30 @@ void main() {
         return;
     }
 
+    /*
+     * How much of the deck this cell sits under. Hoisted: one lookup serves every light,
+     * because only one of them can be the sun.
+     *
+     * Shear P up the sun ray to the shell and read there. No bounds test: the map holds one
+     * period of a periodic field and the sampler wraps, so every world position lands on a
+     * real value. A finite window was tried first and its edge reads as a hard diagonal across
+     * the fog, wherever the shear runs past the last texel.
+     */
+    float cloudSun = 1.0;
+    if (cloudShadowTile > 0.0 && cloudShadowSun.y > 0.0) {
+        vec2 hit = P.xz + cloudShadowSun.xz * ((cloudShadowShellY - P.y) / cloudShadowSun.y);
+        cloudSun = texture(cloudShadowTex, hit / cloudShadowTile).r;
+    }
+
     vec3 S = ambientColor;
     for (int j = 0; j < numLights; j++) {
         float phase = phaseHG(dot(lightDir[j], -rayDir), anisotropy) * sunBoost;
-        S += lightColor[j] * (phase * fogVisibility(j * cascadeCount, P));
+        // Only the sun is under the clouds. Identified by direction rather than by slot: the
+        // sky couples itself to whichever light it was given, and this shader is never told
+        // which one that was. lightDir is travel, cloudShadowSun points back at it.
+        float isSun = step(0.999, dot(-lightDir[j], cloudShadowSun));
+        float cloud = mix(1.0, cloudSun, isSun);
+        S += lightColor[j] * (phase * cloud * fogVisibility(j * cascadeCount, P));
     }
 
     // Spot in-scatter at P: inside the cone, falling off with distance, cut by

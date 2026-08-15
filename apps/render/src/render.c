@@ -750,6 +750,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
         } else if (strcmp(argv[i], "--clouds") == 0) {
             args->clouds = 1;
             args->sky = 1;
+        } else if (strcmp(argv[i], "--no-cloud-shadows") == 0) {
+            args->no_cloud_shadows = 1;
         } else if (strcmp(argv[i], "--cloud-coverage") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -2284,6 +2286,8 @@ int main(int argc, char** argv) {
                 sky->world_units_per_km = args.world_scale;
             sky->aerial_enabled = !args.no_aerial;
             sky->clouds.enabled = args.clouds != 0;
+            if (args.no_cloud_shadows)
+                sky->clouds.shadows_enabled = false;
             if (args.cloud_coverage >= 0.0f)
                 sky->clouds.coverage = args.cloud_coverage;
             if (args.cloud_density >= 0.0f)

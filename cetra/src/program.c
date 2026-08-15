@@ -768,6 +768,10 @@ ShaderProgram* create_cloud_march_program() {
     return create_post_program("cloud_march", cloud_march_frag_shader_str);
 }
 
+ShaderProgram* create_cloud_shadow_program() {
+    return create_post_program("cloud_shadow", cloud_shadow_frag_shader_str);
+}
+
 ShaderProgram* create_sky_env_clouds_program() {
     ShaderProgram* program = NULL;
 

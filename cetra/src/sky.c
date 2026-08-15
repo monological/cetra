@@ -36,6 +36,9 @@ SkyAtmosphere* create_sky_atmosphere(void) {
     sky->clouds.cloud_type = 0.6f;
     sky->clouds.density = 1.0f;
     sky->clouds.prev_frame = -1;
+    // On with the deck rather than behind its own switch: a cloud that casts no shadow is
+    // wrong, not un-featured. --no-cloud-shadows clears it, for bisecting.
+    sky->clouds.shadows_enabled = true;
     sky_update_sun_dir(sky);
 
     return sky;
@@ -65,6 +68,10 @@ void free_sky_atmosphere(SkyAtmosphere* sky) {
         if (sky->clouds.march_fbo[i])
             glDeleteFramebuffers(1, &sky->clouds.march_fbo[i]);
     }
+    if (sky->clouds.shadow_tex)
+        glDeleteTextures(1, &sky->clouds.shadow_tex);
+    if (sky->clouds.shadow_fbo)
+        glDeleteFramebuffers(1, &sky->clouds.shadow_fbo);
     if (sky->quad_vao)
         glDeleteVertexArrays(1, &sky->quad_vao);
     if (sky->quad_vbo)
@@ -336,6 +343,23 @@ void sky_publish_to_postfx(const SkyAtmosphere* sky, struct PostFX* fx) {
         fx->aerial_volume = 0;
         fx->aerial_far = 0.0f;
         fx->aerial_slices = 0;
+    }
+
+    // The cloud deck's sun transmittance, for the fog to shadow its sun term with. Gated on a
+    // march having HAPPENED (prev_frame >= 0) rather than on the layer being enabled: the
+    // texture is written by the march, so arming this before the first one would point the
+    // fog at an uninitialised window. Texture 0 is the single off state, the same shape as
+    // aerial_volume above and as count-zero everywhere else here.
+    if (sky && sky->enabled && sky->clouds.enabled && sky->clouds.shadows_enabled &&
+        sky->clouds.shadow_tex && sky->clouds.prev_frame >= 0) {
+        fx->cloud_shadow_tex = sky->clouds.shadow_tex;
+        fx->cloud_shadow_tile = sky->clouds.shadow_tile;
+        fx->cloud_shadow_shell_y = sky->clouds.shadow_shell_y;
+        // TOWARD the sun, matching sky->sun_dir. The fog's own lightDir[] is the opposite
+        // convention (travel), and both are live in the same shader, so this one is named.
+        glm_vec3_copy((float*)sky->sun_dir, fx->cloud_shadow_sun);
+    } else {
+        fx->cloud_shadow_tex = 0;
     }
 }
 

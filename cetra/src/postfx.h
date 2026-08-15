@@ -336,6 +336,23 @@ typedef struct PostFX {
                           // the sky owns its own dimension (the fog cascade
                           // count crosses the same seam the same way)
 
+    /*
+     * The cloud deck's sun transmittance, sky-owned, for the fog to shadow its sun term with
+     * (spec 11.39). Texture 0 is the single off state, as with aerial_volume above.
+     *
+     * A 2D map is exact rather than approximate here because the deck is a horizontal shell:
+     * how much sun reaches a point below it depends only on WHERE its sun ray crosses the
+     * shell, so a receiver at any altitude shears its own position up to shell_y and reads
+     * there. That is why this is a plane and an altitude rather than a light-space matrix.
+     *
+     * And it TILES: the field is periodic over cloud_shadow_tile, so one period wrapped by the
+     * sampler covers the world with no window and nothing to follow the camera.
+     */
+    GLuint cloud_shadow_tex;    // R16F transmittance toward the sun, 1 = full sun, WRAPPED
+    float cloud_shadow_tile;    // world units the map's period covers; 0 = no deck
+    float cloud_shadow_shell_y; // world Y the map is indexed at (the shell bottom)
+    vec3 cloud_shadow_sun;      // unit vector TOWARD the sun -- note lightDir[] is travel
+
     // Published per frame by water_publish_to_postfx (mirrors the sky and probe
     // blocks; postfx never learns about Water). water_medium 0 = one medium only.
     //

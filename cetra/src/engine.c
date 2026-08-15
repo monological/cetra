@@ -1436,6 +1436,11 @@ static int _create_default_shaders_for_engine(Engine* engine) {
         add_shader_program_to_engine(engine, cloud_march_program);
     }
 
+    ShaderProgram* cloud_shadow_program = create_cloud_shadow_program();
+    if (cloud_shadow_program) {
+        add_shader_program_to_engine(engine, cloud_shadow_program);
+    }
+
     ShaderProgram* sky_background_clouds_program = create_sky_background_clouds_program();
     if (sky_background_clouds_program) {
         add_shader_program_to_engine(engine, sky_background_clouds_program);

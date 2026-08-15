@@ -810,6 +810,7 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     uniform_set_int(fx->froxel_inject_program->uniforms, "shadowMaps", 1);
     uniform_set_int(fx->froxel_inject_program->uniforms, "punctualShadowMaps", 2);
     uniform_set_int(fx->froxel_inject_program->uniforms, "historyVolume", 3);
+    uniform_set_int(fx->froxel_inject_program->uniforms, "cloudShadowTex", 4);
     glUseProgram(fx->froxel_integrate_program->id);
     uniform_set_int(fx->froxel_integrate_program->uniforms, "scatterVolume", 0);
     glUseProgram(fx->froxel_composite_program->id);
@@ -2160,6 +2161,15 @@ static void upload_fog_uniforms(PostFX* fx, UniformManager* u, mat4 projection, 
     uniform_set_float(u, "waterLevelY", fx->water_level_y);
     uniform_set_vec3(u, "waterExtinction", fx->water_extinction);
     uniform_set_vec3(u, "waterInscatter", fx->water_inscatter);
+    // The cloud deck, published by sky_publish_to_postfx. Extent 0 is the single off state:
+    // no deck, no march yet, or shadows switched off, all reach the shader the same way.
+    // Unit set here as well as at init: the seed runs once at program creation, and a sampler
+    // that missed it silently defaults to unit 0, which at inject time holds whatever the last
+    // bind left there.
+    uniform_set_int(u, "cloudShadowTex", 4);
+    uniform_set_float(u, "cloudShadowTile", fx->cloud_shadow_tex ? fx->cloud_shadow_tile : 0.0f);
+    uniform_set_float(u, "cloudShadowShellY", fx->cloud_shadow_shell_y);
+    uniform_set_vec3(u, "cloudShadowSun", fx->cloud_shadow_sun);
     uniform_set_float(u, "anisotropy", fx->fog_anisotropy);
     uniform_set_float(u, "sunBoost", fx->fog_sun_boost);
     uniform_set_float(u, "shadowBias", fx->fog_shadow_bias);
@@ -2320,6 +2330,11 @@ static void postfx_build_fog_volume(PostFX* fx, mat4 projection, mat4 view, bool
     glBindTexture(GL_TEXTURE_2D_ARRAY, fx->fog_punctual_shadow_maps);
     glActiveTexture(GL_TEXTURE3);
     glBindTexture(GL_TEXTURE_3D, fx->froxel_scatter[prev]);
+    // The cloud deck's sun transmittance. Bound unconditionally, including as 0, so the unit
+    // never points at whatever a previous pass left on it; the shader reads it only when
+    // cloudShadowTile is nonzero.
+    glActiveTexture(GL_TEXTURE4);
+    glBindTexture(GL_TEXTURE_2D, fx->cloud_shadow_tex);
     glActiveTexture(GL_TEXTURE0);
     upload_fog_uniforms(fx, iu, projection, inv_view);
     uniform_set_int(iu, "froxelDepth", fx->froxel_built_z);

@@ -92,6 +92,9 @@ typedef struct {
     int sky;                    // Procedural physically-based sky instead of -e
     int sky_debug;              // Blit the sky LUTs into the frame corner
     int clouds;                 // Volumetric cloud layer (implies --sky)
+    int no_cloud_shadows;       // Keep the deck, drop the shadow it casts into the fog. A
+                                // bisect lever rather than a feature: the shadow is on with
+                                // the clouds, because a cloud that casts none is wrong.
     float cloud_coverage;       // 0..1; negative = keep the engine default
     float cloud_density;        // extinction scale; negative = default
     float cloud_wind_kmh;       // drift speed; negative = default (still)

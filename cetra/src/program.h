@@ -120,6 +120,7 @@ ShaderProgram* create_sky_aerial_program();
 ShaderProgram* create_cloud_noise_debug_program();
 // Half-res cloud shell march (spec 11.0)
 ShaderProgram* create_cloud_march_program();
+ShaderProgram* create_cloud_shadow_program();
 // Sky background with the cloud composite (bound only when clouds are on)
 ShaderProgram* create_sky_background_clouds_program();
 // Env-cubemap face render with the low-quality cloud march (release bakes)

@@ -216,6 +216,92 @@ static bool ensure_march_targets(CloudLayer* c, int w, int h) {
     return true;
 }
 
+// Side of the sun-transmittance map. Deliberately coarse: it is read through a trilinear
+// volume lookup and then averaged again by the froxel accumulator, so detail finer than a
+// cloud's own silhouette is discarded twice over -- the argument POSTFX_FOG_ESM_SIZE makes for
+// the fog's own cascades. 256 texels over an 8 km tile is ~31 m, finer than any edge a deck
+// 1.5 km up can cast.
+#define CLOUD_SHADOW_SIZE 256
+// Mirrors include/clouds.glsl, which owns the shell geometry and the noise period. Only the
+// published altitude and tile size need them on this side, and a drift between the two is a
+// shadow in the wrong place rather than a compile error -- hence named here rather than
+// spelled twice.
+#define CLOUD_SHADOW_SHELL_KM 1.5f
+#define CLOUD_SHADOW_TILE_KM 8.0f
+
+static bool ensure_shadow_target(CloudLayer* c) {
+    if (c->shadow_tex)
+        return true;
+    glGenFramebuffers(1, &c->shadow_fbo);
+    c->shadow_tex =
+        create_texture_2d_float(CLOUD_SHADOW_SIZE, CLOUD_SHADOW_SIZE, GL_R16F, GL_RED, NULL);
+    // REPEAT, which is the whole trick: the map holds one period of a field that is periodic
+    // over the same distance, so wrapping it covers the world exactly rather than approximately.
+    // The shared helper defaults to CLAMP_TO_EDGE, which would smear the tile's last texel
+    // across everything beyond it.
+    glBindTexture(GL_TEXTURE_2D, c->shadow_tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER, c->shadow_fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, c->shadow_tex, 0);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        log_error("Cloud shadow FBO incomplete; cloud shadows disabled");
+        gl_delete_texture(&c->shadow_tex);
+        gl_delete_fbo(&c->shadow_fbo);
+        c->shadows_enabled = false;
+        return false;
+    }
+    c->shadow_size = CLOUD_SHADOW_SIZE;
+    return true;
+}
+
+// Sun transmittance through the deck, into one world-anchored tile of it.
+//
+// Called from the march with the march's OWN wind offset, which is the whole reason it lives
+// here: the drift clock advances once per frame, so a pass computing its own offset would sit
+// one frame away from the deck it shadows.
+static void build_cloud_shadow(SkyAtmosphere* sky, struct Engine* engine, CloudLayer* c,
+                               float units, const vec3 wind_off) {
+    if (!c->shadows_enabled || !ensure_shadow_target(c))
+        return;
+    if (!c->shadow_program) {
+        c->shadow_program = get_engine_shader_program_by_name(engine, "cloud_shadow");
+        if (!c->shadow_program) {
+            log_error("No cloud_shadow program; cloud shadows disabled");
+            c->shadows_enabled = false;
+            return;
+        }
+    }
+
+    // One noise tile, world-locked at the origin, wrapped by the sampler. No window to follow
+    // the camera and no snapping to keep it from crawling: with detail off the field is exactly
+    // periodic over this distance, so the tile IS the whole world.
+    c->shadow_tile = CLOUD_SHADOW_TILE_KM * units;
+    c->shadow_shell_y = CLOUD_SHADOW_SHELL_KM * units;
+
+    glBindFramebuffer(GL_FRAMEBUFFER, c->shadow_fbo);
+    glViewport(0, 0, CLOUD_SHADOW_SIZE, CLOUD_SHADOW_SIZE);
+    glUseProgram(c->shadow_program->id);
+    UniformManager* um = c->shadow_program->uniforms;
+
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_3D, c->shape_tex);
+    uniform_set_int(um, "shapeTex", 0);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_3D, c->detail_tex);
+    uniform_set_int(um, "detailTex", 1);
+    glActiveTexture(GL_TEXTURE0);
+
+    uniform_set_vec3(um, "sunDir", sky->sun_dir);
+    uniform_set_float(um, "coverage", c->coverage);
+    uniform_set_float(um, "cloudType", c->cloud_type);
+    uniform_set_float(um, "densityScale", c->density);
+    uniform_set_vec3(um, "windOffsetKm", (float*)wind_off);
+
+    draw_fullscreen_quad(sky->quad_vao);
+}
+
 void sky_clouds_march(SkyAtmosphere* sky, struct Engine* engine, mat4 view, mat4 projection) {
     if (!sky || !engine || !sky->enabled || !sky->clouds.enabled || !sky->clouds.noise_baked ||
         !sky->luts_baked || !sky->sky_view_lut)
@@ -302,6 +388,11 @@ void sky_clouds_march(SkyAtmosphere* sky, struct Engine* engine, mat4 view, mat4
     uniform_set_vec3(um, "windOffsetKm", wind_off);
 
     draw_fullscreen_quad(sky->quad_vao);
+
+    // The sun-transmittance map, from the SAME wind offset this march just used. Sharing the
+    // offset is the point: the drift clock advanced once, above, so anything recomputing it
+    // would shadow a deck one frame from the one on screen.
+    build_cloud_shadow(sky, engine, c, units, wind_off);
 
     // Store this frame's camera for the next march's reprojection:
     // rotation-only view (ray-direction reprojection) + the projection

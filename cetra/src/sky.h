@@ -94,6 +94,28 @@ typedef struct CloudLayer {
     mat4 prev_view; // rotation-only world->view of the previous march
     float prev_focal[2];
     int prev_frame;
+
+    /*
+     * Sun transmittance through the deck, as a 2D map the froxel fog reads (spec 11.39).
+     *
+     * Built in the same call as the march and from the same wind offset, which is the reason
+     * it lives here rather than beside the fog that consumes it: the drift clock advances
+     * exactly once per frame, so a second pass computing its own offset would put the shadow
+     * a frame out of step with the deck it belongs to.
+     *
+     * WORLD-anchored while the deck is camera-anchored -- see cloud_shadow_frag.glsl for why a
+     * shadow cannot follow the camera when the sky may. It needs no window and no camera
+     * following: with detail off the density field is exactly periodic over the shape noise's
+     * own tile, so ONE tile sampled GL_REPEAT is the whole world, not a crop of it.
+     */
+    bool shadows_enabled; // rides the master switch; --no-cloud-shadows clears it
+    GLuint shadow_fbo;
+    GLuint shadow_tex; // R16F transmittance, 1 = full sun, wrapped
+    int shadow_size;
+    ShaderProgram* shadow_program;
+    // Published to PostFX in WORLD units, so the consumer's shear needs no conversion.
+    float shadow_tile;    // world units the map's period covers
+    float shadow_shell_y; // world Y of the shell bottom, the altitude the map is indexed at
 } CloudLayer;
 
 struct Engine;
