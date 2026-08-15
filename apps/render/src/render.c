@@ -167,6 +167,8 @@ static void print_usage(const char* prog) {
             "      --world-scale <f>  World units per km for the atmosphere "
             "(default 1000, implies --sky)\n");
     fprintf(stderr, "      --no-aerial        Disable aerial perspective (on by default)\n");
+    fprintf(stderr, "      --no-fog-volumes   Drop a scene file's fogVolumes[]\n");
+    fprintf(stderr, "      --no-cloud-shadows Keep the cloud deck, drop its shadow\n");
     fprintf(stderr, "      --fog              Volumetric fog: god rays + height haze\n");
     fprintf(stderr, "      --fog-density <f>  Fog extinction per world unit (implies --fog)\n");
     fprintf(stderr, "      --fog-height <f>   Fog height falloff in world units (implies --fog)\n");
@@ -750,6 +752,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
         } else if (strcmp(argv[i], "--clouds") == 0) {
             args->clouds = 1;
             args->sky = 1;
+        } else if (strcmp(argv[i], "--no-fog-volumes") == 0) {
+            args->no_fog_volumes = 1;
         } else if (strcmp(argv[i], "--no-cloud-shadows") == 0) {
             args->no_cloud_shadows = 1;
         } else if (strcmp(argv[i], "--cloud-coverage") == 0) {
@@ -2976,6 +2980,8 @@ int main(int argc, char** argv) {
      * independent `if`s.
      */
     apply_cscene_water(scene, cscn);
+    if (!args.no_fog_volumes)
+        apply_cscene_fog_volumes(scene, cscn);
     if (args.no_water) {
         free_water(scene->water);
         scene->water = NULL;

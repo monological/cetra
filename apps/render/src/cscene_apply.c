@@ -372,6 +372,33 @@ void apply_cscene_water(Scene* scene, const CetraSceneDesc* cscn) {
 }
 
 /*
+ * The scene file's local fog volumes (spec 11.39). No CLI counterpart: a box needs a
+ * place and a size, which is more than a flag can carry, so authoring is the only way in.
+ * Printed because a volume that lands somewhere the camera never enters is invisible and
+ * indistinguishable from one that failed to parse.
+ */
+void apply_cscene_fog_volumes(Scene* scene, const CetraSceneDesc* cscn) {
+    if (!scene || !cscn)
+        return;
+    for (int i = 0; i < cscn->fog_volume_count; i++) {
+        const CSceneFogVolume* v = &cscn->fog_volumes[i];
+        FogVolume out = {0};
+        memcpy(out.center, v->center, sizeof(out.center));
+        memcpy(out.half_extent, v->extent, sizeof(out.half_extent));
+        out.density = v->density;
+        out.feather = v->feather;
+        memcpy(out.tint, v->tint, sizeof(out.tint));
+        if (add_fog_volume_to_scene(scene, &out) < 0)
+            break;
+        printf("Scene file: fog volume at (%.2f %.2f %.2f) half-extent (%.2f %.2f %.2f) "
+               "density %.3f feather %.2f\n",
+               (double)out.center[0], (double)out.center[1], (double)out.center[2],
+               (double)out.half_extent[0], (double)out.half_extent[1],
+               (double)out.half_extent[2], (double)out.density, (double)out.feather);
+    }
+}
+
+/*
  * The material vocabulary lives in material.c (MATERIAL_PARAMS), shared with
  * the GUI editor so the two cannot disagree about what a name means or which
  * properties are safe to set. The parser records keys generically and never

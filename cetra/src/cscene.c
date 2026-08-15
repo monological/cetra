@@ -376,6 +376,42 @@ static void parse_dust(CetraSceneDesc* d, const cJSON* root) {
  * belongs: fog is a field on PostFX and water is owned by the Scene, so authoring it
  * under `post` would put a scene-graph citizen in the post chain's namespace.
  */
+/*
+ * fogVolumes[] -- boxes of denser air, a top-level block for the same reason water is one.
+ *
+ * center and extent are REQUIRED; a volume without a place and a size is not a volume, and
+ * defaulting either would silently put a box at the origin. Everything else has a default:
+ * a white tint leaves the surrounding air's colour alone, and a zero feather is a hard
+ * edge, which is at least visibly wrong rather than quietly so.
+ */
+static void parse_fog_volumes(CetraSceneDesc* d, const cJSON* root) {
+    const cJSON* volumes = cJSON_GetObjectItemCaseSensitive(root, "fogVolumes");
+    if (!cJSON_IsArray(volumes))
+        return;
+    const cJSON* v = NULL;
+    cJSON_ArrayForEach(v, volumes) {
+        if (d->fog_volume_count >= CSCENE_MAX_FOG_VOLUMES) {
+            log_warn("cscene: more than %d fog volumes; extras ignored",
+                     CSCENE_MAX_FOG_VOLUMES);
+            break;
+        }
+        CSceneFogVolume* out = &d->fog_volumes[d->fog_volume_count];
+        memset(out, 0, sizeof(*out));
+        if (!get_floats(v, "center", out->center, 3) ||
+            !get_floats(v, "extent", out->extent, 3)) {
+            log_warn("cscene: fog volume needs both center and extent; skipped");
+            continue;
+        }
+        out->density = 0.0f;
+        get_float(v, "density", &out->density);
+        out->feather = 0.0f;
+        get_float(v, "feather", &out->feather);
+        out->tint[0] = out->tint[1] = out->tint[2] = 1.0f;
+        get_floats(v, "tint", out->tint, 3);
+        d->fog_volume_count++;
+    }
+}
+
 static void parse_water(CetraSceneDesc* d, const cJSON* root) {
     const cJSON* water = cJSON_GetObjectItemCaseSensitive(root, "water");
     if (!cJSON_IsObject(water))
@@ -557,6 +593,7 @@ CetraSceneDesc* cscene_load(const char* path) {
     parse_wind(d, root);
     parse_dust(d, root);
     parse_water(d, root);
+    parse_fog_volumes(d, root);
     parse_materials(d, root);
     parse_camera(d, root);
     cJSON_Delete(root);

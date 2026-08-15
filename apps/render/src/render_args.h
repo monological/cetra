@@ -92,6 +92,9 @@ typedef struct {
     int sky;                    // Procedural physically-based sky instead of -e
     int sky_debug;              // Blit the sky LUTs into the frame corner
     int clouds;                 // Volumetric cloud layer (implies --sky)
+    int no_fog_volumes;         // Drop any fogVolumes[] a scene file authored. The only way
+                                // off, mirroring --no-water: a volume has no CLI counterpart
+                                // to omit, so authoring is the only way on.
     int no_cloud_shadows;       // Keep the deck, drop the shadow it casts into the fog. A
                                 // bisect lever rather than a feature: the shadow is on with
                                 // the clouds, because a cloud that casts none is wrong.

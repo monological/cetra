@@ -15,6 +15,7 @@
  */
 
 #define CSCENE_MAX_LIGHTS          16
+#define CSCENE_MAX_FOG_VOLUMES     8
 #define CSCENE_MAX_LIGHT_OVERRIDES 16
 #define CSCENE_MAX_MATERIALS       8
 #define CSCENE_MAX_NAME            128
@@ -203,6 +204,23 @@ typedef struct CSceneWater {
     bool far_lod; // false = full wave detail whatever world a cell covers
 } CSceneWater;
 
+/*
+ * fogVolumes[] -- a box of denser air (spec 11.39). A TOP-LEVEL block beside water and
+ * wind rather than one under `post`, by the same rule water follows: fog's global
+ * parameters are fields on PostFX, but a volume is a thing placed in the world, so it
+ * belongs in the scene's namespace and not the post chain's.
+ *
+ * Mirrors FogVolume in scene.h; the cap is this parser's own and the scene's is smaller,
+ * so extras are dropped with a warning at whichever bound is hit first.
+ */
+typedef struct CSceneFogVolume {
+    float center[3];
+    float extent[3]; // HALF-extent, matching the engine struct
+    float density;
+    float feather;
+    float tint[3];
+} CSceneFogVolume;
+
 typedef struct CetraSceneDesc {
     // Paths are resolved against the scene file's directory at load time;
     // consumers receive directly usable paths.
@@ -294,6 +312,9 @@ typedef struct CetraSceneDesc {
 
     CSceneDust dust;
     CSceneWater water;
+
+    CSceneFogVolume fog_volumes[CSCENE_MAX_FOG_VOLUMES];
+    int fog_volume_count;
 
     CSceneMaterialOverride materials[CSCENE_MAX_MATERIALS];
     int material_count;

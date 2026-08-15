@@ -1769,6 +1769,9 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode) {
     water_publish_to_postfx(
         fx_scene && water_will_draw(fx_scene->water, engine, frame_mode) ? fx_scene->water : NULL,
         engine);
+    // Unconditional, including with no scene: count 0 is the off state, and only a
+    // publish every frame can reach it after a scene that had volumes goes away.
+    scene_publish_fog_volumes_to_postfx(fx_scene, engine->postfx);
     const PostFXGBufferWrites writes = {.normals = engine->normals_this_frame,
                                         .aux = engine->aux_this_frame,
                                         .albedo = engine->albedo_this_frame,

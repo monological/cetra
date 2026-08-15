@@ -1,0 +1,99 @@
+{
+ "version": 1,
+ "_comment": [
+  "Local fog volumes (spec 11.39). Two boxes of denser air in front of one uniform",
+  "emissive backdrop, separated by a gap of plain backdrop that is the control.",
+  "",
+  "Both boxes carry the SAME density and differ only in tint, so the tint arm reads",
+  "colour with amount held fixed. The gap between them reads amount with colour held",
+  "fixed, against a strip of the same backdrop at the same height.",
+  "",
+  "No global fog is authored anywhere in this file. The froxel pass runs because",
+  "fogVolumes is non-empty, which is the property the off-arm exists to check -- and",
+  "a volume must never do that by setting fog_enabled, which belongs to the app and",
+  "the GUI and is never cleared per frame.",
+  "",
+  "tint colours the SHARED lighting rather than adding radiance of its own, so a box",
+  "can be smoke, dust or mist and cannot be a glow."
+ ],
+ "models": [
+  {
+   "path": "fog_volume_fixture.gltf"
+  }
+ ],
+ "fogVolumes": [
+  {
+   "center": [
+    -1.3,
+    1.0,
+    0.0
+   ],
+   "extent": [
+    0.55,
+    1.2,
+    0.6
+   ],
+   "density": 0.5,
+   "feather": 0.12,
+   "tint": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  {
+   "center": [
+    1.3,
+    1.0,
+    0.0
+   ],
+   "extent": [
+    0.55,
+    1.2,
+    0.6
+   ],
+   "density": 0.5,
+   "feather": 0.12,
+   "tint": [
+    1.0,
+    0.55,
+    0.25
+   ]
+  }
+ ],
+ "lights": [
+  {
+   "name": "FogKey",
+   "type": "directional",
+   "direction": [
+    0.6,
+    -0.5,
+    -0.62
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 2.5,
+   "cast_shadows": false
+  }
+ ],
+ "camera": {
+  "eye": [
+   0.0,
+   1.0,
+   4.4
+  ],
+  "target": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "fov": 45.0
+ },
+ "post": {
+  "tonemap": "neutral",
+  "exposure": 1.0
+ }
+}

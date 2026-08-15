@@ -23,6 +23,7 @@
 struct ParticleSystem;
 // Directional wind field (wind.h); a scene-owned environmental object like sky.
 struct Wind;
+struct PostFX;
 
 /*
  * SceneNode
@@ -90,6 +91,29 @@ void set_shader_programs_for_nodes(SceneNode* node, ShaderProgram* standard,
 void apply_transform_to_nodes(SceneNode* node, mat4 transform);
 
 /*
+ * A box of denser air, folded into the froxel fog volume (spec 11.39).
+ *
+ * World-space and axis-aligned, so it is NOT a SceneNode: like water, it is a medium the
+ * Scene owns and describes in world units, not a transformable citizen. A rotated or
+ * parented volume is the thing this shape cannot express, and is deferred rather than
+ * approximated -- an oriented box costs the shader a matrix per volume, and nothing has
+ * asked for one yet.
+ *
+ * tint colours the SHARED lighting rather than adding radiance of its own: the box sits
+ * in the same sun, sky and clustered lights as the air around it. So a volume can be
+ * smoke, dust or mist, and cannot be a glow.
+ */
+#define SCENE_MAX_FOG_VOLUMES 8
+
+typedef struct FogVolume {
+    vec3 center;
+    vec3 half_extent;
+    float density; // extinction ADDED to the global medium inside the box (1/world units)
+    float feather; // world units the density ramps in over, inward from every face
+    vec3 tint;     // scattering colour; white leaves the surrounding air's colour alone
+} FogVolume;
+
+/*
  * Scene
  */
 
@@ -141,6 +165,10 @@ typedef struct Scene {
     struct Wind* wind;          // dominant directional wind (optional; owned)
     struct GIVolume* gi_volume; // indirect-diffuse probe grid (optional; owned)
     struct Water* water;        // ocean/lake surface (optional; owned)
+
+    // Boxes of denser air, folded into the froxel volume (spec 11.39). Count 0 = none.
+    FogVolume fog_volumes[SCENE_MAX_FOG_VOLUMES];
+    int fog_volume_count;
 
     // Scalar material masks packed into one GL_TEXTURE_2D_ARRAY (built lazily
     // once the source textures have loaded; see mask_array.h). dirty triggers a
@@ -213,6 +241,12 @@ void scene_mark_materials_dirty(Scene* scene);
 
 // wind (scene-owned; freed in free_scene). Replaces any existing wind.
 void set_scene_wind(Scene* scene, struct Wind* wind);
+
+// fog volumes. Returns the new count, or -1 when the array is full.
+int add_fog_volume_to_scene(Scene* scene, const FogVolume* volume);
+// Copy this frame's volumes onto PostFX. Mirrors water_publish_to_postfx: the medium
+// hands PostFX flat POD and PostFX never learns that a Scene exists.
+void scene_publish_fog_volumes_to_postfx(const Scene* scene, struct PostFX* fx);
 
 // skeleton
 int add_skeleton_to_scene(Scene* scene, Skeleton* skeleton);

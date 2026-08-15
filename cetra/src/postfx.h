@@ -104,6 +104,12 @@ typedef enum PostFXSpecOccMode {
 // source has.
 #define POSTFX_FOG_ESM_SIZE 512
 
+// Local fog volumes carried as a plain uniform array; MAX_LOCAL_FOG in
+// froxel_inject_frag.glsl mirrors it. Eight AABB tests per cell is cheap beside the nine
+// cascade taps and the clustered light walk already in that loop, so binning them into
+// the cluster grid is the upgrade this defers, not a thing it needs.
+#define POSTFX_MAX_FOG_VOLUMES 8
+
 typedef struct PostFX {
     int width, height;             // Render size: what the scene and the pre-TAA
                                    // chain rasterize at (post size x render_scale)
@@ -348,6 +354,24 @@ typedef struct PostFX {
      * And it TILES: the field is periodic over cloud_shadow_tile, so one period wrapped by the
      * sampler covers the world with no window and nothing to follow the camera.
      */
+    /*
+     * Local fog volumes, published per frame by scene_publish_fog_volumes_to_postfx
+     * (spec 11.39). Count 0 is the single off state.
+     *
+     * A volume must NOT set fog_enabled to arm the pass. That flag belongs to the app and
+     * the GUI checkbox and nothing clears it per frame, so writing it here would leave
+     * volumetric fog on permanently after one frame that had a volume in it -- exactly
+     * spec 11.33's latched-flag defect. It joins the union at the gate instead, the way
+     * water_medium does.
+     *
+     * Pre-packed into the shader's three-vec4 shape by the publisher, so the uploader is
+     * a straight handoff and only one place decides which component holds what.
+     */
+    int local_fog_count;
+    vec4 local_fog_center_density[POSTFX_MAX_FOG_VOLUMES]; // xyz world centre, w density
+    vec4 local_fog_extent_feather[POSTFX_MAX_FOG_VOLUMES]; // xyz half-extent, w ramp width
+    vec4 local_fog_tint[POSTFX_MAX_FOG_VOLUMES];           // rgb scattering colour
+
     GLuint cloud_shadow_tex;    // R16F transmittance toward the sun, 1 = full sun, WRAPPED
     float cloud_shadow_tile;    // world units the map's period covers; 0 = no deck
     float cloud_shadow_shell_y; // world Y the map is indexed at (the shell bottom)

@@ -2152,7 +2152,13 @@ static void upload_fog_uniforms(PostFX* fx, UniformManager* u, mat4 projection, 
     uniform_set_float(u, "fogFar", fx->fog_far);
     uniform_set_float(u, "fogDepthDist", fx->fog_depth_dist);
     uniform_set_vec3(u, "ambientColor", fx->fog_ambient);
-    uniform_set_float(u, "density", fx->fog_density);
+    // Zero when the app has not asked for global fog, because the pass now runs for media
+    // the app did NOT ask for -- a submerged camera, an authored volume. fog_enabled means
+    // "the global height medium exists"; the gate above means "some medium does". Before
+    // there was only one medium the two were the same statement, and uploading the density
+    // unconditionally would now put the app's height fog in every frame that has a box in
+    // it.
+    uniform_set_float(u, "density", fx->fog_enabled ? fx->fog_density : 0.0f);
     uniform_set_float(u, "heightFalloff", fx->fog_height_falloff);
     uniform_set_float(u, "floorY", fx->fog_floor_y);
     // Water's medium, published by water_publish_to_postfx. 0 when there is no water,
@@ -2170,6 +2176,18 @@ static void upload_fog_uniforms(PostFX* fx, UniformManager* u, mat4 projection, 
     uniform_set_float(u, "cloudShadowTile", fx->cloud_shadow_tex ? fx->cloud_shadow_tile : 0.0f);
     uniform_set_float(u, "cloudShadowShellY", fx->cloud_shadow_shell_y);
     uniform_set_vec3(u, "cloudShadowSun", fx->cloud_shadow_sun);
+    // Local volumes. Only the live entries are uploaded: the shader loops to the count,
+    // so the tail is never read and pushing it would cost uniform traffic for nothing.
+    uniform_set_int(u, "localFogCount", fx->local_fog_count);
+    for (int i = 0; i < fx->local_fog_count; i++) {
+        char name[48];
+        snprintf(name, sizeof(name), "localFogCenterDensity[%d]", i);
+        uniform_set_vec4(u, name, fx->local_fog_center_density[i]);
+        snprintf(name, sizeof(name), "localFogExtentFeather[%d]", i);
+        uniform_set_vec4(u, name, fx->local_fog_extent_feather[i]);
+        snprintf(name, sizeof(name), "localFogTint[%d]", i);
+        uniform_set_vec4(u, name, fx->local_fog_tint[i]);
+    }
     uniform_set_float(u, "anisotropy", fx->fog_anisotropy);
     uniform_set_float(u, "sunBoost", fx->fog_sun_boost);
     uniform_set_float(u, "shadowBias", fx->fog_shadow_bias);
@@ -2380,11 +2398,14 @@ static void postfx_run_atmosphere(PostFX* fx, GLuint canvas_fbo, bool aux_writte
                                   bool taa_resolving, mat4 projection, mat4 view) {
     // Both need the aux buffer: it is the only source of the linear depth the
     // composite indexes by.
-    // The union of the two things that put a medium in the volume: the app's height fog
-    // and a submerged water body. Water arms the pass this way rather than by setting
-    // fog_enabled, which belongs to the app and the GUI and is never cleared per frame.
+    // The union of everything that puts a medium in the volume: the app's height fog, a
+    // submerged water body, and any authored local volume. The latter two arm the pass
+    // this way rather than by setting fog_enabled, which belongs to the app and the GUI
+    // and is never cleared per frame -- writing it here would leave fog on for good after
+    // one frame that had a volume in it.
     const bool fog_on =
-        (fx->fog_enabled || fx->water_medium != 0) && postfx_ensure_froxel_targets(fx);
+        (fx->fog_enabled || fx->water_medium != 0 || fx->local_fog_count > 0) &&
+        postfx_ensure_froxel_targets(fx);
     // Suppressed while submerged: the volume holds the sky-view integral, and that is
     // air the sight line never crosses down there.
     const bool aerial_on = fx->aerial_volume != 0 && !fx->water_suppress_aerial;

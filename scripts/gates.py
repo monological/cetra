@@ -2831,6 +2831,112 @@ def _absorb_box_rgb(pix, w, h, box, n=ABSORB_GRID):
     return [a / (n * n) for a in acc]
 
 
+FOGVOL_FIXTURE = "fog_volume_fixture.cscn"
+# Three strips at the same rows, so the vignette and the tone curve cancel out of every
+# comparison. left and right are the two boxes; gap is bare backdrop between them.
+FOGVOL_BOXES = {
+    "left": (0.18, 0.44, 0.28, 0.72),
+    "gap": (0.45, 0.44, 0.55, 0.72),
+    "right": (0.72, 0.44, 0.82, 0.72),
+}
+# SIXTY frames, not the shared default of 30, and this is load-bearing. The froxel volume
+# has its own temporal accumulator, and at 30 frames this fixture's boxes have not settled
+# -- two runs of ONE build differ by 3/255 across the whole frame. At 60 they are byte
+# identical and the gap reads the exact no-medium value. See spec 11.39.
+FOGVOL_FRAMES = "60"
+# The boxes must darken the backdrop they stand in front of; measured 0.79 of it. A wide
+# floor, because the arm's job is "a volume does something", not a specific opacity.
+FOGVOL_DARKEN_MAX = 0.92
+# A white tint must leave the air's own colour alone, so the untinted box stays neutral.
+FOGVOL_NEUTRAL_EPS = 0.01
+# The warm box authors tint b=0.25 against the white box's 1.0 at EQUAL density, so blue
+# has to fall relative to red. Measured 0.961 against the white box's 1.000; 0.985 is a
+# wide floor that still fails the tint being dropped entirely.
+FOGVOL_TINT_MAX = 0.985
+
+
+def run_fog_volume_gate(workdir):
+    """Local fog volumes (spec 11.39): a box of denser air, and its tint.
+
+    Four arms, none implying the others:
+
+      fogvol-density  the boxes differ from the bare gap between them. Fails the
+                      volume never reaching the medium at all -- which is the whole
+                      feature, and which every ratio arm below would still pass on an
+                      empty frame, since two absent boxes agree perfectly.
+      fogvol-neutral  the WHITE-tinted box stays neutral. This is the identity arm: it
+                      fails a tint that is applied as an added radiance rather than a
+                      sigma-weighted average, because adding tints white in too.
+      fogvol-tint     the warm box's blue:red falls below the white box's, at equal
+                      density. Colour isolated from amount -- the two boxes differ in
+                      nothing else.
+      fogvol-off      --no-fog-volumes returns the frame to no medium: the box strips
+                      read the gap value again. The inverse arm, and it also proves the
+                      volume ARMED the pass, since this scene authors no global fog.
+    """
+    scene = os.path.join(ROOT, "assets", FOGVOL_FIXTURE)
+    if not os.path.exists(scene):
+        print(f"  fogvol-density SKIP  ({FOGVOL_FIXTURE} not present)")
+        return []
+
+    base = ["-f", FOGVOL_FRAMES, "--no-auto-exposure", "-E", "1.0", "--no-dither"]
+    out = os.path.join(workdir, "fogvol_on.ppm")
+    err = render(scene, out, base)
+    if err:
+        print(f"  fogvol-density ERROR render failed: {err.strip()[-200:]}")
+        return ["fogvol-density"]
+
+    failures = []
+    w, h, pix = _read_ppm(out)
+    rgb = {k: _absorb_box_rgb(pix, w, h, b) for k, b in FOGVOL_BOXES.items()}
+
+    def luma(v):
+        return (v[0] + v[1] + v[2]) / 3.0
+
+    darken = max(luma(rgb["left"]), luma(rgb["right"])) / max(luma(rgb["gap"]), 1e-6)
+    ok = darken <= FOGVOL_DARKEN_MAX
+    print(f"  fogvol-density {'PASS' if ok else 'FAIL'}  box/gap={darken:.4f} "
+          f"want <={FOGVOL_DARKEN_MAX} (gap={luma(rgb['gap']):.4f})")
+    if not ok:
+        failures.append("fogvol-density")
+
+    lv = rgb["left"]
+    spread = (max(lv) - min(lv)) / max(max(lv), 1e-6)
+    ok = spread <= FOGVOL_NEUTRAL_EPS
+    print(f"  fogvol-neutral {'PASS' if ok else 'FAIL'}  white-tint box "
+          f"RGB={lv[0]:.4f}/{lv[1]:.4f}/{lv[2]:.4f} spread={spread:.4f} "
+          f"want <={FOGVOL_NEUTRAL_EPS}")
+    if not ok:
+        failures.append("fogvol-neutral")
+
+    br_white = lv[2] / max(lv[0], 1e-6)
+    rv = rgb["right"]
+    br_warm = rv[2] / max(rv[0], 1e-6)
+    rel = br_warm / max(br_white, 1e-6)
+    ok = rel <= FOGVOL_TINT_MAX
+    print(f"  fogvol-tint    {'PASS' if ok else 'FAIL'}  B/R warm={br_warm:.4f} "
+          f"white={br_white:.4f} ratio={rel:.4f} want <={FOGVOL_TINT_MAX}")
+    if not ok:
+        failures.append("fogvol-tint")
+
+    off = os.path.join(workdir, "fogvol_off.ppm")
+    err = render(scene, off, base + ["--no-fog-volumes"])
+    if err:
+        print(f"  fogvol-off     ERROR render failed: {err.strip()[-200:]}")
+        return failures + ["fogvol-off"]
+    w2, h2, pix2 = _read_ppm(off)
+    off_rgb = {k: _absorb_box_rgb(pix2, w2, h2, b) for k, b in FOGVOL_BOXES.items()}
+    off_darken = max(luma(off_rgb["left"]), luma(off_rgb["right"])) / \
+        max(luma(off_rgb["gap"]), 1e-6)
+    ok = abs(off_darken - 1.0) <= FOGVOL_NEUTRAL_EPS
+    print(f"  fogvol-off     {'PASS' if ok else 'FAIL'}  box/gap={off_darken:.4f} "
+          f"want 1.0 +/-{FOGVOL_NEUTRAL_EPS}")
+    if not ok:
+        failures.append("fogvol-off")
+
+    return failures
+
+
 def run_absorption_gate(workdir):
     """Volume absorption scales with path length, and only in the tinted channels.
 
@@ -5490,6 +5596,8 @@ GATE_GROUPS = [
     ("oit", "order-independent transparency (analytic card stack):", run_oit_gate),
     ("absorption", "volume absorption (path length and channel selectivity, spec 11.32):",
      run_absorption_gate),
+    ("fog-volume", "local fog volumes (density, tint, arming; spec 11.39):",
+     run_fog_volume_gate),
     ("water", "water surface (determinism, absorption, shoreline, reach; specs 11.32-11.35):",
      run_water_gate),
     ("clouds", "cloud layer (steady-state churn, report-only):", run_cloud_churn_gate),

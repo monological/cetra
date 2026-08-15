@@ -21,6 +21,8 @@ out vec4 FragColor; // rgb = in-scattered radiance, a = extinction sigma
 // they must track it the same way csm.glsl's copies do.
 #define MAX_FOG_LIGHTS 3
 #define FOG_CASCADES 3
+// Mirrors POSTFX_MAX_FOG_VOLUMES the same way.
+#define MAX_LOCAL_FOG 8
 
 uniform int sliceIndex;  // Which volume layer this draw is writing
 uniform int froxelDepth; // Slice count; mirrors POSTFX_FROXEL_Z
@@ -59,6 +61,21 @@ uniform sampler2D cloudShadowTex;
 uniform float cloudShadowTile;   // world units the map's period covers; 0 = no deck
 uniform float cloudShadowShellY; // world Y the map is indexed at
 uniform vec3 cloudShadowSun;     // TOWARD the sun -- lightDir[] below is the opposite
+
+/*
+ * Local fog volumes (spec 11.39): boxes of denser air, for a smoky room or a dust shaft
+ * that the one global medium cannot express. Count 0 = none, and costs one compare.
+ *
+ * A volume carries a TINT rather than its own radiance, and that is the whole reason it
+ * is cheap: the box is lit by the same sun, sky and clustered lights as the air around
+ * it, so it re-weights the lighting already computed here instead of asking for a second
+ * evaluation of it. Emission -- a volume that glows on its own -- is the thing this shape
+ * cannot express, and is not modelled.
+ */
+uniform int localFogCount;
+uniform vec4 localFogCenterDensity[MAX_LOCAL_FOG]; // xyz world centre, w extinction added
+uniform vec4 localFogExtentFeather[MAX_LOCAL_FOG]; // xyz half-extent, w inward ramp width
+uniform vec4 localFogTint[MAX_LOCAL_FOG];          // rgb scattering colour, a unused
 
 uniform float anisotropy;    // Henyey-Greenstein g
 uniform float sunBoost;
@@ -198,7 +215,7 @@ void main() {
     // rays at the floor plane, which a volume cannot do, so the equivalent is a
     // zero extinction there -- otherwise sub-floor cells would sit at the
     // formula's maximum density and fog the ground from underneath.
-    float sigma = P.y < floorY ? 0.0 : density * exp(-(P.y - floorY) / heightFalloff);
+    float airSigma = P.y < floorY ? 0.0 : density * exp(-(P.y - floorY) / heightFalloff);
 
     // A cell below the surface is water, not denser air, so the two media do not blend:
     // this REPLACES air's terms rather than adding to them, and everything the air path
@@ -225,6 +242,29 @@ void main() {
         FragColor = vec4(min(waterInscatter * preExposure, vec3(WS_MEDIA_MAX)), bodySigma);
         return;
     }
+
+    /*
+     * Local volumes. Each contributes extinction scaled by how far inside the box this
+     * cell sits, and carries that same weight into the tint sum, so a cell in the feather
+     * band is partly the box and partly the air around it.
+     *
+     * The weight comes from the box's exact signed distance rather than a per-axis
+     * product: a product feathers the corners twice and pinches them, which is visible
+     * on any volume whose feather is a real fraction of its size -- and a dust shaft's
+     * is, because the soft edge is the whole point of it.
+     */
+    float localSigma = 0.0;
+    vec3 localTintSigma = vec3(0.0);
+    for (int i = 0; i < localFogCount; i++) {
+        vec3 q = abs(P - localFogCenterDensity[i].xyz) - localFogExtentFeather[i].xyz;
+        float sd = length(max(q, vec3(0.0))) + min(max(q.x, max(q.y, q.z)), 0.0);
+        float feather = max(localFogExtentFeather[i].w, 1e-4);
+        float w = 1.0 - smoothstep(-feather, 0.0, sd);
+        float s = localFogCenterDensity[i].w * w;
+        localSigma += s;
+        localTintSigma += localFogTint[i].rgb * s;
+    }
+    float sigma = airSigma + localSigma;
 
     /*
      * How much of the deck this cell sits under. Hoisted: one lookup serves every light,
@@ -312,6 +352,20 @@ void main() {
         float phase = phaseHG(dot(-toL / max(d, 1e-4), -rayDir), anisotropy) * sunBoost;
         S += clusterLights[li].colorIntensity.xyz * (atten * phase);
     }
+
+    /*
+     * Fold the local volumes' colour in, SIGMA-WEIGHTED rather than added.
+     *
+     * The integrate pass reads this cell's rgb as the medium's source function, not as
+     * radiance already scaled by how much medium is present -- so two media sharing a
+     * cell combine by averaging their sources weighted by the extinction each brings.
+     * Adding them would count the same light once per medium and make a box brighten
+     * simply for existing.
+     *
+     * Air's own tint is white, so it enters the average as airSigma * 1.
+     */
+    if (localSigma > 0.0)
+        S *= (vec3(airSigma) + localTintSigma) / sigma;
 
     // Scene radiance -> working space HERE, upstream of the clamp, for the same
     // reason pbr_frag pre-exposes its per-light radiance rather than its final

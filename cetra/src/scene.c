@@ -13,6 +13,7 @@
 #include "wind.h"
 #include "gi_volume.h"
 #include "water.h"
+#include "postfx.h"
 #include "mask_array.h"
 #include "program.h"
 #include "shader.h"
@@ -399,6 +400,36 @@ void set_scene_wind(Scene* scene, struct Wind* wind) {
     if (scene->wind && scene->wind != wind)
         free_wind(scene->wind);
     scene->wind = wind;
+}
+
+int add_fog_volume_to_scene(Scene* scene, const FogVolume* volume) {
+    if (!scene || !volume)
+        return -1;
+    if (scene->fog_volume_count >= SCENE_MAX_FOG_VOLUMES) {
+        log_warn("scene: more than %d fog volumes; extra ignored", SCENE_MAX_FOG_VOLUMES);
+        return -1;
+    }
+    scene->fog_volumes[scene->fog_volume_count++] = *volume;
+    return scene->fog_volume_count;
+}
+
+void scene_publish_fog_volumes_to_postfx(const Scene* scene, struct PostFX* fx) {
+    if (!fx)
+        return;
+    const int count = scene ? scene->fog_volume_count : 0;
+    fx->local_fog_count = count;
+    for (int i = 0; i < count; i++) {
+        const FogVolume* v = &scene->fog_volumes[i];
+        // Packed here rather than in the uploader: the shader's shape is three vec4s, and
+        // splitting the pack from the upload would leave two places that have to agree on
+        // which component holds what.
+        glm_vec3_copy((float*)v->center, fx->local_fog_center_density[i]);
+        fx->local_fog_center_density[i][3] = v->density;
+        glm_vec3_copy((float*)v->half_extent, fx->local_fog_extent_feather[i]);
+        fx->local_fog_extent_feather[i][3] = v->feather;
+        glm_vec3_copy((float*)v->tint, fx->local_fog_tint[i]);
+        fx->local_fog_tint[i][3] = 0.0f;
+    }
 }
 
 int add_skeleton_to_scene(Scene* scene, Skeleton* skeleton) {
