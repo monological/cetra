@@ -28,6 +28,12 @@ out vec4 PrevClip;
 out float Jacobian;
 out float Shoal;
 out float FilteredMss;
+// The UNDISPLACED planar parameter this vertex was evaluated at -- the Lagrangian label of
+// the water parcel, not where it ended up. Anything keyed to a parcel rather than to a
+// place has to be looked up with this: the cascades are indexed by it, so a quantity
+// accumulated per cascade texel belongs to it and not to WorldPos.xz, which is this same
+// point plus the horizontal displacement.
+out vec2 SurfParam;
 
 // Kept for symmetry with pbr_vert, where it is load-bearing because the depth
 // prepass rasterizes the same triangles from a second program. Nothing rasterizes
@@ -79,6 +85,7 @@ void main() {
     vec3 prevWorld = oceanPreviousWorldAt(p, tPrev, sh, footprint);
 
     WorldPos = s.world;
+    SurfParam = p;
     Normal = s.normal;
     Jacobian = s.jacobian;
     Shoal = s.shoal;

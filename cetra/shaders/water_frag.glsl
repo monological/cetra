@@ -38,6 +38,8 @@ in float Shoal;
 // away. The other half of the geometry-to-BRDF handover: what left the mesh arrives here
 // as roughness.
 in float FilteredMss;
+// The undisplaced planar parameter, which is the water parcel's LABEL. See water_vert.
+in vec2 SurfParam;
 
 uniform mat4 view;
 uniform mat4 projection;
@@ -165,6 +167,9 @@ const float WATER_FOAM_ON = 0.16;
 const float WATER_FOAM_FULL = 0.42;
 // Whitewater is not white: it is a bright grey with the sky in it.
 const vec3 WATER_FOAM_COLOR = vec3(0.72, 0.80, 0.78);
+// Lambertian normalisation for the foam's direct term. The ambient half needs none: a mip
+// of the environment is already an average radiance, where the sun arrives as one.
+const float WATER_INV_PI = 0.31830988618;
 const float WATER_FOAM_MAX = 0.62;
 // Shore band strength. Lower than a breaking crest: this is water going shallow,
 // not water breaking, and at crest strength every lake edge would read as surf.
@@ -364,18 +369,36 @@ void main() {
              * running minimum with a leak, so 1 - it is compression that OUTLIVES the fold
              * -- which is what puts foam behind a breaking wave rather than only on it.
              *
+             * Keyed on SurfParam, the UNDISPLACED parameter, not on WorldPos.xz. The
+             * accumulator writes one texel per cascade cell, and a cascade cell is indexed
+             * by that parameter -- so foam belongs to the water parcel that folded, and it
+             * has to ride that parcel's displacement. Reading it at the displaced position
+             * instead looked the foam up under a DIFFERENT parcel, off by the horizontal
+             * map, and since that offset changes every frame the whitewater slid around
+             * over a surface it was supposed to be sitting on.
+             *
              * Combined with max against the instantaneous term rather than replacing it:
              * the accumulator cannot see the shoal gradient, so a surf-zone crest still
              * needs the vertex Jacobian to be selected at all.
              */
-            float turbLong = texture(foamTex, oceanCascadeUv(WorldPos.xz, 0)).r;
-            float turbMed = texture(foamTex, oceanCascadeUv(WorldPos.xz, 1)).g;
-            float turbShort = texture(foamTex, oceanCascadeUv(WorldPos.xz, 2)).b;
+            float turbLong = texture(foamTex, oceanCascadeUv(SurfParam, 0)).r;
+            float turbMed = texture(foamTex, oceanCascadeUv(SurfParam, 1)).g;
+            float turbShort = texture(foamTex, oceanCascadeUv(SurfParam, 2)).b;
             float persistent = max(0.0, 1.0 - min(turbLong, turbMed)) +
                                max(0.0, 1.0 - turbShort) * fade * 0.62;
             compression = max(compression, persistent);
         }
-        foam = smoothstep(WATER_FOAM_ON, WATER_FOAM_FULL, compression) * fade;
+        /*
+         * NOT scaled by `fade` again. The short band's share of `compression` above is
+         * already weighted by it, and the rest comes from the vertex Jacobian, which is the
+         * long and medium bands and has nothing to do with the short band's aliasing.
+         *
+         * Multiplying the total by it a second time zeroed ALL crest foam past
+         * WATER_SHORT_FAR, however hard the surface was folding -- so whitecaps stopped at a
+         * fixed distance from the eye, which projects onto a flat sea as a straight line
+         * across the frame. Whitecaps run to the horizon on a real sea.
+         */
+        foam = smoothstep(WATER_FOAM_ON, WATER_FOAM_FULL, compression);
         /*
          * Break the coverage up, AFTER the physical selection has chosen where foam is.
          *
@@ -624,6 +647,17 @@ void main() {
      * and refraction that this lobe does not model, and the honest answer there is nothing
      * rather than a highlight in the wrong place.
      */
+    // What survives the caster and the deck. The slot gates both: a sun with no cascade is
+    // one nothing can name, and cloudSunForSlot returns 1 for every other light. Hoisted
+    // out of the lobe below because the foam is lit by the same sun and owes the same debt
+    // to the same shadow -- whitewater standing bright inside a cloud's dapple is the
+    // giveaway that it was never lit at all.
+    float sunVis = 1.0;
+    if (sunShadowSlot >= 0) {
+        sunVis = (1.0 - csmOutermostOcclusion(WorldPos, sunShadowSlot)) *
+                 cloudSunForSlot(WorldPos, sunShadowSlot);
+    }
+
     if (glitterEnabled == 1 && sunAvailable == 1 && !seenFromBelow) {
         vec3 Lv = normalize(mat3(view) * sunDir);
         vec3 windV = normalize(mat3(view) * vec3(waterWindDir.x, 0.0, waterWindDir.y));
@@ -633,25 +667,40 @@ void main() {
         // sun's magnitude and the exposure. A near-mirror sea puts an unbounded spike here
         // otherwise, and one pixel of it survives the tonemap as a hole.
         glitter = min(glitter, WATER_GLITTER_MAX);
-        // What survives the caster and the deck. The slot gates both: a sun with no cascade
-        // is one nothing can name, and cloudSunForSlot returns 1 for every other light.
-        float sun = 1.0;
-        if (sunShadowSlot >= 0) {
-            sun = (1.0 - csmOutermostOcclusion(WorldPos, sunShadowSlot)) *
-                  cloudSunForSlot(WorldPos, sunShadowSlot);
-        }
         // Fresnel at the FACET rather than at the surface normal, which is what makes the
         // glitter brighten toward grazing along with the rest of the interface.
         vec3 Hv = normalize(V + Lv);
         vec3 Fs = fresnelSchlick(max(dot(V, Hv), 0.0), F0);
-        color += Fs * glitter * sun * sunRadiance * preExposure;
+        color += Fs * glitter * sunVis * sunRadiance * preExposure;
     }
 
     // Foam sits ON the interface, so it replaces both halves rather than being
     // added to them: whitewater is opaque, and adding it would let the body colour
     // show through a surface that is full of air.
     if (foam > 0.0) {
-        vec3 lit = WATER_FOAM_COLOR * (iblEnabled > 0 ? iblIntensity * preExposure : preExposure);
+        /*
+         * Foam is LIT, like everything else in this frame.
+         *
+         * WATER_FOAM_COLOR is an ALBEDO. Scaling it by the exposure alone treated it as a
+         * radiance, so whitewater came out the same grey whatever the sun was doing -- it
+         * saw neither the sun, the sky, the cascade nor the cloud deck, and on a sea lit by
+         * a sun 0.8 degrees above the horizon it sat at a fixed 0.75 over near-black water.
+         * Every other term here scales a radiance it sampled.
+         *
+         * Lambertian, because that is what a layer of entrained air bubbles is. The sky half
+         * is the prefiltered environment at its blurriest mip rather than an irradiance
+         * cube: this program declares 16 of 16 samplers so there is no room for one, and the
+         * top mip is already a hemispherical average -- which is the same quantity, up to
+         * the pi that the sun half carries explicitly.
+         */
+        vec3 nWorld = normalize(mat3(transpose(view)) * Nv);
+        vec3 ambient = iblEnabled > 0 ? textureLod(prefilteredMap, nWorld, maxReflectionLOD).rgb *
+                                            iblIntensity
+                                      : vec3(1.0);
+        vec3 direct = sunAvailable == 1
+                          ? sunRadiance * max(dot(nWorld, sunDir), 0.0) * sunVis * WATER_INV_PI
+                          : vec3(0.0);
+        vec3 lit = WATER_FOAM_COLOR * (ambient + direct) * preExposure;
         color = mix(color, lit, clamp(foam, 0.0, 1.0) * WATER_FOAM_MAX);
     }
 
