@@ -32,15 +32,14 @@ SkyAtmosphere* create_sky_atmosphere(void) {
     sky->world_units_per_km = 1000.0f; // 1 unit = 1 metre (the glTF convention)
     sky->publish_fog_ambient = true;
     sky->aerial_enabled = true;
-    // 0.10 rather than the 0.45 this shipped with (spec 11.41). Coverage is a GAP fraction as
-    // far as the ground is concerned: extinction is 25/km over a 2.5 km deck, so tau is 62.5 x
-    // density and half transmittance needs density 0.011 -- any real cloud in a column blocks
-    // the sun outright, exactly as a real cumulus does. So the dapple comes entirely from
-    // columns with no cloud in them, and 0.45 leaves almost none: measured 0.0% of the shadow
-    // map above half transmittance at a 35 degree sun, against 47.9% at 0.10. At 0.45 the deck
-    // casts a flat 32% dimming with no pattern in it -- a correct integral of a sky nobody can
-    // see through, and a poor thing to ship as the default of a feature about dappled light.
-    sky->clouds.coverage = 0.10f;
+    // Coverage is a GAP fraction as far as the GROUND is concerned, which is worth knowing before
+    // changing it (spec 11.41). Extinction is 25/km over a 2.5 km deck, so tau is 62.5 x density
+    // and half transmittance needs density 0.011 -- any real cloud in a column blocks the sun
+    // outright, exactly as a real cumulus does. Dappled light is therefore a map of the HOLES,
+    // and this value decides whether there are any: measured 0.0% of the shadow map above half
+    // transmittance here at a 35 degree sun, against 47.9% at 0.10. At this default the deck
+    // casts a flat 32% dimming with no pattern in it; ~0.10 is where the dapple lives.
+    sky->clouds.coverage = 0.45f;
     sky->clouds.cloud_type = 0.6f;
     sky->clouds.density = 1.0f;
     sky->clouds.prev_frame = -1;

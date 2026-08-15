@@ -2863,27 +2863,47 @@ CLOUDSHADOW_TILE_SIZE = ("400", "400")
 # Measured 0.988 / 0.085 at the default coverage against 0.0 / 0.0 for the saturated map.
 CLOUDSHADOW_MAP_MAX_MIN = 0.30
 CLOUDSHADOW_MAP_SIGMA_MIN = 0.02
+# And the same map at a LOW sun, which is a SEPARATE question the arm above cannot reach: it
+# renders at one elevation, so it can only ever speak for that one.
+#
+# It could not have been more separate, as it turns out. The shipped map capped the marched path
+# at a fixed 1.2 km while crossing the deck takes thickness/sin(elevation), so the fraction of
+# cloud actually traversed fell with the sun -- 48% at the zenith, 4% at 5 degrees -- and below
+# ~10 degrees the march never left the cloud base at all and the map came back uniformly 1.0.
+# apps/tree runs a 0.8 degree sun and so had never had a cloud shadow from either half.
+#
+# Keyed on SIGMA and MEAN, deliberately not on peak: the failure was a uniformly WHITE map, whose
+# peak is a perfect 1.0. A peak floor passes it. Measured sigma 0.0000 / mean 1.0000 broken
+# against 0.2632 / 0.1060 fixed, at coverage 0.10.
+CLOUDSHADOW_LOWSUN_ELEV = "5"
+CLOUDSHADOW_LOWSUN_SIGMA_MIN = 0.05
+CLOUDSHADOW_LOWSUN_MEAN_MAX = 0.60
 # Eight boxes across the GROUND, for the surface half (spec 11.41). Read WITHOUT --fog, which
 # is what makes them unambiguous: with no medium in the frame the froxel half contributes
 # nothing, so every moving pixel is a shaded surface. Kept clear of the horizon, where the
 # terrain meets sky and the band would average the two.
 CLOUDSHADOW_GROUND = [(0.02 + 0.12 * i, 0.62, 0.12 + 0.12 * i, 0.88) for i in range(8)]
-# Measured shaded/lit 0.6998 over this band at coverage 0.2, against 1.0000 before the surface
-# half existed. Floor well above the measurement, because the arm's job is presence.
+# Measured shaded/lit 0.5588 over this band, against 1.0000 before the surface half existed.
+# Floor well above the measurement, because the arm's job is presence.
 CLOUDSHADOW_GROUND_MAX = 0.97
 # ...and the same variance requirement the air band carries, for the same reason: a lookup
 # returning a constant darkens the ground uniformly and sails through the arm above.
 #
 # This is the only arm that reads the map's CONTENT through a lookup, which was checked rather
-# than assumed: against a stub returning a constant 0.5 it reads 0.0512 and fails, while
-# cloudshadow-ground passes at 0.7177 and -vary, the AIR variance arm, passes at 0.9268. So the
-# air arm does not read the map either -- its spread comes from the fog's own structure -- and
-# -map plus this one are what separate a bad map from a bad lookup. Measured 0.2922.
+# than assumed: against a stub returning a constant 0.5 it fails at 0.0512 while
+# cloudshadow-ground passes at 0.7177 -- and so does -vary, the AIR variance arm, at 0.9268. So
+# the air arm does not read the map either; its spread comes from the fog's own structure. -map
+# plus this one are what separate a bad map from a bad lookup. Measured 0.3020.
 CLOUDSHADOW_GROUND_SPREAD_MIN = 0.15
-# Coverage for the ground arms. The 0.45 default is near-overcast -- 11.40 measured the map at
-# mean 0.023 there, which is a flat full shadow with no dapple to detect -- against 0.397 at
-# 0.2. The variance arm is unreadable at the default and the darkening arm barely varies.
-CLOUDSHADOW_GROUND_COVERAGE = "0.2"
+# Coverage for the ground arms, stated rather than inherited: an arm that rode the default would
+# be silently re-tuned by anyone who changed it.
+#
+# 0.10 is where this field has GAPS, and gaps are the whole mechanism -- extinction 25/km over a
+# 2.5 km deck makes any real cloud in a column opaque, so a dappled ground is a map of the holes.
+# Measured 47.9% of the map above half transmittance at 0.10 against 0.0% at 0.45, and the middle
+# is no good either: at 0.2 the corrected march leaves the ground uniformly shaded, spread 0.0618
+# against the 0.15 this arm wants. That reading is what moved the default to 0.10 (spec 11.41).
+CLOUDSHADOW_GROUND_COVERAGE = "0.10"
 
 
 def run_cloud_shadow_gate(workdir):
@@ -2908,6 +2928,14 @@ def run_cloud_shadow_gate(workdir):
                           is the only arm that can tell a bad MAP from a bad LOOKUP -- 11.39
                           shipped one saturated to zero at every texel with both of its
                           downstream arms passing over it.
+      cloudshadow-lowsun  and it carries range at a LOW sun too, which is a different question
+                          the arm above cannot reach because it renders at one elevation. 11.41
+                          found the map blank below ~10 degrees; against that bug this arm reads
+                          sigma 0.0000 / mean 1.0000 and fails while all FIVE others pass.
+
+    The arms deliberately pin --cloud-coverage rather than ride the default. A gate wants the
+    configuration where the property is legible, not a representative frame, and the ground and
+    map arms both need the deck to have GAPS -- see CLOUDSHADOW_GROUND_COVERAGE.
     """
     scene = os.path.join(ROOT, "assets", CLOUDSHADOW_FIXTURE)
     if not os.path.exists(scene):
@@ -2989,30 +3017,47 @@ def run_cloud_shadow_gate(workdir):
 
     # The map itself, through the --sky-debug tile. Hand-rolled rather than render()'d: this
     # one needs a taller frame, or the tile falls off the bottom.
-    tile = os.path.join(workdir, "cloudshadow_map.ppm")
-    cmd = [RENDER, "-m", scene, "-x", "-f", "30",
-           "-W", CLOUDSHADOW_TILE_SIZE[0], "-H", CLOUDSHADOW_TILE_SIZE[1],
-           "-S", tile, "--clouds", "--sky-debug", "--no-auto-exposure", "-E", "1.0"]
-    r = subprocess.run(cmd, capture_output=True, text=True)
-    if r.returncode != 0 or not os.path.exists(tile):
-        print(f"  cloudshadow-map  ERROR render failed: {(r.stdout + r.stderr)[-200:]}")
+    def map_stats(name, extra):
+        tile = os.path.join(workdir, f"cloudshadow_{name}.ppm")
+        cmd = [RENDER, "-m", scene, "-x", "-f", "30",
+               "-W", CLOUDSHADOW_TILE_SIZE[0], "-H", CLOUDSHADOW_TILE_SIZE[1],
+               "-S", tile, "--clouds", "--cloud-coverage", CLOUDSHADOW_GROUND_COVERAGE,
+               "--sky-debug", "--no-auto-exposure", "-E", "1.0"] + extra
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        if r.returncode != 0 or not os.path.exists(tile):
+            return None, (r.stdout + r.stderr)[-200:]
+        tw, _, tpix = _read_ppm(tile)
+        x0, y0, x1, y1 = CLOUDSHADOW_TILE_BOX
+        vals = [tpix[(y * tw + x) * 3] / 255.0
+                for y in range(y0, y1, 4) for x in range(x0, x1, 4)]
+        mean = sum(vals) / len(vals)
+        sigma = (sum((v - mean) ** 2 for v in vals) / len(vals)) ** 0.5
+        return (max(vals), mean, sigma), None
+
+    stats, err = map_stats("map", [])
+    if err:
+        print(f"  cloudshadow-map  ERROR render failed: {err}")
         return failures + ["cloudshadow-map"]
-    tw, thh, tpix = _read_ppm(tile)
-    x0, y0, x1, y1 = CLOUDSHADOW_TILE_BOX
-    vals = []
-    for y in range(y0, y1, 4):
-        for x in range(x0, x1, 4):
-            i = (y * tw + x) * 3
-            vals.append(tpix[i] / 255.0)
-    peak = max(vals)
-    mean = sum(vals) / len(vals)
-    sigma = (sum((v - mean) ** 2 for v in vals) / len(vals)) ** 0.5
+    peak, mean, sigma = stats
     ok = peak >= CLOUDSHADOW_MAP_MAX_MIN and sigma >= CLOUDSHADOW_MAP_SIGMA_MIN
     print(f"  cloudshadow-map  {'PASS' if ok else 'FAIL'}  peak={peak:.4f} "
           f"(want >={CLOUDSHADOW_MAP_MAX_MIN}) sigma={sigma:.4f} "
           f"(want >={CLOUDSHADOW_MAP_SIGMA_MIN}), mean={mean:.4f}")
     if not ok:
         failures.append("cloudshadow-map")
+
+    # The same map at a LOW sun, which is a different question and needs its own arm.
+    stats, err = map_stats("map_lowsun", ["--sun-elevation", CLOUDSHADOW_LOWSUN_ELEV])
+    if err:
+        print(f"  cloudshadow-lowsun ERROR render failed: {err}")
+        return failures + ["cloudshadow-lowsun"]
+    peak, mean, sigma = stats
+    ok = sigma >= CLOUDSHADOW_LOWSUN_SIGMA_MIN and mean <= CLOUDSHADOW_LOWSUN_MEAN_MAX
+    print(f"  cloudshadow-lowsun {'PASS' if ok else 'FAIL'}  sigma={sigma:.4f} "
+          f"(want >={CLOUDSHADOW_LOWSUN_SIGMA_MIN}) mean={mean:.4f} "
+          f"(want <={CLOUDSHADOW_LOWSUN_MEAN_MAX}), peak={peak:.4f}")
+    if not ok:
+        failures.append("cloudshadow-lowsun")
 
     return failures
 
