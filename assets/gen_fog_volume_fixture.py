@@ -62,6 +62,7 @@ BOXES = [
     (-1.30, 0.55, [1.0, 1.0, 1.0]),
     (1.30, 0.55, [1.0, 0.55, 0.25]),
 ]
+WARM_TINT = [1.0, 0.55, 0.25]
 
 materials = [
     {
@@ -178,6 +179,64 @@ scene_desc = {
     "post": {"tonemap": "neutral", "exposure": 1.0},
 }
 
+def volume(cx, hx, density, tint):
+    return {
+        "center": [cx, 1.0, 0.0],
+        "extent": [hx, BOX_HALF_Y, BOX_HALF_Z],
+        "density": density,
+        "feather": BOX_FEATHER,
+        "tint": tint,
+    }
+
+
+# The MIX variant, on the same geometry and the same camera, so the gate reuses the
+# fixture's crop boxes unchanged (spec 11.40).
+#
+# This exists because the fixture above cannot see the sigma-weighted combination at all.
+# With no global fog every cell has airSigma 0, so the fold reduces to `S *= tint` exactly
+# and a plain multiply -- the thing the fold is there to avoid -- passes every arm.
+#
+# Adding global fog does not fix it, and the reason is geometric rather than a matter of
+# tuning: there are 3.8 world units of clear air between the camera and a box's front face,
+# so raising the global density attenuates the box's contribution faster than it dilutes
+# its tint. At density 0.5 the depth mix dominates and moves the read the wrong way; at 2.0
+# the whole frame is uniform haze and the boxes have vanished. There is no window.
+#
+# So the diluting medium is a SECOND VOLUME occupying the same box, not global air. Then
+# there is nothing in front to attenuate, and the total extinction is exactly controllable:
+#
+#   left  strip -- warm alone at D
+#   right strip -- white at D/2 and warm at D/2, COINCIDENT
+#
+# Both strips therefore carry total sigma D, so transmittance, depth mix and backdrop share
+# are identical and the ONLY difference is what the tint sum is made of. The sigma-weighted
+# fold gives the right strip a source tint of (0.5 + 0.5*warm) and the two strips separate;
+# a plain multiply cannot see the white volume at all -- white is its identity -- and the
+# two strips read the same. One comparison, and it fails exactly the substitution the fold
+# exists to prevent.
+mix_desc = dict(scene_desc)
+mix_desc["_comment"] = [
+    "The sigma-weighted-fold instrument (spec 11.40). Same geometry, same camera and the",
+    "same crop boxes as fog_volume_fixture; only the volume set differs.",
+    "",
+    "Left strip: warm alone at D. Right strip: white at D/2 and warm at D/2, occupying the",
+    "SAME box. Total extinction is D on both, so the depth mix is identical and the only",
+    "variable is the composition of the tint sum.",
+    "",
+    "A sigma-weighted average gives the right strip (0.5 + 0.5*warm) and the strips differ.",
+    "A plain S *= tint cannot see a white volume at all, and they read identically. That is",
+    "the whole point of the file -- no other fixture can distinguish the two.",
+    "",
+    "The diluting medium is a coincident VOLUME rather than global fog because 3.8 units of",
+    "clear air sit between the camera and the box, so global density drowns the box before",
+    "it dilutes it.",
+]
+mix_desc["fogVolumes"] = [
+    volume(-1.30, 0.55, BOX_DENSITY, WARM_TINT),
+    volume(1.30, 0.55, BOX_DENSITY * 0.5, [1.0, 1.0, 1.0]),
+    volume(1.30, 0.55, BOX_DENSITY * 0.5, WARM_TINT),
+]
+
 here = os.path.dirname(os.path.abspath(__file__))
 with open(os.path.join(here, "fog_volume_fixture.gltf"), "w") as f:
     json.dump(gltf, f, indent=1)
@@ -185,4 +244,7 @@ with open(os.path.join(here, "fog_volume_fixture.gltf"), "w") as f:
 with open(os.path.join(here, "fog_volume_fixture.cscn"), "w") as f:
     json.dump(scene_desc, f, indent=1)
     f.write("\n")
-print("wrote fog_volume_fixture.gltf + .cscn")
+with open(os.path.join(here, "fog_volume_mix_fixture.cscn"), "w") as f:
+    json.dump(mix_desc, f, indent=1)
+    f.write("\n")
+print("wrote fog_volume_fixture.gltf + .cscn + fog_volume_mix_fixture.cscn")

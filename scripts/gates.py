@@ -2945,22 +2945,18 @@ FOGVOL_NEUTRAL_EPS = 0.01
 # has to fall relative to red. Measured 0.9164 against the white box's 1.0000; 0.985 is a
 # wide floor that still fails the tint being dropped entirely.
 FOGVOL_TINT_MAX = 0.985
-# KNOWN COVERAGE GAP, filed rather than guessed at (spec 11.39).
-#
-# None of the arms above can see the SIGMA-WEIGHTED combination. This fixture authors no
-# global fog, so airSigma is 0 in every cell and the fold reduces to `S *= tint` exactly --
-# which is the implementation the spec argues against, and it would pass all four.
-#
-# The obvious repair does NOT work, and the reason is worth recording because it is not
-# obvious: adding global fog and asserting the tint read lands between the no-air value and
-# 1.0 fails, because air changes TWO things at once. It dilutes the source function toward
-# white (the effect the arm wants), and it raises the strip's total optical depth, so a
-# larger share of the pixel is tinted in-scatter and a smaller share is untinted backdrop.
-# The second effect dominates and moves the read the OTHER way -- measured B/R rel 0.9159
-# with no air against 0.8917 with air at a comparable density.
-#
-# A valid instrument has to hold the depth mix fixed while varying only the air fraction,
-# which this fixture's geometry cannot express. Left unbuilt.
+# The sigma-weighted fold, on its own fixture (spec 11.40). Same geometry, same camera and
+# the same crop boxes as above -- only the volume set differs:
+#   left  strip -- warm alone at D
+#   right strip -- white at D/2 and warm at D/2, COINCIDENT in one box
+# Total extinction is D on both, so transmittance and the backdrop share are identical and
+# the only variable is what the tint sum is made of.
+FOGVOL_MIX_FIXTURE = "fog_volume_mix_fixture.cscn"
+# The coincident strip must read LESS tinted than the warm-alone one. A plain `S *= tint`
+# cannot produce this at all -- white is its identity, so both strips would be equal and the
+# ratio would sit at 1.0. Measured 1.0211 in sRGB; the floor is set well inside that and
+# still far above the R-channel control, which agrees to four decimals.
+FOGVOL_MIX_MIN = 1.008
 
 
 def run_fog_volume_gate(workdir):
@@ -2981,8 +2977,11 @@ def run_fog_volume_gate(workdir):
       fogvol-off      --no-fog-volumes returns the frame to no medium: the box strips
                       read the gap value again. The inverse arm, and it also proves the
                       volume ARMED the pass, since this scene authors no global fog.
-    None of these can see the sigma-weighted COMBINATION -- see the gap filed above the
-    constants; the fold degenerates to S *= tint on a fixture with no global fog.
+      fogvol-fold     on the MIX fixture: a strip whose medium is half white and half warm
+                      reads less tinted than one that is all warm at the same total
+                      extinction. The only arm that can see the sigma-weighted combination
+                      -- and the only one a plain `S *= tint` fails, since white is that
+                      form's identity and the two strips would be equal.
 
     --no-ssao on every arm, and that is load-bearing rather than hygiene. GTAO also asks
     for the aux G-buffer, and the atmosphere pass returns early without it -- so with GTAO
@@ -3049,6 +3048,32 @@ def run_fog_volume_gate(workdir):
           f"want 1.0 +/-{FOGVOL_NEUTRAL_EPS}")
     if not ok:
         failures.append("fogvol-off")
+
+    mix_scene = os.path.join(ROOT, "assets", FOGVOL_MIX_FIXTURE)
+    if not os.path.exists(mix_scene):
+        print(f"  fogvol-fold    SKIP  ({FOGVOL_MIX_FIXTURE} not present)")
+        return failures
+    mixed = os.path.join(workdir, "fogvol_fold.ppm")
+    err = render(mix_scene, mixed, base, frames=FOGVOL_FRAMES)
+    if err:
+        print(f"  fogvol-fold    ERROR render failed: {err.strip()[-200:]}")
+        return failures + ["fogvol-fold"]
+    w3, h3, pix3 = _read_ppm(mixed)
+    fold = {k: _absorb_box_rgb(pix3, w3, h3, b) for k, b in FOGVOL_BOXES.items()}
+    alone, half = fold["left"], fold["right"]
+    br_alone = alone[2] / max(alone[0], 1e-6)
+    br_half = half[2] / max(half[0], 1e-6)
+    rel_fold = br_half / max(br_alone, 1e-6)
+    # R is the control: equal total extinction means equal depth mix, so the untinted
+    # channel must agree. If it drifts, the two strips are no longer comparable and the
+    # B/R shift below stops being attributable to the fold.
+    r_spread = abs(alone[0] - half[0]) / max(alone[0], 1e-6)
+    ok = rel_fold >= FOGVOL_MIX_MIN and r_spread <= FOGVOL_NEUTRAL_EPS
+    print(f"  fogvol-fold    {'PASS' if ok else 'FAIL'}  B/R half-white={br_half:.4f} vs "
+          f"all-warm={br_alone:.4f}, ratio={rel_fold:.4f} want >={FOGVOL_MIX_MIN} "
+          f"(R control spread {r_spread:.4f}, want <={FOGVOL_NEUTRAL_EPS})")
+    if not ok:
+        failures.append("fogvol-fold")
 
     return failures
 

@@ -1,0 +1,118 @@
+{
+ "version": 1,
+ "_comment": [
+  "The sigma-weighted-fold instrument (spec 11.40). Same geometry, same camera and the",
+  "same crop boxes as fog_volume_fixture; only the volume set differs.",
+  "",
+  "Left strip: warm alone at D. Right strip: white at D/2 and warm at D/2, occupying the",
+  "SAME box. Total extinction is D on both, so the depth mix is identical and the only",
+  "variable is the composition of the tint sum.",
+  "",
+  "A sigma-weighted average gives the right strip (0.5 + 0.5*warm) and the strips differ.",
+  "A plain S *= tint cannot see a white volume at all, and they read identically. That is",
+  "the whole point of the file -- no other fixture can distinguish the two.",
+  "",
+  "The diluting medium is a coincident VOLUME rather than global fog because 3.8 units of",
+  "clear air sit between the camera and the box, so global density drowns the box before",
+  "it dilutes it."
+ ],
+ "models": [
+  {
+   "path": "fog_volume_fixture.gltf"
+  }
+ ],
+ "fogVolumes": [
+  {
+   "center": [
+    -1.3,
+    1.0,
+    0.0
+   ],
+   "extent": [
+    0.55,
+    1.2,
+    0.6
+   ],
+   "density": 0.5,
+   "feather": 0.12,
+   "tint": [
+    1.0,
+    0.55,
+    0.25
+   ]
+  },
+  {
+   "center": [
+    1.3,
+    1.0,
+    0.0
+   ],
+   "extent": [
+    0.55,
+    1.2,
+    0.6
+   ],
+   "density": 0.25,
+   "feather": 0.12,
+   "tint": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  {
+   "center": [
+    1.3,
+    1.0,
+    0.0
+   ],
+   "extent": [
+    0.55,
+    1.2,
+    0.6
+   ],
+   "density": 0.25,
+   "feather": 0.12,
+   "tint": [
+    1.0,
+    0.55,
+    0.25
+   ]
+  }
+ ],
+ "lights": [
+  {
+   "name": "FogKey",
+   "type": "directional",
+   "direction": [
+    0.6,
+    -0.5,
+    -0.62
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 2.5,
+   "cast_shadows": false
+  }
+ ],
+ "camera": {
+  "eye": [
+   0.0,
+   1.0,
+   4.4
+  ],
+  "target": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "fov": 45.0
+ },
+ "post": {
+  "tonemap": "neutral",
+  "exposure": 1.0
+ }
+}
