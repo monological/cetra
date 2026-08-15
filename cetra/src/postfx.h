@@ -343,8 +343,28 @@ typedef struct PostFX {
                           // count crosses the same seam the same way)
 
     /*
+     * Local fog volumes, published per frame by scene_publish_fog_volumes_to_postfx
+     * (spec 11.39). Count 0 is the single off state; a zero-density volume is dropped at
+     * the publish, so a nonzero count means there is genuinely something to integrate.
+     *
+     * A volume must NOT set fog_enabled to arm the pass. That flag belongs to the app and
+     * the GUI checkbox and nothing clears it per frame, so writing it here would leave
+     * volumetric fog on permanently after one frame that had a volume in it -- exactly
+     * spec 11.33's latched-flag defect. It joins postfx_has_medium instead, as water does.
+     *
+     * Pre-packed into the shader's array shape by the publisher, so the uploader is a
+     * straight handoff and only one place decides which component holds what. The feather
+     * arrives already clamped away from zero for the same reason: it is an invariant of the
+     * packing, not something to re-establish per cell.
+     */
+    int local_fog_count;
+    vec4 local_fog_center_density[POSTFX_MAX_FOG_VOLUMES]; // xyz world centre, w density
+    vec4 local_fog_extent_feather[POSTFX_MAX_FOG_VOLUMES]; // xyz half-extent, w ramp width
+    vec3 local_fog_tint[POSTFX_MAX_FOG_VOLUMES];           // scattering colour
+
+    /*
      * The cloud deck's sun transmittance, sky-owned, for the fog to shadow its sun term with
-     * (spec 11.39). Texture 0 is the single off state, as with aerial_volume above.
+     * (spec 11.39). cloud_shadow_tile 0 is the single off state.
      *
      * A 2D map is exact rather than approximate here because the deck is a horizontal shell:
      * how much sun reaches a point below it depends only on WHERE its sun ray crosses the
@@ -353,29 +373,28 @@ typedef struct PostFX {
      *
      * And it TILES: the field is periodic over cloud_shadow_tile, so one period wrapped by the
      * sampler covers the world with no window and nothing to follow the camera.
-     */
-    /*
-     * Local fog volumes, published per frame by scene_publish_fog_volumes_to_postfx
-     * (spec 11.39). Count 0 is the single off state.
      *
-     * A volume must NOT set fog_enabled to arm the pass. That flag belongs to the app and
-     * the GUI checkbox and nothing clears it per frame, so writing it here would leave
-     * volumetric fog on permanently after one frame that had a volume in it -- exactly
-     * spec 11.33's latched-flag defect. It joins the union at the gate instead, the way
-     * water_medium does.
-     *
-     * Pre-packed into the shader's three-vec4 shape by the publisher, so the uploader is
-     * a straight handoff and only one place decides which component holds what.
+     * The shear is published rather than the sun direction: it is constant for the frame, and
+     * deriving it per cell cost a divide on every one of them. cloud_shadow_light names WHICH
+     * light the deck occludes, so the consumer does not have to recognise the sun by comparing
+     * directions -- exact where a dot product needed an epsilon, and -1 states "no sun in the
+     * list", which a direction cannot.
      */
-    int local_fog_count;
-    vec4 local_fog_center_density[POSTFX_MAX_FOG_VOLUMES]; // xyz world centre, w density
-    vec4 local_fog_extent_feather[POSTFX_MAX_FOG_VOLUMES]; // xyz half-extent, w ramp width
-    vec4 local_fog_tint[POSTFX_MAX_FOG_VOLUMES];           // rgb scattering colour
-
     GLuint cloud_shadow_tex;    // R16F transmittance toward the sun, 1 = full sun, WRAPPED
     float cloud_shadow_tile;    // world units the map's period covers; 0 = no deck
     float cloud_shadow_shell_y; // world Y the map is indexed at (the shell bottom)
-    vec3 cloud_shadow_sun;      // unit vector TOWARD the sun -- note lightDir[] is travel
+    vec2 cloud_shadow_shear;    // sun.xz / sun.y: world XZ travelled per unit of climb
+    int cloud_shadow_light;     // fog light slot the deck occludes; -1 = none
+
+    // Sticky: the froxel FBO was rejected once, so stop trying. Not fog_enabled -- that is
+    // the app's and the GUI's, and two of the three arming sources republish every frame.
+    bool froxel_failed;
+
+    // 1x1 white R16F, for a sampler whose real texture is absent this frame. Binding name 0
+    // instead leaves an INCOMPLETE texture on a live sampler, which this driver substitutes
+    // for per draw at a measurable cost -- so the stand-in is cheaper than the nothing it
+    // stands in for. White because every current consumer reads it as a transmittance.
+    GLuint white_tex;
 
     // Published per frame by water_publish_to_postfx (mirrors the sky and probe
     // blocks; postfx never learns about Water). water_medium 0 = one medium only.
@@ -672,6 +691,17 @@ bool postfx_taa_active(const PostFX* fx);
 // Halton sequence on this and the seam dispatches on it, so the sequence and
 // the resolve consuming it cannot disagree.
 bool postfx_taau_active(const PostFX* fx);
+
+/*
+ * Every medium that can put something in the froxel volume, as ONE answer.
+ *
+ * The individual flags are REQUESTS from their owners -- the app's height fog, a submerged
+ * water body, an authored volume -- and each arrived at a different time. Spelling the
+ * union at each site is how the third one got added to the pass gate and missed the aux
+ * request, which starves the pass of the depth it indexes by and kills the medium
+ * silently. One predicate, so the next medium joins in one place.
+ */
+bool postfx_has_medium(const PostFX* fx);
 
 // Producer-side predicate: true when the scene pass should write the aux
 // G-buffer (attachment 2: motion .xy for TAA + linear view-Z .z for GTAO).

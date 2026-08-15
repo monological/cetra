@@ -111,8 +111,13 @@ typedef struct CloudLayer {
     bool shadows_enabled; // rides the master switch; --no-cloud-shadows clears it
     GLuint shadow_fbo;
     GLuint shadow_tex; // R16F transmittance, 1 = full sun, wrapped
-    int shadow_size;
     ShaderProgram* shadow_program;
+    // The inputs the last build used. The map is a pure function of these -- deliberately
+    // camera-free, which is what lets it be world-anchored AND what makes this cache exact.
+    // Wind is still by default, so without it a static sky re-marches an identical 256^2
+    // texture every frame for the life of the run.
+    float shadow_inputs[8];
+    bool shadow_built;
     // Published to PostFX in WORLD units, so the consumer's shear needs no conversion.
     float shadow_tile;    // world units the map's period covers
     float shadow_shell_y; // world Y of the shell bottom, the altitude the map is indexed at

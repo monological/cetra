@@ -345,21 +345,32 @@ void sky_publish_to_postfx(const SkyAtmosphere* sky, struct PostFX* fx) {
         fx->aerial_slices = 0;
     }
 
-    // The cloud deck's sun transmittance, for the fog to shadow its sun term with. Gated on a
-    // march having HAPPENED (prev_frame >= 0) rather than on the layer being enabled: the
-    // texture is written by the march, so arming this before the first one would point the
-    // fog at an uninitialised window. Texture 0 is the single off state, the same shape as
-    // aerial_volume above and as count-zero everywhere else here.
+    // The cloud deck's sun transmittance, for the fog to shadow its sun term with. The
+    // texture handle IS the "a march has happened" statement -- shadow_tex is only ever
+    // created inside build_cloud_shadow, so testing it needs no second frame counter.
+    //
+    // The else clears the TILE as well, the way the aerial block above clears all of its
+    // fields: tile 0 is then the single off state on its own, and the uploader hands it
+    // straight to the shader with nothing to re-derive.
     if (sky && sky->enabled && sky->clouds.enabled && sky->clouds.shadows_enabled &&
-        sky->clouds.shadow_tex && sky->clouds.prev_frame >= 0) {
+        sky->clouds.shadow_tex && sky->sun_dir[1] > 0.0f) {
         fx->cloud_shadow_tex = sky->clouds.shadow_tex;
         fx->cloud_shadow_tile = sky->clouds.shadow_tile;
         fx->cloud_shadow_shell_y = sky->clouds.shadow_shell_y;
-        // TOWARD the sun, matching sky->sun_dir. The fog's own lightDir[] is the opposite
-        // convention (travel), and both are live in the same shader, so this one is named.
-        glm_vec3_copy((float*)sky->sun_dir, fx->cloud_shadow_sun);
+        // World XZ per unit of climb toward the sun. Published rather than the direction
+        // because it is constant for the frame, and the consumer would otherwise divide by
+        // the sun's Y once per froxel cell to recover it.
+        fx->cloud_shadow_shear[0] = sky->sun_dir[0] / sky->sun_dir[1];
+        fx->cloud_shadow_shear[1] = sky->sun_dir[2] / sky->sun_dir[1];
+        // Which fog light the deck occludes. The sky knows exactly, so the consumer never
+        // has to recognise the sun by comparing directions. -1 when the sun is not casting
+        // (below the horizon fade) and so is absent from the fog light list entirely.
+        fx->cloud_shadow_light =
+            (sky->sun_light && sky->sun_light->cast_shadows) ? sky->sun_light->shadow_map_index : -1;
     } else {
         fx->cloud_shadow_tex = 0;
+        fx->cloud_shadow_tile = 0.0f;
+        fx->cloud_shadow_light = -1;
     }
 }
 

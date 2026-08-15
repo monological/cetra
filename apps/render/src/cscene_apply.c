@@ -377,17 +377,18 @@ void apply_cscene_water(Scene* scene, const CetraSceneDesc* cscn) {
  * Printed because a volume that lands somewhere the camera never enters is invisible and
  * indistinguishable from one that failed to parse.
  */
+_Static_assert(CSCENE_MAX_FOG_VOLUMES <= SCENE_MAX_FOG_VOLUMES,
+               "the parser cannot author more volumes than a scene can hold");
+
 void apply_cscene_fog_volumes(Scene* scene, const CetraSceneDesc* cscn) {
     if (!scene || !cscn)
         return;
     for (int i = 0; i < cscn->fog_volume_count; i++) {
         const CSceneFogVolume* v = &cscn->fog_volumes[i];
-        FogVolume out = {0};
-        memcpy(out.center, v->center, sizeof(out.center));
-        memcpy(out.half_extent, v->extent, sizeof(out.half_extent));
-        out.density = v->density;
-        out.feather = v->feather;
-        memcpy(out.tint, v->tint, sizeof(out.tint));
+        FogVolume out = {.density = v->density, .feather = v->feather};
+        glm_vec3_copy((float*)v->center, out.center);
+        glm_vec3_copy((float*)v->extent, out.half_extent);
+        glm_vec3_copy((float*)v->tint, out.tint);
         if (add_fog_volume_to_scene(scene, &out) < 0)
             break;
         printf("Scene file: fog volume at (%.2f %.2f %.2f) half-extent (%.2f %.2f %.2f) "

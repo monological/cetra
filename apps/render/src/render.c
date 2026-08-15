@@ -2980,8 +2980,7 @@ int main(int argc, char** argv) {
      * independent `if`s.
      */
     apply_cscene_water(scene, cscn);
-    if (!args.no_fog_volumes)
-        apply_cscene_fog_volumes(scene, cscn);
+    apply_cscene_fog_volumes(scene, cscn);
     if (args.no_water) {
         free_water(scene->water);
         scene->water = NULL;
@@ -3007,6 +3006,11 @@ int main(int argc, char** argv) {
             water->height_ctx = water;
         }
     }
+
+    // Clears what the scene holds rather than skipping the apply, so it wins against any
+    // producer and not just the scene file -- the same shape as --no-water above.
+    if (args.no_fog_volumes)
+        scene->fog_volume_count = 0;
 
     /*
      * --water-probe: the CPU wave query, printed. It is the only way anything outside

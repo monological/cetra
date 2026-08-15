@@ -210,8 +210,8 @@ typedef struct CSceneWater {
  * parameters are fields on PostFX, but a volume is a thing placed in the world, so it
  * belongs in the scene's namespace and not the post chain's.
  *
- * Mirrors FogVolume in scene.h; the cap is this parser's own and the scene's is smaller,
- * so extras are dropped with a warning at whichever bound is hit first.
+ * Mirrors FogVolume in scene.h. The cap is this parser's own; a static assert where the two
+ * meet keeps it from exceeding the scene's, and extras are dropped with a warning.
  */
 typedef struct CSceneFogVolume {
     float center[3];

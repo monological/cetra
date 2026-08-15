@@ -52,6 +52,19 @@ float cloudHeightFrac(float altKm)
     return clamp((altKm - CLOUD_BOTTOM_KM) / (CLOUD_TOP_KM - CLOUD_BOTTOM_KM), 0.0, 1.0);
 }
 
+// Altitude above the ground radius, in the deck-anchored kilometre frame this file owns.
+// The centre sits on-axis below the origin, and this is the ONLY place that -Rg offset is
+// written -- three call sites had spelled it out separately, in two files.
+float cloudAltKm(vec3 posKm)
+{
+    return length(posKm - vec3(0.0, -Rg, 0.0)) - Rg;
+}
+
+float cloudHeightFracAt(vec3 posKm)
+{
+    return cloudHeightFrac(cloudAltKm(posKm));
+}
+
 float cloudRemap(float v, float lo, float hi)
 {
     return clamp((v - lo) / (hi - lo), 0.0, 1.0);

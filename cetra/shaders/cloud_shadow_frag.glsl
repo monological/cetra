@@ -42,17 +42,41 @@ uniform vec3 windOffsetKm;
 // shell is 2.5 km thick and this integral is read through a trilinear volume lookup that
 // blurs finer structure away regardless.
 const int CLOUD_SHADOW_STEPS = 24;
-// A sun below this is doing nothing but grazing the shell for thousands of kilometres, and
-// the path length explodes as 1/sinEl. The light itself is faded out down there
-// (sky_apply_sun_to_light clears cast_shadows under ~3 degrees), so the map goes clear.
+/*
+ * Below this the shadow fades OUT rather than switching off, and the difference matters.
+ *
+ * A cliff here was the first attempt and it pops: sky_apply_sun_to_light scales the sun's
+ * INTENSITY by elevation/3 but only clears cast_shadows at elevation <= 0, so between the
+ * horizon and this floor the sun is still a live, shadow-casting, fog-lighting directional at
+ * up to 96% strength. Cutting the map to 1.0 under it made clouds stop shadowing in one step,
+ * at 2.87 degrees, in a band real scenes sit in -- apps/tree's default sun is 0.8.
+ */
 const float CLOUD_SHADOW_MIN_SUN_Y = 0.05;
+/*
+ * And the marched length is capped rather than the sun angle, because the step SCHEDULE is
+ * what breaks at grazing incidence, not the geometry.
+ *
+ * Uncapped, span = thickness/sinEl, so at the floor above dt reaches ~2 km against an 8 km
+ * noise period: under four samples per period, which is aliasing rather than sampling. Worse,
+ * every tap is weighted by dt, so a single d=0.3 sample contributes tau ~ 15.6 and blacks the
+ * texel outright, and the wind offset re-rolls which taps land each frame.
+ *
+ * clouds.glsl's own sun march rejects exactly this for exactly this reason -- see the comment
+ * on its lightOff cone about one far tap accounting for kilometres of extinction.
+ *
+ * Half the tile, and the bound that matters is the LOWER one: the cap must exceed the shell
+ * thickness, or it truncates the vertical path an overhead sun takes and dims the shadow where
+ * there was never any aliasing to fix. At 4 km against a 2.5 km shell it never bites above 39
+ * degrees, and at the floor it holds dt to ~167 m -- under three shape texels, where uncapped
+ * was 2 km and thirty-three of them.
+ */
+const float CLOUD_SHADOW_SPAN_CAP_KM = CLOUD_SHAPE_TILE_KM * 0.5;
 
 void main()
 {
-    if (sunDir.y < CLOUD_SHADOW_MIN_SUN_Y) {
-        FragColor = 1.0;
-        return;
-    }
+    // Marched at the floor even below it; the fade below is what takes the result to clear,
+    // so nothing discontinuous happens at the boundary.
+    float sunY = max(sunDir.y, CLOUD_SHADOW_MIN_SUN_Y);
 
     // Exactly ONE tile of the shape field, which is what makes this map cover the whole world
     // from 256 texels. With detail off, cloudDensity is periodic in XZ with the shape texture's
@@ -64,9 +88,7 @@ void main()
     // Start at the shell bottom -- the altitude this map is indexed at.
     vec3 pos = vec3(xz.x, CLOUD_BOTTOM_KM, xz.y);
 
-    // March to the top along the sun. The vertical span is fixed, so the PATH grows as the sun
-    // drops and the step count does not: the integral stays right because dt grows with it.
-    float span = (CLOUD_TOP_KM - CLOUD_BOTTOM_KM) / sunDir.y;
+    float span = min((CLOUD_TOP_KM - CLOUD_BOTTOM_KM) / sunY, CLOUD_SHADOW_SPAN_CAP_KM);
     float dt = span / float(CLOUD_SHADOW_STEPS);
 
     vec3 centre = vec3(0.0, -Rg, 0.0);
@@ -74,14 +96,13 @@ void main()
     for (int i = 0; i < CLOUD_SHADOW_STEPS; i++) {
         // Cell centres, not edges: a half-step offset makes the sum a midpoint rule, which is
         // exact for the linear ramps the altitude gradient is built from.
-        vec3 p = pos + sunDir * (float(i) + 0.5) * dt;
-        float alt = length(p - centre) - Rg;
+        vec3 p = pos + vec3(sunDir.x, sunY, sunDir.z) * (float(i) + 0.5) * dt;
         // detailOn false: the erosion tap is a texture-scale feature, and this map is read
         // through a filter far coarser than the detail it would add.
-        float d = cloudDensity(p, cloudHeightFrac(alt), shapeTex, detailTex, coverage, cloudType,
+        float d = cloudDensity(p, cloudHeightFracAt(p), shapeTex, detailTex, coverage, cloudType,
                                false, windOffsetKm, 0.0);
         tau += d * CLOUD_EXTINCTION * densityScale * dt;
     }
 
-    FragColor = exp(-tau);
+    FragColor = mix(1.0, exp(-tau), smoothstep(0.0, CLOUD_SHADOW_MIN_SUN_Y, sunDir.y));
 }

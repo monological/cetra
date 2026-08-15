@@ -402,9 +402,8 @@ static void parse_fog_volumes(CetraSceneDesc* d, const cJSON* root) {
             log_warn("cscene: fog volume needs both center and extent; skipped");
             continue;
         }
-        out->density = 0.0f;
+        // The memset above supplies every zero default; only the non-zero one is spelled.
         get_float(v, "density", &out->density);
-        out->feather = 0.0f;
         get_float(v, "feather", &out->feather);
         out->tint[0] = out->tint[1] = out->tint[2] = 1.0f;
         get_floats(v, "tint", out->tint, 3);

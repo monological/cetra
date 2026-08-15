@@ -1,4 +1,5 @@
 
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -402,6 +403,11 @@ void set_scene_wind(Scene* scene, struct Wind* wind) {
     scene->wind = wind;
 }
 
+// The publish below indexes postfx's arrays by the SCENE's count, so the two capacities
+// cannot diverge; the parser must not be able to author more than the scene can hold.
+_Static_assert(SCENE_MAX_FOG_VOLUMES <= POSTFX_MAX_FOG_VOLUMES,
+               "postfx fog-volume mirror must be at least the scene slot count");
+
 int add_fog_volume_to_scene(Scene* scene, const FogVolume* volume) {
     if (!scene || !volume)
         return -1;
@@ -410,26 +416,34 @@ int add_fog_volume_to_scene(Scene* scene, const FogVolume* volume) {
         return -1;
     }
     scene->fog_volumes[scene->fog_volume_count++] = *volume;
-    return scene->fog_volume_count;
+    return 0;
 }
 
 void scene_publish_fog_volumes_to_postfx(const Scene* scene, struct PostFX* fx) {
     if (!fx)
         return;
     const int count = scene ? scene->fog_volume_count : 0;
-    fx->local_fog_count = count;
-    for (int i = 0; i < count; i++) {
+    int live = 0;
+    for (int i = 0; i < count && live < POSTFX_MAX_FOG_VOLUMES; i++) {
         const FogVolume* v = &scene->fog_volumes[i];
-        // Packed here rather than in the uploader: the shader's shape is three vec4s, and
+        // Dropped, not published as a zero: the count is what ARMS the froxel pass, so a
+        // volume that cannot darken anything would otherwise buy three RGBA16F volumes, the
+        // ESM cascades and 128 slice draws to render a byte-identical frame.
+        if (v->density <= 0.0f)
+            continue;
+        // Packed here rather than in the uploader: the shader's shape is a set of vec4s, and
         // splitting the pack from the upload would leave two places that have to agree on
-        // which component holds what.
-        glm_vec3_copy((float*)v->center, fx->local_fog_center_density[i]);
-        fx->local_fog_center_density[i][3] = v->density;
-        glm_vec3_copy((float*)v->half_extent, fx->local_fog_extent_feather[i]);
-        fx->local_fog_extent_feather[i][3] = v->feather;
-        glm_vec3_copy((float*)v->tint, fx->local_fog_tint[i]);
-        fx->local_fog_tint[i][3] = 0.0f;
+        // which component holds what. The feather is clamped here for the same reason -- it
+        // is an invariant of the packing, and re-establishing it per froxel cell made ~1M
+        // cells a frame pay for a decision that belongs to one volume.
+        glm_vec3_copy((float*)v->center, fx->local_fog_center_density[live]);
+        fx->local_fog_center_density[live][3] = v->density;
+        glm_vec3_copy((float*)v->half_extent, fx->local_fog_extent_feather[live]);
+        fx->local_fog_extent_feather[live][3] = fmaxf(v->feather, 1e-4f);
+        glm_vec3_copy((float*)v->tint, fx->local_fog_tint[live]);
+        live++;
     }
+    fx->local_fog_count = live;
 }
 
 int add_skeleton_to_scene(Scene* scene, Skeleton* skeleton) {

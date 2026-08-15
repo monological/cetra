@@ -252,7 +252,6 @@ static bool ensure_shadow_target(CloudLayer* c) {
         c->shadows_enabled = false;
         return false;
     }
-    c->shadow_size = CLOUD_SHADOW_SIZE;
     return true;
 }
 
@@ -263,8 +262,9 @@ static bool ensure_shadow_target(CloudLayer* c) {
 // one frame away from the deck it shadows.
 static void build_cloud_shadow(SkyAtmosphere* sky, struct Engine* engine, CloudLayer* c,
                                float units, const vec3 wind_off) {
-    if (!c->shadows_enabled || !ensure_shadow_target(c))
+    if (!c->shadows_enabled)
         return;
+    // Before the target, so a missing program cannot orphan a texture and an FBO.
     if (!c->shadow_program) {
         c->shadow_program = get_engine_shader_program_by_name(engine, "cloud_shadow");
         if (!c->shadow_program) {
@@ -273,12 +273,24 @@ static void build_cloud_shadow(SkyAtmosphere* sky, struct Engine* engine, CloudL
             return;
         }
     }
+    if (!ensure_shadow_target(c))
+        return;
 
     // One noise tile, world-locked at the origin, wrapped by the sampler. No window to follow
     // the camera and no snapping to keep it from crawling: with detail off the field is exactly
     // periodic over this distance, so the tile IS the whole world.
     c->shadow_tile = CLOUD_SHADOW_TILE_KM * units;
     c->shadow_shell_y = CLOUD_SHADOW_SHELL_KM * units;
+
+    // Everything the march reads. Camera-free by construction, so an unchanged set means a
+    // bit-identical texture and the whole pass can be skipped -- which is the DEFAULT case,
+    // since wind is still unless an app asks for it. 1.57M density taps either way.
+    const float inputs[8] = {sky->sun_dir[0], sky->sun_dir[1], sky->sun_dir[2], c->coverage,
+                             c->cloud_type,   c->density,      wind_off[0],    wind_off[2]};
+    if (c->shadow_built && memcmp(inputs, c->shadow_inputs, sizeof(inputs)) == 0)
+        return;
+    memcpy(c->shadow_inputs, inputs, sizeof(inputs));
+    c->shadow_built = true;
 
     glBindFramebuffer(GL_FRAMEBUFFER, c->shadow_fbo);
     glViewport(0, 0, CLOUD_SHADOW_SIZE, CLOUD_SHADOW_SIZE);

@@ -70,8 +70,11 @@ static void draw_volume_slices(PostFX* fx, GLuint volume, UniformManager* um) {
     for (int slice = 0; slice < fx->froxel_built_z; slice++) {
         glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, volume, 0, slice);
         if (slice == 0 && glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-            log_error("Froxel volume FBO incomplete; disabling fog");
-            fx->fog_enabled = false;
+            // Sticky, and NOT fog_enabled: that flag is the app's and the GUI's, and two
+            // of the three things that arm this pass republish every frame, so clearing
+            // it would stop nothing and stomp a user setting on the way past.
+            log_error("Froxel volume FBO incomplete; disabling the volume");
+            fx->froxel_failed = true;
             break;
         }
         uniform_set_int(um, "sliceIndex", slice);
@@ -811,6 +814,16 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     uniform_set_int(fx->froxel_inject_program->uniforms, "punctualShadowMaps", 2);
     uniform_set_int(fx->froxel_inject_program->uniforms, "historyVolume", 3);
     uniform_set_int(fx->froxel_inject_program->uniforms, "cloudShadowTex", 4);
+
+    // The stand-in for an absent optional sampler; see white_tex in postfx.h for why an
+    // incomplete texture is worse than a real one.
+    const float white_texel = 1.0f;
+    glGenTextures(1, &fx->white_tex);
+    glBindTexture(GL_TEXTURE_2D, fx->white_tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R16F, 1, 1, 0, GL_RED, GL_FLOAT, &white_texel);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glBindTexture(GL_TEXTURE_2D, 0);
     glUseProgram(fx->froxel_integrate_program->id);
     uniform_set_int(fx->froxel_integrate_program->uniforms, "scatterVolume", 0);
     glUseProgram(fx->froxel_composite_program->id);
@@ -1846,6 +1859,7 @@ void free_postfx(PostFX* fx) {
     postfx_free_targets(fx);
     // The three the resize deliberately keeps, and so are only freed here.
     gl_delete_texture(&fx->noise_texture);
+    gl_delete_texture(&fx->white_tex);
     gl_delete_fbo(&fx->lum_fbo);
     gl_delete_texture(&fx->lum_texture);
     gl_delete_fbo(&fx->froxel_fbo);
@@ -1957,6 +1971,15 @@ bool postfx_taau_active(const PostFX* fx) {
     return fx && fx->post_fbo != 0;
 }
 
+bool postfx_has_medium(const PostFX* fx) {
+    // froxel_failed is sticky and part of the answer rather than a separate test at the
+    // gate: clearing fog_enabled used to stop the pass after an incomplete FBO, and it
+    // cannot any more, because two of the three arming sources are republished every
+    // frame. Without this the pass re-arms, re-fails and re-logs twice a frame forever.
+    return fx && !fx->froxel_failed &&
+           (fx->fog_enabled || fx->water_medium != 0 || fx->local_fog_count > 0);
+}
+
 bool postfx_wants_aux_gbuffer(const PostFX* fx) {
     // Attachment 2 carries motion vectors (.xy, for TAA reprojection) and linear
     // view-Z (.z, for GTAO position reconstruction). Produce it whenever either
@@ -1970,8 +1993,8 @@ bool postfx_wants_aux_gbuffer(const PostFX* fx) {
     // Aerial perspective indexes its volume by the same linear Z, so it forces
     // the buffer for the same reason fog does. Keyed on the published volume
     // rather than a toggle: with no sky there is nothing to composite.
-    return fx && (fx->taa_enabled || fx->ssao_enabled || fx->ssgi_enabled || fx->fog_enabled ||
-                  fx->water_medium != 0 || fx->motion_blur_enabled ||
+    return fx && (fx->taa_enabled || fx->ssao_enabled || fx->ssgi_enabled ||
+                  postfx_has_medium(fx) || fx->motion_blur_enabled ||
                   fx->contact_shadows_enabled || fx->aerial_volume != 0);
 }
 
@@ -2167,26 +2190,29 @@ static void upload_fog_uniforms(PostFX* fx, UniformManager* u, mat4 projection, 
     uniform_set_float(u, "waterLevelY", fx->water_level_y);
     uniform_set_vec3(u, "waterExtinction", fx->water_extinction);
     uniform_set_vec3(u, "waterInscatter", fx->water_inscatter);
-    // The cloud deck, published by sky_publish_to_postfx. Extent 0 is the single off state:
-    // no deck, no march yet, or shadows switched off, all reach the shader the same way.
-    // Unit set here as well as at init: the seed runs once at program creation, and a sampler
-    // that missed it silently defaults to unit 0, which at inject time holds whatever the last
-    // bind left there.
-    uniform_set_int(u, "cloudShadowTex", 4);
-    uniform_set_float(u, "cloudShadowTile", fx->cloud_shadow_tex ? fx->cloud_shadow_tile : 0.0f);
+    // The cloud deck, published by sky_publish_to_postfx. Tile 0 is the single off state --
+    // no deck, no march yet, or shadows switched off all reach the shader as that one value,
+    // because the publisher clears it rather than leaving it stale. The sampler unit is
+    // seeded once at program creation, like every other sampler on this program.
+    uniform_set_float(u, "cloudShadowTile", fx->cloud_shadow_tile);
     uniform_set_float(u, "cloudShadowShellY", fx->cloud_shadow_shell_y);
-    uniform_set_vec3(u, "cloudShadowSun", fx->cloud_shadow_sun);
-    // Local volumes. Only the live entries are uploaded: the shader loops to the count,
-    // so the tail is never read and pushing it would cost uniform traffic for nothing.
+    uniform_set_vec2(u, "cloudShadowShear", fx->cloud_shadow_shear);
+    uniform_set_int(u, "cloudShadowLight", fx->cloud_shadow_light);
+    // Local volumes, ranged like the light arrays below rather than one name per element:
+    // the destinations are contiguous, and a name built per element is the one shape
+    // warn_if_array_shorter cannot check. Only the live entries go up; the shader loops to
+    // the count, so the tail is never read.
     uniform_set_int(u, "localFogCount", fx->local_fog_count);
-    for (int i = 0; i < fx->local_fog_count; i++) {
-        char name[48];
-        snprintf(name, sizeof(name), "localFogCenterDensity[%d]", i);
-        uniform_set_vec4(u, name, fx->local_fog_center_density[i]);
-        snprintf(name, sizeof(name), "localFogExtentFeather[%d]", i);
-        uniform_set_vec4(u, name, fx->local_fog_extent_feather[i]);
-        snprintf(name, sizeof(name), "localFogTint[%d]", i);
-        uniform_set_vec4(u, name, fx->local_fog_tint[i]);
+    if (fx->local_fog_count > 0) {
+        GLint loc = uniform_location(u, "localFogCenterDensity[0]");
+        if (loc >= 0)
+            glUniform4fv(loc, fx->local_fog_count, (const GLfloat*)fx->local_fog_center_density);
+        loc = uniform_location(u, "localFogExtentFeather[0]");
+        if (loc >= 0)
+            glUniform4fv(loc, fx->local_fog_count, (const GLfloat*)fx->local_fog_extent_feather);
+        loc = uniform_location(u, "localFogTint[0]");
+        if (loc >= 0)
+            glUniform3fv(loc, fx->local_fog_count, (const GLfloat*)fx->local_fog_tint);
     }
     uniform_set_float(u, "anisotropy", fx->fog_anisotropy);
     uniform_set_float(u, "sunBoost", fx->fog_sun_boost);
@@ -2348,11 +2374,15 @@ static void postfx_build_fog_volume(PostFX* fx, mat4 projection, mat4 view, bool
     glBindTexture(GL_TEXTURE_2D_ARRAY, fx->fog_punctual_shadow_maps);
     glActiveTexture(GL_TEXTURE3);
     glBindTexture(GL_TEXTURE_3D, fx->froxel_scatter[prev]);
-    // The cloud deck's sun transmittance. Bound unconditionally, including as 0, so the unit
-    // never points at whatever a previous pass left on it; the shader reads it only when
-    // cloudShadowTile is nonzero.
+    // The cloud deck's sun transmittance, or a 1x1 white stand-in when there is no deck.
+    //
+    // The stand-in rather than texture 0, which was the obvious way to write this and is
+    // MEASURABLY worse: an incomplete texture bound to a live sampler makes this driver
+    // substitute per draw, and the substitution costs more than sampling a real texture.
+    // White is the transmittance identity, so the value is right even for a reader that
+    // ignores cloudShadowTile -- the unit is never stale and never incomplete.
     glActiveTexture(GL_TEXTURE4);
-    glBindTexture(GL_TEXTURE_2D, fx->cloud_shadow_tex);
+    glBindTexture(GL_TEXTURE_2D, fx->cloud_shadow_tex ? fx->cloud_shadow_tex : fx->white_tex);
     glActiveTexture(GL_TEXTURE0);
     upload_fog_uniforms(fx, iu, projection, inv_view);
     uniform_set_int(iu, "froxelDepth", fx->froxel_built_z);
@@ -2398,14 +2428,11 @@ static void postfx_run_atmosphere(PostFX* fx, GLuint canvas_fbo, bool aux_writte
                                   bool taa_resolving, mat4 projection, mat4 view) {
     // Both need the aux buffer: it is the only source of the linear depth the
     // composite indexes by.
-    // The union of everything that puts a medium in the volume: the app's height fog, a
-    // submerged water body, and any authored local volume. The latter two arm the pass
-    // this way rather than by setting fog_enabled, which belongs to the app and the GUI
-    // and is never cleared per frame -- writing it here would leave fog on for good after
-    // one frame that had a volume in it.
-    const bool fog_on =
-        (fx->fog_enabled || fx->water_medium != 0 || fx->local_fog_count > 0) &&
-        postfx_ensure_froxel_targets(fx);
+    // Water and local volumes arm the pass through postfx_has_medium rather than by
+    // setting fog_enabled, which belongs to the app and the GUI and is never cleared per
+    // frame -- writing it here would leave fog on for good after one frame that had a
+    // volume in it.
+    const bool fog_on = postfx_has_medium(fx) && postfx_ensure_froxel_targets(fx);
     // Suppressed while submerged: the volume holds the sky-view integral, and that is
     // air the sight line never crosses down there.
     const bool aerial_on = fx->aerial_volume != 0 && !fx->water_suppress_aerial;

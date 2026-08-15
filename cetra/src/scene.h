@@ -242,7 +242,7 @@ void scene_mark_materials_dirty(Scene* scene);
 // wind (scene-owned; freed in free_scene). Replaces any existing wind.
 void set_scene_wind(Scene* scene, struct Wind* wind);
 
-// fog volumes. Returns the new count, or -1 when the array is full.
+// fog volumes. 0 on success, -1 when the array is full, as every add_*_to_scene above.
 int add_fog_volume_to_scene(Scene* scene, const FogVolume* volume);
 // Copy this frame's volumes onto PostFX. Mirrors water_publish_to_postfx: the medium
 // hands PostFX flat POD and PostFX never learns that a Scene exists.

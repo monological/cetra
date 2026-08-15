@@ -119,8 +119,8 @@ def scaled_copy(src, dst, factor):
     cscn_copy(src, dst, scale)
 
 
-def render(scene, out, extra):
-    cmd = [RENDER, "-m", scene, "-x", "-f", "30", "-W", "400", "-H", "300", "-S", out]
+def render(scene, out, extra, frames=30):
+    cmd = [RENDER, "-m", scene, "-x", "-f", str(frames), "-W", "400", "-H", "300", "-S", out]
     r = subprocess.run(cmd + extra, capture_output=True, text=True)
     if r.returncode != 0 or not os.path.exists(out):
         return r.stdout + r.stderr
@@ -2837,14 +2837,16 @@ CLOUDSHADOW_FIXTURE = "aerial_fixture.gltf"
 # over this band against 0.0013 on the terrain below it. An arm reading the ground would
 # be measuring the surface half, which is deferred (spec 11.39, the D0 verdict).
 CLOUDSHADOW_BAND = [(0.02 + 0.12 * i, 0.05, 0.12 + 0.12 * i, 0.33) for i in range(8)]
-# The deck must remove light from the medium under it. Measured 5.3% of mean luminance;
-# a wide floor, because the arm's job is direction and presence.
+# The deck must remove light from the medium under it. Measured shaded/lit 0.8469 over this
+# band; a wide floor, because the arm's job is direction and presence.
 CLOUDSHADOW_DARKEN_MAX = 0.99
 # ...and it must remove DIFFERENT amounts in different places. This is the arm that
 # actually reads the map's contents rather than inferring them: a lookup returning a
 # constant -- a broken shear, a dead texture, a uniform fallback -- still darkens the
-# frame and still passes the arm above. Measured spread/mean 0.63 across the band.
+# frame and still passes the arm above. Measured spread/mean 0.9013 across the band.
 CLOUDSHADOW_SPREAD_MIN = 0.15
+# Same accumulator the fog-volume fixture needs 60 frames for; these arms drive it too.
+CLOUDSHADOW_FRAMES = 60
 
 
 def run_cloud_shadow_gate(workdir):
@@ -2869,8 +2871,8 @@ def run_cloud_shadow_gate(workdir):
     base = ["--clouds", "--no-auto-exposure", "-E", "1.0"]
     on = os.path.join(workdir, "cloudshadow_on.ppm")
     off = os.path.join(workdir, "cloudshadow_off.ppm")
-    err = render(scene, on, base + ["--fog"]) or \
-        render(scene, off, base + ["--fog", "--no-cloud-shadows"])
+    err = render(scene, on, base + ["--fog"], frames=CLOUDSHADOW_FRAMES) or \
+        render(scene, off, base + ["--fog", "--no-cloud-shadows"], frames=CLOUDSHADOW_FRAMES)
     if err:
         print(f"  cloudshadow-dark ERROR render failed: {err.strip()[-200:]}")
         return ["cloudshadow-dark"]
@@ -2906,7 +2908,8 @@ def run_cloud_shadow_gate(workdir):
 
     a = os.path.join(workdir, "cloudshadow_nofog_a.ppm")
     b = os.path.join(workdir, "cloudshadow_nofog_b.ppm")
-    err = render(scene, a, base) or render(scene, b, base + ["--no-cloud-shadows"])
+    err = render(scene, a, base, frames=CLOUDSHADOW_FRAMES) or \
+        render(scene, b, base + ["--no-cloud-shadows"], frames=CLOUDSHADOW_FRAMES)
     if err:
         print(f"  cloudshadow-nofog ERROR render failed: {err.strip()[-200:]}")
         return failures + ["cloudshadow-nofog"]
@@ -2939,9 +2942,25 @@ FOGVOL_DARKEN_MAX = 0.92
 # A white tint must leave the air's own colour alone, so the untinted box stays neutral.
 FOGVOL_NEUTRAL_EPS = 0.01
 # The warm box authors tint b=0.25 against the white box's 1.0 at EQUAL density, so blue
-# has to fall relative to red. Measured 0.961 against the white box's 1.000; 0.985 is a
+# has to fall relative to red. Measured 0.9164 against the white box's 1.0000; 0.985 is a
 # wide floor that still fails the tint being dropped entirely.
 FOGVOL_TINT_MAX = 0.985
+# KNOWN COVERAGE GAP, filed rather than guessed at (spec 11.39).
+#
+# None of the arms above can see the SIGMA-WEIGHTED combination. This fixture authors no
+# global fog, so airSigma is 0 in every cell and the fold reduces to `S *= tint` exactly --
+# which is the implementation the spec argues against, and it would pass all four.
+#
+# The obvious repair does NOT work, and the reason is worth recording because it is not
+# obvious: adding global fog and asserting the tint read lands between the no-air value and
+# 1.0 fails, because air changes TWO things at once. It dilutes the source function toward
+# white (the effect the arm wants), and it raises the strip's total optical depth, so a
+# larger share of the pixel is tinted in-scatter and a smaller share is untinted backdrop.
+# The second effect dominates and moves the read the OTHER way -- measured B/R rel 0.9159
+# with no air against 0.8917 with air at a comparable density.
+#
+# A valid instrument has to hold the depth mix fixed while varying only the air fraction,
+# which this fixture's geometry cannot express. Left unbuilt.
 
 
 def run_fog_volume_gate(workdir):
@@ -2962,15 +2981,23 @@ def run_fog_volume_gate(workdir):
       fogvol-off      --no-fog-volumes returns the frame to no medium: the box strips
                       read the gap value again. The inverse arm, and it also proves the
                       volume ARMED the pass, since this scene authors no global fog.
+    None of these can see the sigma-weighted COMBINATION -- see the gap filed above the
+    constants; the fold degenerates to S *= tint on a fixture with no global fog.
+
+    --no-ssao on every arm, and that is load-bearing rather than hygiene. GTAO also asks
+    for the aux G-buffer, and the atmosphere pass returns early without it -- so with GTAO
+    on, these arms cannot tell "the volume armed the pass" from "something else kept the
+    depth alive and the volume rode along". Run without it and the arms test their own
+    subject. Dither off because the reads are channel ratios where a +/-1 LSB is large.
     """
     scene = os.path.join(ROOT, "assets", FOGVOL_FIXTURE)
     if not os.path.exists(scene):
         print(f"  fogvol-density SKIP  ({FOGVOL_FIXTURE} not present)")
         return []
 
-    base = ["-f", FOGVOL_FRAMES, "--no-auto-exposure", "-E", "1.0", "--no-dither"]
+    base = ["--no-auto-exposure", "-E", "1.0", "--no-dither", "--no-ssao"]
     out = os.path.join(workdir, "fogvol_on.ppm")
-    err = render(scene, out, base)
+    err = render(scene, out, base, frames=FOGVOL_FRAMES)
     if err:
         print(f"  fogvol-density ERROR render failed: {err.strip()[-200:]}")
         return ["fogvol-density"]
@@ -3009,7 +3036,7 @@ def run_fog_volume_gate(workdir):
         failures.append("fogvol-tint")
 
     off = os.path.join(workdir, "fogvol_off.ppm")
-    err = render(scene, off, base + ["--no-fog-volumes"])
+    err = render(scene, off, base + ["--no-fog-volumes"], frames=FOGVOL_FRAMES)
     if err:
         print(f"  fogvol-off     ERROR render failed: {err.strip()[-200:]}")
         return failures + ["fogvol-off"]

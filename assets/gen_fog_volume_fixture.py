@@ -2,9 +2,9 @@
 """Generate assets/fog_volume_fixture.gltf + .cscn, the local-fog-volume instrument
 (spec 11.39).
 
-ONE emissive backdrop quad, and the whole subject of the fixture is in the .cscn: three
-boxes of denser air standing in front of it, in a row, with gaps between them. Every read
-is therefore in-frame, against a neighbouring strip of the same backdrop:
+ONE emissive backdrop quad, and the whole subject of the fixture is in the .cscn: two
+boxes of denser air standing in front of it, with a gap between them. Every read is
+therefore in-frame, against a neighbouring strip of the same backdrop:
 
     left box    density d, white tint   ->  against the gap:  does a volume scatter at all
     right box   density d, warm tint    ->  against the LEFT box: does tint act, at equal

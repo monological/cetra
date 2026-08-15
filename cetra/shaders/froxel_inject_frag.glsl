@@ -48,7 +48,10 @@ uniform float waterLevelY;
 uniform vec3 waterExtinction; // per-channel; reduced to its mean here, see below
 uniform vec3 waterInscatter;  // scene radiance, pre-exposed with everything else
 /*
- * Cloud transmittance toward the sun (spec 11.39). Texture 0 / cloudShadowTile 0 = no deck.
+ * Cloud transmittance toward the sun (spec 11.39). cloudShadowTile 0 = no deck.
+ *
+ * NOT a fourth medium -- a visibility term for one light, which is why it multiplies into
+ * fogVisibility below rather than into sigma. The deck occludes the sun; it does not scatter.
  *
  * Exact for a horizontal shell rather than an approximation of one: the sun ray from P crosses
  * the deck at a single point, so shearing P up to cloudShadowShellY and reading there IS the
@@ -60,7 +63,8 @@ uniform vec3 waterInscatter;  // scene radiance, pre-exposed with everything els
 uniform sampler2D cloudShadowTex;
 uniform float cloudShadowTile;   // world units the map's period covers; 0 = no deck
 uniform float cloudShadowShellY; // world Y the map is indexed at
-uniform vec3 cloudShadowSun;     // TOWARD the sun -- lightDir[] below is the opposite
+uniform vec2 cloudShadowShear;   // world XZ travelled per unit of climb toward the sun
+uniform int cloudShadowLight;    // which light below the deck occludes; -1 = none
 
 /*
  * Local fog volumes (spec 11.39): boxes of denser air, for a smoky room or a dust shaft
@@ -75,7 +79,7 @@ uniform vec3 cloudShadowSun;     // TOWARD the sun -- lightDir[] below is the op
 uniform int localFogCount;
 uniform vec4 localFogCenterDensity[MAX_LOCAL_FOG]; // xyz world centre, w extinction added
 uniform vec4 localFogExtentFeather[MAX_LOCAL_FOG]; // xyz half-extent, w inward ramp width
-uniform vec4 localFogTint[MAX_LOCAL_FOG];          // rgb scattering colour, a unused
+uniform vec3 localFogTint[MAX_LOCAL_FOG];          // scattering colour
 
 uniform float anisotropy;    // Henyey-Greenstein g
 uniform float sunBoost;
@@ -244,27 +248,31 @@ void main() {
     }
 
     /*
-     * Local volumes. Each contributes extinction scaled by how far inside the box this
-     * cell sits, and carries that same weight into the tint sum, so a cell in the feather
-     * band is partly the box and partly the air around it.
+     * Every medium in this cell: an extinction, and the colour it scatters, accumulated
+     * together. Air seeds both -- its own tint is white, so it enters the sum as
+     * airSigma * 1 -- which is what stops air being a special case at the fold below.
+     *
+     * Each volume contributes extinction scaled by how far inside the box this cell sits,
+     * and carries that same weight into the tint sum, so a cell in the feather band is
+     * partly the box and partly the air around it.
      *
      * The weight comes from the box's exact signed distance rather than a per-axis
      * product: a product feathers the corners twice and pinches them, which is visible
      * on any volume whose feather is a real fraction of its size -- and a dust shaft's
      * is, because the soft edge is the whole point of it.
      */
-    float localSigma = 0.0;
-    vec3 localTintSigma = vec3(0.0);
+    float sigma = airSigma;
+    vec3 sigmaTint = vec3(airSigma);
     for (int i = 0; i < localFogCount; i++) {
         vec3 q = abs(P - localFogCenterDensity[i].xyz) - localFogExtentFeather[i].xyz;
         float sd = length(max(q, vec3(0.0))) + min(max(q.x, max(q.y, q.z)), 0.0);
-        float feather = max(localFogExtentFeather[i].w, 1e-4);
-        float w = 1.0 - smoothstep(-feather, 0.0, sd);
+        // The feather arrives clamped away from zero by the publisher, so there is no
+        // per-cell max here: it is an invariant of the packing, not of this loop.
+        float w = 1.0 - smoothstep(-localFogExtentFeather[i].w, 0.0, sd);
         float s = localFogCenterDensity[i].w * w;
-        localSigma += s;
-        localTintSigma += localFogTint[i].rgb * s;
+        sigma += s;
+        sigmaTint += localFogTint[i] * s;
     }
-    float sigma = airSigma + localSigma;
 
     /*
      * How much of the deck this cell sits under. Hoisted: one lookup serves every light,
@@ -276,19 +284,18 @@ void main() {
      * the fog, wherever the shear runs past the last texel.
      */
     float cloudSun = 1.0;
-    if (cloudShadowTile > 0.0 && cloudShadowSun.y > 0.0) {
-        vec2 hit = P.xz + cloudShadowSun.xz * ((cloudShadowShellY - P.y) / cloudShadowSun.y);
+    if (cloudShadowTile > 0.0) {
+        vec2 hit = P.xz + cloudShadowShear * (cloudShadowShellY - P.y);
         cloudSun = texture(cloudShadowTex, hit / cloudShadowTile).r;
     }
 
     vec3 S = ambientColor;
     for (int j = 0; j < numLights; j++) {
         float phase = phaseHG(dot(lightDir[j], -rayDir), anisotropy) * sunBoost;
-        // Only the sun is under the clouds. Identified by direction rather than by slot: the
-        // sky couples itself to whichever light it was given, and this shader is never told
-        // which one that was. lightDir is travel, cloudShadowSun points back at it.
-        float isSun = step(0.999, dot(-lightDir[j], cloudShadowSun));
-        float cloud = mix(1.0, cloudSun, isSun);
+        // The deck occludes one light and the publisher says which, so this is a slot
+        // compare rather than a direction compare -- exact where a dot needed an epsilon,
+        // and -1 states "the sun is not in this list", which a direction cannot.
+        float cloud = (j == cloudShadowLight) ? cloudSun : 1.0;
         S += lightColor[j] * (phase * cloud * fogVisibility(j * cascadeCount, P));
     }
 
@@ -354,7 +361,7 @@ void main() {
     }
 
     /*
-     * Fold the local volumes' colour in, SIGMA-WEIGHTED rather than added.
+     * Fold the media's colour in, SIGMA-WEIGHTED rather than added.
      *
      * The integrate pass reads this cell's rgb as the medium's source function, not as
      * radiance already scaled by how much medium is present -- so two media sharing a
@@ -362,10 +369,15 @@ void main() {
      * Adding them would count the same light once per medium and make a box brighten
      * simply for existing.
      *
-     * Air's own tint is white, so it enters the average as airSigma * 1.
+     * The guard is a NaN guard, not a feature test: with no volume anywhere and a cell
+     * below floorY, both terms are exactly zero and this is 0/0. Do not replace it with
+     * max(sigma, eps) -- airSigma legitimately falls below any such epsilon far above the
+     * floor, and that form darkens thin air instead. Testing localFogCount rather than
+     * sigma keeps the whole thing off a uniform branch in the overwhelmingly common case
+     * of no volumes at all.
      */
-    if (localSigma > 0.0)
-        S *= (vec3(airSigma) + localTintSigma) / sigma;
+    if (localFogCount > 0 && sigma > 0.0)
+        S *= sigmaTint / sigma;
 
     // Scene radiance -> working space HERE, upstream of the clamp, for the same
     // reason pbr_frag pre-exposes its per-light radiance rather than its final
