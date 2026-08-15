@@ -182,10 +182,40 @@ Occupancy of unit 6 across the frame, which is the map to reason from:
 | late / transparent | refraction resolve (read only where transmission > 0) |
 | OIT accumulate | moment atlas |
 
-Consumers read in the opaque pass (a cloud shadow map, light cookies, detail/wetness maps) can share
-that free slot but contend with each other for it. A consumer read in the LATE pass — sampling the
-froxel volume from the transparent pass — cannot, because refraction is live there; that one still
-needs a real unit and is the honest remaining customer for D0 besides D1.
+**Unit 6 is the ONLY globally idle slot, and "globally" is the load-bearing word.** A full sweep of
+every binding site:
+
+| unit | tenant | bound during the opaque pass? |
+|---|---|---|
+| 0, 1, 2, 5 | albedo, normal, masks, emissive | yes, effectively every draw |
+| 3, 4, 8 | clearcoat normal, POM height, sheen | **per-MATERIAL** — only where that material has one (`render.c:241, 246, 257`) |
+| **6** | scene colour | **no — explicitly made unavailable** (`render.c:1123`) |
+| 7 | LTC tables | yes, unconditional once the tables exist (`ltc.c:53`) |
+| 9, 11, 12 | Charlie env, irradiance, prefilter | yes, unconditional once IBL exists (`ibl.c:750-764`) |
+| 10, 15 | CSM, punctual shadows | yes, wherever shadows exist |
+| 13 | BRDF LUT | yes, every frame |
+| 14 | skybox / GI atlas | only with a converged volume (`gi_volume.c:112`) — idle by default |
+
+Units 3, 4 and 8 look free and are not usable. They are per-*material*, so a global texture aliased
+there would vanish on any draw that happens to carry a clearcoat, height or sheen map — a
+content-dependent hole, which is not the same thing as exclusivity.
+
+**And an alias must match the declared sampler TYPE**, because `#define x sceneColorTex` makes `x`
+*be* that `sampler2D`. That constraint decides more than the pass does:
+
+| consumer | pass it reads in | fits the idle slot? |
+|---|---|---|
+| cloud shadow map | opaque | **yes** — a 2D R16F onto a `sampler2D` |
+| decal atlas | opaque | **only as a flat 2D atlas** with computed tile UVs. As a `sampler2DArray` it needs an idle array, and all four (2, 7, 10, 15) are read during opaque shading. `gi_volume.glsl`'s `giTileUV` is the in-tree pattern for doing it flat |
+| light cookies | opaque **and** late | same type problem, and they want transparent receivers too |
+| froxel volume from the transparent pass | late | **no.** A `sampler3D`, in the one pass where refraction is live. Blocked twice over |
+
+So the honest remaining customer for a freed unit is the froxel-in-transparent item, and D1 only if a
+flat atlas is refused. Note also a SECOND conditionally-free routing on unit 6: the refraction read is
+guarded by `transmission > 0`, so a non-transmissive late-pass draw does not touch it. That is real
+capacity and should be treated as a last resort — `pbr_frag.glsl:239-243` already calls the present
+arrangement "forced rather than clever", and a third routing on one unit is where it stops being
+auditable.
 
 **Unit 11 is the one with a way out, and it is worth only one unit.** `pbr_frag.glsl:1766` already
 selects between the irradiance cube and the GI atlas (`giEnabled > 0 ? giSampleIrradiance(...) :
@@ -655,12 +685,12 @@ to new data by adding a layer". So:
 |---|---|
 | detail / wetness maps | **nothing.** Per-texel material data at canonical size *is* the mask array. Never blocked |
 | cloud shadow map (D2's surface half) | **nothing.** Read in the opaque pass, where unit 6 is idle — see the ledger's third escape |
-| decals + light cookies | plausibly ONE `sampler2DArray` between them, and they could take unit 6's opaque slot instead of a freed unit — but then they contend with the cloud shadow map for it |
+| decals + light cookies | **a flat 2D atlas gets them the idle opaque slot too**; only the `sampler2DArray` form needs a freed unit, since every array in the shader (2, 7, 10, 15) is read during opaque shading. Cookies additionally want transparent receivers, where the slot is not free |
 | froxel volume in the transparent pass | **a real unit, no exceptions.** Read in the LATE pass where refraction is live, so no idle slot exists, and a `sampler3D` cannot share a 2D declaration with anything |
 
-So of the five things this wall was said to block, **two are not blocked at all**, two could share one
-idle slot if they do not both want it, and exactly one genuinely needs a unit freed. Together with
-D1's decal atlas that leaves D0 with two honest customers rather than five.
+So of the five things this wall was said to block, **two are not blocked at all**, two are blocked
+only by a choice of texture layout, and exactly one is blocked outright. The sweep in the ledger
+section above has the per-unit occupancy and the type constraint that produces this.
 
 **The wall's own framing is what misled here, and is worth restating.** "Sampler-saturated 16/16" is
 about *declarations*, which is a link-time property. Blocking is about *occupancy at the moment of
@@ -917,10 +947,11 @@ Cost scales linearly in N, so v1 is N=2 with a per-light distance cap.
 
 ## Track D — Surfaces & environment
 
-*Corrected: this preamble named two dependents and only one of them is real. D2's ground-shadow half
-is read in the OPAQUE pass, where unit 6 sits idle, so it needs no free unit — see Wall 1's third
-escape. D1 still does, because a decal atlas is read on every opaque draw and would contend for the
-same slot rather than fit beside it.*
+*Corrected twice, and neither dependent survived. Both D1 and D2's ground-shadow half read in the
+OPAQUE pass, where unit 6 sits idle and takes a `#define` alias — so neither needs a freed unit. D2's
+is a plain 2D map and fits outright; D1 fits if its atlas is flat rather than a `sampler2DArray`.
+What Wall 1 actually bites is narrower than this preamble claims: a consumer read in a pass where
+every unit is already live. See the ledger's occupancy sweep.*
 
 Where Wall 1 actually bites. D1 and D2's ground-shadow half both need a texture inside `pbr_frag`,
 so **D0 is a hard prerequisite for them** and should not be started until one of them is scheduled
@@ -956,9 +987,15 @@ cannot dodge it.*
 is provably absent whenever refraction or MBOIT runs. It does not raise the count, it lets one
 specific consumer squeeze in under a constraint that is invisible at link time and fails as a wrong
 image rather than an error. Wall 1 therefore does not fall here; it becomes a one-slot budget, and
-per the table under Wall 1 that slot has exactly two honest customers left — D1's decal atlas, and
-sampling the froxel volume from the transparent pass. Everything else on the wall's list either was
-never blocked or can take unit 6's idle opaque slot instead.
+per the ledger's occupancy sweep that slot has **one** honest customer left — sampling the froxel
+volume from the transparent pass, which is a `sampler3D` read in the one pass where refraction is
+live. D1 joins it only if a flat 2D decal atlas is refused in favour of a `sampler2DArray`.
+Everything else on the wall's list either was never blocked or can take unit 6's idle opaque slot.
+
+**Which means D0 currently has no SCHEDULED consumer at all.** That is not an argument against
+building it — headroom before D1 is worth something — but it does mean the item has to be judged on
+its own measurement rather than on what it unblocks, and the just-in-time rule this entry cites is
+now pointing the other way.
 
 **2. The fold is about TYPE, not storage, and that changes its cheapest shape.** `pbr_frag.glsl:1766`
 already reads `giEnabled > 0 ? giSampleIrradiance(...) : texture(irradianceMap, N).rgb` — the two are
@@ -1043,6 +1080,14 @@ lighting loop, modifying albedo / normal / roughness in place.
 **Hard-blocked on D0** — a decal atlas is a texture in `pbr_frag`, which is the one thing the ledger
 has none of. Second cost worth pricing before committing: decals are the first feature that makes the
 forward shader's cost data-dependent per pixel in a way clustering cannot bound tightly.
+
+*Softened by the ledger sweep: this is blocked by a choice of texture LAYOUT, not by the ledger.
+Decals are read in the opaque pass, where unit 6 is idle, so a **flat 2D atlas with computed tile
+UVs** takes the alias and needs no freed unit at all — `gi_volume.glsl`'s `giTileUV` is the in-tree
+pattern, and the GI atlas is itself a flat 2D atlas of tiles for the same reason (hundreds of tiles,
+one sampler). Only the `sampler2DArray` form is blocked, because every array declared in the shader
+(2, 7, 10, 15) is read during opaque shading. Price the flat atlas before assuming D0 is a
+prerequisite; the array's convenience is real but it is convenience, not necessity.*
 **Refs.** Persson, *Practical Clustered Shading* (SIGGRAPH 2013 course); Wronski,
 *Screen-Space Decals* (GDC 2014).
 **Depends on:** A1 (shipped), **D0 (hard)**.
@@ -1551,8 +1596,8 @@ not scheduled.
 | 29 | C4 Clustered specular probes | L | Diffuse GI got a spatial structure in A4; specular still has exactly one probe. Reuses A1's grid and A4's atlas. |
 | 30 | E5 Instancing + LOD + sorting | L | **DONE, two limbs of three (11.28 / 11.29).** Wall 2 mostly removed: `abandoned_window_shadowed` shadow CPU −83%, frame −38%, 2,148 draws → 272. Sorting deferred as unfalsifiable against the corpus, which `apps/forest` has since falsified — moved to E6. Established that scatter *order* decides whether batching happens at all (2,368 → 1,287 draws for identical geometry), that LOD fights instancing on the `(mesh, lod)` key non-monotonically, and that "meshoptimizer locks mesh borders" — in three headers and spec 11.28 — was wrong from the start. |
 | 31 | **E6 Depth prepass + opaque ordering** | M | **DONE (11.30 + 11.31).** `apps/forest` opaque **306 → 169 ms (−45%)** from the ORDERING alone, depth complexity 1.93 → 1.08. Masked geometry now prepasses too (11.31, via a `depthOnly` mode in `pbr_frag`) and reaches a better 0.72 — and is still **slower** than the sort, because a full extra geometry pass costs more than the shading it saves. The two are substitutes, not complements: 11.30's "worth more together" was an artefact of the masked exclusion. Ordering ships on, the prepass off, with a gate arm asserting the prepass **costs** on a scene with no overdraw. 11.30's own figures were doubled by a budget that trusted `msaa_samples` over the driver, and its −64% interior does not reproduce. Between them these two specs withdrew seven claims — every one from an instrument that had never been checked against a scene with a known answer. |
-| 32 | D0 Free two sampler units | M | Foundation only — schedule it **with** D1 or D2's surface half, never before, per the just-in-time rule. **Explored after 11.40 and it frees ONE unit, not two** (16/16 → 15/16): the irradiance fold holds, the unit-6 share is a conditional slot rather than a freed one, and the second real candidate (unit 4, POM height into the mask array) costs POM half its resolution on `pilot` to buy a slot nothing currently spends. See D0 for the five corrections. **And it lost its best customer**: D2's surface half turned out not to need it, so the two honest consumers are D1's decal atlas and sampling the froxel volume from the transparent pass — the one read that happens in a pass where no unit is idle. |
-| 33 | D1 Clustered decals | L | Largest environment-art gap. Hard-blocked on D0. |
+| 32 | D0 Free two sampler units | M | Foundation only — schedule it **with** D1 or D2's surface half, never before, per the just-in-time rule. **Explored after 11.40 and it frees ONE unit, not two** (16/16 → 15/16): the irradiance fold holds, the unit-6 share is a conditional slot rather than a freed one, and the second real candidate (unit 4, POM height into the mask array) costs POM half its resolution on `pilot` to buy a slot nothing currently spends. See D0 for the five corrections. **And the ledger sweep left it with no SCHEDULED consumer at all**: D2's surface half never needed it, and D1 can dodge it with a flat 2D decal atlas rather than a `sampler2DArray`. The one consumer that genuinely cannot dodge it is sampling the froxel volume from the transparent pass — a `sampler3D` in the one pass where refraction is live — and that is not booked. Judge the item on its own measurement, not on what it unblocks. |
+| 33 | D1 Clustered decals | L | Largest environment-art gap. ~~Hard-blocked on D0.~~ **Blocked by a texture-layout choice, not by the ledger**: decals read in the opaque pass where unit 6 is idle, so a flat 2D atlas with computed tile UVs takes the alias and needs no freed unit. Only the `sampler2DArray` form is blocked. Price the flat atlas first. |
 | 34 | E8 Fix the wind cull | S | Small, self-contained, closes a real hole in E5's culling — wind geometry is currently exempt from the camera frustum *and* every cascade. Unblocks wind on scattered content, which `apps/forest` gave up to avoid it. |
 | 34b | **E9 One sample means one sample** | M | **DONE (11.34).** `apps/forest` opaque **150.9 → 121.6 ms (−19.4%)** against a 0.23% floor, with byte-identical submission integers — the same work, cheaper. One branch in the one allocator plus one at the depth renderbuffer flips the scene, OIT and moment FBOs in lockstep, since they share the depth attachment. The row's original prescription was wrong twice: there is no `sampler2DMS` anywhere in the corpus (11.17 rejected it), and postfx reaches the scene target only through blits, so the GLSL surface was zero files and postfx changed nothing. Priced before built with a new `--msaa <n>` lever, which also decomposed the first confounded A/B: A2C alone costs 202 ms of forest's opaque row (fragment-set explosion, headless-only), a sample ~93 ms on that inflated set. TAA-only edges verified by crops (raiden groom, forest canopy — indistinguishable), all 23 goldens 0 px, and MBOIT's moment-resolve bias (11.17) is now absent on the TAA path for free. |
 | 35 | ~~D3 Tessellated water~~ | — | **SHIPPED (11.32, 11.33, 11.35) and it spent no tessellation.** The mesh went through two screen-space schemes instead: clipmap rings (11.33), then a **projected grid** (11.35) after the rings turned out to weld reach to near-field detail — the snap that makes them tile is the same thing that kept the surface 5° short of the horizon while a comment claimed otherwise. The stage this item was scheduled to open is still closed. Reaching the horizon then moved the problem from the MESH to filtering: distant cells cover more than a wave period, so each wave model drops what sits under its footprint and hands the slope energy to roughness — a BRDF answer to a geometry question. See D3. |
