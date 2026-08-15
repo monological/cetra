@@ -19,8 +19,12 @@ The rule: a gate that pins exposure cannot see a space-mixing bug.
 """
 
 import argparse
+import base64
+import glob
+import inspect
 import json
 import math
+import struct
 import re
 import os
 from itertools import groupby
@@ -3236,8 +3240,12 @@ def run_fog_volume_gate(workdir):
 def run_absorption_gate(workdir):
     """Volume absorption scales with path length, and only in the tinted channels.
 
-    Three arms, none implying the others:
+    Four arms, in the order they run, none implying the others:
 
+      absorb-panels the panels are IN the frame: bare backdrop in the gap reads bright
+                   against the thickest panel beside it. Presence first, because every
+                   arm below is an equality or a ratio and an empty frame satisfies two
+                   of the three.
       absorb-thin  the zero-thickness panel's green:red is 1.0. Fails an
                    implementation that absorbs by a constant instead of over the
                    authored path -- the failure mode where thin glass, a legal
@@ -3491,19 +3499,36 @@ WATER_CASCADES = 3
 WATER_FFT_IMPULSE_MAX = 1e-3
 
 # The analytic sun lobe (spec 11.42). The fixture's OWN framing cannot see it, and that is
-# geometry rather than an oversight: its sun sits at azimuth 135 and elevation 26, so the
-# mirror direction lands about 24 degrees below the bottom of a 42 degree frame -- measured
-# 0 px there with the lobe on and off. So the arm puts the sun ahead and low, which is the
-# geometry a glitter path needs and the one every photograph of one was taken in.
-WATER_GLITTER_SUN = {"sun_elevation": 14.0, "sun_azimuth": 180.0}
+# geometry rather than an oversight: the streak lands off to one side and largely behind the
+# ramp. So the arm puts the sun dead ahead and lower, which is the geometry a glitter path
+# needs and the one every photograph of one was taken in.
+#
+# NOTE the nested "sun" object, which is the shape parse_env reads. This override carried
+# FLAT sun_elevation/sun_azimuth keys until 11.43 and so moved nothing at all: the arm was
+# measuring the fixture's own sun and passing on it, reporting 26,334 px and a 1.52x box
+# against the 258,246 px and 13.90x it reads once the sun actually moves.
+#
+# 22 degrees puts the specular point at eye_y/tan(el) = 3.0 units in front of the eye, which
+# is clear of the ramp's near edge at z 2.2 -- and stays clear under BOTH ramp orientations,
+# since the flip only moves where the ramp goes under water further away.
+WATER_GLITTER_SUN = {"sun": {"elevation": 22.0, "azimuth": 180.0}}
 WATER_GLITTER_CAMERA = {"eye": [0.0, 1.6, 7.0], "target": [0.0, 0.55, 0.0], "fov": 45}
 # Spectral, because the lobe's width is the slope the surface stopped resolving and the
 # spectral path is where that is a measured quantity rather than four dropped octaves.
 WATER_GLITTER_WATER = {"waves": "fft"}
-# Measured 20,963 px. The lobe is ADDITIVE, so the second half asserts a direction as well
-# as a magnitude: a sun that darkened the sea would be a sign error passing a pixel count.
 WATER_GLITTER_MIN_PX = 5000
-WATER_GLITTER_BOX = (0.55, 0.28, 0.95, 0.40)
+# The box is DERIVED (_water_glitter_box) rather than written down. These two place it
+# below the horizon, as a fraction of frame height: the lobe is a streak from the specular
+# point to the horizon, and screen-space compression piles most of its energy into the rows
+# just under that line -- measured, half the brightening lands in rows 0.318 to 0.368 against
+# a horizon at 0.3189. The box this replaced spanned 0.28 to 0.40, so it straddled the
+# horizon, was 32% SKY, and could not tell a bright sea from a bright sky.
+WATER_GLITTER_BAND = (0.010, 0.060)
+WATER_GLITTER_HALF_W = 0.12
+# A ratio, not `lum_on > lum_off`. A strict inequality is satisfied by a lobe of 1e-9, so
+# the arm it replaces passed on a glitter path that was effectively switched off -- which
+# is exactly the state the dead sun override left it in.
+WATER_GLITTER_RATIO_MIN = 1.15
 
 # Persistent foam (spec 11.42). A ROUGH sea, because whitecaps are selected from the
 # horizontal map folding and the default 11.5 m/s state folds rarely enough that the signal
@@ -3512,22 +3537,43 @@ WATER_GLITTER_BOX = (0.55, 0.28, 0.95, 0.40)
 #
 # 90 frames, not 30: the accumulator has to have something to remember. At 30 the trail is
 # barely longer than the crest that made it.
-WATER_FOAM_SEA = {"waves": "fft", "windSpeed": 20.0, "level": 0.6, "extent": 70.0}
-WATER_FOAM_FRAMES = 90
+#
+# `level` 1.1 clears the ramp's highest point of 0.9, so nothing in the frame is dry and
+# the box below needs no notch cut round the wedge -- see _water_persist_variant.
+WATER_PERSIST_SEA = {"waves": "fft", "windSpeed": 20.0, "level": 1.1, "extent": 70.0}
+WATER_PERSIST_CAMERA = {"eye": [0.0, 3.2, 7.0], "target": [0.0, 0.9, -8.0], "fov": 42}
+WATER_PERSIST_FRAMES = 90
 # Open water only -- above the ramp's crest and below the horizon band, so no dry geometry
 # and no sky is inside it. The ramp is irrelevant to this arm: crest foam is a property of
 # the wave field, where the SHORE band next door is a property of the bed, needs
 # --water-bed dome, and is identically zero on this fixture without one.
 #
-# PERSIST rather than FOAM in the name, because WATER_FOAM_OPEN_BOX already exists for
-# water-shore-foam and is a different box on a different scene. The first version of this
-# reused that name, the later definition won, and the arm measured the shore box on an
-# open-water framing and read 0 -- a green-looking 0/0 rather than an error.
-WATER_PERSIST_OPEN_BOX = (0.05, 0.20, 0.95, 0.35)
-# Measured 6,608 -> 7,490 foam pixels (+13.3%) and 85,604 px over the frame. The ratio is
-# the load-bearing half: a count alone would pass on a sea that simply got brighter.
-WATER_FOAM_PERSIST_RATIO = 1.07
-WATER_FOAM_PERSIST_MIN_PX = 20000
+# WATER_PERSIST_* rather than WATER_FOAM_*, for all five of this arm's constants: the
+# WATER_FOAM_ family below belongs to water-shore-foam, a different arm reading different
+# boxes on a different scene. The first version of this box reused WATER_FOAM_OPEN_BOX
+# outright, the later definition won, and the arm measured the shore box on an open-water
+# framing and read 0 -- a green-looking 0/0 rather than an error. Renaming one constant
+# fixed that instance; keeping the whole set under its own prefix is what stops the next.
+#
+# The top edge is DERIVED from the horizon (_water_persist_box) rather than written down.
+# It was 0.20 against a horizon that sits at 0.2254 once `level` is raised to 0.6, so the
+# top 17% of the box was sky and the foam counts it reported were partly a count of bright
+# sky -- which moves with the sun and not with the accumulator.
+WATER_PERSIST_HORIZON_MARGIN = 0.015
+# 0.60 stops in the MID field, short of the rows the submerged ramp sits under. Measured
+# down the sweep: 1.37x over 1,623 px at 0.40, 1.78x over 1,791 at 0.50, 1.85x over 2,667
+# at 0.60, 2.37x over 2,667 at 0.75. Reaching further reads a stronger effect, and reads it
+# through more of the bed -- which is the one thing in this frame the ramp flip moves.
+WATER_PERSIST_BOX_BOTTOM = 0.60
+# Measured 2,667 -> 4,921 foam pixels (1.85x) and 102,128 px over the frame. It read 1.13x
+# while the box was 17% SKY, and the sky is what was diluting it.
+WATER_PERSIST_RATIO = 1.20
+WATER_PERSIST_MIN_PX = 20000
+# An absolute floor under the WITHOUT-history count, because a ratio has no scale: 1 -> 3
+# foam pixels is 3.00x and passes any ratio bar while describing a frame with no whitewater
+# in it at all. This is the number that says the instrument had something to measure, so it
+# is set well under the measured 2,667 rather than snug against it.
+WATER_PERSIST_MIN_FOAM_PX = 1500
 # And `level` is a field both paths can set, so authoring it must land in exactly the
 # same place the flag does. 0 px or one of them is lying.
 WATER_CSCN_LEVEL = 0.9
@@ -3768,8 +3814,125 @@ def _water_probe(extra, scene=None):
     return head, rows
 
 
+def _water_ramp_edges():
+    """The ramp's low and high edge midpoints, read out of the fixture's own glTF.
+
+    The ramp is the only geometry in this scene, and where it meets the water is what every
+    shoreline box in this group is placed against. Read rather than transcribed, for exactly
+    the reason _cscn_camera is read: turning the wedge round moved the waterline from screen
+    row 0.508 to 0.453 and left every hand-written box aiming at the old one, with two of
+    them still passing. A box derived from the mesh follows it instead.
+
+    Returned as (low, high) by HEIGHT, so which end is near and which is far comes from the
+    file rather than from an assumption this function makes about the orientation.
+    """
+    with open(os.path.join(ROOT, "assets", "water_fixture.gltf")) as f:
+        doc = json.load(f)
+    raw = base64.b64decode(doc["buffers"][0]["uri"].split(",", 1)[1])
+    prim = next(m["primitives"][0] for m in doc["meshes"] if m["name"] == "water_ramp")
+    acc = doc["accessors"][prim["attributes"]["POSITION"]]
+    view = doc["bufferViews"][acc["bufferView"]]
+    base = view.get("byteOffset", 0) + acc.get("byteOffset", 0)
+    corners = [struct.unpack_from("<3f", raw, base + i * 12) for i in range(acc["count"])]
+    lo, hi = min(corners, key=lambda p: p[1]), max(corners, key=lambda p: p[1])
+    # x = 0 -- the centre line. The wedge is a rectangle in plan, so its slope is the same
+    # along any line of constant x, and every box here is placed by height, not by width.
+    return (0.0, lo[1], lo[2]), (0.0, hi[1], hi[2])
+
+
+def _water_ramp_at(height):
+    """The point on the ramp's centre line at a given world height."""
+    lo, hi = _water_ramp_edges()
+    t = (height - lo[1]) / (hi[1] - lo[1])
+    return tuple(lo[i] + t * (hi[i] - lo[i]) for i in range(3))
+
+
+def _water_ramp_band(h0, h1, x0f, x1f):
+    """A fractional box spanning two heights ON THE RAMP, in the fixture's own framing.
+
+    Heights rather than depths because that is what the ramp is placed by: the waterline is
+    height 0, dry land is above it, and the shoaling bed is below. Which screen row each one
+    lands on is then the projection's business and not a constant anyone has to re-measure.
+    """
+    project = _projector(_cscn_camera(WATER_FIXTURE), 400.0, 300.0)
+    rows = sorted(project(_water_ramp_at(h))[1] / 300.0 for h in (h0, h1))
+    return (x0f, rows[0], x1f, rows[1])
+
+
+def _water_persist_box():
+    """The open-water band this arm counts foam in, with its top edge on the horizon.
+
+    Derived because `level` is what moves it, and this arm raises the level to drown the
+    ramp: a hand-written top edge of 0.20 sat 0.025 of a frame height ABOVE the horizon it
+    was meant to sit under, so 17% of the box was sky and the foam counts were partly a
+    count of bright sky -- which moves with the sun and not with the accumulator.
+    """
+    cam = {"eye": tuple(float(v) for v in WATER_PERSIST_CAMERA["eye"]),
+           "target": tuple(float(v) for v in WATER_PERSIST_CAMERA["target"]),
+           "fovy_deg": float(WATER_PERSIST_CAMERA["fov"])}
+    w, h = 400.0, 300.0 # render()'s size; only the projection matters here
+    horizon = _projector(cam, w, h)((0.0, float(WATER_PERSIST_SEA["level"]), -1.0e6))[1] / h
+    return (0.05, horizon + WATER_PERSIST_HORIZON_MARGIN, 0.95, WATER_PERSIST_BOX_BOTTOM)
+
+
+def _water_glitter_box():
+    """Where the sun's streak lands, derived from the framing the arm authors.
+
+    Anchored to the HORIZON rather than to the specular point, because on a rough sea the
+    lobe is a streak running from one to the other and screen-space compression puts most
+    of its energy in the rows just below the horizon. The x centre still comes from the
+    specular point, so the box follows the sun's bearing instead of assuming it is dead
+    ahead -- change the azimuth and the box moves with it.
+
+    Derived for the same reason _cscn_camera exists: a transcribed box keeps passing while
+    measuring somewhere else, and that is precisely what happened here.
+    """
+    eye = tuple(float(v) for v in WATER_GLITTER_CAMERA["eye"])
+    cam = {"eye": eye, "target": tuple(float(v) for v in WATER_GLITTER_CAMERA["target"]),
+           "fovy_deg": float(WATER_GLITTER_CAMERA["fov"])}
+    w, h = 400.0, 300.0 # render()'s size; the projection is what matters, not the count
+    project = _projector(cam, w, h)
+    with open(os.path.join(ROOT, "assets", WATER_FIXTURE)) as f:
+        level = float(json.load(f)["water"]["level"])
+
+    el = math.radians(WATER_GLITTER_SUN["sun"]["elevation"])
+    az = math.radians(WATER_GLITTER_SUN["sun"]["azimuth"])
+    # sky.c's convention: sun_dir = (cos el sin az, sin el, cos el cos az), pointing AT the
+    # sun. Mirror it in the still plane and follow it from the eye to reach the point whose
+    # reflection is the sun -- one ray, because for a plane the specular point is analytic.
+    t = (eye[1] - level) / math.sin(el)
+    spec = (eye[0] + math.cos(el) * math.sin(az) * t, level,
+            eye[2] + math.cos(el) * math.cos(az) * t)
+    sx = project(spec)[0] / w
+    # The same plane at effectively unbounded range. The camera has no roll, so the horizon
+    # is one row and any bearing gives it.
+    hy = project((spec[0], level, -1.0e6))[1] / h
+    return (sx - WATER_GLITTER_HALF_W, hy + WATER_GLITTER_BAND[0],
+            sx + WATER_GLITTER_HALF_W, hy + WATER_GLITTER_BAND[1])
+
+
+def _cscn_water_key_sets():
+    """Return (keys parse_water reads, keys its known[] list tolerates), from the C source.
+
+    Read rather than transcribed. A copy of either list here would be a third place to
+    keep in step, which is the failure this is meant to catch in the first two.
+    """
+    src = open(os.path.join(ROOT, "cetra", "src", "cscene.c")).read()
+    body = src.split("static void parse_water(")[1].split("\nstatic ")[0]
+    # Every read names the block: get_float(water, "level", ...), get_vec3, get_bool,
+    # get_floats, and cJSON_GetObjectItemCaseSensitive for waves.
+    read = set(re.findall(r'\(water,\s*"([A-Za-z]+)"', body))
+    known = set(re.findall(r'"([A-Za-z]+)"', body.split("known[] = {")[1].split("};")[0]))
+    return read, known
+
+
 def _water_fft_probe(extra, scene=None):
-    """Run --water-fft-probe and return (per-cascade rows, impulse dict).
+    """Run --water-fft-probe and return (header, per-cascade rows, impulse dict).
+
+    The header is the probe's own account of what it measured: whether it ran, why not
+    when it did not, and how many cascades this build has. Returning it is the difference
+    between a caller that can say WHICH of a Gerstner surface, an unseeded spectrum and a
+    failed readback it got, and one that can only report an empty list.
 
     Empty results are a failure at every call site here, unlike _water_probe where
     declining is one of the results: the flag is only ever passed with a spectral surface
@@ -3778,24 +3941,22 @@ def _water_fft_probe(extra, scene=None):
     cmd = [RENDER, "-m", scene or os.path.join(ROOT, "assets", WATER_FIXTURE), "-x", "-f", "4",
            "-W", "200", "-H", "150", "--water-fft-probe"] + extra
     r = subprocess.run(cmd, capture_output=True, text=True)
-    rows = []
-    impulse = {}
+    head, rows, impulse = {}, [], {}
     for line in (r.stdout + r.stderr).splitlines():
         if not line.startswith("water-fft-probe "):
             continue
         parts = line.split()[1:]
-        # Three line shapes: a header of key=value, the impulse pair, and the per-cascade
-        # rows, which are the only ones leading with a bare index.
-        if parts[0] == "impulse":
-            impulse = {k: float(v) for k, v in (p.split("=", 1) for p in parts[1:])
-                       if k != "available"}
-            continue
-        if "=" in parts[0]:
-            continue
-        row = {"cascade": int(parts[0])}
-        row.update({k: float(v) for k, v in (p.split("=", 1) for p in parts[1:])})
-        rows.append(row)
-    return rows, impulse
+        # Dispatched on the line's own tag, not on whether its first field happens to
+        # parse as a number -- which made every new header key a change to this parser.
+        tag = parts[0]
+        fields = dict(p.split("=", 1) for p in parts[1:] if "=" in p)
+        if tag == "header":
+            head = fields
+        elif tag == "cascade":
+            rows.append({k: float(v) for k, v in fields.items()})
+        elif tag == "impulse":
+            impulse = {k: float(v) for k, v in fields.items() if k != "available"}
+    return head, rows, impulse
 
 
 def _water_glitter_variant(src, dst):
@@ -3809,6 +3970,27 @@ def _water_glitter_variant(src, dst):
         d["environment"].update(WATER_GLITTER_SUN)
         d["camera"] = dict(WATER_GLITTER_CAMERA)
         d.setdefault("water", {}).update(WATER_GLITTER_WATER)
+
+    cscn_copy(src, dst, mutate)
+
+
+def _water_persist_variant(src, dst):
+    """Copy the fixture with the ramp DROWNED and the eye lifted clear of the sea.
+
+    Its own camera, like the glitter arm's, because the ramp is what makes a box hard to
+    place: a level above the ramp's highest point (0.9) leaves no dry geometry anywhere,
+    so every row below the horizon is open water and the box needs no notch cut out of it.
+    That also makes the arm indifferent to which way round the ramp faces -- at 0.6 the dry
+    wedge sat at rows 0.43-0.61 one way and 0.29-0.34 the other, and a box avoiding both
+    had nothing left to measure.
+
+    The eye rises with the water, and further: 2.1 units of freeboard over a 20 m/s sea,
+    where 0.25 would let a crest close over the camera and hand this arm the waterline
+    branch to measure instead of the foam.
+    """
+    def mutate(d):
+        d["camera"] = dict(WATER_PERSIST_CAMERA)
+        d.setdefault("water", {}).update(WATER_PERSIST_SEA)
 
     cscn_copy(src, dst, mutate)
 
@@ -3960,38 +4142,32 @@ def run_water_gate(workdir):
                       water interface between it and the eye, so the froxel volume's
                       second medium is the only thing that can absorb it -- which is
                       what rendered as though in air before 11.33.
-      water-shore-soft the shoreline is antialiased rather than cut off: the frame
-                      moves against --no-water-coverage AND the sharpest single-row
-                      fall across the waterline gets shallower. The second half is
-                      what makes this a softening claim and not just a liveness one.
-      water-shore-hard the same flag at ONE sample is 0 px. Alpha-to-coverage has
-                      nothing to dither into there, so the shader must fall back to
-                      the cutoff -- if it kept the fractional fragment instead, the
-                      sliver would be written at full strength.
       water-cscn      the scene file's water block reaches the surface, and the flags
                       override it rather than the reverse. absorption is read because
                       no flag can set it, so the frame can only have moved through the
                       authoring path.
-      water-horizon   the surface reaches the horizon, asserted as REACH INVARIANCE:
-                      multiplying the nominal extent by 14,000 must not move the water's
-                      top edge, because an edge already at the vanishing line cannot go
-                      higher. Needs no horizon row and no camera parameters. The clipmap
-                      fails it by 71 px, which is what it was written against.
-      water-farfield  the far field is FILTERED rather than aliased, the filtering is
-                      confined to the far field, and the slope energy it removes arrives
-                      as roughness rather than being dropped. Read against
-                      --no-water-lod, which reports a zero footprint and so reaches the
-                      unfiltered surface exactly. The direction of the roughness handover
-                      is not measurable here -- see WATER_FAR_ROUGH_AUTHORED.
+      water-seastate  the spectral sea state reaches the seeding. Wind speed, fetch,
+                      depth, peak enhancement and swell are authorable since spec 11.42
+                      and NO flag can set any of them, so a scene file is the only way in
+                      and this is the only arm on that path. The wind DIRECTION reaches
+                      both models now and is covered by water-fft-live moving with it.
+      water-glitter   the sea has a specular response to its own sun, and the streak is
+                      at least WATER_GLITTER_RATIO_MIN brighter than the same water with
+                      the lobe off. Under the procedural sky the environment cubemap
+                      carries no disc, so before spec 11.42 there was none at all. The
+                      box is DERIVED from the specular point and the horizon
+                      (_water_glitter_box), and the bar is a ratio rather than a strict
+                      inequality -- until 11.43 it was neither, and the sun override it
+                      authors did not reach the engine either.
       water-foam-persist whitewater OUTLIVES the crest that made it. Read against
                       --no-water-foam-history, which selects foam from this frame's fold
                       alone and is the pre-11.42 behaviour exactly. On open water and on a
-                      rough sea for reasons that are both in WATER_FOAM_SEA.
-      water-glitter   the sea has a specular response to its own sun, and it BRIGHTENS.
-                      Under the procedural sky the environment cubemap carries no disc, so
-                      before spec 11.42 there was none at all -- and the lobe's width comes
-                      from the slope the surface stopped resolving, so it cannot be read
-                      off the fixture's own framing. See WATER_GLITTER_SUN.
+                      rough sea for reasons that are both in WATER_PERSIST_SEA, in a box
+                      whose top edge follows the horizon that raising `level` moves. The
+                      ratio carries an absolute floor under it, since 1 -> 3 px is 3.00x
+                      on a frame with no whitewater in it, and the arm renders the 90-frame
+                      config TWICE: it is the only place the accumulator runs that long
+                      and the only determinism claim over it.
       water-fft-var   the transformed field carries the variance the SEEDING predicted,
                       per band and in both height and slope. The first arm here that
                       reads the spectrum rather than a picture of it, and the only one
@@ -3999,23 +4175,24 @@ def run_water_gate(workdir):
                       Gerstner, and is still wrong. Blind to a missed fftshift, which
                       moves the field in space and not in variance -- that is
                       water-fft-impulse's half.
-      water-fixture-roundtrip the fixture's GENERATOR still produces the fixture. No
-                      renders: it regenerates into a temp directory and compares text.
-                      Exists because gen_water_fixture.py stopped emitting the `water`
-                      block when 11.33 made that block create the surface, and stayed that
-                      way for three specs -- so the docstring's "regenerate with" line was
-                      an instruction to strip the water and fail every arm below.
       water-fft-impulse the transform matches its CLOSED FORM on two single modes: a
                       centred impulse must come back constant, and its neighbour as one
                       cycle across the grid. Run through the same 14 stages and the same
                       twiddle table the sea uses, so it tests this transform rather than
                       a copy. Verified by breaking the shader -- see
                       WATER_FFT_IMPULSE_MAX for what the rest of the suite did then.
-      water-seastate  the spectral sea state reaches the seeding. Wind speed, fetch,
-                      depth, peak enhancement and swell are authorable since spec 11.42
-                      and NO flag can set any of them, so a scene file is the only way in
-                      and this is the only arm on that path. The wind DIRECTION reaches
-                      both models now and is covered by water-fft-live moving with it.
+      water-horizon   the surface reaches the horizon, asserted as REACH INVARIANCE:
+                      multiplying the nominal extent by 14,000 must not move the water's
+                      top edge, because an edge already at the vanishing line cannot go
+                      higher. Needs no horizon row and no camera parameters. The clipmap
+                      fails it by 71 px, which is what it was written against.
+      water-fixture-roundtrip the fixture's GENERATOR still produces the fixture, and the
+                      key set it authors is the one parse_water reads. No renders: it
+                      regenerates into a temp directory and compares text. Exists because
+                      gen_water_fixture.py stopped emitting the `water` block when 11.33
+                      made that block create the surface, and stayed that way for three
+                      specs -- so the docstring's "regenerate with" line was an instruction
+                      to strip the water and fail every arm below.
       water-waterline the above/below split is decided PER PIXEL. On a framing where
                       crests close over a camera that is still above the still level, a
                       backfacing fragment takes the sight line as its optical path
@@ -4033,6 +4210,39 @@ def run_water_gate(workdir):
                       evaluates a real train rather than a plane, and DECLINES on the
                       spectral model instead of returning a flat surface a caller would
                       trust.
+      water-shoal     waves shorten over a rising bed, and ONLY over it. Needs
+                      --water-bed dome, since every other arm here runs over a bed the
+                      vertex stage cannot see. The second half -- open water beyond the
+                      dome unchanged -- is what stops a global roughness change passing
+                      as shoaling.
+      water-shore-foam the shore band is whitewater where the bed shoals and nowhere
+                      else: present in the band, zero at both extremes, and zero in the
+                      same box with no bed under it. Run on GERSTNER deliberately --
+                      crest foam is FFT-only, so that path is what isolates the shore
+                      band from it.
+      water-shore-soft the shoreline is antialiased rather than cut off: the frame
+                      moves against --no-water-coverage AND the sharpest single-row
+                      fall across the waterline gets shallower. The second half is
+                      what makes this a softening claim and not just a liveness one.
+      water-shore-hard the same flag at ONE sample is 0 px. Alpha-to-coverage has
+                      nothing to dither into there, so the shader must fall back to
+                      the cutoff -- if it kept the fractional fragment instead, the
+                      sliver would be written at full strength.
+      water-crack     the projected grid has no HOLE in it, read per pixel rather than
+                      as a mean: the closest pixel in each absorption box to the same
+                      framing with no water must still be far from it. A crack is one
+                      pixel wide and every other arm here averages, so nothing else in
+                      this suite can see one.
+      water-farfield  the far field is FILTERED rather than aliased, the filtering is
+                      confined to the far field, and the slope energy it removes arrives
+                      as roughness rather than being dropped. Read against
+                      --no-water-lod, which reports a zero footprint and so reaches the
+                      unfiltered surface exactly. The direction of the roughness handover
+                      is not measurable here -- see WATER_FAR_ROUGH_AUTHORED.
+      water-draws     the surface is ONE draw of one instance at the lattice's own
+                      triangle count. Integers off the profiler rather than pixels, so
+                      it is blind to how the frame looks and sensitive to the projected
+                      grid quietly becoming a many-draw clipmap again.
       water-row       the profiler row appears with the flag and is ABSENT without
                       it, which is what a scope opened inside the pass predicate
                       gives.
@@ -4278,12 +4488,14 @@ def run_water_gate(workdir):
         ae_glit, _ = compare(glit_off, glit_on)
         gw, gh, g_on_pix = _read_ppm(glit_on)
         _, _, g_off_pix = _read_ppm(glit_off)
-        lum_on = _water_box_luma(g_on_pix, gw, gh, WATER_GLITTER_BOX)
-        lum_off = _water_box_luma(g_off_pix, gw, gh, WATER_GLITTER_BOX)
-        ok = ae_glit >= WATER_GLITTER_MIN_PX and lum_on > lum_off
+        glit_box = _water_glitter_box()
+        lum_on = _water_box_luma(g_on_pix, gw, gh, glit_box)
+        lum_off = _water_box_luma(g_off_pix, gw, gh, glit_box)
+        glit_ratio = lum_on / max(lum_off, 1e-6)
+        ok = ae_glit >= WATER_GLITTER_MIN_PX and glit_ratio >= WATER_GLITTER_RATIO_MIN
         print(f"  water-glitter {'PASS' if ok else 'FAIL'}  {ae_glit} px vs no glitter "
-              f"(want >={WATER_GLITTER_MIN_PX}), sun box {lum_off:.4f} -> {lum_on:.4f} "
-              f"(want brighter)")
+              f"(want >={WATER_GLITTER_MIN_PX}), streak box {lum_off:.4f} -> {lum_on:.4f} "
+              f"= {glit_ratio:.2f}x (want >={WATER_GLITTER_RATIO_MIN}x)")
         if not ok:
             failures.append("water-glitter")
 
@@ -4291,53 +4503,82 @@ def run_water_gate(workdir):
     # thing that can select whitewater -- the shore band is a different mechanism and is
     # identically zero here without a bed.
     foam_scene = os.path.join(workdir, "water_foam.cscn")
-    _water_cscn_variant(scene, foam_scene, WATER_FOAM_SEA)
+    _water_persist_variant(scene, foam_scene)
     foam_on = os.path.join(workdir, "water_foam_on.ppm")
     foam_off = os.path.join(workdir, "water_foam_off.ppm")
+    # A third render of the SAME config, because this arm is the only one that runs the
+    # accumulator over 90 frames and a running minimum is where drift would show. Every
+    # other determinism arm here stops at 30 on the default sea, so nothing else covers it.
+    foam_twice = os.path.join(workdir, "water_foam_on_b.ppm")
     err = render(foam_scene, foam_on, WATER_PIN + WATER_NO_CATCHER,
-                 frames=WATER_FOAM_FRAMES)
+                 frames=WATER_PERSIST_FRAMES)
+    if not err:
+        err = render(foam_scene, foam_twice, WATER_PIN + WATER_NO_CATCHER,
+                     frames=WATER_PERSIST_FRAMES)
     if not err:
         err = render(foam_scene, foam_off,
                      WATER_PIN + WATER_NO_CATCHER + ["--no-water-foam-history"],
-                     frames=WATER_FOAM_FRAMES)
+                     frames=WATER_PERSIST_FRAMES)
     if err:
         print(f"  water-foam-persist ERROR render failed: {err.strip()[-200:]}")
         failures.append("water-foam-persist")
     else:
         ae_foam, _ = compare(foam_off, foam_on)
+        ae_repeat, _ = compare(foam_on, foam_twice)
         fw, fh, f_on_pix = _read_ppm(foam_on)
         _, _, f_off_pix = _read_ppm(foam_off)
-        px_on = _water_foam_px(f_on_pix, fw, fh, WATER_PERSIST_OPEN_BOX)
-        px_off = _water_foam_px(f_off_pix, fw, fh, WATER_PERSIST_OPEN_BOX)
-        ratio = px_on / max(px_off, 1)
-        ok = ratio >= WATER_FOAM_PERSIST_RATIO and ae_foam >= WATER_FOAM_PERSIST_MIN_PX
+        foam_box = _water_persist_box()
+        px_on = _water_foam_px(f_on_pix, fw, fh, foam_box)
+        px_off = _water_foam_px(f_off_pix, fw, fh, foam_box)
+        # Qualified, like every other headline number in this function (mid_ratio,
+        # sd_ratio, sens_ratio): a bare `ratio` is now bound by three separate arms.
+        foam_ratio = px_on / max(px_off, 1)
+        ok = (foam_ratio >= WATER_PERSIST_RATIO and ae_foam >= WATER_PERSIST_MIN_PX and
+              px_off >= WATER_PERSIST_MIN_FOAM_PX and ae_repeat == 0)
         print(f"  water-foam-persist {'PASS' if ok else 'FAIL'}  open-water foam {px_off} "
-              f"-> {px_on} = {ratio:.2f}x (want >={WATER_FOAM_PERSIST_RATIO}), {ae_foam} px "
-              f"over the frame (want >={WATER_FOAM_PERSIST_MIN_PX})")
+              f"-> {px_on} = {foam_ratio:.2f}x (want >={WATER_PERSIST_RATIO} on at least "
+              f"{WATER_PERSIST_MIN_FOAM_PX} px), {ae_foam} px over the frame (want "
+              f">={WATER_PERSIST_MIN_PX}), {ae_repeat} px across two 90-frame runs (want 0)")
         if not ok:
             failures.append("water-foam-persist")
 
     # The transform carries the variance the seeding predicted. The first arm in this
     # suite that reads the SPECTRUM rather than a picture of it.
-    var_rows, impulse = _water_fft_probe(WATER_PIN + ["--water-waves", "fft"])
-    if len(var_rows) != WATER_CASCADES:
-        print(f"  water-fft-var FAIL  --water-fft-probe printed {len(var_rows)} cascades, "
-              f"want {WATER_CASCADES}")
+    probe_head, var_rows, impulse = _water_fft_probe(WATER_PIN + ["--water-waves", "fft"])
+    probe_cascades = int(probe_head.get("cascades", 0))
+    if probe_head.get("available") != "1":
+        # The probe's own reason, not this arm's guess at one. Without it a Gerstner
+        # surface, an unseeded spectrum and a failed readback are the same empty list.
+        print("  water-fft-var FAIL  --water-fft-probe declined: reason="
+              f"{probe_head.get('reason', 'it printed no header at all')}")
+        failures.append("water-fft-var")
+    elif probe_cascades != WATER_CASCADES or len(var_rows) != probe_cascades:
+        # Two questions: the build has the cascade count this suite is written against,
+        # and the probe printed a row for each of the cascades it says it has.
+        print(f"  water-fft-var FAIL  --water-fft-probe reports {probe_cascades} cascades "
+              f"(want {WATER_CASCADES}) and printed {len(var_rows)} rows")
         failures.append("water-fft-var")
     else:
-        hr = [r["height_ratio"] for r in var_rows]
-        sr = [r["slope_ratio"] for r in var_rows]
-        ok = all(WATER_FFT_VAR_MIN <= v <= WATER_FFT_VAR_MAX for v in hr + sr)
+        # NOT `hr`/`sr`: `hr` is this function's name for a frame HEIGHT in the width/height
+        # pairs a dozen later arms unpack, and a list of floats wearing it is one
+        # copy-pasted `h = hr` away from being live.
+        height_ratios = [row["height_ratio"] for row in var_rows]
+        slope_ratios = [row["slope_ratio"] for row in var_rows]
+        ok = all(WATER_FFT_VAR_MIN <= v <= WATER_FFT_VAR_MAX
+                 for v in height_ratios + slope_ratios)
         print(f"  water-fft-var {'PASS' if ok else 'FAIL'}  measured/predicted height "
-              f"{'/'.join(f'{v:.2f}' for v in hr)} slope {'/'.join(f'{v:.2f}' for v in sr)} "
+              f"{'/'.join(f'{v:.2f}' for v in height_ratios)} slope "
+              f"{'/'.join(f'{v:.2f}' for v in slope_ratios)} "
               f"(want {WATER_FFT_VAR_MIN}-{WATER_FFT_VAR_MAX} on all six)")
         if not ok:
             failures.append("water-fft-var")
 
     # The transform against its closed form. The only arm in this suite that can fail on
     # a transform which is deterministic, differs from Gerstner, and is still wrong.
-    if not impulse:
-        print("  water-fft-impulse FAIL  --water-fft-probe printed no impulse result")
+    if "dc_err" not in impulse:
+        why = ("the probe declined before reaching it"
+               if probe_head.get("available") != "1" else "the scratch transform did not run")
+        print(f"  water-fft-impulse FAIL  no impulse result: {why}")
         failures.append("water-fft-impulse")
     else:
         dc = impulse.get("dc_err", 1.0)
@@ -4381,10 +4622,13 @@ def run_water_gate(workdir):
     gen = os.path.join(ROOT, "assets", "gen_water_fixture.py")
     regen_dir = os.path.join(workdir, "regen")
     os.makedirs(regen_dir, exist_ok=True)
-    r = subprocess.run([sys.executable, gen, regen_dir], capture_output=True, text=True)
-    if r.returncode != 0:
-        print(f"  water-fixture-roundtrip FAIL  generator exited {r.returncode}: "
-              f"{(r.stderr or r.stdout).strip()[-200:]}")
+    # `proc`, not `r`: this function uses `r` as a probe-ROW loop variable in several
+    # comprehensions, and `r` is the file's universal name for a CompletedProcess. The two
+    # meanings only stay apart because Python scopes comprehension targets.
+    proc = subprocess.run([sys.executable, gen, regen_dir], capture_output=True, text=True)
+    if proc.returncode != 0:
+        print(f"  water-fixture-roundtrip FAIL  generator exited {proc.returncode}: "
+              f"{(proc.stderr or proc.stdout).strip()[-200:]}")
         failures.append("water-fixture-roundtrip")
     else:
         drifted = []
@@ -4399,9 +4643,23 @@ def run_water_gate(workdir):
             with open(committed) as f_committed, open(regenerated) as f_regenerated:
                 if f_committed.read() != f_regenerated.read():
                     drifted.append(name)
+        # Three key sets that have to agree, and none of them transcribed here: what
+        # parse_water reads, what it will accept without warning, and what the fixture
+        # authors. A key added to the parser and not to the fixture leaves the corpus with
+        # no coverage of it; a key in the fixture the parser does not read is a typo that
+        # authors nothing, which is exactly what get_float cannot distinguish from absence.
+        read_keys, known_keys = _cscn_water_key_sets()
+        fixture_keys = {k for k in json.load(open(os.path.join(ROOT, "assets", WATER_FIXTURE)))
+                        .get("water", {}) if not k.startswith("_")}
+        if read_keys != known_keys:
+            drifted.append(f"parse_water reads {sorted(read_keys ^ known_keys)} "
+                           "but its known[] list disagrees")
+        if read_keys != fixture_keys:
+            drifted.append(f"fixture vs parse_water differ on {sorted(read_keys ^ fixture_keys)}")
         ok = not drifted
-        print(f"  water-fixture-roundtrip {'PASS' if ok else 'FAIL'}  regenerated 2 files, "
-              f"{'all identical to the committed pair' if ok else 'DRIFTED: ' + ', '.join(drifted)}")
+        print(f"  water-fixture-roundtrip {'PASS' if ok else 'FAIL'}  regenerated 2 files "
+              f"and {len(read_keys)} water keys, "
+              f"{'all identical to the committed pair' if ok else 'DRIFTED: ' + '; '.join(drifted)}")
         if not ok:
             failures.append("water-fixture-roundtrip")
 
@@ -4419,10 +4677,10 @@ def run_water_gate(workdir):
         ww, wh, wpix = _read_ppm(wl)
         crest = _water_box_luma(wpix, ww, wh, WATER_WATERLINE_CREST_BOX)
         ref = _water_box_luma(wpix, ww, wh, WATER_WATERLINE_REF_BOX)
-        ratio = crest / max(ref, 1e-9)
-        ok = ratio >= WATER_WATERLINE_MIN_RATIO
+        crest_ratio = crest / max(ref, 1e-9)
+        ok = crest_ratio >= WATER_WATERLINE_MIN_RATIO
         print(f"  water-waterline {'PASS' if ok else 'FAIL'}  crest/foreground "
-              f"{crest:.4f}/{ref:.4f} = {ratio:.4f} (want "
+              f"{crest:.4f}/{ref:.4f} = {crest_ratio:.4f} (want "
               f">={WATER_WATERLINE_MIN_RATIO})")
         if not ok:
             failures.append("water-waterline")
@@ -5954,6 +6212,152 @@ def _run_import_gates(workdir):
     return run_range_gate() + run_fbx_unit_gate()
 
 
+# A line-initial two-space name, which is the shape an arm's printed line and a
+# docstring's arm list BOTH use -- one pattern, because the check is that they agree.
+# inspect.getdoc, not __doc__: Python 3.13 strips a docstring's common indentation at
+# compile time and earlier versions do not, so the raw attribute puts the arm list at a
+# different column depending on the interpreter.
+_ARM_NAME = r"([a-z][a-z0-9]*(?:-[a-z0-9]+)*)"
+_ARM_DOCUMENTED = re.compile(r"^  " + _ARM_NAME + r"(?=\s)", re.M)
+# The verdict line specifically, not any line an arm prints. A SKIP or an ERROR prelude
+# carries the same name, and several are emitted from a guard ABOVE the arm they belong
+# to -- reading those as the arm's position reports a false order mismatch.
+_ARM_PRINTED = re.compile(r'print\(f?"  ' + _ARM_NAME + r'[^"]*PASS')
+
+
+def run_gate_docs_gate(workdir):
+    """A group's documented arm list is the list it actually runs.
+
+      gate-arm-docs   every group whose docstring lists its arms lists all of them, in
+                      run order. Static -- it reads the source rather than running
+                      anything, so it covers all groups whatever --only selected, and
+                      costs no render.
+
+    A docstring naming a different set than the function runs is what a reviewer reads to
+    decide what is covered, which makes a stale one worse than none. This is not a
+    hypothetical: run_water_gate documented 25 arms while running 29, and the four it
+    omitted were shoaling, the shore foam band, the crack test and the draw count. Eleven
+    more were listed in an order the function had stopped following.
+
+    A group that lists no arms is not required to start -- only a list that EXISTS is held
+    to being true, so this adds no documentation debt to the 30 groups without one. A
+    group that lists arms but builds their names at runtime cannot be read this way, and
+    is reported as unverifiable rather than quietly passed or wrongly failed.
+    """
+    del workdir # static: nothing is rendered and nothing is written
+    problems, checked, listless = [], 0, 0
+    for selector, _banner, fn in GATE_GROUPS:
+        documented = _ARM_DOCUMENTED.findall(inspect.getdoc(fn) or "")
+        if not documented:
+            listless += 1
+            continue
+        printed, seen = [], set()
+        for name in _ARM_PRINTED.findall(inspect.getsource(fn)):
+            if name not in seen:
+                seen.add(name)
+                printed.append(name)
+        if not printed:
+            problems.append(f"{selector}: lists arms but names none in a literal")
+            continue
+        checked += 1
+        undocumented = [n for n in printed if n not in set(documented)]
+        stale = [n for n in documented if n not in set(printed)]
+        if undocumented or stale:
+            problems.append(f"{selector}: undocumented {undocumented}, documented but "
+                            f"not run {stale}")
+        elif documented != printed:
+            at = next(i for i in range(len(documented)) if documented[i] != printed[i])
+            problems.append(f"{selector}: same set, but the list leaves run order at #{at} "
+                            f"({documented[at]} listed where {printed[at]} runs)")
+    ok = not problems
+    detail = (f"{checked} groups list their arms and match; {listless} list none"
+              if ok else "; ".join(problems))
+    print(f"  gate-arm-docs {'PASS' if ok else 'FAIL'}  {detail}")
+    return [] if ok else ["gate-arm-docs"]
+
+
+def run_fixture_gen_gate(workdir):
+    """Every gen_*.py still emits the asset committed beside it.
+
+      fixture-gen  each generator runs and reproduces its committed outputs. No GPU and
+                   no render, which is why it can afford to cover the whole corpus.
+
+    It exists because gen_water_fixture.py silently stopped emitting its water block: a
+    regeneration would have stripped 21 authored keys and taken twenty-odd water arms with
+    it, and nothing in the suite could have said so. The same is true of every other
+    fixture whose generator nobody has run since committing it.
+
+    Run as a COPY in a scratch directory rather than through an output-directory argument.
+    A generator resolves both its inputs and its outputs against __file__, so moving the
+    script moves the writes -- which buys this coverage without 34 scripts having to learn
+    a convention they have no other use for. The scratch directory has to MIRROR the tree,
+    not just hold the script: the non-golden PNGs are what the textured fixtures read, and
+    one generator loads a module from ../tools, which is symlinked rather than copied
+    because nothing writes outside its own directory.
+    """
+    src_dir = os.path.join(ROOT, "assets")
+    gens = sorted(glob.glob(os.path.join(src_dir, "gen_*.py")))
+    inputs = [p for p in sorted(glob.glob(os.path.join(src_dir, "*.png")))
+              if not p.endswith("_golden.png")]
+    # Byte equality is the contract a .gltf or .cscn has; it is NOT the contract a .png
+    # has, whose bytes come out of PIL and zlib and move with those libraries rather than
+    # with the fixture. Binary outputs are held to being emitted and non-empty, and the
+    # count is printed so the weaker check does not read as coverage it is not.
+    text_ext = (".gltf", ".cscn")
+
+    drifted, missing_dep, compared, binary = [], [], 0, 0
+    for gen in gens:
+        name = os.path.basename(gen)
+        run_root = os.path.join(workdir, "gen", name[:-3])
+        run_dir = os.path.join(run_root, "assets")
+        os.makedirs(run_dir, exist_ok=True)
+        tools_link = os.path.join(run_root, "tools")
+        if not os.path.exists(tools_link):
+            os.symlink(os.path.join(ROOT, "tools"), tools_link)
+        for path in [gen] + inputs:
+            shutil.copy2(path, run_dir)
+        stamps = {f: os.stat(os.path.join(run_dir, f)).st_mtime_ns
+                  for f in os.listdir(run_dir)}
+
+        proc = subprocess.run([sys.executable, os.path.join(run_dir, name)],
+                              capture_output=True, text=True, cwd=run_dir)
+        if proc.returncode != 0:
+            tail = (proc.stderr or proc.stdout).strip().splitlines()
+            last = tail[-1][:90] if tail else "no output"
+            # A generator needing numpy or PIL is a property of this machine, not of the
+            # fixture, so it is reported apart from a real drift rather than as one.
+            (missing_dep if "ModuleNotFoundError" in (proc.stderr or "")
+             else drifted).append(f"{name}: exited {proc.returncode} ({last})")
+            continue
+
+        wrote = [f for f in sorted(os.listdir(run_dir))
+                 if f != name and stamps.get(f) != os.stat(os.path.join(run_dir, f)).st_mtime_ns]
+        if not wrote:
+            drifted.append(f"{name}: wrote nothing")
+            continue
+        for f in wrote:
+            committed, regenerated = os.path.join(src_dir, f), os.path.join(run_dir, f)
+            if not os.path.exists(committed):
+                drifted.append(f"{f}: emitted but not committed")
+            elif f.endswith(text_ext):
+                compared += 1
+                with open(committed) as f_committed, open(regenerated) as f_regenerated:
+                    if f_committed.read() != f_regenerated.read():
+                        drifted.append(f"{f}: DRIFTED from the committed asset")
+            else:
+                binary += 1
+                if os.path.getsize(regenerated) == 0:
+                    drifted.append(f"{f}: emitted empty")
+
+    ok = not drifted
+    detail = (f"{len(gens)} generators, {compared} text assets byte-identical, "
+              f"{binary} binary emitted non-empty" if ok else "; ".join(drifted[:6]))
+    if missing_dep:
+        detail += f"; {len(missing_dep)} skipped for a missing module"
+    print(f"  fixture-gen  {'PASS' if ok else 'FAIL'}  {detail}")
+    return [] if ok else ["fixture-gen"]
+
+
 SSS_TAG_FIXTURE = "sss_msaa_fixture.cscn"
 SSS_TAG_SIZE = ("400", "300")
 # The tag-2 sphere in WORLD space: sss_fixture.gltf puts unit spheres at x = +/-1.3, y = 1.0.
@@ -6282,6 +6686,10 @@ GATE_GROUPS = [
     ("forest", "forest (scattered content: batching, ordering, LOD, spec 11.29):",
      run_forest_gate),
     ("import", "import:", _run_import_gates),
+    ("fixture-gen", "fixture generators (every gen_*.py reproduces its asset):",
+     run_fixture_gen_gate),
+    ("gate-docs", "gate docstrings (the documented arm list is the one that runs):",
+     run_gate_docs_gate),
 ]
 
 
