@@ -337,10 +337,15 @@ void main() {
         // per-texel read would make the lobe width depend on where in the wave the pixel
         // happened to land, where the removed detail is a property of the whole band.
         //
-        // The kept scale is the fade AND the gain, because the slope reaching the normal
-        // two lines above is scaled by both. Leaving the gain out booked the 58% of this
-        // band that WATER_SHORT_SLOPE_GAIN discards as if it were still in the normal.
-        removedMss += oceanRemovedMss(fade * WATER_SHORT_SLOPE_GAIN, cascadeSlopeVar[2]);
+        // The kept scale is the FADE ONLY, deliberately. WATER_SHORT_SLOPE_GAIN also scales
+        // the slope reaching the normal, so a strict accounting would fold it in here too --
+        // but the gain is 0.42, so that hands 82% of this band to roughness even in the
+        // fully resolved near field, where this expression currently hands over nothing.
+        // Measured: it flattens water-shoal's shoaled-vs-open contrast from 0.54x to 0.96x.
+        // That is a look decision about what the gain MEANS -- an artistic damping, or a
+        // physical attenuation whose remainder is owed back -- and it wants an A/B rather
+        // than being smuggled in behind a correctness fix.
+        removedMss += oceanRemovedMss(fade, cascadeSlopeVar[2]);
 
         // Foam where the horizontal map COMPRESSES, from the vertex Jacobian plus
         // the short band's own. Deformation, not a height threshold: a tall smooth
