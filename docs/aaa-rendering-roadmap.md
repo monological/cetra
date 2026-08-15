@@ -159,6 +159,13 @@ for a free unit either. Two escapes are already precedented and both are narrow 
 declaration through a `#define` when the two consumers are mutually exclusive (moments over
 `sceneColorTex`), or put the table in `const`/uniform space (11.13). See **Wall 1** below.
 
+**Unit 11 is the one with a way out, and it is worth only one unit.** `pbr_frag.glsl:1766` already
+selects between the irradiance cube and the GI atlas (`giEnabled > 0 ? giSampleIrradiance(...) :
+texture(irradianceMap, N).rgb`), so those two consumers are *already* mutually exclusive in use and
+differ only in sampler TYPE. Making irradiance a `sampler2D` octahedral tile is what lets one
+declaration serve both. Explored in detail under **D0**, including why the entry's "free two" is one,
+why its 0-px acceptance bar cannot be met, and why unit 4 (POM height) is a real but premature second.
+
 ## Track A — Direct Lighting & Global Illumination
 
 ### A1. Clustered forward light culling (Olsson et al. 2012) — Effort L
@@ -611,6 +618,22 @@ is nowhere near full), anything that fits in a UBO, or anything small enough to 
 Note which Tier 4 items below are postfx-only or UBO-only: those are the cheap ones, and they are
 cheap *because* of this wall, not in spite of it.
 
+**That list overstates the wall by one item, and its remaining entries are not interchangeable.**
+A unit buys a *declaration*, and a `sampler2DArray` declaration holds many layers — unit 2 already
+serves six masks that way, and `mask_array.h` says in as many words that the array exists to "scale
+to new data by adding a layer". So:
+
+| blocked item | what it actually needs |
+|---|---|
+| detail / wetness maps | **nothing.** Per-texel material data at canonical size *is* the mask array. Never blocked |
+| decals + light cookies | plausibly ONE `sampler2DArray` between them — both are authored 2D images projected onto surfaces |
+| cloud shadow map (D2's surface half) | its own declaration: a single global R16F, not per-material data |
+| froxel volume in the transparent pass | its own unit, no exceptions — a `sampler3D` cannot share a 2D declaration with anything |
+
+So one freed unit buys one of three real features, not four or five, and the froxel item can never
+be the one that shares. Anything proposing to "free a unit" should say which of the three is
+spending it before it starts.
+
 **Wall 2 — geometry submission does not scale — MOSTLY REMOVED (specs 11.28 / 11.29).** Instancing,
 LOD chains and per-cascade shadow culling shipped in E5; on `abandoned_window_shadowed` that is shadow
 CPU **−83%**, frame **−38%**, 2,148 draws → 272. What remains of the wall is the third limb, draw
@@ -622,7 +645,19 @@ anywhere outside `particle_renderer.c`. The renderer is AAA-caliber per pixel an
 object." Two of those three are now false. The occlusion clause was always true and is now Wall 4's
 business rather than this one's.*
 
-**Wall 4 — the opaque pass is unshielded.** There is no depth prepass anywhere in the engine, no
+**Wall 4 — the opaque pass is unshielded — MOSTLY REMOVED (specs 11.30 / 11.31).** Front-to-back
+opaque ordering ships **on**: `apps/forest` opaque **306 → 169 ms (−45%)**, depth complexity
+1.93 → 1.08. A depth prepass was built, extended to masked geometry through a `depthOnly` mode in
+`pbr_frag` (11.31), reached a better 1.08 → 0.72 — and **still lost on the clock everywhere in this
+corpus**, because a full extra geometry pass costs more than the shading it saves. It ships off. The
+two turn out to be substitutes rather than complements; 11.30's "worth more together" was an
+artefact of the masked exclusion. What remains of this wall is the third clause below, occlusion
+culling, which E7 books and no measurement yet demands.
+
+*Original text and its measurement history follow — worth keeping because three consecutive readings
+of the same scene each looked authoritative and each was an artefact of its configuration.*
+
+There is no depth prepass anywhere in the engine, no
 occlusion culling of any kind, and opaque draws are issued in draw-list order — a pre-order DFS
 flatten, Morton-ordered within a prototype for batch contiguity, which is deliberately
 *camera-independent*. A forward renderer with no prepass depends entirely on hardware early-Z to
@@ -852,7 +887,7 @@ Where Wall 1 actually bites. D1 and D2's ground-shadow half both need a texture 
 so **D0 is a hard prerequisite for them** and should not be started until one of them is scheduled
 (the roadmap's own just-in-time rule: foundations land with their first consumer).
 
-### D0. Free two `pbr_frag` sampler units — Effort M
+### D0. Free two `pbr_frag` sampler units — Effort M — explored, and the count is ONE
 Not a feature; the unblocking item. The concrete candidate: **unit 11 (IBL irradiance) folds into the
 GI atlas on unit 14** as a single octahedral tile. `pbr_frag` already samples that atlas, the
 octahedral encode/decode include already exists from A4, and a cosine-convolved environment is
@@ -867,6 +902,89 @@ octahedral resampling is lossy in a way that matters and the item should stop.
 half and measured the ground at RMSE 0.0013 against the air's 0.0353, so the dappled light on
 terrain that D2 was written to deliver is entirely on the far side of this item. It is now the only
 thing standing between the engine and that look, which makes it the highest-leverage entry in D.
+
+**Explored against the code after 11.40, nothing built. Five corrections to the entry above.**
+
+**1. It frees ONE unit, not two — 16/16 becomes 15/16.** Only the first mechanism holds. The second
+("share unit 6") is not a freed unit at all: it is a *conditional* one, usable only by a feature that
+is provably absent whenever refraction or MBOIT runs. It does not raise the count, it lets one
+specific consumer squeeze in under a constraint that is invisible at link time and fails as a wrong
+image rather than an error. Wall 1 therefore does not fall here; it becomes a one-slot budget, and
+per the table under Wall 1 that slot buys one of three real features.
+
+**2. The fold is about TYPE, not storage, and that changes its cheapest shape.** `pbr_frag.glsl:1766`
+already reads `giEnabled > 0 ? giSampleIrradiance(...) : texture(irradianceMap, N).rgb` — the two are
+**already mutually exclusive at the call site**. Only their declarations both exist, and the driver
+counts declarations. So the fold buys no quality whatever; its entire purpose is to make the two the
+same *type* so one declaration can serve both, which is exactly 11.17's escape.
+Which means irradiance need not enter the GI atlas at all. A standalone octahedral `sampler2D` owned
+by `ibl.c` and bound to unit 14 whenever GI is off is the cheaper shape, and it avoids the trap in
+the entry above: `scene->gi_volume` is **NULL by default** (`scene.c:66`; only `apps/render` builds
+one) while every scene has IBL irradiance, so folding into the *atlas* would couple an always-present
+subsystem to an opt-in one, or force a second atlas producer — buying a sampler at the price of a new
+concept.
+
+**3. The 0-diff gate the entry demands cannot pass, so as written this item contains a stop condition
+it will always hit.** Cube→octahedral is a resample — different projection, different texel centres,
+different filter topology — and cannot be bit-exact. Every IBL scene's ambient term shifts by a few
+LSBs. The bar has to be a stated tolerance plus a golden re-bake, not 0 px. This is the entry's own
+"measure twice" rule turned on itself: the acceptance criterion was written before anyone checked
+whether it was reachable.
+
+**4. Sizing and cost, from the code rather than estimated.** The cube is 32² × 6 = 6,144 texels
+(`ibl.h:11`), so an **80×80 octahedral tile matches its angular density** at ~51 KB against the cube's
+~49 KB — VRAM is a wash and the resolution question is simply a constant to pick. GI's own 8×8 tile
+(`gi_volume.h:35`) would be 96× coarser and is the version to refuse. Runtime: `octEncode`
+(`octahedral.glsl:13`) is a reciprocal, three `abs`, two adds and a small branch — 15-20 scalar ops on
+the ambient path, comfortably under `apps/forest`'s 0.23% run-to-run floor, i.e. not findable in the
+profiler. Per-frame CPU is zero; the bake gains one 80² draw against an env re-bake that already
+costs 73.6 ms with clouds. **The failure mode to watch is the seam gutter** — a cubemap gets seamless
+cross-face filtering free, an octahedral tile does not — and a wrong gutter reads as a faint cross in
+the ambient term on every surface in the scene, which is subtle enough to ship unnoticed.
+
+**5. The second unit exists but should NOT be taken yet: unit 4 (`heightTex`) into the mask array.**
+POM reads `.r` and nothing else in all five of its taps (`pbr_frag.glsl:342, 347, 353, 377, 951`), so
+height is a scalar per-texel material field — the mask array's literal job description. Precision is
+free: every texture in the engine loads `GL_UNSIGNED_BYTE` (`texture.c:470`) and the array is RGBA8.
+
+**VRAM is exactly neutral on the corpus's real POM asset, for a reason worth recording.** `pilot.fbm`
+is five materials of 4096² 8-bit **grayscale**, so a height map is `GL_RED` at 4096²×1 B = 16.78 MB
+standalone, and an array layer is 2048²×4 B = 16.78 MB — the 4× waste of a scalar in RGBA8 exactly
+cancels the 4× area cut from `MASK_ARRAY_CAP 2048`. Whole asset, with mips: **335.5 MB either way**.
+The real price is **resolution**: POM would march 2048² instead of 4096², on the one asset that most
+wants the detail.
+
+Three preconditions, all inert today and all biting the instant height becomes a layer:
+- **The frame loop runs them in the wrong order.** `mask_array_ensure_built` (`engine.c:2430`) precedes
+  `heights_ensure_resolved` (`:2433`), both defer until the loader is idle and both are run-once — so
+  the array would be built with no height layer and never rebuilt. Swap them, and re-arm the rebuild
+  on height discovery.
+- **Height arrives after the streaming path closes.** `resolve_height_maps` loads synchronously
+  (`import.c:1718`) *after* the async loader reports idle, outside the precondition `mask_array_build`
+  is written against.
+- **One large layer is charged to all of them.** The canonical size is the largest present mask capped
+  at 2048, and every layer shares it (`mask_array.c:118-132`). Guard: fold only when the height map is
+  not the largest texture in the set — masks at 512² with a 2048² height map would take six existing
+  layers from 8 MB to 134 MB for nothing.
+
+**Deliberately not recommended until a second consumer is scheduled.** One unit already covers D2's
+surface half, the only Track-D feature with a measurement behind it; D1 is Effort L and unscheduled,
+and the froxel-in-transparent item is not scheduled at all. Taking unit 4 now halves POM's resolution
+on the tree's only POM asset to buy a slot nothing spends — precisely what the just-in-time rule
+exists to prevent. Revisit with D1, and measure the 4096→2048 question on `pilot` then rather than
+assuming it.
+
+*Also learned, since the name misleads: the frame loop's "POM height resolve" is not a GPU pass. It is
+a CPU filename-convention resolver (`import.c:1673`) — glTF carries no height texture (the
+`KHR_materials_displacement` draft was abandoned), so height maps arrive as `<name>_height` siblings
+derived by stripping a known base-map suffix, and finding one **auto-enables POM** by setting
+`parallax_scale`.*
+
+**Second candidates examined and rejected.** Unit 13 (`brdfLUT`) to an analytic Lazarov fit: 10.7.1
+packed the sheen E-LUT into its `.b` channel for KHR conformance and clearcoat reads `.rg`
+(`pbr_frag.glsl:1258, 1280, 1858`), so this trades spec conformance for a sampler. Unit 9 (Charlie
+sheen env): only live under sheen, conditional rather than free. Units 10/15 (CSM and punctual shadow
+arrays): both `sampler2DArray` with different layouts and resolutions — real work for one unit.
 
 ### D1. Clustered decals — Effort L
 The largest **environment-art** gap in the engine: there is no way to author localised surface detail
@@ -1372,9 +1490,9 @@ not scheduled.
 |---|------|--------|----------|
 | 20 | E1 Output dither | S | **DONE (11.24).** On by default, `--no-dither` 0 px; sky bands 192 px → 22 px. The sketch's TPDF construction was wrong — a constant `ign` offset only phase-shifts the same sawtooth and collapses to four values — and evaluating the pure function in Python caught it before any shader existed. Static by construction, which measurement confirms costs the churn gates 0.5%. The re-bake reported six of nineteen goldens unreproducible; **11.25 showed that was wrong and all nineteen reproduce** — four recipes were in a ledger nobody opened, and `cloud_fixture` names no file at all. |
 | 21 | C1 Translucent shadows | M→**L** | **DONE (11.26).** Shipped as deep opacity maps — transmittance storage, not the moment reconstruction the sketch assumed, which is why it stayed inside the sampler budget. Bands measure 0.0016 against 0.65^k and the mask ramp 0.0025 against 1-alpha, where a binary alpha test scores 126x worse. Raiden moves 4.0%, all of it the groom and the shoulder under it. Three bugs found by the arms, each presenting as something else — a blend function that desaturated the frame while the shadows looked right, a resolve that covered half the map with a diagonal edge, and two instrument faults that read as renderer faults. |
-| 22 | D2 Local fog + cloud shadows | M | Highest look-per-line left in the atmosphere stack, and its valuable half (froxel injection) needs nothing from D0. B2 deferred cloud shadows explicitly; this collects the debt. |
+| 22 | D2 Local fog + cloud shadows | M | **DONE (11.39 + 11.40).** Both halves of the froxel side landed; the surface side is on the far side of D0 and stayed unbuilt. The verdict the item was told to produce came back sharper than the entry expected: sky/air RMSE **0.0353** against ground **0.0013**, so what ships is weather in the haze and the dappled light on terrain is entirely D0's to unblock. The review's through-line was **green results that could not have gone red** — four arms passed over a feature dead under `--no-ssao`, and 23 goldens were cited as evidence for a change no golden could see. 11.40 closed three of the four filed items by making those claims falsifiable, and found a shipped map saturated to zero at every texel on the first use of its new debug tile. |
 | 23 | C2 Emissive → area lights | S/M | A fit plus a registration — `Light` already carries every field the fit produces. Makes practicals and screens light rooms instead of just glowing. |
-| 24 | E4 GPU timer queries | S | Wall 3. Cheap, and every perf claim after it is honest in a way the ones before it are not. Sequence before E5/D4 or their thresholds are guesses. |
+| 24 | E4 GPU timer queries | S | **DONE (11.27).** Wall 3 removed. It paid for itself immediately and twice: E4's own first draft drew a conclusion the instrument reversed, and Wall 4 exists at all because the instrument said "opaque 312 ms" in a single run. |
 | 25 | C3 IES profiles | S | Collects the payoff for 9.9/10.0's photometric work. Fits Wall 1 by living in the light UBO — zero texture units. |
 | 26 | C5 Contact shadows for local lights | S | A3 generalised from one light to N. Postfx-only. |
 | 27 | E3 Histogram exposure | M | Fixes the image *and* narrows the largest measured source of cross-build non-determinism. |
@@ -1382,7 +1500,7 @@ not scheduled.
 | 29 | C4 Clustered specular probes | L | Diffuse GI got a spatial structure in A4; specular still has exactly one probe. Reuses A1's grid and A4's atlas. |
 | 30 | E5 Instancing + LOD + sorting | L | **DONE, two limbs of three (11.28 / 11.29).** Wall 2 mostly removed: `abandoned_window_shadowed` shadow CPU −83%, frame −38%, 2,148 draws → 272. Sorting deferred as unfalsifiable against the corpus, which `apps/forest` has since falsified — moved to E6. Established that scatter *order* decides whether batching happens at all (2,368 → 1,287 draws for identical geometry), that LOD fights instancing on the `(mesh, lod)` key non-monotonically, and that "meshoptimizer locks mesh borders" — in three headers and spec 11.28 — was wrong from the start. |
 | 31 | **E6 Depth prepass + opaque ordering** | M | **DONE (11.30 + 11.31).** `apps/forest` opaque **306 → 169 ms (−45%)** from the ORDERING alone, depth complexity 1.93 → 1.08. Masked geometry now prepasses too (11.31, via a `depthOnly` mode in `pbr_frag`) and reaches a better 0.72 — and is still **slower** than the sort, because a full extra geometry pass costs more than the shading it saves. The two are substitutes, not complements: 11.30's "worth more together" was an artefact of the masked exclusion. Ordering ships on, the prepass off, with a gate arm asserting the prepass **costs** on a scene with no overdraw. 11.30's own figures were doubled by a budget that trusted `msaa_samples` over the driver, and its −64% interior does not reproduce. Between them these two specs withdrew seven claims — every one from an instrument that had never been checked against a scene with a known answer. |
-| 32 | D0 Free two sampler units | M | Foundation only — schedule it **with** D1 or D2's surface half, never before, per the just-in-time rule. |
+| 32 | D0 Free two sampler units | M | Foundation only — schedule it **with** D1 or D2's surface half, never before, per the just-in-time rule. **Explored after 11.40 and it frees ONE unit, not two** (16/16 → 15/16): the irradiance fold holds, the unit-6 share is a conditional slot rather than a freed one, and the second real candidate (unit 4, POM height into the mask array) costs POM half its resolution on `pilot` to buy a slot nothing currently spends. See D0 for the five corrections. |
 | 33 | D1 Clustered decals | L | Largest environment-art gap. Hard-blocked on D0. |
 | 34 | E8 Fix the wind cull | S | Small, self-contained, closes a real hole in E5's culling — wind geometry is currently exempt from the camera frustum *and* every cascade. Unblocks wind on scattered content, which `apps/forest` gave up to avoid it. |
 | 34b | **E9 One sample means one sample** | M | **DONE (11.34).** `apps/forest` opaque **150.9 → 121.6 ms (−19.4%)** against a 0.23% floor, with byte-identical submission integers — the same work, cheaper. One branch in the one allocator plus one at the depth renderbuffer flips the scene, OIT and moment FBOs in lockstep, since they share the depth attachment. The row's original prescription was wrong twice: there is no `sampler2DMS` anywhere in the corpus (11.17 rejected it), and postfx reaches the scene target only through blits, so the GLSL surface was zero files and postfx changed nothing. Priced before built with a new `--msaa <n>` lever, which also decomposed the first confounded A/B: A2C alone costs 202 ms of forest's opaque row (fragment-set explosion, headless-only), a sample ~93 ms on that inflated set. TAA-only edges verified by crops (raiden groom, forest canopy — indistinguishable), all 23 goldens 0 px, and MBOIT's moment-resolve bias (11.17) is now absent on the TAA path for free. |
@@ -1392,6 +1510,10 @@ not scheduled.
 
 **If only five ever get built: 20 -> 21 -> 22 -> 23 -> 24.** One afternoon, then three items that each
 reuse a shipped subsystem rather than building new machinery, then the instrument the rest needs.
+**Four of those five are now done** (20 in 11.24, 21 in 11.26, 22 in 11.39+11.40, 24 in 11.27), which
+leaves **23 (C2, emissive → area lights)** as the last unbuilt entry in the engine's own shortlist —
+and the only one of the five that needs nothing from Wall 1, since `Light` already carries every
+field the fit produces.
 
 **31 (E6) was the one to build next, and it is now built.** An earlier draft of this line read
 "nothing else on this table is worth 250 ms", which priced E6 at the whole of the opaque pass before
