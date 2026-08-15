@@ -239,6 +239,27 @@ typedef struct Water {
     vec2 seeded_wind_dir;
 
     /*
+     * What the seeded spectrum's variance actually is, per cascade (spec 11.42).
+     *
+     * Accumulated over the modes as they are drawn, which is the only place the
+     * per-mode amplitude exists. Three consumers, and they are why this is stored rather
+     * than re-derived: the displaceable slab's half-thickness (the projector has to know
+     * how far a crest can reach above the still plane), the far field's roughness (the
+     * slope energy filtering removed has to arrive somewhere, and it needs the total to
+     * be a fraction OF), and the glitter lobe's facet distribution.
+     *
+     * height_var is in world units squared, slope_var is dimensionless -- a mean square
+     * slope, which is what Cox-Munk's tables are also in.
+     *
+     * PREDICTED, not measured: the inverse transform is unnormalised and the seeding
+     * draws h0 as (ga + i*gb)*A rather than the textbook (1/sqrt2)(xi_r + i*xi_i)*sqrt(S),
+     * so the constant relating these to the field the shader samples is exactly the thing
+     * --water-fft-probe exists to check rather than assert.
+     */
+    float cascade_height_var[WATER_CASCADE_COUNT];
+    float cascade_slope_var[WATER_CASCADE_COUNT];
+
+    /*
      * Last frame's target 0 for the two cascades that displace the mesh, copied out
      * before this frame's transform overwrites it.
      *
@@ -326,5 +347,16 @@ bool water_will_draw(const Water* water, const struct Engine* engine, RenderMode
  */
 void water_render(Water* water, struct Scene* scene, struct Engine* engine, const mat4 view,
                   const mat4 draw_projection);
+
+/*
+ * Measure the transformed cascades and print them beside what the seeding predicted
+ * (spec 11.42). Stalls the pipeline once per cascade, so this is a diagnostic and not
+ * something the render loop may call.
+ *
+ * Requires a spectral surface that has run at least one frame; anything else prints
+ * `available=0` rather than a number, since a caller reading silence as agreement is the
+ * failure this exists to prevent.
+ */
+void water_fft_probe(const Water* water);
 
 #endif // _WATER_H_

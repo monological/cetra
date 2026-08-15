@@ -87,6 +87,7 @@ typedef struct {
     int water_bed_dome;         // Install the analytic dome bed provider (shoaling)
     int no_water;               // Drop a water surface a scene file asked for
     int water_probe;            // Print the CPU wave query over a grid, then continue
+    int water_fft_probe;        // Print the transformed spectrum's measured statistics
     int gi_rate;                // Probes captured per frame while dirty (0 = default)
     int gi_debug;               // Blit the probe atlas into the frame corner
     int sky;                    // Procedural physically-based sky instead of -e

@@ -1,5 +1,6 @@
 #include <math.h>
 #include <stdint.h>
+#include <stdio.h> // water_fft_probe prints to stdout, like the CPU wave query
 #include <stdlib.h>
 
 #include "water.h"
@@ -150,7 +151,8 @@ static float _water_jonswap(float omega, float peak_omega, float alpha, float tm
  */
 static bool _water_build_spectrum(int size, const struct WaterCascadeConfig* cfg,
                                   const WaterSeaState* sea, float wind_angle, float* initial,
-                                  float* wave_data, float* twiddle) {
+                                  float* wave_data, float* twiddle, float* out_height_var,
+                                  float* out_slope_var) {
     const float g = 9.81f;
     const float delta_k = 6.28318530718f / cfg->length_scale;
     // Guarded rather than trusted: these are authored now, and a zero wind speed or fetch
@@ -170,6 +172,12 @@ static bool _water_build_spectrum(int size, const struct WaterCascadeConfig* cfg
     float* h0 = calloc((size_t)size * size * 2, sizeof(float));
     if (!h0)
         return false;
+
+    // Accumulated in double: 16k modes whose amplitudes span decades, and the small ones
+    // are the short waves that carry most of the SLOPE. Summing those into a float total
+    // dominated by the swell loses exactly the half the roughness handover reads.
+    double sum_a2 = 0.0;
+    double sum_k2_a2 = 0.0;
 
     for (int y = 0; y < size; y++) {
         for (int x = 0; x < size; x++) {
@@ -252,6 +260,13 @@ static bool _water_build_spectrum(int size, const struct WaterCascadeConfig* cfg
             _water_gaussian(&rng, &ga, &gb);
             h0[pixel * 2 + 0] = ga * amplitude;
             h0[pixel * 2 + 1] = gb * amplitude;
+            // The mode's expected power, before the RNG: E[|h0|^2] is 2A^2 because ga and
+            // gb are independent standard normals. Accumulated from A rather than from the
+            // drawn h0 so the totals describe the SPECTRUM rather than this one seed's
+            // realisation -- a different seed is the same sea, and a bound taken from one
+            // realisation would move with it.
+            sum_a2 += (double)amplitude * (double)amplitude;
+            sum_k2_a2 += (double)k_len * (double)k_len * (double)amplitude * (double)amplitude;
 
             wd[0] = kx;
             wd[1] = 1.0f / k_len;
@@ -273,6 +288,23 @@ static bool _water_build_spectrum(int size, const struct WaterCascadeConfig* cfg
         }
     }
     free(h0);
+
+    /*
+     * The variance the transformed field is expected to carry.
+     *
+     * The evolve pairs each mode with its conjugate at -k, so the transformed coefficient
+     * has E[|H(k)|^2] = 2A(k)^2 + 2A(-k)^2, and the unnormalised inverse sum makes the
+     * spatial variance the sum of those over the grid -- which is 4 * sum(A^2), since the
+     * -k term walks the same set. The slope field is i*k*H, so its variance carries the
+     * extra k^2 and is already the sum of BOTH components.
+     *
+     * Stated as arithmetic rather than trusted: --water-fft-probe measures the field and
+     * prints the ratio, which is the only way the normalisation gets checked at all.
+     */
+    if (out_height_var)
+        *out_height_var = (float)(4.0 * sum_a2);
+    if (out_slope_var)
+        *out_slope_var = (float)(4.0 * sum_k2_a2);
 
     if (!twiddle)
         return true;
@@ -700,7 +732,8 @@ static bool _water_reseed(Water* water) {
     const float wind_angle = _water_wind_angle(water);
     for (int c = 0; c < WATER_CASCADE_COUNT; c++) {
         if (!_water_build_spectrum(size, &WATER_CASCADE_CFG[c], &water->sea, wind_angle, initial,
-                                   wave, NULL)) {
+                                   wave, NULL, &water->cascade_height_var[c],
+                                   &water->cascade_slope_var[c])) {
             log_error("Water cascade %d re-seed failed; keeping the previous sea state", c);
             free(initial);
             free(wave);
@@ -751,7 +784,8 @@ static bool _water_ensure_spectra(Water* water) {
         // with the first cascade and shared by all of them.
         if (!_water_build_spectrum(size, &WATER_CASCADE_CFG[c], &water->sea,
                                    _water_wind_angle(water), initial, wave,
-                                   c == 0 ? twiddle : NULL)) {
+                                   c == 0 ? twiddle : NULL, &water->cascade_height_var[c],
+                                   &water->cascade_slope_var[c])) {
             log_error("Water cascade %d seeding failed; disabling water", c);
             glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)saved_fbo);
             free(initial);
@@ -1177,4 +1211,77 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
         glEnable(GL_CULL_FACE);
 
     check_gl_error("water surface");
+}
+
+/*
+ * MEASURE the transformed field and print it beside what the seeding predicted.
+ *
+ * The only instrument on the transform itself. Everything else in this subsystem reads
+ * pixels, and pixels cannot distinguish a correct ocean from a wrong-but-deterministic one
+ * -- a swapped twiddle sign or an off-by-one butterfly partner still renders a plausible
+ * sea, still reproduces across runs, and still differs from Gerstner. That is the shape of
+ * defect spec 11.39 shipped in the cloud shadow map with two green arms over it.
+ *
+ * Reading back inside the library rather than from the app, unlike --water-probe: the
+ * cascades are water's own GPU state, and an app reaching into them would be reaching past
+ * the seam that owns them.
+ *
+ * Costs a full pipeline stall per cascade. That is fine here and would not be per frame,
+ * which is why nothing calls this from the render loop.
+ */
+void water_fft_probe(const Water* water) {
+    if (!water || !water->spectra_ready || water->wave_model != WATER_WAVES_FFT) {
+        // A result, not a failure: the Gerstner path has no spectrum to measure, and
+        // saying so is what stops a caller reading silence as agreement.
+        printf("water-fft-probe available=0\n");
+        return;
+    }
+
+    const int size = WATER_SPECTRUM_RES;
+    const size_t texels = (size_t)size * size;
+    float* buf = malloc(texels * 4 * sizeof(float));
+    if (!buf) {
+        printf("water-fft-probe available=0\n");
+        return;
+    }
+
+    printf("water-fft-probe available=1 cascades=%d res=%d\n", WATER_CASCADE_COUNT, size);
+    glActiveTexture(GL_TEXTURE0);
+    for (int c = 0; c < WATER_CASCADE_COUNT; c++) {
+        // Target 0 channel b is the height, target 1 channels r,g are the two slopes --
+        // the same packing ocean.glsl samples, so this measures what the surface reads
+        // rather than an intermediate nothing consumes.
+        glBindTexture(GL_TEXTURE_2D, water->cascade_field[c][0][0]);
+        glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_FLOAT, buf);
+        double mean = 0.0, sq = 0.0, peak = 0.0;
+        for (size_t i = 0; i < texels; i++) {
+            const double h = buf[i * 4 + 2];
+            mean += h;
+            sq += h * h;
+            if (fabs(h) > peak)
+                peak = fabs(h);
+        }
+        mean /= (double)texels;
+        const double height_var = sq / (double)texels - mean * mean;
+
+        glBindTexture(GL_TEXTURE_2D, water->cascade_field[c][0][1]);
+        glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_FLOAT, buf);
+        double slope_sq = 0.0;
+        for (size_t i = 0; i < texels; i++) {
+            const double sx = buf[i * 4 + 0];
+            const double sz = buf[i * 4 + 1];
+            slope_sq += sx * sx + sz * sz;
+        }
+        const double slope_var = slope_sq / (double)texels;
+
+        const double hp = water->cascade_height_var[c];
+        const double sp = water->cascade_slope_var[c];
+        printf("water-fft-probe %d height_pred=%.6f height_meas=%.6f height_ratio=%.4f "
+               "peak=%.4f slope_pred=%.6f slope_meas=%.6f slope_ratio=%.4f\n",
+               c, hp, height_var, height_var / fmax(hp, 1e-12), peak, sp, slope_var,
+               slope_var / fmax(sp, 1e-12));
+    }
+    glBindTexture(GL_TEXTURE_2D, 0);
+    free(buf);
+    check_gl_error("water fft probe");
 }

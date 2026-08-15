@@ -155,6 +155,7 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --no-water-lod     Full wave detail at any cell footprint\n");
     fprintf(stderr, "      --water-bed <m>    none (default) or dome: an analytic bed to shoal\n");
     fprintf(stderr, "      --water-probe      Print the CPU wave query over a grid\n");
+    fprintf(stderr, "      --water-fft-probe  Print the transformed spectrum's statistics\n");
     fprintf(stderr, "      --sky              Procedural physically-based sky (instead of -e)\n");
     fprintf(stderr, "      --sky-debug        Blit the sky LUTs into the frame corner\n");
     fprintf(stderr, "      --clouds           Volumetric cloud layer (implies --sky)\n");
@@ -694,6 +695,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->water = 1;
         } else if (strcmp(argv[i], "--water-probe") == 0) {
             args->water_probe = 1;
+        } else if (strcmp(argv[i], "--water-fft-probe") == 0) {
+            args->water_fft_probe = 1;
         } else if (strcmp(argv[i], "--no-water") == 0) {
             // Does NOT imply --water, obviously, and it wins over it: this is the
             // escape hatch from a scene file that authors a surface.
@@ -3066,6 +3069,13 @@ int main(int argc, char** argv) {
     // reach a spec or a gate.
     if (args.profiler_enabled)
         profiler_report(engine->profiler);
+
+    // The spectral transform's own statistics, for the same reason and in the same window
+    // as the profiler above: the cascades hold the last frame's transform, and reading
+    // them needs a live GL context. AFTER the loop rather than before it, unlike
+    // --water-probe -- there is nothing to measure until a frame has run one.
+    if (args.water_fft_probe)
+        water_fft_probe(scene->water);
 
     printf("Cleaning up...\n");
     if (anim_state) {

@@ -3457,6 +3457,24 @@ WATER_CSCN_MIN_PX = 20000
 WATER_SEASTATE_REF = {"waves": "fft"}
 WATER_SEASTATE_CALM = {"waves": "fft", "windSpeed": 4.0}
 WATER_SEASTATE_MIN_PX = 20000
+
+# The transform carries the variance the seeding predicted (spec 11.42). Measured 0.69 to
+# 0.99 over the three bands at two sea states: this is ONE realisation of a random field on
+# a finite grid, so its sample variance deviates from the ensemble by roughly
+# sqrt(2/N_modes), and the deficit is largest exactly where the energy concentrates into
+# fewest modes -- the long band at 22 m/s reads 0.69, the same band at 11.5 reads 0.96.
+#
+# The band is wide because that spread is physical and narrow enough to be decisive: a
+# transform that collapsed to zero reads 0.00, and one whose modes landed at the wrong
+# wavenumbers moves the slope ratio by the square of how wrong they are.
+#
+# What this CANNOT catch, and water-fft-impulse exists for: a missed fftshift rearranges
+# the field in space and leaves every variance here untouched.
+WATER_FFT_VAR_MIN = 0.5
+WATER_FFT_VAR_MAX = 1.5
+# Mirrors WATER_CASCADE_COUNT (water.h). Asserted rather than assumed: a probe that
+# printed two rows would otherwise be read as two passing cascades.
+WATER_CASCADES = 3
 # And `level` is a field both paths can set, so authoring it must land in exactly the
 # same place the flag does. 0 px or one of them is lying.
 WATER_CSCN_LEVEL = 0.9
@@ -3691,6 +3709,30 @@ def _water_probe(extra, scene=None):
     return head, rows
 
 
+def _water_fft_probe(extra, scene=None):
+    """Run --water-fft-probe and return one row dict per cascade.
+
+    An empty list is a failure at every call site here, unlike _water_probe where
+    declining is one of the results: the flag is only ever passed with a spectral surface
+    already asked for, so nothing to measure means the surface did not survive the flags.
+    """
+    cmd = [RENDER, "-m", scene or os.path.join(ROOT, "assets", WATER_FIXTURE), "-x", "-f", "4",
+           "-W", "200", "-H", "150", "--water-fft-probe"] + extra
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    rows = []
+    for line in (r.stdout + r.stderr).splitlines():
+        if not line.startswith("water-fft-probe "):
+            continue
+        parts = line.split()[1:]
+        # The header carries available/cascades/res; the per-cascade rows lead with an index.
+        if "=" in parts[0]:
+            continue
+        row = {"cascade": int(parts[0])}
+        row.update({k: float(v) for k, v in (p.split("=", 1) for p in parts[1:])})
+        rows.append(row)
+    return rows
+
+
 def _water_cscn_variant(src, dst, overrides):
     """Copy a .cscn with its water block overridden."""
     cscn_copy(src, dst, lambda d: d.setdefault("water", {}).update(overrides))
@@ -3861,6 +3903,13 @@ def run_water_gate(workdir):
                       --no-water-lod, which reports a zero footprint and so reaches the
                       unfiltered surface exactly. The direction of the roughness handover
                       is not measurable here -- see WATER_FAR_ROUGH_AUTHORED.
+      water-fft-var   the transformed field carries the variance the SEEDING predicted,
+                      per band and in both height and slope. The first arm here that
+                      reads the spectrum rather than a picture of it, and the only one
+                      that can fail on a transform which is deterministic, differs from
+                      Gerstner, and is still wrong. Blind to a missed fftshift, which
+                      moves the field in space and not in variance -- that is
+                      water-fft-impulse's half.
       water-seastate  the spectral sea state reaches the seeding. Wind speed, fetch,
                       depth, peak enhancement and swell are authorable since spec 11.42
                       and NO flag can set any of them, so a scene file is the only way in
@@ -4110,6 +4159,23 @@ def run_water_gate(workdir):
               f"{ae_sea} px (want >={WATER_SEASTATE_MIN_PX}, no flag can set it)")
         if not ok:
             failures.append("water-seastate")
+
+    # The transform carries the variance the seeding predicted. The first arm in this
+    # suite that reads the SPECTRUM rather than a picture of it.
+    var_rows = _water_fft_probe(WATER_PIN + ["--water-waves", "fft"])
+    if len(var_rows) != WATER_CASCADES:
+        print(f"  water-fft-var FAIL  --water-fft-probe printed {len(var_rows)} cascades, "
+              f"want {WATER_CASCADES}")
+        failures.append("water-fft-var")
+    else:
+        hr = [r["height_ratio"] for r in var_rows]
+        sr = [r["slope_ratio"] for r in var_rows]
+        ok = all(WATER_FFT_VAR_MIN <= v <= WATER_FFT_VAR_MAX for v in hr + sr)
+        print(f"  water-fft-var {'PASS' if ok else 'FAIL'}  measured/predicted height "
+              f"{'/'.join(f'{v:.2f}' for v in hr)} slope {'/'.join(f'{v:.2f}' for v in sr)} "
+              f"(want {WATER_FFT_VAR_MIN}-{WATER_FFT_VAR_MAX} on all six)")
+        if not ok:
+            failures.append("water-fft-var")
 
     # Reach invariance. `off` is the matching dry reference -- same flags, --no-water.
     reach_a = os.path.join(workdir, "water_reach_authored.ppm")
