@@ -102,6 +102,28 @@ static void parse_environment(CetraSceneDesc* d, const cJSON* root) {
         bool ga = get_float(sun, "azimuth", &d->env_sun_azimuth_deg);
         d->has_env_sun = ge && ga;
     }
+
+    /*
+     * Report a key nothing above read. Same closed-block reasoning as parse_water, and
+     * the same failure it is here for: water_fixture.cscn authored sun_elevation and
+     * sun_azimuth FLAT for four specs, where the angles live one level down under "sun".
+     * The scene rendered at the sky's own 35 degrees while the file said 26, every water
+     * arm was calibrated against the frame rather than the authoring, and nothing could
+     * say so -- a --sun-elevation 26 render moves 85% of that frame.
+     */
+    static const char* const known[] = {"mode", "hdr", "probe_scene", "intensity",
+                                        "ambient", "sun"};
+    const cJSON* key = NULL;
+    cJSON_ArrayForEach(key, env) {
+        if (!key->string || key->string[0] == '_') // _comment and friends
+            continue;
+        bool known_key = false;
+        for (size_t i = 0; i < sizeof(known) / sizeof(known[0]) && !known_key; i++)
+            known_key = strcmp(key->string, known[i]) == 0;
+        if (!known_key)
+            log_warn("cscene: environment key '%s' is not an environment parameter; ignored",
+                     key->string);
+    }
 }
 
 LightType cscene_light_type(CSceneLightType type) {
@@ -453,6 +475,37 @@ static void parse_water(CetraSceneDesc* d, const cJSON* root) {
             log_warn("cscene: water.waves '%s' is not gerstner or fft; ignored",
                      waves->valuestring);
         }
+    }
+
+    /*
+     * Report a key nothing above read.
+     *
+     * A missing key and a MISSPELLED one are the same thing to get_float, so without this
+     * a scene authoring "windspeed" gets the default sea and no indication why. That is
+     * the failure mode this file already refuses for material textures and for an
+     * unrecognised waves model, and water is where it bites hardest: the five sea-state
+     * keys have no flag, so a scene file is the only way to set them at all.
+     *
+     * The block is CLOSED -- every key it accepts is read directly above -- which is what
+     * makes an unknown one wrong here, unlike a material's, whose key set belongs to the
+     * application. The duplicate list is the price, and water-fixture-roundtrip asserts
+     * the two halves and the fixture agree rather than trusting anyone to keep them so.
+     */
+    static const char* const known[] = {
+        "enabled",   "level",           "extent", "wavelength", "amplitude",     "steepness",
+        "spread",    "windDirection",   "waves",  "windSpeed",  "fetch",         "seaDepth",
+        "roughness", "peakEnhancement", "swell",  "ior",        "absorption",    "scatter",
+        "caustics",  "shoreCoverage",   "farLod",
+    };
+    const cJSON* key = NULL;
+    cJSON_ArrayForEach(key, water) {
+        if (!key->string || key->string[0] == '_') // _comment and friends
+            continue;
+        bool known_key = false;
+        for (size_t i = 0; i < sizeof(known) / sizeof(known[0]) && !known_key; i++)
+            known_key = strcmp(key->string, known[i]) == 0;
+        if (!known_key)
+            log_warn("cscene: water key '%s' is not a water parameter; ignored", key->string);
     }
 }
 

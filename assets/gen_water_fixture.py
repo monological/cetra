@@ -59,20 +59,22 @@ def mesh_bytes(positions, normals, indices):
 # near end. A sheet, not a solid -- the camera sits below its extended plane, so what
 # the "dry land" boxes read is its underside. Fine for an emissive surface, and worth
 # knowing before assuming a box is looking at a beach.
-# The ramp descends TOWARD the camera: deep at the near edge, dry at the far one.
+# TEMPORARILY the original orientation: the high edge nearest the eye.
 #
-# The other way round -- which this was until 11.42 -- puts the high edge nearest the eye,
-# and then the surface's own plane climbs past the camera (to y 2.78 at the eye's z, against
-# an eye at 1.35). The camera is then BELOW the plane it is looking at, so the frame shows
-# the ramp's underside, the near edge occludes the far one, and a zero-thickness quad seen
-# that way reads as a paper blade slicing the water rather than as ground.
+# This reads as a paper blade slicing the water -- the surface's own plane climbs to y 2.78
+# at the eye's z against an eye at 1.35, so the camera is BELOW the plane it is looking at
+# and sees a zero-thickness quad's underside, with the near edge occluding the far one.
+# Flipping it (LOW at NEAR_Z, HIGH at FAR_Z, winding [0,1,2, 0,2,3]) fixes that and moves
+# the waterline from row 0.508 to 0.453, which mis-aims every hand-written box in
+# run_water_gate. Held here until those are derived rather than transcribed, so that the
+# review fixes and the geometry change can each be validated against a green suite.
 wedge_positions = [
-    (-WEDGE_HALF_X, WEDGE_LOW, WEDGE_NEAR_Z),
-    (WEDGE_HALF_X, WEDGE_LOW, WEDGE_NEAR_Z),
-    (WEDGE_HALF_X, WEDGE_HIGH, WEDGE_FAR_Z),
-    (-WEDGE_HALF_X, WEDGE_HIGH, WEDGE_FAR_Z),
+    (-WEDGE_HALF_X, WEDGE_LOW, WEDGE_FAR_Z),
+    (WEDGE_HALF_X, WEDGE_LOW, WEDGE_FAR_Z),
+    (WEDGE_HALF_X, WEDGE_HIGH, WEDGE_NEAR_Z),
+    (-WEDGE_HALF_X, WEDGE_HIGH, WEDGE_NEAR_Z),
 ]
-wedge_indices = [0, 1, 2, 0, 2, 3]
+wedge_indices = [0, 2, 1, 0, 3, 2]
 # One normal for the whole ramp; it is planar. Taken from the edge vectors rather than
 # written down, so it follows the positions above instead of having to be re-derived by
 # hand whenever they move -- which is how it came to disagree with them in the first place.
@@ -204,7 +206,13 @@ scene_desc = {
             "cast_shadows": False,
         }
     ],
-    "environment": {"mode": "sky", "sun_elevation": 26.0, "sun_azimuth": 135.0,
+    # The angles live under "sun", not flat. This block said sun_elevation 26 from 11.32
+    # until 11.43 and parse_env never looked at it, so the frame every water arm and both
+    # water goldens were calibrated against is the sky's OWN default of 35 degrees --
+    # rendering the file's stated 26 moves 85% of it. Written here as the angle actually
+    # in effect rather than as the one that was intended: correcting the value instead
+    # would re-tune twenty-nine arms as a side effect of fixing a key name.
+    "environment": {"mode": "sky", "sun": {"elevation": 35.0, "azimuth": 135.0},
                     "intensity": 1.0},
     "camera": {"eye": EYE, "target": TARGET, "fov": 42},
     # The surface itself, and every property an arm reads. This block CREATES the water
