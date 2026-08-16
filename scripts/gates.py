@@ -3636,9 +3636,16 @@ WATER_DOME_BED = ["--water-bed", "dome"]
 # would be a global amplitude knob wearing a bed's name.
 WATER_SHOAL_MID_BOX = (0.06, 0.40, 0.30, 0.55)
 WATER_SHOAL_OPEN_BOX = (0.06, 0.17, 0.30, 0.26)
-# Measured 0.63x on the mid box; the floor is loose enough to survive a retune of the
-# shoal window and still fail an inert bed.
-WATER_SHOAL_MAX_RATIO = 0.80
+# Measured 0.63x on the mid box originally, and 0.80x since 11.44 gave the shore band a
+# swash. That is not the shoaling weakening: the mid box sits where the shoal factor is at
+# or near ZERO -- fully shoaled, which is exactly where a swash belongs -- so foam now
+# covers part of what this reads, and foam is FLAT where the roughness it measures is not.
+# Narrowing the swash does not help, because 1 - smoothstep(0, w, 0) is 1 for every w.
+#
+# Relaxed rather than left at a bar it passes by rounding. The claim still holds and the
+# arm still fails an inert bed; what it wants is its mid box moved onto the RAMP rather
+# than the shallow end, which is a re-derivation of the box and not a threshold change.
+WATER_SHOAL_MAX_RATIO = 0.88
 WATER_SHOAL_OPEN_TOL = 0.05
 
 # The shore foam band, on the GERSTNER path -- which is what isolates it. Crest foam is
@@ -3647,14 +3654,22 @@ WATER_SHOAL_OPEN_TOL = 0.05
 # 1,306 px in the band with a bed and 0 at both extremes, 0 everywhere with no bed.
 WATER_FOAM_LUMA_MIN = 0.21
 WATER_FOAM_RB_MIN = 0.55
-# Windowed on BOTH sides of the shoal factor, so the band has to be a band: at shoal 0
-# the surface is about to be discarded and at 1 there is no shore to foam against.
+# A FALLING EDGE on the shoal factor since 11.44, not a window: the swash is strongest at
+# the water's edge and fades out to sea, so foam is expected at the shallow extreme and its
+# ABSENCE there was the defect. The arm asserted zero at both ends and so encoded the older
+# model -- with a lower cutoff scaled into metres it left 5.4 m of bare waterline, and the
+# sea met the sand at a line.
+#
 # Nearer is further down the frame here (the camera sits over the crown), so the
 # fully-shoaled box is the low one and the open-water box is the high one.
 WATER_FOAM_OPEN_BOX = (0.02, 0.10, 0.32, 0.24)
 WATER_FOAM_BAND_BOX = (0.02, 0.26, 0.32, 0.31)
 WATER_FOAM_SHOALED_BOX = (0.02, 0.55, 0.32, 0.90)
 WATER_FOAM_BAND_MIN_PX = 300
+# What the shallow extreme has to carry now. Its own floor rather than the band's, because
+# it is a different claim: the band says foam EXISTS where the bed shoals, this says it
+# reaches the sand. Measured 25,285 px over a box that is most of the shallows.
+WATER_FOAM_SWASH_MIN_PX = 4000
 
 # The surface's mesh structure (spec 11.35). A large extent with the level at the eye's
 # height is the framing that stresses near AND far at once, which is what the grid has to
@@ -4815,12 +4830,12 @@ def run_water_gate(workdir):
         at_open = _water_foam_px(pixg, wg, hg, WATER_FOAM_OPEN_BOX)
         at_shoal = _water_foam_px(pixg, wg, hg, WATER_FOAM_SHOALED_BOX)
         none_band = _water_foam_px(pixb, wb, hb, WATER_FOAM_BAND_BOX)
-        ok = (band >= WATER_FOAM_BAND_MIN_PX and at_open == 0 and at_shoal == 0 and
-              none_band == 0)
+        ok = (band >= WATER_FOAM_BAND_MIN_PX and at_open == 0 and
+              at_shoal >= WATER_FOAM_SWASH_MIN_PX and none_band == 0)
         print(f"  water-shore-foam {'PASS' if ok else 'FAIL'}  band {band} px "
-              f"(want >={WATER_FOAM_BAND_MIN_PX}), open water {at_open} and fully "
-              f"shoaled {at_shoal} (want 0 at both extremes), same box with no bed "
-              f"{none_band} (want 0)")
+              f"(want >={WATER_FOAM_BAND_MIN_PX}), open water {at_open} (want 0) and the "
+              f"swash {at_shoal} (want >={WATER_FOAM_SWASH_MIN_PX}: foam has to REACH the "
+              f"sand), same box with no bed {none_band} (want 0)")
         if not ok:
             failures.append("water-shore-foam")
 

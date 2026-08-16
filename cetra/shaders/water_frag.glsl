@@ -156,6 +156,10 @@ const float WATER_DEPTH_EMPTY = 0.99999;
 // little to do with the ray -- the validity check below catches the wrong ones,
 // but not reaching for them is cheaper than rejecting them.
 const float WATER_MAX_BEND_M = 1.0;
+// How far behind the surface a refraction probe has to be before its sample is trusted
+// fully, in METRES. The bend fades out over this rather than switching off at a threshold:
+// a switch on a continuous quantity draws a visible edge along wherever it flips.
+const float WATER_BEND_FADE_M = 0.40;
 // The short cascade's resolved slope is faded out between these view distances,
 // its energy moving into roughness. Metres: at 12 m tiling, past ~120 m a period
 // is a couple of pixels and a literal normal there is aliasing, not detail.
@@ -177,6 +181,10 @@ const float WATER_FOAM_MAX = 0.62;
 // Shore band strength. Lower than a breaking crest: this is water going shallow,
 // not water breaking, and at crest strength every lake edge would read as surf.
 const float WATER_SHORE_FOAM = 0.45;
+// How far out the swash reaches, as shoal factor. Small: a swash is the last thin run of
+// water up the sand, and anything wider is a sheet laid over the whole shelf -- which
+// water-shoal reads directly, since foam is flat and the roughness it measures is not.
+const float WATER_SWASH_SHOAL = 0.06;
 // Foam breakup, in cycles per METRE. Two scales an octave and a half apart, which is
 // enough that their sum does not read as either one of them.
 //
@@ -415,20 +423,29 @@ void main() {
      * Shore foam, on both wave models. The whitewater a beach carries even where nothing is
      * breaking, strongest in the SWASH at the water's edge and fading out to sea.
      *
-     * The inner edge is barely a window at all, and that is the correction spec 11.44 owed
-     * it. It used to open over shoal 0.02 to 0.22, on the reasoning that at shoal 0 the
-     * surface is about to be discarded anyway -- true when the shoal window was being read
-     * as 2.56 WORLD UNITS, where 0.02 of it was a couple of centimetres. Once the window
-     * became the 2.56 METRES it always meant, that same 0.02 was 36 cm of water and 24 units
-     * of ground, so the shallowest water carried no foam at all and the sea met the sand at
-     * a bare line. A beach's foam runs up the sand, not out to a threshold.
+     * THERE IS NO INNER EDGE, and that is the point. The band used to open over shoal 0.02
+     * to 0.22, on the reasoning that at shoal 0 the surface is about to be discarded anyway.
+     * That held while the shoal window was being read as 2.56 WORLD UNITS and 0.02 of it was
+     * a couple of centimetres. Once 11.44 made the window the 2.56 METRES it always meant,
+     * the same expression left 5.4 m of waterline with no foam on it -- the sea met the sand
+     * at a bare line, which is the one thing a beach never does. Narrowing the ramp only
+     * narrowed the bare strip.
      *
-     * The upper edge still closes it: at shoal 1 there is no shore to foam against.
+     * The swash is STRONGEST at the water's edge and fades out to sea, so the band is a
+     * single falling edge, full where the water is shallowest. What stops it drawing foam on
+     * dry ground is the discard, which runs off the water COLUMN and not off this, with
+     * derivative coverage already feathering it.
      *
-     * No bedAvailable guard: with no bed the shoal factor is exactly 1 everywhere, so the
-     * upper edge already zeroes this. The uniform test enforced the same fact a second time.
+     * It falls FAST, and how fast is a measured constraint rather than a taste. Carried out
+     * to shoal 0.72 -- the old upper edge -- it put full-strength foam over every metre of
+     * depth on the shelf, which is a sheet and not a swash, and it flattened water-shoal's
+     * roughness contrast from 0.34x to 0.80x: the foam masking the shoaling it sits on. A
+     * swash is thin on a real beach for the same reason it has to be thin here.
+     *
+     * No bedAvailable guard: with no bed the shoal factor is exactly 1 everywhere, so this is
+     * zero. The uniform test enforced the same fact a second time.
      */
-    float band = smoothstep(0.0, 0.05, Shoal) * (1.0 - smoothstep(0.30, 0.72, Shoal));
+    float band = 1.0 - smoothstep(0.0, WATER_SWASH_SHOAL, Shoal);
     foam = max(foam, band * WATER_SHORE_FOAM);
 
     /*
@@ -597,10 +614,20 @@ void main() {
         // mottled patches wherever a wave happens to aim the ray there. If the
         // sample it landed on sits in FRONT of this surface, it was never behind
         // the water and the unbent sample is the honest answer.
+        //
+        // FADED rather than switched, which is the correction spec 11.44 owed this. It used
+        // to snap the UV back the instant the probe came forward of the surface -- a binary
+        // decision on a continuous quantity, so wherever the test flipped it drew a step one
+        // pixel wide, and on a flat sea the locus of "the probe is in front" is a contour of
+        // constant distance, which projects to a straight horizontal LINE across the frame.
+        // Rare while the bend was capped at one world unit; unmissable once 11.44 made that
+        // cap a metre in a world of 22 units, so the ray reached far enough to trip it over
+        // most of the middle distance.
         if (sceneDepthAvailable == 1) {
             float probeNdc = texture(sceneDepthTex, refrUV).r * 2.0 - 1.0;
-            if (-viewZFromNdcZ(probeNdc) < surfaceDist)
-                refrUV = uv;
+            float behind = -viewZFromNdcZ(probeNdc) - surfaceDist;
+            refrUV = mix(uv, refrUV,
+                         smoothstep(0.0, WATER_BEND_FADE_M * waterUnitsPerMetre, behind));
         }
         bed = textureLod(sceneColorTex, refrUV, roughness * WATER_TRANSMISSION_MAX_LOD).rgb;
 
