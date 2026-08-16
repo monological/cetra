@@ -204,6 +204,10 @@ const float WATER_FOAM_BUBBLE_RELIEF = 2.6;
 // How thin the crust gets where the noise is darkest. Not zero: foam that vanishes in the
 // troughs reads as holes punched in it rather than as varying thickness.
 const float WATER_FOAM_BUBBLE_MIN = 0.55;
+// How far light wraps around the foam past the terminator. 1 lights the whole sphere and
+// reads as a self-lit blob; 0.6 keeps a sunward side while letting a shore under a sun on
+// the horizon still carry surf.
+const float WATER_FOAM_WRAP = 0.6;
 // How completely foam replaces what is under it. Whitewater is opaque, and a swash over
 // shallow water is the one place that matters -- at 0.62 the pale bed still showed through
 // enough to keep the two indistinguishable.
@@ -812,8 +816,24 @@ void main() {
         vec3 ambient = iblEnabled > 0 ? textureLod(prefilteredMap, bubbleN, maxReflectionLOD).rgb *
                                             iblIntensity
                                       : vec3(1.0);
+        /*
+         * WRAPPED, not Lambertian. Foam is a dense froth of air in water, and light entering
+         * it scatters many times before leaving -- so it is lit well past the terminator and
+         * from directions a flat diffuse surface gets nothing from. That is why surf GLOWS at
+         * sunset while everything around it goes dark.
+         *
+         * Straight N.L gets that badly wrong exactly there: the surface normal is near
+         * vertical, so at a sun 0.8 degrees up it is 0.014 and correctly-lit foam is black.
+         * The frame then shows the sea meeting the sand at a bare line, which is what it did.
+         *
+         * The (N.L + w)/(1 + w) form is the cheap standard for it, and the normalisation is
+         * what keeps it from being a brightness cheat: it cannot exceed 1, so foam facing the
+         * sun is no brighter than before -- only foam facing away stops being nothing.
+         */
+        float wrapped = max(dot(bubbleN, sunDir) + WATER_FOAM_WRAP, 0.0) /
+                        (1.0 + WATER_FOAM_WRAP);
         vec3 direct = sunAvailable == 1
-                          ? sunRadiance * max(dot(bubbleN, sunDir), 0.0) * sunVis * WATER_INV_PI
+                          ? sunRadiance * wrapped * sunVis * WATER_INV_PI
                           : vec3(0.0);
         // Thickness: never to zero, or the crust reads as holes rather than as texture.
         float thick = mix(WATER_FOAM_BUBBLE_MIN, 1.0, b0);
