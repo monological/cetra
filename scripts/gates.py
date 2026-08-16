@@ -5143,6 +5143,9 @@ BEACH_BAND_MIN_FRAC = 0.60
 # How much of the run-up ceiling the CPU twin's samples must span, and how far one primary
 # period moves them. Both fractions of the ceiling rather than absolute heights, so the arm
 # does not need re-tuning every time the fixture's sea state moves. Measured 0.216 and 0.171.
+# Half-width of the disc `moved` reads over, in pixels. Small: it is there to span one
+# filament of the foam web, not to blur the shore band into its surroundings.
+BEACH_MOVED_DISC = 2
 SHORE_TWIN_MIN_SPREAD = 0.10
 SHORE_TWIN_MIN_DRIFT = 0.05
 
@@ -5339,12 +5342,26 @@ def run_beach_gate(workdir):
     if not ok:
         failures.append("beach-shoal")
 
-    # Bounded: the bed moves the shore band and leaves the dry crown exactly alone.
+    """
+    Bounded: the bed moves the shore band and leaves the dry crown exactly alone.
+
+    Read over a small DISC rather than at the single pixel the sample lands on. Whitewater is
+    a centimetre-scale web (spec 11.45), so one pixel answers whether that sample happened to
+    fall on a filament or in a hole -- which is the pattern's phase and not the bed's effect,
+    and it swung the pooled fraction by several per cent between builds that differed only in
+    how fine the foam was. A neighbourhood asks the question the arm's name asks.
+    """
     def moved(radius, deg):
         o = _beach_pixel(pix, w, h, project, radius, deg)
         if o is None:
             return None
-        return max(abs(pix[o + k] - poff[o + k]) for k in range(3)) > BEACH_DIFF_THRESH
+        best = 0
+        for dy in range(-BEACH_MOVED_DISC, BEACH_MOVED_DISC + 1):
+            for dx in range(-BEACH_MOVED_DISC, BEACH_MOVED_DISC + 1):
+                p = o + (dy * w + dx) * 3
+                if 0 <= p < len(pix) - 3:
+                    best = max(best, max(abs(pix[p + k] - poff[p + k]) for k in range(3)))
+        return best > BEACH_DIFF_THRESH
 
     crown_hits, crown_n, band_hits, band_n = 0, 0, 0, 0
     for deg in BEACH_AZIMUTHS:

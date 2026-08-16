@@ -233,14 +233,22 @@ const float WATER_SHORE_FOAM_REST = 0.3;
 // up the sand, and anything wider is a sheet laid over the whole shelf -- which water-shoal
 // reads directly, since foam is flat and the roughness it measures is not.
 const float WATER_SWASH_SHOAL = 0.10;
-// Foam breakup, in cycles per METRE. Two scales an octave and a half apart, which is
-// enough that their sum does not read as either one of them.
-//
-// Per world unit, these put 0.42 cycles in every 4.5 cm of a world at 22 units to the
-// metre -- breakup finer than a pixel, which averages to a flat wash rather than reading
-// as broken-up foam.
-const float WATER_FOAM_NOISE_A_PER_M = 0.42;
-const float WATER_FOAM_NOISE_B_PER_M = 1.31;
+/*
+ * The breakup's base frequency, in cycles per METRE. waterFoamPattern lays its other two
+ * bands on at 2.3x and 5.7x this, so one number sets the whole web's scale.
+ *
+ * FOAM IS CENTIMETRE-SCALE, and this is the constant that says so. At 0.42 a cell spanned
+ * 2.4 m, which is wider than most of the whitewater in a frame -- the ridge was there and
+ * every filament of it was metres across, so the pattern still read as lumps however it was
+ * folded. 4 cycles a metre puts a cell at 25 cm, which is a clump of bubbles rather than a
+ * bank of them, and the fine band inside takes it to 4 cm.
+ *
+ * There is a floor under this and it is aliasing: a web finer than the footprint averages to
+ * a flat grey wash, which is the failure the whole Jacobian selection exists to avoid. The far
+ * field is protected by the foam FADING there rather than by this number, so anything much
+ * finer wants a mip chain and therefore a sampler this program does not have.
+ */
+const float WATER_FOAM_NOISE_A_PER_M = 4.0;
 /*
  * The breakup is a COVERAGE THRESHOLD, not a brightness modulation, and the threshold rises
  * as the foam thins.
@@ -270,9 +278,12 @@ const float WATER_FOAM_NOISE_B_PER_M = 1.31;
  * full-strength foam. A bar tied to the amount cannot do that -- at full strength there is no
  * hole to punch -- so the floor is not needed and would only stop the foam ever leaving.
  */
-const float WATER_FOAM_ERODE_HI = 0.61;
-const float WATER_FOAM_ERODE_SPAN = 0.34;
+const float WATER_FOAM_ERODE_HI = 1.05;
+const float WATER_FOAM_ERODE_SPAN = 1.15;
 const float WATER_FOAM_ERODE_EDGE = 0.15;
+// How hard the coarse band is folded about zero. Higher is a thinner, sharper web; at 1 the
+// ridge is as wide as the noise itself and stops reading as a filament at all.
+const float WATER_FOAM_RIDGE = 1.2;
 /*
  * Caustics. Light crossing the surface is focused by the surface's own curvature,
  * so the brightness on the bed is a property of the WAVES above the point being
@@ -351,6 +362,31 @@ float waterValueNoise(vec2 p) {
     return mix(mix(waterHash21(cell), waterHash21(cell + vec2(1.0, 0.0)), f.x),
                mix(waterHash21(cell + vec2(0.0, 1.0)), waterHash21(cell + vec2(1.0, 1.0)), f.x),
                f.y);
+}
+
+/*
+ * THE FOAM PATTERN, and the ridge is the whole of it.
+ *
+ * Value noise is smooth and its level sets are blobs, so thresholding it -- however cleverly
+ * -- gives rounded lumps. Whitewater is not lumps. It is a WEB: thin films stretched between
+ * bubbles, so its structure is filaments and the cells between them.
+ *
+ * Folding a zero-mean field about zero is what produces that. `1 - |n|` puts a crest along
+ * every zero crossing of the noise, which is a curve rather than a region, and squaring it
+ * sharpens the crest into a strand. Three bands, coarse to fine, and only the coarsest is
+ * ridged: it carries the web, and the other two are there to keep the strands from reading as
+ * a regular mesh.
+ *
+ * The weights are the ones the structure was tuned at and the constant term matters as much as
+ * the rest -- it is the wash BETWEEN the filaments, without which the pattern thresholds into
+ * disconnected specks instead of a net that thins.
+ */
+float waterFoamPattern(vec2 p) {
+    float web = waterValueNoise(p) * 2.0 - 1.0;
+    float w = max(0.0, 1.0 - WATER_FOAM_RIDGE * abs(web));
+    float mid = waterValueNoise(p * 2.3 + vec2(11.3, 4.7)) * 2.0 - 1.0;
+    float fine = waterValueNoise(p * 5.7 - vec2(7.1, 2.9)) * 2.0 - 1.0;
+    return clamp(0.55 * w * w + 0.25 + 0.18 * mid + 0.12 * fine, 0.0, 1.0);
 }
 
 float waterSmith(float ndx) {
@@ -575,10 +611,8 @@ void main() {
     // Cycles per metre over a position in world units, so the frequency divides. Shared by
     // both breakups below, which differ in where they are SAMPLED, not in scale.
     float noiseA = WATER_FOAM_NOISE_A_PER_M / waterUnitsPerMetre;
-    float noiseB = WATER_FOAM_NOISE_B_PER_M / waterUnitsPerMetre;
     if (foam > 0.0) {
-        float breakup = waterValueNoise(WorldPos.xz * noiseA + time * 0.03) * 0.62 +
-                        waterValueNoise(WorldPos.xz * noiseB - time * 0.05) * 0.38;
+        float breakup = waterFoamPattern(WorldPos.xz * noiseA + time * 0.03);
         // The bar is read from the foam BEFORE it is eroded, so thinning raises it and the
         // pattern comes apart; what survives keeps the strength it had.
         float bar = WATER_FOAM_ERODE_HI - WATER_FOAM_ERODE_SPAN * foam;
@@ -606,8 +640,7 @@ void main() {
          * cannot collapse and it has nothing to be discontinuous across.
          */
         vec2 q = WorldPos.xz - ShoreDir * SwashRun;
-        float breakup = waterValueNoise(q * noiseA + time * 0.03) * 0.62 +
-                        waterValueNoise(q * noiseB - time * 0.05) * 0.38;
+        float breakup = waterFoamPattern(q * noiseA + time * 0.03);
         float bar = WATER_FOAM_ERODE_HI - WATER_FOAM_ERODE_SPAN * shoreFoam;
         shoreFoam *= smoothstep(0.0, WATER_FOAM_ERODE_EDGE, breakup - bar);
     }
