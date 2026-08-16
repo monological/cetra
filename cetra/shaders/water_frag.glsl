@@ -172,19 +172,50 @@ const float WATER_SHORT_SLOPE_GAIN = 0.42;
 // Jacobian compression at which foam starts and saturates.
 const float WATER_FOAM_ON = 0.16;
 const float WATER_FOAM_FULL = 0.42;
-// Whitewater is not white: it is a bright grey with the sky in it.
-const vec3 WATER_FOAM_COLOR = vec3(0.72, 0.80, 0.78);
+/*
+ * Whitewater is very nearly white, and the grey this used to be is why a swash over pale
+ * sand was invisible.
+ *
+ * Entrained air makes foam one of the brightest natural surfaces -- an albedo up around
+ * 0.9, higher than dry sand and far higher than wet. At 0.72 it sat BELOW the beach it was
+ * running over (0.93 since 11.44), so mixing toward it at the waterline made the frame
+ * slightly darker and greyer, which reads as nothing at all. "Not white, a bright grey with
+ * the sky in it" describes foam under an overcast; the sky it carries arrives through the
+ * lighting now and does not need to be baked into the albedo as well.
+ */
+const vec3 WATER_FOAM_COLOR = vec3(0.95, 0.97, 0.97);
 // Lambertian normalisation for the foam's direct term. The ambient half needs none: a mip
 // of the environment is already an average radiance, where the sun arrives as one.
 const float WATER_INV_PI = 0.31830988618;
-const float WATER_FOAM_MAX = 0.62;
-// Shore band strength. Lower than a breaking crest: this is water going shallow,
-// not water breaking, and at crest strength every lake edge would read as surf.
-const float WATER_SHORE_FOAM = 0.45;
-// How far out the swash reaches, as shoal factor. Small: a swash is the last thin run of
-// water up the sand, and anything wider is a sheet laid over the whole shelf -- which
-// water-shoal reads directly, since foam is flat and the roughness it measures is not.
-const float WATER_SWASH_SHOAL = 0.06;
+/*
+ * The bubble crust: cycles per METRE, how far it drifts, and how hard it tilts the normal.
+ *
+ * Finer than the breakup noise, which chooses WHERE foam is -- this is the texture of the
+ * foam that is already there. 3.2 per metre is roughly a 30 cm clump, which is what reads
+ * as bubbles at the distance a shore is looked at rather than as sandpaper.
+ *
+ * STEP is the finite-difference offset for the gradient, in noise units, and wants to stay
+ * well under a cycle or the difference stops describing the slope it is standing on.
+ */
+const float WATER_FOAM_BUBBLE_PER_M = 3.2;
+const vec2 WATER_FOAM_BUBBLE_DRIFT = vec2(0.021, -0.014);
+const float WATER_FOAM_BUBBLE_STEP = 0.28;
+const float WATER_FOAM_BUBBLE_RELIEF = 2.6;
+// How thin the crust gets where the noise is darkest. Not zero: foam that vanishes in the
+// troughs reads as holes punched in it rather than as varying thickness.
+const float WATER_FOAM_BUBBLE_MIN = 0.55;
+// How completely foam replaces what is under it. Whitewater is opaque, and a swash over
+// shallow water is the one place that matters -- at 0.62 the pale bed still showed through
+// enough to keep the two indistinguishable.
+const float WATER_FOAM_MAX = 0.88;
+// Shore band strength. A breaking shore IS mostly whitewater, so this sits near the crest
+// value rather than well under it -- the old 0.45 was set when the band covered the whole
+// shelf, where that much foam was a wash. Confined to the swash it can be what a swash is.
+const float WATER_SHORE_FOAM = 0.92;
+// How far out the swash reaches, as shoal factor. Small: a swash is the last run of water
+// up the sand, and anything wider is a sheet laid over the whole shelf -- which water-shoal
+// reads directly, since foam is flat and the roughness it measures is not.
+const float WATER_SWASH_SHOAL = 0.10;
 // Foam breakup, in cycles per METRE. Two scales an octave and a half apart, which is
 // enough that their sum does not read as either one of them.
 //
@@ -754,14 +785,39 @@ void main() {
          * top mip is already a hemispherical average -- which is the same quantity, up to
          * the pi that the sun half carries explicitly.
          */
+        /*
+         * BUBBLES (spec 11.44). Foam is a crust of entrained air, not a flat coat of paint,
+         * and shading it off the water's own smooth normal is what made it read as one.
+         *
+         * The relief is value noise sampled three times -- centre and two neighbours -- so
+         * its gradient is a difference rather than a second field, which is the same reason
+         * ocean.glsl derives a normal from the displacement it drew. Evaluated, not sampled:
+         * this program has no sampler left, and a bubble map would need one.
+         *
+         * Two things come out of the one field. The gradient tilts the normal, so bubbles
+         * catch the sun and the sky at their own angles; the value itself mottles the albedo,
+         * because a foam crust is thicker in some places than others and thin foam lets the
+         * water under it through.
+         */
+        vec2 bubbleP = WorldPos.xz * (WATER_FOAM_BUBBLE_PER_M / waterUnitsPerMetre) +
+                       time * WATER_FOAM_BUBBLE_DRIFT;
+        float b0 = waterValueNoise(bubbleP);
+        float bx = waterValueNoise(bubbleP + vec2(WATER_FOAM_BUBBLE_STEP, 0.0));
+        float bz = waterValueNoise(bubbleP + vec2(0.0, WATER_FOAM_BUBBLE_STEP));
         vec3 nWorld = normalize(mat3(transpose(view)) * Nv);
-        vec3 ambient = iblEnabled > 0 ? textureLod(prefilteredMap, nWorld, maxReflectionLOD).rgb *
+        // Tilted in WORLD xz, which is the plane the noise lives in. Weighted by how much
+        // foam is here: a wisp does not deserve the same relief as a bank of it.
+        vec3 bubbleN = normalize(nWorld + vec3(-(bx - b0), 0.0, -(bz - b0)) *
+                                              WATER_FOAM_BUBBLE_RELIEF * foam);
+        vec3 ambient = iblEnabled > 0 ? textureLod(prefilteredMap, bubbleN, maxReflectionLOD).rgb *
                                             iblIntensity
                                       : vec3(1.0);
         vec3 direct = sunAvailable == 1
-                          ? sunRadiance * max(dot(nWorld, sunDir), 0.0) * sunVis * WATER_INV_PI
+                          ? sunRadiance * max(dot(bubbleN, sunDir), 0.0) * sunVis * WATER_INV_PI
                           : vec3(0.0);
-        vec3 lit = WATER_FOAM_COLOR * (ambient + direct) * preExposure;
+        // Thickness: never to zero, or the crust reads as holes rather than as texture.
+        float thick = mix(WATER_FOAM_BUBBLE_MIN, 1.0, b0);
+        vec3 lit = WATER_FOAM_COLOR * thick * (ambient + direct) * preExposure;
         color = mix(color, lit, clamp(foam, 0.0, 1.0) * WATER_FOAM_MAX);
     }
 

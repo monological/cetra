@@ -9,6 +9,58 @@
 // last-bit noise on a 620-unit dome, narrow enough to resolve the shore's own curvature.
 #define GROUND_NORMAL_STEP 0.5f
 
+/*
+ * Value noise, deterministic and self-contained (spec 11.44).
+ *
+ * NOT veg_perlin2, whose permutation table is file-static global state seeded by whoever
+ * called veg_noise_seed last. ground_height_at is read by the island mesh, the seabed, the
+ * bed bake, the grass scatter, the leaf litter and the rock placement, and a ground whose
+ * SHAPE depended on which of those ran first would be a worse failure than the circle this
+ * exists to break. A hash has no state to get wrong.
+ */
+static float ground_hash(int xi, int zi) {
+    unsigned int h = (unsigned int)(xi * 374761393) ^ (unsigned int)(zi * 668265263);
+    h = (h ^ (h >> 13)) * 1274126177u;
+    return (float)((h ^ (h >> 16)) & 0xffffffu) / (float)0xffffff;
+}
+
+static float ground_noise(float x, float z) {
+    const float fx = floorf(x), fz = floorf(z);
+    const int xi = (int)fx, zi = (int)fz;
+    float tx = x - fx, tz = z - fz;
+    tx = tx * tx * (3.0f - 2.0f * tx);
+    tz = tz * tz * (3.0f - 2.0f * tz);
+    const float a = ground_hash(xi, zi), b = ground_hash(xi + 1, zi);
+    const float c = ground_hash(xi, zi + 1), d = ground_hash(xi + 1, zi + 1);
+    return (a + (b - a) * tx) * (1.0f - tz) + (c + (d - c) * tx) * tz;
+}
+
+/*
+ * How much the shore wanders, and how fast.
+ *
+ * A surface of revolution has a CIRCLE for a waterline, and no amount of shading hides
+ * that: it reads as the edge of a dome from every angle, which is what it is. Two octaves
+ * of noise on the height is the whole fix -- at the beach slope an amplitude of a few
+ * centimetres moves the waterline by tens of units, so the shore bays and points without
+ * the profile stopping being a beach.
+ *
+ * Faded out at the CROWN so the tree still stands on level ground, and the amplitude is
+ * bounded well under the crown's rise so the noise can never cut the island in two.
+ */
+#define GROUND_WOBBLE_M 0.16f
+#define GROUND_WOBBLE_SPAN 210.0f
+
+static float ground_wobble(float x, float z, float d) {
+    const float amp = GROUND_WOBBLE_M * GROUND_UNITS_PER_METRE;
+    const float n = ground_noise(x / GROUND_WOBBLE_SPAN, z / GROUND_WOBBLE_SPAN) * 0.68f +
+                    ground_noise(x / (GROUND_WOBBLE_SPAN * 0.37f),
+                                 z / (GROUND_WOBBLE_SPAN * 0.37f)) *
+                        0.32f;
+    // Zero at the centre, full by the time the beach starts. The tree's footing is flat.
+    const float t = fminf(d / (GROUND_SHORE_R * 0.55f), 1.0f);
+    return (n * 2.0f - 1.0f) * amp * t * t * (3.0f - 2.0f * t);
+}
+
 float ground_height_at(float x, float z) {
     const float d = sqrtf(x * x + z * z);
     const float shore = GROUND_SHORE_R;
@@ -29,12 +81,12 @@ float ground_height_at(float x, float z) {
         const float t = d / shore;
         const float h01 = t * t * (3.0f - 2.0f * t);
         const float h11 = t * t * (t - 1.0f);
-        return h01 * (-rise) + h11 * (-slope * shore);
+        return h01 * (-rise) + h11 * (-slope * shore) + ground_wobble(x, z, d);
     }
     if (d < GROUND_RADIUS) {
         // The face and the terrace: ONE straight slope, continuing under the water without
         // a crease at the line the eye is most likely to be looking at.
-        return -rise - slope * (d - shore);
+        return -rise - slope * (d - shore) + ground_wobble(x, z, d);
     }
     /*
      * The seabed, past the rim.
@@ -51,7 +103,11 @@ float ground_height_at(float x, float z) {
 }
 
 float ground_shore_height(void) {
-    return ground_height_at(GROUND_SHORE_T * GROUND_RADIUS, 0.0f);
+    // The still level, taken on the UNWOBBLED profile at the shore radius. It has to be one
+    // number for the whole scene, and the wobble is what makes the waterline wander across
+    // it -- pick it off a wobbled sample and the sea would sit at whatever height one
+    // arbitrary bearing happened to have.
+    return -GROUND_CROWN_RISE;
 }
 
 /*

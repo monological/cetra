@@ -4056,17 +4056,36 @@ def _water_cscn_variant(src, dst, overrides):
 
 
 def _water_roughness(pix, w, h, box):
-    """Per-pixel linear-luma standard deviation in a fractional box.
+    """Per-pixel linear-luma standard deviation in a fractional box, FOAM EXCLUDED.
 
     A wave, to a box of pixels, is spread: the surface tilts, so the reflection it
     returns varies across the box. A shoaled surface has lost its displacement and
     returns nearly one value. The MEAN would not see this at all -- calm and choppy
     water average to much the same place.
+
+    Whitewater is skipped, using water-shore-foam's own test, and that is not a detail.
+    Foam is patchy and bright, so it carries a large variance of its own, and this measure
+    cannot tell "the waves here are shorter" from "there is foam here" -- it just reports
+    spread. Once 11.44 gave the shore band a swash, the swash covered the very box this
+    reads and the ratio INVERTED, 0.34x becoming 1.59x: the arm was reporting the arrival
+    of foam as the absence of shoaling. Excluding it measures the water again.
+
+    Returns 0.0 if the box is entirely foam, which the caller reads as no measurement
+    rather than as a calm surface.
     """
     x0, y0, x1, y1 = box
-    vals = [_linear_luma(pix, w, h, px, py)
-            for py in range(int(y0 * h), int(y1 * h))
-            for px in range(int(x0 * w), int(x1 * w))]
+    vals = []
+    for py in range(int(y0 * h), int(y1 * h)):
+        for px in range(int(x0 * w), int(x1 * w)):
+            o = (py * w + px) * 3
+            r = _SRGB_TO_LINEAR[pix[o]]
+            g = _SRGB_TO_LINEAR[pix[o + 1]]
+            b = _SRGB_TO_LINEAR[pix[o + 2]]
+            if (r + g + b) / 3.0 > WATER_FOAM_LUMA_MIN and r / max(b, 1e-6) > WATER_FOAM_RB_MIN:
+                continue
+            vals.append(_linear_luma(pix, w, h, px, py))
+    if not vals:
+        return 0.0
     mean = sum(vals) / len(vals)
     return (sum((v - mean) ** 2 for v in vals) / len(vals)) ** 0.5
 

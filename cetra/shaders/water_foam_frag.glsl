@@ -16,9 +16,19 @@
  * Per-texel with no neighbourhood, which is why it is a fragment pass and not a compute
  * kernel -- the same reason the spectrum evolution and the FFT stages are.
  *
- * NOT advected. Real foam rides the surface current, and the reference this water is
- * derived from backtraces it through a velocity field it has and this one does not. What
- * is here is birth and decay in place, which is the half that makes whitecaps linger.
+ * ADVECTED, since spec 11.44, by a backtrace: this texel's history is read from where the
+ * water that is here now WAS a frame ago, not from this texel. Two currents carry it and
+ * they are different things.
+ *
+ * The ORBITAL part is already handled and costs nothing here: the surface reads foam at the
+ * parcel's undisplaced label (water_frag's SurfParam), so foam rides a wave's own back-and-
+ * forth motion by construction. What that cannot express is DRIFT -- the mean transport a
+ * wind sea has along the wind, which a linear wave field has no term for at all and which is
+ * what makes real whitewater stream downwind instead of sitting where it was born.
+ *
+ * So the backtrace here is the drift alone, and it is per BAND: the three channels live in
+ * three tiling spaces, so the same world-space drift is a different UV step in each and one
+ * offset would smear two of them. Three fetches rather than one, on a 128 square pass.
  *
  * ONE target, three bands in three channels. Each channel is in its OWN band's tiling
  * space, since that is the space its Jacobian was read in -- so the consumer samples this
@@ -36,6 +46,11 @@ uniform float foamDt;
 // Recovery rate toward unfolded. Lower lingers longer; this is the knob that decides
 // whether a crest leaves a streak or a smear.
 uniform float foamDecay;
+// How fast foam streams downwind, in METRES per second, converted here by the same
+// waterUnitsPerMetre every other physical length in this water goes through. A few per cent
+// of the wind speed is what the literature gives for surface drift; this is a flat rate
+// rather than a fraction of it because the sea state is not a uniform here.
+uniform float foamDriftSpeed;
 
 // For oceanBandJacobian and cascadeChoppiness. The Jacobian has to be the SAME expression
 // the surface shades from, or foam is selected off a different fold than the one drawn.
@@ -47,7 +62,24 @@ const float FOAM_MIN_J = 0.5;
 
 void main() {
     ivec2 coord = ivec2(gl_FragCoord.xy);
-    vec3 prev = foamHistoryAvailable == 1 ? texelFetch(prevFoam, coord, 0).rgb : vec3(1.0);
+
+    /*
+     * Backtrace: where the water under this texel drifted FROM. Upwind by one frame's
+     * travel, expressed in each band's own tiling space, and wrapped -- the field is
+     * periodic, so a step off one edge is a step onto the other and needs no clamp.
+     *
+     * LINEAR sampling for the history, where the Jacobians below are texelFetch: a
+     * backtrace lands between texels by definition, and snapping it to the nearest one
+     * would quantise the drift into stair-steps at exactly the rate it advances.
+     */
+    vec3 prev = vec3(1.0);
+    if (foamHistoryAvailable == 1) {
+        vec2 uv = (vec2(coord) + 0.5) / vec2(textureSize(prevFoam, 0));
+        vec2 travel = waterWindDir * (foamDriftSpeed * waterUnitsPerMetre * foamDt);
+        prev = vec3(texture(prevFoam, fract(uv - travel / cascadeLength[0])).r,
+                    texture(prevFoam, fract(uv - travel / cascadeLength[1])).g,
+                    texture(prevFoam, fract(uv - travel / cascadeLength[2])).b);
+    }
 
     vec3 j;
     j.x = oceanBandJacobian(texelFetch(cascade0_0, coord, 0), texelFetch(cascade0_1, coord, 0),

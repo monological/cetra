@@ -173,6 +173,10 @@ vec2 oceanProjectedPosition(vec2 lattice, mat4 view, mat4 projection) {
 // per metre, which is no surf zone at all.
 const float OCEAN_SHOAL_MIN_M = 0.14;
 const float OCEAN_SHOAL_FULL_M = 2.7;
+// How much of a wave's HEIGHT survives full shoaling, where its horizontal travel does not.
+// A shore that heaves is the difference between a sea and a painted line; 0 here is what
+// made the waterline static however big the swell behind it was.
+const float OCEAN_SHOAL_HEAVE = 0.45;
 
 /*
  * 1 in open water, falling to 0 as the bed comes up, with its own gradient.
@@ -354,7 +358,19 @@ vec3 oceanSpectralDisplacement(vec4 long0, vec4 med0) {
     float y = long0.b + med0.b +
               OCEAN_BOUND_LONG * (long0.b * long0.b - OCEAN_BOUND_LONG_VAR) +
               OCEAN_BOUND_MED * (med0.b * med0.b - OCEAN_BOUND_MED_VAR);
-    return vec3(h.x, y, h.y);
+    /*
+     * METRES to world units, here and nowhere else (spec 11.44).
+     *
+     * The cascades are seeded from a JONSWAP spectrum in real units -- gravity in m/s^2,
+     * wind in m/s, fetch in metres -- so every value in them is metres of displacement over
+     * metres of ocean. The crest terms above are part of that arithmetic and their variances
+     * are in m^2, which is why the conversion lands after them rather than on the samples.
+     *
+     * Only the displacement converts. The DERIVATIVE rows do not: they are metres of
+     * displacement per metre of ocean, which is the same number as world units per world
+     * unit, so slope, the Jacobian and the mean square slope are all unitless and stay put.
+     */
+    return vec3(h.x, y, h.y) * waterUnitsPerMetre;
 }
 
 /*
@@ -373,9 +389,26 @@ vec3 oceanSpectralDisplacement(vec4 long0, vec4 med0) {
 OceanSurface oceanAssemble(vec2 p, vec3 disp, vec3 dispDx, vec3 dispDz, vec3 sh) {
     float shoal = sh.x;
     OceanSurface s;
-    s.world = vec3(p.x, waterLevel, p.y) + disp * shoal;
-    vec3 dPdx = vec3(1.0, 0.0, 0.0) + dispDx * shoal + disp * sh.y;
-    vec3 dPdz = vec3(0.0, 0.0, 1.0) + dispDz * shoal + disp * sh.z;
+    /*
+     * The shoal factor scales the HORIZONTAL fully and the height only partly (spec 11.44).
+     *
+     * Its reason for existing is horizontal: "the horizontal term has to shrink with it or
+     * the surface slides sideways over a beach it is no longer above". Applying the same
+     * factor to the height as well flattened the water to a plane exactly where a real shore
+     * is at its most active -- the sea arrived at the sand as a still line, whatever the
+     * swell offshore was doing. A wave can HEAVE in shallow water without sliding anywhere,
+     * and what stops it drawing over dry sand is the column discard, not this.
+     *
+     * The gradient rows follow: d(vertical scale)/dp is (1 - HEAVE) times the shoal
+     * gradient, since the retained fraction is a constant.
+     */
+    float heave = mix(shoal, 1.0, OCEAN_SHOAL_HEAVE);
+    vec3 scale = vec3(shoal, heave, shoal);
+    vec3 dScaleDx = vec3(sh.y, sh.y * (1.0 - OCEAN_SHOAL_HEAVE), sh.y);
+    vec3 dScaleDz = vec3(sh.z, sh.z * (1.0 - OCEAN_SHOAL_HEAVE), sh.z);
+    s.world = vec3(p.x, waterLevel, p.y) + disp * scale;
+    vec3 dPdx = vec3(1.0, 0.0, 0.0) + dispDx * scale + disp * dScaleDx;
+    vec3 dPdz = vec3(0.0, 0.0, 1.0) + dispDz * scale + disp * dScaleDz;
     // cross(dPdz, dPdx) and not the reverse: on a flat surface that is +Y, and the
     // flipped order would light every wave from underneath.
     s.normal = normalize(cross(dPdz, dPdx));

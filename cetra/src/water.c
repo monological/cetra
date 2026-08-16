@@ -384,6 +384,9 @@ Water* create_water(void) {
     // water is not permanently white. The reference this is ported from calls the same
     // number 0.4 and means the same thing by it.
     water->foam_decay = 0.4f;
+    // Surface drift, m/s. A few per cent of a moderate wind, which is the order the
+    // literature gives for what a wind sea carries its surface at.
+    water->foam_drift = 0.35f;
     water->shore_coverage = true;
     water->far_lod = true;
     return water;
@@ -955,12 +958,16 @@ static void _water_fft_transform(ShaderProgram* fft, GLuint twiddle, const GLuin
  * default rests on: 1 unit is a metre until something says otherwise. Never zero -- the
  * shoal window divides by this.
  */
-static void _water_set_units_per_metre(UniformManager* u, const struct Scene* scene) {
+static float _water_units_per_metre(const struct Scene* scene) {
     const float per_km =
         (scene && scene->sky && scene->sky->world_units_per_km > 0.0f)
             ? scene->sky->world_units_per_km
             : 1000.0f;
-    uniform_set_float(u, "waterUnitsPerMetre", per_km / 1000.0f);
+    return per_km / 1000.0f;
+}
+
+static void _water_set_units_per_metre(UniformManager* u, const struct Scene* scene) {
+    uniform_set_float(u, "waterUnitsPerMetre", _water_units_per_metre(scene));
 }
 
 static void _water_bind_cascades(const Water* water, UniformManager* u, bool fft) {
@@ -1091,9 +1098,24 @@ static void _water_run_spectral(Water* water, const struct Scene* scene, struct 
         glBindTexture(GL_TEXTURE_2D, water->foam_tex[src]);
         uniform_set_int(foam->uniforms, "prevFoam", WATER_FOAM_UNIT);
         uniform_set_int(foam->uniforms, "foamHistoryAvailable", water->foam_frames > 0 ? 1 : 0);
-        // ocean.glsl declares it, so it has to be set here too even though this pass reads
-        // no length: an unset uniform is 0, and the shoal window divides by it.
         _water_set_units_per_metre(foam->uniforms, scene);
+        /*
+         * The drift backtrace needs the wind and each band's tiling period, which this pass
+         * did not read until the foam started being advected (spec 11.44) -- it worked in
+         * texel space and needed neither.
+         *
+         * In world units, like the surface's own copy: the backtrace divides a world-space
+         * travel by them to get a UV step.
+         */
+        uniform_set_vec2(foam->uniforms, "waterWindDir", (const float*)&water->wind_dir);
+        const float foam_units_per_metre = _water_units_per_metre(scene);
+        for (int c = 0; c < WATER_CASCADE_COUNT; c++) {
+            char len[32];
+            snprintf(len, sizeof(len), "cascadeLength[%d]", c);
+            uniform_set_float(foam->uniforms, len,
+                              WATER_CASCADE_CFG[c].length_scale * foam_units_per_metre);
+        }
+        uniform_set_float(foam->uniforms, "foamDriftSpeed", water->foam_drift);
         uniform_set_float(foam->uniforms, "foamDt", (float)engine->render_delta);
         uniform_set_float(foam->uniforms, "foamDecay", water->foam_decay);
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
@@ -1320,11 +1342,17 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
     _water_bind_cascades(water, u, fft);
     // The two the foam pass does not read: it works in cascade texel space, so it needs no
     // tiling period, and it selects folds rather than shading them, so it needs no variance.
+    const float units_per_metre = _water_units_per_metre(scene);
     for (int c = 0; c < WATER_CASCADE_COUNT; c++) {
         char len[32], svar[32];
         snprintf(len, sizeof(len), "cascadeLength[%d]", c);
         snprintf(svar, sizeof(svar), "cascadeSlopeVar[%d]", c);
-        uniform_set_float(u, len, WATER_CASCADE_CFG[c].length_scale);
+        // In WORLD UNITS, where the table holds metres (spec 11.44). The tile a band repeats
+        // over is a physical length -- 240 m of swell -- and uploading it raw made the sea
+        // repeat every 240 UNITS, which in a world at 22 units to the metre is a swell
+        // pattern restarting every eleven metres. The seeding stays in metres, where its
+        // gravity and its wind speed already are.
+        uniform_set_float(u, len, WATER_CASCADE_CFG[c].length_scale * units_per_metre);
         // Zero on the Gerstner path, whose octaves report the slope they dropped directly
         // -- it has no seeded spectrum to have measured, and a stale variance from a
         // previous spectral scene would widen its lobe for waves it never carried.

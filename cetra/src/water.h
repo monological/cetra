@@ -222,6 +222,11 @@ typedef struct Water {
     bool foam_history;
     // How fast foam gives up and returns to open water, per second. Lower lingers longer.
     float foam_decay;
+    // How fast foam streams downwind, in METRES per second (spec 11.44). The accumulator
+    // backtraces its history along this, so whitewater is carried by the sea rather than
+    // decaying where it was born -- the orbital half of that motion is already free, since
+    // the surface reads foam at the wave parcel's own label.
+    float foam_drift;
     // false = the shoreline is a hard cutoff at the pixel the water column closes.
     // Inert wherever the target has no samples to spend coverage on.
     bool shore_coverage;
