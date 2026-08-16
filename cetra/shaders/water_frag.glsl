@@ -170,6 +170,10 @@ const float WATER_BEND_FADE_M = 0.40;
 const float WATER_SHORT_NEAR_M = 42.0;
 const float WATER_SHORT_FAR_M = 118.0;
 const float WATER_SHORT_SLOPE_GAIN = 0.42;
+// How close to grazing the SHADING normal may get before it is bent back toward the eye. A
+// normal pointing away describes a surface you could not be looking at, and both ways of
+// leaving it that way print as artifacts -- see the bend in main().
+const float WATER_MIN_NDV = 0.02;
 // Jacobian compression at which foam starts and saturates.
 const float WATER_FOAM_ON = 0.16;
 const float WATER_FOAM_FULL = 0.42;
@@ -270,6 +274,12 @@ const float WATER_CAUSTIC_DEEP_OFF_M = 20.0;
  * built from. Feeding it the total would count the waves twice: the ones the mesh and the
  * short band already resolve are in the normal, and a lobe as wide as the whole spectrum
  * sitting on top of them is a second sea.
+ *
+ * The spectrum carries MORE slope than Cox and Munk's wind regression, not less -- measured
+ * 0.101 against their 0.062 for an 11.5 m/s sea, printed at seeding. So there is no capillary
+ * remainder owed to this lobe from below the cascades' cutoff, and a term for one would be
+ * dead arithmetic. What the lobe wants is the unresolved part, and the unresolved part is
+ * what the footprint dropped.
  */
 // Cox-Munk's measured upwind/crosswind ratio. The SPLIT is theirs; the total is the
 // spectrum's, because the seeding accumulates a single isotropic k^2 sum and a directional
@@ -561,16 +571,42 @@ void main() {
      * as crests pass and reset every temporal history with them (water.c). The facing
      * test is what carries the per-pixel half, and folding the two here is what lets the
      * wavy boundary the eye actually sees decide instead of the flat one.
+     *
+     * Off the GEOMETRIC facing and the height, not off the shading normal (spec 11.44).
+     * You can only see the underside of the sea from above the still level if that piece of
+     * water is over your head, so a fragment below the eye is not being seen from below
+     * however its normal happens to point. Taken off facing alone, every distant cell that
+     * merely wound backwards switched to the submerged model and lost its sun glitter --
+     * a dark patch riding a crest, invisible with the glitter off because then it matched
+     * its neighbours, which is why it read as the glitter breaking.
      */
-    bool seenFromBelow = cameraSubmerged == 1 || !gl_FrontFacing;
-    // Face the eye. Two separate cases need it, and both rasterize because culling
-    // is off: the whole surface seen from underneath, and the back sides of steep
-    // crests seen from above. Left unflipped, dot(Nv, V) goes negative -- full
-    // Fresnel with no transmitted share, and a refract() whose incident ray is on
-    // the same side as the normal, which returns a direction on the wrong side of
-    // the interface and sends the refraction sample to an arbitrary texel.
+    bool seenFromBelow = cameraSubmerged == 1 || (!gl_FrontFacing && WorldPos.y > waterCamPos.y);
+    // Face the eye. Under the surface the normal points into the body, and left alone the
+    // Fresnel and the refract() below sit on the wrong side of the interface -- the latter
+    // returning a direction that sends the refraction sample to an arbitrary texel.
     if (seenFromBelow)
         Nv = -Nv;
+    /*
+     * ...and then bend the SHADING normal back into the hemisphere the eye can see.
+     *
+     * It points away from the eye in plenty of places the GEOMETRY does not: it is
+     * interpolated across a quad and then tilted by the short band's slope, and at grazing
+     * incidence on a rough sea that tips it past the horizon on thin streaks along every
+     * crest. Measured, not feared -- they cover a good fraction of the mid field.
+     *
+     * Neither obvious repair is right, and each was worn for a while. FLIPPING it points it
+     * AT the eye, which is the low-Fresnel case, so the body shows through as a dark teal
+     * patch. CLAMPING N.V to zero leaves it exactly edge-on, where Fresnel saturates and the
+     * same fragments read as a white mirror instead. Same pixels, opposite colours, one
+     * cause.
+     *
+     * Bending keeps the tangential direction the normal already had, is continuous across
+     * the threshold instead of a branch between two shadings, and does nothing at all to a
+     * surface already facing the eye.
+     */
+    float ndv = dot(Nv, V);
+    if (ndv < WATER_MIN_NDV)
+        Nv = normalize(Nv + V * (WATER_MIN_NDV - ndv));
     float NdotV = clamp(dot(Nv, V), 0.0, 1.0);
 
     // Optical path through the body: the view-Z gap between this surface and
