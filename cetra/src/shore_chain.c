@@ -238,30 +238,40 @@ void shore_chain_step(ShoreChain* chain, const ShoreRunupParams* params, float t
     }
 
     /*
-     * Record a tip slot on the SLOT INTERVAL, not every frame -- the sim rate and the history
-     * rate are different quantities and conflating them made the history useless.
+     * THE HEAD SLOT IS WRITTEN EVERY FRAME; only its ADVANCE is on the slot interval. Those are
+     * two different things and collapsing them breaks opposite ends of the same feature.
      *
-     * The consumer marches back over SHORE_TAP_PERIODS of wave time in SHORE_TAPS steps, so it
-     * asks for ages out to several seconds. A slot per frame gives SHORE_CHAIN_HISTORY frames
-     * of history -- a fifth of a second at 60 Hz -- so every tap but the first ran off the end
-     * of the ring and got the oldest slot back. Nine taps returned two distinct values, and the
-     * accumulation degenerated into exactly the two-tone step it exists to avoid. The closed
-     * form has no ring and was unaffected, so the film made the sand worse than no film at all.
+     * The head is what a consumer reads at age 0 -- the water's edge NOW, which drives the sea's
+     * lens and the waterline. It has to move every frame or the surf visibly steps: recording
+     * the whole slot on the interval left the live edge holding a value for two seconds at a
+     * time, so the waves stopped coming in and switched position instead.
      *
-     * At the interval below the same twelve slots span SHORE_TAP_PERIODS with a slot to spare,
-     * which is the whole window the taps can ask about.
+     * The OLDER slots are the drying history, and they want the opposite. The consumer marches
+     * back over SHORE_TAP_PERIODS of wave time in SHORE_TAPS steps, so advancing per frame gave
+     * SHORE_CHAIN_HISTORY frames of it -- a fifth of a second at 60 Hz -- and every tap but the
+     * first ran off the end of the ring. Nine taps returned two distinct values and the wet sand
+     * collapsed into the two-tone step the accumulation exists to avoid.
+     *
+     * Writing the head each frame and advancing on the interval gives both: an edge that is live
+     * and a ring that spans the window the taps reach over.
      */
+    for (int j = 0; j < SHORE_CHAIN_COLS; j++) {
+        // Back to a HEIGHT above the still level, which is what the shaders compare against.
+        chain->tips[chain->head][j] =
+            chain->x[j * SHORE_CHAIN_NODES + SHORE_CHAIN_NODES - 1] * slope;
+    }
+
     chain->slot_clock += dt;
     if (chain->slot_clock >= slot_interval) {
         // Carry the remainder rather than zeroing: dropping it would make the true interval the
         // frame time rounded up, which drifts against what the shader is told it is.
         chain->slot_clock -= slot_interval;
+        // The new head starts as a copy of the one it follows, so it is a real tip from its
+        // first frame rather than a zero the consumer would read as the water being at the
+        // still line. The loop above overwrites it next frame.
+        const int prev = chain->head;
         chain->head = (chain->head + 1) % SHORE_CHAIN_HISTORY;
-        for (int j = 0; j < SHORE_CHAIN_COLS; j++) {
-            // Back to a HEIGHT above the still level, which is what the shaders compare against.
-            chain->tips[chain->head][j] =
-                chain->x[j * SHORE_CHAIN_NODES + SHORE_CHAIN_NODES - 1] * slope;
-        }
+        memcpy(chain->tips[chain->head], chain->tips[prev], sizeof(chain->tips[prev]));
     }
     chain->steps++;
 }
