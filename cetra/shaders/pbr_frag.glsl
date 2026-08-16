@@ -1067,7 +1067,16 @@ void main() {
         // sign recovered by dotting against the interpolated TBN[1], which
         // goes near-degenerate on slivers and mirrored-UV seams.
         vec3 B = cross(Ng, T) * TangentW;
-        vec3 nTex = texture(normalTex, uv).rgb * 2.0 - 1.0;
+        vec3 nTex;
+        if (stochasticScale > 0.0) {
+            // The same lattice the albedo used -- stochasticTaps is a pure function of uv, so
+            // asking again here costs arithmetic and returns the same three offsets. It has to
+            // be the same ones: two maps on two lattices would show the albedo of one part of
+            // the tile over the relief of another.
+            nTex = stochasticSampleNormal(normalTex, stochasticTaps(uv, uv));
+        } else {
+            nTex = texture(normalTex, uv).rgb * 2.0 - 1.0;
+        }
         // Apply normal scale to XY components (glTF normalTexture.scale)
         nTex.xy *= normalScale;
         N = normalize(mat3(T, B, Ng) * nTex);
