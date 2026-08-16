@@ -65,9 +65,10 @@ void ground_build_mesh(Mesh* mesh, int rings, int segments, float uv_tiles) {
     mesh->index_count = num_triangles * 3;
     mesh->indices = malloc(mesh->index_count * sizeof(unsigned int));
 
-    // Centre vertex (top of dome)
+    // Centre vertex (crown). Through ground_height_at like every other row, plus the
+    // translation the caller will apply -- see the loop below for why that matters.
     mesh->vertices[0] = 0.0f;
-    mesh->vertices[1] = height;
+    mesh->vertices[1] = ground_height_at(0.0f, 0.0f) + height;
     mesh->vertices[2] = 0.0f;
     mesh->normals[0] = 0.0f;
     mesh->normals[1] = 1.0f;
@@ -82,24 +83,33 @@ void ground_build_mesh(Mesh* mesh, int rings, int segments, float uv_tiles) {
     int vi = 1;
     for (int r = 1; r <= rings; r++) {
         float ring_radius = radius * (float)r / rings;
-        float ring_height = height * (1.0f - ((float)r / rings) * ((float)r / rings));
 
         for (int s = 0; s < segments; s++) {
             float angle = 2.0f * (float)M_PI * s / segments;
             float x = ring_radius * cosf(angle);
             float z = ring_radius * sinf(angle);
 
+            /*
+             * Height and normal from ground_height_at and ground_normal_at, NOT from the
+             * profile written out again here.
+             *
+             * This loop carried its own copy of the paraboloid and its own copy of the
+             * paraboloid's slope until spec 11.44, while the header two files up claimed a
+             * single authority that the bed, the grass, the seabed and the leaf litter all
+             * read. They did; the island mesh did not. Nothing showed it because the two
+             * expressions agreed -- and the moment the profile gained a beach shelf they
+             * would have stopped agreeing, leaving the island standing at one shape while
+             * the water shoaled against another.
+             *
+             * The +height is the caller's translation, which ground_height_at already
+             * includes and this mesh is built without.
+             */
             mesh->vertices[vi * 3] = x;
-            mesh->vertices[vi * 3 + 1] = ring_height;
+            mesh->vertices[vi * 3 + 1] = ground_height_at(x, z) + height;
             mesh->vertices[vi * 3 + 2] = z;
 
-            // True surface normal of the dome y = height * (1 - (d/radius)^2),
-            // whose slope at distance d is 2*height*d/radius^2. The old normal
-            // was the radial direction, which tilted the ground up to 60 degrees
-            // off vertical -- it faced sideways and never caught the sun.
-            float slope = 2.0f * height * ring_radius / (radius * radius);
-            vec3 normal = {cosf(angle) * slope, 1.0f, sinf(angle) * slope};
-            glm_vec3_normalize(normal);
+            vec3 normal = {0.0f, 1.0f, 0.0f}; // out-param; seeded so the analyser can see it
+            ground_normal_at(x, z, normal);
             mesh->normals[vi * 3] = normal[0];
             mesh->normals[vi * 3 + 1] = normal[1];
             mesh->normals[vi * 3 + 2] = normal[2];

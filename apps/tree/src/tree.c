@@ -297,23 +297,38 @@ static Player* player = NULL;
  * dome surrounded by nothing reads as a saucer floating in the sky. `--no-water`
  * returns the old dry framing.
  *
- * The level is DERIVED from the dome, not picked: over y = H*(1 - t^2) - H a level of
- * -H*t^2 puts the waterline at exactly t*GROUND_RADIUS, so changing the island's shape
- * moves the sea to match instead of needing it re-tuned. See ground.h for the shape and for
- * why GROUND_SHORE_T is where it is.
+ * The level is DERIVED from the ground, not picked: it is the ground's own height at the
+ * chosen shore radius, so changing the island's shape moves the sea to match instead of
+ * needing it re-tuned. See ground.h for the shape and for why GROUND_SHORE_T is where it is.
+ *
+ * Evaluated rather than solved in closed form (spec 11.44). It used to be written out as
+ * -H*t^2, the paraboloid's own inverse, which is why ground.h argued the profile had to keep
+ * an analytic shoreline -- but the direction that matters here is level FROM radius, and
+ * that is just the profile evaluated at a point. The constraint was on the inverse nobody
+ * needed, and dropping it is what lets the profile grow a beach shelf.
  *
  * The wave train is scaled to THIS app's units, not carried over from the water
  * fixture. A trunk here is 125 units, so the fixture's 6-unit wavelength would be
  * invisible.
  */
-#define TREE_WATER_LEVEL (-GROUND_HEIGHT * GROUND_SHORE_T * GROUND_SHORE_T)
-// The SHOALING BED's domain, and nothing else -- since spec 11.35 the grid is projected from
-// the frustum and reaches the horizon at any extent. So this is sized for the SHORE BAND
-// rather than for the island: tight enough that bed texels land on the shoal ramp (3.1 units
-// per texel here, against a ramp 8.4 units wide), and clear of the waterline at 310 on both
-// sides. Outside it the bed field reads its edge, which is open water -- correct, because the
-// per-fragment water column comes from the depth buffer and not from here.
-#define TREE_WATER_EXTENT 400.0f
+static float tree_water_level(void) {
+    return ground_height_at(GROUND_SHORE_T * GROUND_RADIUS, 0.0f);
+}
+/*
+ * The SHOALING BED's domain, and nothing else -- since spec 11.35 the grid is projected from
+ * the frustum and reaches the horizon at any extent. So this is sized for the SHORE BAND
+ * rather than for the island. Outside it the bed field reads its edge, which is open water --
+ * correct, because the per-fragment water column comes from the depth buffer and not here.
+ *
+ * 600, not the 400 it was through 11.43. That was sized against a shoal ramp 8.4 units wide,
+ * which is what the ramp measured while the shoal window was being read as world units in a
+ * world at 22 units to the metre. At its real width the surf band runs from radius 334 to
+ * 420, so a 400-unit domain cut its outer half off and the bed there reported open water.
+ *
+ * The texel density it was also guarding still holds: 2*600/WATER_BED_RES is 4.7 units per
+ * texel against a ramp now 86 units wide, which is eighteen texels rather than three.
+ */
+#define TREE_WATER_EXTENT 600.0f
 
 // WaterHeightFn over the dome. ground_height_at takes no context -- it reads two
 // compile-time constants -- so the adapter drops the unused pointer rather than the
@@ -768,7 +783,7 @@ static void print_usage(const char* prog) {
     printf("      --no-falling-leaves Disable the falling-leaf particles\n");
     printf("      --no-water          Dry land: drop the sea around the island\n");
     printf("      --water-level D     Still-water world Y (default %.1f)\n",
-           (double)TREE_WATER_LEVEL);
+           (double)tree_water_level());
     printf("      --gerstner-waves    Closed-form octaves instead of spectral cascades\n");
     printf("      --render-mode N     Debug view; 10 = HDR hotspots, 12 = extrapolation\n");
     printf("      --msaa N            MSAA samples (default 4); 1 has no partial coverage\n");
@@ -1300,7 +1315,7 @@ int main(int argc, char** argv) {
         Water* water = create_water();
         if (water) {
             water->level =
-                args.water_level > -9000.0f ? args.water_level : TREE_WATER_LEVEL;
+                args.water_level > -9000.0f ? args.water_level : tree_water_level();
             water->extent = TREE_WATER_EXTENT;
             water->height_at = tree_bed_height;
             /*
