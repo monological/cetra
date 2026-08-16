@@ -156,6 +156,7 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --no-water-foam-history  Foam from this frame's fold only\n");
     fprintf(stderr, "      --no-water-coverage  Hard shoreline cutoff, no coverage\n");
     fprintf(stderr, "      --no-water-lod     Full wave detail at any cell footprint\n");
+    fprintf(stderr, "      --no-water-wetness The swash wets nothing it runs over\n");
     fprintf(stderr, "      --water-bed <m>    none (default) or dome: an analytic bed to shoal\n");
     fprintf(stderr, "      --water-probe      Print the CPU wave query over a grid\n");
     fprintf(stderr, "      --water-fft-probe  Print the transformed spectrum's statistics\n");
@@ -720,6 +721,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->no_water_coverage = 1;
         } else if (strcmp(argv[i], "--no-water-lod") == 0) {
             args->no_water_lod = 1;
+        } else if (strcmp(argv[i], "--no-water-wetness") == 0) {
+            args->no_water_wetness = 1;
         } else if (strcmp(argv[i], "--water-waves") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -3019,6 +3022,8 @@ int main(int argc, char** argv) {
             water->shore_coverage = false;
         if (args.no_water_lod)
             water->far_lod = false;
+        if (args.no_water_wetness)
+            water->wetness = false;
         if (args.water_bed_dome) {
             water->height_at = render_dome_bed_height;
             water->height_ctx = water;

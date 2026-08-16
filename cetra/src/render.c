@@ -198,6 +198,9 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
     // bounds are per-mesh (uploaded in the draw loop from the mesh's AABB).
     uniform_set_float(u, "uWindResponse", material->wind_response);
     uniform_set_int(u, "uWindMode", material->wind_mode);
+    // Shore wetness (0 = never wetted). Per material switch for the same reason wind is:
+    // a material that did not ask for it resets the uniform and the shader early-outs.
+    uniform_set_float(u, "uShoreWetness", material->shore_wetness);
 
     // Dedicated (native-resolution) sampler units. The scalar masks
     // (roughness/metallic/ao/opacity/microsurface/anisotropy) are no
@@ -420,6 +423,11 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
                 sky_bind_cloud_shadow(scene ? scene->sky : NULL, program, TEXUNIT_SCENE_COLOR);
             else
                 uniform_set_int(u, "cloudShadowLight", -1);
+            // Where the swash has been, for materials that opted into wetness. Published
+            // here rather than per material because it is a property of the sea and the
+            // frame, and it is the same clock `time` above came from -- so the sand cannot
+            // describe a different instant of the swash than the water surface draws.
+            water_bind_shore(scene ? scene->water : NULL, scene, program);
             // Both are read only inside an OIT sub-pass, so they upload only
             // there: the warp interval the moments are stated over, and (where
             // the atlas is actually bound) its reciprocal size, which is not the

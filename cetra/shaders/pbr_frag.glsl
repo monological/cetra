@@ -196,6 +196,39 @@ uniform int pcssFrameIndex; // Advances the per-frame rotation; frozen when off
 #define cloudShadowTex sceneColorTex
 #include "cloud_shadow.glsl"
 
+/*
+ * The swash, for wet sand (spec 11.45). shore.glsl and NOT ocean.glsl: the ocean declares
+ * nine samplers and this program has been at its sixteen since 4.10, where the run-up is a
+ * closed form over scalar uniforms and costs a unit nothing.
+ *
+ * The clock is the one render.c publishes per program switch, which is the same value the
+ * water surface reads -- so the sand cannot describe a different instant of the swash than
+ * the sea is drawn at.
+ */
+#include "shore.glsl"
+uniform float time;
+// 0 = this material is never wetted, whatever the sea does. See Material.shore_wetness.
+uniform float uShoreWetness;
+
+// Open porosity of sand that the swash fills, from Lagarde's 25-50% band for natural
+// materials. What the diffuse albedo loses when the pores are full.
+const float SHORE_POROSITY = 0.38;
+// Lekner-Dorf internal reflection as a power on the albedo: saturating, so a channel the dry
+// sand already absorbs is absorbed more, which is the cool-warm shift a wet beach has.
+const float SHORE_DARKEN_POWER = 0.55;
+// What a full film smooths the surface to, and the F0 of the air/water interface it puts in
+// front of it. Water is LESS reflective than sand at normal incidence; the shine is the
+// roughness, not the Fresnel.
+const float SHORE_WET_ROUGHNESS = 0.12;
+const float SHORE_WET_F0 = 0.02;
+// How far a full film flattens the normal toward the geometric one. Not 1: a drained sheet
+// still follows the sand it is lying on, and taking the normal all the way to flat reads as
+// a decal of water rather than water on a beach.
+const float SHORE_FLATTEN = 0.75;
+// Stranded whitewater. Bright and rough -- entrained air, not a wet surface.
+const float SHORE_FOAM_ALBEDO = 0.86;
+const float SHORE_FOAM_ROUGHNESS = 0.85;
+
 uniform int clusterDebug; // Tint fragments by cluster light count (heatmap)
 
 // Cascade for a view depth: the first cascade whose far bound contains it.
@@ -1110,6 +1143,82 @@ void main() {
         roughnessMap = clamp(sqrt(a2 + kernelRoughness2), roughnessMap, 1.0);
     }
 
+    /*
+     * WET SAND: what the swash left behind (spec 11.45).
+     *
+     * Sand a wave has just run over is darker, smoother and slightly shinier than dry sand,
+     * and it dries from the top down over the following seconds. The run-up that decides
+     * where the water reached is a closed form of position and time -- see shore.glsl -- so
+     * this costs no sampler, reads no history, and is exactly the same edge the water surface
+     * is drawn against, which is what makes the two agree at the waterline.
+     *
+     * Everything above the run-up's own analytic ceiling exits before a single tap runs, so
+     * the cost is confined to the swash band and dry geometry pays one compare.
+     */
+    // How much free water is lying on the surface, carried down to the Fresnel below: F0 is
+    // derived from `ior` further on, so the film cannot be folded in at this point.
+    float shoreFilm = 0.0;
+    if (uShoreWetness > 0.0 && waterSurfHeight > 0.0) {
+        float h = WorldPos.y - waterLevel;
+        // Nothing outside the bed's domain has a shore, and without this a material that
+        // opted in would be wetted by geometry that merely sits low a kilometre inland.
+        float inRange = 1.0 - smoothstep(waterExtent * 0.75, waterExtent, length(WorldPos.xz));
+        if (h < shoreEdgeCeiling() && inRange > 0.0) {
+            ShoreSwash sw = shoreSwash(WorldPos.xz, h, time);
+            float amount = uShoreWetness * inRange;
+            float wet = sw.wet * amount;
+            float film = sw.film * amount;
+
+            /*
+             * POROSITY DARKENING (Lagarde). Water filling the pores raises the effective
+             * refractive index between the grains, so less light escapes back out: the
+             * diffuse albedo drops by the open porosity that got filled. 0.38 sits inside
+             * the 25-50% band that work gives for natural materials.
+             *
+             * A tint multiply was the obvious alternative and is wrong twice over -- it does
+             * not saturate, and it makes wet sand a colour rather than a darker version of
+             * whatever colour the sand already is.
+             */
+            albedoMap *= 1.0 - SHORE_POROSITY * wet;
+
+            /*
+             * THE HUE SHIFT, and not by Beer-Lambert. Water's absorption is
+             * (0.0035, 0.0004, 0) per cm, so a film 0.1-1 mm thick transmits exp(-0.0007) --
+             * 0.9993, which is nothing. This session shipped and reverted exactly that
+             * mistake once already on the sea's capillary slope term.
+             *
+             * What actually reddens wet sand is Lekner-Dorf internal reflection: light that
+             * scatters inside the grain bed is reflected back INTO it at the water surface
+             * instead of escaping, so it makes more passes through the sand's own pigment.
+             * A power law on the albedo is the saturating form of that -- a channel the dry
+             * sand already absorbs gets absorbed more -- and it composes with the porosity
+             * term above rather than fighting it.
+             */
+            albedoMap = pow(albedoMap, vec3(1.0 + SHORE_DARKEN_POWER * wet));
+
+            /*
+             * The film makes the surface SMOOTH, which is why it looks shinier -- not more
+             * reflective. An air/water interface is F0 0.02 against sand's 0.04, so the
+             * reflectance actually falls; what rises is how tightly it is concentrated.
+             */
+            roughnessMap = clamp(mix(roughnessMap, SHORE_WET_ROUGHNESS, film), 0.04, 1.0);
+            shoreFilm = film;
+            // A drained sheet reads as a sheet: the ripples the normal map carries are under
+            // the water, not on it.
+            N = normalize(mix(N, normalize(Normal), film * SHORE_FLATTEN));
+
+            /*
+             * Whitewater the tongue stranded. It is drawn HERE rather than by the water
+             * because our water surface is discarded above the line the column closes -- so
+             * once the swash retreats there is no water left to carry it, and foam on the
+             * sand has to be the sand's business.
+             */
+            float foam = sw.foam * amount;
+            albedoMap = mix(albedoMap, vec3(SHORE_FOAM_ALBEDO), foam);
+            roughnessMap = clamp(mix(roughnessMap, SHORE_FOAM_ROUGHNESS, foam), 0.04, 1.0);
+        }
+    }
+
     // Screen-space derivatives of the world position, taken HERE because the
     // punctual shadow lookup that needs them runs inside the clustered light
     // loop, and derivatives are undefined in non-uniform control flow. They
@@ -1178,6 +1287,11 @@ void main() {
     // ior below 1 would produce
     float iorF0Base = (ior - 1.0) / (ior + 1.0);
     float iorF0 = iorF0Base * iorF0Base;
+    // A water film puts an air/water interface in front of the surface, and water's F0 is
+    // 0.02 against a dielectric's 0.04 -- so wet sand reflects LESS at normal incidence, not
+    // more. What makes it read shiny is the roughness drop above, which concentrates the
+    // same energy instead of adding any.
+    iorF0 = mix(iorF0, SHORE_WET_F0, shoreFilm);
     vec3 F0 = vec3(iorF0);
     // KHR_materials_specular re-parameterizes the DIELECTRIC Fresnel, per the
     // spec's exact form (10.8): f0 = min(iorF0 * specularColor, 1) * specular

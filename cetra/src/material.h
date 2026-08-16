@@ -118,6 +118,11 @@ typedef struct Material {
     // per draw from the mesh's AABB -- not stored here (a material is shared).
     float wind_response;
 
+    // Shore wetness (see shore.glsl). The per-material half of the swash split, in the same
+    // shape as wind_response above: the Water owns the run-up, a material opts in here.
+    // 0 = the surface never darkens, whatever the sea does.
+    float shore_wetness;
+
     // Which displacement model wind_response drives (pbr_vert.glsl windOffset):
     //   0 = cloth: the AABB height gradient that pins the top and swings the hem
     //   1 = vegetation branch: whole-trunk lean + per-branch de-phased sway

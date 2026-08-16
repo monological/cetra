@@ -229,6 +229,31 @@ float shoreSlope() {
     return max(waterBeachSlope, OCEAN_SURF_MIN_SLOPE);
 }
 
+// Stockdon's 2% exceedance run-up, METRES. Its own function because the ceiling below needs
+// the same number and a second copy of an empirical fit is a second thing to get wrong.
+float shoreR2() {
+    float g = OCEAN_GRAVITY;
+    float omega = waterSurfOmega;
+    float slope = shoreSlope();
+    float l0 = 6.28318530718 * g / (omega * omega);
+    float hl = waterSurfHeight * l0;
+    return 1.1 * (0.35 * slope * sqrt(hl) + 0.5 * sqrt(hl * (0.563 * slope * slope + 0.004)));
+}
+
+/*
+ * The highest the swash edge can ever reach, world units above the still level.
+ *
+ * A uniform-computable scalar, which is what makes the sand affordable: every factor above
+ * the run-up is separately bounded -- the cusp by its amplitude, the sets by their modulation,
+ * the tongue's own waveform by 1 -- so their product is a constant and anything above it is
+ * dry with certainty. A fragment that clears this runs no taps at all.
+ */
+float shoreEdgeCeiling() {
+    // climb <= 1 + OCEAN_CUSP_AMP, env <= 1 + OCEAN_SURF_GROUP_MOD, swash <= 1, and the
+    // run-up already divides by the second of those.
+    return (1.0 + OCEAN_CUSP_AMP) * shoreR2() * waterUnitsPerMetre;
+}
+
 // The bore waveform and its derivative in phase, leaning forward by `skew`.
 vec2 oceanBoreWave(float phase, float skew) {
     float psi = phase + skew * cos(phase);
@@ -303,10 +328,7 @@ ShoreRunup shoreRunup(vec2 p, float t) {
     vec2 dEnv = -OCEAN_SURF_GROUP_MOD * cos(groupPhase) * kG * waterWindDir;
 
     // The run-up: Stockdon's 2% exceedance, scaled so the biggest wave of a set reaches it.
-    float l0 = 6.28318530718 * g / (omega * omega);
-    float hl = waterSurfHeight * l0;
-    float r2 = 1.1 * (0.35 * slope * sqrt(hl) + 0.5 * sqrt(hl * (0.563 * slope * slope + 0.004)));
-    float runup = r2 / (1.0 + OCEAN_SURF_GROUP_MOD) * upm;
+    float runup = shoreR2() / (1.0 + OCEAN_SURF_GROUP_MOD) * upm;
 
     float period = 6.28318530718 / omega;
     vec3 sw = oceanSurfTrains(p, t, tauShore, vec2(0.0), OCEAN_SWASH_LAG, OCEAN_SWASH_SKEW);
@@ -335,4 +357,89 @@ ShoreRunup shoreRunup(vec2 p, float t) {
     r.edge = runup * climb * env * r.swash;
     r.dEdge = runup * (dReachF * env * r.swash + climb * dEnv * r.swash + climb * env * dSwash);
     return r;
+}
+
+/*
+ * WHAT THE SWASH LEFT: the beach's memory of the last few waves.
+ *
+ * Sand that the water reached is darker than sand it did not, and it stays darker for a while
+ * after the water has gone -- which is the one thing a painted wet band, fixed at a depth,
+ * cannot say. The whole model is available here because the run-up is a closed form: walking
+ * BACKWARDS in time is just evaluating it at earlier arguments, so a beach can remember
+ * without anything storing a memory.
+ *
+ * ACCUMULATED, not maximised, and that is what makes the history legible. The lower beach is
+ * covered by every wave and saturates dark; the upper beach is reached by one wave in twenty
+ * and stays barely damp. Taking a maximum over the same taps gives two levels with a step
+ * between them, which is the painted band again with extra steps.
+ *
+ * Three things come back because they dry at three rates. The FILM is free water still lying
+ * on the surface and drains in seconds; WET is water in the pores and leaves over tens of
+ * seconds; FOAM is what the tongue's tip deposited and is the only one that is a pattern
+ * rather than a depth.
+ */
+struct ShoreSwash {
+    float wet;  // 0..1 pore saturation -- the darkening
+    float film; // 0..1 free water on the surface -- the sheen, and it goes first
+    float foam; // 0..1 whitewater the tip left behind
+};
+
+// Taps and how far back they reach. Three per primary period over three periods: fewer than
+// three per period and a wave can pass a point between taps, which reads as the swash
+// skipping; more than three periods back and the taps are describing water that has already
+// dried by the constants below.
+const int SHORE_TAPS = 9;
+const float SHORE_TAP_PERIODS = 3.0;
+// How sharply the waterline reads, as a fraction of the run-up. The tongue's edge is a real
+// edge but a sub-pixel one, and a hard step aliases along the shore.
+const float SHORE_COVER_SOFT = 0.06;
+// Drying, in SECONDS. The film drains off the surface quickly; the pores hold on. Both are
+// eyeballed -- the two-rate SHAPE is what the time-varying-BRDF work establishes, and fitted
+// numbers for sand were not to hand.
+const float SHORE_DRY_FILM = 1.6;
+const float SHORE_DRY_PORE = 24.0;
+// Foam's own life on the sand, seconds, and how wide a band around the tip it is laid in as a
+// fraction of the run-up. Whitewater is left AT the edge -- that is where the tongue thins to
+// nothing and the bubbles strand -- not spread over everything the water touched.
+const float SHORE_FOAM_LIFE = 3.5;
+const float SHORE_FOAM_BAND = 0.10;
+// How far below the still line the sand is simply never dry. A beach has a water table, and
+// without this the lower foreshore flickers between waves.
+const float SHORE_TABLE_DEPTH = 0.35;
+
+ShoreSwash shoreSwash(vec2 p, float h, float t) {
+    ShoreSwash s;
+    s.wet = 0.0;
+    s.film = 0.0;
+    s.foam = 0.0;
+    if (waterSurfHeight <= 0.0)
+        return s;
+
+    float period = 6.28318530718 / waterSurfOmega;
+    float dt = period * SHORE_TAP_PERIODS / float(SHORE_TAPS);
+    float soft = max(SHORE_COVER_SOFT * shoreEdgeCeiling(), 1.0e-4);
+    float coverNow = 0.0;
+
+    for (int k = 0; k < SHORE_TAPS; k++) {
+        float age = float(k) * dt;
+        float e = shoreRunup(p, t - age).edge;
+        float cover = 1.0 - smoothstep(-soft, soft, h - e);
+        if (k == 0)
+            coverNow = cover;
+        // Union rather than a sum: two waves reaching the same sand do not wet it twice.
+        s.wet = 1.0 - (1.0 - s.wet) * (1.0 - cover * exp(-age / SHORE_DRY_PORE));
+        s.film = 1.0 - (1.0 - s.film) * (1.0 - cover * exp(-age / SHORE_DRY_FILM));
+        // Deposited where the TIP was, which is a band about the edge rather than everything
+        // under it, and then aged.
+        float d = (h - e) / max(SHORE_FOAM_BAND * shoreEdgeCeiling(), 1.0e-4);
+        s.foam = max(s.foam, exp(-d * d) * exp(-age / SHORE_FOAM_LIFE));
+    }
+
+    // Below the water table the sand never dries out.
+    float table = 1.0 - smoothstep(-SHORE_TABLE_DEPTH * shoreEdgeCeiling(), 0.0, h);
+    s.wet = max(s.wet, table);
+    // Swallowed: foam under the water right now belongs to the water, which draws its own.
+    // Leaving it here would double it exactly where the two surfaces meet.
+    s.foam *= 1.0 - coverNow;
+    return s;
 }

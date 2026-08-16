@@ -27,6 +27,8 @@ out vec4 CurrClip;
 out vec4 PrevClip;
 out float Jacobian;
 out float Shoal;
+// How much of its depth limit this crest is using; see OceanSurface.breaking.
+out float Breaking;
 out float FilteredMss;
 // The surf's crest fraction here, gated inshore -- see OceanSurface.surf.
 out float Surf;
@@ -91,6 +93,7 @@ void main() {
     Normal = s.normal;
     Jacobian = s.jacobian;
     Shoal = s.shoal;
+    Breaking = s.breaking;
     FilteredMss = s.filteredMss;
     Surf = s.surf;
 

@@ -755,6 +755,7 @@ typedef struct {
     // Spectral by default here. Gerstner is the A/B, and the only way to reach the
     // wavelength/amplitude/steepness/spread this app authors, which the spectral path ignores.
     int gerstner_waves;
+    int no_water_wetness;
     // RenderMode override, 0 = PBR. The GUI has always had the combo; without this the debug
     // modes could not be reached headlessly, so anything they diagnose could not be captured.
     int render_mode;
@@ -805,6 +806,7 @@ static void print_usage(const char* prog) {
     printf("      --water-level D     Still-water world Y (default %.1f)\n",
            (double)ground_shore_height());
     printf("      --gerstner-waves    Closed-form octaves instead of spectral cascades\n");
+    printf("      --no-water-wetness  The swash leaves the sand exactly as it found it\n");
     printf("      --render-mode N     Debug view; 10 = HDR hotspots, 12 = extrapolation\n");
     printf("      --msaa N            MSAA samples (default 4); 1 has no partial coverage\n");
     printf("      --headless-jitter   Keep TAA jitter and the 0.70 render scale headless:\n");
@@ -865,6 +867,8 @@ static bool parse_args(int argc, char** argv, TreeArgs* a) {
             a->water_level = (float)atof(argv[++i]);
         } else if (!strcmp(s, "--gerstner-waves")) {
             a->gerstner_waves = 1;
+        } else if (!strcmp(s, "--no-water-wetness")) {
+            a->no_water_wetness = 1;
         } else if (!strcmp(s, "--render-mode") && has_next) {
             a->render_mode = atoi(argv[++i]);
         } else if (!strcmp(s, "--msaa") && has_next) {
@@ -1261,6 +1265,9 @@ int main(int argc, char** argv) {
     set_material_albedo_tex(island_material, island_albedo_tex);
     set_material_normal_tex(island_material, island_normal_tex);
     set_material_roughness_tex(island_material, island_roughness_tex);
+    // The beach remembers the swash. Full response: this IS the sand the waves run over, and
+    // the run-up bounds itself, so there is nothing here to scale down.
+    island_material->shore_wetness = 1.0f;
 
     /*
      * The seabed shares the island's sand maps, and now its vertex colours too, so the two
@@ -1280,6 +1287,9 @@ int main(int argc, char** argv) {
     set_material_albedo_tex(seabed_material, island_albedo_tex);
     set_material_normal_tex(seabed_material, island_normal_tex);
     set_material_roughness_tex(seabed_material, island_roughness_tex);
+    // Wetted too, and not optionally: the two meshes share the rim, so a wet island against a
+    // dry seabed would seam exactly where they are meant to be one surface.
+    seabed_material->shore_wetness = 1.0f;
 
     // Wet grey stone. Untextured on purpose: the boulders are small in frame and half of
     // them are under water, where a texture buys nothing a colour and a roughness do not.
@@ -1385,6 +1395,8 @@ int main(int argc, char** argv) {
              * because its sea state comes out of a wind speed and a fetch instead.
              */
             water->wave_model = args.gerstner_waves ? WATER_WAVES_GERSTNER : WATER_WAVES_FFT;
+            if (args.no_water_wetness)
+                water->wetness = false;
             // Shorter and livelier than the swell 11.32 had to settle for, when a
             // world-space grid put a 17-unit cell here and anything under ~150 units read
             // as facets. The projected grid sizes its cells in pixels instead, so what a

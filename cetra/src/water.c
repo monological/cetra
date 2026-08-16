@@ -408,6 +408,7 @@ Water* create_water(void) {
     water->shore_coverage = true;
     water->surf = true;
     water->far_lod = true;
+    water->wetness = true;
     return water;
 }
 
@@ -1011,6 +1012,64 @@ static void _water_set_units_per_metre(UniformManager* u, const struct Scene* sc
     uniform_set_float(u, "waterUnitsPerMetre", _water_units_per_metre(scene));
 }
 
+/*
+ * The sea state the surf runs at: significant height in METRES and peak angular frequency.
+ *
+ * Spectral: from the seeded spectrum -- Hs is 4 sigma, and the variance is the sum over the
+ * cascades since they own disjoint wavenumber windows. Gerstner: from the authored train,
+ * whose longest octave has crest-to-trough 2A and deep-water frequency sqrt(gk). Its
+ * amplitude and wavelength are WORLD units, so both convert; the Gerstner path's own
+ * dispersion runs g against world-unit k and is not corrected here, since that is the train's
+ * look and this is the surf's.
+ *
+ * Its own function because the SAND reads it too, through water_bind_shore. Two copies of
+ * this would let the beach dry against a different sea from the one running up it.
+ */
+static void _water_surf_state(const Water* water, float units_per_metre, bool fft, float* out_hs,
+                              float* out_omega) {
+    if (!water->surf) {
+        *out_hs = 0.0f;
+        *out_omega = 1.0f;
+        return;
+    }
+    if (fft) {
+        *out_hs = _water_significant_height(water);
+        *out_omega = _water_peak_omega(&water->sea);
+    } else {
+        *out_hs = 2.0f * water->amplitude / units_per_metre;
+        const float k = 6.28318530718f / fmaxf(water->wavelength / units_per_metre, 0.01f);
+        *out_omega = sqrtf(9.81f * k);
+    }
+}
+
+/*
+ * The scalars shore.glsl stands on, for a program that is NOT the water.
+ *
+ * Everything the run-up needs and nothing else -- no cascades, no bed, no samplers at all,
+ * which is the property that lets a lit surface ask where the swash is. Called per program
+ * switch alongside the cloud shadow, so a material that opted into wetness gets the same sea
+ * the water surface is drawing at the same instant.
+ *
+ * With no water in the scene nothing calls this, waterSurfHeight stays at its zero default,
+ * and the shader early-outs -- which is why no fallback publication is needed here.
+ */
+void water_bind_shore(const Water* water, const struct Scene* scene, ShaderProgram* program) {
+    if (!water || !program || !program->uniforms)
+        return;
+    UniformManager* u = program->uniforms;
+    const float upm = _water_units_per_metre(scene);
+    const bool fft = water->wave_model == WATER_WAVES_FFT;
+    float hs, omega;
+    _water_surf_state(water, upm, fft, &hs, &omega);
+    uniform_set_float(u, "waterLevel", water->level);
+    uniform_set_float(u, "waterExtent", water->extent);
+    uniform_set_float(u, "waterUnitsPerMetre", upm);
+    uniform_set_vec2(u, "waterWindDir", (const float*)&water->wind_dir);
+    uniform_set_float(u, "waterSurfHeight", water->wetness ? hs : 0.0f);
+    uniform_set_float(u, "waterSurfOmega", omega);
+    uniform_set_float(u, "waterBeachSlope", water->bed_foreshore_slope);
+}
+
 static void _water_bind_cascades(const Water* water, UniformManager* u, bool fft) {
     for (int c = 0; c < WATER_CASCADE_COUNT; c++) {
         for (int t = 0; t < 2; t++) {
@@ -1400,32 +1459,11 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
         uniform_set_float(u, svar, fft ? water->cascade_slope_var[c] : 0.0f);
     }
 
-    /*
-     * The sea state the surf runs at: significant height in metres and peak frequency.
-     *
-     * Spectral: from the seeded spectrum -- Hs is 4 sigma, and the variance is the sum over
-     * the cascades since they own disjoint wavenumber windows. Gerstner: from the authored
-     * train, whose longest octave has crest-to-trough 2A and deep-water frequency sqrt(gk).
-     * Its amplitude and wavelength are WORLD units, so both convert; the Gerstner path's own
-     * dispersion runs g against world-unit k and is not corrected here, since that is the
-     * train's look and this is the surf's.
-     */
-    if (water->surf) {
-        float hs, omega;
-        if (fft) {
-            hs = _water_significant_height(water);
-            omega = _water_peak_omega(&water->sea);
-        } else {
-            hs = 2.0f * water->amplitude / units_per_metre;
-            const float k = 6.28318530718f / fmaxf(water->wavelength / units_per_metre, 0.01f);
-            omega = sqrtf(9.81f * k);
-        }
-        uniform_set_float(u, "waterSurfHeight", hs);
-        uniform_set_float(u, "waterSurfOmega", omega);
-    } else {
-        uniform_set_float(u, "waterSurfHeight", 0.0f);
-        uniform_set_float(u, "waterSurfOmega", 1.0f);
-    }
+    // The sea state the surf runs at. See _water_surf_state -- the sand reads the same pair.
+    float surf_hs, surf_omega;
+    _water_surf_state(water, units_per_metre, fft, &surf_hs, &surf_omega);
+    uniform_set_float(u, "waterSurfHeight", surf_hs);
+    uniform_set_float(u, "waterSurfOmega", surf_omega);
     uniform_set_float(u, "waterBeachSlope", water->bed_foreshore_slope);
 
     // Last frame's displacement, for the spectral path's motion vectors. Only usable

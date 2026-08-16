@@ -126,13 +126,16 @@ float ground_shore_height(void) {
  * coloured. Authored warm and tan, it comes out orange under a low sun and brown under
  * water, which is where this started.
  *
- * WET sand, the strip just above the water, is the dark one: no water film to scatter, and
- * grains still saturated so they refract into each other instead of back at the eye.
+ * ABOVE the water it is dry sand, and it stays dry sand here however close to the line it is.
+ * What is wet at any moment is the SWASH's business (spec 11.45): the run-up is a closed form
+ * the shader evaluates per pixel, so the dark strip follows the water in and out and fades
+ * behind it. A band baked into vertex colour cannot do that -- it is a stripe at a fixed
+ * height, and the tide it is meant to mark slides under it.
  *
- * Then it dries, then it grades into the upland the tree stands on.
+ * The submerged pale stays, because that is not wetness. It is the bed seen THROUGH water,
+ * and the water is what shades it.
  */
 static const vec3 GROUND_SAND_SUBMERGED = {0.87f, 0.86f, 0.80f};
-static const vec3 GROUND_SAND_WET = {0.66f, 0.62f, 0.55f};
 static const vec3 GROUND_SAND_DRY = {0.93f, 0.90f, 0.82f};
 static const vec3 GROUND_UPLAND = {0.44f, 0.46f, 0.26f};
 
@@ -150,13 +153,10 @@ void ground_beach_color(float height_above_water, vec4 out) {
     if (m <= -GROUND_SUBMERGED_FADE_M) {
         glm_vec3_copy((float*)GROUND_SAND_SUBMERGED, rgb);
     } else if (m <= 0.0f) {
-        ground_smooth_lerp(GROUND_SAND_SUBMERGED, GROUND_SAND_WET,
+        ground_smooth_lerp(GROUND_SAND_SUBMERGED, GROUND_SAND_DRY,
                            (m + GROUND_SUBMERGED_FADE_M) / GROUND_SUBMERGED_FADE_M, rgb);
-    } else if (m <= GROUND_WET_SAND_M) {
-        glm_vec3_copy((float*)GROUND_SAND_WET, rgb);
     } else if (m <= GROUND_DRY_SAND_M) {
-        ground_smooth_lerp(GROUND_SAND_WET, GROUND_SAND_DRY,
-                           (m - GROUND_WET_SAND_M) / (GROUND_DRY_SAND_M - GROUND_WET_SAND_M), rgb);
+        glm_vec3_copy((float*)GROUND_SAND_DRY, rgb);
     } else if (m <= GROUND_UPLAND_M) {
         ground_smooth_lerp(GROUND_SAND_DRY, GROUND_UPLAND,
                            (m - GROUND_DRY_SAND_M) / (GROUND_UPLAND_M - GROUND_DRY_SAND_M), rgb);

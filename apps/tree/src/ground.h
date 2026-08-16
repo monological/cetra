@@ -139,15 +139,20 @@ float ground_shore_height(void);
  *
  * The dry sand runs up to the run-up limit, because that is what a beach face IS: the sand
  * the sea reaches. The berm sits just above it (GROUND_CROWN_M) and the grass takes the
- * berm, where the tree is. The wet strip is the always-wet last fifth of a metre at the
- * still line; what is wet ABOVE it at any moment is the swash's business, not a band's.
+ * berm, where the tree is.
+ *
+ * There is no wet band here any more, and that sentence used to end "what is wet ABOVE it at
+ * any moment is the swash's business, not a band's". Spec 11.45 gave the swash the means to
+ * say so: shore.glsl evaluates the run-up per pixel, so the dark strip runs up the sand with
+ * the water and dries behind it. A second band baked into vertex colour would now be a
+ * stationary stripe underneath a moving one.
  */
-#define GROUND_WET_SAND_M 0.18f
 #define GROUND_DRY_SAND_M 1.45f
 #define GROUND_UPLAND_M   1.65f
 
 // Vertex colour for a point on the ground, sRGB, as pbr_frag decodes it. Submerged sand
-// below the water, a wet band just above it, dry sand, then the upland it grades into.
+// below the water, dry sand above it, then the upland it grades into. Wetness is per-pixel
+// and belongs to the shader; see the header above.
 void ground_beach_color(float height_above_water, vec4 out);
 
 /*

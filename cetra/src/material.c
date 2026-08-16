@@ -79,6 +79,7 @@ const MaterialParam MATERIAL_PARAMS[] = {
     {"aoStrength", "Maps and wind", MP(aoStrength, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
     {"parallaxScale", "Maps and wind", MP(parallax_scale, MATERIAL_PARAM_FLOAT, 0.0f, 0.1f)},
     {"windResponse", "Maps and wind", MP(wind_response, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
+    {"shoreWetness", "Maps and wind", MP(shore_wetness, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
     {"windMode", "Maps and wind", .offset = offsetof(Material, wind_mode),
      .type = MATERIAL_PARAM_INT, .enum_labels = WIND_MODE_NAMES,
      .enum_count = (int)(sizeof(WIND_MODE_NAMES) / sizeof(WIND_MODE_NAMES[0]))},
@@ -208,6 +209,7 @@ Material* create_material() {
     material->doubleSided = false;
     material->foliage_shadows = false; // masked surfaces stay out of the shadow map
     material->wind_response = 0.0f;    // rigid until a material opts into wind
+    material->shore_wetness = 0.0f;    // never wetted by the swash until a material asks
     material->wind_mode = 0;           // cloth displacement unless a material asks for vegetation
 
     material->albedo_tex = NULL;

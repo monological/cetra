@@ -168,6 +168,18 @@ const float OCEAN_SHOAL_FULL_M = 2.7;
  * difference between a centimetre of water and a metre is exactly what a bound needs.
  */
 const float OCEAN_BREAK_CREST = 1.15;
+/*
+ * Where a crest counts as BREAKING, as a fraction of its own depth limit, and how much water
+ * it has to be standing in to count at all.
+ *
+ * ON below 1 because the limit is approached rather than crossed -- a wave that has reached
+ * 0.9 of it is already spilling. The depth floor is what keeps this out of the last metres,
+ * where the limit approaches its own epsilon and any ripple would read as surf; that strip
+ * belongs to the shore band, which is shaped like a swash and not like a breaker.
+ */
+const float OCEAN_BREAK_ON = 0.90;
+const float OCEAN_BREAK_FULL = 1.30;
+const float OCEAN_BREAK_MIN_DEPTH_M = 0.5;
 
 /*
  * What the bed under a point says about the water over it. One fetch, read once per vertex
@@ -247,6 +259,11 @@ struct OceanSurface {
     // fraction, gated by how far inshore the point is. What the shore foam rides, so the
     // whitewater moves with the wave instead of sitting on a depth contour.
     float surf;
+    // How close this crest is to the depth limit, 0..1 -- 1 is a wave standing in exactly as
+    // much water as it is tall. The breaking criterion, and it asks nothing of the wave model:
+    // a height over a depth is available wherever there is a bed, where the Jacobian needs a
+    // horizontal map that only the spectral path has.
+    float breaking;
 };
 
 /*
@@ -541,8 +558,29 @@ OceanSurface oceanAssemble(vec2 p, vec3 disp, vec3 dispDx, vec3 dispDz, OceanBed
      * the bed resolution and the lattice before this line was read. tanh(20) is 1 to float
      * precision, so nothing inside the clamp changes.
      */
+    /*
+     * BREAKING, from the same limit and taken BEFORE it saturates.
+     *
+     * The ratio of the crest to the depth limit is the H/h test the surf-zone literature
+     * breaks waves on, and unlike the horizontal-map Jacobian it needs no horizontal map --
+     * so it is the one whitecap source the Gerstner path can have. What it must not use is
+     * the tanh below: that saturates, so every ripple standing in shallow water reads 1 and
+     * the whole shelf comes back as a sheet of whitewater. The raw ratio distinguishes a wave
+     * AT its limit from a wave merely in shallow water, which is the entire distinction.
+     *
+     * Gated on having water to break in. Toward the waterline the limit approaches its own
+     * floor and the ratio runs away, so without this the last metres are white whatever the
+     * sea is doing -- and that strip already belongs to the shore band, which is shaped like a
+     * swash rather than like a breaker.
+     */
+    s.breaking = 0.0;
     if (bedAvailable == 1) {
         float crestLimit = max(OCEAN_BREAK_CREST * max(bed.column, 0.0), 1.0e-4);
+        // Against OCEAN_BORE_CREST, the real criterion, and NOT against crestLimit above --
+        // that one is deliberately looser because it bounds the field rather than breaking it.
+        float breakLimit = max(OCEAN_BORE_CREST * max(bed.column, 0.0), 1.0e-4);
+        float enough = smoothstep(0.0, OCEAN_BREAK_MIN_DEPTH_M * waterUnitsPerMetre, bed.column);
+        s.breaking = smoothstep(OCEAN_BREAK_ON, OCEAN_BREAK_FULL, disp.y / breakLimit) * enough;
         float sat = tanh(clamp(disp.y / crestLimit, -20.0, 20.0));
         // d(tanh)/du. The limit's OWN gradient is dropped here -- it is the same order as
         // the shoal factor's product-rule term below and needs the bed slope, which arrives

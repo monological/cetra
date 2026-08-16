@@ -87,6 +87,7 @@ typedef struct {
     int no_water_foam_history;  // Bisect lever: foam from this frame's fold only
     int no_water_coverage;      // Bisect lever: hard shoreline cutoff, no coverage
     int no_water_lod;           // Bisect lever: full wave detail at any cell footprint
+    int no_water_wetness;       // Bisect lever: the swash wets no material it runs over
     int water_bed_dome;         // Install the analytic dome bed provider (shoaling)
     int no_water;               // Drop a water surface a scene file asked for
     int water_probe;            // Print the CPU wave query over a grid, then continue

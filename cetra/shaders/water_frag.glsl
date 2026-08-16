@@ -34,6 +34,7 @@ in vec4 CurrClip;
 in vec4 PrevClip;
 in float Jacobian;
 in float Shoal;
+in float Breaking;
 in float Surf;
 // Mean square slope of the displacing bands that the vertex stage's footprint filtered
 // away. The other half of the geometry-to-BRDF handover: what left the mesh arrives here
@@ -236,9 +237,38 @@ const float WATER_SWASH_SHOAL = 0.10;
 // as broken-up foam.
 const float WATER_FOAM_NOISE_A_PER_M = 0.42;
 const float WATER_FOAM_NOISE_B_PER_M = 1.31;
-// How much coverage the breakup may take away at its darkest. Not zero: foam that
-// disappears entirely in the troughs of the noise reads as holes rather than as texture.
-const float WATER_FOAM_BREAKUP_MIN = 0.35;
+/*
+ * The breakup is a COVERAGE THRESHOLD, not a brightness modulation, and the threshold rises
+ * as the foam thins.
+ *
+ * Scaling foam by noise cannot fragment it: a sheet times a pattern is still a sheet, dimmer
+ * in places, continuous everywhere. What whitewater actually does as it drains is come apart
+ * -- the thin parts of the pattern go first and what is left is clumps, which keep their full
+ * brightness because a clump of foam is as white as a sheet of it. So the noise chooses WHERE
+ * rather than HOW MUCH, and how much foam there is chooses how high the bar sits.
+ *
+ * HI is the bar with no foam at all and SPAN is how far a full band lowers it. Calibrated
+ * against the breakup's own distribution rather than by eye: it is two value noises at 0.62
+ * and 0.38, so it concentrates about 0.5 with a spread near 0.15. A bore at full strength
+ * puts the bar about a spread BELOW the mean and covers ~85% -- a bore is a sheet. The rest
+ * value between waves puts it just above the mean, near half coverage, which is where a
+ * pattern breaks into islands. EDGE is the soft ramp across the bar, wide enough not to
+ * alias and narrow enough that the edge of a clump is an edge.
+ *
+ * The bar cannot be set from the shape of real whitewater alone, because how long foam LASTS
+ * decides how much of it is there to erode. The reference this is ported from holds its
+ * accumulation near full across a whole swash and can therefore erode much harder; ours
+ * collapses to WATER_SHORE_FOAM_REST between bores, and a bar tuned for a sea that remembers
+ * took the swash from 4000 whitewater pixels to 1741 -- foam that no longer reached the sand.
+ * Persistence is what buys a harder bar, so these two numbers are due a revisit alongside it.
+ *
+ * This replaces a multiplicative floor that existed because the old form punched holes in
+ * full-strength foam. A bar tied to the amount cannot do that -- at full strength there is no
+ * hole to punch -- so the floor is not needed and would only stop the foam ever leaving.
+ */
+const float WATER_FOAM_ERODE_HI = 0.61;
+const float WATER_FOAM_ERODE_SPAN = 0.34;
+const float WATER_FOAM_ERODE_EDGE = 0.15;
 /*
  * Caustics. Light crossing the surface is focused by the surface's own curvature,
  * so the brightness on the bed is a property of the WAVES above the point being
@@ -504,6 +534,20 @@ void main() {
     foam = max(foam, band * WATER_SHORE_FOAM * mix(WATER_SHORE_FOAM_REST, 1.0, Surf));
 
     /*
+     * Breaking crests, on both wave models -- the surf zone between the swash and open water.
+     *
+     * Selected from the depth limit rather than from the fold, which is why it is the one
+     * whitecap source the Gerstner path has: its steepness is clamped so its horizontal map
+     * can never compress, and until now the surf zone of a Gerstner sea was bare between the
+     * swash and open water. The selection itself is done where the depth is (see
+     * OceanSurface.breaking); what arrives here is already a fraction.
+     *
+     * Deliberately NOT gated by `band`: the swash is the last few metres and this is
+     * everything seaward of it standing in too little water, which is what a surf zone is.
+     */
+    foam = max(foam, WATER_SHORE_FOAM * Breaking);
+
+    /*
      * Break the coverage up, AFTER the physical selection has chosen where foam is -- and
      * over BOTH bands, which is the correction 11.44 owed this.
      *
@@ -528,7 +572,10 @@ void main() {
         float noiseB = WATER_FOAM_NOISE_B_PER_M / waterUnitsPerMetre;
         float breakup = waterValueNoise(WorldPos.xz * noiseA + time * 0.03) * 0.62 +
                         waterValueNoise(WorldPos.xz * noiseB - time * 0.05) * 0.38;
-        foam *= mix(WATER_FOAM_BREAKUP_MIN, 1.0, smoothstep(0.25, 0.75, breakup));
+        // The bar is read from the foam BEFORE it is eroded, so thinning raises it and the
+        // pattern comes apart; what survives keeps the strength it had.
+        float bar = WATER_FOAM_ERODE_HI - WATER_FOAM_ERODE_SPAN * foam;
+        foam *= smoothstep(0.0, WATER_FOAM_ERODE_EDGE, breakup - bar);
     }
 
     /*

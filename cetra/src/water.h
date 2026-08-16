@@ -238,6 +238,10 @@ typedef struct Water {
     // world its cell covers, and no slope energy is handed to roughness. Bisect lever, and
     // the only way back to the aliased far field a projected grid has without it.
     bool far_lod;
+    // false = the swash wets nothing: sand a wave just ran over shades exactly as dry sand
+    // does. Reaches the frame before spec 11.45 exactly, and only materials that set
+    // shore_wetness can see it either way.
+    bool wetness;
 
     // Lazily built GPU state, on the postfx ensure_* pattern. `failed` latches
     // so a missing program costs one log line rather than one per frame forever.
@@ -380,6 +384,13 @@ typedef struct Water {
  * engine rather than just the water.
  */
 void water_publish_to_postfx(const Water* water, struct Engine* engine);
+
+/*
+ * Publish the scalars shore.glsl stands on to a program that is not the water, so a lit
+ * surface can ask where the swash has been. Costs no sampler unit: the run-up is a closed
+ * form over these seven floats and nothing else.
+ */
+void water_bind_shore(const Water* water, const struct Scene* scene, ShaderProgram* program);
 
 // The per-cascade tiling periods and choppiness are columns of water.c's own cascade
 // table and are uploaded from there. They were briefly published here as two extra
