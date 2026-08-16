@@ -20,6 +20,7 @@ The rule: a gate that pins exposure cannot see a space-mixing bug.
 
 import argparse
 import base64
+import functools
 import glob
 import inspect
 import json
@@ -5140,8 +5141,12 @@ def _beach_render(out, extra, frames=30):
     return None
 
 
+@functools.cache
 def _beach_profile():
     """The dome's (radius, height) profile, read out of the fixture's own mesh.
+
+    Cached because _beach_height_at is on the sampling path -- a few thousand points per
+    arm, each of which would otherwise re-parse the glTF and re-decode its vertex buffer.
 
     Read rather than re-derived, for the reason _water_ramp_edges is. This dome's shape
     exists in three places -- render_dome_bed_height in C, gen_beach_fixture.py which built
@@ -5205,7 +5210,7 @@ def _beach_pixel(pix, w, h, project, radius, deg):
     return None
 
 
-def _beach_ring_hits(path, project, window):
+def _beach_ring_hits(frame, project, window):
     """How many azimuths put their brightest radial sample inside `window`.
 
     The brightest point along a ray outward from the island, rather than a foam threshold:
@@ -5213,7 +5218,7 @@ def _beach_ring_hits(path, project, window):
     ARGMAX needs none and answers the question the arm asks -- whether there is a bright
     ring, and where.
     """
-    w, h, pix = _read_ppm(path)
+    w, h, pix = frame
     hits = []
     for deg in BEACH_AZIMUTHS:
         best_r, best_l = float("nan"), -1.0
@@ -5268,10 +5273,12 @@ def run_beach_gate(workdir):
 
     project = _projector(_cscn_camera(BEACH_FIXTURE),
                          float(BEACH_SIZE[0]), float(BEACH_SIZE[1]))
+    w, h, pix = _read_ppm(on)
+    wo, ho, poff = _read_ppm(off)
     shore = _beach_waterline()
     window = (shore + BEACH_RING_INNER, shore + BEACH_RING_OUTER)
-    hits_on = _beach_ring_hits(on, project, window)
-    hits_off = _beach_ring_hits(off, project, window)
+    hits_on = _beach_ring_hits((w, h, pix), project, window)
+    hits_off = _beach_ring_hits((wo, ho, poff), project, window)
     ok = hits_on >= BEACH_RING_MIN_ON and hits_off <= BEACH_RING_MAX_OFF
     print(f"  beach-shoreline {'PASS' if ok else 'FAIL'}  waterline at r {shore:.2f} from the "
           f"mesh; the brightest radial sample lands in [{window[0]:.2f}, {window[1]:.2f}] at "
@@ -5284,7 +5291,6 @@ def run_beach_gate(workdir):
     # The turquoise ramp, as R/B against depth. Median over azimuths rather than mean: one
     # ray can cross a crest, and a crest is a bright specular sample that no amount of
     # averaging removes from a five-sample set.
-    w, h, pix = _read_ppm(on)
     ramp = []
     for radius in BEACH_DEPTH_RADII:
         vals = []
@@ -5305,14 +5311,11 @@ def run_beach_gate(workdir):
         failures.append("beach-shoal")
 
     # Bounded: the bed moves the shore band and leaves the dry crown exactly alone.
-    wo, ho, pon = _read_ppm(on)
-    _, _, poff = _read_ppm(off)
-
     def moved(radius, deg):
-        o = _beach_pixel(pon, wo, ho, project, radius, deg)
+        o = _beach_pixel(pix, w, h, project, radius, deg)
         if o is None:
             return None
-        return max(abs(pon[o + k] - poff[o + k]) for k in range(3)) > BEACH_DIFF_THRESH
+        return max(abs(pix[o + k] - poff[o + k]) for k in range(3)) > BEACH_DIFF_THRESH
 
     crown_hits, crown_n, band_hits, band_n = 0, 0, 0, 0
     for deg in BEACH_AZIMUTHS:
