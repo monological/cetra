@@ -531,8 +531,9 @@ void main() {
         // band's texture carries mips, prints as a blurred line through each of them. The
         // short band is not mipped today and this still states the intent rather than
         // relying on it.
+        // Target 1 only: target 0 was fetched here solely to give oceanBandJacobian the
+        // short band's displacement, and the short band no longer selects foam.
         vec2 shortUv = oceanCascadeUv(WorldPos.xz, 2);
-        vec4 short0 = oceanCascadeAt(2, 0, shortUv, 0.0);
         vec4 short1 = oceanCascadeAt(2, 1, shortUv, 0.0);
         float fade = 1.0 - smoothstep(WATER_SHORT_NEAR_M * waterUnitsPerMetre,
                                       WATER_SHORT_FAR_M * waterUnitsPerMetre,
@@ -558,14 +559,30 @@ void main() {
         // than being smuggled in behind a correctness fix.
         removedMss += oceanRemovedMss(fade, cascadeSlopeVar[2]);
 
-        // Foam where the horizontal map COMPRESSES, from the vertex Jacobian plus
-        // the short band's own. Deformation, not a height threshold: a tall smooth
-        // swell does not break and a compressing one does, and selecting on height
-        // puts white on the wrong crests.
-        float shortJ = oceanBandJacobian(short0, short1, cascadeChoppiness[2]);
-        // This frame's fold. The vertex Jacobian is the only one carrying the shoal
-        // gradient, so it stays whatever else is added to it.
-        float compression = max(0.0, 1.0 - Jacobian) + max(0.0, 1.0 - shortJ) * fade * 0.62;
+        /*
+         * Foam where the horizontal map COMPRESSES. Deformation, not a height threshold: a
+         * tall smooth swell does not break and a compressing one does, and selecting on
+         * height puts white on the wrong crests.
+         *
+         * THE VERTEX JACOBIAN ALONE -- the long and medium bands. The short band used to add
+         * its own fold here and no longer does, and that is what stopped the whitecaps
+         * looking like blobs skating over the sea.
+         *
+         * Its tile is 12 m over wavenumbers 1.22 to 24 per metre, so it carries waves from
+         * 26 cm to 5 m, whose deep-water phase speeds are 0.64 to 2.84 m/s. It is also
+         * re-selected every frame at the DISPLACED position. Everything else in this path is
+         * slow by comparison: the breakup pattern drifts at 0.12 m/s and the accumulator at
+         * 0.35. So the short band's share of the selection was whitewater being chosen and
+         * un-chosen at the speed of the ripples on top of a swell rather than at the speed
+         * of the swell -- foam that moved two to eight times faster than the thing it was
+         * supposed to be sitting on.
+         *
+         * It keeps both of its real jobs: it still perturbs the normal above, and its
+         * filtered slope still goes to roughness through removedMss. What it lost is a vote
+         * on WHERE whitewater is, which it was never well placed to cast -- a band that folds
+         * everywhere, always, argues for foam everywhere.
+         */
+        float compression = max(0.0, 1.0 - Jacobian);
         if (foamAvailable == 1) {
             /*
              * The trail the crest left behind (spec 11.42).
@@ -587,22 +604,26 @@ void main() {
              * the accumulator cannot see the shoal gradient, so a surf-zone crest still
              * needs the vertex Jacobian to be selected at all.
              */
+            // Two bands, not three: the short one is excluded here for the same reason it is
+            // excluded above, and its channel in the accumulator is now written by the foam
+            // pass and read by nobody.
             float turbLong = texture(foamTex, oceanCascadeUv(SurfParam, 0)).r;
             float turbMed = texture(foamTex, oceanCascadeUv(SurfParam, 1)).g;
-            float turbShort = texture(foamTex, oceanCascadeUv(SurfParam, 2)).b;
-            float persistent = max(0.0, 1.0 - min(turbLong, turbMed)) +
-                               max(0.0, 1.0 - turbShort) * fade * 0.62;
-            compression = max(compression, persistent);
+            compression = max(compression, max(0.0, 1.0 - min(turbLong, turbMed)));
         }
         /*
-         * NOT scaled by `fade` again. The short band's share of `compression` above is
-         * already weighted by it, and the rest comes from the vertex Jacobian, which is the
-         * long and medium bands and has nothing to do with the short band's aliasing.
+         * NOTHING HERE IS SCALED BY `fade`, and since the short band stopped voting there is
+         * no longer anything in this expression that `fade` would describe -- both terms are
+         * the long and medium bands now.
          *
-         * Multiplying the total by it a second time zeroed ALL crest foam past
-         * WATER_SHORT_FAR, however hard the surface was folding -- so whitecaps stopped at a
-         * fixed distance from the eye, which projects onto a flat sea as a straight line
-         * across the frame. Whitecaps run to the horizon on a real sea.
+         * Kept as a note rather than deleted, because the defect it records is one edit away
+         * at all times: multiplying the total by `fade` zeroed ALL crest foam past
+         * WATER_SHORT_FAR however hard the surface was folding, and on a flat sea the locus
+         * of a fixed distance from the eye projects as a straight line across the frame.
+         * Whitecaps run to the horizon on a real sea.
+         *
+         * What the far field actually wants is FILTERING rather than a fade, which is where
+         * it now comes from -- see the accumulator's mip chain.
          */
         foam = smoothstep(WATER_FOAM_ON, WATER_FOAM_FULL, compression);
     }
