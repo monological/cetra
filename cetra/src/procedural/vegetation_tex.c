@@ -118,6 +118,105 @@ float veg_worley2(float x, float y, unsigned int seed) {
     return sqrtf(min_dist);
 }
 
+// Lattice index wrapped into [0, p). Negative inputs are real: a caller may offset its
+// coordinates, and C's % keeps the sign.
+static int wrap_cell(int v, int p) {
+    if (p <= 0)
+        return v;
+    const int m = v % p;
+    return m < 0 ? m + p : m;
+}
+
+float veg_perlin2_tiled(float x, float y, int px, int py) {
+    if (!perm_initialized)
+        veg_noise_seed(12345);
+
+    // The permutation table indexes as perm[perm[a] + b], so both a and b must stay under
+    // 256 for the second lookup to stay inside 512.
+    px = px > 0 && px < 256 ? px : 256;
+    py = py > 0 && py < 256 ? py : 256;
+
+    const int xi = (int)floorf(x);
+    const int yi = (int)floorf(y);
+    const float xf = x - floorf(x);
+    const float yf = y - floorf(y);
+
+    const float u = fade(xf);
+    const float v = fade(yf);
+
+    // The wrap is the whole difference from veg_perlin2: the cell AFTER the last one is the
+    // first one, so the gradients at u = 1 are the gradients at u = 0 and the field closes.
+    const int x0 = wrap_cell(xi, px);
+    const int x1 = wrap_cell(xi + 1, px);
+    const int y0 = wrap_cell(yi, py);
+    const int y1 = wrap_cell(yi + 1, py);
+
+    const int aa = perm[perm[x0] + y0];
+    const int ab = perm[perm[x0] + y1];
+    const int ba = perm[perm[x1] + y0];
+    const int bb = perm[perm[x1] + y1];
+
+    const float r1 = lerp_f(grad(aa, xf, yf), grad(ba, xf - 1.0f, yf), u);
+    const float r2 = lerp_f(grad(ab, xf, yf - 1.0f), grad(bb, xf - 1.0f, yf - 1.0f), u);
+
+    return (lerp_f(r1, r2, v) + 1.0f) * 0.5f;
+}
+
+float veg_fbm2_tiled(float x, float y, int octaves, float persistence, int px, int py) {
+    float total = 0.0f;
+    float amplitude = 1.0f;
+    float frequency = 1.0f;
+    float max_value = 0.0f;
+    int cx = px;
+    int cy = py;
+
+    for (int i = 0; i < octaves; i++) {
+        total += veg_perlin2_tiled(x * frequency, y * frequency, cx, cy) * amplitude;
+        max_value += amplitude;
+        amplitude *= persistence;
+        frequency *= 2.0f;
+        // The octave samples twice as fine, so its period is twice as many cells. Past the
+        // table's 256 the wrap stops being exact and the octave contributes an unwrapped
+        // field -- which is why the doc caps the useful octave count rather than the period.
+        cx = cx * 2 < 256 ? cx * 2 : 256;
+        cy = cy * 2 < 256 ? cy * 2 : 256;
+    }
+
+    return total / max_value;
+}
+
+float veg_worley2_tiled(float x, float y, unsigned int seed, int px, int py) {
+    const int xi = (int)floorf(x);
+    const int yi = (int)floorf(y);
+
+    float min_dist = 999.0f;
+
+    for (int dy = -1; dy <= 1; dy++) {
+        for (int dx = -1; dx <= 1; dx++) {
+            const int cx = xi + dx;
+            const int cy = yi + dy;
+
+            // The HASH takes the wrapped cell so the feature points repeat, but the DISTANCE
+            // is measured to the unwrapped one -- the point has to sit in the neighbour's
+            // place, not be teleported back inside the tile, or every edge cell measures to
+            // the wrong side of the texture.
+            const int hx = wrap_cell(cx, px);
+            const int hy = wrap_cell(cy, py);
+            unsigned int h = (unsigned int)(hx * 374761393 + hy * 668265263 + (int)seed);
+            h = (h ^ (h >> 13)) * 1274126177;
+
+            const float fx = (float)cx + (float)(h & 0xFFFF) / 65536.0f;
+            const float fy = (float)cy + (float)((h >> 16) & 0xFFFF) / 65536.0f;
+
+            const float dist = (x - fx) * (x - fx) + (y - fy) * (y - fy);
+            if (dist < min_dist)
+                min_dist = dist;
+        }
+    }
+
+    return sqrtf(min_dist);
+}
+
 /*
  * Generate bark albedo texture
  */

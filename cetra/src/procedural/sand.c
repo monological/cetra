@@ -34,34 +34,57 @@
 #define SAND_RIPPLE_CYCLES 7.0f
 #define SAND_RIPPLE_WARP 1.8f
 #define SAND_RIPPLE_WEIGHT 0.16f
-#define SAND_DRIFT_WEIGHT 0.34f
+/*
+ * The drift is the tile's LOW frequency, and low frequency is what makes a repeat legible.
+ *
+ * It is here to stop a large tiled area reading flat, and at a weight where it dominated the
+ * field it did the opposite: a beach is tens of tiles across, and a soft light-and-dark mottle
+ * is precisely the feature the eye recognises when it comes round again. Fine detail repeating
+ * is invisible; a blob repeating is wallpaper. Held low enough to break flatness without
+ * carrying a signature -- the island's own dome supplies the large-scale shape here, so this
+ * does not have to.
+ */
+#define SAND_DRIFT_WEIGHT 0.11f
 #define SAND_GRAIN_WEIGHT 0.16f
 // How much of the ripple survives where the drift says the sand is smooth. Ripples come in
 // patches on a real beach; a train at constant amplitude over the whole surface is the
 // single thing that most makes procedural sand look procedural.
 #define SAND_RIPPLE_PATCHY 0.75f
 
+/*
+ * EVERY TERM HERE IS PERIODIC OVER THE TILE, and that is a hard requirement rather than a
+ * refinement: this texture is repeated tens of times across a beach, so a field that does not
+ * close at u = 1 puts a discontinuity on every tile boundary and the ground prints a hard
+ * grid. That is not a filtering artefact and no amount of mip or anisotropy touches it.
+ *
+ * Which costs the ripple its free choice of angle. The train's phase is a whole number of
+ * cycles in each of u and v, so the direction is quantised to the ratio of two integers --
+ * the nearest such direction to the one asked for, which at the 45 degrees this is used at is
+ * exact anyway.
+ */
 void sand_height_field(float* out, int width, int height, float ripple_angle) {
     if (!out || width <= 0 || height <= 0)
         return;
 
-    const float ca = cosf(ripple_angle);
-    const float sa = sinf(ripple_angle);
+    // Whole cycles per tile along each axis. Rounded from the requested direction, and at
+    // least one, or a near-axis angle would round to zero and kill the train on that axis.
+    int nu = (int)lroundf(SAND_RIPPLE_CYCLES * cosf(ripple_angle));
+    int nv = (int)lroundf(SAND_RIPPLE_CYCLES * sinf(ripple_angle));
+    if (nu == 0 && nv == 0)
+        nu = 1;
 
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++) {
             const float u = (float)x / (float)width;
             const float v = (float)y / (float)height;
 
-            // The ripple axis, rotated. Only the across-ripple coordinate drives the
-            // train; the along-ripple one drives the warp, which is what bends the
-            // crests rather than translating them.
-            const float across = u * ca + v * sa;
-            const float along = -u * sa + v * ca;
+            // The across-ripple coordinate, in CYCLES, so the sine below takes it directly.
+            const float across = (float)nu * u + (float)nv * v;
 
-            const float warp = veg_fbm2(along * 3.0f, across * 1.5f, 3, 0.5f);
-            float ripple = sinf((across * SAND_RIPPLE_CYCLES + warp * SAND_RIPPLE_WARP) *
-                                6.28318530718f);
+            // The warp bends the crests rather than translating them. Its own frequency is a
+            // whole number of cells so it wraps with everything else.
+            const float warp = veg_fbm2_tiled(u * 3.0f, v * 3.0f, 3, 0.5f, 3, 3);
+            float ripple = sinf((across + warp * SAND_RIPPLE_WARP) * 6.28318530718f);
             /*
              * Asymmetric on purpose: a wind ripple has a long shallow windward face and a
              * short steep lee one, and a bare sine has neither. Skewing toward the crest
@@ -69,8 +92,9 @@ void sand_height_field(float* out, int width, int height, float ripple_angle) {
              */
             ripple = ripple >= 0.0f ? powf(ripple, 0.72f) : -powf(-ripple, 1.6f);
 
-            const float drift = veg_fbm2(u * 4.0f + 31.0f, v * 4.0f + 17.0f, 4, 0.55f);
-            const float grain = 1.0f - veg_worley2(u * 96.0f, v * 96.0f, 5150u);
+            // The offsets only shift the lattice; a whole number of cells keeps the wrap.
+            const float drift = veg_fbm2_tiled(u * 4.0f + 31.0f, v * 4.0f + 17.0f, 4, 0.55f, 4, 4);
+            const float grain = 1.0f - veg_worley2_tiled(u * 96.0f, v * 96.0f, 5150u, 96, 96);
 
             // Ripples in patches, driven by the same drift that mounds the surface: the
             // train is strongest where the sand has piled and fades where it has not.
@@ -83,6 +107,38 @@ void sand_height_field(float* out, int width, int height, float ripple_angle) {
     }
 }
 
+/*
+ * Separable box blur that WRAPS, run twice to approximate a Gaussian.
+ *
+ * Wrapping because the result is subtracted from a field that tiles: a blur that clamped
+ * at the edges would leave a rim the subtraction turns into a seam every tile, which is
+ * the artefact the subtraction exists to remove.
+ */
+static void _blur_wrap(const float* src, float* dst, float* tmp, int width, int height,
+                       int radius) {
+    const float inv = 1.0f / (float)(radius * 2 + 1);
+    const float* in = src;
+    for (int pass = 0; pass < 2; pass++) {
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                float acc = 0.0f;
+                for (int i = -radius; i <= radius; i++)
+                    acc += in[y * width + ((x + i) % width + width) % width];
+                tmp[y * width + x] = acc * inv;
+            }
+        }
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                float acc = 0.0f;
+                for (int i = -radius; i <= radius; i++)
+                    acc += tmp[(((y + i) % height + height) % height) * width + x];
+                dst[y * width + x] = acc * inv;
+            }
+        }
+        in = dst;
+    }
+}
+
 unsigned char* sand_albedo(int width, int height, const float* field) {
     if (!field)
         return NULL;
@@ -91,25 +147,52 @@ unsigned char* sand_albedo(int width, int height, const float* field) {
         return NULL;
 
     /*
-     * Near-neutral and narrow-range, because vertex colour multiplies this and carries the
-     * hue -- dry sand, wet sand, and the upland it grades into are all the same texture.
-     * A map with its own strong colour would fight every one of them.
+     * HIGH-PASSED, and that is what stops a tiled beach reading as tiles.
      *
-     * Centred slightly above 0.5 so the product lands on the vertex colour rather than
-     * under it: a texture that averages dark makes every authored colour read muddy.
+     * The height field's largest term is the drift -- broad fBm, an order of magnitude wider
+     * than the ripples -- and it is there to keep the RELIEF from looking flat. Printed into
+     * colour it does the opposite: a beach is tens of tiles across, and a soft light-and-dark
+     * mottle is exactly the kind of feature the eye recognises when it comes round again. Fine
+     * detail repeating is invisible; a blob repeating is wallpaper.
+     *
+     * So the colour keeps only what survives subtracting a wide blur, and the drift stays in
+     * the height, where it still mounds the surface and where a normal map's much gentler
+     * shading does not carry a recognisable signature.
+     *
+     * Near-neutral and narrow-range, because vertex colour multiplies this and carries the hue
+     * -- dry sand, wet sand, and the upland it grades into are all the same texture, and a map
+     * with its own strong colour would fight every one of them.
+     *
+     * The base is where dry white sand actually sits. sRGB 0.88 is about 0.75 linear, and
+     * against the 0.93 vertex colour that lands near the 0.6-0.7 albedo measured for dry
+     * carbonate sand. The 0.72 it started at is 0.47 linear, which is wet-sand dark and made
+     * every authored colour above it read muddy.
      */
+    const float base = 0.88f;
+    const float detail_gain = 1.30f;
+    float* low = malloc((size_t)width * height * sizeof(float));
+    float* tmp = malloc((size_t)width * height * sizeof(float));
+    if (low && tmp) {
+        // An eighth of the tile: wider than the ripple train, narrower than the drift, so
+        // the subtraction takes the mottle and leaves the ripples.
+        _blur_wrap(field, low, tmp, width, height, width / 8 > 1 ? width / 8 : 1);
+    }
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++) {
             const float h = field[y * width + x];
-            const float shade = 0.72f + (h - 0.5f) * 0.34f;
+            const float detail = (low && tmp) ? h - low[y * width + x] : h - 0.5f;
+            const float shade = base + detail * detail_gain;
             // A whisper of warmth in the troughs, where damper, finer material collects.
-            const float warm = (1.0f - h) * 0.05f;
+            const float warm = (0.5f - detail) * 0.05f;
             const int idx = (y * width + x) * 3;
-            data[idx + 0] = (unsigned char)(fminf(shade + warm, 1.0f) * 255.0f);
-            data[idx + 1] = (unsigned char)(fminf(shade + warm * 0.6f, 1.0f) * 255.0f);
-            data[idx + 2] = (unsigned char)(fminf(shade, 1.0f) * 255.0f);
+            data[idx + 0] = (unsigned char)(fminf(fmaxf(shade + warm, 0.0f), 1.0f) * 255.0f);
+            data[idx + 1] =
+                (unsigned char)(fminf(fmaxf(shade + warm * 0.6f, 0.0f), 1.0f) * 255.0f);
+            data[idx + 2] = (unsigned char)(fminf(fmaxf(shade, 0.0f), 1.0f) * 255.0f);
         }
     }
+    free(low);
+    free(tmp);
     return data;
 }
 

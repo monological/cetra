@@ -23,6 +23,26 @@ void veg_noise_seed(unsigned int seed);
 float veg_perlin2(float x, float y);
 float veg_fbm2(float x, float y, int octaves, float persistence);
 float veg_worley2(float x, float y, unsigned int seed);
+
+/*
+ * PERIODIC variants: the same fields, wrapped on a lattice of `px` by `py` cells.
+ *
+ * A texture that tiles has to be built from noise that tiles, and none of the three above
+ * does -- they are sampled on an unbounded lattice, so the field at u = 1 has no relation to
+ * the field at u = 0 and every tile boundary is a discontinuity. Repeated across a beach that
+ * prints as a hard grid, which is not a filtering problem and cannot be blurred away.
+ *
+ * These wrap the integer lattice index instead, so the field is genuinely periodic and the
+ * seam is gone by construction rather than hidden. The caller's frequencies must be whole
+ * numbers of cells, since a fractional one has no period to wrap on.
+ *
+ * The Perlin period is limited to 256, the permutation table's own size; fbm doubles the
+ * period per octave and clamps there, so deep octave counts stop tiling before they stop
+ * working. Worley hashes its cells directly and has no such limit.
+ */
+float veg_perlin2_tiled(float x, float y, int px, int py);
+float veg_fbm2_tiled(float x, float y, int octaves, float persistence, int px, int py);
+float veg_worley2_tiled(float x, float y, unsigned int seed, int px, int py);
 // Uniform in [min, max) from the same global rand(). Same hazard.
 float veg_rand_range(float min_val, float max_val);
 
