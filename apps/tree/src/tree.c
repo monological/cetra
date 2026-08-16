@@ -256,15 +256,17 @@ static float tree_water_level(void) {
  * rather than for the island. Outside it the bed field reads its edge, which is open water --
  * correct, because the per-fragment water column comes from the depth buffer and not here.
  *
- * 600, not the 400 it was through 11.43. That was sized against a shoal ramp 8.4 units wide,
- * which is what the ramp measured while the shoal window was being read as world units in a
- * world at 22 units to the metre. At its real width the surf band runs from radius 334 to
- * 420, so a 400-unit domain cut its outer half off and the bed there reported open water.
+ * 900, against the 400 it was through 11.43. Two things moved it. The shoal window was being
+ * read as world units in a world at 22 units to the metre, so the ramp it was sized against
+ * measured 8.4 units instead of its real width; and 11.44 then flattened the beach from a
+ * slope of 0.31 to 0.145, which spreads the same window of DEPTH over more than twice the
+ * ground. The surf band now runs from radius 366 to 584, and a 400-unit domain cut most of
+ * it off with the bed reporting open water there.
  *
- * The texel density it was also guarding still holds: 2*600/WATER_BED_RES is 4.7 units per
- * texel against a ramp now 86 units wide, which is eighteen texels rather than three.
+ * The texel density it was also guarding still holds: 2*900/WATER_BED_RES is 7.0 units per
+ * texel against a ramp now 218 units wide, which is thirty-one texels rather than three.
  */
-#define TREE_WATER_EXTENT 600.0f
+#define TREE_WATER_EXTENT 900.0f
 
 // WaterHeightFn over the dome. ground_height_at takes no context -- it reads two
 // compile-time constants -- so the adapter drops the unused pointer rather than the

@@ -4,37 +4,61 @@
 #include "cetra/mesh.h"
 
 /*
- * The island, in one place (spec 11.35 phase 5).
+ * The island, in one place (spec 11.35 phase 5, reprofiled in 11.44).
  *
- * A paraboloid of revolution: y = H*(1 - t^2) - H over t = d/R, translated so the CROWN
- * sits at y = 0 where the tree roots start and the rim reaches -H. That single expression
- * is what the mesh, the grass, the water's shoaling bed and the leaf litter all read, so
- * the surface and everything standing on it cannot drift apart.
+ * A BEACH SECTION, not a dome. Three pieces, which is what a real shore is made of:
  *
- * WHY A PARABOLOID and not a nicer island silhouette: its shoreline has a closed form.
- * A still-water level of -H*t^2 puts the waterline at exactly t*R, so the level is derived
- * from the shape rather than tuned against it, and it stays derived when the shape changes.
- * A profile without that inverse would need the level re-tuned by eye every time.
+ *      berm          beach face        terrace
+ *   ___________
+ *              \____
+ *                   \____                        crown, rounded, where the tree stands
+ *   ~~~~~~~~~~~~~~~~~~~~~\~~~~~~~~~~~~~~~~~~~    still water
+ *                         \______
+ *                                \______         one straight slope, through the
+ *                                       \____    waterline and on under it
  *
- * THE THREE NUMBERS ARE NOT INDEPENDENT, and working that out is most of phase 5. Write
- * the rise of the crown above the waterline as `rise = H*t^2` and the island's width above
- * water as `2*t*R`; then the beach's slope is `2*rise / (t*R)` -- fixed by those two alone,
- * whatever H and R separately are.
+ *   The BERM is a rounded crown that flattens as it runs out to the beach: a cubic Hermite
+ *   from slope 0 at the centre to the beach slope at the shore, so the tree stands on
+ *   something slightly domed and the sand is already flat by the time it meets the water.
  *
- *   The island has to FIT THE FRAME. At the camera's distance the frame spans about 620
- *   units across, so `2*t*R ~ 620`. Wider and the shore leaves frame on both sides and it
- *   reads as a coastline rather than as an island -- measured, at t = 0.5 over R = 900.
+ *   The FACE and the TERRACE are ONE straight slope, continuing unbroken under the water.
+ *   That continuity is the point: a beach does not stop at the waterline, and a profile
+ *   that changes there puts a crease exactly where the eye is looking.
  *
- *   The beach has to be SHOAL-ABLE. The water's shoal window is 2.56 units of DEPTH, so on
- *   a slope s it is 2.56/s wide, and the bed is baked at 2*extent/WATER_BED_RES per texel.
- *   Under about three texels the shore-foam band is one linear segment wide.
+ * A PARABOLOID was the shape until 11.44 and it is the wrong one, for a reason its own
+ * header states: its slope is `2*rise / (t*R)` and therefore STEEPEST at the shore, which
+ * is backwards. At H 190 that was 0.31 -- 17 degrees, a 2.16 m rise over 14 m -- so a
+ * walker at the water's edge looked OVER a hill and the frame showed a crown silhouette
+ * curving away a couple of metres off. Flattening the paraboloid does not fix it either;
+ * it is still steepest where a beach is flattest.
  *
- * Those two pin the slope at ~0.31 (17 degrees) and the rise at ~48 units, which is 14% of
- * the frame height -- a hill the eye reads as a hill. 11.32's dome rose 2.45 units at 2.5
- * degrees and read as a sandbar, which is what this phase was called to fix.
+ * The old header argued the paraboloid earned its place by having a closed-form shoreline.
+ * It does not need one: the direction anyone asks for is level FROM radius, which is the
+ * profile evaluated at a point -- see ground_shore_height.
+ *
+ * THE SURF BAND FOLLOWS THE SLOPE. The water's shoal window is 2.56 METRES of depth, so on
+ * a slope s the surf zone is that over s -- 64 m at this slope, which is why
+ * TREE_WATER_EXTENT is what it is. A flatter beach is a wider surf zone, always.
  */
 #define GROUND_RADIUS 620.0f
-#define GROUND_HEIGHT 190.0f
+
+// The crown's height above the still water, in metres, and the slope of the face that runs
+// down to it. 1:11 is a moderately steep sand beach; flatter reads better and costs surf
+// zone that has to fit inside the bed's domain.
+#define GROUND_CROWN_M     0.90f
+#define GROUND_BEACH_SLOPE 0.09f
+
+// Where the shore sits, in units -- the radius the profile crosses the still level at.
+#define GROUND_SHORE_R (GROUND_SHORE_T * GROUND_RADIUS)
+// The crown's rise over the water, in units.
+#define GROUND_CROWN_RISE (GROUND_CROWN_M * GROUND_UNITS_PER_METRE)
+/*
+ * How far the rim sits below the crown -- DERIVED now, where it used to be the paraboloid's
+ * one free parameter. The island mesh is built about its crown and translated down by this,
+ * the seabed hangs off it, and GROUND_SEABED_DROP is taken from it, so it stays a name even
+ * though nothing chooses it any more.
+ */
+#define GROUND_HEIGHT (GROUND_CROWN_RISE + GROUND_BEACH_SLOPE * (GROUND_RADIUS - GROUND_SHORE_R))
 
 /*
  * SCALE. The anchor is the grass: blades are authored at 5.5 units and grass stands about
@@ -70,13 +94,14 @@ float ground_shore_height(void);
  * sand.h) and these bands supply the hue, which is also why the beach can grade into the
  * upland continuously instead of meeting it at a material boundary.
  *
- * This island stands 2.16 m out of the water, so the bands are centimetres and not metres:
- * the wet strip is a third of a metre, and grass takes the last half-metre at the crown
- * where the tree is.
+ * This island stands 1.02 m out of the water, so the bands are centimetres and not metres:
+ * the wet strip is a fifth of a metre and the grass takes the crown, where the tree is.
+ * They were set against a 2.16 m rise and rescaled with it -- a band taller than the island
+ * simply never appears.
  */
-#define GROUND_WET_SAND_M 0.35f
-#define GROUND_DRY_SAND_M 0.90f
-#define GROUND_UPLAND_M   1.60f
+#define GROUND_WET_SAND_M 0.18f
+#define GROUND_DRY_SAND_M 0.46f
+#define GROUND_UPLAND_M   0.80f
 
 // Vertex colour for a point on the ground, sRGB, as pbr_frag decodes it. Submerged sand
 // below the water, a wet band just above it, dry sand, then the upland it grades into.

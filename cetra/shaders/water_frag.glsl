@@ -429,15 +429,24 @@ void main() {
                         waterValueNoise(WorldPos.xz * noiseB - time * 0.05) * 0.38;
         foam *= mix(WATER_FOAM_BREAKUP_MIN, 1.0, smoothstep(0.25, 0.75, breakup));
     }
-    // Shore foam, on both wave models. A band where the bed has risen close to the
-    // surface but has not broken it -- the whitewater a beach carries even where nothing
-    // is breaking. Windowed on both sides: at shoal 0 the surface is about to be discarded
-    // anyway, and at 1 there is no shore to foam against.
-    //
-    // No bedAvailable guard: with no bed the shoal factor is exactly 1 everywhere, so the
-    // window's upper edge already zeroes this. The uniform test enforced the same fact a
-    // second time.
-    float band = smoothstep(0.02, 0.22, Shoal) * (1.0 - smoothstep(0.30, 0.72, Shoal));
+    /*
+     * Shore foam, on both wave models. The whitewater a beach carries even where nothing is
+     * breaking, strongest in the SWASH at the water's edge and fading out to sea.
+     *
+     * The inner edge is barely a window at all, and that is the correction spec 11.44 owed
+     * it. It used to open over shoal 0.02 to 0.22, on the reasoning that at shoal 0 the
+     * surface is about to be discarded anyway -- true when the shoal window was being read
+     * as 2.56 WORLD UNITS, where 0.02 of it was a couple of centimetres. Once the window
+     * became the 2.56 METRES it always meant, that same 0.02 was 36 cm of water and 24 units
+     * of ground, so the shallowest water carried no foam at all and the sea met the sand at
+     * a bare line. A beach's foam runs up the sand, not out to a threshold.
+     *
+     * The upper edge still closes it: at shoal 1 there is no shore to foam against.
+     *
+     * No bedAvailable guard: with no bed the shoal factor is exactly 1 everywhere, so the
+     * upper edge already zeroes this. The uniform test enforced the same fact a second time.
+     */
+    float band = smoothstep(0.0, 0.05, Shoal) * (1.0 - smoothstep(0.30, 0.72, Shoal));
     foam = max(foam, band * WATER_SHORE_FOAM);
 
     /*

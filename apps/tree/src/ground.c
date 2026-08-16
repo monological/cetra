@@ -10,10 +10,31 @@
 #define GROUND_NORMAL_STEP 0.5f
 
 float ground_height_at(float x, float z) {
-    float d = sqrtf(x * x + z * z);
+    const float d = sqrtf(x * x + z * z);
+    const float shore = GROUND_SHORE_R;
+    const float rise = GROUND_CROWN_RISE;
+    const float slope = GROUND_BEACH_SLOPE;
+
+    if (d < shore) {
+        /*
+         * The berm: a cubic Hermite from the crown to the shore, pinned at BOTH ends by
+         * value and by slope -- (0, 0) flat, and (shore, -rise) arriving at exactly the
+         * beach slope. That last pin is what makes the sand flat where it meets the water
+         * instead of steepest there, which is the paraboloid's failing and the whole reason
+         * this is not one.
+         */
+        // Hermite tangents are per unit of t, so the shore's slope scales by the span:
+        // dy/dt = (dy/dd) * shore, and dy/dd is NEGATIVE going out. Dropping that sign puts
+        // a trough just inside the waterline, which is the one place it would be seen.
+        const float t = d / shore;
+        const float h01 = t * t * (3.0f - 2.0f * t);
+        const float h11 = t * t * (t - 1.0f);
+        return h01 * (-rise) + h11 * (-slope * shore);
+    }
     if (d < GROUND_RADIUS) {
-        float t = d / GROUND_RADIUS;
-        return GROUND_HEIGHT * (1.0f - t * t) - GROUND_HEIGHT;
+        // The face and the terrace: ONE straight slope, continuing under the water without
+        // a crease at the line the eye is most likely to be looking at.
+        return -rise - slope * (d - shore);
     }
     /*
      * The seabed, past the rim.
@@ -45,15 +66,20 @@ float ground_shore_height(void) {
  * not illuminate a dark one. A submerged colour as dark as the wet strip turns the whole
  * lagoon brown, whatever the absorption is doing.
  *
+ * All four are NEAR-WHITE and barely saturated, which is what tropical sand actually is and
+ * not what it looks like on a screen: it reads as colour because the light landing on it is
+ * coloured. Authored warm and tan, it comes out orange under a low sun and brown under
+ * water, which is where this started.
+ *
  * WET sand, the strip just above the water, is the dark one: no water film to scatter, and
  * grains still saturated so they refract into each other instead of back at the eye.
  *
  * Then it dries, then it grades into the upland the tree stands on.
  */
-static const vec3 GROUND_SAND_SUBMERGED = {0.78f, 0.75f, 0.66f};
-static const vec3 GROUND_SAND_WET = {0.55f, 0.48f, 0.38f};
-static const vec3 GROUND_SAND_DRY = {0.86f, 0.78f, 0.60f};
-static const vec3 GROUND_UPLAND = {0.42f, 0.44f, 0.24f};
+static const vec3 GROUND_SAND_SUBMERGED = {0.87f, 0.86f, 0.80f};
+static const vec3 GROUND_SAND_WET = {0.66f, 0.62f, 0.55f};
+static const vec3 GROUND_SAND_DRY = {0.93f, 0.90f, 0.82f};
+static const vec3 GROUND_UPLAND = {0.44f, 0.46f, 0.26f};
 
 // Over how much depth the submerged pale gives way to the waterline's dark, in metres. Short:
 // this is the last few centimetres of water, not a gradient across the lagoon.
@@ -97,11 +123,18 @@ void ground_normal_at(float x, float z, vec3 out) {
 }
 
 float ground_sphere_fit(vec3 out_center) {
-    // A paraboloid y = -H*t^2 has curvature 2H/R^2 at its crown, and a sphere tangent there
-    // matches it with radius R^2/(2H). With H well under R the two stay together far past
-    // the crown: at this island's own numbers they differ by 0.01 units over the canopy and
-    // 2 units at the rim, which is nothing a falling leaf can show.
-    const float radius = GROUND_RADIUS * GROUND_RADIUS / (2.0f * GROUND_HEIGHT);
+    /*
+     * The berm's curvature at the crown, and a sphere tangent there matching it.
+     *
+     * Near t = 0 the Hermite is h01 -> 3t^2 and h11 -> -t^2, so with a tangent of
+     * -slope*shore the profile opens as -t^2 * (3*rise - slope*shore) and its curvature is
+     * twice that over shore^2. Taken from the profile rather than from a remembered
+     * paraboloid formula, which is what it was until 11.44 -- and which would have gone
+     * quietly wrong the moment the shape did.
+     */
+    const float shore = GROUND_SHORE_R;
+    const float k = 3.0f * GROUND_CROWN_RISE - GROUND_BEACH_SLOPE * shore;
+    const float radius = shore * shore / (2.0f * k);
     out_center[0] = 0.0f;
     out_center[1] = -radius; // tangent at the crown, which the header puts at y = 0
     out_center[2] = 0.0f;
