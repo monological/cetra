@@ -763,6 +763,18 @@ typedef struct {
     // that identifies them -- against a single sample, where no coverage is partial -- cannot
     // be made in the app that shows them.
     int msaa;
+    /*
+     * Keep the TAA jitter under --headless, which is also what lets the render scale stay at
+     * the 0.70 the app runs at: TAAU reconstructs from the jitter, so the engine pins the
+     * scale to 1 without it.
+     *
+     * Non-deterministic by construction, so it is not for goldens -- it is for reproducing
+     * what the WINDOW draws. Without it a headless capture of this app runs a different
+     * pipeline from the app: full resolution, no jitter, no upscaling resolve. An artifact
+     * that lives in any of those three cannot be captured at all, which is where the black
+     * cells at the horizon were found.
+     */
+    int headless_jitter;
     // Explicit camera pose, for reproducing a framing exactly. Degrees on the command line,
     // radians here. Each is independent: eye alone re-places the default look direction's
     // origin, which is usually what a report means.
@@ -795,6 +807,8 @@ static void print_usage(const char* prog) {
     printf("      --gerstner-waves    Closed-form octaves instead of spectral cascades\n");
     printf("      --render-mode N     Debug view; 10 = HDR hotspots, 12 = extrapolation\n");
     printf("      --msaa N            MSAA samples (default 4); 1 has no partial coverage\n");
+    printf("      --headless-jitter   Keep TAA jitter and the 0.70 render scale headless:\n");
+    printf("                          what the window draws, but NOT deterministic\n");
     printf("      --cam-eye x,y,z     Pin the camera position (exact-repro framing)\n");
     printf("      --cam-target x,y,z  Pin what it looks at\n");
     printf("      --cam-up x,y,z      Pin the up vector\n");
@@ -855,6 +869,8 @@ static bool parse_args(int argc, char** argv, TreeArgs* a) {
             a->render_mode = atoi(argv[++i]);
         } else if (!strcmp(s, "--msaa") && has_next) {
             a->msaa = atoi(argv[++i]);
+        } else if (!strcmp(s, "--headless-jitter")) {
+            a->headless_jitter = 1;
         } else if (!strcmp(s, "--player")) {
             a->player = 1;
         } else if (!strcmp(s, "--walk-speed") && has_next) {
@@ -982,6 +998,7 @@ int main(int argc, char** argv) {
 
     Engine* engine = create_engine("Procedural Tree", args.width, args.height);
     set_engine_headless(engine, args.headless != 0);
+    engine->headless_jitter = args.headless_jitter != 0;
     set_engine_screenshot_path(engine, args.screenshot);
     set_engine_screenshot_every(engine, args.screenshot_every);
     set_engine_exit_after_frames(engine, args.frames);
