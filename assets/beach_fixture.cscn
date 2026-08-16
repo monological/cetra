@@ -1,0 +1,86 @@
+{
+ "version": 1,
+ "models": [
+  {
+   "path": "beach_fixture.gltf"
+  }
+ ],
+ "lights": [
+  {
+   "name": "BeachKey",
+   "type": "directional",
+   "direction": [
+    -0.3,
+    -0.78,
+    -0.55
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 1.2,
+   "cast_shadows": false
+  }
+ ],
+ "environment": {
+  "mode": "sky",
+  "sun": {
+   "elevation": 32.0,
+   "azimuth": 150.0
+  },
+  "intensity": 1.0
+ },
+ "camera": {
+  "eye": [
+   0.0,
+   27.0,
+   77.2
+  ],
+  "target": [
+   0.0,
+   -0.4,
+   -3.7200000000000006
+  ],
+  "fov": 40
+ },
+ "water": {
+  "enabled": true,
+  "level": 0.0,
+  "extent": 60.0,
+  "waves": "fft",
+  "windDirection": [
+   0.0,
+   -1.0
+  ],
+  "windSpeed": 10.5,
+  "fetch": 90000.0,
+  "seaDepth": 24.0,
+  "peakEnhancement": 3.3,
+  "swell": 0.25,
+  "wavelength": 9.0,
+  "amplitude": 0.22,
+  "steepness": 0.6,
+  "spread": 0.8,
+  "roughness": 0.06,
+  "ior": 1.333,
+  "absorption": [
+   0.45,
+   0.09,
+   0.06
+  ],
+  "scatter": [
+   0.04,
+   0.16,
+   0.18
+  ],
+  "caustics": true,
+  "shoreCoverage": true,
+  "farLod": true
+ },
+ "post": {
+  "tonemap": "neutral",
+  "exposure": 1.0,
+  "auto_exposure": false
+ }
+}
