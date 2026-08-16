@@ -418,6 +418,7 @@ void free_water(Water* water) {
     // No `if (handle)` guards: glDelete* on 0 is a no-op (util.h says so), and the
     // cascade arrays are contiguous GLuint, so each family is one call rather than a
     // nest of loops over single deletes.
+    free(water->shore_pts);
     glDeleteVertexArrays(1, &water->grid_vao);
     glDeleteBuffers(1, &water->grid_vbo);
     glDeleteBuffers(1, &water->grid_ebo);
@@ -486,6 +487,193 @@ void water_publish_to_postfx(const Water* water, struct Engine* engine) {
  * wrapping to the far side of the scene, and RGBA32F because a 3-channel float texture
  * is not reliably filterable everywhere this runs.
  */
+/*
+ * THE SHORELINE, traced out of the bed that was just baked (spec 11.45).
+ *
+ * The object the water system has never had. Everything at a shore that is not purely local
+ * wants an ALONGSHORE coordinate -- how far along the beach a point is -- and a height field
+ * does not carry one: it answers "how deep here", never "how far round". Without it the surf
+ * has to assume a straight coast on a fixed bearing, foam has to live in world space and tile,
+ * and a swash film has no columns to run in.
+ *
+ * Marching squares on the level set, then the segments are chained end to end. General on
+ * purpose: it reads whatever WaterHeightFn the app supplied, so tree's wobbly island, a dome
+ * fixture and terrain flooded to an arbitrary level all produce the same thing, and no app has
+ * to declare its own coastline the way the reference implementation's does.
+ *
+ * ONE loop is kept -- the longest. A real bed has islets, sandbars and interior puddles, and
+ * every one of them is a closed contour at this level; the beach is the big one. Keeping them
+ * all would need per-loop bookkeeping for anything that walks the shore, and nothing so far
+ * wants a second coast badly enough to pay for it.
+ */
+static void _water_trace_shoreline(Water* water, const float* heights, int res, float span) {
+    free(water->shore_pts);
+    water->shore_pts = NULL;
+    water->shore_count = 0;
+    water->shore_length = 0.0f;
+
+    // Marching-squares segments. Each cell contributes at most two, so this bound holds.
+    const int max_seg = (res - 1) * (res - 1) * 2;
+    float* seg = malloc((size_t)max_seg * 4 * sizeof(float));
+    if (!seg)
+        return;
+    int nseg = 0;
+
+    const float cell = span / (float)res;
+    const float origin = -water->extent + 0.5f * cell;
+    const float level = water->level;
+
+#define BED_H(cx, cz) (heights[((cz) * res + (cx)) * 4])
+    // Linear crossing between two adjacent samples, in grid coordinates.
+    for (int z = 0; z < res - 1; z++) {
+        for (int x = 0; x < res - 1; x++) {
+            const float h00 = BED_H(x, z), h10 = BED_H(x + 1, z);
+            const float h01 = BED_H(x, z + 1), h11 = BED_H(x + 1, z + 1);
+            const int code = (h00 > level ? 1 : 0) | (h10 > level ? 2 : 0) | (h11 > level ? 4 : 0) |
+                             (h01 > level ? 8 : 0);
+            if (code == 0 || code == 15)
+                continue;
+            // Edge crossings, as grid-space points. Named for the cell edge they sit on.
+            const float tb = (level - h00) / (h10 - h00 != 0.0f ? h10 - h00 : 1.0e-6f);
+            const float tr = (level - h10) / (h11 - h10 != 0.0f ? h11 - h10 : 1.0e-6f);
+            const float tt = (level - h01) / (h11 - h01 != 0.0f ? h11 - h01 : 1.0e-6f);
+            const float tl = (level - h00) / (h01 - h00 != 0.0f ? h01 - h00 : 1.0e-6f);
+            const float bx = (float)x + tb, bz = (float)z;
+            const float rx = (float)x + 1.0f, rz = (float)z + tr;
+            const float tx = (float)x + tt, tz = (float)z + 1.0f;
+            const float lx = (float)x, lz = (float)z + tl;
+            float pts[4][2];
+            int np = 0;
+            /*
+             * An edge carries a crossing exactly when its two ends sit on opposite sides.
+             * Derived rather than tabulated: a hand-written 16-case table is four bits of
+             * transcription with no way to be partly right, and the first version of it put
+             * code 3 -- the two bottom corners dry -- on the bottom and right edges instead
+             * of the left and right, which broke the chain into fragments and traced 41 units
+             * of a shoreline over a kilometre long.
+             *
+             * The two saddles (5 and 10) have four crossings and two valid pairings. Either
+             * is a legal contour; taking them in this fixed order is what matters, since the
+             * chaining below tears if one cell disagrees with its neighbour.
+             */
+            const int b0 = (code & 1) != 0, b1 = (code & 2) != 0;
+            const int b2 = (code & 4) != 0, b3 = (code & 8) != 0;
+            const int uses_b = b0 != b1;
+            const int uses_r = b1 != b2;
+            const int uses_t = b3 != b2;
+            const int uses_l = b0 != b3;
+            if (uses_b) { pts[np][0] = bx; pts[np][1] = bz; np++; }
+            if (uses_r) { pts[np][0] = rx; pts[np][1] = rz; np++; }
+            if (uses_t) { pts[np][0] = tx; pts[np][1] = tz; np++; }
+            if (uses_l) { pts[np][0] = lx; pts[np][1] = lz; np++; }
+            for (int i = 0; i + 1 < np && nseg < max_seg; i += 2) {
+                seg[nseg * 4 + 0] = pts[i][0];
+                seg[nseg * 4 + 1] = pts[i][1];
+                seg[nseg * 4 + 2] = pts[i + 1][0];
+                seg[nseg * 4 + 3] = pts[i + 1][1];
+                nseg++;
+            }
+        }
+    }
+    if (nseg == 0) {
+        free(seg);
+        return;
+    }
+
+    /*
+     * Chain the segments into the longest run.
+     *
+     * Greedy nearest-endpoint rather than a topological walk: marching squares emits segments
+     * whose endpoints coincide exactly only in exact arithmetic, and a hash on a float pair is
+     * a bug waiting for a bed whose crossing lands on a sample. A tolerance of a third of a
+     * cell is far below the spacing between distinct contours and far above the rounding.
+     */
+    char* used = calloc((size_t)nseg, 1);
+    float* chain = malloc((size_t)(nseg + 1) * 2 * sizeof(float));
+    float* best = malloc((size_t)(nseg + 1) * 2 * sizeof(float));
+    if (!used || !chain || !best) {
+        free(seg); free(used); free(chain); free(best);
+        return;
+    }
+    const float tol2 = (0.34f) * (0.34f);
+    int best_n = 0;
+    for (int s = 0; s < nseg; s++) {
+        if (used[s])
+            continue;
+        int n = 0;
+        chain[n * 2] = seg[s * 4 + 0];
+        chain[n * 2 + 1] = seg[s * 4 + 1];
+        n++;
+        chain[n * 2] = seg[s * 4 + 2];
+        chain[n * 2 + 1] = seg[s * 4 + 3];
+        n++;
+        used[s] = 1;
+        for (;;) {
+            const float ex = chain[(n - 1) * 2], ez = chain[(n - 1) * 2 + 1];
+            int found = -1, flip = 0;
+            for (int t = 0; t < nseg; t++) {
+                if (used[t])
+                    continue;
+                const float ax = seg[t * 4 + 0] - ex, az = seg[t * 4 + 1] - ez;
+                if (ax * ax + az * az <= tol2) { found = t; flip = 0; break; }
+                const float bx2 = seg[t * 4 + 2] - ex, bz2 = seg[t * 4 + 3] - ez;
+                if (bx2 * bx2 + bz2 * bz2 <= tol2) { found = t; flip = 1; break; }
+            }
+            if (found < 0)
+                break;
+            used[found] = 1;
+            chain[n * 2] = seg[found * 4 + (flip ? 0 : 2)];
+            chain[n * 2 + 1] = seg[found * 4 + (flip ? 1 : 3)];
+            n++;
+        }
+        if (n > best_n) {
+            best_n = n;
+            memcpy(best, chain, (size_t)n * 2 * sizeof(float));
+        }
+    }
+
+    if (best_n >= 3) {
+        WaterShorePoint* out = malloc((size_t)best_n * sizeof(WaterShorePoint));
+        if (out) {
+            float s_accum = 0.0f;
+            for (int i = 0; i < best_n; i++) {
+                const float gx = best[i * 2], gz = best[i * 2 + 1];
+                out[i].x = origin + gx * cell;
+                out[i].z = origin + gz * cell;
+                // Landward normal from the bed's own gradient, sampled at the nearest node --
+                // uphill is inland by construction, which is what makes this independent of
+                // the chain's winding direction.
+                const int nx = (int)(gx + 0.5f) < 0 ? 0 : ((int)(gx + 0.5f) > res - 1 ? res - 1 : (int)(gx + 0.5f));
+                const int nz = (int)(gz + 0.5f) < 0 ? 0 : ((int)(gz + 0.5f) > res - 1 ? res - 1 : (int)(gz + 0.5f));
+                const float gxv = heights[(nz * res + nx) * 4 + 1];
+                const float gzv = heights[(nz * res + nx) * 4 + 2];
+                const float gl = sqrtf(gxv * gxv + gzv * gzv);
+                out[i].nx = gl > 1.0e-8f ? gxv / gl : 1.0f;
+                out[i].nz = gl > 1.0e-8f ? gzv / gl : 0.0f;
+                if (i > 0) {
+                    const float dx = out[i].x - out[i - 1].x, dz = out[i].z - out[i - 1].z;
+                    s_accum += sqrtf(dx * dx + dz * dz);
+                }
+                out[i].s = s_accum;
+            }
+            water->shore_pts = out;
+            water->shore_count = best_n;
+            water->shore_length = s_accum;
+            // An island's contour closes and a coast running off the bed's edge does not, and
+            // the difference decides whether the alongshore coordinate WRAPS. Measured against
+            // the chain rather than assumed: the same tracer produces both.
+            const float cx2 = out[best_n - 1].x - out[0].x;
+            const float cz2 = out[best_n - 1].z - out[0].z;
+            water->shore_closed = (cx2 * cx2 + cz2 * cz2) <= (cell * cell);
+        }
+    }
+#undef BED_H
+    free(seg);
+    free(used);
+    free(chain);
+    free(best);
+}
+
 static void _water_bake_bed(Water* water, float units_per_metre) {
     if (!water->height_at)
         return;
@@ -547,6 +735,8 @@ static void _water_bake_bed(Water* water, float units_per_metre) {
     }
     water->bed_foreshore_slope = slope_count > 0 ? (float)(slope_sum / slope_count) : 0.0f;
 
+    _water_trace_shoreline(water, heights, res, span);
+
     // The engine's own float-LUT upload: LINEAR / CLAMP_TO_EDGE / no mips is exactly
     // this texture's policy, so there is nothing here to hand-roll. Deleted and recreated
     // rather than re-uploaded because that helper returns a fresh name; the extent change
@@ -559,8 +749,10 @@ static void _water_bake_bed(Water* water, float units_per_metre) {
     water->bed_extent = water->extent;
     water->bed_level = water->level;
     water->bed_units_per_metre = units_per_metre;
-    log_info("Water: bed baked at %d^2 over %.0f units, foreshore slope %.3f", res,
-             (double)span, (double)water->bed_foreshore_slope);
+    log_info("Water: bed baked at %d^2 over %.0f units, foreshore slope %.3f, shoreline %d pts "
+             "over %.0f units (%s)",
+             res, (double)span, (double)water->bed_foreshore_slope, water->shore_count,
+             (double)water->shore_length, water->shore_closed ? "closed" : "open");
 }
 
 bool water_active(const Water* water) {

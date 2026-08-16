@@ -163,6 +163,22 @@ typedef struct WaterSeaState {
     float swell;            // 0..1, how much older cross-swell rides the wind sea
 } WaterSeaState;
 
+/*
+ * One point on the traced waterline (spec 11.45), in order along the shore.
+ *
+ * `s` is the ALONGSHORE ARC LENGTH, which is the coordinate a height field cannot supply and
+ * everything non-local at a shore needs: refraction's phase runs along it, foam that rides the
+ * swash is indexed by it, and a per-column swash film is a column per step of it.
+ *
+ * The normal points LANDWARD, taken from the bed's own gradient rather than from the polyline's
+ * winding -- uphill is inland whichever way the contour happens to be traced.
+ */
+typedef struct WaterShorePoint {
+    float x, z;   // world position on the waterline
+    float nx, nz; // unit landward normal
+    float s;      // cumulative arc length from the chain's start
+} WaterShorePoint;
+
 typedef struct Water {
     bool enabled;
 
@@ -242,6 +258,15 @@ typedef struct Water {
     // does. Reaches the frame before spec 11.45 exactly, and only materials that set
     // shore_wetness can see it either way.
     bool wetness;
+
+    // The waterline, traced out of the baked bed (spec 11.45). NULL where the bed has no
+    // shore in it at all -- open water, or a level below everything. Rebuilt with the bed.
+    WaterShorePoint* shore_pts;
+    int shore_count;
+    float shore_length; // total arc length, world units
+    // true = the chain closes on itself (an island, a lake), so the alongshore coordinate
+    // wraps; false = it runs off the bed's edge and clamps at both ends.
+    bool shore_closed;
 
     // Lazily built GPU state, on the postfx ensure_* pattern. `failed` latches
     // so a missing program costs one log line rather than one per frame forever.
