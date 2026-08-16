@@ -34,6 +34,7 @@
 #include "cetra/particle_sim.h"
 
 #include "cetra/procedural/tree_gen.h"
+#include "cetra/procedural/sand.h"
 #include "cetra/procedural/vegetation_tex.h"
 #include "ground.h"
 #include "player.h"
@@ -58,95 +59,7 @@ static Texture* leaf_roughness_tex = NULL;
 static Texture* leaf_sprite_tex = NULL;
 static Texture* island_albedo_tex = NULL;
 static Texture* island_normal_tex = NULL;
-
-/*
- * Generate island/ground normal texture (mostly flat with some variation)
- */
-static unsigned char* generate_island_normal(int width, int height) {
-    unsigned char* data = malloc(width * height * 3);
-    if (!data)
-        return NULL;
-
-    veg_noise_seed(1000);
-
-    for (int y = 0; y < height; y++) {
-        for (int x = 0; x < width; x++) {
-            int idx = (y * width + x) * 3;
-
-            float nx = (float)x / width * 16.0f;
-            float ny = (float)y / height * 16.0f;
-
-            // Subtle height variation for normal calculation
-            float h = veg_fbm2(nx, ny, 3, 0.5f) * 0.1f;
-            float hx = veg_fbm2(nx + 0.1f, ny, 3, 0.5f) * 0.1f;
-            float hy = veg_fbm2(nx, ny + 0.1f, 3, 0.5f) * 0.1f;
-
-            // Derive normal from height differences. Tangent space puts the
-            // surface normal on +Z, as the bark map does -- writing it on +Y
-            // (the world-space convention) aims every ground texel sideways
-            // along its bitangent, and the ground then never faces the sun.
-            float dx = (hx - h) * 2.0f;
-            float dy = (hy - h) * 2.0f;
-
-            vec3 normal = {-dx, -dy, 1.0f};
-            glm_vec3_normalize(normal);
-
-            // Convert to 0-255 range
-            data[idx] = (unsigned char)((normal[0] * 0.5f + 0.5f) * 255);
-            data[idx + 1] = (unsigned char)((normal[1] * 0.5f + 0.5f) * 255);
-            data[idx + 2] = (unsigned char)((normal[2] * 0.5f + 0.5f) * 255);
-        }
-    }
-
-    return data;
-}
-
-/*
- * Generate island/ground albedo texture
- */
-static unsigned char* generate_island_albedo(int width, int height) {
-    unsigned char* data = malloc(width * height * 3);
-    if (!data)
-        return NULL;
-
-    veg_noise_seed(999);
-
-    for (int y = 0; y < height; y++) {
-        for (int x = 0; x < width; x++) {
-            int idx = (y * width + x) * 3;
-
-            // Base noise for variation
-            float nx = (float)x / width * 8.0f;
-            float ny = (float)y / height * 8.0f;
-
-            float noise = veg_fbm2(nx, ny, 4, 0.5f);
-            float detail = veg_fbm2(nx * 4.0f, ny * 4.0f, 2, 0.5f) * 0.3f;
-
-            float combined = noise + detail;
-
-            // Earth/dirt brown base
-            float r = 0.35f + combined * 0.15f;
-            float g = 0.25f + combined * 0.12f;
-            float b = 0.15f + combined * 0.08f;
-
-            // Add some green patches (grass)
-            float grass = veg_fbm2(nx * 2.0f + 100.0f, ny * 2.0f, 3, 0.6f);
-            if (grass > 0.3f) {
-                float grass_blend = (grass - 0.3f) * 1.5f;
-                grass_blend = fminf(grass_blend, 0.6f);
-                r = r * (1.0f - grass_blend) + 0.2f * grass_blend;
-                g = g * (1.0f - grass_blend) + 0.4f * grass_blend;
-                b = b * (1.0f - grass_blend) + 0.15f * grass_blend;
-            }
-
-            data[idx] = (unsigned char)(fminf(fmaxf(r, 0.0f), 1.0f) * 255);
-            data[idx + 1] = (unsigned char)(fminf(fmaxf(g, 0.0f), 1.0f) * 255);
-            data[idx + 2] = (unsigned char)(fminf(fmaxf(b, 0.0f), 1.0f) * 255);
-        }
-    }
-
-    return data;
-}
+static Texture* island_roughness_tex = NULL;
 
 // Bake one CPU buffer into a pooled texture and release the buffer. Going
 // through the pool (rather than a hand-rolled glTexImage2D) is what gets the
@@ -199,11 +112,32 @@ static void generate_procedural_textures(Scene* scene) {
     leaf_sprite_tex =
         bake_texture(scene, veg_leaf_sprite(T), T, T, 4, true, "proc_leaf_sprite");
 
-    printf("Generating procedural island textures...\n");
-    island_albedo_tex =
-        bake_texture(scene, generate_island_albedo(T, T), T, T, 3, true, "proc_island_albedo");
-    island_normal_tex =
-        bake_texture(scene, generate_island_normal(T, T), T, T, 3, false, "proc_island_normal");
+    /*
+     * The ground is SAND (spec 11.44), and its colour is not in this texture.
+     *
+     * These three carry grain, ripples and relief only, near-neutral, because vertex colour
+     * supplies the hue -- submerged sand, the wet strip at the waterline, dry beach, and the
+     * upland at the crown, all from ground_beach_color. That split is forced by the sampler
+     * ledger: pbr_frag declares sixteen of sixteen, so the terrain gets ONE albedo map and a
+     * second one for the upland cannot be bound. It also buys a continuous grade instead of
+     * a material boundary between beach and inland.
+     *
+     * The ripple train is oriented across the radial direction, which on a round island is
+     * along the shore -- which is the way a beach's ripples actually run.
+     */
+    printf("Generating procedural sand textures...\n");
+    float* sand_field = malloc((size_t)T * T * sizeof(float));
+    if (sand_field) {
+        veg_noise_seed(4242);
+        sand_height_field(sand_field, T, T, 0.7853982f); // 45 degrees across the UV diagonal
+        island_albedo_tex =
+            bake_texture(scene, sand_albedo(T, T, sand_field), T, T, 3, true, "proc_sand_albedo");
+        island_normal_tex =
+            bake_texture(scene, sand_normal(T, T, sand_field), T, T, 3, false, "proc_sand_normal");
+        island_roughness_tex = bake_texture(scene, sand_roughness(T, T, sand_field), T, T, 3,
+                                            false, "proc_sand_roughness");
+        free(sand_field);
+    }
 
     printf("Procedural textures generated.\n");
 
@@ -351,7 +285,11 @@ static void create_island(SceneNode* parent) {
     set_node_name(island_node, "ground");
 
     Mesh* mesh = create_mesh();
-    ground_build_mesh(mesh, 24, 64, 40.0f);
+    // 128 rings, not the 24 this had: the beach's colour bands are VERTEX colour, and the
+    // wet strip is 0.35 m of a 2.16 m rise. At 24 rings a ring is 1.2 m, so the whole wet
+    // band fell between two of them and the grade came out as steps. 128 puts a ring every
+    // 0.22 m, which resolves the narrowest band, for 8192 vertices of a one-off disc.
+    ground_build_mesh(mesh, 128, 64, 40.0f);
     mesh->material = island_material;
 
     glm_mat4_identity(island_node->original_transform);
@@ -1235,20 +1173,26 @@ int main(int argc, char** argv) {
     set_material_shader_program(island_material, pbr_program);
     set_material_albedo_tex(island_material, island_albedo_tex);
     set_material_normal_tex(island_material, island_normal_tex);
+    set_material_roughness_tex(island_material, island_roughness_tex);
 
-    // The seabed reuses the island's textures with a darker, cooler albedo rather than a
-    // third procedural generator: it is only ever seen through metres of water, which is a
-    // colour filter strong enough that the difference a bespoke texture would make does not
-    // survive it. Rougher than the beach, and nothing else -- opaque, no wind, no subsurface.
+    /*
+     * The seabed shares the island's sand maps, and now its vertex colours too, so the two
+     * meshes meet at the rim as one surface rather than as two materials that happen to
+     * touch. The bed's own albedo factor stays white for the same reason the island's does:
+     * the colour is per-vertex, and a factor here would tint the beach as well.
+     *
+     * Rougher than the beach, and nothing else -- opaque, no wind, no subsurface.
+     */
     seabed_material = create_material();
     seabed_material->name = safe_strdup("seabed");
-    glm_vec3_copy((vec3){0.34f, 0.36f, 0.33f}, seabed_material->albedo);
+    glm_vec3_one(seabed_material->albedo);
     seabed_material->roughness = 0.95f;
     seabed_material->metallic = 0.0f;
     seabed_material->ao = 1.0f;
     set_material_shader_program(seabed_material, pbr_program);
     set_material_albedo_tex(seabed_material, island_albedo_tex);
     set_material_normal_tex(seabed_material, island_normal_tex);
+    set_material_roughness_tex(seabed_material, island_roughness_tex);
 
     // Grass. Opaque, so it casts and receives shadows with no special handling
     // -- the canopy dapple landing on it is the point of having it. Colour is

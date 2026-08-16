@@ -29,6 +29,65 @@ float ground_height_at(float x, float z) {
     return -GROUND_HEIGHT - GROUND_SEABED_DROP * ease;
 }
 
+float ground_shore_height(void) {
+    return ground_height_at(GROUND_SHORE_T * GROUND_RADIUS, 0.0f);
+}
+
+/*
+ * The beach's colours, sRGB, in the order the water leaves them.
+ *
+ * The darkest line on a beach is AT the waterline, and it is lighter on both sides of it --
+ * which is not obvious and is most of why a first attempt at this looks like mud.
+ *
+ * SUBMERGED sand is pale. It is seen through water that scatters light back on the way in
+ * and on the way out, so the bed reads brighter and cooler than the same sand in air, and
+ * this is the colour the shallows' turquoise is made of: the water tints a pale bed, it does
+ * not illuminate a dark one. A submerged colour as dark as the wet strip turns the whole
+ * lagoon brown, whatever the absorption is doing.
+ *
+ * WET sand, the strip just above the water, is the dark one: no water film to scatter, and
+ * grains still saturated so they refract into each other instead of back at the eye.
+ *
+ * Then it dries, then it grades into the upland the tree stands on.
+ */
+static const vec3 GROUND_SAND_SUBMERGED = {0.78f, 0.75f, 0.66f};
+static const vec3 GROUND_SAND_WET = {0.55f, 0.48f, 0.38f};
+static const vec3 GROUND_SAND_DRY = {0.86f, 0.78f, 0.60f};
+static const vec3 GROUND_UPLAND = {0.42f, 0.44f, 0.24f};
+
+// Over how much depth the submerged pale gives way to the waterline's dark, in metres. Short:
+// this is the last few centimetres of water, not a gradient across the lagoon.
+#define GROUND_SUBMERGED_FADE_M 0.12f
+
+static void ground_smooth_lerp(const vec3 a, const vec3 b, float t, vec3 out) {
+    glm_vec3_lerp((float*)a, (float*)b, t * t * (3.0f - 2.0f * t), out);
+}
+
+void ground_beach_color(float height_above_water, vec4 out) {
+    const float m = height_above_water / GROUND_UNITS_PER_METRE;
+    vec3 rgb = GLM_VEC3_ZERO_INIT; // every branch writes it; seeded so the analyser can see it
+    if (m <= -GROUND_SUBMERGED_FADE_M) {
+        glm_vec3_copy((float*)GROUND_SAND_SUBMERGED, rgb);
+    } else if (m <= 0.0f) {
+        ground_smooth_lerp(GROUND_SAND_SUBMERGED, GROUND_SAND_WET,
+                           (m + GROUND_SUBMERGED_FADE_M) / GROUND_SUBMERGED_FADE_M, rgb);
+    } else if (m <= GROUND_WET_SAND_M) {
+        glm_vec3_copy((float*)GROUND_SAND_WET, rgb);
+    } else if (m <= GROUND_DRY_SAND_M) {
+        ground_smooth_lerp(GROUND_SAND_WET, GROUND_SAND_DRY,
+                           (m - GROUND_WET_SAND_M) / (GROUND_DRY_SAND_M - GROUND_WET_SAND_M), rgb);
+    } else if (m <= GROUND_UPLAND_M) {
+        ground_smooth_lerp(GROUND_SAND_DRY, GROUND_UPLAND,
+                           (m - GROUND_DRY_SAND_M) / (GROUND_UPLAND_M - GROUND_DRY_SAND_M), rgb);
+    } else {
+        glm_vec3_copy((float*)GROUND_UPLAND, rgb);
+    }
+    out[0] = rgb[0];
+    out[1] = rgb[1];
+    out[2] = rgb[2];
+    out[3] = 1.0f;
+}
+
 void ground_normal_at(float x, float z, vec3 out) {
     const float h = GROUND_NORMAL_STEP;
     float dx = ground_height_at(x + h, z) - ground_height_at(x - h, z);
@@ -62,6 +121,9 @@ void ground_build_mesh(Mesh* mesh, int rings, int segments, float uv_tiles) {
     mesh->normals = malloc(num_vertices * 3 * sizeof(float));
     mesh->tex_coords = malloc(num_vertices * 2 * sizeof(float));
     mesh->tangents = malloc(num_vertices * 4 * sizeof(float)); // xyz + handedness
+    // The beach's colour, which is where the sand-to-upland grade lives -- see ground.h for
+    // why it rides vertex colour rather than a second albedo map.
+    mesh->colors = malloc(num_vertices * 4 * sizeof(float));
     mesh->index_count = num_triangles * 3;
     mesh->indices = malloc(mesh->index_count * sizeof(unsigned int));
 
@@ -79,7 +141,9 @@ void ground_build_mesh(Mesh* mesh, int rings, int segments, float uv_tiles) {
     mesh->tangents[3] = 1.0f; // cross((0,1,0), (1,0,0)) = (0,0,1)
     mesh->tex_coords[0] = 0.5f * uv_tiles;
     mesh->tex_coords[1] = 0.5f * uv_tiles;
+    ground_beach_color(ground_height_at(0.0f, 0.0f) - ground_shore_height(), mesh->colors);
 
+    const float shore = ground_shore_height();
     int vi = 1;
     for (int r = 1; r <= rings; r++) {
         float ring_radius = radius * (float)r / rings;
@@ -125,6 +189,8 @@ void ground_build_mesh(Mesh* mesh, int rings, int segments, float uv_tiles) {
 
             mesh->tex_coords[vi * 2] = (0.5f + 0.5f * x / radius) * uv_tiles;
             mesh->tex_coords[vi * 2 + 1] = (0.5f + 0.5f * z / radius) * uv_tiles;
+
+            ground_beach_color(ground_height_at(x, z) - shore, &mesh->colors[vi * 4]);
 
             vi++;
         }
@@ -175,9 +241,13 @@ bool ground_build_seabed(Mesh* mesh, int rings, int segments, float uv_tiles) {
     // and two triangles per quad between consecutive rows.
     const size_t vres = (size_t)(rings + 1) * (size_t)segments;
     const size_t ires = (size_t)rings * (size_t)segments * 6;
-    if (!mb_init(&mb, vres, ires, false))
+    // With colours, so the bed carries the same beach banding the island does. Its rim row
+    // shares the island's last row exactly, and a seam where one side is coloured sand and
+    // the other is not would show as a ring however well the geometry matches.
+    if (!mb_init(&mb, vres, ires, true))
         return false;
 
+    const float shore = ground_shore_height();
     for (int r = 0; r <= rings; r++) {
         // Geometric in the RADIUS, so the ring spacing grows with distance -- see the header.
         const float u = (float)r / (float)rings;
@@ -205,8 +275,10 @@ bool ground_build_seabed(Mesh* mesh, int rings, int segments, float uv_tiles) {
             // surface of revolution -- so it is already orthogonal to the normal and needs no
             // Gram-Schmidt. Matches the island mesh's convention, handedness +1.
             vec3 t = {-sa, 0.0f, ca};
+            vec4 rgba = GLM_VEC4_ZERO_INIT; // out-param; seeded for the analyser
+            ground_beach_color(p[1] - shore, rgba);
             mb_vertex(&mb, p, n, t, (0.5f + 0.5f * x / GROUND_SEABED_RADIUS) * uv_tiles,
-                      (0.5f + 0.5f * z / GROUND_SEABED_RADIUS) * uv_tiles, 0.0f, 0.0f, NULL);
+                      (0.5f + 0.5f * z / GROUND_SEABED_RADIUS) * uv_tiles, 0.0f, 0.0f, rgba);
         }
     }
 

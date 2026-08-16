@@ -51,6 +51,38 @@
 #define GROUND_SHORE_T 0.5f
 
 /*
+ * The still-water height: the ground's own height at the shore radius (spec 11.44).
+ *
+ * The sea's level is DERIVED from the ground rather than picked, and this is where that
+ * derivation lives so the app and the beach banding below cannot answer it differently.
+ * Evaluated rather than solved in closed form -- the direction anyone needs is level FROM
+ * radius, which is the profile at a point.
+ */
+float ground_shore_height(void);
+
+/*
+ * Beach banding, in METRES above the still water, and metres because GROUND_UNITS_PER_METRE
+ * is right there and a beach is a physical thing (spec 11.44).
+ *
+ * These drive VERTEX COLOUR, not a second texture, and that is forced rather than chosen:
+ * pbr_frag declares sixteen of sixteen samplers, so the terrain gets one albedo map and the
+ * large-scale colour has to arrive another way. The map is near-neutral grain (procedural/
+ * sand.h) and these bands supply the hue, which is also why the beach can grade into the
+ * upland continuously instead of meeting it at a material boundary.
+ *
+ * This island stands 2.16 m out of the water, so the bands are centimetres and not metres:
+ * the wet strip is a third of a metre, and grass takes the last half-metre at the crown
+ * where the tree is.
+ */
+#define GROUND_WET_SAND_M 0.35f
+#define GROUND_DRY_SAND_M 0.90f
+#define GROUND_UPLAND_M   1.60f
+
+// Vertex colour for a point on the ground, sRGB, as pbr_frag decodes it. Submerged sand
+// below the water, a wet band just above it, dry sand, then the upland it grades into.
+void ground_beach_color(float height_above_water, vec4 out);
+
+/*
  * How far the seabed mesh reaches, and how deep it goes past the rim (spec 11.35 phase 6).
  *
  * The sea itself reaches the horizon, so the bed cannot cover all of it and does not need to:
