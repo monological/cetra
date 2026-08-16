@@ -408,6 +408,7 @@ Water* create_water(void) {
     // Surface drift, m/s. A few per cent of a moderate wind, which is the order the
     // literature gives for what a wind sea carries its surface at.
     water->foam_drift = 0.35f;
+    water->foam_debug = 0;
     water->shore_coverage = true;
     water->surf = true;
     water->far_lod = true;
@@ -1775,6 +1776,7 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
     uniform_set_int(u, "sunShadowSlot", shadows ? sun->shadow_map_index : -1);
     uniform_set_int(u, "causticsEnabled", water->caustics ? 1 : 0);
     uniform_set_int(u, "glitterEnabled", water->glitter ? 1 : 0);
+    uniform_set_int(u, "waterFoamDebug", water->foam_debug);
     // The deck dims the caustics it focuses (spec 11.41) and the sun lobe it lights
     // (spec 11.42). Not the reflection, which is an environment lookup already carrying it.
     sky_bind_cloud_shadow(scene->sky, program, SKY_CLOUD_SHADOW_UNIT);

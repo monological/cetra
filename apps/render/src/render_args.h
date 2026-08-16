@@ -83,6 +83,9 @@ typedef struct {
     int water_waves;            // Wave model: -1 = unset, 0 = Gerstner, 1 = spectral
     int no_water_caustics;      // Bisect lever: drop the surface's light focusing
     int no_water_glitter;       // Bisect lever: drop the analytic sun lobe
+    // Draw the crest band as a binary mask: 0 off, 1 after erosion, 2 before. The
+    // instrument whitecap coverage is measured with; see Water.foam_debug.
+    int water_foam_debug;
     int no_water_surf;          // Bisect lever: no incident wave at the shore
     int no_water_foam_history;  // Bisect lever: foam from this frame's fold only
     int no_water_coverage;      // Bisect lever: hard shoreline cutoff, no coverage

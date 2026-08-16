@@ -253,6 +253,21 @@ typedef struct Water {
     // decaying where it was born -- the orbital half of that motion is already free, since
     // the surface reads foam at the wave parcel's own label.
     float foam_drift;
+    /*
+     * Draw the crest band as a BINARY MASK instead of shading it (spec 11.47). 0 = off,
+     * 1 = the band after erosion, 2 = before it -- so the erosion's own pass rate is a
+     * difference of two measurements rather than an estimate.
+     *
+     * Its own mode rather than a render mode because what it measures is a fraction of SEA
+     * AREA, and a coverage read off the shaded frame is a read of the foam's opacity and
+     * colour and of the sun and the tonemap -- so it would move whenever the constants it
+     * exists to calibrate move. A binary write survives any monotone tonemap, which makes
+     * counting a threshold at half.
+     *
+     * The shore band is deliberately not shown: it is calibrated against a swash, not
+     * against a whitecap-coverage relation.
+     */
+    int foam_debug;
     // false = the shoreline is a hard cutoff at the pixel the water column closes.
     // Inert wherever the target has no samples to spend coverage on.
     bool shore_coverage;

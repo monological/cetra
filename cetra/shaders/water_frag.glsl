@@ -76,6 +76,9 @@ uniform vec3 sunRadiance;
 uniform int sunShadowSlot;
 // 0 = no analytic sun lobe, which is the frame every capture before spec 11.42 rendered.
 uniform int glitterEnabled;
+// 0 = shade normally. Non-zero draws the crest band as a binary mask instead; see the
+// override at the end of main for what each value shows and why it is binary.
+uniform int waterFoamDebug;
 // Accumulated foam, one band per channel, each in its OWN band's tiling space -- so this
 // is sampled three times at three UVs rather than once. 0 = the pass has not run, and the
 // instantaneous fold below is the whole selection.
@@ -693,7 +696,12 @@ void main() {
     vec2 foamDdx = dFdx(WorldPos.xz);
     vec2 foamDdy = dFdy(WorldPos.xz);
     vec2 foamDrift = waterWindDir * (time * WATER_FOAM_DRIFT_M_PER_S * waterUnitsPerMetre);
+    // The crest band on its own, either side of the erosion. Kept for --water-foam-debug,
+    // which measures coverage as a fraction of sea area and so has to see the band this
+    // shader selected rather than the colour it ended up painting.
+    float crestSelect = foam;
     foam = waterErodeFoam(foam, WorldPos.xz + foamDrift, foamDdx, foamDdy);
+    float crestFoam = foam;
     shoreFoam = waterErodeFoam(shoreFoam, WorldPos.xz - ShoreDir * SwashRun, foamDdx, foamDdy);
     foam = max(foam, shoreFoam);
 
@@ -1085,4 +1093,35 @@ void main() {
     // FragColor above, so there is nothing here for the spec-occ composite to
     // scale and nothing double-counted by leaving it at zero.
     SpecOut = vec4(0.0);
+
+    /*
+     * --water-foam-debug: the crest band as a BINARY mask (spec 11.47).
+     *
+     * Last, and overwriting FragColor rather than returning early, so every other draw
+     * buffer keeps the value the real path gave it -- this file's own contract at the top
+     * is that a location enabled for the frame and left unwritten keeps whatever the
+     * previous pass put there.
+     *
+     * BINARY because this is an instrument, not a picture. A coverage read off the shaded
+     * frame is a read of the foam's opacity, its colour, the sun and the tonemap, so it
+     * would move whenever the constants it exists to calibrate move. Zero or one survives
+     * any monotone tonemap, which makes counting a threshold at half.
+     *
+     * 1 is the band AFTER erosion -- coverage as the frame draws it. 2 is BEFORE, so the
+     * erosion's own pass rate is a ratio of two measurements rather than an estimate.
+     */
+    if (waterFoamDebug != 0) {
+        /*
+         * RED is the mask; GREEN marks "this pixel is water at all", and the pair is what
+         * makes the reader independent of the scene.
+         *
+         * Coverage is a fraction of SEA AREA, so the denominator has to be the sea and not
+         * the frame -- a fixture with a ramp in it, or any sky above the horizon, would
+         * otherwise be counted as unfoamed water and quietly dilute the answer. Only this
+         * shader writes green here, so `green high and blue low` is the sea exactly, with
+         * no box to place and nothing to tune.
+         */
+        float shown = waterFoamDebug == 2 ? crestSelect : crestFoam;
+        FragColor = vec4(shown > 0.5 ? 1.0 : 0.0, 1.0, 0.0, 1.0);
+    }
 }
