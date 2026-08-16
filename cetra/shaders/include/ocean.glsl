@@ -363,6 +363,13 @@ const float OCEAN_LENS_RATIO = 0.15;
 const float OCEAN_SWASH_REACH = 0.3;
 // The tongue climbs a third of a period after the bore reaches the shoreline.
 const float OCEAN_SWASH_LAG = 2.1;
+// The SETUP: the fraction of the run-up that is a standing rise of the mean water level at
+// the shore, about which the swash oscillates. Stockdon's R2% is setup plus swash, and the
+// setup term of it (0.35 beta sqrt(H0 L0)) is about this fraction of the whole on a beach
+// like this one. Oscillating the tongue about the STILL level instead retreated its tip
+// 0.6 R below still water at every trough -- metres offshore on a shallow slope -- and
+// drained the whole swash zone to a film with a step of water at its seaward edge.
+const float OCEAN_SWASH_SETUP = 0.4;
 // The bore stops shortening below this depth, in metres: the shallow-water wavenumber goes
 // as 1/sqrt(h) and would be infinite at the waterline. The lens takes its phase from here.
 const float OCEAN_SURF_MIN_DEPTH_M = 0.05;
@@ -474,10 +481,13 @@ OceanSurf oceanSurf(vec2 p, OceanBed bed, float t, float fieldY, vec2 dFieldY) {
     float r2 = 1.1 * (0.35 * slope * sqrt(hl) + 0.5 * sqrt(hl * (0.563 * slope * slope + 0.004)));
     float runup = r2 / (1.0 + OCEAN_SURF_GROUP_MOD) * upm;
 
-    // The lens: its edge on the beach face, and the sheet behind it.
+    // The lens: its edge on the beach face, about the setup and up to the run-up, and the
+    // sheet behind it.
     vec2 sw = oceanBoreWave(phaseShore);
-    float edge = runup * env * sw.x;
-    vec2 dEdge = runup * (dEnv * sw.x + env * sw.y * dPhaseShore);
+    float swash = OCEAN_SWASH_SETUP + (1.0 - OCEAN_SWASH_SETUP) * sw.x;
+    float dSwash = (1.0 - OCEAN_SWASH_SETUP) * sw.y;
+    float edge = runup * env * swash;
+    vec2 dEdge = runup * (dEnv * swash + env * dSwash * dPhaseShore);
     float lens = OCEAN_LENS_RATIO * edge - (1.0 - OCEAN_LENS_RATIO) * bed.column;
     vec2 dLens = OCEAN_LENS_RATIO * dEdge - (1.0 - OCEAN_LENS_RATIO) * bed.dColumn;
 
@@ -495,7 +505,7 @@ OceanSurf oceanSurf(vec2 p, OceanBed bed, float t, float fieldY, vec2 dFieldY) {
     s.dHeight = da + (dLens - da) * w + (lens - a) * dW;
     // The foam's cue: the bore's crest where the bore owns the surface, the tongue's where
     // the lens does.
-    s.crest = clamp(mix(bw.x * gate, sw.x, w), 0.0, 1.0);
+    s.crest = clamp(mix(bw.x * gate, swash, w), 0.0, 1.0);
     return s;
 }
 

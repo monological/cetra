@@ -3636,6 +3636,14 @@ WATER_DOME_BED = ["--water-bed", "dome"]
 # would be a global amplitude knob wearing a bed's name.
 WATER_SHOAL_MID_BOX = (0.06, 0.40, 0.30, 0.55)
 WATER_SHOAL_OPEN_BOX = (0.06, 0.17, 0.30, 0.26)
+# WITH THE SURF OFF, on both sides. Shoaling is the vertex stage shortening waves over a
+# rising bed; the surf is the separate incident wave the shore builds on top of it, and over
+# this dome it covers the whole bar -- the fixture authors the library's default ocean
+# (11.5 m/s over 120 km, Hs 3.69 m) onto a bar 0.6 units proud in 9 units of water, so every
+# bit of it is inside the breaker zone. That is correct and it leaves this arm nothing
+# unbroken to measure. Isolated rather than accommodated, the same way the foam it already
+# excludes is; water-surf below is what tests the thing being switched off here.
+WATER_NO_SURF = ["--no-water-surf"]
 # Measured 0.63x on the mid box originally, and 0.80x since 11.44 gave the shore band a
 # swash. That is not the shoaling weakening: the mid box sits where the shoal factor is at
 # or near ZERO -- fully shoaled, which is exactly where a swash belongs -- so foam now
@@ -3647,6 +3655,12 @@ WATER_SHOAL_OPEN_BOX = (0.06, 0.17, 0.30, 0.26)
 # than the shallow end, which is a re-derivation of the box and not a threshold change.
 WATER_SHOAL_MAX_RATIO = 0.88
 WATER_SHOAL_OPEN_TOL = 0.05
+
+# The surf (spec 11.44). Measured 40k+ px of surf over the dome and 20k+ between two frames
+# a quarter of a wave period apart; the no-bed side is an exact 0 and is not a measurement
+# with slack in it -- oceanSurf returns early on bedAvailable == 0.
+WATER_SURF_MIN_PX = 15000
+WATER_SURF_MIN_MOVED = 5000
 
 # The shore foam band, on the GERSTNER path -- which is what isolates it. Crest foam is
 # selected from Jacobian compression and the Gerstner map's steepness is clamped so it
@@ -4288,7 +4302,11 @@ def run_water_gate(workdir):
                       --water-bed dome, since every other arm here runs over a bed the
                       vertex stage cannot see. The second half -- open water beyond the
                       dome unchanged -- is what stops a global roughness change passing
-                      as shoaling.
+                      as shoaling. Both sides run --no-water-surf: see WATER_NO_SURF.
+      water-surf      the incident wave the SHORE builds -- a bore that comes in and a
+                      swash that runs up -- which neither wave model has. Present over
+                      the bed, exactly absent without one, and different between two
+                      frames a fraction of a period apart, which is the claim: it moves.
       water-shore-foam the shore band is whitewater where the bed shoals and nowhere
                       else: present in the band, zero at both extremes, and zero in the
                       same box with no bed under it. Run on GERSTNER deliberately --
@@ -4807,7 +4825,11 @@ def run_water_gate(workdir):
     # WATER_FFT_FLAGS alone is the no-bed frame and rendering it again under
     # --water-bed none produced a byte-identical duplicate.
     dome = os.path.join(workdir, "water_dome.ppm")
-    err = None if not fft_ok else render(scene, dome, WATER_FFT_FLAGS + WATER_DOME_BED)
+    nobed = os.path.join(workdir, "water_nosurf_nobed.ppm")
+    err = None if not fft_ok else render(scene, dome,
+                                         WATER_FFT_FLAGS + WATER_DOME_BED + WATER_NO_SURF)
+    if not err and fft_ok:
+        err = render(scene, nobed, WATER_FFT_FLAGS + WATER_NO_SURF)
     if not fft_ok:
         print("  water-shoal  SKIP  (the spectral render this compares against failed)")
     elif err:
@@ -4815,7 +4837,7 @@ def run_water_gate(workdir):
         failures.append("water-shoal")
     else:
         wd, hd, pixd = _read_ppm(dome)
-        wn, hn, pixn = _read_ppm(fa)
+        wn, hn, pixn = _read_ppm(nobed)
         mid_on = _water_roughness(pixd, wd, hd, WATER_SHOAL_MID_BOX)
         mid_off = _water_roughness(pixn, wn, hn, WATER_SHOAL_MID_BOX)
         open_on = _water_roughness(pixd, wd, hd, WATER_SHOAL_OPEN_BOX)
@@ -4831,6 +4853,43 @@ def run_water_gate(workdir):
               f"{WATER_SHOAL_OPEN_TOL})")
         if not ok:
             failures.append("water-shoal")
+
+    # The surf itself (spec 11.44): the incident wave the shore builds, which no wave model
+    # has -- both are downwind-travelling fields that the shoal factor scales to nothing at
+    # the sand, so before this the sea met the beach as a still line.
+    #
+    # Three claims, and the second is the one that matters. It has to arrive ONLY where
+    # there is a shore: a surf that moved open water would be a global amplitude knob
+    # wearing a beach's name, which is the same trap water-shoal's open box guards. And it
+    # has to MOVE -- a bore that stood still would be the painted band this replaces -- so
+    # the third claim reads two different frame counts rather than two runs of one.
+    surf = os.path.join(workdir, "water_surf.ppm")
+    surf_late = os.path.join(workdir, "water_surf_late.ppm")
+    surf_open = os.path.join(workdir, "water_surf_open.ppm")
+    err = None if not fft_ok else render(scene, surf, WATER_FFT_FLAGS + WATER_DOME_BED)
+    if not err and fft_ok:
+        err = render(scene, surf_late, WATER_FFT_FLAGS + WATER_DOME_BED, frames=44)
+    if not err and fft_ok:
+        err = render(scene, surf_open, WATER_FFT_FLAGS)
+    if not fft_ok:
+        print("  water-surf   SKIP  (the spectral render this compares against failed)")
+    elif err:
+        print(f"  water-surf   ERROR render failed: {err.strip()[-200:]}")
+        failures.append("water-surf")
+    else:
+        # Against the same bed with the surf off, and against no bed with it off: the first
+        # is how much surf there is, the second is whether it stayed where it belongs.
+        shore_px, _ = compare(dome, surf)
+        open_px, _ = compare(nobed, surf_open)
+        moved_px, _ = compare(surf, surf_late)
+        ok = (shore_px >= WATER_SURF_MIN_PX and open_px == 0 and
+              moved_px >= WATER_SURF_MIN_MOVED)
+        print(f"  water-surf   {'PASS' if ok else 'FAIL'}  {shore_px} px over the bed "
+              f"(want >={WATER_SURF_MIN_PX}), {open_px} px with no bed (want 0: a surf "
+              f"that moved open water is an amplitude knob), {moved_px} px between "
+              f"frames 30 and 44 (want >={WATER_SURF_MIN_MOVED}: it has to come IN)")
+        if not ok:
+            failures.append("water-surf")
 
     # The shore foam band, isolated by running Gerstner: no crest foam on that path, so
     # whatever whitewater is in the frame is the shore band.
