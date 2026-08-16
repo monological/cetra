@@ -82,11 +82,11 @@ void main() {
     }
 
     vec3 j;
-    j.x = oceanBandJacobian(texelFetch(cascade0_0, coord, 0), texelFetch(cascade0_1, coord, 0),
+    j.x = oceanBandJacobian(oceanCascadeTexel(0, 0, coord), oceanCascadeTexel(0, 1, coord),
                             cascadeChoppiness[0]);
-    j.y = oceanBandJacobian(texelFetch(cascade1_0, coord, 0), texelFetch(cascade1_1, coord, 0),
+    j.y = oceanBandJacobian(oceanCascadeTexel(1, 0, coord), oceanCascadeTexel(1, 1, coord),
                             cascadeChoppiness[1]);
-    j.z = oceanBandJacobian(texelFetch(cascade2_0, coord, 0), texelFetch(cascade2_1, coord, 0),
+    j.z = oceanBandJacobian(oceanCascadeTexel(2, 0, coord), oceanCascadeTexel(2, 1, coord),
                             cascadeChoppiness[2]);
 
     vec3 recovered = prev + foamDt * foamDecay / max(j, vec3(FOAM_MIN_J));

@@ -45,12 +45,18 @@
 // TEXUNIT_SHEEN and IS the same target, safe because pbr rebinds it from the same
 // pointer that gates its use.
 #define WATER_DEPTH_UNIT 7
-// Six transformed cascade fields (3 bands x 2 targets) start here. Units 0-5,
-// which this program leaves free: its other tenants are 6, 7, 8 and the
-// engine-bound IBL block at 9-15. Everything has to fit under 16 --
-// GL_MAX_TEXTURE_IMAGE_UNITS is exactly that on this hardware, and spec 4.10
-// records a slot at 16 surviving only on the driver's tolerance.
-#define WATER_CASCADE_UNIT0 0
+/*
+ * The transformed cascades: ONE 2D_ARRAY of six layers (3 bands x 2 targets), spec 11.45.
+ *
+ * These were six separate sampler2D on units 0-5, and the driver counts DECLARATIONS rather
+ * than units -- so six of water_frag's sixteen went on the cascades alone and the program sat
+ * exactly at its ceiling. An array is one declaration holding the same six images, which
+ * takes water_frag from 16/16 to 10/16 and leaves units 2-6 and 9-10 free.
+ *
+ * Not a workaround for the cap: a cap counted in declarations is a cap on how many DISTINCT
+ * shapes of data a program reads, and six identical fields were only ever one shape.
+ */
+#define WATER_CASCADE_UNIT 0
 // The baked bed heightfield, sampled in the VERTEX stage for shoaling.
 #define WATER_BED_UNIT 8
 /*
@@ -68,24 +74,23 @@
 // shadow ARRAY, a different binding point from this sampler2D, and water samples no
 // punctual shadows -- the last free unit under the ledger, which this spends.
 #define WATER_FOAM_UNIT 15
-// Last frame's transformed field for the two cascades that displace the mesh, for the
-// spectral path's motion vectors. Units 9 and 10 hold the Charlie sheen cubemap and the
-// shadow map array, both of which are OTHER binding points on those units -- the same
-// reasoning WATER_DEPTH_UNIT above rests on.
-//
-// This program DOES sample the cascade array since spec 11.42, and takes it on
-// WATER_SHADOW_UNIT rather than here: two sampler types against one image unit is an
-// error, where two types on one unit across DIFFERENT programs is only aliasing.
-#define WATER_PREV_UNIT0 9
+// Last frame's transformed field for the cascades that displace the mesh, for the spectral
+// path's motion vectors. A second 2D_ARRAY, one layer per cascade -- and a second unit rather
+// than more layers of the one above, because these two arrays have different LIFETIMES: the
+// fields are this frame's render targets and these are a copy taken before they are
+// overwritten.
+#define WATER_PREV_UNIT 1
 // Only the long and medium bands reach the mesh; the short one shades the interface
 // and never displaces, so it has no previous position to remember.
 #define WATER_PREV_CASCADES 2
 // The cloud deck's sun transmittance is SKY_CLOUD_SHADOW_UNIT (sky.h), shared with the
 // catcher rather than allocated here: it is the sky's resource and neither consumer has a
-// reason to disagree about where it lands. Asserted against this file's own range because
-// WATER_PREV_CASCADES is derived and a third displacing band would walk into it.
-_Static_assert(SKY_CLOUD_SHADOW_UNIT >= WATER_PREV_UNIT0 + WATER_PREV_CASCADES,
-               "the cloud shadow unit collides with water's previous-cascade range");
+// reason to disagree about where it lands.
+_Static_assert(SKY_CLOUD_SHADOW_UNIT != WATER_CASCADE_UNIT &&
+                   SKY_CLOUD_SHADOW_UNIT != WATER_PREV_UNIT &&
+                   SKY_CLOUD_SHADOW_UNIT != WATER_DEPTH_UNIT &&
+                   SKY_CLOUD_SHADOW_UNIT != WATER_BED_UNIT,
+               "the cloud shadow unit collides with one water already binds");
 _Static_assert(SKY_CLOUD_SHADOW_UNIT < 16,
                "the cloud shadow unit exceeds GL_MAX_TEXTURE_IMAGE_UNITS");
 
@@ -296,8 +301,11 @@ typedef struct Water {
     // is what makes the derivatives free rather than three more FFTs.
     GLuint cascade_initial[WATER_CASCADE_COUNT];
     GLuint cascade_wave[WATER_CASCADE_COUNT];
-    GLuint cascade_field[WATER_CASCADE_COUNT][2][2]; // [cascade][buffer][target]
-    GLuint cascade_fbo[WATER_CASCADE_COUNT][2];      // one per buffer, both targets attached
+    // The transformed fields, one ARRAY per ping-pong buffer, six layers each packed as
+    // cascade * 2 + target. Six separate textures were six sampler declarations in every
+    // program that read them, which is what held water_frag at its ceiling; see ocean.glsl.
+    GLuint cascade_array[2];                    // [buffer]
+    GLuint cascade_fbo[WATER_CASCADE_COUNT][2]; // one per buffer, both targets attached
     GLuint twiddle_tex;
     GLuint fft_vao, fft_vbo; // fullscreen quad for the spectral passes
     bool spectra_ready;
@@ -374,7 +382,8 @@ typedef struct Water {
      * is nothing to copy, at 1 the copy is this frame's own work, and only from 2 does
      * the pair hold a frame the surface actually drew.
      */
-    GLuint cascade_prev[WATER_PREV_CASCADES];
+    // Last frame's target 0 for the bands that displace, one layer per cascade.
+    GLuint cascade_prev_array;
     int spectral_frames;
 
     /*

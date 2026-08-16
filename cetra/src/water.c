@@ -433,9 +433,9 @@ void free_water(Water* water) {
     glDeleteTextures(1, &water->bed_tex);
     glDeleteTextures(WATER_CASCADE_COUNT, water->cascade_initial);
     glDeleteTextures(WATER_CASCADE_COUNT, water->cascade_wave);
-    glDeleteTextures(WATER_CASCADE_COUNT * 4, &water->cascade_field[0][0][0]);
+    glDeleteTextures(2, water->cascade_array);
     glDeleteFramebuffers(WATER_CASCADE_COUNT * 2, &water->cascade_fbo[0][0]);
-    glDeleteTextures(WATER_PREV_CASCADES, water->cascade_prev);
+    glDeleteTextures(1, &water->cascade_prev_array);
     glDeleteTextures(2, water->foam_tex);
     glDeleteFramebuffers(2, water->foam_fbo);
     free(water);
@@ -877,6 +877,35 @@ static bool water_ensure_grid(Water* water) {
  * The short band is NOT mipped: it never reaches the mesh, and its own energy already
  * leaves through the distance fade in water_frag.
  */
+/*
+ * A stack of transformed fields as one 2D ARRAY (spec 11.45).
+ *
+ * Same format, filtering and wrap as the single fields this replaced -- an array of N layers
+ * is N of those images in one object, not a different kind of storage. What changes is the
+ * SHADER's side of it: one declaration instead of N, which is the whole point.
+ *
+ * Always mipped, where the singles were mipped per cascade. An array carries one chain policy
+ * for every layer, so the short band gets levels it never samples; that is a third of a level
+ * of memory against six sampler declarations, which is not a close trade.
+ */
+static GLuint _water_make_field_array(int size, int layers, GLenum internal_format) {
+    GLuint tex = 0;
+    glActiveTexture(GL_TEXTURE0);
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, tex);
+    glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, internal_format, size, size, layers, 0, GL_RGBA,
+                 GL_FLOAT, NULL);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    // Complete from the moment it is bound, for the reason the 2D version says: an incomplete
+    // mipmapped texture samples as black, on whichever frame happens to read it first.
+    glGenerateMipmap(GL_TEXTURE_2D_ARRAY);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
+    return tex;
+}
+
 static GLuint _water_make_field(int size, bool mipped) {
     GLuint tex = 0;
     // Unit 0 explicitly: these run lazily on whatever unit the previous pass left
@@ -901,13 +930,6 @@ static GLuint _water_make_field(int size, bool mipped) {
         glGenerateMipmap(GL_TEXTURE_2D);
     glBindTexture(GL_TEXTURE_2D, 0);
     return tex;
-}
-
-// Which cascades displace the mesh, and therefore need a mip chain. The same count the
-// retained previous fields use: only a band that reaches the mesh has a position to filter
-// or to have moved.
-static bool _water_cascade_mipped(int cascade) {
-    return cascade < WATER_PREV_CASCADES;
 }
 
 static GLuint _water_make_data_tex(int w, int h, const float* data) {
@@ -1066,17 +1088,20 @@ static bool _water_ensure_spectra(Water* water) {
     GLint saved_fbo = 0;
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &saved_fbo);
 
+    for (int b = 0; b < 2; b++)
+        water->cascade_array[b] = _water_make_field_array(size, WATER_CASCADE_COUNT * 2, GL_RGBA16F);
+
+    // One framebuffer per (cascade, buffer) still, attaching that cascade's two LAYERS as the
+    // MRT pair. glFramebufferTextureLayer is the only line that differs from attaching two
+    // textures -- the ping-pong above it is untouched.
     for (int c = 0; c < WATER_CASCADE_COUNT; c++) {
         for (int b = 0; b < 2; b++) {
-            for (int t = 0; t < 2; t++)
-                water->cascade_field[c][b][t] = _water_make_field(size, _water_cascade_mipped(c));
-
             glGenFramebuffers(1, &water->cascade_fbo[c][b]);
             glBindFramebuffer(GL_FRAMEBUFFER, water->cascade_fbo[c][b]);
-            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
-                                   water->cascade_field[c][b][0], 0);
-            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D,
-                                   water->cascade_field[c][b][1], 0);
+            glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                                      water->cascade_array[b], 0, c * 2 + 0);
+            glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1,
+                                      water->cascade_array[b], 0, c * 2 + 1);
             const GLenum targets[2] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1};
             glDrawBuffers(2, targets);
             if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
@@ -1094,8 +1119,7 @@ static bool _water_ensure_spectra(Water* water) {
     // previous position at the SAME level as the current one or the velocity describes a
     // surface that was never drawn. No framebuffer: they are only ever written by a copy
     // out of one of the buffers above.
-    for (int c = 0; c < WATER_PREV_CASCADES; c++)
-        water->cascade_prev[c] = _water_make_field(size, true);
+    water->cascade_prev_array = _water_make_field_array(size, WATER_PREV_CASCADES, GL_RGBA16F);
 
     // The foam pair. No mip chain: it is sampled at LOD 0 wherever the surface reads it,
     // and a mip of a running minimum is not the running minimum of a mip.
@@ -1147,11 +1171,11 @@ static bool _water_ensure_spectra(Water* water) {
  * error -- the same shape of green-over-wrong the probe exists to catch.
  */
 static void _water_fft_transform(ShaderProgram* fft, GLuint twiddle, const GLuint fbo[2],
-                                 const GLuint field[2][2]) {
+                                 const GLuint array[2], int cascade) {
     glUseProgram(fft->id);
     uniform_set_int(fft->uniforms, "twiddleTex", 0);
-    uniform_set_int(fft->uniforms, "in0", 1);
-    uniform_set_int(fft->uniforms, "in1", 2);
+    uniform_set_int(fft->uniforms, "inFields", 1);
+    uniform_set_int(fft->uniforms, "inLayer", cascade * 2);
     uniform_set_int(fft->uniforms, "size", WATER_SPECTRUM_RES);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, twiddle);
@@ -1161,9 +1185,7 @@ static void _water_fft_transform(ShaderProgram* fft, GLuint twiddle, const GLuin
         const int dst = 1 - src;
         glBindFramebuffer(GL_FRAMEBUFFER, fbo[dst]);
         glActiveTexture(GL_TEXTURE1);
-        glBindTexture(GL_TEXTURE_2D, field[src][0]);
-        glActiveTexture(GL_TEXTURE2);
-        glBindTexture(GL_TEXTURE_2D, field[src][1]);
+        glBindTexture(GL_TEXTURE_2D_ARRAY, array[src]);
         uniform_set_int(fft->uniforms, "axis", pass < WATER_SPECTRUM_LOG ? 0 : 1);
         uniform_set_int(fft->uniforms, "stage", pass % WATER_SPECTRUM_LOG);
         // The fftshift folds into the LAST stage as a checkerboard sign, which
@@ -1384,15 +1406,13 @@ void water_bind_shore(const Water* water, const struct Scene* scene, ShaderProgr
 }
 
 static void _water_bind_cascades(const Water* water, UniformManager* u, bool fft) {
+    // One bind for all six fields, where this was six. The Gerstner path binds 0 for the same
+    // reason it always did: the shader declares the sampler unconditionally and an unbound
+    // unit is what "no cascades" looks like.
+    glActiveTexture(GL_TEXTURE0 + WATER_CASCADE_UNIT);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, fft ? water->cascade_array[0] : 0);
+    uniform_set_int(u, "cascadeFields", WATER_CASCADE_UNIT);
     for (int c = 0; c < WATER_CASCADE_COUNT; c++) {
-        for (int t = 0; t < 2; t++) {
-            const int unit = WATER_CASCADE_UNIT0 + c * 2 + t;
-            char name[32];
-            snprintf(name, sizeof(name), "cascade%d_%d", c, t);
-            glActiveTexture(GL_TEXTURE0 + unit);
-            glBindTexture(GL_TEXTURE_2D, fft ? water->cascade_field[c][0][t] : 0);
-            uniform_set_int(u, name, unit);
-        }
         char chop[32];
         snprintf(chop, sizeof(chop), "cascadeChoppiness[%d]", c);
         uniform_set_float(u, chop, WATER_CASCADE_CFG[c].choppiness);
@@ -1429,18 +1449,19 @@ static void _water_run_spectral(Water* water, const struct Scene* scene, struct 
     // one texture fetch's worth of saving.
     if (water->spectral_frames > 0) {
         glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D_ARRAY, water->cascade_prev_array);
         for (int c = 0; c < WATER_PREV_CASCADES; c++) {
             glBindFramebuffer(GL_READ_FRAMEBUFFER, water->cascade_fbo[c][0]);
             glReadBuffer(GL_COLOR_ATTACHMENT0);
-            glBindTexture(GL_TEXTURE_2D, water->cascade_prev[c]);
-            glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, WATER_SPECTRUM_RES,
+            glCopyTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, c, 0, 0, WATER_SPECTRUM_RES,
                                 WATER_SPECTRUM_RES);
-            // The copy writes level 0 only, so the chain under it is last frame's -- which
-            // is a level mismatch against level 0 rather than a stale frame, and shows up
-            // as far-field velocity that disagrees with the near field.
-            glGenerateMipmap(GL_TEXTURE_2D);
         }
-        glBindTexture(GL_TEXTURE_2D, 0);
+        // The copy writes level 0 only, so the chain under it is last frame's -- which is a
+        // level mismatch against level 0 rather than a stale frame, and shows up as far-field
+        // velocity that disagrees with the near field. Once for the array, where it was once
+        // per texture.
+        glGenerateMipmap(GL_TEXTURE_2D_ARRAY);
+        glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
     }
 
     glBindVertexArray(water->fft_vao);
@@ -1458,7 +1479,7 @@ static void _water_run_spectral(Water* water, const struct Scene* scene, struct 
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 
         _water_fft_transform(fft, water->twiddle_tex, water->cascade_fbo[c],
-                             water->cascade_field[c]);
+                             water->cascade_array, c);
     }
 
     glBindVertexArray(0);
@@ -1468,15 +1489,9 @@ static void _water_run_spectral(Water* water, const struct Scene* scene, struct 
     // 14 stages land back in buffer 0, which is why buffer 0 is the one that gets a chain --
     // the same reason the previous-frame copy above reads it.
     glActiveTexture(GL_TEXTURE0);
-    for (int c = 0; c < WATER_CASCADE_COUNT; c++) {
-        if (!_water_cascade_mipped(c))
-            continue;
-        for (int t = 0; t < 2; t++) {
-            glBindTexture(GL_TEXTURE_2D, water->cascade_field[c][0][t]);
-            glGenerateMipmap(GL_TEXTURE_2D);
-        }
-    }
-    glBindTexture(GL_TEXTURE_2D, 0);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, water->cascade_array[0]);
+    glGenerateMipmap(GL_TEXTURE_2D_ARRAY);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
 
     /*
      * Foam accumulation, one pass, after the transform it reads and after the mips.
@@ -1788,14 +1803,9 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
     // a copy of the first, so the count has to reach 2 before this is a real previous
     // surface rather than the current one under a different name.
     const bool prev_ready = fft && water->spectral_frames >= 2;
-    for (int c = 0; c < WATER_PREV_CASCADES; c++) {
-        const int unit = WATER_PREV_UNIT0 + c;
-        char name[32];
-        snprintf(name, sizeof(name), "cascadePrev%d", c);
-        glActiveTexture(GL_TEXTURE0 + unit);
-        glBindTexture(GL_TEXTURE_2D, prev_ready ? water->cascade_prev[c] : 0);
-        uniform_set_int(u, name, unit);
-    }
+    glActiveTexture(GL_TEXTURE0 + WATER_PREV_UNIT);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, prev_ready ? water->cascade_prev_array : 0);
+    uniform_set_int(u, "cascadePrevFields", WATER_PREV_UNIT);
     uniform_set_int(u, "prevAvailable", prev_ready ? 1 : 0);
 
     // The accumulated foam. Live only once the pass has actually run a frame: before that
@@ -1885,21 +1895,31 @@ static bool _water_fft_impulse(const Water* water, struct Engine* engine, int fx
     glGetIntegerv(GL_VIEWPORT, saved_viewport);
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &saved_fbo);
 
-    GLuint tex[2][2];
+    // Scratch shaped exactly like the real thing -- two ping-pong ARRAYS of two layers, the
+    // pair one cascade occupies. The transform under test indexes layers, so a scratch built
+    // from loose textures would be testing a different call than the sea makes.
+    GLuint arr[2];
     GLuint fbo[2];
     bool complete = true;
     for (int b = 0; b < 2; b++) {
-        for (int t = 0; t < 2; t++)
-            tex[b][t] = _water_make_data_tex(size, size, (b == 0 && t == 0) ? data : NULL);
+        // fp32 where the sea's own fields are fp16: this is a PRECISION test, and at half
+        // precision the round-trip error it reports is the storage's rather than the
+        // transform's -- measured 4.8e-4 against 1.9e-7 for the same arithmetic.
+        arr[b] = _water_make_field_array(size, 2, GL_RGBA32F);
         glGenFramebuffers(1, &fbo[b]);
         glBindFramebuffer(GL_FRAMEBUFFER, fbo[b]);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex[b][0], 0);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, tex[b][1], 0);
+        glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, arr[b], 0, 0);
+        glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, arr[b], 0, 1);
         const GLenum targets[2] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1};
         glDrawBuffers(2, targets);
         if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
             complete = false;
     }
+    // The impulse goes into buffer 0's first layer, which is where the transform starts.
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, arr[0]);
+    glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, 0, size, size, 1, GL_RGBA, GL_FLOAT, data);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
     free(data);
 
     const GLboolean depth_was_enabled = glIsEnabled(GL_DEPTH_TEST);
@@ -1913,14 +1933,14 @@ static bool _water_fft_impulse(const Water* water, struct Engine* engine, int fx
         // The sea's OWN transform, not a copy of it -- which is what makes this test's
         // result a statement about the shipping path rather than about a sibling that
         // happens to agree today.
-        _water_fft_transform(fft, water->twiddle_tex, fbo, tex);
+        _water_fft_transform(fft, water->twiddle_tex, fbo, arr, 0);
         glBindVertexArray(0);
 
         float* out = malloc(texels * 4 * sizeof(float));
         if (out) {
             glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, tex[0][0]);
-            glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_FLOAT, out);
+            glBindTexture(GL_TEXTURE_2D_ARRAY, arr[0]);
+            glGetTexImage(GL_TEXTURE_2D_ARRAY, 0, GL_RGBA, GL_FLOAT, out);
             double worst = 0.0;
             for (int y = 0; y < size; y++) {
                 for (int x = 0; x < size; x++) {
@@ -1943,7 +1963,7 @@ static bool _water_fft_impulse(const Water* water, struct Engine* engine, int fx
     }
 
     glDeleteFramebuffers(2, fbo);
-    glDeleteTextures(4, &tex[0][0]);
+    glDeleteTextures(2, arr);
     glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)saved_fbo);
     glViewport(saved_viewport[0], saved_viewport[1], saved_viewport[2], saved_viewport[3]);
     // Restored on every exit including the failure ones, matching _water_run_spectral. The
@@ -1997,7 +2017,8 @@ void water_fft_probe(const Water* water, struct Engine* engine) {
 
     const int size = WATER_SPECTRUM_RES;
     const size_t texels = (size_t)size * size;
-    float* buf = malloc(texels * 4 * sizeof(float));
+    // Sized for the WHOLE array, because that is what one glGetTexImage of it returns.
+    float* buf = malloc(texels * 4 * sizeof(float) * WATER_CASCADE_COUNT * 2);
     if (!buf) {
         printf("water-fft-probe header available=0 reason=alloc\n");
         return;
@@ -2006,16 +2027,20 @@ void water_fft_probe(const Water* water, struct Engine* engine) {
     // Every line leads with its kind. The reader used to tell them apart by whether the
     // first field parsed as a number, which makes any new header key a parse change.
     printf("water-fft-probe header available=1 cascades=%d res=%d\n", WATER_CASCADE_COUNT, size);
+    // ONE read for the whole array: glGetTexImage on a 2D_ARRAY returns every layer, so the
+    // six that were six fetches are one, and a layer is an offset into what came back.
     glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, water->cascade_array[0]);
+    glGetTexImage(GL_TEXTURE_2D_ARRAY, 0, GL_RGBA, GL_FLOAT, buf);
     for (int c = 0; c < WATER_CASCADE_COUNT; c++) {
         // Target 0 channel b is the height, target 1 channels r,g are the two slopes --
         // the same packing ocean.glsl samples, so this measures what the surface reads
         // rather than an intermediate nothing consumes.
-        glBindTexture(GL_TEXTURE_2D, water->cascade_field[c][0][0]);
-        glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_FLOAT, buf);
+        const float* t0 = buf + (size_t)(c * 2 + 0) * texels * 4;
+        const float* t1 = buf + (size_t)(c * 2 + 1) * texels * 4;
         double mean = 0.0, sq = 0.0, peak = 0.0;
         for (size_t i = 0; i < texels; i++) {
-            const double h = buf[i * 4 + 2];
+            const double h = t0[i * 4 + 2];
             mean += h;
             sq += h * h;
             if (fabs(h) > peak)
@@ -2024,12 +2049,10 @@ void water_fft_probe(const Water* water, struct Engine* engine) {
         mean /= (double)texels;
         const double height_var = sq / (double)texels - mean * mean;
 
-        glBindTexture(GL_TEXTURE_2D, water->cascade_field[c][0][1]);
-        glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_FLOAT, buf);
         double slope_sq = 0.0;
         for (size_t i = 0; i < texels; i++) {
-            const double sx = buf[i * 4 + 0];
-            const double sz = buf[i * 4 + 1];
+            const double sx = t1[i * 4 + 0];
+            const double sz = t1[i * 4 + 1];
             slope_sq += sx * sx + sz * sz;
         }
         const double slope_var = slope_sq / (double)texels;
@@ -2042,7 +2065,7 @@ void water_fft_probe(const Water* water, struct Engine* engine) {
                c, hp, height_var, height_var / fmax(hp, 1e-12), peak, sp, slope_var,
                slope_var / fmax(sp, 1e-12));
     }
-    glBindTexture(GL_TEXTURE_2D, 0);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
     free(buf);
 
     // Two modes, because one is not enough. The centred impulse checks the shift and the

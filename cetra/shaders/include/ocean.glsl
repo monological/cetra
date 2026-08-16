@@ -34,12 +34,24 @@ const float OCEAN_AMPLITUDE_FALLOFF = 0.44;
 // fragment stage, which GL 3.3 allows and which is the whole point -- the long and
 // medium bands displace real geometry.
 uniform int waveModel; // 0 = Gerstner octaves, 1 = spectral cascades
-uniform sampler2D cascade0_0;
-uniform sampler2D cascade0_1;
-uniform sampler2D cascade1_0;
-uniform sampler2D cascade1_1;
-uniform sampler2D cascade2_0;
-uniform sampler2D cascade2_1;
+/*
+ * THE TRANSFORMED CASCADES, as one ARRAY rather than six textures.
+ *
+ * Six identical RGBA16F 128s were six sampler DECLARATIONS, and the driver counts
+ * declarations rather than units -- so they alone were more than a third of the sixteen this
+ * program is allowed, and water_frag sat exactly at the ceiling with nothing left for a foam
+ * pattern, a caustic table or anything else it might want. An array of six layers is ONE
+ * declaration holding the same six images: same memory, same filtering, same reads.
+ *
+ * Layer is cascade * 2 + target, written once in oceanCascadeLayer below and nowhere else.
+ * The C side attaches the same layers as MRT through glFramebufferTextureLayer, so the
+ * ping-pong is unchanged in everything except where its output lands.
+ *
+ * One consequence worth stating: an array carries ONE mip chain policy for every layer, so
+ * the short band is now mipped where it was not. It is sampled at LOD 0 regardless, so this
+ * costs a third of a level's memory and changes no read.
+ */
+uniform sampler2DArray cascadeFields;
 uniform float cascadeLength[3];
 uniform float cascadeChoppiness[3];
 // Each band's mean square slope, measured off the spectrum it was seeded from (spec
@@ -51,9 +63,34 @@ uniform float cascadeSlopeVar[3];
 // frame yet. 0 on the first two frames, and then the previous position falls back to
 // the current one -- which reports camera motion only, the behaviour the whole
 // spectral path had before these existed.
-uniform sampler2D cascadePrev0;
-uniform sampler2D cascadePrev1;
+uniform sampler2DArray cascadePrevFields;
 uniform int prevAvailable;
+
+/*
+ * The array's packing, in one place.
+ *
+ * Every read of a cascade goes through these three, so the layer arithmetic exists once. The
+ * six textures these replaced were addressed by NAME, which meant the mapping from (band,
+ * target) to image was spelled at every call site and could only be kept consistent by
+ * reading them all.
+ */
+int oceanCascadeLayer(int cascade, int target) {
+    return cascade * 2 + target;
+}
+
+vec4 oceanCascadeAt(int cascade, int target, vec2 uv, float lod) {
+    return textureLod(cascadeFields, vec3(uv, float(oceanCascadeLayer(cascade, target))), lod);
+}
+
+vec4 oceanCascadeTexel(int cascade, int target, ivec2 coord) {
+    return texelFetch(cascadeFields, ivec3(coord, oceanCascadeLayer(cascade, target)), 0);
+}
+
+// Last frame's target 0 for the band that displaces. One layer per cascade, so no target
+// index -- only target 0 is retained, which is the one the position comes out of.
+vec4 oceanCascadePrevAt(int cascade, vec2 uv, float lod) {
+    return textureLod(cascadePrevFields, vec3(uv, float(cascade)), lod);
+}
 
 // The baked bed, for shoaling: height in R, its world-space gradient in G,B. Absent
 // (bedAvailable 0) is the normal case: the per-fragment water column comes from the
@@ -712,10 +749,10 @@ OceanSurface oceanEvaluateSpectral(vec2 p, float t, OceanBed bed, float footprin
     float lodMed = oceanCascadeLod(footprint, 1);
     vec2 uvLong = oceanCascadeUv(p, 0);
     vec2 uvMed = oceanCascadeUv(p, 1);
-    vec4 long0 = textureLod(cascade0_0, uvLong, lodLong);
-    vec4 long1 = textureLod(cascade0_1, uvLong, lodLong);
-    vec4 med0 = textureLod(cascade1_0, uvMed, lodMed);
-    vec4 med1 = textureLod(cascade1_1, uvMed, lodMed);
+    vec4 long0 = oceanCascadeAt(0, 0, uvLong, lodLong);
+    vec4 long1 = oceanCascadeAt(0, 1, uvLong, lodLong);
+    vec4 med0 = oceanCascadeAt(1, 0, uvMed, lodMed);
+    vec4 med1 = oceanCascadeAt(1, 1, uvMed, lodMed);
 
     float q0 = cascadeChoppiness[0];
     float q1 = cascadeChoppiness[1];
@@ -899,11 +936,11 @@ vec3 oceanPreviousWorldAt(vec2 p, float tPrev, OceanBed bed, float footprint) {
     // expression -- so this is two branches.
     vec4 long0, med0;
     if (prevAvailable == 1) {
-        long0 = textureLod(cascadePrev0, uvLong, lodLong);
-        med0 = textureLod(cascadePrev1, uvMed, lodMed);
+        long0 = oceanCascadePrevAt(0, uvLong, lodLong);
+        med0 = oceanCascadePrevAt(1, uvMed, lodMed);
     } else {
-        long0 = textureLod(cascade0_0, uvLong, lodLong);
-        med0 = textureLod(cascade1_0, uvMed, lodMed);
+        long0 = oceanCascadeAt(0, 0, uvLong, lodLong);
+        med0 = oceanCascadeAt(1, 0, uvMed, lodMed);
     }
     return oceanSpectralPosition(p, long0, med0, bed, tPrev);
 }

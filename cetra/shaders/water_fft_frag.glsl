@@ -22,8 +22,16 @@ layout(location = 0) out vec4 Out0;
 layout(location = 1) out vec4 Out1;
 
 uniform sampler2D twiddleTex; // per (index, stage): rotation .xy, input indices .zw
-uniform sampler2D in0;
-uniform sampler2D in1;
+/*
+ * The band being transformed, as two LAYERS of the cascade array rather than two textures.
+ *
+ * The cascades were consolidated into one array so water_frag could stop sitting at its
+ * sixteen-sampler ceiling (see ocean.glsl); this pass writes them, so it reads them the same
+ * way. `inLayer` is the first of the pair -- the second is always the next one up, because
+ * that is what a cascade's two MRT targets are.
+ */
+uniform sampler2DArray inFields;
+uniform int inLayer;
 uniform int axis;     // 0 = transform along x, 1 = along y
 uniform int stage;    // 0 .. log2(size) - 1
 uniform int size;
@@ -62,8 +70,10 @@ void main() {
     // Conjugate rotation: the table holds the forward twiddle and this is the
     // INVERSE transform.
     vec2 inverseTwiddle = vec2(data.x, -data.y);
-    vec4 v0 = butterfly(texelFetch(in0, coord0, 0), texelFetch(in0, coord1, 0), inverseTwiddle);
-    vec4 v1 = butterfly(texelFetch(in1, coord0, 0), texelFetch(in1, coord1, 0), inverseTwiddle);
+    vec4 v0 = butterfly(texelFetch(inFields, ivec3(coord0, inLayer), 0),
+                        texelFetch(inFields, ivec3(coord1, inLayer), 0), inverseTwiddle);
+    vec4 v1 = butterfly(texelFetch(inFields, ivec3(coord0, inLayer + 1), 0),
+                        texelFetch(inFields, ivec3(coord1, inLayer + 1), 0), inverseTwiddle);
 
     if (finalize == 1) {
         // (-1)^(x+y) is the spatial-domain equivalent of shifting the spectrum's

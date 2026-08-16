@@ -464,8 +464,8 @@ void main() {
         // short band is not mipped today and this still states the intent rather than
         // relying on it.
         vec2 shortUv = oceanCascadeUv(WorldPos.xz, 2);
-        vec4 short0 = textureLod(cascade2_0, shortUv, 0.0);
-        vec4 short1 = textureLod(cascade2_1, shortUv, 0.0);
+        vec4 short0 = oceanCascadeAt(2, 0, shortUv, 0.0);
+        vec4 short1 = oceanCascadeAt(2, 1, shortUv, 0.0);
         float fade = 1.0 - smoothstep(WATER_SHORT_NEAR_M * waterUnitsPerMetre,
                                       WATER_SHORT_FAR_M * waterUnitsPerMetre,
                                       length(ViewPos));
@@ -843,11 +843,11 @@ void main() {
             // derivative describes neither the surface nor a footprint, and the medium band
             // IS mipped. Caustics are a near-field effect anyway -- WATER_CAUSTIC_DEEP_OFF
             // closes them well before a cell covers a period.
-            float mj = oceanBandJacobian(textureLod(cascade1_0, uvMed, 0.0),
-                                         textureLod(cascade1_1, uvMed, 0.0),
+            float mj = oceanBandJacobian(oceanCascadeAt(1, 0, uvMed, 0.0),
+                                         oceanCascadeAt(1, 1, uvMed, 0.0),
                                          cascadeChoppiness[1]);
-            float sj = oceanBandJacobian(textureLod(cascade2_0, uvShort, 0.0),
-                                         textureLod(cascade2_1, uvShort, 0.0),
+            float sj = oceanBandJacobian(oceanCascadeAt(2, 0, uvShort, 0.0),
+                                         oceanCascadeAt(2, 1, uvShort, 0.0),
                                          cascadeChoppiness[2]);
             float focus = max(0.0, 1.0 - mj) * 0.48 + max(0.0, 1.0 - sj) * 0.52;
             float window = smoothstep(0.0, WATER_CAUSTIC_SHALLOW_M * waterUnitsPerMetre, path) *
