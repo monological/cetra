@@ -479,22 +479,6 @@ void water_publish_to_postfx(const Water* water, struct Engine* engine) {
 }
 
 /*
- * Bake height_at over the drawn extent: the height in R, and its world-space
- * gradient in G,B.
- *
- * The gradient is here rather than taken with fwidth in the shader because a VERTEX
- * stage has no derivatives, and it is the vertex stage that needs it -- the shoal
- * factor scales the displacement, so the factor's own slope is a product-rule term in
- * the surface derivatives. Central differences over the baked grid, which is the
- * gradient of the field the shader actually samples rather than of the callback
- * behind it; a finer difference than the texels would describe a bed the surface
- * never sees.
- *
- * CLAMP so a vertex just outside the baked square reads the nearest shore rather than
- * wrapping to the far side of the scene, and RGBA32F because a 3-channel float texture
- * is not reliably filterable everywhere this runs.
- */
-/*
  * THE SHORELINE, traced out of the bed that was just baked (spec 11.45).
  *
  * The object the water system has never had. Everything at a shore that is not purely local
@@ -681,6 +665,20 @@ static void _water_trace_shoreline(Water* water, const float* heights, int res, 
     free(best);
 }
 
+/*
+ * Bake height_at over the drawn extent: the height in R, and its world-space gradient in G,B.
+ *
+ * The gradient is here rather than taken with fwidth in the shader because a VERTEX stage has
+ * no derivatives, and it is the vertex stage that needs it -- the shoal factor scales the
+ * displacement, so the factor's own slope is a product-rule term in the surface derivatives.
+ * Central differences over the baked grid, which is the gradient of the field the shader
+ * actually samples rather than of the callback behind it; a finer difference than the texels
+ * would describe a bed the surface never sees.
+ *
+ * CLAMP so a vertex just outside the baked square reads the nearest shore rather than wrapping
+ * to the far side of the scene, and RGBA32F because a 3-channel float texture is not reliably
+ * filterable everywhere this runs.
+ */
 static void _water_bake_bed(Water* water, float units_per_metre) {
     if (!water->height_at)
         return;
@@ -824,9 +822,15 @@ static GLuint _water_make_foam_pattern(void) {
 static bool water_ensure_grid(Water* water) {
     // The foam web rides along here rather than in its own ensure_: it depends on nothing the
     // scene can change, so "made once, on the first frame that draws water" is its whole
-    // lifetime. 0 on failure is a legal bind and the shader reads it as no pattern.
-    if (!water->foam_pattern_tex)
+    // lifetime. On failure the shader is told (foamPatternAvailable) and skips the erosion.
+    //
+    // Latched like the bed's bake and for the same reason: the allocation that failed is a
+    // fixed 256 KB, so retrying it every frame cannot succeed where the first attempt did not
+    // and would only re-run the whole bake on each of them.
+    if (!water->foam_pattern_tex && !water->foam_pattern_failed) {
         water->foam_pattern_tex = _water_make_foam_pattern();
+        water->foam_pattern_failed = water->foam_pattern_tex == 0;
+    }
     if (water->grid_vao)
         return true;
     if (water->failed)
@@ -902,18 +906,6 @@ static bool water_ensure_grid(Water* water) {
 }
 
 /*
- * One transformed cascade field.
- *
- * `mipped` is for the bands that DISPLACE the mesh, and it is what makes the far field
- * possible (spec 11.35): a projected grid's distant cells cover more than a wave period, so
- * level 0 there is one arbitrary phase per cell rather than detail. The mip chain is
- * generated after each frame's transform, and the vertex stage selects a level from the
- * cell's world footprint. Costs no sampler unit -- these are textures water already binds.
- *
- * The short band is NOT mipped: it never reaches the mesh, and its own energy already
- * leaves through the distance fade in water_frag.
- */
-/*
  * A stack of transformed fields as one 2D ARRAY (spec 11.45).
  *
  * Same format, filtering and wrap as the single fields this replaced -- an array of N layers
@@ -942,7 +934,9 @@ static GLuint _water_make_field_array(int size, int layers, GLenum internal_form
     return tex;
 }
 
-static GLuint _water_make_field(int size, bool mipped) {
+// The foam accumulation pair: an unmipped RGBA16F field that tiles. Its `mipped` parameter went
+// with the cascades -- they were the only mipped caller, and they are an array now.
+static GLuint _water_make_foam_target(int size) {
     GLuint tex = 0;
     // Unit 0 explicitly: these run lazily on whatever unit the previous pass left
     // active, and the trailing unbind would otherwise clear that unit's 2D slot.
@@ -954,16 +948,10 @@ static GLuint _water_make_field(int size, bool mipped) {
     // quantising it before the transform quantises the sea state itself.
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, size, size, 0, GL_RGBA, GL_FLOAT, NULL);
     // LINEAR + REPEAT: the surface samples these as tiling world-space fields.
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
-                    mipped ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-    // Allocate the chain now rather than on the first generate, so the texture is complete
-    // from the moment it is bound -- an incomplete mipmapped texture samples as black, and
-    // it would do so on whichever frame happened to read it first.
-    if (mipped)
-        glGenerateMipmap(GL_TEXTURE_2D);
     glBindTexture(GL_TEXTURE_2D, 0);
     return tex;
 }
@@ -1160,7 +1148,7 @@ static bool _water_ensure_spectra(Water* water) {
     // The foam pair. No mip chain: it is sampled at LOD 0 wherever the surface reads it,
     // and a mip of a running minimum is not the running minimum of a mip.
     for (int b = 0; b < 2; b++) {
-        water->foam_tex[b] = _water_make_field(size, false);
+        water->foam_tex[b] = _water_make_foam_target(size);
         glGenFramebuffers(1, &water->foam_fbo[b]);
         glBindFramebuffer(GL_FRAMEBUFFER, water->foam_fbo[b]);
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
@@ -1298,17 +1286,6 @@ static void _water_surf_state(const Water* water, float units_per_metre, bool ff
 }
 
 /*
- * The scalars shore.glsl stands on, for a program that is NOT the water.
- *
- * Everything the run-up needs and nothing else -- no cascades, no bed, no samplers at all,
- * which is the property that lets a lit surface ask where the swash is. Called per program
- * switch alongside the cloud shadow, so a material that opted into wetness gets the same sea
- * the water surface is drawing at the same instant.
- *
- * With no water in the scene nothing calls this, waterSurfHeight stays at its zero default,
- * and the shader early-outs -- which is why no fallback publication is needed here.
- */
-/*
  * Advance the swash film and publish its tips (spec 11.45).
  *
  * Runs before anything reads the water's edge, because the whole point is that the sea's lens
@@ -1340,34 +1317,37 @@ static void _water_step_film(Water* water, const struct Scene* scene, float t, f
             return;
     }
 
-    const float upm = _water_units_per_metre(scene);
-    const bool fft = water->wave_model == WATER_WAVES_FFT;
-    float hs, omega;
-    _water_surf_state(water, upm, fft, &hs, &omega);
-    ShoreRunupParams params = {
-        .surf_height = hs,
-        .surf_omega = omega,
-        .beach_slope = water->bed_foreshore_slope,
-        .units_per_metre = upm,
-        .wind_dir = {water->wind_dir[0], water->wind_dir[1]},
-    };
+    // Through the public constructor, not rebuilt inline. water.h documents that function as
+    // existing so the probe reads the same numbers the film is driven by -- and it was the one
+    // caller not using it, which made that guarantee hold by inspection rather than by
+    // construction. It also carries the hs > 0 test, so a sea with no surf stops here instead
+    // of stepping a chain with nothing driving it.
+    ShoreRunupParams params;
+    if (!water_shore_runup_params(water, scene, &params))
+        return;
     shore_chain_rebuild(water->chain, water, &params);
     shore_chain_step(water->chain, &params, t, dt);
     if (!water->chain->ready)
         return;
 
     /*
-     * Pack into std140. The layout is written out here rather than memcpy'd from a mirror
-     * struct because the tips are a ring buffer on this side and a flat array on the other --
-     * the ordering IS the interface, so it is spelled.
+     * Pack into std140. Written out rather than memcpy'd from a mirror struct because the
+     * ordering IS the interface: the shader indexes tips as slot * COLS + column and the ring
+     * index travels separately, so spelling the layout is what documents that contract.
+     *
+     * Every float below is assigned, so there is no zero-fill: params(4) + origins(COLS * 4) +
+     * tips(COLS * SLOTS) is exactly the block, which the assert in ubo.h pins.
      */
     float block[UBO_SHORE_FILM_VEC4S * 4];
-    memset(block, 0, sizeof(block));
-    const float slope = params.beach_slope > 0.01f ? params.beach_slope : 0.01f;
+    const float slope = shore_runup_slope(&params);
     // 1 an open coast, 2 a closed loop -- see shoreFilmClosed, which needs it to know whether
     // the column after the last is the first or itself.
     block[0] = water->chain->wraps ? 2.0f : 1.0f;
-    block[1] = dt > 0.0f ? dt : 1.0f / 60.0f;          // seconds per history slot
+    // Seconds per history slot -- the TAP INTERVAL the chain records at, not the frame time.
+    // The two are different rates and publishing the frame time here is what made every tap
+    // past the first clamp to the oldest slot. Read through the same function the chain steps
+    // by, so the shader's divisor and the ring's stride cannot disagree.
+    block[1] = shore_runup_slot_interval(&params);
     block[2] = (float)water->chain->head;              // newest slot
     block[3] = slope;
     for (int j = 0; j < UBO_SHORE_FILM_COLS; j++) {
@@ -1377,10 +1357,10 @@ static void _water_step_film(Water* water, const struct Scene* scene, float t, f
         c[2] = water->chain->normal[j * 2];
         c[3] = water->chain->normal[j * 2 + 1];
     }
-    float* tips = &block[4 + UBO_SHORE_FILM_COLS * 4];
-    for (int s = 0; s < UBO_SHORE_FILM_SLOTS; s++)
-        for (int j = 0; j < UBO_SHORE_FILM_COLS; j++)
-            tips[s * UBO_SHORE_FILM_COLS + j] = water->chain->tips[s][j];
+    // The tips go over whole: chain->tips is [SLOTS][COLS] contiguous and the block wants
+    // slot * COLS + column, which is the same order. The nested loop this replaces looked like
+    // a repack and reordered nothing.
+    memcpy(&block[4 + UBO_SHORE_FILM_COLS * 4], water->chain->tips, sizeof(water->chain->tips));
     ubo_upload(water->film_ubo, block, UBO_SHORE_FILM_BLOCK_SIZE);
 
     /*
@@ -1426,10 +1406,19 @@ bool water_shore_runup_params(const Water* water, const struct Scene* scene,
     return true;
 }
 
-void water_bind_shore(const Water* water, const struct Scene* scene, ShaderProgram* program) {
-    if (!water || !program || !program->uniforms)
-        return;
-    UniformManager* u = program->uniforms;
+/*
+ * The seven scalars shore.glsl stands on, published in ONE place.
+ *
+ * Both the water's own program and every lit surface read that file, and each used to publish
+ * the full set from its own site two hundred lines apart -- so renaming or adding a shore
+ * uniform meant finding both, and missing one put the sand and the sea on different data. That
+ * is the drift this whole split exists to prevent, reintroduced a layer down.
+ *
+ * `gate_wetness` is the only thing that differed and is now the parameter it always was: a lit
+ * surface reads the surf height through the global wetness switch, and the sea never does.
+ */
+static void _water_publish_shore(const Water* water, const struct Scene* scene,
+                                 UniformManager* u, bool gate_wetness) {
     const float upm = _water_units_per_metre(scene);
     const bool fft = water->wave_model == WATER_WAVES_FFT;
     float hs, omega;
@@ -1438,9 +1427,26 @@ void water_bind_shore(const Water* water, const struct Scene* scene, ShaderProgr
     uniform_set_float(u, "waterExtent", water->extent);
     uniform_set_float(u, "waterUnitsPerMetre", upm);
     uniform_set_vec2(u, "waterWindDir", (const float*)&water->wind_dir);
-    uniform_set_float(u, "waterSurfHeight", water->wetness ? hs : 0.0f);
+    uniform_set_float(u, "waterSurfHeight", (gate_wetness && !water->wetness) ? 0.0f : hs);
     uniform_set_float(u, "waterSurfOmega", omega);
     uniform_set_float(u, "waterBeachSlope", water->bed_foreshore_slope);
+}
+
+/*
+ * The scalars shore.glsl stands on, for a program that is NOT the water.
+ *
+ * Everything the run-up needs and nothing else -- no cascades, no bed, no samplers at all,
+ * which is the property that lets a lit surface ask where the swash is. Called per program
+ * switch alongside the cloud shadow, so a material that opted into wetness gets the same sea
+ * the water surface is drawing at the same instant.
+ *
+ * With no water in the scene nothing calls this, waterSurfHeight stays at its zero default,
+ * and the shader early-outs -- which is why no fallback publication is needed here.
+ */
+void water_bind_shore(const Water* water, const struct Scene* scene, ShaderProgram* program) {
+    if (!water || !program || !program->uniforms)
+        return;
+    _water_publish_shore(water, scene, program->uniforms, true);
 }
 
 static void _water_bind_cascades(const Water* water, UniformManager* u, bool fft) {
@@ -1457,6 +1463,11 @@ static void _water_bind_cascades(const Water* water, UniformManager* u, bool fft
     glBindTexture(GL_TEXTURE_2D, water->foam_pattern_tex);
     uniform_set_int(u, "foamPatternTex", WATER_FOAM_PATTERN_UNIT);
     uniform_set_float(u, "foamPatternTile", FOAM_PATTERN_TILE_M);
+    // Told rather than inferred. The shader subtracts a rising bar from this pattern, so an
+    // unbound sampler's 0 is not "no pattern" -- it is a threshold nothing clears, and the
+    // frame loses its whitewater. The flag is what makes the bake's failure path degrade the
+    // way its comment says it does.
+    uniform_set_int(u, "foamPatternAvailable", water->foam_pattern_tex ? 1 : 0);
     for (int c = 0; c < WATER_CASCADE_COUNT; c++) {
         char chop[32];
         snprintf(chop, sizeof(chop), "cascadeChoppiness[%d]", c);
@@ -1608,6 +1619,28 @@ static void _water_run_spectral(Water* water, const struct Scene* scene, struct 
     check_gl_error("water spectral");
 }
 
+/*
+ * Advance the water's SIMULATION for the frame, before anything draws.
+ *
+ * Separate from water_render, and the separation is the point: the film's tips are read by the
+ * lit surfaces in the OPAQUE pass and by the sea in the late pass, and stepping them from
+ * inside water_render put the step between those two readers. The sand got the previous
+ * frame's tips and the sea got this frame's -- one frame apart, on the two surfaces this block
+ * exists to keep in agreement.
+ *
+ * It also ran under water_render's own gate, so a frame where the water did not draw (a debug
+ * render mode, a probe capture) stepped no film at all while the sand kept reading the last
+ * tips it had. A frozen swash under moving sand.
+ *
+ * Nothing here draws or reads a framebuffer; the one GL call is the uniform upload.
+ */
+void water_update(Water* water, const struct Scene* scene, float t, float dt) {
+    if (!water_active(water) || !scene)
+        return;
+    _water_bake_bed(water, _water_units_per_metre(scene));
+    _water_step_film(water, scene, t, dt);
+}
+
 void water_render(Water* water, struct Scene* scene, struct Engine* engine, const mat4 view,
                   const mat4 draw_projection) {
     if (!water_active(water) || !scene || !engine)
@@ -1615,11 +1648,9 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
     if (!water_ensure_grid(water))
         return;
 
+    // The bed, again: water_update bakes it at frame top, but water_render is reachable
+    // without it on the first frame a surface appears, and the bake self-guards on having run.
     _water_bake_bed(water, _water_units_per_metre(scene));
-
-    // The swash film, before anything reads where the water's edge is -- which is the sea's
-    // own lens and every lit surface the swash runs over. Same clock the surface is drawn at.
-    _water_step_film(water, scene, (float)engine->render_time, (float)engine->render_delta);
 
     // The spectral bands, before anything that samples them. No profiler scope of
     // its own: it would have to nest inside the caller's, and the simulation is
@@ -1662,9 +1693,9 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
     uniform_set_mat4(u, "uCurrViewProjNoJitter", (const float*)engine->view_proj);
     uniform_set_mat4(u, "uPrevViewProj", (const float*)engine->prev_view_proj);
 
-    uniform_set_float(u, "waterLevel", water->level);
-    uniform_set_float(u, "waterExtent", water->extent);
-    _water_set_units_per_metre(u, scene);
+    // shore.glsl's scalars, through the one publisher. Ungated: the surface itself is drawn
+    // whatever the wetness switch says, which is the only thing the two callers differ on.
+    _water_publish_shore(water, scene, u, false);
     // The projector's origin. Every lattice vertex is a ray from here through its own
     // screen position, so this is the surface's whole placement input.
     uniform_set_vec3(u, "waterCamPos", (const float*)&engine->camera->position);
@@ -1677,7 +1708,6 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
     uniform_set_float(u, "waterIor", water->ior);
     uniform_set_vec3(u, "waterAbsorption", (const float*)&water->absorption);
     uniform_set_vec3(u, "waterScatter", (const float*)&water->scatter);
-    uniform_set_vec2(u, "waterWindDir", (const float*)&water->wind_dir);
     uniform_set_float(u, "waterAmplitude", water->amplitude);
     uniform_set_float(u, "waterWavelength", water->wavelength);
     uniform_set_float(u, "waterSteepness", water_effective_steepness(water));
@@ -1835,13 +1865,6 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
         // previous spectral scene would widen its lobe for waves it never carried.
         uniform_set_float(u, svar, fft ? water->cascade_slope_var[c] : 0.0f);
     }
-
-    // The sea state the surf runs at. See _water_surf_state -- the sand reads the same pair.
-    float surf_hs, surf_omega;
-    _water_surf_state(water, units_per_metre, fft, &surf_hs, &surf_omega);
-    uniform_set_float(u, "waterSurfHeight", surf_hs);
-    uniform_set_float(u, "waterSurfOmega", surf_omega);
-    uniform_set_float(u, "waterBeachSlope", water->bed_foreshore_slope);
 
     // Last frame's displacement, for the spectral path's motion vectors. Only usable
     // from the third frame on: the first has nothing to copy from and the second holds

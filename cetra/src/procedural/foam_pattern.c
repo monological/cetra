@@ -24,6 +24,17 @@
 #define FOAM_MID_LARGE   9.0f
 #define FOAM_FINE_SMALL  1.0f
 #define FOAM_FINE_LARGE  2.5f
+/*
+ * Taps in the widest kernel any radius above needs, which is what lets the blur keep its kernel
+ * on the stack instead of allocating one it could fail to get.
+ *
+ * _blur_axis takes radius = sigma * 3 + 0.5 and 2 * radius + 1 taps, so the largest sigma here
+ * decides it. The assert is against that constant rather than against a copied number, so
+ * widening a band cannot outgrow the buffer silently.
+ */
+#define FOAM_BLUR_MAX_TAPS 64
+_Static_assert(2 * (int)(FOAM_MID_LARGE * 3.0f + 0.5f) + 1 <= FOAM_BLUR_MAX_TAPS,
+               "the widest band's kernel no longer fits the blur's stack buffer");
 // How hard the web is folded. Higher is a thinner, sharper strand; at 1 the ridge is as wide
 // as the field and stops reading as a filament at all.
 #define FOAM_RIDGE 1.2f
@@ -55,11 +66,10 @@ static float _rand_signed(uint32_t* state) {
  */
 static void _blur_axis(const float* src, float* dst, float sigma, bool horizontal) {
     const int radius = (int)(sigma * 3.0f + 0.5f);
-    float* kernel = malloc((size_t)(radius * 2 + 1) * sizeof(float));
-    if (!kernel) {
-        memcpy(dst, src, FOAM_N * sizeof(float));
-        return;
-    }
+    // On the stack: the radii are compile-time constants of this file, so the largest kernel is
+    // known and the allocation that used to be here could only fail by silently returning the
+    // field UNBLURRED -- which the caller then band-passed against itself.
+    float kernel[FOAM_BLUR_MAX_TAPS];
     float sum = 0.0f;
     for (int i = -radius; i <= radius; i++) {
         const float w = expf(-(float)(i * i) / (2.0f * sigma * sigma));
@@ -83,19 +93,23 @@ static void _blur_axis(const float* src, float* dst, float sigma, bool horizonta
             dst[y * FOAM_PATTERN_RES + x] = acc;
         }
     }
-    free(kernel);
 }
 
-// One band: blur at two radii and subtract, then normalise to unit variance so the weights
-// above mean the same thing whatever the radii are.
-static void _bandpass(const float* src, float* out, float* tmp, float sigma_small,
+/*
+ * One band: blur at two radii and subtract, then normalise to unit variance so the weights
+ * above mean the same thing whatever the radii are.
+ *
+ * Both scratch buffers come from the caller. `wide` used to be malloc'd here and the failure
+ * path returned early, which left `out` holding the small-radius blur alone -- not band-passed,
+ * not mean-subtracted, not normalised -- and the caller then weighted it as though it were the
+ * unit-variance band this promises. A silently wrong texture rather than a degraded one, and
+ * indistinguishable from success. With the allocation hoisted, this cannot half-fail.
+ */
+static void _bandpass(const float* src, float* out, float* tmp, float* wide, float sigma_small,
                       float sigma_large) {
     _blur_axis(src, tmp, sigma_small, true);
     _blur_axis(tmp, out, sigma_small, false);
     _blur_axis(src, tmp, sigma_large, true);
-    float* wide = malloc(FOAM_N * sizeof(float));
-    if (!wide)
-        return;
     _blur_axis(tmp, wide, sigma_large, false);
     double mean = 0.0;
     for (int i = 0; i < FOAM_N; i++) {
@@ -112,26 +126,31 @@ static void _bandpass(const float* src, float* out, float* tmp, float sigma_smal
     const float inv = var > 1e-9 ? (float)(1.0 / var) : 1.0f;
     for (int i = 0; i < FOAM_N; i++)
         out[i] = (float)((out[i] - mean) * inv);
-    free(wide);
 }
 
-void foam_pattern_generate(float* out) {
+bool foam_pattern_generate(float* out) {
     if (!out)
-        return;
-    float* white = malloc(FOAM_N * sizeof(float));
-    float* tmp = malloc(FOAM_N * sizeof(float));
-    float* web = malloc(FOAM_N * sizeof(float));
-    float* mid = malloc(FOAM_N * sizeof(float));
-    float* fine = malloc(FOAM_N * sizeof(float));
-    if (!white || !tmp || !web || !mid || !fine) {
-        // A flat field rather than nothing: the consumer thresholds this, and a uniform 0.5
-        // degrades to "foam covers where it is strong enough", which is the pre-pattern look
-        // rather than a hole in the surface.
-        for (int i = 0; i < FOAM_N; i++)
-            out[i] = 0.5f;
-        free(white); free(tmp); free(web); free(mid); free(fine);
-        return;
-    }
+        return false;
+    /*
+     * ONE ARENA for all six scratch fields, which is what makes the failure path a single
+     * question with a single answer.
+     *
+     * There were six allocation sites and three different degradations -- an unblurred field
+     * passed off as blurred, a band-pass that returned half-done, and a flat 0.5 -- so "the
+     * bake failed" could mean any of three things and one of them was silent. Every buffer is
+     * the same compile-time size, so one block covers all of them and the only outcome left is
+     * the honest one: it worked, or it did not and the caller is told.
+     */
+    const size_t stride = FOAM_N;
+    float* arena = malloc(6 * stride * sizeof(float));
+    if (!arena)
+        return false;
+    float* white = arena;
+    float* tmp = arena + stride;
+    float* wide = arena + 2 * stride;
+    float* web = arena + 3 * stride;
+    float* mid = arena + 4 * stride;
+    float* fine = arena + 5 * stride;
 
     // One white field for all three bands, as the source they each filter a window out of.
     // Three independent fields would decorrelate the bands and the fine detail would stop
@@ -140,9 +159,9 @@ void foam_pattern_generate(float* out) {
     for (int i = 0; i < FOAM_N; i++)
         white[i] = _rand_signed(&state);
 
-    _bandpass(white, web, tmp, FOAM_WEB_SMALL, FOAM_WEB_LARGE);
-    _bandpass(white, mid, tmp, FOAM_MID_SMALL, FOAM_MID_LARGE);
-    _bandpass(white, fine, tmp, FOAM_FINE_SMALL, FOAM_FINE_LARGE);
+    _bandpass(white, web, tmp, wide, FOAM_WEB_SMALL, FOAM_WEB_LARGE);
+    _bandpass(white, mid, tmp, wide, FOAM_MID_SMALL, FOAM_MID_LARGE);
+    _bandpass(white, fine, tmp, wide, FOAM_FINE_SMALL, FOAM_FINE_LARGE);
 
     for (int i = 0; i < FOAM_N; i++) {
         // The ridge, and the whole reason this is not a noise texture.
@@ -152,9 +171,6 @@ void foam_pattern_generate(float* out) {
         out[i] = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
     }
 
-    free(white);
-    free(tmp);
-    free(web);
-    free(mid);
-    free(fine);
+    free(arena);
+    return true;
 }

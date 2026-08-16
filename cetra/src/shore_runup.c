@@ -2,39 +2,37 @@
 
 #include "shore_runup.h"
 
-/*
- * Mirrored from cetra/shaders/include/shore.glsl. Same names, same values, same order as they
- * appear there -- so a grep for OCEAN_SWASH_CAPTURE (or any of the rest) finds both copies and
- * a change to one is visibly a change to half of a pair.
- */
-#define OCEAN_GRAVITY 9.81f
-#define OCEAN_SWASH_LAG 2.1f
-#define OCEAN_SWASH_SETUP 0.4f
-#define OCEAN_SURF_MIN_DEPTH_M 0.05f
-#define OCEAN_SURF_MIN_SLOPE 0.01f
-#define OCEAN_SURF_GROUP_WAVES 6.5f
-#define OCEAN_SURF_GROUP_MOD 0.4f
-#define OCEAN_SURF_OBLIQUE 0.3f
-#define OCEAN_BORE_MEAN 0.375f
-#define OCEAN_SWASH_SKEW 0.85f
-#define OCEAN_SWASH_CAPTURE 0.45f
-#define OCEAN_CUSP_AMP 0.35f
 #define TWO_PI 6.28318530718f
 
-static const float OCEAN_TRAIN_FREQ[3] = {1.0f, 0.79f, 1.27f};
-static const float OCEAN_TRAIN_WEIGHT[3] = {0.48f, 0.30f, 0.22f};
-static const float OCEAN_TRAIN_ANGLE[3] = {0.0f, 0.38f, -0.26f};
+// Assembled from the shared per-element defines: C and GLSL spell an array initialiser
+// differently, so each side builds its own from the same numbers.
+static const float OCEAN_TRAIN_FREQ[3] = {OCEAN_TRAIN_FREQ_0, OCEAN_TRAIN_FREQ_1,
+                                          OCEAN_TRAIN_FREQ_2};
+static const float OCEAN_TRAIN_WEIGHT[3] = {OCEAN_TRAIN_WEIGHT_0, OCEAN_TRAIN_WEIGHT_1,
+                                            OCEAN_TRAIN_WEIGHT_2};
+static const float OCEAN_TRAIN_ANGLE[3] = {OCEAN_TRAIN_ANGLE_0, OCEAN_TRAIN_ANGLE_1,
+                                           OCEAN_TRAIN_ANGLE_2};
 
-static float shore_slope(const ShoreRunupParams* p) {
+float shore_runup_slope(const ShoreRunupParams* p) {
     return p->beach_slope > OCEAN_SURF_MIN_SLOPE ? p->beach_slope : OCEAN_SURF_MIN_SLOPE;
 }
 
 static float shore_r2(const ShoreRunupParams* p) {
-    const float slope = shore_slope(p);
+    const float slope = shore_runup_slope(p);
     const float l0 = TWO_PI * OCEAN_GRAVITY / (p->surf_omega * p->surf_omega);
     const float hl = p->surf_height * l0;
     return 1.1f * (0.35f * slope * sqrtf(hl) +
                    0.5f * sqrtf(hl * (0.563f * slope * slope + 0.004f)));
+}
+
+float shore_runup_slot_interval(const ShoreRunupParams* p) {
+    // The same expression shoreSwash spaces its taps by, from the same shared constants: one
+    // slot per tap means the ring covers exactly the window the taps reach back over.
+    const float period = p->surf_omega > 0.0f ? TWO_PI / p->surf_omega : 0.0f;
+    const float interval = period * SHORE_TAP_PERIODS / (float)SHORE_TAPS;
+    // A floor, so a degenerate sea cannot ask for a slot every frame and collapse the history
+    // back to the fifth of a second this exists to fix.
+    return interval > 1.0e-3f ? interval : 1.0e-3f;
 }
 
 float shore_runup_ceiling(const ShoreRunupParams* p) {
@@ -71,7 +69,7 @@ float shore_runup_edge(const ShoreRunupParams* p, float x, float z, float t) {
     const float upm = p->units_per_metre;
     const float g = OCEAN_GRAVITY;
     const float omega = p->surf_omega;
-    const float slope = shore_slope(p);
+    const float slope = shore_runup_slope(p);
     const float inv_slope_g = 1.0f / (slope * sqrtf(g));
     const float tau_shore = 2.0f * sqrtf(OCEAN_SURF_MIN_DEPTH_M) * inv_slope_g;
 

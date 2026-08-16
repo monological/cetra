@@ -2303,6 +2303,16 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EngineRenderFunc render
                                               (float)engine->render_time);
         }
 
+        // The water's own sim, on the same principle as the particle tick above and for a
+        // sharper reason: the swash film's tips are read by the opaque pass and again by the
+        // late pass, so it has to advance before EITHER of them. Outside the clock branch,
+        // because a substituted clock still leaves render_time and render_delta valid, and a
+        // film that stops stepping under one is the frozen-swash case this placement fixes.
+        Scene* water_scene = get_current_scene(engine);
+        if (water_scene)
+            water_update(water_scene->water, water_scene, (float)engine->render_time,
+                         (float)engine->render_delta);
+
         // Per-frame update (input, physics, fixed-timestep sim for game apps),
         // before the shadow pass so transform/particle updates land first.
         // Receives the produced dt, so a game's fixed-step accumulator takes

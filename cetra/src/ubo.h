@@ -5,6 +5,10 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+// For SHORE_CHAIN_COLS / SHORE_CHAIN_HISTORY, which size the shore film block below. The
+// solver owns those dimensions; this file only lays them out for std140.
+#include "shore_chain.h"
+
 // Uniform-buffer plumbing for std140 blocks (first used by clustered forward
 // lighting, spec 9.1). GLSL 330 cannot write layout(binding=N) -- that
 // qualifier is 4.2 -- so C code owns the block-index -> binding-point wiring:
@@ -54,16 +58,27 @@
  * surface needs is not the solver's nodes but the TIP per column at a few past times, and
  * that is a few hundred floats.
  *
- * 64 columns x 12 history slots is 768 floats = 192 vec4, plus one vec4 of parameters and
- * 32 vec4 of column origins (x, z, nx, nz). 3600 bytes, against a cluster block already
+ * 64 columns x 12 history slots is 768 floats = 192 vec4, plus one vec4 of parameters and 64
+ * vec4 of column origins (x, z, nx, nz). 257 vec4 = 4112 bytes, against a cluster block already
  * carrying 12288 every frame.
+ *
+ * The DIMENSIONS ARE THE SOLVER'S, not this file's. They were declared here as their own 64 and
+ * 12 while shore_chain.h declared its own pair, and the packing loop iterated one while indexing
+ * an array sized by the other -- so raising the solver's column count alone was a silent
+ * out-of-bounds read every frame, with no compiler diagnostic and no GL error. Deriving them
+ * makes that unrepresentable. The GLSL copy in shore_film.glsl is still a copy (there is no
+ * sharing a `layout(std140)` block's array size with C) and is asserted against these at wire
+ * time by the driver's own reported block size.
  */
-#define UBO_SHORE_FILM_COLS  64
-#define UBO_SHORE_FILM_SLOTS 12
-// params(1) + origins(64) + tips(64*12/4)
+#define UBO_SHORE_FILM_COLS  SHORE_CHAIN_COLS
+#define UBO_SHORE_FILM_SLOTS SHORE_CHAIN_HISTORY
+// params(1) + origins(COLS) + tips(COLS*SLOTS/4)
 #define UBO_SHORE_FILM_VEC4S \
     (1 + UBO_SHORE_FILM_COLS + (UBO_SHORE_FILM_COLS * UBO_SHORE_FILM_SLOTS) / 4)
 #define UBO_SHORE_FILM_BLOCK_SIZE (UBO_SHORE_FILM_VEC4S * 16)
+// The tips must fill whole vec4 rows, or the division above silently truncates the ring.
+_Static_assert((UBO_SHORE_FILM_COLS * UBO_SHORE_FILM_SLOTS) % 4 == 0,
+               "the shore film's tip array must be a whole number of vec4 rows");
 
 typedef struct Ubo {
     GLuint id;

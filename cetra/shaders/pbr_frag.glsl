@@ -1194,7 +1194,9 @@ void main() {
         float h = WorldPos.y - waterLevel;
         // Nothing outside the bed's domain has a shore, and without this a material that
         // opted in would be wetted by geometry that merely sits low a kilometre inland.
-        float inRange = 1.0 - smoothstep(waterExtent * 0.75, waterExtent, length(WorldPos.xz));
+        // Through shore.glsl, so this reads the same domain the sea does. It was a circle here
+        // against the bed's square, which put the corners in the water and dry on the sand.
+        float inRange = shoreDomain(WorldPos.xz);
         if (h < shoreEdgeCeiling() && inRange > 0.0) {
             ShoreSwash sw = shoreSwash(WorldPos.xz, h, time);
             float amount = uShoreWetness * inRange;

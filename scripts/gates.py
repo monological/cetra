@@ -5385,46 +5385,62 @@ def run_beach_gate(workdir):
     if not ok:
         failures.append("beach-surf-zone")
 
-    """
-    THE CPU TWIN, against the contract it shares with the shader.
-
-    The swash film runs on the CPU and is driven by a C copy of shore.glsl's run-up, because
-    a closed form cannot be shared between C and GLSL. `procedural/water_waves.c` is the
-    precedent for that duplication and CLAUDE.md records its hole: "nothing compares the two,
-    which is the known gap". This arm is why the second copy does not repeat it.
-
-    Three properties, and each is something BOTH copies compute rather than a number one of
-    them happens to produce. The ceiling is the product of the same bounded factors on both
-    sides, so a twin that drifts in any of them breaks it. Movement and non-repetition are
-    the model's own claims -- a swash that stood still or repeated every period would be the
-    painted band this spec exists to retire, whichever copy said so.
-    """
-    err = None
-    probe = os.path.join(workdir, "shore_probe.txt")
+    # THE CPU TWIN, against the contract it shares with the shader, and the film's history
+    # window against the march the shader makes over it.
+    #
+    # The swash film runs on the CPU and is driven by a C copy of shore.glsl's run-up, because
+    # a closed form cannot be shared between C and GLSL. What IS shared is the constants
+    # (shaders/include/shore_constants.glsl), which removes the drift a hand-mirrored tuning
+    # number would otherwise invite.
+    #
+    # BE EXACT ABOUT WHAT THE FIRST THREE PROPERTIES ESTABLISH. Every number they read comes
+    # from the CPU copy, so they check that copy is self-consistent: bounded by its own
+    # ceiling, spread across it, and not repeating a period later. They would NOT notice the
+    # shader's arithmetic changing. The header used to claim otherwise and it was wrong -- an
+    # arm that compares one copy to itself is not a comparison of two.
+    #
+    # THE WINDOW CHECK IS THE CROSS-FILE ONE, and it is the arm that would have caught the
+    # defect this became: the solver records a tip history and the shader marches back over it,
+    # and those two spans are sized in different files. They were out by a factor of ninety --
+    # a ring covering a fifth of a second against taps reaching back eighteen seconds -- so
+    # every tap but the first clamped to the oldest slot and the wet sand collapsed to two
+    # tones, which is precisely what the accumulation exists to avoid.
     cmd = [RENDER, "-m", os.path.join(ROOT, "assets", BEACH_FIXTURE), "-x", "-f", "3",
            "-W", "320", "-H", "240", "--shore-probe"] + BEACH_BED + BEACH_GERSTNER
     r = subprocess.run(cmd, capture_output=True, text=True)
+
+    def _fields(line):
+        # Tagged lines, so the kind is read rather than sniffed from whether a field parses as
+        # a number. Same shape as _water_fft_probe's reader.
+        parts = line.split()
+        return dict(p.split("=", 1) for p in parts[2:] if "=" in p)
+
     lines = [l for l in (r.stdout + r.stderr).splitlines() if l.startswith("shore-probe ")]
-    head = next((l for l in lines if "ceiling=" in l), None)
-    if r.returncode != 0 or not head:
+    head = next((_fields(l) for l in lines if l.startswith("shore-probe header")), None)
+    window = next((_fields(l) for l in lines if l.startswith("shore-probe window")), None)
+    if r.returncode != 0 or not head or not window:
         print(f"  shore-twin   ERROR probe produced nothing: {(r.stdout + r.stderr)[-200:]}")
         failures.append("shore-twin")
         return failures
 
-    ceiling = float(head.split("ceiling=")[1].split()[0])
-    slope = float(head.split("slope=")[1].split()[0])
+    ceiling = float(head["ceiling"])
+    slope = float(head["slope"])
     edges, repeats = [], []
     for line in lines:
-        if "edge=" not in line:
+        if not line.startswith("shore-probe sample"):
             continue
-        edges.append(float(line.split("edge=")[1].split()[0]))
-        repeats.append(float(line.split("next=")[1].split()[0]))
+        f = _fields(line)
+        edges.append(float(f["edge"]))
+        repeats.append(float(f["next"]))
+    span = float(window["span"])
+    taps = float(window["taps"])
+    covers = span >= taps
     within = all(0.0 <= e <= ceiling for e in edges)
     spread = (max(edges) - min(edges)) if edges else 0.0
     # The largest |edge - next| over the samples: one period on, an incommensurate sum has
     # moved somewhere else. A single train would land back where it started.
     drift = max((abs(a - b) for a, b in zip(edges, repeats)), default=0.0)
-    ok = (len(edges) >= 8 and within and slope > 0.0 and
+    ok = (len(edges) >= 8 and within and slope > 0.0 and covers and
           spread >= SHORE_TWIN_MIN_SPREAD * ceiling and
           drift >= SHORE_TWIN_MIN_DRIFT * ceiling)
     print(f"  shore-twin   {'PASS' if ok else 'FAIL'}  {len(edges)} samples on a slope of "
@@ -5432,7 +5448,8 @@ def run_beach_gate(workdir):
           f"{spread / max(ceiling, 1e-9):.3f} of the ceiling (want "
           f">={SHORE_TWIN_MIN_SPREAD}) and one period on it has moved "
           f"{drift / max(ceiling, 1e-9):.3f} (want >={SHORE_TWIN_MIN_DRIFT}: incommensurate "
-          f"trains do not repeat)")
+          f"trains do not repeat); the film's history spans {span:.2f}s against {taps:.2f}s "
+          f"of taps (want >=, or the oldest taps clamp to one slot)")
     if not ok:
         failures.append("shore-twin")
 

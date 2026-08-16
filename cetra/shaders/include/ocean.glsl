@@ -18,6 +18,31 @@
 // the swash edge and cannot afford this file's nine samplers to get it.
 #include "shore.glsl"
 
+/*
+ * The four constants that need the BED, and so belong on this side of that split.
+ *
+ * They lived in shore.glsl next to the prose describing them, which left the sampler-free half
+ * carrying the full tuning of two things it cannot compute -- a reader opening it to understand
+ * the run-up was handed the bore's and the lens's numbers, and any third consumer of that file
+ * inherited them for nothing. shore.glsl still describes both mechanisms; their numbers are
+ * here, beside their only uses.
+ */
+// A saturated bore's crest as a fraction of the depth it runs over: H = 0.78 h.
+const float OCEAN_BORE_CREST = 0.39;
+// How far the crest leans forward: psi = phi + skew cos(phi). A bore is a FRONT, not a peak --
+// steep face, long back -- and a symmetric crest read as a comb of cusps marching in. The face
+// is the LOW-phase side, since at a fixed point phase increases with time and the front arrives
+// first; this form is steep there and slow behind. (phi - skew sin(phi), the obvious guess, is
+// odd about the crest and only broadens it.) 0 is symmetric; 1 is the sawtooth limit where the
+// face goes vertical.
+const float OCEAN_BORE_SKEW = 0.6;
+// The lens's thickness behind its edge, as a fraction of the sand's own drop from the edge:
+// the tongue at the still line is this fraction of the run-up deep.
+const float OCEAN_LENS_RATIO = 0.15;
+// How far seaward of the still line the lens still owns the surface, as a fraction of R in
+// depth. Small: the swash is the last of the run-up, and the bore owns the rest.
+const float OCEAN_SWASH_REACH = 0.3;
+
 uniform float waterAmplitude;  // half crest-to-trough of the longest wave
 uniform float waterWavelength; // longest wave, world units
 uniform float waterSteepness;  // 0 = round sine crests, 1 = the sharpest legal

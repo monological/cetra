@@ -85,6 +85,11 @@ uniform int foamAvailable;
 // consolidation freed -- this program had none before that (spec 11.45).
 uniform sampler2D foamPatternTex;
 uniform float foamPatternTile;
+// 0 = the bake failed and nothing is bound. Every other optional sampler in this file carries
+// one of these, and this one needs it more than most: the erosion below subtracts a rising bar
+// from the pattern, an unbound sampler reads 0, and 0 minus any positive bar is no foam at all.
+// So the "0 binds as no pattern" the C side documents is only true if the shader is told.
+uniform int foamPatternAvailable;
 uniform int cameraSubmerged;
 uniform int causticsEnabled;
 // 1 = the shoreline writes fractional coverage for alpha-to-coverage; 0 = the
@@ -251,20 +256,29 @@ const float WATER_FOAM_DRIFT_M_PER_S = 0.12;
  * brightness because a clump of foam is as white as a sheet of it. So the noise chooses WHERE
  * rather than HOW MUCH, and how much foam there is chooses how high the bar sits.
  *
- * HI is the bar with no foam at all and SPAN is how far a full band lowers it. Calibrated
- * against the breakup's own distribution rather than by eye: it is two value noises at 0.62
- * and 0.38, so it concentrates about 0.5 with a spread near 0.15. A bore at full strength
- * puts the bar about a spread BELOW the mean and covers ~85% -- a bore is a sheet. The rest
- * value between waves puts it just above the mean, near half coverage, which is where a
- * pattern breaks into islands. EDGE is the soft ramp across the bar, wide enough not to
- * alias and narrow enough that the edge of a clump is an edge.
+ * HI is the bar with no foam at all and SPAN is how far a full band lowers it. EDGE is the soft
+ * ramp across the bar, wide enough not to alias and narrow enough that the edge of a clump is
+ * an edge.
+ *
+ * THE FIELD THESE ARE SET AGAINST, measured off procedural/foam_pattern.c's actual bake rather
+ * than asserted: mean 0.3875, standard deviation 0.2585, median 0.4360, with 5% of texels at
+ * exactly 0 (the ridge fold clamps) and the 95th percentile at 0.7724. A ridged band-pass is
+ * not symmetric and does not concentrate about its middle the way a sum of value noises does.
+ *
+ * What the current numbers deliver against it: a full band (1.0) drops the bar to -0.10 and
+ * covers 100% -- a bore is a sheet, which is right -- and the rest value between waves (0.92 x
+ * 0.3 = 0.276) puts it at 0.732 and covers 10%.
+ *
+ * That 10% is worth knowing before touching these: the intent when they were written was about
+ * half coverage at rest, where a pattern breaks into islands, and they were calibrated against
+ * the two value noises this pattern replaced. Restoring that intent against THIS field is
+ * HI 0.564 / SPAN 0.464 (bar 0.436 at rest, the median, and 0.10 at full). It is left alone
+ * here because it is a look change and wants an A/B, not an arithmetic argument.
  *
  * The bar cannot be set from the shape of real whitewater alone, because how long foam LASTS
- * decides how much of it is there to erode. The reference this is ported from holds its
- * accumulation near full across a whole swash and can therefore erode much harder; ours
- * collapses to WATER_SHORE_FOAM_REST between bores, and a bar tuned for a sea that remembers
- * took the swash from 4000 whitewater pixels to 1741 -- foam that no longer reached the sand.
- * Persistence is what buys a harder bar, so these two numbers are due a revisit alongside it.
+ * decides how much of it is there to erode. Ours collapses to WATER_SHORE_FOAM_REST between
+ * bores, and a bar tuned for a sea that remembers took the swash from 4000 whitewater pixels
+ * to 1741 -- foam that no longer reached the sand. Persistence is what buys a harder bar.
  *
  * This replaces a multiplicative floor that existed because the old form punched holes in
  * full-strength foam. A bar tied to the amount cannot do that -- at full strength there is no
@@ -364,17 +378,21 @@ float waterValueNoise(vec2 p) {
  * `p` is in WORLD units; the tile is a physical size, so a world at 22 units to the metre
  * gets the same size of bubble as one at 1.
  *
- * THE FOOTPRINT COMES FROM THE UNDISPLACED POSITION, and that is the whole reason this takes
- * two arguments. Callers advect `p` -- the shore band slides the pattern up the beach with the
- * sheet -- and the advection is built from the bed's gradient, which is bilinear off a texture
- * and therefore only C0. Its DERIVATIVE steps at every bed texel boundary, so an implicit
- * lookup picks a different mip either side of that step and the sea prints a grid of
- * rectangles, one flat and blurred against its sharp neighbour, staircased at the quad
- * granularity the derivative is taken over. Scaling with the run-up, so the tide appears to
- * switch it on.
+ * THE GRADIENTS ARE PASSED IN, taken from the UNDISPLACED position, and both halves of that
+ * matter.
  *
- * Advection translates a pattern without resizing it, so the correct footprint is the pixel's
- * own world footprint and never the advected one.
+ * Undisplaced, because callers advect `p` -- the shore band slides the pattern up the beach
+ * with the sheet -- and the advection is built from the bed's gradient, which is bilinear off a
+ * texture and therefore only C0. Its derivative steps at every bed texel boundary, so a mip
+ * chosen from it differs either side of that step and the sea prints a grid of rectangles, one
+ * flat and blurred against its sharp neighbour. Advection translates a pattern without resizing
+ * it, so the right footprint is the pixel's own and never the advected one.
+ *
+ * Passed in rather than taken here, because every call site is inside a branch on whether there
+ * is any foam to erode. A derivative in non-uniform control flow is undefined -- the quads that
+ * straddle a foam silhouette are exactly the ones where lanes disagree about the branch -- and
+ * this file already makes that argument for its fwidth 400 lines down. Computing them once at
+ * top level also stops the two lanes duplicating the same pair.
  *
  * DOMAIN-WARPED, because one baked tile is wallpaper. The tile is a physical 5 m and a beach is
  * tens of metres across, so a plain lookup puts the same web of filaments on screen three or
@@ -399,7 +417,12 @@ const float WATER_FOAM_WARP_SCALE = 7.3;
 const float WATER_FOAM_WARP_AMOUNT = 0.6;
 const float WATER_FOAM_WARP_LOD = 3.0;
 
-float waterFoamPattern(vec2 p, vec2 footprint) {
+float waterFoamPattern(vec2 p, vec2 ddx, vec2 ddy) {
+    // 1 is "no pattern": the erosion subtracts a bar from this, so a full value leaves the foam
+    // exactly as it was selected. Returning 0 would instead threshold every fragment to nothing
+    // and delete the frame's whitewater, which is what an unbound sampler would have done.
+    if (foamPatternAvailable == 0)
+        return 1.0;
     float tile = max(foamPatternTile * waterUnitsPerMetre, 1.0e-4);
     // Two taps of one channel at an offset, rather than an rg field: the bake has one channel
     // and a second decorrelated one would be a wider texture for a term this slow.
@@ -407,8 +430,28 @@ float waterFoamPattern(vec2 p, vec2 footprint) {
     float wx = textureLod(foamPatternTex, wuv, WATER_FOAM_WARP_LOD).r;
     float wy = textureLod(foamPatternTex, wuv + vec2(0.37, 0.11), WATER_FOAM_WARP_LOD).r;
     vec2 q = p + (vec2(wx, wy) - 0.5) * (tile * WATER_FOAM_WARP_AMOUNT);
-    return textureGrad(foamPatternTex, q / tile, dFdx(footprint) / tile,
-                       dFdy(footprint) / tile).r;
+    return textureGrad(foamPatternTex, q / tile, ddx / tile, ddy / tile).r;
+}
+
+/*
+ * Erode an amount of foam against the pattern at `lookup`.
+ *
+ * One function for both bands: the erosion law is the same and the only thing that separates
+ * crest foam from shore foam is which coordinate carries the pattern. It was written out twice,
+ * which left three tuned constants and the read-the-bar-before-eroding invariant to be kept in
+ * step by hand across two sites, with the paragraph explaining them over only one.
+ *
+ * Zero in, zero out -- which also keeps the pattern fetch out of the callers' branches, so the
+ * gradients above stay in uniform control flow.
+ */
+float waterErodeFoam(float amount, vec2 lookup, vec2 ddx, vec2 ddy) {
+    if (amount <= 0.0)
+        return 0.0;
+    // The bar is read from the foam BEFORE it is eroded, so thinning raises it and the pattern
+    // comes apart; what survives keeps the strength it had.
+    float bar = WATER_FOAM_ERODE_HI - WATER_FOAM_ERODE_SPAN * amount;
+    float breakup = waterFoamPattern(lookup, ddx, ddy);
+    return amount * smoothstep(0.0, WATER_FOAM_ERODE_EDGE, breakup - bar);
 }
 
 float waterSmith(float ndx) {
@@ -622,54 +665,36 @@ void main() {
      * band is a smooth function of depth and has no structure of its own, so if it does not
      * borrow this one it has none.
      *
-     * Value noise evaluated rather than sampled: it costs no sampler in a program that has
-     * none left, and a hash costs less than the fetch would anyway. Two scales drifting at
-     * different rates, so the texture does not read as a stationary pattern the waves slide
-     * under.
-     *
-     * It may only take coverage AWAY. Foam the noise could ADD would be whitewater where
+     * It may only take coverage AWAY. Foam the pattern could ADD would be whitewater where
      * nothing folded and no bed shoaled.
+     *
+     * The two bands differ only in WHAT CARRIES THE PATTERN, which is why they go through one
+     * erosion and differ by a coordinate:
+     *
+     *   Crest foam is on open water with nothing else moving it, so it drifts downwind. A
+     *   world-space offset, which makes the rate a speed.
+     *
+     *   Shore foam sits on a sheet running up the face and draining back, so it rides that. At
+     *   the world position it is instead a fixed set of shapes the moving band reveals and
+     *   hides -- a stencil, and it reads as one: static blobs winking in and out while the tide
+     *   moves over them. So the lookup is offset by how far the tongue has run, along the bed's
+     *   own downhill. A DISPLACEMENT, not a change of coordinates: two earlier attempts gave
+     *   the pattern the shore's own frame and both failed on the geometry rather than the idea.
+     *   An alongshore arc length has a CUT where the tracer's chain closes, and interpolating
+     *   across it swept the whole coast inside one grid cell, printing a band of hairlines.
+     *   Rotating world position into the shore's basis is worse: on a round island the position
+     *   vector is radial and its tangential component is identically zero, so the pattern
+     *   collapses to a function of radius and the sea fills with bullseyes. A displacement has
+     *   neither failure -- world position plus an offset cannot collapse, and its value is
+     *   continuous everywhere.
      */
-    // Crest foam drifts downwind: it is on open water with nothing else carrying it, where
-    // the shore's rides the swash instead. A world-space offset, so the rate is a speed.
+    // Once, at uniform control flow: the erosion below is branchy and a derivative taken inside
+    // a branch is undefined. See waterFoamPattern.
+    vec2 foamDdx = dFdx(WorldPos.xz);
+    vec2 foamDdy = dFdy(WorldPos.xz);
     vec2 foamDrift = waterWindDir * (time * WATER_FOAM_DRIFT_M_PER_S * waterUnitsPerMetre);
-    if (foam > 0.0) {
-        float breakup = waterFoamPattern(WorldPos.xz + foamDrift, WorldPos.xz);
-        // The bar is read from the foam BEFORE it is eroded, so thinning raises it and the
-        // pattern comes apart; what survives keeps the strength it had.
-        float bar = WATER_FOAM_ERODE_HI - WATER_FOAM_ERODE_SPAN * foam;
-        foam *= smoothstep(0.0, WATER_FOAM_ERODE_EDGE, breakup - bar);
-    }
-    if (shoreFoam > 0.0) {
-        /*
-         * THE SHORE'S FOAM RIDES THE SHEET, which is the whole of this.
-         *
-         * Whitewater at a beach sits ON the water, and the water there is a sheet running up
-         * the face and draining back. Sampled at the world position it is instead a fixed set
-         * of shapes that the moving band reveals and hides -- a stencil, and it reads as one:
-         * static blobs winking in and out while the tide moves over them.
-         *
-         * So the lookup is offset by how far the tongue has run, along the bed's own downhill.
-         * A DISPLACEMENT, not a change of coordinates: two earlier attempts tried to give the
-         * pattern the shore's own frame and both failed on the geometry rather than the idea.
-         * An alongshore arc length has a CUT where the tracer's chain closes, and interpolating
-         * across it swept the whole coast inside one grid cell, printing a band of hairlines.
-         * Rotating world position into the shore's basis is worse: on a round island the
-         * position vector is radial and its tangential component is identically zero, so the
-         * pattern collapses to a function of radius and the sea fills with bullseyes.
-         *
-         * A displacement has neither failure: it is world position plus an offset, so it cannot
-         * collapse and its VALUE is continuous everywhere. Its derivative is not -- the offset
-         * comes off the bed's bilinear gradient -- which is why the footprint below is taken
-         * from the undisplaced position. See waterFoamPattern.
-         */
-        vec2 q = WorldPos.xz - ShoreDir * SwashRun;
-        // No drift added: q already carries the swash's own advection, which is what this
-        // foam is sitting on.
-        float breakup = waterFoamPattern(q, WorldPos.xz);
-        float bar = WATER_FOAM_ERODE_HI - WATER_FOAM_ERODE_SPAN * shoreFoam;
-        shoreFoam *= smoothstep(0.0, WATER_FOAM_ERODE_EDGE, breakup - bar);
-    }
+    foam = waterErodeFoam(foam, WorldPos.xz + foamDrift, foamDdx, foamDdy);
+    shoreFoam = waterErodeFoam(shoreFoam, WorldPos.xz - ShoreDir * SwashRun, foamDdx, foamDdy);
     foam = max(foam, shoreFoam);
 
     /*

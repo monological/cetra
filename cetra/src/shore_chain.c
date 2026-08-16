@@ -63,7 +63,7 @@ void shore_chain_rebuild(ShoreChain* chain, const Water* water,
      * above it no wave can reach whatever it does.
      */
     const float upm = params->units_per_metre;
-    const float slope = params->beach_slope > 0.01f ? params->beach_slope : 0.01f;
+    const float slope = shore_runup_slope(params);
     const float seaward = SHORE_CHAIN_REST_DEPTH_M / slope * upm;
     const float landward = shore_runup_ceiling(params);
     const float span = seaward + (landward > 0.0f ? landward : upm);
@@ -72,12 +72,15 @@ void shore_chain_rebuild(ShoreChain* chain, const Water* water,
 
     // Resample the polyline to a fixed column count, so the solver's cost does not follow the
     // tracer's resolution.
+    //
+    // The cursor is OUTSIDE the column loop. Both the requested arc length and the polyline's
+    // own are monotone in their index, so it never needs to go backwards -- restarting it per
+    // column made this a rescan of the whole polyline sixty-four times a frame, which is the
+    // opposite of the property the comment claimed.
+    int k = 0;
     for (int j = 0; j < SHORE_CHAIN_COLS; j++) {
         const float f = (float)j / (float)SHORE_CHAIN_COLS;
         const float s = f * water->shore_length;
-        // The polyline's arc lengths are monotone, so a scan is enough and a search would be
-        // the same cost at this size.
-        int k = 0;
         while (k + 1 < water->shore_count && water->shore_pts[k + 1].s < s)
             k++;
         const WaterShorePoint* a = &water->shore_pts[k];
@@ -110,9 +113,8 @@ void shore_chain_rebuild(ShoreChain* chain, const Water* water,
             chain->u[j * SHORE_CHAIN_NODES + i] = 0.0f;
         }
     memset(chain->tips, 0, sizeof(chain->tips));
-    memset(chain->tip_age, 0, sizeof(chain->tip_age));
     chain->head = 0;
-    chain->filled = 0;
+    chain->slot_clock = 0.0f;
     chain->steps = 0;
     chain->ready = true;
 }
@@ -167,11 +169,12 @@ static void _step_column(ShoreChain* chain, int j, float slope, float upm, float
         x[i] += u[i] * sub;
 
     // Nodes may not pass each other. A crossed pair is negative volume, and the eta above
-    // would hand back a force pushing them further apart the wrong way.
-    const float min_len = rest_seg * SHORE_CHAIN_MIN_SEG;
+    // would hand back a force pushing them further apart the wrong way. Same floor the depth
+    // uses -- it was spelled a second time here under a second name, which read as two
+    // independent limits that happened to agree.
     for (int i = 1; i < SHORE_CHAIN_NODES; i++)
-        if (x[i] < x[i - 1] + min_len) {
-            x[i] = x[i - 1] + min_len;
+        if (x[i] < x[i - 1] + floor_len) {
+            x[i] = x[i - 1] + floor_len;
             if (u[i] < u[i - 1])
                 u[i] = u[i - 1];
         }
@@ -195,7 +198,8 @@ static void _smooth(float* a, int offset, bool wrap) {
 void shore_chain_step(ShoreChain* chain, const ShoreRunupParams* params, float t, float dt) {
     if (!chain || !chain->ready || dt <= 0.0f)
         return;
-    const float slope = params->beach_slope > 0.01f ? params->beach_slope : 0.01f;
+    const float slope = shore_runup_slope(params);
+    const float slot_interval = shore_runup_slot_interval(params);
     // Capped, so a frame spike does not step the solver past what its CFL caps can absorb.
     const float sub = fminf(dt, 0.04f) / (float)SHORE_CHAIN_SUBSTEPS;
 
@@ -233,17 +237,31 @@ void shore_chain_step(ShoreChain* chain, const ShoreRunupParams* params, float t
         _smooth(chain->u, i, chain->wraps);
     }
 
-    // Publish this frame's tips and age everything already stored.
-    chain->head = (chain->head + 1) % SHORE_CHAIN_HISTORY;
-    for (int k = 0; k < SHORE_CHAIN_HISTORY; k++)
-        chain->tip_age[k] += dt;
-    chain->tip_age[chain->head] = 0.0f;
-    for (int j = 0; j < SHORE_CHAIN_COLS; j++) {
-        // Back to a HEIGHT above the still level, which is what the shaders compare against.
-        chain->tips[chain->head][j] =
-            chain->x[j * SHORE_CHAIN_NODES + SHORE_CHAIN_NODES - 1] * slope;
+    /*
+     * Record a tip slot on the SLOT INTERVAL, not every frame -- the sim rate and the history
+     * rate are different quantities and conflating them made the history useless.
+     *
+     * The consumer marches back over SHORE_TAP_PERIODS of wave time in SHORE_TAPS steps, so it
+     * asks for ages out to several seconds. A slot per frame gives SHORE_CHAIN_HISTORY frames
+     * of history -- a fifth of a second at 60 Hz -- so every tap but the first ran off the end
+     * of the ring and got the oldest slot back. Nine taps returned two distinct values, and the
+     * accumulation degenerated into exactly the two-tone step it exists to avoid. The closed
+     * form has no ring and was unaffected, so the film made the sand worse than no film at all.
+     *
+     * At the interval below the same twelve slots span SHORE_TAP_PERIODS with a slot to spare,
+     * which is the whole window the taps can ask about.
+     */
+    chain->slot_clock += dt;
+    if (chain->slot_clock >= slot_interval) {
+        // Carry the remainder rather than zeroing: dropping it would make the true interval the
+        // frame time rounded up, which drifts against what the shader is told it is.
+        chain->slot_clock -= slot_interval;
+        chain->head = (chain->head + 1) % SHORE_CHAIN_HISTORY;
+        for (int j = 0; j < SHORE_CHAIN_COLS; j++) {
+            // Back to a HEIGHT above the still level, which is what the shaders compare against.
+            chain->tips[chain->head][j] =
+                chain->x[j * SHORE_CHAIN_NODES + SHORE_CHAIN_NODES - 1] * slope;
+        }
     }
-    if (chain->filled < SHORE_CHAIN_HISTORY)
-        chain->filled++;
     chain->steps++;
 }

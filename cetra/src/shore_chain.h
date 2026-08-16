@@ -42,9 +42,20 @@ struct Water;
 // Columns around the shore. Independent of the traced polyline's own point count -- the chain
 // resamples it, so a 300-point shoreline and a 900-point one cost the same.
 #define SHORE_CHAIN_COLS 64
-// Tip history depth, in frames of the sim. What pbr_frag reads to know how long ago the water
-// was here; see shore.glsl's SHORE_TAPS.
-#define SHORE_CHAIN_HISTORY 12
+/*
+ * Tip history depth, in SLOTS -- and a slot is one tap of the shader's drying march, not one
+ * frame of the sim.
+ *
+ * Those are different rates and conflating them was a real defect: recording per frame gave a
+ * fifth of a second of history where the taps reach back over SHORE_TAP_PERIODS of wave time,
+ * so every tap but the first ran off the end of the ring and the wet sand collapsed to two
+ * tones. The sim still steps every frame; it just writes a slot on the tap interval, which is
+ * what shore_runup_slot_interval returns. One spare over SHORE_TAPS so the oldest tap
+ * interpolates between two real slots rather than clamping.
+ */
+#define SHORE_CHAIN_HISTORY (SHORE_TAPS + 3)
+_Static_assert(SHORE_CHAIN_HISTORY > SHORE_TAPS,
+               "the ring must outspan the taps or the oldest ones clamp to one slot");
 
 typedef struct ShoreChain {
     // Node position along the beach normal, world units, measured from the still waterline
@@ -55,9 +66,10 @@ typedef struct ShoreChain {
 
     // Ring buffer of tip positions: [slot][column]. Slot `head` is the newest.
     float tips[SHORE_CHAIN_HISTORY][SHORE_CHAIN_COLS];
-    float tip_age[SHORE_CHAIN_HISTORY]; // seconds before now that each slot was written
     int head;
-    int filled;
+    // Time since the last slot was written. The sim runs per frame and the ring advances on
+    // the tap interval, so this is what carries the difference between the two rates.
+    float slot_clock;
     // Steps since the seed. The film needs a few seconds before it means anything: a push at
     // the handover travels at sqrt(g h), which is seconds to cross a beach, so anything read
     // before then is the rest state with a ripple starting across it.
@@ -74,9 +86,13 @@ typedef struct ShoreChain {
 } ShoreChain;
 
 /*
- * Rebuild the column frames from the water's traced shoreline. Cheap to call every frame: it
- * returns immediately unless the shoreline actually changed, which happens when the bed is
- * re-baked.
+ * Rebuild the column frames from the water's traced shoreline.
+ *
+ * Two costs, and they are not the same: the RESAMPLE of the polyline into columns runs every
+ * call (a re-baked bed can move the points without moving the span, so there is nothing cheaper
+ * to test), and the RESEED of the node state is what returns immediately unless the shoreline's
+ * reach or its closure actually changed. The resample is one pass over the polyline, not one
+ * per column.
  */
 void shore_chain_rebuild(ShoreChain* chain, const struct Water* water,
                          const ShoreRunupParams* params);

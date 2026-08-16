@@ -1,6 +1,8 @@
 #ifndef CETRA_FOAM_PATTERN_H
 #define CETRA_FOAM_PATTERN_H
 
+#include <stdbool.h>
+
 /*
  * THE FOAM PATTERN: a tiling web of filaments, baked once (spec 11.45).
  *
@@ -34,7 +36,12 @@
  *
  * One channel: the consumer thresholds it against a bar that rises as foam thins, so what is
  * wanted here is a height field to cut, not a colour.
+ *
+ * Returns false if the scratch allocation failed, in which case `out` is untouched. It reports
+ * rather than degrading because a partly-built field here is indistinguishable from a built one
+ * downstream -- the consumer would threshold against it and the frame would be quietly wrong.
+ * The caller's answer is to tell the shader there is no pattern, which is a real code path.
  */
-void foam_pattern_generate(float* out);
+bool foam_pattern_generate(float* out);
 
 #endif // CETRA_FOAM_PATTERN_H

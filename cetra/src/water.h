@@ -391,6 +391,10 @@ typedef struct Water {
     // The tiling foam web, generated once on first use. Independent of wave model and sea
     // state, so nothing invalidates it.
     GLuint foam_pattern_tex;
+    // The bake was attempted and failed. A fixed-size allocation that failed once will fail
+    // again, so this stops the attempt repeating every frame; the shader is told separately
+    // and skips the erosion rather than thresholding against an unbound sampler.
+    bool foam_pattern_failed;
     int spectral_frames;
 
     /*
@@ -492,6 +496,18 @@ bool water_will_draw(const Water* water, const struct Engine* engine, RenderMode
  */
 void water_render(Water* water, struct Scene* scene, struct Engine* engine, const mat4 view,
                   const mat4 draw_projection);
+
+/*
+ * Advance the water's simulation for the frame: the bed's bake and the swash film's step.
+ *
+ * Called at the FRAME TOP, before any pass draws, and not from water_render -- the film's tips
+ * are read by the opaque pass and by the late pass, so a step between them leaves those two
+ * readers a frame apart. It must also run on frames where the surface does not draw, or the
+ * lit surfaces read a film that stopped advancing.
+ *
+ * Idempotent per frame and safe with no water; both halves self-guard.
+ */
+void water_update(Water* water, const struct Scene* scene, float t, float dt);
 
 /*
  * Measure the transformed cascades and print them beside what the seeding predicted

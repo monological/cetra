@@ -825,6 +825,7 @@ static void print_usage(const char* prog) {
            (double)ground_shore_height());
     printf("      --gerstner-waves    Closed-form octaves instead of spectral cascades\n");
     printf("      --no-water-wetness  The swash leaves the sand exactly as it found it\n");
+    printf("      --no-water-film     Drop the swash solver; the closed-form run-up drives\n");
     printf("      --render-mode N     Debug view; 10 = HDR hotspots, 12 = extrapolation\n");
     printf("      --msaa N            MSAA samples (default 4); 1 has no partial coverage\n");
     printf("      --headless-jitter   Keep TAA jitter and the 0.70 render scale headless:\n");

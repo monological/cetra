@@ -26,6 +26,9 @@
 #include "cetra/sky.h"
 #include "cetra/gi_volume.h"
 #include "cetra/water.h"
+// For SHORE_CHAIN_HISTORY and SHORE_TAP_PERIODS, which --shore-probe reports the film's
+// history window against.
+#include "cetra/shore_chain.h"
 #include "cetra/procedural/water_waves.h"
 #include "cetra/app.h"
 
@@ -3109,37 +3112,56 @@ int main(int argc, char** argv) {
     /*
      * --shore-probe: the CPU twin of shoreRunup, printed.
      *
-     * The swash film runs on the CPU and has to be driven by the same run-up the shader
-     * draws, so that arithmetic exists twice -- there is no way to share a closed form
-     * between C and GLSL. `procedural/water_waves.c` is the precedent for that and also the
-     * warning: CLAUDE.md records of it that "nothing compares the two, which is the known
-     * gap". This one does not ship with the same hole in it.
+     * The swash film runs on the CPU and has to be driven by the same run-up the shader draws,
+     * so that arithmetic exists twice -- there is no way to share a closed form between C and
+     * GLSL. The CONSTANTS are shared (shaders/include/shore_constants.glsl), which is what
+     * rules out the likeliest divergence; what is left duplicated is the arithmetic.
      *
-     * What is printed is the contract the two copies SHARE: the edge is bounded by an
-     * analytic ceiling both sides compute, it moves, and it does not repeat at the primary
-     * period because the trains are incommensurate. A twin that drifts breaks one of those.
+     * BE EXACT ABOUT WHAT THIS ESTABLISHES, because the header here used to overstate it: every
+     * number below comes from the CPU copy, so the arm reading them checks that copy is
+     * self-consistent -- bounded by its own ceiling, spread across it, and not repeating a
+     * period later. It would not notice the shader's arithmetic changing. That is worth having
+     * (a twin that has gone degenerate shows up immediately) and it is not a GPU comparison.
+     *
+     * The window line is the one thing here that IS a cross-copy check: the solver's ring has to
+     * outspan the march the shader makes over it, and those are sized in different files.
      *
      * AFTER the loop, for the same reason --water-fft-probe is: the beach slope is measured
      * when the bed is baked, and the bed is baked on the first frame. Printed before, the
      * probe describes a beach of slope zero -- which is not the beach the frames were drawn
      * against, and a comparison against it would be a comparison with nothing.
+     *
+     * Every line leads with its KIND, which is the format --water-fft-probe was moved to and
+     * for the same reason: a reader telling a header from a sample by whether the first field
+     * parses as a number makes any new key a parse change.
      */
     if (args.shore_probe && scene->water) {
         const Water* w = scene->water;
         ShoreRunupParams sp;
         if (water_shore_runup_params(w, scene, &sp)) {
-            printf("shore-probe hs=%.6f omega=%.6f slope=%.6f upm=%.4f ceiling=%.6f\n",
+            const float period = 6.28318530718f / sp.surf_omega;
+            const float slot = shore_runup_slot_interval(&sp);
+            printf("shore-probe header hs=%.6f omega=%.6f slope=%.6f upm=%.4f ceiling=%.6f\n",
                    (double)sp.surf_height, (double)sp.surf_omega, (double)sp.beach_slope,
                    (double)sp.units_per_metre, (double)shore_runup_ceiling(&sp));
-            const float period = 6.28318530718f / sp.surf_omega;
+            // What the ring spans against what the taps ask for. Both in seconds, so the arm
+            // can assert coverage without knowing either file's slot count.
+            printf("shore-probe window slot=%.6f span=%.6f taps=%.6f\n", (double)slot,
+                   (double)(slot * (float)(SHORE_CHAIN_HISTORY - 1)),
+                   (double)(period * SHORE_TAP_PERIODS));
             const float span = w->extent * 0.35f;
             for (int i = 0; i < 4; i++) {
+                // x and z vary TOGETHER but not equally, so a sample says something about both
+                // axes. Passing one coordinate for both made the probe blind to which of them
+                // a change had moved.
                 const float x = -span + span * 2.0f * (float)i / 3.0f;
+                const float z = span - span * 1.4f * (float)i / 3.0f;
                 for (int k = 0; k < 3; k++) {
                     const float t = (float)k * period * 0.37f;
-                    printf("shore-probe %.4f %.4f t=%.4f edge=%.6f next=%.6f\n", (double)x,
-                           (double)x, (double)t, (double)shore_runup_edge(&sp, x, x, t),
-                           (double)shore_runup_edge(&sp, x, x, t + period));
+                    printf("shore-probe sample x=%.4f z=%.4f t=%.4f edge=%.6f next=%.6f\n",
+                           (double)x, (double)z, (double)t,
+                           (double)shore_runup_edge(&sp, x, z, t),
+                           (double)shore_runup_edge(&sp, x, z, t + period));
                 }
             }
         }

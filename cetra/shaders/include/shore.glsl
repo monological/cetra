@@ -19,7 +19,22 @@ uniform float waterLevel;
 uniform vec2 waterWindDir; // unit; the longest wave's travel direction
 uniform float waterExtent; // the shoaling bed's domain; nothing outside it has a shore
 
-const float OCEAN_GRAVITY = 9.81;
+/*
+ * The numbers this model stands on, in the one file both languages read.
+ *
+ * They are not here because shore_runup.c evaluates the same model on the CPU and a mirrored
+ * copy of a tuned constant is a silent divergence waiting to happen. The arithmetic below is
+ * still duplicated there -- that part cannot be shared and is reviewable by eye; a bare literal
+ * is not.
+ */
+#include "shore_constants.glsl"
+
+const float OCEAN_TRAIN_FREQ[3] =
+    float[3](OCEAN_TRAIN_FREQ_0, OCEAN_TRAIN_FREQ_1, OCEAN_TRAIN_FREQ_2);
+const float OCEAN_TRAIN_WEIGHT[3] =
+    float[3](OCEAN_TRAIN_WEIGHT_0, OCEAN_TRAIN_WEIGHT_1, OCEAN_TRAIN_WEIGHT_2);
+const float OCEAN_TRAIN_ANGLE[3] =
+    float[3](OCEAN_TRAIN_ANGLE_0, OCEAN_TRAIN_ANGLE_1, OCEAN_TRAIN_ANGLE_2);
 
 /*
  * How many world units make a metre, so that a constant which is a PHYSICAL LENGTH can be
@@ -117,103 +132,6 @@ uniform float waterSurfOmega;
 // The beach face's mean slope, rise per run. See the header; 0 with no shore.
 uniform float waterBeachSlope;
 
-// A saturated bore's crest as a fraction of the depth it runs over: H = 0.78 h.
-const float OCEAN_BORE_CREST = 0.39;
-// The lens's thickness behind its edge, as a fraction of the sand's own drop from the edge:
-// the tongue at the still line is this fraction of the run-up deep.
-const float OCEAN_LENS_RATIO = 0.15;
-// How far seaward of the still line the lens still owns the surface, as a fraction of R in
-// depth. Small: the swash is the last of the run-up, and the bore owns the rest.
-const float OCEAN_SWASH_REACH = 0.3;
-// The tongue climbs a third of a period after the bore reaches the shoreline.
-const float OCEAN_SWASH_LAG = 2.1;
-// The SETUP: the fraction of the run-up that is a standing rise of the mean water level at
-// the shore, about which the swash oscillates. Stockdon's R2% is setup plus swash, and the
-// setup term of it (0.35 beta sqrt(H0 L0)) is about this fraction of the whole on a beach
-// like this one. Oscillating the tongue about the STILL level instead retreated its tip
-// 0.6 R below still water at every trough -- metres offshore on a shallow slope -- and
-// drained the whole swash zone to a film with a step of water at its seaward edge.
-const float OCEAN_SWASH_SETUP = 0.4;
-// The bore stops shortening below this depth, in metres: the shallow-water wavenumber goes
-// as 1/sqrt(h) and would be infinite at the waterline. The lens takes its phase from here.
-const float OCEAN_SURF_MIN_DEPTH_M = 0.05;
-// Below this beach slope the travel-time form has nothing to stand on; it only bounds the
-// divide, for a bed with no shore in it.
-const float OCEAN_SURF_MIN_SLOPE = 0.01;
-// Waves per set, and how much the sets modulate the run-up: the biggest wave of a set is
-// 1 + this times the mean and the smallest 1 - this.
-const float OCEAN_SURF_GROUP_WAVES = 6.5;
-const float OCEAN_SURF_GROUP_MOD = 0.4;
-// Sine of the angle the arriving crest makes with the shore. See the header.
-const float OCEAN_SURF_OBLIQUE = 0.3;
-/*
- * THE INCIDENT WAVE IS SEVERAL TRAINS, not one, and this is what stops the swash reading
- * as a moving line however well its waveform is shaped.
- *
- * A sea arriving at a beach is a BAND of frequencies. One train is one sinusoid in space
- * and time, and a single sinusoid IS a straight front travelling along the shore -- there
- * is nothing for it to interfere with, so every point does the same thing a fixed phase
- * apart. Three trains at INCOMMENSURATE periods, each refracted to its own residual angle,
- * superpose into a front that is high where they agree and barely arrives where they
- * oppose, and because the ratios are irrational the pattern never repeats.
- *
- * The ratios are close together because refraction has already sorted the band -- what
- * reaches the swash is the peak and its neighbours, not the whole spectrum. Weights sum to
- * 1, so the combined crest is still 1 where they align and the amplitudes above stay the
- * amplitudes they say they are.
- *
- * Shallow water is NON-DISPERSIVE, which is what makes this nearly free: every frequency
- * travels at sqrt(gh), so all three share one travel time to shore and the expensive part
- * -- the bed fetch and the sqrt -- is computed once.
- */
-const float OCEAN_TRAIN_FREQ[3] = float[3](1.0, 0.79, 1.27);
-const float OCEAN_TRAIN_WEIGHT[3] = float[3](0.48, 0.30, 0.22);
-// Residual angle off the wind, radians, after refraction has turned each train shoreward.
-const float OCEAN_TRAIN_ANGLE[3] = float[3](0.0, 0.38, -0.26);
-// The bore waveform is ((1 + cos psi) / 2)^2, whose mean over a period is 3/8; this takes
-// it back to zero mean and a unit crest. (The skew below moves the mean by under 2%, which
-// is not worth a second constant.)
-const float OCEAN_BORE_MEAN = 0.375;
-// How far the crest leans forward: psi = phi + skew cos(phi). A bore is a FRONT, not a
-// peak -- steep face, long back -- and a symmetric crest read as a comb of cusps marching
-// in. The face is the LOW-phase side, since at a fixed point phase increases with time and
-// the front arrives first; this form is steep there and slow behind. (phi - skew sin(phi),
-// the obvious guess, is odd about the crest and only broadens it.) 0 is symmetric; 1 is
-// the sawtooth limit where the face goes vertical.
-const float OCEAN_BORE_SKEW = 0.6;
-// The swash leans harder than the bore that made it: uprush takes about a third of the
-// cycle and the backwash the other two thirds, where a bore is a travelling front whose
-// face is steep but whose back is not that long.
-const float OCEAN_SWASH_SKEW = 0.85;
-/*
- * SWASH CAPTURE, and this is the nonlinear one -- the reason real run-ups are so unequal.
- *
- * A bore arriving while the previous backwash is still draining runs into it: the two
- * collide, the incoming one is slowed and absorbed, and it stops well short. One arriving
- * just after the beach has drained meets nothing and runs much further. So the run-up
- * depends on the wave BEFORE it, which is what stops a swash zone looking metronomic.
- *
- * Approximated by scaling the run-up down by how big the previous cycle was -- a big one
- * leaves more water on the face to climb through. That needs no stored state, because the
- * previous cycle is this expression evaluated one primary period ago, and with
- * incommensurate trains that is a genuinely different number every wave.
- */
-const float OCEAN_SWASH_CAPTURE = 0.45;
-/*
- * BEACH CUSPS, from a subharmonic edge wave (Guza & Inman 1975).
- *
- * A shore traps waves that run ALONG it, and the one a normally-incident sea excites most
- * strongly is the subharmonic: half the incident frequency, standing, so alternate waves
- * run high where the one before ran short. That is the mechanism behind the scalloped
- * shoreline every real beach has, and it is what breaks the STRAIGHTNESS of the front
- * where the trains above break its uniformity.
- *
- * Its spacing is not a look constant: edge waves have their own dispersion relation,
- * omega^2 = g k sin(beta) for the lowest mode, so at half the incident frequency the cusp
- * spacing is 8 pi g sin(beta) / omega^2 -- 29 m for a 6.7 s sea on a 1:10 face, which is
- * where real cusps on such a beach are. Bigger swell gives wider cusps, as observed.
- */
-const float OCEAN_CUSP_AMP = 0.35;
 
 // The film's tips, where one is running. Included here rather than by each consumer so that
 // anything asking this file where the water is gets the same answer -- simulated if there is a
@@ -232,6 +150,27 @@ struct ShoreRunup {
 // travel time and the run-up cannot end up standing on two different numbers.
 float shoreSlope() {
     return max(waterBeachSlope, OCEAN_SURF_MIN_SLOPE);
+}
+
+/*
+ * How much shore a point has: 1 well inside the bed's domain, 0 outside it.
+ *
+ * SQUARE, because that is the shape the bed texture covers -- ocean.glsl addresses it as
+ * p / (waterExtent * 2) + 0.5, a square of half-width waterExtent centred on the origin. A lit
+ * surface has no bed to sample and wrote its own test as a CIRCLE of radius waterExtent, so the
+ * two disagreed about where the shore was: the square's corners shoaled in the water and were
+ * bone dry on the sand, and the outer quarter of the radius faded on one side only. This file
+ * exists so the sand and the sea agree by algebra rather than by two calibrations, and the
+ * domain is part of that agreement.
+ *
+ * The fade band keeps the edge off a hard cut, where a step would print the bed's boundary as a
+ * line across the ground.
+ */
+const float SHORE_DOMAIN_FADE = 0.75;
+
+float shoreDomain(vec2 p) {
+    vec2 d = abs(p) / max(waterExtent, 1.0e-4);
+    return 1.0 - smoothstep(SHORE_DOMAIN_FADE, 1.0, max(d.x, d.y));
 }
 
 // Stockdon's 2% exceedance run-up, METRES. Its own function because the ceiling below needs
@@ -389,12 +328,11 @@ struct ShoreSwash {
     float foam; // 0..1 whitewater the tip left behind
 };
 
-// Taps and how far back they reach. Three per primary period over three periods: fewer than
-// three per period and a wave can pass a point between taps, which reads as the swash
-// skipping; more than three periods back and the taps are describing water that has already
-// dried by the constants below.
-const int SHORE_TAPS = 9;
-const float SHORE_TAP_PERIODS = 3.0;
+// SHORE_TAPS and SHORE_TAP_PERIODS come from shore_constants.glsl -- three taps per primary
+// period over three periods. Fewer than three per period and a wave can pass a point between
+// taps, which reads as the swash skipping; more than three periods back and the taps describe
+// water that has already dried by the constants below. Shared with the C side because the
+// solver sizes its tip history from exactly this window.
 // How sharply the waterline reads, as a fraction of the run-up. The tongue's edge is a real
 // edge but a sub-pixel one, and a hard step aliases along the shore.
 const float SHORE_COVER_SOFT = 0.06;

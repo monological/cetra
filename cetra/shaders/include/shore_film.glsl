@@ -64,7 +64,6 @@ float shoreFilmTip(int slot, int col) {
 struct ShoreFilmSample {
     int a, b;  // the two nearest columns
     float t;   // 0 at a, 1 at b
-    float dist; // distance to the shoreline, world units
     bool found;
 };
 
@@ -73,7 +72,6 @@ ShoreFilmSample shoreFilmNearest(vec2 p) {
     s.a = 0;
     s.b = 0;
     s.t = 0.0;
-    s.dist = 0.0;
     s.found = false;
     if (!shoreFilmActive())
         return s;
@@ -126,11 +124,9 @@ ShoreFilmSample shoreFilmNearest(vec2 p) {
      * Smoothstep has zero derivative at its ends, so both sides meet at zero and the field is
      * C1 across the join. The value it interpolates is unchanged.
      */
-    float t = clamp(abs(along) / spacing, 0.0, 1.0);
     s.a = bi;
     s.b = other;
-    s.t = t * t * (3.0 - 2.0 * t);
-    s.dist = sqrt(best);
+    s.t = smoothstep(0.0, 1.0, abs(along) / spacing);
     s.found = true;
     return s;
 }
