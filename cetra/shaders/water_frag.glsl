@@ -410,24 +410,6 @@ void main() {
          * across the frame. Whitecaps run to the horizon on a real sea.
          */
         foam = smoothstep(WATER_FOAM_ON, WATER_FOAM_FULL, compression);
-        /*
-         * Break the coverage up, AFTER the physical selection has chosen where foam is.
-         *
-         * Value noise evaluated rather than sampled: it costs no sampler in a program that
-         * has none left, and the reference this is ported from computes it the same way.
-         * Two scales drifting at different rates, so the texture does not read as a
-         * stationary pattern the waves slide under.
-         *
-         * It may only take coverage AWAY. Foam that noise could add would be whitewater
-         * where the surface never folded, which is the painted-overlay look the whole
-         * Jacobian selection exists to avoid.
-         */
-        // Cycles per metre over a position in world units, so the frequency divides.
-        float noiseA = WATER_FOAM_NOISE_A_PER_M / waterUnitsPerMetre;
-        float noiseB = WATER_FOAM_NOISE_B_PER_M / waterUnitsPerMetre;
-        float breakup = waterValueNoise(WorldPos.xz * noiseA + time * 0.03) * 0.62 +
-                        waterValueNoise(WorldPos.xz * noiseB - time * 0.05) * 0.38;
-        foam *= mix(WATER_FOAM_BREAKUP_MIN, 1.0, smoothstep(0.25, 0.75, breakup));
     }
     /*
      * Shore foam, on both wave models. The whitewater a beach carries even where nothing is
@@ -448,6 +430,34 @@ void main() {
      */
     float band = smoothstep(0.0, 0.05, Shoal) * (1.0 - smoothstep(0.30, 0.72, Shoal));
     foam = max(foam, band * WATER_SHORE_FOAM);
+
+    /*
+     * Break the coverage up, AFTER the physical selection has chosen where foam is -- and
+     * over BOTH bands, which is the correction 11.44 owed this.
+     *
+     * It sat inside the spectral branch and so reached crest foam only. The shore band came
+     * out as a flat wash of grey, and once 11.44 widened the surf zone from 0.38 m to tens
+     * of metres that wash became most of the middle distance: a painted band across the
+     * frame, which is precisely the look the whole Jacobian selection exists to avoid. The
+     * band is a smooth function of depth and has no structure of its own, so if it does not
+     * borrow this one it has none.
+     *
+     * Value noise evaluated rather than sampled: it costs no sampler in a program that has
+     * none left, and the reference this is ported from computes it the same way. Two scales
+     * drifting at different rates, so the texture does not read as a stationary pattern the
+     * waves slide under.
+     *
+     * It may only take coverage AWAY. Foam the noise could ADD would be whitewater where
+     * nothing folded and no bed shoaled.
+     */
+    if (foam > 0.0) {
+        // Cycles per metre over a position in world units, so the frequency divides.
+        float noiseA = WATER_FOAM_NOISE_A_PER_M / waterUnitsPerMetre;
+        float noiseB = WATER_FOAM_NOISE_B_PER_M / waterUnitsPerMetre;
+        float breakup = waterValueNoise(WorldPos.xz * noiseA + time * 0.03) * 0.62 +
+                        waterValueNoise(WorldPos.xz * noiseB - time * 0.05) * 0.38;
+        foam *= mix(WATER_FOAM_BREAKUP_MIN, 1.0, smoothstep(0.25, 0.75, breakup));
+    }
 
     /*
      * The removed slope, as a lobe width (spec 11.42).
