@@ -1,7 +1,9 @@
+#include <float.h> // FLT_MAX, for the shoreline nearest-point sweep
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h> // water_fft_probe prints to stdout, like the CPU wave query
 #include <stdlib.h>
+#include <string.h>
 
 #include "water.h"
 
@@ -736,6 +738,43 @@ static void _water_bake_bed(Water* water, float units_per_metre) {
     water->bed_foreshore_slope = slope_count > 0 ? (float)(slope_sum / slope_count) : 0.0f;
 
     _water_trace_shoreline(water, heights, res, span);
+
+    /*
+     * ALONGSHORE COORDINATE into the bed's free .a channel.
+     *
+     * Every texel gets the arc length of the shoreline point nearest to it, which is what
+     * turns the bed from "how deep" into a shore-local frame: depth is the cross-shore axis
+     * and this is the along-shore one. Foam indexed by the pair rides the beach instead of
+     * tiling the world, which is what put every beach gate arm on Gerstner.
+     *
+     * Brute force, res^2 * shore_count -- 21 M distance tests at the default sizes, once per
+     * bake. A grid or a jump-flood would be faster and neither is worth its own bug surface
+     * for a pass that runs when the level or the extent moves.
+     *
+     * Left at zero with no shoreline, which is the open-ocean case: the consumers fall back
+     * to the world frame, exactly as before this existed.
+     */
+    if (water->shore_pts && water->shore_count > 0) {
+        for (int z = 0; z < res; z++) {
+            for (int x = 0; x < res; x++) {
+                // Texel centres, the same expression the height pass above sampled at.
+                const float wx = ((float)x + 0.5f) / (float)res * span - water->extent;
+                const float wz = ((float)z + 0.5f) / (float)res * span - water->extent;
+                float best_d2 = FLT_MAX;
+                float best_s = 0.0f;
+                for (int i = 0; i < water->shore_count; i++) {
+                    const float dx = water->shore_pts[i].x - wx;
+                    const float dz = water->shore_pts[i].z - wz;
+                    const float d2 = dx * dx + dz * dz;
+                    if (d2 < best_d2) {
+                        best_d2 = d2;
+                        best_s = water->shore_pts[i].s;
+                    }
+                }
+                heights[(z * res + x) * 4 + 3] = best_s;
+            }
+        }
+    }
 
     // The engine's own float-LUT upload: LINEAR / CLAMP_TO_EDGE / no mips is exactly
     // this texture's policy, so there is nothing here to hand-roll. Deleted and recreated

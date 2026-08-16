@@ -29,6 +29,9 @@ out float Jacobian;
 out float Shoal;
 // How much of its depth limit this crest is using; see OceanSurface.breaking.
 out float Breaking;
+// The shore-local frame: alongshore arc length and the water column that is its cross-shore
+// partner. See OceanBed.along -- foam indexed by these rides the beach instead of the world.
+out vec2 ShoreUV;
 out float FilteredMss;
 // The surf's crest fraction here, gated inshore -- see OceanSurface.surf.
 out float Surf;
@@ -94,6 +97,7 @@ void main() {
     Jacobian = s.jacobian;
     Shoal = s.shoal;
     Breaking = s.breaking;
+    ShoreUV = vec2(bed.along, bed.column);
     FilteredMss = s.filteredMss;
     Surf = s.surf;
 

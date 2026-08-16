@@ -208,6 +208,19 @@ struct OceanBed {
      */
     float column;
     vec2 dColumn; // d(column)/d(world x, world z): minus the bed's own gradient
+    /*
+     * ALONGSHORE arc length of the nearest point on the traced waterline, world units, baked
+     * into the bed's fourth channel (spec 11.45).
+     *
+     * With `column` as the cross-shore axis this completes a shore-local frame, which is the
+     * thing a height field alone cannot provide. Anything indexed by the pair follows the
+     * beach round a headland instead of tiling the world -- and world tiling is why foam was
+     * accumulated per cascade texel and why every beach arm had to run Gerstner.
+     *
+     * 0 where no shoreline was traced, i.e. open ocean. Consumers fall back to the world
+     * frame there, which is what they all did before this existed.
+     */
+    float along;
 };
 
 OceanBed oceanBed(vec2 p) {
@@ -219,12 +232,14 @@ OceanBed oceanBed(vec2 p) {
         b.dShoal = vec2(0.0);
         b.column = 1.0e6;
         b.dColumn = vec2(0.0);
+        b.along = 0.0;
         return b;
     }
     vec2 uv = p / (waterExtent * 2.0) + 0.5;
-    vec3 bed = texture(bedTex, clamp(uv, vec2(0.0), vec2(1.0))).rgb;
+    vec4 bed = texture(bedTex, clamp(uv, vec2(0.0), vec2(1.0)));
     b.column = waterLevel - bed.r;
     b.dColumn = -bed.gb;
+    b.along = bed.a;
     // The window converted into this world's units, so the shoal ramp is the same DEPTH of
     // water whatever a unit happens to be.
     float shoalMin = OCEAN_SHOAL_MIN_M * waterUnitsPerMetre;

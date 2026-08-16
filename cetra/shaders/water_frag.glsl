@@ -35,6 +35,7 @@ in vec4 PrevClip;
 in float Jacobian;
 in float Shoal;
 in float Breaking;
+in vec2 ShoreUV;
 in float Surf;
 // Mean square slope of the displacing bands that the vertex stage's footprint filtered
 // away. The other half of the geometry-to-BRDF handover: what left the mesh arrives here
@@ -531,7 +532,9 @@ void main() {
      * so the foam comes in and drains with the water instead of marking where the water was.
      */
     float band = 1.0 - smoothstep(0.0, WATER_SWASH_SHOAL, Shoal);
-    foam = max(foam, band * WATER_SHORE_FOAM * mix(WATER_SHORE_FOAM_REST, 1.0, Surf));
+    // Kept apart from the crest foam above, because the two are eroded in DIFFERENT FRAMES
+    // below and only their masks may be combined.
+    float shoreFoam = band * WATER_SHORE_FOAM * mix(WATER_SHORE_FOAM_REST, 1.0, Surf);
 
     /*
      * Breaking crests, on both wave models -- the surf zone between the swash and open water.
@@ -545,7 +548,7 @@ void main() {
      * Deliberately NOT gated by `band`: the swash is the last few metres and this is
      * everything seaward of it standing in too little water, which is what a surf zone is.
      */
-    foam = max(foam, WATER_SHORE_FOAM * Breaking);
+    shoreFoam = max(shoreFoam, WATER_SHORE_FOAM * Breaking);
 
     /*
      * Break the coverage up, AFTER the physical selection has chosen where foam is -- and
@@ -566,10 +569,23 @@ void main() {
      * It may only take coverage AWAY. Foam the noise could ADD would be whitewater where
      * nothing folded and no bed shoaled.
      */
+    /*
+     * TWO FRAMES, and only the MASKS are combined.
+     *
+     * Crest foam belongs to open water and is anchored in the world; shore foam belongs to
+     * the beach and is anchored in the shore's own (alongshore, cross-shore) frame, so it
+     * follows the coast round a headland instead of tiling with the world grid. Eroding one
+     * pattern at coordinates blended between the two smears it into streaks exactly where
+     * they hand over, which is the surf zone -- so each is eroded where it lives and the
+     * results are unioned. The reference this is ported from records the same finding.
+     *
+     * The shore frame degenerates to the world one with no traced shoreline (`along` is 0
+     * there), which is the open-ocean case and is what every frame did before this existed.
+     */
+    float noiseA = WATER_FOAM_NOISE_A_PER_M / waterUnitsPerMetre;
+    float noiseB = WATER_FOAM_NOISE_B_PER_M / waterUnitsPerMetre;
     if (foam > 0.0) {
         // Cycles per metre over a position in world units, so the frequency divides.
-        float noiseA = WATER_FOAM_NOISE_A_PER_M / waterUnitsPerMetre;
-        float noiseB = WATER_FOAM_NOISE_B_PER_M / waterUnitsPerMetre;
         float breakup = waterValueNoise(WorldPos.xz * noiseA + time * 0.03) * 0.62 +
                         waterValueNoise(WorldPos.xz * noiseB - time * 0.05) * 0.38;
         // The bar is read from the foam BEFORE it is eroded, so thinning raises it and the
@@ -577,6 +593,13 @@ void main() {
         float bar = WATER_FOAM_ERODE_HI - WATER_FOAM_ERODE_SPAN * foam;
         foam *= smoothstep(0.0, WATER_FOAM_ERODE_EDGE, breakup - bar);
     }
+    if (shoreFoam > 0.0) {
+        float breakup = waterValueNoise(ShoreUV * noiseA + time * 0.03) * 0.62 +
+                        waterValueNoise(ShoreUV * noiseB - time * 0.05) * 0.38;
+        float bar = WATER_FOAM_ERODE_HI - WATER_FOAM_ERODE_SPAN * shoreFoam;
+        shoreFoam *= smoothstep(0.0, WATER_FOAM_ERODE_EDGE, breakup - bar);
+    }
+    foam = max(foam, shoreFoam);
 
     /*
      * The removed slope, as a lobe width (spec 11.42).
