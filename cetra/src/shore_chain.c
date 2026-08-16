@@ -18,16 +18,37 @@
  * centimetre a frame, every column sat at exactly its seeded rest position, and the probe read
  * a tip spread of zero. That is the same mis-scaling spec 11.44 found across the water's other
  * physical lengths, arriving here through the one quantity that is an acceleration.
+ *
+ * THE `_M` SUFFIX IS THE ENFORCEMENT, so read it as one: a constant carrying it is a physical
+ * quantity that must be multiplied by upm somewhere, and one without it is dimensionless. That
+ * partition was broken while the artificial viscosity pair carried a length and a squared
+ * velocity under bare names -- which is exactly how a scale bug hides, since the only signal a
+ * reader has is the suffix. Anything added here has to pick a side.
  */
 #define SHORE_CHAIN_GRAVITY_M 9.81f
 // Bed friction at the seaward end, and how much more of it at the tip. A swash thins as it
 // climbs and a thin sheet is nearly all boundary layer, so the drag it feels is not constant.
 #define SHORE_CHAIN_FRICTION 0.3f
 #define SHORE_CHAIN_FRICTION_TIP 3.0f
-// Artificial viscosity on COMPRESSION only, which is what stops a bore front from going
-// vertical and then negative. Expansion is left alone: a draining sheet is not a shock.
-#define SHORE_CHAIN_VISC 0.25f
-#define SHORE_CHAIN_VISC_CAP 0.5f
+/*
+ * Artificial viscosity on COMPRESSION only, which is what stops a bore front from going
+ * vertical and then negative. Expansion is left alone: a draining sheet is not a shock.
+ *
+ * As a VELOCITY HEAD -- coefficient times du squared over g -- and that is what makes it scale.
+ * The term is added to eta, which is a length in world units, so it has to be one: du squared
+ * alone is a squared velocity, and it was being used as though a squared velocity were a
+ * height. Dividing by gravity gives a length AND gives it the right scaling for free, since du
+ * squared carries upm squared and gravity carries upm.
+ *
+ * What that was worth: at apps/tree's 22 units to the metre the old form was 484 times too
+ * strong before its cap and the cap was 22 times too small in physical terms, so the shock
+ * limiter degenerated into a near-constant two-centimetre offset on every compressing segment.
+ * The coefficient below is the old 0.25 times g, so the term is UNCHANGED where a unit is a
+ * metre and only worlds at another scale move.
+ */
+#define SHORE_CHAIN_VISC 2.4525f
+// The ceiling on that head, METRES, converted at use like every other length here.
+#define SHORE_CHAIN_VISC_CAP_M 0.5f
 // CFL caps. Without them a segment that briefly collapses hands back an acceleration large
 // enough to throw its node clean off the beach in one step.
 #define SHORE_CHAIN_ACCEL_CAP_M 25.0f
@@ -124,6 +145,7 @@ static void _step_column(ShoreChain* chain, int j, float slope, float upm, float
     const float gravity = SHORE_CHAIN_GRAVITY_M * upm;
     const float accel_cap = SHORE_CHAIN_ACCEL_CAP_M * upm;
     const float speed_cap = SHORE_CHAIN_SPEED_CAP_M * upm;
+    const float visc_cap = SHORE_CHAIN_VISC_CAP_M * upm;
     float* x = &chain->x[j * SHORE_CHAIN_NODES];
     float* u = &chain->u[j * SHORE_CHAIN_NODES];
     const float rest_seg = chain->rest_span / (float)(SHORE_CHAIN_NODES - 1);
@@ -140,8 +162,8 @@ static void _step_column(ShoreChain* chain, int j, float slope, float upm, float
         const float len = fmaxf(x[i + 1] - x[i], floor_len);
         const float du = u[i + 1] - u[i];
         // Compression only. An expanding segment is a sheet draining, not a shock.
-        const float q = du < 0.0f ? fminf(SHORE_CHAIN_VISC * du * du, SHORE_CHAIN_VISC_CAP)
-                                  : 0.0f;
+        const float q =
+            du < 0.0f ? fminf(SHORE_CHAIN_VISC * du * du / gravity, visc_cap) : 0.0f;
         eta[i] = slope * 0.5f * (x[i] + x[i + 1]) + chain->vol[i] / len + q;
     }
 
