@@ -177,6 +177,20 @@ const float OCEAN_SHOAL_FULL_M = 2.7;
 // A shore that heaves is the difference between a sea and a painted line; 0 here is what
 // made the waterline static however big the swell behind it was.
 const float OCEAN_SHOAL_HEAVE = 0.45;
+/*
+ * Tallest crest a given water column may carry, as a fraction of that column.
+ *
+ * ABOVE the breaking criterion, deliberately. A shoaling wave breaks at a height of about
+ * 0.78 of the depth, which is a crest of 0.39 -- and holding the surface to that made the
+ * run-up limp, because it is the wrong half of the problem. That number says when a wave
+ * STOPS being a wave; what climbs the sand afterwards is a bore, and a bore carries a sheet
+ * far deeper than the still water it is running over. The still-water column is the only
+ * depth this has, so the ratio has to absorb the difference.
+ *
+ * What it still guarantees is the part that matters: it goes to zero where the water does,
+ * so the sea cannot climb up through dry sand however energetic the swell behind it is.
+ */
+const float OCEAN_BREAK_CREST = 1.15;
 
 /*
  * 1 in open water, falling to 0 as the bed comes up, with its own gradient.
@@ -188,11 +202,17 @@ const float OCEAN_SHOAL_HEAVE = 0.45;
  * one wherever the bed is steep, which is the surf zone specifically. Zero over a flat
  * bed and zero with no bed at all, so the term costs nothing where it says nothing.
  *
- * .x is the factor; .yz is d(factor)/d(world x, world z).
+ * .x is the factor; .yz is d(factor)/d(world x, world z); .w is the raw water COLUMN, which
+ * the breaking clamp needs and the smoothstepped factor cannot give back -- it saturates at
+ * 0 across the whole shallow end, where the clamp has to keep distinguishing a centimetre of
+ * water from a metre. Unbounded above and negative where the bed is out of the water, both
+ * of which the consumer wants: a column of -2 says the sand here stands two units proud.
  */
-vec3 oceanShoal(vec2 p) {
+vec4 oceanShoal(vec2 p) {
+    // No bed is INFINITELY deep, not zero-deep: the clamp below must not bite where nothing
+    // has been said about the floor.
     if (bedAvailable == 0)
-        return vec3(1.0, 0.0, 0.0);
+        return vec4(1.0, 0.0, 0.0, 1.0e6);
     vec2 uv = p / (waterExtent * 2.0) + 0.5;
     vec3 bed = texture(bedTex, clamp(uv, vec2(0.0), vec2(1.0))).rgb;
     float column = waterLevel - bed.r;
@@ -205,7 +225,7 @@ vec3 oceanShoal(vec2 p) {
     // outside the window, where smoothstep has clamped and the bed can move without
     // the factor moving.
     float dFactor = 6.0 * u * (1.0 - u) / span;
-    return vec3(u * u * (3.0 - 2.0 * u), -dFactor * bed.g, -dFactor * bed.b);
+    return vec4(u * u * (3.0 - 2.0 * u), -dFactor * bed.g, -dFactor * bed.b, column);
 }
 
 struct OceanSurface {
@@ -386,9 +406,47 @@ vec3 oceanSpectralDisplacement(vec4 long0, vec4 med0) {
  * determinant each existed twice, and the Jacobian in particular is easy to "simplify"
  * back into a square, which is only correct while the gradient is zero.
  */
-OceanSurface oceanAssemble(vec2 p, vec3 disp, vec3 dispDx, vec3 dispDz, vec3 sh) {
+OceanSurface oceanAssemble(vec2 p, vec3 disp, vec3 dispDx, vec3 dispDz, vec4 sh) {
     float shoal = sh.x;
     OceanSurface s;
+    /*
+     * DEPTH-LIMITED height: a wave cannot be taller than the water it is standing in.
+     *
+     * The shoal factor alone does not say this. It is a smoothstep that saturates at 0
+     * across the whole shallow end, so once 11.44 let the height keep heaving there, a crest
+     * metres tall could still be drawn over sand standing well out of the water -- the sea
+     * climbing up THROUGH the beach rather than running up it. The factor cannot fix it
+     * either: it has already thrown away the difference between a centimetre of water and a
+     * metre, which is exactly the difference that decides how big a wave may be.
+     *
+     * So the clamp reads the raw column, and it is the breaking criterion: a shoaling wave
+     * breaks at H of about 0.78 times the depth, which is a crest of 0.39. That is a real
+     * limit rather than a fudge -- it is why surf exists, and it goes to zero exactly where
+     * the water does, so the run-up stops at the waterline on its own.
+     *
+     * SATURATED, not clamped. A clamp is C0: its derivative jumps at the point it engages,
+     * and it engages per VERTEX, so the jump runs along the lattice and prints as a scalloped
+     * band of cells down the shoreline. tanh reaches the same limit smoothly, is the identity
+     * for waves well inside it, and hands back its own slope -- so the derivative rows can be
+     * scaled by sech^2 and the normal keeps describing the surface that was drawn.
+     *
+     * Gated on the BED, not on a sentinel depth. Standing in for no-bed with a huge column
+     * and letting the arithmetic run put a float32 round-trip -- tanh of about 6e-8, scaled
+     * back by 1e6 -- in front of every open-water surface in the tree, for an identity. It
+     * moved both water goldens.
+     */
+    if (bedAvailable == 1) {
+        float crestLimit = max(OCEAN_BREAK_CREST * max(sh.w, 0.0), 1.0e-4);
+        float sat = tanh(disp.y / crestLimit);
+        // d(tanh)/du. The limit's OWN gradient is dropped here -- it is the same order as
+        // the shoal factor's product-rule term below and needs the bed slope, which arrives
+        // as d(factor)/dp rather than d(column)/dp. It shows only where the bed is steep AND
+        // the limit is biting, which is the last few units of the run-up.
+        float dsat = 1.0 - sat * sat;
+        disp.y = crestLimit * sat;
+        dispDx.y *= dsat;
+        dispDz.y *= dsat;
+    }
     /*
      * The shoal factor scales the HORIZONTAL fully and the height only partly (spec 11.44).
      *
@@ -435,7 +493,7 @@ vec3 oceanSpectralPosition(vec2 p, vec4 long0, vec4 med0, float shoal) {
  * the Gerstner path, where there is no sea state to ask. A calmer spectral ocean is a
  * lower wind speed, not a smaller number here.
  */
-OceanSurface oceanEvaluateSpectral(vec2 p, vec3 sh, float footprint) {
+OceanSurface oceanEvaluateSpectral(vec2 p, vec4 sh, float footprint) {
     // Explicit LOD, never the implicit derivative, and not only because the vertex stage
     // has none: oceanCascadeUv wraps with fract, so a screen-space derivative reads a whole
     // period across the tile seam and blurs a line through every one of them.
@@ -501,7 +559,7 @@ OceanSurface oceanEvaluateSpectral(vec2 p, vec3 sh, float footprint) {
  * `t` is used here and ignored by the spectral path, which reads cascades that
  * already hold one instant -- see the previous-position note in water_vert.
  */
-OceanSurface oceanEvaluateAt(vec2 p, float t, vec3 sh, float footprint) {
+OceanSurface oceanEvaluateAt(vec2 p, float t, vec4 sh, float footprint) {
     if (waveModel == 1)
         return oceanEvaluateSpectral(p, sh, footprint);
 
@@ -615,7 +673,7 @@ OceanSurface oceanEvaluateAt(vec2 p, float t, vec3 sh, float footprint) {
  * near the horizon -- where the level is the top one and the surface is the still plane --
  * the difference would be the whole wave.
  */
-vec3 oceanPreviousWorldAt(vec2 p, float tPrev, vec3 sh, float footprint) {
+vec3 oceanPreviousWorldAt(vec2 p, float tPrev, vec4 sh, float footprint) {
     if (waveModel == 0)
         return oceanEvaluateAt(p, tPrev, sh, footprint).world;
     float lodLong = oceanCascadeLod(footprint, 0);

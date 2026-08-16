@@ -79,7 +79,7 @@ void main() {
     // One shoal fetch per point, shared by the current surface and the previous position.
     // Both are functions of the same p, and asking twice cost a second bed texture fetch
     // plus its smoothstep and gradient on every vertex.
-    vec3 sh = oceanShoal(p);
+    vec4 sh = oceanShoal(p);
     OceanSurface s = oceanEvaluateAt(p, time, sh, footprint);
     float tPrev = time - uDeltaTime;
     vec3 prevWorld = oceanPreviousWorldAt(p, tPrev, sh, footprint);
