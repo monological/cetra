@@ -182,6 +182,25 @@ they are sized independently (`punctual_size_for` scales with layer count), so m
 one of the two changing resolution. That is a quality trade, not the free consolidation water got,
 and it should be priced against D0 rather than assumed cheaper than it.
 
+**There is a FIFTH escape, and spec 11.46 is the worked example: TRANSFORM the data so the shader
+never needs the original.** The other four move a lookup somewhere cheaper. This one removes the
+second lookup entirely, by noticing that a texture and a processed copy of it are rarely both
+needed at draw time.
+
+By-example stochastic texturing (Heitz & Neyret 2018) is the case that proves it, because it looks
+like it must cost two units and costs none. The method samples a histogram-transformed copy of a
+texture and maps the blended result back through the original histogram — apparently a second
+texture plus a lookup table. But **the shader never reads the original**, so the transform is
+written back over the source at bake time and takes the slot it already had; and the inverse CDF is
+64 entries × 3 channels = 768 bytes, which is the second escape's uniform space. `pbr_frag` gained
+a whole texturing method at **16/16 → 16/16**.
+
+The generalisation worth carrying: before spending a unit on a derived texture, ask whether the
+derivation could be *baked into* the source instead of sitting beside it. That works whenever the
+original is not needed at draw time, which is more often than the reflex suggests. It does not work
+when both are read in one pass — which is exactly the condition the first and third escapes exist to
+test, so the four compose rather than compete.
+
 **There is a THIRD escape, and it is the one nobody had written down: a unit that is idle in the
 pass you need it in.** The two escapes above trade on *consumers* being exclusive. This one trades on
 *passes* being exclusive, and it is strictly easier to satisfy. Unit 6 is set unavailable at the top
@@ -720,6 +739,15 @@ to new data by adding a layer". So:
 So of the five things this wall was said to block, **two are not blocked at all**, two are blocked
 only by a choice of texture layout, and exactly one is blocked outright. The sweep in the ledger
 section above has the per-unit occupancy and the type constraint that produces this.
+
+**A sixth item was never on the list and would have been assumed blocked: by-example stochastic
+texturing.** It reads a transformed copy of a texture plus an inverse histogram table, which sounds
+like two units in the most saturated program in the tree. It cost **zero** — the shader never reads
+the untransformed original, so the transform is baked over the source, and the table is 768 bytes of
+uniform space. Shipped in 11.46 at 16/16 → 16/16. It is the ledger's fifth escape, and the reason it
+belongs in this table's argument rather than beside it: the wall's list was assembled by asking what
+data a feature needs, when the question that decides blocking is what data it needs *at the same
+time*.
 
 **The wall's own framing is what misled here, and is worth restating.** "Sampler-saturated 16/16" is
 about *declarations*, which is a link-time property. Blocking is about *occupancy at the moment of
