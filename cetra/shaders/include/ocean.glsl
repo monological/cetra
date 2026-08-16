@@ -382,6 +382,30 @@ const float OCEAN_SURF_GROUP_WAVES = 6.5;
 const float OCEAN_SURF_GROUP_MOD = 0.4;
 // Sine of the angle the arriving crest makes with the shore. See the header.
 const float OCEAN_SURF_OBLIQUE = 0.3;
+/*
+ * THE INCIDENT WAVE IS SEVERAL TRAINS, not one, and this is what stops the swash reading
+ * as a moving line however well its waveform is shaped.
+ *
+ * A sea arriving at a beach is a BAND of frequencies. One train is one sinusoid in space
+ * and time, and a single sinusoid IS a straight front travelling along the shore -- there
+ * is nothing for it to interfere with, so every point does the same thing a fixed phase
+ * apart. Three trains at INCOMMENSURATE periods, each refracted to its own residual angle,
+ * superpose into a front that is high where they agree and barely arrives where they
+ * oppose, and because the ratios are irrational the pattern never repeats.
+ *
+ * The ratios are close together because refraction has already sorted the band -- what
+ * reaches the swash is the peak and its neighbours, not the whole spectrum. Weights sum to
+ * 1, so the combined crest is still 1 where they align and the amplitudes above stay the
+ * amplitudes they say they are.
+ *
+ * Shallow water is NON-DISPERSIVE, which is what makes this nearly free: every frequency
+ * travels at sqrt(gh), so all three share one travel time to shore and the expensive part
+ * -- the bed fetch and the sqrt -- is computed once.
+ */
+const float OCEAN_TRAIN_FREQ[3] = float[3](1.0, 0.79, 1.27);
+const float OCEAN_TRAIN_WEIGHT[3] = float[3](0.48, 0.30, 0.22);
+// Residual angle off the wind, radians, after refraction has turned each train shoreward.
+const float OCEAN_TRAIN_ANGLE[3] = float[3](0.0, 0.38, -0.26);
 // The bore waveform is ((1 + cos psi) / 2)^2, whose mean over a period is 3/8; this takes
 // it back to zero mean and a unit crest. (The skew below moves the mean by under 2%, which
 // is not worth a second constant.)
@@ -393,6 +417,39 @@ const float OCEAN_BORE_MEAN = 0.375;
 // the obvious guess, is odd about the crest and only broadens it.) 0 is symmetric; 1 is
 // the sawtooth limit where the face goes vertical.
 const float OCEAN_BORE_SKEW = 0.6;
+// The swash leans harder than the bore that made it: uprush takes about a third of the
+// cycle and the backwash the other two thirds, where a bore is a travelling front whose
+// face is steep but whose back is not that long.
+const float OCEAN_SWASH_SKEW = 0.85;
+/*
+ * SWASH CAPTURE, and this is the nonlinear one -- the reason real run-ups are so unequal.
+ *
+ * A bore arriving while the previous backwash is still draining runs into it: the two
+ * collide, the incoming one is slowed and absorbed, and it stops well short. One arriving
+ * just after the beach has drained meets nothing and runs much further. So the run-up
+ * depends on the wave BEFORE it, which is what stops a swash zone looking metronomic.
+ *
+ * Approximated by scaling the run-up down by how big the previous cycle was -- a big one
+ * leaves more water on the face to climb through. That needs no stored state, because the
+ * previous cycle is this expression evaluated one primary period ago, and with
+ * incommensurate trains that is a genuinely different number every wave.
+ */
+const float OCEAN_SWASH_CAPTURE = 0.45;
+/*
+ * BEACH CUSPS, from a subharmonic edge wave (Guza & Inman 1975).
+ *
+ * A shore traps waves that run ALONG it, and the one a normally-incident sea excites most
+ * strongly is the subharmonic: half the incident frequency, standing, so alternate waves
+ * run high where the one before ran short. That is the mechanism behind the scalloped
+ * shoreline every real beach has, and it is what breaks the STRAIGHTNESS of the front
+ * where the trains above break its uniformity.
+ *
+ * Its spacing is not a look constant: edge waves have their own dispersion relation,
+ * omega^2 = g k sin(beta) for the lowest mode, so at half the incident frequency the cusp
+ * spacing is 8 pi g sin(beta) / omega^2 -- 29 m for a 6.7 s sea on a 1:10 face, which is
+ * where real cusps on such a beach are. Bigger swell gives wider cusps, as observed.
+ */
+const float OCEAN_CUSP_AMP = 0.35;
 
 struct OceanSurf {
     float height; // the surface, world units above the still level, field included
@@ -400,15 +457,42 @@ struct OceanSurf {
     float crest;  // 0..1, how much bore or tongue is here -- what the foam reads
 };
 
-// The bore waveform and its derivative in phase.
-vec2 oceanBoreWave(float phase) {
-    float psi = phase + OCEAN_BORE_SKEW * cos(phase);
-    float dPsi = 1.0 - OCEAN_BORE_SKEW * sin(phase);
+// The bore waveform and its derivative in phase, leaning forward by `skew`.
+vec2 oceanBoreWave(float phase, float skew) {
+    float psi = phase + skew * cos(phase);
+    float dPsi = 1.0 - skew * sin(phase);
     float half1 = 0.5 + 0.5 * cos(psi);
     float w = (half1 * half1 - OCEAN_BORE_MEAN) / (1.0 - OCEAN_BORE_MEAN);
     // d/dpsi of half1^2 is -half1 sin(psi), then the chain through psi.
     float dw = -half1 * sin(psi) * dPsi / (1.0 - OCEAN_BORE_MEAN);
     return vec2(w, dw);
+}
+
+/*
+ * The incident wave at a point: OCEAN_TRAIN_FREQ superposed, as (value, d/dx, d/dz).
+ *
+ * `tau` is the shared travel time to shore and `dTau` its gradient -- shared because
+ * shallow water is non-dispersive. `lag` shifts the whole set (the swash climbs after the
+ * bore lands) and `skew` chooses how far the crests lean.
+ */
+vec3 oceanSurfTrains(vec2 p, float t, float tau, vec2 dTau, float lag, float skew) {
+    float sum = 0.0;
+    vec2 dSum = vec2(0.0);
+    for (int i = 0; i < 3; i++) {
+        float om = waterSurfOmega * OCEAN_TRAIN_FREQ[i];
+        float a = OCEAN_TRAIN_ANGLE[i];
+        float ca = cos(a), sa = sin(a);
+        vec2 dir = vec2(waterWindDir.x * ca - waterWindDir.y * sa,
+                        waterWindDir.x * sa + waterWindDir.y * ca);
+        // Each train's own deep-water wavenumber, so the three differ in the DIRECTION and
+        // the RATE their phase runs along the shore -- which is what makes the sum
+        // interfere in space as well as in time.
+        vec2 kv = dir * (om * om / (OCEAN_GRAVITY * waterUnitsPerMetre) * OCEAN_SURF_OBLIQUE);
+        vec2 w = oceanBoreWave(om * (t + tau) - dot(kv, p) - lag, skew);
+        sum += OCEAN_TRAIN_WEIGHT[i] * w.x;
+        dSum += OCEAN_TRAIN_WEIGHT[i] * w.y * (om * dTau - kv);
+    }
+    return vec3(sum, dSum);
 }
 
 /*
@@ -446,16 +530,6 @@ OceanSurf oceanSurf(vec2 p, OceanBed bed, float t, float fieldY, vec2 dFieldY) {
                     : vec2(0.0);
     float tauShore = 2.0 * sqrt(OCEAN_SURF_MIN_DEPTH_M) * invSlopeG;
 
-    // Deep-water wavenumber of the peak, per world unit, for the along-wind term; the
-    // group speed below is half the phase speed at that wavenumber.
-    float k0 = omega * omega / g / upm;
-    vec2 kObl = waterWindDir * (k0 * OCEAN_SURF_OBLIQUE);
-    float oblique = dot(kObl, p);
-    float phase = omega * (t + tau) - oblique;
-    vec2 dPhase = omega * dTau - kObl;
-    float phaseShore = omega * (t + tauShore) - oblique - OCEAN_SWASH_LAG;
-    vec2 dPhaseShore = -kObl;
-
     // Sets: an envelope moving downwind at the group speed. omega_g = omega / waves per
     // set, and k_g = omega_g / c_g with c_g = g / (2 omega).
     float omegaG = omega / OCEAN_SURF_GROUP_WAVES;
@@ -470,10 +544,10 @@ OceanSurf oceanSurf(vec2 p, OceanBed bed, float t, float fieldY, vec2 dFieldY) {
     float boreAmp = min(depthCrest, seaCrest);
     vec2 dBoreAmp = (bed.column > 0.0 && depthCrest < seaCrest) ? OCEAN_BORE_CREST * bed.dColumn
                                                                 : vec2(0.0);
-    vec2 bw = oceanBoreWave(phase);
+    vec3 bw = oceanSurfTrains(p, t, tau, dTau, 0.0, OCEAN_BORE_SKEW);
     float bore = boreAmp * env * bw.x * gate;
     vec2 dBore = dBoreAmp * env * bw.x * gate + boreAmp * dEnv * bw.x * gate +
-                 boreAmp * env * bw.y * dPhase * gate + boreAmp * env * bw.x * dGate;
+                 boreAmp * env * bw.yz * gate + boreAmp * env * bw.x * dGate;
 
     // The run-up: Stockdon's 2% exceedance, scaled so the biggest wave of a set reaches it.
     float l0 = 6.28318530718 * g / (omega * omega);
@@ -481,13 +555,46 @@ OceanSurf oceanSurf(vec2 p, OceanBed bed, float t, float fieldY, vec2 dFieldY) {
     float r2 = 1.1 * (0.35 * slope * sqrt(hl) + 0.5 * sqrt(hl * (0.563 * slope * slope + 0.004)));
     float runup = r2 / (1.0 + OCEAN_SURF_GROUP_MOD) * upm;
 
+    /*
+     * How far THIS wave gets, which is not how far the average one does. Two factors, and
+     * between them they are what stops the swash reading as one line moving in and out.
+     *
+     * CAPTURE: scaled down by how big the cycle before it was, since that water is still
+     * draining down the face. The previous cycle is this same expression one primary period
+     * ago -- no stored state -- and with incommensurate trains it is a different number
+     * every wave.
+     *
+     * CUSPS: the trapped subharmonic, standing along the shore. Alongshore is taken
+     * perpendicular to the wind, which is the same straight-shore approximation the
+     * obliquity above already makes.
+     */
+    float period = 6.28318530718 / omega;
+    vec3 sw = oceanSurfTrains(p, t, tauShore, vec2(0.0), OCEAN_SWASH_LAG, OCEAN_SWASH_SKEW);
+    vec3 swPrev =
+        oceanSurfTrains(p, t - period, tauShore, vec2(0.0), OCEAN_SWASH_LAG, OCEAN_SWASH_SKEW);
+    float prev = clamp(swPrev.x, 0.0, 1.0);
+    float capture = 1.0 - OCEAN_SWASH_CAPTURE * prev;
+    vec2 dCapture = (swPrev.x > 0.0 && swPrev.x < 1.0) ? -OCEAN_SWASH_CAPTURE * swPrev.yz
+                                                       : vec2(0.0);
+
+    float omegaE = 0.5 * omega;
+    // The lowest edge-wave mode: omega^2 = g k sin(beta), with the beach slope standing in
+    // for its sine, which they agree on to a per cent at any slope a beach has.
+    float kE = omegaE * omegaE / (g * slope * upm);
+    vec2 alongDir = vec2(-waterWindDir.y, waterWindDir.x);
+    float along = dot(p, alongDir);
+    float cuspTime = OCEAN_CUSP_AMP * cos(omegaE * t);
+    float cusp = 1.0 + cuspTime * cos(kE * along);
+    vec2 dCusp = -cuspTime * kE * sin(kE * along) * alongDir;
+
     // The lens: its edge on the beach face, about the setup and up to the run-up, and the
     // sheet behind it.
-    vec2 sw = oceanBoreWave(phaseShore);
+    float climb = capture * cusp;
+    vec2 dReachF = dCapture * cusp + capture * dCusp;
     float swash = OCEAN_SWASH_SETUP + (1.0 - OCEAN_SWASH_SETUP) * sw.x;
-    float dSwash = (1.0 - OCEAN_SWASH_SETUP) * sw.y;
-    float edge = runup * env * swash;
-    vec2 dEdge = runup * (dEnv * swash + env * dSwash * dPhaseShore);
+    vec2 dSwash = (1.0 - OCEAN_SWASH_SETUP) * sw.yz;
+    float edge = runup * climb * env * swash;
+    vec2 dEdge = runup * (dReachF * env * swash + climb * dEnv * swash + climb * env * dSwash);
     float lens = OCEAN_LENS_RATIO * edge - (1.0 - OCEAN_LENS_RATIO) * bed.column;
     vec2 dLens = OCEAN_LENS_RATIO * dEdge - (1.0 - OCEAN_LENS_RATIO) * bed.dColumn;
 
