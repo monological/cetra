@@ -756,6 +756,7 @@ typedef struct {
     // wavelength/amplitude/steepness/spread this app authors, which the spectral path ignores.
     int gerstner_waves;
     int no_water_wetness;
+    int no_water_film;
     // RenderMode override, 0 = PBR. The GUI has always had the combo; without this the debug
     // modes could not be reached headlessly, so anything they diagnose could not be captured.
     int render_mode;
@@ -869,6 +870,8 @@ static bool parse_args(int argc, char** argv, TreeArgs* a) {
             a->gerstner_waves = 1;
         } else if (!strcmp(s, "--no-water-wetness")) {
             a->no_water_wetness = 1;
+        } else if (!strcmp(s, "--no-water-film")) {
+            a->no_water_film = 1;
         } else if (!strcmp(s, "--render-mode") && has_next) {
             a->render_mode = atoi(argv[++i]);
         } else if (!strcmp(s, "--msaa") && has_next) {
@@ -1397,6 +1400,8 @@ int main(int argc, char** argv) {
             water->wave_model = args.gerstner_waves ? WATER_WAVES_GERSTNER : WATER_WAVES_FFT;
             if (args.no_water_wetness)
                 water->wetness = false;
+            if (args.no_water_film)
+                water->film = false;
             // Shorter and livelier than the swell 11.32 had to settle for, when a
             // world-space grid put a 17-unit cell here and anything under ~150 units read
             // as facets. The projected grid sizes its cells in pixels instead, so what a

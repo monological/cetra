@@ -20,6 +20,7 @@
 #define UBO_BINDING_CLUSTER_INDICES 2
 #define UBO_BINDING_VIEW            3
 #define UBO_BINDING_INSTANCES       4
+#define UBO_BINDING_SHORE_FILM      5
 
 // std140 byte sizes of the engine's blocks, asserted against the C mirror
 // structs (light_cluster.h) and validated against the driver's
@@ -42,6 +43,27 @@
 // bugs that ubo_validate_program_block exists to catch.
 #define UBO_INSTANCE_MAX         64
 #define UBO_INSTANCES_BLOCK_SIZE 12288
+
+/*
+ * The swash film's tips (spec 11.45), and the reason this feature costs no sampler.
+ *
+ * pbr_frag has been at 16/16 declared samplers since 4.10 and a simulated swash is state a
+ * shader has to read, so on the face of it the film was blocked behind freeing a unit. It is
+ * not: the ledger's constraint is on TEXTURE lookups, and clustered forward already
+ * establishes that a table small enough for uniform space costs zero units. What a lit
+ * surface needs is not the solver's nodes but the TIP per column at a few past times, and
+ * that is a few hundred floats.
+ *
+ * 64 columns x 12 history slots is 768 floats = 192 vec4, plus one vec4 of parameters and
+ * 32 vec4 of column origins (x, z, nx, nz). 3600 bytes, against a cluster block already
+ * carrying 12288 every frame.
+ */
+#define UBO_SHORE_FILM_COLS  64
+#define UBO_SHORE_FILM_SLOTS 12
+// params(1) + origins(64) + tips(64*12/4)
+#define UBO_SHORE_FILM_VEC4S \
+    (1 + UBO_SHORE_FILM_COLS + (UBO_SHORE_FILM_COLS * UBO_SHORE_FILM_SLOTS) / 4)
+#define UBO_SHORE_FILM_BLOCK_SIZE (UBO_SHORE_FILM_VEC4S * 16)
 
 typedef struct Ubo {
     GLuint id;

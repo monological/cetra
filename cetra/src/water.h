@@ -259,6 +259,15 @@ typedef struct Water {
     // shore_wetness can see it either way.
     bool wetness;
 
+    // false = no swash film: the water's edge is the closed-form run-up alone, which is every
+    // frame before spec 11.45. The film needs a traced shoreline, so it is inert without one.
+    bool film;
+    // The film itself and the buffer its tips reach the shaders through. Both lazily made,
+    // both NULL where no shoreline was traced.
+    struct ShoreChain* chain;
+    struct Ubo* film_ubo;
+    bool film_logged; // the one-shot report of what the solver settled to
+
     // The waterline, traced out of the baked bed (spec 11.45). NULL where the bed has no
     // shore in it at all -- open water, or a level below everything. Rebuilt with the bed.
     WaterShorePoint* shore_pts;

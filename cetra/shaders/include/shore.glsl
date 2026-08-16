@@ -215,6 +215,11 @@ const float OCEAN_SWASH_CAPTURE = 0.45;
  */
 const float OCEAN_CUSP_AMP = 0.35;
 
+// The film's tips, where one is running. Included here rather than by each consumer so that
+// anything asking this file where the water is gets the same answer -- simulated if there is a
+// simulation, closed form if there is not.
+#include "shore_film.glsl"
+
 // What the swash tongue is doing at a point, with no bed involved.
 struct ShoreRunup {
     float edge;  // the tongue's edge, world units above the still level
@@ -420,9 +425,20 @@ ShoreSwash shoreSwash(vec2 p, float h, float t) {
     float soft = max(SHORE_COVER_SOFT * shoreEdgeCeiling(), 1.0e-4);
     float coverNow = 0.0;
 
+    /*
+     * The SIMULATED tip where a film is running, and the closed form where none is.
+     *
+     * The film knows what the formula cannot: that this wave met the last one's backwash and
+     * stopped short. Where it exists the sand reads it, so the wet line follows the water the
+     * sea is actually drawing rather than a parallel estimate of it. The search is done once
+     * here rather than once per tap -- the columns do not move between taps, only the history
+     * slot does.
+     */
+    ShoreFilmSample film = shoreFilmNearest(p);
+
     for (int k = 0; k < SHORE_TAPS; k++) {
         float age = float(k) * dt;
-        float e = shoreRunup(p, t - age).edge;
+        float e = film.found ? shoreFilmEdge(film, age) : shoreRunup(p, t - age).edge;
         float cover = 1.0 - smoothstep(-soft, soft, h - e);
         if (k == 0)
             coverNow = cover;

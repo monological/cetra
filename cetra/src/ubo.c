@@ -72,6 +72,11 @@ bool ubo_wire_blocks(GLuint program_id) {
     ubo_wire_program_block(program_id, "ClusterIndexBlock", UBO_BINDING_CLUSTER_INDICES,
                            UBO_CLUSTER_INDICES_BLOCK_SIZE);
     ubo_wire_program_block(program_id, "ViewParams", UBO_BINDING_VIEW, UBO_VIEW_BLOCK_SIZE);
+    // The swash film's tips (spec 11.45). Declared by whatever includes shore.glsl -- the
+    // water surface and any lit program that asked for shore wetness -- and stripped as
+    // unreferenced everywhere else, which this call already treats as a no-op.
+    ubo_wire_program_block(program_id, "ShoreFilmBlock", UBO_BINDING_SHORE_FILM,
+                           UBO_SHORE_FILM_BLOCK_SIZE);
     return ubo_wire_program_block(program_id, "InstanceBlock", UBO_BINDING_INSTANCES,
                                   UBO_INSTANCES_BLOCK_SIZE);
 }

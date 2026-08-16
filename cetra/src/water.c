@@ -6,6 +6,8 @@
 #include "water.h"
 
 #include "engine.h"
+#include "shore_chain.h"
+#include "ubo.h"
 #include "ext/log.h"
 #include "ibl.h"
 #include "profiler.h"
@@ -409,6 +411,7 @@ Water* create_water(void) {
     water->surf = true;
     water->far_lod = true;
     water->wetness = true;
+    water->film = true;
     return water;
 }
 
@@ -419,6 +422,8 @@ void free_water(Water* water) {
     // cascade arrays are contiguous GLuint, so each family is one call rather than a
     // nest of loops over single deletes.
     free(water->shore_pts);
+    free(water->chain);
+    free_ubo(water->film_ubo);
     glDeleteVertexArrays(1, &water->grid_vao);
     glDeleteBuffers(1, &water->grid_vbo);
     glDeleteBuffers(1, &water->grid_ebo);
@@ -1245,6 +1250,103 @@ static void _water_surf_state(const Water* water, float units_per_metre, bool ff
  * With no water in the scene nothing calls this, waterSurfHeight stays at its zero default,
  * and the shader early-outs -- which is why no fallback publication is needed here.
  */
+/*
+ * Advance the swash film and publish its tips (spec 11.45).
+ *
+ * Runs before anything reads the water's edge, because the whole point is that the sea's lens
+ * and the sand's wetness come from ONE tip rather than from two estimates of it.
+ *
+ * Gated on a traced shoreline: with no shore there is nothing to run up, and the block
+ * publishes inactive so every consumer falls back to the closed form -- which is the frame
+ * every capture before this spec rendered.
+ */
+static void _water_step_film(Water* water, const struct Scene* scene, float t, float dt) {
+    const bool want = water->film && water->surf && water->shore_pts && water->shore_count >= 3;
+    if (!want) {
+        if (water->film_ubo) {
+            // Published inactive rather than left stale: a consumer reading last frame's tips
+            // after the film was switched off would drive its wet line from a dead sim.
+            const float zero[UBO_SHORE_FILM_VEC4S * 4] = {0};
+            ubo_upload(water->film_ubo, zero, UBO_SHORE_FILM_BLOCK_SIZE);
+        }
+        return;
+    }
+    if (!water->chain) {
+        water->chain = calloc(1, sizeof(ShoreChain));
+        if (!water->chain)
+            return;
+    }
+    if (!water->film_ubo) {
+        water->film_ubo = create_ubo(UBO_SHORE_FILM_BLOCK_SIZE, UBO_BINDING_SHORE_FILM);
+        if (!water->film_ubo)
+            return;
+    }
+
+    const float upm = _water_units_per_metre(scene);
+    const bool fft = water->wave_model == WATER_WAVES_FFT;
+    float hs, omega;
+    _water_surf_state(water, upm, fft, &hs, &omega);
+    ShoreRunupParams params = {
+        .surf_height = hs,
+        .surf_omega = omega,
+        .beach_slope = water->bed_foreshore_slope,
+        .units_per_metre = upm,
+        .wind_dir = {water->wind_dir[0], water->wind_dir[1]},
+    };
+    shore_chain_rebuild(water->chain, water, &params);
+    shore_chain_step(water->chain, &params, t, dt);
+    if (!water->chain->ready)
+        return;
+
+    /*
+     * Pack into std140. The layout is written out here rather than memcpy'd from a mirror
+     * struct because the tips are a ring buffer on this side and a flat array on the other --
+     * the ordering IS the interface, so it is spelled.
+     */
+    float block[UBO_SHORE_FILM_VEC4S * 4];
+    memset(block, 0, sizeof(block));
+    const float slope = params.beach_slope > 0.01f ? params.beach_slope : 0.01f;
+    block[0] = 1.0f;                                   // active
+    block[1] = dt > 0.0f ? dt : 1.0f / 60.0f;          // seconds per history slot
+    block[2] = (float)water->chain->head;              // newest slot
+    block[3] = slope;
+    for (int j = 0; j < UBO_SHORE_FILM_COLS; j++) {
+        float* c = &block[4 + j * 4];
+        c[0] = water->chain->origin[j * 2];
+        c[1] = water->chain->origin[j * 2 + 1];
+        c[2] = water->chain->normal[j * 2];
+        c[3] = water->chain->normal[j * 2 + 1];
+    }
+    float* tips = &block[4 + UBO_SHORE_FILM_COLS * 4];
+    for (int s = 0; s < UBO_SHORE_FILM_SLOTS; s++)
+        for (int j = 0; j < UBO_SHORE_FILM_COLS; j++)
+            tips[s * UBO_SHORE_FILM_COLS + j] = water->chain->tips[s][j];
+    ubo_upload(water->film_ubo, block, UBO_SHORE_FILM_BLOCK_SIZE);
+
+    /*
+     * One line, once the history has filled, and it is the only window into a solver that is
+     * otherwise invisible from outside the process. What it has to show is a SPREAD: a film
+     * whose columns all reach the same height is a formula with extra steps, and the whole
+     * claim of this phase is that one wave runs further than the next.
+     */
+    if (!water->film_logged && water->chain->steps >= 240) {
+        float lo = 1.0e30f, hi = -1.0e30f, mean = 0.0f;
+        for (int j = 0; j < UBO_SHORE_FILM_COLS; j++) {
+            const float v = water->chain->tips[water->chain->head][j];
+            lo = v < lo ? v : lo;
+            hi = v > hi ? v : hi;
+            mean += v;
+        }
+        mean /= (float)UBO_SHORE_FILM_COLS;
+        log_info("Water: swash film %d cols x %d nodes settled, tip %.2f to %.2f units "
+                 "(mean %.2f, spread %.2f) under a %.2f ceiling; Hs %.2f m, slope %.3f",
+                 SHORE_CHAIN_COLS, SHORE_CHAIN_NODES, (double)lo, (double)hi, (double)mean,
+                 (double)(hi - lo), (double)shore_runup_ceiling(&params),
+                 (double)params.surf_height, (double)params.beach_slope);
+        water->film_logged = true;
+    }
+}
+
 void water_bind_shore(const Water* water, const struct Scene* scene, ShaderProgram* program) {
     if (!water || !program || !program->uniforms)
         return;
@@ -1435,6 +1537,10 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
         return;
 
     _water_bake_bed(water, _water_units_per_metre(scene));
+
+    // The swash film, before anything reads where the water's edge is -- which is the sea's
+    // own lens and every lit surface the swash runs over. Same clock the surface is drawn at.
+    _water_step_film(water, scene, (float)engine->render_time, (float)engine->render_delta);
 
     // The spectral bands, before anything that samples them. No profiler scope of
     // its own: it would have to nest inside the caller's, and the simulation is
