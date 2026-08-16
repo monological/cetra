@@ -238,6 +238,10 @@ const float WATER_SWASH_SHOAL = 0.10;
 // as broken-up foam.
 const float WATER_FOAM_NOISE_A_PER_M = 0.42;
 const float WATER_FOAM_NOISE_B_PER_M = 1.31;
+// How much faster the breakup runs ALONGSHORE than across it, in the shore frame only. See the
+// use site: it is what makes shore foam a lacy line rather than a row of blobs with gaps of
+// bare coast between them.
+const float WATER_FOAM_ALONG_SCALE = 3.5;
 /*
  * The breakup is a COVERAGE THRESHOLD, not a brightness modulation, and the threshold rises
  * as the foam thins.
@@ -594,8 +598,20 @@ void main() {
         foam *= smoothstep(0.0, WATER_FOAM_ERODE_EDGE, breakup - bar);
     }
     if (shoreFoam > 0.0) {
-        float breakup = waterValueNoise(ShoreUV * noiseA + time * 0.03) * 0.62 +
-                        waterValueNoise(ShoreUV * noiseB - time * 0.05) * 0.38;
+        /*
+         * ANISOTROPIC in the shore frame, where the world frame above is not.
+         *
+         * Whitewater at a shoreline is a lacy LINE, not a field of blobs: it is continuous
+         * along the beach and structured across it. An isotropic pattern cannot say that --
+         * at the frequency the open sea wants, one clump spans a whole stretch of coast, and
+         * measured on the dome fixture that left an 80 degree sector with no foam on it at
+         * all while the arm walking the ring found the brightest thing on those rays was the
+         * dry crown. Running faster ALONGSHORE puts several clumps in the width of any ray,
+         * so the line is continuous and the texture is in it rather than instead of it.
+         */
+        vec2 shoreFreq = vec2(WATER_FOAM_ALONG_SCALE, 1.0);
+        float breakup = waterValueNoise(ShoreUV * shoreFreq * noiseA + time * 0.03) * 0.62 +
+                        waterValueNoise(ShoreUV * shoreFreq * noiseB - time * 0.05) * 0.38;
         float bar = WATER_FOAM_ERODE_HI - WATER_FOAM_ERODE_SPAN * shoreFoam;
         shoreFoam *= smoothstep(0.0, WATER_FOAM_ERODE_EDGE, breakup - bar);
     }

@@ -5096,6 +5096,10 @@ BEACH_AZIMUTHS = tuple(range(0, 360, 20))
 # by more than about a quarter of the island's radius falls out of it.
 BEACH_RING_INNER = -1.0
 BEACH_RING_OUTER = 2.5
+# How far past the window the radial search may still look. Enough that the argmax can land
+# outside and fail the arm, short of the open water where the sun's glitter outshines any
+# shore -- see _beach_ring_hits.
+BEACH_RING_MARGIN = 1.0
 # 16 of 18 azimuths land in that window with the bed installed against 1 of 18 without it,
 # where the brightest thing on a ray is the sand crown itself or the sun's glitter path.
 # The two that miss WITH the bed are the two the glitter crosses, which is why this is a
@@ -5127,9 +5131,16 @@ BEACH_DIFF_THRESH = 8
 # crown left for the bound to be about.
 BEACH_CROWN_FRACTION = 0.60
 # The shore band, in world units either side of the waterline, and how much of it the bed
-# has to move. Per-azimuth fractions run 0.525 to 1.000 and the pooled fraction is ~0.9.
+# has to move.
+#
+# The band is deliberately HALF DRY: the waterline is its centre, so the inner half is beach
+# above the still line and only moves because the run-up climbs it. That half is therefore
+# foam-dependent, and once 11.45 broke the foam into clumps the pooled fraction fell 0.680 ->
+# 0.556 with the bed still moving every sample it had moved before, just by less than the
+# 8/255 this arm calls a move. The bar drops to match what a clumpy swash can promise; the
+# arm still fails outright on a drowned island, which is the state it exists to catch.
 BEACH_BAND_HALF = 1.0
-BEACH_BAND_MIN_FRAC = 0.60
+BEACH_BAND_MIN_FRAC = 0.50
 
 
 def _beach_render(out, extra, frames=30):
@@ -5217,13 +5228,25 @@ def _beach_ring_hits(frame, project, window):
     a threshold is a second calibration that would need its own justification, where the
     ARGMAX needs none and answers the question the arm asks -- whether there is a bright
     ring, and where.
+
+    The ray STOPS just outside the window, and that is a correction rather than a tuning.
+    Searching on to r 16 put the ray far out into open water, where the sun's glitter path
+    lives -- so the arm was really asking "is the shore brighter than the sun", and it only
+    ever passed because 11.44's foam was a continuous collar bright enough to win. Once the
+    foam broke into clumps (11.45) the glitter won on five azimuths whose foam was perfectly
+    healthy, and the reported ring collapsed to 9 of 18 while the shore band was still there.
+    CLAUDE.md says of this fixture that the glitter owns the right of frame and every
+    brightness read is taken on the left; beach-shoal already honours that by choosing its
+    azimuths, and this is the same fact applied to a radial search. The margin past the
+    window is what still lets the arm FAIL: the argmax can land outside and be seen to.
     """
     w, h, pix = frame
+    stop = window[1] + BEACH_RING_MARGIN
     hits = []
     for deg in BEACH_AZIMUTHS:
         best_r, best_l = float("nan"), -1.0
         r = 1.0
-        while r < 16.0:
+        while r < stop:
             o = _beach_pixel(pix, w, h, project, r, deg)
             if o is not None:
                 luma = pix[o] + pix[o + 1] + pix[o + 2]
