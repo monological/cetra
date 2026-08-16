@@ -36,6 +36,7 @@
 #include "cetra/procedural/tree_gen.h"
 #include "cetra/procedural/rock.h"
 #include "cetra/procedural/sand.h"
+#include "cetra/procedural/stochastic_tex.h"
 #include "cetra/procedural/vegetation_tex.h"
 #include "ground.h"
 #include "player.h"
@@ -61,6 +62,11 @@ static Texture* leaf_sprite_tex = NULL;
 static Texture* island_albedo_tex = NULL;
 static Texture* island_normal_tex = NULL;
 static Texture* island_roughness_tex = NULL;
+// The inverse histogram of the sand albedo, filled at bake and handed to the island material.
+// Kept here rather than on the texture because it describes the TRANSFORM, and only a material
+// that opts into stochastic sampling has any use for it.
+static float sand_stochastic_lut[STOCHASTIC_LUT_SIZE * 3];
+static bool sand_stochastic_ready = false;
 
 // Bake one CPU buffer into a pooled texture and release the buffer. Going
 // through the pool (rather than a hand-rolled glTexImage2D) is what gets the
@@ -131,8 +137,19 @@ static void generate_procedural_textures(Scene* scene) {
     if (sand_field) {
         veg_noise_seed(4242);
         sand_height_field(sand_field, T, T, 0.7853982f); // 45 degrees across the UV diagonal
-        island_albedo_tex =
-            bake_texture(scene, sand_albedo(T, T, sand_field), T, T, 3, true, "proc_sand_albedo");
+        /*
+         * The albedo goes through the histogram transform before it is uploaded, so the
+         * shader can sample it stochastically and stop the tile being recognisable. See
+         * procedural/stochastic_tex.h; the material picks the table up below.
+         *
+         * Baked NON-sRGB, which is the one thing easy to get wrong here: the transform and
+         * its inverse are both defined on the stored codes, so the decode has to happen after
+         * the inverse table rather than in the sampler. pbr_frag does it there.
+         */
+        unsigned char* sand_alb = sand_albedo(T, T, sand_field);
+        stochastic_gaussianize(sand_alb, T, T, sand_stochastic_lut);
+        sand_stochastic_ready = sand_alb != NULL;
+        island_albedo_tex = bake_texture(scene, sand_alb, T, T, 3, false, "proc_sand_albedo");
         island_normal_tex =
             bake_texture(scene, sand_normal(T, T, sand_field), T, T, 3, false, "proc_sand_normal");
         island_roughness_tex = bake_texture(scene, sand_roughness(T, T, sand_field), T, T, 3,
@@ -1271,6 +1288,19 @@ int main(int argc, char** argv) {
     // The beach remembers the swash. Full response: this IS the sand the waves run over, and
     // the run-up bounds itself, so there is nothing here to scale down.
     island_material->shore_wetness = 1.0f;
+    /*
+     * Sample the sand stochastically, so the tile stops being recognisable.
+     *
+     * The UVs run 0 to 40 across the island, so one UV unit is one tile, and a lattice cell of
+     * that order gives each tile-sized patch of ground its own offset into the texture. Gated
+     * on the transform having actually happened -- without the table the shader would undo a
+     * transform the map never had.
+     */
+    if (sand_stochastic_ready) {
+        island_material->stochastic_scale = 1.0f;
+        memcpy(island_material->stochastic_lut, sand_stochastic_lut,
+               sizeof(sand_stochastic_lut));
+    }
 
     /*
      * The seabed shares the island's sand maps, and now its vertex colours too, so the two

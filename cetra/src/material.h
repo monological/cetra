@@ -7,6 +7,8 @@
 
 #include "texture.h"
 #include "program.h"
+// For STOCHASTIC_LUT_SIZE, the width of the inverse table a material carries.
+#include "procedural/stochastic_tex.h"
 
 // How a material's alpha is rendered (glTF alphaMode semantics).
 //
@@ -122,6 +124,20 @@ typedef struct Material {
     // shape as wind_response above: the Water owns the run-up, a material opts in here.
     // 0 = the surface never darkens, whatever the sea does.
     float shore_wetness;
+
+    /*
+     * Stochastic albedo sampling (see include/stochastic.glsl), in UV units per lattice cell.
+     * 0 = a plain lookup, which is every material that has not asked.
+     *
+     * Opt-in because the albedo map has to have been through stochastic_gaussianize first --
+     * the shader samples a transformed texture and undoes the transform with a table, so a
+     * material that sets this without a baked map renders its own histogram wrong. Costs three
+     * texture fetches in place of one where it is on.
+     */
+    float stochastic_scale;
+    // The inverse CDF that undoes the transform, as stochastic_gaussianize filled it: one
+    // vec3 per entry, so it uploads in a single call. Meaningless unless stochastic_scale > 0.
+    float stochastic_lut[STOCHASTIC_LUT_SIZE * 3];
 
     // Which displacement model wind_response drives (pbr_vert.glsl windOffset):
     //   0 = cloth: the AABB height gradient that pins the top and swings the hem

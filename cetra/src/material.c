@@ -211,6 +211,16 @@ Material* create_material() {
     material->wind_response = 0.0f;    // rigid until a material opts into wind
     material->shore_wetness = 0.0f;    // never wetted by the swash until a material asks
     material->wind_mode = 0;           // cloth displacement unless a material asks for vegetation
+    // A plain albedo lookup until a material both asks and supplies a transformed map. The
+    // identity table below is what the shader would apply if it ran anyway, so a half-wired
+    // material renders its texture rather than a black one.
+    material->stochastic_scale = 0.0f;
+    for (int i = 0; i < STOCHASTIC_LUT_SIZE; i++) {
+        const float v = ((float)i + 0.5f) / (float)STOCHASTIC_LUT_SIZE;
+        material->stochastic_lut[i * 3 + 0] = v;
+        material->stochastic_lut[i * 3 + 1] = v;
+        material->stochastic_lut[i * 3 + 2] = v;
+    }
 
     material->albedo_tex = NULL;
     material->normal_tex = NULL;

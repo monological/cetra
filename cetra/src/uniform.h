@@ -69,4 +69,12 @@ void uniform_set_vec4(UniformManager* mgr, const char* name, const float* value)
 void uniform_set_mat3(UniformManager* mgr, const char* name, const float* value);
 void uniform_set_mat4(UniformManager* mgr, const char* name, const float* value);
 
+// `count` consecutive vec3, from `count * 3` tightly packed floats.
+//
+// UNCACHED, unlike every setter above, and that is a correctness requirement rather than a
+// choice: the cache slot is 16 floats, so an array would run off the end of it. The redundant
+// write it therefore cannot skip is the price, which is why this is for tables a material
+// changes rarely and not for anything set per draw.
+void uniform_set_vec3_array(UniformManager* mgr, const char* name, const float* values, int count);
+
 #endif // _UNIFORM_H_

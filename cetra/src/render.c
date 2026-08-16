@@ -201,6 +201,13 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
     // Shore wetness (0 = never wetted). Per material switch for the same reason wind is:
     // a material that did not ask for it resets the uniform and the shader early-outs.
     uniform_set_float(u, "uShoreWetness", material->shore_wetness);
+    // Stochastic albedo sampling (0 = a plain lookup). The table goes up whenever the scale
+    // does rather than being cached per material: it is 768 bytes, where deciding whether to
+    // skip it would need per-program state this call deliberately does not keep.
+    uniform_set_float(u, "stochasticScale", material->stochastic_scale);
+    if (material->stochastic_scale > 0.0f)
+        uniform_set_vec3_array(u, "stochasticLut", material->stochastic_lut,
+                               STOCHASTIC_LUT_SIZE);
 
     // Dedicated (native-resolution) sampler units. The scalar masks
     // (roughness/metallic/ao/opacity/microsurface/anisotropy) are no

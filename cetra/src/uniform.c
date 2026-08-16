@@ -238,6 +238,16 @@ void uniform_set_vec3(UniformManager* mgr, const char* name, const float* value)
         glUniform3fv(loc, 1, value);
 }
 
+void uniform_set_vec3_array(UniformManager* mgr, const char* name, const float* values,
+                            int count) {
+    if (!mgr || !values || count <= 0)
+        return;
+    // Straight to GL: see the header for why this one cannot use the value cache.
+    const GLint loc = uniform_location(mgr, name);
+    if (loc >= 0)
+        glUniform3fv(loc, (GLsizei)count, values);
+}
+
 void uniform_set_vec4(UniformManager* mgr, const char* name, const float* value) {
     GLint loc;
     if (uniform_write_wanted(mgr, name, value, 4, &loc))

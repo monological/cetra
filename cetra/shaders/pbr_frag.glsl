@@ -210,6 +210,13 @@ uniform float time;
 // 0 = this material is never wetted, whatever the sea does. See Material.shore_wetness.
 uniform float uShoreWetness;
 
+/*
+ * By-example stochastic albedo (spec 11.45). Declares no sampler of its own -- it re-reads
+ * albedoTex, whose contents a material opting in has had transformed -- and keeps its inverse
+ * table in uniform space, so it fits a program that has been at sixteen samplers since 4.10.
+ */
+#include "stochastic.glsl"
+
 // Open porosity of sand that the swash fills, from Lagarde's 25-50% band for natural
 // materials. What the diffuse albedo loses when the pores are full.
 const float SHORE_POROSITY = 0.38;
@@ -998,10 +1005,26 @@ void main() {
     vec3 albedoMap = albedo;
     float texAlpha = 1.0;  // Alpha from albedo texture (for hair/foliage)
     if (albedoTexExists > 0) {
-        // sRGB texture: the hardware already decoded the sample to linear
-        vec4 albedoSample = texture(albedoTex, uv);
-        albedoMap = albedo * albedoSample.rgb;
-        texAlpha = albedoSample.a;
+        if (stochasticScale > 0.0) {
+            /*
+             * The map is stored NON-sRGB on this path, and the decode happens here instead.
+             *
+             * The histogram transform and its inverse table are both defined on the stored
+             * codes, so a hardware sRGB decode sitting between the two would put the blend in
+             * a different space from the one the histogram was measured in -- the inverse
+             * would then be undoing a transform of a curve of the values it was built from.
+             * Sample, blend, invert, and only then go to linear.
+             *
+             * No alpha: the transform is per channel over rgb, and a material wanting cutout
+             * foliage wants an untransformed map anyway.
+             */
+            albedoMap = albedo * sRGBToLinear(stochasticSample(albedoTex, uv, uv));
+        } else {
+            // sRGB texture: the hardware already decoded the sample to linear
+            vec4 albedoSample = texture(albedoTex, uv);
+            albedoMap = albedo * albedoSample.rgb;
+            texAlpha = albedoSample.a;
+        }
     }
 
     // Apply vertex color to tint albedo (glTF vertex colors)
