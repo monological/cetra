@@ -70,6 +70,23 @@ uniform float waterExtent;
 uniform vec3 waterCamPos;
 
 /*
+ * How many world units make a metre, so that a constant which is a PHYSICAL LENGTH can be
+ * written as one (spec 11.44).
+ *
+ * The water carries a dozen such numbers -- the depth a wave shoals over, the distance the
+ * short band fades across, the refraction bend's ceiling, the caustic depth window -- and
+ * every one of them was a bare world-unit literal, correct only where a unit happened to be
+ * a metre. apps/tree runs at 22 units per metre, so its waves shoaled over 12 CENTIMETRES of
+ * depth and its surf zone was 0.38 m wide, which is the hard line at the shore rather than a
+ * beach.
+ *
+ * Derived from Sky.world_units_per_km, which is the engine's existing authority on this and
+ * already drives the atmosphere. One number, one meaning: an ocean with a private copy would
+ * be free to disagree with the sky about how big the world is, which is the whole defect.
+ */
+uniform float waterUnitsPerMetre;
+
+/*
  * PROJECTED GRID placement (spec 11.35).
  *
  * The lattice is a fixed grid in NDC rather than in the world: each vertex is a ray
@@ -147,11 +164,15 @@ vec2 oceanProjectedPosition(vec2 lattice, mat4 view, mat4 projection) {
     return waterCamPos.xz + rd.xz * t;
 }
 
-// Depth over which a wave goes from fully shoaled to fully open-water. Waves
+// Depth over which a wave goes from fully shoaled to fully open-water, IN METRES. Waves
 // shorten and steepen as the bed rises under them; below the floor there is not
 // enough water column left to carry any displacement at all.
-const float OCEAN_SHOAL_MIN = 0.14;
-const float OCEAN_SHOAL_FULL = 2.7;
+//
+// These two decide how wide the surf zone is: its width on the ground is this span divided
+// by the bed's slope. Read as world units they were 12 cm of depth in a world at 22 units
+// per metre, which is no surf zone at all.
+const float OCEAN_SHOAL_MIN_M = 0.14;
+const float OCEAN_SHOAL_FULL_M = 2.7;
 
 /*
  * 1 in open water, falling to 0 as the bed comes up, with its own gradient.
@@ -171,8 +192,11 @@ vec3 oceanShoal(vec2 p) {
     vec2 uv = p / (waterExtent * 2.0) + 0.5;
     vec3 bed = texture(bedTex, clamp(uv, vec2(0.0), vec2(1.0))).rgb;
     float column = waterLevel - bed.r;
-    float span = OCEAN_SHOAL_FULL - OCEAN_SHOAL_MIN;
-    float u = clamp((column - OCEAN_SHOAL_MIN) / span, 0.0, 1.0);
+    // The window converted into this world's units, so the shoal ramp is the same DEPTH of
+    // water whatever a unit happens to be.
+    float shoalMin = OCEAN_SHOAL_MIN_M * waterUnitsPerMetre;
+    float span = (OCEAN_SHOAL_FULL_M - OCEAN_SHOAL_MIN_M) * waterUnitsPerMetre;
+    float u = clamp((column - shoalMin) / span, 0.0, 1.0);
     // d/dp smoothstep(u(p)) = 6u(1-u) * du/dp, and du/dp = -d(bed)/dp / span. Flat
     // outside the window, where smoothstep has clamped and the bed can move without
     // the factor moving.

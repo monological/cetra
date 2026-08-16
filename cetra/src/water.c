@@ -942,6 +942,27 @@ static void _water_fft_transform(ShaderProgram* fft, GLuint twiddle, const GLuin
  * default is a type mismatch against whatever 2D texture happens to occupy that unit, not an
  * unused binding.
  */
+/*
+ * How many world units make a metre, for every constant in the ocean that is a physical
+ * length (spec 11.44).
+ *
+ * Taken from the SKY, which already owns this fact and already spends it on the atmosphere.
+ * A second copy on Water would be a second answer to one question about the world, and an
+ * ocean disagreeing with its own sky about the size of a metre is the defect this fixes
+ * rather than a shape it should take.
+ *
+ * Falls back to the glTF convention when there is no sky, on the same reasoning sky.c's own
+ * default rests on: 1 unit is a metre until something says otherwise. Never zero -- the
+ * shoal window divides by this.
+ */
+static void _water_set_units_per_metre(UniformManager* u, const struct Scene* scene) {
+    const float per_km =
+        (scene && scene->sky && scene->sky->world_units_per_km > 0.0f)
+            ? scene->sky->world_units_per_km
+            : 1000.0f;
+    uniform_set_float(u, "waterUnitsPerMetre", per_km / 1000.0f);
+}
+
 static void _water_bind_cascades(const Water* water, UniformManager* u, bool fft) {
     for (int c = 0; c < WATER_CASCADE_COUNT; c++) {
         for (int t = 0; t < 2; t++) {
@@ -958,7 +979,8 @@ static void _water_bind_cascades(const Water* water, UniformManager* u, bool fft
     }
 }
 
-static void _water_run_spectral(Water* water, struct Engine* engine, float time) {
+static void _water_run_spectral(Water* water, const struct Scene* scene, struct Engine* engine,
+                                float time) {
     ShaderProgram* evolve = get_engine_shader_program_by_name(engine, "water_spectrum");
     ShaderProgram* fft = get_engine_shader_program_by_name(engine, "water_fft");
     if (!evolve || !fft) {
@@ -1069,6 +1091,9 @@ static void _water_run_spectral(Water* water, struct Engine* engine, float time)
         glBindTexture(GL_TEXTURE_2D, water->foam_tex[src]);
         uniform_set_int(foam->uniforms, "prevFoam", WATER_FOAM_UNIT);
         uniform_set_int(foam->uniforms, "foamHistoryAvailable", water->foam_frames > 0 ? 1 : 0);
+        // ocean.glsl declares it, so it has to be set here too even though this pass reads
+        // no length: an unset uniform is 0, and the shoal window divides by it.
+        _water_set_units_per_metre(foam->uniforms, scene);
         uniform_set_float(foam->uniforms, "foamDt", (float)engine->render_delta);
         uniform_set_float(foam->uniforms, "foamDecay", water->foam_decay);
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
@@ -1104,7 +1129,7 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
     if (fft) {
         if (!_water_ensure_spectra(water))
             return;
-        _water_run_spectral(water, engine, (float)engine->render_time);
+        _water_run_spectral(water, scene, engine, (float)engine->render_time);
     }
 
     ShaderProgram* program = get_engine_shader_program_by_name(engine, "water");
@@ -1140,6 +1165,7 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
 
     uniform_set_float(u, "waterLevel", water->level);
     uniform_set_float(u, "waterExtent", water->extent);
+    _water_set_units_per_metre(u, scene);
     // The projector's origin. Every lattice vertex is a ray from here through its own
     // screen position, so this is the surface's whole placement input.
     uniform_set_vec3(u, "waterCamPos", (const float*)&engine->camera->position);

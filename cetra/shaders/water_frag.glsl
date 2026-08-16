@@ -151,16 +151,19 @@ const float WATER_MIN_COVERAGE = 0.02;
 // code short of 1.0 at 24 bits, so a real surface sitting exactly on the far plane is the only
 // thing this can misread -- and that surface is already at the limit of what depth can express.
 const float WATER_DEPTH_EMPTY = 0.99999;
-// Ceiling on the refraction bend, in world units. The bend is a screen-space
+// Ceiling on the refraction bend, in METRES. The bend is a screen-space
 // approximation, and past a metre or so of offset the sample it reaches has
 // little to do with the ray -- the validity check below catches the wrong ones,
 // but not reaching for them is cheaper than rejecting them.
-const float WATER_MAX_BEND = 1.0;
+const float WATER_MAX_BEND_M = 1.0;
 // The short cascade's resolved slope is faded out between these view distances,
 // its energy moving into roughness. Metres: at 12 m tiling, past ~120 m a period
 // is a couple of pixels and a literal normal there is aliasing, not detail.
-const float WATER_SHORT_NEAR = 42.0;
-const float WATER_SHORT_FAR = 118.0;
+//
+// These were world-unit literals saying the same numbers, which is why they read as metres
+// already -- and why they were wrong by the world's scale everywhere a unit was not one.
+const float WATER_SHORT_NEAR_M = 42.0;
+const float WATER_SHORT_FAR_M = 118.0;
 const float WATER_SHORT_SLOPE_GAIN = 0.42;
 // Jacobian compression at which foam starts and saturates.
 const float WATER_FOAM_ON = 0.16;
@@ -174,10 +177,14 @@ const float WATER_FOAM_MAX = 0.62;
 // Shore band strength. Lower than a breaking crest: this is water going shallow,
 // not water breaking, and at crest strength every lake edge would read as surf.
 const float WATER_SHORE_FOAM = 0.45;
-// Foam breakup, in cycles per world unit. Two scales an octave and a half apart, which is
+// Foam breakup, in cycles per METRE. Two scales an octave and a half apart, which is
 // enough that their sum does not read as either one of them.
-const float WATER_FOAM_NOISE_A = 0.42;
-const float WATER_FOAM_NOISE_B = 1.31;
+//
+// Per world unit, these put 0.42 cycles in every 4.5 cm of a world at 22 units to the
+// metre -- breakup finer than a pixel, which averages to a flat wash rather than reading
+// as broken-up foam.
+const float WATER_FOAM_NOISE_A_PER_M = 0.42;
+const float WATER_FOAM_NOISE_B_PER_M = 1.31;
 // How much coverage the breakup may take away at its darkest. Not zero: foam that
 // disappears entirely in the troughs of the noise reads as holes rather than as texture.
 const float WATER_FOAM_BREAKUP_MIN = 0.35;
@@ -192,10 +199,12 @@ const float WATER_FOAM_BREAKUP_MIN = 0.35;
 const float WATER_CAUSTIC_ON = 0.060;
 const float WATER_CAUSTIC_FULL = 0.27;
 const float WATER_CAUSTIC_GAIN = 1.35;
-// Caustics need water above them to focus through, and lose coherence with depth.
-const float WATER_CAUSTIC_SHALLOW = 0.35;
-const float WATER_CAUSTIC_DEEP_ON = 9.0;
-const float WATER_CAUSTIC_DEEP_OFF = 20.0;
+// Caustics need water above them to focus through, and lose coherence with depth. Path
+// lengths, so METRES: a window written in world units puts the whole effect in the first
+// centimetre of a world at 22 units to the metre.
+const float WATER_CAUSTIC_SHALLOW_M = 0.35;
+const float WATER_CAUSTIC_DEEP_ON_M = 9.0;
+const float WATER_CAUSTIC_DEEP_OFF_M = 20.0;
 
 /*
  * COX-MUNK SUN GLITTER (spec 11.42).
@@ -330,7 +339,9 @@ void main() {
         vec2 shortUv = oceanCascadeUv(WorldPos.xz, 2);
         vec4 short0 = textureLod(cascade2_0, shortUv, 0.0);
         vec4 short1 = textureLod(cascade2_1, shortUv, 0.0);
-        float fade = 1.0 - smoothstep(WATER_SHORT_NEAR, WATER_SHORT_FAR, length(ViewPos));
+        float fade = 1.0 - smoothstep(WATER_SHORT_NEAR_M * waterUnitsPerMetre,
+                                      WATER_SHORT_FAR_M * waterUnitsPerMetre,
+                                      length(ViewPos));
         vec2 shortSlope = short1.rg * fade;
         N = normalize(N + vec3(-shortSlope.x, 0.0, -shortSlope.y) * WATER_SHORT_SLOPE_GAIN);
         // Roughness takes the slope variance the fade REMOVED, which is what makes this a
@@ -411,8 +422,11 @@ void main() {
          * where the surface never folded, which is the painted-overlay look the whole
          * Jacobian selection exists to avoid.
          */
-        float breakup = waterValueNoise(WorldPos.xz * WATER_FOAM_NOISE_A + time * 0.03) * 0.62 +
-                        waterValueNoise(WorldPos.xz * WATER_FOAM_NOISE_B - time * 0.05) * 0.38;
+        // Cycles per metre over a position in world units, so the frequency divides.
+        float noiseA = WATER_FOAM_NOISE_A_PER_M / waterUnitsPerMetre;
+        float noiseB = WATER_FOAM_NOISE_B_PER_M / waterUnitsPerMetre;
+        float breakup = waterValueNoise(WorldPos.xz * noiseA + time * 0.03) * 0.62 +
+                        waterValueNoise(WorldPos.xz * noiseB - time * 0.05) * 0.38;
         foam *= mix(WATER_FOAM_BREAKUP_MIN, 1.0, smoothstep(0.25, 0.75, breakup));
     }
     // Shore foam, on both wave models. A band where the bed has risen close to the
@@ -555,7 +569,7 @@ void main() {
     vec3 refrDir = refract(-V, Nv, 1.0 / waterIor);
     vec3 bed;
     if (sceneColorAvailable == 1) {
-        vec3 exitView = ViewPos + refrDir * min(path, WATER_MAX_BEND);
+        vec3 exitView = ViewPos + refrDir * min(path, WATER_MAX_BEND_M * waterUnitsPerMetre);
         vec4 refrClip = projection * vec4(exitView, 1.0);
         vec2 refrUV = clamp(refrClip.xy / refrClip.w * 0.5 + 0.5, vec2(0.001), vec2(0.999));
         // Validity: the offset is a screen-space approximation of a world-space
@@ -594,8 +608,9 @@ void main() {
                                          textureLod(cascade2_1, uvShort, 0.0),
                                          cascadeChoppiness[2]);
             float focus = max(0.0, 1.0 - mj) * 0.48 + max(0.0, 1.0 - sj) * 0.52;
-            float window = smoothstep(0.0, WATER_CAUSTIC_SHALLOW, path) *
-                           (1.0 - smoothstep(WATER_CAUSTIC_DEEP_ON, WATER_CAUSTIC_DEEP_OFF, path));
+            float window = smoothstep(0.0, WATER_CAUSTIC_SHALLOW_M * waterUnitsPerMetre, path) *
+                           (1.0 - smoothstep(WATER_CAUSTIC_DEEP_ON_M * waterUnitsPerMetre,
+                                             WATER_CAUSTIC_DEEP_OFF_M * waterUnitsPerMetre, path));
             float focused =
                 pow(smoothstep(WATER_CAUSTIC_ON, WATER_CAUSTIC_FULL, focus), 2.0) * window;
             // A caustic is focused SUNLIGHT, so a deck over the crossing point dims it

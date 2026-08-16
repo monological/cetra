@@ -1070,6 +1070,17 @@ int main(int argc, char** argv) {
     if (sky && ibl) {
         sky->sun_elevation_deg = sun_elevation;
         sky->sun_azimuth_deg = sun_azimuth;
+        /*
+         * This world's scale, which nothing set until spec 11.44 (the GUI offered a slider
+         * for it and no code ever wrote it), so the sky ran at its 1-unit-is-a-metre default
+         * while ground.h has always put this app at 22.
+         *
+         * It is not the sky's alone. Every physical length in the ocean converts through the
+         * same number -- the depth a wave shoals over, the distance the short band fades
+         * across, the caustic window -- so leaving it wrong gave this app a surf zone 0.38 m
+         * wide, which is the hard line at the shore rather than a beach.
+         */
+        sky->world_units_per_km = GROUND_UNITS_PER_METRE * 1000.0f;
         sky_update_sun_dir(sky);
 
         if (sky_bake_static_luts(sky, engine) == 0 && sky_bake(sky, ibl, engine) == 0) {
