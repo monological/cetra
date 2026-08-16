@@ -34,6 +34,7 @@
 #include "cetra/particle_sim.h"
 
 #include "cetra/procedural/tree_gen.h"
+#include "cetra/procedural/rock.h"
 #include "cetra/procedural/sand.h"
 #include "cetra/procedural/vegetation_tex.h"
 #include "ground.h"
@@ -169,6 +170,7 @@ static SceneNode* island_node = NULL;
 static Material* island_material = NULL;
 static SceneNode* seabed_node = NULL;
 static Material* seabed_material = NULL;
+static Material* rock_material = NULL;
 
 static GrassParams grass_params;
 static GrassParams prev_grass_params;
@@ -322,6 +324,89 @@ static void create_seabed(SceneNode* parent) {
     add_mesh_to_node(seabed_node, mesh);
     add_child_node(parent, seabed_node);
     upload_buffers_to_gpu_for_nodes(seabed_node);
+}
+
+/*
+ * Boulders through the surf (spec 11.44).
+ *
+ * Placed by DEPTH rather than by radius, straddling the waterline: a rock is only worth
+ * having where it interrupts something, and what it interrupts here is the shore band. So
+ * the placement reads the same ground_height_at the water shoals against, which also means
+ * they follow the profile if it ever changes rather than sitting at a transcribed radius.
+ *
+ * Each rock is its own mesh and its own node. At this count that is cheaper to read than a
+ * prototype table, and nothing here is instanced: apps/forest exists to exercise that path
+ * with thousands, where this wants a dozen.
+ *
+ * Sunk by a third of the radius so they sit IN the sand rather than on it. A boulder
+ * tangent to the ground reads as dropped, and the shoreline is exactly where the eye checks.
+ */
+#define TREE_ROCK_COUNT 14
+#define TREE_ROCK_MIN_M 0.30f
+#define TREE_ROCK_MAX_M 1.10f
+// Depths the scatter spans, in metres of water: above the line is a dry boulder on the
+// beach, below it one standing in the shallows.
+#define TREE_ROCK_HIGH_M (-0.45f)
+#define TREE_ROCK_LOW_M 1.30f
+
+static SceneNode* rock_nodes[TREE_ROCK_COUNT];
+
+static void create_shore_rocks(SceneNode* parent) {
+    if (!rock_material)
+        return;
+    veg_noise_seed(9317); // the scatter's own stream, seeded next to its only consumer
+
+    const float shore = ground_shore_height();
+    for (int i = 0; i < TREE_ROCK_COUNT; i++) {
+        RockParams rp = rock_default_params();
+        rp.seed = 41u + (unsigned)i * 977u;
+        rp.subdivisions = 3;
+        rp.roughness = 0.24f + veg_rand_range(0.0f, 0.10f);
+        rp.noise_freq = 1.3f + veg_rand_range(0.0f, 0.7f);
+        rp.radius = veg_rand_range(TREE_ROCK_MIN_M, TREE_ROCK_MAX_M) * GROUND_UNITS_PER_METRE;
+
+        Mesh* mesh = create_mesh();
+        if (!rock_build_mesh(&rp, mesh)) {
+            free_mesh(mesh);
+            continue;
+        }
+        mesh->material = rock_material;
+
+        /*
+         * Solve for the radius that puts this rock at its chosen height above the water.
+         * The profile is monotonic outward over the beach, so a bisection is exact and needs
+         * no inverse -- the same reasoning that let the water level stop being closed-form.
+         */
+        const float want = shore - veg_rand_range(TREE_ROCK_HIGH_M, TREE_ROCK_LOW_M) *
+                                       GROUND_UNITS_PER_METRE;
+        float lo = 0.0f, hi = GROUND_RADIUS;
+        for (int it = 0; it < 40; it++) {
+            const float mid = 0.5f * (lo + hi);
+            if (ground_height_at(mid, 0.0f) > want)
+                lo = mid;
+            else
+                hi = mid;
+        }
+        const float r = 0.5f * (lo + hi);
+        const float angle = veg_rand_range(0.0f, 6.28318531f);
+        const float x = r * cosf(angle);
+        const float z = r * sinf(angle);
+
+        SceneNode* node = create_node();
+        set_node_name(node, "shore_rock");
+        add_mesh_to_node(node, mesh);
+        glm_mat4_identity(node->original_transform);
+        glm_translate(node->original_transform,
+                      (vec3){x, ground_height_at(x, z) - rp.radius * 0.34f, z});
+        glm_rotate(node->original_transform, veg_rand_range(0.0f, 6.28318531f),
+                   (vec3){0.0f, 1.0f, 0.0f});
+        // Squashed a little, because a displaced icosphere is round and a boulder that has
+        // been sitting in surf is not.
+        glm_scale(node->original_transform, (vec3){1.0f, veg_rand_range(0.62f, 0.88f), 1.0f});
+        add_child_node(parent, node);
+        upload_buffers_to_gpu_for_nodes(node);
+        rock_nodes[i] = node;
+    }
 }
 
 /*
@@ -1194,6 +1279,16 @@ int main(int argc, char** argv) {
     set_material_normal_tex(seabed_material, island_normal_tex);
     set_material_roughness_tex(seabed_material, island_roughness_tex);
 
+    // Wet grey stone. Untextured on purpose: the boulders are small in frame and half of
+    // them are under water, where a texture buys nothing a colour and a roughness do not.
+    rock_material = create_material();
+    rock_material->name = safe_strdup("shore_rock");
+    glm_vec3_copy((vec3){0.20f, 0.19f, 0.18f}, rock_material->albedo);
+    rock_material->roughness = 0.86f;
+    rock_material->metallic = 0.0f;
+    rock_material->ao = 1.0f;
+    set_material_shader_program(rock_material, pbr_program);
+
     // Grass. Opaque, so it casts and receives shadows with no special handling
     // -- the canopy dapple landing on it is the point of having it. Colour is
     // entirely per-vertex, so no textures and no AO map to collide with UV1.
@@ -1256,6 +1351,10 @@ int main(int argc, char** argv) {
     // it is a plate around a dome, which is the saucer --no-water exists to avoid.
     if (!args.no_water) {
         create_seabed(root);
+        // Boulders straddling the waterline. Under the same guard: they are placed by DEPTH,
+        // and with no sea there is no depth to place them by -- a scatter of rocks at
+        // arbitrary radii on dry land is not what this is for.
+        create_shore_rocks(root);
         Water* water = create_water();
         if (water) {
             water->level =
