@@ -159,6 +159,29 @@ for a free unit either. Two escapes are already precedented and both are narrow 
 declaration through a `#define` when the two consumers are mutually exclusive (moments over
 `sceneColorTex`), or put the table in `const`/uniform space (11.13). See **Wall 1** below.
 
+**There is a FOURTH escape, and spec 11.45 spent it on the other program: CONSOLIDATE identical
+declarations into one array.** A cap counted in declarations is a cap on how many distinct *shapes*
+of data a program reads, so N textures of the same format and size were never N shapes — they were
+one shape N times, and an array of N layers is one declaration holding the same images. `water_frag`
+had six `sampler2D` cascade fields (RGBA16F 128², identical in every respect) plus two more for the
+previous frame; as two arrays that is 8 declarations down to 2, and the program went **16/16 →
+10/16** with all 24 goldens at 0 px and the FFT's own impulse error unchanged at 1.9e-7. The
+ping-pong that writes them changed in one line — `glFramebufferTextureLayer` for
+`glFramebufferTexture2D`.
+
+**Two costs, both small and both worth knowing before reaching for it.** An array carries ONE mip
+policy for every layer, so a band that wanted no chain gets one (read at LOD 0, so it is memory and
+not a changed read). And anything that read those textures for *precision* has to keep its own
+storage: the FFT impulse test's scratch reported 4.8e-4 at fp16 against 1.9e-7 at fp32 for the same
+arithmetic, which is the storage's error masquerading as the transform's.
+
+**How much this offers `pbr_frag` is a separate question and the answer is "less".** Its four
+`sampler2DArray`s are `maskArray`, `shadowMaps`, `punctualShadowMaps` and `ltcTex`. The two shadow
+arrays are the closest pair — both `GL_DEPTH_COMPONENT24` through the same `init_depth_array` — but
+they are sized independently (`punctual_size_for` scales with layer count), so merging them means
+one of the two changing resolution. That is a quality trade, not the free consolidation water got,
+and it should be priced against D0 rather than assumed cheaper than it.
+
 **There is a THIRD escape, and it is the one nobody had written down: a unit that is idle in the
 pass you need it in.** The two escapes above trade on *consumers* being exclusive. This one trades on
 *passes* being exclusive, and it is strictly easier to satisfy. Unit 6 is set unavailable at the top
@@ -703,6 +726,19 @@ about *declarations*, which is a link-time property. Blocking is about *occupanc
 the read*, which is a per-pass property. Those are different questions, and this section asked only
 the first for the length of the roadmap. Anything proposing to free a unit should first say which
 pass its read happens in.
+
+**And a second wall existed that this section never named: `water_frag` was also at 16/16.** It is a
+separate program with a separate ledger, so nothing here applied to it and nothing it did applied
+here — which is exactly why it went unrecorded until it blocked something. Spec 11.45 wanted a baked
+foam pattern there, found the program full, and shipped procedural noise instead; the noise has no
+mip chain, so the far field lost its filtering, and that cost was paid for a wall that turned out not
+to be one.
+
+**Consolidation cleared it: 8 identical cascade declarations became 2 arrays, 16/16 → 10/16.** The
+lesson generalises past water and is now the ledger's fourth escape above. The narrower lesson is
+about this document: a per-program ledger deserves a per-program entry, and "the sampler wall" as a
+singular noun is what let a second one sit unexamined through four specs. `water.h` now carries its
+own ledger comment in the same shape as this section's.
 
 **Wall 2 — geometry submission does not scale — MOSTLY REMOVED (specs 11.28 / 11.29).** Instancing,
 LOD chains and per-cascade shadow culling shipped in E5; on `abandoned_window_shadowed` that is shadow
