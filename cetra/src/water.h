@@ -5,8 +5,9 @@
 #include <stdbool.h>
 #include <cglm/cglm.h>
 
-#include "common.h" // RenderMode, for water_will_draw
-#include "sky.h"    // SKY_CLOUD_SHADOW_UNIT, asserted against this file's own ledger below
+#include "common.h"      // RenderMode, for water_will_draw
+#include "shore_runup.h" // ShoreRunupParams, for the CPU twin the film is driven by
+#include "sky.h"         // SKY_CLOUD_SHADOW_UNIT, asserted against this file's own ledger below
 
 /*
  * Water surface (spec 11.32, roadmap D3).
@@ -425,6 +426,15 @@ void water_publish_to_postfx(const Water* water, struct Engine* engine);
  * form over these seven floats and nothing else.
  */
 void water_bind_shore(const Water* water, const struct Scene* scene, ShaderProgram* program);
+
+/*
+ * The sea state the run-up runs at, for a caller that wants to evaluate the CPU twin.
+ *
+ * Returns false where there is no surf to describe, in which case `out` is untouched. Exists
+ * so --shore-probe reads the SAME numbers the film is driven by rather than reconstructing
+ * them, which would make the probe agree with itself instead of with the engine.
+ */
+bool water_shore_runup_params(const Water* water, const struct Scene* scene, ShoreRunupParams* out);
 
 // The per-cascade tiling periods and choppiness are columns of water.c's own cascade
 // table and are uploaded from there. They were briefly published here as two extra

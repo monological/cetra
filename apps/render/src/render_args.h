@@ -89,6 +89,7 @@ typedef struct {
     int no_water_lod;           // Bisect lever: full wave detail at any cell footprint
     int no_water_wetness;       // Bisect lever: the swash wets no material it runs over
     int no_water_film;          // Bisect lever: the closed-form run-up, with no swash solver
+    int shore_probe;            // Print the CPU twin of the run-up, the film's own drive
     int water_bed_dome;         // Install the analytic dome bed provider (shoaling)
     int no_water;               // Drop a water surface a scene file asked for
     int water_probe;            // Print the CPU wave query over a grid, then continue

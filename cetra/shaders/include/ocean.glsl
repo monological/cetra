@@ -345,8 +345,33 @@ OceanSurf oceanSurf(vec2 p, OceanBed bed, float t, float fieldY, vec2 dFieldY) {
     ShoreRunup r = shoreRunup(p, t);
     float runup = r.runup;
     float swash = r.swash;
-    float lens = OCEAN_LENS_RATIO * r.edge - (1.0 - OCEAN_LENS_RATIO) * bed.column;
-    vec2 dLens = OCEAN_LENS_RATIO * r.dEdge - (1.0 - OCEAN_LENS_RATIO) * bed.dColumn;
+
+    /*
+     * THE SIMULATED EDGE where a film is running, and the closed form where none is.
+     *
+     * This is the point of the film reaching the shader at all: the sea's own lens and the
+     * wet line on the sand behind it are fitted to ONE edge, so they cannot disagree about
+     * where the water is. The lookup is affordable here because oceanSurf has already
+     * returned for everything outside the shoal window -- open water and dry land never
+     * reach this line.
+     *
+     * The DERIVATIVE stays analytic and is rescaled rather than re-measured. The film
+     * publishes a tip per column and not a gradient, and finite-differencing it would cost a
+     * second column search per vertex to refine a term that only tilts the lens. Scaling the
+     * closed form's gradient by how much the film moved the edge keeps its direction, which
+     * is what the normal actually reads.
+     */
+    float edge = r.edge;
+    vec2 dEdge = r.dEdge;
+    ShoreFilmSample fs = shoreFilmNearest(p);
+    if (fs.found) {
+        float filmEdge = shoreFilmEdge(fs, 0.0);
+        dEdge *= r.edge > 1.0e-4 ? filmEdge / r.edge : 1.0;
+        edge = filmEdge;
+    }
+
+    float lens = OCEAN_LENS_RATIO * edge - (1.0 - OCEAN_LENS_RATIO) * bed.column;
+    vec2 dLens = OCEAN_LENS_RATIO * dEdge - (1.0 - OCEAN_LENS_RATIO) * bed.dColumn;
 
     // Where the lens owns the surface: everywhere on the sand, fading out over the first
     // fraction of R in depth. A smoothstep in depth, differentiated through the column.
@@ -372,7 +397,7 @@ OceanSurf oceanSurf(vec2 p, OceanBed bed, float t, float fieldY, vec2 dFieldY) {
      * stencil, not foam -- it reads as a fixed set of shapes being masked in and out, which
      * is exactly what it looks like.
      */
-    s.run = r.edge / slope;
+    s.run = edge / slope;
     return s;
 }
 

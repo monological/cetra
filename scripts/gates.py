@@ -5140,6 +5140,11 @@ BEACH_CROWN_FRACTION = 0.60
 # aligned to the shore's DIRECTION instead the fraction came back at 0.690.
 BEACH_BAND_HALF = 1.0
 BEACH_BAND_MIN_FRAC = 0.60
+# How much of the run-up ceiling the CPU twin's samples must span, and how far one primary
+# period moves them. Both fractions of the ceiling rather than absolute heights, so the arm
+# does not need re-tuning every time the fixture's sea state moves. Measured 0.216 and 0.171.
+SHORE_TWIN_MIN_SPREAD = 0.10
+SHORE_TWIN_MIN_DRIFT = 0.05
 
 
 def _beach_render(out, extra, frames=30):
@@ -5265,6 +5270,8 @@ def run_beach_gate(workdir):
                        decreasing depth across five radii read off the mesh.
       beach-surf-zone  the bed's effect is bounded -- it moves the shore band and never
                        reaches the dry crown.
+      shore-twin       the CPU run-up the swash film is driven by keeps the contract it
+                       shares with the shader's copy (spec 11.45).
 
     The water corpus could not see any of this. Both goldens are Gerstner with no bed, so
     crest foam does not exist in them by construction and shore foam is identically zero:
@@ -5360,6 +5367,57 @@ def run_beach_gate(workdir):
           f"inside r {BEACH_CROWN_FRACTION * shore:.2f} on the dry crown (want exactly 0)")
     if not ok:
         failures.append("beach-surf-zone")
+
+    """
+    THE CPU TWIN, against the contract it shares with the shader.
+
+    The swash film runs on the CPU and is driven by a C copy of shore.glsl's run-up, because
+    a closed form cannot be shared between C and GLSL. `procedural/water_waves.c` is the
+    precedent for that duplication and CLAUDE.md records its hole: "nothing compares the two,
+    which is the known gap". This arm is why the second copy does not repeat it.
+
+    Three properties, and each is something BOTH copies compute rather than a number one of
+    them happens to produce. The ceiling is the product of the same bounded factors on both
+    sides, so a twin that drifts in any of them breaks it. Movement and non-repetition are
+    the model's own claims -- a swash that stood still or repeated every period would be the
+    painted band this spec exists to retire, whichever copy said so.
+    """
+    err = None
+    probe = os.path.join(workdir, "shore_probe.txt")
+    cmd = [RENDER, "-m", os.path.join(ROOT, "assets", BEACH_FIXTURE), "-x", "-f", "3",
+           "-W", "320", "-H", "240", "--shore-probe"] + BEACH_BED + BEACH_GERSTNER
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    lines = [l for l in (r.stdout + r.stderr).splitlines() if l.startswith("shore-probe ")]
+    head = next((l for l in lines if "ceiling=" in l), None)
+    if r.returncode != 0 or not head:
+        print(f"  shore-twin   ERROR probe produced nothing: {(r.stdout + r.stderr)[-200:]}")
+        failures.append("shore-twin")
+        return failures
+
+    ceiling = float(head.split("ceiling=")[1].split()[0])
+    slope = float(head.split("slope=")[1].split()[0])
+    edges, repeats = [], []
+    for line in lines:
+        if "edge=" not in line:
+            continue
+        edges.append(float(line.split("edge=")[1].split()[0]))
+        repeats.append(float(line.split("next=")[1].split()[0]))
+    within = all(0.0 <= e <= ceiling for e in edges)
+    spread = (max(edges) - min(edges)) if edges else 0.0
+    # The largest |edge - next| over the samples: one period on, an incommensurate sum has
+    # moved somewhere else. A single train would land back where it started.
+    drift = max((abs(a - b) for a, b in zip(edges, repeats)), default=0.0)
+    ok = (len(edges) >= 8 and within and slope > 0.0 and
+          spread >= SHORE_TWIN_MIN_SPREAD * ceiling and
+          drift >= SHORE_TWIN_MIN_DRIFT * ceiling)
+    print(f"  shore-twin   {'PASS' if ok else 'FAIL'}  {len(edges)} samples on a slope of "
+          f"{slope:.3f}, all within [0, {ceiling:.4f}]: {within}; spread "
+          f"{spread / max(ceiling, 1e-9):.3f} of the ceiling (want "
+          f">={SHORE_TWIN_MIN_SPREAD}) and one period on it has moved "
+          f"{drift / max(ceiling, 1e-9):.3f} (want >={SHORE_TWIN_MIN_DRIFT}: incommensurate "
+          f"trains do not repeat)")
+    if not ok:
+        failures.append("shore-twin")
 
     return failures
 

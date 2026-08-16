@@ -1347,6 +1347,25 @@ static void _water_step_film(Water* water, const struct Scene* scene, float t, f
     }
 }
 
+bool water_shore_runup_params(const Water* water, const struct Scene* scene,
+                              ShoreRunupParams* out) {
+    if (!water || !out)
+        return false;
+    const float upm = _water_units_per_metre(scene);
+    const bool fft = water->wave_model == WATER_WAVES_FFT;
+    float hs, omega;
+    _water_surf_state(water, upm, fft, &hs, &omega);
+    if (hs <= 0.0f)
+        return false;
+    out->surf_height = hs;
+    out->surf_omega = omega;
+    out->beach_slope = water->bed_foreshore_slope;
+    out->units_per_metre = upm;
+    out->wind_dir[0] = water->wind_dir[0];
+    out->wind_dir[1] = water->wind_dir[1];
+    return true;
+}
+
 void water_bind_shore(const Water* water, const struct Scene* scene, ShaderProgram* program) {
     if (!water || !program || !program->uniforms)
         return;

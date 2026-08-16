@@ -157,6 +157,8 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --no-water-coverage  Hard shoreline cutoff, no coverage\n");
     fprintf(stderr, "      --no-water-lod     Full wave detail at any cell footprint\n");
     fprintf(stderr, "      --no-water-wetness The swash wets nothing it runs over\n");
+    fprintf(stderr, "      --no-water-film    Closed-form run-up, with no swash solver\n");
+    fprintf(stderr, "      --shore-probe      Print the CPU twin of the run-up\n");
     fprintf(stderr, "      --water-bed <m>    none (default) or dome: an analytic bed to shoal\n");
     fprintf(stderr, "      --water-probe      Print the CPU wave query over a grid\n");
     fprintf(stderr, "      --water-fft-probe  Print the transformed spectrum's statistics\n");
@@ -725,6 +727,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->no_water_wetness = 1;
         } else if (strcmp(argv[i], "--no-water-film") == 0) {
             args->no_water_film = 1;
+        } else if (strcmp(argv[i], "--shore-probe") == 0) {
+            args->shore_probe = 1;
         } else if (strcmp(argv[i], "--water-waves") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -3067,6 +3071,7 @@ int main(int argc, char** argv) {
         }
     }
 
+
     // Interactive default: TAA-only (drop to 1x MSAA and let temporal AA carry
     // it) — much cheaper than 4x MSAA on this GPU and better on shading/specular
     // aliasing. Headless keeps 4x MSAA with TAA off so screenshots stay
@@ -3100,6 +3105,45 @@ int main(int argc, char** argv) {
     // --water-probe -- there is nothing to measure until a frame has run one.
     if (args.water_fft_probe)
         water_fft_probe(scene->water, engine);
+
+    /*
+     * --shore-probe: the CPU twin of shoreRunup, printed.
+     *
+     * The swash film runs on the CPU and has to be driven by the same run-up the shader
+     * draws, so that arithmetic exists twice -- there is no way to share a closed form
+     * between C and GLSL. `procedural/water_waves.c` is the precedent for that and also the
+     * warning: CLAUDE.md records of it that "nothing compares the two, which is the known
+     * gap". This one does not ship with the same hole in it.
+     *
+     * What is printed is the contract the two copies SHARE: the edge is bounded by an
+     * analytic ceiling both sides compute, it moves, and it does not repeat at the primary
+     * period because the trains are incommensurate. A twin that drifts breaks one of those.
+     *
+     * AFTER the loop, for the same reason --water-fft-probe is: the beach slope is measured
+     * when the bed is baked, and the bed is baked on the first frame. Printed before, the
+     * probe describes a beach of slope zero -- which is not the beach the frames were drawn
+     * against, and a comparison against it would be a comparison with nothing.
+     */
+    if (args.shore_probe && scene->water) {
+        const Water* w = scene->water;
+        ShoreRunupParams sp;
+        if (water_shore_runup_params(w, scene, &sp)) {
+            printf("shore-probe hs=%.6f omega=%.6f slope=%.6f upm=%.4f ceiling=%.6f\n",
+                   (double)sp.surf_height, (double)sp.surf_omega, (double)sp.beach_slope,
+                   (double)sp.units_per_metre, (double)shore_runup_ceiling(&sp));
+            const float period = 6.28318530718f / sp.surf_omega;
+            const float span = w->extent * 0.35f;
+            for (int i = 0; i < 4; i++) {
+                const float x = -span + span * 2.0f * (float)i / 3.0f;
+                for (int k = 0; k < 3; k++) {
+                    const float t = (float)k * period * 0.37f;
+                    printf("shore-probe %.4f %.4f t=%.4f edge=%.6f next=%.6f\n", (double)x,
+                           (double)x, (double)t, (double)shore_runup_edge(&sp, x, x, t),
+                           (double)shore_runup_edge(&sp, x, x, t + period));
+                }
+            }
+        }
+    }
 
     printf("Cleaning up...\n");
     if (anim_state) {
