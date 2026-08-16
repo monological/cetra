@@ -75,6 +75,43 @@
 #define GROUND_SHORE_T 0.5f
 
 /*
+ * How far the shore wanders off the circle, and over what distance.
+ *
+ * A surface of revolution has a CIRCLE for a waterline, and no amount of shading hides that:
+ * it reads as the edge of a dome from every angle, because that is what it is. Two octaves of
+ * noise on the HEIGHT is the whole fix -- at the beach slope an amplitude of a few centimetres
+ * moves the waterline by tens of units, so the shore bays and points without the profile
+ * having to stop being a beach.
+ *
+ * In the header rather than beside the noise because the island mesh has to be fine enough to
+ * CARRY them, which is what GROUND_MESH_SEGMENTS is derived from.
+ */
+#define GROUND_WOBBLE_M    0.16f
+#define GROUND_WOBBLE_SPAN 210.0f
+// The second octave, and so the finest feature the ground has anywhere.
+#define GROUND_WOBBLE_FINE (GROUND_WOBBLE_SPAN * 0.37f)
+
+/*
+ * Segments the island mesh needs around, DERIVED from the noise it has to carry.
+ *
+ * The waterline is a CONTOUR of ground_height_at, so its shape is only ever what the mesh can
+ * represent there -- and the mesh carries the shore at one vertex per segment, spaced
+ * 2*pi*GROUND_SHORE_R/segments. At the 64 this app passed until 11.44 that is 30 units
+ * against a finest octave of 78: 2.6 samples per period, BELOW Nyquist. So the noise written
+ * to break the circle was being aliased into flat facets -- which is why the waterline showed
+ * a staircase, and why it still read as an arc even though the field it contours does not.
+ * One cause, both symptoms.
+ *
+ * Eight samples per period is the bar, which is about where a curve stops showing its chords
+ * at walking distance. The RINGS need no such rule and did not have the defect: they are 4.8
+ * units apart, 16 to a period already, which is why the aliasing was angular only and printed
+ * as steps along the shore rather than as rings across it.
+ */
+#define GROUND_SHORE_SAMPLES 8.0f
+#define GROUND_MESH_SEGMENTS \
+    ((int)(6.28318531f * GROUND_SHORE_R * GROUND_SHORE_SAMPLES / GROUND_WOBBLE_FINE))
+
+/*
  * The still-water height: the ground's own height at the shore radius (spec 11.44).
  *
  * The sea's level is DERIVED from the ground rather than picked, and this is where that

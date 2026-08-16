@@ -35,30 +35,29 @@ static float ground_noise(float x, float z) {
     return (a + (b - a) * tx) * (1.0f - tz) + (c + (d - c) * tx) * tz;
 }
 
-/*
- * How much the shore wanders, and how fast.
- *
- * A surface of revolution has a CIRCLE for a waterline, and no amount of shading hides
- * that: it reads as the edge of a dome from every angle, which is what it is. Two octaves
- * of noise on the height is the whole fix -- at the beach slope an amplitude of a few
- * centimetres moves the waterline by tens of units, so the shore bays and points without
- * the profile stopping being a beach.
- *
- * Faded out at the CROWN so the tree still stands on level ground, and the amplitude is
- * bounded well under the crown's rise so the noise can never cut the island in two.
- */
-#define GROUND_WOBBLE_M 0.16f
-#define GROUND_WOBBLE_SPAN 210.0f
-
+// See ground.h for what the wobble is for and why its constants live there. Faded out at
+// BOTH ends, and the amplitude is bounded well under the crown's rise so the noise can never
+// cut the island in two.
 static float ground_wobble(float x, float z, float d) {
     const float amp = GROUND_WOBBLE_M * GROUND_UNITS_PER_METRE;
     const float n = ground_noise(x / GROUND_WOBBLE_SPAN, z / GROUND_WOBBLE_SPAN) * 0.68f +
-                    ground_noise(x / (GROUND_WOBBLE_SPAN * 0.37f),
-                                 z / (GROUND_WOBBLE_SPAN * 0.37f)) *
-                        0.32f;
+                    ground_noise(x / GROUND_WOBBLE_FINE, z / GROUND_WOBBLE_FINE) * 0.32f;
     // Zero at the centre, full by the time the beach starts. The tree's footing is flat.
     const float t = fminf(d / (GROUND_SHORE_R * 0.55f), 1.0f);
-    return (n * 2.0f - 1.0f) * amp * t * t * (3.0f - 2.0f * t);
+    /*
+     * ...and back to zero by the RIM, because the seabed branch beyond it carries no wobble
+     * and a term that stops abruptly is a step.
+     *
+     * Without this ground_height_at jumps by up to the full amplitude across d = GROUND_RADIUS
+     * -- a 3.5-unit cliff ringing the island, which the header has claimed since 11.35 that
+     * this function does not have. It also makes the rim row a circle at ONE height, which is
+     * what lets the island and the seabed meet there whatever ring counts they were built with.
+     */
+    const float o =
+        fminf(2.0f * (GROUND_RADIUS - d) / (GROUND_RADIUS - GROUND_SHORE_R), 1.0f);
+    const float oc = fmaxf(o, 0.0f);
+    return (n * 2.0f - 1.0f) * amp * (t * t * (3.0f - 2.0f * t)) *
+           (oc * oc * (3.0f - 2.0f * oc));
 }
 
 float ground_height_at(float x, float z) {

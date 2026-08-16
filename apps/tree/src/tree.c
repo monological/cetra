@@ -228,29 +228,6 @@ static MouseDragController* drag_controller = NULL;
 static Player* player = NULL;
 
 /*
- * The sea (spec 11.32). ON by default here, unlike `render` and `forest`, because
- * this app's ground is not a landscape that happens to end -- it is a dome, and a
- * dome surrounded by nothing reads as a saucer floating in the sky. `--no-water`
- * returns the old dry framing.
- *
- * The level is DERIVED from the ground, not picked: it is the ground's own height at the
- * chosen shore radius, so changing the island's shape moves the sea to match instead of
- * needing it re-tuned. See ground.h for the shape and for why GROUND_SHORE_T is where it is.
- *
- * Evaluated rather than solved in closed form (spec 11.44). It used to be written out as
- * -H*t^2, the paraboloid's own inverse, which is why ground.h argued the profile had to keep
- * an analytic shoreline -- but the direction that matters here is level FROM radius, and
- * that is just the profile evaluated at a point. The constraint was on the inverse nobody
- * needed, and dropping it is what lets the profile grow a beach shelf.
- *
- * The wave train is scaled to THIS app's units, not carried over from the water
- * fixture. A trunk here is 125 units, so the fixture's 6-unit wavelength would be
- * invisible.
- */
-static float tree_water_level(void) {
-    return ground_height_at(GROUND_SHORE_T * GROUND_RADIUS, 0.0f);
-}
-/*
  * The SHOALING BED's domain, and nothing else -- since spec 11.35 the grid is projected from
  * the frustum and reaches the horizon at any extent. So this is sized for the SHORE BAND
  * rather than for the island. Outside it the bed field reads its edge, which is open water --
@@ -292,8 +269,11 @@ static void create_island(SceneNode* parent) {
     // 128 rings, not the 24 this had: the beach's colour bands are VERTEX colour, and the
     // wet strip is 0.35 m of a 2.16 m rise. At 24 rings a ring is 1.2 m, so the whole wet
     // band fell between two of them and the grade came out as steps. 128 puts a ring every
-    // 0.22 m, which resolves the narrowest band, for 8192 vertices of a one-off disc.
-    ground_build_mesh(mesh, 128, 64, 40.0f);
+    // 0.22 m, which resolves the narrowest band.
+    //
+    // The segment count is DERIVED (ground.h) rather than chosen: it is the shoreline, not
+    // the disc, that sets it.
+    ground_build_mesh(mesh, 128, GROUND_MESH_SEGMENTS, 40.0f);
     mesh->material = island_material;
 
     glm_mat4_identity(island_node->original_transform);
@@ -315,7 +295,10 @@ static void create_island(SceneNode* parent) {
  */
 static void create_seabed(SceneNode* parent) {
     Mesh* mesh = create_mesh();
-    if (!ground_build_seabed(mesh, 40, 96, 60.0f)) {
+    // The SAME segment count as the island, which is what makes the shared rim row shared:
+    // the two meshes meet vertex for vertex there rather than as a 96-gon inscribed in a
+    // 64-gon, which is what they were.
+    if (!ground_build_seabed(mesh, 40, GROUND_MESH_SEGMENTS, 60.0f)) {
         free_mesh(mesh);
         return;
     }
@@ -808,7 +791,7 @@ static void print_usage(const char* prog) {
     printf("      --no-falling-leaves Disable the falling-leaf particles\n");
     printf("      --no-water          Dry land: drop the sea around the island\n");
     printf("      --water-level D     Still-water world Y (default %.1f)\n",
-           (double)tree_water_level());
+           (double)ground_shore_height());
     printf("      --gerstner-waves    Closed-form octaves instead of spectral cascades\n");
     printf("      --render-mode N     Debug view; 10 = HDR hotspots, 12 = extrapolation\n");
     printf("      --msaa N            MSAA samples (default 4); 1 has no partial coverage\n");
@@ -1359,8 +1342,13 @@ int main(int argc, char** argv) {
         create_shore_rocks(root);
         Water* water = create_water();
         if (water) {
+            // The still level comes from ground_shore_height and NOT from sampling
+            // ground_height_at at some bearing, which is a WOBBLED height: the sea would then
+            // sit at whatever the shore happened to be doing along +x, and the beach banding
+            // -- which reads the unwobbled level -- would band against a different waterline
+            // than the one drawn.
             water->level =
-                args.water_level > -9000.0f ? args.water_level : tree_water_level();
+                args.water_level > -9000.0f ? args.water_level : ground_shore_height();
             water->extent = TREE_WATER_EXTENT;
             water->height_at = tree_bed_height;
             /*
