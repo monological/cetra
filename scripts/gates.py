@@ -5066,6 +5066,279 @@ def run_water_gate(workdir):
     return failures
 
 
+BEACH_FIXTURE = "beach_fixture.cscn"
+BEACH_MESH = "beach_fixture.gltf"
+# Bigger than render()'s shared 400x300 because everything here is a RING a few pixels
+# wide: the island's waterline is 5.7 world units inside a 60-unit domain, so at the
+# shared size a radial walk resamples the same texel and the ring has no width to find.
+BEACH_SIZE = ("800", "600")
+# The analytic bed is a FLAG and no scene key can ask for it. Without it bedAvailable is
+# 0, so nothing shoals and the frame has no surf, no shore foam and no run-up -- the
+# turquoise that remains is absorption through the depth buffer, which needs no bed.
+# Every arm installs it, because the claim this fixture exists to make is that the DRAWN
+# dome and the ANALYTIC one are the same dome.
+BEACH_BED = ["--water-bed", "dome"]
+# Gerstner throughout, deliberately, and for two reasons rather than one. Crest foam is
+# FFT-only by construction, so on this path whatever whitewater is in frame is the SHORE
+# band -- the isolation water-shore-foam already uses. And it removes the foam HISTORY,
+# which accumulates per CASCADE texel and therefore tiles the world: with the spectral sea
+# the bed's effect is measurable out to the horizon, which would make beach-surf-zone read
+# as a failure of a claim it is not making.
+BEACH_GERSTNER = ["--water-waves", "gerstner"]
+# All the way round at 20 degrees. A ring asked about on one aspect is not a ring, and
+# asking about every aspect at once is the one thing this fixture can do that the ramp
+# cannot -- water_fixture has a single shoreline facing a single way.
+BEACH_AZIMUTHS = tuple(range(0, 360, 20))
+# The shore band sits SEAWARD of the waterline, because foam is on water and not on sand,
+# and close to it. Measured peaks cluster at 5.5-8.1 world units against a waterline the
+# mesh puts at 5.67, so this window holds the effect while a bed disagreeing with the mesh
+# by more than about a quarter of the island's radius falls out of it.
+BEACH_RING_INNER = -1.0
+BEACH_RING_OUTER = 2.5
+# 16 of 18 azimuths land in that window with the bed installed against 1 of 18 without it,
+# where the brightest thing on a ray is the sand crown itself or the sun's glitter path.
+# The two that miss WITH the bed are the two the glitter crosses, which is why this is a
+# count rather than a requirement on every azimuth.
+BEACH_RING_MIN_ON = 13
+BEACH_RING_MAX_OFF = 5
+# Radii for the turquoise ramp, on azimuths clear of the glitter. World radii on the dome,
+# so what depth each stands in comes from the mesh rather than from a screen row that has
+# to be re-measured whenever the framing moves.
+BEACH_DEPTH_RADII = (7.0, 9.0, 12.0, 16.0, 21.0)
+BEACH_DEPTH_AZIMUTHS = (120, 140, 160, 180, 200)
+# Measured 1.0757 -> 0.7962 -> 0.4967 -> 0.3194 -> 0.2500 for depths 0.29 to 5.12 m: the
+# smallest step is 1.28x, so this floor sits under it and still fails a constant tint.
+# Seen to fail: --no-water reads 1.2042 -> 1.2051 over the same five radii, every step
+# 1.00x, because what is left is the emissive bed with no column in front of it.
+# The ramp deliberately stops at 21: absorption has saturated by 27 (0.2386) and RISES
+# again by 33 as sky reflection takes over, which is the same band AGENTS.md warns not to
+# read absorption monotonicity through on the ramp fixture.
+BEACH_DEPTH_STEP_MIN = 1.15
+# A MAGNITUDE, not inequality. Output dither is on by default and puts +/-1 LSB on every
+# 8-bit write, so a differing byte is not by itself a claim about the bed; at this
+# threshold the innermost reach moves from r 0.25 (noise) to r 3.90 (the band).
+BEACH_DIFF_THRESH = 8
+# The dry crown, as a fraction of the waterline radius. Measured innermost reach across
+# the 18 azimuths is 3.90 to 5.05, i.e. 0.688 of the waterline at worst, so this sits
+# inside the closest approach with room and asks for exactly zero.
+# Seen to fail: at --water-level 0.5, which puts the still line 0.1 under a crown 0.6
+# high, the reach is r 0.20 at EVERY azimuth -- the island is drowned and there is no dry
+# crown left for the bound to be about.
+BEACH_CROWN_FRACTION = 0.60
+# The shore band, in world units either side of the waterline, and how much of it the bed
+# has to move. Per-azimuth fractions run 0.525 to 1.000 and the pooled fraction is ~0.9.
+BEACH_BAND_HALF = 1.0
+BEACH_BAND_MIN_FRAC = 0.60
+
+
+def _beach_render(out, extra, frames=30):
+    cmd = [RENDER, "-m", os.path.join(ROOT, "assets", BEACH_FIXTURE), "-x", "-f", str(frames),
+           "-W", BEACH_SIZE[0], "-H", BEACH_SIZE[1], "-S", out] + WATER_PIN + extra
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0 or not os.path.exists(out):
+        return r.stdout + r.stderr
+    return None
+
+
+def _beach_profile():
+    """The dome's (radius, height) profile, read out of the fixture's own mesh.
+
+    Read rather than re-derived, for the reason _water_ramp_edges is. This dome's shape
+    exists in three places -- render_dome_bed_height in C, gen_beach_fixture.py which built
+    the mesh, and whatever a gate assumes -- and a gate that computes it from the formula is
+    a third copy that agrees with the other two only until one of them moves. Reading the
+    mesh leaves two, and those two are exactly the pair beach-shoreline compares.
+
+    A surface of revolution, so one radius has one height and the ring vertices collapse.
+    """
+    with open(os.path.join(ROOT, "assets", BEACH_MESH)) as f:
+        doc = json.load(f)
+    raw = base64.b64decode(doc["buffers"][0]["uri"].split(",", 1)[1])
+    prim = next(m["primitives"][0] for m in doc["meshes"] if m["name"] == "beach_dome")
+    acc = doc["accessors"][prim["attributes"]["POSITION"]]
+    view = doc["bufferViews"][acc["bufferView"]]
+    base = view.get("byteOffset", 0) + acc.get("byteOffset", 0)
+    rings = {}
+    for i in range(acc["count"]):
+        x, y, z = struct.unpack_from("<3f", raw, base + i * 12)
+        rings[round(math.hypot(x, z), 4)] = y
+    return sorted(rings.items())
+
+
+def _beach_height_at(radius):
+    profile = _beach_profile()
+    for i in range(1, len(profile)):
+        if profile[i][0] >= radius:
+            (r0, y0), (r1, y1) = profile[i - 1], profile[i]
+            t = (radius - r0) / max(r1 - r0, 1e-9)
+            return y0 + t * (y1 - y0)
+    return profile[-1][1]
+
+
+def _beach_waterline():
+    """The radius where the drawn dome crosses the still level."""
+    profile = _beach_profile()
+    for i in range(1, len(profile)):
+        (r0, y0), (r1, y1) = profile[i - 1], profile[i]
+        if y0 >= 0.0 > y1:
+            return r0 + (r1 - r0) * y0 / (y0 - y1)
+    return profile[-1][0]
+
+
+def _beach_point(radius, deg):
+    """A world point ON the dome at a radius and azimuth."""
+    a = math.radians(deg)
+    return (radius * math.cos(a), _beach_height_at(radius), radius * math.sin(a))
+
+
+def _beach_pixel(pix, w, h, project, radius, deg):
+    """The pixel a dome point lands on, or None if it falls outside the frame.
+
+    Projected into FRACTIONS first, so the read is independent of the framebuffer scale --
+    a Retina context hands back twice the requested pixels.
+    """
+    sx, sy = project(_beach_point(radius, deg))
+    px = int(sx / float(BEACH_SIZE[0]) * w)
+    py = int(sy / float(BEACH_SIZE[1]) * h)
+    if 0 <= px < w and 0 <= py < h:
+        return (py * w + px) * 3
+    return None
+
+
+def _beach_ring_hits(path, project, window):
+    """How many azimuths put their brightest radial sample inside `window`.
+
+    The brightest point along a ray outward from the island, rather than a foam threshold:
+    a threshold is a second calibration that would need its own justification, where the
+    ARGMAX needs none and answers the question the arm asks -- whether there is a bright
+    ring, and where.
+    """
+    w, h, pix = _read_ppm(path)
+    hits = []
+    for deg in BEACH_AZIMUTHS:
+        best_r, best_l = float("nan"), -1.0
+        r = 1.0
+        while r < 16.0:
+            o = _beach_pixel(pix, w, h, project, r, deg)
+            if o is not None:
+                luma = pix[o] + pix[o + 1] + pix[o + 2]
+                if luma > best_l:
+                    best_l, best_r = luma, r
+            r += 0.05
+        hits.append(window[0] <= best_r <= window[1])
+    return sum(hits)
+
+
+def run_beach_gate(workdir):
+    """The shoaling bed is the one the eye can see (spec 11.44 phase 5).
+
+      beach-shoreline  the shore band the ANALYTIC bed produces sits on the waterline the
+                       DRAWN mesh has, all the way round. Without the bed there is no ring.
+      beach-shoal      the water over that bed reddens toward the shore: R/B rises with
+                       decreasing depth across five radii read off the mesh.
+      beach-surf-zone  the bed's effect is bounded -- it moves the shore band and never
+                       reaches the dry crown.
+
+    The water corpus could not see any of this. Both goldens are Gerstner with no bed, so
+    crest foam does not exist in them by construction and shore foam is identically zero:
+    spec 11.43 landed three foam fixes and moved zero golden pixels. water_fixture's ramp
+    can shoal, but it has ONE shoreline facing ONE way, so nothing there can tell a ring
+    from a band that happens to cross the frame.
+
+    The claim that needs a mesh is beach-shoreline's. gen_beach_fixture.py duplicates
+    render_dome_bed_height on purpose -- the water shoals against the analytic field and
+    this mesh is what the eye watches it shoal against -- and a duplicate that drifts would
+    leave the surface shoaling against nothing visible, which is a defect no arm reading
+    only the water could name.
+    """
+    scene = os.path.join(ROOT, "assets", BEACH_FIXTURE)
+    if not os.path.exists(scene):
+        print(f"  beach-shoreline SKIP  ({BEACH_FIXTURE} not present)")
+        return []
+
+    failures = []
+    on = os.path.join(workdir, "beach_bed.ppm")
+    off = os.path.join(workdir, "beach_nobed.ppm")
+    err = _beach_render(on, BEACH_GERSTNER + BEACH_BED)
+    if not err:
+        err = _beach_render(off, BEACH_GERSTNER)
+    if err:
+        print(f"  beach-shoreline ERROR render failed: {err.strip()[-200:]}")
+        return ["beach-shoreline"]
+
+    project = _projector(_cscn_camera(BEACH_FIXTURE),
+                         float(BEACH_SIZE[0]), float(BEACH_SIZE[1]))
+    shore = _beach_waterline()
+    window = (shore + BEACH_RING_INNER, shore + BEACH_RING_OUTER)
+    hits_on = _beach_ring_hits(on, project, window)
+    hits_off = _beach_ring_hits(off, project, window)
+    ok = hits_on >= BEACH_RING_MIN_ON and hits_off <= BEACH_RING_MAX_OFF
+    print(f"  beach-shoreline {'PASS' if ok else 'FAIL'}  waterline at r {shore:.2f} from the "
+          f"mesh; the brightest radial sample lands in [{window[0]:.2f}, {window[1]:.2f}] at "
+          f"{hits_on} of {len(BEACH_AZIMUTHS)} azimuths with the analytic bed (want "
+          f">={BEACH_RING_MIN_ON}) and {hits_off} without it (want <={BEACH_RING_MAX_OFF}: "
+          f"with no bed the brightest thing on the ray is the crown or the glitter)")
+    if not ok:
+        failures.append("beach-shoreline")
+
+    # The turquoise ramp, as R/B against depth. Median over azimuths rather than mean: one
+    # ray can cross a crest, and a crest is a bright specular sample that no amount of
+    # averaging removes from a five-sample set.
+    w, h, pix = _read_ppm(on)
+    ramp = []
+    for radius in BEACH_DEPTH_RADII:
+        vals = []
+        for deg in BEACH_DEPTH_AZIMUTHS:
+            o = _beach_pixel(pix, w, h, project, radius, deg)
+            if o is not None and pix[o + 2] > 0:
+                vals.append(pix[o] / pix[o + 2])
+        if vals:
+            ramp.append(sorted(vals)[len(vals) // 2])
+    steps = [ramp[i - 1] / max(ramp[i], 1e-6) for i in range(1, len(ramp))]
+    ok = len(ramp) == len(BEACH_DEPTH_RADII) and all(s >= BEACH_DEPTH_STEP_MIN for s in steps)
+    print(f"  beach-shoal  {'PASS' if ok else 'FAIL'}  R/B "
+          f"{' -> '.join(f'{v:.4f}' for v in ramp)} at depths "
+          f"{' '.join(f'{-_beach_height_at(r):.2f}' for r in BEACH_DEPTH_RADII)}; smallest "
+          f"step {min(steps) if steps else float('nan'):.2f}x (want "
+          f">={BEACH_DEPTH_STEP_MIN} at every one)")
+    if not ok:
+        failures.append("beach-shoal")
+
+    # Bounded: the bed moves the shore band and leaves the dry crown exactly alone.
+    wo, ho, pon = _read_ppm(on)
+    _, _, poff = _read_ppm(off)
+
+    def moved(radius, deg):
+        o = _beach_pixel(pon, wo, ho, project, radius, deg)
+        if o is None:
+            return None
+        return max(abs(pon[o + k] - poff[o + k]) for k in range(3)) > BEACH_DIFF_THRESH
+
+    crown_hits, crown_n, band_hits, band_n = 0, 0, 0, 0
+    for deg in BEACH_AZIMUTHS:
+        for step in range(2, int(BEACH_CROWN_FRACTION * shore * 10)):
+            got = moved(step / 10.0, deg)
+            if got is not None:
+                crown_n += 1
+                crown_hits += 1 if got else 0
+        for step in range(21):
+            radius = shore - BEACH_BAND_HALF + step * BEACH_BAND_HALF / 10.0
+            got = moved(radius, deg)
+            if got is not None:
+                band_n += 1
+                band_hits += 1 if got else 0
+    frac = band_hits / max(band_n, 1)
+    ok = crown_hits == 0 and frac >= BEACH_BAND_MIN_FRAC
+    print(f"  beach-surf-zone {'PASS' if ok else 'FAIL'}  the bed moves {frac:.3f} of the "
+          f"shore band within {BEACH_BAND_HALF} unit of the waterline (want "
+          f">={BEACH_BAND_MIN_FRAC}, {band_n} samples) and {crown_hits} of {crown_n} samples "
+          f"inside r {BEACH_CROWN_FRACTION * shore:.2f} on the dry crown (want exactly 0)")
+    if not ok:
+        failures.append("beach-surf-zone")
+
+    return failures
+
+
 def run_mask_gate(workdir):
     """ALPHA_MASK is binary above the cutoff, and absent below it (spec 11.31).
 
@@ -6789,6 +7062,8 @@ GATE_GROUPS = [
      run_cloud_shadow_gate),
     ("water", "water surface (determinism, absorption, shoreline, reach; specs 11.32-11.35):",
      run_water_gate),
+    ("beach", "the shoaling bed the eye can see (surf ring, turquoise, bound; spec 11.44):",
+     run_beach_gate),
     ("clouds", "cloud layer (steady-state churn, report-only):", run_cloud_churn_gate),
     ("skin-offpath", "pre-integrated skin (off-path byte identity):", run_skin_offpath_gate),
     ("skin-curvature", "pre-integrated skin (curvature ordering):", run_skin_curvature_gate),
