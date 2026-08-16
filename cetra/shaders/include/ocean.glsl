@@ -208,19 +208,6 @@ struct OceanBed {
      */
     float column;
     vec2 dColumn; // d(column)/d(world x, world z): minus the bed's own gradient
-    /*
-     * ALONGSHORE arc length of the nearest point on the traced waterline, world units, baked
-     * into the bed's fourth channel (spec 11.45).
-     *
-     * With `column` as the cross-shore axis this completes a shore-local frame, which is the
-     * thing a height field alone cannot provide. Anything indexed by the pair follows the
-     * beach round a headland instead of tiling the world -- and world tiling is why foam was
-     * accumulated per cascade texel and why every beach arm had to run Gerstner.
-     *
-     * 0 where no shoreline was traced, i.e. open ocean. Consumers fall back to the world
-     * frame there, which is what they all did before this existed.
-     */
-    float along;
 };
 
 OceanBed oceanBed(vec2 p) {
@@ -232,14 +219,12 @@ OceanBed oceanBed(vec2 p) {
         b.dShoal = vec2(0.0);
         b.column = 1.0e6;
         b.dColumn = vec2(0.0);
-        b.along = 0.0;
         return b;
     }
     vec2 uv = p / (waterExtent * 2.0) + 0.5;
     vec4 bed = texture(bedTex, clamp(uv, vec2(0.0), vec2(1.0)));
     b.column = waterLevel - bed.r;
     b.dColumn = -bed.gb;
-    b.along = bed.a;
     // The window converted into this world's units, so the shoal ramp is the same DEPTH of
     // water whatever a unit happens to be.
     float shoalMin = OCEAN_SHOAL_MIN_M * waterUnitsPerMetre;
@@ -274,6 +259,9 @@ struct OceanSurface {
     // fraction, gated by how far inshore the point is. What the shore foam rides, so the
     // whitewater moves with the wave instead of sitting on a depth contour.
     float surf;
+    // How far up the face the tongue has run, world units. What foam is CARRIED by; see
+    // OceanSurf.run.
+    float swashRun;
     // How close this crest is to the depth limit, 0..1 -- 1 is a wave standing in exactly as
     // much water as it is tall. The breaking criterion, and it asks nothing of the wave model:
     // a height over a depth is available wherever there is a bed, where the Jacobian needs a
@@ -292,6 +280,9 @@ struct OceanSurf {
     float height; // the surface, world units above the still level, field included
     vec2 dHeight; // d(height)/d(world x, world z)
     float crest;  // 0..1, how much bore or tongue is here -- what the foam reads
+    // Cross-shore distance the tongue has run up the face, world units. What CARRIES the
+    // foam: whitewater sits on the sheet, and the sheet is what moves.
+    float run;
 };
 
 /*
@@ -304,6 +295,7 @@ OceanSurf oceanSurf(vec2 p, OceanBed bed, float t, float fieldY, vec2 dFieldY) {
     s.height = fieldY;
     s.dHeight = dFieldY;
     s.crest = 0.0;
+    s.run = 0.0;
     float gate = 1.0 - bed.shoal;
     // Gated on the bed like the crest limit is: with no bed there is no shore for anything to
     // come in to, and the sentinel column would otherwise be run through a sqrt. And nothing
@@ -371,6 +363,16 @@ OceanSurf oceanSurf(vec2 p, OceanBed bed, float t, float fieldY, vec2 dFieldY) {
     // The foam's cue: the bore's crest where the bore owns the surface, the tongue's where
     // the lens does.
     s.crest = clamp(mix(bw.x * gate, swash, w), 0.0, 1.0);
+    /*
+     * How far up the beach face the tongue has RUN, as a cross-shore distance.
+     *
+     * A height over the slope is a distance along the sand, which is the number whitewater
+     * has to be carried by: foam is on the water, and the water here is a sheet sliding up
+     * and back. A pattern held still in the world while the band that reveals it moves is a
+     * stencil, not foam -- it reads as a fixed set of shapes being masked in and out, which
+     * is exactly what it looks like.
+     */
+    s.run = r.edge / slope;
     return s;
 }
 
@@ -639,6 +641,7 @@ OceanSurface oceanAssemble(vec2 p, vec3 disp, vec3 dispDx, vec3 dispDz, OceanBed
     dPdx.y = surf.dHeight.x;
     dPdz.y = surf.dHeight.y;
     s.surf = surf.crest;
+    s.swashRun = surf.run;
     // cross(dPdz, dPdx) and not the reverse: on a flat surface that is +Y, and the
     // flipped order would light every wave from underneath.
     s.normal = normalize(cross(dPdz, dPdx));

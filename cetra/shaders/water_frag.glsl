@@ -35,7 +35,10 @@ in vec4 PrevClip;
 in float Jacobian;
 in float Shoal;
 in float Breaking;
-in vec2 ShoreUV;
+// What the shore foam rides: the bed's downhill (unit, zero with no bed) and how far the
+// tongue has run up the face. See the shore breakup.
+in vec2 ShoreDir;
+in float SwashRun;
 in float Surf;
 // Mean square slope of the displacing bands that the vertex stage's footprint filtered
 // away. The other half of the geometry-to-BRDF handover: what left the mesh arrives here
@@ -238,10 +241,6 @@ const float WATER_SWASH_SHOAL = 0.10;
 // as broken-up foam.
 const float WATER_FOAM_NOISE_A_PER_M = 0.42;
 const float WATER_FOAM_NOISE_B_PER_M = 1.31;
-// How much faster the breakup runs ALONGSHORE than across it, in the shore frame only. See the
-// use site: it is what makes shore foam a lacy line rather than a row of blobs with gaps of
-// bare coast between them.
-const float WATER_FOAM_ALONG_SCALE = 3.5;
 /*
  * The breakup is a COVERAGE THRESHOLD, not a brightness modulation, and the threshold rises
  * as the foam thins.
@@ -536,8 +535,8 @@ void main() {
      * so the foam comes in and drains with the water instead of marking where the water was.
      */
     float band = 1.0 - smoothstep(0.0, WATER_SWASH_SHOAL, Shoal);
-    // Kept apart from the crest foam above, because the two are eroded in DIFFERENT FRAMES
-    // below and only their masks may be combined.
+    // Kept apart from the crest foam above: the two ride different things, so they are broken
+    // up in different places below and only the results are combined.
     float shoreFoam = band * WATER_SHORE_FOAM * mix(WATER_SHORE_FOAM_REST, 1.0, Surf);
 
     /*
@@ -566,30 +565,18 @@ void main() {
      * borrow this one it has none.
      *
      * Value noise evaluated rather than sampled: it costs no sampler in a program that has
-     * none left, and the reference this is ported from computes it the same way. Two scales
-     * drifting at different rates, so the texture does not read as a stationary pattern the
-     * waves slide under.
+     * none left, and a hash costs less than the fetch would anyway. Two scales drifting at
+     * different rates, so the texture does not read as a stationary pattern the waves slide
+     * under.
      *
      * It may only take coverage AWAY. Foam the noise could ADD would be whitewater where
      * nothing folded and no bed shoaled.
      */
-    /*
-     * TWO FRAMES, and only the MASKS are combined.
-     *
-     * Crest foam belongs to open water and is anchored in the world; shore foam belongs to
-     * the beach and is anchored in the shore's own (alongshore, cross-shore) frame, so it
-     * follows the coast round a headland instead of tiling with the world grid. Eroding one
-     * pattern at coordinates blended between the two smears it into streaks exactly where
-     * they hand over, which is the surf zone -- so each is eroded where it lives and the
-     * results are unioned. The reference this is ported from records the same finding.
-     *
-     * The shore frame degenerates to the world one with no traced shoreline (`along` is 0
-     * there), which is the open-ocean case and is what every frame did before this existed.
-     */
+    // Cycles per metre over a position in world units, so the frequency divides. Shared by
+    // both breakups below, which differ in where they are SAMPLED, not in scale.
     float noiseA = WATER_FOAM_NOISE_A_PER_M / waterUnitsPerMetre;
     float noiseB = WATER_FOAM_NOISE_B_PER_M / waterUnitsPerMetre;
     if (foam > 0.0) {
-        // Cycles per metre over a position in world units, so the frequency divides.
         float breakup = waterValueNoise(WorldPos.xz * noiseA + time * 0.03) * 0.62 +
                         waterValueNoise(WorldPos.xz * noiseB - time * 0.05) * 0.38;
         // The bar is read from the foam BEFORE it is eroded, so thinning raises it and the
@@ -599,19 +586,28 @@ void main() {
     }
     if (shoreFoam > 0.0) {
         /*
-         * ANISOTROPIC in the shore frame, where the world frame above is not.
+         * THE SHORE'S FOAM RIDES THE SHEET, which is the whole of this.
          *
-         * Whitewater at a shoreline is a lacy LINE, not a field of blobs: it is continuous
-         * along the beach and structured across it. An isotropic pattern cannot say that --
-         * at the frequency the open sea wants, one clump spans a whole stretch of coast, and
-         * measured on the dome fixture that left an 80 degree sector with no foam on it at
-         * all while the arm walking the ring found the brightest thing on those rays was the
-         * dry crown. Running faster ALONGSHORE puts several clumps in the width of any ray,
-         * so the line is continuous and the texture is in it rather than instead of it.
+         * Whitewater at a beach sits ON the water, and the water there is a sheet running up
+         * the face and draining back. Sampled at the world position it is instead a fixed set
+         * of shapes that the moving band reveals and hides -- a stencil, and it reads as one:
+         * static blobs winking in and out while the tide moves over them.
+         *
+         * So the lookup is offset by how far the tongue has run, along the bed's own downhill.
+         * A DISPLACEMENT, not a change of coordinates: two earlier attempts tried to give the
+         * pattern the shore's own frame and both failed on the geometry rather than the idea.
+         * An alongshore arc length has a CUT where the tracer's chain closes, and interpolating
+         * across it swept the whole coast inside one grid cell, printing a band of hairlines.
+         * Rotating world position into the shore's basis is worse: on a round island the
+         * position vector is radial and its tangential component is identically zero, so the
+         * pattern collapses to a function of radius and the sea fills with bullseyes.
+         *
+         * A displacement has neither failure. It is world position plus a smooth offset, so it
+         * cannot collapse and it has nothing to be discontinuous across.
          */
-        vec2 shoreFreq = vec2(WATER_FOAM_ALONG_SCALE, 1.0);
-        float breakup = waterValueNoise(ShoreUV * shoreFreq * noiseA + time * 0.03) * 0.62 +
-                        waterValueNoise(ShoreUV * shoreFreq * noiseB - time * 0.05) * 0.38;
+        vec2 q = WorldPos.xz - ShoreDir * SwashRun;
+        float breakup = waterValueNoise(q * noiseA + time * 0.03) * 0.62 +
+                        waterValueNoise(q * noiseB - time * 0.05) * 0.38;
         float bar = WATER_FOAM_ERODE_HI - WATER_FOAM_ERODE_SPAN * shoreFoam;
         shoreFoam *= smoothstep(0.0, WATER_FOAM_ERODE_EDGE, breakup - bar);
     }

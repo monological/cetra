@@ -5131,16 +5131,15 @@ BEACH_DIFF_THRESH = 8
 # crown left for the bound to be about.
 BEACH_CROWN_FRACTION = 0.60
 # The shore band, in world units either side of the waterline, and how much of it the bed
-# has to move.
+# has to move. Per-azimuth fractions run 0.525 to 1.000 and the pooled fraction is ~0.9.
 #
 # The band is deliberately HALF DRY: the waterline is its centre, so the inner half is beach
-# above the still line and only moves because the run-up climbs it. That half is therefore
-# foam-dependent, and once 11.45 broke the foam into clumps the pooled fraction fell 0.680 ->
-# 0.556 with the bed still moving every sample it had moved before, just by less than the
-# 8/255 this arm calls a move. The bar drops to match what a clumpy swash can promise; the
-# arm still fails outright on a drowned island, which is the state it exists to catch.
+# above the still line and only moves because the run-up climbs it. That makes it sensitive to
+# what the swash paints, and it caught a real defect rather than needing to be loosened for
+# one -- an alongshore coordinate with a cut in it fell to 0.556 here, and once the foam was
+# aligned to the shore's DIRECTION instead the fraction came back at 0.690.
 BEACH_BAND_HALF = 1.0
-BEACH_BAND_MIN_FRAC = 0.50
+BEACH_BAND_MIN_FRAC = 0.60
 
 
 def _beach_render(out, extra, frames=30):

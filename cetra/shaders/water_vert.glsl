@@ -29,9 +29,14 @@ out float Jacobian;
 out float Shoal;
 // How much of its depth limit this crest is using; see OceanSurface.breaking.
 out float Breaking;
-// The shore-local frame: alongshore arc length and the water column that is its cross-shore
-// partner. See OceanBed.along -- foam indexed by these rides the beach instead of the world.
-out vec2 ShoreUV;
+/*
+ * What the shore foam RIDES: the direction the bed falls away (unit, or zero with no bed)
+ * and how far up the face the tongue has run. Together they are a displacement, and the
+ * fragment stage offsets its foam pattern by it so the whitewater travels with the sheet
+ * instead of being a fixed set of shapes the moving band reveals and hides.
+ */
+out vec2 ShoreDir;
+out float SwashRun;
 out float FilteredMss;
 // The surf's crest fraction here, gated inshore -- see OceanSurface.surf.
 out float Surf;
@@ -97,7 +102,11 @@ void main() {
     Jacobian = s.jacobian;
     Shoal = s.shoal;
     Breaking = s.breaking;
-    ShoreUV = vec2(bed.along, bed.column);
+    // Guarded rather than normalized blind: a flat seabed has no downhill, and the consumer
+    // reads the zero as "nothing to ride" and leaves its pattern in the world.
+    float bedFall = length(bed.dColumn);
+    ShoreDir = bedFall > 1.0e-5 ? bed.dColumn / bedFall : vec2(0.0);
+    SwashRun = s.swashRun;
     FilteredMss = s.filteredMss;
     Surf = s.surf;
 
