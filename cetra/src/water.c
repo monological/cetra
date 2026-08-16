@@ -802,8 +802,13 @@ static bool _water_seed_cascades(Water* water) {
     free(initial);
     free(wave);
     _water_record_seed(water);
-    log_info("Water: seeded sea Hs %.2f m, Tp %.1f s", (double)_water_significant_height(water),
-             (double)(6.28318530718f / _water_peak_omega(&water->sea)));
+    float carried = 0.0f;
+    for (int c = 0; c < WATER_CASCADE_COUNT; c++)
+        carried += water->cascade_slope_var[c];
+    log_info("Water: seeded sea Hs %.2f m, Tp %.1f s, slope var %.4f of Cox-Munk %.4f",
+             (double)_water_significant_height(water),
+             (double)(6.28318530718f / _water_peak_omega(&water->sea)), (double)carried,
+             (double)(0.003f + 0.00512f * water->sea.wind_speed));
     return true;
 }
 
