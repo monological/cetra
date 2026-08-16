@@ -266,13 +266,32 @@ void ground_build_mesh(Mesh* mesh, int rings, int segments, float uv_tiles) {
             mesh->normals[vi * 3 + 1] = normal[1];
             mesh->normals[vi * 3 + 2] = normal[2];
 
-            // Tangent along the circle (perpendicular to radial). The shader
-            // derives the bitangent as cross(N, T), which for this normal and
-            // tangent works out to (cos, -slope, sin) -- the slope-tilted
-            // vector this used to store explicitly -- so the handedness is +1.
-            mesh->tangents[vi * 4] = -sinf(angle);
-            mesh->tangents[vi * 4 + 1] = 0.0f;
-            mesh->tangents[vi * 4 + 2] = cosf(angle);
+            /*
+             * The tangent has to be d(position)/du, and u is PLANAR here -- see the tex_coords
+             * below, which are a function of x alone. So the tangent is the world X axis laid
+             * onto the surface, and nothing to do with the ring the vertex happens to sit on.
+             *
+             * It was the circular tangent, perpendicular to radial, which is the frame a POLAR
+             * parameterisation would want. Against planar UVs that is a TBN which disagrees
+             * with the map it indexes: the sand's ripple train came out rotating around the
+             * island instead of running one way across it, and because the frame turns with
+             * the ring while the UVs do not, the disagreement changes from vertex to vertex
+             * and prints a crease along every triangle edge -- a quilt over the whole beach,
+             * strongest where the normal map has the most to say.
+             *
+             * Gram-Schmidt against the surface normal rather than a bare (1,0,0), so the
+             * tangent stays in the surface where the beach is sloped. cross(N, T) then gives a
+             * bitangent along +z, which is +v, so the handedness stays +1.
+             */
+            vec3 tangent = {1.0f, 0.0f, 0.0f}; // out-param; seeded so the analyser can see it
+            const float tn = glm_vec3_dot(normal, tangent);
+            tangent[0] -= normal[0] * tn;
+            tangent[1] -= normal[1] * tn;
+            tangent[2] -= normal[2] * tn;
+            glm_vec3_normalize(tangent);
+            mesh->tangents[vi * 4] = tangent[0];
+            mesh->tangents[vi * 4 + 1] = tangent[1];
+            mesh->tangents[vi * 4 + 2] = tangent[2];
             mesh->tangents[vi * 4 + 3] = 1.0f;
 
             mesh->tex_coords[vi * 2] = (0.5f + 0.5f * x / radius) * uv_tiles;
