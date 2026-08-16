@@ -6,6 +6,7 @@
 #include "water.h"
 
 #include "engine.h"
+#include "procedural/foam_pattern.h"
 #include "shore_chain.h"
 #include "ubo.h"
 #include "ext/log.h"
@@ -436,6 +437,7 @@ void free_water(Water* water) {
     glDeleteTextures(2, water->cascade_array);
     glDeleteFramebuffers(WATER_CASCADE_COUNT * 2, &water->cascade_fbo[0][0]);
     glDeleteTextures(1, &water->cascade_prev_array);
+    glDeleteTextures(1, &water->foam_pattern_tex);
     glDeleteTextures(2, water->foam_tex);
     glDeleteFramebuffers(2, water->foam_fbo);
     free(water);
@@ -790,7 +792,41 @@ bool water_will_draw(const Water* water, const struct Engine* engine, RenderMode
 // depends on neither the resolution nor the extent and is built once. No normals: a
 // displaced surface's normal is the derivative of the displacement, and a stored one would
 // just be overwritten.
+/*
+ * The foam web, generated once and kept for the context's life.
+ *
+ * R16F with a full mip chain and REPEAT: it tiles across the sea, so the wrap has to be real
+ * on both the sampling and the blur that made it. One channel because the consumer thresholds
+ * it -- what is wanted is a height field to cut, not a colour.
+ */
+static GLuint _water_make_foam_pattern(void) {
+    float* pattern = malloc((size_t)FOAM_PATTERN_RES * FOAM_PATTERN_RES * sizeof(float));
+    if (!pattern)
+        return 0;
+    foam_pattern_generate(pattern);
+
+    GLuint tex = 0;
+    glActiveTexture(GL_TEXTURE0);
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R16F, FOAM_PATTERN_RES, FOAM_PATTERN_RES, 0, GL_RED,
+                 GL_FLOAT, pattern);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glGenerateMipmap(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    free(pattern);
+    return tex;
+}
+
 static bool water_ensure_grid(Water* water) {
+    // The foam web rides along here rather than in its own ensure_: it depends on nothing the
+    // scene can change, so "made once, on the first frame that draws water" is its whole
+    // lifetime. 0 on failure is a legal bind and the shader reads it as no pattern.
+    if (!water->foam_pattern_tex)
+        water->foam_pattern_tex = _water_make_foam_pattern();
     if (water->grid_vao)
         return true;
     if (water->failed)
@@ -1328,7 +1364,9 @@ static void _water_step_film(Water* water, const struct Scene* scene, float t, f
     float block[UBO_SHORE_FILM_VEC4S * 4];
     memset(block, 0, sizeof(block));
     const float slope = params.beach_slope > 0.01f ? params.beach_slope : 0.01f;
-    block[0] = 1.0f;                                   // active
+    // 1 an open coast, 2 a closed loop -- see shoreFilmClosed, which needs it to know whether
+    // the column after the last is the first or itself.
+    block[0] = water->chain->wraps ? 2.0f : 1.0f;
     block[1] = dt > 0.0f ? dt : 1.0f / 60.0f;          // seconds per history slot
     block[2] = (float)water->chain->head;              // newest slot
     block[3] = slope;
@@ -1412,6 +1450,13 @@ static void _water_bind_cascades(const Water* water, UniformManager* u, bool fft
     glActiveTexture(GL_TEXTURE0 + WATER_CASCADE_UNIT);
     glBindTexture(GL_TEXTURE_2D_ARRAY, fft ? water->cascade_array[0] : 0);
     uniform_set_int(u, "cascadeFields", WATER_CASCADE_UNIT);
+
+    // The foam web, on BOTH wave models: it breaks up the shore band, which is selected from
+    // the bed rather than from the wave field and so exists whichever model is running.
+    glActiveTexture(GL_TEXTURE0 + WATER_FOAM_PATTERN_UNIT);
+    glBindTexture(GL_TEXTURE_2D, water->foam_pattern_tex);
+    uniform_set_int(u, "foamPatternTex", WATER_FOAM_PATTERN_UNIT);
+    uniform_set_float(u, "foamPatternTile", FOAM_PATTERN_TILE_M);
     for (int c = 0; c < WATER_CASCADE_COUNT; c++) {
         char chop[32];
         snprintf(chop, sizeof(chop), "cascadeChoppiness[%d]", c);

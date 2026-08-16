@@ -21,8 +21,9 @@
 #define SHORE_FILM_SLOTS 12
 
 layout(std140) uniform ShoreFilmBlock {
-    // x = active (0 = no film, fall back to the closed form), y = seconds per history slot,
-    // z = index of the newest slot, w = the beach slope the tips were measured against.
+    // x = 0 no film (fall back to the closed form), 1 an open coast, 2 a closed loop -- which
+    // decides whether the column index wraps. y = seconds per history slot, z = index of the
+    // newest slot, w = the beach slope the tips were measured against.
     vec4 shoreFilmParams;
     // Each column's waterline point and its landward normal: xy = world position, zw = normal.
     vec4 shoreFilmCols[SHORE_FILM_COLS];
@@ -33,6 +34,12 @@ layout(std140) uniform ShoreFilmBlock {
 
 bool shoreFilmActive() {
     return shoreFilmParams.x > 0.5;
+}
+
+// An island's columns are a ring and a coast running off the bed's edge is not, which decides
+// whether the partner of the last column is the first one or itself.
+bool shoreFilmClosed() {
+    return shoreFilmParams.x > 1.5;
 }
 
 float shoreFilmTip(int slot, int col) {
@@ -70,29 +77,60 @@ ShoreFilmSample shoreFilmNearest(vec2 p) {
     s.found = false;
     if (!shoreFilmActive())
         return s;
-    float best = 1.0e30, second = 1.0e30;
-    int bi = 0, si = 0;
+    float best = 1.0e30;
+    int bi = 0;
     for (int i = 0; i < SHORE_FILM_COLS; i++) {
         vec2 d = shoreFilmCols[i].xy - p;
         float d2 = dot(d, d);
         if (d2 < best) {
-            second = best;
-            si = bi;
             best = d2;
             bi = i;
-        } else if (d2 < second) {
-            second = d2;
-            si = i;
         }
     }
-    // Weighted by distance rather than by projecting onto the segment between them: the
-    // columns are a resampling of a traced polyline and need not be evenly spaced, and a
-    // projection would need the segment's own length to mean anything.
-    float da = sqrt(best), db = sqrt(second);
+
+    /*
+     * The partner is the INDEX-ADJACENT column on the side the point is on -- not the
+     * second-nearest by distance, which is discontinuous and looked it.
+     *
+     * Second-nearest changes IDENTITY as you move along the shore: somewhere between every
+     * pair of columns there is a locus where the runner-up swaps for a different column with a
+     * different tip, and the blend jumps across it. That locus is a straight line, the jump is
+     * a step in the swash edge, and the lens is fitted to that edge -- so it printed as a
+     * straight crease in the water surface with the sea at a different height either side of
+     * it. Only visible with the swash IN, because with the tide out the lens contributes
+     * nothing for the step to be a step in.
+     *
+     * Choosing by side makes it continuous. Where the nearest column changes from i to i+1 the
+     * point is equidistant, so both readings use the pair (i, i+1) at the same weight and meet.
+     */
+    vec2 o = shoreFilmCols[bi].xy;
+    vec2 n = shoreFilmCols[bi].zw;
+    vec2 tangent = vec2(-n.y, n.x);
+    float along = dot(p - o, tangent);
+    int other = along >= 0.0 ? bi + 1 : bi - 1;
+    if (shoreFilmClosed())
+        other = (other + SHORE_FILM_COLS) % SHORE_FILM_COLS;
+    else
+        other = clamp(other, 0, SHORE_FILM_COLS - 1);
+    float spacing = max(length(shoreFilmCols[other].xy - o), 1.0e-4);
+
+    /*
+     * SMOOTHSTEPPED, and that is not a polish -- a linear blend creases at every column.
+     *
+     * Walking along the shore, a linear interpolation between columns has a derivative that
+     * jumps at each one: the slope of the segment behind is (tip_i - tip_{i-1}) and the slope
+     * ahead is (tip_{i+1} - tip_i), and those disagree. The lens is fitted to this edge and the
+     * water's NORMAL is its derivative, so a C1 break shades as a hard line -- a terrace at
+     * every column, in the water and in the wet sand alike, because both read this function.
+     *
+     * Smoothstep has zero derivative at its ends, so both sides meet at zero and the field is
+     * C1 across the join. The value it interpolates is unchanged.
+     */
+    float t = clamp(abs(along) / spacing, 0.0, 1.0);
     s.a = bi;
-    s.b = si;
-    s.t = da + db > 1.0e-6 ? da / (da + db) : 0.0;
-    s.dist = da;
+    s.b = other;
+    s.t = t * t * (3.0 - 2.0 * t);
+    s.dist = sqrt(best);
     s.found = true;
     return s;
 }

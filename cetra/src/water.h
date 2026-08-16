@@ -59,6 +59,10 @@
 #define WATER_CASCADE_UNIT 0
 // The baked bed heightfield, sampled in the VERTEX stage for shoaling.
 #define WATER_BED_UNIT 8
+// The foam pattern (spec 11.45), on one of the units the cascade consolidation freed. Mipped,
+// which is the whole reason it is a texture rather than the ALU version it replaced: whitewater
+// is centimetre detail seen from a metre to the horizon, and procedural noise has no chain.
+#define WATER_FOAM_PATTERN_UNIT 2
 /*
  * The cascade shadow array, for the sun glitter (spec 11.42).
  *
@@ -384,6 +388,9 @@ typedef struct Water {
      */
     // Last frame's target 0 for the bands that displace, one layer per cascade.
     GLuint cascade_prev_array;
+    // The tiling foam web, generated once on first use. Independent of wave model and sea
+    // state, so nothing invalidates it.
+    GLuint foam_pattern_tex;
     int spectral_frames;
 
     /*

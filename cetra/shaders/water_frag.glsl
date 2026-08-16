@@ -81,6 +81,10 @@ uniform int glitterEnabled;
 // instantaneous fold below is the whole selection.
 uniform sampler2D foamTex;
 uniform int foamAvailable;
+// The tiling foam web and the world span one tile covers, in METRES. On a unit the cascade
+// consolidation freed -- this program had none before that (spec 11.45).
+uniform sampler2D foamPatternTex;
+uniform float foamPatternTile;
 uniform int cameraSubmerged;
 uniform int causticsEnabled;
 // 1 = the shoreline writes fractional coverage for alpha-to-coverage; 0 = the
@@ -233,22 +237,10 @@ const float WATER_SHORE_FOAM_REST = 0.3;
 // up the sand, and anything wider is a sheet laid over the whole shelf -- which water-shoal
 // reads directly, since foam is flat and the roughness it measures is not.
 const float WATER_SWASH_SHOAL = 0.10;
-/*
- * The breakup's base frequency, in cycles per METRE. waterFoamPattern lays its other two
- * bands on at 2.3x and 5.7x this, so one number sets the whole web's scale.
- *
- * FOAM IS CENTIMETRE-SCALE, and this is the constant that says so. At 0.42 a cell spanned
- * 2.4 m, which is wider than most of the whitewater in a frame -- the ridge was there and
- * every filament of it was metres across, so the pattern still read as lumps however it was
- * folded. 4 cycles a metre puts a cell at 25 cm, which is a clump of bubbles rather than a
- * bank of them, and the fine band inside takes it to 4 cm.
- *
- * There is a floor under this and it is aliasing: a web finer than the footprint averages to
- * a flat grey wash, which is the failure the whole Jacobian selection exists to avoid. The far
- * field is protected by the foam FADING there rather than by this number, so anything much
- * finer wants a mip chain and therefore a sampler this program does not have.
- */
-const float WATER_FOAM_NOISE_A_PER_M = 4.0;
+// How fast crest foam streams downwind, METRES per second. Small: this is the pattern sliding
+// over the sea, where the foam's own travel is already handled by reading it at the wave
+// parcel's undisplaced label.
+const float WATER_FOAM_DRIFT_M_PER_S = 0.12;
 /*
  * The breakup is a COVERAGE THRESHOLD, not a brightness modulation, and the threshold rises
  * as the foam thins.
@@ -281,9 +273,6 @@ const float WATER_FOAM_NOISE_A_PER_M = 4.0;
 const float WATER_FOAM_ERODE_HI = 1.05;
 const float WATER_FOAM_ERODE_SPAN = 1.15;
 const float WATER_FOAM_ERODE_EDGE = 0.15;
-// How hard the coarse band is folded about zero. Higher is a thinner, sharper web; at 1 the
-// ridge is as wide as the noise itself and stops reading as a filament at all.
-const float WATER_FOAM_RIDGE = 1.2;
 /*
  * Caustics. Light crossing the surface is focused by the surface's own curvature,
  * so the brightness on the bed is a property of the WAVES above the point being
@@ -365,28 +354,61 @@ float waterValueNoise(vec2 p) {
 }
 
 /*
- * THE FOAM PATTERN, and the ridge is the whole of it.
+ * THE FOAM PATTERN: a baked, MIPPED web of filaments (procedural/foam_pattern.c).
  *
- * Value noise is smooth and its level sets are blobs, so thresholding it -- however cleverly
- * -- gives rounded lumps. Whitewater is not lumps. It is a WEB: thin films stretched between
- * bubbles, so its structure is filaments and the cells between them.
+ * Sampled rather than evaluated, and the mip chain is the reason. An ALU version of this ran
+ * here first and had no chain, so distant whitewater aliased into a speckle band and was
+ * protected only by the foam fading out before it got bad -- for detail that is centimetre
+ * scale and seen from a metre to the horizon, which is exactly the case mips exist for.
  *
- * Folding a zero-mean field about zero is what produces that. `1 - |n|` puts a crest along
- * every zero crossing of the noise, which is a curve rather than a region, and squaring it
- * sharpens the crest into a strand. Three bands, coarse to fine, and only the coarsest is
- * ridged: it carries the web, and the other two are there to keep the strands from reading as
- * a regular mesh.
+ * `p` is in WORLD units; the tile is a physical size, so a world at 22 units to the metre
+ * gets the same size of bubble as one at 1.
  *
- * The weights are the ones the structure was tuned at and the constant term matters as much as
- * the rest -- it is the wash BETWEEN the filaments, without which the pattern thresholds into
- * disconnected specks instead of a net that thins.
+ * THE FOOTPRINT COMES FROM THE UNDISPLACED POSITION, and that is the whole reason this takes
+ * two arguments. Callers advect `p` -- the shore band slides the pattern up the beach with the
+ * sheet -- and the advection is built from the bed's gradient, which is bilinear off a texture
+ * and therefore only C0. Its DERIVATIVE steps at every bed texel boundary, so an implicit
+ * lookup picks a different mip either side of that step and the sea prints a grid of
+ * rectangles, one flat and blurred against its sharp neighbour, staircased at the quad
+ * granularity the derivative is taken over. Scaling with the run-up, so the tide appears to
+ * switch it on.
+ *
+ * Advection translates a pattern without resizing it, so the correct footprint is the pixel's
+ * own world footprint and never the advected one.
+ *
+ * DOMAIN-WARPED, because one baked tile is wallpaper. The tile is a physical 5 m and a beach is
+ * tens of metres across, so a plain lookup puts the same web of filaments on screen three or
+ * four times over and the eye locks onto it at once. That is the PERIOD being wrong, not the
+ * content, and no care in the bake can fix it.
+ *
+ * A warp rather than a second tap blended in: blending two copies halves the contrast and
+ * blurs the ridges, which is exactly the structure the erosion threshold reads, and it would
+ * put every constant in that threshold out of calibration. Displacing the lookup is a
+ * REPARAMETERISATION -- the set of values returned over an area is unchanged, so the threshold
+ * stays calibrated and only where each filament lands moves.
+ *
+ * The warp field is the same texture at a scale that shares no small common multiple with the
+ * pattern's, so the composite repeats at their beat rather than at the tile. Read at a fixed
+ * coarse mip: it must be smooth, or it adds its own high-frequency detail to a field that
+ * already has the detail it wants.
  */
-float waterFoamPattern(vec2 p) {
-    float web = waterValueNoise(p) * 2.0 - 1.0;
-    float w = max(0.0, 1.0 - WATER_FOAM_RIDGE * abs(web));
-    float mid = waterValueNoise(p * 2.3 + vec2(11.3, 4.7)) * 2.0 - 1.0;
-    float fine = waterValueNoise(p * 5.7 - vec2(7.1, 2.9)) * 2.0 - 1.0;
-    return clamp(0.55 * w * w + 0.25 + 0.18 * mid + 0.12 * fine, 0.0, 1.0);
+// In tiles: the warp's own period, how far it displaces, and the mip that keeps it smooth.
+// The amount is small against the scale on purpose -- that ratio is the local stretch, and a
+// large one would visibly smear the filaments instead of relocating them.
+const float WATER_FOAM_WARP_SCALE = 7.3;
+const float WATER_FOAM_WARP_AMOUNT = 0.6;
+const float WATER_FOAM_WARP_LOD = 3.0;
+
+float waterFoamPattern(vec2 p, vec2 footprint) {
+    float tile = max(foamPatternTile * waterUnitsPerMetre, 1.0e-4);
+    // Two taps of one channel at an offset, rather than an rg field: the bake has one channel
+    // and a second decorrelated one would be a wider texture for a term this slow.
+    vec2 wuv = p / (tile * WATER_FOAM_WARP_SCALE);
+    float wx = textureLod(foamPatternTex, wuv, WATER_FOAM_WARP_LOD).r;
+    float wy = textureLod(foamPatternTex, wuv + vec2(0.37, 0.11), WATER_FOAM_WARP_LOD).r;
+    vec2 q = p + (vec2(wx, wy) - 0.5) * (tile * WATER_FOAM_WARP_AMOUNT);
+    return textureGrad(foamPatternTex, q / tile, dFdx(footprint) / tile,
+                       dFdy(footprint) / tile).r;
 }
 
 float waterSmith(float ndx) {
@@ -608,11 +630,11 @@ void main() {
      * It may only take coverage AWAY. Foam the noise could ADD would be whitewater where
      * nothing folded and no bed shoaled.
      */
-    // Cycles per metre over a position in world units, so the frequency divides. Shared by
-    // both breakups below, which differ in where they are SAMPLED, not in scale.
-    float noiseA = WATER_FOAM_NOISE_A_PER_M / waterUnitsPerMetre;
+    // Crest foam drifts downwind: it is on open water with nothing else carrying it, where
+    // the shore's rides the swash instead. A world-space offset, so the rate is a speed.
+    vec2 foamDrift = waterWindDir * (time * WATER_FOAM_DRIFT_M_PER_S * waterUnitsPerMetre);
     if (foam > 0.0) {
-        float breakup = waterFoamPattern(WorldPos.xz * noiseA + time * 0.03);
+        float breakup = waterFoamPattern(WorldPos.xz + foamDrift, WorldPos.xz);
         // The bar is read from the foam BEFORE it is eroded, so thinning raises it and the
         // pattern comes apart; what survives keeps the strength it had.
         float bar = WATER_FOAM_ERODE_HI - WATER_FOAM_ERODE_SPAN * foam;
@@ -636,11 +658,15 @@ void main() {
          * position vector is radial and its tangential component is identically zero, so the
          * pattern collapses to a function of radius and the sea fills with bullseyes.
          *
-         * A displacement has neither failure. It is world position plus a smooth offset, so it
-         * cannot collapse and it has nothing to be discontinuous across.
+         * A displacement has neither failure: it is world position plus an offset, so it cannot
+         * collapse and its VALUE is continuous everywhere. Its derivative is not -- the offset
+         * comes off the bed's bilinear gradient -- which is why the footprint below is taken
+         * from the undisplaced position. See waterFoamPattern.
          */
         vec2 q = WorldPos.xz - ShoreDir * SwashRun;
-        float breakup = waterFoamPattern(q * noiseA + time * 0.03);
+        // No drift added: q already carries the swash's own advection, which is what this
+        // foam is sitting on.
+        float breakup = waterFoamPattern(q, WorldPos.xz);
         float bar = WATER_FOAM_ERODE_HI - WATER_FOAM_ERODE_SPAN * shoreFoam;
         shoreFoam *= smoothstep(0.0, WATER_FOAM_ERODE_EDGE, breakup - bar);
     }
