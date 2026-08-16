@@ -142,6 +142,24 @@ static float _water_jonswap(float omega, float peak_omega, float alpha, float tm
            expf(-1.25f * powf(peak_ratio, 4.0f)) * powf(enhancement, peak_shape);
 }
 
+// The JONSWAP peak angular frequency for a sea state, rad/s: the fetch-limited relation, in
+// one place because the seeding shapes the spectrum around it and the surf runs at it.
+static float _water_peak_omega(const WaterSeaState* sea) {
+    const float g = 9.81f;
+    const float wind_speed = fmaxf(sea->wind_speed, 0.1f);
+    const float fetch = fmaxf(sea->fetch, 1.0f);
+    return 22.0f * powf(wind_speed * fetch / (g * g), -0.33f);
+}
+
+// Significant wave height of the seeded sea, metres: 4 sigma, with the variance summed over
+// the cascades since they own disjoint wavenumber windows. Meaningful once seeded.
+static float _water_significant_height(const Water* water) {
+    float var = 0.0f;
+    for (int c = 0; c < WATER_CASCADE_COUNT; c++)
+        var += water->cascade_height_var[c];
+    return 4.0f * sqrtf(fmaxf(var, 0.0f));
+}
+
 /*
  * Seed one cascade: the conjugate-symmetric initial spectrum, and the per-mode wave
  * vector and dispersion.
@@ -162,7 +180,7 @@ static bool _water_build_spectrum(int size, const struct WaterCascadeConfig* cfg
     const float fetch = fmaxf(sea->fetch, 1.0f);
     const float sea_depth = fmaxf(sea->sea_depth, 0.1f);
     const float alpha = 0.076f * powf(g * fetch / (wind_speed * wind_speed), -0.22f);
-    const float peak_omega = 22.0f * powf(wind_speed * fetch / (g * g), -0.33f);
+    const float peak_omega = _water_peak_omega(sea);
 
     // Reported rather than shrugged off: returning quietly would leave wave_data
     // unwritten and the twiddle table all zeros, so every butterfly would read
@@ -388,6 +406,7 @@ Water* create_water(void) {
     // literature gives for what a wind sea carries its surface at.
     water->foam_drift = 0.35f;
     water->shore_coverage = true;
+    water->surf = true;
     water->far_lod = true;
     return water;
 }
@@ -466,15 +485,16 @@ void water_publish_to_postfx(const Water* water, struct Engine* engine) {
  * wrapping to the far side of the scene, and RGBA32F because a 3-channel float texture
  * is not reliably filterable everywhere this runs.
  */
-static void _water_bake_bed(Water* water) {
+static void _water_bake_bed(Water* water, float units_per_metre) {
     if (!water->height_at)
         return;
     // Self-checking, on the engine's own pattern for a lazily sized target
     // (_ensure_scene_depth_target): store what was baked and rebuild when the request
     // disagrees. Manual invalidation had the dependency backwards -- the GUI re-armed it
-    // from the LEVEL, which the bake does not read, and nothing re-armed it when the
-    // EXTENT moved, which is the one input it does.
-    if (water->bed_baked && water->bed_extent == water->extent)
+    // from the level when the bake did not read it, and nothing re-armed it when the
+    // EXTENT moved, which it did. The level is an input now, for the foreshore slope.
+    if (water->bed_baked && water->bed_extent == water->extent &&
+        water->bed_level == water->level && water->bed_units_per_metre == units_per_metre)
         return;
 
     const int res = WATER_BED_RES;
@@ -499,7 +519,13 @@ static void _water_bake_bed(Water* water) {
     // Second pass, so every central difference reads baked neighbours rather than
     // re-entering the callback. One-sided at the border, where the far neighbour does
     // not exist -- CLAMP means the field is flat past the edge anyway.
+    //
+    // The foreshore slope is accumulated in the same pass: the mean gradient magnitude
+    // over the texels within a metre of the still line, above or below it. See the field.
     const float cell = span / (float)res;
+    const float foreshore = 1.0f * units_per_metre;
+    double slope_sum = 0.0;
+    int slope_count = 0;
     for (int z = 0; z < res; z++) {
         for (int x = 0; x < res; x++) {
             const int x0 = x > 0 ? x - 1 : x;
@@ -512,8 +538,13 @@ static void _water_bake_bed(Water* water) {
             t[2] = (heights[(z1 * res + x) * 4] - heights[(z0 * res + x) * 4]) /
                    ((float)(z1 - z0) * cell);
             t[3] = 0.0f;
+            if (fabsf(t[0] - water->level) <= foreshore) {
+                slope_sum += sqrt((double)t[1] * t[1] + (double)t[2] * t[2]);
+                slope_count++;
+            }
         }
     }
+    water->bed_foreshore_slope = slope_count > 0 ? (float)(slope_sum / slope_count) : 0.0f;
 
     // The engine's own float-LUT upload: LINEAR / CLAMP_TO_EDGE / no mips is exactly
     // this texture's policy, so there is nothing here to hand-roll. Deleted and recreated
@@ -525,7 +556,10 @@ static void _water_bake_bed(Water* water) {
     free(heights);
     water->bed_baked = true;
     water->bed_extent = water->extent;
-    log_info("Water: bed baked at %d^2 over %.0f units", res, (double)span);
+    water->bed_level = water->level;
+    water->bed_units_per_metre = units_per_metre;
+    log_info("Water: bed baked at %d^2 over %.0f units, foreshore slope %.3f", res,
+             (double)span, (double)water->bed_foreshore_slope);
 }
 
 bool water_active(const Water* water) {
@@ -768,6 +802,8 @@ static bool _water_seed_cascades(Water* water) {
     free(initial);
     free(wave);
     _water_record_seed(water);
+    log_info("Water: seeded sea Hs %.2f m, Tp %.1f s", (double)_water_significant_height(water),
+             (double)(6.28318530718f / _water_peak_omega(&water->sea)));
     return true;
 }
 
@@ -1142,7 +1178,7 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
     if (!water_ensure_grid(water))
         return;
 
-    _water_bake_bed(water);
+    _water_bake_bed(water, _water_units_per_metre(scene));
 
     // The spectral bands, before anything that samples them. No profiler scope of
     // its own: it would have to nest inside the caller's, and the simulation is
@@ -1358,6 +1394,34 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
         // previous spectral scene would widen its lobe for waves it never carried.
         uniform_set_float(u, svar, fft ? water->cascade_slope_var[c] : 0.0f);
     }
+
+    /*
+     * The sea state the surf runs at: significant height in metres and peak frequency.
+     *
+     * Spectral: from the seeded spectrum -- Hs is 4 sigma, and the variance is the sum over
+     * the cascades since they own disjoint wavenumber windows. Gerstner: from the authored
+     * train, whose longest octave has crest-to-trough 2A and deep-water frequency sqrt(gk).
+     * Its amplitude and wavelength are WORLD units, so both convert; the Gerstner path's own
+     * dispersion runs g against world-unit k and is not corrected here, since that is the
+     * train's look and this is the surf's.
+     */
+    if (water->surf) {
+        float hs, omega;
+        if (fft) {
+            hs = _water_significant_height(water);
+            omega = _water_peak_omega(&water->sea);
+        } else {
+            hs = 2.0f * water->amplitude / units_per_metre;
+            const float k = 6.28318530718f / fmaxf(water->wavelength / units_per_metre, 0.01f);
+            omega = sqrtf(9.81f * k);
+        }
+        uniform_set_float(u, "waterSurfHeight", hs);
+        uniform_set_float(u, "waterSurfOmega", omega);
+    } else {
+        uniform_set_float(u, "waterSurfHeight", 0.0f);
+        uniform_set_float(u, "waterSurfOmega", 1.0f);
+    }
+    uniform_set_float(u, "waterBeachSlope", water->bed_foreshore_slope);
 
     // Last frame's displacement, for the spectral path's motion vectors. Only usable
     // from the third frame on: the first has nothing to copy from and the second holds

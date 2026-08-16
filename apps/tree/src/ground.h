@@ -45,7 +45,13 @@
 // The crown's height above the still water, in metres, and the slope of the face that runs
 // down to it. 1:11 is a moderately steep sand beach; flatter reads better and costs surf
 // zone that has to fit inside the bed's domain.
-#define GROUND_CROWN_M     0.90f
+//
+// The crown sits where the SEA puts a berm: at the run-up limit. The default sea here is
+// Hs 3.7 m at Tp 6.7 s, and Stockdon's 2% run-up on a 1:11 face from that is 1.38 m
+// (ocean.glsl, oceanSurf) -- so the biggest set of the surf climbs to there, and the tree
+// stands on a berm a third of a metre clear of it. At the 0.9 m this was, every set
+// overtopped the island. A calmer sea is a lower berm, and it is the sea that would change.
+#define GROUND_CROWN_M     1.70f
 #define GROUND_BEACH_SLOPE 0.09f
 
 // Where the shore sits, in units -- the radius the profile crosses the still level at.
@@ -131,14 +137,14 @@ float ground_shore_height(void);
  * sand.h) and these bands supply the hue, which is also why the beach can grade into the
  * upland continuously instead of meeting it at a material boundary.
  *
- * This island stands 1.02 m out of the water, so the bands are centimetres and not metres:
- * the wet strip is a fifth of a metre and the grass takes the crown, where the tree is.
- * They were set against a 2.16 m rise and rescaled with it -- a band taller than the island
- * simply never appears.
+ * The dry sand runs up to the run-up limit, because that is what a beach face IS: the sand
+ * the sea reaches. The berm sits just above it (GROUND_CROWN_M) and the grass takes the
+ * berm, where the tree is. The wet strip is the always-wet last fifth of a metre at the
+ * still line; what is wet ABOVE it at any moment is the swash's business, not a band's.
  */
 #define GROUND_WET_SAND_M 0.18f
-#define GROUND_DRY_SAND_M 0.46f
-#define GROUND_UPLAND_M   0.80f
+#define GROUND_DRY_SAND_M 1.45f
+#define GROUND_UPLAND_M   1.65f
 
 // Vertex colour for a point on the ground, sRGB, as pbr_frag decodes it. Submerged sand
 // below the water, a wet band just above it, dry sand, then the upland it grades into.

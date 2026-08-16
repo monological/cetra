@@ -28,6 +28,8 @@ out vec4 PrevClip;
 out float Jacobian;
 out float Shoal;
 out float FilteredMss;
+// The surf's crest fraction here, gated inshore -- see OceanSurface.surf.
+out float Surf;
 // The UNDISPLACED planar parameter this vertex was evaluated at -- the Lagrangian label of
 // the water parcel, not where it ended up. Anything keyed to a parcel rather than to a
 // place has to be looked up with this: the cascades are indexed by it, so a quantity
@@ -76,13 +78,13 @@ void main() {
         footprint = max(distance(px, p), distance(pz, p));
     }
 
-    // One shoal fetch per point, shared by the current surface and the previous position.
+    // One bed fetch per point, shared by the current surface and the previous position.
     // Both are functions of the same p, and asking twice cost a second bed texture fetch
     // plus its smoothstep and gradient on every vertex.
-    vec4 sh = oceanShoal(p);
-    OceanSurface s = oceanEvaluateAt(p, time, sh, footprint);
+    OceanBed bed = oceanBed(p);
+    OceanSurface s = oceanEvaluateAt(p, time, bed, footprint);
     float tPrev = time - uDeltaTime;
-    vec3 prevWorld = oceanPreviousWorldAt(p, tPrev, sh, footprint);
+    vec3 prevWorld = oceanPreviousWorldAt(p, tPrev, bed, footprint);
 
     WorldPos = s.world;
     SurfParam = p;
@@ -90,6 +92,7 @@ void main() {
     Jacobian = s.jacobian;
     Shoal = s.shoal;
     FilteredMss = s.filteredMss;
+    Surf = s.surf;
 
     vec4 viewPos = view * vec4(s.world, 1.0);
     ViewPos = viewPos.xyz;

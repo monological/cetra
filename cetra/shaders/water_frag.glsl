@@ -34,6 +34,7 @@ in vec4 CurrClip;
 in vec4 PrevClip;
 in float Jacobian;
 in float Shoal;
+in float Surf;
 // Mean square slope of the displacing bands that the vertex stage's footprint filtered
 // away. The other half of the geometry-to-BRDF handover: what left the mesh arrives here
 // as roughness.
@@ -216,6 +217,9 @@ const float WATER_FOAM_MAX = 0.88;
 // value rather than well under it -- the old 0.45 was set when the band covered the whole
 // shelf, where that much foam was a wash. Confined to the swash it can be what a swash is.
 const float WATER_SHORE_FOAM = 0.92;
+// What is left of the shore band between waves, as a fraction of it. Not zero: the swash
+// zone is never clean water, and a band that vanished entirely between bores would flash.
+const float WATER_SHORE_FOAM_REST = 0.3;
 // How far out the swash reaches, as shoal factor. Small: a swash is the last run of water
 // up the sand, and anything wider is a sheet laid over the whole shelf -- which water-shoal
 // reads directly, since foam is flat and the roughness it measures is not.
@@ -479,9 +483,15 @@ void main() {
      *
      * No bedAvailable guard: with no bed the shoal factor is exactly 1 everywhere, so this is
      * zero. The uniform test enforced the same fact a second time.
+     *
+     * AND IT MOVES. The band is a function of depth, which does not change, so on its own it
+     * is a painted stripe the sea slides under. What breaks and runs up is the surf wave, and
+     * its crest fraction arrives from the vertex stage: the whitewater is full on the bore
+     * and on the tongue it pushes up the sand, and falls back to a residue between waves --
+     * so the foam comes in and drains with the water instead of marking where the water was.
      */
     float band = 1.0 - smoothstep(0.0, WATER_SWASH_SHOAL, Shoal);
-    foam = max(foam, band * WATER_SHORE_FOAM);
+    foam = max(foam, band * WATER_SHORE_FOAM * mix(WATER_SHORE_FOAM_REST, 1.0, Surf));
 
     /*
      * Break the coverage up, AFTER the physical selection has chosen where foam is -- and

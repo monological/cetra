@@ -173,59 +173,75 @@ vec2 oceanProjectedPosition(vec2 lattice, mat4 view, mat4 projection) {
 // per metre, which is no surf zone at all.
 const float OCEAN_SHOAL_MIN_M = 0.14;
 const float OCEAN_SHOAL_FULL_M = 2.7;
-// How much of a wave's HEIGHT survives full shoaling, where its horizontal travel does not.
-// A shore that heaves is the difference between a sea and a painted line; 0 here is what
-// made the waterline static however big the swell behind it was.
-const float OCEAN_SHOAL_HEAVE = 0.45;
 /*
- * Tallest crest a given water column may carry, as a fraction of that column.
+ * Tallest crest the WAVE FIELD may carry over a given water column, as a fraction of it.
  *
- * ABOVE the breaking criterion, deliberately. A shoaling wave breaks at a height of about
- * 0.78 of the depth, which is a crest of 0.39 -- and holding the surface to that made the
- * run-up limp, because it is the wrong half of the problem. That number says when a wave
- * STOPS being a wave; what climbs the sand afterwards is a bore, and a bore carries a sheet
- * far deeper than the still water it is running over. The still-water column is the only
- * depth this has, so the ratio has to absorb the difference.
- *
- * What it still guarantees is the part that matters: it goes to zero where the water does,
- * so the sea cannot climb up through dry sand however energetic the swell behind it is.
+ * Above the breaking criterion (a shoaling wave breaks at a height of about 0.78 of the
+ * depth, a crest of 0.39) because this bounds the open-water field as it fades across the
+ * shoal window, not the bore that replaces it -- oceanSurf owns the bore and holds it to the
+ * criterion itself. What this guarantees is that the field goes to zero where the water
+ * does, so a swell cannot climb up through dry sand however energetic it is; the shoal
+ * factor says the same thing but saturates at zero across the whole shallow end, where the
+ * difference between a centimetre of water and a metre is exactly what a bound needs.
  */
 const float OCEAN_BREAK_CREST = 1.15;
 
 /*
- * 1 in open water, falling to 0 as the bed comes up, with its own gradient.
- *
- * Multiplies displacement, not height alone: the horizontal term has to shrink with it
- * or the surface slides sideways over a beach it is no longer above. And because it
- * multiplies the displacement, its GRADIENT is a product-rule term in every surface
- * derivative -- the factor alone describes a surface whose normal is the open-water
- * one wherever the bed is steep, which is the surf zone specifically. Zero over a flat
- * bed and zero with no bed at all, so the term costs nothing where it says nothing.
- *
- * .x is the factor; .yz is d(factor)/d(world x, world z); .w is the raw water COLUMN, which
- * the breaking clamp needs and the smoothstepped factor cannot give back -- it saturates at
- * 0 across the whole shallow end, where the clamp has to keep distinguishing a centimetre of
- * water from a metre. Unbounded above and negative where the bed is out of the water, both
- * of which the consumer wants: a column of -2 says the sand here stands two units proud.
+ * What the bed under a point says about the water over it. One fetch, read once per vertex
+ * and handed to everything that shoals, breaks or runs up, so they cannot disagree about
+ * where the floor is.
  */
-vec4 oceanShoal(vec2 p) {
-    // No bed is INFINITELY deep, not zero-deep: the clamp below must not bite where nothing
-    // has been said about the floor.
-    if (bedAvailable == 0)
-        return vec4(1.0, 0.0, 0.0, 1.0e6);
+struct OceanBed {
+    /*
+     * 1 in open water, falling to 0 as the bed comes up.
+     *
+     * Multiplies displacement, not height alone: the horizontal term has to shrink with it
+     * or the surface slides sideways over a beach it is no longer above. And because it
+     * multiplies the displacement, its GRADIENT is a product-rule term in every surface
+     * derivative -- the factor alone describes a surface whose normal is the open-water
+     * one wherever the bed is steep, which is the surf zone specifically. Zero over a flat
+     * bed and zero with no bed at all, so the term costs nothing where it says nothing.
+     */
+    float shoal;
+    vec2 dShoal; // d(shoal)/d(world x, world z)
+    /*
+     * The raw water COLUMN, world units, which the breaking clamp needs and the smoothstepped
+     * factor cannot give back -- it saturates at 0 across the whole shallow end, where the
+     * clamp has to keep distinguishing a centimetre of water from a metre. Unbounded above
+     * and negative where the bed is out of the water, both of which the consumers want: a
+     * column of -2 says the sand here stands two units proud.
+     */
+    float column;
+    vec2 dColumn; // d(column)/d(world x, world z): minus the bed's own gradient
+};
+
+OceanBed oceanBed(vec2 p) {
+    OceanBed b;
+    // No bed is INFINITELY deep, not zero-deep: the clamp must not bite where nothing has
+    // been said about the floor.
+    if (bedAvailable == 0) {
+        b.shoal = 1.0;
+        b.dShoal = vec2(0.0);
+        b.column = 1.0e6;
+        b.dColumn = vec2(0.0);
+        return b;
+    }
     vec2 uv = p / (waterExtent * 2.0) + 0.5;
     vec3 bed = texture(bedTex, clamp(uv, vec2(0.0), vec2(1.0))).rgb;
-    float column = waterLevel - bed.r;
+    b.column = waterLevel - bed.r;
+    b.dColumn = -bed.gb;
     // The window converted into this world's units, so the shoal ramp is the same DEPTH of
     // water whatever a unit happens to be.
     float shoalMin = OCEAN_SHOAL_MIN_M * waterUnitsPerMetre;
     float span = (OCEAN_SHOAL_FULL_M - OCEAN_SHOAL_MIN_M) * waterUnitsPerMetre;
-    float u = clamp((column - shoalMin) / span, 0.0, 1.0);
-    // d/dp smoothstep(u(p)) = 6u(1-u) * du/dp, and du/dp = -d(bed)/dp / span. Flat
+    float u = clamp((b.column - shoalMin) / span, 0.0, 1.0);
+    // d/dp smoothstep(u(p)) = 6u(1-u) * du/dp, and du/dp = d(column)/dp / span. Flat
     // outside the window, where smoothstep has clamped and the bed can move without
     // the factor moving.
     float dFactor = 6.0 * u * (1.0 - u) / span;
-    return vec4(u * u * (3.0 - 2.0 * u), -dFactor * bed.g, -dFactor * bed.b, column);
+    b.shoal = u * u * (3.0 - 2.0 * u);
+    b.dShoal = dFactor * b.dColumn;
+    return b;
 }
 
 struct OceanSurface {
@@ -244,7 +260,244 @@ struct OceanSurface {
     // knowing what it is a fraction of, which is why the far field used to lerp toward a
     // constant instead of widening by what it actually lost (spec 11.42).
     float filteredMss;
+    // How much bore or swash is at this point right now, 0..1: the surf wave's crest
+    // fraction, gated by how far inshore the point is. What the shore foam rides, so the
+    // whitewater moves with the wave instead of sitting on a depth contour.
+    float surf;
 };
+
+/*
+ * SURF: the incident wave, refracted, breaking, running up and draining back (spec 11.44).
+ *
+ * The wave field proper cannot do this. Both models are stationary in the sense that
+ * matters at a shore: a Gerstner train travels downwind and a Tessendorf field is periodic
+ * over its tile and travels downwind too, and the shoal factor's whole effect is to scale
+ * either to nothing at the sand. So the sea arrived at the beach as a still line however big
+ * the swell behind it was -- there was no term for the thing a beach IS, which is waves
+ * coming in.
+ *
+ * What comes in is the incident wave AFTER refraction. Entering shallow water it slows as
+ * sqrt(g h), so its crests turn parallel to the depth contours whatever direction it left
+ * deep water in, and it shortens as it comes; it breaks, and what crosses the surf zone is a
+ * BORE whose height the depth sets; and at the shoreline the bore collapses into the SWASH,
+ * a thin lens that runs up the beach face and drains back. Two things, then, and they are
+ * different shapes:
+ *
+ *   the bore    amplitude min(0.39 h, Hs/2), the saturated surf-zone crest -- H = 0.78 h --
+ *               capped by the sea that feeds it, and gated to nothing across the shoal
+ *               window where the wave field itself is whole. Phase omega * (t + tau(h)),
+ *               tau = 2 sqrt(h) / (s sqrt(g)), the shallow-water travel time to shore over
+ *               a bed of slope s: written as a time-to-shore rather than a wavenumber
+ *               integral so the crest at the shore NOW is the crest that was at depth h a
+ *               time tau AGO. Crests move toward the sand at the local speed and bunch up as
+ *               they come. A bore's waveform is a peaked crest and a long flat trough, so
+ *               that is what it is, zero-mean.
+ *
+ *   the swash   NOT a wave with amplitude R at the shoreline -- that put a wall of water
+ *               metres tall over five centimetres of depth, because R is how far the water's
+ *               EDGE climbs, and the sheet behind the edge is thin. It is a lens: the edge
+ *               sits at height E(t) on the beach face and the surface behind it slopes down
+ *               toward the sea nearly parallel to the sand, at a fixed fraction of the sand's
+ *               own drop, so it is centimetres thick at the tip and tens of centimetres at
+ *               the still line. One phase for the whole lens, the bore's phase at the
+ *               shoreline lagged by a third of a period (the bore arrives, THEN the water
+ *               climbs). It replaces the field over the last fraction of the run-up in depth,
+ *               blended, so the backwash drains a thin sheet and the trough exposes sand a
+ *               little below the still line -- about what a real swash does around its
+ *               setup level.
+ *
+ *   how far     R from Stockdon et al. 2006, the empirical run-up on a natural beach:
+ *               R2% = 1.1 * (0.35 beta sqrt(H0 L0) + sqrt(H0 L0 (0.563 beta^2 + 0.004)) / 2),
+ *               beta the beach slope, H0 the deep-water significant height, L0 the peak's
+ *               deep-water wavelength -- so a steep beach throws the water higher than a
+ *               flat one from the same sea, which no constant fraction of Hs can say. That
+ *               is the 2% exceedance; the sets below carry the mean under it and the biggest
+ *               wave of a set up to it.
+ *
+ *   sets        waves come in groups. The envelope is one slow sinusoid travelling at the
+ *               peak's group speed along the wind, so a big set arrives, works along the
+ *               shore, and is followed by small ones -- and two stretches of beach are not
+ *               in the same phase of the same set.
+ *
+ *   obliquity   a small along-wind term in the phase, so the crest is not exactly a depth
+ *               contour: on a round island the contours are circles, and a wave that
+ *               arrived everywhere at once would make the whole shoreline breathe. Held at
+ *               a fixed angle rather than taken from Snell's law, whose along-shore phase
+ *               would need an arc-length along a shoreline this shader has no line for.
+ *
+ * ON DRY SAND TOO. The column is negative there, the shoal factor holds the field to
+ * nothing and the bore has no depth to stand in, which is right; the lens is added after
+ * both and is not scaled by the shoal factor, so the swash surface rises above the sand and
+ * the tongue climbs the beach, then falls below it and drains. Where it is under the sand
+ * the depth test hides it, and where it is above, the shoreline coverage draws its edge --
+ * so the run-up costs the shoreline machinery nothing new. What bounds it is R, which is a
+ * physical height, not a clamp against the sand.
+ *
+ * THE BEACH SLOPE IS ONE NUMBER, not the bed's gradient under each vertex. The travel time
+ * goes as one over it and the run-up nearly linearly in it, and a beach's local slope
+ * varies along the shore by more than the beach slope itself wherever the shoreline
+ * wanders -- so reading it per vertex re-timed the wave by the shore's own wobble and
+ * printed every crest as a comb of humps at the wobble's period. The incident wave was
+ * timed by the beach as a whole; it arrives at the bumps, it is not re-planned by them. The
+ * C side measures the mean foreshore slope when it bakes the bed.
+ *
+ * DERIVATIVES ANALYTIC, like everything else in this file, with one named exception: the
+ * bore amplitude's sea cap is treated as constant under d/dp where it binds, which is a
+ * flat top and costs nothing there.
+ */
+// Significant wave height of the sea arriving at the shore, METRES, and its peak angular
+// frequency, rad/s. Both from the seeded spectrum on the spectral path and from the
+// authored train on the Gerstner one; 0 height is no surf.
+uniform float waterSurfHeight;
+uniform float waterSurfOmega;
+// The beach face's mean slope, rise per run. See the header; 0 with no shore.
+uniform float waterBeachSlope;
+
+// A saturated bore's crest as a fraction of the depth it runs over: H = 0.78 h.
+const float OCEAN_BORE_CREST = 0.39;
+// The lens's thickness behind its edge, as a fraction of the sand's own drop from the edge:
+// the tongue at the still line is this fraction of the run-up deep.
+const float OCEAN_LENS_RATIO = 0.15;
+// How far seaward of the still line the lens still owns the surface, as a fraction of R in
+// depth. Small: the swash is the last of the run-up, and the bore owns the rest.
+const float OCEAN_SWASH_REACH = 0.3;
+// The tongue climbs a third of a period after the bore reaches the shoreline.
+const float OCEAN_SWASH_LAG = 2.1;
+// The bore stops shortening below this depth, in metres: the shallow-water wavenumber goes
+// as 1/sqrt(h) and would be infinite at the waterline. The lens takes its phase from here.
+const float OCEAN_SURF_MIN_DEPTH_M = 0.05;
+// Below this beach slope the travel-time form has nothing to stand on; it only bounds the
+// divide, for a bed with no shore in it.
+const float OCEAN_SURF_MIN_SLOPE = 0.01;
+// Waves per set, and how much the sets modulate the run-up: the biggest wave of a set is
+// 1 + this times the mean and the smallest 1 - this.
+const float OCEAN_SURF_GROUP_WAVES = 6.5;
+const float OCEAN_SURF_GROUP_MOD = 0.4;
+// Sine of the angle the arriving crest makes with the shore. See the header.
+const float OCEAN_SURF_OBLIQUE = 0.3;
+// The bore waveform is ((1 + cos psi) / 2)^2, whose mean over a period is 3/8; this takes
+// it back to zero mean and a unit crest. (The skew below moves the mean by under 2%, which
+// is not worth a second constant.)
+const float OCEAN_BORE_MEAN = 0.375;
+// How far the crest leans forward: psi = phi + skew cos(phi). A bore is a FRONT, not a
+// peak -- steep face, long back -- and a symmetric crest read as a comb of cusps marching
+// in. The face is the LOW-phase side, since at a fixed point phase increases with time and
+// the front arrives first; this form is steep there and slow behind. (phi - skew sin(phi),
+// the obvious guess, is odd about the crest and only broadens it.) 0 is symmetric; 1 is
+// the sawtooth limit where the face goes vertical.
+const float OCEAN_BORE_SKEW = 0.6;
+
+struct OceanSurf {
+    float height; // the surface, world units above the still level, field included
+    vec2 dHeight; // d(height)/d(world x, world z)
+    float crest;  // 0..1, how much bore or tongue is here -- what the foam reads
+};
+
+// The bore waveform and its derivative in phase.
+vec2 oceanBoreWave(float phase) {
+    float psi = phase + OCEAN_BORE_SKEW * cos(phase);
+    float dPsi = 1.0 - OCEAN_BORE_SKEW * sin(phase);
+    float half1 = 0.5 + 0.5 * cos(psi);
+    float w = (half1 * half1 - OCEAN_BORE_MEAN) / (1.0 - OCEAN_BORE_MEAN);
+    // d/dpsi of half1^2 is -half1 sin(psi), then the chain through psi.
+    float dw = -half1 * sin(psi) * dPsi / (1.0 - OCEAN_BORE_MEAN);
+    return vec2(w, dw);
+}
+
+/*
+ * The surface at p with the surf on it. fieldY / dFieldY are the shoaled wave field's
+ * height above the still level and its gradient; what comes back is the total, so the
+ * caller replaces rather than adds.
+ */
+OceanSurf oceanSurf(vec2 p, OceanBed bed, float t, float fieldY, vec2 dFieldY) {
+    OceanSurf s;
+    s.height = fieldY;
+    s.dHeight = dFieldY;
+    s.crest = 0.0;
+    float gate = 1.0 - bed.shoal;
+    // Gated on the bed like the crest limit is: with no bed there is no shore for anything to
+    // come in to, and the sentinel column would otherwise be run through a sqrt. And nothing
+    // to do at all outside the shoal window, where the field is whole.
+    if (bedAvailable == 0 || waterSurfHeight <= 0.0 || gate <= 0.0)
+        return s;
+    vec2 dGate = -bed.dShoal;
+
+    float upm = waterUnitsPerMetre;
+    float g = OCEAN_GRAVITY;
+    float omega = waterSurfOmega;
+
+    // Time to shore, from the column in metres. Floored, so in the last centimetres it is a
+    // constant -- which is also the lens's phase.
+    float hm = bed.column / upm;
+    float hs = max(hm, OCEAN_SURF_MIN_DEPTH_M);
+    float slope = max(waterBeachSlope, OCEAN_SURF_MIN_SLOPE);
+    float invSlopeG = 1.0 / (slope * sqrt(g));
+    float tau = 2.0 * sqrt(hs) * invSlopeG;
+    // d(tau)/dp = (1/(s sqrt g)) * hs^-1/2 * d(hm)/dp, and zero where the floor holds.
+    vec2 dTau = hm > OCEAN_SURF_MIN_DEPTH_M
+                    ? invSlopeG * inversesqrt(hs) * (bed.dColumn / upm)
+                    : vec2(0.0);
+    float tauShore = 2.0 * sqrt(OCEAN_SURF_MIN_DEPTH_M) * invSlopeG;
+
+    // Deep-water wavenumber of the peak, per world unit, for the along-wind term; the
+    // group speed below is half the phase speed at that wavenumber.
+    float k0 = omega * omega / g / upm;
+    vec2 kObl = waterWindDir * (k0 * OCEAN_SURF_OBLIQUE);
+    float oblique = dot(kObl, p);
+    float phase = omega * (t + tau) - oblique;
+    vec2 dPhase = omega * dTau - kObl;
+    float phaseShore = omega * (t + tauShore) - oblique - OCEAN_SWASH_LAG;
+    vec2 dPhaseShore = -kObl;
+
+    // Sets: an envelope moving downwind at the group speed. omega_g = omega / waves per
+    // set, and k_g = omega_g / c_g with c_g = g / (2 omega).
+    float omegaG = omega / OCEAN_SURF_GROUP_WAVES;
+    float kG = omegaG * 2.0 * omega / g / upm;
+    float groupPhase = omegaG * t - kG * dot(waterWindDir, p);
+    float env = 1.0 + OCEAN_SURF_GROUP_MOD * sin(groupPhase);
+    vec2 dEnv = -OCEAN_SURF_GROUP_MOD * cos(groupPhase) * kG * waterWindDir;
+
+    // The bore, world units. Depth-limited, sea-capped, gated offshore.
+    float depthCrest = OCEAN_BORE_CREST * max(bed.column, 0.0);
+    float seaCrest = 0.5 * waterSurfHeight * upm;
+    float boreAmp = min(depthCrest, seaCrest);
+    vec2 dBoreAmp = (bed.column > 0.0 && depthCrest < seaCrest) ? OCEAN_BORE_CREST * bed.dColumn
+                                                                : vec2(0.0);
+    vec2 bw = oceanBoreWave(phase);
+    float bore = boreAmp * env * bw.x * gate;
+    vec2 dBore = dBoreAmp * env * bw.x * gate + boreAmp * dEnv * bw.x * gate +
+                 boreAmp * env * bw.y * dPhase * gate + boreAmp * env * bw.x * dGate;
+
+    // The run-up: Stockdon's 2% exceedance, scaled so the biggest wave of a set reaches it.
+    float l0 = 6.28318530718 * g / (omega * omega);
+    float hl = waterSurfHeight * l0;
+    float r2 = 1.1 * (0.35 * slope * sqrt(hl) + 0.5 * sqrt(hl * (0.563 * slope * slope + 0.004)));
+    float runup = r2 / (1.0 + OCEAN_SURF_GROUP_MOD) * upm;
+
+    // The lens: its edge on the beach face, and the sheet behind it.
+    vec2 sw = oceanBoreWave(phaseShore);
+    float edge = runup * env * sw.x;
+    vec2 dEdge = runup * (dEnv * sw.x + env * sw.y * dPhaseShore);
+    float lens = OCEAN_LENS_RATIO * edge - (1.0 - OCEAN_LENS_RATIO) * bed.column;
+    vec2 dLens = OCEAN_LENS_RATIO * dEdge - (1.0 - OCEAN_LENS_RATIO) * bed.dColumn;
+
+    // Where the lens owns the surface: everywhere on the sand, fading out over the first
+    // fraction of R in depth. A smoothstep in depth, differentiated through the column.
+    float reach = max(OCEAN_SWASH_REACH * runup, 0.02 * upm);
+    float u = clamp(bed.column / reach, 0.0, 1.0);
+    float w = 1.0 - u * u * (3.0 - 2.0 * u);
+    vec2 dW = (bed.column > 0.0 && bed.column < reach) ? -6.0 * u * (1.0 - u) / reach * bed.dColumn
+                                                       : vec2(0.0);
+
+    float a = fieldY + bore;
+    vec2 da = dFieldY + dBore;
+    s.height = mix(a, lens, w);
+    s.dHeight = da + (dLens - da) * w + (lens - a) * dW;
+    // The foam's cue: the bore's crest where the bore owns the surface, the tongue's where
+    // the lens does.
+    s.crest = clamp(mix(bw.x * gate, sw.x, w), 0.0, 1.0);
+    return s;
+}
 
 /*
  * THE FAR FIELD IS A FILTERING PROBLEM (spec 11.35).
@@ -406,8 +659,9 @@ vec3 oceanSpectralDisplacement(vec4 long0, vec4 med0) {
  * determinant each existed twice, and the Jacobian in particular is easy to "simplify"
  * back into a square, which is only correct while the gradient is zero.
  */
-OceanSurface oceanAssemble(vec2 p, vec3 disp, vec3 dispDx, vec3 dispDz, vec4 sh) {
-    float shoal = sh.x;
+OceanSurface oceanAssemble(vec2 p, vec3 disp, vec3 dispDx, vec3 dispDz, OceanBed bed,
+                           float t) {
+    float shoal = bed.shoal;
     OceanSurface s;
     /*
      * DEPTH-LIMITED height: a wave cannot be taller than the water it is standing in.
@@ -434,10 +688,19 @@ OceanSurface oceanAssemble(vec2 p, vec3 disp, vec3 dispDx, vec3 dispDz, vec4 sh)
      * and letting the arithmetic run put a float32 round-trip -- tanh of about 6e-8, scaled
      * back by 1e6 -- in front of every open-water surface in the tree, for an identity. It
      * moved both water goldens.
+     *
+     * The ARGUMENT IS CLAMPED, and that is not tidiness. Where the sand stands out of the
+     * water the limit is its 1e-4 floor and the wave is units, so the ratio is around 1e5;
+     * tanh is exp under the hood and exp of that is inf, and inf/inf is NaN. A NaN vertex
+     * drops every triangle it touches, so the shoreline lost whole lattice cells wherever
+     * the sea dipped -- which printed as a staircase of screen-aligned steps along the
+     * water's edge, worst when the water was out, and was chased through the island mesh,
+     * the bed resolution and the lattice before this line was read. tanh(20) is 1 to float
+     * precision, so nothing inside the clamp changes.
      */
     if (bedAvailable == 1) {
-        float crestLimit = max(OCEAN_BREAK_CREST * max(sh.w, 0.0), 1.0e-4);
-        float sat = tanh(disp.y / crestLimit);
+        float crestLimit = max(OCEAN_BREAK_CREST * max(bed.column, 0.0), 1.0e-4);
+        float sat = tanh(clamp(disp.y / crestLimit, -20.0, 20.0));
         // d(tanh)/du. The limit's OWN gradient is dropped here -- it is the same order as
         // the shoal factor's product-rule term below and needs the bed slope, which arrives
         // as d(factor)/dp rather than d(column)/dp. It shows only where the bed is steep AND
@@ -448,25 +711,27 @@ OceanSurface oceanAssemble(vec2 p, vec3 disp, vec3 dispDx, vec3 dispDz, vec4 sh)
         dispDz.y *= dsat;
     }
     /*
-     * The shoal factor scales the HORIZONTAL fully and the height only partly (spec 11.44).
-     *
-     * Its reason for existing is horizontal: "the horizontal term has to shrink with it or
-     * the surface slides sideways over a beach it is no longer above". Applying the same
-     * factor to the height as well flattened the water to a plane exactly where a real shore
-     * is at its most active -- the sea arrived at the sand as a still line, whatever the
-     * swell offshore was doing. A wave can HEAVE in shallow water without sliding anywhere,
-     * and what stops it drawing over dry sand is the column discard, not this.
-     *
-     * The gradient rows follow: d(vertical scale)/dp is (1 - HEAVE) times the shoal
-     * gradient, since the retained fraction is a constant.
+     * The shoal factor scales the whole displacement, height included. Between 11.44's
+     * first cut and this one the height kept a fraction of itself across the shallow end so
+     * that the shore would heave at all; that was a stand-in for the surf, and with the surf
+     * here it is the wrong thing -- a stationary field's vertical wobble where the surf zone
+     * should be shore-normal bores. The field fades across the window and the surf takes
+     * over, which is what a surf zone is.
      */
-    float heave = mix(shoal, 1.0, OCEAN_SHOAL_HEAVE);
-    vec3 scale = vec3(shoal, heave, shoal);
-    vec3 dScaleDx = vec3(sh.y, sh.y * (1.0 - OCEAN_SHOAL_HEAVE), sh.y);
-    vec3 dScaleDz = vec3(sh.z, sh.z * (1.0 - OCEAN_SHOAL_HEAVE), sh.z);
+    vec3 scale = vec3(shoal);
+    vec3 dScaleDx = vec3(bed.dShoal.x);
+    vec3 dScaleDz = vec3(bed.dShoal.y);
     s.world = vec3(p.x, waterLevel, p.y) + disp * scale;
     vec3 dPdx = vec3(1.0, 0.0, 0.0) + dispDx * scale + disp * dScaleDx;
     vec3 dPdz = vec3(0.0, 0.0, 1.0) + dispDz * scale + disp * dScaleDz;
+    // The surf takes the shoaled field's height and hands back the surface with the bore
+    // and the swash on it: what the shore does with the wave, not part of the wave. See
+    // oceanSurf.
+    OceanSurf surf = oceanSurf(p, bed, t, s.world.y - waterLevel, vec2(dPdx.y, dPdz.y));
+    s.world.y = waterLevel + surf.height;
+    dPdx.y = surf.dHeight.x;
+    dPdz.y = surf.dHeight.y;
+    s.surf = surf.crest;
     // cross(dPdz, dPdx) and not the reverse: on a flat surface that is +Y, and the
     // flipped order would light every wave from underneath.
     s.normal = normalize(cross(dPdz, dPdx));
@@ -481,9 +746,20 @@ OceanSurface oceanAssemble(vec2 p, vec3 disp, vec3 dispDx, vec3 dispDz, vec4 sh)
     return s;
 }
 
-vec3 oceanSpectralPosition(vec2 p, vec4 long0, vec4 med0, float shoal) {
-    vec3 d = oceanSpectralDisplacement(long0, med0);
-    return vec3(p.x, waterLevel, p.y) + d * shoal;
+/*
+ * The spectral surface's POSITION alone, for the previous frame's motion-vector half.
+ *
+ * Through oceanAssemble with zero derivative rows, not a private `p + d * shoal`: that
+ * shortcut was the pre-11.44 arithmetic and stayed behind when the crest limit, the heave
+ * split and the surf were added to the current position, so near a shore the velocity
+ * described a surface the raster never drew. Sharing the assembly costs a few multiplies of
+ * derivative arithmetic per vertex and makes the two positions the same expression by
+ * construction, which is this file's whole argument.
+ */
+vec3 oceanSpectralPosition(vec2 p, vec4 long0, vec4 med0, OceanBed bed, float t) {
+    return oceanAssemble(p, oceanSpectralDisplacement(long0, med0), vec3(0.0), vec3(0.0), bed,
+                         t)
+        .world;
 }
 
 /*
@@ -493,7 +769,7 @@ vec3 oceanSpectralPosition(vec2 p, vec4 long0, vec4 med0, float shoal) {
  * the Gerstner path, where there is no sea state to ask. A calmer spectral ocean is a
  * lower wind speed, not a smaller number here.
  */
-OceanSurface oceanEvaluateSpectral(vec2 p, vec4 sh, float footprint) {
+OceanSurface oceanEvaluateSpectral(vec2 p, float t, OceanBed bed, float footprint) {
     // Explicit LOD, never the implicit derivative, and not only because the vertex stage
     // has none: oceanCascadeUv wraps with fract, so a screen-space derivative reads a whole
     // period across the tile seam and blurs a line through every one of them.
@@ -520,7 +796,7 @@ OceanSurface oceanEvaluateSpectral(vec2 p, vec4 sh, float footprint) {
 
     OceanSurface s = oceanAssemble(p, oceanSpectralDisplacement(long0, med0),
                                    vec3(dHoriz.x, slope.x, crossDeriv),
-                                   vec3(crossDeriv, slope.y, dHoriz.y), sh);
+                                   vec3(crossDeriv, slope.y, dHoriz.y), bed, t);
     /*
      * Each band's slope survives in proportion to how much of it the mip still resolves,
      * reaching nothing at the top level. Weighted by each band's OWN variance and summed
@@ -556,12 +832,13 @@ OceanSurface oceanEvaluateSpectral(vec2 p, vec4 sh, float footprint) {
  * Q directly would instead make "sharp" mean something different at every
  * wavelength.
  *
- * `t` is used here and ignored by the spectral path, which reads cascades that
- * already hold one instant -- see the previous-position note in water_vert.
+ * `t` drives the octaves here; the spectral path reads cascades that already hold one
+ * instant -- see the previous-position note in water_vert -- and passes it on to the surf,
+ * which is closed-form on both models.
  */
-OceanSurface oceanEvaluateAt(vec2 p, float t, vec4 sh, float footprint) {
+OceanSurface oceanEvaluateAt(vec2 p, float t, OceanBed bed, float footprint) {
     if (waveModel == 1)
-        return oceanEvaluateSpectral(p, sh, footprint);
+        return oceanEvaluateSpectral(p, t, bed, footprint);
 
     // Accumulated UNSHOALED, then scaled once at the end by oceanAssemble. The shoal
     // factor multiplies the whole displacement, so its gradient multiplies the whole
@@ -637,7 +914,7 @@ OceanSurface oceanEvaluateAt(vec2 p, float t, vec4 sh, float footprint) {
         amplitude *= OCEAN_AMPLITUDE_FALLOFF;
     }
 
-    OceanSurface s = oceanAssemble(p, disp, dDispDx, dDispDz, sh);
+    OceanSurface s = oceanAssemble(p, disp, dDispDx, dDispDz, bed, t);
     // What the footprint dropped, as a mean square slope rather than as a fraction. The
     // halving is the mean square of a sine: an octave whose slope amplitude is a*k
     // contributes (a*k)^2 / 2, and the two axes already sum to that because the octave
@@ -673,9 +950,9 @@ OceanSurface oceanEvaluateAt(vec2 p, float t, vec4 sh, float footprint) {
  * near the horizon -- where the level is the top one and the surface is the still plane --
  * the difference would be the whole wave.
  */
-vec3 oceanPreviousWorldAt(vec2 p, float tPrev, vec4 sh, float footprint) {
+vec3 oceanPreviousWorldAt(vec2 p, float tPrev, OceanBed bed, float footprint) {
     if (waveModel == 0)
-        return oceanEvaluateAt(p, tPrev, sh, footprint).world;
+        return oceanEvaluateAt(p, tPrev, bed, footprint).world;
     float lodLong = oceanCascadeLod(footprint, 0);
     float lodMed = oceanCascadeLod(footprint, 1);
     vec2 uvLong = oceanCascadeUv(p, 0);
@@ -693,5 +970,5 @@ vec3 oceanPreviousWorldAt(vec2 p, float tPrev, vec4 sh, float footprint) {
         long0 = textureLod(cascade0_0, uvLong, lodLong);
         med0 = textureLod(cascade1_0, uvMed, lodMed);
     }
-    return oceanSpectralPosition(p, long0, med0, sh.x);
+    return oceanSpectralPosition(p, long0, med0, bed, tPrev);
 }

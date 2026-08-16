@@ -230,6 +230,10 @@ typedef struct Water {
     // false = the shoreline is a hard cutoff at the pixel the water column closes.
     // Inert wherever the target has no samples to spend coverage on.
     bool shore_coverage;
+    // false = no incident wave at the shore: the wave field shoals to nothing and the sea
+    // meets the sand as a still line, which is every frame before spec 11.44. Inert with no
+    // bed, since there is no shore for anything to come in to.
+    bool surf;
     // false = every vertex evaluates the wave field at full detail regardless of how much
     // world its cell covers, and no slope energy is handed to roughness. Bisect lever, and
     // the only way back to the aliased far field a projected grid has without it.
@@ -349,10 +353,23 @@ typedef struct Water {
      */
     GLuint bed_tex;
     bool bed_baked;
-    // The extent the bake was taken at. Compared against `extent` each frame, so moving
-    // the extent re-bakes and moving anything the bake does NOT read (the level) does
-    // not -- rather than every caller having to know which is which.
+    // What the bake was taken at, compared against the live values each frame so a change
+    // in any input re-bakes and a change in anything else does not -- rather than every
+    // caller having to know which is which. The level and the metre are inputs since spec
+    // 11.44, because the foreshore slope below is measured about the waterline.
     float bed_extent;
+    float bed_level;
+    float bed_units_per_metre;
+    /*
+     * The beach face's mean slope, rise per run, measured from the baked bed over the strip
+     * within a metre of the still line (spec 11.44). Zero with no bed or no shore.
+     *
+     * The surf's timing and its run-up are properties of the BEACH, not of the bump under
+     * one vertex: the incident wave's travel time to shore goes as one over the slope, so
+     * reading the slope locally re-timed the wave by the shore's own wobble and printed the
+     * crest as a comb of humps at the wobble's period. One number for the whole shore.
+     */
+    float bed_foreshore_slope;
 } Water;
 
 /*
