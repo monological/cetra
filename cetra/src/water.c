@@ -935,8 +935,19 @@ static GLuint _water_make_field_array(int size, int layers, GLenum internal_form
     return tex;
 }
 
-// The foam accumulation pair: an unmipped RGBA16F field that tiles. Its `mipped` parameter went
-// with the cascades -- they were the only mipped caller, and they are an array now.
+/*
+ * The foam accumulation pair: an RGBA16F field that tiles, MIPPED (spec 11.47).
+ *
+ * It was unmipped, and that is what made the horizon crawl. The trail is 128 texels across
+ * the whole tile; near the horizon one screen pixel covers dozens of them, and a single
+ * bilinear tap over that range is a random sample of a fast-changing field rather than an
+ * average of it -- which is aliasing, and aliasing of a temporal signal reads as speckle
+ * that swaps from frame to frame. Filtering it is this subsystem's own stated answer to a
+ * far field: "the far field is a filtering problem" (ocean.glsl), not a distance fade.
+ *
+ * Complete from the moment it is bound, for the reason the cascade array states: an
+ * incomplete mipmapped texture samples as black on whichever frame reads it first.
+ */
 static GLuint _water_make_foam_target(int size) {
     GLuint tex = 0;
     // Unit 0 explicitly: these run lazily on whatever unit the previous pass left
@@ -949,10 +960,11 @@ static GLuint _water_make_foam_target(int size) {
     // quantising it before the transform quantises the sea state itself.
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, size, size, 0, GL_RGBA, GL_FLOAT, NULL);
     // LINEAR + REPEAT: the surface samples these as tiling world-space fields.
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glGenerateMipmap(GL_TEXTURE_2D);
     glBindTexture(GL_TEXTURE_2D, 0);
     return tex;
 }
@@ -1605,6 +1617,14 @@ static void _water_run_spectral(Water* water, const struct Scene* scene, struct 
         uniform_set_float(foam->uniforms, "foamDecay", water->foam_decay);
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
         glBindVertexArray(0);
+        // Regenerated every frame: the trail the surface reads is this frame's dst, freshly
+        // written above, and the surface's own read is a textureGrad selecting whichever
+        // level its screen footprint calls for -- see the mip note on _water_make_foam_target.
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, water->foam_tex[dst]);
+        glGenerateMipmap(GL_TEXTURE_2D);
+        glBindTexture(GL_TEXTURE_2D, 0);
         water->foam_index = dst;
         water->foam_frames++;
     }

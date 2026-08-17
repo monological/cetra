@@ -497,6 +497,14 @@ float waterSunGlitter(vec3 N, vec3 V, vec3 L, vec3 windV, float mss) {
 void main() {
     vec2 uv = gl_FragCoord.xy / max(screenSize, vec2(1.0));
 
+    // Once, at uniform control flow (waveModel and foamAvailable are both program-wide
+    // uniforms, so the branches below are not divergent, but the file's convention is to
+    // take a derivative at the top rather than trust that). SurfParam, not WorldPos.xz: it
+    // is the coordinate the foam accumulator's own UV is built from, and it is smooth where
+    // the displaced position is not.
+    vec2 foamDdxParam = dFdx(SurfParam);
+    vec2 foamDdyParam = dFdy(SurfParam);
+
     vec3 N = normalize(Normal);
     /*
      * The geometry-to-BRDF handover, which arrives from two directions.
@@ -607,8 +615,24 @@ void main() {
             // Two bands, not three: the short one is excluded here for the same reason it is
             // excluded above, and its channel in the accumulator is now written by the foam
             // pass and read by nobody.
-            float turbLong = texture(foamTex, oceanCascadeUv(SurfParam, 0)).r;
-            float turbMed = texture(foamTex, oceanCascadeUv(SurfParam, 1)).g;
+            //
+            // TEXTUREGRAD, not an implicit fetch (spec 11.47). oceanCascadeUv wraps with
+            // fract, so the automatic derivative reads a whole period across every tile
+            // seam -- the same trap this file already documents for the pattern lookup and
+            // for the cascade sampling itself. The gradient of oceanCascadeUv(p, band) is
+            // exactly dFdx(p)/cascadeLength[band]: origin is a per-fragment constant, so the
+            // division is the whole derivative. Taken from SurfParam, the UNDISPLACED
+            // parameter, which is smooth where WorldPos.xz is not.
+            //
+            // This is also what makes the accumulator's new mip chain (water.c) reach the
+            // surface at all: an unmipped or wrongly-graded read would still pick level 0
+            // everywhere and the horizon would keep aliasing.
+            float turbLong = textureGrad(foamTex, oceanCascadeUv(SurfParam, 0),
+                                         foamDdxParam / cascadeLength[0],
+                                         foamDdyParam / cascadeLength[0]).r;
+            float turbMed = textureGrad(foamTex, oceanCascadeUv(SurfParam, 1),
+                                        foamDdxParam / cascadeLength[1],
+                                        foamDdyParam / cascadeLength[1]).g;
             compression = max(compression, max(0.0, 1.0 - min(turbLong, turbMed)));
         }
         /*
