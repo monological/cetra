@@ -214,7 +214,9 @@ static void update_drift_run(ParticleModule* m, ParticleEmitter* e, size_t begin
     (void)t;
     const DriftParams* p = m->params;
     for (size_t i = begin; i < end; i++)
-        glm_vec3_muladds(p->accel, dt, e->pool->velocity[i]);
+        // The cast is cglm's const-incorrectness: it reads the addend and declares it
+        // non-const, so a const params block cannot be handed over without one.
+        glm_vec3_muladds((float*)p->accel, dt, e->pool->velocity[i]);
 }
 
 ParticleModule* particle_module_update_drift(vec3 accel) {

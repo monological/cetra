@@ -200,12 +200,6 @@ static const struct aiScene* import_ai_scene(const char* path, unsigned int flag
     return ai_scene;
 }
 
-// Extract rotation quaternion from a mat4 transform
-static void extract_rotation_quat(mat4 transform, versor out) {
-    glm_mat4_quat(transform, out);
-    glm_quat_normalize(out);
-}
-
 /*
  * Texture mapping table for material loading
  */
@@ -1021,28 +1015,6 @@ void process_ai_mesh_bones(Mesh* mesh, const struct aiMesh* ai_mesh, Skeleton* s
 }
 
 /*
- * Compute global rest pose for a bone by accumulating parent transforms
- * This is needed for retargeting: delta must use GLOBAL rest poses, not local,
- * because bone_matrix = global * inverse_bind_pose uses GLOBAL coordinates.
- */
-static void compute_bone_global_rest(Skeleton* skeleton, int bone_idx, mat4 out) {
-    if (!skeleton || bone_idx < 0 || (size_t)bone_idx >= skeleton->bone_count) {
-        glm_mat4_identity(out);
-        return;
-    }
-    Bone* bone = &skeleton->bones[bone_idx];
-    if (bone->parent_index < 0) {
-        // Root bone: global = local
-        glm_mat4_copy(bone->local_transform, out);
-    } else {
-        // Child bone: global = parent_global * local
-        mat4 parent_global = GLM_MAT4_IDENTITY_INIT;
-        compute_bone_global_rest(skeleton, bone->parent_index, parent_global);
-        glm_mat4_mul(parent_global, bone->local_transform, out);
-    }
-}
-
-/*
  * Extract animations from aiScene with optional retargeting support
  * source_skeleton: if provided, used to get source rest poses for proper delta computation
  */
@@ -1124,9 +1096,10 @@ static void process_ai_animations_internal(const struct aiScene* ai_scene, Scene
             if (enable_retargeting && bone_index >= 0 && ai_channel->mNumRotationKeys > 0) {
                 const Bone* target_bone = &skeleton->bones[bone_index];
 
-                // Extract LOCAL rest pose rotation from target bone
+                // Extract LOCAL rest pose rotation from target bone. The cast is cglm's
+                // const-incorrectness: it reads the matrix and declares it non-const.
                 versor target_local_rest;
-                glm_mat4_quat(target_bone->local_transform, target_local_rest);
+                glm_mat4_quat((vec4*)target_bone->local_transform, target_local_rest);
                 glm_quat_normalize(target_local_rest);
 
                 // Initialize global retarget fields
@@ -1148,7 +1121,7 @@ static void process_ai_animations_internal(const struct aiScene* ai_scene, Scene
                         find_matching_bone_smart(source_skeleton, ai_channel->mNodeName.data);
                     if (source_idx >= 0) {
                         const Bone* source_bone = &source_skeleton->bones[source_idx];
-                        glm_mat4_quat(source_bone->local_transform, source_local_rest);
+                        glm_mat4_quat((vec4*)source_bone->local_transform, source_local_rest);
                         glm_quat_normalize(source_local_rest);
 
                         // Enable global-space retargeting with source hierarchy info

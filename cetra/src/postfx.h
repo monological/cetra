@@ -680,7 +680,7 @@ bool postfx_wants_normals(const PostFX* fx);
 // chose. It is still resolution-independent -- the cap is a fraction of frame
 // height and the pixels per world unit are proportional to height, so the two
 // cancel and what remains depends only on the vertical FOV.
-float postfx_sss_max_sigma_per_depth(const PostFX* fx, mat4 projection);
+float postfx_sss_max_sigma_per_depth(const PostFX* fx, const mat4 projection);
 
 // Producer-side predicate: true when TAA runs this frame (jitter + velocity
 // buffer + resolve all gate on it). Mirrors postfx_wants_normals.

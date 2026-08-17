@@ -43,6 +43,14 @@ static const char* hdr_path = NULL;
 static bool door_open_pending = false;
 static float door_open_velocity = 0.0f;
 
+// Uniform in [0, 1]. The division is in DOUBLE deliberately: RAND_MAX is 0x7fffffff,
+// which float cannot represent, so dividing in float rounds the divisor up to 2^31 and
+// the quotient is quietly wrong. double holds it exactly, and one rounding on the way
+// out is the whole error.
+static float rand01(void) {
+    return (float)(rand() / (double)RAND_MAX);
+}
+
 // Create a visual mesh node for an entity
 static SceneNode* create_box_node(Scene* scene, vec3 size, vec3 color, bool glass) {
     SceneNode* node = create_node();
@@ -169,17 +177,16 @@ static void spawn_falling_box(Game* game) {
     Entity* box = create_entity(em, name);
 
     // Random position above the scene
-    float x = ((float)rand() / RAND_MAX - 0.5f) * 20.0f;
-    float z = ((float)rand() / RAND_MAX - 0.5f) * 20.0f;
-    vec3 pos = {x, 15.0f + (float)rand() / RAND_MAX * 5.0f, z};
+    float x = (rand01() - 0.5f) * 20.0f;
+    float z = (rand01() - 0.5f) * 20.0f;
+    vec3 pos = {x, 15.0f + rand01() * 5.0f, z};
     entity_set_position(box, pos);
 
     // Random color
-    vec3 color = {0.3f + (float)rand() / RAND_MAX * 0.7f, 0.3f + (float)rand() / RAND_MAX * 0.7f,
-                  0.3f + (float)rand() / RAND_MAX * 0.7f};
+    vec3 color = {0.3f + rand01() * 0.7f, 0.3f + rand01() * 0.7f, 0.3f + rand01() * 0.7f};
 
     // Random size
-    float scale = 0.5f + (float)rand() / RAND_MAX * 1.0f;
+    float scale = 0.5f + rand01() * 1.0f;
     vec3 half_extents = {scale, scale, scale};
 
     // Create visual

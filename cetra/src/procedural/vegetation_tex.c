@@ -464,8 +464,14 @@ static float leaf_half_width(float t, float skew) {
 
 // Texture-space randomness only. The tree generator keeps its own stream
 // (tree_gen.c) so shape never depends on how much texture work ran first.
+//
+// The division is in DOUBLE. RAND_MAX is 0x7fffffff, which float cannot represent, so
+// (float)RAND_MAX rounds the divisor UP to 2^31 and the quotient never quite reaches 1
+// -- the explicit cast that used to be here silenced the compiler's warning about
+// exactly that rather than answering it. double holds RAND_MAX exactly, so the only
+// rounding left is the single one on the way out.
 float veg_rand_range(float min_val, float max_val) {
-    return min_val + (float)rand() / (float)RAND_MAX * (max_val - min_val);
+    return min_val + (float)(rand() / (double)RAND_MAX) * (max_val - min_val);
 }
 
 // Secondary veins, as a 0..1 mask. Each one leaves the midrib at its own point

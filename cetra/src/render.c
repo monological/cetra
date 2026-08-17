@@ -644,15 +644,18 @@ void instance_chunk_upload(Ubo* ubo, InstanceChunk* chunk, const DrawList* list,
                            size_t run, bool shading) {
     for (size_t k = 0; k < run; ++k) {
         const SceneNode* node = list->items[first + k].node;
-        glm_mat4_copy(node->global_transform, chunk->model[k]);
+        // The casts are cglm's const-incorrectness, not ours: it reads its source
+        // matrices and declares them non-const anyway, so a const node cannot be
+        // handed over without one. Keeping the node const is the point.
+        glm_mat4_copy((vec4*)node->global_transform, chunk->model[k]);
         if (!shading)
             continue;
-        glm_mat4_copy(node->prev_global_transform, chunk->prev_model[k]);
+        glm_mat4_copy((vec4*)node->prev_global_transform, chunk->prev_model[k]);
         // The block declares the normal matrix as a mat4 because std140 pads a
         // mat3's columns to 16 bytes where C packs them tight; ins3 writes the
         // upper 3x3 of an identity at that stride.
         glm_mat4_identity(chunk->normal[k]);
-        glm_mat4_ins3(node->normal_matrix, chunk->normal[k]);
+        glm_mat4_ins3((vec3*)node->normal_matrix, chunk->normal[k]);
     }
 
     // The whole block, however short the run: sending only the live prefix

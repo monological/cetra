@@ -1365,7 +1365,7 @@ static void postfx_build_sss_pyramid(PostFX* fx, int profile_tag, float proj_sca
     glActiveTexture(GL_TEXTURE2);
     glBindTexture(GL_TEXTURE_2D, fx->depth_texture);
     uniform_set_int(fx->sss_pyr_seed_program->uniforms, "profileTag", profile_tag);
-    uniform_set_mat4(fx->sss_pyr_seed_program->uniforms, "projection", projection);
+    uniform_set_mat4(fx->sss_pyr_seed_program->uniforms, "projection", (const float*)projection);
     draw_fullscreen_quad(fx->quad_vao);
 
     glUseProgram(fx->sss_pyr_down_program->id);
@@ -1581,7 +1581,7 @@ static void postfx_run_sss(PostFX* fx, GLuint canvas_fbo, mat4 projection, bool 
         glBindTexture(GL_TEXTURE_2D, fx->depth_texture);
         uniform_set_vec4(fx->sss_gather_program->uniforms, "sssProfile", fx->sss_profiles[p]);
         uniform_set_int(fx->sss_gather_program->uniforms, "profileTag", p + 1);
-        uniform_set_mat4(fx->sss_gather_program->uniforms, "projection", projection);
+        uniform_set_mat4(fx->sss_gather_program->uniforms, "projection", (const float*)projection);
         uniform_set_float(fx->sss_gather_program->uniforms, "projScale", proj_scale);
         uniform_set_float(fx->sss_gather_program->uniforms, "maxLod", sss_lod_cap(fx));
         uniform_set_vec2(fx->sss_gather_program->uniforms, "renderTexel",
@@ -1930,7 +1930,7 @@ void postfx_apply_film_look(PostFX* fx) {
     glm_vec3_copy((vec3){1.05f, 1.0f, 0.95f}, fx->grade_gain); // warm highlights
 }
 
-float postfx_sss_max_sigma_per_depth(const PostFX* fx, mat4 projection) {
+float postfx_sss_max_sigma_per_depth(const PostFX* fx, const mat4 projection) {
     if (!fx)
         return 0.0f;
     float proj_scale = 0.5f * projection[1][1] * (float)fx->height;
