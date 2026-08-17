@@ -233,11 +233,32 @@ scene_desc = {
         "windDirection": [0.0, -1.0],
         # Rough enough that the map folds and crest foam exists at all, calm enough that the
         # crests do not swamp the crown -- the shoreline is what half these arms read.
-        "windSpeed": 10.5,
-        "fetch": 90000.0,
+        #
+        # Two TRAINS since spec 11.48. The swell's numbers are the ones that used to be
+        # hardcoded, so the sea here is the same one these arms were calibrated against; the
+        # old flat "swell": 0.25 was ONE knob doing two jobs and migrates to both of them --
+        # the wind sea's `focus`, and the swell's `scale` at 0.25/0.38 of full strength.
         "seaDepth": 24.0,
-        "peakEnhancement": 3.3,
-        "swell": 0.25,
+        "windSea": {
+            "windSpeed": 10.5,
+            "fetch": 90000.0,
+            "direction": 0.0,
+            "scale": 1.0,
+            "peakEnhancement": 3.3,
+            "focus": 0.25,
+            "spreadGain": 0.58,
+            "spreadBlend": 0.68,
+        },
+        "swell": {
+            "windSpeed": 8.4,
+            "fetch": 310000.0,
+            "direction": 0.82,
+            "scale": 0.6579,
+            "peakEnhancement": 2.6,
+            "focus": 0.833,
+            "spreadGain": 0.72,
+            "spreadBlend": 1.0,
+        },
         "wavelength": 9.0,
         "amplitude": 0.22,
         "steepness": 0.6,

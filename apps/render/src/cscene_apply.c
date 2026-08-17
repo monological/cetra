@@ -319,6 +319,28 @@ void apply_cscene_wind(Scene* scene, const CetraSceneDesc* cscn) {
     // hem stay per-mesh, supplied at draw time from each mesh's AABB.
 }
 
+// One authored wave train onto the library's. Field by field, on the same reasoning as the
+// block below: an absent key keeps create_water's value, so a scene naming only the swell's
+// wind speed does not reset the other seven to whatever a zeroed struct means.
+static void apply_wave_train(const CSceneWaveTrain* src, WaterWaveTrain* dst) {
+    if (src->has_wind_speed)
+        dst->wind_speed = src->wind_speed;
+    if (src->has_fetch)
+        dst->fetch = src->fetch;
+    if (src->has_direction)
+        dst->direction = src->direction;
+    if (src->has_scale)
+        dst->scale = src->scale;
+    if (src->has_peak_enhancement)
+        dst->peak_enhancement = src->peak_enhancement;
+    if (src->has_focus)
+        dst->focus = src->focus;
+    if (src->has_spread_gain)
+        dst->spread_gain = src->spread_gain;
+    if (src->has_spread_blend)
+        dst->spread_blend = src->spread_blend;
+}
+
 /*
  * The scene file's water surface. Attached here so `--water` and its family become
  * OVERRIDES of an authored surface rather than the only way to get one -- the CLI block
@@ -351,16 +373,10 @@ void apply_cscene_water(Scene* scene, const CetraSceneDesc* cscn) {
         water->spread = w->spread;
     if (w->has_wind_dir)
         glm_vec2_copy((float*)w->wind_dir, water->wind_dir);
-    if (w->has_wind_speed)
-        water->sea.wind_speed = w->wind_speed;
-    if (w->has_fetch)
-        water->sea.fetch = w->fetch;
     if (w->has_sea_depth)
         water->sea.sea_depth = w->sea_depth;
-    if (w->has_peak_enhancement)
-        water->sea.peak_enhancement = w->peak_enhancement;
-    if (w->has_swell)
-        water->sea.swell = w->swell;
+    apply_wave_train(&w->wind_sea, &water->sea.wind_sea);
+    apply_wave_train(&w->swell, &water->sea.swell);
     if (w->has_roughness)
         water->roughness = w->roughness;
     if (w->has_ior)

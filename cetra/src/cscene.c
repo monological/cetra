@@ -62,6 +62,30 @@ static bool get_bool(const cJSON* obj, const char* key, bool* out) {
     return true;
 }
 
+/*
+ * Report a key nothing read: a missing key and a MISSPELLED one are the same thing to
+ * get_float, so without this a scene authoring "windspeed" gets the default and no
+ * indication why.
+ *
+ * `known` must be CLOSED -- every key the caller reads directly -- which is what makes an
+ * unknown one wrong, unlike a material's, whose key set belongs to the application. One
+ * function rather than a loop per block: the leading-underscore escape is easy to forget in
+ * a copy, and there are four blocks now.
+ */
+static void warn_unknown_keys(const cJSON* obj, const char* const* known, size_t count,
+                              const char* what) {
+    const cJSON* key = NULL;
+    cJSON_ArrayForEach(key, obj) {
+        if (!key->string || key->string[0] == '_') // _comment and friends
+            continue;
+        bool known_key = false;
+        for (size_t i = 0; i < count && !known_key; i++)
+            known_key = strcmp(key->string, known[i]) == 0;
+        if (!known_key)
+            log_warn("cscene: %s key '%s' is not a %s parameter; ignored", what, key->string, what);
+    }
+}
+
 static void parse_models(CetraSceneDesc* d, const cJSON* root, const char* path) {
     const cJSON* models = cJSON_GetObjectItemCaseSensitive(root, "models");
     if (!cJSON_IsArray(models))
@@ -113,17 +137,7 @@ static void parse_environment(CetraSceneDesc* d, const cJSON* root) {
      */
     static const char* const known[] = {"mode", "hdr", "probe_scene", "intensity",
                                         "ambient", "sun"};
-    const cJSON* key = NULL;
-    cJSON_ArrayForEach(key, env) {
-        if (!key->string || key->string[0] == '_') // _comment and friends
-            continue;
-        bool known_key = false;
-        for (size_t i = 0; i < sizeof(known) / sizeof(known[0]) && !known_key; i++)
-            known_key = strcmp(key->string, known[i]) == 0;
-        if (!known_key)
-            log_warn("cscene: environment key '%s' is not an environment parameter; ignored",
-                     key->string);
-    }
+    warn_unknown_keys(env, known, sizeof(known) / sizeof(known[0]), "environment");
 }
 
 LightType cscene_light_type(CSceneLightType type) {
@@ -433,6 +447,37 @@ static void parse_fog_volumes(CetraSceneDesc* d, const cJSON* root) {
     }
 }
 
+/*
+ * One nested wave train, `water.windSea` or `water.swell` (spec 11.48).
+ *
+ * Nested rather than flat-prefixed (`swellWindSpeed`, `swellSpreadGain`, ...) because a flat
+ * set leaves the wind sea's own fields unprefixed, so they read as belonging to the water
+ * rather than to a train -- which is exactly the confusion that let a hardcoded swell sit
+ * beside an authorable wind sea for six specs without anyone seeing it.
+ */
+static void parse_wave_train(const cJSON* water, const char* name, CSceneWaveTrain* out) {
+    const cJSON* train = cJSON_GetObjectItemCaseSensitive(water, name);
+    if (!cJSON_IsObject(train))
+        return;
+    out->has_wind_speed = get_float(train, "windSpeed", &out->wind_speed);
+    out->has_fetch = get_float(train, "fetch", &out->fetch);
+    out->has_direction = get_float(train, "direction", &out->direction);
+    out->has_scale = get_float(train, "scale", &out->scale);
+    out->has_peak_enhancement = get_float(train, "peakEnhancement", &out->peak_enhancement);
+    out->has_focus = get_float(train, "focus", &out->focus);
+    out->has_spread_gain = get_float(train, "spreadGain", &out->spread_gain);
+    out->has_spread_blend = get_float(train, "spreadBlend", &out->spread_blend);
+
+    static const char* const known[] = {
+        "windSpeed", "fetch", "direction",  "scale",
+        "peakEnhancement", "focus", "spreadGain", "spreadBlend",
+    };
+    // Named with the block so a warning says WHICH train, since the two accept the same keys.
+    char what[32];
+    snprintf(what, sizeof(what), "water.%s", name);
+    warn_unknown_keys(train, known, sizeof(known) / sizeof(known[0]), what);
+}
+
 static void parse_water(CetraSceneDesc* d, const cJSON* root) {
     const cJSON* water = cJSON_GetObjectItemCaseSensitive(root, "water");
     if (!cJSON_IsObject(water))
@@ -447,11 +492,9 @@ static void parse_water(CetraSceneDesc* d, const cJSON* root) {
     out->has_steepness = get_float(water, "steepness", &out->steepness);
     out->has_spread = get_float(water, "spread", &out->spread);
     out->has_wind_dir = get_floats(water, "windDirection", out->wind_dir, 2);
-    out->has_wind_speed = get_float(water, "windSpeed", &out->wind_speed);
-    out->has_fetch = get_float(water, "fetch", &out->fetch);
     out->has_sea_depth = get_float(water, "seaDepth", &out->sea_depth);
-    out->has_peak_enhancement = get_float(water, "peakEnhancement", &out->peak_enhancement);
-    out->has_swell = get_float(water, "swell", &out->swell);
+    parse_wave_train(water, "windSea", &out->wind_sea);
+    parse_wave_train(water, "swell", &out->swell);
     out->has_roughness = get_float(water, "roughness", &out->roughness);
     out->has_ior = get_float(water, "ior", &out->ior);
     out->has_absorption = get_vec3(water, "absorption", out->absorption);
@@ -478,35 +521,24 @@ static void parse_water(CetraSceneDesc* d, const cJSON* root) {
     }
 
     /*
-     * Report a key nothing above read.
-     *
-     * A missing key and a MISSPELLED one are the same thing to get_float, so without this
-     * a scene authoring "windspeed" gets the default sea and no indication why. That is
-     * the failure mode this file already refuses for material textures and for an
-     * unrecognised waves model, and water is where it bites hardest: the five sea-state
+     * Report a key nothing above read. Water is where this bites hardest: the sea-state
      * keys have no flag, so a scene file is the only way to set them at all.
      *
-     * The block is CLOSED -- every key it accepts is read directly above -- which is what
-     * makes an unknown one wrong here, unlike a material's, whose key set belongs to the
-     * application. The duplicate list is the price, and water-fixture-roundtrip asserts
-     * the two halves and the fixture agree rather than trusting anyone to keep them so.
+     * Spec 11.48 moved four of them -- windSpeed, fetch, peakEnhancement and swell -- one
+     * level down into windSea{} and swell{}, so a scene written against the old flat block
+     * now gets a warning per key rather than a silently different sea. That is the loud
+     * migration it wanted, and the reason those four are absent below rather than tolerated.
+     *
+     * water-fixture-roundtrip asserts this list, what parse_water reads and what the fixture
+     * authors all agree, rather than trusting anyone to keep them so.
      */
     static const char* const known[] = {
-        "enabled",   "level",           "extent", "wavelength", "amplitude",     "steepness",
-        "spread",    "windDirection",   "waves",  "windSpeed",  "fetch",         "seaDepth",
-        "roughness", "peakEnhancement", "swell",  "ior",        "absorption",    "scatter",
-        "caustics",  "shoreCoverage",   "farLod",
+        "enabled",   "level",         "extent",  "wavelength", "amplitude",  "steepness",
+        "spread",    "windDirection", "waves",   "seaDepth",   "windSea",    "swell",
+        "roughness", "ior",           "absorption", "scatter",  "caustics",  "shoreCoverage",
+        "farLod",
     };
-    const cJSON* key = NULL;
-    cJSON_ArrayForEach(key, water) {
-        if (!key->string || key->string[0] == '_') // _comment and friends
-            continue;
-        bool known_key = false;
-        for (size_t i = 0; i < sizeof(known) / sizeof(known[0]) && !known_key; i++)
-            known_key = strcmp(key->string, known[i]) == 0;
-        if (!known_key)
-            log_warn("cscene: water key '%s' is not a water parameter; ignored", key->string);
-    }
+    warn_unknown_keys(water, known, sizeof(known) / sizeof(known[0]), "water");
 }
 
 static void parse_materials(CetraSceneDesc* d, const cJSON* root) {

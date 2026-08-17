@@ -236,11 +236,31 @@ scene_desc = {
         # The spectral sea state (spec 11.42), inert until --water-waves fft. Physical
         # quantities: a calmer spectral ocean is a lower wind speed, not a smaller
         # amplitude, and no CLI flag can set any of these.
-        "windSpeed": 11.5,
-        "fetch": 120000.0,
+        #
+        # Two TRAINS since spec 11.48, each a complete parameter set. The swell was a
+        # hardcoded 8.4 m/s over 310 km that no scene could reach, so a scene lowering its
+        # wind left most of the sea standing; these are that same swell, said out loud.
         "seaDepth": 54.0,
-        "peakEnhancement": 3.3,
-        "swell": 0.38,
+        "windSea": {
+            "windSpeed": 11.5,
+            "fetch": 120000.0,
+            "direction": 0.0,
+            "scale": 1.0,
+            "peakEnhancement": 3.3,
+            "focus": 0.38,
+            "spreadGain": 0.58,
+            "spreadBlend": 0.68,
+        },
+        "swell": {
+            "windSpeed": 8.4,
+            "fetch": 310000.0,
+            "direction": 0.82,
+            "scale": 1.0,
+            "peakEnhancement": 2.6,
+            "focus": 0.833,
+            "spreadGain": 0.72,
+            "spreadBlend": 1.0,
+        },
         "roughness": 0.04,
         "ior": 1.333,
         # Clear water per metre, and this fixture's unit IS a metre (spec 11.36).

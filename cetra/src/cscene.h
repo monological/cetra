@@ -167,6 +167,32 @@ typedef struct CSceneDust {
 // `waves` is spelled rather than numbered -- "gerstner" or "fft" -- because the two
 // are different simulations with wildly different costs, and a scene file that said
 // `1` would tell a reader nothing about which one it asked for.
+/*
+ * One authored wave train (spec 11.48), mirroring WaterWaveTrain field for field.
+ *
+ * A `has_` flag PER FIELD rather than one for the object: a scene naming only the swell's
+ * wind speed keeps the library's defaults for the other seven, so authoring a calmer swell
+ * cannot silently reset its shape to whatever a zeroed struct means.
+ */
+typedef struct CSceneWaveTrain {
+    bool has_wind_speed;
+    float wind_speed; // m/s at the 10 m reference height
+    bool has_fetch;
+    float fetch; // metres of open water the wind has blown across
+    bool has_direction;
+    float direction; // radians, relative to windDirection
+    bool has_scale;
+    float scale; // spectral density weight; 0 removes the train
+    bool has_peak_enhancement;
+    float peak_enhancement; // JONSWAP gamma
+    bool has_focus;
+    float focus; // 0..1, how narrowly the energy sits about the train's heading
+    bool has_spread_gain;
+    float spread_gain; // outer factor on the directional spread power
+    bool has_spread_blend;
+    float spread_blend; // 0 = a broad cos^2 lobe, 1 = the focused cos^2s one
+} CSceneWaveTrain;
+
 typedef struct CSceneWater {
     bool enabled;
     bool has_level;
@@ -190,19 +216,13 @@ typedef struct CSceneWater {
     // The direction the waves travel, XZ; normalised on upload. Reaches BOTH models since
     // spec 11.42 -- it fans the Gerstner octaves and centres the spectral spread.
     float wind_dir[2];
-    // Spectral sea state (WaterSeaState), all five inert on the Gerstner path. Physical
+    // Spectral sea state (WaterSeaState), all of it inert on the Gerstner path. Physical
     // quantities in metres and m/s: a calmer spectral ocean is a lower wind speed, not a
     // smaller amplitude, which is why the spectral path has no amplitude at all.
-    bool has_wind_speed;
-    float wind_speed; // m/s at the 10 m reference height
-    bool has_fetch;
-    float fetch; // metres of open water the wind has blown across
     bool has_sea_depth;
     float sea_depth; // metres; drives the TMA shallow-water correction
-    bool has_peak_enhancement;
-    float peak_enhancement; // JONSWAP gamma
-    bool has_swell;
-    float swell; // 0..1, how much older cross-swell rides the wind sea
+    CSceneWaveTrain wind_sea;
+    CSceneWaveTrain swell;
     bool has_roughness;
     float roughness; // interface roughness; picks the environment lobe's mip
     bool has_ior;

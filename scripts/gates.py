@@ -3464,10 +3464,14 @@ WATER_CSCN_MIN_PX = 20000
 # only way to ask a spectral ocean for calm.
 #
 # Both sides author `waves` so the wave model is not the variable. No flag can set any of
-# the five, which is what makes this the only instrument on that path -- the same argument
-# water-cscn makes for absorption.
+# the sea state, which is what makes this the only instrument on that path -- the same
+# argument water-cscn makes for absorption.
+#
+# The WIND SEA's wind speed since spec 11.48, not the water's: the swell is its own train
+# now and keeps its own wind, which is the point -- before this, most of the height came
+# from a swell that ignored this number, and the arm was measuring through that dilution.
 WATER_SEASTATE_REF = {"waves": "fft"}
-WATER_SEASTATE_CALM = {"waves": "fft", "windSpeed": 4.0}
+WATER_SEASTATE_CALM = {"waves": "fft", "windSea": {"windSpeed": 4.0}}
 WATER_SEASTATE_MIN_PX = 20000
 
 # The transform carries the variance the seeding predicted (spec 11.42). Measured 0.69 to
@@ -3544,7 +3548,8 @@ WATER_GLITTER_RATIO_MIN = 1.15
 #
 # `level` 1.1 clears the ramp's highest point of 0.9, so nothing in the frame is dry and
 # the box below needs no notch cut round the wedge -- see _water_persist_variant.
-WATER_PERSIST_SEA = {"waves": "fft", "windSpeed": 20.0, "level": 1.1, "extent": 70.0}
+WATER_PERSIST_SEA = {"waves": "fft", "windSea": {"windSpeed": 20.0},
+                     "level": 1.1, "extent": 70.0}
 WATER_PERSIST_CAMERA = {"eye": [0.0, 3.2, 7.0], "target": [0.0, 0.9, -8.0], "fov": 42}
 WATER_PERSIST_FRAMES = 90
 # Open water only -- above the ramp's crest and below the horizon band, so no dry geometry
@@ -3616,7 +3621,7 @@ WATER_CSCN_LEVEL = 0.9
 WATER_COVERAGE_STATES = (8.0, 14.0)
 # waves/fft only -- no bed, and therefore no extent to author: oceanBed's whole body is
 # behind `if (bedAvailable == 0) return early` (ocean.glsl), and this arm never installs
-# one. windSpeed is the one thing that varies per state.
+# one. The wind sea's windSpeed is the one thing that varies per state.
 WATER_COVERAGE_SEA = {"waves": "fft"}
 WATER_COVERAGE_FRAMES = 90
 WATER_COVERAGE_CAM = ["--cam-eye", "0,300,0", "--cam-target", "0,0,0",
@@ -4078,8 +4083,25 @@ def _cscn_water_key_sets():
     src = open(os.path.join(ROOT, "cetra", "src", "cscene.c")).read()
     body = src.split("static void parse_water(")[1].split("\nstatic ")[0]
     # Every read names the block: get_float(water, "level", ...), get_vec3, get_bool,
-    # get_floats, and cJSON_GetObjectItemCaseSensitive for waves.
+    # get_floats, cJSON_GetObjectItemCaseSensitive for waves, and since spec 11.48
+    # parse_wave_train(water, "windSea", ...) for each nested train -- which the same
+    # pattern catches, because a sub-object is a key of water like any other.
     read = set(re.findall(r'\(water,\s*"([A-Za-z]+)"', body))
+    known = set(re.findall(r'"([A-Za-z]+)"', body.split("known[] = {")[1].split("};")[0]))
+    return read, known
+
+
+def _cscn_wave_train_key_sets():
+    """Return (keys parse_wave_train reads, keys its known[] tolerates), from the C source.
+
+    The nested half of the pair above, and it needs its own reader rather than one regex
+    spanning both levels: what both assert is that a parser, its CLOSED known[] list and the
+    fixture agree, and a pattern loose enough to cover both blocks would stop being able to
+    say which of them a key belongs to.
+    """
+    src = open(os.path.join(ROOT, "cetra", "src", "cscene.c")).read()
+    body = src.split("static void parse_wave_train(")[1].split("\nstatic ")[0]
+    read = set(re.findall(r'\(train,\s*"([A-Za-z]+)"', body))
     known = set(re.findall(r'"([A-Za-z]+)"', body.split("known[] = {")[1].split("};")[0]))
     return read, known
 
@@ -4154,8 +4176,22 @@ def _water_persist_variant(src, dst):
 
 
 def _water_cscn_variant(src, dst, overrides):
-    """Copy a .cscn with its water block overridden."""
-    cscn_copy(src, dst, lambda d: d.setdefault("water", {}).update(overrides))
+    """Copy a .cscn with its water block overridden.
+
+    A nested object (windSea, swell) MERGES rather than replaces, so an arm naming one
+    field of a train keeps the fixture's other seven. A plain dict.update swaps the whole
+    object for the one-key one, and the seven it dropped then fall back to create_water's
+    defaults -- which are the water fixture's own values today, so that mistake would not
+    show until the fixture changed.
+    """
+    def apply(d):
+        water = d.setdefault("water", {})
+        for key, value in overrides.items():
+            if isinstance(value, dict) and isinstance(water.get(key), dict):
+                water[key].update(value)
+            else:
+                water[key] = value
+    cscn_copy(src, dst, apply)
 
 
 def _water_roughness(pix, w, h, box):
@@ -4770,7 +4806,8 @@ def run_water_gate(workdir):
     cov_ok = True
     for wind_speed in WATER_COVERAGE_STATES:
         cov_scene = os.path.join(workdir, f"water_coverage_{int(wind_speed)}.cscn")
-        _water_cscn_variant(scene, cov_scene, dict(WATER_COVERAGE_SEA, windSpeed=wind_speed))
+        _water_cscn_variant(scene, cov_scene,
+                            dict(WATER_COVERAGE_SEA, windSea={"windSpeed": wind_speed}))
         cov_out = os.path.join(workdir, f"water_coverage_{int(wind_speed)}.ppm")
         err = render(cov_scene, cov_out,
                      WATER_PIN + WATER_NO_CATCHER + WATER_FOAM_DEBUG_ON + WATER_COVERAGE_CAM,
@@ -4900,16 +4937,29 @@ def run_water_gate(workdir):
         # no coverage of it; a key in the fixture the parser does not read is a typo that
         # authors nothing, which is exactly what get_float cannot distinguish from absence.
         read_keys, known_keys = _cscn_water_key_sets()
-        fixture_keys = {k for k in json.load(open(os.path.join(ROOT, "assets", WATER_FIXTURE)))
-                        .get("water", {}) if not k.startswith("_")}
+        fixture_water = json.load(open(os.path.join(ROOT, "assets", WATER_FIXTURE))).get("water", {})
+        fixture_keys = {k for k in fixture_water if not k.startswith("_")}
         if read_keys != known_keys:
             drifted.append(f"parse_water reads {sorted(read_keys ^ known_keys)} "
                            "but its known[] list disagrees")
         if read_keys != fixture_keys:
             drifted.append(f"fixture vs parse_water differ on {sorted(read_keys ^ fixture_keys)}")
+        # And the same three-way agreement one level down, for each nested train (spec
+        # 11.48). Checking only the outer level would let a train's key set drift freely,
+        # which is where the coverage matters most: every one of those eight is unreachable
+        # from the command line, so the fixture is the corpus's only exercise of them.
+        train_read, train_known = _cscn_wave_train_key_sets()
+        if train_read != train_known:
+            drifted.append(f"parse_wave_train reads {sorted(train_read ^ train_known)} "
+                           "but its known[] list disagrees")
+        for train in ("windSea", "swell"):
+            authored = {k for k in fixture_water.get(train, {}) if not k.startswith("_")}
+            if authored != train_read:
+                drifted.append(f"fixture water.{train} vs parse_wave_train differ on "
+                               f"{sorted(authored ^ train_read)}")
         ok = not drifted
-        print(f"  water-fixture-roundtrip {'PASS' if ok else 'FAIL'}  regenerated 2 files "
-              f"and {len(read_keys)} water keys, "
+        print(f"  water-fixture-roundtrip {'PASS' if ok else 'FAIL'}  regenerated 2 files, "
+              f"{len(read_keys)} water keys and {len(train_read)} per train, "
               f"{'all identical to the committed pair' if ok else 'DRIFTED: ' + '; '.join(drifted)}")
         if not ok:
             failures.append("water-fixture-roundtrip")

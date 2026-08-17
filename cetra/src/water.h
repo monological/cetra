@@ -163,23 +163,45 @@ struct Scene;
 typedef float (*WaterHeightFn)(void* ctx, float x, float z);
 
 /*
+ * One wave train's spectrum (spec 11.48).
+ *
+ * A wind sea and a swell are the same kind of thing, so this is one type used twice rather
+ * than one type and a hardcoded imitation of it alongside. Every field is a physical
+ * quantity in METRES and m/s or a shape parameter of THIS train, never a look control on
+ * the water: a calmer train is a lower wind speed or a shorter fetch, which is why there is
+ * no amplitude among them.
+ *
+ * `direction` is measured from `Water.wind_dir` rather than from an absolute bearing, so
+ * turning the wind turns both trains and preserves the ANGLE BETWEEN them -- which is what
+ * makes a second train read as an older swell instead of as more wind sea.
+ */
+typedef struct WaterWaveTrain {
+    float wind_speed;       // m/s, at the standard 10 m reference height
+    float fetch;            // metres of open water the wind has blown across
+    float direction;        // radians, relative to Water.wind_dir
+    float scale;            // spectral density weight; 1 is the spectrum the fetch law gives
+    float peak_enhancement; // JONSWAP gamma: how sharply the spectrum peaks
+    float focus;            // 0..1, how narrowly the energy sits about the train's heading
+    float spread_gain;      // outer factor on the directional spread power
+    float spread_blend;     // 0 = a broad cos^2 lobe, 1 = the focused cos^2s one
+} WaterWaveTrain;
+
+/*
  * The sea state the spectral cascades are seeded from (spec 11.42).
  *
  * One set of numbers for all three bands, so the bands stay windows onto ONE spectrum
- * rather than three independently authored looks. Every field is a physical quantity in
- * METRES and m/s, not a look control: a calmer spectral ocean is a lower wind speed or a
- * shorter fetch, which is why the spectral path takes no amplitude knob at all.
+ * rather than three independently authored looks.
  *
  * Gerstner reads none of this -- it has no sea state to ask, which is what `amplitude`
  * and `wavelength` are for. The wind DIRECTION is deliberately not here: both models
  * travel downwind and `Water.wind_dir` is the one place it is said.
  */
 typedef struct WaterSeaState {
-    float wind_speed;       // m/s, at the standard 10 m reference height
-    float fetch;            // metres of open water the wind has blown across
-    float sea_depth;        // metres; drives the TMA shallow-water correction
-    float peak_enhancement; // JONSWAP gamma: how sharply the spectrum peaks
-    float swell;            // 0..1, how much older cross-swell rides the wind sea
+    // Metres; drives the TMA shallow-water correction. A property of the water rather than
+    // of either train, which is why it sits here and not in WaterWaveTrain.
+    float sea_depth;
+    WaterWaveTrain wind_sea;
+    WaterWaveTrain swell; // the older cross-swell; `scale` 0 removes the train entirely
 } WaterSeaState;
 
 /*

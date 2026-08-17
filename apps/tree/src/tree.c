@@ -779,12 +779,13 @@ typedef struct {
     // Bisect lever: no incident wave at the shore. Removes the bore from the GEOMETRY as
     // well as the whitewater, since depth-limited breaking is gated on the surf existing.
     int no_water_surf;
-    // Spectral sea state. <=0 keeps the library default. The FFT path takes its wave
-    // heights from these two and ignores the wavelength/amplitude below, so they are the
-    // only way to make this sea calmer without switching wave models.
+    // Spectral sea state, all three on the WIND SEA except --swell. <=0 keeps this app's
+    // own value. The FFT path takes its wave heights from the trains and ignores the
+    // wavelength/amplitude below, so these are the only way to make this sea calmer
+    // without switching wave models.
     float wind_speed;
     float fetch;
-    float swell; // <0 keeps the default; 0 = no crossing swell train
+    float swell; // the swell train's `scale`; <0 keeps the default, 0 = no swell train
     // RenderMode override, 0 = PBR. The GUI has always had the combo; without this the debug
     // modes could not be reached headlessly, so anything they diagnose could not be captured.
     int render_mode;
@@ -839,9 +840,9 @@ static void print_usage(const char* prog) {
     printf("      --no-water-film     Drop the swash solver; the closed-form run-up drives\n");
     printf("      --water-foam-debug N  Crest band as a binary mask: 1 after erosion, 2 before\n");
     printf("      --no-water-surf     No incident wave at the shore: no run-up, no bore\n");
-    printf("      --wind-speed M      Spectral sea: wind in m/s (default 11.5)\n");
-    printf("      --fetch M           Spectral sea: fetch in metres (default 120000)\n");
-    printf("      --swell S           Crossing swell train, 0 = none (default 0.38)\n");
+    printf("      --wind-speed M      Spectral wind sea: wind in m/s (default 6)\n");
+    printf("      --fetch M           Spectral wind sea: fetch in metres (default 15000)\n");
+    printf("      --swell S           Swell train weight, 0 = no swell (default 1)\n");
     printf("      --render-mode N     Debug view; 10 = HDR hotspots, 12 = extrapolation\n");
     printf("      --msaa N            MSAA samples (default 4); 1 has no partial coverage\n");
     printf("      --headless-jitter   Keep TAA jitter and the 0.70 render scale headless:\n");
@@ -866,7 +867,7 @@ static void print_usage(const char* prog) {
 static bool parse_args(int argc, char** argv, TreeArgs* a) {
     memset(a, 0, sizeof(*a));
     // AFTER the memset, obviously, and not before it. <0 means "untouched", because 0 is
-    // itself a legal request -- a scene asking for no crossing swell at all.
+    // itself a legal request -- a scene asking for no swell train at all.
     a->swell = -1.0f;
     a->width = (int)WIDTH;
     a->height = (int)HEIGHT;
@@ -1479,14 +1480,14 @@ int main(int argc, char** argv) {
              * this scene is otherwise painted as -- turquoise, shallow, calm. The surf
              * becomes a line at the beach instead of a field over the bay.
              */
-            water->sea.wind_speed = 6.0f;
-            water->sea.fetch = 15000.0f;
+            water->sea.wind_sea.wind_speed = 6.0f;
+            water->sea.wind_sea.fetch = 15000.0f;
             if (args.wind_speed > 0.0f)
-                water->sea.wind_speed = args.wind_speed;
+                water->sea.wind_sea.wind_speed = args.wind_speed;
             if (args.fetch > 0.0f)
-                water->sea.fetch = args.fetch;
+                water->sea.wind_sea.fetch = args.fetch;
             if (args.swell >= 0.0f)
-                water->sea.swell = args.swell;
+                water->sea.swell.scale = args.swell;
             if (args.no_water_wetness)
                 water->wetness = false;
             if (args.no_water_film)

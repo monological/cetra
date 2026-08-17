@@ -57,11 +57,27 @@
    0.86,
    0.51
   ],
-  "windSpeed": 11.5,
-  "fetch": 120000.0,
   "seaDepth": 54.0,
-  "peakEnhancement": 3.3,
-  "swell": 0.38,
+  "windSea": {
+   "windSpeed": 11.5,
+   "fetch": 120000.0,
+   "direction": 0.0,
+   "scale": 1.0,
+   "peakEnhancement": 3.3,
+   "focus": 0.38,
+   "spreadGain": 0.58,
+   "spreadBlend": 0.68
+  },
+  "swell": {
+   "windSpeed": 8.4,
+   "fetch": 310000.0,
+   "direction": 0.82,
+   "scale": 1.0,
+   "peakEnhancement": 2.6,
+   "focus": 0.833,
+   "spreadGain": 0.72,
+   "spreadBlend": 1.0
+  },
   "roughness": 0.04,
   "ior": 1.333,
   "absorption": [

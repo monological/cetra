@@ -111,6 +111,32 @@ static void _end_effect_group(void) {
     igEndDisabled();
 }
 
+/*
+ * One spectral wave train's sliders (spec 11.48). Shared by the wind sea and the swell,
+ * which carry the same fields -- and a TreeNode pushes its own ID scope, so the two calls
+ * can use identical labels without ImGui keying them to one widget.
+ *
+ * Every one of these re-seeds the initial spectrum on the next frame, which is why they
+ * are folded away rather than sitting open.
+ */
+static void _water_train_gui(const char* label, WaterWaveTrain* train) {
+    if (!igTreeNode_Str(label))
+        return;
+    // No amplitude: a train takes its height from the wind and the fetch, so calm is a
+    // lower wind speed rather than a smaller number. `Scale` is a spectral density weight
+    // for balancing the two trains, not that missing amplitude -- at 0 the train is gone.
+    igSliderFloat("Wind speed (m/s)", &train->wind_speed, 0.5f, 30.0f, "%.1f", 0);
+    igSliderFloat("Fetch (m)", &train->fetch, 1000.0f, 500000.0f, "%.0f",
+                  ImGuiSliderFlags_Logarithmic);
+    igSliderFloat("Direction (rad)", &train->direction, -3.14159265f, 3.14159265f, "%.2f", 0);
+    igSliderFloat("Scale", &train->scale, 0.0f, 2.0f, "%.2f", 0);
+    igSliderFloat("Peak enhancement", &train->peak_enhancement, 1.0f, 7.0f, "%.2f", 0);
+    igSliderFloat("Focus", &train->focus, 0.0f, 1.0f, "%.2f", 0);
+    igSliderFloat("Spread gain", &train->spread_gain, 0.1f, 2.0f, "%.2f", 0);
+    igSliderFloat("Spread blend", &train->spread_blend, 0.0f, 1.0f, "%.2f", 0);
+    igTreePop();
+}
+
 // Combo entry for one light: "1: KeyLamp (Spot)", or the type alone when the
 // asset gave the light no name. The index leads because it is the only part
 // guaranteed unique -- ImGui keys widgets by label, so two identically named
@@ -612,17 +638,11 @@ static void _engine_gui_panel(Engine* engine) {
                 // of this panel put together and is why they are folded behind the model
                 // that uses them.
                 //
-                // No amplitude: the spectrum takes its height from the wind and the
-                // fetch, so calm is a lower wind speed rather than a smaller number.
-                igSliderFloat("Wind speed (m/s)", &water->sea.wind_speed, 0.5f, 30.0f, "%.1f",
-                              0);
-                igSliderFloat("Fetch (m)", &water->sea.fetch, 1000.0f, 500000.0f, "%.0f",
-                              ImGuiSliderFlags_Logarithmic);
+                // Depth is the water's, not a train's, so it sits outside both.
                 igSliderFloat("Sea depth (m)", &water->sea.sea_depth, 1.0f, 500.0f, "%.0f",
                               ImGuiSliderFlags_Logarithmic);
-                igSliderFloat("Peak enhancement", &water->sea.peak_enhancement, 1.0f, 7.0f,
-                              "%.2f", 0);
-                igSliderFloat("Swell", &water->sea.swell, 0.0f, 1.0f, "%.2f", 0);
+                _water_train_gui("Wind sea", &water->sea.wind_sea);
+                _water_train_gui("Swell", &water->sea.swell);
             }
             igCheckbox("Caustics", &water->caustics);
             igCheckbox("Sun glitter", &water->glitter);
