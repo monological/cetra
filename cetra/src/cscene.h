@@ -160,13 +160,6 @@ typedef struct CSceneDust {
     float damping;
 } CSceneDust;
 
-// Water surface (water.h). Presence-flagged like dust and wind, so a block that
-// authors only a level leaves every other property at the subsystem's own default
-// rather than at whatever zero happens to mean for it.
-//
-// `waves` is spelled rather than numbered -- "gerstner" or "fft" -- because the two
-// are different simulations with wildly different costs, and a scene file that said
-// `1` would tell a reader nothing about which one it asked for.
 /*
  * One authored wave train (spec 11.48), mirroring WaterWaveTrain field for field.
  *
@@ -193,6 +186,13 @@ typedef struct CSceneWaveTrain {
     float spread_blend; // 0 = a broad cos^2 lobe, 1 = the focused cos^2s one
 } CSceneWaveTrain;
 
+// Water surface (water.h). Presence-flagged like dust and wind, so a block that
+// authors only a level leaves every other property at the subsystem's own default
+// rather than at whatever zero happens to mean for it.
+//
+// `waves` is spelled rather than numbered -- "gerstner" or "fft" -- because the two
+// are different simulations with wildly different costs, and a scene file that said
+// `1` would tell a reader nothing about which one it asked for.
 typedef struct CSceneWater {
     bool enabled;
     bool has_level;

@@ -63,30 +63,39 @@ static const struct WaterCascadeConfig {
 // over 310 km that no scene could reach, so a scene lowering its wind left most of the sea
 // standing -- and over shallow water that unasked-for swell breaks everywhere. A low wind
 // over a very long fetch is what a swell IS; the point is that it is now sayable.
+//
+// `static const` rather than compound-literal macros, matching WATER_CASCADE_CFG above: a
+// macro cannot carry a `//` on the field it explains (the backslash continuation swallows
+// it), so the reason for `focus` below had to sit six unrelated fields away from the value.
+// A compound literal also has AUTOMATIC storage where the name reads like a constant, so its
+// address dangles and it cannot initialise a static -- neither bites at two direct
+// assignments, which is exactly why it would bite whoever adds a third train.
 #define WATER_DEFAULT_SEA_DEPTH 54.0f
-#define WATER_DEFAULT_WIND_SEA                                                                     \
-    ((WaterWaveTrain){.wind_speed = 11.5f,                                                         \
-                      .fetch = 120000.0f,                                                          \
-                      .direction = 0.0f,                                                           \
-                      .scale = 1.0f,                                                               \
-                      .peak_enhancement = 3.3f,                                                    \
-                      .focus = 0.38f,                                                              \
-                      .spread_gain = 0.58f,                                                        \
-                      .spread_blend = 0.68f})
-// `focus` 0.833 is not a round number because it is a FIT. The swell's spread was a flat
-// +9.0 where the wind sea's is 16*tanh(min(w/wp,20))*focus^2; unifying the form is what
-// makes the two trains one type, and 0.833 is the least-squares match to that flat 9.0
-// weighted by the energy each mode actually carries (72% of it sits within a quarter of the
-// peak). The residual is a lobe half-width of 28..38 degrees where it was a flat 32.
-#define WATER_DEFAULT_SWELL                                                                        \
-    ((WaterWaveTrain){.wind_speed = 8.4f,                                                          \
-                      .fetch = 310000.0f,                                                          \
-                      .direction = 0.82f,                                                          \
-                      .scale = 1.0f,                                                               \
-                      .peak_enhancement = 2.6f,                                                    \
-                      .focus = 0.833f,                                                             \
-                      .spread_gain = 0.72f,                                                        \
-                      .spread_blend = 1.0f})
+static const WaterWaveTrain WATER_DEFAULT_WIND_SEA = {
+    .wind_speed = 11.5f,
+    .fetch = 120000.0f,
+    .direction = 0.0f,
+    .scale = 1.0f,
+    .peak_enhancement = 3.3f,
+    .focus = 0.38f,
+    .spread_gain = 0.58f,
+    .spread_blend = 0.68f,
+};
+static const WaterWaveTrain WATER_DEFAULT_SWELL = {
+    .wind_speed = 8.4f,
+    .fetch = 310000.0f,
+    .direction = 0.82f,
+    .scale = 1.0f,
+    .peak_enhancement = 2.6f,
+    // Not a round number because it is a FIT. The swell's spread was a flat +9.0 where the
+    // wind sea's is 16*tanh(min(w/wp,20))*focus^2; unifying the form is what makes the two
+    // trains one type, and this is the least-squares match to that flat 9.0 weighted by the
+    // energy each mode actually carries (72% of it sits within a quarter of the peak). The
+    // residual is a lobe half-width of 28..38 degrees where it was a flat 32.
+    .focus = 0.833f,
+    .spread_gain = 0.72f,
+    .spread_blend = 1.0f,
+};
 
 // The reference's deterministic PRNG, ported exactly rather than swapped for
 // rand(): the spectrum it seeds IS the ocean's identity, so a different sequence
@@ -171,27 +180,34 @@ static float _water_jonswap(float omega, float peak_omega, float alpha, float tm
 }
 
 /*
- * What a train's fetch law gives it: the JONSWAP scale and the peak angular frequency in
- * rad/s. In one place because the seeding shapes the spectrum around them and the surf runs
- * at the peak; together because each costs a powf and the seeding wants them once per train
- * rather than once per mode, which is 16k modes a cascade.
+ * A train prepared for seeding: itself, plus what its fetch law gives it -- the JONSWAP
+ * scale and the peak angular frequency in rad/s.
+ *
+ * The two derived numbers are here because each costs a powf and the seeding wants them once
+ * per train rather than once per mode, which is 16k modes a cascade. The train POINTER is
+ * here so they cannot be separated: passed alongside, `wind_fetch` and `swell_fetch` were two
+ * interchangeable values at two adjacent call sites, and transposing them would compile
+ * clean and seed one train's fetch law against the other's gamma, heading and spread. No
+ * golden reaches the seeding and water-fft-var reads to 2 dp, so nothing would have caught it.
  */
-typedef struct WaterTrainFetch {
+typedef struct WaterTrainSpectrum {
+    const WaterWaveTrain* train;
     float alpha;
     float peak_omega;
-} WaterTrainFetch;
+} WaterTrainSpectrum;
 
-static WaterTrainFetch _water_train_fetch(const WaterWaveTrain* train) {
+static WaterTrainSpectrum _water_train_prepare(const WaterWaveTrain* train) {
     const float g = 9.81f;
     // Guarded rather than trusted: these are authored, and a zero wind speed or fetch
     // divides here rather than at some later texel. The floors are far below any sea a
     // scene would ask for, so they can only bind on a value that was never a sea state.
     const float wind_speed = fmaxf(train->wind_speed, 0.1f);
     const float fetch = fmaxf(train->fetch, 1.0f);
-    WaterTrainFetch f;
-    f.alpha = 0.076f * powf(g * fetch / (wind_speed * wind_speed), -0.22f);
-    f.peak_omega = 22.0f * powf(wind_speed * fetch / (g * g), -0.33f);
-    return f;
+    WaterTrainSpectrum s;
+    s.train = train;
+    s.alpha = 0.076f * powf(g * fetch / (wind_speed * wind_speed), -0.22f);
+    s.peak_omega = 22.0f * powf(wind_speed * fetch / (g * g), -0.33f);
+    return s;
 }
 
 /*
@@ -205,20 +221,24 @@ static WaterTrainFetch _water_train_fetch(const WaterWaveTrain* train) {
  * `mode_angle` is the mode's bearing, passed in rather than recomputed per train: two calls
  * on one mode would otherwise take the same atan2 twice.
  */
-static float _water_train_density(const WaterWaveTrain* train, WaterTrainFetch fetch, float omega,
-                                  float mode_angle, float tma, float wind_angle) {
+static float _water_train_density(WaterTrainSpectrum s, float omega, float mode_angle, float tma,
+                                  float wind_angle) {
+    const WaterWaveTrain* train = s.train;
     const float jonswap =
-        _water_jonswap(omega, fetch.peak_omega, fetch.alpha, tma, train->peak_enhancement);
+        _water_jonswap(omega, s.peak_omega, s.alpha, tma, train->peak_enhancement);
     const float theta = _water_wrap_angle(mode_angle - (wind_angle + train->direction));
-    const float omega_ratio = omega / fetch.peak_omega;
+    const float omega_ratio = omega / s.peak_omega;
     const float spread_power =
-        ((omega > fetch.peak_omega ? 9.77f * powf(omega_ratio, -2.5f)
-                                   : 6.97f * powf(omega_ratio, 5.0f)) +
+        ((omega > s.peak_omega ? 9.77f * powf(omega_ratio, -2.5f)
+                               : 6.97f * powf(omega_ratio, 5.0f)) +
          16.0f * tanhf(fminf(omega_ratio, 20.0f)) * train->focus * train->focus) *
         train->spread_gain;
     const float focused = _water_spread_norm(spread_power) *
                           powf(fabsf(cosf(theta * 0.5f)), 2.0f * spread_power);
-    const float broad = 2.0f / 3.14159265359f * powf(fmaxf(cosf(theta), 0.0f), 2.0f);
+    // cosf then a multiply, not powf(x, 2.0f): the build everyone runs is -O0, where that
+    // literal exponent is a libm call on every one of the 7.4k in-band modes.
+    const float broad_cos = fmaxf(cosf(theta), 0.0f);
+    const float broad = 2.0f / 3.14159265359f * (broad_cos * broad_cos);
     const float direction = focused * train->spread_blend + broad * (1.0f - train->spread_blend);
     return jonswap * direction * train->scale;
 }
@@ -248,8 +268,8 @@ static bool _water_build_spectrum(int size, const struct WaterCascadeConfig* cfg
     // Guarded for the same reason the trains' wind and fetch are: authored, and dividing
     // here rather than at some later texel.
     const float sea_depth = fmaxf(sea->sea_depth, 0.1f);
-    const WaterTrainFetch wind_fetch = _water_train_fetch(&sea->wind_sea);
-    const WaterTrainFetch swell_fetch = _water_train_fetch(&sea->swell);
+    const WaterTrainSpectrum wind_sea = _water_train_prepare(&sea->wind_sea);
+    const WaterTrainSpectrum swell = _water_train_prepare(&sea->swell);
     // Whether this band carries the second train at all: secondary_scale is the CASCADE's
     // say in it, and is what keeps the swell out of the 12 m band.
     const bool carries_swell = cfg->secondary_scale > 0.0f && sea->swell.scale > 0.0f;
@@ -305,15 +325,13 @@ static bool _water_build_spectrum(int size, const struct WaterCascadeConfig* cfg
             // does not end in a hard spectral cliff that rings after transform. A
             // property of the BAND rather than of a train, so both are faded by it.
             const float short_fade = expf(-0.00016f * k_len * k_len);
-            float density = _water_train_density(&sea->wind_sea, wind_fetch, omega, mode_angle,
-                                                 tma, wind_angle) *
+            float density = _water_train_density(wind_sea, omega, mode_angle, tma, wind_angle) *
                             short_fade;
             // The second train, older and crossing the wind: one direction of travel,
             // however well spread, reads as corduroy. Its own size is inside the density,
             // via `scale`; secondary_scale is the band's weighting on top of it.
             if (carries_swell)
-                density += _water_train_density(&sea->swell, swell_fetch, omega, mode_angle, tma,
-                                                wind_angle) *
+                density += _water_train_density(swell, omega, mode_angle, tma, wind_angle) *
                            short_fade * cfg->secondary_scale;
 
             const float amplitude =
@@ -1127,7 +1145,7 @@ static bool _water_seed_cascades(Water* water) {
     // at, and Cox-Munk relates slope variance to the local wind, which a swell is not.
     log_info("Water: seeded sea Hs %.2f m, wind-sea Tp %.1f s, slope var %.4f of Cox-Munk %.4f",
              (double)_water_significant_height(water),
-             (double)(6.28318530718f / _water_train_fetch(&water->sea.wind_sea).peak_omega),
+             (double)(6.28318530718f / _water_train_prepare(&water->sea.wind_sea).peak_omega),
              (double)carried, (double)(0.003f + 0.00512f * water->sea.wind_sea.wind_speed));
     return true;
 }
@@ -1362,7 +1380,7 @@ static void _water_surf_state(const Water* water, float units_per_metre, bool ff
         // should follow the longer train -- at the defaults the swell's period is 8.3 s
         // against the wind sea's 6.7 -- but that moves waterSurfOmega and every shore
         // frame with it, so it is recorded here rather than changed under 11.48.
-        *out_omega = _water_train_fetch(&water->sea.wind_sea).peak_omega;
+        *out_omega = _water_train_prepare(&water->sea.wind_sea).peak_omega;
     } else {
         *out_hs = 2.0f * water->amplitude / units_per_metre;
         const float k = 6.28318530718f / fmaxf(water->wavelength / units_per_metre, 0.01f);

@@ -144,6 +144,11 @@ typedef enum WaterFoamDebug {
     WATER_FOAM_DEBUG_OFF = 0,
     WATER_FOAM_DEBUG_ERODED,   // the band as the frame draws it, after erosion
     WATER_FOAM_DEBUG_SELECTED, // the band before erosion, so the pass rate is measurable
+    // Depth-limited breaking alone. The two above became the UNION of whitecaps and breaking
+    // when 11.48 gave a breaker the crest band's ceiling, and separating them again is what
+    // an elimination needs -- ruling crest foam out as the cause of a surf-zone artifact is
+    // exactly what 11.48's own trace used mode 1 for.
+    WATER_FOAM_DEBUG_BREAKING,
 } WaterFoamDebug;
 
 struct Engine;
@@ -166,10 +171,9 @@ typedef float (*WaterHeightFn)(void* ctx, float x, float z);
  * One wave train's spectrum (spec 11.48).
  *
  * A wind sea and a swell are the same kind of thing, so this is one type used twice rather
- * than one type and a hardcoded imitation of it alongside. Every field is a physical
- * quantity in METRES and m/s or a shape parameter of THIS train, never a look control on
- * the water: a calmer train is a lower wind speed or a shorter fetch, which is why there is
- * no amplitude among them.
+ * than one type and a hardcoded imitation of it alongside. A train's SIZE comes from its
+ * physics -- a calmer train is a lower wind speed or a shorter fetch -- and `scale` only
+ * re-weights one train against the other.
  *
  * `direction` is measured from `Water.wind_dir` rather than from an absolute bearing, so
  * turning the wind turns both trains and preserves the ANGLE BETWEEN them -- which is what
@@ -179,11 +183,16 @@ typedef struct WaterWaveTrain {
     float wind_speed;       // m/s, at the standard 10 m reference height
     float fetch;            // metres of open water the wind has blown across
     float direction;        // radians, relative to Water.wind_dir
-    float scale;            // spectral density weight; 1 is the spectrum the fetch law gives
+    float scale;            // spectral density weight; 0 removes the train
     float peak_enhancement; // JONSWAP gamma: how sharply the spectrum peaks
-    float focus;            // 0..1, how narrowly the energy sits about the train's heading
-    float spread_gain;      // outer factor on the directional spread power
-    float spread_blend;     // 0 = a broad cos^2 lobe, 1 = the focused cos^2s one
+    // The two spread knobs both narrow the lobe, and they narrow DIFFERENT BANDS -- which is
+    // the whole reason there are two. `spread_gain` multiplies the entire spread power, so
+    // it narrows at every frequency including the peak, where it dominates. `focus` scales
+    // only the saturating tanh term, which is negligible at the peak and dominant in both
+    // tails, so it narrows the off-peak energy and leaves the peak's own width alone.
+    float focus;        // 0..1, how narrowly the OFF-PEAK energy sits about the heading
+    float spread_gain;  // outer factor on the whole directional spread power
+    float spread_blend; // 0 = a broad cos^2 lobe, 1 = the focused cos^2s one
 } WaterWaveTrain;
 
 /*

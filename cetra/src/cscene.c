@@ -81,8 +81,11 @@ static void warn_unknown_keys(const cJSON* obj, const char* const* known, size_t
         bool known_key = false;
         for (size_t i = 0; i < count && !known_key; i++)
             known_key = strcmp(key->string, known[i]) == 0;
+        // "a recognised %s" rather than "a %s": the noun varies, and the extraction turned
+        // parse_environment's "is not an environment parameter" into "is not a environment".
         if (!known_key)
-            log_warn("cscene: %s key '%s' is not a %s parameter; ignored", what, key->string, what);
+            log_warn("cscene: %s key '%s' is not a recognised %s parameter; ignored", what,
+                     key->string, what);
     }
 }
 
