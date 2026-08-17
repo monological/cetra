@@ -253,7 +253,12 @@ scene_desc = {
             "windSpeed": 8.4,
             "fetch": 310000.0,
             "direction": 0.82,
-            "scale": 0.6579,
+            # The arithmetic, not a rounded 0.6579: this IS the expression master computed
+            # (sw_weight = swell / WATER_DEFAULT_SWELL, with the old default 0.38), so writing
+            # it keeps the migration checkable instead of asking a reader to trust a rounding.
+            # json.dump uses repr(float), which is deterministic, so fixture-gen's byte
+            # comparison is as happy with this as with a literal.
+            "scale": 0.25 / 0.38,
             "peakEnhancement": 2.6,
             "focus": 0.833,
             "spreadGain": 0.72,
