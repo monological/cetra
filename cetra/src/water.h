@@ -180,10 +180,14 @@ typedef float (*WaterHeightFn)(void* ctx, float x, float z);
  * makes a second train read as an older swell instead of as more wind sea.
  */
 typedef struct WaterWaveTrain {
-    float wind_speed;       // m/s, at the standard 10 m reference height
-    float fetch;            // metres of open water the wind has blown across
-    float direction;        // radians, relative to Water.wind_dir
-    float scale;            // spectral density weight; 0 removes the train
+    float wind_speed; // m/s, at the standard 10 m reference height
+    float fetch;      // metres of open water the wind has blown across
+    float direction;  // radians, relative to Water.wind_dir
+    // Spectral density weight; 0 removes the train. NOT an absolute: the second train is
+    // additionally weighted per cascade (WATER_CASCADE_CFG.secondary_scale, 0.22/0.08/0),
+    // so an authored 1 is the fetch law's spectrum for the wind sea and a fraction of it for
+    // the swell -- and no value at all reaches the short band, which weights it zero.
+    float scale;
     float peak_enhancement; // JONSWAP gamma: how sharply the spectrum peaks
     // The two spread knobs both narrow the lobe, and they narrow DIFFERENT BANDS -- which is
     // the whole reason there are two. `spread_gain` multiplies the entire spread power, so
@@ -275,16 +279,16 @@ typedef struct Water {
     void* height_ctx;
 
     WaterWaveModel wave_model;
-    // Caustics on refracted geometry. Inert on the Gerstner path, whose steepness
-    // is clamped so its mapping cannot compress and therefore cannot focus.
+    // Caustics on refracted geometry. Inert on the Gerstner path, which reports no
+    // compression for this to focus from -- deliberately, not because it has none.
     bool caustics;
     // false = no analytic sun lobe, which is every frame before spec 11.42. Live on both
     // wave models: its width comes from the slope the surface stopped resolving, and the
     // Gerstner path reports that from its dropped octaves.
     bool glitter;
     // false = whitewater is selected from THIS frame's fold and forgotten, which is the
-    // pre-11.42 foam exactly. Spectral only: the accumulator runs over the cascades, and
-    // the Gerstner path's steepness is clamped so its map cannot fold at all.
+    // pre-11.42 foam exactly. Spectral only: the accumulator is a cascade texture, and the
+    // Gerstner path reports no compression to accumulate.
     bool foam_history;
     // How fast foam gives up and returns to open water, per second. Lower lingers longer.
     float foam_decay;

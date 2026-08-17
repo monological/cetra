@@ -248,7 +248,7 @@ const float OCEAN_BREAK_ON = 0.90;
 const float OCEAN_BREAK_FULL = 1.30;
 const float OCEAN_BREAK_MIN_DEPTH_M = 0.5;
 /*
- * How steep the SHOREWARD FACE has to be before that crest whitens, as a multiple of the
+ * How steep the FORWARD FACE has to be before that crest whitens, as a multiple of the
  * surf's own deep-water steepness.
  *
  * The height test above says a wave MAY break. It cannot say where the whitewater goes, and
@@ -259,8 +259,20 @@ const float OCEAN_BREAK_MIN_DEPTH_M = 0.5;
  * A multiple of the sea's own steepness rather than an absolute slope, for the reason the
  * far-field roughness handover records: an absolute constant is a look control standing where
  * a property of the sea belongs, and it would break the same wave on a millpond and never on
- * a gale. Shoaling steepens a front by roughly two to three before it overturns, so a face
- * carrying more than its deep-water share is the one that is actually breaking.
+ * a gale.
+ *
+ * THE WINDOW IS CALIBRATED, NOT DERIVED, and the derivation it looks like it has would be
+ * wrong. Shoaling does steepen a real front two- or threefold before it overturns, but this
+ * field never does: `front` and disp.y are both read before the shoal factor and before the
+ * tanh saturation, and neither model shortens its wavenumber with depth -- the Gerstner k is
+ * fixed and the cascades are seeded once against a scene-wide depth. So the incident field
+ * carries its OPEN-WATER steepness everywhere on the shelf and those two only ever attenuate
+ * it. On the Gerstner path charSlope reduces exactly to the primary octave's own a*k, so ON
+ * asks the instantaneous projected slope to reach that octave's full amplitude -- the single
+ * steepest phase -- and FULL needs the fanned octaves to add constructively on top. The
+ * window is therefore near the ceiling of what this field can produce, which is what makes
+ * the term selective. Widen it by measuring a front/charSlope histogram, not by reasoning
+ * from shoaling that is not in the arithmetic.
  */
 const float OCEAN_BREAK_FACE_ON = 1.0;
 const float OCEAN_BREAK_FACE_FULL = 2.5;

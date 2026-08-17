@@ -755,10 +755,11 @@ void main() {
      * Breaking crests, on both wave models -- the surf zone between the swash and open water.
      *
      * Selected from the depth limit rather than from the fold, which is why it is the one
-     * whitecap source the Gerstner path has: its steepness is clamped so its horizontal map
-     * can never compress, and until now the surf zone of a Gerstner sea was bare between the
-     * swash and open water. The selection itself is done where the depth is (see
-     * OceanSurface.breaking); what arrives here is already a fraction.
+     * whitecap source the Gerstner path has: that path reports no Jacobian for the crest
+     * gate to read (a choice, not an inability -- see the caustics block below), so until
+     * now the surf zone of a Gerstner sea was bare between the swash and open water. The
+     * selection itself is done where the depth is (see OceanSurface.breaking); what
+     * arrives here is already a fraction.
      *
      * Deliberately NOT gated by `band`: the swash is the last few metres and this is
      * everything seaward of it standing in too little water, which is what a surf zone is.
@@ -1010,9 +1011,12 @@ void main() {
         // surface, and read the compression of the cascades THERE: a converging
         // patch of surface is a lens, and its focus is what brightens the floor.
         //
-        // FFT only, and that is principled rather than a gap: caustics come from
-        // compression, and the Gerstner path's steepness is clamped precisely so
-        // its mapping cannot compress. The same reasoning gates its foam.
+        // FFT only, and that is a CHOICE rather than an inability. Caustics come from
+        // compression, and a Gerstner map does compress -- the bunching is what
+        // sharpens its crests. What its steepness clamp buys is injectivity: the map
+        // never FOLDS. ocean.glsl then declines to report the determinant it computed
+        // on that path, so the gate here reads a flat 1 and finds no lens. Same
+        // reasoning gates its foam, and the same line would undo both.
         if (waveModel == 1 && sunAvailable == 1 && causticsEnabled == 1) {
             vec2 crossing = WorldPos.xz - sunDir.xz / max(sunDir.y, 0.12) * path * 0.18;
             vec2 uvMed = oceanCascadeUv(crossing, 1);
