@@ -15,9 +15,18 @@ each tier item later gets its own subplan (feature branch + spec) before impleme
 — the original plan is finished. **Tier 4 (Tracks C/D/E below) is the new frontier**, and it is shaped
 by a different constraint than Tiers 1-3 were: those items could each be built as another gated
 fullscreen pass, and Tier 4's cannot. Four structural walls now decide what is reachable at all; they
-are stated before Track C because half the Tier 4 items are blocked on one of them. Two have since
-fallen (Wall 3 to E4, most of Wall 2 to E5) and one was added after the fact (Wall 4), which is the
-section's own record of having mis-framed the geometry problem.
+are stated before Track C because half the Tier 4 items are blocked on one of them.
+
+**All four have moved since, and none of them the way this section predicted.** Wall 3 was removed
+outright (E4), Wall 2 mostly (E5), Wall 4 mostly (E6/11.31) — and Wall 4 was not in the original
+three at all, which is this section's own record of having mis-framed the geometry problem. **Wall 1
+is the interesting one: it did not fall, it turned out to bite far more narrowly than stated.** Of
+the five things it was said to block, two were never blocked, two are blocked only by a choice of
+texture layout, and exactly one is blocked outright. Five escapes from it are now precedented and
+four of them were found *after* the wall was written. The lesson the wall's own section draws is the
+one to carry into any future entry here: "16/16" is a link-time property and blocking is a
+per-pass, per-type, per-byte-count property, and this document asked only the first question for the
+length of the roadmap.
 
 Everything in Tracks C/D/E is a **sketch**, in the sense this document has taught the word: a
 pre-implementation guess whose load-bearing claims are wrong often enough that B3 lists four, B6 lists
@@ -157,7 +166,15 @@ shadow array. 11.17 established the rule that makes this a hard stop rather than
 driver counts sampler *declarations*, not uses**, so there is no seventeenth sampler in `pbr_frag`
 for a free unit either. Two escapes are already precedented and both are narrow — ride an existing
 declaration through a `#define` when the two consumers are mutually exclusive (moments over
-`sceneColorTex`), or put the table in `const`/uniform space (11.13). See **Wall 1** below.
+`sceneColorTex`), or put the table in `const`/uniform space. See **Wall 1** below.
+
+**The uniform-space escape has turned out to be the widest of the five, and it was priced as the
+narrowest.** 11.13 took it for a 16-row skin table and this entry recorded it as a curiosity. Since
+then it has carried A1's entire light path, C3's IES profiles by design, **11.45's `ShoreFilmBlock`**
+(a CPU shallow-water solver's per-column tips, 2.3 KB, read by both the sea's lens and the sand's
+wetness so they agree by construction) and **11.46's inverse CDF** (64 entries × 3 channels, 768
+bytes). The rule that falls out: ask how many BYTES a feature needs in the shader before asking for a
+unit, because the answer is frequently kilobytes and a UBO holds 16 of them.
 
 **There is a FOURTH escape, and spec 11.45 spent it on the other program: CONSOLIDATE identical
 declarations into one array.** A cap counted in declarations is a cap on how many distinct *shapes*
@@ -768,6 +785,18 @@ about this document: a per-program ledger deserves a per-program entry, and "the
 singular noun is what let a second one sit unexamined through four specs. `water.h` now carries its
 own ledger comment in the same shape as this section's.
 
+**The cost was then refunded in the same spec.** With units free the foam pattern went back to a
+baked 256² ridged web with a mip chain, which the ALU version could not have had — distant
+whitewater had been aliasing into a speckle band that only foam fading out kept tolerable. Two
+things about sampling it were found as artefacts before they were understood, and both are the same
+trap in different clothes: **the footprint must come from the UNDISPLACED position** (the shore band
+advects the lookup along the bed's downhill, the bed gradient is bilinear off a texture and
+therefore C0, so an implicit lookup steps mip level at every bed texel and prints the sea as a grid
+of rectangles — advection translates a pattern without resizing it, so the correct footprint is the
+pixel's own); and **it is domain-warped**, because one 5 m tile across tens of metres of beach is
+wallpaper, and a warp is a reparameterisation that leaves the value distribution — and so the
+erosion threshold's calibration — untouched, where a blended second tap would not.
+
 **Wall 2 — geometry submission does not scale — MOSTLY REMOVED (specs 11.28 / 11.29).** Instancing,
 LOD chains and per-cascade shadow culling shipped in E5; on `abandoned_window_shadowed` that is shadow
 CPU **−83%**, frame **−38%**, 2,148 draws → 272. What remains of the wall is the third limb, draw
@@ -1135,6 +1164,16 @@ a CPU filename-convention resolver (`import.c:1673`) — glTF carries no height 
 derived by stripping a known base-map suffix, and finding one **auto-enables POM** by setting
 `parallax_scale`.*
 
+**6. A sixth mechanism exists that this entry never listed, and it is the one that actually worked —
+on the other program.** Consolidating identical declarations into an array took `water_frag` from
+16/16 to 10/16 in a single spec (11.45), which is six units where D0's best mechanism frees one. It
+does **not** transfer cheaply: `pbr_frag`'s four `sampler2DArray`s are `maskArray`, `shadowMaps`,
+`punctualShadowMaps` and `ltcTex`, and the closest pair — the two shadow arrays, both
+`GL_DEPTH_COMPONENT24` through the same `init_depth_array` — are sized independently, so merging them
+means one of the two changing resolution. That is a quality trade rather than the free consolidation
+water got, and it should be priced against the irradiance fold rather than assumed cheaper than it.
+The ledger section above has the full argument as the fourth escape.
+
 **Second candidates examined and rejected.** Unit 13 (`brdfLUT`) to an analytic Lazarov fit: 10.7.1
 packed the sheen E-LUT into its `.b` channel for KHR conformance and clearcoat reads `.rg`
 (`pbr_frag.glsl:1258, 1280, 1858`), so this trades spec conformance for a sampler. Unit 9 (Charlie
@@ -1276,11 +1315,102 @@ not counted twice, shadowed through `csmOutermostOcclusion` and dimmed by the cl
 persist (one accumulation pass, three bands in one RGB target) instead of vanishing with the crest
 that made them, and the spectral sea state is authorable from `.cscn` instead of six `#define`s.
 
+**The entry above stopped at 11.42 and six more specs have landed on this surface since.** Recorded
+compactly here, in shipping order, because D3 owns water and a reader wanting the current state
+should not have to reconstruct it from six closed specs.
+
+- **11.43 — the fixture told the truth for the first time.** `water_fixture.cscn` authored
+  `sun_elevation` / `sun_azimuth` **flat** where `parse_env` reads them one level down under `sun`,
+  so its stated 26° sun had never been in effect: every water arm and both water goldens were
+  calibrated against the sky's own 35°, and rendering the stated angle moves **85% of the frame**.
+  Fixed at the class rather than the instance — `parse_env` now reports a key nothing read, the way
+  `parse_water` does — and the fixture was corrected to the angle actually in effect, so it becomes
+  truthful at 0 px instead of re-tuning twenty-nine arms as a side effect of a key-name fix. The
+  gate boxes stopped being transcriptions in the same spec: `_water_ramp_band` reads the wedge's
+  corners out of the glTF and states a box as two HEIGHTS on the ramp, so the ramp could then be
+  flipped (waterline row 0.5079 → 0.4530) with every derived box following it untouched.
+- **11.44 — the ocean learned how big a world unit is.** Every physical length in the water was a
+  bare world-unit literal (the shoal window, the short band's fade, the bend ceiling, the caustic
+  depth window), correct only where a unit happened to be a metre. They are metres now, converted at
+  use through `waterUnitsPerMetre` off `Sky.world_units_per_km` — the authority the atmosphere
+  already uses, so the ocean cannot disagree with its own sky about the size of the world.
+  **`apps/tree` set that number for the first time**: `ground.h` had recorded 22 units to the metre
+  since 11.35, the GUI had offered a slider, and nothing ever wrote it — so tree shoaled over 12 cm
+  of depth and its surf zone was **0.38 m wide**, which is the hard line at the shore the spec was
+  called to fix. The atmosphere moved with it and **99.05% of tree's frame** changed, correctly: the
+  engine had been putting 0.62 km of air in front of a 28 m island. Provably inert where it had to
+  be — `water_fixture` is authored at 1 unit = 1 m, so its factor is exactly 1.0 and all 24 goldens
+  read 0 px. **This closes open item 5 below.**
+- **11.45 — the shore got a simulation.** A closed form says where the water's edge ought to be; it
+  cannot say that THIS wave ran into the last one's backwash and stopped short, because that is a
+  collision between two bodies of water and a formula has none. So: a Lagrangian chain per
+  alongshore column of the traced shoreline, segments carrying a conserved rest volume, forced by
+  the shallow-water pressure form — a linear spring has degenerate equilibria and settles into
+  piled-up states, where the pressure form pins the equilibrium to surface-flat uniquely. Both the
+  sea's lens and the sand's wetness read the same tips, so they agree by construction. **It costs no
+  sampler**, which is what made it possible at all: the tips are a few hundred floats, which is the
+  ledger's second escape, 2.3 KB against a cluster block already carrying 12. Its probe caught two
+  faults reasoning had not — the dynamics were written in METRES in a world of 22 units to one, so a
+  6 m/s CFL cap became 0.27 world-units/s and the chain could not move a centimetre a frame; and the
+  first reading was taken 0.2 s after the seed, where a push needs about three seconds to cross the
+  beach at `sqrt(gh)`, so the flat answer was the rest state correctly reported.
+- **11.46 — by-example texturing.** See **D5** below and the ledger's fifth escape.
+- **11.47 — whitecaps that break instead of blobbing.** The reflex, raise the threshold and have
+  fewer of them, was measured backwards before any constant moved: at the default 11.5 m/s sea the
+  frame carried **1.094% whitecap coverage against Monahan and O'Muircheartaigh's 1.60%**, so
+  coverage was already slightly LOW and raising the onset would have made the sea cleaner than a
+  real one while leaving every part of the complaint — contrast, edge, motion — untouched. What the
+  complaint was actually about is the **short cascade**: a 12 m tile carrying 0.26–5.15 m waves at
+  0.64–2.84 m/s, re-selected every frame at the displaced position and voting on where foam is,
+  while everything else in the path drifts at 0.12–0.35 m/s. Removing its vote took per-frame
+  foam-state churn **0.074% → 0.010% of the sea**, matching the phase-speed ratio its own wavenumber
+  range predicts. Three more followed: the accumulator is mipped and read with `textureGrad` (never
+  the implicit derivative — `oceanCascadeUv` wraps with `fract`, so an automatic one reads a whole
+  period across every tile seam); a fold only births foam near its own band's crest, normalised in
+  that band's own RMS so the window scales with sea state rather than being tuned for one
+  (2.345% → 1.867%); and the composite opacity splits crest from shore, because a whitecap is a
+  millimetre slick with sea showing through and a swash is a decimetre of aerated water, and one
+  ceiling could not serve both.
+- **11.48 — the swell got its own spectrum.** It had never been authorable at all: seeded from a
+  hardcoded 8.4 m/s over 310 km, so a scene lowering its wind kept a gale's swell — in `apps/tree`
+  **300% of the wind sea** — and since depth-limited breaking tests `disp.y / (0.39·depth)`, a
+  shallow shelf under it broke everywhere at once and painted a white blob over the whole bay.
+  `Breaking` was reporting the truth about an absurd sea, which is why 11.47's six commits on the
+  foam path never touched it. Now two complete wave trains, `windSea{}` and `swell{}`, eight keys
+  each beside a shared `seaDepth`. Its P6 then found the breaking term itself wrong in a way the sea
+  state had been masking: **the face term normalised the bed's gradient, and the bed does not know
+  which way a wave is going** — exactly zero on a flat shelf, exactly zero where the shore runs
+  across the wind (a plane wave's gradient has no component across its own travel), and reversed
+  past the beam, which put the foam on the REAR face of every wave on the lee shore. Taken off the
+  wave's own direction instead: breaking coverage 1.87% → 1.04% of sea area on tree, the difference
+  being the lee face and the crosswind band.
+
+**Build the instrument before the fix — and in this series it contradicted the reflex every time.**
+Worth naming because that is what the practice buys: 11.44 found the surf zone was 0.38 m wide
+before it touched a constant, 11.47 found coverage already LOW when the whole complaint sounded like
+too much foam, and 11.48 found the breaking term wrong when the sea state had been taking the blame.
+Two of the instruments are worth carrying past water. `--water-foam-debug` writes a **binary**
+selection mask and is read at **nadir**, where a pinhole images a plane affinely — the `1/cos³` of
+foreshortening cancels the `cos³` of solid angle, so pixel fraction IS areal fraction, exactly, with
+no crop box to place. Both halves are deliberate: coverage measured off the shaded frame is a
+measurement of the opacity and colour being calibrated, and an instrument whose sensitivity depends
+on the thing under test is not one. And 11.48's containment check is the **per-cascade probe rather
+than a golden**, because both water goldens are Gerstner and never reach the seeding at all — cascade
+2 carries no swell and read identical to every printed digit across the change, which is what pins
+the wind sea as untouched where a green golden would have pinned nothing.
+
 **So the tessellation stage is still entirely unspent** — POM silhouettes and D4 terrain remain its
 candidate first consumers, and neither inherits a pipeline from here.
 
-**Open items this entry still owns.** Recorded here rather than only in 11.35's history, because a
-closed spec is not where anyone looks for work that is still outstanding.
+**Open items this entry still owns.** Recorded here rather than only in the closed specs, because a
+closed spec is not where anyone looks for work that is still outstanding. Numbers are stable —
+item 5 is struck rather than removed so the ones after it do not shift under a citation.
+
+**Six are live and they group into three.** Geometry: 1 and 4's second half, both about the
+projector covering a camera the waves reach. The gate corpus: 3, 6 and the red 7. And 2, precision
+at distance, which has **no consumer today** and whose correct fix is engine-wide anyway. The corpus
+group is the more urgent of the three: 3 and 6 are the same finding in two places, which is that
+this subsystem's arms have twice been green over a defect they structurally could not see.
 
 1. **The projector aims at the still plane, not the displaceable slab. ATTEMPTED IN 11.42 AND
    MEASURED HARMFUL — the prescription below is wrong, and this is the correction.** Each lattice
@@ -1341,6 +1471,12 @@ closed spec is not where anyone looks for work that is still outstanding.
    **`apps/forest --water` and `apps/tree` inherit the whole surface stack with zero pixel coverage
    between them** — and tree is where the bug was found, by eye. A scene whose far plane is small
    relative to the horizon is the instrument this corpus lacks.
+   **11.44 added a second fixture and it does NOT close this.** `beach_fixture` is a dome rising out
+   of the sea — open water at the rim, the whole shoaling ramp, a dry crown, and a shoreline facing
+   EVERY direction, which is what lets an arm ask whether the surf is a ring rather than a band that
+   happens to cross the frame. Genuinely new coverage, and a different blind spot: it is still a
+   small scene, so the horizon-to-far-plane ratio it exercises is no better than the ramp's. It also
+   opened a third, which is item 6 below.
 
 4. **A camera AT the waterline is unhandled — SHADING HALF FIXED in 11.42, geometry half still open.**
    The two scopes are now one `seenFromBelow`, computed per PIXEL and read by both the normal flip
@@ -1371,31 +1507,41 @@ closed spec is not where anyone looks for work that is still outstanding.
    this needs coverage on both sides of it. **Rank above item 1**: it fires whenever a walker enters
    the water, where item 1 needs a specific camera regime.
 
-5. **The water shader does not know how big a world unit is, and 11.36 made that visible.** Clear
-   water in `apps/tree` promotes four more world-unit constants in `water_frag.glsl` from harmless to
-   conspicuous: `WATER_MAX_BEND` (1.0, whose comment says "a metre or so" — 4.5 cm at 22 units/m, so
-   refraction distortion of the now-visible bed is imperceptible), the caustic depth window
-   (`0.35 / 9 / 20`, a 1.6 cm–0.9 m ring hugging the shore, and tree is **FFT by default** so
-   caustics are live there — expect a bright band with clear bed beyond it), `WATER_SHORT_NEAR/FAR`
-   (42/118, whose comment says "Metres:" outright), and `OCEAN_SHOAL_MIN/FULL`. The engine already
-   owns the number — `Sky.world_units_per_km`, default 1000 — and **`apps/tree` never initialises
-   it**, so its aerial perspective is wrong by the same factor with the opposite sign: 22× too
-   *thick*, where the water was 22× too absorbing. Plumbing one float into the water program scales
-   all five at once. 11.36 introduced `GROUND_UNITS_PER_METRE`, which is that number, so the app half
-   already exists.
+5. ~~**The water shader does not know how big a world unit is.**~~ **CLOSED by 11.44**, and the
+   prescription this item gave — "plumbing one float into the water program scales all five at
+   once" — is exactly what shipped. The constants are stated in metres and converted at use through
+   `waterUnitsPerMetre` off `Sky.world_units_per_km`, and `apps/tree` writes that number for the
+   first time. The item's estimate of the damage was low: it priced the miss as refraction and
+   caustics looking wrong, where the shoal window was the load-bearing one and made tree's surf zone
+   0.38 m wide. See the 11.44 bullet above.
 
-**Queued:** `specs/11.36-water-clarity-at-world-scale.md` — the absorption is authored per metre and
-stored per world unit, so `apps/tree` (22 units/m) is 4.9–8.6× too absorbing per channel, and
-`WATER_MAX_PATH` is a world-unit clamp justified in its own comment as an optical-depth budget. Fixing
-either half alone makes the frame worse. This also closes 11.35 phase 6's own open question, which
-named the water's optical properties as the blocker on a visible seabed.
+6. **The gate corpus has no coverage of breaking whitewater at all, and 11.48 measured that
+   rather than inferring it.** Two shader edits to the surf path left **all 33 water arms at
+   numbers identical to before them** — `water_fixture` is Gerstner at amplitude 0.06, which never
+   reaches the depth-limited criterion, so the group was measuring containment and reporting it as
+   coverage. `beach_fixture` reaches it only incidentally, through arms written for shoaling and
+   for the shore band (`beach-shoal` 0.7962 → 0.7987, `beach-surf-zone` 0.770 → 0.762). A
+   `water-breaking` arm — that the selection fires over a bed and not over open water, and that it
+   is a band rather than a filled region — is what would have caught both of P6's defects at the
+   time they shipped. This is item 3's blind spot in a second location, which is the argument for
+   treating it as a corpus property rather than a fixture's.
+
+7. **`beach-shoreline` is red and has been for three specs**, at 6 of 18 azimuths after 11.48 P6
+   and 7 of 18 before it — byte-identical to the line it failed on master, so it is pre-existing
+   rather than caused. It looks for a continuous bright ring at the waterline, and surf that is
+   crest lines rather than sheets is structurally harder for it to see, so **the arm may be what
+   needs rethinking rather than the renderer**. Booked here so it is a known red rather than an
+   ignored one; nobody has a working theory yet.
 
 **Refs.** Tessendorf, *Simulating Ocean Water* (SIGGRAPH 2001 course); Johanson, *Real-time Water
 Rendering: Introducing the Projected Grid Concept* (2004) for the mesh that ships; Asirvatham & Hoppe
-(GPU Gems 2) for the clipmap it replaced, whose real home is D4 below.
+(GPU Gems 2) for the clipmap it replaced, whose real home is D4 below; Hasselmann et al. (JONSWAP,
+1973) and Bouws et al. (TMA, 1985) for the two trains' spectrum; Monahan & O'Muircheartaigh (1980)
+for the whitecap-coverage relation 11.47 calibrates against.
 **Owns foundations:** none of the ones this entry predicted. What it does own is the water subsystem
 itself, its bed-provider seam (`WaterHeightFn`, which `apps/forest`'s terrain satisfies directly),
-and the CPU wave query buoyancy would consume.
+the CPU wave query buoyancy would consume, and — since 11.45 — the shore chain, a CPU per-column
+solver published to the shading stage through a std140 block rather than a texture.
 
 ### D4. Terrain — Effort XL
 No terrain system exists. Real gap, but only for outdoor scale, and it depends on Wall 2 far more
@@ -1429,6 +1575,51 @@ pure function of (params, x, z)"), so terrain can use it where a general mesh co
 Strugar, *Continuous Distance-Dependent LOD* (CDLOD, 2009).
 **Depends on:** E5 (hard, in practice), D3's tessellation path (soft).
 **Inherits:** D3's clipmap implementation at `8d04658`, including the T-junction stitch.
+
+### D5. By-example stochastic texturing — SHIPPED as spec 11.46, unbooked before it
+Never a row here, and it would have been assumed blocked if it had been: it reads a
+histogram-transformed copy of a texture plus an inverse table, which sounds like two units in the
+most saturated program in the tree. It cost **zero** — see the ledger's fifth escape. Heitz & Neyret
+2018: skew the UV onto a triangle lattice, sample the texture at a different random offset per
+triangle vertex, and blend, so neighbouring points read different parts of the tile and the period
+stops existing. Opt-in per material (`stochastic_scale`), and only `apps/tree`'s sand takes it, so
+all 24 goldens are 0 px.
+
+**The blend is where it lives or dies, and the reason is why the histogram machinery is not
+optional.** A weighted average of three taps divides the variance — contrast collapses and the
+ground is flat mush. Dividing by the root of the summed squared weights preserves a single sample's
+variance instead, but that is exact only for a Gaussian input, which is what the transform
+manufactures. **An earlier claim that the transform could be skipped is kept here because it should
+not be made again**: the argument was that a sum of noise octaves is near-Gaussian by CLT, and the
+field is a sine train (arcsine, U-shaped) plus fBm plus Worley plus a deliberate skew in the ripple.
+Measured contrast held to **0.15%** across the change — 0.02876 plain against 0.02881 stochastic at
+the same mean, which is the whole claim: same statistics, different arrangement.
+
+**The normal map rides the same lattice and does NOT get a transform, because it cannot.** Its three
+channels are a unit vector, so per-channel transform-and-blend breaks the constraint and produces
+non-unit normals with a distribution the map never had. Blended in slope space instead — `-dh/du`,
+`-dh/dv` are unconstrained and blend meaningfully, and reconstruction restores the constraint
+exactly. Same space D3's far-field handover works in, for the same reason: slope filters linearly
+and a normal does not. Relief contrast measured 0.02881 → 0.02893, i.e. preserved rather than
+softened, which is the failure it was watched for.
+
+**Roughness is deliberately not done.** It comes off the shared `maskArray` layer rather than a
+`sampler2D`, so stochastic sampling means transforming a packed multi-material `sampler2DArray` that
+six scalar masks share — much larger, and the least valuable of the three, since the visible tiling
+was carried by albedo and relief. **Also unmeasured: the cost.** Six fetches on the ground where
+there were two, and `--profiler` has never been pointed at it.
+
+**And two of the three defects it fixed were never rendering bugs**, which is the transferable
+lesson. `apps/tree`'s beach was reported repeatedly as "a grid", "columns", "the same tile
+boundary", every report read as a water bug and none of them was: `sand_height_field` sampled an
+unbounded lattice so all forty tile boundaries were discontinuities in the DATA, which no mip level
+or anisotropy setting touches; and the island mesh wrote a **circular** tangent for **planar** UVs,
+so the normal map ran through a basis disagreeing with the map it indexes, creasing along every
+triangle edge. **A tangent is `d(position)/du` and nothing else** — a frame that looks geometrically
+natural for the mesh is wrong unless the UVs agree with it.
+**Refs.** Heitz & Neyret, *High-Performance By-Example Noise using a Histogram-Preserving Blending
+Operator* (HPG 2018).
+**Depends on:** nothing. **Wall 1:** avoided by construction (the fifth escape).
 
 ## Track E — Image finishing & the perf floor
 
@@ -1740,7 +1931,8 @@ not scheduled.
 | 33 | D1 Clustered decals | L | Largest environment-art gap. ~~Hard-blocked on D0.~~ **Blocked by a texture-layout choice, not by the ledger**: decals read in the opaque pass where unit 6 is idle, so a flat 2D atlas with computed tile UVs takes the alias and needs no freed unit. Only the `sampler2DArray` form is blocked. Price the flat atlas first. |
 | 34 | E8 Fix the wind cull | S | Small, self-contained, closes a real hole in E5's culling — wind geometry is currently exempt from the camera frustum *and* every cascade. Unblocks wind on scattered content, which `apps/forest` gave up to avoid it. |
 | 34b | **E9 One sample means one sample** | M | **DONE (11.34).** `apps/forest` opaque **150.9 → 121.6 ms (−19.4%)** against a 0.23% floor, with byte-identical submission integers — the same work, cheaper. One branch in the one allocator plus one at the depth renderbuffer flips the scene, OIT and moment FBOs in lockstep, since they share the depth attachment. The row's original prescription was wrong twice: there is no `sampler2DMS` anywhere in the corpus (11.17 rejected it), and postfx reaches the scene target only through blits, so the GLSL surface was zero files and postfx changed nothing. Priced before built with a new `--msaa <n>` lever, which also decomposed the first confounded A/B: A2C alone costs 202 ms of forest's opaque row (fragment-set explosion, headless-only), a sample ~93 ms on that inflated set. TAA-only edges verified by crops (raiden groom, forest canopy — indistinguishable), all 23 goldens 0 px, and MBOIT's moment-resolve bias (11.17) is now absent on the TAA path for free. |
-| 35 | ~~D3 Tessellated water~~ | — | **SHIPPED (11.32, 11.33, 11.35) and it spent no tessellation.** The mesh went through two screen-space schemes instead: clipmap rings (11.33), then a **projected grid** (11.35) after the rings turned out to weld reach to near-field detail — the snap that makes them tile is the same thing that kept the surface 5° short of the horizon while a comment claimed otherwise. The stage this item was scheduled to open is still closed. Reaching the horizon then moved the problem from the MESH to filtering: distant cells cover more than a wave period, so each wave model drops what sits under its footprint and hands the slope energy to roughness — a BRDF answer to a geometry question. See D3. |
+| 35 | ~~D3 Tessellated water~~ | — | **SHIPPED (11.32, 11.33, 11.35) and it spent no tessellation.** The mesh went through two screen-space schemes instead: clipmap rings (11.33), then a **projected grid** (11.35) after the rings turned out to weld reach to near-field detail — the snap that makes them tile is the same thing that kept the surface 5° short of the horizon while a comment claimed otherwise. The stage this item was scheduled to open is still closed. Reaching the horizon then moved the problem from the MESH to filtering: distant cells cover more than a wave period, so each wave model drops what sits under its footprint and hands the slope energy to roughness — a BRDF answer to a geometry question. See D3. **Six more specs have landed on the surface since and none of them were rows here** (11.43 the fixture's sun, 11.44 world scale, 11.45 the swash film, 11.46 → row 35b, 11.47 whitecaps, 11.48 two wave trains); D3 carries them. |
+| 35b | **D5 By-example texturing** | S/M | **DONE (11.46), and it was never booked.** Would have been assumed blocked — a transformed copy of a texture plus an inverse table, in the most saturated program in the tree — and cost **zero** units: the shader never reads the original so the transform is baked over it, and the table is 768 bytes of uniform space. The ledger's fifth escape. Contrast held to 0.15% (0.02876 → 0.02881), which is the measurement that matters, because a broken blend flattens variance rather than shifting colour. **Two of the three defects it fixed were not rendering bugs at all** — a noise field sampled on an unbounded lattice, so forty tile boundaries were discontinuities in the data; and a circular tangent frame under planar UVs, creasing along every triangle edge. Both were reported as water bugs for most of a session. |
 | 36 | D4 Terrain | XL | Only after E5; a clipmap without instancing/LOD is a mega-mesh with extra steps. `apps/forest` is a *consumer* of E5, not this — fixed tiles with per-tile chains, fine at 1 km² and explicitly not the answer above it. **Inherits D3's clipmap at `8d04658`** — the rings-over-a-mip-pyramid half water never used is the half terrain needs — and its T-junction stitch, which is a better fix for the crack risk E5 left open than locking borders. |
 | 37 | E7 Occlusion culling | L | Booked so the gap is visible, **not because a measurement demands it**, and 11.31 lowers the price further rather than raising it: forest's opaque lane already runs at complexity 1.08 from ordering alone, so there is little redundant shading left to remove, and the one thing that reached 0.72 — the prepass — lost on the clock anyway because the extra submission cost more than the fragments it saved. An occlusion pass is a bigger version of that same trade. `assets/overdraw_layers.gltf` is the instrument to price it with. |
 
@@ -1759,6 +1951,24 @@ worst case and the withdrawn claims all recorded. **37 (E7, occlusion culling) s
 against them**: it was booked as not-yet-justified on the grounds that E6 would get most of the
 benefit for less, and E6 doing so on opaque content is now measured rather than assumed.
 
+**23 (C2, emissive → area lights) is what's next, and it has been next for a while.** It is a fit
+plus a registration: plane-fit an emissive mesh's dominant quad, integrate its emissive to a
+radiance, register it into the packed array A1 already uploads. `Light` carries every field the fit
+produces, so there is no new shading code, no new machinery and no unit. Everything else still
+unbuilt is either small and self-contained (25 C3 IES, 26 C5 local contact shadows, 27 E3 histogram
+exposure, 28 E2 grading, 34 E8 the wind cull) or L/XL with no measurement demanding it yet (29 C4,
+32 D0, 33 D1, 36 D4, 37 E7).
+
+**And the honest observation this table should carry: it has not driven the work since 11.32.**
+Seventeen specs have shipped since D3 opened, and **ten of them are the water and shore series
+(11.32, 11.33, 11.35, 11.36, 11.42–11.45, 11.47, 11.48), against which this table has exactly one
+row — D3 — and it covers three of the ten.** That is not a failure of the roadmap — the surface
+turned out to have far more in it than one XL row could hold, and every one of those specs measured
+something before it changed anything, which is the standard this document exists to enforce. But it
+does mean the table above describes a *backlog*, not a plan, and that four of the five items in its
+own shortlist were finished while the actual work went somewhere else entirely. Anyone reading the
+tier order as a schedule should read this paragraph first.
+
 ### Known limitations not booked as items
 
 Recorded because they are real, understood, and currently nobody's row — not because they are
@@ -1770,9 +1980,10 @@ scheduled.
   as the wall behind it. Standard forward-renderer behaviour; the clean fix wants the froxel volume
   sampled inside `pbr_frag`, which is Wall 1. A partial fix (per-draw analytic fog on transparent
   meshes) is available and cheap but will not match the froxel result.
-- ~~**No golden runner.**~~ **BUILT (spec 11.25)** — `python3 scripts/goldens.py` checks all
-  nineteen in one command, and every render command now lives in one table instead of in whichever
-  spec introduced it. **The corpus was never broken**, which is the part worth carrying: 11.17
+- ~~**No golden runner.**~~ **BUILT (spec 11.25)** — `python3 scripts/goldens.py` checks the whole
+  corpus in one command (nineteen then, **24 now**), and every render command lives in one table
+  instead of in whichever spec introduced it. **The corpus was never broken**, which is the part
+  worth carrying: 11.17
   recorded three goldens as having no recipe anywhere, 11.21 repeated it and named four, and 11.24
   concluded six of nineteen were unreproducible and wrote that here. All three were wrong. Four of
   the six had their recipe in `assets/area_light_goldens.md`, a per-feature ledger nobody thought
@@ -1838,13 +2049,17 @@ scheduled.
 | `create_texture_3d_float` + `include/froxel.glsl` (slice count parameterized, so a differently-sized volume reuses it) | B1 | B9 aerial perspective, B2 clouds, future volumetrics |
 | CPU 3D noise (`noise_worley3`, Perlin-Worley packing, threaded bake) | B2 | ground fog detail, media |
 | Render-res/post-res split — **delivered** as four sizes (`width/height` render, `post_*`, `out_*`, `half_*` = render/2), plus the canvas locals every post-seam pass composites onto | B4 | B5, B7, tonemap |
-| Transmittance-vs-depth storage in the shadow path | C1 (proposed) | any translucent caster: hair, glass, foliage tips, smoke |
-| Freed `pbr_frag` sampler units | D0 (proposed) | D1 decals, D2's surface-shadow half, detail/wetness maps |
+| Transmittance-vs-depth storage in the shadow path | C1 — **delivered** (11.26), as deep opacity maps rather than the moments the sketch assumed | any translucent caster: hair, glass, foliage tips, smoke |
+| Freed `pbr_frag` sampler units | D0 (proposed, and it frees ONE) | **the consumer list this row carried is withdrawn** — D2's surface half shipped without it (11.41), and detail/wetness maps were never blocked (they are mask-array layers). What is left is D1 *if* a flat 2D atlas is refused, and sampling the froxel volume from the transparent pass, which is not booked |
 | Tessellation pipeline (program creation, patch draw, distance LOD) | **still unowned** — D3 shipped without it | D4 terrain, POM silhouettes |
 | Bed-height seam (`WaterHeightFn`) + the CPU Gerstner query | D3 — **delivered** (11.32, 11.33) | Jolt buoyancy, gameplay water tests, any surface that shoals |
 | Geometry clipmap: coarsest-cell snap + T-junction stitch | D3 — built (11.33), **removed** (11.35), kept at `8d04658` | D4 terrain, where the streamed-mip-pyramid half water never used is the point |
 | Screen-space footprint → detail handover (mip level or dropped octave, energy into roughness) | D3 — **delivered** (11.35) | any procedural surface a projected or adaptive mesh under-samples at distance |
-| Per-pass GPU timing | E4 (proposed) | E5 LOD thresholds, D4, all budget work |
+| World-scale contract for shader-side physical lengths (`waterUnitsPerMetre` off `Sky.world_units_per_km`, the authority the atmosphere already used) | D3 — **delivered** (11.44) | anything whose constants are metres: terrain, POM depth, contact-shadow reach, decal projection |
+| A CPU solver published to the shading stage through a std140 block rather than a texture | D3 — **delivered** (11.45, `ShoreFilmBlock`) | any per-column or per-object field a shader needs that a UBO can hold — the ledger's second escape, generalised |
+| Sampler-declaration consolidation: N identical textures → one array, one declaration | D3 — **delivered** (11.45), `water_frag` 16/16 → 10/16 | D0, and any program that hits its own ceiling |
+| Histogram-preserving stochastic sampling + periodic noise primitives | D5 — **delivered** (11.46) | terrain, any surface seen over tens of repeats |
+| Per-pass GPU timing | E4 — **delivered** (11.27) | E5 LOD thresholds, D4, all budget work |
 
 ## Cross-track integration contracts
 
@@ -1906,3 +2121,9 @@ Tier 4 adds three that Tiers 1-3 barely touched:
 - `cetra/src/render.c` — E5 submission: instanced draws, LOD selection, draw sorting; D1 decal binding
 - `cetra/shaders/tonemap_frag.glsl` — E1 dither, E2 LUT (both at the very end of the chain, where the
   colour is already a display-referred scalar)
+
+And a fourth the list never anticipated, because D3 was priced as one row and became ten specs:
+
+- `cetra/shaders/include/ocean.glsl` + `water_frag.glsl` — the surface evaluation and its shading,
+  edited by every water spec from 11.32 on, and the second program in the tree to hit its own
+  sampler ceiling
