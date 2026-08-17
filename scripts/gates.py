@@ -4074,36 +4074,73 @@ def _water_glitter_box():
             sx + WATER_GLITTER_HALF_W, hy + WATER_GLITTER_BAND[1])
 
 
-def _cscn_water_key_sets():
-    """Return (keys parse_water reads, keys its known[] list tolerates), from the C source.
+# A JSON key as parse_* spells it. NOT [A-Za-z]+: `probe_scene` already exists, and a key
+# carrying a digit or an underscore would drop out of the read set, the known set AND the
+# fixture set at once -- all three would agree on not having it, so the arm below would pass
+# while covering nothing, which is the one way these checks can fail silently.
+_CSCN_KEY = r'"([A-Za-z0-9_]+)"'
 
-    Read rather than transcribed. A copy of either list here would be a third place to
-    keep in step, which is the failure this is meant to catch in the first two.
+
+def _cscn_key_sets(func, block):
+    """Return (keys `func` reads off `block`, keys its known[] tolerates), from the C source.
+
+    Read rather than transcribed. A copy of either list here would be a third place to keep
+    in step, which is the failure this is meant to catch in the first two.
+
+    Parameterised over the function and the cJSON variable so parse_water and
+    parse_wave_train share one reader. Each call still slices ONE function body and ONE
+    closed known[], so neither assertion is weakened by the sharing -- what would weaken
+    them is a single regex spanning both nesting levels, which this is not.
+
+    Fails LOUDLY on a formatting change: renaming `known`, or a formatter moving the brace
+    off `known[] = {`, raises IndexError here rather than returning an empty set.
     """
     src = open(os.path.join(ROOT, "cetra", "src", "cscene.c")).read()
-    body = src.split("static void parse_water(")[1].split("\nstatic ")[0]
+    body = src.split("static void %s(" % func)[1].split("\nstatic ")[0]
     # Every read names the block: get_float(water, "level", ...), get_vec3, get_bool,
     # get_floats, cJSON_GetObjectItemCaseSensitive for waves, and since spec 11.48
     # parse_wave_train(water, "windSea", ...) for each nested train -- which the same
     # pattern catches, because a sub-object is a key of water like any other.
-    read = set(re.findall(r'\(water,\s*"([A-Za-z]+)"', body))
-    known = set(re.findall(r'"([A-Za-z]+)"', body.split("known[] = {")[1].split("};")[0]))
+    read = set(re.findall(r'\(%s,\s*' % block + _CSCN_KEY, body))
+    known = set(re.findall(_CSCN_KEY, body.split("known[] = {")[1].split("};")[0]))
     return read, known
 
 
-def _cscn_wave_train_key_sets():
-    """Return (keys parse_wave_train reads, keys its known[] tolerates), from the C source.
+def _cscn_wave_train_names():
+    """The nested train sub-objects parse_water installs, from the C source.
 
-    The nested half of the pair above, and it needs its own reader rather than one regex
-    spanning both levels: what both assert is that a parser, its CLOSED known[] list and the
-    fixture agree, and a pattern loose enough to cover both blocks would stop being able to
-    say which of them a key belongs to.
+    Derived rather than written down for the same reason as the key sets: a third train
+    added to the parser and authored in the fixture would otherwise keep read == fixture at
+    the outer level and never be checked at the nested one.
     """
     src = open(os.path.join(ROOT, "cetra", "src", "cscene.c")).read()
+    body = src.split("static void parse_water(")[1].split("\nstatic ")[0]
+    return set(re.findall(r'parse_wave_train\(water,\s*' + _CSCN_KEY, body))
+
+
+def _cscn_wave_train_parse_fields():
+    """The CSceneWaveTrain fields parse_wave_train sets a has_ flag on, from the C source."""
+    src = open(os.path.join(ROOT, "cetra", "src", "cscene.c")).read()
     body = src.split("static void parse_wave_train(")[1].split("\nstatic ")[0]
-    read = set(re.findall(r'\(train,\s*"([A-Za-z]+)"', body))
-    known = set(re.findall(r'"([A-Za-z]+)"', body.split("known[] = {")[1].split("};")[0]))
-    return read, known
+    return set(re.findall(r"out->has_([a-z0-9_]+)\s*=", body))
+
+
+def _cscn_wave_train_apply_fields():
+    """Return (fields apply_wave_train GUARDS on, fields it WRITES), from the C source.
+
+    The other three readers are all on the read side -- parser, known[] and fixture. This is
+    the only one that looks at the bridge onto the live WaterWaveTrain, which is the one site
+    in the chain whose omission is completely silent: it compiles, parses, warns nothing, and
+    the authored key simply never arrives.
+
+    Guards and writes are returned separately because they fail differently: a missing `if`
+    applies an absent key over the library default, a missing assignment drops an authored
+    one, and neither shows up if you only count lines.
+    """
+    src = open(os.path.join(ROOT, "apps", "render", "src", "cscene_apply.c")).read()
+    body = src.split("static void apply_wave_train(")[1].split("\nstatic ")[0]
+    return (set(re.findall(r"src->has_([a-z0-9_]+)", body)),
+            set(re.findall(r"dst->([a-z0-9_]+)\s*=", body)))
 
 
 def _water_fft_probe(extra, scene=None):
@@ -4149,7 +4186,9 @@ def _water_glitter_variant(src, dst):
     def mutate(d):
         d["environment"].update(WATER_GLITTER_SUN)
         d["camera"] = dict(WATER_GLITTER_CAMERA)
-        d.setdefault("water", {}).update(WATER_GLITTER_WATER)
+        # Through the merge even though WATER_GLITTER_WATER is flat today, so it stays
+        # correct if it ever gains a train.
+        _merge_water_block(d.setdefault("water", {}), WATER_GLITTER_WATER)
 
     cscn_copy(src, dst, mutate)
 
@@ -4170,28 +4209,39 @@ def _water_persist_variant(src, dst):
     """
     def mutate(d):
         d["camera"] = dict(WATER_PERSIST_CAMERA)
-        d.setdefault("water", {}).update(WATER_PERSIST_SEA)
+        _merge_water_block(d.setdefault("water", {}), WATER_PERSIST_SEA)
 
     cscn_copy(src, dst, mutate)
 
 
-def _water_cscn_variant(src, dst, overrides):
-    """Copy a .cscn with its water block overridden.
+def _merge_water_block(water, overrides):
+    """Apply a water-block override, merging one level into a nested train.
 
     A nested object (windSea, swell) MERGES rather than replaces, so an arm naming one
     field of a train keeps the fixture's other seven. A plain dict.update swaps the whole
     object for the one-key one, and the seven it dropped then fall back to create_water's
     defaults -- which are the water fixture's own values today, so that mistake would not
     show until the fixture changed.
+
+    One function rather than a rule each override path remembers: it was written as a
+    closure inside _water_cscn_variant and _water_persist_variant kept its flat update,
+    which is the only other path carrying a nested constant. Every arm that reached
+    water-foam-persist ran with seven windSea fields off the library defaults instead of
+    the fixture's -- invisible, for exactly the reason above.
+
+    An override naming a train the fixture does NOT author installs it whole, since there
+    is nothing to merge into.
     """
-    def apply(d):
-        water = d.setdefault("water", {})
-        for key, value in overrides.items():
-            if isinstance(value, dict) and isinstance(water.get(key), dict):
-                water[key].update(value)
-            else:
-                water[key] = value
-    cscn_copy(src, dst, apply)
+    for key, value in overrides.items():
+        if isinstance(value, dict) and isinstance(water.get(key), dict):
+            water[key].update(value)
+        else:
+            water[key] = value
+
+
+def _water_cscn_variant(src, dst, overrides):
+    """Copy a .cscn with its water block overridden."""
+    cscn_copy(src, dst, lambda d: _merge_water_block(d.setdefault("water", {}), overrides))
 
 
 def _water_roughness(pix, w, h, box):
@@ -4936,7 +4986,7 @@ def run_water_gate(workdir):
         # authors. A key added to the parser and not to the fixture leaves the corpus with
         # no coverage of it; a key in the fixture the parser does not read is a typo that
         # authors nothing, which is exactly what get_float cannot distinguish from absence.
-        read_keys, known_keys = _cscn_water_key_sets()
+        read_keys, known_keys = _cscn_key_sets("parse_water", "water")
         fixture_water = json.load(open(os.path.join(ROOT, "assets", WATER_FIXTURE))).get("water", {})
         fixture_keys = {k for k in fixture_water if not k.startswith("_")}
         if read_keys != known_keys:
@@ -4948,18 +4998,33 @@ def run_water_gate(workdir):
         # 11.48). Checking only the outer level would let a train's key set drift freely,
         # which is where the coverage matters most: every one of those eight is unreachable
         # from the command line, so the fixture is the corpus's only exercise of them.
-        train_read, train_known = _cscn_wave_train_key_sets()
+        train_read, train_known = _cscn_key_sets("parse_wave_train", "train")
         if train_read != train_known:
             drifted.append(f"parse_wave_train reads {sorted(train_read ^ train_known)} "
                            "but its known[] list disagrees")
-        for train in ("windSea", "swell"):
+        for train in sorted(_cscn_wave_train_names()):
             authored = {k for k in fixture_water.get(train, {}) if not k.startswith("_")}
             if authored != train_read:
                 drifted.append(f"fixture water.{train} vs parse_wave_train differ on "
                                f"{sorted(authored ^ train_read)}")
+        # The WRITE side, which the three sets above cannot see. They all describe reading a
+        # .cscn; a key parsed, tolerated and authored still reaches nothing if the copy onto
+        # WaterWaveTrain forgets it -- and that is silent, because get_float cannot tell a key
+        # nobody applied from a key nobody authored, which is the exact defect class 11.48
+        # exists to remove. The corpus cannot catch it either: water_fixture authors the
+        # library defaults exactly, so every assignment in apply_wave_train is a no-op there.
+        apply_has, apply_set = _cscn_wave_train_apply_fields()
+        if apply_has != apply_set:
+            drifted.append(f"apply_wave_train guards and writes differ on "
+                           f"{sorted(apply_has ^ apply_set)}")
+        parse_fields = _cscn_wave_train_parse_fields()
+        if apply_set != parse_fields:
+            drifted.append(f"apply_wave_train vs parse_wave_train differ on "
+                           f"{sorted(apply_set ^ parse_fields)}")
         ok = not drifted
         print(f"  water-fixture-roundtrip {'PASS' if ok else 'FAIL'}  regenerated 2 files, "
-              f"{len(read_keys)} water keys and {len(train_read)} per train, "
+              f"{len(read_keys)} water keys, {len(train_read)} per train and "
+              f"{len(apply_set)} applied, "
               f"{'all identical to the committed pair' if ok else 'DRIFTED: ' + '; '.join(drifted)}")
         if not ok:
             failures.append("water-fixture-roundtrip")
