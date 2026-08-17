@@ -211,7 +211,7 @@ uniform float time;
 uniform float uShoreWetness;
 
 /*
- * By-example stochastic albedo (spec 11.45). Declares no sampler of its own -- it re-reads
+ * By-example stochastic albedo (spec 11.46). Declares no sampler of its own -- it re-reads
  * albedoTex, whose contents a material opting in has had transformed -- and keeps its inverse
  * table in uniform space, so it fits a program that has been at sixteen samplers since 4.10.
  */
