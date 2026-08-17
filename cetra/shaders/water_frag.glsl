@@ -206,6 +206,18 @@ const float WATER_FOAM_FULL = 0.42;
  * lighting now and does not need to be baked into the albedo as well.
  */
 const vec3 WATER_FOAM_COLOR = vec3(0.95, 0.97, 0.97);
+/*
+ * CREST foam gets its own colour and ceiling, split from the shore's (spec 11.47). A
+ * whitecap is a slick of bubbles millimetres thick with sea showing through; a swash is a
+ * decimetre of aerated water. One opacity cannot honestly serve both, and a single colour
+ * used to average them into something too grey for the shore and too solid for the crest.
+ *
+ * Cooler and dimmer than WATER_FOAM_COLOR on purpose -- a whitecap still reads as sea-lit
+ * foam rather than paint, where the shore's warmer near-white is what makes a swash read
+ * over pale sand (see the comment on WATER_FOAM_COLOR above; that fix is untouched).
+ */
+const vec3 WATER_CREST_FOAM_COLOR = vec3(0.88, 0.92, 0.94);
+const float WATER_CREST_FOAM_MAX = 0.30;
 // Lambertian normalisation for the foam's direct term. The ambient half needs none: a mip
 // of the environment is already an average radiance, where the sun arrives as one.
 const float WATER_INV_PI = 0.31830988618;
@@ -230,10 +242,11 @@ const float WATER_FOAM_BUBBLE_MIN = 0.55;
 // reads as a self-lit blob; 0.6 keeps a sunward side while letting a shore under a sun on
 // the horizon still carry surf.
 const float WATER_FOAM_WRAP = 0.6;
-// How completely foam replaces what is under it. Whitewater is opaque, and a swash over
-// shallow water is the one place that matters -- at 0.62 the pale bed still showed through
-// enough to keep the two indistinguishable.
-const float WATER_FOAM_MAX = 0.88;
+// How completely SHORE foam replaces what is under it (spec 11.47 split this from the
+// crest's own ceiling above). Whitewater is opaque, and a swash over shallow water is the
+// one place that matters -- at 0.62 the pale bed still showed through enough to keep the
+// two indistinguishable.
+const float WATER_SHORE_FOAM_MAX = 0.88;
 // Shore band strength. A breaking shore IS mostly whitewater, so this sits near the crest
 // value rather than well under it -- the old 0.45 was set when the band covered the whole
 // shelf, where that much foam was a wash. Confined to the swash it can be what a swash is.
@@ -1137,8 +1150,31 @@ void main() {
                           : vec3(0.0);
         // Thickness: never to zero, or the crust reads as holes rather than as texture.
         float thick = mix(WATER_FOAM_BUBBLE_MIN, 1.0, b0);
-        vec3 lit = WATER_FOAM_COLOR * thick * (ambient + direct) * preExposure;
-        color = mix(color, lit, clamp(foam, 0.0, 1.0) * WATER_FOAM_MAX);
+        vec3 litBase = thick * (ambient + direct) * preExposure;
+        /*
+         * TWO MIXES, not one blended weight (spec 11.47). A whitecap and a swash are
+         * different materials -- a slick of bubbles millimetres thick with sea showing
+         * through, against a decimetre of aerated water -- and one opacity honestly serving
+         * both was the reason crest foam read as an opaque blob: it was composited at the
+         * shore's own near-full strength.
+         *
+         * The bubble relief above stays SHARED and keyed to the union `foam`: it is a
+         * texture on top of whichever band is present, not a property that differs between
+         * them, and computing it once is why `foam` still needs to be the union.
+         *
+         * CREST FIRST, SHORE SECOND, so dense whitewater wins where both are present rather
+         * than the thinner crest coat painting over it last.
+         *
+         * CONTAINMENT: where crestFoam is 0 the first mix is `mix(color, x, 0.0)`, exactly
+         * color, and the second is character-for-character the pre-11.47 expression -- same
+         * colour, same ceiling, same litBase. Both water goldens are Gerstner with no bed,
+         * where crestFoam AND shoreFoam are structurally 0 and this whole block never runs,
+         * which is the stronger guarantee that backs the 0 px they measure.
+         */
+        color = mix(color, WATER_CREST_FOAM_COLOR * litBase,
+                   clamp(crestFoam, 0.0, 1.0) * WATER_CREST_FOAM_MAX);
+        color = mix(color, WATER_FOAM_COLOR * litBase,
+                   clamp(shoreFoam, 0.0, 1.0) * WATER_SHORE_FOAM_MAX);
     }
 
     // Alpha is the shoreline coverage, in BOTH writes below, because which output
