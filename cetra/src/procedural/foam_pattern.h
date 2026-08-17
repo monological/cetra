@@ -25,11 +25,20 @@
  * source of golden drift.
  */
 
-// Side of the generated texture, and the world span one tile covers, in METRES. 5 m over 256
-// texels is 2 cm a texel, and the coarsest band below spans a few of those -- a clump of
-// bubbles rather than a bank of them.
+// Side of the generated texture, and the world span one tile covers, in METRES.
+//
+// Was 5 m. Measured against apps/tree's actual sea state (spec 11.47's review-fix pass):
+// individual crest-foam selections there run 5-10 real metres across, so a 5 m tile fit
+// zero to one period inside a whole selection -- there was no room left for the pattern to
+// TILE, which is the only mechanism that fragments a solid selection into filaments. The
+// erosion PASS RATE is unaffected by this constant (it depends on the baked texture's own
+// value distribution, sampled at a different frequency, not a different distribution), so
+// this changes granularity, not how much foam survives on average.
+//
+// 1.5 m over 256 texels is 6 mm a texel, still a clump of bubbles rather than a single one,
+// and gives at least three tile periods across even the smallest selections measured above.
 #define FOAM_PATTERN_RES    256
-#define FOAM_PATTERN_TILE_M 5.0f
+#define FOAM_PATTERN_TILE_M 1.5f
 
 /*
  * Fill `out` (FOAM_PATTERN_RES^2 floats, 0..1) with the pattern's density.

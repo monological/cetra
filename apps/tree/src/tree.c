@@ -774,6 +774,14 @@ typedef struct {
     int gerstner_waves;
     int no_water_wetness;
     int no_water_film;
+    int water_foam_debug; // WaterFoamDebug (water.h): 0 off, 1 eroded, 2 pre-erosion
+    int no_water_foam_history; // Bisect lever: foam from this frame's fold only
+    // Spectral sea state. <=0 keeps the library default. The FFT path takes its wave
+    // heights from these two and ignores the wavelength/amplitude below, so they are the
+    // only way to make this sea calmer without switching wave models.
+    float wind_speed;
+    float fetch;
+    float swell; // <0 keeps the default; 0 = no crossing swell train
     // RenderMode override, 0 = PBR. The GUI has always had the combo; without this the debug
     // modes could not be reached headlessly, so anything they diagnose could not be captured.
     int render_mode;
@@ -826,6 +834,10 @@ static void print_usage(const char* prog) {
     printf("      --gerstner-waves    Closed-form octaves instead of spectral cascades\n");
     printf("      --no-water-wetness  The swash leaves the sand exactly as it found it\n");
     printf("      --no-water-film     Drop the swash solver; the closed-form run-up drives\n");
+    printf("      --water-foam-debug N  Crest band as a binary mask: 1 after erosion, 2 before\n");
+    printf("      --wind-speed M      Spectral sea: wind in m/s (default 11.5)\n");
+    printf("      --fetch M           Spectral sea: fetch in metres (default 120000)\n");
+    printf("      --swell S           Crossing swell train, 0 = none (default 0.38)\n");
     printf("      --render-mode N     Debug view; 10 = HDR hotspots, 12 = extrapolation\n");
     printf("      --msaa N            MSAA samples (default 4); 1 has no partial coverage\n");
     printf("      --headless-jitter   Keep TAA jitter and the 0.70 render scale headless:\n");
@@ -849,6 +861,9 @@ static void print_usage(const char* prog) {
 
 static bool parse_args(int argc, char** argv, TreeArgs* a) {
     memset(a, 0, sizeof(*a));
+    // AFTER the memset, obviously, and not before it. <0 means "untouched", because 0 is
+    // itself a legal request -- a scene asking for no crossing swell at all.
+    a->swell = -1.0f;
     a->width = (int)WIDTH;
     a->height = (int)HEIGHT;
     a->seed = 42;
@@ -890,6 +905,16 @@ static bool parse_args(int argc, char** argv, TreeArgs* a) {
             a->no_water_wetness = 1;
         } else if (!strcmp(s, "--no-water-film")) {
             a->no_water_film = 1;
+        } else if (!strcmp(s, "--water-foam-debug") && has_next) {
+            a->water_foam_debug = atoi(argv[++i]);
+        } else if (!strcmp(s, "--no-water-foam-history")) {
+            a->no_water_foam_history = 1;
+        } else if (!strcmp(s, "--wind-speed") && has_next) {
+            a->wind_speed = (float)atof(argv[++i]);
+        } else if (!strcmp(s, "--fetch") && has_next) {
+            a->fetch = (float)atof(argv[++i]);
+        } else if (!strcmp(s, "--swell") && has_next) {
+            a->swell = (float)atof(argv[++i]);
         } else if (!strcmp(s, "--render-mode") && has_next) {
             a->render_mode = atoi(argv[++i]);
         } else if (!strcmp(s, "--msaa") && has_next) {
@@ -1429,6 +1454,31 @@ int main(int argc, char** argv) {
              * because its sea state comes out of a wind speed and a fetch instead.
              */
             water->wave_model = args.gerstner_waves ? WATER_WAVES_GERSTNER : WATER_WAVES_FFT;
+            water->foam_debug = (WaterFoamDebug)args.water_foam_debug;
+            if (args.no_water_foam_history)
+                water->foam_history = false;
+            /*
+             * THE SEA STATE, authored here rather than inherited.
+             *
+             * create_water's defaults are a fully-developed 11.5 m/s sea over 120 km of
+             * fetch -- about 2 m significant height. That is a real sea state and the
+             * library is right to default to it, but this island is 28 m across: a 2 m
+             * swell breaks on the whole of it at once, so the depth-limited surf term
+             * covered the shore in one unbroken sheet of whitewater and the crest term
+             * scattered whitecaps over the lagoon. The scene was asking for a storm.
+             *
+             * 6 m/s over 15 km is a light breeze on a sheltered lagoon, which is the water
+             * this scene is otherwise painted as -- turquoise, shallow, calm. The surf
+             * becomes a line at the beach instead of a field over the bay.
+             */
+            water->sea.wind_speed = 6.0f;
+            water->sea.fetch = 15000.0f;
+            if (args.wind_speed > 0.0f)
+                water->sea.wind_speed = args.wind_speed;
+            if (args.fetch > 0.0f)
+                water->sea.fetch = args.fetch;
+            if (args.swell >= 0.0f)
+                water->sea.swell = args.swell;
             if (args.no_water_wetness)
                 water->wetness = false;
             if (args.no_water_film)

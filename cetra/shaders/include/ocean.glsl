@@ -281,15 +281,37 @@ OceanBed oceanBed(vec2 p) {
     OceanBed b;
     // No bed is INFINITELY deep, not zero-deep: the clamp must not bite where nothing has
     // been said about the floor.
-    if (bedAvailable == 0) {
-        b.shoal = 1.0;
-        b.dShoal = vec2(0.0);
-        b.column = 1.0e6;
-        b.dColumn = vec2(0.0);
+    b.shoal = 1.0;
+    b.dShoal = vec2(0.0);
+    b.column = 1.0e6;
+    b.dColumn = vec2(0.0);
+    if (bedAvailable == 0)
         return b;
-    }
     vec2 uv = p / (waterExtent * 2.0) + 0.5;
-    vec4 bed = texture(bedTex, clamp(uv, vec2(0.0), vec2(1.0)));
+    /*
+     * OUTSIDE THE BAKE'S DOMAIN IS NO BED, not the bed's edge repeated forever.
+     *
+     * The bake covers a square of half-width waterExtent, sized for the SHORE BAND rather
+     * than for the drawn surface -- since the grid became projected (spec 11.35) the sea
+     * reaches the horizon at any extent, so nearly all of an open-water frame lies outside
+     * this square. Clamping the lookup answered those fragments with whatever depth the
+     * bake happened to end on, and that answer is a SHALLOW one: the domain edge sits on
+     * the shoaling ramp it was sized to capture.
+     *
+     * That is not a cosmetic error, because bed.column feeds the depth-limited BREAKING
+     * criterion. A sea whose crests approach 0.39 of the water depth is breaking, so
+     * reporting a few metres of water under the whole ocean made the whole ocean break:
+     * measured in apps/tree, Breaking fired over 86.7% of the frame and painted the open
+     * sea with the shore band's near-opaque whitewater, moving at wave speed. The surface
+     * has no shore out there to break on.
+     *
+     * The early-out above is the right answer and already exists -- open water, no shoal,
+     * no breaking. The per-fragment column still comes from the depth buffer, which is
+     * exact and unbounded, so nothing that needs a real depth loses one here.
+     */
+    if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0))))
+        return b;
+    vec4 bed = texture(bedTex, uv);
     b.column = waterLevel - bed.r;
     b.dColumn = -bed.gb;
     // The window converted into this world's units, so the shoal ramp is the same DEPTH of

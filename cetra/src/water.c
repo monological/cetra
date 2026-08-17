@@ -249,11 +249,28 @@ static bool _water_build_spectrum(int size, const struct WaterCascadeConfig* cfg
             const float short_fade = expf(-0.00016f * k_len * k_len);
             float density = jonswap * direction * short_fade;
 
-            if (cfg->secondary_scale > 0.0f) {
-                // A second swell train, older and crossing the wind. One
-                // direction of travel, however well spread, reads as corduroy.
+            if (cfg->secondary_scale > 0.0f && sea->swell > 0.0f) {
+                /*
+                 * A second swell train, older and crossing the wind. One
+                 * direction of travel, however well spread, reads as corduroy.
+                 *
+                 * ITS SIZE FOLLOWS THE AUTHORED `swell`, which until now it did not: the
+                 * train was a fixed 8.4 m/s over 310 km whatever the scene asked for, and
+                 * on the two cascades that carry the height it contributes about 1.6 m of
+                 * significant height on its own. That is most of the sea, so a scene
+                 * lowering its wind could not make the water calmer -- measured, Hs fell
+                 * only 1.92 m to 1.85 m across a wind drop from 6 m/s to 3. A swell IS
+                 * independent of the local wind, which is why this train exists and why
+                 * it keeps its own wind and fetch; what was wrong is that nothing could
+                 * turn it DOWN.
+                 *
+                 * Scaled by swell/WATER_DEFAULT_SWELL so the default sea state is
+                 * unchanged to the last bit, and swell 0 now means no swell rather than
+                 * the same swell with a different spread.
+                 */
                 const float sw_wind = 8.4f;
                 const float sw_fetch = 310000.0f;
+                const float sw_weight = sea->swell / WATER_DEFAULT_SWELL;
                 const float sw_peak = 22.0f * powf(sw_wind * sw_fetch / (g * g), -0.33f);
                 const float sw_alpha = 0.076f * powf(g * sw_fetch / (sw_wind * sw_wind), -0.22f);
                 const float sw_spectrum = _water_jonswap(omega, sw_peak, sw_alpha, tma, 2.6f);
@@ -270,7 +287,7 @@ static bool _water_build_spectrum(int size, const struct WaterCascadeConfig* cfg
                     0.72f;
                 const float sw_dir = _water_spread_norm(sw_spread) *
                                      powf(fabsf(cosf(sw_theta * 0.5f)), 2.0f * sw_spread);
-                density += sw_spectrum * sw_dir * short_fade * cfg->secondary_scale;
+                density += sw_spectrum * sw_dir * short_fade * cfg->secondary_scale * sw_weight;
             }
 
             const float amplitude =
