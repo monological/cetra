@@ -1482,6 +1482,22 @@ int main(int argc, char** argv) {
              */
             water->sea.wind_sea.wind_speed = 6.0f;
             water->sea.wind_sea.fetch = 15000.0f;
+            /*
+             * AND ITS SWELL, for the same reason and to the same scale.
+             *
+             * The library's swell is 8.4 m/s over 310 km. That is an ocean swell, and on
+             * this scene it carried about 1.1 m of significant height -- three times the
+             * wind sea above. Until spec 11.48 it was not sayable, so lowering the wind
+             * left it standing: the shelf met a metre of swell whatever the breeze did, and
+             * since breaking is depth-limited it broke over the whole bay at once.
+             *
+             * 3 m/s over 40 km is 0.16 m here against the wind sea's 0.64 -- a swell that
+             * is present rather than dominant, which is what a sheltered lagoon has. Tuned
+             * by eye against the A/B, not to a target number: with no swell at all a single
+             * train's crests read as corduroy, so zero is the wrong answer too.
+             */
+            water->sea.swell.wind_speed = 3.0f;
+            water->sea.swell.fetch = 40000.0f;
             if (args.wind_speed > 0.0f)
                 water->sea.wind_sea.wind_speed = args.wind_speed;
             if (args.fetch > 0.0f)
