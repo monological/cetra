@@ -334,6 +334,9 @@ static void parse_post(CetraSceneDesc* d, const cJSON* root) {
         } else {
             log_warn("cscene: post.camera needs aperture, shutter and iso together; ignored");
         }
+        static const char* const cam_known[] = {"aperture", "shutter", "iso"};
+        warn_unknown_keys(cam, cam_known, sizeof(cam_known) / sizeof(cam_known[0]),
+                          "post.camera");
     }
 
     // Refused rather than clamped: silently moving an authored number into
@@ -356,6 +359,9 @@ static void parse_post(CetraSceneDesc* d, const cJSON* root) {
         d->has_bloom_enabled = get_bool(bloom, "enabled", &d->bloom_enabled);
         d->has_bloom_strength = get_float(bloom, "strength", &d->bloom_strength);
         d->has_bloom_threshold = get_float(bloom, "threshold", &d->bloom_threshold);
+        static const char* const bloom_known[] = {"enabled", "strength", "threshold"};
+        warn_unknown_keys(bloom, bloom_known, sizeof(bloom_known) / sizeof(bloom_known[0]),
+                          "post.bloom");
     }
     const cJSON* fog = cJSON_GetObjectItemCaseSensitive(post, "fog");
     if (cJSON_IsObject(fog)) {
@@ -369,7 +375,17 @@ static void parse_post(CetraSceneDesc* d, const cJSON* root) {
         // from every direction. A real emitter, so it does not track the lamps;
         // a scale test has to scale it too, or leave it at zero.
         d->has_fog_ambient = get_vec3(fog, "ambient", d->fog_ambient);
+        static const char* const fog_known[] = {
+            "enabled", "density", "anisotropy", "near", "far", "depthDistribution", "ambient",
+        };
+        warn_unknown_keys(fog, fog_known, sizeof(fog_known) / sizeof(fog_known[0]), "post.fog");
     }
+
+    static const char* const known[] = {
+        "tonemap", "exposure", "auto_exposure",        "camera", "render_scale",
+        "flare",   "bloom",    "chromatic_aberration", "fog",
+    };
+    warn_unknown_keys(post, known, sizeof(known) / sizeof(known[0]), "post");
 }
 
 static void parse_wind(CetraSceneDesc* d, const cJSON* root) {
@@ -384,6 +400,12 @@ static void parse_wind(CetraSceneDesc* d, const cJSON* root) {
     d->has_wind_gust_frequency = get_float(wind, "gustFrequency", &d->wind_gust_frequency);
     d->has_wind_gust_amount = get_float(wind, "gustAmount", &d->wind_gust_amount);
     d->has_wind_turbulence = get_float(wind, "turbulence", &d->wind_turbulence);
+
+    static const char* const known[] = {
+        "enabled", "direction", "strength", "speed", "gustFrequency", "gustAmount",
+        "turbulence",
+    };
+    warn_unknown_keys(wind, known, sizeof(known) / sizeof(known[0]), "wind");
 }
 
 static void parse_dust(CetraSceneDesc* d, const cJSON* root) {
@@ -404,9 +426,18 @@ static void parse_dust(CetraSceneDesc* d, const cJSON* root) {
         out->has_curl = get_float(curl, "scale", &out->curl[0]) &&
                         get_float(curl, "strength", &out->curl[1]) &&
                         get_float(curl, "timescale", &out->curl[2]);
+        static const char* const curl_known[] = {"scale", "strength", "timescale"};
+        warn_unknown_keys(curl, curl_known, sizeof(curl_known) / sizeof(curl_known[0]),
+                          "dust.curl");
     }
     out->has_drift = get_vec3(dust, "drift", out->drift);
     out->has_damping = get_float(dust, "damping", &out->damping);
+
+    static const char* const known[] = {
+        "enabled", "spawnRate", "lifetime", "size",  "color",
+        "colorJitter", "curl",   "drift",    "damping",
+    };
+    warn_unknown_keys(dust, known, sizeof(known) / sizeof(known[0]), "dust");
 }
 
 /*
@@ -649,6 +680,9 @@ static void parse_camera(CetraSceneDesc* d, const cJSON* root) {
         log_warn("cscene: camera needs both eye and target; ignored");
     }
     d->has_cam_fov = get_float(cam, "fov", &d->cam_fov);
+
+    static const char* const known[] = {"eye", "target", "fov"};
+    warn_unknown_keys(cam, known, sizeof(known) / sizeof(known[0]), "camera");
 }
 
 CetraSceneDesc* cscene_load(const char* path) {
