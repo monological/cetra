@@ -791,19 +791,32 @@ OceanSurface oceanAssemble(vec2 p, vec3 disp, vec3 dispDx, vec3 dispDz, OceanBed
              * the result slides over the shelf as one soft-edged patch -- a spotlight, not a
              * breaker.
              *
-             * bed.dColumn is the gradient of the water COLUMN, so it points seaward, and a
-             * point on the shoreward face climbs toward the crest in that direction. Hence the
-             * dot's sign: the back face gives a negative one, which the smoothstep's strictly
+             * FROM THE WAVE, NOT FROM THE BED. Both models put the phase at
+             * k*dot(dir,p) - omega*t, so a wave travels along +waterWindDir and its forward
+             * face -- the one the crest is advancing into, where a spilling breaker throws its
+             * water -- is where the height gradient points back along -waterWindDir. Hence the
+             * dot's sign: the rear face gives a negative one, which the smoothstep's strictly
              * positive lower edge takes to zero, so it stays dark. That is what makes this a
              * crest line with a wake rather than a filled contour.
+             *
+             * This read the normalised bed gradient until it was measured. Three defects, one
+             * cause -- the bed does not know which way the wave is going. It is exactly zero on
+             * a flat bed, so breaking vanished over a shelf that has no slope, which is a sea
+             * state that breaks in reality. Where the shore ran across the wind the dominant
+             * octave scored exactly nothing, because a plane wave's gradient has no component
+             * across its own travel: reachable `front` fell about twofold, an azimuthal bias on
+             * a round island. And past the beam the bed gradient reverses while the waves do
+             * not, so the foam moved to the REAR face of every wave on the lee shore.
+             *
+             * The bed still decides WHETHER a wave breaks -- that is the depth ratio above, and
+             * `enough`. It has no say in where on the wave the water whitens.
              *
              * Taken from the UNSHOALED derivative, matching the disp.y the ratio uses. Both
              * describe the incident wave, which is what the breaking criterion is about; the
              * shoal factor's attenuation is applied to the drawn surface further down.
              */
-            float bedFall = length(bed.dColumn);
-            vec2 seaward = bedFall > 1.0e-5 ? bed.dColumn / bedFall : vec2(0.0);
-            float front = dot(vec2(dispDx.y, dispDz.y), seaward);
+            vec2 travel = normalize(waterWindDir + vec2(1e-6, 0.0));
+            float front = dot(vec2(dispDx.y, dispDz.y), -travel);
             // The surf's own steepness a*k, with a = Hs/2 and deep-water k = omega^2/g.
             // Unitless, because Hs is metres and k is per metre, so it needs no unit scale --
             // on the Gerstner path it reduces exactly to the primary octave's own A*2pi/lambda
