@@ -776,6 +776,9 @@ typedef struct {
     int no_water_film;
     int water_foam_debug; // WaterFoamDebug (water.h): 0 off, 1 eroded, 2 pre-erosion
     int no_water_foam_history; // Bisect lever: foam from this frame's fold only
+    // Bisect lever: no incident wave at the shore. Removes the bore from the GEOMETRY as
+    // well as the whitewater, since depth-limited breaking is gated on the surf existing.
+    int no_water_surf;
     // Spectral sea state. <=0 keeps the library default. The FFT path takes its wave
     // heights from these two and ignores the wavelength/amplitude below, so they are the
     // only way to make this sea calmer without switching wave models.
@@ -835,6 +838,7 @@ static void print_usage(const char* prog) {
     printf("      --no-water-wetness  The swash leaves the sand exactly as it found it\n");
     printf("      --no-water-film     Drop the swash solver; the closed-form run-up drives\n");
     printf("      --water-foam-debug N  Crest band as a binary mask: 1 after erosion, 2 before\n");
+    printf("      --no-water-surf     No incident wave at the shore: no run-up, no bore\n");
     printf("      --wind-speed M      Spectral sea: wind in m/s (default 11.5)\n");
     printf("      --fetch M           Spectral sea: fetch in metres (default 120000)\n");
     printf("      --swell S           Crossing swell train, 0 = none (default 0.38)\n");
@@ -909,6 +913,8 @@ static bool parse_args(int argc, char** argv, TreeArgs* a) {
             a->water_foam_debug = atoi(argv[++i]);
         } else if (!strcmp(s, "--no-water-foam-history")) {
             a->no_water_foam_history = 1;
+        } else if (!strcmp(s, "--no-water-surf")) {
+            a->no_water_surf = 1;
         } else if (!strcmp(s, "--wind-speed") && has_next) {
             a->wind_speed = (float)atof(argv[++i]);
         } else if (!strcmp(s, "--fetch") && has_next) {
@@ -1457,6 +1463,8 @@ int main(int argc, char** argv) {
             water->foam_debug = (WaterFoamDebug)args.water_foam_debug;
             if (args.no_water_foam_history)
                 water->foam_history = false;
+            if (args.no_water_surf)
+                water->surf = false;
             /*
              * THE SEA STATE, authored here rather than inherited.
              *
