@@ -84,24 +84,11 @@ uniform float cascadeChoppiness[3];
 // be a fraction of something -- without them the far field could only be lerped toward a
 // literal, which is a look constant standing in for a property of the sea.
 uniform float cascadeSlopeVar[3];
-// Each band's own RMS surface elevation, METRES, 0 on Gerstner (spec 11.47). What the
-// crest-height gate normalises a fold's elevation by, so the threshold is a fraction of
-// what THIS sea's THIS band normally does rather than a fixed number of metres.
-uniform float cascadeHeightRms[3];
-/*
- * THE CREST-HEIGHT GATE, shared because it gates in two places: the birth of a fold in
- * water_foam_frag, and the instantaneous selection in water_frag. Both need the same window
- * or the trail a birth writes and the read that later interprets it would disagree about
- * what counts as a crest.
- *
- * In units of SIGMA, not metres -- a metre threshold is a threshold on one sea state, and
- * sigma is what makes it scale with wind speed the way the sea itself does. The Gaussian
- * exceedance at 0.8 sigma is 21%, at 1.8 sigma 3.6%; the real surface is skewed higher than
- * that (bound-harmonic terms sharpen crests and flatten troughs), so these are a starting
- * window rather than a literal percentile.
- */
-const float WATER_FOAM_CREST_ON_SIGMA = 0.8;
-const float WATER_FOAM_CREST_FULL_SIGMA = 1.8;
+// Each band's own VARIANCE of surface elevation, METRES SQUARED, 0 on Gerstner (spec
+// 11.47) -- a variance, like cascadeSlopeVar above, and for the same reason: the gate below
+// sums two of these (independent fields add in variance, not in RMS) and a variance is what
+// makes that sum a single sqrt rather than a round trip through one.
+uniform float cascadeHeightVar[3];
 // Last frame's target 0 for the two cascades that displace, and whether they hold a
 // frame yet. 0 on the first two frames, and then the previous position falls back to
 // the current one -- which reports camera motion only, the behaviour the whole
@@ -582,6 +569,15 @@ vec2 oceanCascadeUv(vec2 p, int band) {
     return fract((p - origin) / period + 0.5);
 }
 
+// Its screen derivative, for a caller that needs textureGrad rather than an implicit fetch
+// (spec 11.47) -- oceanCascadeUv wraps with fract, so the automatic derivative reads a
+// whole tile period across every seam. The camera-snapped origin above is a per-fragment
+// constant, so dividing the WORLD-SPACE gradient by the band's period is the whole chain
+// rule; there is no fract term to differentiate through.
+vec2 oceanCascadeUvGrad(vec2 dP, int band) {
+    return dP / cascadeLength[band];
+}
+
 /*
  * One band's horizontal-map Jacobian, from its packed derivatives. Below 1 the map is
  * compressing, which is what selects whitecaps and caustic focus.
@@ -597,6 +593,41 @@ float oceanBandJacobian(vec4 field0, vec4 field1, float choppiness) {
     float c = field0.a * choppiness;
     vec2 d = field1.ba * choppiness;
     return (1.0 + d.x) * (1.0 + d.y) - c * c;
+}
+
+/*
+ * THE CREST-HEIGHT GATE (spec 11.47): a second physical condition alongside compression,
+ * so a fold only reads as a whitecap when it is also near a crest -- selecting on
+ * compression alone puts foam in a trough that is folding just as hard as a peak.
+ *
+ * ONE function because it gates in two places: the birth of a fold in water_foam_frag, and
+ * the instantaneous selection in water_frag. Both need the same window or the trail a birth
+ * writes and the read that later interprets it would disagree about what counts as a crest.
+ *
+ * `elevationM` and `heightVar` are the caller's business -- per band from the accumulator's
+ * own texel at the birth site, assembled from WorldPos.y at the instantaneous site -- this
+ * only turns whichever pair it is handed into a z-score and shapes it.
+ *
+ * In units of SIGMA, not metres -- a metre threshold is a threshold on one sea state, and
+ * sigma is what makes it scale with wind speed the way the sea itself does. The Gaussian
+ * exceedance at 0.8 sigma is 21%, at 1.8 sigma 3.6%; the real surface is skewed higher than
+ * that (bound-harmonic terms sharpen crests and flatten troughs), so these are a starting
+ * window rather than a literal percentile.
+ *
+ * heightVar at or near zero -- an unseeded spectrum, or the Gerstner path, which has no
+ * seeded spectrum to have a variance at all -- fails OPEN: the gate returns 1 rather than
+ * dividing by nothing, so a sea with no z-score to give reads as ungated rather than
+ * foam-free.
+ */
+const float OCEAN_FOAM_CREST_ON_SIGMA = 0.8;
+const float OCEAN_FOAM_CREST_FULL_SIGMA = 1.8;
+const float OCEAN_FOAM_CREST_VAR_MIN = 1.0e-8;
+
+float oceanCrestGate(float elevationM, float heightVar) {
+    if (heightVar <= OCEAN_FOAM_CREST_VAR_MIN)
+        return 1.0;
+    return smoothstep(OCEAN_FOAM_CREST_ON_SIGMA, OCEAN_FOAM_CREST_FULL_SIGMA,
+                      elevationM * inversesqrt(heightVar));
 }
 
 /*

@@ -720,8 +720,22 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->no_water_caustics = 1;
         } else if (strcmp(argv[i], "--no-water-glitter") == 0) {
             args->no_water_glitter = 1;
-        } else if (strcmp(argv[i], "--water-foam-debug") == 0 && i + 1 < argc) {
-            args->water_foam_debug = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--water-foam-debug") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            char* end = NULL;
+            long mode = strtol(argv[i], &end, 10);
+            if (end == argv[i] || *end != '\0' || mode < WATER_FOAM_DEBUG_OFF ||
+                mode > WATER_FOAM_DEBUG_SELECTED) {
+                fprintf(stderr, "Error: --water-foam-debug wants 0, 1 or 2, got '%s'\n",
+                       argv[i]);
+                return -1;
+            }
+            // Does NOT imply --water: this is a view mode for a surface something else
+            // already asked for, the same reason the negative flags above do not either.
+            args->water_foam_debug = (int)mode;
         } else if (strcmp(argv[i], "--no-water-surf") == 0) {
             args->no_water_surf = 1;
         } else if (strcmp(argv[i], "--no-water-foam-history") == 0) {

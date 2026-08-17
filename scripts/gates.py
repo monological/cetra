@@ -3582,15 +3582,9 @@ WATER_PERSIST_BOX_BOTTOM = 0.60
 # which is the point of S4. Set under the measured floor rather than at the old bar, which
 # a correct S4 cannot clear.
 WATER_PERSIST_RATIO = 1.10
-# WATER_PERSIST_MIN_PX -- an absolute floor on how many pixels the SHADED frame differed
-# by between WITH and WITHOUT history -- is gone as of spec 11.47, which moved this arm
-# onto --water-foam-debug instead of reading the composited image. It was a floor on the
-# LOOK (crest opacity and colour), not on the persistence effect this arm exists to prove,
-# and it broke every time either constant moved: reading 5,735 against a 20,000 bar the day
-# S5 gave crest foam its own dimmer opacity, on a frame where the ratio and determinism
-# checks below still held. An absolute floor is the wrong shape of assertion for a quantity
-# whose SCALE is a look constant; the debug mask has no opacity to be a floor ON, and the
-# ratio already says how much more foam persistence adds.
+# WATER_PERSIST_MIN_PX (an absolute floor on how many pixels the SHADED frame differed by
+# between WITH and WITHOUT history) is gone as of spec 11.47: it was a floor on the LOOK,
+# not on persistence, and broke every time crest opacity or colour moved.
 # An absolute floor under the WITHOUT-history count, because a ratio has no scale: 1 -> 3
 # foam pixels is 3.00x and passes any ratio bar while describing a frame with no whitewater
 # in it at all. Recalibrated for the debug mask's pixel counts, which run at a different
@@ -3620,10 +3614,21 @@ WATER_CSCN_LEVEL = 0.9
 # to fix (the default sea's look), and chasing it here risks the opposite mistake this spec
 # started from: tuning a constant to a number instead of to a measurement.
 WATER_COVERAGE_STATES = (8.0, 14.0)
-WATER_COVERAGE_EXTENT = 300.0
+# waves/fft only -- no bed, and therefore no extent to author: oceanBed's whole body is
+# behind `if (bedAvailable == 0) return early` (ocean.glsl), and this arm never installs
+# one. windSpeed is the one thing that varies per state.
+WATER_COVERAGE_SEA = {"waves": "fft"}
 WATER_COVERAGE_FRAMES = 90
 WATER_COVERAGE_CAM = ["--cam-eye", "0,300,0", "--cam-target", "0,0,0",
                      "--cam-up", "0,0,-1", "-F", "20"]
+# --no-bloom so a mask value of exactly 1.0 cannot bleed a halo past the edge of a foam
+# patch and inflate the count -- the classifier's own docstring claims no opacity or
+# tonemap curve stands between it and the shader's selection, which this makes exactly true
+# rather than almost true.
+WATER_FOAM_DEBUG_ON = ["--water-foam-debug", "1", "--no-bloom"]
+# Monahan & O'Muircheartaigh 1980: whitecap area fraction W = A * U10^B, U10 in m/s.
+WATER_MONAHAN_A = 2.95e-6
+WATER_MONAHAN_B = 3.52
 # 0.5x-2x, not a tight band: Monahan's own data scatters roughly that much across the field
 # campaigns it was fit to, and this measures one seeded FFT patch against a mean curve --
 # an exact match would be suspicious rather than reassuring. Well inside the original
@@ -4180,35 +4185,24 @@ def _water_box_luma(pix, w, h, box):
     return sum(vals) / len(vals)
 
 
-def _water_foam_debug_px(pix, w, h, box):
-    """Crest-mask pixels in a fractional box, from a --water-foam-debug=1 frame (spec 11.47).
+def _water_foam_debug_px(pix, w, h, box=(0.0, 0.0, 1.0, 1.0)):
+    """(crest-mask px, sea px) in a fractional box, from a --water-foam-debug=1 frame.
 
     Green marks water at all, red marks the crest band the shader selected -- written as a
     binary override at the end of water_frag's main(), after the real G-buffer writes, so
     this reads the SELECTION rather than the composited colour. No opacity, no tonemap
     curve, no albedo constant stands between this count and what the shader chose.
+
+    The sea count is the denominator coverage needs: a fraction of SEA AREA, not of frame,
+    so no crop box has to be placed to exclude the sky or any dry geometry in shot -- see
+    water-whitecap-coverage, which reads the default full-frame box at nadir where that
+    denominator is exact.
     """
     x0, y0, x1, y1 = box
-    n = 0
-    for py in range(int(y0 * h), int(y1 * h)):
-        for px in range(int(x0 * w), int(x1 * w)):
-            o = (py * w + px) * 3
-            if pix[o + 1] > 127 and pix[o + 2] < 127 and pix[o] > 127:
-                n += 1
-    return n
-
-
-def _water_foam_debug_coverage(pix, w, h):
-    """(foam px, sea px) over the WHOLE frame from a --water-foam-debug=1 frame.
-
-    No box: the green channel is already "is this sea at all", so the denominator is the
-    sea itself rather than the frame, and no crop box has to be placed -- see
-    water-whitecap-coverage, which reads this at nadir where that denominator is exact.
-    """
     sea = 0
     foam = 0
-    for py in range(h):
-        for px in range(w):
+    for py in range(int(y0 * h), int(y1 * h)):
+        for px in range(int(x0 * w), int(x1 * w)):
             o = (py * w + px) * 3
             if pix[o + 1] > 127 and pix[o + 2] < 127:
                 sea += 1
@@ -4705,7 +4699,7 @@ def run_water_gate(workdir):
     # accumulator over 90 frames and a running minimum is where drift would show. Every
     # other determinism arm here stops at 30 on the default sea, so nothing else covers it.
     foam_twice = os.path.join(workdir, "water_foam_on_b.ppm")
-    foam_debug = WATER_PIN + WATER_NO_CATCHER + ["--water-foam-debug", "1"]
+    foam_debug = WATER_PIN + WATER_NO_CATCHER + WATER_FOAM_DEBUG_ON
     err = render(foam_scene, foam_on, foam_debug, frames=WATER_PERSIST_FRAMES)
     if not err:
         err = render(foam_scene, foam_twice, foam_debug, frames=WATER_PERSIST_FRAMES)
@@ -4723,8 +4717,8 @@ def run_water_gate(workdir):
         fw, fh, f_on_pix = _read_ppm(foam_on)
         _, _, f_off_pix = _read_ppm(foam_off)
         foam_box = _water_persist_box()
-        px_on = _water_foam_debug_px(f_on_pix, fw, fh, foam_box)
-        px_off = _water_foam_debug_px(f_off_pix, fw, fh, foam_box)
+        px_on, _ = _water_foam_debug_px(f_on_pix, fw, fh, foam_box)
+        px_off, _ = _water_foam_debug_px(f_off_pix, fw, fh, foam_box)
         # Qualified, like every other headline number in this function (mid_ratio,
         # sd_ratio, sens_ratio): a bare `ratio` is now bound by three separate arms.
         foam_ratio = px_on / max(px_off, 1)
@@ -4743,22 +4737,20 @@ def run_water_gate(workdir):
     cov_ok = True
     for wind_speed in WATER_COVERAGE_STATES:
         cov_scene = os.path.join(workdir, f"water_coverage_{int(wind_speed)}.cscn")
-        _water_cscn_variant(scene, cov_scene,
-                            {"waves": "fft", "windSpeed": wind_speed,
-                             "extent": WATER_COVERAGE_EXTENT})
+        _water_cscn_variant(scene, cov_scene, dict(WATER_COVERAGE_SEA, windSpeed=wind_speed))
         cov_out = os.path.join(workdir, f"water_coverage_{int(wind_speed)}.ppm")
         err = render(cov_scene, cov_out,
-                     WATER_PIN + WATER_NO_CATCHER + ["--water-foam-debug", "1"] +
-                     WATER_COVERAGE_CAM, frames=WATER_COVERAGE_FRAMES)
+                     WATER_PIN + WATER_NO_CATCHER + WATER_FOAM_DEBUG_ON + WATER_COVERAGE_CAM,
+                     frames=WATER_COVERAGE_FRAMES)
         if err:
             print(f"  water-whitecap-coverage ERROR render failed at {wind_speed:.0f} m/s: "
                   f"{err.strip()[-200:]}")
             cov_ok = False
             continue
         cw, ch, cov_pix = _read_ppm(cov_out)
-        foam_px, sea_px = _water_foam_debug_coverage(cov_pix, cw, ch)
+        foam_px, sea_px = _water_foam_debug_px(cov_pix, cw, ch)
         measured = foam_px / max(sea_px, 1)
-        predicted = 2.95e-6 * wind_speed ** 3.52
+        predicted = WATER_MONAHAN_A * wind_speed ** WATER_MONAHAN_B
         ratio = measured / max(predicted, 1e-9)
         ok = WATER_COVERAGE_RATIO_MIN <= ratio <= WATER_COVERAGE_RATIO_MAX
         print(f"  water-whitecap-coverage {'PASS' if ok else 'FAIL'}  {wind_speed:.0f} m/s: "

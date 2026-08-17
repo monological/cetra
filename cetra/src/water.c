@@ -408,7 +408,7 @@ Water* create_water(void) {
     // Surface drift, m/s. A few per cent of a moderate wind, which is the order the
     // literature gives for what a wind sea carries its surface at.
     water->foam_drift = 0.35f;
-    water->foam_debug = 0;
+    water->foam_debug = WATER_FOAM_DEBUG_OFF;
     water->shore_coverage = true;
     water->surf = true;
     water->far_lod = true;
@@ -945,6 +945,17 @@ static GLuint _water_make_field_array(int size, int layers, GLenum internal_form
  * that swaps from frame to frame. Filtering it is this subsystem's own stated answer to a
  * far field: "the far field is a filtering problem" (ocean.glsl), not a distance fade.
  *
+ * THE FIELD IS A RUNNING MINIMUM, and mipping it does not average that minimum -- it
+ * averages the STORED VALUE, which water_frag reads as `1 - value` and shapes through
+ * `smoothstep(WATER_FOAM_ON, WATER_FOAM_FULL, ...)` downstream. That distinction is exact
+ * in one direction and approximate in the other: averaging the stored value IS averaging
+ * `1 - value` (the two are the same linear operation, negated), so a mip reports coverage
+ * -- what fraction of this footprint has folded -- and not a worst-case fold, which is the
+ * quantity the consumer actually wants. What a mip does NOT commute with is the smoothstep
+ * applied AFTER it: shaping the average is not the average of the shaping, so by Jensen the
+ * far field's coverage is a slight UNDER-estimate rather than exact. That errs toward less
+ * foam at the horizon, which is the safe direction against the aliasing this fixes.
+ *
  * Complete from the moment it is bound, for the reason the cascade array states: an
  * incomplete mipmapped texture samples as black on whichever frame reads it first.
  */
@@ -1158,8 +1169,7 @@ static bool _water_ensure_spectra(Water* water) {
     // out of one of the buffers above.
     water->cascade_prev_array = _water_make_field_array(size, WATER_PREV_CASCADES, GL_RGBA16F);
 
-    // The foam pair. No mip chain: it is sampled at LOD 0 wherever the surface reads it,
-    // and a mip of a running minimum is not the running minimum of a mip.
+    // The foam pair -- see _water_make_foam_target for why it is mipped.
     for (int b = 0; b < 2; b++) {
         water->foam_tex[b] = _water_make_foam_target(size);
         glGenFramebuffers(1, &water->foam_fbo[b]);
@@ -1233,11 +1243,15 @@ static void _water_fft_transform(ShaderProgram* fft, GLuint twiddle, const GLuin
 }
 
 /*
- * The six transformed fields on WATER_CASCADE_UNIT0.., plus the per-band choppiness.
+ * The six transformed fields on WATER_CASCADE_UNIT0.., plus the per-band choppiness,
+ * height variance (spec 11.47) and slope variance.
  *
  * Everything a consumer of ocean.glsl's cascade group needs, and nothing that belongs to
  * only one of them: `cascadeLength` and `cascadeSlopeVar` are the surface's alone, since the
- * foam pass works in texel space and selects folds rather than shading them.
+ * foam pass works in texel space and selects folds rather than shading them. Height
+ * variance is NOT surface-only -- the foam pass's own crest-height gate (birth, in
+ * water_foam_frag) reads it per band the same way the surface's instantaneous gate does, so
+ * it goes out on every call rather than being threaded in as a second parameter.
  *
  * `fft` false points the units at texture 0 rather than skipping them. A sampler left at its
  * default is a type mismatch against whatever 2D texture happens to occupy that unit, not an
@@ -1486,25 +1500,30 @@ static void _water_bind_cascades(const Water* water, UniformManager* u, bool fft
         snprintf(chop, sizeof(chop), "cascadeChoppiness[%d]", c);
         uniform_set_float(u, chop, WATER_CASCADE_CFG[c].choppiness);
         /*
-         * The band's own RMS surface elevation, METRES (spec 11.47). What the crest-height
-         * gate normalises by: a threshold in metres is a threshold on one sea state, and
-         * dividing a fold's elevation by sigma asks the scale-free question "how tall is
-         * this relative to what THIS band of THIS sea normally does" instead.
+         * The band's own VARIANCE of surface elevation, METRES SQUARED (spec 11.47).
+         * Published raw, matching cascadeSlopeVar four lines below in ocean.glsl -- the
+         * crest-height gate (oceanCrestGate) sums the two bands that reach the mesh before
+         * taking a root, and a variance is what makes that a plain sum rather than a
+         * sqrt/square/sum/sqrt round trip through an RMS.
+         *
+         * What the gate normalises by: a threshold in metres is a threshold on one sea
+         * state, and dividing a fold's elevation by sigma asks the scale-free question "how
+         * tall is this relative to what THIS band of THIS sea normally does" instead.
          *
          * NOT waterSurfHeight -- that is zeroed by the surf switch (water_shore_runup_params
          * returns false with no surf), and water-shoal runs both its frames under
          * --no-water-surf. This is unconditional on anything but the spectrum having been
          * seeded, which fft implies.
          *
-         * 0 on the Gerstner path, where there is no seeded spectrum to have a sigma at all.
-         * The shader guards the divide explicitly and fails OPEN on a zero sigma -- every
-         * point reads as a crest rather than the gate closing on a sea with no z-score to
-         * give, which is the same "no bed, no gate" shape shoreDomain and the shoal window
-         * already use for their own missing-data cases.
+         * 0 on the Gerstner path, where there is no seeded spectrum to have a variance at
+         * all. The gate guards the divide explicitly and fails OPEN on a zero variance --
+         * every point reads as a crest rather than the gate closing on a sea with no
+         * z-score to give, which is the same "no bed, no gate" shape shoreDomain and the
+         * shoal window already use for their own missing-data cases.
          */
-        char rms[32];
-        snprintf(rms, sizeof(rms), "cascadeHeightRms[%d]", c);
-        uniform_set_float(u, rms, fft ? sqrtf(fmaxf(water->cascade_height_var[c], 0.0f)) : 0.0f);
+        char var[32];
+        snprintf(var, sizeof(var), "cascadeHeightVar[%d]", c);
+        uniform_set_float(u, var, fft ? fmaxf(water->cascade_height_var[c], 0.0f) : 0.0f);
     }
 }
 
@@ -1640,6 +1659,11 @@ static void _water_run_spectral(Water* water, const struct Scene* scene, struct 
         // Regenerated every frame: the trail the surface reads is this frame's dst, freshly
         // written above, and the surface's own read is a textureGrad selecting whichever
         // level its screen footprint calls for -- see the mip note on _water_make_foam_target.
+        //
+        // UNBOUND FIRST: foam_tex[dst] is still the live colour attachment of foam_fbo[dst]
+        // at this point, and generating its mips while it is a bound attachment is a
+        // driver-dependent hazard rather than a defined operation. The FBO is restored below
+        // regardless, so this costs nothing.
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, water->foam_tex[dst]);

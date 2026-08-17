@@ -515,8 +515,8 @@ void main() {
     // take a derivative at the top rather than trust that). SurfParam, not WorldPos.xz: it
     // is the coordinate the foam accumulator's own UV is built from, and it is smooth where
     // the displaced position is not.
-    vec2 foamDdxParam = dFdx(SurfParam);
-    vec2 foamDdyParam = dFdy(SurfParam);
+    vec2 surfDdx = dFdx(SurfParam);
+    vec2 surfDdy = dFdy(SurfParam);
 
     vec3 N = normalize(Normal);
     /*
@@ -609,36 +609,34 @@ void main() {
          */
         float instant = max(0.0, 1.0 - Jacobian);
         /*
-         * THE CREST-HEIGHT GATE, applied to `instant` and NOT to the trail read back below.
+         * THE CREST-HEIGHT GATE (oceanCrestGate, ocean.glsl), applied to `instant` and NOT
+         * to the trail read back below -- see the gate's own comment for why it is shared
+         * with the accumulator's birth site rather than written out here.
          *
          * WorldPos.y - waterLevel is the assembled elevation the mesh actually drew -- the
-         * long and medium bands, their crest terms, the depth clamp, the surf -- so it is
-         * the right numerator here even though it is not the same quantity the accumulator
-         * stores per band. Normalised by the RMS of the two bands that reach the mesh, not
-         * all three: the short band never displaces, so its energy is not in WorldPos.y and
-         * must not be in the denominator either.
-         *
-         * Sigma at or near zero (an unseeded spectrum, or --no-water-surf on a scene with no
-         * fallback) fails OPEN: crestGate becomes 1 rather than the gate dividing by nothing,
-         * so a sea with no z-score to give reads as ungated rather than foam-free.
+         * long and medium bands, their crest terms, the depth clamp, AND THE SURF, where the
+         * birth site's per-band elevation is not -- so this numerator opens more readily in
+         * the surf zone than the gate's stated z-score alone would predict. Intentional
+         * rather than an oversight: a breaking shore needs the vertex Jacobian selectable at
+         * all, which is what the comment two blocks down says of the accumulator here too.
+         * Normalised by the variance of the two bands that reach the mesh, not all three:
+         * the short band never displaces, so its energy is not in WorldPos.y and must not be
+         * in the denominator either -- variances of independent bands ADD, the same rule
+         * this file states for slope above.
          */
-        float sigmaM = sqrt(cascadeHeightRms[0] * cascadeHeightRms[0] +
-                            cascadeHeightRms[1] * cascadeHeightRms[1]);
-        float crestGate = 1.0;
-        if (sigmaM > 1.0e-4) {
-            float crestM = (WorldPos.y - waterLevel) / max(waterUnitsPerMetre, 1.0e-6);
-            crestGate = smoothstep(WATER_FOAM_CREST_ON_SIGMA, WATER_FOAM_CREST_FULL_SIGMA,
-                                   crestM / sigmaM);
-        }
-        float compression = instant * crestGate;
+        float crestM = (WorldPos.y - waterLevel) / max(waterUnitsPerMetre, 1.0e-6);
+        float compression = instant *
+            oceanCrestGate(crestM, cascadeHeightVar[0] + cascadeHeightVar[1]);
         if (foamAvailable == 1) {
             /*
              * The trail the crest left behind (spec 11.42).
              *
-             * Three fetches from one texture, each in its own band's tiling space, because
-             * that is the space the accumulator read its Jacobian in. The value is a
-             * running minimum with a leak, so 1 - it is compression that OUTLIVES the fold
-             * -- which is what puts foam behind a breaking wave rather than only on it.
+             * Two fetches from one texture, each in its own band's tiling space, because
+             * that is the space the accumulator read its Jacobian in -- the short band is
+             * excluded here for the same reason it is excluded above, and the accumulator
+             * carries only these two channels (spec 11.47). The value is a running minimum
+             * with a leak, so 1 - it is compression that OUTLIVES the fold -- which is what
+             * puts foam behind a breaking wave rather than only on it.
              *
              * Keyed on SurfParam, the UNDISPLACED parameter, not on WorldPos.xz. The
              * accumulator writes one texel per cascade cell, and a cascade cell is indexed
@@ -652,35 +650,29 @@ void main() {
              * it: the accumulator cannot see the shoal gradient, so a surf-zone crest still
              * needs the vertex Jacobian to be selected at all.
              *
-             * UNGATED by crestGate, deliberately. Foam outlives the crest that made it and
-             * slides into the trough behind it -- that is the entire reason a trail exists
-             * rather than reselecting from scratch every frame. Gating this read by height
-             * would delete the memory the moment its parcel dropped, at the wave period, and
-             * the sea would pulse instead of carrying a trail. The gate belongs where a fold
-             * is RECORDED, not where it is remembered -- see the birth gate in
-             * water_foam_frag, which applies it once, at the snap.
+             * UNGATED by the crest-height gate, deliberately. Foam outlives the crest that
+             * made it and slides into the trough behind it -- that is the entire reason a
+             * trail exists rather than reselecting from scratch every frame. Gating this
+             * read by height would delete the memory the moment its parcel dropped, at the
+             * wave period, and the sea would pulse instead of carrying a trail. The gate
+             * belongs where a fold is RECORDED, not where it is remembered -- see the birth
+             * gate in water_foam_frag, which applies it once, at the snap.
              */
-            // Two bands, not three: the short one is excluded here for the same reason it is
-            // excluded above, and its channel in the accumulator is now written by the foam
-            // pass and read by nobody.
-            //
-            // TEXTUREGRAD, not an implicit fetch (spec 11.47). oceanCascadeUv wraps with
-            // fract, so the automatic derivative reads a whole period across every tile
-            // seam -- the same trap this file already documents for the pattern lookup and
-            // for the cascade sampling itself. The gradient of oceanCascadeUv(p, band) is
-            // exactly dFdx(p)/cascadeLength[band]: origin is a per-fragment constant, so the
-            // division is the whole derivative. Taken from SurfParam, the UNDISPLACED
-            // parameter, which is smooth where WorldPos.xz is not.
+            // TEXTUREGRAD, not an implicit fetch (spec 11.47) -- see oceanCascadeUvGrad for
+            // why the chain rule is just a division, and the same trap this file already
+            // documents for the pattern lookup and for the cascade sampling itself. Taken
+            // from SurfParam, the UNDISPLACED parameter, which is smooth where WorldPos.xz
+            // is not.
             //
             // This is also what makes the accumulator's new mip chain (water.c) reach the
             // surface at all: an unmipped or wrongly-graded read would still pick level 0
             // everywhere and the horizon would keep aliasing.
             float turbLong = textureGrad(foamTex, oceanCascadeUv(SurfParam, 0),
-                                         foamDdxParam / cascadeLength[0],
-                                         foamDdyParam / cascadeLength[0]).r;
+                                         oceanCascadeUvGrad(surfDdx, 0),
+                                         oceanCascadeUvGrad(surfDdy, 0)).r;
             float turbMed = textureGrad(foamTex, oceanCascadeUv(SurfParam, 1),
-                                        foamDdxParam / cascadeLength[1],
-                                        foamDdyParam / cascadeLength[1]).g;
+                                        oceanCascadeUvGrad(surfDdx, 1),
+                                        oceanCascadeUvGrad(surfDdy, 1)).g;
             compression = max(compression, max(0.0, 1.0 - min(turbLong, turbMed)));
         }
         /*
@@ -786,16 +778,16 @@ void main() {
      */
     // Once, at uniform control flow: the erosion below is branchy and a derivative taken inside
     // a branch is undefined. See waterFoamPattern.
-    vec2 foamDdx = dFdx(WorldPos.xz);
-    vec2 foamDdy = dFdy(WorldPos.xz);
+    vec2 worldDdx = dFdx(WorldPos.xz);
+    vec2 worldDdy = dFdy(WorldPos.xz);
     vec2 foamDrift = waterWindDir * (time * WATER_FOAM_DRIFT_M_PER_S * waterUnitsPerMetre);
     // The crest band on its own, either side of the erosion. Kept for --water-foam-debug,
     // which measures coverage as a fraction of sea area and so has to see the band this
     // shader selected rather than the colour it ended up painting.
-    float crestSelect = foam;
-    foam = waterErodeFoam(foam, WorldPos.xz + foamDrift, foamDdx, foamDdy);
+    float crestPreErode = foam;
+    foam = waterErodeFoam(foam, WorldPos.xz + foamDrift, worldDdx, worldDdy);
     float crestFoam = foam;
-    shoreFoam = waterErodeFoam(shoreFoam, WorldPos.xz - ShoreDir * SwashRun, foamDdx, foamDdy);
+    shoreFoam = waterErodeFoam(shoreFoam, WorldPos.xz - ShoreDir * SwashRun, worldDdx, worldDdy);
     foam = max(foam, shoreFoam);
 
     /*
@@ -1237,7 +1229,11 @@ void main() {
          * shader writes green here, so `green high and blue low` is the sea exactly, with
          * no box to place and nothing to tune.
          */
-        float shown = waterFoamDebug == 2 ? crestSelect : crestFoam;
-        FragColor = vec4(shown > 0.5 ? 1.0 : 0.0, 1.0, 0.0, 1.0);
+        float shown = waterFoamDebug == 2 ? crestPreErode : crestFoam;
+        // Alpha stays `coverage`, not 1 -- the real path's alpha-to-coverage feathering
+        // (see the comment above FragColor's real write) is a property of the surface the
+        // instrument is measuring, not of the debug write, and hardcoding it here would
+        // make this shoreline read harder-edged than the shipped one.
+        FragColor = vec4(shown > 0.5 ? 1.0 : 0.0, 1.0, 0.0, coverage);
     }
 }
