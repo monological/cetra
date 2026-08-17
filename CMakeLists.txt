@@ -2,10 +2,77 @@
 # also makes CMP0141 (below) NEW by default.
 cmake_minimum_required(VERSION 3.25 FATAL_ERROR)
 
+# The version is derived, not typed: this said 0.1 through the v0.2 tag and the 1,244
+# commits after it. Three sources, most authoritative first -- a stamped VERSION file
+# (written by an export, which has no history to ask; never committed), git describe,
+# then the short sha.
+#
+# An untagged checkout is not an error. A sha identifies the build exactly, which is the
+# property wanted here; it just cannot satisfy project(VERSION), which takes digits and
+# dots -- so that reports 0.0.0 and CETRA_VERSION_STRING carries the identity.
+set(CETRA_VERSION_STRING "")
+
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION")
+    file(READ "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" CETRA_VERSION_STRING)
+    string(STRIP "${CETRA_VERSION_STRING}" CETRA_VERSION_STRING)
+endif()
+
+if(NOT CETRA_VERSION_STRING)
+    find_package(Git QUIET)
+    if(GIT_FOUND)
+        # --match so a `nightly` or `wip` tag cannot become the version.
+        execute_process(
+            COMMAND "${GIT_EXECUTABLE}" describe --tags --dirty --match "v[0-9]*"
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+            OUTPUT_VARIABLE CETRA_VERSION_STRING
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET
+            RESULT_VARIABLE CETRA_GIT_RC)
+        if(NOT CETRA_GIT_RC EQUAL 0)
+            execute_process(
+                COMMAND "${GIT_EXECUTABLE}" rev-parse --short HEAD
+                WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+                OUTPUT_VARIABLE CETRA_VERSION_STRING
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+                ERROR_QUIET)
+        endif()
+    endif()
+endif()
+
+# Nothing left to ask, so nothing honest to answer.
+if(NOT CETRA_VERSION_STRING)
+    message(FATAL_ERROR
+            "cetra: no VERSION file and no git history, so this build cannot name "
+            "itself.\n"
+            "  Checkout: git on PATH, at least one commit (shallow clones need "
+            "'git fetch --tags --unshallow').\n"
+            "  Exported tree: write the version into a VERSION file at the source root.")
+endif()
+
+# v0.12.0-1-gabc1234-dirty -> 0.12.0; the two-component v0.2 still parses; a bare sha
+# matches nothing and lands on 0.0.0.
+if(CETRA_VERSION_STRING MATCHES "^v([0-9]+(\\.[0-9]+)*)")
+    set(CETRA_VERSION "${CMAKE_MATCH_1}")
+else()
+    set(CETRA_VERSION "0.0.0")
+endif()
+
 project(cetra
-    VERSION 0.1
+    VERSION ${CETRA_VERSION}
     DESCRIPTION "Cetra Graphics Engine"
     LANGUAGES C CXX)
+
+# Tagging changes no tracked file, so without these the cache keeps whatever version it
+# was configured with. An unpacked new tag still needs a manual reconfigure; globbing
+# refs/tags instead would re-run configure on every fetch.
+foreach(cetra_git_ref HEAD packed-refs)
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.git/${cetra_git_ref}")
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+                     "${CMAKE_CURRENT_SOURCE_DIR}/.git/${cetra_git_ref}")
+    endif()
+endforeach()
+
+message(STATUS "Cetra version ${PROJECT_VERSION} (${CETRA_VERSION_STRING})")
 
 if(MSVC)
     # /Z7 (Embedded) over /Zi (ProgramDatabase): with Ninja, parallel compiles

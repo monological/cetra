@@ -11,3 +11,6 @@ plans/
 AGENTS.md
 CLAUDE.md
 __pycache__/
+# Written by an export so a tree with no history can still name itself. Committing one
+# would put the stale literal back that deriving the version removed.
+VERSION
