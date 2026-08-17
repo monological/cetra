@@ -793,8 +793,9 @@ OceanSurface oceanAssemble(vec2 p, vec3 disp, vec3 dispDx, vec3 dispDz, OceanBed
              *
              * bed.dColumn is the gradient of the water COLUMN, so it points seaward, and a
              * point on the shoreward face climbs toward the crest in that direction. Hence the
-             * positive dot: the back face gives a negative one and stays dark, which is what
-             * makes this a crest line with a wake rather than a filled contour.
+             * dot's sign: the back face gives a negative one, which the smoothstep's strictly
+             * positive lower edge takes to zero, so it stays dark. That is what makes this a
+             * crest line with a wake rather than a filled contour.
              *
              * Taken from the UNSHOALED derivative, matching the disp.y the ratio uses. Both
              * describe the incident wave, which is what the breaking criterion is about; the
@@ -802,11 +803,14 @@ OceanSurface oceanAssemble(vec2 p, vec3 disp, vec3 dispDx, vec3 dispDz, OceanBed
              */
             float bedFall = length(bed.dColumn);
             vec2 seaward = bedFall > 1.0e-5 ? bed.dColumn / bedFall : vec2(0.0);
-            float front = max(dot(vec2(dispDx.y, dispDz.y), seaward), 0.0);
+            float front = dot(vec2(dispDx.y, dispDz.y), seaward);
             // The surf's own steepness a*k, with a = Hs/2 and deep-water k = omega^2/g.
-            // Unitless, because Hs is metres and k is per metre, so it needs no unit scale.
-            float charSlope =
-                max(0.5 * waterSurfHeight * waterSurfOmega * waterSurfOmega / 9.81, 1.0e-4);
+            // Unitless, because Hs is metres and k is per metre, so it needs no unit scale --
+            // on the Gerstner path it reduces exactly to the primary octave's own A*2pi/lambda
+            // in world units, with waterUnitsPerMetre cancelling.
+            float charSlope = max(0.5 * waterSurfHeight * waterSurfOmega * waterSurfOmega /
+                                      OCEAN_GRAVITY,
+                                  1.0e-4);
             float face = smoothstep(OCEAN_BREAK_FACE_ON * charSlope,
                                     OCEAN_BREAK_FACE_FULL * charSlope, front);
             s.breaking = smoothstep(OCEAN_BREAK_ON, OCEAN_BREAK_FULL, disp.y / breakLimit) *

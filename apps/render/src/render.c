@@ -155,8 +155,8 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --water-waves <m>  gerstner (default) or fft spectral cascades\n");
     fprintf(stderr, "      --no-water-caustics  Drop the surface's light focusing\n");
     fprintf(stderr, "      --no-water-glitter Drop the analytic sun lobe on the water\n");
-    fprintf(stderr, "      --water-foam-debug N  Crest foam as a binary mask: 1 after the\n");
-    fprintf(stderr, "                         erosion, 2 before it. Measures coverage.\n");
+    fprintf(stderr, "      --water-foam-debug N  Foam as a binary mask: 1 the crest band after\n");
+    fprintf(stderr, "                         the erosion, 2 before it, 3 breaking alone.\n");
     fprintf(stderr, "      --no-water-surf    No incident wave at the shore: no run-up, no bore\n");
     fprintf(stderr, "      --no-water-foam-history  Foam from this frame's fold only\n");
     fprintf(stderr, "      --no-water-coverage  Hard shoreline cutoff, no coverage\n");
@@ -728,8 +728,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             char* end = NULL;
             long mode = strtol(argv[i], &end, 10);
             if (end == argv[i] || *end != '\0' || mode < WATER_FOAM_DEBUG_OFF ||
-                mode > WATER_FOAM_DEBUG_SELECTED) {
-                fprintf(stderr, "Error: --water-foam-debug wants 0, 1 or 2, got '%s'\n",
+                mode > WATER_FOAM_DEBUG_BREAKING) {
+                fprintf(stderr, "Error: --water-foam-debug wants 0, 1, 2 or 3, got '%s'\n",
                        argv[i]);
                 return -1;
             }

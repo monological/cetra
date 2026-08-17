@@ -779,10 +779,10 @@ typedef struct {
     // Bisect lever: no incident wave at the shore. Removes the bore from the GEOMETRY as
     // well as the whitewater, since depth-limited breaking is gated on the surf existing.
     int no_water_surf;
-    // Spectral sea state, all three on the WIND SEA except --swell. <=0 keeps this app's
-    // own value. The FFT path takes its wave heights from the trains and ignores the
-    // wavelength/amplitude below, so these are the only way to make this sea calmer
-    // without switching wave models.
+    // Spectral sea state: these two address the WIND SEA, --swell below scales the swell
+    // train. <=0 keeps this app's own value. The FFT path takes its wave heights from the
+    // trains and ignores the wavelength/amplitude below, so these are the only way to make
+    // this sea calmer without switching wave models.
     float wind_speed;
     float fetch;
     float swell; // the swell train's `scale`; <0 keeps the default, 0 = no swell train
@@ -838,11 +838,13 @@ static void print_usage(const char* prog) {
     printf("      --gerstner-waves    Closed-form octaves instead of spectral cascades\n");
     printf("      --no-water-wetness  The swash leaves the sand exactly as it found it\n");
     printf("      --no-water-film     Drop the swash solver; the closed-form run-up drives\n");
-    printf("      --water-foam-debug N  Crest band as a binary mask: 1 after erosion, 2 before\n");
+    printf("      --water-foam-debug N  Foam as a binary mask: 1 the crest band after erosion,\n");
+    printf("                          2 before it, 3 breaking alone\n");
     printf("      --no-water-surf     No incident wave at the shore: no run-up, no bore\n");
     printf("      --wind-speed M      Spectral wind sea: wind in m/s (default 6)\n");
     printf("      --fetch M           Spectral wind sea: fetch in metres (default 15000)\n");
-    printf("      --swell S           Swell train weight, 0 = no swell (default 1)\n");
+    printf("      --swell S           Swell train weight, 0 = no swell (default 1; this\n");
+    printf("                          app's own swell is 3 m/s over 40 km)\n");
     printf("      --render-mode N     Debug view; 10 = HDR hotspots, 12 = extrapolation\n");
     printf("      --msaa N            MSAA samples (default 4); 1 has no partial coverage\n");
     printf("      --headless-jitter   Keep TAA jitter and the 0.70 render scale headless:\n");

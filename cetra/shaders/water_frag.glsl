@@ -1251,6 +1251,14 @@ void main() {
      *
      * 1 is the band AFTER erosion -- coverage as the frame draws it. 2 is BEFORE, so the
      * erosion's own pass rate is a ratio of two measurements rather than an estimate.
+     *
+     * 3 is BREAKING ALONE, and it exists because 1 and 2 stopped being able to answer the
+     * question they were built for. Since Breaking joins this band (see the composite above)
+     * they show whitecaps UNION depth-limited breaking wherever a bed is present, and spec
+     * 11.48's own trace ran `--water-foam-debug 1` specifically to rule crest foam OUT as the
+     * cause of a surf-zone artifact. That elimination needs the two separable. Over open
+     * water Breaking is structurally zero, so 3 is a black frame there and 1 still means
+     * exactly what it always did.
      */
     if (waterFoamDebug != 0) {
         /*
@@ -1263,7 +1271,9 @@ void main() {
          * shader writes green here, so `green high and blue low` is the sea exactly, with
          * no box to place and nothing to tune.
          */
-        float shown = waterFoamDebug == 2 ? crestPreErode : crestFoam;
+        float shown = waterFoamDebug == 3   ? Breaking
+                      : waterFoamDebug == 2 ? crestPreErode
+                                            : crestFoam;
         // Alpha stays `coverage`, not 1 -- the real path's alpha-to-coverage feathering
         // (see the comment above FragColor's real write) is a property of the surface the
         // instrument is measuring, not of the debug write, and hardcoding it here would
