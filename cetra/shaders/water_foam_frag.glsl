@@ -81,16 +81,46 @@ void main() {
                     texture(prevFoam, fract(uv - travel / cascadeLength[2])).b);
     }
 
+    vec4 field0Long = oceanCascadeTexel(0, 0, coord);
+    vec4 field0Med = oceanCascadeTexel(1, 0, coord);
+    vec4 field0Short = oceanCascadeTexel(2, 0, coord);
+
     vec3 j;
-    j.x = oceanBandJacobian(oceanCascadeTexel(0, 0, coord), oceanCascadeTexel(0, 1, coord),
-                            cascadeChoppiness[0]);
-    j.y = oceanBandJacobian(oceanCascadeTexel(1, 0, coord), oceanCascadeTexel(1, 1, coord),
-                            cascadeChoppiness[1]);
-    j.z = oceanBandJacobian(oceanCascadeTexel(2, 0, coord), oceanCascadeTexel(2, 1, coord),
-                            cascadeChoppiness[2]);
+    j.x = oceanBandJacobian(field0Long, oceanCascadeTexel(0, 1, coord), cascadeChoppiness[0]);
+    j.y = oceanBandJacobian(field0Med, oceanCascadeTexel(1, 1, coord), cascadeChoppiness[1]);
+    j.z = oceanBandJacobian(field0Short, oceanCascadeTexel(2, 1, coord), cascadeChoppiness[2]);
 
     vec3 recovered = prev + foamDt * foamDecay / max(j, vec3(FOAM_MIN_J));
+
+    /*
+     * THE BIRTH GATE (spec 11.47): a fold only snaps the record down when its OWN band's
+     * elevation is near that band's own crest. `.b` of the target-0 texel this pass already
+     * fetched for the Jacobian is that band's height in metres (ocean.glsl:611-628) -- no
+     * extra sample. Per band and not assembled the way water_frag's is: each channel lives in
+     * its own tiling space, so one texel index is a different world position in each and
+     * there is no single elevation to ask about here, only three.
+     *
+     * Sigma at or near zero fails OPEN, same as the sibling gate in water_frag: crestGate
+     * stays 1 rather than the ratio dividing by nothing.
+     */
+    vec3 heightM = vec3(field0Long.b, field0Med.b, field0Short.b);
+    vec3 crestGate = vec3(1.0);
+    if (cascadeHeightRms[0] > 1.0e-4) {
+        crestGate.x = smoothstep(WATER_FOAM_CREST_ON_SIGMA, WATER_FOAM_CREST_FULL_SIGMA,
+                                 heightM.x / cascadeHeightRms[0]);
+    }
+    if (cascadeHeightRms[1] > 1.0e-4) {
+        crestGate.y = smoothstep(WATER_FOAM_CREST_ON_SIGMA, WATER_FOAM_CREST_FULL_SIGMA,
+                                 heightM.y / cascadeHeightRms[1]);
+    }
+    if (cascadeHeightRms[2] > 1.0e-4) {
+        crestGate.z = smoothstep(WATER_FOAM_CREST_ON_SIGMA, WATER_FOAM_CREST_FULL_SIGMA,
+                                 heightM.z / cascadeHeightRms[2]);
+    }
+    // Gated only here, at 1.0 (open water, no fold on record) where the gate is shut. The
+    // divisor above stays on the raw Jacobian regardless -- see the file comment on `recovered`.
+    vec3 jSnap = mix(vec3(1.0), j, crestGate);
     // The minimum is what makes this a snap rather than a blend: a fold takes effect on the
     // frame it happens, where recovery is always gradual.
-    Foam = vec4(min(j, recovered), 1.0);
+    Foam = vec4(min(jSnap, recovered), 1.0);
 }

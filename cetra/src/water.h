@@ -352,13 +352,21 @@ typedef struct Water {
      * far field's roughness, and the glitter lobe's facet distribution. Both need what the
      * filtering removed to be a fraction OF something.
      *
-     * height_var has ONE reader, and it is water_fft_probe. It exists to check the
-     * transform's normalisation, not to feed shading. The projector-slab consumer it was
-     * accumulated for was measured harmful and reverted (spec 11.42 phase 4), so anything
-     * reading it as a live displacement bound is reading a number nothing acts on.
+     * height_var had ONE reader, water_fft_probe, until spec 11.47 gave it a second: the
+     * crest-height gate publishes its square root per band so foam can ask "how tall is this
+     * point relative to what this band of the sea normally does" without a third quantity.
+     * The projector-slab consumer it was originally accumulated for was measured harmful and
+     * reverted (spec 11.42 phase 4); this is a different use of the same number, not that one
+     * coming back.
      *
-     * height_var is in world units squared, slope_var is dimensionless -- a mean square
-     * slope, which is what Cox-Munk's tables are also in.
+     * height_var is in METRES SQUARED, not world units squared as this comment used to say.
+     * The seeding is entirely SI -- g = 9.81, wind in m/s, fetch in m, and length_scale in
+     * WATER_CASCADE_CFG is documented in metres -- and nothing in _water_build_spectrum
+     * converts it. The conversion happens once, at the very end of oceanSpectralDisplacement
+     * in ocean.glsl, which is the only place the field becomes a world-space quantity. That
+     * stale claim is exactly the class of bug spec 11.44 existed to close, and it survived in
+     * a field nothing but a probe read. slope_var is dimensionless -- a mean square slope,
+     * which is what Cox-Munk's tables are also in.
      *
      * PREDICTED, not measured: the inverse transform is unnormalised and the seeding
      * draws h0 as (ga + i*gb)*A rather than the textbook (1/sqrt2)(xi_r + i*xi_i)*sqrt(S),

@@ -568,9 +568,13 @@ void main() {
         removedMss += oceanRemovedMss(fade, cascadeSlopeVar[2]);
 
         /*
-         * Foam where the horizontal map COMPRESSES. Deformation, not a height threshold: a
-         * tall smooth swell does not break and a compressing one does, and selecting on
-         * height puts white on the wrong crests.
+         * Foam where the horizontal map COMPRESSES, AND where the surface stands tall against
+         * its own sea state. Compression alone is not enough: a choppy field folds a little
+         * everywhere, and without a second condition every ripple crest reads as a breaking
+         * wave. Height alone is not enough either -- a tall smooth swell does not break, and
+         * selecting on height alone puts white on the wrong crests. Every reference renderer
+         * this was compared against multiplies compression by a second physical quantity
+         * rather than selecting on either alone; this is ours.
          *
          * THE VERTEX JACOBIAN ALONE -- the long and medium bands. The short band used to add
          * its own fold here and no longer does, and that is what stopped the whitecaps
@@ -590,7 +594,30 @@ void main() {
          * on WHERE whitewater is, which it was never well placed to cast -- a band that folds
          * everywhere, always, argues for foam everywhere.
          */
-        float compression = max(0.0, 1.0 - Jacobian);
+        float instant = max(0.0, 1.0 - Jacobian);
+        /*
+         * THE CREST-HEIGHT GATE, applied to `instant` and NOT to the trail read back below.
+         *
+         * WorldPos.y - waterLevel is the assembled elevation the mesh actually drew -- the
+         * long and medium bands, their crest terms, the depth clamp, the surf -- so it is
+         * the right numerator here even though it is not the same quantity the accumulator
+         * stores per band. Normalised by the RMS of the two bands that reach the mesh, not
+         * all three: the short band never displaces, so its energy is not in WorldPos.y and
+         * must not be in the denominator either.
+         *
+         * Sigma at or near zero (an unseeded spectrum, or --no-water-surf on a scene with no
+         * fallback) fails OPEN: crestGate becomes 1 rather than the gate dividing by nothing,
+         * so a sea with no z-score to give reads as ungated rather than foam-free.
+         */
+        float sigmaM = sqrt(cascadeHeightRms[0] * cascadeHeightRms[0] +
+                            cascadeHeightRms[1] * cascadeHeightRms[1]);
+        float crestGate = 1.0;
+        if (sigmaM > 1.0e-4) {
+            float crestM = (WorldPos.y - waterLevel) / max(waterUnitsPerMetre, 1.0e-6);
+            crestGate = smoothstep(WATER_FOAM_CREST_ON_SIGMA, WATER_FOAM_CREST_FULL_SIGMA,
+                                   crestM / sigmaM);
+        }
+        float compression = instant * crestGate;
         if (foamAvailable == 1) {
             /*
              * The trail the crest left behind (spec 11.42).
@@ -608,9 +635,17 @@ void main() {
              * map, and since that offset changes every frame the whitewater slid around
              * over a surface it was supposed to be sitting on.
              *
-             * Combined with max against the instantaneous term rather than replacing it:
-             * the accumulator cannot see the shoal gradient, so a surf-zone crest still
+             * Combined with max against the GATED instantaneous term rather than replacing
+             * it: the accumulator cannot see the shoal gradient, so a surf-zone crest still
              * needs the vertex Jacobian to be selected at all.
+             *
+             * UNGATED by crestGate, deliberately. Foam outlives the crest that made it and
+             * slides into the trough behind it -- that is the entire reason a trail exists
+             * rather than reselecting from scratch every frame. Gating this read by height
+             * would delete the memory the moment its parcel dropped, at the wave period, and
+             * the sea would pulse instead of carrying a trail. The gate belongs where a fold
+             * is RECORDED, not where it is remembered -- see the birth gate in
+             * water_foam_frag, which applies it once, at the snap.
              */
             // Two bands, not three: the short one is excluded here for the same reason it is
             // excluded above, and its channel in the accumulator is now written by the foam

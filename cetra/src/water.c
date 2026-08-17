@@ -1485,6 +1485,26 @@ static void _water_bind_cascades(const Water* water, UniformManager* u, bool fft
         char chop[32];
         snprintf(chop, sizeof(chop), "cascadeChoppiness[%d]", c);
         uniform_set_float(u, chop, WATER_CASCADE_CFG[c].choppiness);
+        /*
+         * The band's own RMS surface elevation, METRES (spec 11.47). What the crest-height
+         * gate normalises by: a threshold in metres is a threshold on one sea state, and
+         * dividing a fold's elevation by sigma asks the scale-free question "how tall is
+         * this relative to what THIS band of THIS sea normally does" instead.
+         *
+         * NOT waterSurfHeight -- that is zeroed by the surf switch (water_shore_runup_params
+         * returns false with no surf), and water-shoal runs both its frames under
+         * --no-water-surf. This is unconditional on anything but the spectrum having been
+         * seeded, which fft implies.
+         *
+         * 0 on the Gerstner path, where there is no seeded spectrum to have a sigma at all.
+         * The shader guards the divide explicitly and fails OPEN on a zero sigma -- every
+         * point reads as a crest rather than the gate closing on a sea with no z-score to
+         * give, which is the same "no bed, no gate" shape shoreDomain and the shoal window
+         * already use for their own missing-data cases.
+         */
+        char rms[32];
+        snprintf(rms, sizeof(rms), "cascadeHeightRms[%d]", c);
+        uniform_set_float(u, rms, fft ? sqrtf(fmaxf(water->cascade_height_var[c], 0.0f)) : 0.0f);
     }
 }
 

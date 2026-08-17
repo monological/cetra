@@ -84,6 +84,24 @@ uniform float cascadeChoppiness[3];
 // be a fraction of something -- without them the far field could only be lerped toward a
 // literal, which is a look constant standing in for a property of the sea.
 uniform float cascadeSlopeVar[3];
+// Each band's own RMS surface elevation, METRES, 0 on Gerstner (spec 11.47). What the
+// crest-height gate normalises a fold's elevation by, so the threshold is a fraction of
+// what THIS sea's THIS band normally does rather than a fixed number of metres.
+uniform float cascadeHeightRms[3];
+/*
+ * THE CREST-HEIGHT GATE, shared because it gates in two places: the birth of a fold in
+ * water_foam_frag, and the instantaneous selection in water_frag. Both need the same window
+ * or the trail a birth writes and the read that later interprets it would disagree about
+ * what counts as a crest.
+ *
+ * In units of SIGMA, not metres -- a metre threshold is a threshold on one sea state, and
+ * sigma is what makes it scale with wind speed the way the sea itself does. The Gaussian
+ * exceedance at 0.8 sigma is 21%, at 1.8 sigma 3.6%; the real surface is skewed higher than
+ * that (bound-harmonic terms sharpen crests and flatten troughs), so these are a starting
+ * window rather than a literal percentile.
+ */
+const float WATER_FOAM_CREST_ON_SIGMA = 0.8;
+const float WATER_FOAM_CREST_FULL_SIGMA = 1.8;
 // Last frame's target 0 for the two cascades that displace, and whether they hold a
 // frame yet. 0 on the first two frames, and then the previous position falls back to
 // the current one -- which reports camera motion only, the behaviour the whole
