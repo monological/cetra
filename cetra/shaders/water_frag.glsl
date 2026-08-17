@@ -762,8 +762,19 @@ void main() {
      *
      * Deliberately NOT gated by `band`: the swash is the last few metres and this is
      * everything seaward of it standing in too little water, which is what a surf zone is.
+     *
+     * INTO THE CREST BAND, not the shore one. A breaker is a whitecap -- a slick of bubbles
+     * with sea showing through -- and spec 11.47 made exactly that argument when it split the
+     * two composites apart, then left this line feeding the shore slot. So a breaking crest
+     * went on at the swash's near-full 0.88 through a pattern coordinate that rides the swash
+     * sheet, and read as an opaque sticker sliding over open water. Both halves belong to the
+     * crest band: its ceiling, and the drift coordinate that breaks a whitecap up as it
+     * travels rather than stencilling it against the beach.
+     *
+     * Unscaled, unlike the shore band's WATER_SHORE_FOAM: the crest band is a 0..1 coverage
+     * fraction and this is already one.
      */
-    shoreFoam = max(shoreFoam, WATER_SHORE_FOAM * Breaking);
+    foam = max(foam, Breaking);
 
     /*
      * Break the coverage up, AFTER the physical selection has chosen where foam is -- and

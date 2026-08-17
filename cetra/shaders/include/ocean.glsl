@@ -247,6 +247,23 @@ const float OCEAN_BREAK_CREST = 1.15;
 const float OCEAN_BREAK_ON = 0.90;
 const float OCEAN_BREAK_FULL = 1.30;
 const float OCEAN_BREAK_MIN_DEPTH_M = 0.5;
+/*
+ * How steep the SHOREWARD FACE has to be before that crest whitens, as a multiple of the
+ * surf's own deep-water steepness.
+ *
+ * The height test above says a wave MAY break. It cannot say where the whitewater goes, and
+ * on its own it puts it everywhere the wave is tall enough -- which is a filled level set of
+ * a smooth height field over a static bed, so it reads as a soft-edged patch gliding across
+ * the water. That is the defect: a breaker is a LINE along a crest, not a region.
+ *
+ * A multiple of the sea's own steepness rather than an absolute slope, for the reason the
+ * far-field roughness handover records: an absolute constant is a look control standing where
+ * a property of the sea belongs, and it would break the same wave on a millpond and never on
+ * a gale. Shoaling steepens a front by roughly two to three before it overturns, so a face
+ * carrying more than its deep-water share is the one that is actually breaking.
+ */
+const float OCEAN_BREAK_FACE_ON = 1.0;
+const float OCEAN_BREAK_FACE_FULL = 2.5;
 
 /*
  * What the bed under a point says about the water over it. One fetch, read once per vertex
@@ -764,9 +781,37 @@ OceanSurface oceanAssemble(vec2 p, vec3 disp, vec3 dispDx, vec3 dispDz, OceanBed
         // The surf gate is on THIS and not on the clamp below: the depth limit bounds the wave
         // field and has to hold whether or not a surf is asked for, where whitewater is the
         // surf's own.
-        if (waterSurfHeight > 0.0)
-            s.breaking =
-                smoothstep(OCEAN_BREAK_ON, OCEAN_BREAK_FULL, disp.y / breakLimit) * enough;
+        if (waterSurfHeight > 0.0) {
+            /*
+             * WHERE on the wave, which the height ratio alone cannot say.
+             *
+             * Whitewater is generated on the steep shoreward FACE as the crest overturns and
+             * spills down it. The ratio is a function of disp.y over a depth field that does
+             * not move, so thresholding it alone fills every point of a broad smooth hump and
+             * the result slides over the shelf as one soft-edged patch -- a spotlight, not a
+             * breaker.
+             *
+             * bed.dColumn is the gradient of the water COLUMN, so it points seaward, and a
+             * point on the shoreward face climbs toward the crest in that direction. Hence the
+             * positive dot: the back face gives a negative one and stays dark, which is what
+             * makes this a crest line with a wake rather than a filled contour.
+             *
+             * Taken from the UNSHOALED derivative, matching the disp.y the ratio uses. Both
+             * describe the incident wave, which is what the breaking criterion is about; the
+             * shoal factor's attenuation is applied to the drawn surface further down.
+             */
+            float bedFall = length(bed.dColumn);
+            vec2 seaward = bedFall > 1.0e-5 ? bed.dColumn / bedFall : vec2(0.0);
+            float front = max(dot(vec2(dispDx.y, dispDz.y), seaward), 0.0);
+            // The surf's own steepness a*k, with a = Hs/2 and deep-water k = omega^2/g.
+            // Unitless, because Hs is metres and k is per metre, so it needs no unit scale.
+            float charSlope =
+                max(0.5 * waterSurfHeight * waterSurfOmega * waterSurfOmega / 9.81, 1.0e-4);
+            float face = smoothstep(OCEAN_BREAK_FACE_ON * charSlope,
+                                    OCEAN_BREAK_FACE_FULL * charSlope, front);
+            s.breaking = smoothstep(OCEAN_BREAK_ON, OCEAN_BREAK_FULL, disp.y / breakLimit) *
+                         enough * face;
+        }
         float sat = tanh(clamp(disp.y / crestLimit, -20.0, 20.0));
         // d(tanh)/du. The limit's OWN gradient is dropped here -- it is the same order as
         // the shoal factor's product-rule term below and needs the bed slope, which arrives
