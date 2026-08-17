@@ -258,6 +258,24 @@ const float WATER_SHORE_FOAM_REST = 0.3;
 // up the sand, and anything wider is a sheet laid over the whole shelf -- which water-shoal
 // reads directly, since foam is flat and the roughness it measures is not.
 const float WATER_SWASH_SHOAL = 0.10;
+/*
+ * How far the swash RETREATS between bores, as a fraction of the window above.
+ *
+ * The window alone is a depth contour, and a depth contour round an island is a circle --
+ * which from the beach projects as a dead straight line, so the band read as a slab with a
+ * hard flat top edge whatever the water was doing. Only its brightness and its texture
+ * animated: the pattern is advected by the run-up (see the erosion lookup) but the EDGE was
+ * nailed to the bathymetry, so whitewater slid through a boundary that never moved.
+ *
+ * A swash is the opposite of that -- the edge is the whole motion. Scaling the window by the
+ * bore fraction makes the band advance and drain with the water, and since the bore varies
+ * along the shore the edge stops being a circle at the same time.
+ *
+ * Not zero: the swash zone is never clean water between waves, which is what
+ * WATER_SHORE_FOAM_REST already says about its strength -- this is the same statement about
+ * its reach, and a band that retreated to nothing would flash rather than drain.
+ */
+const float WATER_SWASH_REACH_REST = 0.35;
 // How fast crest foam streams downwind, METRES per second. Small: this is the pattern sliding
 // over the sea, where the foam's own travel is already handled by reading it at the wave
 // parcel's undisplaced label.
@@ -723,7 +741,12 @@ void main() {
      * and on the tongue it pushes up the sand, and falls back to a residue between waves --
      * so the foam comes in and drains with the water instead of marking where the water was.
      */
-    float band = 1.0 - smoothstep(0.0, WATER_SWASH_SHOAL, Shoal);
+    // The window BREATHES with the bore rather than sitting at a fixed depth -- see
+    // WATER_SWASH_REACH_REST. Surf is the bore/tongue fraction the vertex stage already
+    // hands over, so the reach and the strength below now come from the same quantity, and
+    // the sheet's edge moves with the sheet.
+    float swashReach = WATER_SWASH_SHOAL * mix(WATER_SWASH_REACH_REST, 1.0, Surf);
+    float band = 1.0 - smoothstep(0.0, swashReach, Shoal);
     // Kept apart from the crest foam above: the two ride different things, so they are broken
     // up in different places below and only the results are combined.
     float shoreFoam = band * WATER_SHORE_FOAM * mix(WATER_SHORE_FOAM_REST, 1.0, Surf);
