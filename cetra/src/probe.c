@@ -98,7 +98,9 @@ int reflection_probe_capture(ReflectionProbe* probe, struct Engine* engine, Scen
     }
 
     SceneCaptureState saved_capture;
-    scene_capture_begin(engine, scene, &saved_capture);
+    // RADIANCE: this cubemap is what a mirror sees, so an emissive surface that
+    // is also a derived panel must still appear in it (render.h).
+    scene_capture_begin(engine, scene, SCENE_CAPTURE_RADIANCE, &saved_capture);
 
     if (probe->cubemap)
         glDeleteTextures(1, &probe->cubemap);

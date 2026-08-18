@@ -1558,9 +1558,13 @@ void render_current_scene(Engine* engine) {
 // stripe moire that mirror reflections magnify into banded streaks.
 #define CAPTURE_SS_FACTOR 2
 
-void scene_capture_begin(Engine* engine, Scene* scene, SceneCaptureState* saved) {
+void scene_capture_begin(Engine* engine, Scene* scene, SceneCaptureKind kind,
+                         SceneCaptureState* saved) {
     if (!engine || !scene || !saved)
         return;
+
+    saved->irradiance = engine->capturing_irradiance;
+    engine->capturing_irradiance = kind == SCENE_CAPTURE_IRRADIANCE;
 
     // Nothing inside a capture burst is timed, and this is the seam that owns
     // that -- not scene_capture_faces, which starts too late: the shadow
@@ -1608,6 +1612,7 @@ void scene_capture_end(Engine* engine, Scene* scene, const SceneCaptureState* sa
     if (!engine || !scene || !saved)
         return;
     profiler_resume(engine->profiler);
+    engine->capturing_irradiance = saved->irradiance;
     engine_set_render_time(engine, saved->render_time, saved->render_delta);
     if (scene->shadow_system) {
         scene->shadow_system->cascade_count = saved->cascade_count;

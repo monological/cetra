@@ -46,9 +46,28 @@ typedef struct SceneCaptureState {
     bool msm_enabled;
     double render_time;
     double render_delta;
+    bool irradiance;
 } SceneCaptureState;
 
-void scene_capture_begin(Engine* engine, struct Scene* scene, SceneCaptureState* saved);
+// What a capture's output MEANS, which two callers need opposite answers to.
+//
+// A GI probe bakes IRRADIANCE, added to the analytic direct term -- so an
+// emissive surface that is also a derived area panel (spec 11.49) must sit it
+// out, or the panel delivers that light and the capture delivers it again. A
+// reflection probe bakes RADIANCE, which is what a mirror sees, so the same
+// surface must appear. Both go through scene_capture_faces and both raise
+// engine->capturing, which is exactly why that flag cannot answer this.
+//
+// A third clause of capture policy, and it belongs here for the reason the two
+// above it do: it was briefly hand-written by one caller with its own
+// save/restore, which is the shape this struct's own history warns about.
+typedef enum SceneCaptureKind {
+    SCENE_CAPTURE_RADIANCE = 0, // what an eye or a mirror sees
+    SCENE_CAPTURE_IRRADIANCE,   // what is added to the analytic direct term
+} SceneCaptureKind;
+
+void scene_capture_begin(Engine* engine, struct Scene* scene, SceneCaptureKind kind,
+                         SceneCaptureState* saved);
 void scene_capture_end(Engine* engine, struct Scene* scene, const SceneCaptureState* saved);
 
 // Render the scene into the six faces of `dst_cubemap` from `position`, at
