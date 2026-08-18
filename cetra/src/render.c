@@ -1062,7 +1062,9 @@ void render_current_scene(Engine* engine) {
     // disabled path unreachable, so turning the feature off mid-run stranded
     // every derived light instead of removing them. Costs one branch when off --
     // the registry is NULL and there is nothing to tear down.
+    profiler_scope_begin(engine->profiler, "emissive panels");
     scene_build_emissive_lights(scene, engine->emissive_lights_enabled);
+    profiler_scope_end(engine->profiler);
 
     // Clustered forward (spec 9.1): rebuild the light grid + UBOs for THIS
     // invocation's camera and viewport -- probe-capture faces re-enter here
