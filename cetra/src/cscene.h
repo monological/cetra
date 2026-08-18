@@ -101,7 +101,10 @@ typedef struct CSceneMaterialParam {
     int components; // 1 or 3, as authored
 } CSceneMaterialParam;
 
-#define CSCENE_MAX_MATERIAL_TEXTURES 2
+// Also holds enum LABELS, which are strings on a non-texture key and share this
+// array because the parser routes by value type. Raised from 2 when the first
+// label key landed, so a material can carry both its textures and a label.
+#define CSCENE_MAX_MATERIAL_TEXTURES 4
 
 // One authored TEXTURE key from a material override block. Kept apart from the
 // numeric params because a float array cannot hold a path, not because it is a

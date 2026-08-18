@@ -275,6 +275,29 @@ void emissive_radiance_to_light(const vec3 nits, vec3 out_color, float* out_inte
     glm_vec3_scale((float*)nits, 1.0f / lum, out_color);
 }
 
+// Whether this mesh should carry a derived panel at all, and its radiance if so.
+// The material's verdict and the dimness floor together, because a caller that
+// asked them separately would have to remember the order they compose in.
+static EmissiveFitReject _mesh_candidacy(const Mesh* mesh, vec3 out_nits) {
+    glm_vec3_zero(out_nits);
+    if (!mesh || !mesh->material)
+        return EMISSIVE_FIT_TOO_DIM;
+
+    emissive_material_radiance(mesh->material, out_nits);
+    float lum = 0.0f;
+    emissive_radiance_to_light(out_nits, NULL, &lum);
+
+    // Dimness BEFORE the material's verdict, in that order for two reasons. It
+    // fills out_nits either way, so a reject can report the radiance it turned
+    // down rather than a zero. And it keeps the opt-out reject meaning what it
+    // says: a scene that set the key on a whole material library would otherwise
+    // report every wall in it as opted out, and a reject list nobody can read is
+    // the same as no reject list.
+    if (lum < EMISSIVE_FIT_MIN_NITS)
+        return EMISSIVE_FIT_TOO_DIM;
+    return mesh->material->emissive_light != 0 ? EMISSIVE_FIT_OPTED_OUT : EMISSIVE_FIT_OK;
+}
+
 static void _probe_node(const SceneNode* node, int* count) {
     if (!node)
         return;
@@ -288,19 +311,23 @@ static void _probe_node(const SceneNode* node, int* count) {
         const char* mat_name = mesh->material->name ? mesh->material->name : "(unnamed)";
 
         vec3 nits = {0.0f, 0.0f, 0.0f};
-        emissive_material_radiance(mesh->material, nits);
+        // The same verdict the reconcile reaches, so the probe cannot report a
+        // panel the renderer declines to build. Dimness is inside it and is
+        // tested before geometry, so a scene full of non-emissive meshes reports
+        // nothing rather than calling every wall "not planar" -- a reject list is
+        // only useful if it is short.
+        EmissiveFitReject reject = _mesh_candidacy(mesh, nits);
+        if (reject == EMISSIVE_FIT_TOO_DIM)
+            continue;
+
         vec3 color = {0.0f, 0.0f, 0.0f};
         float intensity = 0.0f;
         emissive_radiance_to_light(nits, color, &intensity);
 
-        // Dimness is tested before geometry so a scene full of non-emissive
-        // meshes reports nothing rather than reporting every wall as "not
-        // planar" -- the reject list is only useful if it is short.
-        if (intensity < EMISSIVE_FIT_MIN_NITS)
-            continue;
-
         EmissivePanelFit fit;
-        EmissiveFitReject reject = emissive_panel_fit(mesh, &fit);
+        memset(&fit, 0, sizeof(fit));
+        if (reject == EMISSIVE_FIT_OK)
+            reject = emissive_panel_fit(mesh, &fit);
         if (reject != EMISSIVE_FIT_OK) {
             printf("emissive-light-probe reject node=%s material=%s mesh=%u reason=\"%s\" "
                    "planarity=%.6f area=%.6f nits=%.6f\n",
@@ -335,22 +362,6 @@ void emissive_lights_probe(const Scene* scene) {
     int count = 0;
     _probe_node(scene->root_node, &count);
     printf("emissive-light-probe header count=%d\n", count);
-}
-
-// Whether this mesh should carry a derived panel at all, and its radiance if so.
-// The material's verdict and the dimness floor together, because a caller that
-// asked them separately would have to remember the order they compose in.
-static EmissiveFitReject _mesh_candidacy(const Mesh* mesh, vec3 out_nits) {
-    glm_vec3_zero(out_nits);
-    if (!mesh || !mesh->material)
-        return EMISSIVE_FIT_TOO_DIM;
-    if (mesh->material->emissive_light != 0)
-        return EMISSIVE_FIT_OPTED_OUT;
-
-    emissive_material_radiance(mesh->material, out_nits);
-    float lum = 0.0f;
-    emissive_radiance_to_light(out_nits, NULL, &lum);
-    return lum < EMISSIVE_FIT_MIN_NITS ? EMISSIVE_FIT_TOO_DIM : EMISSIVE_FIT_OK;
 }
 
 static Light* _find_derived(Scene* scene, unsigned mesh_id) {

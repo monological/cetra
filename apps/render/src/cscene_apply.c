@@ -476,8 +476,40 @@ void apply_cscene_material_overrides(Scene* scene, const CetraSceneDesc* cscn) {
             const MaterialParam* slot;
             Texture* tex;
         } textures[CSCENE_MAX_MATERIAL_TEXTURES] = {0};
+        // Enum labels arrive in the same array as textures, since both are
+        // strings, so they are separated out here rather than at the parser.
+        struct {
+            const MaterialParam* slot;
+            float value;
+        } enums[CSCENE_MAX_MATERIAL_TEXTURES] = {0};
+        int enum_count = 0;
         for (int t = 0; t < mo->texture_count; t++) {
             const MaterialParam* slot = material_param_find(mo->textures[t].key);
+            // A STRING on an enum row is the label, not a path. The parser routes
+            // by VALUE type and cannot know the difference -- it keeps the key
+            // either way -- so the disambiguation belongs here, where the
+            // vocabulary is in scope. Without it a scene file has to author
+            // windMode as 2 and emissiveLight as 1, and nobody reading the
+            // fixture a year later knows what either number meant.
+            if (slot && slot->type == MATERIAL_PARAM_INT && slot->enum_labels) {
+                int value = -1;
+                for (int e = 0; e < slot->enum_count; e++) {
+                    if (strcmp(slot->enum_labels[e], mo->textures[t].path) == 0) {
+                        value = e;
+                        break;
+                    }
+                }
+                if (value < 0) {
+                    fprintf(stderr, "Warning: material '%s': key '%s' has no value '%s'\n",
+                            mo->material, mo->textures[t].key, mo->textures[t].path);
+                    continue;
+                }
+                enums[enum_count].slot = slot;
+                enums[enum_count].value = (float)value;
+                enum_count++;
+                usable++;
+                continue;
+            }
             if (!slot || slot->type != MATERIAL_PARAM_TEXTURE) {
                 fprintf(stderr, "Warning: material '%s': %s '%s'\n", mo->material,
                         slot ? "not a texture key:" : "unknown texture key",
@@ -500,7 +532,9 @@ void apply_cscene_material_overrides(Scene* scene, const CetraSceneDesc* cscn) {
 
         // Scene state, not per-material: the layer indices are assigned when the
         // array next rebuilds, and until then each material reads its fallback.
-        if (mo->texture_count > 0)
+        // A label string rides the texture array but is not a texture, so it must
+        // not dirty the mask array -- that would rebuild it for a scalar write.
+        if (mo->texture_count > enum_count)
             scene->mask_array_dirty = true;
 
         int tagged = 0;
@@ -516,6 +550,8 @@ void apply_cscene_material_overrides(Scene* scene, const CetraSceneDesc* cscn) {
                 if (textures[t].slot)
                     textures[t].slot->set_tex(m, textures[t].tex);
             }
+            for (int e = 0; e < enum_count; e++)
+                material_param_set(m, enums[e].slot, &enums[e].value);
             tagged++;
         }
         printf("Scene file: %d override(s) on material '%s' (%d material(s))\n", usable,
