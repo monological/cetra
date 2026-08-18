@@ -1,0 +1,3 @@
+# The compilation database is in out/, which is neither place clangd looks.
+CompileFlags:
+  CompilationDatabase: out
