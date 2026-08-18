@@ -7460,10 +7460,10 @@ EMISSIVE_GEOM_EPS = 1e-3
 # tolerance is the 8-bit sRGB round trip through the top mip, not slack: 0.5
 # encodes to byte 188, which decodes to 0.5029.
 EMISSIVE_TEX_MEAN = 0.5
-EMISSIVE_TEX_EPS = 0.01
+EMISSIVE_TEX_EPS = 0.005
 
 # The strip is 2.0 x 0.25 rotated 30 degrees in its own plane. An axis-aligned
-# bound on the reference frame reads about 1.86 x 1.09, so this separates the
+# bound on the reference frame reads 1.8571 x 1.2165, so this separates the
 # minimum-area search from the obvious thing to have written.
 EMISSIVE_STRIP_SIZE = (0.25, 2.0)
 
@@ -7481,11 +7481,100 @@ EMISSIVE_MATCH_EPS = 0.03
 EMISSIVE_GI_EPS = 0.05
 EMISSIVE_GI_FRAMES = 120
 
-EMISSIVE_BOXES = {
-    "floor": (0.20, 0.70, 0.80, 0.95),
-    "left": (0.02, 0.35, 0.12, 0.70),
-    "right": (0.88, 0.35, 0.98, 0.70),
+# Bare literals in the arms below became these, because five thresholds in this
+# group already carried a stated reason and three did not.
+#
+# PLANARITY_MAX  a closed volume reads 0 exactly (its faces cancel); the loosest
+#                shape that should still reject is far under this.
+# SHADOW_LIFT_MIN  the unshadowed floor measured 1.37x the shadowed one on this
+#                fixture, so this is well inside the effect and well outside the
+#                noise -- the arm is asserting a shadow exists, not sizing it.
+# PRESENCE_MIN   two black frames agree on every ratio, so the acceptance arms
+#                demand the floor is actually lit. Linear, against a floor that
+#                reads ~0.12 lit and ~0.001 under a clear colour.
+# GI_LIFT_MIN    the indirect term must actually lift, or a ratio of two absent
+#                lifts is 1.0 and says nothing.
+# OFF_MOVED_MIN  the flag must actually change the frame, or "off equals opted
+#                out" passes on two identical blank renders.
+EMISSIVE_PLANARITY_MAX = 0.5
+EMISSIVE_SHADOW_LIFT_MIN = 1.10
+EMISSIVE_PRESENCE_MIN = 0.02
+EMISSIVE_GI_LIFT_MIN = 1.05
+EMISSIVE_OFF_MOVED_MIN = 0.10
+
+# Read bands, as WORLD patches on named surfaces of the cornell room, projected
+# through the fixture's own camera.
+#
+# They were hand-written screen boxes and every one of them measured something
+# other than its name. Ray-cast against the room and tallied over the same 12x12
+# grid _absorb_box_rgb samples: the "floor" box hit 59 short-box, 34 tall-box and
+# 33 floor samples -- 65% boxes -- and the two wall boxes were each EXACTLY half
+# background, because they straddled the room's silhouette. A wall ratio blended
+# 50/50 with the G-buffer clear is not a wall ratio, and the number this group
+# printed as `left=0.9969` never was one.
+#
+# Derived here for the reason _cscn_camera exists (its own docstring: "the
+# failure is silent -- the gate keeps passing while measuring a different scene
+# than it predicts"), and stated as the surface each band is ON so the name and
+# the measurement cannot come apart again.
+#
+# Placement respects the room's own furniture: the tall box spans x -0.79..0.06
+# and the short one x -0.05..0.81 (gen_cornell_rooms.py box(cx, cz, w, h, d, yaw),
+# half-diagonal 0.42 under yaw), so the floor patch sits left of both and forward
+# of the tall one; the wall patches sit ABOVE the tall box's 1.2 height, where
+# nothing occludes them.
+# `shadow` is floor the TALL BOX hides from the ceiling panel, which the lit
+# bands above deliberately avoid -- so the first version of emissive-override,
+# reading `floor`, compared two frames that were identical there and reported
+# 1.0000x. Checked rather than eyeballed: a floor point (x, z) sees the panel
+# centre through height 1.2 at (0.394x, 1.2, 0.394z), and for this patch that
+# lands inside the box's yawed 0.6 top face at every corner.
+EMISSIVE_WORLD_BANDS = {
+    "floor": [(-0.80, 0.0, 0.30), (-0.20, 0.0, 0.30), (-0.20, 0.0, 0.85), (-0.80, 0.0, 0.85)],
+    "shadow": [(-0.80, 0.0, -0.80), (-0.50, 0.0, -0.80), (-0.50, 0.0, -0.50), (-0.80, 0.0, -0.50)],
+    "left": [(-1.0, 1.40, -0.45), (-1.0, 1.40, 0.45), (-1.0, 1.80, 0.45), (-1.0, 1.80, -0.45)],
+    "right": [(1.0, 1.40, -0.45), (1.0, 1.40, 0.45), (1.0, 1.80, 0.45), (1.0, 1.80, -0.45)],
 }
+
+# Fraction of each projected band trimmed off every side. The patches above are
+# already interior, so this is against the projection's own rounding and the
+# 12x12 sample grid landing on a boundary texel, not a margin for error in them.
+EMISSIVE_BAND_INSET = 0.12
+
+
+def _emissive_boxes(w, h):
+    """The world bands above as fractional screen boxes, for _absorb_box_rgb."""
+    project = _projector(_cscn_camera(CORNELL_FIXTURE), w, h)
+    boxes = {}
+    for name, pts in EMISSIVE_WORLD_BANDS.items():
+        xs, ys = zip(*(project(p) for p in pts))
+        x0, x1 = min(xs) / w, max(xs) / w
+        y0, y1 = min(ys) / h, max(ys) / h
+        dx, dy = (x1 - x0) * EMISSIVE_BAND_INSET, (y1 - y0) * EMISSIVE_BAND_INSET
+        boxes[name] = (x0 + dx, y0 + dy, x1 - dx, y1 - dy)
+    return boxes
+
+
+def _emissive_lumas(path):
+    """Mean linear luma per band. One place that knows how a band is measured."""
+    w, h, pix = _read_ppm(path)
+    return {k: sum(_absorb_box_rgb(pix, w, h, b)) / 3.0
+            for k, b in _emissive_boxes(w, h).items()}
+
+
+def _emissive_worst(base, other):
+    """Per-band ratios and the band furthest from 1.0.
+
+    `max` over a key rather than a running best against a 0.0 seed. The seeded
+    form was written three times here and one copy carried `or worst == 0.0`,
+    which made 0.0 both "not set yet" and a legal reading -- so a band whose
+    ratio collapsed to exactly zero, the strongest failure available, was
+    overwritten by the next band and the arm passed. There is no sentinel here
+    to get that wrong.
+    """
+    ratios = {k: other[k] / max(base[k], 1e-6) for k in base}
+    name = max(ratios, key=lambda k: abs(ratios[k] - 1.0))
+    return ratios, name, ratios[name]
 
 
 def _emissive_probe(workdir, scene, extra=None, frames=8):
@@ -7542,8 +7631,11 @@ def run_emissive_gate(workdir):
                         Fails the covariance principal axis this was first written
                         as, and fails an axis-aligned bound, both of which look
                         right on every other shape in the corpus.
-      emissive-reject   a closed cube rejects at planarity 0. The one-rectangle
-                        limit as a test rather than a promise.
+      emissive-reject   a closed cube rejects, AND for the stated reason. The
+                        planarity number alone does not discriminate: the probe
+                        zeroes the fit for any non-geometric reject, so every
+                        other reason prints 0.000000 and satisfies a bare
+                        threshold -- an opted-out material used to pass this.
       emissive-texmean  a half-black half-white emissive texture reads 0.5. The
                         only arm that sees the top-mip readback at all.
 
@@ -7556,8 +7648,10 @@ def run_emissive_gate(workdir):
                         change could quietly start treating them as lamps and
                         nothing would object.
       emissive-optout   emissiveLight: "off" takes the cornell panel to zero
-                        derived lights. Authored as the LABEL, so it covers the
-                        scene-file change too.
+                        derived lights, and the probe still REPORTS it declining.
+                        Authored as the LABEL, so it covers the scene-file change
+                        too. The count alone is what a scene that failed to load
+                        prints, which is why the reject row is asserted with it.
 
     LIGHT, which is what any of it was for:
 
@@ -7565,11 +7659,14 @@ def run_emissive_gate(workdir):
                         radiance, light the room the same. THE acceptance test.
                         Read on floor and walls, never the ceiling panel, whose
                         own pixels differ 18x between the two by construction.
-      emissive-override light_overrides names a DERIVED panel and gives it a
-                        shadow. Proves the name reaches it and that the build
-                        happens before overrides resolve -- and it is how the
-                        match arm above gets to agree at all, since the authored
-                        light casts and a derived one does not by default.
+      emissive-override light_overrides can NAME a derived panel -- a light the
+                        scene file could not have known about -- which is the
+                        whole ordering claim. Asserted on the renderer's own
+                        report rather than on a shadow: toggling cast_shadows
+                        changes no band on this fixture, for the AUTHORED light
+                        too, so an area panel's shadow is not measurable here and
+                        claiming it would be asserting A7 through a blind
+                        instrument.
       emissive-gi       a derived panel and a hand-authored one lift the indirect
                         term by the same amount. A DDGI probe capture runs the
                         full forward shader, so it sees the emissive surface AND
@@ -7578,12 +7675,17 @@ def run_emissive_gate(workdir):
                         capture learned to silence a derived emitter. Reads the
                         RATIO of lifts, so it does not move when the fixture's
                         exposure or geometry does.
-      emissive-off      two ways of having no derived panel agree, and both
-                        differ from having one. NOT "the room goes dark", which
-                        is what this was first written as: strip the authored
-                        light and turn the feature off and the scene has no
-                        lights at all, so the render app substitutes its
+      emissive-off      two ways of having no derived panel are BYTE-IDENTICAL,
+                        and both differ from having one. NOT "the room goes
+                        dark", which is what this was first written as: strip the
+                        authored light and turn the feature off and the scene has
+                        no lights at all, so the render app substitutes its
                         three-point fallback and the room gets BRIGHTER, 16x.
+
+    Every band read here is derived from the fixture's own camera and stated as a
+    WORLD patch (EMISSIVE_WORLD_BANDS). The hand-written screen boxes this group
+    shipped with measured a "floor" that was 65% the two boxes and walls that were
+    half empty background.
     """
     failures = []
     fixture = os.path.join(ROOT, "assets", EMISSIVE_FIXTURE)
@@ -7633,12 +7735,19 @@ def run_emissive_gate(workdir):
             if not ok:
                 failures.append("emissive-strip")
 
+        # The REASON is asserted, not just printed. planarity alone cannot carry
+        # this: _probe_node zeroes the fit and only runs it for a geometric
+        # reject, so EVERY other reason prints planarity=0.000000 and satisfies a
+        # bare threshold. An `opted-out` line passed this arm -- so had the
+        # material key defaulted wrong, or the emissiveLight row been mis-wired
+        # so every material read as opted out, this would have reported PASS on a
+        # cube it never tested.
         rec = _emissive_named(rows, "reject", "emissive_box")
-        ok = rec is not None and float(rec.get("planarity", 1.0)) <= 0.5
-        got = rec.get("reason", "no reject line") if rec else "no reject line"
+        got = rec.get("reason", "-") if rec else "no reject line"
         plan = float(rec["planarity"]) if rec and "planarity" in rec else float("nan")
-        print(f"  emissive-reject {'PASS' if ok else 'FAIL'} reason={got} "
-              f"planarity={plan:.6f} want <=0.5")
+        ok = rec is not None and got == "not-planar" and plan <= EMISSIVE_PLANARITY_MAX
+        print(f"  emissive-reject {'PASS' if ok else 'FAIL'} reason={got} want not-planar; "
+              f"planarity={plan:.6f} want <={EMISSIVE_PLANARITY_MAX}")
         if not ok:
             failures.append("emissive-reject")
 
@@ -7679,8 +7788,15 @@ def run_emissive_gate(workdir):
         rows, _ = _emissive_probe(workdir, optout, ["--emissive-lights"])
         header = next((r for r in rows if r.get("kind") == "header"), None)
         count = int(header["count"]) if header and "count" in header else -1
-        ok = count == 0
-        print(f"  emissive-optout {'PASS' if ok else 'FAIL'} derived={count} want 0 "
+        # A count of 0 is also what a scene that failed to load prints, and what
+        # any scene with no emissive mesh prints. The reject row is the evidence
+        # that the mesh was SEEN and DECLINED, which is the actual claim -- and it
+        # comes free out of rows already in hand.
+        rec = _emissive_named(rows, "reject", "cornell_light")
+        got = rec.get("reason", "-") if rec else "no reject line"
+        ok = count == 0 and got == "opted-out"
+        print(f"  emissive-optout {'PASS' if ok else 'FAIL'} derived={count} want 0, "
+              f"cornell_light reason={got} want opted-out "
               "(authored as the label, not the number)")
         if not ok:
             failures.append("emissive-optout")
@@ -7690,7 +7806,14 @@ def run_emissive_gate(workdir):
         print(f"  emissive-match SKIP  ({CORNELL_FIXTURE} not present)")
         return failures
 
-    base = ["--no-auto-exposure", "-E", "1.0", "--no-dither"]
+    # --no-bloom is load-bearing, not hygiene. The derived twin carries
+    # emissiveStrength 18, so its QUAD is 18x the authored one's -- handled for
+    # direct pixels by never reading the ceiling, but bloom carries that
+    # difference out of the quad and across the frame, asymmetrically, into every
+    # band this group reads. Without it the residual these arms measure is part
+    # panel placement and part glow, and the bar absorbs an effect nobody has
+    # separated.
+    base = ["--no-auto-exposure", "-E", "1.0", "--no-dither", "--no-bloom"]
 
     # The derived twin: the quad carries the authored light's radiance, the
     # authored light is gone, and a light_overrides entry gives the panel the
@@ -7715,48 +7838,47 @@ def run_emissive_gate(workdir):
         print(f"  emissive-match ERROR derived render failed: {err.strip()[-200:]}")
         return failures + ["emissive-match"]
 
-    wa, ha, pa = _read_ppm(a)
-    wb, hb, pb = _read_ppm(b)
-    worst, worst_name = 0.0, ""
-    detail = []
-    for name, box in EMISSIVE_BOXES.items():
-        ra = _absorb_box_rgb(pa, wa, ha, box)
-        rb = _absorb_box_rgb(pb, wb, hb, box)
-        la = sum(ra) / 3.0
-        lb = sum(rb) / 3.0
-        rel = abs(lb - la) / max(la, 1e-6)
-        detail.append(f"{name}={lb / max(la, 1e-6):.4f}")
-        if rel > worst:
-            worst, worst_name = rel, name
-    ok = worst <= EMISSIVE_MATCH_EPS
-    print(f"  emissive-match {'PASS' if ok else 'FAIL'}  derived/authored {' '.join(detail)} "
-          f"worst={worst:.4f} at {worst_name} want <={EMISSIVE_MATCH_EPS}")
+    lum_a = _emissive_lumas(a)
+    lum_b = _emissive_lumas(b)
+    ratios, worst_name, worst = _emissive_worst(lum_a, lum_b)
+    # A presence floor, because every band ratio here is 1.0 on two BLACK frames
+    # and this arm is the acceptance test. The floor band is lit by the panel in
+    # both variants, so it is the honest one to demand light from; the value is
+    # well under the ~30/255 it actually reads and well over a clear colour.
+    lit = min(lum_a["floor"], lum_b["floor"])
+    detail = " ".join(f"{k}={v:.4f}" for k, v in ratios.items())
+    ok = abs(worst - 1.0) <= EMISSIVE_MATCH_EPS and lit >= EMISSIVE_PRESENCE_MIN
+    print(f"  emissive-match {'PASS' if ok else 'FAIL'}  derived/authored {detail} "
+          f"worst={worst:.4f} at {worst_name} want 1.0 +/-{EMISSIVE_MATCH_EPS}; "
+          f"floor lit={lit:.4f} want >={EMISSIVE_PRESENCE_MIN}")
     if not ok:
         failures.append("emissive-match")
 
-    # The override is what made that agree: without it the authored light casts
-    # and the derived one does not, and the floor reads ~1.4x. So this arm both
-    # proves the name reaches a derived panel and explains the arm above.
-    noshadow = os.path.join(workdir, "cornell_noshadow.cscn")
-
-    def _derive_noshadow(d):
-        _derive(d)
-        d.pop("light_overrides", None)
-
-    cscn_copy(cornell, noshadow, _derive_noshadow)
-    c = os.path.join(workdir, "emissive_noshadow.ppm")
-    err = render(noshadow, c, base + ["--emissive-lights"])
-    if err:
-        print(f"  emissive-override ERROR render failed: {err.strip()[-200:]}")
-        return failures + ["emissive-override"]
-    wc, hc, pc = _read_ppm(c)
-    fa = sum(_absorb_box_rgb(pa, wa, ha, EMISSIVE_BOXES["floor"])) / 3.0
-    fc = sum(_absorb_box_rgb(pc, wc, hc, EMISSIVE_BOXES["floor"])) / 3.0
-    lift = fc / max(fa, 1e-6)
-    ok = lift >= 1.10
-    print(f"  emissive-override {'PASS' if ok else 'FAIL'} floor without the override "
-          f"={lift:.4f}x authored, want >=1.10 (an unshadowed panel lights what the "
-          "boxes should hide)")
+    # Asserted on the OVERRIDE BEING APPLIED, not on a shadow appearing.
+    #
+    # This arm first compared the no-override frame against the AUTHORED one and
+    # read 1.3684x, which looked like the shadow and was not: those two frames
+    # also differ by the 18x quad and the 1 cm offset, and all three push the
+    # ratio the same way. Compared against the frame that differs ONLY in the
+    # override, every band is identical to four decimals.
+    #
+    # And the reason is not this feature. Toggling cast_shadows on the fixture's
+    # own HAND-AUTHORED area light changes nothing in any band either, so an area
+    # panel's shadow is simply not measurable on cornell_box. That is an A7
+    # property; asserting it here would be asserting someone else's feature
+    # through an instrument that cannot see it.
+    #
+    # What this arm owns is that a light_overrides entry can NAME a light that did
+    # not exist when the scene file was written -- which is the whole ordering
+    # claim -- and the renderer says so itself. The failure mode is loud and
+    # distinct: cscene_apply prints "matches no light" instead.
+    _, text = _emissive_probe(workdir, derived, ["--emissive-lights"])
+    applied = "light 'cornell_light' cast_shadows on" in text
+    unmatched = "matches no light" in text
+    ok = applied and not unmatched
+    print(f"  emissive-override {'PASS' if ok else 'FAIL'} override reached the derived "
+          f"panel: applied={applied} unmatched={unmatched} "
+          "(names a light the scene file could not have known about)")
     if not ok:
         failures.append("emissive-override")
 
@@ -7771,35 +7893,43 @@ def run_emissive_gate(workdir):
     # match arm's 30-frame renders. A lift divides two frames, so anything that
     # differs between them contaminates it -- and 30 against 120 is a real
     # difference here, worth 2.7 points on the floor when it was measured.
+    # The authored side gets its QUAD darkened for this arm, which the direct
+    # arms above deliberately do not do. Reason: the derived side's emitter is
+    # suppressed inside an irradiance capture (that is the feature), so an
+    # authored quad still emitting its token 1 nit into ITS capture makes the two
+    # captures see different amounts of emitter and the ratio inherits the
+    # difference. Measured at 0.93 before this, in the direction the asymmetry
+    # predicts. Darkening it leaves both captures seeing only bounced light,
+    # which is the comparison the arm claims to make.
+    def _derive_gi_authored(d):
+        d.setdefault("materials", {}).setdefault("cornell_light", {})["emissiveStrength"] = 0.0
+
+    gi_authored = os.path.join(workdir, "cornell_gi_authored.cscn")
+    cscn_copy(cornell, gi_authored, _derive_gi_authored)
+
     off_a = os.path.join(workdir, "emissive_gi_authored_off.ppm")
     off_b = os.path.join(workdir, "emissive_gi_derived_off.ppm")
-    err = (render(cornell, off_a, base, frames=EMISSIVE_GI_FRAMES) or
+    err = (render(gi_authored, off_a, base, frames=EMISSIVE_GI_FRAMES) or
            render(derived, off_b, base + ["--emissive-lights"], frames=EMISSIVE_GI_FRAMES) or
-           render(cornell, gi_a, base + ["--gi-volume"], frames=EMISSIVE_GI_FRAMES) or
+           render(gi_authored, gi_a, base + ["--gi-volume"], frames=EMISSIVE_GI_FRAMES) or
            render(derived, gi_b, base + ["--emissive-lights", "--gi-volume"],
                   frames=EMISSIVE_GI_FRAMES))
     if err:
         print(f"  emissive-gi    ERROR render failed: {err.strip()[-200:]}")
         failures.append("emissive-gi")
     else:
-        wga, hga, pga = _read_ppm(gi_a)
-        wgb, hgb, pgb = _read_ppm(gi_b)
-        woa, hoa, poa = _read_ppm(off_a)
-        wob, hob, pob = _read_ppm(off_b)
-        worst, worst_name, detail = 0.0, "", []
-        for name, bx in EMISSIVE_BOXES.items():
-            base_a = sum(_absorb_box_rgb(poa, woa, hoa, bx)) / 3.0
-            base_b = sum(_absorb_box_rgb(pob, wob, hob, bx)) / 3.0
-            lift_a = (sum(_absorb_box_rgb(pga, wga, hga, bx)) / 3.0) / max(base_a, 1e-6)
-            lift_b = (sum(_absorb_box_rgb(pgb, wgb, hgb, bx)) / 3.0) / max(base_b, 1e-6)
-            rel = lift_b / max(lift_a, 1e-6)
-            detail.append(f"{name}={rel:.4f}")
-            if abs(rel - 1.0) > abs(worst - 1.0) or worst == 0.0:
-                worst, worst_name = rel, name
-        ok = abs(worst - 1.0) <= EMISSIVE_GI_EPS
+        lift_a, _, _ = _emissive_worst(_emissive_lumas(off_a), _emissive_lumas(gi_a))
+        lift_b, _, _ = _emissive_worst(_emissive_lumas(off_b), _emissive_lumas(gi_b))
+        ratios, worst_name, worst = _emissive_worst(lift_a, lift_b)
+        detail = " ".join(f"{k}={v:.4f}" for k, v in ratios.items())
+        # The lift itself must be real, or two GI-inert frames give lift 1.0 on
+        # both sides and a ratio of 1.0 that means nothing.
+        ok = (abs(worst - 1.0) <= EMISSIVE_GI_EPS and
+              min(lift_a["floor"], lift_b["floor"]) >= EMISSIVE_GI_LIFT_MIN)
         print(f"  emissive-gi    {'PASS' if ok else 'FAIL'}  derived/authored GI lift "
-              f"{' '.join(detail)} worst={worst:.4f} at {worst_name} "
-              f"want 1.0 +/-{EMISSIVE_GI_EPS}")
+              f"{detail} worst={worst:.4f} at {worst_name} want 1.0 +/-{EMISSIVE_GI_EPS}; "
+              f"floor lift a={lift_a['floor']:.4f} b={lift_b['floor']:.4f} "
+              f"want >={EMISSIVE_GI_LIFT_MIN}")
         if not ok:
             failures.append("emissive-gi")
 
@@ -7827,22 +7957,19 @@ def run_emissive_gate(workdir):
     if err:
         print(f"  emissive-off   ERROR render failed: {err.strip()[-200:]}")
         return failures + ["emissive-off"]
-    wd, hd, pd = _read_ppm(d_off)
-    wo, ho, po = _read_ppm(d_opt)
-    worst = 0.0
-    for name, box in EMISSIVE_BOXES.items():
-        l1 = sum(_absorb_box_rgb(pd, wd, hd, box)) / 3.0
-        l2 = sum(_absorb_box_rgb(po, wo, ho, box)) / 3.0
-        worst = max(worst, abs(l2 - l1) / max(l1, 1e-6))
-    # Sanity, so this cannot pass on two identically blank frames: the no-panel
-    # frame must differ from the derived one, which is the thing being switched.
-    fd = sum(_absorb_box_rgb(pd, wd, hd, EMISSIVE_BOXES["floor"])) / 3.0
-    fb = sum(_absorb_box_rgb(pb, wb, hb, EMISSIVE_BOXES["floor"])) / 3.0
-    moved = abs(fd - fb) / max(fb, 1e-6)
-    ok = worst <= EMISSIVE_MATCH_EPS and moved >= 0.10
+    # An exact identity, not a box tolerance. These two frames differ in nothing
+    # a renderer should see -- same scene, same fallback rig, same 18-nit quad,
+    # and no derived panel by either route -- so the honest bar is 0 px, which is
+    # what the spec specified before this shipped at 3%. Reading it through boxes
+    # also coupled it to EMISSIVE_MATCH_EPS, whose 3% is sized for a genuine
+    # approximation elsewhere; tightening that would have silently tightened this.
+    ae, pae = compare(d_off, d_opt)
+    lum_off = _emissive_lumas(d_off)
+    moved = abs(lum_off["floor"] - lum_b["floor"]) / max(lum_b["floor"], 1e-6)
+    ok = ae == 0 and moved >= EMISSIVE_OFF_MOVED_MIN
     print(f"  emissive-off   {'PASS' if ok else 'FAIL'}  flag-absent vs opted-out "
-          f"worst={worst:.4f} want <={EMISSIVE_MATCH_EPS}; and vs derived "
-          f"moved={moved:.4f} want >=0.10")
+          f"ae={ae} pae={pae:.6f} want 0 px; and vs derived moved={moved:.4f} "
+          f"want >={EMISSIVE_OFF_MOVED_MIN}")
     if not ok:
         failures.append("emissive-off")
 

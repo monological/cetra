@@ -19,7 +19,7 @@ about it and nothing else in the corpus asks it:
                   the case a covariance principal axis gets right and an
                   axis-aligned bound does not. It pins the minimum-area search:
                   the true rectangle is 2.0 x 0.25, and a bound taken on the
-                  reference frame instead reads about 1.86 x 1.09.
+                  reference frame instead reads 1.8571 x 1.2165.
 
 The quad's base colour is black, which is the unlit-flat-colour idiom this spec
 found is how most emissive in the wild is authored -- so the fixture also carries
@@ -28,6 +28,7 @@ one honest instance of the thing that moved the default.
 
 import base64
 import json
+import math
 import os
 import struct
 import zlib
@@ -123,7 +124,6 @@ def build():
     # Rotated in its own plane (z = 0), so no axis of the reference frame lines
     # up with either side. Corners written out rather than rotated by a matrix,
     # so the file states the answer the gate checks.
-    import math
     th = math.radians(STRIP_ANGLE_DEG)
     ct, st = math.cos(th), math.sin(th)
 
