@@ -1291,7 +1291,7 @@ int main(int argc, char** argv) {
     leaf_material->alpha_mode = ALPHA_MASK;
     leaf_material->alphaCutoff = 0.4f;
     leaf_material->doubleSided = true;
-    leaf_material->foliage_shadows = true;
+    leaf_material->foliage_shadows = 1;
     leaf_material->wind_response = 1.0f;
     leaf_material->wind_mode = 2; // vegetation leaf (adds flutter)
     // Thin leaves transmit light: without this the canopy reads as opaque

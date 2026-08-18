@@ -21,6 +21,12 @@ static const char* const WIND_MODE_NAMES[] = {"cloth", "vegetation branch", "veg
 // Order IS the stored value, and 0 must stay "light" so a calloc'd material opts in.
 static const char* const EMISSIVE_LIGHT_NAMES[] = {"light", "off"};
 
+// Order IS the stored value, and here 0 must stay "off" -- the opposite polarity
+// from EMISSIVE_LIGHT_NAMES above, because the shadow-map exclusion is the
+// default every existing material relies on. Reversed, every masked surface in
+// the corpus would start casting.
+static const char* const FOLIAGE_SHADOW_NAMES[] = {"off", "on"};
+
 // Group order here is the order an editor shows them in, and it is deliberate:
 // the handful of properties that describe every surface come first, and the
 // ones that only matter to a material that opted into a feature follow. A flat
@@ -89,6 +95,13 @@ const MaterialParam MATERIAL_PARAMS[] = {
     {"windMode", "Maps and wind", .offset = offsetof(Material, wind_mode),
      .type = MATERIAL_PARAM_INT, .enum_labels = WIND_MODE_NAMES,
      .enum_count = (int)(sizeof(WIND_MODE_NAMES) / sizeof(WIND_MODE_NAMES[0]))},
+
+    // Its own group rather than "Base": this says nothing about how the surface
+    // shades, only whether the shadow map may see it. Inert unless the material
+    // is ALPHA_MASK with a positive alphaCutoff and an albedo texture.
+    {"foliageShadows", "Shadows", .offset = offsetof(Material, foliage_shadows),
+     .type = MATERIAL_PARAM_INT, .enum_labels = FOLIAGE_SHADOW_NAMES,
+     .enum_count = (int)(sizeof(FOLIAGE_SHADOW_NAMES) / sizeof(FOLIAGE_SHADOW_NAMES[0]))},
 };
 
 #undef MP
@@ -222,7 +235,7 @@ Material* create_material() {
     glm_vec2_one(material->uvScale);
     material->uvRotation = 0.0f;
     material->doubleSided = false;
-    material->foliage_shadows = false; // masked surfaces stay out of the shadow map
+    material->foliage_shadows = 0; // masked surfaces stay out of the shadow map
     material->wind_response = 0.0f;    // rigid until a material opts into wind
     material->shore_wetness = 0.0f;    // never wetted by the swash until a material asks
     material->wind_mode = 0;           // cloth displacement unless a material asks for vegetation

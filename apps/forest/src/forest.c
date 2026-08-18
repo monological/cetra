@@ -663,7 +663,7 @@ static void on_init(Game* game) {
     g_mat_leaf->alpha_mode = ALPHA_MASK;
     g_mat_leaf->alphaCutoff = 0.4f;
     g_mat_leaf->doubleSided = true;
-    g_mat_leaf->foliage_shadows = true;
+    g_mat_leaf->foliage_shadows = 1;
     // Thin leaves transmit; without it a backlit canopy reads as opaque plastic.
     g_mat_leaf->subsurface = 0.55f;
     // Dark wet stone. Rock is the only light NEUTRAL surface in a scene of dark

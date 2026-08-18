@@ -108,10 +108,14 @@ typedef struct Material {
 
     // ALPHA_MASK opt-in to the shadow map: the depth pass draws this material
     // with an alpha test (casts) and the shading pass samples the map for it
-    // (receives). Default false keeps the blanket exclusion documented above,
+    // (receives). Default 0 keeps the blanket exclusion documented above,
     // which is what hair cards need. Effective only when the material is
     // ALPHA_MASK with a positive alphaCutoff and an albedo texture to test.
-    bool foliage_shadows;
+    //
+    // An int rather than a bool because it rides MATERIAL_PARAMS, which stores
+    // through an offset and knows FLOAT/COLOR/INT/TEXTURE -- an INT row against
+    // a bool would write four bytes into one.
+    int foliage_shadows;
 
     // Wind response (World-Position Offset cloth; see wind.h). The per-material
     // half of the wind split: the Scene owns the wind field, a material opts in
@@ -254,10 +258,21 @@ typedef struct MaterialParam {
  * namespace and the same authored vocabulary, they just need a setter call
  * where the others need a store.
  *
- * alpha_mode, alphaCutoff, doubleSided and foliage_shadows are deliberately
- * absent: they decide which PASS a mesh draws in and whether it is culled, so a
- * wrong value there moves geometry between queues instead of merely misshading
- * it.
+ * alpha_mode, alphaCutoff and doubleSided are deliberately absent: they decide
+ * which PASS a mesh draws in and whether it is culled, so a wrong value there
+ * moves geometry between queues instead of merely misshading it. All three also
+ * arrive from the GLB already, so a key here would be a second source of truth
+ * for something the file has already said.
+ *
+ * foliage_shadows was in that list until 11.50 and is now a row, because neither
+ * half applied to it. It cannot move the camera lane -- classify() derives that
+ * from transmissive and blend alone, and DRAW_FOLIAGE reaches only the two
+ * caster-set reads in shadow.c -- so the worst it can do is the streak-and-acne
+ * aliasing the default protects hair from, which is an ugly surface and nothing
+ * more. And no format can express it, so excluding it removed the capability
+ * rather than preventing a conflict: masked foliage could shadow only when the
+ * app that built it was compiled. It is also guarded four ways at the point of
+ * use, so a value set on anything but alpha-masked textured geometry is inert.
  *
  * That is NOT the same as "nothing here changes the lane", and it used to be
  * stated as if it were. `transmission` has always routed to
