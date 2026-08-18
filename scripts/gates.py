@@ -7593,6 +7593,43 @@ EMISSIVE_LEAK_BANDS = {
 EMISSIVE_LEAK_MAX = 0.02
 EMISSIVE_LEAK_MIN = 0.15
 
+# The specular double count (P11). A reflection probe photographs the glowing
+# quad and the LTC panel integrates the same rectangle analytically, so a smooth
+# surface receives it twice.
+#
+# Read as the derived side's PROBE LIFT over the authored side's, which controls
+# for everything in the capture that is not the emitter -- the sky above all.
+# The authored fixture's quad emits a token 1 nit beside its 18 nit analytic
+# light, the derived one carries the full 18 in the quad itself, so the
+# difference between the two lifts IS the emitter's own share of the probe.
+#
+# Measured worst 1.0386, against 1.3134 for the diffuse double count before P6.
+# An order of magnitude smaller, and the reason is the split sum: a DDGI probe
+# integrates irradiance over the whole hemisphere, where a bright ceiling panel
+# dominates, while the reflection probe feeds specular through a lobe where the
+# panel covers little solid angle and a dielectric reflects a few percent of it.
+#
+# --sun-elevation -10 is pinned and load-bearing, exactly as --cloud-coverage
+# 0.10 is on the cloud-shadow arms: an arm wants the configuration where the
+# property is LEGIBLE. With the default sun the sky dominates the capture and
+# the same measurement reads 1.0150, so a default change could halve the arm's
+# sensitivity silently. The sun is below the horizon rather than the sky absent
+# because the probe requires a precomputed IBL to be created at all.
+#
+# Sky rather than an HDR for three reasons: my_models/ is out of tree so an HDR
+# arm would SKIP in a clean checkout, the sky path is 0 px run-to-run, and the
+# elevation is a dial that turns the confound DOWN. A fixed HDR has none of the
+# three.
+EMISSIVE_SPEC_MAX = 1.10
+# The probe must actually lift, or a ratio of two absent lifts is 1.0 and the
+# arm passes on a build where the capture never ran. Max lift measured 2.6464.
+EMISSIVE_SPEC_LIFT_MIN = 1.5
+EMISSIVE_SPEC_SKY = ["--sky", "--sun-elevation", "-10"]
+# Polished, but a DIELECTRIC. Metal has no diffuse, so every lift ratio's
+# denominator collapses toward black and the ratio destabilises -- measured, the
+# floor and back wall go nearly black and the read stops meaning anything.
+EMISSIVE_SPEC_ROUGHNESS = 0.08
+
 
 def _emissive_boxes(w, h):
     """The world bands above as fractional screen boxes, for _absorb_box_rgb."""
@@ -7748,6 +7785,18 @@ def run_emissive_gate(workdir):
                         capture learned to silence a derived emitter. Reads the
                         RATIO of lifts, so it does not move when the fixture's
                         exposure or geometry does.
+      emissive-spec     the SPECULAR double count, BOUNDED rather than removed. A
+                        reflection probe photographs the glowing quad and the LTC
+                        panel integrates the same rectangle analytically, so a
+                        smooth surface gets it twice. Read as the derived side's
+                        probe lift over the authored side's, which cancels
+                        everything in the capture that is not the emitter.
+                        Measured 1.0386 against the arm above's 1.3134, and the
+                        fix was declined at that size: unlike the GI case the
+                        emitter must STAY in a radiance capture, or a mirror
+                        reflects a uniform rectangle instead of the surface. So
+                        this one does not assert 1.0 -- it asserts the effect
+                        stays small enough for that judgement to hold.
       emissive-off      two ways of having no derived panel are BYTE-IDENTICAL,
                         and both differ from having one. NOT "the room goes
                         dark", which is what this was first written as: strip the
@@ -8138,6 +8187,62 @@ def run_emissive_gate(workdir):
               f"want >={EMISSIVE_GI_LIFT_MIN}")
         if not ok:
             failures.append("emissive-gi")
+
+    # The SPECULAR counterpart of the arm above, and the reason it is a separate
+    # arm rather than a second read on the same renders: the two double counts
+    # want OPPOSITE fixes. A DDGI capture's output is irradiance ADDED to the
+    # analytic direct term, so the emitter must be absent from it -- that is what
+    # emissive-gi pins. A reflection probe's output is radiance, what a mirror
+    # sees, so the emitter must be PRESENT. Silencing it in both is one flag and
+    # would decide this question by accident.
+    #
+    # This arm therefore does not assert 1.0. It asserts the effect stays SMALL,
+    # because the fix was measured and declined: at 1.0386 on a fixture built to
+    # maximise it, every available fix costs more than it buys. The bar is what
+    # would fail if that stopped being true.
+    spec_scn = {}
+    for tag, mutate in (("authored", None), ("derived", True)):
+        def _spec(d, derived_side=mutate):
+            for m in ("cornell_shell", "cornell_left_red", "cornell_right_green"):
+                d.setdefault("materials", {}).setdefault(
+                    m, {})["roughness"] = EMISSIVE_SPEC_ROUGHNESS
+            if derived_side:
+                d["lights"] = []
+                d["light_overrides"] = [{"name": "cornell_light", "cast_shadows": True}]
+                d.setdefault("materials", {}).setdefault(
+                    "cornell_light", {})["emissiveStrength"] = 18.0
+        spec_scn[tag] = os.path.join(workdir, f"emissive_spec_{tag}.cscn")
+        cscn_copy(cornell, spec_scn[tag], _spec)
+
+    spec = {t: {k: os.path.join(workdir, f"emissive_spec_{t}_{k}.ppm")
+                for k in ("on", "off")} for t in ("authored", "derived")}
+    lights = ["--emissive-lights"]
+    err = (render(spec_scn["authored"], spec["authored"]["off"],
+                  base + EMISSIVE_SPEC_SKY, frames=60) or
+           render(spec_scn["authored"], spec["authored"]["on"],
+                  base + EMISSIVE_SPEC_SKY + ["--probe-scene"], frames=60) or
+           render(spec_scn["derived"], spec["derived"]["off"],
+                  base + EMISSIVE_SPEC_SKY + lights, frames=60) or
+           render(spec_scn["derived"], spec["derived"]["on"],
+                  base + EMISSIVE_SPEC_SKY + lights + ["--probe-scene"], frames=60))
+    if err:
+        print(f"  emissive-spec  ERROR render failed: {err.strip()[-200:]}")
+        failures.append("emissive-spec")
+    else:
+        lift_a, _, _ = _emissive_worst(_emissive_lumas(spec["authored"]["off"]),
+                                       _emissive_lumas(spec["authored"]["on"]))
+        lift_b, _, _ = _emissive_worst(_emissive_lumas(spec["derived"]["off"]),
+                                       _emissive_lumas(spec["derived"]["on"]))
+        ratios, worst_name, worst = _emissive_worst(lift_a, lift_b)
+        detail = " ".join(f"{k}={v:.4f}" for k, v in ratios.items())
+        peak = max(lift_a.values())
+        ok = worst <= EMISSIVE_SPEC_MAX and peak >= EMISSIVE_SPEC_LIFT_MIN
+        print(f"  emissive-spec  {'PASS' if ok else 'FAIL'} derived/authored probe lift "
+              f"{detail} worst={worst:.4f} at {worst_name} want <={EMISSIVE_SPEC_MAX}; "
+              f"peak lift={peak:.4f} want >={EMISSIVE_SPEC_LIFT_MIN} "
+              "(the emitter is counted twice on purpose -- this bounds it)")
+        if not ok:
+            failures.append("emissive-spec")
 
     # OFF IS OFF, stated as an identity rather than as "the room goes dark",
     # which is what this arm was first written as and is measured wrong.
