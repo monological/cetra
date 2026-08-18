@@ -169,7 +169,14 @@ def build():
     g.end()
 
     # An L: a foot along +x and an upright along +y, sharing the corner.
-    ex, ey = 2.6, -1.9
+    #
+    # BELOW the split and clear of its x span, not beside it. Every emitter in
+    # this file lies on z = 0, so two that overlap in xy are coplanar and
+    # z-fight -- which is what this one did against the split's right strip
+    # (x 2.5..3.5) when the strips were pushed apart. Nothing in the fit cares
+    # where a mesh sits, so the layout is free; keeping the emitters disjoint in
+    # xy is what keeps the fixture readable by eye.
+    ex, ey = -0.5, -3.2
     g.begin("emissive_ell")
     g.quad((ex, ey, 0.0), (ex + ELL_LONG, ey, 0.0),
            (ex + ELL_LONG, ey + ELL_ARM, 0.0), (ex, ey + ELL_ARM, 0.0))
