@@ -25,6 +25,7 @@
 #include "cetra/ibl.h"
 #include "cetra/sky.h"
 #include "cetra/gi_volume.h"
+#include "cetra/emissive_light.h"
 #include "cetra/water.h"
 // For SHORE_CHAIN_HISTORY and SHORE_TAP_PERIODS, which --shore-probe reports the film's
 // history window against.
@@ -167,6 +168,7 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --water-bed <m>    none (default) or dome: an analytic bed to shoal\n");
     fprintf(stderr, "      --water-probe      Print the CPU wave query over a grid\n");
     fprintf(stderr, "      --water-fft-probe  Print the transformed spectrum's statistics\n");
+    fprintf(stderr, "      --emissive-light-probe  Print the panel every emissive mesh derives\n");
     fprintf(stderr, "      --sky              Procedural physically-based sky (instead of -e)\n");
     fprintf(stderr, "      --sky-debug        Blit the sky LUTs into the frame corner\n");
     fprintf(stderr, "      --clouds           Volumetric cloud layer (implies --sky)\n");
@@ -708,6 +710,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->water_probe = 1;
         } else if (strcmp(argv[i], "--water-fft-probe") == 0) {
             args->water_fft_probe = 1;
+        } else if (strcmp(argv[i], "--emissive-light-probe") == 0) {
+            args->emissive_light_probe = 1;
         } else if (strcmp(argv[i], "--no-water") == 0) {
             // Does NOT imply --water, obviously, and it wins over it: this is the
             // escape hatch from a scene file that authors a surface.
@@ -2573,6 +2577,13 @@ int main(int argc, char** argv) {
     mat4 identity;
     glm_mat4_identity(identity);
     apply_transform_to_nodes(scene->root_node, identity);
+
+    // The panel fit is LOCAL to each mesh, so it needs no transform and could
+    // run anywhere after import. It reports here because this is where the
+    // derived lights themselves will be built -- before the scene file's
+    // light_overrides run, which is what lets an override name one.
+    if (args.emissive_light_probe)
+        emissive_lights_probe(scene);
 
     // Compute scene bounds; center/radius drive every scene-scaled policy below
     vec3 scene_center;
