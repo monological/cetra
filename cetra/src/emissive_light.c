@@ -244,10 +244,10 @@ EmissiveFitReject emissive_panel_fit(const Mesh* mesh, EmissivePanelFit* out) {
     return EMISSIVE_FIT_OK;
 }
 
-void emissive_material_radiance(const Material* material, vec3 out_nits) {
+bool emissive_material_radiance(const Material* material, vec3 out_nits) {
     glm_vec3_zero(out_nits);
     if (!material)
-        return;
+        return true;
 
     // Mirrors what render.c uploads as `emissiveFactor`, including the fallback
     // where a black factor beside an emissive texture means "the texture IS the
@@ -258,6 +258,24 @@ void emissive_material_radiance(const Material* material, vec3 out_nits) {
     glm_vec3_scale((float*)material->emissive, material->emissive_strength, out_nits);
     if (material->emissive_tex && glm_vec3_norm2((float*)material->emissive) < 1e-8f)
         glm_vec3_fill(out_nits, material->emissive_strength);
+
+    // pbr_frag multiplies that factor by the texel, so the surface's MEAN
+    // radiance is the factor times the texture's mean -- which is the 1x1 top
+    // mip. Without it a mostly-black emissive atlas under a bright factor
+    // reports the factor as if the whole panel were lit, and over-states the
+    // lamp by whatever fraction of the map is actually emitting: a screen
+    // showing one bright window would light a room like a screen showing white.
+    //
+    // Declining leaves the factor alone rather than zeroing, so a texture whose
+    // chain is missing over-states rather than vanishing -- the same direction
+    // the code had before this existed.
+    if (material->emissive_tex) {
+        vec3 mean = {1.0f, 1.0f, 1.0f};
+        if (!texture_mean_color(material->emissive_tex, mean))
+            return false;
+        glm_vec3_mul(out_nits, mean, out_nits);
+    }
+    return true;
 }
 
 void emissive_radiance_to_light(const vec3 nits, vec3 out_color, float* out_intensity) {
@@ -278,12 +296,16 @@ void emissive_radiance_to_light(const vec3 nits, vec3 out_color, float* out_inte
 // Whether this mesh should carry a derived panel at all, and its radiance if so.
 // The material's verdict and the dimness floor together, because a caller that
 // asked them separately would have to remember the order they compose in.
-static EmissiveFitReject _mesh_candidacy(const Mesh* mesh, vec3 out_nits) {
+static EmissiveFitReject _mesh_candidacy(const Mesh* mesh, vec3 out_nits, bool* out_final) {
     glm_vec3_zero(out_nits);
+    if (out_final)
+        *out_final = true;
     if (!mesh || !mesh->material)
         return EMISSIVE_FIT_TOO_DIM;
 
-    emissive_material_radiance(mesh->material, out_nits);
+    bool final = emissive_material_radiance(mesh->material, out_nits);
+    if (out_final)
+        *out_final = final;
     float lum = 0.0f;
     emissive_radiance_to_light(out_nits, NULL, &lum);
 
@@ -316,7 +338,8 @@ static void _probe_node(const SceneNode* node, int* count) {
         // tested before geometry, so a scene full of non-emissive meshes reports
         // nothing rather than calling every wall "not planar" -- a reject list is
         // only useful if it is short.
-        EmissiveFitReject reject = _mesh_candidacy(mesh, nits);
+        bool final = true;
+        EmissiveFitReject reject = _mesh_candidacy(mesh, nits, &final);
         if (reject == EMISSIVE_FIT_TOO_DIM)
             continue;
 
@@ -338,11 +361,12 @@ static void _probe_node(const SceneNode* node, int* count) {
 
         printf("emissive-light-probe panel node=%s material=%s mesh=%u "
                "center=%.6f,%.6f,%.6f normal=%.6f,%.6f,%.6f up=%.6f,%.6f,%.6f "
-               "size=%.6f,%.6f planarity=%.6f area=%.6f nits=%.6f color=%.6f,%.6f,%.6f\n",
+               "size=%.6f,%.6f planarity=%.6f area=%.6f nits=%.6f radiance=%s "
+               "color=%.6f,%.6f,%.6f\n",
                node_name, mat_name, mesh->id, fit.center[0], fit.center[1], fit.center[2],
                fit.normal[0], fit.normal[1], fit.normal[2], fit.up[0], fit.up[1], fit.up[2],
-               fit.size[0], fit.size[1], fit.planarity, fit.area, intensity, color[0], color[1],
-               color[2]);
+               fit.size[0], fit.size[1], fit.planarity, fit.area, intensity,
+               final ? "final" : "pending", color[0], color[1], color[2]);
         (*count)++;
     }
 
@@ -420,7 +444,7 @@ static void _reconcile_node(Scene* scene, SceneNode* node, bool refit, int* live
             continue;
 
         vec3 nits = {0.0f, 0.0f, 0.0f};
-        if (_mesh_candidacy(mesh, nits) != EMISSIVE_FIT_OK)
+        if (_mesh_candidacy(mesh, nits, NULL) != EMISSIVE_FIT_OK)
             continue;
 
         Light* light = _find_derived(scene, mesh->id);
@@ -482,7 +506,7 @@ static void _mark_seen(SceneNode* node, unsigned* seen, int* count, int cap) {
     for (size_t m = 0; m < node->mesh_count; m++) {
         const Mesh* mesh = node->meshes[m];
         vec3 nits = {0.0f, 0.0f, 0.0f};
-        if (!mesh || _mesh_candidacy(mesh, nits) != EMISSIVE_FIT_OK)
+        if (!mesh || _mesh_candidacy(mesh, nits, NULL) != EMISSIVE_FIT_OK)
             continue;
         if (*count < cap)
             seen[(*count)++] = mesh->id;

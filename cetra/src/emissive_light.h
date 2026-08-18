@@ -84,7 +84,13 @@ EmissiveFitReject emissive_panel_fit(const struct Mesh* mesh, EmissivePanelFit* 
 // intensity is measured in. Reproduced here rather than shared with render.c's
 // uniform upload because that one also encodes a texture fallback the fit reads
 // differently -- see the emissive-texture note in the .c.
-void emissive_material_radiance(const struct Material* material, vec3 out_nits);
+// Returns false when the answer is PROVISIONAL: the material has an emissive
+// texture whose mean could not be read yet, so this is the factor alone and will
+// change. Textures stream in on a worker (async_loader.c), so that is the normal
+// state for the first frames rather than an error -- the per-frame reconcile
+// recomputes and settles on its own. A caller that reports rather than shades
+// has to say which of the two it is holding.
+bool emissive_material_radiance(const struct Material* material, vec3 out_nits);
 
 // Split a radiance into the (color, intensity) pair Light stores, so that
 // color * intensity reconstructs it exactly and `intensity` reads as real nits

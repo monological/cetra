@@ -244,6 +244,51 @@ void texture_apply_wrap(Texture* texture, GLenum wrap_s, GLenum wrap_t) {
     texture->wrap_t = wrap_t;
 }
 
+bool texture_mean_color(const Texture* texture, float* out_rgb) {
+    if (!texture || !out_rgb || texture->id == 0 || texture->width <= 0 || texture->height <= 0)
+        return false;
+
+    // The 1x1 top mip IS the mean, which is the whole trick: the chain already
+    // exists (every load path calls glGenerateMipmap), so an average that would
+    // otherwise need the pixels back on the CPU is one texel already sitting in
+    // VRAM. Nothing here keeps a copy -- Texture deliberately holds no data
+    // pointer -- so without this the mean is simply unobtainable.
+    int longest = texture->width > texture->height ? texture->width : texture->height;
+    GLint level = 0;
+    while ((longest >> level) > 1)
+        level++;
+
+    glBindTexture(GL_TEXTURE_2D, texture->id);
+
+    // Ask the driver rather than trusting the arithmetic: a texture whose chain
+    // was never generated answers with something other than 1 and this declines,
+    // where reading the level anyway would return uninitialised memory and call
+    // it a colour.
+    GLint w = 0, h = 0;
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, level, GL_TEXTURE_WIDTH, &w);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, level, GL_TEXTURE_HEIGHT, &h);
+    if (w != 1 || h != 1) {
+        glBindTexture(GL_TEXTURE_2D, 0);
+        return false;
+    }
+
+    unsigned char texel[4] = {0, 0, 0, 255};
+    glGetTexImage(GL_TEXTURE_2D, level, GL_RGBA, GL_UNSIGNED_BYTE, texel);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    // A colour texture is stored sRGB-encoded, and glGetTexImage hands back what
+    // is STORED -- no decode, where the sampler would have done one. Filtering an
+    // sRGB format is specified to happen in linear space, so the top mip is the
+    // encoding of the linear mean and decoding it here recovers that mean.
+    bool is_srgb =
+        texture->internal_format == GL_SRGB || texture->internal_format == GL_SRGB_ALPHA;
+    for (int c = 0; c < 3; c++) {
+        float v = (float)texel[c] / 255.0f;
+        out_rgb[c] = is_srgb ? (v <= 0.04045f ? v / 12.92f : powf((v + 0.055f) / 1.055f, 2.4f)) : v;
+    }
+    return true;
+}
+
 void free_texture(Texture* texture) {
     if (texture) {
         glDeleteTextures(1, &(texture->id));

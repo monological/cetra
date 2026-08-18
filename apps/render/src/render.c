@@ -2597,10 +2597,6 @@ int main(int argc, char** argv) {
     glm_mat4_identity(identity);
     apply_transform_to_nodes(scene->root_node, identity);
 
-    // The fit is LOCAL to each mesh, so the probe needs no transform and reports
-    // whatever the flag did or would do.
-    if (args.emissive_light_probe)
-        emissive_lights_probe(scene);
 
     // Compute scene bounds; center/radius drive every scene-scaled policy below
     vec3 scene_center;
@@ -3155,6 +3151,14 @@ int main(int argc, char** argv) {
     // --water-probe -- there is nothing to measure until a frame has run one.
     if (args.water_fft_probe)
         water_fft_probe(scene->water, engine);
+
+    // AFTER the loop, for a reason the fit does not have but its RADIANCE does:
+    // an emissive texture's mean is read from its top mip, and textures stream in
+    // on a worker at up to five a frame. Probed at init, a textured emitter
+    // reports its factor alone and calls it the answer. The geometry would be
+    // identical either way -- the fit is local and needs nothing loaded.
+    if (args.emissive_light_probe)
+        emissive_lights_probe(scene);
 
     /*
      * --shore-probe: the CPU twin of shoreRunup, printed.

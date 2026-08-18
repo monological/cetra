@@ -51,6 +51,14 @@ void set_texture_data_format(Texture* texture, GLenum data_format);
 // costs nothing.
 void texture_apply_wrap(Texture* texture, GLenum wrap_s, GLenum wrap_t);
 
+// The texture's mean colour, LINEAR, into out_rgb. False if it cannot be had --
+// no chain, no GL object -- so a caller can fall back rather than use a zero.
+//
+// Reads the 1x1 top mip, which is that mean already computed. Costs a synchronous
+// readback of one texel, so it belongs at bake or load time and never per frame.
+// Needs a live GL context.
+bool texture_mean_color(const Texture* texture, float* out_rgb);
+
 /*
  * Texture Pool
  */
