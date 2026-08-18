@@ -20,6 +20,7 @@
 #include "shader.h"
 #include "mesh.h"
 #include "material.h"
+#include "emissive_light.h"
 #include "light.h"
 #include "camera.h"
 #include "common.h"
@@ -93,6 +94,11 @@ void free_scene(Scene* scene) {
         free_texture_pool(scene->tex_pool);
         scene->tex_pool = NULL;
     }
+
+    // Before the lights, because a panel borrows one and the registry's own
+    // teardown must not outlive what it points at.
+    emissive_panels_free(scene->emissive_panels);
+    scene->emissive_panels = NULL;
 
     // Free all lights
     if (scene->lights) {

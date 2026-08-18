@@ -24,6 +24,7 @@ struct ParticleSystem;
 // Directional wind field (wind.h); a scene-owned environmental object like sky.
 struct Wind;
 struct PostFX;
+struct EmissivePanels;
 
 /*
  * SceneNode
@@ -133,11 +134,14 @@ typedef struct Scene {
     size_t material_count;
     bool materials_dirty; // graph may hold materials the registry has not seen
 
-    // Graph epoch the emissive panels were last FITTED at (spec 11.49). The fit
-    // is a plane solve over every vertex and the graph is what invalidates it;
-    // placement is three vector transforms and runs every frame regardless, so
-    // a lamp on a moving node needs no refit.
-    uint64_t emissive_epoch;
+    // Derived emissive area panels (spec 11.49), owned. Opaque: the registry and
+    // the local fit it holds are emissive_light.c's business, and putting the fit
+    // type here would drag a lighting concept into every translation unit that
+    // wants a Scene.
+    //
+    // NULL until the feature derives its first panel, so a scene that never asks
+    // costs one branch and no allocation.
+    struct EmissivePanels* emissive_panels;
 
     TexturePool* tex_pool;
 

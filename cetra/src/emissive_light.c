@@ -323,7 +323,7 @@ static EmissiveFitReject _mesh_candidacy(const Mesh* mesh, vec3 out_nits, bool* 
     return mesh->material->emissive_light != 0 ? EMISSIVE_FIT_OPTED_OUT : EMISSIVE_FIT_OK;
 }
 
-static void _probe_node(const SceneNode* node, int* count) {
+static void _probe_node(const Scene* scene, const SceneNode* node, int* count) {
     if (!node)
         return;
 
@@ -364,17 +364,37 @@ static void _probe_node(const SceneNode* node, int* count) {
 
         printf("emissive-light-probe panel node=%s material=%s mesh=%u "
                "center=%.6f,%.6f,%.6f normal=%.6f,%.6f,%.6f up=%.6f,%.6f,%.6f "
-               "size=%.6f,%.6f planarity=%.6f area=%.6f nits=%.6f radiance=%s "
+               "space=local size=%.6f,%.6f planarity=%.6f area=%.6f nits=%.6f radiance=%s "
                "color=%.6f,%.6f,%.6f\n",
                node_name, mat_name, mesh->id, fit.center[0], fit.center[1], fit.center[2],
                fit.normal[0], fit.normal[1], fit.normal[2], fit.up[0], fit.up[1], fit.up[2],
                fit.size[0], fit.size[1], fit.planarity, fit.area, intensity,
                final ? "final" : "pending", color[0], color[1], color[2]);
         (*count)++;
+
+        // The panel line above is the LOCAL fit. Saying so is not pedantry: the
+        // arm that reads it asserts world numbers taken from a generator, and the
+        // two agree only because every emissive fixture node is identity-
+        // transformed. A second line reports where the panel actually ENDED UP,
+        // which is the half a fit report cannot see -- and the half where the
+        // field-aliasing defect this module shipped with lived, undetected by a
+        // green nine-arm group.
+        const Light* placed = NULL;
+        for (size_t i = 0; i < scene->light_count && !placed; i++)
+            if (scene->lights[i] && scene->lights[i]->emissive_source_id == mesh->id)
+                placed = scene->lights[i];
+        if (placed)
+            printf("emissive-light-probe placed node=%s mesh=%u space=world "
+                   "center=%.6f,%.6f,%.6f normal=%.6f,%.6f,%.6f up=%.6f,%.6f,%.6f "
+                   "size=%.6f,%.6f nits=%.6f\n",
+                   node_name, mesh->id, placed->global_position[0], placed->global_position[1],
+                   placed->global_position[2], placed->direction[0], placed->direction[1],
+                   placed->direction[2], placed->up[0], placed->up[1], placed->up[2],
+                   placed->size[0], placed->size[1], placed->intensity);
     }
 
     for (size_t c = 0; c < node->children_count; c++)
-        _probe_node(node->children[c], count);
+        _probe_node(scene, node->children[c], count);
 }
 
 void emissive_lights_probe(const Scene* scene) {
@@ -387,39 +407,103 @@ void emissive_lights_probe(const Scene* scene) {
     // produces it and a header promising a number the rows then contradict is
     // the failure mode a gate cannot see.
     int count = 0;
-    _probe_node(scene->root_node, &count);
+    _probe_node(scene, scene->root_node, &count);
     printf("emissive-light-probe header count=%d\n", count);
 }
 
-static Light* _find_derived(Scene* scene, unsigned mesh_id) {
-    for (size_t i = 0; i < scene->light_count; i++) {
-        Light* l = scene->lights[i];
-        if (l && l->emissive_source_id == mesh_id)
-            return l;
-    }
+/*
+ * The panel registry: where a derived panel's LOCAL fit lives.
+ *
+ * It did not exist, and its absence was the module's one real defect. The fit
+ * was stashed in Light.original_position/_direction/_up and Light.size and read
+ * back as local on the next frame -- but _place writes WORLD values into those
+ * same four fields, so from frame two the "local" fit was a world fit and the
+ * node transform was re-applied to it every frame, compounding. A translated node
+ * walked its panel away; a scaled one doubled or vanished it; a rotated one spun
+ * its normal. Invisible in the whole corpus because every emissive fixture node
+ * is identity-transformed, which is the exact fixed point where world == local.
+ *
+ * light.h defines original_* as the AUTHORED pre-transform value and scene.c
+ * treats it as read-only; Light.size has no local/world split at all, so there
+ * was nowhere for a local size to survive even in principle. That missing slot is
+ * what forced the write-through-and-read-back in the first place.
+ *
+ * With the fit owned here, _place writes only world outputs and becomes
+ * re-runnable -- which the six cube-capture re-entries per face already assumed.
+ */
+typedef struct EmissivePanel {
+    unsigned mesh_id; // stable across frames; 0 is never a real mesh
+    SceneNode* node;  // borrowed; re-resolved on every rebuild
+    Light* light;     // borrowed; the Scene owns it
+    EmissivePanelFit fit; // LOCAL to the mesh, and it stays local
+    uint64_t fit_epoch;   // graph epoch `fit` was solved at; 0 = never
+    uint64_t seen;        // reconcile pass that last touched this panel
+} EmissivePanel;
+
+struct EmissivePanels {
+    EmissivePanel* items;
+    size_t count, capacity;
+    uint64_t pass; // bumped per reconcile; a panel not stamped with it is gone
+};
+
+void emissive_panels_free(struct EmissivePanels* panels) {
+    if (!panels)
+        return;
+    free(panels->items);
+    free(panels);
+}
+
+static EmissivePanel* _panel_for(struct EmissivePanels* panels, unsigned mesh_id) {
+    for (size_t i = 0; i < panels->count; i++)
+        if (panels->items[i].mesh_id == mesh_id)
+            return &panels->items[i];
     return NULL;
 }
 
-// Local fit -> world, through the node's current transform.
+// Swap-remove: the registry has no ordering contract, unlike scene->lights,
+// whose walk order light_cluster.c documents as what makes packing deterministic.
+static void _panel_drop(struct EmissivePanels* panels, EmissivePanel* panel) {
+    if (panel->light)
+        panel->light = NULL; // the caller owns whether the Light itself goes
+    *panel = panels->items[panels->count - 1];
+    panels->count--;
+}
+
+static EmissivePanel* _panel_add(struct EmissivePanels* panels, unsigned mesh_id) {
+    if (panels->count == panels->capacity) {
+        size_t want = panels->capacity ? panels->capacity * 2 : 8;
+        EmissivePanel* grown = realloc(panels->items, want * sizeof(*grown));
+        if (!grown)
+            return NULL;
+        panels->items = grown;
+        panels->capacity = want;
+    }
+    EmissivePanel* p = &panels->items[panels->count++];
+    memset(p, 0, sizeof(*p));
+    p->mesh_id = mesh_id;
+    return p;
+}
+
+// World placement, from the panel's own local fit. Writes ONLY world outputs:
+// nothing here feeds the next frame's input, which is what makes it re-runnable
+// and what the field aliasing above got wrong.
 //
-// The two axes carry their EXTENT, so the same product delivers the rotation and
-// the scale and a scaled node scales its panel. The normal goes through the
-// node's normal_matrix instead, which is what a normal needs under non-uniform
-// scale and what the node already computes for the draw path.
+// The two axes carry their EXTENT, so one product delivers rotation and scale
+// together and a scaled node scales its panel. The normal goes through the node's
+// normal_matrix instead, which is what a normal needs under non-uniform scale.
 static void _place(Light* light, const SceneNode* node, const EmissivePanelFit* fit) {
     vec3 u, v;
     glm_vec3_cross((float*)fit->up, (float*)fit->normal, u); // the width axis
     glm_vec3_scale(u, fit->size[0], u);
     glm_vec3_scale((float*)fit->up, fit->size[1], v);
 
-    mat4* xf = (mat4*)&node->global_transform;
+    mat4* xf = (mat4*)&node->global_transform; // cglm takes mat4 non-const
     vec3 world_u, world_v, world_c;
     glm_mat4_mulv3(*xf, u, 0.0f, world_u);
     glm_mat4_mulv3(*xf, v, 0.0f, world_v);
     glm_mat4_mulv3(*xf, (float*)fit->center, 1.0f, world_c);
 
     glm_vec3_copy(world_c, light->global_position);
-    glm_vec3_copy(world_c, light->original_position);
     set_light_size(light, glm_vec3_norm(world_u), glm_vec3_norm(world_v));
 
     vec3 world_n;
@@ -428,155 +512,130 @@ static void _place(Light* light, const SceneNode* node, const EmissivePanelFit* 
         glm_vec3_copy((float*)fit->normal, world_n);
     glm_vec3_normalize(world_n);
     glm_vec3_copy(world_n, light->direction);
-    glm_vec3_copy(world_n, light->original_direction);
 
     if (glm_vec3_norm(world_v) < 1e-8f)
         glm_vec3_copy((float*)fit->up, world_v);
     glm_vec3_normalize(world_v);
     glm_vec3_copy(world_v, light->up);
-    glm_vec3_copy(world_v, light->original_up);
 }
 
-static void _reconcile_node(Scene* scene, SceneNode* node, bool refit, int* live) {
+// One walk, and it is the only one. There were three -- clear the marks, collect
+// the survivors, reconcile -- two of which evaluated candidacy over every mesh,
+// which is also what made a textured emitter pay two synchronous GL readbacks a
+// frame. Marking unconditionally rather than only on the candidate path is what
+// lets the clear pass go: a mesh that stops being a candidate is un-marked by the
+// same statement that would have marked it, so a stale mark cannot exist.
+static void _walk(Scene* scene, SceneNode* node, bool enabled, uint64_t epoch, int* live) {
     if (!node)
         return;
 
     for (size_t m = 0; m < node->mesh_count; m++) {
-        // Non-const because this pass MARKS the mesh below; the fit itself only
-        // reads it.
         Mesh* mesh = node->meshes[m];
         if (!mesh)
             continue;
 
         vec3 nits = {0.0f, 0.0f, 0.0f};
-        if (_mesh_candidacy(mesh, nits, NULL) != EMISSIVE_FIT_OK)
-            continue;
+        bool candidate =
+            enabled && _mesh_candidacy(mesh, nits, NULL) == EMISSIVE_FIT_OK;
 
-        Light* light = _find_derived(scene, mesh->id);
-        // Marked here rather than in the sweep below, because the sweep walks
-        // LIGHTS and a mesh that never produced one would never be visited.
-        mesh->emissive_derived = true;
-        EmissivePanelFit fit;
-        if (!light || refit) {
-            if (emissive_panel_fit(mesh, &fit) != EMISSIVE_FIT_OK)
-                continue;
+        EmissivePanel* panel = candidate ? _panel_for(scene->emissive_panels, mesh->id) : NULL;
+        if (candidate && !panel) {
+            panel = _panel_add(scene->emissive_panels, mesh->id);
+            candidate = panel != NULL;
         }
 
-        if (!light) {
-            light = create_light();
-            if (!light)
+        // Re-fit when the graph moved, and when this panel is new. A REJECT is
+        // recorded by dropping the panel, so a shape the fit refuses is retried
+        // once per graph change rather than once per frame -- the fit is an
+        // O(bins x vertices) search and a glowing box would otherwise pay it
+        // forever.
+        if (candidate && (panel->fit_epoch != epoch)) {
+            if (emissive_panel_fit(mesh, &panel->fit) == EMISSIVE_FIT_OK) {
+                panel->fit_epoch = epoch;
+            } else {
+                // The fit refused the shape. Drop the panel AND its light: a
+                // mesh that stopped being a rectangle is no longer a lamp.
+                if (panel->light)
+                    remove_light_from_scene(scene, panel->light);
+                _panel_drop(scene->emissive_panels, panel);
+                candidate = false;
+            }
+        }
+
+        mesh->emissive_derived = candidate;
+        if (!candidate)
+            continue;
+
+        panel->node = node;
+        panel->seen = scene->emissive_panels->pass;
+
+        if (!panel->light) {
+            Light* light = create_light();
+            if (!light) {
+                _panel_drop(scene->emissive_panels, panel);
+                mesh->emissive_derived = false;
                 continue;
+            }
             set_light_type(light, LIGHT_AREA);
             light->emissive_source_id = mesh->id;
             // Named for the NODE, not the material: a name has to identify one
-            // lamp for light_overrides to be able to address it, and a material
-            // is shared by every mesh that uses it.
+            // lamp for light_overrides to address it, and a material is shared by
+            // every mesh that uses it.
             set_light_name(light, node->name ? node->name : "emissive");
             if (add_light_to_scene(scene, light) != 0) {
                 free_light(light);
+                _panel_drop(scene->emissive_panels, panel);
+                mesh->emissive_derived = false;
                 continue;
             }
-            // Stored on the light so a later frame can place it without
-            // re-fitting; these fields already mean "before the node transform".
-            glm_vec3_copy(fit.center, light->original_position);
-            glm_vec3_copy(fit.normal, light->original_direction);
-            glm_vec3_copy(fit.up, light->original_up);
-            glm_vec2_copy(fit.size, light->size);
-        } else if (refit) {
-            glm_vec3_copy(fit.center, light->original_position);
-            glm_vec3_copy(fit.normal, light->original_direction);
-            glm_vec3_copy(fit.up, light->original_up);
-            glm_vec2_copy(fit.size, light->size);
+            panel->light = light;
         }
 
-        // The local fit lives in original_* between frames, so placement reads
-        // it back rather than depending on whether this frame re-fitted.
-        EmissivePanelFit local;
-        memset(&local, 0, sizeof(local));
-        glm_vec3_copy(light->original_position, local.center);
-        glm_vec3_copy(light->original_direction, local.normal);
-        glm_vec3_copy(light->original_up, local.up);
-        glm_vec2_copy(light->size, local.size);
-        _place(light, node, &local);
-
-        emissive_radiance_to_light(nits, light->color, &light->intensity);
-        light->units = LIGHT_UNITS_NITS;
+        _place(panel->light, node, &panel->fit);
+        emissive_radiance_to_light(nits, panel->light->color, &panel->light->intensity);
+        panel->light->units = LIGHT_UNITS_NITS;
         (*live)++;
     }
 
     for (size_t c = 0; c < node->children_count; c++)
-        _reconcile_node(scene, node->children[c], refit, live);
-}
-
-static void _mark_seen(SceneNode* node, unsigned* seen, int* count, int cap) {
-    if (!node)
-        return;
-    for (size_t m = 0; m < node->mesh_count; m++) {
-        const Mesh* mesh = node->meshes[m];
-        vec3 nits = {0.0f, 0.0f, 0.0f};
-        if (!mesh || _mesh_candidacy(mesh, nits, NULL) != EMISSIVE_FIT_OK)
-            continue;
-        if (*count < cap)
-            seen[(*count)++] = mesh->id;
-    }
-    for (size_t c = 0; c < node->children_count; c++)
-        _mark_seen(node->children[c], seen, count, cap);
-}
-
-// Every mesh, unmarked. Called at the top of every reconcile rather than only on
-// the disabled path, because a mesh can stop being a candidate without the
-// feature going anywhere -- a material opting out mid-run is the obvious case --
-// and _reconcile_node below only ever marks. Clear-then-set is one rule that
-// covers both; set-and-hope-to-unset later is two, and the second gets forgotten.
-//
-// A stale mark is not inert: it suppresses that mesh's emissive inside an
-// irradiance capture, for a panel that no longer exists.
-static void _clear_marks(SceneNode* node) {
-    if (!node)
-        return;
-    for (size_t m = 0; m < node->mesh_count; m++)
-        if (node->meshes[m])
-            node->meshes[m]->emissive_derived = false;
-    for (size_t c = 0; c < node->children_count; c++)
-        _clear_marks(node->children[c]);
+        _walk(scene, node->children[c], enabled, epoch, live);
 }
 
 int scene_build_emissive_lights(Scene* scene, bool enabled) {
     if (!scene || !scene->root_node)
         return 0;
 
-    _clear_marks(scene->root_node);
-
-    // Sweep first, so a panel whose mesh is gone releases its cluster slot in the
-    // same pass that would otherwise fill it. Backwards, because removal shifts
-    // the tail down over the index just visited.
-    int seen_count = 0;
-    unsigned* seen = NULL;
-    if (enabled) {
-        seen = calloc(scene->light_count + 64, sizeof(unsigned));
-        if (seen)
-            _mark_seen(scene->root_node, seen, &seen_count, (int)(scene->light_count + 64));
+    if (!scene->emissive_panels) {
+        // Nothing to tear down and nothing to build: the common case is a scene
+        // with the feature off and no registry, and it costs one branch.
+        if (!enabled)
+            return 0;
+        scene->emissive_panels = calloc(1, sizeof(*scene->emissive_panels));
+        if (!scene->emissive_panels)
+            return 0;
     }
 
-    for (size_t i = scene->light_count; i-- > 0;) {
-        Light* l = scene->lights[i];
-        if (!l || l->emissive_source_id == 0)
-            continue; // authored: never this function's business
-        bool keep = false;
-        for (int s = 0; s < seen_count && !keep; s++)
-            keep = seen[s] == l->emissive_source_id;
-        if (!keep)
-            remove_light_from_scene(scene, l);
-    }
-    free(seen);
+    struct EmissivePanels* panels = scene->emissive_panels;
+    panels->pass++;
 
-    if (!enabled)
-        return 0;
-
-    uint64_t epoch = scene_graph_epoch();
-    bool refit = scene->emissive_epoch != epoch;
     int live = 0;
-    _reconcile_node(scene, scene->root_node, refit, &live);
-    scene->emissive_epoch = epoch;
+    _walk(scene, scene->root_node, enabled, scene_graph_epoch(), &live);
+
+    // Sweep AFTER the walk, on the stamp the walk just wrote. The previous shape
+    // swept first against a separately-collected id array sized from
+    // scene->light_count + 64 -- a set of MESH ids sized from a count of LIGHTS,
+    // which silently truncated, and whose calloc failing removed every derived
+    // light (losing exactly the light_overrides state reconcile-not-rebuild
+    // exists to keep). Nothing reads scene->lights between the two, so the old
+    // ordering bought nothing it claimed.
+    for (size_t i = panels->count; i-- > 0;) {
+        if (panels->items[i].seen == panels->pass)
+            continue;
+        if (panels->items[i].light)
+            remove_light_from_scene(scene, panels->items[i].light);
+        panels->items[i] = panels->items[panels->count - 1];
+        panels->count--;
+    }
+
     return live;
 }

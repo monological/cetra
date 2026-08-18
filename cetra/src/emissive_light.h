@@ -9,6 +9,11 @@ struct Material;
 struct Mesh;
 struct Scene;
 
+// The derived panels a Scene owns. Opaque: it holds each panel's LOCAL fit,
+// which is this module's business and nobody else's.
+struct EmissivePanels;
+void emissive_panels_free(struct EmissivePanels* panels);
+
 /*
  * Deriving an LTC area light from an emissive mesh (spec 11.49, roadmap C2).
  *

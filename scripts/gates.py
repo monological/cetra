@@ -7638,6 +7638,12 @@ def run_emissive_gate(workdir):
                         threshold -- an opted-out material used to pass this.
       emissive-texmean  a half-black half-white emissive texture reads 0.5. The
                         only arm that sees the top-mip readback at all.
+      emissive-placed   a panel on a TRANSLATED node lands in the same place at 4
+                        frames and at 40. Every fixture node is identity-
+                        transformed, which is the one arrangement where the local
+                        fit and the world placement cannot be told apart -- and
+                        this module shipped re-applying the node transform to its
+                        own output every frame, which no other arm can see.
 
     INTENT, because the feature has to be able to decline:
 
@@ -7765,6 +7771,49 @@ def run_emissive_gate(workdir):
                   f"want {EMISSIVE_TEX_MEAN} +/-{EMISSIVE_TEX_EPS} (delta={d:.6f})")
             if not ok:
                 failures.append("emissive-texmean")
+
+        # PLACEMENT, on a TRANSFORMED node, which nothing else in the corpus has.
+        #
+        # The fit is local; where the panel ends up is the other half, and every
+        # emissive fixture node is identity-transformed -- the one arrangement
+        # where world == local and the two halves cannot be told apart. This
+        # module shipped writing world values back into the fields it read the
+        # local fit from, so from frame two the node transform was re-applied to
+        # its own output: a translated node walked its panel away, compounding,
+        # and nine green arms could not see it.
+        #
+        # Rendering the same scene twice at 10x the frames and demanding the same
+        # answer is what catches an accumulating error, where any single frame
+        # looks plausible.
+        moved = os.path.join(workdir, "emissive_moved.gltf")
+        with open(fixture) as f:
+            doc = json.load(f)
+        for n in doc["nodes"]:
+            if n["name"] == "emissive_quad":
+                n["translation"] = [0.5, 0.0, 0.0]
+        for b in doc.get("buffers", []):
+            b.pop("_", None)
+        with open(moved, "w") as f:
+            json.dump(doc, f)
+
+        short_rows, _ = _emissive_probe(workdir, moved, ["--emissive-lights"], frames=4)
+        long_rows, _ = _emissive_probe(workdir, moved, ["--emissive-lights"], frames=40)
+        s_rec = _emissive_named(short_rows, "placed", "emissive_quad")
+        l_rec = _emissive_named(long_rows, "placed", "emissive_quad")
+        if not s_rec or not l_rec:
+            print("  emissive-placed FAIL  no placed row (the panel was never built)")
+            failures.append("emissive-placed")
+        else:
+            sc, lc = _emissive_vec(s_rec, "center"), _emissive_vec(l_rec, "center")
+            ss, ls = _emissive_vec(s_rec, "size"), _emissive_vec(l_rec, "size")
+            drift = max(max(abs(sc[i] - lc[i]) for i in range(3)),
+                        max(abs(ss[i] - ls[i]) for i in range(2)))
+            ok = drift <= EMISSIVE_GEOM_EPS
+            print(f"  emissive-placed {'PASS' if ok else 'FAIL'} 4 frames vs 40 on a "
+                  f"translated node: centre {sc} -> {lc} size {ss} -> {ls} "
+                  f"drift={drift:.6f} want <={EMISSIVE_GEOM_EPS}")
+            if not ok:
+                failures.append("emissive-placed")
 
     # --- intent -------------------------------------------------------------
     water = os.path.join(ROOT, "assets", EMISSIVE_WATER_FIXTURE)
