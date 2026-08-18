@@ -7472,6 +7472,15 @@ EMISSIVE_STRIP_SIZE = (0.25, 2.0)
 # everything -- which is the residual this bar is sized to admit and name.
 EMISSIVE_MATCH_EPS = 0.03
 
+# The GI arm compares two LIFTS, so it is looser than the direct match above: it
+# divides two ratios, each carrying the probe volume's own quantisation, and the
+# derived side is very slightly darker because the authored fixture's quad still
+# emits its token 1 nit into the capture where the derived one is silenced whole.
+# It failed at 1.3134 before the capture learned to silence a derived emitter, so
+# 5% discriminates by a wide margin.
+EMISSIVE_GI_EPS = 0.05
+EMISSIVE_GI_FRAMES = 120
+
 EMISSIVE_BOXES = {
     "floor": (0.20, 0.70, 0.80, 0.95),
     "left": (0.02, 0.35, 0.12, 0.70),
@@ -7561,6 +7570,14 @@ def run_emissive_gate(workdir):
                         happens before overrides resolve -- and it is how the
                         match arm above gets to agree at all, since the authored
                         light casts and a derived one does not by default.
+      emissive-gi       a derived panel and a hand-authored one lift the indirect
+                        term by the same amount. A DDGI probe capture runs the
+                        full forward shader, so it sees the emissive surface AND
+                        the surfaces the panel already lit -- the first bounce
+                        lands twice, and it read 1.31x on the floor before the
+                        capture learned to silence a derived emitter. Reads the
+                        RATIO of lifts, so it does not move when the fixture's
+                        exposure or geometry does.
       emissive-off      two ways of having no derived panel agree, and both
                         differ from having one. NOT "the room goes dark", which
                         is what this was first written as: strip the authored
@@ -7742,6 +7759,49 @@ def run_emissive_gate(workdir):
           "boxes should hide)")
     if not ok:
         failures.append("emissive-override")
+
+    # The indirect term must not count the emitter twice. Four renders because a
+    # LIFT is what is being compared, not a brightness: each side is measured
+    # against its own GI-off frame, so the arm survives the two sides differing
+    # in anything else. 120 frames is the probe volume converging -- it captures a
+    # couple of probes a frame and then idles.
+    gi_a = os.path.join(workdir, "emissive_gi_authored.ppm")
+    gi_b = os.path.join(workdir, "emissive_gi_derived.ppm")
+    # Dedicated GI-OFF baselines at the same frame count, rather than reusing the
+    # match arm's 30-frame renders. A lift divides two frames, so anything that
+    # differs between them contaminates it -- and 30 against 120 is a real
+    # difference here, worth 2.7 points on the floor when it was measured.
+    off_a = os.path.join(workdir, "emissive_gi_authored_off.ppm")
+    off_b = os.path.join(workdir, "emissive_gi_derived_off.ppm")
+    err = (render(cornell, off_a, base, frames=EMISSIVE_GI_FRAMES) or
+           render(derived, off_b, base + ["--emissive-lights"], frames=EMISSIVE_GI_FRAMES) or
+           render(cornell, gi_a, base + ["--gi-volume"], frames=EMISSIVE_GI_FRAMES) or
+           render(derived, gi_b, base + ["--emissive-lights", "--gi-volume"],
+                  frames=EMISSIVE_GI_FRAMES))
+    if err:
+        print(f"  emissive-gi    ERROR render failed: {err.strip()[-200:]}")
+        failures.append("emissive-gi")
+    else:
+        wga, hga, pga = _read_ppm(gi_a)
+        wgb, hgb, pgb = _read_ppm(gi_b)
+        woa, hoa, poa = _read_ppm(off_a)
+        wob, hob, pob = _read_ppm(off_b)
+        worst, worst_name, detail = 0.0, "", []
+        for name, bx in EMISSIVE_BOXES.items():
+            base_a = sum(_absorb_box_rgb(poa, woa, hoa, bx)) / 3.0
+            base_b = sum(_absorb_box_rgb(pob, wob, hob, bx)) / 3.0
+            lift_a = (sum(_absorb_box_rgb(pga, wga, hga, bx)) / 3.0) / max(base_a, 1e-6)
+            lift_b = (sum(_absorb_box_rgb(pgb, wgb, hgb, bx)) / 3.0) / max(base_b, 1e-6)
+            rel = lift_b / max(lift_a, 1e-6)
+            detail.append(f"{name}={rel:.4f}")
+            if abs(rel - 1.0) > abs(worst - 1.0) or worst == 0.0:
+                worst, worst_name = rel, name
+        ok = abs(worst - 1.0) <= EMISSIVE_GI_EPS
+        print(f"  emissive-gi    {'PASS' if ok else 'FAIL'}  derived/authored GI lift "
+              f"{' '.join(detail)} worst={worst:.4f} at {worst_name} "
+              f"want 1.0 +/-{EMISSIVE_GI_EPS}")
+        if not ok:
+            failures.append("emissive-gi")
 
     # OFF IS OFF, stated as an identity rather than as "the room goes dark",
     # which is what this arm was first written as and is measured wrong.

@@ -559,6 +559,21 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
         uniform_set_float(u, "uWindMaskMinY", mesh->aabb.min[1]);
         uniform_set_float(u, "uWindMaskMaxY", mesh->aabb.max[1]);
 
+        // Emissive gate (spec 11.49): 0 silences this mesh's emissive inside an
+        // IRRADIANCE capture, where its derived area panel already delivers that
+        // light and a visible emitter would deliver it a second time.
+        //
+        // Per-mesh here rather than folded into emissiveFactor, which lives in
+        // the material block: submit_take_material uploads that only when the
+        // material CHANGES, so a zero written for one mesh would leak onto every
+        // later mesh sharing it, and un-leaking it means invalidating the
+        // material cache every draw. This rides beside the wind bounds instead,
+        // which are per-mesh for the same reason. uniform_set_float is
+        // value-cached and this is 1.0 on effectively every draw, so the steady
+        // state is a comparison and no GL call.
+        uniform_set_float(u, "uEmissiveGate",
+                          engine->capturing_irradiance && mesh->emissive_derived ? 0.0f : 1.0f);
+
         // Only update material uniforms if material changed
         if (submit_take_material(state, mat)) {
             _update_program_material_uniforms(program, mat, a2c_capable);

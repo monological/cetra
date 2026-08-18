@@ -442,7 +442,9 @@ static void _reconcile_node(Scene* scene, SceneNode* node, bool refit, int* live
         return;
 
     for (size_t m = 0; m < node->mesh_count; m++) {
-        const Mesh* mesh = node->meshes[m];
+        // Non-const because this pass MARKS the mesh below; the fit itself only
+        // reads it.
+        Mesh* mesh = node->meshes[m];
         if (!mesh)
             continue;
 
@@ -451,6 +453,9 @@ static void _reconcile_node(Scene* scene, SceneNode* node, bool refit, int* live
             continue;
 
         Light* light = _find_derived(scene, mesh->id);
+        // Marked here rather than in the sweep below, because the sweep walks
+        // LIGHTS and a mesh that never produced one would never be visited.
+        mesh->emissive_derived = true;
         EmissivePanelFit fit;
         if (!light || refit) {
             if (emissive_panel_fit(mesh, &fit) != EMISSIVE_FIT_OK)
@@ -518,9 +523,29 @@ static void _mark_seen(SceneNode* node, unsigned* seen, int* count, int cap) {
         _mark_seen(node->children[c], seen, count, cap);
 }
 
+// Every mesh, unmarked. Called at the top of every reconcile rather than only on
+// the disabled path, because a mesh can stop being a candidate without the
+// feature going anywhere -- a material opting out mid-run is the obvious case --
+// and _reconcile_node below only ever marks. Clear-then-set is one rule that
+// covers both; set-and-hope-to-unset later is two, and the second gets forgotten.
+//
+// A stale mark is not inert: it suppresses that mesh's emissive inside an
+// irradiance capture, for a panel that no longer exists.
+static void _clear_marks(SceneNode* node) {
+    if (!node)
+        return;
+    for (size_t m = 0; m < node->mesh_count; m++)
+        if (node->meshes[m])
+            node->meshes[m]->emissive_derived = false;
+    for (size_t c = 0; c < node->children_count; c++)
+        _clear_marks(node->children[c]);
+}
+
 int scene_build_emissive_lights(Scene* scene, bool enabled) {
     if (!scene || !scene->root_node)
         return 0;
+
+    _clear_marks(scene->root_node);
 
     // Sweep first, so a panel whose mesh is gone releases its cluster slot in the
     // same pass that would otherwise fill it. Backwards, because removal shifts

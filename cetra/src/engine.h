@@ -196,6 +196,22 @@ typedef struct Engine {
     // framebuffer's shape rather than the bound one, must consult this.
     bool capturing;
 
+    // Narrower than `capturing`, and the distinction is the whole point: this is
+    // true only while a capture whose output is IRRADIANCE runs -- one whose
+    // result is ADDED to the analytic direct term rather than shown to an eye.
+    //
+    // A derived emissive panel (spec 11.49) must not appear in such a capture:
+    // the panel already delivers that light analytically, so an emitter visible
+    // to the probes as well arrives twice. Measured at 1.31x on the cornell
+    // floor before this existed.
+    //
+    // The REFLECTION probe deliberately does not set it. Its output is radiance
+    // -- what a mirror sees -- so the emitter must appear there, and suppressing
+    // it would stop mirrors reflecting a lamp that is visibly in the room. Both
+    // captures go through scene_capture_faces and both raise `capturing`, which
+    // is exactly why that flag cannot answer this question.
+    bool capturing_irradiance;
+
     Camera* camera;         // main camera
     CameraMode camera_mode; // Current camera mode
 

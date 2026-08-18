@@ -55,6 +55,10 @@ uniform int renderMode;
 
 uniform vec3 albedo;
 uniform vec3 emissiveFactor;  // Emissive color factor (multiplied with emissive texture)
+// Per-MESH, unlike emissiveFactor beside it: 0 silences this mesh's emissive
+// inside an irradiance capture whose analytic panel already carries that light
+// (spec 11.49). Defaults to 1 so a program nothing uploads it to is unaffected.
+uniform float uEmissiveGate = 1.0;
 uniform float metallic;
 uniform float roughness;
 uniform float ao;
@@ -1126,6 +1130,12 @@ void main() {
     } else {
         emissiveMap = emissiveFactor;
     }
+    // Silenced inside an irradiance capture when this mesh's emissive is also a
+    // derived area panel (spec 11.49): the panel delivers that light through the
+    // analytic term, so an emitter the probes can see delivers it twice. 1.0
+    // everywhere else, including every reflection-probe face -- a mirror has to
+    // keep seeing the lamp.
+    emissiveMap *= uEmissiveGate;
 
     // Geometric coverage, kept apart from the scalar translucency it used to be
     // multiplied into (see fresnelOpacity). A dedicated opacity map and an

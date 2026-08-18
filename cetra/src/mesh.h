@@ -80,6 +80,18 @@ typedef struct Mesh {
     struct Skeleton* skeleton; // Shared skeleton pointer (not owned)
     bool is_skinned;
 
+    // This mesh's emissive surface is also an LTC area panel (spec 11.49), so a
+    // capture whose output is irradiance must not see it emit -- the panel
+    // already carries that light analytically.
+    //
+    // Per MESH and not per material, which is the whole reason it lives here: one
+    // material can serve both a quad that became a panel and a shape the
+    // planarity test rejected, and the second still has to emit.
+    //
+    // Owned by the emissive reconcile, which CLEARS it when the feature is off.
+    // Leaving it set would suppress an emitter for a panel that no longer exists.
+    bool emissive_derived;
+
     // Outstanding shares. One is the ordinary case and behaves exactly as the
     // pointer did when it was owned outright, including for a mesh no node ever
     // takes; more than one is geometry a file says is shared.

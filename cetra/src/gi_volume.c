@@ -287,6 +287,17 @@ void gi_volume_update(GIVolume* gi, struct Engine* engine, struct Scene* scene) 
     SceneCaptureState saved_capture;
     scene_capture_begin(engine, scene, &saved_capture);
 
+    // What this volume bakes is IRRADIANCE, added to the analytic direct term
+    // rather than shown to an eye -- so an emissive surface that also exists as a
+    // derived area panel must sit this out, or its light reaches a receiver twice.
+    // Raised here and not in scene_capture_faces because the reflection probe
+    // goes through the same call and wants the opposite (engine.h).
+    //
+    // Around the whole burst rather than each face: the only other thing between
+    // them is the projection pass, a fullscreen quad with no emissive in it.
+    const bool saved_irradiance = engine->capturing_irradiance;
+    engine->capturing_irradiance = true;
+
     for (int n = 0; n < budget; ++n) {
         int probe = gi->next_probe;
         gi->next_probe = (gi->next_probe + 1) % probes;
@@ -315,6 +326,7 @@ void gi_volume_update(GIVolume* gi, struct Engine* engine, struct Scene* scene) 
         log_info("GI volume converged: %d captures total", gi->captures_total);
     }
 
+    engine->capturing_irradiance = saved_irradiance;
     scene_capture_end(engine, scene, &saved_capture);
 
     // Blend ENABLED is the engine's baseline (set once at init; the G-buffer
