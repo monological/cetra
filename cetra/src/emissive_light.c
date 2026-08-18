@@ -25,16 +25,19 @@ const char* emissive_fit_reject_name(EmissiveFitReject reject) {
     switch (reject) {
     case EMISSIVE_FIT_OK:
         return "ok";
+    // One token, no spaces: these are values in a key=value line, and a reader
+    // that splits on whitespace -- which is every reader of this format -- turns
+    // "not planar" into a truncated reason and a bare word it cannot place.
     case EMISSIVE_FIT_NO_GEOMETRY:
-        return "no indexed triangles";
+        return "no-indexed-triangles";
     case EMISSIVE_FIT_DEGENERATE:
-        return "zero area";
+        return "zero-area";
     case EMISSIVE_FIT_NOT_PLANAR:
-        return "not planar";
+        return "not-planar";
     case EMISSIVE_FIT_TOO_DIM:
-        return "radiance too low to light anything";
+        return "too-dim";
     case EMISSIVE_FIT_OPTED_OUT:
-        return "material opted out";
+        return "opted-out";
     }
     return "unknown";
 }
@@ -352,7 +355,7 @@ static void _probe_node(const SceneNode* node, int* count) {
         if (reject == EMISSIVE_FIT_OK)
             reject = emissive_panel_fit(mesh, &fit);
         if (reject != EMISSIVE_FIT_OK) {
-            printf("emissive-light-probe reject node=%s material=%s mesh=%u reason=\"%s\" "
+            printf("emissive-light-probe reject node=%s material=%s mesh=%u reason=%s "
                    "planarity=%.6f area=%.6f nits=%.6f\n",
                    node_name, mat_name, mesh->id, emissive_fit_reject_name(reject), fit.planarity,
                    fit.area, intensity);

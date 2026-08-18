@@ -7436,6 +7436,359 @@ def run_varying_gate(workdir):
 # minutes long, and a change that touches one subsystem should not have to pay for
 # all of them -- a check nobody waits for is a check nobody runs. The full run stays
 # the default, so CI and the specs' verification blocks are unaffected.
+# ---------------------------------------------------------------------------
+# Emissive geometry as LTC area lights (spec 11.49 / roadmap C2)
+# ---------------------------------------------------------------------------
+
+EMISSIVE_FIXTURE = "emissive_fixture.gltf"
+CORNELL_FIXTURE = "cornell_box.cscn"
+EMISSIVE_WATER_FIXTURE = "water_fixture.gltf"
+
+# The cornell quad, read off gen_cornell_rooms.py rather than off a render: the
+# panel sits at TOP - 0.02 with TOP = 2.0 and spans +/-0.35 in x and z. Stated
+# here so the arm compares the fit against the GEOMETRY, not against itself.
+#
+# Note 1.98 and not the 1.97 the fixture's own area light is authored at. That
+# 1 cm is a real discrepancy in the fixture -- its comment says the light mirrors
+# the quad -- and the fit is a fit of the MESH, so this is the number it owes.
+EMISSIVE_CORNELL_CENTER = (0.0, 1.98, 0.0)
+EMISSIVE_CORNELL_NORMAL = (0.0, -1.0, 0.0)
+EMISSIVE_CORNELL_SIZE = (0.7, 0.7)
+EMISSIVE_GEOM_EPS = 1e-3
+
+# Half black, half white, so the linear mean is 0.5 by construction. The
+# tolerance is the 8-bit sRGB round trip through the top mip, not slack: 0.5
+# encodes to byte 188, which decodes to 0.5029.
+EMISSIVE_TEX_MEAN = 0.5
+EMISSIVE_TEX_EPS = 0.01
+
+# The strip is 2.0 x 0.25 rotated 30 degrees in its own plane. An axis-aligned
+# bound on the reference frame reads about 1.86 x 1.09, so this separates the
+# minimum-area search from the obvious thing to have written.
+EMISSIVE_STRIP_SIZE = (0.25, 2.0)
+
+# Derived against hand-authored at equal radiance. Not tighter, because the
+# fixture's own 1 cm offset puts the derived panel very slightly further from
+# everything -- which is the residual this bar is sized to admit and name.
+EMISSIVE_MATCH_EPS = 0.03
+
+EMISSIVE_BOXES = {
+    "floor": (0.20, 0.70, 0.80, 0.95),
+    "left": (0.02, 0.35, 0.12, 0.70),
+    "right": (0.88, 0.35, 0.98, 0.70),
+}
+
+
+def _emissive_probe(workdir, scene, extra=None, frames=8):
+    """Run --emissive-light-probe and parse its lines into dicts.
+
+    Reads the INSTRUMENT rather than the image on purpose: a panel half a metre
+    out or sqrt(2) too wide still lights a room, so a frame cannot tell a correct
+    fit from a plausible one. Every geometric arm here goes through this.
+    """
+    out = os.path.join(workdir, "emissive_probe.ppm")
+    cmd = [RENDER, "-m", scene, "-x", "-f", str(frames), "-W", "400", "-H", "300",
+           "-S", out, "--emissive-light-probe"]
+    r = subprocess.run(cmd + (extra or []), capture_output=True, text=True)
+    rows = []
+    for line in (r.stdout + r.stderr).splitlines():
+        if not line.startswith("emissive-light-probe "):
+            continue
+        parts = line.split()
+        rec = {"kind": parts[1]}
+        for tok in parts[2:]:
+            if "=" not in tok:
+                continue
+            k, v = tok.split("=", 1)
+            rec[k] = v
+        rows.append(rec)
+    return rows, r.stdout + r.stderr
+
+
+def _emissive_vec(rec, key):
+    try:
+        return tuple(float(x) for x in rec[key].split(","))
+    except (KeyError, ValueError):
+        return None
+
+
+def _emissive_named(rows, kind, node):
+    for r in rows:
+        if r.get("kind") == kind and r.get("node") == node:
+            return r
+    return None
+
+
+def run_emissive_gate(workdir):
+    """Emissive geometry derives an LTC area light (spec 11.49).
+
+    The arms split into three groups, and the split is the point.
+
+    GEOMETRY, read off the probe against numbers taken from the generators:
+
+      emissive-fit      the cornell quad's centre, normal and size. Exact, not
+                        approximate -- the mesh is a flat axis-aligned square and
+                        the fit owes it to the digit.
+      emissive-strip    a 2.0 x 0.25 quad rotated 30 degrees in its own plane.
+                        Fails the covariance principal axis this was first written
+                        as, and fails an axis-aligned bound, both of which look
+                        right on every other shape in the corpus.
+      emissive-reject   a closed cube rejects at planarity 0. The one-rectangle
+                        limit as a test rather than a promise.
+      emissive-texmean  a half-black half-white emissive texture reads 0.5. The
+                        only arm that sees the top-mip readback at all.
+
+    INTENT, because the feature has to be able to decline:
+
+      emissive-unlit    water_fixture's bed and ramp are emissive over a BLACK
+                        base -- the unlit-flat-colour idiom -- and the probe
+                        reports both. This arm exists because that measurement is
+                        why the feature is off by default; without it a later
+                        change could quietly start treating them as lamps and
+                        nothing would object.
+      emissive-optout   emissiveLight: "off" takes the cornell panel to zero
+                        derived lights. Authored as the LABEL, so it covers the
+                        scene-file change too.
+
+    LIGHT, which is what any of it was for:
+
+      emissive-match    a derived panel and a hand-authored one, at equal
+                        radiance, light the room the same. THE acceptance test.
+                        Read on floor and walls, never the ceiling panel, whose
+                        own pixels differ 18x between the two by construction.
+      emissive-off      two ways of having no derived panel agree, and both
+                        differ from having one. NOT "the room goes dark", which
+                        is what this was first written as: strip the authored
+                        light and turn the feature off and the scene has no
+                        lights at all, so the render app substitutes its
+                        three-point fallback and the room gets BRIGHTER, 16x.
+      emissive-override light_overrides names a DERIVED panel and gives it a
+                        shadow. Proves the name reaches it and that the build
+                        happens before overrides resolve -- and it is how the
+                        match arm above gets to agree at all, since the authored
+                        light casts and a derived one does not by default.
+    """
+    failures = []
+    fixture = os.path.join(ROOT, "assets", EMISSIVE_FIXTURE)
+    cornell = os.path.join(ROOT, "assets", CORNELL_FIXTURE)
+
+    # --- geometry -----------------------------------------------------------
+    if not os.path.exists(cornell):
+        print(f"  emissive-fit   SKIP  ({CORNELL_FIXTURE} not present)")
+    else:
+        rows, _ = _emissive_probe(workdir, cornell)
+        rec = _emissive_named(rows, "panel", "cornell_light")
+        if not rec:
+            print("  emissive-fit   FAIL  no panel derived from cornell_light")
+            failures.append("emissive-fit")
+        else:
+            c = _emissive_vec(rec, "center")
+            n = _emissive_vec(rec, "normal")
+            s = _emissive_vec(rec, "size")
+            dc = max(abs(c[i] - EMISSIVE_CORNELL_CENTER[i]) for i in range(3))
+            dn = max(abs(n[i] - EMISSIVE_CORNELL_NORMAL[i]) for i in range(3))
+            ds = max(abs(sorted(s)[i] - sorted(EMISSIVE_CORNELL_SIZE)[i]) for i in range(2))
+            plan = float(rec.get("planarity", 0.0))
+            ok = (dc <= EMISSIVE_GEOM_EPS and dn <= EMISSIVE_GEOM_EPS
+                  and ds <= EMISSIVE_GEOM_EPS and abs(plan - 1.0) <= EMISSIVE_GEOM_EPS)
+            print(f"  emissive-fit   {'PASS' if ok else 'FAIL'}  center={c} normal={n} "
+                  f"size={s} planarity={plan:.6f} worst_delta={max(dc, dn, ds):.6f} "
+                  f"want <={EMISSIVE_GEOM_EPS}")
+            if not ok:
+                failures.append("emissive-fit")
+
+    if not os.path.exists(fixture):
+        print(f"  emissive-strip SKIP  ({EMISSIVE_FIXTURE} not present)")
+    else:
+        rows, _ = _emissive_probe(workdir, fixture)
+
+        rec = _emissive_named(rows, "panel", "emissive_strip")
+        if not rec:
+            print("  emissive-strip FAIL  no panel derived from emissive_strip")
+            failures.append("emissive-strip")
+        else:
+            s = sorted(_emissive_vec(rec, "size"))
+            want = sorted(EMISSIVE_STRIP_SIZE)
+            ds = max(abs(s[i] - want[i]) for i in range(2))
+            ok = ds <= EMISSIVE_GEOM_EPS
+            print(f"  emissive-strip {'PASS' if ok else 'FAIL'}  size={s[0]:.6f}x{s[1]:.6f} "
+                  f"want {want[0]}x{want[1]} delta={ds:.6f}")
+            if not ok:
+                failures.append("emissive-strip")
+
+        rec = _emissive_named(rows, "reject", "emissive_box")
+        ok = rec is not None and float(rec.get("planarity", 1.0)) <= 0.5
+        got = rec.get("reason", "no reject line") if rec else "no reject line"
+        plan = float(rec["planarity"]) if rec and "planarity" in rec else float("nan")
+        print(f"  emissive-reject {'PASS' if ok else 'FAIL'} reason={got} "
+              f"planarity={plan:.6f} want <=0.5")
+        if not ok:
+            failures.append("emissive-reject")
+
+        rec = _emissive_named(rows, "panel", "emissive_quad")
+        if not rec or rec.get("radiance") != "final":
+            state = rec.get("radiance", "absent") if rec else "absent"
+            print(f"  emissive-texmean FAIL  radiance={state}, want final "
+                  "(the texture's mip never arrived)")
+            failures.append("emissive-texmean")
+        else:
+            nits = float(rec["nits"])
+            d = abs(nits - EMISSIVE_TEX_MEAN)
+            ok = d <= EMISSIVE_TEX_EPS
+            print(f"  emissive-texmean {'PASS' if ok else 'FAIL'} nits={nits:.6f} "
+                  f"want {EMISSIVE_TEX_MEAN} +/-{EMISSIVE_TEX_EPS} (delta={d:.6f})")
+            if not ok:
+                failures.append("emissive-texmean")
+
+    # --- intent -------------------------------------------------------------
+    water = os.path.join(ROOT, "assets", EMISSIVE_WATER_FIXTURE)
+    if not os.path.exists(water):
+        print(f"  emissive-unlit SKIP  ({EMISSIVE_WATER_FIXTURE} not present)")
+    else:
+        rows, _ = _emissive_probe(workdir, water, ["--no-water"])
+        panels = sorted(r["node"] for r in rows if r.get("kind") == "panel")
+        ok = panels == ["water_bed", "water_ramp"]
+        print(f"  emissive-unlit {'PASS' if ok else 'FAIL'}  panels={panels} "
+              "want ['water_bed', 'water_ramp'] (emissive over a black base is not a lamp)")
+        if not ok:
+            failures.append("emissive-unlit")
+
+    if os.path.exists(cornell):
+        optout = os.path.join(workdir, "cornell_optout.cscn")
+        cscn_copy(cornell, optout,
+                  lambda d: d.setdefault("materials", {})
+                             .setdefault("cornell_light", {})
+                             .update({"emissiveLight": "off"}))
+        rows, _ = _emissive_probe(workdir, optout, ["--emissive-lights"])
+        header = next((r for r in rows if r.get("kind") == "header"), None)
+        count = int(header["count"]) if header and "count" in header else -1
+        ok = count == 0
+        print(f"  emissive-optout {'PASS' if ok else 'FAIL'} derived={count} want 0 "
+              "(authored as the label, not the number)")
+        if not ok:
+            failures.append("emissive-optout")
+
+    # --- light --------------------------------------------------------------
+    if not os.path.exists(cornell):
+        print(f"  emissive-match SKIP  ({CORNELL_FIXTURE} not present)")
+        return failures
+
+    base = ["--no-auto-exposure", "-E", "1.0", "--no-dither"]
+
+    # The derived twin: the quad carries the authored light's radiance, the
+    # authored light is gone, and a light_overrides entry gives the panel the
+    # shadow the authored one had. Generated rather than committed, so the two
+    # halves cannot differ in anything this does not touch.
+    def _derive(d):
+        d["lights"] = []
+        d["light_overrides"] = [{"name": "cornell_light", "cast_shadows": True}]
+        d.setdefault("materials", {}).setdefault("cornell_light", {})["emissiveStrength"] = 18.0
+
+    derived = os.path.join(workdir, "cornell_derived.cscn")
+    cscn_copy(cornell, derived, _derive)
+
+    a = os.path.join(workdir, "emissive_authored.ppm")
+    b = os.path.join(workdir, "emissive_derived.ppm")
+    err = render(cornell, a, base)
+    if err:
+        print(f"  emissive-match ERROR authored render failed: {err.strip()[-200:]}")
+        return failures + ["emissive-match"]
+    err = render(derived, b, base + ["--emissive-lights"])
+    if err:
+        print(f"  emissive-match ERROR derived render failed: {err.strip()[-200:]}")
+        return failures + ["emissive-match"]
+
+    wa, ha, pa = _read_ppm(a)
+    wb, hb, pb = _read_ppm(b)
+    worst, worst_name = 0.0, ""
+    detail = []
+    for name, box in EMISSIVE_BOXES.items():
+        ra = _absorb_box_rgb(pa, wa, ha, box)
+        rb = _absorb_box_rgb(pb, wb, hb, box)
+        la = sum(ra) / 3.0
+        lb = sum(rb) / 3.0
+        rel = abs(lb - la) / max(la, 1e-6)
+        detail.append(f"{name}={lb / max(la, 1e-6):.4f}")
+        if rel > worst:
+            worst, worst_name = rel, name
+    ok = worst <= EMISSIVE_MATCH_EPS
+    print(f"  emissive-match {'PASS' if ok else 'FAIL'}  derived/authored {' '.join(detail)} "
+          f"worst={worst:.4f} at {worst_name} want <={EMISSIVE_MATCH_EPS}")
+    if not ok:
+        failures.append("emissive-match")
+
+    # The override is what made that agree: without it the authored light casts
+    # and the derived one does not, and the floor reads ~1.4x. So this arm both
+    # proves the name reaches a derived panel and explains the arm above.
+    noshadow = os.path.join(workdir, "cornell_noshadow.cscn")
+
+    def _derive_noshadow(d):
+        _derive(d)
+        d.pop("light_overrides", None)
+
+    cscn_copy(cornell, noshadow, _derive_noshadow)
+    c = os.path.join(workdir, "emissive_noshadow.ppm")
+    err = render(noshadow, c, base + ["--emissive-lights"])
+    if err:
+        print(f"  emissive-override ERROR render failed: {err.strip()[-200:]}")
+        return failures + ["emissive-override"]
+    wc, hc, pc = _read_ppm(c)
+    fa = sum(_absorb_box_rgb(pa, wa, ha, EMISSIVE_BOXES["floor"])) / 3.0
+    fc = sum(_absorb_box_rgb(pc, wc, hc, EMISSIVE_BOXES["floor"])) / 3.0
+    lift = fc / max(fa, 1e-6)
+    ok = lift >= 1.10
+    print(f"  emissive-override {'PASS' if ok else 'FAIL'} floor without the override "
+          f"={lift:.4f}x authored, want >=1.10 (an unshadowed panel lights what the "
+          "boxes should hide)")
+    if not ok:
+        failures.append("emissive-override")
+
+    # OFF IS OFF, stated as an identity rather than as "the room goes dark",
+    # which is what this arm was first written as and is measured wrong.
+    #
+    # This variant has no authored light, so with the feature off the scene has
+    # no lights at all -- and the render app then substitutes its three-point
+    # fallback rig, which floods the room to 16x the authored frame. Darkness is
+    # not available to assert. What IS available: two different ways of having no
+    # derived panel must produce the same frame. The flag absent, and the flag
+    # present with the material opted out. Both get the fallback, so it cancels,
+    # and the arm fails if either route leaks a panel.
+    optout_lit = os.path.join(workdir, "cornell_derived_optout.cscn")
+
+    def _derive_optout(d):
+        _derive(d)
+        d["materials"]["cornell_light"]["emissiveLight"] = "off"
+
+    cscn_copy(cornell, optout_lit, _derive_optout)
+
+    d_off = os.path.join(workdir, "emissive_off.ppm")
+    d_opt = os.path.join(workdir, "emissive_off_optout.ppm")
+    err = render(derived, d_off, base) or render(optout_lit, d_opt, base + ["--emissive-lights"])
+    if err:
+        print(f"  emissive-off   ERROR render failed: {err.strip()[-200:]}")
+        return failures + ["emissive-off"]
+    wd, hd, pd = _read_ppm(d_off)
+    wo, ho, po = _read_ppm(d_opt)
+    worst = 0.0
+    for name, box in EMISSIVE_BOXES.items():
+        l1 = sum(_absorb_box_rgb(pd, wd, hd, box)) / 3.0
+        l2 = sum(_absorb_box_rgb(po, wo, ho, box)) / 3.0
+        worst = max(worst, abs(l2 - l1) / max(l1, 1e-6))
+    # Sanity, so this cannot pass on two identically blank frames: the no-panel
+    # frame must differ from the derived one, which is the thing being switched.
+    fd = sum(_absorb_box_rgb(pd, wd, hd, EMISSIVE_BOXES["floor"])) / 3.0
+    fb = sum(_absorb_box_rgb(pb, wb, hb, EMISSIVE_BOXES["floor"])) / 3.0
+    moved = abs(fd - fb) / max(fb, 1e-6)
+    ok = worst <= EMISSIVE_MATCH_EPS and moved >= 0.10
+    print(f"  emissive-off   {'PASS' if ok else 'FAIL'}  flag-absent vs opted-out "
+          f"worst={worst:.4f} want <={EMISSIVE_MATCH_EPS}; and vs derived "
+          f"moved={moved:.4f} want >=0.10")
+    if not ok:
+        failures.append("emissive-off")
+
+    return failures
+
+
 GATE_GROUPS = [
     ("scale", "scale invariance (lights x1000, exposure /1000):", run_scale_gates),
     ("penumbra", "area shadow (analytic penumbra):", run_penumbra_gate),
@@ -7455,6 +7808,8 @@ GATE_GROUPS = [
      run_water_gate),
     ("beach", "the shoaling bed the eye can see (surf ring, turquoise, bound; spec 11.44):",
      run_beach_gate),
+    ("emissive", "emissive geometry as area lights (fit, intent, light; spec 11.49):",
+     run_emissive_gate),
     ("clouds", "cloud layer (steady-state churn, report-only):", run_cloud_churn_gate),
     ("skin-offpath", "pre-integrated skin (off-path byte identity):", run_skin_offpath_gate),
     ("skin-curvature", "pre-integrated skin (curvature ordering):", run_skin_curvature_gate),
