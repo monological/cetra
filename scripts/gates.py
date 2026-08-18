@@ -7467,6 +7467,21 @@ EMISSIVE_TEX_EPS = 0.005
 # minimum-area search from the obvious thing to have written.
 EMISSIVE_STRIP_SIZE = (0.25, 2.0)
 
+# The two fill rejects, read off gen_emissive_fixture.py's own constants rather
+# than off a probe run, so the arm compares the fit against the GEOMETRY.
+#
+# split  two 1.0 x 0.25 strips whose inner edges are 5.0 apart: 0.5 of area
+#        against a 7.0 x 0.25 bound = 0.285714
+# ell    two 1.0 x 0.3 arms sharing a corner: 0.3 + 0.21 against a 1.0 x 1.0
+#        bound = 0.51
+#
+# Both sit far under EMISSIVE_FIT_MIN_FILL 0.65, which is where a disc (0.785)
+# stays accepted -- so the epsilon is against the minimum-area search's angular
+# quantisation, not against the distance to the threshold.
+EMISSIVE_SPLIT_FILL = 0.285714
+EMISSIVE_ELL_FILL = 0.51
+EMISSIVE_FILL_EPS = 2e-3
+
 # Derived against hand-authored at equal radiance. Not tighter, because the
 # fixture's own 1 cm offset puts the derived panel very slightly further from
 # everything -- which is the residual this bar is sized to admit and name.
@@ -7636,6 +7651,13 @@ def run_emissive_gate(workdir):
                         zeroes the fit for any non-geometric reject, so every
                         other reason prints 0.000000 and satisfies a bare
                         threshold -- an opted-out material used to pass this.
+      emissive-fill     two coplanar strips with a gap, and an L. Both read
+                        planarity exactly 1.0, so the flatness test above says
+                        nothing about either, and both would otherwise get a panel
+                        radiating from space with no geometry in it. Two shapes
+                        rather than one because they fail for different reasons --
+                        disjoint against concave -- and a threshold catching only
+                        one of them would look correct.
       emissive-texmean  a half-black half-white emissive texture reads 0.5. The
                         only arm that sees the top-mip readback at all.
       emissive-placed   a panel on a TRANSLATED node lands in the same place at 4
@@ -7756,6 +7778,32 @@ def run_emissive_gate(workdir):
               f"planarity={plan:.6f} want <={EMISSIVE_PLANARITY_MAX}")
         if not ok:
             failures.append("emissive-reject")
+
+        # FILL: flat is not the same as rectangular, and planarity only tests
+        # flat. Both of these read planarity 1.0 and both would otherwise get a
+        # panel spanning geometry that is not there -- the split one radiating
+        # from the empty gap between its two strips, which is a lamp where there
+        # is no lamp. Two shapes rather than one because they fail for different
+        # reasons, disjoint against concave, and a threshold catching only one of
+        # them would look correct.
+        for node_name, want_fill in (("emissive_split", EMISSIVE_SPLIT_FILL),
+                                     ("emissive_ell", EMISSIVE_ELL_FILL)):
+            rec = _emissive_named(rows, "reject", node_name)
+            got = rec.get("reason", "-") if rec else "no reject line"
+            plan = float(rec["planarity"]) if rec and "planarity" in rec else float("nan")
+            fill = float(rec["fill"]) if rec and "fill" in rec else float("nan")
+            # Planarity asserted at 1.0 alongside, because that is the whole
+            # point: this shape is rejected by fill and NOT by flatness, and an
+            # arm that did not say so would pass if the two tests were confused.
+            ok = (rec is not None and got == "not-filled"
+                  and abs(fill - want_fill) <= EMISSIVE_FILL_EPS
+                  and abs(plan - 1.0) <= EMISSIVE_GEOM_EPS)
+            print(f"  emissive-fill  {'PASS' if ok else 'FAIL'} {node_name} reason={got} "
+                  f"want not-filled; fill={fill:.6f} want {want_fill} "
+                  f"+/-{EMISSIVE_FILL_EPS}; planarity={plan:.6f} want 1.0 "
+                  "(flat, and still not a rectangle)")
+            if not ok and "emissive-fill" not in failures:
+                failures.append("emissive-fill")
 
         rec = _emissive_named(rows, "panel", "emissive_quad")
         if not rec or rec.get("radiance") != "final":

@@ -45,10 +45,24 @@ typedef struct EmissivePanelFit {
     vec2 size; // width along cross(up, normal), height along up
 
     // |sum(n_i * A_i)| / sum(A_i): exactly 1 for a flat quad however
-    // tessellated, and 0 for a closed volume whose faces cancel. One number
-    // that rejects every shape a rectangle cannot describe, which is why there
-    // is no separate "is it a quad" test.
+    // tessellated, and 0 for a closed volume whose faces cancel.
+    //
+    // This is a FLATNESS test and nothing more. It used to be described here as
+    // "one number that rejects every shape a rectangle cannot describe, which is
+    // why there is no separate is-it-a-quad test", and that was wrong: it
+    // measures normal cancellation, so two coplanar strips five metres apart, an
+    // L, a ring and a quad with a hole all read exactly 1.0. `fill` is the test
+    // that was missing.
     float planarity;
+
+    // sum(A_i) / (size[0] * size[1]): how much of the fitted rectangle the mesh
+    // actually covers. 1.0 for a quad; below it for anything the rectangle spans
+    // without occupying.
+    //
+    // Both numbers were already computed -- the area from the triangle pass and
+    // the rectangle from the minimum-area search -- so the test that was missing
+    // cost one divide.
+    float fill;
     float area; // sum(A_i), local units squared
 } EmissivePanelFit;
 
@@ -60,6 +74,7 @@ typedef enum EmissiveFitReject {
     EMISSIVE_FIT_NO_GEOMETRY, // not indexed triangles
     EMISSIVE_FIT_DEGENERATE,  // total area is zero
     EMISSIVE_FIT_NOT_PLANAR,  // a box, a tube, a sphere
+    EMISSIVE_FIT_NOT_FILLED,  // flat, but the rectangle would span what is not there
     EMISSIVE_FIT_TOO_DIM,     // cannot light anything, and would cost a slot
     EMISSIVE_FIT_OPTED_OUT,   // the material says its emissive is decorative
 } EmissiveFitReject;
@@ -75,6 +90,25 @@ const char* emissive_fit_reject_name(EmissiveFitReject reject);
 // Radiance under this cannot light anything and would still occupy a cluster
 // slot. In nits, against a diffuse white of ~1.
 #define EMISSIVE_FIT_MIN_NITS 1e-3f
+
+// Fill below this is a rectangle spanning geometry that is not there.
+//
+// The line is a judgement and it is worth stating what sits on each side, because
+// fill cannot tell a shape that is ROUND from one that is DISJOINT:
+//
+//   1.000  a quad, however tessellated
+//   0.785  a disc -- a round ceiling light, ACCEPTED as a slightly generous
+//          rectangle, which is an approximation of a real lamp
+//   0.750  a quad with a hole
+//   0.510  an L
+//   0.286  two strips whose gap is five times their own length
+//
+// The pathological case is the last one: the panel radiates from the empty space
+// between them, so it is a lamp where there is no lamp, and no amount of accuracy
+// elsewhere makes that right. A disc fitted 27% large is wrong by a fraction; a
+// span across a gap is wrong by kind. 0.65 separates those two, deliberately
+// keeping the round emitter.
+#define EMISSIVE_FIT_MIN_FILL 0.65f
 
 // Fit a rectangle to `mesh` in its LOCAL space. Pure geometry -- it asks nothing
 // of the material, so a caller wanting the material's verdict tests that

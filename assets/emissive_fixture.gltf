@@ -9,7 +9,9 @@
    "nodes": [
     0,
     1,
-    2
+    2,
+    3,
+    4
    ]
   }
  ],
@@ -25,6 +27,14 @@
   {
    "name": "emissive_strip",
    "mesh": 2
+  },
+  {
+   "name": "emissive_split",
+   "mesh": 3
+  },
+  {
+   "name": "emissive_ell",
+   "mesh": 4
   }
  ],
  "meshes": [
@@ -67,6 +77,34 @@
      },
      "indices": 5,
      "material": 2
+    }
+   ]
+  },
+  {
+   "name": "emissive_split",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1,
+      "TEXCOORD_0": 2
+     },
+     "indices": 6,
+     "material": 3
+    }
+   ]
+  },
+  {
+   "name": "emissive_ell",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1,
+      "TEXCOORD_0": 2
+     },
+     "indices": 7,
+     "material": 4
     }
    ]
   }
@@ -128,6 +166,42 @@
     0.85,
     1.0
    ]
+  },
+  {
+   "name": "emissive_split_mat",
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 1.0
+   },
+   "emissiveFactor": [
+    1.0,
+    0.7,
+    0.7
+   ]
+  },
+  {
+   "name": "emissive_ell_mat",
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 1.0
+   },
+   "emissiveFactor": [
+    0.7,
+    1.0,
+    0.7
+   ]
   }
  ],
  "textures": [
@@ -154,15 +228,15 @@
   {
    "bufferView": 0,
    "componentType": 5126,
-   "count": 32,
+   "count": 48,
    "type": "VEC3",
    "min": [
-    -2.928525403784439,
-    0.39174682452694515,
+    -3.5,
+    -1.9,
     -0.3
    ],
    "max": [
-    2.3,
+    3.6,
     1.608253175473055,
     0.3
    ]
@@ -170,13 +244,13 @@
   {
    "bufferView": 1,
    "componentType": 5126,
-   "count": 32,
+   "count": 48,
    "type": "VEC3"
   },
   {
    "bufferView": 2,
    "componentType": 5126,
-   "count": 32,
+   "count": 48,
    "type": "VEC2"
   },
   {
@@ -196,50 +270,74 @@
    "componentType": 5125,
    "count": 6,
    "type": "SCALAR"
+  },
+  {
+   "bufferView": 6,
+   "componentType": 5125,
+   "count": 12,
+   "type": "SCALAR"
+  },
+  {
+   "bufferView": 7,
+   "componentType": 5125,
+   "count": 12,
+   "type": "SCALAR"
   }
  ],
  "bufferViews": [
   {
    "buffer": 0,
    "byteOffset": 0,
+   "byteLength": 576,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 576,
+   "byteLength": 576,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 1152,
    "byteLength": 384,
    "target": 34962
   },
   {
    "buffer": 0,
-   "byteOffset": 384,
-   "byteLength": 384,
-   "target": 34962
-  },
-  {
-   "buffer": 0,
-   "byteOffset": 768,
-   "byteLength": 256,
-   "target": 34962
-  },
-  {
-   "buffer": 0,
-   "byteOffset": 1024,
+   "byteOffset": 1536,
    "byteLength": 24,
    "target": 34963
   },
   {
    "buffer": 0,
-   "byteOffset": 1048,
+   "byteOffset": 1560,
    "byteLength": 144,
    "target": 34963
   },
   {
    "buffer": 0,
-   "byteOffset": 1192,
+   "byteOffset": 1704,
    "byteLength": 24,
+   "target": 34963
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 1728,
+   "byteLength": 48,
+   "target": 34963
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 1776,
+   "byteLength": 48,
    "target": 34963
   }
  ],
  "buffers": [
   {
-   "byteLength": 1216,
-   "uri": "data:application/octet-stream;base64,mpkZv83MzD4AAAAAmpkZP83MzD4AAAAAmpkZP83MzD8AAAAAmpkZv83MzD8AAAAAmpnZPzMzMz+amZk+MzMTQDMzMz+amZk+MzMTQGZmpj+amZk+mpnZP2Zmpj+amZk+MzMTQDMzMz+amZm+mpnZPzMzMz+amZm+mpnZP2Zmpj+amZm+MzMTQGZmpj+amZm+MzMTQDMzMz+amZk+MzMTQDMzMz+amZm+MzMTQGZmpj+amZm+MzMTQGZmpj+amZk+mpnZPzMzMz+amZm+mpnZPzMzMz+amZk+mpnZP2Zmpj+amZk+mpnZP2Zmpj+amZm+mpnZP2Zmpj+amZk+MzMTQGZmpj+amZk+MzMTQGZmpj+amZm+mpnZP2Zmpj+amZm+mpnZPzMzMz+amZm+MzMTQDMzMz+amZm+MzMTQDMzMz+amZk+mpnZPzMzMz+amZk+9mwzwAqTyD4AAAAAFCaJv8Mksj8AAAAAFCaZvz3bzT8AAAAA9mw7wHu2Gz8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AACAPwAAAIAAAAAAAACAPwAAAIAAAAAAAACAPwAAAIAAAAAAAACAPwAAAIAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAAAAgAAAgD8AAAAAAAAAgAAAgD8AAAAAAAAAgAAAgD8AAAAAAAAAgAAAgD8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAAIAAAIA/AAAAAAAAAIAAAIA/AAAAAAAAAIAAAIA/AAAAAAAAAIAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAgD8AAIA/AAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAACAPwAAgD8AAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAIA/AACAPwAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAgD8AAIA/AAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAACAPwAAgD8AAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAIA/AACAPwAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAgD8AAIA/AAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAACAPwAAgD8AAAAAAACAPwAAAAABAAAAAgAAAAAAAAACAAAAAwAAAAQAAAAFAAAABgAAAAQAAAAGAAAABwAAAAgAAAAJAAAACgAAAAgAAAAKAAAACwAAAAwAAAANAAAADgAAAAwAAAAOAAAADwAAABAAAAARAAAAEgAAABAAAAASAAAAEwAAABQAAAAVAAAAFgAAABQAAAAWAAAAFwAAABgAAAAZAAAAGgAAABgAAAAaAAAAGwAAABwAAAAdAAAAHgAAABwAAAAeAAAAHwAAAA=="
+   "byteLength": 1824,
+   "uri": "data:application/octet-stream;base64,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"
   }
  ]
 }

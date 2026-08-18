@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate assets/emissive_fixture.gltf -- the derived-area-light instrument (spec 11.49).
 
-Three emitters, each present because the probe has a different question to answer
+Five emitters, each present because the probe has a different question to answer
 about it and nothing else in the corpus asks it:
 
   emissive_quad   A flat quad carrying an emissive TEXTURE that is exactly half
@@ -20,6 +20,17 @@ about it and nothing else in the corpus asks it:
                   axis-aligned bound does not. It pins the minimum-area search:
                   the true rectangle is 2.0 x 0.25, and a bound taken on the
                   reference frame instead reads 1.8571 x 1.2165.
+
+  emissive_split  Two coplanar 1.0 x 0.25 strips five units apart. Perfectly FLAT
+                  -- planarity 1.0 -- so the flatness test says nothing about it,
+                  and the 7.0 x 0.25 rectangle bounding both radiates from the
+                  empty middle: a lamp where there is no lamp. Fill 0.2857.
+
+  emissive_ell    An L of two 1.0 x 0.3 arms, also flat, also planarity 1.0,
+                  whose 1.0 x 1.0 bound covers a quadrant with no geometry in it.
+                  Fill 0.51. Present beside the split because the two fail the
+                  same test for different reasons -- disjoint against concave --
+                  and a threshold catching only one of them would look right.
 
 The quad's base colour is black, which is the unlit-flat-colour idiom this spec
 found is how most emissive in the wild is authored -- so the fixture also carries
@@ -109,6 +120,16 @@ STRIP_ANGLE_DEG = 30.0
 STRIP_HALF_LONG = 1.0
 STRIP_HALF_SHORT = 0.125
 
+# Two 1.0 x 0.25 strips whose inner edges are 5.0 apart: area 0.5 against a
+# 7.0 x 0.25 bound, so fill is 0.2857.
+SPLIT_LONG = 1.0
+SPLIT_HALF_SHORT = 0.125
+SPLIT_INNER = 2.5
+
+# An L of two 1.0 x 0.3 arms: area 0.51 against a 1.0 x 1.0 bound.
+ELL_LONG = 1.0
+ELL_ARM = 0.3
+
 
 def build():
     g = Geo()
@@ -133,6 +154,27 @@ def build():
     g.begin("emissive_strip")
     g.quad(rot(-STRIP_HALF_LONG, -STRIP_HALF_SHORT), rot(STRIP_HALF_LONG, -STRIP_HALF_SHORT),
            rot(STRIP_HALF_LONG, STRIP_HALF_SHORT), rot(-STRIP_HALF_LONG, STRIP_HALF_SHORT))
+    g.end()
+
+    # Two strips, one mesh, a gap between them. Flat, and the bound spans the gap.
+    # Written as explicit inner/outer edges rather than a centre and a half-span,
+    # so the fill the gate asserts can be read straight off the file.
+    cy = -1.4
+    g.begin("emissive_split")
+    for sign in (-1.0, 1.0):
+        inner, outer = sign * SPLIT_INNER, sign * (SPLIT_INNER + SPLIT_LONG)
+        x0, x1 = min(inner, outer), max(inner, outer)
+        g.quad((x0, cy - SPLIT_HALF_SHORT, 0.0), (x1, cy - SPLIT_HALF_SHORT, 0.0),
+               (x1, cy + SPLIT_HALF_SHORT, 0.0), (x0, cy + SPLIT_HALF_SHORT, 0.0))
+    g.end()
+
+    # An L: a foot along +x and an upright along +y, sharing the corner.
+    ex, ey = 2.6, -1.9
+    g.begin("emissive_ell")
+    g.quad((ex, ey, 0.0), (ex + ELL_LONG, ey, 0.0),
+           (ex + ELL_LONG, ey + ELL_ARM, 0.0), (ex, ey + ELL_ARM, 0.0))
+    g.quad((ex, ey + ELL_ARM, 0.0), (ex + ELL_ARM, ey + ELL_ARM, 0.0),
+           (ex + ELL_ARM, ey + ELL_LONG, 0.0), (ex, ey + ELL_LONG, 0.0))
     g.end()
     return g
 
@@ -182,6 +224,14 @@ def emit(path, g):
          "pbrMetallicRoughness": {"baseColorFactor": [0.0, 0.0, 0.0, 1.0],
                                   "metallicFactor": 0.0, "roughnessFactor": 1.0},
          "emissiveFactor": [0.8, 0.85, 1.0]},
+        {"name": "emissive_split_mat",
+         "pbrMetallicRoughness": {"baseColorFactor": [0.0, 0.0, 0.0, 1.0],
+                                  "metallicFactor": 0.0, "roughnessFactor": 1.0},
+         "emissiveFactor": [1.0, 0.7, 0.7]},
+        {"name": "emissive_ell_mat",
+         "pbrMetallicRoughness": {"baseColorFactor": [0.0, 0.0, 0.0, 1.0],
+                                  "metallicFactor": 0.0, "roughnessFactor": 1.0},
+         "emissiveFactor": [0.7, 1.0, 0.7]},
     ]
 
     doc = {

@@ -34,6 +34,8 @@ const char* emissive_fit_reject_name(EmissiveFitReject reject) {
         return "zero-area";
     case EMISSIVE_FIT_NOT_PLANAR:
         return "not-planar";
+    case EMISSIVE_FIT_NOT_FILLED:
+        return "not-filled";
     case EMISSIVE_FIT_TOO_DIM:
         return "too-dim";
     case EMISSIVE_FIT_OPTED_OUT:
@@ -236,6 +238,17 @@ EmissiveFitReject emissive_panel_fit(const Mesh* mesh, EmissivePanelFit* out) {
     glm_vec3_scale(best_v, 0.5f * (best_vmin + best_vmax), offset);
     glm_vec3_add(center, offset, center);
 
+    // FILL: does the mesh occupy the rectangle it was fitted to, or does the
+    // rectangle merely span it? Planarity above is a flatness test and answers
+    // nothing about this -- two coplanar strips with a gap between them are
+    // perfectly flat, and the panel they fit radiates from the empty middle.
+    //
+    // Computed here rather than in the search because best_area is the winning
+    // rectangle and area_total is the mesh's own; both are already in hand.
+    out->fill = best_area > 0.0f ? area_total / best_area : 0.0f;
+    if (out->fill < EMISSIVE_FIT_MIN_FILL)
+        return EMISSIVE_FIT_NOT_FILLED;
+
     glm_vec3_copy(center, out->center);
     glm_vec3_copy(normal, out->normal);
     // `up` is the v axis, so cross(up, normal) recovers u -- the width axis the
@@ -354,19 +367,20 @@ static void _probe_node(const Scene* scene, const SceneNode* node, int* count) {
             reject = emissive_panel_fit(mesh, &fit);
         if (reject != EMISSIVE_FIT_OK) {
             printf("emissive-light-probe reject node=%s material=%s mesh=%u reason=%s "
-                   "planarity=%.6f area=%.6f nits=%.6f\n",
+                   "planarity=%.6f fill=%.6f area=%.6f nits=%.6f\n",
                    node_name, mat_name, mesh->id, emissive_fit_reject_name(reject), fit.planarity,
-                   fit.area, intensity);
+                   fit.fill, fit.area, intensity);
             continue;
         }
 
         printf("emissive-light-probe panel node=%s material=%s mesh=%u "
                "center=%.6f,%.6f,%.6f normal=%.6f,%.6f,%.6f up=%.6f,%.6f,%.6f "
-               "space=local size=%.6f,%.6f planarity=%.6f area=%.6f nits=%.6f radiance=%s "
+               "space=local size=%.6f,%.6f planarity=%.6f fill=%.6f area=%.6f nits=%.6f "
+               "radiance=%s "
                "color=%.6f,%.6f,%.6f\n",
                node_name, mat_name, mesh->id, fit.center[0], fit.center[1], fit.center[2],
                fit.normal[0], fit.normal[1], fit.normal[2], fit.up[0], fit.up[1], fit.up[2],
-               fit.size[0], fit.size[1], fit.planarity, fit.area, intensity,
+               fit.size[0], fit.size[1], fit.planarity, fit.fill, fit.area, intensity,
                final ? "final" : "pending", color[0], color[1], color[2]);
         (*count)++;
 
