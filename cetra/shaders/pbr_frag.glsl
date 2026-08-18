@@ -2191,9 +2191,10 @@ void main() {
      * which STOP a pixel is on -- an eye cannot rank two dim greys, and 4x versus 16x mid grey
      * is the difference between a hot highlight and a broken one.
      *
-     * Pre-exposure is divided out so the ramp means the same thing whatever the metering is
-     * doing; otherwise every band moves when the exposure drifts and nothing can be compared
-     * between two frames.
+     * Banded on the PRE-EXPOSED value -- see the note at the branch below for why. This
+     * paragraph used to say the opposite, that pre-exposure "is divided out so the ramp means
+     * the same thing whatever the metering is doing", which the code eleven lines down has
+     * contradicted since the ramp was rewritten.
      */
     if (renderMode == 10 || renderMode == 11) {
         /*

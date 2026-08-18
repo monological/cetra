@@ -2000,7 +2000,9 @@ int main(int argc, char** argv) {
             // also get a say -- they are alternative methods, not stacking ones.
             // Left on, metering compares absolute scene radiance against an
             // absolute 0.18 key and darkens a correctly-exposed frame by up to
-            // the 1/64 clamp. An explicit --taa-style override can still turn it
+            // EXPOSURE_MAX_STOPS_DOWN -- 20 stops, not the 1/64 this said until
+            // 11.52; the floor was raised in 3a5047a once the meter read
+            // absolute nits. An explicit --taa-style override can still turn it
             // back on; this is only the default when a camera is authored.
             if (args.auto_exposure_override < 0)
                 ex->automatic = false;

@@ -702,9 +702,14 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     }
 
     // Auto-exposure: a 64x64 log2-luminance measure target whose mip chain is
-    // regenerated each frame (top mip = geometric-mean scene luminance), and a
-    // 1x1 adapted-luminance ping-pong the eye-adaptation pass blends across
-    // frames. R16F: log2 luminance is small-range but needs sub-ulp precision.
+    // regenerated each frame (top mip = geometric-mean scene luminance).
+    // R16F: log2 luminance is small-range but needs sub-ulp precision.
+    //
+    // There is no adapted-luminance ping-pong beside it, though this comment
+    // described one until 11.52. The eye-adaptation pass that owned it was
+    // deleted in f98ab0a: the measurement is read back to the CPU anyway, so
+    // blending it there deleted the pass, its shader, the ping-pong, its
+    // validity flag, and the C-to-GLSL agreement about which mip is the top.
     if (!create_color_fbo(LUM_MEASURE_SIZE, LUM_MEASURE_SIZE, GL_R16F, &fx->lum_fbo,
                           &fx->lum_texture)) {
         free_postfx(fx);
