@@ -27,6 +27,17 @@ typedef struct Texture {
     GLenum wrap_s;
     GLenum wrap_t;
 
+    // The image's mean colour, LINEAR, memoized on first read. Pixels are never
+    // rewritten in place -- the async loader creates a new Texture per landed
+    // load -- so once true this can never go stale.
+    //
+    // Memoized rather than recomputed because the read is a synchronous
+    // glGetTexImage, and its one consumer turned out to be calling it per mesh
+    // per frame. A cache is what makes "never per frame" a property of the
+    // function instead of advice its caller has to remember.
+    float mean_rgb[3];
+    bool mean_valid;
+
     size_t ref_count; // Reference count for shared ownership
 
     UT_hash_handle hh; // Makes this structure hashable
@@ -54,10 +65,10 @@ void texture_apply_wrap(Texture* texture, GLenum wrap_s, GLenum wrap_t);
 // The texture's mean colour, LINEAR, into out_rgb. False if it cannot be had --
 // no chain, no GL object -- so a caller can fall back rather than use a zero.
 //
-// Reads the 1x1 top mip, which is that mean already computed. Costs a synchronous
-// readback of one texel, so it belongs at bake or load time and never per frame.
-// Needs a live GL context.
-bool texture_mean_color(const Texture* texture, float* out_rgb);
+// Reads the 1x1 top mip, which is that mean already computed, and MEMOIZES it:
+// the readback happens once per texture for the life of the process, however
+// often this is called. The first call needs a live GL context.
+bool texture_mean_color(Texture* texture, float* out_rgb);
 
 /*
  * Texture Pool

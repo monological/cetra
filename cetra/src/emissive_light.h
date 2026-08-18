@@ -83,19 +83,24 @@ EmissiveFitReject emissive_panel_fit(const struct Mesh* mesh, EmissivePanelFit* 
 
 // The radiance a material emits, in nits.
 //
-// This is NOT a conversion. render.c already builds emissive * emissive_strength
-// as the value pbr_frag adds to Lo before the pre-exposure multiply, so the
-// number is already scene radiance and already in the unit an area light's
-// intensity is measured in. Reproduced here rather than shared with render.c's
-// uniform upload because that one also encodes a texture fallback the fit reads
-// differently -- see the emissive-texture note in the .c.
+// This is NOT a conversion. material_emissive_factor is already the value
+// pbr_frag adds to Lo before the pre-exposure multiply, so the number is already
+// scene radiance and already in the unit an area light's intensity is measured
+// in. What this adds on top is the texture's mean, which is the one thing the
+// panel needs and the shader does not.
+//
+// The three lines of factor arithmetic used to be duplicated here, justified by
+// a comment claiming render.c "encodes a texture fallback the fit reads
+// differently". It did not -- the fallback was identical and only the mean
+// multiply differed. Both call material.c now.
+//
 // Returns false when the answer is PROVISIONAL: the material has an emissive
 // texture whose mean could not be read yet, so this is the factor alone and will
 // change. Textures stream in on a worker (async_loader.c), so that is the normal
 // state for the first frames rather than an error -- the per-frame reconcile
 // recomputes and settles on its own. A caller that reports rather than shades
 // has to say which of the two it is holding.
-bool emissive_material_radiance(const struct Material* material, vec3 out_nits);
+bool emissive_material_radiance(struct Material* material, vec3 out_nits);
 
 // Split a radiance into the (color, intensity) pair Light stores, so that
 // color * intensity reconstructs it exactly and `intensity` reads as real nits
@@ -108,12 +113,20 @@ void emissive_radiance_to_light(const vec3 nits, vec3 out_color, float* out_inte
 // Returns how many derived panels are live. `enabled` false removes every one,
 // so the feature toggles cleanly rather than leaving orphans behind.
 //
+// CALL IT UNCONDITIONALLY and pass the flag -- do not guard the call. Guarding it
+// is what made that promise unreachable: with the call skipped, turning the
+// feature off left every derived light in scene->lights and every mesh still
+// marked. Nothing collected on it because the only way in was a CLI flag, and
+// every comparable Engine bool has a GUI checkbox.
+//
 // RECONCILE, not rebuild. A panel whose mesh survives keeps the same Light
 // object, so anything set on it -- a scene file's light_overrides entry above
 // all -- persists across a graph change. A rebuild would silently drop that.
 //
-// Cheap to call every frame: the plane fit re-runs only when the graph epoch
-// moved, and what happens otherwise is one matrix-vector product per panel.
+// Per frame it is one graph walk plus one matrix-vector product per panel. The
+// plane fit and the texture mean are both cached, so neither is on that path.
+// (This used to say "one matrix-vector product per panel" alone, which was three
+// full graph walks short of the truth.)
 //
 // Safe to call at load as well as per frame, and the app SHOULD, because
 // light_overrides resolves names once at init and can only name a light that

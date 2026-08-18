@@ -244,9 +244,18 @@ void texture_apply_wrap(Texture* texture, GLenum wrap_s, GLenum wrap_t) {
     texture->wrap_t = wrap_t;
 }
 
-bool texture_mean_color(const Texture* texture, float* out_rgb) {
+bool texture_mean_color(Texture* texture, float* out_rgb) {
     if (!texture || !out_rgb || texture->id == 0 || texture->width <= 0 || texture->height <= 0)
         return false;
+
+    // Memoized: the readback below is a pipeline stall, and its consumer
+    // evaluates candidacy for every mesh every frame. Pixels are never rewritten
+    // in place, so a hit can never be stale.
+    if (texture->mean_valid) {
+        for (int c = 0; c < 3; c++)
+            out_rgb[c] = texture->mean_rgb[c];
+        return true;
+    }
 
     // The 1x1 top mip IS the mean, which is the whole trick: the chain already
     // exists (every load path calls glGenerateMipmap), so an average that would
@@ -285,7 +294,9 @@ bool texture_mean_color(const Texture* texture, float* out_rgb) {
     for (int c = 0; c < 3; c++) {
         float v = (float)texel[c] / 255.0f;
         out_rgb[c] = is_srgb ? (v <= 0.04045f ? v / 12.92f : powf((v + 0.055f) / 1.055f, 2.4f)) : v;
+        texture->mean_rgb[c] = out_rgb[c];
     }
+    texture->mean_valid = true;
     return true;
 }
 

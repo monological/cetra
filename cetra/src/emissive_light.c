@@ -247,7 +247,7 @@ EmissiveFitReject emissive_panel_fit(const Mesh* mesh, EmissivePanelFit* out) {
     return EMISSIVE_FIT_OK;
 }
 
-bool emissive_material_radiance(const Material* material, vec3 out_nits) {
+bool emissive_material_radiance(Material* material, vec3 out_nits) {
     glm_vec3_zero(out_nits);
     if (!material)
         return true;
@@ -258,9 +258,7 @@ bool emissive_material_radiance(const Material* material, vec3 out_nits) {
     // multiply, so it is already scene radiance in nits -- the unit an area
     // panel's intensity is measured in. There is no conversion here and there
     // must not be one.
-    glm_vec3_scale((float*)material->emissive, material->emissive_strength, out_nits);
-    if (material->emissive_tex && glm_vec3_norm2((float*)material->emissive) < 1e-8f)
-        glm_vec3_fill(out_nits, material->emissive_strength);
+    material_emissive_factor(material, out_nits);
 
     // pbr_frag multiplies that factor by the texel, so the surface's MEAN
     // radiance is the factor times the texture's mean -- which is the 1x1 top
@@ -299,7 +297,7 @@ void emissive_radiance_to_light(const vec3 nits, vec3 out_color, float* out_inte
 // Whether this mesh should carry a derived panel at all, and its radiance if so.
 // The material's verdict and the dimness floor together, because a caller that
 // asked them separately would have to remember the order they compose in.
-static EmissiveFitReject _mesh_candidacy(const Mesh* mesh, vec3 out_nits, bool* out_final) {
+static EmissiveFitReject _mesh_candidacy(Mesh* mesh, vec3 out_nits, bool* out_final) {
     glm_vec3_zero(out_nits);
     if (out_final)
         *out_final = true;
@@ -328,7 +326,7 @@ static void _probe_node(const Scene* scene, const SceneNode* node, int* count) {
         return;
 
     for (size_t m = 0; m < node->mesh_count; m++) {
-        const Mesh* mesh = node->meshes[m];
+        Mesh* mesh = node->meshes[m];
         if (!mesh || !mesh->material)
             continue;
 

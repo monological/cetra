@@ -95,6 +95,15 @@ const MaterialParam MATERIAL_PARAMS[] = {
 
 const size_t MATERIAL_PARAM_COUNT = sizeof(MATERIAL_PARAMS) / sizeof(MATERIAL_PARAMS[0]);
 
+void material_emissive_factor(const Material* material, vec3 out) {
+    glm_vec3_zero(out);
+    if (!material)
+        return;
+    glm_vec3_scale((float*)material->emissive, material->emissive_strength, out);
+    if (material->emissive_tex && glm_vec3_norm2((float*)material->emissive) < 1e-8f)
+        glm_vec3_fill(out, material->emissive_strength);
+}
+
 const MaterialParam* material_param_find(const char* key) {
     if (!key)
         return NULL;

@@ -273,6 +273,20 @@ typedef struct MaterialParam {
  * Keys must fit CSCENE_MAX_PARAM_KEY or a scene file truncates them and reports
  * the result as an unknown key.
  */
+// The emissive factor exactly as pbr_frag receives it: colour x strength, with
+// the glTF fallback where a BLACK factor beside an emissive texture means "the
+// texture is the colour".
+//
+// One place, because there were three. render.c uploaded it, emissive_light.c
+// re-derived it to size a derived area panel -- justifying the copy in a header
+// comment that claimed the two read the fallback differently, which they did
+// not -- and pbr_frag spells the same rule a third way, on a different threshold
+// (component sum > 0.001 of the scaled factor, against squared norm < 1e-8 of the
+// unscaled colour). The panel's whole premise is that it carries EXACTLY the
+// radiance the surface would have emitted, so a drift between the first two is a
+// lamp that silently stops matching its own pixels, and no arm can see it.
+void material_emissive_factor(const Material* material, vec3 out);
+
 extern const MaterialParam MATERIAL_PARAMS[];
 extern const size_t MATERIAL_PARAM_COUNT;
 

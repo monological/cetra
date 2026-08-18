@@ -152,13 +152,8 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
     bool masked = material->alpha_mode == ALPHA_MASK;
 
     uniform_set_vec3(u, "albedo", (const float*)&material->albedo);
-    vec3 emissive_hdr;
-    glm_vec3_scale(material->emissive, material->emissive_strength, emissive_hdr);
-    // The shader treats a black factor with an emissive texture as "use the
-    // texture as-is"; substitute the bare strength so it still applies there
-    if (material->emissive_tex && glm_vec3_norm2(material->emissive) < 1e-8f) {
-        glm_vec3_fill(emissive_hdr, material->emissive_strength);
-    }
+    vec3 emissive_hdr = {0.0f, 0.0f, 0.0f};
+    material_emissive_factor(material, emissive_hdr);
     uniform_set_vec3(u, "emissiveFactor", (const float*)&emissive_hdr);
     uniform_set_float(u, "metallic", material->metallic);
     uniform_set_float(u, "roughness", material->roughness);
@@ -1063,8 +1058,11 @@ void render_current_scene(Engine* engine) {
     //
     // A cube-capture face re-enters here, so this runs six more times per
     // capture; it is idempotent and epoch-gated, so those are placement only.
-    if (engine->emissive_lights_enabled)
-        scene_build_emissive_lights(scene, true);
+    // Unconditional, with the flag passed in: guarding the call is what made the
+    // disabled path unreachable, so turning the feature off mid-run stranded
+    // every derived light instead of removing them. Costs one branch when off --
+    // the registry is NULL and there is nothing to tear down.
+    scene_build_emissive_lights(scene, engine->emissive_lights_enabled);
 
     // Clustered forward (spec 9.1): rebuild the light grid + UBOs for THIS
     // invocation's camera and viewport -- probe-capture faces re-enter here
