@@ -199,7 +199,12 @@ def build_shell(seed):
 # Leaf SIZE is the cheaper half of that: area goes as the square, so growing the
 # card from 0.17 to 0.22 buys 1.7x the coverage per card and keeps the count
 # (and the vertex count, and the file) far below what raw density would cost.
-CARD_DENSITY = 340.0  # cards per square metre of shell surface
+# Raised from 340 to bury the shell completely. At 340 the mat still showed
+# through as smooth "mossy" surface between leaves; the shell is a backing, and
+# any of it the eye can resolve reads as the wrong material rather than as
+# shadow. Paired with darkening the shell in the .cscn, since the cheapest way
+# to stop seeing something is for it to be the colour of the gaps.
+CARD_DENSITY = 640.0
 # Stem to tip of a CLUMP (which is 5-9 leaves), so a leaf inside it is ~7 cm --
 # actual ivy. Sized against the shot: the arcade is read from outside and well
 # back, where the mass is what registers and a leaf is fine texture. Cards big

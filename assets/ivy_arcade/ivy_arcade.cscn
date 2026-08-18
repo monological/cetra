@@ -60,7 +60,12 @@
   },
   "ivy_mat": {
    "subsurface": 0.12,
-   "roughness": 0.8
+   "roughness": 0.95,
+   "albedo": [
+    0.1,
+    0.13,
+    0.07
+   ]
   }
  },
  "wind": {
