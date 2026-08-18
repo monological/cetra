@@ -1,5 +1,6 @@
 
 #include <math.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -114,6 +115,22 @@ void exposure_submit_measurement(Exposure* ex, float log2_luminance) {
         return;
     ex->adapted_luminance = lum;
     ex->adapted_valid = true;
+}
+
+void exposure_probe_report(const Exposure* ex, float raw_log2, int frame) {
+    if (!ex)
+        return;
+    // Both halves separately as well as their product, because they fail
+    // differently and the frame only shows the product: a camera multiplier is
+    // free of scene content and identical across runs, while the gain is the
+    // half that adapts and therefore the half that can differ between two builds
+    // of the same scene.
+    float camera = exposure_camera_multiplier(ex);
+    float gain = exposure_auto_gain(ex);
+    printf("exposure-probe frame=%d raw_log2=%.6f raw_nits=%.6f adapted_nits=%.6f "
+           "gain=%.6f camera=%.6f pre_exposure=%.6f ev100=%.6f key=%.6f valid=%d\n",
+           frame, raw_log2, exp2f(raw_log2), ex->adapted_luminance, gain, camera, camera * gain,
+           exposure_ev100(ex), ex->key, ex->adapted_valid ? 1 : 0);
 }
 
 void exposure_reset_adaptation(Exposure* ex) {

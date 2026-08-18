@@ -62,6 +62,14 @@ typedef struct Exposure {
     // what keeps the first frame from adapting to uninitialised memory.
     float adapted_luminance;
     bool adapted_valid;
+
+    // Print what the meter decided, every frame it decides it. Diagnostic only;
+    // nothing downstream reads it.
+    //
+    // It lives here rather than on PostFX because this struct is the one place
+    // that decides what the exposure is, and a report of that decision made
+    // anywhere else would be reading the pieces back out and re-deriving it.
+    bool probe;
 } Exposure;
 
 // Initialise in place. No allocation: an Engine always has exactly one, so a
@@ -97,5 +105,17 @@ void exposure_submit_measurement(Exposure* ex, float log2_luminance);
 // Drop the adaptation history, so the next metered frame snaps instead of
 // blending from a value measured under different conditions.
 void exposure_reset_adaptation(Exposure* ex);
+
+// One line per metered frame, on stdout, in the --water-fft-probe idiom.
+//
+// `raw_log2` is the measurement as it arrived, BEFORE the blend -- the one
+// number in the whole path that exists nowhere afterwards, since
+// exposure_submit_measurement folds it into adapted_luminance and drops it. The
+// rest is read back off `ex`, so the report cannot describe an exposure the
+// engine is not using.
+//
+// Call it AFTER submitting, so `adapted` and `gain` are this frame's. Costs a
+// printf on a frame nobody is measuring, which is why it is behind `probe`.
+void exposure_probe_report(const Exposure* ex, float raw_log2, int frame);
 
 #endif // _EXPOSURE_H_

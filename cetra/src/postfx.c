@@ -3293,6 +3293,11 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             float measured = 0.0f;
             glGetTexImage(GL_TEXTURE_2D, LUM_MEASURE_TOP_MIP, GL_RED, GL_FLOAT, &measured);
             exposure_submit_measurement(fx->exposure, measured);
+            // After the submit, so the report carries this frame's adapted value
+            // rather than last frame's. `measured` is passed in because the
+            // blend consumes it and nothing keeps the raw reading.
+            if (fx->exposure->probe)
+                exposure_probe_report(fx->exposure, measured, fx->frame_index);
             check_gl_error("postfx auto exposure");
             profiler_scope_end(fx->profiler);
         } else {

@@ -170,6 +170,9 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --water-fft-probe  Print the transformed spectrum's statistics\n");
     fprintf(stderr, "      --emissive-lights  Emissive meshes become LTC area lights\n");
     fprintf(stderr, "      --emissive-light-probe  Print the panel every emissive mesh derives\n");
+    fprintf(stderr,
+            "      --exposure-probe   Print what the meter decided, per frame "
+            "(silent on a pinned frame)\n");
     fprintf(stderr, "      --sky              Procedural physically-based sky (instead of -e)\n");
     fprintf(stderr, "      --sky-debug        Blit the sky LUTs into the frame corner\n");
     fprintf(stderr, "      --clouds           Volumetric cloud layer (implies --sky)\n");
@@ -715,6 +718,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->emissive_lights = 1;
         } else if (strcmp(argv[i], "--emissive-light-probe") == 0) {
             args->emissive_light_probe = 1;
+        } else if (strcmp(argv[i], "--exposure-probe") == 0) {
+            args->exposure_probe = 1;
         } else if (strcmp(argv[i], "--no-water") == 0) {
             // Does NOT imply --water, obviously, and it wins over it: this is the
             // escape hatch from a scene file that authors a surface.
@@ -2017,6 +2022,12 @@ int main(int argc, char** argv) {
             ex->automatic = args.auto_exposure_override != 0;
         else if (args.exposure > 0.0f)
             ex->automatic = false;
+        // Set last, and deliberately NOT gated on `automatic`: the probe reports
+        // only from frames the meter actually ran, so asking for it on a pinned
+        // frame prints nothing. That silence is the honest answer -- there is no
+        // measurement on a pinned frame -- and it is worth being able to observe
+        // rather than having the flag refuse.
+        ex->probe = args.exposure_probe != 0;
     }
     if (args.no_ssao && engine->postfx) {
         engine->postfx->ssao_enabled = false;

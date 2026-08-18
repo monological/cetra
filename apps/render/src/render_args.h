@@ -99,6 +99,7 @@ typedef struct {
     int water_fft_probe;        // Print the transformed spectrum's measured statistics
     int emissive_lights;        // Derive an LTC area panel from every emissive mesh
     int emissive_light_probe;   // Print the area panel every emissive mesh would derive
+    int exposure_probe;         // Print what the meter decided, per metered frame
     int gi_rate;                // Probes captured per frame while dirty (0 = default)
     int gi_debug;               // Blit the probe atlas into the frame corner
     int sky;                    // Procedural physically-based sky instead of -e
