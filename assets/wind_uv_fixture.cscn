@@ -1,0 +1,73 @@
+{
+ "version": 1,
+ "models": [
+  {
+   "path": "wind_uv_fixture.gltf"
+  }
+ ],
+ "lights": [
+  {
+   "name": "WindUvSun",
+   "type": "directional",
+   "direction": [
+    0.0,
+    -0.25,
+    -0.97
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 3.0,
+   "cast_shadows": false
+  }
+ ],
+ "camera": {
+  "eye": [
+   0.0,
+   1.0,
+   6.5
+  ],
+  "target": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "fov": 45
+ },
+ "post": {
+  "tonemap": "neutral",
+  "exposure": 1.0,
+  "auto_exposure": false,
+  "bloom": {
+   "enabled": false
+  }
+ },
+ "wind": {
+  "direction": [
+   1.0,
+   0.0,
+   0.0
+  ],
+  "strength": 0.6,
+  "speed": 3.14159,
+  "gustFrequency": 0.15,
+  "gustAmount": 0.0,
+  "turbulence": 0.0
+ },
+ "materials": {
+  "wind_uv_red": {
+   "windResponse": 1.0,
+   "windMode": "vegetation leaf"
+  },
+  "wind_uv_green": {
+   "windResponse": 1.0,
+   "windMode": "vegetation leaf"
+  },
+  "wind_uv_blue": {
+   "windResponse": 1.0,
+   "windMode": "vegetation leaf"
+  }
+ }
+}
