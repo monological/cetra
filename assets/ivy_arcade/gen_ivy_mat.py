@@ -108,10 +108,68 @@ def normal_from_height(hgt, strength=2.4):
     return ((n * 0.5 + 0.5) * 255.0).astype(np.uint8)
 
 
+# --- clump atlas -------------------------------------------------------------
+# Cards carry a CLUMP of leaves, not one leaf, and that is a cost decision as
+# much as a look one. A single-leaf card has to be large to cover ground, and a
+# large flat quad seen edge-on collapses to a sliver -- which is what a canopy of
+# lone quads actually looks like from inside. A clump covers the same area with a
+# card that still reads as many leaves, so the count drops severalfold.
+# A ROW, not a grid, and this is a hard constraint rather than a layout taste.
+# The wind shader pivots a mode-2 card about UV0.y = 0, so every cell must span
+# the FULL v range with the stem at one end. Splitting v across atlas rows puts
+# the second row's stem at v = 0.5 and its leaves would swing about their middle.
+# cetra's own tree_gen atlases along U only for exactly this reason.
+CLUMP_CELLS = 4          # 1 x 4 strip -> 4 variants
+CLUMP_RES = 512          # per cell
+CLUMP_LEAVES = (5, 9)    # per clump, inclusive range
+
+
+def build_clumps(leaf, rng):
+    """A CLUMP_CELLS x CLUMP_CELLS atlas of leaf rosettes, alpha preserved.
+
+    Alpha is composited with a MAX rather than an over: the mask is what cetra
+    tests against alphaCutoff, and a stack of soft-edged leaves alpha-blended
+    together thins toward the edges of every leaf, so the cutoff would eat the
+    silhouette it is supposed to define.
+    """
+    atlas = Image.new("RGBA", (CLUMP_RES * CLUMP_CELLS, CLUMP_RES), (0, 0, 0, 0))
+    for cx in range(CLUMP_CELLS):
+        if True:
+            cell = Image.new("RGBA", (CLUMP_RES, CLUMP_RES), (0, 0, 0, 0))
+            n = rng.integers(CLUMP_LEAVES[0], CLUMP_LEAVES[1] + 1)
+            for i in range(int(n)):
+                # Leaves radiate from a stem point at the BOTTOM of the cell, so
+                # the clump has a direction: the card's stem end is the cell's
+                # v = 1 edge and the shader pivots there.
+                scale = CLUMP_RES * rng.uniform(0.40, 0.62)
+                w = max(8, int(scale * leaf.width / max(leaf.width, leaf.height)))
+                h = max(8, int(scale * leaf.height / max(leaf.width, leaf.height)))
+                im = leaf.resize((w, h), Image.LANCZOS)
+                ang = rng.uniform(-62.0, 62.0)
+                im = im.rotate(ang, expand=True, resample=Image.BICUBIC)
+                tint = np.array([rng.uniform(0.74, 1.10), rng.uniform(0.86, 1.14),
+                                 rng.uniform(0.72, 1.04), 1.0], np.float32)
+                a = np.clip(np.asarray(im).astype(np.float32) * tint, 0, 255)
+                im = Image.fromarray(a.astype(np.uint8))
+                x = int(CLUMP_RES * 0.5 - im.width * 0.5
+                        + rng.uniform(-0.16, 0.16) * CLUMP_RES)
+                y = int(CLUMP_RES * 0.92 - im.height
+                        + rng.uniform(-0.10, 0.16) * CLUMP_RES)
+                base = Image.new("RGBA", cell.size, (0, 0, 0, 0))
+                base.paste(im, (x, y))
+                ca, ba = np.asarray(cell), np.asarray(base)
+                keep = (ba[:, :, 3:4] > ca[:, :, 3:4])
+                cell = Image.fromarray(np.where(keep, ba, ca))
+            atlas.paste(cell, (cx * CLUMP_RES, 0))
+    return atlas
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     leaf = load_leaf()
     leaf.save(os.path.join(OUT, "ivy_leaf_base.png"))
+    build_clumps(leaf, np.random.default_rng(SEED + 7)).save(
+        os.path.join(OUT, "ivy_clump_base.png"))
 
     rng = np.random.default_rng(SEED)
     # Seeded with deep shade rather than black: the gaps between leaves in a

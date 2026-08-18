@@ -1,43 +1,78 @@
 {
  "version": 1,
  "_comment": [
-  "An ivy-clad stone arcade (spec 11.51). 24 'n'-profile ribs at a 1.4 m pitch,",
-  "with 0.9 m gaps between them -- the gaps are the point, since they are what",
-  "let the sun in as the vertical streaks the reference is built around.",
+  "An ivy-clad stone arcade (spec 11.51). 24 'n'-profile ribs at a 1.75 m",
+  "pitch; the gaps are what let the sun in, and the pitch is set against the",
+  "FOLIAGE depth rather than the stone, or the canopy from adjacent ribs meets",
+  "in the middle and seals them.",
   "",
-  "The sun sits ACROSS the tunnel rather than down it. Down the axis the gaps",
-  "are edge-on and let nothing through; across it, each gap is a slot and the",
-  "wall opposite gets a band."
+  "Framed from OUTSIDE and well back, which is what the reference is: at that",
+  "distance the green MASS registers and a leaf is fine texture, so the cards",
+  "carry clumps rather than single leaves and are sized accordingly.",
+  "",
+  "Sun high and across, not low and down the axis. High because the target is",
+  "a bright sunlit hedge, not a cave -- the earlier low-sun framing lit the",
+  "outside and left the whole structure reading as a silhouette."
  ],
  "models": [
   {
-   "path": "ivy_arcade.glb"
+   "path": "ivy_arcade.gltf"
   }
  ],
  "environment": {
   "mode": "sky",
   "sun": {
-   "elevation": 22.0,
-   "azimuth": 95.0
+   "elevation": 11.0,
+   "azimuth": 98.0
   },
-  "intensity": 1.0
+  "intensity": 2.4
  },
  "camera": {
   "eye": [
    0.0,
-   1.7,
-   6.0
+   1.65,
+   -6.4
   ],
   "target": [
    0.0,
-   1.9,
-   -28.0
+   1.85,
+   -38.0
   ],
-  "fov": 55
+  "fov": 60
  },
  "post": {
   "tonemap": "neutral",
-  "exposure": 1.0,
+  "exposure": 2.6,
   "auto_exposure": false
+ },
+ "materials": {
+  "ivy_leaf": {
+   "subsurface": 0.25,
+   "subsurfaceColor": [
+    0.42,
+    0.78,
+    0.3
+   ],
+   "roughness": 0.58,
+   "foliageShadows": "on",
+   "windResponse": 0.85,
+   "windMode": "vegetation leaf"
+  },
+  "ivy_mat": {
+   "subsurface": 0.12,
+   "roughness": 0.8
+  }
+ },
+ "wind": {
+  "direction": [
+   1.0,
+   0.05,
+   0.25
+  ],
+  "strength": 0.045,
+  "speed": 1.35,
+  "gustFrequency": 0.22,
+  "gustAmount": 0.55,
+  "turbulence": 0.45
  }
 }
