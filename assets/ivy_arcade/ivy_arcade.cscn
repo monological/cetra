@@ -1,0 +1,43 @@
+{
+ "version": 1,
+ "_comment": [
+  "An ivy-clad stone arcade (spec 11.51). 24 'n'-profile ribs at a 1.4 m pitch,",
+  "with 0.9 m gaps between them -- the gaps are the point, since they are what",
+  "let the sun in as the vertical streaks the reference is built around.",
+  "",
+  "The sun sits ACROSS the tunnel rather than down it. Down the axis the gaps",
+  "are edge-on and let nothing through; across it, each gap is a slot and the",
+  "wall opposite gets a band."
+ ],
+ "models": [
+  {
+   "path": "ivy_arcade.glb"
+  }
+ ],
+ "environment": {
+  "mode": "sky",
+  "sun": {
+   "elevation": 22.0,
+   "azimuth": 95.0
+  },
+  "intensity": 1.0
+ },
+ "camera": {
+  "eye": [
+   0.0,
+   1.7,
+   6.0
+  ],
+  "target": [
+   0.0,
+   1.9,
+   -28.0
+  ],
+  "fov": 55
+ },
+ "post": {
+  "tonemap": "neutral",
+  "exposure": 1.0,
+  "auto_exposure": false
+ }
+}
