@@ -983,19 +983,62 @@ Bavoil, *Fourier Opacity Mapping* (I3D 2010); Yuksel & Keyser, *Deep Opacity Map
 
 </details>
 
-### C2. Emissive geometry → LTC area lights — Effort S/M
-An emissive mesh lights nothing today. It is bright in the frame, it feeds bloom, and its only path
-into the lighting solution is a 16²-face DDGI capture that converges over seconds and resolves no
-detail. Practicals, screens, strip lights and neon — the entire vocabulary of interior lighting — are
-therefore decorative.
+### C2. Emissive geometry → LTC area lights — Effort S/M — **DONE (11.49)**
+An emissive mesh lit nothing. It was bright in the frame, it fed bloom, and its only path into the
+lighting solution was a 16²-face DDGI capture that converges over seconds and resolves no detail.
+Practicals, screens, strip lights and neon — the entire vocabulary of interior lighting — were
+decorative.
 
-`Light` already carries exactly the fit's output: `position`, `direction` (panel normal), `up`,
-`size`, and a photometric `intensity` in nits (`light.h:45-73`). So the item is a fit — plane-fit an
+`Light` already carried exactly the fit's output: `position`, `direction` (panel normal), `up`,
+`size`, and a photometric `intensity` in nits (`light.h:45-73`). So the item was a fit — plane-fit an
 emissive mesh's dominant quad, integrate its emissive to a radiance — plus a registration into the
-packed light array A1 already uploads. **No new shading code, no new machinery, no new units.**
-v1 limits worth writing down now: one rectangle per emissive mesh (a curved neon tube is out), static
-fit at load (an animated emitter re-fits per frame or is excluded), and the same single-sided
-constraint A2 shipped with.
+packed light array A1 already uploads.
+
+**It ships OFF by default, and that is the finding that reversed the design.** The sketch assumed
+emissive means "this is a lamp". Measured across the corpus, **30 of 32 emissive materials are the
+unlit-flat-colour trick** — a glow over a black base, used to make something a flat bright colour,
+not to light a room. On by default turns every one of those into a light. `--emissive-lights` opts
+in; a material can decline individually with `emissiveLight: "off"`.
+
+**"No new shading code" held for five phases and then did not.** The DDGI double count (below) needed
+one uniform and one multiply in `pbr_frag`. It cost no sampler unit, so Wall 1 was never in play —
+but the claim is worth correcting rather than leaving to rot.
+
+Of the three v1 limits written down here in advance, one was lifted and one needed a test that did
+not exist. **"Static fit at load" was lifted**: the fit is cached in LOCAL space and epoch-gated on
+the scene graph, while PLACEMENT runs per frame from the owning node's transform, so a lamp on a
+moving node costs three vector transforms rather than a refit and an animated emitter simply works.
+**"One rectangle per emissive mesh" held, but the test for it was wrong.** Planarity
+(`|Σ nᵢAᵢ| / Σ Aᵢ`) was documented as "one number that rejects everything a rectangle cannot
+describe"; it measures normal cancellation, so a closed box reads 0 and *everything flat* reads
+exactly 1.0 — an L, a ring, a quad with a hole, two strips five metres apart. Each got one rectangle
+spanning the lot, the split one radiating out of the empty gap between its strips. The missing test
+is fill, `Σ Aᵢ / (w·h)`, and both terms were already computed: one divide. The single-sided
+constraint held unchanged.
+
+**Four defects the arms found, three of them invisible in a frame.** The in-plane fit was planned as
+the 2×2 covariance principal axis and that is wrong — a square panel's covariance is isotropic, so
+the axis is arbitrary and a square bounded at 45° comes out √2 too wide in both directions.
+`cornell_light` is exactly square, so the corpus's only real lamp is the case it fails on; the
+minimum-area rectangle over the mesh's own edge directions replaced it. A **DDGI capture runs the
+full forward shader**, so a probe saw the emissive surface *and* the surfaces the panel had already
+lit — the first bounce landed twice, floor GI lift **1.31× → 0.98×** once the capture learned to
+silence a derived emitter. That fix must NOT extend to the reflection probe, whose output is radiance
+rather than irradiance, which is why the flag names what a capture is FOR. And a derived panel
+inherits `cast_shadows` false, so it lights through walls: `cornell_leak` reads **0.41 of the lit
+half behind a solid partition**, taken to an exact 0 by a `light_overrides` entry.
+
+**Cost is not where the sketch implied.** The reconcile — walk, fit, placement — is **0.017–0.021 ms
+of CPU and zero GPU** on a 71-mesh scene. What costs is that the scene now has one more LTC area
+light to shade, roughly **+2 to +3 ms** for one panel covering most of the frame. The price scales
+with how many panels a scene derives, not with graph size.
+
+**The specular double count was measured and declined.** A reflection probe photographs the glowing
+quad while the panel integrates the same rectangle analytically. Measured **1.0386** against the
+diffuse count's 1.3134 — an order of magnitude smaller, because the split sum gives the panel little
+solid angle where DDGI's hemisphere integral lets it dominate. Every available fix costs more than
+it buys, so a gate arm bounds it rather than removing it. Note SSR is not a second route and cannot
+be: `ssr_frag.glsl:152` traces only surfaces the shadow catcher marked reflective.
 **Refs.** Heitz, Dupuy, Hill & Neubelt, *Real-Time Polygonal-Light Shading with Linearly Transformed
 Cosines* (SIGGRAPH 2016) — already shipped as A2; this item is a producer for it.
 **Depends on:** A1 (shipped), A2 (shipped). **Wall 1:** unaffected.
@@ -1918,7 +1961,7 @@ not scheduled.
 | 20 | E1 Output dither | S | **DONE (11.24).** On by default, `--no-dither` 0 px; sky bands 192 px → 22 px. The sketch's TPDF construction was wrong — a constant `ign` offset only phase-shifts the same sawtooth and collapses to four values — and evaluating the pure function in Python caught it before any shader existed. Static by construction, which measurement confirms costs the churn gates 0.5%. The re-bake reported six of nineteen goldens unreproducible; **11.25 showed that was wrong and all nineteen reproduce** — four recipes were in a ledger nobody opened, and `cloud_fixture` names no file at all. |
 | 21 | C1 Translucent shadows | M→**L** | **DONE (11.26).** Shipped as deep opacity maps — transmittance storage, not the moment reconstruction the sketch assumed, which is why it stayed inside the sampler budget. Bands measure 0.0016 against 0.65^k and the mask ramp 0.0025 against 1-alpha, where a binary alpha test scores 126x worse. Raiden moves 4.0%, all of it the groom and the shoulder under it. Three bugs found by the arms, each presenting as something else — a blend function that desaturated the frame while the shadows looked right, a resolve that covered half the map with a diagonal edge, and two instrument faults that read as renderer faults. |
 | 22 | D2 Local fog + cloud shadows | M | **DONE, both halves (11.39 + 11.40 froxel, 11.41 surface).** The surface half was booked as hard-blocked on D0 for a whole spec cycle and never was — it reads in the opaque pass, where unit 6 is idle, so it took a `#define` alias and cost the ledger nothing (Wall 1's third escape). Ground RMSE **0.0072 → 0.1241** with the air band unchanged to four decimals as the control. 11.41's arms then found the shadow MAP itself blank below ~10° of sun and truncated above it, so **every cloud figure from 11.39/11.40 was taken through a map crossing 4-48% of the deck**; fixing it moved both cloud goldens. The review's through-line was **green results that could not have gone red** — four arms passed over a feature dead under `--no-ssao`, and 23 goldens were cited as evidence for a change no golden could see. 11.40 closed three of the four filed items by making those claims falsifiable, and found a shipped map saturated to zero at every texel on the first use of its new debug tile. |
-| 23 | C2 Emissive → area lights | S/M | A fit plus a registration — `Light` already carries every field the fit produces. Makes practicals and screens light rooms instead of just glowing. |
+| 23 | C2 Emissive → area lights | S/M | **DONE (11.49).** A fit plus a registration, as sketched — but it ships **off by default**, because measuring the corpus found **30 of 32 emissive materials are the unlit-flat-colour trick** rather than lamps, and on-by-default turns every one into a light. "No new shading code" held five phases and then cost one uniform (no unit — Wall 1 never in play). The planned covariance principal axis is wrong on a SQUARE panel, whose covariance is isotropic, and `cornell_light` is exactly square — the corpus's only real lamp is the case it fails on. The stated "one rectangle per mesh" limit had no working test: planarity measures FLATNESS, so an L, a ring and two strips five metres apart all read exactly 1.0 and got one rectangle spanning the lot. Three arms went red on things no frame shows — a DDGI capture counting the first bounce twice (**1.31× → 0.98×**), a panel lighting through a solid partition (**0.41 → 0.00**), and a placement compounding 29 units of drift over 40 frames. Cost lands on the LIGHT, not the machinery: reconcile 0.017–0.021 ms CPU, but +2–3 ms of shading per panel. |
 | 24 | E4 GPU timer queries | S | **DONE (11.27).** Wall 3 removed. It paid for itself immediately and twice: E4's own first draft drew a conclusion the instrument reversed, and Wall 4 exists at all because the instrument said "opaque 312 ms" in a single run. |
 | 25 | C3 IES profiles | S | Collects the payoff for 9.9/10.0's photometric work. Fits Wall 1 by living in the light UBO — zero texture units. |
 | 26 | C5 Contact shadows for local lights | S | A3 generalised from one light to N. Postfx-only. |
@@ -1938,10 +1981,9 @@ not scheduled.
 
 **If only five ever get built: 20 -> 21 -> 22 -> 23 -> 24.** One afternoon, then three items that each
 reuse a shipped subsystem rather than building new machinery, then the instrument the rest needs.
-**Four of those five are now done** (20 in 11.24, 21 in 11.26, 22 in 11.39+11.40, 24 in 11.27), which
-leaves **23 (C2, emissive → area lights)** as the last unbuilt entry in the engine's own shortlist —
-and the only one of the five that needs nothing from Wall 1, since `Light` already carries every
-field the fit produces.
+**All five are now done** (20 in 11.24, 21 in 11.26, 22 in 11.39+11.40, 23 in 11.49, 24 in 11.27).
+The shortlist is exhausted, and 23 was the only one of the five that needed nothing from Wall 1 —
+`Light` already carried every field the fit produces, and it cost no sampler unit.
 
 **31 (E6) was the one to build next, and it is now built.** An earlier draft of this line read
 "nothing else on this table is worth 250 ms", which priced E6 at the whole of the opaque pass before
@@ -1951,13 +1993,26 @@ worst case and the withdrawn claims all recorded. **37 (E7, occlusion culling) s
 against them**: it was booked as not-yet-justified on the grounds that E6 would get most of the
 benefit for less, and E6 doing so on opaque content is now measured rather than assumed.
 
-**23 (C2, emissive → area lights) is what's next, and it has been next for a while.** It is a fit
-plus a registration: plane-fit an emissive mesh's dominant quad, integrate its emissive to a
-radiance, register it into the packed array A1 already uploads. `Light` carries every field the fit
-produces, so there is no new shading code, no new machinery and no unit. Everything else still
-unbuilt is either small and self-contained (25 C3 IES, 26 C5 local contact shadows, 27 E3 histogram
-exposure, 28 E2 grading, 34 E8 the wind cull) or L/XL with no measurement demanding it yet (29 C4,
-32 D0, 33 D1, 36 D4, 37 E7).
+**23 (C2) was what's next for a long time and is now built (11.49), which leaves this table with no
+obvious head.** What remains is either small and self-contained (25 C3 IES, 26 C5 local contact
+shadows, 27 E3 histogram exposure, 28 E2 grading, 34 E8 the wind cull) or L/XL with no measurement
+demanding it yet (29 C4, 32 D0, 33 D1, 36 D4, 37 E7). Nothing in the first group is blocked and
+nothing in the second has a number behind it, so the next pick is a judgement rather than a
+consequence — which is a different situation from the one this table has described since 11.24, and
+worth saying plainly rather than nominating a successor by default.
+
+Two of the small ones have a claim beyond size. **27 (E3, histogram exposure)** is the only unbuilt
+item that fixes the image *and* narrows the largest measured source of cross-build
+non-determinism — this document's own determinism section puts auto-exposure at 99.77% of pixels
+moved on a provable no-op. **34 (E8, the wind cull)** closes a hole E5 left open, where wind geometry
+is exempt from the camera frustum and every cascade; `apps/forest` gave up wind on scattered content
+to avoid it, so the gap has already cost content once.
+
+**11.49 also leaves an observation about this table rather than an item in it.** Three of its four
+real defects were invisible in every frame — a first bounce counted twice, a panel lighting through a
+solid wall, a placement drifting 29 units over 40 frames — and each was found by an arm reading an
+instrument, not by looking. The two that a picture *did* show were both found by the user looking at
+the picture. That split is worth carrying into whatever is picked next.
 
 **And the honest observation this table should carry: it has not driven the work since 11.32.**
 Seventeen specs have shipped since D3 opened, and **ten of them are the water and shore series
