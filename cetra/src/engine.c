@@ -239,6 +239,7 @@ Engine* create_engine(const char* window_title, int width, int height) {
     // --no-instancing is the escape hatch.
     engine->instancing_enabled = true;
     engine->oit_moments_enabled = true;
+    engine->emissive_lights_enabled = false; // see engine.h: emissive is mostly not a lamp
     engine->lod_enabled = true;
     engine->lod_bias = 1.0f;
     // On by default (spec 11.30): -29% of the opaque pass on apps/forest, for a

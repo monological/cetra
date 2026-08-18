@@ -133,6 +133,12 @@ typedef struct Scene {
     size_t material_count;
     bool materials_dirty; // graph may hold materials the registry has not seen
 
+    // Graph epoch the emissive panels were last FITTED at (spec 11.49). The fit
+    // is a plane solve over every vertex and the graph is what invalidates it;
+    // placement is three vector transforms and runs every frame regardless, so
+    // a lamp on a moving node needs no refit.
+    uint64_t emissive_epoch;
+
     TexturePool* tex_pool;
 
     // used by all nodes
@@ -217,6 +223,23 @@ Camera* find_camera_by_name(Scene* scene, const char* name);
 // light
 void set_scene_lights(Scene* scene, Light** lights, size_t light_count);
 int add_light_to_scene(Scene* scene, Light* light);
+
+// Unlink and FREE. The Scene owns its lights, so an unlink-only form would leak
+// by default.
+//
+// Order-preserving, and that is load-bearing rather than tidy: light_cluster.c
+// walks this array in order and documents that order as what makes the packing --
+// and so the shading loop order -- deterministic. A swap-with-last would reorder
+// the list on any removal and move pixels for no reason a reader could find.
+//
+// OWNERSHIP HAZARD, in the same shape as the particle system's: a SceneNode
+// BORROWS its light and does not free it, so removing one a node still points at
+// leaves node->light dangling. The caller owns that invariant. Nothing here walks
+// the graph to clear it, which would be O(nodes) per removal against a caller
+// this codebase does not have -- the one caller that removes anything, the
+// emissive reconcile, only ever removes lights it created, and those have no node.
+int remove_light_from_scene(Scene* scene, Light* light);
+
 Light* find_light_by_name(Scene* scene, const char* name);
 
 // particle systems (scene-owned; ticked + rendered automatically by the engine)

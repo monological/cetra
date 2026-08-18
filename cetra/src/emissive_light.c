@@ -2,9 +2,12 @@
 #include <float.h>
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "emissive_light.h"
+#include "draw_list.h"
+#include "light.h"
 #include "material.h"
 #include "mesh.h"
 #include "scene.h"
@@ -332,4 +335,185 @@ void emissive_lights_probe(const Scene* scene) {
     int count = 0;
     _probe_node(scene->root_node, &count);
     printf("emissive-light-probe header count=%d\n", count);
+}
+
+// Whether this mesh should carry a derived panel at all, and its radiance if so.
+// The material's verdict and the dimness floor together, because a caller that
+// asked them separately would have to remember the order they compose in.
+static EmissiveFitReject _mesh_candidacy(const Mesh* mesh, vec3 out_nits) {
+    glm_vec3_zero(out_nits);
+    if (!mesh || !mesh->material)
+        return EMISSIVE_FIT_TOO_DIM;
+    if (mesh->material->emissive_light != 0)
+        return EMISSIVE_FIT_OPTED_OUT;
+
+    emissive_material_radiance(mesh->material, out_nits);
+    float lum = 0.0f;
+    emissive_radiance_to_light(out_nits, NULL, &lum);
+    return lum < EMISSIVE_FIT_MIN_NITS ? EMISSIVE_FIT_TOO_DIM : EMISSIVE_FIT_OK;
+}
+
+static Light* _find_derived(Scene* scene, unsigned mesh_id) {
+    for (size_t i = 0; i < scene->light_count; i++) {
+        Light* l = scene->lights[i];
+        if (l && l->emissive_source_id == mesh_id)
+            return l;
+    }
+    return NULL;
+}
+
+// Local fit -> world, through the node's current transform.
+//
+// The two axes carry their EXTENT, so the same product delivers the rotation and
+// the scale and a scaled node scales its panel. The normal goes through the
+// node's normal_matrix instead, which is what a normal needs under non-uniform
+// scale and what the node already computes for the draw path.
+static void _place(Light* light, const SceneNode* node, const EmissivePanelFit* fit) {
+    vec3 u, v;
+    glm_vec3_cross((float*)fit->up, (float*)fit->normal, u); // the width axis
+    glm_vec3_scale(u, fit->size[0], u);
+    glm_vec3_scale((float*)fit->up, fit->size[1], v);
+
+    mat4* xf = (mat4*)&node->global_transform;
+    vec3 world_u, world_v, world_c;
+    glm_mat4_mulv3(*xf, u, 0.0f, world_u);
+    glm_mat4_mulv3(*xf, v, 0.0f, world_v);
+    glm_mat4_mulv3(*xf, (float*)fit->center, 1.0f, world_c);
+
+    glm_vec3_copy(world_c, light->global_position);
+    glm_vec3_copy(world_c, light->original_position);
+    set_light_size(light, glm_vec3_norm(world_u), glm_vec3_norm(world_v));
+
+    vec3 world_n;
+    glm_mat3_mulv((float(*)[3])node->normal_matrix, (float*)fit->normal, world_n);
+    if (glm_vec3_norm(world_n) < 1e-8f)
+        glm_vec3_copy((float*)fit->normal, world_n);
+    glm_vec3_normalize(world_n);
+    glm_vec3_copy(world_n, light->direction);
+    glm_vec3_copy(world_n, light->original_direction);
+
+    if (glm_vec3_norm(world_v) < 1e-8f)
+        glm_vec3_copy((float*)fit->up, world_v);
+    glm_vec3_normalize(world_v);
+    glm_vec3_copy(world_v, light->up);
+    glm_vec3_copy(world_v, light->original_up);
+}
+
+static void _reconcile_node(Scene* scene, SceneNode* node, bool refit, int* live) {
+    if (!node)
+        return;
+
+    for (size_t m = 0; m < node->mesh_count; m++) {
+        const Mesh* mesh = node->meshes[m];
+        if (!mesh)
+            continue;
+
+        vec3 nits = {0.0f, 0.0f, 0.0f};
+        if (_mesh_candidacy(mesh, nits) != EMISSIVE_FIT_OK)
+            continue;
+
+        Light* light = _find_derived(scene, mesh->id);
+        EmissivePanelFit fit;
+        if (!light || refit) {
+            if (emissive_panel_fit(mesh, &fit) != EMISSIVE_FIT_OK)
+                continue;
+        }
+
+        if (!light) {
+            light = create_light();
+            if (!light)
+                continue;
+            set_light_type(light, LIGHT_AREA);
+            light->emissive_source_id = mesh->id;
+            // Named for the NODE, not the material: a name has to identify one
+            // lamp for light_overrides to be able to address it, and a material
+            // is shared by every mesh that uses it.
+            set_light_name(light, node->name ? node->name : "emissive");
+            if (add_light_to_scene(scene, light) != 0) {
+                free_light(light);
+                continue;
+            }
+            // Stored on the light so a later frame can place it without
+            // re-fitting; these fields already mean "before the node transform".
+            glm_vec3_copy(fit.center, light->original_position);
+            glm_vec3_copy(fit.normal, light->original_direction);
+            glm_vec3_copy(fit.up, light->original_up);
+            glm_vec2_copy(fit.size, light->size);
+        } else if (refit) {
+            glm_vec3_copy(fit.center, light->original_position);
+            glm_vec3_copy(fit.normal, light->original_direction);
+            glm_vec3_copy(fit.up, light->original_up);
+            glm_vec2_copy(fit.size, light->size);
+        }
+
+        // The local fit lives in original_* between frames, so placement reads
+        // it back rather than depending on whether this frame re-fitted.
+        EmissivePanelFit local;
+        memset(&local, 0, sizeof(local));
+        glm_vec3_copy(light->original_position, local.center);
+        glm_vec3_copy(light->original_direction, local.normal);
+        glm_vec3_copy(light->original_up, local.up);
+        glm_vec2_copy(light->size, local.size);
+        _place(light, node, &local);
+
+        emissive_radiance_to_light(nits, light->color, &light->intensity);
+        light->units = LIGHT_UNITS_NITS;
+        (*live)++;
+    }
+
+    for (size_t c = 0; c < node->children_count; c++)
+        _reconcile_node(scene, node->children[c], refit, live);
+}
+
+static void _mark_seen(SceneNode* node, unsigned* seen, int* count, int cap) {
+    if (!node)
+        return;
+    for (size_t m = 0; m < node->mesh_count; m++) {
+        const Mesh* mesh = node->meshes[m];
+        vec3 nits = {0.0f, 0.0f, 0.0f};
+        if (!mesh || _mesh_candidacy(mesh, nits) != EMISSIVE_FIT_OK)
+            continue;
+        if (*count < cap)
+            seen[(*count)++] = mesh->id;
+    }
+    for (size_t c = 0; c < node->children_count; c++)
+        _mark_seen(node->children[c], seen, count, cap);
+}
+
+int scene_build_emissive_lights(Scene* scene, bool enabled) {
+    if (!scene || !scene->root_node)
+        return 0;
+
+    // Sweep first, so a panel whose mesh is gone releases its cluster slot in the
+    // same pass that would otherwise fill it. Backwards, because removal shifts
+    // the tail down over the index just visited.
+    int seen_count = 0;
+    unsigned* seen = NULL;
+    if (enabled) {
+        seen = calloc(scene->light_count + 64, sizeof(unsigned));
+        if (seen)
+            _mark_seen(scene->root_node, seen, &seen_count, (int)(scene->light_count + 64));
+    }
+
+    for (size_t i = scene->light_count; i-- > 0;) {
+        Light* l = scene->lights[i];
+        if (!l || l->emissive_source_id == 0)
+            continue; // authored: never this function's business
+        bool keep = false;
+        for (int s = 0; s < seen_count && !keep; s++)
+            keep = seen[s] == l->emissive_source_id;
+        if (!keep)
+            remove_light_from_scene(scene, l);
+    }
+    free(seen);
+
+    if (!enabled)
+        return 0;
+
+    uint64_t epoch = scene_graph_epoch();
+    bool refit = scene->emissive_epoch != epoch;
+    int live = 0;
+    _reconcile_node(scene, scene->root_node, refit, &live);
+    scene->emissive_epoch = epoch;
+    return live;
 }

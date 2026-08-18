@@ -212,31 +212,35 @@ typedef struct Engine {
 
     RenderMode current_render_mode; // default is PBR
 
-    float specular_aa_strength; // Geometric specular AA (0 disables)
-    bool energy_comp_enabled;   // Multi-scatter specular energy compensation;
-                                // inert without an IBL environment (needs the BRDF LUT)
-    bool refraction_enabled;    // Screen-space refraction for transmissive materials;
-                                // off = no resolve, and the shader treats transmission
-                                // as 0 (glass renders as a plain lit surface)
-    bool clearcoat_enabled;     // KHR_materials_clearcoat second specular lobe; off
-                                // skips the lobe (materials with clearcoat 0 are
-                                // unaffected either way)
-    bool specular_enabled;      // KHR_materials_specular F0 tint + specular weight; off
-                                // leaves the base dielectric BRDF unchanged (materials
-                                // without the extension are unaffected either way)
-    bool sheen_enabled;         // KHR_materials_sheen cloth lobe; off skips the lobe
-                                // (materials with sheen color 0 are unaffected either way)
-    bool parallax_enabled;      // POM height-march (§4.11); off skips the march
-                                // (materials with no height map / scale 0 are unaffected)
-    bool sss_enabled;           // Separable screen-space SSS; off skips the diffuse
-                                // separation + blur (materials with subsurface 0 are unaffected)
-    bool skin_preint_enabled;   // Pre-integrated skin diffuse (§11.13); off keeps the clamped
-                                // Lambert falloff (materials with curvature_scale 0 are
-                                // unaffected either way)
-    bool oit_enabled;           // Weighted-blended OIT for ALPHA_BLEND meshes (--oit); off keeps
-                                // the unsorted alpha-blend late pass
-    bool oit_moments_enabled;   // Weight the OIT accumulate by absorbance moments (spec 11.17)
-                                // instead of the depth curve; inert unless oit_enabled
+    float specular_aa_strength;   // Geometric specular AA (0 disables)
+    bool energy_comp_enabled;     // Multi-scatter specular energy compensation;
+                                  // inert without an IBL environment (needs the BRDF LUT)
+    bool refraction_enabled;      // Screen-space refraction for transmissive materials;
+                                  // off = no resolve, and the shader treats transmission
+                                  // as 0 (glass renders as a plain lit surface)
+    bool clearcoat_enabled;       // KHR_materials_clearcoat second specular lobe; off
+                                  // skips the lobe (materials with clearcoat 0 are
+                                  // unaffected either way)
+    bool specular_enabled;        // KHR_materials_specular F0 tint + specular weight; off
+                                  // leaves the base dielectric BRDF unchanged (materials
+                                  // without the extension are unaffected either way)
+    bool sheen_enabled;           // KHR_materials_sheen cloth lobe; off skips the lobe
+                                  // (materials with sheen color 0 are unaffected either way)
+    bool parallax_enabled;        // POM height-march (§4.11); off skips the march
+                                  // (materials with no height map / scale 0 are unaffected)
+    bool sss_enabled;             // Separable screen-space SSS; off skips the diffuse
+                                  // separation + blur (materials with subsurface 0 are unaffected)
+    bool skin_preint_enabled;     // Pre-integrated skin diffuse (§11.13); off keeps the clamped
+                                  // Lambert falloff (materials with curvature_scale 0 are
+                                  // unaffected either way)
+    bool oit_enabled;             // Weighted-blended OIT for ALPHA_BLEND meshes (--oit); off keeps
+                                  // the unsorted alpha-blend late pass
+    bool oit_moments_enabled;     // Weight the OIT accumulate by absorbance moments (spec 11.17)
+                                  // instead of the depth curve; inert unless oit_enabled
+    bool emissive_lights_enabled; // Derive an LTC area panel from every emissive mesh
+                                  // (spec 11.49). Off by default: emissive over a black base
+                                  // is how a constant-colour surface is authored, so most
+                                  // emissive geometry in the wild is not a lamp.
 
     mat4 model_matrix;
     mat4 view_matrix;

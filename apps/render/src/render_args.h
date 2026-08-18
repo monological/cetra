@@ -97,6 +97,7 @@ typedef struct {
     int no_water;               // Drop a water surface a scene file asked for
     int water_probe;            // Print the CPU wave query over a grid, then continue
     int water_fft_probe;        // Print the transformed spectrum's measured statistics
+    int emissive_lights;        // Derive an LTC area panel from every emissive mesh
     int emissive_light_probe;   // Print the area panel every emissive mesh would derive
     int gi_rate;                // Probes captured per frame while dirty (0 = default)
     int gi_debug;               // Blit the probe atlas into the frame corner

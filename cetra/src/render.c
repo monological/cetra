@@ -25,6 +25,7 @@
 #include "engine.h"
 #include "render.h"
 #include "profiler.h"
+#include "emissive_light.h"
 #include "light_cluster.h"
 #include "util.h"
 #include "shadow.h"
@@ -1039,6 +1040,16 @@ void render_current_scene(Engine* engine) {
     // per-frame flag resets and the prev_view_proj stash below, poisoning the
     // NEXT frame's motion vectors as well as this one's composite.
     engine_build_draw_list((Engine*)engine, scene);
+
+    // Derived emissive panels (spec 11.49), immediately upstream of the only
+    // thing that reads them. Here and not in scene_sync_materials because
+    // PLACEMENT needs this frame's transforms, and that runs before the app's
+    // apply_transform_to_nodes -- the same one-frame lag the shadow pass has.
+    //
+    // A cube-capture face re-enters here, so this runs six more times per
+    // capture; it is idempotent and epoch-gated, so those are placement only.
+    if (engine->emissive_lights_enabled)
+        scene_build_emissive_lights(scene, true);
 
     // Clustered forward (spec 9.1): rebuild the light grid + UBOs for THIS
     // invocation's camera and viewport -- probe-capture faces re-enter here

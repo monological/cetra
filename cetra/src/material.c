@@ -18,6 +18,9 @@
 // material, which is not a thing to discover by dragging an integer.
 static const char* const WIND_MODE_NAMES[] = {"cloth", "vegetation branch", "vegetation leaf"};
 
+// Order IS the stored value, and 0 must stay "light" so a calloc'd material opts in.
+static const char* const EMISSIVE_LIGHT_NAMES[] = {"light", "off"};
+
 // Group order here is the order an editor shows them in, and it is deliberate:
 // the handful of properties that describe every surface come first, and the
 // ones that only matter to a material that opted into a feature follow. A flat
@@ -40,6 +43,9 @@ const MaterialParam MATERIAL_PARAMS[] = {
 
     {"emissive", "Emissive", MP(emissive, MATERIAL_PARAM_COLOR, 0.0f, 1.0f)},
     {"emissiveStrength", "Emissive", MP(emissive_strength, MATERIAL_PARAM_FLOAT, 0.0f, 20.0f)},
+    {"emissiveLight", "Emissive", .offset = offsetof(Material, emissive_light),
+     .type = MATERIAL_PARAM_INT, .enum_labels = EMISSIVE_LIGHT_NAMES,
+     .enum_count = (int)(sizeof(EMISSIVE_LIGHT_NAMES) / sizeof(EMISSIVE_LIGHT_NAMES[0]))},
 
     {"clearcoat", "Coat and sheen", MP(clearcoat, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
     {"clearcoatRoughness", "Coat and sheen",
@@ -211,6 +217,7 @@ Material* create_material() {
     material->wind_response = 0.0f;    // rigid until a material opts into wind
     material->shore_wetness = 0.0f;    // never wetted by the swash until a material asks
     material->wind_mode = 0;           // cloth displacement unless a material asks for vegetation
+    material->emissive_light = 0;      // an emissive surface lights, unless it says otherwise
     // A plain albedo lookup until a material both asks and supplies a transformed map. The
     // identity table below is what the shader would apply if it ran anyway, so a half-wired
     // material renders its texture rather than a black one.

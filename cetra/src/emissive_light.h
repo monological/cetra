@@ -92,6 +92,23 @@ void emissive_material_radiance(const struct Material* material, vec3 out_nits);
 // zero and leaves the colour white rather than dividing by it.
 void emissive_radiance_to_light(const vec3 nits, vec3 out_color, float* out_intensity);
 
+// Bring the scene's derived panels into agreement with its emissive geometry,
+// and place them in world space from their owning nodes' CURRENT transforms.
+// Returns how many derived panels are live. `enabled` false removes every one,
+// so the feature toggles cleanly rather than leaving orphans behind.
+//
+// RECONCILE, not rebuild. A panel whose mesh survives keeps the same Light
+// object, so anything set on it -- a scene file's light_overrides entry above
+// all -- persists across a graph change. A rebuild would silently drop that.
+//
+// Cheap to call every frame: the plane fit re-runs only when the graph epoch
+// moved, and what happens otherwise is one matrix-vector product per panel.
+//
+// Safe to call at load as well as per frame, and the app SHOULD, because
+// light_overrides resolves names once at init and can only name a light that
+// already exists. Forgetting costs the override, not the lights.
+int scene_build_emissive_lights(struct Scene* scene, bool enabled);
+
 // Report what a panel would be for every mesh in the graph, and why any
 // candidate was rejected, on stdout in the --water-fft-probe idiom.
 //

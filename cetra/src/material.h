@@ -153,6 +153,17 @@ typedef struct Material {
     // vegetation is safe rather than silently wrong.
     int wind_mode;
 
+    // Whether this material's emissive surface derives an LTC area light
+    // (spec 11.49): 0 lights, 1 is decorative. Zero is "lights" so a calloc'd
+    // material opts in, and the feature is gated separately at the app -- this
+    // says what the SURFACE is, not whether the run wants any panels.
+    //
+    // A material is shared by every mesh that uses it, so this is a statement
+    // about a KIND of surface. That is right for "decorative" and would be wrong
+    // for anything per-instance, which is why casting lives on the scene file's
+    // light_overrides rather than here.
+    int emissive_light;
+
     // Core PBR Textures
     Texture* albedo_tex;            // Albedo (Diffuse) Map
     Texture* normal_tex;            // Normal Map

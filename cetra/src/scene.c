@@ -299,6 +299,23 @@ int add_light_to_scene(Scene* scene, Light* light) {
     return 0;
 }
 
+int remove_light_from_scene(Scene* scene, Light* light) {
+    if (!scene || !light)
+        return -1;
+
+    for (size_t i = 0; i < scene->light_count; ++i) {
+        if (scene->lights[i] != light)
+            continue;
+        // Shift rather than swap: see the ordering note in scene.h.
+        memmove(&scene->lights[i], &scene->lights[i + 1],
+                (scene->light_count - i - 1) * sizeof(Light*));
+        scene->light_count--;
+        free_light(light);
+        return 0;
+    }
+    return -1;
+}
+
 Light* find_light_by_name(Scene* scene, const char* name) {
     if (!scene || !name)
         return NULL;

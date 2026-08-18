@@ -168,6 +168,7 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --water-bed <m>    none (default) or dome: an analytic bed to shoal\n");
     fprintf(stderr, "      --water-probe      Print the CPU wave query over a grid\n");
     fprintf(stderr, "      --water-fft-probe  Print the transformed spectrum's statistics\n");
+    fprintf(stderr, "      --emissive-lights  Emissive meshes become LTC area lights\n");
     fprintf(stderr, "      --emissive-light-probe  Print the panel every emissive mesh derives\n");
     fprintf(stderr, "      --sky              Procedural physically-based sky (instead of -e)\n");
     fprintf(stderr, "      --sky-debug        Blit the sky LUTs into the frame corner\n");
@@ -710,6 +711,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->water_probe = 1;
         } else if (strcmp(argv[i], "--water-fft-probe") == 0) {
             args->water_fft_probe = 1;
+        } else if (strcmp(argv[i], "--emissive-lights") == 0) {
+            args->emissive_lights = 1;
         } else if (strcmp(argv[i], "--emissive-light-probe") == 0) {
             args->emissive_light_probe = 1;
         } else if (strcmp(argv[i], "--no-water") == 0) {
@@ -2422,6 +2425,22 @@ int main(int argc, char** argv) {
         }
     }
 
+    // Emissive panels are derived BEFORE the lighting decision below, and that
+    // ordering is what the three-point fallback's own comment asks for: it keeps
+    // out of the way of "scenes that ship their own lighting design (embedded
+    // lights, emissive surfaces)", and a scene lit ONLY by its emissive surfaces
+    // is lightless until this runs. It is also before light_overrides resolves
+    // names, which is what lets an override address a derived panel.
+    //
+    // The fit needs no transform -- it is local to each mesh -- so running this
+    // early costs nothing. Placement is the half that needs the graph resolved,
+    // and that happens per frame.
+    engine->emissive_lights_enabled = args.emissive_lights ? true : false;
+    if (engine->emissive_lights_enabled) {
+        int panels = scene_build_emissive_lights(scene, true);
+        printf("Emissive lights: %d derived area panel%s\n", panels, panels == 1 ? "" : "s");
+    }
+
     if (args.hdr_path) {
         IBLResources* ibl = create_ibl_resources();
         if (ibl && load_hdr_environment(ibl, args.hdr_path) == 0) {
@@ -2578,10 +2597,8 @@ int main(int argc, char** argv) {
     glm_mat4_identity(identity);
     apply_transform_to_nodes(scene->root_node, identity);
 
-    // The panel fit is LOCAL to each mesh, so it needs no transform and could
-    // run anywhere after import. It reports here because this is where the
-    // derived lights themselves will be built -- before the scene file's
-    // light_overrides run, which is what lets an override name one.
+    // The fit is LOCAL to each mesh, so the probe needs no transform and reports
+    // whatever the flag did or would do.
     if (args.emissive_light_probe)
         emissive_lights_probe(scene);
 

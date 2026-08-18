@@ -83,6 +83,16 @@ typedef struct Light {
     bool cast_shadows;
     int shadow_map_index;
     int shadow_layer;
+
+    // The Mesh whose emissive surface this panel was derived from (spec 11.49),
+    // by that mesh's stable `id`. 0 means AUTHORED -- a light somebody made --
+    // and the emissive reconcile will not touch one, so the two populations
+    // share this array without either being able to delete the other.
+    //
+    // The id and not a Mesh*: the reconcile learns a mesh is gone from the graph
+    // epoch, by which time the pointer is already dangling, where mesh.h
+    // guarantees an id is "assigned once and never reused".
+    unsigned emissive_source_id;
 } Light;
 
 Light* create_light();
