@@ -7556,17 +7556,17 @@ def run_emissive_gate(workdir):
                         radiance, light the room the same. THE acceptance test.
                         Read on floor and walls, never the ceiling panel, whose
                         own pixels differ 18x between the two by construction.
+      emissive-override light_overrides names a DERIVED panel and gives it a
+                        shadow. Proves the name reaches it and that the build
+                        happens before overrides resolve -- and it is how the
+                        match arm above gets to agree at all, since the authored
+                        light casts and a derived one does not by default.
       emissive-off      two ways of having no derived panel agree, and both
                         differ from having one. NOT "the room goes dark", which
                         is what this was first written as: strip the authored
                         light and turn the feature off and the scene has no
                         lights at all, so the render app substitutes its
                         three-point fallback and the room gets BRIGHTER, 16x.
-      emissive-override light_overrides names a DERIVED panel and gives it a
-                        shadow. Proves the name reaches it and that the build
-                        happens before overrides resolve -- and it is how the
-                        match arm above gets to agree at all, since the authored
-                        light casts and a derived one does not by default.
     """
     failures = []
     fixture = os.path.join(ROOT, "assets", EMISSIVE_FIXTURE)
