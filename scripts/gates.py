@@ -7557,6 +7557,43 @@ EMISSIVE_WORLD_BANDS = {
 EMISSIVE_BAND_INSET = 0.12
 
 
+EMISSIVE_LEAK_FIXTURE = "cornell_leak.cscn"
+
+# cornell_leak is the same room cut in half by a partition at x = 0, lit over the
+# LEFT half only (gen_cornell_rooms.py `r.panel(-0.5)`). It exists to prove light
+# does NOT arrive where it has no path.
+#
+# Mirrored patches on the BACK WALL (z = -1), one each side of the partition.
+# The back wall and not the floor because the .cscn camera is nearly horizontal
+# (eye y 1.0, target y 0.95), so the floor projects into a grazing sliver while
+# the back wall faces the lens. Mirrored rather than absolute because the two
+# configurations differ in how bright the LIT half is -- a 160 lumen spot is not
+# an 18 nit panel -- so the reading that means anything is dark AGAINST lit
+# inside one frame.
+#
+# Deliberately away from the open front (z = +1), which is the one real path
+# light has into the occluded half and would put a legitimate reading in a band
+# whose whole claim is that it receives none.
+EMISSIVE_LEAK_BANDS = {
+    "lit": [(-0.85, 0.55, -1.0), (-0.20, 0.55, -1.0), (-0.20, 1.35, -1.0), (-0.85, 1.35, -1.0)],
+    "dark": [(0.20, 0.55, -1.0), (0.85, 0.55, -1.0), (0.85, 1.35, -1.0), (0.20, 1.35, -1.0)],
+}
+
+# The occluded half must read as a fraction of the lit half. Measured 0.0000
+# exactly with the shadow on -- the room is direct-lit only, so a fully occluded
+# surface is black rather than nearly so -- and 0.4115 with it off. The bar sits
+# far from both, since what separates them is three orders of magnitude and not a
+# margin.
+#
+# LEAK_MIN is the falsifier and is the more important of the two. Without it this
+# arm passes on any frame where the dark half happens to be black, INCLUDING a
+# build where the derived panel never lit anything at all: "no light through the
+# wall" and "no light" are the same reading. The unshadowed render is what proves
+# the band can detect a leak, so the shadowed zero means something.
+EMISSIVE_LEAK_MAX = 0.02
+EMISSIVE_LEAK_MIN = 0.15
+
+
 def _emissive_boxes(w, h):
     """The world bands above as fractional screen boxes, for _absorb_box_rgb."""
     project = _projector(_cscn_camera(CORNELL_FIXTURE), w, h)
@@ -7695,6 +7732,14 @@ def run_emissive_gate(workdir):
                         too, so an area panel's shadow is not measurable here and
                         claiming it would be asserting A7 through a blind
                         instrument.
+      emissive-occluded the occlusion the arm above cannot see, on the fixture
+                        built to ask it. cornell_leak is one room cut in half by
+                        a partition and lit over one side only. A derived panel
+                        inherits cast_shadows FALSE, so by default it lights the
+                        far half straight through the wall -- 0.41 of the lit
+                        half -- and a light_overrides entry takes that to 0.
+                        BOTH are asserted: without the leaking frame, "no light
+                        through the wall" and "no light at all" are one reading.
       emissive-gi       a derived panel and a hand-authored one lift the indirect
                         term by the same amount. A DDGI probe capture runs the
                         full forward shader, so it sees the emissive surface AND
@@ -7978,6 +8023,70 @@ def run_emissive_gate(workdir):
           "(names a light the scene file could not have known about)")
     if not ok:
         failures.append("emissive-override")
+
+    # OCCLUSION, which the arm above explicitly cannot measure: it records that an
+    # area panel's shadow does not move any band on cornell_box, for either the
+    # derived panel or the fixture's own authored one. cornell_leak is the fixture
+    # where it does move, because the whole room is built around one occluder.
+    #
+    # A derived panel inherits cast_shadows FALSE -- create_light's default, which
+    # emissive_light.c never overrides -- so out of the box it lights straight
+    # through the partition. That is not a defect this feature introduced; it is
+    # what every non-shadowing area light does, and it is the reason
+    # cornell_leak.cscn authors a SPOT rather than reusing the box room's panel.
+    # What was missing is that nothing pointed the fixture at a derived panel, so
+    # the behaviour was neither asserted nor written down anywhere a change could
+    # trip over it.
+    #
+    # Both directions in one arm, because separately neither is worth much: the
+    # shadowed zero is only meaningful beside a frame proving the band can read a
+    # leak at all.
+    leak_src = os.path.join(ROOT, "assets", EMISSIVE_LEAK_FIXTURE)
+    if not os.path.exists(leak_src):
+        print(f"  emissive-occluded SKIP ({EMISSIVE_LEAK_FIXTURE} not present)")
+    else:
+        def _leak_variant(shadow):
+            def mutate(d):
+                d["lights"] = []
+                d.setdefault("materials", {}).setdefault(
+                    "cornell_light", {})["emissiveStrength"] = 18.0
+                if shadow:
+                    d["light_overrides"] = [{"name": "cornell_light", "cast_shadows": True}]
+            return mutate
+
+        leak_ok = True
+        reads = {}
+        for tag, shadow in (("shadowed", True), ("unshadowed", False)):
+            scn = os.path.join(workdir, f"emissive_leak_{tag}.cscn")
+            cscn_copy(leak_src, scn, _leak_variant(shadow))
+            img = os.path.join(workdir, f"emissive_leak_{tag}.ppm")
+            err = render(scn, img, base + ["--emissive-lights"])
+            if err:
+                print(f"  emissive-occluded ERROR {tag} render failed: {err.strip()[-200:]}")
+                failures.append("emissive-occluded")
+                leak_ok = False
+                break
+            w, h, pix = _read_ppm(img)
+            project = _projector(_cscn_camera(EMISSIVE_LEAK_FIXTURE), w, h)
+            band = {}
+            for name, pts in EMISSIVE_LEAK_BANDS.items():
+                xs, ys = zip(*(project(pt) for pt in pts))
+                x0, x1 = min(xs) / w, max(xs) / w
+                y0, y1 = min(ys) / h, max(ys) / h
+                dx, dy = (x1 - x0) * EMISSIVE_BAND_INSET, (y1 - y0) * EMISSIVE_BAND_INSET
+                band[name] = sum(_absorb_box_rgb(
+                    pix, w, h, (x0 + dx, y0 + dy, x1 - dx, y1 - dy))) / 3.0
+            reads[tag] = band["dark"] / max(band["lit"], 1e-6)
+
+        if leak_ok:
+            shadowed, unshadowed = reads["shadowed"], reads["unshadowed"]
+            ok = shadowed <= EMISSIVE_LEAK_MAX and unshadowed >= EMISSIVE_LEAK_MIN
+            print(f"  emissive-occluded {'PASS' if ok else 'FAIL'} dark/lit behind the "
+                  f"partition: shadowed={shadowed:.4f} want <={EMISSIVE_LEAK_MAX}; "
+                  f"unshadowed={unshadowed:.4f} want >={EMISSIVE_LEAK_MIN} "
+                  "(the second is the falsifier -- it proves the band can see a leak)")
+            if not ok:
+                failures.append("emissive-occluded")
 
     # The indirect term must not count the emitter twice. Four renders because a
     # LIFT is what is being compared, not a brightness: each side is measured
