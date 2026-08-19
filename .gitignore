@@ -14,3 +14,14 @@ __pycache__/
 # Written by an export so a tree with no history can still name itself. Committing one
 # would put the stale literal back that deriving the version removed.
 VERSION
+
+# The ivy arcade's geometry, which build_arcade.py generates. Derived data, and
+# it is enormous: 641k leaf cards baked flat is 2.5M vertices, a 169 MB external
+# buffer uncompressed and 19 MB under Draco. Committing it once already made the
+# repo unpushable -- GitHub refuses a file over 100 MB.
+#
+# The generator is committed and deterministic, which is how every gen_*.py
+# fixture in assets/ already works and why my_models/ is ignored above. Rebuild
+# with: blender --background --python assets/ivy_arcade/build_arcade.py
+assets/ivy_arcade/ivy_arcade.gltf
+assets/ivy_arcade/ivy_arcade.bin
