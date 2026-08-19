@@ -482,6 +482,41 @@ ShaderProgram* create_particle_sim_program() {
     return program;
 }
 
+// The wind bound's instrument (spec 11.54). Vertex-only for the same reason the
+// particle sim above is, and assembled the same way -- the feedback varying has
+// to be named between attach and link.
+//
+// Built on demand by wind_bound_probe and freed straight after: it runs once at
+// the end of a run behind a flag, so putting it in the engine's program cache
+// would cost every session a compile for a diagnostic almost nobody asks for.
+ShaderProgram* create_wind_probe_program() {
+    ShaderProgram* program = create_program("wind_probe");
+    if (!program) {
+        log_error("Failed to create wind probe program");
+        return NULL;
+    }
+
+    Shader* vs = create_shader(VERTEX_SHADER, wind_probe_vert_shader_str);
+    if (!vs || !compile_shader(vs)) {
+        log_error("Wind probe vertex shader compilation failed");
+        free_program(program);
+        return NULL;
+    }
+    attach_shader_to_program(program, vs);
+
+    const char* varyings[] = {"oOffset"};
+    glTransformFeedbackVaryings(program->id, 1, varyings, GL_INTERLEAVED_ATTRIBS);
+
+    if (!link_program(program)) {
+        log_error("Wind probe program linking failed");
+        free_program(program);
+        return NULL;
+    }
+
+    setup_program_uniforms(program);
+    return program;
+}
+
 ShaderProgram* create_pbr_skinned_program() {
     ShaderProgram* program = NULL;
 

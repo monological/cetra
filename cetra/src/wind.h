@@ -5,6 +5,8 @@
 
 #include "uniform.h"
 
+struct Scene;
+
 // A first-class, scene-owned wind field. Mirrors how UE's WindDirectionalSource
 // and Unity's WindZone are scene objects: the wind carries a direction, strength,
 // and gust, and wind-responsive materials sample it (Material.wind_response) to
@@ -56,5 +58,20 @@ void wind_upload_to_program(const Wind* wind, UniformManager* u);
 // no vertex data. Returns exactly 0 wherever the shader early-outs, so a
 // rigid mesh and a windless scene both keep their import bounds untouched.
 float wind_max_offset(const Wind* wind, float response, int mode, float flex_max, float leaf_max);
+
+// Prints the largest displacement windOffset can be driven to, beside the bound
+// wind_max_offset claims for the same inputs, per wind-responsive mesh, in the
+// --water-fft-probe idiom.
+//
+// It drives the REAL shader through transform feedback rather than a C mirror of
+// it. The two halves above share their coefficients (wind_bounds.glsl) and
+// cannot share their arithmetic, so a term added to windOffset makes the bound
+// non-conservative with nothing to say so -- and the symptom is geometry culled
+// while it is on screen, which no frame in the corpus is framed to catch. A C
+// port would have checked the bound against a third copy and passed straight
+// through exactly that edit.
+//
+// Needs a live GL context.
+void wind_bound_probe(const struct Scene* scene);
 
 #endif // _WIND_H_

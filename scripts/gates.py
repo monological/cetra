@@ -8793,6 +8793,14 @@ def run_exposure_gate(workdir):
     return failures
 
 
+# How close the tightest sweep must come to the bound before the reading counts
+# as a test of it. Measured at 0.9664 on the vegetation quad and 0.9618 on the
+# cloth one, so 0.85 leaves room for a grid tweak without leaving room for a
+# grid that stopped sweeping. It is a floor on the INSTRUMENT, not on the
+# engine: the bound getting tighter would raise this, never lower it.
+CULL_BOUND_FLOOR = 0.85
+
+
 def run_cull_gate(workdir):
     """Wind and skinned geometry is bounded, so it can be culled (spec 11.53).
 
@@ -8802,12 +8810,18 @@ def run_cull_gate(workdir):
       cull-margin     a wind quad outside the frustum at bind, blown back in
       cull-skin       a posed panel outside its bind bounds is still drawn
       cull-skin-away  the same rig aimed away, every mesh rejected
+      cull-bound      the wind bound is one, measured against the real shader
 
     Both fixtures pair a MUST-CULL arm with a MUST-NOT-CULL one, because the two
     fail in opposite directions and neither is safe alone. The old exemption
     passes every "nothing visible was dropped" test trivially -- it dropped
     nothing because it culled nothing -- and a bound that is too tight passes
     every "it culls" test while deleting geometry that is on screen.
+
+    cull-bound closes what the five above cannot: they pin the bound at ONE
+    camera, one frame and one wind field, so a displacement term smaller than
+    the fixture's slack, or pointing where its quads do not, leaves them all
+    green. It reads --wind-bound-probe, which drives windOffset itself.
     """
     WIND = "wind_cull_fixture"
     SKIN = "skinned_cull_fixture"
@@ -8920,6 +8934,38 @@ def run_cull_gate(workdir):
               f"{a.get('draws')} draws (want all culled, 0 draws)")
         if not ok:
             failures.append("cull-skin-away")
+
+    # --- cull-bound: the bound is one, against the shader itself ------------
+    # Two claims on one reading. `measured <= bound` is correctness -- a ratio
+    # over 1.0 means culling can drop geometry that is on screen. The floor is
+    # the instrument checking itself: the worst case IS reachable (cloth's
+    # mask*sway and the vegetation lean both hit 1), so a correct sweep lands
+    # near 1.0, and a reading of 0.3 means the grid got coarser, not that the
+    # bound got safer.
+    #
+    # max_abs, not max_l2: the margin inflates the AABB per AXIS.
+    rows, _ = _probe_render(workdir, os.path.join(ROOT, "assets", f"{WIND}.cscn"),
+                            "--wind-bound-probe", "wind-bound-probe", frames=2,
+                            out_name="wind_bound_probe.ppm")
+    head = next((r for r in rows if r.get("kind") == "header"), None)
+    samples = [r for r in rows if r.get("kind") in ("mesh", "sweep")]
+    if not head or head.get("available") != "1" or not samples:
+        reason = head.get("reason", "no rows") if head else "no header"
+        print(f"  cull-bound   FAIL  probe unavailable: {reason}")
+        failures.append("cull-bound")
+    else:
+        ratios = [float(r["abs_ratio"]) for r in samples]
+        worst = max(ratios)
+        tightest = max(float(r["abs_ratio"]) for r in samples if r["kind"] == "sweep")
+        ok = worst <= 1.0 and tightest >= CULL_BOUND_FLOOR
+        over = [f"{r['mesh']}/{r['kind']}" for r in samples if float(r["abs_ratio"]) > 1.0]
+        print(f"  cull-bound   {'PASS' if ok else 'FAIL'}  {len(samples)} readings over "
+              f"{head['time_span']}s in {head['time_steps']} steps: worst measured/bound "
+              f"{worst:.4f} (want <= 1.0{'; over: ' + ','.join(over) if over else ''}), "
+              f"tightest sweep {tightest:.4f} (want >= {CULL_BOUND_FLOOR}, or the grid is too "
+              f"coarse to be a test)")
+        if not ok:
+            failures.append("cull-bound")
 
     return failures
 

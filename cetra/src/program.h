@@ -79,6 +79,10 @@ ShaderProgram* create_pbr_skinned_program();
 ShaderProgram* create_particle_program();
 // Particle GPU-sim UPDATE program (transform feedback; vertex-only, spec 5.2)
 ShaderProgram* create_particle_sim_program();
+// Captures windOffset itself (transform feedback; vertex-only, spec 11.54), so
+// the bound that lets a swaying mesh be culled is checked against the shader
+// rather than against a second copy of it.
+ShaderProgram* create_wind_probe_program();
 ShaderProgram* create_shape_program();
 ShaderProgram* create_xyz_program();
 ShaderProgram* create_shadow_depth_program();
