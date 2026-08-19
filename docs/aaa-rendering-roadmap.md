@@ -2294,6 +2294,14 @@ wrong (a budget compared in MB against MiB), and taking it would have replaced a
 a wrong one in two permanent documents. **Verify a correction before applying it, exactly as you
 would verify a row.**
 
+And the sharpest detail is why one of the three survived so long: **the state it goes wrong in was
+unreachable from the harness.** `Light.shadow_layer` only goes stale when the shadow system is
+switched off *after* the depth pass has run, and `--no-shadows` clears it before frame 0 — so every
+headless run exercised the never-enabled path and none exercised the transition. Closing that gap
+meant building the instrument first (`--shadows-off-at`, in the `--render-scale-at` idiom). **A
+defect that no flag can reach is not covered by any number of gate arms**, and the corpus now has two
+of these levers on the same principle.
+
 **Two observations about this table rather than items in it**, both from two earlier specs.
 
 11.49: three of its four real defects were invisible in every frame — a first bounce counted twice, a
