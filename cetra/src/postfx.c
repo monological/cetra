@@ -9,12 +9,29 @@
 
 #include "ext/log.h"
 
-// Auto-exposure measure target. Its full mip chain averages down to 1x1 at
-// level log2(size), and that top mip is the geometric-mean luminance the
-// adaptation reads. Both constants are used here only -- the shader that used
-// to need to agree about the top level is gone.
-#define LUM_MEASURE_SIZE    64
-#define LUM_MEASURE_TOP_MIP 6
+// Auto-exposure measure target: 64x64 log2 luminances, binned by
+// lum_histogram_frag and collapsed by lum_reduce_frag. It used to average down
+// its own mip chain instead, which gave the geometric mean and nothing else --
+// a mean cannot have a tail cut off it after the fact, which is what a
+// percentile needs (spec 11.52).
+#define LUM_MEASURE_SIZE 64
+
+// One fragment per bin, so the histogram pass is this many fragments and the
+// reduce pass loops this many texels. 64 is far more resolution than the
+// percentile cut needs; the cost of a bin is one more iteration in a loop that
+// runs once per frame.
+#define LUM_HISTOGRAM_BINS 64
+
+// The binned range, as log2 luminance in absolute cd/m^2. Roughly starlight
+// (1e-4) to well past a sunlit surface (1e5), which is the photometric span the
+// meter reads since it started dividing pre-exposure back out.
+//
+// Deliberately wider than any scene needs, because the cost of width is
+// resolution the percentile does not need, while the cost of being too narrow
+// is a scene pinned against an end bin. Samples outside it still contribute
+// their true value to the mean -- only their percentile position is clamped.
+#define LUM_HISTOGRAM_MIN_LOG2 (-14.0f)
+#define LUM_HISTOGRAM_MAX_LOG2 (18.0f)
 // Motion-blur tile size (px): tile-max reduces velocity to one dominant vector
 // per MOTION_BLUR_TILE^2 tile, which also bounds the max blur radius. Must match
 // TILE_SIZE reasoning in motion_blur_frag.glsl (MAX_PIXELS clamp).
@@ -701,23 +718,39 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
         return NULL;
     }
 
-    // Auto-exposure: a 64x64 log2-luminance measure target whose mip chain is
-    // regenerated each frame (top mip = geometric-mean scene luminance).
-    // R16F: log2 luminance is small-range but needs sub-ulp precision.
+    // Auto-exposure, three fixed-size targets. R16F for the measure: log2
+    // luminance is small-range but needs sub-ulp precision. RG32F for the
+    // histogram because its second channel is a SUM of up to 4096 log2 values,
+    // where fp16 would start losing the low bits of the mean the reduce derives
+    // from it. R32F for the 1x1 the CPU reads back.
     //
-    // There is no adapted-luminance ping-pong beside it, though this comment
-    // described one until 11.52. The eye-adaptation pass that owned it was
-    // deleted in f98ab0a: the measurement is read back to the CPU anyway, so
-    // blending it there deleted the pass, its shader, the ping-pong, its
-    // validity flag, and the C-to-GLSL agreement about which mip is the top.
+    // None of the three is resolution-dependent, so they are allocated once here
+    // and freed only in free_postfx -- deliberately outside postfx_free_targets
+    // and postfx_invalidate_targets, which exist for the targets a resize
+    // rebuilds.
+    //
+    // The measure target no longer carries a mip chain. It used to be averaged
+    // down to 1x1 by glGenerateMipmap, and there is no adapted-luminance
+    // ping-pong beside it either, though this comment described one until 11.52:
+    // that pass was deleted in f98ab0a.
     if (!create_color_fbo(LUM_MEASURE_SIZE, LUM_MEASURE_SIZE, GL_R16F, &fx->lum_fbo,
-                          &fx->lum_texture)) {
+                          &fx->lum_texture) ||
+        !create_color_fbo(LUM_HISTOGRAM_BINS, 1, GL_RG32F, &fx->lum_hist_fbo,
+                          &fx->lum_hist_texture) ||
+        !create_color_fbo(1, 1, GL_R32F, &fx->lum_reduce_fbo, &fx->lum_reduce_texture)) {
         free_postfx(fx);
         return NULL;
     }
+    // Both consumers texelFetch, which ignores filtering -- but a mipmapped
+    // min filter on a texture with no mips is incomplete, and the default IS
+    // mipmapped. create_color_fbo already sets LINEAR; NEAREST states that
+    // nothing here samples between texels.
     glBindTexture(GL_TEXTURE_2D, fx->lum_texture);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-    glGenerateMipmap(GL_TEXTURE_2D); // Allocate the chain up front
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glBindTexture(GL_TEXTURE_2D, fx->lum_hist_texture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 
     unsigned int rng = 0x9E3779B9u;
     fx->noise_texture = create_ssao_noise_texture(&rng);
@@ -737,6 +770,8 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     fx->ssr_atrous_program = create_ssr_atrous_program();
     fx->ssr_accum_program = create_ssr_accum_program();
     fx->lum_measure_program = create_lum_measure_program();
+    fx->lum_histogram_program = create_lum_histogram_program();
+    fx->lum_reduce_program = create_lum_reduce_program();
     fx->ssr_program = create_ssr_program();
     fx->ssr_hiz_program = create_ssr_hiz_program();
     fx->upsample_tent_program = create_upsample_tent_program();
@@ -772,7 +807,7 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
         !fx->tonemap_program || !fx->gtao_program || !fx->ssao_blur_program ||
         !fx->temporal_accum_program || !fx->ssgi_composite_program || !fx->ssgi_accum_program ||
         !fx->ssgi_atrous_program || !fx->ssr_atrous_program || !fx->ssr_accum_program ||
-        !fx->lum_measure_program ||
+        !fx->lum_measure_program || !fx->lum_histogram_program || !fx->lum_reduce_program ||
         !fx->ssr_program || !fx->upsample_tent_program ||
         !fx->taa_resolve_program || !fx->dof_coc_program ||
         !fx->froxel_inject_program || !fx->froxel_integrate_program ||
@@ -805,6 +840,10 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
 
     glUseProgram(fx->lum_measure_program->id);
     uniform_set_int(fx->lum_measure_program->uniforms, "hdrTex", 0);
+    glUseProgram(fx->lum_histogram_program->id);
+    uniform_set_int(fx->lum_histogram_program->uniforms, "lumTex", 0);
+    glUseProgram(fx->lum_reduce_program->id);
+    uniform_set_int(fx->lum_reduce_program->uniforms, "histTex", 0);
 
     glUseProgram(fx->ssr_program->id);
     uniform_set_int(fx->ssr_program->uniforms, "depthTex", 0);
@@ -1867,6 +1906,10 @@ void free_postfx(PostFX* fx) {
     gl_delete_texture(&fx->white_tex);
     gl_delete_fbo(&fx->lum_fbo);
     gl_delete_texture(&fx->lum_texture);
+    gl_delete_fbo(&fx->lum_hist_fbo);
+    gl_delete_texture(&fx->lum_hist_texture);
+    gl_delete_fbo(&fx->lum_reduce_fbo);
+    gl_delete_texture(&fx->lum_reduce_texture);
     gl_delete_fbo(&fx->froxel_fbo);
     glDeleteTextures(2, fx->froxel_scatter);
     fx->froxel_scatter[0] = 0;
@@ -1888,6 +1931,8 @@ void free_postfx(PostFX* fx) {
     free_program(fx->ssgi_atrous_program);
     free_program(fx->ssr_atrous_program);
     free_program(fx->lum_measure_program);
+    free_program(fx->lum_histogram_program);
+    free_program(fx->lum_reduce_program);
     free_program(fx->ssr_program);
     free_program(fx->ssr_hiz_program);
     free_program(fx->upsample_tent_program);
@@ -3262,8 +3307,8 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         //
         // This replaced a second fullscreen pass that blended into a 1x1
         // ping-pong pair, purely so the tonemap could sample the result. Reading
-        // the mip directly deletes that pass, its shader, the ping-pong, its
-        // validity flag, and the C-to-GLSL agreement about which mip is the top.
+        // the value directly deletes that pass, its shader, the ping-pong and its
+        // validity flag.
         //
         // The read blocks. A PBO plus a fence would not (measured 0.033 ms
         // against 5.253), but it lands each measurement whenever the GPU happens
@@ -3287,11 +3332,34 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             // structural rather than a rule the C side has to remember.
             uniform_set_float(fx->lum_measure_program->uniforms, "autoKey", fx->exposure->key);
             draw_fullscreen_quad(fx->quad_vao);
+
+            // Bin, then collapse. Two draws of 64 and 1 fragments -- the cost
+            // that matters in this block is the blocking read below, not these.
+            glBindFramebuffer(GL_FRAMEBUFFER, fx->lum_hist_fbo);
+            glViewport(0, 0, LUM_HISTOGRAM_BINS, 1);
+            glUseProgram(fx->lum_histogram_program->id);
             glBindTexture(GL_TEXTURE_2D, fx->lum_texture);
-            glGenerateMipmap(GL_TEXTURE_2D);
+            uniform_set_int(fx->lum_histogram_program->uniforms, "srcSize", LUM_MEASURE_SIZE);
+            uniform_set_int(fx->lum_histogram_program->uniforms, "binCount", LUM_HISTOGRAM_BINS);
+            uniform_set_vec2(fx->lum_histogram_program->uniforms, "binRange",
+                             (vec2){LUM_HISTOGRAM_MIN_LOG2, LUM_HISTOGRAM_MAX_LOG2});
+            draw_fullscreen_quad(fx->quad_vao);
+
+            glBindFramebuffer(GL_FRAMEBUFFER, fx->lum_reduce_fbo);
+            glViewport(0, 0, 1, 1);
+            glUseProgram(fx->lum_reduce_program->id);
+            glBindTexture(GL_TEXTURE_2D, fx->lum_hist_texture);
+            uniform_set_int(fx->lum_reduce_program->uniforms, "binCount", LUM_HISTOGRAM_BINS);
+            // Keeping the whole population reproduces the geometric mean the mip
+            // chain used to give, exactly -- the histogram carries each bin's SUM,
+            // so no resolution is lost to binning. The percentiles become
+            // authorable in P2; until then this pass is a no-op by construction.
+            uniform_set_vec2(fx->lum_reduce_program->uniforms, "percentiles", (vec2){0.0f, 1.0f});
+            draw_fullscreen_quad(fx->quad_vao);
 
             float measured = 0.0f;
-            glGetTexImage(GL_TEXTURE_2D, LUM_MEASURE_TOP_MIP, GL_RED, GL_FLOAT, &measured);
+            glBindTexture(GL_TEXTURE_2D, fx->lum_reduce_texture);
+            glGetTexImage(GL_TEXTURE_2D, 0, GL_RED, GL_FLOAT, &measured);
             exposure_submit_measurement(fx->exposure, measured);
             // After the submit, so the report carries this frame's adapted value
             // rather than last frame's. `measured` is passed in because the

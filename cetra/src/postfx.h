@@ -157,8 +157,12 @@ typedef struct PostFX {
     GLuint aux_texture;
     GLuint albedo_fbo; // Full-res resolved base color / albedo (attachment 3) for SSGI composite
     GLuint albedo_texture;
-    GLuint lum_fbo; // 64x64 log2-luminance measure target, mipmapped each frame (auto-exposure)
+    GLuint lum_fbo; // 64x64 log2-luminance measure target (auto-exposure)
     GLuint lum_texture;
+    GLuint lum_hist_fbo; // binCount x 1, RG32F: (population, sum of log2) per bin
+    GLuint lum_hist_texture;
+    GLuint lum_reduce_fbo; // 1x1, the percentile-clipped log2 mean the CPU reads back
+    GLuint lum_reduce_texture;
     PingPong taa_history; // Post-res history (previous resolved frames)
     // TAAU canvas (render_scale < 1 only, 0 otherwise): the post-res buffer
     // the seam brings the render-res frame up to. At full scale the hdr
@@ -184,6 +188,8 @@ typedef struct PostFX {
     ShaderProgram* ssr_atrous_program; // Edge-aware a-trous denoise for the SSR reflection buffer
     ShaderProgram* ssr_accum_program;  // SSR's own accumulator: inverse-luma blend (10.7.2)
     ShaderProgram* lum_measure_program;
+    ShaderProgram* lum_histogram_program;
+    ShaderProgram* lum_reduce_program;
     ShaderProgram* ssr_program;
     ShaderProgram* ssr_hiz_program;
     ShaderProgram* upsample_tent_program;    // Shared tent composite (bloom mips, SSR)

@@ -1047,6 +1047,14 @@ ShaderProgram* create_lum_measure_program() {
     return create_post_program("lum_measure", lum_measure_frag_shader_str);
 }
 
+ShaderProgram* create_lum_histogram_program() {
+    return create_post_program("lum_histogram", lum_histogram_frag_shader_str);
+}
+
+ShaderProgram* create_lum_reduce_program() {
+    return create_post_program("lum_reduce", lum_reduce_frag_shader_str);
+}
+
 ShaderProgram* create_dof_coc_program() {
     return create_post_program("dof_coc", dof_coc_frag_shader_str);
 }
