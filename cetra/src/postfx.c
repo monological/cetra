@@ -3340,6 +3340,10 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             uniform_set_int(fx->lum_histogram_program->uniforms, "binCount", LUM_HISTOGRAM_BINS);
             uniform_set_vec2(fx->lum_histogram_program->uniforms, "binRange",
                              (vec2){LUM_HISTOGRAM_MIN_LOG2, LUM_HISTOGRAM_MAX_LOG2});
+            uniform_set_int(fx->lum_histogram_program->uniforms, "meterMode",
+                            (int)fx->exposure->meter_mode);
+            uniform_set_float(fx->lum_histogram_program->uniforms, "meterRadius",
+                              fx->exposure->meter_radius);
             draw_fullscreen_quad(fx->quad_vao);
 
             glBindFramebuffer(GL_FRAMEBUFFER, fx->lum_reduce_fbo);

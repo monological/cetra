@@ -102,6 +102,8 @@ typedef struct {
     int exposure_probe;         // Print what the meter decided, per metered frame
     float meter_low;            // Metering low percentile (<0 = leave the default)
     float meter_high;           // Metering high percentile (<0 = leave the default)
+    int meter_mode;             // MeteringMode override (-1 = leave the default)
+    float meter_radius;         // Spot / centre-weight radius (<0 = leave the default)
     int gi_rate;                // Probes captured per frame while dirty (0 = default)
     int gi_debug;               // Blit the probe atlas into the frame corner
     int sky;                    // Procedural physically-based sky instead of -e

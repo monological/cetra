@@ -329,7 +329,9 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->msm_bleed = -1.0f;            // -1 = keep the engine default
     args->auto_exposure_override = -1;
     args->meter_low = -1.0f;
-    args->meter_high = -1.0f;  // -1 = unset; an authored exposure then pins
+    args->meter_high = -1.0f;
+    args->meter_mode = -1;
+    args->meter_radius = -1.0f;  // -1 = unset; an authored exposure then pins
     args->oit = -1;                     // -1 = unset; both default ON in the engine
     args->oit_moments = -1;
     args->sun_elevation = -999.0f; // -999 = keep the sky default
@@ -722,6 +724,27 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->emissive_light_probe = 1;
         } else if (strcmp(argv[i], "--exposure-probe") == 0) {
             args->exposure_probe = 1;
+        } else if (strcmp(argv[i], "--meter-mode") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: --meter-mode expects uniform|centre|spot\n");
+                return -1;
+            }
+            if (strcmp(argv[i], "uniform") == 0)
+                args->meter_mode = 0;
+            else if (strcmp(argv[i], "centre") == 0 || strcmp(argv[i], "center") == 0)
+                args->meter_mode = 1;
+            else if (strcmp(argv[i], "spot") == 0)
+                args->meter_mode = 2;
+            else {
+                fprintf(stderr, "Error: unknown meter mode '%s'\n", argv[i]);
+                return -1;
+            }
+        } else if (strcmp(argv[i], "--meter-radius") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: --meter-radius expects a fraction\n");
+                return -1;
+            }
+            args->meter_radius = (float)atof(argv[i]);
         } else if (strcmp(argv[i], "--meter-low") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: --meter-low expects a fraction\n");
@@ -2046,6 +2069,10 @@ int main(int argc, char** argv) {
             ex->meter_low = args.meter_low;
         if (args.meter_high >= 0.0f)
             ex->meter_high = args.meter_high;
+        if (args.meter_mode >= 0)
+            ex->meter_mode = (MeteringMode)args.meter_mode;
+        if (args.meter_radius >= 0.0f)
+            ex->meter_radius = args.meter_radius;
     }
     if (args.no_ssao && engine->postfx) {
         engine->postfx->ssao_enabled = false;

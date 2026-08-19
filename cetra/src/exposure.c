@@ -59,6 +59,9 @@ void exposure_init(Exposure* ex) {
     ex->meter_low = 0.70f;
     ex->meter_high = 0.95f;
 
+    ex->meter_mode = METERING_UNIFORM;
+    ex->meter_radius = 0.4f;
+
     // 1e-4 to 1e6 cd/m^2. The upper bound is the old per-texel metering ceiling,
     // moved here: it is the same protection expressed on the metered SCALAR
     // rather than on every texel, which is what makes it compatible with a

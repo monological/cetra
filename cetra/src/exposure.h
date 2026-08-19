@@ -4,6 +4,20 @@
 
 #include <stdbool.h>
 
+// How the frame is weighted before the percentiles are taken.
+//
+// The weight multiplies a texel's contribution to the POPULATION, not to the
+// value, so a half-weighted texel is half a vote rather than half as bright.
+// That is what keeps a mode change from moving the metered value of a flat
+// frame: weighting a uniform scene any way at all still meters the same
+// luminance, which is the property a mode has to have to be a framing choice
+// rather than an exposure offset.
+typedef enum MeteringMode {
+    METERING_UNIFORM = 0, // every texel votes equally
+    METERING_CENTRE,      // smooth falloff toward the edges
+    METERING_SPOT,        // a central disc votes; nothing else does
+} MeteringMode;
+
 // The camera's exposure, and the one place that decides what it is.
 //
 // Exposure used to be four things in three files: a linear multiplier on PostFX,
@@ -68,6 +82,14 @@ typedef struct Exposure {
     // match is a look decision this spec did not take.
     float meter_low;
     float meter_high;
+
+    // Which part of the frame votes. Uniform by default -- a metering mode is a
+    // framing decision and nothing in this engine's fixtures is framed for one.
+    MeteringMode meter_mode;
+    // Radius of the spot / the centre weighting's falloff, as a fraction of the
+    // frame's half-diagonal. Measured in UV, so on a non-square frame the disc is
+    // an ellipse in pixels -- the same convention a metering mask texture has.
+    float meter_radius;
 
     // Bounds on the metered luminance, as log2 cd/m^2 (UE's Min/Max Brightness).
     // Inert by default -- they span wider than the histogram does, so a scene has
