@@ -454,10 +454,12 @@ static void parse_wind(CetraSceneDesc* d, const cJSON* root) {
     d->has_wind_gust_frequency = get_float(wind, "gustFrequency", &d->wind_gust_frequency);
     d->has_wind_gust_amount = get_float(wind, "gustAmount", &d->wind_gust_amount);
     d->has_wind_turbulence = get_float(wind, "turbulence", &d->wind_turbulence);
+    d->has_wind_phase_variation =
+        get_float(wind, "phaseVariation", &d->wind_phase_variation);
 
     static const char* const known[] = {
-        "enabled", "direction", "strength", "speed", "gustFrequency", "gustAmount",
-        "turbulence",
+        "enabled", "direction", "strength", "speed",      "gustFrequency",
+        "gustAmount", "turbulence", "phaseVariation",
     };
     warn_unknown_keys(wind, known, sizeof(known) / sizeof(known[0]), "wind");
 }

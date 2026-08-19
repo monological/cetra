@@ -84,8 +84,13 @@ void main() {
     // t - dt so the motion vector stays honest (no TAA/motion-blur smear).
     // No skeleton in this stage: identity bone, and false so the posed branch
     // folds away.
-    vec4 local = cetra_local_position(aPos, mat4(1.0), false, aTexCoords, aTexCoords2, time);
-    vec3 posPrev = aPos + windOffset(aPos, aTexCoords, aTexCoords2, time - uDeltaTime);
+    // The SAME origin for both, because the phase is a property of the object
+    // rather than of the frame -- taking it from a moved node next frame would
+    // report a velocity the raster never drew.
+    vec3 windOrigin = mModel[3].xyz;
+    vec4 local =
+        cetra_local_position(aPos, mat4(1.0), false, aTexCoords, aTexCoords2, time, windOrigin);
+    vec3 posPrev = aPos + windOffset(aPos, aTexCoords, aTexCoords2, time - uDeltaTime, windOrigin);
 
     CetraObjectPos obj = cetra_object_position(mModel, view, projection, local);
     vec4 worldPos = obj.world;

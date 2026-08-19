@@ -375,6 +375,8 @@ typedef struct CetraSceneDesc {
     float wind_gust_amount;
     bool has_wind_turbulence;
     float wind_turbulence;
+    bool has_wind_phase_variation;
+    float wind_phase_variation;
 
     CSceneDust dust;
     CSceneWater water;

@@ -36,13 +36,18 @@
 // `skinned` uniform: disabled vertex attributes read as (0,0,0,1), so an
 // unskinned mesh drawn by a skinned program must not take the posed branch.
 //
+// `origin` is where this object stands -- the model matrix's translation --
+// and only reaches the per-object wind phase. It is the OBJECT's position and
+// not the vertex's on purpose: a phase that varied within a mesh would tear it.
+//
 // `rest` is the UN-skinned bind position, and it is deliberately what wind is
 // evaluated against rather than the posed result: the height mask that pins a
 // cloth top and frees its hem is authored in rest space, and re-measuring it
 // against an animated pose makes the mask slide as the mesh moves.
-vec4 cetra_local_position(vec3 rest, mat4 bone, bool isSkinned, vec2 uv0, vec2 uv1, float t) {
+vec4 cetra_local_position(vec3 rest, mat4 bone, bool isSkinned, vec2 uv0, vec2 uv1, float t,
+                          vec3 origin) {
     vec4 local = isSkinned ? bone * vec4(rest, 1.0) : vec4(rest, 1.0);
-    local.xyz += windOffset(rest, uv0, uv1, t);
+    local.xyz += windOffset(rest, uv0, uv1, t, origin);
     return local;
 }
 

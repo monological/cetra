@@ -25,6 +25,12 @@ typedef struct Wind {
     float gust_frequency; // gust swell rate; low = occasional gusts
     float gust_amount;    // gust envelope depth 0..1; high = calm between gusts
     float turbulence;     // high-frequency lateral flutter 0..1
+    // How far apart in the sway cycle two objects at different places are,
+    // in turns. 0 = every object sways in lockstep, which is what a single
+    // object wants and what a field of instanced copies of one mesh must not
+    // have -- wind is evaluated in object space from per-mesh uniforms, so
+    // without this a thousand scattered trees beat as one.
+    float phase_variation;
 } Wind;
 
 // Created with gentle-draft defaults; adjust fields directly to tune.

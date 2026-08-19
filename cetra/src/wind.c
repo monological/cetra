@@ -23,6 +23,8 @@ Wind* create_wind(const char* name) {
     wind->gust_frequency = 0.15f;
     wind->gust_amount = 0.8f;
     wind->turbulence = 0.2f;
+    // Lockstep, which is what every scene authored before this existed had.
+    wind->phase_variation = 0.0f;
     return wind;
 }
 
@@ -55,6 +57,7 @@ void wind_upload_to_program(const Wind* wind, UniformManager* u) {
     uniform_set_float(u, "uWindGustFreq", wind->gust_frequency);
     uniform_set_float(u, "uWindGustAmount", wind->gust_amount);
     uniform_set_float(u, "uWindTurbulence", wind->turbulence);
+    uniform_set_float(u, "uWindPhaseVariation", wind->phase_variation);
 }
 
 // |vec3(sin a, 0, cos b)| at its worst, which is what both turbulence terms

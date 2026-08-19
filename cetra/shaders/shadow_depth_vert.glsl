@@ -32,10 +32,11 @@ void main()
     // splits view and projection, and this pass renders under a polygon offset
     // and is read through a bias, so it has no bit-exactness to preserve. The
     // DEPTH PREPASS is the stage that does -- see object_position.glsl.
+    mat4 mModel = cetra_instance_model(model);
     vec4 localPos = cetra_local_position(aPos, skinMatrixOrIdentity(aBoneIds, aBoneWeights),
-                                         skinned, aTexCoords, aTexCoords2, time);
+                                         skinned, aTexCoords, aTexCoords2, time, mModel[3].xyz);
 
     TexCoords = aTexCoords;
     VertexColor = aColor;
-    gl_Position = lightSpaceMatrix * cetra_instance_model(model) * localPos;
+    gl_Position = lightSpaceMatrix * mModel * localPos;
 }

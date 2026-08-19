@@ -318,6 +318,8 @@ void apply_cscene_wind(Scene* scene, const CetraSceneDesc* cscn) {
                 wind->gust_amount = cscn->wind_gust_amount;
             if (cscn->has_wind_turbulence)
                 wind->turbulence = cscn->wind_turbulence;
+            if (cscn->has_wind_phase_variation)
+                wind->phase_variation = cscn->wind_phase_variation;
             set_scene_wind(scene, wind);
             printf("Scene file: wind dir=(%.2f, %.2f, %.2f), strength %.3f\n", wind->direction[0],
                    wind->direction[1], wind->direction[2], wind->strength);
