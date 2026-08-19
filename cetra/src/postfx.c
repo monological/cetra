@@ -3073,7 +3073,15 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             glBindTexture(GL_TEXTURE_2D, have_normals ? fx->normal_texture : 0);
             uniform_set_int(cu, "useNormalsTex", have_normals ? 1 : 0);
             uniform_set_mat4(cu, "projection", (float*)projection);
+            // The cluster list stores WORLD positions, so the march needs the
+            // view matrix to reach them; the key light arrives pre-transformed
+            // above because it has no position to transform.
+            uniform_set_mat4(cu, "view", (float*)view);
             uniform_set_vec3(cu, "lightDirVS", cs_dir_vs);
+            // Same slot as the direction, so the fold weight and the direction
+            // cannot describe two different lights.
+            uniform_set_vec3(cu, "keyRadiance", fx->fog_light_color[0]);
+            uniform_set_int(cu, "hasKeyLight", fx->fog_light_count > 0 ? 1 : 0);
             uniform_set_float(cu, "csDistance", fx->cs_distance);
             uniform_set_int(cu, "temporal", taa_resolving ? 1 : 0);
             // % 4096 keeps the shader's float hash well-conditioned over
