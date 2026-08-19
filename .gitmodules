@@ -1,6 +1,7 @@
 [submodule "cetra/src/ext/JoltC"]
 	path = cetra/src/ext/JoltC
-	url = https://github.com/SecondHalfGames/JoltC.git
+	url = https://github.com/monological/JoltC.git
+	branch = cetra
 [submodule "cetra/src/ext/cimgui"]
 	path = cetra/src/ext/cimgui
 	url = https://github.com/cimgui/cimgui.git
