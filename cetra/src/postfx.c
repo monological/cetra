@@ -1686,6 +1686,70 @@ static void postfx_run_sss(PostFX* fx, GLuint canvas_fbo, mat4 projection, bool 
 // everywhere: the mip-count policy at allocation stops at >= 8 px per
 // axis, so the shifts never degenerate and viewport always agrees with
 // texelSize.
+// Bin the frame's log2 luminances and collapse them to the percentile-clipped
+// mean, returned in log2. GPU only: what happens to the number is exposure.c's.
+//
+// Its own function for the reason every other multi-draw sequence in this file
+// has one -- postfx_run_bloom, _dof, _ssr, _sss, _oit, _atmosphere,
+// _motion_blur, _flare. This grew from one draw plus a mipmap into three draws
+// into three framebuffers while sitting inline, which is how it ended up the
+// only multi-FBO chain in postfx_run that had not made that move.
+static float postfx_run_metering(PostFX* fx, GLuint scene_tex) {
+    glBindFramebuffer(GL_FRAMEBUFFER, fx->lum_fbo);
+    glViewport(0, 0, LUM_MEASURE_SIZE, LUM_MEASURE_SIZE);
+    glUseProgram(fx->lum_measure_program->id);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, scene_tex);
+    draw_fullscreen_quad(fx->quad_vao);
+
+    // Bin, then collapse.
+    //
+    // The bin pass is the expensive half of this block and it is not the
+    // fetch count that makes it so. LUM_HISTOGRAM_ROWS exists because 64
+    // fragments is around 0.4% occupancy on this GPU: measured standing
+    // alone the draw costs ~0.35 ms, while 10000 of them back to back
+    // cost 1.19 us each -- a 300x gap, which is what latency rather than
+    // work looks like. Splitting the source rows across output rows cuts
+    // the serial depth from 4160 to about 1024. Count and sum are
+    // associative, so the reduce summing R rows per bin is the same
+    // statistic.
+    glBindFramebuffer(GL_FRAMEBUFFER, fx->lum_hist_fbo);
+    glViewport(0, 0, LUM_HISTOGRAM_BINS, LUM_HISTOGRAM_ROWS);
+    glUseProgram(fx->lum_histogram_program->id);
+    glBindTexture(GL_TEXTURE_2D, fx->lum_texture);
+    uniform_set_int(fx->lum_histogram_program->uniforms, "srcSize", LUM_MEASURE_SIZE);
+    uniform_set_int(fx->lum_histogram_program->uniforms, "binCount", LUM_HISTOGRAM_BINS);
+    uniform_set_int(fx->lum_histogram_program->uniforms, "rowCount", LUM_HISTOGRAM_ROWS);
+    uniform_set_vec2(fx->lum_histogram_program->uniforms, "binRange",
+                     (vec2){LUM_HISTOGRAM_MIN_LOG2, LUM_HISTOGRAM_MAX_LOG2});
+    uniform_set_int(fx->lum_histogram_program->uniforms, "meterMode",
+                    (int)fx->exposure->meter_mode);
+    uniform_set_float(fx->lum_histogram_program->uniforms, "meterRadius",
+                      fx->exposure->meter_radius);
+    draw_fullscreen_quad(fx->quad_vao);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, fx->lum_reduce_fbo);
+    glViewport(0, 0, 1, 1);
+    glUseProgram(fx->lum_reduce_program->id);
+    glBindTexture(GL_TEXTURE_2D, fx->lum_hist_texture);
+    uniform_set_int(fx->lum_reduce_program->uniforms, "binCount", LUM_HISTOGRAM_BINS);
+    uniform_set_int(fx->lum_reduce_program->uniforms, "rowCount", LUM_HISTOGRAM_ROWS);
+    uniform_set_vec2(fx->lum_reduce_program->uniforms, "percentiles",
+                     (vec2){fx->exposure->meter_low, fx->exposure->meter_high});
+    draw_fullscreen_quad(fx->quad_vao);
+
+    // The read BLOCKS. A PBO plus a fence would not (measured 0.033 ms against
+    // 5.253), but it lands each measurement whenever the GPU happens to finish,
+    // which makes adaptation depend on frame timing -- and equal headless runs
+    // then stop matching. This engine trades that the other way round
+    // everywhere else, so it does here too.
+    float measured = 0.0f;
+    glBindTexture(GL_TEXTURE_2D, fx->lum_reduce_texture);
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_RED, GL_FLOAT, &measured);
+    check_gl_error("postfx auto exposure");
+    return measured;
+}
+
 static void postfx_run_bloom(PostFX* fx, GLuint scene_tex) {
     // Bright pass into pyramid level 0 (linear sampling downsamples)
     glBindFramebuffer(GL_FRAMEBUFFER, fx->bloom_fbo);
@@ -3322,83 +3386,29 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             scene_tex = fx->dof_texture;
         }
 
-        // Auto-exposure, measurement half: draw log2 luminance at 64x64, bin it,
-        // and collapse the bins with the tails cut. The adaptation half -- the
-        // blend toward it, and the deadband -- is exposure.c's, because the value
-        // has to reach the CPU anyway: nothing on the GPU consumes it now that
-        // the tonemap applies no exposure.
+        // Auto-exposure. The measurement half is postfx_run_metering; the
+        // adaptation half -- the blend toward it, and the deadband -- is
+        // exposure.c's, because the value has to reach the CPU anyway: nothing on
+        // the GPU consumes it now that the tonemap applies no exposure.
         //
-        // This replaced a second fullscreen pass that blended into a 1x1
+        // That split replaced a second fullscreen pass which blended into a 1x1
         // ping-pong pair, purely so the tonemap could sample the result. Reading
-        // the value directly deletes that pass, its shader, the ping-pong and its
-        // validity flag.
-        //
-        // The read blocks. A PBO plus a fence would not (measured 0.033 ms
-        // against 5.253), but it lands each measurement whenever the GPU happens
-        // to finish, which makes adaptation depend on frame timing -- and equal
-        // headless runs then stop matching. This engine trades that the other
-        // way round everywhere else, so it does here too.
+        // the value directly deleted that pass, its shader, the ping-pong and
+        // its validity flag.
         const bool metering = fx->exposure && fx->exposure->automatic;
         if (metering) {
             // Its own scope, and the number it reports is not comparable with
-            // the others: the blocking read below drains the pipeline, so this
-            // row carries the whole frame's outstanding GPU work rather than
-            // the cost of a 64x64 draw. Left attributable here instead of
-            // smeared into whichever neighbour it was folded in with.
+            // the others: the blocking read inside drains the pipeline, so this
+            // row carries the whole frame's outstanding GPU work rather than the
+            // cost of three small draws.
             profiler_scope_begin(fx->profiler, "exposure meter (drains)");
-            glBindFramebuffer(GL_FRAMEBUFFER, fx->lum_fbo);
-            glViewport(0, 0, LUM_MEASURE_SIZE, LUM_MEASURE_SIZE);
-            glUseProgram(fx->lum_measure_program->id);
-            glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, scene_tex);
-            draw_fullscreen_quad(fx->quad_vao);
-
-            // Bin, then collapse.
-            //
-            // The bin pass is the expensive half of this block and it is not the
-            // fetch count that makes it so. LUM_HISTOGRAM_ROWS exists because 64
-            // fragments is around 0.4% occupancy on this GPU: measured standing
-            // alone the draw costs ~0.35 ms, while 10000 of them back to back
-            // cost 1.19 us each -- a 300x gap, which is what latency rather than
-            // work looks like. Splitting the source rows across output rows cuts
-            // the serial depth from 4160 to about 1024. Count and sum are
-            // associative, so the reduce summing R rows per bin is the same
-            // statistic.
-            glBindFramebuffer(GL_FRAMEBUFFER, fx->lum_hist_fbo);
-            glViewport(0, 0, LUM_HISTOGRAM_BINS, LUM_HISTOGRAM_ROWS);
-            glUseProgram(fx->lum_histogram_program->id);
-            glBindTexture(GL_TEXTURE_2D, fx->lum_texture);
-            uniform_set_int(fx->lum_histogram_program->uniforms, "srcSize", LUM_MEASURE_SIZE);
-            uniform_set_int(fx->lum_histogram_program->uniforms, "binCount", LUM_HISTOGRAM_BINS);
-            uniform_set_int(fx->lum_histogram_program->uniforms, "rowCount", LUM_HISTOGRAM_ROWS);
-            uniform_set_vec2(fx->lum_histogram_program->uniforms, "binRange",
-                             (vec2){LUM_HISTOGRAM_MIN_LOG2, LUM_HISTOGRAM_MAX_LOG2});
-            uniform_set_int(fx->lum_histogram_program->uniforms, "meterMode",
-                            (int)fx->exposure->meter_mode);
-            uniform_set_float(fx->lum_histogram_program->uniforms, "meterRadius",
-                              fx->exposure->meter_radius);
-            draw_fullscreen_quad(fx->quad_vao);
-
-            glBindFramebuffer(GL_FRAMEBUFFER, fx->lum_reduce_fbo);
-            glViewport(0, 0, 1, 1);
-            glUseProgram(fx->lum_reduce_program->id);
-            glBindTexture(GL_TEXTURE_2D, fx->lum_hist_texture);
-            uniform_set_int(fx->lum_reduce_program->uniforms, "binCount", LUM_HISTOGRAM_BINS);
-            uniform_set_int(fx->lum_reduce_program->uniforms, "rowCount", LUM_HISTOGRAM_ROWS);
-            uniform_set_vec2(fx->lum_reduce_program->uniforms, "percentiles",
-                             (vec2){fx->exposure->meter_low, fx->exposure->meter_high});
-            draw_fullscreen_quad(fx->quad_vao);
-
-            float measured = 0.0f;
-            glBindTexture(GL_TEXTURE_2D, fx->lum_reduce_texture);
-            glGetTexImage(GL_TEXTURE_2D, 0, GL_RED, GL_FLOAT, &measured);
+            float measured = postfx_run_metering(fx, scene_tex);
             exposure_submit_measurement(fx->exposure, measured);
             // After the submit, so the report carries this frame's adapted value
             // rather than last frame's. `measured` is passed in because the
             // blend consumes it and nothing keeps the raw reading.
             if (fx->exposure->probe)
                 exposure_probe_report(fx->exposure, measured, fx->frame_index);
-            check_gl_error("postfx auto exposure");
             profiler_scope_end(fx->profiler);
         } else {
             // Drop the history, or re-enabling auto-exposure would pre-expose by
