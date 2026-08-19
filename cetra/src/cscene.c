@@ -199,8 +199,11 @@ static void parse_lights(CetraSceneDesc* d, const cJSON* root) {
         if (!get_vec3(l, "color", out->color)) {
             out->color[0] = out->color[1] = out->color[2] = 1.0f;
         }
-        if (!get_float(l, "intensity", &out->intensity))
+        out->has_intensity = get_float(l, "intensity", &out->intensity);
+        if (!out->has_intensity)
             out->intensity = 1.0f;
+        copy_string(out->ies_path, CSCENE_MAX_PATH,
+                    cJSON_GetObjectItemCaseSensitive(l, "profile"));
         // Authored unit only -- the conversion is Light's job, so this parser and
         // the glTF importer cannot drift apart on what a lumen is. Absent leaves
         // DEFAULT, which resolves against the type when something displays it.
@@ -288,8 +291,9 @@ static void parse_lights(CetraSceneDesc* d, const cJSON* root) {
         // has already been reported by name, and warning twice about the same
         // entry reads as two problems.
         static const char* const known[] = {
-            "name",  "type",         "position", "color", "intensity", "intensity_unit",
-            "direction", "cast_shadows", "attenuation", "range", "size", "up", "cone"};
+            "name",   "type", "position", "color",     "intensity", "intensity_unit", "direction",
+            "cast_shadows", "attenuation", "range",    "size",      "up",             "cone",
+            "profile"};
         warn_unknown_keys(l, known, sizeof(known) / sizeof(known[0]), "light");
         d->light_count++;
     }
@@ -808,6 +812,11 @@ CetraSceneDesc* cscene_load(const char* path) {
     }
     resolve_in_place(d->model_path, CSCENE_MAX_PATH, dir);
     resolve_in_place(d->env_hdr, CSCENE_MAX_PATH, dir);
+    // An IES profile resolves like the HDR above and NOT like a material
+    // texture: it is not a texture, never goes through the pool, and so has no
+    // second resolver that would win. Empty paths pass through untouched.
+    for (int i = 0; i < d->light_count; i++)
+        resolve_in_place(d->lights[i].ies_path, CSCENE_MAX_PATH, dir);
     // Material texture paths are deliberately NOT resolved here. Every texture
     // the engine loads resolves against the texture pool's directory (the -t
     // argument) through find_existing_subpath, and a material's textures are

@@ -145,6 +145,12 @@ typedef struct Scene {
 
     TexturePool* tex_pool;
 
+    // IES photometric profiles a light may name (spec 11.57), cached by resolved
+    // path for the texture pool's reason: two lights naming one luminaire are one
+    // profile. NULL until a scene loads one, so a scene that names none costs a
+    // branch and no allocation.
+    struct IesLibrary* ies_library;
+
     // used by all nodes
     ShaderProgram* xyz_shader_program;
     ShaderProgram* outlines_shader_program;

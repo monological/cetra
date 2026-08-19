@@ -9,6 +9,7 @@
 #include "cetra/engine.h"
 #include "cetra/ext/cwalk.h"
 #include "cetra/ext/log.h"
+#include "cetra/ies.h"
 #include "cetra/light.h"
 #include "cetra/material.h"
 #include "cetra/noise.h"
@@ -255,6 +256,35 @@ void add_cscene_lights(Scene* scene, const CetraSceneDesc* cscn) {
         // branch. The switch above only carries what genuinely varies by type.
         if (sl->cast_shadows)
             set_light_cast_shadows(light, true);
+
+        // Type-independent for the same reason: a profile is an angular
+        // distribution, and point and spot both have an axis to measure it from.
+        if (sl->ies_path[0]) {
+            if (!scene->ies_library)
+                scene->ies_library = create_ies_library();
+            light->ies_profile = ies_library_load(scene->ies_library, sl->ies_path);
+            const IesProfile* p = ies_library_at(scene->ies_library, light->ies_profile);
+            if (p) {
+                // The file's peak is the light's intensity unless the scene said
+                // otherwise. Normalising the profile to peak 1 and multiplying by
+                // this IS the file's absolute output, so an author gets physical
+                // correctness without transcribing a number the file carries --
+                // and an authored intensity still wins, which is what keeps
+                // intensity the one brightness control (spec 11.57).
+                if (!sl->has_intensity) {
+                    set_light_intensity_units(light, p->peak_cd, LIGHT_UNITS_CANDELA);
+                    printf("Scene file: light '%s' takes its %.1f cd from '%s'\n", light->name,
+                           (double)p->peak_cd, sl->ies_path);
+                }
+                if (sl->type == CSCENE_LIGHT_SPOT) {
+                    // The profile carries the whole distribution, cutoff
+                    // included, so the authored cone no longer reaches anything.
+                    log_warn("cscene: spot '%s' authors both a cone and a profile; the profile "
+                             "carries the distribution and the cone is ignored",
+                             light->name);
+                }
+            }
+        }
 
         add_light_to_scene(scene, light);
 

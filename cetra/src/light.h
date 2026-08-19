@@ -84,6 +84,17 @@ typedef struct Light {
     int shadow_map_index;
     int shadow_layer;
 
+    // Index into the scene's IesLibrary, or -1 for none (spec 11.57). An IES
+    // profile is the measured angular distribution of a real luminaire and
+    // REPLACES the analytic cone, so a spot carrying one ignores its cutOff
+    // pair -- and so a point light finally has a use for `direction`, which it
+    // has always carried and nothing has ever read.
+    //
+    // An index and not an IesProfile*, for emissive_source_id's reason one field
+    // down: the library is scene-owned and a pointer would outlive it in exactly
+    // the teardown order that is easiest to get wrong.
+    int ies_profile;
+
     // The Mesh whose emissive surface this panel was derived from (spec 11.49),
     // by that mesh's stable `id`. 0 means AUTHORED -- a light somebody made --
     // and the emissive reconcile will not touch one, so the two populations

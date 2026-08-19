@@ -43,6 +43,7 @@ Light* create_light() {
     light->cast_shadows = false;
     light->shadow_map_index = -1;
     light->shadow_layer = -1;
+    light->ies_profile = -1;
 
     return light;
 }

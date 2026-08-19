@@ -59,6 +59,12 @@ typedef struct CSceneLight {
     // As authored, in `units` -- NOT converted here. The conversion lives on
     // Light (set_light_intensity_units), so a .cscn and a glTF import cannot
     // disagree about what a lumen is.
+    //
+    // has_intensity distinguishes "authored 1.0" from "said nothing", which an
+    // IES profile needs: absent, the loader seeds the intensity from the file's
+    // own peak candela, so a profiled light is physically correct without the
+    // author transcribing a number the file already carries (spec 11.57).
+    bool has_intensity;
     float intensity;
     LightUnits units;
     float direction[3]; // directional/spot/area (travel direction)
@@ -71,6 +77,11 @@ typedef struct CSceneLight {
     float range;       // point/spot cull radius (else derived from attenuation)
     float cone[2];     // spot: inner, outer half-angle in DEGREES
     bool cast_shadows; // directional/spot (point/area cannot cast)
+    // IESNA LM-63 photometric profile, resolved against the scene file's own
+    // directory like `models` and `environment.hdr`. Inline rather than a
+    // pointer because cscene_free is a bare free(desc) and the struct must stay
+    // POD. Empty = the light keeps its analytic cone.
+    char ies_path[CSCENE_MAX_PATH];
 } CSceneLight;
 
 typedef struct CSceneLightOverride {

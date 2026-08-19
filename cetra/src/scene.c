@@ -21,6 +21,7 @@
 #include "mesh.h"
 #include "material.h"
 #include "emissive_light.h"
+#include "ies.h"
 #include "light.h"
 #include "camera.h"
 #include "common.h"
@@ -99,6 +100,12 @@ void free_scene(Scene* scene) {
     // teardown must not outlive what it points at.
     emissive_panels_free(scene->emissive_panels);
     scene->emissive_panels = NULL;
+
+    // Also before the lights: a light holds a profile INDEX rather than a
+    // pointer (light.h), so the order is not forced -- but keeping the two
+    // together is what stops a future pointer being the thing that discovers it.
+    free_ies_library(scene->ies_library);
+    scene->ies_library = NULL;
 
     // Free all lights
     if (scene->lights) {
