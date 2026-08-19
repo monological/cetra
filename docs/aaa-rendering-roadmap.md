@@ -1973,17 +1973,40 @@ faster). **On current evidence this item is not yet justified**; it is booked so
 not because a measurement demands it.
 **Depends on:** E6 (soft — build the cheap shield first and re-measure). **Wall 1:** unaffected.
 
-### E8. Fixing the wind cull — Effort S
-`draw_list.c:94` marks any `wind_response > 0` material `DRAW_UNBOUNDED`, and `draw_item_visible`
-(`draw_list.c:201`) then accepts it unconditionally — camera *and* every shadow cascade. Wind-responsive geometry is
-therefore never culled by anything. The fix is to expand those meshes' AABB by maximum wind
-displacement so they become cullable rather than exempt.
+### E8. Fixing the wind cull — Effort S — **DONE (spec 11.53)**
+This section said `draw_list.c:94` marks any `wind_response > 0` material `DRAW_UNBOUNDED`. The line
+was `:110` and the condition was `mesh->is_skinned || mat->wind_response > 0.0f`, so **every skinned
+mesh in every scene was exempt from the camera frustum and every cascade as well** — and the fix this
+section prescribed, expanding the AABB by maximum wind displacement, does not address that case at
+all. A bind-pose bound is not a loose bound on an animated pose; it is a bound on a different shape.
+The flag's own comment knew this. The row did not, for five specs.
 
-Small, self-contained, and it removes a real correctness-shaped hole in E5's culling. It also unblocks
-wind on scattered content: `apps/forest` carries **no wind on 2,000 trees** specifically to avoid this,
-which is a visible look compromise made for a fixable engine reason. Pairs naturally with per-instance
-wind phase (`windOffset` is object-space with per-mesh uniforms, so every instance of a shared tree
-sways identically) — one instance-block field, and the two want the same arms.
+**Both bounds were closed-form and nobody had looked.** Every term in `windOffset` is sin/cos-bounded
+and nothing scales with the vertex position — it enters only inside sine *arguments*, as phase
+decorrelation — so the margin is `strength x response` times a per-mode constant, plus two per-vertex
+maxima measured at upload because UV1 is raw unclamped data. And skin weights are convex, so a posed
+vertex lies in the convex hull of its bones acting on it alone: bound each bone's own vertices in bind
+space, union through the pose, and no blend is ever evaluated.
+
+**`DRAW_UNBOUNDED` is deleted rather than fixed.** It was a build-time flag decided in `classify`,
+which sees neither `scene->wind` (GUI-mutable) nor the pose, and which runs at the frame's first pass
+— the shadow pass, before the app steps the animation. The decision moved into a `CullView` carried
+where the frustum already travelled, built by each pass from what it is about to draw with. Changing
+the type is what found every call site; a flag left in place would have gone on being wrong silently.
+
+**The payoff needed a second half this section booked wrong.** It called per-instance wind phase a
+natural pairing worth "one instance-block field". It is neither optional nor a field: wind is applied
+in object space, so making 2,000 trees cullable does not stop them swaying in lockstep, and the phase
+is better *derived* from the object's world origin — an InstanceBlock entry costs a kilobyte of std140
+padding to restate what the model matrix says, and a phase keyed to batching would flip as LOD and
+culling reshuffle runs.
+
+Measured: `ivy_arcade` aimed away goes 49 of 73 culled to **73 of 73, 0 draws**; raiden **18 of 18**;
+`apps/forest` has its wind and it costs **5 meshes of cull out of 28,256**, against a counterfactual
+of at most 3,064 opaque culled where it measures 4,085. It also closed a latent defect nothing had
+reported: `_count_late_meshes` tested the raw bind AABB while the lane that draws those meshes
+exempted them, so a swaying or posed transmissive mesh could be drawn without the refraction resolve
+it samples.
 **Depends on:** nothing. **Wall 1:** unaffected.
 
 ## Sequencing — tiers & rationale
@@ -2090,7 +2113,7 @@ not scheduled.
 | 31 | **E6 Depth prepass + opaque ordering** | M | **DONE (11.30 + 11.31).** `apps/forest` opaque **306 → 169 ms (−45%)** from the ORDERING alone, depth complexity 1.93 → 1.08. Masked geometry now prepasses too (11.31, via a `depthOnly` mode in `pbr_frag`) and reaches a better 0.72 — and is still **slower** than the sort, because a full extra geometry pass costs more than the shading it saves. The two are substitutes, not complements: 11.30's "worth more together" was an artefact of the masked exclusion. Ordering ships on, the prepass off, with a gate arm asserting the prepass **costs** on a scene with no overdraw. 11.30's own figures were doubled by a budget that trusted `msaa_samples` over the driver, and its −64% interior does not reproduce. Between them these two specs withdrew seven claims — every one from an instrument that had never been checked against a scene with a known answer. |
 | 32 | D0 Free two sampler units | M | Foundation only — schedule it **with** D1 or D2's surface half, never before, per the just-in-time rule. **Explored after 11.40 and it frees ONE unit, not two** (16/16 → 15/16): the irradiance fold holds, the unit-6 share is a conditional slot rather than a freed one, and the second real candidate (unit 4, POM height into the mask array) costs POM half its resolution on `pilot` to buy a slot nothing currently spends. See D0 for the five corrections. **And the ledger sweep left it with no SCHEDULED consumer at all**: D2's surface half never needed it — **shipped without it in 11.41, so that is now demonstrated rather than predicted** — and D1 can dodge it with a flat 2D decal atlas rather than a `sampler2DArray`. The one consumer that genuinely cannot dodge it is sampling the froxel volume from the transparent pass — a `sampler3D` in the one pass where refraction is live — and that is not booked. Judge the item on its own measurement, not on what it unblocks. |
 | 33 | D1 Clustered decals | L | Largest environment-art gap. ~~Hard-blocked on D0.~~ **Blocked by a texture-layout choice, not by the ledger**: decals read in the opaque pass where unit 6 is idle, so a flat 2D atlas with computed tile UVs takes the alias and needs no freed unit. Only the `sampler2DArray` form is blocked. Price the flat atlas first. |
-| 34 | E8 Fix the wind cull | S | Small, self-contained, closes a real hole in E5's culling — wind geometry is currently exempt from the camera frustum *and* every cascade. Unblocks wind on scattered content, which `apps/forest` gave up to avoid it. **11.51 raised the stakes**: the ivy arcade is the first asset to author UV1 wind data, so there is now shipped content on the exempt path. |
+| 34 | E8 Fix the wind cull | S | **DONE (11.53), and this row described half of it.** The condition is `is_skinned || wind_response > 0`, so **every skinned mesh** was exempt from the camera frustum and every cascade too — and the prescribed AABB expansion does not address a posed mesh at all, since a bind-pose bound is a bound on a different shape. Both bounds turned out to be closed-form: `windOffset` is sin/cos-bounded with nothing scaling by vertex position, and skin weights are convex so a posed vertex lies in the hull of its bones acting alone. `DRAW_UNBOUNDED` is deleted — it was decided in `classify`, which sees neither the wind field nor the pose — and the decision moved into a `CullView` beside the frustum, built per pass. Aimed away, `ivy_arcade` goes 49 of 73 culled to **73 of 73, 0 draws**, and raiden **18 of 18**. **The payoff needed a second half the row did not book**: wind is object-space, so making trees cullable does not stop 2,000 copies swaying in lockstep — `phaseVariation` fixes that with no InstanceBlock field, hashed from the object's world origin. `apps/forest` now has its wind, and it costs **5 meshes of cull out of 28,256**, against a counterfactual of at most 3,064 opaque culled where it measures 4,085. Also closed a latent defect nothing had reported: `_count_late_meshes` tested the raw bind AABB while the lane that draws those meshes exempted them, so a swaying or posed transmissive mesh could be drawn without the refraction resolve it samples. |
 | 34b | **E9 One sample means one sample** | M | **DONE (11.34).** `apps/forest` opaque **150.9 → 121.6 ms (−19.4%)** against a 0.23% floor, with byte-identical submission integers — the same work, cheaper. One branch in the one allocator plus one at the depth renderbuffer flips the scene, OIT and moment FBOs in lockstep, since they share the depth attachment. The row's original prescription was wrong twice: there is no `sampler2DMS` anywhere in the corpus (11.17 rejected it), and postfx reaches the scene target only through blits, so the GLSL surface was zero files and postfx changed nothing. Priced before built with a new `--msaa <n>` lever, which also decomposed the first confounded A/B: A2C alone costs 202 ms of forest's opaque row (fragment-set explosion, headless-only), a sample ~93 ms on that inflated set. TAA-only edges verified by crops (raiden groom, forest canopy — indistinguishable), all 23 goldens 0 px, and MBOIT's moment-resolve bias (11.17) is now absent on the TAA path for free. |
 | 35 | ~~D3 Tessellated water~~ | — | **SHIPPED (11.32, 11.33, 11.35) and it spent no tessellation.** The mesh went through two screen-space schemes instead: clipmap rings (11.33), then a **projected grid** (11.35) after the rings turned out to weld reach to near-field detail — the snap that makes them tile is the same thing that kept the surface 5° short of the horizon while a comment claimed otherwise. The stage this item was scheduled to open is still closed. Reaching the horizon then moved the problem from the MESH to filtering: distant cells cover more than a wave period, so each wave model drops what sits under its footprint and hands the slope energy to roughness — a BRDF answer to a geometry question. See D3. **Six more specs have landed on the surface since and none of them were rows here** (11.43 the fixture's sun, 11.44 world scale, 11.45 the swash film, 11.46 → row 35b, 11.47 whitecaps, 11.48 two wave trains); D3 carries them. |
 | 35b | **D5 By-example texturing** | S/M | **DONE (11.46), and it was never booked.** Would have been assumed blocked — a transformed copy of a texture plus an inverse table, in the most saturated program in the tree — and cost **zero** units: the shader never reads the original so the transform is baked over it, and the table is 768 bytes of uniform space. The ledger's fifth escape. Contrast held to 0.15% (0.02876 → 0.02881), which is the measurement that matters, because a broken blend flattens variance rather than shifting colour. **Two of the three defects it fixed were not rendering bugs at all** — a noise field sampled on an unbounded lattice, so forty tile boundaries were discontinuities in the data; and a circular tangent frame under planar UVs, creasing along every triangle edge. Both were reported as water bugs for most of a session. |
@@ -2125,12 +2148,17 @@ number behind it, so the next pick is a judgement rather than a consequence — 
 situation from the one this table has described since 11.24, and worth saying plainly rather than
 nominating a successor by default.
 
-Of the small ones, **34 (E8, the wind cull)** has the clearest claim beyond size: it closes a hole E5
-left open, where wind geometry is exempt from the camera frustum and every cascade, and `apps/forest`
-gave up wind on scattered content to avoid it — so the gap has already cost content once. **26 (C5,
-contact shadows for local lights)** gained a claim it did not have when it was written: 11.49 shipped
-a *producer* of local area lights, so any scene with practicals now has more of them than C5's row
-assumed.
+Of the small ones, **34 (E8, the wind cull) was the pick and is now built** (11.53). What remains
+unblocked and small is **26 (C5, contact shadows for local lights)**, which gained a claim it did not
+have when it was written — 11.49 shipped a *producer* of local area lights, so any scene with
+practicals now has more of them than C5's row assumed — plus **25 (C3, IES)** and **28 (E2, grading)**.
+
+11.53 adds a third entry to the observation below, and the sharpest one: **a row can be wrong about
+what it is describing, not merely about why.** E8's row and section both named wind alone where the
+code exempted skinned meshes too, and both prescribed a fix that does not address the half they
+missed. Five specs read past it. The habit that catches it is the same one 11.52 named — read the code
+the row describes — and the cost of not doing it here would have been shipping half an item under the
+belief it was whole.
 
 **Two observations about this table rather than items in it**, both from the last two specs.
 
