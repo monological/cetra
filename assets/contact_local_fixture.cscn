@@ -1,40 +1,70 @@
 {
-  "version": 1,
-  "models": [
-    { "path": "contact_local_fixture.gltf" }
-  ],
-  "environment": {
-    "ambient": [0.04, 0.042, 0.05]
-  },
-  "lights": [
-    {
-      "name": "practical_back",
-      "type": "point",
-      "position": [0.0, 1.5, -2.85],
-      "color": [1.0, 1.0, 1.0],
-      "intensity": 12.0,
-      "intensity_unit": "candela",
-      "range": 12.0,
-      "cast_shadows": false
-    },
-    {
-      "name": "practical_front",
-      "type": "point",
-      "position": [0.0, 1.5, 3.95],
-      "color": [1.0, 1.0, 1.0],
-      "intensity": 12.0,
-      "intensity_unit": "candela",
-      "range": 12.0,
-      "cast_shadows": false
-    }
-  ],
-  "camera": {
-    "eye": [0.0, 1.9, 4.4],
-    "target": [0.0, 0.25, 0.0],
-    "fov": 42
-  },
-  "post": {
-    "tonemap": "neutral",
-    "exposure": 1.0
+ "version": 1,
+ "models": [
+  {
+   "path": "contact_local_fixture.gltf"
   }
+ ],
+ "environment": {
+  "ambient": [
+   0.04,
+   0.042,
+   0.05
+  ]
+ },
+ "lights": [
+  {
+   "name": "practical_back",
+   "type": "point",
+   "position": [
+    0.0,
+    1.5,
+    -2.85
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 12.0,
+   "intensity_unit": "candela",
+   "range": 12.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "practical_front",
+   "type": "point",
+   "position": [
+    0.0,
+    1.5,
+    3.95
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 12.0,
+   "intensity_unit": "candela",
+   "range": 12.0,
+   "cast_shadows": false
+  }
+ ],
+ "camera": {
+  "eye": [
+   0.0,
+   1.9,
+   4.4
+  ],
+  "target": [
+   0.0,
+   0.25,
+   0.0
+  ],
+  "fov": 42.0
+ },
+ "post": {
+  "tonemap": "neutral",
+  "exposure": 1.0
+ }
 }

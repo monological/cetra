@@ -1846,9 +1846,13 @@ def run_contact_gate(workdir):
         return []
     failures = []
 
+    # Every arm reads the unmutated fixture, so losing it fails all three -- named
+    # one per line rather than once, or two of them appear in the summary with
+    # nothing above explaining why.
     base, err = _contact_read(workdir, "base", lambda d: None)
     if err:
-        print(f"  contact-local ERROR render failed: {err.strip()[-200:]}")
+        for arm in ("contact-local", "contact-mapped", "contact-fold"):
+            print(f"  {arm} ERROR the base render failed: {err.strip()[-200:]}")
         return ["contact-local", "contact-mapped", "contact-fold"]
     bare, err = _contact_read(
         workdir, "bare", lambda d: d["models"].__setitem__(0, {"path": CONTACT_BARE_MODEL}))
