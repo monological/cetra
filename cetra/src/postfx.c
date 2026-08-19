@@ -3041,26 +3041,34 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         }
         profiler_scope_end(fx->profiler);
 
-        // Contact shadows (spec 9.3): an AO-res depth march toward the key light,
+        // Contact shadows (spec 9.3): a full-res depth march toward the lights,
         // blurred and temporally accumulated like GTAO, consumed by tonemap.
-        // Gated on a shadow-casting directional being published (fog_light_dir[0])
-        // and on cs_distance > 0 -- the latter makes --cs-distance 0 take the
-        // exact off path (a zero-length march would still evaluate a 1.0 multiply
-        // whose bit-exactness is not guaranteed). Runs before GTAO so both AO-res
-        // occlusion terms are ready when tonemap composites.
+        // Gated on SOMETHING TO MARCH -- a shadow-casting directional being
+        // published (fog_light_dir[0]), or a local light no shadow map can serve
+        // (spec 11.56); a room lit only by practicals used to skip the pass
+        // entirely, which is where the feature was needed most. Also gated on
+        // cs_distance > 0, which makes --cs-distance 0 take the exact off path (a
+        // zero-length march would still evaluate a 1.0 multiply whose
+        // bit-exactness is not guaranteed). Runs before GTAO so both occlusion
+        // terms are ready when tonemap composites.
         GLuint cs_result_tex = 0;
         bool cs_accum_ran = false;
+        const bool cs_key_light = fx->fog_light_count > 0;
         const bool cs_active = fx->contact_shadows_enabled && aux_written &&
-                               fx->fog_light_count > 0 && fx->cs_distance > 0.0f &&
-                               postfx_ensure_contact_targets(fx);
+                               (cs_key_light || fx->cs_mapless_lights > 0) &&
+                               fx->cs_distance > 0.0f && postfx_ensure_contact_targets(fx);
         if (cs_active) {
             profiler_scope_begin(fx->profiler, "contact shadows");
             // World-space travel direction -> view-space TOWARD-light unit vector
             // (pbr uses L = -light->direction; fog_light_dir[0] is that direction).
-            vec3 toward, cs_dir_vs;
-            glm_vec3_negate_to(fx->fog_light_dir[0], toward);
-            glm_mat4_mulv3(view, toward, 0.0f, cs_dir_vs);
-            glm_vec3_normalize(cs_dir_vs);
+            // Left at zero with no directional published: fog_light_dir holds
+            // whatever the last scene that had one left there.
+            vec3 toward, cs_dir_vs = {0.0f, 0.0f, 0.0f};
+            if (cs_key_light) {
+                glm_vec3_negate_to(fx->fog_light_dir[0], toward);
+                glm_mat4_mulv3(view, toward, 0.0f, cs_dir_vs);
+                glm_vec3_normalize(cs_dir_vs);
+            }
 
             glBindFramebuffer(GL_FRAMEBUFFER, fx->cs_fbo[0]);
             glViewport(0, 0, fx->width, fx->height);
@@ -3081,7 +3089,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             // Same slot as the direction, so the fold weight and the direction
             // cannot describe two different lights.
             uniform_set_vec3(cu, "keyRadiance", fx->fog_light_color[0]);
-            uniform_set_int(cu, "hasKeyLight", fx->fog_light_count > 0 ? 1 : 0);
+            uniform_set_int(cu, "hasKeyLight", cs_key_light ? 1 : 0);
             uniform_set_float(cu, "csDistance", fx->cs_distance);
             uniform_set_int(cu, "temporal", taa_resolving ? 1 : 0);
             // % 4096 keeps the shader's float hash well-conditioned over

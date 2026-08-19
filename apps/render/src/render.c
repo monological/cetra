@@ -201,7 +201,8 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --fog-density <f>  Fog extinction per world unit (implies --fog)\n");
     fprintf(stderr, "      --fog-height <f>   Fog height falloff in world units (implies --fog)\n");
     fprintf(stderr,
-            "      --contact-shadows  Screen-space contact shadows along the key light\n");
+            "      --contact-shadows  Screen-space contact shadows: key light + "
+            "map-less local lights\n");
     fprintf(stderr,
             "      --cs-debug         Show the raw contact-shadow term (implies enable)\n");
     fprintf(stderr,

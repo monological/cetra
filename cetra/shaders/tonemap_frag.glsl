@@ -34,7 +34,7 @@ uniform sampler2D auxTex;       // Aux G-buffer: linear view-Z (.z) + roughness 
 uniform vec2 invFocal;          // 1/projection focal terms, for view-pos reconstruction
 uniform int specOccMode;        // 0 off, 1 legacy smoothness blend, 2 bent-normal cone
 uniform int specOccHasMetallic; // albedoTex.a carries metallic this frame (SSGI wrote it)
-uniform sampler2D csTex;        // Contact-shadow visibility (spec 9.3), AO res
+uniform sampler2D csTex;        // Contact-shadow visibility (spec 9.3), full internal res
 uniform int csEnabled;          // Multiply the direct-light term by contact shadows
 uniform float csStrength;       // Contact-shadow darkening weight
 // Debug view dispatch (PostFXDebugView): 0=none, 1=AO, 2=normals, 3=SSR,

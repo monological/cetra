@@ -14,6 +14,7 @@
 #include "engine.h"
 #include "intersect.h"
 #include "shadow.h"
+#include "light_cluster.h"
 #include "profiler.h"
 #include "texture.h"
 #include "render.h"
@@ -1566,6 +1567,21 @@ void shadow_publish_to_postfx(const Scene* scene, PostFX* fx) {
         fx->fog_spot_atten[2] = 0.0f;
         fx->fog_spot_cos_inner = sp->cutOff;
         fx->fog_spot_cos_outer = sp->outerCutOff;
+    }
+
+    // The population no shadow map can serve: point and spot lights holding no
+    // punctual layer. Counted BEFORE the directional early-out below, because a
+    // scene lit only by practicals has no directional and this is the whole
+    // reason it still needs a contact-shadow pass (spec 11.56). The cull radius
+    // is the same test the cluster build applies -- a light that never reaches
+    // epsilon is not a light the march can shadow.
+    fx->cs_mapless_lights = 0;
+    for (size_t i = 0; scene && i < scene->light_count; i++) {
+        const Light* l = scene->lights[i];
+        if (!l || (l->type != LIGHT_POINT && l->type != LIGHT_SPOT))
+            continue;
+        if (l->shadow_layer < 0 && light_cull_radius(l) != 0.0f)
+            fx->cs_mapless_lights++;
     }
 
     // Spot shadow (Phase 2): occludes the beam by geometry. Published

@@ -827,10 +827,11 @@ static void _engine_gui_panel(Engine* engine) {
         // app scales to the scene, like SSR Distance.
         igSliderFloat("CS Distance", &fx->cs_distance, 0.01f, 1000.0f, "%.3f m",
                       ImGuiSliderFlags_Logarithmic);
-        // The pass needs a shadow-casting directional (its published direction);
-        // say so rather than let the toggle look inert.
-        if (fx->fog_light_count == 0)
-            igTextDisabled("(needs a shadow-casting directional light)");
+        // The pass needs something to march toward -- a shadow-casting
+        // directional, or a local light that has no shadow map to be sharpened
+        // against. Say so rather than let the toggle look inert.
+        if (fx->fog_light_count == 0 && fx->cs_mapless_lights == 0)
+            igTextDisabled("(needs a directional or a map-less local light)");
         _end_effect_group();
 
         _begin_effect_group("SSR", &fx->ssr_enabled);

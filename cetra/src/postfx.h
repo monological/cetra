@@ -237,16 +237,24 @@ typedef struct PostFX {
     PostFXSpecOccMode spec_occlusion_mode; // How the AO factor treats specular (see the enum)
     bool ao_edge_filter_enabled; // Depth-bilateral AO blur (no silhouette bleed onto the floor)
 
-    // Screen-space contact shadows (spec 9.3): an AO-res depth march toward the
-    // key light, composited in tonemap as a direct-light occlusion multiplier
-    // beside AO. Needs a shadow-casting directional (fog_light_dir[0]) but no
-    // shadow map. Off by default; enabled false leaves the frame untouched.
-    // Targets are lazily allocated (cs_ready) and freed unconditionally.
+    // Screen-space contact shadows (spec 9.3): a full-internal-res depth march
+    // toward the key light and toward every clustered local light with no
+    // punctual shadow map (spec 11.56), composited in tonemap as a direct-light
+    // occlusion multiplier beside AO. Needs no shadow map itself. Off by
+    // default; enabled false leaves the frame untouched. Targets are lazily
+    // allocated (cs_ready) and freed unconditionally.
     bool contact_shadows_enabled;
     float cs_strength; // Composite darkening weight [0,1]
     float cs_distance; // March reach in view-space units (0 = off, C-gated)
-    bool cs_ready;     // Lazy-alloc guard for the targets below
-    GLuint cs_fbo[2];  // R8 at AO res: [0] raw march, [1] bilateral-blurred
+    // Point/spot lights in the scene holding no punctual layer -- the population
+    // that has no other occlusion at all, and the second half of the run gate:
+    // 0 here with no shadow-casting directional means the pass has nothing to
+    // march. A scene count, not a visible one, so it can arm the pass for a lamp
+    // that turns out to be off screen; the cluster list is empty there and the
+    // march answers 1.
+    int cs_mapless_lights;
+    bool cs_ready;    // Lazy-alloc guard for the targets below
+    GLuint cs_fbo[2]; // R8 at full internal res: [0] raw march, [1] bilateral-blurred
     GLuint cs_texture[2];
     PingPong cs_history;  // R16F temporal accumulation (0.9 feedback bands in 8 bits)
     bool ssgi_enabled;    // Screen-space GI: one-bounce indirect diffuse (extends the GTAO sweep)
