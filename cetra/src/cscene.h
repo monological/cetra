@@ -299,6 +299,22 @@ typedef struct CetraSceneDesc {
     float aperture;      // f-number
     float shutter_speed; // seconds
     float iso;
+    // post.metering: how the frame is weighted and which tails are discarded
+    // before the mean. Each carries its own presence flag rather than the block
+    // carrying one, so a scene can author a mode without also pinning the
+    // percentiles a later default change would otherwise stop reaching it.
+    bool has_meter_mode;
+    int meter_mode; // MeteringMode; int here since cscene.h carries no engine headers
+    bool has_meter_radius;
+    float meter_radius;
+    bool has_meter_low;
+    float meter_low;
+    bool has_meter_high;
+    float meter_high;
+    bool has_adapt_up;
+    float adapt_up;
+    bool has_adapt_down;
+    float adapt_down;
     // TAAU render-resolution scale in [0.5, 1). Everything before the TAA seam
     // renders at this fraction and the upscale resolve brings it to post res.
     // It rides TAA, which windowed sessions turn on and headless ones do not --

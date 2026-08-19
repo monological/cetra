@@ -22,11 +22,15 @@ typedef struct {
     const char* screenshot_path;      // Save final frame here (PPM)
     int screenshot_every;             // Also save numbered frames every N frames
     float fov_deg;                    // Camera FOV in degrees (0 = default 50)
-    float exposure;                   // Tonemap exposure override (0 = engine default)
-    float ground_radius;              // Skybox ground projection dome radius (0 = default)
-    float ground_height;              // HDR capture height above ground (0 = default)
-    float camera_distance;            // Camera distance override in meters (0 = auto)
-    int no_recenter;                  // Keep the model's authored world position
+    float exposure;                   // Tonemap exposure override; see has_exposure
+    // Presence flag rather than testing `exposure > 0`, which six sites did.
+    // Under a physical camera the value is an EV BIAS, where negative is a legal
+    // and useful setting -- stopping down -- so sign cannot double as presence.
+    int has_exposure;
+    float ground_radius;   // Skybox ground projection dome radius (0 = default)
+    float ground_height;   // HDR capture height above ground (0 = default)
+    float camera_distance; // Camera distance override in meters (0 = auto)
+    int no_recenter;       // Keep the model's authored world position
     // Tri-state so "unspecified" is distinct from "off": -1 unset, 0 pin the
     // frame, 1 keep adapting. Two booleans could not say "unset", which is what
     // lets an authored exposure imply a pin only when nothing asked otherwise.
@@ -104,6 +108,8 @@ typedef struct {
     float meter_high;           // Metering high percentile (<0 = leave the default)
     int meter_mode;             // MeteringMode override (-1 = leave the default)
     float meter_radius;         // Spot / centre-weight radius (<0 = leave the default)
+    float adapt_up;             // Per-frame adaptation rate, scene brightening (<0 = default)
+    float adapt_down;           // Per-frame adaptation rate, scene darkening (<0 = default)
     int gi_rate;                // Probes captured per frame while dirty (0 = default)
     int gi_debug;               // Blit the probe atlas into the frame corner
     int sky;                    // Procedural physically-based sky instead of -e

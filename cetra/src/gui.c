@@ -724,6 +724,52 @@ static void _engine_gui_panel(Engine* engine) {
                              "this to an EV bias instead.");
         }
 
+        // What the meter actually decided, which nothing showed until 11.52 --
+        // the exposure was three numbers multiplied together and the GUI
+        // displayed one of the inputs. Shown whether or not adaptation is on:
+        // with it off this reads the camera alone, which is the answer to "why
+        // is the frame this bright" either way.
+        {
+            Exposure* ex = &engine->exposure;
+            float gain = exposure_auto_gain(ex);
+            igText("Metered %.4g cd/m2   gain %.4f   EV100 %.2f", (double)ex->adapted_luminance,
+                   (double)gain, (double)exposure_ev100(ex));
+            if (igIsItemHovered(0))
+                igSetTooltip("Metered scene luminance, the adaptation gain it produced, and the "
+                             "camera's EV100. Gain is capped at 1: auto-exposure only darkens.");
+        }
+
+        if (igTreeNode_Str("Metering")) {
+            static const char* const meter_names[] = {"Uniform", "Centre-weighted", "Spot"};
+            int mode = (int)engine->exposure.meter_mode;
+            if (igCombo_Str_arr("Mode", &mode, meter_names,
+                                (int)(sizeof(meter_names) / sizeof(meter_names[0])), -1))
+                engine->exposure.meter_mode = (MeteringMode)mode;
+            if (engine->exposure.meter_mode != METERING_UNIFORM) {
+                igSliderFloat("Radius", &engine->exposure.meter_radius, 0.05f, 1.5f, "%.2f", 0);
+                if (igIsItemHovered(0))
+                    igSetTooltip("Fraction of the frame's half-diagonal, in UV -- an ellipse in "
+                                 "pixels on a non-square frame.");
+            }
+            // Low is deliberately allowed up to 0.95 and high down to 0.05; the
+            // shader falls back to the whole population if they cross, so a
+            // slider drag through the middle degrades to a plain mean instead of
+            // to a black frame.
+            igSliderFloat("Low %", &engine->exposure.meter_low, 0.0f, 0.95f, "%.2f", 0);
+            if (igIsItemHovered(0))
+                igSetTooltip("Fraction of the DARKEST pixels ignored. High by default: a meter "
+                             "that includes the black background is measuring the background.");
+            igSliderFloat("High %", &engine->exposure.meter_high, 0.05f, 1.0f, "%.2f", 0);
+            if (igIsItemHovered(0))
+                igSetTooltip("Everything above this fraction is ignored -- the highlight tail.");
+            igSliderFloat("Adapt Up", &engine->exposure.adapt_rate_up, 0.001f, 1.0f, "%.3f", 0);
+            igSliderFloat("Adapt Down", &engine->exposure.adapt_rate_down, 0.001f, 1.0f, "%.3f", 0);
+            if (igIsItemHovered(0))
+                igSetTooltip("Per FRAME, not per second: a headless run of N frames must adapt "
+                             "identically every time.");
+            igTreePop();
+        }
+
         _begin_effect_group("Bloom", &fx->bloom_enabled);
         igSliderFloat("Bloom Strength", &fx->bloom_strength, 0.0f, 0.1f, "%.3f", 0);
         igSliderFloat("Bloom Threshold", &fx->bloom_threshold, 0.0f, 8.0f, "%.2f", 0);

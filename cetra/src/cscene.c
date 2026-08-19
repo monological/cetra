@@ -339,6 +339,36 @@ static void parse_post(CetraSceneDesc* d, const cJSON* root) {
                           "post.camera");
     }
 
+    const cJSON* meter = cJSON_GetObjectItemCaseSensitive(post, "metering");
+    if (cJSON_IsObject(meter)) {
+        const cJSON* mode = cJSON_GetObjectItemCaseSensitive(meter, "mode");
+        if (cJSON_IsString(mode) && mode->valuestring) {
+            if (strcmp(mode->valuestring, "uniform") == 0) {
+                d->meter_mode = 0;
+                d->has_meter_mode = true;
+            } else if (strcmp(mode->valuestring, "centre") == 0 ||
+                       strcmp(mode->valuestring, "center") == 0) {
+                d->meter_mode = 1;
+                d->has_meter_mode = true;
+            } else if (strcmp(mode->valuestring, "spot") == 0) {
+                d->meter_mode = 2;
+                d->has_meter_mode = true;
+            } else {
+                log_warn("cscene: unknown metering mode '%s' (uniform|centre|spot)",
+                         mode->valuestring);
+            }
+        }
+        d->has_meter_radius = get_float(meter, "radius", &d->meter_radius);
+        d->has_meter_low = get_float(meter, "low", &d->meter_low);
+        d->has_meter_high = get_float(meter, "high", &d->meter_high);
+        d->has_adapt_up = get_float(meter, "adapt_up", &d->adapt_up);
+        d->has_adapt_down = get_float(meter, "adapt_down", &d->adapt_down);
+        static const char* const meter_known[] = {"mode", "radius",    "low",
+                                                  "high", "adapt_up", "adapt_down"};
+        warn_unknown_keys(meter, meter_known, sizeof(meter_known) / sizeof(meter_known[0]),
+                          "post.metering");
+    }
+
     // Refused rather than clamped: silently moving an authored number into
     // range hides a typo behind a slightly soft frame, and the author never
     // learns the value they wrote is not the value they got. The bound matches
@@ -383,7 +413,7 @@ static void parse_post(CetraSceneDesc* d, const cJSON* root) {
 
     static const char* const known[] = {
         "tonemap", "exposure", "auto_exposure",        "camera", "render_scale",
-        "flare",   "bloom",    "chromatic_aberration", "fog",
+        "flare",   "bloom",    "chromatic_aberration", "fog",     "metering",
     };
     warn_unknown_keys(post, known, sizeof(known) / sizeof(known[0]), "post");
 }

@@ -173,6 +173,12 @@ static void print_usage(const char* prog) {
     fprintf(stderr,
             "      --exposure-probe   Print what the meter decided, per frame "
             "(silent on a pinned frame)\n");
+    fprintf(stderr, "      --meter-mode <m>   Metering mask: uniform|centre|spot\n");
+    fprintf(stderr, "      --meter-radius <f> Spot/centre radius, fraction of the half-diagonal\n");
+    fprintf(stderr, "      --meter-low <f>    Fraction of the darkest pixels ignored (0.70)\n");
+    fprintf(stderr, "      --meter-high <f>   Fraction above which pixels are ignored (0.95)\n");
+    fprintf(stderr, "      --adapt-up <f>     Per-frame adaptation rate, scene brightening\n");
+    fprintf(stderr, "      --adapt-down <f>   Per-frame adaptation rate, scene darkening\n");
     fprintf(stderr, "      --sky              Procedural physically-based sky (instead of -e)\n");
     fprintf(stderr, "      --sky-debug        Blit the sky LUTs into the frame corner\n");
     fprintf(stderr, "      --clouds           Volumetric cloud layer (implies --sky)\n");
@@ -331,7 +337,9 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->meter_low = -1.0f;
     args->meter_high = -1.0f;
     args->meter_mode = -1;
-    args->meter_radius = -1.0f;  // -1 = unset; an authored exposure then pins
+    args->meter_radius = -1.0f;
+    args->adapt_up = -1.0f;
+    args->adapt_down = -1.0f;  // -1 = unset; an authored exposure then pins
     args->oit = -1;                     // -1 = unset; both default ON in the engine
     args->oit_moments = -1;
     args->sun_elevation = -999.0f; // -999 = keep the sky default
@@ -495,10 +503,15 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 return -1;
             }
             args->exposure = (float)atof(argv[i]);
-            if (args->exposure <= 0.0f) {
-                fprintf(stderr, "Error: invalid exposure '%s'\n", argv[i]);
-                return -1;
-            }
+            args->has_exposure = 1;
+            // NOT validated here, and that is the fix rather than an omission.
+            // What -E means depends on whether a physical camera is in play: a
+            // linear multiplier, which must be positive, or an EV BIAS, where
+            // negative is stopping down and is half the range the GUI has always
+            // offered. A camera can only arrive from a .cscn, which is parsed
+            // after argv -- so a sign check here could never see one, and
+            // rejecting <= 0 made negative compensation unreachable from the CLI
+            // entirely. The check moved to where the mode is known.
         } else if (strcmp(argv[i], "--no-ground") == 0) {
             args->no_ground = 1;
         } else if (strcmp(argv[i], "--no-recenter") == 0) {
@@ -739,6 +752,18 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 fprintf(stderr, "Error: unknown meter mode '%s'\n", argv[i]);
                 return -1;
             }
+        } else if (strcmp(argv[i], "--adapt-up") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: --adapt-up expects a per-frame rate\n");
+                return -1;
+            }
+            args->adapt_up = (float)atof(argv[i]);
+        } else if (strcmp(argv[i], "--adapt-down") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: --adapt-down expects a per-frame rate\n");
+                return -1;
+            }
+            args->adapt_down = (float)atof(argv[i]);
         } else if (strcmp(argv[i], "--meter-radius") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: --meter-radius expects a fraction\n");
@@ -2030,6 +2055,16 @@ int main(int argc, char** argv) {
 
     {
         Exposure* ex = &engine->exposure;
+        // Now that the scene file has been merged, -E's meaning is settled and
+        // its sign can be judged. A linear multiplier of zero is a black frame
+        // and a negative one is meaningless; under a camera the same number is
+        // an EV bias and any sign is legal.
+        if (args.has_exposure && args.aperture <= 0.0f && args.exposure <= 0.0f) {
+            fprintf(stderr, "Error: exposure %g is not a valid linear multiplier "
+                            "(negative stops need a post.camera)\n",
+                    (double)args.exposure);
+            return -1;
+        }
         if (args.aperture > 0.0f) {
             ex->physical = true;
             ex->aperture = args.aperture;
@@ -2037,7 +2072,7 @@ int main(int argc, char** argv) {
             ex->iso = args.iso;
             // -E means stops under a camera, so it lands on bias_stops rather
             // than the multiplier. Absent, 0 = neutral compensation.
-            ex->bias_stops = args.exposure > 0.0f ? args.exposure : 0.0f;
+            ex->bias_stops = args.has_exposure ? args.exposure : 0.0f;
             // A physical camera IS the exposure decision, so adaptation does not
             // also get a say -- they are alternative methods, not stacking ones.
             // Left on, metering compares absolute scene radiance against an
@@ -2050,14 +2085,14 @@ int main(int argc, char** argv) {
                 ex->automatic = false;
             printf("Physical exposure: f/%.1f %.4gs ISO%.0f -> EV100 %.2f\n", ex->aperture,
                    ex->shutter_speed, ex->iso, exposure_ev100(ex));
-        } else if (args.exposure > 0.0f) {
+        } else if (args.has_exposure && args.exposure > 0.0f) {
             ex->multiplier = args.exposure;
         }
         // An explicit override wins; failing that, naming an exposure pins the
         // frame, which is what every scene authored before the key existed.
         if (args.auto_exposure_override >= 0)
             ex->automatic = args.auto_exposure_override != 0;
-        else if (args.exposure > 0.0f)
+        else if (args.has_exposure)
             ex->automatic = false;
         // Set last, and deliberately NOT gated on `automatic`: the probe reports
         // only from frames the meter actually ran, so asking for it on a pinned
@@ -2073,6 +2108,10 @@ int main(int argc, char** argv) {
             ex->meter_mode = (MeteringMode)args.meter_mode;
         if (args.meter_radius >= 0.0f)
             ex->meter_radius = args.meter_radius;
+        if (args.adapt_up >= 0.0f)
+            ex->adapt_rate_up = args.adapt_up;
+        if (args.adapt_down >= 0.0f)
+            ex->adapt_rate_down = args.adapt_down;
     }
     if (args.no_ssao && engine->postfx) {
         engine->postfx->ssao_enabled = false;

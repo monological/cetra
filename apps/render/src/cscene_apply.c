@@ -103,8 +103,9 @@ int cscene_setup(RenderArgs* args, CetraSceneDesc** out_cscn) {
                 break;
         }
     }
-    if (args->exposure <= 0.0f && cscn->has_exposure) {
+    if (!args->has_exposure && cscn->has_exposure) {
         args->exposure = cscn->exposure;
+        args->has_exposure = 1;
         // Say so. Setting an exposure also switches adaptation off downstream,
         // which surprises anyone who then finds the GUI's auto-exposure box
         // unticked in a scene whose file never mentions auto-exposure.
@@ -117,6 +118,18 @@ int cscene_setup(RenderArgs* args, CetraSceneDesc** out_cscn) {
     // adapting from an authored starting exposure, or pin the frame without
     // naming a value. Guarded like every other field here, so the CLI still wins
     // -- the precedence this whole function implements is CLI > scene > default.
+    if (cscn->has_meter_mode && args->meter_mode < 0)
+        args->meter_mode = cscn->meter_mode;
+    if (cscn->has_meter_radius && args->meter_radius < 0.0f)
+        args->meter_radius = cscn->meter_radius;
+    if (cscn->has_meter_low && args->meter_low < 0.0f)
+        args->meter_low = cscn->meter_low;
+    if (cscn->has_meter_high && args->meter_high < 0.0f)
+        args->meter_high = cscn->meter_high;
+    if (cscn->has_adapt_up && args->adapt_up < 0.0f)
+        args->adapt_up = cscn->adapt_up;
+    if (cscn->has_adapt_down && args->adapt_down < 0.0f)
+        args->adapt_down = cscn->adapt_down;
     if (cscn->has_camera_exposure && args->aperture <= 0.0f) {
         args->aperture = cscn->aperture;
         args->shutter_speed = cscn->shutter_speed;
