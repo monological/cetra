@@ -2216,15 +2216,23 @@ The habit that catches it is cheap: read the code the row describes before belie
 found the defect the row *should* have been arguing from, which no one had looked for because nothing
 could see the metered value at all.
 
-**And the honest observation this table should carry: it has not driven the work since 11.32.**
-Twenty-one specs have shipped since D3 opened, and **ten of them are the water and shore series
-(11.32, 11.33, 11.35, 11.36, 11.42–11.45, 11.47, 11.48), against which this table has exactly one
-row — D3 — and it covers three of the ten.** That is not a failure of the roadmap — the surface
+**And the honest observation this table should carry: for most of its life it has not driven the
+work.** Twenty-three specs have shipped since D3 opened, and **ten of them are the water and shore
+series (11.32, 11.33, 11.35, 11.36, 11.42–11.45, 11.47, 11.48), against which this table has exactly
+one row — D3 — and it covers three of the ten.** That is not a failure of the roadmap — the surface
 turned out to have far more in it than one XL row could hold, and every one of those specs measured
 something before it changed anything, which is the standard this document exists to enforce. But it
 does mean the table above describes a *backlog*, not a plan, and that all five items in its
 own shortlist were finished while the actual work went somewhere else entirely. Anyone reading the
 tier order as a schedule should read this paragraph first.
+
+**The last two are the exception, and worth naming as one.** 11.53 came straight off row 34 and 11.54
+off its review — the first table-driven pair since the water series began. What that produced is also
+the argument for reading a row against the code before believing it: row 34 described half of what
+the flag it named actually did, its fixture then tested a fraction of what the spec built, and the
+instrument that finally checked the whole thing had to be rebuilt once after the first version was
+measured reading straight through the failure it existed for. The table found the work; it did not
+describe it correctly, and neither did the first two attempts at testing it.
 
 ### Known limitations not booked as items
 
