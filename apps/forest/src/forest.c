@@ -11,8 +11,9 @@
  *     the run
  *   - terrain split into tiles, because a tile is the unit of both culling and
  *     LOD selection and a kilometre-wide mesh is neither
- *   - no wind on anything scattered: a wind material is DRAW_UNBOUNDED, which
- *     exempts it from frustum culling entirely
+ *   - wind on the trees, which spec 11.53 made possible: a wind material used
+ *     to be exempt from frustum culling entirely, and 2,000 uncullable trees
+ *     defeat the point of the app
  */
 
 #include <math.h>
@@ -40,6 +41,7 @@
 #include "cetra/shadow.h"
 #include "cetra/sky.h"
 #include "cetra/water.h"
+#include "cetra/wind.h"
 #include "cetra/transform.h"
 #include "cetra/util.h"
 
@@ -666,6 +668,15 @@ static void on_init(Game* game) {
     g_mat_leaf->foliage_shadows = 1;
     // Thin leaves transmit; without it a backlit canopy reads as opaque plastic.
     g_mat_leaf->subsurface = 0.55f;
+    // Wind. Both prototypes come from tree_gen, which already writes the UV1
+    // branch phase and flex weight the vegetation modes read, so this is a
+    // material field and not new geometry. Modest against a 125-unit trunk: the
+    // response multiplies the scene strength, and a canopy that travels metres
+    // reads as a storm rather than as air moving.
+    g_mat_bark->wind_response = 0.45f;
+    g_mat_bark->wind_mode = 1; // whole-trunk lean plus per-branch sway
+    g_mat_leaf->wind_response = 0.7f;
+    g_mat_leaf->wind_mode = 2; // that, plus the card flutter
     // Dark wet stone. Rock is the only light NEUTRAL surface in a scene of dark
     // foliage, so anything near a realistic granite albedo reads as white against
     // it however the lighting is balanced -- the surrounding palette sets what
@@ -673,6 +684,19 @@ static void on_init(Game* game) {
     g_mat_rock = make_material("rock", (vec3){0.085f, 0.082f, 0.078f}, 0.88f, 0.0f);
 
     bake_vegetation_textures(g_scene);
+
+    // A breeze across the valley. phase_variation is what makes 2,000 copies of
+    // five prototypes look like trees rather than one tree drawn 2,000 times:
+    // wind is evaluated in object space, so without it every instance sways on
+    // the same beat.
+    g_scene->wind = create_wind("valley breeze");
+    glm_vec3_copy((vec3){0.82f, 0.0f, 0.57f}, g_scene->wind->direction);
+    g_scene->wind->strength = 3.0f;
+    g_scene->wind->speed = 0.9f;
+    g_scene->wind->gust_frequency = 0.18f;
+    g_scene->wind->gust_amount = 0.5f;
+    g_scene->wind->turbulence = 0.35f;
+    g_scene->wind->phase_variation = 1.0f;
 
     PhysicsConfig pc = physics_default_config();
     PhysicsWorld* physics = create_physics_world(&pc);
