@@ -1958,9 +1958,9 @@ void render_light_overlay(Engine* engine, Scene* scene) {
 //
 // The offset direction is cross(segment, toCamera), so the quad always faces
 // the viewer. shape_geo.glsl solves the same problem with a world-space XY
-// perpendicular, which is correct only for the flat, head-on layouts the pcb
-// and shapes apps draw; a skeleton is fully 3D under an orbiting camera and
-// would thin out or vanish at unlucky angles.
+// perpendicular, which is correct only for the flat, head-on layouts the 2D
+// apps draw; a skeleton is fully 3D under an orbiting camera and would thin out
+// or vanish at unlucky angles.
 static void _emit_bone_quad(float* v, size_t* n, const vec3 a, const vec3 b, const vec3 cam_pos,
                             float world_per_pixel_at_unit_depth, float r, float g, float bl) {
     vec3 seg;

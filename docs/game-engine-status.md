@@ -129,7 +129,7 @@ authoring/description, **not** save-game state. (§6.0)
 `gametest` (a genuinely playable physics sandbox: WASD character with jump,
 spawnable crates, raycasts, a motorized hinge door you push open), `spores`
 (curl-noise particle room on the game loop, headless-capable), `tree`
-(procedural trees), `shapes` / `pcb` (2D primitive demos), `splash` (SDF text
+(procedural trees), `shapes` (2D primitive demo), `splash` (SDF text
 showcase).
 
 ### Build & dependencies

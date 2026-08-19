@@ -1,18 +1,19 @@
-# Fix: 2D apps (`pcb`, `shapes`) skew the whole canvas on an empty-space drag
+# Fix: the 2D apps skew the whole canvas on an empty-space drag
 
 ## Context
 
-The `shapes` and `pcb` apps are meant to be **2D drag-and-drop** canvases. Instead, clicking
-on empty background and dragging rotates the *entire* view in 3D — the flat squares shear into
-parallelograms (see the user's screenshots). The user wants this fixed by giving these apps a
-**proper orthographic 2D camera** (added to the engine, apps locked to it), and also wants
-**`pcb` to get real drag-and-drop** (it currently has none).
+The two 2D apps -- `shapes` and a second, untracked one -- are meant to be **2D drag-and-drop**
+canvases. Instead, clicking on empty background and dragging rotates the *entire* view in 3D —
+the flat squares shear into parallelograms (see the user's screenshots). The user wants this
+fixed by giving these apps a **proper orthographic 2D camera** (added to the engine, apps
+locked to it), and also wants **the second app to get real drag-and-drop** (it currently has
+none).
 
 ## Root cause (confirmed from the code)
 
-Both apps run a **perspective camera in `CAMERA_MODE_FREE`** (`shapes.c:220-241`,
-`pcb.c:175-196`) and, every frame, unconditionally call `mouse_drag_update()`
-(`shapes.c:143`, `pcb.c:102`). In FREE mode a normal (non-shift) left-drag runs the
+Both apps run a **perspective camera in `CAMERA_MODE_FREE`** (`shapes.c:220-241`, and the
+same shape in the untracked one) and, every frame, unconditionally call `mouse_drag_update()`
+(`shapes.c:143`). In FREE mode a normal (non-shift) left-drag runs the
 **"orbit around look_at"** branch (`app.c:205-226`), gated *only* on `is_dragging`
 (`app.c:182`) — it never checks whether a shape was actually picked. A left-press in empty
 space still latches `is_dragging = true` (`engine.c:861`) even though ray-picking returns
@@ -20,7 +21,7 @@ space still latches `is_dragging = true` (`engine.c:861`) even though ray-pickin
 camera around the origin → the flat squares skew.
 
 (The shape-drag path *is* correctly gated on `selected_node` at `shapes.c:49`, so that part
-works. `pcb`'s cursor callback is empty (`pcb.c:47`), so `pcb` only ever orbits.)
+works. The other app's cursor callback is empty, so it only ever orbits.)
 
 A global gate on `selected_node` would be wrong — the real 3D apps (`render`, `gametest`,
 `tree`) *want* empty-space drag to orbit. The fix is therefore scoped to these two 2D apps
@@ -86,18 +87,17 @@ plus a new, opt-in orthographic camera in the engine.
   translates both `look_at` and `position` by it (pure translation → no skew), then
   `update_engine_camera_lookat`. (Exact delta signs / coord space verified by running.)
 
-### 3. `pcb` app (`apps/pcb/src/pcb.c`)
+### 3. The second 2D app (untracked, so absent from the diff)
 
-- Same camera swap to `set_camera_orthographic`, sized to *its* framing. `pcb` pushes content
-  to `z = -700` via its model transform (`pcb.c:106`), so `distance = 1000` →
+- Same camera swap to `set_camera_orthographic`, sized to *its* framing: it pushes content to
+  `z = -700` via its model transform, so `distance = 1000` →
   `ortho_height = 2 * 1000 * tan(0.37/2)` ≈ **374**. Same orbit-wiring removal as `shapes`.
-- **Add AABBs**: `pcb` never calls `calculate_aabb()`, so picking (which tests `mesh->aabb`)
-  can't work. Add `calculate_aabb(meshN)` after each `generate_*_to_mesh` for the pickable
-  shapes (`mesh1`–`mesh10`).
-- **Implement shape drag-and-drop**: fill in the empty `cursor_position_callback`
-  (`pcb.c:47`) by mirroring `shapes.c:48-68` (move `selected_node->original_transform[3][0/1]`
-  on the drag plane). Add the same pan-on-background-drag as `shapes`. `pcb`'s model transform
-  has no XY offset, so writing world XY into the node's local translation is correct.
+- **Add AABBs**: it never calls `calculate_aabb()`, so picking (which tests `mesh->aabb`)
+  cannot work. Add `calculate_aabb()` after each `generate_*_to_mesh` for the pickable shapes.
+- **Implement shape drag-and-drop**: fill in its empty `cursor_position_callback` by mirroring
+  `shapes.c:48-68` (move `selected_node->original_transform[3][0/1]` on the drag plane). Add
+  the same pan-on-background-drag as `shapes`. Its model transform has no XY offset, so
+  writing world XY into the node's local translation is correct.
 
 ## Files to modify
 
@@ -107,7 +107,7 @@ plus a new, opt-in orthographic camera in the engine.
   ortho branch in the two picking functions.
 - `cetra/src/intersect.c`, `cetra/src/intersect.h` — `compute_ortho_ray_from_screen`.
 - `apps/shapes/src/shapes.c` — ortho camera, remove orbit wiring, add pan.
-- `apps/pcb/src/pcb.c` — ortho camera, remove orbit wiring, add AABBs, implement shape-drag + pan.
+- The untracked 2D app — ortho camera, remove orbit wiring, add AABBs, implement shape-drag + pan.
 
 ## Verification
 
@@ -115,7 +115,7 @@ plus a new, opt-in orthographic camera in the engine.
 2. **2D behavior (manual — these apps are windowed, not headless):**
    - Run `./out/bin/shapes`: dragging empty background **no longer skews** the view; dragging
      a square moves just that square; the squares stay perfectly rectangular at all times.
-   - Run `./out/bin/pcb`: shapes are now **draggable**; empty-space drag pans without skew.
+   - Run the second 2D app: shapes are now **draggable**; empty-space drag pans without skew.
 3. **3D regression (engine change must be a no-op for perspective):** capture a deterministic
    `render` frame before and after and confirm **0 differing pixels** — routing
    `update_engine_camera_perspective` through `compute_projection_matrix` calls the same
@@ -138,7 +138,7 @@ index buffer in threes on the assumption that every mesh is triangles. Line topo
 that: a bezier carries 38 indices, an unfilled circle 65, an unfilled sharp rect 5 -- none a
 whole number of triangles, so the last iteration read one element past the array, and the
 value read is used as a *vertex index*, turning a 4-byte overread into an unbounded one.
-Giving pcb's shapes real AABBs is what made the loop reachable, so this shipped as part of
+Giving that app's shapes real AABBs is what made the loop reachable, so this shipped as part of
 the same change: non-triangle meshes are now picked on their bounding box, which is also the
 only meaningful answer for line geometry, and the triangle loop bound is `j + 2 <
 index_count`. Confirmed with AddressSanitizer -- `heap-buffer-overflow` before, clean after.
