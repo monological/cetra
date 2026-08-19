@@ -205,6 +205,46 @@ float spotConeFactor(float typeF, vec3 lightDir, float cutOff, float outerCutOff
     return clamp((theta - outerCutOff) / epsilon, 0.0, 1.0);
 }
 
+/*
+ * The ANGULAR half of a clustered punctual light's falloff: its IES profile when
+ * it has one, the analytic cone when it does not.
+ *
+ * One function because the falloff is evaluated in five places -- the shading
+ * loop, its hand-duplicated debug twin, the fog's clustered point walk, the fog's
+ * spot shaft, and the contact-shadow fold weight -- and a profile applied in some
+ * but not all of them means the beam disagrees with the pool it casts. That is
+ * precisely the failure getDistanceAtt and spotConeFactor were centralised here
+ * to prevent, restated one layer up now that there are two ways to be angular.
+ *
+ * A profile REPLACES the cone rather than multiplying it: the profile is the
+ * whole distribution, cutoff included, so applying both renders a falloff
+ * matching neither the file nor the authored cone (spec 11.57).
+ */
+// The general form takes the light's frame explicitly, because a consumer
+// working in VIEW space (the contact-shadow pass) has to transform the axis and
+// the roll reference itself -- view is rigid, so every angle here survives that
+// unchanged, but the vectors must be in the same space as `L`.
+float punctualAngular(uint li, vec3 L, vec3 axis, vec3 refUp) {
+    int idx = int(clusterLights[li].attenCutoff.y);
+    if (idx >= 0)
+        return iesProfile(idx, L, axis, refUp);
+    return spotConeFactor(clusterLights[li].dirType.w, axis, clusterLights[li].attenCutoff.w,
+                          clusterLights[li].shadowMisc.x, L);
+}
+
+// ...and the world-space one, which is every consumer but that.
+float punctualAngular(uint li, vec3 L) {
+    return punctualAngular(li, L, clusterLights[li].dirType.xyz, clusterLights[li].upArea.xyz);
+}
+
+// Whether a light needs its frame at all. A point light with no profile reads
+// neither the axis nor the roll, so a consumer that has to transform them can
+// skip the work -- which is what 11.56 measured as a mat4 multiply per point
+// light per pixel, thrown away.
+bool punctualNeedsFrame(uint li) {
+    return int(clusterLights[li].attenCutoff.y) >= 0 || clusterLights[li].dirType.w == 2.0;
+}
+
 // The other half of punctual attenuation, beside the cone for the same reason:
 // a surface and the fog in front of it have to agree about how a lamp dies off,
 // or the beam separates from the pool it casts.

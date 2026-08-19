@@ -55,6 +55,12 @@ typedef struct IesProfile {
     float v_lo; // first and last measured vertical angle, degrees
     float v_hi;
     float peak_cd;
+    // The largest vertical angle at which ANY tap is non-zero -- the profile's
+    // angular support, in degrees from the axis. The spot shadow frustum is
+    // fitted to this rather than to the authored cone, because a real IES skirt
+    // routinely emits past the cone and the map would otherwise clip it, leaving
+    // the skirt lit and unshadowed.
+    float support_deg;
     // The largest v_taps*h_taps a profile can occupy. The POOL is what profiles
     // actually share (ies.c), so this bounds one table rather than sizing the set.
     float table[IES_MAX_VERT * IES_MAX_HORIZ];

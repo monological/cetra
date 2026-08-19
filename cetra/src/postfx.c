@@ -710,6 +710,8 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     fx->froxel_prev_frame = -1;   // no froxel frame yet; 0 would match frame 0
     fx->fog_layer_frame = -1;     // likewise for the composited layer's history
     fx->fog_spot_enabled = false; // published per frame by shadow_publish_to_postfx
+    // -1 is "no profile"; a calloc'd 0 would name the first one.
+    fx->fog_spot_ies_profile = -1;
 
     // Motion blur (off by default; target allocated lazily on first enable).
     fx->motion_blur_enabled = false;
@@ -2384,6 +2386,8 @@ static void upload_fog_uniforms(PostFX* fx, UniformManager* u, mat4 projection, 
         uniform_set_vec3(u, "spotAtten", fx->fog_spot_atten);
         uniform_set_float(u, "spotCosInner", fx->fog_spot_cos_inner);
         uniform_set_float(u, "spotCosOuter", fx->fog_spot_cos_outer);
+        uniform_set_int(u, "spotIesProfile", fx->fog_spot_ies_profile);
+        uniform_set_vec3(u, "spotUp", fx->fog_spot_up);
         if (spot_shadowed) {
             uniform_set_mat4(u, "spotLightSpaceMatrix", (float*)fx->fog_spot_light_space);
             uniform_set_int(u, "spotShadowLayer", fx->fog_spot_shadow_layer);

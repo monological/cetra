@@ -14,6 +14,7 @@
 #include "engine.h"
 #include "intersect.h"
 #include "shadow.h"
+#include "ies.h"
 #include "profiler.h"
 #include "texture.h"
 #include "render.h"
@@ -790,7 +791,8 @@ static int punctual_layers_for(const Light* light) {
 // is not a subtle degradation but a total one. Apps already scale
 // near_plane/far_plane off the scene radius for the cascades; a punctual light
 // in the same scene has no reason to disagree with them.
-static int compute_punctual_matrices(const Light* light, const ShadowSystem* ss, mat4* dest) {
+static int compute_punctual_matrices(const Light* light, const ShadowSystem* ss,
+                                     const IesProfile* profile, mat4* dest) {
     const float near_p = ss->near_plane, far_p = ss->far_plane;
 
     switch (light->type) {
@@ -816,7 +818,16 @@ static int compute_punctual_matrices(const Light* light, const ShadowSystem* ss,
     default: {
         // A spot's fov is its own cone, plus a margin so the outer edge is not
         // clipped by the frustum it is supposed to fill.
-        float fov = 2.0f * acosf(light->outerCutOff) * 1.15f; // outerCutOff = cos(half-angle)
+        //
+        // A PROFILED spot's cone is dead -- the profile replaced it -- so the
+        // frustum is fitted to the profile's angular support instead. Real IES
+        // skirts routinely reach past the authored cone, and fitting the cone
+        // anyway would leave that skirt lit and unshadowed, which reads as a
+        // light passing through walls.
+        float half_angle = acosf(light->outerCutOff); // outerCutOff = cos(half-angle)
+        if (profile)
+            half_angle = glm_rad(profile->support_deg);
+        float fov = 2.0f * half_angle * 1.15f;
         if (fov > glm_rad(175.0f))
             fov = glm_rad(175.0f);
         compute_perspective_light_space(light->global_position, light->direction, fov, near_p, far_p,
@@ -1494,8 +1505,9 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
             if (!light || light->shadow_layer < 0)
                 continue;
 
-            int layers =
-                compute_punctual_matrices(light, ss, &ss->punctual_matrices[light->shadow_layer]);
+            int layers = compute_punctual_matrices(
+                light, ss, ies_library_at(scene->ies_library, light->ies_profile),
+                &ss->punctual_matrices[light->shadow_layer]);
 
             // One scene traversal per layer -- this loop is the frame cost the
             // pool ceiling caps, and a point light pays six times a spot's.
@@ -1574,6 +1586,17 @@ void shadow_publish_to_postfx(const Scene* scene, PostFX* fx) {
         fx->fog_spot_atten[2] = 0.0f;
         fx->fog_spot_cos_inner = sp->cutOff;
         fx->fog_spot_cos_outer = sp->outerCutOff;
+        // ...and the same for the angular half: a profiled spot's shaft has to
+        // read the profile the floor pool reads, or the beam and the pool
+        // disagree. The roll comes from `up` orthonormalised against the axis,
+        // which is what light_cluster.c packs for the clustered path.
+        fx->fog_spot_ies_profile = sp->ies_profile;
+        vec3 proj;
+        glm_vec3_proj((float*)sp->up, fx->fog_spot_dir, proj);
+        glm_vec3_sub((float*)sp->up, proj, fx->fog_spot_up);
+        if (glm_vec3_norm(fx->fog_spot_up) < 1e-4f)
+            glm_vec3_ortho(fx->fog_spot_dir, fx->fog_spot_up);
+        glm_vec3_normalize(fx->fog_spot_up);
     }
 
     // The population no shadow map can serve: point and spot lights holding no

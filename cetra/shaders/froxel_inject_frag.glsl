@@ -86,6 +86,12 @@ uniform vec3 spotAtten;
 uniform float spotCosInner;
 uniform float spotCosOuter;
 uniform int spotShadowed;
+// This spot's IES profile, -1 for none, and the roll its asymmetry needs. Fed
+// through the fog block rather than read from the cluster list because this
+// shaft is the one light here that does NOT come from it -- it is published
+// standalone so it can carry its shadow map (spec 9.5).
+uniform int spotIesProfile;
+uniform vec3 spotUp;
 // The punctual shadow array and this spot's layer in it. Fed from postfx's own
 // fog block rather than by the punctual_shadow.glsl binder, the same separation
 // the cascade uniforms above keep.
@@ -279,8 +285,14 @@ void main() {
     if (spotEnabled == 1) {
         vec3 toL = spotPos - P;
         float d = length(toL);
-        // spotConeFactor's own ramp, so shaft and floor pool share one formula.
-        float cone = spotConeFactor(2.0, spotDir, spotCosInner, spotCosOuter, toL / max(d, 1e-4));
+        // spotConeFactor's own ramp, so shaft and floor pool share one formula --
+        // or the light's IES profile where it has one, for the same reason: the
+        // beam has to agree with the pool it casts, and a profile REPLACES the
+        // cone rather than multiplying it (spec 11.57).
+        vec3 spotL = toL / max(d, 1e-4);
+        float cone = spotIesProfile >= 0 ? iesProfile(spotIesProfile, spotL, spotDir, spotUp)
+                                         : spotConeFactor(2.0, spotDir, spotCosInner,
+                                                          spotCosOuter, spotL);
         if (cone > 0.0) {
             float atten = getDistanceAtt(d * d, spotAtten.x);
             float vis = 1.0;
@@ -329,10 +341,17 @@ void main() {
         float d = length(toL);
         float sqrDist = dot(toL, toL);
         float atten = getDistanceAtt(sqrDist, clusterLights[li].attenCutoff.x);
+        // A point light's ANGULAR term used to be nothing -- this loop never read
+        // dirType.xyz, because a bare point has no direction that means anything.
+        // An IES profile gives it one, and the air has to agree with the floor
+        // about it or a shaped downlight scatters a halo its own pool does not
+        // have (spec 11.57). punctualAngular answers 1 for an unprofiled point,
+        // so the un-profiled fog is unchanged.
+        float atten_angular = atten * punctualAngular(li, toL / max(d, 1e-4));
         // toL points at the light, so -toL/d is the direction it travels -- the
         // punctual analogue of the directional phase above.
         float phase = phaseHG(dot(-toL / max(d, 1e-4), -rayDir), anisotropy) * sunBoost;
-        S += clusterLights[li].colorIntensity.xyz * (atten * phase);
+        S += clusterLights[li].colorIntensity.xyz * (atten_angular * phase);
     }
 
     /*

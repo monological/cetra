@@ -1296,10 +1296,7 @@ void main() {
                 L = normalize(toLight);
                 attenuation = getDistanceAtt(dot(toLight, toLight),
                                              clusterLights[li].attenCutoff.x);
-                attenuation *=
-                    spotConeFactor(clusterLights[li].dirType.w, clusterLights[li].dirType.xyz,
-                                    clusterLights[li].attenCutoff.w,
-                                    clusterLights[li].shadowMisc.x, L);
+                attenuation *= punctualAngular(li, L);
                 lightCI = clusterLights[li].colorIntensity.xyz;
             }
             float NdotL = max(dot(N, L), 0.0);
@@ -1662,21 +1659,7 @@ void main() {
             vec3 toLight = lightPos - WorldPos;
             L = normalize(toLight);
             attenuation = getDistanceAtt(dot(toLight, toLight), clusterLights[li].attenCutoff.x);
-            // An IES profile REPLACES the analytic cone rather than multiplying
-            // it: the profile is the whole angular distribution, cutoff
-            // included, so applying both would render a falloff matching neither
-            // the file nor the authored cone (spec 11.57). A light with no
-            // profile takes the cone exactly as before.
-            int iesIdx = int(clusterLights[li].attenCutoff.y);
-            if (iesIdx >= 0) {
-                attenuation *= iesProfile(iesIdx, L, clusterLights[li].dirType.xyz,
-                                          clusterLights[li].upArea.xyz);
-            } else {
-                attenuation *=
-                    spotConeFactor(clusterLights[li].dirType.w, clusterLights[li].dirType.xyz,
-                                    clusterLights[li].attenCutoff.w,
-                                    clusterLights[li].shadowMisc.x, L);
-            }
+            attenuation *= punctualAngular(li, L);
             // Both terms reach EXACTLY zero over a real area -- the window at the
             // light's range, the cone outside its outer angle -- and cluster
             // assignment is a conservative sphere-vs-AABB, so a boundary cluster

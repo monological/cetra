@@ -453,6 +453,12 @@ typedef struct PostFX {
     vec3 fog_spot_atten;      // x = 1/range^2 (0 = unbounded), yz unused
     float fog_spot_cos_inner; // cutOff (cos inner half-angle)
     float fog_spot_cos_outer; // outerCutOff (cos outer half-angle)
+    // The spot's IES profile index, -1 for none, and the roll an asymmetric one
+    // needs. Carried here because this shaft is the one light the fog does NOT
+    // read from the cluster list -- it is published standalone so it can bring
+    // its shadow map -- and the beam must still agree with the pool it casts.
+    int fog_spot_ies_profile;
+    vec3 fog_spot_up;
     // Perspective spot shadow (Phase 2): occludes the beam by geometry.
     bool fog_spot_shadowed;    // a spot shadow map was rendered this frame
     mat4 fog_spot_light_space; // perspective proj * lookAt from the spot

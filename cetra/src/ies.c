@@ -306,6 +306,22 @@ static bool _parse_and_resample(const char* text, size_t len, const char* path, 
     out->v_lo = vert[0];
     out->v_hi = vert[n_vert - 1];
     out->peak_cd = peak;
+
+    // The angular support: the last vertical tap carrying anything. Read off the
+    // NORMALISED table so it means the same thing whatever the file's absolute
+    // scale, and taken as the tap's own angle rather than v_hi, because a file
+    // measured to 180 whose upper half is all zero has a support of 90.
+    out->support_deg = out->v_lo;
+    for (int iv = v_taps - 1; iv >= 0; iv--) {
+        bool live = false;
+        for (int ih = 0; ih < h_taps && !live; ih++)
+            live = out->table[iv * h_taps + ih] > 0.0f;
+        if (live) {
+            out->support_deg =
+                out->v_lo + (out->v_hi - out->v_lo) * (float)iv / (float)(v_taps - 1);
+            break;
+        }
+    }
     return true;
 }
 

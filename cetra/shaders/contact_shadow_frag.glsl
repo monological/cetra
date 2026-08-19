@@ -300,22 +300,23 @@ void main() {
             float ndl = hasN ? dot(n, dirVS) : 1.0;
 
             float typeF = clusterLights[li].dirType.w;
-            float cone = 1.0;
-            if (typeF == 2.0) {
-                // The cone axis is a world direction like the position, and view
-                // is rigid, so the cone survives the transform unchanged. Behind
-                // the type test because spotConeFactor answers 1 for everything
-                // else without reading it, and a point light is the common case.
-                vec3 coneDirVS = (view * vec4(clusterLights[li].dirType.xyz, 0.0)).xyz;
-                cone = spotConeFactor(typeF, coneDirVS, clusterLights[li].attenCutoff.w,
-                                      clusterLights[li].shadowMisc.x, dirVS);
+            // The cone axis and the profile's roll reference are world directions
+            // like the position, and view is rigid, so the angles survive the
+            // transform unchanged. Behind the test because a point light with no
+            // profile reads neither, and paying two mat4 multiplies per pixel for
+            // a value nothing consumes is the waste 11.56 measured here.
+            float angular = 1.0;
+            if (punctualNeedsFrame(li)) {
+                vec3 axisVS = (view * vec4(clusterLights[li].dirType.xyz, 0.0)).xyz;
+                vec3 upVS = (view * vec4(clusterLights[li].upArea.xyz, 0.0)).xyz;
+                angular = punctualAngular(li, dirVS, axisVS, upVS);
             }
             // An area panel is weighted from its CENTRE, which is a crude estimate
             // of an LTC integral and deliberately not the same judgement as the
             // one below: a centre is good enough to say how much light arrives,
             // and not good enough to say which way to march for it.
             float w = dot(clusterLights[li].colorIntensity.xyz, LUMA) *
-                      getDistanceAtt(sqrDist, clusterLights[li].attenCutoff.x) * cone *
+                      getDistanceAtt(sqrDist, clusterLights[li].attenCutoff.x) * angular *
                       max(ndl, 0.0);
             // Negated rather than `w <= 0.0` so a NaN is rejected too. It cannot
             // arrive from anything this file computes, but spotConeFactor
