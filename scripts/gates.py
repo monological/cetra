@@ -5401,15 +5401,32 @@ BEACH_AZIMUTHS = tuple(range(0, 360, 20))
 BEACH_RING_INNER = -1.0
 BEACH_RING_OUTER = 2.5
 # How far past the window the radial search may still look. Enough that the argmax can land
-# outside and fail the arm, short of the open water where the sun's glitter outshines any
-# shore -- see _beach_ring_hits.
+# outside and fail the arm -- which it does, at the two azimuths below -- and short of the
+# open water, where the bed goes on changing the image and can change it by more than the
+# shore band does. Measured across the range: 16 of 18 at margins 0.5 and 1.0, 15 at 2.0,
+# 14 at 4.0, and 11 from 8.0 out to an unbounded search, which FAILS. So the bound is
+# load-bearing and not tidiness.
+#
+# The brightness argmax this replaced was barely sensitive to the same sweep -- 6 of 18 out to
+# margin 2.0 and 5 from 4.0 on -- which says where its failure actually lived. 11.44 bounded
+# the ray to keep the SUN out of the search and the bound was worth one azimuth; the CROWN was
+# already inside the window's own inner half, where no bound could reach it. See
+# _beach_ring_hits.
 BEACH_RING_MARGIN = 1.0
-# 16 of 18 azimuths land in that window with the bed installed against 1 of 18 without it,
-# where the brightest thing on a ray is the sand crown itself or the sun's glitter path.
-# The two that miss WITH the bed are the two the glitter crosses, which is why this is a
-# count rather than a requirement on every azimuth.
+# 16 of 18 azimuths put the bed's largest effect in that window. The two that miss are still
+# the two the GLITTER crosses, as they were under the brightness statistic, but they now miss
+# for the opposite reason and it is worth knowing which: their peak is at r 8.6 and 8.9, just
+# seaward of the window, and it is NEGATIVE -- -114 and -86 luma. The bed is not adding foam
+# out there, it is SUPPRESSING a specular highlight, because shoaling changes the surface it
+# is reflected off. An unsigned argmax counts that as the bed's largest effect and it is one.
+# So this stays a count rather than a requirement on every azimuth.
+#
+# The bar is 13 and has never moved. It was written in 11.44 against a brightness argmax
+# that read 16, went red at 9 in 11.45 and 6 by 11.48, and reads 16 again under the
+# difference statistic -- the ring was there for all four of those specs and the arm could
+# not see it. Left at 13 deliberately: re-deriving a bar from the reading that made it green
+# is how an arm stops being able to fail.
 BEACH_RING_MIN_ON = 13
-BEACH_RING_MAX_OFF = 5
 # Radii for the turquoise ramp, on azimuths clear of the glitter. World radii on the dome,
 # so what depth each stands in comes from the mesh rather than from a screen row that has
 # to be re-measured whenever the framing moves.
@@ -5532,39 +5549,62 @@ def _beach_pixel(pix, w, h, project, radius, deg):
     return None
 
 
-def _beach_ring_hits(frame, project, window):
-    """How many azimuths put their brightest radial sample inside `window`.
+def _beach_ring_hits(on, off, project, window):
+    """How many azimuths put the BED'S LARGEST EFFECT inside `window`.
 
-    The brightest point along a ray outward from the island, rather than a foam threshold:
-    a threshold is a second calibration that would need its own justification, where the
-    ARGMAX needs none and answers the question the arm asks -- whether there is a bright
-    ring, and where.
+    The argmax of |with bed - without bed| along a ray outward from the island, rather
+    than a threshold on it: a threshold is a second calibration that would need its own
+    justification, where the ARGMAX needs none. That much is 11.44's reasoning and it
+    still holds -- what changed is the quantity, from brightness to the bed's effect on
+    it.
 
-    The ray STOPS just outside the window, and that is a correction rather than a tuning.
-    Searching on to r 16 put the ray far out into open water, where the sun's glitter path
-    lives -- so the arm was really asking "is the shore brighter than the sun", and it only
-    ever passed because 11.44's foam was a continuous collar bright enough to win. Once the
-    foam broke into clumps (11.45) the glitter won on five azimuths whose foam was perfectly
-    healthy, and the reported ring collapsed to 9 of 18 while the shore band was still there.
-    CLAUDE.md says of this fixture that the glitter owns the right of frame and every
-    brightness read is taken on the left; beach-shoal already honours that by choosing its
-    azimuths, and this is the same fact applied to a radial search. The margin past the
-    window is what still lets the arm FAIL: the argmax can land outside and be seen to.
+    BRIGHTNESS COULD NOT ANSWER THE QUESTION THE ARM ASKS. The ray crosses the DRY CROWN,
+    and sunlit sand and whitewater are the same brightness: measured at 800x600 the crown
+    peaks at 580-591 luma against a shore band at 570-607, so the argmax was decided by
+    ties of a few codes between two unrelated surfaces. At two azimuths the two peaks were
+    EQUAL and the crown won on walk order alone. That is what the reported 6 of 18 was --
+    not a missing ring. The band was intact underneath it the whole time, and visible in
+    the same rays as a window maximum the bed lifts from 527 to 572 and from 526 to 591.
+
+    11.44 already made this correction at the OUTER end, stopping the ray short of the
+    sun's glitter so the arm would stop asking "is the shore brighter than the sun", and
+    recorded the reasoning in the constants above. The crown is the same fact at the inner
+    end -- but stopping short of it is NOT available, because the window's own inner half
+    is dry beach by construction (BEACH_RING_INNER is negative, and deliberately: the
+    run-up climbs above the still line). An arm that started its walk at the window edge
+    would find sunlit sand just inside that edge -- median argmax 4.81 against a window
+    opening at 4.66 -- and report a green 18 of 18 for the wrong reason. Measured.
+
+    Differencing removes both competitors at once, and removes them structurally rather
+    than by choosing where to look. The bed does not touch dry sand, so dry sand differences
+    to nothing and cannot win: measured over the crown, 853 of 864 samples are bit-identical
+    between the two renders and the worst channel anywhere is 1 code, which is the output
+    dither's own LSB and an order below the floor. Not an assumption here either -- it is the
+    standing assertion of beach-surf-zone below, whose crown samples must read EXACTLY 0
+    moved, and that arm is green.
+
+    The magnitude floor is what carries the other half of the claim, "without the bed there
+    is no ring". It is not a new calibration: BEACH_DIFF_THRESH is the same LSB-vs-signal
+    threshold beach-surf-zone reads, and the peaks here clear it by a wide margin (20 to
+    114 against a floor of 8). A build whose bed did nothing produces no peak above dither
+    at any azimuth and scores zero.
     """
-    w, h, pix = frame
+    w, h, pix = on
+    _, _, poff = off
     stop = window[1] + BEACH_RING_MARGIN
     hits = []
     for deg in BEACH_AZIMUTHS:
-        best_r, best_l = float("nan"), -1.0
+        best_r, best_d = float("nan"), -1.0
         r = 1.0
         while r < stop:
             o = _beach_pixel(pix, w, h, project, r, deg)
             if o is not None:
-                luma = pix[o] + pix[o + 1] + pix[o + 2]
-                if luma > best_l:
-                    best_l, best_r = luma, r
+                d = abs((pix[o] + pix[o + 1] + pix[o + 2])
+                        - (poff[o] + poff[o + 1] + poff[o + 2]))
+                if d > best_d:
+                    best_d, best_r = d, r
             r += 0.05
-        hits.append(window[0] <= best_r <= window[1])
+        hits.append(window[0] <= best_r <= window[1] and best_d >= BEACH_DIFF_THRESH)
     return sum(hits)
 
 
@@ -5613,14 +5653,13 @@ def run_beach_gate(workdir):
     wo, ho, poff = _read_ppm(off)
     shore = _beach_waterline()
     window = (shore + BEACH_RING_INNER, shore + BEACH_RING_OUTER)
-    hits_on = _beach_ring_hits((w, h, pix), project, window)
-    hits_off = _beach_ring_hits((wo, ho, poff), project, window)
-    ok = hits_on >= BEACH_RING_MIN_ON and hits_off <= BEACH_RING_MAX_OFF
+    hits = _beach_ring_hits((w, h, pix), (wo, ho, poff), project, window)
+    ok = hits >= BEACH_RING_MIN_ON
     print(f"  beach-shoreline {'PASS' if ok else 'FAIL'}  waterline at r {shore:.2f} from the "
-          f"mesh; the brightest radial sample lands in [{window[0]:.2f}, {window[1]:.2f}] at "
-          f"{hits_on} of {len(BEACH_AZIMUTHS)} azimuths with the analytic bed (want "
-          f">={BEACH_RING_MIN_ON}) and {hits_off} without it (want <={BEACH_RING_MAX_OFF}: "
-          f"with no bed the brightest thing on the ray is the crown or the glitter)")
+          f"mesh; the bed's largest effect on the ray lands in [{window[0]:.2f}, "
+          f"{window[1]:.2f}] at {hits} of {len(BEACH_AZIMUTHS)} azimuths (want "
+          f">={BEACH_RING_MIN_ON}, each clearing {BEACH_DIFF_THRESH} luma so a bed that "
+          f"changed nothing scores zero)")
     if not ok:
         failures.append("beach-shoreline")
 

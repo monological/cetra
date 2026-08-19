@@ -1635,12 +1635,34 @@ this subsystem's arms have twice been green over a defect they structurally coul
    time they shipped. This is item 3's blind spot in a second location, which is the argument for
    treating it as a corpus property rather than a fixture's.
 
-7. **`beach-shoreline` is red and has been for three specs**, at 6 of 18 azimuths after 11.48 P6
-   and 7 of 18 before it — byte-identical to the line it failed on master, so it is pre-existing
-   rather than caused. It looks for a continuous bright ring at the waterline, and surf that is
-   crest lines rather than sheets is structurally harder for it to see, so **the arm may be what
-   needs rethinking rather than the renderer**. Booked here so it is a known red rather than an
-   ignored one; nobody has a working theory yet.
+7. **`beach-shoreline` was red for four specs and the renderer was never at fault.** It read 16
+   of 18 azimuths at 11.44, 9 after 11.45, 7 by the time 11.48 measured it on master and 6 after
+   that spec's P6 — and the shore ring was intact at every one of them. The arm took the brightest
+   sample along a ray outward from the island, and that ray crosses the DRY CROWN: sunlit sand
+   measures 580-591 luma against a shore
+   band at 570-607, so the statistic was competing whitewater against beach and being decided by
+   ties of a few codes — at two azimuths the peaks were EQUAL and the crown won on walk order.
+   Clumping the foam (11.45) did not remove the ring, it removed the last few codes of margin the
+   arm had been winning by. 11.44 had already made exactly this correction at the OUTER end of the
+   ray, stopping it short of the sun's glitter, and recorded the reasoning — but that bound is
+   worth **one azimuth** on the current build (6 of 18 bounded against 5 unbounded), because the
+   crown sits inside the window's own inner half, which no bound on the ray can reach: the window
+   starts a unit BELOW the waterline, deliberately, since the run-up climbs above the still line.
+   The correction was made at the end of the ray where it was cheap and never at the end where the
+   failure was. The arm now takes the argmax of |with bed − without bed| along the same
+   ray, which cannot read dry sand because the bed does not touch it — already asserted by
+   `beach-surf-zone`, whose crown samples must read exactly 0 moved. **16 of 18 against the same
+   unmoved bar of 13**, and the peak tracks the waterline when the sea level moves (5.70 → 7.75 →
+   9.15 as the mesh crossing goes 5.66 → 7.03 → 8.22), so it is testing the registration between
+   the analytic bed and the drawn mesh that this fixture exists to test.
+
+   **The transferable lesson is about argmax as a gate statistic.** An argmax needs no threshold,
+   which is why 11.44 chose one and why the replacement keeps one — but it is only meaningful when
+   nothing else in the search range can win, and that is a property of the SCENE, not of the
+   statistic. Here a second bright object sat in range from the day the arm was written, the arm
+   passed anyway on a margin of a few codes, and four specs of renderer changes were suspected
+   before the statistic was. Item 6's blind spot in a third form: a green arm was reporting
+   coverage it did not have.
 
 **Refs.** Tessendorf, *Simulating Ocean Water* (SIGGRAPH 2001 course); Johanson, *Real-time Water
 Rendering: Introducing the Projected Grid Concept* (2004) for the mesh that ships; Asirvatham & Hoppe
