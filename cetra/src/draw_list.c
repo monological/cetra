@@ -237,46 +237,41 @@ bool draw_list_build(DrawList* list, Scene* scene, uint64_t stamp, const LodSele
     return true;
 }
 
-// The object-space box the geometry this item draws actually occupies, which is
-// mesh->aabb only for a mesh that neither sways nor poses.
-//
-// Returns false when no bound can be established, which the caller reads as
-// visible. That is the honest answer rather than a fallback: culling on a bound
-// the geometry can leave drops something on screen, and there is no test in the
-// corpus that would catch it.
 // The box a skinned mesh's POSE occupies, in object space: each bone's own
 // bind-space vertices under that bone's matrix, plus the vertices no bone
-// claims. Left EMPTY (min > max) when nothing contributed, which is the same
-// sentinel the per-bone boxes carry.
-static void _posed_bounds(const Mesh* mesh, const AnimationState* pose, vec3 out_min,
-                          vec3 out_max) {
-    glm_vec3_fill(out_min, FLT_MAX);
-    glm_vec3_fill(out_max, -FLT_MAX);
+// claims. Left EMPTY when nothing contributed, which the caller tests for.
+static void _posed_bounds(const Mesh* mesh, const AnimationState* pose, AABB* out) {
+    aabb_empty(out);
 
     size_t bones = mesh->bone_aabb_count < pose->active_bone_count ? mesh->bone_aabb_count
                                                                    : pose->active_bone_count;
     for (size_t b = 0; b < bones; ++b) {
         const AABB* box = &mesh->bone_aabb[b];
-        if (box->min[0] > box->max[0])
+        if (aabb_is_empty(box))
             continue; // no vertex binds this bone, and FLT_MAX cannot be transformed
-        // The casts are cglm's const-incorrectness, the same one
-        // item_world_bounds carries: it reads these and declares them non-const
-        // anyway.
-        vec3 lo = {0.0f, 0.0f, 0.0f}, hi = {0.0f, 0.0f, 0.0f};
-        aabb_transform((float*)box->min, (float*)box->max, (vec4*)pose->bone_matrices[b], lo, hi);
-        glm_vec3_minv(out_min, lo, out_min);
-        glm_vec3_maxv(out_max, hi, out_max);
+        // The cast is cglm's const-incorrectness, the same one item_world_bounds
+        // carries: it reads the matrix and declares it non-const anyway.
+        // Zeroed for the same reason item_world_bounds zeroes its out-params:
+        // a write through a pointer reads as a use before write.
+        AABB posed = {{0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}};
+        aabb_transform((float*)box->min, (float*)box->max, (vec4*)pose->bone_matrices[b],
+                       posed.min, posed.max);
+        aabb_union(out, &posed);
     }
     // Already in this space, so no transform -- and an empty one unions to a
     // no-op, which is why it needs no flag saying whether it is there.
-    glm_vec3_minv(out_min, (float*)mesh->bone_rest_aabb.min, out_min);
-    glm_vec3_maxv(out_max, (float*)mesh->bone_rest_aabb.max, out_max);
+    aabb_union(out, &mesh->bone_rest_aabb);
 }
 
-static bool _item_bounds(const DrawItem* item, const CullView* view, vec3 out_min, vec3 out_max) {
+// The object-space box the geometry this item draws actually occupies, which is
+// mesh->aabb only for a mesh that neither sways nor poses.
+//
+// Returns false when no bound can be established, which the caller reads as
+// visible. That is the honest answer rather than a fallback: culling on a bound
+// the geometry can leave drops something on screen.
+static bool _item_bounds(const DrawItem* item, const CullView* view, AABB* out) {
     const Mesh* mesh = item->mesh;
-    glm_vec3_copy((float*)mesh->aabb.min, out_min);
-    glm_vec3_copy((float*)mesh->aabb.max, out_max);
+    *out = mesh->aabb;
 
     // A skinned mesh's import AABB describes its BIND pose, which is a
     // different shape from the one being drawn -- so it is replaced rather than
@@ -292,33 +287,33 @@ static bool _item_bounds(const DrawItem* item, const CullView* view, vec3 out_mi
     if (mesh->is_skinned && view->pose && view->pose->active_bone_count > 0) {
         if (mesh->skeleton != view->pose->skeleton || !mesh->bone_aabb)
             return false;
-        _posed_bounds(mesh, view->pose, out_min, out_max);
-        if (out_min[0] > out_max[0])
+        _posed_bounds(mesh, view->pose, out);
+        if (aabb_is_empty(out))
             return false; // a skinned mesh that binds nothing
     }
 
     // Wind is added in OBJECT space (object_position.glsl) and the caller
     // transforms this box afterwards, so the margin lands in the same space the
     // displacement does and picks up the node's scale exactly as it does.
+    //
+    // That the margin really is one is checked by --wind-bound-probe, which
+    // drives windOffset itself and compares what it measures against this.
     float margin = wind_max_offset(view->wind, mesh->material->wind_response,
                                    mesh->material->wind_mode, mesh->wind_flex_max,
                                    mesh->wind_leaf_max);
-    if (margin > 0.0f) {
-        glm_vec3_subs(out_min, margin, out_min);
-        glm_vec3_adds(out_max, margin, out_max);
-    }
+    if (margin > 0.0f)
+        aabb_expand(out, margin);
     return true;
 }
 
 bool draw_item_visible(const DrawItem* item, const CullView* view) {
     if (!view || !view->frustum)
         return true;
-    // Zeroed for the same reason item_world_bounds zeroes its out-params:
-    // static analysis reads a write through a pointer as a use before write.
-    vec3 lo = {0.0f, 0.0f, 0.0f}, hi = {0.0f, 0.0f, 0.0f};
-    if (!_item_bounds(item, view, lo, hi))
+    AABB box;
+    if (!_item_bounds(item, view, &box))
         return true;
-    return frustum_test_aabb_transformed(view->frustum, lo, hi, item->node->global_transform);
+    return frustum_test_aabb_transformed(view->frustum, box.min, box.max,
+                                         item->node->global_transform);
 }
 
 bool draw_run_can_join(const DrawItem* head, const DrawItem* next, const CullView* view) {

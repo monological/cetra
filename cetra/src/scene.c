@@ -948,8 +948,21 @@ void print_scene(const Scene* scene) {
 }
 
 
-static void _compute_node_bounds(SceneNode* node, vec3 scene_min, vec3 scene_max,
-                                 bool* initialized) {
+// The scene's world bound, accumulated over every mesh's eight transformed
+// corners.
+//
+// The corners are enumerated rather than run through aabb_transform, and that is
+// deliberate: aabb_transform is the Arvo centre/extents bound, a conservative
+// SUPERSET of the true hull under rotation, so adopting it here would enlarge
+// the scene box and move the GI volume fit, the reflection probe's proxy, the
+// fog anchor and the camera framing with it. Same reason the two are not merged.
+//
+// It accumulates through aabb_add_point, which folds via cglm's glm_min rather
+// than fminf. They differ on NaN -- fminf returns the non-NaN operand, glm_min
+// returns the second -- so a NaN corner now poisons the box instead of being
+// quietly dropped. Nothing in the corpus produces one, and a scene box built
+// from a NaN transform is better loud than plausible.
+static void _compute_node_bounds(SceneNode* node, AABB* bounds) {
     if (!node)
         return;
 
@@ -991,24 +1004,12 @@ static void _compute_node_bounds(SceneNode* node, vec3 scene_min, vec3 scene_max
             vec4 corner4 = {corners[c][0], corners[c][1], corners[c][2], 1.0f};
             vec4 world_corner;
             glm_mat4_mulv(node->global_transform, corner4, world_corner);
-
-            if (!*initialized) {
-                glm_vec3_copy((vec3){world_corner[0], world_corner[1], world_corner[2]}, scene_min);
-                glm_vec3_copy((vec3){world_corner[0], world_corner[1], world_corner[2]}, scene_max);
-                *initialized = true;
-            } else {
-                scene_min[0] = fminf(scene_min[0], world_corner[0]);
-                scene_min[1] = fminf(scene_min[1], world_corner[1]);
-                scene_min[2] = fminf(scene_min[2], world_corner[2]);
-                scene_max[0] = fmaxf(scene_max[0], world_corner[0]);
-                scene_max[1] = fmaxf(scene_max[1], world_corner[1]);
-                scene_max[2] = fmaxf(scene_max[2], world_corner[2]);
-            }
+            aabb_add_point(bounds, world_corner);
         }
     }
 
     for (size_t i = 0; i < node->children_count; i++) {
-        _compute_node_bounds(node->children[i], scene_min, scene_max, initialized);
+        _compute_node_bounds(node->children[i], bounds);
     }
 }
 
@@ -1019,13 +1020,20 @@ void compute_scene_bounds(Scene* scene, vec3 out_min, vec3 out_max) {
         return;
     }
 
-    bool initialized = false;
-    _compute_node_bounds(scene->root_node, out_min, out_max, &initialized);
+    // The empty sentinel replaces the `bool* initialized` out-param this used to
+    // thread through the walk -- the same flag-beside-a-box idiom 11.53's review
+    // deleted from Mesh, and the last one in the tree.
+    AABB bounds;
+    aabb_empty(&bounds);
+    _compute_node_bounds(scene->root_node, &bounds);
 
-    if (!initialized) {
+    if (aabb_is_empty(&bounds)) {
         glm_vec3_zero(out_min);
         glm_vec3_zero(out_max);
+        return;
     }
+    glm_vec3_copy(bounds.min, out_min);
+    glm_vec3_copy(bounds.max, out_max);
 }
 
 void compute_scene_center_and_radius(Scene* scene, vec3 out_center, float* out_radius) {

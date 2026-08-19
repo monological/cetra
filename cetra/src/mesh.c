@@ -105,8 +105,7 @@ Mesh* create_mesh() {
     mesh->bone_aabb_count = 0;
     // Seeded EMPTY, not left to the allocator: this box is read whenever it is
     // not empty, so garbage here is a bound the geometry can leave.
-    glm_vec3_fill(mesh->bone_rest_aabb.min, FLT_MAX);
-    glm_vec3_fill(mesh->bone_rest_aabb.max, -FLT_MAX);
+    aabb_empty(&mesh->bone_rest_aabb);
 
     return mesh;
 }
@@ -193,8 +192,7 @@ void calculate_aabb(Mesh* mesh) {
         vec3 vertex = {mesh->vertices[i * 3 + 0], mesh->vertices[i * 3 + 1],
                        mesh->vertices[i * 3 + 2]};
 
-        glm_vec3_minv(aabb->min, vertex, aabb->min);
-        glm_vec3_maxv(aabb->max, vertex, aabb->max);
+        aabb_add_point(aabb, vertex);
     }
 }
 
@@ -225,8 +223,7 @@ static void measure_bone_bounds(Mesh* mesh) {
     free(mesh->bone_aabb);
     mesh->bone_aabb = NULL;
     mesh->bone_aabb_count = 0;
-    glm_vec3_fill(mesh->bone_rest_aabb.min, FLT_MAX);
-    glm_vec3_fill(mesh->bone_rest_aabb.max, -FLT_MAX);
+    aabb_empty(&mesh->bone_rest_aabb);
 
     if (!mesh->is_skinned || !mesh->bone_ids || !mesh->bone_weights || !mesh->skeleton)
         return;
@@ -241,10 +238,8 @@ static void measure_bone_bounds(Mesh* mesh) {
 
     // An empty box per bone, marked by min > max, so a bone this mesh does not
     // bind is skipped at cull rather than contributing a box around the origin.
-    for (size_t b = 0; b < bones; ++b) {
-        glm_vec3_fill(mesh->bone_aabb[b].min, FLT_MAX);
-        glm_vec3_fill(mesh->bone_aabb[b].max, -FLT_MAX);
-    }
+    for (size_t b = 0; b < bones; ++b)
+        aabb_empty(&mesh->bone_aabb[b]);
 
     for (size_t i = 0; i < mesh->vertex_count; ++i) {
         vec3 v = {mesh->vertices[i * 3 + 0], mesh->vertices[i * 3 + 1], mesh->vertices[i * 3 + 2]};
@@ -255,14 +250,12 @@ static void measure_bone_bounds(Mesh* mesh) {
             if (id < 0 || (size_t)id >= bones || w <= 0.0f)
                 continue;
             total += w;
-            glm_vec3_minv(mesh->bone_aabb[id].min, v, mesh->bone_aabb[id].min);
-            glm_vec3_maxv(mesh->bone_aabb[id].max, v, mesh->bone_aabb[id].max);
+            aabb_add_point(&mesh->bone_aabb[id], v);
         }
         // The shader's own threshold, mirrored: below it skinMatrix hands back
         // identity and this vertex draws where it sits.
         if (total < 0.001f) {
-            glm_vec3_minv(mesh->bone_rest_aabb.min, v, mesh->bone_rest_aabb.min);
-            glm_vec3_maxv(mesh->bone_rest_aabb.max, v, mesh->bone_rest_aabb.max);
+            aabb_add_point(&mesh->bone_rest_aabb, v);
         }
     }
 }
