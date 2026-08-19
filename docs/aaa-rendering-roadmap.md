@@ -2106,9 +2106,14 @@ The shortlist is exhausted, and 23 was the only one of the five that needed noth
 
 **31 (E6) was the one to build next, and it is now built.** An earlier draft of this line read
 "nothing else on this table is worth 250 ms", which priced E6 at the whole of the opaque pass before
-anything had measured how much of that pass is redundant. The real figures are **−41% on forest and
-−64% on the interior** — smaller than the invented number, and arrived at with the crossover, the
-worst case and the withdrawn claims all recorded. **37 (E7, occlusion culling) should be re-priced
+anything had measured how much of that pass is redundant. The real figure is **−45% on forest**
+(opaque 306 → 169 ms, from the ORDERING alone) — smaller than the invented number, and arrived at
+with the crossover, the worst case and the withdrawn claims all recorded. **This paragraph read
+"−41% on forest and −64% on the interior" and both halves were wrong**: the interior's −64% is one
+of the seven claims 11.31 withdrew, and that scene is now recorded as one where the prepass *costs*
+6.7%. Row 31 has said so since 11.31 while this line went on contradicting it — the same rot the row
+above describes, in the paragraph that tells you what to build next. **37 (E7, occlusion culling)
+should be re-priced
 against them**: it was booked as not-yet-justified on the grounds that E6 would get most of the
 benefit for less, and E6 doing so on opaque content is now measured rather than assumed.
 
