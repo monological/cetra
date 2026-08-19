@@ -2024,6 +2024,20 @@ against a float shader. And the gate group opted out of the arm-list checker cit
 verdict now returns it — took the checker from 9 groups to 10.
 
 None of the three was found by looking at the picture, and none would have been.
+
+**11.54 closed the gap the review left open.** E8's bound and the shader it bounds share their
+coefficients and cannot share their arithmetic, so a term added to `windOffset` made the bound
+non-conservative with nothing to say so — and `cull-margin` could not see it, because it pins the
+bound at one camera, one frame and one wind field. `--wind-bound-probe` drives `windOffset` itself
+through transform feedback and prints the measured travel beside the claimed bound.
+
+**A CPU port was built first and thrown away, and the numbers are why.** It catches a term added to
+the model (0.966 → 1.258) and reads *straight through* a term added to the GLSL (0.966, unmoved) —
+which is the failure the probe exists for. Capturing the shader catches that same edit at 1.258 and
+leaves no third copy. The two independent routes agree to six decimal places, which is its own
+evidence. `cull-bound` asserts in both directions: `measured <= bound` for correctness, and a floor
+on the tightest sweep so a grid that stopped sweeping reads as a failure rather than as a safer
+bound.
 **Depends on:** nothing. **Wall 1:** unaffected.
 
 ## Sequencing — tiers & rationale
@@ -2137,6 +2151,7 @@ not scheduled.
 | 35c | **Unbooked, shipped anyway** | — | **11.50 and 11.51 appear nowhere else in this document.** 11.50 made `foliage_shadows` a material row, so alpha-masked foliage arriving through a FILE can shadow — it had worked only for meshes built in C. 11.51 is the ivy arcade: the first asset authoring UV1 wind data, and a new `wind-uv` gate group. Both are content-driven work with no roadmap row, which is the same pattern D5 records — the table is a backlog, and the work keeps arriving from outside it. |
 | 36 | D4 Terrain | XL | Only after E5; a clipmap without instancing/LOD is a mega-mesh with extra steps. `apps/forest` is a *consumer* of E5, not this — fixed tiles with per-tile chains, fine at 1 km² and explicitly not the answer above it. **Inherits D3's clipmap at `8d04658`** — the rings-over-a-mip-pyramid half water never used is the half terrain needs — and its T-junction stitch, which is a better fix for the crack risk E5 left open than locking borders. |
 | 37 | E7 Occlusion culling | L | Booked so the gap is visible, **not because a measurement demands it**, and 11.31 lowers the price further rather than raising it: forest's opaque lane already runs at complexity 1.08 from ordering alone, so there is little redundant shading left to remove, and the one thing that reached 0.72 — the prepass — lost on the clock anyway because the extra submission cost more than the fragments it saved. An occlusion pass is a bigger version of that same trade. `assets/overdraw_layers.gltf` is the instrument to price it with. |
+| 38 | E10 Integer-bit hashes | S | **Booked by 11.54, which deliberately did not do it.** Every stochastic site in the tree keys off `fract(sin(x) · 43758.5453)`, which is precision-sensitive and driver-variable — `sin` at a large argument is implementation-defined in its last bits and `fract` of the product amplifies that across the whole range. A PCG or Wang integer hash would be exactly reproducible; GLSL 330 has `uint` and bitwise ops, so nothing blocks it. Not folded into 11.54 because it is a **behaviour** change wherever a hash is live, where that spec's hash phase was a 0 px assertion — and because `ssr_frag.glsl:187` has already measured what re-forming a hash costs on a ray-marching consumer: **31,800 px**. Price it against that, not against tidiness. |
 
 **If only five ever get built: 20 -> 21 -> 22 -> 23 -> 24.** One afternoon, then three items that each
 reuse a shipped subsystem rather than building new machinery, then the instrument the rest needs.
