@@ -52,6 +52,41 @@ typedef struct Exposure {
     bool automatic; // adapt to the scene's metered luminance
     float key;      // middle grey the metered mean is mapped to (0.18)
 
+    // Fraction of the population kept, by luminance order: everything below
+    // `meter_low` and above `meter_high` is discarded before the mean is taken.
+    //
+    // Over POPULATION, not over the value range, which is what makes them
+    // survive the scene being scaled -- "ignore the darkest tenth" holds at any
+    // brightness where "ignore anything under 0.18 nits" does not. That
+    // distinction is the whole reason these exist: the absolute floor they
+    // replaced cost 1.61 stops of scale-covariance on a dim scene (spec 11.52).
+    //
+    // The defaults TRIM TAILS rather than re-centre the metering, which is a
+    // deliberate divergence from UE's 0.80/0.983. Those are tuned against UE's
+    // own key and tonemapper; metering the brightest fifth of the scene against
+    // a 0.18 key here would darken every frame substantially, and re-keying to
+    // match is a look decision this spec did not take.
+    float meter_low;
+    float meter_high;
+
+    // Bounds on the metered luminance, as log2 cd/m^2 (UE's Min/Max Brightness).
+    // Inert by default -- they span wider than the histogram does, so a scene has
+    // to opt into being clamped. Their job is to stop a pathological frame (a
+    // camera inside geometry, a fully black loading frame) walking the exposure
+    // somewhere it cannot walk back from within the adaptation rate.
+    float meter_min_log2;
+    float meter_max_log2;
+
+    // Per-FRAME blend rates, separately for a scene getting brighter and one
+    // getting darker -- a real eye dilates slower than it contracts, and UE
+    // splits these for the same reason.
+    //
+    // Per frame and not per second: a headless run of N frames must adapt
+    // identically every time, which is why this is not driven off the frame
+    // clock. Equal by default, so the split costs nothing until asked for.
+    float adapt_rate_up;
+    float adapt_rate_down;
+
     // Last frame's metered geometric-mean luminance, in ABSOLUTE scene radiance
     // (the meter divides the pre-exposure back out). One frame stale by
     // construction: this frame's value cannot exist before this frame is shaded,

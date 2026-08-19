@@ -9,7 +9,6 @@ out vec4 FragColor;
 #include "view.glsl"
 
 uniform sampler2D hdrTex; // Resolved linear HDR scene
-uniform float autoKey;    // Middle-gray target; ALSO the metering floor (see below)
 
 void main()
 {
@@ -25,21 +24,22 @@ void main()
     // sun legitimately exceeds -- the meter would read it as overcast.
     vec3 hdr = min(texture(hdrTex, TexCoords).rgb, vec3(WS_SCENE_MAX)) * oneOverPreExposure;
     float lum = dot(hdr, vec3(0.2126, 0.7152, 0.0722));
-    // Clamp the metered range so extremes can't hijack the average. Both bounds
-    // are ABSOLUTE cd/m^2, because the conversion above already happened.
+    // A NUMERIC guard, and nothing else. log2(0) is -INF, which would poison the
+    // histogram's sum and reach the CPU as a measurement it can only refuse; the
+    // value is twenty-odd stops below anything a scene contains, so it decides
+    // nothing about metering.
     //
-    // The floor is the key itself: texels darker than the key meter AS the key,
-    // so the mean can never fall below it and the auto gain (key / mean) tops
-    // out at 1x -- auto-exposure only ever DARKENS an over-bright scene.
-    // Boosting dark scenes is what it must not do: a subject framed against a
-    // black void (no environment) would otherwise meter low and blow out.
+    // Both real bounds used to live here and both were ABSOLUTE cd/m^2. The
+    // floor was the key itself -- texels darker than the key metered AS the key,
+    // which made "auto only darkens" structural -- and the ceiling was 1e6,
+    // stopping one sun pixel crushing the average. 11.52 replaced them with
+    // percentile rejection in lum_reduce_frag, because an absolute threshold is
+    // not scale-covariant: on a scene metering near the key, most of the frame
+    // clamped UP and inflated the mean 3.05x, costing 1.61 stops between a scene
+    // and the same scene at 1000x. A percentile over POPULATION survives that.
     //
-    // The ceiling stops one sun pixel from crushing everything else. It has to
-    // sit well above any plausible scene MEAN, which in nits is a much bigger
-    // number than it looks: an overcast sky is ~8000 and a sunlit white surface
-    // ~1e4, so the old 10000 was ordinary daylight rather than the unreachable
-    // guard it was when 1.0 meant white. At that value an exterior metered as
-    // overcast no matter how bright it actually was.
-    lum = clamp(lum, autoKey, 1.0e6);
+    // The only-darkens invariant moved with it, to the fminf in
+    // exposure_auto_gain, which is now the whole of it rather than a backstop.
+    lum = max(lum, 1.0e-8);
     FragColor = vec4(log2(lum), 0.0, 0.0, 1.0);
 }

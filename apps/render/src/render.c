@@ -327,7 +327,9 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->shadow_softness = -1.0f;      // -1 = keep the engine default
     args->msm_blur = -1.0f;             // -1 = keep the engine default
     args->msm_bleed = -1.0f;            // -1 = keep the engine default
-    args->auto_exposure_override = -1;  // -1 = unset; an authored exposure then pins
+    args->auto_exposure_override = -1;
+    args->meter_low = -1.0f;
+    args->meter_high = -1.0f;  // -1 = unset; an authored exposure then pins
     args->oit = -1;                     // -1 = unset; both default ON in the engine
     args->oit_moments = -1;
     args->sun_elevation = -999.0f; // -999 = keep the sky default
@@ -720,6 +722,18 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->emissive_light_probe = 1;
         } else if (strcmp(argv[i], "--exposure-probe") == 0) {
             args->exposure_probe = 1;
+        } else if (strcmp(argv[i], "--meter-low") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: --meter-low expects a fraction\n");
+                return -1;
+            }
+            args->meter_low = (float)atof(argv[i]);
+        } else if (strcmp(argv[i], "--meter-high") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: --meter-high expects a fraction\n");
+                return -1;
+            }
+            args->meter_high = (float)atof(argv[i]);
         } else if (strcmp(argv[i], "--no-water") == 0) {
             // Does NOT imply --water, obviously, and it wins over it: this is the
             // escape hatch from a scene file that authors a surface.
@@ -2028,6 +2042,10 @@ int main(int argc, char** argv) {
         // measurement on a pinned frame -- and it is worth being able to observe
         // rather than having the flag refuse.
         ex->probe = args.exposure_probe != 0;
+        if (args.meter_low >= 0.0f)
+            ex->meter_low = args.meter_low;
+        if (args.meter_high >= 0.0f)
+            ex->meter_high = args.meter_high;
     }
     if (args.no_ssao && engine->postfx) {
         engine->postfx->ssao_enabled = false;

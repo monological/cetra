@@ -20,6 +20,19 @@
 // and could not move.
 #define EXPOSURE_MAX_STOPS_DOWN 20.0f
 
+// Default per-FRAME blend toward the measurement, and the deadband that follows
+// it. Both used to live in lum_adapt_frag.glsl; they are policy, so they belong
+// with the rest of it now that the value is read back to the CPU anyway. The
+// rate is only the DEFAULT since 11.52 -- adapt_rate_up/down are the live
+// values, and a caller may split them.
+#define EXPOSURE_ADAPT_RATE 0.04f
+// An exponential blend never quite arrives, so without a snap the resting value
+// depends on the approach path -- which async texture-load timing perturbs, and
+// which would make two equal-length headless runs differ. Snapping inside ~1%
+// makes steady state a pure function of the scene. Measured: it engages by
+// frame 12 and the adaptation then holds no history at all (spec 11.52 P0).
+#define EXPOSURE_ADAPT_SNAP 0.01f
+
 void exposure_init(Exposure* ex) {
     if (!ex)
         return;
@@ -29,6 +42,40 @@ void exposure_init(Exposure* ex) {
     ex->bias_stops = 0.0f;
     ex->automatic = true;
     ex->key = 0.18f;
+
+    // Aggressive at the bottom, and it has to be. A meter that includes the
+    // black background is measuring the background: where no geometry was drawn
+    // the buffer holds exactly 0, and zero times a thousand is still zero, so
+    // that population never scales with the scene. Measured on cornell_point at
+    // x1000, the raw metered value should move 9.966 stops and moves:
+    //
+    //   0.10 / 0.90   3.848 stops   (-6.118 error -- the meter reads background)
+    //   0.50 / 0.95   9.832 stops   (-0.134)
+    //   0.70 / 0.95   9.961 stops   (-0.005)
+    //
+    // Which is the same reason UE's Low Percent defaults to 80 rather than to
+    // something mild. 0.50 measures nearly as straight but pins the gain at 1.0
+    // on both test scenes -- accurate and inert, which is worse than useful.
+    ex->meter_low = 0.70f;
+    ex->meter_high = 0.95f;
+
+    // 1e-4 to 1e6 cd/m^2. The upper bound is the old per-texel metering ceiling,
+    // moved here: it is the same protection expressed on the metered SCALAR
+    // rather than on every texel, which is what makes it compatible with a
+    // percentile (a per-texel clamp is not scale-covariant; a bound on the
+    // answer is a different statement and a legitimate one -- it is UE's Max
+    // Brightness).
+    //
+    // NOT inert, and the reason is a measured runaway. Without an upper bound a
+    // bright scene drives the gain to the 20-stop floor, pre-exposure collapses
+    // past fp16's subnormals in the HDR buffer, and the meter -- which divides
+    // pre-exposure back out -- amplifies what is left into millions of nits and
+    // holds the gain pinned there. That is a stable fixed point and it is wrong.
+    ex->meter_min_log2 = -13.3f;
+    ex->meter_max_log2 = 19.93f;
+
+    ex->adapt_rate_up = EXPOSURE_ADAPT_RATE;
+    ex->adapt_rate_down = EXPOSURE_ADAPT_RATE;
 
     // Off by default: every scene authored before the physical camera existed
     // expects the linear multiplier, and switching silently would rescale all
@@ -69,12 +116,17 @@ float exposure_auto_gain(const Exposure* ex) {
         return 1.0f;
     if (!(ex->adapted_luminance > 0.0f))
         return 1.0f;
-    // Capped at 1: auto-exposure only ever DARKENS an over-bright scene. The
-    // metering floor equals the key, so the measured mean cannot fall below it
-    // and this cannot exceed 1 -- but clamp anyway, because that invariant lives
-    // in a shader and this is the code depending on it. Brightening is what it
-    // must not do: a subject framed against a black void meters low and would
-    // blow out.
+    // Capped at 1: auto-exposure only ever DARKENS an over-bright scene.
+    // Brightening is what it must not do -- a subject framed against a black
+    // void meters low and would blow out.
+    //
+    // THIS LINE IS NOW THE WHOLE GUARANTEE. It used to be belt-and-braces over a
+    // metering floor pinned at the key, which made a sub-key mean impossible in
+    // the first place; the comment here said it clamped "anyway, because that
+    // invariant lives in a shader and this is the code depending on it". 11.52
+    // deleted that floor -- it was an ABSOLUTE threshold and cost 1.61 stops of
+    // scale-covariance -- so the shader can and does now report a mean below the
+    // key, and nothing but this fminf stops it becoming a brightening gain.
     float gain = ex->key / ex->adapted_luminance;
     return fminf(fmaxf(gain, exp2f(-EXPOSURE_MAX_STOPS_DOWN)), 1.0f);
 }
@@ -82,16 +134,6 @@ float exposure_auto_gain(const Exposure* ex) {
 float exposure_multiplier(const Exposure* ex) {
     return exposure_camera_multiplier(ex) * exposure_auto_gain(ex);
 }
-
-// Per-FRAME blend toward the measurement, and the deadband that follows it.
-// Both used to live in lum_adapt_frag.glsl; they are policy, so they belong
-// with the rest of it now that the value is read back to the CPU anyway.
-#define EXPOSURE_ADAPT_RATE 0.04f
-// An exponential blend never quite arrives, so without a snap the resting value
-// depends on the approach path -- which async texture-load timing perturbs, and
-// which would make two equal-length headless runs differ. Snapping inside ~1%
-// makes steady state a pure function of the scene.
-#define EXPOSURE_ADAPT_SNAP 0.01f
 
 void exposure_submit_measurement(Exposure* ex, float log2_luminance) {
     if (!ex)
@@ -102,12 +144,25 @@ void exposure_submit_measurement(Exposure* ex, float log2_luminance) {
     if (!isfinite(log2_luminance))
         return;
 
-    float adapted = log2_luminance;
+    // Clamp before blending, not after: the bound is on what the scene is
+    // allowed to have measured, so a pathological frame never enters the
+    // history. Clamping the blended value instead would let it sit pinned at the
+    // bound while the real measurement walked further away, and then crawl back
+    // at the adaptation rate once the frame recovered.
+    float target = fminf(fmaxf(log2_luminance, ex->meter_min_log2), ex->meter_max_log2);
+
+    float adapted = target;
     if (ex->adapted_valid) {
         float prev = log2f(ex->adapted_luminance);
-        adapted = prev + (log2_luminance - prev) * EXPOSURE_ADAPT_RATE;
-        if (fabsf(adapted - log2_luminance) < EXPOSURE_ADAPT_SNAP)
-            adapted = log2_luminance;
+        // Which rate applies is decided by the direction the SCENE moved, in
+        // luminance -- a target above `prev` is a brightening scene, which the
+        // eye follows by stopping down. Naming them for the scene rather than
+        // for the gain is what keeps "up" meaning the same thing here as it does
+        // in the GUI.
+        float rate = target > prev ? ex->adapt_rate_up : ex->adapt_rate_down;
+        adapted = prev + (target - prev) * fminf(fmaxf(rate, 0.0f), 1.0f);
+        if (fabsf(adapted - target) < EXPOSURE_ADAPT_SNAP)
+            adapted = target;
     }
 
     float lum = exp2f(adapted);

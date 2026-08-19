@@ -3328,9 +3328,6 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             glUseProgram(fx->lum_measure_program->id);
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, scene_tex);
-            // Metering floor == key, which is what makes "auto only darkens"
-            // structural rather than a rule the C side has to remember.
-            uniform_set_float(fx->lum_measure_program->uniforms, "autoKey", fx->exposure->key);
             draw_fullscreen_quad(fx->quad_vao);
 
             // Bin, then collapse. Two draws of 64 and 1 fragments -- the cost
@@ -3350,11 +3347,8 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             glUseProgram(fx->lum_reduce_program->id);
             glBindTexture(GL_TEXTURE_2D, fx->lum_hist_texture);
             uniform_set_int(fx->lum_reduce_program->uniforms, "binCount", LUM_HISTOGRAM_BINS);
-            // Keeping the whole population reproduces the geometric mean the mip
-            // chain used to give, exactly -- the histogram carries each bin's SUM,
-            // so no resolution is lost to binning. The percentiles become
-            // authorable in P2; until then this pass is a no-op by construction.
-            uniform_set_vec2(fx->lum_reduce_program->uniforms, "percentiles", (vec2){0.0f, 1.0f});
+            uniform_set_vec2(fx->lum_reduce_program->uniforms, "percentiles",
+                             (vec2){fx->exposure->meter_low, fx->exposure->meter_high});
             draw_fullscreen_quad(fx->quad_vao);
 
             float measured = 0.0f;
