@@ -8,6 +8,8 @@
 // For SHORE_CHAIN_COLS / SHORE_CHAIN_HISTORY, which size the shore film block below. The
 // solver owns those dimensions; this file only lays them out for std140.
 #include "shore_chain.h"
+// Same relationship: ies.h owns the profile ceiling, this file only lays it out.
+#include "ies.h"
 
 // Uniform-buffer plumbing for std140 blocks (first used by clustered forward
 // lighting, spec 9.1). GLSL 330 cannot write layout(binding=N) -- that
@@ -25,6 +27,7 @@
 #define UBO_BINDING_VIEW            3
 #define UBO_BINDING_INSTANCES       4
 #define UBO_BINDING_SHORE_FILM      5
+#define UBO_BINDING_IES             6
 
 // std140 byte sizes of the engine's blocks, asserted against the C mirror
 // structs (light_cluster.h) and validated against the driver's
@@ -79,6 +82,44 @@
 // The tips must fill whole vec4 rows, or the division above silently truncates the ring.
 _Static_assert((UBO_SHORE_FILM_COLS * UBO_SHORE_FILM_SLOTS) % 4 == 0,
                "the shore film's tip array must be a whole number of vec4 rows");
+
+/*
+ * IES photometric profiles (spec 11.57), and why they cost no sampler either.
+ *
+ * The roadmap deferred asymmetric profiles "rather than paying a unit for the symmetric 90%",
+ * which is a Wall 1 argument that assumes a 2D table means a TEXTURE. It does not: a block
+ * costs BYTES, and this one is its own, so the symmetric and asymmetric cases differ only in
+ * stride and both ship.
+ *
+ * ITS OWN BLOCK RATHER THAN ROOM IN LightsBlock, and that is not a preference. ubo_upload
+ * orphans the whole allocation and light_cluster.c rewrites only the live prefix
+ * (offsetof(cluster_lights) + N * sizeof(GpuPackedLight)), so a table appended after the
+ * lights would be undefined every frame; one placed before them would be re-sent on every
+ * render_current_scene invocation, which a probe-capture frame enters seven times. Uploaded
+ * once at load, here, it is touched by neither.
+ *
+ * TWO INDEPENDENT LIMITS, because one would have to be sized for the worst case and waste the
+ * budget on the common one. IES_MAX_PROFILES caps how many DESCRIPTORS there are;
+ * IES_POOL_FLOATS caps the bytes they share. A profile spends only its own v_taps * h_taps, so
+ * a symmetric one costs 32 floats against a fully asymmetric one's 512 -- sixteen to one. The
+ * loader refuses by name when either runs out rather than truncating a table into a plausible
+ * wrong shape.
+ *
+ * At the ceiling this holds seven fully asymmetric profiles, or a hundred-odd symmetric ones,
+ * or any mix. The spec's planning estimate of "~8 asymmetric" was arithmetic done before this
+ * assert existed; the assert is what corrected it.
+ */
+#define UBO_IES_TAPS (IES_MAX_VERT * IES_MAX_HORIZ)
+// counts(1) + TWO descriptor rows per profile + the shared pool, 4 taps to a vec4
+#define UBO_IES_VEC4S      (1 + IES_MAX_PROFILES * 2 + IES_POOL_FLOATS / 4)
+#define UBO_IES_BLOCK_SIZE (UBO_IES_VEC4S * 16)
+// The pool must fill whole vec4 rows, or the division above silently truncates its tail --
+// the shore film's lesson, in the same shape.
+_Static_assert(IES_POOL_FLOATS % 4 == 0, "the IES pool must be a whole number of vec4 rows");
+_Static_assert(IES_POOL_FLOATS >= UBO_IES_TAPS,
+               "the IES pool must hold at least one profile at the ceiling");
+_Static_assert(UBO_IES_BLOCK_SIZE <= 16384,
+               "the IES block must fit GL 4.1's guaranteed GL_MAX_UNIFORM_BLOCK_SIZE");
 
 typedef struct Ubo {
     GLuint id;

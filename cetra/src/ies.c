@@ -11,6 +11,7 @@
 struct IesLibrary {
     IesProfile profiles[IES_MAX_PROFILES];
     int count;
+    int pool_used; // floats of IES_POOL_FLOATS the loaded tables occupy
 };
 
 IesLibrary* create_ies_library(void) {
@@ -30,6 +31,29 @@ void free_ies_library(IesLibrary* lib) {
 
 int ies_library_count(const IesLibrary* lib) {
     return lib ? lib->count : 0;
+}
+
+int ies_library_pool_used(const IesLibrary* lib) {
+    return lib ? lib->pool_used : 0;
+}
+
+bool ies_library_pack(const IesLibrary* lib, GpuIesBlock* block) {
+    if (!lib || !block || lib->count == 0)
+        return false;
+    memset(block, 0, sizeof(*block));
+    block->ies_counts[0] = lib->count;
+    for (int i = 0; i < lib->count; i++) {
+        const IesProfile* p = &lib->profiles[i];
+        block->ies_desc[i * 2 + 0][0] = (float)p->offset;
+        block->ies_desc[i * 2 + 0][1] = (float)p->v_taps;
+        block->ies_desc[i * 2 + 0][2] = (float)p->h_taps;
+        block->ies_desc[i * 2 + 0][3] = p->span;
+        block->ies_desc[i * 2 + 1][0] = p->v_lo;
+        block->ies_desc[i * 2 + 1][1] = p->v_hi;
+        memcpy(&block->ies_pool[p->offset], p->table,
+               (size_t)(p->v_taps * p->h_taps) * sizeof(float));
+    }
+    return true;
 }
 
 const IesProfile* ies_library_at(const IesLibrary* lib, int index) {
@@ -65,7 +89,15 @@ static float _lerp_uniform(const float* v, int taps, int stride, float t01) {
 float ies_profile_sample(const IesProfile* p, float v_deg, float h_deg) {
     if (!p)
         return 1.0f;
+    // Outside the measured range the luminaire emits nothing -- see iesProfile
+    // in lights_ubo.glsl, which this is the CPU twin of.
+    if (v_deg < p->v_lo - 1e-3f || v_deg > p->v_hi + 1e-3f)
+        return 0.0f;
     float vt = p->v_hi > p->v_lo ? (v_deg - p->v_lo) / (p->v_hi - p->v_lo) : 0.0f;
+    if (vt < 0.0f)
+        vt = 0.0f;
+    if (vt > 1.0f)
+        vt = 1.0f;
     if (p->h_taps <= 1) {
         // Rotationally symmetric: one column, no horizontal term at all.
         return _lerp_uniform(p->table, p->v_taps, p->h_taps, vt);
@@ -318,6 +350,19 @@ int ies_library_load(IesLibrary* lib, const char* path) {
     free(text);
     if (!ok)
         return -1;
+
+    // The pool is the second limit, independent of the descriptor count: a
+    // profile spends only its own taps, so a set of symmetric downlights costs a
+    // sixteenth of what the same number of wall-washers would. Refused by name
+    // rather than truncated, since a table cut short is a plausible wrong shape.
+    int taps = p->v_taps * p->h_taps;
+    if (lib->pool_used + taps > IES_POOL_FLOATS) {
+        log_warn("ies: '%s' needs %d of %d remaining table floats; profile skipped", path, taps,
+                 IES_POOL_FLOATS - lib->pool_used);
+        return -1;
+    }
+    p->offset = lib->pool_used;
+    lib->pool_used += taps;
 
     p->path = safe_strdup(path);
     log_info("IES '%s': %dx%d taps, %s, span %g deg, peak %.1f cd", path, p->v_taps, p->h_taps,

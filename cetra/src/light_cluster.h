@@ -94,6 +94,11 @@ typedef struct LightClusterContext {
     struct Ubo* lights_ubo;          // LightsBlock       (UBO_BINDING_LIGHTS)
     struct Ubo* clusters_ubo;        // ClusterBlock      (UBO_BINDING_CLUSTERS)
     struct Ubo* cluster_indices_ubo; // ClusterIndexBlock (UBO_BINDING_CLUSTER_INDICES)
+    // IesBlock (UBO_BINDING_IES). Lives here because it is light data and the
+    // binding registry keeps the light blocks together, but it is uploaded from
+    // the SCENE's library when that changes, never by the per-frame build.
+    struct Ubo* ies_ubo;
+    int ies_uploaded_count; // profiles last packed; 0 = nothing uploaded yet
 
     GpuLightsBlock lights;
     GpuClusterBlock grid;

@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 // IES photometric profiles (IESNA LM-63, spec 11.57): the measured angular
 // distribution of a real luminaire, replacing the analytic cone a spot would
@@ -27,6 +28,17 @@
 // sixteenth of that, so a realistic set is far below the cap.
 #define IES_MAX_PROFILES 8
 
+// Floats the loaded tables SHARE. The second and independent limit: a profile
+// spends only its own v_taps * h_taps, so a symmetric one costs 32 against a
+// fully asymmetric one's 512, and sizing a fixed slot for the worst case would
+// spend the whole budget on the rare shape. 3968 floats is 992 vec4, which
+// holds seven profiles at the ceiling or a hundred-odd symmetric ones.
+//
+// This file owns the number and ubo.h only lays it out, the relationship
+// shore_chain.h has with the shore film block -- so raising it cannot leave the
+// block sized for the old one.
+#define IES_POOL_FLOATS 3968
+
 // One resampled luminaire.
 //
 // `table` is V-MAJOR -- h_taps entries per vertical tap -- because that is the
@@ -38,10 +50,13 @@ typedef struct IesProfile {
     char* path; // resolved, owned; the cache key
     int v_taps;
     int h_taps; // 1 for a rotationally symmetric file
+    int offset; // first float of this profile's table in the library's pool
     float span; // horizontal sweep the file declares: 90, 180 or 360 degrees
     float v_lo; // first and last measured vertical angle, degrees
     float v_hi;
     float peak_cd;
+    // The largest v_taps*h_taps a profile can occupy. The POOL is what profiles
+    // actually share (ies.c), so this bounds one table rather than sizing the set.
     float table[IES_MAX_VERT * IES_MAX_HORIZ];
 } IesProfile;
 
@@ -61,6 +76,35 @@ int ies_library_load(IesLibrary* lib, const char* path);
 
 int ies_library_count(const IesLibrary* lib);
 const IesProfile* ies_library_at(const IesLibrary* lib, int index);
+
+// Floats of the shared pool the loaded profiles occupy, for the probe and for
+// anything reporting how close a scene sits to the block's budget.
+int ies_library_pool_used(const IesLibrary* lib);
+
+// The std140 IesBlock, mirrored by lights_ubo.glsl. Uploaded ONCE when the
+// library changes, never by the per-frame cluster path -- which is the whole
+// reason it is its own block rather than room in LightsBlock (see ubo.h).
+typedef struct GpuIesBlock {
+    int32_t ies_counts[4]; // x = profile count, yzw unused
+    // TWO vec4 per profile:
+    //   [2i+0] pool offset, v_taps, h_taps, horizontal span in degrees
+    //   [2i+1] v_lo, v_hi (the file's measured vertical range), unused, unused
+    //
+    // The measured range is carried rather than resampling every profile onto a
+    // fixed 0..180 domain, which would spend half the taps on a hemisphere a
+    // downlight never lights. Outside it the profile is ZERO, not the clamped
+    // edge value: a file measured 0..90 stopped there because the luminaire
+    // emits nothing above it, and clamping would light the ceiling.
+    //
+    // Floats rather than ints because std140 pads an ivec4 array identically and
+    // the shader wants most of them as floats anyway.
+    float ies_desc[IES_MAX_PROFILES * 2][4];
+    float ies_pool[IES_POOL_FLOATS];
+} GpuIesBlock;
+
+// Fill `block` from the library. Returns false when there is nothing to upload,
+// so a scene with no profiles allocates and uploads nothing at all.
+bool ies_library_pack(const IesLibrary* lib, GpuIesBlock* block);
 
 // Fold a horizontal angle into the measured sweep [0, span].
 //

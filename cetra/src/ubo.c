@@ -77,6 +77,10 @@ bool ubo_wire_blocks(GLuint program_id) {
     // unreferenced everywhere else, which this call already treats as a no-op.
     ubo_wire_program_block(program_id, "ShoreFilmBlock", UBO_BINDING_SHORE_FILM,
                            UBO_SHORE_FILM_BLOCK_SIZE);
+    // IES profiles (spec 11.57). Declared by anything including lights_ubo.glsl
+    // and stripped as unreferenced where nothing calls iesProfile, which this
+    // already treats as a no-op.
+    ubo_wire_program_block(program_id, "IesBlock", UBO_BINDING_IES, UBO_IES_BLOCK_SIZE);
     return ubo_wire_program_block(program_id, "InstanceBlock", UBO_BINDING_INSTANCES,
                                   UBO_INSTANCES_BLOCK_SIZE);
 }

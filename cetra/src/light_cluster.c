@@ -30,7 +30,10 @@ LightClusterContext* create_light_cluster_context(void) {
     ctx->clusters_ubo = create_ubo(UBO_CLUSTERS_BLOCK_SIZE, UBO_BINDING_CLUSTERS);
     ctx->cluster_indices_ubo =
         create_ubo(UBO_CLUSTER_INDICES_BLOCK_SIZE, UBO_BINDING_CLUSTER_INDICES);
-    if (!ctx->lights_ubo || !ctx->clusters_ubo || !ctx->cluster_indices_ubo) {
+    // Created here beside the other light blocks, but NOT uploaded here: it is
+    // static per scene, so the per-frame path never touches it (ubo.h).
+    ctx->ies_ubo = create_ubo(UBO_IES_BLOCK_SIZE, UBO_BINDING_IES);
+    if (!ctx->lights_ubo || !ctx->clusters_ubo || !ctx->cluster_indices_ubo || !ctx->ies_ubo) {
         log_error("Failed to create clustered light UBOs");
         free_light_cluster_context(ctx);
         return NULL;
@@ -44,6 +47,7 @@ void free_light_cluster_context(LightClusterContext* ctx) {
     free_ubo(ctx->lights_ubo);
     free_ubo(ctx->clusters_ubo);
     free_ubo(ctx->cluster_indices_ubo);
+    free_ubo(ctx->ies_ubo);
     free(ctx);
 }
 
@@ -179,7 +183,10 @@ static void _pack_cluster_light(GpuPackedLight* dst, const struct Light* light, 
     dst->dir_type[3] = (float)light->type; // 1 point / 2 spot / 3 area
     glm_vec3_scale((float*)light->color, light->intensity, dst->color_intensity);
     dst->atten_cutoff[0] = light->range > 0.0f ? 1.0f / (light->range * light->range) : 0.0f;
-    dst->atten_cutoff[1] = 0.0f;
+    // The IES profile index, -1 for none -- the same "a float carrying an index
+    // or a sentinel" convention shadow_misc[1] uses for the punctual layer, in a
+    // slot that was already reserved and read by nothing.
+    dst->atten_cutoff[1] = (float)light->ies_profile;
     dst->atten_cutoff[2] = 0.0f;
     dst->atten_cutoff[3] = light->cutOff;
     dst->shadow_misc[0] = light->outerCutOff;
@@ -207,20 +214,19 @@ static void _pack_cluster_light(GpuPackedLight* dst, const struct Light* light, 
     // A degenerate authored direction falls back to -Y, the same substitution
     // _light_axis makes and for the same reason: something downstream has to
     // build a frame from it.
-    if (light->type == LIGHT_AREA) {
-        // Zero-init is dead -- both helpers write unconditionally -- but
-        // cppcheck cannot see through cglm's inlines to know that
-        vec3 dir = {0.0f, 0.0f, 0.0f}, up = {0.0f, 0.0f, 0.0f};
-        _light_axis(light, dir);
-        _area_panel_up(light, dir, up);
-        glm_vec3_copy(dir, dst->dir_type);
-        glm_vec3_copy(up, dst->up_area);
-        dst->up_area[3] = 0.0f;
-    } else {
-        vec3 dir = {0.0f, 0.0f, 0.0f};
-        _light_axis(light, dir);
-        glm_vec3_copy(dir, dst->dir_type);
-    }
+    // Zero-init is dead -- both helpers write unconditionally -- but cppcheck
+    // cannot see through cglm's inlines to know that
+    vec3 dir = {0.0f, 0.0f, 0.0f}, up = {0.0f, 0.0f, 0.0f};
+    _light_axis(light, dir);
+    _area_panel_up(light, dir, up);
+    glm_vec3_copy(dir, dst->dir_type);
+    // The height axis used to be packed for panels alone. Every type ships it
+    // now, because an ASYMMETRIC IES profile is not rotationally invariant and
+    // needs to know which way the luminaire is turned -- a wall-washer aimed
+    // down still has to say which wall. It costs three floats that were being
+    // zeroed anyway, and a symmetric profile never reads it.
+    glm_vec3_copy(up, dst->up_area);
+    dst->up_area[3] = 0.0f;
 }
 
 // Classify, cull and pack scene->lights. Directionals shade unclustered (they
@@ -410,6 +416,18 @@ void light_cluster_build_and_upload(LightClusterContext* ctx, struct Scene* scen
     glm_mat4_mul(projection, view, view_proj);
     Frustum frustum;
     frustum_extract_from_vp(view_proj, &frustum);
+
+    // Uploaded when the SET changes, not per frame -- profiles are static once
+    // loaded, and this path re-enters seven times on a probe-capture frame. The
+    // count is the whole test because the library only ever grows: a profile is
+    // cached by path and never evicted, so a changed count is a changed set.
+    int ies_count = ies_library_count(scene->ies_library);
+    if (ies_count != ctx->ies_uploaded_count) {
+        GpuIesBlock block;
+        if (ies_library_pack(scene->ies_library, &block))
+            ubo_upload(ctx->ies_ubo, &block, sizeof(block));
+        ctx->ies_uploaded_count = ies_count;
+    }
 
     _gather_lights(ctx, scene, &frustum, view, projection, &cf);
     _mark_touched_clusters(ctx, &cf);
